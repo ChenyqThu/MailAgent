@@ -95,9 +95,14 @@ export type MatterRunLifecycleState =
 export const MATTER_RUN_TRIGGERS = ['manual', 'schedule', 'event', 'condition'] as const
 export type MatterRunTrigger = (typeof MATTER_RUN_TRIGGERS)[number]
 
-/** 事件型触发的可选项。**刻意小于设计稿**：只收录能映射到既有判据的项 —— 设计画的
- *  「会议结束」（日历与事项零接线）不做，与其给一个永不触发的选项，不如不给。 */
-export const MATTER_EVENT_TRIGGER_TYPES = ['resource_doc_updated', 'resource_linked_mail'] as const
+/** 事件型触发的可选项。**刻意小于设计稿**：只收录能映射到既有判据的项。「会议结束」
+ *  自 L4 批次 1 起由 calendar_event_ended 落地（判据 = 本事项已确认的 event 资料有
+ *  刚结束的 occurrence，Python 侧 `worker._calendar_ended_evidence`）。 */
+export const MATTER_EVENT_TRIGGER_TYPES = [
+  'calendar_event_ended',
+  'resource_doc_updated',
+  'resource_linked_mail'
+] as const
 export type MatterEventTriggerType = (typeof MATTER_EVENT_TRIGGER_TYPES)[number]
 
 /** 条件型触发的可选项，各自直接对应一条既有的 attention 信号。设计画的「超过 5 天无进展」

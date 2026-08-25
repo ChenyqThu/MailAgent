@@ -87,7 +87,11 @@ def test_unsupported_event_and_condition_values_are_rejected():
 
 
 def test_supported_option_sets_match_decision_d15():
-    assert set(EVENT_TRIGGER_TYPES) == {"resource_linked_mail", "resource_doc_updated"}
+    # calendar_event_ended = L4 批次 1 #2 接活的「会议结束」（判据在 agenda worker 的
+    # calendar_event 扫描，不在 matter_event 表）。
+    assert set(EVENT_TRIGGER_TYPES) == {
+        "calendar_event_ended", "resource_linked_mail", "resource_doc_updated"
+    }
     assert set(CONDITION_TRIGGER_TYPES) == {
         "action_overdue", "health_down", "wait_overdue"
     }

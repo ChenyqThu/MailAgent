@@ -2201,7 +2201,12 @@
       "deleted": "Deleted \"{title}\"",
       "deletedSubtitle": "Syncing to CalDAV in 5 seconds",
       "restored": "Restored (deletion cancelled)",
-      "deleteFailed": "Failed to delete event"
+      "deleteFailed": "Failed to delete event",
+      "rescheduled": "Rescheduled \"{title}\"",
+      "resized": "Adjusted duration of \"{title}\"",
+      "rescheduledSubtitle": "{range} · Syncing to CalDAV in 5 seconds",
+      "rescheduleReverted": "Original time restored (not submitted)",
+      "rescheduleFailed": "Failed to reschedule event"
     },
     "view": {
       "day": {
@@ -5896,6 +5901,8 @@
       "traceHint": "No-change runs create no update, but remain in history",
       "manual": "Manual",
       "schedule": "Scheduled",
+      "event": "Event",
+      "condition": "Condition",
       "review": "Review proposal",
       "queued": "Queued",
       "running": "Reading and comparing changes",
@@ -5999,6 +6006,7 @@
         "manual": "Manual"
       },
       "event": {
+        "calendar_event_ended": "A linked meeting has ended",
         "resource_linked_mail": "A new email or thread is linked",
         "resource_doc_updated": "A linked document has a new version"
       },

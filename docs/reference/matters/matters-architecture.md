@@ -354,7 +354,7 @@ publish 端点）。完整三条路与鉴权见
 | kind | 判据 | 幂等键里的证据 |
 |---|---|---|
 | `schedule` | 复用 `src/agents/schedule_rule` 求值器（该模块**零改动**）| occurrence 时间 |
-| `event` | 新增的 `matter_event` 行（新证据到达）| 触发它的 event id |
+| `event` | 按 `event_type` 分两族：`resource_linked_mail` / `resource_doc_updated` 判**新增的 `matter_event` 行**（新证据到达）；`calendar_event_ended` 判**本事项已确认的 `kind='event'` 资料有刚结束的 occurrence**（`worker._calendar_ended_evidence`，判据不在 `matter_event` 表）| event id；日历那族是 `{ical_uid}\|{recurrence_id}\|{occurrence_end}` |
 | `condition` | **open 状态**的 `matter_attention` 信号 | 信号 id + subject_key |
 | `manual` | 不自动触发；由失效提案上的「重新跑一轮」等手动 run 入口（`POST /{id}/runs`）驱动 —— 详情头「立即跟进」已是**对话**入口，不产生 run（§1）| — |
 
@@ -367,9 +367,19 @@ publish 端点）。完整三条路与鉴权见
 2. **单条 entry 坏掉只跳过它自己**，不牵连同一事项的其它 trigger。
 
 **EVENT/CONDITION 的选项集刻意小于设计稿**：只收录能映射到既有判据的项。
-设计画的「会议结束」（日历与事项零接线）与「超过 5 天无进展」（后端无此判据）**不做** ——
-与其四个选项里两个永不触发，不如少给两个。`wait_overdue` 的 UI 文案按**真实阈值 7 天**写
-（`attention.WAIT_OVERDUE_DAYS`），不按设计稿的 3 天。
+「超过 5 天无进展」（后端无此判据）仍**不做** —— 与其给一个永不触发的选项，不如不给。
+「会议结束」曾因日历与事项零接线被砍，**L4 批次 1 起由 `calendar_event_ended` 落地**：
+判据源是 `calendar_event`（`CalendarEventRepository.list_ended_occurrences`），前提
+`CALENDAR_CALDAV_SYNC_ENABLED`，关闭时静默不触发；迟到超过 30 分钟（`CALENDAR_ENDED_FIRE_WINDOW`）
+不补跑。🔴 判定挂 agenda worker 的 60s tick，**绝不挂 5s radar poll**。
+`wait_overdue` 的 UI 文案按**真实阈值 7 天**写（`attention.WAIT_OVERDUE_DAYS`），不按设计稿的 3 天。
+
+🔴 **`enqueue_run` 的 `trigger_kind` 值域 = `MatterRunTrigger` 全集**（与 `matter_run` 列的
+`CHECK` 同源）。P6-B 给 worker 加 event/condition 触发时漏改这道守卫，于是真实 run_service 下
+event/condition 一 fire 就被拒、被 `_schedule_tick` 的 per-trigger 兜底吞成一条 warning ——
+而测试用的 FakeRuns 不经过它，**全绿**。L4 批次 1 修复，回归闸在
+`tests/matters/test_matter_calendar_ended.py::test_event_trigger_enqueues_through_real_run_service`
+（跑真 `MatterRunService`，断言 `matter_run` 里真有那一行）。
 
 **新建事项**默认 `agent_enabled=1` 且带一条默认排程（每 3 天 · 09:00）——
 开关开着而没有排程 = 永远不跑 = 一个说谎的开关，两者必须一起给。
@@ -480,6 +490,13 @@ matter run 终态四值 `ok / noop / warn / fail`（+ `canceled`），映射单�
 - **拒绝记忆**：建议被拒后，同证据不再重现。「实质新证据」= 持久锚点集（线程 id / 干系人邮箱 /
   匹配关键词 / 外扩理由）变化；指纹**显式排除**时间戳、随机 id、置信度，所以重复跑同一次检索
   绕不过拒绝，而真有新锚点时能重新建议。
+- **会议结束 → 关联提案**（L4 批次 1 #3）：agenda worker 的 `_calendar_proposal_tick` 扫刚结束的
+  occurrence，与会者 email 走**双腿**匹配（`contact_email` 锚点 → `matter_stakeholder.contact_id`；
+  兜底 `matter_stakeholder.email_normalized` 直匹）到 open matter，命中就写一条
+  `kind='event'` 的**未确认** link（`resource_key = event:{ical_uid}`，**系列级**：拒一次管整个
+  系列，否则周会每周重来一遍 = 审批疲劳）。🔴 **零自动写** —— `confirmed_at` 恒 NULL，确认/拒绝
+  全在 owner 手里；幂等、拒绝记忆、backlog cap 与下面的建议家族逐条复用。
+  全局 watermark 存 `sync_state['matters.calendar_ended.watermark']`，离线超过 2h 不补提案。
 - **重复候选**：四信号加权可解释（资料重叠 / 干系人重叠 / 语义 Jaccard / 30 天内邻近），
   每条带理由与证据。时间邻近**只在已有其它信号时**才加分 —— 否则「同期创建」会把无关事项凑成候选。
 - **URL 抓取**：零自研 SSRF 防护，直接复用 `src/api/routers/web.py::_do_fetch`（有测试钉死调的就是它）。
@@ -549,7 +566,8 @@ sqlite3 "$DB" "SELECT key, value FROM sync_state WHERE key LIKE 'matter.%last_fi
 | `tests/matters/test_matters_contract_parity.py` | 枚举常量数组（TS `as const` vs Python canonical values）+ SQL CHECK 值集 + chat_config flag 投影。**不管** `MattersApi` 这个纯前端接口的方法列表 |
 | `frontend/tests/ai-gateway/matter_tool_face_leaf.test.ts` | **工具面说明书 ↔ 真实 ToolSet 双向**：(a) 表里每个名字都真的在工具面里（无幽灵条目）；(b) 工具面里每个名字都落在某个分组里（无藏起来的能力）；(c) 关掉一个 skill 后真实消失的那批 == 叶子里标了该 skill 的那批。跑的是真实 `runHeadlessAgent` + `buildGatewayTools`，不是另一份手抄名单 |
 | `tests/config/test_matter_web_face_parity.py` | 网页三档词表 + 缺省值的**三份手抄**（Python 端点 / gateway policy.ts / renderer hook）。🔴 renderer 那份漂了 **typecheck 不会红**（`readonly MatterRunWebFace[]` 装子集合法），只能靠这道闸 |
-| `frontend/tests/shared/matterEventLocale.test.ts` | 两份 locale 覆盖 `MATTER_EVENT_KINDS` 全集。kind 数量会随功能增长，所以判据是**从 events.py 抽全集**，不是写死的数字；闸自身也断言「抽不到就红」 |
+| `frontend/tests/shared/matterEventLocale.test.ts` | 两份 locale 覆盖 `MATTER_EVENT_KINDS` 全集。kind 数量会随功能增长，所以判据是**从 events.py 抽全集**，不是写死的数字；闸自身也断言「抽不到就红」。同文件另盖 `matters.trigger.event.*` / `.condition.*`：locale 是 trigger 词表的**第三份手抄**（Python → TS 有 parity 闸，locale 没有），少一条 key 时下拉直出裸标识符而两侧词表仍一致、其它闸全绿 |
+| `tests/matters/test_matters_contract_parity.py::test_every_resource_kind_has_an_identity_landing_or_explicit_exemption` | 资料 kind 词表 ↔ identity 层落点。病根：`MatterResourceKind.EVENT` 在词表里躺了数月却没有 `event_resource_key`、`normalize_resource_key` 不认、存在性判定不查 —— 值域校验全绿而这个 kind 结构上用不起来。闸要求每个成员**要么**有真实 identity 落点（probe 直接调真函数 + parse/normalize 双向认领 + 收编进 `_KINDS_BY_PROVIDER['mailagent']`），**要么**进显式豁免清单（`doc`/`url`，key 由 connector / URL 自身发号）|
 | `tests/matters/test_matter_trigger_envelope_parity.py` | trigger v2 envelope 的跨语言形状（含 §4.0 的 `agent` 覆盖块）|
 | `tests/matters/test_matters_contract_parity.py::test_effort_tier_value_set_matches_the_typescript_canonical_ladder` | effort 档位值域**与顺序**（canonical = TS `effortTiers.ts::EFFORT_TIERS`，Python 手抄在 `triggers.MATTER_AGENT_EFFORT_TIERS`）。顺序也算：档位是有序阶梯，漂了「向下取最近可选档」就选错档 |
 | `tests/matters/test_matters_contract_parity.py::test_new_resource_proposal_shape_agrees_across_every_hand_copy` | `matterProposalNewResource` 提案契约的**五份手抄**（zod schema / 工具描述 / pydantic DTO / `normalize_new_resource` 返回键 / TS 读类型）互相一致。抽取器 `ts_zod_object_field_names()` 定位源码里的 `const <name> = z.object({...})` 前先把字符串 / 模板串 / 正则字面量与两种注释（`//` 与 `/* */`）整段抹成空格——不做的话，把字段**注释掉**闸依然绿。抽取失败（锚点找不到 / 花括号未配平 / 抽出空集 / 丢了 `.strict()`）必须红，不许静默放行当通过 |

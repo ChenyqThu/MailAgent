@@ -10,6 +10,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from src.agents.schedule_rule import parse_anchor, parse_rule, prev_occurrence
+from src.contacts.service import get_contact_id_for_email, normalize_email
 from src.events.publisher import safe_publish
 from src.notify.center import NotifyCenter
 from src.notify.center_models import NOTIFICATION_SEVERITY_VALUES
@@ -18,7 +19,9 @@ from .attention import AttentionService
 from .models import MatterAttentionKind, MatterRunTrigger
 from .repository import MatterRepository
 from .run_service import MatterRunService
+from .service import MatterService
 from .triggers import (
+    CALENDAR_ENDED_EVENT_TYPE,
     EVENT_TRIGGER_CRITERIA,
     idempotency_key,
     is_legacy_shape,
@@ -37,6 +40,17 @@ TICK_SECONDS = 60
 CATCHUP_WINDOW = timedelta(minutes=30)
 MATTER_RUN_RETRY_BACKOFF = (timedelta(minutes=5), timedelta(minutes=30))
 
+#: `calendar_event_ended` 的回看窗口 —— 沿用 before_start 的迟到不补语义
+#: （`src/agents/trigger_worker.FIRE_WINDOW_MIN`，常量本地定义）：app 离线超过它，
+#: 错过的「会议结束」不补跑。
+CALENDAR_ENDED_FIRE_WINDOW = timedelta(minutes=30)
+
+#: event→matter 关联提案（L4 批次 1 #3）的全局扫描 watermark 与错过上限。
+#: watermark 是 `sync_state` KV（不 bump DB_VERSION，`alert.*` 先例）；离线超过
+#: 上限的结束会议不补提案 —— 提案的价值窗口就在会后不久。
+CALENDAR_ENDED_WATERMARK_KEY = "matters.calendar_ended.watermark"
+CALENDAR_PROPOSAL_LOOKBACK_MAX = timedelta(hours=2)
+
 
 class MatterAgendaWorker:
     def __init__(
@@ -47,6 +61,7 @@ class MatterAgendaWorker:
         notify_level_reader: Callable[[], str] | None = None,
         clock_ms: Callable[[], int] | None = None,
         run_service: MatterRunService | None = None,
+        matter_service: "MatterService | None" = None,
     ):
         self.repository = repository
         self.sync_store = sync_store
@@ -54,6 +69,11 @@ class MatterAgendaWorker:
         self.clock_ms = clock_ms or (lambda: int(datetime.now(timezone.utc).timestamp() * 1000))
         self.attention = AttentionService(repository, clock_ms=self.clock_ms)
         self.run_service = run_service or MatterRunService(repository, clock_ms=self.clock_ms)
+        #: event→matter 提案的写入口（#3）—— 提案必须走 matters 域唯一写面
+        #: （transaction gate 纪律），worker 自己不碰 repository.transaction。
+        self.matter_service = matter_service or MatterService(
+            repository, clock_ms=self.clock_ms
+        )
         #: 通知中心写面（只持 db_path，不开连接；per-call connect 在 NotifyCenter 内部）。
         self._notify_center = NotifyCenter(str(repository.db_path))
 
@@ -72,6 +92,10 @@ class MatterAgendaWorker:
             changed.update(await asyncio.to_thread(self._retry_tick))
         except Exception as exc:  # noqa: BLE001
             logger.exception(f"[matter-agenda] schedule/retry tick failed: {exc}")
+        try:
+            await asyncio.to_thread(self._calendar_proposal_tick)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(f"[matter-agenda] calendar proposal tick failed: {exc}")
         try:
             result = await asyncio.to_thread(self.attention.reconcile)
             changed.update(result["changed_matter_ids"])
@@ -272,11 +296,14 @@ class MatterAgendaWorker:
         else:
             # EVENT / CONDITION：判据各自产出一个**稳定**的证据标识；marker 存的就是它。
             # 同一条持续 open 的信号、同一个已消费过的事件，标识不变 ⇒ 只 fire 一次。
-            stamp = (
-                self._event_evidence(matter_id, entry)
-                if entry.kind == MatterRunTrigger.EVENT
-                else self._condition_evidence(matter_id, entry)
-            )
+            if entry.kind == MatterRunTrigger.EVENT:
+                stamp = (
+                    self._calendar_ended_evidence(matter_id, now)
+                    if entry.event_type == CALENDAR_ENDED_EVENT_TYPE
+                    else self._event_evidence(matter_id, entry)
+                )
+            else:
+                stamp = self._condition_evidence(matter_id, entry)
             if stamp is None:
                 return False
             key = marker_key(matter_id, entry, legacy=legacy)
@@ -313,6 +340,60 @@ class MatterAgendaWorker:
                     return f"event:{int(event_row['id'])}"
         return None
 
+    def _calendar_ended_evidence(self, matter_id: int, now) -> str | None:
+        """本 matter 已确认的 kind='event' 资料里，最近一个「刚结束」的 occurrence。
+
+        证据标识 = ``{ical_uid}|{recurrence_id or ''}|{occurrence_end_iso}`` ——
+        markerless 幂等的镜像（before_start 先例）：同一次结束只 fire 一次；改期产生
+        新的 end ⇒ 新标识。迟到超窗（``CALENDAR_ENDED_FIRE_WINDOW``）不补。
+        日历同步关闭时静默返回 None（判据的数据源不在更新）。
+        """
+        from src.config import config
+
+        if not config.calendar_caldav_sync_enabled:
+            return None
+        uids = self._linked_event_uids(matter_id)
+        if not uids:
+            return None
+        from src.calendar_sync.repository import CalendarEventRepository
+
+        calendar_repo = CalendarEventRepository(str(self.repository.db_path), pool=False)
+        best = None
+        for occ in calendar_repo.list_ended_occurrences(
+            now - CALENDAR_ENDED_FIRE_WINDOW, now
+        ):
+            if occ.row.ical_uid not in uids:
+                continue
+            if best is None or occ.occurrence_end_utc > best.occurrence_end_utc:
+                best = occ
+        if best is None:
+            return None
+        return (
+            f"{best.row.ical_uid}|{best.row.recurrence_id or ''}|"
+            f"{best.occurrence_end_utc.isoformat()}"
+        )
+
+    def _linked_event_uids(self, matter_id: int) -> set[str]:
+        """已**确认**关联进本 matter 的 kind='event' 资料 → ical_uid 集。
+
+        未确认的 agent 建议不算 —— 一条 owner 还没接受的提案不该开始驱动跟进 run。
+        """
+        with self.repository.connect() as conn:
+            rows = conn.execute(
+                "SELECT r.external_key FROM matter_resource mr "
+                "JOIN resource r ON r.id=mr.resource_id "
+                "WHERE mr.matter_id=? AND mr.deleted_at IS NULL "
+                "AND mr.confirmed_at IS NOT NULL "
+                "AND r.provider='mailagent' AND r.kind='event'",
+                (matter_id,),
+            ).fetchall()
+        prefix = "event:"
+        return {
+            key[len(prefix):]
+            for row in rows
+            if (key := str(row["external_key"] or "")).startswith(prefix)
+        }
+
     def _condition_evidence(self, matter_id: int, entry) -> str | None:
         """该条件当前是否有 open 信号；返回信号的稳定标识。"""
         with self.repository.connect() as conn:
@@ -324,6 +405,117 @@ class MatterAgendaWorker:
         if signal is None:
             return None
         return f"signal:{int(signal['id'])}:{signal['subject_key']}"
+
+    # ── event→matter 关联提案（L4 批次 1 #3）────────────────────────────────────
+
+    def _calendar_proposal_tick(self) -> None:
+        """会议结束 → 与会者双腿匹配 open matter → unconfirmed link 提案。
+
+        全局 watermark（``sync_state`` KV，上次窗口末端 iso），错过上限 2h 不补；
+        挂 60s agenda tick，**不触碰 5s radar 节拍**。零自动写：落库的只有
+        ``confirmed_at IS NULL`` 的提案（`propose_calendar_event_resource`），
+        确认 / 拒绝恒在 owner 手里。
+        """
+        from src.config import config
+
+        if not config.calendar_caldav_sync_enabled:
+            return
+        now = datetime.fromtimestamp(self.clock_ms() / 1000, timezone.utc)
+        floor = now - CALENDAR_PROPOSAL_LOOKBACK_MAX
+        window_start = floor
+        raw = self.sync_store.get_state(CALENDAR_ENDED_WATERMARK_KEY)
+        if raw:
+            try:
+                window_start = max(datetime.fromisoformat(raw), floor)
+            except ValueError:
+                logger.warning(
+                    f"[matter-agenda] invalid calendar watermark {raw!r}, using floor"
+                )
+        if window_start >= now:
+            return
+        from src.calendar_sync.repository import CalendarEventRepository
+
+        calendar_repo = CalendarEventRepository(str(self.repository.db_path), pool=False)
+        for occurrence in calendar_repo.list_ended_occurrences(window_start, now):
+            try:
+                self._propose_for_ended_occurrence(occurrence)
+            except Exception as exc:  # noqa: BLE001 — 单个会议失败不拖累其余与 watermark
+                logger.warning(
+                    "[matter-agenda] event proposal failed "
+                    f"uid={occurrence.row.ical_uid}: {exc}"
+                )
+        self.sync_store.set_state(CALENDAR_ENDED_WATERMARK_KEY, now.isoformat())
+
+    def _propose_for_ended_occurrence(self, occurrence) -> None:
+        emails = self._attendee_emails(occurrence.row.attendees)
+        if not emails:
+            return
+        row = occurrence.row
+        for public_id, matched in self._open_matters_for_emails(emails).items():
+            # per-matter 兜底：watermark 在外层无条件推进，单 matter 抛异常若打断
+            # 同场会议剩余 matter，那几条提案会永久丢失（不会重扫）。
+            try:
+                result = self.matter_service.propose_calendar_event_resource(
+                    public_id,
+                    ical_uid=row.ical_uid,
+                    title=row.summary or None,
+                    recurrence_id=row.recurrence_id,
+                    occurrence_start_ms=int(
+                        occurrence.occurrence_start_utc.timestamp() * 1000
+                    ),
+                    occurrence_end_ms=int(
+                        occurrence.occurrence_end_utc.timestamp() * 1000
+                    ),
+                    matched_emails=matched,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    f"[matter-agenda] event proposal failed matter={public_id} "
+                    f"uid={row.ical_uid}: {exc}"
+                )
+                continue
+            logger.info(
+                f"[matter-agenda] event proposal matter={public_id} "
+                f"uid={row.ical_uid}: {result['status']}"
+            )
+
+    @staticmethod
+    def _attendee_emails(attendees: list) -> list[str]:
+        """attendees_json → 归一小写去重的 email 列表（保序）。
+
+        兜底形状兼容：repository 写侧对老数据只包 ``{"email": …}``，消费方不得假设
+        name/response/role 在场；无 email 的与会者直接丢（身份判据只有归一 email）。
+        """
+        seen: list[str] = []
+        for attendee in attendees or []:
+            raw = attendee.get("email") if isinstance(attendee, dict) else attendee
+            email = normalize_email(raw) if isinstance(raw, str) else None
+            if email and email not in seen:
+                seen.append(email)
+        return seen
+
+    def _open_matters_for_emails(self, emails: list[str]) -> dict[str, list[str]]:
+        """与会者 email → open matter 的双腿匹配（public_id → 命中的 email 列表）。
+
+        腿 1 = ``contact_email`` 锚点 → ``matter_stakeholder.contact_id``（v67 独立索引）；
+        腿 2 = ``matter_stakeholder.email_normalized`` 直匹（老数据 / 未绑 contact 的行）。
+        open 判据沿用 agenda worker 先例：未删未归档且 status 不在终态。
+        """
+        hits: dict[str, list[str]] = {}
+        with self.repository.connect() as conn:
+            for email in emails:
+                contact_id = get_contact_id_for_email(conn, email)
+                rows = conn.execute(
+                    "SELECT DISTINCT m.public_id FROM matter_stakeholder ms "
+                    "JOIN matter m ON m.id=ms.matter_id "
+                    "WHERE ms.deleted_at IS NULL AND m.deleted_at IS NULL "
+                    "AND m.archived_at IS NULL AND m.status NOT IN ('done','canceled') "
+                    "AND (ms.email_normalized=? OR (? IS NOT NULL AND ms.contact_id=?))",
+                    (email, contact_id, contact_id),
+                ).fetchall()
+                for row in rows:
+                    hits.setdefault(str(row["public_id"]), []).append(email)
+        return hits
 
     def _retry_tick(self) -> set[int]:
         now = self.clock_ms()

@@ -10,7 +10,14 @@ from src.api.routers import chat
 from src.api.routers.matters import MatterPatchWithScheduleRequest
 from src.api.schemas.matters import MatterCreateRequest, MatterProposalNewResource
 from src.mail import sync_store
-from src.matters import models, resource_proposal, run_service, service, triggers
+from src.matters import (
+    models,
+    resource_identity,
+    resource_proposal,
+    run_service,
+    service,
+    triggers,
+)
 
 
 ENUMS = (
@@ -86,6 +93,77 @@ def ts_const_string_array(
     assert not scrubbed, f"{path}: {name} 含非字符串字面量或部分抽取: {scrubbed!r}"
     assert extracted, f"{path}: {name} 抽取结果为空"
     return extracted
+
+
+# ── 资源 kind 词表死列闸（L4 批次 1 #1）────────────────────────────────────────
+# 病根：`MatterResourceKind.EVENT` 在词表里躺了数月却没有任何 identity 落点（没有
+# `event_resource_key`、`normalize_resource_key` 不认、存在性判定不查）—— 值域校验全绿，
+# 但这个 kind 结构上用不起来，而没有任何闸会红。本闸要求枚举每个成员要么在 identity 层
+# 有真实落点（probe 直接调用真函数并断言 parse/normalize 双向认领），要么进显式豁免
+# 清单并写明理由 —— 「忘了接」从此必须表现为一条红。
+# 🔴 kind 清单从真实枚举取（`models.MatterResourceKind`），这里不手抄第二份词表。
+
+#: mailagent 身份空间 kind → (normalize 前的裸输入, canonical key 产出)。
+RESOURCE_KIND_IDENTITY_PROBES = {
+    "email": ("42", lambda: resource_identity.email_resource_key(42)),
+    "thread": ("th-1", lambda: resource_identity.thread_resource_key("th-1")),
+    "event": ("uid-1", lambda: resource_identity.event_resource_key("uid-1")),
+}
+
+#: 身份空间之外但仍有 identity 函数的 kind：`file` 走 `attachment_resource_key`
+#: （normalize 原样透传，函数 docstring 写明 kind='file' 的用法）。
+RESOURCE_KIND_FILE_PROBE = lambda: resource_identity.attachment_resource_key(7)  # noqa: E731
+
+#: 显式豁免 —— identity 层**有意**不给这两个 kind 发号：
+#:   doc: connector 词表 kind，external_key 按 `resource_proposal._CONNECTOR_KEY_RE`
+#:        的 `<entity>:<id>` 约定由 connector 侧发号，本地无存在性判定；
+#:   url: external_key 就是 URL 本身（`resource_proposal` 的 WEB_PROVIDER 路径）。
+RESOURCE_KIND_IDENTITY_EXEMPT = frozenset({"doc", "url"})
+
+
+def test_every_resource_kind_has_an_identity_landing_or_explicit_exemption():
+    kinds = {member.value for member in models.MatterResourceKind}
+    covered = (
+        set(RESOURCE_KIND_IDENTITY_PROBES) | {"file"} | RESOURCE_KIND_IDENTITY_EXEMPT
+    )
+    assert covered == kinds, (
+        f"资源 kind 词表与 identity 落点劈叉：无落点也无豁免 {sorted(kinds - covered)} / "
+        f"落点或豁免指向词表外的 kind {sorted(covered - kinds)}"
+    )
+    assert not (set(RESOURCE_KIND_IDENTITY_PROBES) & RESOURCE_KIND_IDENTITY_EXEMPT)
+
+    for kind, (raw, probe) in RESOURCE_KIND_IDENTITY_PROBES.items():
+        key = probe()
+        assert key.startswith(f"{kind}:"), f"{kind} identity 函数产出前缀不对: {key!r}"
+        parsed_kind, identifier = resource_identity.parse_resource_key(key)
+        assert parsed_kind == kind and identifier, f"parse_resource_key 不认领 {key!r}"
+        # normalize 双向认领：裸输入与 canonical key 都归一到同一个 key。
+        assert (
+            resource_identity.normalize_resource_key(
+                resource_identity.EMAIL_PROVIDER, kind, raw
+            )
+            == key
+        ), f"normalize_resource_key 不认裸输入 kind={kind}"
+        assert (
+            resource_identity.normalize_resource_key(
+                resource_identity.EMAIL_PROVIDER, kind, key
+            )
+            == key
+        ), f"normalize_resource_key 不认 canonical key kind={kind}"
+        # 提案词表同步收编：身份空间 kind 不许流进 connector kind 集
+        # （connector 认领会造出永远验不了的资料 —— resource_proposal 头注理由）。
+        assert kind in resource_proposal._KINDS_BY_PROVIDER[resource_identity.EMAIL_PROVIDER]
+        assert kind not in resource_proposal._CONNECTOR_KINDS
+
+    file_key = RESOURCE_KIND_FILE_PROBE()
+    assert file_key.startswith("attachment:")
+    # file 的 key 不在 normalize 的规范范围内 —— 原样透传即是契约。
+    assert (
+        resource_identity.normalize_resource_key(
+            resource_identity.EMAIL_PROVIDER, "file", file_key
+        )
+        == file_key
+    )
 
 
 def test_migration_ddl_uses_canonical_sql_check_helper():

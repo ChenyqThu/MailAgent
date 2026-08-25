@@ -278,10 +278,11 @@ class MatterRunService(MatterService):
         reverses_event_id: int | None = None,
         trigger_kind: str = MatterRunTrigger.MANUAL.value,
     ) -> dict[str, Any]:
-        if trigger_kind not in (
-            MatterRunTrigger.MANUAL.value,
-            MatterRunTrigger.SCHEDULE.value,
-        ):
+        # 值域 = MatterRunTrigger 全集（matter_run 列的 CHECK 同源）。此前只放行
+        # manual/schedule —— P6-B 给 worker 加 event/condition 触发时漏改这里，真实
+        # run_service 下 event/condition trigger 一 fire 就被拒，被 `_schedule_tick`
+        # 的 per-trigger 兜底吞成 warning（测试用 FakeRuns 不经过本函数，全绿）。
+        if trigger_kind not in set(MatterRunTrigger):
             raise MatterError("E_INVALID_ARG", f"unsupported trigger_kind: {trigger_kind}")
         key = self._dedupe(idempotency_key)
         now = self.clock_ms()

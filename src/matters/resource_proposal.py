@@ -26,7 +26,12 @@ from urllib.parse import urlparse
 from loguru import logger
 
 from .models import MATTER_RESOURCE_KINDS, MATTER_RESOURCE_SUMMARY_MAX_CHARS
-from .resource_identity import EMAIL_PROVIDER, MatterError, normalize_resource_key
+from .resource_identity import (
+    EMAIL_PROVIDER,
+    MAILAGENT_IDENTITY_KINDS,
+    MatterError,
+    normalize_resource_key,
+)
 
 #: 不经 connector、结构上恒可达的两个来源。
 #: ``mailagent`` = 本机邮件库（email / thread，身份与存在性都可本地验证）；
@@ -36,15 +41,15 @@ from .resource_identity import EMAIL_PROVIDER, MatterError, normalize_resource_k
 WEB_PROVIDER = "web"
 PROPOSAL_BUILTIN_PROVIDERS: frozenset[str] = frozenset({EMAIL_PROVIDER, WEB_PROVIDER})
 
-#: 各 provider 允许的 resource kind。``email``/``thread`` 是 mailagent 的身份空间专属
-#: （``repository.resource_available`` 的存在性判定就钉在 provider=='mailagent' 上），
-#: 让 connector 认领这两个 kind 会造出一条永远验不了的资料。
+#: 各 provider 允许的 resource kind。``MAILAGENT_IDENTITY_KINDS``（email/thread/event）
+#: 是 mailagent 的身份空间专属（``repository.resource_available`` 的存在性判定就钉在
+#: provider=='mailagent' 上），让 connector 认领这些 kind 会造出一条永远验不了的资料。
 _KINDS_BY_PROVIDER: dict[str, frozenset[str]] = {
-    EMAIL_PROVIDER: frozenset({"email", "thread"}),
+    EMAIL_PROVIDER: MAILAGENT_IDENTITY_KINDS,
     WEB_PROVIDER: frozenset({"url"}),
 }
-_CONNECTOR_KINDS: frozenset[str] = frozenset(MATTER_RESOURCE_KINDS) - frozenset(
-    {"email", "thread"}
+_CONNECTOR_KINDS: frozenset[str] = (
+    frozenset(MATTER_RESOURCE_KINDS) - MAILAGENT_IDENTITY_KINDS
 )
 
 MAX_EXTERNAL_KEY_CHARS = 512

@@ -15,8 +15,9 @@
 - ``manual``    → 不自动触发，只由「立即跟进」按钮驱动
 
 🔴 EVENT/CONDITION 的选项集**刻意小于设计稿**：只收录能映射到既有判据的项（D15）。
-设计里的「会议结束」（calendar 与 matter 零接线）、「超过 5 天无进展」（Python 侧无此
-判据）不做 —— 与其给四个选项里两个永不触发，不如少给两个。
+「超过 5 天无进展」（Python 侧无此判据）不做；「会议结束」曾因 calendar 与 matter
+零接线被砍，L4 批次 1 起由 ``calendar_event_ended`` 落地（判据 = 本事项已确认的
+event 资料有刚结束的 occurrence，见 ``worker._calendar_ended_evidence``）。
 """
 
 from __future__ import annotations
@@ -30,14 +31,22 @@ from .models import MatterRunTrigger
 
 TRIGGER_ENVELOPE_VERSION = 2
 
+#: 日历型事件触发（L4 批次 1 #2）：判据**不在** `matter_event` 表 —— agenda worker 直接
+#: 扫 `calendar_event` 的「刚结束的 occurrence」（`worker._calendar_ended_evidence`）。
+CALENDAR_ENDED_EVENT_TYPE = "calendar_event_ended"
+
 #: 事件型触发的选项 → 判据。值是 `(event_kind, resource_kinds)`；resource_kinds 为空
-#: 表示不按资源类型过滤。
-EVENT_TRIGGER_CRITERIA: dict[str, tuple[str, frozenset[str]]] = {
+#: 表示不按资源类型过滤。`CALENDAR_ENDED_EVENT_TYPE` 的值是 None —— 它没有
+#: matter_event 判据（worker 按 event_type 先分派，`_event_evidence` 不消费它），
+#: 放进同一个 dict 是让它进同一份词表（写侧校验 + `EVENT_TRIGGER_TYPES` 的 TS 镜像
+#: parity 闸自动覆盖）。
+EVENT_TRIGGER_CRITERIA: dict[str, tuple[str, frozenset[str]] | None] = {
     # 设计原文叫「收到干系人新邮件」，但判「发件人是不是干系人」需要回查邮件发件人再
     # 比对 matter_stakeholder，那是**新造判据**（D6 禁止）。订阅进事项的邮件本就是这条
     # 证据流，所以按「关联了新的邮件或会话」落地，文案也照实写。
     "resource_linked_mail": ("resource_linked", frozenset({"email", "thread"})),
     "resource_doc_updated": ("resource_updated", frozenset({"doc"})),
+    CALENDAR_ENDED_EVENT_TYPE: None,
 }
 
 #: 条件型触发的选项 → `matter_attention.kind`。三项都直接命中既有信号。

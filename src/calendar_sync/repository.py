@@ -619,6 +619,35 @@ class CalendarEventRepository:
         occurrences.sort(key=lambda o: o.occurrence_start_utc)
         return occurrences
 
+    def list_ended_occurrences(
+        self,
+        window_start_utc: datetime,
+        window_end_utc: datetime,
+        *,
+        source: Optional[str] = None,
+        calendar_name: Optional[str] = None,
+    ) -> list[CalendarEventOccurrence]:
+        """「刚结束」的 occurrence：occurrence_end ∈ (window_start, window_end]（RRULE 展开后）.
+
+        matter 侧「会议结束」trigger 与 event→matter 提案生成器的共享判定原语
+        (L4 批次 1 #2/#3). 排除集与 before_start 扫描同款: CANCELLED 跳过,
+        软删行由 ``list_event_rows`` 的 deleted_at 过滤承担.
+
+        窗口**左开右闭**: 调用方拿上次窗口末端作本次 window_start 时, 恰落在边界上的
+        occurrence 不会跨窗重复, 也不会漏掉.
+        """
+        return [
+            occ
+            for occ in self.list_event_occurrences(
+                window_start_utc,
+                window_end_utc,
+                source=source,
+                calendar_name=calendar_name,
+            )
+            if (occ.row.status or "").upper() != "CANCELLED"
+            and window_start_utc < occ.occurrence_end_utc <= window_end_utc
+        ]
+
     def list_calendar_names(self) -> list[str]:
         """枚举 calendar_event 表里出现过的 calendar_name (非空, distinct)."""
         with self._conn_ctx() as conn:

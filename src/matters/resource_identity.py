@@ -7,6 +7,11 @@ import json
 
 EMAIL_PROVIDER = "mailagent"
 
+#: mailagent 身份空间的 resource kind —— identity 由本模块发号、存在性可本地验证
+#: （`repository.resource_available`）、提案 provider 白名单收编（`resource_proposal.
+#: _KINDS_BY_PROVIDER`）。三处消费同一份集合，不许各抄一份（跨边界手抄常量纪律）。
+MAILAGENT_IDENTITY_KINDS = frozenset({"email", "thread", "event"})
+
 
 class MatterError(RuntimeError):
     def __init__(self, code: str, message: str, *, hint: str | None = None):
@@ -27,20 +32,33 @@ def thread_resource_key(thread_id: str) -> str:
     return f"thread:{value}"
 
 
+def event_resource_key(ical_uid: str) -> str:
+    """日历事件（kind='event'）的稳定标识 —— **系列级**：只含 ical_uid，不含 recurrence_id。
+
+    粒度是拍板过的（L4 批次 1 DB）：拒绝记忆的 resource_key 就是它，拒一次管整个系列
+    —— 否则周会每结束一次就重新提案一次 = 审批疲劳。occurrence 细节（哪一次结束、
+    谁在场）进 provenance / evidence，不进身份键。
+    """
+    value = str(ical_uid or "").strip()
+    if not value:
+        raise ValueError("ical_uid is required")
+    return f"event:{value}"
+
+
 def attachment_resource_key(attachment_id: int) -> str:
     """邮件附件被引用成 matter 资料（kind='file'）时的稳定标识。
 
     用 `email_attachment.id`（自增 PK，行在则 id 在）而不是「文件名 + 邮件」——同一封邮件里
     重名附件是合法的，用名字做键会把两份不同的文件折成一份。
-    🔴 `normalize_resource_key` 只规范 email/thread 两种 kind，`file` 原样透传，故这里产出的
-    字符串就是最终 external_key。
+    🔴 `normalize_resource_key` 只规范 `MAILAGENT_IDENTITY_KINDS`（email/thread/event），
+    `file` 原样透传，故这里产出的字符串就是最终 external_key。
     """
     return f"attachment:{int(attachment_id)}"
 
 
 def parse_resource_key(key: str) -> tuple[str, str]:
     kind, separator, value = str(key or "").partition(":")
-    if not separator or kind not in {"email", "thread"} or not value:
+    if not separator or kind not in MAILAGENT_IDENTITY_KINDS or not value:
         raise ValueError(f"invalid MailAgent resource key: {key!r}")
     if kind == "email":
         try:
@@ -51,7 +69,7 @@ def parse_resource_key(key: str) -> tuple[str, str]:
 
 
 def normalize_resource_key(provider: str, kind: str, external_key: str) -> str:
-    if provider != EMAIL_PROVIDER or kind not in {"email", "thread"}:
+    if provider != EMAIL_PROVIDER or kind not in MAILAGENT_IDENTITY_KINDS:
         return external_key
     value = str(external_key or "").strip()
     if not value:
@@ -61,11 +79,11 @@ def normalize_resource_key(provider: str, kind: str, external_key: str) -> str:
             parsed_kind, identifier = parse_resource_key(value)
         except ValueError as exc:
             raise MatterError("E_INVALID_ARG", str(exc)) from exc
-        return (
-            email_resource_key(int(identifier))
-            if parsed_kind == "email"
-            else thread_resource_key(identifier)
-        )
+        if parsed_kind == "email":
+            return email_resource_key(int(identifier))
+        if parsed_kind == "thread":
+            return thread_resource_key(identifier)
+        return event_resource_key(identifier)
     if ":" in value:
         raise MatterError(
             "E_INVALID_ARG",
@@ -77,7 +95,9 @@ def normalize_resource_key(provider: str, kind: str, external_key: str) -> str:
                 "E_INVALID_ARG", f"invalid email resource key: {external_key!r}"
             )
         return email_resource_key(int(value))
-    return thread_resource_key(value)
+    if kind == "thread":
+        return thread_resource_key(value)
+    return event_resource_key(value)
 
 
 def rejection_resource_key(provider: str, kind: str, external_key: str) -> str:

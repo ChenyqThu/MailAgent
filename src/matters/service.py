@@ -68,6 +68,7 @@ from .resource_identity import (
     EMAIL_PROVIDER,
     MatterError,
     attachment_resource_key,
+    event_resource_key,
     evidence_fingerprint,
     email_resource_key,
     normalize_resource_key,
@@ -2361,6 +2362,123 @@ class MatterService:
                 "expanded": expanded,
                 "backlog_capped": False,
             }
+
+    def propose_calendar_event_resource(
+        self,
+        public_id: str,
+        *,
+        ical_uid: str,
+        title: str | None,
+        recurrence_id: str | None,
+        occurrence_start_ms: int | None,
+        occurrence_end_ms: int | None,
+        matched_emails: Sequence[str],
+    ) -> dict[str, Any]:
+        """会议结束 → event 资料关联**提案**（L4 批次 1 #3，agenda worker 的唯一写入口）。
+
+        零自动写：产物恒是 ``confirmed_at IS NULL`` + ``added_by_kind='agent'`` 的
+        unconfirmed link，owner 在既有资料建议面确认 / 拒绝。幂等与抑制全复用
+        ``discover_resource_suggestions`` 家族：已有 live link 跳过、拒绝记忆同
+        fingerprint 抑制、``RESOURCE_SUGGESTION_BACKLOG_CAP`` 原样。
+
+        evidence = ``stakeholder:<email>``（命中的与会者 = 干系人邮箱，durable 锚）。
+        resource_key 是**系列级**（``event_resource_key`` 不含 recurrence_id）⇒ 拒一次
+        管整个系列；换一批与会者命中 = 新 fingerprint，可再提。occurrence 细节只进
+        provenance。
+        """
+        external_key = event_resource_key(ical_uid)
+        evidence = [f"stakeholder:{email}" for email in matched_emails]
+        now = self.clock_ms()
+        with self._transaction() as conn:
+            matter = self._require_matter(conn, public_id)
+            backlog = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM matter_resource WHERE matter_id=? "
+                    "AND deleted_at IS NULL AND confirmed_at IS NULL AND added_by_kind='agent'",
+                    (matter["id"],),
+                ).fetchone()[0]
+            )
+            if backlog >= RESOURCE_SUGGESTION_BACKLOG_CAP:
+                return {"status": "backlog_capped"}
+            canonical_key = rejection_resource_key(EMAIL_PROVIDER, "event", external_key)
+            fingerprint = evidence_fingerprint(canonical_key, evidence)
+            rejection = self.repository.get_resource_rejection(
+                conn, matter["id"], canonical_key
+            )
+            if rejection and rejection["evidence_fingerprint"] == fingerprint:
+                return {"status": "suppressed", "reason": "rejected_same_evidence"}
+            provenance = {
+                "reason": "calendar_event_ended",
+                "evidence": evidence,
+                "evidence_fingerprint": fingerprint,
+                "ical_uid": ical_uid,
+                "recurrence_id": recurrence_id,
+                "occurrence_start_ms": occurrence_start_ms,
+                "occurrence_end_ms": occurrence_end_ms,
+                "matched_stakeholder_emails": list(matched_emails),
+            }
+            resource, _ = self._upsert_resource(
+                conn,
+                {
+                    "provider": EMAIL_PROVIDER,
+                    "kind": "event",
+                    "external_key": external_key,
+                    "title": title,
+                    "metadata": {},
+                },
+                now,
+            )
+            live = self.repository.get_resource_link(
+                conn, matter["id"], resource["id"], live_only=True
+            )
+            if live:
+                return {"status": "already_linked"}
+            deleted = self.repository.get_resource_link(conn, matter["id"], resource["id"])
+            if deleted:
+                conn.execute(
+                    "UPDATE matter_resource SET added_by_kind='agent',added_by_id=NULL,"
+                    "confidence=NULL,provenance_json=?,confirmed_at=NULL,deleted_at=NULL,"
+                    "updated_at=? WHERE id=?",
+                    (self._dump(provenance), now, deleted["id"]),
+                )
+                link_id = deleted["id"]
+            else:
+                link_id = self.repository.insert_resource_link(
+                    conn,
+                    {
+                        "matter_id": matter["id"], "resource_id": resource["id"],
+                        "relation_type": None, "pinned": 0,
+                        "added_by_kind": "agent", "added_by_id": None,
+                        "confidence": None,
+                        "provenance_json": self._dump(provenance),
+                        "confirmed_at": None, "sub_state": "none",
+                        "created_at": now, "updated_at": now,
+                    },
+                )
+            event_key = (
+                f"matter:{matter['id']}:resource_linked:{resource['id']}:{fingerprint}"
+            )
+            if not self.repository.find_event(conn, event_key):
+                self._append_event(
+                    conn, matter_id=matter["id"], kind=RESOURCE_LINKED,
+                    actor=Actor(kind="agent"), source="matter_followup",
+                    dedupe_key=event_key, reason="calendar_event_ended",
+                    resource_id=resource["id"],
+                    payload={
+                        "link_id": link_id, "suggested": True,
+                        "evidence_fingerprint": fingerprint,
+                        "title": truncated_text(resource.get("title")),
+                        "resource_kind": resource.get("kind"),
+                    },
+                    happened_at=now,
+                )
+            if not self._cas_update(
+                conn, matter["id"], int(matter["version"]),
+                {"updated_at": now, "last_activity_at": now},
+                scope=scope_from_resources([int(resource["id"])]),
+            ):
+                raise self._version_conflict()
+            return {"status": "proposed", "link_id": link_id, "resource_id": int(resource["id"])}
 
     def list_resource_candidates(
         self, public_id: str, *, limit: int = RESOURCE_DISCOVERY_MAX_CANDIDATES

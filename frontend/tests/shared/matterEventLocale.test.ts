@@ -4,6 +4,10 @@ import { resolve } from 'node:path'
 
 import zh from '../../src/shared/i18n/locales/zh-CN/common.json'
 import en from '../../src/shared/i18n/locales/en-US/common.json'
+import {
+  MATTER_CONDITION_TRIGGER_TYPES,
+  MATTER_EVENT_TRIGGER_TYPES
+} from '@shared/api/types/matter'
 
 /**
  * 跨语言闸：`matters.events.*` 必须覆盖 Python 侧 `MATTER_EVENT_KINDS` 的全集。
@@ -104,6 +108,29 @@ describe('matter event locale coverage', () => {
       const labels = (bundle as { matters: { eventField: Record<string, string> } }).matters
         .eventField
       expect(labels.description?.trim()).toBeTruthy()
+    })
+  })
+
+  /**
+   * 跟进规则编辑器把 `MATTER_EVENT_TRIGGER_TYPES` / `MATTER_CONDITION_TRIGGER_TYPES`
+   * 逐项拿去查 `matters.trigger.event.*` / `matters.trigger.condition.*`（`MatterTriggerEditor`
+   * 的下拉项）。词表本身有 Python↔TS 的 parity 闸，但 locale 是**第三份手抄** —— 少一条
+   * key，下拉里就直出裸标识符（i18next 的 key 回落），而两侧词表仍然一致、闸全绿。
+   */
+  describe('matters.trigger.* labels every trigger option', () => {
+    it.each([
+      ['zh-CN', zh],
+      ['en-US', en]
+    ])('%s covers every event / condition trigger type', (_locale, bundle) => {
+      const trigger = (
+        bundle as {
+          matters: { trigger: { event: Record<string, string>; condition: Record<string, string> } }
+        }
+      ).matters.trigger
+      expect(MATTER_EVENT_TRIGGER_TYPES.filter((type) => !trigger.event[type]?.trim())).toEqual([])
+      expect(
+        MATTER_CONDITION_TRIGGER_TYPES.filter((type) => !trigger.condition[type]?.trim())
+      ).toEqual([])
     })
   })
 

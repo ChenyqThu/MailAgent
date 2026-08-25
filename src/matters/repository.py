@@ -13,7 +13,7 @@ from .models import (
     MATTER_TAG_DEFAULT_COLOR,
     MATTER_TAG_DEFAULT_SHAPE,
 )
-from .resource_identity import parse_resource_key
+from .resource_identity import MAILAGENT_IDENTITY_KINDS, parse_resource_key
 
 #: 「下一步」的档位表（越小越优先）。值域与前端 `matterDerive.MatterNextActionKind` 的
 #: 条目那三档同名 —— 状态派生的 monitoring / done / missing 三档不在这里（见
@@ -922,7 +922,7 @@ class MatterRepository:
         return results
 
     def resource_available(self, conn: sqlite3.Connection, provider: str, kind: str, external_key: str) -> bool:
-        if provider != "mailagent" or kind not in {"email", "thread"}:
+        if provider != "mailagent" or kind not in MAILAGENT_IDENTITY_KINDS:
             return True
         try:
             parsed_kind, identifier = parse_resource_key(
@@ -935,7 +935,14 @@ class MatterRepository:
         if kind == "email":
             internal_id = int(identifier)
             return conn.execute("SELECT 1 FROM email_metadata WHERE internal_id=?", (internal_id,)).fetchone() is not None
-        return conn.execute("SELECT 1 FROM email_metadata WHERE thread_id=? LIMIT 1", (identifier,)).fetchone() is not None
+        if kind == "thread":
+            return conn.execute("SELECT 1 FROM email_metadata WHERE thread_id=? LIMIT 1", (identifier,)).fetchone() is not None
+        # event：calendar_event 任意（未软删）行在即在 —— 身份是系列级 ical_uid，
+        # 不看 recurrence_id / source（caldav 是唯一活跃写入方，email_ics 从未写入）。
+        return conn.execute(
+            "SELECT 1 FROM calendar_event WHERE ical_uid=? AND deleted_at IS NULL LIMIT 1",
+            (identifier,),
+        ).fetchone() is not None
 
     def rebuild_all_search_documents(self) -> int:
         with self.transaction() as conn:

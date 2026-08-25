@@ -2201,7 +2201,12 @@
       "deleted": "已删除「{title}」",
       "deletedSubtitle": "5 秒后同步到 CalDAV",
       "restored": "已恢复 (未提交删除)",
-      "deleteFailed": "删除事件失败"
+      "deleteFailed": "删除事件失败",
+      "rescheduled": "已改期「{title}」",
+      "resized": "已调整「{title}」时长",
+      "rescheduledSubtitle": "{range} · 5 秒后同步到 CalDAV",
+      "rescheduleReverted": "已恢复原时间 (未提交)",
+      "rescheduleFailed": "改期失败"
     },
     "view": {
       "day": {
@@ -5896,6 +5901,8 @@
       "traceHint": "无变化的运行不会产生更新，但仍然留痕",
       "manual": "手动",
       "schedule": "定时",
+      "event": "事件",
+      "condition": "条件",
       "review": "查看提案",
       "queued": "排队中",
       "running": "读取与比对变化中",
@@ -5999,6 +6006,7 @@
         "manual": "手动"
       },
       "event": {
+        "calendar_event_ended": "关联的会议结束",
         "resource_linked_mail": "关联了新的邮件或会话",
         "resource_doc_updated": "关联文档有新版本"
       },

@@ -10,11 +10,19 @@ def test_normalize_mailagent_resource_keys():
     assert normalize_resource_key("mailagent", "email", "email:123") == "email:123"
     assert normalize_resource_key("mailagent", "thread", "thread-abc") == "thread:thread-abc"
     assert normalize_resource_key("mailagent", "thread", "thread:thread-abc") == "thread:thread-abc"
+    assert normalize_resource_key("mailagent", "event", "uid-1") == "event:uid-1"
+    assert normalize_resource_key("mailagent", "event", "event:uid-1") == "event:uid-1"
 
 
 @pytest.mark.parametrize(
     ("kind", "external_key"),
-    (("email", "abc"), ("email", "thread:123"), ("thread", "email:123")),
+    (
+        ("email", "abc"),
+        ("email", "thread:123"),
+        ("thread", "email:123"),
+        ("event", "thread:abc"),
+        ("event", ""),
+    ),
 )
 def test_normalize_rejects_invalid_mailagent_resource_keys(kind, external_key):
     with pytest.raises(MatterError) as exc_info:
