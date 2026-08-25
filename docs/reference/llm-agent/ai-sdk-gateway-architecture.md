@@ -1403,3 +1403,47 @@ Run active（含审批等待）时 Enter 入队不发请求；Run 真正 onFinis
 ### 13.25.6 flag 与回退
 
 `MAILAGENT_INTERNAL_AGENT_TOOLS` **双载体默认 ON**（Python pydantic `internal_agent_tools_enabled` + Node `envBool`，两侧默认必须同为 true）。有意偏离 ship-off 惯例：它修的是「主 agent 对自己的 agent 全盲」，off = 痛点依旧；manual-only（class capability_change）+ 写工具恒 ask 已是安全地板，同 P0 `plan_tool` 先例。显式 false = 三件套与 `matter_followup_mutate` 都不注册，ToolSet 字节级回 08-14 前。注册是 flag + guard 的 all-or-nothing（只注册读面 = 广告半个能力）。
+
+## 13.26 审批卡 preview 服务端化（task 08-24 L4 批次 1 #6，无 flag）
+
+### 13.26.1 起因：审批卡上那行字是模型在复述自己
+
+`approvalInputPreview`（`chatRun.ts`）只吃**模型给的 tool args**：挑 `to` / `subject` /
+`body` 拼一行，认不出就 `JSON.stringify` 兜底。可写工具的一部分载荷是**服务端派生**的：
+
+- `email_draft_reply` 不传 `to` = 「让服务端算 reply-all」——审批时刻用户看不到真实收件人
+  （执行完才有 `final_to` 回显）；
+- `calendar_event_reschedule` 只带一个 `ical_uid`——「改期前是什么样」全靠模型自述。
+
+桌面 `CalendarApprovalCard` 早已按「事实由服务端现查、模型只出提案」重做，但**只有它**：
+岛卡 / 飞书卡 / 记录页 `PendingApprovalPanel` 拿到的只有 `inputPreview` 这**一根**文案。
+
+### 13.26.2 结构：一个服务端端点 + 一个 gateway 决策点
+
+- **serve-api** `POST /api/approval/preview`（`src/api/routers/approval_preview.py`，
+  `verify_local_token`——只认同机 gateway，不接受 CF JWT）→ 派生器注册表
+  `src/services/approval_preview.py`。入 `{toolName, input}`，出 `{toolName, preview}`；
+  **没有派生器 / 事实取不到 / 形状不对 = 200 + `preview: null`**（不是 4xx——调用方只该有
+  「拿到就用、拿不到就回落」一条分支）。
+- **gateway** `resolveApprovalPreview(cfg, toolName, input)`（`chatRun.ts`）是**唯一**决策点：
+  `cfg.fetchApprovalPreview`（lifecycle → `domainClient.fetchApprovalPreview`，2s 超时 +
+  吞异常）拿到非空串就用它，否则回落 `approvalInputPreview`。两处产出点共用它 ——
+  `maybeStashAndAnnounceApproval` 的 announce 腿 + `GET /api/ai/approval/pending` ——
+  于是岛 / 飞书 / 记录页三面自动继承。chat 内 a2ui 富卡**不动**（它有自己的确定性 mapper）。
+
+首批两个派生器：`email_draft_reply`（真实收件人/主题，走 `MailWriteService.compose_plan`
+这条文档化的「无 auth 无写」dry-run，**与执行同一条派生**，不另抄一份）与
+`calendar_event_reschedule`（`calendar_event` 行的现标题 + 现起止 → 模型提案）。
+
+### 13.26.3 纪律
+
+- 🔴 **fail-open**：serve-api 不可达 / 超时 / 派生器抛 → 旧文案照常出卡。少一行事实是降级，
+  少一张卡是事故；写本身的门是 ApprovalGuard + Python 写权威，两者都不信这根字符串。
+- 🔴 **没挂 hook 的 gateway 字节级不变**，且 announce 腿在无 hook 时**仍是同步**的（有闸：
+  `tests/ai-gateway/approval_preview.test.ts` ④ 在 await 之前断言）。
+- 🔴 **不要为「让卡上多一行」而给没有服务端事实的工具加派生器**：`email_prepare_send` 的
+  收件人/主题/正文全是模型显式给的，再生成一遍只是换个壳复述，反而让用户以为这行被核对过。
+  新增覆盖前先问：这个工具有没有服务端派生值或库内现值？
+- 端点路径**不在** `/api/ai/approval/*` 下：那一整段是 `ai_gateway_proxy` 转发到 gateway 的
+  地盘（resolve / pending / decide），serve-api 自有的端点挂自己的前缀，免得下一个人把它也加
+  进代理清单。

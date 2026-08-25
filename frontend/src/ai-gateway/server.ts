@@ -31,14 +31,14 @@ import {
   type MailAgentUIMessageMetadata
 } from '@shared/assistant/uiMessage'
 import {
-  approvalInputPreview,
   extractApprovalStashInput,
   generateSessionTitle,
   lastUserMessage,
   llmCredentialsMissing,
   makeIdGenerator,
   makePersistOnFinish,
-  prepareChatRun
+  prepareChatRun,
+  resolveApprovalPreview
 } from './chatRun'
 // HIGH-1 (batch1 review) — SDK-free typed credentials error (the registry resolver throws it when
 // the selected provider row lacks a required key); mapped back to 503 E_NO_LLM_KEY below.
@@ -1413,7 +1413,11 @@ async function handleApprovalDecide(
  * serve-api announce leg. `pending:true` + `toolName` are kept verbatim for the island-notice
  * consumer (superset, zero-touch).
  */
-function handleApprovalPending(res: ServerResponse, cfg: AiGatewayConfig, url: string): void {
+async function handleApprovalPending(
+  res: ServerResponse,
+  cfg: AiGatewayConfig,
+  url: string
+): Promise<void> {
   const raw = new URL(url, 'http://127.0.0.1').searchParams.get('sessionId')
   const sessionId = raw != null && /^-?\d+$/.test(raw) ? Number(raw) : null
   if (sessionId == null) {
@@ -1426,11 +1430,18 @@ function handleApprovalPending(res: ServerResponse, cfg: AiGatewayConfig, url: s
     return
   }
   const info = extractApprovalStashInput(entry.responseMessage)
+  // L4 批次1 #6 — same preview source as the island announce leg (server-derived facts first,
+  // the model's args second). Async now: this handler awaits serve-api, which is why it is
+  // dispatched through the crash belt. Unreadable stash input (no approval part) keeps the bare
+  // toolName — there is no input to describe, and inventing one is worse than saying less.
+  const inputPreview = info
+    ? await resolveApprovalPreview(cfg, entry.toolName, info.input)
+    : entry.toolName
   writeJson(res, 200, {
     pending: true,
     approvalId: entry.approvalId,
     toolName: entry.toolName,
-    inputPreview: info ? approvalInputPreview(entry.toolName, info.input) : entry.toolName,
+    inputPreview,
     agentId: entry.agentRunContext?.agentId ?? null,
     jobId: entry.agentRunContext?.jobId ?? null,
     // Stage 2 PR-4 (task 08-01 messenger) — the frozen DESTRUCTIVE bit, so an out-of-app approval
@@ -1635,7 +1646,8 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     // (nothing stashed) → 404 { pending:false } (fail-closed truth), a hit → the enriched
     // decide-card body (never the resumeToken).
     if (method === 'GET' && path === '/api/ai/approval/pending') {
-      handleApprovalPending(res, cfg, url)
+      // Async since #6 (the preview line is fetched from serve-api) → through the crash belt.
+      dispatch('/api/ai/approval/pending', res, handleApprovalPending(res, cfg, url))
       return
     }
 

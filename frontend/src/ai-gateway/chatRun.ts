@@ -657,7 +657,11 @@ export function extractApprovalStashInput(responseMessage: MailAgentUIMessage): 
 
 /** A compact one-line preview of a tool input for the island approval card (the model-proposed
  *  action). Prefers common human-facing fields (subject / body / recipients), falls back to a clipped
- *  JSON. Never throws; caps length. */
+ *  JSON. Never throws; caps length.
+ *
+ *  🔴 Everything here is the MODEL RE-TELLING ITSELF — it is the FALLBACK of
+ *  resolveApprovalPreview (below), not the preferred source. Prefer adding a server-side deriver
+ *  (src/services/approval_preview.py) over teaching this function about another tool's fields. */
 export function approvalInputPreview(toolName: string, input: unknown): string {
   const clip = (s: string, n = 180): string => {
     const one = s.replace(/\s+/g, ' ').trim()
@@ -676,6 +680,35 @@ export function approvalInputPreview(toolName: string, input: unknown): string {
     return clip(`${toolName}: ${JSON.stringify(input)}`)
   } catch {
     return toolName
+  }
+}
+
+/** L4 批次1 #6 — the ONE place that decides where an approval preview line comes from: serve-api's
+ *  server-derived facts first (cfg.fetchApprovalPreview → POST /api/approval/preview), the
+ *  model's own args second (approvalInputPreview).
+ *
+ *  Why the server leg exists at all: part of a write's payload is derived server-side, so the
+ *  model's args are NOT the action. An `email_draft_reply` with no `to` means "server, compute
+ *  reply-all" — the surfaces that only get this one line (island card, Feishu card, record view)
+ *  would show the user everything EXCEPT who the mail actually goes to.
+ *
+ *  🔴 fail-OPEN, deliberately: no deriver for this tool (null) / serve-api down / it threw →
+ *  the old client-side line. A missing FACT degrades the card; a missing CARD blocks the user.
+ *  The write itself is still gated by the ApprovalGuard + the Python write authority, neither of
+ *  which trusts this string. */
+export async function resolveApprovalPreview(
+  cfg: AiGatewayConfig,
+  toolName: string,
+  input: unknown
+): Promise<string> {
+  const fallback = approvalInputPreview(toolName, input)
+  if (!cfg.fetchApprovalPreview) return fallback
+  try {
+    const server = await cfg.fetchApprovalPreview({ toolName, input })
+    const trimmed = typeof server === 'string' ? server.trim() : ''
+    return trimmed.length > 0 ? trimmed : fallback
+  } catch {
+    return fallback
   }
 }
 
@@ -782,14 +815,33 @@ function maybeStashAndAnnounceApproval(
     // announceApprovalToIsland is undefined unless the island flag is on, so the explicit guard just
     // documents the split and skips the preview compute when the island is off.
     if (cfg.islandAgentEnabled) {
-      cfg.announceApprovalToIsland?.({
-        sessionId: run.sessionId,
-        toolCallId: info.toolCallId,
-        toolName: info.toolName,
-        risk: '', // the lifecycle enriches risk from ApprovalGuard.peek (it owns the guard)
-        inputPreview: approvalInputPreview(info.toolName, info.input),
-        resumeToken
-      })
+      const announce = (inputPreview: string): void => {
+        cfg.announceApprovalToIsland?.({
+          sessionId: run.sessionId,
+          toolCallId: info.toolCallId,
+          toolName: info.toolName,
+          risk: '', // the lifecycle enriches risk from ApprovalGuard.peek (it owns the guard)
+          inputPreview,
+          resumeToken
+        })
+      }
+      // L4 批次1 #6 — the preview line now prefers serve-api's server-derived facts. The hook is
+      // async, and the announce is already fire-and-forget, so we let the card wait for the facts
+      // (bounded by the wrapper's own timeout) instead of pushing a line we know is weaker.
+      // 🔴 No hook wired (harness cfg / preview endpoint unreachable at construction time) → the
+      // SYNCHRONOUS old path, so a pause still announces within this tick exactly as before.
+      if (cfg.fetchApprovalPreview) {
+        void resolveApprovalPreview(cfg, info.toolName, info.input)
+          .then(announce)
+          // resolveApprovalPreview never rejects (it owns the fallback); this catch is the async
+          // half of the outer try/catch — an announce that throws must not surface as an
+          // unhandled rejection.
+          .catch((err) => {
+            console.error('[ai-gateway] island approval announce failed (turn paused OK)', err)
+          })
+      } else {
+        announce(approvalInputPreview(info.toolName, info.input))
+      }
     }
   } catch (err) {
     console.error('[ai-gateway] island approval stash/announce failed (turn paused OK)', err)

@@ -1813,6 +1813,24 @@ export class MailAgentDomainClient {
     return this._req('GET', '/agent/tool-prefs', { signal })
   }
 
+  /** L4 批次1 #6 — POST /approval/preview → the approval-card line built from the REAL payload
+   *  (server-derived reply-all recipients, the calendar row's CURRENT title/times …). `preview`
+   *  is null when no deriver covers that tool — the normal case, and the caller (chatRun's
+   *  resolveApprovalPreview) then falls back to the model's own args. NOT a write: it reads
+   *  domain facts for a human to review, and the Python side never mutates. */
+  async fetchApprovalPreview(
+    toolName: string,
+    input: unknown,
+    signal?: AbortSignal
+  ): Promise<string | null> {
+    const data = await this._req<{ toolName: string; preview: string | null }>(
+      'POST',
+      '/approval/preview',
+      { body: { toolName, input }, signal }
+    )
+    return typeof data?.preview === 'string' && data.preview.length > 0 ? data.preview : null
+  }
+
   // ── policy primitives (S2 W1) — the structured whitelist. evaluate is consulted by the exec
   //    tools' needsApproval (auto_allow → skip card); the CRUD methods back the Settings automation
   //    policy page + the approval-card "always allow" affordance (rule creation is an OWNER action

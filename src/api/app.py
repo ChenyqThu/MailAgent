@@ -406,6 +406,7 @@ from src.api.routers import (  # noqa: E402
     agent_runs,
     ai,
     ai_gateway_proxy,
+    approval_preview,
     attachment,
     calendar,
     chat,
@@ -478,6 +479,11 @@ app.include_router(exec_router.router)
 # 权威事实）+ 岛 resume 后回写 approval_state。owner-only（verify_local_token，不接受 CF JWT）；
 # flag MAILAGENT_CUSTOM_AGENTS_ENABLED 默认 off → 端点 404。
 app.include_router(agent_runs.router)
+# L4 批次1 #6 (审批卡 preview 服务端化) — /api/approval/preview。同机 embedded gateway
+# 在暂停/查 pending 时调它，拿服务端按真实 payload 生成的一行摘要（模型不传 to 时的
+# reply-all 真实收件人、日历改期的事件现值）；null / 失败时 gateway 回落旧文案。
+# owner-only 且只认本地 token（verify_local_token，不接受 CF JWT）—— 见 router docstring。
+app.include_router(approval_preview.router)
 # ping-island 解耦 ack 通道 (契约 §6/§9-4): 按钮点击 fire-and-forget POST 回灌。
 # 自认 ack_token 能力令牌 (不挂 verify_cf_access)，见 routers/island.py。
 app.include_router(island.router)

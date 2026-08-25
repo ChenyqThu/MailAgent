@@ -791,6 +791,27 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     return value
   }
 
+  // L4 批次1 #6 — the approval-card preview line, built by serve-api from the REAL payload
+  // (POST /api/approval/preview). 🔴 fail-OPEN by contract, and the contract is implemented HERE:
+  // bounded timeout + swallow everything → null, so the gateway core's fallback (the model's own
+  // args) is the only thing a slow/unreachable serve-api can cost us. The timeout matches
+  // resolveToolApprovalPrefs — an approval card is a user-facing pause, not a background job.
+  const fetchApprovalPreview = async (info: {
+    toolName: string
+    input: unknown
+  }): Promise<string | null> => {
+    try {
+      return await domain.fetchApprovalPreview(
+        info.toolName,
+        info.input,
+        AbortSignal.timeout(2_000)
+      )
+    } catch (err) {
+      console.warn('[ai-gateway] approval preview fetch failed — falling back to model args', err)
+      return null
+    }
+  }
+
   // Part B (harness 上岛) — fire-and-forget announce a paused approval to the island via serve-api
   // /api/island/agent/announce. Enriches `risk` from the ApprovalGuard (main owns it) and stamps THIS
   // gateway's port so serve-api's ack → /api/ai/approval/decide callback reaches us. Local-token
@@ -1302,6 +1323,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     detachedRunsEnabled,
     activeRuns,
     announceApprovalToIsland: islandAgentEnabled ? announceApprovalToIsland : undefined,
+    // L4 批次1 #6 — always wired (not island-gated): the in-panel / record-view pending probe is a
+    // first-class approval surface too, and it reads the same preview line.
+    fetchApprovalPreview,
     // /decide short-circuit vs a renderer that won the race: has THIS approval already reached a
     // terminal decision (executed OR rejected) on the other surface? If so, resumeApprovalRun does
     // not re-run (no double execute / persist; a renderer reject also blocks a later in-panel/island

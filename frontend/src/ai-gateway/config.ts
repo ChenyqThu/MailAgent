@@ -416,6 +416,18 @@ export interface AiGatewayConfig {
    *  the stash minted. 🔴 MUST be fire-and-forget (returns void, never awaited) so a slow/failed
    *  announce can't block the already-streamed (paused) turn. Omitted → no island announce. */
   announceApprovalToIsland?: (info: IslandApprovalAnnounce) => void
+  /** L4 批次1 #6 — ask serve-api for the approval preview line built from the REAL payload
+   *  (POST /api/approval/preview → src/services/approval_preview.py). The gateway's own
+   *  `approvalInputPreview` can only re-tell the model's args, and part of a write's payload is
+   *  server-derived (an email_draft_reply without `to` means "server, compute reply-all" — the
+   *  card would show recipients the model never wrote), so the FACTS have to come from the side
+   *  that owns them (CalendarApprovalCard's live-fetch precedent, now shared by the island /
+   *  Feishu / record surfaces that only ever get this one line).
+   *  Resolve `null` = no deriver for this tool (the normal case) → the caller falls back to
+   *  approvalInputPreview. 🔴 fail-OPEN by contract: the wrapper must swallow its own errors +
+   *  bound its own timeout — an unreachable serve-api must never cost the user an approval card.
+   *  Omitted (hand-built cfg / harness) → the pre-#6 client-side preview, byte-identical. */
+  fetchApprovalPreview?: (info: { toolName: string; input: unknown }) => Promise<string | null>
   /** Part B — read whether an approval already reached a TERMINAL decision on ANY surface (approved
    *  +executed OR rejected — ApprovalGuard.isResolved). /api/ai/approval/decide short-circuits on this
    *  so it never re-runs an approval the RENDERER already resolved (in-app approve executed, or in-app
