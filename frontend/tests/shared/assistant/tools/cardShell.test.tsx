@@ -27,7 +27,12 @@ import {
   CardFrame,
   CardParams
 } from '@shared/assistant/tools/_cardShell'
-import { approvalActionsMotion, type CardPhase } from '@shared/assistant/tools/_cardShell.lib'
+import {
+  APPROVAL_REASON_MAX_CHARS,
+  approvalActionsMotion,
+  normalizeApprovalReason,
+  type CardPhase
+} from '@shared/assistant/tools/_cardShell.lib'
 import { McpApprovalCard } from '@shared/assistant/tools/generic/McpApprovalCard'
 
 await i18n.changeLanguage('zh-CN')
@@ -350,9 +355,112 @@ describe('A5 — action row exit + press feedback', () => {
     fireEvent.click(screen.getByText('允许'))
     expect(respond).toHaveBeenCalledWith({ approved: true })
     cleanup()
+    // McpApprovalCard opts into rejectReason (L4 批次2): the first click only opens the box, the
+    // confirm click decides.
     const respond2 = vi.fn()
     render(<McpApprovalCard {...mcpProps({ respondToApproval: respond2 })} />)
     fireEvent.click(screen.getByText('拒绝'))
-    expect(respond2).toHaveBeenCalledWith({ approved: false })
+    expect(respond2).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('确认拒绝'))
+    expect(respond2).toHaveBeenCalledWith({ approved: false, reason: undefined })
+  })
+})
+
+// ───────────── L4 批次2 · 拒绝并给文字指导（response 维度）─────────────
+//
+// The reason box is OPT-IN (`rejectReason`). That is a correctness boundary, not a taste call: every
+// chat rich card passes `onReject={() => respondToApproval({approved:false})}` — an arrow that drops
+// its argument — so a default-on box would collect guidance the model never sees. The default-off
+// half is pinned first, because it is what keeps all 17 existing cards byte-identical.
+
+describe('L4 批次2 — reject reason (opt-in)', () => {
+  test('default (no rejectReason) → one click decides, no box, reason undefined', () => {
+    const onReject = vi.fn()
+    render(
+      <CardFrame icon={null} title="t" phase="pending">
+        <ApprovalActions onApprove={vi.fn()} onReject={onReject} />
+      </CardFrame>
+    )
+    fireEvent.click(screen.getByText('拒绝'))
+    expect(onReject).toHaveBeenCalledWith(undefined)
+    expect(screen.queryByLabelText('拒绝理由（可选）')).toBeNull()
+  })
+
+  test('opted in → the first click only opens the box; the confirm carries the trimmed reason', () => {
+    const onReject = vi.fn()
+    render(
+      <CardFrame icon={null} title="t" phase="pending">
+        <ApprovalActions onApprove={vi.fn()} onReject={onReject} rejectReason />
+      </CardFrame>
+    )
+    fireEvent.click(screen.getByText('拒绝'))
+    expect(onReject).not.toHaveBeenCalled() // a mis-click must not deny
+    fireEvent.change(screen.getByLabelText('拒绝理由（可选）'), {
+      target: { value: '  换个说法再来  ' }
+    })
+    fireEvent.click(screen.getByText('确认拒绝'))
+    expect(onReject).toHaveBeenCalledWith('换个说法再来')
+  })
+
+  test('confirming an empty box → undefined (not an empty string on the wire)', () => {
+    const onReject = vi.fn()
+    render(
+      <CardFrame icon={null} title="t" phase="pending">
+        <ApprovalActions onApprove={vi.fn()} onReject={onReject} rejectReason />
+      </CardFrame>
+    )
+    fireEvent.click(screen.getByText('拒绝'))
+    fireEvent.click(screen.getByText('确认拒绝'))
+    expect(onReject).toHaveBeenCalledWith(undefined)
+  })
+
+  test('返回 closes the box without deciding, and the draft does not survive', () => {
+    const onReject = vi.fn()
+    render(
+      <CardFrame icon={null} title="t" phase="pending">
+        <ApprovalActions onApprove={vi.fn()} onReject={onReject} rejectReason />
+      </CardFrame>
+    )
+    fireEvent.click(screen.getByText('拒绝'))
+    fireEvent.change(screen.getByLabelText('拒绝理由（可选）'), { target: { value: '算了' } })
+    fireEvent.click(screen.getByText('返回'))
+    expect(onReject).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('拒绝'))
+    expect((screen.getByLabelText('拒绝理由（可选）') as HTMLTextAreaElement).value).toBe('')
+  })
+
+  test('approving with the box open still approves (the reason is not smuggled into it)', () => {
+    const onApprove = vi.fn()
+    const onReject = vi.fn()
+    render(
+      <CardFrame icon={null} title="t" phase="pending">
+        <ApprovalActions onApprove={onApprove} onReject={onReject} rejectReason />
+      </CardFrame>
+    )
+    fireEvent.click(screen.getByText('拒绝'))
+    fireEvent.change(screen.getByLabelText('拒绝理由（可选）'), { target: { value: 'x' } })
+    fireEvent.click(screen.getByText('允许'))
+    expect(onApprove).toHaveBeenCalled()
+    expect(onReject).not.toHaveBeenCalled()
+  })
+
+  test('the box is clamped to the shared limit the endpoint enforces', () => {
+    render(
+      <CardFrame icon={null} title="t" phase="pending">
+        <ApprovalActions onApprove={vi.fn()} onReject={vi.fn()} rejectReason />
+      </CardFrame>
+    )
+    fireEvent.click(screen.getByText('拒绝'))
+    expect(screen.getByLabelText('拒绝理由（可选）').getAttribute('maxLength')).toBe(
+      String(APPROVAL_REASON_MAX_CHARS)
+    )
+  })
+
+  test('normalizeApprovalReason: trims, drops empty, clamps at the limit', () => {
+    expect(normalizeApprovalReason('  hi  ')).toBe('hi')
+    expect(normalizeApprovalReason('   ')).toBeUndefined()
+    expect(normalizeApprovalReason('')).toBeUndefined()
+    const long = 'x'.repeat(APPROVAL_REASON_MAX_CHARS + 50)
+    expect(normalizeApprovalReason(long)?.length).toBe(APPROVAL_REASON_MAX_CHARS)
   })
 })

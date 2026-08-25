@@ -1024,6 +1024,15 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       const rec = approvalGuard.applyEdit(toolCallId, editedFields)
       return { approvalId: rec.approvalId, toolName: rec.toolName }
     },
+    // L4 批次2 — the READ-ONLY half of the same seam: GET /api/ai/approval/pending surfaces the
+    // EFFECTIVE input + the registered editableFields so the generic in-panel approval card can
+    // render an editor for the 12 tools that registered editable fields (chat's 3 rich edit cards
+    // stay as they are). peek never mutates / never consumes; nothing else of the record leaves.
+    peekApprovalRecord: (toolCallId: string) => {
+      const rec = approvalGuard.peek(toolCallId)
+      if (!rec) return null
+      return { input: rec.editedInput ?? rec.input, editableFields: rec.editableFields ?? [] }
+    },
     // S2 W1 — the exec approval card's "always allow" affordance (POST /api/ai/policy/remember).
     // Peek the pending exec approval (READ-ONLY — never mutates/consumes; the same approved
     // argv/cwd/path so the model cannot forge a broader rule), derive a full-PIN structured rule,

@@ -9,9 +9,8 @@
 //   3. 域面板行 = registry 里该域门控通过、有 panel 落位的条目（每个域各断一次）；
 //      邮件域另有 compose CTA，agents 域另有「报告 / Chats」轻量 tab 行
 //   4. shell 内 .row-selected ≤ 1；导轨选中格恰 1 且 = 当前路由归属域
-//   5. gate:'never' 的预留位（今日）永远不上导轨、不进面板
-//   6. 门控关（matters / contacts off）→ 对应导轨格消失
-//   7. 逐格 / 逐行点击落到自己的目标（含 search 默认值）；点当前域的格 = 折叠面板
+//   5. 门控关（matters / contacts off）→ 对应导轨格消失
+//   6. 逐格 / 逐行点击落到自己的目标（含 search 默认值）；点当前域的格 = 折叠面板
 //
 // 🔴 手写期望清单**不是**从 registry 反推的，所以「registry 改了但 UI 没跟上」
 // 「UI 手塞了一格 registry 里没有的」两个方向都会红；投影断言那半从 registry 推，
@@ -91,7 +90,7 @@ import { SETTINGS_TABS } from '../../src/shared/lib/settingsTabs'
 import { useNavCollapsed } from '../../src/shared/state/nav-shell'
 
 /** 门控全开时的导轨格（自上而下 = 屏幕上的顺序），**手写**期望。 */
-const ALL_RAIL = ['邮件', '日历', '事项', '通讯录', 'Agents', '运维', '设置']
+const ALL_RAIL = ['今日', '邮件', '日历', '事项', '通讯录', 'Agents', '运维', '设置']
 const BOTTOM_RAIL = ['运维', '设置']
 
 /** 邮件域面板五行（手写）。 */
@@ -109,6 +108,7 @@ function makeWrappedRouter(initialPath: string): ReturnType<typeof createRouter>
   // 空组件路由树：只为让各域路由「存在」，面板/导轨的选中态与域推导有落点。
   const paths = [
     '/',
+    '/today',
     '/sessions',
     '/agents',
     '/matters',
@@ -231,7 +231,7 @@ describe('nav shell 结构契约', () => {
 describe('IconRail ↔ nav registry 投影', () => {
   afterEach(() => cleanup())
 
-  test('门控全开：7 格，顺序 = registry 的 rail.order（手写 + 投影两半）', async () => {
+  test('门控全开：8 格，顺序 = registry 的 rail.order（手写 + 投影两半）', async () => {
     const { container } = await renderShell()
     expect(railLabels(container)).toEqual(ALL_RAIL)
     expect(railLabels(container)).toEqual(projectedRail())
@@ -247,17 +247,6 @@ describe('IconRail ↔ nav registry 投影', () => {
     gates.contacts = false
     const { container } = await renderShell()
     expect(railLabels(container)).toEqual(ALL_RAIL.filter((l) => l !== '事项' && l !== '通讯录'))
-  })
-
-  test("gate:'never' 的预留位（今日）：不上导轨、不进任何面板", async () => {
-    const reserved = NAV_ENTRIES.filter((e) => e.gate === 'never')
-    expect(reserved.length).toBeGreaterThan(0)
-    const { container } = await renderShell()
-    for (const entry of reserved) {
-      expect(entry.to).toBeUndefined()
-      expect(entry.panel).toBeUndefined()
-      expect(railLabels(container)).not.toContain(navDomainLabel(entry.domain, i18n.t))
-    }
   })
 
   test('选中格恰 1 且 = 当前路由归属域（/sessions 归 agents 格）', async () => {
@@ -296,7 +285,7 @@ describe('IconRail ↔ nav registry 投影', () => {
       fireEvent.click(cell)
     }
     const calls: unknown[] = []
-    for (const label of ['邮件', '日历', '事项', '通讯录', '运维', '设置']) {
+    for (const label of ['今日', '邮件', '日历', '事项', '通讯录', '运维', '设置']) {
       clickCell(label)
       const last = navigate.mock.calls.at(-1)?.[0] as { to?: string; search?: unknown }
       calls.push(
@@ -305,6 +294,7 @@ describe('IconRail ↔ nav registry 投影', () => {
     }
     // 手写期望：search 缺省值也在这里钉死。
     expect(calls).toEqual([
+      { to: '/today' },
       { to: '/', search: { view: 'inbox' } },
       { to: '/admin/calendar', search: { view: 'week' } },
       { to: '/matters' },
@@ -383,10 +373,13 @@ describe('DomainPanel ↔ nav registry 投影', () => {
     }
   })
 
-  test('none 域（日历）：无面板、无开合按钮', async () => {
-    const { container } = await renderShell('/admin/calendar')
-    expect(container.querySelector('[data-nav-panel]')).toBeNull()
-    expect(container.querySelector('.nav-rail-toggle')).toBeNull()
+  test('none 域（日历 / 今日）：无面板、无开合按钮', async () => {
+    for (const path of ['/admin/calendar', '/today'] as const) {
+      const { container } = await renderShell(path)
+      expect(container.querySelector('[data-nav-panel]'), path).toBeNull()
+      expect(container.querySelector('.nav-rail-toggle'), path).toBeNull()
+      cleanup()
+    }
   })
 
   test('设置域：面板行 = 12 个 tab 直达行（词表单源 SETTINGS_TABS）+ 版本 footer', async () => {

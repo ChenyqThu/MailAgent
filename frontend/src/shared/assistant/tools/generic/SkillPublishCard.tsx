@@ -67,7 +67,11 @@ export function SkillPublishCard(props: ToolCallMessagePartProps): React.JSX.Ele
   }, [draftId, phase])
 
   return (
-    <CardFrame icon={<PackageCheck size={13} />} title={t('chat.skillPublishCard.title')} phase={phase}>
+    <CardFrame
+      icon={<PackageCheck size={13} />}
+      title={t('chat.skillPublishCard.title')}
+      phase={phase}
+    >
       {phase === 'pending' ? (
         factsError || !draftId ? (
           <div className="space-y-2">
@@ -82,16 +86,25 @@ export function SkillPublishCard(props: ToolCallMessagePartProps): React.JSX.Ele
               {facts.name} · {facts.validation?.package_hash?.slice(0, 12) ?? '—'}
             </div>
             <div>{t('chat.skillPublishCard.files', { count: facts.files.length })}</div>
-            <div className="break-all font-mono text-meta">{facts.files.map((file) => file.path).join('  ')}</div>
+            <div className="break-all font-mono text-meta">
+              {facts.files.map((file) => file.path).join('  ')}
+            </div>
             <div>{t('chat.skillPublishCard.enabled', { value: enabled ? 'yes' : 'no' })}</div>
-            {facts.replacesInstalled ? <div className="text-fail">{t('chat.skillPublishCard.replaceWarning')}</div> : null}
+            {facts.replacesInstalled ? (
+              <div className="text-fail">{t('chat.skillPublishCard.replaceWarning')}</div>
+            ) : null}
             <pre className="max-h-36 overflow-auto whitespace-pre-wrap rounded-md bg-ink-2 p-2 text-meta">
-              {JSON.stringify({ scripts: facts.validation?.scripts, tests: facts.validation?.tests }, null, 2)}
+              {JSON.stringify(
+                { scripts: facts.validation?.scripts, tests: facts.validation?.tests },
+                null,
+                2
+              )}
             </pre>
             <ApprovalActions
               onApprove={() => props.respondToApproval({ approved: true })}
-              onReject={() => props.respondToApproval({ approved: false })}
+              onReject={(reason) => props.respondToApproval({ approved: false, reason })}
               approveLabel={t('chat.skillPublishCard.approve')}
+              rejectReason
             />
           </div>
         ) : (

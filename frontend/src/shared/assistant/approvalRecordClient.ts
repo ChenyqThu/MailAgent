@@ -28,6 +28,20 @@ export interface PendingApprovalInfo {
   jobId: number | null
   /** Age since the approval was stashed (ms) — the card can show "N 分钟前". */
   ageMs: number
+  /** Stage 2 PR-4 — the connector tool's frozen destructive_hint (server-side registry, never the
+   *  model). The server has always returned it; the type omitted it, so the desktop card silently
+   *  rendered no warning while the Feishu card did (r1 §Caveats 末条). */
+  destructive: boolean
+  /** L4 批次2 — the EFFECTIVE tool input (a previous /resolve edit overlaid, else the model's
+   *  proposal). `null` when the stashed message carried no readable approval part. */
+  input: unknown
+  /** L4 批次2 — fields the tool factory registered as editable. Empty ⇒ approve/reject only (the
+   *  same boundary ApprovalGuard.applyEdit enforces); the card offers no editor. */
+  editableFields: string[]
+  /** L4 批次2 — the context mode FROZEN at pause time. `'manual_chat'` is the only mode in which
+   *  `tool_approval_pref` is consulted, so it gates the「记住这类操作」affordance; `null` = unknown
+   *  (older/hand-built stash entry) → fail closed, offer nothing. */
+  contextMode: string | null
 }
 
 /** POST /api/ai/approval/decide terminal result (mirrors the gateway ResumeResult wire shape). */
@@ -64,7 +78,15 @@ export async function fetchPendingApproval(sessionId: number): Promise<PendingAp
       inputPreview: typeof body.inputPreview === 'string' ? body.inputPreview : body.toolName,
       agentId: typeof body.agentId === 'string' ? body.agentId : null,
       jobId: typeof body.jobId === 'number' ? body.jobId : null,
-      ageMs: typeof body.ageMs === 'number' ? body.ageMs : 0
+      ageMs: typeof body.ageMs === 'number' ? body.ageMs : 0,
+      destructive: body.destructive === true,
+      input: body.input ?? null,
+      // Absent / malformed (a gateway older than this build) → no editor, no remember affordance:
+      // both degrade to the pre-L4 approve/reject card rather than guess.
+      editableFields: Array.isArray(body.editableFields)
+        ? body.editableFields.filter((f): f is string => typeof f === 'string')
+        : [],
+      contextMode: typeof body.contextMode === 'string' ? body.contextMode : null
     }
   } catch {
     return null
@@ -92,6 +114,39 @@ export async function postRememberWebPolicy(approvalId: string): Promise<boolean
   }
 }
 
+/** L4 批次2 — the in-panel EDIT side-channel: POST /api/ai/approval/resolve with the
+ *  `{ approvalId, editedInput }` shape (the panel never learns the internal toolCallId; the gateway
+ *  resolves it from the stash, read-only). The gateway overlays ONLY the registered editableFields
+ *  onto the pending approval's input — identity fields stay pinned and the model's history input is
+ *  untouched, so the approval stays valid on replay.
+ *
+ *  🔴 Call this BEFORE postApprovalDecide: /decide claims the stash, after which the approvalId no
+ *  longer resolves. Throws the typed gateway code (E_APPROVAL_NOT_FOUND / _EXPIRED / _NOT_EDITABLE)
+ *  on failure so the caller can surface it and NOT proceed to approve — an unsaved edit must never
+ *  be approved silently as the model's original proposal. */
+export async function postApprovalResolveEdit(
+  approvalId: string,
+  editedInput: Record<string, unknown>
+): Promise<void> {
+  const baseUrl = resolveAiGatewayBaseUrl()
+  if (baseUrl == null) throw new Error('E_NO_GATEWAY')
+  const res = await fetch(`${baseUrl}/api/ai/approval/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ approvalId, editedInput })
+  })
+  if (!res.ok) {
+    let code = `E_HTTP_${res.status}`
+    try {
+      const body = (await res.json()) as { error?: string }
+      if (body.error) code = body.error
+    } catch {
+      /* non-JSON error body — keep the status code */
+    }
+    throw new Error(code)
+  }
+}
+
 /** Decide a pending approval server-side (approve / reject) — the SAME /decide channel the island
  *  uses, but with the in-record { approvalId, decision } shape (PRD P9): the record view carries NO
  *  capability token; the gateway resolves the internal toolCallId + resumeToken from the stash by
@@ -101,6 +156,10 @@ export async function postRememberWebPolicy(approvalId: string): Promise<boolean
 export async function postApprovalDecide(input: {
   approvalId: string
   decision: 'approve' | 'reject'
+  /** L4 批次2 — the owner's free-text rejection reason. Reject-only by contract (the gateway drops
+   *  it on approve, where ai@7 emits no tool-result to carry it). Omit for a plain decision — the
+   *  body then matches the pre-L4 one byte for byte. */
+  reason?: string
 }): Promise<ApprovalDecideResult> {
   const baseUrl = resolveAiGatewayBaseUrl()
   if (baseUrl == null) {

@@ -241,7 +241,26 @@ describe('the buttons decide', () => {
     expect(respond).toHaveBeenCalledWith({ approved: true })
   })
 
-  test('reject routes to respondToApproval({approved:false})', async () => {
+  test('reject (no reason given) routes to respondToApproval({approved:false, reason:undefined})', async () => {
+    stubFacts(SERVER_FACTS)
+    const respond = vi.fn()
+    render(
+      <CalendarApprovalCard
+        {...mockProps('calendar_event_delete', { event_id: 'evt-1' }, {
+          respondToApproval: respond
+        } as Partial<ToolCallMessagePartProps>)}
+      />
+    )
+    await waitFor(() => expect(screen.getByText('拒绝')).toBeTruthy())
+    // L4 批次2 — reject is now two-step (rejectReason opt-in): the first click only opens the
+    // reason box, the confirm click decides.
+    fireEvent.click(screen.getByText('拒绝'))
+    expect(respond).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('确认拒绝'))
+    expect(respond).toHaveBeenCalledWith({ approved: false, reason: undefined })
+  })
+
+  test('reject with a typed reason forwards it to respondToApproval', async () => {
     stubFacts(SERVER_FACTS)
     const respond = vi.fn()
     render(
@@ -253,6 +272,10 @@ describe('the buttons decide', () => {
     )
     await waitFor(() => expect(screen.getByText('拒绝')).toBeTruthy())
     fireEvent.click(screen.getByText('拒绝'))
-    expect(respond).toHaveBeenCalledWith({ approved: false })
+    fireEvent.change(screen.getByLabelText('拒绝理由（可选）'), {
+      target: { value: '这个会议其实还没确认场地' }
+    })
+    fireEvent.click(screen.getByText('确认拒绝'))
+    expect(respond).toHaveBeenCalledWith({ approved: false, reason: '这个会议其实还没确认场地' })
   })
 })

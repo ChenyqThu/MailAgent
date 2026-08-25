@@ -316,8 +316,8 @@ export const useAppearance = create<Store>((set) => ({
   accent 字色，hover = ink-3；数字角标（`.railbadge`，13px 高 / 9px 字号 / 99+ 截断）
   骑 icon 右上角；底部沉 面板开合按钮（`.nav-rail-toggle`，PanelLeftOpen/Close）+
   「运维」「设置」（icon 18px，格间 6px，距底 10px）。格序（首版）：邮件 / 日历 /
-  事项 / 通讯录 / Agents ＋ 底部 运维 / 设置；「今日」registry 预留（`gate:'never'`，
-  批次 2 翻开）。
+  事项 / 通讯录 / Agents ＋ 底部 运维 / 设置；「今日」已随批次 2 翻开
+  （task 08-25-l4-batch2-exception-surface：`gate:'always'` → `/today` 例外面）。
 - **二级栏（0825 轮 3 owner 拍板：全域统一折叠模型，差别只在第二列由谁提供）** —
   registry `NAV_DOMAINS[domain].second` 三态：
   - `'nav'`（邮件 / Agents / 运维 / 设置）= **DomainPanel（232px）**：41px 头（域名
@@ -332,7 +332,7 @@ export const useAppearance = create<Store>((set) => ({
     只作用于导航面板，清单列是内容，窄窗行为由 workspace 自己的 max-[880/860px]
     断点自治）；收起时详情独占、MatterDetail 露出上/下切换钮。「未来长出真导航
     菜单再把 list 移出去」= 把 second 改回 `'nav'`。
-  - `'none'`（日历）= 无二级栏，rail 开合按钮同隐、点当前域格退化为重导航。
+  - `'none'`（日历 / 今日）= 无二级栏，rail 开合按钮同隐、点当前域格退化为重导航。
 
 **材质**（0825 dogfood 拍板，取代画布的 ink 明度序）：rail 与 panel 一律
 `--tier-side`，留在 v3 surface-tier 透明体系内（Frosted/Surface 可切、壁纸辉光

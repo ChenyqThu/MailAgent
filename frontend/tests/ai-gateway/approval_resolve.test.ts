@@ -8,6 +8,7 @@ import { describe, expect, test } from 'vitest'
 import type { Tool } from 'ai'
 
 import { ApprovalError, ApprovalGuard } from '../../src/ai-gateway/security/approval'
+import { ApprovalRunStash } from '../../src/ai-gateway/approvalStash'
 import { createWriteTools } from '../../src/ai-gateway/tools/write'
 import { startAiGatewayServer } from '../../src/ai-gateway/server'
 import type { GatewayToolAuditEntry } from '../../src/ai-gateway/tools/types'
@@ -209,6 +210,77 @@ describe('POST /api/ai/approval/resolve', () => {
         })
         expect(missing.status).toBe(400)
         expect((await missing.json()).error).toBe('E_INVALID_ARG')
+      }
+    )
+  })
+
+  // L4 批次2 — the in-panel decide card learns only the approvalId from GET /pending (the internal
+  // toolCallId never leaves the gateway), so /resolve accepts the same id shape /decide does and
+  // looks the toolCallId up in the stash itself.
+  test('{ approvalId } shape resolves through the stash and applies the SAME edit', async () => {
+    const guard = new ApprovalGuard()
+    guard.register('tc1', 'email_draft_reply', 'edit', { internal_id: 7, body_markdown: 'A' }, [
+      'body_markdown'
+    ])
+    const stash = new ApprovalRunStash()
+    const token = stash.stash({
+      toolCallId: 'tc1',
+      approvalId: 'ap_1',
+      toolName: 'email_draft_reply',
+      sessionId: 3,
+      body: { messages: [] },
+      responseMessage: { id: 'a1', role: 'assistant', parts: [] } as never,
+      contextMode: 'manual_chat'
+    })
+    const handle = await startAiGatewayServer({
+      port: 0,
+      baseUrl: 'http://127.0.0.1:0',
+      apiKey: 'test',
+      model: 'test-model',
+      approvalStash: stash,
+      resolveEditedApproval: (toolCallId, edited) => {
+        const rec = guard.applyEdit(toolCallId, edited)
+        return { approvalId: rec.approvalId, toolName: rec.toolName }
+      }
+    })
+    try {
+      const base = `http://127.0.0.1:${handle.port}`
+      const res = await fetch(`${base}/api/ai/approval/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approvalId: 'ap_1', editedInput: { body_markdown: 'B' } })
+      })
+      expect(res.status).toBe(200)
+      expect(guard.verify('tc1', { internal_id: 7, body_markdown: 'A' }).effectiveInput).toEqual({
+        internal_id: 7,
+        body_markdown: 'B'
+      })
+      // 🔴 peek, not claim: the entry must still be claimable by the /decide that follows.
+      expect(stash.claim('tc1', token)).not.toBeNull()
+
+      // a stale / wrong approvalId → 404 fail-closed (nothing edited)
+      const stale = await fetch(`${base}/api/ai/approval/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approvalId: 'ap_nope', editedInput: { body_markdown: 'C' } })
+      })
+      expect(stale.status).toBe(404)
+      expect((await stale.json()).error).toBe('E_APPROVAL_NOT_FOUND')
+    } finally {
+      await handle.close()
+    }
+  })
+
+  test('{ approvalId } with no stash wired → 404 (nothing is claimable)', async () => {
+    await withServer(
+      () => ({ approvalId: 'ap_1', toolName: 'email_draft_reply' }),
+      async (base) => {
+        const res = await fetch(`${base}/api/ai/approval/resolve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ approvalId: 'ap_1', editedInput: { body_markdown: 'B' } })
+        })
+        expect(res.status).toBe(404)
       }
     )
   })

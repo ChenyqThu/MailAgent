@@ -46,7 +46,8 @@ export function SkillToggleCard(props: ToolCallMessagePartProps): React.JSX.Elem
           </div>
           <ApprovalActions
             onApprove={() => respondToApproval({ approved: true })}
-            onReject={() => respondToApproval({ approved: false })}
+            onReject={(reason) => respondToApproval({ approved: false, reason })}
+            rejectReason
           />
         </>
       ) : phase === 'done' ? (

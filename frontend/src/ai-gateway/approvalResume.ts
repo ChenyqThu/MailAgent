@@ -35,10 +35,23 @@ import {
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 import type { UIMessage } from 'ai'
 
+/** L4 批次2 — max length of the optional rejection reason a decide surface may attach.
+ *  🔴 CANONICAL. The renderer mirrors it as `APPROVAL_REASON_MAX_CHARS` in
+ *  `@shared/assistant/tools/_cardShell.lib` (a shared leaf can't be imported here without dragging
+ *  renderer-only modules into the gateway); `tests/ai-gateway/approval_decide.test.ts` asserts the
+ *  two are equal, so a bump on one side that misses the other goes red instead of silently letting
+ *  the box accept text the endpoint then 400s. */
+export const APPROVAL_REASON_MAX_CHARS = 2000
+
 export interface ResumeDecideInput {
   toolCallId: string
   decision: 'approve' | 'reject'
   resumeToken: string
+  /** L4 批次2 — the user's free-text rejection reason. Reaches the model as the tool result
+   *  `{type:'execution-denied', reason}` on the resumed turn, so「不批，但这样做」becomes the next
+   *  round's input instead of a bare refusal. IGNORED on approve (ai@7 emits no tool-result for an
+   *  approved-with-reason part, so keeping it would be a promise nothing fulfils). */
+  reason?: string
   /** codex r2 [C] — the ActiveRunRegistry lease held by handleApprovalDecide for this resume.
    *  Stamped onto the PreparedChatRun so the resume's persists (completed turn / re-pause) carry
    *  it into the 'chat:turn-persisted' broadcast (per-run settle dedup). undefined = no lease
@@ -111,7 +124,11 @@ export async function resumeApprovalRun(
   const approvalResp: ToolApprovalResponsePayload = {
     toolCallId: entry.toolCallId,
     approvalId: entry.approvalId,
-    decision: approved ? 'approved' : 'rejected'
+    decision: approved ? 'approved' : 'rejected',
+    // L4 批次2 — reject-only (see ResumeDecideInput.reason). applyApprovalResponseToMessages writes
+    // it onto the approval part, and ai@7 turns that into the `execution-denied` tool result the
+    // model reads on this very resume.
+    ...(!approved && input.reason ? { reason: input.reason } : {})
   }
 
   // Resume history = the original turn's messages + the paused assistant message, with the tool part

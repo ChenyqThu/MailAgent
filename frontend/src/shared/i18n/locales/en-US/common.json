@@ -542,6 +542,7 @@
       "adminMeta": "{n, plural, =0 {no dead letters} other {# dead-letter}} · queue health",
       "contacts": "Open Contacts",
       "contactsMeta": "People profiles",
+      "todayMeta": "What is waiting on you",
       "mattersMeta": "Matters workspace",
       "calendarMeta": "Schedule & meetings",
       "customAiMeta": "Agents · Reports · Chats",
@@ -702,6 +703,7 @@
       "ops": "Ops"
     },
     "composeNew": "Compose",
+    "today": "Today",
     "inbox": "Inbox",
     "outbox": "Outbox",
     "drafts": "Drafts",
@@ -1230,7 +1232,11 @@
       "details": "View details",
       "actionFailed": "Action failed: {error}",
       "rejectedBanner": "Denied — the operation was not performed.",
-      "expiredBanner": "The approval expired — ask the assistant to start over."
+      "expiredBanner": "The approval expired — ask the assistant to start over.",
+      "rejectReasonLabel": "Reason for denial (optional)",
+      "rejectReasonPlaceholder": "Say why, and what you want done instead",
+      "rejectConfirm": "Confirm denial",
+      "rejectBack": "Back"
     },
     "sendApprovalCard": {
       "title": "Send email",
@@ -4900,6 +4906,11 @@
         "approveLabel": "Approve",
         "rememberDomain": "Always allow this agent to reach this domain (no approval)",
         "rememberDomainHint": "Creates a domain whitelist entry for this agent's unattended runs, so future access to this domain skips approval. Tick only for sources you trust.",
+        "editParams": "Edit parameters",
+        "editParamsClose": "Hide parameters",
+        "editParamsHint": "Only the fields below can be changed; the rest are pinned server-side. Approve to run the edited version.",
+        "rememberTool": "Remember: stop asking about this kind of action",
+        "rememberToolHint": "Sets {tool} to run automatically in chat from now on. Unattended agent runs are unaffected. Reversible in Settings → AI → tool approval tiers.",
         "approvalExpired": "Approval expired (timeout or app restart); this run was not executed.",
         "decideFailed": "Decision failed",
         "state": {
@@ -6829,6 +6840,52 @@
       "today": "Today",
       "yesterday": "Yesterday",
       "earlier": "Earlier"
+    }
+  },
+  "today": {
+    "kicker": "TODAY",
+    "title": "Exceptions",
+    "subtitle": "{count, plural, =0 {Nothing waiting} one {# item to look at} other {# items to look at}}",
+    "subtitleLoading": "Collecting…",
+    "error": "Failed to load matters data — only agent runs are listed below",
+    "empty": {
+      "title": "Nothing needs you right now",
+      "hint": "Agent approvals, matter proposals and attention signals collect here. None of them are waiting."
+    },
+    "group": {
+      "waiting": "Waiting on you",
+      "inProgress": "In progress",
+      "expired": "Expired",
+      "attention": "Needs a look",
+      "recent": "Recent results"
+    },
+    "groupCount": "{count, plural, one {# item} other {# items}}",
+    "item": {
+      "proposalTitle": "Agent proposal to review"
+    },
+    "triage": {
+      "runTrigger": "Triggered by {trigger}",
+      "runTriggerAt": "Triggered by {trigger} · {at}",
+      "proposalChanges": "{count, plural, one {# change} other {# changes}}",
+      "proposalConfidence": "{percent}% confidence"
+    },
+    "trigger": {
+      "manual": "manual run",
+      "cron": "schedule",
+      "schedule": "schedule rule",
+      "emailFilter": "mail rule",
+      "calendarChange": "calendar change",
+      "calendarBefore": "pre-meeting"
+    },
+    "run": {
+      "stashMiss": "This approval expired (timed out or the app restarted) — the run record is still readable."
+    },
+    "menu": {
+      "trigger": "More",
+      "dismissReasonLabel": "Reason for dismissing (optional)",
+      "dismissReasonPlaceholder": "Say why this can wait for now",
+      "dismissConfirm": "Confirm dismiss",
+      "dismissBack": "Back"
     }
   }
 }

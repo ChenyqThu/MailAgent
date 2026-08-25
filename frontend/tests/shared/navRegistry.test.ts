@@ -79,6 +79,7 @@ describe('nav registry — 条目自身的不变量', () => {
     // 手写期望（顺序 = 面板里自上而下）。渲染侧由 CommandPaletteContacts 的
     //「打开通讯录」用例钉住（投影出来的行真能点、真会跳）。
     expect(navPaletteEntries(NAV_ENTRIES).map((e) => e.id)).toEqual([
+      'today',
       'sessions',
       'kanban',
       'calendar',
@@ -159,7 +160,7 @@ describe('nav registry — i18n key 在两个 locale 都在', () => {
 
   test('侧栏 / jump 会渲染的条目，label 与 meta 文案都能解出来', () => {
     for (const entry of NAV_ENTRIES) {
-      // 预留位（今日）还没上线，locale 里没有它的文案 —— 批次 2 落地时一起加。
+      // gate:'never' 的预留位不渲染，locale 里可以没有它的文案（现无此类条目）。
       if (entry.gate === 'never') continue
       for (const [name, locale] of locales) {
         if ('i18nKey' in entry.label) {
@@ -177,9 +178,8 @@ describe('nav registry — i18n key 在两个 locale 都在', () => {
     }
   })
 
-  test('域标签（导轨格 / 面板头）在两个 locale 都在（today 预留域除外）', () => {
-    for (const [domain, meta] of Object.entries(NAV_DOMAINS)) {
-      if (domain === 'today') continue
+  test('域标签（导轨格 / 面板头）在两个 locale 都在', () => {
+    for (const [, meta] of Object.entries(NAV_DOMAINS)) {
       if (!('i18nKey' in meta.label)) continue
       for (const [name, locale] of locales) {
         expect(lookup(locale, meta.label.i18nKey), `${name} 缺 ${meta.label.i18nKey}`).toBeTruthy()
@@ -192,6 +192,7 @@ describe('nav registry — 域推导（导轨选中格 = 面板域）', () => {
   test('每条路由归它该归的域；/sessions 无导轨格但归 agents 域', () => {
     const cases: ReadonlyArray<[string, NavDomain]> = [
       ['/', 'mail'],
+      ['/today', 'today'],
       ['/sessions', 'agents'],
       ['/agents', 'agents'],
       ['/matters', 'matters'],

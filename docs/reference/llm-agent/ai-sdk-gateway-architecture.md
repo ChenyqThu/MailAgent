@@ -1447,3 +1447,52 @@ Run active（含审批等待）时 Enter 入队不发请求；Run 真正 onFinis
 - 端点路径**不在** `/api/ai/approval/*` 下：那一整段是 `ai_gateway_proxy` 转发到 gateway 的
   地盘（resolve / pending / decide），serve-api 自有的端点挂自己的前缀，免得下一个人把它也加
   进代理清单。
+
+## 13.27 审批四维（task 08-25 L4 批次 2，无 flag）
+
+批准 / 驳回二元扩成四维：`approve` / `edit`（改参数再执行）/ `response`（不批但给文字理由，
+回给模型成为下一轮输入）/ `remember`（记住本决定，以后这类不再问）。三个新维度全是**用户在
+卡上的动作**——零新模型工具，`tool_catalog.json` 零变化（agent_eval 的 gateway↔catalog 闸
+本身就是断言）。消费面 = `PendingApprovalPanel`（chat / 记录页 / 今日域例外面三处复用）+
+chat 富卡 `ApprovalActions`（拒绝理由）。
+
+### 13.27.1 契约扩展（全部向后兼容加字段）
+
+- `GET /approval/pending` 命中体 +3：`input`（guard record 的 `editedInput ?? input`，无 guard
+  回落 stash 里的模型提案）、`editableFields`（`record.editableFields ?? []`）、`contextMode`
+  （stash 冻结的模式）；TS `PendingApprovalInfo` 补服务端一直在返的 `destructive`。
+  🔴 `resumeToken` 仍恒不出现（有闸）。`editableFields` 经 lifecycle 新只读 hook
+  `peekApprovalRecord`（`approvalGuard.peek`）拿——`resolveApprovalRequest` 被 AG-UI mirror
+  flag 门控生产恒 undefined，不能复用。
+- `POST /approval/decide` +可选 `reason`（canonical `APPROVAL_REASON_MAX_CHARS = 2000`，
+  非字符串/超长 → 400，**都在碰 stash 之前**，400 后审批可重试）。只在 `decision='reject'`
+  时进 resume 消息（模型看到 `execution-denied {reason}`）；approve 带 reason 直接忽略。
+- `POST /approval/resolve` 增 `{approvalId, editedInput}` 形状（原 `{toolCallId}` 形状字节不变）。
+  动因：`/pending` 有意不返 toolCallId（内部 id 不出 gateway，S6 W2 P9 同款取向），面板只有
+  approvalId。编辑仍走 §13.10.4 同一条侧信道语义：identity pin、只覆盖 editableFields、
+  永不进模型 history。🔴 面板提交顺序恒 **先 resolve 后 decide**（decide 会 claim stash）。
+- `ai_gateway_proxy` 零改动：`_proxy_buffered` 原样字节透传，新字段自动过。
+
+### 13.27.2 remember 通道与作用域
+
+- 勾选写 owner `tool_approval_pref` tier=`auto`，通道 = 既有 `PUT /api/agent/tool-prefs/{name}`
+  （serve-api，远程可达；**不用** `/api/ai/policy/remember`——不在远程代理清单）。
+- 🔴 **owner tier=auto 只作用 manual_chat**（`types.ts` 审批梯子 + `tool_prefs.py` 头注）：
+  headless 走 per-agent grants、im_chat 走结构性矩阵。因此勾选框只在
+  `contextMode === 'manual_chat'` 出现——这是 `/pending` 加 `contextMode` 的唯一动因
+  （`agentId == null` 不等价 manual_chat，im_chat 会话也没有 agentRunContext），UI 文案
+  照实写作用范围。另三道门：registry `configurable`、当前档 `ask`、`group ∉ {exec, web}`
+  （后两组保留更细的 policy_rules「总是允许」，不叠加第二个勾选）。
+- 🔴 顺序恒**先 remember（best-effort，失败不阻断）后 decide**；remember 恒用户动作，
+  无任何模型可调用的写账本通道。撤销 = 设置页工具审批档。
+
+### 13.27.3 前端纪律
+
+- `ApprovalActions` 拒绝键两步式（理由框 + 确认）由 prop `rejectReason` opt-in；host 的
+  `onReject` 签名是 `(reason?: string)`——**开启 prop 必须同步转发 reason**，丢弃入参的
+  箭头函数 + 开启 prop = 用户理由被静默丢弃。
+- 🔴 `PendingApprovalPanel` 两次审批间不重挂载（re-pause 只换 probe 载荷）：一切
+  per-approval 输入态（编辑值 / 理由草稿 / remember 勾选）必须按 `approvalId` 重置
+  （render 期重置 + `key={approvalId}`），否则 A 次审批的输入会被安到 B 次提案上。
+- 编辑器只渲染模型提过且类型可忠实往返的字段（string → input、string[] → 逐行）；
+  其他类型跳过不渲染（`inputPreview` 已有服务端概述），缺失字段不补空输入框。

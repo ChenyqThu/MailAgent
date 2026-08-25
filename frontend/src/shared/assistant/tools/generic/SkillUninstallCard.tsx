@@ -104,8 +104,9 @@ export function SkillUninstallCard(props: ToolCallMessagePartProps): React.JSX.E
           </div>
           <ApprovalActions
             onApprove={() => respondToApproval({ approved: true })}
-            onReject={() => respondToApproval({ approved: false })}
+            onReject={(reason) => respondToApproval({ approved: false, reason })}
             approveLabel={t('chat.skillUninstallCard.approve')}
+            rejectReason
           />
         </>
       ) : phase === 'done' ? (

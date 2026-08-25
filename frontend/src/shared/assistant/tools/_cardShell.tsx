@@ -32,7 +32,12 @@ import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { SPRING_PRESS, SPRING_SWAP } from '@shared/lib/motion-tokens'
 // 纯逻辑面拆去 _cardShell.lib.ts（08-02 review F9），组件侧按需引回。
-import { approvalActionsMotion, type CardPhase } from './_cardShell.lib'
+import {
+  APPROVAL_REASON_MAX_CHARS,
+  approvalActionsMotion,
+  normalizeApprovalReason,
+  type CardPhase
+} from './_cardShell.lib'
 
 /** The pill phase = the derived CardPhase, plus `approving` — a UI-only state that exists while a
  *  decision is in flight (the approve/reject handler's promise has not settled: an edit-tier
@@ -244,18 +249,35 @@ export function ApprovalActions({
   onApprove,
   onReject,
   approveLabel,
-  disabled
+  disabled,
+  rejectReason = false
 }: {
   onApprove: () => void | Promise<void>
-  onReject: () => void | Promise<void>
+  /** L4 批次2 — receives the user's optional free-text reason when the host opted into
+   *  `rejectReason`; called with `undefined` otherwise (and always, for hosts that did not). */
+  onReject: (reason?: string) => void | Promise<void>
   approveLabel?: string
   disabled?: boolean
+  /** L4 批次2 —「不批但给文字指导」affordance: the deny button first opens an optional reason box
+   *  and only decides on the confirm.
+   *
+   *  🔴 OPT-IN, default off, and it must stay that way until a host actually FORWARDS the reason.
+   *  Every chat rich card passes `onReject={() => respondToApproval({approved:false})}` — an arrow
+   *  that drops the argument — so switching this on there would collect a reason the model never
+   *  sees. The reason only becomes real once a host either forwards it to `respondToApproval`
+   *  (通道 A) or posts it to /api/ai/approval/decide (通道 B, PendingApprovalPanel). */
+  rejectReason?: boolean
 }): React.JSX.Element {
   const { t } = useTranslation()
   const reduce = useReducedMotion() ?? false
   const shell = useContext(CardShellContext)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Two-step deny (rejectReason hosts only): the first click opens the box, the confirm decides.
+  const [reasonOpen, setReasonOpen] = useState(false)
+  const [reasonText, setReasonText] = useState('')
+  // useId, not a literal: 例外面 renders several of these on one page (one per pending run).
+  const reasonId = useId()
   const anim = approvalActionsMotion(reduce)
   // Shared async action machine: busy disables the pair while either action is in flight; a throw
   // renders inline and re-enables. On success busy stays latched — the card transitions/unmounts.
@@ -288,7 +310,41 @@ export function ApprovalActions({
               {t('chat.approvalShell.actionFailed', { error })}
             </div>
           )}
+          {rejectReason && reasonOpen && (
+            <div className="mb-2">
+              <label className="mb-1 block text-meta text-ink-fg-3" htmlFor={reasonId}>
+                {t('chat.approvalShell.rejectReasonLabel')}
+              </label>
+              <textarea
+                id={reasonId}
+                rows={2}
+                autoFocus
+                value={reasonText}
+                maxLength={APPROVAL_REASON_MAX_CHARS}
+                onChange={(e) => setReasonText(e.target.value)}
+                placeholder={t('chat.approvalShell.rejectReasonPlaceholder')}
+                className={cn(
+                  'w-full resize-y rounded-md border border-ink-border-soft bg-ink-2 px-2 py-1.5',
+                  'text-aux text-ink-fg placeholder:text-ink-fg-3',
+                  'focus:border-ink-border focus:outline-none'
+                )}
+              />
+            </div>
+          )}
           <div className="flex items-center justify-end gap-2">
+            {rejectReason && reasonOpen ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setReasonOpen(false)
+                  setReasonText('')
+                }}
+                disabled={busy}
+                className="mr-auto rounded-md text-meta text-ink-fg-3 transition-colors duration-fast hover:text-ink-fg-2 disabled:opacity-40"
+              >
+                {t('chat.approvalShell.rejectBack')}
+              </button>
+            ) : null}
             {/* 🔴 The i18n KEY is still `cancel` (renaming it would touch every locale for no
                 behaviour); the LABEL is 「拒绝 / Deny」. 0805 收尾③ — this button posts
                 `approved: false`, which is an ACTIVE refusal, and the wire condition it produces
@@ -298,7 +354,17 @@ export function ApprovalActions({
                 left the same event named two different things on two surfaces. */}
             <motion.button
               type="button"
-              onClick={() => void runAction(onReject)}
+              onClick={() => {
+                // rejectReason hosts: the FIRST click only opens the box — the decision is the
+                // confirm click below it, so a mis-click can't deny without a second, deliberate one.
+                if (rejectReason && !reasonOpen) {
+                  setReasonOpen(true)
+                  return
+                }
+                void runAction(() =>
+                  onReject(rejectReason ? normalizeApprovalReason(reasonText) : undefined)
+                )
+              }}
               disabled={busy || disabled}
               whileTap={anim.whileTap}
               transition={SPRING_PRESS}
@@ -311,7 +377,9 @@ export function ApprovalActions({
               )}
             >
               <X size={12} strokeWidth={2.5} />
-              {t('chat.approvalShell.cancel')}
+              {rejectReason && reasonOpen
+                ? t('chat.approvalShell.rejectConfirm')
+                : t('chat.approvalShell.cancel')}
             </motion.button>
             <motion.button
               type="button"

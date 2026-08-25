@@ -53,7 +53,7 @@ import {
   SSE_HEADERS
 } from './httpUtil'
 import { handleAguiChat } from './agui/aguiRoute'
-import { resumeApprovalRun } from './approvalResume'
+import { APPROVAL_REASON_MAX_CHARS, resumeApprovalRun } from './approvalResume'
 // 发版终审 M3 — registry 语境下 title 的 E_UPSTREAM hint + 日志走固定形状脱敏
 // （上游错误正文可能回显凭证）；flag off 保持原 message 形状（字节级纪律）。
 import { sanitizedUpstreamErrorMessage } from './upstreamError'
@@ -892,6 +892,13 @@ function approvalErrorStatus(code: string): number {
  * WITHOUT changing the ai@6 history input, so the signed approval stays valid (architecture
  * §13.10.2(1)). Identity fields are pinned domain-side. Errors are typed: 404 not-found / 410
  * expired / 400 not-editable / 501 when no resolver is wired (read-only / 03b config).
+ *
+ * L4 批次2 — a second body shape `{ approvalId, editedInput }` for the in-panel decide card, the
+ * SAME id-resolution /decide already does (S6 W2 P9): that surface only ever learns the approvalId
+ * from GET /pending, never the internal toolCallId. The gateway peeks the stash by approvalId
+ * (read-only — the claim still happens later, inside /decide) and drives the identical applyEdit.
+ * A miss → 404, so a stale card cannot edit anything. 🔴 Order matters for the caller: /resolve
+ * FIRST, /decide second — /decide claims the stash, after which the approvalId no longer resolves.
  */
 async function handleApprovalResolve(
   req: IncomingMessage,
@@ -906,13 +913,29 @@ async function handleApprovalResolve(
     return
   }
   const body = await readJsonBody(req)
-  const toolCallId = typeof body.toolCallId === 'string' ? body.toolCallId : ''
+  const bodyToolCallId = typeof body.toolCallId === 'string' ? body.toolCallId : ''
+  const approvalId = typeof body.approvalId === 'string' ? body.approvalId : ''
   const editedInput =
     body.editedInput && typeof body.editedInput === 'object' && !Array.isArray(body.editedInput)
       ? (body.editedInput as Record<string, unknown>)
       : null
+  // L4 批次2 — resolve the { approvalId } shape to the internal toolCallId through the stash
+  // (peek = read-only; the entry stays claimable for the /decide that follows). No stash wired or
+  // no live entry → 404 not_found, the same fail-closed shape /decide answers for a stale id.
+  let toolCallId = bodyToolCallId
+  if (!toolCallId && approvalId) {
+    const entry = cfg.approvalStash?.peekByApprovalId(approvalId) ?? null
+    if (!entry) {
+      writeJson(res, 404, { error: 'E_APPROVAL_NOT_FOUND', hint: 'no live pending approval' })
+      return
+    }
+    toolCallId = entry.toolCallId
+  }
   if (!toolCallId || !editedInput) {
-    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'toolCallId + editedInput{} required' })
+    writeJson(res, 400, {
+      error: 'E_INVALID_ARG',
+      hint: 'toolCallId (or approvalId) + editedInput{} required'
+    })
     return
   }
   try {
@@ -1296,6 +1319,26 @@ async function handleApprovalDecide(
     })
     return
   }
+  // L4 批次2 — the optional REJECTION REASON (the「不批但给文字指导」response dimension). Validated
+  // whenever present, whatever the decision, and BEFORE the stash is touched: a malformed field is a
+  // malformed request, and a 400 here leaves the approval claimable by a corrected retry. It only
+  // has an EFFECT on reject — ai@7's convertToModelMessages emits a tool-result only for
+  // `approved === false` (`{type:'execution-denied', reason}`), so an approve-side reason would be
+  // collected and never seen; approvalResume drops it rather than pretend otherwise.
+  if (body.reason !== undefined && body.reason !== null) {
+    if (typeof body.reason !== 'string') {
+      writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'reason must be a string' })
+      return
+    }
+    if (body.reason.length > APPROVAL_REASON_MAX_CHARS) {
+      writeJson(res, 400, {
+        error: 'E_INVALID_ARG',
+        hint: `reason must be at most ${APPROVAL_REASON_MAX_CHARS} characters`
+      })
+      return
+    }
+  }
+  const reason = typeof body.reason === 'string' && body.reason.length > 0 ? body.reason : undefined
   const toolCallId = typeof body.toolCallId === 'string' ? body.toolCallId : ''
   const resumeToken = typeof body.resumeToken === 'string' ? body.resumeToken : ''
   const approvalId = typeof body.approvalId === 'string' ? body.approvalId : ''
@@ -1360,6 +1403,7 @@ async function handleApprovalDecide(
         toolCallId: resolved.toolCallId,
         decision,
         resumeToken: resolved.resumeToken,
+        ...(reason !== undefined ? { reason } : {}),
         // codex r2 [C] — the resume's persists broadcast under the lease's runId (per-run dedup).
         runId: leaseToken?.runId
       },
@@ -1412,6 +1456,17 @@ async function handleApprovalDecide(
  * decide card, but NEVER the resumeToken: that capability must only leave the gateway through the
  * serve-api announce leg. `pending:true` + `toolName` are kept verbatim for the island-notice
  * consumer (superset, zero-touch).
+ *
+ * L4 批次2 — three more fields, all additive:
+ *   - `input` — the EFFECTIVE input (guard `editedInput ?? input`; the stashed model proposal when
+ *     no guard is wired). The decide card renders an editor over it for the editable fields.
+ *   - `editableFields` — what the tool factory registered as editable (empty ⇒ approve/reject only,
+ *     the same boundary ApprovalGuard.applyEdit enforces with E_APPROVAL_NOT_EDITABLE).
+ *   - `contextMode` — the mode FROZEN at pause time. The card needs it to decide whether a
+ *     「记住这类操作」affordance would be a live config or a dead one: `tool_approval_pref` is
+ *     consulted ONLY in manual_chat (tools/types.ts:411 / tool_prefs.py 头注), so offering it on an
+ *     im_chat or headless pause would promise something the ladder never reads. `null` = unknown
+ *     (hand-built stash entry) → the card must fail closed and offer nothing.
  */
 async function handleApprovalPending(
   res: ServerResponse,
@@ -1437,11 +1492,18 @@ async function handleApprovalPending(
   const inputPreview = info
     ? await resolveApprovalPreview(cfg, entry.toolName, info.input)
     : entry.toolName
+  // L4 批次2 — the guard record is the authority on BOTH new fields: it holds any editedInput a
+  // previous /resolve overlaid (so a re-opened card edits from where the last edit left off) and the
+  // editableFields the tool factory registered. No guard wired → the stashed proposal + no editor.
+  const record = cfg.peekApprovalRecord?.(entry.toolCallId) ?? null
   writeJson(res, 200, {
     pending: true,
     approvalId: entry.approvalId,
     toolName: entry.toolName,
     inputPreview,
+    input: record ? record.input : (info?.input ?? null),
+    editableFields: record?.editableFields ?? [],
+    contextMode: entry.contextMode ?? null,
     agentId: entry.agentRunContext?.agentId ?? null,
     jobId: entry.agentRunContext?.jobId ?? null,
     // Stage 2 PR-4 (task 08-01 messenger) — the frozen DESTRUCTIVE bit, so an out-of-app approval

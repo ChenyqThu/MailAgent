@@ -51,7 +51,7 @@ import {
 
 // ── 词表 ────────────────────────────────────────────────────────────────────
 
-/** 域 = 方案 B 导轨的一格。`today` 整域预留（批次 2 才上线，见 prd v2 N2）。 */
+/** 域 = 方案 B 导轨的一格。 */
 export type NavDomain =
   | 'today'
   | 'mail'
@@ -65,6 +65,7 @@ export type NavDomain =
 /** 可导航到的路由 path（TanStack 路由树里真实存在的那些）。 */
 export type NavPath =
   | '/'
+  | '/today'
   | '/matters'
   | '/sessions'
   | '/agents'
@@ -172,14 +173,18 @@ export interface NavEntry {
  *  下面几个派生（`NAV_DEEPLINK_PATH` / `NotificationRouteTarget` / `navEntry(id)`）才能给
  *  出 TanStack 认的窄类型，而不是退化成 string。 */
 const ENTRIES = [
-  // ── 今日（批次 2 例外面）— registry 预留位，不建占位路由（prd v2 N2）。
+  // ── 今日（L4 批次 2 例外面）—— 跨 agent / 跨事项的待处理态聚合视图。
+  // `NAV_DOMAINS.today.second = 'none'`（同日历）：这一域没有二级栏，页面自己占满。
   {
     id: 'today',
     domain: 'today',
+    to: '/today',
     label: { i18nKey: 'nav.today' },
     icon: () => createElement(SunIcon),
-    gate: 'never',
-    rail: { order: 0 }
+    gate: 'always',
+    match: { exact: ['/today'] },
+    rail: { order: 0 },
+    palette: { order: 5, metaI18nKey: 'palette.jump.todayMeta' }
   },
 
   // ── 邮件域 · MAILBOXES 段 ────────────────────────────────────────────────
@@ -539,9 +544,12 @@ type RouterLike = Pick<ReturnType<typeof useRouter>, 'preloadRoute'>
 export function navigateToNavEntry(navigate: NavigateFn, entry: NavEntry): void {
   switch (entry.to) {
     case undefined:
-      return // 预留位（today）：没有目标，点了什么也不做。
+      return // 预留位：没有目标，点了什么也不做。
     case '/':
       void navigate({ to: '/', search: { view: entry.view ?? 'inbox' } })
+      return
+    case '/today':
+      void navigate({ to: '/today' })
       return
     case '/matters':
       void navigate({ to: '/matters' })

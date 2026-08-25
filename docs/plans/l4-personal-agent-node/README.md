@@ -158,6 +158,15 @@ agent-first（先找 agent、开对话、派任务）是 chat 形态的延续，
 ### 批次 2「例外面最小版」（B1，D5 定位）
 列表按状态分组 + waitingForHuman 浮顶 + 审批卡 edit/response/remember + triage.logic 字段。
 
+**已落地（2026-08-25，task `.trellis/tasks/08-25-l4-batch2-exception-surface`）**：
+今日域 `/today` 例外面（三源聚合：run 读态 / matter 提案 / 关注信号，五组分组「等我处理」
+浮顶，triage.logic 一等字段，纯前端聚合零建表）+ 审批四维（edit = 面板编辑参数走 `/resolve`
+侧信道；response = 拒绝理由 `reason` → `execution-denied` 回给模型；remember = tool-prefs
+tier=auto，仅 manual_chat）+ run 历史触发方式投影。契约细节 →
+`ai-sdk-gateway-architecture.md` §13.27；与通知中心划界 → `notification-center.md` §1.1。
+明确没做（原样留给后续批次）：manual chat pending 审批的持久化面（批次 3 A2 一起解）、
+站会仪式 B2、信任引擎 B3、动态审批分级 B4。
+
 ### 批次 3「行动项执行契约」（A2，D4 挂层）
 matter_item 状态机一等对象 + 五段契约 + delegate-not-assignee；设计输入含档案 07。
 

@@ -97,7 +97,7 @@ export function ExecApprovalCard(props: ToolCallMessagePartProps): React.JSX.Ele
     }
     respondToApproval({ approved: true })
   }
-  const onReject = (): void => respondToApproval({ approved: false })
+  const onReject = (reason?: string): void => respondToApproval({ approved: false, reason })
 
   return (
     <CardFrame icon={iconFor(data.kind)} title={title} phase={phase}>
@@ -139,6 +139,7 @@ export function ExecApprovalCard(props: ToolCallMessagePartProps): React.JSX.Ele
             onApprove={onApprove}
             onReject={onReject}
             approveLabel={t('chat.execApprovalCard.approve')}
+            rejectReason
           />
         </>
       ) : phase === 'done' ? (

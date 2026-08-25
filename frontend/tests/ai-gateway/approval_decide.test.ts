@@ -11,6 +11,7 @@ import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV3 } from 'ai/test'
 
 import { startAiGatewayServer, type AiGatewayHandle } from '../../src/ai-gateway/server'
+import { APPROVAL_REASON_MAX_CHARS } from '../../src/ai-gateway/approvalResume'
 import type { AiGatewayConfig, IslandApprovalAnnounce } from '../../src/ai-gateway/config'
 import { ApprovalGuard } from '../../src/ai-gateway/security/approval'
 import { ApprovalRunStash } from '../../src/ai-gateway/approvalStash'
@@ -174,6 +175,152 @@ describe('/api/ai/approval/decide — gating + validation', () => {
     })
     expect(res.status).toBe(404)
     expect((await res.json()).status).toBe('not_found')
+  })
+})
+
+// ── L4 批次2 · the `response` dimension: reject WITH a written reason ────────────────────────────
+//
+// 「不批但给文字指导」only counts if the model actually READS the guidance. The assertion is
+// therefore not "the field was accepted" but the model PROMPT of the resumed turn: ai@7 turns an
+// `approval-responded {approved:false, reason}` part into the tool result
+// `{type:'execution-denied', reason}`, which is the next round's input. Approve+reason produces no
+// tool-result at all upstream, so the gateway must NOT pretend it carries anywhere.
+describe('/api/ai/approval/decide — rejection reason (response 维度)', () => {
+  /** Pull the tool-result outputs out of a captured LanguageModelV3Prompt. */
+  function promptToolOutputs(prompt: unknown): unknown[] {
+    const out: unknown[] = []
+    if (!Array.isArray(prompt)) return out
+    for (const msg of prompt) {
+      const m = msg as { role?: unknown; content?: unknown }
+      if (!Array.isArray(m.content)) continue
+      for (const part of m.content) {
+        const p = part as { type?: unknown; output?: unknown }
+        if (p.type === 'tool-result') out.push(p.output)
+      }
+    }
+    return out
+  }
+
+  /** islandCfg pinned to ONE model instance, so the resumed turn's prompt can be read back off the
+   *  mock's own `doStreamCalls` recorder (no hand-rolled capturing model). */
+  function cfgWithModel(
+    guard: ApprovalGuard,
+    stash: ApprovalRunStash,
+    model: MockLanguageModelV3,
+    domainCalls: unknown[] = []
+  ): AiGatewayConfig {
+    return { ...islandCfg({ guard, stash, domainCalls }), createModel: () => model }
+  }
+
+  test('reject + reason → the resumed prompt carries execution-denied with that reason', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const model = mockTextModel(['明白了。'])
+    const domainCalls: unknown[] = []
+    const h = await start(cfgWithModel(guard, stash, model, domainCalls))
+    const token = seedPausedApproval(guard, stash)
+
+    const res = await decide(h.port, {
+      toolCallId: TC,
+      decision: 'reject',
+      resumeToken: token,
+      reason: '这封别自动回，我要自己写'
+    })
+    expect(res.status).toBe(200)
+    expect((await res.json()).status).toBe('rejected')
+    expect(domainCalls).toHaveLength(0)
+    expect(promptToolOutputs(model.doStreamCalls[0].prompt)).toContainEqual({
+      type: 'execution-denied',
+      reason: '这封别自动回，我要自己写'
+    })
+  })
+
+  test('reject WITHOUT a reason → execution-denied with no reason (pre-L4 shape, unchanged)', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const model = mockTextModel(['明白了。'])
+    const h = await start(cfgWithModel(guard, stash, model))
+    const token = seedPausedApproval(guard, stash)
+
+    await decide(h.port, { toolCallId: TC, decision: 'reject', resumeToken: token })
+    const outputs = promptToolOutputs(model.doStreamCalls[0].prompt) as Array<{
+      type?: string
+      reason?: unknown
+    }>
+    const denied = outputs.find((o) => o?.type === 'execution-denied')
+    expect(denied).toBeTruthy()
+    expect(denied?.reason).toBeUndefined()
+  })
+
+  test('approve + reason → the tool STILL executes and no denial output is invented', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const model = mockTextModel(['明白了。'])
+    const domainCalls: unknown[] = []
+    const h = await start(cfgWithModel(guard, stash, model, domainCalls))
+    const token = seedPausedApproval(guard, stash)
+
+    const res = await decide(h.port, {
+      toolCallId: TC,
+      decision: 'approve',
+      resumeToken: token,
+      reason: '顺便注意语气' // upstream carries this nowhere on an approve — it is dropped, not faked
+    })
+    expect(res.status).toBe(200)
+    expect((await res.json()).status).toBe('completed')
+    expect(domainCalls).toHaveLength(1)
+    const outputs = promptToolOutputs(model.doStreamCalls[0].prompt) as Array<{ type?: string }>
+    expect(outputs.some((o) => o?.type === 'execution-denied')).toBe(false)
+  })
+
+  test('over-long reason → 400 E_INVALID_ARG with the stash INTACT (a corrected retry still works)', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const domainCalls: unknown[] = []
+    const h = await start(islandCfg({ guard, stash, domainCalls }))
+    const token = seedPausedApproval(guard, stash)
+
+    const tooLong = await decide(h.port, {
+      toolCallId: TC,
+      decision: 'reject',
+      resumeToken: token,
+      reason: 'x'.repeat(APPROVAL_REASON_MAX_CHARS + 1)
+    })
+    expect(tooLong.status).toBe(400)
+    expect((await tooLong.json()).error).toBe('E_INVALID_ARG')
+
+    // exactly at the limit is fine, and the earlier 400 left the approval claimable
+    const atLimit = await decide(h.port, {
+      toolCallId: TC,
+      decision: 'reject',
+      resumeToken: token,
+      reason: 'x'.repeat(APPROVAL_REASON_MAX_CHARS)
+    })
+    expect(atLimit.status).toBe(200)
+    expect((await atLimit.json()).status).toBe('rejected')
+  })
+
+  test('non-string reason → 400 (a malformed body is never a silent decision)', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash()
+    const h = await start(islandCfg({ guard, stash, domainCalls: [] }))
+    const token = seedPausedApproval(guard, stash)
+    const res = await decide(h.port, {
+      toolCallId: TC,
+      decision: 'reject',
+      resumeToken: token,
+      reason: 42
+    })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('E_INVALID_ARG')
+  })
+
+  // 🔴 cross-module mirror gate: the renderer clamps its reason box with its own copy of the limit
+  // (a shared leaf can't be imported by the gateway without dragging renderer modules in). Bumping
+  // one side alone would let the box accept text the endpoint then 400s.
+  test('the renderer mirror of APPROVAL_REASON_MAX_CHARS matches the gateway canonical', async () => {
+    const lib = await import('../../src/shared/assistant/tools/_cardShell.lib')
+    expect(lib.APPROVAL_REASON_MAX_CHARS).toBe(APPROVAL_REASON_MAX_CHARS)
   })
 })
 

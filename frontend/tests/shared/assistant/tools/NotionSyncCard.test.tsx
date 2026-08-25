@@ -49,10 +49,13 @@ describe('NotionSyncCard — pending', () => {
     await waitFor(() => expect(respondToApproval).toHaveBeenCalledWith({ approved: true }))
 
     cleanup()
+    // L4 批次2 — reject is two-step: the first click only opens the reason box.
     const reject = vi.fn()
     render(<NotionSyncCard {...mockProps({ respondToApproval: reject })} />)
     fireEvent.click(screen.getByText('拒绝'))
-    await waitFor(() => expect(reject).toHaveBeenCalledWith({ approved: false }))
+    expect(reject).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('确认拒绝'))
+    await waitFor(() => expect(reject).toHaveBeenCalledWith({ approved: false, reason: undefined }))
   })
 })
 

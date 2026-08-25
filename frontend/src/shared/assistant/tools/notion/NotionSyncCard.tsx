@@ -32,8 +32,9 @@ export function NotionSyncCard(props: ToolCallMessagePartProps): React.JSX.Eleme
           </div>
           <ApprovalActions
             onApprove={() => respondToApproval({ approved: true })}
-            onReject={() => respondToApproval({ approved: false })}
+            onReject={(reason) => respondToApproval({ approved: false, reason })}
             approveLabel="重新同步"
+            rejectReason
           />
         </>
       ) : phase === 'done' ? (

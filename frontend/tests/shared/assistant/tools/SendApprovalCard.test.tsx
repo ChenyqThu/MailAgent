@@ -138,11 +138,15 @@ describe('SendApprovalCard — pending (approval-requested)', () => {
     expect(respondToApproval).not.toHaveBeenCalled()
   })
 
-  test('reject → respondToApproval(false)', async () => {
+  test('reject → respondToApproval(false) (two-step, L4 批次2)', async () => {
     const respondToApproval = vi.fn()
     render(<SendApprovalCard {...mockProps({ respondToApproval })} />)
     fireEvent.click(screen.getByText('拒绝'))
-    await waitFor(() => expect(respondToApproval).toHaveBeenCalledWith({ approved: false }))
+    expect(respondToApproval).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('确认拒绝'))
+    await waitFor(() =>
+      expect(respondToApproval).toHaveBeenCalledWith({ approved: false, reason: undefined })
+    )
   })
 })
 

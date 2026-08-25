@@ -240,6 +240,9 @@ export interface AttentionActionInput {
   matterId: string
   signalId: number
   action: AttentionAction
+  /** L4 批次2 — dismiss-only, optional: forwarded to `dismissAttention` verbatim. Ignored by
+   *  resolve/snooze (their endpoints take no reason). */
+  reason?: string
 }
 
 function removeSignal(
@@ -258,12 +261,12 @@ export function useAttentionAction(): UseMutationResult<
   const api = useMattersApi()
   const client = useQueryClient()
   return useMutation({
-    mutationFn: ({ matterId, signalId, action }) =>
+    mutationFn: ({ matterId, signalId, action, reason }) =>
       action === 'resolved'
         ? api.resolveAttention(matterId, signalId)
         : action === 'snoozed'
           ? api.snoozeAttention(matterId, signalId, { preset: '3d' })
-          : api.dismissAttention(matterId, signalId),
+          : api.dismissAttention(matterId, signalId, reason),
     onMutate: async ({ matterId, signalId }) => {
       await Promise.all([
         client.cancelQueries({ queryKey: globalAttentionKey() }),

@@ -104,6 +104,46 @@ def test_list_invalid_state_400(client, runs_env):
     assert r.json()["error"]["code"] == "E_INVALID_ARG"
 
 
+# ── trigger 投影（L4 批次2 §2.1）──────────────────────────────────────────────────
+
+
+def test_list_projects_trigger_kind_and_cron_fired_at(client, runs_env):
+    """params 带 trigger_kind=cron + fire_key → triggerKind 直通，triggerFiredAtIso 解析
+    fire_key 的 occurrence 时刻（与 _assemble_spec 的 firedAt 同一份 _fired_at_iso 解法）。"""
+    runs_env.repo.enqueue(
+        job_type="agent_run", target_kind="agent", target_key="a",
+        params={"agent_id": "a", "trigger_kind": "cron", "fire_key": "20260101T090000Z"},
+    )
+    it = client.get("/api/agent-runs").json()["data"][0]
+    assert it["triggerKind"] == "cron"
+    assert it["triggerFiredAtIso"] == "2026-01-01T09:00:00+00:00"
+
+
+def test_list_non_cron_trigger_kind_fired_at_falls_back_to_created_at(client, runs_env):
+    """非 cron trigger_kind（如 manual）→ triggerFiredAtIso 回退 job.created_at，不解析 fire_key。"""
+    from datetime import datetime, timezone
+
+    job_id, _ = runs_env.repo.enqueue(
+        job_type="agent_run", target_kind="agent", target_key="a",
+        params={"agent_id": "a", "trigger_kind": "manual", "fire_key": "agent-call:1:tc"},
+    )
+    job = runs_env.repo.get(job_id)
+    it = client.get("/api/agent-runs").json()["data"][0]
+    assert it["triggerKind"] == "manual"
+    assert it["triggerFiredAtIso"] == datetime.fromtimestamp(
+        job.created_at, tz=timezone.utc
+    ).isoformat()
+
+
+def test_list_missing_trigger_kind_projects_none(client, runs_env):
+    """params 无 trigger_kind（老行 / 非常规入队路径，既有 _enqueue_run helper 只写 agent_id）
+    → 两字段恒 None，不臆造触发方式。"""
+    _enqueue_run(runs_env.repo, "a")
+    it = client.get("/api/agent-runs").json()["data"][0]
+    assert it["triggerKind"] is None
+    assert it["triggerFiredAtIso"] is None
+
+
 # ── 分页（task 07-21：offset + meta.total）──────────────────────────────────────
 
 

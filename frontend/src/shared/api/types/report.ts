@@ -560,6 +560,12 @@ export interface AgentRunHistoryItem {
    *  非空）计数；grant = grant 级免卡（rule_id=null，如 open 档 web_fetch / web_search 授权），
    *  按 tool_name 分桶。null 语义同 autoWhitelistedWrites（账本不可达 ≠ 0）。 */
   autoWhitelistedBreakdown?: { rule: number; grant: Record<string, number> } | null
+  /** L4 批次2 §2.1 — 触发方式（manual | schedule | email_filter | cron | …），与后端
+   *  `_run_history_item` 同源投影（job.params.trigger_kind）。缺失（老行 / 非常规入队）恒 null。 */
+  triggerKind?: string | null
+  /** 同上批次，触发时刻 ISO 字符串（cron 用 occurrence 时刻，否则用入队时刻）；
+   *  triggerKind 为 null 时本字段恒 null。 */
+  triggerFiredAtIso?: string | null
 }
 
 export interface ReportRunResult {

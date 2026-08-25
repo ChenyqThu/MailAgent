@@ -319,6 +319,14 @@ const mattersRoute = createRoute({
   component: lazyRouteComponent(() => import('./components/layout/MattersLayout'), 'MattersLayout')
 })
 
+// /today — L4 批次 2「例外面」：跨 agent / 跨事项的待处理态聚合。无 search 参数（页面
+// 自己拥有分组/展开状态）；域二级栏形态 'none'（同日历），整屏归页面。
+const todayRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/today',
+  component: lazyRouteComponent(() => import('./components/today/TodayLayout'), 'TodayLayout')
+})
+
 // /contacts — 通讯录（Contact Directory WP2）。flag off 时导航不渲染，路由直达由
 // ContactsWorkspace 渲染 404 空态（设计 §7：不是空页）。
 const contactsRoute = createRoute({
@@ -457,6 +465,7 @@ const _routerBasepath =
 export const router = createRouter({
   routeTree: rootRoute.addChildren([
     inboxRoute,
+    todayRoute,
     sessionsRoute,
     agentsRoute,
     mattersRoute,

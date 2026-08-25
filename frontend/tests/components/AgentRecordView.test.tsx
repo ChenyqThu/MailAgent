@@ -46,7 +46,14 @@ const HIT: PendingApprovalInfo = {
   inputPreview: 'email_draft_reply · 给张三回复',
   agentId: 'dms',
   jobId: 7,
-  ageMs: 3 * 60 * 1000
+  ageMs: 3 * 60 * 1000,
+  // L4 批次2 — the headless record face: destructive off, nothing editable offered here, and the
+  // FROZEN cron_headless mode (which is what keeps the「记住」affordance off — tool_approval_pref
+  // is a manual_chat-only ladder rung).
+  destructive: false,
+  input: { internal_id: 5, body_markdown: '好的，我来跟进。' },
+  editableFields: [],
+  contextMode: 'cron_headless'
 }
 
 describe('AgentRunRecordBanner', () => {
@@ -109,7 +116,11 @@ const HIT_WEB_AGENT: PendingApprovalInfo = {
   inputPreview: 'web_fetch · https://api.vendor.com/v1',
   agentId: 'dms',
   jobId: 7,
-  ageMs: 60 * 1000
+  ageMs: 60 * 1000,
+  destructive: false,
+  input: { url: 'https://api.vendor.com/v1' },
+  editableFields: ['url'],
+  contextMode: 'cron_headless'
 }
 const HIT_WEB_MANUAL: PendingApprovalInfo = { ...HIT_WEB_AGENT, approvalId: 'ap_m', agentId: null }
 

@@ -49,8 +49,9 @@ export function SkillInstallCard(props: ToolCallMessagePartProps): React.JSX.Ele
           </div>
           <ApprovalActions
             onApprove={() => respondToApproval({ approved: true })}
-            onReject={() => respondToApproval({ approved: false })}
+            onReject={(reason) => respondToApproval({ approved: false, reason })}
             approveLabel={t('chat.skillInstallCard.approve')}
+            rejectReason
           />
         </>
       ) : phase === 'done' ? (

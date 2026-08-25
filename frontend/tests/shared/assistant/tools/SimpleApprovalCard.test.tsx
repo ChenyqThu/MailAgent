@@ -171,7 +171,7 @@ describe('SimpleApprovalCard — approve / reject wire respondToApproval (通道
     expect(respond).toHaveBeenCalledWith({ approved: true })
   })
 
-  test('reject → respondToApproval({ approved: false })', () => {
+  test('reject → respondToApproval({ approved: false }) (two-step, L4 批次2)', () => {
     const respond = vi.fn()
     render(
       <SimpleApprovalCard
@@ -183,7 +183,9 @@ describe('SimpleApprovalCard — approve / reject wire respondToApproval (通道
       />
     )
     fireEvent.click(screen.getByText('拒绝'))
-    expect(respond).toHaveBeenCalledWith({ approved: false })
+    expect(respond).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('确认拒绝'))
+    expect(respond).toHaveBeenCalledWith({ approved: false, reason: undefined })
   })
 })
 

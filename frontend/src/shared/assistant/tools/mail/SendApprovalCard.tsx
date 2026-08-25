@@ -127,7 +127,7 @@ export function SendApprovalCard(props: ToolCallMessagePartProps): React.JSX.Ele
     }
     respondToApproval({ approved: true })
   }
-  const onReject = (): void => respondToApproval({ approved: false })
+  const onReject = (reason?: string): void => respondToApproval({ approved: false, reason })
 
   return (
     <CardFrame
@@ -188,6 +188,7 @@ export function SendApprovalCard(props: ToolCallMessagePartProps): React.JSX.Ele
             onReject={onReject}
             approveLabel={t('chat.sendApprovalCard.approve')}
             disabled={expired || noRecipients}
+            rejectReason
           />
         </div>
       ) : phase === 'done' ? (

@@ -193,7 +193,7 @@ export function DraftComposeCard(props: ToolCallMessagePartProps): React.JSX.Ele
     }
     respondToApproval({ approved: true })
   }
-  const onReject = (): void => respondToApproval({ approved: false })
+  const onReject = (reason?: string): void => respondToApproval({ approved: false, reason })
 
   const title = t(
     isUpdate
@@ -359,6 +359,7 @@ export function DraftComposeCard(props: ToolCallMessagePartProps): React.JSX.Ele
                 ? 'chat.draftComposeCard.update.approve'
                 : 'chat.draftComposeCard.new.approve'
             )}
+            rejectReason
           />
         </div>
       ) : phase === 'done' ? (

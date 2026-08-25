@@ -76,12 +76,14 @@ describe('McpApprovalCard — pending', () => {
     expect(respond).toHaveBeenCalledWith({ approved: true })
   })
 
-  test('reject button responds approved:false', () => {
+  test('reject button (two-step, L4 批次2) responds approved:false after the confirm click', () => {
     stubToolsFetch([])
     const respond = vi.fn()
     render(<McpApprovalCard {...mockProps({ respondToApproval: respond })} />)
     fireEvent.click(screen.getByText('拒绝').closest('button')!)
-    expect(respond).toHaveBeenCalledWith({ approved: false })
+    expect(respond).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('确认拒绝'))
+    expect(respond).toHaveBeenCalledWith({ approved: false, reason: undefined })
   })
 
   test('destructive warning renders ONLY from the server manifest fact', async () => {

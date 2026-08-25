@@ -182,8 +182,9 @@ export function SkillInstallConfirmCard(props: ToolCallMessagePartProps): React.
             </div>
             <ApprovalActions
               onApprove={() => respondToApproval({ approved: true })}
-              onReject={() => respondToApproval({ approved: false })}
+              onReject={(reason) => respondToApproval({ approved: false, reason })}
               approveLabel={t('chat.skillInstallConfirmCard.approve')}
+              rejectReason
             />
           </>
         )

@@ -34,6 +34,21 @@ M3-C2 表）；TitleBar 旧徽标 `AgentPendingBadge` / `SystemAlertBadge` 收�
 `unread-count` 新增 `openByCategory` 轴支撑铃铛的待办持久点（§7）。灵动岛与飞书两处
 fanout 投影评估后分别判定跳过 / 缓行，未纳入本批，见 §9 决策⑤⑥。
 
+### 1.1 与例外面（今日域 `/today`）的划界
+
+L4 批次 2（task `08-25-l4-batch2-exception-surface`）起，app 内并存两个「有事找我」面，
+语义不同、互不替代：
+
+- **通知中心 = 推送侧事件流**：某信源某时刻发生了一件事，状态长在通知行上
+  （`open/snoozed/resolved/dismissed` + `read_at`），条目身份 = 事件。
+- **例外面 = 拉取侧待处理态聚合**：条目身份 = 源实体（agent run / matter 提案 / 关注信号），
+  在不在只由源实体读态决定——**直接读源实体，不经 `notification` 表**，无归档动作，
+  条目消失 = 源实体离开等待态。这是唯一不会产生「通知已 resolve 但审批还挂着」类裂缝的形态。
+
+划界纪律：例外面不给 `notification` 加任何端点/语义；铃铛徽标与例外面分组互不喂数。
+同一件事可以两边都出现（如 run 暂停待批：铃铛记「发生了暂停」这个事件，例外面呈现
+「现在仍等着批」这个状态），这不是重复，是两个正交轴。
+
 ## 2. 数据模型：`notification` 表（v68）
 
 DDL 单源 = `src/mail/sync_store.py::NOTIFICATION_TABLE_DDLS` / `NOTIFICATION_INDEX_DDLS`

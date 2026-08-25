@@ -542,6 +542,7 @@
       "adminMeta": "dead-letter {n, plural, =0 {0} other {#}} · 队列健康",
       "contacts": "打开通讯录",
       "contactsMeta": "人物档案",
+      "todayMeta": "等我处理的事",
       "mattersMeta": "事项工作台",
       "calendarMeta": "日程与会议",
       "customAiMeta": "Agents · 报告 · Chats",
@@ -702,6 +703,7 @@
       "ops": "运维"
     },
     "composeNew": "写邮件",
+    "today": "今日",
     "inbox": "收件箱",
     "outbox": "发件箱",
     "drafts": "草稿箱",
@@ -1230,7 +1232,11 @@
       "details": "查看详情",
       "actionFailed": "操作失败：{error}",
       "rejectedBanner": "已拒绝，未执行该操作。",
-      "expiredBanner": "审批已过期，请让助手重新发起。"
+      "expiredBanner": "审批已过期，请让助手重新发起。",
+      "rejectReasonLabel": "拒绝理由（可选）",
+      "rejectReasonPlaceholder": "说明为什么不批准，以及希望改成什么做法",
+      "rejectConfirm": "确认拒绝",
+      "rejectBack": "返回"
     },
     "sendApprovalCard": {
       "title": "发送邮件",
@@ -4900,6 +4906,11 @@
         "approveLabel": "批准",
         "rememberDomain": "总是允许该 Agent 访问此域名（免审批）",
         "rememberDomainHint": "为该 Agent 的无人值守运行创建一条域名白名单，此后访问该域名免审批。仅对你信任的来源勾选。",
+        "editParams": "编辑参数",
+        "editParamsClose": "收起参数",
+        "editParamsHint": "只有下列字段可改，其余参数由服务端锁定。改完点「批准」，执行的是改后的版本。",
+        "rememberTool": "记住：以后不再询问这类操作",
+        "rememberToolHint": "把 {tool} 设为自动执行：此后在与助手的对话里调用它不再弹审批；后台自动运行的 agent 不受影响。可在设置 → AI → 工具审批档改回。",
         "approvalExpired": "审批已失效（超时或应用重启），此次运行未执行。",
         "decideFailed": "决策失败",
         "state": {
@@ -6829,6 +6840,52 @@
       "today": "今天",
       "yesterday": "昨天",
       "earlier": "更早"
+    }
+  },
+  "today": {
+    "kicker": "TODAY",
+    "title": "例外面",
+    "subtitle": "{count} 条等你看一眼",
+    "subtitleLoading": "正在汇总…",
+    "error": "事项数据加载失败，下面只列出了 Agent 运行",
+    "empty": {
+      "title": "没有需要你处理的事",
+      "hint": "Agent 等审批、事项提案、关注信号都会汇到这里；现在一条都没有。"
+    },
+    "group": {
+      "waiting": "等我处理",
+      "inProgress": "进行中",
+      "expired": "已失效",
+      "attention": "需要留意",
+      "recent": "最近结果"
+    },
+    "groupCount": "{count} 条",
+    "item": {
+      "proposalTitle": "Agent 提案待评审"
+    },
+    "triage": {
+      "runTrigger": "由「{trigger}」触发",
+      "runTriggerAt": "由「{trigger}」触发 · {at}",
+      "proposalChanges": "{count} 项变更",
+      "proposalConfidence": "置信度 {percent}%"
+    },
+    "trigger": {
+      "manual": "手动",
+      "cron": "定时",
+      "schedule": "排程",
+      "emailFilter": "邮件规则",
+      "calendarChange": "日历变化",
+      "calendarBefore": "会前提醒"
+    },
+    "run": {
+      "stashMiss": "这条审批已失效（超时或应用重启），只能查看执行记录。"
+    },
+    "menu": {
+      "trigger": "更多",
+      "dismissReasonLabel": "忽略理由（可选）",
+      "dismissReasonPlaceholder": "说明这条信号为什么现在可以先不管",
+      "dismissConfirm": "确认忽略",
+      "dismissBack": "返回"
     }
   }
 }

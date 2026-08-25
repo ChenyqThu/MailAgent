@@ -88,7 +88,7 @@ export function DraftReplyCard(props: ToolCallMessagePartProps): React.JSX.Eleme
     }
     respondToApproval({ approved: true })
   }
-  const onReject = (): void => respondToApproval({ approved: false })
+  const onReject = (reason?: string): void => respondToApproval({ approved: false, reason })
 
   const modeLabel = data.mode === 'reply' ? '仅答复发件人' : '答复全部'
 
@@ -133,7 +133,12 @@ export function DraftReplyCard(props: ToolCallMessagePartProps): React.JSX.Eleme
             className="scrollbar-thin w-full resize-y rounded-lg border border-ink-border-soft bg-ink-2 px-2.5 py-2 text-aux leading-relaxed text-ink-fg outline-none focus:border-coral/50"
             aria-label="reply draft body"
           />
-          <ApprovalActions onApprove={onApprove} onReject={onReject} approveLabel="创建草稿" />
+          <ApprovalActions
+            onApprove={onApprove}
+            onReject={onReject}
+            approveLabel="创建草稿"
+            rejectReason
+          />
         </div>
       ) : phase === 'done' ? (
         <div className="space-y-1.5">

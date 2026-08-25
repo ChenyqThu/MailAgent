@@ -136,7 +136,7 @@ export function McpApprovalCard(props: ToolCallMessagePartProps): React.JSX.Elem
   const toolLabel = facts?.remoteName ?? parsed?.toolSlug ?? toolName
 
   const onApprove = (): void => respondToApproval({ approved: true })
-  const onReject = (): void => respondToApproval({ approved: false })
+  const onReject = (reason?: string): void => respondToApproval({ approved: false, reason })
 
   return (
     <CardFrame
@@ -187,7 +187,7 @@ export function McpApprovalCard(props: ToolCallMessagePartProps): React.JSX.Elem
       )}
       {/* A5 — likewise outside the branches: the row hides itself when the phase leaves pending,
           so the buttons fade out instead of blinking away. */}
-      <ApprovalActions onApprove={onApprove} onReject={onReject} />
+      <ApprovalActions onApprove={onApprove} onReject={onReject} rejectReason />
       {phase === 'rejected' || phase === 'expired' ? <TerminalBanner phase={phase} /> : null}
     </CardFrame>
   )

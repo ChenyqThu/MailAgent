@@ -146,6 +146,79 @@ describe('GET /api/ai/approval/pending — hit (enriched decide-card body)', () 
   })
 })
 
+// L4 批次2 — the in-panel decide card needs three more facts to offer edit / remember honestly:
+// the EFFECTIVE input, what may be edited, and the mode frozen at pause time. The first two come
+// from the ApprovalGuard through cfg.peekApprovalRecord (READ-ONLY); the third from the stash.
+describe('GET /api/ai/approval/pending — L4 批次2 edit/remember facts', () => {
+  test('guard wired → effective input + registered editableFields + frozen contextMode', async () => {
+    const stash = new ApprovalRunStash()
+    const h = await start(
+      baseCfg({
+        approvalStash: stash,
+        peekApprovalRecord: () => ({
+          input: { internal_id: 5, body_markdown: 'draft body' },
+          editableFields: ['body_markdown', 'to']
+        })
+      })
+    )
+    stash.stash({
+      toolCallId: 'tc_pending',
+      approvalId: 'ap_pending',
+      toolName: 'email_draft_reply',
+      sessionId: 31,
+      body: { messages: [] },
+      responseMessage: pausedResponse({ body_markdown: 'draft body' }),
+      contextMode: 'manual_chat'
+    })
+
+    const body = (await (await pending(h.port, '?sessionId=31')).json()) as Record<string, unknown>
+    expect(body.input).toEqual({ internal_id: 5, body_markdown: 'draft body' })
+    expect(body.editableFields).toEqual(['body_markdown', 'to'])
+    expect(body.contextMode).toBe('manual_chat')
+  })
+
+  test('a previous /resolve edit wins over the model proposal (effective, not superseded)', async () => {
+    // The guard holds editedInput after an edit; a re-opened card must edit from THERE, otherwise
+    // the second edit would silently start from the model's original text again.
+    const stash = new ApprovalRunStash()
+    const h = await start(
+      baseCfg({
+        approvalStash: stash,
+        peekApprovalRecord: () => ({
+          input: { body_markdown: 'EDITED body' },
+          editableFields: ['body_markdown']
+        })
+      })
+    )
+    seedStash(stash, 32, { input: { body_markdown: 'model proposal' } })
+    const body = (await (await pending(h.port, '?sessionId=32')).json()) as Record<string, unknown>
+    expect(body.input).toEqual({ body_markdown: 'EDITED body' })
+  })
+
+  test('no guard hook → the stashed proposal + NO editable fields (honest degradation)', async () => {
+    const stash = new ApprovalRunStash()
+    const h = await start(baseCfg({ approvalStash: stash }))
+    seedStash(stash, 33, { input: { body_markdown: 'draft body' } })
+    const body = (await (await pending(h.port, '?sessionId=33')).json()) as Record<string, unknown>
+    expect(body.input).toEqual({ body_markdown: 'draft body' })
+    expect(body.editableFields).toEqual([]) // ⇒ the card offers approve/reject only
+    expect(body.contextMode).toBeNull() // hand-built entry: unknown ⇒ no remember affordance
+  })
+
+  test('🔴 the new fields do not smuggle the resumeToken out', async () => {
+    const stash = new ApprovalRunStash()
+    const h = await start(
+      baseCfg({
+        approvalStash: stash,
+        peekApprovalRecord: () => ({ input: { a: 1 }, editableFields: ['a'] })
+      })
+    )
+    const token = seedStash(stash, 34)
+    const raw = await (await pending(h.port, '?sessionId=34')).text()
+    expect(raw).not.toContain(token)
+  })
+})
+
 describe('GET /api/ai/approval/pending — miss (404 fail-closed)', () => {
   test('no live entry for the session → 404 { pending:false }', async () => {
     const stash = new ApprovalRunStash()

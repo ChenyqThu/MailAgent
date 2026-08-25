@@ -285,6 +285,19 @@ export interface AiGatewayConfig {
     toolCallId: string,
     editedFields: Record<string, unknown>
   ) => { approvalId: string; toolName: string }
+  /** L4 批次2 — READ-ONLY peek at the guard record behind a pending approval, for the
+   *  `GET /api/ai/approval/pending` body. The Electron wrapper implements it as
+   *  `approvalGuard.peek(toolCallId)` and returns only the two fields a generic edit UI needs:
+   *  the EFFECTIVE input (`editedInput ?? input` — a re-opened card must show what would actually
+   *  run, not the model's superseded proposal) and the registered `editableFields` (empty for
+   *  preview-tier writes → the UI offers no editor, mirroring applyEdit's E_APPROVAL_NOT_EDITABLE).
+   *  🔴 Never mutates / never consumes (same discipline as resolveApprovalRequest) and never
+   *  surfaces the inputHash / idempotencyKey / TTL bookkeeping. Omitted (harness cfg / guard not
+   *  wired) → /pending falls back to the stashed model proposal + no editable fields, i.e. the
+   *  pre-L4 body plus two honest "nothing to edit" values. */
+  peekApprovalRecord?: (
+    toolCallId: string
+  ) => { input: unknown; editableFields: readonly string[] } | null
   /** S2 W1 (ADR-001 D4/D6) — the exec approval card's "always allow" affordance. POST
    *  /api/ai/policy/remember {toolCallId} calls this: the Electron wrapper peeks the pending exec
    *  approval (ApprovalGuard.peek — the SAME approved argv/cwd/path, so the model cannot forge a

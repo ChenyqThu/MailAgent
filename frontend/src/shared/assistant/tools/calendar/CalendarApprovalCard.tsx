@@ -148,7 +148,7 @@ export function CalendarApprovalCard(props: ToolCallMessagePartProps): React.JSX
       : null
 
   const onApprove = (): void => respondToApproval({ approved: true })
-  const onReject = (): void => respondToApproval({ approved: false })
+  const onReject = (reason?: string): void => respondToApproval({ approved: false, reason })
 
   // A2 — the before/after review rows as the shared label/value table (was a local `Row`).
   // 🔴 Order is load-bearing for reschedule: 原时间 immediately above 新时间, so the two-column
@@ -221,7 +221,7 @@ export function CalendarApprovalCard(props: ToolCallMessagePartProps): React.JSX
               {t(warningKey)}
             </div>
           )}
-          <ApprovalActions onApprove={onApprove} onReject={onReject} />
+          <ApprovalActions onApprove={onApprove} onReject={onReject} rejectReason />
         </>
       ) : phase === 'rejected' || phase === 'expired' ? (
         <>

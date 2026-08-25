@@ -125,7 +125,7 @@ export function SimpleApprovalCard(props: ToolCallMessagePartProps): React.JSX.E
   const continuation = continuationValue(spec, args, argsText)
 
   const onApprove = (): void => respondToApproval({ approved: true })
-  const onReject = (): void => respondToApproval({ approved: false })
+  const onReject = (reason?: string): void => respondToApproval({ approved: false, reason })
 
   return (
     <CardFrame icon={iconFor(toolName)} title={title} phase={phase}>
@@ -163,7 +163,7 @@ export function SimpleApprovalCard(props: ToolCallMessagePartProps): React.JSX.E
         </>
       )}
       {/* A5 — outside the branches too: the row hides itself once the phase leaves pending. */}
-      <ApprovalActions onApprove={onApprove} onReject={onReject} />
+      <ApprovalActions onApprove={onApprove} onReject={onReject} rejectReason />
       {phase === 'rejected' || phase === 'expired' ? <TerminalBanner phase={phase} /> : null}
     </CardFrame>
   )

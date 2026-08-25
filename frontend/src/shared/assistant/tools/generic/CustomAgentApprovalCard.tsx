@@ -401,13 +401,14 @@ export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.
         ) : (
           <ApprovalActions
             onApprove={() => respondToApproval({ approved: true })}
-            onReject={() => respondToApproval({ approved: false })}
+            onReject={(reason) => respondToApproval({ approved: false, reason })}
             approveLabel={t(
               isUpdate ? 'chat.customAgentCard.approveUpdate' : 'chat.customAgentCard.approveCreate'
             )}
             // update: no approving before the server baseline arrives — the diff being reviewed
             // must be the real one (facts error paths are handled above / by permsUnreviewable).
             disabled={isUpdate && facts == null && factsError == null}
+            rejectReason
           />
         )}
       </CardFrame>

@@ -50,7 +50,8 @@ export function ApprovalActionCard(props: ToolCallMessagePartProps): React.JSX.E
           </div>
           <ApprovalActions
             onApprove={() => respondToApproval({ approved: true })}
-            onReject={() => respondToApproval({ approved: false })}
+            onReject={(reason) => respondToApproval({ approved: false, reason })}
+            rejectReason
           />
         </>
       ) : phase === 'done' ? (

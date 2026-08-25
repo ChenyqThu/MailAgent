@@ -55,6 +55,21 @@ export function approvalActionsMotion(reduce: boolean): {
   }
 }
 
+/** L4 批次2 — max length of the optional rejection reason an approval surface may attach.
+ *  🔴 MIRROR of `APPROVAL_REASON_MAX_CHARS` in `src/ai-gateway/approvalResume.ts` (canonical; the
+ *  gateway can't import this leaf without pulling renderer-only modules in). The equality gate is
+ *  `tests/ai-gateway/approval_decide.test.ts` — bump one side alone and it goes red. */
+export const APPROVAL_REASON_MAX_CHARS = 2000
+
+/** Normalize a typed rejection reason for the wire: trimmed, clipped to the shared limit, and
+ *  `undefined` when the user left it empty — an empty box must produce the byte-identical
+ *  reason-less body the pre-L4 reject sent, not `reason: ''`. */
+export function normalizeApprovalReason(raw: string): string | undefined {
+  const text = raw.trim()
+  if (text.length === 0) return undefined
+  return text.length > APPROVAL_REASON_MAX_CHARS ? text.slice(0, APPROVAL_REASON_MAX_CHARS) : text
+}
+
 /** Longest error detail a card will render — a schema-validation errorText embeds the whole
  *  rejected input, which for a draft is the entire body. */
 const ERROR_DETAIL_MAX = 240

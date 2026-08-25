@@ -579,6 +579,11 @@ def _run_history_item(job: AsyncJob) -> dict[str, Any]:
     outcome/approval_state 推导状态（投影即契约），防 ``paused_handoff`` 渲染成「成功完成」的
     第二处解读漂移。``outcome``/``approvalState``/``sessionId``/``steps``/``tokens`` 从
     result_json 透传；duration 由账本时间戳投影（均非状态判定输入）。
+
+    ``triggerKind``/``triggerFiredAtIso``（L4 批次2 §2.1）：从 ``job.params``（非 result）
+    投影，纯展示增强，非状态判定输入——不影响上面那条红线。``params.trigger_kind`` 缺失
+    （老行 / 非常规入队路径）→ 两字段恒 None；有值则复用 ``_fired_at_iso`` 同一份 cron
+    occurrence 解析，与 ``_assemble_spec`` 的 firedAt 同源不重造第二套解法。
     """
     result = job.result if isinstance(job.result, dict) else {}
     state = derive_agent_run_state(
@@ -588,6 +593,13 @@ def _run_history_item(job: AsyncJob) -> dict[str, Any]:
             "finished_at": job.finished_at,
             "updated_at": job.updated_at,
         }
+    )
+    params = job.params if isinstance(job.params, dict) else {}
+    raw_trigger_kind = params.get("trigger_kind")
+    trigger_kind = raw_trigger_kind if isinstance(raw_trigger_kind, str) and raw_trigger_kind else None
+    trigger_fired_at_iso = (
+        _fired_at_iso(trigger_kind, params.get("fire_key"), job.created_at)
+        if trigger_kind is not None else None
     )
     return {
         "jobId": job.job_id,
@@ -606,6 +618,8 @@ def _run_history_item(job: AsyncJob) -> dict[str, Any]:
             max(0.0, job.finished_at - (job.started_at or job.created_at))
             if job.finished_at is not None else None
         ),
+        "triggerKind": trigger_kind,
+        "triggerFiredAtIso": trigger_fired_at_iso,
     }
 
 

@@ -351,8 +351,9 @@ export function CustomAgentCallCard(props: ToolCallMessagePartProps): React.JSX.
           </div>
           <ApprovalActions
             onApprove={() => props.respondToApproval?.({ approved: true })}
-            onReject={() => props.respondToApproval?.({ approved: false })}
+            onReject={(reason) => props.respondToApproval?.({ approved: false, reason })}
             approveLabel={t('chat.agentCallCard.approve')}
+            rejectReason
           />
         </div>
       </CardFrame>
