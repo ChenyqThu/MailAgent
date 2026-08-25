@@ -13,9 +13,17 @@
 // updater_restart）。它们的落地动作各不相同（两个走 store-intent、一个走现成的 matters
 // 通道、一个直调 updater IPC），但**解析**这一步仍然只有这一处。
 
-/** 允许的 route 目标。值 = TanStack Router 的路由 path 字面量。 */
-export const NOTIFICATION_ROUTE_TARGETS = ['/agents', '/admin/kanban', '/settings'] as const
-export type NotificationRouteTarget = (typeof NOTIFICATION_ROUTE_TARGETS)[number]
+// 允许的 route 目标（值 = TanStack Router 的路由 path 字面量）自 task 08-24-l4-nav-shell
+// Step R 起**从 nav registry 派生**（标了 `notificationRoute` 的那几条），不再在这里手抄
+// 一份 path 清单 —— 它与侧栏 / ⌘K 是同一批入口，抄第二份就会在改路由时漏掉一边。
+// 🔴 白名单**只转录现状三条**，不借机扩面：加档 = 给那条 entry 标 `notificationRoute`
+// + 确认真有信源会发它。
+import {
+  NOTIFICATION_ROUTE_TARGETS,
+  type NotificationRouteTarget
+} from '@shared/navigation/registry'
+
+export { NOTIFICATION_ROUTE_TARGETS, type NotificationRouteTarget }
 
 export type NotificationLink =
   | { type: 'session'; sessionId: number }

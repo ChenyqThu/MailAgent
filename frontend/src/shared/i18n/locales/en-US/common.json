@@ -541,7 +541,12 @@
       "admin": "Admin kanban",
       "adminMeta": "{n, plural, =0 {no dead letters} other {# dead-letter}} · queue health",
       "contacts": "Open Contacts",
-      "contactsMeta": "People profiles"
+      "contactsMeta": "People profiles",
+      "mattersMeta": "Matters workspace",
+      "calendarMeta": "Schedule & meetings",
+      "customAiMeta": "Agents · Reports · Chats",
+      "llmMeta": "Classification & usage",
+      "settingsMeta": "Preferences & accounts"
     },
     "email": {
       "countLabel": "{n} / {total}",

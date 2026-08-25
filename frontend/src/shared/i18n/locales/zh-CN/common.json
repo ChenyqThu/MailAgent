@@ -541,7 +541,12 @@
       "admin": "看板 Admin",
       "adminMeta": "dead-letter {n, plural, =0 {0} other {#}} · 队列健康",
       "contacts": "打开通讯录",
-      "contactsMeta": "人物档案"
+      "contactsMeta": "人物档案",
+      "mattersMeta": "事项工作台",
+      "calendarMeta": "日程与会议",
+      "customAiMeta": "Agents · 报告 · Chats",
+      "llmMeta": "分类与用量",
+      "settingsMeta": "偏好与账户"
     },
     "email": {
       "countLabel": "{n} / {total}",

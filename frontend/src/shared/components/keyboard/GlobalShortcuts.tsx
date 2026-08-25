@@ -15,11 +15,18 @@ import { useNavigate } from '@tanstack/react-router'
 import i18n from '@shared/i18n'
 
 import { useShortcut } from '@shared/hooks/useShortcut'
+// ⌘, / ⌘O 的**目标**来自 nav registry（与侧栏、⌘K jump 同一条 entry），**组合键**仍来自
+// keymap.ts（registry 只引用它的 binding id）—— 两者都不在本文件写死。
+import { navEntry, navigateToNavEntry, navShortcutSpec } from '@shared/navigation/registry'
 import { toggleChatModal } from '@shared/state/ai-chat-panel'
 import { useCommandPalette } from '@shared/state/command-palette'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
 import { useNavCollapsed } from '@shared/state/nav-shell'
 import { openNewCompose } from '@shared/state/compose-new'
+
+// 模块级常量：entry 是静态数据，没必要每次 render 再查一次。
+const settingsEntry = navEntry('settings')
+const generalAgentEntry = navEntry('sessions')
 
 export function GlobalShortcuts(): null {
   const navigate = useNavigate()
@@ -40,7 +47,7 @@ export function GlobalShortcuts(): null {
     // Sprint 18 PR C — `/settings` now requires a `tab` search param
     // (validateSearch in router-instance.tsx). ⌘, lands the user on the
     // first tab; deep-linking to a specific tab is handled by SettingsRail.
-    void navigate({ to: '/settings', search: { tab: 'general' } })
+    navigateToNavEntry(navigate, settingsEntry)
   }, [navigate])
 
   // assistant-modal: ⌘J 开关 chat dock（⌘L 的旧侧边面板 toggle 随 legacy 面板退役）。
@@ -54,7 +61,7 @@ export function GlobalShortcuts(): null {
   // ⌘O — MailAgent 通用 agent 视图 (/sessions)。legacy Cmd+O centered dialog 已随
   // legacy runtime 退役。
   const toggleGeneral = useCallback(() => {
-    void navigate({ to: '/sessions' })
+    navigateToNavEntry(navigate, generalAgentEntry)
   }, [navigate])
 
   // Sprint 11 V1.4 — nav-shell collapse + locale toggle.
@@ -72,9 +79,9 @@ export function GlobalShortcuts(): null {
   // having to write 'shift+/'.
   useShortcut('?', openHelp)
   useShortcut('cmd+k', togglePalette)
-  useShortcut('cmd+,', goSettings)
+  useShortcut(navShortcutSpec(settingsEntry), goSettings)
   useShortcut('cmd+j', toggleModal)
-  useShortcut('cmd+o', toggleGeneral)
+  useShortcut(navShortcutSpec(generalAgentEntry), toggleGeneral)
   // ⌘N — 写新邮件 (居中模态, ComposeNewModal 挂 RootLayout)。global scope: 任意
   // 页面可开, 与全局侧边栏「写邮件」按钮一致。editable context 默认 short-circuit,
   // chat / 主题输入框打字不误触。

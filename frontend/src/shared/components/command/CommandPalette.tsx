@@ -48,7 +48,6 @@ import { useTranslation } from 'react-i18next'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import {
-  BarChart3,
   Bookmark,
   BookmarkPlus,
   Check,
@@ -92,7 +91,15 @@ import { useMattersApi, useMattersEnabled } from '@shared/components/matters/hoo
 import { useMatterNavigation } from '@shared/components/matters/navigation'
 import { useContactsApi, useContactsEnabled } from '@shared/components/contacts/hooks'
 import { useContactNavigation } from '@shared/components/contacts/navigation'
-import { UsersRoundIcon } from '@shared/components/icons'
+// jump 段的静态行 = nav registry 投影（task 08-24-l4-nav-shell Step R）：一级入口
+// 加/删/改门控只动 registry 一处，⌘K 自动跟上（此前是三行手抄，新入口从来不会出现在这里）。
+import {
+  navigateToNavEntry,
+  navPaletteEntries,
+  navPaletteLabel,
+  type NavEntry
+} from '@shared/navigation/registry'
+import { useVisibleNavEntries } from '@shared/navigation/useNavGates'
 import { EmailHitRow } from './EmailHitRow'
 import { MatterHitRow } from './MatterHitRow'
 import { PersonHitRow } from './PersonHitRow'
@@ -128,6 +135,10 @@ const IS_WEB = resolveBuildTarget() === 'web'
 // 展示的单一截断点 (searchEmails clamp 上限 200, 50 在范围内), 不设无界。
 const MAX_EMAIL_HITS = 50
 const MAX_JUMP_MAILBOXES = 3
+// 「AI 会话」行在 jump 静态段里的位次。它不是路由入口（开的是 chat 模态），所以不进
+// registry；给它一个 order 就能和 registry 投影排在同一条轴上 —— 落在通用 agent(10)
+// 与看板(20) 之间，与收敛前的位置一致。
+const AI_HISTORY_JUMP_ORDER = 15
 // 通讯录 WP4「人」组：面板展示 8 条；服务端 limit 取 16 留出客户端滤 hidden 的
 // 余量（total 仍是全量命中数，供「另有 n 人」提示）。
 const MAX_CONTACT_HITS = 8
@@ -230,6 +241,12 @@ export function CommandPalette(): React.ReactElement | null {
   const mattersEnabled = useMattersEnabled()
   const contactsApi = useContactsApi()
   const { enabled: contactsEnabled } = useContactsEnabled()
+  // jump 静态段的一级入口（门控过滤 + 按 palette.order 排好）。
+  const visibleNavEntries = useVisibleNavEntries()
+  const paletteNavEntries: readonly NavEntry[] = useMemo(
+    () => navPaletteEntries(visibleNavEntries),
+    [visibleNavEntries]
+  )
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const openMatter = useMatterNavigation((state) => state.open)
@@ -724,74 +741,52 @@ export function CommandPalette(): React.ReactElement | null {
       })
     }
 
-    // Always offer the AI panel jump + admin kanban shortcut as static rows
-    // so users can ⌘K → ⏎ to surface them without typing.
-    // MailAgent 通用 agent 视图 (/sessions)——legacy Cmd+O centered dialog 已随
-    // legacy runtime 退役。
-    out.push({
-      id: 'jump:general-agent',
-      icon: <Sparkles size={14} strokeWidth={1.75} />,
-      label: (
-        <span className="text-body flex-1 truncate">
-          <span className="text-ink-fg font-medium">{t('nav.agentView')}</span>
-          <span className="text-ink-fg-3 mx-1">·</span>
-          <span className="text-ink-fg-2">{t('palette.jump.generalAgentMeta')}</span>
-        </span>
-      ),
-      run: () => {
-        closeCommandPalette()
-        void navigate({ to: '/sessions' })
-      }
-    })
-    out.push({
-      id: 'jump:ai-history',
-      icon: <History size={14} strokeWidth={1.75} />,
-      label: (
-        <span className="text-body flex-1 truncate">
-          <span className="text-ink-fg font-medium">{t('palette.jump.aiHistory')}</span>
-          <span className="text-ink-fg-3 mx-1">·</span>
-          <span className="text-ink-fg-2">{t('palette.jump.aiHistoryMeta')}</span>
-        </span>
-      ),
-      run: () => {
-        closeCommandPalette()
-        openChatModal()
-      }
-    })
-    out.push({
-      id: 'jump:admin',
-      icon: <BarChart3 size={14} strokeWidth={1.75} />,
-      label: (
-        <span className="text-body flex-1 truncate">
-          <span className="text-ink-fg font-medium">{t('palette.jump.admin')}</span>
-          <span className="text-ink-fg-3 mx-1">·</span>
-          <span className="text-ink-fg-2">{t('palette.jump.adminMeta', { n: 0 })}</span>
-        </span>
-      ),
-      run: () => {
-        closeCommandPalette()
-        void navigate({ to: '/admin/kanban' })
-      }
-    })
-    // 通讯录 WP4 —— 「打开通讯录」导航命令（位置对齐侧栏 VIEW 组顺序：看板之后）。
-    // flag off 不渲染（与侧栏条目同一 gate）。icon = 侧栏通讯录同款图标组件。
-    if (contactsEnabled) {
-      out.push({
-        id: 'jump:contacts',
-        icon: <UsersRoundIcon size={14} strokeWidth={1.75} />,
-        label: (
-          <span className="text-body flex-1 truncate">
-            <span className="text-ink-fg font-medium">{t('palette.jump.contacts')}</span>
-            <span className="text-ink-fg-3 mx-1">·</span>
-            <span className="text-ink-fg-2">{t('palette.jump.contactsMeta')}</span>
-          </span>
-        ),
-        run: () => {
-          closeCommandPalette()
-          void navigate({ to: '/contacts' })
+    // 静态行（不随 query 变）：一级入口全量投影 + 一行非路由动作（AI 会话历史，
+    // 它开的是 chat 模态不是路由，所以不在 registry 里）。两者按同一条 order 轴合并，
+    // 用户 ⌘K → ⏎ 就能到任意一级入口，不用先记得它在侧栏哪一段。
+    const staticRows: { order: number; row: JumpRow }[] = paletteNavEntries
+      .map((entry) => ({
+        order: entry.palette?.order ?? 0,
+        row: {
+          id: `jump:${entry.id}`,
+          icon: entry.icon(),
+          label: (
+            <span className="text-body flex-1 truncate">
+              <span className="text-ink-fg font-medium">{navPaletteLabel(entry, t)}</span>
+              <span className="text-ink-fg-3 mx-1">·</span>
+              {/* `n` 只有看板那条 meta 用（ICU plural）；多传一个参数对其余键无害，
+                  少一条分支。 */}
+              <span className="text-ink-fg-2">{t(entry.palette?.metaI18nKey ?? '', { n: 0 })}</span>
+            </span>
+          ),
+          run: () => {
+            closeCommandPalette()
+            navigateToNavEntry(navigate, entry)
+          }
         }
-      })
-    }
+      }))
+      .concat([
+        {
+          order: AI_HISTORY_JUMP_ORDER,
+          row: {
+            id: 'jump:ai-history',
+            icon: <History size={14} strokeWidth={1.75} />,
+            label: (
+              <span className="text-body flex-1 truncate">
+                <span className="text-ink-fg font-medium">{t('palette.jump.aiHistory')}</span>
+                <span className="text-ink-fg-3 mx-1">·</span>
+                <span className="text-ink-fg-2">{t('palette.jump.aiHistoryMeta')}</span>
+              </span>
+            ),
+            run: () => {
+              closeCommandPalette()
+              openChatModal()
+            }
+          }
+        }
+      ])
+    staticRows.sort((a, b) => a.order - b.order)
+    for (const item of staticRows) out.push(item.row)
     return out
   }, [
     debouncedRaw,
@@ -802,7 +797,7 @@ export function CommandPalette(): React.ReactElement | null {
     mailboxes,
     navigate,
     setActiveMailbox,
-    contactsEnabled,
+    paletteNavEntries,
     t
   ])
 
@@ -1127,12 +1122,8 @@ export function CommandPalette(): React.ReactElement | null {
       count: emailProviderCount + visibleMatterHits.length + visibleContactHits.length
     },
     { id: 'email', count: emailProviderCount },
-    ...(mattersEnabled
-      ? [{ id: 'matter', count: visibleMatterHits.length } as const]
-      : []),
-    ...(contactsEnabled
-      ? [{ id: 'contact', count: visibleContactHits.length } as const]
-      : [])
+    ...(mattersEnabled ? [{ id: 'matter', count: visibleMatterHits.length } as const] : []),
+    ...(contactsEnabled ? [{ id: 'contact', count: visibleContactHits.length } as const] : [])
   ]
 
   // Pre-compute flat index offsets for each group so renderer can stamp

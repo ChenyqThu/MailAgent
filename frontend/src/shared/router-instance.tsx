@@ -52,6 +52,9 @@ import { useMatterNavigation } from './components/matters/navigation'
 // 'notifications:navigate' 送来通知行 payload，这里用**单源解析器**收窄（不另抄判据）。
 import { resolveNotificationLink } from './components/notifications/navigation'
 import { requestOpenAgentSession } from './state/ai-chat-panel'
+// 一级入口单源（task 08-24-l4-nav-shell Step R）：deeplink 的落点与「AI → General Agent」
+// 菜单项的目标都从 registry 取，不在这里第二次写死 path。
+import { navEntry, navigateToNavEntry, NAV_DEEPLINK_PATH } from './navigation/registry'
 import type { DeeplinkTarget } from './lib/deeplink_target'
 import { calendarUiEnabled, detectUiPlatform } from './lib/mailBackend'
 
@@ -82,11 +85,13 @@ function useDeeplinkRouter(): void {
     const handler = (...args: unknown[]): void => {
       const target = args[1] as DeeplinkTarget
       if (!target || typeof target !== 'object') return
+      // 目标 path 从 nav registry 查（`NAV_DEEPLINK_PATH` 的键域 = DeeplinkTarget['kind']
+      // 全集，少一个 kind 编译期就红）；search 的形状按 kind 各不相同，仍逐个落地。
       switch (target.kind) {
         case 'email':
           if (typeof target.id === 'number') {
             useActiveEmail.getState().setActive(target.id)
-            void router.navigate({ to: '/' })
+            void router.navigate({ to: NAV_DEEPLINK_PATH.email })
           }
           break
         case 'calendar': {
@@ -96,20 +101,20 @@ function useDeeplinkRouter(): void {
           const v = (CALENDAR_VIEWS as readonly string[]).includes(target.view ?? '')
             ? (target.view as CalendarView)
             : 'week'
-          void router.navigate({ to: '/admin/calendar', search: { view: v } })
+          void router.navigate({ to: NAV_DEEPLINK_PATH.calendar, search: { view: v } })
           break
         }
         case 'kanban':
-          void router.navigate({ to: '/admin/kanban' })
+          void router.navigate({ to: NAV_DEEPLINK_PATH.kanban })
           break
         case 'llm':
-          void router.navigate({ to: '/admin/llm' })
+          void router.navigate({ to: NAV_DEEPLINK_PATH.llm })
           break
         case 'settings': {
           const t = (SETTINGS_TABS as readonly string[]).includes(target.view ?? '')
             ? (target.view as SettingsTab)
             : 'general'
-          void router.navigate({ to: '/settings', search: { tab: t } })
+          void router.navigate({ to: NAV_DEEPLINK_PATH.settings, search: { tab: t } })
           break
         }
       }
@@ -132,6 +137,8 @@ function useDeeplinkRouter(): void {
 function useGeneralAgentMenu(): void {
   const navigate = useNavigate()
   useEffect(() => {
+    // 目标同侧栏「MailAgent」行 / ⌘K 的通用 agent 行 —— 三处共用 registry 的同一条 entry。
+    const entry = navEntry('sessions')
     const ipc = (
       window as unknown as {
         electron?: {
@@ -144,7 +151,7 @@ function useGeneralAgentMenu(): void {
     ).electron?.ipcRenderer
     if (!ipc) return
     const handler = (): void => {
-      void navigate({ to: '/sessions' })
+      navigateToNavEntry(navigate, entry)
     }
     const off = ipc.on('mailagent:open-general-agent', handler)
     return typeof off === 'function'

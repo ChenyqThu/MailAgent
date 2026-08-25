@@ -14,6 +14,11 @@
 // `app-nav-bottom`, `app-nav-chevron-*`, `row-selected`) are load-bearing
 // hooks from §2.11 — they live in authored CSS (index.css) and survive
 // Tailwind purge. Do NOT replace with Tailwind utilities.
+//
+// task 08-24-l4-nav-shell Step R — 行不再逐个手写：条目（id / 目标 / 图标 / 门控 /
+// 徽标源 / 分段与序）来自 `@shared/navigation/registry`，这里只负责**怎么渲染**
+// （徽标形状、选中态、折叠态 tooltip）。本文件不再出现任何路由 path 字面量：跳转一律
+// 走 `navigateToNavEntry`。加/删一级入口 = 改 registry 一处，五通道同时跟上。
 
 import { cloneElement, isValidElement, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -23,24 +28,22 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
-import {
-  AnimatedIconActiveProvider,
-  BriefcaseBusinessIcon,
-  CalendarCheckIcon,
-  ChartLineIcon,
-  ChartPieIcon,
-  GripIcon,
-  MAILBOX_ICON_COMPONENT,
-  SettingsIcon,
-  SparklesIcon,
-  SquarePenIcon,
-  UsersRoundIcon
-} from '@shared/components/icons'
+import { AnimatedIconActiveProvider, SquarePenIcon } from '@shared/components/icons'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { isDraftsMailbox, isInboxMailbox, mailboxForView } from '@shared/lib/mailboxSemantics'
-import { calendarUiEnabled, detectUiPlatform } from '@shared/lib/mailBackend'
+import {
+  isNavEntryActive,
+  navigateToNavEntry,
+  navLabel,
+  navPanelSection,
+  navShortcutDisplay,
+  preloadNavEntry,
+  type NavBadgeKind,
+  type NavEntry
+} from '@shared/navigation/registry'
+import { useVisibleNavEntries } from '@shared/navigation/useNavGates'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { useMailbox } from '@shared/state/mailbox'
 import { useNavCollapsed } from '@shared/state/nav-shell'
@@ -48,7 +51,6 @@ import { openNewCompose } from '@shared/state/compose-new'
 import { deriveAccount } from '@shared/lib/account'
 import { useAgentUnreadCount, useSessionProvenanceEnabled } from '@shared/components/agents/hooks'
 import { useGlobalAttention, useMattersEnabled } from '@shared/components/matters/hooks'
-import { useContactsEnabled } from '@shared/components/contacts/hooks'
 
 import { AccountSwitcherPopover } from './AccountSwitcherPopover'
 import { SidebarFolderTree } from './SidebarFolderTree'
@@ -278,37 +280,17 @@ export function MatterAttentionBadge({ count }: { count: number }): React.ReactE
   )
 }
 
-// 全部走 AnimatedIcon（mailbox/feather/square-pen/zap/folders）；整行 hover/focus 经 NavRow 的
-// AnimatedIconActiveProvider 驱动（trigger='parent' 仅保留标注语义）。已标旗用 zap（用户点名）。
-// 🔴 view→图标组件的对应关系单源在 `icons/mailboxIcons.ts` —— 设置页「已同步文件夹配置」
-// 的内建邮箱行读同一份，别在这里改成字面量。
-function mailboxIconNode(view: EmailView): React.ReactNode {
-  const Icon = MAILBOX_ICON_COMPONENT[view]
-  return <Icon size={15} strokeWidth={1.75} trigger="parent" />
-}
-const MAILBOX_ICON: Record<EmailView, React.ReactNode> = {
-  inbox: mailboxIconNode('inbox'),
-  outbox: mailboxIconNode('outbox'),
-  drafts: mailboxIconNode('drafts'),
-  flagged: mailboxIconNode('flagged'),
-  all: mailboxIconNode('all')
-}
-
 export function Sidebar(): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
   const navigate = useNavigate()
   const routerInstance = useRouter()
-  // hover 意图预载 (§①): 事项/通讯录是最大的两个懒 chunk (591KB/184KB), hover 即开始
-  // 下载, 点击时通常已在本地。preloadRoute 自去重; 失败静默 (预载不该产生可见错误)。
-  const preloadOnHover = (to: '/matters' | '/contacts') => (): void => {
-    void routerInstance.preloadRoute({ to }).catch(() => {})
-  }
+  // 门控过滤后的一级入口（registry 单源）。分段/排序在下面按 panel.section 投影。
+  const navEntries = useVisibleNavEntries()
   const collapsed = useNavCollapsed((s) => s.collapsed)
   const toggleCollapsed = useNavCollapsed((s) => s.toggle)
   const sessionProvenanceEnabled = useSessionProvenanceEnabled()
   const mattersEnabled = useMattersEnabled()
-  const { enabled: contactsEnabled } = useContactsEnabled()
   const matterAttention = useGlobalAttention(mattersEnabled)
   const matterAttentionCount = matterAttention.data?.items.length ?? 0
   const agentUnreadTotal = useAgentUnreadCount(sessionProvenanceEnabled).total
@@ -319,7 +301,6 @@ export function Sidebar(): React.ReactElement {
   const customMailbox = useEmailFilter((s) => s.customMailbox)
   const setActiveMailbox = useMailbox((s) => s.setActive)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
-  const onAgents = pathname === '/agents'
 
   // Mailbox counts — SSE driven (useEventBridge invalidate ['mailboxes']);
   // polling 作 SSE 断线 fallback.
@@ -365,14 +346,16 @@ export function Sidebar(): React.ReactElement {
   const allTotal = nonDraft.reduce((sum, mb) => sum + mb.total, 0)
   const flaggedTotal = nonDraft.reduce((sum, mb) => sum + (mb.flagged ?? 0), 0)
 
-  // MAILBOXES selection: only when we're on the inbox route. Other routes
-  // (settings, admin, etc.) leave all MAILBOXES rows unselected. Plus the
-  // VIEW rows derive selection from pathname so §2.11 lint rule #4
-  // (`row-selected` count ≤ 1) holds for free.
-  const onInbox = pathname === '/'
-  // 自定义文件夹激活 (customMailbox 非空) 时内建 view 行全不选中 (列表已切到该
-  // 文件夹, 选中态由 SidebarFolderTree 那侧的 row-selected 表达)。
-  const selectedView = onInbox && !customMailbox ? view : null
+  // 徽标数值按 registry 的 badge.kind 索引 —— 行渲染只问「这一行挂哪个计数」，
+  // 不再逐行手接一个变量。
+  const badgeValue: Record<NavBadgeKind, number> = {
+    inboxUnread,
+    draftsTotal,
+    flaggedTotal,
+    allTotal,
+    matterAttention: matterAttentionCount,
+    agentUnread: agentUnreadTotal
+  }
 
   // Account popover — anchored under the header row. Outside-click /
   // Escape dismiss + add-account ghost row live in AccountSwitcherPopover.
@@ -387,14 +370,14 @@ export function Sidebar(): React.ReactElement {
   /** 未读徽标点击 —— 切进该 view 并只看未读。收的是「徽标常亮 N 但列表里翻不到那几封」
    *  的可发现性缺口（实测一封 2026-05 的老未读因 davmail folderSizeLimit 窗口外、
    *  入向已读回收够不着，徽标永久挂 1）。 */
-  const handleUnreadBadgeClick = (next: EmailView): void => {
+  const handleUnreadBadgeClick = (entry: NavEntry, next: EmailView): void => {
     focusUnread(next)
     const nextMailbox = mailboxForView(next)
     if (nextMailbox) setActiveMailbox(nextMailbox)
-    void navigate({ to: '/', search: { view: next } })
+    navigateToNavEntry(navigate, entry)
   }
 
-  const handleViewClick = (next: EmailView): void => {
+  const handleViewClick = (entry: NavEntry, next: EmailView): void => {
     setView(next)
     // Keep useMailbox.active in lockstep for the StatusBar mailbox segment.
     // inbox/outbox map cleanly to concrete Mail.app mailboxes; the virtual
@@ -402,7 +385,75 @@ export function Sidebar(): React.ReactElement {
     const nextMailbox = mailboxForView(next)
     if (nextMailbox) setActiveMailbox(nextMailbox)
     // flagged + all leave activeMailbox alone — they are cross-mailbox views.
-    void navigate({ to: '/', search: { view: next } })
+    navigateToNavEntry(navigate, entry)
+  }
+
+  /** registry 条目 → 一行。选中态、徽标形状、折叠态 tooltip 都在这里定 ——
+   *  MAILBOXES 行还要叠「列表状态」这一层：自定义文件夹激活 (customMailbox 非空)
+   *  时内建 view 行全不选中（选中态由 SidebarFolderTree 那侧表达）。 */
+  const renderEntry = (entry: NavEntry): React.ReactElement => {
+    const label = navLabel(entry, t)
+    const mailView = entry.view
+    const onRoute = isNavEntryActive(entry, pathname)
+    const selected =
+      mailView !== undefined ? onRoute && !customMailbox && view === mailView : onRoute
+    const badge = entry.badge
+    const count = badge ? badgeValue[badge.kind] : 0
+    let right: React.ReactNode
+    switch (badge?.kind) {
+      case 'inboxUnread':
+        right =
+          count > 0 && mailView !== undefined ? (
+            <CountRight
+              count={count}
+              selected={selected}
+              onClick={() => handleUnreadBadgeClick(entry, mailView)}
+              clickHint={t('nav.showUnreadOnly')}
+            />
+          ) : undefined
+        break
+      // 草稿总数 / 旗标数不是未读计数 —— 不接点击（点了筛未读只会给出空列表）。
+      case 'draftsTotal':
+      case 'flaggedTotal':
+        right = count > 0 ? <CountRight count={count} selected={selected} /> : undefined
+        break
+      case 'allTotal':
+        right = count > 0 ? <TotalCount count={count} /> : undefined
+        break
+      case 'matterAttention':
+        right = <MatterAttentionBadge count={count} />
+        break
+      case 'agentUnread':
+        right =
+          count > 0 ? (
+            <span
+              className="h-2 w-2 rounded-full bg-[rgb(var(--c-accent))]"
+              aria-label={t('agents.unread')}
+            />
+          ) : undefined
+        break
+      default:
+        right = entry.panel?.kbd === true ? <kbd>{navShortcutDisplay(entry)}</kbd> : undefined
+    }
+    return (
+      <NavRow
+        key={entry.id}
+        icon={entry.icon()}
+        label={label}
+        title={collapsed ? label : undefined}
+        selected={selected}
+        onClick={
+          mailView !== undefined
+            ? () => handleViewClick(entry, mailView)
+            : () => navigateToNavEntry(navigate, entry)
+        }
+        onHover={
+          entry.preloadOnHover === true ? () => preloadNavEntry(routerInstance, entry) : undefined
+        }
+        right={right}
+        collapsedBadge={badge?.collapsed === true ? count : undefined}
+      />
+    )
   }
 
   const handleAvatarClick = (): void => {
@@ -533,73 +584,11 @@ export function Sidebar(): React.ReactElement {
             {t('nav.section.mailboxes')}
           </h2>
         </div>
+        {/* 五行内建邮箱由 registry 投影。发件箱无右侧计数 (§2.11 mockup: 自己发的
+            没有未读语义)；所有邮件有意不显收起态角标（几千级大数字在 56px rail 上
+            没有信号价值）—— 两条都写在 registry 的 badge 声明里。 */}
         <nav className="px-2 space-y-px">
-          <NavRow
-            icon={MAILBOX_ICON.inbox}
-            label={t('nav.inbox')}
-            title={collapsed ? t('nav.inbox') : undefined}
-            selected={selectedView === 'inbox'}
-            onClick={() => handleViewClick('inbox')}
-            right={
-              inboxUnread > 0 ? (
-                <CountRight
-                  count={inboxUnread}
-                  selected={selectedView === 'inbox'}
-                  onClick={() => handleUnreadBadgeClick('inbox')}
-                  clickHint={t('nav.showUnreadOnly')}
-                />
-              ) : undefined
-            }
-            collapsedBadge={inboxUnread}
-          />
-          {/* Mockup §2.11: outbox row has no right-side count (developers
-              don't typically have unread sent mail). Drop the right slot
-              entirely so the row reads "发件箱" alone. */}
-          <NavRow
-            icon={MAILBOX_ICON.outbox}
-            label={t('nav.outbox')}
-            title={collapsed ? t('nav.outbox') : undefined}
-            selected={selectedView === 'outbox'}
-            onClick={() => handleViewClick('outbox')}
-          />
-          {/* 草稿箱 — davmail Drafts 对账同步 (DRAFTS_SYNC_ENABLED)。数量 = 草稿
-              总数; 未同步 (AppleScript 模式 / 开关关) 时 0 → 行仍在, 数字不显示。 */}
-          <NavRow
-            icon={MAILBOX_ICON.drafts}
-            label={t('nav.drafts')}
-            title={collapsed ? t('nav.drafts') : undefined}
-            selected={selectedView === 'drafts'}
-            onClick={() => handleViewClick('drafts')}
-            right={
-              draftsTotal > 0 ? (
-                <CountRight count={draftsTotal} selected={selectedView === 'drafts'} />
-              ) : undefined
-            }
-            collapsedBadge={draftsTotal}
-          />
-          <NavRow
-            icon={MAILBOX_ICON.flagged}
-            label={t('nav.flagged')}
-            title={collapsed ? t('nav.flagged') : undefined}
-            selected={selectedView === 'flagged'}
-            onClick={() => handleViewClick('flagged')}
-            right={
-              flaggedTotal > 0 ? (
-                <CountRight count={flaggedTotal} selected={selectedView === 'flagged'} />
-              ) : undefined
-            }
-            collapsedBadge={flaggedTotal}
-          />
-          {/* all-mail 有意不传 collapsedBadge：总数是几千级大数字，收起态角标
-              失去信号价值还占 56px rail 空间（用户只点名 收件箱/草稿/已标旗）。 */}
-          <NavRow
-            icon={MAILBOX_ICON.all}
-            label={t('nav.allMail')}
-            title={collapsed ? t('nav.allMail') : undefined}
-            selected={selectedView === 'all'}
-            onClick={() => handleViewClick('all')}
-            right={allTotal > 0 ? <TotalCount count={allTotal} /> : undefined}
-          />
+          {navPanelSection(navEntries, 'mailboxes').map(renderEntry)}
           {/* 多文件夹同步 (P3) — 已勾选自定义文件夹树。挂在 MAILBOXES 段内 (三段
               铁律: 不新增 header)。whitelist 空 → 渲染 null, 不破坏现有行。 */}
           <SidebarFolderTree />
@@ -616,49 +605,10 @@ export function Sidebar(): React.ReactElement {
             {t('nav.section.aiAgents')}
           </h2>
         </div>
+        {/* 事项（dogfood 反馈：主动工作面而非只读看板，归段首） → MailAgent 通用
+            agent 视图 → Custom AI hub。顺序 = registry 的 panel.order。 */}
         <nav className="px-2 space-y-px">
-          {/* dogfood 反馈：事项是主动工作面而非只读看板，归 AI AGENTS 段首。 */}
-          {mattersEnabled ? (
-            <NavRow
-              icon={<BriefcaseBusinessIcon size={15} strokeWidth={1.75} trigger="parent" />}
-              label={t('matters.nav')}
-              selected={pathname === '/matters'}
-              onClick={() => void navigate({ to: '/matters' })}
-              onHover={preloadOnHover('/matters')}
-              title={collapsed ? t('matters.nav') : undefined}
-              right={<MatterAttentionBadge count={matterAttentionCount} />}
-              collapsedBadge={matterAttentionCount}
-            />
-          ) : null}
-          {/* /sessions — MailAgent 交互式通用 agent 视图。dogfood-2 user feedback：排在
-              Custom AI 前 + 无底色，仅 icon 用 coral 强调色（不再整行 coral 填充）。 */}
-          <NavRow
-            icon={
-              <SparklesIcon size={15} strokeWidth={1.75} className="text-coral" trigger="parent" />
-            }
-            label={t('nav.agentView')}
-            title={collapsed ? t('nav.agentView') : undefined}
-            selected={pathname === '/sessions'}
-            onClick={() => navigate({ to: '/sessions' })}
-          />
-          {/* Custom AI — /agents hub（Agents / 报告 / Chats=custom-api scoped）。
-              整个 /agents 都属 Custom AI。（邮件上下文「问 AI」仍开 AIChatPanel。） */}
-          <NavRow
-            icon={<GripIcon size={15} strokeWidth={1.75} trigger="parent" />}
-            label={t('chat.backend.customApi')}
-            title={collapsed ? t('chat.backend.customApi') : undefined}
-            selected={onAgents}
-            right={
-              agentUnreadTotal > 0 ? (
-                <span
-                  className="h-2 w-2 rounded-full bg-[rgb(var(--c-accent))]"
-                  aria-label={t('agents.unread')}
-                />
-              ) : undefined
-            }
-            collapsedBadge={agentUnreadTotal}
-            onClick={() => navigate({ to: '/agents', search: { tab: 'agents' } })}
-          />
+          {navPanelSection(navEntries, 'agents').map(renderEntry)}
         </nav>
 
         <div className="app-nav-section-spacer my-3 mx-4 border-t [border-top-color:var(--hairline)]" />
@@ -672,57 +622,16 @@ export function Sidebar(): React.ReactElement {
             {t('nav.section.view')}
           </h2>
         </div>
+        {/* LLM Dashboard / 看板 Admin / 日历 / 通讯录 —— 门控（日历的 Windows
+            出范围、通讯录）在 registry 声明，这里只渲染过滤后的结果。 */}
         <nav className="px-2 space-y-px">
-          <NavRow
-            icon={<ChartPieIcon size={15} strokeWidth={1.75} trigger="parent" />}
-            label="LLM Dashboard"
-            title={collapsed ? 'LLM Dashboard' : undefined}
-            selected={pathname.startsWith('/admin/llm') || pathname === '/llm'}
-            onClick={() => navigate({ to: '/admin/llm' })}
-          />
-          <NavRow
-            icon={<ChartLineIcon size={15} strokeWidth={1.75} trigger="parent" />}
-            label={t('nav.adminKanban')}
-            title={collapsed ? t('nav.adminKanban') : undefined}
-            selected={pathname === '/admin/kanban' || pathname === '/admin'}
-            onClick={() => navigate({ to: '/admin/kanban' })}
-          />
-          {/* Windows 日历整体出范围（2026-08-13 拍板，平台判定不看 backend）*/}
-          {calendarUiEnabled(detectUiPlatform()) && (
-            <NavRow
-              icon={<CalendarCheckIcon size={15} strokeWidth={1.75} trigger="parent" />}
-              label={t('nav.calendar')}
-              title={collapsed ? t('nav.calendar') : undefined}
-              selected={pathname.startsWith('/admin/calendar') || pathname === '/calendar'}
-              onClick={() => navigate({ to: '/admin/calendar', search: { view: 'week' } })}
-            />
-          )}
-          {/* 通讯录（Contact Directory WP2）——「日历」之后（主 session 裁决项 2：设计
-              D1 的 IA 图假设事项在 VIEW，与现实不符；三行既有顺序不动）。flag off
-              不渲染（三段铁律：不新增 section header）。 */}
-          {contactsEnabled ? (
-            <NavRow
-              icon={<UsersRoundIcon size={15} strokeWidth={1.75} trigger="parent" />}
-              label={t('contacts.nav.title')}
-              title={collapsed ? t('contacts.nav.title') : undefined}
-              selected={pathname === '/contacts'}
-              onClick={() => navigate({ to: '/contacts' })}
-              onHover={preloadOnHover('/contacts')}
-            />
-          ) : null}
+          {navPanelSection(navEntries, 'view').map(renderEntry)}
         </nav>
       </div>
 
       {/* ── Bottom strip · 设置 ──────────────────────────────────────── */}
       <div className="app-nav-bottom border-t [border-top-color:var(--hairline)] p-2 space-y-px">
-        <NavRow
-          icon={<SettingsIcon size={15} strokeWidth={1.75} trigger="parent" />}
-          label={t('nav.settings')}
-          title={collapsed ? t('nav.settings') : undefined}
-          selected={pathname === '/settings'}
-          onClick={() => navigate({ to: '/settings', search: { tab: 'general' } })}
-          right={<kbd>⌘,</kbd>}
-        />
+        {navPanelSection(navEntries, 'bottom').map(renderEntry)}
       </div>
     </aside>
   )
