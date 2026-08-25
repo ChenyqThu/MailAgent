@@ -8,8 +8,9 @@
 // 顺带把后层的退让从「整个消失」（opacity→0 + scale 0.9）改成 `opacity→0.35` ——
 // 两张纸叠着错开时后面那张仍在，才读得出层次；整张消失读成的是「删掉一层」。
 //
-// ⚠️ 本图标同时是侧边栏「所有邮件」行的图标（Sidebar.tsx `MAILBOX_ICON.all`），
-// 刷新会同步改到那一行的观感。这是有意的：内建行与文件夹选择器里的候选图标同版。
+// ⚠️ 本图标同时是侧边栏「所有邮件」行的图标（icons/mailboxIcons.ts，经 nav
+// registry 的 entry 工厂引用），刷新会同步改到那一行的观感。这是有意的：内建行
+// 与文件夹选择器里的候选图标同版。
 import * as React from 'react'
 import { motion, type Variants } from 'motion/react'
 

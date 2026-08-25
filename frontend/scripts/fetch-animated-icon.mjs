@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// 拉 pqoqubbw/icons（lucide-animated）源码，辅助新增动画图标。
+// 拉 pqoqubbw/icons（lucide-animated）源码，辅助**人工**新增动画图标。
 //   用法: node scripts/fetch-animated-icon.mjs <icon-name>     （或 pnpm icon:fetch <icon-name>）
 //   输出: pqoqubbw 原始源码 + 套 IconShell 的改造 checklist。
 //
-// 为什么不全自动生成：每个图标的动画结构不同（svg 级整体变换 vs 局部 motion.path/circle、
-// custom stagger、pathLength 描入…），机械转换易出错。脚本只省去「手动 curl + base64 解码」
-// 这步，改造仍按 checklist 人工套（对照现有范例），保证守 §8（spring→tween）红线。
+// 🔴 先看 `pnpm icon:vendor`（scripts/vendor-animated-icons.mjs）：上游 467 个里 460 个
+// 已经批量 vendor 进仓，正常情况下**不需要**再单个拉。本脚本只服务批量转换转不了的那几个
+// （上游用 useState / AnimatePresence / <defs>、或多阶段序列压不成关键帧），报告里会点名。
+// 人工套壳后记得重跑一次 `pnpm icon:vendor` 刷新 barrel（它按目录扫，不会覆盖人工版）。
 
 const name = process.argv[2]
 if (!name) {
@@ -42,7 +43,8 @@ console.log(`\n===== 套 IconShell 改造 checklist =====
    ease: 'easeInOut' 等 → ICON_EASE；duration > 0.8s 收敛到 0.4–0.6s
 5. 整体变换(原 motion.svg animate) → svgVariants + svgTransition；局部 → children motion.* + variants
 6. 颜色 currentColor；custom stagger（(custom)=>({...}) + custom={i}）保留
-7. 在 src/shared/components/icons/index.ts 加: export { ${toPascal(name)}Icon } from './animated/${name}'
+7. 跑 pnpm icon:vendor 刷新 barrel（src/shared/components/icons/animated/index.ts 是生成的；
+   人工版不带「机器生成」标记，脚本不会覆盖）
 8. 引用处整行/整 tab hover 驱动: 用 <AnimatedIconActiveProvider active={hovered}> 包裹（见 Sidebar NavRow）
-9. 自检: grep -nE "spring|stiffness|damping|forwardRef|useAnimation|easeInOut" 该文件应为空
+9. 自检: pnpm vitest run tests/shared/animatedIconsDiscipline.test.ts（三道红线闸）
 `)

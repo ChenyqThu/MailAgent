@@ -22,7 +22,7 @@ const DOT: Variants = {
     opacity: [0.3, 1, 0.3],
     transition: {
       type: 'tween' as const,
-      duration: 0.9,
+      duration: 0.8,
       ease: ICON_EASE,
       delay: i * 0.15,
       times: [0, 0.5, 1]

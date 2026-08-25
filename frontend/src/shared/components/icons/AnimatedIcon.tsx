@@ -32,6 +32,7 @@ import {
   motion,
   useAnimationControls,
   useReducedMotion,
+  type MotionStyle,
   type Transition,
   type Variants
 } from 'motion/react'
@@ -90,6 +91,12 @@ interface IconShellProps extends AnimatedIconProps {
   svgVariants?: Variants
   /** 仅 svgVariants 存在时生效，控制整体动画时长/曲线。 */
   svgTransition?: Transition
+  /** svg 自身的行内样式 —— 只服务两类上游事实：旋转类图标的 transformOrigin /
+   *  transformBox / originX（不给就绕错轴），以及位移超出 24 视窗的图标要
+   *  overflow: visible（不给就被裁）。用 motion 的 MotionStyle 而非 CSSProperties：
+   *  originX / originY 是 motion 自己的变换原点属性，CSSProperties 里没有。
+   *  业务侧不要用它做外观定制，颜色/尺寸走 className / size。 */
+  svgStyle?: MotionStyle
   children: React.ReactNode
 }
 
@@ -103,6 +110,7 @@ export function IconShell({
   active,
   svgVariants,
   svgTransition,
+  svgStyle,
   children
 }: IconShellProps): React.ReactElement {
   const reduce = useReducedMotion()
@@ -149,6 +157,7 @@ export function IconShell({
       strokeLinejoin="round"
       aria-hidden="true"
       className={cn('shrink-0', className)}
+      style={svgStyle}
       initial="normal"
       animate={controls}
       variants={svgVariants}

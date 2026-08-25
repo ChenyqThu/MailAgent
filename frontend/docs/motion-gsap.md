@@ -211,6 +211,17 @@ stall watchdog 纯前端（`useStallLevel`，15s/30s 两档），**不动 gatewa
 3. **图标动画只动形状、不引入颜色** —— svg 用 `currentColor`，颜色仍由 className（`text-coral` 等）控制。
 4. **effect 的曲线/时长复用 §1 三档 + standard**，不另立第四档。Border Glow 是 authored CSS（写进 `index.css`，绕开 lint 的 hex/gradient/shadow 红线，用 `rgb(var(--c-accent)/…)`）；Strands 是 ogl WebGL。
 
+### 10.1 lucide-animated 全量 vendor（2026-08-24）
+
+动画图标从「按需单个改造的 69 个」扩到**上游全量**：`pqoqubbw/icons`（现名 lucide-animated.com，**MIT**，Copyright 2024-2026 pqoqubbw）的 467 个里 **460 个已在 `src/shared/components/icons/animated/`**（390 个机器转换 + 70 个人工版），许可原文归档在同目录 `LICENSE-pqoqubbw`（含上游快照 commit）。零新增依赖（`motion` 早已在）。
+
+- **出口**：`@shared/components/icons` 的 `export * from './animated'`；`animated/index.ts` 是**生成的具名 export barrel**。🔴 **禁止**为这批图标建 key → 组件的 eager 查表（`folderIcons.ts` 那种查表只对 24 个落库 key 成立；对 460 个照做 = 一个消费点把全部图标拖进 bundle）。按名字 import 才摇得掉。
+- **怎么更新**：`pnpm icon:vendor`（`scripts/vendor-animated-icons.mjs`，clone 上游 → codemod → 落盘 → 重生成 barrel）。重跑幂等：只覆盖自己生成的文件（认头注的「机器生成」标记），**人工改造版一个字不动**。转不了的会在报告里点名，走 `pnpm icon:fetch <name>` 单图人工流程。
+- **codemod 消化了什么**（照抄上游 = 当场违 §10 rule 2）：spring（含 stiffness/damping/mass/bounce）→ 显式 tween + `ICON_EASE`；给每个 `animate` variant 补显式 `transition`（🔴 `IconShell` 挂在 `motion.svg` 上的 transition **不会 cascade 给子 `motion.path`**，不补就是静默吃 motion 默认 spring —— 这是最隐蔽的一条）；删 `repeat`/`repeatType`（无限循环 → 单次播放）；`duration` 一律落成 ≤0.8s 的**数字字面量**（算不出的表达式回落 0.4）；上游的多阶段 await 序列（`start("fadeOut")` → `start("fadeIn")`）压成一条关键帧。
+- **三道闸**：`tests/shared/animatedIconsDiscipline.test.ts` —— ① spring/stiffness/damping/`use client`/forwardRef/useAnimation 在代码行零命中（注释豁免）+ 每个 `ease` 都是 `ICON_EASE` ② `repeat: Infinity` 零命中 ③ 每个 `duration` 是 ≤0.8 的字面量。判据函数从转换脚本 import（写侧与验侧单源，不手抄）。闸建成时揪出一处存量违规（`bot-message-square` 的 0.9s，已收敛到 0.8）；验收时又揪出一处 —— `rabbit` 把过渡抽成模块常量再从 variants 里 `transition: TRANSITION` 引用，绕开了 codemod 的归一路径，曲线还是上游的裸 cubic-bezier（脚本已补收集这类引用点，`ease` 也进了闸①）。
+- **未 vendor 的 7 个**（报告即事实，别当能力引用）：`discord`/`flask`/`syringe`（上游不是 24 网格描边图标）、`construction`（`<defs>` + 写死的 pattern id，多实例会串，且动画本身就是无限循环）、`heart-pulse`/`receipt-text`（多阶段序列含数组值，压不成关键帧）、`wifi-low`（上游用 useState + 定时器）。
+- **人工改造版的语义简化**（写在各自文件头注里）：`github` 的永动摆尾 → 一次；`volume` 的 AnimatePresence 换装 → 两组元素互斥淡入；`keyboard` 的 `Math.random()` 延时 → 固定错峰。
+
 **Strands 与 §9 的关系（重要，避免误判违规）**：§9 的「canvas / 数学曲线 loader = 不采用」禁的是**把 canvas 当 loading 指示器**。Strands 是 **agent 视图空态欢迎页的氛围背景**（用户 2026-06 明确要求引入 reactbits WebGL 重组件），语义 ≠ loading。Loading 仍只用 §9 三词汇（spin / skeleton / shimmer），不引入 canvas loader。Strands 仅在 agent 新对话空态短暂挂载，首条消息后卸载（零持续 GPU），reduce 时 `return null` 退回静态背景。
 
 **骨架屏 + 渐进式加载**（工具型 app「高级感」的正解）：
