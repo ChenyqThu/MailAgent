@@ -31,6 +31,7 @@ import type { useNavigate, useRouter } from '@tanstack/react-router'
 
 import type { EmailView } from '@shared/state/email-filter'
 import type { DeeplinkTarget } from '@shared/lib/deeplink_target'
+import type { SettingsTab } from '@shared/lib/settingsTabs'
 import { SHORTCUTS } from '@shared/keymap'
 import {
   BotIcon,
@@ -98,12 +99,22 @@ export type NavShortcutId = 'settings' | 'generalAgent'
 
 export type NavLabel = { readonly i18nKey: string } | { readonly literal: string }
 
+/** 域的二级栏形态（0825 dogfood 轮 2/3 拍板：所有域共用同一套「rail 右侧第二列 +
+ *  同一个折叠状态/开合按钮」的模型，差别只在第二列由谁提供）：
+ *  - `'nav'`  = DomainPanel（232px 导航栏：邮件视图行/文件夹树/设置 tab 行…）；
+ *  - `'page'` = 页面自带的列表列充当二级栏（事项/通讯录的 list——宽度按内容
+ *    （336-380），收起走同一个 useNavCollapsed；「未来长出真导航菜单再把 list
+ *    移出去」即把这里改回 'nav'）；
+ *  - `'none'` = 无二级栏（日历），rail 开合按钮隐藏。 */
+export type NavDomainSecond = 'nav' | 'page' | 'none'
+
 /** 域元数据（方案 B 导轨格的脸）：格标签与格图标是**域**的身份，不是域内某条 entry 的
  *  身份 —— 邮件格画信封（域概念），面板里的收件箱行才画收件托盘（视图概念）。 */
 export interface NavDomainMeta {
   readonly label: NavLabel
   /** 同 NavEntry.icon 的 D6 契约：只返回裸组件。 */
   readonly icon: () => ReactElement
+  readonly second: NavDomainSecond
 }
 
 export interface NavMatch {
@@ -350,7 +361,8 @@ const ENTRIES = [
     icon: () => createElement(SettingsIcon),
     gate: 'always',
     match: { exact: ['/settings'] },
-    panel: { order: 0, kbd: true },
+    // 无 panel 落位：设置域的面板行是 12 个 tab 直达行（DomainPanel 直渲，同 agents
+    // 的轻量 tab 行——词表单源 @shared/lib/settingsTabs），再放一行「设置」是重复。
     rail: { order: 11 },
     palette: { order: 70, metaI18nKey: 'palette.jump.settingsMeta' },
     notificationRoute: true,
@@ -363,21 +375,39 @@ const ENTRIES = [
  *  邮件/日历/事项/通讯录/Agents 的格图标是**域**的脸；单入口域（日历/事项/通讯录）
  *  沿用该入口的既有图标身份，不为导轨另造第二个 glyph。 */
 export const NAV_DOMAINS: Record<NavDomain, NavDomainMeta> = {
-  today: { label: { i18nKey: 'nav.today' }, icon: () => createElement(SunIcon) },
-  mail: { label: { i18nKey: 'nav.domain.mail' }, icon: () => createElement(MailCheckIcon) },
-  calendar: { label: { i18nKey: 'nav.calendar' }, icon: () => createElement(CalendarCheckIcon) },
-  matters: { label: { i18nKey: 'matters.nav' }, icon: () => createElement(BriefcaseBusinessIcon) },
+  today: { label: { i18nKey: 'nav.today' }, icon: () => createElement(SunIcon), second: 'none' },
+  mail: {
+    label: { i18nKey: 'nav.domain.mail' },
+    icon: () => createElement(MailCheckIcon),
+    second: 'nav'
+  },
+  calendar: {
+    label: { i18nKey: 'nav.calendar' },
+    icon: () => createElement(CalendarCheckIcon),
+    second: 'none'
+  },
+  matters: {
+    label: { i18nKey: 'matters.nav' },
+    icon: () => createElement(BriefcaseBusinessIcon),
+    second: 'page'
+  },
   contacts: {
     label: { i18nKey: 'contacts.nav.title' },
-    icon: () => createElement(UsersRoundIcon)
+    icon: () => createElement(UsersRoundIcon),
+    second: 'page'
   },
   // 专有名词，两个 locale 都是 "Agents"（同 LLM Dashboard 先例，不造 i18n 键）。
-  agents: { label: { literal: 'Agents' }, icon: () => createElement(BotIcon) },
+  agents: { label: { literal: 'Agents' }, icon: () => createElement(BotIcon), second: 'nav' },
   ops: {
     label: { i18nKey: 'nav.domain.ops' },
-    icon: () => createElement(ChartColumnIncreasingIcon)
+    icon: () => createElement(ChartColumnIncreasingIcon),
+    second: 'nav'
   },
-  settings: { label: { i18nKey: 'nav.settings' }, icon: () => createElement(SettingsIcon) }
+  settings: {
+    label: { i18nKey: 'nav.settings' },
+    icon: () => createElement(SettingsIcon),
+    second: 'nav'
+  }
 }
 
 type NavEntries = typeof ENTRIES
@@ -479,12 +509,9 @@ export function navDomainPanelEntries(
     .sort((a, b) => (a.panel?.order ?? 0) - (b.panel?.order ?? 0))
 }
 
-/** 域有没有二级栏（0825 dogfood 拍板）：单入口域（日历/事项/通讯录/设置）自己就是
- *  list + page 的完整呈现，面板只剩一行重复格身份的行，没有导航价值 —— 不渲染。
- *  判据从 registry 派生（本域 panel 行 >1），域内容将来长出第二条 entry 时面板
- *  自动回来，不用改这里。 */
-export function navDomainHasPanel(entries: readonly NavEntry[], domain: NavDomain): boolean {
-  return navDomainPanelEntries(entries, domain).length > 1
+/** 域的二级栏形态（声明在 NAV_DOMAINS.second，语义见 NavDomainSecond）。 */
+export function navDomainSecond(domain: NavDomain): NavDomainSecond {
+  return NAV_DOMAINS[domain].second
 }
 
 /** 当前路由归属的域（导轨选中格 + 面板显示哪个域）。判据 = 门控过滤后**任一**条目
@@ -555,6 +582,12 @@ export type AgentsSubTab = 'reports' | 'chats'
 
 export function navigateToAgentsTab(navigate: NavigateFn, tab: AgentsSubTab): void {
   void navigate({ to: '/agents', search: { tab } })
+}
+
+/** 设置域面板 tab 行的落点（同上：path 字面量不出 registry）。tab 词表单源
+ *  `@shared/lib/settingsTabs`（`import type` 编译期擦除，叶子纪律不破）。 */
+export function navigateToSettingsTab(navigate: NavigateFn, tab: SettingsTab): void {
+  void navigate({ to: '/settings', search: { tab } })
 }
 
 /** hover 意图预载（`preloadOnHover` 的两个大 chunk 入口）。幂等 + 失败静默 ——

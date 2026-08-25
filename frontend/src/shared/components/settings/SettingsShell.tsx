@@ -1,9 +1,9 @@
 // Sprint 18 §PR C — Settings 三列 shell.
 //
-// Layout 走 mockup-settings.html 同款:
-//   PageFrame (TitleBar + AppSidebar 240 + StatusBar)
+// Layout（0825 轮 3 起）:
+//   PageFrame (TitleBar + nav shell + StatusBar)
 //     └── SettingsShell
-//           ├── SettingsRail (180px Radix Tabs.List vertical)
+//           ├── SettingsRail（仅 <lg：顶部水平 tab 条；≥lg 节导航在 DomainPanel）
 //           └── content pane (760 max-w, glass-3 surface, overflow-y-auto)
 //                 └── one <Tabs.Content> per tab
 //
@@ -24,7 +24,6 @@ import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { Tabs, TabsContent } from '@shared/components/ui/tabs'
 import { useEnvStore } from '@shared/state/env'
-import { useIsBelowMd } from '@shared/hooks/useMediaQuery'
 import { SETTINGS_TABS, type SettingsTab } from '@shared/router-instance'
 
 import { RestartBanner } from './RestartBanner'
@@ -56,11 +55,6 @@ export function SettingsShell(): React.ReactElement {
   const isWeb =
     (import.meta as unknown as { env?: { VITE_BUILD_TARGET?: string } }).env?.VITE_BUILD_TARGET ===
     'web'
-  // SETTINGS-04 — <md 把 vertical rail 切成 horizontal 顶部 tab 条。orientation
-  // 驱动 Radix data-orientation: vertical→TabsList flex-col (tabs.tsx:29 data-attr
-  // 强制, specificity 压过 className); horizontal→横向 + 下划线 active tab。
-  const belowMd = useIsBelowMd()
-
   React.useEffect(() => {
     void refresh()
   }, [refresh])
@@ -100,15 +94,16 @@ export function SettingsShell(): React.ReactElement {
     <Tabs
       value={tab}
       onValueChange={handleTabChange}
-      orientation={belowMd ? 'horizontal' : 'vertical'}
+      // 0825 轮 3 — 节导航 ≥lg 住进域面板（DomainPanel 设置分支），SettingsRail 只剩
+      // <lg 的顶部水平 tab 条兜底（<lg 域面板被强制收起，没有它 tab 就够不着了），
+      // 所以 orientation 恒 horizontal、根恒 flex-col（rail 上 / content 下；≥lg
+      // rail 隐藏，方向无感）。老 SETTINGS-04 的 vertical rail 形态整体退役。
+      orientation="horizontal"
       // Sprint 18 review — SettingsLayout passes `mainClassName="flex"`
       // 让 <main> 变成 row flex 容器, 这里 Tabs root 直接 stretch 填高度.
       // `min-w-0` 让长 content 行 (env path / tag-list) 在 flex 子项中
       // 正确 shrink, 不会强行撑爆父级宽度.
-      // SETTINGS-04 响应式: <md rail 转顶部水平 tab 条 → flex-col (rail 上 /
-      // content 下); >=md 恢复 rail+content 并排。rail/content 的尺寸 var 在
-      // index.css @media 同步收窄 (rail-w/content-max-w/px → 100%/1rem)。
-      className="flex flex-col md:flex-row flex-1 min-h-0 min-w-0"
+      className="flex flex-col flex-1 min-h-0 min-w-0"
     >
       <SettingsRail />
       {/* Sprint 18 review (round 5) — 单滚动条 + sticky banner (EmailDetail

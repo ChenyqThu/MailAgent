@@ -99,16 +99,12 @@ test('⑥ Settings → Island testConnection → connected (ping-island live)', 
   // brittle when prior specs left the locale as en-US.
   await win.keyboard.press('Meta+,')
 
-  // Settings is a SettingsRail/SettingsShell tabbed layout (rail 化, S18+) — ⌘,
-  // lands on the `general` tab. Wait on structural aria-labels first (PageFrame
-  // <main> + SettingsRail <aside>), then click the island tab; only then does the
-  // island TabsContent (with "灵动岛集成" heading) mount. Radix TabsContent has no
-  // forceMount, so the heading is absent until the tab is active.
+  // Settings（0825 轮 3 起）：≥lg 的节导航在 DomainPanel（NavRow button 行），
+  // SettingsRail 只在 <lg 兜底 —— e2e 窗口是桌面宽度，走域面板行；只有点过 tab 行
+  // 之后 island TabsContent（"灵动岛集成" heading）才会 mount（Radix 无 forceMount）。
   await win.locator('main[aria-label="settings"]').waitFor({ state: 'visible', timeout: 10_000 })
-  await win
-    .locator('aside[aria-label="settings sections"]')
-    .waitFor({ state: 'visible', timeout: 10_000 })
-  await win.getByRole('tab', { name: /灵动岛与更新|Island & Updates/ }).click()
+  await win.locator('[data-nav-panel]').waitFor({ state: 'visible', timeout: 10_000 })
+  await win.locator('[data-nav-panel] button', { hasText: /灵动岛与更新|Island & Updates/ }).click()
   const islandHeading = win.locator('text=/灵动岛集成|Dynamic Island integration/')
   await expect(islandHeading).toBeVisible({ timeout: 10_000 })
 

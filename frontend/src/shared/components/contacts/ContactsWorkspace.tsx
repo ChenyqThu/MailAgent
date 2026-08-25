@@ -15,6 +15,7 @@ import { useMediaQuery } from '@shared/hooks/useMediaQuery'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { openNewCompose } from '@shared/state/compose-new'
+import { useNavCollapsed } from '@shared/state/nav-shell'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { ContactAgentDrawer } from './ContactAgentDrawer'
@@ -54,6 +55,8 @@ const WORKSPACE_STACKED_QUERY = '(max-width: 860px)'
 /** 双栏骨架（config 加载中）与真实布局共用同一份 grid 类，几何不对就是白闪一下再跳版。 */
 const WORKSPACE_GRID_CLASS =
   'grid h-full min-h-0 grid-cols-[var(--contact-list-width)_6px_minmax(430px,1fr)] max-[860px]:grid-cols-1'
+/** 0825 轮 3 —— 清单列被 nav shell 折叠收起时的单列变体（列表/把手 display:none 不参与轨道）。 */
+const WORKSPACE_GRID_CLASS_COLLAPSED = 'grid h-full min-h-0 grid-cols-[minmax(430px,1fr)]'
 
 function clampListWidth(width: number): number {
   return Math.min(MAX_CONTACT_LIST_WIDTH, Math.max(MIN_CONTACT_LIST_WIDTH, width))
@@ -117,6 +120,9 @@ export function ContactsWorkspace(): React.ReactElement | null {
   const [agentOpen, setAgentOpen] = useState(false)
 
   const stacked = useMediaQuery(WORKSPACE_STACKED_QUERY)
+  // 0825 轮 3 —— 清单列 = 通讯录域的「二级栏」（registry second:'page'），收起走 nav shell
+  // 的同一个折叠状态；排除 forced 的理由同 MattersWorkspace（窄窗由 max-[860px] 自治）。
+  const listPanelHidden = useNavCollapsed((s) => s.collapsed && !s.forced)
   const workspaceGridRef = useRef<HTMLDivElement>(null)
   const resizeDragRef = useRef<{
     pointerId: number
@@ -399,10 +405,16 @@ export function ContactsWorkspace(): React.ReactElement | null {
   return (
     <div
       ref={workspaceGridRef}
-      className={WORKSPACE_GRID_CLASS}
+      className={listPanelHidden ? WORKSPACE_GRID_CLASS_COLLAPSED : WORKSPACE_GRID_CLASS}
       style={{ '--contact-list-width': `${listWidth}px` } as React.CSSProperties}
     >
-      <div className={cn('min-h-0', selectedId !== null && 'max-[860px]:hidden')}>
+      <div
+        className={cn(
+          'min-h-0',
+          selectedId !== null && 'max-[860px]:hidden',
+          listPanelHidden && 'hidden'
+        )}
+      >
         <ContactListPane
           view={view}
           onViewChange={(next) => {
@@ -453,7 +465,10 @@ export function ContactsWorkspace(): React.ReactElement | null {
         aria-valuemax={MAX_CONTACT_LIST_WIDTH}
         aria-valuenow={listWidth}
         tabIndex={0}
-        className="group relative z-10 cursor-col-resize touch-none outline-none max-[860px]:hidden"
+        className={cn(
+          'group relative z-10 cursor-col-resize touch-none outline-none max-[860px]:hidden',
+          listPanelHidden && 'hidden'
+        )}
         onPointerDown={(event) => {
           if (event.button !== 0) return
           event.preventDefault()
@@ -499,7 +514,7 @@ export function ContactsWorkspace(): React.ReactElement | null {
             contactId={selectedId}
             onBack={backToList}
             actions={actions}
-            showBack={stacked}
+            showBack={stacked || listPanelHidden}
             onMergeRequest={requestMerge}
           />
         ) : (

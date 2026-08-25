@@ -31,6 +31,7 @@ import {
   navDomainLabel,
   navDomainPanelEntries,
   navigateToAgentsTab,
+  navigateToSettingsTab,
   navLabel,
   navShortcutDisplay,
   type AgentsSubTab,
@@ -40,7 +41,12 @@ import {
 } from '@shared/navigation/registry'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { openNewCompose } from '@shared/state/compose-new'
+import { useUpdaterStore } from '@shared/state/updater'
+import { clampSettingsTab, SETTINGS_TABS, type SettingsTab } from '@shared/lib/settingsTabs'
+import { useMattersEnabled } from '@shared/components/matters/hooks'
 import type { DerivedAccount } from '@shared/lib/account'
+
+import { SETTINGS_TAB_ICON, settingsTabLabelKey } from '../settings/settingsTabMeta'
 
 import { AccountSwitcherPopover } from './AccountSwitcherPopover'
 import { SidebarFolderTree } from './SidebarFolderTree'
@@ -234,11 +240,13 @@ export function DomainPanel({
   // （否则 mousedown 关、click 又开，按钮永远关不上；AccountSwitcherPopover 头注）。
   const accountButtonRef = useRef<HTMLButtonElement>(null)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
-  // Custom AI 区激活 tab —— agents 域的行选中态要按 tab 细分（Custom Agent 行 =
-  // tab=agents，报告 / Chats 行 = 各自 tab），否则 /agents 下多行同时高亮。
-  const agentsTab = useRouterState({
+  // `?tab=` 搜索参 —— agents 域（Custom Agent / 报告 / Chats 行按 tab 细分选中）与
+  // settings 域（12 个 tab 直达行）共用；不细分会让 /agents、/settings 下多行同时高亮。
+  const searchTab = useRouterState({
     select: (s) => (s.location.search as { tab?: string }).tab
   })
+  const mattersEnabled = useMattersEnabled()
+  const appVersion = useUpdaterStore((s) => s.status.currentVersion)
   const view = useEmailFilter((s) => s.view)
   // 多文件夹同步 (P3) — 自定义文件夹激活时内建 MAILBOXES 行全不高亮 (互斥)。
   const customMailbox = useEmailFilter((s) => s.customMailbox)
@@ -256,7 +264,7 @@ export function DomainPanel({
     if (mailView !== undefined) {
       selected = onRoute && !customMailbox && view === mailView
     } else if (entry.id === 'agents') {
-      selected = onRoute && (agentsTab ?? 'agents') === 'agents'
+      selected = onRoute && (searchTab ?? 'agents') === 'agents'
     } else {
       selected = onRoute
     }
@@ -322,10 +330,27 @@ export function DomainPanel({
       key={`agents-tab-${tab}`}
       icon={icon}
       label={t(labelKey)}
-      selected={pathname === '/agents' && agentsTab === tab}
+      selected={pathname === '/agents' && searchTab === tab}
       onClick={() => navigateToAgentsTab(navigate, tab)}
     />
   )
+
+  /** 设置域的 tab 直达行（0825 轮 3：设置节导航从 SettingsShell 内嵌 rail 迁入域面板，
+   *  ≥lg 由这里承载；<lg 面板强制收起，SettingsShell 的顶部水平 tab 条兜底）。
+   *  词表单源 `SETTINGS_TABS`；matters tab 跟随模块开关（同 SettingsRail 既有语义）。 */
+  const activeSettingsTab = clampSettingsTab(searchTab)
+  const renderSettingsTabRow = (tab: SettingsTab): React.ReactElement => {
+    const Icon = SETTINGS_TAB_ICON[tab]
+    return (
+      <NavRow
+        key={`settings-tab-${tab}`}
+        icon={<Icon />}
+        label={t(settingsTabLabelKey(tab), { defaultValue: tab })}
+        selected={pathname === '/settings' && activeSettingsTab === tab}
+        onClick={() => navigateToSettingsTab(navigate, tab)}
+      />
+    )
+  }
 
   return (
     <div className="nav-panel" data-nav-panel>
@@ -402,10 +427,35 @@ export function DomainPanel({
               {renderAgentsTabRow('reports', 'agents.tabReports', <FileChartLineIcon />)}
               {renderAgentsTabRow('chats', 'agents.tabChats', <MessageSquareIcon />)}
             </>
+          ) : domain === 'settings' ? (
+            SETTINGS_TABS.filter((tab) => tab !== 'matters' || mattersEnabled).map(
+              renderSettingsTabRow
+            )
           ) : (
             rows.map(renderEntry)
           )}
         </nav>
+
+        {/* 设置域 footer（版本 + repo）—— 随节导航从 SettingsRail 迁入（那侧 ≥lg 已隐）。 */}
+        {domain === 'settings' && (
+          <div className="shrink-0 border-t border-ink-border-soft px-3 py-3 text-micro font-mono text-ink-fg-2">
+            <div className="flex items-center justify-between">
+              <span>version</span>
+              <span>v{appVersion}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span>repo</span>
+              <a
+                href="https://github.com/chenyqthu/MailAgent"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-coral transition-colors duration-fast"
+              >
+                GitHub
+              </a>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Account dropdown popover（域头下方锚定；收起态面板整体 visibility

@@ -26,7 +26,7 @@ import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { isDraftsMailbox, isInboxMailbox, mailboxForView } from '@shared/lib/mailboxSemantics'
 import {
   navActiveDomain,
-  navDomainHasPanel,
+  navDomainSecond,
   navigateToNavEntry,
   preloadNavEntry,
   type NavBadgeKind,
@@ -70,8 +70,10 @@ export function Sidebar(): React.ReactElement {
   // 当前域（导轨选中格 + 面板内容）。无命中回落邮件域 —— registry 覆盖全部路由，
   // 理论上只在测试路由树缺路由时走到。
   const activeDomain = navActiveDomain(navEntries, pathname) ?? 'mail'
-  // 单入口域无二级栏（0825 dogfood 拍板，判据见 registry.navDomainHasPanel）。
-  const hasPanel = navDomainHasPanel(navEntries, activeDomain)
+  // 域二级栏形态（0825 dogfood 轮 2/3）：'nav' = DomainPanel；'page' = 页面列表列
+  // 充当二级栏（收起走同一个 useNavCollapsed，本组件只管开合按钮的显隐）；'none' = 无。
+  const second = navDomainSecond(activeDomain)
+  const hasPanel = second === 'nav'
 
   // Mailbox counts — SSE driven (useEventBridge invalidate ['mailboxes']);
   // polling 作 SSE 断线 fallback.
@@ -160,11 +162,11 @@ export function Sidebar(): React.ReactElement {
     else navigateToNavEntry(navigate, entry)
   }
 
-  /** 导轨格点击：切域 = 导航到该格的 entry；点当前域的格 = 折叠/展开面板
+  /** 导轨格点击：切域 = 导航到该格的 entry；点当前域的格 = 折叠/展开二级栏
    *  （快捷路径；显式入口是 rail 底部的 RailToggle，0825 dogfood 补）。
-   *  无面板域没有可开合的东西 —— 点当前格退化为重导航（回该域默认落点）。 */
+   *  无二级栏的域没有可开合的东西 —— 点当前格退化为重导航（回该域默认落点）。 */
   const handleRailCellClick = (entry: NavEntry): void => {
-    if (entry.domain === activeDomain && hasPanel) {
+    if (entry.domain === activeDomain && second !== 'none') {
       toggleCollapsed()
       return
     }
@@ -205,7 +207,7 @@ export function Sidebar(): React.ReactElement {
         monogram={account.monogram}
         accountTitle={t('nav.account.tooltip', { email: accountEmail ?? account.localPart })}
         panelCollapsed={collapsed}
-        showPanelToggle={!forcedCollapsed && hasPanel}
+        showPanelToggle={!forcedCollapsed && second !== 'none'}
         onPanelToggle={toggleCollapsed}
         onAvatarClick={handleAvatarClick}
         onCellClick={handleRailCellClick}

@@ -87,6 +87,7 @@ import {
   navRailEntries,
   type NavDomain
 } from '../../src/shared/navigation/registry'
+import { SETTINGS_TABS } from '../../src/shared/lib/settingsTabs'
 import { useNavCollapsed } from '../../src/shared/state/nav-shell'
 
 /** 门控全开时的导轨格（自上而下 = 屏幕上的顺序），**手写**期望。 */
@@ -314,30 +315,36 @@ describe('IconRail ↔ nav registry 投影', () => {
     navigate.mockRestore()
   })
 
-  test('点当前域的格 = 折叠/展开面板，不导航（有面板域）', async () => {
-    const { container, router } = await renderShell('/')
-    const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
-    const cell = Array.from(container.querySelectorAll('[data-nav-rail] .nav-rail-cell')).find(
-      (c) => c.querySelector('.raillabel')?.textContent === '邮件'
-    )!
-    expect(useNavCollapsed.getState().collapsed).toBe(false)
-    fireEvent.click(cell)
-    expect(useNavCollapsed.getState().collapsed).toBe(true)
-    fireEvent.click(cell)
-    expect(useNavCollapsed.getState().collapsed).toBe(false)
-    expect(navigate).not.toHaveBeenCalled()
-    navigate.mockRestore()
+  test('点当前域的格 = 折叠/展开二级栏，不导航（nav 域与 page 域同语义）', async () => {
+    for (const [path, label] of [
+      ['/', '邮件'],
+      ['/matters', '事项']
+    ] as const) {
+      const { container, router } = await renderShell(path)
+      const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
+      const cell = Array.from(container.querySelectorAll('[data-nav-rail] .nav-rail-cell')).find(
+        (c) => c.querySelector('.raillabel')?.textContent === label
+      )!
+      expect(useNavCollapsed.getState().collapsed, path).toBe(false)
+      fireEvent.click(cell)
+      expect(useNavCollapsed.getState().collapsed, path).toBe(true)
+      fireEvent.click(cell)
+      expect(useNavCollapsed.getState().collapsed, path).toBe(false)
+      expect(navigate, path).not.toHaveBeenCalled()
+      navigate.mockRestore()
+      cleanup()
+    }
   })
 
-  test('无面板域点当前格 = 重导航，不动折叠偏好', async () => {
-    const { container, router } = await renderShell('/matters')
+  test("second:'none' 域（日历）点当前格 = 重导航，不动折叠偏好", async () => {
+    const { container, router } = await renderShell('/admin/calendar')
     const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
     const cell = Array.from(container.querySelectorAll('[data-nav-rail] .nav-rail-cell')).find(
-      (c) => c.querySelector('.raillabel')?.textContent === '事项'
+      (c) => c.querySelector('.raillabel')?.textContent === '日历'
     )!
     fireEvent.click(cell)
     expect(useNavCollapsed.getState().collapsed).toBe(false)
-    expect(navigate.mock.calls.at(-1)?.[0]).toMatchObject({ to: '/matters' })
+    expect(navigate.mock.calls.at(-1)?.[0]).toMatchObject({ to: '/admin/calendar' })
     navigate.mockRestore()
   })
 })
@@ -364,16 +371,38 @@ describe('DomainPanel ↔ nav registry 投影', () => {
     expect(panelRowLabels(container)).toEqual(projectedPanel('ops'))
   })
 
-  // 0825 dogfood 拍板：单入口域（日历/事项/通讯录/设置）自己就是 list + page 呈现，
-  // 一行的面板没有导航价值 —— 不渲染。判据派生自 registry（navDomainHasPanel），
-  // 这些域长出第二条 entry 后本测试会红，届时按新形态改期望即可。
-  test('单入口域：不渲染面板（rail 开合按钮同隐）', async () => {
-    for (const path of ['/matters', '/contacts', '/admin/calendar', '/settings'] as const) {
+  // 0825 轮 3（owner 拍板）：所有域共用同一套「二级栏 + 折叠」模型，差别在
+  // registry NAV_DOMAINS.second —— 'nav' = DomainPanel；'page' = 页面清单列充当
+  // 二级栏（无 DomainPanel，但开合按钮在场）；'none' = 无二级栏（按钮同隐）。
+  test('page 域（事项/通讯录）：无 DomainPanel，rail 开合按钮在场', async () => {
+    for (const path of ['/matters', '/contacts'] as const) {
       const { container } = await renderShell(path)
       expect(container.querySelector('[data-nav-panel]'), path).toBeNull()
-      expect(container.querySelector('.nav-rail-toggle'), path).toBeNull()
+      expect(container.querySelector('.nav-rail-toggle'), path).toBeTruthy()
       cleanup()
     }
+  })
+
+  test('none 域（日历）：无面板、无开合按钮', async () => {
+    const { container } = await renderShell('/admin/calendar')
+    expect(container.querySelector('[data-nav-panel]')).toBeNull()
+    expect(container.querySelector('.nav-rail-toggle')).toBeNull()
+  })
+
+  test('设置域：面板行 = 12 个 tab 直达行（词表单源 SETTINGS_TABS）+ 版本 footer', async () => {
+    const { container } = await renderShell('/settings')
+    expect(panelRowLabels(container)).toEqual(
+      SETTINGS_TABS.map((tab) => i18n.t(`settings.tabs.${tab}`))
+    )
+    expect(container.querySelector('[data-nav-panel]')!.textContent).toContain('version')
+  })
+
+  test('设置域 matters 门控关：matters tab 行消失', async () => {
+    gates.matters = false
+    const { container } = await renderShell('/settings')
+    expect(panelRowLabels(container)).toEqual(
+      SETTINGS_TABS.filter((tab) => tab !== 'matters').map((tab) => i18n.t(`settings.tabs.${tab}`))
+    )
   })
 
   test('面板头 = 域名；邮件域头带账号位', async () => {

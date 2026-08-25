@@ -318,14 +318,21 @@ export const useAppearance = create<Store>((set) => ({
   「运维」「设置」（icon 18px，格间 6px，距底 10px）。格序（首版）：邮件 / 日历 /
   事项 / 通讯录 / Agents ＋ 底部 运维 / 设置；「今日」registry 预留（`gate:'never'`，
   批次 2 翻开）。
-- **DomainPanel（232px，可折叠）** — 域二级栏，随域换内容。41px 头（域名 13px/600 +
-  域级动作位：邮件域 = 账号邮箱 11px + 折叠钮；其余域 = 折叠钮）。邮件域 = 写邮件
-  CTA（32px accent 填充居中）+ MAILBOXES 五视图行 + FOLDERS 自定义文件夹树；
-  agents 域 = registry 两行 + 「报告 / Chats」轻量 tab 直达行；ops 域 = registry
-  投影行。**单入口域（日历 / 事项 / 通讯录 / 设置）无面板**（0825 dogfood 拍板：
-  它们自己就是 list + page 呈现，一行的面板没有导航价值）——判据派生自 registry
-  （`navDomainHasPanel`，本域 panel 行 >1 才渲染），域内容长出第二条 entry 面板
-  自动回来；无面板域的 rail 开合按钮同隐、点当前域格退化为重导航。
+- **二级栏（0825 轮 3 owner 拍板：全域统一折叠模型，差别只在第二列由谁提供）** —
+  registry `NAV_DOMAINS[domain].second` 三态：
+  - `'nav'`（邮件 / Agents / 运维 / 设置）= **DomainPanel（232px）**：41px 头（域名
+    13px/600 + 域级动作位：邮件域 = 账号邮箱 11px + 折叠钮；其余域 = 折叠钮）。
+    邮件域 = 写邮件 CTA + MAILBOXES 五视图行 + FOLDERS 文件夹树；agents 域 =
+    registry 两行 + 「报告 / Chats」tab 直达行；ops 域 = registry 投影行；
+    **设置域 = 12 个 tab 直达行**（词表单源 `lib/settingsTabs`，图标表
+    `settings/settingsTabMeta.ts`，与 <lg 兜底的 SettingsRail 顶条共用）+ 版本
+    footer——SettingsShell 内嵌的垂直节 rail 已退役。
+  - `'page'`（事项 / 通讯录）= **页面清单列充当二级栏**：宽度按内容（336-380 可拖），
+    收起走同一个 `useNavCollapsed`（🔴 判据 `collapsed && !forced`——<lg 的强制收起
+    只作用于导航面板，清单列是内容，窄窗行为由 workspace 自己的 max-[880/860px]
+    断点自治）；收起时详情独占、MatterDetail 露出上/下切换钮。「未来长出真导航
+    菜单再把 list 移出去」= 把 second 改回 `'nav'`。
+  - `'none'`（日历）= 无二级栏，rail 开合按钮同隐、点当前域格退化为重导航。
 
 **材质**（0825 dogfood 拍板，取代画布的 ink 明度序）：rail 与 panel 一律
 `--tier-side`，留在 v3 surface-tier 透明体系内（Frosted/Surface 可切、壁纸辉光

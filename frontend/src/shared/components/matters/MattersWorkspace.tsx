@@ -9,6 +9,7 @@ import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { openAttentionFor } from '@shared/lib/matterDerive'
 import { qk } from '@shared/lib/queryKeys'
+import { useNavCollapsed } from '@shared/state/nav-shell'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { MatterCreateDialog } from './MatterCreateDialog'
@@ -144,6 +145,10 @@ export function MattersWorkspace(): React.ReactElement | null {
   // 的另一行。只在窄屏折叠成单列、详情独占视口时才露出（design detail.jsx:174 `narrow &&
   // <PrevNext.../>` 同一判据）。
   const stackedLayout = useMediaQuery(WORKSPACE_STACKED_QUERY)
+  // 0825 轮 3 —— 清单列 = 事项域的「二级栏」（registry second:'page'）：收起走 nav shell
+  // 的同一个折叠状态（rail 开合按钮 / 点当前域格）。🔴 排除 forced：<lg 的强制收起是
+  // 给导航面板的，清单列是内容，窄窗行为仍由下面的 max-[880px] 断点自治。
+  const listPanelHidden = useNavCollapsed((s) => s.collapsed && !s.forced)
   const workspaceGridRef = useRef<HTMLDivElement>(null)
   const resizeDragRef = useRef<{
     pointerId: number
@@ -478,10 +483,23 @@ export function MattersWorkspace(): React.ReactElement | null {
             ref={workspaceGridRef}
             // V3-10 —— 单列折叠断点按设计定 880；清单列用 minmax(280, 拖拽宽) 弹性轨：881-985px
             // 的窗口里拖到 560 的清单先让步收窄，详情列 minmax(420,1fr) 的下限不破。
-            className="grid h-full min-h-0 grid-cols-[minmax(280px,var(--matter-list-width))_6px_minmax(420px,1fr)] max-[880px]:grid-cols-1"
+            className={cn(
+              'grid h-full min-h-0 max-[880px]:grid-cols-1',
+              // 收起态：清单列与拖宽把手整体隐藏（display:none 不参与轨道），详情独占。
+              // 不做宽度过渡 —— minmax() 轨道端点不可插值，硬切比假动画诚实。
+              listPanelHidden
+                ? 'grid-cols-[minmax(420px,1fr)]'
+                : 'grid-cols-[minmax(280px,var(--matter-list-width))_6px_minmax(420px,1fr)]'
+            )}
             style={{ '--matter-list-width': `${matterListWidth}px` } as React.CSSProperties}
           >
-            <div className={cn('min-h-0', selected && 'max-[880px]:hidden')}>
+            <div
+              className={cn(
+                'min-h-0',
+                selected && 'max-[880px]:hidden',
+                listPanelHidden && 'hidden'
+              )}
+            >
               <MatterList
                 matters={visible}
                 query={query}
@@ -510,7 +528,10 @@ export function MattersWorkspace(): React.ReactElement | null {
               aria-valuemax={MAX_MATTER_LIST_WIDTH}
               aria-valuenow={matterListWidth}
               tabIndex={0}
-              className="group relative z-10 cursor-col-resize touch-none outline-none max-[880px]:hidden"
+              className={cn(
+                'group relative z-10 cursor-col-resize touch-none outline-none max-[880px]:hidden',
+                listPanelHidden && 'hidden'
+              )}
               onPointerDown={(event) => {
                 if (event.button !== 0) return
                 event.preventDefault()
@@ -565,8 +586,9 @@ export function MattersWorkspace(): React.ReactElement | null {
                   // E10③—— 并排可见时不传 onNavigateMatter：MatterDetail 的
                   // `showNavigation` 判据里 `Boolean(onNavigateMatter)` 是硬门槛，undefined
                   // 就等于「没有导航能力」，上/下切换钮整体不渲染（MatterDetail 内部逻辑一字
-                  // 不动，从调用方把控制权收掉）。
-                  onNavigateMatter={stackedLayout ? selectMatter : undefined}
+                  // 不动，从调用方把控制权收掉）。清单被折叠收起时同窄屏 —— 详情独占视口，
+                  // 上/下切换是唯一的换事项路径。
+                  onNavigateMatter={stackedLayout || listPanelHidden ? selectMatter : undefined}
                   attentionSignals={openAttentionFor(selected, attentionIndex)}
                   onAttentionAction={handleAttentionAction}
                   initialReviewId={
