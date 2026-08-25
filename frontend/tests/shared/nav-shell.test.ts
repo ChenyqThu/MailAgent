@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 
 import { useNavCollapsed } from '../../src/shared/state/nav-shell'
 
-const KEY = 'mailagent.nav.collapsed'
+const KEY = 'mailagent.nav.panelCollapsed'
 
 // happy-dom's Storage shape varies across versions (some builds drop
 // getItem/removeItem). We only need to verify store mutation semantics
@@ -44,9 +44,7 @@ describe('useNavCollapsed', () => {
     // Simulate the event that fires when a DIFFERENT renderer window
     // writes the same key — same `key` + `newValue` shape that the real
     // browser ships when a sibling window mutates localStorage.
-    window.dispatchEvent(
-      new StorageEvent('storage', { key: KEY, newValue: 'true' })
-    )
+    window.dispatchEvent(new StorageEvent('storage', { key: KEY, newValue: 'true' }))
     expect(useNavCollapsed.getState().collapsed).toBe(true)
   })
 
@@ -64,9 +62,7 @@ describe('useNavCollapsed', () => {
   test('storage event with the same value is a no-op (idempotent)', () => {
     useNavCollapsed.getState().setCollapsed(true)
     const before = useNavCollapsed.getState().collapsed
-    window.dispatchEvent(
-      new StorageEvent('storage', { key: KEY, newValue: 'true' })
-    )
+    window.dispatchEvent(new StorageEvent('storage', { key: KEY, newValue: 'true' }))
     expect(useNavCollapsed.getState().collapsed).toBe(before)
   })
 })

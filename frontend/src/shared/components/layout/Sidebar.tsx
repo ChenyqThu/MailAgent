@@ -53,6 +53,7 @@ export function Sidebar(): React.ReactElement {
   // 门控过滤后的一级入口（registry 单源）。rail / panel 投影在子组件里做。
   const navEntries = useVisibleNavEntries()
   const collapsed = useNavCollapsed((s) => s.collapsed)
+  const forcedCollapsed = useNavCollapsed((s) => s.forced)
   const toggleCollapsed = useNavCollapsed((s) => s.toggle)
   const setCollapsed = useNavCollapsed((s) => s.setCollapsed)
   const sessionProvenanceEnabled = useSessionProvenanceEnabled()
@@ -157,7 +158,7 @@ export function Sidebar(): React.ReactElement {
   }
 
   /** 导轨格点击：切域 = 导航到该格的 entry；点当前域的格 = 折叠/展开面板
-   *  （面板收起后它是唯一的展开入口）。 */
+   *  （快捷路径；显式入口是 rail 底部的 RailToggle，0825 dogfood 补）。 */
   const handleRailCellClick = (entry: NavEntry): void => {
     if (entry.domain === activeDomain) {
       toggleCollapsed()
@@ -194,6 +195,9 @@ export function Sidebar(): React.ReactElement {
         badgeValue={badgeValue}
         monogram={account.monogram}
         accountTitle={t('nav.account.tooltip', { email: accountEmail ?? account.localPart })}
+        panelCollapsed={collapsed}
+        showPanelToggle={!forcedCollapsed}
+        onPanelToggle={toggleCollapsed}
         onAvatarClick={handleAvatarClick}
         onCellClick={handleRailCellClick}
         onCellHover={handleEntryHover}

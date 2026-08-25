@@ -717,6 +717,7 @@
     "shortcuts": "快捷键",
     "toggleTitle": "折叠/展开导航 (⌥B)",
     "toggleAria": "折叠导航",
+    "expandAria": "展开导航",
     "online": "在线",
     "account": {
       "add": "添加账户...",

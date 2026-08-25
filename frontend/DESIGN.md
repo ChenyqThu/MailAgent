@@ -311,24 +311,29 @@ export const useAppearance = create<Store>((set) => ({
 （`<aside data-app-nav class="app-nav">`，内部 flex row），装两列：
 
 - **IconRail（56px，常驻不折叠）** — 域切换导轨。顶部 41px 头（26px monogram 头像，
-  hairline 底边与相邻列头共线）；域格 = 40×40 按钮（icon 19px）+ 9px 标签，格间 2px；
-  选中格 = accent wash（90deg 0.18→0.08）圆角 10px pill + accent 字色；数字角标
-  （`.railbadge`，13px 高 / 9px 字号 / 99+ 截断）骑 icon 右上角；底部沉「运维」「设置」
-  （icon 18px，格间 6px，距底 10px）。格序（首版）：邮件 / 日历 / 事项 / 通讯录 /
-  Agents ＋ 底部 运维 / 设置；「今日」registry 预留（`gate:'never'`，批次 2 翻开）。
+  hairline 底边与相邻列头共线）；域格 = 44px 宽整格 pill（icon 19px 按钮 + 9px 标签
+  **同框**，圆角 11px），格间 2px；选中格 = `--sel-wash`（全 app 统一选中签名）+
+  accent 字色，hover = ink-3；数字角标（`.railbadge`，13px 高 / 9px 字号 / 99+ 截断）
+  骑 icon 右上角；底部沉 面板开合按钮（`.nav-rail-toggle`，PanelLeftOpen/Close）+
+  「运维」「设置」（icon 18px，格间 6px，距底 10px）。格序（首版）：邮件 / 日历 /
+  事项 / 通讯录 / Agents ＋ 底部 运维 / 设置；「今日」registry 预留（`gate:'never'`，
+  批次 2 翻开）。
 - **DomainPanel（232px，可折叠）** — 域二级栏，随域换内容。41px 头（域名 13px/600 +
   域级动作位：邮件域 = 账号邮箱 11px + 折叠钮；其余域 = 折叠钮）。邮件域 = 写邮件
   CTA（32px accent 填充居中）+ MAILBOXES 五视图行 + FOLDERS 自定义文件夹树；
   matters / calendar / contacts / ops / settings 域首版 = 最小面板（registry panel
   投影行）；agents 域另有「报告 / Chats」轻量 tab 直达行。
 
-**明度序**（画布定稿，token 化）：rail `ink-2`(26) → panel `ink-1`(21) → 列表 →
-正文，从左到右渐暗；亮色主题随 token 自动翻。
+**材质**（0825 dogfood 拍板，取代画布的 ink 明度序）：rail 与 panel 一律
+`--tier-side`，留在 v3 surface-tier 透明体系内（Frosted/Surface 可切、壁纸辉光
+可达）；左右分层交给 hairline，不靠明度差。
 
 **折叠模型**：`data-collapsed` 挂 `.app-nav` 根 = **面板显隐**（width 232→0 +
-visibility hidden，rail 常驻）。localStorage 键 `mailagent.nav.collapsed` 不换、
-值语义兼容；`<lg`(1024) 强制收起沿用（state/nav-shell.ts）。展开/收起入口 =
-面板头折叠钮 + 点击**当前域**的导轨格。`--app-nav-w` = 288px / 56px（batch bar 联动）。
+visibility hidden，rail 常驻）。localStorage 键 `mailagent.nav.panelCollapsed`
+（老单栏键有意不迁——语义已换，全员从展开态重新开始）；`<lg`(1024) 强制收起沿用
+（state/nav-shell.ts，`forced` 态下 rail 开合按钮隐藏）。展开/收起入口 =
+rail 底部开合按钮 + 面板头折叠钮 + 点击**当前域**的导轨格（快捷路径）。
+`--app-nav-w` = 288px / 56px（batch bar 联动）。
 
 **单源与契约**：条目/域元数据单源 `@shared/navigation/registry`（NavEntry 的
 `rail`/`panel` 落位 + `NAV_DOMAINS` 域标签/域图标）；渲染期闸

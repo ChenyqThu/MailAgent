@@ -9,13 +9,17 @@
 //
 // 格 = registry 里带 rail 落位的 entry；格的脸（标签/图标）= NAV_DOMAINS 的域元
 // 数据（邮件格画信封，面板里的收件箱行才画收件托盘）。点击语义由 Sidebar 注入：
-// 非当前域 → 导航到该 entry；当前域 → 折叠/展开面板（唯一的面板展开入口，不另设
-// chrome）。
+// 非当前域 → 导航到该 entry；当前域 → 折叠/展开面板。0825 dogfood 起底部另有
+// 显式开合按钮（RailToggle）——「点当前域格」这条隐蔽入口保留作快捷路径。
 
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { AnimatedIconActiveProvider } from '@shared/components/icons'
+import {
+  AnimatedIconActiveProvider,
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon
+} from '@shared/components/icons'
 import {
   NAV_DOMAINS,
   navDomainLabel,
@@ -81,6 +85,36 @@ function RailCell({
   )
 }
 
+/** 面板开合按钮（底部沉，域格之上）。<lg 强制收起时由 Sidebar 隐藏。 */
+function RailToggle({
+  collapsed,
+  onToggle
+}: {
+  collapsed: boolean
+  onToggle(): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const [iconActive, setIconActive] = useState(false)
+  return (
+    <button
+      type="button"
+      className="nav-rail-toggle"
+      onClick={onToggle}
+      onPointerEnter={() => setIconActive(true)}
+      onPointerLeave={() => setIconActive(false)}
+      onFocus={() => setIconActive(true)}
+      onBlur={() => setIconActive(false)}
+      title={t('nav.toggleTitle')}
+      aria-label={collapsed ? t('nav.expandAria') : t('nav.toggleAria')}
+      aria-expanded={!collapsed}
+    >
+      <AnimatedIconActiveProvider active={iconActive}>
+        {collapsed ? <PanelLeftOpenIcon /> : <PanelLeftCloseIcon />}
+      </AnimatedIconActiveProvider>
+    </button>
+  )
+}
+
 export interface IconRailProps {
   /** 门控过滤后的入口全集（本组件自己按 rail 投影）。 */
   entries: readonly NavEntry[]
@@ -88,6 +122,11 @@ export interface IconRailProps {
   badgeValue: Record<NavBadgeKind, number>
   monogram: string
   accountTitle: string
+  /** 面板收起态（RailToggle 的图标方向 + aria）。 */
+  panelCollapsed: boolean
+  /** <lg 视口强制收起时为 false —— 那里的收起不可解除，按钮只会空翻偏好。 */
+  showPanelToggle: boolean
+  onPanelToggle(): void
   onAvatarClick(): void
   onCellClick(entry: NavEntry): void
   onCellHover(entry: NavEntry): void
@@ -99,6 +138,9 @@ export function IconRail({
   badgeValue,
   monogram,
   accountTitle,
+  panelCollapsed,
+  showPanelToggle,
+  onPanelToggle,
   onAvatarClick,
   onCellClick,
   onCellHover
@@ -135,7 +177,10 @@ export function IconRail({
         </button>
       </div>
       <div className="nav-rail-cells">{top.map(renderCell)}</div>
-      <div className="nav-rail-bottom">{bottom.map(renderCell)}</div>
+      <div className="nav-rail-bottom">
+        {showPanelToggle && <RailToggle collapsed={panelCollapsed} onToggle={onPanelToggle} />}
+        {bottom.map(renderCell)}
+      </div>
     </div>
   )
 }

@@ -717,6 +717,7 @@
     "shortcuts": "Shortcuts",
     "toggleTitle": "Collapse / expand navigation (⌥B)",
     "toggleAria": "Toggle navigation",
+    "expandAria": "Expand navigation",
     "online": "online",
     "account": {
       "add": "Add account…",

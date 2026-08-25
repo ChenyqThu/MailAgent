@@ -4,9 +4,10 @@
 // 方案 B contract（DESIGN.md §2.11）：
 //   - collapsed = 域二级栏（232px DomainPanel）收起；56px IconRail 常驻不折叠
 //     ⇒ shell 总宽 288px (expanded) ↔ 56px (collapsed)
-//   - persists to localStorage["mailagent.nav.collapsed"] —— 键与值语义与老单栏
-//     时代兼容（true 从「整栏收成 56px icon rail」平滑映射为「面板收起只剩
-//     rail」，都是「最小导航」，老用户的偏好原值直读，无迁移代码）
+//   - persists to localStorage["mailagent.nav.panelCollapsed"]。老单栏时代的键
+//     `mailagent.nav.collapsed` **有意不迁**（0825 dogfood 实锤：老「整栏收起」
+//     偏好被沿用成「面板收起」，owner 首启即「文件夹列没了」——语义已经换了，
+//     换键让所有人从展开态重新开始；老键留在 localStorage 里无害）
 //   - cross-window sync via the `storage` event so a pop-out compose /
 //     detail window stays in lockstep with the main inbox window
 //
@@ -25,7 +26,7 @@
 
 import { create } from 'zustand'
 
-const KEY = 'mailagent.nav.collapsed'
+const KEY = 'mailagent.nav.panelCollapsed'
 
 // Shell widths — must stay in sync with `.nav-rail`(56) + `.nav-panel`(232)
 // in index.css. The shell itself is sized by authored CSS; this store mirrors
@@ -78,6 +79,8 @@ function readBelowLg(): boolean {
 interface NavShellStore {
   /** Effective collapsed = belowLg || userCollapsed (see file header). */
   collapsed: boolean
+  /** viewport <lg 的强制收起 —— toggle 解除不了；rail 的开合按钮据此隐藏。 */
+  forced: boolean
   toggle: () => void
   setCollapsed: (next: boolean) => void
 }
@@ -98,6 +101,7 @@ applyNavWidthVar(initialCollapsed)
 
 export const useNavCollapsed = create<NavShellStore>((set) => ({
   collapsed: initialCollapsed,
+  forced: belowLg,
   toggle: () => {
     // Flip the *manual* preference (persisted). At <lg the effective state
     // stays forced-collapsed (the rail is already icon-only there), so the
@@ -125,9 +129,7 @@ if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
     belowLg = e.matches
     const next = effective()
     applyNavWidthVar(next)
-    if (useNavCollapsed.getState().collapsed !== next) {
-      useNavCollapsed.setState({ collapsed: next })
-    }
+    useNavCollapsed.setState({ collapsed: next, forced: belowLg })
   })
 }
 

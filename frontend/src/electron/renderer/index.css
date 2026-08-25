@@ -1243,9 +1243,10 @@ body::before {
 /* ─── task 08-24-l4-nav-shell Step B — 方案 B nav shell (IconRail + DomainPanel) ─
  * 视觉基准 = 提案画布方案 B 板 (ProposalB.dc.html)。老「240↔56 双宽态」collapse
  * contract（Sprint 11 V1.4 §2.11）退役：56px 图标导轨常驻，折叠 = 232px 域面板
- * 显隐（`data-collapsed` 仍挂 `.app-nav` 根，localStorage 键不换，
- * state/nav-shell.ts）。明度序照画布定稿：rail ink-2(26) → panel ink-1(21) →
- * 列表 ink-0.5 → 正文 ink-0，从左到右渐暗；token 化 ⇒ 亮色主题自动跟随。
+ * 显隐（`data-collapsed` 仍挂 `.app-nav` 根，键见 state/nav-shell.ts）。
+ * 材质（0825 dogfood 拍板）：rail/panel 一律挂 --tier-side —— 画布的不透明
+ * ink 明度序会掉出 v3 surface-tier 透明体系（左 288px 对 Frosted/Surface
+ * 失效、吃不到壁纸辉光，与右侧透明面直接色裂）；分层交给 hairline。
  *
  * Authored CSS class names are load-bearing — Tailwind never sees these so
  * the contract survives purge. 结构契约（`railbtn > svg` 直子等）有渲染期闸
@@ -1262,7 +1263,7 @@ body::before {
   display: flex;
   flex-direction: column;
   align-items: center;
-  background: rgb(var(--ink-2));
+  background: var(--tier-side);
   border-right: 1px solid var(--hairline);
 }
 /* rail 头 41px (border-box 含底边) — 与 DomainPanel 头 / 右侧内容区顶栏
@@ -1304,12 +1305,44 @@ body::before {
   gap: 6px;
   padding-bottom: 10px;
 }
-/* 格 = 40×40 按钮 + 9px 标签（画布 .railbtn/.raillabel/.railbadge 逐属性）。 */
+/* 面板开合按钮（0825 dogfood: 此前收起态唯一展开入口 = 再点当前域格, 太隐蔽）。
+ * <lg 强制收起时由 TSX 隐藏（那里收起不可解除, 按钮只会空翻偏好）。 */
+.nav-rail-toggle {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: rgb(var(--ink-fg-3));
+  transition:
+    background-color 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.nav-rail-toggle:hover,
+.nav-rail-toggle:focus-visible {
+  background: rgb(var(--ink-3));
+  color: rgb(var(--ink-fg));
+}
+.nav-rail-toggle > svg {
+  width: 18px !important;
+  height: 18px !important;
+}
+/* 格 = 40×40 按钮 + 9px 标签（画布 .railbtn/.raillabel/.railbadge 逐属性）。
+ * 0825 dogfood: hover/selected 的 pill 从 40×40 icon 框上移到**整格**（icon 与
+ * 标签同框——wash 只包 icon 时标签悬在框外像掉出来的）; selected 配方对齐全 app
+ * 选中签名 --sel-wash（画布的 accent 0.18 渐变偏重, 与其他栏不一致）。 */
 .nav-rail-cell {
+  width: 44px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
+  padding: 2px 0 4px;
+  border-radius: 11px;
+  transition:
+    background-color 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 120ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 .railbtn {
   width: 40px;
@@ -1317,26 +1350,23 @@ body::before {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
   color: rgb(var(--ink-fg-2));
   position: relative;
-  transition:
-    background-color 120ms cubic-bezier(0.4, 0, 0.2, 1),
-    color 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  transition: color 120ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 /* hover 态画布未 spec — 沿用行 hover 语言 (ink-3 一档提亮)。 */
+.nav-rail-cell:hover,
+.nav-rail-cell:focus-visible {
+  background: rgb(var(--ink-3));
+}
 .nav-rail-cell:hover .railbtn,
 .nav-rail-cell:focus-visible .railbtn {
-  background: rgb(var(--ink-3));
   color: rgb(var(--ink-fg));
 }
-/* selected = accent wash 圆角 10px pill (画布 0.18→0.08, 比行 wash 略强)。 */
+.nav-rail-cell[data-selected='true'] {
+  background: var(--sel-wash);
+}
 .nav-rail-cell[data-selected='true'] .railbtn {
-  background: linear-gradient(
-    90deg,
-    rgb(var(--c-accent) / 0.18),
-    rgb(var(--c-accent) / 0.08)
-  );
   color: rgb(var(--c-accent));
 }
 /* icon 19px (底部格 18px)。CSS width on <svg> overrides the inline width
@@ -1387,7 +1417,7 @@ body::before {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: rgb(var(--ink-1));
+  background: var(--tier-side);
   border-right: 1px solid var(--hairline);
   transition: width 220ms cubic-bezier(0.4, 0, 0.2, 1);
 }
