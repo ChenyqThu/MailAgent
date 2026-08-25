@@ -12,7 +12,13 @@
 
 import { z } from 'zod'
 import { REPORT_CADENCES, reportBlockInputSchema } from '../../shared/api/reportBlocks'
-import { MATTER_RESOURCE_SUMMARY_MAX_CHARS } from '../../shared/api/types/matter'
+import {
+  MATTER_PROGRESS_BODY_MAX_CHARS,
+  MATTER_PROGRESS_KINDS,
+  MATTER_PROGRESS_MAX_REFS,
+  MATTER_PROGRESS_TITLE_MAX_CHARS,
+  MATTER_RESOURCE_SUMMARY_MAX_CHARS
+} from '../../shared/api/types/matter'
 
 export const PLAN_STEP_STATUSES = [
   'pending',
@@ -150,7 +156,8 @@ export const MATTER_GET_INCLUDES = [
   'timeline',
   'relations',
   'updates',
-  'followup'
+  'followup',
+  'progress'
 ] as const
 export const matterGetSchema = z.object({
   public_id: z.string().trim().min(1),
@@ -489,6 +496,104 @@ export const matterItemMutateSchema = z
   })
 export type MatterItemMutateInput = z.infer<typeof matterItemMutateSchema>
 
+// ── task 08-25 — curated 进展 lane（matter_progress_mutate）────────────────────────────────────
+//
+// 词表 canonical 在 Python（`src/matters/models.MatterProgressKind`）；TS 侧**唯一**镜像
+// 在 `shared/api/types/matter.ts::MATTER_PROGRESS_KINDS`（跨语言闸在那份上），这里 import
+// 复用 —— 不再第二份手抄。长度上限同源（`MATTER_PROGRESS_TITLE/BODY_MAX_CHARS`）。
+
+/** 一条进展的证据链引用。
+ *
+ *  🔴 形状权威在 Python（`models.normalize_progress_refs`），那里**有意宽松**：只要求「是
+ *  对象、带非空 type」。这里的键是扁平并集而不是三个互斥变体 —— 把「email 必须带
+ *  message_id」写成条件约束就是第二份契约，而分支约束一律不进 tool schema（本仓两连败）。
+ *  哪个键配哪个 type 写在 describe 里，模型读得到，写错了服务端也只是丢那一条引用。 */
+const matterProgressRefSchema = z
+  .object({
+    type: z.enum(['email', 'resource', 'url']),
+    message_id: z.string().trim().min(1).optional(),
+    resource_id: z.number().int().positive().optional(),
+    url: z.string().trim().min(1).optional()
+  })
+  .strict()
+  .describe(
+    "Evidence for this entry: type='email' carries message_id, type='resource' carries " +
+      'resource_id (a resource already linked to this Matter — ids come from matter_get), ' +
+      "type='url' carries url."
+  )
+
+const matterProgressFields = {
+  kind: z
+    .enum(MATTER_PROGRESS_KINDS)
+    .optional()
+    .describe(
+      'goal = the goal was set or revised; milestone = a milestone was reached; progress = ' +
+        'something concretely moved (a reply that settles a question, a delivery, a step ' +
+        'forward); signal = a risk or warning sign worth watching; decision = a decision was ' +
+        'made. Pick by what HAPPENED, not by how important it feels — progress is the default.'
+    ),
+  title: z
+    .string()
+    .trim()
+    .min(1)
+    .max(MATTER_PROGRESS_TITLE_MAX_CHARS)
+    .optional()
+    .describe(
+      'One sentence saying WHO did what or WHAT was settled, e.g. 「Simon 回邮确认 Q4 预算按 ' +
+        '80 万走」. Written for someone reading this Matter months from now — never "updated ' +
+        'the status" or "searched the mailbox".'
+    ),
+  body: z
+    .string()
+    .max(MATTER_PROGRESS_BODY_MAX_CHARS)
+    .nullable()
+    .optional()
+    .describe(
+      'Optional detail: the context a future reader needs. Leave out when the title says it all.'
+    ),
+  happened_at: epochMillis('When this actually happened')
+    .optional()
+    .describe(
+      'When it HAPPENED (epoch MILLISECONDS), not when you are recording it — omit for ' +
+        '"just now". Backdating an entry you learned about late is the normal case.'
+    ),
+  refs: z.array(matterProgressRefSchema).max(MATTER_PROGRESS_MAX_REFS).optional()
+}
+
+/** matter_progress_mutate — 单 op 形状照 `matter_item_mutate`。
+ *
+ *  🔴 `superRefine` 而不是顶层 `oneOf` / `not`：refinement 不进 JSON Schema（模型看到的是一份
+ *  扁平可选的 schema），所以「prompt/schema 里的分支约束把模型带沟里」那两连败在这里不成立；
+ *  值域与条件必填的**权威**在 Python（`service._progress_insert_fields` / `_progress_patch_fields`），
+ *  这里只是让明显写错的调用当场返回可读的报错，少浪费一轮。 */
+export const matterProgressMutateSchema = z
+  .object({
+    public_id: z.string().trim().min(1),
+    operation: z.enum(['create', 'update', 'delete', 'restore']),
+    progress_id: z.number().int().positive().optional(),
+    progress: z.object(matterProgressFields).strict().optional(),
+    patch: z.object(matterProgressFields).strict().optional(),
+    ...matterVersionedFields
+  })
+  .superRefine((value, ctx) => {
+    if (value.operation === 'create' && value.progress_id != null)
+      ctx.addIssue({ code: 'custom', message: 'create forbids progress_id', path: ['progress_id'] })
+    if (value.operation !== 'create' && value.progress_id == null)
+      ctx.addIssue({ code: 'custom', message: 'progress_id is required', path: ['progress_id'] })
+    if (
+      value.operation === 'create' &&
+      (value.progress?.kind == null || value.progress.title == null)
+    )
+      ctx.addIssue({
+        code: 'custom',
+        message: 'create requires progress with kind and title',
+        path: ['progress']
+      })
+    if (value.operation === 'update' && value.patch == null)
+      ctx.addIssue({ code: 'custom', message: 'patch is required', path: ['patch'] })
+  })
+export type MatterProgressMutateInput = z.infer<typeof matterProgressMutateSchema>
+
 export const matterResourceMutateSchema = z
   .object({
     public_id: z.string().trim().min(1),
@@ -728,10 +833,24 @@ const matterProposalValueSchema = z.union([
   z.record(z.string(), z.unknown())
 ])
 
+/** `kind: 'progress'` 的载荷（task 08-25）：跟进 run 对 curated 进展的**唯一**通道 —— 它拿不到
+ *  进展写工具（结构红线），owner 接受这条 change 时才落成一行进展。
+ *  🔴 只有「追加」这一种形态：信封里没有 progress_id，改既有条目要 owner 在场（事项对话）。
+ *  字段与 REST DTO `MatterProposalProgress` / `service._progress_insert_fields` 同名同义。 */
+const matterProposalProgressSchema = z
+  .object({
+    kind: z.enum(MATTER_PROGRESS_KINDS),
+    title: z.string().trim().min(1).max(MATTER_PROGRESS_TITLE_MAX_CHARS),
+    body: z.string().trim().max(MATTER_PROGRESS_BODY_MAX_CHARS).optional(),
+    happened_at: epochMillis('When this happened').optional(),
+    refs: z.array(matterProgressRefSchema).max(MATTER_PROGRESS_MAX_REFS).default([])
+  })
+  .strict()
+
 const matterProposalChangeSchema = z
   .object({
     id: z.string().trim().min(1).max(64),
-    kind: z.enum(['fact', 'inference', 'field', 'action', 'resource']),
+    kind: z.enum(['fact', 'inference', 'field', 'action', 'resource', 'progress']),
     target: z
       .object({
         entity: z.enum(['matter', 'item', 'resource', 'stakeholder']),
@@ -743,6 +862,8 @@ const matterProposalChangeSchema = z
     /** `kind: 'resource'` has two shapes: `target.id` CONFIRMS a resource already linked to this
      *  Matter, `resource` LINKS a newly found one for the first time. Exactly one of them. */
     resource: matterProposalNewResourceSchema.optional(),
+    /** `kind: 'progress'` 的载荷 —— 记一条进展。 */
+    progress: matterProposalProgressSchema.optional(),
     operation: z.enum(['add', 'replace', 'remove']).optional(),
     before: matterProposalValueSchema.optional(),
     after: matterProposalValueSchema.optional(),
@@ -753,6 +874,18 @@ const matterProposalChangeSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
+    if (value.progress != null && value.kind !== 'progress')
+      ctx.addIssue({
+        code: 'custom',
+        message: 'only a kind="progress" change can carry a progress entry',
+        path: ['progress']
+      })
+    if (value.kind === 'progress' && value.progress == null)
+      ctx.addIssue({
+        code: 'custom',
+        message: 'a kind="progress" change needs a progress entry',
+        path: ['progress']
+      })
     if (value.resource == null) return
     if (value.kind !== 'resource')
       ctx.addIssue({
@@ -962,9 +1095,9 @@ export type MatterRunsListInput = z.infer<typeof matterRunsListSchema>
 export const matterTagsListSchema = z.object({})
 export type MatterTagsListInput = z.infer<typeof matterTagsListSchema>
 
-/** matter_suggestion_resolve — the disposal half of resource suggestions.
- *  matter_suggest_related_resources only DISCOVERS; until now the only way to act on what it
- *  found was matter_resource_mutate patch confirmed:true per row, and rejecting was impossible.
+/** matter_suggestion_resolve — the disposal half of resource suggestions (unconfirmed links a
+ *  follow-up run or a calendar-ended event attached). Without it the only way to act on one was
+ *  matter_resource_mutate patch confirmed:true per row, and rejecting was impossible.
  *  One call, one version check, one version bump — mixed-in ids that were already handled come
  *  back in `skipped` with a reason instead of failing the batch. */
 export const matterSuggestionResolveSchema = z.object({
@@ -975,9 +1108,8 @@ export const matterSuggestionResolveSchema = z.object({
     .min(1)
     .max(200)
     .describe(
-      'Unconfirmed resource ids, from matter_suggest_related_resources or ' +
-        'matter_get(include:["resources"]). Ids that are already confirmed / unlinked / not on ' +
-        'this Matter are reported in `skipped`, not rejected.'
+      'Unconfirmed resource ids, from matter_get(include:["resources"]). Ids that are already ' +
+        'confirmed / unlinked / not on this Matter are reported in `skipped`, not rejected.'
     ),
   action: z
     .enum(['confirm', 'reject'])

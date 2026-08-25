@@ -117,7 +117,9 @@ vi.mock('@shared/hooks/useLlmModels', () => ({
 vi.mock('@shared/assistant/runtime/AiSdkRuntimeProvider', () => ({
   AiSdkRuntimeProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>
 }))
-vi.mock('@shared/assistant/runtime/ThreadRunningBridge', () => ({ ThreadRunningBridge: () => null }))
+vi.mock('@shared/assistant/runtime/ThreadRunningBridge', () => ({
+  ThreadRunningBridge: () => null
+}))
 vi.mock('@shared/assistant/runtime/useBackgroundChatRun', () => ({
   useBackgroundChatRun: () => ({ backgroundActive: false, backgroundStartedAt: null })
 }))
@@ -139,9 +141,9 @@ vi.mock('@shared/assistant/context/useAgentContextSnapshot', () => ({
 }))
 // 与 AgentConversationGuards 同一份替身（事项适配层要的三个 hook 都得在，少一个整组不挂）。
 vi.mock('@shared/components/matters/hooks', () => ({
-  useMattersApi: () => ({
-    discoverResourceSuggestions: vi.fn(async () => ({ items: [], suppressed: [] }))
-  }),
+  // 事项对话不再经这个面发任何请求（task 08-25 退役了缺口卡的外扩检索）；
+  // 桩留成空对象是因为 hook 本身还在被 import。
+  useMattersApi: () => ({}),
   useMatterChatApi: () => ({
     contextSnapshot: vi.fn(async () => {
       throw new Error('not needed')

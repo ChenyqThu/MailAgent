@@ -352,8 +352,14 @@ def test_contact_governance_matrix_branch_precedes_the_generic_pass():
         "（期望恰为 read + artifact —— 多出成员 = 有 venue 放宽没过裁决，"
         "尤其 'web' 属于「扫描出网」，少了 = 读面塌了）"
     )
-    artifact_line = re.search(r"toolClass\s*===\s*'artifact'.*", block)
-    assert artifact_line and "CONTACT_PROPOSE_TOOLS" in artifact_line.group(0), (
+    # 🔴 抽到分支体收尾的 `return false` 为止，**不是**抽一行：prettier 会按行宽把
+    # `if (…) return …` 折成两行（本仓的 PostToolUse formatter 一碰这个文件就折），
+    # 单行正则那时抽到的只有 `toolClass === 'artifact')` —— 闸会因为排版变红，
+    # 而真出问题（整类放行）时反而与它无法区分。
+    artifact_guard = re.search(
+        r"toolClass\s*===\s*'artifact'.*?(?=\n\s*return false)", block, re.DOTALL
+    )
+    assert artifact_guard and "CONTACT_PROPOSE_TOOLS" in artifact_guard.group(0), (
         "artifact 在 contact_governance 分支里必须**按名字**放行（CONTACT_PROPOSE_TOOLS）"
         "—— 整类放行会把 report_write / matter_update_propose 一并交给无人值守的扫描"
     )

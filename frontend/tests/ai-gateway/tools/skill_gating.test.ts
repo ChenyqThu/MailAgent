@@ -24,8 +24,10 @@ const CONDITIONAL_HEADLESS_CORE_TOOLS = new Set(['agent_catalog_list', 'agent_ca
 /** Matters MVP P4 — matter_update_propose registers only inside a follow-up run context (it binds
  *  to a server-assembled Matter+run anchor), so a manual/mount build cannot contain it. */
 const MATTER_RUN_ONLY_TOOLS = new Set(['matter_update_propose'])
-/** P6-A — registered after both skill-gating passes because the Matter flag is its only switch. */
-const POST_GATING_CORE_TOOLS = new Set(['matter_suggest_related_resources'])
+/** 两道 skill-gating 之后才注册的工具。task 08-25 起是**空集** —— 唯一的成员
+ *  `matter_suggest_related_resources` 随关键词命中式资料推荐一起退役。集合留着是问句：
+ *  非空就得有人解释为什么这个工具要绕过 gating 之后再挂。 */
+const POST_GATING_CORE_TOOLS = new Set<string>()
 
 function buildAllTools() {
   const manual = buildGatewayTools({

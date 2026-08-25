@@ -215,29 +215,35 @@ describe('详情头 chips + tab 图标 = 设计原型 helpers.jsx 的 MATTER_STA
   })
 })
 
-describe('时间轴节点 = 设计原型 detail.jsx 的 TL_ICON / TL_TONE', () => {
-  // 时间线本体已从 MatterDetail 拆到 MatterTimeline（叙述/合并/分档三层逻辑放不进
-  // 那个 2000 行的文件）。表跟着搬，闸也跟着搬 —— 上面 `indexOf` 的 -1 断言正是为了
-  // 让「表挪走了但闸还在读旧文件」这种失效必须红，而不是静默变成零校验。
-  const source = read('src/shared/components/matters/MatterTimeline.tsx')
+describe('操作日志节点 = 设计原型的 AUDIT_ICON + PROG_KIND 合表', () => {
+  // task 08-25 —— 进展换成 curated lane 之后，事件那一路（含节点样式）整体归了操作日志
+  // 弹窗，此前分成两处的 `TIMELINE_ICONS`（AUDIT_ICON）与 `PROGRESS_VISUALS`（PROG_KIND）
+  // 合成一张 `EVENT_VISUALS`。闸跟着搬 —— `indexOf` 的 -1 断言正是为了让「表挪走了但闸
+  // 还在读旧文件」这种失效必须红，而不是静默变成零校验。
+  const source = read('src/shared/components/matters/MatterAuditLogModal.tsx')
 
-  it('TL_ICON 覆盖的 9 类语义逐项落地', () => {
-    // 设计只画了 9 个 mock kind，实到 38 个事件；这里只钉死设计明确画过的那几条映射。
+  it('设计画过的语义逐项落地（合表后 icon 与 tone 同源）', () => {
+    // 设计只画了 9 个 mock kind，实到 38+ 个事件；这里只钉死设计明确画过的那几条映射。
     const expected: ReadonlyArray<readonly [string, string]> = [
-      ['matter_created\\$/, Plus', 'created→plus'],
-      ['matter_updated\\$/, FileCheck', 'update→filecheck'],
-      ['ArrowRight', 'status→arrowright'],
-      ['^item_/, ListChecks', 'item→listcheck'],
-      ['resource_updated\\$/, FileText', 'doc→filetext'],
-      ['Link2', 'resource→link']
+      ['matter_created$/, { icon: Plus', 'created→plus'],
+      ['^item_/, { icon: ListChecks', 'item→listcheck'],
+      ['resource_updated$/, { icon: FileText', 'doc→filetext'],
+      ['^resource_/, { icon: Link2', 'resource→link'],
+      ['attention_opened$/, { icon: TriangleAlert', 'risk→alert'],
+      ['^progress_/, { icon: NotebookPen', 'curated 进展的维护动作']
     ]
     for (const [needle, why] of expected) {
-      expect(source, `TIMELINE_ICONS 缺 ${why}`).toContain(needle.replace(/\\\$/g, '$'))
+      expect(source, `EVENT_VISUALS 缺 ${why}`).toContain(needle)
     }
-    expect(source, '兜底必须是设计稿的 dot').toContain('return Circle')
+    // 归档/重开这类状态迁移沿设计 status→arrowright；`matter_updated` 有意**不**用
+    // AUDIT_ICON 的 filecheck，按触及字段派生（进入等待=hourglass / 换状态=arrowright /
+    // 其余=send），所以这里钉的是派生分支而不是一个静态符号。
+    expect(source).toContain('icon: ArrowRight')
+    expect(source).toContain('icon: Hourglass, tone: PROGRESS_TONE.warn')
+    expect(source, '兜底必须是设计稿的 dot').toContain('return { icon: Circle')
   })
 
-  it('进展节点按 PROG_KIND 定色（G-18 两层复刻后，主视图节点色来自 kind 不来自 actor）', () => {
+  it('节点按 PROG_KIND 定色（节点色来自 kind，不来自 actor）', () => {
     // PROGRESS_TONE 的值是 class 字符串（不是组件名），所以不走 extractMap，直接钉内容。
     // 设计 progress.jsx `PROG_KIND[*].color`：--c-ai / --c-ok / --c-warn / --c-crit。
     // 🔴 **只上色不描边**（D13，2026-08-13 dogfood）：设计里那圈 40% alpha 发丝边成立的前提是
@@ -251,19 +257,52 @@ describe('时间轴节点 = 设计原型 detail.jsx 的 TL_ICON / TL_TONE', () =
     expect(body).toMatch(/warn:\s*'text-warn'/)
     expect(body).toMatch(/crit:\s*'text-crit'/)
     expect(body, 'D13：节点不再描边').not.toMatch(/border-/)
-    // 操作日志弹窗的 actor 配色沿设计 AuditLogModal：agent=--c-ai / me=--c-accent / system=fg-3。
-    const auditStart = source.indexOf('const AUDIT_ACTOR_TONE')
-    expect(auditStart, '找不到 AUDIT_ACTOR_TONE —— 表被改名或挪走了，闸失效').toBeGreaterThan(-1)
-    const auditBody = source.slice(auditStart, auditStart + 300)
-    expect(auditBody).toMatch(/agent:\s*'text-ai'/)
-    expect(auditBody).toMatch(/user:\s*'text-coral'/)
-    expect(auditBody).toMatch(/system:\s*'text-ink-fg-3'/)
   })
 
-  it('时间轴有贯穿竖线（此前是一堆独立卡片，没有任何时间轴形态）', () => {
+  it('时间轴有贯穿竖线（此前是一堆平铺行，没有任何时间轴形态）', () => {
     // 设计 progress.jsx ProgressEntry：25px 圆节点；竖线 left 16px = 半径 12.5 + pl-1 的 4px。
     expect(source).toContain('left-4')
     expect(source).toContain('size-[25px]')
+  })
+})
+
+describe('curated 进展五类 = 设计 PROG_KIND（task 08-25）', () => {
+  const source = read('src/shared/components/matters/matterProgressVocab.ts')
+
+  it('图标 5 档逐位对应', () => {
+    const actual = extractMap(source, 'export const MATTER_PROGRESS_KIND_ICONS', [
+      'goal',
+      'milestone',
+      'progress',
+      'signal',
+      'decision'
+    ])
+    expect(actual).toEqual({
+      goal: 'Flag', // flag —— 设计 PROG_KIND 的 start
+      milestone: 'CheckCircle2', // checkcircle
+      progress: 'Send', // send（我方推进）
+      signal: 'TriangleAlert', // alert
+      decision: 'Gavel' // gavel，与 ITEM_KIND.decision 同符号
+    })
+  })
+
+  it('色调 5 档逐位对应（进展 tab 的节点色 = 这张表）', () => {
+    const start = source.indexOf('export const MATTER_PROGRESS_KIND_TONE_CLASS')
+    expect(
+      start,
+      '找不到 MATTER_PROGRESS_KIND_TONE_CLASS —— 表被改名或挪走了，闸失效'
+    ).toBeGreaterThan(-1)
+    const body = source.slice(start, start + 400)
+    for (const [key, tone] of [
+      ['goal', 'text-ink-fg-3'],
+      ['milestone', 'text-ok'],
+      ['progress', 'text-info'],
+      ['signal', 'text-warn'],
+      ['decision', 'text-ai']
+    ] as const) {
+      expect(body, `${key} 的 tone 应为 ${tone}`).toMatch(new RegExp(`\\b${key}:\\s*'${tone}'`))
+    }
+    expect(body, 'D13：节点不再描边').not.toMatch(/border-/)
   })
 })
 

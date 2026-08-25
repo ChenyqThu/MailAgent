@@ -49,6 +49,7 @@ def export_matter(service: MatterService, public_id: str) -> dict[str, Any]:
     """机器读的完整快照（不含资料正文，不含时间线原始 payload）。"""
     matter = service.get_matter(public_id)["matter"]
     items = service.list_items(public_id)
+    progress = service.list_progress(public_id)
     stakeholders = service.list_stakeholders(public_id)
     resources = service.list_resources(public_id)
 
@@ -82,6 +83,18 @@ def export_matter(service: MatterService, public_id: str) -> dict[str, Any]:
                 "due_at": _iso(item.get("due_at")),
             }
             for item in items
+        ],
+        # curated 进展（task 08-25）：事情的发展脉络。**叙事时间正序** —— 界面按倒序读
+        # 「最近发生了什么」，导出件是给人从头读一遍的，倒着排会把因果关系读反。
+        "progress": [
+            {
+                "kind": entry["kind"],
+                "title": entry["title"],
+                "body": entry.get("body"),
+                "happened_at": _iso(entry.get("happened_at")),
+                "by": entry.get("actor_kind"),
+            }
+            for entry in reversed(progress)
         ],
         "stakeholders": [
             {
@@ -134,6 +147,16 @@ def export_matter_markdown(service: MatterService, public_id: str) -> str:
         lines += ["### 完成标志", ""]
         lines += [f"- [{'x' if check.get('done') else ' '}] {check.get('t', '')}" for check in checks]
         lines += [""]
+
+    if data["progress"]:
+        lines += ["## 进展", ""]
+        for entry in data["progress"]:
+            stamp = f"{entry['happened_at'][:10]} · " if entry["happened_at"] else ""
+            lines.append(f"- {stamp}**[{entry['kind']}]** {entry['title']}")
+            if entry.get("body"):
+                # 正文缩进成子块，免得多行正文与下一条进展的 bullet 平起平坐。
+                lines += ["", *(f"  {line}" for line in str(entry["body"]).splitlines())]
+        lines.append("")
 
     if data["items"]:
         lines += ["## 条目", ""]

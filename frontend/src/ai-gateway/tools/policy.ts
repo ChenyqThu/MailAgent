@@ -237,6 +237,10 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   matter_create: 'domain_write',
   matter_update: 'domain_write',
   matter_item_mutate: 'domain_write',
+  // task 08-25 — curated 进展 lane 的写面。同 class 同理由：本地、可审计、软删可 restore。
+  // 🔴 class 也是这里的**安全边界**：domain_write ⇒ 跟进 run 的矩阵行整类拒绝 ⇒ 那条无人值守
+  // 的 run 结构上写不了进展，只能提案（changes_json 的 kind='progress'）等 owner 拍板。
+  matter_progress_mutate: 'domain_write',
   matter_resource_mutate: 'domain_write',
   matter_stakeholder_mutate: 'domain_write',
   matter_relation_mutate: 'domain_write',
@@ -706,7 +710,8 @@ export function isToolClassAllowedInMode(
   // admitted; connector WRITES stay denied under any tampered ceiling).
   if (mode === 'contact_governance') {
     if (toolClass === 'read') return true
-    if (toolClass === 'artifact') return toolName !== undefined && CONTACT_PROPOSE_TOOLS.has(toolName)
+    if (toolClass === 'artifact')
+      return toolName !== undefined && CONTACT_PROPOSE_TOOLS.has(toolName)
     return false
   }
   if (toolClass === 'read' || toolClass === 'domain_write' || toolClass === 'artifact') return true

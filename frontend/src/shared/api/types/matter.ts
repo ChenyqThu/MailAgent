@@ -46,6 +46,31 @@ export const MATTER_ITEM_STATUSES = [
 ] as const
 export type MatterItemStatus = (typeof MATTER_ITEM_STATUSES)[number]
 
+/**
+ * curated 进展条目的叙事类型（task 08-25）。
+ *
+ * 🔴 与 `MATTER_ITEM_KINDS` 的 `milestone` / `decision` **同名不同物**：item 是工作对象
+ * （可勾、可改状态），progress 是叙事节点（发生过的一件事，写给未来读者看）。
+ * 图标 / 色调只活在 TS（`components/matters/matterProgressVocab.ts`），Python 不存样式。
+ */
+export const MATTER_PROGRESS_KINDS = [
+  'goal',
+  'milestone',
+  'progress',
+  'signal',
+  'decision'
+] as const
+export type MatterProgressKind = (typeof MATTER_PROGRESS_KINDS)[number]
+
+/** 进展条目文本上限。canonical: `src/matters/models.MATTER_PROGRESS_TITLE/BODY_MAX_CHARS`
+ *  （服务端拒绝而非截断）；gateway 的 `matterProgressFields` / 提案 progress 用它当 zod max，
+ *  闸 = `test_matters_contract_parity.py`（正则抽数值 + schemas.ts 的 max() 在位断言）。 */
+export const MATTER_PROGRESS_TITLE_MAX_CHARS = 500
+export const MATTER_PROGRESS_BODY_MAX_CHARS = 4000
+/** 一条进展最多挂几条证据链引用。canonical: `src/matters/models.MATTER_PROGRESS_MAX_REFS`
+ *  （REST DTO 与 `normalize_progress_refs` 都用它），同一道闸。 */
+export const MATTER_PROGRESS_MAX_REFS = 20
+
 export const MATTER_RESOURCE_KINDS = ['email', 'thread', 'event', 'doc', 'file', 'url'] as const
 export type MatterResourceKind = (typeof MATTER_RESOURCE_KINDS)[number]
 
@@ -78,7 +103,17 @@ export type MatterAttentionSeverity = (typeof MATTER_ATTENTION_SEVERITIES)[numbe
 export const MATTER_NOTIFY_LEVELS = ['high', 'all', 'off'] as const
 export type MatterNotifyLevel = (typeof MATTER_NOTIFY_LEVELS)[number]
 
-export const MATTER_CHANGE_KINDS = ['fact', 'inference', 'field', 'action', 'resource'] as const
+// `progress`（task 08-25）= 跟进 run 对 curated 进展的唯一通道（它拿不到进展写工具）。
+// 🔴 注释只能待在数组**外面**：跨语言闸的抽取器（`ts_const_string_array`）不剥注释，
+// 数组体里出现非字符串字面量一律判成「部分抽取」当场红。
+export const MATTER_CHANGE_KINDS = [
+  'fact',
+  'inference',
+  'field',
+  'action',
+  'resource',
+  'progress'
+] as const
 export type MatterChangeKind = (typeof MATTER_CHANGE_KINDS)[number]
 
 export const MATTER_RUN_STATUSES = ['ok', 'noop', 'warn', 'fail'] as const
@@ -460,7 +495,9 @@ export interface MatterResourceVersionTrail {
   items: MatterResourceVersion[]
 }
 
-export type MatterResourceExpansionReason = 'context_gap' | 'verification' | 'matter_instructions'
+// `MatterResourceExpansionReason` 已随关键词命中式资料推荐整条退役（task 08-25）——
+// 那条链的唯一入口是 `POST /{id}/resource-suggestions/discover`，端点、gateway 工具、
+// chat 缺口卡的「外扩检索」按钮一并下线。
 
 export interface MatterCandidateReason {
   kind: 'resource_overlap' | 'stakeholder_overlap' | 'semantic_overlap' | 'time_proximity'
@@ -546,11 +583,6 @@ export interface MatterCreateDraftResponse {
     notion_status: 'disabled' | 'searched' | 'failed'
     warnings: Array<{ code: 'notion_search_failed'; message: string }>
   }
-}
-
-export interface MatterResourceSuggestion extends MatterResourceListItem {
-  reason: string
-  confidence: number
 }
 
 /** 整批处置资料建议。逐条口不变，这是「全部确认 / 全部忽略」的整批口。 */
@@ -645,15 +677,6 @@ export interface MatterRelationCreateInput {
   confirmed?: boolean
 }
 
-export interface MatterResourceDiscoveryResult {
-  items: MatterResourceSuggestion[]
-  suppressed: Array<{ external_key: string; reason: 'rejected_same_evidence' }>
-  local_candidate_count: number
-  expanded: boolean
-  /** true = 该事项已挂满未审建议（服务端 `RESOURCE_SUGGESTION_BACKLOG_CAP`），本次不再堆新的。 */
-  backlog_capped?: boolean
-}
-
 export interface MatterStakeholder {
   id: number
   matter_id: number
@@ -722,6 +745,39 @@ export interface MatterItem {
   deleted_at: number | null
 }
 
+/**
+ * 一条进展的证据链引用（`refs_json` 的元素）。
+ *
+ * 🔴 形状**有意宽松**，与服务端 `models.normalize_progress_refs` 同一条纪律：那边只校验
+ * 「是对象 + `type` 非空」，把 email / resource / url 各自的键写死在这里就成了第二处契约
+ * （加一种引用形态要改两边，漏改的表现是「Agent 写了但存不进去」）。渲染侧本来就得对
+ * 认不出的形态兜底（存量行、未来形态）。
+ */
+export interface MatterProgressRef {
+  type: string
+  [key: string]: unknown
+}
+
+/** curated 进展条目（`matter_progress` 行，task 08-25）。`refs` 是服务端解好的数组，
+ *  wire 上不出现 `refs_json`。 */
+export interface MatterProgress {
+  id: number
+  matter_id: number
+  kind: MatterProgressKind
+  title: string
+  body: string | null
+  /** 叙事时间（这件事什么时候发生），与 `created_at`（什么时候被记下来）是两回事。epoch ms。 */
+  happened_at: number
+  actor_kind: MatterActorKind
+  actor_id: string | null
+  source: string
+  refs: MatterProgressRef[]
+  version: number
+  deleted_at: number | null
+  created_at: number
+  updated_at: number
+}
+
 export interface MatterEvent {
   id: number
   matter_id: number
@@ -745,6 +801,7 @@ export interface MatterMutationResult {
   matter?: Matter | null
   event_ids?: number[]
   item?: MatterItem
+  progress?: MatterProgress
   deleted?: boolean
   public_id?: string
   resource?: MatterResource
@@ -887,6 +944,9 @@ export interface MatterListResponse {
 export interface MatterDetailResponse {
   matter: Matter
   items?: MatterItem[]
+  /** `include=progress`。🔴 软删的条目**不在**里面（与 `items` 的 include_deleted 不同源：
+   *  条目删了还要渲染成划掉的行，进展删了就是从脉络里拿掉）。 */
+  progress?: MatterProgress[]
   resources?: MatterResourceListItem[]
   stakeholders?: MatterStakeholder[]
   timeline?: MatterEvent[]
@@ -970,6 +1030,24 @@ export interface MatterItemCreateInput {
 }
 
 export type MatterItemPatchInput = Partial<MatterItemCreateInput>
+
+/**
+ * 记一条进展。
+ *
+ * 🔴 `actor_kind` / `source` **不在**写面上：服务端从 mutation 信封与调用者身份盖章，
+ * 调用方结构上伪造不了「这条是 Agent 写的」（REST DTO `MatterProgressCreateRequest` 同形）。
+ * `happened_at` 省略 = 现在；秒值服务端恒拒不换算（matters 域全域 epoch **毫秒**）。
+ */
+export interface MatterProgressCreateInput {
+  kind: MatterProgressKind
+  title: string
+  body?: string | null
+  happened_at?: number | null
+  refs?: MatterProgressRef[]
+}
+
+/** 编辑一条进展。`deleted_at` 有意不在写面上 —— 删除 / 恢复走各自的端点。 */
+export type MatterProgressPatchInput = Partial<MatterProgressCreateInput>
 
 export interface MatterNoteCreateInput {
   title?: string | null
@@ -1103,6 +1181,33 @@ export interface MattersApi {
     itemId: number,
     options: MatterMutationOptions
   ): Promise<MatterMutationResult>
+  /** curated 进展（task 08-25）。详情页走 `get(id, ['progress'])` 一次取回，这个清单口
+   *  留给需要 kind 过滤 / 软删可见的调用方。 */
+  listProgress(
+    matterId: string,
+    options?: { kind?: MatterProgressKind; includeDeleted?: boolean; limit?: number }
+  ): Promise<MatterProgress[]>
+  createProgress(
+    matterId: string,
+    input: MatterProgressCreateInput,
+    options: MatterMutationOptions
+  ): Promise<MatterMutationResult>
+  patchProgress(
+    matterId: string,
+    progressId: number,
+    input: MatterProgressPatchInput,
+    options: MatterMutationOptions
+  ): Promise<MatterMutationResult>
+  deleteProgress(
+    matterId: string,
+    progressId: number,
+    options: MatterMutationOptions
+  ): Promise<MatterMutationResult>
+  restoreProgress(
+    matterId: string,
+    progressId: number,
+    options: MatterMutationOptions
+  ): Promise<MatterMutationResult>
   listResources(
     matterId: string,
     options?: MatterResourceListOptions
@@ -1147,12 +1252,11 @@ export interface MattersApi {
     input: { action: MatterSuggestionBulkAction; resourceIds: number[] },
     options: MatterMutationOptions
   ): Promise<MatterSuggestionBulkResult>
-  discoverResourceSuggestions(
-    matterId: string,
-    input?: { query?: string; expandReason?: MatterResourceExpansionReason; limit?: number }
-  ): Promise<MatterResourceDiscoveryResult>
-  /** G-14 tab ①：只读候选。与 `discoverResourceSuggestions` 同引擎但**不写任何东西** ——
-   *  打开「关联资料」弹窗不该在事项上留下建议行 / 事件 / 版本推进。 */
+  /** G-14 tab ①：只读候选（owner 自己挑，**不写任何东西** —— 打开「关联资料」弹窗不该在
+   *  事项上留下建议行 / 事件 / 版本推进）。
+   *  🔴 task 08-25 起这是唯一的确定性资料候选面：关键词命中式的「外扩检索」写面
+   *  （`POST /resource-suggestions/discover`）已整条退役，资料推荐改由有 LLM 能力的 agent
+   *  给出（跟进 run 的提案 `resource` change / 对话里的 `matter_resource_mutate`）。 */
   listResourceCandidates(
     matterId: string,
     options?: { limit?: number }

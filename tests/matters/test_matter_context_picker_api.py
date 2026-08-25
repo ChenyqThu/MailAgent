@@ -190,28 +190,42 @@ def test_manual_link_metadata_carries_address_columns(client):
     assert metadata["cc_addr"] == "legal@example.com"
 
 
-def test_discovered_suggestion_metadata_carries_address_columns(client):
+def test_candidate_metadata_carries_address_columns(client):
+    """只读候选那条路也得带满三列 —— 用户从弹窗里挑一封关联上之后，干系人「往来候选」
+    就是从这份 metadata 推人的。
+
+    🔴 task 08-25：关键词命中式的 `POST /resource-suggestions/discover` 已退役，另一条
+    产出路径（`propose_calendar_event_resource`）挂的是 event 类资料、不走这三列。
+    """
     http, path = client
     matter = _create_matter(http)
     _insert_email(path, 1, thread_id="t-1", subject="Anchor")
     _insert_email(path, 2, thread_id="t-1", subject="Same thread follow-up")
     _link_email(http, matter["public_id"], matter["version"], 1, "link:1")
 
-    # 只读候选端点与 discover 同引擎，弹窗里那一组走的是这条 —— 先验它（discover 会把这封
-    # 挂成建议，之后它就从「未关联候选」里消失了）。
     candidates = http.get(f"/api/matters/{matter['public_id']}/resource-candidates")
-    assert candidates.json()["data"]["items"][0]["metadata"]["cc_addr"] == "legal@example.com"
-
-    discovered = http.post(
-        f"/api/matters/{matter['public_id']}/resource-suggestions/discover", json={}
-    )
-    assert discovered.status_code == 200, discovered.text
-    suggestions = discovered.json()["data"]["items"]
-    assert [item["resource"]["metadata"]["internal_id"] for item in suggestions] == [2]
-    metadata = suggestions[0]["resource"]["metadata"]
+    assert candidates.status_code == 200, candidates.text
+    items = candidates.json()["data"]["items"]
+    assert [item["metadata"]["internal_id"] for item in items] == [2]
+    metadata = items[0]["metadata"]
     assert metadata["sender"] == "peer@example.com"
     assert metadata["to_addr"] == "owner@example.com"
     assert metadata["cc_addr"] == "legal@example.com"
+
+
+def test_retired_discover_endpoint_is_gone(client):
+    """🔴 关键词命中式的资料推荐整条退役（owner 0825）—— 端点必须真的不在了。
+
+    留着一个「还能调但没人调」的写端点，等于把刚砍掉的噪音源留了个后门。
+    """
+    http, path = client
+    matter = _create_matter(http)
+    _insert_email(path, 1, thread_id="t-1", subject="Anchor")
+
+    gone = http.post(
+        f"/api/matters/{matter['public_id']}/resource-suggestions/discover", json={}
+    )
+    assert gone.status_code == 404, gone.text
 
 
 # ── G-14 tab ① 候选：只读 ──────────────────────────────────────────────────────

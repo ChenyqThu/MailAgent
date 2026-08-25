@@ -244,6 +244,49 @@ def test_prompt_names_no_dynamic_tool_literals_and_keeps_retrieval_conditional(e
     assert "不是你本轮的操作记录" in prompt
 
 
+def test_task_contract_teaches_the_progress_lane_as_proposal_only(env):
+    """task 08-25：跟进 run 对 curated 进展的维护**只有提案**这一条通道（结构红线）。
+
+    契约必须同时说清三件事，缺一件模型就会做错事：
+      · 通道 —— 写成 kind=progress 的 change，没有进展的写工具（否则它会去调一个拿不到的工具）；
+      · 记什么 / 不记什么 —— owner 点名的失败形态正是「进展和操作日志一模一样」；
+      · 只能追加 —— 提案信封里没有 progress_id，声称能更正就是教它编一个不存在的入参。
+    """
+    settings, _, _, _, job = env
+    prompt = assemble_matter_spec(job, settings=settings)["prompt"]["taskPrompt"]
+    assert "写成 kind=progress 的 change" in prompt
+    assert "你没有进展的写工具" in prompt
+    # 五类词表逐个点名（少一类 = 模型只用它见过的那几类）。
+    for kind in ("goal=", "milestone=", "progress=", "signal=", "decision="):
+        assert kind in prompt, kind
+    assert "纯抄送、例行通知、没有信息增量的往来**不记**" in prompt
+    assert "你只能追加" in prompt
+    # epoch 毫秒：A3 那个把 2026 年显示成 1970 年的形状，每个时间字段都要自己声明单位。
+    assert "happened_at 是这件事**发生**的时间（epoch 毫秒）" in prompt
+
+
+def test_snapshot_projects_existing_progress_for_the_run(env):
+    """run 判断「有没有实质变化」的第一手材料 —— 快照里看不见进展就只能重记一遍已记过的事。"""
+    settings, service, pid, run, job = env
+    version = service.get_matter(pid)["matter"]["version"]
+    service.add_progress(
+        pid,
+        {
+            "kind": "decision",
+            "title": "定了按 9/1 启动",
+            "body": "客户会上拍板",
+            "happened_at": 1_786_690_800_000,
+        },
+        expected_version=version,
+        idempotency_key="prog-1",
+        source="desktop_ui",
+    )
+    prompt = assemble_matter_spec(job, settings=settings)["prompt"]["taskPrompt"]
+    assert "进展（新的在前" in prompt
+    assert "- [decision] 定了按 9/1 启动" in prompt
+    assert "客户会上拍板" in prompt
+
+
 def test_snapshot_projects_goal_checks_for_the_run(env):
     """0813 轮 3 O2 可见面：run 的快照段渲染「完成标志」清单（勾选态可读，不是 dict repr）。"""
     settings, service, pid, run, job = env

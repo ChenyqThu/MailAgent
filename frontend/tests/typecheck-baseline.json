@@ -92,7 +92,7 @@
   "tests/shared/matterResource.test.ts": 1,
   "tests/shared/mattersP4Api.test.ts": 5,
   "tests/shared/mattersP5Api.test.ts": 7,
-  "tests/shared/mattersP6Api.test.ts": 9,
+  "tests/shared/mattersP6Api.test.ts": 7,
   "tests/shared/matterTimelineModel.test.ts": 1,
   "tests/shared/MatterVersionConflictRecovery.test.tsx": 1,
   "tests/shared/StandingDocsSection.test.tsx": 1,

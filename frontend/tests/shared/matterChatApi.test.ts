@@ -84,6 +84,46 @@ describe('resolveMatterUndoRequest — tool/operation → REST', () => {
     })
   })
 
+  test('matter_progress_mutate maps onto the /progress routes（路径段是单数，没有复数变形）', () => {
+    // 认不出这个 tool = 撤销按钮结构上不出现（`readMatterUndoDescriptor` 会 fail-closed）——
+    // 界面上「删掉一条进展」就永远没有反悔入口，而删除是软删、服务端明明给得出 restore。
+    expect(
+      resolveMatterUndoRequest(
+        descriptor('matter_progress_mutate', { operation: 'restore', progress_id: 4 })
+      )
+    ).toMatchObject({ method: 'POST', path: '/matters/MAT-0042/progress/4/restore' })
+    expect(
+      resolveMatterUndoRequest(
+        descriptor('matter_progress_mutate', { operation: 'delete', progress_id: 4 })
+      )
+    ).toMatchObject({ method: 'DELETE', path: '/matters/MAT-0042/progress/4' })
+    expect(
+      resolveMatterUndoRequest(
+        descriptor('matter_progress_mutate', {
+          operation: 'update',
+          progress_id: 4,
+          patch: { title: '改之前的主句' }
+        })
+      )
+    ).toMatchObject({
+      method: 'PATCH',
+      path: '/matters/MAT-0042/progress/4',
+      fields: { title: '改之前的主句' }
+    })
+    expect(
+      resolveMatterUndoRequest(
+        descriptor('matter_progress_mutate', {
+          operation: 'create',
+          progress: { kind: 'decision', title: 'Q4 预算已定' }
+        })
+      )
+    ).toMatchObject({
+      method: 'POST',
+      path: '/matters/MAT-0042/progress',
+      fields: { kind: 'decision', title: 'Q4 预算已定' }
+    })
+  })
+
   test('resource unlink/restore/update + stakeholder + relation all resolve', () => {
     expect(
       resolveMatterUndoRequest(

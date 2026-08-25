@@ -140,10 +140,11 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   // matter (Matters MVP P3)
   'matter_find',
   'matter_get',
-  'matter_suggest_related_resources',
   'matter_create',
   'matter_update',
   'matter_item_mutate',
+  // task 08-25 —— curated 进展 lane 的写面（`matter_suggest_related_resources` 同批退役）。
+  'matter_progress_mutate',
   'matter_resource_mutate',
   'matter_stakeholder_mutate',
   'matter_relation_mutate',

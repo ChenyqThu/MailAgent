@@ -38,12 +38,7 @@ import {
   createContactReadTools,
   createContactWriteTools
 } from './contacts'
-import {
-  createMatterReadTools,
-  createMatterRunTools,
-  createMatterSuggestionTools,
-  createMatterWriteTools
-} from './matters'
+import { createMatterReadTools, createMatterRunTools, createMatterWriteTools } from './matters'
 import { createNotionAgentTools } from './notion_agent'
 import {
   admitDynamicTools,
@@ -651,22 +646,9 @@ export function buildGatewayTools(
   const mounted = opts.agentRunContext
     ? applySkillGating(gated, opts.agentRunContext.skills ?? [])
     : gated
-  // Matters MVP P6-A — resource discovery is a manual-chat-only supply tool. Register it AFTER
-  // both skill-gating passes: the Matter flag is its sole capability switch, and no advertised or
-  // mounted skill may accidentally hide it. It stays out of policy.ts by explicit adjudication;
-  // the manual venue gate here plus classOfTool's fail-closed exec fallback form the two belts.
-  if (opts.approvalGuard && contextMode === 'manual_chat') {
-    Object.assign(
-      mounted,
-      createMatterSuggestionTools(opts.domain, collector, opts.approvalGuard, {
-        a2uiEnabled: opts.a2uiEnabled,
-        approvalMode: opts.approvalMode,
-        toolApprovalPrefs: prefTiers,
-        oneShot: opts.oneShotWrites,
-        contextMode
-      })
-    )
-  }
+  // task 08-25 — Matters MVP P6-A 的 `matter_suggest_related_resources` 曾在这里、两道
+  // skill-gating 之后单独注册（manual-only 的供给工具）。整条关键词命中式的资料推荐随
+  // owner 0825 拍板退役，于是这个注册点也没了 —— 现在两道 gating 之后只剩 dynamic tools。
   // Stage 0b — dynamic tools (none exist yet; stage 1 fills the input): admitted only with a
   // runtime class registration (fail-closed — an unregistered dynamic tool never enters the
   // ToolSet), after both skill-gating passes (no skill family) and BEFORE the context-mode

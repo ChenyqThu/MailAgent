@@ -58,6 +58,7 @@ from src.matters.models import (
     MatterItemKind,
     MatterItemStatus,
     MatterPriority,
+    MatterProgressKind,
     MatterAccessPolicy,
     MatterRelationType,
     MatterResourceKind,
@@ -758,6 +759,55 @@ NOTIFICATION_INDEX_DDLS = (
     # 未读数: partial index 只覆盖未读活跃行 (铃铛徽标是最高频读)。
     "CREATE INDEX IF NOT EXISTS idx_notification_unread "
     "ON notification(category) WHERE read_at IS NULL AND state IN ('open','snoozed')",
+)
+
+
+# ==================== matter_progress DDL (v70) ====================
+# curated 进展条目 (task 08-25-matter-progress-curated, design §1)。「进展」从
+# `matter_event` 的降级映射换成独立的 curated lane: 目标 / 里程碑 / 关键进展 / 关键信号 /
+# 决议, 由用户与 Agent 共同维护; 操作日志继承原来那套按天分组的呈现, 数据面一字不动。
+#
+# 🔴 独立成组, **不进** MATTER_TABLE_DDLS / MATTER_INDEX_DDLS —— 那两组会被 v44/v45/
+# v46/v49/v50 各块对老库整组重放, 且 MATTER_TABLE_DDLS 还有下标依赖 (v45 块按 [2]/[3]
+# 取用)。混进去 = 给 v44..v69 每一个中间版本各加一个新炸点 (v52 索引教训)。本组只从
+# v70 块执行一次, 新库走满迁移梯子同样经 v70 拿到。
+#
+# 列语义:
+#   kind        五类叙事词表, CHECK 引 `src/matters/models.py::MatterProgressKind` 单源。
+#               🔴 与 matter_item 的 milestone / decision 同名不同物 (见该枚举 docstring)。
+#   title       一句话主句 (「Simon 回邮确认 Q4 预算」)。非空是硬约束 —— 一条没有主句的
+#               进展在时间轴上就是一个读不懂的点。
+#   body        可选展开正文。
+#   happened_at **叙事**时间 (这件事什么时候发生), 与 created_at (什么时候被记下来) 是两
+#               回事: 补记上周的进展时两者相差好几天, 合成一列就没法按事情发生的顺序读。
+#               🔴 epoch **毫秒** (matters 域全域单位, §2.2 三道门), 秒值恒拒不换算。
+#   source      与 matter_event.source 同词表 (自由文本, 无 CHECK)。
+#   refs_json   证据链, `[{"type": ...}]`。归一走 models.normalize_progress_refs (有意宽松)。
+#   deleted_at  软删 —— undo 路径与 matter_item 同形 (删了还能恢复, 事件里留得下痕迹)。
+MATTER_PROGRESS_TABLE_DDLS = (
+    f"""CREATE TABLE IF NOT EXISTS matter_progress (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        matter_id INTEGER NOT NULL REFERENCES matter(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind {sql_check_clause(MatterProgressKind)}),
+        title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+        body TEXT NULL,
+        happened_at INTEGER NOT NULL,
+        actor_kind TEXT NOT NULL CHECK (actor_kind {sql_check_clause(MatterActorKind)}),
+        actor_id TEXT NULL,
+        source TEXT NOT NULL,
+        refs_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(refs_json)),
+        version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+        deleted_at INTEGER NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    )""",
+)
+
+MATTER_PROGRESS_INDEX_DDLS = (
+    # 唯一读面: 「某事项的进展, 按叙事时间倒序」。id DESC 是同毫秒内的稳定次序 ——
+    # 一次导入补记多条时没有它, 两次读的顺序可能不一样。
+    "CREATE INDEX IF NOT EXISTS idx_matter_progress_live "
+    "ON matter_progress(matter_id, happened_at DESC, id DESC) WHERE deleted_at IS NULL",
 )
 
 
@@ -1691,7 +1741,30 @@ class SyncStore:
     #                幂等: ALTER 前 PRAGMA 探列 (三列各判各的), 重放结果不变。
     #                回滚 (回退 v69): 旧代码不认识这三列, **只降版本号是安全的**
     #                (列留着不碍事; SQLite 要清干净得重建 contact 表, 不值当)。
-    DB_VERSION = 69
+    # v70 (2026-08-25, curated 进展 lane): 新表 matter_progress —— 事项的「进展」从
+    #                `matter_event` 的降级映射 (G-18 的 (b) 档) 换成独立的 curated 条目:
+    #                目标 / 里程碑 / 关键进展 / 关键信号 / 决议五类叙事节点, 由用户内联编辑
+    #                与事项 Agent 共同维护; 操作日志继承原来那套呈现, 数据面 (全量
+    #                `matter_event`, append-only) 一字不动。DDL 单源
+    #                `MATTER_PROGRESS_TABLE_DDLS` / `MATTER_PROGRESS_INDEX_DDLS`
+    #                (🔴 不进 MATTER_*/CONTACT_* 各组, 理由见该常量头注 = v52 教训),
+    #                kind 与 actor_kind 的 CHECK 引 `src/matters/models.py` 枚举。
+    #                语义: 进展是 curated 的 —— 默认**不**从操作事件降级生成, 没条目就是
+    #                空态, 不回落降级视图。三条写入口安全姿态照旧 (结构红线 §1): 用户直写 /
+    #                事项对话工具走 HITL / 定时跟进 run **只有提案通道** (change kind
+    #                `progress`, owner 接受时才落行)。每次写都 append 一条
+    #                progress_added|updated|removed|restored 审计事件。
+    #                数据规则: 时间列全是 epoch **毫秒**; `happened_at` (叙事时间) 与
+    #                `created_at` (记录时间) 是两回事, 不合成一列; 软删走 `deleted_at`
+    #                (undo 路径同 matter_item); 无播种数据 —— 存量事项升级后进展为空态,
+    #                🔴 **不拿历史事件回填** (那些是操作记录不是叙事节点, 回填 = 把系统
+    #                自己的动作谎报成人写下来的脉络, 正是本版本要终结的那件事)。
+    #                幂等: CREATE TABLE / CREATE INDEX IF NOT EXISTS, 表与索引同块
+    #                (纯新表首建, 无 v52 式「索引先于列」的错位面)。重放结果不变。
+    #                回滚 (回退 v70): 旧代码完全不认识 matter_progress, **只降版本号是
+    #                安全的** (表留着不碍事); 要清干净再 `DROP TABLE matter_progress`
+    #                —— 🔴 那会连人手写的进展一起没, 事件里只留得下「加过 / 改过」的痕迹。
+    DB_VERSION = 70
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
 
@@ -4587,6 +4660,19 @@ class SyncStore:
                     cursor, "contact",
                     {name for name, _ in _contact_calendar_cols}, "v69 migration", e,
                 )
+        # === v70: matter_progress curated 进展条目 ===
+        # 语义 / 数据规则 / 回滚代价见 DB_VERSION 注记与 MATTER_PROGRESS_TABLE_DDLS 头注。
+        # 表与索引同块同 try: 纯新表首建, 不存在 v52 式「索引先于列」的错位面。
+        if current_version < 70:
+            try:
+                for ddl in MATTER_PROGRESS_TABLE_DDLS:
+                    cursor.execute(ddl)
+                for ddl in MATTER_PROGRESS_INDEX_DDLS:
+                    cursor.execute(ddl)
+            except sqlite3.Error as e:
+                raise SyncStoreMigrationError(
+                    f"v70 migration (matter_progress table): {e}"
+                ) from e
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
         # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →

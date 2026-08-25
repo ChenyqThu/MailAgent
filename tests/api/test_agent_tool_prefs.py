@@ -46,6 +46,9 @@ EXPECTED_DEFAULT_AUTO = {
     "matter_create",
     "matter_update",
     "matter_item_mutate",
+    # task 08-25：curated 进展条目的写面，与同族其余写同档（本地、留审计事件、软删可 restore，
+    # 且要被日常维护 —— 每记一条弹一张卡就没人用了）。
+    "matter_progress_mutate",
     "matter_resource_mutate",
     "matter_stakeholder_mutate",
     "matter_relation_mutate",

@@ -871,6 +871,27 @@ export class MailAgentDomainClient {
     return this._req('POST', `${itemPath}/restore`, { body: { mutation }, signal })
   }
 
+  /** task 08-25 — curated 进展条目的逐条写。路径形状与 items 逐字一致（POST / PATCH /
+   *  DELETE / POST …/restore），语义权威在 Python。 */
+  mutateMatterProgress(
+    publicId: string,
+    operation: 'create' | 'update' | 'delete' | 'restore',
+    progressId: number | undefined,
+    data: Record<string, unknown> | undefined,
+    mutation: DomainMatterMutation,
+    signal?: AbortSignal
+  ): Promise<DomainMatterResult> {
+    const base = `/matters/${encodeURIComponent(publicId)}/progress`
+    if (operation === 'create')
+      return this._req('POST', base, { body: { ...(data ?? {}), mutation }, signal })
+    const progressPath = `${base}/${progressId}`
+    if (operation === 'update')
+      return this._req('PATCH', progressPath, { body: { ...(data ?? {}), mutation }, signal })
+    if (operation === 'delete')
+      return this._req('DELETE', progressPath, { body: { mutation }, signal })
+    return this._req('POST', `${progressPath}/restore`, { body: { mutation }, signal })
+  }
+
   mutateMatterResource(
     publicId: string,
     operation: 'link' | 'update' | 'unlink' | 'restore',

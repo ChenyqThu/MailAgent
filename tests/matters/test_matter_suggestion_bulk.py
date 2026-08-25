@@ -4,8 +4,13 @@
 1. **一次版本推进** —— 逐条口是「一份建议一次 bump」，Agent 一轮挂十几份就等于把版本号
    推十几格，中间任何一次错位都会撞乐观锁。
 2. **逐条不整批失败** —— 批里混进已确认 / 已删 / 不属于本事项的 id 要如实分开计数。
-3. **忽略走 rejection 语义** —— 只删 link 不记 evidence_fingerprint 的话，下一轮 discovery
-   会把它们原样推回来。
+3. **忽略走 rejection 语义** —— 只删 link 不记 evidence_fingerprint 的话，下一次同证据的
+   提案会把它们原样推回来。
+
+🔴 task 08-25：关键词命中式的 `discover_resource_suggestions` 已退役，unconfirmed 建议
+改由测试直接以 agent 身份关联（形状与会议结束提案链落下来的行逐字一致：
+`added_by_kind='agent'` + `confirmed_at IS NULL` + provenance 带 evidence 与 fingerprint）。
+被测的批量口一个字节没动。
 """
 
 from __future__ import annotations
@@ -20,7 +25,8 @@ from src.matters.events import (
     RESOURCE_SUGGESTION_REJECTED,
 )
 from src.matters.repository import MatterRepository
-from src.matters.service import MatterError, MatterService
+from src.matters.resource_identity import evidence_fingerprint, rejection_resource_key
+from src.matters.service import Actor, MatterError, MatterService
 
 
 @pytest.fixture
@@ -59,11 +65,21 @@ def _insert_email(path, internal_id: int, *, thread_id: str, subject: str) -> No
         conn.commit()
 
 
+def _suggestion_provenance(external_key: str) -> dict[str, object]:
+    """Agent 提案链落下来的 provenance 形状（`propose_calendar_event_resource` 同款）。"""
+    evidence = ["thread:bulk-thread", "stakeholder:lead@example.com"]
+    return {
+        "reason": "与已关联邮件处于同一线程",
+        "evidence": evidence,
+        "evidence_fingerprint": evidence_fingerprint(
+            rejection_resource_key("mailagent", "email", external_key), evidence
+        ),
+    }
+
+
 def _matter_with_suggestions(service, path, count: int):
-    """建一个事项 + 一封锚点邮件 + `count` 封同线程邮件 → discovery 产出 count 条建议。"""
+    """建一个事项 + 一封人工关联的锚点邮件 + `count` 条 agent 挂上来的**未确认**建议。"""
     _insert_email(path, 1, thread_id="bulk-thread", subject="Anchor")
-    for index in range(2, 2 + count):
-        _insert_email(path, index, thread_id="bulk-thread", subject=f"Reply {index}")
     created = service.create_matter(
         {"title": "Bulk suggestions"}, idempotency_key="create", source="desktop_ui"
     )
@@ -73,14 +89,28 @@ def _matter_with_suggestions(service, path, count: int):
         {"provider": "mailagent", "kind": "email", "external_key": "email:1"},
         **_mutation(created["version"], "link-anchor"),
     )
-    discovered = service.discover_resource_suggestions(public_id)
-    suggestions = [
-        item for item in discovered["items"] if item["link"]["confirmed_at"] is None
-    ]
+    version = linked["version"]
+    suggestions = []
+    for index in range(2, 2 + count):
+        _insert_email(path, index, thread_id="bulk-thread", subject=f"Reply {index}")
+        external_key = f"email:{index}"
+        added = service.add_resource(
+            public_id,
+            {
+                "provider": "mailagent",
+                "kind": "email",
+                "external_key": external_key,
+                "confidence": 0.62,
+                "provenance": _suggestion_provenance(external_key),
+            },
+            actor=Actor(kind="agent"),
+            **_mutation(version, f"suggest-{index}"),
+        )
+        version = added["version"]
+        suggestions.append(added["resources"][0])
     assert len(suggestions) == count
-    # discovery 自己也 bump 了一次版本，取库里的当前值而不是算。
-    version = service.get_matter(public_id)["matter"]["version"]
-    assert version >= linked["version"]
+    assert all(item["link"]["confirmed_at"] is None for item in suggestions)
+    assert all(item["link"]["added_by_kind"] == "agent" for item in suggestions)
     return public_id, suggestions, version
 
 
@@ -143,12 +173,22 @@ def test_bulk_reject_writes_rejection_memory_and_suppresses_rediscovery(env):
         ]
     assert len(fingerprints) == 3
     assert all(fingerprint for fingerprint in fingerprints)
-    # 记了账，下一轮 discovery 不会把同一批原样推回来。
-    repeated = service.discover_resource_suggestions(public_id)
-    assert repeated["items"] == []
-    assert {entry["reason"] for entry in repeated["suppressed"]} == {
-        "rejected_same_evidence"
-    }
+    # 🔴 记的账要能真的挡住下一次 —— 抑制判据是「同 resource_key 且同 evidence_fingerprint」
+    # （`propose_calendar_event_resource` 与 `_email_resource_candidates` 共用的那一条）。
+    # 只断言「有三行」会放过「记了但记的是别的指纹」这种静默失效。
+    with service.repository.connect() as conn:
+        matter_id = service.get_matter(public_id)["matter"]["id"]
+        for item in suggestions:
+            external_key = item["resource"]["external_key"]
+            canonical_key = rejection_resource_key("mailagent", "email", external_key)
+            remembered = service.repository.get_resource_rejection(
+                conn, matter_id, canonical_key
+            )
+            assert remembered is not None
+            assert (
+                remembered["evidence_fingerprint"]
+                == _suggestion_provenance(external_key)["evidence_fingerprint"]
+            )
 
 
 def test_bulk_confirm_classifies_bad_ids_without_failing_the_batch(env):

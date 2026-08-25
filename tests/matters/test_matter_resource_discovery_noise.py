@@ -5,8 +5,18 @@
 三连（原件 + 两条回复），以及事项文档散文里那些近乎全域命中的虚词
 （`邮件`/`需求`/`确认`/`时间`/`项目`，活库最近 500 封里命中率 5%~8%）。
 
-🔴 光证明「变少了」不算数：每条「该挡的」旁边都钉一条「该留的」——同线程、干系人命中、
-专有名词（项目代号）单命中 —— 断言它们**仍然入选**。否则修法退化成「把召回关掉」。
+🔴 光证明「变少了」不算数：每条「该挡的」旁边都钉一条「该留的」——同线程、干系人命中 ——
+断言它们**仍然入选**。否则修法退化成「把召回关掉」。
+
+🔴 task 08-25（owner 0825「置信度非常低，反而徒增烦恼」）：关键词命中式的资料推荐整条
+退役 —— `discover_resource_suggestions` / REST discover 端点 / gateway
+`matter_suggest_related_resources` 三个写入口全删。候选引擎 `_email_resource_candidates`
+留着，但**只剩只读候选**（`list_resource_candidates`，owner 手动挑）这一个调用面，而它
+有意不接 `query` / `expand_reason` —— 于是外扩那一趟（`scope='expanded'`：关键词召回、
+分数排序、同线程折叠、backlog 守卫）**当前没有任何消费者**。本文件因此只保留 `local` 档
+的用例；外扩那 6 条（虚词 query 不召回 / 专有名词单命中 / 同线程折叠 / 证据强度排序 /
+积压守卫 / 事项散文不作检索条件）随之删除 —— 让测试绿着调用无人可达的代码是恒绿装饰。
+外扩若复活，从 git 历史（本批之前的这个文件）把它们捞回来。
 """
 
 from __future__ import annotations
@@ -17,6 +27,7 @@ import pytest
 
 from src.mail.sync_store import SyncStore
 from src.matters.repository import MatterRepository
+from src.matters.resource_identity import evidence_fingerprint, rejection_resource_key
 from src.matters.service import MatterService
 
 # 事项文档散文（照抄活库 MAT-0002 的形状）：其中「未见**邮件**记录」正是把标题带
@@ -160,7 +171,7 @@ def _mutation(version: int, key: str) -> dict[str, object]:
 
 
 def _keys(result) -> set[str]:
-    return {item["resource"]["external_key"] for item in result["items"]}
+    return {item["external_key"] for item in result["items"]}
 
 
 NOISE_KEYS = {f"email:{row[0]}" for row in NOISE_EMAILS}
@@ -196,7 +207,7 @@ def test_local_pass_keeps_durable_anchors_and_drops_every_noise_sample(env):
     service, path = env
     public_id, _ = _anchored_matter(service, path)
 
-    result = service.discover_resource_suggestions(public_id)
+    result = service.list_resource_candidates(public_id)
 
     assert _keys(result) == {f"email:{THREAD_REPLY_ID}", f"email:{STAKEHOLDER_ID}"}
     assert _keys(result) & NOISE_KEYS == set()
@@ -205,182 +216,45 @@ def test_local_pass_keeps_durable_anchors_and_drops_every_noise_sample(env):
 def test_matter_prose_alone_never_recalls_anything(env):
     """🔴 事项散文不是检索条件（修法 3）。
 
-    没有 query 的外扩 = 旧 `context_snapshot` 自签 `context_gap` 那条路径的形状，
-    活库 20 条噪音全部由它产出。现在它一条都出不来。
+    病根形态：`context_snapshot` 自签 `context_gap` 去做全库 keyword 检索，活库 20 条噪音
+    全部由它产出。零 durable 锚点的事项现在一条候选都出不来 —— 事项文档里那些近乎全域
+    命中的虚词只**加分**，永远不能独自把一封邮件拉进来。
     """
     service, path = env
     public_id, _ = _anchored_matter(service, path, with_anchor=False)
 
-    result = service.discover_resource_suggestions(
-        public_id, expand_reason="context_gap", limit=10
-    )
-
-    assert result["expanded"] is True
-    assert result["items"] == []
+    assert service.list_resource_candidates(public_id)["items"] == []
 
 
-def test_generic_query_terms_alone_recall_nothing(env):
-    """全是虚词的 query（`确认 邮件 时间 项目 需求 安排`）不该把全库拉进来。
-
-    🔴 变异点：把 common 档（停用词表）拿掉，这些词各值 1 分、凑够 3 分就召回 ⇒ 300 封
-    填充邮件全部入选，本用例当场红。
-    """
-    service, path = env
-    public_id, _ = _anchored_matter(service, path, with_anchor=False)
-
-    result = service.discover_resource_suggestions(
-        public_id, query="确认 邮件 时间 项目 需求 安排",
-        expand_reason="verification", limit=10,
-    )
-
-    assert result["items"] == []
-
-
-def test_specific_query_recalls_topic_and_still_excludes_noise(env):
-    """真话题 query：命中该命中的，句子里的虚词不把无关邮件顺带捞进来。
-
-    ⚠️ 撤回通知（1000012428）在**这条** query 下**有意**仍然入选：它的标题逐字包含
-    「意大利Omada CBC单Site支持5K设备测试报告需求」，对显式问这个话题的人来说
-    「那封原件已被撤回」是有效答案。它当初是噪音，病在**根本没有 query**（服务自签
-    context_gap）——那条路径已由 `test_matter_prose_alone_never_recalls_anything` 钉死。
-    要把系统通知整类挡掉需要发件人/通知分类器，那是另一件事，不在本批。
-    """
-    service, path = env
-    public_id, _ = _anchored_matter(service, path, with_anchor=False)
-
-    result = service.discover_resource_suggestions(
-        public_id, query="确认 意大利 CBC 测试报告 的时间安排",
-        expand_reason="verification", limit=10,
-    )
-
-    keys = _keys(result)
-    # cbc-thread 两封折成一封（修法 6）。
-    assert len(keys & {f"email:{ANCHOR_ID}", f"email:{THREAD_REPLY_ID}"}) == 1
-    # 摘要机器人 / Teams 提醒这类纯虚词邮件一条都不进。
-    assert keys & {"email:1000012439", "email:1000012433"} == set()
-
-
-def test_project_code_single_hit_still_recalls(env):
-    """专有名词/项目代号单命中的特例：靠一个 ER706W 就该把那封邮件关联上。"""
-    service, path = env
-    public_id, _ = _anchored_matter(service, path, with_anchor=False)
-
-    result = service.discover_resource_suggestions(
-        public_id, query="ER706W", expand_reason="verification", limit=10
-    )
-
-    assert _keys(result) == {f"email:{PROJECT_CODE_ID}"}
-
-
-def test_same_thread_noise_collapses_to_one_slot(env):
-    """同线程三连只占一个名额（修法 6）—— 候选池是 email 粒度，线程只能折叠不能刷屏。"""
-    service, path = env
-    public_id, _ = _anchored_matter(service, path, with_anchor=False)
-
-    result = service.discover_resource_suggestions(
-        public_id, query="Omada Config Tool", expand_reason="verification", limit=10
-    )
-
-    config_hits = _keys(result) & {
-        "email:1000012431", "email:1000012434", "email:1000012436"
-    }
-    assert len(config_hits) == 1
-
-
-def test_expanded_ranking_reflects_evidence_strength_not_recency(env):
-    """🔴 变异点（修法 1）：常量托底会把所有外扩候选压成同一个分。
-
-    confidence 恒等 ⇒ `sort(key=-confidence)` 退化成恒等排序 ⇒ `combined[:limit]` 拿到的
-    「Top N」其实是 date_received DESC 的前 N。这里让**证据最强的那封恰好最旧**：分数
-    一旦被拍平，它就会掉到列表后面。
-    """
-    service, path = env
-    public_id, _ = _anchored_matter(service, path, with_anchor=False)
-
-    result = service.discover_resource_suggestions(
-        public_id,
-        query="Omicron Lambda Kappa",
-        expand_reason="verification",
-        limit=10,
-    )
-
-    ordered = [
-        (item["resource"]["external_key"], item["confidence"]) for item in result["items"]
-    ]
-    assert [key for key, _ in ordered] == [
-        f"email:{RANK_STRONG_ID}",  # 双低频命中，日期最旧
-        f"email:{RANK_WEAK_ID}",  # 单命中，日期最新
-    ]
-    # 分数不是同一个常量 —— 排序还有意义。
-    assert ordered[0][1] > ordered[1][1]
-
-
-def test_suggestion_backlog_cap_stops_piling_up(env):
-    """已经挂满一屏待审建议就不再堆（修法 6 的第二半）。"""
-    service, path = env
-    public_id, version = _anchored_matter(service, path, with_anchor=False)
-    with sqlite3.connect(path) as conn:
-        matter_id = conn.execute(
-            "SELECT id FROM matter WHERE public_id=?", (public_id,)
-        ).fetchone()[0]
-        for index in range(10):
-            conn.execute(
-                "INSERT INTO resource (kind,provider,external_key,metadata_json,"
-                "access_policy,created_at,updated_at) VALUES ('email','mailagent',?,'{}',"
-                "'allowed',1,1)",
-                (f"email:{700_000 + index}",),
-            )
-            resource_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-            conn.execute(
-                "INSERT INTO matter_resource (matter_id,resource_id,pinned,added_by_kind,"
-                "provenance_json,sub_state,created_at,updated_at) "
-                "VALUES (?,?,0,'agent','{}','none',1,1)",
-                (matter_id, resource_id),
-            )
-        conn.commit()
-    del version
-
-    result = service.discover_resource_suggestions(
-        public_id, query="ER706W", expand_reason="verification", limit=10
-    )
-
-    assert result == {
-        "items": [],
-        "suppressed": [],
-        "local_candidate_count": 0,
-        "expanded": False,
-        "backlog_capped": True,
-    }
-
-
-def test_rejection_survives_a_reworded_matter_summary(env):
+def test_rejection_fingerprint_survives_a_reworded_matter_summary(env):
     """🔴 修法 7：改一句 `current_summary` 不该让抑制失效。
 
     旧实现把 `keyword:*`（来自整份事项文档的 bigram）一起哈希进指纹，于是用户拒掉一条
-    垃圾建议后，下一次跟进 run 只要重写了摘要，指纹就变、抑制当场失效、同一封原样回来 ——
-    与 docstring 承诺的语义正好相反。
+    垃圾建议后，只要下一轮重写了摘要，指纹就变、抑制当场失效、同一封原样回来 —— 与
+    docstring 承诺的语义正好相反。抑制判据本身（`evidence_fingerprint` 只吃 durable
+    anchor）没随关键词推荐退役，所以这条继续钉着：**同一封邮件的候选证据，在摘要被改写
+    前后必须给出同一个指纹**。
     """
     service, path = env
     public_id, version = _anchored_matter(service, path)
 
-    discovered = service.discover_resource_suggestions(public_id)
-    suggestion = next(
-        item for item in discovered["items"]
-        if item["resource"]["external_key"] == f"email:{THREAD_REPLY_ID}"
-    )
-    rejected = service.reject_resource_suggestion(
-        public_id, suggestion["resource"]["id"], reason="not relevant",
-        **_mutation(version + 1, "reject-thread-reply"),
-    )
+    def fingerprint_of(external_key: str) -> str:
+        candidate = next(
+            item
+            for item in service.list_resource_candidates(public_id)["items"]
+            if item["external_key"] == external_key
+        )
+        return evidence_fingerprint(
+            rejection_resource_key("mailagent", "email", external_key),
+            candidate["evidence"],
+        )
+
+    target = f"email:{THREAD_REPLY_ID}"
+    before = fingerprint_of(target)
     service.patch_matter(
         public_id,
         {"current_summary": "改写后的摘要：等待意大利侧回复测试数据，需求与时间待确认。"},
-        **_mutation(rejected["version"], "reword-summary"),
+        **_mutation(version, "reword-summary"),
     )
 
-    repeated = service.discover_resource_suggestions(public_id)
-
-    assert _keys(repeated) == set()
-    assert repeated["suppressed"] == [
-        {"external_key": f"email:{THREAD_REPLY_ID}", "reason": "rejected_same_evidence"}
-    ]
+    assert fingerprint_of(target) == before

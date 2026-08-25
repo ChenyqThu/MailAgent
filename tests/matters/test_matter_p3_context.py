@@ -126,6 +126,8 @@ def test_context_snapshot_core_fields_and_summary_accepted_at(service, clock):
         "matter",
         "items",
         "stakeholders",
+        # curated 进展（task 08-25）：跟进 run 与事项对话共用的「这件事到哪一步了」。
+        "progress",
         "resources",
         "resource_counts",
         "events",

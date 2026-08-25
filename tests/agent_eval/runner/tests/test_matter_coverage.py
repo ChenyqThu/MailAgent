@@ -14,6 +14,9 @@ MATTER_READ_TOOLS = [
 MATTER_WRITE_TOOLS = [
     "matter_create", "matter_update", "matter_item_mutate", "matter_resource_mutate",
     "matter_stakeholder_mutate", "matter_relation_mutate", "matter_add_note",
+    # task 08-25 —— curated 进展 lane 的写面。进这张表 = 它同时被
+    # `test_matter_followup_trace_has_no_state_write` 钉住：跟进 run 的 trace 里出现它就是红。
+    "matter_progress_mutate",
     # P4 D8 — the two review-side writes.
     "matter_run_control", "matter_review_update",
     # 0813 轮 3 批 R — the two disposal writes.

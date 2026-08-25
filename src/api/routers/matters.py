@@ -20,6 +20,8 @@ from src.api.schemas.matters import (
     MatterItemPatchRequest,
     MatterNoteCreateRequest,
     MatterPatchRequest,
+    MatterProgressCreateRequest,
+    MatterProgressPatchRequest,
     MatterRelationCreateRequest,
     MatterRelationPatchRequest,
     MatterResourceCreateRequest,
@@ -767,6 +769,98 @@ async def create_note(
     return success_envelope(result, request=request, status_code=201)
 
 
+@router.get("/{matter_id}/progress")
+async def list_progress(
+    matter_id: str,
+    request: Request,
+    kind: str | None = None,
+    include_deleted: bool = False,
+    limit: int | None = Query(default=None, ge=1, le=500),
+    service: MatterService = Depends(get_matter_service),
+):
+    items = await _acall(
+        service.list_progress,
+        matter_id,
+        kind=kind,
+        include_deleted=include_deleted,
+        limit=limit,
+    )
+    return success_envelope({"items": items}, request=request)
+
+
+@router.post("/{matter_id}/progress")
+async def create_progress(
+    matter_id: str,
+    body: MatterProgressCreateRequest,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(
+        service.add_progress,
+        matter_id,
+        body.model_dump(exclude={"mutation"}),
+        **_mutation_args(body.mutation, idempotency_key),
+    )
+    return success_envelope(result, request=request, status_code=201)
+
+
+@router.patch("/{matter_id}/progress/{progress_id}")
+async def update_progress(
+    matter_id: str,
+    progress_id: int,
+    body: MatterProgressPatchRequest,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    patch = body.model_dump(exclude={"mutation"}, exclude_unset=True)
+    result = _call(
+        service.update_progress,
+        matter_id,
+        progress_id,
+        patch,
+        **_mutation_args(body.mutation, idempotency_key),
+    )
+    return success_envelope(result, request=request)
+
+
+@router.delete("/{matter_id}/progress/{progress_id}")
+async def delete_progress(
+    matter_id: str,
+    progress_id: int,
+    body: MutationOnly,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(
+        service.delete_progress,
+        matter_id,
+        progress_id,
+        **_mutation_args(body.mutation, idempotency_key),
+    )
+    return success_envelope(result, request=request)
+
+
+@router.post("/{matter_id}/progress/{progress_id}/restore")
+async def restore_progress(
+    matter_id: str,
+    progress_id: int,
+    body: MutationOnly,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(
+        service.restore_progress,
+        matter_id,
+        progress_id,
+        **_mutation_args(body.mutation, idempotency_key),
+    )
+    return success_envelope(result, request=request)
+
+
 @router.get("/{matter_id}/resources")
 async def list_resources(
     matter_id: str, request: Request, kind: str | None = None,
@@ -788,8 +882,8 @@ async def list_resource_candidates(
     matter_id: str, request: Request, limit: int = Query(default=10, ge=1, le=50),
     service: MatterService = Depends(get_matter_service),
 ):
-    """只读候选（G-14「关联资料」弹窗）。与 `resource-suggestions/discover` 同引擎但零写入 ——
-    打开弹窗不该在事项上留下任何痕迹。"""
+    """只读候选（G-14「关联资料」弹窗）：owner 手动挑，一个字都不写 —— 打开弹窗不该在事项上
+    留下任何痕迹。task 08-25 起这是候选引擎 `_email_resource_candidates` 的唯一调用面。"""
     return success_envelope(
         await _acall(service.list_resource_candidates, matter_id, limit=limit),
         request=request,
@@ -900,22 +994,11 @@ async def bulk_resolve_resource_suggestions(
     return success_envelope(result, request=request)
 
 
-@router.post("/{matter_id}/resource-suggestions/discover")
-async def discover_resource_suggestions(
-    matter_id: str,
-    body: dict[str, Any] | None,
-    request: Request,
-    service: MatterService = Depends(get_matter_service),
-):
-    payload = body or {}
-    result = _call(
-        service.discover_resource_suggestions,
-        matter_id,
-        query=payload.get("query"),
-        expand_reason=payload.get("expand_reason"),
-        limit=payload.get("limit", 10),
-    )
-    return success_envelope(result, request=request)
+# `POST /{matter_id}/resource-suggestions/discover` 已退役（task 08-25，owner 0825）：
+# 关键词命中式的资料推荐置信度太低。资料关联的推荐现在只有两条路，都要过 LLM 判断 ——
+# 跟进 run 的提案信封 `resource` change，与事项对话里 agent 自己检索后
+# `matter_resource_mutate`。只读候选 `GET /{id}/resource-candidates`（owner 手动挑，
+# 零写入）不受影响。
 
 
 @router.delete("/{matter_id}/resources/{resource_id}")

@@ -1089,10 +1089,10 @@
       "calendar_event_delete": "删除日程",
       "matter_find": "检索事项",
       "matter_get": "读取事项",
-      "matter_suggest_related_resources": "发现相关资料",
       "matter_create": "创建事项",
       "matter_update": "更新事项",
       "matter_item_mutate": "编辑事项条目",
+      "matter_progress_mutate": "记录事项进展",
       "matter_resource_mutate": "关联事项资料",
       "matter_stakeholder_mutate": "编辑事项干系人",
       "matter_relation_mutate": "编辑事项关联",
@@ -5391,16 +5391,39 @@
         "note": "备注"
       }
     },
+    "progress": {
+      "sectionTitle": "事情的进展",
+      "add": "记进展",
+      "empty": "还没有进展记录。",
+      "emptyHint": "这里记的是事情的发展脉络：目标、关键进展、关键信号、里程碑、决议。Agent 会日常维护，你也可以自己记一条。",
+      "edit": "编辑这条进展",
+      "delete": "删除这条进展",
+      "deleted": "已删除这条进展",
+      "titleLabel": "一句话说清发生了什么",
+      "titlePlaceholder": "例：Simon 回邮确认 Q4 预算",
+      "bodyLabel": "补充说明（可选）",
+      "bodyPlaceholder": "细节、原文摘录、下一步…",
+      "kind": {
+        "goal": "目标",
+        "milestone": "里程碑",
+        "progress": "进展",
+        "signal": "信号",
+        "decision": "决议"
+      },
+      "refKind": {
+        "email": "邮件",
+        "resource": "资料",
+        "url": "链接"
+      }
+    },
     "timeline": {
-      "filter": "进展参与者筛选",
+      "filter": "参与者筛选",
       "all": "全部",
       "me": "我",
       "agent": "Agent",
       "system": "系统",
-      "empty": "这个筛选下还没有进展。",
+      "auditEmpty": "这个筛选下没有记录。",
       "changedFields": "改动：{fields}",
-      "sectionTitle": "事情的进展",
-      "derivedNotice": "这条线由已有记录生成：绑定跟进 Agent 后，会从往来邮件与关联资料里提炼进展。",
       "dayToday": "今天",
       "dayYesterday": "昨天",
       "dayCount": "{count} 项",
@@ -5490,6 +5513,14 @@
       "stakeholder_removed_plain": "移除了一位干系人",
       "stakeholder_restored": "恢复了干系人 {name}",
       "stakeholder_restored_plain": "恢复了一位干系人",
+      "progress_added": "记了一条进展{title}",
+      "progress_added_plain": "记了一条进展",
+      "progress_updated": "改了进展{title}",
+      "progress_updated_plain": "改了一条进展",
+      "progress_removed": "删掉了进展{title}",
+      "progress_removed_plain": "删掉了一条进展",
+      "progress_restored": "恢复了进展{title}",
+      "progress_restored_plain": "恢复了一条进展",
       "relation_added": "关联了事项{title}",
       "relation_added_plain": "关联了另一个事项",
       "relation_updated": "更新了事项之间的关联",
@@ -5881,6 +5912,7 @@
         "matter_stakeholder_mutate": "干系人已更新",
         "matter_relation_mutate": "事项关联已更新",
         "matter_add_note": "已添加备注",
+        "matter_progress_mutate": "进展已记录",
         "matter_run_control": "跟进运行已更新",
         "matter_review_update": "提案评审已更新",
         "matter_attention_triage": "关注信号已处置",
@@ -5897,12 +5929,9 @@
         "failed": "撤销失败"
       },
       "gap": {
-        "title": "上下文缺口 · 需要你授权扩大检索",
-        "expand": "授权扩检索",
-        "expanding": "正在检索…",
-        "result": "已加入 {count} 条建议态资源",
-        "suppressed": "{count} 条此前已标记不相关，已跳过",
-        "failed": "扩检索失败"
+        "title": "上下文缺口 · 这件事还没有关联资料",
+        "ask": "让 Agent 找",
+        "prompt": "帮我找找与本事项相关的邮件和资料，确认相关的建立关联。"
       }
     },
     "runs": {
@@ -5969,6 +5998,10 @@
         "resource": {
           "label": "关联资料",
           "hint": "会把资料正式关联到事项"
+        },
+        "progress": {
+          "label": "记进展",
+          "hint": "会在事情脉络里留下一条记录"
         }
       },
       "title": "更新提案审阅",
@@ -5998,6 +6031,12 @@
         "summaryByAgent": "Agent 已生成的摘要",
         "summaryFromMail": "沿用邮件自带的摘要",
         "summaryPending": "还没有摘要 · 下次跟进运行时生成"
+      },
+      "newProgress": {
+        "badge": "将记入进展",
+        "hint": "接受后这条才会进入事情脉络",
+        "happenedAt": "发生于 {time}",
+        "happenedNow": "未注明发生时间 · 按接受的时刻记"
       },
       "rejectReason": "拒绝原因",
       "confirmReject": "确认拒绝",
@@ -6263,7 +6302,11 @@
       "attention_opened": "产生关注信号",
       "attention_resolved": "信号已解决",
       "attention_snoozed": "信号稍后提醒",
-      "attention_dismissed": "忽略本次信号"
+      "attention_dismissed": "忽略本次信号",
+      "progress_added": "记了一条进展",
+      "progress_updated": "改了一条进展",
+      "progress_removed": "删了一条进展",
+      "progress_restored": "恢复了一条进展"
     },
     "eventActor": {
       "user": "你",

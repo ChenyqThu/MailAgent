@@ -20,19 +20,18 @@ import i18n from '@shared/i18n'
 import type { MatterContextSnapshotPayload } from '@shared/api/matters'
 import type { MatterChatTarget } from '@shared/state/ai-chat-panel'
 
-const { chatApi, mattersApi, toastError } = vi.hoisted(() => ({
+const { chatApi, toastError } = vi.hoisted(() => ({
   chatApi: {
     contextSnapshot: vi.fn(),
     applyUndo: vi.fn()
-  },
-  mattersApi: {
-    discoverResourceSuggestions: vi.fn()
   },
   toastError: vi.fn()
 }))
 
 vi.mock('@shared/components/matters/hooks', () => ({
-  useMattersApi: () => mattersApi,
+  // 事项对话本身**不再**调用任何 matters REST 写面（task 08-25 退役了缺口卡的外扩检索），
+  // 但 hooks 模块整体还得存在：useMatterChatApi 是撤销通道。
+  useMattersApi: () => ({}),
   useMatterChatApi: () => chatApi,
   useMattersEnabled: () => true
 }))
@@ -46,6 +45,7 @@ const { useMatterConversation, matterTargetFromSession, matterIdentityFromSessio
   await import('@shared/components/matters/useMatterConversation')
 type MatterConversationBinding = ReturnType<typeof useMatterConversation>
 const { MatterContextGapCard } = await import('@shared/components/matters/MatterContextGapCard')
+const { useAIChatPanel } = await import('@shared/state/ai-chat-panel')
 
 await i18n.changeLanguage('zh-CN')
 
@@ -160,12 +160,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   chatApi.contextSnapshot.mockResolvedValue(snapshotPayload())
   chatApi.applyUndo.mockResolvedValue({})
-  mattersApi.discoverResourceSuggestions.mockResolvedValue({
-    items: [],
-    suppressed: [],
-    local_candidate_count: 0,
-    expanded: true
-  })
+  useAIChatPanel.setState({ pendingPrompt: null, matterTarget: null })
 })
 
 afterEach(cleanup)
@@ -341,38 +336,32 @@ describe('useMatterConversation — 撤销回执的身份（codex #6）', () => 
   })
 })
 
-describe('MatterContextGapCard — 显式授权才扩检索', () => {
-  test('渲染警告卡与它的授权动作', () => {
-    const onExpand = vi.fn()
-    render(<MatterContextGapCard onExpand={onExpand} />)
-    expect(screen.getByText('上下文缺口 · 需要你授权扩大检索')).toBeTruthy()
-    fireEvent.click(screen.getByText('授权扩检索'))
-    expect(onExpand).toHaveBeenCalledTimes(1)
+// task 08-25 —— 关键词命中式的外扩检索整条退役（owner：「置信度非常低，反而徒增烦恼」）。
+// 卡还在（缺口判据一个字没改），动作换成「把检索交给这场对话里的事项 agent」。
+describe('MatterContextGapCard — 缺口卡把检索交给事项 agent', () => {
+  test('渲染警告卡与它的动作', () => {
+    const onAsk = vi.fn()
+    render(<MatterContextGapCard onAsk={onAsk} />)
+    expect(screen.getByText('上下文缺口 · 这件事还没有关联资料')).toBeTruthy()
+    fireEvent.click(screen.getByText('让 Agent 找'))
+    expect(onAsk).toHaveBeenCalledTimes(1)
   })
 
-  test('点了才检索，并把「此前已标记不相关」的命中如实说出来', async () => {
+  test('🔴 点下去只递一条指令 —— 卡本身不再是任何写入路径', async () => {
     const payload = snapshotPayload()
     payload.resources = []
     chatApi.contextSnapshot.mockResolvedValue(payload)
-    mattersApi.discoverResourceSuggestions.mockResolvedValue({
-      items: [{}, {}],
-      suppressed: [{ external_key: 'email:9', reason: 'rejected_same_evidence' }],
-      local_candidate_count: 1,
-      expanded: true
-    })
     renderBinding({ seed: MATTER })
     await waitFor(() => expect(screen.getByTestId('matter-context-gap')).toBeTruthy())
-    expect(mattersApi.discoverResourceSuggestions).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByText('授权扩检索'))
-    await waitFor(() =>
-      expect(mattersApi.discoverResourceSuggestions).toHaveBeenCalledWith('MAT-0042', {
-        query: 'Vendor launch',
-        expandReason: 'context_gap',
-        limit: 10
-      })
-    )
-    expect(
-      await screen.findByText('已加入 2 条建议态资源 · 1 条此前已标记不相关，已跳过')
-    ).toBeTruthy()
+    expect(useAIChatPanel.getState().pendingPrompt).toBeNull()
+
+    fireEvent.click(screen.getByText('让 Agent 找'))
+
+    const state = useAIChatPanel.getState()
+    // 走既有 `startMatterChatWithPrompt`：事项身份保住（不 clearMatterChat），指令是一条
+    // 普通用户消息 —— 检索与关联由 agent 在既有审批闸下完成，不在这里发任何请求。
+    expect(state.matterTarget).toEqual(MATTER)
+    expect(state.pendingPrompt?.text).toBe('帮我找找与本事项相关的邮件和资料，确认相关的建立关联。')
+    expect(state.pendingPrompt?.emailId).toBeNull()
   })
 })

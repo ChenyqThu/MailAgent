@@ -52,6 +52,7 @@ const WRITE_LABELLED_TOOLS = new Set([
   'matter_stakeholder_mutate',
   'matter_relation_mutate',
   'matter_add_note',
+  'matter_progress_mutate',
   'matter_run_control',
   'matter_review_update',
   // 0813 轮 3 批 R — the two disposal writes.

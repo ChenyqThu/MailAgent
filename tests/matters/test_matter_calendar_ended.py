@@ -438,7 +438,10 @@ def test_proposal_contact_leg_and_no_email_attendees(tmp_path, calendar_on):
 
 
 def test_proposal_respects_backlog_cap(tmp_path, calendar_on):
-    """积压守卫：待审建议堆到上限就停手（与 `discover_resource_suggestions` 同一条闸）。
+    """积压守卫：待审建议堆到上限就停手（`RESOURCE_SUGGESTION_BACKLOG_CAP`）。
+
+    🔴 task 08-25 关键词命中式的资料推荐退役后，这条提案链是**唯一**还会产 unconfirmed
+    行的确定性路径 —— 于是这道守卫也只剩这一个消费者，动它前先看这里。
 
     一天里结束的会议可以远多于 owner 愿意审的条数 —— 没有这道守卫，一个开着的事项
     会被日历刷成一屏未确认建议。

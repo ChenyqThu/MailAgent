@@ -8,7 +8,8 @@
 //
 // 保住的能力（删 MatterChatPanel 时逐个搬过来的，少一个都算功能倒退）：
 //   · 可移除的事项 context chip（+ 移除后不再自动重新 seed，与邮件 chip 同款 ref 记忆）
-//   · 上下文缺口卡（MatterContextGapCard）与「授权扩检索」
+//   · 上下文缺口卡（MatterContextGapCard）—— CTA 自 task 08-25 起是「让 Agent 找」
+//     （关键词命中式的「授权扩检索」整条退役，见卡片头注）
 //   · 事项快捷 prompt（设计稿：位置与全局面板的快捷动作一致 —— 换一组，不是删掉）
 //   · MatterChatSurface（写入回执 + 撤销）—— 没有它，matter 写入卡会 fall through 成通用工具卡
 //
@@ -16,7 +17,6 @@
 // （dock 唤出时带的那件事）。两者都没有 = 这就是一场普通对话。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { ClipboardList } from 'lucide-react'
 
@@ -26,12 +26,9 @@ import type {
   ContextScope
 } from '@shared/assistant/context/contextSnapshot'
 import { ConversationContextChip } from '@shared/components/agents/ConversationContextChip'
-import { errorMessage } from '@shared/lib/ipcErrors'
 import type { MatterChatTarget } from '@shared/state/ai-chat-panel'
-import { toastError } from '@shared/state/toast'
+import { startMatterChatWithPrompt } from '@shared/state/ai-chat-panel'
 
-import { useMattersApi } from './hooks'
-import { refreshMatter } from './matterMutation'
 import { MatterContextGapCard } from './MatterContextGapCard'
 import { MatterQuickPrompts } from './MatterQuickPrompts'
 import type { MatterChatSurface } from './matterChatContext'
@@ -136,8 +133,6 @@ export function useMatterConversation(
   const seed = unresolved ? null : input.seed
   const chatIsEmpty = input.chatIsEmpty
   const { t } = useTranslation()
-  const mattersApi = useMattersApi()
-  const queryClient = useQueryClient()
 
   // ── 可移除的事项 chip（邮件 chip 同款：显式移除后不再自动重新 seed，换一件事则重新提供）──
   const [chipTarget, setChipTarget] = useState<MatterChatTarget | null>(null)
@@ -224,21 +219,16 @@ export function useMatterConversation(
     ? 1 + chips.openItems + chips.stakeholders + chips.pinnedResources + chips.changes
     : 0
 
-  const discovery = useMutation({
-    mutationFn: () =>
-      mattersApi.discoverResourceSuggestions(chipTarget?.publicId ?? '', {
-        query: chipTarget?.title ?? '',
-        expandReason: 'context_gap',
-        limit: 10
-      }),
-    onSuccess: async () => {
-      const publicId = chipTarget?.publicId
-      if (!publicId) return
-      // resources / contextSnapshot 都挂在 detail 前缀下 —— 单源清单见 refreshMatter。
-      await refreshMatter(queryClient, publicId)
-    },
-    onError: (error) => toastError(t('matters.chat.gap.failed'), errorMessage(error))
-  })
+  // task 08-25 —— 缺口卡的动作：往**这场对话**递一条「帮我找找相关邮件和资料」的指令。
+  //
+  // 走的是既有的 `startMatterChatWithPrompt`（openMatterChat 保住事项身份 + `pendingPrompt`
+  // 排队一条普通用户消息），不新造注入路径。🔴 关键词命中式的 `discoverResourceSuggestions`
+  // 已整条退役：检索与判断交给有 LLM 能力的 agent，关联落地仍走 `matter_resource_mutate`
+  // 的既有审批闸 —— 缺口卡不许成为第二条不留痕的写入路径（这条约束一个字没变）。
+  const askAgentForResources = useCallback((): void => {
+    if (!chipTarget) return
+    startMatterChatWithPrompt(chipTarget, t('matters.chat.gap.prompt'))
+  }, [chipTarget, t])
 
   // 🔴 异步落地时"当前这条线程是谁"的活体真相。`anchor` 是 props 派生值，await 期间会变；
   // 闭包里那份只是**发起时**的快照，不能拿来判"现在还是不是它"（撤销执行前的复核靠它）。
@@ -294,14 +284,7 @@ export function useMatterConversation(
         {snapshotFailed ? (
           <p className="text-meta text-ink-fg-3">{t('matters.chat.chips.unavailable')}</p>
         ) : null}
-        {hasContextGap ? (
-          <MatterContextGapCard
-            disabled={discovery.isPending}
-            onExpand={() => discovery.mutate()}
-            suggestedCount={discovery.data?.items.length ?? null}
-            suppressedCount={discovery.data?.suppressed.length ?? 0}
-          />
-        ) : null}
+        {hasContextGap ? <MatterContextGapCard onAsk={askAgentForResources} /> : null}
       </div>
     ) : null
 

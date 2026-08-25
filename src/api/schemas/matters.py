@@ -7,9 +7,13 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.matters.models import (
+    MATTER_PROGRESS_BODY_MAX_CHARS,
+    MATTER_PROGRESS_MAX_REFS,
+    MATTER_PROGRESS_TITLE_MAX_CHARS,
     MATTER_RESOURCE_SUMMARY_MAX_CHARS,
     MATTER_STAKEHOLDER_REORDER_MAX,
     MATTER_SUGGESTION_BULK_MAX,
+    MatterProgressKind,
     MatterStakeholderTier,
     MatterSuggestionBulkAction,
 )
@@ -135,6 +139,40 @@ class MatterItemPatchRequest(StrictModel):
 class MatterNoteCreateRequest(StrictModel):
     title: str | None = Field(default=None, max_length=500)
     text: str | None = None
+    mutation: MutationEnvelope
+
+
+class MatterProgressCreateRequest(StrictModel):
+    """curated 进展条目的新增（task 08-25）。
+
+    🔴 值域与长度上限都从 `src/matters/models.py` 取，不在这里手抄第二份。
+    `actor_kind` / `source` 不在 schema 里 —— 服务端从 mutation 信封与调用者身份盖章，
+    调用方结构性不可伪造「这条是 Agent 写的」。
+    """
+
+    kind: MatterProgressKind
+    title: str = Field(min_length=1, max_length=MATTER_PROGRESS_TITLE_MAX_CHARS)
+    body: str | None = Field(default=None, max_length=MATTER_PROGRESS_BODY_MAX_CHARS)
+    #: 叙事时间，epoch **毫秒**（缺省 = 现在）。秒值服务端恒拒不换算（§2.2）。
+    happened_at: int | None = None
+    refs: list[dict[str, Any]] = Field(
+        default_factory=list, max_length=MATTER_PROGRESS_MAX_REFS
+    )
+    mutation: MutationEnvelope
+
+
+class MatterProgressPatchRequest(StrictModel):
+    """进展条目的编辑。`deleted_at` 有意不在写面上 —— 删除 / 恢复走各自的端点。"""
+
+    kind: MatterProgressKind | None = None
+    title: str | None = Field(
+        default=None, min_length=1, max_length=MATTER_PROGRESS_TITLE_MAX_CHARS
+    )
+    body: str | None = Field(default=None, max_length=MATTER_PROGRESS_BODY_MAX_CHARS)
+    happened_at: int | None = None
+    refs: list[dict[str, Any]] | None = Field(
+        default=None, max_length=MATTER_PROGRESS_MAX_REFS
+    )
     mutation: MutationEnvelope
 
 
@@ -311,15 +349,37 @@ class MatterProposalNewResource(StrictModel):
     diff: str | None = Field(default=None, max_length=MATTER_RESOURCE_SUMMARY_MAX_CHARS)
 
 
+class MatterProposalProgress(StrictModel):
+    """提案里**记一条进展**（task 08-25，`kind=progress` 的载荷）。
+
+    跟进 run 拿不到进展写工具（结构红线 §1），提案是它维护脉络的唯一通道，且只有「追加」
+    这一种形态 —— 更正既有条目要 owner 在场，走事项对话。
+
+    🔴 值域裁决全在服务端（`run_service._validate_changes` 剔一轮 +
+    `service._progress_insert_fields` backstop）；这里只做形状与长度。
+    """
+
+    kind: MatterProgressKind
+    title: str = Field(min_length=1, max_length=MATTER_PROGRESS_TITLE_MAX_CHARS)
+    body: str | None = Field(default=None, max_length=MATTER_PROGRESS_BODY_MAX_CHARS)
+    #: 叙事时间，epoch **毫秒**（缺省 = 接受的那一刻）。秒值在 propose 侧就被剔除。
+    happened_at: int | None = None
+    refs: list[dict[str, Any]] = Field(
+        default_factory=list, max_length=MATTER_PROGRESS_MAX_REFS
+    )
+
+
 class MatterProposalChange(StrictModel):
     """D6 Change 形状。🔴 matter_id/run_id/from|to_event_id/anchored_matter_version
     不在 schema 里 —— 全部服务端从 run 语境盖章，模型结构性不可传（extra=forbid）。"""
 
     id: str = Field(min_length=1, max_length=64)
-    kind: str = Field(pattern="^(fact|inference|field|action|resource)$")
+    kind: str = Field(pattern="^(fact|inference|field|action|resource|progress)$")
     target: dict[str, Any] | None = None
     #: ``kind=resource`` 的第二形态：新建一条资料关联（与 ``target.id`` 的"确认既有"互斥）。
     resource: MatterProposalNewResource | None = None
+    #: ``kind=progress`` 的载荷（task 08-25）。
+    progress: MatterProposalProgress | None = None
     operation: str | None = Field(default=None, pattern="^(add|replace|remove)$")
     before: Any = None
     after: Any = None

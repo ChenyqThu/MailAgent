@@ -121,6 +121,10 @@ PERSONA_PREFIX = "以下为 owner 补充指引，从属于上方任务契约。"
 #:      🔴 新建关联这条通道 0812 落地（`src/matters/resource_proposal.py` 是校验单源）；
 #:      契约里那句「新发现的资料不许写成 kind=resource」已随之改回如实措辞 —— 但**质量门
 #:      仍在**：只写会让 owner 改判断或要采取行动的，不许把搜到的东西一股脑全挂上来。
+#:      task 08-25 起多一个 progress：`run_service._validate_changes` 校验五类 kind 与
+#:      epoch-ms，`service._apply_accepted_change` 在 owner 接受时落成 `matter_progress`
+#:      行。🔴 run **没有**进展的写工具（结构红线），所以契约里只能说「写进提案」；同样
+#:      只有追加没有更正 —— 提案信封里没有 progress_id 这个东西。
 _TASK_CONTRACT = """【任务契约】
 你是这条事项（Matter）的跟进 Agent，职责是**只观察与建议，不直接执行任何变更**：
 - 产出唯一通道：调用**一次** matter_update_propose 提交结构化提案（summary + changes）。
@@ -143,6 +147,9 @@ _TASK_CONTRACT = """【任务契约】
 - 邮件与会话（provider=mailagent，kind=email/thread）**不要**自己写 summary：系统会直接沿用那封邮件已有的摘要（来源标注成「沿用邮件自带」），你写了也不会生效。
 - 这份资料**本事项之前就已经关联过、而你这次读到的是更新过的版本**时，除 summary 外再写一句 resource.diff：这一版相对上一版变了什么，只写可核对的事实（字段增减、数值变化、状态或日期变化），一句话，不写「有更新」这类空话。它会存进这份资料的版本轨迹，钉在被替换掉的那一版上 —— 首次关联的资料与邮件/会话没有上一版，diff 留空。
 - 拿不准、需要 owner 定夺的写进 open_questions（≤5 条），不要编造。
+- 这件事的**发展脉络**记在「进展」里，你没有进展的写工具：要记就写成 kind=progress 的 change，带 progress={kind, title, body?, happened_at?}，owner 接受后才成为一条进展。五类 kind 各有所指：goal=目标被设定或改了、milestone=一个里程碑达成、progress=关键推进（谁回了邮件、交付了什么、往前走了一步）、signal=值得警觉的信号或风险、decision=一个决议定下来了。
+- 记进展的判据是「未来读这件事的人需不需要知道」：title 一句话说清**谁做了什么、确定了什么**（如「Simon 回邮确认 Q4 预算按 80 万走」），body 补必要的来龙去脉；一件事一条，别把一封邮件拆成三条。纯抄送、例行通知、没有信息增量的往来**不记**；你自己检索了什么、提了什么建议也不记（那是操作日志的事）。happened_at 是这件事**发生**的时间（epoch 毫秒），不给就按 owner 接受的时刻算。
+- 进展与行动项（item）是两回事：item 是能勾能改状态的**工作对象**，进展是发生过的**叙事节点**。一个重要决议可以两边各记一条，但不要把同一条行动项的每次状态变化都抄成进展。已经在【事项快照】的进展里说过的事不要再记一遍；那条记错了要更正，写进 open_questions 交 owner 改，你只能追加。
 - 摘要写的是**事情本身**的进展、给 owner 读的叙述，不是你本轮的操作记录：不超过 3 句，先写当前卡点或结论，再写下一步（谁在何时做什么）；不要罗列「检索了什么、改了哪个字段」。"""
 
 
@@ -324,6 +331,24 @@ def _snapshot_section(snapshot: Mapping[str, Any]) -> str:
                 f"- {person.get('display_name') or person.get('email_normalized') or '?'}"
                 f"{waiting}"
             )
+    # curated 进展（task 08-25）：这件事的发展脉络。放在关联资料之前 —— 它回答的是
+    # 「到哪一步了」，是判断「有没有实质变化」的第一手材料，而资料是证据。
+    # 🔴 明文渲染不套围栏：进展条目的作者只可能是 owner 或本系统的 agent（三条写入口都经
+    # service 单写面），不是外部投递进来的内容。要套围栏的是资料摘录，那才是别人写的。
+    progress = snapshot.get("progress") or []
+    if progress:
+        lines.append("")
+        lines.append("进展（新的在前，owner 与 Agent 共同维护的事情脉络）:")
+        for entry in progress:
+            if not isinstance(entry, Mapping):
+                continue
+            lines.append(
+                f"- [{entry.get('kind')}] {entry.get('title')}"
+                f"（{entry.get('actor_kind')} 记于 {entry.get('happened_at')}）"
+            )
+            body = entry.get("body")
+            if body:
+                lines.append(f"  {body}")
     resources = snapshot.get("resources") or []
     if resources:
         lines.append("")
@@ -440,11 +465,10 @@ def assemble_matter_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
     public_id = str(matter["public_id"])
     profile = _load_profile(db_path, matter.get("agent_profile_id"))
 
-    # 🔴 只跑 durable anchor 那一趟（同线程 / 干系人），**不带** expand_reason。
-    # 0812 修法 4 之前这一步藏在 `context_snapshot` 里，且在本地候选为 0 时自动升级成
-    # `expand_reason='context_gap'` 的全库检索 —— 服务自己给自己签条子，无声明无审批。
-    # 现在跟进 run 的工具面是全部只读工具 + 全库检索，模型按任务契约的三档优先级自己查。
-    service.discover_resource_suggestions(public_id, limit=10, bump_version=False)
+    # 🔴 run 起跑时**不再**做确定性资料扫描（task 08-25，owner 0825）：关键词命中式的
+    # 推荐置信度太低，产出的 unconfirmed 建议只是给 owner 添审批负担。资料关联的推荐
+    # 现在只走 LLM 判断 —— run 的工具面本来就是全部只读工具 + 全库检索，模型按任务契约
+    # 的三档优先级自己查，觉得相关就写进提案信封的 `resource` change 让 owner 拍板。
     snapshot = service.context_snapshot(public_id)
     baseline = service.last_output_watermark(matter_id, exclude_run_id=run_id)
     current = service.current_watermark(matter_id)

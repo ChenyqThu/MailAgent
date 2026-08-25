@@ -95,7 +95,7 @@ import { MatterDetailSkeleton } from './MatterSkeleton'
 import { MatterTagChip } from './MatterTagMarker'
 import { MatterTagManagerModal } from './MatterTagManagerModal'
 import { MatterTagPicker } from './MatterTagPicker'
-import { MatterTimeline } from './MatterTimeline'
+import { MatterProgressLane } from './MatterProgressLane'
 import { MatterUpdateReview, type ReviewAcceptPayload } from './MatterUpdateReview'
 import { isMatterStaleError, refreshMatter, useMatterMutation } from './matterMutation'
 import { useMatterUndoToast } from './useMatterUndoToast'
@@ -296,7 +296,7 @@ export function MatterDetail({
 
   const detail = useQuery({
     queryKey: qk.matters.detail(matterId),
-    queryFn: () => api.get(matterId, ['items', 'timeline']),
+    queryFn: () => api.get(matterId, ['items', 'progress', 'timeline']),
     // 缓存配方同 useEmailListRows（速赢包 §2）: 详情三件套的实时性靠写侧
     // refreshMatter（invalidate detail 前缀）与 `matter.changed` SSE, 不靠 15s staleTime
     // —— 后者只会让「切走再回 / 在两条事项间来回点」每次都重拉。
@@ -313,6 +313,9 @@ export function MatterDetail({
   const matter = detail.data?.matter
   const chatOpen = Boolean(matter && assistantVisible && activeMatterChatId === matter.id)
   const items = detail.data?.items ?? []
+  // curated 进展（task 08-25）与全量事件是**两份**数据：前者是「事情的发展脉络」，
+  // 后者是操作日志。同一次 detail 请求取回，不各发一次。
+  const progress = detail.data?.progress ?? []
   const timeline = detail.data?.timeline ?? []
   // 这两条与 detail 同步换：只给 detail 加占位的话，切换瞬间会出现「标题还是上一条、上下文
   // 却空了」的混搭态（比整体停一拍更容易被读成数据丢了）。
@@ -1195,7 +1198,13 @@ export function MatterDetail({
                 onCancel={(runId) => cancelRun.mutate(runId)}
               />
             ) : (
-              <MatterTimeline events={timeline} />
+              <MatterProgressLane
+                matterId={matterId}
+                matterVersion={matter.version}
+                entries={progress}
+                events={timeline}
+                locale={i18n.language || 'zh-CN'}
+              />
             )}
           </div>
         </div>
@@ -1920,7 +1929,7 @@ function DueDateControl({
  * `[icon] LABEL ————————————— [right]`：标签在卡**外面**，一条发丝线把这一行填满。
  *
  * 🔴 不用仓库的 `SectionHeader`，也不上 `font-mono`：CI lint 规则 `no-cjk-in-mono-size`
- * 禁 CJK 走等宽（中文在 mono 下字距会散）。同 `MatterTimeline` 的处理。
+ * 禁 CJK 走等宽（中文在 mono 下字距会散）。同 `MatterProgressLane` 区头的处理。
  */
 function MatterSectionLabel({
   icon,

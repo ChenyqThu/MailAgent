@@ -12,7 +12,8 @@ from src.matters.events import (
     RESOURCE_UPDATED,
 )
 from src.matters.repository import MatterRepository
-from src.matters.service import MatterError, MatterService
+from src.matters.resource_identity import evidence_fingerprint, rejection_resource_key
+from src.matters.service import Actor, MatterService
 
 
 @pytest.fixture
@@ -54,7 +55,14 @@ def _insert_email(
         conn.commit()
 
 
-def test_rejection_suppresses_same_evidence_but_new_anchor_can_resuggest(env):
+def test_rejection_memory_keys_on_durable_anchors_and_moves_with_new_evidence(env):
+    """拒绝记忆的判据 = 「同 resource_key 且同 durable evidence 指纹」。
+
+    🔴 task 08-25：产建议的关键词扫描 (`discover_resource_suggestions`) 已退役，但**拒绝
+    记忆本身没动** —— 会议结束 → 出席者身份匹配的提案链还在用它。这里改用只读候选引擎
+    (`list_resource_candidates`，与当年产建议时是同一个 `_email_resource_candidates`) 取
+    evidence，钉的还是同一件事：拒了之后同证据不再来，锚点真变了才能再来。
+    """
     service, path = env
     _insert_email(
         path, 1, thread_id="delivery-thread", subject="Delivery baseline",
@@ -76,37 +84,55 @@ def test_rejection_suppresses_same_evidence_but_new_anchor_can_resuggest(env):
         **_mutation(created["version"], "link-anchor"),
     )
 
-    discovered = service.discover_resource_suggestions(public_id)
-    suggestion = next(
-        item for item in discovered["items"]
-        if item["resource"]["external_key"] == "email:2"
+    def candidate_fingerprint() -> str:
+        candidate = next(
+            item
+            for item in service.list_resource_candidates(public_id)["items"]
+            if item["external_key"] == "email:2"
+        )
+        return evidence_fingerprint(
+            rejection_resource_key("mailagent", "email", "email:2"),
+            candidate["evidence"],
+        )
+
+    before = candidate_fingerprint()
+    suggested = service.add_resource(
+        public_id,
+        {
+            "provider": "mailagent",
+            "kind": "email",
+            "external_key": "email:2",
+            "provenance": {"evidence_fingerprint": before},
+        },
+        actor=Actor(kind="agent"),
+        **_mutation(linked["version"], "suggest-email-2"),
     )
-    assert suggestion["link"]["confirmed_at"] is None
-    assert suggestion["link"]["added_by_kind"] == "agent"
+    assert suggested["resources"][0]["link"]["confirmed_at"] is None
+    assert suggested["resources"][0]["link"]["added_by_kind"] == "agent"
 
     rejected = service.reject_resource_suggestion(
         public_id,
-        suggestion["resource"]["id"],
+        suggested["resources"][0]["resource"]["id"],
         reason="not relevant yet",
-        **_mutation(linked["version"] + 1, "reject-suggestion"),
+        **_mutation(suggested["version"], "reject-suggestion"),
     )
-    repeated = service.discover_resource_suggestions(public_id)
-    assert repeated["items"] == []
-    assert repeated["suppressed"] == [
-        {"external_key": "email:2", "reason": "rejected_same_evidence"}
-    ]
+    with service.repository.connect() as conn:
+        remembered = service.repository.get_resource_rejection(
+            conn,
+            service.get_matter(public_id)["matter"]["id"],
+            rejection_resource_key("mailagent", "email", "email:2"),
+        )
+    assert remembered["evidence_fingerprint"] == before
 
-    stakeholder = service.create_stakeholder(
+    # 加一个真锚点（这封邮件的发件人成了干系人）→ durable evidence 变了 ⇒ 指纹变了 ⇒
+    # 同一封邮件可以重新被提出来。这正是「实质新证据」的定义。
+    service.create_stakeholder(
         public_id,
         {"email": "new-owner@example.com", "display_name": "New Owner"},
         **_mutation(rejected["version"], "add-new-evidence"),
     )
-    rediscovered = service.discover_resource_suggestions(public_id)
-    assert [item["resource"]["external_key"] for item in rediscovered["items"]] == [
-        "email:2"
-    ]
-    assert rediscovered["items"][0]["link"]["confirmed_at"] is None
-    assert stakeholder["version"] + 1 == service.get_matter(public_id)["matter"]["version"]
+    assert candidate_fingerprint() != before
+
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM matter_relation").fetchone()[0] == 0
         assert conn.execute(
@@ -114,7 +140,12 @@ def test_rejection_suppresses_same_evidence_but_new_anchor_can_resuggest(env):
         ).fetchone()[0] == RESOURCE_SUGGESTION_REJECTED
 
 
-def test_keyword_only_discovery_requires_justified_expansion(env):
+def test_readonly_candidates_never_recall_on_keywords_alone(env):
+    """只读候选恒是 `local` 档：没有 thread / 干系人硬锚的邮件一条都不进。
+
+    🔴 task 08-25 起这是候选引擎**唯一**的调用面 —— `query` / `expand_reason` 那条关键词
+    外扩通道随 `discover_resource_suggestions` 一起没了消费者（见文件头）。
+    """
     service, path = env
     _insert_email(
         path, 10, thread_id="outside", subject="Project Apollo verification",
@@ -124,20 +155,7 @@ def test_keyword_only_discovery_requires_justified_expansion(env):
         {"title": "Project Apollo"}, idempotency_key="create", source="desktop_ui"
     )
     public_id = created["matter"]["public_id"]
-    assert service.discover_resource_suggestions(public_id)["items"] == []
-    with pytest.raises(MatterError) as exc_info:
-        service.discover_resource_suggestions(
-            public_id, expand_reason="verification"
-        )
-    assert exc_info.value.code == "E_INVALID_ARG"
-    expanded = service.discover_resource_suggestions(
-        public_id,
-        query="Apollo evidence",
-        expand_reason="verification",
-    )
-    assert expanded["expanded"] is True
-    assert expanded["items"][0]["resource"]["external_key"] == "email:10"
-    assert expanded["items"][0]["link"]["confirmed_at"] is None
+    assert service.list_resource_candidates(public_id)["items"] == []
 
 
 def test_suggestion_acceptance_rate_uses_dedicated_event_kinds(env):
@@ -163,24 +181,31 @@ def test_suggestion_acceptance_rate_uses_dedicated_event_kinds(env):
         {"provider": "mailagent", "kind": "email", "external_key": "email:30"},
         **_mutation(created["version"], "link-rate-anchor"),
     )
-    discovered = service.discover_resource_suggestions(public_id)
-    suggestions = {
-        item["resource"]["external_key"]: item for item in discovered["items"]
-    }
+    version = linked["version"]
+    suggestions = {}
+    for external_key in ("email:31", "email:32"):
+        added = service.add_resource(
+            public_id,
+            {"provider": "mailagent", "kind": "email", "external_key": external_key},
+            actor=Actor(kind="agent"),
+            **_mutation(version, f"suggest-{external_key}"),
+        )
+        version = added["version"]
+        suggestions[external_key] = added["resources"][0]
 
     accepted = service.patch_resource(
         public_id,
         suggestions["email:31"]["resource"]["id"],
         {"confirmed": True},
         reason="arbitrary reason text",
-        **_mutation(linked["version"] + 1, "accept-rate-suggestion"),
+        **_mutation(version, "accept-rate-suggestion"),
     )
     replayed = service.patch_resource(
         public_id,
         suggestions["email:31"]["resource"]["id"],
         {"confirmed": True},
         reason="arbitrary reason text",
-        **_mutation(linked["version"] + 1, "accept-rate-suggestion"),
+        **_mutation(version, "accept-rate-suggestion"),
     )
     assert replayed["event_ids"] == accepted["event_ids"]
     rejected = service.reject_resource_suggestion(
@@ -212,45 +237,6 @@ def test_suggestion_acceptance_rate_uses_dedicated_event_kinds(env):
         assert conn.execute(
             "SELECT kind FROM matter_event WHERE dedupe_key='patch-already-confirmed'"
         ).fetchone()[0] == RESOURCE_UPDATED
-
-
-def test_run_context_prepares_unconfirmed_matter_first_suggestions_without_version_bump(env):
-    """跟进 run 的本地那一趟：durable anchor 建议入库，但不推事项版本号。
-
-    🔴 0812 修法 4 起这一趟由调用方（``run_spec.assemble_matter_spec``）显式发起 ——
-    ``context_snapshot`` 本身一行都不写库，见下面那条只读断言。
-    """
-    service, path = env
-    _insert_email(
-        path, 20, thread_id="run-thread", subject="Run baseline",
-        sender="lead@example.com",
-    )
-    _insert_email(
-        path, 21, thread_id="run-thread", subject="Run follow-up",
-        sender="lead@example.com", snippet="new run evidence",
-    )
-    created = service.create_matter(
-        {"title": "Run follow-up"}, idempotency_key="create", source="desktop_ui"
-    )
-    public_id = created["matter"]["public_id"]
-    linked = service.add_resource(
-        public_id,
-        {"provider": "mailagent", "kind": "email", "external_key": "email:20"},
-        **_mutation(created["version"], "link-run-anchor"),
-    )
-    service.discover_resource_suggestions(public_id, limit=10, bump_version=False)
-    snapshot = service.context_snapshot(public_id)
-    assert "email:21" in {
-        resource["external_key"] for resource in snapshot["resources"]
-    }
-    after = service.get_matter(public_id)["matter"]
-    assert after["version"] == linked["version"]
-    suggestion = next(
-        item for item in service.list_resources(public_id)
-        if item["resource"]["external_key"] == "email:21"
-    )
-    assert suggestion["link"]["confirmed_at"] is None
-    assert suggestion["link"]["added_by_kind"] == "agent"
 
 
 def test_context_snapshot_never_writes_and_never_self_signs_a_context_gap(env):

@@ -208,6 +208,7 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
       'matter_stakeholder_mutate',
       'matter_relation_mutate',
       'matter_add_note',
+      'matter_progress_mutate',
       // P4 (D8) — the review-side pair.
       'matter_run_control',
       'matter_review_update',

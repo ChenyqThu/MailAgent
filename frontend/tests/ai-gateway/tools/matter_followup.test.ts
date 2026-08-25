@@ -11,17 +11,18 @@
 
 import { describe, expect, test } from 'vitest'
 import type { Tool } from 'ai'
+import { z } from 'zod'
 
 import { buildGatewayTools } from '../../../src/ai-gateway/tools'
 import {
   createMatterReadTools,
   createMatterRunTools,
-  createMatterSuggestionTools,
   createMatterWriteTools
 } from '../../../src/ai-gateway/tools/matters'
 import { createEmailReadTools } from '../../../src/ai-gateway/tools/email'
 import {
   matterGetSchema,
+  matterProgressMutateSchema,
   matterReviewUpdateSchema,
   matterRunControlSchema,
   matterUpdateProposeSchema
@@ -94,79 +95,121 @@ describe('matter_update_propose — registration is anchored to a run (D6)', () 
   })
 })
 
-describe('matter_suggest_related_resources — manual-only dynamic approval', () => {
-  test('registers only for manual chat', () => {
+describe('matter_progress_mutate — curated 进展 lane 的写面 (task 08-25)', () => {
+  test('owner-present venues hold it; a follow-up run structurally cannot write progress', () => {
     const build = (contextMode: AgentContextMode) =>
       buildGatewayTools({
-        domain: mockDomain(() => okEnvelope({ items: [] })),
+        domain: mockDomain(() => okEnvelope({})),
         approvalGuard: new ApprovalGuard(),
         contextMode
       })
 
-    expect(build('manual_chat').matter_suggest_related_resources).toBeDefined()
-    expect(build('im_chat').matter_suggest_related_resources).toBeUndefined()
-    expect(build('untrusted_trigger').matter_suggest_related_resources).toBeUndefined()
-    expect(build('cron_headless').matter_suggest_related_resources).toBeUndefined()
-    expect(build('matter_followup').matter_suggest_related_resources).toBeUndefined()
+    expect(build('manual_chat').matter_progress_mutate).toBeDefined()
+    expect(build('im_chat').matter_progress_mutate).toBeDefined()
+    // 🔴 结构红线：跟进 run 对进展的维护**只有提案**这一条通道。class domain_write ⇒
+    // matter_followup 矩阵行整类拒绝 ⇒ 这里必须是 undefined，哪怕带着 Matter 锚。
+    // （untrusted_trigger / cron_headless 走的是另一条腰带 —— headless_excluded ⇒ 不进
+    //  HEADLESS_TOOL_OPTIONS ⇒ 不进 allowedTools，由 tool_catalog 那侧的闸钉住。）
+    expect(buildRunTools().matter_progress_mutate).toBeUndefined()
   })
 
-  test('Matter-scoped search is silent and posts the exact discover wire shape', async () => {
-    const { domain, calls } = recordingDomain({
-      items: [{ resource: { kind: 'email', external_key: 'email:31' } }],
-      suppressed: [],
-      local_candidate_count: 1,
-      expanded: false
-    })
-    const tool = createMatterSuggestionTools(domain, [], new ApprovalGuard(), {
+  test('create posts the entry; the other three address one row by id', async () => {
+    const { domain, calls } = recordingDomain({ version: 3 })
+    const tools = createMatterWriteTools(domain, [], new ApprovalGuard(), {
       contextMode: 'manual_chat'
-    }).matter_suggest_related_resources
-    const input = { matter_id: 'MAT-000042', kinds: ['email'], query: 'launch', limit: 7 }
-    const needsApproval = tool.needsApproval as (
-      value: unknown,
-      options: { toolCallId: string; messages: unknown[] }
-    ) => boolean | Promise<boolean>
-
-    expect(await needsApproval(input, { toolCallId: 'tc-local', messages: [] })).toBe(false)
-    await (tool.execute as (value: unknown, options: unknown) => Promise<unknown>)(input, {
-      toolCallId: 'tc-local',
-      messages: [],
-      abortSignal: undefined
     })
-    expect(calls).toEqual([
+    await approveAndRun(
+      tools.matter_progress_mutate,
       {
-        url: 'http://127.0.0.1:8200/api/matters/MAT-000042/resource-suggestions/discover',
-        body: {
-          query: 'launch',
-          limit: 7,
-          kinds: ['email']
-        }
-      }
+        public_id: 'MAT-000042',
+        operation: 'create',
+        progress: {
+          kind: 'decision',
+          title: 'Simon 回邮确认 Q4 预算按 80 万走',
+          happened_at: 1_786_690_800_000,
+          refs: [{ type: 'email', message_id: '<a@b>' }]
+        },
+        expected_version: 2,
+        idempotency_key: 'k-create'
+      },
+      'tc-create'
+    )
+    await approveAndRun(
+      tools.matter_progress_mutate,
+      {
+        public_id: 'MAT-000042',
+        operation: 'update',
+        progress_id: 9,
+        patch: { title: '按 82 万走' },
+        expected_version: 3,
+        idempotency_key: 'k-update'
+      },
+      'tc-update'
+    )
+    await approveAndRun(
+      tools.matter_progress_mutate,
+      {
+        public_id: 'MAT-000042',
+        operation: 'delete',
+        progress_id: 9,
+        expected_version: 4,
+        idempotency_key: 'k-delete'
+      },
+      'tc-delete'
+    )
+    await approveAndRun(
+      tools.matter_progress_mutate,
+      {
+        public_id: 'MAT-000042',
+        operation: 'restore',
+        progress_id: 9,
+        expected_version: 5,
+        idempotency_key: 'k-restore'
+      },
+      'tc-restore'
+    )
+
+    expect(calls.map((call) => call.url)).toEqual([
+      'http://127.0.0.1:8200/api/matters/MAT-000042/progress',
+      'http://127.0.0.1:8200/api/matters/MAT-000042/progress/9',
+      'http://127.0.0.1:8200/api/matters/MAT-000042/progress/9',
+      'http://127.0.0.1:8200/api/matters/MAT-000042/progress/9/restore'
     ])
+    expect(calls[0].body).toMatchObject({
+      kind: 'decision',
+      title: 'Simon 回邮确认 Q4 预算按 80 万走',
+      happened_at: 1_786_690_800_000,
+      refs: [{ type: 'email', message_id: '<a@b>' }],
+      mutation: { source: 'ai_gateway', expected_version: 2, idempotency_key: 'k-create' }
+    })
+    // update 的 patch 直接铺开在 body 上（items 端点同形），delete/restore 只带 mutation。
+    expect(calls[1].body).toMatchObject({ title: '按 82 万走' })
+    expect(Object.keys(calls[2].body as object)).toEqual(['mutation'])
   })
 
-  test('whole-library expansion always asks, including bypass mode', async () => {
-    const tool = createMatterSuggestionTools(
-      mockDomain(() => okEnvelope({ items: [] })),
-      [],
-      new ApprovalGuard(),
-      { contextMode: 'manual_chat', approvalMode: 'bypass' }
-    ).matter_suggest_related_resources
-    const needsApproval = tool.needsApproval as (
-      value: unknown,
-      options: { toolCallId: string; messages: unknown[] }
-    ) => boolean | Promise<boolean>
-
+  test('the schema keeps operation-conditional shape out of the model-facing JSON Schema', () => {
+    // 🔴 两连败教训：分支约束（oneOf / not{required} / 条件必填）一旦进模型看到的 schema，
+    // 模型漂移就会整轮打空。条件必填留在 superRefine（运行时，不进 JSON Schema）与 Python
+    // （权威），模型看到的是一份扁平可选的 schema。
+    // （`anyOf` 有意不在断言里：`body` 是 string|null 这种**类型**联合，不是分支约束。）
+    const schema = z.toJSONSchema(matterProgressMutateSchema) as {
+      required?: string[]
+      properties?: Record<string, unknown>
+    }
+    const json = JSON.stringify(schema)
+    expect(json).not.toContain('oneOf')
+    expect(json).not.toContain('"not"')
+    expect(schema.required).toEqual(['public_id', 'operation', 'expected_version'])
+    // 扁平可选的另一半：五类 kind 仍然以 enum 的形式摆在模型面前。
+    expect(json).toContain('"decision"')
+    // 而写错 operation 的调用在运行时仍然被挡下（不是「不校验」）。
     expect(
-      await needsApproval(
-        {
-          matter_id: 'MAT-000042',
-          query: 'outside evidence',
-          expand_reason: 'verification',
-          limit: 10
-        },
-        { toolCallId: 'tc-expanded', messages: [] }
-      )
-    ).toBe(true)
+      matterProgressMutateSchema.safeParse({
+        public_id: 'MAT-000042',
+        operation: 'update',
+        expected_version: 1
+      }).success
+    ).toBe(false)
   })
 })
 

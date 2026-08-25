@@ -33,6 +33,7 @@ ENUMS = (
     models.MatterActorKind,
     models.MatterResourceSummarySource,
     models.MatterStakeholderTier,
+    models.MatterProgressKind,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -49,6 +50,9 @@ TS_ARRAYS = {
     "MATTER_STAKEHOLDER_TIERS": models.MATTER_STAKEHOLDER_TIERS,
     "MATTER_ITEM_KINDS": models.MATTER_ITEM_KINDS,
     "MATTER_ITEM_STATUSES": models.MATTER_ITEM_STATUSES,
+    # curated 进展的五类（task 08-25）。🔴 图标 / tone 是**表现层词汇，只活在 TS**
+    # （`components/matters/matterProgressVocab.ts`），这条闸只锁值域与顺序。
+    "MATTER_PROGRESS_KINDS": models.MATTER_PROGRESS_KINDS,
     "MATTER_RESOURCE_KINDS": models.MATTER_RESOURCE_KINDS,
     "MATTER_RELATION_TYPES": models.MATTER_RELATION_TYPES,
     "MATTER_ATTENTION_KINDS": models.MATTER_ATTENTION_KINDS,
@@ -175,7 +179,10 @@ def test_migration_ddl_uses_canonical_sql_check_helper():
 
 
 def test_python_values_equal_sql_check_value_sets():
-    ddl = "\n".join(sync_store.MATTER_TABLE_DDLS)
+    # 🔴 `matter_progress` 的 DDL **有意**独立成组（v52 教训：新表/新索引混进被老版本整组
+    # 重放的 MATTER_TABLE_DDLS = 给每个中间版本各加一个炸点）。闸要覆盖它，就得把两组都拼上，
+    # 否则 `MatterProgressKind` 的 CHECK 漂了这里照样绿。
+    ddl = "\n".join((*sync_store.MATTER_TABLE_DDLS, *sync_store.MATTER_PROGRESS_TABLE_DDLS))
     for enum_type in ENUMS:
         values = tuple(member.value for member in enum_type)
         clause = models.sql_check_clause(enum_type)
@@ -421,6 +428,57 @@ def test_gateway_matter_get_include_enum_covers_every_branch_the_service_serves(
         f"matter_get include 值域漂移：TS 多 {sorted(exposed - served)} / "
         f"TS 缺 {sorted(served - exposed)}"
     )
+
+
+def test_gateway_progress_schema_imports_the_single_ts_kind_mirror():
+    """curated 进展词表在 TS 侧**只许一份镜像**（`shared/api/types/matter.ts`，闸在 TS_ARRAYS）。
+
+    gateway schema 曾短暂自带第二份手抄 —— 收敛为 import 复用后，这里防它被抄回来：
+    schemas.ts 里再出现 `MATTER_PROGRESS_KINDS = [` 的定义体就红。
+    """
+    schemas_source = GATEWAY_SCHEMAS_TS.read_text(encoding="utf-8")
+    assert re.search(r"const\s+MATTER_PROGRESS_KINDS\s*=\s*\[", schemas_source) is None, (
+        "gateway schemas.ts 又长出第二份进展 kind 词表 —— 从 shared/api/types/matter import"
+    )
+    assert "MATTER_PROGRESS_KINDS" in schemas_source, (
+        "gateway schemas.ts 不再引用进展 kind 词表 —— 工具 schema 的 enum 丢了"
+    )
+
+
+#: gateway schemas.ts 里带进展上限的两个块：工具 schema 的字段组、提案信封的 progress 载荷。
+#: 两块都要用常量当 zod max —— 只查「文件里出现过一次」会让**其中一块**退回字面量时照样绿
+#: （部分抽取比抽不到更毒）。
+_PROGRESS_SCHEMA_BLOCKS = (
+    r"const matterProgressFields = \{.*?\n\}",
+    r"const matterProposalProgressSchema = z\n.*?\n  \.strict\(\)",
+)
+
+
+def test_progress_caps_are_one_number_on_all_three_sides():
+    """进展 title/body/refs 上限：Python 拒绝门、TS 常量、gateway zod max 必须是同一个数。"""
+    ts_source = MATTER_TS.read_text(encoding="utf-8")
+    schemas_source = GATEWAY_SCHEMAS_TS.read_text(encoding="utf-8")
+    for name, py_value in (
+        ("MATTER_PROGRESS_TITLE_MAX_CHARS", models.MATTER_PROGRESS_TITLE_MAX_CHARS),
+        ("MATTER_PROGRESS_BODY_MAX_CHARS", models.MATTER_PROGRESS_BODY_MAX_CHARS),
+        ("MATTER_PROGRESS_MAX_REFS", models.MATTER_PROGRESS_MAX_REFS),
+    ):
+        match = re.search(rf"export\s+const\s+{name}\s*=\s*(\d+)", ts_source)
+        assert match is not None, f"{MATTER_TS}: 找不到 {name}"
+        assert int(match.group(1)) == py_value, (
+            f"进展上限漂移: {name} TS={match.group(1)} Python={py_value}"
+        )
+        assert f"max({name})" in schemas_source, (
+            f"gateway zod 没用 {name} 常量当 max —— 字面量手抄是第三份契约"
+        )
+    for pattern in _PROGRESS_SCHEMA_BLOCKS:
+        block = re.search(pattern, schemas_source, re.DOTALL)
+        assert block is not None, f"schemas.ts 抽不到进展 schema 块（{pattern}）—— 更新本闸"
+        literal = re.search(r"\.max\(\s*\d", block.group(0))
+        assert literal is None, (
+            f"进展 schema 块里出现字面量 max（{literal.group(0) if literal else ''}）—— "
+            "上限只许写常量，字面量是第三份契约"
+        )
 
 
 def test_chat_config_keeps_legacy_matters_projection_always_true():

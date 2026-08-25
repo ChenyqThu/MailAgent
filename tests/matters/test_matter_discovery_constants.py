@@ -1,19 +1,23 @@
 """资料发现的**数值契约**闸（0812 codex review + 内部审计各点名一次）。
 
-背景：`src/matters/service.py` 的召回/评分是一串手调常量（DF 分档比例、词权重、准入线、
-各项分数上限、扫描窗口、积压上限）。实测把 `RESOURCE_KEYWORD_RECALL_MIN_WEIGHT` 从 3 改成
-1，整个 matters 测试套仍然全绿 —— 也就是说这些数字**一个都没有被钉住**。本批 `service.py`
+背景：`src/matters/service.py` 的候选/评分是一串手调常量（DF 分档比例、各项分数上限、
+扫描窗口、积压上限）。实测把当年的 `RESOURCE_KEYWORD_RECALL_MIN_WEIGHT` 从 3 改成 1，
+整个 matters 测试套仍然全绿 —— 也就是说这些数字**一个都没有被钉住**。本批 `service.py`
 还被清零重建过：如果重放时损坏的是一个数字，测试同样抓不到。
 
 所以这里是表驱动的**数值**闸，判据不是"行为大致对"而是"数就是这个数"：
   · 档位边界（500 文档语料下 common 从第 25 篇起算）；
-  · 权重表与准入线（rare+normal 恰好过线、两个 normal 恰好不过、虚词任意多恒 0）；
-  · 分数常量（干系人单命中恰好 0.25 = 准入线；关键词封顶 0.40；加分封顶 0.06）；
+  · 分数常量（干系人单命中恰好 0.25 = 准入线；加分封顶 0.06）；
   · 扫描窗口 500 / 积压上限 10。
 
-🔴 除纯函数那两组外，分数一律**走真实评分链路**（`discover_resource_suggestions` 返回的
-`confidence` = `round(min(score, 0.98), 3)`），不在测试里复刻公式 —— 复刻公式的"闸"只会
-和实现一起漂。
+🔴 除纯函数那两组外，分数一律**走真实评分链路**（候选引擎返回的 `confidence` =
+`round(min(score, 0.98), 3)`），不在测试里复刻公式 —— 复刻公式的"闸"只会和实现一起漂。
+
+⚠️ task 08-25（owner 0825「置信度非常低，反而徒增烦恼」）：关键词命中式的资料推荐整条
+退役，候选引擎只剩只读候选（`list_resource_candidates`）这一个调用面 —— 入选判据只有
+durable 硬锚（同线程 / 干系人），词表分档只剩「加不加分」这一个作用。原先钉「rare+normal
+恰好过线 / 关键词封顶 0.40」的两组端到端用例、以及权重表与准入权重两个常量的数值断言，
+随那两个常量一起删除。外扩若复活，从 git 历史（本批之前的这个文件）把它们捞回来。
 """
 
 from __future__ import annotations
@@ -26,9 +30,7 @@ from src.mail.sync_store import SyncStore
 from src.matters.repository import MatterRepository
 from src.matters.service import (
     RESOURCE_DISCOVERY_SCAN_LIMIT,
-    RESOURCE_KEYWORD_RECALL_MIN_WEIGHT,
     RESOURCE_SUGGESTION_BACKLOG_CAP,
-    RESOURCE_TERM_WEIGHTS,
     MatterService,
 )
 
@@ -73,17 +75,6 @@ def test_term_tier_boundaries_at_500_docs(term, df_count, expected):
 )
 def test_term_tier_min_docs_floor_protects_small_corpora(df_count, expected):
     assert MatterService._term_tier("probetok", df_count, 10) == expected
-
-
-def test_term_weight_table_and_admission_line():
-    """权重表逐值 + 准入线 —— 「一个低频词顶两个普通词」那句话的数值形态。"""
-    assert RESOURCE_TERM_WEIGHTS == {
-        "distinctive": 3,
-        "rare": 2,
-        "normal": 1,
-        "common": 0,
-    }
-    assert RESOURCE_KEYWORD_RECALL_MIN_WEIGHT == 3
 
 
 def test_scan_window_and_backlog_cap():
@@ -169,73 +160,22 @@ def _matter(service, *, background: str = "") -> str:
     return created["matter"]["public_id"]
 
 
-def _recall(service, public_id, query):
-    result = service.discover_resource_suggestions(
-        public_id, query=query, expand_reason="verification", limit=10
-    )
-    return {
-        item["resource"]["external_key"]: item["confidence"] for item in result["items"]
-    }
-
-
-@pytest.mark.parametrize(
-    ("query", "admitted", "why"),
-    [
-        # rare(2) + normal(1) == 3 == 准入线 → 过。
-        ("raretok normaltok", True, "rare+normal 恰好过线"),
-        # normal(1) + normal(1) == 2 → 不过。
-        ("normaltok normalalt", False, "两个 normal 差一分"),
-        # distinctive(3) 单命中 → 过（项目代号一个就该关联上）。
-        ("distincttok", True, "专有名词单命中"),
-        # rare(2) 单命中 → 不过。
-        ("raretok", False, "单个低频词不够"),
-        # 🔴 中文二元组单命中最多 rare(2) → 不过；两个凑 4 → 过。
-        ("甲乙", False, "中文二元组单命中最多 2 分"),
-        ("甲乙丙丁", True, "两个中文二元组凑够 4 分"),
-        # 虚词任意多恒 0 分。
-        ("commonone", False, "1 个虚词"),
-        ("commonone commontwo", False, "2 个虚词"),
-        ("commonone commontwo commonthree", False, "3 个虚词"),
-        # 虚词堆再多也托不动一个 normal（0×3 + 1 = 1）。
-        ("commonone commontwo commonthree normaltok", False, "虚词托不动 normal"),
-    ],
-)
-def test_recall_admission_is_driven_by_the_weight_table(corpus, query, admitted, why):
-    service, _ = corpus
-    hits = _recall(service, _matter(service), query)
-    assert (f"email:{TARGET_ID}" in hits) is admitted, why
-
-
-@pytest.mark.parametrize(
-    ("query", "expected_confidence", "why"),
-    [
-        # 单个 distinctive：0.10 × 3 = 0.30（无 thread / 无干系人 / 无 boost）。
-        ("distincttok", 0.3, "关键词分 = 0.10 × 权重"),
-        # 权重 3+2+1+1 = 7 → 0.70，被 0.40 顶住。
-        ("distincttok raretok normaltok normalalt", 0.4, "关键词封顶 0.40"),
-    ],
-)
-def test_keyword_score_multiplier_and_cap(corpus, query, expected_confidence, why):
-    service, _ = corpus
-    hits = _recall(service, _matter(service), query)
-    assert hits[f"email:{TARGET_ID}"] == expected_confidence, why
-
-
-@pytest.mark.parametrize(
-    ("background", "expected_confidence", "why"),
-    [
-        # 1 个加分词：0.30 + 0.02 × 1。
-        ("boostone", 0.32, "加分 = 0.02 × 非虚词命中数"),
-        # 4 个加分词：0.30 + min(0.06, 0.08) —— 封顶。
-        ("boostone boosttwo boostthree boostfour", 0.36, "加分封顶 0.06"),
-    ],
-)
-def test_boost_score_multiplier_and_cap(corpus, background, expected_confidence, why):
-    """boost 词来自**事项文档**，只加分、永远不能自己把一封邮件拉进来（召回仍靠 query）。"""
-    service, _ = corpus
+def _anchored(service, *, background: str = "") -> str:
+    """建事项 + 把目标邮件的收件人立成干系人（唯一的 durable 硬锚）。"""
     public_id = _matter(service, background=background)
-    hits = _recall(service, public_id, "distincttok")
-    assert hits[f"email:{TARGET_ID}"] == expected_confidence, why
+    service.create_stakeholder(
+        public_id,
+        {"email": STAKEHOLDER_EMAIL},
+        expected_version=service.get_matter(public_id)["matter"]["version"],
+        idempotency_key="add-stakeholder",
+        source="desktop_ui",
+    )
+    return public_id
+
+
+def _candidates(service, public_id) -> dict[str, float]:
+    result = service.list_resource_candidates(public_id)
+    return {item["external_key"]: item["confidence"] for item in result["items"]}
 
 
 def test_single_stakeholder_hit_lands_exactly_on_the_admission_line(corpus):
@@ -245,19 +185,29 @@ def test_single_stakeholder_hit_lands_exactly_on_the_admission_line(corpus):
     不许再靠虚词堆出来的关键词分托过线。任何一侧动一点点，这封就整个消失。
     """
     service, _ = corpus
-    public_id = _matter(service)
-    version = service.get_matter(public_id)["matter"]["version"]
-    service.create_stakeholder(
-        public_id,
-        {"email": STAKEHOLDER_EMAIL},
-        expected_version=version,
-        idempotency_key="add-stakeholder",
-        source="desktop_ui",
-    )
+    assert _candidates(service, _anchored(service)) == {f"email:{TARGET_ID}": 0.25}
 
-    # 本地那一趟（无 query）：唯一证据就是这个干系人。
-    result = service.discover_resource_suggestions(public_id)
-    hits = {
-        item["resource"]["external_key"]: item["confidence"] for item in result["items"]
-    }
-    assert hits == {f"email:{TARGET_ID}": 0.25}
+
+@pytest.mark.parametrize(
+    ("background", "expected_confidence", "why"),
+    [
+        # 干系人硬锚 0.25，1 个加分词：+0.02 × 1。
+        ("boostone", 0.27, "加分 = 0.02 × 非虚词命中数"),
+        # 4 个加分词：0.25 + min(0.06, 0.08) —— 封顶。
+        ("boostone boosttwo boostthree boostfour", 0.31, "加分封顶 0.06"),
+        # 🔴 虚词**恒不计分**：三个 common 词一分都加不上，分数与零加分词时一模一样。
+        ("commonone commontwo commonthree", 0.25, "虚词一分不加"),
+    ],
+)
+def test_boost_score_multiplier_and_cap(corpus, background, expected_confidence, why):
+    """boost 词来自**事项文档**，只加分、永远不能自己把一封邮件拉进来（召回靠 durable 锚）。"""
+    service, _ = corpus
+    hits = _candidates(service, _anchored(service, background=background))
+    assert hits[f"email:{TARGET_ID}"] == expected_confidence, why
+
+
+def test_matter_prose_alone_cannot_admit_an_email(corpus):
+    """没有 durable 锚时，事项文档里把探针词写全也召不回任何东西（`local` 档硬要求）。"""
+    service, _ = corpus
+    public_id = _matter(service, background=TARGET_SUBJECT)
+    assert _candidates(service, public_id) == {}

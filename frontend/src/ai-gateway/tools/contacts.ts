@@ -25,8 +25,9 @@
 //    thing they are about to be asked to review. It is ALSO what makes the governance venue
 //    possible: `contact_governance` denies every write-capable class, and these three are the one
 //    channel it may hold (policy.ts CONTACT_PROPOSE_TOOLS, admitted BY NAME).
-//    ⚠️ Do NOT copy `matter_suggest_related_resources` here (auditedWriteTool + risk:'edit' but
-//    catalog write:false) — that shape trips eval R5 and has no per-tool approval row.
+//    ⚠️ Never build a proposal channel as `auditedWriteTool` + `risk:'edit'` while its catalog row
+//    says write:false — that mismatched shape trips eval R5 and has no per-tool approval row.
+//    (The one tool that ever had it, matter_suggest_related_resources, retired on 2026-08-25.)
 //
 // 🔴 Untrusted fencing (安全红线): everything in a contact PROFILE is LLM prose distilled from
 //    externally-authored mail bodies (a second-order injection surface — the profile agent read

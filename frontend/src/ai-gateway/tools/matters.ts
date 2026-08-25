@@ -1,5 +1,4 @@
 import type { Tool } from 'ai'
-import { z } from 'zod'
 
 import type {
   DomainMatterMutation,
@@ -18,6 +17,7 @@ import {
   matterFollowupMutateSchema,
   matterGetSchema,
   matterItemMutateSchema,
+  matterProgressMutateSchema,
   matterRelationMutateSchema,
   matterResourceMutateSchema,
   matterReviewUpdateSchema,
@@ -48,11 +48,15 @@ export const GATEWAY_MATTER_READ_TOOL_NAMES = [
   'matter_runs_list',
   'matter_tags_list'
 ] as const
-export const GATEWAY_MATTER_SUGGESTION_TOOL_NAMES = ['matter_suggest_related_resources'] as const
+// task 08-25（owner 0825「置信度非常低，反而徒增烦恼」）—— `matter_suggest_related_resources`
+// 已退役：关键词命中式的资料推荐整条不要了。资料关联的推荐现在只有 LLM 判断那两条路 ——
+// 跟进 run 提案信封里的 `resource` change，与这里 agent 自己检索后 matter_resource_mutate。
+// owner 手动挑的只读候选弹窗（`GET /matters/{id}/resource-candidates`）不经工具面，不受影响。
 export const GATEWAY_MATTER_WRITE_TOOL_NAMES = [
   'matter_create',
   'matter_update',
   'matter_item_mutate',
+  'matter_progress_mutate',
   'matter_resource_mutate',
   'matter_stakeholder_mutate',
   'matter_relation_mutate',
@@ -86,42 +90,6 @@ export const GATEWAY_MATTER_RUN_TOOL_NAMES = ['matter_update_propose'] as const
  *  混进去会让「写家族 = domain_write」这条读得懂的规律失效。装配上仍随 matter 家族一起
  *  all-or-nothing 注册。 */
 export const GATEWAY_MATTER_FOLLOWUP_TOOL_NAMES = ['matter_followup_mutate'] as const
-
-const matterSuggestRelatedResourcesSchema = z
-  .object({
-    matter_id: z.string().trim().min(1),
-    kinds: z
-      .array(z.enum(['email', 'thread', 'event', 'doc', 'file', 'url']))
-      .min(1)
-      .optional(),
-    query: z.string().trim().min(1).optional(),
-    expand_reason: z.enum(['context_gap', 'verification', 'matter_instructions']).optional(),
-    limit: z.number().int().min(1).max(50).default(10)
-  })
-  .strict()
-
-interface MatterSuggestionResult {
-  items: Array<{ resource?: { kind?: string }; [key: string]: unknown }>
-  suppressed: unknown[]
-  local_candidate_count: number
-  expanded: boolean
-}
-
-type DomainRequest = <T>(
-  method: string,
-  path: string,
-  opts?: { body?: unknown; signal?: AbortSignal }
-) => Promise<T>
-
-function domainRequest<T>(
-  domain: MailAgentDomainClient,
-  method: string,
-  path: string,
-  opts?: { body?: unknown; signal?: AbortSignal }
-): Promise<T> {
-  const request = (domain as unknown as { _req: DomainRequest })._req
-  return request.call(domain, method, path, opts) as Promise<T>
-}
 
 function mutation(input: {
   idempotency_key?: string
@@ -205,6 +173,8 @@ export function createMatterReadTools(
       name: 'matter_get',
       description:
         'Read one Matter and a bounded subset of items, resources, stakeholders, timeline, ' +
+        'progress (the curated 进展 lane — the narrative of how the work unfolded; read it ' +
+        'before recording a new entry so you neither repeat one nor contradict it), ' +
         'relations, updates (pending review proposals — include "updates" to get the update_id ' +
         'that matter_review_update needs), or followup (the follow-up configuration: triggers ' +
         'with their ids, run actions, bound agent profile, instructions and model overrides — ' +
@@ -282,68 +252,6 @@ export function createMatterReadTools(
   )
 
   return reads
-}
-
-export function createMatterSuggestionTools(
-  domain: MailAgentDomainClient,
-  collector: GatewayToolAuditCollector = [],
-  guard: ApprovalGuard,
-  opts: {
-    a2uiEnabled?: boolean
-    approvalMode?: GatewayApprovalMode
-    toolApprovalPrefs?: GatewayToolApprovalPrefs['tools']
-    oneShot?: boolean
-    contextMode?: AgentContextMode
-  } = {}
-): Record<string, Tool> {
-  const matter_suggest_related_resources = auditedWriteTool(
-    {
-      a2uiEnabled: opts.a2uiEnabled,
-      approvalMode: opts.approvalMode,
-      toolApprovalPrefs: opts.toolApprovalPrefs,
-      oneShot: opts.oneShot,
-      contextMode: opts.contextMode,
-      name: 'matter_suggest_related_resources',
-      description:
-        'Suggest relevant resources that are not yet confirmed on a Matter. The default search stays within durable Matter anchors and runs silently. Set expand_reason only when the user explicitly needs a whole-library search; that expansion always requires approval. Suggestions are returned without confirming them.',
-      inputSchema: matterSuggestRelatedResourcesSchema,
-      risk: 'edit',
-      forceApproval: (input) => input.expand_reason != null,
-      policyEvaluate: async (input) =>
-        input.expand_reason == null
-          ? { decision: 'auto_allow', rule_id: null }
-          : { decision: 'ask', rule_id: null },
-      run: async (input, { signal }) => {
-        const result = await domainRequest<MatterSuggestionResult>(
-          domain,
-          'POST',
-          `/matters/${encodeURIComponent(input.matter_id)}/resource-suggestions/discover`,
-          {
-            body: {
-              query: input.query,
-              expand_reason: input.expand_reason,
-              limit: input.limit,
-              kinds: input.kinds
-            },
-            signal
-          }
-        )
-        if (input.kinds == null) return result
-        const kinds = new Set(input.kinds)
-        return {
-          ...result,
-          items: result.items.filter((item) => {
-            const kind = item.resource?.kind
-            return kind != null && kinds.has(kind as (typeof input.kinds)[number])
-          })
-        }
-      }
-    },
-    collector,
-    guard
-  )
-
-  return { matter_suggest_related_resources }
 }
 
 export function createMatterWriteTools(
@@ -439,6 +347,49 @@ export function createMatterWriteTools(
           input.operation,
           input.item_id,
           input.operation === 'create' ? input.item : input.patch,
+          mutation(input),
+          signal
+        )
+    },
+    collector,
+    guard
+  )
+
+  // task 08-25 —— curated 进展 lane 的写面。与 matter_item_mutate 同 class / 同档 / 同形状：
+  // 都是本地、可审计、可撤销（软删 + restore）的域内写。
+  // 🔴 一件事一条、纯抄送不记这类**判断**写在 description 里而不是 schema 约束里：值域与
+  // 条件必填的权威在 Python，而「这封值不值得记」根本不是 schema 能表达的东西。
+  const matter_progress_mutate = auditedWriteTool(
+    {
+      ...shared,
+      name: 'matter_progress_mutate',
+      description:
+        "Record or fix ONE entry in a Matter's 进展 (progress) lane — the curated narrative of " +
+        'how the work is unfolding, kept separately from the operation log. Five kinds, pick by ' +
+        'what happened: kind="goal" the goal was set or revised · "milestone" a milestone was ' +
+        'reached · "progress" something concretely moved (a reply that settles a question, a ' +
+        'delivery, a step forward — the default) · "signal" a risk or warning sign worth ' +
+        'watching · "decision" a decision was made. ' +
+        'Write `title` as one sentence saying WHO did what or WHAT was settled ' +
+        '(「Simon 回邮确认 Q4 预算按 80 万走」), for a reader who opens this Matter months from ' +
+        'now; put the context a reader needs in `body`. One happening, one entry. ' +
+        'Do NOT record cc-only mail, routine notifications, anything with no new information, ' +
+        'or your own tool calls and edits — the operation log already has those. ' +
+        'Correct a wrong entry with operation="update" instead of adding a second one; ' +
+        'operation="delete" soft-deletes and "restore" brings it back. ' +
+        '`happened_at` is when it HAPPENED in epoch MILLISECONDS (omit for "just now"), and ' +
+        '`refs` carries the evidence (an email message_id, a linked resource_id, a URL). ' +
+        'A progress entry is NOT an action item: matter_item_mutate creates work objects you ' +
+        'can check off, this records something that already happened. A significant decision may ' +
+        'deserve both, but never mirror every item status change into the progress lane.',
+      inputSchema: matterProgressMutateSchema,
+      risk: 'edit',
+      run: (input, { signal }) =>
+        domain.mutateMatterProgress(
+          input.public_id,
+          input.operation,
+          input.progress_id,
+          input.operation === 'create' ? input.progress : input.patch,
           mutation(input),
           signal
         )
@@ -682,8 +633,9 @@ export function createMatterWriteTools(
       ...shared,
       name: 'matter_suggestion_resolve',
       description:
-        'Confirm or reject unconfirmed resource suggestions on a Matter, in one batch. This is ' +
-        'the disposal half of matter_suggest_related_resources, which only ever discovers. ' +
+        'Confirm or reject unconfirmed resource suggestions on a Matter, in one batch — the ' +
+        'ones a follow-up run or a calendar event attached without the owner having said yet ' +
+        'that they belong. ' +
         'Confirming links the resources as real evidence; rejecting records that they do not ' +
         'belong, which also stops them being suggested again. Ids already handled elsewhere come ' +
         'back in `skipped` with a reason — the batch is not rejected for them.',
@@ -706,6 +658,7 @@ export function createMatterWriteTools(
     matter_create,
     matter_update,
     matter_item_mutate,
+    matter_progress_mutate,
     matter_resource_mutate,
     matter_stakeholder_mutate,
     matter_relation_mutate,

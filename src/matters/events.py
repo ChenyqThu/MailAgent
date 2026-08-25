@@ -48,6 +48,13 @@ ATTENTION_OPENED = "attention_opened"
 ATTENTION_RESOLVED = "attention_resolved"
 ATTENTION_SNOOZED = "attention_snoozed"
 ATTENTION_DISMISSED = "attention_dismissed"
+# task 08-25 (curated 进展 lane): 进展是独立于操作日志的 curated 条目, 但它的**维护动作**
+# 照样是操作 —— 三条入口 (用户内联编辑 / 事项对话工具 / 提案被接受) 都经 service 单写面
+# append 这四条之一, 于是操作日志天然看得到「谁在什么时候动了哪条进展」。
+PROGRESS_ADDED = "progress_added"
+PROGRESS_UPDATED = "progress_updated"
+PROGRESS_REMOVED = "progress_removed"
+PROGRESS_RESTORED = "progress_restored"
 
 MATTER_EVENT_KINDS = (
     MATTER_CREATED,
@@ -88,4 +95,8 @@ MATTER_EVENT_KINDS = (
     ATTENTION_RESOLVED,
     ATTENTION_SNOOZED,
     ATTENTION_DISMISSED,
+    PROGRESS_ADDED,
+    PROGRESS_UPDATED,
+    PROGRESS_REMOVED,
+    PROGRESS_RESTORED,
 )

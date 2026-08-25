@@ -6,7 +6,8 @@ import zh from '../../src/shared/i18n/locales/zh-CN/common.json'
 import en from '../../src/shared/i18n/locales/en-US/common.json'
 import {
   MATTER_CONDITION_TRIGGER_TYPES,
-  MATTER_EVENT_TRIGGER_TYPES
+  MATTER_EVENT_TRIGGER_TYPES,
+  MATTER_PROGRESS_KINDS
 } from '@shared/api/types/matter'
 
 /**
@@ -131,6 +132,22 @@ describe('matter event locale coverage', () => {
       expect(
         MATTER_CONDITION_TRIGGER_TYPES.filter((type) => !trigger.condition[type]?.trim())
       ).toEqual([])
+    })
+  })
+
+  /**
+   * curated 进展的五类（task 08-25）是 locale 的**第三份手抄**：词表本身两侧有 pytest 的
+   * parity 闸，但少一条 `matters.progress.kind.*` 的 key，进展 tab 的 kind picker 与行尾
+   * 标签就直出裸标识符（i18next 的 key 回落），而两侧词表仍然一致、闸全绿。
+   */
+  describe('matters.progress.kind.* labels every curated progress kind', () => {
+    it.each([
+      ['zh-CN', zh],
+      ['en-US', en]
+    ])('%s covers every progress kind', (_locale, bundle) => {
+      const labels = (bundle as { matters: { progress: { kind: Record<string, string> } } }).matters
+        .progress.kind
+      expect(MATTER_PROGRESS_KINDS.filter((kind) => !labels[kind]?.trim())).toEqual([])
     })
   })
 

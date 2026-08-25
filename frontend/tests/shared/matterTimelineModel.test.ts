@@ -122,7 +122,26 @@ const KIND_FIXTURES: Record<string, Partial<MatterEvent>> = {
   },
   attention_resolved: { payload: { signal_id: 9, resolved_by: 'user' } },
   attention_snoozed: { payload: { signal_id: 9, state: 'snoozed' } },
-  attention_dismissed: { payload: { signal_id: 9, state: 'dismissed' } }
+  attention_dismissed: { payload: { signal_id: 9, state: 'dismissed' } },
+  // curated 进展的**维护动作**（task 08-25）。🔴 payload 里有意没有 `body` —— 正文只有
+  // 一个家（`matter_progress` 行本身），操作日志回答的是「谁动了哪一条」。
+  progress_added: {
+    payload: { progress_id: 4, kind: 'progress', title: 'Simon 回邮确认 Q4 预算' }
+  },
+  progress_updated: {
+    payload: {
+      progress_id: 4,
+      fields: ['kind', 'title'],
+      kind: 'decision',
+      title: 'Q4 预算已定'
+    }
+  },
+  progress_removed: {
+    payload: { progress_id: 4, fields: ['deleted_at'], kind: 'decision', title: 'Q4 预算已定' }
+  },
+  progress_restored: {
+    payload: { progress_id: 4, fields: ['deleted_at'], kind: 'decision', title: 'Q4 预算已定' }
+  }
 }
 
 beforeAll(async () => {
@@ -742,7 +761,7 @@ describe('反例：不许合成假句子、不许藏起真事件', () => {
   it('#0 源文件里不许有裸 NUL 字节', () => {
     // 裸 NUL 会让 `file` 把这个 .ts 判成 data、grep/rg 默认跳过它；git 的二进制探测只看
     // 前 8000 字节，位置一往后挪 `git diff` 就变成 Binary files differ，review 直接瞎掉。
-    for (const file of ['matterTimelineModel.ts', 'MatterTimeline.tsx']) {
+    for (const file of TIMELINE_SOURCE_FILES) {
       expect(readSource(file).includes('\u0000'), `${file} 里有裸 NUL 字节`).toBe(false)
     }
   })
@@ -1013,7 +1032,7 @@ describe('locale 覆盖', () => {
 
   it('组件里没有硬编码中文', () => {
     // 叙述层的产出全是给人读的文案，一旦有人图省事写死中文，en-US 就是坏的。
-    for (const file of ['MatterTimeline.tsx', 'matterTimelineModel.ts']) {
+    for (const file of TIMELINE_SOURCE_FILES) {
       const source = readSource(file)
       const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
       expect(code, `${file} 出现了硬编码 CJK`).not.toMatch(/['"`][^'"`]*[一-龥]/)
@@ -1048,6 +1067,24 @@ describe('locale 覆盖', () => {
     }
   })
 })
+
+/**
+ * 叙述层的源文件清单 —— 两条结构闸（裸 NUL / 硬编码中文）盯的就是这几份。
+ *
+ * task 08-25：`MatterTimeline.tsx` 拆成了三件 —— 事件那一路进操作日志弹窗
+ * （`MatterAuditLogModal`），curated 进展是新的 `MatterProgressLane`，正文块与按天分组
+ * 抽成两份共用模块。🔴 新增同层文件时加进这张表，漏加 = 那份文件不在任何闸下面。
+ */
+const TIMELINE_SOURCE_FILES = [
+  'matterTimelineModel.ts',
+  'matterDayGroups.ts',
+  'MatterAuditLogModal.tsx',
+  'MatterNarrativeBody.tsx',
+  'MatterProgressLane.tsx',
+  // 进展五类的图标 / 色调表。今天只有 token 与符号，但它是「五类长什么样」的家 ——
+  // 下一个人往里加 `label: '目标'` 是最自然的动作，那正是 en-US 坏掉的方式。
+  'matterProgressVocab.ts'
+] as const
 
 function readSource(name: string): string {
   return readFileSync(resolve(__dirname, '../../src/shared/components/matters', name), 'utf-8')

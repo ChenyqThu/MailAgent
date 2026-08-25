@@ -95,22 +95,24 @@ run 的上网能力 —— owner 永远看不见这件事发生。反过来，**
 静默回落会让「UI 显示的档」与「实际生效的档」劈叉，在一个安全档上这比报错危险得多。
 run 起始解析一次并冻进 run context，pause / resume 复用同值。
 
-### 1.3 matter 工具家族本身（13 件）
+### 1.3 matter 工具家族本身（19 件，成员单源 = `matters.ts` 的四个导出数组）
 
-事项工具家族恒注册（仍要求 mixed-family `ApprovalGuard`）：2 读（`matter_find` / `matter_get`）+
-9 写（`matter_create` / `matter_update` / 四个 `*_mutate` / `matter_add_note` /
-`matter_run_control` / `matter_review_update`）+ 1 提案 artifact（`matter_update_propose`，
-**只在 matter-run 语境注册**）+ `matter_suggest_related_resources`。
+事项工具家族恒注册（仍要求 mixed-family `ApprovalGuard`）：5 读（`matter_find` / `matter_get` /
+`matter_attention_list` / `matter_runs_list` / `matter_tags_list`）+ 12 写（`matter_create` /
+`matter_update` / 四个 `*_mutate` / **`matter_progress_mutate`（0825，curated 进展写面）** /
+`matter_add_note` / `matter_run_control` / `matter_review_update` / `matter_attention_triage` /
+`matter_suggestion_resolve`）+ 1 提案 artifact（`matter_update_propose`，**只在 matter-run
+语境注册**）+ 1 `matter_followup_mutate`（class `capability_change`）。
+本节旧版写的「13 件」自 0813 批 R 起就欠账 —— 数成员以代码四数组为准，本节只记结构。
 
-🔴 最后这件**有意不在 `GATEWAY_TOOL_CLASSES` 里**（明确裁定，不是漏登记）：它是 manual-chat
-专属的供给型工具，两道腰带是 `tools/index.ts` 的 `contextMode === 'manual_chat'` 注册门 +
-`classOfTool` 未命中时 fail-closed 兜底成 `'exec'`（matter 腰带拒 exec）。代价是
-`policy.test.ts` 的 class 同步闸**结构上覆盖不到它** —— 动它的注册条件时没有闸兜底。
+`matter_suggest_related_resources`（曾经的 manual-chat 供给型特例，有意不在
+`GATEWAY_TOOL_CLASSES`）已于 **2026-08-25 随「关键词命中推荐退役」删除**（见 §5）——
+那条「class 闸覆盖不到它」的债随之消失，家族现在全员在 class 表里。
 
-**全 13 件都带 `headless_excluded`**：普通 custom-agent 的 headless run（`untrusted_trigger` /
+**全家族都带 `headless_excluded`**：普通 custom-agent 的 headless run（`untrusted_trigger` /
 `cron_headless`）**一件 matter 工具都拿不到**，连读面也没有 —— 不出现在能力勾选面上 =
-结构性不可达。但除 `matter_suggest_related_resources` 外的 12 件**在 `im_chat` 里照常注册**
-（owner 在场），所以给它们标 `manual_only` 是语义错的；只有 suggest 那件真是 manual-only。
+结构性不可达。全家族**在 `im_chat` 里照常注册**（owner 在场），所以给它们标
+`manual_only` 是语义错的（suggest 退役后家族里已无真 manual-only 成员）。
 
 🔴 `headless_excluded` 说的是「不出现在 custom-agent 的能力勾选面上」，**与跟进 run 的工具面
 无关** —— 后者按 class 推导（§1.1），从不看 `HEADLESS_TOOL_OPTIONS`。
@@ -128,10 +130,13 @@ run 起始解析一次并冻进 run context，pause / resume 复用同值。
 ## 2. 数据模型
 
 主表 `matter`（`src/mail/sync_store.py` 的 `MATTER_TABLE_DDLS`），围绕它的从表。
-迁移占用 `DB_VERSION` **v44–v50、v52 与 v56–v57**（v44/v45 基表与资源域 · v46 run 账本 ·
+迁移占用 `DB_VERSION` **v44–v50、v52、v56–v57 与 v70**（v44/v45 基表与资源域 · v46 run 账本 ·
 v47 attention · v48 email/thread external_key 归一 · v49 拒绝记忆 · v50 标签定义表 + 完成标志 ·
 v52 全局干系人库 · v56 资料摘要三列（`resource.sum`/`sum_src`/`sum_at`）·
-v57 资料版本轨迹表 `resource_version`，两者详见 §2.5；v51/v53–v55 是其它域的迁移
+v57 资料版本轨迹表 `resource_version`，两者详见 §2.5 ·
+v70 curated 进展表 `matter_progress`（0825，纯 DDL 零回填——历史事件**有意不**转进展；
+🔴 DDL 独立常量组 `MATTER_PROGRESS_TABLE_DDLS` **不进**老库重放的 `MATTER_*_DDLS`，
+v52 教训，有专门闸）；v51/v53–v55 是其它域的迁移
 （邮件 `ingest_reason` / outlook_com backend / 通讯录 Contact Directory），与事项无关）：
 
 | 表 | 作用 | 关键约束 |
@@ -144,6 +149,7 @@ v57 资料版本轨迹表 `resource_version`，两者详见 §2.5；v51/v53–v5
 | ~~`matter_contact`~~ | 全局干系人库（v52）——**v54 已整体迁入通讯录 `contact` 三表后 DROP**（id 保持，见 §2.4）| 身份 = 归一 email 纪律由 `contact_email` 锚点继承；**无 email 的干系人不入库** 不变 |
 | `matter_relation` | 事项之间的关系 | |
 | `matter_event` | 时间线 / 审计 | 🔴 `ON DELETE CASCADE` —— 事项被永久删除时事件**一起没**，所以永久删除的审计落**日志**不落事件 |
+| `matter_progress` | curated 进展（v70）：事情发展脉络的叙事条目，与操作日志分家 | kind 五类（goal/milestone/progress/signal/decision，Python `MATTER_PROGRESS_KINDS` 是 canonical，TS 镜像唯一一份在 `api/types/matter.ts`，parity 闸锁死）；软删可编辑；每次写 append `progress_*` 审计事件；`happened_at` 同样 epoch 毫秒；跟进 run 只能经提案 `progress` change 落行 |
 | `matter_update` | Agent 的更新提案 | `review_status` 四态 |
 | `matter_attention` | 关注信号（episode 语义）| 判据单源 `attention.py::_collect_facts`；「解决」语义见 §2.3 |
 | `matter_tag` | 标签定义（名 / 颜色 / 形状）| `matter.tags_json` 仍是**字符串数组**引用 name |
@@ -407,6 +413,12 @@ event/condition 一 fire 就被拒、被 `_schedule_tick` 的 per-trigger 兜底
 → 上下文快照 → 变更清单（watermark diff）→【补充指引】（profile persona + 事项级指引，套
 `PERSONA_PREFIX` 围栏）。
 
+**curated 进展（0825）**：快照含近 10 条 live 进展（owner 与 Agent 共同维护的事情脉络）；
+任务契约末尾三条进展职责——run 没有进展写工具，要记就在提案里写 `progress` change
+（`{kind,title,body?,happened_at?,refs?}`，纯追加、owner 接受才落行）；何时记 / 纯抄送不记 /
+与行动项的分界都写在契约原文里（`run_spec._TASK_CONTRACT`）。事项对话侧的对应职责在
+`src/skills/builtin/matters.py` 的恒注入方法论段（工具 `matter_progress_mutate`）。
+
 ### 4.0 事项级模型覆盖（model / effort / fallback）
 
 三项跟着 `schedule_json` 的 v2 envelope 走 —— 新增 `agent` 块，**零 DB 迁移**（与 `actions`
@@ -487,9 +499,18 @@ matter run 终态四值 `ok / noop / warn / fail`（+ `canceled`），映射单�
 
 ## 5. 智能关联
 
-- **拒绝记忆**：建议被拒后，同证据不再重现。「实质新证据」= 持久锚点集（线程 id / 干系人邮箱 /
-  匹配关键词 / 外扩理由）变化；指纹**显式排除**时间戳、随机 id、置信度，所以重复跑同一次检索
-  绕不过拒绝，而真有新锚点时能重新建议。
+🔴 **关键词命中式推荐已整条退役（2026-08-25 owner 拍板：置信度太低，徒增烦恼）**：
+`discover_resource_suggestions`（跟进 run 起跑扫描 + REST discover 端点 + gateway
+`matter_suggest_related_resources` + chat 缺口卡「外扩检索」）与关键词召回那一趟
+（`RESOURCE_TERM_WEIGHTS` / 准入线 / `expand_reason` 三档）全部删除。资料推荐现在**只有
+两条 LLM 路径**：① 跟进 run 在提案里带 `resource` change（owner 评审后落地）；② 事项
+对话里 agent 自己检索（全库只读工具面）后经 `matter_resource_mutate` 建 link（审批卡）。
+缺口卡的 CTA 改为经 `startMatterChatWithPrompt` 让事项 agent 检索并关联。
+仍会产生 unconfirmed 建议行的信源只剩**会议结束→出席者身份匹配**（见下，身份锚定非关键词）。
+
+- **拒绝记忆**：建议被拒后，同证据不再重现。「实质新证据」= 持久锚点集（线程 id / 干系人
+  邮箱等）变化；指纹**显式排除**时间戳、随机 id、置信度，所以重复出现的同一事实绕不过
+  拒绝，而真有新锚点时能重新建议。
 - **会议结束 → 关联提案**（L4 批次 1 #3）：agenda worker 的 `_calendar_proposal_tick` 扫刚结束的
   occurrence，与会者 email 走**双腿**匹配（`contact_email` 锚点 → `matter_stakeholder.contact_id`；
   兜底 `matter_stakeholder.email_normalized` 直匹）到 open matter，命中就写一条
@@ -501,12 +522,11 @@ matter run 终态四值 `ok / noop / warn / fail`（+ `canceled`），映射单�
   每条带理由与证据。时间邻近**只在已有其它信号时**才加分 —— 否则「同期创建」会把无关事项凑成候选。
 - **URL 抓取**：零自研 SSRF 防护，直接复用 `src/api/routers/web.py::_do_fetch`（有测试钉死调的就是它）。
 - **创建带调研**：纯读端点产草案，**不写库**（有测试钉死）；标题走确定性推导，无 LLM 依赖。
-- **手动关联的候选**（`GET /{id}/resource-candidates`，只读）与 Agent 建议**共用同一个候选引擎**
-  `_email_resource_candidates` —— 于是人工挑与 Agent 建议看到的是同一批锚点、同一套理由文案，
-  不会出现「Agent 说相关的这封，我自己搜却看不到」。差别只有一个：这里一个字都不写
-  （不建 link、不发事件、不推版本、不吃 backlog 配额），所以**打开弹窗本身没有副作用**。
-  🔴 有意**不接** `query` / `expand_reason`：`local` 档结构上要求线程 / 干系人硬锚，关键词只能
-  加分。用户在弹窗里输的关键词走的是另一条路 —— 前端的全局邮件搜索（FTS5）。
+- **手动关联的候选**（`GET /{id}/resource-candidates`，只读）：候选引擎
+  `_email_resource_candidates` 现在**只剩 local 档**（线程 / 干系人硬锚；关键词召回随
+  0825 退役一并剪除，`query` / `expand_reason` 参数位已不存在）。一个字都不写
+  （不建 link、不发事件、不推版本），**打开弹窗本身没有副作用**。用户在弹窗里想按
+  关键词找邮件走的是另一条路 —— 前端的全局邮件搜索（FTS5）。
 - **本事项邮件附件**（`GET /{id}/resource-attachments`，只读）：🔴 **一条 SQL 拿全部** ——
   逐封扇出 `attachment/list/{internal_id}` 在挂了几十封邮件的事项上就是几十个请求
   （`frontend/ARCHITECTURE.md` §7.1 列表性能铁律）。`is_inline=0`：正文里的 cid 图片不是「资料」。

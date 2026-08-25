@@ -61,6 +61,22 @@ def test_matters_fragment_teaches_find_before_create_and_draft_only(_rebuild_bui
     assert "until the tool result confirms it" in fragment
 
 
+def test_matters_fragment_teaches_the_curated_progress_lane(_rebuild_builtins):
+    """task 08-25 —— 进展改成 curated lane 后，「谁来维护、记什么」只写在这份恒注入的方法论里。
+
+    没有这段，模型手里多了一个 `matter_progress_mutate` 却不知道什么值得记 —— owner 点名的
+    失败形态正是「进展和操作日志一模一样」，即把每次编辑都抄成一条进展。
+    """
+    fragment = _matters_skill().prompt_fragment
+    assert "matter_progress_mutate" in fragment
+    # 五类词表逐个点名：少一类 = 模型只会用它见过的那几类（默认全塞 progress）。
+    for kind in ("goal", "milestone", "progress", "signal", "decision"):
+        assert f"kind={kind}" in fragment, kind
+    # 不记什么与「更正用 update」——owner 原话里的两条纪律。
+    assert "Do NOT record cc-only mail" in fragment
+    assert "operation=update" in fragment
+
+
 def test_matters_fragment_tells_the_model_to_research_before_creating(_rebuild_builtins):
     """0813 dogfood #4（owner：「创建事项…好像不会去检索 notion」）。
 

@@ -17,6 +17,13 @@
  *
  * 值一律是**原始值**（枚举字面量、时间戳数字），本地化在这一层做。档位名复用既有
  * `matters.status.*` / `matters.health.*` / `matters.item.kinds.*`，不新造一套。
+ *
+ * ⚠️ task 08-25 之后，本模块**只有 `narrateEvent` 有生产消费者**（操作日志弹窗逐条渲染）。
+ * 同类合并与业务/审计分档那一套（`groupTimelineEvents` / `narrateTimelineGroup` /
+ * `narrateGroupEntries` / `matterEventTier` / `GROUPED_TEMPLATE_KINDS` / `TIMELINE_BURST_*`）
+ * 随「进展 = 事件降级视图」一起失去了调用点：弹窗要的是逐条原始记录，不合并也不分档。
+ * 这里**指出而不删** —— 它们与各自的回归网都还完整，是否退役由 owner 决定（若日后给操作
+ * 日志加回「折叠同一次操作的扇出」，要用的正是这几个函数）。
  */
 
 import type { MatterEvent } from '@shared/api/types/matter'
@@ -768,6 +775,17 @@ function narrateEventText(
       return result.shape === 'clauses'
         ? say('stakeholder_updated', { name, changes: result.text })
         : say('stakeholder_updated_plain', { name })
+    }
+
+    /* ---- curated 进展的维护动作（task 08-25）---- */
+    // 🔴 只叙述「谁动了哪一条」——进展的正文有且只有一个家（`matter_progress` 行本身），
+    // 抄进操作日志就是同一段话两处存。后端因此有意不往 payload 里塞 body。
+    case 'progress_added':
+    case 'progress_updated':
+    case 'progress_removed':
+    case 'progress_restored': {
+      const title = quoted(payload, 'title', 'matters.narrative.quoteTitle', t)
+      return title === null ? say(`${event.kind}_plain`) : say(event.kind, { title })
     }
 
     /* ---- 事项间关联 ---- */

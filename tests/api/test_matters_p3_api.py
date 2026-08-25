@@ -149,6 +149,8 @@ def test_context_snapshot_endpoint_shape(matters_client):
         "matter",
         "items",
         "stakeholders",
+        # curated 进展（task 08-25）：跟进 run 与事项对话都要看得见「这件事到哪一步了」。
+        "progress",
         "resources",
         "resource_counts",
         "events",

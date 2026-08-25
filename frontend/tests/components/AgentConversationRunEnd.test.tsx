@@ -124,9 +124,9 @@ vi.mock('@shared/assistant/context/useAgentContextSnapshot', () => ({
   useAgentContextSnapshot: () => ({ snapshot: null })
 }))
 vi.mock('@shared/components/matters/hooks', () => ({
-  useMattersApi: () => ({
-    discoverResourceSuggestions: vi.fn(async () => ({ items: [], suppressed: [] }))
-  }),
+  // 事项对话不再经这个面发任何请求（task 08-25 退役了缺口卡的外扩检索）；
+  // 桩留成空对象是因为 hook 本身还在被 import。
+  useMattersApi: () => ({}),
   useMatterChatApi: () => ({
     contextSnapshot: vi.fn(async () => {
       throw new Error('not needed')
@@ -211,7 +211,11 @@ function DockHost(): React.JSX.Element {
   hostChat = chat
   const matterTarget = useAIChatPanel((s) => s.matterTarget)
   return (
-    <AgentConversation chat={chat} activeItem={null} initialMatterTarget={matterTarget ?? undefined} />
+    <AgentConversation
+      chat={chat}
+      activeItem={null}
+      initialMatterTarget={matterTarget ?? undefined}
+    />
   )
 }
 
@@ -263,7 +267,9 @@ beforeEach(() => {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.includes('/api/ai/title')) {
-        titleCalls.push(JSON.parse(String(init?.body ?? '{}')) as { sessionId: number; model: string })
+        titleCalls.push(
+          JSON.parse(String(init?.body ?? '{}')) as { sessionId: number; model: string }
+        )
         const next = titleResponses.shift() ?? { ok: true, title: '生成的标题' }
         return {
           ok: next.ok,

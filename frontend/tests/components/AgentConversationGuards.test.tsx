@@ -125,9 +125,9 @@ vi.mock('@shared/assistant/context/useAgentContextSnapshot', () => ({
   }
 }))
 vi.mock('@shared/components/matters/hooks', () => ({
-  useMattersApi: () => ({
-    discoverResourceSuggestions: vi.fn(async () => ({ items: [], suppressed: [] }))
-  }),
+  // 事项对话不再经这个面发任何请求（task 08-25 退役了缺口卡的外扩检索）；
+  // 桩留成空对象是因为 hook 本身还在被 import。
+  useMattersApi: () => ({}),
   useMatterChatApi: () => ({
     contextSnapshot: vi.fn(async () => {
       throw new Error('not needed')
@@ -138,9 +138,8 @@ vi.mock('@shared/components/matters/hooks', () => ({
 }))
 
 const { AgentConversation } = await import('@shared/components/agents/AgentConversation')
-const { useAIChatPanel, startChatWithPrompt, startMatterChatWithPrompt } = await import(
-  '@shared/state/ai-chat-panel'
-)
+const { useAIChatPanel, startChatWithPrompt, startMatterChatWithPrompt } =
+  await import('@shared/state/ai-chat-panel')
 
 beforeAll(async () => {
   await i18n.changeLanguage('zh-CN')

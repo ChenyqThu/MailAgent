@@ -5,6 +5,7 @@ import {
   Layers,
   Link,
   ListChecks,
+  Milestone,
   Plus,
   RefreshCcw,
   Shield,
@@ -14,12 +15,14 @@ import {
   X,
   Zap
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { MATTER_HEALTH_VALUES, MATTER_STATUSES } from '@shared/api/types/matter'
 import type {
   Matter,
+  MatterChangeKind,
   MatterHealth,
   MatterProposalChange,
   MatterStatus,
@@ -33,12 +36,17 @@ import { DOC_PROVIDER_ICONS, RESOURCE_KIND_ICONS } from './matterResource'
 // 逐项照设计原型 review.jsx 的 `CHANGE_KIND` 词表（icon + tone + label + hint 四件）。
 // 🔴 改动前三处不符：action/resource 的 tone 用了 ai（稿子是 info）、两条 hint 是空的、
 // 五项全都没有 icon；label/hint 还是**硬编码中文**，英文用户直接看到中文。
-const kindMeta = {
+// 🔴 值域 = `MATTER_CHANGE_KINDS`，少一个成员这张卡在渲染那条 change 时**当场崩**——所以
+// 显式标 `Record<MatterChangeKind, …>` 把穷尽性钉进编译期（tsconfig 的 noImplicitAny:false
+// 会让无标注的 `kindMeta[change.kind]` 静默变成 any，08-25 加 progress 时差点漏成运行时崩）。
+const kindMeta: Record<MatterChangeKind, { icon: LucideIcon; tone: string }> = {
   fact: { icon: CheckCircle2, tone: 'text-ok' }, // checkcircle / success
   inference: { icon: Zap, tone: 'text-warn' }, // zap / warn
   field: { icon: SquarePen, tone: 'text-fail' }, // edit / critical
   action: { icon: ListChecks, tone: 'text-info' }, // listcheck / info
-  resource: { icon: Link, tone: 'text-info' } // link / info
+  resource: { icon: Link, tone: 'text-info' }, // link / info
+  // task 08-25 —— 记一条进展（跟进 run 维护「事情脉络」的唯一通道）。
+  progress: { icon: Milestone, tone: 'text-ai' }
 } as const
 
 const statusTone: Record<MatterStatus, string> = {
@@ -364,6 +372,7 @@ function ChangeRow({
   const meta = kindMeta[change.kind]
   const confidence = change.confidence ?? change.conf
   const field = typeof change.target?.field === 'string' ? change.target.field : 'field'
+  const progress = proposedProgress(change)
 
   return (
     <article
@@ -402,9 +411,7 @@ function ChangeRow({
             // S3 —— 背景与目标是长文本：挤进一行读不了，单行 input 也编辑不了。
             // v61 起两者是两个独立字段，各自单独提案、单独评审。
             <div className="mt-2 space-y-2 text-body">
-              <div className="text-aux text-ink-fg-3">
-                {t(`matters.eventField.${field}`)}
-              </div>
+              <div className="text-aux text-ink-fg-3">{t(`matters.eventField.${field}`)}</div>
               <p className="whitespace-pre-wrap rounded bg-ink-3 p-2 text-ink-fg-2">
                 {String(change.before ?? '—')}
               </p>
@@ -445,6 +452,8 @@ function ChangeRow({
             <p className="mt-2 text-body">{change.text}</p>
           )}
 
+          {progress ? <NewProgressCard progress={progress} /> : null}
+
           {change.resource ? <NewResourceCard resource={change.resource} /> : null}
 
           {change.reason ? (
@@ -479,6 +488,63 @@ function ChangeRow({
         </div>
       </div>
     </article>
+  )
+}
+
+/** 提案里「记一条进展」的载荷（task 08-25）。
+ *
+ *  🔴 这里做**运行时**读取而不是给 `MatterProposalChange` 加一个 `progress?:` 字段：形状权威
+ *  在 Python（`MatterProposalProgress` / `run_service._validate_changes`），而这张卡要能渲染
+ *  历史提案里的存量形状。读不出主句就当没有 —— 一条空卡比不显示更糟（owner 会以为它没内容）。 */
+interface ProposedProgress {
+  kind: string
+  title: string
+  body: string
+  happened_at: number | null
+}
+
+function proposedProgress(change: MatterProposalChange): ProposedProgress | null {
+  if (change.kind !== 'progress') return null
+  const raw = (change as { progress?: unknown }).progress
+  if (raw == null || typeof raw !== 'object') return null
+  const spec = raw as Record<string, unknown>
+  const title = typeof spec.title === 'string' ? spec.title.trim() : ''
+  if (!title) return null
+  return {
+    kind: typeof spec.kind === 'string' ? spec.kind : 'progress',
+    title,
+    body: typeof spec.body === 'string' ? spec.body.trim() : '',
+    happened_at: typeof spec.happened_at === 'number' ? spec.happened_at : null
+  }
+}
+
+/** 「将记入进展」的条目卡。owner 是在这个界面上按接受的 —— 主句、类型、发生时间三样都要在场，
+ *  否则就是盲签一条会长期留在事情脉络里的记录。 */
+function NewProgressCard({ progress }: { progress: ProposedProgress }): React.ReactElement {
+  const { t, i18n } = useTranslation()
+  return (
+    <div className="mt-2 rounded-[var(--r-ctl)] border border-ai/30 bg-ai/[0.06] p-2.5">
+      <p className="flex items-center gap-1.5 text-meta font-medium text-ai">
+        <Milestone size={11} />
+        {t('matters.review.newProgress.badge')}
+        <span className="rounded-full bg-ai/10 px-1.5 text-meta">
+          {/* kind 标签与进展 tab 同键（matters.progress.kind.*）——评审卡不留第二份五联文案。 */}
+          {t(`matters.progress.kind.${progress.kind}`, { defaultValue: progress.kind })}
+        </span>
+      </p>
+      <p className="mt-1.5 text-body font-medium">{progress.title}</p>
+      {progress.body ? (
+        <p className="mt-1 whitespace-pre-wrap text-aux leading-5 text-ink-fg-2">{progress.body}</p>
+      ) : null}
+      <p className="mt-1.5 text-meta text-ink-fg-3">
+        {progress.happened_at != null
+          ? t('matters.review.newProgress.happenedAt', {
+              time: new Date(progress.happened_at).toLocaleString(i18n.language)
+            })
+          : t('matters.review.newProgress.happenedNow')}
+      </p>
+      <p className="mt-1 text-meta text-ink-fg-3">{t('matters.review.newProgress.hint')}</p>
+    </div>
   )
 }
 

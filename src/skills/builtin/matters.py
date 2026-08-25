@@ -1,6 +1,7 @@
 """matters skill —— 事项跟进的方法论（零工具，只出 prompt_fragment）。
 
-🔴 这个 skill **不解锁任何工具**：``matter_*`` 十二件都在 gateway 的
+🔴 这个 skill **不解锁任何工具**：``matter_*`` 全家（成员随家族演进，勿在此抄数——权威名单
+就是下面那个常量）都在 gateway 的
 ``CORE_UNGATED_GATEWAY_TOOLS`` 里（``frontend/src/ai-gateway/tools/skill_gating.ts``），永不被
 skill→tool 门控 —— 它们的安全边界在审批，不在这里。所以本 skill
 的价值是「教会 agent 怎么跟进一件事」，与 ``custom_agent`` 同形（``tools=[]``）。
@@ -14,6 +15,11 @@ skill→tool 门控 —— 它们的安全边界在审批，不在这里。所�
 跟进 run 的对应物 = ``src/matters/run_spec.py`` 的 ``_RUN_METHODOLOGY``（0813 轮 3 O4，按
 headless 场地改写的子集，**有意不同文** —— 那边没有任何写工具，措辞必须如实）。改判断纪律时
 两处都过一眼。
+
+🔴 进展（task 08-25）的维护职责同样是**两处、有意不同文**：这里教「用 matter_progress_mutate
+维护」，跟进 run 的任务契约（``run_spec._TASK_CONTRACT`` 的【提案标准】）教「写进提案的
+kind=progress，owner 接受后才落地」—— run 结构上拿不到进展写工具。两边的**判据**（记什么、
+不记什么、五类 kind 各指什么）必须一致，措辞按场地各写各的。
 """
 
 from __future__ import annotations
@@ -43,6 +49,18 @@ Before judging progress, read the evidence with matter_get instead of inferring 
 Compare the open action items, the stakeholders, and the recent timeline events against the accepted
 summary, and separate what the evidence shows from what you are guessing. When evidence is missing,
 say what is missing rather than filling the gap.
+
+Keep the Matter's 进展 (progress) lane current with matter_progress_mutate — it is the narrative of
+the work itself, written for whoever reads this Matter in three months. Record one entry when the
+goal is set or revised (kind=goal), a milestone lands (kind=milestone), something concretely moved
+forward such as a reply that settles a question or a delivery (kind=progress), a risk or warning
+sign appears (kind=signal), or a decision is made (kind=decision). One happening, one entry, with a
+title that says who did what or what was settled. Do NOT record cc-only mail, routine notifications,
+anything that adds no information, or your own tool calls and edits — the operation log already has
+those. Fix a wrong entry with operation=update instead of adding a second one. Progress entries and
+action items are different things: an item is a work object you can check off, a progress entry is
+something that happened; a significant decision may deserve both, but do not mirror every item
+status change into the progress lane.
 
 Prefer the smallest write that records the change: add a note or update one item instead of
 rewriting the summary. Rewrite the current summary only when the evidence supports a new state. A

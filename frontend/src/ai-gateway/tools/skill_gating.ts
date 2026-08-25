@@ -150,16 +150,16 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'calendar_event_reschedule',
   'calendar_event_rsvp',
   'calendar_event_delete',
-  // Matters MVP P3/P4 —— Matter 家族 12 件：2 读 + 9 写 + 跟进 run 专属的
-  // matter_update_propose。Python 无 matter builtin skill，GATEWAY_SKILL_TOOLS 无映射，
-  // 永不 skill-gated。
-  // 🔴 P3 落地时**漏了**这 12 个名字：完整性守护（每个 gateway 工具必被分类）本该当场变红，
+  // Matters MVP P3/P4 —— Matter 家族：2 读 + 写面 + 跟进 run 专属的 matter_update_propose。
+  // Python 无 matter builtin skill，GATEWAY_SKILL_TOOLS 无映射，永不 skill-gated。
+  // 🔴 P3 落地时**漏了**这一批名字：完整性守护（每个 gateway 工具必被分类）本该当场变红，
   // 却因为当时的测试装配未包含 Matter 家族而静默放过。P4 一次性补齐名单与装配闸。
   'matter_find',
   'matter_get',
   'matter_create',
   'matter_update',
   'matter_item_mutate',
+  'matter_progress_mutate',
   'matter_resource_mutate',
   'matter_stakeholder_mutate',
   'matter_relation_mutate',

@@ -30,7 +30,13 @@ from src.notify.center import NotifyCenter
 
 from .events import UPDATE_PROPOSED
 from .attention import AttentionFact, AttentionService
-from .models import MATTER_CHANGE_KINDS, MATTER_RUN_STATUSES, MatterRunTrigger
+from .models import (
+    MATTER_CHANGE_KINDS,
+    MATTER_PROGRESS_KINDS,
+    MATTER_RUN_STATUSES,
+    MatterRunTrigger,
+    normalize_progress_refs,
+)
 from .resource_proposal import (
     ResourceProposalError,
     new_resource_spec,
@@ -976,6 +982,38 @@ class MatterRunService(MatterService):
                         continue
             if kind == "inference":
                 change["is_inference"] = True
+            if kind == "progress":
+                # task 08-25：跟进 run 对进展的唯一通道。三条判据与 service 落行时那道
+                # backstop 同源；在这里剔除是为了让 agent **当轮**就从 dropped 明细里
+                # 看到自己写错了什么（accept 时才炸的话，报错落在 owner 头上）。
+                # 🔴 分支约束一律在这里判，不进 tool schema 顶层（prompt/schema 两连败）。
+                spec = change.get("progress")
+                if not isinstance(spec, Mapping):
+                    drop(change, "progress_spec_missing")
+                    continue
+                progress_kind = str(spec.get("kind") or "")
+                if progress_kind not in MATTER_PROGRESS_KINDS:
+                    drop(change, "progress_kind_invalid", progress_kind=progress_kind)
+                    continue
+                if not str(spec.get("title") or "").strip():
+                    drop(change, "progress_title_missing")
+                    continue
+                if spec.get("happened_at") is not None:
+                    try:
+                        self._require_epoch_ms("happened_at", spec.get("happened_at"))
+                    except MatterError:
+                        drop(
+                            change, "timestamp_not_epoch_ms",
+                            field="happened_at", value=spec.get("happened_at"),
+                        )
+                        continue
+                # refs 形状同判（与 accept 落行的 normalize_progress_refs 同一判据，
+                # 它抛 ValueError）—— 坏 ref 若留到 accept 才炸，掀掉的是 owner 的整次接受。
+                try:
+                    normalize_progress_refs(spec.get("refs"))
+                except ValueError:
+                    drop(change, "progress_refs_invalid", refs=spec.get("refs"))
+                    continue
             if kind == "action":
                 target = change.get("target")
                 if target is not None:

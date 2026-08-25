@@ -91,6 +91,7 @@ describe('componentRegistry — resolution', () => {
       'matter_attention_triage',
       'matter_create',
       'matter_item_mutate',
+      'matter_progress_mutate',
       'matter_relation_mutate',
       'matter_resource_mutate',
       'matter_review_update',

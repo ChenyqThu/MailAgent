@@ -94,9 +94,11 @@ const CONDITIONAL_HEADLESS_READ_TOOLS = new Set(['agent_catalog_list', 'agent_ca
  *  manual full-set build. Same shape as CONDITIONAL_HEADLESS_READ_TOOLS: a classified tool whose
  *  registration has an extra CONTEXT condition, given its own builder for the drift guards. */
 const MATTER_RUN_ONLY_TOOLS = new Set(['matter_update_propose'])
-/** P6-A — explicitly manual-only and intentionally absent from policy.ts. The index registration
- *  gate is the primary belt; classOfTool's fail-closed exec fallback is the secondary belt. */
-const MANUAL_ONLY_UNCLASSIFIED_TOOLS = new Set(['matter_suggest_related_resources'])
+/** 有意不进 `GATEWAY_TOOL_CLASSES` 的工具（registration 门 + classOfTool 的 fail-closed exec
+ *  兜底当两道腰带）。task 08-25 起是**空集** —— 唯一的成员 `matter_suggest_related_resources`
+ *  随关键词命中式资料推荐一起退役。留着这个集合是因为它同时是「有没有这种特例」的问句：
+ *  非空就得有人解释为什么这个工具不归 class 管。 */
+const MANUAL_ONLY_UNCLASSIFIED_TOOLS = new Set<string>()
 
 function buildMatterRunTools() {
   return buildGatewayTools({
@@ -393,19 +395,19 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
                   // assembler never authors one and a directory scan must not go outbound.
                   cls === 'read'
                 : cls === 'read' || cls === 'artifact' || cls === 'domain_write'
-                ? true
-                : mode === 'im_chat'
-                  ? // stage 2 PR-1 (08-04 拍板) — connector 全开放 in im_chat; every OTHER class
-                    // keeps the hard floor and grants are STILL never consulted (web is the venue
-                    // switch, pinned in its own describe — not part of the grants axis).
-                    cls === 'connector_write'
-                  : cls === 'exec'
-                    ? execGranted
-                    : cls === 'web'
-                      ? webGranted
-                      : cls === 'connector_write'
-                        ? connectorGranted // PR3 — the connector axis lifts ONLY its own row
-                        : false // capability_change + outbound (send):恒 false under ANY grants
+                  ? true
+                  : mode === 'im_chat'
+                    ? // stage 2 PR-1 (08-04 拍板) — connector 全开放 in im_chat; every OTHER class
+                      // keeps the hard floor and grants are STILL never consulted (web is the venue
+                      // switch, pinned in its own describe — not part of the grants axis).
+                      cls === 'connector_write'
+                    : cls === 'exec'
+                      ? execGranted
+                      : cls === 'web'
+                        ? webGranted
+                        : cls === 'connector_write'
+                          ? connectorGranted // PR3 — the connector axis lifts ONLY its own row
+                          : false // capability_change + outbound (send):恒 false under ANY grants
         expect(
           isToolClassAllowedInMode(cls, mode, grants),
           `${cls} × ${mode} × ${JSON.stringify(grants)}`
@@ -713,7 +715,11 @@ describe('contact_governance — behavior belt across every tool class (WP7)', (
       { web: true } as unknown as AgentModeGrants
     ]) {
       expect(
-        isToolClassAllowedInMode('web', 'contact_governance', grants as AgentModeGrants | undefined),
+        isToolClassAllowedInMode(
+          'web',
+          'contact_governance',
+          grants as AgentModeGrants | undefined
+        ),
         JSON.stringify(grants)
       ).toBe(false)
     }
@@ -758,7 +764,13 @@ describe('contact_governance — behavior belt across every tool class (WP7)', (
     ]) {
       expect(tools[name], `${name} must be stripped in contact_governance`).toBeUndefined()
       expect(
-        isToolClassAllowedInMode(classOfTool(name), 'contact_governance', MAX_GRANTS, undefined, name),
+        isToolClassAllowedInMode(
+          classOfTool(name),
+          'contact_governance',
+          MAX_GRANTS,
+          undefined,
+          name
+        ),
         `${name} must be denied by the matrix row itself, under maximal grants and its own name`
       ).toBe(false)
     }

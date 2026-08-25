@@ -140,6 +140,8 @@ export function toChipCounts(payload: MatterContextSnapshotPayload): MatterConte
  * 不进。旧判据 `resources.length === 0` 于是构成自噬循环 —— agent 挂 3 条建议（可见 3、
  * 不弹卡）→ 用户把 3 条都确认（可见 0）→ **弹「缺上下文」**→ 点外扩 → 灌一批垃圾（可见
  * 10、卡片消失）。用户越配合越被灌垃圾。现在改看后端另发的 `resource_counts`（修法 5）。
+ * （那条「点外扩」的尾巴自 task 08-25 起不存在了 —— 关键词命中式推荐整条退役，缺口卡的
+ * CTA 改成让事项 agent 去找。判据本身与那次退役无关，照旧看真实关联数。）
  *
  * `waiting_context` 那半边**保留**：它是「这个事项在等外部输入」的显式声明，与资料多少
  * 正交（等得到东西才叫等），是这张卡最原始的语义。活库里恒 NULL 只说明 owner 没用过

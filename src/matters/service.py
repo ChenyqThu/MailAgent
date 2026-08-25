@@ -23,6 +23,9 @@ from .models import (
     MATTER_ITEM_KINDS,
     MATTER_ITEM_STATUSES,
     MATTER_PRIORITIES,
+    MATTER_PROGRESS_BODY_MAX_CHARS,
+    MATTER_PROGRESS_KINDS,
+    MATTER_PROGRESS_TITLE_MAX_CHARS,
     MATTER_TAG_COLORS,
     MATTER_TAG_DEFAULT_COLOR,
     MATTER_TAG_DEFAULT_SHAPE,
@@ -30,7 +33,6 @@ from .models import (
     MATTER_ACCESS_POLICIES,
     MATTER_RELATION_TYPES,
     MATTER_RESOURCE_KINDS,
-    MATTER_RESOURCE_EXPANSION_REASONS,
     MATTER_RESOURCE_SUBSCRIPTION_STATES,
     MATTER_RESOURCE_SUMMARY_MAX_CHARS,
     MATTER_RESOURCE_SUMMARY_SOURCES,
@@ -47,6 +49,7 @@ from .models import (
     MatterSuggestionBulkSkipReason,
     format_public_id,
     normalize_goal_checks,
+    normalize_progress_refs,
     normalize_tags,
     person_key_for_email,
 )
@@ -58,6 +61,7 @@ from .proposal_scope import (
     scope_from_items,
     scope_from_matter_columns,
     scope_from_payload,
+    scope_from_progress,
     scope_from_relations,
     scope_from_resources,
     scope_from_stakeholders,
@@ -102,6 +106,10 @@ from .events import (
     ITEM_CREATED,
     MATTER_CREATED,
     MATTER_UPDATED,
+    PROGRESS_ADDED,
+    PROGRESS_REMOVED,
+    PROGRESS_RESTORED,
+    PROGRESS_UPDATED,
     RELATION_ADDED,
     RESOURCE_LINKED,
     RESOURCE_SUGGESTION_ACCEPTED,
@@ -123,6 +131,9 @@ ACTION_ONLY_ITEM_FIELDS = {
     "checklist",
 }
 MANUAL_UPDATE_FIELDS = {"status", "health", "current_summary"}
+# 进展条目的可编辑字段（task 08-25）。撤销的前像只快照这些 —— `deleted_at` 有意不在内：
+# 删除 / 恢复的反向操作是另一颗按钮（operation restore / delete），不是 patch 回一个时间戳。
+PROGRESS_PATCH_FIELDS = {"kind", "title", "body", "happened_at", "refs"}
 # P4 绑定三键（D2）：走既有 PATCH 白名单 + 事件 agent_binding_changed；
 # schedule_json P5 才有写面（本相位零消费，不进白名单）。
 BINDING_PATCH_FIELDS = {
@@ -162,38 +173,30 @@ UNDOABLE_PATCH_FIELDS = DIRECT_PATCH_FIELDS | MANUAL_UPDATE_FIELDS
 # snippet / body ...) are the *source* of the truncated `excerpt` field and must
 # never ride out untruncated through metadata — whitelist, 宁缺勿滥.
 SNAPSHOT_METADATA_KEYS = ("internal_id", "message_id", "thread_id", "date_received")
+#: 快照里带几条 curated 进展、每条正文截多长（task 08-25）。10 条 = 一件事最近的脉络，
+#: 再多就变成让模型重读整本流水账；正文 500 字够说清一件事，要全文的走
+#: `matter_get include=["progress"]`。
+SNAPSHOT_PROGRESS_LIMIT = 10
+SNAPSHOT_PROGRESS_BODY_CHARS = 500
 RESOURCE_DISCOVERY_MAX_CANDIDATES = 50
 RESOURCE_DISCOVERY_SCAN_LIMIT = 500
-# 资料发现的词表纪律（0812 dogfood「拉了一堆无关信息」批）。三个档由**文档频率**（DF）划分，
+# 资料候选的词表纪律（0812 dogfood「拉了一堆无关信息」批）。三个档由**文档频率**（DF）划分，
 # 语料 = 本次扫描窗口那批行本身（最近 RESOURCE_DISCOVERY_SCAN_LIMIT 封）：候选就是从这批
 # 行里选的，用同一批行算词频恰好是「在这个池子里算不算稀有」的正解，而且零额外 I/O ——
 # 🔴 绝不为算词频再全表扫一遍。
 #   · common（虚词）：活库实测最近 500 封里 `邮件` 5.0% / `时间` 6.8% / `确认` 7.2% /
-#     `项目` 8.0% / `omada` 26.8%（自家公司名）。靠它们召回 = 全域召回，只留一点点加分。
-#   · rare（低频词） / distinctive（专有名词档）：命中一个就足以说明「这封确实在讲那件事」。
+#     `项目` 8.0% / `omada` 26.8%（自家公司名）。这一档一分都不加。
+#   · rare / distinctive / normal：非虚词，各加一点点分（封顶 0.06）。
 # 小语料保护（MIN_DOCS）不可省：测试库/新装机器只有几封邮件时，纯比例会把每个词都判成
-# 全域词，召回直接归零。
+# 全域词，加分档整个失效。
+# ⚠️ task 08-25：分档曾经还决定「关键词能不能**独自**把一封邮件召回」（权重表 + 准入权重），
+# 那条链随关键词命中式推荐一起退役 —— 现在分档只影响加分，入选判据只有 durable 硬锚。
 RESOURCE_TERM_COMMON_DF_RATIO = 0.05
 RESOURCE_TERM_COMMON_MIN_DOCS = 5
 RESOURCE_TERM_RARE_DF_RATIO = 0.01
 RESOURCE_TERM_RARE_MIN_DOCS = 2
 RESOURCE_TERM_DISTINCTIVE_DF_RATIO = 0.002
 RESOURCE_TERM_DISTINCTIVE_MIN_DOCS = 1
-# 召回权重：distinctive 3 / rare 2 / normal 1 / common 0，过线 ≥3。等价说法 =
-# 「一个低频词顶两个普通词」：低频词 + 普通词过线、单个专有名词（项目代号那种，一个就
-# 该把邮件关联上）也过线，而**一两个普通词过不了线、任意多个虚词永远过不了线**（虚词
-# 恒 0 分）—— 后者正是活库那 10 条噪音的来路。
-RESOURCE_TERM_WEIGHTS = {"distinctive": 3, "rare": 2, "normal": 1, "common": 0}
-RESOURCE_KEYWORD_RECALL_MIN_WEIGHT = 3
-# ⚠️ 留给下一个做召回调优的人（0812 变异测试的实测发现，本批**有意**不动）：这道闸与
-# `_email_resource_candidates` 里的 `score < 0.25` 准入线**几乎完全冗余** —— 关键词分是
-# `min(0.40, 0.10 × recall_weight)`，权重是整数，于是 `0.10 × w ≥ 0.25 ⟺ w ≥ 3`，两道判的
-# 是同一件事。实测把本常量从 3 改成 1，整套 matters 用例（318 条）里除了直接断言这个数字
-# 的那条以外**一条都不变红**。
-# 它唯一还起作用的格子：expanded 那一趟里「有同线程锚（+0.62）、但关键词权重不足」——
-# 此时 `keyword_recalled=False` 且 `matched_people` 为空 ⇒ 一封分数其实很高的邮件被丢弃。
-# 要合并成一道闸就得先决定那一格该怎么判（同线程锚该不该自己就够格进 expanded 结果），
-# 那是召回语义的改动，不是清理重复常量。
 
 # 一个事项挂着 10 条待审建议时不再堆新的：用户先处理完再说（0812 修法 6）。
 RESOURCE_SUGGESTION_BACKLOG_CAP = 10
@@ -401,6 +404,13 @@ class MatterService:
             if "items" in include_set:
                 result["items"] = self.repository.list_items(
                     conn, matter["id"], include_deleted=True
+                )
+            if "progress" in include_set:
+                # curated 进展（task 08-25）。软删的不带出来 —— 它与 `items` 的
+                # `include_deleted=True` 不同源：item 的删除态在清单里还要渲染成划掉的行，
+                # 进展被删就是从脉络里拿掉了。
+                result["progress"] = self.repository.list_progress(
+                    conn, matter["id"]
                 )
             if "timeline" in include_set:
                 result["timeline"], _ = self.repository.list_events(
@@ -610,7 +620,8 @@ class MatterService:
         `local_candidate_count == 0` 判据本身就是错的：该计数已排除全部已关联资源，事项越
         整齐越等于 0。跟进 run 的工具面现在是全部只读工具 + 全库检索，模型能按契约里的三档
         优先级**自己有意识地查** —— 砍掉这条自动路径不是削功能。
-        本地那一趟（durable anchor only）由调用方显式发起，见 `run_spec.build_matter_run_spec`。
+        task 08-25：连「本地那一趟」也没了 —— `run_spec` 起跑时**不再**做任何确定性资料扫描
+        （关键词命中式推荐整条退役）。候选引擎只剩只读候选弹窗一个调用面。
         """
         with self.repository.connect() as conn:
             matter = self._require_matter(conn, public_id)
@@ -663,6 +674,30 @@ class MatterService:
             stakeholders = [
                 {**dict(row), "is_waiting_on": bool(row["is_waiting_on"])}
                 for row in stakeholder_rows
+            ]
+
+            # curated 进展（task 08-25）：跟进 run 与事项对话共用的「这件事到哪一步了」。
+            # 🔴 正文截断到 500 字：快照是有界投影，一条 4000 字的进展能把整段挤爆；要读全文
+            # 的模型有 matter_get include=["progress"]。
+            # 🔴 `refs`（证据链）有意不进快照：它是给人点开验证用的 UI 载荷，模型拿到一串
+            # resource_id / URL 只会当成可引用的来源转手抄进提案 —— 而提案的 sources 有服务端
+            # 独立校验，抄来的引用会被整条丢弃。
+            progress_rows = conn.execute(
+                "SELECT kind,title,body,happened_at,actor_kind FROM matter_progress "
+                "WHERE matter_id=? AND deleted_at IS NULL "
+                "ORDER BY happened_at DESC,id DESC LIMIT ?",
+                (matter["id"], SNAPSHOT_PROGRESS_LIMIT),
+            ).fetchall()
+            progress = [
+                {
+                    **dict(row),
+                    "body": (
+                        str(row["body"])[:SNAPSHOT_PROGRESS_BODY_CHARS]
+                        if row["body"]
+                        else None
+                    ),
+                }
+                for row in progress_rows
             ]
 
             resources = []
@@ -751,6 +786,7 @@ class MatterService:
                 "matter": core,
                 "items": items,
                 "stakeholders": stakeholders,
+                "progress": progress,
                 "resources": resources,
                 "resource_counts": counts,
                 "events": events,
@@ -1542,6 +1578,319 @@ class MatterService:
                 ),
             )
 
+    # ==================== curated 进展 lane（task 08-25）====================
+    # 🔴 与 `matter_item` 的关系见 `MatterProgressKind` 的 docstring：item 是**工作对象**，
+    # progress 是**叙事节点**。进展不进搜索投影（v1 有意不做）—— 检索面现在按 items /
+    # notes / stakeholders 三个桶组织，加第四个桶要重建 fts5 并动 `matched_fields` 这层
+    # 对外契约，而「进展里搜关键词」还没有被点名的需求。
+
+    def add_progress(
+        self,
+        public_id: str,
+        data: Mapping[str, Any],
+        *,
+        expected_version: int,
+        idempotency_key: str,
+        source: str,
+        actor: Actor = Actor(),
+        reason: str | None = None,
+        reverses_event_id: int | None = None,
+    ) -> dict[str, Any]:
+        now = self.clock_ms()
+        fields = self._progress_insert_fields(data, now)
+        dedupe_key = self._dedupe(idempotency_key)
+        with self._transaction() as conn:
+            replay = self._replay(
+                conn, dedupe_key, PROGRESS_ADDED, include_progress=True
+            )
+            if replay:
+                return replay
+            matter = self._require_matter(conn, public_id)
+            self._cas_update_rebase(
+                conn,
+                matter,
+                expected_version,
+                {"updated_at": now, "last_activity_at": now},
+                # 记一条进展：纯追加，没有任何既有对象被改 → 不作废任何提案，
+                # stale base 也不构成冲突（auto-rebase），与 create_item 同判据。
+                scope=SCOPE_NOTHING,
+            )
+            progress_id = self.repository.insert_progress(
+                conn,
+                {
+                    "matter_id": matter["id"],
+                    **fields,
+                    "actor_kind": actor.kind,
+                    "actor_id": actor.actor_id,
+                    "source": source or "desktop_ui",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+            event_id = self._append_event(
+                conn,
+                matter_id=matter["id"],
+                kind=PROGRESS_ADDED,
+                actor=actor,
+                source=source,
+                dedupe_key=dedupe_key,
+                reason=reason,
+                # 🔴 正文**不进**事件 payload：进展本身就是那段正文的家，抄一份到操作日志
+                # 等于同一段话两处存（改一处漏一处），而操作日志要回答的是「谁动了哪条」。
+                payload={
+                    "progress_id": progress_id,
+                    "kind": fields["kind"],
+                    "title": truncated_text(fields["title"]),
+                },
+                happened_at=now,
+                reverses_event_id=reverses_event_id,
+            )
+            after = self.repository.get_matter_by_id(conn, matter["id"])
+            return self._mutation(
+                after,
+                [event_id],
+                progress=self.repository.get_progress(
+                    conn, matter["id"], progress_id
+                ),
+                undo=self._undo_descriptor(
+                    "matter_progress_mutate",
+                    "撤销新增进展",
+                    {
+                        "public_id": public_id,
+                        "operation": "delete",
+                        "progress_id": progress_id,
+                    },
+                    after,
+                    event_id,
+                ),
+            )
+
+    def update_progress(
+        self, public_id: str, progress_id: int, patch: Mapping[str, Any], **mutation: Any
+    ) -> dict[str, Any]:
+        return self._mutate_progress(
+            public_id, progress_id, patch, PROGRESS_UPDATED, **mutation
+        )
+
+    def delete_progress(
+        self, public_id: str, progress_id: int, **mutation: Any
+    ) -> dict[str, Any]:
+        return self._mutate_progress(
+            public_id,
+            progress_id,
+            {"deleted_at": self.clock_ms()},
+            PROGRESS_REMOVED,
+            **mutation,
+        )
+
+    def restore_progress(
+        self, public_id: str, progress_id: int, **mutation: Any
+    ) -> dict[str, Any]:
+        return self._mutate_progress(
+            public_id, progress_id, {"deleted_at": None}, PROGRESS_RESTORED, **mutation
+        )
+
+    def list_progress(
+        self,
+        public_id: str,
+        *,
+        kind: str | None = None,
+        include_deleted: bool = False,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        with self.repository.connect() as conn:
+            matter = self._require_matter(conn, public_id)
+            return self.repository.list_progress(
+                conn,
+                matter["id"],
+                kind=kind,
+                include_deleted=include_deleted,
+                limit=limit,
+            )
+
+    def _mutate_progress(
+        self,
+        public_id: str,
+        progress_id: int,
+        patch: Mapping[str, Any],
+        event_kind: str,
+        *,
+        expected_version: int,
+        idempotency_key: str,
+        source: str,
+        actor: Actor = Actor(),
+        reason: str | None = None,
+        reverses_event_id: int | None = None,
+    ) -> dict[str, Any]:
+        now = self.clock_ms()
+        dedupe_key = self._dedupe(idempotency_key)
+        changes = self._progress_patch_fields(patch)
+        with self._transaction() as conn:
+            replay = self._replay(conn, dedupe_key, event_kind, include_progress=True)
+            if replay:
+                return replay
+            matter = self._require_matter(conn, public_id)
+            progress = self.repository.get_progress(conn, matter["id"], progress_id)
+            if not progress:
+                raise MatterError(
+                    "E_CHILD_NOT_FOUND", f"progress {progress_id} not found"
+                )
+            changes["updated_at"] = now
+            self._cas_update_rebase(
+                conn,
+                matter,
+                expected_version,
+                {"updated_at": now, "last_activity_at": now},
+                # 只有打到**同一条**进展的并发写才算冲突（auto-rebase，形照 item）。
+                scope=scope_from_progress([progress_id]),
+            )
+            if not self.repository.update_progress(
+                conn, matter["id"], progress_id, changes
+            ):
+                raise MatterError(
+                    "E_CHILD_NOT_FOUND", f"progress {progress_id} not found"
+                )
+            progress_after = self.repository.get_progress(
+                conn, matter["id"], progress_id
+            )
+            event_id = self._append_event(
+                conn,
+                matter_id=matter["id"],
+                kind=event_kind,
+                actor=actor,
+                source=source,
+                dedupe_key=dedupe_key,
+                reason=reason,
+                payload={
+                    "progress_id": progress_id,
+                    "fields": sorted(patch),
+                    "kind": (progress_after or progress).get("kind"),
+                    "title": truncated_text((progress_after or progress).get("title")),
+                },
+                happened_at=now,
+                reverses_event_id=reverses_event_id,
+            )
+            after = self.repository.get_matter_by_id(conn, matter["id"])
+            if event_kind == PROGRESS_REMOVED:
+                reverse_input = {
+                    "public_id": public_id,
+                    "operation": "restore",
+                    "progress_id": progress_id,
+                }
+            elif event_kind == PROGRESS_RESTORED:
+                reverse_input = {
+                    "public_id": public_id,
+                    "operation": "delete",
+                    "progress_id": progress_id,
+                }
+            else:
+                reverse_input = {
+                    "public_id": public_id,
+                    "operation": "update",
+                    "progress_id": progress_id,
+                    "patch": {
+                        key: progress.get(key)
+                        for key in patch
+                        if key in PROGRESS_PATCH_FIELDS
+                    },
+                }
+            return self._mutation(
+                after,
+                [event_id],
+                progress=progress_after,
+                undo=self._undo_descriptor(
+                    "matter_progress_mutate",
+                    "撤销进展变更",
+                    reverse_input,
+                    after,
+                    event_id,
+                ),
+            )
+
+    def _progress_insert_fields(
+        self, data: Mapping[str, Any], now: int
+    ) -> dict[str, Any]:
+        """新建一条进展的列值（三条写入口共用，含提案 accept 的 backstop）。"""
+        kind = str(data.get("kind") or "")
+        self._require_value("kind", kind, MATTER_PROGRESS_KINDS)
+        return {
+            "kind": kind,
+            "title": self._require_progress_title(data.get("title")),
+            "body": self._require_progress_body(data.get("body")),
+            # 缺省 = 现在。补记往事的人自己给 happened_at；不给就是「刚发生」。
+            "happened_at": self._require_epoch_ms(
+                "happened_at", data.get("happened_at")
+            )
+            or now,
+            "refs_json": self._dump(self._require_progress_refs(data.get("refs"))),
+        }
+
+    def _progress_patch_fields(self, patch: Mapping[str, Any]) -> dict[str, Any]:
+        """进展编辑的列值。未知键一律拒 —— 静默丢弃会让「改了但没生效」无从发现。"""
+        changes: dict[str, Any] = {}
+        for key, value in patch.items():
+            if key == "kind":
+                kind = str(value or "")
+                self._require_value("kind", kind, MATTER_PROGRESS_KINDS)
+                changes["kind"] = kind
+            elif key == "title":
+                changes["title"] = self._require_progress_title(value)
+            elif key == "body":
+                changes["body"] = self._require_progress_body(value)
+            elif key == "happened_at":
+                happened_at = self._require_epoch_ms("happened_at", value)
+                if happened_at is None:
+                    raise MatterError(
+                        "E_INVALID_ARG", "progress happened_at cannot be cleared"
+                    )
+                changes["happened_at"] = happened_at
+            elif key == "refs":
+                changes["refs_json"] = self._dump(self._require_progress_refs(value))
+            elif key == "deleted_at":
+                # 软删 / 恢复由 delete_progress / restore_progress 内部下发，不走外部 patch
+                # 白名单（REST / 工具的 patch schema 里没有这个键）。
+                changes["deleted_at"] = value
+            else:
+                raise MatterError(
+                    "E_INVALID_ARG", f"progress field is not editable: {key}"
+                )
+        if not changes:
+            raise MatterError("E_INVALID_ARG", "progress patch is empty")
+        return changes
+
+    @staticmethod
+    def _require_progress_title(value: Any) -> str:
+        title = str(value or "").strip()
+        if not title:
+            raise MatterError("E_INVALID_ARG", "progress title is required")
+        if len(title) > MATTER_PROGRESS_TITLE_MAX_CHARS:
+            raise MatterError(
+                "E_INVALID_ARG",
+                f"progress title exceeds {MATTER_PROGRESS_TITLE_MAX_CHARS} characters",
+            )
+        return title
+
+    @staticmethod
+    def _require_progress_body(value: Any) -> str | None:
+        body = MatterService._optional_text(value)
+        if body is not None and len(body) > MATTER_PROGRESS_BODY_MAX_CHARS:
+            raise MatterError(
+                "E_INVALID_ARG",
+                f"progress body exceeds {MATTER_PROGRESS_BODY_MAX_CHARS} characters",
+            )
+        return body
+
+    @staticmethod
+    def _require_progress_refs(value: Any) -> list[dict[str, Any]]:
+        if value is None:
+            return []
+        if not isinstance(value, (list, tuple)):
+            raise MatterError("E_INVALID_ARG", "progress refs must be an array")
+        try:
+            return [dict(ref) for ref in normalize_progress_refs(value)]
+        except ValueError as exc:
+            raise MatterError("E_INVALID_ARG", f"progress refs: {exc}") from exc
+
     def _timestamp_transition(
         self,
         public_id: str,
@@ -2215,153 +2564,13 @@ class MatterService:
             counts={"applied": len(applied), "skipped": len(skipped)},
         )
 
-    def discover_resource_suggestions(
-        self, public_id: str, *, query: str | None = None,
-        expand_reason: str | None = None, limit: int = 10,
-        bump_version: bool = True,
-    ) -> dict[str, Any]:
-        """Discover email resources, persisting only unconfirmed suggestions.
-
-        The first pass is confined to durable Matter anchors (linked threads and stakeholder
-        addresses). Keyword-only global search is allowed only for a declared context gap,
-        verification query, or explicit matter instructions.
-        """
-        limit = max(1, min(int(limit), RESOURCE_DISCOVERY_MAX_CANDIDATES))
-        if expand_reason is not None:
-            self._require_value(
-                "expand_reason", expand_reason, MATTER_RESOURCE_EXPANSION_REASONS
-            )
-        now = self.clock_ms()
-        with self._transaction() as conn:
-            matter = self._require_matter(conn, public_id)
-            # 积压守卫（0812 修法 6）：已经挂着一屏待审建议就别再堆了，先让用户处理完。
-            backlog = int(
-                conn.execute(
-                    "SELECT COUNT(*) FROM matter_resource WHERE matter_id=? "
-                    "AND deleted_at IS NULL AND confirmed_at IS NULL AND added_by_kind='agent'",
-                    (matter["id"],),
-                ).fetchone()[0]
-            )
-            if backlog >= RESOURCE_SUGGESTION_BACKLOG_CAP:
-                return {
-                    "items": [],
-                    "suppressed": [],
-                    "local_candidate_count": 0,
-                    "expanded": False,
-                    "backlog_capped": True,
-                }
-            candidates, local_count, expanded = self._email_resource_candidates(
-                conn, matter, query=query, expand_reason=expand_reason,
-                limit=limit,
-            )
-            linked: list[dict[str, Any]] = []
-            suppressed: list[dict[str, Any]] = []
-            event_ids: list[int] = []
-            for candidate in candidates:
-                canonical_key = rejection_resource_key(
-                    EMAIL_PROVIDER, "email", candidate["external_key"]
-                )
-                fingerprint = evidence_fingerprint(
-                    canonical_key, candidate["evidence"]
-                )
-                rejection = self.repository.get_resource_rejection(
-                    conn, matter["id"], canonical_key
-                )
-                if rejection and rejection["evidence_fingerprint"] == fingerprint:
-                    suppressed.append({
-                        "external_key": candidate["external_key"],
-                        "reason": "rejected_same_evidence",
-                    })
-                    continue
-                provenance = {
-                    "discovery_scope": candidate["scope"],
-                    "expand_reason": expand_reason if candidate["scope"] == "expanded" else None,
-                    "reason": candidate["reason"],
-                    "evidence": candidate["evidence"],
-                    "evidence_fingerprint": fingerprint,
-                }
-                resource, _ = self._upsert_resource(
-                    conn,
-                    {
-                        "provider": EMAIL_PROVIDER,
-                        "kind": "email",
-                        "external_key": candidate["external_key"],
-                        "title": candidate["title"],
-                        "metadata": candidate["metadata"],
-                    },
-                    now,
-                )
-                live = self.repository.get_resource_link(
-                    conn, matter["id"], resource["id"], live_only=True
-                )
-                if live:
-                    continue
-                deleted = self.repository.get_resource_link(
-                    conn, matter["id"], resource["id"]
-                )
-                if deleted:
-                    conn.execute(
-                        "UPDATE matter_resource SET added_by_kind='agent',added_by_id=NULL,"
-                        "confidence=?,provenance_json=?,confirmed_at=NULL,deleted_at=NULL,updated_at=? "
-                        "WHERE id=?",
-                        (candidate["confidence"], self._dump(provenance), now, deleted["id"]),
-                    )
-                    link_id = deleted["id"]
-                else:
-                    link_id = self.repository.insert_resource_link(
-                        conn,
-                        {
-                            "matter_id": matter["id"], "resource_id": resource["id"],
-                            "relation_type": None, "pinned": 0,
-                            "added_by_kind": "agent", "added_by_id": None,
-                            "confidence": candidate["confidence"],
-                            "provenance_json": self._dump(provenance),
-                            "confirmed_at": None, "sub_state": "none",
-                            "created_at": now, "updated_at": now,
-                        },
-                    )
-                event_key = (
-                    f"matter:{matter['id']}:resource_linked:{resource['id']}:{fingerprint}"
-                )
-                if not self.repository.find_event(conn, event_key):
-                    event_ids.append(self._append_event(
-                        conn, matter_id=matter["id"], kind=RESOURCE_LINKED,
-                        actor=Actor(kind="agent"), source="matter_followup",
-                        dedupe_key=event_key, reason=candidate["reason"],
-                        resource_id=resource["id"],
-                        payload={
-                            "link_id": link_id, "suggested": True,
-                            "evidence_fingerprint": fingerprint,
-                            "title": truncated_text(resource.get("title")),
-                            "resource_kind": resource.get("kind"),
-                        },
-                        happened_at=now,
-                    ))
-                linked.append({
-                    "resource": resource,
-                    "link": self.repository.get_resource_link(
-                        conn, matter["id"], resource["id"], live_only=True
-                    ),
-                    "reason": candidate["reason"],
-                    "confidence": candidate["confidence"],
-                })
-            if linked and bump_version:
-                if not self._cas_update(
-                    conn, matter["id"], int(matter["version"]),
-                    {"updated_at": now, "last_activity_at": now},
-                    # 新发现的资料建议：只碰这些 link，不改任何既有业务字段。
-                    scope=scope_from_resources(
-                        [int(entry["resource"]["id"]) for entry in linked]
-                    ),
-                ):
-                    raise self._version_conflict()
-            return {
-                "items": linked,
-                "suppressed": suppressed,
-                "local_candidate_count": local_count,
-                "expanded": expanded,
-                "backlog_capped": False,
-            }
+    # `discover_resource_suggestions` 已退役（task 08-25，owner 0825）：关键词命中式的
+    # 资料推荐置信度太低，产出的 unconfirmed 建议只是给 owner 添审批负担。资料关联的推荐
+    # 现在只有两条**都过 LLM 判断**的路：跟进 run 的提案信封 `resource` change，与事项
+    # 对话里 agent 自己检索后 `matter_resource_mutate`。
+    # 🔴 候选引擎 `_email_resource_candidates`、拒绝记忆、`reject_resource_suggestion` /
+    # `bulk_resolve_resource_suggestions` 一个都没动 —— 只读候选（`list_resource_candidates`）
+    # 与会议结束→出席者身份匹配的提案（`propose_calendar_event_resource`）仍在用它们。
 
     def propose_calendar_event_resource(
         self,
@@ -2377,9 +2586,12 @@ class MatterService:
         """会议结束 → event 资料关联**提案**（L4 批次 1 #3，agenda worker 的唯一写入口）。
 
         零自动写：产物恒是 ``confirmed_at IS NULL`` + ``added_by_kind='agent'`` 的
-        unconfirmed link，owner 在既有资料建议面确认 / 拒绝。幂等与抑制全复用
-        ``discover_resource_suggestions`` 家族：已有 live link 跳过、拒绝记忆同
-        fingerprint 抑制、``RESOURCE_SUGGESTION_BACKLOG_CAP`` 原样。
+        unconfirmed link，owner 在既有资料建议面确认 / 拒绝。幂等与抑制沿用资料建议家族的
+        既有机制：已有 live link 跳过、拒绝记忆同 fingerprint 抑制、
+        ``RESOURCE_SUGGESTION_BACKLOG_CAP`` 原样。
+
+        🔴 task 08-25 起这是**唯一**会写 unconfirmed link 的确定性路径 —— 判据是**身份
+        锚定**（与会者 email → 干系人）不是关键词命中，所以它没跟着关键词推荐一起退役。
 
         evidence = ``stakeholder:<email>``（命中的与会者 = 干系人邮箱，durable 锚）。
         resource_key 是**系列级**（``event_resource_key`` 不含 recurrence_id）⇒ 拒一次
@@ -2485,21 +2697,22 @@ class MatterService:
     ) -> dict[str, Any]:
         """「手动关联资料」入口用的**只读**候选（G-14 tab ①「与本事项相关」那一组）。
 
-        与 `discover_resource_suggestions` 共用同一个候选引擎 `_email_resource_candidates`
-        —— 于是人工挑与 Agent 建议看到的是同一批锚点、同一套理由文案，不会出现「Agent 说相关
-        的这封，我自己搜却看不到」。差别只有一个：这里**一个字都不写**（不建 link、不发事件、
-        不推版本、不吃 backlog 配额），所以打开弹窗这个动作本身没有副作用。
+        这里**一个字都不写**（不建 link、不发事件、不推版本、不吃 backlog 配额），
+        所以打开弹窗这个动作本身没有副作用。
 
-        🔴 有意 **不接 `query` / `expand_reason`**：`local` 档结构上要求 thread / 干系人硬锚，
-        关键词只能加分、不能独自把一封邮件拉进来（见 `_email_resource_candidates` 注释）。
-        用户在弹窗里输入的关键词走的是另一条路 —— 前端的全局邮件搜索（FTS5），那条路本来就
-        是「用户明说要搜什么」，不需要也不应该借用 agent 侧的 expansion 声明。
+        🔴 有意 **不接关键词**：候选引擎结构上要求 thread / 干系人硬锚，事项文档里的词只能
+        加分、不能独自把一封邮件拉进来（见 `_email_resource_candidates`）。用户在弹窗里输入
+        的关键词走的是另一条路 —— 前端的全局邮件搜索（FTS5），那条路本来就是「用户明说要
+        搜什么」。
+
+        🔴 task 08-25 起这是候选引擎 `_email_resource_candidates` 的**唯一**调用面（关键词
+        命中式的资料推荐整条退役）。
         """
         limit = max(1, min(int(limit), RESOURCE_DISCOVERY_MAX_CANDIDATES))
         with self.repository.connect() as conn:
             matter = self._require_matter(conn, public_id)
-            candidates, local_count, _expanded = self._email_resource_candidates(
-                conn, matter, query=None, expand_reason=None, limit=limit
+            candidates, local_count = self._email_resource_candidates(
+                conn, matter, limit=limit
             )
             return {"items": candidates, "local_candidate_count": local_count}
 
@@ -3330,6 +3543,7 @@ class MatterService:
                     applied_events=applied_events,
                     warnings=warnings,
                     actor=actor,
+                    source=source,
                     now=now,
                 )
             resolved_summary = (
@@ -3559,12 +3773,53 @@ class MatterService:
         applied_events: list[tuple[str, dict[str, Any], int | None, int | None]],
         warnings: list[str],
         actor: Actor,
+        source: str,
         now: int,
     ) -> None:
         """逐 change 应用（D9 步骤 4）：field→matter 列；action→item；resource→link
-        确认；fact/inference 只留档不落结构化状态。"""
+        确认；progress→curated 进展行；fact/inference 只留档不落结构化状态。"""
         kind = str(change.get("kind") or "")
         if kind in ("fact", "inference"):
+            return
+        if kind == "progress":
+            # task 08-25：跟进 run 对进展的**唯一**通道。它拿不到写工具（结构红线 §1），
+            # 所以这条 change 只有「追加」一种形态 —— 更正既有进展要 owner 在场，走对话。
+            spec = change.get("progress")
+            if not isinstance(spec, Mapping):
+                raise MatterError(
+                    "E_INVALID_ARG",
+                    f"progress change {change_id} missing progress payload",
+                )
+            # backstop：propose 侧已按同一套判据 fail-closed 剔过一轮（§2.2 三道门的第三道）。
+            fields = self._progress_insert_fields(spec, now)
+            progress_id = self.repository.insert_progress(
+                conn,
+                {
+                    "matter_id": matter["id"],
+                    **fields,
+                    # 🔴 行的 actor 是 **agent** 而不是点「接受」的那个人：这段脉络是
+                    # Agent 写的，owner 只是放行。审计事件那一侧照旧记 owner（下面
+                    # `applied_events` 用 accept 的 actor），两件事各自如实。
+                    "actor_kind": MatterActorKind.AGENT.value,
+                    "actor_id": None,
+                    "source": source or "matter_review",
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+            applied_events.append(
+                (
+                    PROGRESS_ADDED,
+                    {
+                        "progress_id": progress_id,
+                        "kind": fields["kind"],
+                        "title": truncated_text(fields["title"]),
+                        "via_update_id": update_id,
+                    },
+                    None,
+                    None,
+                )
+            )
             return
         if kind == "field":
             target = change.get("target")
@@ -4556,9 +4811,16 @@ class MatterService:
         return keys
 
     def _email_resource_candidates(
-        self, conn: sqlite3.Connection, matter: Mapping[str, Any], *,
-        query: str | None, expand_reason: str | None, limit: int,
-    ) -> tuple[list[dict[str, Any]], int, bool]:
+        self, conn: sqlite3.Connection, matter: Mapping[str, Any], *, limit: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """本事项的邮件候选：**只走 durable 硬锚**（同线程 / 干系人），事项文档里的词只加分。
+
+        task 08-25（owner 0825「置信度非常低，反而徒增烦恼」）：关键词命中式召回与它的外扩
+        通道（`query` / `expand_reason` / 权重表 / 准入权重）整条退役。资料关联的推荐现在只
+        有 LLM 判断那两条路 —— 跟进 run 提案里的 `resource` change、事项对话里 agent 自己检索
+        后 `matter_resource_mutate`。这里留下的是「与本事项**结构上**相连的邮件」，供 owner
+        在关联弹窗里手动挑。
+        """
         linked_rows = conn.execute(
             "SELECT r.kind,r.external_key FROM matter_resource mr "
             "JOIN resource r ON r.id=mr.resource_id "
@@ -4604,28 +4866,16 @@ class MatterService:
                 "stakeholders_text", "notes_text",
             )
         ) if document else str(matter["title"])
-        # 🔴 召回词与加分词是**两个集合**（0812 修法 3）。旧实现把
-        # `matter_text ∪ query` 整个当匹配词集，于是 agent 自己写进 summary/notes 的散文
-        # 成了检索条件 —— 实测事项描述里一句「未见邮件记录」，把标题带「已撤回邮件」的
-        # 撤回通知拉了进来。现在：
-        #   · recall_terms（来自调用方声明的 query）决定**是否入选**；
-        #   · boost_terms（来自事项文档）只**加分**，永远不能独自把一封邮件拉进来。
-        # matter_instructions 是 owner 手写的「专属指令」（不是 agent 散文），所以
-        # `expand_reason='matter_instructions'` 这一档把它并进召回源 —— 否则该档结构性失效。
-        recall_source = str(query or "")
-        if expand_reason == "matter_instructions":
-            recall_source = " ".join(
-                (recall_source, str(matter.get("matter_instructions") or ""))
-            )
-        recall_terms = self._semantic_terms(recall_source)
-        boost_terms = self._semantic_terms(matter_text) - recall_terms
+        # 🔴 事项文档里的词**只加分**，永远不能独自把一封邮件拉进来（0812 修法 3）。
+        # 那次的病灶是把事项散文当检索条件：事项描述里一句「未见邮件记录」，把标题带
+        # 「已撤回邮件」的撤回通知拉了进来。入选判据只认 durable 硬锚（同线程 / 干系人）。
+        boost_terms = self._semantic_terms(matter_text)
         rows = conn.execute(
             "SELECT internal_id,message_id,thread_id,subject,sender,sender_name,to_addr,cc_addr,"
             "date_received,snippet FROM email_metadata ORDER BY date_received DESC,internal_id DESC LIMIT ?",
             (RESOURCE_DISCOVERY_SCAN_LIMIT,),
         ).fetchall()
-        # DF 语料 = 上面那批行本身，逐行的词集顺手缓存（旧实现每行算两遍：local 一遍、
-        # expanded 再一遍）。全表扫描算词频是明令禁止的。
+        # DF 语料 = 上面那批行本身，逐行的词集顺手缓存。全表扫描算词频是明令禁止的。
         row_terms: dict[int, set[str]] = {}
         document_frequency: dict[str, int] = {}
         for row in rows:
@@ -4640,7 +4890,7 @@ class MatterService:
         def term_tier(term: str) -> str:
             return self._term_tier(term, document_frequency.get(term, 0), doc_total)
 
-        def build_candidate(row: sqlite3.Row, scope: str) -> dict[str, Any] | None:
+        def build_candidate(row: sqlite3.Row) -> dict[str, Any] | None:
             external_key = email_resource_key(int(row["internal_id"]))
             if external_key in linked_keys:
                 return None
@@ -4661,39 +4911,19 @@ class MatterService:
                 # 「只靠关键词、没有 thread/stakeholder 硬锚的不许进」）。旧代码靠虚词堆出来的
                 # 0.24 关键词分把它托过线，虚词分收紧后这里必须自己站得住。
                 score += min(0.30, 0.20 + len(matched_people) * 0.05)
-            email_terms = row_terms[int(row["internal_id"])]
-            matched_recall = sorted(recall_terms & email_terms)
-            matched_boost = sorted(boost_terms & email_terms)
-            recall_weight = sum(
-                RESOURCE_TERM_WEIGHTS[term_tier(term)] for term in matched_recall
-            )
-            keyword_recalled = recall_weight >= RESOURCE_KEYWORD_RECALL_MIN_WEIGHT
-            matched_terms = matched_recall + [
-                term for term in matched_boost if term not in matched_recall
-            ]
+            matched_terms = sorted(boost_terms & row_terms[int(row["internal_id"])])
             if matched_terms:
                 evidence.extend(f"keyword:{term}" for term in matched_terms[:8])
-            if recall_weight:
-                # 权重 3（低频+普通 / 单个专有名词）落在 0.30，刚好在准入线之上；
-                # 封顶 0.40，关键词永远压不过同线程锚（0.62）。
-                score += min(0.40, 0.10 * recall_weight)
             boost_weight = sum(
-                1 for term in matched_boost if term_tier(term) != "common"
+                1 for term in matched_terms if term_tier(term) != "common"
             )
             if boost_weight:
                 score += min(0.06, 0.02 * boost_weight)
-            if scope == "local" and not any(
+            # 🔴 durable 硬锚是**入选**的唯一判据：加分词再多也进不来。
+            if not any(
                 item.startswith(("thread:", "stakeholder:")) for item in evidence
             ):
                 return None
-            if scope == "expanded":
-                evidence.append(f"expansion:{expand_reason}")
-                if query:
-                    evidence.extend(
-                        f"query:{term}" for term in sorted(self._semantic_terms(query))[:8]
-                    )
-                if not keyword_recalled and not matched_people:
-                    return None
             if score < 0.25:
                 return None
             reason_parts = []
@@ -4703,8 +4933,6 @@ class MatterService:
                 reason_parts.append("涉及事项干系人")
             if matched_terms:
                 reason_parts.append(f"命中主题词：{', '.join(matched_terms[:4])}")
-            if scope == "expanded":
-                reason_parts.append(f"因 {expand_reason} 外扩检索")
             return {
                 "external_key": external_key,
                 "title": row["subject"],
@@ -4720,57 +4948,20 @@ class MatterService:
                     "to_addr": row["to_addr"],
                     "cc_addr": row["cc_addr"],
                 },
-                "scope": scope,
+                # 只剩这一档了，但字段留着：它是候选行的线上契约（前端关联弹窗按它分组），
+                # 去掉等于让一个不相干的批次去改前端。
+                "scope": "local",
                 "reason": "；".join(reason_parts),
                 "evidence": sorted(set(evidence)),
                 "confidence": round(min(score, 0.98), 3),
             }
 
-        local = [candidate for row in rows if (candidate := build_candidate(row, "local"))]
+        # 扫描行本身按 date_received DESC 排，sort 稳定 ⇒ 同分内部仍是「新的在前」。
+        # 🔴 有意**不按线程折叠**：候选全部来自已关联线程，那条线程的每一封新邮件都是用户
+        # 要看的（「同线程还有 5 封新回复」只报 1 封才是 bug）。
+        local = [candidate for row in rows if (candidate := build_candidate(row))]
         local.sort(key=lambda item: -item["confidence"])
-        should_expand = False
-        if expand_reason == "context_gap":
-            should_expand = not local
-        elif expand_reason == "verification":
-            if not str(query or "").strip():
-                raise MatterError(
-                    "E_INVALID_ARG", "verification expansion requires a query"
-                )
-            should_expand = True
-        elif expand_reason == "matter_instructions":
-            if not str(matter.get("matter_instructions") or "").strip():
-                raise MatterError(
-                    "E_INVALID_STATE", "matter has no instructions requiring expansion"
-                )
-            should_expand = True
-        expanded: list[dict[str, Any]] = []
-        if should_expand:
-            local_keys = {item["external_key"] for item in local}
-            expanded = [
-                candidate
-                for row in rows
-                if (candidate := build_candidate(row, "expanded"))
-                and candidate["external_key"] not in local_keys
-            ]
-            # 扫描行本身按 date_received DESC 排，sort 稳定 ⇒ 同分内部仍是「新的在前」。
-            expanded.sort(key=lambda item: -item["confidence"])
-            # 🔴 外扩结果按线程折叠，每线程只留分最高的一条（0812 修法 6）。候选池是 email
-            # 粒度、thread_id 只用来加分从不折叠，实测活库里「原件 + 撤回通知 + 回复」三封
-            # 同线程邮件各占一个名额，把 10 条配额吃掉三成。
-            # local 有意不折叠：它的候选全部来自**已关联线程**，那条线程的每一封新邮件都是
-            # 用户要的（"同线程还有 5 封新回复" 只报 1 封才是 bug）。
-            folded: list[dict[str, Any]] = []
-            seen_threads: set[str] = set()
-            for candidate in expanded:
-                thread_id = str(candidate["metadata"].get("thread_id") or "")
-                if thread_id:
-                    if thread_id in seen_threads:
-                        continue
-                    seen_threads.add(thread_id)
-                folded.append(candidate)
-            expanded = folded
-        combined = (local + expanded)[:limit]
-        return combined, len(local), should_expand
+        return local[:limit], len(local)
 
     def _tag_replay(
         self,
@@ -4943,6 +5134,7 @@ class MatterService:
         expected_kind: str | tuple[str, ...],
         *,
         include_item: bool = False,
+        include_progress: bool = False,
     ) -> dict[str, Any] | None:
         event = self.repository.find_event(conn, dedupe_key)
         if not event:
@@ -4961,6 +5153,15 @@ class MatterService:
             extra["item"] = self.repository.get_item(
                 conn, event["matter_id"], event["item_id"]
             )
+        if include_progress:
+            # 🔴 进展没有 `matter_event` 上的外键列（item / resource / update 那三根是
+            # P3 就定好的形状，为进展再加一列要重建整张事件表）—— 重放要还原哪一条，
+            # 判据是事件 payload 里的 `progress_id`。
+            progress_id = (event.get("payload") or {}).get("progress_id")
+            if isinstance(progress_id, int) and not isinstance(progress_id, bool):
+                extra["progress"] = self.repository.get_progress(
+                    conn, event["matter_id"], progress_id
+                )
         return self._mutation(matter, [event["id"]], **extra)
 
     def _require_matter(

@@ -196,6 +196,72 @@ class MatterRepository:
         ).fetchall()
         return [self._item_row(row) for row in rows]
 
+    def insert_progress(
+        self, conn: sqlite3.Connection, values: Mapping[str, Any]
+    ) -> int:
+        columns = tuple(values)
+        cursor = conn.execute(
+            f"INSERT INTO matter_progress ({', '.join(columns)}) "
+            f"VALUES ({', '.join('?' for _ in columns)})",
+            tuple(values[column] for column in columns),
+        )
+        return int(cursor.lastrowid)
+
+    def update_progress(
+        self,
+        conn: sqlite3.Connection,
+        matter_id: int,
+        progress_id: int,
+        changes: Mapping[str, Any],
+    ) -> bool:
+        assignments = [f"{column}=?" for column in changes]
+        assignments.append("version=version+1")
+        cursor = conn.execute(
+            f"UPDATE matter_progress SET {', '.join(assignments)} "
+            "WHERE id=? AND matter_id=?",
+            (*changes.values(), progress_id, matter_id),
+        )
+        return cursor.rowcount == 1
+
+    def get_progress(
+        self, conn: sqlite3.Connection, matter_id: int, progress_id: int
+    ) -> dict[str, Any] | None:
+        row = conn.execute(
+            "SELECT * FROM matter_progress WHERE id=? AND matter_id=?",
+            (progress_id, matter_id),
+        ).fetchone()
+        return self._progress_row(row) if row else None
+
+    def list_progress(
+        self,
+        conn: sqlite3.Connection,
+        matter_id: int,
+        *,
+        kind: str | None = None,
+        include_deleted: bool = False,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """本事项的进展条目, **叙事时间倒序**（新的在前）。
+
+        排序键是 `happened_at` 而不是 `created_at`：补记上周发生的事时两者能差好几天，
+        按记录时间排会把它插在今天的进展中间 —— 读的人拿不到事情的发展脉络。
+        """
+        clauses = ["matter_id=?"]
+        params: list[Any] = [matter_id]
+        if kind:
+            clauses.append("kind=?")
+            params.append(kind)
+        if not include_deleted:
+            clauses.append("deleted_at IS NULL")
+        sql = (
+            f"SELECT * FROM matter_progress WHERE {' AND '.join(clauses)} "
+            "ORDER BY happened_at DESC, id DESC"
+        )
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        return [self._progress_row(row) for row in conn.execute(sql, params).fetchall()]
+
     def list_events(
         self,
         conn: sqlite3.Connection,
@@ -1134,6 +1200,12 @@ class MatterRepository:
         result = dict(row)
         result["checklist"] = cls._json(result.pop("checklist_json"), [])
         result["source_locator"] = cls._json(result.pop("source_locator_json"), None)
+        return result
+
+    @classmethod
+    def _progress_row(cls, row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["refs"] = cls._json(result.pop("refs_json"), [])
         return result
 
     @classmethod

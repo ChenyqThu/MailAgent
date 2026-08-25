@@ -110,6 +110,9 @@ BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     BuiltinToolPolicy("matter_create", "matters", "auto"),
     BuiltinToolPolicy("matter_update", "matters", "auto"),
     BuiltinToolPolicy("matter_item_mutate", "matters", "auto"),
+    # task 08-25：curated 进展条目。与同族七写同档 auto —— 本地、留审计事件、软删可 restore；
+    # 而且它要被日常维护（owner 的原话是「让 agents 来维护」），每记一条弹一张卡就没人用了。
+    BuiltinToolPolicy("matter_progress_mutate", "matters", "auto"),
     BuiltinToolPolicy("matter_resource_mutate", "matters", "auto"),
     BuiltinToolPolicy("matter_stakeholder_mutate", "matters", "auto"),
     BuiltinToolPolicy("matter_relation_mutate", "matters", "auto"),

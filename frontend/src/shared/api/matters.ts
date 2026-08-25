@@ -20,9 +20,9 @@ import type {
   MatterDuplicateCandidate,
   MatterPendingUpdatesResponse,
   MatterRelation,
+  MatterProgress,
   MatterResourceAttachment,
   MatterResourceCandidateResult,
-  MatterResourceDiscoveryResult,
   MatterResourceListItem,
   MatterResourceLookupResponse,
   MatterResourceVersionTrail,
@@ -271,6 +271,58 @@ export function createMattersApi(baseUrl: string): MattersApi {
       )
     },
 
+    async listProgress(matterId, options = {}): Promise<MatterProgress[]> {
+      const result = await request<{ items: MatterProgress[] }>(
+        baseUrl,
+        'GET',
+        `/matters/${segment(matterId)}/progress`,
+        {
+          query: {
+            kind: options.kind,
+            include_deleted: options.includeDeleted,
+            limit: options.limit
+          }
+        }
+      )
+      return result.items
+    },
+
+    createProgress(matterId, input, options): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/progress`,
+        mutationRequest(options, input)
+      )
+    },
+
+    patchProgress(matterId, progressId, input, options): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'PATCH',
+        `/matters/${segment(matterId)}/progress/${segment(progressId)}`,
+        mutationRequest(options, input)
+      )
+    },
+
+    deleteProgress(matterId, progressId, options): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'DELETE',
+        `/matters/${segment(matterId)}/progress/${segment(progressId)}`,
+        mutationRequest(options)
+      )
+    },
+
+    restoreProgress(matterId, progressId, options): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/progress/${segment(progressId)}/restore`,
+        mutationRequest(options)
+      )
+    },
+
     async listResources(matterId, options = {}): Promise<MatterResourceListItem[]> {
       const result = await request<{ items: MatterResourceListItem[] }>(
         baseUrl,
@@ -352,21 +404,9 @@ export function createMattersApi(baseUrl: string): MattersApi {
       )
     },
 
-    discoverResourceSuggestions(matterId, input = {}): Promise<MatterResourceDiscoveryResult> {
-      return request(
-        baseUrl,
-        'POST',
-        `/matters/${segment(matterId)}/resource-suggestions/discover`,
-        {
-          body: {
-            query: input.query,
-            expand_reason: input.expandReason,
-            limit: input.limit
-          }
-        }
-      )
-    },
-
+    // `discoverResourceSuggestions`（关键词命中式外扩检索）已随 task 08-25 整条退役 ——
+    // 端点 `POST /{id}/resource-suggestions/discover` 也没了。资料推荐现在只有两条来源：
+    // 跟进 run 的提案 `resource` change、对话里 agent 检索后的 `matter_resource_mutate`。
     listResourceCandidates(matterId, options = {}): Promise<MatterResourceCandidateResult> {
       return request(baseUrl, 'GET', `/matters/${segment(matterId)}/resource-candidates`, {
         query: { limit: options.limit }
@@ -700,7 +740,7 @@ function asPositiveInt(value: unknown): number | null {
  *  relation — one mapper, four collection names + four id/create-payload keys. */
 function resolveChildUndo(
   publicId: string,
-  collection: 'items' | 'resources' | 'stakeholders' | 'relations',
+  collection: 'items' | 'progress' | 'resources' | 'stakeholders' | 'relations',
   idKey: string,
   createKey: string,
   createOperation: 'create' | 'link',
@@ -764,6 +804,18 @@ export function resolveMatterUndoRequest(
     }
   } else if (descriptor.tool === 'matter_item_mutate') {
     resolved = resolveChildUndo(publicId, 'items', 'item_id', 'item', 'create', 'delete', input)
+  } else if (descriptor.tool === 'matter_progress_mutate') {
+    // 进展的 undo 与 item 同形（create/update/delete/restore + 行 id），路径段就是 `progress`
+    // （REST 是 `/matters/{id}/progress/{pid}`，没有复数变形）。
+    resolved = resolveChildUndo(
+      publicId,
+      'progress',
+      'progress_id',
+      'progress',
+      'create',
+      'delete',
+      input
+    )
   } else if (descriptor.tool === 'matter_resource_mutate') {
     resolved = resolveChildUndo(
       publicId,

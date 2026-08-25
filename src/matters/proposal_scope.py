@@ -60,9 +60,13 @@ class MatterWriteScope:
     """一次写入（或一份提案）触及的对象集合。
 
     `stakeholder_ids` / `relation_ids`（0813 A2）：提案结构上碰不到干系人/关系（change kind
-    只有 fact/inference/field/action/resource），所以这两个集合对**提案失效**永远不产生重叠 ——
-    它们存在是为了版本账本（`service._cas_update` 落的 gap scan 判据）：并发的两笔干系人写
-    只在打到**同一行**时才算真冲突。
+    只有 fact/inference/field/action/resource/progress），所以这两个集合对**提案失效**永远
+    不产生重叠 —— 它们存在是为了版本账本（`service._cas_update` 落的 gap scan 判据）：
+    并发的两笔干系人写只在打到**同一行**时才算真冲突。
+
+    `progress_ids`（task 08-25）同理：提案里的 `kind=progress` 只有「追加一条」这一种形态
+    （没有 `target`），所以它对提案失效也永远不产生重叠；集合存在是为了让「并发编辑两条
+    **不同**的进展」不被 matter 级 CAS 钝化成冲突。
     """
 
     fields: frozenset[str] = frozenset()
@@ -70,6 +74,7 @@ class MatterWriteScope:
     resource_ids: frozenset[int] = frozenset()
     stakeholder_ids: frozenset[int] = frozenset()
     relation_ids: frozenset[int] = frozenset()
+    progress_ids: frozenset[int] = frozenset()
     #: 推导不出可靠目标 / 语义上触及整个聚合 → 与任何提案都算重叠（fail-closed）。
     wildcard: bool = False
 
@@ -82,6 +87,7 @@ class MatterWriteScope:
             or self.resource_ids & other.resource_ids
             or self.stakeholder_ids & other.stakeholder_ids
             or self.relation_ids & other.relation_ids
+            or self.progress_ids & other.progress_ids
         )
 
 
@@ -125,6 +131,11 @@ def scope_from_relations(relation_ids: Any) -> MatterWriteScope:
     return _scope_from_ids(relation_ids, "relation_ids")
 
 
+def scope_from_progress(progress_ids: Any) -> MatterWriteScope:
+    """从被改动的进展条目 id 集合推导。非 int 元素 → fail closed。"""
+    return _scope_from_ids(progress_ids, "progress_ids")
+
+
 def _scope_from_ids(values: Any, field: str) -> MatterWriteScope:
     ids: set[int] = set()
     for value in values or ():
@@ -135,7 +146,11 @@ def _scope_from_ids(values: Any, field: str) -> MatterWriteScope:
 
 
 #: 版本账本（sync_state `matter_version_scopes:*`）里 scope 的 JSON 键。顺序即序列化顺序。
-_SCOPE_ID_FIELDS = ("item_ids", "resource_ids", "stakeholder_ids", "relation_ids")
+#: 🔴 追加新键对**老账本**是安全的：`scope_from_payload` 对缺席的键补空集，v70 之前写下的
+#: 条目照常解析成「没碰过任何进展」—— 那正是事实。
+_SCOPE_ID_FIELDS = (
+    "item_ids", "resource_ids", "stakeholder_ids", "relation_ids", "progress_ids",
+)
 
 
 def scope_to_payload(scope: MatterWriteScope) -> dict[str, Any]:
@@ -184,6 +199,9 @@ def proposal_scope(
     - `field`：写 matter 的一个字段列。
     - `action` 且 `target=None`：新建 item（纯追加，不可能与既有对象冲突）→ 不触及。
     - `action` 且 `target={"id": <int>}`：改那一条 item。
+    - `progress`：记一条进展。**只有追加这一种形态**（跟进 run 不改既有条目 —— 更正是
+      交互式对话里 owner 在场时才做的事），所以不触及任何既有对象。带了 `target` 的
+      形态结构上还不存在，落到 fail-closed 分支（宁可保守）。
     - `resource` 且带 `target.id`：确认那一条 resource link。
     - `resource` 且带 `resource`（新建关联）：由 `resolve_new_resource` 回答「本事项**已经**
       有过这份资料的 link 吗」—— 有（含 owner 解除过的 soft-deleted 行）就把那个
@@ -245,6 +263,10 @@ def proposal_scope(
                 return SCOPE_EVERYTHING  # fail closed：拿不到目标 item
             item_ids.add(int(item_id))
             continue
+        if kind == "progress":
+            if change.get("target") is None:
+                continue  # 记一条进展：纯追加，没有可冲突的既有对象
+            return SCOPE_EVERYTHING  # fail closed：提案改既有进展的形态还不存在
         if kind == "resource":
             spec = change.get("resource")
             if isinstance(spec, Mapping):
