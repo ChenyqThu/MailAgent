@@ -94,7 +94,7 @@ agent-first（先找 agent、开对话、派任务）是 chat 形态的延续，
 |---|---|---|
 | A1 | **接线批（=批次 1，先行）**：详见 §4 | 档案 01 §8 |
 | A2 | **行动项执行契约（=批次 3，架构中心）**：matter_item 升格有状态机的一等对象（D4）；契约 = 派发/接单 ack/过程 activity（thought/action）/反问 elicitation/交付 result；**委派 ≠ 转移责任**（owner=人恒为负责人，executor=人或 agent，两列分开）；elicitation 进例外面。**档案 07 五条设计约束**：① 执行契约状态由服务端 CAS 强制、业务语义标签可自定义，**两者不合成一列**（Notion 手搓状态机的教训 = agent 忘改状态即静默卡死）② claim = 带 lease 的 CAS（复用 async_jobs fire_key + expect_status 先例 + `lease_expires_at`，到期回 open）③ `awaiting_input` 一等状态（复用 paused_handoff/审批 stash/TTL，「等人」与「死了」在 UI 上必须长得不一样）④ 过程可见性挂行动项不挂会话（`ai_chat_sessions` 加 `item_id` 反查 + 行内 live badge）⑤ propose-only 做成 **per-行动项执行档** `propose_only\|edit_with_approval\|autonomous`（挂行动项不挂 agent，同一 agent 不同行动项可不同档） | Linear AgentSession（04 §2）· AAMP intents（04 §5）· agent-inbox 契约（06 §3）· **Notion 软硬对照（07 §8b）** |
-| A3 | **事项编排者**：跟进 agent 升格为本事项的 orchestrator（管理行动项队列）；`custom_agent_call` 放开 headless，配小脑 triage 闸（判据取 DB 事实非措辞，底压确定性地板）+ hold-token 律（任何免卡旁路必须是对服务端已展示状态的确认，绑 seq/短 TTL/turn 死）+ 形状对偶回归基准 | cumora 协调纪律（02 §5）· Anthropic orchestrator-worker（02 §6） |
+| A3 | **事项工作群 · Agent 会议 · Agent 成员面**（2026-08-25 owner 拍板具体化，方案 SSoT → [`a3-agent-meetings-and-crew.md`](./a3-agent-meetings-and-crew.md)，拆批 A3a 会议最小版 / A3b Agent 成员面 / A3c 约日程 / A3d 真分身 gated）。原「事项编排者」内核（`custom_agent_call` headless + 小脑 triage 闸 + hold-token 律）后置为 A3d 组成部分 | cumora 协调纪律（02 §5）· Anthropic orchestrator-worker（02 §6）· owner 三拍板（见方案 §1） |
 | A4 | **SOP-as-skill**：事项类别 ↔ SOP skill 绑定；run 后 agent 可提议 SOP 修订（走 P8 trust + 人审 + 可回滚；⚠️ memory/SOP 文件会自我投毒，恒人审） | cumora T6（02 §2.8）· P8 trust-by-hash |
 | A5 | **预约链接**：照抄 Inbox Zero 四表极简 schema（weekday+分钟整数避 DST / cancelTokenHash 无账号取消 / idempotencyToken 防重），不看 cal.diy（官方自认非生产用） | 档案 06 §1 机制④ |
 
