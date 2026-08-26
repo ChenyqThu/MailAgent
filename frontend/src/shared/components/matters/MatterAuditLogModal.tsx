@@ -4,6 +4,8 @@ import {
   ArrowRight,
   BellOff,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Circle,
   EyeOff,
   FileText,
@@ -36,7 +38,14 @@ import { cn } from '@shared/lib/cn'
 
 import { dayLabelOf, groupByDay, type Translate } from './matterDayGroups'
 import { MatterNarrativeBody } from './MatterNarrativeBody'
-import { narrateEvent, readChanges, readFields } from './matterTimelineModel'
+import {
+  groupTimelineEvents,
+  narrateEvent,
+  narrateTimelineGroup,
+  readChanges,
+  readFields,
+  type TimelineGroup
+} from './matterTimelineModel'
 
 type AuditFilter = 'all' | MatterActorKind
 
@@ -136,9 +145,15 @@ function eventVisual(event: MatterEvent): EventVisual {
  * task 08-25：呈现从平铺清单换成进展 tab 原来那套（按天分组 + 贯穿竖线 + kind 定色圆节点
  * + 叙事主句 + 正文卡）。owner 原话：「把现在的进展样式搬到操作日志里」。
  *
- * 🔴 **不做同类合并**（此前主视图会把一个 burst 里的同类事件收成一条带计数的条目）：
- * 这里要的是回看与追责，判据是「逐条原始记录」。合并是阅读优化，属于已经搬走的那个面。
- * 🔴 数据面一字未动：`matter_event` 仍是 append-only，纠错走反向事件。
+ * 0825 dogfood 回修：**同类合并回来了**。上一版有意平铺（判据写的是「回看与追责要逐条
+ * 原始记录」），owner 实测的结论相反 —— 一次接受提案扇出十几行、连改标签四行，平铺出来
+ * 「日志 UI 体验很不好」。合并**不删任何一条**：一个 burst 里同 kind/同 actor/同来源/同
+ * 目标的事件收成一条带计数的条目，展开后逐条明细（各自带各自的正文）一条不少，所以
+ * 「可追溯」没有让步，让步的只是默认占多少屏。判定全在 `matterTimelineModel`
+ * （`groupTimelineEvents` / `narrateTimelineGroup`），本文件只负责画。
+ *
+ * 🔴 合并**只在渲染层**：`matter_event` 仍是 append-only，纠错走反向事件。
+ * 🔴 **不做业务/审计分档**：弹窗是完整时间线，`matterEventTier` 那一路留给别的面。
  */
 export function MatterAuditLogModal({
   open,
@@ -156,6 +171,9 @@ export function MatterAuditLogModal({
   const [actor, setActor] = useState<AuditFilter>('all')
   // 「今天/昨天」的基准挂载时冻结（react-hooks/purity：render 期间不许调 Date.now()）。
   const [now] = useState(() => Date.now())
+  // 🔴 展开态记的是 `group.id`（语义分组键 + burst 内最老一条的 id），不是 `head.id`：
+  // 同 burst 新到一条更新的事件会换掉 head，按 head 记的展开态会**无提示地收起**。
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set())
   const options = useMemo(
     () => [
       { value: 'all' as const, label: t('matters.timeline.all') },
@@ -169,21 +187,33 @@ export function MatterAuditLogModal({
     () => (actor === 'all' ? events : events.filter((event) => event.actor_kind === actor)),
     [actor, events]
   )
-  // 🔴 分天之前先按时间排一遍。后端 `list_events` 是 `ORDER BY id DESC`，**不是**按时间：
-  // 时钟漂移让更晚写入的一行带上更早的时间戳时，相邻切分会切出重复的天头。
-  // `sort` 是稳定的，同一毫秒的事件因此保持后端的 id DESC 次序。
-  const days = useMemo(
+  // 🔴 分组在**筛选之后**：看到的就是被合并的，不会出现「合并了一条你看不见的事件」。
+  // `groupTimelineEvents` 内部已按 `happened_at` 排过序（后端 `list_events` 是 id DESC，
+  // 不是按时间），这里再按组头排一次是为了满足 `groupByDay` 的前提：**输入必须时间倒序**，
+  // 否则相邻切分会切出重复的天头。`sort` 稳定，同一毫秒的组保持分组时的次序。
+  const groups = useMemo(
     () =>
-      groupByDay(
-        [...list].sort((left, right) => right.happened_at - left.happened_at),
-        (event) => event.happened_at
+      groupTimelineEvents(list).sort(
+        (left, right) => right.head.happened_at - left.head.happened_at
       ),
     [list]
   )
+  const days = useMemo(() => groupByDay(groups, (group) => group.head.happened_at), [groups])
+
+  const toggleGroup = (id: string): void => {
+    setExpanded((current) => {
+      const next = new Set(current)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[84vh] max-w-xl grid-rows-[auto_auto_1fr]">
+      {/* 比默认的 max-w-lg 宽一大截：这一屏的行是「主句 + 正文卡 + 元信息 + 明细列表」的
+          完整时间线条目，不是一行审计流水。窄容器下正文卡每条都要 clamp，读起来全是省略号。
+          `max-w-[calc(100vw-2rem)]` 保证窄窗不溢出（同 MatterLinkResourceModal 的写法）。 */}
+      <DialogContent className="max-h-[86vh] w-[820px] max-w-[calc(100vw-2rem)] grid-rows-[auto_auto_1fr]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <History size={14} className="shrink-0 text-ink-fg-2" />
@@ -199,6 +229,8 @@ export function MatterAuditLogModal({
             ariaLabel={t('matters.timeline.filter')}
           />
           <span className="flex-1" />
+          {/* 计数说的是**事件条数**（不是合并后的行数）—— 合并是阅读优化，「一共记了多少条」
+              这个数字不能跟着缩水，否则日志看起来就像少记了。 */}
           <span className="text-meta text-ink-fg-3">
             {t('matters.timeline.auditCount', { count: list.length })}
           </span>
@@ -207,7 +239,7 @@ export function MatterAuditLogModal({
           {days.map((day) => (
             <div key={day.key} data-testid="matter-audit-day" className="mt-1.5">
               {/* 天分组头（设计 progress.jsx:179-184）：标签 + 发丝线 + 条数。 */}
-              <div className="flex items-center gap-2 px-0.5 pb-0.5 pt-1.5">
+              <div className="flex items-center gap-2 px-0.5 pb-0.5 pt-2">
                 <span className="text-meta font-medium text-ink-fg-2">
                   {dayLabelOf(day.at, now, locale, translate)}
                 </span>
@@ -220,8 +252,14 @@ export function MatterAuditLogModal({
                   节点半径 12.5 + pl-1 的 4px，正好穿过圆心；节点用 bg-ink-0 盖住线。 */}
               <div className="relative pl-1">
                 <span aria-hidden className="absolute bottom-3 left-4 top-3 w-px bg-ink-border" />
-                {day.rows.map((event) => (
-                  <AuditRow key={event.id} event={event} t={translate} />
+                {day.rows.map((group) => (
+                  <AuditRow
+                    key={group.id}
+                    group={group}
+                    t={translate}
+                    expanded={expanded.has(group.id)}
+                    onToggle={() => toggleGroup(group.id)}
+                  />
                 ))}
               </div>
             </div>
@@ -237,16 +275,34 @@ export function MatterAuditLogModal({
   )
 }
 
-function AuditRow({ event, t }: { event: MatterEvent; t: Translate }): React.ReactElement {
-  const visual = eventVisual(event)
+/**
+ * 一条日志条目 = 一个合并组。组内只有一条时它就是那条事件本身（没有展开钮）。
+ *
+ * 节点图标 / 色调 / 时间戳 / actor 都取 `group.head`（组内**最新**那条）—— 与
+ * `narrateTimelineGroup` 算净变化时取的 to 侧是同一条，句子和符号说的是同一件事。
+ */
+function AuditRow({
+  group,
+  t,
+  expanded,
+  onToggle
+}: {
+  group: TimelineGroup
+  t: Translate
+  expanded: boolean
+  onToggle(): void
+}): React.ReactElement {
+  const { head } = group
+  const visual = eventVisual(head)
   // 🔴 `const Icon = eventVisual(...)` + `<Icon/>` 会撞 eslint `react-hooks/static-components`
   // （调用表达式证明不了每次 render 拿到同一个组件身份）。`createElement` 绕开的是**写法**，
   // 不是规则的实质关切 —— 这张表是模块级常量，身份本来就稳定。同 `matterVocab.ts` 的先例。
   const icon = createElement(visual.icon, { size: 12 })
-  const sentence = narrateEvent(event, t)
+  const sentence = narrateTimelineGroup(group, t)
+  const mergedCount = group.events.length
 
   return (
-    <div className="relative flex gap-[11px] py-[7px]" data-testid="matter-audit-entry">
+    <div className="relative flex gap-3 py-2" data-testid="matter-audit-entry">
       {/* D13 —— 圆底只为盖住贯穿竖线，**不描边**（见 PROGRESS_TONE 的说明）。 */}
       <span
         className={cn(
@@ -265,25 +321,72 @@ function AuditRow({ event, t }: { event: MatterEvent; t: Translate }): React.Rea
         {sentence.body ? (
           <MatterNarrativeBody text={sentence.body.text} truncated={sentence.body.truncated} />
         ) : null}
-        <div className="mt-[3px] flex flex-wrap items-center gap-[7px]">
+        <div className="mt-1 flex flex-wrap items-center gap-[7px]">
           <time className="font-mono text-micro text-ink-fg-3">
-            {new Date(event.happened_at).toLocaleString()}
+            {new Date(head.happened_at).toLocaleString()}
           </time>
-          {event.actor_kind === 'agent' ? (
+          {head.actor_kind === 'agent' ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-ai/10 px-1.5 py-0.5 text-micro text-ai">
               <Sparkles size={9} />
               {t('matters.timeline.agent')}
             </span>
           ) : (
             <span className="text-micro text-ink-fg-3">
-              · {t(`matters.eventActor.${event.actor_kind}`, { defaultValue: event.actor_kind })}
+              · {t(`matters.eventActor.${head.actor_kind}`, { defaultValue: head.actor_kind })}
             </span>
           )}
           <span className="text-micro text-ink-fg-3">
-            · {t(`matters.eventSource.${event.source}`, { defaultValue: event.source })}
+            · {t(`matters.eventSource.${head.source}`, { defaultValue: head.source })}
           </span>
         </div>
+        {/* 合并了才有展开钮 —— 明细一条不丢，只是默认不占位置。 */}
+        {mergedCount > 1 ? (
+          <>
+            <button
+              type="button"
+              onClick={onToggle}
+              aria-expanded={expanded}
+              className="mt-1 inline-flex items-center gap-1 rounded-[var(--r-ctl)] px-1 py-0.5 text-micro text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+            >
+              {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+              {expanded
+                ? t('matters.narrative.collapse')
+                : t('matters.narrative.expand', { count: mergedCount })}
+            </button>
+            {expanded ? (
+              <ul className="mt-1 space-y-0.5 border-l border-ink-border pl-2.5">
+                {group.events.map((event) => (
+                  <MergedEntry key={event.id} event={event} t={t} />
+                ))}
+              </ul>
+            ) : null}
+          </>
+        ) : null}
       </div>
     </div>
+  )
+}
+
+/**
+ * 合并组展开后的单条明细。
+ *
+ * 🔴 正文只能在这儿露面：计数句本身**不挂正文**（那等于替用户从三条备注里挑一条说
+ * 「这就是进展」），少了这一层，「新增了 3 条备注」展开后仍然一个字都读不到。
+ */
+function MergedEntry({ event, t }: { event: MatterEvent; t: Translate }): React.ReactElement {
+  const sentence = narrateEvent(event, t)
+  return (
+    <li className="text-micro leading-[1.55] text-ink-fg-3">
+      <span className="text-ink-fg-2">{sentence.text}</span>
+      {sentence.detail ? <span> · {sentence.detail}</span> : null}
+      <time className="ml-1.5 font-mono">{new Date(event.happened_at).toLocaleTimeString()}</time>
+      {sentence.body ? (
+        <MatterNarrativeBody
+          text={sentence.body.text}
+          truncated={sentence.body.truncated}
+          compact
+        />
+      ) : null}
+    </li>
   )
 }

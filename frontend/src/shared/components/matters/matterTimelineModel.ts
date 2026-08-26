@@ -18,12 +18,11 @@
  * 值一律是**原始值**（枚举字面量、时间戳数字），本地化在这一层做。档位名复用既有
  * `matters.status.*` / `matters.health.*` / `matters.item.kinds.*`，不新造一套。
  *
- * ⚠️ task 08-25 之后，本模块**只有 `narrateEvent` 有生产消费者**（操作日志弹窗逐条渲染）。
- * 同类合并与业务/审计分档那一套（`groupTimelineEvents` / `narrateTimelineGroup` /
- * `narrateGroupEntries` / `matterEventTier` / `GROUPED_TEMPLATE_KINDS` / `TIMELINE_BURST_*`）
- * 随「进展 = 事件降级视图」一起失去了调用点：弹窗要的是逐条原始记录，不合并也不分档。
- * 这里**指出而不删** —— 它们与各自的回归网都还完整，是否退役由 owner 决定（若日后给操作
- * 日志加回「折叠同一次操作的扇出」，要用的正是这几个函数）。
+ * 消费者（task 08-25 dogfood 回修后）：操作日志弹窗 `MatterAuditLogModal` 用
+ * `groupTimelineEvents` + `narrateTimelineGroup` 画合并条目、用 `narrateEvent` 画展开后的
+ * 逐条明细。**`matterEventTier` 目前没有生产调用点** —— 业务/审计分档是「进展 = 事件降级
+ * 视图」时代的东西，弹窗是完整时间线不分档。这里指出而不删：它与自己的回归网都还完整，
+ * 是否退役由 owner 决定。
  */
 
 import type { MatterEvent } from '@shared/api/types/matter'
@@ -787,6 +786,42 @@ function narrateEventText(
       const title = quoted(payload, 'title', 'matters.narrative.quoteTitle', t)
       return title === null ? say(`${event.kind}_plain`) : say(event.kind, { title })
     }
+
+    /* ---- 行动项执行契约（task 08-25 批次 3）---- */
+    // 一次派发从头到尾会落 2-4 条事件（派出 → [回答 …] → 交付 → 评审 / 失败），
+    // 每一条各说一句 —— 「谁把哪条行动项交给了谁、后来怎么了」是这条 lane 的全部意义。
+    case 'item_dispatched': {
+      const title = quoted(payload, 'title', 'matters.narrative.quoteTitle', t)
+      const executor = readText(payload, 'executor_id')
+      return title === null || executor === null
+        ? say('item_dispatched_plain')
+        : say('item_dispatched', { title, executor })
+    }
+    case 'item_dispatch_answered': {
+      const attempt = readCount(payload, 'attempt')
+      return attempt === null || attempt <= 0
+        ? say('item_dispatch_answered_plain')
+        : say('item_dispatch_answered', { attempt })
+    }
+    case 'item_dispatch_canceled':
+      return say('item_dispatch_canceled')
+    case 'item_dispatch_delivered':
+      // 交付有两副面孔：给出提案，或者反问。用同一句话说会把「等我回答」藏起来。
+      return say(
+        payload.needs_input === true
+          ? 'item_dispatch_delivered_needs_input'
+          : 'item_dispatch_delivered'
+      )
+    case 'item_dispatch_failed': {
+      const code = readText(payload, 'code')
+      return code === null
+        ? say('item_dispatch_failed_plain')
+        : say('item_dispatch_failed', { code })
+    }
+    case 'item_dispatch_settled':
+      return say(
+        payload.accepted === false ? 'item_dispatch_settled_rejected' : 'item_dispatch_settled'
+      )
 
     /* ---- 事项间关联 ---- */
     case 'relation_added': {

@@ -1,12 +1,13 @@
 // @vitest-environment happy-dom
 //
-// 操作日志弹窗（task 08-25 起它是事件那一路的**唯一**去处）：全量 `matter_event` 逐条、
-// 按天分组、节点样式、actor 四档筛选。前身是 `MatterTimeline.test.tsx` —— 那一屏的主视图
-// 换成了 curated 进展（`MatterProgressLane.test.tsx`），事件的呈现整体搬进这个弹窗。
+// 操作日志弹窗（task 08-25 起它是事件那一路的**唯一**去处）：全量 `matter_event`、
+// 同类合并、按天分组、节点样式、actor 四档筛选。前身是 `MatterTimeline.test.tsx` ——
+// 那一屏的主视图换成了 curated 进展（`MatterProgressLane.test.tsx`），事件的呈现连同
+// 合并机线整体搬进这个弹窗（0825 dogfood 回修）。
 // 逐 kind 的句式判定在 `tests/shared/matterTimelineModel.test.ts`（纯函数，不经 DOM）。
 
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 
 import i18n from '@shared/i18n'
 import type { MatterActorKind, MatterEvent } from '@shared/api/types/matter'
@@ -73,8 +74,9 @@ describe('MatterAuditLogModal', () => {
     expect(screen.getByText('改动：状态、优先级')).toBeTruthy()
   })
 
-  it('🔴 同类事件**不合并** —— 回看与追责要的是逐条原始记录', () => {
-    // 主视图时代这 6 条会收成一条「关联了 6 份资料」；弹窗要的是 6 行。
+  // 0825 dogfood：平铺出来「日志 UI 体验很不好」——一次操作扇出十几行。合并回来了，
+  // 但**一条都不能丢**：下面两条是这次回修的看门人（合并成一条 / 展开见全部明细）。
+  it('🔴 同类连发合并成一条带计数的条目', () => {
     open(
       Array.from({ length: 6 }, (_, index) =>
         ev({
@@ -85,17 +87,82 @@ describe('MatterAuditLogModal', () => {
         })
       )
     )
-    expect(rows()).toHaveLength(6)
-    expect(screen.queryByText('关联了 6 份资料')).toBeNull()
-    expect(screen.getAllByText('关联了邮件《资料 0》')).toHaveLength(1)
+    expect(rows()).toHaveLength(1)
+    expect(screen.getByText('关联了 6 份资料')).toBeTruthy()
+    // 合并的是渲染行，不是记录数：右上角计数仍说 6 条。
+    expect(screen.getByText('6 条')).toBeTruthy()
   })
 
-  it('审计档事件同样逐条在场（收进弹窗 ≠ 删掉）', () => {
+  it('🔴 展开后明细一条不少（可追溯没有让步）', () => {
+    open(
+      Array.from({ length: 6 }, (_, index) =>
+        ev({
+          kind: 'resource_linked',
+          actor_kind: 'agent',
+          source: 'matter_followup',
+          payload: { title: `资料 ${index}`, resource_kind: 'email' }
+        })
+      )
+    )
+    const toggle = screen.getByRole('button', { name: /展开 6 条明细/ })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+
+    const details = within(rows()[0]).getAllByRole('listitem')
+    expect(details).toHaveLength(6)
+    expect(details[0].textContent).toContain('关联了邮件《资料 0》')
+    expect(details[5].textContent).toContain('关联了邮件《资料 5》')
+  })
+
+  // codex 反例 #10（合并机线随原时间线一起搬过来，这条纪律也一起搬）：展开态记在
+  // `group.head.id` 上时，同 burst 新到一条更新的事件会换掉 head ⇒ 组的 key 变了 ⇒
+  // 已展开的明细**无提示地收起**。
+  it('同 burst 新增更新成员后，已展开的明细不会无提示收起', () => {
+    const older = Array.from({ length: 6 }, (_, index) =>
+      ev({
+        kind: 'resource_linked',
+        happened_at: T0 - (index + 1) * 1_000,
+        payload: { title: `资料 ${index}`, resource_kind: 'email' }
+      })
+    )
+    const view = render(
+      <MatterAuditLogModal open events={older} locale="zh-CN" onOpenChange={() => undefined} />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /展开 6 条明细/ }))
+    expect(within(rows()[0]).getAllByRole('listitem')).toHaveLength(6)
+
+    view.rerender(
+      <MatterAuditLogModal
+        open
+        events={[
+          ev({
+            kind: 'resource_linked',
+            happened_at: T0,
+            payload: { title: '资料 6', resource_kind: 'email' }
+          }),
+          ...older
+        ]}
+        locale="zh-CN"
+        onOpenChange={() => undefined}
+      />
+    )
+    expect(screen.getByText('关联了 7 份资料')).toBeTruthy()
+    expect(within(rows()[0]).getAllByRole('listitem')).toHaveLength(7)
+  })
+
+  it('单条事件不显示展开钮', () => {
+    open([ev({ kind: 'matter_created' })])
+    expect(screen.queryByRole('button', { name: /展开/ })).toBeNull()
+  })
+
+  it('审计档事件同样在场（弹窗是完整时间线，不分业务/审计档）', () => {
     open([
       ev({ kind: 'matter_created' }),
       ev({ kind: 'chat_scope_expanded', payload: { session_id: 's1' } }),
       ev({ kind: 'matter_updated', payload: { fields: ['tags'], changes: [] } })
     ])
+    // 三条 kind 各不相同 ⇒ 合并键各不相同 ⇒ 仍是三行。
     expect(rows()).toHaveLength(3)
     expect(screen.getByText('扩大了事项对话的检索范围')).toBeTruthy()
     expect(screen.getByText('3 条')).toBeTruthy() // 计数 = 全量，不是"业务档那几条"
@@ -237,7 +304,7 @@ describe('MatterAuditLogModal —— 事件正文', () => {
     expect(screen.getByText(/只是摘录/)).toBeTruthy()
   })
 
-  it('合并没了 ⇒ 每条备注各自带各自的正文，一条不丢', () => {
+  it('合并组的正文在展开的明细里一条不丢', () => {
     open([
       ev({
         kind: 'item_created',
@@ -250,6 +317,11 @@ describe('MatterAuditLogModal —— 事件正文', () => {
         payload: { kind: 'note', title: '乙', narrative: { text: '备注乙的正文' } }
       })
     ])
+    // 计数句本身不挂正文（从两条备注里挑一条说"这就是进展"是撒谎）。
+    expect(screen.getByText('新增了 2 个条目')).toBeTruthy()
+    expect(screen.queryByTestId('matter-narrative-body')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /展开 2 条明细/ }))
     expect(screen.getAllByTestId('matter-narrative-body').map((node) => node.textContent)).toEqual([
       '备注甲的正文',
       '备注乙的正文'
