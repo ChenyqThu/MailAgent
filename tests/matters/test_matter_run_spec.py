@@ -265,6 +265,21 @@ def test_task_contract_teaches_the_progress_lane_as_proposal_only(env):
     assert "happened_at 是这件事**发生**的时间（epoch 毫秒）" in prompt
 
 
+def test_task_contract_expects_a_progress_change_when_the_work_moved(env):
+    """0825 dogfood：curated 进展页恒空 —— 两轮 run 的提案全是 fact/action/resource。
+
+    病因在措辞：旧条款写「要记就写成 kind=progress」，是个**可选动作**，而 fact 与 progress
+    语义相邻，模型于是把实质推进一律写进 fact 与 summary。修法是把期望说明白，并把两者的
+    边界写在 fact 条款上（模型是在 fact 那里做的选择）。
+    """
+    settings, _, _, _, job = env
+    prompt = assemble_matter_spec(job, settings=settings)["prompt"]["taskPrompt"]
+    assert "提案里**应当**有一条 kind=progress" in prompt
+    assert "fact 与 progress 分工" in prompt
+    # 🔴 期望不等于配额：查不到实质推进时硬造一条进展比空着更糟（进展是给人读的脉络）。
+    assert "不要为凑数硬造" in prompt
+
+
 def test_snapshot_projects_existing_progress_for_the_run(env):
     """run 判断「有没有实质变化」的第一手材料 —— 快照里看不见进展就只能重记一遍已记过的事。"""
     settings, service, pid, run, job = env

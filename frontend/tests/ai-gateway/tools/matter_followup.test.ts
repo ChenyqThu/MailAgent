@@ -314,6 +314,62 @@ describe('matter_update_propose — proposing a NEW resource link', () => {
   })
 })
 
+/** 0825 dogfood —— curated 进展页恒空。`happened_at` 此前只收 int 毫秒，模型给 ISO 字符串
+ *  就是 AI_TypeValidationError 打回**整个** matter_update_propose，重试那一发往往把 progress
+ *  change 整条丢掉。一个可选字段不该有这个能力。 */
+describe('matter_update_propose — progress.happened_at 宽收严归一', () => {
+  const parseProgress = (happened_at: unknown) =>
+    matterUpdateProposeSchema.safeParse({
+      summary: 's',
+      changes: [
+        {
+          id: 'chg_p',
+          kind: 'progress',
+          progress: { kind: 'progress', title: 'Simon 回邮确认按 80 万走', happened_at }
+        }
+      ]
+    })
+
+  const happenedAt = (result: ReturnType<typeof parseProgress>) =>
+    result.success
+      ? (result.data.changes[0] as { progress?: { happened_at?: number } }).progress?.happened_at
+      : undefined
+
+  test('epoch milliseconds pass through untouched', () => {
+    const parsed = parseProgress(1_786_690_800_000)
+    expect(parsed.success).toBe(true)
+    expect(happenedAt(parsed)).toBe(1_786_690_800_000)
+  })
+
+  test('an ISO date / datetime is accepted and normalized to epoch ms', () => {
+    expect(happenedAt(parseProgress('2026-08-20T10:00:00Z'))).toBe(
+      Date.parse('2026-08-20T10:00:00Z')
+    )
+    expect(happenedAt(parseProgress('2026-08-20'))).toBe(Date.parse('2026-08-20'))
+  })
+
+  test('an unparseable date drops the optional field instead of failing the whole proposal', () => {
+    const parsed = parseProgress('上周三')
+    expect(parsed.success).toBe(true)
+    expect(happenedAt(parsed)).toBeUndefined()
+  })
+
+  test('epoch SECONDS are deliberately NOT rescaled — Python drops them fail-closed', () => {
+    // 🔴 matter 域纪律：秒值恒拒，不静默 ×1000（A3 三道门）。歧义的数字留给 Python 的
+    // `timestamp_not_epoch_ms` 剔除明细，模型下一轮才看得见自己写错了什么；只有 ISO 字符串
+    // 这种**无歧义**形态才在网关归一。
+    expect(happenedAt(parseProgress(1_786_690_800))).toBe(1_786_690_800)
+  })
+
+  test('the model-facing JSON Schema gains a leaf anyOf, never a branch constraint', () => {
+    const json = JSON.stringify(z.toJSONSchema(matterUpdateProposeSchema, { io: 'input' }))
+    expect(json).not.toContain('oneOf')
+    expect(json).not.toContain('"not"')
+    // 毫秒仍是首选：数字分支的 describe 逐字留在模型眼前。
+    expect(json).toContain('Never epoch seconds')
+  })
+})
+
 describe('matter_run_control — start/cancel wire shape (D8)', () => {
   const writeTools = (
     domain: MailAgentDomainClient,

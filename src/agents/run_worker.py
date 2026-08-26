@@ -52,6 +52,9 @@ _PAUSED_DEDUPE_PREFIX = "agent_run_paused:"
 # 审批 TTL 过期归档的扫描节拍与窗口（寄生主循环空闲轮，不新增 tick）。
 _PAUSED_SWEEP_INTERVAL_SEC = 60.0
 _PAUSED_SWEEP_SCAN_LIMIT = 100
+# matter run.error_json 里 gateway 原文的两段上限（读者不同，见 _matter_error_payload）。
+_ERROR_MESSAGE_MAX_CHARS = 500
+_ERROR_DETAIL_MAX_CHARS = 1500
 
 
 class _GatewayPokeError(Exception):
@@ -343,13 +346,23 @@ class AgentRunWorker:
         """run.error_json 的载荷：错误码 + gateway 透传的人读原因（0813 dogfood #17）。
 
         码本身是分不清病因的（``E_AGENT`` 是 gateway 侧一切非 APICallError 的兜底），而原文
-        此前只进 console.error —— 打包 app 里它哪儿都不去。截断 500 字符：这是给人看的一行
-        提示，不是日志载体。
+        此前只进 console.error —— 打包 app 里它哪儿都不去。
+
+        ``message`` 与 ``detail`` 读者不同，**有意不合成一段**：
+          · ``message`` = 给人看的一行提示（头 500 字）。唯一 UI 消费点 ``RunOverlay`` 把它
+            整段渲染进一个 340px 宽的固定浮层，放长了当场撑爆 —— 所以这一半一个字不放宽。
+          · ``detail`` = 被 ``message`` 截掉的**尾部**（≤1500 字，仅超长时出现），落 sqlite 供
+            排查。0825 dogfood 实证（matter_run 30 的 ``AI_TypeValidationError``）：校验类错误
+            把「哪个字段不合法」写在长文最末，旧的单段截头正好把唯一的诊断信息截没。
         """
         payload: dict[str, Any] = {"code": code}
         message = resp.get("errorMessage")
         if isinstance(message, str) and message.strip():
-            payload["message"] = message.strip()[:500]
+            text = message.strip()
+            payload["message"] = text[:_ERROR_MESSAGE_MAX_CHARS]
+            tail = text[_ERROR_MESSAGE_MAX_CHARS:]
+            if tail:
+                payload["detail"] = tail[-_ERROR_DETAIL_MAX_CHARS:]
         return payload
 
     def _map_matter_response(

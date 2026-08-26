@@ -704,6 +704,11 @@ export function createMatterRunTools(
         'applies when the resource was already attached and you just read a newer version of it; ' +
         'omit it otherwise. ' +
         'A fact may cite such a pending resource with sources[].change_id instead of resource_id. ' +
+        'When the evidence shows the matter actually MOVED (someone replied, something was ' +
+        'delivered, a blocker cleared, a decision landed), also include one kind="progress" change ' +
+        'carrying `progress` {kind, title, body?, happened_at?} — that is what feeds the 进展 lane. ' +
+        'A fact records what is now true; a progress entry records that a step happened. When ' +
+        'nothing moved, do not fabricate one. ' +
         'Three field changes carry extra weight and the owner reads them closely: ' +
         'field="background" rewrites 背景 (how this came about and what constrains it) and ' +
         'field="goal" rewrites 目标 (what must be true when it is done) — they are independent ' +

@@ -140,14 +140,14 @@ _TASK_CONTRACT = """【任务契约】
 
 【提案标准】
 - 只写会让 owner 改判断或要采取行动的 change，快照已有的信息不要重复。
-- kind=fact 必须带 sources：sources[].resource_id 取自本事项已关联资源，或 sources[].change_id 引用你在本次提案里新建关联的那条 resource change（二选一，都不满足整条被丢弃）；推断一律 kind=inference 并显式标注。
+- kind=fact 必须带 sources：sources[].resource_id 取自本事项已关联资源，或 sources[].change_id 引用你在本次提案里新建关联的那条 resource change（二选一，都不满足整条被丢弃）；推断一律 kind=inference 并显式标注。fact 与 progress 分工：fact 记这件事的**客观事实**（数字、条款、口径的修正或补充），事情**往前走了一步**（有人回了、交付了、卡点解了、决议定了）记 progress —— 两者常常同时成立，别只写 fact 漏了 progress。
 - kind=field 只改 status/health/priority/due_at/waiting_context/background/goal/goal_checks 并写依据；改 background 或 goal 要给出「事情本身变了」的证据，不是行文润色；kind=action 无 target=新建行动项、带 target.id=改既有条目（id 来自 matter_get）；kind=resource 有两个形态：带 target.id=确认快照里已列出但未确认的资料，带 resource=新建一条关联。
 - 在②③档发现的**新**邮件/文档/页面（尚未关联进本事项的），写成 kind=resource 并带 resource={provider, kind, external_key, title, canonical_url, summary}，由 owner 接受时正式关联：provider 只能是 mailagent（邮件，external_key 形如 email:<internal_id>）、web（网页，external_key 就是那个 http(s) 链接）或你**确实用到过**的已连接外部服务（如 notion，external_key 形如 page:<id>）；编造来源或不合形状的一律被服务端丢弃。🔴 只挂**你要在提案里引用、能让 owner 改判断或采取行动**的那几份，不要把检索到的东西一股脑全挂上来；拿不准要不要关联的写进 open_questions 让 owner 定。
 - resource.summary = 这份资料**本身在说什么**：一到三句，只写内容（结论、数字、状态、时间点），**不写**你为什么要关联它（那写在同一条 change 的 text/reason 里），也不写「本文档介绍了…」这类套话。摘要只能来自你真正读到的正文或摘录；只看得到标题、链接、文件名一类元数据时**留空**，不要凭标题推测内容。
 - 邮件与会话（provider=mailagent，kind=email/thread）**不要**自己写 summary：系统会直接沿用那封邮件已有的摘要（来源标注成「沿用邮件自带」），你写了也不会生效。
 - 这份资料**本事项之前就已经关联过、而你这次读到的是更新过的版本**时，除 summary 外再写一句 resource.diff：这一版相对上一版变了什么，只写可核对的事实（字段增减、数值变化、状态或日期变化），一句话，不写「有更新」这类空话。它会存进这份资料的版本轨迹，钉在被替换掉的那一版上 —— 首次关联的资料与邮件/会话没有上一版，diff 留空。
 - 拿不准、需要 owner 定夺的写进 open_questions（≤5 条），不要编造。
-- 这件事的**发展脉络**记在「进展」里，你没有进展的写工具：要记就写成 kind=progress 的 change，带 progress={kind, title, body?, happened_at?}，owner 接受后才成为一条进展。五类 kind 各有所指：goal=目标被设定或改了、milestone=一个里程碑达成、progress=关键推进（谁回了邮件、交付了什么、往前走了一步）、signal=值得警觉的信号或风险、decision=一个决议定下来了。
+- 这件事的**发展脉络**记在「进展」里，你没有进展的写工具：写成 kind=progress 的 change，带 progress={kind, title, body?, happened_at?}，owner 接受后才成为一条进展。🔴 本轮查到实质推进（有人回了、交付了什么、卡点解了、决议定了、目标或里程碑动了）时，提案里**应当**有一条 kind=progress 概括这轮推进；查不到实质推进就不写，不要为凑数硬造。五类 kind 各有所指：goal=目标被设定或改了、milestone=一个里程碑达成、progress=关键推进（谁回了邮件、交付了什么、往前走了一步）、signal=值得警觉的信号或风险、decision=一个决议定下来了。
 - 记进展的判据是「未来读这件事的人需不需要知道」：title 一句话说清**谁做了什么、确定了什么**（如「Simon 回邮确认 Q4 预算按 80 万走」），body 补必要的来龙去脉；一件事一条，别把一封邮件拆成三条。纯抄送、例行通知、没有信息增量的往来**不记**；你自己检索了什么、提了什么建议也不记（那是操作日志的事）。happened_at 是这件事**发生**的时间（epoch 毫秒），不给就按 owner 接受的时刻算。
 - 进展与行动项（item）是两回事：item 是能勾能改状态的**工作对象**，进展是发生过的**叙事节点**。一个重要决议可以两边各记一条，但不要把同一条行动项的每次状态变化都抄成进展。已经在【事项快照】的进展里说过的事不要再记一遍；那条记错了要更正，写进 open_questions 交 owner 改，你只能追加。
 - 摘要写的是**事情本身**的进展、给 owner 读的叙述，不是你本轮的操作记录：不超过 3 句，先写当前卡点或结论，再写下一步（谁在何时做什么）；不要罗列「检索了什么、改了哪个字段」。"""

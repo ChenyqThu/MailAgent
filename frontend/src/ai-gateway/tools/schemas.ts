@@ -833,6 +833,33 @@ const matterProposalValueSchema = z.union([
   z.record(z.string(), z.unknown())
 ])
 
+/** `happened_at` 宽收严归一（0825 dogfood）：模型描述日期时爱给 ISO 字符串，而这里只收 int
+ *  毫秒 ⇒ 整个 matter_update_propose 调用被 AI_TypeValidationError 打回，重试那一发往往把
+ *  progress change 整条丢掉（实测 matter_run 30：重试后只剩 fact/action/resource）。一个
+ *  **可选**字段不该有能力打空整轮提案 —— 何况 REST DTO `MatterProposalProgress.happened_at`
+ *  是 `int | None`，字符串连 `_validate_changes` 的门都摸不到就会 422 掉整份提案。
+ *  🔴 只归一 ISO 字符串（无歧义），**不**把 epoch 秒 ×1000：秒值恒拒是 matter 域的时间戳纪律
+ *  （A3 三道门），归一出的毫秒照旧要过 Python `run_service._validate_changes` 的 epoch-ms 门，
+ *  权威一步没挪。解析不出来的字符串折成「不给」（= 按 owner 接受的时刻算），而不是让整条提案失败。
+ *  🔴 这是**类型**联合（leaf anyOf），不是分支约束 —— 顶层 oneOf / 条件必填仍然禁止。 */
+const matterProgressHappenedAtSchema = z
+  .union([
+    epochMillis('When this happened'),
+    z
+      .string()
+      .trim()
+      .max(100)
+      .describe(
+        'Or an ISO-8601 date / datetime (e.g. "2026-08-20" or "2026-08-20T10:00:00Z"), ' +
+          'normalized to epoch milliseconds here. Epoch milliseconds are preferred.'
+      )
+  ])
+  .transform((value) => {
+    if (typeof value === 'number') return value
+    const parsed = Date.parse(value)
+    return Number.isNaN(parsed) ? undefined : parsed
+  })
+
 /** `kind: 'progress'` 的载荷（task 08-25）：跟进 run 对 curated 进展的**唯一**通道 —— 它拿不到
  *  进展写工具（结构红线），owner 接受这条 change 时才落成一行进展。
  *  🔴 只有「追加」这一种形态：信封里没有 progress_id，改既有条目要 owner 在场（事项对话）。
@@ -842,7 +869,7 @@ const matterProposalProgressSchema = z
     kind: z.enum(MATTER_PROGRESS_KINDS),
     title: z.string().trim().min(1).max(MATTER_PROGRESS_TITLE_MAX_CHARS),
     body: z.string().trim().max(MATTER_PROGRESS_BODY_MAX_CHARS).optional(),
-    happened_at: epochMillis('When this happened').optional(),
+    happened_at: matterProgressHappenedAtSchema.optional(),
     refs: z.array(matterProgressRefSchema).max(MATTER_PROGRESS_MAX_REFS).default([])
   })
   .strict()

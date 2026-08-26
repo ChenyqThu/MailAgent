@@ -270,6 +270,33 @@ def test_transport_failure_after_proposal_maps_warn_without_watermark(env, monke
     assert repo.get(job.job_id).status == "failed"
 
 
+def test_error_payload_keeps_the_validation_detail_that_lives_in_the_tail():
+    """0825 dogfood：校验类错误的**字段明细在长文最末**，旧的单段截头（500 字）正好截没它。
+
+    实证 —— matter_run 30 的 `AI_TypeValidationError` 只留下一句「模型输出不合 schema」，
+    到底哪个字段不合法查不出来。所以尾部另开一段 `detail`，而 `message` 一个字不放宽：
+    它的唯一 UI 消费点 RunOverlay 把整段渲染在 340px 的浮层里。
+    """
+    payload = AgentRunWorker._matter_error_payload(
+        "E_AGENT", {"errorMessage": "H" * 500 + "M" * 900 + "field: happened_at"}
+    )
+    assert payload["code"] == "E_AGENT"
+    assert payload["message"] == "H" * 500  # UI 那一行的长度不变
+    assert payload["detail"].endswith("field: happened_at")
+    assert len(payload["detail"]) <= 1500
+
+    # 短原文不长出第二段（没有尾巴就没有 detail 键）。
+    short = AgentRunWorker._matter_error_payload("E_AGENT", {"errorMessage": " boom "})
+    assert short == {"code": "E_AGENT", "message": "boom"}
+
+    # 超长尾巴保留的是**末**1500 字（中段丢弃），不是又一次截头。
+    long_tail = AgentRunWorker._matter_error_payload(
+        "E_AGENT", {"errorMessage": "x" * 4000 + "TAIL"}
+    )
+    assert len(long_tail["detail"]) == 1500
+    assert long_tail["detail"].endswith("TAIL")
+
+
 def test_cancel_requested_converges_canceled(env, monkeypatch):
     repo, service, pid, version = env
     run, job = _enqueue_and_claim(service, repo, pid, version)
