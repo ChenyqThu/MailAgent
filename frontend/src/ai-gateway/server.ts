@@ -1230,15 +1230,31 @@ async function handleAgentRun(
       // matter+agent) and stamped trigger_kind='matter_followup' rather than the spec's 'manual',
       // so the Matter's run history is queryable off the session row and the P3 panel's
       // getOrCreate (origin='interactive' only) can never pick it up.
-      const matterAnchor = spec.runKind === 'matter_followup' && spec.matter ? spec.matter.id : null
+      // L4 批次3 — an ITEM-dispatch run anchors on its Matter too, and additionally stamps
+      // `item_id` (CHAT_DB v28) so the 行动项 can list its own execution history
+      // (listSessionsForItem). Its trigger_kind is stamped 'matter_item_run' to keep the two
+      // unattended matter venues distinguishable in the history UI.
+      const itemRun = spec.runKind === 'matter_item_run' ? spec.matterItem : undefined
+      const matterAnchor =
+        itemRun != null
+          ? itemRun.matterId
+          : spec.runKind === 'matter_followup' && spec.matter
+            ? spec.matter.id
+            : null
       sessionId = cfg.createAgentSession({
         agentId: spec.agentId,
         jobId,
         title: spec.sessionTitle,
         triggerId: spec.trigger.id ?? null,
-        triggerKind: matterAnchor == null ? spec.trigger.kind : 'matter_followup',
+        triggerKind:
+          matterAnchor == null
+            ? spec.trigger.kind
+            : itemRun != null
+              ? 'matter_item_run'
+              : 'matter_followup',
         triggerFiredAt: Number.isFinite(firedAt) ? firedAt : null,
-        ...(matterAnchor == null ? {} : { anchor: { type: 'matter' as const, id: matterAnchor } })
+        ...(matterAnchor == null ? {} : { anchor: { type: 'matter' as const, id: matterAnchor } }),
+        ...(itemRun != null ? { itemId: itemRun.itemId } : {})
       })
     }
   } catch (err) {

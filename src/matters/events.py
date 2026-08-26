@@ -55,6 +55,16 @@ PROGRESS_ADDED = "progress_added"
 PROGRESS_UPDATED = "progress_updated"
 PROGRESS_REMOVED = "progress_removed"
 PROGRESS_RESTORED = "progress_restored"
+# task 08-25 批次 3 (行动项执行契约): 一条行动项被派给执行器之后的整条执行史。
+# 🔴 事件带真实 FK `item_id`（matter_event 有这一列）；派发行自己的 id 只进 payload 的
+# `dispatch_id` —— 为它再加一根 FK 列要重建整张事件表（P3 就定死的三根：item / resource /
+# update），与 matter_progress 同一条取舍。
+ITEM_DISPATCHED = "item_dispatched"
+ITEM_DISPATCH_ANSWERED = "item_dispatch_answered"
+ITEM_DISPATCH_CANCELED = "item_dispatch_canceled"
+ITEM_DISPATCH_DELIVERED = "item_dispatch_delivered"
+ITEM_DISPATCH_FAILED = "item_dispatch_failed"
+ITEM_DISPATCH_SETTLED = "item_dispatch_settled"
 
 MATTER_EVENT_KINDS = (
     MATTER_CREATED,
@@ -99,4 +109,10 @@ MATTER_EVENT_KINDS = (
     PROGRESS_UPDATED,
     PROGRESS_REMOVED,
     PROGRESS_RESTORED,
+    ITEM_DISPATCHED,
+    ITEM_DISPATCH_ANSWERED,
+    ITEM_DISPATCH_CANCELED,
+    ITEM_DISPATCH_DELIVERED,
+    ITEM_DISPATCH_FAILED,
+    ITEM_DISPATCH_SETTLED,
 )

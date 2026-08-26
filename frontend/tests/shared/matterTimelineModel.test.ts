@@ -141,7 +141,31 @@ const KIND_FIXTURES: Record<string, Partial<MatterEvent>> = {
   },
   progress_restored: {
     payload: { progress_id: 4, fields: ['deleted_at'], kind: 'decision', title: 'Q4 预算已定' }
-  }
+  },
+  // 行动项执行契约（task 08-25 批次 3）。🔴 payload 里有意没有回答正文 —— 它的家是
+  // 派发行的 `answers`，操作日志回答的是「谁在第几轮动了哪一次派发」。
+  item_dispatched: {
+    payload: {
+      dispatch_id: 8,
+      title: '回签补充协议',
+      executor_id: 'matter_followup',
+      exec_profile: 'propose_only',
+      attempt: 1
+    }
+  },
+  item_dispatch_answered: { payload: { dispatch_id: 8, attempt: 2, answered: true } },
+  item_dispatch_canceled: { payload: { dispatch_id: 8, from_state: 'awaiting_input' } },
+  item_dispatch_delivered: {
+    actor_kind: 'agent',
+    source: 'agent_run',
+    payload: { dispatch_id: 8, update_id: 12, attempt: 1 }
+  },
+  item_dispatch_failed: {
+    actor_kind: 'system',
+    source: 'agent_run',
+    payload: { dispatch_id: 8, code: 'no_report', attempt: 1 }
+  },
+  item_dispatch_settled: { payload: { dispatch_id: 8, update_id: 12, accepted: true } }
 }
 
 beforeAll(async () => {

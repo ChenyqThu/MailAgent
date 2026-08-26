@@ -39,6 +39,9 @@ export const SSE_EVENT_TYPES = [
   'matter.attention',
   'matter.notify',
   'matter.run.changed',
+  // 行动项派发的执行态迁移（v71）。与 `matter.run.changed` 是两条独立的账本：
+  // 那个是 per-事项的定时跟进 run，这个是 per-行动项的一次派发。
+  'matter.item.dispatch.changed',
   // 通讯录（R1-3: 扫描 tick / 画像 / 建议采纳）
   'contact.changed',
   // custom agent run 生命周期（R1-5）

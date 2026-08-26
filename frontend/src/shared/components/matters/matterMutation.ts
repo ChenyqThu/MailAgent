@@ -71,6 +71,9 @@ export async function refreshMatter(
   await Promise.all([
     client.invalidateQueries({ queryKey: qk.matters.list() }),
     client.invalidateQueries({ queryKey: qk.matters.pendingUpdates() }),
+    // 同上一条的处境：例外面第四源是**跨事项**聚合（`['matters','item-dispatches']`），
+    // detail 前缀覆盖不到它 —— 在详情里回答 / 取消一次派发后，例外面那条不失效就会挂着。
+    client.invalidateQueries({ queryKey: qk.matters.itemDispatches() }),
     client.invalidateQueries({ queryKey: MATTER_TAGS_QUERY_KEY }),
     ...(matterId ? [client.invalidateQueries({ queryKey: qk.matters.detail(matterId) })] : [])
   ])

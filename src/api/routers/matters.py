@@ -17,6 +17,8 @@ from src.api.deps import get_settings
 from src.api.schemas.matters import (
     MatterCreateRequest,
     MatterItemCreateRequest,
+    MatterItemDispatchAnswerRequest,
+    MatterItemDispatchRequest,
     MatterItemPatchRequest,
     MatterNoteCreateRequest,
     MatterPatchRequest,
@@ -388,6 +390,26 @@ async def list_live_updates(
     return success_envelope(result, request=request, meta_extra={"limit": limit})
 
 
+@router.get("/item-dispatches")
+async def list_live_item_dispatches(
+    request: Request,
+    state: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
+    service: MatterService = Depends(get_matter_service),
+):
+    """全部活跃事项的行动项派发聚合（`/today` 例外面第四源的唯一数据源）。
+
+    `state` 是逗号分隔的执行态；缺省 = 「等我回答 / 挂了」两态（service 单源）。
+    🔴 路由位置必须留在 `GET /{matter_id}` **之前** —— 那条路由会把它当成
+    `matter_id='item-dispatches'` 吃掉（FastAPI 按注册序匹配），同 `/updates` `/attention`。
+    """
+    states = [value.strip() for value in (state or "").split(",") if value.strip()]
+    result = await _acall(
+        service.list_live_item_dispatches, states=states or None, limit=limit
+    )
+    return success_envelope(result, request=request, meta_extra={"limit": limit})
+
+
 @router.get("/{public_id}/export")
 async def export_matter_endpoint(
     public_id: str,
@@ -734,6 +756,87 @@ async def restore_item(
         matter_id,
         item_id,
         **_mutation_args(body.mutation, idempotency_key),
+    )
+    return success_envelope(result, request=request)
+
+
+# ── 行动项执行契约（task 08-25 批次 3）────────────────────────────────────────
+# 🔴 matters 的**第四条入口**，姿态 = owner 直操作的 REST 动作（agent 侧只有内部 report
+# 端点那一条）。三条既有入口的安全姿态一个字不动。
+# `expected_version` 一律**可缺省**（`require_version=False`）：这三个动作也会从 `/today`
+# 例外面发起，而那个面只认识派发行、拿不到事项版本号。
+
+
+@router.get("/{matter_id}/item-dispatches")
+async def list_item_dispatches(
+    matter_id: str,
+    request: Request,
+    item_id: int | None = None,
+    service: MatterService = Depends(get_matter_service),
+):
+    items = await _acall(service.list_dispatches, matter_id, item_id=item_id)
+    return success_envelope({"items": items}, request=request)
+
+
+@router.post("/{matter_id}/items/{item_id}/dispatch")
+async def dispatch_item(
+    matter_id: str,
+    item_id: int,
+    body: MatterItemDispatchRequest,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    args = _mutation_args(body.mutation, idempotency_key, require_version=False)
+    result = _call(
+        service.dispatch_item,
+        matter_id,
+        item_id,
+        executor_id=body.executor_id,
+        profile=body.profile,
+        expected_version=body.mutation.expected_version,
+        **args,
+    )
+    return success_envelope(result, request=request, status_code=201)
+
+
+@router.post("/{matter_id}/item-dispatches/{dispatch_id}/answer")
+async def answer_item_dispatch(
+    matter_id: str,
+    dispatch_id: int,
+    body: MatterItemDispatchAnswerRequest,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    args = _mutation_args(body.mutation, idempotency_key, require_version=False)
+    result = _call(
+        service.answer_dispatch,
+        matter_id,
+        dispatch_id,
+        text=body.text,
+        expected_version=body.mutation.expected_version,
+        **args,
+    )
+    return success_envelope(result, request=request)
+
+
+@router.post("/{matter_id}/item-dispatches/{dispatch_id}/cancel")
+async def cancel_item_dispatch(
+    matter_id: str,
+    dispatch_id: int,
+    body: MutationOnly,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    args = _mutation_args(body.mutation, idempotency_key, require_version=False)
+    result = _call(
+        service.cancel_dispatch,
+        matter_id,
+        dispatch_id,
+        expected_version=body.mutation.expected_version,
+        **args,
     )
     return success_envelope(result, request=request)
 

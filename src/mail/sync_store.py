@@ -50,11 +50,14 @@ from typing import Dict, List, NamedTuple, Optional, Set, Any, Iterator, TypedDi
 from loguru import logger
 
 from src.matters.models import (
+    MATTER_ITEM_EXECUTOR_KINDS,
     MatterActorKind,
     MatterAttentionKind,
     MatterAttentionSeverity,
     MatterAttentionState,
     MatterHealth,
+    MatterItemDispatchState,
+    MatterItemExecProfile,
     MatterItemKind,
     MatterItemStatus,
     MatterPriority,
@@ -241,6 +244,7 @@ MATTER_TABLE_DDLS = (
         deleted_at INTEGER NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
+        exec_profile TEXT NULL CHECK (exec_profile IS NULL OR exec_profile {sql_check_clause(MatterItemExecProfile)}),
         CHECK (kind = 'action' OR (
             status IS NULL AND priority IS NULL AND owner_kind IS NULL AND owner_id IS NULL
             AND waiting_on_stakeholder_id IS NULL AND due_at IS NULL AND completed_at IS NULL
@@ -290,7 +294,13 @@ MATTER_TABLE_DDLS = (
         reviewed_by_id TEXT NULL,
         accepted_at INTEGER NULL,
         rejected_at INTEGER NULL,
-        review_reason TEXT NULL
+        review_reason TEXT NULL,
+        -- v71: 这份提案是哪一次行动项派发交付的 (`matter_item_dispatch.id`)。
+        -- accept / reject 时按它把那次派发结算成 done / canceled。
+        -- 🔴 有意**不加 FK**: 与 matter_item_dispatch 分属两个 DDL 常量组 (那张表只从 v71
+        -- 块建一次, 本组却会被 v44..v50 各块对老库整组重放) —— 跨组 FK 会把重放顺序变成
+        -- 一个新的约束面。抄 matter_run.async_job_id 的先例 (同样跨组、同样无 FK)。
+        item_dispatch_id INTEGER NULL
     )""",
     f"""CREATE TABLE IF NOT EXISTS resource (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -808,6 +818,90 @@ MATTER_PROGRESS_INDEX_DDLS = (
     # 一次导入补记多条时没有它, 两次读的顺序可能不一样。
     "CREATE INDEX IF NOT EXISTS idx_matter_progress_live "
     "ON matter_progress(matter_id, happened_at DESC, id DESC) WHERE deleted_at IS NULL",
+)
+
+
+# ============ matter_item_dispatch DDL (v71) ============
+# 行动项执行契约 (task 08-25-l4-batch3-item-execution-contract, design §1.1)。派发 = 把一条
+# 行动项交给一个执行器 (现阶段恒 agent) 跑一轮 headless run, 状态机由服务端 CAS 推进。
+#
+# 🔴 为什么是**新表**而不是给 matter_item 加执行状态列: matter_item 有一条表级 CHECK
+# 「非 action 的 kind 上述业务列必须全 NULL」, 而 SQLite 改不了 CHECK —— 往里加执行态列要
+# 重建整张表。派发史本来也该逐行留下 (一条行动项可以派很多轮), 与 matter_run 同构:
+# 执行行独立于工作对象。matter_item 只加一列 `exec_profile` (additive, 不进那条 CHECK 名单)。
+#
+# 🔴 独立成组, **不进** MATTER_TABLE_DDLS / MATTER_INDEX_DDLS —— 那两组会被 v44/v45/v46/
+# v49/v50 各块对老库整组重放, 且 MATTER_TABLE_DDLS 还有下标依赖 (v45 块按 [2]/[3] 取用);
+# 混进去 = 给 v44..v70 每一个中间版本各加一个新炸点 (v52 索引教训)。范式抄 v70 matter_progress。
+#
+# 列语义:
+#   state          七值执行态, CHECK 引 `models.MatterItemDispatchState` 单源。与业务态
+#                  (`matter_item.status`) 分两列, 理由见该枚举 docstring。
+#   executor_kind  现在恒 'agent'; 'user' 是 R6 的语义预留, 加它的那一批同时接流程。
+#   executor_id    'matter_followup' (内建跟进 Agent) 或某个 custom agent 的 report_agent.id。
+#   exec_profile   **派发时从 item 冻结**的执行档 (抄审批 stash 冻结 contextMode 的先例):
+#                  owner 中途改了 item 的默认档, 已经在跑的这一轮仍按派发时那档结算。
+#   question_json  当前这一问 (`{question, options?}`); 回答后清空。
+#   answers_json   问答史 `[{question, answer, at}]`, 多轮反问逐条追加 —— 下一轮 run 的
+#                  prompt 要把它全带上, 否则 agent 会把同一个问题再问一遍。
+#   update_id      交付落成的提案 (`matter_update.id`)。🔴 **不加 FK**: matter_update 属
+#                  MATTER_TABLE_DDLS 那一组 (会被老块重放), 跨组建 FK 会让老库的重放顺序
+#                  变成一个新的约束面 —— 抄 matter_run.async_job_id 的先例 (同样无 FK)。
+#   async_job_id   当前 / 最近一轮 run 的 async_jobs 行 (孤儿收敛靠它 JOIN)。
+#   attempt_count  第几轮 (派发 = 1, 每次回答 +1)。同时是 job 幂等键的组成部分。
+#   ended_at       **终态判据**: done / failed / canceled 三态写它。partial unique 只拦
+#                  `ended_at IS NULL` 的行 ⇒ 终态后同一条行动项可以再派。
+#   全部时间列是 epoch **毫秒** (matters 域全域单位, 三道门 fail-closed, 秒值恒拒)。
+MATTER_ITEM_DISPATCH_TABLE_DDLS = (
+    f"""CREATE TABLE IF NOT EXISTS matter_item_dispatch (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        matter_id INTEGER NOT NULL REFERENCES matter(id) ON DELETE CASCADE,
+        item_id INTEGER NOT NULL REFERENCES matter_item(id) ON DELETE CASCADE,
+        state TEXT NOT NULL CHECK (state {sql_check_clause(MatterItemDispatchState)}),
+        executor_kind TEXT NOT NULL CHECK (executor_kind {sql_check_clause(MATTER_ITEM_EXECUTOR_KINDS)}),
+        executor_id TEXT NOT NULL CHECK (length(trim(executor_id)) > 0),
+        exec_profile TEXT NOT NULL CHECK (exec_profile {sql_check_clause(MatterItemExecProfile)}),
+        question_json TEXT NULL CHECK (question_json IS NULL OR json_valid(question_json)),
+        answers_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(answers_json)),
+        update_id INTEGER NULL,
+        async_job_id INTEGER NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
+        error_json TEXT NULL CHECK (error_json IS NULL OR json_valid(error_json)),
+        idempotency_key TEXT NULL,
+        created_by_kind TEXT NOT NULL CHECK (created_by_kind {sql_check_clause(MatterActorKind)}),
+        created_by_id TEXT NULL,
+        dispatched_at INTEGER NOT NULL,
+        awaiting_since INTEGER NULL,
+        delivered_at INTEGER NULL,
+        ended_at INTEGER NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    )""",
+)
+
+MATTER_ITEM_DISPATCH_INDEX_DDLS = (
+    # 一条行动项同时只允许一个活跃派发 —— 数据库最终防线 (service 的存在性检查撞它 →
+    # E_DISPATCH_ACTIVE)。终态行 ended_at 非空, 不占坑。
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_item_dispatch_one_active "
+    "ON matter_item_dispatch(item_id) WHERE ended_at IS NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_item_dispatch_idem "
+    "ON matter_item_dispatch(idempotency_key) WHERE idempotency_key IS NOT NULL",
+    # 跨事项读面:「现在有哪些派发在等我 / 挂了」(/today 例外面的第四源)。
+    # 🔴 **不加** `WHERE ended_at IS NULL`: `failed` 本身就是终态 (写了 ended_at), 加了
+    # 那句话这个索引就服务不了例外面最要紧的那一半 —— 挂掉的派发。
+    "CREATE INDEX IF NOT EXISTS idx_item_dispatch_state "
+    "ON matter_item_dispatch(state, updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_item_dispatch_matter "
+    "ON matter_item_dispatch(matter_id, id)",
+)
+
+# 提案 → 派发的回钩索引 (accept/reject 时按它把 dispatch 结算成 done / canceled)。
+# 🔴 与 MATTER_STAKEHOLDER_CONTACT_INDEX_DDL 同一条理由**不进** MATTER_INDEX_DDLS:
+# `matter_update.item_dispatch_id` 列要到 v71 的 ALTER 才存在, 放进那组会把 v45..v70 老库
+# 的升级梯子当场炸掉 ("no such column")。只能在 v71 块 (ALTER 之后) 建。
+MATTER_UPDATE_ITEM_DISPATCH_INDEX_DDL = (
+    "CREATE INDEX IF NOT EXISTS idx_matter_update_item_dispatch "
+    "ON matter_update(item_dispatch_id) WHERE item_dispatch_id IS NOT NULL"
 )
 
 
@@ -1764,7 +1858,29 @@ class SyncStore:
     #                回滚 (回退 v70): 旧代码完全不认识 matter_progress, **只降版本号是
     #                安全的** (表留着不碍事); 要清干净再 `DROP TABLE matter_progress`
     #                —— 🔴 那会连人手写的进展一起没, 事件里只留得下「加过 / 改过」的痕迹。
-    DB_VERSION = 70
+    # v71 (2026-08-25, 行动项执行契约): 新表 matter_item_dispatch —— 一条行动项可以被
+    #                派给一个执行器 (现阶段恒 agent) 跑一轮 headless run, 执行态由服务端
+    #                CAS 推进 (七值 queued/running/awaiting_input/proposed/done/failed/
+    #                canceled), 交付走既有提案机制。DDL 单源 MATTER_ITEM_DISPATCH_TABLE_DDLS
+    #                / _INDEX_DDLS (🔴 不进 MATTER_*/CONTACT_* 各组, 理由见该常量头注 =
+    #                v52 教训), state / exec_profile / created_by_kind 的 CHECK 引
+    #                `src/matters/models.py` 枚举。配套两列 additive ALTER:
+    #                `matter_item.exec_profile` (per-行动项执行档, NULL = propose_only) 与
+    #                `matter_update.item_dispatch_id` (提案 → 派发的回钩, 无 FK) + 一条
+    #                部分索引 MATTER_UPDATE_ITEM_DISPATCH_INDEX_DDL。
+    #                语义: 执行态与业务态 (`matter_item.status`) **分两列**, 有意不合成
+    #                (合成一列 = agent 忘改状态即静默永久卡死, 档案 07 §8b); 终态判据是
+    #                `ended_at IS NOT NULL` 而不是 state 值, partial unique 只拦活跃行 ⇒
+    #                终态后同一条行动项可以再派、历史逐行留下; 派发时把 item 的 exec_profile
+    #                **冻结**进派发行 (抄审批 stash 冻结 contextMode 的先例)。
+    #                数据规则: 时间列全是 epoch **毫秒**; 无播种数据 —— 存量行动项升上来
+    #                一条派发都没有 (它们从来没被派过, 回填等于编造执行史)。
+    #                幂等: CREATE TABLE / CREATE INDEX IF NOT EXISTS + 两处 ALTER 前 PRAGMA
+    #                探列, 重放结果不变。
+    #                回滚 (回退 v70): 旧代码完全不认识这张表与这两列, **只降版本号是安全的**
+    #                (表 / 列留着不碍事; 要清干净再 DROP TABLE matter_item_dispatch ——
+    #                两列 SQLite 得重建表才去得掉, 不值当)。
+    DB_VERSION = 71
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
 
@@ -3651,8 +3767,29 @@ class SyncStore:
                     cursor.execute("DROP TABLE IF EXISTS matter_item_v45")
                     cursor.execute(item_ddl)
                     cursor.execute(event_ddl)
+                    # 🔴 matter_item 这一趟必须**显式列名**而不是 `SELECT *`: v71 起
+                    # canonical DDL 带了 exec_profile, 而恰好停在 v44 的老库那张表没有这一
+                    # 列 —— `SELECT *` 会以「24 列表收到 23 个值」当场炸掉整条升级梯子。
+                    # 搬旧表有的那些列, 新列留空 = 它自己的缺省语义 (exec_profile NULL =
+                    # propose_only)。matter_event 本批没加列, 维持原样。
+                    old_item_cols = [
+                        row[1]
+                        for row in cursor.execute(
+                            "PRAGMA table_info(matter_item)"
+                        ).fetchall()
+                    ]
+                    new_item_cols = {
+                        row[1]
+                        for row in cursor.execute(
+                            "PRAGMA table_info(matter_item_v45)"
+                        ).fetchall()
+                    }
+                    carried = ", ".join(
+                        column for column in old_item_cols if column in new_item_cols
+                    )
                     cursor.execute(
-                        "INSERT INTO matter_item_v45 SELECT * FROM matter_item"
+                        f"INSERT INTO matter_item_v45 ({carried}) "
+                        f"SELECT {carried} FROM matter_item"
                     )
                     cursor.execute(
                         "INSERT INTO matter_event_v45 SELECT * FROM matter_event"
@@ -4673,6 +4810,65 @@ class SyncStore:
                 raise SyncStoreMigrationError(
                     f"v70 migration (matter_progress table): {e}"
                 ) from e
+        # === v71: 行动项执行契约 matter_item_dispatch + 两列 additive ALTER ===
+        # 语义 / 数据规则 / 回滚代价见 DB_VERSION 注记与 MATTER_ITEM_DISPATCH_TABLE_DDLS 头注。
+        # 表与索引同块同 try: 纯新表首建, 不存在 v52 式「索引先于列」的错位面。
+        if current_version < 71:
+            try:
+                for ddl in MATTER_ITEM_DISPATCH_TABLE_DDLS:
+                    cursor.execute(ddl)
+                for ddl in MATTER_ITEM_DISPATCH_INDEX_DDLS:
+                    cursor.execute(ddl)
+            except sqlite3.Error as e:
+                raise SyncStoreMigrationError(
+                    f"v71 migration (matter_item_dispatch table): {e}"
+                ) from e
+            # per-行动项执行档。fresh 库满梯子在 v44/v45 块建 matter_item 时已带这一列
+            # (MATTER_TABLE_DDLS 最新形), 探列后跳过 ALTER; 老库追加在表尾 —— 列序与
+            # fresh 库不同, 但 item 读面全部按列名取数 (`dict(row)` / 显式列 INSERT)。
+            # 🔴 **不碰**既有那条跨列 CHECK (「非 action 无状态机」): 改 CHECK 要重建整张表。
+            # 「只有 kind='action' 能设执行档」下沉 service 校验。
+            _item_exec_profile_ddl = (
+                "ALTER TABLE matter_item ADD COLUMN exec_profile TEXT NULL "
+                "CHECK (exec_profile IS NULL OR exec_profile "
+                f"{sql_check_clause(MatterItemExecProfile)})"
+            )
+            try:
+                _item_cols_v71 = {
+                    row[1]
+                    for row in cursor.execute("PRAGMA table_info(matter_item)").fetchall()
+                }
+                if "exec_profile" not in _item_cols_v71:
+                    cursor.execute(_item_exec_profile_ddl)
+                    logger.info("v71 migration: matter_item +exec_profile")
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                _migration_guard_columns(
+                    cursor, "matter_item", {"exec_profile"}, "v71 migration", e,
+                )
+            # 提案 → 派发的回钩列 + 它的部分索引。🔴 索引只能在这里建 (ALTER 之后),
+            # 不进 MATTER_INDEX_DDLS —— v45..v70 老库重放那组时这一列还不存在 (v52 教训)。
+            try:
+                _update_cols_v71 = {
+                    row[1]
+                    for row in cursor.execute(
+                        "PRAGMA table_info(matter_update)"
+                    ).fetchall()
+                }
+                if "item_dispatch_id" not in _update_cols_v71:
+                    cursor.execute(
+                        "ALTER TABLE matter_update ADD COLUMN item_dispatch_id INTEGER"
+                    )
+                    logger.info("v71 migration: matter_update +item_dispatch_id")
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                _migration_guard_columns(
+                    cursor, "matter_update", {"item_dispatch_id"}, "v71 migration", e,
+                )
+            try:
+                cursor.execute(MATTER_UPDATE_ITEM_DISPATCH_INDEX_DDL)
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                _migration_guard_index(
+                    cursor, "idx_matter_update_item_dispatch", "v71 migration", e,
+                )
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
         # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →

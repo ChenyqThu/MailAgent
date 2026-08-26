@@ -17,6 +17,7 @@ import {
   matterFollowupMutateSchema,
   matterGetSchema,
   matterItemMutateSchema,
+  matterItemReportSchema,
   matterProgressMutateSchema,
   matterRelationMutateSchema,
   matterResourceMutateSchema,
@@ -84,6 +85,14 @@ export const GATEWAY_MATTER_WRITE_TOOL_NAMES = [
 const MATTER_OWNER_VOICE_FIELDS = ['background', 'goal', 'goal_checks'] as const
 
 export const GATEWAY_MATTER_RUN_TOOL_NAMES = ['matter_update_propose'] as const
+
+/** L4 批次3 (task 08-25) — the 行动项 dispatch run's own tool. Its own array for the same reason
+ *  GATEWAY_MATTER_RUN_TOOL_NAMES is one: class `artifact`, silent, guard-free, and it only ever
+ *  registers inside an item-run context. 🔴 The literal must equal policy.ts's
+ *  MATTER_ITEM_REPORT_TOOL (matters.test.ts pins it) — the catalog extractor's name universe
+ *  only scans `GATEWAY_*_TOOL_NAMES` arrays, so this array is also what keeps the tool inside
+ *  tool_catalog.json's completeness gate. */
+export const GATEWAY_MATTER_ITEM_RUN_TOOL_NAMES = ['matter_item_report'] as const
 
 /** task 08-14 — 跟进配置的逐条编辑。单列成组而不是并进写家族：它的 class 是
  *  `capability_change`（改的是无人值守 run 的触发条件），与那一族的 `domain_write` 不同 ——
@@ -724,6 +733,46 @@ export function createMatterRunTools(
     collector
   )
   return { matter_update_propose }
+}
+
+/** L4 批次3 (task 08-25) — the item-dispatch run's single output tool. Same construction as
+ *  createMatterRunTools above (auditedReadTool → class `artifact`, silent, no ApprovalGuard, no
+ *  risk tier) and for the same reason: what it writes is either a PENDING proposal the owner still
+ *  reviews, or a question waiting for them — an approval card here would ask the owner to approve
+ *  being asked.
+ *
+ *  🔴 `matterItem` is the server-assembled anchor (AgentRunContext.matterItemRun): which Matter,
+ *  which 行动项, which dispatch all come from this closure — the schema carries no ids at all.
+ *  🔴 The one-of-two rule (result XOR needs_input) is NOT in the schema: Python judges it and the
+ *  rejection comes back in the same turn (D11). */
+export function createMatterItemRunTools(
+  domain: MailAgentDomainClient,
+  collector: GatewayToolAuditCollector = [],
+  matterItem: { matterId: number; publicId: string; itemId: number; dispatchId: number }
+): Record<string, Tool> {
+  const matter_item_report = auditedReadTool(
+    {
+      name: 'matter_item_report',
+      description:
+        'Deliver THIS action item run. Call it EXACTLY ONCE, at the end, and pick one of two ' +
+        'shapes. (1) You got somewhere: `summary` (what you concluded, ≤3 sentences) plus the ' +
+        '`changes` you propose — kind="action" with target {entity:"item", id:<this item>} to ' +
+        'move this item itself (status/description), kind="action" WITHOUT a target to split off ' +
+        'a sub-task, kind="fact" for what you verified (every fact needs a source), ' +
+        'kind="inference" for what you deduced, kind="progress" when the work visibly moved, ' +
+        'kind="resource" to attach new evidence you found. (2) You are blocked on something only ' +
+        'the owner can decide: `needs_input` with ONE question (and `options` when it is a pick) ' +
+        '— the round ends there and resumes with their answer, so ask everything at once instead ' +
+        'of stopping three times. Never send both shapes and never send neither. Nothing is ' +
+        'applied by calling this: changes land as a proposal the owner reviews. Changes aimed at ' +
+        "another item or at the Matter's own fields are dropped and reported back to you.",
+      inputSchema: matterItemReportSchema,
+      run: (input, signal) =>
+        domain.reportItemDispatch(matterItem.publicId, matterItem.dispatchId, input, signal)
+    },
+    collector
+  )
+  return { matter_item_report }
 }
 
 /** D8 — the dynamic verdict behind matter_review_update's approval card. Fail-closed everywhere:

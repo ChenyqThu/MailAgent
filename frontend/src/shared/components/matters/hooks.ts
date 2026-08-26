@@ -8,9 +8,13 @@ import type { ReportAgentConfig } from '@shared/api/types'
 import type {
   MatterAttentionListResponse,
   MatterAttentionSignal,
+  MatterItemDispatch,
+  MatterItemDispatchListResponse,
+  MatterItemExecProfile,
   MattersApi,
   MatterListResponse,
   MatterMutationOptions,
+  MatterMutationResult,
   MatterNotifyLevel,
   MatterNotifyLevelResponse,
   MatterPendingUpdatesResponse,
@@ -25,7 +29,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { qk } from '@shared/lib/queryKeys'
 import { useEventsStatusStore } from '@shared/state/eventsStatus'
 
-import { useMatterMutation } from './matterMutation'
+import { refreshMatter, useMatterMutation } from './matterMutation'
 
 export function useMattersApi(): MattersApi {
   return useMemo(() => createMattersApi(resolveApiBaseUrl()), [])
@@ -338,5 +342,95 @@ export function useMatterAgentProfiles(enabled = true): UseQueryResult<ReportAge
     queryFn: async () =>
       (await mailApi.report.getConfig()).filter((profile) => profile.type === 'custom'),
     enabled
+  })
+}
+
+// ── 行动项执行契约（task 08-25 批次 3）─────────────────────────────────────────
+
+/** 一件事名下的全部派发（详情页的执行历史）。挂在 `detail(id)` 前缀下 ⇒ 一次事项写入
+ *  连带失效，不用在写侧再列一条。 */
+export const matterItemDispatchesKey = (matterId: string) =>
+  [...qk.matters.detail(matterId), 'item-dispatches'] as const
+
+/** 跨事项的「等我回答 / 挂了」派发（例外面第四源）。导出给 `useEventBridge`：
+ *  `matter.item.dispatch.changed` 到达时定向失效。 */
+export const liveItemDispatchesKey = () => [...qk.matters.itemDispatches()] as const
+
+export function useMatterItemDispatches(
+  matterId: string,
+  enabled = true
+): UseQueryResult<MatterItemDispatch[]> {
+  const api = useMattersApi()
+  return useQuery({
+    queryKey: matterItemDispatchesKey(matterId),
+    queryFn: () => api.listItemDispatches(matterId),
+    enabled,
+    // 实时性靠 `matter.item.dispatch.changed` SSE 定向失效 + 写侧 refreshMatter；
+    // 长 staleTime 只是断线兜底（同 attention / pendingUpdates 的配方）。
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000
+  })
+}
+
+export function useLiveItemDispatches(
+  enabled = true
+): UseQueryResult<MatterItemDispatchListResponse> {
+  const api = useMattersApi()
+  return useQuery({
+    queryKey: liveItemDispatchesKey(),
+    // 🔴 不传 states：默认值是服务端单源（`DEFAULT_LIVE_DISPATCH_STATES`）。在这里抄一份
+    // 就是第二处会漂的词表 —— 后端加一个「也该进面」的态时，前端会静默过滤掉它。
+    queryFn: () => api.listLiveItemDispatches(),
+    enabled,
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000
+  })
+}
+
+export interface ItemDispatchActionInput {
+  matterId: string
+  /** 派发：需要 itemId；回答 / 取消：需要 dispatchId。 */
+  itemId?: number
+  dispatchId?: number
+  action: 'dispatch' | 'answer' | 'cancel'
+  executorId?: string | null
+  profile?: MatterItemExecProfile | null
+  text?: string
+}
+
+/**
+ * 派发 / 回答 / 取消的**唯一**写口（详情页与例外面共用）。
+ *
+ * 🔴 三个动作都**不带** `expectedVersion`：服务端对它们 `require_version=False`，而例外面
+ * 只认识派发行、拿不到事项版本号。走 `useMatterMutation` 仍有价值 —— 万一服务端回
+ * `E_VERSION_CONFLICT`（并发写抬高了版本），它会替我们重新拉取事项。
+ */
+export function useItemDispatchAction(): UseMutationResult<
+  MatterMutationResult,
+  Error,
+  ItemDispatchActionInput
+> {
+  const api = useMattersApi()
+  const client = useQueryClient()
+  return useMatterMutation({
+    matterId: (variables: ItemDispatchActionInput) => variables.matterId,
+    mutationFn: (input: ItemDispatchActionInput) => {
+      if (input.action === 'dispatch') {
+        if (input.itemId == null) return Promise.reject(new Error('dispatch requires itemId'))
+        return api.dispatchItem(input.matterId, input.itemId, {
+          executor_id: input.executorId ?? null,
+          profile: input.profile ?? null
+        })
+      }
+      if (input.dispatchId == null) {
+        return Promise.reject(new Error(`${input.action} requires dispatchId`))
+      }
+      return input.action === 'answer'
+        ? api.answerItemDispatch(input.matterId, input.dispatchId, input.text ?? '')
+        : api.cancelItemDispatch(input.matterId, input.dispatchId)
+    },
+    // 一次派发同时改动事项行（last_activity_at）、派发史与跨事项聚合 —— 走共享出口，
+    // 别在这里手抄一份失效清单（闸：matterRefreshGate.test.ts）。
+    onSuccess: (_result, variables) => refreshMatter(client, variables.matterId)
   })
 }

@@ -95,6 +95,30 @@ export interface ChatSession {
   // marker. SQLite crosses the untyped boundary as 0/1, hence the tolerant starred wire shape.
   pinned_at?: number | null
   starred?: boolean | number
+  // L4 批次3 (ai_chat.db v28) — the matter_item this session's run belongs to (行动项执行历史反查).
+  // NULL/undefined for every session that isn't an item run. Cross-db id (matter_item lives in
+  // sync_store.db), no FK — same shape as agent_job_id.
+  item_id?: number | null
+  // L4 批次3 R7 (ai_chat.db v28) — the persistent「曾在审批处暂停」marker (a JSON PausedApprovalMarker,
+  // keep-latest; NULL once the session's run settles or a new run starts). The approval STASH itself
+  // stays process-memory: this column only proves the pause HAPPENED, so a manual session can render
+  // the honest「已失效」notice after a gateway restart instead of silently showing nothing.
+  paused_marker_json?: string | null
+}
+
+/** L4 批次3 R7 — the JSON shape stored in `ai_chat_sessions.paused_marker_json`.
+ *
+ *  🔴 Deliberately carries NO resume capability: no request body, no responseMessage, no resumeToken.
+ *  Persisting those would make a restarted approval executable again while the ApprovalGuard that
+ *  authorized it is gone — the fail-closed "restart drops all pending" contract (approvalStash.ts) is
+ *  the security floor, and this marker only restores HONESTY about it, never the ability to approve. */
+export interface PausedApprovalMarker {
+  toolCallId: string
+  approvalId: string
+  toolName: string
+  destructive: boolean
+  /** Unix ms at pause time. */
+  pausedAt: number
 }
 
 // Global session-history row. Unlike `ChatSession` (per-email, used by the

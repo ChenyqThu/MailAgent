@@ -1095,6 +1095,7 @@
       "matter_update": "Update matter",
       "matter_item_mutate": "Edit matter item",
       "matter_progress_mutate": "Record matter progress",
+      "matter_item_report": "Report action item result",
       "matter_resource_mutate": "Link matter resource",
       "matter_stakeholder_mutate": "Edit matter stakeholder",
       "matter_relation_mutate": "Edit matter relation",
@@ -5402,6 +5403,45 @@
         "note": "Note"
       }
     },
+    "dispatch": {
+      "sectionTitle": "Hand to an agent",
+      "start": "Dispatch to agent",
+      "starting": "Dispatching…",
+      "executor": "Executor",
+      "builtinExecutor": "Built-in follow-up agent",
+      "profile": "Execution profile",
+      "confirm": "Dispatch",
+      "cancel": "Cancel dispatch",
+      "answer": "Answer",
+      "answerLabel": "Answer the agent",
+      "answerPlaceholder": "Give it the piece it is missing",
+      "answerConfirm": "Send answer",
+      "answerBack": "Back",
+      "review": "Review the proposal",
+      "history": "{count, plural, one {# run} other {# runs}}",
+      "attempt": "Round {count}",
+      "openSession": "Open this run",
+      "empty": "Never dispatched. Once you do, its execution state shows up here.",
+      "state": {
+        "queued": "Queued",
+        "running": "Running",
+        "awaiting_input": "Waiting on you",
+        "proposed": "Proposed",
+        "done": "Done",
+        "failed": "Failed",
+        "canceled": "Canceled"
+      },
+      "profiles": {
+        "propose_only": "Propose only (you accept)",
+        "edit_with_approval": "Approve each change",
+        "autonomous": "Accept automatically"
+      },
+      "profileHints": {
+        "propose_only": "Output lands as a proposal; nothing is written until you accept it.",
+        "edit_with_approval": "Each change is approved before it lands.",
+        "autonomous": "Output is written straight to this action item; still undoable afterwards."
+      }
+    },
     "progress": {
       "sectionTitle": "Progress",
       "add": "Note progress",
@@ -5532,6 +5572,17 @@
       "progress_removed_plain": "Removed a progress entry",
       "progress_restored": "Restored the progress {title}",
       "progress_restored_plain": "Restored a progress entry",
+      "item_dispatched": "Handed the action item {title} to {executor}",
+      "item_dispatched_plain": "Dispatched an action item",
+      "item_dispatch_answered": "Answered the agent's question (round {attempt})",
+      "item_dispatch_answered_plain": "Answered the agent's question",
+      "item_dispatch_canceled": "Cancelled this dispatch",
+      "item_dispatch_delivered": "The agent delivered an update proposal",
+      "item_dispatch_delivered_needs_input": "The agent needs more information and asked a question",
+      "item_dispatch_failed": "This dispatch failed ({code})",
+      "item_dispatch_failed_plain": "This dispatch failed",
+      "item_dispatch_settled": "Accepted what this dispatch delivered",
+      "item_dispatch_settled_rejected": "Rejected what this dispatch delivered",
       "relation_added": "Linked the matter {title}",
       "relation_added_plain": "Linked another matter",
       "relation_updated": "Updated a link between matters",
@@ -6317,7 +6368,13 @@
       "progress_added": "Progress noted",
       "progress_updated": "Progress edited",
       "progress_removed": "Progress removed",
-      "progress_restored": "Progress restored"
+      "progress_restored": "Progress restored",
+      "item_dispatched": "Action item dispatched",
+      "item_dispatch_answered": "Agent question answered",
+      "item_dispatch_canceled": "Dispatch cancelled",
+      "item_dispatch_delivered": "Dispatch delivered",
+      "item_dispatch_failed": "Dispatch failed",
+      "item_dispatch_settled": "Dispatch delivery reviewed"
     },
     "eventActor": {
       "user": "You",
@@ -6850,7 +6907,7 @@
     "error": "Failed to load matters data — only agent runs are listed below",
     "empty": {
       "title": "Nothing needs you right now",
-      "hint": "Agent approvals, matter proposals and attention signals collect here. None of them are waiting."
+      "hint": "Agent approvals, matter proposals, attention signals and item dispatches collect here. None of them are waiting."
     },
     "group": {
       "waiting": "Waiting on you",
@@ -6867,7 +6924,9 @@
       "runTrigger": "Triggered by {trigger}",
       "runTriggerAt": "Triggered by {trigger} · {at}",
       "proposalChanges": "{count, plural, one {# change} other {# changes}}",
-      "proposalConfidence": "{percent}% confidence"
+      "proposalConfidence": "{percent}% confidence",
+      "dispatchAsked": "The agent is waiting on an answer",
+      "dispatchFailed": "This run failed ({code})"
     },
     "trigger": {
       "manual": "manual run",
@@ -6886,6 +6945,13 @@
       "dismissReasonPlaceholder": "Say why this can wait for now",
       "dismissConfirm": "Confirm dismiss",
       "dismissBack": "Back"
+    },
+    "dispatch": {
+      "cancel": "Cancel dispatch",
+      "answerLabel": "Answer the agent",
+      "answerPlaceholder": "Give it the piece it is missing",
+      "answerConfirm": "Answer",
+      "answerBack": "Back"
     }
   }
 }

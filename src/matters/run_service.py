@@ -34,6 +34,8 @@ from .models import (
     MATTER_CHANGE_KINDS,
     MATTER_PROGRESS_KINDS,
     MATTER_RUN_STATUSES,
+    MatterItemDispatchState,
+    MatterItemExecProfile,
     MatterRunTrigger,
     normalize_progress_refs,
 )
@@ -51,6 +53,12 @@ _DEFAULT_AI_GATEWAY_PORT = 8300
 _RUN_STOP_TIMEOUT_SEC = 5.0
 
 MATTER_FOLLOWUP_JOB_TYPE = "matter_followup"
+
+#: 行动项 run 允许提的 change 种类（task 08-25 批次 3）。🔴 `field` **有意不在里面**：那是
+#: 事项本身的 status/health/priority/due_at/background/goal 一类字段，而派出去的是**一条
+#: 行动项**，不是重写这件事的授权。autonomous 档落库即采纳，这条边界因此是无人值守能改到
+#: 什么的实际半径，不是产品口味。
+ITEM_RUN_CHANGE_KINDS = frozenset({"fact", "inference", "action", "resource", "progress"})
 
 #: 通知中心行的 `source` 值（design §2.3 的信源枚举）。
 #: 🔴 写成常量而不是字面量是有原因的：时间线 i18n 闸
@@ -775,18 +783,7 @@ class MatterRunService(MatterService):
             if not validated and summary is None:
                 # 全剔 + 无 summary → 不落 Update（终态 warn 由 worker 凭 dropped 判）。
                 return {"update_id": None, "dropped": dropped}
-            from_row = conn.execute(
-                "SELECT to_event_id FROM matter_update WHERE matter_id=? "
-                "AND review_status='accepted' "
-                "ORDER BY COALESCE(accepted_at, created_at) DESC, id DESC LIMIT 1",
-                (matter["id"],),
-            ).fetchone()
-            from_event_id = from_row["to_event_id"] if from_row else None
-            to_row = conn.execute(
-                "SELECT MAX(id) AS max_id FROM matter_event WHERE matter_id=?",
-                (matter["id"],),
-            ).fetchone()
-            to_event_id = to_row["max_id"] if to_row else None
+            from_event_id, to_event_id = self._proposal_event_bounds(conn, int(matter["id"]))
             created_by_id = run.get("agent_profile_id") or f"matter:{matter['public_id']}"
             citations = [
                 dict(source)
@@ -851,6 +848,264 @@ class MatterRunService(MatterService):
             str(matter["public_id"]), str(matter["title"]), update_id, summary
         )
         return {"update_id": update_id, "dropped": dropped}
+
+    # ── 行动项派发 run 的交付（task 08-25 批次 3）───────────────────────────────────
+
+    def _proposal_event_bounds(
+        self, conn: sqlite3.Connection, matter_id: int
+    ) -> tuple[Any, Any]:
+        """提案锚的事件窗 ``(from_event_id, to_event_id)``：上次被接受的提案看到哪 → 现在到哪。"""
+        from_row = conn.execute(
+            "SELECT to_event_id FROM matter_update WHERE matter_id=? "
+            "AND review_status='accepted' "
+            "ORDER BY COALESCE(accepted_at, created_at) DESC, id DESC LIMIT 1",
+            (matter_id,),
+        ).fetchone()
+        to_row = conn.execute(
+            "SELECT MAX(id) AS max_id FROM matter_event WHERE matter_id=?",
+            (matter_id,),
+        ).fetchone()
+        return (
+            from_row["to_event_id"] if from_row else None,
+            to_row["max_id"] if to_row else None,
+        )
+
+    def report_item_dispatch(
+        self, public_id: str, dispatch_id: int, payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """行动项派发 run 的**唯一**交付通道（`matter_item_report` 工具的落库端）。
+
+        二选一，且必居其一：
+          · 有产出 → summary / changes 落成 pending 提案，派发 `running → proposed`；
+          · 缺关键信息 → question 落在派发行上，`running → awaiting_input`，本轮结束。
+
+        🔴 分支约束（XOR）**在这里判**，不进 tool schema 顶层 —— schema 分支两次把整条工具链
+        打瘫的前科见 `_validate_changes` 上方的 D11 注记。
+        🔴 状态迁移一律走 CAS（`deliver_dispatch`），不信 agent 自述：「已经交付过一次」因此
+        是结构性的（第二次调用撞 `state != running` → 409），不靠额外记一个标志位。
+        """
+        with self.repository.connect() as conn:
+            matter = self._require_matter(conn, public_id)
+            dispatch = self.repository.get_dispatch(
+                conn, dispatch_id, matter_id=int(matter["id"])
+            )
+        if dispatch is None:
+            raise MatterError("E_CHILD_NOT_FOUND", f"dispatch {dispatch_id} not found")
+        if str(dispatch["state"]) != MatterItemDispatchState.RUNNING.value:
+            raise MatterError(
+                "E_INVALID_STATE",
+                f"dispatch is {dispatch['state']}, not running",
+                hint="Each dispatch attempt delivers at most once.",
+            )
+        needs_input = payload.get("needs_input")
+        summary = self._optional_text(payload.get("summary"))
+        raw_changes = [
+            dict(change)
+            for change in (payload.get("changes") or [])
+            if isinstance(change, Mapping)
+        ]
+        if needs_input is not None and (raw_changes or summary is not None):
+            raise MatterError(
+                "E_INVALID_ARG",
+                "needs_input and a result (summary/changes) are mutually exclusive",
+            )
+        if needs_input is None and not raw_changes and summary is None:
+            raise MatterError(
+                "E_INVALID_ARG",
+                "report needs either a result (summary/changes) or needs_input",
+            )
+        if needs_input is not None:
+            delivered = self.deliver_dispatch(dispatch_id, question=needs_input)
+            return {
+                "dispatch_id": dispatch_id,
+                "state": delivered.get("state"),
+                "update_id": None,
+                "dropped": [],
+                "accepted": False,
+            }
+
+        item_id = int(dispatch["item_id"])
+        attempt = int(dispatch["attempt_count"])
+        autonomous = (
+            str(dispatch["exec_profile"]) == MatterItemExecProfile.AUTONOMOUS.value
+        )
+        now = self.clock_ms()
+        with self._transaction() as conn:
+            matter = self._require_matter(conn, public_id)
+            validated, dropped = self._validate_changes(conn, matter, raw_changes)
+            validated, out_of_scope = self._scope_changes_to_item(validated, item_id)
+            dropped = [*dropped, *out_of_scope]
+            if not validated and summary is None:
+                # 全剔且没有 summary → 不落提案，派发**留在 running**：模型拿着 dropped 明细
+                # 还能在同一轮里改对再报一次。「每次派发至多一次交付」说的是**成功**那一次。
+                return {
+                    "dispatch_id": dispatch_id,
+                    "state": str(dispatch["state"]),
+                    "update_id": None,
+                    "dropped": dropped,
+                    "accepted": False,
+                }
+            from_event_id, to_event_id = self._proposal_event_bounds(
+                conn, int(matter["id"])
+            )
+            created_by_id = str(dispatch["executor_id"])
+            citations = [
+                dict(source)
+                for change in validated
+                for source in (change.get("sources") or [])
+                if isinstance(source, Mapping)
+            ]
+            update_id = self.repository.insert_update(
+                conn,
+                {
+                    "matter_id": matter["id"],
+                    "review_status": "pending",
+                    "summary": summary,
+                    "from_event_id": from_event_id,
+                    "to_event_id": to_event_id,
+                    "anchored_matter_version": int(matter["version"]),
+                    "original_proposal_json": self._dump(dict(payload)),
+                    "changes_json": self._dump(validated),
+                    "citations_json": self._dump(citations),
+                    "confidence": None,
+                    "agent_run_id": None,
+                    "item_dispatch_id": dispatch_id,
+                    "created_by_kind": "agent",
+                    "created_by_id": created_by_id,
+                    "created_at": now,
+                },
+            )
+            self._append_event(
+                conn,
+                matter_id=matter["id"],
+                kind=UPDATE_PROPOSED,
+                actor=Actor(kind="agent", actor_id=created_by_id),
+                source="agent_run",
+                dedupe_key=f"item_dispatch:{dispatch_id}:update_proposed:{attempt}",
+                reason=None,
+                item_id=item_id,
+                update_id=update_id,
+                payload={
+                    "update_id": update_id,
+                    "dispatch_id": dispatch_id,
+                    "change_count": len(validated),
+                },
+                happened_at=now,
+            )
+            if not autonomous:
+                # autonomous 档下一步就自动采纳了 —— 开一条「有提案待评审」的关注信号、再在
+                # 一秒内被清账循环收掉，只是噪音。等人审的两档才需要它。
+                AttentionService(
+                    self.repository, clock_ms=self.clock_ms
+                )._open_episode_in_conn(
+                    conn,
+                    AttentionFact(
+                        int(matter["id"]),
+                        "needs_review",
+                        f"update:{update_id}",
+                        "info",
+                        "有一条 Agent 提案等待评审",
+                        {"update_id": update_id},
+                    ),
+                    now,
+                )
+        # 事务外：先把派发行推进到 proposed（accept 的回钩认的就是这一步的状态），
+        # 再看要不要自动采纳。顺序不能反 —— `_settle_dispatch_for_update` 只结算停在
+        # proposed 的行。
+        delivered = self.deliver_dispatch(dispatch_id, update_id=update_id)
+        state = str(delivered.get("state") or MatterItemDispatchState.PROPOSED.value)
+        accepted = False
+        if autonomous:
+            accepted = self._auto_accept_item_update(
+                public_id, update_id, dispatch_id, attempt
+            )
+            if accepted:
+                state = MatterItemDispatchState.DONE.value
+        else:
+            self._publish_update_notification(
+                str(matter["public_id"]), str(matter["title"]), update_id, summary
+            )
+        return {
+            "dispatch_id": dispatch_id,
+            "state": state,
+            "update_id": update_id,
+            "dropped": dropped,
+            "accepted": accepted,
+        }
+
+    @staticmethod
+    def _scope_changes_to_item(
+        changes: list[dict[str, Any]], item_id: int
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """把 change 集裁到「这一条行动项」的半径内。返回 (保留的, 剔除明细)。
+
+        🔴 这是 autonomous 档的实际作用半径，不只是产品口味：那一档落库即采纳，所以
+        「派出去推一条行动项」绝不能顺手改掉事项本身的状态 / 目标（`kind=field`），也不能
+        去动别的条目。越界的一律剔除并把明细回给模型 —— 它当轮就知道自己写错了什么。
+        """
+        kept: list[dict[str, Any]] = []
+        dropped: list[dict[str, Any]] = []
+
+        def drop(change: Mapping[str, Any], reason: str, **extra: Any) -> None:
+            dropped.append(
+                {
+                    "id": str(change.get("id") or ""),
+                    "kind": str(change.get("kind") or ""),
+                    "reason": reason,
+                    **extra,
+                }
+            )
+
+        for change in changes:
+            kind = str(change.get("kind") or "")
+            if kind not in ITEM_RUN_CHANGE_KINDS:
+                drop(change, "change_kind_not_allowed_for_item_run")
+                continue
+            if kind == "action":
+                target = change.get("target")
+                target_id = target.get("id") if isinstance(target, Mapping) else None
+                # target 为空 = 新建一条子任务（合法）；带 target 就必须是**这一条**。
+                # `_validate_changes` 已经保证了 target_id 是本事项里活着的 item。
+                if target_id is not None and int(target_id) != item_id:
+                    drop(
+                        change,
+                        "action_target_outside_dispatch",
+                        target_id=target_id,
+                    )
+                    continue
+            kept.append(change)
+        return kept, dropped
+
+    def _auto_accept_item_update(
+        self, public_id: str, update_id: int, dispatch_id: int, attempt: int
+    ) -> bool:
+        """autonomous 档：提案落库后**立即**按既有 accept 内核采纳（actor=system）。
+
+        🔴 走的是与 owner 点「接受」完全同一条路径（`accept_update`）—— 逐条应用、写
+        `update_accepted` 事件、把派发结算成 done、可撤销面照旧。这一档省掉的只是「等人点」，
+        不是审计与可逆性。
+
+        失败（提案被并发写作废 / 版本竞态）不抛：提案已经在库里了，退回「等 owner 审」比
+        把这一轮判死更诚实。返回是否真的采纳了。
+        """
+        try:
+            with self.repository.connect() as conn:
+                matter = self._require_matter(conn, public_id)
+            self.accept_update(
+                public_id,
+                update_id,
+                expected_version=int(matter["version"]),
+                idempotency_key=f"item_dispatch:{dispatch_id}:auto_accept:{attempt}",
+                source="agent_run",
+                actor=Actor(kind="system"),
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001 — 采纳失败退回等人审，绝不反噬已落库的提案
+            logger.warning(
+                f"[matter-dispatch] autonomous accept failed "
+                f"dispatch_id={dispatch_id} update_id={update_id}: {exc}"
+            )
+            return False
 
     def _publish_update_notification(
         self, public_id: str, matter_title: str, update_id: int, summary: Optional[str]

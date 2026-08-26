@@ -170,6 +170,19 @@ tier=auto，仅 manual_chat）+ run 历史触发方式投影。契约细节 →
 ### 批次 3「行动项执行契约」（A2，D4 挂层）
 matter_item 状态机一等对象 + 五段契约 + delegate-not-assignee；设计输入含档案 07。
 
+**已落地（2026-08-25，task `.trellis/tasks/08-25-l4-batch3-item-execution-contract`）**：
+行动项派发执行契约——`matter_item_dispatch` 账本（DB v71，七值状态机服务端 CAS）+
+`matter_item_run` headless 执行链 + `matter_item_report` 交付恰一次（changes XOR needs_input，
+分支约束下沉 Python）+ 反问 run 终止式（awaiting_input 持久、回答开新轮带问答史）+
+per-行动项执行档（propose_only 默认 / autonomous 自动采纳 / edit_with_approval 词表预留不上 UI）+
+过程可见挂行动项（CHAT_DB v28 `item_id` 会话锚 + 派发史 + 会话跳转）+ `/today` 第四源
+（等回答/失败两态进面）+ 批次 2 移交的 manual 审批「曾暂停」持久 marker。
+契约权威 → `matters-architecture.md` §4.3 + gateway 架构文档 §13.27.4/§13.28。
+与 A2 字面的三处有据偏离（无 lease / 反问不 mid-run 暂停 / contextMode 复用 followup 档）
+记在任务 design.md 修订注记。
+明确没做（原样留给后续批次）：人执行器流程、A3 事项编排者、`custom_agent_call` headless、
+B2 站会、B3 信任引擎、B4 动态审批（edit_with_approval 启用点）、WS-D4' Notion 投影。
+
 ---
 
 ## 5. 风险与红线

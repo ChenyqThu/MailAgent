@@ -144,6 +144,13 @@ export function AIChatPanel({
     const row = chatSessions.find((s) => s.id === chatActiveSessionId)
     return row ? row.backend_model : undefined
   }, [chatActiveSessionId, chatSessions])
+  // L4 批次3 R7 — the active session's「曾暂停」marker (ai_chat.db v28), off the SAME rows (no extra
+  // query / no polling). Only consulted on a stash miss, i.e. after a gateway restart, when the rows
+  // are freshly loaded anyway.
+  const pausedMarkerJson = useMemo<string | null>(() => {
+    if (chatActiveSessionId === null) return null
+    return chatSessions.find((s) => s.id === chatActiveSessionId)?.paused_marker_json ?? null
+  }, [chatActiveSessionId, chatSessions])
   const persistSessionModel = useCallback(
     (sid: number, m: string): void => {
       void mailApi.chat.updateSessionModel(sid, m)
@@ -576,6 +583,7 @@ export function AIChatPanel({
     pendingApprovalSessionId !== null ? (
       <PendingApprovalPanel
         sessionId={pendingApprovalSessionId}
+        pausedMarkerJson={pausedMarkerJson}
         refreshKey={islandRefreshNonce}
         onDecided={() => {
           void chatReloadActiveSession().then(() => setIslandRefreshNonce((n) => n + 1))

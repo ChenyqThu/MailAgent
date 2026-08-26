@@ -202,6 +202,16 @@ export function AgentConversation({
     const row = chatSessionRows.find((s) => s.id === chatActiveSessionId)
     return row ? row.backend_model : undefined
   }, [chatActiveSessionId, activeItem, chatSessionRows])
+  // L4 批次3 R7 — the active session's「曾暂停」marker (ai_chat.db v28), read off the SAME rows the
+  // model preference above uses (no extra query / no polling). It only matters on a stash miss, i.e.
+  // after a gateway restart, when these rows are freshly loaded anyway.
+  const pausedMarkerJson = useMemo<string | null>(() => {
+    if (chatActiveSessionId === null) return null
+    if (activeItem && activeItem.id === chatActiveSessionId) {
+      return activeItem.paused_marker_json ?? null
+    }
+    return chatSessionRows.find((s) => s.id === chatActiveSessionId)?.paused_marker_json ?? null
+  }, [chatActiveSessionId, activeItem, chatSessionRows])
   const persistSessionModel = useCallback(
     (sid: number, m: string): void => {
       void mailApi.chat.updateSessionModel(sid, m)
@@ -694,6 +704,7 @@ export function AgentConversation({
     initialMessages.length > 0 ? (
       <PendingApprovalPanel
         sessionId={chatActiveSessionId}
+        pausedMarkerJson={pausedMarkerJson}
         refreshKey={refreshNonce}
         onDecided={() => {
           void chatReloadActiveSession().then(() => setRefreshNonce((n) => n + 1))

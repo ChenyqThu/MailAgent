@@ -2371,6 +2371,36 @@ describe('POST /api/ai/agent-run — matter_followup gating + Matter-anchored se
     expect('anchor' in arg).toBe(false)
     expect(arg.triggerKind).toBe('cron')
   })
+
+  test('L4 批次3: an item dispatch run anchors on its Matter AND stamps item_id', async () => {
+    const createAgentSession = vi.fn(() => 55)
+    const base = await startWith({
+      fetchAgentRunSpec: async () => makeItemRunSpec(),
+      createAgentSession
+    })
+    expect((await postAgentRun(base, { jobId: 7, claimToken: 'tok' })).status).toBe(200)
+    // The item_id column (CHAT_DB v28) is what lets a 行动项 list its own execution history;
+    // the anchor stays the Matter (an item run is still that Matter's conversation).
+    expect(createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        anchor: { type: 'matter', id: 42 },
+        itemId: 9,
+        triggerKind: 'matter_item_run',
+        title: '行动项 · 回签补充协议'
+      })
+    )
+  })
+
+  test('a follow-up run carries NO itemId (the two venues stay distinguishable)', async () => {
+    const createAgentSession = vi.fn(() => 55)
+    const base = await startWith({
+      fetchAgentRunSpec: async () => makeMatterSpec(),
+      createAgentSession
+    })
+    expect((await postAgentRun(base, { jobId: 7, claimToken: 'tok' })).status).toBe(200)
+    const arg = (createAgentSession.mock.calls[0] as unknown as [Record<string, unknown>])[0]
+    expect('itemId' in arg).toBe(false)
+  })
 })
 
 // ── 0813 dogfood 轮 3 #10：事项级模型覆盖的**消费端** ──────────────────────────────
@@ -2458,7 +2488,11 @@ describe('runHeadlessAgent — model / effort / fallback overrides', () => {
     const chain = chainModel(new Set())
     await runHeadlessAgent(
       chainCfg(chain.createModel),
-      { jobId: 7, spec: makeSpec({ model: 'claude-sonnet-4-6', effort: 'turbo' }), sessionId: null },
+      {
+        jobId: 7,
+        spec: makeSpec({ model: 'claude-sonnet-4-6', effort: 'turbo' }),
+        sessionId: null
+      },
       new AbortController().signal
     )
     expect(chain.providerOptions[0]?.anthropic).toBeUndefined()
@@ -2736,7 +2770,11 @@ describe('contact_governance — the governance venue (WP7)', () => {
     const enabledTools: string[][] = []
     await runHeadlessAgent(
       contactCfg(enabledTools),
-      { jobId: 7, spec: makeContactSpec({ useKos: true } as Partial<AgentRunSpec>), sessionId: null },
+      {
+        jobId: 7,
+        spec: makeContactSpec({ useKos: true } as Partial<AgentRunSpec>),
+        sessionId: null
+      },
       new AbortController().signal
     )
     expect(enabledTools[0].some((name) => name.startsWith('kos_'))).toBe(true)
@@ -2744,7 +2782,11 @@ describe('contact_governance — the governance venue (WP7)', () => {
     const disabledTools: string[][] = []
     await runHeadlessAgent(
       contactCfg(disabledTools),
-      { jobId: 8, spec: makeContactSpec({ useKos: false } as Partial<AgentRunSpec>), sessionId: null },
+      {
+        jobId: 8,
+        spec: makeContactSpec({ useKos: false } as Partial<AgentRunSpec>),
+        sessionId: null
+      },
       new AbortController().signal
     )
     expect(disabledTools[0].some((name) => name.startsWith('kos_'))).toBe(false)
@@ -2887,5 +2929,228 @@ describe('contact_governance — the governance venue (WP7)', () => {
       matterRun: { matterId: 42, publicId: 'MAT-000042', runId: 7 }
     }).buildTools!([], undefined, 'matter_followup')
     expect(Object.keys(matterRun).sort()).toEqual(['email_list_filter', 'matter_update_propose'])
+  })
+})
+
+/** The server-assembled spec of a 行动项 dispatch run (L4 批次3): the toolPolicy is the follow-up
+ *  run's byte-for-byte (same venue tier), the anchor is the item + dispatch, and the runKind stamp
+ *  is what routes it. trigger.kind stays 'manual' — the value that would fail-close to
+ *  untrusted_trigger (which ADMITS domain_write) if anything read the ladder instead of runKind. */
+function makeItemRunSpec(over?: Partial<AgentRunSpec>): AgentRunSpec {
+  return makeSpec({
+    runKind: 'matter_item_run',
+    matterItem: {
+      matterId: 42,
+      publicId: 'MAT-000042',
+      matterTitle: 'Atlas rollout',
+      itemId: 9,
+      itemTitle: '回签补充协议',
+      dispatchId: 3
+    },
+    agentId: 'matter_item:MAT-000042:9',
+    trigger: { kind: 'manual', firedAt: '2026-08-25T09:00:00Z' },
+    toolPolicy: { ...MATTER_FOLLOWUP_TOOL_POLICY } as AgentRunSpec['toolPolicy'],
+    sessionTitle: '行动项 · 回签补充协议',
+    ...over
+  } as Partial<AgentRunSpec>)
+}
+
+describe('matter_item_run — the 行动项 dispatch venue (L4 批次3)', () => {
+  /** Deliberately WIDE flags (write + send + exec + web + calendar + custom agents): every one of
+   *  those families is what the two belts must strip, so building them is what makes the
+   *  assertions mean anything. */
+  function itemCfg(seenTools: string[][]): AiGatewayConfig {
+    const guard = new ApprovalGuard()
+    return {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      createModel: () => captureToolsModel(seenTools),
+      buildTools: (collector, _am, mode, agentRunContext) =>
+        buildGatewayTools(
+          {
+            domain: minimalDomain(),
+            writeToolsEnabled: true,
+            approvalGuard: guard,
+            sendToolEnabled: true,
+            sendSigningSecret: 'secret',
+            execToolsEnabled: true,
+            webToolsEnabled: true,
+            calendarToolsEnabled: true,
+            customAgentToolsEnabled: true,
+            notionAgentToolsEnabled: true,
+            contextMode: mode,
+            agentRunContext
+          },
+          collector
+        ),
+      persistTurn: () => {}
+    }
+  }
+
+  test("runKind='matter_item_run' lands on the matter venue, over EVERY trigger kind", () => {
+    for (const kind of ['manual', 'cron', 'schedule', 'email_filter', 'im', 'junk']) {
+      expect(
+        deriveContextMode(makeItemRunSpec({ trigger: { kind, firedAt: '2026-08-25T09:00:00Z' } })),
+        kind
+      ).toBe('matter_followup')
+    }
+  })
+
+  test('the anchor is all-or-nothing and allowedTools are forced []', () => {
+    const ctx = agentRunContextFromSpec(
+      makeItemRunSpec({
+        toolPolicy: {
+          allowedTools: ['email_flag', 'report_write'],
+          skills: ['email']
+        } as AgentRunSpec['toolPolicy']
+      })
+    )
+    expect(ctx.matterItemRun).toEqual({
+      matterId: 42,
+      publicId: 'MAT-000042',
+      itemId: 9,
+      dispatchId: 3
+    })
+    expect(ctx.allowedTools).toEqual([]) // the list has no legal use in this venue
+    expect(ctx.skills).toEqual(['email']) // the mount list IS honoured (it only ever narrows)
+    // a follow-up spec keeps the pre-批次3 object shape — the key is absent, not undefined-valued.
+    expect('matterItemRun' in agentRunContextFromSpec(makeMatterSpec())).toBe(false)
+  })
+
+  test.each([
+    ['missing anchor', undefined],
+    ['missing dispatchId', { matterId: 42, publicId: 'MAT-000042', itemId: 9 }],
+    ['zero dispatchId', { matterId: 42, publicId: 'MAT-000042', itemId: 9, dispatchId: 0 }],
+    ['zero itemId', { matterId: 42, publicId: 'MAT-000042', itemId: 0, dispatchId: 3 }],
+    ['non-integer matterId', { matterId: 4.2, publicId: 'MAT-000042', itemId: 9, dispatchId: 3 }],
+    ['empty publicId', { matterId: 42, publicId: '', itemId: 9, dispatchId: 3 }],
+    ['junk anchor type', 'MAT-000042']
+  ])('malformed anchor (%s) → undefined, never a half-anchor', (_label, anchor) => {
+    const spec = makeItemRunSpec({ matterItem: anchor as AgentRunSpec['matterItem'] })
+    expect(agentRunContextFromSpec(spec).matterItemRun).toBeUndefined()
+  })
+
+  test('DoD: the assembled face is the read face + the ONE report channel, nothing else', async () => {
+    const seenTools: string[][] = []
+    await runHeadlessAgent(
+      itemCfg(seenTools),
+      { jobId: 7, spec: makeItemRunSpec(), sessionId: null },
+      new AbortController().signal
+    )
+    const face = seenTools[0].sort()
+    expect(
+      face.length,
+      'the face is empty — the assembly path broke, the loops below would be vacuous'
+    ).toBeGreaterThan(10)
+    expect(face).toContain('matter_item_report')
+    // 🔴 the other venue's output channel is NOT registered here: each propose/report tool only
+    // ever mints under its own anchor, which is what keeps the two runs apart.
+    expect(face).not.toContain('matter_update_propose')
+    expect(face).not.toContain('report_write')
+    // Red line, pinned from the independent catalog mirror (mutation-sensitive).
+    for (const denied of CATALOG_WRITE_CAPABLE_NAMES) {
+      expect(face, `${denied} must never reach an item dispatch run`).not.toContain(denied)
+    }
+    for (const name of face) {
+      const cls = CATALOG_TOOLS[name]?.tool_class
+      expect(
+        ['read', 'artifact', 'web'],
+        `${name} (class ${cls}) is not a read-grade tool`
+      ).toContain(cls)
+    }
+  })
+
+  test('a tampered spec (max grants + hostile allowedTools) changes nothing', async () => {
+    const clean: string[][] = []
+    await runHeadlessAgent(
+      itemCfg(clean),
+      { jobId: 7, spec: makeItemRunSpec(), sessionId: null },
+      new AbortController().signal
+    )
+    const tampered: string[][] = []
+    await runHeadlessAgent(
+      itemCfg(tampered),
+      {
+        jobId: 8,
+        spec: makeItemRunSpec({
+          toolPolicy: {
+            allowedTools: ['run_command', 'email_prepare_send', 'report_write', 'matter_update'],
+            skills: ['email', 'search', 'report'],
+            grantExec: true,
+            grantWeb: 'open',
+            grantConnectors: { notion: 'update' }
+          } as unknown as AgentRunSpec['toolPolicy']
+        }),
+        sessionId: null
+      },
+      new AbortController().signal
+    )
+    expect(tampered[0].sort()).toEqual(clean[0].sort())
+  })
+
+  test('the item belt and the follow-up belt do not leak into each other', () => {
+    const donor = tool({ description: 'd', inputSchema: z.object({}), execute: async () => ({}) })
+    const base: AiGatewayConfig = {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      buildTools: () => ({
+        matter_update_propose: donor,
+        matter_item_report: donor,
+        email_list_filter: donor,
+        run_command: donor
+      })
+    }
+    const itemRun = wrapCfgForAgentRun(base, {
+      agentId: 'matter_item:MAT-000042:9',
+      allowedTools: [],
+      matterItemRun: { matterId: 42, publicId: 'MAT-000042', itemId: 9, dispatchId: 3 }
+    }).buildTools!([], undefined, 'matter_followup')
+    expect(Object.keys(itemRun).sort()).toEqual(['email_list_filter', 'matter_item_report'])
+
+    const followUp = wrapCfgForAgentRun(base, {
+      agentId: 'matter:MAT-000042',
+      allowedTools: [],
+      matterRun: { matterId: 42, publicId: 'MAT-000042', runId: 7 }
+    }).buildTools!([], undefined, 'matter_followup')
+    expect(Object.keys(followUp).sort()).toEqual(['email_list_filter', 'matter_update_propose'])
+  })
+
+  test('the report tool addresses ONLY its own dispatch (identity comes from the anchor)', async () => {
+    const calls: Array<{ publicId: string; dispatchId: number; report: unknown }> = []
+    const domain = {
+      ...minimalDomain(),
+      reportItemDispatch: async (
+        publicId: string,
+        dispatchId: number,
+        report: Record<string, unknown>
+      ) => {
+        calls.push({ publicId, dispatchId, report })
+        return { dispatch_id: dispatchId, state: 'proposed' }
+      }
+    } as unknown as MailAgentDomainClient
+    const tools = buildGatewayTools(
+      {
+        domain,
+        approvalGuard: new ApprovalGuard(),
+        contextMode: 'matter_followup',
+        agentRunContext: {
+          agentId: 'matter_item:MAT-000042:9',
+          allowedTools: [],
+          matterItemRun: { matterId: 42, publicId: 'MAT-000042', itemId: 9, dispatchId: 3 }
+        }
+      },
+      []
+    )
+    const report = tools.matter_item_report as {
+      execute: (input: unknown, opts: unknown) => Promise<unknown>
+    }
+    await report.execute({ summary: '查完了' }, { toolCallId: 't1', messages: [] })
+    expect(calls).toEqual([
+      { publicId: 'MAT-000042', dispatchId: 3, report: { summary: '查完了' } }
+    ])
   })
 })

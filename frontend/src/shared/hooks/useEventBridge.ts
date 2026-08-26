@@ -38,9 +38,11 @@ import { qk } from '@shared/lib/queryKeys'
 import {
   globalAttentionKey,
   isMatterAttentionDetailKey,
+  liveItemDispatchesKey,
   matterAttentionKey,
   matterAttentionPublicIds,
   matterChangedPublicId,
+  matterItemDispatchesKey,
   matterRunsKey
 } from '@shared/components/matters/hooks'
 import { refreshMatter } from '@shared/components/matters/matterMutation'
@@ -214,6 +216,23 @@ export function useEventBridge(): void {
         debounceInvalidate(`matters:runs:${runPid}`, () =>
           queryClient.invalidateQueries({ queryKey: matterRunsKey(runPid) })
         )
+        return
+      }
+      // L4 批次3 — 行动项派发的状态迁移（派发/认领/反问/交付/失败/取消, payload 带
+      // public_id + dispatch_id + item_id）: 两个面各刷一次 —— 例外面那份是**跨事项**
+      // 聚合（没有 id 可挂, 恒失效）, 详情页那份按 public_id 定向。
+      // 🔴 拿不到 public_id 时仍刷跨事项那条: 它是「等我回答」的唯一入口, 漏刷 =
+      // 用户看不见 agent 在等他（与 matter.attention 同一条「不许漏刷」的取向）。
+      if (ev.event_type === 'matter.item.dispatch.changed') {
+        debounceInvalidate('matters:item-dispatches', () =>
+          queryClient.invalidateQueries({ queryKey: liveItemDispatchesKey() })
+        )
+        const dispatchPid = matterChangedPublicId(ev.data)
+        if (dispatchPid) {
+          debounceInvalidate(`matters:item-dispatches:${dispatchPid}`, () =>
+            queryClient.invalidateQueries({ queryKey: matterItemDispatchesKey(dispatchPid) })
+          )
+        }
         return
       }
       // R1-5 — custom agent run 生命周期（queued/running/终态/审批结算）: 红点面

@@ -10,6 +10,9 @@
 import type { LanguageModel, ToolSet } from 'ai'
 
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
+// 🔴 type-only — the ai_chat.db v28 marker shape lives with ChatSession (shared/chat_model.ts, no
+// better-sqlite3 import), so the gateway core and the Electron writer share one definition.
+import type { PausedApprovalMarker } from '@shared/chat_model'
 // 🔴 type-only import — fully erased, so config.ts keeps ZERO runtime dependency on
 // tools/types (which DOES import `tool` from 'ai'). index.ts statically imports
 // config.ts for resolveAiGatewayPort; this must never pull the heavy `ai` chunk into
@@ -375,6 +378,18 @@ export interface AiGatewayConfig {
      *  on the 'paused' broadcast for per-run settle dedup. undefined = unleased run. */
     runId?: string | null
   ) => void
+  /** L4 批次3 R7 — write (marker) / clear (null) the session's persistent「曾在审批处暂停」marker
+   *  (ai_chat.db v28 `paused_marker_json`). Rides the SAME persistence channel as
+   *  persistPausedAssistant (the Electron wrapper's chat_db access, no HTTP): a pause writes it next
+   *  to the redacted assistant row, a completed turn clears it, and a new turn's onTurnStart clears
+   *  any stale one.
+   *
+   *  🔴 What it is NOT: a way to resurrect a pause. The stash (body / responseMessage / resumeToken)
+   *  stays process-memory on purpose — after a gateway restart the approval is un-approvable and the
+   *  marker only lets a MANUAL session say so honestly instead of rendering nothing (a headless run
+   *  already derives the same fact from its run read state). Best-effort: a failure is logged and
+   *  never breaks the already-streamed turn. Omitted → no marker, byte-identical to pre-R7. */
+  setSessionPausedMarker?: (sessionId: number, marker: PausedApprovalMarker | null) => void
 
   // ── harness-chat lane A (B1, task 07-15) — detach-tolerant chat runs ─────────────────────────────
   /** MAILAGENT_CHAT_DETACHED_RUNS (default ON; env explicit false = emergency rollback). When true
@@ -489,6 +504,9 @@ export interface AiGatewayConfig {
      *  general-anchor row (CHAT_DB v27's CHECK already admits anchor_type='matter' with
      *  origin='agent', so no migration is involved). */
     anchor?: { type: 'matter'; id: number }
+    /** L4 批次3 (CHAT_DB v28) — additionally stamp the 行动项 this run executes, so the item can
+     *  list its own execution history. ADDITIVE: every earlier caller omits it. */
+    itemId?: number | null
   }) => number | null
   // ── Stage 2 PR-1 (task 08-01 messenger, MAILAGENT_IM_FEISHU) — im_chat entrypoint ──────────────
   /** MAILAGENT_IM_FEISHU (env default ON — cutover 2026-08-04). When true the gateway registers

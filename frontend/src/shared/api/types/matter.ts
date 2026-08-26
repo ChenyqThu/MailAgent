@@ -47,6 +47,38 @@ export const MATTER_ITEM_STATUSES = [
 export type MatterItemStatus = (typeof MATTER_ITEM_STATUSES)[number]
 
 /**
+ * 行动项**执行契约**的状态（`matter_item_dispatch.state`，task 08-25 批次 3）。
+ *
+ * 🔴 与 `MATTER_ITEM_STATUSES` 是两回事、有意不合成一列：后者是业务语义标签（owner 看的
+ * 「待办 / 进行中 / 等人 / 已完成」，可宽松可回跳），这里是执行态 —— 只能由服务端 CAS
+ * 推进，前端**永不**自己推导（合成一列的教训：agent 忘改状态 = 那件事静默永久卡死）。
+ * 🔴 终态判据是行上的 `ended_at != null`，不是这里的值。
+ */
+export const MATTER_ITEM_DISPATCH_STATES = [
+  'queued',
+  'running',
+  'awaiting_input',
+  'proposed',
+  'done',
+  'failed',
+  'canceled'
+] as const
+export type MatterItemDispatchState = (typeof MATTER_ITEM_DISPATCH_STATES)[number]
+
+/**
+ * per-**行动项**的执行档（不挂 agent —— 同一个 agent 在不同行动项可以不同档）。
+ *
+ * 🔴 `edit_with_approval` 在词表里但**不上 UI**（v1）：提案制引擎里它与 `propose_only`
+ * 行为暂无差异，摆出来就是一个假选项。词表留着是因为它是跨批契约（动态审批分级要用）。
+ */
+export const MATTER_ITEM_EXEC_PROFILES = [
+  'propose_only',
+  'edit_with_approval',
+  'autonomous'
+] as const
+export type MatterItemExecProfile = (typeof MATTER_ITEM_EXEC_PROFILES)[number]
+
+/**
  * curated 进展条目的叙事类型（task 08-25）。
  *
  * 🔴 与 `MATTER_ITEM_KINDS` 的 `milestone` / `decision` **同名不同物**：item 是工作对象
@@ -738,11 +770,66 @@ export interface MatterItem {
   due_at: number | null
   completed_at: number | null
   checklist: MatterChecklistEntry[]
+  /** per-行动项执行档（v71）。`null` = 没选过 = 出厂档 `propose_only`
+   *  —— 「明确选了 propose_only」与「还没选过」在未来改默认档时不是一回事。
+   *  可选（`?:`）是新列的既有写法：pre-v71 的行与字面量仍然合法。 */
+  exec_profile?: MatterItemExecProfile | null
   source_resource_id: number | null
   source_locator: Record<string, unknown> | null
   created_at: number
   updated_at: number
   deleted_at: number | null
+}
+
+/** agent 的一次反问（`matter_item_dispatch.question`）。`options` 只在 agent 给了备选时出现。 */
+export interface MatterItemDispatchQuestion {
+  question: string
+  options?: string[]
+}
+
+/** 一轮问答（`answers` 的元素）。`at` 是 epoch **毫秒**。 */
+export interface MatterItemDispatchAnswer {
+  question: string | null
+  answer: string
+  at: number
+}
+
+/**
+ * 一次行动项派发（`matter_item_dispatch` 行，task 08-25 批次 3）。
+ *
+ * `question` / `answers` / `error` 是服务端解好的对象，wire 上不出现 `*_json`。
+ * 跨事项读面（`GET /api/matters/item-dispatches`）额外带出 `matter_public_id` /
+ * `matter_title` / `item_title` / `item_kind` —— 例外面一行要说清「哪件事的哪条行动项
+ * 在等我」，少一个就得再发一轮请求。
+ */
+export interface MatterItemDispatch {
+  id: number
+  matter_id: number
+  item_id: number
+  state: MatterItemDispatchState
+  executor_kind: string
+  executor_id: string
+  /** 派发时从 item **冻结**的档 —— owner 中途改了默认档不影响这一轮的结算。 */
+  exec_profile: MatterItemExecProfile
+  question: MatterItemDispatchQuestion | null
+  answers: MatterItemDispatchAnswer[]
+  update_id: number | null
+  async_job_id: number | null
+  attempt_count: number
+  error: Record<string, unknown> | null
+  created_by_kind: MatterActorKind
+  created_by_id: string | null
+  dispatched_at: number
+  awaiting_since: number | null
+  delivered_at: number | null
+  /** 终态判据（done / failed / canceled 三态写它）。 */
+  ended_at: number | null
+  created_at: number
+  updated_at: number
+  matter_public_id?: string
+  matter_title?: string
+  item_title?: string
+  item_kind?: MatterItemKind
 }
 
 /**
@@ -802,6 +889,7 @@ export interface MatterMutationResult {
   event_ids?: number[]
   item?: MatterItem
   progress?: MatterProgress
+  dispatch?: MatterItemDispatch | null
   deleted?: boolean
   public_id?: string
   resource?: MatterResource
@@ -1025,6 +1113,8 @@ export interface MatterItemCreateInput {
   due_at?: number | null
   completed_at?: number | null
   checklist?: MatterChecklistEntry[]
+  /** 只有 kind='action' 能设（服务端单判；非行动项带上它一律 E_INVALID_ARG）。 */
+  exec_profile?: MatterItemExecProfile | null
   source_resource_id?: number | null
   source_locator?: Record<string, unknown> | null
 }
@@ -1064,6 +1154,24 @@ export interface MatterItemListOptions {
   kind?: MatterItemKind
   status?: MatterItemStatus
   includeDeleted?: boolean
+}
+
+/** 派发一条行动项。两个字段都可缺省：执行器缺省 = 内建跟进 Agent；档缺省 = 取 item 的
+ *  `exec_profile`，仍缺省 = 出厂档 `propose_only`（值域校验在服务端单判）。 */
+export interface MatterItemDispatchInput {
+  executor_id?: string | null
+  profile?: MatterItemExecProfile | null
+}
+
+/** 跨事项派发读面的过滤（`GET /api/matters/item-dispatches`）。`states` 缺省 = 服务端的
+ *  「等我回答 / 挂了」两态。 */
+export interface MatterItemDispatchListOptions {
+  states?: readonly MatterItemDispatchState[]
+  limit?: number
+}
+
+export interface MatterItemDispatchListResponse {
+  items: MatterItemDispatch[]
 }
 
 export interface MatterResourceListOptions {
@@ -1180,6 +1288,30 @@ export interface MattersApi {
     matterId: string,
     itemId: number,
     options: MatterMutationOptions
+  ): Promise<MatterMutationResult>
+  /** 行动项执行契约（task 08-25 批次 3）。三个写动作的 `expected_version` 服务端可缺省
+   *  —— `/today` 例外面只认识派发行、拿不到事项版本号。 */
+  listItemDispatches(matterId: string, options?: { itemId?: number }): Promise<MatterItemDispatch[]>
+  /** 跨事项聚合（例外面第四源）。逐事项取会把一次进入放大成 N 次往返。 */
+  listLiveItemDispatches(
+    options?: MatterItemDispatchListOptions
+  ): Promise<MatterItemDispatchListResponse>
+  dispatchItem(
+    matterId: string,
+    itemId: number,
+    input: MatterItemDispatchInput,
+    options?: MatterMutationOptions
+  ): Promise<MatterMutationResult>
+  answerItemDispatch(
+    matterId: string,
+    dispatchId: number,
+    text: string,
+    options?: MatterMutationOptions
+  ): Promise<MatterMutationResult>
+  cancelItemDispatch(
+    matterId: string,
+    dispatchId: number,
+    options?: MatterMutationOptions
   ): Promise<MatterMutationResult>
   /** curated 进展（task 08-25）。详情页走 `get(id, ['progress'])` 一次取回，这个清单口
    *  留给需要 kind 过滤 / 软删可见的调用方。 */

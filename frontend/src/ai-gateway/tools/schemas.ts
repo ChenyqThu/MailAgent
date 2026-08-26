@@ -949,6 +949,60 @@ export const matterUpdateProposeSchema = z
   .strict()
 export type MatterUpdateProposeInput = z.infer<typeof matterUpdateProposeSchema>
 
+/** matter_item_report — an ITEM-dispatch run's ONLY output channel (L4 批次3, task 08-25).
+ *  🔴 Like matterUpdateProposeSchema there is deliberately NO matter / item / dispatch id: all
+ *  three are stamped server-side from the run context, so the model structurally cannot report
+ *  against another dispatch.
+ *  🔴 FLAT on purpose — `changes`/`summary` XOR `needs_input`, "exactly one of them", and "at most
+ *  one question per round" are NOT expressed here. Branch constraints stay out of tool schemas
+ *  (D11: a top-level oneOf / conditional-required took the whole tool chain down twice); Python
+ *  `run_service.report_item_dispatch` is the single judge and its rejection reaches the model in
+ *  the same turn. */
+export const matterItemReportSchema = z
+  .object({
+    summary: z
+      .string()
+      .trim()
+      .max(2000)
+      .optional()
+      .describe(
+        'At most 3 sentences: what you concluded or produced for THIS action item, written for ' +
+          'the owner. Not a log of the tools you called.'
+      ),
+    changes: z
+      .array(matterProposalChangeSchema)
+      .max(20)
+      .optional()
+      .describe(
+        'What you propose to record. kind="action" with target {entity:"item", id:<this item>} ' +
+          'updates THIS item; kind="action" without a target creates a sub-task. Changes aimed ' +
+          'at other items, or at the Matter\'s own fields (kind="field"), are dropped server-side.'
+      ),
+    needs_input: z
+      .object({
+        question: z
+          .string()
+          .trim()
+          .min(1)
+          .max(4000)
+          .describe('One question, answerable in a sentence. Ask everything you need at once.'),
+        options: z
+          .array(z.string().trim().min(1).max(200))
+          .max(8)
+          .optional()
+          .describe('Concrete choices, when the answer is a pick rather than free text.')
+      })
+      .strict()
+      .optional()
+      .describe(
+        'Use INSTEAD of summary/changes when a decision only the owner can make is blocking you. ' +
+          'The round ends here; once the owner answers, a fresh round starts with this Q&A ' +
+          'carried over.'
+      )
+  })
+  .strict()
+export type MatterItemReportInput = z.infer<typeof matterItemReportSchema>
+
 /** matter_run_control — start or cancel a follow-up run (D8).
  *  🔴 No `trigger_kind` field: a manual start is the ONLY kind this tool can produce (the gateway
  *  pins it), so forging `trigger_kind=schedule` is structurally impossible (contracts §4.4). Also

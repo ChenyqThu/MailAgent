@@ -10,8 +10,11 @@
 //
 // 纪律（unchanged from S6 W2）：
 //  • pending 真值 = live 查 gateway ApprovalRunStash（fetchPendingApproval），命中渲染可决策卡，
-//    miss → showExpiredState ? 诚实失效态 : 不渲染（manual 会话没有 run 读态可判"曾暂停"，miss
-//    静默 —— 已知残留，见 lane 笔记）。
+//    miss → 能证明"曾暂停"才渲染诚实失效态，否则不渲染。两个证据源：record view 的 run 读态
+//    （showExpiredState）与 L4 批次3 R7 给 manual 会话补的持久 marker（pausedMarkerJson，
+//    ai_chat.db v28 `paused_marker_json`）——「manual miss 恒静默」的已知残留到此为止。
+//  • 🔴 marker 只是**证据**不是**能力**：stash（body/responseMessage/resumeToken）仍是进程内存，
+//    重启后这条审批恒不可批。所以 marker 命中渲染的是静态失效提示，绝不是可决策卡。
 //  • 决策走既有 POST /api/ai/approval/decide（{approvalId} 形状，resumeToken 不出 gateway）；
 //    not_found = 已被其它面处理（并发），静默失活。
 //  • web PIN affordance 是数据驱动的（agentId 非空 + web_fetch）——只有 headless agent run 会命中，
@@ -142,6 +145,7 @@ export function PendingApprovalPanel({
   sessionId,
   agentName = null,
   showExpiredState = false,
+  pausedMarkerJson = null,
   refreshKey = 0,
   onDecided,
   onDecideBusyChange
@@ -149,9 +153,13 @@ export function PendingApprovalPanel({
   sessionId: number | null
   /** Custom-agent display name for the body copy; null → manual-chat copy. */
   agentName?: string | null
-  /** Render the honest "已失效" notice on a probe miss (the record view derives it from the run's
-   *  paused_* read state; manual surfaces have no such signal and pass false → miss renders null). */
+  /** Render the honest "已失效" notice on a probe miss — the record view derives it from the run's
+   *  paused_* read state. Manual surfaces have no run read state and pass the marker below instead. */
   showExpiredState?: boolean
+  /** L4 批次3 R7 — the session row's `paused_marker_json` (ai_chat.db v28). Non-empty = this session
+   *  WAS paused at an approval and nothing has settled it since, so a probe miss means "expired /
+   *  app restarted", not "nothing to show". Null/absent keeps the pre-R7 silence. */
+  pausedMarkerJson?: string | null
   /** Folded into the query key so a settle-driven remount/nonce re-probes deterministically. */
   refreshKey?: number
   onDecided: () => void
@@ -376,9 +384,9 @@ export function PendingApprovalPanel({
     )
   }
 
-  // miss：调用方能证明"曾在审批处暂停"（record view 的 paused_* 读态）→ 诚实失效态（非卡片，
-  // 静态提示）；manual 会话无此信号 → 不渲染。
-  if (showExpiredState) {
+  // miss：能证明"曾在审批处暂停"（record view 的 paused_* 读态 / manual 会话的持久 marker）→
+  // 诚实失效态（非卡片，静态提示）；两个证据都没有 → 不渲染。
+  if (showExpiredState || (pausedMarkerJson ?? '').length > 0) {
     return (
       <div
         data-in-record-approval-expired

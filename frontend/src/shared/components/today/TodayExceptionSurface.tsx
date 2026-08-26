@@ -5,7 +5,8 @@
 //
 // 与通知中心的划界（prd §3）：铃铛是**推送侧事件流**（某信源某时刻发生了一件事，状态长在
 // 通知行上）；例外面是**拉取侧待处理态**（条目身份 = 源实体，在不在只由源实体读态决定，
-// 没有归档动作）。本页因此直接读三条源实体端点，不经 `notification` 表。
+// 没有归档动作）。本页因此直接读四条源实体端点，不经 `notification` 表
+// （第四条 = 行动项派发，L4 批次 3）。
 
 import { useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
@@ -13,7 +14,7 @@ import { useTranslation } from 'react-i18next'
 import { Sun } from 'lucide-react'
 
 import { EmptyState } from '@shared/components/feedback/EmptyState'
-import { useAttentionAction } from '@shared/components/matters/hooks'
+import { useAttentionAction, useItemDispatchAction } from '@shared/components/matters/hooks'
 import { useMatterNavigation } from '@shared/components/matters/navigation'
 import { requestOpenAgentSession } from '@shared/state/ai-chat-panel'
 import { cn } from '@shared/lib/cn'
@@ -31,6 +32,7 @@ export function TodayExceptionSurface(): React.ReactElement {
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
   const openMatter = useMatterNavigation((state) => state.open)
   const attentionAction = useAttentionAction()
+  const dispatchAction = useItemDispatchAction()
 
   const handlers: TodayRowHandlers = {
     onOpenMatter: (publicId) => {
@@ -45,6 +47,13 @@ export function TodayExceptionSurface(): React.ReactElement {
     },
     onSignalAction: (matterId, signalId, action, reason) => {
       attentionAction.mutate({ matterId, signalId, action, reason })
+    },
+    // 派发的回答 / 取消走事项域的共享写口（它自己带 refreshMatter，跨事项聚合也一起刷）。
+    onDispatchAnswer: (matterId, dispatchId, text) => {
+      dispatchAction.mutate({ matterId, dispatchId, action: 'answer', text })
+    },
+    onDispatchCancel: (matterId, dispatchId) => {
+      dispatchAction.mutate({ matterId, dispatchId, action: 'cancel' })
     },
     onToggleExpand: setExpandedId,
     onDecided: refreshRuns

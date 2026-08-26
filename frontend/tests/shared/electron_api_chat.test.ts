@@ -84,6 +84,24 @@ describe('ElectronApi.chat — 3c-3 loopback baseUrl 端口注入', () => {
   })
 })
 
+describe('ElectronApi.chat — listAllSessions 的 query 拼装（L4 批次3）', () => {
+  test('itemId 上 wire，且**不**补 origin —— 缺省的单源在服务端', async () => {
+    const api = new ElectronApi()
+    await api.chat.listAllSessions({ itemId: 7 })
+    const url = String(fetchMock.mock.calls[0][0])
+    expect(url).toContain('itemId=7')
+    // 🔴 前端补一个 origin=interactive 就会把行动项的 headless 执行 run 全过滤掉
+    //（服务端对 itemId 查询的缺省是 all）。
+    expect(url).not.toContain('origin=')
+  })
+
+  test('显式 origin 照旧上 wire（缺省只在没传时生效）', async () => {
+    const api = new ElectronApi()
+    await api.chat.listAllSessions({ itemId: 7, origin: 'interactive' })
+    expect(String(fetchMock.mock.calls[0][0])).toContain('origin=interactive')
+  })
+})
+
 describe('ElectronApi.chat — 3c-3 openPopout override', () => {
   test('openPopout(id) → window:openChatPopout IPC（shared runtime no-op 被 override）', () => {
     const api = new ElectronApi()

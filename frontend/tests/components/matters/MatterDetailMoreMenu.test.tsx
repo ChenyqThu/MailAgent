@@ -41,6 +41,8 @@ vi.mock('@shared/components/matters/hooks', () => ({
   useMatterPendingUpdates: () => ({ data: undefined, isLoading: false }),
   useStartMatterRun: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
   useMatterAgentProfiles: () => ({ data: [], isLoading: false }),
+  // L4 批次3：行动项执行契约的取数口（详情页整块挂 matterAgentEnabled）。
+  useMatterItemDispatches: () => ({ data: [], isLoading: false }),
   useMatterAttention: () => ({ data: undefined, isLoading: false }),
   useGlobalAttention: () => ({ data: undefined, isLoading: false }),
   useAttentionAction: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false })

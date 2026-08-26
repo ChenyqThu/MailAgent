@@ -192,11 +192,14 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     async listAllSessions(options: ListAllSessionsOptions = {}): Promise<ChatSessionListItem[]> {
       try {
         const includeArchived = options.includeArchived ?? false
-        const origin = options.origin ?? 'interactive'
+        // 🔴 `origin` 只在调用方**显式**传了才上 wire：缺省的单源在服务端，且它按查询对象分流
+        // （带 itemId → 'all'，其余 → 'interactive'）。在这里再补一个前端默认值，就会把行动项
+        // 的执行历史压回 interactive —— headless 执行 run 全被过滤掉，列表恒空却仍是 200。
         return await request<ChatSessionListItem[]>(baseUrl, 'GET', '/chat/sessions/all', {
           query: {
             ...(includeArchived ? { include_archived: 'true' } : {}),
-            ...(origin === 'interactive' ? {} : { origin })
+            ...(options.origin !== undefined ? { origin: options.origin } : {}),
+            ...(options.itemId !== undefined ? { itemId: options.itemId } : {})
           }
         })
       } catch {

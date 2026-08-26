@@ -132,6 +132,7 @@ es.addEventListener('mailagent', e => {
 | `matter.changed` | `MatterService._transaction()` 在**事务提交后**，本次落了至少一条 `matter_event` 的每个事项各一条 | `{public_id: str}`（`MAT-0012`）|
 | `matter.attention` | `MatterAgendaWorker` 单次 tick 内有 episode 新开、关闭、升档或 snooze 到期 | `{matter_ids: number[], public_ids: string[]}`；每 tick 最多一条聚合失效事件。`public_ids` 是 perf-sse-realtime 批补的（映射失败时为 `[]`，消费端回落全量失效）；`matter_ids`（内部数字主键）保留一版不删 |
 | `matter.notify` | worker 判定 open episode 符合 owner 通知级别且尚未写投递水位（`last_notified_at IS NULL`） | `{matter_id, public_id, matter_title, signal_id, kind, severity, why}`；`last_notified_at` 由 worker 同轮自 ack 写入（NC publish 落库成功后；`needs_review` 无条件）。macOS 弹窗走 `notification.changed` 的 fanout，本事件只供 renderer 刷 attention 面 |
+| `matter.item.dispatch.changed` | 行动项派发（`matter_item_dispatch`）每次执行态迁移：派发 / 回答 / 取消 / 交付 / 失败，事务提交后发；幂等重放不发（无新行） | `{public_id: str, dispatch_id: int, item_id: int}`。与 `matter.run.changed` 是两条独立账本：那个是 per-事项的定时跟进 run，这个是 per-行动项的一次派发 |
 
 🔴 **matter 系事件的 payload 一律用 public_id**（前端缓存键用的就是它 ⇒ 可定向失效）。
 `matter.attention` 曾只发内部数字主键 `matter.id`（前端对不上 ⇒ 被迫按形状全量失效，

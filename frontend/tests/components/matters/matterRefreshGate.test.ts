@@ -68,6 +68,9 @@ describe('事项刷新清单只有一个出口', () => {
     expect(body![0]).toContain('qk.matters.pendingUpdates()')
     expect(body![0]).toContain('qk.matters.list()')
     expect(body![0]).toContain('qk.matters.detail(matterId)')
+    // 🔴 L4 批次3 的第二个「跨事项、没有 id 可挂」的键：例外面第四源。在详情页回答 /
+    //    取消一次派发后，不失效它就是同一个 0818 bug 换了个源（那条继续挂在例外面上）。
+    expect(body![0]).toContain('qk.matters.itemDispatches()')
   })
 
   it('pending-updates 的键只能来自工厂，不许内联拼', () => {

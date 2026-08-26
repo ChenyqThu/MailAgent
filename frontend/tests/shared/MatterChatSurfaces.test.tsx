@@ -81,6 +81,8 @@ vi.mock('@shared/components/matters/hooks', () => ({
   usePendingMatterUpdates: () => ({ data: undefined, isLoading: false }),
   useStartMatterRun: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
   useMatterAgentProfiles: () => ({ data: [], isLoading: false }),
+  // L4 批次3：行动项执行契约的取数口（详情页整块挂 matterAgentEnabled）。
+  useMatterItemDispatches: () => ({ data: [], isLoading: false }),
   // P5 lane ②：MattersWorkspace/MatterDetail 又多消费三个 attention hook。本测试只看
   // 面板/rail 槽位，一律给「无信号」惰性桩（Focus 与 AttnBand 不渲染，P3 断言面不变）。
   useGlobalAttention: () => ({ data: undefined, isLoading: false }),

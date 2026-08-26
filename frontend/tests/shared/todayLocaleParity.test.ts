@@ -11,6 +11,8 @@ import { describe, expect, test } from 'vitest'
 
 import zhCN from '../../src/shared/i18n/locales/zh-CN/common.json'
 import enUS from '../../src/shared/i18n/locales/en-US/common.json'
+import { MATTER_ITEM_DISPATCH_STATES } from '@shared/api/types/matter'
+import { MATTER_EXEC_PROFILE_OPTIONS } from '@shared/components/matters/matterDispatchVocab'
 import { TODAY_GROUP_IDS } from '@shared/components/today/todayGroups'
 import { TODAY_SIGNAL_ACTION_LABEL_KEY } from '@shared/components/today/todayVocab'
 
@@ -68,6 +70,48 @@ describe('today locale parity', () => {
       for (const key of Object.values(TODAY_SIGNAL_ACTION_LABEL_KEY)) {
         expect(key.startsWith('matters.attention.'), `不是事项域的 key: ${key}`).toBe(true)
         expect(lookup(locale, key), `${name} 缺 ${key}`).toBeTruthy()
+      }
+    }
+  })
+})
+
+// ───────────── L4 批次3 · 派发（第四源 + 详情页执行契约面） ─────────────
+//
+// 两条闸：
+//   ① 执行态词表的每个值在两份 locale 里都有徽标文案 —— 词表在后端 canonical、TS 只是镜像，
+//      加一个态而忘了补文案的表现是屏幕上出现一颗写着 `matters.dispatch.state.xxx` 的徽标，
+//      没有任何类型错误会拦住它（`MATTER_DISPATCH_STATE_TONES` 只逼你补色，不逼你补词）。
+//   ② UI 上真的会渲染的执行档（`MATTER_EXEC_PROFILE_OPTIONS`，两档）标题 + 说明都在场。
+//      🔴 断言用的是**那张 UI 表**而不是完整词表：`edit_with_approval` 有意不上 UI。
+
+describe('派发 locale', () => {
+  test('每个执行态在两份 locale 里都有徽标文案', () => {
+    for (const [name, locale] of [
+      ['zh-CN', zhCN as Record<string, unknown>],
+      ['en-US', enUS as Record<string, unknown>]
+    ] as const) {
+      for (const state of MATTER_ITEM_DISPATCH_STATES) {
+        const label = lookup(locale, `matters.dispatch.state.${state}`)
+        expect(typeof label === 'string' && label.length > 0, `${name} 缺 ${state} 文案`).toBe(true)
+      }
+    }
+  })
+
+  test('上 UI 的两档执行档有标题与说明；edit_with_approval 不在 UI 表里', () => {
+    expect([...MATTER_EXEC_PROFILE_OPTIONS]).not.toContain('edit_with_approval')
+    for (const [name, locale] of [
+      ['zh-CN', zhCN as Record<string, unknown>],
+      ['en-US', enUS as Record<string, unknown>]
+    ] as const) {
+      for (const option of MATTER_EXEC_PROFILE_OPTIONS) {
+        expect(
+          lookup(locale, `matters.dispatch.profiles.${option}`),
+          `${name} 缺 ${option}`
+        ).toBeTruthy()
+        expect(
+          lookup(locale, `matters.dispatch.profileHints.${option}`),
+          `${name} 缺 ${option} 说明`
+        ).toBeTruthy()
       }
     }
   })

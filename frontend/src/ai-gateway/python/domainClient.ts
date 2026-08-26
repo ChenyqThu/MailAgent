@@ -1049,6 +1049,25 @@ export class MailAgentDomainClient {
     })
   }
 
+  /** POST /matters/{public_id}/item-dispatches/{dispatch_id}/report — an ITEM-dispatch run's
+   *  single delivery (L4 批次3). Same INTERNAL face as proposeMatterUpdate above
+   *  (verify_local_token, gateway-only): the matter + dispatch identity comes from the path, the
+   *  tool's input carries neither. Either a result (summary/changes → a pending proposal) or a
+   *  question (needs_input → the dispatch waits on the owner); Python enforces the one-of-two and
+   *  409s a second delivery for the same attempt. */
+  reportItemDispatch(
+    publicId: string,
+    dispatchId: number,
+    report: Record<string, unknown>,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req(
+      'POST',
+      `/matters/${encodeURIComponent(publicId)}/item-dispatches/${dispatchId}/report`,
+      { body: report, signal }
+    )
+  }
+
   /** POST /matters/{public_id}/runs — start a manual follow-up run. `trigger_kind` is NOT part of
    *  the request: 'manual' is the only kind this face produces (contracts §4.4 — a schedule start
    *  is the scheduler's own internal path). An already-active run returns 200 + coalesced:true. */

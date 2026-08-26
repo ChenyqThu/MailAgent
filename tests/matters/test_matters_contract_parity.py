@@ -26,6 +26,8 @@ ENUMS = (
     models.MatterPriority,
     models.MatterItemKind,
     models.MatterItemStatus,
+    models.MatterItemDispatchState,
+    models.MatterItemExecProfile,
     models.MatterAttentionKind,
     models.MatterAttentionState,
     models.MatterAttentionSeverity,
@@ -50,6 +52,10 @@ TS_ARRAYS = {
     "MATTER_STAKEHOLDER_TIERS": models.MATTER_STAKEHOLDER_TIERS,
     "MATTER_ITEM_KINDS": models.MATTER_ITEM_KINDS,
     "MATTER_ITEM_STATUSES": models.MATTER_ITEM_STATUSES,
+    # 行动项执行契约（task 08-25 批次 3）。🔴 执行态与业务态是**两份**词表，前端拿它们
+    # 各渲染各的；混用一份会让「等人回答」和「等待中」在 UI 上长成同一个东西。
+    "MATTER_ITEM_DISPATCH_STATES": models.MATTER_ITEM_DISPATCH_STATES,
+    "MATTER_ITEM_EXEC_PROFILES": models.MATTER_ITEM_EXEC_PROFILES,
     # curated 进展的五类（task 08-25）。🔴 图标 / tone 是**表现层词汇，只活在 TS**
     # （`components/matters/matterProgressVocab.ts`），这条闸只锁值域与顺序。
     "MATTER_PROGRESS_KINDS": models.MATTER_PROGRESS_KINDS,
@@ -179,10 +185,16 @@ def test_migration_ddl_uses_canonical_sql_check_helper():
 
 
 def test_python_values_equal_sql_check_value_sets():
-    # 🔴 `matter_progress` 的 DDL **有意**独立成组（v52 教训：新表/新索引混进被老版本整组
-    # 重放的 MATTER_TABLE_DDLS = 给每个中间版本各加一个炸点）。闸要覆盖它，就得把两组都拼上，
-    # 否则 `MatterProgressKind` 的 CHECK 漂了这里照样绿。
-    ddl = "\n".join((*sync_store.MATTER_TABLE_DDLS, *sync_store.MATTER_PROGRESS_TABLE_DDLS))
+    # 🔴 `matter_progress`（v70）与 `matter_item_dispatch`（v71）的 DDL **有意**独立成组
+    # （v52 教训：新表/新索引混进被老版本整组重放的 MATTER_TABLE_DDLS = 给每个中间版本各加
+    # 一个炸点）。闸要覆盖它们，就得把三组都拼上，否则那两张表的 CHECK 漂了这里照样绿。
+    ddl = "\n".join(
+        (
+            *sync_store.MATTER_TABLE_DDLS,
+            *sync_store.MATTER_PROGRESS_TABLE_DDLS,
+            *sync_store.MATTER_ITEM_DISPATCH_TABLE_DDLS,
+        )
+    )
     for enum_type in ENUMS:
         values = tuple(member.value for member in enum_type)
         clause = models.sql_check_clause(enum_type)

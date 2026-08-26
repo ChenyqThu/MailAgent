@@ -43,6 +43,20 @@ export interface AgentRunSpec {
     title: string
     runId: number
   }
+  /** L4 批次3 (task 08-25) — the 行动项 dispatch a `matter_item_run` executes, assembled by
+   *  `src/matters/run_spec.py::assemble_item_spec`. The two titles feed the prompt / session
+   *  title; `matterId` + `publicId` + `itemId` + `dispatchId` are what `agentRunContextFromSpec`
+   *  projects into AgentRunContext.matterItemRun (the matter_item_report registration + its
+   *  server-stamped identity). 🔴 The model has NO control surface over any of them — the report
+   *  tool's schema carries no ids at all. Absent on every other run. */
+  matterItem?: {
+    matterId: number
+    publicId: string
+    matterTitle: string
+    itemId: number
+    itemTitle: string
+    dispatchId: number
+  }
   trigger: {
     /** 'cron' | 'schedule' → cron_headless, 'email_filter' → untrusted_trigger, 'im' → im_chat
      *  (阶段 0b 预置 —— 阶段 2 飞书对话；当前无任何 spec 会带它); anything else
@@ -307,11 +321,23 @@ export interface ChatSession {
   // custom-agent epic W3 (ai_chat.db v21) — durable history organization metadata.
   pinned_at?: number | null
   starred?: boolean | number
+  // L4 批次3 (ai_chat.db v28) — the matter_item this session's run executes (行动项执行历史反查).
+  // NULL/undefined for every session that isn't an item run.
+  item_id?: number | null
+  // L4 批次3 R7 (ai_chat.db v28) — the persistent「曾在审批处暂停」marker (JSON, keep-latest; cleared
+  // when the run settles or a new one starts). PendingApprovalPanel reads it so a MANUAL session can
+  // render the honest「已失效」notice on a stash miss instead of nothing. 🔴 It proves the pause
+  // happened, it does NOT carry resume capability — the stash stays gateway process memory.
+  paused_marker_json?: string | null
 }
 
 export interface ListAllSessionsOptions {
   includeArchived?: boolean
   origin?: ChatSessionOriginFilter
+  // L4 批次3 — 只要这条行动项名下的会话（`ai_chat_sessions.item_id`，执行历史反查）。
+  // 🔴 与 origin 联动：不传 origin 时服务端对 itemId 查询的缺省是 'all'，因为行动项要看的
+  // 正是 headless 执行 run（origin='agent'）；旧缺省 'interactive' 会把它们全过滤掉。
+  itemId?: number
 }
 
 // Row of the global "AI 会话历史" page (chat.listAllSessions). A ChatSession

@@ -293,6 +293,19 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
                 "E_SPEC_AGENT_INVALID", exc.message,
                 http_status=409, source="agent-runs",
             ) from exc
+    if job.job_type == "matter_item_run":
+        # task 08-25 批次 3：一条**行动项**的派发 run。与 matter_followup 同一薄转发形状
+        # （spec 组装的权威在 src/matters/run_spec.py，坏语境同码 409）。
+        from src.matters.run_spec import assemble_item_spec
+        from src.matters.service import MatterError
+
+        try:
+            return assemble_item_spec(job)
+        except MatterError as exc:
+            raise APIError(
+                "E_SPEC_AGENT_INVALID", exc.message,
+                http_status=409, source="agent-runs",
+            ) from exc
     if job.job_type == "contact_governance":
         from src.contacts.governance import assemble_contact_governance_spec
         from src.contacts.service import ContactError

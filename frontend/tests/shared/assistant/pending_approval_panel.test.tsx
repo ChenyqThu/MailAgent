@@ -211,6 +211,52 @@ describe('PendingApprovalPanel — manual session (agentName null)', () => {
   })
 })
 
+// ── L4 批次3 R7 · manual 会话的持久「曾暂停」marker（ai_chat.db v28 paused_marker_json）────────
+//
+// 缺口原文（批次2 移交）：stash 是 gateway 进程内存，重启即 miss；agent-run 会话有 run 读态可判
+// 「曾暂停」，manual 会话没有 → 什么都不渲染 = 用户看不出这里曾经等过他。marker 补的就是这个信号，
+// 且**只**补这个：它不携带任何 resume 凭据，所以 miss 命中 marker 渲染的是静态失效提示，不是卡。
+const PAUSED_MARKER = JSON.stringify({
+  toolCallId: 'toolu_1',
+  approvalId: 'ap_m1',
+  toolName: 'email_prepare_send',
+  destructive: false,
+  pausedAt: 1000
+})
+
+describe('PendingApprovalPanel — paused marker (R7)', () => {
+  test('miss + marker → honest expired notice (manual 会话不再静默)', async () => {
+    mockFetchPending.mockResolvedValue(null)
+    withQuery(
+      <PendingApprovalPanel sessionId={9} pausedMarkerJson={PAUSED_MARKER} onDecided={vi.fn()} />
+    )
+    await waitFor(() =>
+      expect(document.querySelector('[data-in-record-approval-expired]')).not.toBeNull()
+    )
+    // 🔴 失效态绝不是可决策卡：审批凭据没落盘，这条审批恒不可批。
+    expect(document.querySelector('[data-in-record-approval-card]')).toBeNull()
+    expect(screen.queryByRole('button', { name: '批准' })).toBeNull()
+  })
+
+  test('miss + no marker → still renders nothing (pre-R7 behaviour preserved)', async () => {
+    mockFetchPending.mockResolvedValue(null)
+    withQuery(<PendingApprovalPanel sessionId={9} pausedMarkerJson={null} onDecided={vi.fn()} />)
+    await waitFor(() => expect(mockFetchPending).toHaveBeenCalled())
+    expect(document.querySelector('[data-in-record-approval-expired]')).toBeNull()
+    expect(document.querySelector('[data-in-record-approval-card]')).toBeNull()
+  })
+
+  test('hit + marker → the actionable card wins; no expired notice alongside it', async () => {
+    mockFetchPending.mockResolvedValue(MANUAL_HIT)
+    withQuery(
+      <PendingApprovalPanel sessionId={9} pausedMarkerJson={PAUSED_MARKER} onDecided={vi.fn()} />
+    )
+    expect(await screen.findByText(MANUAL_HIT.inputPreview)).toBeTruthy()
+    expect(await screen.findByRole('button', { name: '批准' })).toBeTruthy()
+    expect(document.querySelector('[data-in-record-approval-expired]')).toBeNull()
+  })
+})
+
 // ── L4 批次2 · response 维度（拒绝并给文字指导）──────────────────────────────────────────
 describe('PendingApprovalPanel — reject with a reason', () => {
   test('the reason rides /decide (so the model reads execution-denied {reason})', async () => {

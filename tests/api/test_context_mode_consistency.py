@@ -367,3 +367,116 @@ def test_contact_governance_matrix_branch_precedes_the_generic_pass():
         "contact_governance 分支体必须以 `return false` 收尾 —— 少了它，未列出的 class 会落进"
         "下面的 grant 阶梯（grantExec / grantWeb 将能在这个 venue 抬起 exec / web）"
     )
+
+
+# ── L4 批次3：`matter_item_run` 的 runKind 分支（**复用**第五个 mode，不是第七个）──────────────
+#
+# 与上面两节同构、同理由：它也不是 trigger 的一种，而是服务端 spec 上的 runKind 盖章字段
+# （`src/matters/run_spec.py::assemble_item_spec`）。行动项派发 run 的 trigger.kind 是 'manual'，
+# 走 kind 阶梯会 fail-close 到 untrusted_trigger —— **那一档放行 domain_write**。
+#
+# 🔴 与前两节的**不同**：这一支不新开 mode，而是断言它落在 `matter_followup` 上。venue 姿态
+# 完全一样（无人值守 / 无写 class / 只能提案 / connector 天花板服务端钉死 read），新开一个
+# mode 只会把同一行矩阵抄两遍，还把 owner 的 per-venue 规则劈成两半。两个 venue 的隔离靠
+# **锚**：各自的交付工具只在自己的锚下注册。
+# 🔴 分支体同样是花括号块（单行会被上面那张 kind 表的抽取器抓到却抽不出 kind → 误红）。
+
+MATTER_ITEM_RUN_KIND = "matter_item_run"
+
+
+def test_item_run_kind_literal_matches_python():
+    """TS 的 runKind 字面量 == Python 的 job_type/runKind 常量（跨语言手抄，改一侧必红）。"""
+    from src.matters.run_spec import MATTER_ITEM_RUN_KIND as PY_KIND
+    from src.matters.service import MATTER_ITEM_RUN_JOB_TYPE
+    from src.sync.async_jobs import AsyncJobRepository
+
+    assert PY_KIND == MATTER_ITEM_RUN_KIND == MATTER_ITEM_RUN_JOB_TYPE
+    # job_type 也必须在 agent 族里，否则 worker 根本 claim 不到这条 job。
+    assert MATTER_ITEM_RUN_JOB_TYPE in AsyncJobRepository.AGENT_JOB_TYPES
+    src = _read(_AGENT_RUN_TS)
+    const = re.search(r"MATTER_ITEM_RUN_KIND\s*=\s*'([a-z_]+)'", src)
+    assert const, "agentRun.ts 的 MATTER_ITEM_RUN_KIND 常量抽取失败 —— 更新本闸"
+    assert const.group(1) == PY_KIND, (
+        f"runKind 字面量漂移：TS={const.group(1)!r} Python={PY_KIND!r} —— "
+        "spec 盖的章与 gateway 认的章不一致 = 派发 run 落回 untrusted_trigger（放行 domain_write）"
+    )
+    # spec 组装侧确实盖了这个章（防「常量还在、投影里被改掉」）。
+    assert '"runKind": MATTER_ITEM_RUN_KIND' in _read(
+        _REPO_ROOT / "src" / "matters" / "run_spec.py"
+    ), "assemble_item_spec 不再用 MATTER_ITEM_RUN_KIND 盖 runKind —— 更新本闸"
+
+
+def test_item_run_kind_branch_maps_to_matter_venue_before_the_ladder():
+    """agentRun.ts：item run 分支存在、块写法、落 matter_followup、且在 kind 阶梯**之前**。"""
+    src = _read(_AGENT_RUN_TS)
+    match = re.search(r"function deriveContextMode\b.*?\n}", src, re.DOTALL)
+    assert match, "deriveContextMode 不见了 —— 镜像函数被移动/改名，更新本闸"
+    body = match.group(0)
+
+    branch = re.search(
+        rf"if\s*\(\s*spec\.runKind\s*===\s*'{MATTER_ITEM_RUN_KIND}'\s*\)\s*\{{\s*"
+        rf"return\s*'(?P<mode>[a-z_]+)'",
+        body,
+    )
+    assert branch, (
+        "抽不到 matter_item_run 的 runKind 分支（习语变了？）—— 期望块写法 "
+        "`if (spec.runKind === 'matter_item_run') { return 'matter_followup' }`；"
+        "🔴 别改成单行，那会让上面的 trigger-kind 表抽取器误红"
+    )
+    assert branch.group("mode") == MATTER_FOLLOWUP_MODE, (
+        "行动项派发 run 必须落在 matter_followup venue 上：换成别的 mode 要先补一整行矩阵"
+        "（policy.ts）+ connector 天花板（src/connectors/service.py），少一处就是放宽"
+    )
+
+    ladder = re.search(r"const kind\s*=\s*spec\.trigger", body)
+    assert ladder, "kind 阶梯的起点（`const kind = spec.trigger…`）不见了 —— 更新本闸"
+    assert branch.start() < ladder.start(), (
+        "matter_item_run 分支跑到 kind 阶梯后面去了：它的 trigger.kind='manual' 会先被阶梯"
+        "fail-close 成 untrusted_trigger（那一档放行 domain_write）—— 顺序就是语义"
+    )
+
+
+def test_item_run_spec_allowed_tools_are_forced_empty():
+    """agentRun.ts：item run 的 allowedTools 与另外两个无人值守 venue 一样被 FORCE 成 []。"""
+    src = _read(_AGENT_RUN_TS)
+    match = re.search(
+        r"const allowedRaw: unknown =(?P<expr>.*?)\n\s*//", src, re.DOTALL
+    )
+    assert match, "allowedRaw 的 FORCE-[] 三元式抽取失败 —— 习语变了，更新本闸"
+    expr = match.group("expr")
+    assert "MATTER_ITEM_RUN_KIND" in expr, (
+        "matter_item_run 不在 FORCE-[] 名单里 —— 一份被篡改/过时的 spec 就能把矩阵放行的工具"
+        "经 wrap belt 的 `keep.has(name)` 拉回一个无人值守的 run"
+    )
+
+
+def test_matter_venue_admits_artifact_by_name_including_item_report():
+    """policy.ts：matter_followup 的 artifact 仍是**按名字**放行，且名单含两条交付通道。"""
+    src = _read(_POLICY_TS)
+    match = re.search(r"export function isToolClassAllowedInMode\b.*?\n}", src, re.DOTALL)
+    assert match, "isToolClassAllowedInMode 不见了 —— 更新本闸"
+    branch = re.search(
+        rf"if\s*\(\s*mode\s*===\s*'{MATTER_FOLLOWUP_MODE}'\s*\)\s*\{{(?P<block>.*?)\n  \}}",
+        match.group(0),
+        re.DOTALL,
+    )
+    assert branch, "抽不到 matter_followup 的矩阵分支块 —— 更新本闸"
+    artifact_guard = re.search(
+        r"toolClass\s*===\s*'artifact'.*?(?=\n\s*if\s*\(\s*toolClass\s*===\s*'web')",
+        branch.group("block"),
+        re.DOTALL,
+    )
+    assert artifact_guard and "MATTER_RUN_ARTIFACT_TOOLS" in artifact_guard.group(0), (
+        "artifact 在 matter_followup 分支里必须**按名字**放行（MATTER_RUN_ARTIFACT_TOOLS）"
+        "—— 整类放行会把 report_write（本地写）一并交给无人值守的 run"
+    )
+    names = re.search(
+        r"MATTER_RUN_ARTIFACT_TOOLS[^=]*=\s*new Set\(\[(?P<members>.*?)\]\)", src, re.DOTALL
+    )
+    assert names, "MATTER_RUN_ARTIFACT_TOOLS 抽取失败 —— 习语变了，更新本闸"
+    assert {"MATTER_RUN_PROPOSE_TOOL", "MATTER_ITEM_REPORT_TOOL"} == set(
+        re.findall(r"[A-Z][A-Z0-9_]+", names.group("members"))
+    ), (
+        "matter venue 的 artifact 名单变了：期望恰为两条交付通道（跟进提案 + 行动项交付）"
+        "—— 多一个成员就是多一条无人值守的写通道"
+    )

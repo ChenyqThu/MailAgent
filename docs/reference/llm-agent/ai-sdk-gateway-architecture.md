@@ -1496,3 +1496,33 @@ chat 富卡 `ApprovalActions`（拒绝理由）。
   （render 期重置 + `key={approvalId}`），否则 A 次审批的输入会被安到 B 次提案上。
 - 编辑器只渲染模型提过且类型可忠实往返的字段（string → input、string[] → 逐行）；
   其他类型跳过不渲染（`inputPreview` 已有服务端概述），缺失字段不补空输入框。
+
+### 13.27.4 manual 会话的「曾暂停」持久 marker（L4 批次 3 补缺）
+
+批次 2 留下的已知缺口：stash 是进程内存，gateway 重启后 agent-run 会话有
+`derive_agent_run_state` 可渲染诚实失效态，**manual 会话什么都不渲染**（静默）。批次 3 起：
+
+- `persistPausedAssistant` 的同一条持久化通道**另写** `ai_chat_sessions.paused_marker_json`
+  （CHAT_DB v28 新列，keep-latest，`{toolCallId, approvalId, toolName, destructive, pausedAt}`）——
+  独立钩子 `setSessionPausedMarker`，因为脱敏副本里没有这些字段，且 marker 的价值正在
+  「stash 没了」的世界，与 stash 各自 try/catch。
+- 清 marker 三时机：decide 终局 / resume 完成 / 该会话新一轮 run 开始（`onTurnStart`）。
+- `PendingApprovalPanel`：stash miss 且 marker 在 → 渲染既有失效态（静态提示，🔴 **没有**
+  「批准」键——只存证据不存凭据，重启后审批不可复活；把整个 stash 落盘是另一个安全面，
+  有意不做）。agent-run 路径行为不变。
+
+### 13.28 行动项派发 run（`matter_item_run` venue，L4 批次 3）
+
+第七种 headless run kind，**contextMode 复用 `matter_followup` 档**（姿态逐条相同；不开第七
+mode 的理由 = 新 mode 要同步矩阵/两个 venue 集/天花板/闸四处，漏一处即放宽）。两 venue 的
+隔离由**锚**保证：`matter_update_propose` 只在 matter-run 锚下注册、`matter_item_report` 只在
+item-dispatch 锚下注册，belt 测试钉互不渗透。要点：
+
+- spec 组装 `assemble_item_spec`（`run_spec.py`）：`allowedTools` 恒 `[]` 三处强制照旧
+  （Python 组装 / gateway FORCE 白名单含 `matter_item_run` / venue connector 天花板 read）；
+  executor 为 custom agent 时只取 model/effort 段。会话锚 `anchor:{type:'matter'}` + `itemId`
+  （CHAT_DB v28 列）。
+- 交付/反问契约、状态机、autonomous 档语义 → 权威在
+  [`matters/matters-architecture.md`](../matters/matters-architecture.md) §4.3，本节不复述。
+- `tests/api/test_context_mode_consistency.py` 的 canonical 表含 `matter_item_run`；
+  `tool_catalog.json` 含 `matter_item_report`（agent_eval 完整性闸）。

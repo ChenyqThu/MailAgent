@@ -36,6 +36,7 @@ import {
 import {
   classOfTool,
   CONTACT_PROPOSE_TOOLS,
+  MATTER_ITEM_REPORT_TOOL,
   MATTER_RUN_PROPOSE_TOOL,
   normalizeContextMode,
   parseConnectorGrants,
@@ -66,6 +67,14 @@ export const MAX_AGENT_RUN_SECONDS = 1800
  *  constant: that gate's extractor regex matches `spec.runKind === '<kind>'` on the source text and
  *  an identifier there would make it抽不到 → red. */
 export const CONTACT_GOVERNANCE_RUN_KIND = 'contact_governance'
+
+/** L4 批次3 (task 08-25) — the SERVER's run-kind stamp for a 行动项 (matter_item) dispatch run.
+ *  🔴 Hand-copied from Python `src/matters/run_spec.py::MATTER_ITEM_RUN_KIND` (which equals the
+ *  async_jobs job_type); `tests/api/test_context_mode_consistency.py` pins the literal on both
+ *  sides. Consumed by the forced-empty allowedTools, the item anchor and the belt below.
+ *  🔴 `deriveContextMode` spells the LITERAL instead of this constant for the same extractor
+ *  reason CONTACT_GOVERNANCE_RUN_KIND documents. */
+export const MATTER_ITEM_RUN_KIND = 'matter_item_run'
 
 /** Mirror the backend Budget clamp at the gateway boundary so stale or malformed specs cannot
  * silently restore the retired five-minute timeout or bypass the 30-minute ceiling. */
@@ -116,6 +125,14 @@ export function deriveContextMode(spec: AgentRunSpec): AgentContextMode {
   }
   if (spec.runKind === 'contact_governance') {
     return 'contact_governance'
+  }
+  // L4 批次3 — a 行动项 dispatch run asserts the SAME venue as a follow-up run (see the
+  // matter_followup paragraph in policy.ts: identical posture, one row, one set of owner rules).
+  // It must still be its own branch AHEAD of the ladder: its trigger.kind is 'manual', which the
+  // ladder would fail-close to untrusted_trigger — a mode that still admits domain_write.
+  // 🔴 块写法（不是单行）：单行会被 trigger-kind 表的抽取器抓到却抽不出 kind → 那张表误红。
+  if (spec.runKind === 'matter_item_run') {
+    return 'matter_followup'
   }
   const kind = spec.trigger?.kind
   if (kind === 'email_filter') return 'untrusted_trigger'
@@ -169,8 +186,13 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
   // artifact tools (report_write, matter_update_propose) into an unattended directory scan through
   // the wrap belt's `keep.has(name)`. Today the assembler writes `{allowedTools: []}` already —
   // this makes it structural rather than a promise.
+  // 🔴 L4 批次3 — an item-dispatch spec joins the FORCED-[] list for the same reason: its tool
+  // face is fixed server-side (matrix row + the item belt derive it BY CLASS), so a list on the
+  // spec has no legal use and honouring one would let it pull matrix-admitted tools back in.
   const allowedRaw: unknown =
-    spec.runKind === 'matter_followup' || spec.runKind === CONTACT_GOVERNANCE_RUN_KIND
+    spec.runKind === 'matter_followup' ||
+    spec.runKind === CONTACT_GOVERNANCE_RUN_KIND ||
+    spec.runKind === MATTER_ITEM_RUN_KIND
       ? []
       : toolPolicy?.allowedTools
   // S6 W3 (rev3.1 §5.1) — the mount list mirrors allowedTools' fail-closed shape: the Python
@@ -188,6 +210,9 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
   // partial/junk `matter` key can never mint a half-anchor (a scope filter without a runId would
   // silently register a propose tool that cannot address any run).
   const matterRun = matterRunFromSpec(spec)
+  // L4 批次3 — same all-or-nothing funnel for the item-dispatch anchor (a half anchor would
+  // register a report tool that cannot address any dispatch).
+  const matterItemRun = matterItemRunFromSpec(spec)
   const specUseKos = (spec as AgentRunSpec & { useKos?: unknown }).useKos
   return {
     agentId: spec.agentId,
@@ -209,6 +234,8 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
     // P4 — conditional include for the same reason: a non-matter run's context object keeps the
     // pre-P4 shape (the stash-freeze assertions depend on that).
     ...(matterRun !== undefined ? { matterRun } : {}),
+    // L4 批次3 — same conditional-include discipline.
+    ...(matterItemRun !== undefined ? { matterItemRun } : {}),
     // WP7 — same conditional-include discipline: only a spec STAMPED contact_governance mints the
     // flag, so every other run's context object is byte-identical to the pre-WP7 shape.
     ...(spec.runKind === CONTACT_GOVERNANCE_RUN_KIND
@@ -234,6 +261,25 @@ function matterRunFromSpec(spec: AgentRunSpec): AgentRunContext['matterRun'] {
   if (typeof publicId !== 'string' || publicId.length === 0) return undefined
   if (!Number.isInteger(runId) || (runId as number) <= 0) return undefined
   return { matterId, publicId, runId }
+}
+
+/** L4 批次3 (task 08-25) — the fail-closed funnel for the spec's ITEM DISPATCH anchor. Returns
+ *  undefined unless the spec is stamped `runKind: 'matter_item_run'` AND carries a fully-formed
+ *  `matterItem` object ({matterId, publicId, itemId, dispatchId} — the two titles are prompt-side
+ *  only, so they are not projected). Every field is re-derived from the JSON at runtime: the
+ *  shared TYPE states what the server promises, this assumes it may lie (ADR-004 P1-4). A
+ *  malformed anchor yields undefined rather than a partial object — the report tool must be
+ *  all-or-nothing, and its identity comes from here alone. */
+function matterItemRunFromSpec(spec: AgentRunSpec): AgentRunContext['matterItemRun'] {
+  if (spec.runKind !== MATTER_ITEM_RUN_KIND) return undefined
+  const anchor = spec.matterItem
+  if (anchor == null || typeof anchor !== 'object') return undefined
+  const { matterId, publicId, itemId, dispatchId } = anchor
+  if (!Number.isInteger(matterId) || (matterId as number) <= 0) return undefined
+  if (typeof publicId !== 'string' || publicId.length === 0) return undefined
+  if (!Number.isInteger(itemId) || (itemId as number) <= 0) return undefined
+  if (!Number.isInteger(dispatchId) || (dispatchId as number) <= 0) return undefined
+  return { matterId, publicId, itemId, dispatchId }
 }
 
 /** 🔴 0812 codex修复批 — the SINGLE decision point for web tools in a Matter follow-up run
@@ -377,6 +423,7 @@ export function wrapCfgForAgentRun(
     buildTools: (collector, approvalMode, mode) => {
       const built = cfg.buildTools?.(collector, approvalMode, mode, ctx) ?? {}
       const matterReadFace = ctx.matterRun != null
+      const itemReadFace = ctx.matterItemRun != null
       const contactReadFace = ctx.contactGovernanceRun === true
       const contactUseKos = (ctx as AgentRunContext & { useKos?: boolean }).useKos !== false
       // The tier was resolved ONCE at run start and frozen onto the context (so a pause→resume
@@ -390,6 +437,22 @@ export function wrapCfgForAgentRun(
           if (
             cls === 'read' ||
             name === MATTER_RUN_PROPOSE_TOOL ||
+            matterRunAdmitsWeb(name, cls, webFace)
+          )
+            out[name] = t
+          continue
+        }
+        // 🔴 L4 批次3 — the ITEM-dispatch belt, SELF-CONTAINED for exactly the reason the two
+        // above are (merged into the generic OR-chain, its unconditional exec/web/mcp passes
+        // would re-admit whatever the matrix let through). Same shape as the matter belt — class
+        // 'read' + web under the frozen tier — with ONE artifact name: the report channel. It
+        // never consults `keep` (allowedTools is forced [] above) and never exempts exec/mcp/
+        // plan_update by name. A tool missing from the class map fail-closes to 'exec' in
+        // classOfTool → EXCLUDED here, never silently admitted.
+        if (itemReadFace) {
+          if (
+            cls === 'read' ||
+            name === MATTER_ITEM_REPORT_TOOL ||
             matterRunAdmitsWeb(name, cls, webFace)
           )
             out[name] = t
@@ -531,7 +594,10 @@ async function runHeadlessAgentOnce(
   // is frozen onto the context so (a) the wrap belt below and (b) an island resume rebuilding
   // from the stashed context see the SAME value — a Settings change mid-run can never widen a
   // paused run's face. No resolver wired → undefined → the context keeps its pre-dogfood shape.
-  const webFace = specContext.matterRun != null ? await resolveMatterRunWebFace(cfg) : undefined
+  const webFace =
+    specContext.matterRun != null || specContext.matterItemRun != null
+      ? await resolveMatterRunWebFace(cfg)
+      : undefined
   const agentRunContext: AgentRunContext =
     webFace !== undefined ? { ...specContext, matterWebFace: webFace } : specContext
   const cfg2 = wrapCfgForAgentRun(
@@ -738,9 +804,7 @@ export async function runHeadlessAgent(
   abortSignal: AbortSignal
 ): Promise<HeadlessAgentResult> {
   const primary =
-    typeof opts.spec.model === 'string' && opts.spec.model.length > 0
-      ? opts.spec.model
-      : cfg.model
+    typeof opts.spec.model === 'string' && opts.spec.model.length > 0 ? opts.spec.model : cfg.model
   const chain: (string | undefined)[] = [undefined]
   for (const candidate of opts.spec.fallbackModels ?? []) {
     if (typeof candidate !== 'string' || candidate.length === 0) continue

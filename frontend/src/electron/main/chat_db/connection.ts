@@ -157,7 +157,21 @@ import { resolveDataRoot } from '../db'
 // v27 (Matters MVP P3, task 08-09) — widen the session anchor CHECK to admit matter rows:
 // email_id=NULL + anchor_id=matter internal integer id. Rebuild/swap preserves all later columns,
 // rows, dependent tables, and the five session indexes; migration is structural and always-on.
-const CHAT_DB_VERSION = 27
+// v28 (L4 批次3 行动项执行契约, task 08-25) — two additive session columns:
+//   • item_id: the matter_item (行动项) an agent run belongs to, so a 行动项 aggregates every run /
+//     session under it (过程可见性挂行动项不挂会话). Cross-db (matter_item lives in sync_store.db) →
+//     no FK, same discipline as agent_job_id (v19). NULL for every non-item session.
+//   • paused_marker_json: R7 — the persistent「曾在审批处暂停」marker for a MANUAL session
+//     ({toolCallId, approvalId, toolName, destructive, pausedAt}, keep-latest). The approval STASH is
+//     gateway process memory (approvalStash.ts) — after a restart a manual session had no signal at
+//     all that it was ever paused, so PendingApprovalPanel rendered nothing (a headless run derives
+//     the same fact from derive_agent_run_state). This column is the missing signal, and ONLY that:
+//     the stash itself (body / responseMessage / resumeToken) is deliberately NOT persisted, so a
+//     restarted pause stays un-approvable and renders the honest「已失效」notice.
+// 🔴 Plain additive ALTERs + one index — the anchor CHECK is untouched (no rebuild): both columns are
+// independent of the anchor triple, and CHAT_DB has no FK to sync_store.db anyway. 🔴 bump 同步刷
+// src/chat/db.py 头注释；NOT backend_lifecycle.EXPECTED_DB_VERSION（两条独立版本梯）。
+const CHAT_DB_VERSION = 28
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -1316,6 +1330,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_queued_input_delivery
       }
     } finally {
       db.pragma('foreign_keys = ON')
+    }
+  }
+
+  // v27 → v28 — L4 批次3: ai_chat_sessions.item_id (行动项反查 + one read index) and
+  // ai_chat_sessions.paused_marker_json (R7 曾暂停 marker). Two plain additive ALTERs, hasColumn
+  // idempotency guard (v24/v25 样板) — see the header comment for why neither needs a rebuild.
+  if (current < 28) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'ai_chat_sessions', 'item_id')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN item_id INTEGER')
+      }
+      if (!hasColumn(db, 'ai_chat_sessions', 'paused_marker_json')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN paused_marker_json TEXT')
+      }
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_item
+        ON ai_chat_sessions(item_id, created_at DESC)`)
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '28')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
     }
   }
 }

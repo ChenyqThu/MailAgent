@@ -94,6 +94,7 @@ import {
   revertClaimed,
   updateQueuedInput,
   updateMessage,
+  updateSessionPausedMarker,
   updateSessionTitle,
   updateToolCall
 } from './chat_db'
@@ -908,6 +909,14 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // coordinates with persistTurn to prevent double-writing when both paths fire.
     onTurnStart: (sessionId, userMessage) => {
       if (sessionId == null || !userMessage) return
+      // R7 (L4 批次3) — a new turn on this session supersedes any older「曾暂停」marker (the owner
+      // moved on, or this IS the renderer's resume). Without it the honest expired notice would
+      // linger for the whole new turn — the marker otherwise only clears at that turn's onFinish.
+      try {
+        updateSessionPausedMarker(sessionId, null)
+      } catch (err) {
+        console.warn('[ai-gateway] onTurnStart paused-marker clear failed (turn continues)', err)
+      }
       const key = eagerUserMessageKey(sessionId, userMessage.id)
       // Skip if THIS message was already eagerly written. Happens on the HITL resume turn:
       // rawMessages still ends with the original user message (same id), so lastUserMessage()
@@ -974,6 +983,16 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         })
       } catch (err) {
         console.error('[ai-gateway] persistPausedAssistant write failed (best-effort)', err)
+      }
+    },
+    // R7 (L4 批次3) — the durable「曾暂停」marker, on the SAME chat_db channel as the redacted persist
+    // above (no HTTP). Write on pause / clear on a settled turn; the stash itself stays process-memory
+    // (see AiGatewayConfig.setSessionPausedMarker for why persisting it is deliberately out of scope).
+    setSessionPausedMarker: (sessionId, marker) => {
+      try {
+        updateSessionPausedMarker(sessionId, marker)
+      } catch (err) {
+        console.warn('[ai-gateway] paused marker persist failed (best-effort)', err)
       }
     },
     persistTurn,
@@ -1395,6 +1414,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       triggerFiredAt?: number | null
       /** P4 (D7) — Matter-anchored session for a follow-up run; omitted → general anchor. */
       anchor?: { type: 'matter'; id: number }
+      /** L4 批次3 (CHAT_DB v28) — the 行动项 an item-dispatch run executes. */
+      itemId?: number | null
     }) => {
       try {
         return createAgentSession(input)

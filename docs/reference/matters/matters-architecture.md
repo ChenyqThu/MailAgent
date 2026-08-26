@@ -95,15 +95,16 @@ run 的上网能力 —— owner 永远看不见这件事发生。反过来，**
 静默回落会让「UI 显示的档」与「实际生效的档」劈叉，在一个安全档上这比报错危险得多。
 run 起始解析一次并冻进 run context，pause / resume 复用同值。
 
-### 1.3 matter 工具家族本身（19 件，成员单源 = `matters.ts` 的四个导出数组）
+### 1.3 matter 工具家族本身（20 件，成员单源 = `matters.ts` 的五个导出数组）
 
 事项工具家族恒注册（仍要求 mixed-family `ApprovalGuard`）：5 读（`matter_find` / `matter_get` /
 `matter_attention_list` / `matter_runs_list` / `matter_tags_list`）+ 12 写（`matter_create` /
 `matter_update` / 四个 `*_mutate` / **`matter_progress_mutate`（0825，curated 进展写面）** /
 `matter_add_note` / `matter_run_control` / `matter_review_update` / `matter_attention_triage` /
-`matter_suggestion_resolve`）+ 1 提案 artifact（`matter_update_propose`，**只在 matter-run
-语境注册**）+ 1 `matter_followup_mutate`（class `capability_change`）。
-本节旧版写的「13 件」自 0813 批 R 起就欠账 —— 数成员以代码四数组为准，本节只记结构。
+`matter_suggestion_resolve`）+ 2 提案 artifact（`matter_update_propose` **只在 matter-run
+语境注册**；`matter_item_report` **只在行动项派发 run 语境注册**，L4 批次 3，见 §4.3）+
+1 `matter_followup_mutate`（class `capability_change`）。
+本节旧版写的「13 件」自 0813 批 R 起就欠账 —— 数成员以代码五数组为准，本节只记结构。
 
 `matter_suggest_related_resources`（曾经的 manual-chat 供给型特例，有意不在
 `GATEWAY_TOOL_CLASSES`）已于 **2026-08-25 随「关键词命中推荐退役」删除**（见 §5）——
@@ -494,6 +495,42 @@ matter run 终态四值 `ok / noop / warn / fail`（+ `canceled`），映射单�
   `run.error?.message` 此前是永远取不到值的死读法，就此接通。gateway 的 `console.error` 在
   打包 app 里仍然哪儿都不去，错误原文进 run 行是目前唯一的落点。
   回归：`tests/agents/test_run_worker_matter.py`。
+
+### 4.3 行动项执行契约（`matter_item_run` 派发，L4 批次 3，DB v71）
+
+把 `kind='action'` 的行动项变成**可派发最小单元**。账本 = 新表 `matter_item_dispatch`
+（独立常量组 `MATTER_ITEM_DISPATCH_TABLE_DDLS`，🔴 不进 `MATTER_*_DDLS` 老库重放；
+每条行动项至多一条活跃派发，partial unique `uq_item_dispatch_one_active`）。
+**不写 `matter_run` 行** —— 单活跃约束、终态词表都与跟进 run 无关。
+
+- **状态机七值**（Python canonical `MatterItemDispatchState`，TS 单镜像 + parity 闸）：
+  `queued → running → awaiting_input | proposed → done / failed / canceled`。🔴 全部迁移由
+  **服务端 CAS** 强制（条件 UPDATE + rowcount），不信 agent 自述——执行态与 `matter_item.status`
+  （业务标签）**两列并存不合一**（Notion 手搓状态机的教训）。终态判据 = `ended_at IS NOT NULL`。
+- **执行链**：`dispatch_item`（REST，用户动作）→ enqueue `matter_item_run`（🔴 事务外，失败收敛
+  failed）→ `AgentRunWorker._execute_item_dispatch` → gateway headless（contextMode **复用
+  `matter_followup` 档**，隔离由锚保证；`allowedTools` 恒 `[]` 三处强制照旧）。
+  executor 可选内建 `matter_followup` 或 custom agent，后者**只取 model/effort 段**——工具面
+  挂行动项不挂 agent。孤儿收敛 `recover_orphaned_dispatches`（JOIN async_jobs，镜像
+  `recover_orphaned_runs`）；**无 lease 列**（单进程 worker 下预算超时 + 孤儿收敛已等价，
+  外部执行器时代再上）。
+- **交付恰一次**：run 末尾调 `matter_item_report`（artifact 级，镜像 `matter_update_propose`
+  形状，内部端点 `POST /api/matters/{id}/item-dispatches/{did}/report`，本地 token + 服务端盖章）。
+  载荷 `changes` XOR `needs_input`（🔴 分支约束下沉 Python，schema 恒 flat）：
+  - `changes` → 防幻觉剔除（action target 限本行动项；🔴 **`kind=field` 恒拒**——owner 自己的话
+    不进无人值守写半径）→ 建 `matter_update`（带 `item_dispatch_id`）→ `proposed`；
+    owner accept → `done`，reject → `canceled`；🔴 **同事项别的提案被采纳把这份 supersede 掉时
+    同样回钩 `canceled`（code `proposal_superseded`）**——否则派发停在 `proposed` 两边面都
+    看不见、还占着单活跃锁（check 抓的黑洞）。终态后可重派。
+  - `needs_input` → `awaiting_input`（问题落 `question_json`）。🔴 **反问是 run 终止式不是
+    mid-run 暂停**（审批 stash 是进程内存，headless 反问靠它重启即丢）：owner 回答 →
+    answers_json 追加 + 回 `queued` + 新一轮 run 带问答史。
+- **执行档 `exec_profile`** 挂行动项（`matter_item` v71 新列，同一 agent 不同行动项可不同档）：
+  `propose_only`（默认）/ `autonomous`（report 落提案后同事务自动采纳，actor=system，走既有
+  undo 面）/ `edit_with_approval`（词表预留，**不上 UI**，B4 动态审批再启用）。
+- **可见性挂行动项**：会话锚 `ai_chat_sessions.item_id`（CHAT_DB v28）反查 + `/today` 第四源
+  直读派发行（`awaiting_input` → 等我处理、`failed` → 需要留意；`proposed` 有意不进面——由
+  提案源覆盖，同 `needs_review` 去重取向）。派发失败**不发通知**，例外面是唯一提醒面。
 
 ---
 

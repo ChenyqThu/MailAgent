@@ -65,8 +65,10 @@ export {
   listAllSessions,
   listGeneralSessions,
   listSessionsForEmail,
+  listSessionsForItem,
   listSessionsForMatter,
   updateSessionArchived,
+  updateSessionPausedMarker,
   updateSessionPinned,
   updateSessionStarred,
   updateSessionTitle
@@ -74,11 +76,7 @@ export {
 
 export { markToolCallApprovalExpired } from './chat_db/tool_calls'
 
-export type {
-  QueuedInput,
-  QueuedInputMode,
-  QueuedInputStatus
-} from './chat_db/queuedInput'
+export type { QueuedInput, QueuedInputMode, QueuedInputStatus } from './chat_db/queuedInput'
 export {
   cancelQueuedInput,
   claimQueuedInput,

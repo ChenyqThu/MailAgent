@@ -197,6 +197,7 @@ ERROR_CODE_TO_HTTP: dict[str, int] = {
     "E_UPDATE_STALE": 409,
     "E_UPDATE_ALREADY_REVIEWED": 409,
     "E_RUN_ACTIVE": 409,
+    "E_DISPATCH_ACTIVE": 409,  # Matters 批次 3: 一条行动项同时只有一次活跃派发
     "E_RESOURCE_IDENTITY_CONFLICT": 409,
     "E_DEPENDENCY_EXISTS": 409,
     "E_PROPOSAL_EXISTS": 409,  # Matters P4: 每 run 至多一个提案

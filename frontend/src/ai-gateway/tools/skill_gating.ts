@@ -167,6 +167,9 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'matter_run_control',
   'matter_review_update',
   'matter_update_propose',
+  // L4 批次3 —— 行动项派发 run 的交付通道。同族同纪律（无 skill 归属）；那条 run 的挂载集
+  // 与跟进 run 相同（email/search/report），全靠 CORE_UNGATED 地板把 matter 家族留在门外。
+  'matter_item_report',
   // 0813 轮 3 批 R —— 三读 + 两处置写，同一族同一条纪律（无 skill 归属）。
   'matter_attention_list',
   'matter_runs_list',

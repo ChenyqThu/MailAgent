@@ -1,12 +1,13 @@
 // @vitest-environment happy-dom
 //
-// 例外面的渲染闸（L4 批次 2）。分组算法本身在 `todayGroups.test.ts` 单测，这里钉的是**页面
-// 真的接得起来**：三条源 → 分组 → 行；以及那条最容易做假的行为 ——
+// 例外面的渲染闸（L4 批次 2 起，批次 3 加第四源）。分组算法本身在 `todayGroups.test.ts`
+// 单测，这里钉的是**页面真的接得起来**：四条源 → 分组 → 行；以及两条最容易做假的行为 ——
 //
 //   🔴 `paused_pending` 行的可操作性由 live 查 `/approval/pending` 决定，miss（gateway 重启 /
 //      TTL 过期）必须**诚实降级**成「已失效」，不能画一个按了没反应的批准入口。
+//   🔴 派发的「等你回答」与「失败」必须长得不一样（不同组 + 不同徽标）。
 //
-// 三条读端点全 mock 在 hook 边界（与 sidebar-contract 同款做法）：真实网络在 happy-dom 下
+// 四条读端点全 mock 在 hook 边界（与 sidebar-contract 同款做法）：真实网络在 happy-dom 下
 // 只会变成一屏 CORS 噪声，测不出任何东西。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -26,19 +27,22 @@ import i18n from '../../src/shared/i18n'
 import type { AgentRunHistoryItem } from '../../src/shared/api/types'
 import type {
   MatterAttentionSignal,
+  MatterItemDispatch,
   MatterPendingUpdatesEntry
 } from '../../src/shared/api/types/matter'
 
-const { state, attentionMutate } = vi.hoisted(() => ({
+const { state, attentionMutate, dispatchMutate } = vi.hoisted(() => ({
   state: {
     runs: [] as AgentRunHistoryItem[],
     proposals: [] as MatterPendingUpdatesEntry[],
     signals: [] as MatterAttentionSignal[],
+    dispatches: [] as MatterItemDispatch[],
     /** `fetchPendingApproval` 的返回：null = stash miss（gateway 重启 / 已被别处消费）。 */
     pending: null as { approvalId: string; toolName: string; inputPreview: string } | null
   },
   // 单独 hoist：`useAttentionAction` 的 mock 每次都要返回**同一个**间谍，测试才断言得到调用。
-  attentionMutate: vi.fn()
+  attentionMutate: vi.fn(),
+  dispatchMutate: vi.fn()
 }))
 
 vi.mock('@shared/hooks/useMailApi', () => ({
@@ -60,7 +64,14 @@ vi.mock('@shared/components/matters/hooks', () => ({
     isError: false
   }),
   useGlobalAttention: () => ({ data: { items: state.signals }, isPending: false, isError: false }),
-  useAttentionAction: () => ({ mutate: attentionMutate })
+  useAttentionAction: () => ({ mutate: attentionMutate }),
+  // L4 批次3 第四源。
+  useLiveItemDispatches: () => ({
+    data: { items: state.dispatches },
+    isPending: false,
+    isError: false
+  }),
+  useItemDispatchAction: () => ({ mutate: dispatchMutate, isPending: false })
 }))
 
 vi.mock('@shared/assistant/approvalRecordClient', () => ({
@@ -129,12 +140,45 @@ async function renderSurface(): Promise<void> {
   })
 }
 
+function dispatch(over: Partial<MatterItemDispatch> = {}): MatterItemDispatch {
+  return {
+    id: 31,
+    matter_id: 12,
+    item_id: 44,
+    state: 'awaiting_input',
+    executor_kind: 'agent',
+    executor_id: 'matter_followup',
+    exec_profile: 'propose_only',
+    question: { question: '要按哪一版报价发？', options: ['第 2 版', '第 3 版'] },
+    answers: [],
+    update_id: null,
+    async_job_id: 900,
+    attempt_count: 1,
+    error: null,
+    created_by_kind: 'user',
+    created_by_id: null,
+    dispatched_at: Date.now() - 300_000,
+    awaiting_since: Date.now() - 90_000,
+    delivered_at: null,
+    ended_at: null,
+    created_at: Date.now() - 300_000,
+    updated_at: Date.now() - 90_000,
+    matter_public_id: 'm-abc',
+    matter_title: '供应商比价',
+    item_title: '把报价单发给财务',
+    item_kind: 'action',
+    ...over
+  } satisfies MatterItemDispatch
+}
+
 beforeEach(async () => {
   state.runs = []
   state.proposals = []
   state.signals = []
+  state.dispatches = []
   state.pending = null
   attentionMutate.mockClear()
+  dispatchMutate.mockClear()
   await i18n.changeLanguage('zh-CN')
 })
 
@@ -292,5 +336,99 @@ describe('信号 dismiss（可选理由）', () => {
       action: 'resolved'
     })
     expect(screen.queryByLabelText('忽略理由（可选）')).toBeNull()
+  })
+})
+
+// ───────────── L4 批次3 · 第四源：行动项派发（prd 验收标准 3 / 5） ─────────────
+//
+// 钉三件事：
+//   ① 「等你回答」进「等我处理」组、「失败」进「需要留意」组 —— 两者在屏幕上必须
+//      长得不一样（这一整批的卖点）；
+//   ② 回答是两步式：点行先展开回答框，填了才提交；
+//   ③ 取消派发只在还能取消的态上给入口（`failed` 是终态，服务端会 CAS 拒）。
+
+describe('行动项派发（例外面第四源）', () => {
+  test('awaiting_input → 「等我处理」；failed → 「需要留意」，两组分开', async () => {
+    state.dispatches = [
+      dispatch({ id: 31, item_id: 44, state: 'awaiting_input' }),
+      dispatch({
+        id: 32,
+        item_id: 45,
+        state: 'failed',
+        question: null,
+        item_title: '整理会议纪要',
+        error: { code: 'no_report', message: '这一轮没有交付任何东西' },
+        awaiting_since: null,
+        ended_at: Date.now() - 60_000
+      })
+    ]
+    await renderSurface()
+    await waitFor(() => expect(screen.getAllByTestId('today-item').length).toBe(2))
+    expect(screen.getAllByTestId('today-group').map((el) => el.getAttribute('data-group'))).toEqual(
+      ['waiting', 'attention']
+    )
+    // 标题是**行动项**，事项名另占一行。
+    expect(screen.getByText('把报价单发给财务')).toBeTruthy()
+    expect(screen.getAllByText('供应商比价').length).toBeGreaterThan(0)
+    // triage 说明：等你回答 → 反问原文；挂了 → 服务端写的 message。
+    expect(screen.getByText('要按哪一版报价发？')).toBeTruthy()
+    expect(screen.getByText('这一轮没有交付任何东西')).toBeTruthy()
+    // 🔴 两个态的徽标不同 —— 「在等人」与「死了」分得开。
+    expect(
+      screen.getAllByTestId('dispatch-state-badge').map((el) => el.getAttribute('data-state'))
+    ).toEqual(['awaiting_input', 'failed'])
+  })
+
+  test('还在跑 / 已交提案 / 已完成的派发不进面（proposed 由提案源覆盖）', async () => {
+    state.dispatches = [
+      dispatch({ id: 33, item_id: 46, state: 'running' }),
+      dispatch({ id: 34, item_id: 47, state: 'proposed', update_id: 77 }),
+      dispatch({ id: 35, item_id: 48, state: 'done', ended_at: Date.now() })
+    ]
+    await renderSurface()
+    await waitFor(() => expect(screen.getByText(i18n.t('today.empty.title'))).toBeTruthy())
+    expect(screen.queryAllByTestId('today-item')).toHaveLength(0)
+  })
+
+  test('点行先展开回答框，不立即提交；填了才调 answer', async () => {
+    state.dispatches = [dispatch()]
+    await renderSurface()
+    await waitFor(() => expect(screen.getByText('把报价单发给财务')).toBeTruthy())
+    fireEvent.click(screen.getByText('把报价单发给财务'))
+    await waitFor(() => expect(screen.getByTestId('today-dispatch-answer')).toBeTruthy())
+    expect(dispatchMutate).not.toHaveBeenCalled()
+
+    // 备选项只**填充**输入框（人可以改），不直接提交。
+    fireEvent.click(screen.getByText('第 3 版'))
+    expect(dispatchMutate).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText(i18n.t('today.dispatch.answerConfirm')))
+    expect(dispatchMutate).toHaveBeenCalledWith({
+      matterId: 'm-abc',
+      dispatchId: 31,
+      action: 'answer',
+      text: '第 3 版'
+    })
+  })
+
+  test('取消派发：awaiting_input 有菜单入口，failed（终态）没有', async () => {
+    state.dispatches = [dispatch()]
+    await renderSurface()
+    await waitFor(() => expect(screen.getByText('把报价单发给财务')).toBeTruthy())
+    fireEvent.click(screen.getByLabelText(i18n.t('today.menu.trigger')))
+    await waitFor(() => expect(screen.getByText(i18n.t('today.dispatch.cancel'))).toBeTruthy())
+    fireEvent.click(screen.getByText(i18n.t('today.dispatch.cancel')))
+    expect(dispatchMutate).toHaveBeenCalledWith({
+      matterId: 'm-abc',
+      dispatchId: 31,
+      action: 'cancel'
+    })
+
+    cleanup()
+    state.dispatches = [
+      dispatch({ id: 32, state: 'failed', question: null, ended_at: Date.now() - 1000 })
+    ]
+    await renderSurface()
+    await waitFor(() => expect(screen.getByText('把报价单发给财务')).toBeTruthy())
+    expect(screen.queryByLabelText(i18n.t('today.menu.trigger'))).toBeNull()
   })
 })

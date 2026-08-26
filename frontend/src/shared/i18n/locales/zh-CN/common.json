@@ -1095,6 +1095,7 @@
       "matter_update": "更新事项",
       "matter_item_mutate": "编辑事项条目",
       "matter_progress_mutate": "记录事项进展",
+      "matter_item_report": "提交行动项执行结果",
       "matter_resource_mutate": "关联事项资料",
       "matter_stakeholder_mutate": "编辑事项干系人",
       "matter_relation_mutate": "编辑事项关联",
@@ -5402,6 +5403,45 @@
         "note": "备注"
       }
     },
+    "dispatch": {
+      "sectionTitle": "交给 Agent",
+      "start": "派给 Agent",
+      "starting": "派发中…",
+      "executor": "执行器",
+      "builtinExecutor": "内建跟进 Agent",
+      "profile": "执行档",
+      "confirm": "派发",
+      "cancel": "取消派发",
+      "answer": "回答",
+      "answerLabel": "回答 Agent 的提问",
+      "answerPlaceholder": "把它缺的那条信息补给它",
+      "answerConfirm": "提交回答",
+      "answerBack": "返回",
+      "review": "去看提案",
+      "history": "执行历史 {count} 次",
+      "attempt": "第 {count} 轮",
+      "openSession": "看这一轮",
+      "empty": "还没派发过。派出去之后它的执行态会显示在这里。",
+      "state": {
+        "queued": "排队中",
+        "running": "执行中",
+        "awaiting_input": "等你回答",
+        "proposed": "已交提案",
+        "done": "已完成",
+        "failed": "执行失败",
+        "canceled": "已取消"
+      },
+      "profiles": {
+        "propose_only": "只提案（我来采纳）",
+        "edit_with_approval": "改动逐条审批",
+        "autonomous": "自动采纳"
+      },
+      "profileHints": {
+        "propose_only": "产出落成提案，等你采纳才写进事项。",
+        "edit_with_approval": "产出逐条审批后写入。",
+        "autonomous": "产出直接写进这条行动项，事后仍可撤销。"
+      }
+    },
     "progress": {
       "sectionTitle": "事情的进展",
       "add": "记进展",
@@ -5532,6 +5572,17 @@
       "progress_removed_plain": "删掉了一条进展",
       "progress_restored": "恢复了进展{title}",
       "progress_restored_plain": "恢复了一条进展",
+      "item_dispatched": "把行动项{title}派给了 {executor}",
+      "item_dispatched_plain": "派出了一条行动项",
+      "item_dispatch_answered": "回答了 Agent 的提问（第 {attempt} 轮）",
+      "item_dispatch_answered_plain": "回答了 Agent 的提问",
+      "item_dispatch_canceled": "取消了这次派发",
+      "item_dispatch_delivered": "Agent 交付了一条更新提案",
+      "item_dispatch_delivered_needs_input": "Agent 缺信息，提了一个问题等你回答",
+      "item_dispatch_failed": "这次派发失败了（{code}）",
+      "item_dispatch_failed_plain": "这次派发失败了",
+      "item_dispatch_settled": "采纳了这次派发的交付",
+      "item_dispatch_settled_rejected": "驳回了这次派发的交付",
       "relation_added": "关联了事项{title}",
       "relation_added_plain": "关联了另一个事项",
       "relation_updated": "更新了事项之间的关联",
@@ -6317,7 +6368,13 @@
       "progress_added": "记了一条进展",
       "progress_updated": "改了一条进展",
       "progress_removed": "删了一条进展",
-      "progress_restored": "恢复了一条进展"
+      "progress_restored": "恢复了一条进展",
+      "item_dispatched": "派出行动项",
+      "item_dispatch_answered": "回答 Agent 提问",
+      "item_dispatch_canceled": "取消派发",
+      "item_dispatch_delivered": "派发有了交付",
+      "item_dispatch_failed": "派发失败",
+      "item_dispatch_settled": "派发交付已评审"
     },
     "eventActor": {
       "user": "你",
@@ -6850,7 +6907,7 @@
     "error": "事项数据加载失败，下面只列出了 Agent 运行",
     "empty": {
       "title": "没有需要你处理的事",
-      "hint": "Agent 等审批、事项提案、关注信号都会汇到这里；现在一条都没有。"
+      "hint": "Agent 等审批、事项提案、关注信号、行动项派发都会汇到这里；现在一条都没有。"
     },
     "group": {
       "waiting": "等我处理",
@@ -6867,7 +6924,9 @@
       "runTrigger": "由「{trigger}」触发",
       "runTriggerAt": "由「{trigger}」触发 · {at}",
       "proposalChanges": "{count} 项变更",
-      "proposalConfidence": "置信度 {percent}%"
+      "proposalConfidence": "置信度 {percent}%",
+      "dispatchAsked": "Agent 有一个问题在等你回答",
+      "dispatchFailed": "这一轮执行失败（{code}）"
     },
     "trigger": {
       "manual": "手动",
@@ -6886,6 +6945,13 @@
       "dismissReasonPlaceholder": "说明这条信号为什么现在可以先不管",
       "dismissConfirm": "确认忽略",
       "dismissBack": "返回"
+    },
+    "dispatch": {
+      "cancel": "取消派发",
+      "answerLabel": "回答 Agent 的提问",
+      "answerPlaceholder": "把它缺的那条信息补给它",
+      "answerConfirm": "回答",
+      "answerBack": "返回"
     }
   }
 }

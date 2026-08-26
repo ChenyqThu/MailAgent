@@ -38,7 +38,12 @@ import {
   createContactReadTools,
   createContactWriteTools
 } from './contacts'
-import { createMatterReadTools, createMatterRunTools, createMatterWriteTools } from './matters'
+import {
+  createMatterItemRunTools,
+  createMatterReadTools,
+  createMatterRunTools,
+  createMatterWriteTools
+} from './matters'
 import { createNotionAgentTools } from './notion_agent'
 import {
   admitDynamicTools,
@@ -582,6 +587,15 @@ export function buildGatewayTools(
     // 先例): it writes a PENDING proposal the owner still has to review.
     if (matterRun) {
       Object.assign(tools, createMatterRunTools(opts.domain, collector, matterRun))
+    }
+    // L4 批次3 — matter_item_report exists ONLY inside an item-dispatch run, mirroring the line
+    // above: which Matter / 行动项 / dispatch it addresses comes from the server-assembled anchor,
+    // so outside that context there is nothing for it to report to. The two anchors are mutually
+    // exclusive by construction (a spec is stamped one runKind), which is what keeps each venue's
+    // output channel out of the other's ToolSet.
+    const matterItemRun = opts.agentRunContext?.matterItemRun
+    if (matterItemRun) {
+      Object.assign(tools, createMatterItemRunTools(opts.domain, collector, matterItemRun))
     }
   }
   // Contact Directory WP7 — core contact family. Mixed set (3 silent reads + 3 silent artifact

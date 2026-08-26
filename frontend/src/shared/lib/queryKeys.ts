@@ -70,6 +70,9 @@ export const qk = {
     allSessions: () => ['chat', 'allSessions'] as const,
     agentUnread: () => ['chat', 'agentUnread'] as const,
     messages: (sessionId: string | number) => ['chat', 'messages', sessionId] as const,
+    /** L4 批次3 — 一条行动项名下的会话（执行历史反查，`GET /chat/sessions/all?itemId=`）。
+     *  挂 'chat' 前缀而不是 'matters'：数据源是 ai_chat.db 的会话行，事项域的写不改变它。 */
+    itemSessions: (itemId: number) => ['chat', 'itemSessions', itemId] as const,
     queuedInput: (sessionId: number | null) => ['chat', 'queuedInput', sessionId] as const,
     kosAvailable: () => ['chat', 'kosAvailable'] as const,
     config: (flag: string) => ['chat', 'config', flag] as const
@@ -268,6 +271,10 @@ export const qk = {
      *  （staleTime 15s + 组件不重挂 ⇒ 不 refetch）。收进工厂 + 收进 `refreshMatter()`
      *  的清单，两件事一起做才算修好；内联拼键 = 下一个没人失效得到的缓存。 */
     pendingUpdates: () => ['matters', 'pending-updates'] as const,
+    /** 例外面第四源：**跨事项**的「等我回答 / 挂了」派发（task 08-25 批次 3）。
+     *  与 `pendingUpdates` 同一处境 —— 跨事项、没有 id 可挂，任何 detail 前缀都覆盖不到它，
+     *  所以它也必须显式列进 `refreshMatter()` 的清单。 */
+    itemDispatches: () => ['matters', 'item-dispatches'] as const,
     config: () => ['matters', 'config'] as const
   },
 

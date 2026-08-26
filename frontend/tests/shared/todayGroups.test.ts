@@ -11,8 +11,11 @@
 import { describe, expect, test } from 'vitest'
 
 import type { AgentRunHistoryItem, AgentRunState } from '../../src/shared/api/types'
+import { MATTER_ITEM_DISPATCH_STATES } from '../../src/shared/api/types/matter'
 import type {
   MatterAttentionSignal,
+  MatterItemDispatch,
+  MatterItemDispatchState,
   MatterPendingUpdatesEntry
 } from '../../src/shared/api/types/matter'
 import {
@@ -97,6 +100,37 @@ function signal(over: Partial<MatterAttentionSignal> = {}): MatterAttentionSigna
       health: 'on_track',
       priority: 'p1'
     },
+    ...over
+  }
+}
+
+function dispatchRow(over: Partial<MatterItemDispatch> = {}): MatterItemDispatch {
+  return {
+    id: 31,
+    matter_id: 12,
+    item_id: 44,
+    state: 'awaiting_input',
+    executor_kind: 'agent',
+    executor_id: 'matter_followup',
+    exec_profile: 'propose_only',
+    question: { question: '要按哪一版报价发？', options: ['第 2 版', '第 3 版'] },
+    answers: [],
+    update_id: null,
+    async_job_id: 900,
+    attempt_count: 1,
+    error: null,
+    created_by_kind: 'user',
+    created_by_id: null,
+    dispatched_at: NOW_MS - 300_000,
+    awaiting_since: NOW_MS - 90_000,
+    delivered_at: null,
+    ended_at: null,
+    created_at: NOW_MS - 300_000,
+    updated_at: NOW_MS - 90_000,
+    matter_public_id: 'm-abc',
+    matter_title: '供应商比价',
+    item_title: '把报价单发给财务',
+    item_kind: 'action',
     ...over
   }
 }
@@ -375,5 +409,137 @@ describe('buildTodayItems — 行装配', () => {
     expect(ids).toContain('signal:21')
     expect(ids).toContain('signal:22')
     expect(ids).toContain('proposal:77')
+  })
+})
+
+// ───────────── L4 批次3 · 第四源：行动项派发 ─────────────
+//
+// 钉三件事：
+//   ① 7 值执行态 → 组的**完整映射**（含「不进面」的五个）；
+//   ② `dispatch` 行的装配（标题 = 行动项、triage = 反问 / 失败原因、`at` 取对起点）；
+//   ③ 🔴 `todayGroupOf` 现在按 `source` 穷举 —— 批次 2 那句 `if (source !== 'run')
+//      return 'waiting'` 会把新源静默塞进「等我处理」，这一节钉住新语义。
+
+describe('todayGroupOf — 派发执行态 → 组', () => {
+  const cases: ReadonlyArray<[MatterItemDispatchState, TodayGroupId | null]> = [
+    ['awaiting_input', 'waiting'],
+    ['failed', 'attention'],
+    ['queued', null],
+    ['running', null],
+    ['proposed', null],
+    ['done', null],
+    ['canceled', null]
+  ]
+
+  test.each(cases)('%s → %s', (state, expected) => {
+    const items = buildTodayItems(
+      { runs: [], proposals: [], signals: [], dispatches: [dispatchRow({ state })] },
+      ctx
+    )
+    expect(todayGroupOf(items[0]!, NOW_MS)).toBe(expected)
+  })
+
+  test('🔴 词表全覆盖：MATTER_ITEM_DISPATCH_STATES 每个值都在上面的表里', () => {
+    // 后端加一个执行态时这条会红 —— 否则新态会走 switch 的哪一支全靠运气。
+    expect([...MATTER_ITEM_DISPATCH_STATES].sort()).toEqual(cases.map(([s]) => s).sort())
+  })
+
+  test('🔴 派发不是「非 run 就等我处理」：failed 归「需要留意」', () => {
+    const items = buildTodayItems(
+      {
+        runs: [],
+        proposals: [],
+        signals: [],
+        dispatches: [dispatchRow({ state: 'failed', ended_at: NOW_MS - 60_000 })]
+      },
+      ctx
+    )
+    expect(todayGroupOf(items[0]!, NOW_MS)).not.toBe('waiting')
+  })
+})
+
+describe('buildTodayItems — 派发行装配', () => {
+  test('标题 = 行动项、事项名另占一格；triage = 反问原文', () => {
+    const [item] = buildTodayItems(
+      { runs: [], proposals: [], signals: [], dispatches: [dispatchRow()] },
+      ctx
+    )
+    expect(item?.id).toBe('dispatch:31')
+    expect(item?.title).toBe('把报价单发给财务')
+    expect(item?.source === 'dispatch' && item.matterTitle).toBe('供应商比价')
+    expect(item?.triageLogic).toBe('要按哪一版报价发？')
+    expect(item?.severity).toBe('warn')
+    expect(item?.source === 'dispatch' && item.options).toEqual(['第 2 版', '第 3 版'])
+  })
+
+  test('失败：message 优先；只有 code 时用带 code 的文案；两者都没有则留空', () => {
+    const build = (error: Record<string, unknown> | null): string => {
+      const [item] = buildTodayItems(
+        {
+          runs: [],
+          proposals: [],
+          signals: [],
+          dispatches: [dispatchRow({ state: 'failed', question: null, error })]
+        },
+        ctx
+      )
+      return item?.triageLogic ?? ''
+    }
+    expect(build({ code: 'no_report', message: '这一轮没有交付任何东西' })).toBe(
+      '这一轮没有交付任何东西'
+    )
+    expect(build({ code: 'claim_expired' })).toContain('today.triage.dispatchFailed')
+    expect(build(null)).toBe('')
+  })
+
+  test('反问原文缺席（agent 只标了 awaiting）→ 兜底文案而不是空行', () => {
+    const [item] = buildTodayItems(
+      { runs: [], proposals: [], signals: [], dispatches: [dispatchRow({ question: null })] },
+      ctx
+    )
+    expect(item?.triageLogic).toBe('today.triage.dispatchAsked')
+  })
+
+  test('at：等你回答取 awaiting_since、失败取 ended_at，都缺席回落 updated_at', () => {
+    const at = (row: Partial<MatterItemDispatch>): number => {
+      const [item] = buildTodayItems(
+        { runs: [], proposals: [], signals: [], dispatches: [dispatchRow(row)] },
+        ctx
+      )
+      return item?.at ?? -1
+    }
+    expect(at({})).toBe(NOW_MS - 90_000)
+    expect(at({ state: 'failed', question: null, ended_at: NOW_MS - 30_000 })).toBe(NOW_MS - 30_000)
+    expect(at({ awaiting_since: null, updated_at: NOW_MS - 5_000 })).toBe(NOW_MS - 5_000)
+  })
+
+  test('🔴 跨事项标识缺席 → 不渲染（回答 / 取消端点都是 per-matter 的）', () => {
+    const items = buildTodayItems(
+      {
+        runs: [],
+        proposals: [],
+        signals: [],
+        dispatches: [dispatchRow({ matter_public_id: undefined })]
+      },
+      ctx
+    )
+    expect(items).toEqual([])
+  })
+
+  test('四条源同屏：派发与信号按等龄在「等我处理」里排到一起', () => {
+    const groups = groupTodayItems(
+      buildTodayItems(
+        {
+          runs: [],
+          proposals: [],
+          signals: [signal({ id: 40, severity: 'warn', first_opened_at: NOW_MS - 30_000 })],
+          dispatches: [dispatchRow({ awaiting_since: NOW_MS - 200_000 })]
+        },
+        ctx
+      ),
+      NOW_MS
+    )
+    // 派发等了 200s、信号等了 30s —— 同为 warn，等更久的在前。
+    expect(idsOf(groups, 'waiting')).toEqual(['dispatch:31', 'signal:40'])
   })
 })

@@ -145,6 +145,9 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'matter_item_mutate',
   // task 08-25 —— curated 进展 lane 的写面（`matter_suggest_related_resources` 同批退役）。
   'matter_progress_mutate',
+  // task 08-25 批次3 —— 行动项执行 run 的**交付**工具（只在 `matter_item_run` venue 注入，
+  // manual chat 永不注册；但历史回放仍会经过这张表，所以标题不能缺）。
+  'matter_item_report',
   'matter_resource_mutate',
   'matter_stakeholder_mutate',
   'matter_relation_mutate',

@@ -81,6 +81,9 @@ class AsyncJobRepository:
     AGENT_JOB_TYPES = frozenset({
         "agent_run",
         "matter_followup",
+        # Matters 批次 3: 一条**行动项**的派发 run (matter_followup 是 per-事项, 这个是
+        # per-行动项)。同为 poke-gateway 的 LLM run ⇒ 同族共享 claim / 孤儿纪律。
+        "matter_item_run",
         "contact_governance",
     })
     # 并集 = enqueue 合法性总闸 (向后兼容: 既有 job_type 全在 MAINTENANCE 里)。

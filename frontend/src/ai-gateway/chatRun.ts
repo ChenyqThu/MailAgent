@@ -765,6 +765,53 @@ export function redactApprovalRequestedParts(
 }
 
 /**
+ * L4 批次3 R7 — write the session's persistent「曾在审批处暂停」marker (ai_chat.db v28) when a turn
+ * pauses, and clear it when a turn completes without pausing.
+ *
+ * Why a marker at all: the stash is gateway process memory, so after a restart a MANUAL session had
+ * NO signal that it was ever paused and PendingApprovalPanel rendered nothing at all (a headless run
+ * derives the same fact from derive_agent_run_state and shows the honest「已失效」notice). The marker
+ * is that missing signal — and ONLY that: it carries no resume capability (see PausedApprovalMarker),
+ * so a restarted approval stays un-approvable, exactly as the fail-closed stash contract intends.
+ *
+ * Independent of the stash leg below on purpose (its own try/catch, its own cfg hook): the marker
+ * matters precisely in the world where the stash is gone.
+ */
+function writePausedMarker(
+  cfg: AiGatewayConfig,
+  sessionId: number | null,
+  responseMessage: MailAgentUIMessage
+): void {
+  if (!cfg.setSessionPausedMarker || sessionId == null) return
+  try {
+    const info = extractApprovalStashInput(responseMessage)
+    if (!info) return
+    cfg.setSessionPausedMarker(sessionId, {
+      toolCallId: info.toolCallId,
+      approvalId: info.approvalId,
+      toolName: info.toolName,
+      // Same rule as the stash's copy: the runtime connector registry, NEVER the model's args.
+      destructive: isRuntimeToolDestructive(info.toolName),
+      pausedAt: Date.now()
+    })
+  } catch (err) {
+    console.error('[ai-gateway] paused marker write failed (turn paused OK)', err)
+  }
+}
+
+/** R7 — the mirror of writePausedMarker: a turn that reaches persistence WITHOUT pausing settled the
+ *  session (an approve-resume's merged turn, a reject-resume's denial turn, or a plain turn), so any
+ *  older marker is stale. Best-effort. A re-paused turn never gets here (it returns early above). */
+function clearPausedMarker(cfg: AiGatewayConfig, sessionId: number | null): void {
+  if (!cfg.setSessionPausedMarker || sessionId == null) return
+  try {
+    cfg.setSessionPausedMarker(sessionId, null)
+  } catch (err) {
+    console.error('[ai-gateway] paused marker clear failed (turn persisted OK)', err)
+  }
+}
+
+/**
  * Part B / S6 W2 (PRD P8) — on a paused approval, stash the run for server-side resume, and (island
  * only) fire-and-forget announce it to the island.
  *
@@ -1037,6 +1084,9 @@ export function makePersistOnFinish(
       // upsert (same UIMessage id), so the redacted row is replaced, never duplicated. flag-off
       // (default) → both cfg hooks are undefined → this call is inert (byte-identical early return).
       maybeStashAndAnnounceApproval(cfg, run, responseMessage as MailAgentUIMessage)
+      // R7 (L4 批次3) — third self-contained leg: the durable「曾暂停」marker, so a manual session
+      // can render the honest expired notice after the stash above is gone (gateway restart).
+      writePausedMarker(cfg, run.sessionId, responseMessage as MailAgentUIMessage)
       return
     }
     // Part B (harness 上岛, finding 2) — if the one-shot guard.consume rejected this turn's tool
@@ -1079,6 +1129,10 @@ export function makePersistOnFinish(
       // persistence is best-effort — a write failure must not break the streamed reply.
       console.error('[ai-gateway] persistTurn failed (turn streamed OK)', err)
     }
+    // R7 (L4 批次3) — this turn finished WITHOUT pausing, so the session is no longer「等人」:
+    // drop any marker (a resume's merged turn lands here, as does a plain turn after an abandoned
+    // pause). Runs after persistTurn for the same reason capture does — never before the truth.
+    clearPausedMarker(cfg, run.sessionId)
     // M1c — auto-capture 触发（fire-and-forget，**永不 await**）。红线：capture 端点的网络/抽取
     // 延迟绝不阻塞已流式完成的 reply；回调 return void（不 return promise 给我们 await），失败由
     // 回调内部自吞。仅当 MAILAGENT_MEM0_CAPTURE 开时由 lifecycle 注入；否则 undefined → ?. 短路 =

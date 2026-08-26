@@ -25,6 +25,7 @@ import { MoreHorizontal, type LucideIcon } from 'lucide-react'
 import { PendingApprovalPanel } from '@shared/assistant/PendingApprovalPanel'
 import { fetchPendingApproval } from '@shared/assistant/approvalRecordClient'
 import { RunStateBadge } from '@shared/components/agents/CustomAgentDrawer'
+import { MatterDispatchStateBadge } from '@shared/components/matters/MatterDispatchStateBadge'
 import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
 import { ageLabel } from '@shared/lib/ageLabel'
 import { cn } from '@shared/lib/cn'
@@ -55,10 +56,14 @@ export interface TodayRowHandlers {
     action: AttentionAction,
     reason?: string
   ): void
-  /** run `paused_pending` 行内展开 / 收起审批卡。 */
+  /** run `paused_pending` / 派发 `awaiting_input` 行内展开 / 收起（审批卡 / 回答框）。 */
   onToggleExpand(itemId: string | null): void
-  /** 决策落地后让父层刷新三条源。 */
+  /** 决策落地后让父层刷新四条源。 */
   onDecided(): void
+  /** 回答 agent 的反问（派发 `awaiting_input`）—— 回答后服务端开新一轮 run。 */
+  onDispatchAnswer(matterPublicId: string, dispatchId: number, text: string): void
+  /** 取消一次派发（只在还能取消的态上给入口）。 */
+  onDispatchCancel(matterPublicId: string, dispatchId: number): void
 }
 
 export function TodayItemRow({
@@ -121,10 +126,16 @@ export function TodayItemRow({
         ? ageLabel(t, age)
         : new Date(item.at).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })
 
+  // 派发：`awaiting_input` 的主动作是行内展开回答框（这一行的整个存在意义就是「回答我」）；
+  // 其余（进面的只剩 `failed`）跳去事项详情看这一轮为什么挂了。
+  const isAwaitingAnswer = item.source === 'dispatch' && item.state === 'awaiting_input'
+
   // 行主动作。等审批探测未落地时**不给入口** —— 否则那一瞬的点击会按「跳记录页」处理，
   // 用户以为点的是「去批准」。
   let primary: (() => void) | null = null
-  if (item.source === 'proposal' || item.source === 'signal') {
+  if (isAwaitingAnswer) {
+    primary = () => handlers.onToggleExpand(expanded ? null : item.id)
+  } else if (item.source === 'proposal' || item.source === 'signal' || item.source === 'dispatch') {
     const publicId = item.link.matterPublicId
     primary = () => handlers.onOpenMatter(publicId)
   } else if (canApprove) {
@@ -135,54 +146,73 @@ export function TodayItemRow({
     primary = () => handlers.onOpenRecord(sessionId)
   }
 
-  const menuItems: PopmenuItem[] =
-    item.source !== 'signal'
-      ? []
-      : dismissReasonOpen
-        ? [
-            {
-              kind: 'custom' as const,
-              id: 'dismiss-reason',
-              content: (
-                <DismissReasonForm
-                  id={dismissReasonId}
-                  value={dismissReasonText}
-                  onChange={setDismissReasonText}
-                  onBack={() => {
-                    setDismissReasonOpen(false)
-                    setDismissReasonText('')
-                  }}
-                  onConfirm={() => {
-                    const trimmed = dismissReasonText.trim()
-                    onMenuOpenChange(null)
-                    handlers.onSignalAction(
-                      item.link.matterPublicId,
-                      item.link.signalId,
-                      'dismissed',
-                      trimmed.length > 0 ? trimmed : undefined
-                    )
-                  }}
-                  t={t}
-                />
-              )
-            }
-          ]
-        : (['resolved', 'snoozed', 'dismissed'] as const).map((action) => ({
+  // 派发的行内菜单只有一条「取消派发」，且只在还能取消的态上给 —— `failed` 是终态，
+  // 服务端会拒（CAS），画一个必然报错的入口比不画更糟。
+  const dispatchMenuItems: PopmenuItem[] =
+    item.source === 'dispatch' && isAwaitingAnswer
+      ? [
+          {
             kind: 'action' as const,
-            id: action,
-            label: t(TODAY_SIGNAL_ACTION_LABEL_KEY[action]),
-            // dismiss 的第一次点击只展开理由框（下面 dismissReasonOpen 分支），不立即决策 ——
-            // Popmenu 默认点完就关菜单，`keepOpen` 挡掉这次自动关闭。
-            keepOpen: action === 'dismissed',
+            id: 'cancel-dispatch',
+            label: t('today.dispatch.cancel'),
             onSelect: () => {
-              if (action === 'dismissed') {
-                setDismissReasonOpen(true)
-                return
-              }
               onMenuOpenChange(null)
-              handlers.onSignalAction(item.link.matterPublicId, item.link.signalId, action)
+              handlers.onDispatchCancel(item.link.matterPublicId, item.link.dispatchId)
             }
-          }))
+          }
+        ]
+      : []
+
+  const menuItems: PopmenuItem[] =
+    item.source === 'dispatch'
+      ? dispatchMenuItems
+      : item.source !== 'signal'
+        ? []
+        : dismissReasonOpen
+          ? [
+              {
+                kind: 'custom' as const,
+                id: 'dismiss-reason',
+                content: (
+                  <DismissReasonForm
+                    id={dismissReasonId}
+                    value={dismissReasonText}
+                    onChange={setDismissReasonText}
+                    onBack={() => {
+                      setDismissReasonOpen(false)
+                      setDismissReasonText('')
+                    }}
+                    onConfirm={() => {
+                      const trimmed = dismissReasonText.trim()
+                      onMenuOpenChange(null)
+                      handlers.onSignalAction(
+                        item.link.matterPublicId,
+                        item.link.signalId,
+                        'dismissed',
+                        trimmed.length > 0 ? trimmed : undefined
+                      )
+                    }}
+                    t={t}
+                  />
+                )
+              }
+            ]
+          : (['resolved', 'snoozed', 'dismissed'] as const).map((action) => ({
+              kind: 'action' as const,
+              id: action,
+              label: t(TODAY_SIGNAL_ACTION_LABEL_KEY[action]),
+              // dismiss 的第一次点击只展开理由框（下面 dismissReasonOpen 分支），不立即决策 ——
+              // Popmenu 默认点完就关菜单，`keepOpen` 挡掉这次自动关闭。
+              keepOpen: action === 'dismissed',
+              onSelect: () => {
+                if (action === 'dismissed') {
+                  setDismissReasonOpen(true)
+                  return
+                }
+                onMenuOpenChange(null)
+                handlers.onSignalAction(item.link.matterPublicId, item.link.signalId, action)
+              }
+            }))
 
   const face = (
     <>
@@ -285,6 +315,99 @@ export function TodayItemRow({
           />
         </div>
       )}
+
+      {/* 行内回答框（agent 的反问）。与审批卡同一个展开位、同一条纪律：回答落地后收起
+          并让父层刷新 —— 这一条会在下一次拉取里变成 queued（新一轮 run）。 */}
+      {expanded && item.source === 'dispatch' && isAwaitingAnswer && (
+        <div className="px-3 pb-3 pt-1.5">
+          <DispatchAnswerForm
+            question={item.question}
+            options={item.options}
+            onSubmit={(text) => {
+              handlers.onToggleExpand(null)
+              handlers.onDispatchAnswer(item.link.matterPublicId, item.link.dispatchId, text)
+              handlers.onDecided()
+            }}
+            onCancel={() => handlers.onToggleExpand(null)}
+            t={t}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * agent 反问的回答框 —— 两步式的第二步（第一步是行主动作展开它），交互样式与
+ * `DismissReasonForm` 同源：抬头 + textarea + 返回/确认。
+ *
+ * 🔴 空回答不给提交：服务端 `text` 是 `min_length=1`，点下去只会拿到一个 400。
+ * 备选项（agent 给了才有）是**填充**输入框而不是直接提交 —— 人可以改。
+ */
+function DispatchAnswerForm({
+  question,
+  options,
+  onSubmit,
+  onCancel,
+  t
+}: {
+  question: string | null
+  options: readonly string[]
+  onSubmit(text: string): void
+  onCancel(): void
+  t: TFunction
+}): React.ReactElement {
+  const fieldId = useId()
+  const [text, setText] = useState('')
+  const trimmed = text.trim()
+  return (
+    <div
+      data-testid="today-dispatch-answer"
+      className="space-y-1.5 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2/70 p-2.5"
+    >
+      <label className="block text-meta text-ink-fg-2" htmlFor={fieldId}>
+        {question != null && question.length > 0 ? question : t('today.dispatch.answerLabel')}
+      </label>
+      {options.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {options.map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => setText(option)}
+              className="rounded-full border border-ink-border-soft px-2 py-0.5 text-micro text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      )}
+      <textarea
+        id={fieldId}
+        rows={2}
+        autoFocus
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder={t('today.dispatch.answerPlaceholder')}
+        className="w-full resize-y rounded-md border border-ink-border-soft bg-ink-2 px-2 py-1.5 text-aux text-ink-fg placeholder:text-ink-fg-3 focus:border-ink-border focus:outline-none"
+      />
+      <div className="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="mr-auto rounded-md text-meta text-ink-fg-3 transition-colors duration-fast hover:text-ink-fg-2"
+        >
+          {t('today.dispatch.answerBack')}
+        </button>
+        <button
+          type="button"
+          disabled={trimmed.length === 0}
+          onClick={() => onSubmit(trimmed)}
+          className="inline-flex h-7 items-center justify-center rounded-md bg-[rgb(var(--c-accent))] px-2.5 text-aux font-medium leading-none text-[rgb(var(--c-accent-fg))] transition-opacity duration-fast hover:opacity-90 disabled:opacity-50"
+        >
+          {t('today.dispatch.answerConfirm')}
+        </button>
+      </div>
     </div>
   )
 }
@@ -370,9 +493,16 @@ function RowBody({
           {/* run 的 9 值读态原样透传（RunStateBadge 是穷举 switch + assertNever）——
               `succeeded + paused_handoff` 永远画成「等待审批」而不是「成功完成」。 */}
           {item.source === 'run' && <RunStateBadge state={item.state} />}
+          {/* 派发的执行态同理原样透传（`matterDispatchVocab` 的穷举表）——「等你回答」与
+              「失败」在这里就必须一眼分得开（warn 琥珀 vs critical 红）。 */}
+          {item.source === 'dispatch' && <MatterDispatchStateBadge state={item.state} />}
           {time.length > 0 && <span className="font-mono text-micro text-ink-fg-3">{time}</span>}
         </span>
       </span>
+      {/* 派发行的标题是**行动项**，所以「哪件事」得另占一行（其余源的标题本身就是事项/agent）。 */}
+      {item.source === 'dispatch' && item.matterTitle.length > 0 && (
+        <span className="mt-0.5 truncate text-micro text-ink-fg-3">{item.matterTitle}</span>
+      )}
       {/* triage 说明：一等字段，行上直读。 */}
       {item.triageLogic.length > 0 && (
         <span className="mt-0.5 line-clamp-2 text-meta text-ink-fg-2">{item.triageLogic}</span>

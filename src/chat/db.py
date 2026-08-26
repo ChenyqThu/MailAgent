@@ -1,6 +1,13 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 27）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 28）。
+v28（L4 批次3 行动项执行契约，task 08-25）= ``ai_chat_sessions.item_id`` + ``paused_marker_json``
+两个 additive 列 + 索引 ``idx_chat_sessions_item``。``item_id`` = 这条会话执行的行动项
+（matter_item，跨库无 FK，同 agent_job_id），供「行动项执行历史」反查（本文件
+``list_all_sessions`` 的 ``item_id=`` 过滤参数，带 ``_has_column`` 兼容旧库）；
+``paused_marker_json`` = manual 会话「曾在审批处暂停」的持久 marker（R7），只证明暂停发生过，
+**不含任何 resume 凭据**（审批 stash 仍是 gateway 进程内存，重启后恒不可批 —— marker 只让
+UI 诚实说「已失效」）。两列都只由前端 gateway 写，本文件不写；读走 ``SELECT *`` 自动带回。
 v27（Matters MVP P3，task 08-09）= ``ai_chat_sessions.anchor_type`` 新增 ``'matter'``：
 ``email_id`` 必须 NULL，``anchor_id`` 存 Matter 内部正整数 id；前端 rebuild/swap 扩宽 CHECK。
 v26（harness optimization P5，task 08-07）= ``chat_queued_input`` 队列表与调度索引。
@@ -320,6 +327,7 @@ class ChatDb:
         archived: Optional[bool] = None,
         starred: Optional[bool] = None,
         matter_id: Optional[int] = None,
+        item_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """跨邮件 session 历史（含 first_user_message 预览 + message_count，排除无消息 session）。
         镜像 listAllSessions → ChatSessionSummary[]。
@@ -379,6 +387,14 @@ class ChatDb:
                 return []
             clauses.append("s.anchor_type = 'matter' AND s.anchor_id = ?")
             params.append(matter_id)
+        if item_id is not None:
+            # v28 —「行动项执行历史」：一条行动项名下的全部会话。与 matter_id 分开（一件事的
+            # 会话 ⊋ 某条行动项的会话），且**不**按 origin 过滤 —— 行动项要看的正是 headless
+            # 执行 run。旧库（未跑 v28 迁移）没有这一列 → 返回 []，绝不让 SQL 报错吞成整表。
+            if not self._has_column("ai_chat_sessions", "item_id"):
+                return []
+            clauses.append("s.item_id = ?")
+            params.append(item_id)
         clauses.append("EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)")
         where_clause = " AND ".join(clauses)
         return self._read_all(

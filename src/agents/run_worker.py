@@ -66,7 +66,7 @@ class _GatewayPokeError(Exception):
 
 
 class AgentRunWorker:
-    """agent_run / matter_followup 串行执行主循环（认领 → poke gateway → 写终态）。
+    """agent_run / matter_followup / matter_item_run 串行执行主循环（认领 → poke → 写终态）。
 
     P4 泛化：构造器不再硬依赖 ``ReportStore`` 类型 —— title/timeout 经注入的
     resolver 取（缺省 resolver 复用 store 的既有逻辑，report 路径行为字节级不变）；
@@ -110,6 +110,7 @@ class AgentRunWorker:
         """主循环. 调用方 asyncio.create_task(worker.run())."""
         recovered = self.repo.recover_orphaned_agents()
         self._recover_matter_runs()
+        self._recover_item_dispatches()
         logger.info(
             f"[agent-run-worker] starting poll_interval={self.poll_interval_sec}s "
             f"(failed {recovered} orphaned agent_run job(s))"
@@ -138,6 +139,9 @@ class AgentRunWorker:
         """跑单个 agent_run：set token → poke → 映射终态 → 岛结果通知。**绝不悬挂 running**（全路径写终态）。"""
         if job.job_type == "matter_followup":
             await self._execute_matter(job)
+            return
+        if job.job_type == "matter_item_run":
+            await self._execute_item_dispatch(job)
             return
         job_id = job.job_id
         # perf-sse-realtime R1-5: claim 后即广播 running (matter_followup 不在此发 ——
@@ -195,6 +199,17 @@ class AgentRunWorker:
             self._matter_service().recover_orphaned_runs()
         except Exception as exc:  # noqa: BLE001 — 扫尾失败不阻断 worker 启动
             logger.warning(f"[agent-run-worker] matter orphan sweep failed: {exc}")
+
+    def _recover_item_dispatches(self) -> None:
+        """启动扫尾：failed/aborted 的 matter_item_run job 反查派发行收敛 fail（批次 3）。
+
+        🔴 与 `recover_orphaned_agents` 同一条硬纪律：**绝不 requeue** —— LLM run 非幂等，
+        重放一轮孤儿等于让 agent 把没做完的事按自己的记忆再演一遍。
+        """
+        try:
+            self._matter_service().recover_orphaned_dispatches()
+        except Exception as exc:  # noqa: BLE001 — 扫尾失败不阻断 worker 启动
+            logger.warning(f"[agent-run-worker] item dispatch orphan sweep failed: {exc}")
 
     async def _execute_matter(self, job: "AsyncJob") -> None:
         """matter_followup：便宜比对（noop 短路不 poke）→ started CAS
@@ -276,6 +291,133 @@ class AgentRunWorker:
                 self._publish_matter_failure(
                     run_id, f"E_WORKER_CRASH: {type(exc).__name__}"
                 )
+
+    # ── matter_item_run 分派（Matters 批次 3 —— 一条行动项的派发 run）──────────────
+
+    def _read_dispatch(self, dispatch_id: int) -> Optional[dict]:
+        """派发行只读投影（走 repository —— worker 不需要 service 再包一层读面）。"""
+        svc = self._matter_service()
+        with svc.repository.connect() as conn:
+            return svc.repository.get_dispatch(conn, dispatch_id)
+
+    async def _execute_item_dispatch(self, job: "AsyncJob") -> None:
+        """matter_item_run：认领 CAS → poke→map 链 → 派发行终态。
+
+        与 `_execute_matter` 的三处**有意不同**：
+          ① **没有便宜比对短路** —— 派发是 owner 显式按下的动作，"这轮没什么变化"不是跳过
+             它的理由（跟进 run 是定时自动跑的，那里才需要省 token）；
+          ② 账本在 `matter_item_dispatch` 行上，不写 `matter_run`（两张表各管各的执行史）；
+          ③ 一轮跑完**没交付**（状态仍 running）→ 派发收敛 failed(`no_report`)：run 本身
+             没报错，但这条行动项什么也没等到，那就是失败，不许静默留在 running。
+
+        **绝不悬挂**：任何路径同时收敛 async job 终态 + 派发行终态。
+        """
+        job_id = job.job_id
+        params = job.params or {}
+        dispatch_id = params.get("dispatch_id")
+        try:
+            if not isinstance(dispatch_id, int):
+                self._mark(job_id, "failed", last_error="E_ITEM_DISPATCH_MISSING")
+                return
+            svc = self._matter_service()
+            dispatch = self._read_dispatch(dispatch_id)
+            if dispatch is None or dispatch.get("matter_id") != params.get("matter_id"):
+                self._mark(job_id, "failed", last_error="E_ITEM_DISPATCH_MISSING")
+                return
+            if dispatch.get("ended_at") is not None:
+                # 已被取消 / 已收敛（cancel 竞态窗）→ job 收敛 aborted，不再执行。
+                self._mark(
+                    job_id, "aborted",
+                    result={"outcome": "stopped", "reason": "dispatch_already_terminal"},
+                )
+                return
+            # 认领 CAS（queued → running）。False 的两种病因判据不同：行已终态 = owner 抢在
+            # 前面取消了（job 收 aborted，不该记成失败）；否则是重复认领 / 状态漂移 —— 派发
+            # 与 job 一起收敛 fail，绝不留一个永远不会有人推进的 running。
+            if not svc.mark_dispatch_started(dispatch_id, async_job_id=job_id):
+                current = self._read_dispatch(dispatch_id) or {}
+                if current.get("ended_at") is not None:
+                    self._mark(
+                        job_id, "aborted",
+                        result={"outcome": "stopped", "reason": "dispatch_already_terminal"},
+                    )
+                    return
+                svc.fail_dispatch(dispatch_id, code="E_DISPATCH_CLAIM_FAILED")
+                self._mark(job_id, "failed", last_error="E_DISPATCH_CLAIM_FAILED")
+                return
+            claim_token = secrets.token_urlsafe(32)
+            self.repo.set_claim_token(job_id, claim_token)
+            timeout_s = self._resolve_timeout(job)
+            try:
+                resp = await self._poke_gateway(job_id, claim_token, timeout_s)
+            except _GatewayPokeError as exc:
+                self._finish_item_failure(svc, dispatch_id, job_id, exc.code, resp=None)
+                return
+            self._map_item_response(svc, dispatch_id, job_id, resp)
+        except Exception as exc:  # noqa: BLE001 — 兜底：不留 running/queued 悬挂
+            logger.error(
+                f"[agent-run-worker] item dispatch crash job_id={job_id}: {exc}",
+                exc_info=True,
+            )
+            code = f"E_WORKER_CRASH: {type(exc).__name__}"
+            if isinstance(dispatch_id, int):
+                try:
+                    self._matter_service().fail_dispatch(dispatch_id, code=code)
+                except Exception:  # noqa: BLE001
+                    pass
+            self._mark(job_id, "failed", last_error=code)
+
+    def _finish_item_failure(
+        self, svc, dispatch_id: int, job_id: int, code: str, *, resp: Optional[dict]
+    ) -> None:
+        """run 侧失败 → 派发收敛（**已交付过的不动**）+ job 记 failed。
+
+        🔴 判据是「有没有交付」，与 matter 那条链同旨（0813 dogfood #17）：交付之后 drain 报错
+        收尾，那一轮**有产出**——把它按失败推回去会同时抹掉提案指针和 owner 眼前的那张卡。
+        """
+        current = self._read_dispatch(dispatch_id) or {}
+        if current.get("state") == "running":
+            svc.fail_dispatch(
+                dispatch_id, code=code, message=self._gateway_error_message(resp)
+            )
+        self._mark(job_id, "failed", last_error=code)
+
+    @staticmethod
+    def _gateway_error_message(resp: Optional[dict]) -> Optional[str]:
+        """gateway 透传的人读原因（截头，与 `_matter_error_payload` 同一上限）。"""
+        message = (resp or {}).get("errorMessage")
+        if isinstance(message, str) and message.strip():
+            return message.strip()[:_ERROR_MESSAGE_MAX_CHARS]
+        return None
+
+    def _map_item_response(
+        self, svc, dispatch_id: int, job_id: int, resp: dict
+    ) -> None:
+        """gateway 响应 → 派发行终态 + async job 终态。
+
+        `ok && outcome=='completed'` 是唯一的正常路径，此时派发行的状态由**交付**决定
+        （report 端点已经 CAS 过）：`proposed`/`done`/`awaiting_input` = 这轮有结果；仍
+        `running` = 模型一次 `matter_item_report` 都没调 → `no_report`。
+        其余（error / ok=false / paused_handoff）走失败收敛 —— 含 paused：这个场地不该有
+        审批卡（工具面只读 + 交付工具 guard-free），真停在那儿也没有人能批，如实记失败。
+        """
+        session_id = resp.get("sessionId") if isinstance(resp.get("sessionId"), int) else None
+        if bool(resp.get("ok")) and resp.get("outcome") == "completed":
+            current = self._read_dispatch(dispatch_id) or {}
+            state = str(current.get("state") or "")
+            if state == "running":
+                svc.fail_dispatch(dispatch_id, code="no_report")
+                state = "failed"
+            result = self._result_json(resp)
+            result["itemDispatchState"] = state
+            if current.get("update_id") is not None:
+                result["updateId"] = current["update_id"]
+            if session_id is not None:
+                result["sessionId"] = session_id
+            self._mark(job_id, "succeeded", result=result)
+            return
+        err = str(resp.get("error") or "E_RUN_ERROR")
+        self._finish_item_failure(svc, dispatch_id, job_id, err, resp=resp)
 
     def _publish_matter_failure(self, run_id: int, code: str) -> None:
         """matter_followup **硬失败且无提案** → results/warn 通知（design §7 缺口 ④）。
@@ -864,7 +1006,9 @@ class AgentRunWorker:
     def _default_timeout_resolver(self, job: "AsyncJob") -> float:
         """缺省 timeout resolver：matter_followup → 1800s 常量（profile budget 不咨询，
         D7）；agent_run → report_agent budget（既有行为字节级不变，缺失/坏 budget → 默认）。"""
-        if job.job_type == "matter_followup":
+        if job.job_type in ("matter_followup", "matter_item_run"):
+            # 批次 3 的行动项 run 复用同一个常量（spec 组装侧投的也是它）—— 两个场地都是
+            # 无人值守的 matter venue，没有理由给它们两套预算。
             from src.matters.run_spec import MATTER_FOLLOWUP_MAX_RUN_SECONDS
 
             return float(MATTER_FOLLOWUP_MAX_RUN_SECONDS)

@@ -93,7 +93,9 @@ const CONDITIONAL_HEADLESS_READ_TOOLS = new Set(['agent_catalog_list', 'agent_ca
  *  needs a server-assembled Matter+run anchor to bind it to), so it can never appear in the
  *  manual full-set build. Same shape as CONDITIONAL_HEADLESS_READ_TOOLS: a classified tool whose
  *  registration has an extra CONTEXT condition, given its own builder for the drift guards. */
-const MATTER_RUN_ONLY_TOOLS = new Set(['matter_update_propose'])
+/** L4 批次3 — `matter_item_report` joins for the same reason one venue over: it needs a
+ *  server-assembled Matter+item+dispatch anchor, so no manual/im build can ever contain it. */
+const MATTER_RUN_ONLY_TOOLS = new Set(['matter_update_propose', 'matter_item_report'])
 /** 有意不进 `GATEWAY_TOOL_CLASSES` 的工具（registration 门 + classOfTool 的 fail-closed exec
  *  兜底当两道腰带）。task 08-25 起是**空集** —— 唯一的成员 `matter_suggest_related_resources`
  *  随关键词命中式资料推荐一起退役。留着这个集合是因为它同时是「有没有这种特例」的问句：
@@ -110,6 +112,23 @@ function buildMatterRunTools() {
       allowedTools: [],
       skills: [],
       matterRun: { matterId: 42, publicId: 'MAT-000042', runId: 7 }
+    }
+  })
+}
+
+/** L4 批次3 — the assembly a 行动项 dispatch run gets: the SAME context mode as a follow-up run
+ *  (one venue tier) but a different anchor, which is what mints `matter_item_report` instead of
+ *  `matter_update_propose`. The only assembly that can produce it. */
+function buildItemRunTools() {
+  return buildGatewayTools({
+    domain: mockDomain(() => okEnvelope([])),
+    approvalGuard: new ApprovalGuard(),
+    contextMode: 'matter_followup',
+    agentRunContext: {
+      agentId: 'matter_item:MAT-000042:9',
+      allowedTools: [],
+      skills: [],
+      matterItemRun: { matterId: 42, publicId: 'MAT-000042', itemId: 9, dispatchId: 3 }
     }
   })
 }
@@ -1067,7 +1086,9 @@ describe('drift guards — classification completeness + eval catalog mirror', (
       ...Object.keys(buildAllTools('manual_chat')),
       ...Object.keys(buildGrantedHeadlessCatalogTools()),
       // P4 — the matter-run context is the only assembly that can produce matter_update_propose.
-      ...Object.keys(buildMatterRunTools())
+      ...Object.keys(buildMatterRunTools()),
+      // L4 批次3 — likewise the item-dispatch context for matter_item_report.
+      ...Object.keys(buildItemRunTools())
     ])
     for (const name of Object.keys(GATEWAY_TOOL_CLASSES)) {
       expect(real.has(name), `${name} classified but not a real gateway tool`).toBe(true)

@@ -6,7 +6,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Mapping, Sequence
 
 from .models import (
     MATTER_SEARCH_FIELDS,
@@ -195,6 +195,137 @@ class MatterRepository:
             params,
         ).fetchall()
         return [self._item_row(row) for row in rows]
+
+    # ── 行动项派发（matter_item_dispatch，task 08-25 批次 3）──────────────────────
+    # 🔴 状态推进**只走** `cas_dispatch_state`：条件 UPDATE + rowcount 判据是「不接受
+    # agent 自述」这条安全姿态在数据层的落点。别在别处直接 `UPDATE … SET state=…`。
+
+    def insert_dispatch(self, conn: sqlite3.Connection, values: Mapping[str, Any]) -> int:
+        columns = tuple(values)
+        cursor = conn.execute(
+            f"INSERT INTO matter_item_dispatch ({', '.join(columns)}) "
+            f"VALUES ({', '.join('?' for _ in columns)})",
+            tuple(values[column] for column in columns),
+        )
+        return int(cursor.lastrowid)
+
+    def get_dispatch(
+        self, conn: sqlite3.Connection, dispatch_id: int, *, matter_id: int | None = None
+    ) -> dict[str, Any] | None:
+        sql = "SELECT * FROM matter_item_dispatch WHERE id=?"
+        params: list[Any] = [dispatch_id]
+        if matter_id is not None:
+            sql += " AND matter_id=?"
+            params.append(matter_id)
+        row = conn.execute(sql, params).fetchone()
+        return self._dispatch_row(row) if row else None
+
+    def get_active_dispatch(
+        self, conn: sqlite3.Connection, item_id: int
+    ) -> dict[str, Any] | None:
+        """这条行动项当前那一次未结束的派发（`ended_at IS NULL`），没有则 None。"""
+        row = conn.execute(
+            "SELECT * FROM matter_item_dispatch WHERE item_id=? AND ended_at IS NULL",
+            (item_id,),
+        ).fetchone()
+        return self._dispatch_row(row) if row else None
+
+    def list_dispatches(
+        self,
+        conn: sqlite3.Connection,
+        matter_id: int,
+        *,
+        item_id: int | None = None,
+        active_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        clauses = ["matter_id=?"]
+        params: list[Any] = [matter_id]
+        if item_id is not None:
+            clauses.append("item_id=?")
+            params.append(item_id)
+        if active_only:
+            clauses.append("ended_at IS NULL")
+        rows = conn.execute(
+            f"SELECT * FROM matter_item_dispatch WHERE {' AND '.join(clauses)} "
+            "ORDER BY id DESC",
+            params,
+        ).fetchall()
+        return [self._dispatch_row(row) for row in rows]
+
+    def list_live_item_dispatches(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        states: Sequence[str],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """活跃事项 × 某几个执行态的派发的**跨事项**投影（`/today` 例外面第四源的数据源）。
+
+        存在的理由与 `list_live_matter_updates` 同一条列表性能铁律：例外面要的是「全部
+        活跃事项里等我回答 / 挂掉了的派发」，逐事项取会把一次进入放大成 N + P 次往返。
+
+        「活跃」= `deleted_at IS NULL AND archived_at IS NULL`（归档 / 回收站里的不进面），
+        与列表端点默认子句同口径。同时带出事项标识与行动项标题 —— 例外面一行要说清
+        「哪件事的哪条行动项在等我」，缺一个就得再发一轮请求。
+
+        🔴 **不按 `ended_at IS NULL` 过滤**：`failed` 是终态（写了 ended_at），而它恰恰是
+        例外面最要紧的那一半。过滤只认调用方给的 state 集。
+        🔴 只取每条行动项**最近的那一次**派发：重派之后旧的 failed 行还留在库里（派发史
+        逐行留下是有意的），不加这一条会让同一条行动项在例外面上出现两遍 —— 一遍写着
+        「挂了」、一遍写着「在等你」。
+        """
+        if not states:
+            return []
+        placeholders = ",".join("?" for _ in states)
+        rows = conn.execute(
+            "SELECT d.*, m.public_id AS matter_public_id, m.title AS matter_title, "
+            "i.title AS item_title, i.kind AS item_kind "
+            "FROM matter_item_dispatch d "
+            "JOIN matter m ON m.id = d.matter_id "
+            "JOIN matter_item i ON i.id = d.item_id "
+            f"WHERE d.state IN ({placeholders}) "
+            "AND d.id = (SELECT MAX(x.id) FROM matter_item_dispatch x WHERE x.item_id = d.item_id) "
+            "AND m.deleted_at IS NULL AND m.archived_at IS NULL "
+            "AND i.deleted_at IS NULL "
+            "ORDER BY d.updated_at DESC, d.id DESC LIMIT ?",
+            (*states, limit),
+        ).fetchall()
+        return [self._dispatch_row(row) for row in rows]
+
+    def cas_dispatch_state(
+        self,
+        conn: sqlite3.Connection,
+        dispatch_id: int,
+        *,
+        expect_state: str,
+        changes: Mapping[str, Any],
+    ) -> bool:
+        """`UPDATE … WHERE id=? AND state=?` + rowcount 判据（抄 async_jobs 的 CAS 三式）。
+
+        返回 False = 前置态不符（并发抢跑 / 非法迁移 / 行不存在），调用方一律按拒绝处理，
+        **不要**回读一次再决定 —— 回读与写之间还有窗口，那正是 CAS 要消灭的东西。
+        """
+        assignments = [f"{column}=?" for column in changes]
+        cursor = conn.execute(
+            f"UPDATE matter_item_dispatch SET {', '.join(assignments)} "
+            "WHERE id=? AND state=?",
+            (*changes.values(), dispatch_id, expect_state),
+        )
+        return cursor.rowcount == 1
+
+    def list_orphaned_dispatch_ids(self, conn: sqlite3.Connection) -> list[int]:
+        """job 已 failed/aborted 而派发仍活跃的那些行（孤儿收敛判据，镜像
+        `recover_orphaned_runs`）。async_jobs 与 matter_* 同库，所以能一条 JOIN 查完。"""
+        try:
+            rows = conn.execute(
+                "SELECT d.id FROM matter_item_dispatch d "
+                "JOIN async_jobs j ON j.job_id = d.async_job_id "
+                "WHERE d.ended_at IS NULL AND j.job_type='matter_item_run' "
+                "AND j.status IN ('failed','aborted')"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        return [int(row["id"]) for row in rows]
 
     def insert_progress(
         self, conn: sqlite3.Connection, values: Mapping[str, Any]
@@ -1200,6 +1331,14 @@ class MatterRepository:
         result = dict(row)
         result["checklist"] = cls._json(result.pop("checklist_json"), [])
         result["source_locator"] = cls._json(result.pop("source_locator_json"), None)
+        return result
+
+    @classmethod
+    def _dispatch_row(cls, row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["question"] = cls._json(result.pop("question_json"), None)
+        result["answers"] = cls._json(result.pop("answers_json"), [])
+        result["error"] = cls._json(result.pop("error_json"), None)
         return result
 
     @classmethod

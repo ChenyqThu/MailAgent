@@ -8,6 +8,8 @@ import type {
   MatterNotifyLevel,
   MatterNotifyLevelResponse,
   MatterItem,
+  MatterItemDispatch,
+  MatterItemDispatchListResponse,
   MatterListOptions,
   MatterListResponse,
   MatterMutationOptions,
@@ -267,6 +269,59 @@ export function createMattersApi(baseUrl: string): MattersApi {
         baseUrl,
         'POST',
         `/matters/${segment(matterId)}/items/${segment(itemId)}/restore`,
+        mutationRequest(options)
+      )
+    },
+
+    // ── 行动项执行契约（task 08-25 批次 3）───────────────────────────────────────
+    // 三个写动作**不传** `expectedVersion`：服务端对它们 `require_version=False`（例外面
+    // 只认识派发行、拿不到事项版本号）。传 null 与省略在 wire 上等价，`mutationRequest`
+    // 的默认值已经是 null。
+
+    async listItemDispatches(matterId, options = {}): Promise<MatterItemDispatch[]> {
+      const result = await request<{ items: MatterItemDispatch[] }>(
+        baseUrl,
+        'GET',
+        `/matters/${segment(matterId)}/item-dispatches`,
+        { query: { item_id: options.itemId } }
+      )
+      return result.items
+    },
+
+    listLiveItemDispatches(options = {}): Promise<MatterItemDispatchListResponse> {
+      return request(baseUrl, 'GET', '/matters/item-dispatches', {
+        // `state` 是逗号分隔的执行态；省略 = 服务端默认的「等我回答 / 挂了」两态。
+        // 🔴 不在这里抄一份默认值：抄了就是第二处会漂的词表。
+        query: {
+          state: options.states && options.states.length > 0 ? options.states.join(',') : undefined,
+          limit: options.limit
+        }
+      })
+    },
+
+    dispatchItem(matterId, itemId, input, options = {}): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/items/${segment(itemId)}/dispatch`,
+        mutationRequest(options, input)
+      )
+    },
+
+    answerItemDispatch(matterId, dispatchId, text, options = {}): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/item-dispatches/${segment(dispatchId)}/answer`,
+        mutationRequest(options, { text })
+      )
+    },
+
+    cancelItemDispatch(matterId, dispatchId, options = {}): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/item-dispatches/${segment(dispatchId)}/cancel`,
         mutationRequest(options)
       )
     },

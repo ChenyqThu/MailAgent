@@ -76,6 +76,13 @@ import type { ToolSet } from 'ai'
  *  matrix row is the first. Asserted in trusted code by POST /api/ai/agent-run when the
  *  SERVER-assembled spec carries runKind==='matter_followup' (agentRun.ts deriveContextMode),
  *  never from a request body.
+ *  🔴 L4 批次3 (task 08-25) — runKind==='matter_item_run' (一条行动项的派发 run) asserts THIS
+ *  SAME mode rather than minting a seventh one: the venue posture is identical (unattended, no
+ *  write class, propose-only, connector ceiling pinned 'read' server-side), so a separate mode
+ *  would duplicate the row and split the owner's per-venue policy rules in two. The only
+ *  difference is WHICH artifact name is admitted, and that is already a by-name decision
+ *  (MATTER_RUN_ARTIFACT_TOOLS). The two runs stay apart structurally through their anchors:
+ *  each output tool registers only under its own (tools/index.ts).
  *
  *  'contact_governance' (Contact Directory WP7): the SIXTH venue — the nightly contact-directory
  *  governance scan (读邮件与通讯录 → 提建议, never 直写). It is deliberately NOT cron_headless:
@@ -206,6 +213,13 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // discardable artifact. It is the ONE class the matter_followup row admits besides 'read', and
   // it only ever REGISTERS inside a matter-run context (tools/index.ts).
   matter_update_propose: 'artifact',
+  // L4 批次3 (task 08-25) — an ITEM-dispatch run's ONLY output channel. Same artifact shape and
+  // same reasoning as matter_update_propose: it writes either a PENDING proposal or a question
+  // onto the dispatch row, never the Matter's own state (even the autonomous profile commits
+  // through the ordinary accept kernel, server-side). It registers ONLY inside an item-run
+  // context (tools/index.ts), and the matter_followup row admits it BY NAME
+  // (MATTER_RUN_ARTIFACT_TOOLS) — never by class.
+  matter_item_report: 'artifact',
   // Contact Directory WP7 — the governance scan's ONLY output channel: each writes a PENDING
   // `contact_suggestion` row (status='pending'), never the contact's own fields. Same artifact
   // shape as matter_update_propose (silent, no guard, no card): the owner's later adopt/ignore on
@@ -570,6 +584,21 @@ export interface AgentRunContext {
     publicId: string
     runId: number
   }
+  /** L4 批次3 (task 08-25) — the ITEM DISPATCH this run executes, built by agentRunContextFromSpec
+   *  from the SERVER-assembled spec's `matterItem` key (never a body). Present ONLY for a
+   *  `matter_item_run` spec; every other context omits it, so every pre-批次3 assembly is
+   *  byte-identical. Two consumers, both structural: (a) it is the registration condition + the
+   *  server-stamped identity of `matter_item_report` (the model passes no matter / item /
+   *  dispatch id — the schema has none), and (b) it selects wrapCfgForAgentRun's item read-face
+   *  belt. 🔴 NOT a policy input (the matrix row keys on the MODE), and deliberately a SECOND
+   *  input beside the derived mode, so a broken deriveContextMode cannot take both belts down at
+   *  once. Frozen into the approval stash with the rest of the context. */
+  matterItemRun?: {
+    matterId: number
+    publicId: string
+    itemId: number
+    dispatchId: number
+  }
   /** 0812 dogfood — the owner-configured web tier of THIS follow-up run, resolved ONCE by
    *  runHeadlessAgent (owner_settings `matter_run_web_face` via the lifecycle's TTL-cached hot
    *  read) and consumed ONLY by wrapCfgForAgentRun's matter belt (matterRunAdmitsWeb). It rides
@@ -633,6 +662,25 @@ export interface ImVenueSwitches {
  *  cycle through types.ts. */
 export const MATTER_RUN_PROPOSE_TOOL = 'matter_update_propose'
 
+/** L4 批次3 (task 08-25) — the item-dispatch run's delivery channel. Same by-name discipline and
+ *  the same zero-dependency-root reason as MATTER_RUN_PROPOSE_TOOL. 🔴 Hand-copied from Python
+ *  (`src/api/routers/matter_agent.py`'s endpoint + the tool factory in tools/matters.ts, whose
+ *  GATEWAY_MATTER_ITEM_RUN_TOOL_NAMES the catalog extractor scans); matters.test.ts pins the two
+ *  spellings equal. */
+export const MATTER_ITEM_REPORT_TOOL = 'matter_item_report'
+
+/** The artifact NAMES the matter_followup row admits. Two, because the row serves BOTH unattended
+ *  matter venues — the follow-up run (matter_update_propose) and the item-dispatch run
+ *  (matter_item_report), which share this venue tier: toolless-by-class, propose-only, no owner
+ *  in the room. Whole-class admission stays forbidden (report_write is a LOCAL WRITE sharing the
+ *  class — that was the 0812 hole). Cross-venue leakage is not a concern here: each tool only
+ *  ever REGISTERS under its own server-assembled anchor (tools/index.ts), so a follow-up run has
+ *  no item_report to admit and vice versa. */
+export const MATTER_RUN_ARTIFACT_TOOLS: ReadonlySet<string> = new Set([
+  MATTER_RUN_PROPOSE_TOOL,
+  MATTER_ITEM_REPORT_TOOL
+])
+
 /** Contact Directory WP7 — the THREE artifact NAMES the contact_governance row admits. Same
  *  by-name discipline as MATTER_RUN_PROPOSE_TOOL and for the same reason: the artifact class also
  *  holds report_write (a local Reports write) and matter_update_propose (another domain's proposal
@@ -693,7 +741,8 @@ export function isToolClassAllowedInMode(
   // even under a tampered write/update ceiling).
   if (mode === 'matter_followup') {
     if (toolClass === 'read') return true
-    if (toolClass === 'artifact') return toolName === MATTER_RUN_PROPOSE_TOOL
+    if (toolClass === 'artifact')
+      return toolName !== undefined && MATTER_RUN_ARTIFACT_TOOLS.has(toolName)
     if (toolClass === 'web') return grants?.web === 'gated' || grants?.web === 'open'
     return false
   }

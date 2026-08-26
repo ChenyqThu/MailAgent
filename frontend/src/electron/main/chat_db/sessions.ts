@@ -5,7 +5,8 @@ import type {
   ChatSession,
   ChatSessionOriginFilter,
   ChatSessionSummary,
-  OpenSessionInput
+  OpenSessionInput,
+  PausedApprovalMarker
 } from '@shared/chat_model'
 
 // ── sessions ────────────────────────────────────────────────────────────
@@ -228,6 +229,10 @@ export function createNewSession(input: OpenSessionInput): ChatSession {
  * omitting it reproduces the pre-P4 INSERT byte-for-byte, and CHAT_DB v27's CHECK already admits
  * matter+agent, so no migration is involved. A non-positive/non-integer id is rejected rather than
  * written as a dangling anchor (mirrors resolveAnchor's matter branch above).
+ *
+ * L4 批次3 (CHAT_DB v28) — an optional `itemId` additionally stamps the matter_item (行动项) the run
+ * executes, so a 行动项 can list every session under it (listSessionsForItem). Independent of the
+ * anchor triple (an item run still anchors on its Matter); omitting it keeps the INSERT unchanged.
  */
 export function createAgentSession(input: {
   agentId: string
@@ -240,6 +245,7 @@ export function createAgentSession(input: {
   parentToolCallId?: string | null
   invokedBy?: 'user' | 'main_agent' | null
   anchor?: { type: 'matter'; id: number }
+  itemId?: number | null
 }): number {
   const db = getChatDb()
   const now = Date.now()
@@ -249,6 +255,10 @@ export function createAgentSession(input: {
       `createAgentSession: anchor.type='matter' requires a positive integer id, got ${String(matterId)}`
     )
   }
+  const itemId = input.itemId
+  if (itemId != null && (!Number.isInteger(itemId) || itemId <= 0)) {
+    throw new Error(`createAgentSession: itemId must be a positive integer, got ${String(itemId)}`)
+  }
   const anchorType = input.anchor ? 'matter' : 'general'
   const anchorId = input.anchor ? (matterId as number) : null
   const result = db
@@ -256,8 +266,9 @@ export function createAgentSession(input: {
       `INSERT INTO ai_chat_sessions
         (email_id, anchor_type, anchor_id, backend_kind, backend_model,
          backend_agent_page_id, title, created_at, updated_at, origin, agent_id, agent_job_id,
-         trigger_id, trigger_kind, trigger_fired_at, parent_session_id, parent_tool_call_id, invoked_by)
-       VALUES (NULL, ?, ?, 'ai-sdk', NULL, NULL, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?)`
+         trigger_id, trigger_kind, trigger_fired_at, parent_session_id, parent_tool_call_id, invoked_by,
+         item_id)
+       VALUES (NULL, ?, ?, 'ai-sdk', NULL, NULL, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       anchorType,
@@ -272,7 +283,8 @@ export function createAgentSession(input: {
       input.triggerFiredAt ?? null,
       input.parentSessionId ?? null,
       input.parentToolCallId ?? null,
-      input.invokedBy ?? null
+      input.invokedBy ?? null,
+      itemId ?? null
     )
   return Number(result.lastInsertRowid)
 }
@@ -334,6 +346,16 @@ export function listSessionsForMatter(matterId: number): ChatSession[] {
       "SELECT * FROM ai_chat_sessions WHERE anchor_type = 'matter' AND anchor_id = ? AND COALESCE(origin, 'interactive') <> 'agent' ORDER BY updated_at DESC"
     )
     .all(matterId) as ChatSession[]
+}
+
+/** L4 批次3 (CHAT_DB v28) — every session under one 行动项 (matter_item), newest-first. Unlike
+ *  listSessionsForMatter this deliberately does NOT filter origin='agent': the whole point of the
+ *  item_id column is that a 行动项 shows its EXECUTION history (headless runs), and an interactive
+ *  session stamped with an item_id belongs there too. Reads the index idx_chat_sessions_item. */
+export function listSessionsForItem(itemId: number): ChatSession[] {
+  return getChatDb()
+    .prepare('SELECT * FROM ai_chat_sessions WHERE item_id = ? ORDER BY created_at DESC, id DESC')
+    .all(itemId) as ChatSession[]
 }
 
 /** P2c — list general (context-free) sessions, newest-first. The per-email
@@ -437,6 +459,19 @@ export function updateSessionPinned(sessionId: number, pinned: boolean): void {
   getChatDb()
     .prepare('UPDATE ai_chat_sessions SET pinned_at = ? WHERE id = ?')
     .run(pinned ? Date.now() : null, sessionId)
+}
+
+/** L4 批次3 R7 (CHAT_DB v28) — write (or clear with `null`) the session's「曾在审批处暂停」marker.
+ *  Keep-latest: a re-pause overwrites, a settled/newly-started run clears. Like updateSessionTitle /
+ *  updateSessionArchived it deliberately does NOT bump updated_at — the marker is derived run state,
+ *  and bumping would reorder history and fake unread. Safe on a missing id (UPDATE matches 0 rows). */
+export function updateSessionPausedMarker(
+  sessionId: number,
+  marker: PausedApprovalMarker | null
+): void {
+  getChatDb()
+    .prepare('UPDATE ai_chat_sessions SET paused_marker_json = ? WHERE id = ?')
+    .run(marker === null ? null : JSON.stringify(marker), sessionId)
 }
 
 /** custom-agent epic W3 — star is a durable icon state only; it never reorders or regroups. */

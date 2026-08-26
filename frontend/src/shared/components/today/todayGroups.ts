@@ -18,6 +18,8 @@ import type { AgentRunHistoryItem, AgentRunState } from '@shared/api/types'
 import type {
   MatterAttentionSeverity,
   MatterAttentionSignal,
+  MatterItemDispatch,
+  MatterItemDispatchState,
   MatterPendingUpdatesEntry
 } from '@shared/api/types/matter'
 
@@ -28,7 +30,7 @@ export type Translate = (key: string, options?: Record<string, unknown>) => stri
 export const TODAY_GROUP_IDS = ['waiting', 'inProgress', 'expired', 'attention', 'recent'] as const
 export type TodayGroupId = (typeof TODAY_GROUP_IDS)[number]
 
-export type TodayItemSource = 'run' | 'proposal' | 'signal'
+export type TodayItemSource = 'run' | 'proposal' | 'signal' | 'dispatch'
 export type TodaySeverity = MatterAttentionSeverity
 
 interface TodayItemBase {
@@ -61,7 +63,28 @@ export interface TodaySignalItem extends TodayItemBase {
   link: { matterPublicId: string; signalId: number }
 }
 
-export type TodayItem = TodayRunItem | TodayProposalItem | TodaySignalItem
+/**
+ * 一次行动项派发（L4 批次 3）。`state` 是**服务端 CAS 推进**的执行态，前端与 run 那条
+ * 同一条纪律：只透传、永不自行推导。
+ *
+ * 进面的只有两态（分组表在 `dispatchGroupOf`）：`awaiting_input`（agent 在等你回答）与
+ * `failed`（这一轮挂了）。`proposed` **有意不进面** —— 它已经由提案那条源覆盖，纳入会让
+ * 同一件事出现两遍（同 `needs_review` 信号在提案在场时被去重的取向）。
+ */
+export interface TodayDispatchItem extends TodayItemBase {
+  source: 'dispatch'
+  state: MatterItemDispatchState
+  /** 回答 / 取消都是 per-matter 的 REST 动作，所以三个标识缺一不可。 */
+  link: { matterPublicId: string; itemId: number; dispatchId: number }
+  /** 所属事项的标题 —— `title` 已经被行动项占了，而「哪件事」是这一行必须说清的另一半。 */
+  matterTitle: string
+  /** agent 的反问原文（`awaiting_input` 才有）—— 行内回答框的抬头。 */
+  question: string | null
+  /** 反问自带的备选项（agent 给了才有）。 */
+  options: string[]
+}
+
+export type TodayItem = TodayRunItem | TodayProposalItem | TodaySignalItem | TodayDispatchItem
 
 export interface TodayGroup {
   id: TodayGroupId
@@ -86,19 +109,12 @@ function severityRank(severity: TodaySeverity | undefined): number {
   return severity === undefined ? 0 : SEVERITY_RANK[severity]
 }
 
-function assertNever(x: never): never {
-  throw new Error(`unhandled AgentRunState: ${String(x)}`)
+function assertNever(x: never, what: string): never {
+  throw new Error(`unhandled ${what}: ${JSON.stringify(x)}`)
 }
 
-/**
- * 一条行归哪个组。`null` = 不进例外面（例：24h 之外的终态 run）。
- *
- * 🔴 matter 跟进 run **不在这张表里**：它没有全局 list 端点，而且失败已由 `run_failed`
- * 信号覆盖、产出已由提案覆盖 —— 直接纳入只会让同一件事出现两遍（`warn` 那档还会被误
- * 归失败，0813 dogfood #17）。
- */
-export function todayGroupOf(item: TodayItem, nowMs: number): TodayGroupId | null {
-  if (item.source !== 'run') return 'waiting'
+/** run 的 9 值读态 → 组。switch 无 default，漏一个值 tsc 当场红。 */
+function runGroupOf(item: TodayRunItem, nowMs: number): TodayGroupId | null {
   const state: AgentRunState = item.state
   switch (state) {
     case 'paused_pending':
@@ -116,7 +132,55 @@ export function todayGroupOf(item: TodayItem, nowMs: number): TodayGroupId | nul
     case 'paused_rejected':
       return nowMs - item.at <= TODAY_RECENT_WINDOW_MS ? 'recent' : null
   }
-  return assertNever(state)
+  return assertNever(state, 'AgentRunState')
+}
+
+/**
+ * 派发的 7 值执行态 → 组。
+ *
+ * `queued` / `running` 不进面：例外面是**例外**，「agent 正在跑」不是例外（要看进度去事项
+ * 详情，那里有 live badge）。`proposed` 也不进面 —— 那条提案已经由提案源渲染了一行，
+ * 再出一行就是同一件事出现两遍（与 `needs_review` 信号在提案在场时被去重同一条取向）。
+ * `done` / `canceled` 是终局，没有下一步动作。
+ */
+function dispatchGroupOf(state: MatterItemDispatchState): TodayGroupId | null {
+  switch (state) {
+    case 'awaiting_input':
+      return 'waiting'
+    case 'failed':
+      return 'attention'
+    case 'queued':
+    case 'running':
+    case 'proposed':
+    case 'done':
+    case 'canceled':
+      return null
+  }
+  return assertNever(state, 'MatterItemDispatchState')
+}
+
+/**
+ * 一条行归哪个组。`null` = 不进例外面（例：24h 之外的终态 run、还在跑的派发）。
+ *
+ * 🔴 **按 `source` 穷举**（批次 3 补上的闸）：批次 2 这里是 `if (item.source !== 'run')
+ * return 'waiting'`，于是新加一条源会静默落进「等我处理」—— 一个不报错的错误。现在
+ * switch 无 default，加 source 而不给它定组，tsc 当场红。
+ *
+ * 🔴 matter 跟进 run **不在这张表里**：它没有全局 list 端点，而且失败已由 `run_failed`
+ * 信号覆盖、产出已由提案覆盖 —— 直接纳入只会让同一件事出现两遍（`warn` 那档还会被误
+ * 归失败，0813 dogfood #17）。
+ */
+export function todayGroupOf(item: TodayItem, nowMs: number): TodayGroupId | null {
+  switch (item.source) {
+    case 'run':
+      return runGroupOf(item, nowMs)
+    case 'proposal':
+    case 'signal':
+      return 'waiting'
+    case 'dispatch':
+      return dispatchGroupOf(item.state)
+  }
+  return assertNever(item, 'TodayItemSource')
 }
 
 /** 组内排序。「等我处理」按 severity 降序 + 等龄降序（等得最久的在前）；其余组按发生
@@ -279,19 +343,72 @@ function buildSignalItems(
   return items
 }
 
+/** 派发的 triage 说明：等我回答 → 反问原文；挂了 → 错误码/原因一句话。
+ *  两者都拿不到时返空串（调用方按缺席渲染，不编一句话填上）。 */
+function dispatchTriageLogic(dispatch: MatterItemDispatch, ctx: TodayBuildContext): string {
+  if (dispatch.state === 'awaiting_input') {
+    const question = dispatch.question?.question ?? ''
+    return question.length > 0 ? question : ctx.t('today.triage.dispatchAsked')
+  }
+  // error 是服务端写的 `{code, message?}`（`fail_dispatch`）—— message 更像人话，优先它。
+  const error = dispatch.error ?? {}
+  const message = typeof error.message === 'string' ? error.message : ''
+  if (message.length > 0) return message
+  const code = typeof error.code === 'string' ? error.code : ''
+  return code.length > 0 ? ctx.t('today.triage.dispatchFailed', { code }) : ''
+}
+
+function buildDispatchItems(
+  dispatches: readonly MatterItemDispatch[],
+  ctx: TodayBuildContext
+): TodayDispatchItem[] {
+  const items: TodayDispatchItem[] = []
+  for (const dispatch of dispatches) {
+    const publicId = dispatch.matter_public_id
+    // 跨事项读面才带 `matter_public_id`（逐事项那条不带）。拿不到 = 这一行的回答 / 取消
+    // 都点不动（两个端点都是 per-matter 的）—— 渲染一条按了没反应的行比不渲染更糟。
+    if (publicId == null || publicId.length === 0) continue
+    // `awaiting_since` 才是「等了多久」的起点；挂了那条用终止时刻。都缺席时回落 updated_at。
+    const at =
+      dispatch.state === 'awaiting_input'
+        ? (dispatch.awaiting_since ?? dispatch.updated_at)
+        : (dispatch.ended_at ?? dispatch.updated_at)
+    items.push({
+      id: `dispatch:${dispatch.id}`,
+      source: 'dispatch',
+      state: dispatch.state,
+      // 标题 = 那条行动项（这一行要处理的东西）；事项名另占一格（`matterTitle`）。
+      title: dispatch.item_title ?? dispatch.matter_title ?? publicId,
+      matterTitle: dispatch.matter_title ?? publicId,
+      triageLogic: dispatchTriageLogic(dispatch, ctx),
+      at: epochToMs(at),
+      // 「等人」与「挂了」都记 warn（与 run 的 paused_pending / failed 同口径）：两者的
+      // **区分**靠组（waiting vs attention）与行内文案，不靠 severity 分档。
+      severity: 'warn',
+      link: { matterPublicId: publicId, itemId: dispatch.item_id, dispatchId: dispatch.id },
+      question: dispatch.question?.question ?? null,
+      options: dispatch.question?.options ?? []
+    })
+  }
+  return items
+}
+
 export interface TodaySourceData {
   runs: readonly AgentRunHistoryItem[]
   proposals: readonly MatterPendingUpdatesEntry[]
   signals: readonly MatterAttentionSignal[]
+  /** L4 批次 3 第四源。缺席 = 事项总闸关着 / 还没落地。 */
+  dispatches?: readonly MatterItemDispatch[]
 }
 
-/** 三条源 → 一份统一行列表（未分组）。分组交给 `groupTodayItems`。 */
+/** 四条源 → 一份统一行列表（未分组）。分组交给 `groupTodayItems`。 */
 export function buildTodayItems(data: TodaySourceData, ctx: TodayBuildContext): TodayItem[] {
   const proposals = buildProposalItems(data.proposals, ctx)
   const mattersWithProposal = new Set(proposals.map((item) => item.link.matterPublicId))
   return [
     ...buildRunItems(data.runs, ctx),
     ...proposals,
-    ...buildSignalItems(data.signals, mattersWithProposal, ctx)
+    ...buildSignalItems(data.signals, mattersWithProposal, ctx),
+    ...buildDispatchItems(data.dispatches ?? [], ctx)
   ]
 }

@@ -39,6 +39,7 @@ import {
   MATTER_TAG_DEFAULT_COLOR,
   MATTER_TAG_DEFAULT_SHAPE
 } from '@shared/api/types/matter'
+import type { ReportAgentConfig } from '@shared/api/types'
 import type {
   Matter,
   MatterAttentionSignal,
@@ -46,6 +47,8 @@ import type {
   MatterHealth,
   MatterItem,
   MatterItemCreateInput,
+  MatterItemDispatch,
+  MatterItemExecProfile,
   MatterItemKind,
   MatterItemStatus,
   MatterPatchInput,
@@ -130,11 +133,13 @@ import {
   useMatterAgentProfiles,
   useMatterAttention,
   useMatterFlags,
+  useMatterItemDispatches,
   useMatterPendingUpdates,
   useMatterRuns,
   useMattersApi,
   useStartMatterRun
 } from './hooks'
+import { MatterItemDispatchBlock } from './MatterItemDispatchBlock'
 
 interface MatterDetailProps {
   matterId: string
@@ -249,6 +254,9 @@ export function MatterDetail({
   const updatesQuery = useMatterPendingUpdates(matterId, matterAgentEnabled)
   const startRun = useStartMatterRun(matterId)
   const profilesQuery = useMatterAgentProfiles(matterAgentEnabled)
+  // L4 批次 3 —— 本事项名下的全部行动项派发（一次请求，行内按 item_id 切片）。
+  // 逐行各拉一次 = 一屏行动项就是一屏请求。
+  const dispatchesQuery = useMatterItemDispatches(matterId, matterAgentEnabled)
   const matterAttentionQuery = useMatterAttention(matterId)
   const navigationIndex = useMemo(
     () => navigationMatterIds.indexOf(matterId),
@@ -532,6 +540,23 @@ export function MatterDetail({
         matterId,
         item.id,
         { status, completed_at: status === 'done' ? Date.now() : null },
+        { expectedVersion: matter.version }
+      )
+    },
+    onSuccess: () => void refresh(),
+    onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
+  })
+
+  // L4 批次 3 —— 行动项的**执行档**（`exec_profile`）走既有 item PATCH 面，不新开端点：
+  // 派发时服务端从 item 冻结这一档，所以改的是「以后派出去按哪档结算」。
+  const setItemProfile = useMatterMutation({
+    matterId,
+    mutationFn: ({ item, profile }: { item: MatterItem; profile: MatterItemExecProfile }) => {
+      if (!matter) return Promise.reject(new Error('Matter is not loaded'))
+      return api.patchItem(
+        matterId,
+        item.id,
+        { exec_profile: profile },
         { expectedVersion: matter.version }
       )
     },
@@ -1167,6 +1192,14 @@ export function MatterDetail({
                   resources={resourceItems}
                   now={now}
                   locale={i18n.language || 'zh-CN'}
+                  matterId={matterId}
+                  // 执行契约整块挂事项 Agent 闸：派发就是跑一轮 headless run，
+                  // agent 关着的时候画一个派发入口 = 派出去永远不动。
+                  dispatchEnabled={matterAgentEnabled}
+                  dispatches={dispatchesQuery.data ?? EMPTY_DISPATCHES}
+                  agentProfiles={profilesQuery.data ?? EMPTY_AGENT_PROFILES}
+                  onSetItemProfile={(item, profile) => setItemProfile.mutate({ item, profile })}
+                  onReviewUpdate={setReviewId}
                   busy={renameItem.isPending || removeItem.isPending || updateItem.isPending}
                   onToggle={(item) =>
                     updateItem.mutate({ item, status: item.status === 'done' ? 'open' : 'done' })
@@ -2464,6 +2497,21 @@ interface ItemRowCallbacks {
   onOpenResource(item: MatterResourceListItem): void
 }
 
+/** L4 批次 3 —— 执行契约那一块要往下传的东西，独立成一组免得两层各抄六个参数。 */
+interface ItemDispatchProps {
+  matterId: string
+  dispatchEnabled: boolean
+  /** 本事项的全部派发（newest-first）。行内按 `item_id` 切片。 */
+  dispatches: readonly MatterItemDispatch[]
+  agentProfiles: readonly ReportAgentConfig[]
+  onSetItemProfile(item: MatterItem, profile: MatterItemExecProfile): void
+  onReviewUpdate(updateId: number): void
+}
+
+/** 模块级常量 = 引用稳定：`?? []` 每次 render 新建数组，会让下游 memo 全部失效。 */
+const EMPTY_DISPATCHES: readonly MatterItemDispatch[] = []
+const EMPTY_AGENT_PROFILES: readonly ReportAgentConfig[] = []
+
 function ItemGroups({
   items,
   stakeholders,
@@ -2475,7 +2523,8 @@ function ItemGroups({
   onAdd,
   onRename,
   onDelete,
-  onOpenResource
+  onOpenResource,
+  ...dispatchProps
 }: {
   items: readonly MatterItem[]
   stakeholders: readonly MatterStakeholder[]
@@ -2484,7 +2533,8 @@ function ItemGroups({
   locale: string
   busy: boolean
   onAdd(kind: MatterItemKind): void
-} & ItemRowCallbacks): React.ReactElement {
+} & ItemRowCallbacks &
+  ItemDispatchProps): React.ReactElement {
   const { t } = useTranslation()
   const activeItems = items.filter((item) => item.deleted_at === null)
   const groups = MATTER_ITEM_KINDS.map((kind) => ({
@@ -2545,6 +2595,7 @@ function ItemGroups({
           onRename={onRename}
           onDelete={onDelete}
           onOpenResource={onOpenResource}
+          {...dispatchProps}
         />
       ))}
     </section>
@@ -2563,7 +2614,13 @@ function ItemGroup({
   onAdd,
   onRename,
   onDelete,
-  onOpenResource
+  onOpenResource,
+  matterId,
+  dispatchEnabled,
+  dispatches,
+  agentProfiles,
+  onSetItemProfile,
+  onReviewUpdate
 }: {
   kind: MatterItemKind
   items: readonly MatterItem[]
@@ -2573,8 +2630,19 @@ function ItemGroup({
   locale: string
   busy: boolean
   onAdd(kind: MatterItemKind): void
-} & ItemRowCallbacks): React.ReactElement {
+} & ItemRowCallbacks &
+  ItemDispatchProps): React.ReactElement {
   const { t } = useTranslation()
+  // 一次 O(n) 分桶：行内 `dispatches.filter(...)` 是 O(行数 × 派发数)。
+  const dispatchesByItem = useMemo(() => {
+    const byItem = new Map<number, MatterItemDispatch[]>()
+    for (const dispatch of dispatches) {
+      const bucket = byItem.get(dispatch.item_id)
+      if (bucket) bucket.push(dispatch)
+      else byItem.set(dispatch.item_id, [dispatch])
+    }
+    return byItem
+  }, [dispatches])
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [editingId, setEditingId] = useState<number | null>(null)
   const [titleDraft, setTitleDraft] = useState('')
@@ -2820,6 +2888,22 @@ function ItemGroup({
                           </li>
                         ))}
                       </ul>
+                    ) : null}
+                    {/* 执行契约只挂行动项 —— 其余五种 kind 结构上就没有状态机（服务端表级
+                        CHECK 同判）。派发史为空且档关着时整块不渲染，行的样子一个像素不变。 */}
+                    {item.kind === 'action' &&
+                    (dispatchEnabled || (dispatchesByItem.get(item.id)?.length ?? 0) > 0) ? (
+                      <MatterItemDispatchBlock
+                        matterId={matterId}
+                        item={item}
+                        dispatches={dispatchesByItem.get(item.id) ?? EMPTY_DISPATCHES}
+                        agents={agentProfiles}
+                        now={now}
+                        locale={locale}
+                        busy={busy}
+                        onProfileChange={(profile) => onSetItemProfile(item, profile)}
+                        onReview={onReviewUpdate}
+                      />
                     ) : null}
                   </div>
                 </div>

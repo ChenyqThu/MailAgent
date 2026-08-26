@@ -219,6 +219,83 @@ describe('makePersistOnFinish approval-pause routing', () => {
   })
 })
 
+// ── L4 批次3 R7 — the durable「曾暂停」marker (ai_chat.db v28 paused_marker_json) ─────────────
+//
+// 为什么要有它：stash 是 gateway 进程内存，重启即丢；manual 会话没有 run 读态，重启后连「这里曾经
+// 等过你」都看不出来（agent-run 会话有 derive_agent_run_state 兜着）。marker 只补这个信号，**不含
+// 任何 resume 凭据** —— 所以本组只钉「写/清」的时机，不钉「能不能批」（重启后恒不可批）。
+
+const APPROVAL_PART_WITH_ID = {
+  ...APPROVAL_PART,
+  approval: { id: 'ap_1' }
+}
+
+describe('makePersistOnFinish — paused marker (R7)', () => {
+  test('paused turn → marker written with the approval identity', async () => {
+    const markers: Array<[number, unknown]> = []
+    const cfg = {
+      persistTurn: () => {},
+      setSessionPausedMarker: (sessionId: number, marker: unknown) => {
+        markers.push([sessionId, marker])
+      }
+    } as unknown as AiGatewayConfig
+    const onFinish = makePersistOnFinish(cfg, fakeRun(7))
+    await onFinish({
+      responseMessage: msg('a1', [TEXT_PART, APPROVAL_PART_WITH_ID]),
+      isAborted: false
+    } as never)
+    expect(markers).toHaveLength(1)
+    expect(markers[0][0]).toBe(7)
+    expect(markers[0][1]).toMatchObject({
+      toolCallId: 't1',
+      approvalId: 'ap_1',
+      toolName: 'email_prepare_send',
+      // 🔴 from the runtime connector registry, never the model's args (a non-connector tool = false).
+      destructive: false
+    })
+  })
+
+  test('completed turn → marker CLEARED (the session is no longer 等人)', async () => {
+    const markers: Array<[number, unknown]> = []
+    const cfg = {
+      persistTurn: () => {},
+      setSessionPausedMarker: (sessionId: number, marker: unknown) => {
+        markers.push([sessionId, marker])
+      }
+    } as unknown as AiGatewayConfig
+    const onFinish = makePersistOnFinish(cfg, fakeRun(7))
+    await onFinish({ responseMessage: msg('a1', [TEXT_PART]), isAborted: false } as never)
+    expect(markers).toEqual([[7, null]])
+  })
+
+  test('a marker write that throws never breaks the paused turn', async () => {
+    const cfg = {
+      persistTurn: () => {},
+      setSessionPausedMarker: () => {
+        throw new Error('intentional marker failure')
+      }
+    } as unknown as AiGatewayConfig
+    const onFinish = makePersistOnFinish(cfg, fakeRun(7))
+    await expect(
+      onFinish({
+        responseMessage: msg('a1', [TEXT_PART, APPROVAL_PART_WITH_ID]),
+        isAborted: false
+      } as never)
+    ).resolves.toBeUndefined()
+  })
+
+  test('hook omitted → no marker anywhere (byte-identical to pre-R7)', async () => {
+    const cfg = { persistTurn: () => {} } as unknown as AiGatewayConfig
+    const onFinish = makePersistOnFinish(cfg, fakeRun(7))
+    await expect(
+      onFinish({
+        responseMessage: msg('a1', [TEXT_PART, APPROVAL_PART_WITH_ID]),
+        isAborted: false
+      } as never)
+    ).resolves.toBeUndefined()
+  })
+})
+
 // ── ③ upsert contract (pure sim of lifecycle + findAssistantMessageRowIdByUiId) ──
 
 describe('paused→resume upsert produces exactly one assistant row', () => {

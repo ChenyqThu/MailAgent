@@ -50,6 +50,50 @@ class MatterItemStatus(StrEnum):
     CANCELED = "canceled"
 
 
+class MatterItemDispatchState(StrEnum):
+    """行动项派发（`matter_item_dispatch` 行）的**执行契约**状态（task 08-25 批次 3）。
+
+    🔴 与 `MatterItemStatus` 是两回事，有意不合成一列：后者是**业务语义标签**（owner 看的
+    「待办 / 进行中 / 等人 / 已完成」，可宽松、可回跳），前者是**执行态**，只能由服务端 CAS
+    推进、不接受 agent 自述。合成一列的教训写在调研档案 07 §8b：agent 忘改状态 = 那件事
+    静默永久卡死，而没有任何人看得出来。
+
+    🔴 终态判据不是这里的值，而是行上的 `ended_at IS NOT NULL`（done / failed / canceled
+    三态写它）。partial unique 只拦活跃行 ⇒ 终态之后同一条行动项可以再派，历史逐行留下。
+    """
+
+    #: 已派发、等 worker 认领。
+    QUEUED = "queued"
+    #: worker 已认领，headless run 进行中。
+    RUNNING = "running"
+    #: run 以「缺信息」收尾，问题落在行上等 owner 回答（**不是** mid-run 暂停 —— 审批 stash
+    #: 是 gateway 进程内存，重启即丢；「等人」必须是持久态）。
+    AWAITING_INPUT = "awaiting_input"
+    #: 交付已落成提案（`matter_update`），等 owner 评审。
+    PROPOSED = "proposed"
+    #: 提案被采纳（autonomous 档自动采纳同样落这里）。
+    DONE = "done"
+    #: run 失败 / 未交付 / 孤儿收敛。
+    FAILED = "failed"
+    #: owner 主动取消，或提案被驳回。
+    CANCELED = "canceled"
+
+
+class MatterItemExecProfile(StrEnum):
+    """per-**行动项**的执行档（不是 per-agent —— 同一个 agent 在不同行动项可以不同档）。
+
+    出厂默认 `propose_only`：交付恒落提案，owner 采纳才动数据。
+
+    🔴 `edit_with_approval` 在词表里但**不上 UI**（v1）：提案制引擎里它与 `propose_only`
+    行为暂无差异，摆出来就是一个假选项。词表留着是因为它是跨批契约（B4 动态审批分级要用），
+    真上 UI 的那一批负责让它有真实差异。
+    """
+
+    PROPOSE_ONLY = "propose_only"
+    EDIT_WITH_APPROVAL = "edit_with_approval"
+    AUTONOMOUS = "autonomous"
+
+
 class MatterStakeholderTier(StrEnum):
     """干系人在**这件事**里的重要度（v60）。
 
@@ -248,6 +292,19 @@ MATTER_HEALTH_VALUES = _values(MatterHealth)
 MATTER_PRIORITIES = _values(MatterPriority)
 MATTER_ITEM_KINDS = _values(MatterItemKind)
 MATTER_ITEM_STATUSES = _values(MatterItemStatus)
+MATTER_ITEM_DISPATCH_STATES = _values(MatterItemDispatchState)
+MATTER_ITEM_EXEC_PROFILES = _values(MatterItemExecProfile)
+#: 派发行的执行器类别。现在只有 agent；`user`（人执行器）是 R6 的 schema 语义预留，
+#: **流程不做**（认领 / 转派 / 接单都不在本批），所以词表里也先不放 —— 放了就是一个
+#: 结构上写得进、业务上没人处理的值。加它的那一批同时接流程。
+MATTER_ITEM_EXECUTOR_AGENT = "agent"
+MATTER_ITEM_EXECUTOR_KINDS = (MATTER_ITEM_EXECUTOR_AGENT,)
+#: 不指定执行器时派给谁 = 内建跟进 Agent（`report_agent` 表里没有这一行，它是内建身份）。
+MATTER_ITEM_BUILTIN_EXECUTOR = "matter_followup"
+MATTER_ITEM_DISPATCH_DEFAULT_PROFILE = MatterItemExecProfile.PROPOSE_ONLY
+#: owner 回答反问的长度护栏。与 `MATTER_PROGRESS_BODY_MAX_CHARS` 同量级 —— 回答要能把
+#: 一件事说清楚（贴一段邮件原文很常见），但不该变成无界输入。
+MATTER_ITEM_DISPATCH_ANSWER_MAX_CHARS = 4000
 MATTER_PROGRESS_KINDS = _values(MatterProgressKind)
 #: 进展主句 / 正文的长度护栏。主句与 item 标题同量级（一句话）；正文比 item 描述宽一档 ——
 #: 它承载的是「发生了什么」的完整叙述，被截断的进展等于把脉络讲一半。

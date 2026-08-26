@@ -27,6 +27,8 @@ from src.kos.client import KOSError  # kos-call 端点 KOSError→502 测试用
 # S6 W2 — mirror chat_db.ts v19: origin/agent_id/agent_job_id (list_all_sessions now
 # SELECTs them so the record view can composer-lock agent sessions); without these the
 # SELECT would OperationalError and _read_all would swallow it to [] (silent empty list).
+# L4 批次3 — mirror chat_db.ts v28: item_id（行动项执行历史反查）。db.py 的 item 过滤带
+# _has_column 守卫，fixture 少这一列时 itemId 查询恒返 [] —— 测试会「绿得像没这功能」。
 _AI_CHAT_DDL = """
 CREATE TABLE ai_chat_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,6 +51,7 @@ CREATE TABLE ai_chat_sessions (
     last_read_at INTEGER,
     pinned_at INTEGER,
     starred INTEGER NOT NULL DEFAULT 0,
+    item_id INTEGER,
     CHECK (
         (anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
         OR
@@ -247,6 +250,78 @@ def test_list_all_sessions_projects_matter_identity(
     assert by_id[777]["matter_public_id"] == "MAT-0042"
     assert by_id[777]["matter_title"] == "Vendor launch"
     assert by_id[SESSION_ID]["matter_public_id"] is None
+
+
+def _seed_item_sessions(ai_chat_db: Path) -> None:
+    """一条行动项（item_id=88）名下两场会话 + 一场属于别的行动项的会话。
+
+    881 = headless 执行 run（``origin='agent'``，行动项执行历史要看的正是它）；
+    882 = 交互会话（也盖了 item_id）；883 = 另一条行动项的执行 run。
+    """
+    now = int(time.time() * 1000)
+    conn = sqlite3.connect(str(ai_chat_db))
+    rows = (
+        (881, "agent", "matter_item_run", "9001", 88),
+        (882, None, None, None, 88),
+        (883, "agent", "matter_item_run", "9003", 99),
+    )
+    for sid, origin, agent_id, job_id, item_id in rows:
+        conn.execute(
+            "INSERT INTO ai_chat_sessions (id, email_id, anchor_type, anchor_id, backend_kind, "
+            "created_at, updated_at, origin, agent_id, agent_job_id, item_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (sid, None, "general", None, "ai-sdk", now, now, origin, agent_id, job_id, item_id),
+        )
+        conn.execute(
+            "INSERT INTO ai_chat_messages (session_id, role, content, status, created_at, "
+            "updated_at) VALUES (?,?,?,?,?,?)",
+            (sid, "user", f"run {sid}", "complete", now, now),
+        )
+    conn.commit()
+    conn.close()
+
+
+def test_list_all_sessions_by_item_includes_agent_origin(
+    chat_client: TestClient, ai_chat_db: Path
+) -> None:
+    """``?itemId=`` 只出这条行动项的会话，且 **headless 执行 run 必须在里面**。
+
+    🔴 后半句是这条测试的全部意义：``origin`` 的旧缺省 'interactive' 会把 ``origin='agent'``
+    的执行 run 全过滤掉 —— 端点 200、行动项的执行历史恒空。
+    """
+    _seed_item_sessions(ai_chat_db)
+    r = chat_client.get("/api/chat/sessions/all", params={"itemId": 88})
+    assert r.status_code == 200
+    rows = r.json()["data"]
+    assert sorted(row["id"] for row in rows) == [881, 882]
+    assert {row["item_id"] for row in rows} == {88}
+    by_id = {row["id"]: row for row in rows}
+    assert by_id[881]["origin"] == "agent"
+    assert by_id[881]["agent_job_id"] == "9001"
+
+
+def test_list_all_sessions_by_item_honours_explicit_origin(
+    chat_client: TestClient, ai_chat_db: Path
+) -> None:
+    """缺省只在调用方没传 origin 时生效：显式传了就以它为准（这里只要交互会话）。"""
+    _seed_item_sessions(ai_chat_db)
+    rows = (
+        chat_client.get(
+            "/api/chat/sessions/all", params={"itemId": 88, "origin": "interactive"}
+        )
+        .json()["data"]
+    )
+    assert [row["id"] for row in rows] == [882]
+
+
+def test_list_all_sessions_without_item_still_excludes_agent_rows(
+    chat_client: TestClient, ai_chat_db: Path
+) -> None:
+    """不带 itemId 的查询字节级不变：缺省仍是 'interactive'（执行 run 不混进主历史）。"""
+    _seed_item_sessions(ai_chat_db)
+    ids = [row["id"] for row in chat_client.get("/api/chat/sessions/all").json()["data"]]
+    assert 881 not in ids and 883 not in ids
+    assert 882 in ids and SESSION_ID in ids
 
 
 def _seed_matter_session(

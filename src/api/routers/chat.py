@@ -186,7 +186,7 @@ def _matter_meta_for_sessions(
 async def list_all_sessions(
     request: Request,
     include_archived: bool = Query(False),
-    origin: Literal["interactive", "agent", "im", "all"] = Query("interactive"),
+    origin: Optional[Literal["interactive", "agent", "im", "all"]] = Query(None),
     agent_id: Optional[str] = Query(None, alias="agentId"),
     agent_job_id: Optional[str] = Query(None, alias="agentJobId"),
     trigger_id: Optional[str] = Query(None, alias="triggerId"),
@@ -196,17 +196,25 @@ async def list_all_sessions(
     archived: Optional[bool] = Query(None),
     starred: Optional[bool] = Query(None),
     matter_id: Optional[int] = Query(None, alias="matterId", ge=1),
+    item_id: Optional[int] = Query(None, alias="itemId", ge=1),
     limit: int = Query(300, ge=1, le=300),
 ):
     """跨邮件 session 历史（含 first_user_message 预览 + message_count + join email
     subject/sender）。镜像 chat:listAllSessions → ChatSessionListItem[]。
-    include_archived=true 时含归档会话（用于归档分组视图）。"""
+    include_archived=true 时含归档会话（用于归档分组视图）。
+
+    ``itemId``（L4 批次3，ai_chat.db v28）= 一条行动项名下的全部会话（执行历史反查）。"""
+    # 🔴 ``origin`` 的缺省按查询对象分流，而不是恒 'interactive'：行动项要看的**正是** headless
+    # 执行 run（``origin='agent'``），沿用旧缺省会把它们全过滤掉 —— 端点 200、列表恒空，
+    # 「查不到」与「没有」又混成一个值。缺省只在**调用方没传**时生效（其余查询字节级不变；
+    # 带 itemId 时也允许显式传 origin，例如只看交互会话）。
+    effective_origin = origin or ("all" if item_id is not None else "interactive")
     summaries = get_chat_db().list_all_sessions(
-        limit=limit, include_archived=include_archived, origin=origin,
+        limit=limit, include_archived=include_archived, origin=effective_origin,
         agent_id=_session_scope(request, agent_id), agent_job_id=agent_job_id,
         trigger_id=trigger_id, trigger_kind=trigger_kind,
         created_after=created_after, created_before=created_before,
-        archived=archived, starred=starred, matter_id=matter_id,
+        archived=archived, starred=starred, matter_id=matter_id, item_id=item_id,
     )
     _project_session_runs(summaries, get_settings().sync_store_db_path)
     # codex review NIT — general sessions have email_id=None; exclude them so the

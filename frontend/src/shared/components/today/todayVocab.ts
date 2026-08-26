@@ -3,6 +3,7 @@ import {
   Bot,
   CheckCheck,
   CircleDashed,
+  ListChecks,
   ShieldAlert,
   SquarePen,
   TimerOff,
@@ -55,11 +56,12 @@ export const TODAY_GROUP_TONE: Record<TodayGroupId, TodayTone> = {
   recent: 'ok'
 }
 
-/** 行图标按**源**走（这一条是 agent 跑的、是提案、还是信号）。 */
+/** 行图标按**源**走（这一条是 agent 跑的、是提案、是信号，还是一次行动项派发）。 */
 export const TODAY_SOURCE_ICONS: Record<TodayItemSource, LucideIcon> = {
   run: Bot,
   proposal: SquarePen,
-  signal: AlertTriangle
+  signal: AlertTriangle,
+  dispatch: ListChecks
 }
 
 /**

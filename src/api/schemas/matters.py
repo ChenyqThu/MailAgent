@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.matters.models import (
+    MATTER_ITEM_DISPATCH_ANSWER_MAX_CHARS,
     MATTER_PROGRESS_BODY_MAX_CHARS,
     MATTER_PROGRESS_MAX_REFS,
     MATTER_PROGRESS_TITLE_MAX_CHARS,
@@ -113,6 +114,8 @@ class MatterItemCreateRequest(StrictModel):
     due_at: int | None = None
     completed_at: int | None = None
     checklist: list[dict[str, Any]] = Field(default_factory=list)
+    #: per-行动项执行档（v71）。只有 kind='action' 能设，值域由 service 单判。
+    exec_profile: str | None = None
     source_resource_id: int | None = None
     source_locator: dict[str, Any] | None = None
     mutation: MutationEnvelope
@@ -131,8 +134,30 @@ class MatterItemPatchRequest(StrictModel):
     due_at: int | None = None
     completed_at: int | None = None
     checklist: list[dict[str, Any]] | None = None
+    exec_profile: str | None = None
     source_resource_id: int | None = None
     source_locator: dict[str, Any] | None = None
+    mutation: MutationEnvelope
+
+
+class MatterItemDispatchRequest(StrictModel):
+    """把一条行动项派给执行器（task 08-25 批次 3）。
+
+    两个字段都可缺省：`executor_id` 缺省 = 内建跟进 Agent；`profile` 缺省 = 取 item 的
+    `exec_profile`，仍缺省 = 出厂档 `propose_only`。
+    🔴 值域（执行器存不存在 / 启没启用、执行档词表）由 service 单判 —— 在 DTO 里再抄一份
+    枚举就是又一份会漂的手抄清单（PATCH 白名单那个 bug 的病根）。
+    """
+
+    executor_id: str | None = Field(default=None, max_length=128)
+    profile: str | None = None
+    mutation: MutationEnvelope
+
+
+class MatterItemDispatchAnswerRequest(StrictModel):
+    """owner 回答 agent 的反问。回答后开新一轮 run（不是唤醒旧 run，见 service 注释）。"""
+
+    text: str = Field(min_length=1, max_length=MATTER_ITEM_DISPATCH_ANSWER_MAX_CHARS)
     mutation: MutationEnvelope
 
 
@@ -394,3 +419,26 @@ class MatterProposalRequest(StrictModel):
     changes: list[MatterProposalChange] = Field(default_factory=list, max_length=20)
     open_questions: list[str] | None = Field(default=None, max_length=5)
     confidence: float | None = Field(default=None, ge=0, le=1)
+
+
+class MatterItemReportQuestion(StrictModel):
+    """行动项 run 的反问载荷（`needs_input`）。
+
+    选项是可选的：能列清楚就列（owner 一键选），列不清楚就只问一句话。
+    """
+
+    question: str = Field(min_length=1, max_length=MATTER_ITEM_DISPATCH_ANSWER_MAX_CHARS)
+    options: list[str] = Field(default_factory=list, max_length=8)
+
+
+class MatterItemReportRequest(StrictModel):
+    """`matter_item_report` 工具入参原样（task 08-25 批次 3）。
+
+    锚字段（matter / dispatch）全在 path，模型结构性传不进来（extra=forbid）。
+    🔴 「changes/summary 与 needs_input 二选一且必居其一」**不在这里判**：分支约束一律下沉
+    `run_service.report_item_dispatch`（D11 —— schema 顶层分支两次把整条工具链打瘫的前科）。
+    """
+
+    summary: str | None = Field(default=None, max_length=2000)
+    changes: list[MatterProposalChange] = Field(default_factory=list, max_length=20)
+    needs_input: MatterItemReportQuestion | None = None
