@@ -44,6 +44,7 @@ import {
   GLASS_KNOB_RANGE,
   GLASS_KNOB_VARS
 } from '@shared/state/appearance'
+import { MAX_TABS_MAX, MAX_TABS_MIN, useTabWorkspace } from '@shared/state/tab-workspace'
 import { SUPPORTED_LOCALES, type Locale } from '@shared/i18n'
 import { cn } from '@shared/lib/cn'
 import { Slider } from '@shared/components/ui/slider'
@@ -501,6 +502,8 @@ export function GeneralTab(): React.ReactElement {
   const setBodyLineHeight = useAppearance((s) => s.setBodyLineHeight)
   const composeLineHeight = useAppearance((s) => s.composeLineHeight)
   const setComposeLineHeight = useAppearance((s) => s.setComposeLineHeight)
+  const maxTabs = useTabWorkspace((s) => s.maxTabs)
+  const setMaxTabs = useTabWorkspace((s) => s.setMaxTabs)
 
   const currentLocale: Locale = (SUPPORTED_LOCALES as readonly string[]).includes(i18n.language)
     ? (i18n.language as Locale)
@@ -560,7 +563,7 @@ export function GeneralTab(): React.ReactElement {
         eyebrow="GENERAL"
         title={t('settings.appearance', { defaultValue: '外观' })}
         description={t('settings.general.page.intro', {
-          defaultValue: '控制强调色、主题、语言与界面材质。所有偏好仅保存在本机。'
+          defaultValue: '控制强调色、主题、语言、界面材质与标签工作区。所有偏好仅保存在本机。'
         })}
       />
 
@@ -862,7 +865,37 @@ export function GeneralTab(): React.ReactElement {
         </p>
       </section>
 
-      {/* ── 6. Diagnostics — 诊断包导出 (E4 §4.2; 仅 Electron 环境, 远程 web 不渲染) ── */}
+      {/* ── 6. 标签工作区 — 右侧详情区能同时开几个邮件 / 事项标签 (08-27 P2)。
+          与上面几块一样是「只存本机的界面偏好」，控件沿用同一枚 Stepper。上限只影响
+          下一次新开标签（store 的 setMaxTabs 有意不追溯关闭已开的）。 */}
+      <section className="mb-[var(--settings-block-gap,1.75rem)]">
+        <BlockHeader
+          title={t('settings.general.tabWorkspace.title', { defaultValue: '标签工作区' })}
+          meta={t('settings.general.tabWorkspace.meta', {
+            min: MAX_TABS_MIN,
+            max: MAX_TABS_MAX,
+            defaultValue: `${MAX_TABS_MIN}-${MAX_TABS_MAX}`
+          })}
+        />
+        <div className="tile rounded-[var(--r-card)] border border-ink-border-soft">
+          <Stepper
+            label={t('settings.general.tabWorkspace.limit.label', { defaultValue: '标签上限' })}
+            meta={t('settings.general.tabWorkspace.limit.meta', {
+              defaultValue: '右侧最多同时开几个邮件 / 事项标签'
+            })}
+            display={String(maxTabs)}
+            onDec={() => setMaxTabs(maxTabs - 1)}
+            onInc={() => setMaxTabs(maxTabs + 1)}
+            canDec={maxTabs > MAX_TABS_MIN}
+            canInc={maxTabs < MAX_TABS_MAX}
+          />
+        </div>
+        <p className="text-meta text-ink-fg-2 mt-2.5 leading-relaxed">
+          {t('settings.general.tabWorkspace.note', { defaultValue: '' })}
+        </p>
+      </section>
+
+      {/* ── 7. Diagnostics — 诊断包导出 (E4 §4.2; 仅 Electron 环境, 远程 web 不渲染) ── */}
       {canExportDiagnostics ? (
         <section className="mb-[var(--settings-block-gap,1.75rem)]">
           <BlockHeader title={t('settings.general.diagnostics.title', { defaultValue: '诊断' })} />

@@ -475,7 +475,11 @@
       "settings": "Open settings",
       "shortcutHelp": "Show keyboard help",
       "composeNew": "Compose new email",
-      "generalAgent": "Open General Agent",
+      "generalAgent": "Open Chats and start a new session",
+      "tabClose": "Close current tab",
+      "tabReopen": "Reopen last closed tab",
+      "tabCycle": "Cycle through tabs",
+      "tabJump": "Jump to tab N (⌘1 = main tab)",
       "nextEmail": "Next email",
       "prevEmail": "Previous email",
       "reply": "AI draft reply",
@@ -2855,7 +2859,7 @@
     "accentHint": "6 swatches · drives the primary CTA + chip color",
     "general": {
       "page": {
-        "intro": "Accent, theme, language and glass material. Preferences stay local.",
+        "intro": "Accent, theme, language, glass material and the tab workspace. Preferences stay local.",
         "eyebrow": "GENERAL",
         "title": "General"
       },
@@ -2883,6 +2887,15 @@
         "meta": "2 styles",
         "frostedMeta": "Frosted · one sheet of glass: OS-level blur + tint. Mood & tuning below.",
         "solidMeta": "Solid · opaque, zero blur & glow. Best perf, matches prefers-reduced-transparency."
+      },
+      "tabWorkspace": {
+        "title": "Tab workspace",
+        "meta": "{min}-{max}",
+        "limit": {
+          "label": "Tab limit",
+          "meta": "How many email / matter tabs can stay open at once"
+        },
+        "note": "Opening one more past the limit closes the least recently viewed tab and tells you which one. Tabs with a draft in progress, or that you have chatted with in the AI drawer, are never closed automatically. Lowering the limit does not close anything retroactively — it applies the next time you open a tab."
       },
       "bodyText": {
         "title": "Body text",
@@ -6949,6 +6962,17 @@
       "answerPlaceholder": "Give it the piece it is missing",
       "answerConfirm": "Answer",
       "answerBack": "Back"
+    }
+  },
+  "tabs": {
+    "untitled": "Untitled",
+    "strip": "Workspace tabs",
+    "close": "Close tab (⌘W)",
+    "locked": "Unfinished work here — won't be auto-closed",
+    "toast": {
+      "evictedOne": "Tab limit reached — closed “{title}”",
+      "evictedMany": "Tab limit reached — closed {count} tabs, starting with “{title}”",
+      "full": "Every tab is in use (draft in progress or chatted) — close one first"
     }
   }
 }

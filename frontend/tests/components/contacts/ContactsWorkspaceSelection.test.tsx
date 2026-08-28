@@ -118,6 +118,7 @@ vi.mock('@shared/components/contacts/ContactAgentDrawer', () => ({
 import i18n from '@shared/i18n'
 import { ContactsWorkspace } from '@shared/components/contacts/ContactsWorkspace'
 import { useContactNavigation } from '@shared/components/contacts/navigation'
+import { MAIN_SLOT, useTabWorkspace } from '@shared/state/tab-workspace'
 
 await i18n.changeLanguage('zh-CN')
 
@@ -185,6 +186,48 @@ describe('ContactsWorkspace · 冷启动选中', () => {
     })
     renderWorkspace()
     await waitFor(() => expect(selectedId()).toBe('102'))
+  })
+})
+
+describe('ContactsWorkspace · 主标签面包屑', () => {
+  // 主标签文本是「通讯录 / {选中的人}」（design §三）。第二段由承载页自己写，
+  // 写入口是 useMainBreadcrumb（守卫语义另有专测 tests/shared/mainBreadcrumb.test.tsx）。
+  beforeEach(() => {
+    useTabWorkspace.setState({
+      tabs: [],
+      active: MAIN_SLOT,
+      mainPage: 'contacts',
+      mainBreadcrumb: null,
+      maxTabs: 8
+    })
+  })
+
+  function crumb(): string | null {
+    return useTabWorkspace.getState().mainBreadcrumb
+  }
+
+  test('选中一个人 → 第二段是那个人的名字', async () => {
+    visitStore.value = { id: 103, view: 'known' }
+    renderWorkspace()
+    await waitFor(() => expect(crumb()).toBe('王五'))
+  })
+
+  test('冷启动退化到第一条时第二段跟着落到第一条', async () => {
+    renderWorkspace()
+    await waitFor(() => expect(crumb()).toBe('张三'))
+  })
+
+  test('承载还不是通讯录（路由收敛尚未落地）→ 不写；落地后补上', async () => {
+    useTabWorkspace.setState({ mainPage: 'today' })
+    visitStore.value = { id: 103, view: 'known' }
+    renderWorkspace()
+    await waitFor(() => expect(selectedId()).toBe('103'))
+    expect(crumb()).toBeNull()
+
+    act(() => {
+      useTabWorkspace.getState().setMainPage('contacts')
+    })
+    await waitFor(() => expect(crumb()).toBe('王五'))
   })
 })
 

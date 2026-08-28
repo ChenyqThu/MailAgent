@@ -36,7 +36,9 @@ export function useEmailKeyboardNav(orderedIds: ReadonlyArray<number>): void {
 
       if (next !== null && next !== current) {
         evt.preventDefault()
-        useActiveEmail.getState().setActive(next)
+        // 08-27 标签工作区：J/K 在当前激活的邮件标签里**原位换目标**（replaceActiveTab），
+        // 连按十次 J 不能开十个标签。锁定 / 已开在他处的分支由 store 兜住。
+        useActiveEmail.getState().setActive(next, { mode: 'replace' })
       }
     }
 

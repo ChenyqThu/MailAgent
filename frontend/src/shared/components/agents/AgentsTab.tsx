@@ -26,6 +26,7 @@ import {
 } from './hooks'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
 import { errorMessage } from '@shared/lib/ipcErrors'
+import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
 import { useRestartStore } from '@shared/state/restart'
 import { toastError } from '@shared/state/toast'
 import {
@@ -1315,6 +1316,23 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   const contactProfileAgent = contactProfileAgents[0] ?? null
   // 通讯录治理只有一行（后端播种）；抽屉编辑它。
   const contactGovernanceAgent = contactGovernanceAgents[0] ?? null
+  // 主标签第二段 = 当前那位智能体（design §三）。这一页还是卡片网格，「当前」只在配置
+  // 抽屉打开时存在（八个抽屉里恰有一个开着）；都关着 = 在看整片团队 ⇒ 单段。
+  // P4 把团队页重做成「清单 + 配置整页」后，这里换成清单的选中项。
+  const openAgent =
+    configAgent ??
+    searchConfigAgent ??
+    customConfigAgent ??
+    (preprocessOpen ? preprocessAgent : null) ??
+    (projectProgressOpen ? projectProgressAgent : null) ??
+    (contactProfileOpen ? contactProfileAgent : null) ??
+    (contactGovernanceOpen ? contactGovernanceAgent : null)
+  useMainBreadcrumb(
+    'agents',
+    // 主 Agent 没有 report_agent 配置行（它是默认助手），用卡片同一条文案。
+    openAgent?.title ?? (mainAssistantOpen ? t('agents.mainAgent.title') : null)
+  )
+
   // drawer 任一打开 → 锁列表滚动。
   const anyDrawerOpen =
     configAgent !== null ||

@@ -654,7 +654,10 @@ export function useEmailListRows(): UseEmailListRowsReturn {
     (activeId === null || !orderedIds.includes(activeId)) &&
     activeId !== firstId
   ) {
-    queueMicrotask(() => setActive(firstId))
+    // 08-27 标签工作区：自动续选走 replace（不是每次 reset 都开一个新标签）。恢复的
+    // 激活标签靠 navTarget 豁免（active-email 冷启动把恢复目标同步进 navTargetId），
+    // 不会走到这里被 replace 掉。
+    queueMicrotask(() => setActive(firstId, { mode: 'replace' }))
   }
 
   // Publish the live order so EmailDetail can wire the toolbar prev/next

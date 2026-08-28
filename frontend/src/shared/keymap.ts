@@ -54,6 +54,32 @@ export interface ShortcutDef {
   wired: boolean
 }
 
+// ── 标签工作区的 spec 常量（task 08-27-l4-tab-workspace P2）─────────────────
+//
+// 这几条不是「一个 spec 一行 catalog」：⌘1-9 是九个 spec 合成一行，⌃⇥ / ⌃⇧⇥ 是一对。
+// 常量导出后 GlobalShortcuts 直接消费同一份，catalog 的 `spec` 也由它们拼出来 ——
+// 「spec 与调用点 lockstep」就不再靠人眼盯两处（改这里，两侧一起动）。
+// 多 spec 合成一行时用**空格分隔**，与 calendar 的 `'g d'` / `'left right'` 同写法。
+
+export const TAB_CLOSE_SPEC = 'cmd+w'
+export const TAB_REOPEN_SPEC = 'shift+cmd+t'
+export const TAB_CYCLE_NEXT_SPEC = 'ctrl+tab'
+export const TAB_CYCLE_PREV_SPEC = 'ctrl+shift+tab'
+
+/** ⌘1-9 位置直达：**⌘1 = 主标签**，⌘2-9 = 对象标签按标签条顺序的第 1-8 个。
+ *  数组序 = 位置序，GlobalShortcuts 按下标注册。 */
+export const TAB_JUMP_SPECS: ReadonlyArray<string> = [
+  'cmd+1',
+  'cmd+2',
+  'cmd+3',
+  'cmd+4',
+  'cmd+5',
+  'cmd+6',
+  'cmd+7',
+  'cmd+8',
+  'cmd+9'
+]
+
 /** Ordered by DESIGN.md §9.5 — keep in sync. Scope ordering used by the
  *  help modal to group rows under section headers. */
 export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
@@ -94,14 +120,52 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     wired: true
   },
   {
-    // P3 — ⌘O opens the General Agent dialog: a context-free Custom AI
-    // conversation not tied to any email (GlobalShortcuts useShortcut('cmd+o',
-    // toggleGeneral)). Toggle semantics mirror ⌘K.
+    // ⌘O — 切到对话页（/sessions）**并新建一个会话**（08-27 标签工作区批：原语义
+    // 只是导航过去，接着上一次的会话）。目标 entry 在 registry（`shortcutId` 引用
+    // 本条），新建会话由 GlobalShortcuts 经 ai-chat-panel 的一次性请求投给
+    // AgentViewLayout。🔴 它**不开对象标签** —— 对话是主标签的八种承载之一。
     id: 'generalAgent',
     spec: 'cmd+o',
     display: '⌘O',
     scope: 'global',
     labelKey: 'shortcutHelp.binding.generalAgent',
+    wired: true
+  },
+  // ── 标签工作区（08-27 P2）— 注册在 GlobalShortcuts，spec 取上面的常量 ──────
+  {
+    // 🔴 主标签激活时 ⌘W **消费掉但不做事**：macOS windowMenu 的 close role 也绑
+    // ⌘W，不消费就变成「按一下关掉整个窗口」。同一条 preventDefault 覆盖菜单
+    // 加速键的先例见 useCalendarShortcuts 的 ⌘R（viewMenu reload role）。
+    id: 'tabClose',
+    spec: TAB_CLOSE_SPEC,
+    display: '⌘W',
+    scope: 'global',
+    labelKey: 'shortcutHelp.binding.tabClose',
+    wired: true
+  },
+  {
+    id: 'tabReopen',
+    spec: TAB_REOPEN_SPEC,
+    display: '⇧⌘T',
+    scope: 'global',
+    labelKey: 'shortcutHelp.binding.tabReopen',
+    wired: true
+  },
+  {
+    // 一行两个 spec：⌃⇥ 往后 / ⌃⇧⇥ 往前。循环序 = 主标签 → 对象标签数组序 → 回主标签。
+    id: 'tabCycle',
+    spec: `${TAB_CYCLE_NEXT_SPEC} ${TAB_CYCLE_PREV_SPEC}`,
+    display: '⌃⇥ / ⌃⇧⇥',
+    scope: 'global',
+    labelKey: 'shortcutHelp.binding.tabCycle',
+    wired: true
+  },
+  {
+    id: 'tabJump',
+    spec: TAB_JUMP_SPECS.join(' '),
+    display: '⌘1-9',
+    scope: 'global',
+    labelKey: 'shortcutHelp.binding.tabJump',
     wired: true
   },
   // ── Inbox ─────────────────────────────────────────────────────────────
@@ -185,7 +249,8 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
   },
   // 2026-08 筛选菜单重做 — 三条最常用筛选轴的直达键 (EmailListHeader 注册)。
   // 菜单关着也生效; 都是 ⌘-modified 故在输入框里也不被 short-circuit 掉,
-  // 与 ⌘K 同一档 macOS 惯例。⌘O 已被 generalAgent 占用, 不同 chord 不冲突。
+  // 与 ⌘K 同一档 macOS 惯例。裸 ⌘O 已被 generalAgent（对话页 + 新建会话）占用,
+  // 这三条都带第二个修饰键, 不同 chord 不冲突。
   {
     id: 'filterUnread',
     spec: 'shift+cmd+o',

@@ -193,11 +193,19 @@
   --glass-base: color-mix(in oklab, var(--glass-lift), var(--A) var(--glass-accent-mix));
 
   /* 分层 overlay — 面板深浅差异的唯一来源 (整窗均匀) */
-  --tier-bar: rgb(255 255 255 / 0.04); /* titlebar / statusbar */
+  /* 08-27 标签工作区: bar 0.04→0.02 对齐标签条原型 (StatusBar 已退役, 唯一消费者
+   * = 顶栏标签条; 压暗一档换取激活标签面与条底的对比, 见 --tab-strip-surface)。 */
+  --tier-bar: rgb(255 255 255 / 0.02); /* titlebar (顶栏标签条) */
   --tier-side: transparent; /* sidebar — 最透 */
   --tier-list: rgb(255 255 255 / 0.03); /* 列表 */
   --tier-detail: rgb(255 255 255 / 0.065); /* 详情 — 阅读面, 最亮 */
   --tier-panel: rgb(255 255 255 / 0.045); /* AI 面板 */
+  /* 08-27 标签工作区 — 激活标签滑动面。推导: 滑动面叠在 --tier-bar 上, 合成色
+   * 必须等于下方内容面 --tier-detail (「激活标签与内容区连成一片」的全部依据):
+   *   1-(1-bar)(1-s) = detail  ⇒  s = (detail-bar)/(1-bar)
+   * 暗: (0.065-0.02)/(1-0.02) = 0.046。🔴 改 bar/detail 任一值必须重算这里
+   * (亮档与 vib-off/solid 的同名覆盖见各自 block)。 */
+  --tab-strip-surface: rgb(255 255 255 / 0.046);
 
   /* 无 vibrancy 平台 (data-vib=off / web) 的内置回退壁纸 — 单光源, 与
    * ambient 同向, accent 派生换色自动跟; 本身是平滑渐变, 零 blur。 */
@@ -384,6 +392,8 @@
   --tier-list: rgb(255 255 255 / 0.32);
   --tier-detail: rgb(255 255 255 / 0.62);
   --tier-panel: rgb(255 255 255 / 0.44);
+  /* 激活标签滑动面 (推导见暗档同名 token): (0.62-0.38)/(1-0.38) = 0.387。 */
+  --tab-strip-surface: rgb(255 255 255 / 0.387);
 
   --wp-fallback:
     radial-gradient(
@@ -995,6 +1005,17 @@ body::before {
 :root[data-vib='off'][data-theme='light'] .glass-3 {
   background-color: rgb(255 255 255 / 0.66);
 }
+/* 标签滑动面在回退路径同步重算 (上两条覆盖改了内容面 detail 的实际值, 「滑动面
+ * 叠在 bar 上 = 内容面」的等式要重解, 推导见 :root 的 --tab-strip-surface):
+ * 暗: 目标 = color-mix(白/0.065, ink-0/0.18) ≈ rgb(78 79 82 / 0.1225), 解
+ *     「S over 白/0.02 = 目标」 ⇒ S ≈ rgb(48 49 52 / 0.105)。
+ * 亮: (0.66-0.38)/(1-0.38) = 0.452。 */
+:root[data-vib='off'] {
+  --tab-strip-surface: rgb(48 49 52 / 0.105);
+}
+:root[data-vib='off'][data-theme='light'] {
+  --tab-strip-surface: rgb(255 255 255 / 0.452);
+}
 
 /* 主题 v3 (C1/C2): .grain 静态噪点层与 .specular 标题栏镜面高光已退役
  * (静态装饰降噪, README §1 决策总表)。 */
@@ -1115,6 +1136,11 @@ body::before {
     background-color: rgb(var(--ink-0));
     background-image: none;
   }
+  /* 标签滑动面: 此路径 .glass-3 = 不透明 ink-3, 滑动面直接同色不透明即与内容面
+   * 连成一片 (不透明盖住 bar, 无需 alpha 推导)。 */
+  :root {
+    --tab-strip-surface: rgb(var(--ink-3));
+  }
   .glass {
     background-color: rgb(var(--ink-1));
   }
@@ -1166,6 +1192,11 @@ body::before {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+/* 标签滑动面: solid 档 .glass-3 = 不透明 ink-3, 同 reduced-transparency 的
+ * 覆盖 —— 不透明同色即连成一片。 */
+:root[data-surface='solid'] {
+  --tab-strip-surface: rgb(var(--ink-3));
+}
 
 /* ─── Surface picker mini preview swatch (主题 v2 两档) ─────────────
  * 14×14 圆角小块, 每个 variant 视觉化对应材质. SurfacePickerPopover
@@ -1198,7 +1229,8 @@ body::before {
   /* 主题 v2 — 材质 (bg/blur/border/shadow) 移交 .glass-pop (各 picker 组件
    * 同时挂两类), 这里只留几何。 */
   position: fixed;
-  top: 44px;
+  /* 顶栏高 44 + 8 间隙 (08-27 标签工作区: 顶栏 36→44 时从 44 跟到 52)。 */
+  top: 52px;
   right: 12px;
   width: 264px;
   /* 主题 v3 C8/批 4: theme/surface/accent picker = 内容浮层档 12px → --r-pop(14) */
@@ -1482,6 +1514,252 @@ body::before {
  * padding 下会被 .nav-panel overflow 裁掉 2px)。 */
 .nav-panel .row-selected::before {
   left: -6px;
+}
+
+/* ─── task 08-27-l4-tab-workspace P2 — 顶栏标签工作区 (原型 Main.dc.html .rtop 1:1) ─
+ * 44px 顶栏 = 左段 .topbar-left (与左列共宽, 跟随 --app-nav-w) + 右段标签条
+ * .tstrip。标签几何 (PAD_L 10 / 主标签 168 / 分隔 11 / gap 3 / 标签高 34 底对齐)
+ * 与滑动面/断口坐标由 TabStrip.tsx 按容器实测算好以内联 style 写入; 这里只管
+ * 形态与材质。合成色契约 (激活标签内部 = 内容面) 见 :root 的 --tab-strip-surface。 */
+.topbar-left {
+  width: var(--app-nav-w, 392px);
+  flex-shrink: 0;
+  overflow: hidden;
+  background: var(--tier-side);
+  border-right: 1px solid var(--hairline);
+  transition: width 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* 内容定宽 392 — 宽度过渡期间行不换行不挤压 (同 .nav-panel-inner 手法); 收起
+ * (56px) 时整段被 overflow 裁切, visibility 延到宽度动画结束再翻 (挡键盘焦点
+ * 进被裁掉的 ⌘K 搜索钮)。 */
+.topbar-left-inner {
+  width: 392px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+}
+.topbar-left[data-collapsed='true'] .topbar-left-inner {
+  visibility: hidden;
+  transition: visibility 0s linear 220ms;
+}
+
+.tstrip {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 0 12px 0 10px;
+  /* 材质 = .glass-bar (TSX 同挂两类) —— solid / reduced-transparency 的既有
+   * 覆盖自动生效。滑动缓动是原型的 iOS sheet 曲线 (R2 拍板照抄, 与
+   * --ease-out-strong 不同——出手更缓, morph 面不「弹」)。 */
+  --tstrip-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --tstrip-dur: 440ms;
+}
+/* hairline 两段 — 在激活标签 (含两侧外凹圆角 ±12px) 范围内**断开**, 断口跟随
+ * 滑动面用同一条缓动。
+ * 🔴 不能改成整条线 + z-index 盖: 激活面是半透明的, 盖不住底下 0.065 的线,
+ * 两层叠出 ~0.13 反而比两边都亮 —— 正是 owner 报过的「还有条分割线」。 */
+.tstrip-hair {
+  position: absolute;
+  bottom: 0;
+  height: 1px;
+  background: var(--hairline);
+  z-index: 1;
+  transition:
+    left var(--tstrip-dur) var(--tstrip-ease),
+    width var(--tstrip-dur) var(--tstrip-ease);
+}
+/* 激活标签滑动面 — left/width 过渡 (🔴 不是 scaleX: scaleX 会把两侧外凹圆角
+ * 拉变形)。bottom:0 让底边正好压在 hairline 那一行上, 断口处面内颜色 = 内容面
+ * ⇒ 激活标签与内容区连成一片, 不溢出内容区。 */
+.tstrip-surface {
+  position: absolute;
+  bottom: 0;
+  height: 34px;
+  background: var(--tab-strip-surface);
+  border-radius: 11px 11px 0 0;
+  z-index: 2;
+  transition:
+    left var(--tstrip-dur) var(--tstrip-ease),
+    width var(--tstrip-dur) var(--tstrip-ease);
+}
+/* 两侧向外凹的圆角 (12px 略大于标签自身的 11px —— 凹角略大于凸角, 衔接更顺)。
+ * 圆心上移 0.5px 让伪元素底边整行落在实色侧, 与断开的 hairline 严丝合缝。 */
+.tstrip-surface::before,
+.tstrip-surface::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  width: 12px;
+  height: 12px;
+}
+.tstrip-surface::before {
+  left: -12px;
+  background: radial-gradient(
+    circle at 0 -0.5px,
+    transparent 11.4px,
+    var(--tab-strip-surface) 11.9px
+  );
+}
+.tstrip-surface::after {
+  right: -12px;
+  background: radial-gradient(
+    circle at 100% -0.5px,
+    transparent 11.4px,
+    var(--tab-strip-surface) 11.9px
+  );
+}
+
+/* 主标签 — 单例槽位 (168 定宽 / 永在最左 / 不可关), icon 与面包屑随承载切换。 */
+.ttab-main {
+  width: 168px;
+  height: 34px;
+  border-radius: 11px 11px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 3;
+  cursor: pointer;
+  color: rgb(var(--ink-fg-2));
+  transition:
+    color 240ms ease-out,
+    background-color 120ms ease-out;
+}
+.ttab-main:hover {
+  background: rgb(var(--ink-fg) / 0.04);
+}
+.ttab-main[aria-selected='true'],
+.ttab-main[aria-selected='true']:hover {
+  background: transparent; /* 激活底色由滑动面画 */
+  color: rgb(var(--ink-fg));
+}
+.ttab-main > svg,
+.ttab > svg {
+  flex-shrink: 0;
+}
+.tcrumb {
+  font-size: 13px;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+/* 第一段 (域名) 不截断; 第二段收缩出省略号。 */
+.tcrumb > :first-child {
+  flex-shrink: 0;
+}
+.tcrumb-sep {
+  color: rgb(var(--ink-fg-3) / 0.6);
+  flex-shrink: 0;
+}
+.tcrumb-2 {
+  color: rgb(var(--ink-fg-3));
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ttab-main[aria-selected='true'] .tcrumb-2 {
+  color: rgb(var(--ink-fg-2));
+}
+
+/* 主标签与对象标签之间的分隔 (1px 竖线 + 两侧 5px margin = 原型 SEP_W 11)。 */
+.tstrip-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--hairline-strong);
+  margin: 0 5px 14px;
+  flex-shrink: 0;
+  z-index: 3;
+}
+
+.tstrip-tabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  /* 极窄窗时标签压到 84 下限后横向裁切 (拍板: minWidth 保持 940, 不做滚动)。 */
+  overflow: hidden;
+}
+
+/* 对象标签 (邮件/事项)。宽度由 TabStrip.tsx 按容器实测计算 (clamp 84-190)。 */
+.ttab {
+  height: 34px;
+  border-radius: 11px 11px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 6px 0 10px;
+  color: rgb(var(--ink-fg-2));
+  font-size: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+  min-width: 0;
+  position: relative;
+  z-index: 3;
+  transition:
+    color 240ms ease-out,
+    background-color 120ms ease-out;
+}
+.ttab:hover {
+  background: rgb(var(--ink-fg) / 0.035);
+}
+.ttab[aria-selected='true'],
+.ttab[aria-selected='true']:hover {
+  background: transparent;
+  color: rgb(var(--ink-fg));
+}
+.ttab-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+/* 关闭钮 — 激活 / hover / 键盘焦点进入 (tab 本体聚焦后 Tab 一下可达) 时可见。 */
+.ttab-close {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--ink-fg-3));
+  flex-shrink: 0;
+}
+.ttab[aria-selected='true'] .ttab-close,
+.ttab:hover .ttab-close,
+.ttab:focus-within .ttab-close {
+  display: flex;
+}
+.ttab-close:hover {
+  background: rgb(var(--ink-fg) / 0.14);
+  color: rgb(var(--ink-fg));
+}
+/* 锁定点 (琥珀) — 正在写回复 / 抽屉里聊过 ⇒ 不参与自动淘汰 (prd「标签模型」)。 */
+.ttab-lock {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgb(var(--c-warn));
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .topbar-left,
+  .tstrip-hair,
+  .tstrip-surface,
+  .ttab-main,
+  .ttab {
+    transition: none;
+  }
 }
 
 /* dogfood-2 — DotMatrix (agent 视图 working indicator) keyframes + @property + dot 动画规则。
@@ -2529,9 +2807,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
  *   palette-veil  (z 40) — soft dim + blur of whatever is behind
  *   palette-pane  (z 50) — 720px glass-pop pane, anchored 96px from top
  *
- * Inset on .palette-veil (36px / 24px) carves out the title bar and
- * status bar so chrome stays interactive. Reduced-transparency users get
- * a deeper opaque dim instead of the blur.
+ * Top inset on .palette-veil (44px) carves out the title bar so chrome stays
+ * interactive; the bottom inset is 0 since the status bar retired (08-27).
+ * Reduced-transparency users get a deeper opaque dim instead of the blur.
  *
  * .pal-row is shared by all three result groups (JUMP / EMAIL / AI
  * ACTIONS); selection state is render-driven (React sets `.is-selected`
@@ -2541,7 +2819,10 @@ body:not([data-batch-mode='true']) .email-row .cb {
  */
 .palette-veil {
   position: fixed;
-  inset: 36px 0 24px 0;
+  /* 顶 inset = 顶栏高 (08-27 标签工作区: 36→44, tailwind spacing.titlebar 同步)；
+     底 inset = 0 (原来的 24 是给已随本批退役的 StatusBar 让位, 留着就是底部一条不变暗
+     的亮带)。 */
+  inset: 44px 0 0 0;
   /* 主题 v2 — veil 去 blur 纯 dim (blur 预算只留真浮层面板), 加深补偿 */
   background: rgb(var(--ink-0) / 0.62);
   z-index: 40;
@@ -2560,7 +2841,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
   left: 50%;
   transform: translateX(-50%);
   width: min(720px, calc(100vw - 32px));
-  max-height: calc(100vh - 36px - 24px - 96px - 32px);
+  max-height: calc(100vh - 44px - 24px - 96px - 32px);
   z-index: 50;
   display: flex;
   flex-direction: column;
@@ -2571,10 +2852,11 @@ body:not([data-batch-mode='true']) .email-row .cb {
 
 /* P3 — General Agent dialog (Cmd+O). Same glass-pop-over-veil shell as the
  * command palette, but taller: it hosts a full chat (message list + composer),
- * not a result list. Veil keeps the title/status bar interactive (inset 36/24). */
+ * not a result list. Veil keeps the title bar interactive (top inset 44). */
 .general-agent-veil {
   position: fixed;
-  inset: 36px 0 24px 0;
+  /* 顶 inset = 顶栏高、底 inset = 0 (StatusBar 已退役), 同 .palette-veil。 */
+  inset: 44px 0 0 0;
   background: rgb(var(--ink-0) / 0.62);
   z-index: 40;
 }

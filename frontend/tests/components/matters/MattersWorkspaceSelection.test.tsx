@@ -65,9 +65,11 @@ const { A, B, C, TEST_MATTERS, lastSelectedStore } = vi.hoisted(() => {
   // C 已归档（task 08-14 起默认 scope='all' 含 done/canceled，「已完成」不再是「已不可见」
   // 的落点 —— 只有 archived/trash 才是；下面的 mock `list()` 照真实服务端「无参数 → 只回
   // 活跃行」语义把它挡在 liveMatters 之外，用来钉「有记录但已不可见」的退化路径）。
-  const a = matter({ public_id: 'MAT-0001', priority: 'p2' })
-  const b = matter({ public_id: 'MAT-0002', priority: 'p0' })
-  const c = matter({ public_id: 'MAT-0003', priority: 'p3', archived_at: 10 })
+  // 08-27 标签工作区：数值 id 必须互异 —— 它是标签 store 的 targetId（id↔public_id 双向索引），
+  // 同 id 会让后注册的覆盖先注册的。
+  const a = matter({ id: 11, public_id: 'MAT-0001', priority: 'p2' })
+  const b = matter({ id: 12, public_id: 'MAT-0002', priority: 'p0' })
+  const c = matter({ id: 13, public_id: 'MAT-0003', priority: 'p3', archived_at: 10 })
   return {
     A: a,
     B: b,
@@ -132,6 +134,8 @@ const { MattersWorkspace } = await import('@shared/components/matters/MattersWor
 const { useMatterNavigation } = await import('@shared/components/matters/navigation')
 const { resetMatterWorkspace, useMatterWorkspace } =
   await import('@shared/components/matters/matterWorkspaceStore')
+const { MAIN_SLOT, useTabWorkspace } = await import('@shared/state/tab-workspace')
+const { _resetMatterIdentityForTest } = await import('@shared/components/matters/matterTabIdentity')
 
 function renderWorkspace(): ReturnType<typeof render> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -149,6 +153,9 @@ beforeEach(() => {
   // 「切走再回还是上一屏」），它会跨用例存活 —— 不复位的话第二个用例一上来就已经落在
   // 上一个用例留下的 tab 与选中上。
   resetMatterWorkspace()
+  // 08-27 标签工作区：selectMatter 转发标签 store（也是模块级），身份索引同样跨用例存活。
+  useTabWorkspace.setState({ tabs: [], active: MAIN_SLOT, closedStack: [] })
+  _resetMatterIdentityForTest()
 })
 afterEach(cleanup)
 
@@ -208,6 +215,29 @@ describe('MattersWorkspace — V3-11 记住上次选中', () => {
     const detail = await screen.findByTestId('matter-detail')
     await waitFor(() => expect(detail.getAttribute('data-matter-id')).toBe(B.public_id))
     expect(useMatterNavigation.getState().targetPublicId).toBeNull()
+  })
+
+  // 08-27 标签工作区（Lane W）——
+  test('恢复的激活事项标签压过「记住上次选中」记录（冷启动初选不得覆盖恢复的激活标签）', async () => {
+    lastSelectedStore.value = B.public_id
+    useTabWorkspace.getState().openTab('matter', A.id, A.title)
+
+    renderWorkspace()
+    const detail = await screen.findByTestId('matter-detail')
+    await waitFor(() => expect(detail.getAttribute('data-matter-id')).toBe(A.public_id))
+    // 激活标签原样保留（没有被 replace 成 B）
+    expect(useTabWorkspace.getState().active).toBe(`matter:${A.id}`)
+    expect(useTabWorkspace.getState().tabs.map((t) => t.id)).toEqual([`matter:${A.id}`])
+  })
+
+  test('选中一条事项 = 开出事项标签（selectMatter 转发标签 store）', async () => {
+    lastSelectedStore.value = A.public_id
+    renderWorkspace()
+    await screen.findByTestId('matter-detail')
+    await waitFor(() =>
+      expect(useTabWorkspace.getState().tabs.some((t) => t.id === `matter:${A.id}`)).toBe(true)
+    )
+    expect(useTabWorkspace.getState().active).toBe(`matter:${A.id}`)
   })
 })
 

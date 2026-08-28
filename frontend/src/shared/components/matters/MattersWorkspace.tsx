@@ -10,6 +10,8 @@ import { errorMessage } from '@shared/lib/ipcErrors'
 import { openAttentionFor } from '@shared/lib/matterDerive'
 import { qk } from '@shared/lib/queryKeys'
 import { useNavCollapsed } from '@shared/state/nav-shell'
+import { selectActiveTargetId, useTabWorkspace } from '@shared/state/tab-workspace'
+import { closeObjectTab } from '@shared/state/tab-workspace-bridge'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { MatterCreateDialog } from './MatterCreateDialog'
@@ -31,6 +33,7 @@ import {
   usePendingMatterUpdates
 } from './hooks'
 import { refreshMatter } from './matterMutation'
+import { matterNumericId, registerMatterIdentity } from './matterTabIdentity'
 import { readLastSelectedMatterId } from './matterLastSelected'
 import { useMatterWorkspace } from './matterWorkspaceStore'
 import {
@@ -126,6 +129,12 @@ export function MattersWorkspace(): React.ReactElement | null {
   const scopeRows = scopeOnServer ? (scopedList.data?.items ?? []) : liveMatters
   const scopeReady = scopeOnServer ? scopedList.isSuccess : liveList.isSuccess
 
+  // 08-27 标签工作区（Lane W）—— 事项双身份索引的注册边缘：列表行带 id + public_id 两个键。
+  useEffect(() => {
+    for (const matter of liveMatters) registerMatterIdentity(matter.id, matter.public_id)
+    for (const matter of scopeRows) registerMatterIdentity(matter.id, matter.public_id)
+  }, [liveMatters, scopeRows])
+
   const attentionQuery = useGlobalAttention(enabled)
   const attentionItems = useMemo(
     () => attentionQuery.data?.items ?? [],
@@ -217,7 +226,8 @@ export function MattersWorkspace(): React.ReactElement | null {
   // 行点击的回调要引用稳定：它进 MatterList 的 `rowProps`，每次 render 换一个新函数会让
   // react-window 把可见行全部重渲一遍（虚拟化省下来的那点开销正好还回去）。
   const handleSelectMatter = useCallback(
-    (matter: Matter): void => selectMatter(matter.public_id),
+    // 点行 = 开标签（去重激活在 store），标题随行数据带上（免得新标签空标题等详情回填）。
+    (matter: Matter): void => selectMatter(matter.public_id, { title: matter.title }),
     [selectMatter]
   )
 
@@ -260,6 +270,20 @@ export function MattersWorkspace(): React.ReactElement | null {
     if (initialSelectionApplied || !liveList.isSuccess) return
     markInitialSelectionApplied()
     if (navigationTarget) return
+    // 08-27 标签工作区：先注册身份索引（本 layout effect 跑在上面的注册 effect **之前**，
+    // 不内联注册的话冷启动初选的标签转发会因索引未命中而落空）。
+    for (const matter of liveMatters) registerMatterIdentity(matter.id, matter.public_id)
+    // ⓪ 恢复的激活事项标签优先（PRD：冷启动初选不得覆盖恢复的激活标签）。标签指向的
+    // 事项不在活跃集（已归档/已删）时退化走原有三路分叉。
+    const restoredTarget = selectActiveTargetId(useTabWorkspace.getState(), 'matter')
+    if (restoredTarget !== null) {
+      const restored = liveMatters.find((matter) => matter.id === restoredTarget)
+      if (restored) {
+        selectMatter(restored.public_id, { title: restored.title })
+        setTab('list')
+        return
+      }
+    }
     const candidates = applyMatterListQuery(
       liveMatters,
       DEFAULT_MATTER_LIST_QUERY,
@@ -268,10 +292,14 @@ export function MattersWorkspace(): React.ReactElement | null {
     )
     const stored = readLastSelectedMatterId()
     if (stored && candidates.some((matter) => matter.public_id === stored)) {
-      selectMatter(stored)
+      // 冷启动初选走 replace：激活位已有事项标签就原位换目标，没有就退化成 openTab。
+      selectMatter(stored, { mode: 'replace' })
       setTab('list')
     } else if (candidates.length > 0) {
-      selectMatter(candidates[0].public_id)
+      selectMatter(candidates[0].public_id, {
+        mode: 'replace',
+        title: candidates[0].title
+      })
     }
   }, [
     initialSelectionApplied,
@@ -443,14 +471,25 @@ export function MattersWorkspace(): React.ReactElement | null {
                 <MatterDetail
                   matterId={selected.public_id}
                   onBack={() => selectMatter(null)}
-                  onRemoved={() => selectMatter(null)}
+                  onRemoved={() => {
+                    // 对象已被删除/归档：先清本地选中（后继标签接管时会重设），再收掉它的
+                    // 标签 —— 反过来的话 closeTab 的后继同步刚设好的选中会被 null 冲掉。
+                    const removedId = matterNumericId(selected.public_id)
+                    selectMatter(null)
+                    if (removedId !== null) closeObjectTab('matter', removedId)
+                  }}
                   navigationMatterIds={visibleIds}
                   // E10③—— 并排可见时不传 onNavigateMatter：MatterDetail 的
                   // `showNavigation` 判据里 `Boolean(onNavigateMatter)` 是硬门槛，undefined
                   // 就等于「没有导航能力」，上/下切换钮整体不渲染（MatterDetail 内部逻辑一字
                   // 不动，从调用方把控制权收掉）。清单被折叠收起时同窄屏 —— 详情独占视口，
                   // 上/下切换是唯一的换事项路径。
-                  onNavigateMatter={stackedLayout || listPanelHidden ? selectMatter : undefined}
+                  onNavigateMatter={
+                    // 详情上/下条 = J/K 同语义：原位换目标（replace），不涨标签数。
+                    stackedLayout || listPanelHidden
+                      ? (matterId) => selectMatter(matterId, { mode: 'replace' })
+                      : undefined
+                  }
                   attentionSignals={openAttentionFor(selected, attentionIndex)}
                   onAttentionAction={handleAttentionAction}
                   initialReviewId={

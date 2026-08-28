@@ -62,6 +62,7 @@ import {
   useMatterConversation
 } from '@shared/components/matters/useMatterConversation'
 import { useAIChatPanel, type MatterChatTarget } from '@shared/state/ai-chat-panel'
+import { notifyTabChatActivity } from '@shared/state/tab-workspace-bridge'
 
 import { AgentThread } from './AgentThread'
 import { resolveConversationContextSource, seededEmailIdOf } from './conversationContextSource'
@@ -324,7 +325,18 @@ export function AgentConversation({
       [renderEmailExcerptBlock(header, excerpt)]
     )
   }, [emailContext, mailApi])
+  // 08-27 标签工作区（Lane W）—— 「AI 抽屉里聊过」的锁定信号源。buildInjectedContext 由
+  // transport 在**每次 send POST** 时调用（useMailAgentAiSdkRuntime 的 body resolver），是
+  // 不动运行时内部就能拿到的最贴近「发出一轮」的时点。当轮带着的对象（当前邮件 context
+  // chip / 邮件锚点会话 / 事项锚点）对应的标签 → locked，不再参与 LRU 自动淘汰。锁定目标
+  // 走 ref：matterAnchor 在本 hook 之后才算得出来（同 matterAnchorRef 的既有理由）。
+  const chatLockTargetsRef = useRef<{ email: number | null; matter: number | null }>({
+    email: null,
+    matter: null
+  })
   const buildInjectedContext = useCallback(async (): Promise<string> => {
+    notifyTabChatActivity('email', chatLockTargetsRef.current.email)
+    notifyTabChatActivity('matter', chatLockTargetsRef.current.matter)
     const agentContext = buildAgentMentionEnvelope(agentMentions)
     // S4 —— 与 agent 信封同类（可信本地元数据），排在所有不可信围栏**之前**。
     const matterContext = buildMatterMentionEnvelope(activeMatterMentions)
@@ -514,6 +526,11 @@ export function AgentConversation({
   })
   const matterAnchor = matter.anchor
   matterAnchorRef.current = matterAnchor
+  // 08-27 标签工作区 —— 锁定目标随最新一帧同步（send 时从 ref 读，见 buildInjectedContext）。
+  chatLockTargetsRef.current = {
+    email: emailContext?.internalId ?? emailAnchorId,
+    matter: matterAnchor?.id ?? null
+  }
 
   // ── context snapshot (email session → inject that email's body; general → SOUL-only prompt) ──────
   // S3 — always on for live ai-sdk sessions (the CONTEXT_INJECTION flag was GA'd away).

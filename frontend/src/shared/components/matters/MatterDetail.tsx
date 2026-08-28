@@ -81,6 +81,11 @@ import { qk } from '@shared/lib/queryKeys'
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { useActiveEmail } from '@shared/state/active-email'
 import {
+  getObjectTabScroll,
+  saveObjectTabScroll,
+  setObjectTabTitle
+} from '@shared/state/tab-workspace-bridge'
+import {
   openMatterChat,
   startMatterChatWithPrompt,
   useAIChatPanel
@@ -91,6 +96,7 @@ import { AddItemModal } from './AddItemModal'
 import { MatterAgentConfigModal } from './MatterAgentConfigModal'
 import { MatterCheckRow, MatterCheckToggle } from './MatterCheckRow'
 import { MatterContextTab } from './MatterContextTab'
+import { matterNumericId, registerMatterIdentity } from './matterTabIdentity'
 import { MatterDatePicker } from './MatterDatePicker'
 import { ResourceDrawer } from './ResourceDrawer'
 import { MatterRunsPane } from './MatterRunsPane'
@@ -453,6 +459,54 @@ export function MatterDetail({
     ro.observe(list)
     return () => ro.disconnect()
   }, [])
+
+  // ── 08-27 标签工作区（Lane W）────────────────────────────────────────────
+  // 🔴 placeholder 期间 detail.data 是**上一条**的（上方 query 头注释），一律以
+  // public_id === matterId 收窄后再碰标签面。
+  const loadedMatter =
+    detail.data?.matter && detail.data.matter.public_id === matterId ? detail.data.matter : null
+  // 身份注册（数值 id ↔ public_id）+ 标签标题回填（bridge 同值不写）。
+  useEffect(() => {
+    if (!loadedMatter) return
+    registerMatterIdentity(loadedMatter.id, loadedMatter.public_id)
+    if (loadedMatter.title) setObjectTabTitle('matter', loadedMatter.id, loadedMatter.title)
+  }, [loadedMatter])
+  // 每标签滚动位置：onScroll 只写 ref，切走（matterId 变化 / 卸载）时落一次快照；
+  // 切回在详情数据就绪后恢复一次。
+  const bodyScrollRef = useRef<HTMLDivElement | null>(null)
+  const lastScrollTopRef = useRef(0)
+  useEffect(() => {
+    const id = matterId
+    return () => {
+      const numericId = matterNumericId(id)
+      if (numericId !== null) saveObjectTabScroll('matter', numericId, lastScrollTopRef.current)
+    }
+  }, [matterId])
+  const scrollRestoredForRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!loadedMatter || scrollRestoredForRef.current === matterId) return
+    scrollRestoredForRef.current = matterId
+    lastScrollTopRef.current = 0
+    const stored = getObjectTabScroll('matter', loadedMatter.id)
+    const el = bodyScrollRef.current
+    if (el && stored > 0) {
+      // 命令式恢复滚动位置；规则误判容器不可变。
+      // eslint-disable-next-line react-hooks/immutability
+      el.scrollTop = stored
+      lastScrollTopRef.current = el.scrollTop
+    }
+  }, [loadedMatter, matterId])
+  // 切标签/换事项时正文一次淡入（EmailDetail B2 的 fromTo 先例：终点显式 =1，快速连切
+  // 打断也收敛到不透明；reduced-motion 短路）。
+  useGSAP(
+    () => {
+      if (reduceTabMotion) return
+      const el = bodyScrollRef.current
+      if (!el) return
+      gsap.fromTo(el, { autoAlpha: 0 }, { autoAlpha: 1, duration: DUR.fast, overwrite: 'auto' })
+    },
+    { dependencies: [matterId, reduceTabMotion], scope: bodyScrollRef }
+  )
   const selectedUpdate = useQuery({
     queryKey: [...qk.matters.detail(matterId), 'update', reviewId],
     queryFn: () => api.getUpdate(matterId, reviewId as number),
@@ -736,7 +790,9 @@ export function MatterDetail({
     const target = resolveMatterCitationTarget(item)
     setReviewId(null)
     if (target.kind === 'email') {
-      setActiveEmail(target.emailId)
+      // navTarget：跨域跳转目标可能不在收件箱列表里，不豁免会被 active-reset 抢走
+      //（08-27 标签工作区起被抢 = 刚开出来的邮件标签被 replace 成第一封）。
+      setActiveEmail(target.emailId, { navTarget: true })
       void navigate({ to: '/' })
       return
     }
@@ -1113,7 +1169,14 @@ export function MatterDetail({
           })}
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-5 scrollbar-thin">
+        <div
+          ref={bodyScrollRef}
+          className="min-h-0 flex-1 overflow-y-auto p-5 scrollbar-thin"
+          // 每标签滚动位置的采样面（只写 ref，切走时才落标签快照）。
+          onScroll={(e) => {
+            lastScrollTopRef.current = e.currentTarget.scrollTop
+          }}
+        >
           {/* 设计 detail.jsx:230-244 —— 归档 / 回收站的状态条，带就地出口。原先「恢复」与
               「取消归档」只藏在「更多」菜单里，翻到一个已删除的事项时正文毫无提示。 */}
           <MatterLifecycleBanner

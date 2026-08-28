@@ -10,10 +10,7 @@ import { I18nextProvider } from 'react-i18next'
 
 import i18n from '../../src/shared/i18n'
 import { KeyboardHelpModal } from '../../src/shared/components/keyboard/KeyboardHelpModal'
-import {
-  closeKeyboardHelp,
-  openKeyboardHelp
-} from '../../src/shared/state/keyboard-help'
+import { closeKeyboardHelp, openKeyboardHelp } from '../../src/shared/state/keyboard-help'
 
 function renderModal(): ReturnType<typeof render> {
   return render(
@@ -58,5 +55,15 @@ describe('KeyboardHelpModal', () => {
     // in en-US or "即将上线" in zh-CN. We accept either.
     const pills = screen.queryAllByText(/^(soon|即将上线)$/)
     expect(pills.length).toBeGreaterThan(0)
+  })
+
+  // 08-27 标签工作区 P2 — 四条标签绑定必须出现在帮助面板里。面板按 keymap 目录
+  // 渲染，所以这里真正锁的是「新绑定进了 SSoT 而不是只写在 GlobalShortcuts 里」。
+  test('renders the tab-workspace bindings', () => {
+    openKeyboardHelp()
+    renderModal()
+    for (const display of ['⌘W', '⇧⌘T', '⌃⇥ / ⌃⇧⇥', '⌘1-9']) {
+      expect(screen.getAllByText(display).length, display).toBeGreaterThan(0)
+    }
   })
 })

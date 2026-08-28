@@ -34,6 +34,14 @@ import { useShortcut } from '@shared/hooks/useShortcut'
 import { useIsBelowLg } from '@shared/hooks/useMediaQuery'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { useActiveEmail, pickNext, pickPrev } from '@shared/state/active-email'
+import { tabId, useTabWorkspace } from '@shared/state/tab-workspace'
+import {
+  clearObjectTabDraft,
+  getObjectTabScroll,
+  saveObjectTabDraft,
+  saveObjectTabScroll,
+  setObjectTabTitle
+} from '@shared/state/tab-workspace-bridge'
 import { useTogglePin } from '@shared/hooks/usePinnedSync'
 import { usePinned } from '@shared/state/pinned'
 import { startChatWithPrompt } from '@shared/state/ai-chat-panel'
@@ -60,6 +68,11 @@ import { CustomAgentDrawer } from '../agents/CustomAgentDrawer'
 import { useTriggerV2Enabled } from '../agents/hooks'
 import { ComposePanel, ComposePanelInner } from './compose/ComposePanel'
 import type { ComposeGuardHandle } from './compose/useComposeGuard'
+import {
+  readComposeTabDraft,
+  toDraftSnapshot,
+  type ComposeTabDraft
+} from './compose/composeTabDraft'
 import { closeCompose, useComposeStore } from '@shared/state/compose'
 import type { ComposeMode } from '@shared/api/types'
 
@@ -325,13 +338,11 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   const togglePin = useTogglePin()
   const isPinned = usePinned((s) => (internalId !== null ? s.isPinned(internalId) : false))
   const [lastInternalId, setLastInternalId] = useState<number | null>(internalId)
-  // T6 离开守卫 — 切邮件时若 overlay composer (reply/forward) 有未保存更改, 不静默丢:
-  // 渲染期同步把它的 overlay 钉在新详情上 (composeHeldFor, 防止 useExitAnimation 抢先
-  // 卸载/闪一下), 由下方 effect 经守卫句柄弹确认。dirty 走 composerDirty 反应态 (render
-  // 期不能读 ref); composeGuardRef 仅供 effect 里 attemptClose (ComposePanel 经 guardRef 挂上)。
-  const composeGuardRef = useRef<ComposeGuardHandle | null>(null)
-  const [composeHeldFor, setComposeHeldFor] = useState<number | null>(null)
-  const [composerDirty, setComposerDirty] = useState(false)
+  // 08-27 标签工作区（Lane W）—— overlay composer 的「切走不丢正文」从 T6 的钉住+弹确认
+  // 改为**现场快照进标签**：切走时把可序列化现场写进 TabDescriptor.draft（下方 effect 经
+  // snapshotRef 取），切回该标签自动重开并回填。getter 只读 ref（面板卸载后仍可安全调用，
+  // 域切换时 EmailDetail 整树卸载靠 ComposePanelInner 自己的卸载快照兜底）。
+  const composeSnapshotRef = useRef<(() => ComposeTabDraft | null) | null>(null)
   // T9 同款 hold 模型扩到 draft-edit 分支 (下方草稿点开即编辑, 非 store 驱动: EmailDetail
   // 直接渲染 ComposePanelInner mode='draft-edit')。切走时若草稿编辑处于 dirty 会直接 unmount
   // 丢字节 —— 该分支上报 dirty (draftEditDirty) 后把被编辑的草稿钉住 (draftEditHeldFor),
@@ -347,20 +358,8 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     setShowTranslation(false)
     setPending(NO_PENDING)
     setPropsExpanded(false)
-    // Switching emails closes any open composer so it can't write to the wrong
-    // source message (single-composer per window) — UNLESS it has unsaved edits
-    // (composerDirty, reported up by the panel), in which case we pin its overlay
-    // open (composeHeldFor) so the switch effect below can prompt (T6 guard)
-    // instead of silently dropping the draft.
-    const cs = useComposeStore.getState()
-    if (cs.open && cs.internalId !== internalId) {
-      if (composerDirty) {
-        setComposeHeldFor(cs.internalId)
-      } else {
-        closeCompose()
-        setComposeHeldFor(null)
-      }
-    }
+    // overlay composer 不在渲染期关：切邮件的快照+关闭在下方 effect 做（getter 要在
+    // useExitAnimation 延迟卸载窗口内读到活面板）。draft-edit（T9）钉住模型维持不变。
     // draft-edit hold (T9): 上一屏 (lastInternalId) 是脏草稿编辑 iff draftEditDirty —
     // 钉住它让下方 effect 弹守卫, 而非直接 unmount 丢字节。`heldFor === null` 守卫防覆盖
     // 已有钉住 (连切多封保留最先钉住的那封); clean 草稿编辑不钉 (切走即 unmount, 无字节可丢)。
@@ -621,8 +620,16 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   const setActive = useActiveEmail((s) => s.setActive)
   const prevId = pickPrev(orderedIds, internalId)
   const nextId = pickNext(orderedIds, internalId)
-  const onPrev = prevId !== null && prevId !== internalId ? () => setActive(prevId) : undefined
-  const onNext = nextId !== null && nextId !== internalId ? () => setActive(nextId) : undefined
+  // 08-27 标签工作区：工具栏 ∧/∨ 与 J/K 同语义 —— 在当前标签里原位换目标（replace），
+  // 不是每按一次开一个标签。
+  const onPrev =
+    prevId !== null && prevId !== internalId
+      ? () => setActive(prevId, { mode: 'replace' })
+      : undefined
+  const onNext =
+    nextId !== null && nextId !== internalId
+      ? () => setActive(nextId, { mode: 'replace' })
+      : undefined
 
   const openCompose = useComposeStore((s) => s.openCompose)
   const composeOpen = useComposeStore((s) => s.open)
@@ -636,26 +643,48 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   )
 
   // 灰白蒙版 bug 修复 — compose store 是全局开关, 渲染条件原本只看 `open`:
-  // 在邮件 A 开过 compose 后切视图/切邮件 (没有任何人调 closeCompose), overlay
-  // 的 bg-ink-3 实心层会盖在任何后续详情上 (用户: 草稿箱↔收件箱往返后正文蒙灰白)。
-  // 双保险: ① overlay 只在 store.internalId === 当前详情时渲染 (scope 校验);
-  // ② 切邮件时把 stale 的 open store 清掉, 防止切回原邮件时 compose 凭空弹回。
-  const composeOpenHere =
-    composeOpen &&
-    (composeFor === internalId || (composeHeldFor !== null && composeFor === composeHeldFor))
-  // 切邮件后, 若渲染期把 dirty overlay composer 钉住了 (composeHeldFor), 用它的守卫句柄
-  // 弹确认: 保存/丢弃 → proceed (closeCompose + 清 hold); 取消 → hold 保留, overlay 继续
-  // 钉在新详情上让用户接着编辑。clean composer 已在渲染期同步关掉, 这里只处理 dirty 的。
+  // 在邮件 A 开过 compose 后切视图/切邮件, overlay 的 bg-ink-3 实心层会盖在任何后续
+  // 详情上。overlay 只在 store.internalId === 当前详情时渲染 (scope 校验)。
+  const composeOpenHere = composeOpen && composeFor === internalId
+  // 08-27 标签工作区 —— 每标签 draft 快照（切走存 / 切回自动重开）。
+  // 描述符 draft 的 selector：draft 对象引用稳定（updateTab 只在写它时换引用），
+  // 无关的标签提交不会让本组件重渲。
+  const activeTabDraft = useTabWorkspace((s) =>
+    internalId === null
+      ? null
+      : (s.tabs.find((tab) => tab.id === tabId('email', internalId))?.draft ?? null)
+  )
+  const composeTabDraft = useMemo(() => readComposeTabDraft(activeTabDraft), [activeTabDraft])
+  // 切邮件：遗留的上一封 overlay composer → 经 snapshotRef 取现场快照写进它的标签，再关。
+  // useExitAnimation 让面板在本次提交后仍活着一小段，getter 此刻可用；域切换（EmailDetail
+  // 整树卸载）走 ComposePanelInner 自己的卸载快照，两条路径写的是同一份形状。
+  // 随后：本标签挂着 compose 快照且 store 空闲 → 自动重开（「切回来 compose 仍开」）。
   useEffect(() => {
-    if (composeHeldFor === null || composeHeldFor === internalId) return
-    const guard = composeGuardRef.current
-    const proceed = (): void => {
-      useComposeStore.getState().closeCompose()
-      setComposeHeldFor(null)
+    const cs = useComposeStore.getState()
+    if (cs.open && cs.internalId !== null && cs.internalId !== internalId) {
+      const snap = composeSnapshotRef.current?.()
+      if (snap !== null && snap !== undefined) {
+        saveObjectTabDraft('email', cs.internalId, toDraftSnapshot(snap))
+      }
+      closeCompose()
     }
-    if (guard) guard.attemptClose(proceed)
-    else proceed()
-  }, [composeHeldFor, internalId])
+    if (internalId !== null && composeTabDraft !== null && !useComposeStore.getState().open) {
+      useComposeStore.getState().openCompose(internalId, composeTabDraft.mode)
+    }
+  }, [internalId, composeTabDraft])
+  // 真实关闭（发送成功 / 显式丢弃 —— open 在**本邮件**上翻 false）→ 清掉标签上的快照。
+  // 上面 effect 的程序化关闭发生在 composeFor ≠ internalId 时，天然不进这条分支。
+  const prevComposeRef = useRef<{ open: boolean; internalId: number | null }>({
+    open: composeOpen,
+    internalId: composeFor
+  })
+  useEffect(() => {
+    const prev = prevComposeRef.current
+    prevComposeRef.current = { open: composeOpen, internalId: composeFor }
+    if (prev.open && !composeOpen && prev.internalId !== null && prev.internalId === internalId) {
+      clearObjectTabDraft('email', prev.internalId)
+    }
+  }, [composeOpen, composeFor, internalId])
   // T9 draft-edit hold 收敛 (镜像上方 overlay effect)。脏草稿编辑被钉住 (draftEditHeldFor)
   // 且 active 已切走时, 经该草稿面板的守卫弹确认: 保存/丢弃 → proceed (放钉 → 新 active 渲染);
   // 取消 → 钉住保留, 面板继续渲染被钉草稿 (列表选中与详情短暂不一致, 与 overlay 路径同语义)。
@@ -742,8 +771,9 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     try {
       await mailApi.email.archive(archivingId)
       toastSuccess(t('toolbarToast.archiveOk'))
-      if (nextId !== null && nextId !== archivingId) setActive(nextId)
-      else if (prevId !== null && prevId !== archivingId) setActive(prevId)
+      // 归档后自动续选 = 原位换目标（replace），不开新标签。
+      if (nextId !== null && nextId !== archivingId) setActive(nextId, { mode: 'replace' })
+      else if (prevId !== null && prevId !== archivingId) setActive(prevId, { mode: 'replace' })
       await queryClient.invalidateQueries({ queryKey: qk.emails.all() })
       await queryClient.invalidateQueries({ queryKey: qk.email.detail(archivingId) })
     } catch (err) {
@@ -764,8 +794,8 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     try {
       await mailApi.email.flag(deletingId, { isFlagged: false, processingStatus: '已完成' })
       toastSuccess(t('toolbarToast.deleteOk', { defaultValue: '已删除（归档完成）' }))
-      if (nextId !== null && nextId !== deletingId) setActive(nextId)
-      else if (prevId !== null && prevId !== deletingId) setActive(prevId)
+      if (nextId !== null && nextId !== deletingId) setActive(nextId, { mode: 'replace' })
+      else if (prevId !== null && prevId !== deletingId) setActive(prevId, { mode: 'replace' })
       await queryClient.invalidateQueries({ queryKey: qk.emails.all() })
       await queryClient.invalidateQueries({ queryKey: qk.email.detail(deletingId) })
     } catch (err) {
@@ -929,6 +959,43 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     })
   }, [internalId, detailQ.data, mailApi, optimisticDetail])
 
+  // 08-27 标签工作区 —— 标签标题回填：deeplink / J-K 开出来的标签没有标题快照，
+  // 详情数据落地后补上（bridge 同值不写，不会造成 localStorage 提交风暴）。
+  useEffect(() => {
+    if (internalId === null) return
+    const data = detailQ.data
+    if (data?.internal_id !== internalId) return
+    if (data.subject) setObjectTabTitle('email', internalId, data.subject)
+  }, [internalId, detailQ.data])
+
+  // 08-27 标签工作区 —— 每标签滚动位置：onScroll 只写 ref（不碰 store），切走时
+  // （effect cleanup）落一次快照；切回在详情数据就绪后恢复一次。iframe 高度异步
+  // 到位，长邮件的恢复是尽力而为（内容未撑开时会被 clamp）。
+  const lastScrollTopRef = useRef(0)
+  useEffect(() => {
+    if (internalId === null) return
+    const id = internalId
+    return () => {
+      saveObjectTabScroll('email', id, lastScrollTopRef.current)
+    }
+  }, [internalId])
+  const scrollRestoredForRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (internalId === null) return
+    if (detailQ.data?.internal_id !== internalId) return
+    if (scrollRestoredForRef.current === internalId) return
+    scrollRestoredForRef.current = internalId
+    const stored = getObjectTabScroll('email', internalId)
+    lastScrollTopRef.current = 0
+    const el = bodyScopeRef.current
+    if (el && stored > 0) {
+      // 命令式恢复滚动位置（同 useEmailListRows 的锚定回滚）；规则误判容器不可变。
+      // eslint-disable-next-line react-hooks/immutability
+      el.scrollTop = stored
+      lastScrollTopRef.current = el.scrollTop
+    }
+  }, [internalId, detailQ.data])
+
   // T9 — 脏草稿编辑被钉住 (active 已切走): 继续渲染被钉草稿 (独立于新 active 的加载/mailbox
   // 态), 直到守卫弹窗 (上方 effect) 放行。与下方 mailbox 分支同 key → 面板实例 (+ 其编辑器)
   // 跨切换存活, 编辑增量不丢。放在所有早退 (null/loading/error) 之前, 让钉住不被新 active 态干扰。
@@ -1039,7 +1106,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
           "遮盖详情列", 加实心 ink-3 底 (= 详情列标称色) 既挡住正文又保留面板玻璃层次. */}
       {composeShouldRender && (
         <div ref={composeScopeRef} className="absolute inset-0 z-20 flex flex-col bg-ink-3">
-          <ComposePanel guardRef={composeGuardRef} onDirtyChange={setComposerDirty} />
+          <ComposePanel snapshotRef={composeSnapshotRef} initialTabDraft={composeTabDraft} />
         </div>
       )}
       <EmailToolbar
@@ -1129,7 +1196,14 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         onClose={() => setFollowupOpen(false)}
       />
 
-      <div ref={bodyScopeRef} className="flex-1 overflow-y-auto scrollbar-thin">
+      <div
+        ref={bodyScopeRef}
+        className="flex-1 overflow-y-auto scrollbar-thin"
+        // 每标签滚动位置的采样面（只写 ref，切走时才落标签快照）。
+        onScroll={(e) => {
+          lastScrollTopRef.current = e.currentTarget.scrollTop
+        }}
+      >
         {/* Sprint 14 round 14 user feedback: "邮件标题、元数据、AI Field、
             正文内容(含历史线程内容)应该在一个页面, 用一个滚动条. 先实现
             这个, 再考虑向上滚动冻结标题栏试试".

@@ -33,6 +33,9 @@ import { cn } from '@shared/lib/cn'
 import { isSessionUnread } from '@shared/lib/chatUnread'
 import { Popover, PopoverContent, PopoverTrigger } from '@shared/components/ui/popover'
 
+// 行标题与主标签面包屑共用同一条口径（见 sessionTitle.ts 的头注）。
+import { titleOf } from './sessionTitle'
+
 export interface AgentThreadListProps {
   /** Unified history — all sessions (email + general), newest-first. */
   items: ChatSessionListItem[]
@@ -70,17 +73,6 @@ function groupOf(updatedAtMs: number, todayStartMs: number): GroupKey {
   if (updatedAtMs >= todayStartMs) return 'today'
   if (updatedAtMs >= todayStartMs - 86_400_000) return 'yesterday'
   return 'earlier'
-}
-
-// Unified title: a stored title wins (manual rename / haiku auto-title); else an email session shows
-// its subject, a general session the first user message; else "untitled".
-function titleOf(item: ChatSessionListItem, t: TFunction): string {
-  return (
-    item.title?.trim() ||
-    item.email_subject?.trim() ||
-    item.first_user_message?.trim() ||
-    t('sessions.untitled')
-  )
 }
 
 export function AgentThreadList(props: AgentThreadListProps): React.ReactElement {

@@ -44,6 +44,7 @@ import {
   stepAnchor
 } from '../calendar/lib/key-nav'
 import { useCalendarFocus, type CalendarFocusTarget } from '@shared/state/calendar-focus'
+import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
 import { AgendaView } from '../calendar/views/AgendaView'
 import { DayView } from '../calendar/views/DayView'
 import { MonthView } from '../calendar/views/MonthView'
@@ -86,6 +87,15 @@ export function CalendarLayout(): React.ReactElement {
   const view: CalendarView = search.view ?? 'week'
 
   const [currentDate, setCurrentDate] = useState<Date>(() => new Date())
+  // 主标签第二段 = 当前月份（design §三）。格式走 toolbar 期间标题的同一条 i18n
+  // （`calendar.shared.yearMonth`），不为面包屑另造一份日期文案。
+  useMainBreadcrumb(
+    'calendar',
+    t('calendar.shared.yearMonth', '{y} 年 {m} 月', {
+      y: currentDate.getFullYear(),
+      m: currentDate.getMonth() + 1
+    })
+  )
   const [shortcutOpen, setShortcutOpen] = useState(false)
   // Phase 4·#1 — calendar 多选筛选 (空 = 全部). client-side filter 不重 fetch,
   // 传给 Toolbar (dropdown) + 各 view (useCalendarEventsInWindow select).

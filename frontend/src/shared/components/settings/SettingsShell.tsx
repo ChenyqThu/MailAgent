@@ -24,10 +24,12 @@ import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { Tabs, TabsContent } from '@shared/components/ui/tabs'
 import { useEnvStore } from '@shared/state/env'
+import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
 import { SETTINGS_TABS, type SettingsTab } from '@shared/router-instance'
 
 import { RestartBanner } from './RestartBanner'
 import { SettingsRail } from './SettingsRail'
+import { settingsTabLabelKey } from './settingsTabMeta'
 import { SettingsScrollContext } from './settingsScrollContext'
 import { AccountsTab } from './tabs/AccountsTab'
 import { AiTab } from './tabs/AiTab'
@@ -64,6 +66,10 @@ export function SettingsShell(): React.ReactElement {
       ? (search.tab as SettingsTab)
       : 'general'
   const isConnectorsTab = tab === 'connectors'
+
+  // 主标签第二段 = 当前分节（design §三）。label key 走 settingsTabMeta 的同一份约定，
+  // 与二级栏的设置分节行、<lg 的水平 tab 条三处同名。
+  useMainBreadcrumb('settings', t(settingsTabLabelKey(tab), { defaultValue: tab }))
 
   // 切 tab 时当前激活 panel 淡入. Radix TabsContent 仅 mount/unmount 无过渡 (硬替换),
   // 这里给 panel 容器做 autoAlpha 0→1 + y:4→0 (DUR.base). reduced-motion 短路.

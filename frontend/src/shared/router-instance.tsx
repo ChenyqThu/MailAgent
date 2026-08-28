@@ -51,11 +51,13 @@ import { useMatterNavigation } from './components/matters/navigation'
 // task 08-20-notification-center M2 批 B4 — 系统通知点击深跳：main 的通知 fanout 经
 // 'notifications:navigate' 送来通知行 payload，这里用**单源解析器**收窄（不另抄判据）。
 import { resolveNotificationLink } from './components/notifications/navigation'
-import { requestOpenAgentSession } from './state/ai-chat-panel'
+import { requestNewAgentSession, requestOpenAgentSession } from './state/ai-chat-panel'
 // 一级入口单源（task 08-24-l4-nav-shell Step R）：deeplink 的落点与「AI → General Agent」
 // 菜单项的目标都从 registry 取，不在这里第二次写死 path。
 import { NAV_ENTRIES, navEntry, navigateToNavEntry, NAV_DEEPLINK_PATH } from './navigation/registry'
 import { resolveStaticNavGate } from './navigation/useNavGates'
+// 标签工作区 ↔ 路由双向同步（08-27 P2 Lane W）：boot 恢复 / 标签激活跟路由 / rail 切域收敛标签态。
+import { useTabRouteSync } from './navigation/useTabRouteSync'
 import { navigateNotificationRoute } from './components/notifications/navigation'
 import type { DeeplinkTarget } from './lib/deeplink_target'
 import { clampSettingsTab, type SettingsTab } from './lib/settingsTabs'
@@ -97,7 +99,10 @@ function useDeeplinkRouter(): void {
       switch (target.kind) {
         case 'email':
           if (typeof target.id === 'number') {
-            useActiveEmail.getState().setActive(target.id)
+            // navTarget：深链目标可能不在当前列表（别的文件夹 / 未分页到），不豁免的话
+            // active-reset 会把刚开出来的标签 replace 成列表第一封（08-27 标签工作区起
+            // setActive 默认 openTab，被抢 = 标签目标被改写，比旧日的抢高亮更重）。
+            useActiveEmail.getState().setActive(target.id, { navTarget: true })
             void router.navigate({ to: NAV_DEEPLINK_PATH.email })
           }
           break
@@ -132,10 +137,14 @@ function useDeeplinkRouter(): void {
 
 /**
  * 监听 main 菜单 (AI → General Agent) 转发的 'mailagent:open-general-agent' →
- * 导航到 MailAgent 通用 agent 视图 (/sessions)。菜单项不绑 accelerator（⌘O 由
+ * 切到对话页 (/sessions) **并新建一个会话**。菜单项不绑 accelerator（⌘O 由
  * renderer GlobalShortcuts 拥有），只走 click → IPC → 这里。RootLayout 仅主 shell
  * 渲染（popout 绕过 router），与 main 端「只发主窗口」对齐。legacy Cmd+O centered
  * dialog 已随 legacy runtime 退役（S3 W2）。
+ *
+ * 🔴 与 ⌘O 同一套动作（08-27 P2 起 ⌘O = 导航 + 新建会话）：同一个入口的两个触发面
+ * 行为必须一致，否则「菜单点进去落在上一次的会话、快捷键开新会话」。新建会话经
+ * ai-chat-panel 排一次请求给 AgentViewLayout 消费 —— 会话引擎在那个组件实例里。
  */
 function useGeneralAgentMenu(): void {
   const navigate = useNavigate()
@@ -155,6 +164,7 @@ function useGeneralAgentMenu(): void {
     if (!ipc) return
     const handler = (): void => {
       navigateToNavEntry(navigate, entry)
+      requestNewAgentSession()
     }
     const off = ipc.on('mailagent:open-general-agent', handler)
     return typeof off === 'function'
@@ -221,6 +231,7 @@ function RootLayout(): React.ReactElement {
   useDeeplinkRouter()
   useGeneralAgentMenu()
   useNotificationClickNavigation()
+  useTabRouteSync()
   return (
     <>
       {/* 外壳单例 (§②, task 08-20-perf-shell-prefetch-sidebar): TitleBar/Sidebar

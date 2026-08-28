@@ -352,7 +352,8 @@ app.whenReady().then(async () => {
             // No accelerator — ⌘O is owned by the renderer GlobalShortcuts
             // (useShortcut('cmd+o')). A menu accelerator would double-fire with
             // the renderer binding and immediately toggle the dialog shut, so
-            // the menu only does click → IPC → renderer navigates to /sessions.
+            // the menu only does click → IPC → renderer navigates to /sessions
+            // and starts a new session there (same action as ⌘O, 08-27 P2).
             click(): void {
               // Main window = first window (popout windows are created later;
               // same simplification as setDeeplinkSink). PopoutShell has no

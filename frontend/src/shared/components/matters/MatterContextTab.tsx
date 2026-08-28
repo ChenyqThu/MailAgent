@@ -480,7 +480,8 @@ function StakeholderLastContact({
     <button
       type="button"
       onClick={() => {
-        setActiveEmail(emailId)
+        // navTarget：跨域跳转目标可能不在当前列表，豁免 active-reset（08-27 标签工作区）。
+        setActiveEmail(emailId, { navTarget: true })
         void navigate({ to: '/' })
       }}
       title={t('matters.context.openLastContact')}

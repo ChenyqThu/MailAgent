@@ -475,7 +475,11 @@
       "settings": "打开设置",
       "shortcutHelp": "显示快捷键帮助",
       "composeNew": "写新邮件",
-      "generalAgent": "打开通用 Agent",
+      "generalAgent": "打开对话并新建会话",
+      "tabClose": "关闭当前标签",
+      "tabReopen": "恢复刚关闭的标签",
+      "tabCycle": "循环切换标签",
+      "tabJump": "跳到第 N 个标签（⌘1 = 主标签）",
       "nextEmail": "下一封邮件",
       "prevEmail": "上一封邮件",
       "reply": "AI 起草回复",
@@ -2855,7 +2859,7 @@
     "accentHint": "6 种 swatch · 影响主 CTA 与 chip 染色",
     "general": {
       "page": {
-        "intro": "控制强调色、主题、语言与界面材质。所有偏好仅保存在本机。",
+        "intro": "控制强调色、主题、语言、界面材质与标签工作区。所有偏好仅保存在本机。",
         "eyebrow": "GENERAL",
         "title": "通用"
       },
@@ -2883,6 +2887,15 @@
         "meta": "2 styles",
         "frostedMeta": "磨砂 ·「一块玻璃」：系统级模糊 + 玻璃染色，气质与细调见下方",
         "solidMeta": "实色 · 不透明、零模糊零辉光，性能最好，等价 reduced-transparency"
+      },
+      "tabWorkspace": {
+        "title": "标签工作区",
+        "meta": "{min}-{max}",
+        "limit": {
+          "label": "标签上限",
+          "meta": "右侧最多同时开几个邮件 / 事项标签"
+        },
+        "note": "开到上限还要再开时，自动关掉最久没看的那个并提示你关了哪个。正在写回复、或在 AI 抽屉里聊过的标签不参与自动关闭。调低上限不会关掉已经开着的标签，只在下次新开时按新上限收敛。"
       },
       "bodyText": {
         "title": "正文外观",
@@ -6949,6 +6962,17 @@
       "answerPlaceholder": "把它缺的那条信息补给它",
       "answerConfirm": "回答",
       "answerBack": "返回"
+    }
+  },
+  "tabs": {
+    "untitled": "未命名",
+    "strip": "工作区标签",
+    "close": "关闭标签（⌘W）",
+    "locked": "有未完成的工作，不会被自动关闭",
+    "toast": {
+      "evictedOne": "标签已满，顺带关掉了「{title}」",
+      "evictedMany": "标签已满，顺带关掉了「{title}」等 {count} 个标签",
+      "full": "标签已满，且都在用（写着回复或聊过），先关一个再开新的"
     }
   }
 }

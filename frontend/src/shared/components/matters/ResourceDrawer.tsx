@@ -218,7 +218,8 @@ export function ResourceDrawer({
 
   const openSource = (): void => {
     if (mailId !== null && Number.isFinite(mailId)) {
-      setActiveEmail(mailId)
+      // navTarget：跨域跳转目标可能不在当前列表，豁免 active-reset（08-27 标签工作区）。
+      setActiveEmail(mailId, { navTarget: true })
       void navigate({ to: '/' })
       onClose()
       return

@@ -7,6 +7,7 @@ import { Check, Trash2, X } from 'lucide-react'
 import type { AgentAvatarConfig, ReportCadence, ReportListItem } from '@shared/api/types'
 import { MANUAL_CHAT_REPORT_AGENT_ID, REPORT_CADENCES } from '@shared/api/reportBlocks'
 import { cn } from '@shared/lib/cn'
+import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { ShimmerText } from '@shared/components/ShimmerText'
 import { ErrorBoundary } from '@shared/components/ErrorBoundary'
@@ -781,6 +782,18 @@ export function ReportsTab(): React.ReactElement {
     return items[0] ?? null
   }, [items, picked])
   const selectedId = selected?.id ?? null
+
+  // 主标签第二段（design §三「报告类型，进具体一份时换成标题」）：报告行没有 title 字段，
+  // 「这一份的标题」= 列表行的抬头同款（自定义报告写 agent 名，排程报告写「日报 08/27」）。
+  // 一份都没有时退回类型级 —— 也就是当前的 cadence 筛选档。
+  useMainBreadcrumb(
+    'reports',
+    selected === null
+      ? t(`agents.cadence.${filter}`)
+      : selected.cadence === 'custom'
+        ? (agentNames[selected.agent_id] ?? selected.agent_id)
+        : `${t(`agents.cadence.${selected.cadence}`)} ${selected.report_date.slice(5).replace('-', '/')}`
+  )
 
   const ctx: RenderCtx = useMemo(
     () => ({

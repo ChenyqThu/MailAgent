@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 //
-// T6 Bug C 拦截点① — EmailDetail 切邮件时的 compose 离开守卫。
-//   - overlay (reply/forward) 有未保存更改 → 切邮件不静默丢: overlay 钉住 + 弹守卫。
-//   - overlay 无更改 → 切邮件静默关闭 (原行为, 清 stale store, 防灰白蒙版)。
-// T9 拦截点补口 — draft-edit (草稿点开即编辑, 非 store 驱动) 切邮件同款守卫:
+// EmailDetail 切邮件时的 compose 处置。
+// 08-27 标签工作区 (Lane W) — overlay (reply/forward) 的 T6「钉住 + 弹确认」退役, 改为
+// **现场快照进标签** (TabDescriptor.draft): 切邮件静默携带、切回自动重开并恢复编辑增量、
+// 显式关闭清快照。draft 快照在场的标签 locked (不参与 LRU 自动淘汰)。
+// T9 拦截点 — draft-edit (草稿点开即编辑, 非 store 驱动) 切邮件守卫维持不变:
 //   - draft-edit dirty → 切走: 钉住原草稿 + 弹守卫; 保存/丢弃放行, 取消留守。
 //   - draft-edit clean → 切走: 直接放行到新邮件 (原行为)。
 // 详情列子组件非本用例关注点 → stub, 只保留 compose 面板。
@@ -71,6 +72,8 @@ vi.mock('../../src/shared/components/email/EmailBodyFrame', () => ({ EmailBodyFr
 import i18n from '@shared/i18n'
 import { EmailDetail } from '../../src/shared/components/email/EmailDetail'
 import { useComposeStore } from '../../src/shared/state/compose'
+import { MAIN_SLOT, useTabWorkspace } from '../../src/shared/state/tab-workspace'
+import { readComposeTabDraft } from '../../src/shared/components/email/compose/composeTabDraft'
 
 await i18n.changeLanguage('zh-CN')
 
@@ -139,31 +142,57 @@ beforeEach(() => {
   mockDeleteDraft.mockResolvedValue({ success: true })
   mockSettingsGet.mockResolvedValue({ userEmail: 'me@acme.com', signature: null })
   useComposeStore.setState({ open: false, internalId: null, mode: 'reply' })
+  // 08-27 标签工作区：overlay 的切邮件语义改为「现场快照进标签」——两封邮件先开成标签
+  //（快照写在 TabDescriptor.draft 上，没有标签就没有落点）。模块级 store 跨用例存活，复位。
+  useTabWorkspace.setState({ tabs: [], active: MAIN_SLOT, closedStack: [] })
+  useTabWorkspace.getState().openTab('email', 42, '邮件42')
+  useTabWorkspace.getState().openTab('email', 43, '邮件43')
 })
 
 afterEach(() => {
   cleanup()
   useComposeStore.setState({ open: false, internalId: null, mode: 'reply' })
+  useTabWorkspace.setState({ tabs: [], active: MAIN_SLOT, closedStack: [] })
 })
 
-describe('EmailDetail 切邮件 — compose 离开守卫 (T6 拦截点①)', () => {
-  test('overlay dirty → 切邮件不静默丢: 弹守卫 + overlay 保持 + store 仍 open', async () => {
+describe('EmailDetail 切邮件 — overlay compose 现场快照进标签 (08-27 标签工作区, 替代 T6 弹确认)', () => {
+  test('overlay dirty → 切邮件: 不弹守卫, 现场快照写进原标签 draft, store 关闭', async () => {
     const { rerender } = render(view(42))
     act(() => useComposeStore.getState().openCompose(42, 'reply'))
     await waitFor(() => expect(screen.getByText('alice@acme.com')).toBeTruthy())
     // 编辑主题 → dirty
     fireEvent.change(screen.getByLabelText('主题'), { target: { value: '改了主题' } })
-    // 切到邮件 43
+    // 切到邮件 43 —— 静默携带: 无守卫弹窗, 快照落在 email:42 的描述符上
     rerender(view(43))
-    // 守卫弹窗出现 (没有静默 closeCompose)
-    expect(await screen.findByText('未保存的更改')).toBeTruthy()
-    // overlay composer 仍挂载 (钉住)
-    expect(document.querySelector('[aria-label="compose-panel"]')).toBeTruthy()
-    // store 仍 open (没被清)
-    expect(useComposeStore.getState().open).toBe(true)
+    await waitFor(() => expect(useComposeStore.getState().open).toBe(false))
+    expect(screen.queryByText('未保存的更改')).toBeNull()
+    const tab42 = useTabWorkspace.getState().tabs.find((t) => t.id === 'email:42')
+    const snap = readComposeTabDraft(tab42?.draft)
+    expect(snap).not.toBeNull()
+    expect(snap?.mode).toBe('reply')
+    expect(snap?.subject).toBe('改了主题')
+    expect(snap?.dirty).toBe(true)
+    // 带着 draft 快照的标签锁定 (不参与 LRU 自动淘汰)
+    expect(tab42?.locked).toBe(true)
   })
 
-  test('overlay clean → 切邮件静默关闭: 无守卫弹窗 + store 清空', async () => {
+  test('overlay dirty → 切走再切回: compose 自动重开, 编辑增量恢复', async () => {
+    const { rerender } = render(view(42))
+    act(() => useComposeStore.getState().openCompose(42, 'reply'))
+    await waitFor(() => expect(screen.getByText('alice@acme.com')).toBeTruthy())
+    fireEvent.change(screen.getByLabelText('主题'), { target: { value: '改了主题' } })
+    rerender(view(43))
+    await waitFor(() => expect(useComposeStore.getState().open).toBe(false))
+    // 切回 42：快照在 → 自动重开 + 主题恢复
+    rerender(view(42))
+    await waitFor(() => expect(useComposeStore.getState().open).toBe(true))
+    expect(useComposeStore.getState().internalId).toBe(42)
+    await waitFor(() =>
+      expect((screen.getByLabelText('主题') as HTMLInputElement).value).toBe('改了主题')
+    )
+  })
+
+  test('overlay clean → 切邮件: store 关闭但快照仍携带 (切回 compose 仍开)', async () => {
     const { rerender } = render(view(42))
     act(() => useComposeStore.getState().openCompose(42, 'reply'))
     await waitFor(() => expect(screen.getByText('alice@acme.com')).toBeTruthy())
@@ -171,6 +200,39 @@ describe('EmailDetail 切邮件 — compose 离开守卫 (T6 拦截点①)', () 
     rerender(view(43))
     await waitFor(() => expect(useComposeStore.getState().open).toBe(false))
     expect(screen.queryByText('未保存的更改')).toBeNull()
+    // clean 快照: bodyHtml null (没动过正文 → 恢复时保留 plan 建议正文), dirty false
+    const snap = readComposeTabDraft(
+      useTabWorkspace.getState().tabs.find((t) => t.id === 'email:42')?.draft
+    )
+    expect(snap).not.toBeNull()
+    expect(snap?.bodyHtml).toBeNull()
+    expect(snap?.dirty).toBe(false)
+  })
+
+  test('显式丢弃 (自己标签上关闭) → 已携带的快照清除, 切回不再重开', async () => {
+    const { rerender } = render(view(42))
+    act(() => useComposeStore.getState().openCompose(42, 'reply'))
+    await waitFor(() => expect(screen.getByText('alice@acme.com')).toBeTruthy())
+    fireEvent.change(screen.getByLabelText('主题'), { target: { value: '改了主题' } })
+    // 先切走让快照真实落盘, 再切回恢复现场 —— 这样下面的「清除」断言才不是恒真。
+    rerender(view(43))
+    await waitFor(() => expect(useComposeStore.getState().open).toBe(false))
+    expect(
+      readComposeTabDraft(useTabWorkspace.getState().tabs.find((t) => t.id === 'email:42')?.draft)
+    ).not.toBeNull()
+    rerender(view(42))
+    await waitFor(() => expect(useComposeStore.getState().open).toBe(true))
+    // 显式关闭 (= 守卫放行后的 proceed 路径): 在**自己的标签上** open 翻 false → 快照清除
+    act(() => useComposeStore.getState().closeCompose())
+    await waitFor(() =>
+      expect(
+        readComposeTabDraft(useTabWorkspace.getState().tabs.find((t) => t.id === 'email:42')?.draft)
+      ).toBeNull()
+    )
+    // 切走再切回: 无快照 → 不自动重开
+    rerender(view(43))
+    rerender(view(42))
+    expect(useComposeStore.getState().open).toBe(false)
   })
 })
 

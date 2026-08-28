@@ -14,6 +14,7 @@ import { useMediaQuery } from '@shared/hooks/useMediaQuery'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { openNewCompose } from '@shared/state/compose-new'
+import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
 import { useNavCollapsed } from '@shared/state/nav-shell'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
@@ -159,6 +160,18 @@ export function ContactsWorkspace(): React.ReactElement | null {
   //   · 藏了 → 报实际列出的数（= 上面那条老语义，一字不变）
   //   · 没藏 → 报服务端的全量命中数（全部加载完时两者恒相等）
   const headerCount = visibleCount < items.length ? visibleCount : matchedCount
+
+  // 主标签第二段 = 选中的那个人（design §三）。名字取自**已加载的列表行** —— 深链
+  // （⌘K / PersonChip / 通知）可以点名一个当前视图列不出来的人（隐藏 / 机器人 / 还没翻到
+  // 那一页），那时取不到名字就退回单段，不为面包屑单独发一次详情查询。P4 通讯录重做时
+  // 若详情已在手，改成由详情回填更准。
+  const selectedName = useMemo(() => {
+    if (selectedId === null) return null
+    const row = items.find((item) => item.id === selectedId)
+    if (row === undefined) return null
+    return row.display_name?.trim() || row.primary_email || null
+  }, [items, selectedId])
+  useMainBreadcrumb('contacts', selectedName)
 
   // v2 任务 ③：选中一个真实联系人时把「id + 当时的视图」写进记录；取消选中
   // （`id === null`）**不清记录** —— 记录留着，下次冷启动按「当前视图的可见集里找不找得到」

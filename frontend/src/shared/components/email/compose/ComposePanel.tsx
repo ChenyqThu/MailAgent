@@ -59,7 +59,14 @@ import type {
   DraftPlanResult
 } from '@shared/api/types'
 
+import { saveObjectTabDraft } from '@shared/state/tab-workspace-bridge'
+
 import { EmailBodyFrame } from '../EmailBodyFrame'
+import {
+  toDraftSnapshot,
+  type ComposeTabDraft,
+  type ComposeTabDraftAttachment
+} from './composeTabDraft'
 import { RecipientField } from './RecipientField'
 import { ComposeEditor, ComposeFormatToolbar } from './ComposeEditor'
 import { DeleteDraftDialog, SendConfirmDialog, UnsavedChangesDialog } from './ComposeDialogs'
@@ -194,6 +201,12 @@ interface Props {
   /** mode='new' 专用：预填抄送（WP5「写邮件并抄送上级」）。非空时顺带展开
    *  cc 行；同 initialTo 走 planApplied 之前的预填闸，不标脏。其余 mode 忽略。 */
   initialCc?: readonly string[]
+  /** 08-27 标签工作区 —— 每标签 compose 现场快照（reply/reply-all/forward overlay 专用）：
+   *  切走时 EmailDetail 经 `snapshotRef` 的 getter 取现场；`initialTabDraft` 是切回时的
+   *  回填源（正常 plan 预填后覆写用户可编辑字段）。getter 只读 ref，卸载后仍可安全调用
+   *  （域切换兜底路径）。其余 mode 忽略。 */
+  snapshotRef?: React.MutableRefObject<(() => ComposeTabDraft | null) | null>
+  initialTabDraft?: ComposeTabDraft | null
 }
 
 /** Inner panel — keyed on (internalId, mode) by the caller so a mode switch
@@ -206,7 +219,9 @@ export function ComposePanelInner({
   guardRef,
   onDirtyChange,
   initialTo,
-  initialCc
+  initialCc,
+  snapshotRef,
+  initialTabDraft
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
@@ -257,7 +272,9 @@ export function ComposePanelInner({
   // 可移除 {attachment_id} chips (显式权威列表契约); pending/error 期间发送硬阻断,
   // error 给错误条 + 重试 (置回 'pending' 重跑 effect)。非 forward 恒 'done' 不参与。
   const [fwdAttachState, setFwdAttachState] = useState<'pending' | 'done' | 'error'>(() =>
-    mode === 'forward' ? 'pending' : 'done'
+    // 标签快照恢复且快照记录过 hydrate 已完成 → 不再重跑（chips 从快照回填；重跑会把
+    // 用户已显式移除的原附件加回来）。
+    mode === 'forward' && initialTabDraft?.fwdHydrated !== true ? 'pending' : 'done'
   )
   const attachSeq = useRef(0)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -284,6 +301,9 @@ export function ComposePanelInner({
     if (!baselineReadyRef.current) return
     setDirty((d) => (d ? d : true))
   }, [])
+  // 08-27 标签快照 —— 正文的最新 HTML 走 ref（editor 'update' 顺手记，不逼组件重渲）。
+  // null = 用户没改过正文（快照恢复时保留 plan 建议正文）。
+  const latestBodyHtmlRef = useRef<string | null>(null)
 
   // @mention 选中联系人 → 不在任何收件人字段时自动加进 To (契约 D4)。extensions 在
   // useEditor 初始化时装配一次; 选中回调是纯事件时序 (suggestion 菜单点击/回车),
@@ -491,12 +511,112 @@ export function ComposePanelInner({
   // planApplied 翻 true 之前, 那一刻监听尚未挂上, 故预填不会误标脏 (旧坑根因)。
   useEffect(() => {
     if (!editor || !planApplied) return
-    const onUpdate = (): void => markDirty()
+    const onUpdate = (): void => {
+      latestBodyHtmlRef.current = editor.getHTML()
+      markDirty()
+    }
     editor.on('update', onUpdate)
     return () => {
       editor.off('update', onUpdate)
     }
   }, [editor, planApplied, markDirty])
+
+  // ── 08-27 标签工作区：compose 现场快照（reply/reply-all/forward overlay 专用） ────
+  const isOverlayMode = mode === 'reply' || mode === 'reply-all' || mode === 'forward'
+  // 快照恢复：正常 plan 预填完成后覆写用户可编辑的字段（quote/splitQuote 从 plan 重建，
+  // 见 composeTabDraft.ts 头注释）。恒只跑一次；mode 不匹配（快照是 reply、这次开的是
+  // forward）时整份放弃。
+  const [tabDraftApplied, setTabDraftApplied] = useState(false)
+  useEffect(() => {
+    if (!planApplied || tabDraftApplied || !editor) return
+    setTabDraftApplied(true)
+    const snap = initialTabDraft
+    if (!isOverlayMode || snap == null || snap.mode !== mode) return
+    setTo([...snap.to])
+    setCc([...snap.cc])
+    setBcc([...snap.bcc])
+    setSubject(snap.subject)
+    setImportance(snap.importance)
+    if (snap.cc.length > 0 || snap.ccVisible) setCcVisible(true)
+    if (snap.bcc.length > 0 || snap.bccVisible) setBccVisible(true)
+    if (snap.lineHeightChoice !== '') setLineHeightChoice(snap.lineHeightChoice)
+    if (snap.bodyHtml !== null) {
+      editor.commands.setContent(snap.bodyHtml)
+      latestBodyHtmlRef.current = snap.bodyHtml
+    }
+    if (snap.attachments.length > 0) {
+      setAttachList(
+        snap.attachments.map((a) => ({
+          localId: ++attachSeq.current,
+          filename: a.filename,
+          size: a.size,
+          status: 'done' as const,
+          ...(a.stageId !== undefined ? { stageId: a.stageId } : {}),
+          ...(a.attachmentId !== undefined ? { attachmentId: a.attachmentId } : {})
+        }))
+      )
+    }
+    if (snap.dirty) setDirty(true)
+  }, [planApplied, tabDraftApplied, editor, initialTabDraft, isOverlayMode, mode])
+
+  // 现场捕获：正文以外的字段每次提交后打进 ref（对象拼装廉价）；正文在快照落笔时从
+  // latestBodyHtmlRef 补上 —— 编辑器打字不触发 React 重渲，捕获时直接读 ref 才是最新值。
+  const tabDraftBaseRef = useRef<Omit<ComposeTabDraft, 'bodyHtml'> | null>(null)
+  useEffect(() => {
+    if (!isOverlayMode) return
+    tabDraftBaseRef.current = {
+      kind: 'compose',
+      mode: mode as ComposeMode,
+      to,
+      cc,
+      bcc,
+      subject,
+      importance,
+      ccVisible,
+      bccVisible,
+      lineHeightChoice,
+      attachments: attachList
+        .filter((a) => a.status === 'done')
+        .map(
+          (a): ComposeTabDraftAttachment => ({
+            filename: a.filename,
+            size: a.size,
+            ...(a.stageId !== undefined ? { stageId: a.stageId } : {}),
+            ...(a.attachmentId !== undefined ? { attachmentId: a.attachmentId } : {})
+          })
+        ),
+      fwdHydrated: mode !== 'forward' || fwdAttachState === 'done',
+      dirty
+    }
+  })
+  // getter 出口（EmailDetail 切邮件路径：面板还活着时取现场）。只读 ref，引用恒定。
+  useEffect(() => {
+    if (snapshotRef === undefined) return
+    snapshotRef.current = () => {
+      const base = tabDraftBaseRef.current
+      if (base === null) return null
+      return { ...base, bodyHtml: latestBodyHtmlRef.current }
+    }
+    // 🔴 卸载时**不清** getter：域切换时 EmailDetail 的收尾要在面板卸载后仍能读到冻结
+    // 的现场（全 ref，安全）；下一个面板实例挂载时会覆写。
+  }, [snapshotRef])
+  // 卸载兜底：store 仍指向本邮件且 open（= 不是用户显式关闭，而是切域 / 详情早退把树
+  // 整个卸了）→ 把现场快照写进标签。显式关闭（丢弃 / 发送成功）先 closeCompose 再卸载，
+  // 这里天然跳过；StrictMode 的 setup→cleanup→setup 重放只会多写一次等价快照，无副作用。
+  useEffect(() => {
+    if (!isOverlayMode) return
+    return () => {
+      const base = tabDraftBaseRef.current
+      if (base === null) return
+      const cs = useComposeStore.getState()
+      if (!cs.open || cs.internalId !== internalId) return
+      saveObjectTabDraft(
+        'email',
+        internalId,
+        toDraftSnapshot({ ...base, bodyHtml: latestBodyHtmlRef.current })
+      )
+    }
+  }, [isOverlayMode, internalId])
 
   // 发送/存草稿正文 = 编辑器内容 + 原文引用块 (拼回)。行距只包新输入段 —— 序列化
   // 发生在拼引用之前, 引用段作为兄弟拼在 wrapper 之后, 出站样式契约不受影响。
@@ -1346,14 +1466,16 @@ export function ComposePanelInner({
 }
 
 /** Store-driven wrapper (reply / reply-all / forward overlay). 草稿编辑态由 EmailDetail
- *  直接渲染 ComposePanelInner (mode='draft-edit'), 不走此 store。guardRef 由 EmailDetail
- *  传入, 让切邮件时能经离开守卫拦截 (T6)。 */
+ *  直接渲染 ComposePanelInner (mode='draft-edit'), 不走此 store。
+ *  08-27 标签工作区: overlay 的「切邮件不丢字节」由 snapshotRef / initialTabDraft 这对
+ *  现场快照承担, T6 的 guardRef / onDirtyChange 离开守卫只留在 draft-edit 与 ComposeNewModal
+ *  两条仍然直接渲染 Inner 的路径上, 故不再穿过这个 wrapper。 */
 export function ComposePanel({
-  guardRef,
-  onDirtyChange
+  snapshotRef,
+  initialTabDraft
 }: {
-  guardRef?: React.MutableRefObject<ComposeGuardHandle | null>
-  onDirtyChange?: (dirty: boolean) => void
+  snapshotRef?: React.MutableRefObject<(() => ComposeTabDraft | null) | null>
+  initialTabDraft?: ComposeTabDraft | null
 } = {}): React.ReactElement | null {
   const open = useComposeStore((s) => s.open)
   const internalId = useComposeStore((s) => s.internalId)
@@ -1367,8 +1489,8 @@ export function ComposePanel({
       internalId={internalId}
       mode={mode}
       onClose={closeCompose}
-      guardRef={guardRef}
-      onDirtyChange={onDirtyChange}
+      snapshotRef={snapshotRef}
+      initialTabDraft={initialTabDraft}
     />
   )
 }

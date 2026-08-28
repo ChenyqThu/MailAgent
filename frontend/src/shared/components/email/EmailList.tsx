@@ -21,6 +21,7 @@
 //     toggle (reads useEmailFilter + useBatch stores directly; only the
 //     pipeline-derived counts arrive as props)
 
+import { useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { List } from 'react-window'
 import { Mail } from 'lucide-react'
@@ -66,6 +67,25 @@ export function EmailList(): React.ReactElement {
 
   useEmailKeyboardNav(orderedIds)
   useInboxActionShortcuts()
+
+  // 08-27 标签工作区：点行 = 开标签（去重激活在 store），标题从行数据带上（避免新标签
+  // 顶着空标题等详情回填）。rows 走 ref —— 放进 useCallback 依赖会让 5s poll 的每次
+  // rows 变化都换回调引用，react-window 把可见行全部重渲一遍。
+  const rowsRef = useRef(rows)
+  rowsRef.current = rows
+  const handleSelect = useCallback(
+    (id: number): void => {
+      let title: string | undefined
+      for (const row of rowsRef.current) {
+        if (row.type === 'email' && row.email.internal_id === id) {
+          title = row.email.subject ?? undefined
+          break
+        }
+      }
+      setActive(id, title !== undefined && title !== '' ? { title } : undefined)
+    },
+    [setActive]
+  )
 
   return (
     <section
@@ -113,7 +133,7 @@ export function EmailList(): React.ReactElement {
               rows,
               activeId,
               newIds,
-              onSelect: setActive,
+              onSelect: handleSelect,
               onToggleGroup: toggleGroup,
               onToggleThread: handleToggleThread,
               onExpandThread: handleExpandThread,

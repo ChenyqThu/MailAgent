@@ -117,7 +117,11 @@ export default {
         subj: ['22px', '30px']
       },
       spacing: {
-        titlebar: '36px'
+        // 08-27 标签工作区: 36→44 (顶栏 = 左段 + 标签条, 标签高 34 底对齐)。
+        // 消费者: h-titlebar (TitleBar) / top-titlebar (Toast·UpdateReadyBanner);
+        // index.css 的 .palette-veil / .general-agent-veil 顶 inset 与
+        // .theme-popover top 是同一高度的手抄对, 改这里必须同步那边。
+        titlebar: '44px'
       },
       transitionTimingFunction: {
         standard: 'cubic-bezier(0.4, 0, 0.2, 1)'

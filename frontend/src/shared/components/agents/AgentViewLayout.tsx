@@ -17,10 +17,12 @@ import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { useGeneralChat } from '@shared/hooks/useGeneralChat'
 import { useAIChatPanel } from '@shared/state/ai-chat-panel'
+import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
 import { useNavCollapsed } from '@shared/state/nav-shell'
 import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
 
 import { AgentThreadList } from './AgentThreadList'
+import { titleOf } from './sessionTitle'
 import { AgentConversation } from './AgentConversation'
 import { useNarrow } from './hooks'
 
@@ -78,6 +80,20 @@ export function AgentViewLayout(): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingAgentSessionId])
 
+  // 08-27 标签工作区 P2 — ⌘O 的第二半：GlobalShortcuts 导航到这里后排了一次「新建会话」
+  // 请求（会话引擎是本组件实例内的 state，模块级 handler 够不着）。nonce 变化即消费一次，
+  // 所以已经在对话页时连按 ⌘O 也是一次一个新会话。
+  const pendingNewAgentSession = useAIChatPanel((s) => s.pendingNewAgentSession)
+  const consumeNewAgentSession = useAIChatPanel((s) => s.consumeNewAgentSession)
+  useEffect(() => {
+    if (pendingNewAgentSession === 0) return
+    chat.newSession()
+    consumeNewAgentSession(pendingNewAgentSession)
+    if (narrow) setMobileDetail(true)
+    // newSession is stable (useCallback); only re-run when a new request is parked.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingNewAgentSession])
+
   // The active session's unified item (anchor_type / email_id / backend_kind) drives the conversation's
   // runtime + context routing (email vs general). null for a brand-new chat → general default.
   const listedActiveItem = items.find((s) => s.id === chat.activeSessionId) ?? null
@@ -90,6 +106,11 @@ export function AgentViewLayout(): React.ReactElement {
   // Agent-run records are intentionally absent from the interactive sidebar, but a run-history jump
   // still needs the exact row metadata so AgentConversation enters locked record mode.
   const activeItem = listedActiveItem ?? directSessionQ.data ?? null
+
+  // 主标签第二段 = 当前会话名（design §三）。标题取列表行的同一份 titleOf；全新会话
+  // （还没落库、activeItem 为 null）不占第二段，主标签就显单段「对话」。
+  // P3 群聊落地后这里换成「会话或群聊名」，取值口径仍是这一处。
+  useMainBreadcrumb('chats', activeItem === null ? null : titleOf(activeItem, t))
 
   const list = (
     <AgentThreadList
