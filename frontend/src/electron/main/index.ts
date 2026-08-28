@@ -177,6 +177,9 @@ function createWindow(opts: { onboarding?: boolean } = {}): void {
     show: false,
     title: 'MailAgent',
     titleBarStyle: 'hiddenInset',
+    // 顶栏 36→44 (08-27 标签工作区) 后 OS 默认 inset 的红绿灯偏上;
+    // 按钮高 12px, 垂直居中 44px 栏 ⇒ y = (44 − 12) / 2 = 16, x 保持默认横距。
+    trafficLightPosition: { x: 7, y: 16 },
     // 主题 v2 — frosted 时由 OS 提供整窗唯一一层重模糊 (macOS vibrancy /
     // Win11 acrylic), 用持久化 surface 让首帧免闪; solid / Linux / Win10
     // 由 surfaceWindowOptions 给不透明锚。🔴 frosted 路径不能出现任何

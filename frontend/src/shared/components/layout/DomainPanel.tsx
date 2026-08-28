@@ -2,8 +2,8 @@
 // task 08-27-l4-tab-workspace P1 — 定宽 336（左列总宽 392 = 导轨 56 + 336）：
 //   · mail / chats 转 'page' 域（列表列由页面自己出），本组件不再渲染邮件
 //     MAILBOXES / 文件夹树 / compose CTA / 账户 popover / agents tab 行；
-//   · today 域 = 当天五节跳转（TodayNavPanel）；calendar 域 = 小月历
-//     （CalendarMiniPanel）；agents（团队）域 = 简版智能体清单（TeamNavPanel，
+//   · today 域 = 当天五节跳转（TodayNavPanel）；calendar 域 = 分组日历树
+//     （CalendarSourcePanel）；agents（团队）域 = 简版智能体清单（TeamNavPanel，
 //     P1 过渡档，见 NAV_DOMAINS.agents 注释）；ops / settings 仍是 registry 投影行
 //     （P3 起 reports 也转 'page'：报告清单列就是它的二级栏）。
 //
@@ -32,7 +32,7 @@ import { useUpdaterStore } from '@shared/state/updater'
 import { clampSettingsTab, SETTINGS_TABS, type SettingsTab } from '@shared/lib/settingsTabs'
 import { useMattersEnabled } from '@shared/components/matters/hooks'
 import { TeamNavPanel } from '@shared/components/agents/TeamNavPanel'
-import { CalendarMiniPanel } from '@shared/components/calendar/CalendarMiniPanel'
+import { CalendarSourcePanel } from '@shared/components/calendar/CalendarSourcePanel'
 import { TodayNavPanel } from '@shared/components/today/TodayNavPanel'
 
 import { SETTINGS_TAB_ICON, settingsTabLabelKey } from '../settings/settingsTabMeta'
@@ -188,7 +188,7 @@ export function DomainPanel({
         {domain === 'today' ? (
           <TodayNavPanel />
         ) : domain === 'calendar' ? (
-          <CalendarMiniPanel />
+          <CalendarSourcePanel />
         ) : domain === 'agents' ? (
           <TeamNavPanel />
         ) : (

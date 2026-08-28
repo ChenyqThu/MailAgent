@@ -173,6 +173,9 @@ export interface AgendaEntry {
   eventId?: number
   icalUid?: string
   recurrenceId?: string | null
+  /** 仅 source=mail 携带 —— 「按日历筛选」的判据; matter/agent 条目不带此键,
+   *  筛选对它们恒不生效 (恒显示)。 */
+  calendarName?: string
   // source=matter 时的跳转锚点。
   matterId?: string
   itemId?: string
@@ -308,7 +311,7 @@ export interface CalendarApi {
 
   // Phase 3 §3.1 — Calendar SSoT 直读
   eventsList(opts?: EventsListOpts): Promise<CalendarEventOccurrence[]>
-  // task 08-27 P3 — 三源聚合 (月视图 + 小月历色点专用; 其余视图仍走 eventsList)
+  // task 08-27 P3/P5 — 三源聚合 (月/日/周视图 + 二级栏源树; Agenda/recurring 仍走 eventsList)
   agenda(opts: AgendaOpts): Promise<AgendaEntry[]>
   eventGet(opts: EventGetOpts): Promise<CalendarEventDetail | null>
   syncStatus(): Promise<CalendarSyncStateItem[]>

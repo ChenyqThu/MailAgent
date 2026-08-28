@@ -30,12 +30,15 @@ import type { FolderInfo } from '../../src/shared/api/types'
 
 await i18n.changeLanguage('zh-CN')
 
-// useMailApi 稳定单例 (避免 useCallback 重建); 注入 whitelist + discover + prefs。
+// useMailApi 稳定单例 (避免 useCallback 重建); 注入 whitelist + discover + prefs
+// + listMailboxes (行尾计数的数据源)。
 const mockGetWhitelist = vi.fn()
 const mockDiscover = vi.fn()
 const mockGetPrefs = vi.fn()
+const mockListMailboxes = vi.fn()
 const stableApi = {
-  folder: { getWhitelist: mockGetWhitelist, discover: mockDiscover, getPrefs: mockGetPrefs }
+  folder: { getWhitelist: mockGetWhitelist, discover: mockDiscover, getPrefs: mockGetPrefs },
+  email: { listMailboxes: mockListMailboxes }
 }
 
 vi.mock('@shared/hooks/useMailApi', () => ({
@@ -47,6 +50,7 @@ vi.mock('@shared/hooks/usePollingFallback', () => ({
   usePollingFallback: () => false
 }))
 
+import type { MailboxSummary } from '@shared/api/types'
 import { ALL_CATEGORIES, ALL_PRIORITIES, useEmailFilter } from '@shared/state/email-filter'
 import { usePinnedFolders } from '@shared/state/pinned-folders'
 import { __resetToastStore, useToastStore } from '@shared/state/toast'
@@ -69,6 +73,20 @@ function fi(
     has_children: false,
     parent,
     message_count: count
+  }
+}
+
+/** listMailboxes 的一行（按 `email_metadata.mailbox` 原值分组的 per-mailbox 汇总）。 */
+function mb(
+  mailbox: string,
+  counts: { total?: number; unread?: number; flagged?: number }
+): MailboxSummary {
+  return {
+    mailbox,
+    total: counts.total ?? 0,
+    unread: counts.unread ?? 0,
+    flagged: counts.flagged ?? 0,
+    failed: 0
   }
 }
 
@@ -114,6 +132,15 @@ function renderHeader(): { container: HTMLElement } {
   return { container }
 }
 
+/** 某一行行尾的计数文本；该行没有计数时返回 null。 */
+function countOf(scope: HTMLElement, label: string): string | null {
+  const row = Array.from(scope.querySelectorAll('button.row')).find(
+    (b) => b.querySelector('span.flex-1')?.textContent === label
+  )
+  if (!row) throw new Error(`row not found: ${label}`)
+  return row.querySelector('span.tabular-nums')?.textContent ?? null
+}
+
 /** 打开文件夹下拉（触发器的可及名 = 当前位置 + 「切换文件夹」）。
  *  🔴 必须 await：TanStack Router 首帧后才把子树挂上来，同步 getByRole 会撞空 body。 */
 async function openFolderMenu(): Promise<HTMLElement> {
@@ -125,9 +152,11 @@ beforeEach(() => {
   mockGetWhitelist.mockReset()
   mockDiscover.mockReset()
   mockGetPrefs.mockReset()
+  mockListMailboxes.mockReset()
   mockGetPrefs.mockResolvedValue({ prefs: [] })
   mockGetWhitelist.mockResolvedValue({ folders: [] })
   mockDiscover.mockResolvedValue(discoverData([], []))
+  mockListMailboxes.mockResolvedValue([])
   useEmailFilter.getState().setView('inbox')
   usePinnedFolders.setState({ pinned: [] })
   __resetToastStore()
@@ -174,12 +203,15 @@ describe('文件夹选择器 — 下拉两段', () => {
 
   test('whitelist 非空 → FOLDERS 段渲染文件夹名 + 计数', async () => {
     mockGetWhitelist.mockResolvedValue({ folders: ['Jira'] })
-    mockDiscover.mockResolvedValue(discoverData([fi('Jira', 'Jira', null, 3458)], ['Jira']))
+    // discover 的 message_count 故意给另一个值：计数取本地库的未读（listMailboxes），
+    // 🔴 不是 message_count —— 树是 counts:false 拉的，生产里那个字段恒 null。
+    mockDiscover.mockResolvedValue(discoverData([fi('Jira', 'Jira', null, 11)], ['Jira']))
+    mockListMailboxes.mockResolvedValue([mb('Jira', { total: 9999, unread: 3458 })])
     renderHeader()
     await waitFor(() => expect(mockDiscover).toHaveBeenCalled())
     const menu = await openFolderMenu()
     expect(await within(menu).findByText('Jira')).toBeTruthy()
-    expect(await within(menu).findByText('3,458')).toBeTruthy()
+    await waitFor(() => expect(countOf(menu, 'Jira')).toBe('3,458'))
   })
 
   test('点文件夹 → setCustomMailbox(display_name, path) 并关掉下拉', async () => {
@@ -254,6 +286,96 @@ describe('文件夹选择器 — 下拉两段', () => {
   })
 })
 
+// ── 行尾计数（owner 0828 dogfood 拍板的五档口径）───────────────────────────
+//
+// 口径: 收件箱=未读 · 草稿箱=总数 · 已标旗=总数 · 所有邮件=未读 · 自定义=各自未读;
+// 发件箱不显计数。
+//
+// 🔴 数据里**故意**放变体行 (INBOX / Drafts): listMailboxes 按 mailbox 原值 GROUP BY,
+// 变体自成一组, 而列表查询按判定集 IN(...) 认全变体 (issue #42 两轮)。徽标若按
+// canonical `=` 精确匹配求和就与列表分裂 —— 少了变体行这些断言全是恒绿装饰。
+
+describe('文件夹选择器 — 行尾计数', () => {
+  /** 收件箱与草稿箱各带一个变体行；草稿的 flagged/unread 故意做大, 跨邮箱视图
+   *  (已标旗 / 所有邮件) 排不掉它就会溢出到断言里。 */
+  const SUMMARIES = [
+    mb('收件箱', { total: 100, unread: 7, flagged: 2 }),
+    mb('INBOX', { total: 30, unread: 3, flagged: 1 }),
+    mb('草稿箱', { total: 5, unread: 3, flagged: 40 }),
+    mb('Drafts', { total: 2, unread: 1, flagged: 10 }),
+    mb('发件箱', { total: 20, unread: 0, flagged: 6 }),
+    mb('Jira', { total: 80, unread: 9, flagged: 4 })
+  ]
+
+  async function openWithCounts(): Promise<HTMLElement> {
+    mockGetWhitelist.mockResolvedValue({ folders: ['Jira'] })
+    mockDiscover.mockResolvedValue(discoverData([fi('Jira', 'Jira', null, null)], ['Jira']))
+    mockListMailboxes.mockResolvedValue(SUMMARIES)
+    renderHeader()
+    await waitFor(() => expect(mockGetWhitelist).toHaveBeenCalled())
+    const menu = await openFolderMenu()
+    await waitFor(() => expect(mockListMailboxes).toHaveBeenCalled())
+    return menu
+  }
+
+  test('收件箱 = 未读, 含变体行 INBOX', async () => {
+    const menu = await openWithCounts()
+    // 7 + 3；只认 canonical 的话是 '7'（= 列表显 10 封、徽标算 7 的那种分裂）。
+    await waitFor(() => expect(countOf(menu, '收件箱')).toBe('10'))
+  })
+
+  test('草稿箱 = 总数（不是未读）, 含变体行 Drafts', async () => {
+    const menu = await openWithCounts()
+    // total 5 + 2 = 7；按未读算是 '4'（3+1），只认 canonical 是 '5' —— 三者互不相同。
+    await waitFor(() => expect(countOf(menu, '草稿箱')).toBe('7'))
+  })
+
+  test('已标旗 = 总数, 跨邮箱且排除草稿', async () => {
+    const menu = await openWithCounts()
+    // flagged: 收件箱 2 + INBOX 1 + 发件箱 6 + Jira 4 = 13（草稿的 50 不算 ——
+    // 列表未指定 mailbox 时走 DRAFTS_EXCLUDE_SQL）。
+    await waitFor(() => expect(countOf(menu, '已标旗')).toBe('13'))
+  })
+
+  test('所有邮件 = 未读, 跨邮箱且排除草稿', async () => {
+    const menu = await openWithCounts()
+    // unread: 7 + 3 + 0 + 9 = 19（含草稿会是 24；按总数会是 230）。
+    await waitFor(() => expect(countOf(menu, '所有邮件')).toBe('19'))
+  })
+
+  test('自定义文件夹 = 各自未读', async () => {
+    const menu = await openWithCounts()
+    // Jira unread 9（按总数会是 80）。
+    await waitFor(() => expect(countOf(menu, 'Jira')).toBe('9'))
+  })
+
+  test('发件箱不显计数', async () => {
+    const menu = await openWithCounts()
+    await waitFor(() => expect(countOf(menu, '收件箱')).toBe('10'))
+    expect(countOf(menu, '发件箱')).toBeNull()
+  })
+
+  test('自定义文件夹是精确匹配 —— 父文件夹不吞子文件夹的未读', async () => {
+    mockGetWhitelist.mockResolvedValue({ folders: ['Proj', 'Proj/Q2'] })
+    mockDiscover.mockResolvedValue(
+      discoverData(
+        [fi('Proj', '项目', null, null), fi('Proj/Q2', '项目/2026 Q2', 'Proj', null)],
+        ['Proj', 'Proj/Q2']
+      )
+    )
+    mockListMailboxes.mockResolvedValue([
+      mb('项目', { total: 50, unread: 4 }),
+      mb('项目/2026 Q2', { total: 60, unread: 6 })
+    ])
+    renderHeader()
+    await waitFor(() => expect(mockDiscover).toHaveBeenCalled())
+    const menu = await openFolderMenu()
+    // 子行的 4+6=10 不该出现在父行上（前缀/包含匹配的变异必红）。
+    await waitFor(() => expect(countOf(menu, '项目')).toBe('4'))
+    expect(countOf(menu, '2026 Q2')).toBe('6')
+  })
+})
+
 // ── per-folder 图标 (v62) ──────────────────────────────────────────────────
 //
 // 断言看渲染出的 svg 里有没有那个图标的特征 path, 不看类名/组件名 (换实现不该红)。
@@ -282,6 +404,9 @@ describe('文件夹选择器 — per-folder 图标 (v62 folder_pref.icon)', () =
         ['Jira', 'Notion']
       )
     )
+    // 下面几条用「22 出现了」当异步 settle 标记（seed 树里两个名字立刻就在，
+    // 计数要等 listMailboxes 回来才有）。
+    mockListMailboxes.mockResolvedValue([mb('Jira', { unread: 11 }), mb('Notion', { unread: 22 })])
   }
 
   test('设过 icon 的文件夹渲染那个图标; 没设过的退回兜底 folder', async () => {

@@ -1,12 +1,11 @@
 // task 08-27 P3 — 月视图「每周一行」布局纯函数单测 (lib/monthGrid, node 环境,
 // 零 hooks import 链, 对齐 calendar-filter.test.ts 惯例)。
 // 覆盖: 周行分组 / 跨天色带跨列与跨周裁剪 / lane 堆叠 / 容量 4−色带 / 溢出计数 /
-// 三源开关过滤 / 小月历色点首源语义 / 选中判定 ISO 容差。
+// 三源开关过滤 / 选中判定 ISO 容差。
 
 import { describe, expect, test } from 'vitest'
 
 import {
-  agendaDayDotSources,
   entryDayRange,
   filterAgendaBySources,
   isAgendaEntrySelected,
@@ -157,25 +156,6 @@ describe('filterAgendaBySources — 三源开关', () => {
   test('关掉 mail → hot 条目一并消失', () => {
     const out = filterAgendaBySources(entries, { mail: false, matter: true, agent: true })
     expect(out.map((e) => e.source)).toEqual(['matter', 'agent'])
-  })
-})
-
-describe('agendaDayDotSources — 小月历色点', () => {
-  test('取当天最早开始条目的源; 跨天条目为覆盖的每一天投点', () => {
-    const matterLate = mk({ source: 'matter', startIso: iso(0, 15), endIso: iso(0, 16) })
-    const mailEarly = mk({ source: 'mail', startIso: iso(0, 8), endIso: iso(0, 9) })
-    const agentBand = mk({
-      source: 'agent',
-      startIso: iso(3, 9),
-      endIso: iso(5, 17),
-      multiDay: true
-    })
-    const m = agendaDayDotSources([matterLate, mailEarly, agentBand])
-    expect(m.get('2026-06-01')).toBe('mail') // 最早的是 mail
-    expect(m.get('2026-06-04')).toBe('agent')
-    expect(m.get('2026-06-05')).toBe('agent')
-    expect(m.get('2026-06-06')).toBe('agent')
-    expect(m.get('2026-06-07')).toBeUndefined()
   })
 })
 

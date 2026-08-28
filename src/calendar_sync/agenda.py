@@ -210,6 +210,9 @@ def _mail_entries(
                 "eventId": ev.get("id"),
                 "icalUid": ev.get("ical_uid"),
                 "recurrenceId": rid,
+                # 「按日历筛选」的前端判据 (mail-only): matter/agent 条目不带此键,
+                # 前端筛选对它们恒不生效。
+                "calendarName": ev.get("calendar_name"),
             }
         )
     return out

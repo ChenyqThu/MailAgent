@@ -12,10 +12,10 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar as CalendarIcon } from 'lucide-react'
-import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
 import { CalendarQueryError } from '../CalendarQueryError'
+import { agendaSrc } from '../lib/agendaLayout'
 import { isTodayLocal, shortTime, ymd } from '../lib/format'
 import { DOW_EN } from '../lib/weekdays'
 import {
@@ -30,69 +30,23 @@ import {
   startOfWeek,
   addDays
 } from '../hooks/useCalendarEvents'
+import { useAgendaEntryClick } from '../hooks/useAgendaEntryClick'
 import { useCalendarAgenda } from '../hooks/useCalendarAgenda'
 import type { AgendaEntry, CalendarEventOccurrence } from '@shared/api/types'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
-import { useMatterNavigation } from '@shared/components/matters/navigation'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
-import { navEntry, navigateToNavEntry } from '@shared/navigation/registry'
 import { useCalendarView } from '@shared/state/calendar-view'
 
 interface Props {
   date?: Date
   calendarName?: string
-  /** Phase 4·#1 遗留 — agenda 聚合无 calendar_name 字段, 月视图暂不消费
-   *  (Day/Week/Agenda 仍生效); 保留 prop 让 Layout 接口不变。 */
-  selectedCalendars?: string[]
   /** F5 — view 上提选中事件给 CalendarLayout (仅 mail 源)。 */
   onSelect: (occ: CalendarEventOccurrence) => void
   /** F4/Q13 — selected event key (= ``${id}-${occurrence_start_iso}``)。 */
   selectedKey?: string | null
-}
-
-/** 色带/胶囊的 data-src 值: hot (重要邮箱日程) 视觉独立但归邮箱组。 */
-function srcAttr(entry: AgendaEntry): string {
-  return entry.source === 'mail' && entry.hot ? 'hot' : entry.source
-}
-
-/** mail 条目 → drawer 需要的 occurrence: 优先从同窗口 events 缓存解析 (Layout
- *  j/k 巡航同 queryKey, 命中即零额外 IPC); 未命中兜底合成最小形状 (drawer 头部
- *  标题/时间可显示, 其余字段由 useCalendarEvent 详情查询补齐)。 */
-function resolveMailOccurrence(
-  entry: AgendaEntry,
-  occs: CalendarEventOccurrence[]
-): CalendarEventOccurrence {
-  const t = Date.parse(entry.startIso)
-  const hit =
-    occs.find((o) => o.id === entry.eventId && Date.parse(o.occurrence_start_iso) === t) ??
-    (entry.icalUid
-      ? occs.find((o) => o.ical_uid === entry.icalUid && Date.parse(o.occurrence_start_iso) === t)
-      : undefined)
-  if (hit) return hit
-  return {
-    id: entry.eventId ?? 0,
-    ical_uid: entry.icalUid ?? '',
-    recurrence_id: entry.recurrenceId ?? null,
-    sequence: 0,
-    summary: entry.title,
-    occurrence_start_iso: entry.startIso,
-    occurrence_end_iso: entry.endIso ?? entry.startIso,
-    is_recurrence_instance: !!entry.recurrenceId,
-    is_all_day: entry.allDay,
-    calendar_name: '',
-    organizer: '',
-    attendees: [],
-    location: '',
-    url: '',
-    status: '',
-    response_status: '',
-    source: 'caldav',
-    notion_page_id: null,
-    related_email_internal_id: null
-  }
 }
 
 interface PopState {
@@ -126,7 +80,7 @@ function AgendaChip({
     <button
       type="button"
       className={cn('m-evt', selected && 'is-selected')}
-      data-src={srcAttr(entry)}
+      data-src={agendaSrc(entry)}
       onClick={onClick}
       title={entry.title}
     >
@@ -140,13 +94,12 @@ function AgendaChip({
 export function MonthView({
   date,
   calendarName: _calendarName,
-  selectedCalendars: _selectedCalendars,
   onSelect,
   selectedKey = null
 }: Props): React.ReactElement {
   const { t } = useTranslation()
-  const navigate = useNavigate()
   const sources = useCalendarView((s) => s.sources)
+  const excluded = useCalendarView((s) => s.excluded)
   const [pop, setPop] = useState<PopState | null>(null)
   const popRef = useRef<HTMLDivElement | null>(null)
   // Q11 — 退场动画期间 pop 已置 null, lastPop 保留最后内容渲染到播完。
@@ -172,7 +125,9 @@ export function MonthView({
 
   const { data, isLoading, isError, refetch } = useCalendarAgenda(
     { fromIso: gridStart.toISOString(), toIso: gridEnd.toISOString() },
-    sources
+    sources,
+    true,
+    excluded
   )
   // mail 条目点击解析用的同窗口 occurrences — 与 Layout j/k 巡航同 queryKey,
   // react-query 缓存命中, 零额外 IPC。
@@ -181,18 +136,7 @@ export function MonthView({
     toIso: gridEnd.toISOString()
   })
 
-  const handleEntryClick = (entry: AgendaEntry): void => {
-    if (entry.source === 'mail') {
-      onSelect(resolveMailOccurrence(entry, windowEvents ?? []))
-      return
-    }
-    if (entry.source === 'matter') {
-      if (entry.matterId) useMatterNavigation.getState().open(entry.matterId)
-      navigateToNavEntry(navigate, navEntry('matters'))
-      return
-    }
-    navigateToNavEntry(navigate, navEntry('agents'))
-  }
+  const handleEntryClick = useAgendaEntryClick(onSelect, windowEvents)
 
   // F11 — popover click-outside / Esc to close (capture phase mousedown)。
   useEffect(() => {
@@ -283,7 +227,7 @@ export function MonthView({
                 key={`band-${band.entry.id}-${band.startCol}`}
                 type="button"
                 className="m-band"
-                data-src={srcAttr(band.entry)}
+                data-src={agendaSrc(band.entry)}
                 style={{
                   left: `calc(${(band.startCol * 100) / 7}% + 4px)`,
                   width: `calc(${(band.span * 100) / 7}% - 8px)`,

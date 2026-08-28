@@ -7,7 +7,7 @@
 //   - dragEnter (含 Files) → 提示层出现; dragDepth 计数抗子元素抖动; leave 归零/drop 后消失
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const { mockSend, mockSettingsGet, mockUpload, mockToastError } = vi.hoisted(() => ({
@@ -35,6 +35,7 @@ vi.mock('../../src/shared/components/email/EmailBodyFrame', () => ({
 
 import i18n from '@shared/i18n'
 import { ComposePanelInner } from '../../src/shared/components/email/compose/ComposePanel'
+import { COMPOSE_INLINE_IMAGE_DROP_FLAG } from '../../src/shared/components/email/compose/editor-extensions'
 
 await i18n.changeLanguage('zh-CN')
 
@@ -114,6 +115,22 @@ describe('ComposePanel — L0 拖拽附件 (mode=new)', () => {
     fireEvent.dragEnter(zone, { dataTransfer: dt([], ['text/plain']) })
     expect(screen.queryByText(DROP_HINT)).toBeNull()
     fireEvent.drop(zone, { dataTransfer: dt([], ['text/plain']) })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(mockUpload).not.toHaveBeenCalled()
+  })
+
+  test('composeInlineImage 已消费的 drop（事件带标记）→ 收尾提示层但不进附件链', async () => {
+    // 图片拖进正文时编辑器插件先内联插入并在原生事件上打标记（同一事件对象冒泡
+    // 到 <main>）；面板只清掉提示层，不再把同一文件当附件重复添加。
+    const zone = renderPanel()
+    fireEvent.dragEnter(zone, { dataTransfer: dt([], ['Files']) })
+    expect(screen.getByText(DROP_HINT)).toBeTruthy()
+    const dropEvent = createEvent.drop(zone, {
+      dataTransfer: dt([makeFile('pic.png', [1, 2, 3], 'image/png')], ['Files'])
+    })
+    ;(dropEvent as unknown as Record<string, unknown>)[COMPOSE_INLINE_IMAGE_DROP_FLAG] = true
+    fireEvent(zone, dropEvent)
+    expect(screen.queryByText(DROP_HINT)).toBeNull()
     await new Promise((r) => setTimeout(r, 20))
     expect(mockUpload).not.toHaveBeenCalled()
   })

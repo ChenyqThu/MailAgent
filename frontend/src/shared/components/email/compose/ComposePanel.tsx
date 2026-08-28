@@ -75,10 +75,11 @@ import {
   type ComposeTabDraftMode
 } from './composeTabDraft'
 import { RecipientField } from './RecipientField'
+import { SenderChip } from './SenderChip'
 import { ComposeEditor, ComposeFormatToolbar } from './ComposeEditor'
 import { DeleteDraftDialog, SendConfirmDialog, UnsavedChangesDialog } from './ComposeDialogs'
 import { useComposeGuard, type ComposeGuardHandle } from './useComposeGuard'
-import { buildComposeExtensions } from './editor-extensions'
+import { COMPOSE_INLINE_IMAGE_DROP_FLAG, buildComposeExtensions } from './editor-extensions'
 import { AttachmentTray, kindFromName } from './AttachmentTray'
 
 /** Panel mode = UI ComposeMode + 草稿编辑态 + 写新邮件态。 */
@@ -1077,6 +1078,10 @@ export function ComposePanelInner({
     (e: React.DragEvent) => {
       dragDepth.current = 0
       setIsDragActive(false)
+      // 图片拖进正文时 composeInlineImage 插件已内联插入并在原生事件上打了标记
+      // (同一事件对象冒泡到这里) → 只收尾提示层, 不再把文件当附件重复添加。
+      if ((e.nativeEvent as unknown as Record<string, unknown>)[COMPOSE_INLINE_IMAGE_DROP_FLAG])
+        return
       if (busy || !e.dataTransfer.types.includes('Files')) return
       e.preventDefault()
       handleFilesSelected(e.dataTransfer.files)
@@ -1295,12 +1300,7 @@ export function ComposePanelInner({
         <div className="folder-field-row">
           <span className="field-label">{t('compose.from')}</span>
           <div className="flex items-center gap-2 min-w-0">
-            <span className="recipient-chip">
-              <span className="rc-av">
-                {(selfEmail?.split('@')[0]?.slice(0, 2) ?? 'ME').toUpperCase()}
-              </span>
-              <span className="break-all">{selfEmail ?? t('compose.fromUnknown')}</span>
-            </span>
+            <SenderChip email={selfEmail} fallbackLabel={t('compose.fromUnknown')} />
           </div>
           <span />
         </div>

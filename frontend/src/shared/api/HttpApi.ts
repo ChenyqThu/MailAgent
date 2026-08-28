@@ -663,7 +663,7 @@ export class HttpApi implements MailApi {
       return data ?? []
     },
 
-    // task 08-27 P3 — 三源聚合 (月视图 + 小月历色点)。C7: serve-api 把
+    // task 08-27 P3 — 三源聚合 (月/日/周视图 + 二级栏源树)。C7: serve-api 把
     // AgendaEntry[] 放进 envelope.data (total/window/sources 落 meta)。
     // 🔴 path/query 与 Electron 侧 calendar:agenda handler (daemon_api 转发)
     // 严格 mirror, 改 wire 时两处同步。

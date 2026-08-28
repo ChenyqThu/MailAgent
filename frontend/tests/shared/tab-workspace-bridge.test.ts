@@ -74,38 +74,51 @@ describe('openObjectTab / replaceObjectTab', () => {
     expect(ids).toContain('email:1')
   })
 
-  test('LRU 淘汰出 toast（报被关标签名）；满且全锁定出「先关一个」toast', () => {
+  test('LRU 驱逐静默（dogfood 轮4）：满员开新零 toast，新标签在场并激活，被挤掉的可 ⌘⇧T 找回', () => {
     useTabWorkspace.setState({ maxTabs: 4 })
     for (let i = 1; i <= 4; i++) bridge.openObjectTab('email', i, `邮件${i}`)
-    bridge.openObjectTab('email', 5, '邮件5')
-    let toasts = useToastStore.getState().items
-    expect(toasts).toHaveLength(1)
-    expect(toasts[0].title).toContain('邮件1')
-    // 全锁定：淘汰不了 → rejected toast
     __resetToastStore()
+    expect(bridge.openObjectTab('email', 5, '邮件5')).toBe(true)
+    // 驱逐不再出声（此前每次满员都弹「顺带关掉了谁」，owner 判为噪音）
+    expect(useToastStore.getState().items).toHaveLength(0)
+    const ws = useTabWorkspace.getState()
+    expect(ws.tabs.some((t) => t.id === 'email:5')).toBe(true)
+    expect(ws.active).toBe('email:5')
+    expect(ws.tabs.some((t) => t.id === 'email:1')).toBe(false)
+    // 被挤掉的进最近关闭栈 —— 静默的前提是找得回来
+    expect(ws.closedStack.at(-1)).toEqual({ kind: 'email', targetId: 1, title: '邮件1' })
+    useTabWorkspace.getState().reopenLastClosed()
+    expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'email:1')).toBe(true)
+  })
+
+  test('满且全锁定（极端路径）→ 仍拒绝 + 「先关一个」toast，openObjectTab 返回 false（回滚链判据）', () => {
+    useTabWorkspace.setState({ maxTabs: 4 })
+    for (let i = 1; i <= 4; i++) bridge.openObjectTab('email', i, `邮件${i}`)
     for (const t of useTabWorkspace.getState().tabs) {
       useTabWorkspace.getState().updateTab(t.id, { locked: true })
     }
-    bridge.openObjectTab('email', 9, '邮件9')
-    toasts = useToastStore.getState().items
+    __resetToastStore()
+    // 返回 false = active-email / matters 的被拒回滚投影链在这条极端路径继续工作
+    expect(bridge.openObjectTab('email', 9, '邮件9')).toBe(false)
+    const toasts = useToastStore.getState().items
     expect(toasts).toHaveLength(1)
+    expect(toasts[0].title).toContain('先关一个')
     expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'email:9')).toBe(false)
   })
 
-  test('一次淘汰多个（用户把上限调低后再开）→ 走 evictedMany 文案，含个数', () => {
+  test('一次驱逐多个（用户把上限调低后再开）同样静默：零 toast，按新上限收敛到位', () => {
     useTabWorkspace.setState({ maxTabs: 8 })
     for (let i = 1; i <= 6; i++) bridge.openObjectTab('email', i, `邮件${i}`)
     // 调低上限不追溯（store 契约），下一次开新标签时一次收敛到位 —— 6 → 3 要连关 4 个。
     useTabWorkspace.getState().setMaxTabs(4)
     __resetToastStore()
     bridge.openObjectTab('email', 7, '邮件7')
+    expect(useToastStore.getState().items).toHaveLength(0)
     expect(useTabWorkspace.getState().tabs).toHaveLength(4)
-    const [toast] = useToastStore.getState().items
-    // 🔴 `count` 选项会让 i18next 先找 `..._other`，词表里没有那一支 —— 这条断言同时钉住
-    //   「多个」文案确实回落到基础键（漏了就渲染成 key 原文，不是中文）。
-    expect(toast.title).toContain('邮件1')
-    expect(toast.title).toContain('3')
-    expect(toast.title).not.toContain('evictedMany')
+    expect(useTabWorkspace.getState().active).toBe('email:7')
+    // 被挤掉的三个全部进 closedStack（⌘⇧T 逐个可找回）
+    const stacked = useTabWorkspace.getState().closedStack.map((e) => e.targetId)
+    expect(stacked).toEqual(expect.arrayContaining([1, 2, 3]))
   })
 })
 

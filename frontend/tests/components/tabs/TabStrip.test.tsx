@@ -197,12 +197,17 @@ describe('TabStrip — 「+」新标签页钮', () => {
     expect(useTabWorkspace.getState().active).toBe(SEARCH_TAB_ID)
   })
 
-  test('钮在 .tstrip-tabs 之外（tabs 区被 RO 观察，钮宽经实测进几何不靠手抄）', () => {
+  test('钮在 .tstrip-tabs 内、恒为最后一个子节点（Chrome 式跟在最后一个标签右侧）', () => {
     const { container } = render(<TabStrip />)
+    act(() => {
+      useTabWorkspace.getState().openTab('email', 1, 'A')
+      useTabWorkspace.getState().openTab('email', 2, 'B')
+    })
+    const wrap = container.querySelector('.tstrip-tabs')
     const plus = container.querySelector('.tstrip-plus')
     expect(plus).not.toBeNull()
-    expect(plus?.closest('.tstrip-tabs')).toBeNull()
-    expect(plus?.closest('.tstrip')).not.toBeNull()
+    expect(plus?.parentElement).toBe(wrap)
+    expect(wrap?.lastElementChild).toBe(plus)
   })
 })
 
@@ -225,7 +230,9 @@ describe('TabStrip — morphing 滑动面与 hairline 断口', () => {
       useTabWorkspace.getState().openTab('email', 1, 'A')
       useTabWorkspace.getState().openTab('email', 2, 'B')
     })
-    wireGeometry(container) // left 195 / width 600 ⇒ tabW = clamp(84,190,299) = 190
+    // left 195 / width 600、n=2 ⇒ floor((600-28-2×2)/2)=284 → clamp 84-190 = 190
+    // （「+」钮在 tabs 区内，宽 28 + 一个 gap 从可用宽度里扣掉）
+    wireGeometry(container)
     const surf = surface(container)
     // 激活的是第二个：surfLeft = 195 + 1×(190+2) = 387
     expect(surf.style.left).toBe('387px')
@@ -242,7 +249,7 @@ describe('TabStrip — morphing 滑动面与 hairline 断口', () => {
     act(() => {
       for (let i = 1; i <= 4; i++) useTabWorkspace.getState().openTab('email', i, `邮件 ${i}`)
     })
-    wireGeometry(container, 195, 200) // floor((200-6)/4)=48 → clamp 到 84
+    wireGeometry(container, 195, 200) // floor((200-28-8)/4)=41 → clamp 到 84
     expect(screen.getAllByRole('tab')[1].style.width).toBe('84px')
   })
 })
@@ -278,5 +285,129 @@ describe('TabStrip — 改动点与关闭守卫（dogfood 波3）', () => {
     expect(state.tabs.some((t) => t.id === 'email:1')).toBe(true)
     expect(state.active).toBe('email:1')
     expect(useTabCloseGuard.getState().pending?.tabId).toBe('email:1')
+  })
+})
+
+// setup.ts 全局强制 reduce（组件测试断言最终 DOM）—— 本组测的就是动画中间态，
+// 按 setup.ts 注释的约定自行覆盖 matchMedia（useExitAnimation.test 同款先例）。
+describe('TabStrip — 开合动效（dogfood 轮4：关闭收缩淡出 / 新开长出 / 原位换身不播）', () => {
+  const originalMatchMedia = window.matchMedia
+
+  beforeEach(() => {
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false
+    })) as unknown as typeof window.matchMedia
+  })
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia
+    vi.useRealTimers()
+  })
+
+  test('关闭：标签先以幽灵态留在 DOM（.ttab-closing，宽 0、退出 a11y 树），到点卸载', () => {
+    vi.useFakeTimers()
+    const { container } = render(<TabStrip />)
+    act(() => {
+      useTabWorkspace.getState().openTab('email', 1, 'A')
+      useTabWorkspace.getState().openTab('email', 2, 'B')
+    })
+    act(() => {
+      useTabWorkspace.getState().closeTab('email:1')
+    })
+    const ghost = container.querySelector('.ttab-closing')
+    expect(ghost).not.toBeNull()
+    expect((ghost as HTMLElement).style.width).toBe('0px')
+    expect(ghost?.getAttribute('aria-hidden')).toBe('true')
+    // 幽灵不是 tab：可交互序列 = 主标签 + email:2
+    expect(screen.getAllByRole('tab')).toHaveLength(2)
+    act(() => {
+      vi.runAllTimers()
+    })
+    expect(container.querySelector('.ttab-closing')).toBeNull()
+  })
+
+  test('新开：入场标签带 .ttab-enter（从 0 宽长出）；挂载时的存量标签不播', () => {
+    act(() => {
+      useTabWorkspace.getState().openTab('email', 1, 'A')
+    })
+    const { container } = render(<TabStrip />)
+    // boot 存量：直接入列，不闪一排入场动画
+    expect(container.querySelector('.ttab-enter')).toBeNull()
+    act(() => {
+      useTabWorkspace.getState().openTab('email', 2, 'B')
+    })
+    const entering = container.querySelectorAll('.ttab-enter')
+    expect(entering).toHaveLength(1)
+    expect(entering[0].textContent).toContain('B')
+  })
+
+  test('满员驱逐 = 幽灵收缩 + 新标签长出同帧并存（静默驱逐的观感面）', () => {
+    vi.useFakeTimers()
+    const { container } = render(<TabStrip />)
+    act(() => {
+      useTabWorkspace.getState().setMaxTabs(4)
+      for (let i = 1; i <= 4; i++) useTabWorkspace.getState().openTab('email', i, `邮件 ${i}`)
+    })
+    // 先让这一批的入场标记到点摘除，隔离出「第 5 个」这次开合
+    act(() => {
+      vi.runAllTimers()
+    })
+    expect(container.querySelector('.ttab-enter')).toBeNull()
+    act(() => {
+      useTabWorkspace.getState().openTab('email', 5, '邮件 5')
+    })
+    const ghost = container.querySelector('.ttab-closing')
+    expect(ghost?.textContent).toContain('邮件 1')
+    const entering = container.querySelectorAll('.ttab-enter')
+    expect(entering).toHaveLength(1)
+    expect(entering[0].textContent).toContain('邮件 5')
+  })
+
+  test('原位换目标（J/K 的 replaceActiveTab）不播动画：无幽灵、无入场', () => {
+    const { container } = render(<TabStrip />)
+    act(() => {
+      useTabWorkspace.getState().openTab('email', 1, 'A')
+    })
+    act(() => {
+      useTabWorkspace.getState().replaceActiveTab('email', 2, 'B')
+    })
+    expect(container.querySelector('.ttab-closing')).toBeNull()
+    // openTab('email',1) 播过的入场标记在换身时一并清掉（换身不是新开）
+    expect(container.querySelector('.ttab-enter')).toBeNull()
+    expect(screen.getAllByRole('tab')[1].textContent).toContain('B')
+  })
+
+  test('幽灵期间重开同一目标（⌘⇧T 秒回）：幽灵让位，存活序与 store 一致', () => {
+    vi.useFakeTimers()
+    const { container } = render(<TabStrip />)
+    act(() => {
+      useTabWorkspace.getState().openTab('email', 1, 'A')
+      useTabWorkspace.getState().openTab('email', 2, 'B')
+    })
+    act(() => {
+      useTabWorkspace.getState().closeTab('email:1')
+    })
+    expect(container.querySelector('.ttab-closing')).not.toBeNull()
+    act(() => {
+      useTabWorkspace.getState().reopenLastClosed()
+    })
+    // 同一个 id 不能一边是幽灵一边是活标签 —— 幽灵当场让位（含定时器取消）
+    expect(container.querySelector('.ttab-closing')).toBeNull()
+    const tabsEls = screen.getAllByRole('tab')
+    expect(tabsEls).toHaveLength(3)
+    // store 序 = [email:2, email:1]（重开走 append）——渲染序必须跟 store，滑动面才指得对格
+    expect(tabsEls[1].textContent).toContain('B')
+    expect(tabsEls[2].textContent).toContain('A')
+    act(() => {
+      vi.runAllTimers()
+    })
+    expect(screen.getAllByRole('tab')).toHaveLength(3)
   })
 })

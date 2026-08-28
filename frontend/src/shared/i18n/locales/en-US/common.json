@@ -1980,15 +1980,6 @@
         "thu": "Thu",
         "fri": "Fri",
         "sat": "Sat"
-      },
-      "min": {
-        "mon": "M",
-        "tue": "T",
-        "wed": "W",
-        "thu": "T",
-        "fri": "F",
-        "sat": "S",
-        "sun": "S"
       }
     },
     "shared": {
@@ -2223,11 +2214,6 @@
       "rescheduleFailed": "Failed to reschedule event"
     },
     "view": {
-      "day": {
-        "count": "{n} events",
-        "prevMonthAria": "Previous month",
-        "nextMonthAria": "Next month"
-      },
       "month": {
         "moreItems": "{n} more",
         "today": "Today",
@@ -2252,7 +2238,10 @@
       "agent": "Agents",
       "mailHint": "Accounts + shared calendars",
       "matterHint": "Due dates + action items",
-      "agentHint": "Agent schedules"
+      "agentHint": "Agent schedules",
+      "emptyMail": "No mailbox calendars synced yet",
+      "emptyMatter": "No matter dates this month",
+      "emptyAgent": "No agent schedules this month"
     }
   },
   "settings": {
@@ -6951,8 +6940,6 @@
     "locked": "Unfinished work here — won't be auto-closed",
     "dirty": "Unsaved changes here",
     "toast": {
-      "evictedOne": "Tab limit reached — closed “{title}”",
-      "evictedMany": "Tab limit reached — closed {count} tabs, starting with “{title}”",
       "full": "Every tab is in use (draft in progress or chatted) — close one first",
       "targetGone": "That email or draft no longer exists — its tab was closed"
     }

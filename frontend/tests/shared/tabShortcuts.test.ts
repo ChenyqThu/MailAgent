@@ -181,7 +181,7 @@ describe('⌘⇧T reopenClosedTab', () => {
     expect(toastTitles()).toEqual([])
   })
 
-  test('恢复时挤掉了别人 → 提示说清关掉的是哪个', () => {
+  test('恢复时挤掉了别人 → 静默驱逐（dogfood 轮4），被挤掉的进栈可再找回', () => {
     // maxTabs=4：开满 → 关掉 t1（进最近关闭栈）→ 再开 t5 填回满员。
     const [t1, t2] = openEmails(4)
     useTabWorkspace.getState().closeTab(t1)
@@ -189,11 +189,12 @@ describe('⌘⇧T reopenClosedTab', () => {
     expect(useTabWorkspace.getState().tabs).toHaveLength(4)
 
     expect(reopenClosedTab()).toBe(true)
-    // 淘汰的是最久未激活且非锁定的 t2。
+    // 淘汰的是最久未激活且非锁定的 t2 —— 零 toast，t2 进最近关闭栈成新栈顶。
     expect(useTabWorkspace.getState().tabs.map((t) => t.id)).not.toContain(t2)
     expect(useTabWorkspace.getState().tabs.map((t) => t.id)).toContain(t1)
-    expect(toastTitles()).toHaveLength(1)
-    expect(toastTitles()[0]).toContain('邮件2')
+    expect(toastTitles()).toEqual([])
+    const stack = useTabWorkspace.getState().closedStack
+    expect(stack[stack.length - 1]?.targetId).toBe(2)
   })
 
   test('满了且全锁定 → 提示先关一个，条目留在栈里等下次', () => {

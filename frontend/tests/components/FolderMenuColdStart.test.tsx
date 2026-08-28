@@ -34,12 +34,14 @@ import type { FolderInfo } from '../../src/shared/api/types'
 
 await i18n.changeLanguage('zh-CN')
 
-// useMailApi 稳定单例 (避免 useCallback 重建); 三个 folder 读全注入。
+// useMailApi 稳定单例 (避免 useCallback 重建); 三个 folder 读全注入 +
+// listMailboxes (下拉行尾计数的数据源, 这里恒空 —— 本文件只验文件夹行在不在)。
 const mockGetWhitelist = vi.fn()
 const mockDiscover = vi.fn()
 const mockGetPrefs = vi.fn()
 const stableApi = {
-  folder: { getWhitelist: mockGetWhitelist, discover: mockDiscover, getPrefs: mockGetPrefs }
+  folder: { getWhitelist: mockGetWhitelist, discover: mockDiscover, getPrefs: mockGetPrefs },
+  email: { listMailboxes: vi.fn().mockResolvedValue([]) }
 }
 
 vi.mock('@shared/hooks/useMailApi', () => ({

@@ -25,6 +25,9 @@ export interface EventRescheduleInput {
 
 interface EventBlockProps {
   event: CalendarEventOccurrence
+  /** P5 三源语言 — 源色 (data-src): 'mail' 邮箱蓝 / 'hot' 重要邮箱日程.
+   *  timeline 事件块只承载 mail 源 (matter/agent 走 .evt-mark 时刻标记). */
+  src?: 'mail' | 'hot'
   /** 块顶部 px 偏移 (相对 timeline 起点). */
   topPx: number
   /** 块高度 px (raw, 内部 min 24, 减 2 留 hour-cell 边). */
@@ -51,6 +54,7 @@ function hasMeetingLink(occ: CalendarEventOccurrence): boolean {
 
 export function EventBlock({
   event,
+  src = 'mail',
   topPx,
   heightPx,
   col = 0,
@@ -97,6 +101,7 @@ export function EventBlock({
       role="button"
       tabIndex={0}
       className={cn('evt', selected && 'is-selected', isPast && 'is-past')}
+      data-src={src}
       data-resp={(event.response_status || '').toUpperCase()}
       data-status={(event.status || '').toUpperCase()}
       style={{

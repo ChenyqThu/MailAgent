@@ -1,18 +1,16 @@
 // task 08-27-l4-tab-workspace P2 — 44px 顶栏 = 左段（与左列共宽）+ 标签条。
 //
-// 左段（.topbar-left，authored CSS）：macOS hiddenInset 红绿灯占位 72px + 行尾
-// 「紧凑 ⌘K 搜索钮 · 快捷键帮助钮」。原居中大搜索钮退役 —— 搜索可发现性 = 这枚
-// 紧凑钮 + ⌘K 快捷键（togglePalette 复用）。宽度恒 --app-nav-w(392)，右缘竖
+// 左段（.topbar-left，authored CSS）：macOS hiddenInset 红绿灯占位 72px + 行尾控件簇。
+// dogfood 轮4：右簇整体迁入左段，顺序 = 更新（有新版本才出现）· 搜索 ⌘K · 通知铃铛 ·
+// 亮暗切换 · 快捷键帮助；顶栏右侧**完全腾空**给标签条（TabStrip 不再收 trailing，
+// 断开的 hairline 一直延伸到行末，右侧零常驻控件）。宽度恒 --app-nav-w(392)，右缘竖
 // hairline 与左列边界共线。Windows 无红绿灯：占位无条件渲染（对平台无分支，与旧版
 // 一致——win 上只是 72px 留白，不是回归）。
-//
-// 右段：TabStrip（主标签 + 对象标签 + morphing 滑动面 + 断开的 hairline，见
-// components/tabs/TabStrip.tsx）。右簇（更新 · 铃铛 · 亮暗）作为 trailing 传入 ——
-// 落位在标签条内是为了让 hairline 一直延伸到行末。整行保持可拖拽，交互件各自 no-drag。
 //
 // 08-27 dogfood 修正批：品牌字「MailAgent」删除；主题色 / 磨砂 / 中英文三枚 picker
 // 从右簇删除（保底能力在设置 → 通用 → 外观，那里四项齐全；语言的 ⌥G 快捷键保留）；
 // 亮暗从三态 popover 改成单 icon 直切（ThemeToggleButton），system 态只能在设置里选回。
+// 铃铛的浮层经 useAnchoredPopover 钉在触发器上并对视口收口，迁到左段照常工作。
 
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -44,60 +42,56 @@ export function TitleBar(): React.ReactElement {
           {/* 72px reservation for real macOS traffic lights (hiddenInset). */}
           <div className="w-[72px] shrink-0" aria-hidden />
           <div className="flex-1 min-w-0" />
-          <button
-            type="button"
-            onClick={togglePalette}
-            onPointerEnter={() => setSearchActive(true)}
-            onPointerLeave={() => setSearchActive(false)}
-            onFocus={() => setSearchActive(true)}
-            onBlur={() => setSearchActive(false)}
-            title={t('search.title')}
-            aria-label={t('search.title')}
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            className={cn(
-              'group flex items-center gap-1.5 px-2 py-1 rounded-[var(--r-ctl)]',
-              'text-aux text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3',
-              'transition-colors duration-fast'
-            )}
-          >
-            <AnimatedIconActiveProvider active={searchActive}>
-              <SearchIcon size={13} strokeWidth={2} />
-            </AnimatedIconActiveProvider>
-            <kbd className="group-hover:bg-ink-4">⌘K</kbd>
-          </button>
-          {/* 快捷键帮助紧挨搜索钮（08-27 dogfood 修正批从右簇移来 —— 它是「查怎么用」，
-              与搜索同属入口类，右簇只留状态类）。 */}
-          <button
-            type="button"
-            onClick={openKeyboardHelp}
-            title={t('nav.shortcuts')}
-            aria-label={t('nav.shortcuts')}
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            className={cn(
-              'flex items-center justify-center ml-0.5 mr-2.5 p-1.5 rounded',
-              'text-ink-fg-2 hover:text-ink-fg-1 hover:bg-ink-3 active:bg-ink-4',
-              'transition-colors duration-fast'
-            )}
-          >
-            <CircleHelpIcon size={13} strokeWidth={2} />
-          </button>
-        </div>
-      </div>
-
-      {/* 右段 · 标签条 + 行尾右簇。簇内各件自行 no-drag（ThemeToggleButton /
-          NotificationBellBadge 都在各自 <button> 上设了）。 */}
-      <TabStrip
-        trailing={
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0 self-center text-meta font-mono text-ink-fg-2">
-            {/* 07-04 — 检测到新版本时出更新 icon (强调色配置左侧); 无更新时 null。 */}
+          {/* 控件簇（dogfood 轮4 拍板顺序）：更新 icon 是瞬态指示放簇首；后四件常驻。
+              各件自行 no-drag。 */}
+          <div className="flex items-center gap-0.5 mr-2.5">
             <UpdateIndicator />
-            {/* 08-20 — 统一通知中心铃铛，右簇唯一的告警/待办入口（M3 批 C5 收编了
+            <button
+              type="button"
+              onClick={togglePalette}
+              onPointerEnter={() => setSearchActive(true)}
+              onPointerLeave={() => setSearchActive(false)}
+              onFocus={() => setSearchActive(true)}
+              onBlur={() => setSearchActive(false)}
+              title={t('search.title')}
+              aria-label={t('search.title')}
+              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+              className={cn(
+                'group flex items-center gap-1.5 px-2 py-1 rounded-[var(--r-ctl)]',
+                'text-aux text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3',
+                'transition-colors duration-fast'
+              )}
+            >
+              <AnimatedIconActiveProvider active={searchActive}>
+                <SearchIcon size={13} strokeWidth={2} />
+              </AnimatedIconActiveProvider>
+              <kbd className="group-hover:bg-ink-4">⌘K</kbd>
+            </button>
+            {/* 08-20 — 统一通知中心铃铛，chrome 上唯一的告警/待办入口（M3 批 C5 收编了
                 SystemAlertBadge 与 TitleBarAgentPendingBadge）。 */}
             <NotificationBellBadge />
             <ThemeToggleButton />
+            <button
+              type="button"
+              onClick={openKeyboardHelp}
+              title={t('nav.shortcuts')}
+              aria-label={t('nav.shortcuts')}
+              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+              className={cn(
+                'flex items-center justify-center p-1.5 rounded',
+                'text-ink-fg-2 hover:text-ink-fg-1 hover:bg-ink-3 active:bg-ink-4',
+                'transition-colors duration-fast'
+              )}
+            >
+              <CircleHelpIcon size={13} strokeWidth={2} />
+            </button>
           </div>
-        }
-      />
+        </div>
+      </div>
+
+      {/* 右段 · 标签条独占（主标签 + 对象标签 + morphing 滑动面 + 断开的 hairline，
+          见 components/tabs/TabStrip.tsx）。整行保持可拖拽，交互件各自 no-drag。 */}
+      <TabStrip />
     </header>
   )
 }

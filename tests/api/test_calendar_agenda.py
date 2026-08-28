@@ -300,8 +300,23 @@ def test_agenda_mail_locator_fields(agenda_client):
     assert isinstance(hot["eventId"], int)
     assert hot["recurrenceId"] is None
     assert hot["endIso"].startswith("2026-06-02T10:00")
+    # 「按日历筛选」的前端判据 (seed 全部落在 'Work' 日历)。
+    assert hot["calendarName"] == "Work"
     # 后端不掺前端路由知识。
     assert "href" not in hot
+
+
+def test_agenda_calendar_name_only_on_mail_entries(agenda_client):
+    """mail 条目带 calendarName; matter/agent 条目不带此键 —— 前端「按日历筛选」
+    只对 mail 生效, matter/agent 恒显示的判据就是键缺席。"""
+    entries = _get(agenda_client)["data"]
+    mail = _by_source(entries, "mail")
+    assert mail, "seed 必须有 mail 条目"
+    assert all(e.get("calendarName") == "Work" for e in mail)
+    for source in ("matter", "agent"):
+        rest = _by_source(entries, source)
+        assert rest, f"seed 必须有 {source} 条目"
+        assert all("calendarName" not in e for e in rest)
 
 
 def test_agenda_multi_day_uses_utc_by_default(agenda_client):

@@ -208,6 +208,8 @@ class ContactSuggestion(BaseModel):
 
     email: str
     name: Optional[str] = None
+    #: 通讯录 organization（只有通讯录 lane 的候选带）。展示用，不参与排序。
+    org: Optional[str] = None
     score: int = Field(..., ge=0)
     last_seen: Optional[str] = None
 

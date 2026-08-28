@@ -1,262 +1,45 @@
-// 视觉复刻 mockup-calendar.html §week (2026-05-23) —
-// 3 段 flex column: wk-headrow + wk-alldayrow + wk-body (内 scroll, 默认到 8AM).
-// HOUR_PX=48, 7 列 (Mon-Sun) × 24h. now-line + now-bubble 跟今天列漂浮.
+// task 08-27 P5 —— 周视图重做: 7 列时间轴 (TimelineView dayCount=7), 三源聚合
+// 数据 + 月视图确立的源色语言。旧的按格 all-day chips 换成置顶条区色带
+// (跨天条目横跨若干列, lane 堆叠), 结构细节见 TimelineView。
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { CalendarQueryError } from '../CalendarQueryError'
-import { EventBlock, type EventRescheduleInput } from '../EventBlock'
-import { isTodayLocal, pad, ymd } from '../lib/format'
-import { occurrenceKey } from '../lib/key-nav'
-import { canRsvpFor } from '../lib/rsvp'
-import { HOUR_PX } from '../lib/timeGrid'
-import { DOW_EN } from '../lib/weekdays'
-import {
-  useCalendarEventsInWindow,
-  addDays,
-  startOfWeek,
-  layoutDay
-} from '../hooks/useCalendarEvents'
 import type { CalendarEventOccurrence } from '@shared/api/types'
-import { cn } from '@shared/lib/cn'
-import { useCalendarTimeOverrides } from '@shared/state/calendar-time-override'
 
-import { CalendarViewEmpty } from './CalendarViewEmpty'
-import { TimelineSkeleton } from './TimelineSkeleton'
+import type { EventRescheduleInput } from '../EventBlock'
+import { startOfWeek } from '../hooks/useCalendarEvents'
+import { TimelineView } from './TimelineView'
 
 interface Props {
   date?: Date
-  calendarName?: string
-  /** Phase 4·#1 — 多 calendar 多选 (client-side filter). 空 = 全部. */
-  selectedCalendars?: string[]
-  /** F5 — view 不再 own selected event state; CalendarLayout 持单一 active
-   *  + mount 单一 Drawer, view 通过 callback 上提选中事件. */
+  /** F5 — Layout 持单一 active + Drawer, view 上提选中事件。 */
   onSelect: (occ: CalendarEventOccurrence) => void
-  /** F5 — selected event key (= ``${id}-${occurrence_start_iso}``) 由 Layout
-   *  传, view 比对来高亮 selected event block. */
   selectedKey?: string | null
-  /** Lane C (#5) — 拖拽改期提交口 (Layout 持 mutation, 切视图不丢). 不传 = 只读. */
+  /** Lane C (#5) — 拖拽改期提交口 (Layout 持 mutation)。不传 = 只读。 */
   onReschedule?: (occ: CalendarEventOccurrence, next: EventRescheduleInput) => void
-  /** 判组织者用 — 与 drawer 的编辑门控同一判据 (非组织者只能 RSVP, 不能改期). */
   userEmail?: string | null
 }
 
-const GRID_COLS = '56px repeat(7, 1fr)'
-
-// F32 — ymd/pad/isSameDay/isTodayLocal 抽到 ../lib/format
-
 export function WeekView({
   date,
-  calendarName,
-  selectedCalendars,
   onSelect,
   selectedKey = null,
   onReschedule,
   userEmail = null
 }: Props): React.ReactElement {
   const { t } = useTranslation()
-  const scrollRef = useRef<HTMLDivElement | null>(null)
-  const [now, setNow] = useState(() => new Date())
-  // Lane C (#5) — 拖完 10s 内以本地 override 定位/显示 (服务端还没回填).
-  const timeOverrides = useCalendarTimeOverrides((s) => s.overrides)
-
-  // refresh now-line each minute
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 60_000)
-    return () => clearInterval(t)
-  }, [])
-
   const weekStart = useMemo(() => startOfWeek(date ?? new Date()), [date])
-  const weekEnd = useMemo(() => addDays(weekStart, 7), [weekStart])
-  const days = useMemo(
-    () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
-    [weekStart]
-  )
-
-  const { data, isLoading, isError, refetch } = useCalendarEventsInWindow(
-    {
-      fromIso: weekStart.toISOString(),
-      toIso: weekEnd.toISOString(),
-      calendarName
-    },
-    selectedCalendars
-  )
-
-  // 默认 scroll 到 8AM (events 渲染完 / 切日期重新加载完都 reset).
-  useEffect(() => {
-    if (!isLoading && scrollRef.current) {
-      scrollRef.current.scrollTop = 8 * HOUR_PX - 16
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: 同 DayView, getTime() 数值比较防 Date 引用不稳定导致每渲染重滚。
-  }, [isLoading, weekStart.getTime()])
-
-  // 首次加载 (无 placeholderData 旧数据可借) 才显骨架; 切周时 isLoading=false,
-  // 旧周事件经 keepPreviousData 留屏直到新周 ready, 不显骨架不闪白.
-  // F23 — 结构化 timeline 骨架替代通用灰条.
-  if (isLoading) {
-    return <TimelineSkeleton cols={7} />
-  }
-
-  const events = data ?? []
-  // F21 — query reject 不再伪装成空态; 仅在无可显示数据时换错误屏
-  // (keepPreviousData 下后台 refetch 偶发失败, 已在屏的旧数据继续留屏).
-  if (isError && events.length === 0) {
-    return (
-      <div className="cal-week">
-        <CalendarQueryError onRetry={refetch} />
-      </div>
-    )
-  }
-  if (events.length === 0) {
-    // S7 — 空态三语义 (无事件/从未同步/同步失败) 由 CalendarViewEmpty 判定.
-    return (
-      <div className="cal-week">
-        <CalendarViewEmpty emptyTitle={t('calendar.empty.week', '本周无日程')} />
-      </div>
-    )
-  }
-
-  // group timed events by day
-  const byDay = new Map<string, CalendarEventOccurrence[]>()
-  for (const occ of events) {
-    if (occ.is_all_day) continue
-    const d = new Date(occ.occurrence_start_iso)
-    const key = ymd(d)
-    const arr = byDay.get(key) ?? []
-    arr.push(occ)
-    byDay.set(key, arr)
-  }
-  const allDayEvents = events.filter((e) => e.is_all_day)
-  const hasAllDay = allDayEvents.length > 0
-
-  // now-line position
-  const todayIdx = days.findIndex(isTodayLocal)
-  const showNow = todayIdx >= 0
-  const nowTopPx = ((now.getHours() * 60 + now.getMinutes()) / 60) * HOUR_PX
 
   return (
-    <div className="cal-week">
-      {/* head row */}
-      <div className="wk-headrow" style={{ gridTemplateColumns: GRID_COLS }}>
-        <div className="wk-corner" />
-        {days.map((d, i) => (
-          <div key={i} className={cn('wk-dayhead', isTodayLocal(d) && 'is-today')}>
-            <div className="wk-dow">{DOW_EN[i]}</div>
-            <div className="wk-dn">{d.getDate()}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* all-day strip — 仅当本周有 all-day 事件时显示 */}
-      {hasAllDay && (
-        <div className="wk-alldayrow" style={{ gridTemplateColumns: GRID_COLS }}>
-          <div className="allday-gutter">
-            <span>{t('calendar.shared.allDay', '全天')}</span>
-          </div>
-          {days.map((d, i) => {
-            const dayMs = d.getTime()
-            const nextMs = dayMs + 86_400_000
-            const evs = allDayEvents.filter((e) => {
-              const s = Date.parse(e.occurrence_start_iso)
-              const en = Date.parse(e.occurrence_end_iso)
-              return s < nextMs && en > dayMs
-            })
-            return (
-              <div key={i} className={cn('allday-cell', isTodayLocal(d) && 'is-today')}>
-                {evs.map((occ) => (
-                  <button
-                    key={`${occ.id}-${occ.occurrence_start_iso}`}
-                    type="button"
-                    className="allday-evt"
-                    data-resp={(occ.response_status || '').toUpperCase()}
-                    data-status={(occ.status || '').toUpperCase()}
-                    onClick={() => onSelect(occ)}
-                    title={occ.summary || t('calendar.shared.untitled', '未命名事件')}
-                  >
-                    {occ.summary ? (
-                      occ.summary
-                    ) : (
-                      <span className="empty-field">
-                        {t('calendar.shared.untitled', '未命名事件')}
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      {/* scrolling timeline body */}
-      <div ref={scrollRef} className="wk-body scrollbar-thin">
-        <div className="wk-grid" style={{ gridTemplateColumns: GRID_COLS }}>
-          {/* hour gutter */}
-          <div className="hour-gutter">
-            {Array.from({ length: 24 }, (_, h) => (
-              <div key={h} className="hour-label">
-                <span>{h === 0 ? '' : `${pad(h)}:00`}</span>
-              </div>
-            ))}
-          </div>
-
-          {/* 7 day columns */}
-          {days.map((d, di) => {
-            const dKey = ymd(d)
-            const dayMs = d.getTime()
-            const timed = byDay.get(dKey) ?? []
-            const laid = layoutDay(timed)
-            return (
-              <div key={di} className={cn('day-col', isTodayLocal(d) && 'is-today')}>
-                {/* 24 hour cells for visual grid */}
-                {Array.from({ length: 24 }, (_, h) => (
-                  <div key={h} className="hour-cell" />
-                ))}
-                {/* events */}
-                {laid.map(({ occ, col, totalCols }) => {
-                  // 恒走 occurrenceKey: override 是 useEventReschedule 用它写进去的,
-                  // 这里手抄一份就等于用两把尺子 —— 一旦形状变了 override 静默失配
-                  // (块弹回旧时间, 无报错).
-                  const key = occurrenceKey(occ)
-                  const override = timeOverrides[key] ?? null
-                  const startMs = Date.parse(override?.startIso ?? occ.occurrence_start_iso)
-                  const endMs = Date.parse(override?.endIso ?? occ.occurrence_end_iso)
-                  const topPx = ((startMs - dayMs) / 3_600_000) * HOUR_PX
-                  const heightPx = ((endMs - startMs) / 3_600_000) * HOUR_PX
-                  const selected = selectedKey === key
-                  // 非组织者改不动 (服务端也会拒), 不给必失败的拖拽手感.
-                  const canDrag = !!onReschedule && !canRsvpFor(occ.organizer, userEmail)
-                  return (
-                    <EventBlock
-                      key={key}
-                      event={occ}
-                      topPx={topPx}
-                      heightPx={heightPx}
-                      col={col}
-                      totalCols={totalCols}
-                      selected={selected}
-                      onClick={() => onSelect(occ)}
-                      timeOverride={override}
-                      onReschedule={canDrag ? (next) => onReschedule?.(occ, next) : undefined}
-                    />
-                  )
-                })}
-              </div>
-            )
-          })}
-
-          {/* now line + bubble — 当本周包含今天才画 */}
-          {showNow && (
-            <>
-              <div className="now-bubble" style={{ top: `${nowTopPx}px` }}>
-                {pad(now.getHours())}:{pad(now.getMinutes())}
-              </div>
-              <div className="now-line" style={{ top: `${nowTopPx}px` }} aria-hidden />
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+    <TimelineView
+      gridStart={weekStart}
+      dayCount={7}
+      emptyTitle={t('calendar.empty.week', '本周无日程')}
+      onSelect={onSelect}
+      selectedKey={selectedKey}
+      onReschedule={onReschedule}
+      userEmail={userEmail}
+    />
   )
 }

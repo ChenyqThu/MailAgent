@@ -7,6 +7,8 @@
 //   - Highlight(multicolor)   → 工具栏高亮 swatch
 //   - Mention(@联系人)        → 数据源复用 email.contactSuggest（RecipientField 同通道）
 //   - composeSlash("/" 块菜单) → @tiptap/suggestion 自定义扩展
+//   - composeLinkPaste        → 选区 + 剪贴板是 URL → 套 link 不替换文本
+//   - composeInlineImage      → 剪贴板图片粘贴 / 图片文件拖放 → data URL 内联插入
 //   - Placeholder（可选）      → 仅传入 placeholder 时挂载；生产 ComposeEditor 仍用
 //     自绘空态浮层（Placeholder 的 data-placeholder 需配套 CSS 才可见），两者二选一。
 //
@@ -47,6 +49,7 @@ import i18n from '@shared/i18n'
 import { makeMailApi } from '@shared/api/factory'
 import type { ContactSuggestion } from '@shared/api/types'
 import { normalizeEditableEmailHtml } from '@shared/lib/emailComposerHtml'
+import { toastError } from '@shared/state/toast'
 
 import { MentionMenu, SlashMenu, type SuggestMenuHandle } from './editor-suggest'
 
@@ -323,6 +326,142 @@ function createTablePasteExtension(): Extension {
   })
 }
 
+// ── link paste onto selection ────────────────────────────────────────
+
+/** 选区非空 + 剪贴板是单个带 scheme 的 URL → 给选中文本套 link（不把 URL 文本
+ *  替换进去）。StarterKit Link 的 linkOnPaste 也做这件事，但它要求 linkify 的解析
+ *  值与剪贴板逐字相等——含尾括号等特殊字符的 URL（wiki 页那类）会失配、回落成
+ *  替换粘贴。本扩展 priority 1001（> Link 的 1000）先拿 handlePaste：判据只看
+ *  scheme，href = 剪贴板原文不做 linkify 归一。无 scheme 的裸域名（example.com）
+ *  仍交给 linkOnPaste 的启发式，无选区时一律不抢（现状行为不变）。 */
+function createLinkPasteExtension(): Extension {
+  return Extension.create({
+    name: 'composeLinkPaste',
+    priority: 1001,
+    addProseMirrorPlugins() {
+      const editor = this.editor
+      return [
+        new Plugin({
+          props: {
+            handlePaste: (view, event) => {
+              if (view.state.selection.empty) return false
+              const text = (event.clipboardData?.getData('text/plain') ?? '').trim()
+              if (!text || /\s/.test(text)) return false
+              if (!/^(?:https?|mailto):/i.test(text)) return false
+              return editor.commands.setMark('link', { href: text })
+            }
+          }
+        })
+      ]
+    }
+  })
+}
+
+// ── inline image paste / drop ────────────────────────────────────────
+
+/** 内联图片(data URL 直嵌正文)的单张上限 — data URL 会把字节膨胀 ~1.37×,
+ *  大图该走附件而不是正文内联。工具栏「从文件选图」/ 粘贴 / 拖放三条入口同一口径。 */
+export const MAX_INLINE_IMAGE_BYTES = 4 * 1024 * 1024
+
+/** ComposePanel `<main>` onDrop 的对账标记：composeInlineImage 插件消费了这次
+ *  drop 时挂在原生事件上（同一个事件对象一路冒泡），面板据此只收尾拖拽提示层、
+ *  不再把文件当附件重复添加。 */
+export const COMPOSE_INLINE_IMAGE_DROP_FLAG = 'maComposeInlineImageDrop'
+
+/** 内联图片插件的 PluginKey — 测试用它精确定位插件（tiptap core 自带的 Drop 事件
+ *  转发插件也有 handleDrop，按 prop 存在性找会撞）。 */
+export const COMPOSE_INLINE_IMAGE_PLUGIN_KEY = new PluginKey('composeInlineImage')
+
+function readImageAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+    reader.onerror = () => resolve('')
+    reader.readAsDataURL(file)
+  })
+}
+
+/** 读文件 → data URL → 插入正文；超限逐张 toast（与工具栏「从文件选图」同文案）。
+ *  `pos` = null 时插在当前光标（粘贴路径），否则插在 drop 坐标换算的位置。 */
+async function insertInlineImages(
+  editor: Editor,
+  files: File[],
+  pos: number | null
+): Promise<void> {
+  const within: File[] = []
+  for (const file of files) {
+    if (file.size > MAX_INLINE_IMAGE_BYTES) {
+      toastError(i18n.t('compose.editor.imageTooLarge', { name: file.name, max: 4 }))
+    } else {
+      within.push(file)
+    }
+  }
+  if (within.length === 0) return
+  const srcs = await Promise.all(within.map(readImageAsDataUrl))
+  const nodes = srcs.filter((s) => s.length > 0).map((src) => ({ type: 'image', attrs: { src } }))
+  if (nodes.length === 0 || editor.isDestroyed) return
+  if (pos === null) {
+    editor.chain().focus().insertContent(nodes).run()
+  } else {
+    // FileReader 是异步的, 完成时文档可能已变 → 位置钳制到当前文档边界。
+    const clamped = Math.max(0, Math.min(pos, editor.state.doc.content.size))
+    editor.chain().focus().insertContentAt(clamped, nodes).run()
+  }
+}
+
+/** 剪贴板图片（截图 / Finder 拷贝）粘贴 + 图片文件拖放 → data URL 内联插入。
+ *  与工具栏「从文件选图」同一下游（data: 直嵌正文 HTML，随邮件发出）。 */
+function createInlineImageExtension(): Extension {
+  return Extension.create({
+    name: 'composeInlineImage',
+    addProseMirrorPlugins() {
+      const editor = this.editor
+      return [
+        new Plugin({
+          key: COMPOSE_INLINE_IMAGE_PLUGIN_KEY,
+          props: {
+            // 只接「剪贴板只有图片文件、没有 HTML」的粘贴（截图 / Finder 拷贝的
+            // 典型形状）。带 HTML 的粘贴（网页图文 / Office）仍走默认解析，不抢。
+            handlePaste: (_view, event) => {
+              const clipboard = event.clipboardData
+              if (!clipboard) return false
+              const images = Array.from(clipboard.files ?? []).filter((f) =>
+                f.type.startsWith('image/')
+              )
+              if (images.length === 0) return false
+              if ((clipboard.getData('text/html') ?? '').trim().length > 0) return false
+              event.preventDefault()
+              void insertInlineImages(editor, images, null)
+              return true
+            },
+            // 拖放：整批都是 ≤4MB 的图片才内联插到 drop cursor 位置；混入非图片
+            // 或超限图 → 返回 false，整批交还 ComposePanel 的附件拖放链（一次
+            // drop 语义单一，不拆成内联 + 附件两半）。
+            handleDrop: (view, event) => {
+              const files = Array.from(event.dataTransfer?.files ?? [])
+              if (files.length === 0) return false
+              const allInline = files.every(
+                (f) => f.type.startsWith('image/') && f.size <= MAX_INLINE_IMAGE_BYTES
+              )
+              if (!allInline) return false
+              event.preventDefault()
+              ;(event as unknown as Record<string, unknown>)[COMPOSE_INLINE_IMAGE_DROP_FLAG] = true
+              let pos: number | null = null
+              try {
+                pos = view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos ?? null
+              } catch {
+                pos = null // 无布局环境（测试）拿不到坐标 → 回落当前光标位置
+              }
+              void insertInlineImages(editor, files, pos)
+              return true
+            }
+          }
+        })
+      ]
+    }
+  })
+}
+
 // ── @mention ─────────────────────────────────────────────────────────
 
 /** mention 下拉最多显示的联系人数（对齐 demo MENTION_POOL slice 6）。 */
@@ -396,7 +535,13 @@ export interface ComposeExtensionsOptions extends ComposeMentionOptions {
 export function buildComposeExtensions(options: ComposeExtensionsOptions = {}): Extensions {
   const extensions: Extensions = [
     // heading 收敛 H1-H3（工具栏/slash 同款位阶）；link 行为与旧装配一致。
-    StarterKit.configure({ heading: { levels: [1, 2, 3] }, link: { openOnClick: false } }),
+    // dropcursor: 拖图片进正文时的插入位置指示（accent 色 2px, 默认 currentColor
+    // 1px 在深底上几乎不可见）。
+    StarterKit.configure({
+      heading: { levels: [1, 2, 3] },
+      link: { openOnClick: false },
+      dropcursor: { color: 'rgb(var(--c-accent))', width: 2 }
+    }),
     TextStyle,
     Color,
     FontFamily,
@@ -418,7 +563,9 @@ export function buildComposeExtensions(options: ComposeExtensionsOptions = {}): 
       HTMLAttributes: { class: 'compose-mention text-coral font-medium' },
       suggestion: createMentionSuggestion(options)
     }),
-    createSlashExtension()
+    createSlashExtension(),
+    createLinkPasteExtension(),
+    createInlineImageExtension()
   ]
   if (options.placeholder) {
     extensions.push(Placeholder.configure({ placeholder: options.placeholder }))

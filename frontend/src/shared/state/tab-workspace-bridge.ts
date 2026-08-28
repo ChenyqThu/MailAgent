@@ -2,7 +2,7 @@
 //
 // store 本体（tab-workspace.ts，波 1 定稿，51 条专测钉着语义）不认识 i18n / 别的 store；
 // 「开标签顺带要做的事」全收敛在这里：
-//   - 结局 toast（只有 opened 带 evicted / rejected 两支需要提示，activated / replaced 静默）；
+//   - 结局 toast（dogfood 轮4 起**只剩 rejected 一支**出声；LRU 驱逐静默，见 announceTabResult）；
 //   - locked 的两个来源（compose 打开指向该标签 · AI 抽屉里就它发过消息）+ draft 快照 dirty；
 //   - per-tab 抽屉开合的记录与恢复（useAIChatPanel.visible 是全局单例，切标签时按目标标签
 //     的 drawerOpen 恢复）。
@@ -48,31 +48,21 @@ export function getObjectTab(kind: TabKind, targetId: number): TabDescriptor | n
   return useTabWorkspace.getState().tabs.find((t) => t.id === id) ?? null
 }
 
-/** 结局 toast —— 开标签这件事的**唯一**「结果 → 提示」判据。判据只看 `opened` 带
- *  evicted / `rejected` 两支（store 契约注释同款）：`activated`（本来就开着）与
- *  `replaced`（原位变身）都是用户自己按出来的直接结果，出提示是噪音。
- *  文案键用 Lane U 建好的 `tabs.*` 词表，不另起第二套。
+/** 结局 toast —— 开标签这件事的**唯一**「结果 → 提示」判据。dogfood 轮4 拍板：
+ *  **只剩 `rejected` 一支出声**（满且全锁定，真的没开成，用户需要知道该先关一个）。
+ *  LRU 驱逐（`opened` 带 evicted）改为静默 —— 每次满员开新都弹「顺带关掉了谁」被
+ *  owner 判为噪音；被挤掉的进最近关闭栈，⌘⇧T 可找回。`activated` / `replaced`
+ *  一如既往静默（用户自己按出来的直接结果）。
  *
  *  🔴 键盘命令层（tab-commands）也调这一份，不在那边再写一遍 —— 反过来（判据放
  *  tab-commands、这里 import）不行：那个模块引 `@shared/i18n`（顶层拉 react-i18next），
  *  进了 active-email 的 import 图会炸掉一批 mock 了 react-i18next 的无关测试。
  *
- *  变体：两支都用 `toastInfo` —— 容量到顶不是失败（`toastError` 全仓是「操作真的错了」
- *  才用），与同批的 `list.folder.pinLimit` 同款。 */
+ *  变体：`toastInfo` —— 容量到顶不是失败（`toastError` 全仓是「操作真的错了」才用），
+ *  与同批的 `list.folder.pinLimit` 同款。 */
 export function announceTabResult(result: OpenTabResult | ReplaceTabResult | null): void {
-  if (result === null) return
-  if (result.outcome === 'rejected') {
-    toastInfo(tr('tabs.toast.full'))
-    return
-  }
-  if (result.outcome === 'opened' && result.evicted.length > 0) {
-    const title = result.evicted[0].title || tr('tabs.untitled')
-    if (result.evicted.length === 1) {
-      toastInfo(tr('tabs.toast.evictedOne', { title }))
-    } else {
-      toastInfo(tr('tabs.toast.evictedMany', { title, count: result.evicted.length }))
-    }
-  }
+  if (result === null || result.outcome !== 'rejected') return
+  toastInfo(tr('tabs.toast.full'))
 }
 
 /** 点行 / 深链 / 跨域跳转 —— 开或激活一个对象标签（去重在 store）。
@@ -88,8 +78,8 @@ export function openObjectTab(kind: TabKind, targetId: number, title?: string): 
 }
 
 /** ⌘T / 标签条「+」/ `/search` 深链 —— 打开「新标签页」搜索单例（已开着则只激活）。
- *  标题快照只给 toast / closedStack 用（标签条渲染按 kind 直取 i18n，不读快照），
- *  这里顺手写一份当前语言的，免得淘汰 toast 报「无标题」。 */
+ *  标题快照只给 closedStack 用（标签条渲染按 kind 直取 i18n，不读快照），
+ *  这里顺手写一份当前语言的，⌘⇧T 菜单/找回时才有名字可显。 */
 export function openSearchTab(): void {
   if (inert()) return
   announceTabResult(

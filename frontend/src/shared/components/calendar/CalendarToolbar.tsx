@@ -158,6 +158,9 @@ export function CalendarToolbar({
   }, [calFilterOpen])
 
   const showDateNav = view === 'today' || view === 'week' || view === 'month'
+  // P5 — 三源聚合接完日/周后, 源色点覆盖月/周/日三个网格视图 (agenda/recurring
+  // 仍是单源列表, 不画)。
+  const showSourceDots = view === 'today' || view === 'week' || view === 'month'
   const rangeLabel = fmtRangeLabel(t, view, currentDate)
   const enabledSources = SOURCE_ORDER.filter((s) => sources[s])
 
@@ -245,8 +248,8 @@ export function CalendarToolbar({
 
       {/* 右簇 */}
       <div className="flex items-center gap-2 ml-auto shrink-0">
-        {/* 源色点 — 仅月视图 (三源聚合只接月视图); 关掉一组这里同步消失 */}
-        {view === 'month' && enabledSources.length > 0 && (
+        {/* 源色点 — 月/周/日网格视图; 关掉一组这里同步消失 */}
+        {showSourceDots && enabledSources.length > 0 && (
           <span className="cal-src-dots" aria-hidden>
             {enabledSources.map((s) => (
               <span key={s} className="cal-src-dot" data-src={s} title={SOURCE_LABELS[s]} />
@@ -254,9 +257,10 @@ export function CalendarToolbar({
           </span>
         )}
 
-        {/* Phase 4·#1 — calendar 多选筛选 (仅多 calendar 用户显示)。月视图不渲染:
-            它走三源聚合数据 (AgendaEntry 无 calendar_name), 筛选对它不生效。 */}
-        {view !== 'month' && calendars.length > 1 && (
+        {/* Phase 4·#1 — calendar 多选筛选 (仅多 calendar 用户显示)。P5 起 agenda
+            mail 条目带 calendarName, 筛选对三源数据同样生效 (只滤 mail;
+            matter/agent 恒显示), 控件恢复全视图常驻。 */}
+        {calendars.length > 1 && (
           <div className="relative" ref={calFilterRef}>
             <button
               type="button"

@@ -112,7 +112,7 @@ export type NavLabel = { readonly i18nKey: string } | { readonly literal: string
 /** 域的二级栏形态（08-27 标签工作区批：二级栏**恒存在且定宽 336**，`'none'` 档
  *  取消 —— 左列总宽固定 392 = 导轨 56 + 二级栏 336，切域时边界不动；dogfood
  *  修正批起亦不可收起）：
- *  - `'nav'`  = DomainPanel（336px 导航栏：今日五节/小月历/团队清单/设置 tab 行…）；
+ *  - `'nav'`  = DomainPanel（336px 导航栏：今日五节/日历源树/团队清单/设置 tab 行…）；
  *  - `'page'` = 页面自带的列表列充当二级栏（邮件/事项/通讯录/对话的 list，同样定宽 336）。 */
 export type NavDomainSecond = 'nav' | 'page'
 
@@ -358,7 +358,7 @@ const ENTRIES = [
     // Windows 日历整体出范围（2026-08-13 拍板，平台判定不看 backend）。
     gate: 'calendar',
     match: { exact: ['/calendar'], prefix: ['/admin/calendar'] },
-    // 无 panel 落位：日历域的二级栏是小月历（DomainPanel 直渲 CalendarMiniPanel），
+    // 无 panel 落位：日历域的二级栏是分组日历树（DomainPanel 直渲 CalendarSourcePanel），
     // 再放一行「日历」是重复。
     rail: { order: 3 },
     palette: { order: 25, metaI18nKey: 'palette.jump.calendarMeta' },

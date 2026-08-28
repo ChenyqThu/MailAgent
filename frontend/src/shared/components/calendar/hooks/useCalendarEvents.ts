@@ -168,7 +168,7 @@ export function useCalendarSyncTrigger(): {
     onSuccess: () => {
       toastSuccess(t('calendar.syncTriggered', '已触发日历同步'))
       void qc.invalidateQueries({ queryKey: CALENDAR_EVENTS_KEY })
-      // P3 — 三源聚合窗口 (月视图 + 小月历色点) 的 mail 源也来自刚同步的表。
+      // P3 — 三源聚合窗口 (月/日/周视图 + 二级栏源树) 的 mail 源也来自刚同步的表。
       void qc.invalidateQueries({ queryKey: qk.calendar.agenda() })
       void qc.invalidateQueries({ queryKey: CALENDAR_SYNC_STATUS_KEY })
     },

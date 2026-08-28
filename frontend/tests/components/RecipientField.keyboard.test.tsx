@@ -16,6 +16,13 @@ vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({ email: { contactSuggest: mockContactSuggest } })
 }))
 
+// chip 姓名的通讯录解析（08-28）——本文件测的是键盘/粘贴/去重，把它按「不在库」
+// 短路（chip 显示裸地址，既有 getByTitle('a@x.com') 一类断言口径不变）。
+vi.mock('@shared/components/contacts/hooks', () => ({
+  useContactsEnabled: () => ({ enabled: true, loading: false }),
+  useContactsApi: () => ({ resolve: vi.fn(async () => ({ items: {} })) })
+}))
+
 import { RecipientField } from '../../src/shared/components/email/compose/RecipientField'
 
 beforeEach(() => {

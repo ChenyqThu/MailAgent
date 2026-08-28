@@ -5,8 +5,9 @@
 // 框架语言一致。
 //
 // 样式全部跟随既有先例，不新造语言：
-//  · 视图钮 = `DomainPanel::NavRow` / `TodayNavPanel` 的 30px 导航行（选中态
-//    `row-selected acc-select`）；单行排布下宽度按内容走，不通栏；
+//  · 视图钮 = `DomainPanel::NavRow` / `TodayNavPanel` 的 30px 导航行几何；单行排布下
+//    宽度按内容走，不通栏。选中态取 `.tab-active`（底部 accent 指示条）而不是导航行的
+//    `row-selected acc-select`（左条 + wash）—— 见 renderView 处的注释；
 //  · 「新建」= `.list-cta`（收件箱「写邮件」CTA 的同一配色层），实心 accent 与左侧两个
 //    视图钮区分出「动作」而非「视图」。它仍是唯一常驻创建入口（无 ⌘N、无第二条路径）。
 //    可视文案压短成「新建」是为了单行放得下，无障碍名与 title 仍是完整的「新建事项」。
@@ -54,8 +55,10 @@ export function MatterViewNav({
         className={cn(
           ROW_CLASS,
           'min-w-0',
+          // 选中态 = 底部 accent 指示条（.tab-active 先例，owner 0828：单行水平排布
+          // 下高亮条放底部，不用导航行的左条 + wash）。
           selected
-            ? 'row-selected acc-select font-medium text-ink-fg'
+            ? 'tab-active font-medium'
             : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4'
         )}
       >

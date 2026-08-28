@@ -95,6 +95,8 @@ export interface SearchResult {
 export interface ContactSuggestion {
   email: string
   name?: string
+  /** 通讯录 organization（只有通讯录 lane 的候选带）。展示用，不参与排序。 */
+  org?: string
   score: number
   last_seen?: string
 }

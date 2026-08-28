@@ -217,6 +217,9 @@ class ContactSuggestion:
     name: Optional[str]
     score: int
     last_seen: Optional[str]
+    #: 通讯录 organization —— 只用于展示（补全行的次要标识），不参与排序。
+    #: 邮件头 lane 的候选没有这一项。
+    org: Optional[str] = None
 
 
 @dataclass
@@ -235,6 +238,7 @@ class _ContactCandidate:
     former: bool
     fields: list[str]
     tokens: list[str]
+    org: Optional[str] = None
 
     def to_suggestion(self) -> ContactSuggestion:
         return ContactSuggestion(
@@ -242,6 +246,7 @@ class _ContactCandidate:
             name=self.name,
             score=self.score,
             last_seen=self.last_seen,
+            org=self.org,
         )
 
 
@@ -869,6 +874,7 @@ def _build_contact_candidates(
             former=row.get("former_at") is not None,
             fields=fields,
             tokens=tokens,
+            org=_normalize_contact_name(row.get("organization")),
         )
 
     return list(by_email.values())

@@ -7,6 +7,9 @@
 // 投影，不新增路径字面量）；FOLDERS = 已同步的自定义文件夹（whitelist × discover，
 // 🔴 数组序 = 用户自定义显示顺序，不排序）。每行行尾一枚 pin，钉到列表头第一行。
 //
+// 行尾计数沿用退役的侧栏徽标那条数据链（`qk.mailboxes()`），各行的口径（未读 / 总数）
+// 在 `lib/mailboxCounts` —— 那里也写清了「徽标必须按判定集展开」这条 issue #42 红线。
+//
 // 为什么不用全 app 的弹层基座 `ui/Popmenu`：它的一行就是一个 `<button>`，而这里每行要
 // 带一枚**独立可点**的 pin 按钮（button 套 button 是非法 DOM），改基座的行结构会动到它
 // 的 morph 几何契约。故手写这一档 popover（useExitAnimation + outside-click/Esc 组合），
@@ -17,15 +20,19 @@
 // 「邮件五视图恒 gate:always」。
 
 import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Pin } from 'lucide-react'
 
 import { AnimatedIconActiveProvider, FolderGlyph } from '@shared/components/icons'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useFolderPrefMap } from '@shared/hooks/useFolderPrefs'
+import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
 import { flattenFolderTree, type FolderNode } from '@shared/lib/folderTree'
 import { DUR } from '@shared/lib/gsap'
+import { folderUnreadCount, mailboxViewCount } from '@shared/lib/mailboxCounts'
+import { qk } from '@shared/lib/queryKeys'
 import { NAV_ENTRIES, navDomainPanelEntries, navLabel } from '@shared/navigation/registry'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { samePinnedFolder, usePinnedFolders, type PinnedFolder } from '@shared/state/pinned-folders'
@@ -136,6 +143,19 @@ export function FolderMenu({
   // 失败/缺行静默退回兜底图标（图标是观感，不该让整个面板跟着挂）。
   const prefMap = useFolderPrefMap()
 
+  // 行尾计数（owner 0828 dogfood：下拉要按老侧栏的方式显计数）。数据链沿用退役的
+  // 侧栏徽标那一条：qk.mailboxes() ← email.listMailboxes()，SSE 失效 + Sidebar 的兜底
+  // 轮询已经在喂这个 key，这里只做第二个 observer（enabled: open —— 关着的下拉不必
+  // 自己去拉；缓存有值时开面板即时有数）。口径换算在 lib/mailboxCounts。
+  const mailApi = useMailApi()
+  const { data: mailboxData } = useQuery({
+    queryKey: qk.mailboxes(),
+    queryFn: () => mailApi.email.listMailboxes(),
+    staleTime: 30_000,
+    enabled: open
+  })
+  const mailboxes = mailboxData ?? []
+
   const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
     backdrop: false,
     from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top left' },
@@ -196,7 +216,7 @@ export function FolderMenu({
             icon={entry.icon()}
             label={navLabel(entry, t)}
             title={navLabel(entry, t)}
-            count={null}
+            count={mailboxViewCount(mailboxes, entryView)}
             depth={0}
             selected={customMailbox === null && view === entryView}
             pin={{ kind: 'view', view: entryView }}
@@ -226,7 +246,9 @@ export function FolderMenu({
               }
               label={node.displayName}
               title={node.fullDisplayName}
-              count={node.count}
+              // 🔴 不是 node.count（那是 discover 的 IMAP message_count，且树用
+              // counts:false 拉 ⇒ 生产恒 null）。计数取本地库的未读，与列表同径。
+              count={folderUnreadCount(mailboxes, node.fullDisplayName)}
               depth={depth}
               selected={customMailbox === node.fullDisplayName}
               pin={{ kind: 'folder', mailbox: node.fullDisplayName }}

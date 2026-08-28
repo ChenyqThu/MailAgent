@@ -17,8 +17,8 @@
 //
 // popover 用 createPortal 送到 <body>：TitleBar 有 backdrop-filter，会给 fixed 子元素造一个
 // 层叠上下文，浮层留在里面会被裁（原右簇三枚 picker 同款理由，它们已退役）。横向落点走
-// `useAnchoredPopover`（`.theme-popover` 写死的 right:12px 只对簇内最右的按钮成立，铃铛在
-// 簇首会整整偏出一个面板宽）。
+// `useAnchoredPopover`（`.theme-popover` 写死的 right:12px 只对贴着视口右缘的按钮成立；铃铛
+// 不在那个位置——dogfood 轮4 起整簇在顶栏左段——不按触发器实测会整整偏出一个面板宽）。
 
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'

@@ -9,8 +9,13 @@
 // Capabilities (design/compose-handoff §2):
 //  1. inline editing            — field is the input; blank click focuses it.
 //  2. avatar autocomplete       — email:contactSuggest (debounced), avatar + name
-//                                 + email rows; a valid unmatched email gets an
-//                                 "添加 xxx" row.
+//                                 + org + email rows (行形态对齐通讯录既有的
+//                                 PersonPicker: 姓名 / 组织 / 主邮箱三段); a valid
+//                                 unmatched email gets an "添加 xxx" row.
+//                                 补全按**姓名或邮箱**命中 —— 服务端两条 lane
+//                                 (邮件头聚合 + 通讯录 display_name/formal_name/
+//                                 organization/name_variants) 合流后做子串匹配,
+//                                 中文名同样命中。
 //  3. full keyboard             — empty-input ←/Backspace enters chip-select;
 //                                 ←/→ move; Backspace/Delete remove; Enter opens
 //                                 detail; Esc exits; dropdown ↑/↓/Enter/Tab;
@@ -26,6 +31,12 @@
 //                                 (RecipientDetailPopover, .glass-pop material).
 //  7. cross-field dedup         — `excludeEmails` is filtered from suggestions and
 //                                 blocked from being added (mirrors self-filter).
+//  8. directory names on chips  — 预填 (reply/forward/草稿续编) 的收件人用户一个字
+//                                 没打, 补全查询不会发 ⇒ 只靠补全学名字的话那些
+//                                 chip 恒是裸邮箱。故 chip 名字有两个来源:
+//                                 通讯录批量解析 (useRecipientDirectoryNames, 权威)
+//                                 > 补全学到的邮件头名字; 都没有才回落邮箱。
+//                                 title 恒带完整地址 (显示名字时也看得到原地址)。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, X } from 'lucide-react'
@@ -37,6 +48,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import type { ContactSuggestion } from '@shared/api/types'
 import { RecipientAvatar } from './recipient-avatar'
 import { RecipientDetailPopover } from './recipient-detail'
+import { useRecipientDirectoryNames } from './useRecipientDirectory'
 
 interface Props {
   label: string
@@ -197,14 +209,21 @@ export function RecipientField({
     [internalDomainSet]
   )
 
+  // 通讯录批量解析（预填 chip 的名字来源；补全查询不会为它们发起）。
+  const directoryNames = useRecipientDirectoryNames(values)
+
   const buildChip = useCallback(
-    (addr: string): ChipContact => ({
-      email: addr,
-      name: nameCacheRef.current.get(addr.toLowerCase()) ?? '',
-      external: isExternal(addr),
-      determinable: internalDomainSet.size > 0
-    }),
-    [isExternal, internalDomainSet]
+    (addr: string): ChipContact => {
+      const key = addr.toLowerCase()
+      return {
+        email: addr,
+        // 通讯录 display_name 权威 > 邮件头/补全学到的名字 > 裸邮箱（调用方回落）。
+        name: directoryNames.get(key) ?? nameCacheRef.current.get(key) ?? '',
+        external: isExternal(addr),
+        determinable: internalDomainSet.size > 0
+      }
+    },
+    [directoryNames, isExternal, internalDomainSet]
   )
 
   // React Query owns the fetch (debounce feeds `debounced`); gated on focus so
@@ -538,7 +557,8 @@ export function RecipientField({
                     : null),
                   ...(selected ? { boxShadow: '0 0 0 2px rgb(var(--c-accent) / 0.55)' } : null)
                 }}
-                title={chip.email}
+                // 显示名字时 title 仍带完整地址 —— 名字是显示口径，地址才是真值。
+                title={chip.name ? `${chip.name} <${chip.email}>` : chip.email}
                 onClick={() => openDetailAt(i)}
               >
                 <RecipientAvatar name={chip.name} email={chip.email} size={18} />
@@ -604,7 +624,7 @@ export function RecipientField({
             id={listboxId}
             role="listbox"
             aria-label={label}
-            className="glass-pop absolute top-full left-0 mt-1 z-50 w-[300px] max-w-full max-h-[260px] overflow-y-auto py-1"
+            className="glass-pop absolute top-full left-0 mt-1 z-50 w-[344px] max-w-full max-h-[280px] overflow-y-auto py-1"
           >
             {suggestions.map((c, idx) => {
               const external = isExternal(c.email)
@@ -629,9 +649,24 @@ export function RecipientField({
                     )}
                   >
                     <RecipientAvatar name={c.name ?? ''} email={c.email} size={30} />
+                    {/* 行形态 = 通讯录 PersonPicker：姓名（无名字则 local-part 斜体
+                        降级）· 组织 / 主邮箱两行。名字与邮箱都打命中高亮，因为两
+                        者都可能是用户刚敲的那几个字。 */}
                     <span className="flex flex-col min-w-0 flex-1">
-                      <span className="text-meta text-ink-fg truncate flex items-center gap-1.5">
-                        {highlightMatch(c.name || localPart(c.email), debounced)}
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span
+                          className={cn(
+                            'truncate text-body text-ink-fg',
+                            c.name ? 'font-medium' : 'italic text-ink-fg-1'
+                          )}
+                        >
+                          {highlightMatch(c.name || localPart(c.email), debounced)}
+                        </span>
+                        {c.org && (
+                          <span className="min-w-0 flex-1 truncate text-meta text-ink-fg-2">
+                            {highlightMatch(c.org, debounced)}
+                          </span>
+                        )}
                         {external && (
                           <span
                             title="外部联系人"
@@ -677,9 +712,7 @@ export function RecipientField({
                   </span>
                   <span className="flex flex-col min-w-0">
                     <span className="text-aux text-ink-fg truncate">添加 “{canonicalInput}”</span>
-                    <span className="text-aux text-ink-fg-3 truncate">
-                      使用这个邮箱地址
-                    </span>
+                    <span className="text-aux text-ink-fg-3 truncate">使用这个邮箱地址</span>
                   </span>
                 </button>
               </li>

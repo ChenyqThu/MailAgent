@@ -2,18 +2,24 @@
 //
 // F3 (阶段2·2.6) — 状态形态化渲染: data-resp / data-status 是 CSS 形态编码
 // (斜纹/空心/删除线+中性灰) 的唯一 hook, 断言四消费面 (Month chip / timeline
-// evt / Agenda 行 / Day rail 行) 均正确挂载两个 attribute — 尤其 dr-row 的
-// data-status (本轮补的缺口, CANCELLED 此前在 rail 行无编码)。图例组件断言
+// evt / Agenda 行 / 日周置顶色带) 均正确挂载两个 attribute。P5 起日/周主数据
+// 是 AgendaEntry (无状态字段), 形态化靠同窗口 events 缓存解析回 occurrence —
+// 这条解析链断了状态形态就整体消失, DayView 用例专门锁它。图例组件断言
 // 4 种状态的 swatch/文案齐全。不测像素。
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 
-import type { CalendarEventOccurrence } from '../../src/shared/api/types'
+import type { AgendaEntry, CalendarEventOccurrence } from '../../src/shared/api/types'
 
-const { hookState } = vi.hoisted(() => ({
+const { hookState, agendaState } = vi.hoisted(() => ({
   hookState: {
     data: undefined as CalendarEventOccurrence[] | undefined,
+    isLoading: false,
+    isError: false
+  },
+  agendaState: {
+    data: [] as AgendaEntry[] | undefined,
     isLoading: false,
     isError: false
   }
@@ -59,6 +65,24 @@ vi.mock('@shared/components/calendar/hooks/useCalendarEvents', async (importOrig
   }
 })
 
+// P5 — 日/周主数据源 (三源聚合)。
+vi.mock('@shared/components/calendar/hooks/useCalendarAgenda', () => ({
+  useCalendarAgenda: () => ({
+    data: agendaState.data,
+    isLoading: agendaState.isLoading,
+    isFetching: false,
+    isError: agendaState.isError,
+    refetch: vi.fn()
+  }),
+  localOlsonTz: () => 'UTC'
+}))
+
+// useAgendaEntryClick 链上的 useNavigate — 测试无 RouterProvider, 换 no-op。
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+  return { ...actual, useNavigate: () => vi.fn() }
+})
+
 import { EventBlock } from '../../src/shared/components/calendar/EventBlock'
 import { EventChip } from '../../src/shared/components/calendar/EventChip'
 import { CalendarStatusLegend } from '../../src/shared/components/calendar/CalendarStatusLegend'
@@ -102,6 +126,9 @@ afterEach(() => {
   hookState.data = undefined
   hookState.isLoading = false
   hookState.isError = false
+  agendaState.data = []
+  agendaState.isLoading = false
+  agendaState.isError = false
 })
 
 describe('状态形态化 data-resp/data-status 挂载 (F3/2.6)', () => {
@@ -172,7 +199,9 @@ describe('状态形态化 data-resp/data-status 挂载 (F3/2.6)', () => {
     expect(rows[1].querySelector('.ag-title')).toBeTruthy()
   })
 
-  test('DayView rail 行 — dr-row 挂 data-status (CANCELLED 编码缺口回归保护)', () => {
+  test('DayView (P5 agenda 主数据) — 状态经缓存解析回填: 定时块与置顶色带都挂 attr', () => {
+    // AgendaEntry 本身无状态字段 — data-resp/data-status 全靠同窗口 events
+    // 缓存按 eventId+起点解析回 occurrence; 解析链断了这两个断言就红。
     hookState.data = [
       makeOccurrence({
         summary: '全天取消样本',
@@ -189,13 +218,42 @@ describe('状态形态化 data-resp/data-status 挂载 (F3/2.6)', () => {
         occurrence_end_iso: todayIso(10)
       })
     ]
+    agendaState.data = [
+      {
+        id: 'mail:uid-morph-1',
+        source: 'mail',
+        hot: false,
+        title: '全天取消样本',
+        startIso: todayIso(0),
+        endIso: todayIso(23),
+        allDay: true,
+        multiDay: false,
+        eventId: 1,
+        icalUid: 'uid-morph-1',
+        recurrenceId: null
+      },
+      {
+        id: 'mail:uid-morph-2',
+        source: 'mail',
+        hot: false,
+        title: '暂定样本',
+        startIso: todayIso(9),
+        endIso: todayIso(10),
+        allDay: false,
+        multiDay: false,
+        eventId: 2,
+        icalUid: 'uid-morph-1',
+        recurrenceId: null
+      }
+    ]
     const { container } = render(<DayView onSelect={() => {}} />)
-    const rows = container.querySelectorAll('.dr-row')
-    expect(rows).toHaveLength(2)
-    expect(rows[0].getAttribute('data-status')).toBe('CANCELLED')
-    expect(rows[0].querySelector('.dr-bar')).toBeTruthy()
-    expect(rows[1].getAttribute('data-resp')).toBe('TENTATIVE')
-    expect(rows[1].getAttribute('data-status')).toBe('CONFIRMED')
+    const band = container.querySelector('.m-band')
+    expect(band).toBeTruthy()
+    expect(band?.getAttribute('data-status')).toBe('CANCELLED')
+    const block = container.querySelector('.evt')
+    expect(block).toBeTruthy()
+    expect(block?.getAttribute('data-resp')).toBe('TENTATIVE')
+    expect(block?.getAttribute('data-status')).toBe('CONFIRMED')
   })
 })
 

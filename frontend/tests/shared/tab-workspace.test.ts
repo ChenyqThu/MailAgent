@@ -150,7 +150,7 @@ describe('openTab —— 去重', () => {
 // ── LRU 淘汰 ────────────────────────────────────────────────────────────────
 
 describe('openTab —— 满了之后的淘汰', () => {
-  test('淘汰最久未激活的那个，并把它报给调用方（toast 文案在调用方）', () => {
+  test('淘汰最久未激活的那个并把它报给调用方（驱逐静默，evicted 信息留给测试/轻提示）', () => {
     s().setMaxTabs(4)
     openEmails(4)
     const r = s().openTab('email', 5, '邮件 5')
@@ -160,6 +160,8 @@ describe('openTab —— 满了之后的淘汰', () => {
       evicted: [{ id: 'email:1', title: '邮件 1' }]
     })
     expect(s().tabs.map((t) => t.id)).toEqual(['email:2', 'email:3', 'email:4', 'email:5'])
+    // 新标签在场且当场激活 —— 静默驱逐后这是用户能感知到「开成了」的唯一凭据
+    expect(s().active).toBe('email:5')
   })
 
   test('激活的那个不参与淘汰 —— 哪怕它是最久没被激活的', () => {

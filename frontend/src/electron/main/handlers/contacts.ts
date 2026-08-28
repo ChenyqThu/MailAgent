@@ -52,6 +52,8 @@ interface DirectoryRow {
 interface Candidate {
   email: string
   name?: string
+  /** 通讯录 organization —— 只用于展示（补全行的次要标识），不参与排序。 */
+  org?: string
   score: number
   last_seen?: string
   lastSeenMs: number
@@ -351,9 +353,12 @@ function buildCandidates(history: Candidate[], rows: DirectoryRow[]): Candidate[
       ...variants.flatMap((variant) => nameTokens(variant))
     ]
 
+    const org = normalizeName(row.organization)
+
     byEmail.set(email, {
       email,
       ...(name ? { name } : {}),
+      ...(org ? { org } : {}),
       score: prev?.score ?? 0,
       ...(prev?.last_seen ? { last_seen: prev.last_seen } : {}),
       lastSeenMs: prev?.lastSeenMs ?? 0,
@@ -401,6 +406,7 @@ export function contactSuggest(opts: ContactSuggestOpts = {}): ContactSuggestion
     .map((item) => ({
       email: item.email,
       ...(item.name ? { name: item.name } : {}),
+      ...(item.org ? { org: item.org } : {}),
       score: item.score,
       ...(item.last_seen ? { last_seen: item.last_seen } : {})
     }))

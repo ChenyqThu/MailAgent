@@ -291,6 +291,23 @@ class TestDirectoryLane:
         former = repo.suggest_contacts("alice.legacy", limit=5)[0]
         assert (former.email, former.name) == ("alice.legacy@example.com", "张三")
 
+    def test_directory_org_rides_along_history_only_has_none(
+        self, repo: EmailRepository, tmp_path: Path
+    ):
+        """organization 只跟着通讯录候选出来（补全行的次要标识）。
+
+        🔴 与 Electron main `handlers/contacts.ts` 的同名断言成对 —— 两侧是同一
+        产品行为的两份实现（桌面走 IPC / 远程 web 走 GET /api/email/contacts）。
+        """
+        _seed_directory(tmp_path / "sync_store.db")
+        _CONTACT_SUGGEST_CACHE.clear()
+
+        alice = repo.suggest_contacts("alice@", limit=5, exclude="me@example.com")[0]
+        assert alice.org == "Acme Networks"
+        # 只在邮件头里出现过的人没有组织可报（不臆造）。
+        adam = repo.suggest_contacts("adam", limit=5)[0]
+        assert (adam.email, adam.org) == ("adam@example.com", None)
+
     def test_directory_only_person_is_suggestible(
         self, repo: EmailRepository, tmp_path: Path
     ):

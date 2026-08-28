@@ -18,6 +18,14 @@ vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({ email: { contactSuggest: mockContactSuggest } })
 }))
 
+// chip 姓名的通讯录解析（08-28）——本文件只测补全流，把它按「不在库」短路，
+// 免得每个用例都去打真实的 /chat/config 与 /contacts/resolve。
+// 姓名呈现另见 RecipientFieldDirectory.test.tsx。
+vi.mock('@shared/components/contacts/hooks', () => ({
+  useContactsEnabled: () => ({ enabled: true, loading: false }),
+  useContactsApi: () => ({ resolve: vi.fn(async () => ({ items: {} })) })
+}))
+
 import { RecipientField } from '../../src/shared/components/email/compose/RecipientField'
 
 const CONTACTS = [

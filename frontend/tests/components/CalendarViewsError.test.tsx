@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 //
 // F21 (阶段 0.4) — 日历查询错误态回归: query reject 不得再伪装成
-// EmptyState「无日程」假空态. 覆盖 WeekView / MonthView (mock
-// useCalendarEventsInWindow 返回 isError) + CalendarPage recurring
+// EmptyState「无日程」假空态. 覆盖 WeekView / MonthView (P5 起两者主数据都是
+// useCalendarAgenda, mock 它返回 isError) + CalendarPage recurring
 // (真 useQuery + reject 的 mailApi). 断言: 错误 UI 渲染 + [重试] 触发
 // refetch + 有旧数据时后台错误不轰掉已在屏内容 (keepPreviousData 语义).
 
@@ -57,8 +57,8 @@ vi.mock('@shared/components/calendar/hooks/useCalendarEvents', async (importOrig
   }
 })
 
-// P3 — MonthView 的三源聚合 hook: 独立 mock (与 useCalendarEventsInWindow 分开,
-// windowEvents 解析路径仍走上面的 mock)。
+// P3/P5 — 月/日/周共用的三源聚合 hook: 独立 mock (与 useCalendarEventsInWindow
+// 分开, windowEvents 解析路径仍走上面的 mock)。
 vi.mock('@shared/components/calendar/hooks/useCalendarAgenda', () => ({
   useCalendarAgenda: () => ({
     data: agendaState.data,
@@ -122,12 +122,21 @@ afterEach(() => {
 })
 
 describe('WeekView 错误态 (F21)', () => {
-  test('query 失败且无数据 → 错误屏替代假空态, [重试] 调 refetch', () => {
+  test('agenda query 失败且无数据 → 错误屏替代假空态, [重试] 调 agenda refetch', () => {
+    hookState.isError = false
     render(<WeekView onSelect={() => {}} />)
     expect(screen.getByText('日历数据加载失败')).toBeTruthy()
     expect(screen.queryByText('本周无日程')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /重试/ }))
-    expect(refetchSpy).toHaveBeenCalledTimes(1)
+    expect(agendaRefetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  test('后台 refetch 失败但有旧数据 → 旧数据留屏, 不换错误屏', () => {
+    agendaState.data = [makeAgendaEntry()]
+    agendaState.isError = true
+    render(<WeekView onSelect={() => {}} />)
+    expect(screen.getByText('架构周会')).toBeTruthy()
+    expect(screen.queryByText('日历数据加载失败')).toBeNull()
   })
 })
 

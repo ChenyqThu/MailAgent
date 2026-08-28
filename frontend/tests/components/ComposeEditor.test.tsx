@@ -7,6 +7,12 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useEffect } from 'react'
+
+// toastError 换 vi.fn — 内联图片超限路径断言用；其余导出保持原实现。
+vi.mock('@shared/state/toast', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@shared/state/toast')>()),
+  toastError: vi.fn()
+}))
 import { useEditor, type Editor, type Extensions } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import {
@@ -19,6 +25,7 @@ import {
 import Image from '@tiptap/extension-image'
 
 import i18n from '@shared/i18n'
+import { toastError } from '@shared/state/toast'
 import type { ContactSuggestion } from '@shared/api/types'
 import {
   COMPOSE_FONT_SIZE_DEFAULT_PX,
@@ -26,6 +33,9 @@ import {
   ComposeFormatToolbar
 } from '../../src/shared/components/email/compose/ComposeEditor'
 import {
+  COMPOSE_INLINE_IMAGE_DROP_FLAG,
+  COMPOSE_INLINE_IMAGE_PLUGIN_KEY,
+  MAX_INLINE_IMAGE_BYTES,
   SLASH_ITEMS,
   buildComposeExtensions,
   createMentionSuggestion,
@@ -595,5 +605,187 @@ describe('@mention', () => {
     const html = editor.getHTML()
     expect(html).toContain('data-id="alice@acme.test"')
     expect(html).toContain('@Alice Chen')
+  })
+})
+
+// ── URL 粘贴到选区（composeLinkPaste + Link.linkOnPaste 兜底） ─────────
+
+function pasteText(text: string): void {
+  const editable = document.querySelector('.ProseMirror')
+  if (!(editable instanceof HTMLElement)) throw new Error('ProseMirror root not found')
+  fireEvent.paste(editable, {
+    clipboardData: {
+      types: ['text/plain'],
+      files: [],
+      getData: (type: string) => (type === 'text/plain' ? text : '')
+    }
+  })
+}
+
+describe('URL 粘贴到选区', () => {
+  test('选中文本粘贴 URL → 套 link 且文本不变', () => {
+    const editor = renderEditor() // content '<p>hello world</p>'
+    act(() => editor.commands.setTextSelection({ from: 1, to: 6 }))
+    pasteText('https://example.com/x')
+    expect(editor.getAttributes('link').href).toBe('https://example.com/x')
+    expect(editor.state.doc.textContent).toBe('hello world')
+  })
+
+  test('linkify 精确匹配失配的 URL（尾括号）也套 link — composeLinkPaste 兜底', () => {
+    // Link.linkOnPaste 要求 linkify 解析值与剪贴板逐字相等，wiki 式尾括号 URL 会
+    // 失配回落成替换粘贴；composeLinkPaste 只看 scheme，href = 剪贴板原文。
+    const editor = renderEditor()
+    act(() => editor.commands.setTextSelection({ from: 1, to: 6 }))
+    pasteText('https://en.wikipedia.org/wiki/Foo_(bar)')
+    expect(editor.getAttributes('link').href).toBe('https://en.wikipedia.org/wiki/Foo_(bar)')
+    expect(editor.state.doc.textContent).toBe('hello world')
+  })
+
+  test('无选区粘贴 URL → 现状不回归：URL 作为文本插入', () => {
+    const editor = renderEditor({ content: '<p>hi</p>' })
+    act(() => editor.commands.focus('end'))
+    pasteText('https://example.com/x')
+    expect(editor.state.doc.textContent).toContain('https://example.com/x')
+  })
+
+  test('多词文本粘贴到选区 → 正常替换粘贴（不套 link）', () => {
+    const editor = renderEditor()
+    act(() => editor.commands.setTextSelection({ from: 1, to: 6 }))
+    pasteText('see https://example.com/x please')
+    expect(editor.isActive('link')).toBe(false)
+    expect(editor.state.doc.textContent).toContain('see https://example.com/x please')
+  })
+})
+
+// ── 链接弹框：不预填 scheme，提交才补全 ────────────────────────────────
+
+describe('链接弹框 scheme 处理', () => {
+  test('打开弹框不预填 https://（输入框为空）', () => {
+    renderEditor()
+    fireEvent.click(screen.getByLabelText('链接'))
+    const input = screen.getByPlaceholderText('链接地址')
+    expect((input as HTMLInputElement).value).toBe('')
+  })
+
+  test('无 scheme 输入 example.com → 提交补全为 https://example.com', () => {
+    const editor = renderEditor()
+    act(() => editor.commands.selectAll())
+    fireEvent.click(screen.getByLabelText('链接'))
+    const input = screen.getByPlaceholderText('链接地址')
+    fireEvent.change(input, { target: { value: 'example.com' } })
+    fireEvent.click(screen.getByLabelText('应用'))
+    expect(editor.getAttributes('link').href).toBe('https://example.com')
+  })
+
+  test('mailto: 输入不被补全', () => {
+    const editor = renderEditor()
+    act(() => editor.commands.selectAll())
+    fireEvent.click(screen.getByLabelText('链接'))
+    const input = screen.getByPlaceholderText('链接地址')
+    fireEvent.change(input, { target: { value: 'mailto:a@b.test' } })
+    fireEvent.click(screen.getByLabelText('应用'))
+    expect(editor.getAttributes('link').href).toBe('mailto:a@b.test')
+  })
+})
+
+// ── 内联图片：粘贴 / 拖放 → data URL 直嵌正文 ─────────────────────────
+
+function makeImage(name: string, type = 'image/png'): File {
+  return new File([new Uint8Array([137, 80, 78, 71])], name, { type })
+}
+
+/** 真造 4MB Blob 慢；小文件 + 实例级 size 覆写模拟超限（对齐 ComposeAttachmentsDnd）。 */
+function makeOversizeImage(name: string): File {
+  const f = makeImage(name)
+  Object.defineProperty(f, 'size', { value: MAX_INLINE_IMAGE_BYTES + 1 })
+  return f
+}
+
+function pasteFiles(files: File[], html = ''): void {
+  const editable = document.querySelector('.ProseMirror')
+  if (!(editable instanceof HTMLElement)) throw new Error('ProseMirror root not found')
+  fireEvent.paste(editable, {
+    clipboardData: {
+      types: html ? ['text/html', 'Files'] : ['Files'],
+      files,
+      getData: (type: string) => (type === 'text/html' ? html : '')
+    }
+  })
+}
+
+/** DOM 层拖放在 happy-dom 没有布局（PM 的 drop 入口先 posAtCoords 早退），这里
+ *  经 PluginKey 定位 composeInlineImage 插件、直接驱动它的 handleDrop 测命令层。 */
+function findDropHandler(
+  editor: Editor
+): (view: unknown, event: unknown, slice: unknown, moved: boolean) => boolean {
+  const plugin = COMPOSE_INLINE_IMAGE_PLUGIN_KEY.get(editor.state)
+  const handler = plugin?.props.handleDrop
+  if (typeof handler !== 'function') throw new Error('composeInlineImage handleDrop not found')
+  // 实现是箭头函数不读 this，直接断言成宽签名调用即可。
+  return handler as unknown as (
+    view: unknown,
+    event: unknown,
+    slice: unknown,
+    moved: boolean
+  ) => boolean
+}
+
+describe('内联图片粘贴 / 拖放', () => {
+  test('粘贴剪贴板图片（无 HTML）→ data URL 内联插入', async () => {
+    const editor = renderEditor({ content: '<p></p>' })
+    act(() => editor.commands.focus('end'))
+    pasteFiles([makeImage('shot.png')])
+    await waitFor(() => expect(editor.getHTML()).toContain('src="data:image/png;base64'))
+  })
+
+  test('粘贴超限图片 → toast 提示且不插入', async () => {
+    vi.mocked(toastError).mockClear()
+    const editor = renderEditor({ content: '<p></p>' })
+    pasteFiles([makeOversizeImage('big.png')])
+    await waitFor(() => expect(vi.mocked(toastError)).toHaveBeenCalled())
+    expect(editor.getHTML()).not.toContain('<img')
+  })
+
+  test('剪贴板带 HTML 的图片粘贴不抢 — 走默认解析（远程 img 直插，现状）', () => {
+    const editor = renderEditor({ content: '<p></p>' })
+    pasteFiles([makeImage('shot.png')], '<img src="https://remote.test/x.png">')
+    expect(editor.getHTML()).toContain('https://remote.test/x.png')
+    expect(editor.getHTML()).not.toContain('data:image/png')
+  })
+
+  test('拖放图片文件 → 内联插入并在事件上打消费标记', async () => {
+    const editor = renderEditor({ content: '<p></p>' })
+    const handleDrop = findDropHandler(editor)
+    const event = {
+      dataTransfer: { files: [makeImage('pic.png')] },
+      clientX: 0,
+      clientY: 0,
+      preventDefault: vi.fn()
+    }
+    const handled = handleDrop(editor.view, event, null, false)
+    expect(handled).toBe(true)
+    expect((event as unknown as Record<string, unknown>)[COMPOSE_INLINE_IMAGE_DROP_FLAG]).toBe(true)
+    await waitFor(() => expect(editor.getHTML()).toContain('src="data:image/png;base64'))
+  })
+
+  test('拖放混入非图片 / 超限图 → 整批不吞（交还附件链），不打标记', async () => {
+    const editor = renderEditor({ content: '<p></p>' })
+    const handleDrop = findDropHandler(editor)
+    const before = editor.getHTML()
+    for (const files of [
+      [
+        makeImage('pic.png'),
+        new File([new Uint8Array([1])], 'doc.pdf', { type: 'application/pdf' })
+      ],
+      [makeOversizeImage('big.png')]
+    ]) {
+      const event = { dataTransfer: { files }, clientX: 0, clientY: 0, preventDefault: vi.fn() }
+      expect(handleDrop(editor.view, event, null, false)).toBe(false)
+      expect(
+        (event as unknown as Record<string, unknown>)[COMPOSE_INLINE_IMAGE_DROP_FLAG]
+      ).toBeUndefined()
+    }
+    await new Promise((r) => setTimeout(r, 10))
+    expect(editor.getHTML()).toBe(before)
   })
 })

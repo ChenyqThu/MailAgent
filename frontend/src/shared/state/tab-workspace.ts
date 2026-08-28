@@ -128,9 +128,11 @@ export interface EvictedTab {
   readonly title: string
 }
 
-/** openTab 的三种结局。调用方据此出 toast（store 不认识 i18n）：
+/** openTab 的三种结局。调用方据此决定要不要提示（store 不认识 i18n）：
  *  - `activated`：已经开着，只是激活了它，不该出任何提示；
- *  - `opened`：开了新标签；`evicted` 非空时说明顺带关掉了谁；
+ *  - `opened`：开了新标签；`evicted` 非空 = 顺带**静默**关掉了谁（dogfood 轮4 拍板：
+ *    满员驱逐不再出 toast —— 被挤掉的进最近关闭栈，⌘⇧T 可找回；evicted 信息保留
+ *    给测试与将来可能的「刚关掉了 X」轻提示用）；
  *  - `rejected`：满了且**全部锁定**（写回复中 / 抽屉聊过），没开也没关，提示用户先关一个。 */
 export type OpenTabResult =
   | { readonly outcome: 'activated'; readonly id: TabId }

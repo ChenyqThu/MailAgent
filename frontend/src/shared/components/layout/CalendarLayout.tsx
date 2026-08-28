@@ -34,6 +34,7 @@ import {
   useNowTick
 } from '../calendar/hooks/useCalendarEvents'
 import { calendarCapabilities } from '../calendar/lib/capabilities'
+import { selectionFromExclusions } from '../calendar/lib/sourceTree'
 
 const caps = calendarCapabilities()
 import {
@@ -87,8 +88,8 @@ export function CalendarLayout(): React.ReactElement {
   const navigate = useNavigate({ from: '/admin/calendar' })
   const view: CalendarView = search.view ?? 'week'
 
-  // P3 — currentDate 提升为模块级 store (calendar-view): 小月历反向联动
-  // (主视图翻月 → 小月历跟随) 靠它; 正向 (点小月历日期) 仍走 calendar-focus。
+  // P3 — currentDate 提升为模块级 store (calendar-view): 二级栏 (CalendarSourcePanel)
+  // 靠它按同一个锚定日期算成员聚合窗口; 邮件里点会议邀请定位仍走 calendar-focus。
   const currentDate = useCalendarView((s) => s.currentDate)
   const setCurrentDate = useCalendarView((s) => s.setCurrentDate)
   // 主标签第二段 = 当前月份（design §三）。格式走 toolbar 期间标题的同一条 i18n
@@ -101,11 +102,25 @@ export function CalendarLayout(): React.ReactElement {
     })
   )
   const [shortcutOpen, setShortcutOpen] = useState(false)
-  // Phase 4·#1 — calendar 多选筛选 (空 = 全部). client-side filter 不重 fetch,
-  // 传给 Toolbar (dropdown) + 各 view (useCalendarEventsInWindow select).
-  const [selectedCalendars, setSelectedCalendars] = useState<string[]>([])
+  // Phase 4·#1 —「按日历筛选」多选 (空 = 全部). client-side filter 不重 fetch.
+  //
+  // dogfood 轮 2 收敛: 权威状态迁到 calendar-view store 的**邮箱组排除集** ——
+  // 二级栏日历源树的邮箱组和这个下拉动的是同一份数据, 两处不许各存一套选中态.
+  // 这里只做「排除集 ⇄ 选中集」的换算: 三源视图 (月/日/周) 直接读 store, 下拉
+  // 与走老 events 端点的那几处 (AgendaView / j-k 巡航 / 副 statusbar) 收这个投影.
+  const excludedMail = useCalendarView((s) => s.excluded.mail)
   const { data: calendarNames } = useCalendarNames()
-  const calendars = calendarNames ?? []
+  const calendars = useMemo(() => calendarNames ?? [], [calendarNames])
+  const selectedCalendars = useMemo(
+    () => selectionFromExclusions(calendars, excludedMail),
+    [calendars, excludedMail]
+  )
+  const setSelectedCalendars = useCallback(
+    (next: string[]): void => {
+      useCalendarView.getState().setSelectedMembers('mail', calendars, next)
+    },
+    [calendars]
+  )
   // F5 — 单一 active selected event, 4 view 通过 onSelect callback 上提.
   // Drawer 跟着挂在 Layout 层 (单 mount), 切 view 不丢, deleteMut hook 不
   // unmount → 修 Critical #4 deleteMut stale closure + 撤销可 reopen drawer.
@@ -355,8 +370,6 @@ export function CalendarLayout(): React.ReactElement {
               <CalendarErrorBoundary viewName={t('calendar.toolbar.viewDay', '日')}>
                 <DayView
                   date={currentDate}
-                  onDateChange={handleDateChange}
-                  selectedCalendars={selectedCalendars}
                   onSelect={handleSelect}
                   selectedKey={selectedKey}
                   onReschedule={onReschedule}
@@ -368,7 +381,6 @@ export function CalendarLayout(): React.ReactElement {
               <CalendarErrorBoundary viewName={t('calendar.toolbar.viewWeek', '周')}>
                 <WeekView
                   date={currentDate}
-                  selectedCalendars={selectedCalendars}
                   onSelect={handleSelect}
                   selectedKey={selectedKey}
                   onReschedule={onReschedule}
@@ -378,12 +390,7 @@ export function CalendarLayout(): React.ReactElement {
             )}
             {view === 'month' && (
               <CalendarErrorBoundary viewName={t('calendar.toolbar.viewMonth', '月')}>
-                <MonthView
-                  date={currentDate}
-                  selectedCalendars={selectedCalendars}
-                  onSelect={handleSelect}
-                  selectedKey={selectedKey}
-                />
+                <MonthView date={currentDate} onSelect={handleSelect} selectedKey={selectedKey} />
               </CalendarErrorBoundary>
             )}
             {view === 'agenda' && (

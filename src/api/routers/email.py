@@ -548,7 +548,7 @@ async def suggest_contacts(
 ):
     """compose 收件人自动补全候选。
 
-    data = {items:[{email,name?,score,last_seen?}]}；数据来自本地
+    data = {items:[{email,name?,org?,score,last_seen?}]}；数据来自本地
     email_metadata 聚合 + 通讯录 (contact 三表) 合流，不访问 davmail/GAL。
     通讯录里的 display_name 覆盖邮件头猜出来的名字，零往来的人也进候选。
     """
@@ -556,6 +556,7 @@ async def suggest_contacts(
         {
             "email": item.email,
             "name": item.name,
+            "org": item.org,
             "score": item.score,
             "last_seen": item.last_seen,
         }

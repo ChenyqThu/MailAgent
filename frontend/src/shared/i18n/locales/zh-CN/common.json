@@ -1967,15 +1967,6 @@
         "thu": "周四",
         "fri": "周五",
         "sat": "周六"
-      },
-      "min": {
-        "mon": "一",
-        "tue": "二",
-        "wed": "三",
-        "thu": "四",
-        "fri": "五",
-        "sat": "六",
-        "sun": "日"
       }
     },
     "shared": {
@@ -2223,11 +2214,6 @@
       "rescheduleFailed": "改期失败"
     },
     "view": {
-      "day": {
-        "count": "{n} 个日程",
-        "prevMonthAria": "上月",
-        "nextMonthAria": "下月"
-      },
       "month": {
         "moreItems": "还有 {n} 项",
         "today": "今天",
@@ -2252,7 +2238,10 @@
       "agent": "Agent 日历",
       "mailHint": "各账户 + 团队共享",
       "matterHint": "截止日 + 行动项排期",
-      "agentHint": "智能体排程"
+      "agentHint": "智能体排程",
+      "emptyMail": "还没有同步到任何邮箱日历",
+      "emptyMatter": "本月没有事项排期",
+      "emptyAgent": "本月没有智能体排程"
     }
   },
   "settings": {
@@ -6951,8 +6940,6 @@
     "locked": "有未完成的工作，不会被自动关闭",
     "dirty": "有未保存的修改",
     "toast": {
-      "evictedOne": "标签已满，顺带关掉了「{title}」",
-      "evictedMany": "标签已满，顺带关掉了「{title}」等 {count} 个标签",
       "full": "标签已满，且都在用（写着回复或聊过），先关一个再开新的",
       "targetGone": "该邮件或草稿已不存在，已关闭它的标签"
     }

@@ -241,9 +241,23 @@ describe('contact directory lane', () => {
       expect.arrayContaining(['alice@example.com', 'lisi@example.com'])
     )
     // 曾用邮箱按地址也能搜到，且带的是这个人的 display_name。
-    expect(
-      contacts.contactSuggest({ q: 'alice.legacy', limit: 5 })[0]
-    ).toMatchObject({ email: 'alice.legacy@example.com', name: '张三' })
+    expect(contacts.contactSuggest({ q: 'alice.legacy', limit: 5 })[0]).toMatchObject({
+      email: 'alice.legacy@example.com',
+      name: '张三'
+    })
+  })
+
+  test('directory organization rides along; history-only candidates carry none', () => {
+    // 🔴 与 Python 侧 tests/repository/test_contact_suggest.py 的同名断言成对 ——
+    // 两侧是同一产品行为的两份实现，org 字段漂了会让远程 web 的补全行少一段。
+    seedDirectory(fixtureDb!)
+
+    const [alice] = contacts.contactSuggest({ q: 'alice@', limit: 5, exclude: 'me@example.com' })
+    expect(alice?.org).toBe('Acme Networks')
+    // 只在邮件头里出现过的人没有组织可报（不臆造）。
+    const [adam] = contacts.contactSuggest({ q: 'adam', limit: 5 })
+    expect(adam?.email).toBe('adam@example.com')
+    expect(adam?.org).toBeUndefined()
   })
 
   test('directory-only person (zero mail history) is suggestible', () => {

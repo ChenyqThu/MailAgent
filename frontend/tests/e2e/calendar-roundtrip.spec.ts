@@ -22,7 +22,7 @@
 //
 // selector 纪律: 优先 role/aria/结构型 class (main[aria-label="calendar"] /
 // [data-ui-drawer] / role=tab / role=dialog), 视图根用稳定结构 class
-// (.day-view/.cal-week/.cal-month/.cal-agenda), 不依赖易碎的视觉 class。
+// (.cal-week/.cal-month/.cal-agenda), 不依赖易碎的视觉 class。
 // 文本 selector 前统一 setLocale('zh-CN') 锁定语言。每个用例独立可重跑
 // (beforeEach 冷启 .app, afterEach close)。零新依赖。
 
@@ -66,9 +66,11 @@ async function switchView(page: Page, index: number): Promise<void> {
 }
 
 // 视图 tab 索引 + 各视图恒定根 (loading/empty/error/content 全分支共用)。
+// day 与 week 自 dogfood 轮 2 起共用 TimelineView (dayCount 1/7), 根都是 .cal-week
+// —— 「进的是哪个视图」由 switchView 里的 aria-selected 断言承担。
 const VIEW = { day: 0, week: 1, month: 2, agenda: 3, recurring: 4 } as const
 const VIEW_ROOT: Record<'day' | 'week' | 'month' | 'agenda', string> = {
-  day: '.day-view',
+  day: '.cal-week',
   week: '.cal-week',
   month: '.cal-month',
   agenda: '.cal-agenda'

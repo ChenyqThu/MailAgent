@@ -3,7 +3,7 @@
 填充读端点 (handoff §2 + 阶段 2.1 P1-3 双向反查) + 远程手动同步触发
 (syncTrigger) + 阶段 3.1 (#11) 事件写路径 (create/update/delete/rsvp/replay):
   GET    /api/calendar/events             — eventsList   (→ CalendarEventOccurrence[])
-  GET    /api/calendar/agenda             — agendaList   (→ AgendaEntry[]; 月视图专用的
+  GET    /api/calendar/agenda             — agendaList   (→ AgendaEntry[]; 月/日/周视图的
                                             三源聚合: 邮箱日历 / 事项 / Agent 排程,
                                             实现体 src/calendar_sync/agenda.py)
   GET    /api/calendar/events/{event_id}  — eventGet     (→ CalendarEventDetail | null, 404→null)
@@ -221,12 +221,12 @@ async def list_agenda(
         None, description="Olson 时区名; multiDay 的日界判定用, 缺省 UTC"
     ),
 ):
-    """月视图用的三源聚合: 邮箱日历 + 事项截止 / 行动项排期 + Agent 排程。
+    """月/日/周视图用的三源聚合: 邮箱日历 + 事项截止 / 行动项排期 + Agent 排程。
 
-    与 ``/events`` 的分工: ``/events`` 是 ``calendar_event`` 单表的窗口查询 (Day /
-    Week / Agenda 视图仍走它); 本端点是月视图专用的**跨源**读面, 条目形状是聚合层
-    自己的 ``AgendaEntry`` (见 src/calendar_sync/agenda.py), 不是
-    ``CalendarEventOccurrence``。
+    与 ``/events`` 的分工: ``/events`` 是 ``calendar_event`` 单表的窗口查询 (Agenda /
+    recurring 视图与前端的 occurrence 解析缓存仍走它); 本端点是网格视图的**跨源**
+    读面, 条目形状是聚合层自己的 ``AgendaEntry`` (见 src/calendar_sync/agenda.py),
+    不是 ``CalendarEventOccurrence``。
 
     ``data`` = ``AgendaEntry[]`` (裸数组, 按 startIso 升序); total / window / sources
     落 envelope ``meta`` (对齐 ``/events`` 的 C7 纪律)。

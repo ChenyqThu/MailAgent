@@ -5,8 +5,8 @@
 //   ① 组织者门控 —— 与 drawer 的编辑门控同判据 (非组织者只有 RSVP), 不给必失败
 //      的拖拽手感; 判断在视图里, 漏掉就是「拖得动但一定 400」;
 //   ② 拖拽把**原始** occurrence 上抛给 Layout (提交链要靠它算 recurrenceId);
-//   ③ 乐观 override 期内块按新时间定位, 且 Day 视图左栏行显示同一个时间
-//      (同屏两处口径分裂过一次就再也说不清哪个是真的)。
+//   ③ 乐观 override 期内块按新时间定位 (P5 起主数据是 agenda 条目, 块渲染
+//      走缓存解析回的 occurrence — override 必须仍然生效)。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render } from '@testing-library/react'
@@ -53,6 +53,38 @@ vi.mock('@shared/components/calendar/hooks/useCalendarEvents', async (importOrig
       refetch: vi.fn()
     })
   }
+})
+
+// P5 — 日/周主数据源: agenda 条目从 events mock 派生 (eventId+起点与缓存对齐,
+// 视图内的解析链因此命中同一 occurrence, 拖拽/override 断言口径不变)。
+vi.mock('@shared/components/calendar/hooks/useCalendarAgenda', () => ({
+  useCalendarAgenda: () => ({
+    data: (hookState.data ?? []).map((o) => ({
+      id: `mail:${o.ical_uid}:${o.occurrence_start_iso}`,
+      source: 'mail' as const,
+      hot: false,
+      title: o.summary,
+      startIso: o.occurrence_start_iso,
+      endIso: o.occurrence_end_iso,
+      allDay: o.is_all_day,
+      multiDay: false,
+      eventId: o.id,
+      icalUid: o.ical_uid,
+      recurrenceId: o.recurrence_id,
+      calendarName: o.calendar_name
+    })),
+    isLoading: false,
+    isFetching: false,
+    isError: false,
+    refetch: vi.fn()
+  }),
+  localOlsonTz: () => 'UTC'
+}))
+
+// useAgendaEntryClick 链上的 useNavigate — 测试无 RouterProvider, 换 no-op。
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+  return { ...actual, useNavigate: () => vi.fn() }
 })
 
 import { DayView } from '../../src/shared/components/calendar/views/DayView'
@@ -159,7 +191,7 @@ describe('WeekView 拖拽接线', () => {
 })
 
 describe('DayView 拖拽接线', () => {
-  test('override 生效期 → timeline 块与左栏行显示同一个时间', () => {
+  test('override 生效期 → timeline 块按新时间定位与显示', () => {
     const key = `3-${todayAt(10).toISOString()}`
     useCalendarTimeOverrides.getState().set(key, {
       startIso: todayAt(11).toISOString(),
@@ -171,6 +203,5 @@ describe('DayView 拖拽接线', () => {
     const block = container.querySelector('.evt') as HTMLElement
     expect(block.style.top).toBe(`${11 * HOUR_PX}px`)
     expect(block.querySelector('.e-time')?.textContent).toContain('11:00')
-    expect(container.querySelector('.dr-row .dr-time')?.textContent).toContain('11:00 – 12:00')
   })
 })

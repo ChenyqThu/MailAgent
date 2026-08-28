@@ -59,10 +59,7 @@ import { toastError } from '@shared/state/toast'
 import { useAppearance } from '@shared/state/appearance'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { Popover, PopoverContent, PopoverTrigger } from '@shared/components/ui/popover'
-
-// 内联图片(data URL 直嵌正文)的单张上限 — data URL 会把字节膨胀 ~1.37×,
-// 大图该走附件而不是正文内联。与粘贴图片同一下游 (data: 直存 HTML)。
-const MAX_INLINE_IMAGE_BYTES = 4 * 1024 * 1024
+import { MAX_INLINE_IMAGE_BYTES } from './editor-extensions'
 
 function FmtBtn({
   icon,
@@ -726,19 +723,25 @@ export function ComposeFormatToolbar({
   }
 
   const openLinkDialog = useCallback(() => {
+    // 不预填 https:// — 输入框里用户输入什么就是什么 (dogfood: 不许强改输入);
+    // 无 scheme 的温和补全放在 applyLink 提交时。已有链接仍回填当前 href。
     const prev = editor.getAttributes('link').href as string | undefined
-    setLinkValue(prev && prev.length > 0 ? prev : 'https://')
+    setLinkValue(prev ?? '')
     setLinkOpen(true)
   }, [editor])
   const applyLink = useCallback(() => {
     const url = linkValue.trim()
     setLinkOpen(false)
-    // 空 / 占位 https:// → 视作清除 (给选中文本去链); 否则给选中文本加 link。
+    // 空 / 光杆 scheme → 视作清除 (给选中文本去链)。
     if (url === '' || url === 'https://') {
       editor.chain().focus().extendMarkRange('link').unsetLink().run()
       return
     }
-    editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run()
+    // 无 scheme 时提交才补全 https:// (example.com:8080 这类「域名:端口」不算
+    // scheme, 判据是 :// 或 mailto/tel)。输入框内容始终不被改写。
+    const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(url) || /^(?:mailto|tel):/i.test(url)
+    const href = hasScheme ? url : `https://${url}`
+    editor.chain().focus().extendMarkRange('link').setLink({ href }).run()
   }, [editor, linkValue])
   const removeLink = useCallback(() => {
     setLinkOpen(false)

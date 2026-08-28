@@ -29,18 +29,18 @@ export function filterAgendaBySources(
 }
 
 /** 本地日历日 (00:00)。 */
-function localDay(ms: number): Date {
+export function localDay(ms: number): Date {
   const d = new Date(ms)
   return new Date(d.getFullYear(), d.getMonth(), d.getDate())
 }
 
 /** 本地日历算术加天 (setDate 溢出进位, DST 安全)。 */
-function addLocalDays(d: Date, n: number): Date {
+export function addLocalDays(d: Date, n: number): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n)
 }
 
 /** 两个本地 00:00 Date 的日历天差 (round 而非 floor — 跨 DST 的 23/25h 仍取整数天)。 */
-function diffDays(later: Date, earlier: Date): number {
+export function diffLocalDays(later: Date, earlier: Date): number {
   return Math.round((later.getTime() - earlier.getTime()) / 86_400_000)
 }
 
@@ -52,8 +52,43 @@ export function entryDayRange(entry: AgendaEntry): { firstDay: Date; lastDay: Da
   const endMs = entry.endIso ? Date.parse(entry.endIso) : startMs
   const firstDay = localDay(startMs)
   let lastDay = localDay(Math.max(endMs - 1, startMs))
-  if (diffDays(lastDay, firstDay) > MAX_SPAN_DAYS) lastDay = addLocalDays(firstDay, MAX_SPAN_DAYS)
+  if (diffLocalDays(lastDay, firstDay) > MAX_SPAN_DAYS) {
+    lastDay = addLocalDays(firstDay, MAX_SPAN_DAYS)
+  }
   return { firstDay, lastDay }
+}
+
+/** 色带贪心 lane 分配 (月视图周行与日/周视图置顶条区共用)。
+ *  先排序 (startCol 升序 → span 降序 → 开始时间升序) 再放进首个不重叠的 lane。 */
+export interface BandPlacement {
+  entry: AgendaEntry
+  /** 区内起始列 (0-based)。 */
+  startCol: number
+  /** 跨列数 ≥1。 */
+  span: number
+}
+
+export function assignBandLanes(placements: BandPlacement[]): {
+  bands: (BandPlacement & { lane: number })[]
+  laneCount: number
+} {
+  const sorted = [...placements].sort((a, b) => {
+    if (a.startCol !== b.startCol) return a.startCol - b.startCol
+    if (a.span !== b.span) return b.span - a.span
+    return Date.parse(a.entry.startIso) - Date.parse(b.entry.startIso)
+  })
+  const laneEnds: number[] = [] // 每 lane 当前占到的 endCol
+  const bands = sorted.map((b) => {
+    let lane = laneEnds.findIndex((end) => end < b.startCol)
+    if (lane === -1) {
+      lane = laneEnds.length
+      laneEnds.push(b.startCol + b.span - 1)
+    } else {
+      laneEnds[lane] = b.startCol + b.span - 1
+    }
+    return { ...b, lane }
+  })
+  return { bands, laneCount: laneEnds.length }
 }
 
 export interface MonthWeekBand {
@@ -124,7 +159,7 @@ export function layoutMonthWeeks(
     const weekStart = addLocalDays(gridStart, w * 7)
     const weekEndIncl = addLocalDays(weekStart, 6)
 
-    // 与本周相交的跨天条目 → 色带 (列区间裁剪到 [0,6])。
+    // 与本周相交的跨天条目 → 色带 (列区间裁剪到 [0,6]), 贪心 lane 分配。
     const raw = multiDay
       .filter(
         (m) =>
@@ -132,30 +167,11 @@ export function layoutMonthWeeks(
           m.lastDay.getTime() >= weekStart.getTime()
       )
       .map((m) => {
-        const startCol = Math.max(0, diffDays(m.firstDay, weekStart))
-        const endCol = Math.min(6, diffDays(m.lastDay, weekStart))
+        const startCol = Math.max(0, diffLocalDays(m.firstDay, weekStart))
+        const endCol = Math.min(6, diffLocalDays(m.lastDay, weekStart))
         return { entry: m.entry, startCol, span: endCol - startCol + 1 }
       })
-      .sort((a, b) => {
-        if (a.startCol !== b.startCol) return a.startCol - b.startCol
-        if (a.span !== b.span) return b.span - a.span
-        return Date.parse(a.entry.startIso) - Date.parse(b.entry.startIso)
-      })
-
-    // 贪心 lane 分配: 放进首个不重叠的 lane。
-    const laneEnds: number[] = [] // 每 lane 当前占到的 endCol
-    const bands: MonthWeekBand[] = raw.map((b) => {
-      let lane = laneEnds.findIndex((end) => end < b.startCol)
-      if (lane === -1) {
-        lane = laneEnds.length
-        laneEnds.push(b.startCol + b.span - 1)
-      } else {
-        laneEnds[lane] = b.startCol + b.span - 1
-      }
-      return { ...b, lane }
-    })
-
-    const laneCount = laneEnds.length
+    const { bands, laneCount } = assignBandLanes(raw)
     const capacity = Math.max(0, MONTH_CELL_CAPACITY - laneCount)
     const days: MonthDayCell[] = Array.from({ length: 7 }, (_, i) => {
       const date = addLocalDays(weekStart, i)
@@ -168,21 +184,6 @@ export function layoutMonthWeeks(
     weeks.push({ start: weekStart, days, bands, laneCount, capacity })
   }
   return weeks
-}
-
-/** 小月历色点: 日键 → 当天首个 (最早开始) 条目的源。跨天条目为覆盖的每一天投点。 */
-export function agendaDayDotSources(entries: AgendaEntry[]): Map<string, AgendaSource> {
-  const m = new Map<string, AgendaSource>()
-  const sorted = [...entries].sort((a, b) => Date.parse(a.startIso) - Date.parse(b.startIso))
-  for (const entry of sorted) {
-    const { firstDay, lastDay } = entryDayRange(entry)
-    const span = diffDays(lastDay, firstDay)
-    for (let i = 0; i <= span; i++) {
-      const key = ymd(addLocalDays(firstDay, i))
-      if (!m.has(key)) m.set(key, entry.source)
-    }
-  }
-  return m
 }
 
 /** 选中判定: Layout 传的 selectedKey = `${occurrence.id}-${occurrence_start_iso}`

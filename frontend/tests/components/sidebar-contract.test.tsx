@@ -432,12 +432,20 @@ describe('DomainPanel ↔ nav registry 投影', () => {
     ])
   })
 
-  test('日历域：面板 = 小月历（CalendarMiniPanel，7 列头 + 42 格）', async () => {
+  test('日历域：面板 = 分组日历树（CalendarSourcePanel，三组各一个组头）', async () => {
     const { container } = await renderShell('/admin/calendar')
-    const mini = container.querySelector('[data-nav-panel] [data-calendar-mini]')
-    expect(mini).toBeTruthy()
-    expect(mini!.querySelectorAll('.mm-dow')).toHaveLength(7)
-    expect(mini!.querySelectorAll('.mm-cell')).toHaveLength(42)
+    const tree = container.querySelector('[data-nav-panel] [data-calendar-sources]')
+    expect(tree).toBeTruthy()
+    expect(tree!.querySelectorAll('.cal-srcgroup')).toHaveLength(3)
+    expect(
+      Array.from(tree!.querySelectorAll('.cal-src-row.is-group .cal-src-label')).map(
+        (el) => el.textContent
+      )
+    ).toEqual([
+      i18n.t('calendar.sources.mail'),
+      i18n.t('calendar.sources.matter'),
+      i18n.t('calendar.sources.agent')
+    ])
   })
 
   test('设置域：面板行 = 12 个 tab 直达行（词表单源 SETTINGS_TABS）+ 版本 footer', async () => {
