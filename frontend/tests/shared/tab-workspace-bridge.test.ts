@@ -165,12 +165,23 @@ describe('标题 / 滚动位置', () => {
   })
 })
 
+describe('openSearchTab（P2 补批 Lane S）', () => {
+  test('开搜索单例并带当前语言的标题快照（给淘汰 toast / closedStack 用）', () => {
+    bridge.openSearchTab()
+    const tabs = useTabWorkspace.getState().tabs
+    expect(tabs.map((t) => t.id)).toEqual(['search:0'])
+    expect(tabs[0].title).toBe('新标签页')
+    expect(useTabWorkspace.getState().active).toBe('search:0')
+  })
+})
+
 describe('popout no-op', () => {
   test('popout 下所有入口不碰标签 store（防覆盖主窗持久化标签集）', () => {
     usePopoutMode.setState({ isPopout: true, emailId: 1 })
     bridge.openObjectTab('email', 1)
     bridge.replaceObjectTab('email', 2)
     bridge.notifyTabChatActivity('email', 1)
+    bridge.openSearchTab()
     expect(useTabWorkspace.getState().tabs).toHaveLength(0)
   })
 })

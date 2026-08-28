@@ -61,6 +61,7 @@ export interface ShortcutDef {
 // 「spec 与调用点 lockstep」就不再靠人眼盯两处（改这里，两侧一起动）。
 // 多 spec 合成一行时用**空格分隔**，与 calendar 的 `'g d'` / `'left right'` 同写法。
 
+export const TAB_NEW_SPEC = 'cmd+t'
 export const TAB_CLOSE_SPEC = 'cmd+w'
 export const TAB_REOPEN_SPEC = 'shift+cmd+t'
 export const TAB_CYCLE_NEXT_SPEC = 'ctrl+tab'
@@ -132,6 +133,16 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     wired: true
   },
   // ── 标签工作区（08-27 P2）— 注册在 GlobalShortcuts，spec 取上面的常量 ──────
+  {
+    // ⌘T — 打开「新标签页」（kind='search' 搜索单例，/search 路由）。已开着则只激活
+    // （store 去重语义）。标签条行尾的「+」钮是同一个动作的鼠标入口。
+    id: 'tabNew',
+    spec: TAB_NEW_SPEC,
+    display: '⌘T',
+    scope: 'global',
+    labelKey: 'shortcutHelp.binding.tabNew',
+    wired: true
+  },
   {
     // 🔴 主标签激活时 ⌘W **消费掉但不做事**：macOS windowMenu 的 close role 也绑
     // ⌘W，不消费就变成「按一下关掉整个窗口」。同一条 preventDefault 覆盖菜单

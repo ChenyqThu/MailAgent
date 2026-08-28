@@ -24,6 +24,7 @@ import type { EventsConnectionState } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { isInboxMailbox, mailboxForView } from '@shared/lib/mailboxSemantics'
+import { navigateToDomain } from '@shared/navigation/domain-location'
 import {
   navActiveDomain,
   navDomainSecond,
@@ -125,12 +126,16 @@ export function Sidebar(): React.ReactElement {
     select: (s) => (s.location.search as { tab?: string }).tab
   })
 
-  // 当前域（导轨选中格 + 面板内容）。无命中回落邮件域 —— registry 覆盖全部路由，
-  // 理论上只在测试路由树缺路由时走到。
-  const activeDomain = navActiveDomain(navEntries, pathname, searchTab) ?? 'mail'
+  // 路由归属域。🔴 null 是**真值**不是缺省：'/search'（「新标签页」搜索标签的承载路由）
+  // 有意不进 registry，不属于任何域。导轨高亮与「点当前域的格 = 折叠」这条短路都必须
+  // 按它判 —— 回落成 'mail' 会让 /search 上点邮件格变成折叠切换、走不掉（实测过）。
+  const routeDomain = navActiveDomain(navEntries, pathname, searchTab)
+  // 二级栏形态要一个具体域才能算，这里才回落邮件域（/search 自带 336 左列，
+  // 回落到 mail 的 'page' 档 ⇒ 不渲染 DomainPanel，正是要的形态）。
+  const panelDomain = routeDomain ?? 'mail'
   // 域二级栏形态（08-27 批起恒有二级栏）：'nav' = DomainPanel；'page' = 页面列表列
   // 充当二级栏（收起走同一个 useNavCollapsed，本组件只管开合按钮的显隐）。
-  const second = navDomainSecond(activeDomain)
+  const second = navDomainSecond(panelDomain)
   const hasPanel = second === 'nav'
 
   // Mailbox counts — SSE driven (useEventBridge invalidate ['mailboxes']);
@@ -197,15 +202,21 @@ export function Sidebar(): React.ReactElement {
     else navigateToNavEntry(navigate, entry)
   }
 
-  /** 导轨格点击：切域 = 导航到该格的 entry；点当前域的格 = 折叠/展开二级栏
+  /** 导轨格点击：切域 = 回该域上次的落点；点当前域的格 = 折叠/展开二级栏
    *  （快捷路径；显式入口是 rail 底部的 RailToggle，0825 dogfood 补）。
    *  08-27 批起所有域都有二级栏，点当前格恒为开合。 */
   const handleRailCellClick = (entry: NavEntry): void => {
-    if (entry.domain === activeDomain) {
+    // routeDomain 为 null（'/search'）时没有「当前域」⇒ 每一格都是切域，正常导航。
+    if (entry.domain === routeDomain) {
       toggleCollapsed()
       return
     }
-    handleEntryClick(entry)
+    // 🔴 切域走 navigateToDomain（有落点回放 / 无落点才是这一格的缺省 entry），与
+    // ⌃⇥ / 标签条切域同径 —— 导轨是「回邮件域」最常走的路径，恒落缺省会把
+    // 「已加星标」重置成收件箱。不走 handleEntryClick：那条路会 setView(格的缺省视图)，
+    // 正好把回放的视图覆盖掉；回放后的 view→store 同步由 InboxLayout 的 URL→store
+    // effect 负责（它本就是深链那条腿）。
+    navigateToDomain(navigate, entry.domain)
   }
 
   const handleEntryHover = (entry: NavEntry): void => {
@@ -227,7 +238,7 @@ export function Sidebar(): React.ReactElement {
     >
       <IconRail
         entries={navEntries}
-        activeDomain={activeDomain}
+        activeDomain={routeDomain}
         badgeValue={badgeValue}
         monogram={account.monogram}
         accountTitle={t('nav.account.tooltip', { email: accountEmail ?? account.localPart })}
@@ -242,7 +253,7 @@ export function Sidebar(): React.ReactElement {
       />
       {hasPanel && (
         <DomainPanel
-          domain={activeDomain}
+          domain={panelDomain}
           entries={navEntries}
           onEntryClick={handleEntryClick}
           onEntryHover={handleEntryHover}

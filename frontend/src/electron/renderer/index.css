@@ -1689,6 +1689,27 @@ body::before {
   overflow: hidden;
 }
 
+/* 「+」新标签页钮 (原型 .plus 28×28 圆角 8, 标签行尾、右簇之前; ⌘T 的鼠标入口)。
+ * margin-bottom 8 ≈ 与 34px 底对齐标签的视觉中线齐平。在 .tstrip-tabs 之外 ——
+ * tabs 区是 flex-1 且被 RO 观察, 本钮宽度经实测自动进 morphing 几何。 */
+.tstrip-plus {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--ink-fg-2));
+  flex-shrink: 0;
+  margin-bottom: 8px;
+  z-index: 3;
+  cursor: pointer;
+}
+.tstrip-plus:hover {
+  background: rgb(var(--ink-fg) / 0.05);
+  color: rgb(var(--ink-fg));
+}
+
 /* 对象标签 (邮件/事项)。宽度由 TabStrip.tsx 按容器实测计算 (clamp 84-190)。 */
 .ttab {
   height: 34px;

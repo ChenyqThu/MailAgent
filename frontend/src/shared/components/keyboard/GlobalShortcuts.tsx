@@ -22,6 +22,7 @@ import {
   TAB_CYCLE_NEXT_SPEC,
   TAB_CYCLE_PREV_SPEC,
   TAB_JUMP_SPECS,
+  TAB_NEW_SPEC,
   TAB_REOPEN_SPEC
 } from '@shared/keymap'
 // ⌘, / ⌘O 的**目标**来自 nav registry（与侧栏、⌘K jump 同一条 entry），**组合键**仍来自
@@ -32,7 +33,13 @@ import { useCommandPalette } from '@shared/state/command-palette'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
 import { useNavCollapsed } from '@shared/state/nav-shell'
 import { openNewCompose } from '@shared/state/compose-new'
-import { closeActiveTab, cycleTab, jumpToSlot, reopenClosedTab } from '@shared/state/tab-commands'
+import {
+  closeActiveTab,
+  cycleTab,
+  jumpToSlot,
+  openSearchTab,
+  reopenClosedTab
+} from '@shared/state/tab-commands'
 
 // 模块级常量：entry 是静态数据，没必要每次 render 再查一次。
 const settingsEntry = navEntry('settings')
@@ -113,6 +120,14 @@ export function GlobalShortcuts(): ReactElement {
     return true
   }, [])
 
+  // ⌘T —— 打开「新标签页」（搜索单例；已开着则只激活）。preventDefault 防浏览器语义
+  // 残留（Electron 无 tab role，但 ⌘ 组合恒消费与 ⌘W 同口径）。
+  const newTab = useCallback((evt: KeyboardEvent) => {
+    evt.preventDefault()
+    openSearchTab()
+    return true
+  }, [])
+
   // ⌃⇥ / ⌃⇧⇥ —— 循环切标签。useShortcut 的 `ctrl` 是跨平台别名（⌘ 也算），这里要的是
   // **严格 ⌃**，故在 handler 里补一道 ctrlKey 判据；不匹配就不消费，让给后面的注册项。
   const cycleNext = useCallback((evt: KeyboardEvent) => {
@@ -152,6 +167,7 @@ export function GlobalShortcuts(): ReactElement {
   useShortcut('cmd+n', () => openNewCompose())
   useShortcut('alt+b', toggleNav)
   useShortcut('alt+g', toggleLocale)
+  useShortcut(TAB_NEW_SPEC, newTab)
   useShortcut(TAB_CLOSE_SPEC, closeTab)
   useShortcut(TAB_REOPEN_SPEC, reopenTab)
   useShortcut(TAB_CYCLE_NEXT_SPEC, cycleNext)

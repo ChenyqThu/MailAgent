@@ -476,6 +476,7 @@
       "shortcutHelp": "Show keyboard help",
       "composeNew": "Compose new email",
       "generalAgent": "Open Chats and start a new session",
+      "tabNew": "New tab (search)",
       "tabClose": "Close current tab",
       "tabReopen": "Reopen last closed tab",
       "tabCycle": "Cycle through tabs",
@@ -6966,6 +6967,8 @@
   },
   "tabs": {
     "untitled": "Untitled",
+    "searchTitle": "New Tab",
+    "newTab": "New tab (⌘T)",
     "strip": "Workspace tabs",
     "close": "Close tab (⌘W)",
     "locked": "Unfinished work here — won't be auto-closed",
@@ -6974,5 +6977,15 @@
       "evictedMany": "Tab limit reached — closed {count} tabs, starting with “{title}”",
       "full": "Every tab is in use (draft in progress or chatted) — close one first"
     }
+  },
+  "searchTab": {
+    "slogan": "Search mail, matters, contacts and events",
+    "placeholder": "Type keywords, or refine with from: has: mailbox:",
+    "hintAi": "✦ AI deep search",
+    "recents": "Recently opened",
+    "recentSearches": "Recent searches",
+    "savedSearches": "Saved searches",
+    "metaEmail": "Email",
+    "metaMatter": "Matter"
   }
 }

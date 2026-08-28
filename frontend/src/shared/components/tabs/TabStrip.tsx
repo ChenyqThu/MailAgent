@@ -18,8 +18,9 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { XIcon } from '@shared/components/icons'
+import { PlusIcon, SearchIcon, XIcon } from '@shared/components/icons'
 import { NAV_DOMAINS, navDomainLabel } from '@shared/navigation/registry'
+import { openSearchTab } from '@shared/state/tab-commands'
 import {
   MAIN_SLOT,
   TAB_KIND_DOMAIN,
@@ -158,6 +159,19 @@ export function TabStrip({ trailing }: TabStripProps): React.ReactElement {
         ))}
       </div>
 
+      {/* 「+」新标签页（⌘T 的鼠标入口，原型 .plus）。放在 .tstrip-tabs **外**：tabs 区
+          是被 RO 观察的 flex-1，钮占掉的宽度经实测自动进几何，断口坐标不需要手抄它。 */}
+      <button
+        type="button"
+        className="tstrip-plus"
+        style={NO_DRAG}
+        title={t('tabs.newTab')}
+        aria-label={t('tabs.newTab')}
+        onClick={openSearchTab}
+      >
+        <PlusIcon size={14} strokeWidth={2} />
+      </button>
+
       {trailing}
     </div>
   )
@@ -179,8 +193,14 @@ function ObjectTab({
   onClose
 }: ObjectTabProps): React.ReactElement {
   const { t } = useTranslation()
-  // deeplink 这类入口先开着空标题，详情加载完由消费方 updateTab 补（store 契约）。
-  const title = tab.title === '' ? t('tabs.untitled') : tab.title
+  // 搜索标签标题恒定（不读快照 ⇒ 切语言即时跟）；对象标签 deeplink 这类入口先开着
+  // 空标题，详情加载完由消费方 updateTab 补（store 契约）。
+  const title =
+    tab.kind === 'search'
+      ? t('tabs.searchTitle')
+      : tab.title === ''
+        ? t('tabs.untitled')
+        : tab.title
   return (
     <div
       role="tab"
@@ -197,8 +217,9 @@ function ObjectTab({
         }
       }}
     >
-      {/* kind icon = 所属域的脸（registry 单源，不为标签另造 glyph）。 */}
-      {NAV_DOMAINS[TAB_KIND_DOMAIN[tab.kind]].icon()}
+      {/* kind icon = 所属域的脸（registry 单源，不为标签另造 glyph）；搜索标签没有域，
+          用放大镜（与页面 slogo / ⌘K 钮同一枚）。 */}
+      {tab.kind === 'search' ? <SearchIcon /> : NAV_DOMAINS[TAB_KIND_DOMAIN[tab.kind]].icon()}
       <span className="ttab-title">{title}</span>
       {tab.locked && <span className="ttab-lock" title={t('tabs.locked')} />}
       <button

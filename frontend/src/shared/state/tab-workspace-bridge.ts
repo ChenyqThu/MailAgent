@@ -21,6 +21,7 @@ import { useAIChatPanel } from './ai-chat-panel'
 import { useComposeStore } from './compose'
 import { usePopoutMode } from './popout-mode'
 import {
+  SEARCH_TARGET_ID,
   selectActiveTab,
   tabId,
   useTabWorkspace,
@@ -76,6 +77,16 @@ export function announceTabResult(result: OpenTabResult | ReplaceTabResult | nul
 export function openObjectTab(kind: TabKind, targetId: number, title?: string): void {
   if (inert()) return
   announceTabResult(useTabWorkspace.getState().openTab(kind, targetId, title))
+}
+
+/** ⌘T / 标签条「+」/ `/search` 深链 —— 打开「新标签页」搜索单例（已开着则只激活）。
+ *  标题快照只给 toast / closedStack 用（标签条渲染按 kind 直取 i18n，不读快照），
+ *  这里顺手写一份当前语言的，免得淘汰 toast 报「无标题」。 */
+export function openSearchTab(): void {
+  if (inert()) return
+  announceTabResult(
+    useTabWorkspace.getState().openTab('search', SEARCH_TARGET_ID, tr('tabs.searchTitle'))
+  )
 }
 
 /** J/K · 归档/删除后续选 · 冷启动选第一条 —— 原位换目标，不涨标签数。

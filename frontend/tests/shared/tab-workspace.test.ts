@@ -40,6 +40,8 @@ const {
   MAX_TABS_DEFAULT,
   MAX_TABS_MAX,
   MAX_TABS_MIN,
+  SEARCH_TAB_ID,
+  SEARCH_TARGET_ID,
   TAB_KIND_DOMAIN,
   selectActiveTab,
   selectActiveTargetId,
@@ -345,6 +347,83 @@ describe('updateTab', () => {
     const before = s()
     s().updateTab('email:404', { title: '幽灵' })
     expect(s()).toBe(before)
+  })
+})
+
+// ── 搜索标签（「新标签页」单例，P2 补批 Lane S）─────────────────────────────
+//
+// 走通用语义（LRU 可淘汰 / ⌘W 可关 / closedStack 可找回 / 持久化恢复），只有两条
+// 专属规则要钉：单例（targetId 恒 SEARCH_TARGET_ID，去重即单例）与「永不 locked」
+// （updateTab 丢弃锁定写入 + 存档里的 locked 放平）。
+
+describe('搜索标签', () => {
+  test('单例：开两次只有一个，第二次是 activated（去重键 = search:0）', () => {
+    const first = s().openTab('search', SEARCH_TARGET_ID, '新标签页')
+    expect(first).toEqual({ outcome: 'opened', id: SEARCH_TAB_ID, evicted: [] })
+    s().openTab('email', 1, '邮件 1')
+    const again = s().openTab('search', SEARCH_TARGET_ID, '新标签页')
+    expect(again).toEqual({ outcome: 'activated', id: SEARCH_TAB_ID })
+    expect(s().tabs.filter((t) => t.kind === 'search')).toHaveLength(1)
+    expect(s().active).toBe(SEARCH_TAB_ID)
+  })
+
+  test('参与 LRU 淘汰（永不锁定 ⇒ 恒是候选）', () => {
+    s().setMaxTabs(4)
+    s().openTab('search', SEARCH_TARGET_ID, '新标签页')
+    openEmails(3) // 满 4，搜索标签是最久未激活的
+    const r = s().openTab('email', 9, '邮件 9')
+    expect(r.outcome === 'opened' && r.evicted).toEqual([{ id: SEARCH_TAB_ID, title: '新标签页' }])
+  })
+
+  test('updateTab 丢弃 locked 写入，其余字段照常', () => {
+    s().openTab('search', SEARCH_TARGET_ID, '新标签页')
+    s().updateTab(SEARCH_TAB_ID, { locked: true, scrollTop: 120 })
+    const tab = s().tabs.find((t) => t.id === SEARCH_TAB_ID)
+    expect(tab?.locked).toBe(false)
+    expect(tab?.scrollTop).toBe(120)
+  })
+
+  test('关掉进最近关闭栈，⌘⇧T 找得回', () => {
+    s().openTab('search', SEARCH_TARGET_ID, '新标签页')
+    s().closeTab(SEARCH_TAB_ID)
+    expect(s().closedStack).toEqual([
+      { kind: 'search', targetId: SEARCH_TARGET_ID, title: '新标签页' }
+    ])
+    expect(s().reopenLastClosed()?.outcome).toBe('opened')
+    expect(s().active).toBe(SEARCH_TAB_ID)
+  })
+
+  test('持久化恢复：搜索标签回来、激活槽保住，存档里的 locked 放平', async () => {
+    const fresh = await reboot(
+      JSON.stringify({
+        v: 1,
+        active: SEARCH_TAB_ID,
+        mainPage: 'today',
+        maxTabs: 8,
+        tabs: [
+          { kind: 'email', targetId: 1, title: '邮件 1' },
+          { kind: 'search', targetId: SEARCH_TARGET_ID, title: '新标签页', locked: true }
+        ]
+      })
+    )
+    const state = fresh.useTabWorkspace.getState()
+    expect(state.tabs.map((t) => t.id)).toEqual(['email:1', SEARCH_TAB_ID])
+    expect(state.active).toBe(SEARCH_TAB_ID)
+    expect(state.tabs[1].locked).toBe(false)
+  })
+
+  test('存档被手改出第二个搜索标签（targetId ≠ 0）→ 丢弃，单例判据不破', async () => {
+    const fresh = await reboot(
+      JSON.stringify({
+        v: 1,
+        active: 'main',
+        tabs: [
+          { kind: 'search', targetId: SEARCH_TARGET_ID, title: '新标签页' },
+          { kind: 'search', targetId: 5, title: '第二个搜索标签' }
+        ]
+      })
+    )
+    expect(fresh.useTabWorkspace.getState().tabs.map((t) => t.id)).toEqual([SEARCH_TAB_ID])
   })
 })
 

@@ -42,7 +42,12 @@ vi.stubGlobal('ResizeObserver', FakeResizeObserver)
 
 import i18n from '../../../src/shared/i18n'
 import { TabStrip } from '@shared/components/tabs/TabStrip'
-import { MAIN_SLOT, useTabWorkspace } from '@shared/state/tab-workspace'
+import {
+  MAIN_SLOT,
+  SEARCH_TAB_ID,
+  SEARCH_TARGET_ID,
+  useTabWorkspace
+} from '@shared/state/tab-workspace'
 
 await i18n.changeLanguage('zh-CN')
 
@@ -159,6 +164,43 @@ describe('TabStrip — 对象标签', () => {
       useTabWorkspace.getState().openTab('matter', 9)
     })
     expect(screen.getAllByRole('tab')[1].textContent).toContain('未命名')
+  })
+
+  test('搜索标签标题恒「新标签页」（按 kind 取 i18n，不读快照）', () => {
+    render(<TabStrip />)
+    act(() => {
+      // 快照故意塞别的字 —— 渲染必须无视它（切语言即时跟的前提）。
+      useTabWorkspace.getState().openTab('search', SEARCH_TARGET_ID, '快照里的旧标题')
+    })
+    const tab = screen.getAllByRole('tab')[1]
+    expect(tab.textContent).toContain('新标签页')
+    expect(tab.textContent).not.toContain('快照里的旧标题')
+    // 可关（⌘W / 关闭钮），与对象标签同款
+    expect(screen.getAllByRole('button', { name: '关闭标签（⌘W）' })).toHaveLength(1)
+  })
+})
+
+describe('TabStrip — 「+」新标签页钮', () => {
+  test('点击开搜索单例并激活；再点只激活不重复开', () => {
+    render(<TabStrip />)
+    const plus = screen.getByRole('button', { name: '新标签页（⌘T）' })
+    fireEvent.click(plus)
+    expect(useTabWorkspace.getState().tabs.map((tb) => tb.id)).toEqual([SEARCH_TAB_ID])
+    expect(useTabWorkspace.getState().active).toBe(SEARCH_TAB_ID)
+    act(() => {
+      useTabWorkspace.getState().activateMain()
+    })
+    fireEvent.click(plus)
+    expect(useTabWorkspace.getState().tabs).toHaveLength(1)
+    expect(useTabWorkspace.getState().active).toBe(SEARCH_TAB_ID)
+  })
+
+  test('钮在 .tstrip-tabs 之外（tabs 区被 RO 观察，钮宽经实测进几何不靠手抄）', () => {
+    const { container } = render(<TabStrip />)
+    const plus = container.querySelector('.tstrip-plus')
+    expect(plus).not.toBeNull()
+    expect(plus?.closest('.tstrip-tabs')).toBeNull()
+    expect(plus?.closest('.tstrip')).not.toBeNull()
   })
 })
 

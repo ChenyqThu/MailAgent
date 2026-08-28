@@ -88,6 +88,10 @@ import {
   navRailEntries,
   type NavDomain
 } from '../../src/shared/navigation/registry'
+import {
+  __resetDomainLocations,
+  recordRouteLocation
+} from '../../src/shared/navigation/domain-location'
 import { SETTINGS_TABS } from '../../src/shared/lib/settingsTabs'
 import { useNavCollapsed } from '../../src/shared/state/nav-shell'
 
@@ -113,6 +117,9 @@ function makeWrappedRouter(initialPath: string): ReturnType<typeof createRouter>
     '/agents',
     '/matters',
     '/contacts',
+    // 「新标签页」搜索标签的承载路由（08-27 P2 补批 Lane S）。有意不进 registry ⇒
+    // 不属于任何域，导轨在它上面不该有高亮格。
+    '/search',
     '/settings',
     '/admin/llm',
     '/admin/kanban',
@@ -180,6 +187,8 @@ beforeEach(async () => {
   gates.matters = true
   gates.contacts = true
   useNavCollapsed.setState({ collapsed: false })
+  // 每域落点记忆是模块级的；不清会让「回放」用例污染后面按缺省 entry 断言的用例。
+  __resetDomainLocations()
   await i18n.changeLanguage('zh-CN')
 })
 
@@ -321,6 +330,38 @@ describe('IconRail ↔ nav registry 投影', () => {
       { to: '/admin/kanban' },
       { to: '/settings', search: { tab: 'general' } }
     ])
+    navigate.mockRestore()
+  })
+
+  // '/search' 不属于任何域（registry 有意不收它）。回落成 'mail' 会同时错两件事：
+  // 邮件格亮着（误导），且点它命中「同域 = 折叠」短路 ⇒ 路由停在 /search 走不掉
+  // （dev 实测：两次点击只是左列 336↔56 来回，路由不动）。
+  test("'/search'：导轨无高亮格，且点任一格都正常切域（不落同域折叠短路）", async () => {
+    const { container, router } = await renderShell('/search')
+    expect(container.querySelectorAll('[data-nav-rail] [data-selected="true"]')).toHaveLength(0)
+    const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
+    const mailCell = Array.from(container.querySelectorAll('[data-nav-rail] .nav-rail-cell')).find(
+      (c) => c.querySelector('.raillabel')?.textContent === '邮件'
+    )!
+    fireEvent.click(mailCell)
+    expect(navigate.mock.calls.at(-1)?.[0]).toEqual({ to: '/', search: { view: 'inbox' } })
+    expect(useNavCollapsed.getState().collapsed).toBe(false)
+    navigate.mockRestore()
+  })
+
+  // 导轨是「回邮件域」最常走的路径。P2 补批 Lane R 之前它恒落这一格的缺省 entry ——
+  // 在「已加星标」里切去事项域再点回邮件格，视图被重置成收件箱（dev 实测）。
+  test('切域落该域上次的落点：在 flagged 切走，点邮件格回到 flagged 而不是 inbox', async () => {
+    // 模拟「上次在邮件域停在 /?view=flagged」（真实链路里由 useTabRouteSync 的
+    // route→tab 腿在每次路由变化时记下）。
+    expect(recordRouteLocation('/', { view: 'flagged' })).toBe('mail')
+    const { container, router } = await renderShell('/matters')
+    const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
+    const mailCell = Array.from(container.querySelectorAll('[data-nav-rail] .nav-rail-cell')).find(
+      (c) => c.querySelector('.raillabel')?.textContent === '邮件'
+    )!
+    fireEvent.click(mailCell)
+    expect(navigate.mock.calls.at(-1)?.[0]).toEqual({ to: '/', search: { view: 'flagged' } })
     navigate.mockRestore()
   })
 

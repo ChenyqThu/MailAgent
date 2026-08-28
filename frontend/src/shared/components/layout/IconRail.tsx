@@ -119,7 +119,9 @@ function RailToggle({
 export interface IconRailProps {
   /** 门控过滤后的入口全集（本组件自己按 rail 投影）。 */
   entries: readonly NavEntry[]
-  activeDomain: NavDomain
+  /** 当前路由归属的域；`null` = 路由不属于任何域（'/search' 有意不进 registry）
+   *  ⇒ **没有格高亮**。别在这里回落成某个域：那会让那一格既亮着又变成「点它 = 折叠」。 */
+  activeDomain: NavDomain | null
   badgeValue: Record<NavBadgeKind, number>
   monogram: string
   accountTitle: string

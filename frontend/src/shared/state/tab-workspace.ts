@@ -1,8 +1,9 @@
 // 标签工作区的状态单源（task 08-27-l4-tab-workspace P2 波1）。
 //
-// 右侧详情区从「单一对象槽」改成多标签：**只有邮件与事项**会开成对象标签（判据是
-// 「需不需要同时开两个来比对」），八个页面型承载共用最左那个**主标签**单例槽 ——
-// 所以主标签不在 `tabs` 数组里，它是独立的 `mainPage` + `mainBreadcrumb`。
+// 右侧详情区从「单一对象槽」改成多标签：邮件与事项会开成对象标签（判据是「需不需要
+// 同时开两个来比对」），外加一个「新标签页」搜索单例（TabKind 词表注释）；八个页面型
+// 承载共用最左那个**主标签**单例槽 —— 所以主标签不在 `tabs` 数组里，它是独立的
+// `mainPage` + `mainBreadcrumb`。
 //
 // 🔴 单挂载切换，不是多实例并存（design.md §一）：切标签只换 targetId，详情组件树
 // 只有一份。滚动位置 / 草稿快照 / 抽屉开合挂在标签描述符上，切回来由消费方恢复。
@@ -29,10 +30,21 @@ const SCHEMA_VERSION = 1
 
 // ── 词表 ────────────────────────────────────────────────────────────────────
 
-/** 会开成对象标签的两类内容。 */
-export type TabKind = 'email' | 'matter'
+/** 会开成对象标签的内容种类。email / matter 是对象（各归一个一级域）；`'search'` 是
+ *  「新标签页」（⌘T / 标签条「+」）—— 单例（targetId 恒 `SEARCH_TARGET_ID`），承载在
+ *  `/search` 路由上，不归任何域。它走标签的全部通用语义（LRU 可淘汰 / ⌘W 可关 /
+ *  closedStack 可找回 / 持久化恢复），仅两处不同：标题恒定（渲染侧按 kind 取 i18n，
+ *  不读快照）、**永不 locked**（没有草稿 / 抽屉工作现场，updateTab 丢弃锁定写入）。 */
+export type TabKind = 'email' | 'matter' | 'search'
 
-export const TAB_KINDS: readonly TabKind[] = ['email', 'matter']
+export const TAB_KINDS: readonly TabKind[] = ['email', 'matter', 'search']
+
+/** 归属一级域的对象种类（= TabKind 减去无域的搜索标签）。 */
+export type DomainTabKind = Exclude<TabKind, 'search'>
+
+/** 搜索标签的固定 targetId（原型 `open('search', 0)` 同值）—— 单例判据就是现行的
+ *  `kind + targetId` 去重，不另加特判。 */
+export const SEARCH_TARGET_ID = 0
 
 /** 标签种类 → 一级域。
  *  🔴 与 registry 的 `NAV_OBJECT_DOMAINS` 是同一件事的两种写法（那边是域名，这边是
@@ -43,10 +55,10 @@ export const TAB_KINDS: readonly TabKind[] = ['email', 'matter']
 export const TAB_KIND_DOMAIN = {
   email: 'mail',
   matter: 'matters'
-} as const satisfies Record<TabKind, NavDomain>
+} as const satisfies Record<DomainTabKind, NavDomain>
 
 /** 对象域（会开标签的）。 */
-export type ObjectDomain = (typeof TAB_KIND_DOMAIN)[TabKind]
+export type ObjectDomain = (typeof TAB_KIND_DOMAIN)[DomainTabKind]
 
 /** 主标签的八种承载 = 全部域减去对象域。**类型从 NavDomain 派生**，不手写第二份并集。 */
 export type MainPage = Exclude<NavDomain, ObjectDomain>
@@ -105,6 +117,9 @@ export interface TabDescriptor {
 export function tabId(kind: TabKind, targetId: number): TabId {
   return `${kind}:${targetId}`
 }
+
+/** 搜索标签的稳定 id（单例 ⇒ 恒等于这一个）。 */
+export const SEARCH_TAB_ID: TabId = tabId('search', SEARCH_TARGET_ID)
 
 // ── 返回值契约 ──────────────────────────────────────────────────────────────
 
@@ -223,6 +238,9 @@ function parseTab(raw: unknown): TabDescriptor | null {
   if (!isTabKind(rec.kind)) return null
   const targetId = rec.targetId
   if (typeof targetId !== 'number' || !Number.isInteger(targetId)) return null
+  // 搜索标签是单例：targetId 只有 SEARCH_TARGET_ID 一个合法值，存档被手改出第二个
+  // 搜索标签也不放进来（会破坏「已存在则激活」的单例判据）。
+  if (rec.kind === 'search' && targetId !== SEARCH_TARGET_ID) return null
   const lastActiveAt =
     typeof rec.lastActiveAt === 'number' && Number.isFinite(rec.lastActiveAt) ? rec.lastActiveAt : 0
   const scrollTop =
@@ -238,7 +256,8 @@ function parseTab(raw: unknown): TabDescriptor | null {
     targetId,
     title: typeof rec.title === 'string' ? rec.title : '',
     lastActiveAt,
-    locked: rec.locked === true,
+    // 搜索标签永不 locked（词表注释）—— 存档里被写进 true 也在这里放平。
+    locked: rec.locked === true && rec.kind !== 'search',
     drawerOpen: rec.drawerOpen === true,
     scrollTop,
     ...(draft === undefined ? {} : { draft })
@@ -509,8 +528,12 @@ export const useTabWorkspace = create<TabWorkspaceState>((set, get) => {
 
     updateTab(id, patch) {
       const state = get()
-      if (!state.tabs.some((t) => t.id === id)) return
-      commit({ tabs: state.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t)) })
+      const target = state.tabs.find((t) => t.id === id)
+      if (target === undefined) return
+      // 搜索标签永不 locked（词表注释）——锁定写入丢弃，其余字段照常。
+      const applied =
+        target.kind === 'search' && patch.locked === true ? { ...patch, locked: false } : patch
+      commit({ tabs: state.tabs.map((t) => (t.id === id ? { ...t, ...applied } : t)) })
     },
 
     setMaxTabs(next) {

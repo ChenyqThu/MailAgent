@@ -476,6 +476,7 @@
       "shortcutHelp": "显示快捷键帮助",
       "composeNew": "写新邮件",
       "generalAgent": "打开对话并新建会话",
+      "tabNew": "新标签页（搜索）",
       "tabClose": "关闭当前标签",
       "tabReopen": "恢复刚关闭的标签",
       "tabCycle": "循环切换标签",
@@ -6966,6 +6967,8 @@
   },
   "tabs": {
     "untitled": "未命名",
+    "searchTitle": "新标签页",
+    "newTab": "新标签页（⌘T）",
     "strip": "工作区标签",
     "close": "关闭标签（⌘W）",
     "locked": "有未完成的工作，不会被自动关闭",
@@ -6974,5 +6977,15 @@
       "evictedMany": "标签已满，顺带关掉了「{title}」等 {count} 个标签",
       "full": "标签已满，且都在用（写着回复或聊过），先关一个再开新的"
     }
+  },
+  "searchTab": {
+    "slogan": "搜索邮件、事项、联系人与日程",
+    "placeholder": "输入关键词，或用 from: has: mailbox: 精确检索",
+    "hintAi": "✦ AI 深度搜索",
+    "recents": "最近打开",
+    "recentSearches": "最近搜索",
+    "savedSearches": "已保存搜索",
+    "metaEmail": "邮件",
+    "metaMatter": "事项"
   }
 }

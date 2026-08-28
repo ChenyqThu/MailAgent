@@ -12,6 +12,10 @@ import {
   type ActiveSlot
 } from '@shared/state/tab-workspace'
 
+// ⌘T / 标签条「+」——「新标签页」搜索单例。实现在 bridge（toast 判据 + i18n 标题快照
+// 都在那边单源），这里 re-export 保住键盘命令层的入口面。
+export { openSearchTab } from '@shared/state/tab-workspace-bridge'
+
 /** ⌃⇥ / ⌘1-9 的循环序：主标签在最前，其后是对象标签的**数组序**（标签条上看到的顺序，
  *  不是 LRU 序 —— 位置直达要的是「屏幕上第几个」）。 */
 function slotOrder(): ActiveSlot[] {

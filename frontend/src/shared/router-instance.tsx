@@ -330,6 +330,16 @@ const mattersRoute = createRoute({
   component: lazyRouteComponent(() => import('./components/layout/MattersLayout'), 'MattersLayout')
 })
 
+// /search — 「新标签页」搜索标签（08-27 P2 补批 Lane S）的承载路由。⌘T / 标签条「+」
+// 开出 kind='search' 单例标签，useTabRouteSync 的特判腿把它与本路由双向同步。
+// 🔴 有意不进 nav registry：NavDomain 十域不动、rail 不加格，navActiveDomain('/search')
+// 返回 null 属预期（Sidebar 回落 mail 档；页面自带 336 左列守住 392 边界）。
+const searchRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/search',
+  component: lazyRouteComponent(() => import('./components/search/SearchTabPage'), 'SearchTabPage')
+})
+
 // /today — L4 批次 2「例外面」：跨 agent / 跨事项的待处理态聚合。无 search 参数（页面
 // 自己拥有分组/展开状态）；域二级栏形态 'none'（同日历），整屏归页面。
 const todayRoute = createRoute({
@@ -480,6 +490,7 @@ export const router = createRouter({
     sessionsRoute,
     agentsRoute,
     mattersRoute,
+    searchRoute,
     contactsRoute,
     connectorsRoute,
     adminRoute.addChildren([adminIndexRoute, adminLlmRoute, adminKanbanRoute, adminCalendarRoute]),

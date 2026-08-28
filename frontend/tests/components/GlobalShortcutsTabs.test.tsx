@@ -18,7 +18,13 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }))
 import { GlobalShortcuts } from '@shared/components/keyboard/GlobalShortcuts'
 import { __resetShortcutBus } from '@shared/hooks/useShortcut'
 import { useAIChatPanel } from '@shared/state/ai-chat-panel'
-import { DEFAULT_MAIN_PAGE, MAIN_SLOT, tabId, useTabWorkspace } from '@shared/state/tab-workspace'
+import {
+  DEFAULT_MAIN_PAGE,
+  MAIN_SLOT,
+  SEARCH_TAB_ID,
+  tabId,
+  useTabWorkspace
+} from '@shared/state/tab-workspace'
 import { __resetToastStore } from '@shared/state/toast'
 
 function press(
@@ -78,6 +84,18 @@ describe('GlobalShortcuts — 标签快捷键接线', () => {
     const evt = press('w', { meta: true })
     expect(ids()).toHaveLength(2)
     expect(evt.defaultPrevented).toBe(true)
+  })
+
+  test('⌘T 打开「新标签页」搜索单例；再按只激活不重复开', () => {
+    const evt = press('t', { meta: true })
+    expect(evt.defaultPrevented).toBe(true)
+    expect(ids()).toContain(SEARCH_TAB_ID)
+    expect(useTabWorkspace.getState().active).toBe(SEARCH_TAB_ID)
+    // 切走再按 —— 去重只激活（⌘⇧T 的 shift 不落到这条：spec 修饰键精确匹配）。
+    useTabWorkspace.getState().activateMain()
+    press('t', { meta: true })
+    expect(ids().filter((id) => id === SEARCH_TAB_ID)).toHaveLength(1)
+    expect(useTabWorkspace.getState().active).toBe(SEARCH_TAB_ID)
   })
 
   test('⌘⇧T 恢复刚关掉的标签', () => {
