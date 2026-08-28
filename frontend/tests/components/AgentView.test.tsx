@@ -10,6 +10,9 @@
 // attachment toolbar (with controls), and readOnly composer suppression. The shared
 // MarkdownText is mocked to a plain div (its internals are covered by its own tests).
 
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -233,6 +236,51 @@ describe('Agent view — unified history list (Phase 9)', () => {
   test('empty unified list shows the empty-history hint', () => {
     render(<AgentThreadList items={[]} {...handlers} />)
     expect(screen.getByText(i18n.t('agentView.emptyHistory'))).toBeTruthy()
+  })
+
+  // 08-27 标签工作区批：对话域的页面自管列充当二级栏，展开态定宽 336
+  //（rail 56 + 336 = 392，与其他域左列边界对齐）。改这个数 = 改左列总宽契约，
+  // 要与 .nav-panel(336) / nav-shell NAV_W_EXPANDED(392) 一起动。
+  test('展开态列宽 336（392px 左列对齐契约）；折叠仍是 48px rail', () => {
+    const { container } = render(<AgentThreadList items={[]} {...handlers} />)
+    expect(container.querySelector('aside')?.className).toContain('w-[336px]')
+  })
+
+  // 会话列 = 对话域的二级栏：nav shell 折叠时整列 `display:none` 而**不卸载**（保滚动
+  // 位置与分组展开态，同 InboxLayout 的邮件列）。接线在 AgentViewLayout —— 少了它，
+  // rail 的开合按钮在对话域就是空转（点了只翻全局偏好，列一动不动）。
+  test('navHidden → 整列 hidden（不卸载）；与列自己的 rail 折叠叠加时 hidden 赢', () => {
+    const { container, rerender } = render(<AgentThreadList items={[]} {...handlers} />)
+    const aside = container.querySelector('aside')
+    // 🔴 token 级判定（classList）不是子串 —— 基线 className 里本来就有 overflow-hidden，
+    // `toContain('hidden')` 会恒真。
+    expect(aside?.classList.contains('hidden')).toBe(false)
+
+    rerender(<AgentThreadList items={[]} {...handlers} navHidden />)
+    // 同一个 DOM 节点（没被卸载重建），只是多了 hidden。
+    expect(container.querySelector('aside')).toBe(aside)
+    expect(aside?.classList.contains('hidden')).toBe(true)
+
+    rerender(<AgentThreadList items={[]} {...handlers} collapsed navHidden />)
+    expect(container.querySelector('aside')?.classList.contains('hidden')).toBe(true)
+  })
+
+  // 上一条测的是「给了 navHidden 会怎样」，这条测**接线本身在不在**：AgentViewLayout
+  // 不读 useNavCollapsed / 不传这个 prop 的话，上一条照样绿而 rail 的开合按钮在对话域
+  // 空转（本批复核抓到的就是这个形态）。判声明与使用，同 composer_attachment_frame 的
+  // 三场地闸的写法。
+  test('接线在场：AgentViewLayout 读 useNavCollapsed 并把它传给会话列', () => {
+    const raw = readFileSync(
+      resolve(process.cwd(), 'src/shared/components/agents/AgentViewLayout.tsx'),
+      'utf8'
+    )
+    // 🔴 先剥注释再判 —— 这个文件的注释里就写着这两个名字（讲的正是这条接线），
+    // 直接对全文 match 的话「把那行注释掉」这种回归照样绿。
+    const code = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+    // canary：剥完还得剩下东西，正则写坏把整个文件吃光时先在这里红。
+    expect(code.length).toBeGreaterThan(raw.length / 2)
+    expect(code).toContain('useNavCollapsed')
+    expect(code).toMatch(/navHidden=\{navHidden\}/)
   })
 })
 

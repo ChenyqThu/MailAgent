@@ -1,30 +1,34 @@
-// 多文件夹同步 (P3) — SidebarFolderTree 的纯函数 helper (从组件文件拆出, 避免
-// react-refresh/only-export-components: 组件文件只能导出组件)。
+// 同步文件夹树的纯函数 —— 把 `folder.discover` 的 flat folders 按 whitelist 过滤 +
+// parent 链还原成树。父不在 whitelist 但子在 → 子挂到最近的 synced 祖先（无则升顶层，
+// 不丢）。
 //
-// 把 discover 的 flat folders 按 whitelist 过滤 + parent 链还原成树, 供 Sidebar
-// 渲染。父不在 whitelist 但子在 → 子挂到最近的 synced 祖先 (无则升顶层, 不丢)。
-// 排序 task: whitelist 参数是**有序数组** (SYNC_FOLDERS 数组序 = 用户自定义显示
-// 顺序), 同层级内 (roots 与每个节点的 children) 按其下标排序; 层级挂载不受影响。
+// 原址 `components/layout/sidebarFolderTree.helpers.ts`（多文件夹同步 P3）。task
+// 08-27 P1 Lane B 把常驻文件夹树换成列表头的文件夹选择器后，这份逻辑与「侧边栏」
+// 不再有关系，故搬到 lib 并去掉名字里的 Sidebar。行为逐字不变。
+//
+// 🔴 whitelist 参数是**有序数组**（SYNC_FOLDERS 数组序 = 用户自定义显示顺序），同层级内
+// （roots 与每个节点的 children）按其下标排序；层级挂载不受影响。读侧不得 sorted()。
 
 import type { FolderInfo } from '@shared/api/types'
 import { decodeImapUtf7 } from '@shared/lib/imapUtf7'
 
-/** sidebar 内部树节点 — FolderInfo 子集 + children + 层级 display_name 路径。 */
-export interface SidebarFolderNode {
+/** 树节点 — FolderInfo 子集 + children + 层级 display_name 路径。 */
+export interface FolderNode {
   imapName: string
-  /** 叶子段 display_name (已按 delimiter 切末段), 行 label + 过滤 key 用完整路径用 fullDisplayName。 */
+  /** 叶子段 display_name（已按 delimiter 切末段）；过滤 key 用 fullDisplayName。 */
   displayName: string
-  /** 完整 display_name (原始值, 未切割), 用于 customMailbox 过滤 key (后端 mailbox 字段存完整解码路径)。 */
+  /** 完整 display_name（原始值，未切割），用于 customMailbox 过滤 key（后端
+   *  `email_metadata.mailbox` 存完整解码路径）。 */
   fullDisplayName: string
   count: number | null
-  /** 根→本节点的 display_name 段 (末段 = displayName), 列表面包屑用。 */
+  /** 根→本节点的 display_name 段（末段 = displayName），面包屑用。 */
   path: string[]
-  children: SidebarFolderNode[]
+  children: FolderNode[]
 }
 
-/** discover 未就绪时的本地 seed (task 08-20-perf-shell-prefetch-sidebar §③) ——
- *  从 whitelist (imap 原始名, SYNC_FOLDERS 数组序) 合成 FolderInfo 子集, 喂给
- *  buildSidebarFolderTree 走与正式树**完全相同**的建树 + orderIndex 排序路径
+/** discover 未就绪时的本地 seed（task 08-20-perf-shell-prefetch-sidebar §③）——
+ *  从 whitelist（imap 原始名，SYNC_FOLDERS 数组序）合成 FolderInfo 子集，喂给
+ *  buildFolderTree 走与正式树**完全相同**的建树 + orderIndex 排序路径
  *  (🔴 顺序红线: 数组序 = 用户自定义显示顺序, 两棵树同源同序, 切换零跳变)。
  *
  *  display_name = decodeImapUtf7(imap_name) —— 与后端两处同源同值:
@@ -60,10 +64,10 @@ export function buildSeedFolderInfos(whitelistOrder: readonly string[]): FolderI
   }))
 }
 
-export function buildSidebarFolderTree(
+export function buildFolderTree(
   folders: FolderInfo[],
   whitelistOrder: readonly string[]
-): SidebarFolderNode[] {
+): FolderNode[] {
   const whitelist = new Set(whitelistOrder)
   const orderIndex = new Map<string, number>()
   whitelistOrder.forEach((n, i) => orderIndex.set(n, i))
@@ -103,7 +107,7 @@ export function buildSidebarFolderTree(
     return segs
   }
 
-  const nodes = new Map<string, SidebarFolderNode>()
+  const nodes = new Map<string, FolderNode>()
   const synced = folders.filter((f) => whitelist.has(f.imap_name))
   for (const f of synced) {
     nodes.set(f.imap_name, {
@@ -116,7 +120,7 @@ export function buildSidebarFolderTree(
     })
   }
 
-  const roots: SidebarFolderNode[] = []
+  const roots: FolderNode[] = []
   for (const f of synced) {
     const node = nodes.get(f.imap_name)
     if (!node) continue
@@ -128,11 +132,25 @@ export function buildSidebarFolderTree(
 
   // 同层级内按 whitelist 下标排序 (数组序 = 自定义显示顺序)。节点 ⊆ whitelist
   // (synced 过滤保证), 下标必存在; ?? 0 仅安抚类型。
-  const rank = (n: SidebarFolderNode): number => orderIndex.get(n.imapName) ?? 0
-  const sortLevel = (level: SidebarFolderNode[]): void => {
+  const rank = (n: FolderNode): number => orderIndex.get(n.imapName) ?? 0
+  const sortLevel = (level: FolderNode[]): void => {
     level.sort((a, b) => rank(a) - rank(b))
     for (const n of level) sortLevel(n.children)
   }
   sortLevel(roots)
   return roots
+}
+
+/** 树按深度优先摊平（父在前，子紧随），供不做展开/收起的平铺列表消费。
+ *  🔴 顺序仍是 buildFolderTree 定的 whitelist 序，这里只负责摊平。 */
+export function flattenFolderTree(
+  nodes: readonly FolderNode[],
+  depth = 0
+): Array<{ node: FolderNode; depth: number }> {
+  const out: Array<{ node: FolderNode; depth: number }> = []
+  for (const node of nodes) {
+    out.push({ node, depth })
+    out.push(...flattenFolderTree(node.children, depth + 1))
+  }
+  return out
 }

@@ -223,16 +223,16 @@ function RootLayout(): React.ReactElement {
   useNotificationClickNavigation()
   return (
     <>
-      {/* 外壳单例 (§②, task 08-20-perf-shell-prefetch-sidebar): TitleBar/Sidebar/
-          StatusBar 只在这里渲染一次, 路由切换只换 <Outlet/> 的中间内容区 ——
-          Sidebar (含文件夹树) 不再逐路由 remount。 */}
+      {/* 外壳单例 (§②, task 08-20-perf-shell-prefetch-sidebar): TitleBar/Sidebar
+          只在这里渲染一次, 路由切换只换 <Outlet/> 的中间内容区 —— Sidebar 不再
+          逐路由 remount。(底部 StatusBar 已随 08-27 标签工作区批退役。) */}
       <AppShell>
         <Outlet />
       </AppShell>
       <GlobalShortcuts />
       <KeyboardHelpModal />
       <CommandPalette />
-      {/* 写新邮件居中模态 — 全局单实例, 由侧边栏「写邮件」按钮 / ⌘N 打开。 */}
+      {/* 写新邮件居中模态 — 全局单实例, 由列表头「写邮件」CTA / ⌘N 打开。 */}
       <ComposeNewModal />
       {PopmenuShowcaseMount !== null && (
         <Suspense fallback={null}>

@@ -40,9 +40,11 @@ import {
   ChartColumnIncreasingIcon,
   ChartLineIcon,
   ChartPieIcon,
+  FileChartLineIcon,
   GripIcon,
   MAILBOX_ICON_COMPONENT,
   MailCheckIcon,
+  MessageSquareIcon,
   SettingsIcon,
   SparklesIcon,
   SunIcon,
@@ -51,16 +53,24 @@ import {
 
 // ── 词表 ────────────────────────────────────────────────────────────────────
 
-/** 域 = 方案 B 导轨的一格。 */
+/** 域 = 方案 B 导轨的一格。
+ *  🔴 `agents` 的值名保留（deeplink 白名单 / 持久化 state 兼容），语义与文案自
+ *  08-27 标签工作区批起是「团队」；「对话」「报告」拆成独立域（chats / reports）。 */
 export type NavDomain =
   | 'today'
   | 'mail'
   | 'calendar'
   | 'matters'
   | 'contacts'
+  | 'chats'
   | 'agents'
+  | 'reports'
   | 'ops'
   | 'settings'
+
+/** 对象域 = 内容会开成对象标签的两类（邮件 / 事项）；其余都是页面域（P2 起轮流
+ *  占用主标签的单例槽）。导轨在这两组之间画一条分隔线（原型 railsep）。 */
+export const NAV_OBJECT_DOMAINS: readonly NavDomain[] = ['mail', 'matters']
 
 /** 可导航到的路由 path（TanStack 路由树里真实存在的那些）。 */
 export type NavPath =
@@ -78,20 +88,18 @@ export type NavPath =
 /** 门控名。求值在 `useNavGates.ts`（那里才碰 hooks）。 */
 export type NavGate = 'always' | 'never' | 'matters' | 'contacts' | 'calendar'
 
-/** 徽标的**数据来源**（数值由各通道自己取，registry 只说「这一行挂哪个计数」）。 */
-export type NavBadgeKind =
-  | 'inboxUnread'
-  | 'draftsTotal'
-  | 'flaggedTotal'
-  | 'allTotal'
-  | 'matterAttention'
-  | 'agentUnread'
+/** 徽标的**数据来源**（数值由各通道自己取，registry 只说「这一行挂哪个计数」）。
+ *  08-27 标签工作区批：草稿箱 / 已标旗 / 所有邮件三个总数随邮件域面板退役 —— 内建
+ *  视图行搬进列表头的文件夹下拉后不再显计数（口径单源只有 Sidebar 一份，抄进下拉会
+ *  分叉），三个 kind 没有渲染面，一并删。 */
+export type NavBadgeKind = 'inboxUnread' | 'matterAttention' | 'agentUnread'
 
 export interface NavBadgeSpec {
   readonly kind: NavBadgeKind
   /** 导轨格（56px rail）要不要显数字角标（Step B 起 rail 常驻，这一位从「收起态才
-   *  显」改叙述为「rail 显不显」，值逐条沿用）。所有邮件是几千级大数字，角标失去
-   *  信号价值还占位 —— 不显；没有 rail 落位的条目（草稿箱/已标旗）这一位不被读。 */
+   *  显」改叙述为「rail 显不显」，值逐条沿用）。08-27 批把三个「总数」型徽标删掉后
+   *  剩下的都是 rail 上要显的未读/待办计数 —— 这一位保留作声明位，加新徽标时按
+   *  「是不是几千级大数字」定（大数字角标失去信号价值还占位）。 */
   readonly rail: boolean
 }
 
@@ -100,14 +108,12 @@ export type NavShortcutId = 'settings' | 'generalAgent'
 
 export type NavLabel = { readonly i18nKey: string } | { readonly literal: string }
 
-/** 域的二级栏形态（0825 dogfood 轮 2/3 拍板：所有域共用同一套「rail 右侧第二列 +
- *  同一个折叠状态/开合按钮」的模型，差别只在第二列由谁提供）：
- *  - `'nav'`  = DomainPanel（232px 导航栏：邮件视图行/文件夹树/设置 tab 行…）；
- *  - `'page'` = 页面自带的列表列充当二级栏（事项/通讯录的 list——宽度按内容
- *    （336-380），收起走同一个 useNavCollapsed；「未来长出真导航菜单再把 list
- *    移出去」即把这里改回 'nav'）；
- *  - `'none'` = 无二级栏（日历），rail 开合按钮隐藏。 */
-export type NavDomainSecond = 'nav' | 'page' | 'none'
+/** 域的二级栏形态（08-27 标签工作区批：二级栏**恒存在且定宽 336**，`'none'` 档
+ *  取消 —— 左列总宽固定 392 = 导轨 56 + 二级栏 336，切域时边界不动）：
+ *  - `'nav'`  = DomainPanel（336px 导航栏：今日五节/小月历/团队清单/设置 tab 行…）；
+ *  - `'page'` = 页面自带的列表列充当二级栏（邮件/事项/通讯录/对话的 list，
+ *    定宽 336，收起走同一个 useNavCollapsed）。 */
+export type NavDomainSecond = 'nav' | 'page'
 
 /** 域元数据（方案 B 导轨格的脸）：格标签与格图标是**域**的身份，不是域内某条 entry 的
  *  身份 —— 邮件格画信封（域概念），面板里的收件箱行才画收件托盘（视图概念）。 */
@@ -123,6 +129,11 @@ export interface NavMatch {
   readonly exact?: readonly string[]
   /** pathname 前缀命中即选中（子路由）。 */
   readonly prefix?: readonly string[]
+  /** `?tab=` 细分。过渡期（P3 拆路由前）`/agents` 被 team（agents 域）与 reports
+   *  两个域共用，只有 `navActiveDomain` 消费这一位：pathname 命中多个域时按
+   *  搜索参 tab 归属；无 tab 约束的条目是该路由的缺省归属域。P3 报告拿到自己的
+   *  路由后删。 */
+  readonly tab?: readonly string[]
 }
 
 export interface NavEntry {
@@ -143,7 +154,10 @@ export interface NavEntry {
   readonly badge?: NavBadgeSpec
   /** 域二级栏（DomainPanel）里的落位：序在**本域**内比较（Step B 起面板按域切换，
    *  跨域不同行没有相对序可言）。缺席 = 不在二级栏出现。
-   *  `kbd` = 行尾显组合键（只有设置行这么做，⌘O 的会话行有意不显）。 */
+   *  `kbd` = 行尾显组合键（只有设置行这么做，⌘O 的会话行有意不显）。
+   *  08-27 批的一处例外：mail 域转 `'page'` 后 DomainPanel 不再渲染它，那五条的
+   *  `panel.order` 改由**列表头的文件夹下拉**（FolderMenu 的 MAILBOXES 段）消费 ——
+   *  同一份「五个内建视图的序」，只是换了个渲染面。 */
   readonly panel?: {
     readonly order: number
     readonly kbd?: boolean
@@ -174,7 +188,7 @@ export interface NavEntry {
  *  出 TanStack 认的窄类型，而不是退化成 string。 */
 const ENTRIES = [
   // ── 今日（L4 批次 2 例外面）—— 跨 agent / 跨事项的待处理态聚合视图。
-  // `NAV_DOMAINS.today.second = 'none'`（同日历）：这一域没有二级栏，页面自己占满。
+  // 08-27 批起有二级栏（DomainPanel 的 TodayNavPanel：当天五节跳转）。
   {
     id: 'today',
     domain: 'today',
@@ -183,7 +197,7 @@ const ENTRIES = [
     icon: () => createElement(SunIcon),
     gate: 'always',
     match: { exact: ['/today'] },
-    rail: { order: 0 },
+    rail: { order: 2 },
     palette: { order: 5, metaI18nKey: 'palette.jump.todayMeta' }
   },
 
@@ -199,7 +213,7 @@ const ENTRIES = [
     match: { exact: ['/'] },
     badge: { kind: 'inboxUnread', rail: true },
     panel: { order: 0 },
-    rail: { order: 1 },
+    rail: { order: 0 },
     deeplinkKind: 'email'
   },
   {
@@ -222,7 +236,6 @@ const ENTRIES = [
     icon: () => createElement(MAILBOX_ICON_COMPONENT.drafts),
     gate: 'always',
     match: { exact: ['/'] },
-    badge: { kind: 'draftsTotal', rail: false },
     panel: { order: 2 }
   },
   {
@@ -234,7 +247,6 @@ const ENTRIES = [
     icon: () => createElement(MAILBOX_ICON_COMPONENT.flagged),
     gate: 'always',
     match: { exact: ['/'] },
-    badge: { kind: 'flaggedTotal', rail: false },
     panel: { order: 3 }
   },
   {
@@ -246,7 +258,6 @@ const ENTRIES = [
     icon: () => createElement(MAILBOX_ICON_COMPONENT.all),
     gate: 'always',
     match: { exact: ['/'] },
-    badge: { kind: 'allTotal', rail: false },
     panel: { order: 4 }
   },
 
@@ -261,36 +272,52 @@ const ENTRIES = [
     match: { exact: ['/matters'] },
     badge: { kind: 'matterAttention', rail: true },
     panel: { order: 0 },
-    rail: { order: 3 },
+    rail: { order: 1 },
     palette: { order: 30, metaI18nKey: 'palette.jump.mattersMeta' },
     preloadOnHover: true
   },
+  // 对话域（08-27 批从 agents 域拆出）：过渡期落 `/sessions`（SessionsLayout 既有），
+  // P3 做页面层拆分（会话与群聊混装列表）。
   {
     id: 'sessions',
-    domain: 'agents',
+    domain: 'chats',
     to: '/sessions',
-    label: { i18nKey: 'nav.agentView' },
+    label: { i18nKey: 'nav.domain.chats' },
     // coral 是这一行的身份色（dogfood-2 拍板：不整行填充，只 icon 强调）。
     icon: () => createElement(SparklesIcon, { className: 'text-coral' }),
     gate: 'always',
     match: { exact: ['/sessions'] },
-    panel: { order: 0 },
+    rail: { order: 4 },
     palette: { order: 10, metaI18nKey: 'palette.jump.generalAgentMeta' },
     shortcutId: 'generalAgent'
   },
+  // 团队域（NavDomain 值仍是 'agents'，见类型定义处注释）。
   {
     id: 'agents',
     domain: 'agents',
     to: '/agents',
-    label: { i18nKey: 'chat.backend.customApi' },
+    label: { i18nKey: 'nav.domain.team' },
     icon: () => createElement(GripIcon),
     gate: 'always',
     match: { exact: ['/agents'] },
     badge: { kind: 'agentUnread', rail: true },
-    panel: { order: 1 },
-    rail: { order: 5 },
+    rail: { order: 6 },
     palette: { order: 40, metaI18nKey: 'palette.jump.customAiMeta' },
     notificationRoute: true
+  },
+  // 报告域（08-27 批从 agents 域拆出）：过渡期复用 `/agents?tab=reports`
+  // （navigateToNavEntry 的 '/agents' case 按域落 tab），P3 给它独立路由。
+  {
+    id: 'reports',
+    domain: 'reports',
+    to: '/agents',
+    label: { i18nKey: 'nav.domain.reports' },
+    icon: () => createElement(FileChartLineIcon),
+    gate: 'always',
+    match: { exact: ['/agents'], tab: ['reports'] },
+    panel: { order: 0 },
+    rail: { order: 7 },
+    palette: { order: 45, metaI18nKey: 'palette.jump.reportsMeta' }
   },
 
   // ── VIEW 段 ─────────────────────────────────────────────────────────────
@@ -334,8 +361,9 @@ const ENTRIES = [
     // Windows 日历整体出范围（2026-08-13 拍板，平台判定不看 backend）。
     gate: 'calendar',
     match: { exact: ['/calendar'], prefix: ['/admin/calendar'] },
-    panel: { order: 0 },
-    rail: { order: 2 },
+    // 无 panel 落位：日历域的二级栏是小月历（DomainPanel 直渲 CalendarMiniPanel），
+    // 再放一行「日历」是重复。
+    rail: { order: 3 },
     palette: { order: 25, metaI18nKey: 'palette.jump.calendarMeta' },
     deeplinkKind: 'calendar'
   },
@@ -348,7 +376,7 @@ const ENTRIES = [
     gate: 'contacts',
     match: { exact: ['/contacts'] },
     panel: { order: 0 },
-    rail: { order: 4 },
+    rail: { order: 5 },
     palette: {
       order: 60,
       labelI18nKey: 'palette.jump.contacts',
@@ -380,16 +408,18 @@ const ENTRIES = [
  *  邮件/日历/事项/通讯录/Agents 的格图标是**域**的脸；单入口域（日历/事项/通讯录）
  *  沿用该入口的既有图标身份，不为导轨另造第二个 glyph。 */
 export const NAV_DOMAINS: Record<NavDomain, NavDomainMeta> = {
-  today: { label: { i18nKey: 'nav.today' }, icon: () => createElement(SunIcon), second: 'none' },
+  today: { label: { i18nKey: 'nav.today' }, icon: () => createElement(SunIcon), second: 'nav' },
+  // 08-27 批：mail 的二级栏 = 邮件列表本身（InboxLayout 定宽 336，文件夹树退役、
+  // 文件夹选择器进列表头）—— DomainPanel 不再为 mail 渲染面板。
   mail: {
     label: { i18nKey: 'nav.domain.mail' },
     icon: () => createElement(MailCheckIcon),
-    second: 'nav'
+    second: 'page'
   },
   calendar: {
     label: { i18nKey: 'nav.calendar' },
     icon: () => createElement(CalendarCheckIcon),
-    second: 'none'
+    second: 'nav'
   },
   matters: {
     label: { i18nKey: 'matters.nav' },
@@ -401,8 +431,25 @@ export const NAV_DOMAINS: Record<NavDomain, NavDomainMeta> = {
     icon: () => createElement(UsersRoundIcon),
     second: 'page'
   },
-  // 专有名词，两个 locale 都是 "Agents"（同 LLM Dashboard 先例，不造 i18n 键）。
-  agents: { label: { literal: 'Agents' }, icon: () => createElement(BotIcon), second: 'nav' },
+  chats: {
+    label: { i18nKey: 'nav.domain.chats' },
+    icon: () => createElement(MessageSquareIcon),
+    second: 'page'
+  },
+  // 值名 'agents' 保留（见 NavDomain 注释），域的脸是「团队」。
+  // P1 过渡档 'nav'：/agents 页还是卡片网格、没有页面自管左列，二级栏由 DomainPanel
+  // 的 TeamNavPanel（简版智能体清单）出 —— 否则切到团队域左列只剩 56px 导轨，破
+  // 「切域边界不动」。P4 团队页重做出自管清单列（336）后再定终态档位。
+  agents: {
+    label: { i18nKey: 'nav.domain.team' },
+    icon: () => createElement(BotIcon),
+    second: 'nav'
+  },
+  reports: {
+    label: { i18nKey: 'nav.domain.reports' },
+    icon: () => createElement(FileChartLineIcon),
+    second: 'nav'
+  },
   ops: {
     label: { i18nKey: 'nav.domain.ops' },
     icon: () => createElement(ChartColumnIncreasingIcon),
@@ -520,10 +567,22 @@ export function navDomainSecond(domain: NavDomain): NavDomainSecond {
 }
 
 /** 当前路由归属的域（导轨选中格 + 面板显示哪个域）。判据 = 门控过滤后**任一**条目
- *  的选中态命中（`/sessions` 因此归 agents 域，虽然它没有导轨格）。无命中（理论上
- *  只有 popout 之类的非路由场景）→ null，调用方自己给缺省。 */
-export function navActiveDomain(entries: readonly NavEntry[], pathname: string): NavDomain | null {
-  return entries.find((e) => isNavEntryActive(e, pathname))?.domain ?? null
+ *  的选中态命中。无命中（理论上只有 popout 之类的非路由场景）→ null，调用方自己给
+ *  缺省。`searchTab` 只在 pathname 命中多个域时起作用（过渡期 `/agents` 被 team 与
+ *  reports 共用，见 NavMatch.tab）：tab 命中的条目优先，否则落到无 tab 约束的
+ *  缺省归属域。 */
+export function navActiveDomain(
+  entries: readonly NavEntry[],
+  pathname: string,
+  searchTab?: string
+): NavDomain | null {
+  const hits = entries.filter((e) => isNavEntryActive(e, pathname))
+  if (hits.length === 0) return null
+  if (searchTab !== undefined) {
+    const tabHit = hits.find((e) => e.match?.tab?.includes(searchTab))
+    if (tabHit) return tabHit.domain
+  }
+  return (hits.find((e) => e.match?.tab === undefined) ?? hits[0]).domain
 }
 
 /** ⌘K jump 段的条目（已按 order 排序）。 */
@@ -558,7 +617,12 @@ export function navigateToNavEntry(navigate: NavigateFn, entry: NavEntry): void 
       void navigate({ to: '/sessions' })
       return
     case '/agents':
-      void navigate({ to: '/agents', search: { tab: 'agents' } })
+      // 过渡期（P3 拆路由前）：team（agents 域）与 reports 域共用 /agents，按
+      // entry 所属域落 tab（与 NavMatch.tab 的归属判据同步删）。
+      void navigate({
+        to: '/agents',
+        search: { tab: entry.domain === 'reports' ? 'reports' : 'agents' }
+      })
       return
     case '/admin/llm':
       void navigate({ to: '/admin/llm' })
@@ -582,17 +646,7 @@ export function navigateToNavEntry(navigate: NavigateFn, entry: NavEntry): void 
   }
 }
 
-/** Custom AI 区（`/agents`）的 tab 直达。DomainPanel 的「报告 / Chats」轻量子入口
- *  （它们不是一级入口，不占 NavEntry —— 与文件夹树同类）走这里拿落点；path 字面量
- *  按本文件头的纪律只允许出现在 registry。`agents` entry 自身的 tab=agents 落点仍在
- *  `navigateToNavEntry` 的 '/agents' case。 */
-export type AgentsSubTab = 'reports' | 'chats'
-
-export function navigateToAgentsTab(navigate: NavigateFn, tab: AgentsSubTab): void {
-  void navigate({ to: '/agents', search: { tab } })
-}
-
-/** 设置域面板 tab 行的落点（同上：path 字面量不出 registry）。tab 词表单源
+/** 设置域面板 tab 行的落点（path 字面量不出 registry）。tab 词表单源
  *  `@shared/lib/settingsTabs`（`import type` 编译期擦除，叶子纪律不破）。 */
 export function navigateToSettingsTab(navigate: NavigateFn, tab: SettingsTab): void {
   void navigate({ to: '/settings', search: { tab } })

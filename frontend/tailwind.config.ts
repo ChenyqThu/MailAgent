@@ -117,8 +117,7 @@ export default {
         subj: ['22px', '30px']
       },
       spacing: {
-        titlebar: '36px',
-        statusbar: '24px'
+        titlebar: '36px'
       },
       transitionTimingFunction: {
         standard: 'cubic-bezier(0.4, 0, 0.2, 1)'

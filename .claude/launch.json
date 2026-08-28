@@ -2,6 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "web-dev",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["-C", "frontend", "dev:web"],
+      "port": 5173
+    },
+    {
       "name": "stakeholder-mockup",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["-C", "frontend", "exec", "vite", "--config", "mockups/stakeholder/vite.config.ts"],

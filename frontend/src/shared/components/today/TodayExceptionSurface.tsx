@@ -8,7 +8,7 @@
 // 没有归档动作）。本页因此直接读四条源实体端点，不经 `notification` 表
 // （第四条 = 行动项派发，L4 批次 3）。
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { Sun } from 'lucide-react'
@@ -17,17 +17,44 @@ import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { useAttentionAction, useItemDispatchAction } from '@shared/components/matters/hooks'
 import { useMatterNavigation } from '@shared/components/matters/navigation'
 import { requestOpenAgentSession } from '@shared/state/ai-chat-panel'
+import { useTodaySection, type TodaySectionId } from '@shared/state/today-section'
 import { cn } from '@shared/lib/cn'
 
 import { TodayItemRow, type TodayRowHandlers } from './TodayItemRow'
 import { TodayListSkeleton } from './TodaySkeleton'
 import { TODAY_GROUP_ICONS, TODAY_GROUP_TONE, TODAY_TONE_CLASS } from './todayVocab'
+import type { TodayGroupId } from './todayGroups'
 import { useTodayData } from './useTodayData'
+
+/** P1 过渡：二级栏五节 → 批次 2 例外面现有分组的最近映射（点节滚过去）。meet /
+ *  reply 现在没有源（今天的会 / 待回邮件要 P4 的今日聚合端点），滚回顶部即可。
+ *  P4 把主区重做成与五节一一对应后，这份映射随之删除。 */
+const SECTION_TO_GROUP: Record<TodaySectionId, TodayGroupId | null> = {
+  decide: 'waiting',
+  meet: null,
+  reply: null,
+  due: 'attention',
+  out: 'recent'
+}
 
 export function TodayExceptionSurface(): React.ReactElement {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { groups, isPending, isError, nowMs, refreshRuns } = useTodayData()
+  const rootRef = useRef<HTMLDivElement>(null)
+  const section = useTodaySection((s) => s.section)
+  const sectionNonce = useTodaySection((s) => s.nonce)
+  const focusedGroup = SECTION_TO_GROUP[section]
+
+  // 二级栏点节 → 滚到映射分组（无映射 = 滚回顶部）。nonce 让再点同一节也重滚。
+  useEffect(() => {
+    if (sectionNonce === 0) return // 初始态不打扰用户的自然滚动位置。
+    const root = rootRef.current
+    if (!root) return
+    const target = focusedGroup ? root.querySelector(`[data-group="${focusedGroup}"]`) : null
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    else root.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [sectionNonce, focusedGroup])
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
   const openMatter = useMatterNavigation((state) => state.open)
@@ -62,7 +89,7 @@ export function TodayExceptionSurface(): React.ReactElement {
   const total = groups.reduce((n, group) => n + group.items.length, 0)
 
   return (
-    <div className="mx-auto w-full max-w-[880px] px-6 py-6">
+    <div ref={rootRef} className="mx-auto w-full max-w-[880px] px-6 py-6">
       <header className="mb-5 flex flex-col gap-[3px]">
         <div className="text-micro font-mono uppercase tracking-wider text-ink-fg-2">
           {t('today.kicker')}
@@ -101,8 +128,16 @@ export function TodayExceptionSurface(): React.ReactElement {
                   data-group={group.id}
                   className="mb-5"
                 >
-                  {/* 分组头照 `MatterProgressLane` 的「标签 + 发丝线 + 条数」。 */}
+                  {/* 分组头照 `MatterProgressLane` 的「标签 + 发丝线 + 条数」。
+                      二级栏当前节映射到本组时左侧多一根 2px accent 竖条（原型的
+                      节标题选中态）。 */}
                   <div className="flex items-center gap-2 pb-1.5">
+                    {focusedGroup === group.id && (
+                      <span
+                        aria-hidden
+                        className="h-[14px] w-[2px] shrink-0 rounded-full bg-[rgb(var(--c-accent))]"
+                      />
+                    )}
                     <span
                       className={cn(
                         'grid size-5 shrink-0 place-items-center rounded-md',

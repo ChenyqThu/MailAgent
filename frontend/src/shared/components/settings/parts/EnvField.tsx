@@ -143,7 +143,8 @@ export function EnvField({
   const markRestartRequired = useRestartStore((s) => s.markRestartRequired)
 
   // Remote web (HttpApi) is read-only: env.set is notImplemented, so all write
-  // controls render disabled. Mirror StatusBar.tsx's VITE_BUILD_TARGET probe.
+  // controls render disabled. Same VITE_BUILD_TARGET probe as api/factory.ts
+  // (曾同款的 StatusBar 已随 08-27 标签工作区批退役)。
   const isWeb =
     (import.meta as unknown as { env?: { VITE_BUILD_TARGET?: string } }).env?.VITE_BUILD_TARGET ===
     'web'

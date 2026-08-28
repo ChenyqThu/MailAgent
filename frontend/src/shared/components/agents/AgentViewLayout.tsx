@@ -17,6 +17,7 @@ import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { useGeneralChat } from '@shared/hooks/useGeneralChat'
 import { useAIChatPanel } from '@shared/state/ai-chat-panel'
+import { useNavCollapsed } from '@shared/state/nav-shell'
 import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
 
 import { AgentThreadList } from './AgentThreadList'
@@ -32,6 +33,11 @@ export function AgentViewLayout(): React.ReactElement {
   const narrow = useNarrow()
   const chat = useGeneralChat()
   const [collapsed, setCollapsed] = useState(false)
+  // 会话列 = 对话域的「二级栏」（registry `second: 'page'`），收起走 nav shell 的同一个
+  // 折叠状态（rail 开合按钮 / 点当前域格）——与事项/通讯录/邮件三列同款接线，否则那颗
+  // 按钮在对话域是空转。🔴 排除 forced：<lg 的强制收起是给导航面板的，会话列是内容，
+  // 窄窗行为仍由本组件的 useNarrow(780) 单栏切换自治。
+  const navHidden = useNavCollapsed((s) => s.collapsed && !s.forced)
   // Narrow single-pane back-stack: the list and the conversation alternate (a row tap / "New" pushes
   // the conversation; the back arrow returns to the list).
   const [mobileDetail, setMobileDetail] = useState(false)
@@ -137,6 +143,9 @@ export function AgentViewLayout(): React.ReactElement {
       collapsed={collapsed}
       onToggleCollapse={() => setCollapsed((c) => !c)}
       fluid={narrow}
+      // narrow 单栏时列表就是整页，藏了会剩空屏 —— 但 narrow(<780) ⊂ forced(<1024)，
+      // 那里 navHidden 恒 false，不必再特判。
+      navHidden={navHidden}
     />
   )
 

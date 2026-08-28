@@ -4,7 +4,14 @@
 // priority / category multi-select) and the meta count line.
 // Contract: `useEmailFilter` / `useBatch` stores are read & written directly
 // in here (no parent relay); only the pipeline-derived counts arrive as props.
-// CSS classes (.inbox-tabs / .filter-btn) live in index.css Sprint 12 block.
+// CSS classes (.inbox-tabs / .filter-btn / .list-cta) live in index.css。
+//
+// task 08-27 P1 Lane B —— 两行列表头（原型 TabAnatomy「列表头：邮件双行」）：
+//   第一行  文件夹选择器（下拉，取代常驻文件夹树）· pin 的文件夹图标 · 写邮件实心 CTA
+//   第二行  重点/其他分栏 + 「N 未读 · 共 M」左对齐紧跟其后；批量与筛选推到右端
+// 🔴 非收件箱视图只是分栏消失，第二行**行高不变**（高度由右端 28px 工具钮定，不由
+// 24px 分栏定）—— 切文件夹时列表不能跳。老的自定义文件夹面包屑随之退役：当前文件夹
+// 名现在由第一行的选择器承载（完整路径在 title 上）。
 //
 // 2026-08 筛选/排序菜单重做（Outlook 结构 + 下钻面板交互）：
 //   • 旧的手搓 `.filter-pop`（三段平铺 + 自管 outside-click/Esc/退场动画）换成
@@ -17,24 +24,43 @@
 //     文本=A→Z。owner 拟稿里只写了日期口径的两个词，照抄会让「按发件人 · 由新到旧」
 //     这种自相矛盾的组合出现在菜单里。
 
-import { Fragment, useCallback, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { ChevronRight, Filter, Folder, ListChecks } from 'lucide-react'
+import { ChevronDown, Filter, ListChecks } from 'lucide-react'
 
 import {
   ALL_CATEGORIES,
   ALL_PRIORITIES,
   useEmailFilter,
-  type EmailCategory
+  type EmailCategory,
+  type EmailView
 } from '@shared/state/email-filter'
 import { useBatch } from '@shared/state/batch'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { useShortcut } from '@shared/hooks/useShortcut'
+import { useSyncedFolderTree } from '@shared/hooks/useSyncedFolderTree'
+import { useFolderPrefMap } from '@shared/hooks/useFolderPrefs'
 import { cn } from '@shared/lib/cn'
 import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { EMAIL_SORT_KEYS, type EmailSortKey } from '@shared/lib/emailSort'
+import { flattenFolderTree, type FolderNode } from '@shared/lib/folderTree'
+import { mailboxForView } from '@shared/lib/mailboxSemantics'
 import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
+import { FolderGlyph, SquarePenIcon } from '@shared/components/icons'
+import {
+  NAV_ENTRIES,
+  navDomainPanelEntries,
+  navigateToNavEntry,
+  navLabel
+} from '@shared/navigation/registry'
+import { openNewCompose } from '@shared/state/compose-new'
+import { useMailbox } from '@shared/state/mailbox'
+import { MAX_PINNED_FOLDERS, pinnedFolderKey, usePinnedFolders } from '@shared/state/pinned-folders'
+import { toastInfo } from '@shared/state/toast'
 import type { AIPriority } from '@shared/api/types'
+
+import { FolderMenu } from './FolderMenu'
 
 interface EmailListHeaderProps {
   /** Pipeline-derived live counts (tab-scoped) from EmailList — meta line +
@@ -66,6 +92,12 @@ const PRIORITY_DOT_CLASS: Record<AIPriority, string> = {
   low: 'bg-low'
 }
 
+/** 五个内建邮箱视图行 —— registry 投影（标签 / 图标 / 落点的单源仍在那里）。
+ *  registry 是零副作用的叶子模块，模块级取一次即可，不必每 render 过一遍。 */
+const MAIL_VIEW_ENTRIES = navDomainPanelEntries(NAV_ENTRIES, 'mail').filter(
+  (e) => e.view !== undefined
+)
+
 /** 方向两档的文案 key 随排序键变 —— 「按发件人 · 由新到旧」是无意义组合。 */
 const DIR_LABEL_KEY: Record<EmailSortKey, { desc: string; asc: string }> = {
   date: { desc: 'list.sort.dir.newest', asc: 'list.sort.dir.oldest' },
@@ -81,12 +113,18 @@ export function EmailListHeader({
   userEmail
 }: EmailListHeaderProps): React.ReactElement {
   const { t, i18n } = useTranslation()
+  const navigate = useNavigate()
   const view = useEmailFilter((s) => s.view)
   // 多文件夹同步 (P3) — 当前自定义文件夹 (mailbox=display_name); 非空时列表只拉它。
   const customMailbox = useEmailFilter((s) => s.customMailbox)
   const customMailboxPath = useEmailFilter((s) => s.customMailboxPath)
   const tab = useEmailFilter((s) => s.tab)
   const setTab = useEmailFilter((s) => s.setTab)
+  const setView = useEmailFilter((s) => s.setView)
+  const setCustomMailbox = useEmailFilter((s) => s.setCustomMailbox)
+  const setActiveMailbox = useMailbox((s) => s.setActive)
+  /** 收件箱视图（有分栏的那一档）—— 自定义文件夹与其余内建视图都没有重点/其他。 */
+  const isInboxView = customMailbox === null && view === 'inbox'
 
   // §8 滑动 indicator — Focused/Other 激活态的胶囊背景移到一个绝对定位元素,
   // 随 tab 变化 tween x/width (DUR.fast)。首次挂载 (含切回 inbox) gsap.set 直接
@@ -125,7 +163,9 @@ export function EmailListHeader({
     },
     // i18n.language 在依赖里: tab 文本宽度随语言变 (重点 vs Focused),
     // 不重测会让胶囊保持旧语言的宽度 → 英文文本溢出胶囊。
-    { dependencies: [tab, view, reduceMotion, i18n.language], scope: tabListRef }
+    // customMailbox 也在依赖里: 切到自定义文件夹会把整条 tab 条卸载, 切回来是**新的**
+    // DOM 而 view 全程没变 —— 少了它 effect 不重跑, 胶囊停在 CSS 初始 hidden。
+    { dependencies: [tab, view, customMailbox, reduceMotion, i18n.language], scope: tabListRef }
   )
 
   const unread = useEmailFilter((s) => s.unread)
@@ -154,6 +194,97 @@ export function EmailListHeader({
 
   const [filterOpen, setFilterOpen] = useState(false)
   const filterTriggerRef = useRef<HTMLButtonElement>(null)
+
+  // ── 文件夹选择器（第一行）─────────────────────────────────────────────
+  const [folderOpen, setFolderOpen] = useState(false)
+  const folderTriggerRef = useRef<HTMLButtonElement>(null)
+  const { tree } = useSyncedFolderTree()
+  const prefMap = useFolderPrefMap()
+  const pinned = usePinnedFolders((s) => s.pinned)
+
+  /** 内建视图切换 —— setView + StatusBar mailbox 联动 + `?view=` 同步，与侧栏行
+   *  （Sidebar.handleViewClick）同一套动作；路径字面量仍只在 registry 里。 */
+  const selectView = useCallback(
+    (next: EmailView): void => {
+      setView(next)
+      const nextMailbox = mailboxForView(next)
+      // flagged / all 是跨邮箱虚拟视图，没有具体 mailbox —— 保持 StatusBar 原值。
+      if (nextMailbox) setActiveMailbox(nextMailbox)
+      const entry = MAIL_VIEW_ENTRIES.find((e) => e.view === next)
+      if (entry) navigateToNavEntry(navigate, entry)
+    },
+    [navigate, setActiveMailbox, setView]
+  )
+
+  /** 自定义文件夹切换 —— 过滤 key 必须是完整 display_name（后端
+   *  `email_metadata.mailbox` 存完整解码路径）；path 供列表头显示叶子名。 */
+  const selectFolder = useCallback(
+    (node: FolderNode): void => {
+      setCustomMailbox(node.fullDisplayName, node.path)
+      setActiveMailbox(node.fullDisplayName)
+    },
+    [setActiveMailbox, setCustomMailbox]
+  )
+
+  const notifyPinLimit = useCallback((): void => {
+    toastInfo(t('list.folder.pinLimit', { count: MAX_PINNED_FOLDERS }))
+  }, [t])
+
+  // pin 图标解析：内建视图取 registry 的图标/标签；自定义文件夹按**当前**树解析
+  // （文件夹被移出白名单时退回兜底图标 + 存下的完整名，不自动清 pin）。
+  const flatFolders = flattenFolderTree(tree)
+  const pinChips = pinned.map((pin) => {
+    if (pin.kind === 'view') {
+      const entry = MAIL_VIEW_ENTRIES.find((e) => e.view === pin.view)
+      return {
+        pin,
+        label: entry ? navLabel(entry, t) : pin.view,
+        // 图标不裹 AnimatedIconActiveProvider —— standalone 档（默认 trigger='self'）
+        // 自己挂 hover，裹上等于把动画钉死在 normal。
+        icon: entry ? entry.icon() : null,
+        active: customMailbox === null && view === pin.view,
+        onClick: () => selectView(pin.view)
+      }
+    }
+    const node = flatFolders.find((f) => f.node.fullDisplayName === pin.mailbox)?.node
+    return {
+      pin,
+      label: node?.displayName ?? pin.mailbox,
+      icon: (
+        <FolderGlyph
+          iconKey={node ? prefMap.get(node.imapName)?.icon : null}
+          size={15}
+          strokeWidth={1.75}
+          className="shrink-0"
+        />
+      ),
+      active: customMailbox === pin.mailbox,
+      onClick: () => {
+        if (node) selectFolder(node)
+      }
+    }
+  })
+
+  /** 选择器上显示的当前位置：自定义文件夹用叶子段（完整路径进 title），内建视图用
+   *  registry 的标签。列宽只有 336，面包屑放不下 —— 层级在下拉里看。 */
+  const currentFolderNode = customMailbox
+    ? flatFolders.find((f) => f.node.fullDisplayName === customMailbox)?.node
+    : undefined
+  const currentViewEntry = MAIL_VIEW_ENTRIES.find((e) => e.view === view) ?? MAIL_VIEW_ENTRIES[0]
+  const currentLabel = customMailbox
+    ? (customMailboxPath.at(-1) ?? customMailbox)
+    : navLabel(currentViewEntry, t)
+  const currentTitle = customMailbox ?? currentLabel
+  const currentIcon = customMailbox ? (
+    <FolderGlyph
+      iconKey={currentFolderNode ? prefMap.get(currentFolderNode.imapName)?.icon : null}
+      size={15}
+      strokeWidth={1.75}
+      className="shrink-0 text-ink-fg-2"
+    />
+  ) : (
+    currentViewEntry.icon()
+  )
 
   // 三条最常用筛选轴的直达键（keymap.ts 已登记 scope=inbox）。菜单**关着**也生效
   // —— 这些键的价值就在于不必先打开菜单。
@@ -353,40 +484,70 @@ export function EmailListHeader({
   ]
 
   return (
-    /* Header — Focused/Other tabs · batch + filter cluster · meta line */
+    /* Header 两行 — ① 文件夹选择器 · pin 图标 · 写邮件 CTA ② 分栏 + 统计 · 批量 + 筛选 */
     /* 分割线统一 hairline — 与 sidebar header / AgentsPage tab 条同色连贯。 */
-    <div className="relative px-3 pt-3 pb-2.5 border-b [border-bottom-color:var(--hairline)]">
-      <div className="flex items-center justify-between gap-2">
-        {customMailbox ? (
-          // 多文件夹同步 (P3) — 选中自定义文件夹时左侧显层级面包屑 (界面④)。
-          // 末段 = 当前文件夹 (高亮), 前缀段为父路径 (弱化), 中间用 chevron 分隔。
-          <div className="flex items-center gap-1 min-w-0" aria-label={t('list.folderCrumb.aria')}>
-            <Folder size={14} strokeWidth={1.75} className="shrink-0 text-ink-fg-2" />
-            {(customMailboxPath.length > 0 ? customMailboxPath : [customMailbox]).map(
-              (seg, i, arr) => {
-                const isLast = i === arr.length - 1
-                return (
-                  <Fragment key={`${seg}-${i}`}>
-                    {i > 0 ? (
-                      <ChevronRight size={12} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
-                    ) : null}
-                    <span
-                      className={cn(
-                        'truncate text-aux',
-                        isLast ? 'font-semibold text-ink-fg' : 'text-ink-fg-2'
-                      )}
-                    >
-                      {seg}
-                    </span>
-                  </Fragment>
-                )
-              }
+    <div className="relative px-3 pt-2.5 pb-2 border-b [border-bottom-color:var(--hairline)]">
+      {/* ── 第一行 ─────────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-1">
+        <button
+          ref={folderTriggerRef}
+          type="button"
+          className={cn(
+            'flex items-center gap-1.5 min-w-0 h-7 pl-1.5 pr-2 rounded-[var(--r-ctl)]',
+            'text-ink-fg hover:bg-ink-3 transition-colors duration-fast'
+          )}
+          title={currentTitle}
+          aria-expanded={folderOpen}
+          onClick={() => {
+            setFolderOpen((o) => !o)
+            setFilterOpen(false)
+          }}
+        >
+          {currentIcon}
+          <span className="truncate text-aux font-semibold">{currentLabel}</span>
+          <ChevronDown size={13} strokeWidth={2} className="shrink-0 text-ink-fg-2" />
+          <span className="sr-only">{t('list.folder.trigger')}</span>
+        </button>
+        <div className="flex-1" />
+        {pinChips.map((chip) => (
+          <button
+            key={pinnedFolderKey(chip.pin)}
+            type="button"
+            onClick={chip.onClick}
+            title={chip.label}
+            aria-label={chip.label}
+            aria-current={chip.active ? 'true' : undefined}
+            className={cn(
+              'shrink-0 w-7 h-7 rounded-[var(--r-ctl)] flex items-center justify-center',
+              'transition-colors duration-fast',
+              chip.active
+                ? 'text-coral bg-coral/10'
+                : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3'
             )}
-          </div>
-        ) : view === 'inbox' ? (
+          >
+            {chip.icon}
+          </button>
+        ))}
+        {pinChips.length > 0 && (
+          <span className="shrink-0 w-px h-4 mx-0.5 bg-ink-border" aria-hidden="true" />
+        )}
+        <button
+          type="button"
+          onClick={() => openNewCompose()}
+          className="list-cta shrink-0 h-7 flex items-center gap-1.5 px-2.5 rounded-[var(--r-ctl)] text-aux font-medium transition-[filter] duration-fast"
+          aria-label={t('nav.composeNew')}
+        >
+          <SquarePenIcon size={13} strokeWidth={2} className="shrink-0" />
+          <span>{t('nav.composeNew')}</span>
+        </button>
+      </div>
+
+      {/* ── 第二行 —— 🔴 行高由右端 28px 工具钮定，与有没有分栏无关（切文件夹不跳）─ */}
+      <div className="mt-2 flex items-center gap-2.5">
+        {isInboxView && (
           <div
             ref={tabListRef}
-            className="inbox-tabs"
+            className="inbox-tabs shrink-0"
             role="tablist"
             aria-label={t('list.tab.aria')}
           >
@@ -411,73 +572,72 @@ export function EmailListHeader({
               {t('list.tab.other')}
             </button>
           </div>
-        ) : (
-          // 非收件箱视图无 focused/other 分流, 用视图标题占左侧 (保 justify-between
-          // 布局: 右侧 batch/filter 簇仍靠右), 同时告诉用户当前在哪个视图。
-          <div className="text-aux font-semibold text-ink-fg truncate">
-            {view === 'outbox'
-              ? t('nav.outbox')
-              : view === 'drafts'
-                ? t('nav.drafts')
-                : view === 'flagged'
-                  ? t('nav.flagged')
-                  : t('nav.allMail')}
-          </div>
         )}
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            className={
-              // 主题 v3 C8/批 4: 工具钮档 rounded-md(6) → token 化 --r-ctl
-              batchMode === 'on'
-                ? 'w-7 h-7 rounded-[var(--r-ctl)] text-coral bg-coral/10 flex items-center justify-center transition-colors duration-fast'
-                : 'w-7 h-7 rounded-[var(--r-ctl)] text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 flex items-center justify-center transition-colors duration-fast'
-            }
-            title={batchMode === 'on' ? t('list.batch.exit') : t('list.batch.enter')}
-            aria-label={batchMode === 'on' ? t('list.batch.exit') : t('list.batch.enter')}
-            aria-pressed={batchMode === 'on'}
-            onClick={() => (batchMode === 'on' ? exitBatch() : enterBatch())}
-          >
-            <ListChecks size={13} strokeWidth={2} />
-          </button>
-          <button
-            ref={filterTriggerRef}
-            type="button"
-            className="filter-btn w-7 h-7 rounded-[var(--r-ctl)] text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 flex items-center justify-center transition-colors duration-fast"
-            title={t('list.filter.button')}
-            aria-label={t('list.filter.button')}
-            aria-haspopup="menu"
-            aria-expanded={filterOpen}
-            aria-controls="filter-pop"
-            data-active={filterActive ? 'true' : 'false'}
-            onClick={() => setFilterOpen((o) => !o)}
-          >
-            <Filter size={13} strokeWidth={2} />
-          </button>
+        <div className="flex items-center gap-1.5 min-w-0 text-meta font-mono text-ink-fg-2">
+          <span className="tabular-nums">
+            {counts.unread} {t('list.meta.unread')}
+          </span>
+          <span className="text-ink-fg-3">·</span>
+          <span className="tabular-nums">
+            {t('list.meta.total')} {counts.all}
+          </span>
+          {filterActive && (
+            <>
+              <span className="text-ink-fg-3">·</span>
+              <button
+                type="button"
+                className="shrink-0 text-coral hover:text-coral-hover transition-colors duration-fast"
+                onClick={() => resetAll()}
+              >
+                {t('list.filter.reset')}
+              </button>
+            </>
+          )}
         </div>
+        <div className="flex-1" />
+        <button
+          type="button"
+          className={
+            // 主题 v3 C8/批 4: 工具钮档 rounded-md(6) → token 化 --r-ctl
+            batchMode === 'on'
+              ? 'shrink-0 w-7 h-7 rounded-[var(--r-ctl)] text-coral bg-coral/10 flex items-center justify-center transition-colors duration-fast'
+              : 'shrink-0 w-7 h-7 rounded-[var(--r-ctl)] text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 flex items-center justify-center transition-colors duration-fast'
+          }
+          title={batchMode === 'on' ? t('list.batch.exit') : t('list.batch.enter')}
+          aria-label={batchMode === 'on' ? t('list.batch.exit') : t('list.batch.enter')}
+          aria-pressed={batchMode === 'on'}
+          onClick={() => (batchMode === 'on' ? exitBatch() : enterBatch())}
+        >
+          <ListChecks size={13} strokeWidth={2} />
+        </button>
+        <button
+          ref={filterTriggerRef}
+          type="button"
+          className="filter-btn shrink-0 w-7 h-7 rounded-[var(--r-ctl)] text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 flex items-center justify-center transition-colors duration-fast"
+          title={t('list.filter.button')}
+          aria-label={t('list.filter.button')}
+          aria-haspopup="menu"
+          aria-expanded={filterOpen}
+          aria-controls="filter-pop"
+          data-active={filterActive ? 'true' : 'false'}
+          onClick={() => {
+            setFilterOpen((o) => !o)
+            setFolderOpen(false)
+          }}
+        >
+          <Filter size={13} strokeWidth={2} />
+        </button>
       </div>
 
-      <div className="mt-2 flex items-center gap-1.5 text-meta font-mono text-ink-fg-2">
-        <span className="tabular-nums">
-          {counts.unread} {t('list.meta.unread')}
-        </span>
-        <span className="text-ink-fg-3">·</span>
-        <span className="tabular-nums">
-          {t('list.meta.total')} {counts.all}
-        </span>
-        {filterActive && (
-          <>
-            <span className="text-ink-fg-3">·</span>
-            <button
-              type="button"
-              className="text-coral hover:text-coral-hover transition-colors duration-fast"
-              onClick={() => resetAll()}
-            >
-              {t('list.filter.reset')}
-            </button>
-          </>
-        )}
-      </div>
+      <FolderMenu
+        open={folderOpen}
+        onClose={() => setFolderOpen(false)}
+        anchorRef={folderTriggerRef}
+        tree={tree}
+        onSelectView={selectView}
+        onSelectFolder={selectFolder}
+        onPinRejected={notifyPinLimit}
+      />
 
       <Popmenu
         id="filter-pop"

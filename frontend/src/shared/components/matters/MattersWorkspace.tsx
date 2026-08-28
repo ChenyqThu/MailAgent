@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Ban, Plus } from 'lucide-react'
@@ -46,58 +46,10 @@ import {
 import { listMatterTagsSafely, MATTER_TAGS_QUERY_KEY } from './matterTags'
 import { useMatterNavigation } from './navigation'
 
-const MATTER_LIST_WIDTH_STORAGE_KEY = 'mailagent.matters.listWidth'
-const MIN_MATTER_LIST_WIDTH = 280
-// E10①（dogfood 轮 2）—— 拖拽上限从 480 提到 560：容器（窗口）宽度足够时，用户要能把清单
-// 拖得比原来更宽，行 1 的编号/优先级/状态才有稳定余量、不用总卡在窄变体的挤压边缘。
-// V3-10（880 断点）后 560 + 6px 分隔条 + 详情列 minmax(420) 下限 = 986 可能超过 881-985px
-// 的窗口 —— 由下方 grid 的 `minmax(280px, var(--matter-list-width))` 弹性列兜住（空间不足时
-// 清单列先让步收窄，详情列的 420 下限不破）。
-const MAX_MATTER_LIST_WIDTH = 560
-const MATTER_LIST_WIDTH_STEP = 16
-// E10①—— 首次进入（还没有持久化宽度）时按窗口宽度给一个更宽的起点：镜像设计源码
-// app.jsx `listWidthFor = width >= 1440 ? 380 : 336`。原来固定 320（低于 MatterList 自己
-// 360px 的窄变体阈值）等于「刚打开就已经处在挤压状态」——这正是①要修的问题本体，不只是
-// 抬高手动拖拽的天花板。用户一旦手动拖过，走持久化值，这个函数不再生效。
-const WIDE_DESKTOP_BREAKPOINT = 1440
-const DEFAULT_MATTER_LIST_WIDTH_WIDE = 380
-const DEFAULT_MATTER_LIST_WIDTH_NARROW = 336
 // V3-10 —— 「让位给详情」的断点按设计 H3§1 定 880（原 1180）。镜像下方 grid 的
 // `max-[880px]:grid-cols-1` 断点（清单/详情单列折叠 = 同一时刻只露一个面）。用它判定
 // 「清单与详情是否并排可见」，不是猜一个新数字：数字漂了两处会各说各话。
 const WORKSPACE_STACKED_QUERY = '(max-width: 880px)'
-
-function clampMatterListWidth(width: number): number {
-  return Math.min(MAX_MATTER_LIST_WIDTH, Math.max(MIN_MATTER_LIST_WIDTH, width))
-}
-
-function defaultMatterListWidth(): number {
-  if (typeof window === 'undefined') return DEFAULT_MATTER_LIST_WIDTH_NARROW
-  return window.innerWidth >= WIDE_DESKTOP_BREAKPOINT
-    ? DEFAULT_MATTER_LIST_WIDTH_WIDE
-    : DEFAULT_MATTER_LIST_WIDTH_NARROW
-}
-
-function readMatterListWidth(): number {
-  try {
-    if (typeof localStorage === 'undefined') return defaultMatterListWidth()
-    const raw = localStorage.getItem(MATTER_LIST_WIDTH_STORAGE_KEY)
-    if (raw === null) return defaultMatterListWidth()
-    const persisted = Number(raw)
-    return Number.isFinite(persisted) ? clampMatterListWidth(persisted) : defaultMatterListWidth()
-  } catch {
-    return defaultMatterListWidth()
-  }
-}
-
-function writeMatterListWidth(width: number): void {
-  try {
-    if (typeof localStorage === 'undefined') return
-    localStorage.setItem(MATTER_LIST_WIDTH_STORAGE_KEY, String(width))
-  } catch {
-    // localStorage unavailable — the resized width still works for this session.
-  }
-}
 
 export function MattersWorkspace(): React.ReactElement | null {
   const { t } = useTranslation()
@@ -133,7 +85,6 @@ export function MattersWorkspace(): React.ReactElement | null {
   )
   // 快捷筛选「有到期 / 逾期」的基准时刻，挂载时冻结（react-hooks/purity），与 MatterList 同模式。
   const [now] = useState(() => Date.now())
-  const [matterListWidth, setMatterListWidth] = useState(readMatterListWidth)
   const [createOpen, setCreateOpen] = useState(false)
   const [tagManagerOpen, setTagManagerOpen] = useState(false)
   const [reviewTarget, setReviewTarget] = useState<{ matterId: string; updateId: number } | null>(
@@ -149,36 +100,6 @@ export function MattersWorkspace(): React.ReactElement | null {
   // 的同一个折叠状态（rail 开合按钮 / 点当前域格）。🔴 排除 forced：<lg 的强制收起是
   // 给导航面板的，清单列是内容，窄窗行为仍由下面的 max-[880px] 断点自治。
   const listPanelHidden = useNavCollapsed((s) => s.collapsed && !s.forced)
-  const workspaceGridRef = useRef<HTMLDivElement>(null)
-  const resizeDragRef = useRef<{
-    pointerId: number
-    startX: number
-    startWidth: number
-    currentWidth: number
-    previousCursor: string
-    previousUserSelect: string
-  } | null>(null)
-
-  const finishMatterListResize = useCallback((target: HTMLDivElement, pointerId: number): void => {
-    const drag = resizeDragRef.current
-    if (!drag || drag.pointerId !== pointerId) return
-    resizeDragRef.current = null
-    if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
-    document.body.style.cursor = drag.previousCursor
-    document.body.style.userSelect = drag.previousUserSelect
-    setMatterListWidth(drag.currentWidth)
-    writeMatterListWidth(drag.currentWidth)
-  }, [])
-
-  useEffect(
-    () => () => {
-      const drag = resizeDragRef.current
-      if (!drag) return
-      document.body.style.cursor = drag.previousCursor
-      document.body.style.userSelect = drag.previousUserSelect
-    },
-    []
-  )
 
   // 活跃行（deleted/archived 皆 NULL）—— 看板、open/done 两个 scope、提案扇出都吃这一份。
   // options 单源在 matterLiveListOptions（与启动预热共用, 防 key 漂移）; 缓存配方
@@ -480,22 +401,19 @@ export function MattersWorkspace(): React.ReactElement | null {
           />
         ) : (
           <div
-            ref={workspaceGridRef}
-            // V3-10 —— 单列折叠断点按设计定 880；清单列用 minmax(280, 拖拽宽) 弹性轨：881-985px
-            // 的窗口里拖到 560 的清单先让步收窄，详情列 minmax(420,1fr) 的下限不破。
+            // V3-10 —— 单列折叠断点按设计定 880；清单列定宽 336px（task 08-27 P1 Lane C 续改：
+            // 拖拽调宽体系退役，左列总宽 392 = 导轨 56 + 二级栏 336，切域时左列边界不动）。
             className={cn(
               'grid h-full min-h-0 max-[880px]:grid-cols-1',
-              // 收起态：清单列与拖宽把手整体隐藏（display:none 不参与轨道），详情独占。
-              // 不做宽度过渡 —— minmax() 轨道端点不可插值，硬切比假动画诚实。
+              // 收起态：清单列整体隐藏（display:none 不参与轨道），详情独占。
               listPanelHidden
                 ? 'grid-cols-[minmax(420px,1fr)]'
-                : 'grid-cols-[minmax(280px,var(--matter-list-width))_6px_minmax(420px,1fr)]'
+                : 'grid-cols-[336px_minmax(420px,1fr)]'
             )}
-            style={{ '--matter-list-width': `${matterListWidth}px` } as React.CSSProperties}
           >
             <div
               className={cn(
-                'min-h-0',
+                'min-h-0 border-r border-ink-border',
                 selected && 'max-[880px]:hidden',
                 listPanelHidden && 'hidden'
               )}
@@ -519,62 +437,6 @@ export function MattersWorkspace(): React.ReactElement | null {
                 onCreate={() => setCreateOpen(true)}
                 onManageTags={() => setTagManagerOpen(true)}
               />
-            </div>
-            <div
-              role="separator"
-              aria-label={t('matters.list.resize')}
-              aria-orientation="vertical"
-              aria-valuemin={MIN_MATTER_LIST_WIDTH}
-              aria-valuemax={MAX_MATTER_LIST_WIDTH}
-              aria-valuenow={matterListWidth}
-              tabIndex={0}
-              className={cn(
-                'group relative z-10 cursor-col-resize touch-none outline-none max-[880px]:hidden',
-                listPanelHidden && 'hidden'
-              )}
-              onPointerDown={(event) => {
-                if (event.button !== 0) return
-                event.preventDefault()
-                event.currentTarget.setPointerCapture(event.pointerId)
-                resizeDragRef.current = {
-                  pointerId: event.pointerId,
-                  startX: event.clientX,
-                  startWidth: matterListWidth,
-                  currentWidth: matterListWidth,
-                  previousCursor: document.body.style.cursor,
-                  previousUserSelect: document.body.style.userSelect
-                }
-                document.body.style.cursor = 'col-resize'
-                document.body.style.userSelect = 'none'
-              }}
-              onPointerMove={(event) => {
-                const drag = resizeDragRef.current
-                if (!drag || drag.pointerId !== event.pointerId) return
-                const nextWidth = clampMatterListWidth(
-                  drag.startWidth + event.clientX - drag.startX
-                )
-                drag.currentWidth = nextWidth
-                workspaceGridRef.current?.style.setProperty('--matter-list-width', `${nextWidth}px`)
-              }}
-              onPointerUp={(event) => finishMatterListResize(event.currentTarget, event.pointerId)}
-              onPointerCancel={(event) =>
-                finishMatterListResize(event.currentTarget, event.pointerId)
-              }
-              onLostPointerCapture={(event) =>
-                finishMatterListResize(event.currentTarget, event.pointerId)
-              }
-              onKeyDown={(event) => {
-                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
-                event.preventDefault()
-                const delta =
-                  event.key === 'ArrowLeft' ? -MATTER_LIST_WIDTH_STEP : MATTER_LIST_WIDTH_STEP
-                const nextWidth = clampMatterListWidth(matterListWidth + delta)
-                workspaceGridRef.current?.style.setProperty('--matter-list-width', `${nextWidth}px`)
-                setMatterListWidth(nextWidth)
-                writeMatterListWidth(nextWidth)
-              }}
-            >
-              <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-ink-border transition-colors group-hover:bg-coral/70 group-focus-visible:bg-coral/70" />
             </div>
             <div className={cn('min-h-0', !selected && 'max-[880px]:hidden')}>
               {selected ? (

@@ -1296,6 +1296,14 @@ body::before {
   align-items: center;
   gap: 2px;
 }
+/* 对象域（邮件/事项）与页面域之间的分隔线（08-27 原型 railsep: 24×1）。 */
+.nav-rail-sep {
+  width: 24px;
+  height: 1px;
+  flex-shrink: 0;
+  background: rgb(var(--ink-border));
+  margin: 6px 0;
+}
 /* 底部沉「运维」「设置」（画布: 格间 6px, 距底 10px, icon 18px）。 */
 .nav-rail-bottom {
   margin-top: auto;
@@ -1304,6 +1312,15 @@ body::before {
   align-items: center;
   gap: 6px;
   padding-bottom: 10px;
+}
+/* 同步状态点（StatusBar 退役后 sync 段的常驻落位，原型 railfoot .sync: 8px 圆点）。
+ * 颜色类（bg-ok / bg-coral / bg-fail / bg-ink-fg-3）由 Sidebar 按 SSE 状态注入。 */
+.nav-rail-sync {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-bottom: 2px;
 }
 /* 面板开合按钮（0825 dogfood: 此前收起态唯一展开入口 = 再点当前域格, 太隐蔽）。
  * <lg 强制收起时由 TSX 隐藏（那里收起不可解除, 按钮只会空翻偏好）。 */
@@ -1409,9 +1426,12 @@ body::before {
   color: rgb(var(--c-accent));
 }
 
-/* ── DomainPanel · 232px 可折叠 ── */
+/* ── DomainPanel · 336px 可折叠（08-27 标签工作区批：二级栏定宽 336，左列总宽
+ * 392 = rail 56 + 336；'page' 域的页面列表列同宽，切域左列边界不动）。
+ * 🔴 宽度在 .nav-panel 与 .nav-panel-inner 手抄两处，改必成对 —— inner 定宽是
+ * 折叠过渡期间行不换行不挤压的前提，只改一处过渡期间列会错位。 */
 .nav-panel {
-  width: 232px;
+  width: 336px;
   flex-shrink: 0;
   position: relative;
   display: flex;
@@ -1431,9 +1451,9 @@ body::before {
     width 220ms cubic-bezier(0.4, 0, 0.2, 1),
     visibility 0s linear 220ms;
 }
-/* 内容定宽 232px — 宽度过渡期间行不换行不挤压, 整列被 overflow 裁切。 */
+/* 内容定宽 336px — 宽度过渡期间行不换行不挤压, 整列被 overflow 裁切。 */
 .nav-panel-inner {
-  width: 232px;
+  width: 336px;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -1462,20 +1482,6 @@ body::before {
  * padding 下会被 .nav-panel overflow 裁掉 2px)。 */
 .nav-panel .row-selected::before {
   left: -6px;
-}
-
-/* 写邮件 accent 主 CTA（画布: 32px 高 / 居中 / accent 填充 / 0 1px 2px 投影）。
- * 几何在 TSX utility, 这里只管配色层。 */
-.app-nav-compose-btn {
-  background: rgb(var(--c-accent));
-  color: rgb(var(--c-accent-fg));
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
-}
-.app-nav-compose-btn:hover {
-  filter: brightness(1.08);
-}
-.app-nav-compose-btn:active {
-  filter: brightness(0.96);
 }
 
 /* dogfood-2 — DotMatrix (agent 视图 working indicator) keyframes + @property + dot 动画规则。
@@ -1840,15 +1846,15 @@ body:not([data-batch-mode='true']) .email-row .cb {
    动画，故移除。 */
 
 /* Floating batch action bar — fixed at the bottom edge of the inbox column,
- * right of the sidebar. The `--app-nav-w` custom property is set by the
- * nav-shell store (288px expanded = rail 56 + panel 232, 56px collapsed =
- * rail only) so the bar reflows with
- * the sidebar without measuring. Sits above the 24px status bar. */
+ * right of the left columns. The `--app-nav-w` custom property is set by the
+ * nav-shell store (392px expanded = rail 56 + second column 336, 56px
+ * collapsed = rail only) so the bar reflows with
+ * the sidebar without measuring. */
 #batch-bar.floating {
   position: fixed;
-  left: calc(var(--app-nav-w, 288px) + 16px);
+  left: calc(var(--app-nav-w, 392px) + 16px);
   right: 16px;
-  bottom: calc(24px + 12px);
+  bottom: 12px;
   height: 56px;
   padding-inline: 14px;
   border-radius: 14px;
@@ -2414,6 +2420,21 @@ body:not([data-batch-mode='true']) .email-row .cb {
   /* 主题 v2: 激活指示点是 accent 性质的强调, 从写死 v1 coral 改跟主题色。 */
   background: rgb(var(--c-accent));
   box-shadow: 0 0 0 2px rgb(var(--ink-2));
+}
+
+/* 列表头的实心主 CTA（task 08-27 P1 Lane B：写邮件从二级栏搬到列表头第一行，
+ * 原 nav shell 的 .app-nav-compose-btn 随邮件域面板退役删除）。配色层 = accent
+ * 填充 + hover 提亮，几何在 TSX utility。 */
+.list-cta {
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+}
+.list-cta:hover {
+  filter: brightness(1.08);
+}
+.list-cta:active {
+  filter: brightness(0.96);
 }
 
 /* ─── AI Chat panel — tool-row + qchip + draft-card ─────────────────── */

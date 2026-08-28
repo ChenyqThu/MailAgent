@@ -1,21 +1,23 @@
 // @vitest-environment happy-dom
 //
-// 回归闸 —— 「侧边栏自定义文件夹整段冷启后不出现」。
+// 回归闸 —— 「自定义文件夹整段冷启后不出现」（原 SidebarFolderTreeColdStart.test.tsx；
+// task 08-27 P1 Lane B 把树搬进列表头的文件夹选择器后，查询配方原样落在
+// `useSyncedFolderTree`，这三条防线跟着搬过来）。
 //
 // 复现链: 冷启时 renderer 比 serve-api 先起 (实测 renderer 已挂载、serve-api 还在
-// import) → whitelist query 首拉 E_NETWORK → `hasWhitelist` 恒 false → 整棵树
-// return null。回归由 AppShell 单例化 (57cde131) 引入: 此前每次路由切换 Sidebar
-// remount 会把 errored query 重新拉一遍 (隐性自愈), 单例后失败即**永久**失败 ——
-// 全局 `retry: 1` + `refetchOnWindowFocus: false` 一秒内两发全废, SSE 一连上
-// usePollingFallback 又把兜底轮询清零, 于是再没有任何触发器。
+// import) → whitelist query 首拉 E_NETWORK → `hasWhitelist` 恒 false → 整棵树空。
+// 回归由 AppShell 单例化 (57cde131) 引入: 此前每次路由切换 Sidebar remount 会把
+// errored query 重新拉一遍 (隐性自愈), 单例后失败即**永久**失败 —— 全局 `retry: 1` +
+// `refetchOnWindowFocus: false` 一秒内两发全废, SSE 一连上 usePollingFallback 又把兜底
+// 轮询清零, 于是再没有任何触发器。
 //
 // 三条防线各一条用例 (拆掉任何一条这里必红):
-//   ① main 的 `mailagent:api-ready` 广播失效 folder 族 → 重拉 → 树出现 (主修复);
+//   ① main 的 `mailagent:api-ready` 广播失效 folder 族 → 重拉 → 文件夹出现 (主修复);
 //   ② query 层按错误码重试 (E_NETWORK) → 不等广播也能自愈;
 //   ③ 业务错误 (非 davmail 后端的 E_INVALID_ARG) **不**重试 —— 防①②被写成无条件重试。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { I18nextProvider } from 'react-i18next'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
@@ -53,7 +55,10 @@ vi.mock('@shared/hooks/usePollingFallback', () => ({
 import { useApiReadyRefresh } from '@shared/hooks/useApiReadyRefresh'
 import { API_READY_CHANNEL } from '@shared/lib/ipcChannels'
 import { qk } from '@shared/lib/queryKeys'
-import { SidebarFolderTree } from '../../src/shared/components/layout/SidebarFolderTree'
+import { ALL_CATEGORIES, ALL_PRIORITIES } from '@shared/state/email-filter'
+import { EmailListHeader } from '../../src/shared/components/email/EmailListHeader'
+
+const COUNTS = { all: 12, unread: 3, flagged: 2, done: 1, toMe: 5, hasAttach: 4, failed: 0 }
 
 /** http_client / IPC envelope 抛出的形状: 普通 Error 挂一个字符串 `code`。 */
 function apiError(code: string, message: string): Error {
@@ -82,7 +87,6 @@ function discoverOk(folders: FolderInfo[], whitelist: string[]) {
 }
 
 interface ColdStartView {
-  container: HTMLElement
   queryClient: QueryClient
   /** 模拟 main 侧软门控轮到 /api/health 200 后广播 `mailagent:api-ready`。 */
   fireApiReady: () => void
@@ -118,9 +122,12 @@ function renderColdStart(): ColdStartView {
     component: () => (
       <I18nextProvider i18n={i18n}>
         <ApiReadyProbe />
-        <nav>
-          <SidebarFolderTree />
-        </nav>
+        <EmailListHeader
+          counts={COUNTS}
+          categoryCounts={Object.fromEntries(ALL_CATEGORIES.map((c) => [c, 0])) as never}
+          priorityCounts={Object.fromEntries(ALL_PRIORITIES.map((p) => [p, 0])) as never}
+          userEmail="me@example.test"
+        />
         <Outlet />
       </I18nextProvider>
     )
@@ -134,19 +141,24 @@ function renderColdStart(): ColdStartView {
     routeTree: rootRoute.addChildren([indexRoute]),
     history: createMemoryHistory({ initialEntries: ['/'] })
   })
-  const { container } = render(
+  render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
     </QueryClientProvider>
   )
   return {
-    container,
     queryClient,
     fireApiReady: () => {
       if (!broadcast) throw new Error(`no listener on ${API_READY_CHANNEL}`)
       broadcast()
     }
   }
+}
+
+/** 打开列表头的文件夹下拉（自定义文件夹段就在里面）。 */
+async function openFolderMenu(): Promise<HTMLElement> {
+  fireEvent.click(await screen.findByRole('button', { name: /切换文件夹/ }))
+  return screen.getByLabelText('文件夹')
 }
 
 /** whitelist query 停在 error (重试已耗尽) —— 断言「不渲染」前必须等到这里,
@@ -157,7 +169,7 @@ async function waitForWhitelistError(queryClient: QueryClient): Promise<void> {
   )
 }
 
-describe('SidebarFolderTree — serve-api 冷启窗口的回归闸', () => {
+describe('文件夹选择器 — serve-api 冷启窗口的回归闸', () => {
   beforeEach(() => {
     mockGetWhitelist.mockReset()
     mockDiscover.mockReset()
@@ -170,19 +182,20 @@ describe('SidebarFolderTree — serve-api 冷启窗口的回归闸', () => {
     vi.unstubAllGlobals()
   })
 
-  test('① whitelist 首拉失败 → 整段不渲染; api-ready 广播后重拉 → 树出现', async () => {
+  test('① whitelist 首拉失败 → 没有自定义文件夹段; api-ready 广播后重拉 → 出现', async () => {
     mockGetWhitelist.mockRejectedValue(apiError('E_NETWORK', 'serve-api 还没 bind'))
-    const { container, queryClient, fireApiReady } = renderColdStart()
+    const { queryClient, fireApiReady } = renderColdStart()
 
     await waitForWhitelistError(queryClient)
-    expect(container.querySelectorAll('button.row')).toHaveLength(0)
+    const menu = await openFolderMenu()
+    expect(within(menu).queryByText('Jira')).toBeNull()
 
     // serve-api 起来了, main 广播就绪。
     mockGetWhitelist.mockResolvedValue({ folders: ['Jira'] })
     mockDiscover.mockResolvedValue(discoverOk([folderInfo('Jira', 'Jira', 42)], ['Jira']))
     fireApiReady()
 
-    expect(await screen.findByText('Jira')).toBeTruthy()
+    expect(await within(menu).findByText('Jira')).toBeTruthy()
   })
 
   test('② E_NETWORK 是传输层抖动 → query 层自己重试到成功 (不等广播)', async () => {
@@ -194,7 +207,8 @@ describe('SidebarFolderTree — serve-api 冷启窗口的回归闸', () => {
     renderColdStart()
 
     // 全局 retry:1 (两发) 盖不住的窗口, 靠 query 层按错误码续命。
-    expect(await screen.findByText('Jira')).toBeTruthy()
+    const menu = await openFolderMenu()
+    expect(await within(menu).findByText('Jira')).toBeTruthy()
   })
 
   test('③ 非 davmail 后端的 E_INVALID_ARG 不重试 (重试结果一样, 只拖慢门控态)', async () => {

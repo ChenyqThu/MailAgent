@@ -2,10 +2,10 @@
 //
 // 老单栏（240↔56 双宽态，三段 11-13 行）退役，拆为：
 //   · IconRail（56px 常驻图标导轨，切域）
-//   · DomainPanel（232px 域二级栏，随域换内容，可折叠 = 显隐）
+//   · DomainPanel（336px 域二级栏，随域换内容，可折叠 = 显隐；08-27 批定宽）
 // 本文件负责**数据与写路径**：mailbox 计数 / 事项关注 / agent 未读 → badgeValue，
-// 邮件视图切换（setView + `?view=` 同步 + StatusBar mailbox 联动）、账户 popover
-// 状态、域推导（navActiveDomain）。渲染细节在两个子组件。
+// 邮件视图切换（setView + `?view=` 同步 + useMailbox 联动）、同步状态点、域推导
+// （navActiveDomain）。渲染细节在两个子组件。
 //
 // 🔴 AppShell 红线：Sidebar 仍是中行的**单个** flex item（外层 aside 自身是
 // flex row 容器，rail + panel 是它的内部列）——AssistantChatDock 兄弟位挤压语义
@@ -15,15 +15,15 @@
 // 条目单源仍是 `@shared/navigation/registry`（Step R）：rail 格与 panel 行都是
 // registry 投影，路由 path 字面量不出现在本文件。
 
-import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
 import { useNavigate, useRouter, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
+import type { EventsConnectionState } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
-import { isDraftsMailbox, isInboxMailbox, mailboxForView } from '@shared/lib/mailboxSemantics'
+import { isInboxMailbox, mailboxForView } from '@shared/lib/mailboxSemantics'
 import {
   navActiveDomain,
   navDomainSecond,
@@ -34,6 +34,7 @@ import {
 } from '@shared/navigation/registry'
 import { useVisibleNavEntries } from '@shared/navigation/useNavGates'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
+import { useEventsStatusStore } from '@shared/state/eventsStatus'
 import { useMailbox } from '@shared/state/mailbox'
 import { useNavCollapsed } from '@shared/state/nav-shell'
 import { deriveAccount } from '@shared/lib/account'
@@ -46,6 +47,60 @@ import { IconRail } from './IconRail'
 // MattersP5Renderer 等既有消费方从本文件拿它 —— 定义随行原语一起搬去了 DomainPanel。
 export { MatterAttentionBadge } from './DomainPanel'
 
+/** 同步状态点（08-27 批：StatusBar 退役，sync 段迁 rail 底部）。语义沿用原
+ *  StatusBar buildSyncView：SSE 连接状态 + fallback polling 周期 → 点色 + 完整
+ *  tooltip（label · 状态 · 详情）。 */
+function buildSyncDot(
+  t: (k: string, opts?: Record<string, unknown>) => string,
+  sseState: EventsConnectionState,
+  fallbackMs: number | false
+): { dotClass: string; title: string } {
+  const fallbackSec =
+    typeof fallbackMs === 'number' && fallbackMs > 0 ? Math.round(fallbackMs / 1000) : null
+  const tooltipFallback =
+    fallbackSec !== null
+      ? t('statusbar.sync.tooltipFallback', { seconds: fallbackSec })
+      : t('statusbar.sync.tooltipFallbackOff')
+  let dotClass: string
+  let label: string
+  let tooltip: string
+  switch (sseState) {
+    case 'connected':
+      dotClass = 'bg-ok'
+      label = t('statusbar.sync.live')
+      tooltip = t('statusbar.sync.tooltipConnected')
+      break
+    case 'connecting':
+    case 'reconnecting':
+      dotClass = 'bg-coral/100 animate-pulse motion-reduce:animate-none'
+      label = t(
+        sseState === 'connecting' ? 'statusbar.sync.connecting' : 'statusbar.sync.reconnecting'
+      )
+      tooltip = sseState === 'connecting' ? t('statusbar.sync.tooltipConnected') : tooltipFallback
+      break
+    case 'disconnected':
+      dotClass = 'bg-fail'
+      label =
+        fallbackSec !== null
+          ? t('statusbar.sync.fallbackTpl', { seconds: fallbackSec })
+          : t('statusbar.sync.fallbackOff')
+      tooltip = tooltipFallback
+      break
+    case 'disabled':
+      dotClass = 'bg-ink-fg-3'
+      label = t('statusbar.sync.disabled')
+      tooltip = t('statusbar.sync.tooltipDisabled')
+      break
+    case 'idle':
+    default:
+      dotClass = 'bg-ink-fg-3'
+      label = t('statusbar.sync.idle')
+      tooltip = t('statusbar.sync.tooltipDisabled')
+      break
+  }
+  return { dotClass, title: `${t('statusbar.sync.label')} · ${label} · ${tooltip}` }
+}
+
 export function Sidebar(): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
@@ -56,28 +111,35 @@ export function Sidebar(): React.ReactElement {
   const collapsed = useNavCollapsed((s) => s.collapsed)
   const forcedCollapsed = useNavCollapsed((s) => s.forced)
   const toggleCollapsed = useNavCollapsed((s) => s.toggle)
-  const setCollapsed = useNavCollapsed((s) => s.setCollapsed)
   const sessionProvenanceEnabled = useSessionProvenanceEnabled()
   const mattersEnabled = useMattersEnabled()
   const matterAttention = useGlobalAttention(mattersEnabled)
   const matterAttentionCount = matterAttention.data?.items.length ?? 0
   const agentUnreadTotal = useAgentUnreadCount(sessionProvenanceEnabled).total
   const setView = useEmailFilter((s) => s.setView)
-  const focusUnread = useEmailFilter((s) => s.focusUnread)
   const setActiveMailbox = useMailbox((s) => s.setActive)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
+  // `?tab=` —— 过渡期 `/agents` 被 team 与 reports 两个域共用，域推导按 tab 细分
+  // （navActiveDomain 的 searchTab 参数，P3 报告拿到独立路由后删）。
+  const searchTab = useRouterState({
+    select: (s) => (s.location.search as { tab?: string }).tab
+  })
 
   // 当前域（导轨选中格 + 面板内容）。无命中回落邮件域 —— registry 覆盖全部路由，
   // 理论上只在测试路由树缺路由时走到。
-  const activeDomain = navActiveDomain(navEntries, pathname) ?? 'mail'
-  // 域二级栏形态（0825 dogfood 轮 2/3）：'nav' = DomainPanel；'page' = 页面列表列
-  // 充当二级栏（收起走同一个 useNavCollapsed，本组件只管开合按钮的显隐）；'none' = 无。
+  const activeDomain = navActiveDomain(navEntries, pathname, searchTab) ?? 'mail'
+  // 域二级栏形态（08-27 批起恒有二级栏）：'nav' = DomainPanel；'page' = 页面列表列
+  // 充当二级栏（收起走同一个 useNavCollapsed，本组件只管开合按钮的显隐）。
   const second = navDomainSecond(activeDomain)
   const hasPanel = second === 'nav'
 
   // Mailbox counts — SSE driven (useEventBridge invalidate ['mailboxes']);
   // polling 作 SSE 断线 fallback.
   const pollingInterval = usePollingFallback()
+
+  // rail 底部同步状态点（StatusBar 退役后 sync 段的常驻落位）。
+  const sseState = useEventsStatusStore((s) => s.status.state)
+  const syncDot = buildSyncDot(t, sseState, pollingInterval)
   const { data } = useQuery({
     queryKey: qk.mailboxes(),
     queryFn: () => mailApi.email.listMailboxes(),
@@ -100,55 +162,28 @@ export function Sidebar(): React.ReactElement {
   const accountEmail = settings?.userEmail ?? settings?.notionAgentName ?? null
   const account = deriveAccount(accountEmail)
 
-  // Aggregate counts for virtual rows (flagged / all-mail).
+  // 收件箱未读（rail 的邮件格角标）。08-27 批：草稿箱 / 已标旗 / 所有邮件三个总数
+  // 随内建视图行搬进列表头下拉一并退役（下拉不显计数），聚合与 badge kind 都已删。
   // 🔴 徽标与列表必须同径 —— listMailboxes 按 mailbox **原值** GROUP BY, 变体行
   // (INBOX/Drafts…) 自成一组; 而列表查询已按判定集 IN(...) 认全变体 (issue #42
   // 后续)。这里若还 find(=== canonical), 就成了「列表显 6 值、徽标算 1 值」——
-  // 正是本轮要消的那种不一致, 只是方向反了。故按判定集求和。
+  // 正是那一轮要消的那种不一致, 只是方向反了。故按判定集求和。
   const inboxUnread = mailboxes
     .filter((m) => isInboxMailbox(m.mailbox))
     .reduce((sum, mb) => sum + mb.unread, 0)
-  // 草稿箱 = davmail Drafts 对账同步进 email_metadata 的行 (mailbox='草稿箱')。
-  // 数量语义是"草稿总数"而非未读 (草稿是自己写的)。
-  const draftsTotal = mailboxes
-    .filter((m) => isDraftsMailbox(m.mailbox))
-    .reduce((sum, mb) => sum + mb.total, 0)
-  // 「所有邮件」/「已标旗」badge 排除草稿 — 列表查询 (buildListWhere 未指定
-  // mailbox 时排草稿) 与 badge 计数必须同径, 否则数字与列表行数对不上。
-  const nonDraft = mailboxes.filter((m) => !isDraftsMailbox(m.mailbox))
-  const allTotal = nonDraft.reduce((sum, mb) => sum + mb.total, 0)
-  const flaggedTotal = nonDraft.reduce((sum, mb) => sum + (mb.flagged ?? 0), 0)
 
-  // 徽标数值按 registry 的 badge.kind 索引 —— rail 格与 panel 行只问「这一格挂
-  // 哪个计数」，不逐处手接变量。
+  // 徽标数值按 registry 的 badge.kind 索引 —— rail 格只问「这一格挂哪个计数」，
+  // 不逐处手接变量。
   const badgeValue: Record<NavBadgeKind, number> = {
     inboxUnread,
-    draftsTotal,
-    flaggedTotal,
-    allTotal,
     matterAttention: matterAttentionCount,
     agentUnread: agentUnreadTotal
   }
 
-  // Account popover — anchored under the DomainPanel header. Outside-click /
-  // Escape dismiss + add-account ghost row live in AccountSwitcherPopover.
-  const [accountOpen, setAccountOpen] = useState(false)
-
-  /** 未读徽标点击 —— 切进该 view 并只看未读。收的是「徽标常亮 N 但列表里翻不到那几封」
-   *  的可发现性缺口（实测一封 2026-05 的老未读因 davmail folderSizeLimit 窗口外、
-   *  入向已读回收够不着，徽标永久挂 1）。 */
-  const handleUnreadBadgeClick = (entry: NavEntry, next: EmailView): void => {
-    focusUnread(next)
-    const nextMailbox = mailboxForView(next)
-    if (nextMailbox) setActiveMailbox(nextMailbox)
-    navigateToNavEntry(navigate, entry)
-  }
-
   const handleViewClick = (entry: NavEntry, next: EmailView): void => {
     setView(next)
-    // Keep useMailbox.active in lockstep for the StatusBar mailbox segment.
-    // inbox/outbox map cleanly to concrete Mail.app mailboxes; the virtual
-    // flagged/all views use a descriptive label so StatusBar reads sensibly.
+    // Keep useMailbox.active in lockstep（搜索范围等读态的既有联动；此前还服务
+    // StatusBar mailbox 段，08-27 批 StatusBar 退役后联动本身保留）。
     const nextMailbox = mailboxForView(next)
     if (nextMailbox) setActiveMailbox(nextMailbox)
     // flagged + all leave activeMailbox alone — they are cross-mailbox views.
@@ -164,9 +199,9 @@ export function Sidebar(): React.ReactElement {
 
   /** 导轨格点击：切域 = 导航到该格的 entry；点当前域的格 = 折叠/展开二级栏
    *  （快捷路径；显式入口是 rail 底部的 RailToggle，0825 dogfood 补）。
-   *  无二级栏的域没有可开合的东西 —— 点当前格退化为重导航（回该域默认落点）。 */
+   *  08-27 批起所有域都有二级栏，点当前格恒为开合。 */
   const handleRailCellClick = (entry: NavEntry): void => {
-    if (entry.domain === activeDomain && second !== 'none') {
+    if (entry.domain === activeDomain) {
       toggleCollapsed()
       return
     }
@@ -177,20 +212,10 @@ export function Sidebar(): React.ReactElement {
     preloadNavEntry(routerInstance, entry)
   }
 
-  /** 导轨头像点击：面板收起时先展开（popover 需要面板在场才有锚定处），再开
-   *  账户菜单 —— 老收起态的同款 idiom（延一拍让宽度过渡先起步）。
-   *  无面板域连锚定处都没有 —— 直接去账户设置（popover 里唯一动作的落点）。 */
+  /** 导轨头像点击 —— 直接去账户设置。08-27 批：账户 popover 随 DomainPanel 的
+   *  mail 分支退役（mail 转 'page' 域），popover 里唯一动作的落点就是这里。 */
   const handleAvatarClick = (): void => {
-    if (!hasPanel) {
-      void navigate({ to: '/settings', search: { tab: 'accounts' } })
-      return
-    }
-    if (collapsed) {
-      setCollapsed(false)
-      window.setTimeout(() => setAccountOpen(true), 60)
-    } else {
-      setAccountOpen(true)
-    }
+    void navigate({ to: '/settings', search: { tab: 'accounts' } })
   }
 
   return (
@@ -206,8 +231,10 @@ export function Sidebar(): React.ReactElement {
         badgeValue={badgeValue}
         monogram={account.monogram}
         accountTitle={t('nav.account.tooltip', { email: accountEmail ?? account.localPart })}
+        syncDotClass={syncDot.dotClass}
+        syncTitle={syncDot.title}
         panelCollapsed={collapsed}
-        showPanelToggle={!forcedCollapsed && second !== 'none'}
+        showPanelToggle={!forcedCollapsed}
         onPanelToggle={toggleCollapsed}
         onAvatarClick={handleAvatarClick}
         onCellClick={handleRailCellClick}
@@ -217,22 +244,9 @@ export function Sidebar(): React.ReactElement {
         <DomainPanel
           domain={activeDomain}
           entries={navEntries}
-          badgeValue={badgeValue}
           onEntryClick={handleEntryClick}
           onEntryHover={handleEntryHover}
-          onUnreadBadgeClick={handleUnreadBadgeClick}
           onCollapse={toggleCollapsed}
-          account={account}
-          accountEmail={accountEmail}
-          accountOpen={accountOpen}
-          onAccountOpenChange={setAccountOpen}
-          onAddAccount={() => {
-            setAccountOpen(false)
-            // Sprint 18 PR C — `/settings` requires `tab` search param. Land
-            // the user on Accounts since that's where they came to set up
-            // a new account.（有意保留的路径字面量：非 entry 默认落点，Step R 定案⑤）
-            void navigate({ to: '/settings', search: { tab: 'accounts' } })
-          }}
         />
       )}
     </aside>

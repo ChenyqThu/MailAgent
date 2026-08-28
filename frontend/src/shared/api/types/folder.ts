@@ -37,7 +37,7 @@ export interface FolderDiscoverResult {
 
 export interface FolderWhitelistResult {
   /** 🔴 **保序** —— 同 `FolderDiscoverResult.whitelist`: 数组序即用户自定义显示
-   *  顺序。侧边栏 `buildSidebarFolderTree` 直接吃这个数组的下标做同层级排序,
+   *  顺序。`lib/folderTree.ts::buildFolderTree` 直接吃这个数组的下标做同层级排序,
    *  Set 化 / 重排都会静默丢掉用户的顺序。 */
   folders: string[]
 }

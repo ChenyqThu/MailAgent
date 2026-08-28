@@ -51,10 +51,15 @@
       "toMe": "Addressed to me",
       "hasAttach": "Has attachments"
     },
-    "folderCrumb": {
-      "aria": "Folder path"
+    "folder": {
+      "trigger": "Switch folder",
+      "menuAria": "Folders",
+      "pin": "Pin to list header",
+      "unpin": "Unpin",
+      "pinNamed": "Pin “{name}” to the list header",
+      "unpinNamed": "Unpin “{name}” from the list header",
+      "pinLimit": "You can pin at most {count} folders to the list header"
     },
-    "resizeHandle": "Resize list width",
     "priority": {
       "critical": "Critical",
       "urgent": "Urgent",
@@ -545,7 +550,8 @@
       "todayMeta": "What is waiting on you",
       "mattersMeta": "Matters workspace",
       "calendarMeta": "Schedule & meetings",
-      "customAiMeta": "Agents · Reports · Chats",
+      "customAiMeta": "Agent team · config & runs",
+      "reportsMeta": "Daily · weekly · custom output",
       "llmMeta": "Classification & usage",
       "settingsMeta": "Preferences & accounts"
     },
@@ -700,6 +706,9 @@
     },
     "domain": {
       "mail": "Mail",
+      "chats": "Chats",
+      "team": "Team",
+      "reports": "Reports",
       "ops": "Ops"
     },
     "composeNew": "Compose",
@@ -709,7 +718,6 @@
     "drafts": "Drafts",
     "flagged": "Flagged",
     "allMail": "All mail",
-    "showUnreadOnly": "Show unread only",
     "aiSessions": "AI sessions",
     "agentView": "MailAgent",
     "connectors": "Connectors",
@@ -722,14 +730,9 @@
     "expandAria": "Expand navigation",
     "online": "online",
     "account": {
-      "add": "Add account…",
       "tooltip": "{email} — switch account"
     },
     "folderTree": {
-      "expand": "Expand",
-      "collapse": "Collapse",
-      "showMore": "Show more (+{count})",
-      "showLess": "Collapse",
       "disabledTip": "Available once folder info finishes loading"
     }
   },
@@ -4156,13 +4159,6 @@
     }
   },
   "statusbar": {
-    "version": "v{version}",
-    "synced": "Synced",
-    "mailbox": "mailbox",
-    "llm": "llm",
-    "theme": "theme",
-    "llmIdle": "IDLE",
-    "updateReady": "Update ready",
     "sync": {
       "label": "Sync",
       "live": "live",
@@ -4176,15 +4172,6 @@
       "tooltipFallback": "SSE offline; fallback poll every {seconds}s",
       "tooltipFallbackOff": "SSE offline; fallback poll disabled (Settings → Realtime events)",
       "tooltipDisabled": "Realtime events disabled"
-    },
-    "remote": {
-      "label": "Remote",
-      "on": "On",
-      "off": "Off",
-      "tooltipOn": "serve-api enabled · {url}",
-      "tooltipOff": "Remote access off",
-      "unconfigured": "Not configured",
-      "tooltipUnconfigured": "Remote access on but CF_AUDIENCE missing — serve-api won't start"
     }
   },
   "titleBar": {
@@ -4229,6 +4216,9 @@
     "solid": "Solid"
   },
   "agents": {
+    "nav": {
+      "allAgents": "All agents"
+    },
     "unread": "Unread agent runs",
     "title": "Report Agents",
     "subtitle": "Auto-generated, traceable email reports. Daily by default; weekly / monthly share the engine.",
@@ -5117,8 +5107,7 @@
       "searchInView": "Search in {view}…",
       "archived": "Archived",
       "trashDays": "Trash · purges in {count} days",
-      "dueRelative": "Due {value}",
-      "resize": "Resize matter list"
+      "dueRelative": "Due {value}"
     },
     "nextAction": {
       "action": "{title}",
@@ -6435,8 +6424,7 @@
       "title": "Contacts"
     },
     "list": {
-      "count": "{count} people",
-      "resize": "Drag to resize the list"
+      "count": "{count} people"
     },
     "view": {
       "known": "People you email",
@@ -6901,6 +6889,15 @@
   },
   "today": {
     "kicker": "TODAY",
+    "nav": {
+      "groupNeedYou": "Needs you",
+      "groupNext": "Up next",
+      "decide": "Your call",
+      "meet": "Today's meetings",
+      "reply": "Emails to answer",
+      "due": "Due soon",
+      "out": "Agent output"
+    },
     "title": "Exceptions",
     "subtitle": "{count, plural, =0 {Nothing waiting} one {# item to look at} other {# items to look at}}",
     "subtitleLoading": "Collecting…",

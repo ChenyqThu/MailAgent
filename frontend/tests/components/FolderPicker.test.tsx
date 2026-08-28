@@ -32,7 +32,7 @@ await i18n.changeLanguage('zh-CN')
 // ── mailApi mock ──────────────────────────────────────────────────────────
 // 🔴 必须返回稳定单例 — 真 useMailApi 是 makeMailApi() 单例; 不稳定的 queryFn 闭包
 // 不影响 React Query 缓存 (按 queryKey 索引), 但稳定单例仍是真实语义的忠实复刻。
-// discover 现走 React Query (['folder','discover'], 与 SidebarFolderTree 共用), 防
+// discover 现走 React Query (['folder','discover'], 与 useSyncedFolderTree 共用), 防
 // 重复拉取由 staleTime 承担 — 同一 QueryClient 内重 mount 命中缓存零请求。
 const mockDiscover = vi.fn<() => Promise<FolderDiscoverResult>>()
 const mockSetWhitelist = vi.fn()

@@ -67,7 +67,9 @@ function assertExtractorsAlive(keys: UiEnvKeys): void {
   const checks: Array<[string, Set<string>, number, string]> = [
     ['envKey="KEY"', keys.envField, 60, 'LOG_LEVEL'],
     ['applyEnvPatch / patch[…]=', keys.patchWrite, 5, 'MAILAGENT_BACKEND'],
-    ["snapshot.values['KEY']", keys.valueRead, 8, 'MAILAGENT_REMOTE_ACCESS_ENABLED']
+    // 锚点原是 MAILAGENT_REMOTE_ACCESS_ENABLED（StatusBar 的 remote 段）——
+    // 08-27 批 StatusBar 退役后换用多处直读、语义稳定的 LLM 总闸。
+    ["snapshot.values['KEY']", keys.valueRead, 8, 'LLM_AGENT_ENABLED']
   ]
   for (const [label, set, floor, anchor] of checks) {
     if (set.size < floor) {

@@ -1,6 +1,6 @@
 // redesign Phase 1 — MailAgent view LEFT session-history sidebar.
 //
-// A collapsible (260px ↔ 48px) thread-list for the general-agent surface, restyled from the
+// A collapsible (336px ↔ 48px) thread-list for the general-agent surface, restyled from the
 // assistant-ui base template with our coral/ink tokens. Visual DNA borrowed from the ChatsTab
 // SessionRow/SessionListPane (the read-only /sessions browser this view replaces). Pure
 // props-driven — the parent AgentViewLayout owns the session state — so the same component serves
@@ -54,6 +54,11 @@ export interface AgentThreadListProps {
   onToggleCollapse: () => void
   /** fluid = full-width single pane (narrow / mobile); ignores collapse. */
   fluid?: boolean
+  /** 08-27 标签工作区批：nav shell 的二级栏折叠（对话域的二级栏 = 这一列）。
+   *  整列 `display:none` **不卸载** —— 保滚动位置与已加载的分组展开态，同
+   *  InboxLayout 的邮件列。与列自己的 48px rail 折叠（`collapsed`）正交：两者叠加
+   *  时 hidden 优先（整列都不在场，rail 宽窄无意义）。 */
+  navHidden?: boolean
 }
 
 // dogfood-3 — 'archived' is a synthetic group pinned to the BOTTOM (collapsed by default); active
@@ -92,7 +97,8 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
     onStar,
     collapsed,
     onToggleCollapse,
-    fluid
+    fluid,
+    navHidden = false
   } = props
   const { t } = useTranslation()
   const [renamingId, setRenamingId] = useState<number | null>(null)
@@ -142,8 +148,14 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
           ? 'w-full'
           : cn(
               'border-r border-ink-border transition-[width] duration-base ease-standard motion-reduce:transition-none',
-              isRail ? 'w-12' : 'w-[260px]'
-            )
+              // 08-27 标签工作区批：对话域的页面自管列充当二级栏，展开态定宽 336
+              //（rail 56 + 336 = 392，与其他域左列边界对齐）。折叠到 48px rail 是
+              // 用户主动行为，保留；P3 对话域重做时再统一。
+              isRail ? 'w-12' : 'w-[336px]'
+            ),
+        // nav shell 折叠 → 整列不在场（display:none，不卸载）。放在宽度类之后，
+        // 与列自己的 rail 折叠叠加时 hidden 赢。
+        navHidden && 'hidden'
       )}
     >
       {/* Header — PanelLeft collapse toggle (demo icon) + fading title. */}

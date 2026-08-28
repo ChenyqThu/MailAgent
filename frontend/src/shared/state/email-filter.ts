@@ -179,10 +179,6 @@ interface EmailFilterStore extends FilterAxes, SortState {
   selectedPriorities: ReadonlySet<AIPriority>
   selectedCategories: ReadonlySet<EmailCategory>
   setView(next: EmailView): void
-  /** 切到该 view 且**只**开 unread 轴 —— 侧边栏未读徽标的点击入口。
-   *  🔴 必须是独立 action 而非 `setView(v)` + `toggleBool('unread')`：setView 自带
-   *  `...NO_FILTER_AXES` 会把刚开的轴清掉（顺序反过来则中间会多一帧全量列表）。 */
-  focusUnread(next: EmailView): void
   /** 选中自定义文件夹 (mailbox = display_name)。其余过滤轴归零, view 占位 inbox
    *  (Sidebar 自行据 customMailbox 控制选中态, 内建 view 高亮全部解除)。`path`
    *  是层级 display_name 段 (末段 = mailbox), 列表头部面包屑用。 */
@@ -232,9 +228,6 @@ export const useEmailFilter = create<EmailFilterStore>((set, get) => ({
     // 切内建 view 必清掉自定义文件夹选中态 (互斥) + 二值筛选轴 (沿用老 chip 的
     // 「切视图即归零」语义: 带着「同步失败」切进发件箱只会看到空列表)。
     set({ ...NO_FILTER_AXES, view: next, customMailbox: null, customMailboxPath: [] })
-  },
-  focusUnread(next) {
-    set({ ...NO_FILTER_AXES, unread: true, view: next, customMailbox: null, customMailboxPath: [] })
   },
   setCustomMailbox(mailbox, path) {
     set({ ...NO_FILTER_AXES, customMailbox: mailbox, customMailboxPath: path ?? [mailbox] })

@@ -2,8 +2,8 @@
 // Step B 起语义 = DomainPanel 显隐)。
 //
 // 方案 B contract（DESIGN.md §2.11）：
-//   - collapsed = 域二级栏（232px DomainPanel）收起；56px IconRail 常驻不折叠
-//     ⇒ shell 总宽 288px (expanded) ↔ 56px (collapsed)
+//   - collapsed = 域二级栏（336px DomainPanel）收起；56px IconRail 常驻不折叠
+//     ⇒ shell 总宽 392px (expanded) ↔ 56px (collapsed)
 //   - persists to localStorage["mailagent.nav.panelCollapsed"]。老单栏时代的键
 //     `mailagent.nav.collapsed` **有意不迁**（0825 dogfood 实锤：老「整栏收起」
 //     偏好被沿用成「面板收起」，owner 首启即「文件夹列没了」——语义已经换了，
@@ -28,13 +28,14 @@ import { create } from 'zustand'
 
 const KEY = 'mailagent.nav.panelCollapsed'
 
-// Shell widths — must stay in sync with `.nav-rail`(56) + `.nav-panel`(232)
-// in index.css. The shell itself is sized by authored CSS; this store mirrors
+// Shell widths — must stay in sync with `.nav-rail`(56) + `.nav-panel`(336)
+// in index.css（08-27 批：二级栏定宽 336，'page' 域的页面列表列同宽 ⇒ 展开态左列
+// 恒 392）。The shell itself is sized by authored CSS; this store mirrors
 // the same width into the `--app-nav-w` custom property so detached
 // fixed-position chrome that cannot read the zustand store — notably
 // `#batch-bar.floating` (index.css §"Floating batch action bar") — reflows in
 // lockstep when the panel collapses.
-const NAV_W_EXPANDED = '288px'
+const NAV_W_EXPANDED = '392px'
 const NAV_W_COLLAPSED = '56px'
 
 // <lg auto-collapse breakpoint — aligns with Tailwind `lg`(1024) and the

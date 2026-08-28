@@ -36,8 +36,8 @@ const { gates } = vi.hoisted(() => ({ gates: { matters: true, contacts: true } }
 
 // `useMailApi` ships a real ElectronApi by default — that talks to
 // window.electron which doesn't exist under happy-dom. Stub the surface
-// the shell actually touches: settings.get + email.listMailboxes + folder.*
-// (SidebarFolderTree; whitelist 空 = 不渲染 FOLDERS 段)。
+// the shell actually touches: settings.get + email.listMailboxes（rail 徽标）+
+// report.getConfig（TeamNavPanel）。
 // Must use the @shared alias here — Vitest resolves the import string
 // before applying tsconfig paths, so a relative path silently fails to
 // match the import in Sidebar.tsx.
@@ -59,10 +59,12 @@ vi.mock('@shared/hooks/useMailApi', () => ({
         { mailbox: '发件箱', total: 4, unread: 0, flagged: 0, failed: 0 }
       ])
     },
-    folder: {
-      getWhitelist: vi.fn().mockResolvedValue({ folders: [] }),
-      discover: vi.fn().mockResolvedValue({ folders: [], tree: [], whitelist: [] }),
-      getPrefs: vi.fn().mockResolvedValue({ prefs: [] })
+    // TeamNavPanel（团队域二级栏）走 /agents 页同一份 useReportConfig 查询。
+    report: {
+      getConfig: vi.fn().mockResolvedValue([
+        { id: 'a1', title: '跟进员', type: 'custom', enabled: true, description: '盯事项推进' },
+        { id: 'a2', title: '搜索助手', type: 'search', enabled: true, description: null }
+      ])
     }
   })
 }))
@@ -89,12 +91,10 @@ import {
 import { SETTINGS_TABS } from '../../src/shared/lib/settingsTabs'
 import { useNavCollapsed } from '../../src/shared/state/nav-shell'
 
-/** 门控全开时的导轨格（自上而下 = 屏幕上的顺序），**手写**期望。 */
-const ALL_RAIL = ['今日', '邮件', '日历', '事项', '通讯录', 'Agents', '运维', '设置']
+/** 门控全开时的导轨格（自上而下 = 屏幕上的顺序），**手写**期望。08-27 批：对象域
+ *  （邮件/事项）在前、页面域在后（两组之间有 .nav-rail-sep 分隔线），共十格。 */
+const ALL_RAIL = ['邮件', '事项', '今日', '日历', '对话', '通讯录', '团队', '报告', '运维', '设置']
 const BOTTOM_RAIL = ['运维', '设置']
-
-/** 邮件域面板五行（手写）。 */
-const MAIL_ROWS = ['收件箱', '发件箱', '草稿箱', '已标旗', '所有邮件']
 
 function makeWrappedRouter(initialPath: string): ReturnType<typeof createRouter> {
   const rootRoute = createRootRoute({
@@ -187,10 +187,15 @@ describe('nav shell 结构契约', () => {
   afterEach(() => cleanup())
 
   test('exactly one [data-app-nav] root（rail + panel 收在单个 flex item）', async () => {
-    const { container } = await renderShell()
+    // 08-27 批：mail 转 'page' 域（'/' 无 DomainPanel），用有面板的 today 域验结构。
+    const { container } = await renderShell('/today')
     expect(container.querySelectorAll('[data-app-nav]')).toHaveLength(1)
     expect(container.querySelectorAll('[data-nav-rail]')).toHaveLength(1)
     expect(container.querySelectorAll('[data-nav-panel]')).toHaveLength(1)
+    // StatusBar 退役后 sync 段的常驻落位（rail 底部状态点）。
+    expect(container.querySelectorAll('[data-nav-rail] .nav-rail-sync')).toHaveLength(1)
+    // 对象域（邮件/事项）与页面域之间的分隔线。
+    expect(container.querySelectorAll('[data-nav-rail] .nav-rail-sep')).toHaveLength(1)
   })
 
   test('at most 1 .row-selected inside the shell', async () => {
@@ -218,7 +223,8 @@ describe('nav shell 结构契约', () => {
   })
 
   test('折叠 = data-collapsed 翻面（面板仍在 DOM，由 authored CSS 隐藏）', async () => {
-    const { container } = await renderShell()
+    // 'nav' 域才有 DomainPanel（mail 已转 'page'），用 today 域验「面板仍在 DOM」。
+    const { container } = await renderShell('/today')
     expect(container.querySelector('[data-app-nav]')!.getAttribute('data-collapsed')).toBe('false')
     useNavCollapsed.setState({ collapsed: true })
     await waitFor(() => {
@@ -231,7 +237,7 @@ describe('nav shell 结构契约', () => {
 describe('IconRail ↔ nav registry 投影', () => {
   afterEach(() => cleanup())
 
-  test('门控全开：8 格，顺序 = registry 的 rail.order（手写 + 投影两半）', async () => {
+  test('门控全开：10 格，顺序 = registry 的 rail.order（手写 + 投影两半）', async () => {
     const { container } = await renderShell()
     expect(railLabels(container)).toEqual(ALL_RAIL)
     expect(railLabels(container)).toEqual(projectedRail())
@@ -249,10 +255,10 @@ describe('IconRail ↔ nav registry 投影', () => {
     expect(railLabels(container)).toEqual(ALL_RAIL.filter((l) => l !== '事项' && l !== '通讯录'))
   })
 
-  test('选中格恰 1 且 = 当前路由归属域（/sessions 归 agents 格）', async () => {
+  test('选中格恰 1 且 = 当前路由归属域（/sessions 归对话格）', async () => {
     for (const [path, label] of [
       ['/', '邮件'],
-      ['/sessions', 'Agents'],
+      ['/sessions', '对话'],
       ['/admin/llm', '运维'],
       ['/admin/calendar', '日历']
     ] as const) {
@@ -285,20 +291,33 @@ describe('IconRail ↔ nav registry 投影', () => {
       fireEvent.click(cell)
     }
     const calls: unknown[] = []
-    for (const label of ['今日', '邮件', '日历', '事项', '通讯录', '运维', '设置']) {
+    for (const label of [
+      '邮件',
+      '事项',
+      '今日',
+      '日历',
+      '通讯录',
+      '团队',
+      '报告',
+      '运维',
+      '设置'
+    ]) {
       clickCell(label)
       const last = navigate.mock.calls.at(-1)?.[0] as { to?: string; search?: unknown }
       calls.push(
         last?.search === undefined ? { to: last?.to } : { to: last?.to, search: last.search }
       )
     }
-    // 手写期望：search 缺省值也在这里钉死。
+    // 手写期望：search 缺省值也在这里钉死（过渡期 team / reports 共用 /agents，
+    // 靠 tab 区分落点）。
     expect(calls).toEqual([
-      { to: '/today' },
       { to: '/', search: { view: 'inbox' } },
-      { to: '/admin/calendar', search: { view: 'week' } },
       { to: '/matters' },
+      { to: '/today' },
+      { to: '/admin/calendar', search: { view: 'week' } },
       { to: '/contacts' },
+      { to: '/agents', search: { tab: 'agents' } },
+      { to: '/agents', search: { tab: 'reports' } },
       { to: '/admin/kanban' },
       { to: '/settings', search: { tab: 'general' } }
     ])
@@ -308,7 +327,9 @@ describe('IconRail ↔ nav registry 投影', () => {
   test('点当前域的格 = 折叠/展开二级栏，不导航（nav 域与 page 域同语义）', async () => {
     for (const [path, label] of [
       ['/', '邮件'],
-      ['/matters', '事项']
+      ['/matters', '事项'],
+      // 08-27 批：日历有二级栏（小月历）了，点当前格同样是开合。
+      ['/admin/calendar', '日历']
     ] as const) {
       const { container, router } = await renderShell(path)
       const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
@@ -325,47 +346,28 @@ describe('IconRail ↔ nav registry 投影', () => {
       cleanup()
     }
   })
-
-  test("second:'none' 域（日历）点当前格 = 重导航，不动折叠偏好", async () => {
-    const { container, router } = await renderShell('/admin/calendar')
-    const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
-    const cell = Array.from(container.querySelectorAll('[data-nav-rail] .nav-rail-cell')).find(
-      (c) => c.querySelector('.raillabel')?.textContent === '日历'
-    )!
-    fireEvent.click(cell)
-    expect(useNavCollapsed.getState().collapsed).toBe(false)
-    expect(navigate.mock.calls.at(-1)?.[0]).toMatchObject({ to: '/admin/calendar' })
-    navigate.mockRestore()
-  })
 })
 
 describe('DomainPanel ↔ nav registry 投影', () => {
   afterEach(() => cleanup())
-
-  test('邮件域：MAILBOXES 五行，顺序 = registry 投影 + 手写清单', async () => {
-    const { container } = await renderShell('/')
-    expect(panelRowLabels(container)).toEqual(MAIL_ROWS)
-    expect(panelRowLabels(container)).toEqual(projectedPanel('mail'))
-    // compose CTA 在场（域头下、行区上）。
-    expect(container.querySelector('[data-nav-panel] .app-nav-compose-btn')).toBeTruthy()
-  })
-
-  test('agents 域：registry 两行 + 报告 / Chats 轻量 tab 行', async () => {
-    const { container } = await renderShell('/agents')
-    expect(panelRowLabels(container)).toEqual([...projectedPanel('agents'), '报告', 'Chats'])
-    expect(panelRowLabels(container)).toEqual(['MailAgent', 'Custom Agent', '报告', 'Chats'])
-  })
 
   test('运维域：面板行 = registry 投影', async () => {
     const { container } = await renderShell('/admin/llm')
     expect(panelRowLabels(container)).toEqual(projectedPanel('ops'))
   })
 
-  // 0825 轮 3（owner 拍板）：所有域共用同一套「二级栏 + 折叠」模型，差别在
-  // registry NAV_DOMAINS.second —— 'nav' = DomainPanel；'page' = 页面清单列充当
-  // 二级栏（无 DomainPanel，但开合按钮在场）；'none' = 无二级栏（按钮同隐）。
-  test('page 域（事项/通讯录）：无 DomainPanel，rail 开合按钮在场', async () => {
-    for (const path of ['/matters', '/contacts'] as const) {
+  test('报告域（过渡期 /agents?tab=reports）：面板行 = registry 投影', async () => {
+    const { container } = await renderShell('/agents?tab=reports')
+    expect(panelRowLabels(container)).toEqual(projectedPanel('reports'))
+    expect(panelRowLabels(container)).toEqual(['报告'])
+  })
+
+  // 08-27 批：所有域恒有二级栏，差别只在 registry NAV_DOMAINS.second ——
+  // 'nav' = DomainPanel；'page' = 页面清单列充当二级栏（无 DomainPanel，但开合
+  // 按钮在场）。mail / chats 本批转 'page'（邮件列表 / 会话列表由页面自己出）；
+  // team（agents）过渡期留 'nav'（/agents 还是卡片网格，无自管左列）。
+  test('page 域（邮件/事项/通讯录/对话）：无 DomainPanel，rail 开合按钮在场', async () => {
+    for (const path of ['/', '/matters', '/contacts', '/sessions'] as const) {
       const { container } = await renderShell(path)
       expect(container.querySelector('[data-nav-panel]'), path).toBeNull()
       expect(container.querySelector('.nav-rail-toggle'), path).toBeTruthy()
@@ -373,13 +375,40 @@ describe('DomainPanel ↔ nav registry 投影', () => {
     }
   })
 
-  test('none 域（日历 / 今日）：无面板、无开合按钮', async () => {
-    for (const path of ['/admin/calendar', '/today'] as const) {
-      const { container } = await renderShell(path)
-      expect(container.querySelector('[data-nav-panel]'), path).toBeNull()
-      expect(container.querySelector('.nav-rail-toggle'), path).toBeNull()
-      cleanup()
-    }
+  test('团队域（过渡档 nav）：面板 = 简版智能体清单，点行落 /agents?tab=agents', async () => {
+    const { container, router } = await renderShell('/agents')
+    expect(container.querySelector('[data-nav-panel] [data-team-nav]')).toBeTruthy()
+    // 清单行 = useReportConfig 共享缓存里的 agent（名字进 .flex-1 主位）。
+    await waitFor(() => {
+      expect(panelRowLabels(container)).toEqual(['跟进员', '搜索助手'])
+    })
+    const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
+    fireEvent.click(container.querySelector('[data-team-nav] .row')!)
+    expect(navigate.mock.calls.at(-1)?.[0]).toEqual({
+      to: '/agents',
+      search: { tab: 'agents' }
+    })
+    navigate.mockRestore()
+  })
+
+  test('今日域：面板 = 当天五节跳转（TodayNavPanel）', async () => {
+    const { container } = await renderShell('/today')
+    expect(container.querySelector('[data-nav-panel] [data-today-nav]')).toBeTruthy()
+    expect(panelRowLabels(container)).toEqual([
+      '等你拍板',
+      '今天的会',
+      '待回邮件',
+      '临期事项',
+      '智能体产出'
+    ])
+  })
+
+  test('日历域：面板 = 小月历（CalendarMiniPanel，7 列头 + 42 格）', async () => {
+    const { container } = await renderShell('/admin/calendar')
+    const mini = container.querySelector('[data-nav-panel] [data-calendar-mini]')
+    expect(mini).toBeTruthy()
+    expect(mini!.querySelectorAll('.mm-dow')).toHaveLength(7)
+    expect(mini!.querySelectorAll('.mm-cell')).toHaveLength(42)
   })
 
   test('设置域：面板行 = 12 个 tab 直达行（词表单源 SETTINGS_TABS）+ 版本 footer', async () => {
@@ -398,35 +427,14 @@ describe('DomainPanel ↔ nav registry 投影', () => {
     )
   })
 
-  test('面板头 = 域名；邮件域头带账号位', async () => {
-    const { container } = await renderShell('/')
-    const header = container.querySelector('[data-nav-panel] .nav-panel-header')!
-    expect(header.textContent).toContain('邮件')
-    await waitFor(() => {
-      expect(header.textContent).toContain('lucien.chen')
-    })
+  test('面板头 = 域名', async () => {
+    const { container } = await renderShell('/today')
+    expect(container.querySelector('[data-nav-panel] .nav-panel-header')!.textContent).toContain(
+      '今日'
+    )
     cleanup()
     const { container: c2 } = await renderShell('/admin/llm')
     expect(c2.querySelector('[data-nav-panel] .nav-panel-header')!.textContent).toContain('运维')
-  })
-
-  test('邮件域逐行点击都落到自己的 view（search 钉死）', async () => {
-    const { container, router } = await renderShell('/')
-    const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
-    const calls: unknown[] = []
-    for (const row of Array.from(container.querySelectorAll('[data-nav-panel] .row'))) {
-      fireEvent.click(row)
-      const last = navigate.mock.calls.at(-1)?.[0] as { to?: string; search?: unknown }
-      calls.push({ to: last?.to, search: last?.search })
-    }
-    expect(calls).toEqual([
-      { to: '/', search: { view: 'inbox' } },
-      { to: '/', search: { view: 'outbox' } },
-      { to: '/', search: { view: 'drafts' } },
-      { to: '/', search: { view: 'flagged' } },
-      { to: '/', search: { view: 'all' } }
-    ])
-    navigate.mockRestore()
   })
 })
 

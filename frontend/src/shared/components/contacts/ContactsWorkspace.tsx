@@ -1,10 +1,9 @@
-// 通讯录双栏工作台（task 08-13 WP2）。骨架照 MattersWorkspace：列表列 280–560
-// 可拖宽（localStorage 持久化 + 拖拽中只写 CSS 变量零 re-render）+ 详情列
-// minmax(430px,1fr)；断点 **860px**（设计实测值，两处一致：grid 的
-// `max-[860px]:grid-cols-1` 与 WORKSPACE_STACKED_QUERY —— 镜像不猜数）；单列态
-// 折叠用 `hidden`（display:none 保滚动位）。
+// 通讯录双栏工作台（task 08-13 WP2）。列表列定宽 336px（task 08-27 P1 Lane C 续改：
+// 拖拽调宽体系退役，二级栏恒 336，切域时左列边界不动）+ 详情列 minmax(430px,1fr)；
+// 断点 **860px**（设计实测值，两处一致：grid 的 `max-[860px]:grid-cols-1` 与
+// WORKSPACE_STACKED_QUERY —— 镜像不猜数）；单列态折叠用 `hidden`（display:none 保滚动位）。
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { UsersRound } from 'lucide-react'
@@ -43,45 +42,16 @@ import {
 import { useContactKeyboardNav } from './useContactKeyboardNav'
 import { useContactNavigation } from './navigation'
 
-const CONTACT_LIST_WIDTH_STORAGE_KEY = 'mailagent.contacts.listWidth'
-const MIN_CONTACT_LIST_WIDTH = 280
-const MAX_CONTACT_LIST_WIDTH = 560
-const DEFAULT_CONTACT_LIST_WIDTH = 320
-const CONTACT_LIST_WIDTH_STEP = 16
-// 🔴 镜像下方 grid 的 `max-[860px]:grid-cols-1` 断点（设计实测值：列表最小 280 +
+// 🔴 镜像下方 grid 的 `max-[860px]:grid-cols-1` 断点（设计实测值：列表最小 336 +
 // 详情最小 430 + 收起态导航 52 才放得下双栏）。学 MattersWorkspace 的注释纪律：
 // 用同一个数字的两份拷贝必须互相指认，漂了两处会各说各话。
 const WORKSPACE_STACKED_QUERY = '(max-width: 860px)'
-/** 双栏骨架（config 加载中）与真实布局共用同一份 grid 类，几何不对就是白闪一下再跳版。 */
+/** 双栏骨架（config 加载中）与真实布局共用同一份 grid 类，几何不对就是白闪一下再跳版。
+ *  task 08-27 P1 Lane C 续改：清单列定宽 336px（左列总宽 392 = 导轨 56 + 二级栏 336）。 */
 const WORKSPACE_GRID_CLASS =
-  'grid h-full min-h-0 grid-cols-[var(--contact-list-width)_6px_minmax(430px,1fr)] max-[860px]:grid-cols-1'
-/** 0825 轮 3 —— 清单列被 nav shell 折叠收起时的单列变体（列表/把手 display:none 不参与轨道）。 */
+  'grid h-full min-h-0 grid-cols-[336px_minmax(430px,1fr)] max-[860px]:grid-cols-1'
+/** 0825 轮 3 —— 清单列被 nav shell 折叠收起时的单列变体（列表 display:none 不参与轨道）。 */
 const WORKSPACE_GRID_CLASS_COLLAPSED = 'grid h-full min-h-0 grid-cols-[minmax(430px,1fr)]'
-
-function clampListWidth(width: number): number {
-  return Math.min(MAX_CONTACT_LIST_WIDTH, Math.max(MIN_CONTACT_LIST_WIDTH, width))
-}
-
-function readListWidth(): number {
-  try {
-    if (typeof localStorage === 'undefined') return DEFAULT_CONTACT_LIST_WIDTH
-    const raw = localStorage.getItem(CONTACT_LIST_WIDTH_STORAGE_KEY)
-    if (raw === null) return DEFAULT_CONTACT_LIST_WIDTH
-    const persisted = Number(raw)
-    return Number.isFinite(persisted) ? clampListWidth(persisted) : DEFAULT_CONTACT_LIST_WIDTH
-  } catch {
-    return DEFAULT_CONTACT_LIST_WIDTH
-  }
-}
-
-function writeListWidth(width: number): void {
-  try {
-    if (typeof localStorage === 'undefined') return
-    localStorage.setItem(CONTACT_LIST_WIDTH_STORAGE_KEY, String(width))
-  } catch {
-    // localStorage 不可用 —— 本 session 内拖宽仍生效。
-  }
-}
 
 export function ContactsWorkspace(): React.ReactElement | null {
   const { t } = useTranslation()
@@ -111,7 +81,6 @@ export function ContactsWorkspace(): React.ReactElement | null {
   const [selectionMode, setSelectionMode] = useState(false)
   const [checkedIds, setCheckedIds] = useState<ReadonlySet<number>>(() => new Set())
   const [menuOpenId, setMenuOpenId] = useState<number | null>(null)
-  const [listWidth, setListWidth] = useState(readListWidth)
   /** WP3 合并入口状态：入口 ①（详情页发起，sourceId）或入口 ②（多选恰 2 条，pair）。
    *  WP7 的 merge 类建议采纳复用入口 ②（服务端只交回 id 对，合并仍走这条唯一人工路径）。 */
   const [mergeState, setMergeState] = useState<
@@ -123,15 +92,6 @@ export function ContactsWorkspace(): React.ReactElement | null {
   // 0825 轮 3 —— 清单列 = 通讯录域的「二级栏」（registry second:'page'），收起走 nav shell
   // 的同一个折叠状态；排除 forced 的理由同 MattersWorkspace（窄窗由 max-[860px] 自治）。
   const listPanelHidden = useNavCollapsed((s) => s.collapsed && !s.forced)
-  const workspaceGridRef = useRef<HTMLDivElement>(null)
-  const resizeDragRef = useRef<{
-    pointerId: number
-    startX: number
-    startWidth: number
-    currentWidth: number
-    previousCursor: string
-    previousUserSelect: string
-  } | null>(null)
 
   // 三个显示档位的写回：state 变了就落盘一次（写在 effect 里而不是 setter 里 —— state
   // updater 必须是纯函数，StrictMode 下会被调用两次）。
@@ -381,36 +341,11 @@ export function ContactsWorkspace(): React.ReactElement | null {
     if (selectedId !== null) setMergeState({ sourceId: selectedId, pair: null })
   }, [selectedId])
 
-  const finishListResize = useCallback((target: HTMLDivElement, pointerId: number): void => {
-    const drag = resizeDragRef.current
-    if (!drag || drag.pointerId !== pointerId) return
-    resizeDragRef.current = null
-    if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
-    document.body.style.cursor = drag.previousCursor
-    document.body.style.userSelect = drag.previousUserSelect
-    setListWidth(drag.currentWidth)
-    writeListWidth(drag.currentWidth)
-  }, [])
-
-  useEffect(
-    () => () => {
-      const drag = resizeDragRef.current
-      if (!drag) return
-      document.body.style.cursor = drag.previousCursor
-      document.body.style.userSelect = drag.previousUserSelect
-    },
-    []
-  )
-
   return (
-    <div
-      ref={workspaceGridRef}
-      className={listPanelHidden ? WORKSPACE_GRID_CLASS_COLLAPSED : WORKSPACE_GRID_CLASS}
-      style={{ '--contact-list-width': `${listWidth}px` } as React.CSSProperties}
-    >
+    <div className={listPanelHidden ? WORKSPACE_GRID_CLASS_COLLAPSED : WORKSPACE_GRID_CLASS}>
       <div
         className={cn(
-          'min-h-0',
+          'min-h-0 border-r border-ink-border',
           selectedId !== null && 'max-[860px]:hidden',
           listPanelHidden && 'hidden'
         )}
@@ -456,57 +391,6 @@ export function ContactsWorkspace(): React.ReactElement | null {
           pendingCount={agentStatus.data?.pending_count ?? 0}
           onOpenAgent={() => setAgentOpen(true)}
         />
-      </div>
-      <div
-        role="separator"
-        aria-label={t('contacts.list.resize')}
-        aria-orientation="vertical"
-        aria-valuemin={MIN_CONTACT_LIST_WIDTH}
-        aria-valuemax={MAX_CONTACT_LIST_WIDTH}
-        aria-valuenow={listWidth}
-        tabIndex={0}
-        className={cn(
-          'group relative z-10 cursor-col-resize touch-none outline-none max-[860px]:hidden',
-          listPanelHidden && 'hidden'
-        )}
-        onPointerDown={(event) => {
-          if (event.button !== 0) return
-          event.preventDefault()
-          event.currentTarget.setPointerCapture(event.pointerId)
-          resizeDragRef.current = {
-            pointerId: event.pointerId,
-            startX: event.clientX,
-            startWidth: listWidth,
-            currentWidth: listWidth,
-            previousCursor: document.body.style.cursor,
-            previousUserSelect: document.body.style.userSelect
-          }
-          document.body.style.cursor = 'col-resize'
-          document.body.style.userSelect = 'none'
-        }}
-        onPointerMove={(event) => {
-          const drag = resizeDragRef.current
-          if (!drag || drag.pointerId !== event.pointerId) return
-          const nextWidth = clampListWidth(drag.startWidth + event.clientX - drag.startX)
-          drag.currentWidth = nextWidth
-          // 🔴 拖拽中只写 CSS 变量不 setState（零 re-render 手法，照 MattersWorkspace）。
-          workspaceGridRef.current?.style.setProperty('--contact-list-width', `${nextWidth}px`)
-        }}
-        onPointerUp={(event) => finishListResize(event.currentTarget, event.pointerId)}
-        onPointerCancel={(event) => finishListResize(event.currentTarget, event.pointerId)}
-        onLostPointerCapture={(event) => finishListResize(event.currentTarget, event.pointerId)}
-        onKeyDown={(event) => {
-          if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
-          event.preventDefault()
-          const delta =
-            event.key === 'ArrowLeft' ? -CONTACT_LIST_WIDTH_STEP : CONTACT_LIST_WIDTH_STEP
-          const nextWidth = clampListWidth(listWidth + delta)
-          workspaceGridRef.current?.style.setProperty('--contact-list-width', `${nextWidth}px`)
-          setListWidth(nextWidth)
-          writeListWidth(nextWidth)
-        }}
-      >
-        <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-ink-border transition-colors group-hover:bg-coral/70 group-focus-visible:bg-coral/70" />
       </div>
       <div className={cn('min-h-0', selectedId === null && 'max-[860px]:hidden')}>
         {selectedId !== null ? (

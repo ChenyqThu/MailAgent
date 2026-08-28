@@ -16,7 +16,6 @@ import { useAIChatPanel, openMatterChat } from '@shared/state/ai-chat-panel'
 
 vi.mock('@shared/components/layout/TitleBar', () => ({ TitleBar: () => <div /> }))
 vi.mock('@shared/components/layout/Sidebar', () => ({ Sidebar: () => <div /> }))
-vi.mock('@shared/components/layout/StatusBar', () => ({ StatusBar: () => <div /> }))
 vi.mock('@shared/components/matters/MattersWorkspace', () => ({
   MattersWorkspace: () => <div data-testid="matters-workspace" />
 }))

@@ -86,7 +86,7 @@ export function mailboxForView(view: EmailView): string | null {
 
 // 反向映射按判定集 —— 与 mailboxFilterLabels 同径: 列表既然认变体, 从搜索结果/
 // 日历抽屉点一条 mailbox='INBOX' 的行就该落到收件箱视图, 而不是退回「所有邮件」。
-// 存档 / 自定义文件夹仍落 'all' (它们没有内建视图, 由 SidebarFolderTree 承载)。
+// 存档 / 自定义文件夹仍落 'all' (它们没有内建视图, 由列表头的文件夹选择器承载)。
 export function viewForMailbox(mailbox: string | null | undefined): EmailView {
   if (isInboxMailbox(mailbox)) return 'inbox'
   if (isSentMailbox(mailbox)) return 'outbox'

@@ -16,9 +16,11 @@
 // Sprint 18 review 的既有结论) + 中行 `flex flex-1 min-h-0`。
 
 import { Sidebar } from './Sidebar'
-import { StatusBar } from './StatusBar'
 import { TitleBar } from './TitleBar'
 
+// 08-27 标签工作区批：底部 StatusBar（24px 六段 footer）随原型退役 —— sync 段迁
+// rail 底部状态点（IconRail），更新指示本就在 TitleBar 的 UpdateIndicator，版本号
+// 在设置域面板 footer；其余段是纯展示，随组件删。
 export function AppShell({ children }: { children: React.ReactNode }): React.ReactElement {
   return (
     <div className="flex flex-col h-full text-ink-fg">
@@ -27,7 +29,6 @@ export function AppShell({ children }: { children: React.ReactNode }): React.Rea
         <Sidebar />
         {children}
       </div>
-      <StatusBar />
     </div>
   )
 }

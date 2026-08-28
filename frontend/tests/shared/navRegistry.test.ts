@@ -85,6 +85,7 @@ describe('nav registry — 条目自身的不变量', () => {
       'calendar',
       'matters',
       'agents',
+      'reports',
       'llm',
       'contacts',
       'settings'
@@ -98,6 +99,17 @@ describe('nav registry — 条目自身的不变量', () => {
       if (entry.gate === 'never') continue
       expect(entry.to, `${entry.id} 没有 to`).toBeTruthy()
     }
+  })
+
+  // 08-27 批：邮件域的 MAILBOXES 行搬到列表头的文件夹下拉（FolderMenu / EmailListHeader），
+  // 那两处按 `NAV_ENTRIES` 投影 —— 它们不是组件树里能拿到 `useVisibleNavEntries()` 的位置
+  // （EmailListHeader 的投影是模块级常量）。等价的前提就是这一条：邮件五视图全都恒在。
+  // 🔴 给其中任何一条加门控（如把草稿箱挂到 DRAFTS_SYNC_ENABLED），这条会红 —— 那时要把
+  // 两处投影改成吃门控过滤后的集合，否则下拉会渲染出该隐藏的行。
+  test('邮件五视图恒 gate:always（列表头下拉按未过滤的 NAV_ENTRIES 投影）', () => {
+    const mail = NAV_ENTRIES.filter((e) => e.domain === 'mail')
+    expect(mail.length).toBe(5)
+    expect(mail.filter((e) => e.gate !== 'always')).toEqual([])
   })
 })
 
@@ -189,11 +201,11 @@ describe('nav registry — i18n key 在两个 locale 都在', () => {
 })
 
 describe('nav registry — 域推导（导轨选中格 = 面板域）', () => {
-  test('每条路由归它该归的域；/sessions 无导轨格但归 agents 域', () => {
+  test('每条路由归它该归的域；/sessions 归 chats 域（08-27 批从 agents 拆出）', () => {
     const cases: ReadonlyArray<[string, NavDomain]> = [
       ['/', 'mail'],
       ['/today', 'today'],
-      ['/sessions', 'agents'],
+      ['/sessions', 'chats'],
       ['/agents', 'agents'],
       ['/matters', 'matters'],
       ['/contacts', 'contacts'],
@@ -206,6 +218,14 @@ describe('nav registry — 域推导（导轨选中格 = 面板域）', () => {
     for (const [pathname, domain] of cases) {
       expect(navActiveDomain(NAV_ENTRIES, pathname), pathname).toBe(domain)
     }
+  })
+
+  test('过渡期 /agents 按 ?tab= 细分：reports 归报告域，其余归团队（agents）域', () => {
+    expect(navActiveDomain(NAV_ENTRIES, '/agents', 'reports')).toBe('reports')
+    expect(navActiveDomain(NAV_ENTRIES, '/agents', 'agents')).toBe('agents')
+    expect(navActiveDomain(NAV_ENTRIES, '/agents', 'chats')).toBe('agents')
+    // 无 searchTab（validateSearch 之外的调用面）回落缺省归属域。
+    expect(navActiveDomain(NAV_ENTRIES, '/agents')).toBe('agents')
   })
 })
 

@@ -16,9 +16,9 @@
 //   1. settings.notionAgentName, if it contains '@'
 //   2. Fallback 'me@local'
 //
-// When the backend grows a `mail_accounts` table the AccountSwitcherPopover
-// renders a real list — but the per-row shape is still `deriveAccount(email)`,
-// so the helper stays unchanged.
+// When the backend grows a `mail_accounts` table, whatever surface lists
+// accounts（原 AccountSwitcherPopover 已随 08-27 P1 邮件域面板退役删除）still
+// renders per-row via `deriveAccount(email)`, so the helper stays unchanged.
 
 export interface DerivedAccount {
   /** Local-part of the email (left of @). E.g. 'lucien.chen'. */

@@ -100,31 +100,11 @@ describe('二值筛选轴', () => {
     expect(useEmailFilter.getState().customMailboxPath).toEqual(['A', 'ProjectX'])
   })
 
-  test('focusUnread 切视图并只留 unread —— 单次 set，其余轴归零', () => {
-    const s = useEmailFilter.getState()
-    s.toggleBool('failed')
-    s.toggleBool('hasAttach')
-    s.toggleFlagMark('flagged')
-    s.setCustomMailbox('ProjectX', ['ProjectX'])
-
-    useEmailFilter.getState().focusUnread('inbox')
-
-    const next = useEmailFilter.getState()
-    expect(axesOf(next)).toEqual({ ...NO_FILTER_AXES, unread: true })
-    expect(next.view).toBe('inbox')
-    // 自定义文件夹必须让位，否则列表仍钉在 ProjectX 上、收件箱的未读一封也看不到。
-    expect(next.customMailbox).toBeNull()
-    expect(next.customMailboxPath).toEqual([])
-  })
-
-  test('🔴 focusUnread 不能拆成 setView + toggleBool —— setView 会把 unread 清掉', () => {
-    useEmailFilter.getState().setView('inbox')
-    useEmailFilter.getState().toggleBool('unread')
-    expect(useEmailFilter.getState().unread).toBe(true)
-    // 顺序反过来（先开轴再切视图）就是 focusUnread 存在的理由：
-    useEmailFilter.getState().setView('inbox')
-    expect(useEmailFilter.getState().unread).toBe(false)
-  })
+  // 原来这里还有两条 `focusUnread` 专测（侧边栏未读徽标点击 = 切视图 + 只开 unread
+  // 轴）。08-27 标签工作区批：内建视图行搬进列表头下拉、下拉不显计数，那个快捷入口
+  // 随之退役，action 一并删 —— 「只看未读」的可达路径是筛选菜单里的独立筛选项。
+  // 上面「切视图 / 切自定义文件夹归零二值轴」那条已覆盖 setView 的清轴语义（列表头
+  // 的 selectView 就压在它上面），不留恒绿的空壳测。
 })
 
 describe('hasActiveFilter', () => {

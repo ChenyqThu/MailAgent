@@ -206,20 +206,19 @@ describe('ContactsWorkspace · 渲染放大', () => {
     expect(detailRenders.count).toBe(detailBefore)
   })
 
-  test('workspace 自己重渲染（拖宽列表列）也不带着可见行重渲染', async () => {
+  test('workspace 自己重渲染（打开治理台）也不带着可见行重渲染', async () => {
     // 🔴 这条与上面那条钉的是**两处不同的修复**：上面钉「敲字不再惊动 workspace」，这条钉
     // 「workspace 真的重渲染时，rowProps 的浅比较仍然拦得住」——后者要求 `actions` /
     // `onToggleGroup` 是稳定引用（v5 的 useMutation 返回对象放进依赖数组就恒失效）。
-    // 拖宽只改 `listWidth`，与行数据无关，是最干净的「无关重渲染」触发器。
+    // task 08-27 P1 Lane C（续改）—— 拖拽调宽体系退役，原来的拖宽触发器随之退役；改用
+    // 「打开治理台」（`agentOpen` 状态切换，`ContactAgentDrawer` 已桩成 null）：与行数据
+    // 无关的纯 workspace 自身 re-render 触发器。
     renderWorkspace()
     await waitFor(() => expect(rowRenders.count).toBeGreaterThan(0))
-    const separator = screen.getByRole('separator', { name: '拖动调整列表宽度' })
     const rowsBefore = rowRenders.count
 
-    fireEvent.keyDown(separator, { key: 'ArrowRight' })
-    fireEvent.keyDown(separator, { key: 'ArrowRight' })
+    fireEvent.click(screen.getByRole('button', { name: 'Agent' }))
 
-    expect(separator.getAttribute('aria-valuenow')).not.toBe('320')
     expect(rowRenders.count).toBe(rowsBefore)
   })
 

@@ -551,7 +551,7 @@ export function FolderPicker(): React.ReactElement {
   // 正在执行 cleanup 的 imap_name (null = 无), 同时禁用两按钮防重复。
   const [cleanupBusy, setCleanupBusy] = React.useState<string | null>(null)
 
-  // discover 走 React Query, 与 SidebarFolderTree 共用 ['folder','discover'] 缓存 (counts
+  // discover 走 React Query, 与 useSyncedFolderTree 共用 ['folder','discover'] 缓存 (counts
   // 一致) → 重进设置页命中缓存零请求, 只在 staleTime(10min) 过期 / 手动刷新 / CRUD
   // invalidate 时才重打 IMAP LIST。env 门控时 enabled=false 不发请求 (gated 由渲染期
   // envGated 短路)。retry:false 让 E_INVALID_ARG 立即落到 error → 兜底门控。无
@@ -562,7 +562,7 @@ export function FolderPicker(): React.ReactElement {
     queryKey: qk.folder.discover(),
     // refresh:true — 文件夹管理是「要拿 Exchange 真实状态」的消费者: 每次真正发出的
     // 请求 (首拉 staleTime 过期 / 手动刷新 refetch / CRUD 后 invalidate) 都穿透
-    // serve-api 的 60s TTL 缓存。SidebarFolderTree 同 key 但 refresh 缺省 false 吃
+    // serve-api 的 60s TTL 缓存。useSyncedFolderTree 同 key 但 refresh 缺省 false 吃
     // 缓存 —— react-query 按发起 fetch 的 observer 取 queryFn, 两个消费点互不干扰。
     queryFn: () => mailApi.folder.discover({ counts: false, refresh: true }),
     enabled: !envGated,
@@ -714,7 +714,7 @@ export function FolderPicker(): React.ReactElement {
       toastSuccess(t('settings.folder.picker.saveOk', { defaultValue: '文件夹白名单已保存' }))
       // 保存后重置所有 pending 清理提示 (whitelist 已更新, 旧提示失效)。
       setCleanupPrompts(new Set())
-      // 失效共享 folder 缓存 → SidebarFolderTree 的 ['folder','whitelist'] /
+      // 失效共享 folder 缓存 → useSyncedFolderTree 的 ['folder','whitelist'] /
       // ['folder','discover'] 重拉, 否则其 staleTime(30s / 5min) 内滞后。
       void qc.invalidateQueries({ queryKey: qk.folder.all() })
     } catch (e) {

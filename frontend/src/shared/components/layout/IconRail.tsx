@@ -22,6 +22,7 @@ import {
 } from '@shared/components/icons'
 import {
   NAV_DOMAINS,
+  NAV_OBJECT_DOMAINS,
   navDomainLabel,
   navRailEntries,
   type NavBadgeKind,
@@ -122,6 +123,10 @@ export interface IconRailProps {
   badgeValue: Record<NavBadgeKind, number>
   monogram: string
   accountTitle: string
+  /** 底部同步状态点（StatusBar 退役后 sync 段唯一的常驻落位，原型 railfoot `.sync`）。
+   *  dotClass = Tailwind bg-* 色类；title = 完整状态描述（OS tooltip）。 */
+  syncDotClass: string
+  syncTitle: string
   /** 面板收起态（RailToggle 的图标方向 + aria）。 */
   panelCollapsed: boolean
   /** <lg 视口强制收起时为 false —— 那里的收起不可解除，按钮只会空翻偏好。 */
@@ -138,6 +143,8 @@ export function IconRail({
   badgeValue,
   monogram,
   accountTitle,
+  syncDotClass,
+  syncTitle,
   panelCollapsed,
   showPanelToggle,
   onPanelToggle,
@@ -148,6 +155,10 @@ export function IconRail({
   const { t } = useTranslation()
   const cells = navRailEntries(entries)
   const top = cells.filter((e) => !BOTTOM_DOMAINS.includes(e.domain))
+  // 对象域（邮件 / 事项）与页面域之间隔一条分隔线（原型 railsep）—— 前者点开
+  // 对象标签，后者轮流占用主标签，rail 上把这两种语义分开。
+  const objectCells = top.filter((e) => NAV_OBJECT_DOMAINS.includes(e.domain))
+  const pageCells = top.filter((e) => !NAV_OBJECT_DOMAINS.includes(e.domain))
   const bottom = cells.filter((e) => BOTTOM_DOMAINS.includes(e.domain))
 
   const renderCell = (entry: NavEntry): React.ReactElement => (
@@ -171,13 +182,24 @@ export function IconRail({
           onClick={onAvatarClick}
           title={accountTitle}
           aria-label={accountTitle}
-          aria-haspopup="menu"
         >
           {monogram}
         </button>
       </div>
-      <div className="nav-rail-cells">{top.map(renderCell)}</div>
+      <div className="nav-rail-cells">
+        {objectCells.map(renderCell)}
+        {objectCells.length > 0 && pageCells.length > 0 && (
+          <div className="nav-rail-sep" aria-hidden />
+        )}
+        {pageCells.map(renderCell)}
+      </div>
       <div className="nav-rail-bottom">
+        <span
+          className={`nav-rail-sync ${syncDotClass}`}
+          title={syncTitle}
+          role="status"
+          aria-label={syncTitle}
+        />
         {showPanelToggle && <RailToggle collapsed={panelCollapsed} onToggle={onPanelToggle} />}
         {bottom.map(renderCell)}
       </div>

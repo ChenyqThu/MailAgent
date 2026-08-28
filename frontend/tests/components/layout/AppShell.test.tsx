@@ -2,17 +2,17 @@
 //
 // AppShell 外壳单例 (task 08-20-perf-shell-prefetch-sidebar §②)。
 //
-// 覆盖三条本批真正改掉的行为:
-//   1. AppShell 结构: TitleBar + 中行(Sidebar + children) + StatusBar, children 是
-//      中行的直接 flex item (dock 挤压正文的前提)。
+// 覆盖三条行为 (08-27 标签工作区批: 底部 StatusBar 退役, 壳只剩 TitleBar + 中行):
+//   1. AppShell 结构: TitleBar + 中行(Sidebar + children), children 是中行的直接
+//      flex item (dock 挤压正文的前提)。
 //   2. 🔴 路由切换 Sidebar 不 remount: root 层 AppShell + <Outlet/> 的接线下, 导航
 //      只换内容区 —— Sidebar mount 恰一次、DOM 节点身份不变 (老架构每路由各渲染
 //      一份壳, 每次导航 mount 计数 +1)。
-//   3. PageFrame 已退化为纯内容容器: 不再渲染任何壳 (data-app-nav / TitleBar /
-//      StatusBar 都不该出现)。
+//   3. PageFrame 已退化为纯内容容器: 不再渲染任何壳 (data-app-nav / TitleBar
+//      都不该出现)。
 //
-// TitleBar/Sidebar/StatusBar mock 成带 mount 探针的轻量 stub —— 本测试测的是**接线
-// 拓扑**(谁挂在哪、挂几次), 不是三个组件自身的渲染 (它们各有专测)。
+// TitleBar/Sidebar mock 成带 mount 探针的轻量 stub —— 本测试测的是**接线
+// 拓扑**(谁挂在哪、挂几次), 不是组件自身的渲染 (它们各有专测)。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
@@ -38,9 +38,6 @@ vi.mock('@shared/components/layout/Sidebar', () => ({
 vi.mock('@shared/components/layout/TitleBar', () => ({
   TitleBar: () => <header data-testid="stub-titlebar" />
 }))
-vi.mock('@shared/components/layout/StatusBar', () => ({
-  StatusBar: () => <footer data-testid="stub-statusbar" />
-}))
 
 import { AppShell } from '@shared/components/layout/AppShell'
 import { PageFrame } from '@shared/components/layout/PageFrame'
@@ -49,14 +46,15 @@ beforeEach(() => sidebarMounts.mockClear())
 afterEach(() => cleanup())
 
 describe('AppShell — 结构', () => {
-  test('TitleBar + 中行(Sidebar + children) + StatusBar; children 是中行直接子节点', () => {
+  test('TitleBar + 中行(Sidebar + children); children 是中行直接子节点、无底部 footer', () => {
     const { container } = render(
       <AppShell>
         <div data-testid="content">hi</div>
       </AppShell>
     )
     expect(screen.getByTestId('stub-titlebar')).toBeTruthy()
-    expect(screen.getByTestId('stub-statusbar')).toBeTruthy()
+    // 08-27 批: StatusBar 退役 — 壳里不该再有 footer。
+    expect(container.querySelector('footer')).toBeNull()
     const content = screen.getByTestId('content')
     const row = content.parentElement!
     // children 与 Sidebar 同为中行的直接子节点 (dock sidebar 模式挤压正文的前提)。
@@ -116,7 +114,7 @@ describe('AppShell + Outlet — 路由切换外壳不 remount', () => {
 })
 
 describe('PageFrame — 退化为纯内容容器 (§② 之后不再渲染壳)', () => {
-  test('只渲染 <main> + rightDock, 不再有 TitleBar/Sidebar/StatusBar', () => {
+  test('只渲染 <main> + rightDock, 不再有 TitleBar/Sidebar', () => {
     const { container } = render(
       <PageFrame ariaLabel="probe" rightDock={<div data-testid="dock" />}>
         <div data-testid="content" />
@@ -124,7 +122,6 @@ describe('PageFrame — 退化为纯内容容器 (§② 之后不再渲染壳)',
     )
     expect(screen.queryByTestId('stub-titlebar')).toBeNull()
     expect(screen.queryByTestId('stub-sidebar')).toBeNull()
-    expect(screen.queryByTestId('stub-statusbar')).toBeNull()
     const main = container.querySelector('main[aria-label="probe"]')!
     expect(main).toBeTruthy()
     expect(main.contains(screen.getByTestId('content'))).toBe(true)

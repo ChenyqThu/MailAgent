@@ -289,7 +289,7 @@ export function planInvalidation(
     // folder writes (perf-sse-realtime R1-2) — CRUD/cleanup in mail_write.py +
     // folder_pref upsert/rename/delete in sync_store.py. Replaces the dead
     // 'folder.synced' subscription (its src/folder_sync/ publisher was retired,
-    // leaving SidebarFolderTree's SSE-gated poll with no event to lean on).
+    // leaving useSyncedFolderTree's SSE-gated poll with no event to lean on).
     // ['folder'] prefix covers discover / whitelist / prefs.
     case 'folder.changed':
       return [{ kind: 'key', key: ['folder'] }]

@@ -442,13 +442,16 @@ describe('MattersWorkspace — flag off', () => {
   })
 })
 
-describe('MattersWorkspace — resizable matter list', () => {
-  test('restores, drags, clamps, and persists the list width', async () => {
-    window.localStorage.setItem('mailagent.matters.listWidth', '400')
+// task 08-27 P1 Lane C（续改）—— 拖拽调宽体系整体退役：清单列不再可拖，恒 336px（左列
+// 总宽 392 = 导轨 56 + 二级栏 336），切域时左列边界不动。原「resizable matter list」
+// 三条测试（拖拽 / 键盘步进 / 宽窗默认宽度）随被测能力一起删除，改钉「没有拖拽把手、
+// 宽度恒 336」这条新不变量。
+describe('MattersWorkspace — fixed-width matter list (drag-to-resize retired)', () => {
+  test('no resize handle is rendered and the list column is a fixed 336px track', async () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
     })
-    render(
+    const { container } = render(
       <QueryClientProvider client={client}>
         <MattersWorkspace />
       </QueryClientProvider>
@@ -456,74 +459,15 @@ describe('MattersWorkspace — resizable matter list', () => {
 
     // M1（v3 信息架构）：左轨视图列已退役，进列表 = 点「事项」tab（默认落看板）。
     fireEvent.click(await screen.findByRole('tab', { name: '事项' }))
-    const separator = screen.getByRole('separator', { name: '调整事项清单宽度' })
-    const grid = separator.parentElement as HTMLDivElement
-    expect(grid.style.getPropertyValue('--matter-list-width')).toBe('400px')
+    expect(await screen.findByText('Vendor launch')).toBeTruthy()
 
-    let capturedPointer: number | null = null
-    separator.setPointerCapture = vi.fn((pointerId: number) => {
-      capturedPointer = pointerId
-    })
-    separator.hasPointerCapture = vi.fn((pointerId: number) => capturedPointer === pointerId)
-    separator.releasePointerCapture = vi.fn(() => {
-      capturedPointer = null
-    })
+    expect(screen.queryByRole('separator', { name: '调整事项清单宽度' })).toBeNull()
 
-    // E10①（dogfood 轮 2）—— 拖拽上限从 480 提到 560（见 MattersWorkspace.MAX_MATTER_LIST_WIDTH）。
-    fireEvent.pointerDown(separator, { button: 0, clientX: 400, pointerId: 7 })
-    fireEvent.pointerMove(separator, { clientX: 900, pointerId: 7 })
-    expect(grid.style.getPropertyValue('--matter-list-width')).toBe('560px')
-    expect(window.localStorage.getItem('mailagent.matters.listWidth')).toBe('400')
-    expect(document.body.style.cursor).toBe('col-resize')
-    expect(document.body.style.userSelect).toBe('none')
-
-    fireEvent.pointerUp(separator, { pointerId: 7 })
-    await waitFor(() => expect(separator.getAttribute('aria-valuenow')).toBe('560'))
-    expect(window.localStorage.getItem('mailagent.matters.listWidth')).toBe('560')
-    expect(document.body.style.cursor).toBe('')
-    expect(document.body.style.userSelect).toBe('')
-  })
-
-  test('supports keyboard resizing', async () => {
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
-    })
-    render(
-      <QueryClientProvider client={client}>
-        <MattersWorkspace />
-      </QueryClientProvider>
-    )
-
-    // M1（v3 信息架构）：左轨视图列已退役，进列表 = 点「事项」tab（默认落看板）。
-    fireEvent.click(await screen.findByRole('tab', { name: '事项' }))
-    const separator = screen.getByRole('separator', { name: '调整事项清单宽度' })
-    fireEvent.keyDown(separator, { key: 'ArrowLeft' })
-
-    // E10①—— 无持久化宽度时的起点镜像 design `listWidthFor`：happy-dom 默认视口 1024px
-    // < 1440 → 336（窄档），ArrowLeft 一步 -16 → 320。
-    expect(separator.getAttribute('aria-valuenow')).toBe('320')
-    expect(window.localStorage.getItem('mailagent.matters.listWidth')).toBe('320')
-  })
-
-  test('E10①：窗口 ≥1440px 时首次进入的默认宽度是 380（design listWidthFor 宽档）', async () => {
-    const originalWidth = window.innerWidth
-    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true })
-    try {
-      const client = new QueryClient({
-        defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
-      })
-      render(
-        <QueryClientProvider client={client}>
-          <MattersWorkspace />
-        </QueryClientProvider>
-      )
-      // M1（v3 信息架构）：左轨视图列已退役，进列表 = 点「事项」tab（默认落看板）。
-      fireEvent.click(await screen.findByRole('tab', { name: '事项' }))
-      const separator = screen.getByRole('separator', { name: '调整事项清单宽度' })
-      expect(separator.getAttribute('aria-valuenow')).toBe('380')
-    } finally {
-      Object.defineProperty(window, 'innerWidth', { value: originalWidth, configurable: true })
-    }
+    const grid = container.querySelector('.grid') as HTMLDivElement | null
+    expect(grid).toBeTruthy()
+    expect(grid?.className).toContain('grid-cols-[336px_minmax(420px,1fr)]')
+    // 拖拽体系连带的 CSS 变量写面也一并退役——不该再有任何组件往这个变量上写值。
+    expect(grid?.style.getPropertyValue('--matter-list-width')).toBe('')
   })
 })
 
@@ -547,7 +491,7 @@ describe('MattersWorkspace — tags are a filter facet, not a nav rail (V3-04)',
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
     })
-    render(
+    const { container } = render(
       <QueryClientProvider client={client}>
         <MattersWorkspace />
       </QueryClientProvider>
@@ -558,20 +502,21 @@ describe('MattersWorkspace — tags are a filter facet, not a nav rail (V3-04)',
     await waitFor(() => expect(mattersApi.listTags).toHaveBeenCalled())
     // 菜单未打开时**列表面**里没有任何标签控件（没有导航轨）。
     //
-    // 🔴 取景范围收窄到列表面本身（分隔条 `role="separator"` 的前一个兄弟节点，即
-    // `<MatterList>` 的挂载点），不是整个 render：V3-11 起冷启动「无记录 → 选第一条」会
+    // 🔴 取景范围收窄到列表面本身，不是整个 render：V3-11 起冷启动「无记录 → 选第一条」会
     // 自动选中这里唯一的事项，详情栏随之渲染真实的 `MatterDetail` —— 它在标签区（轮 3
     // 保留下来的「标签只在详情页与设置里」结论）合法地渲染标签 chip + 添加标签按钮，
     // 若断言查询整个页面会被这段合法 UI 误伤。这条闸本身要测的是「标签不许以导航面/
     // 常驻轨的形态回到**列表**」，`MatterDetail` 里的标签编辑从来不在它的管辖范围。
-    const separator = screen.getByRole('separator', { name: '调整事项清单宽度' })
-    const listPane = separator.previousElementSibling as HTMLElement
-    // 🔴 锚点自证：`previousElementSibling` 是基于 DOM 相邻位置的定位——如果将来有人在
-    // 列表与分隔条之间插进任何一个元素（wrapper / 提示条 / portal 容器），它会静默指向
-    // 别的节点，下面两条 `queryByText`/`queryByRole` 断言会在**错误的空节点**里查不到东西、
-    // 照样通过，闸从「守卫」退化成「恒绿」且没人发现。用 `MatterList` 自己独有、必然已挂载
-    // 的搜索框（`matters.list.searchInView` 占位符，含固定的「搜索」二字，不随 scope 名变）
-    // 做前置断言：指错了就在这里先红，不会带着错误锚点往下跑出一个假绿。
+    //
+    // task 08-27 P1 Lane C（续改）—— 拖拽把手退役后，原来「分隔条 `previousElementSibling`」
+    // 那个锚点也随之退役：改用二级栏 grid 的第一个子节点定位列表面。`.grid` 在这棵渲染树里
+    // 唯一：`querySelector` 走文档序，这个顶层 grid 是列表/详情两栏的共同祖先，必然先于
+    // `MatterDetail` 内部任何嵌套的 `grid` 类节点被命中。
+    const workspaceGrid = container.querySelector('.grid') as HTMLElement
+    const listPane = workspaceGrid.children[0] as HTMLElement
+    // 🔴 锚点自证：用 `MatterList` 自己独有、必然已挂载的搜索框（`matters.list.searchInView`
+    // 占位符，含固定的「搜索」二字，不随 scope 名变）做前置断言——指错了就在这里先红，
+    // 不会带着错误锚点往下跑出一个假绿。
     expect(within(listPane).getByPlaceholderText(/搜索/)).toBeTruthy()
     expect(within(listPane).queryByRole('button', { name: '合规' })).toBeNull()
     expect(within(listPane).queryByText('标签')).toBeNull()

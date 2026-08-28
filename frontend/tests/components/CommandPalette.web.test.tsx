@@ -6,7 +6,7 @@
 // LLM key lives on the desktop), so the palette must NOT surface the doomed
 // "AI 理解…" entry row. The gate is a module-level `IS_WEB` constant derived
 // from `import.meta.env.VITE_BUILD_TARGET` (the project-wide web/desktop
-// signal, see factory.ts / StatusBar.tsx / EnvField.tsx). Because that constant
+// signal, see factory.ts / EnvField.tsx). Because that constant
 // is evaluated at module load, this lives in its own file so we can stub the
 // env BEFORE importing the component (dynamic import after vi.stubEnv).
 

@@ -51,10 +51,15 @@
       "toMe": "收件人是我",
       "hasAttach": "具有附件"
     },
-    "folderCrumb": {
-      "aria": "文件夹路径"
+    "folder": {
+      "trigger": "切换文件夹",
+      "menuAria": "文件夹",
+      "pin": "固定到列表头",
+      "unpin": "取消固定",
+      "pinNamed": "把「{name}」固定到列表头",
+      "unpinNamed": "把「{name}」从列表头取消固定",
+      "pinLimit": "列表头最多固定 {count} 个文件夹"
     },
-    "resizeHandle": "调整列表宽度",
     "priority": {
       "critical": "紧急",
       "urgent": "紧迫",
@@ -545,7 +550,8 @@
       "todayMeta": "等我处理的事",
       "mattersMeta": "事项工作台",
       "calendarMeta": "日程与会议",
-      "customAiMeta": "Agents · 报告 · Chats",
+      "customAiMeta": "智能体团队 · 配置与运行",
+      "reportsMeta": "日报 · 周报 · 自定义产出",
       "llmMeta": "分类与用量",
       "settingsMeta": "偏好与账户"
     },
@@ -700,6 +706,9 @@
     },
     "domain": {
       "mail": "邮件",
+      "chats": "对话",
+      "team": "团队",
+      "reports": "报告",
       "ops": "运维"
     },
     "composeNew": "写邮件",
@@ -709,7 +718,6 @@
     "drafts": "草稿箱",
     "flagged": "已标旗",
     "allMail": "所有邮件",
-    "showUnreadOnly": "只看未读",
     "aiSessions": "AI 会话历史",
     "agentView": "MailAgent",
     "connectors": "Connectors",
@@ -722,14 +730,9 @@
     "expandAria": "展开导航",
     "online": "在线",
     "account": {
-      "add": "添加账户...",
       "tooltip": "{email} — 切换账户"
     },
     "folderTree": {
-      "expand": "展开",
-      "collapse": "收起",
-      "showMore": "展开更多（+{count}）",
-      "showLess": "折叠",
       "disabledTip": "等待文件夹信息加载后可点击"
     }
   },
@@ -4156,13 +4159,6 @@
     }
   },
   "statusbar": {
-    "version": "v{version}",
-    "synced": "已同步",
-    "mailbox": "邮箱",
-    "llm": "llm",
-    "theme": "主题",
-    "llmIdle": "空闲",
-    "updateReady": "更新就绪",
     "sync": {
       "label": "同步",
       "live": "实时",
@@ -4176,15 +4172,6 @@
       "tooltipFallback": "SSE 断线;每 {seconds}s 兜底拉取",
       "tooltipFallbackOff": "SSE 断线;兜底轮询已关 (设置 → 实时事件)",
       "tooltipDisabled": "实时事件已禁用"
-    },
-    "remote": {
-      "label": "远程",
-      "on": "开",
-      "off": "关",
-      "tooltipOn": "serve-api 已启用 · {url}",
-      "tooltipOff": "远程访问已关闭",
-      "unconfigured": "未配置",
-      "tooltipUnconfigured": "远程访问已开启但缺 CF_AUDIENCE，serve-api 不会启动"
     }
   },
   "titleBar": {
@@ -4229,6 +4216,9 @@
     "solid": "实色"
   },
   "agents": {
+    "nav": {
+      "allAgents": "全部智能体"
+    },
     "unread": "未读 Agent 运行",
     "title": "报告 Agents",
     "subtitle": "自动生成、可溯源的邮件报告。日报为主，周报 / 月报同引擎。",
@@ -5117,8 +5107,7 @@
       "searchInView": "在{view}中搜索…",
       "archived": "已归档",
       "trashDays": "回收站 · {count} 天后清除",
-      "dueRelative": "{value}到期",
-      "resize": "调整事项清单宽度"
+      "dueRelative": "{value}到期"
     },
     "nextAction": {
       "action": "{title}",
@@ -6435,8 +6424,7 @@
       "title": "通讯录"
     },
     "list": {
-      "count": "{count} 人",
-      "resize": "拖动调整列表宽度"
+      "count": "{count} 人"
     },
     "view": {
       "known": "往来的人",
@@ -6901,6 +6889,15 @@
   },
   "today": {
     "kicker": "TODAY",
+    "nav": {
+      "groupNeedYou": "需要你",
+      "groupNext": "接下来",
+      "decide": "等你拍板",
+      "meet": "今天的会",
+      "reply": "待回邮件",
+      "due": "临期事项",
+      "out": "智能体产出"
+    },
     "title": "例外面",
     "subtitle": "{count} 条等你看一眼",
     "subtitleLoading": "正在汇总…",
