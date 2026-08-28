@@ -5,7 +5,7 @@
 //   ① 切 tab 在**本地**过滤同一份数据（列表查询不带 category —— 加载体验批把按 tab 分
 //      查询收敛掉了，回退的表现是切 tab 又开始各自白屏）；
 //   ② hover 菜单点得动，Snooze 档位传的是前端算好的 epoch 毫秒（不是 preset 字符串）；
-//   ③ 条目点击按 link 型分流到对应的落地动作（report 走 store-intent + /agents?tab=reports）；
+//   ③ 条目点击按 link 型分流到对应的落地动作（report 直接落 /reports/$reportId）；
 //   ④ 首次加载渲染骨架行（不是一行「加载中」文字）。
 //
 // 数据层整块 mock 掉（`./hooks`）：这些事都与真实请求无关，接了真 fetch 只会把测试
@@ -108,7 +108,6 @@ vi.mock('@shared/components/notifications/hooks', () => ({
 
 const { NotificationPanel } =
   await import('../../src/shared/components/notifications/NotificationPanel')
-const { useReportNavigation } = await import('../../src/shared/components/agents/reportNavigation')
 
 await i18n.changeLanguage('zh-CN')
 
@@ -117,7 +116,6 @@ beforeEach(() => {
   hoisted.listState.items = null
   hoisted.listState.isPending = false
   hoisted.historyState.items = null
-  useReportNavigation.getState().clear()
 })
 
 afterEach(cleanup)
@@ -296,7 +294,10 @@ describe('NotificationPanel — 历史（已处理）视图', () => {
     fireEvent.click(screen.getByText('已处理的告警'))
 
     expect(hoisted.markRead).not.toHaveBeenCalled()
-    expect(hoisted.navigate).toHaveBeenCalledWith({ to: '/agents', search: { tab: 'reports' } })
+    expect(hoisted.navigate).toHaveBeenCalledWith({
+      to: '/reports/$reportId',
+      params: { reportId: 'daily-2026-08-21' }
+    })
     expect(onClose).toHaveBeenCalled()
   })
 
@@ -339,15 +340,19 @@ describe('NotificationPanel — 历史（已处理）视图', () => {
 })
 
 describe('NotificationPanel — 条目点击', () => {
-  test('report 型：标已读 + store-intent 点名报告 + 跳 /agents?tab=reports', () => {
+  // 08-27 P3：报告有了自己的路由，深链从「store-intent + 跳 /agents?tab=reports」
+  // 改成直接落 `/reports/$reportId` —— 报告 id 进 params，不再有中转 store。
+  test('report 型：标已读 + 直接跳 /reports/$reportId', () => {
     const onClose = vi.fn()
     render(<NotificationPanel onClose={onClose} />)
 
     fireEvent.click(screen.getByText('日报已生成'))
 
     expect(hoisted.markRead).toHaveBeenCalledWith(1)
-    expect(useReportNavigation.getState().targetReportId).toBe('daily-2026-08-21')
-    expect(hoisted.navigate).toHaveBeenCalledWith({ to: '/agents', search: { tab: 'reports' } })
+    expect(hoisted.navigate).toHaveBeenCalledWith({
+      to: '/reports/$reportId',
+      params: { reportId: 'daily-2026-08-21' }
+    })
     expect(onClose).toHaveBeenCalled()
   })
 })

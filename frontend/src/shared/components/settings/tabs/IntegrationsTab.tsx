@@ -63,7 +63,7 @@ function KosRequireLabeledDeadlockWarning(): React.ReactElement | null {
         })}{' '}
         <button
           type="button"
-          onClick={() => void navigate({ to: '/agents', search: { tab: 'agents' } })}
+          onClick={() => void navigate({ to: '/agents' })}
           className="underline underline-offset-2 hover:text-ink-fg cursor-pointer"
         >
           {t('settings.integrations.kos.requireLabeled.goToAgents', {

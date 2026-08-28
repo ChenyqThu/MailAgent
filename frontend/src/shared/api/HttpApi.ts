@@ -39,6 +39,8 @@ import type {
   ProjectProgressRunItem,
   AdminHealthData,
   AdminStatsData,
+  AgendaEntry,
+  AgendaOpts,
   AIFields,
   AttachmentMeta,
   BodyOpts,
@@ -656,6 +658,23 @@ export class HttpApi implements MailApi {
           source: opts.source,
           expandRecurrences: opts.expandRecurrences,
           limit: opts.limit
+        }
+      })
+      return data ?? []
+    },
+
+    // task 08-27 P3 — 三源聚合 (月视图 + 小月历色点)。C7: serve-api 把
+    // AgendaEntry[] 放进 envelope.data (total/window/sources 落 meta)。
+    // 🔴 path/query 与 Electron 侧 calendar:agenda handler (daemon_api 转发)
+    // 严格 mirror, 改 wire 时两处同步。
+    agenda: async (opts: AgendaOpts): Promise<AgendaEntry[]> => {
+      const data = await this.req<AgendaEntry[]>('GET', '/calendar/agenda', {
+        query: {
+          fromIso: opts.fromIso,
+          toIso: opts.toIso,
+          sources: opts.sources?.join(','),
+          calendarName: opts.calendarName,
+          tz: opts.tz
         }
       })
       return data ?? []

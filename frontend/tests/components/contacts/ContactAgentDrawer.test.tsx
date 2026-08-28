@@ -578,7 +578,7 @@ describe('ContactAgentDrawer · 脚部跳转', () => {
 
     expect(useAgentsNavigation.getState().targetAgentId).toBe('contact_governance_agent')
     expect(onOpenChange).toHaveBeenCalledWith(false)
-    expect(navigate).toHaveBeenCalledWith({ to: '/agents', search: { tab: 'agents' } })
+    expect(navigate).toHaveBeenCalledWith({ to: '/agents' })
   })
 })
 

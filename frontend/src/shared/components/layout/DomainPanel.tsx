@@ -4,8 +4,8 @@
 //     MAILBOXES / 文件夹树 / compose CTA / 账户 popover / agents tab 行；
 //   · today 域 = 当天五节跳转（TodayNavPanel）；calendar 域 = 小月历
 //     （CalendarMiniPanel）；agents（团队）域 = 简版智能体清单（TeamNavPanel，
-//     P1 过渡档，见 NAV_DOMAINS.agents 注释）；reports / ops / settings 仍是
-//     registry 投影行。
+//     P1 过渡档，见 NAV_DOMAINS.agents 注释）；ops / settings 仍是 registry 投影行
+//     （P3 起 reports 也转 'page'：报告清单列就是它的二级栏）。
 //
 // 08-27 dogfood 修正批：折叠能力整体移除 —— 面板恒在、恒 336，域头只剩域名。
 //

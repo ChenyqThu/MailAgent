@@ -135,8 +135,8 @@ export function useCalendarSyncStatus(): {
  *  选它, 避免后端残留的孤儿行 (端口配错期间用 fallback 假名 'calendar' 建的行带
  *  旧错, 字母序排在真实 '日历' 前) 被盲取 [0] → 指示灯误报常红. 后端
  *  clear_stale_errors 清孤儿根治; 此处兜底, 新孤儿出现也不误报.
- *  Toolbar sync-pill / Layout 副 status bar / CalendarViewEmpty 三处消费必须
- *  同源 (F19: 曾各写一遍, 孤儿行场景 sync-pill 绿 · status bar 红同屏矛盾). */
+ *  Layout 副 status bar / CalendarViewEmpty 两处消费必须同源 (F19: 曾各写一遍,
+ *  孤儿行场景两处一绿一红同屏矛盾; 08-27 P3 起工具条的 sync-pill 已退役). */
 export function pickSyncHead(
   syncStatus: CalendarSyncStateItem[] | undefined
 ): CalendarSyncStateItem | undefined {
@@ -168,6 +168,8 @@ export function useCalendarSyncTrigger(): {
     onSuccess: () => {
       toastSuccess(t('calendar.syncTriggered', '已触发日历同步'))
       void qc.invalidateQueries({ queryKey: CALENDAR_EVENTS_KEY })
+      // P3 — 三源聚合窗口 (月视图 + 小月历色点) 的 mail 源也来自刚同步的表。
+      void qc.invalidateQueries({ queryKey: qk.calendar.agenda() })
       void qc.invalidateQueries({ queryKey: CALENDAR_SYNC_STATUS_KEY })
     },
     onError: (err: unknown) => {
@@ -240,7 +242,7 @@ export function toIsoWithOffset(d: Date): string {
 }
 
 /** 把过去某时间格式化成 "刚刚 / N 秒前 / N 分钟前 / N 小时前 / N 天前".
- *  toolbar sync-pill 与 cal-card 副 status bar 共用, 保证语义一致.
+ *  cal-card 副 status bar 用 (08-27 P3 起工具条的 sync-pill 已退役).
  *
  *  i18n: 纯 function 不能用 useTranslation hook, 走 i18next module-level
  *  singleton ``i18n.t(...)``. 第二参 fallback 防 key 漏不破.

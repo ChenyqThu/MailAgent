@@ -1,8 +1,11 @@
-"""calendar 路由 — /api/calendar/* (6 读端点 + 6 写端点)。
+"""calendar 路由 — /api/calendar/* (7 读端点 + 6 写端点)。
 
 填充读端点 (handoff §2 + 阶段 2.1 P1-3 双向反查) + 远程手动同步触发
 (syncTrigger) + 阶段 3.1 (#11) 事件写路径 (create/update/delete/rsvp/replay):
   GET    /api/calendar/events             — eventsList   (→ CalendarEventOccurrence[])
+  GET    /api/calendar/agenda             — agendaList   (→ AgendaEntry[]; 月视图专用的
+                                            三源聚合: 邮箱日历 / 事项 / Agent 排程,
+                                            实现体 src/calendar_sync/agenda.py)
   GET    /api/calendar/events/{event_id}  — eventGet     (→ CalendarEventDetail | null, 404→null)
   GET    /api/calendar/email-link/{internal_id}
                                           — emailCalendarLink (→ EmailCalendarLink | null, 404→null)
@@ -189,6 +192,80 @@ async def list_events(
             "limit": limit,
             "window": data["window"],
             "filters": data["filters"],
+        },
+    )
+
+
+# ===========================================================================
+# GET /api/calendar/agenda — 三源聚合 (邮箱日历 / 事项 / Agent 排程)
+# ===========================================================================
+
+
+@router.get("/agenda", dependencies=[Depends(verify_cf_access)])
+async def list_agenda(
+    request: Request,
+    cfg: "Config" = Depends(get_settings),
+    from_iso: Optional[str] = Query(
+        None, alias="fromIso", description="窗口起 (ISO / YYYY-MM-DD, UTC); 默认今天 00:00 UTC"
+    ),
+    to_iso: Optional[str] = Query(
+        None, alias="toIso", description="窗口止; 默认 fromIso + 7 天"
+    ),
+    sources: Optional[str] = Query(
+        None, description="CSV, 子集 of mail,matter,agent; 缺省 = 全部三源"
+    ),
+    calendar_name: Optional[str] = Query(
+        None, alias="calendarName", description="透传给邮箱日历子查询"
+    ),
+    tz: Optional[str] = Query(
+        None, description="Olson 时区名; multiDay 的日界判定用, 缺省 UTC"
+    ),
+):
+    """月视图用的三源聚合: 邮箱日历 + 事项截止 / 行动项排期 + Agent 排程。
+
+    与 ``/events`` 的分工: ``/events`` 是 ``calendar_event`` 单表的窗口查询 (Day /
+    Week / Agenda 视图仍走它); 本端点是月视图专用的**跨源**读面, 条目形状是聚合层
+    自己的 ``AgendaEntry`` (见 src/calendar_sync/agenda.py), 不是
+    ``CalendarEventOccurrence``。
+
+    ``data`` = ``AgendaEntry[]`` (裸数组, 按 startIso 升序); total / window / sources
+    落 envelope ``meta`` (对齐 ``/events`` 的 C7 纪律)。
+    """
+    from src.calendar_sync.agenda import build_agenda, parse_sources, resolve_zone
+
+    window_start = _parse_iso_date_opt(from_iso, field="fromIso")
+    window_end = _parse_iso_date_opt(to_iso, field="toIso")
+    if window_start is None:
+        window_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+    if window_end is None:
+        window_end = window_start + timedelta(days=7)
+
+    try:
+        selected = parse_sources(sources)
+        zone = resolve_zone(tz)
+        data = build_agenda(
+            db_path=cfg.sync_store_db_path,
+            cfg=cfg,
+            window_start=window_start,
+            window_end=window_end,
+            sources=selected,
+            calendar_name=calendar_name,
+            zone=zone,
+        )
+    except ValueError as exc:
+        raise APIError("E_INVALID_ARG", str(exc), source="sqlite") from exc
+
+    return success_envelope(
+        data["entries"],
+        request=request,
+        source="sqlite",
+        meta_extra={
+            "total": data["total"],
+            "window": data["window"],
+            "sources": data["sources"],
+            "filters": {"calendar_name": calendar_name, "tz": tz},
         },
     )
 

@@ -1,7 +1,7 @@
 // 「域 → 落点」的解析（task 08-27 P2 补批 Lane R）。
 //
 // 跨域切回落在**该域上次的落点**，不是恒落域缺省 entry —— 域内位置在 URL 里
-// （邮件五视图 `/?view=flagged`、日历 `?view=month`、`/agents?tab=reports`），恒落缺省会把
+// （邮件五视图 `/?view=flagged`、日历 `?view=month`、报告 `/reports/<id>`），恒落缺省会把
 // 「已加星标」重置成收件箱。记忆是会话内的，不持久化（跨会话首次进各域走缺省即可）。
 //
 // 🔴 回放的是 router 自己给过的 pathname + search（下面 recordRouteLocation 记的），
@@ -30,12 +30,6 @@ type NavigateFn = ReturnType<typeof useNavigate>
 /** 路由 search 的原样搬运形状：只从 router 拿、只原样递回 navigate，不在这里解释字段。 */
 export type RouteSearch = Record<string, unknown>
 
-/** `?tab=` 细分（过渡期 `/agents` 被 team 与 reports 两域共用，靠它归属）。 */
-export function searchTabOf(search: unknown): string | undefined {
-  const tab = (search as { tab?: unknown } | undefined)?.tab
-  return typeof tab === 'string' ? tab : undefined
-}
-
 /** 域 → 该域的缺省落点 entry。每个域恰有一格 rail（导轨 8+2 已满员），直接从 registry
  *  派生 —— 不另抄一份 domain→path 映射表（会漂）。 */
 export function domainDefaultEntry(domain: NavDomain): NavEntry | null {
@@ -48,7 +42,7 @@ const lastLocationByDomain = new Map<NavDomain, { pathname: string; search: Rout
 /** 记下当前 location 归属域的落点，返回归属域（不属于任何域 → null，不记）。
  *  route → tab 腿每次路由变化时调用。 */
 export function recordRouteLocation(pathname: string, search: RouteSearch): NavDomain | null {
-  const domain = navActiveDomain(NAV_ENTRIES, pathname, searchTabOf(search))
+  const domain = navActiveDomain(NAV_ENTRIES, pathname)
   if (domain === null) return null
   lastLocationByDomain.set(domain, { pathname, search })
   return domain

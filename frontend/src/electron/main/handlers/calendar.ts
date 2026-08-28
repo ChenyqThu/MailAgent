@@ -18,7 +18,9 @@
 
 import { assertSafeSender, safeIpcHandle } from './calendar-shared'
 
+import { daemonRead } from '../daemon_api'
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
+import type { AgendaEntry, AgendaOpts } from '../../../shared/api/types'
 
 // Read handlers + types
 import {
@@ -137,6 +139,23 @@ export function registerCalendarHandlers(): void {
   safeIpcHandle('calendar:eventsList', async (_evt, ...args) =>
     runEventsList((args[0] as EventsListOpts) ?? {})
   )
+  // task 08-27 P3 — 三源聚合读。🔴 不在 TS 重写任何聚合/展开逻辑 (schedule 展开
+  // 有跨语言 parity 闸, 再双写是灾难): 经 daemon_api 转发本机 serve-api,
+  // path/query 严格 mirror HttpApi.calendar.agenda。serve-api 不可达 (dev 未起)
+  // 时 daemonRead 重试一次后原样 reject —— 诚实降级, 月视图显示错误态而不是
+  // 静默装没数据。
+  safeIpcHandle('calendar:agenda', async (_evt, ...args): Promise<AgendaEntry[]> => {
+    const opts = (args[0] ?? {}) as AgendaOpts
+    return daemonRead<AgendaEntry[]>('/calendar/agenda', {
+      query: {
+        fromIso: opts.fromIso,
+        toIso: opts.toIso,
+        sources: opts.sources?.join(','),
+        calendarName: opts.calendarName,
+        tz: opts.tz
+      }
+    })
+  })
   safeIpcHandle('calendar:eventGet', async (_evt, ...args): Promise<CalendarEventRow | null> => {
     const opts = args[0] as EventGetOpts | undefined
     if (!opts || !opts.icalUid) return null

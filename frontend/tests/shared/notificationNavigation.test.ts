@@ -144,14 +144,16 @@ describe('navigateNotificationRoute — route 型落地', () => {
     ).toEqual({ to: '/settings', search: { tab: 'general' } })
   })
 
-  it('/agents 的非法 tab 归 agents；/admin/kanban 无 search', () => {
+  // 08-27 P3：`/agents` 的三 tab 拆成三个一级域，路由不再有搜索参数 —— 老载荷里
+  // 带的 `search.tab`（`run_worker.py` 曾发 `{"tab":"agents"}`）落地时整个忽略。
+  it('/agents 忽略载荷里的 tab；/admin/kanban 无 search', () => {
     expect(
       run(
         resolveNotificationLink({
           link: { type: 'route', to: '/agents', search: { tab: 'rogue' } }
         })
       )
-    ).toEqual({ to: '/agents', search: { tab: 'agents' } })
+    ).toEqual({ to: '/agents' })
     expect(run(resolveNotificationLink({ link: { type: 'route', to: '/admin/kanban' } }))).toEqual({
       to: '/admin/kanban'
     })

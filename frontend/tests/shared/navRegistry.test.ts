@@ -201,12 +201,13 @@ describe('nav registry — i18n key 在两个 locale 都在', () => {
 })
 
 describe('nav registry — 域推导（导轨选中格 = 面板域）', () => {
-  test('每条路由归它该归的域；/sessions 归 chats 域（08-27 批从 agents 拆出）', () => {
+  test('每条路由归它该归的域；/sessions 归 chats、/reports 归报告（08-27 批从 agents 拆出）', () => {
     const cases: ReadonlyArray<[string, NavDomain]> = [
       ['/', 'mail'],
       ['/today', 'today'],
       ['/sessions', 'chats'],
       ['/agents', 'agents'],
+      ['/reports', 'reports'],
       ['/matters', 'matters'],
       ['/contacts', 'contacts'],
       ['/admin/calendar', 'calendar'],
@@ -220,12 +221,14 @@ describe('nav registry — 域推导（导轨选中格 = 面板域）', () => {
     }
   })
 
-  test('过渡期 /agents 按 ?tab= 细分：reports 归报告域，其余归团队（agents）域', () => {
-    expect(navActiveDomain(NAV_ENTRIES, '/agents', 'reports')).toBe('reports')
-    expect(navActiveDomain(NAV_ENTRIES, '/agents', 'agents')).toBe('agents')
-    expect(navActiveDomain(NAV_ENTRIES, '/agents', 'chats')).toBe('agents')
-    // 无 searchTab（validateSearch 之外的调用面）回落缺省归属域。
-    expect(navActiveDomain(NAV_ENTRIES, '/agents')).toBe('agents')
+  // P3 拆路由后每条 pathname 恰归一个域 —— 过渡期那套「`/agents` 被 team 与 reports
+  // 共用、按 `?tab=` 归属」的胶水（NavMatch.tab + searchTab 参数）整体退役。报告详情
+  // 是子路由，靠 prefix 命中同一个域（否则打开一份报告时导轨的报告格会灭）。
+  test('报告详情子路由仍归报告域；没有第二个域争 /agents', () => {
+    expect(navActiveDomain(NAV_ENTRIES, '/reports/daily-2026-08-27')).toBe('reports')
+    expect(NAV_ENTRIES.filter((e) => isNavEntryActive(e, '/agents')).map((e) => e.id)).toEqual([
+      'agents'
+    ])
   })
 })
 

@@ -6,7 +6,7 @@
 //
 // 🔴 未知 type / 字段缺失 / 路由不在白名单 → 返回 null，条目点击**只标已读不跳转**（前向
 // 兼容：新版后端加了新 link 型，老前端不炸也不乱跳）。白名单只列信源真会发的目标
-// （`run_worker.py` 的 `/agents?tab=agents`、`job_worker.py` / `service.py` /
+// （`run_worker.py` 的 `/agents`、`job_worker.py` / `service.py` /
 // `davmail_watchdog.py` 的 `/admin/kanban`）—— 加信源时同步加档，不预留空位。
 //
 // M2 批 B5 补齐 design §6.4 表里的另外四型（report / contact_queue / matter /
@@ -32,7 +32,8 @@ export { NOTIFICATION_ROUTE_TARGETS, type NotificationRouteTarget }
 export type NotificationLink =
   | { type: 'session'; sessionId: number }
   | { type: 'route'; to: NotificationRouteTarget; search: Record<string, unknown> | null }
-  /** 报告完成（`reports/worker.py`）→ `/agents?tab=reports` 并选中那一份。 */
+  /** 报告完成（`reports/worker.py`）→ `/reports/$reportId`（08-27 P3 前是
+   *  `/agents?tab=reports` + store-intent）。 */
   | { type: 'report'; reportId: string }
   /** 通讯录治理建议（`governance.py`）→ 打开工作台抽屉的「待审建议」tab。 */
   | { type: 'contact_queue' }
@@ -109,13 +110,11 @@ export function navigateNotificationRoute(
   link: Extract<NotificationLink, { type: 'route' }>
 ): void {
   switch (link.to) {
-    case '/agents': {
-      // `/agents` 的 validateSearch 要求 tab 三档之一；非法值按路由自身口径归 agents。
-      const tab = link.search?.tab
-      const safeTab = tab === 'reports' || tab === 'chats' ? tab : 'agents'
-      void navigate({ to: '/agents', search: { tab: safeTab } })
+    case '/agents':
+      // 08-27 P3：`/agents` 的三 tab 拆成三个一级域，本路由不再有搜索参数 ——
+      // 老载荷里带的 `search.tab`（`run_worker.py` 曾发 `{"tab":"agents"}`）直接忽略。
+      void navigate({ to: '/agents' })
       return
-    }
     case '/admin/kanban':
       void navigate({ to: '/admin/kanban' })
       return

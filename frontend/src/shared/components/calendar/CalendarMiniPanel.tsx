@@ -1,50 +1,60 @@
-// 「日历」域的二级栏 —— 小月历（task 08-27-l4-tab-workspace P1）。
+// 「日历」域的二级栏 —— 小月历 + 三组日历源开关（task 08-27-l4-tab-workspace P1/P3）。
 //
-// 形态抄原型 Main.dc.html 的日历二级栏段（.minical）：月标题 + 前后月切换 +
-// 「今天」回跳 + 7×6 月网格（有事件的格底部圆点）。样式复用 DayView rail 的
-// `.mm-*` authored CSS（index.css，未作用域限定）。
+// 形态抄原型 Main.dc.html 的日历二级栏段（.minical + srctree）：月标题 + 前后月
+// 切换 + 「今天」回跳 + 7×6 月网格（有事件的格底部圆点取当天首个事件的源色）+
+// 分隔线下三组日历源开关（邮箱 / 事项 / Agent）。
 //
-// 与主视图的联动是**单向**的：点日期 / 「今天」经既有 useCalendarFocus store 写
-// pending target（uid 空串 = 只跳日期不选中事件），CalendarLayout 的 consume 效应
-// setCurrentDate。反向（主视图翻月 → 小月历跟随）没有干净的联动点 ——
-// CalendarLayout 的 currentDate 是组件内 useState；P3 日历月视图重做把它提升为
-// store 后再接双向。三组日历源开关同属 P3（要后端三源聚合）。
+// 联动（P3 起双向）：
+// - 正向（点日期 / 「今天」）经既有 useCalendarFocus store 写 pending target
+//   （uid 空串 = 只跳日期不选中事件），CalendarLayout consume → setCurrentDate。
+// - 反向（主视图翻月 → 小月历跟随）：CalendarLayout.currentDate 已提升为
+//   calendar-view store，这里订阅它同步本地 month。本地翻月按钮仍只动小月历
+//   （浏览别的月不打扰主视图，点日期才落）。
+//
+// 色点数据走三源聚合 useCalendarAgenda（月视图同款），关掉某源色点同步消失。
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { Check, ChevronLeft, ChevronRight } from 'lucide-react'
 
+import type { AgendaSource } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { useCalendarFocus } from '@shared/state/calendar-focus'
+import { useCalendarView } from '@shared/state/calendar-view'
 
-import {
-  addDays,
-  startOfMonth,
-  startOfWeek,
-  todayStartLocal,
-  useCalendarEventsInWindow
-} from './hooks/useCalendarEvents'
+import { addDays, startOfMonth, startOfWeek, todayStartLocal } from './hooks/useCalendarEvents'
+import { useCalendarAgenda } from './hooks/useCalendarAgenda'
+import { agendaDayDotSources } from './lib/monthGrid'
 import { ymd } from './lib/format'
 import { weekdayMin } from './lib/weekdays'
+
+const SOURCE_ORDER: readonly AgendaSource[] = ['mail', 'matter', 'agent']
 
 export function CalendarMiniPanel(): React.ReactElement {
   const { t } = useTranslation()
   const [month, setMonth] = useState<Date>(() => startOfMonth(new Date()))
+  const currentDate = useCalendarView((s) => s.currentDate)
+  const sources = useCalendarView((s) => s.sources)
+  const toggleSource = useCalendarView((s) => s.toggleSource)
+
+  // P3 反向联动 — 主视图翻月 / 跳日期时小月历跟随（用 ms 做依赖，Date 引用每次
+  // set 都变但同一天不必重跑）。
+  const currentMonthMs = startOfMonth(currentDate).getTime()
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 跨面单向跟随（store → 本地浏览态），非派生渲染值：本地 month 允许用户独立翻月浏览，只在主视图落点变化时拉回。
+    setMonth(new Date(currentMonthMs))
+  }, [currentMonthMs])
 
   const gridStart = startOfWeek(month)
   const cells = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i))
   const gridEnd = addDays(gridStart, 42)
 
-  // 事件圆点 —— 与主视图共享同一窗口缓存族（CALENDAR_EVENTS_KEY）。展开 RRULE，
-  // 否则周期会议只在首次那天有点。
-  const { data: occurrences } = useCalendarEventsInWindow({
-    fromIso: gridStart.toISOString(),
-    toIso: gridEnd.toISOString(),
-    expandRecurrences: true
-  })
-  const eventDays = new Set(
-    (occurrences ?? []).map((occ) => ymd(new Date(occ.occurrence_start_iso)))
+  // 色点 —— 三源聚合（与月视图共享同一窗口缓存族 qk.calendar.agenda）。
+  const { data: entries } = useCalendarAgenda(
+    { fromIso: gridStart.toISOString(), toIso: gridEnd.toISOString() },
+    sources
   )
+  const dotSources = agendaDayDotSources(entries ?? [])
 
   const todayKey = ymd(todayStartLocal())
   const currentMonth = month.getMonth()
@@ -67,6 +77,17 @@ export function CalendarMiniPanel(): React.ReactElement {
 
   const prevLabel = t('calendar.view.day.prevMonthAria', '上月')
   const nextLabel = t('calendar.view.day.nextMonthAria', '下月')
+
+  const SOURCE_LABELS: Record<AgendaSource, string> = {
+    mail: t('calendar.sources.mail', '邮箱日历'),
+    matter: t('calendar.sources.matter', '事项日历'),
+    agent: t('calendar.sources.agent', 'Agent 日历')
+  }
+  const SOURCE_HINTS: Record<AgendaSource, string> = {
+    mail: t('calendar.sources.mailHint', '各账户 + 团队共享'),
+    matter: t('calendar.sources.matterHint', '截止日 + 行动项排期'),
+    agent: t('calendar.sources.agentHint', '智能体排程')
+  }
 
   return (
     <div className="flex-1 overflow-y-auto scrollbar-thin px-3 pt-2.5 pb-2" data-calendar-mini>
@@ -115,6 +136,7 @@ export function CalendarMiniPanel(): React.ReactElement {
           const key = ymd(c)
           const isOther = c.getMonth() !== currentMonth
           const isToday = key === todayKey
+          const dotSrc = dotSources.get(key)
           return (
             <button
               key={i}
@@ -130,7 +152,32 @@ export function CalendarMiniPanel(): React.ReactElement {
               aria-label={key}
             >
               {c.getDate()}
-              {eventDays.has(key) && <span className="mm-dot" aria-hidden />}
+              {dotSrc && <span className="mm-dot" data-src={dotSrc} aria-hidden />}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* P3 — 三组日历源开关（srctree）。关掉一组，月网格 / 小月历色点 / 工具条
+          源色点同步变（client-side 过滤，不重发请求）。 */}
+      <div className="cal-srctree" role="group" aria-label={t('calendar.sources.legend', '日历源')}>
+        <div className="cal-srctree-title">{t('calendar.sources.legend', '日历源')}</div>
+        {SOURCE_ORDER.map((s) => {
+          const on = sources[s]
+          return (
+            <button
+              key={s}
+              type="button"
+              role="checkbox"
+              aria-checked={on}
+              className={cn('cal-src-row', !on && 'is-off')}
+              onClick={() => toggleSource(s)}
+            >
+              <span className="cal-src-check" data-src={s} aria-hidden>
+                {on && <Check size={10} strokeWidth={3} />}
+              </span>
+              <span className="cal-src-label">{SOURCE_LABELS[s]}</span>
+              <span className="cal-src-hint">{SOURCE_HINTS[s]}</span>
             </button>
           )
         })}

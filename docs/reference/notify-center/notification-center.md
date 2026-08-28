@@ -232,7 +232,8 @@ evaluate/commit 代码一行未动。两处入口 guard 从「无 alerter 直接
 - **deep-link** `navigation.ts::resolveNotificationLink`：判别 union 的单源解析器，支持六
   型——`session`（跳会话）/ `route`（白名单 `/agents`、`/admin/kanban`、`/settings`，
   最后一个是 KOS dead 通知 `/settings?tab=integrations` 的落点，`77984a4a` 补入）/
-  `report`（store-intent `useReportNavigation`，`ReportsTab` 挂载时消费）/
+  `report`（`navigateToReport` 直落 `/reports/$reportId`；08-27 P3 前是 store-intent
+  `useReportNavigation` + `/agents?tab=reports`）/
   `contact_queue`（`useContactNavigation` 的第二条轴，打开 `ContactAgentDrawer`）/ `matter`
   （现成 `useMatterNavigation`）/ `updater_restart`（直调 `api.updater.quitAndInstall()`，
   内建 `state!=='downloaded'` 守卫防误退出）。未知 type / 字段缺失 / 不在白名单 → 返回

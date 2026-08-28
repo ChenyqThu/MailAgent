@@ -37,9 +37,6 @@ export interface MatterWorkspaceState {
   selectedId: string | null
   /** V3-05 行内分组的折叠态（key 自带维度前缀，见 matterListQuery::MatterGroup）。 */
   collapsedGroups: ReadonlySet<string>
-  /** 08-27 波 2 —— 二级栏顶部视图折叠组（MatterViewNav）的收起态。与行内分组折叠同档：
-   *  会话级、不持久化（带着一个收起的菜单重启应用，用户找不到「新建事项」）。 */
-  viewNavCollapsed: boolean
   /** 冷启动「记住上次选中 / 选第一条」是否已跑过 —— 提升到 store 后，重进事项页不再重挑一次。 */
   initialSelectionApplied: boolean
   setTab(tab: MatterTab): void
@@ -65,7 +62,6 @@ export interface MatterWorkspaceState {
   applyQuickFilter(quick: MatterQuickFilter): void
   toggleGroup(key: string): void
   clearCollapsedGroups(): void
-  toggleViewNav(): void
   /** reveal-on-navigate：把选中项所在的折叠组展开（详情上/下条导航要求）。 */
   expandGroups(keys: readonly string[]): void
   markInitialSelectionApplied(): void
@@ -75,13 +71,7 @@ const EMPTY_COLLAPSED: ReadonlySet<string> = new Set<string>()
 
 function initialState(): Pick<
   MatterWorkspaceState,
-  | 'tab'
-  | 'query'
-  | 'search'
-  | 'selectedId'
-  | 'collapsedGroups'
-  | 'viewNavCollapsed'
-  | 'initialSelectionApplied'
+  'tab' | 'query' | 'search' | 'selectedId' | 'collapsedGroups' | 'initialSelectionApplied'
 > {
   return {
     // V3-01 —— 默认落看板（≙ 旧默认 view 'focus'）；有有效的「记住上次选中」记录时，
@@ -91,8 +81,6 @@ function initialState(): Pick<
     search: '',
     selectedId: null,
     collapsedGroups: EMPTY_COLLAPSED,
-    // 默认展开：菜单里装着唯一的创建入口，收起是用户的主动行为。
-    viewNavCollapsed: false,
     initialSelectionApplied: false
   }
 }
@@ -155,7 +143,6 @@ export const useMatterWorkspace = create<MatterWorkspaceState>((set) => ({
     set((state) =>
       state.collapsedGroups.size === 0 ? state : { collapsedGroups: EMPTY_COLLAPSED }
     ),
-  toggleViewNav: () => set((state) => ({ viewNavCollapsed: !state.viewNavCollapsed })),
   expandGroups: (keys) =>
     set((state) => {
       if (state.collapsedGroups.size === 0) return state

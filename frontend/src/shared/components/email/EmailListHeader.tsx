@@ -485,7 +485,7 @@ export function EmailListHeader({
 
   return (
     /* Header 两行 — ① 文件夹选择器 · pin 图标 · 写邮件 CTA ② 分栏 + 统计 · 批量 + 筛选 */
-    /* 分割线统一 hairline — 与 sidebar header / AgentsPage tab 条同色连贯。 */
+    /* 分割线统一 hairline — 与 sidebar header / 各页页头同色连贯。 */
     <div className="relative px-3 pt-2.5 pb-2 border-b [border-bottom-color:var(--hairline)]">
       {/* ── 第一行 ─────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-1">

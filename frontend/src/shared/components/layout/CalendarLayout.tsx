@@ -44,6 +44,7 @@ import {
   stepAnchor
 } from '../calendar/lib/key-nav'
 import { useCalendarFocus, type CalendarFocusTarget } from '@shared/state/calendar-focus'
+import { useCalendarView } from '@shared/state/calendar-view'
 import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
 import { AgendaView } from '../calendar/views/AgendaView'
 import { DayView } from '../calendar/views/DayView'
@@ -86,7 +87,10 @@ export function CalendarLayout(): React.ReactElement {
   const navigate = useNavigate({ from: '/admin/calendar' })
   const view: CalendarView = search.view ?? 'week'
 
-  const [currentDate, setCurrentDate] = useState<Date>(() => new Date())
+  // P3 — currentDate 提升为模块级 store (calendar-view): 小月历反向联动
+  // (主视图翻月 → 小月历跟随) 靠它; 正向 (点小月历日期) 仍走 calendar-focus。
+  const currentDate = useCalendarView((s) => s.currentDate)
+  const setCurrentDate = useCalendarView((s) => s.setCurrentDate)
   // 主标签第二段 = 当前月份（design §三）。格式走 toolbar 期间标题的同一条 i18n
   // （`calendar.shared.yearMonth`），不为面包屑另造一份日期文案。
   useMainBreadcrumb(
@@ -192,8 +196,8 @@ export function CalendarLayout(): React.ReactElement {
   const userEmail = settings?.userEmail ?? null
   const onReschedule = caps.write ? reschedule : undefined
 
-  // F19/Q6 — 健康优先选行统一走 pickSyncHead (与 Toolbar sync-pill /
-  // CalendarViewEmpty 同源, 孤儿行场景不再上绿下红同屏矛盾).
+  // F19/Q6 — 健康优先选行统一走 pickSyncHead (与 CalendarViewEmpty 同源,
+  // 孤儿行场景不再上绿下红同屏矛盾; 工具条那处 sync-pill 08-27 P3 已退役).
   const head = pickSyncHead(syncStatus)
   const ctag = head?.ctag ?? null
   const lastIso = head?.last_incremental_sync_at_iso ?? head?.last_full_sync_at_iso ?? null
@@ -252,7 +256,7 @@ export function CalendarLayout(): React.ReactElement {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 跨面 one-shot 信号消费 (照 AiChatPanel 先例): consume() 带清空 store 副作用, 只能在 effect 做, 消费结果落两个本地 state.
     setFocusTarget(target)
     setCurrentDate(new Date(target.dateIso))
-  }, [pendingFocus])
+  }, [pendingFocus, setCurrentDate])
 
   // 匹配: 等当前视图窗口覆盖目标日期且数据就位 (isFetching 排除
   // keepPreviousData 旧窗口留屏) 再按 uid/recurrence_id 找; 找到只设选中
@@ -276,19 +280,23 @@ export function CalendarLayout(): React.ReactElement {
   const handleToday = useCallback(() => {
     setAnchor(null)
     setCurrentDate(new Date())
-  }, [])
+  }, [setCurrentDate])
   const handlePrev = useCallback(() => {
     setAnchor(null)
-    setCurrentDate((d) => stepViewDate(view, -1, d))
-  }, [view])
+    // store setter 无 updater 形态 — 从 store 现读再步进 (getState 不入 deps)。
+    setCurrentDate(stepViewDate(view, -1, useCalendarView.getState().currentDate))
+  }, [view, setCurrentDate])
   const handleNext = useCallback(() => {
     setAnchor(null)
-    setCurrentDate((d) => stepViewDate(view, 1, d))
-  }, [view])
-  const handleDateChange = useCallback((d: Date) => {
-    setAnchor(null)
-    setCurrentDate(d)
-  }, [])
+    setCurrentDate(stepViewDate(view, 1, useCalendarView.getState().currentDate))
+  }, [view, setCurrentDate])
+  const handleDateChange = useCallback(
+    (d: Date) => {
+      setAnchor(null)
+      setCurrentDate(d)
+    },
+    [setCurrentDate]
+  )
   const handleSync = useCallback(() => triggerSync({ full: true }), [triggerSync])
   const handleHelp = useCallback(() => setShortcutOpen((v) => !v), [])
   const handleEsc = useCallback(() => setShortcutOpen(false), [])

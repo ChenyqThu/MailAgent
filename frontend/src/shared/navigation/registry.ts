@@ -79,6 +79,7 @@ export type NavPath =
   | '/matters'
   | '/sessions'
   | '/agents'
+  | '/reports'
   | '/admin/llm'
   | '/admin/kanban'
   | '/admin/calendar'
@@ -129,11 +130,6 @@ export interface NavMatch {
   readonly exact?: readonly string[]
   /** pathname 前缀命中即选中（子路由）。 */
   readonly prefix?: readonly string[]
-  /** `?tab=` 细分。过渡期（P3 拆路由前）`/agents` 被 team（agents 域）与 reports
-   *  两个域共用，只有 `navActiveDomain` 消费这一位：pathname 命中多个域时按
-   *  搜索参 tab 归属；无 tab 约束的条目是该路由的缺省归属域。P3 报告拿到自己的
-   *  路由后删。 */
-  readonly tab?: readonly string[]
 }
 
 export interface NavEntry {
@@ -305,19 +301,20 @@ const ENTRIES = [
     palette: { order: 40, metaI18nKey: 'palette.jump.customAiMeta' },
     notificationRoute: true
   },
-  // 报告域（08-27 批从 agents 域拆出）：过渡期复用 `/agents?tab=reports`
-  // （navigateToNavEntry 的 '/agents' case 按域落 tab），P3 给它独立路由。
+  // 报告域（08-27 批从 agents 域拆出，P3 拿到独立路由）：`/reports` 列表 +
+  // `/reports/$reportId` 详情，二级栏 = 页面自管的报告清单列（NAV_DOMAINS.reports
+  // 是 'page' 档）—— 故无 panel 落位。prefix 命中让详情路由也算选中。
   {
     id: 'reports',
     domain: 'reports',
-    to: '/agents',
+    to: '/reports',
     label: { i18nKey: 'nav.domain.reports' },
     icon: () => createElement(FileChartLineIcon),
     gate: 'always',
-    match: { exact: ['/agents'], tab: ['reports'] },
-    panel: { order: 0 },
+    match: { prefix: ['/reports'] },
     rail: { order: 7 },
-    palette: { order: 45, metaI18nKey: 'palette.jump.reportsMeta' }
+    palette: { order: 45, metaI18nKey: 'palette.jump.reportsMeta' },
+    preloadOnHover: true
   },
 
   // ── VIEW 段 ─────────────────────────────────────────────────────────────
@@ -445,10 +442,12 @@ export const NAV_DOMAINS: Record<NavDomain, NavDomainMeta> = {
     icon: () => createElement(BotIcon),
     second: 'nav'
   },
+  // 报告域的二级栏 = `/reports` 页自管的报告清单列（定宽 336）——「二级栏就是报告
+  // 列表通栏行，点行右侧直接出内容」。
   reports: {
     label: { i18nKey: 'nav.domain.reports' },
     icon: () => createElement(FileChartLineIcon),
-    second: 'nav'
+    second: 'page'
   },
   ops: {
     label: { i18nKey: 'nav.domain.ops' },
@@ -568,21 +567,14 @@ export function navDomainSecond(domain: NavDomain): NavDomainSecond {
 
 /** 当前路由归属的域（导轨选中格 + 面板显示哪个域）。判据 = 门控过滤后**任一**条目
  *  的选中态命中。无命中（理论上只有 popout 之类的非路由场景）→ null，调用方自己给
- *  缺省。`searchTab` 只在 pathname 命中多个域时起作用（过渡期 `/agents` 被 team 与
- *  reports 共用，见 NavMatch.tab）：tab 命中的条目优先，否则落到无 tab 约束的
- *  缺省归属域。 */
-export function navActiveDomain(
-  entries: readonly NavEntry[],
-  pathname: string,
-  searchTab?: string
-): NavDomain | null {
+ *  缺省。
+ *
+ *  🔴 判据只看 pathname：P3 报告拿到 `/reports` 之后每条路由恰归一个域，此前那套
+ *  「`/agents` 被 team 与 reports 共用、按 `?tab=` 归属」的过渡胶水（NavMatch.tab +
+ *  searchTab 参数 + 两处 useRouterState 读 search.tab）整体退役。 */
+export function navActiveDomain(entries: readonly NavEntry[], pathname: string): NavDomain | null {
   const hits = entries.filter((e) => isNavEntryActive(e, pathname))
-  if (hits.length === 0) return null
-  if (searchTab !== undefined) {
-    const tabHit = hits.find((e) => e.match?.tab?.includes(searchTab))
-    if (tabHit) return tabHit.domain
-  }
-  return (hits.find((e) => e.match?.tab === undefined) ?? hits[0]).domain
+  return hits.length === 0 ? null : hits[0].domain
 }
 
 /** ⌘K jump 段的条目（已按 order 排序）。 */
@@ -617,12 +609,10 @@ export function navigateToNavEntry(navigate: NavigateFn, entry: NavEntry): void 
       void navigate({ to: '/sessions' })
       return
     case '/agents':
-      // 过渡期（P3 拆路由前）：team（agents 域）与 reports 域共用 /agents，按
-      // entry 所属域落 tab（与 NavMatch.tab 的归属判据同步删）。
-      void navigate({
-        to: '/agents',
-        search: { tab: entry.domain === 'reports' ? 'reports' : 'agents' }
-      })
+      void navigate({ to: '/agents' })
+      return
+    case '/reports':
+      void navigate({ to: '/reports' })
       return
     case '/admin/llm':
       void navigate({ to: '/admin/llm' })
@@ -652,6 +642,13 @@ export function navigateToSettingsTab(navigate: NavigateFn, tab: SettingsTab): v
   void navigate({ to: '/settings', search: { tab } })
 }
 
+/** 某一份报告的落点（报告清单行点击 / 通知中心「报告完成」深链共用）。
+ *  `/reports/$reportId` 是 `/reports` 的子路由：父组件不卸载，清单的筛选与滚动位置
+ *  在切换报告时保持。 */
+export function navigateToReport(navigate: NavigateFn, reportId: string): void {
+  void navigate({ to: '/reports/$reportId', params: { reportId } })
+}
+
 /** hover 意图预载（`preloadOnHover` 的两个大 chunk 入口）。幂等 + 失败静默 ——
  *  预载不该产生可见错误。非预载入口调用即 no-op。 */
 export function preloadNavEntry(router: RouterLike, entry: NavEntry): void {
@@ -662,6 +659,9 @@ export function preloadNavEntry(router: RouterLike, entry: NavEntry): void {
       return
     case '/contacts':
       void router.preloadRoute({ to: '/contacts' }).catch(() => {})
+      return
+    case '/reports':
+      void router.preloadRoute({ to: '/reports' }).catch(() => {})
       return
     default:
       return

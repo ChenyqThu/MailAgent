@@ -1,19 +1,28 @@
-// 视觉复刻 mockup-calendar.html §toolbar (2026-05-23) —
-// title + range-label + 日期 nav + view chips + sync btn + sync-pill (CSS hover tip).
+// task 08-27 P3 —— 工具条压成单行 (r2 calbar): 今天 · 视图▾ · ‹ › · 期间标题
+// … 源色点 (月视图) · 日历筛选 · 同步 · 新建日程。
 //
-// 接口不变 (view / onViewChange / currentDate / onDateChange), 只重做视觉。
-// CalendarView 类型从 router-instance 复用 (单一来源, 避免 enum 漂移).
+// 相对旧版的三处收敛:
+// - 大标题「日历」退役 —— 主标签面包屑已带「日历 / {年月}」(CalendarLayout 的
+//   useMainBreadcrumb), 工具条只留期间标题。
+// - view chips + GSAP 滑动 indicator → 下拉 (「月 ▾」), 单行放得下。
+// - sync-pill (上次同步 N 秒前 hover tip) 退役 —— 同一信息在 cal-card 底部
+//   statusbar 常驻, 工具条只留急刷按钮。
 //
-// 切到 mockup class (.nav-btn / .today-btn / .view-chip / .sync-pill),
-// 不再用 Tailwind inline. sync tip CSS-only hover 触发, 移除 useState.
+// 接口不变 (view / onViewChange / currentDate / onDateChange …)。
+// CalendarView 类型从 router-instance 复用 (单一来源, 避免 enum 漂移)。
 
 import { useEffect, useRef, useState } from 'react'
-import { Check, ChevronLeft, ChevronRight, ListFilter, Plus, RefreshCw } from 'lucide-react'
+import {
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ListFilter,
+  Plus,
+  RefreshCw
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
-
-import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
-import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 
 import { CalendarStatusLegend } from './CalendarStatusLegend'
 import { EventFormModal } from './EventFormModal'
@@ -23,21 +32,19 @@ const caps = calendarCapabilities()
 import { weekdayLong } from './lib/weekdays'
 import {
   useCalendarSyncTrigger,
-  useCalendarSyncStatus,
-  pickSyncHead,
   startOfWeek,
   stepViewDate,
-  addDays,
-  relativeTime,
-  useNowTick
+  addDays
 } from './hooks/useCalendarEvents'
+import type { AgendaSource } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { type CalendarView } from '@shared/router-instance'
+import { useCalendarView } from '@shared/state/calendar-view'
 
 // 兼容旧 import — 历史代码 `import { type CalendarView } from './CalendarToolbar'`
 export type { CalendarView }
 
-// F26 (阶段1·1.7) — 硬编码中文 t() 化; 周几走 weekdayLong 单源 (lib/weekdays).
+// F26 (阶段1·1.7) — 硬编码中文 t() 化; 周几走 weekdayLong 单源 (lib/weekdays)。
 function fmtRangeLabel(t: TFunction, view: CalendarView, d: Date): string {
   if (view === 'today') return `${d.getMonth() + 1}/${d.getDate()} ${weekdayLong(t, d.getDay())}`
   if (view === 'week') {
@@ -54,18 +61,20 @@ function fmtRangeLabel(t: TFunction, view: CalendarView, d: Date): string {
   return t('calendar.toolbar.range.recurring', '全部定期事件')
 }
 
+const SOURCE_ORDER: readonly AgendaSource[] = ['mail', 'matter', 'agent']
+
 interface Props {
   view: CalendarView
   onViewChange: (v: CalendarView) => void
   currentDate: Date
   onDateChange: (d: Date) => void
-  /** Phase 4·#1 — 全部 calendar 名 (来自 useCalendarNames). */
+  /** Phase 4·#1 — 全部 calendar 名 (来自 useCalendarNames)。 */
   calendars: string[]
-  /** Phase 4·#1 — 当前选中的 calendar (空 = 全部). */
+  /** Phase 4·#1 — 当前选中的 calendar (空 = 全部)。 */
   selectedCalendars: string[]
-  /** Phase 4·#1 — 选择变化回调. */
+  /** Phase 4·#1 — 选择变化回调。 */
   onSelectedCalendarsChange: (next: string[]) => void
-  /** 2.7 — create modal 状态上提到 Layout (n 快捷键与 [+ 新建] 按钮共用). */
+  /** 2.7 — create modal 状态上提到 Layout (n 快捷键与 [+ 新建] 按钮共用)。 */
   createOpen: boolean
   onCreateOpenChange: (open: boolean) => void
 }
@@ -83,41 +92,45 @@ export function CalendarToolbar({
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const { trigger, isPending } = useCalendarSyncTrigger()
-  const { data: syncStatus } = useCalendarSyncStatus()
-  // 30s tick — 让 sync-pill 的 "上次同步 N 秒前" 字串自然走时, 不靠 syncStatus
-  // 数据引用变化也能刷.
-  useNowTick()
+  // P3 — 三源开关 (calendar-view store): 月视图工具条右簇的源色点与月网格同步变。
+  const sources = useCalendarView((s) => s.sources)
 
-  // §8 滑动 indicator — 激活 view-chip 的 bg/border 移到一个绝对定位元素, 随 view
-  // 变化 tween x/width (DUR.fast)。首次挂载 gsap.set 直接定位无动画, 之后才滑。
-  // reduced-motion 短路成无动画定位。useGSAP({scope}) 自动 cleanup。
-  const chipListRef = useRef<HTMLDivElement | null>(null)
-  const chipIndicatorRef = useRef<HTMLSpanElement | null>(null)
-  const chipMountedRef = useRef(false)
-  const reduceMotion = useReducedMotion()
-  useGSAP(
-    () => {
-      const list = chipListRef.current
-      const indicator = chipIndicatorRef.current
-      if (!list || !indicator) return
-      const activeEl = list.querySelector<HTMLElement>('.view-chip.is-active')
-      if (!activeEl) return
-      // border/padding 偏移用 getBoundingClientRect 差值规避 (容器有 border)。
-      const listRect = list.getBoundingClientRect()
-      const activeRect = activeEl.getBoundingClientRect()
-      const left = activeRect.left - listRect.left
-      const width = activeRect.width
-      if (!chipMountedRef.current || reduceMotion) {
-        gsap.set(indicator, { x: left, width, autoAlpha: 1 })
-        chipMountedRef.current = true
-        return
+  const VIEW_LABELS: Record<CalendarView, string> = {
+    today: t('calendar.toolbar.viewDay', '日'),
+    week: t('calendar.toolbar.viewWeek', '周'),
+    month: t('calendar.toolbar.viewMonth', '月'),
+    agenda: t('calendar.toolbar.viewAgenda', 'Agenda'),
+    recurring: t('calendar.toolbar.viewRecurring', '定期邀请')
+  }
+  const SOURCE_LABELS: Record<AgendaSource, string> = {
+    mail: t('calendar.sources.mail', '邮箱日历'),
+    matter: t('calendar.sources.matter', '事项日历'),
+    agent: t('calendar.sources.agent', 'Agent 日历')
+  }
+
+  // 视图下拉 (「月 ▾」) — click-outside + Esc 关闭 (capture-phase mousedown,
+  // 参考旧 calendar filter 同款)。
+  const [viewMenuOpen, setViewMenuOpen] = useState(false)
+  const viewMenuRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!viewMenuOpen) return
+    const onDown = (e: MouseEvent): void => {
+      if (viewMenuRef.current && !viewMenuRef.current.contains(e.target as Node)) {
+        setViewMenuOpen(false)
       }
-      gsap.to(indicator, { x: left, width, duration: DUR.fast, overwrite: 'auto' })
-    },
-    { dependencies: [view, reduceMotion], scope: chipListRef }
-  )
+    }
+    const onEsc = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setViewMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown, true)
+    window.addEventListener('keydown', onEsc)
+    return () => {
+      document.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('keydown', onEsc)
+    }
+  }, [viewMenuOpen])
 
-  // Phase 4·#1 — calendar 多选筛选 dropdown (仅 >1 calendar 时显示).
+  // Phase 4·#1 — calendar 多选筛选 dropdown (仅 >1 calendar 时显示)。
   const [calFilterOpen, setCalFilterOpen] = useState(false)
   const calFilterRef = useRef<HTMLDivElement | null>(null)
   const toggleCalendar = (name: string): void => {
@@ -126,7 +139,6 @@ export function CalendarToolbar({
     else set.add(name)
     onSelectedCalendarsChange(Array.from(set))
   }
-  // click-outside + Esc 关闭 (参考 MonthView §F11 capture-phase mousedown).
   useEffect(() => {
     if (!calFilterOpen) return
     const onDown = (e: MouseEvent): void => {
@@ -145,39 +157,66 @@ export function CalendarToolbar({
     }
   }, [calFilterOpen])
 
-  const VIEW_LABELS: Record<CalendarView, string> = {
-    today: t('calendar.toolbar.viewDay', '日'),
-    week: t('calendar.toolbar.viewWeek', '周'),
-    month: t('calendar.toolbar.viewMonth', '月'),
-    agenda: t('calendar.toolbar.viewAgenda', 'Agenda'),
-    recurring: t('calendar.toolbar.viewRecurring', '定期邀请')
-  }
-
   const showDateNav = view === 'today' || view === 'week' || view === 'month'
-  // F19/Q6 — 健康优先选行统一走 pickSyncHead (与 Layout 副 status bar /
-  // CalendarViewEmpty 同源, 孤儿行场景不再上绿下红).
-  const head = pickSyncHead(syncStatus)
-  const lastIso = head?.last_incremental_sync_at_iso ?? head?.last_full_sync_at_iso ?? null
-  const lastDate = lastIso ? new Date(lastIso) : null
-  const lastError = head?.last_error ?? null
-  const hasErr = !!lastError
   const rangeLabel = fmtRangeLabel(t, view, currentDate)
+  const enabledSources = SOURCE_ORDER.filter((s) => sources[s])
 
   return (
-    <div className="shrink-0 px-5 pt-4 pb-3 flex items-center gap-4 flex-wrap">
-      {/* title + range */}
-      <div className="flex items-baseline gap-3 min-w-0">
-        <h1 className="text-subj font-semibold text-ink-fg tracking-tight">
-          {t('calendar.toolbar.title', '日历')}
-        </h1>
-        <span className="text-lead text-ink-fg-1 font-mono tabular-nums whitespace-nowrap">
-          {rangeLabel}
-        </span>
+    <div className="shrink-0 px-5 pt-3 pb-2.5 flex items-center gap-2 min-w-0">
+      <button
+        type="button"
+        className="today-btn"
+        onClick={() => onDateChange(new Date())}
+        title={t('calendar.toolbar.todayTitle', '今天 (T)')}
+      >
+        {t('calendar.toolbar.today', '今天')}
+      </button>
+
+      {/* 视图下拉 — 「月 ▾」 */}
+      <div className="relative" ref={viewMenuRef}>
+        <button
+          type="button"
+          className="nav-btn"
+          style={{ width: 'auto', padding: '0 9px', gap: 4, fontSize: 13 }}
+          onClick={() => setViewMenuOpen((v) => !v)}
+          aria-haspopup="true"
+          aria-expanded={viewMenuOpen}
+          title={t('calendar.toolbar.viewAria', '视图切换')}
+        >
+          <span>{VIEW_LABELS[view]}</span>
+          <ChevronDown size={12} strokeWidth={2.2} />
+        </button>
+        {viewMenuOpen && (
+          <div
+            className="glass-pop absolute left-0 mt-1.5 z-30 min-w-[132px] p-1 rounded-[var(--r-ctl)]"
+            role="menu"
+            aria-label={t('calendar.toolbar.viewAria', '视图切换')}
+          >
+            {(['today', 'week', 'month', 'agenda', 'recurring'] as CalendarView[]).map((v) => (
+              <button
+                key={v}
+                type="button"
+                role="menuitemradio"
+                aria-checked={v === view}
+                onClick={() => {
+                  onViewChange(v)
+                  setViewMenuOpen(false)
+                }}
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-aux text-ink-fg hover:bg-ink-2/60 text-left"
+              >
+                <span className="w-3.5 inline-flex justify-center shrink-0 text-coral">
+                  {v === view && <Check size={13} strokeWidth={2.4} />}
+                </span>
+                <span>{VIEW_LABELS[v]}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* date nav — agenda/recurring 隐藏 */}
       {showDateNav && (
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
           <button
             type="button"
             className="nav-btn"
@@ -186,14 +225,6 @@ export function CalendarToolbar({
             title={t('calendar.toolbar.prevTitle', '上一段 (←)')}
           >
             <ChevronLeft size={14} strokeWidth={2.2} />
-          </button>
-          <button
-            type="button"
-            className="today-btn"
-            onClick={() => onDateChange(new Date())}
-            title={t('calendar.toolbar.todayTitle', '今天 (T)')}
-          >
-            {t('calendar.toolbar.today', '今天')}
           </button>
           <button
             type="button"
@@ -207,169 +238,119 @@ export function CalendarToolbar({
         </div>
       )}
 
-      {/* view chips — push to right */}
-      <div
-        ref={chipListRef}
-        className="relative flex items-center gap-1 ml-auto p-0.5 rounded-lg bg-ink-2/40 border border-ink-border/50"
-        role="tablist"
-        aria-label={t('calendar.toolbar.viewAria', '视图切换')}
-      >
-        {/* §8 滑动 indicator — bg+border 跟随激活 chip 滑动 (JS 测量 + GSAP x/width)。 */}
-        <span ref={chipIndicatorRef} className="view-chip-indicator" aria-hidden="true" />
-        {(['today', 'week', 'month', 'agenda', 'recurring'] as CalendarView[]).map((v) => (
-          <button
-            key={v}
-            type="button"
-            role="tab"
-            aria-selected={v === view}
-            onClick={() => onViewChange(v)}
-            className={cn('view-chip', v === view && 'is-active')}
-          >
-            {VIEW_LABELS[v]}
-          </button>
-        ))}
-      </div>
+      {/* 期间标题 */}
+      <span className="text-lead text-ink-fg-1 font-mono tabular-nums whitespace-nowrap truncate min-w-0">
+        {rangeLabel}
+      </span>
 
-      {/* Phase 4·#1 — calendar 多选筛选 (仅多 calendar 用户显示) */}
-      {calendars.length > 1 && (
-        <div className="relative" ref={calFilterRef}>
-          <button
-            type="button"
-            className="nav-btn"
-            style={{ width: 'auto', padding: '0 11px', gap: 6, fontSize: 13 }}
-            onClick={() => setCalFilterOpen((v) => !v)}
-            aria-haspopup="true"
-            aria-expanded={calFilterOpen}
-            title={t('calendar.toolbar.calendarFilter.title', '按日历筛选')}
-          >
-            <ListFilter size={13} strokeWidth={2} />
-            <span>
-              {selectedCalendars.length === 0
-                ? t('calendar.toolbar.calendarFilter.all', '全部日历')
-                : t('calendar.toolbar.calendarFilter.selected', '{n} 个日历', {
-                    n: selectedCalendars.length
-                  })}
-            </span>
-          </button>
-          {calFilterOpen && (
-            <div
-              // 主题 v3 C8/批 4: 紧凑菜单档 rounded-lg(8) → token 化 --r-ctl
-              className="glass-pop absolute right-0 mt-1.5 z-30 min-w-[180px] max-w-[280px] p-1 rounded-[var(--r-ctl)]"
-              role="menu"
-              aria-label={t('calendar.toolbar.calendarFilter.ariaLabel', '日历筛选')}
+      {/* 右簇 */}
+      <div className="flex items-center gap-2 ml-auto shrink-0">
+        {/* 源色点 — 仅月视图 (三源聚合只接月视图); 关掉一组这里同步消失 */}
+        {view === 'month' && enabledSources.length > 0 && (
+          <span className="cal-src-dots" aria-hidden>
+            {enabledSources.map((s) => (
+              <span key={s} className="cal-src-dot" data-src={s} title={SOURCE_LABELS[s]} />
+            ))}
+          </span>
+        )}
+
+        {/* Phase 4·#1 — calendar 多选筛选 (仅多 calendar 用户显示)。月视图不渲染:
+            它走三源聚合数据 (AgendaEntry 无 calendar_name), 筛选对它不生效。 */}
+        {view !== 'month' && calendars.length > 1 && (
+          <div className="relative" ref={calFilterRef}>
+            <button
+              type="button"
+              className="nav-btn"
+              style={{ width: 'auto', padding: '0 9px', gap: 5, fontSize: 13 }}
+              onClick={() => setCalFilterOpen((v) => !v)}
+              aria-haspopup="true"
+              aria-expanded={calFilterOpen}
+              title={t('calendar.toolbar.calendarFilter.title', '按日历筛选')}
             >
-              <button
-                type="button"
-                role="menuitemcheckbox"
-                aria-checked={selectedCalendars.length === 0}
-                onClick={() => onSelectedCalendarsChange([])}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-aux text-ink-fg hover:bg-ink-2/60 text-left"
+              <ListFilter size={13} strokeWidth={2} />
+              <span>
+                {selectedCalendars.length === 0
+                  ? t('calendar.toolbar.calendarFilter.all', '全部日历')
+                  : t('calendar.toolbar.calendarFilter.selected', '{n} 个日历', {
+                      n: selectedCalendars.length
+                    })}
+              </span>
+            </button>
+            {calFilterOpen && (
+              <div
+                className="glass-pop absolute right-0 mt-1.5 z-30 min-w-[180px] max-w-[280px] p-1 rounded-[var(--r-ctl)]"
+                role="menu"
+                aria-label={t('calendar.toolbar.calendarFilter.ariaLabel', '日历筛选')}
               >
-                <span className="w-3.5 inline-flex justify-center shrink-0 text-coral">
-                  {selectedCalendars.length === 0 && <Check size={13} strokeWidth={2.4} />}
-                </span>
-                <span>{t('calendar.toolbar.calendarFilter.all', '全部日历')}</span>
-              </button>
-              {calendars.map((name) => {
-                const checked = selectedCalendars.includes(name)
-                return (
-                  <button
-                    key={name}
-                    type="button"
-                    role="menuitemcheckbox"
-                    aria-checked={checked}
-                    onClick={() => toggleCalendar(name)}
-                    className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-aux text-ink-fg hover:bg-ink-2/60 text-left"
-                  >
-                    <span className="w-3.5 inline-flex justify-center shrink-0 text-coral">
-                      {checked && <Check size={13} strokeWidth={2.4} />}
-                    </span>
-                    <span className="truncate">{name}</span>
-                  </button>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      )}
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={selectedCalendars.length === 0}
+                  onClick={() => onSelectedCalendarsChange([])}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-aux text-ink-fg hover:bg-ink-2/60 text-left"
+                >
+                  <span className="w-3.5 inline-flex justify-center shrink-0 text-coral">
+                    {selectedCalendars.length === 0 && <Check size={13} strokeWidth={2.4} />}
+                  </span>
+                  <span>{t('calendar.toolbar.calendarFilter.all', '全部日历')}</span>
+                </button>
+                {calendars.map((name) => {
+                  const checked = selectedCalendars.includes(name)
+                  return (
+                    <button
+                      key={name}
+                      type="button"
+                      role="menuitemcheckbox"
+                      aria-checked={checked}
+                      onClick={() => toggleCalendar(name)}
+                      className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-aux text-ink-fg hover:bg-ink-2/60 text-left"
+                    >
+                      <span className="w-3.5 inline-flex justify-center shrink-0 text-coral">
+                        {checked && <Check size={13} strokeWidth={2.4} />}
+                      </span>
+                      <span className="truncate">{name}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
-      {/* Phase 2.5 §11.1 — [+ 新建] coral primary (跟 mockup-event-form §toolbar 一致)
-          阶段 3 (#11) — caps.write 门控 (serve-api 写端点就绪后两端可用). */}
-      {caps.write && (
-        <button
-          type="button"
-          className="btn-coral"
-          onClick={() => onCreateOpenChange(true)}
-          title={t('calendar.toolbar.newTitle', '新建事件 — 直接写到 Exchange (CalDAV PUT)')}
-        >
-          <Plus size={14} strokeWidth={2.4} />
-          <span>{t('calendar.toolbar.newBtn', '新建')}</span>
-        </button>
-      )}
-
-      {/* sync — nav-btn 拉宽 (mockup inline style) + sync-pill CSS-only hover tip */}
-      <div className="flex items-center gap-2">
+        {/* sync — icon-only 急刷; 上次同步/错误态常驻在底部 statusbar */}
         <button
           type="button"
           className="nav-btn"
-          style={{ width: 'auto', padding: '0 11px', gap: 6, fontSize: 13 }}
           onClick={() => trigger({ full: true })}
           disabled={isPending}
+          aria-label={t('calendar.toolbar.syncBtn', '同步')}
           title={t(
             'calendar.toolbar.syncTitle',
             '急刷 (⌘R) · 后台 worker 每 60s 自动同步, 此按钮触发立即全量拉取'
           )}
         >
           <RefreshCw size={13} strokeWidth={2} className={cn(isPending && 'animate-spin')} />
-          <span>{t('calendar.toolbar.syncBtn', '同步')}</span>
         </button>
-        <div className="sync-pill" data-sync={hasErr ? 'err' : 'ok'}>
-          <span className="sync-dot" aria-hidden />
-          <span className="sync-label">
-            {hasErr
-              ? t('calendar.toolbar.syncPillErr', '同步失败 · [ERR]')
-              : lastDate
-                ? t('calendar.toolbar.syncPillOk', '上次同步 {time}', {
-                    time: relativeTime(lastDate)
-                  })
-                : t('calendar.toolbar.syncPillNone', '尚未同步')}
-          </span>
-          <div className="sync-tip glass-pop">
-            <div className="text-aux text-ink-fg font-medium mb-1">
-              {hasErr
-                ? t('calendar.toolbar.syncTipErr', 'DavMail · 同步失败')
-                : t('calendar.toolbar.syncTipOk', 'DavMail · 已同步')}
-            </div>
-            <div className="text-meta text-ink-fg-2 font-mono leading-relaxed break-all">
-              {hasErr && (lastError ?? t('calendar.toolbar.syncTipUnknownErr', '未知错误'))}
-              {!hasErr && head && (
-                <>
-                  {head.last_full_sync_at_iso && (
-                    <>
-                      last_full_sync {head.last_full_sync_at_iso.replace('T', ' ').slice(0, 19)}
-                      <br />
-                    </>
-                  )}
-                  {head.ctag && (
-                    <>
-                      ctag {head.ctag.slice(0, 8)}
-                      <br />
-                    </>
-                  )}
-                  {head.calendar_name && <>calendar {head.calendar_name}</>}
-                </>
-              )}
-              {!head && t('calendar.empty.syncHint')}
-            </div>
-          </div>
-        </div>
+
         {/* F3 (阶段2·2.6) — 状态形态图例入口 (hover/focus 显示 tip) */}
         <CalendarStatusLegend />
+
+        {/* 阶段 3 (#11) — caps.write 门控 (serve-api 写端点就绪后两端可用)。 */}
+        {caps.write && (
+          <button
+            type="button"
+            className="btn-coral"
+            onClick={() => onCreateOpenChange(true)}
+            title={t('calendar.toolbar.newTitle', '新建事件 — 直接写到 Exchange (CalDAV PUT)')}
+          >
+            <Plus size={14} strokeWidth={2.4} />
+            <span>{t('calendar.toolbar.newBtn', '新建日程')}</span>
+          </button>
+        )}
       </div>
 
       {/* Phase 2.2 — create modal (occurrence=null = create 语义); 2.7 状态上提
-          Layout (n 快捷键与按钮共用入口). 远程 web 下按钮隐藏 + Layout 不接 n,
-          createOpen 恒 false, modal 不渲染. */}
+          Layout (n 快捷键与按钮共用入口)。 */}
       <EventFormModal
         open={createOpen}
         onClose={() => onCreateOpenChange(false)}

@@ -149,6 +149,14 @@
   --c-info: 184 214 244;
   --c-ai: 224 196 244;
 
+  /* task 08-27 P3 — 日历三源源色 (r2 spec 暗档原值): 邮箱 / 事项 / Agent +
+   * hot (重要邮箱日程, 归邮箱组)。消费面: 月视图胶囊与跨天色带、小月历色点、
+   * 工具条源色点、二级栏源开关。亮档在 data-theme='light' 块按 v3 惯例压暗。 */
+  --cal-src-mail: 111 168 220;
+  --cal-src-matter: 240 180 80;
+  --cal-src-agent: 139 124 216;
+  --cal-src-hot: 229 101 75;
+
   /* 主题 v3/C9 — AI-strip 优先级色与旗标 done 绿自 2026-07-12 起**直接消费
    * 上方 --c-* AA token**（owner 拍板方案 A 归一）：Sprint 3 写死 hex 与
    * Sprint 4 a11y 调过的 --c-* 是两支从未合流的分叉（strip 单值不分亮暗，
@@ -365,6 +373,12 @@
   --c-fail: 130 30 32;
   --c-info: 24 70 116;
   --c-ai: 92 58 130;
+
+  /* task 08-27 P3 — 日历三源源色亮档 (同色相压暗, wash 底/白底上做前景可读)。 */
+  --cal-src-mail: 44 98 150;
+  --cal-src-matter: 158 100 22;
+  --cal-src-agent: 90 74 158;
+  --cal-src-hot: 172 56 36;
 
   /* 主题 v2 — 亮色玻璃 token (theme-v2.css light 块照搬)。hairline 转
    * 深色细线 (亮纸上白线不可见); 亮色偏离暗色定稿默认的两项 (sat 1.4 /
@@ -1305,7 +1319,7 @@ body::before {
   border-right: 1px solid var(--hairline);
 }
 /* rail 头 41px (border-box 含底边) — 与 DomainPanel 头 / 右侧内容区顶栏
- * (AgentsPage tab 条等, height:41) 的分割线共线（画布修正版基线）。 */
+ * (各页页头等, height:41) 的分割线共线（画布修正版基线）。 */
 .nav-rail-header {
   height: 41px;
   width: 100%;
@@ -3007,8 +3021,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
 .wk-dayhead.is-today .wk-dn {
   background: rgb(var(--c-accent));
   color: rgb(var(--c-accent-fg));
-  /* today 高亮 pill 圆角与 month 视图 .nday 取齐 (#1: 同一 today 语义→同一
-   * 形状), 均落 chip 档 6px; 尺寸各自保留不动。 */
+  /* today 高亮落 chip 档 6px (#1: 同一 today 语义→同一形状; 月视图 P3 改右下角
+   * .m-daynum 圆点后, 此处保留 week 头自己的 pill 形态)。 */
   border-radius: 6px;
 }
 
@@ -3404,6 +3418,11 @@ body:not([data-batch-mode='true']) .email-row .cb {
   left: 50%;
   transform: translateX(-50%);
 }
+/* task 08-27 P3 — 小月历色点取当天首个事件的源色 (r2); today/sel 的
+ * currentColor 覆写在后, 优先级不变。 */
+.mm-dot[data-src='mail'] { background: rgb(var(--cal-src-mail)); }
+.mm-dot[data-src='matter'] { background: rgb(var(--cal-src-matter)); }
+.mm-dot[data-src='agent'] { background: rgb(var(--cal-src-agent)); }
 .mm-cell.today .mm-dot,
 .mm-cell.sel .mm-dot { background: currentColor; }
 
@@ -3505,53 +3524,227 @@ body:not([data-batch-mode='true']) .email-row .cb {
   border-right: 1px solid rgb(var(--ink-border-soft));
 }
 .m-dow > div:last-child { border-right: 0; }
-.m-grid {
+/* task 08-27 P3 — 每周一行 (r2 calmon): 跨天色带在行内绝对定位横跨若干列,
+ * 一整块 42 格 grid 做不到干净的跨列。日期数字挪到格子右下角。 */
+.m-weeks {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
   grid-auto-rows: 1fr;
   height: 100%;
+  min-height: 0;
 }
+.m-week {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  border-bottom: 1px solid rgb(var(--ink-border-soft));
+  min-height: 0;
+}
+.m-week:last-child { border-bottom: 0; }
 .m-cell {
   border-right: 1px solid rgb(var(--ink-border-soft));
-  border-bottom: 1px solid rgb(var(--ink-border-soft));
-  padding: 5px 6px;
+  position: relative;
+  /* padding-top 由行内 style 写 (4 + 该周色带条数 × 20); 底部 20 给右下角
+   * 日期数字让位 (r2)。 */
+  padding: 4px 4px 20px;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
   overflow: hidden;
 }
-.m-cell:nth-child(7n) { border-right: 0; }
+/* 色带与格子同为 .m-week 子元素, nth-child 会数进色带 — 行尾判据用 last-child。 */
+.m-cell:last-child { border-right: 0; }
 .m-cell.is-other { background: rgb(var(--ink-2) / 0.5); }
-.m-cell.is-other .m-num { color: rgb(var(--ink-fg-3)); }
+.m-cell.is-other .m-daynum { color: rgb(var(--ink-fg-3)); }
 .m-cell.is-today { background: rgb(var(--c-accent) / 0.05); }
-.m-num {
-  font-size: 12.5px;
+.m-daynum {
+  position: absolute;
+  right: 7px;
+  bottom: 5px;
+  font-size: 11px;
   font-weight: 600;
   color: rgb(var(--ink-fg-1));
   font-variant-numeric: tabular-nums;
   line-height: 1;
-  padding: 2px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
 }
-.m-cell.is-today .m-num .nday {
-  background: rgb(var(--c-accent));
-  color: rgb(var(--c-accent-fg));
-  border-radius: 6px;
-  min-width: 20px;
-  height: 20px;
+.m-cell.is-today .m-daynum {
+  width: 19px;
+  height: 19px;
+  right: 5px;
+  bottom: 3px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  border-radius: 50%;
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
 }
-.m-today-tag {
+
+/* 单日事件胶囊 — 淡 wash + 左圆点取源色 + 标题 + 灰时间同行 (r2)。
+ * --src 随 data-src 切换, 三源 + hot 共用一套规则。 */
+.m-evt {
+  --src: var(--cal-src-mail);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 19px;
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 5px;
+  border: 0;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  cursor: pointer;
+  background: rgb(var(--src) / 0.15);
+  transition: background 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+.m-evt[data-src='matter'] { --src: var(--cal-src-matter); }
+.m-evt[data-src='agent'] { --src: var(--cal-src-agent); }
+.m-evt[data-src='hot'] {
+  --src: var(--cal-src-hot);
+  background: rgb(var(--src) / 0.16);
+}
+.m-evt:hover { background: rgb(var(--src) / 0.24); }
+.m-evt.is-selected {
+  background: var(--sel-wash);
+  box-shadow: 0 0 0 1.5px rgb(var(--c-accent) / 0.5);
+}
+.m-evt-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: rgb(var(--src));
+}
+.m-evt-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: rgb(var(--ink-fg));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-evt-time {
   font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: 9.5px;
-  color: rgb(var(--c-accent));
+  font-size: 10.5px;
+  color: rgb(var(--ink-fg-2));
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+/* 跨天色带 — 行内绝对定位整条 (r2: 高 18 圆角 5, left/width 按列百分比,
+ * top = 4 + lane × 20 由行内 style 写)。 */
+.m-band {
+  --src: var(--cal-src-mail);
+  position: absolute;
+  z-index: 1;
+  height: 18px;
+  border-radius: 5px;
+  border: 0;
+  cursor: pointer;
+  padding: 0 7px;
+  background: rgb(var(--src) / 0.3);
+  color: rgb(var(--ink-fg));
+  font-size: 11px;
+  line-height: 18px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.m-band[data-src='matter'] {
+  --src: var(--cal-src-matter);
+  background: rgb(var(--src) / 0.28);
+}
+.m-band[data-src='agent'] { --src: var(--cal-src-agent); }
+.m-band[data-src='hot'] { --src: var(--cal-src-hot); }
+.m-band:hover { background: rgb(var(--src) / 0.42); }
+
+/* 工具条右簇源色点 (月视图) — 关掉一组同步消失。 */
+.cal-src-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 2px;
+}
+.cal-src-dot {
+  --src: var(--cal-src-mail);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgb(var(--src));
+}
+.cal-src-dot[data-src='matter'] { --src: var(--cal-src-matter); }
+.cal-src-dot[data-src='agent'] { --src: var(--cal-src-agent); }
+
+/* 二级栏三组日历源开关 (srctree, 小月历下方)。 */
+.cal-srctree {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.cal-srctree-title {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 9px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
+  color: rgb(var(--ink-fg-3));
+  padding: 0 6px 4px;
+}
+.cal-src-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  min-width: 0;
+}
+.cal-src-row:hover { background: rgb(var(--ink-3) / 0.7); }
+.cal-src-check {
+  --src: var(--cal-src-mail);
+  width: 13px;
+  height: 13px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: rgb(var(--src) / 0.85);
+  color: rgb(var(--ink-0));
+}
+.cal-src-check[data-src='matter'] { --src: var(--cal-src-matter); }
+.cal-src-check[data-src='agent'] { --src: var(--cal-src-agent); }
+.cal-src-row.is-off .cal-src-check {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px rgb(var(--src) / 0.55);
+}
+.cal-src-label {
+  font-size: 11.5px;
+  color: rgb(var(--ink-fg-1));
+  flex-shrink: 0;
+}
+.cal-src-row.is-off .cal-src-label { color: rgb(var(--ink-fg-3)); }
+.cal-src-hint {
+  margin-left: auto;
+  font-size: 10px;
+  color: rgb(var(--ink-fg-3));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* event chip (month / agenda all-day strip / week all-day)
@@ -3765,8 +3958,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* F22/S6 — agenda 跨天事件「第 n/m 天」标注 (mono 微标签, 同 .m-today-tag
- * 语言的 accent 轻底) */
+/* F22/S6 — agenda 跨天事件「第 n/m 天」标注 (mono 微标签, accent 轻底) */
 .cal-day-badge {
   flex-shrink: 0;
   font-family: ui-monospace, 'SF Mono', monospace;
@@ -4277,39 +4469,6 @@ body:not([data-batch-mode='true']) .email-row .cb {
 .nav-btn:hover { background: rgb(var(--ink-3)); color: rgb(var(--ink-fg)); }
 .nav-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* sync pill — CSS-only hover 触发 tip (mockup §toolbar sync 段) */
-.sync-pill {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: 11.5px;
-  color: rgb(var(--ink-fg-2));
-  padding: 4px 8px;
-  border-radius: 6px;
-  cursor: default;
-}
-.sync-pill:hover { background: rgb(var(--ink-3) / 0.6); }
-.sync-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.sync-pill[data-sync='ok'] .sync-dot { background: rgb(var(--c-ok)); }
-.sync-pill[data-sync='err'] .sync-dot {
-  background: rgb(var(--c-fail));
-  box-shadow: 0 0 0 0 rgba(227, 98, 98, 0.5);
-  animation: errpulse 1.6s ease-out infinite;
-}
-.sync-pill[data-sync='err'] .sync-label { color: rgb(var(--c-fail)); }
-@keyframes errpulse {
-  0%   { box-shadow: 0 0 0 0 rgba(227, 98, 98, 0.45); }
-  70%  { box-shadow: 0 0 0 6px rgba(227, 98, 98, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(227, 98, 98, 0); }
-}
-
 html[data-theme-vt='circle-blur']::view-transition-old(root) {
   animation: none;
 }
@@ -4326,32 +4485,9 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
     filter: blur(0);
   }
 }
-.sync-tip {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  width: 290px;
-  z-index: 70;
-  /* 主题 v3 C8/批 4: 290px 富内容悬浮面板(非微型 tooltip) 10px → --r-pop(14) */
-  border-radius: var(--r-pop);
-  padding: 11px 13px;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-4px);
-  /* F8 — 散装 0.14s 收编 fast(120ms) + standard 曲线 */
-  transition:
-    opacity 120ms cubic-bezier(0.4, 0, 0.2, 1),
-    transform 120ms cubic-bezier(0.4, 0, 0.2, 1);
-  text-align: left;
-}
-.sync-pill:hover .sync-tip {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-/* F3 (阶段2·2.6) — 事件状态图例: toolbar sync-pill 旁 info 入口, 复刻
- * .sync-pill/.sync-tip 的 CSS-only hover tip 模式 (加 :focus-within 键盘
- * 可达)。swatch 用与消费面同款形态配方, 图例即样本。 */
+/* F3 (阶段2·2.6) — 事件状态图例: toolbar info 入口, CSS-only hover tip
+ * 模式 (加 :focus-within 键盘可达)。swatch 用与消费面同款形态配方,
+ * 图例即样本。 */
 .cal-legend { position: relative; }
 .cal-legend-tip {
   position: absolute;

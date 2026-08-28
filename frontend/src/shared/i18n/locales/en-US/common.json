@@ -705,7 +705,6 @@
     "section": {
       "mailboxes": "Mailboxes",
       "aiAgents": "AI Agents",
-      "view": "View",
       "folders": "Folders"
     },
     "domain": {
@@ -2002,7 +2001,6 @@
       "yearMonth": "{m}/{y}"
     },
     "toolbar": {
-      "title": "Calendar",
       "prevAria": "Previous",
       "prevTitle": "Previous (←)",
       "nextAria": "Next",
@@ -2015,16 +2013,10 @@
       "viewMonth": "Month",
       "viewAgenda": "Agenda",
       "viewRecurring": "Recurring",
-      "newBtn": "New",
+      "newBtn": "New event",
       "newTitle": "New event — write directly to Exchange (CalDAV PUT)",
       "syncBtn": "Sync",
       "syncTitle": "Force sync (⌘R) · Background worker auto-syncs every 60s; this triggers an immediate full fetch",
-      "syncPillOk": "Last sync {time}",
-      "syncPillErr": "Sync failed · [ERR]",
-      "syncPillNone": "Never synced",
-      "syncTipOk": "DavMail · Synced",
-      "syncTipErr": "DavMail · Sync failed",
-      "syncTipNoRecord": "No sync_state records yet — enable CALENDAR_CALDAV_SYNC_ENABLED and wait 60s",
       "syncTipUnknownErr": "Unknown error",
       "range": {
         "agenda": "Next 14 days",
@@ -2237,7 +2229,7 @@
         "nextMonthAria": "Next month"
       },
       "month": {
-        "moreBtn": "+{n} more",
+        "moreItems": "{n} more",
         "today": "Today",
         "popEventCount": "{n} events",
         "popDayLabel": "{m}/{d}"
@@ -2252,6 +2244,15 @@
     "shortcut": {
       "title": "Keyboard shortcuts",
       "subtitle": "G-prefixed shortcuts switch views (press G then view key within 800 ms)"
+    },
+    "sources": {
+      "legend": "Calendar sources",
+      "mail": "Mailbox",
+      "matter": "Matters",
+      "agent": "Agents",
+      "mailHint": "Accounts + shared calendars",
+      "matterHint": "Due dates + action items",
+      "agentHint": "Agent schedules"
     }
   },
   "settings": {
@@ -4219,9 +4220,6 @@
       "hint": "When on, the report service runs continuously and enabling any report takes effect immediately; when off, the first report you enable needs one backend restart before scheduled generation starts.",
       "saveError": "Failed to save the report service switch"
     },
-    "tabAgents": "Agents",
-    "tabReports": "Reports",
-    "tabChats": "Chats",
     "schedule": {
       "label": "Schedule",
       "hint": "Preview and actual firing both use the selected timezone",
@@ -5163,6 +5161,7 @@
     },
     "create": {
       "title": "Create matter",
+      "short": "New",
       "fromEmailTitle": "Create matter from email",
       "name": "Title",
       "type": "Type",

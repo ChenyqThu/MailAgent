@@ -766,7 +766,7 @@ export function ContactAgentDrawer({
         onClick={() => {
           openAgentConfig(CONTACT_GOVERNANCE_AGENT_ID)
           onOpenChange(false)
-          void navigate({ to: '/agents', search: { tab: 'agents' } })
+          void navigate({ to: '/agents' })
         }}
         className="flex shrink-0 items-center gap-2 border-t border-ink-border-soft px-4 py-[11px] text-left transition-colors duration-fast ease-standard hover:bg-ink-fg/[0.04]"
       >

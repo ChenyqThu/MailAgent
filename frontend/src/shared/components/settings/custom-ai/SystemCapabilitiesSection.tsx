@@ -369,7 +369,7 @@ export function SystemCapabilitiesSection(): React.ReactElement {
       desc: t('settings.systemCapabilities.crossRef.customAgents.desc'),
       action: t('settings.systemCapabilities.crossRef.customAgents.action'),
       enabled: customAgentsEnabled,
-      onGo: () => void navigate({ to: '/agents', search: { tab: 'agents' } })
+      onGo: () => void navigate({ to: '/agents' })
     }
   ]
 

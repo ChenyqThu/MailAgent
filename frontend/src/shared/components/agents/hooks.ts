@@ -32,7 +32,7 @@ const CONFIG_KEY = qk.report.config()
 // the paginated LIST_KEY (['report','list']) does NOT cover it, so run-now / delete bust it too.
 const LATEST_KEY = ['report', 'latest'] as const
 
-// task 07-21 — 报告中心列表分页大小（滚动预取，见 ReportsTab）。
+// task 07-21 — 报告中心列表分页大小（滚动预取，见 ReportsPage）。
 const REPORT_PAGE_SIZE = 50
 
 export function useReportList(cadence?: ReportCadence): {

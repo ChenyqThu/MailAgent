@@ -116,16 +116,11 @@ export function Sidebar(): React.ReactElement {
   const setView = useEmailFilter((s) => s.setView)
   const setActiveMailbox = useMailbox((s) => s.setActive)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
-  // `?tab=` —— 过渡期 `/agents` 被 team 与 reports 两个域共用，域推导按 tab 细分
-  // （navActiveDomain 的 searchTab 参数，P3 报告拿到独立路由后删）。
-  const searchTab = useRouterState({
-    select: (s) => (s.location.search as { tab?: string }).tab
-  })
 
   // 路由归属域。🔴 null 是**真值**不是缺省：'/search'（「新标签页」搜索标签的承载路由）
   // 有意不进 registry，不属于任何域 ⇒ 导轨没有高亮格。回落成 'mail' 会让邮件格亮着，
   // 误导「当前在邮件域」。
-  const routeDomain = navActiveDomain(navEntries, pathname, searchTab)
+  const routeDomain = navActiveDomain(navEntries, pathname)
   // 二级栏形态要一个具体域才能算，这里才回落邮件域（/search 自带 336 左列，
   // 回落到 mail 的 'page' 档 ⇒ 不渲染 DomainPanel，正是要的形态）。
   const panelDomain = routeDomain ?? 'mail'

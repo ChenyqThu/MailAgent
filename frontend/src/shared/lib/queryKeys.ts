@@ -88,6 +88,7 @@ export const qk = {
 
   calendar: {
     events: () => ['calendar', 'events'] as const,
+    agenda: () => ['calendar', 'agenda'] as const,
     syncStatus: () => ['calendar', 'syncStatus'] as const,
     names: () => ['calendar', 'names'] as const,
     event: () => ['calendar', 'event'] as const,

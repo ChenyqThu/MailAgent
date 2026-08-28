@@ -287,6 +287,24 @@ weekly/周一 9 点/空 tz，后者 disabled），升级后触发时刻**逐分�
   日期标签按宿主机时区，边界上可差一天。`natural_day` 时列 = 构建器时区，两者同源。
   现有行迁移时列写实成宿主机值 → 行为等价。
 
+### 6.3 日历聚合读侧（`src/calendar_sync/agenda.py`）
+
+`GET /api/calendar/agenda` 的 Agent 源是**只读消费方**，不是第三个 worker：
+
+- 只调 `occurrences()`（把窗口内的运行时刻列出来）与 `rules_from_legacy_schedule()`
+  （存量报告 agent 的老形状），**不写 marker、不参与 fire 判定、不改任何语义**。
+- 窗口是半开区间 `[start, end)`：`occurrences()` 严格晚于 `after`，所以传
+  `window_start - 1µs` 让恰好落在起点的那次进来；`>= window_end` 的丢弃。
+  每条规则单窗口展开上限 100（长窗口 + 每日规则会无界增长）。
+- 新老形状分流逐字对齐 §6.2 的 `_rule_entries()`；`type='custom'` 的 v1/v2 分流逐字
+  对齐 §6.1 的 `tick_loop`（**显示必须等于「真的会跑」**，否则日历上会画着一条
+  flag-off 之后根本不 fire 的排程）。
+- `kind='cron'` 不在本契约覆盖范围（§8），聚合侧走 croniter，与 `_due_fire` 的
+  cron 支同库同时区语义。
+- 老形状回落宿主机时区时拿到的是**固定偏移快照**，跨 DST 边界的窗口里切换之后的
+  时刻会差一小时。两个 worker 每 tick 用新的 `now` 取快照所以从不暴露这点；显示面
+  接受这个已知偏差。
+
 ---
 
 ## 7. UI 接入约束

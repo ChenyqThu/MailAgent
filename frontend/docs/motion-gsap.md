@@ -149,7 +149,7 @@ loading 不该成为视觉焦点。**loading 只用三个词汇**（2026-06-13 �
    末尾 @media 块统一降级为纯色文字（纯 CSS 动画不经 GSAP，CSS @media 足够，无需 JS 判断）。
    已接：chat 状态条 `TurnStatusLine`（真值驱动，见 §9.1）/ `ToolGroupCard` 运行态组头 / chat thinking 头 /
    pre-answer「AI 思考中…」/「翻译中…」/ 报告「生成中」/ 邮件正文「加载中…」。spinner 与 shimmer **不并存**于同一条 loading 行
-   （双动效闹；ReportsTab GeneratingState 的页级 spin 是既有信息锚点，例外保留）。
+   （双动效闹；ReportsPage GeneratingState 的页级 spin 是既有信息锚点，例外保留）。
 
 ### 9.1 chat 流式状态条 + 工具组（harness-chat lane B，2026-07）
 

@@ -1,81 +1,158 @@
-// 视觉复刻 mockup-calendar.html §month (2026-05-23) —
-// 6×7 grid (周一首列), 每格显示日期 + 最多 3 个 EventChip, 超出弹 .more-pop
-// fixed popover. is-other 灰底, today coral 圆角 .nday + "今天" tag.
+// task 08-27 P3 —— 月视图重做 (design §七 / r2 calmon)。
+//
+// 形态: 每周一行 (不是一整块 42 格 grid —— 跨天色带要在行内绝对定位横跨若干列)。
+// 数据: 三源聚合 GET /api/calendar/agenda (邮箱 / 事项 / Agent), 布局纯函数在
+// lib/monthGrid.ts。日期数字在格子右下角, 今天 accent 实心圆; 单日事件是淡 wash
+// 胶囊, 跨天是横跨列的整条色带; 每格容量 4 − 该周色带条数, 超出「还有 N 项」
+// (溢出弹层沿用旧 .more-pop 交互)。
+//
+// 点击路由随源分流: mail → EventDetailDrawer (occurrence 从同窗口 events 缓存
+// 解析, 未命中兜底合成); matter → 事项详情 (useMatterNavigation + registry);
+// agent → 团队域 (registry 导航函数, 不写路径字面量)。
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar as CalendarIcon } from 'lucide-react'
+import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
 import { CalendarQueryError } from '../CalendarQueryError'
-import { EventChip } from '../EventChip'
-import { isTodayLocal, ymd } from '../lib/format'
+import { isTodayLocal, shortTime, ymd } from '../lib/format'
 import { DOW_EN } from '../lib/weekdays'
+import {
+  isAgendaEntrySelected,
+  layoutMonthWeeks,
+  MONTH_WEEK_COUNT,
+  type MonthWeekLayout
+} from '../lib/monthGrid'
 import {
   useCalendarEventsInWindow,
   startOfMonth,
   startOfWeek,
   addDays
 } from '../hooks/useCalendarEvents'
-import type { CalendarEventOccurrence } from '@shared/api/types'
+import { useCalendarAgenda } from '../hooks/useCalendarAgenda'
+import type { AgendaEntry, CalendarEventOccurrence } from '@shared/api/types'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
+import { useMatterNavigation } from '@shared/components/matters/navigation'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
+import { navEntry, navigateToNavEntry } from '@shared/navigation/registry'
+import { useCalendarView } from '@shared/state/calendar-view'
 
 interface Props {
   date?: Date
   calendarName?: string
-  /** Phase 4·#1 — 多 calendar 多选 (client-side filter). 空 = 全部. */
+  /** Phase 4·#1 遗留 — agenda 聚合无 calendar_name 字段, 月视图暂不消费
+   *  (Day/Week/Agenda 仍生效); 保留 prop 让 Layout 接口不变。 */
   selectedCalendars?: string[]
-  /** F5 — view 上提选中事件给 CalendarLayout. */
+  /** F5 — view 上提选中事件给 CalendarLayout (仅 mail 源)。 */
   onSelect: (occ: CalendarEventOccurrence) => void
-  /** F4/Q13 — selected event key (= ``${id}-${occurrence_start_iso}``) 由
-   *  Layout 传, chip 比对高亮 drawer 当前 occurrence. */
+  /** F4/Q13 — selected event key (= ``${id}-${occurrence_start_iso}``)。 */
   selectedKey?: string | null
 }
 
-const MAX_VISIBLE = 3
+/** 色带/胶囊的 data-src 值: hot (重要邮箱日程) 视觉独立但归邮箱组。 */
+function srcAttr(entry: AgendaEntry): string {
+  return entry.source === 'mail' && entry.hot ? 'hot' : entry.source
+}
 
-// F32 — ymd/isTodayLocal 抽到 ../lib/format
+/** mail 条目 → drawer 需要的 occurrence: 优先从同窗口 events 缓存解析 (Layout
+ *  j/k 巡航同 queryKey, 命中即零额外 IPC); 未命中兜底合成最小形状 (drawer 头部
+ *  标题/时间可显示, 其余字段由 useCalendarEvent 详情查询补齐)。 */
+function resolveMailOccurrence(
+  entry: AgendaEntry,
+  occs: CalendarEventOccurrence[]
+): CalendarEventOccurrence {
+  const t = Date.parse(entry.startIso)
+  const hit =
+    occs.find((o) => o.id === entry.eventId && Date.parse(o.occurrence_start_iso) === t) ??
+    (entry.icalUid
+      ? occs.find((o) => o.ical_uid === entry.icalUid && Date.parse(o.occurrence_start_iso) === t)
+      : undefined)
+  if (hit) return hit
+  return {
+    id: entry.eventId ?? 0,
+    ical_uid: entry.icalUid ?? '',
+    recurrence_id: entry.recurrenceId ?? null,
+    sequence: 0,
+    summary: entry.title,
+    occurrence_start_iso: entry.startIso,
+    occurrence_end_iso: entry.endIso ?? entry.startIso,
+    is_recurrence_instance: !!entry.recurrenceId,
+    is_all_day: entry.allDay,
+    calendar_name: '',
+    organizer: '',
+    attendees: [],
+    location: '',
+    url: '',
+    status: '',
+    response_status: '',
+    source: 'caldav',
+    notion_page_id: null,
+    related_email_internal_id: null
+  }
+}
 
 interface PopState {
-  /** 下方展开时的 top; flip 时改用 bottom 锚定 (实际高度未知, 向上生长). */
   top?: number
   bottom?: number
   left: number
-  /** 到 viewport 边缘的可用高度, 超出走 overflow-y (index.css .more-pop). */
   maxHeight: number
-  /** Q11 — 下方空间不足且上方更宽裕时向上翻. */
   flip: boolean
-  items: CalendarEventOccurrence[]
+  items: AgendaEntry[]
   dayLabel: string
 }
 
-/** more-pop 高度估算 (flip 判定用): padding 20 + head ~24 + 每 chip 24. */
+/** more-pop 高度估算 (flip 判定用): padding 20 + head ~24 + 每行 24. */
 function estimatePopHeight(itemCount: number): number {
   return 44 + itemCount * 24
 }
 
+/** 单日条目胶囊 (r2: 高 19 圆角 5, 左圆点取源色 + 标题 + 灰时间同行)。 */
+function AgendaChip({
+  entry,
+  selected,
+  allDayLabel,
+  onClick
+}: {
+  entry: AgendaEntry
+  selected: boolean
+  allDayLabel: string
+  onClick: () => void
+}): React.ReactElement {
+  return (
+    <button
+      type="button"
+      className={cn('m-evt', selected && 'is-selected')}
+      data-src={srcAttr(entry)}
+      onClick={onClick}
+      title={entry.title}
+    >
+      <span className="m-evt-dot" aria-hidden />
+      <span className="m-evt-title">{entry.title}</span>
+      <span className="m-evt-time">{entry.allDay ? allDayLabel : shortTime(entry.startIso)}</span>
+    </button>
+  )
+}
+
 export function MonthView({
   date,
-  calendarName,
-  selectedCalendars,
+  calendarName: _calendarName,
+  selectedCalendars: _selectedCalendars,
   onSelect,
   selectedKey = null
 }: Props): React.ReactElement {
   const { t } = useTranslation()
+  const navigate = useNavigate()
+  const sources = useCalendarView((s) => s.sources)
   const [pop, setPop] = useState<PopState | null>(null)
-  // F11 — popover click-outside 用 ref + capture phase mousedown 判断, 不靠
-  // 内部元素 stopPropagation (脆弱: 漏一处就闪一下消失).
   const popRef = useRef<HTMLDivElement | null>(null)
-  // Q11 — 退场动画期间 pop 已置 null, lastPop 保留最后内容渲染到播完
-  // (state 而非 ref: render 期间读 ref 违反 react-hooks/refs).
+  // Q11 — 退场动画期间 pop 已置 null, lastPop 保留最后内容渲染到播完。
   const [lastPop, setLastPop] = useState<PopState | null>(null)
   const renderPop = pop ?? lastPop
 
-  // Q11/F7 — 出入场收编 useExitAnimation popover 模式 (无 backdrop, 从锚点
-  // 侧微展开); flip 时生长方向/origin 镜像.
   const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(pop !== null, {
     backdrop: false,
     from: {
@@ -86,31 +163,38 @@ export function MonthView({
     },
     enterDuration: DUR.fast
   })
-  // Q11 — focus trap (共享 useFocusTrap, 同 KeyboardHelpModal); Esc 走下方
-  // 既有 window keydown.
   const { dialogRef, handleTab } = useFocusTrap({ open: pop !== null })
 
   const monthStart = useMemo(() => startOfMonth(date ?? new Date()), [date])
   const gridStart = useMemo(() => startOfWeek(monthStart), [monthStart])
-  const gridEnd = useMemo(() => addDays(gridStart, 42), [gridStart])
-  const days = useMemo(
-    () => Array.from({ length: 42 }, (_, i) => addDays(gridStart, i)),
-    [gridStart]
-  )
+  const gridEnd = useMemo(() => addDays(gridStart, MONTH_WEEK_COUNT * 7), [gridStart])
   const currentMonth = monthStart.getMonth()
 
-  const { data, isLoading, isError, refetch } = useCalendarEventsInWindow(
-    {
-      fromIso: gridStart.toISOString(),
-      toIso: gridEnd.toISOString(),
-      calendarName
-    },
-    selectedCalendars
+  const { data, isLoading, isError, refetch } = useCalendarAgenda(
+    { fromIso: gridStart.toISOString(), toIso: gridEnd.toISOString() },
+    sources
   )
+  // mail 条目点击解析用的同窗口 occurrences — 与 Layout j/k 巡航同 queryKey,
+  // react-query 缓存命中, 零额外 IPC。
+  const { data: windowEvents } = useCalendarEventsInWindow({
+    fromIso: gridStart.toISOString(),
+    toIso: gridEnd.toISOString()
+  })
 
-  // F11 — popover click-outside / Esc to close. 用 capture phase mousedown
-  // + popRef.contains 判断点击在 popover 内, 比老 'click' bubble + 内部
-  // stopPropagation 更稳 (后者漏一处就闪).
+  const handleEntryClick = (entry: AgendaEntry): void => {
+    if (entry.source === 'mail') {
+      onSelect(resolveMailOccurrence(entry, windowEvents ?? []))
+      return
+    }
+    if (entry.source === 'matter') {
+      if (entry.matterId) useMatterNavigation.getState().open(entry.matterId)
+      navigateToNavEntry(navigate, navEntry('matters'))
+      return
+    }
+    navigateToNavEntry(navigate, navEntry('agents'))
+  }
+
+  // F11 — popover click-outside / Esc to close (capture phase mousedown)。
   useEffect(() => {
     if (!pop) return
     const esc = (e: KeyboardEvent): void => {
@@ -120,9 +204,6 @@ export function MonthView({
       const target = e.target as (Node & { closest?: (s: string) => Element | null }) | null
       if (!target) return
       if (popRef.current && popRef.current.contains(target)) return
-      // F28 — 点击共享 Drawer 内部（含 backdrop）时 Drawer 自己负责关；popover
-      // 不应抢着 close 后让 Drawer 关闭多一帧延迟。依赖共享 Drawer 外层的
-      // data-ui-drawer 标记（内部 click 时 Drawer 走 onOpenChange）。
       if (typeof target.closest === 'function') {
         const inDrawer = target.closest('[data-ui-drawer]')
         if (inDrawer) return
@@ -137,7 +218,9 @@ export function MonthView({
     }
   }, [pop])
 
-  // 首次加载 (无 keepPreviousData 旧数据) 才显网格骨架; 切月时旧月格留屏不闪.
+  const allDayLabel = t('calendar.shared.allDay', '全天')
+
+  // 首次加载 (无 keepPreviousData 旧数据) 才显网格骨架; 切月时旧月格留屏不闪。
   if (isLoading) {
     return (
       <div className="cal-month" aria-busy="true">
@@ -146,12 +229,14 @@ export function MonthView({
             <div key={label}>{label}</div>
           ))}
         </div>
-        <div className="m-grid">
-          {Array.from({ length: 42 }, (_, i) => (
-            <div key={`skel-cell-${i}`} className="m-cell">
-              <div className="m-num">
-                <span className="nday h-3.5 w-5 rounded bg-ink-3 animate-pulse motion-reduce:animate-none" />
-              </div>
+        <div className="m-weeks">
+          {Array.from({ length: MONTH_WEEK_COUNT }, (_, w) => (
+            <div key={`skel-week-${w}`} className="m-week">
+              {Array.from({ length: 7 }, (_, i) => (
+                <div key={`skel-cell-${w}-${i}`} className="m-cell">
+                  <span className="m-daynum h-3.5 w-5 rounded bg-ink-3 animate-pulse motion-reduce:animate-none" />
+                </div>
+              ))}
             </div>
           ))}
         </div>
@@ -159,17 +244,16 @@ export function MonthView({
     )
   }
 
-  const events = data ?? []
-  // F21 — query reject 不再伪装成空态; 仅在无可显示数据时换错误屏
-  // (keepPreviousData 下后台 refetch 偶发失败, 已在屏的旧数据继续留屏).
-  if (isError && events.length === 0) {
+  const entries = data ?? []
+  // F21 — query reject 不伪装成空态; serve-api 不可达 (dev 未起) 时明说。
+  if (isError && entries.length === 0) {
     return (
       <div className="cal-month">
         <CalendarQueryError onRetry={refetch} />
       </div>
     )
   }
-  if (events.length === 0) {
+  if (entries.length === 0) {
     return (
       <div className="cal-month">
         <EmptyState
@@ -181,31 +265,7 @@ export function MonthView({
     )
   }
 
-  // group occurrences by local day; all-day events include跨天逻辑.
-  const byDay = new Map<string, CalendarEventOccurrence[]>()
-  for (const occ of events) {
-    const s = new Date(occ.occurrence_start_iso)
-    const e = new Date(occ.occurrence_end_iso)
-    if (occ.is_all_day) {
-      // 把跨天 all-day 事件展开到每一天
-      const startDay = new Date(s.getFullYear(), s.getMonth(), s.getDate())
-      const endDay = new Date(e.getFullYear(), e.getMonth(), e.getDate())
-      let cur = startDay
-      while (cur.getTime() <= endDay.getTime()) {
-        const k = ymd(cur)
-        const arr = byDay.get(k) ?? []
-        arr.push(occ)
-        byDay.set(k, arr)
-        cur = addDays(cur, 1)
-        if (cur.getTime() - startDay.getTime() > 14 * 86_400_000) break // safety
-      }
-    } else {
-      const k = ymd(s)
-      const arr = byDay.get(k) ?? []
-      arr.push(occ)
-      byDay.set(k, arr)
-    }
-  }
+  const weeks: MonthWeekLayout[] = layoutMonthWeeks(entries, gridStart)
 
   return (
     <div className="cal-month">
@@ -214,73 +274,87 @@ export function MonthView({
           <div key={label}>{label}</div>
         ))}
       </div>
-      <div className="m-grid">
-        {days.map((d, i) => {
-          const isOther = d.getMonth() !== currentMonth
-          const today = isTodayLocal(d)
-          const dayEvents = byDay.get(ymd(d)) ?? []
-          // sort: all-day first, then by start time
-          const sorted = [...dayEvents].sort((a, b) => {
-            if (a.is_all_day !== b.is_all_day) return a.is_all_day ? -1 : 1
-            return Date.parse(a.occurrence_start_iso) - Date.parse(b.occurrence_start_iso)
-          })
-          const visible = sorted.slice(0, MAX_VISIBLE)
-          const moreCount = sorted.length - visible.length
-          const monthN = d.getMonth() + 1
-          return (
-            <div key={i} className={cn('m-cell', isOther && 'is-other', today && 'is-today')}>
-              <div className="m-num">
-                <span className="nday">{d.getDate()}</span>
-                {today && (
-                  <span className="m-today-tag">{t('calendar.view.month.today', '今天')}</span>
-                )}
-              </div>
-              {visible.map((occ) => (
-                <EventChip
-                  key={`${occ.id}-${occ.occurrence_start_iso}`}
-                  event={occ}
-                  selected={selectedKey === `${occ.id}-${occ.occurrence_start_iso}`}
-                  onClick={() => onSelect(occ)}
-                />
-              ))}
-              {moreCount > 0 && (
-                <button
-                  type="button"
-                  className="more-btn"
-                  onClick={(ev) => {
-                    ev.stopPropagation()
-                    const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect()
-                    // Q11 — 垂直 flip: 下方剩余空间放不下估算高度且上方更宽裕
-                    // 时, 改 bottom 锚定向上生长; maxHeight 兜住极端格 (超出
-                    // 滚动, 不溢出 viewport).
-                    const spaceBelow = window.innerHeight - rect.bottom - 6
-                    const spaceAbove = rect.top - 6
-                    const flip =
-                      estimatePopHeight(sorted.length) > spaceBelow && spaceAbove > spaceBelow
-                    const next: PopState = {
-                      left: Math.min(rect.left, window.innerWidth - 240),
-                      maxHeight: Math.max(120, Math.floor((flip ? spaceAbove : spaceBelow) - 8)),
-                      flip,
-                      items: sorted,
-                      // F26 — more-pop 日期标签 t() 化 (批 2 落地时仍硬编码)
-                      dayLabel: t('calendar.view.month.popDayLabel', '{m} 月 {d} 日', {
-                        m: monthN,
-                        d: d.getDate()
-                      }),
-                      ...(flip
-                        ? { bottom: window.innerHeight - rect.top + 6 }
-                        : { top: rect.bottom + 6 })
-                    }
-                    setLastPop(next)
-                    setPop(next)
-                  }}
+      <div className="m-weeks">
+        {weeks.map((week) => (
+          <div key={ymd(week.start)} className="m-week">
+            {/* 跨天色带 — 行内绝对定位横跨若干列, top 按 lane 序号叠 */}
+            {week.bands.map((band) => (
+              <button
+                key={`band-${band.entry.id}-${band.startCol}`}
+                type="button"
+                className="m-band"
+                data-src={srcAttr(band.entry)}
+                style={{
+                  left: `calc(${(band.startCol * 100) / 7}% + 4px)`,
+                  width: `calc(${(band.span * 100) / 7}% - 8px)`,
+                  top: 4 + band.lane * 20
+                }}
+                onClick={() => handleEntryClick(band.entry)}
+                title={band.entry.title}
+              >
+                {band.entry.title}
+              </button>
+            ))}
+            {week.days.map((cell) => {
+              const isOther = cell.date.getMonth() !== currentMonth
+              const today = isTodayLocal(cell.date)
+              const monthN = cell.date.getMonth() + 1
+              return (
+                <div
+                  key={cell.key}
+                  className={cn('m-cell', isOther && 'is-other', today && 'is-today')}
+                  style={{ paddingTop: 4 + week.laneCount * 20 }}
                 >
-                  {t('calendar.view.month.moreBtn', '+{n} 更多', { n: moreCount })}
-                </button>
-              )}
-            </div>
-          )
-        })}
+                  {cell.visible.map((entry) => (
+                    <AgendaChip
+                      key={entry.id}
+                      entry={entry}
+                      selected={isAgendaEntrySelected(entry, selectedKey)}
+                      allDayLabel={allDayLabel}
+                      onClick={() => handleEntryClick(entry)}
+                    />
+                  ))}
+                  {cell.moreCount > 0 && (
+                    <button
+                      type="button"
+                      className="more-btn"
+                      onClick={(ev) => {
+                        ev.stopPropagation()
+                        const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect()
+                        const spaceBelow = window.innerHeight - rect.bottom - 6
+                        const spaceAbove = rect.top - 6
+                        const flip =
+                          estimatePopHeight(cell.items.length) > spaceBelow &&
+                          spaceAbove > spaceBelow
+                        const next: PopState = {
+                          left: Math.min(rect.left, window.innerWidth - 240),
+                          maxHeight: Math.max(
+                            120,
+                            Math.floor((flip ? spaceAbove : spaceBelow) - 8)
+                          ),
+                          flip,
+                          items: cell.items,
+                          dayLabel: t('calendar.view.month.popDayLabel', '{m} 月 {d} 日', {
+                            m: monthN,
+                            d: cell.date.getDate()
+                          }),
+                          ...(flip
+                            ? { bottom: window.innerHeight - rect.top + 6 }
+                            : { top: rect.bottom + 6 })
+                        }
+                        setLastPop(next)
+                        setPop(next)
+                      }}
+                    >
+                      {t('calendar.view.month.moreItems', '还有 {n} 项', { n: cell.moreCount })}
+                    </button>
+                  )}
+                  <span className="m-daynum">{cell.date.getDate()}</span>
+                </div>
+              )
+            })}
+          </div>
+        ))}
       </div>
 
       {shouldRender && renderPop && (
@@ -310,13 +384,14 @@ export function MonthView({
             </span>
           </div>
           <div className="space-y-1">
-            {renderPop.items.map((occ, idx) => (
-              <EventChip
-                key={`${occ.id}-${occ.occurrence_start_iso}-${idx}`}
-                event={occ}
-                selected={selectedKey === `${occ.id}-${occ.occurrence_start_iso}`}
+            {renderPop.items.map((entry) => (
+              <AgendaChip
+                key={`pop-${entry.id}`}
+                entry={entry}
+                selected={isAgendaEntrySelected(entry, selectedKey)}
+                allDayLabel={allDayLabel}
                 onClick={() => {
-                  onSelect(occ)
+                  handleEntryClick(entry)
                   setPop(null)
                 }}
               />

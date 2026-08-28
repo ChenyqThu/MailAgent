@@ -230,16 +230,16 @@ export function MatterBoardSkeleton(): React.ReactElement {
 export function MattersWorkspaceSkeleton({ tab }: { tab: MatterTab }): React.ReactElement {
   return (
     <div aria-hidden className="flex h-full min-h-0 flex-col" data-testid="matters-skeleton">
-      {/* 08-27 波 2 —— 几何跟随 MattersWorkspace 的新形态：清单列（含顶部视图折叠组）在两个
+      {/* 08-27 波 2 —— 几何跟随 MattersWorkspace 的新形态：清单列（含顶部视图行）在两个
           视图下都在场，右栏按 tab 换看板 / 详情。 */}
       <div className="grid min-h-0 flex-1 grid-cols-[336px_minmax(420px,1fr)] max-[880px]:grid-cols-1">
         <div className="flex min-h-0 flex-col border-r border-ink-border bg-ink-1/55">
-          {/* 视图折叠组占位：段头 + 三行（今日看板 / 事项 / 新建事项）。 */}
-          <div className="shrink-0 space-y-1.5 border-b border-ink-border px-3.5 pb-2.5 pt-3.5">
-            <Bar w={34} h={9} className="opacity-70" />
-            {[0, 1, 2].map((index) => (
-              <Bar key={`matter-skel-viewnav-${index}`} w={index === 2 ? 96 : 76} h={14} />
-            ))}
+          {/* 视图行占位：单行 42px = py-1.5(6) + 行 30 + py-1.5(6)，条位照 MatterViewNav 的
+              两个视图钮 + 右端「新建」CTA。 */}
+          <div className="flex h-[42px] shrink-0 items-center gap-3 border-b border-ink-border px-3.5">
+            <Bar w={76} h={14} />
+            <Bar w={52} h={14} />
+            <Bar w={52} h={14} className="ml-auto opacity-70" />
           </div>
           <div className="min-h-0 flex-1">
             <MatterListSkeleton />

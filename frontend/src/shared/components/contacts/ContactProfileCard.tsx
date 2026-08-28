@@ -444,7 +444,7 @@ export function ContactProfileCard({
             </p>
             <button
               type="button"
-              onClick={() => void navigate({ to: '/agents', search: { tab: 'agents' } })}
+              onClick={() => void navigate({ to: '/agents' })}
               className="mt-2.5 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2.5 py-1 text-meta text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3"
             >
               {t('contacts.profile.offCta')}

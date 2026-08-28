@@ -1,12 +1,22 @@
-// Sprint 20 — 报告 tab：master 列表（cadence 过滤 + 状态徽标）+ 详情（BlockRenderer
+// Sprint 20 — 报告页：master 列表（cadence 过滤 + 状态徽标）+ 详情（BlockRenderer
 // + generating/failed/empty 态）。窄屏单栏 + 返回栈。移植自 ~/Downloads/agents/reports.jsx。
-import { useEffect, useMemo, useState } from 'react'
+//
+// 08-27 P3：从 `/agents?tab=reports` 拆成一级域 `/reports`。清单列即报告域的二级栏
+// （定宽 336，左列总宽 392 = 导轨 56 + 336），选中项由 URL 的 `$reportId` 决定 ——
+// 原来的组件内 `picked` state 与 reportNavigation store-intent 一并退役。
+//
+// 窄屏（<780，只在 web 构件里够得着）的单栏切换同样看 URL：有 `$reportId` 就是详情、
+// 没有就是清单，「返回列表」= 导航回 `/reports`。原来那个 `mobileDetail` state 一并
+// 退役 —— 留着它的话，通知深链直接落详情路由时它还是 false，会停在清单上。
+import { useMemo, useState } from 'react'
+import { useNavigate, useParams } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { Check, Trash2, X } from 'lucide-react'
 
 import type { AgentAvatarConfig, ReportCadence, ReportListItem } from '@shared/api/types'
 import { MANUAL_CHAT_REPORT_AGENT_ID, REPORT_CADENCES } from '@shared/api/reportBlocks'
 import { cn } from '@shared/lib/cn'
+import { navEntry, navigateToNavEntry, navigateToReport } from '@shared/navigation/registry'
 import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { ShimmerText } from '@shared/components/ShimmerText'
@@ -15,7 +25,6 @@ import { BlockRenderer } from './BlockRenderer'
 import { EmailSourcePanel } from './EmailSourcePanel'
 import { CadencePill, ReportIcon, StatusBadge } from './primitives'
 import { AgentAvatar } from './AgentAvatar'
-import { useReportNavigation } from './reportNavigation'
 import {
   FIXED_RENDER,
   fmtClock,
@@ -264,6 +273,9 @@ function ReportListRow({
 // 距底多少 px 触发预取下一页（EmailList 70%/8 行阈值同款思路，这里数据量小，固定距离足够）。
 const PREFETCH_THRESHOLD_PX = 200
 
+/** 报告域二级栏定宽（左列总宽 392 = 导轨 56 + 336）。邮件/事项/通讯录同值。 */
+const LIST_WIDTH = 336
+
 function ReportList({
   items,
   total,
@@ -318,7 +330,7 @@ function ReportList({
   return (
     <div
       style={{
-        width: fluid ? '100%' : 332,
+        width: fluid ? '100%' : LIST_WIDTH,
         flexShrink: 0,
         borderRight: fluid ? 'none' : '1px solid rgb(var(--ink-border))',
         display: 'flex',
@@ -742,9 +754,10 @@ function ReportDetailView({
   )
 }
 
-// ─── tab ────────────────────────────────────────────────────────────────────
-export function ReportsTab(): React.ReactElement {
+// ─── 页面 ───────────────────────────────────────────────────────────────────
+export function ReportsPage(): React.ReactElement {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const [filter, setFilter] = useState<string>('all')
   const cadence = filter === 'all' ? undefined : (filter as ReportCadence)
   const { items, total, isLoading, hasMore, isFetchingMore, fetchMore } = useReportList(cadence)
@@ -762,25 +775,30 @@ export function ReportsTab(): React.ReactElement {
     () => Object.fromEntries(agents.map((agent) => [agent.id, agent.avatar])),
     [agents]
   )
-  // 用户显式点选；派生有效选中（pick 仍在列表→用它，否则回落第一份），免 set-state-in-effect。
-  const [picked, setPicked] = useState<string | null>(null)
-  const [mobileDetail, setMobileDetail] = useState(false)
+  // 选中项来自 URL（`/reports/$reportId`）。派生有效选中：URL 点名的那份仍在列表里就
+  // 用它，否则回落第一份 —— 深链到一份已删 / 分页还没翻到的报告时不弹空详情。
+  // `strict: false` = 从 `/reports`（无参）与 `/reports/$reportId`（有参）两条路由读同
+  // 一份 params，父组件不必知道当前匹配的是哪一条。
+  const pickedId = useParams({
+    strict: false,
+    select: (p) => (p as { reportId?: string }).reportId
+  })
   const [sourceEmail, setSourceEmail] = useState<ReportEmailItemForPanel | null>(null)
   const narrow = useNarrow()
   const { run, isRunning } = useRunNow()
   const { remove } = useDeleteReport()
-  // 删除当前选中项时，refetch 后 picked 不再命中 → selected 自动回落第一份（派生逻辑）。
+  // 删除当前选中项时，refetch 后 URL 上那个 id 不再命中 → selected 自动回落第一份（派生逻辑）。
   const onDelete = (id: string): void => {
     void remove(id)
   }
 
   const selected = useMemo(() => {
-    if (picked) {
-      const hit = items.find((it) => it.id === picked)
+    if (pickedId) {
+      const hit = items.find((it) => it.id === pickedId)
       if (hit) return hit
     }
     return items[0] ?? null
-  }, [items, picked])
+  }, [items, pickedId])
   const selectedId = selected?.id ?? null
 
   // 主标签第二段（design §三「报告类型，进具体一份时换成标题」）：报告行没有 title 字段，
@@ -805,24 +823,9 @@ export function ReportsTab(): React.ReactElement {
   )
 
   const onSelect = (id: string): void => {
-    setPicked(id)
-    if (narrow) setMobileDetail(true)
+    navigateToReport(navigate, id)
   }
 
-  // 跨页直达：通知中心的「报告完成」条目在 store 里点名一份报告后 navigate 到
-  // `/agents?tab=reports`，本 effect 消费即清（reportNavigation.ts 头注写了为什么走
-  // store-intent 而不是搜索参数）。
-  // 🔴 不等列表落定：`picked` 只是一个 id，命中与否由下面的 `selected` 每次现算 ——
-  // 提前落下反而免掉「先闪一眼列表第一份再跳走」。那份报告始终不在列表里（分页没翻到 /
-  // 已被删）时它就一直不命中，选中自然停在第一份，不弹空详情。
-  const navigationTargetReportId = useReportNavigation((state) => state.targetReportId)
-  const clearReportNavigation = useReportNavigation((state) => state.clear)
-  useEffect(() => {
-    if (navigationTargetReportId === null) return
-    setPicked(navigationTargetReportId)
-    if (narrow) setMobileDetail(true)
-    clearReportNavigation()
-  }, [clearReportNavigation, narrow, navigationTargetReportId])
   const onRetry = (): void => {
     if (selected && !isRunning) void run(selected.agent_id, { cadence: selected.cadence })
   }
@@ -844,11 +847,11 @@ export function ReportsTab(): React.ReactElement {
   if (narrow) {
     return (
       <div style={{ position: 'relative', height: '100%', width: '100%' }}>
-        {mobileDetail && selected ? (
+        {pickedId !== undefined && selected ? (
           <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             <button
               type="button"
-              onClick={() => setMobileDetail(false)}
+              onClick={() => navigateToNavEntry(navigate, navEntry('reports'))}
               className="flex items-center"
               style={{
                 gap: 6,

@@ -16,7 +16,7 @@
 //
 // 跨域切回落在**该域上次的落点**而不是域缺省 entry（解析与记忆在 ./domain-location，
 // 导轨格点击共用同一份）—— 域内位置在 URL 里（邮件五视图 `/?view=flagged`、日历
-// `?view=month`、`/agents?tab=`），恒落缺省会把「已加星标」重置成收件箱。
+// `?view=month`、报告 `/reports/<id>`），恒落缺省会把「已加星标」重置成收件箱。
 //
 // 搜索标签（kind='search'，P2 补批 Lane S）不归任何域，两腿各有一条特判：激活它 →
 // navigate '/search'（绕过 navigateToDomain —— 那是域的解析）；pathname='/search'
@@ -38,7 +38,7 @@ import {
   type TabWorkspaceState
 } from '@shared/state/tab-workspace'
 import { openSearchTab } from '@shared/state/tab-workspace-bridge'
-import { navigateToDomain, recordRouteLocation, searchTabOf } from './domain-location'
+import { navigateToDomain, recordRouteLocation } from './domain-location'
 import { NAV_ENTRIES, navActiveDomain, type NavDomain } from './registry'
 
 /** 搜索标签的承载路由。不是 NavPath（不进 registry：无 rail 格、无 jump 行、无深链
@@ -121,7 +121,7 @@ export function useTabRouteSync(): void {
     const target = activeSlotDomain(useTabWorkspace.getState())
     // 恢复的激活槽是搜索标签：路由恒从 '/' 起步（≠ '/search'），恒需导航。
     if (target === SEARCH_SLOT) return pathname === SEARCH_ROUTE_PATH ? null : target
-    const current = navActiveDomain(NAV_ENTRIES, pathname, searchTabOf(search))
+    const current = navActiveDomain(NAV_ENTRIES, pathname)
     return current !== null && current !== target ? target : null
   })
   const bootNavTarget = useRef(bootTarget)
@@ -178,7 +178,7 @@ export function useTabRouteSync(): void {
         if (loc.pathname !== SEARCH_ROUTE_PATH) void navigate({ to: SEARCH_ROUTE_PATH })
         return
       }
-      const current = navActiveDomain(NAV_ENTRIES, loc.pathname, searchTabOf(loc.search))
+      const current = navActiveDomain(NAV_ENTRIES, loc.pathname)
       if (current === target) return
       navigateToDomain(navigate, target)
     })

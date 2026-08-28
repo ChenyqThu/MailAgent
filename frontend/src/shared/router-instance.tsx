@@ -305,23 +305,27 @@ const sessionsRoute = createRoute({
   )
 })
 
-// /agents — Custom AI Agents 区（Agents / 报告 / Chats）。?tab= 控制激活 tab，
-// 侧栏「Custom AI」「AI 会话历史」直接深链。validateSearch 把未知 tab 归到 agents。
-const AGENTS_TABS = ['agents', 'reports', 'chats'] as const
-
+// /agents — 团队域（智能体清单与配置）。08-27 P3：报告与对话拆成各自的一级域
+// （`/reports` / `/sessions`），`?tab=` 三档过渡机制随之退役，本路由无搜索参数。
 const agentsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/agents',
-  component: lazyRouteComponent(() => import('./components/layout/AgentsLayout'), 'AgentsLayout'),
-  validateSearch: (search: Record<string, unknown>): { tab: (typeof AGENTS_TABS)[number] } => {
-    const tab = search.tab
-    return {
-      tab:
-        typeof tab === 'string' && (AGENTS_TABS as readonly string[]).includes(tab)
-          ? (tab as (typeof AGENTS_TABS)[number])
-          : 'agents'
-    }
-  }
+  component: lazyRouteComponent(() => import('./components/layout/AgentsLayout'), 'AgentsLayout')
+})
+
+// /reports — 报告域（08-27 P3 从 /agents 的 tab 里拆出）。`/reports/$reportId` 是它的
+// 子路由：**父路由的组件同时渲染清单列与详情**（详情要拿列表行的元数据），子路由只
+// 提供 `reportId` 参数、自身不渲染任何东西。这样切换报告时 ReportsPage 不卸载，清单
+// 的筛选档、滚动位置与已翻的分页都留着。
+const reportsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/reports',
+  component: lazyRouteComponent(() => import('./components/layout/ReportsLayout'), 'ReportsLayout')
+})
+
+const reportDetailRoute = createRoute({
+  getParentRoute: () => reportsRoute,
+  path: '$reportId'
 })
 
 const mattersRoute = createRoute({
@@ -489,6 +493,7 @@ export const router = createRouter({
     todayRoute,
     sessionsRoute,
     agentsRoute,
+    reportsRoute.addChildren([reportDetailRoute]),
     mattersRoute,
     searchRoute,
     contactsRoute,

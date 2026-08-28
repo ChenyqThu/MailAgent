@@ -195,14 +195,17 @@ describe('每域最近落点：记录与回放', () => {
     expect(lastNavigate(navigate)).toEqual({ to: '/admin/calendar', search: { view: 'month' } })
   })
 
-  // /agents 过渡期被 team（agents 域）与 reports 两个域共用，归属靠 `?tab=`：记录必须
-  // 用整个 search 判域，否则两个域会互相覆盖对方的落点（切到报告再切回团队落到报告页）。
-  test('/agents 的两个域各记各的（tab 归属不串味）', () => {
-    expect(recordRouteLocation('/agents', { tab: 'reports' })).toBe('reports')
+  // 08-27 P3：报告拿到自己的路由，团队与报告不再共用 `/agents`（`?tab=` 归属那套
+  // 胶水随之退役）。落点各记各的这条不变，只是判据回到纯 pathname：报告域记的是
+  // 「上次看的那一份」，切回来直接回那一份而不是清单缺省。
+  test('团队与报告各记各的落点（报告回放到上次看的那一份）', () => {
+    expect(recordRouteLocation('/reports/daily-2026-08-27', {})).toBe('reports')
+    expect(recordRouteLocation('/agents', {})).toBe('agents')
     const navigate = vi.fn()
-    // 团队域自己没落点 → 走它的缺省 tab；报告域那次落点不该顶到它头上。
+    navigateToDomain(navigate as never, 'reports')
+    expect(lastNavigate(navigate)).toEqual({ to: '/reports/daily-2026-08-27', search: {} })
     navigateToDomain(navigate as never, 'agents')
-    expect(lastNavigate(navigate)).toEqual({ to: '/agents', search: { tab: 'agents' } })
+    expect(lastNavigate(navigate)).toEqual({ to: '/agents', search: {} })
   })
 
   test('不属于任何域的 path → 不记（回放仍走缺省）', () => {

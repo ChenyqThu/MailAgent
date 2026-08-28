@@ -290,7 +290,7 @@ describe('SystemCapabilitiesSection — cross-reference rows always render', () 
       ).toBeTruthy()
     )
     fireEvent.click(screen.getByText('settings.systemCapabilities.crossRef.customAgents.action'))
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/agents', search: { tab: 'agents' } })
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/agents' })
   })
 
   test('exec cross-ref (enabled) → scrollIntoView on the anchor element', async () => {

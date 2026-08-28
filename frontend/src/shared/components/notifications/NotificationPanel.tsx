@@ -33,7 +33,7 @@ import { requestOpenAgentSession } from '@shared/state/ai-chat-panel'
 import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { useMailApi } from '@shared/hooks/useMailApi'
-import { useReportNavigation } from '@shared/components/agents/reportNavigation'
+import { navigateToReport } from '@shared/navigation/registry'
 import { useContactNavigation } from '@shared/components/contacts/navigation'
 import { useMatterNavigation } from '@shared/components/matters/navigation'
 
@@ -316,7 +316,6 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
   const markAllRead = useMarkAllNotificationsRead()
   const snooze = useSnoozeNotification()
   const resolve = useResolveNotification()
-  const openReport = useReportNavigation((state) => state.open)
   const openContactQueue = useContactNavigation((state) => state.openQueue)
   const openMatter = useMatterNavigation((state) => state.open)
 
@@ -353,10 +352,10 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
         void navigate({ to: '/sessions' })
         return
       case 'report':
-        // store-intent → ReportsTab 挂载/更新时消费即清（reportNavigation.ts 头注解释了
-        // 为什么不走 `?report=` 搜索参数）。
-        openReport(link.reportId)
-        void navigate({ to: '/agents', search: { tab: 'reports' } })
+        // 08-27 P3：报告有了自己的路由，深链直接落 `/reports/$reportId` —— 原来那条
+        // store-intent（reportNavigation）随之退役。目标报告不在列表里（已删 / 分页
+        // 没翻到）时 ReportsPage 的派生选中回落第一份，不弹空详情。
+        navigateToReport(navigate, link.reportId)
         return
       case 'contact_queue':
         openContactQueue()

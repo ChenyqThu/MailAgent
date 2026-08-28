@@ -5,8 +5,8 @@
 // 「本周无日程」会误导用户以为没事件而不是系统没数据 (S7).
 //
 // 判定口径 (数据源 useCalendarSyncStatus):
-//   1. 同步失败  — 健康优先选行 (find 无 last_error 的行 ?? [0], 与 Toolbar
-//      sync-pill 同源判定, 避免 F19 孤儿行误报) 后 head.last_error 非空;
+//   1. 同步失败  — 健康优先选行 (find 无 last_error 的行 ?? [0], 与 Layout 副
+//      status bar 同源判定 pickSyncHead, 避免 F19 孤儿行误报) 后 head.last_error 非空;
 //   2. 从未同步  — syncStatus 已加载且 (无行 || 选中行 full/incremental 两个
 //      同步时间戳均为 null);
 //   3. 正常空    — 其余 (含 syncStatus 尚在加载/不可得: 不闪错误语义).

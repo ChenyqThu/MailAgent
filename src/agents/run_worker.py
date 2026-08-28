@@ -845,11 +845,14 @@ class AgentRunWorker:
 
     @staticmethod
     def _notification_link(session_id: int) -> dict:
-        """通知条目 deep-link：有会话进会话，没有则退化到 Agents 区列表。"""
+        """通知条目 deep-link：有会话进会话，没有则退化到团队页。
+
+        `/agents` 自 08-27 P3（报告与对话拆成一级域）起不再有 `?tab=` 搜索参数。
+        """
         return (
             {"type": "session", "sessionId": session_id}
             if session_id > 0
-            else {"type": "route", "to": "/agents", "search": {"tab": "agents"}}
+            else {"type": "route", "to": "/agents"}
         )
 
     def _run_title(self, job: "AsyncJob", agent_id: str) -> str:

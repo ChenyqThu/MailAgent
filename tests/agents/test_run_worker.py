@@ -440,10 +440,8 @@ def test_failed_publishes_warn_notification_keyed_by_agent(env, monkeypatch):
     assert rows[0]["severity"] == "warn"
     assert rows[0]["dedupe_key"] == "agent_run_failed:dms"  # 失败按 agent（连败合并计次）
     assert "E_BUDGET_TIME" in rows[0]["body"]
-    # 无 sessionId → deep-link 退化到 Agents 区列表
-    assert json.loads(rows[0]["payload_json"])["link"] == {
-        "type": "route", "to": "/agents", "search": {"tab": "agents"},
-    }
+    # 无 sessionId → deep-link 退化到团队页（`/agents` 自 08-27 P3 起无 `?tab=`）
+    assert json.loads(rows[0]["payload_json"])["link"] == {"type": "route", "to": "/agents"}
 
 
 def test_paused_handoff_never_publishes_completed_notification(env, monkeypatch):

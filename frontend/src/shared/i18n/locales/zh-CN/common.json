@@ -705,7 +705,6 @@
     "section": {
       "mailboxes": "Mailboxes",
       "aiAgents": "AI Agents",
-      "view": "View",
       "folders": "Folders"
     },
     "domain": {
@@ -1989,7 +1988,6 @@
       "yearMonth": "{y} 年 {m} 月"
     },
     "toolbar": {
-      "title": "日历",
       "prevAria": "上一段",
       "prevTitle": "上一段 (←)",
       "nextAria": "下一段",
@@ -2002,16 +2000,10 @@
       "viewMonth": "月",
       "viewAgenda": "Agenda",
       "viewRecurring": "定期邀请",
-      "newBtn": "新建",
+      "newBtn": "新建日程",
       "newTitle": "新建事件 — 直接写到 Exchange (CalDAV PUT)",
       "syncBtn": "同步",
       "syncTitle": "急刷 (⌘R) · 后台 worker 每 60s 自动同步, 此按钮触发立即全量拉取",
-      "syncPillOk": "上次同步 {time}",
-      "syncPillErr": "同步失败 · [ERR]",
-      "syncPillNone": "尚未同步",
-      "syncTipOk": "DavMail · 已同步",
-      "syncTipErr": "DavMail · 同步失败",
-      "syncTipNoRecord": "尚无 sync_state 记录 — 启用 CALENDAR_CALDAV_SYNC_ENABLED 后等 60s",
       "syncTipUnknownErr": "未知错误",
       "range": {
         "agenda": "未来 14 天",
@@ -2237,7 +2229,7 @@
         "nextMonthAria": "下月"
       },
       "month": {
-        "moreBtn": "+{n} 更多",
+        "moreItems": "还有 {n} 项",
         "today": "今天",
         "popEventCount": "{n} 个事件",
         "popDayLabel": "{m} 月 {d} 日"
@@ -2252,6 +2244,15 @@
     "shortcut": {
       "title": "键盘快捷键",
       "subtitle": "G 开头为视图跳转 (先按 G 再按视图键, 800ms 内有效)"
+    },
+    "sources": {
+      "legend": "日历源",
+      "mail": "邮箱日历",
+      "matter": "事项日历",
+      "agent": "Agent 日历",
+      "mailHint": "各账户 + 团队共享",
+      "matterHint": "截止日 + 行动项排期",
+      "agentHint": "智能体排程"
     }
   },
   "settings": {
@@ -4219,9 +4220,6 @@
       "hint": "开启后报告生成服务常驻运行，启用任一报告立即生效；关闭时首次启用某个报告后需重启一次后端才开始定时生成。",
       "saveError": "保存报告服务开关失败"
     },
-    "tabAgents": "Agents",
-    "tabReports": "报告",
-    "tabChats": "Chats",
     "schedule": {
       "label": "排程",
       "hint": "预览与实际触发都按所选时区",
@@ -5163,6 +5161,7 @@
     },
     "create": {
       "title": "新建事项",
+      "short": "新建",
       "fromEmailTitle": "从邮件创建事项",
       "name": "标题",
       "type": "类型",

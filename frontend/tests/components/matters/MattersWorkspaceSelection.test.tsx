@@ -152,9 +152,8 @@ const { useMatterNavigation } = await import('@shared/components/matters/navigat
 const { resetMatterWorkspace, useMatterWorkspace } =
   await import('@shared/components/matters/matterWorkspaceStore')
 const { MAIN_SLOT, useTabWorkspace } = await import('@shared/state/tab-workspace')
-const { _resetMatterIdentityForTest, registerMatterIdentity } = await import(
-  '@shared/components/matters/matterTabIdentity'
-)
+const { _resetMatterIdentityForTest, registerMatterIdentity } =
+  await import('@shared/components/matters/matterTabIdentity')
 
 function renderWorkspace(): ReturnType<typeof render> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -323,16 +322,16 @@ describe('MattersWorkspace — scope 默认 all（task 08-14）', () => {
   })
 })
 
-// 08-27 dogfood 修正批·波 2 —— 42px 通栏模块 tab 栏退役，视图切换与「新建事项」收进清单列
-// （336）顶部的折叠组（MatterViewNav）。
+// 08-27 dogfood 修正批 —— 42px 通栏模块 tab 栏退役，视图切换与「新建」收进清单列（336）
+// 顶部的单行视图行（MatterViewNav）。
 function viewNav(): HTMLElement {
   const host = document.querySelector('[data-matter-view-nav]')
   if (!host) throw new Error('view nav not rendered')
   return host as HTMLElement
 }
 
-describe('MattersWorkspace — 二级栏视图折叠组（08-27 波 2）', () => {
-  test('看板视图下清单列仍在场：折叠组与看板同屏（二级栏不随视图消失）', async () => {
+describe('MattersWorkspace — 二级栏视图行', () => {
+  test('看板视图下清单列仍在场：视图行与看板同屏（二级栏不随视图消失）', async () => {
     renderWorkspace()
 
     expect(await screen.findByTestId('matter-focus')).toBeTruthy()
@@ -343,7 +342,7 @@ describe('MattersWorkspace — 二级栏视图折叠组（08-27 波 2）', () =>
     ).toBe('page')
   })
 
-  test('点组内两行切视图，选中态跟着搬家', async () => {
+  test('点行内两个视图钮切视图，选中态跟着搬家', async () => {
     renderWorkspace()
     await screen.findByTestId('matter-focus')
 
@@ -360,18 +359,18 @@ describe('MattersWorkspace — 二级栏视图折叠组（08-27 波 2）', () =>
     expect(await screen.findByTestId('matter-focus')).toBeTruthy()
   })
 
-  test('点组头收起：组内三行都不在，下方清单不受影响', async () => {
+  test('三个入口同在一行：两个视图钮 + 新建，没有第四个（段头/折叠钮）', async () => {
     renderWorkspace()
     await screen.findByTestId('matter-focus')
 
-    fireEvent.click(within(viewNav()).getByRole('button', { name: 'View' }))
-
-    expect(within(viewNav()).queryByRole('button', { name: '今日看板' })).toBeNull()
-    expect(within(viewNav()).queryByRole('button', { name: '事项' })).toBeNull()
-    expect(within(viewNav()).queryByRole('button', { name: '新建事项' })).toBeNull()
-    // 收起的是组，不是列：清单（与当前视图的主区）原样在场。
-    expect(screen.getByTestId('matter-list')).toBeTruthy()
-    expect(screen.getByTestId('matter-focus')).toBeTruthy()
+    // 🔴 钉的是「一行放得下就别折叠」：段头 + chevron 那套退役后，这一列顶部只剩三个钮，
+    // 多出来的任何一个都意味着又长回了多行。
+    const buttons = within(viewNav()).getAllByRole('button')
+    expect(buttons.map((b) => b.getAttribute('aria-label') ?? b.textContent)).toEqual([
+      '今日看板',
+      '事项',
+      '新建事项'
+    ])
   })
 
   test('看板视图下点清单行 = 去看那件事（选中 + 主区换成详情）', async () => {
@@ -388,7 +387,7 @@ describe('MattersWorkspace — 二级栏视图折叠组（08-27 波 2）', () =>
     expect(screen.queryByTestId('matter-focus')).toBeNull()
   })
 
-  test('「新建事项」行仍是常驻创建入口（点开创建弹窗）', async () => {
+  test('「新建事项」钮仍是常驻创建入口（点开创建弹窗）', async () => {
     renderWorkspace()
     await screen.findByTestId('matter-focus')
 

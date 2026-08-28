@@ -150,6 +150,47 @@ export interface EventSourceEmail {
   linked_email_count: number
 }
 
+// task 08-27 P3 — 三源聚合读面 (GET /api/calendar/agenda)。与 /events 分开:
+// /events 是纯 calendar_event 表的单源查询; agenda 把邮箱日历 / 事项截止与行动项
+// 排期 / Agent schedule 展开合成一条时间轴。契约与后端 lane 同一份, 不许擅改。
+
+export type AgendaSource = 'mail' | 'matter' | 'agent'
+
+export interface AgendaEntry {
+  /** 聚合层合成 id (非数据库自增 id)。 */
+  id: string
+  source: AgendaSource
+  /** 仅 source=mail 可能 true (重要邮箱日程, 反查源邮件 ai_priority)。 */
+  hot: boolean
+  title: string
+  startIso: string
+  /** matter/agent 类是时间点, 可为 null。 */
+  endIso: string | null
+  allDay: boolean
+  /** 月视图跨天色带直接判定, 前端不自己算。 */
+  multiDay: boolean
+  // source=mail 时的回查锚点 (点击 → EventDetailDrawer)。
+  eventId?: number
+  icalUid?: string
+  recurrenceId?: string | null
+  // source=matter 时的跳转锚点。
+  matterId?: string
+  itemId?: string
+  // source=agent 时的归属。
+  agentId?: string
+}
+
+export interface AgendaOpts {
+  fromIso: string
+  toIso: string
+  /** 缺省 = 全部三源。 */
+  sources?: AgendaSource[]
+  calendarName?: string
+  /** Olson 时区名 —— 后端只拿它判 `multiDay` 的日界 (缺省 UTC); 三源的时刻本身
+   *  一律按各自的语义展开, 不受这个参数影响。 */
+  tz?: string
+}
+
 export interface EventsListOpts {
   /** Window start (ISO datetime, UTC). Default = today 00:00 UTC. */
   fromIso?: string
@@ -267,6 +308,8 @@ export interface CalendarApi {
 
   // Phase 3 §3.1 — Calendar SSoT 直读
   eventsList(opts?: EventsListOpts): Promise<CalendarEventOccurrence[]>
+  // task 08-27 P3 — 三源聚合 (月视图 + 小月历色点专用; 其余视图仍走 eventsList)
+  agenda(opts: AgendaOpts): Promise<AgendaEntry[]>
   eventGet(opts: EventGetOpts): Promise<CalendarEventDetail | null>
   syncStatus(): Promise<CalendarSyncStateItem[]>
   calendarNames(): Promise<string[]>

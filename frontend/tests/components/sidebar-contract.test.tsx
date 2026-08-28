@@ -114,6 +114,7 @@ function makeWrappedRouter(initialPath: string): ReturnType<typeof createRouter>
     '/today',
     '/sessions',
     '/agents',
+    '/reports',
     '/matters',
     '/contacts',
     // 「新标签页」搜索标签的承载路由（08-27 P2 补批 Lane S）。有意不进 registry ⇒
@@ -304,16 +305,16 @@ describe('IconRail ↔ nav registry 投影', () => {
         last?.search === undefined ? { to: last?.to } : { to: last?.to, search: last.search }
       )
     }
-    // 手写期望：search 缺省值也在这里钉死（过渡期 team / reports 共用 /agents，
-    // 靠 tab 区分落点）。
+    // 手写期望：search 缺省值也在这里钉死。08-27 P3：报告拿到自己的路由，团队与
+    // 报告不再共用 `/agents` + `?tab=`。
     expect(calls).toEqual([
       { to: '/', search: { view: 'inbox' } },
       { to: '/matters' },
       { to: '/today' },
       { to: '/admin/calendar', search: { view: 'week' } },
       { to: '/contacts' },
-      { to: '/agents', search: { tab: 'agents' } },
-      { to: '/agents', search: { tab: 'reports' } },
+      { to: '/agents' },
+      { to: '/reports' },
       { to: '/admin/kanban' },
       { to: '/settings', search: { tab: 'general' } }
     ])
@@ -393,25 +394,20 @@ describe('DomainPanel ↔ nav registry 投影', () => {
     expect(panelRowLabels(container)).toEqual(projectedPanel('ops'))
   })
 
-  test('报告域（过渡期 /agents?tab=reports）：面板行 = registry 投影', async () => {
-    const { container } = await renderShell('/agents?tab=reports')
-    expect(panelRowLabels(container)).toEqual(projectedPanel('reports'))
-    expect(panelRowLabels(container)).toEqual(['报告'])
-  })
-
   // 08-27 批：所有域恒有二级栏，差别只在 registry NAV_DOMAINS.second ——
   // 'nav' = DomainPanel；'page' = 页面清单列充当二级栏（无 DomainPanel）。
-  // mail / chats 本批转 'page'（邮件列表 / 会话列表由页面自己出）；
-  // team（agents）过渡期留 'nav'（/agents 还是卡片网格，无自管左列）。
-  test('page 域（邮件/事项/通讯录/对话）：无 DomainPanel', async () => {
-    for (const path of ['/', '/matters', '/contacts', '/sessions'] as const) {
+  // mail / chats P1 转 'page'（邮件列表 / 会话列表由页面自己出）；reports P3 转
+  // 'page'（报告清单列就是它的二级栏）；team（agents）过渡期仍留 'nav'
+  // （/agents 还是卡片网格，无自管左列）。
+  test('page 域（邮件/事项/通讯录/对话/报告）：无 DomainPanel', async () => {
+    for (const path of ['/', '/matters', '/contacts', '/sessions', '/reports'] as const) {
       const { container } = await renderShell(path)
       expect(container.querySelector('[data-nav-panel]'), path).toBeNull()
       cleanup()
     }
   })
 
-  test('团队域（过渡档 nav）：面板 = 简版智能体清单，点行落 /agents?tab=agents', async () => {
+  test('团队域（过渡档 nav）：面板 = 简版智能体清单，点行落 /agents', async () => {
     const { container, router } = await renderShell('/agents')
     expect(container.querySelector('[data-nav-panel] [data-team-nav]')).toBeTruthy()
     // 清单行 = useReportConfig 共享缓存里的 agent（名字进 .flex-1 主位）。
@@ -420,10 +416,7 @@ describe('DomainPanel ↔ nav registry 投影', () => {
     })
     const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
     fireEvent.click(container.querySelector('[data-team-nav] .row')!)
-    expect(navigate.mock.calls.at(-1)?.[0]).toEqual({
-      to: '/agents',
-      search: { tab: 'agents' }
-    })
+    expect(navigate.mock.calls.at(-1)?.[0]).toEqual({ to: '/agents' })
     navigate.mockRestore()
   })
 

@@ -375,7 +375,7 @@ export function SearchConfigDrawer({
           flexShrink: 0
         }}
       >
-        {/* 删除：仅编辑既有时显示；两步确认（同 ReportsTab/SessionsPage 风格）。 */}
+        {/* 删除：仅编辑既有时显示；两步确认（同 ReportsPage/SessionsPage 风格）。 */}
         {!create &&
           cfg &&
           (confirming ? (

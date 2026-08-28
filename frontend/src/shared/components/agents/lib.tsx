@@ -128,7 +128,7 @@ export function renderSummary(text: string | undefined, onJump: (id: number) => 
 }
 
 // task 06-08-chat Bug 2 — top whitespace reserved above the jump target. The
-// report detail view (ReportsTab ReportDetailView) has a `position:sticky;
+// report detail view (ReportsPage ReportDetailView) has a `position:sticky;
 // top:0` meta header (~40px: padding 10px + caption). The old 18px landed the
 // target row under that header, hiding its upper half ("跳转过头"). 64 ≈ sticky
 // header ~40px + ~24px breathing room so the row sits fully below the header.

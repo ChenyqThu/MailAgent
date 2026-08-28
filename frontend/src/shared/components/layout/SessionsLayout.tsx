@@ -1,6 +1,5 @@
-// /sessions route shell — MailAgent 交互式通用 agent 视图（左历史 + 实时对话 +
-// 快捷操作）。S3 W2：flag-off 的只读 ChatsTab 分支随 legacy UI 收敛移除（ChatsTab
-// 本体保留，仍服务 /agents?tab=chats 的 per-agent 只读浏览）。
+// /sessions route shell — 对话域：MailAgent 交互式通用 agent 视图（左历史 + 实时对话 +
+// 快捷操作）。08-27 P3：`/agents` 的 chats tab 腿拆掉后，本路由是对话域的唯一承载。
 
 import { lazy, Suspense } from 'react'
 

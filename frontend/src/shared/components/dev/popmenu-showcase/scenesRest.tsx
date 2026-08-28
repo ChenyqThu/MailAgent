@@ -337,7 +337,7 @@ export function RestScenes(): React.ReactElement {
         <ShowcaseCard
           code="40"
           name="状态栏同步详情"
-          status="现状：#13（CSS-only :hover 浮层），bottom 写死向上；.sync-tip 变体键盘不可达。"
+          status="现状：#13（CSS-only :hover 浮层），bottom 写死向上。"
           note="换成点击触发即可键盘可达；向上展开同样是 anchorClassName（bottom-[calc(100%+…)]）。"
         >
           <SyncPopScene />
@@ -423,8 +423,8 @@ export function RestScenes(): React.ReactElement {
         />
         <ShowcaseNote
           code="38 / 39"
-          name="CSS-only :hover 浮层（.sync-tip / .cal-legend-tip）"
-          reason="恒挂载、零 JS。换成受控组件是净增运行时成本；.sync-tip 的键盘不可达可以先用 :focus-within 单独修（.cal-legend-tip 已经这么做了）。"
+          name="CSS-only :hover 浮层（.cal-legend-tip）"
+          reason="恒挂载、零 JS。换成受控组件是净增运行时成本；键盘可达已用 :focus-within 解决。"
         />
       </ShowcaseSection>
     </>

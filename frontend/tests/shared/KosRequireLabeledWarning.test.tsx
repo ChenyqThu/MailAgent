@@ -117,6 +117,6 @@ describe('KOS 仅推已标注 × AI 分类关 — 联动死锁警告', () => {
     setEnv({ KOS_REQUIRE_LABELED: 'true' })
     renderTab()
     fireEvent.click(screen.getByText(CTA_KEY))
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/agents', search: { tab: 'agents' } })
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/agents' })
   })
 })

@@ -392,7 +392,7 @@ export function ConnectorsConsolePage(): React.ReactElement {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* 页头 —— 高度 41 与 sidebar app-nav-header 共线（AgentsPage 同款约束）。 */}
+      {/* 页头 —— 高度 41 与 sidebar app-nav-header 共线（各页页头同款约束）。 */}
       <div
         className="flex shrink-0 items-center gap-3 px-[18px]"
         style={{ height: 41, borderBottom: '1px solid var(--hairline)' }}

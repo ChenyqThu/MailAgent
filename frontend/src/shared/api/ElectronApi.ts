@@ -12,6 +12,8 @@ import type {
   AdminApi,
   AdminHealthData,
   AdminStatsData,
+  AgendaEntry,
+  AgendaOpts,
   AIFields,
   AiApi,
   AttachmentApi,
@@ -521,6 +523,11 @@ class ElectronCalendarApi implements CalendarApi {
   // Phase 3 §3.1 — Calendar SSoT
   async eventsList(opts: EventsListOpts = {}): Promise<CalendarEventOccurrence[]> {
     return (await invoker()('calendar:eventsList', opts)) as CalendarEventOccurrence[]
+  }
+  // task 08-27 P3 — 三源聚合。handler 经 daemon_api 转发本机 serve-api;
+  // serve-api 不可达时 reject (E_NETWORK), 前端月视图诚实显示错误态。
+  async agenda(opts: AgendaOpts): Promise<AgendaEntry[]> {
+    return (await invoker()('calendar:agenda', opts)) as AgendaEntry[]
   }
   async eventGet(opts: EventGetOpts): Promise<CalendarEventDetail | null> {
     return (await invoker()('calendar:eventGet', opts)) as CalendarEventDetail | null

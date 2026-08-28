@@ -1,7 +1,7 @@
 // F3 (阶段2·2.6) — 事件状态图例: 状态形态化 (斜纹=暂定 / 空心=待回复 /
-// 删除线+灰=已拒绝 / 删除线+深灰=已取消) 的解码器。toolbar sync-pill 旁
-// info 入口, CSS-only hover/focus 触发 (.cal-legend-tip, 复刻 .sync-tip
-// 模式, 零 JS 状态)。swatch 与消费面同款 CSS 配方 — 图例即样本。
+// 删除线+灰=已拒绝 / 删除线+深灰=已取消) 的解码器。toolbar info 入口,
+// CSS-only hover/focus 触发 (.cal-legend-tip, 零 JS 状态)。swatch 与
+// 消费面同款 CSS 配方 — 图例即样本。
 
 import { Info } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
