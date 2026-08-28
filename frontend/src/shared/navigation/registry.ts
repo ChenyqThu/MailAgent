@@ -109,10 +109,10 @@ export type NavShortcutId = 'settings' | 'generalAgent'
 export type NavLabel = { readonly i18nKey: string } | { readonly literal: string }
 
 /** 域的二级栏形态（08-27 标签工作区批：二级栏**恒存在且定宽 336**，`'none'` 档
- *  取消 —— 左列总宽固定 392 = 导轨 56 + 二级栏 336，切域时边界不动）：
+ *  取消 —— 左列总宽固定 392 = 导轨 56 + 二级栏 336，切域时边界不动；dogfood
+ *  修正批起亦不可收起）：
  *  - `'nav'`  = DomainPanel（336px 导航栏：今日五节/小月历/团队清单/设置 tab 行…）；
- *  - `'page'` = 页面自带的列表列充当二级栏（邮件/事项/通讯录/对话的 list，
- *    定宽 336，收起走同一个 useNavCollapsed）。 */
+ *  - `'page'` = 页面自带的列表列充当二级栏（邮件/事项/通讯录/对话的 list，同样定宽 336）。 */
 export type NavDomainSecond = 'nav' | 'page'
 
 /** 域元数据（方案 B 导轨格的脸）：格标签与格图标是**域**的身份，不是域内某条 entry 的

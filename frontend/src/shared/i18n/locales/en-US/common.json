@@ -495,7 +495,6 @@
       "sendChat": "Send AI message",
       "newChat": "New AI conversation",
       "toggleIsland": "Toggle Dynamic Island",
-      "toggleNav": "Toggle navigation",
       "toggleLocale": "Toggle language",
       "calViewDay": "Day view",
       "calViewWeek": "Week view",
@@ -730,9 +729,6 @@
     "calendar": "Calendar",
     "settings": "Settings",
     "shortcuts": "Shortcuts",
-    "toggleTitle": "Collapse / expand navigation (⌥B)",
-    "toggleAria": "Toggle navigation",
-    "expandAria": "Expand navigation",
     "online": "online",
     "account": {
       "tooltip": "{email} — switch account"
@@ -4199,25 +4195,7 @@
       "disabled": "Dynamic Island off"
     },
     "synced": "Synced",
-    "themeCycle": "Theme · click to cycle",
-    "accent": {
-      "label": "Accent",
-      "title": "Accent Color",
-      "tooltip": "Pick accent (View → Appearance)",
-      "aria": "Pick accent color",
-      "note": "Affects toolbar · chips · selected row · Island. Stored locally."
-    },
-    "surface": {
-      "title": "Surface Material",
-      "tooltip": "Switch Frosted / Solid (fine-tune glass in Settings → General)",
-      "aria": "Pick surface material",
-      "note": "Affects chrome + all panel backgrounds. Stored locally."
-    },
-    "locale": {
-      "label": "Language",
-      "tooltip": "Switch language (⌥G)",
-      "aria": "Switch language"
-    },
+    "themeCycle": "Theme · click to switch",
     "update": {
       "available": "New version v{version} available · click to download",
       "downloading": "Downloading update · {percent}%",
@@ -5040,7 +5018,7 @@
     },
     "moduleTabs": {
       "list": "Matters",
-      "board": "Board"
+      "board": "Today board"
     },
     "scope": {
       "all": "All",
@@ -6972,10 +6950,12 @@
     "strip": "Workspace tabs",
     "close": "Close tab (⌘W)",
     "locked": "Unfinished work here — won't be auto-closed",
+    "dirty": "Unsaved changes here",
     "toast": {
       "evictedOne": "Tab limit reached — closed “{title}”",
       "evictedMany": "Tab limit reached — closed {count} tabs, starting with “{title}”",
-      "full": "Every tab is in use (draft in progress or chatted) — close one first"
+      "full": "Every tab is in use (draft in progress or chatted) — close one first",
+      "targetGone": "That email or draft no longer exists — its tab was closed"
     }
   },
   "searchTab": {

@@ -37,6 +37,9 @@ export interface MatterWorkspaceState {
   selectedId: string | null
   /** V3-05 行内分组的折叠态（key 自带维度前缀，见 matterListQuery::MatterGroup）。 */
   collapsedGroups: ReadonlySet<string>
+  /** 08-27 波 2 —— 二级栏顶部视图折叠组（MatterViewNav）的收起态。与行内分组折叠同档：
+   *  会话级、不持久化（带着一个收起的菜单重启应用，用户找不到「新建事项」）。 */
+  viewNavCollapsed: boolean
   /** 冷启动「记住上次选中 / 选第一条」是否已跑过 —— 提升到 store 后，重进事项页不再重挑一次。 */
   initialSelectionApplied: boolean
   setTab(tab: MatterTab): void
@@ -62,6 +65,7 @@ export interface MatterWorkspaceState {
   applyQuickFilter(quick: MatterQuickFilter): void
   toggleGroup(key: string): void
   clearCollapsedGroups(): void
+  toggleViewNav(): void
   /** reveal-on-navigate：把选中项所在的折叠组展开（详情上/下条导航要求）。 */
   expandGroups(keys: readonly string[]): void
   markInitialSelectionApplied(): void
@@ -71,7 +75,13 @@ const EMPTY_COLLAPSED: ReadonlySet<string> = new Set<string>()
 
 function initialState(): Pick<
   MatterWorkspaceState,
-  'tab' | 'query' | 'search' | 'selectedId' | 'collapsedGroups' | 'initialSelectionApplied'
+  | 'tab'
+  | 'query'
+  | 'search'
+  | 'selectedId'
+  | 'collapsedGroups'
+  | 'viewNavCollapsed'
+  | 'initialSelectionApplied'
 > {
   return {
     // V3-01 —— 默认落看板（≙ 旧默认 view 'focus'）；有有效的「记住上次选中」记录时，
@@ -81,21 +91,25 @@ function initialState(): Pick<
     search: '',
     selectedId: null,
     collapsedGroups: EMPTY_COLLAPSED,
+    // 默认展开：菜单里装着唯一的创建入口，收起是用户的主动行为。
+    viewNavCollapsed: false,
     initialSelectionApplied: false
   }
 }
 
 // 选中 → 标签 store 的转发半边。先落本地再转发（active-email.setActive 同款次序）：
 // 转发引起的标签提交触发下方订阅时投影值已相等，不会二次覆写。
+// 返回是否被接受（check 波3 续改）：标签满且全 locked 被拒 → false，调用方回滚本地选中。
+// popout（纯本地投影）与索引未命中（有意只落本地选中，不落标签）都视为接受。
 function forwardMatterSelectToTab(
   publicId: string,
   opts?: { mode?: 'open' | 'replace'; title?: string }
-): void {
-  if (usePopoutMode.getState().isPopout) return
+): boolean {
+  if (usePopoutMode.getState().isPopout) return true
   const numericId = matterNumericId(publicId)
-  if (numericId === null) return
-  if (opts?.mode === 'replace') replaceObjectTab('matter', numericId, opts?.title)
-  else openObjectTab('matter', numericId, opts?.title)
+  if (numericId === null) return true
+  if (opts?.mode === 'replace') return replaceObjectTab('matter', numericId, opts?.title)
+  return openObjectTab('matter', numericId, opts?.title)
 }
 
 export const useMatterWorkspace = create<MatterWorkspaceState>((set) => ({
@@ -104,19 +118,30 @@ export const useMatterWorkspace = create<MatterWorkspaceState>((set) => ({
   setQuery: (query) => set({ query }),
   setSearch: (search) => set({ search }),
   selectMatter: (selectedId, opts) => {
-    if (selectedId) writeLastSelectedMatterId(selectedId)
+    const prevSelected = useMatterWorkspace.getState().selectedId
     set({ selectedId })
-    if (selectedId) forwardMatterSelectToTab(selectedId, opts)
+    if (selectedId) {
+      // 被拒（标签满且全 locked）→ 回滚本地选中，seed 也不写（写了会让冷启动去追一件
+      // 根本没开成标签的事）；接受后才落 seed —— 详情区与标签条保持一致（check 波3）。
+      if (forwardMatterSelectToTab(selectedId, opts)) writeLastSelectedMatterId(selectedId)
+      else set({ selectedId: prevSelected })
+    }
   },
   revealMatter: (matter) => {
-    writeLastSelectedMatterId(matter.public_id)
+    const prevSelected = useMatterWorkspace.getState().selectedId
     set({
       tab: 'list',
       search: '',
       query: { ...DEFAULT_MATTER_LIST_QUERY, scope: matterScopeOf(matter) },
       selectedId: matter.public_id
     })
-    forwardMatterSelectToTab(matter.public_id, { title: matter.title })
+    // 被拒只回滚选中：tab/筛选的切换留着（用户意图里「去清单看这件事」的一半已达成），
+    // 旧选中若掉出新筛选可见集，由既有「掉出可见集丢选中」守卫自然清掉。
+    if (forwardMatterSelectToTab(matter.public_id, { title: matter.title })) {
+      writeLastSelectedMatterId(matter.public_id)
+    } else {
+      set({ selectedId: prevSelected })
+    }
   },
   applyQuickFilter: (quick) =>
     set({ tab: 'list', search: '', query: { ...DEFAULT_MATTER_LIST_QUERY, quick: [quick] } }),
@@ -130,6 +155,7 @@ export const useMatterWorkspace = create<MatterWorkspaceState>((set) => ({
     set((state) =>
       state.collapsedGroups.size === 0 ? state : { collapsedGroups: EMPTY_COLLAPSED }
     ),
+  toggleViewNav: () => set((state) => ({ viewNavCollapsed: !state.viewNavCollapsed })),
   expandGroups: (keys) =>
     set((state) => {
       if (state.collapsedGroups.size === 0) return state

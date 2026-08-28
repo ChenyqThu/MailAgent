@@ -207,6 +207,13 @@
    * (亮档与 vib-off/solid 的同名覆盖见各自 block)。 */
   --tab-strip-surface: rgb(255 255 255 / 0.046);
 
+  /* 左列总宽 —— 恒定 392 = `.nav-rail`(56) + `.nav-panel`(336)。二级栏不可收起
+   * （dogfood 拍板：切域时左列边界恒不动），所以这是个静态 token，没有 JS 写入路径。
+   * 消费者：`.topbar-left`（顶栏左段与左列共宽）与 `#batch-bar.floating`
+   * （portal 到 body、量不到左列，只能读这个变量对齐）。
+   * 🔴 与那两条 authored 宽度手抄三处，闸在 tests/shared/nav-shell.test.ts。 */
+  --app-nav-w: 392px;
+
   /* 无 vibrancy 平台 (data-vib=off / web) 的内置回退壁纸 — 单光源, 与
    * ambient 同向, accent 派生换色自动跟; 本身是平滑渐变, 零 blur。 */
   --wp-fallback:
@@ -1164,8 +1171,8 @@ body::before {
 }
 
 /* ─── Surface (材质) 切换 — 主题 v2 两档 (液态档已删) ─────────────────
- * SurfacePickerPopover / 设置页写 :root[data-surface='solid'] (frosted 默
- * 认不写 attribute, base .glass-* 自然生效)。solid = 不透明 ink 梯度 +
+ * 设置 → 通用 → 外观写 :root[data-surface='solid'] (frosted 默认不写
+ * attribute, base .glass-* 自然生效)。solid = 不透明 ink 梯度 +
  * 零 blur (实色 = 安静), 也是 reduced-transparency 的用户主动等价物。
  * 基底 tint 不画, 由不透明 ink-0 兜底。 */
 :root[data-surface='solid'] body::before {
@@ -1199,8 +1206,8 @@ body::before {
 }
 
 /* ─── Surface picker mini preview swatch (主题 v2 两档) ─────────────
- * 14×14 圆角小块, 每个 variant 视觉化对应材质. SurfacePickerPopover
- * 里 list option 左侧渲染. 装饰性小块不占 backdrop-filter 预算 (红线:
+ * 14×14 圆角小块, 每个 variant 视觉化对应材质 (顶栏那枚 picker 08-27 dogfood
+ * 修正批已删, 现存消费方 = popmenu-showcase). 装饰性小块不占 backdrop-filter 预算 (红线:
  * 同屏 CSS blur ≤2 仅真浮层), frosted 用半透渐变示意即可. */
 .surface-swatch {
   width: 14px;
@@ -1219,15 +1226,14 @@ body::before {
   background-image: linear-gradient(180deg, rgb(var(--ink-2)), rgb(var(--ink-4)));
 }
 
-/* ─── Sprint 11 V1.4 — Theme picker popover (TitleBar Accent picker) ──
- * Ported verbatim from frontend/ref/mockup-inbox.html lines 504-540. The
- * AccentPickerPopover.tsx renders a 264px fixed-position card with a 3×2
- * grid of 36px swatch buttons; selected swatch carries 2px coral ring +
- * inset white check via ::after. Lives in authored CSS (not Tailwind
+/* ─── Sprint 11 V1.4 — 顶栏浮层几何 (原 Theme/Accent picker popover) ──
+ * Ported verbatim from frontend/ref/mockup-inbox.html lines 504-540. 三枚
+ * picker 已随 08-27 dogfood 修正批退役, 现存消费方 = NotificationBellBadge
+ * (+ popmenu-showcase 的 .swatch 网格)。Lives in authored CSS (not Tailwind
  * utilities) so Tailwind purge cannot touch the class names. */
 .theme-popover {
-  /* 主题 v2 — 材质 (bg/blur/border/shadow) 移交 .glass-pop (各 picker 组件
-   * 同时挂两类), 这里只留几何。 */
+  /* 主题 v2 — 材质 (bg/blur/border/shadow) 移交 .glass-pop (消费方组件同时挂
+   * 两类), 这里只留几何。 */
   position: fixed;
   /* 顶栏高 44 + 8 间隙 (08-27 标签工作区: 顶栏 36→44 时从 44 跟到 52)。 */
   top: 52px;
@@ -1274,8 +1280,8 @@ body::before {
 
 /* ─── task 08-24-l4-nav-shell Step B — 方案 B nav shell (IconRail + DomainPanel) ─
  * 视觉基准 = 提案画布方案 B 板 (ProposalB.dc.html)。老「240↔56 双宽态」collapse
- * contract（Sprint 11 V1.4 §2.11）退役：56px 图标导轨常驻，折叠 = 232px 域面板
- * 显隐（`data-collapsed` 仍挂 `.app-nav` 根，键见 state/nav-shell.ts）。
+ * contract（Sprint 11 V1.4 §2.11）退役；08-27 dogfood 修正批起**折叠能力整体移除**：
+ * 56px 图标导轨 + 336px 域面板恒在，左列恒 392（见 :root 的 --app-nav-w）。
  * 材质（0825 dogfood 拍板）：rail/panel 一律挂 --tier-side —— 画布的不透明
  * ink 明度序会掉出 v3 surface-tier 透明体系（左 288px 对 Frosted/Surface
  * 失效、吃不到壁纸辉光，与右侧透明面直接色裂）；分层交给 hairline。
@@ -1353,29 +1359,6 @@ body::before {
   border-radius: 50%;
   flex-shrink: 0;
   margin-bottom: 2px;
-}
-/* 面板开合按钮（0825 dogfood: 此前收起态唯一展开入口 = 再点当前域格, 太隐蔽）。
- * <lg 强制收起时由 TSX 隐藏（那里收起不可解除, 按钮只会空翻偏好）。 */
-.nav-rail-toggle {
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  color: rgb(var(--ink-fg-3));
-  transition:
-    background-color 120ms cubic-bezier(0.4, 0, 0.2, 1),
-    color 120ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-.nav-rail-toggle:hover,
-.nav-rail-toggle:focus-visible {
-  background: rgb(var(--ink-3));
-  color: rgb(var(--ink-fg));
-}
-.nav-rail-toggle > svg {
-  width: 18px !important;
-  height: 18px !important;
 }
 /* 格 = 40×40 按钮 + 9px 标签（画布 .railbtn/.raillabel/.railbadge 逐属性）。
  * 0825 dogfood: hover/selected 的 pill 从 40×40 icon 框上移到**整格**（icon 与
@@ -1458,10 +1441,11 @@ body::before {
   color: rgb(var(--c-accent));
 }
 
-/* ── DomainPanel · 336px 可折叠（08-27 标签工作区批：二级栏定宽 336，左列总宽
- * 392 = rail 56 + 336；'page' 域的页面列表列同宽，切域左列边界不动）。
+/* ── DomainPanel · 336px 恒定（08-27 标签工作区批：二级栏定宽 336，左列总宽
+ * 392 = rail 56 + 336；'page' 域的页面列表列同宽，切域左列边界不动。dogfood
+ * 修正批：折叠能力移除，这一列不再有第二种宽度）。
  * 🔴 宽度在 .nav-panel 与 .nav-panel-inner 手抄两处，改必成对 —— inner 定宽是
- * 折叠过渡期间行不换行不挤压的前提，只改一处过渡期间列会错位。 */
+ * 「面板本身 overflow:hidden 时行不换行不挤压」的前提。 */
 .nav-panel {
   width: 336px;
   flex-shrink: 0;
@@ -1471,19 +1455,8 @@ body::before {
   overflow: hidden;
   background: var(--tier-side);
   border-right: 1px solid var(--hairline);
-  transition: width 220ms cubic-bezier(0.4, 0, 0.2, 1);
 }
-/* 折叠 = 宽度收 0 + visibility hidden（挡键盘焦点进隐藏面板; visibility 是
- * 离散过渡, 延到宽度动画结束那一拍才翻）。 */
-.app-nav[data-collapsed='true'] .nav-panel {
-  width: 0;
-  border-right-width: 0;
-  visibility: hidden;
-  transition:
-    width 220ms cubic-bezier(0.4, 0, 0.2, 1),
-    visibility 0s linear 220ms;
-}
-/* 内容定宽 336px — 宽度过渡期间行不换行不挤压, 整列被 overflow 裁切。 */
+/* 内容定宽 336px — 行不换行不挤压, 溢出由 .nav-panel 裁切。 */
 .nav-panel-inner {
   width: 336px;
   flex: 1;
@@ -1527,20 +1500,13 @@ body::before {
   overflow: hidden;
   background: var(--tier-side);
   border-right: 1px solid var(--hairline);
-  transition: width 220ms cubic-bezier(0.4, 0, 0.2, 1);
 }
-/* 内容定宽 392 — 宽度过渡期间行不换行不挤压 (同 .nav-panel-inner 手法); 收起
- * (56px) 时整段被 overflow 裁切, visibility 延到宽度动画结束再翻 (挡键盘焦点
- * 进被裁掉的 ⌘K 搜索钮)。 */
+/* 内容定宽 392 — 行不换行不挤压 (同 .nav-panel-inner 手法)。 */
 .topbar-left-inner {
   width: 392px;
   height: 100%;
   display: flex;
   align-items: center;
-}
-.topbar-left[data-collapsed='true'] .topbar-left-inner {
-  visibility: hidden;
-  transition: visibility 0s linear 220ms;
 }
 
 .tstrip {
@@ -1772,9 +1738,19 @@ body::before {
   background: rgb(var(--c-warn));
   flex-shrink: 0;
 }
+/* 改动点 (accent) — 草稿有未保存修改 (dogfood 波3)。与锁定点同位互斥, dirty 优先
+ * (TabStrip 只画其一): dirty 必带 draft 快照 ⇒ 必 locked, 两点并列是噪音。 */
+.ttab-dirty {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgb(var(--c-accent));
+  flex-shrink: 0;
+}
 
+/* 注：`.topbar-left` 不在这一组 —— 它的 220ms width 过渡随折叠能力一起删了，
+   现在没有可关停的动画（留着是个恒不命中的空选择器）。 */
 @media (prefers-reduced-motion: reduce) {
-  .topbar-left,
   .tstrip-hair,
   .tstrip-surface,
   .ttab-main,
@@ -1827,7 +1803,6 @@ body::before {
 
 /* Reduced-motion: flatten chrome transitions. Layout identical. */
 @media (prefers-reduced-motion: reduce) {
-  .nav-panel,
   .railbtn {
     transition: none;
   }
@@ -2145,10 +2120,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
    动画，故移除。 */
 
 /* Floating batch action bar — fixed at the bottom edge of the inbox column,
- * right of the left columns. The `--app-nav-w` custom property is set by the
- * nav-shell store (392px expanded = rail 56 + second column 336, 56px
- * collapsed = rail only) so the bar reflows with
- * the sidebar without measuring. */
+ * right of the left columns. `--app-nav-w`（:root 静态 token，392 = rail 56 +
+ * 二级栏 336）让 bar 不用测量就能贴住左列右缘 —— bar 是 portal 到 body 的
+ * fixed 元素，量不到左列。 */
 #batch-bar.floating {
   position: fixed;
   left: calc(var(--app-nav-w, 392px) + 16px);
@@ -2165,10 +2139,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
     0 12px 28px rgba(0, 0, 0, 0.32),
     0 2px 6px rgba(0, 0, 0, 0.2);
   z-index: 40;
-  /* 仅保留 left 过渡（侧栏宽度变化时 bar 水平 reflow），对齐 §8 standard
-     曲线 + 220ms。opacity/transform 进/退场已交给 GSAP，从 CSS transition 移除
-     以免双重动画。 */
-  transition: left 220ms cubic-bezier(0.4, 0, 0.2, 1);
+  /* 无 transition：opacity/transform 进退场交给 GSAP（双重动画会打架）；left 恒定
+     （--app-nav-w 是静态 token），没有可过渡的量。 */
 }
 /* 0 selected — dim the bulk-op buttons (but keep the count badge, the
  * "select all N", "clear" links, kbd Esc, and × close bright). */

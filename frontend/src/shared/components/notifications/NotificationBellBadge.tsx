@@ -16,7 +16,7 @@
 // 不出：同一个角位上两枚点会分不清「几条未读」和「几项待办」。
 //
 // popover 用 createPortal 送到 <body>：TitleBar 有 backdrop-filter，会给 fixed 子元素造一个
-// 层叠上下文，浮层留在里面会被裁（AccentPickerPopover 同款理由）。横向落点走
+// 层叠上下文，浮层留在里面会被裁（原右簇三枚 picker 同款理由，它们已退役）。横向落点走
 // `useAnchoredPopover`（`.theme-popover` 写死的 right:12px 只对簇内最右的按钮成立，铃铛在
 // 簇首会整整偏出一个面板宽）。
 

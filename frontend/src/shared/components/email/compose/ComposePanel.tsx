@@ -59,13 +59,20 @@ import type {
   DraftPlanResult
 } from '@shared/api/types'
 
-import { saveObjectTabDraft } from '@shared/state/tab-workspace-bridge'
+import {
+  clearObjectTabDraft,
+  getObjectTab,
+  retargetObjectTab,
+  saveObjectTabDraft,
+  setObjectTabTitle
+} from '@shared/state/tab-workspace-bridge'
 
 import { EmailBodyFrame } from '../EmailBodyFrame'
 import {
   toDraftSnapshot,
   type ComposeTabDraft,
-  type ComposeTabDraftAttachment
+  type ComposeTabDraftAttachment,
+  type ComposeTabDraftMode
 } from './composeTabDraft'
 import { RecipientField } from './RecipientField'
 import { ComposeEditor, ComposeFormatToolbar } from './ComposeEditor'
@@ -76,6 +83,11 @@ import { AttachmentTray, kindFromName } from './AttachmentTray'
 
 /** Panel mode = UI ComposeMode + 草稿编辑态 + 写新邮件态。 */
 export type PanelMode = ComposeMode | 'draft-edit' | 'new'
+
+/** onClose 的可选关闭原因（dogfood 波3）—— 只有**对象消亡**的两种关闭带原因：
+ *  draft-edit 删除草稿 / 发送成功（替换语义顺带删原稿）。EmailDetail 据此收掉
+ *  对应标签；普通关闭（取消编辑 / 存后关闭）不带原因，标签保留。 */
+export type ComposeCloseReason = 'sent' | 'deleted'
 
 /** "name" <a@x>, b@y; c@z → ['a@x','b@y','c@z'] —— 草稿回填 to_addr/cc_addr 提纯。
  *  通讯录 WP4 起收敛到 shared 单源 `parseAddressList`（行为等价 + 引号名内的
@@ -184,26 +196,26 @@ function ImportanceSelect({
 interface Props {
   internalId: number
   mode: PanelMode
-  onClose: () => void
+  /** 关闭回调。带 reason 的两种（'sent' / 'deleted'）= 对象消亡，EmailDetail 据此
+   *  收标签；不带 reason = 普通关闭。既有 `() => void` 调用方（closeCompose 等）
+   *  按参数可省略原样兼容。 */
+  onClose: (reason?: ComposeCloseReason) => void
   /** 'column' (默认) = 占满 detail 列 (reply/forward/draft-edit overlay);
    *  'modal' = 居中模态卡片内 (写新邮件，外壳 ComposeNewModal 提供遮罩/卡框)。 */
   variant?: 'column' | 'modal'
-  /** T6 离开守卫句柄出口 —— 外部关闭方 (新邮件浮窗 scrim·× / EmailDetail 切邮件) 持有此
+  /** T6 离开守卫句柄出口 —— 外部关闭方 (新邮件浮窗 scrim·× / 标签关闭守卫) 持有此
    *  ref, 经 handle.attemptClose 走同一守卫 (dirty → 弹确认)。内部 ESC/丢弃直接用
    *  guard.guardClose, 不经此 ref。 */
   guardRef?: React.MutableRefObject<ComposeGuardHandle | null>
-  /** T6 —— 把 dirty 态上报给父级 (overlay: EmailDetail 切邮件时据此在渲染期同步决定
-   *  是否钉住 overlay + 弹守卫; 不用 guardRef.isDirty 是因为 render 期不能读 ref)。 */
-  onDirtyChange?: (dirty: boolean) => void
   /** mode='new' 专用：预填收件人（通讯录「写邮件」入口）。走 isNew 预填分支
    *  （planApplied 之前），与其他预填一样不标脏。其余 mode 忽略。 */
   initialTo?: readonly string[]
   /** mode='new' 专用：预填抄送（WP5「写邮件并抄送上级」）。非空时顺带展开
    *  cc 行；同 initialTo 走 planApplied 之前的预填闸，不标脏。其余 mode 忽略。 */
   initialCc?: readonly string[]
-  /** 08-27 标签工作区 —— 每标签 compose 现场快照（reply/reply-all/forward overlay 专用）：
+  /** 08-27 标签工作区 —— 每标签 compose 现场快照（overlay 三模式 + draft-edit）：
    *  切走时 EmailDetail 经 `snapshotRef` 的 getter 取现场；`initialTabDraft` 是切回时的
-   *  回填源（正常 plan 预填后覆写用户可编辑字段）。getter 只读 ref，卸载后仍可安全调用
+   *  回填源（正常预填后覆写用户可编辑字段）。getter 只读 ref，卸载后仍可安全调用
    *  （域切换兜底路径）。其余 mode 忽略。 */
   snapshotRef?: React.MutableRefObject<(() => ComposeTabDraft | null) | null>
   initialTabDraft?: ComposeTabDraft | null
@@ -217,7 +229,6 @@ export function ComposePanelInner({
   onClose,
   variant = 'column',
   guardRef,
-  onDirtyChange,
   initialTo,
   initialCc,
   snapshotRef,
@@ -521,9 +532,11 @@ export function ComposePanelInner({
     }
   }, [editor, planApplied, markDirty])
 
-  // ── 08-27 标签工作区：compose 现场快照（reply/reply-all/forward overlay 专用） ────
+  // ── 08-27 标签工作区：compose 现场快照（overlay 三模式；dogfood 波3 扩到 draft-edit）──
   const isOverlayMode = mode === 'reply' || mode === 'reply-all' || mode === 'forward'
-  // 快照恢复：正常 plan 预填完成后覆写用户可编辑的字段（quote/splitQuote 从 plan 重建，
+  const snapshotEligible = isOverlayMode || isDraftEdit
+  // 快照恢复：正常预填完成后覆写用户可编辑的字段（overlay 的 quote/splitQuote 从 plan
+  // 重建；draft-edit 的 quote/splitQuote/preserveOriginal/inlineRefs 从 draftQ 行数据重建，
   // 见 composeTabDraft.ts 头注释）。恒只跑一次；mode 不匹配（快照是 reply、这次开的是
   // forward）时整份放弃。
   const [tabDraftApplied, setTabDraftApplied] = useState(false)
@@ -531,7 +544,7 @@ export function ComposePanelInner({
     if (!planApplied || tabDraftApplied || !editor) return
     setTabDraftApplied(true)
     const snap = initialTabDraft
-    if (!isOverlayMode || snap == null || snap.mode !== mode) return
+    if (!snapshotEligible || snap == null || snap.mode !== mode) return
     setTo([...snap.to])
     setCc([...snap.cc])
     setBcc([...snap.bcc])
@@ -544,7 +557,10 @@ export function ComposePanelInner({
       editor.commands.setContent(snap.bodyHtml)
       latestBodyHtmlRef.current = snap.bodyHtml
     }
-    if (snap.attachments.length > 0) {
+    // 附件：overlay 维持「非空才覆写」（reply 本来就从零开始）；draft-edit 的预填已从
+    // 行数据灌了 chips，快照是编辑后的权威列表 —— **空也要应用**（用户把原附件全删了，
+    // 不应用就等于删除被回滚）。inlineRefs（隐藏保真集）不在快照里，保留预填值。
+    if (snap.attachments.length > 0 || isDraftEdit) {
       setAttachList(
         snap.attachments.map((a) => ({
           localId: ++attachSeq.current,
@@ -556,17 +572,22 @@ export function ComposePanelInner({
         }))
       )
     }
+    if (isDraftEdit) {
+      // C-1 replace 锚随快照恢复（保存过一次再切走的会话，锚已指镜像新行）。
+      if (typeof snap.draftRowId === 'number') setDraftRowId(snap.draftRowId)
+      if (typeof snap.lastSavedAtMs === 'number') setLastSavedAt(new Date(snap.lastSavedAtMs))
+    }
     if (snap.dirty) setDirty(true)
-  }, [planApplied, tabDraftApplied, editor, initialTabDraft, isOverlayMode, mode])
+  }, [planApplied, tabDraftApplied, editor, initialTabDraft, snapshotEligible, isDraftEdit, mode])
 
   // 现场捕获：正文以外的字段每次提交后打进 ref（对象拼装廉价）；正文在快照落笔时从
   // latestBodyHtmlRef 补上 —— 编辑器打字不触发 React 重渲，捕获时直接读 ref 才是最新值。
   const tabDraftBaseRef = useRef<Omit<ComposeTabDraft, 'bodyHtml'> | null>(null)
   useEffect(() => {
-    if (!isOverlayMode) return
+    if (!snapshotEligible) return
     tabDraftBaseRef.current = {
       kind: 'compose',
-      mode: mode as ComposeMode,
+      mode: mode as ComposeTabDraftMode,
       to,
       cc,
       bcc,
@@ -586,7 +607,10 @@ export function ComposePanelInner({
           })
         ),
       fwdHydrated: mode !== 'forward' || fwdAttachState === 'done',
-      dirty
+      dirty,
+      // draft-edit 的 replace 锚随现场走（保存后 = 镜像新行 = 标签 retarget 后的 targetId）。
+      ...(isDraftEdit ? { draftRowId } : {}),
+      ...(isDraftEdit && lastSavedAt !== null ? { lastSavedAtMs: lastSavedAt.getTime() } : {})
     }
   })
   // getter 出口（EmailDetail 切邮件路径：面板还活着时取现场）。只读 ref，引用恒定。
@@ -600,9 +624,9 @@ export function ComposePanelInner({
     // 🔴 卸载时**不清** getter：域切换时 EmailDetail 的收尾要在面板卸载后仍能读到冻结
     // 的现场（全 ref，安全）；下一个面板实例挂载时会覆写。
   }, [snapshotRef])
-  // 卸载兜底：store 仍指向本邮件且 open（= 不是用户显式关闭，而是切域 / 详情早退把树
-  // 整个卸了）→ 把现场快照写进标签。显式关闭（丢弃 / 发送成功）先 closeCompose 再卸载，
-  // 这里天然跳过；StrictMode 的 setup→cleanup→setup 重放只会多写一次等价快照，无副作用。
+  // 卸载兜底（overlay）：store 仍指向本邮件且 open（= 不是用户显式关闭，而是切域 / 详情
+  // 早退把树整个卸了）→ 把现场快照写进标签。显式关闭（丢弃 / 发送成功）先 closeCompose
+  // 再卸载，这里天然跳过；StrictMode 的 setup→cleanup→setup 重放只会多写一次等价快照。
   useEffect(() => {
     if (!isOverlayMode) return
     return () => {
@@ -617,6 +641,72 @@ export function ComposePanelInner({
       )
     }
   }, [isOverlayMode, internalId])
+  // 卸载兜底（draft-edit，dogfood 波3）：切标签 / 切域 / 取消编辑都会把树卸掉，把现场
+  // 写进标签快照。写入条件 = 有未保存修改，或本次会话保存过（lastSavedAtMs 在 ——
+  // 恢复时「已保存 HH:MM」不丢）；从没动过的干看不写（否则每个点开过的草稿都带上
+  // draft 快照被锁死，永不进 LRU）。显式丢弃经 suppress 位压住；删除 / 发送时标签已
+  // 先被 EmailDetail 关掉，saveObjectTabDraft 找不到标签自然跳过。
+  // 🔴 写入目标是 base.draftRowId（replace 锚）不是挂载时的 internalId —— 保存过一次后
+  // 标签已 retarget 到镜像新行，旧 id 上已无标签。
+  const snapshotSuppressedRef = useRef(false)
+  useEffect(() => {
+    if (!isDraftEdit) return
+    return () => {
+      if (snapshotSuppressedRef.current) return
+      const base = tabDraftBaseRef.current
+      if (base === null) return
+      if (base.dirty !== true && base.lastSavedAtMs === undefined) return
+      saveObjectTabDraft(
+        'email',
+        base.draftRowId ?? internalId,
+        toDraftSnapshot({ ...base, bodyHtml: latestBodyHtmlRef.current })
+      )
+    }
+  }, [isDraftEdit, internalId])
+  // dirty 翻 true 当场把现场写进标签快照（不等切走）：标签条立即出改动点 + 上锁，
+  // 关闭守卫（⌘W / ×）也才有 dirty 位可判。翻回 false 的收敛由保存链（下方
+  // snapshotRefreshRef）与显式丢弃处理，这里只管「变脏即报」。
+  useEffect(() => {
+    if (!snapshotEligible || !dirty) return
+    const base = tabDraftBaseRef.current
+    if (base === null) return
+    saveObjectTabDraft(
+      'email',
+      base.draftRowId ?? internalId,
+      toDraftSnapshot({ ...base, bodyHtml: latestBodyHtmlRef.current })
+    )
+  }, [snapshotEligible, dirty, internalId])
+  // 保存成功后的快照收敛（onSuccess 里 tabDraftBaseRef 还是旧值 —— 附件引用 swap、
+  // dirty→false、lastSavedAt 都要等捕获 effect 拿到新一轮渲染，故这里存「期望的锚」、
+  // 等渲染追上再落笔。🔴 不能用布尔标记当场消费：TanStack 回调与 React 提交的批次
+  // 边界不可靠，实测有「标记已置、该次提交渲染的还是旧 draftRowId」的中间提交，当场
+  // 消费会把快照写到已 retarget 掉的旧标签上（no-op，等于丢了收敛）。
+  // draft-edit 恒重写（换锚后的标签要新快照，「已保存 HH:MM」靠它跨 remount 存活）；
+  // overlay 只在已有快照时刷新（把 dirty 位放平，没有快照不凭空造一个）。
+  const snapshotRefreshRef = useRef<number | null>(null)
+  useEffect(() => {
+    const expected = snapshotRefreshRef.current
+    if (expected === null || !snapshotEligible) return
+    const base = tabDraftBaseRef.current
+    if (base === null) return
+    // 渲染还没追上保存结果（dirty 未放平 / 锚未换新）→ 等下一个提交。保存后立即又被
+    // 编辑标脏的罕见交错里，live dirty 写会接管现场，这份收敛过期作废即可。
+    if (base.dirty === true) return
+    if (isDraftEdit && (base.draftRowId ?? internalId) !== expected) return
+    snapshotRefreshRef.current = null
+    if (!isDraftEdit && getObjectTab('email', expected)?.draft === undefined) return
+    saveObjectTabDraft(
+      'email',
+      expected,
+      toDraftSnapshot({ ...base, bodyHtml: latestBodyHtmlRef.current })
+    )
+  })
+  // 草稿标签标题跟手（bridge 同值不写）。回填也会经过这里：回填值 = 行数据主题 =
+  // 点行时的标题快照，同值早退，无噪音；保存成功后标题即已存主题。
+  useEffect(() => {
+    if (!isDraftEdit) return
+    setObjectTabTitle('email', draftRowId, subject)
+  }, [isDraftEdit, draftRowId, subject])
 
   // 发送/存草稿正文 = 编辑器内容 + 原文引用块 (拼回)。行距只包新输入段 —— 序列化
   // 发生在拼引用之前, 引用段作为兄弟拼在 wrapper 之后, 出站样式契约不受影响。
@@ -818,8 +908,10 @@ export function ComposePanelInner({
     // resolve → proceed)。存成功即 baseline 复位 (dirty=false)。
     onSuccess: (data) => {
       toastSuccess(t('compose.toast.draftOk'))
-      invalidateLists()
       setDirty(false)
+      // 保存后的锚：draft-edit 有镜像时换新行，否则维持现锚。快照收敛（dirty 放平 /
+      // lastSavedAt / 换锚）写到它上面。
+      let anchorAfterSave = isDraftEdit ? draftRowId : internalId
       if (isDraftEdit) {
         setLastSavedAt(new Date())
         // C-1 replace — 服务端删旧行建镜像新行: 替换锚 + 附件引用一并换到新行
@@ -831,6 +923,7 @@ export function ComposePanelInner({
         }
         if (typeof d.mirror_internal_id === 'number') {
           setDraftRowId(d.mirror_internal_id)
+          anchorAfterSave = d.mirror_internal_id
           const idMap = d.mirror_attachment_ids ?? {}
           setAttachList((prev) =>
             prev.map((c) => {
@@ -844,8 +937,15 @@ export function ComposePanelInner({
               return typeof nid === 'number' ? { ...r, id: nid } : r
             })
           )
+          // dogfood 波3 — 标签跟着换锚（不换 = 标签指着已删行，重启后成死标签）。
+          // 🔴 次序: 先 retarget 再 invalidate —— 反过来会打开「标签还指旧行、
+          // 旧行详情已 404」的死窗口。
+          retargetObjectTab('email', draftRowId, d.mirror_internal_id)
         }
       }
+      // 期望锚交给上面的收敛 effect（等渲染追上再落笔快照）。
+      snapshotRefreshRef.current = anchorAfterSave
+      invalidateLists()
     },
     onError: (err: unknown) => {
       const e = asWriteError(err)
@@ -875,7 +975,8 @@ export function ComposePanelInner({
           .catch(() => toastError(t('compose.toast.draftDeleteFail')))
           .finally(() => invalidateLists())
       }
-      onClose()
+      // draft-edit 发送 = 原草稿行随替换语义消亡 → 带 reason 让 EmailDetail 收标签。
+      onClose(isDraftEdit ? 'sent' : undefined)
     },
     onError: (err: unknown) => {
       setSendOpen(false)
@@ -899,7 +1000,8 @@ export function ComposePanelInner({
     mutationFn: () => mailApi.email.deleteDraft(draftRowId),
     onMutate: () => {
       toastSuccess(t('compose.toast.draftDeleted'))
-      onClose()
+      // 对象消亡 → 带 reason 让 EmailDetail 收标签（deleteMut 只在 draft-edit 出现）。
+      onClose('deleted')
     },
     onSuccess: () => {
       invalidateLists()
@@ -944,11 +1046,6 @@ export function ComposePanelInner({
       if (guardRef) guardRef.current = null
     }
   }, [guardRef, guardHandle])
-  // 上报 dirty 给父级 (overlay 场景 EmailDetail 用它做切邮件的渲染期拦截决定)。
-  useEffect(() => {
-    onDirtyChange?.(dirty)
-  }, [dirty, onDirtyChange])
-
   const busy = saveMut.isPending || sendMut.isPending || deleteMut.isPending
 
   // L0 — 拖拽附件事件面: 只认真实文件拖入 (types 含 'Files'); 文本/HTML 拖拽不激活、
@@ -1458,7 +1555,16 @@ export function ComposePanelInner({
         open={guardUnsavedOpen}
         pending={guardSaving}
         onSave={onGuardSave}
-        onDiscard={onGuardDiscard}
+        onDiscard={() => {
+          // draft-edit 丢弃 = 放弃未保存修改：清标签快照 + 压住卸载兜底（否则 cleanup
+          // 会把刚丢弃的现场又写回去）。overlay 的快照清理走 EmailDetail 的真实关闭
+          // effect（open 在本邮件上翻 false → clearObjectTabDraft），不在这里。
+          if (isDraftEdit) {
+            snapshotSuppressedRef.current = true
+            clearObjectTabDraft('email', draftRowId)
+          }
+          onGuardDiscard()
+        }}
         onCancel={onGuardCancel}
       />
     </main>
@@ -1468,14 +1574,16 @@ export function ComposePanelInner({
 /** Store-driven wrapper (reply / reply-all / forward overlay). 草稿编辑态由 EmailDetail
  *  直接渲染 ComposePanelInner (mode='draft-edit'), 不走此 store。
  *  08-27 标签工作区: overlay 的「切邮件不丢字节」由 snapshotRef / initialTabDraft 这对
- *  现场快照承担, T6 的 guardRef / onDirtyChange 离开守卫只留在 draft-edit 与 ComposeNewModal
- *  两条仍然直接渲染 Inner 的路径上, 故不再穿过这个 wrapper。 */
+ *  现场快照承担；guardRef 是标签**关闭守卫**的承接口（dogfood 波3: ⌘W / × 关 dirty
+ *  标签时 EmailDetail 经它弹 UnsavedChangesDialog, 保存链在面板里）。 */
 export function ComposePanel({
   snapshotRef,
-  initialTabDraft
+  initialTabDraft,
+  guardRef
 }: {
   snapshotRef?: React.MutableRefObject<(() => ComposeTabDraft | null) | null>
   initialTabDraft?: ComposeTabDraft | null
+  guardRef?: React.MutableRefObject<ComposeGuardHandle | null>
 } = {}): React.ReactElement | null {
   const open = useComposeStore((s) => s.open)
   const internalId = useComposeStore((s) => s.internalId)
@@ -1491,6 +1599,7 @@ export function ComposePanel({
       onClose={closeCompose}
       snapshotRef={snapshotRef}
       initialTabDraft={initialTabDraft}
+      guardRef={guardRef}
     />
   )
 }

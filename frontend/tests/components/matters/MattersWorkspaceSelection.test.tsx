@@ -12,7 +12,7 @@
 // 拆出独立小模块正是为了让这条闸不依赖这个环境限制。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import i18n from '@shared/i18n'
@@ -111,13 +111,25 @@ vi.mock('@shared/components/matters/hooks', async (importOriginal) => {
 vi.mock('@shared/components/matters/MatterFocus', () => ({
   MatterFocus: () => <div data-testid="matter-focus" />
 }))
+// 行按 public_id 出一个可点的桩按钮 —— 波 2 起清单列在看板视图下也在场，「点行等于去看
+// 那件事」这条编排（MattersWorkspace::handleSelectMatter）需要一个真实的点击入口来钉。
 vi.mock('@shared/components/matters/MatterList', () => ({
-  MatterList: (props: { selectedId: string | null; matters: readonly unknown[] }) => (
+  MatterList: (props: {
+    selectedId: string | null
+    matters: readonly Matter[]
+    onSelect(matter: Matter): void
+  }) => (
     <div
       data-testid="matter-list"
       data-selected-id={props.selectedId ?? ''}
       data-matter-count={props.matters.length}
-    />
+    >
+      {props.matters.map((matter) => (
+        <button key={matter.public_id} type="button" onClick={() => props.onSelect(matter)}>
+          {matter.public_id}
+        </button>
+      ))}
+    </div>
   )
 }))
 vi.mock('@shared/components/matters/MatterDetail', () => ({
@@ -125,7 +137,12 @@ vi.mock('@shared/components/matters/MatterDetail', () => ({
     <div data-testid="matter-detail" data-matter-id={props.matterId} />
   )
 }))
-vi.mock('@shared/components/matters/MatterCreateDialog', () => ({ MatterCreateDialog: () => null }))
+// 开合态要可观察 —— 波 2 的「新建事项」行是唯一常驻创建入口，它有没有真的开出弹窗是本
+// 文件的断言对象之一（原来的桩恒 null，点了也看不出区别）。
+vi.mock('@shared/components/matters/MatterCreateDialog', () => ({
+  MatterCreateDialog: ({ open }: { open: boolean }) =>
+    open ? <div data-testid="matter-create-dialog" /> : null
+}))
 vi.mock('@shared/components/matters/MatterTagManagerModal', () => ({
   MatterTagManagerModal: () => null
 }))
@@ -135,7 +152,9 @@ const { useMatterNavigation } = await import('@shared/components/matters/navigat
 const { resetMatterWorkspace, useMatterWorkspace } =
   await import('@shared/components/matters/matterWorkspaceStore')
 const { MAIN_SLOT, useTabWorkspace } = await import('@shared/state/tab-workspace')
-const { _resetMatterIdentityForTest } = await import('@shared/components/matters/matterTabIdentity')
+const { _resetMatterIdentityForTest, registerMatterIdentity } = await import(
+  '@shared/components/matters/matterTabIdentity'
+)
 
 function renderWorkspace(): ReturnType<typeof render> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -166,7 +185,7 @@ describe('MattersWorkspace — V3-11 记住上次选中', () => {
 
     const detail = await screen.findByTestId('matter-detail')
     expect(detail.getAttribute('data-matter-id')).toBe(A.public_id)
-    expect(screen.getByRole('tab', { name: '事项' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('button', { name: '事项' }).getAttribute('aria-current')).toBe('page')
   })
 
   test('有记录但已不可见（已归档）→ 退化成选第一条，且不强制切 tab', async () => {
@@ -175,7 +194,7 @@ describe('MattersWorkspace — V3-11 记住上次选中', () => {
 
     // 冷启动默认落看板；只有「有记录且可见」才会被拽去事项 tab —— 退化路径不该顺带改动 tab。
     expect(await screen.findByTestId('matter-focus')).toBeTruthy()
-    fireEvent.click(screen.getByRole('tab', { name: '事项' }))
+    fireEvent.click(screen.getByRole('button', { name: '事项' }))
 
     const list = await screen.findByTestId('matter-list')
     await waitFor(() => expect(list.getAttribute('data-selected-id')).toBe(B.public_id))
@@ -185,7 +204,7 @@ describe('MattersWorkspace — V3-11 记住上次选中', () => {
     renderWorkspace()
 
     expect(await screen.findByTestId('matter-focus')).toBeTruthy()
-    fireEvent.click(screen.getByRole('tab', { name: '事项' }))
+    fireEvent.click(screen.getByRole('button', { name: '事项' }))
 
     const list = await screen.findByTestId('matter-list')
     await waitFor(() => expect(list.getAttribute('data-selected-id')).toBe(B.public_id))
@@ -199,10 +218,10 @@ describe('MattersWorkspace — V3-11 记住上次选中', () => {
       A.public_id
     )
 
-    fireEvent.click(screen.getByRole('tab', { name: '看板' }))
+    fireEvent.click(screen.getByRole('button', { name: '今日看板' }))
     expect(await screen.findByTestId('matter-focus')).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('tab', { name: '事项' }))
+    fireEvent.click(screen.getByRole('button', { name: '事项' }))
     const detail = await screen.findByTestId('matter-detail')
     expect(detail.getAttribute('data-matter-id')).toBe(A.public_id)
   })
@@ -266,7 +285,7 @@ describe('MattersWorkspace — 状态提升（task 08-20）', () => {
     // 回来直接就是那一屏：清单 tab、选中 B、搜索词还在 —— 中间没有「先看板后清单」的翻转。
     const list = await screen.findByTestId('matter-list')
     expect(list.getAttribute('data-selected-id')).toBe(B.public_id)
-    expect(screen.getByRole('tab', { name: '事项' }).getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByRole('button', { name: '事项' }).getAttribute('aria-current')).toBe('page')
     expect(useMatterWorkspace.getState().search).toBe('ship')
 
     // 🔴 等这一遍的 `/matters` 落地再断言一次：冷启动初选**只做一次**，重挂时它若再跑一遍，
@@ -297,9 +316,110 @@ describe('MattersWorkspace — 看板冷启动骨架（task 08-20）', () => {
 describe('MattersWorkspace — scope 默认 all（task 08-14）', () => {
   test('已归档事项不出现在默认「全部」范围下的清单里', async () => {
     renderWorkspace()
-    fireEvent.click(screen.getByRole('tab', { name: '事项' }))
+    fireEvent.click(screen.getByRole('button', { name: '事项' }))
 
     const list = await screen.findByTestId('matter-list')
     await waitFor(() => expect(list.getAttribute('data-matter-count')).toBe('2'))
+  })
+})
+
+// 08-27 dogfood 修正批·波 2 —— 42px 通栏模块 tab 栏退役，视图切换与「新建事项」收进清单列
+// （336）顶部的折叠组（MatterViewNav）。
+function viewNav(): HTMLElement {
+  const host = document.querySelector('[data-matter-view-nav]')
+  if (!host) throw new Error('view nav not rendered')
+  return host as HTMLElement
+}
+
+describe('MattersWorkspace — 二级栏视图折叠组（08-27 波 2）', () => {
+  test('看板视图下清单列仍在场：折叠组与看板同屏（二级栏不随视图消失）', async () => {
+    renderWorkspace()
+
+    expect(await screen.findByTestId('matter-focus')).toBeTruthy()
+    // 🔴 这条钉的正是本批的形态：原来 tab='board' 是通栏，清单列整个不渲染。
+    expect(screen.getByTestId('matter-list')).toBeTruthy()
+    expect(
+      within(viewNav()).getByRole('button', { name: '今日看板' }).getAttribute('aria-current')
+    ).toBe('page')
+  })
+
+  test('点组内两行切视图，选中态跟着搬家', async () => {
+    renderWorkspace()
+    await screen.findByTestId('matter-focus')
+
+    fireEvent.click(within(viewNav()).getByRole('button', { name: '事项' }))
+    expect(screen.queryByTestId('matter-focus')).toBeNull()
+    expect(
+      within(viewNav()).getByRole('button', { name: '事项' }).getAttribute('aria-current')
+    ).toBe('page')
+    expect(
+      within(viewNav()).getByRole('button', { name: '今日看板' }).getAttribute('aria-current')
+    ).toBeNull()
+
+    fireEvent.click(within(viewNav()).getByRole('button', { name: '今日看板' }))
+    expect(await screen.findByTestId('matter-focus')).toBeTruthy()
+  })
+
+  test('点组头收起：组内三行都不在，下方清单不受影响', async () => {
+    renderWorkspace()
+    await screen.findByTestId('matter-focus')
+
+    fireEvent.click(within(viewNav()).getByRole('button', { name: 'View' }))
+
+    expect(within(viewNav()).queryByRole('button', { name: '今日看板' })).toBeNull()
+    expect(within(viewNav()).queryByRole('button', { name: '事项' })).toBeNull()
+    expect(within(viewNav()).queryByRole('button', { name: '新建事项' })).toBeNull()
+    // 收起的是组，不是列：清单（与当前视图的主区）原样在场。
+    expect(screen.getByTestId('matter-list')).toBeTruthy()
+    expect(screen.getByTestId('matter-focus')).toBeTruthy()
+  })
+
+  test('看板视图下点清单行 = 去看那件事（选中 + 主区换成详情）', async () => {
+    renderWorkspace()
+    await screen.findByTestId('matter-focus')
+
+    // 🔴 这条钉的是 handleSelectMatter 里的 setTab('list')：标签 store 的反向投影腿在这条
+    // 路径上帮不上忙（它的判据是「投影值与当前选中不同」，而选中已经先设好了），少了那一
+    // 行，点行只会静静地换选中、主区仍停在看板 —— 看着就是「点了没反应」。
+    fireEvent.click(screen.getByRole('button', { name: A.public_id }))
+
+    const detail = await screen.findByTestId('matter-detail')
+    expect(detail.getAttribute('data-matter-id')).toBe(A.public_id)
+    expect(screen.queryByTestId('matter-focus')).toBeNull()
+  })
+
+  test('「新建事项」行仍是常驻创建入口（点开创建弹窗）', async () => {
+    renderWorkspace()
+    await screen.findByTestId('matter-focus')
+
+    expect(screen.queryByTestId('matter-create-dialog')).toBeNull()
+    fireEvent.click(within(viewNav()).getByRole('button', { name: '新建事项' }))
+    expect(screen.getByTestId('matter-create-dialog')).toBeTruthy()
+  })
+})
+
+describe('selectMatter — 开标签被拒时回滚本地投影（check 波3 续改）', () => {
+  test('标签满且全 locked → selectedId 不落新值、标签没开、seed 不写', () => {
+    registerMatterIdentity(21, 'MAT-0021')
+    useTabWorkspace.setState({ maxTabs: 4 })
+    for (let i = 1; i <= 4; i++) useTabWorkspace.getState().openTab('email', i, `邮件${i}`)
+    for (const t of useTabWorkspace.getState().tabs) {
+      useTabWorkspace.getState().updateTab(t.id, { locked: true })
+    }
+    useMatterWorkspace.getState().selectMatter('MAT-0021', { title: '开不进来' })
+    // 回滚：不回滚 = 详情区展示 MAT-0021、标签条还高亮旧标签的劈叉（active-email 同形）
+    expect(useMatterWorkspace.getState().selectedId).toBeNull()
+    expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'matter:21')).toBe(false)
+    // seed 也不写 —— 写了会让冷启动去追一件根本没开成标签的事
+    expect(lastSelectedStore.value).toBeNull()
+  })
+
+  test('未满 → 正常选中 + 开标签 + seed 落盘（回滚不误伤主路径）', () => {
+    registerMatterIdentity(21, 'MAT-0021')
+    useTabWorkspace.setState({ maxTabs: 8 })
+    useMatterWorkspace.getState().selectMatter('MAT-0021', { title: '正常' })
+    expect(useMatterWorkspace.getState().selectedId).toBe('MAT-0021')
+    expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'matter:21')).toBe(true)
+    expect(lastSelectedStore.value).toBe('MAT-0021')
   })
 })

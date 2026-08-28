@@ -9,17 +9,13 @@
 //
 // 格 = registry 里带 rail 落位的 entry；格的脸（标签/图标）= NAV_DOMAINS 的域元
 // 数据（邮件格画信封，面板里的收件箱行才画收件托盘）。点击语义由 Sidebar 注入：
-// 非当前域 → 导航到该 entry；当前域 → 折叠/展开面板。0825 dogfood 起底部另有
-// 显式开合按钮（RailToggle）——「点当前域格」这条隐蔽入口保留作快捷路径。
+// 恒为「导航到该域上次的落点」——08-27 dogfood 修正批移除折叠能力后，底部的开合
+// 按钮与「点当前域格 = 折叠」这条快捷路径一并退役。
 
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import {
-  AnimatedIconActiveProvider,
-  PanelLeftCloseIcon,
-  PanelLeftOpenIcon
-} from '@shared/components/icons'
+import { AnimatedIconActiveProvider } from '@shared/components/icons'
 import {
   NAV_DOMAINS,
   NAV_OBJECT_DOMAINS,
@@ -86,41 +82,11 @@ function RailCell({
   )
 }
 
-/** 面板开合按钮（底部沉，域格之上）。<lg 强制收起时由 Sidebar 隐藏。 */
-function RailToggle({
-  collapsed,
-  onToggle
-}: {
-  collapsed: boolean
-  onToggle(): void
-}): React.ReactElement {
-  const { t } = useTranslation()
-  const [iconActive, setIconActive] = useState(false)
-  return (
-    <button
-      type="button"
-      className="nav-rail-toggle"
-      onClick={onToggle}
-      onPointerEnter={() => setIconActive(true)}
-      onPointerLeave={() => setIconActive(false)}
-      onFocus={() => setIconActive(true)}
-      onBlur={() => setIconActive(false)}
-      title={t('nav.toggleTitle')}
-      aria-label={collapsed ? t('nav.expandAria') : t('nav.toggleAria')}
-      aria-expanded={!collapsed}
-    >
-      <AnimatedIconActiveProvider active={iconActive}>
-        {collapsed ? <PanelLeftOpenIcon /> : <PanelLeftCloseIcon />}
-      </AnimatedIconActiveProvider>
-    </button>
-  )
-}
-
 export interface IconRailProps {
   /** 门控过滤后的入口全集（本组件自己按 rail 投影）。 */
   entries: readonly NavEntry[]
   /** 当前路由归属的域；`null` = 路由不属于任何域（'/search' 有意不进 registry）
-   *  ⇒ **没有格高亮**。别在这里回落成某个域：那会让那一格既亮着又变成「点它 = 折叠」。 */
+   *  ⇒ **没有格高亮**。别在这里回落成某个域：那会让那一格亮着，误导「当前在那个域」。 */
   activeDomain: NavDomain | null
   badgeValue: Record<NavBadgeKind, number>
   monogram: string
@@ -129,11 +95,6 @@ export interface IconRailProps {
    *  dotClass = Tailwind bg-* 色类；title = 完整状态描述（OS tooltip）。 */
   syncDotClass: string
   syncTitle: string
-  /** 面板收起态（RailToggle 的图标方向 + aria）。 */
-  panelCollapsed: boolean
-  /** <lg 视口强制收起时为 false —— 那里的收起不可解除，按钮只会空翻偏好。 */
-  showPanelToggle: boolean
-  onPanelToggle(): void
   onAvatarClick(): void
   onCellClick(entry: NavEntry): void
   onCellHover(entry: NavEntry): void
@@ -147,9 +108,6 @@ export function IconRail({
   accountTitle,
   syncDotClass,
   syncTitle,
-  panelCollapsed,
-  showPanelToggle,
-  onPanelToggle,
   onAvatarClick,
   onCellClick,
   onCellHover
@@ -202,7 +160,6 @@ export function IconRail({
           role="status"
           aria-label={syncTitle}
         />
-        {showPanelToggle && <RailToggle collapsed={panelCollapsed} onToggle={onPanelToggle} />}
         {bottom.map(renderCell)}
       </div>
     </div>

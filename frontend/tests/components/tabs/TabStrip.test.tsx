@@ -48,6 +48,7 @@ import {
   SEARCH_TARGET_ID,
   useTabWorkspace
 } from '@shared/state/tab-workspace'
+import { _resetTabBridgeForTest, useTabCloseGuard } from '@shared/state/tab-workspace-bridge'
 
 await i18n.changeLanguage('zh-CN')
 
@@ -60,6 +61,7 @@ beforeEach(() => {
     mainBreadcrumb: null,
     maxTabs: 8
   })
+  _resetTabBridgeForTest()
 })
 
 afterEach(cleanup)
@@ -242,5 +244,39 @@ describe('TabStrip — morphing 滑动面与 hairline 断口', () => {
     })
     wireGeometry(container, 195, 200) // floor((200-6)/4)=48 → clamp 到 84
     expect(screen.getAllByRole('tab')[1].style.width).toBe('84px')
+  })
+})
+
+describe('TabStrip — 改动点与关闭守卫（dogfood 波3）', () => {
+  test('draft.dirty 的 email 标签渲染改动点；与锁定点互斥，dirty 优先', () => {
+    const { container } = render(<TabStrip />)
+    act(() => {
+      useTabWorkspace.getState().openTab('email', 1, '写一半的草稿')
+      useTabWorkspace.getState().openTab('email', 2, '聊过的邮件')
+      // dirty 快照在场（真实链路里 live 写快照 + recompute 会顺带 locked=true）
+      useTabWorkspace
+        .getState()
+        .updateTab('email:1', { draft: { kind: 'compose', dirty: true }, locked: true })
+      useTabWorkspace.getState().updateTab('email:2', { locked: true })
+    })
+    // email:1 dirty+locked → 只画 dirty 点；email:2 只 locked → 琥珀点
+    expect(container.querySelectorAll('.ttab-dirty').length).toBe(1)
+    expect(container.querySelectorAll('.ttab-lock').length).toBe(1)
+    expect(screen.getByTitle('有未保存的修改')).toBeTruthy()
+  })
+
+  test('× 对 dirty 草稿标签走关闭守卫：不直接关，先激活 + 挂起请求', () => {
+    render(<TabStrip />)
+    act(() => {
+      useTabWorkspace.getState().openTab('email', 1, '草稿')
+      useTabWorkspace.getState().openTab('email', 2, '别的')
+      useTabWorkspace.getState().updateTab('email:1', { draft: { kind: 'compose', dirty: true } })
+    })
+    const closes = screen.getAllByRole('button', { name: '关闭标签（⌘W）' })
+    fireEvent.click(closes[0]) // × 第一个（dirty、非激活）
+    const state = useTabWorkspace.getState()
+    expect(state.tabs.some((t) => t.id === 'email:1')).toBe(true)
+    expect(state.active).toBe('email:1')
+    expect(useTabCloseGuard.getState().pending?.tabId).toBe('email:1')
   })
 })

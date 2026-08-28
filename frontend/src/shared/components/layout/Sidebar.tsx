@@ -2,7 +2,7 @@
 //
 // 老单栏（240↔56 双宽态，三段 11-13 行）退役，拆为：
 //   · IconRail（56px 常驻图标导轨，切域）
-//   · DomainPanel（336px 域二级栏，随域换内容，可折叠 = 显隐；08-27 批定宽）
+//   · DomainPanel（336px 域二级栏，随域换内容；08-27 批定宽，dogfood 修正批起不可收起）
 // 本文件负责**数据与写路径**：mailbox 计数 / 事项关注 / agent 未读 → badgeValue，
 // 邮件视图切换（setView + `?view=` 同步 + useMailbox 联动）、同步状态点、域推导
 // （navActiveDomain）。渲染细节在两个子组件。
@@ -37,7 +37,6 @@ import { useVisibleNavEntries } from '@shared/navigation/useNavGates'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { useEventsStatusStore } from '@shared/state/eventsStatus'
 import { useMailbox } from '@shared/state/mailbox'
-import { useNavCollapsed } from '@shared/state/nav-shell'
 import { deriveAccount } from '@shared/lib/account'
 import { useAgentUnreadCount, useSessionProvenanceEnabled } from '@shared/components/agents/hooks'
 import { useGlobalAttention, useMattersEnabled } from '@shared/components/matters/hooks'
@@ -109,9 +108,6 @@ export function Sidebar(): React.ReactElement {
   const routerInstance = useRouter()
   // 门控过滤后的一级入口（registry 单源）。rail / panel 投影在子组件里做。
   const navEntries = useVisibleNavEntries()
-  const collapsed = useNavCollapsed((s) => s.collapsed)
-  const forcedCollapsed = useNavCollapsed((s) => s.forced)
-  const toggleCollapsed = useNavCollapsed((s) => s.toggle)
   const sessionProvenanceEnabled = useSessionProvenanceEnabled()
   const mattersEnabled = useMattersEnabled()
   const matterAttention = useGlobalAttention(mattersEnabled)
@@ -127,14 +123,14 @@ export function Sidebar(): React.ReactElement {
   })
 
   // 路由归属域。🔴 null 是**真值**不是缺省：'/search'（「新标签页」搜索标签的承载路由）
-  // 有意不进 registry，不属于任何域。导轨高亮与「点当前域的格 = 折叠」这条短路都必须
-  // 按它判 —— 回落成 'mail' 会让 /search 上点邮件格变成折叠切换、走不掉（实测过）。
+  // 有意不进 registry，不属于任何域 ⇒ 导轨没有高亮格。回落成 'mail' 会让邮件格亮着，
+  // 误导「当前在邮件域」。
   const routeDomain = navActiveDomain(navEntries, pathname, searchTab)
   // 二级栏形态要一个具体域才能算，这里才回落邮件域（/search 自带 336 左列，
   // 回落到 mail 的 'page' 档 ⇒ 不渲染 DomainPanel，正是要的形态）。
   const panelDomain = routeDomain ?? 'mail'
-  // 域二级栏形态（08-27 批起恒有二级栏）：'nav' = DomainPanel；'page' = 页面列表列
-  // 充当二级栏（收起走同一个 useNavCollapsed，本组件只管开合按钮的显隐）。
+  // 域二级栏形态（08-27 批起恒有二级栏，dogfood 修正批起不可收起）：'nav' =
+  // DomainPanel；'page' = 页面列表列自己充当二级栏。
   const second = navDomainSecond(panelDomain)
   const hasPanel = second === 'nav'
 
@@ -202,15 +198,10 @@ export function Sidebar(): React.ReactElement {
     else navigateToNavEntry(navigate, entry)
   }
 
-  /** 导轨格点击：切域 = 回该域上次的落点；点当前域的格 = 折叠/展开二级栏
-   *  （快捷路径；显式入口是 rail 底部的 RailToggle，0825 dogfood 补）。
-   *  08-27 批起所有域都有二级栏，点当前格恒为开合。 */
+  /** 导轨格点击：恒为「回该域上次的落点」。dogfood 修正批：二级栏不可收起了，
+   *  「点当前域的格 = 折叠」这条短路随之取消 —— 点当前域的格回放的就是当前位置，
+   *  等效无感。 */
   const handleRailCellClick = (entry: NavEntry): void => {
-    // routeDomain 为 null（'/search'）时没有「当前域」⇒ 每一格都是切域，正常导航。
-    if (entry.domain === routeDomain) {
-      toggleCollapsed()
-      return
-    }
     // 🔴 切域走 navigateToDomain（有落点回放 / 无落点才是这一格的缺省 entry），与
     // ⌃⇥ / 标签条切域同径 —— 导轨是「回邮件域」最常走的路径，恒落缺省会把
     // 「已加星标」重置成收件箱。不走 handleEntryClick：那条路会 setView(格的缺省视图)，
@@ -230,12 +221,7 @@ export function Sidebar(): React.ReactElement {
   }
 
   return (
-    <aside
-      data-app-nav
-      data-collapsed={collapsed ? 'true' : 'false'}
-      aria-label="primary"
-      className="app-nav"
-    >
+    <aside data-app-nav aria-label="primary" className="app-nav">
       <IconRail
         entries={navEntries}
         activeDomain={routeDomain}
@@ -244,9 +230,6 @@ export function Sidebar(): React.ReactElement {
         accountTitle={t('nav.account.tooltip', { email: accountEmail ?? account.localPart })}
         syncDotClass={syncDot.dotClass}
         syncTitle={syncDot.title}
-        panelCollapsed={collapsed}
-        showPanelToggle={!forcedCollapsed}
-        onPanelToggle={toggleCollapsed}
         onAvatarClick={handleAvatarClick}
         onCellClick={handleRailCellClick}
         onCellHover={handleEntryHover}
@@ -257,7 +240,6 @@ export function Sidebar(): React.ReactElement {
           entries={navEntries}
           onEntryClick={handleEntryClick}
           onEntryHover={handleEntryHover}
-          onCollapse={toggleCollapsed}
         />
       )}
     </aside>

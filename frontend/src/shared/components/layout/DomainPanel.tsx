@@ -7,8 +7,7 @@
 //     P1 过渡档，见 NAV_DOMAINS.agents 注释）；reports / ops / settings 仍是
 //     registry 投影行。
 //
-// 折叠 = 整个面板经 `.app-nav[data-collapsed]` 的 authored CSS 隐藏（width 0 +
-// visibility hidden），rail 常驻 —— 本组件不再有「收起态行形态」这回事。
+// 08-27 dogfood 修正批：折叠能力整体移除 —— 面板恒在、恒 336，域头只剩域名。
 //
 // 数据与写路径留在 Sidebar（组装层）：本组件只拿点击 handler，自己读只读的
 // 路由 store 来定选中态。
@@ -16,7 +15,6 @@
 import { cloneElement, isValidElement, useState } from 'react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { ChevronsLeft } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { AnimatedIconActiveProvider } from '@shared/components/icons'
@@ -124,16 +122,13 @@ export interface DomainPanelProps {
   /** 条目点击 —— 与 IconRail 的格点击共用 Sidebar 里的同一个 handler。 */
   onEntryClick(entry: NavEntry): void
   onEntryHover(entry: NavEntry): void
-  /** 面板头右侧的收起按钮。 */
-  onCollapse(): void
 }
 
 export function DomainPanel({
   domain,
   entries,
   onEntryClick,
-  onEntryHover,
-  onCollapse
+  onEntryHover
 }: DomainPanelProps): React.ReactElement {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -161,9 +156,9 @@ export function DomainPanel({
     />
   )
 
-  /** 设置域的 tab 直达行（0825 轮 3：设置节导航从 SettingsShell 内嵌 rail 迁入域面板，
-   *  ≥lg 由这里承载；<lg 面板强制收起，SettingsShell 的顶部水平 tab 条兜底）。
-   *  词表单源 `SETTINGS_TABS`；matters tab 跟随模块开关（同 SettingsRail 既有语义）。 */
+  /** 设置域的 tab 直达行 —— 设置节导航的**唯一**入口（0825 轮 3 从 SettingsShell 内嵌
+   *  rail 迁入域面板，SettingsShell 那侧的水平 tab 条已随二级栏恒在一并退役）。
+   *  词表单源 `SETTINGS_TABS`；matters tab 跟随模块开关。 */
   const activeSettingsTab = clampSettingsTab(searchTab)
   const renderSettingsTabRow = (tab: SettingsTab): React.ReactElement => {
     const Icon = SETTINGS_TAB_ICON[tab]
@@ -181,23 +176,12 @@ export function DomainPanel({
   return (
     <div className="nav-panel" data-nav-panel>
       <div className="nav-panel-inner">
-        {/* ── 41px 域头 · 域名 + 域级动作位 ──────────────────────────────
+        {/* ── 41px 域头 · 域名 ───────────────────────────────────────────
             与 rail 头 / 右侧内容区顶栏 (height 41) 的分割线共线（画布修正版基线）。 */}
-        <div className="nav-panel-header gap-1.5">
-          <span className="text-[13px] font-semibold text-ink-fg truncate">
+        <div className="nav-panel-header">
+          <span className="flex-1 min-w-0 text-[13px] font-semibold text-ink-fg truncate">
             {navDomainLabel(domain, t)}
           </span>
-          <div className="flex-1 min-w-0 flex items-center justify-end gap-1">
-            <button
-              type="button"
-              onClick={onCollapse}
-              className="shrink-0 p-1 rounded hover:bg-ink-3 active:bg-ink-4 text-ink-fg-2 hover:text-ink-fg transition-colors duration-fast"
-              title={t('nav.toggleTitle')}
-              aria-label={t('nav.toggleAria')}
-            >
-              <ChevronsLeft size={13} strokeWidth={2} />
-            </button>
-          </div>
         </div>
 
         {/* ── 域内容 ─────────────────────────────────────────────────── */}
@@ -217,7 +201,7 @@ export function DomainPanel({
           </nav>
         )}
 
-        {/* 设置域 footer（版本 + repo）—— 随节导航从 SettingsRail 迁入（那侧 ≥lg 已隐）。 */}
+        {/* 设置域 footer（版本 + repo）—— 随节导航从设置页内嵌 rail 迁入。 */}
         {domain === 'settings' && (
           <div className="shrink-0 border-t border-ink-border-soft px-3 py-3 text-micro font-mono text-ink-fg-2">
             <div className="flex items-center justify-between">

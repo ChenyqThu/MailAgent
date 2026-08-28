@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { Ban, Plus } from 'lucide-react'
+import { Ban } from 'lucide-react'
 
 import type { Matter, MatterCreateInput } from '@shared/api/types/matter'
 import { useMediaQuery } from '@shared/hooks/useMediaQuery'
@@ -9,7 +9,6 @@ import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { openAttentionFor } from '@shared/lib/matterDerive'
 import { qk } from '@shared/lib/queryKeys'
-import { useNavCollapsed } from '@shared/state/nav-shell'
 import { selectActiveTargetId, useTabWorkspace } from '@shared/state/tab-workspace'
 import { closeObjectTab } from '@shared/state/tab-workspace-bridge'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -24,6 +23,7 @@ import {
   MattersWorkspaceSkeleton
 } from './MatterSkeleton'
 import { MatterTagManagerModal } from './MatterTagManagerModal'
+import { MatterViewNav } from './MatterViewNav'
 import {
   matterLiveListOptions,
   useAttentionAction,
@@ -40,8 +40,6 @@ import {
   applyMatterListQuery,
   DEFAULT_MATTER_LIST_QUERY,
   groupMatters,
-  MATTER_TAB_ICONS,
-  MATTER_TABS,
   matterInScope,
   matterScopeParams,
   orderedMatterIds
@@ -59,9 +57,10 @@ export function MattersWorkspace(): React.ReactElement | null {
   const api = useMattersApi()
   const { mattersEnabled: enabled, matterAgentEnabled, flagsPending } = useMatterFlags()
   const queryClient = useQueryClient()
-  // V3-01 —— 左侧 176px 视图列删除，12 档 view 收敛成「事项 / 看板」两 tab + 查询模型
-  // （matterListQuery.ts）。默认落看板（≙ 旧默认 view 'focus'）；有有效的「记住上次选中」
+  // V3-01 —— 左侧 176px 视图列删除，12 档 view 收敛成「事项 / 今日看板」两个视图 + 查询模型
+  // （matterListQuery.ts）。默认落今日看板（≙ 旧默认 view 'focus'）；有有效的「记住上次选中」
   // 记录时 V3-11 的冷启动 effect（见下方 `initialSelectionApplied`）会把它改成 'list'。
+  // 08-27 波 2 —— 两个视图的切换入口在二级栏顶部的折叠组（MatterViewNav），不再是通栏 tab 栏。
   //
   // task 08-20 P0-3 —— 这一组（tab / query / search / selectedId / 折叠组 / 冷启动标记）住在
   // **模块级 store**（matterWorkspaceStore.ts）：本组件随路由切换整树卸载，放 useState 就是
@@ -99,10 +98,6 @@ export function MattersWorkspace(): React.ReactElement | null {
   // 的另一行。只在窄屏折叠成单列、详情独占视口时才露出（design detail.jsx:174 `narrow &&
   // <PrevNext.../>` 同一判据）。
   const stackedLayout = useMediaQuery(WORKSPACE_STACKED_QUERY)
-  // 0825 轮 3 —— 清单列 = 事项域的「二级栏」（registry second:'page'）：收起走 nav shell
-  // 的同一个折叠状态（rail 开合按钮 / 点当前域格）。🔴 排除 forced：<lg 的强制收起是
-  // 给导航面板的，清单列是内容，窄窗行为仍由下面的 max-[880px] 断点自治。
-  const listPanelHidden = useNavCollapsed((s) => s.collapsed && !s.forced)
 
   // 活跃行（deleted/archived 皆 NULL）—— 看板、open/done 两个 scope、提案扇出都吃这一份。
   // options 单源在 matterLiveListOptions（与启动预热共用, 防 key 漂移）; 缓存配方
@@ -227,8 +222,14 @@ export function MattersWorkspace(): React.ReactElement | null {
   // react-window 把可见行全部重渲一遍（虚拟化省下来的那点开销正好还回去）。
   const handleSelectMatter = useCallback(
     // 点行 = 开标签（去重激活在 store），标题随行数据带上（免得新标签空标题等详情回填）。
-    (matter: Matter): void => selectMatter(matter.public_id, { title: matter.title }),
-    [selectMatter]
+    // 🔴 顺带切到清单视图：08-27 波 2 起清单列在看板视图下也在场，不切的话点了行主区还是
+    // 看板 —— 看着像「点了没反应」。store 的标签订阅腿在这条路径上帮不上忙（它的判据是
+    // 「投影值与当前选中不同」，而这里已经先把选中设好了）。
+    (matter: Matter): void => {
+      selectMatter(matter.public_id, { title: matter.title })
+      setTab('list')
+    },
+    [selectMatter, setTab]
   )
 
   const attentionAction = useAttentionAction()
@@ -355,163 +356,117 @@ export function MattersWorkspace(): React.ReactElement | null {
   // 首屏还没有任何行 = 冷启动，出骨架；有行（含 keepPreviousData 留下的上一批）就照常渲染。
   const rowsPending = scopeOnServer ? scopedList.isPending : liveList.isPending
 
+  // 08-27 波 2 —— 单列折叠（≤880）下谁让位：主区有内容（看板 / 选中的事项）时露主区，
+  // 否则露清单列。原判据只有 `selected`，那是「看板是通栏」时代的形状。
+  const contentPaneVisible = tab === 'board' || Boolean(selected)
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* V3-01/V3-02 —— 42px 模块 tab 栏（设计 `list.jsx::ModuleTabs`）：事项 / 看板 两 tab +
-          右侧常驻「新建事项」主按钮。它是唯一常驻的创建入口（无 ⌘N、无第二条路径），
-          从旧左轨顶部移到这里，不可省。 */}
-      <div className="flex h-[42px] shrink-0 items-center gap-0.5 border-b border-ink-border bg-ink-1/45 pl-2 pr-3">
+      <div
+        // V3-10 —— 单列折叠断点按设计定 880；清单列定宽 336px（task 08-27 P1 Lane C 续改：
+        // 拖拽调宽体系退役，左列总宽 392 = 导轨 56 + 二级栏 336，切域时左列边界不动）。
+        // 08-27 波 2 —— 看板视图也走这套 grid：清单列是事项域的二级栏，不随视图消失
+        // （原来 tab='board' 是通栏，左列边界会当场塌回 56）。
+        className="grid min-h-0 flex-1 max-[880px]:grid-cols-1 grid-cols-[336px_minmax(420px,1fr)]"
+      >
         <div
-          role="tablist"
-          aria-label={t('matters.nav')}
-          className="flex h-full items-center gap-0.5"
+          className={cn(
+            // 🔴 列容器不铺底色：菜单与清单各自铺 `bg-ink-1/55`（MatterList 的 section 自带
+            // 一层），这里再铺一层同色会在清单区叠成两层、与菜单区分出一道色差。
+            'flex min-h-0 flex-col border-r border-ink-border',
+            contentPaneVisible && 'max-[880px]:hidden'
+          )}
         >
-          {MATTER_TABS.map((value) => {
-            const Icon = MATTER_TAB_ICONS[value]
-            const active = tab === value
-            return (
-              <button
-                key={value}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => setTab(value)}
-                className={cn(
-                  'relative flex h-full items-center gap-1.5 px-3 text-body transition-colors duration-fast',
-                  active ? 'font-medium text-ink-fg' : 'text-ink-fg-1 hover:text-ink-fg'
-                )}
-              >
-                <Icon size={14} />
-                {t(`matters.moduleTabs.${value}`)}
-                {value === 'board' && boardBadge > 0 ? (
-                  <span className="min-w-[15px] rounded-full bg-crit px-1 text-center font-mono text-[10.5px] font-semibold leading-[15px] text-white">
-                    {boardBadge}
-                  </span>
-                ) : null}
-                {active ? (
-                  <span
-                    aria-hidden
-                    className="absolute inset-x-2 bottom-0 h-0.5 rounded-t-sm bg-coral/100"
-                  />
-                ) : null}
-              </button>
-            )
-          })}
-        </div>
-        <span className="flex-1" />
-        <button
-          type="button"
-          onClick={() => setCreateOpen(true)}
-          className="inline-flex items-center gap-1.5 rounded-[var(--r-ctl)] bg-coral/100 px-3 py-1.5 text-body font-medium text-accent-fg"
-        >
-          <Plus size={15} />
-          {t('matters.create.submit')}
-        </button>
-      </div>
-
-      <div className="min-h-0 flex-1">
-        {tab === 'board' && rowsPending && liveMatters.length === 0 ? (
-          // 看板冷启动 —— 不出真看板：`matters=[]` 时四个 tile 全是 0、关注区还会显示一句
-          // 「全部处理完了」，那是**误导性空态**（与清单的「暂无事项」同一类问题）。
-          <MatterBoardSkeleton />
-        ) : tab === 'board' ? (
-          <MatterFocus
-            matters={liveMatters}
-            signals={attentionItems}
-            updates={updateIndex}
-            onSelect={revealMatter}
-            onReview={(matter, updateId) => {
-              revealMatter(matter)
-              setReviewTarget({ matterId: matter.public_id, updateId })
-            }}
-            onSignal={handleAttentionAction}
-            onJump={jumpToQuickFilter}
+          <MatterViewNav
+            tab={tab}
+            boardBadge={boardBadge}
+            onSelectTab={setTab}
+            onCreate={() => setCreateOpen(true)}
           />
-        ) : (
-          <div
-            // V3-10 —— 单列折叠断点按设计定 880；清单列定宽 336px（task 08-27 P1 Lane C 续改：
-            // 拖拽调宽体系退役，左列总宽 392 = 导轨 56 + 二级栏 336，切域时左列边界不动）。
-            className={cn(
-              'grid h-full min-h-0 max-[880px]:grid-cols-1',
-              // 收起态：清单列整体隐藏（display:none 不参与轨道），详情独占。
-              listPanelHidden
-                ? 'grid-cols-[minmax(420px,1fr)]'
-                : 'grid-cols-[336px_minmax(420px,1fr)]'
-            )}
-          >
-            <div
-              className={cn(
-                'min-h-0 border-r border-ink-border',
-                selected && 'max-[880px]:hidden',
-                listPanelHidden && 'hidden'
-              )}
-            >
-              <MatterList
-                matters={visible}
-                query={query}
-                onQueryChange={setQuery}
-                scopeTotal={scopeTotal}
-                tags={tagDefinitions}
-                // V3-05 —— 清单的分组与工作台的筛选/排序/导航序必须同一个「此刻」：
-                // MatterList 随 tab 切换卸载重挂，自持一份的话跨零点会与 visibleIds 劈叉。
-                now={now}
-                selectedId={selectedId}
-                attention={attentionIndex}
-                updates={updateIndex}
-                search={search}
-                loading={rowsPending}
-                onSearchChange={setSearch}
-                onSelect={handleSelectMatter}
-                onCreate={() => setCreateOpen(true)}
-                onManageTags={() => setTagManagerOpen(true)}
-              />
-            </div>
-            <div className={cn('min-h-0', !selected && 'max-[880px]:hidden')}>
-              {selected ? (
-                <MatterDetail
-                  matterId={selected.public_id}
-                  onBack={() => selectMatter(null)}
-                  onRemoved={() => {
-                    // 对象已被删除/归档：先清本地选中（后继标签接管时会重设），再收掉它的
-                    // 标签 —— 反过来的话 closeTab 的后继同步刚设好的选中会被 null 冲掉。
-                    const removedId = matterNumericId(selected.public_id)
-                    selectMatter(null)
-                    if (removedId !== null) closeObjectTab('matter', removedId)
-                  }}
-                  navigationMatterIds={visibleIds}
-                  // E10③—— 并排可见时不传 onNavigateMatter：MatterDetail 的
-                  // `showNavigation` 判据里 `Boolean(onNavigateMatter)` 是硬门槛，undefined
-                  // 就等于「没有导航能力」，上/下切换钮整体不渲染（MatterDetail 内部逻辑一字
-                  // 不动，从调用方把控制权收掉）。清单被折叠收起时同窄屏 —— 详情独占视口，
-                  // 上/下切换是唯一的换事项路径。
-                  onNavigateMatter={
-                    // 详情上/下条 = J/K 同语义：原位换目标（replace），不涨标签数。
-                    stackedLayout || listPanelHidden
-                      ? (matterId) => selectMatter(matterId, { mode: 'replace' })
-                      : undefined
-                  }
-                  attentionSignals={openAttentionFor(selected, attentionIndex)}
-                  onAttentionAction={handleAttentionAction}
-                  initialReviewId={
-                    reviewTarget?.matterId === selected.public_id ? reviewTarget.updateId : null
-                  }
-                  onReviewOpened={() => setReviewTarget(null)}
-                />
-              ) : rowsPending && scopeRows.length === 0 ? (
-                // 冷启动还没有行 ⇒ 也还没有选中项，这时候的「未选中事项」是误导（用户什么都
-                // 还没来得及点）。与清单列同步出骨架，等行到了冷启动初选会自己选中一条。
-                <MatterDetailSkeleton />
-              ) : (
-                <div className="grid h-full place-items-center p-8 text-center text-body text-ink-fg-2">
-                  <div>
-                    <Ban size={28} className="mx-auto mb-3 opacity-60" />
-                    {t('matters.detail.empty')}
-                  </div>
-                </div>
-              )}
-            </div>
+          <div className="min-h-0 flex-1">
+            <MatterList
+              matters={visible}
+              query={query}
+              onQueryChange={setQuery}
+              scopeTotal={scopeTotal}
+              tags={tagDefinitions}
+              // V3-05 —— 清单的分组与工作台的筛选/排序/导航序必须同一个「此刻」：
+              // MatterList 随路由切换卸载重挂，自持一份的话跨零点会与 visibleIds 劈叉。
+              now={now}
+              selectedId={selectedId}
+              attention={attentionIndex}
+              updates={updateIndex}
+              search={search}
+              loading={rowsPending}
+              onSearchChange={setSearch}
+              onSelect={handleSelectMatter}
+              onCreate={() => setCreateOpen(true)}
+              onManageTags={() => setTagManagerOpen(true)}
+            />
           </div>
-        )}
+        </div>
+        <div className={cn('min-h-0', !contentPaneVisible && 'max-[880px]:hidden')}>
+          {tab === 'board' ? (
+            rowsPending && liveMatters.length === 0 ? (
+              // 看板冷启动 —— 不出真看板：`matters=[]` 时四个 tile 全是 0、关注区还会显示一句
+              // 「全部处理完了」，那是**误导性空态**（与清单的「暂无事项」同一类问题）。
+              <MatterBoardSkeleton />
+            ) : (
+              <MatterFocus
+                matters={liveMatters}
+                signals={attentionItems}
+                updates={updateIndex}
+                onSelect={revealMatter}
+                onReview={(matter, updateId) => {
+                  revealMatter(matter)
+                  setReviewTarget({ matterId: matter.public_id, updateId })
+                }}
+                onSignal={handleAttentionAction}
+                onJump={jumpToQuickFilter}
+              />
+            )
+          ) : selected ? (
+            <MatterDetail
+              matterId={selected.public_id}
+              onBack={() => selectMatter(null)}
+              onRemoved={() => {
+                // 对象已被删除/归档：先清本地选中（后继标签接管时会重设），再收掉它的
+                // 标签 —— 反过来的话 closeTab 的后继同步刚设好的选中会被 null 冲掉。
+                const removedId = matterNumericId(selected.public_id)
+                selectMatter(null)
+                if (removedId !== null) closeObjectTab('matter', removedId)
+              }}
+              navigationMatterIds={visibleIds}
+              // E10③—— 并排可见时不传 onNavigateMatter：MatterDetail 的
+              // `showNavigation` 判据里 `Boolean(onNavigateMatter)` 是硬门槛，undefined
+              // 就等于「没有导航能力」，上/下切换钮整体不渲染（MatterDetail 内部逻辑一字
+              // 不动，从调用方把控制权收掉）。
+              onNavigateMatter={
+                // 详情上/下条 = J/K 同语义：原位换目标（replace），不涨标签数。
+                stackedLayout
+                  ? (matterId) => selectMatter(matterId, { mode: 'replace' })
+                  : undefined
+              }
+              attentionSignals={openAttentionFor(selected, attentionIndex)}
+              onAttentionAction={handleAttentionAction}
+              initialReviewId={
+                reviewTarget?.matterId === selected.public_id ? reviewTarget.updateId : null
+              }
+              onReviewOpened={() => setReviewTarget(null)}
+            />
+          ) : rowsPending && scopeRows.length === 0 ? (
+            // 冷启动还没有行 ⇒ 也还没有选中项，这时候的「未选中事项」是误导（用户什么都
+            // 还没来得及点）。与清单列同步出骨架，等行到了冷启动初选会自己选中一条。
+            <MatterDetailSkeleton />
+          ) : (
+            <div className="grid h-full place-items-center p-8 text-center text-body text-ink-fg-2">
+              <div>
+                <Ban size={28} className="mx-auto mb-3 opacity-60" />
+                {t('matters.detail.empty')}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <MatterCreateDialog

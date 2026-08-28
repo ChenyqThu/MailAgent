@@ -196,3 +196,36 @@ describe('useActiveEmail — 冷启动恢复', () => {
     expect(fresh.useActiveEmail.getState().activeInternalId).toBeNull()
   })
 })
+
+describe('setActive — 被拒回滚（check 波3 续改）', () => {
+  test('标签满且全 locked → openTab 被拒：activeInternalId / navTargetId 不落新值', () => {
+    useTabWorkspace.setState({ maxTabs: 4 })
+    for (let i = 1; i <= 4; i++) useActiveEmail.getState().setActive(i)
+    for (const t of useTabWorkspace.getState().tabs) {
+      useTabWorkspace.getState().updateTab(t.id, { locked: true })
+    }
+    expect(useActiveEmail.getState().activeInternalId).toBe(4)
+    useActiveEmail.getState().setActive(99, { navTarget: true })
+    // 被拒：本地投影回滚 —— 不回滚就是「详情显示 99、标签条高亮 email:4」的劈叉，
+    // 且点 email:4 时 activateTab 因 active===id 早退，卡死在错位态。
+    expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'email:99')).toBe(false)
+    expect(useActiveEmail.getState().activeInternalId).toBe(4)
+    expect(useActiveEmail.getState().navTargetId).toBeNull()
+  })
+
+  test('replace 模式同样回滚（当前标签 locked → 退 openTab → 满拒）', () => {
+    useTabWorkspace.setState({ maxTabs: 4 })
+    for (let i = 1; i <= 4; i++) useActiveEmail.getState().setActive(i)
+    for (const t of useTabWorkspace.getState().tabs) {
+      useTabWorkspace.getState().updateTab(t.id, { locked: true })
+    }
+    useActiveEmail.getState().setActive(99, { mode: 'replace' })
+    expect(useActiveEmail.getState().activeInternalId).toBe(4)
+  })
+
+  test('未满时不受影响：setActive 正常落值并开标签', () => {
+    useActiveEmail.getState().setActive(7, { title: '正常开' })
+    expect(useActiveEmail.getState().activeInternalId).toBe(7)
+    expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'email:7')).toBe(true)
+  })
+})

@@ -21,7 +21,6 @@ import { cn } from '@shared/lib/cn'
 import { useIsBelowLg } from '@shared/hooks/useMediaQuery'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useEmailFilter } from '@shared/state/email-filter'
-import { useNavCollapsed } from '@shared/state/nav-shell'
 
 import { EmailList } from '../email/EmailList'
 import { EmailDetail } from '../email/EmailDetail'
@@ -36,9 +35,6 @@ export function InboxLayout(): React.ReactElement {
   // RESPONSIVE-XCUT-01 — <lg(1024) 列表/详情单栏切换：选中邮件 → 详情 absolute
   // 覆盖列表；未选中 → 详情 hidden, 列表占满。≥lg 维持桌面三栏并排（零回归）。
   const belowLg = useIsBelowLg()
-  // 清单列 = 邮件域的「二级栏」：收起走 nav shell 的同一个折叠状态。🔴 排除 forced：
-  // <lg 的强制收起是给导航面板的，列表是内容，窄窗行为仍由 belowLg 单栏切换自治。
-  const listPanelHidden = useNavCollapsed((s) => s.collapsed && !s.forced)
   // Sprint 11 V1.4 — URL ↔ store sync. The route's `validateSearch` clamps
   // unknown values to 'inbox', so `urlView` is always a real EmailView
   // (the optional type just lets `navigate({to:'/'})` skip the search arg).
@@ -64,13 +60,8 @@ export function InboxLayout(): React.ReactElement {
           Sidebar）。≥lg 内部 list(336) + detail(flex-1) 并排；<lg list 占满,
           detail 覆盖(选中) / hidden(未选中)。 */}
       <div className="relative flex flex-1 min-h-0 min-w-0">
-        {/* 收起用 `hidden` 而非卸载 —— EmailList 是虚拟列表，卸载会丢滚动位置与已翻的页。 */}
         <div
-          className={cn(
-            'relative flex min-h-0',
-            belowLg ? 'w-full' : 'shrink-0',
-            listPanelHidden && 'hidden'
-          )}
+          className={cn('relative flex min-h-0', belowLg ? 'w-full' : 'shrink-0')}
           style={belowLg ? undefined : { width: LIST_WIDTH }}
         >
           <EmailList />

@@ -74,8 +74,8 @@ export const TabsTrigger = React.forwardRef<
       className={cn(
         'group relative isolate inline-flex items-center whitespace-nowrap rounded-[var(--r-ctl)]',
         // Sprint 18 review — 默认 font-normal, 选中态才加 font-medium. 旧版
-        // 全 font-medium 让 SettingsRail 的 8 个 tab 都看起来加粗, 跟主
-        // Sidebar 风格不一致 (Sidebar 默认 font-normal, selected 才 medium).
+        // 全 font-medium 让整条 tab 条看起来都加粗, 跟主 Sidebar 风格不一致
+        // (Sidebar 默认 font-normal, selected 才 medium).
         'text-aux font-normal',
         'transition-colors duration-fast ease-standard',
         // Focus ring unified to coral/70 with no offset (the orphan

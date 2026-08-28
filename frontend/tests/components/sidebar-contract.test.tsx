@@ -93,7 +93,6 @@ import {
   recordRouteLocation
 } from '../../src/shared/navigation/domain-location'
 import { SETTINGS_TABS } from '../../src/shared/lib/settingsTabs'
-import { useNavCollapsed } from '../../src/shared/state/nav-shell'
 
 /** 门控全开时的导轨格（自上而下 = 屏幕上的顺序），**手写**期望。08-27 批：对象域
  *  （邮件/事项）在前、页面域在后（两组之间有 .nav-rail-sep 分隔线），共十格。 */
@@ -186,7 +185,6 @@ function projectedPanel(domain: NavDomain): string[] {
 beforeEach(async () => {
   gates.matters = true
   gates.contacts = true
-  useNavCollapsed.setState({ collapsed: false })
   // 每域落点记忆是模块级的；不清会让「回放」用例污染后面按缺省 entry 断言的用例。
   __resetDomainLocations()
   await i18n.changeLanguage('zh-CN')
@@ -229,17 +227,6 @@ describe('nav shell 结构契约', () => {
     for (const btn of btns) {
       expect(btn.querySelector(':scope > svg'), btn.parentElement?.textContent ?? '').toBeTruthy()
     }
-  })
-
-  test('折叠 = data-collapsed 翻面（面板仍在 DOM，由 authored CSS 隐藏）', async () => {
-    // 'nav' 域才有 DomainPanel（mail 已转 'page'），用 today 域验「面板仍在 DOM」。
-    const { container } = await renderShell('/today')
-    expect(container.querySelector('[data-app-nav]')!.getAttribute('data-collapsed')).toBe('false')
-    useNavCollapsed.setState({ collapsed: true })
-    await waitFor(() => {
-      expect(container.querySelector('[data-app-nav]')!.getAttribute('data-collapsed')).toBe('true')
-    })
-    expect(container.querySelector('[data-nav-panel]')).toBeTruthy()
   })
 })
 
@@ -333,10 +320,9 @@ describe('IconRail ↔ nav registry 投影', () => {
     navigate.mockRestore()
   })
 
-  // '/search' 不属于任何域（registry 有意不收它）。回落成 'mail' 会同时错两件事：
-  // 邮件格亮着（误导），且点它命中「同域 = 折叠」短路 ⇒ 路由停在 /search 走不掉
-  // （dev 实测：两次点击只是左列 336↔56 来回，路由不动）。
-  test("'/search'：导轨无高亮格，且点任一格都正常切域（不落同域折叠短路）", async () => {
+  // '/search' 不属于任何域（registry 有意不收它）⇒ 导轨没有高亮格，每一格都是切域。
+  // 回落成 'mail' 会让邮件格亮着（误导），导轨的「当前域」判据必须容得下 null。
+  test("'/search'：导轨无高亮格，且点任一格都正常切域", async () => {
     const { container, router } = await renderShell('/search')
     expect(container.querySelectorAll('[data-nav-rail] [data-selected="true"]')).toHaveLength(0)
     const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
@@ -345,7 +331,6 @@ describe('IconRail ↔ nav registry 投影', () => {
     )!
     fireEvent.click(mailCell)
     expect(navigate.mock.calls.at(-1)?.[0]).toEqual({ to: '/', search: { view: 'inbox' } })
-    expect(useNavCollapsed.getState().collapsed).toBe(false)
     navigate.mockRestore()
   })
 
@@ -365,27 +350,38 @@ describe('IconRail ↔ nav registry 投影', () => {
     navigate.mockRestore()
   })
 
-  test('点当前域的格 = 折叠/展开二级栏，不导航（nav 域与 page 域同语义）', async () => {
-    for (const [path, label] of [
-      ['/', '邮件'],
-      ['/matters', '事项'],
-      // 08-27 批：日历有二级栏（小月历）了，点当前格同样是开合。
-      ['/admin/calendar', '日历']
+  // 08-27 dogfood 修正批：二级栏不可收起了，「点当前域的格 = 折叠」这条短路取消 ——
+  // 每一格恒是「回该域上次的落点」，包括当前域自己（回放的就是当前位置，等效无感）。
+  test('点当前域的格 = 正常导航到该域落点，不再是折叠短路', async () => {
+    for (const [path, label, expected] of [
+      ['/', '邮件', { to: '/', search: { view: 'inbox' } }],
+      ['/matters', '事项', { to: '/matters' }],
+      ['/admin/calendar', '日历', { to: '/admin/calendar', search: { view: 'week' } }]
     ] as const) {
       const { container, router } = await renderShell(path)
       const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
       const cell = Array.from(container.querySelectorAll('[data-nav-rail] .nav-rail-cell')).find(
         (c) => c.querySelector('.raillabel')?.textContent === label
       )!
-      expect(useNavCollapsed.getState().collapsed, path).toBe(false)
       fireEvent.click(cell)
-      expect(useNavCollapsed.getState().collapsed, path).toBe(true)
-      fireEvent.click(cell)
-      expect(useNavCollapsed.getState().collapsed, path).toBe(false)
-      expect(navigate, path).not.toHaveBeenCalled()
+      expect(navigate.mock.calls.at(-1)?.[0], path).toEqual(expected)
       navigate.mockRestore()
       cleanup()
     }
+  })
+
+  // 🔴 当前域那一格也必须走 navigateToDomain：改成 handleEntryClick 的话它会落**这一格
+  // 的缺省 entry**（收件箱），在「已加星标」里点一下邮件格就把视图重置了。
+  test('点当前域的格：有落点记录时回放记录，不落该格的缺省 entry', async () => {
+    expect(recordRouteLocation('/', { view: 'flagged' })).toBe('mail')
+    const { container, router } = await renderShell('/?view=flagged')
+    const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
+    const mailCell = Array.from(container.querySelectorAll('[data-nav-rail] .nav-rail-cell')).find(
+      (c) => c.querySelector('.raillabel')?.textContent === '邮件'
+    )!
+    fireEvent.click(mailCell)
+    expect(navigate.mock.calls.at(-1)?.[0]).toEqual({ to: '/', search: { view: 'flagged' } })
+    navigate.mockRestore()
   })
 })
 
@@ -404,14 +400,13 @@ describe('DomainPanel ↔ nav registry 投影', () => {
   })
 
   // 08-27 批：所有域恒有二级栏，差别只在 registry NAV_DOMAINS.second ——
-  // 'nav' = DomainPanel；'page' = 页面清单列充当二级栏（无 DomainPanel，但开合
-  // 按钮在场）。mail / chats 本批转 'page'（邮件列表 / 会话列表由页面自己出）；
+  // 'nav' = DomainPanel；'page' = 页面清单列充当二级栏（无 DomainPanel）。
+  // mail / chats 本批转 'page'（邮件列表 / 会话列表由页面自己出）；
   // team（agents）过渡期留 'nav'（/agents 还是卡片网格，无自管左列）。
-  test('page 域（邮件/事项/通讯录/对话）：无 DomainPanel，rail 开合按钮在场', async () => {
+  test('page 域（邮件/事项/通讯录/对话）：无 DomainPanel', async () => {
     for (const path of ['/', '/matters', '/contacts', '/sessions'] as const) {
       const { container } = await renderShell(path)
       expect(container.querySelector('[data-nav-panel]'), path).toBeNull()
-      expect(container.querySelector('.nav-rail-toggle'), path).toBeTruthy()
       cleanup()
     }
   })

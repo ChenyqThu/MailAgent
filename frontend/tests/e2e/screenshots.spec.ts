@@ -52,15 +52,13 @@ async function openSettings(win: Page): Promise<void> {
   // string-matching fragility (the EN palette nav reads "Go · Settings",
   // the zh one reads "前往 · 设置"; a single keystroke skips both).
   await win.keyboard.press('Meta+,')
-  // Settings is now a SettingsRail/SettingsShell tabbed layout (rail 化, S18+),
-  // not the old single long-scroll page — ⌘, always lands on the `general` tab.
-  // Wait on structural aria-labels (PageFrame <main> + SettingsRail <aside>)
-  // which are tab/locale-agnostic; the previous "灵动岛集成" heading only exists
-  // inside the non-default island tab, so it never appears here and timed out.
+  // Settings is a tabbed SettingsShell (S18+), not the old single long-scroll
+  // page — ⌘, always lands on the `general` tab. Wait on structural anchors
+  // (PageFrame <main> + 设置域二级栏) which are tab/locale-agnostic; the previous
+  // "灵动岛集成" heading only exists inside the non-default island tab, so it
+  // never appears here and timed out. 节导航住在域二级栏（设置页自己不出 tab 条）。
   await win.locator('main[aria-label="settings"]').waitFor({ state: 'visible', timeout: 10_000 })
-  await win
-    .locator('aside[aria-label="settings sections"]')
-    .waitFor({ state: 'visible', timeout: 10_000 })
+  await win.locator('[data-nav-panel]').waitFor({ state: 'visible', timeout: 10_000 })
 }
 
 test('01 inbox-zh-default', async () => {

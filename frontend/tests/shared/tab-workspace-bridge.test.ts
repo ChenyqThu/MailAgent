@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 const memoryStore: Record<string, string> = {}
-vi.stubGlobal('localStorage', {
+const localStorageStub = {
   getItem: (k: string) => (k in memoryStore ? memoryStore[k] : null),
   setItem: (k: string, v: string) => {
     memoryStore[k] = v
@@ -16,7 +16,12 @@ vi.stubGlobal('localStorage', {
   clear: () => {
     for (const k of Object.keys(memoryStore)) delete memoryStore[k]
   }
-})
+}
+vi.stubGlobal('localStorage', localStorageStub)
+// node 池没有 window —— tab-workspace 的持久化走 `window.localStorage`（typeof window
+// 短路），「重启回灌与归一」用例要重新 hydrate 存档，补一个最小 window（active-email
+// 测试同款先例）。
+vi.stubGlobal('window', { localStorage: localStorageStub })
 
 // bridge 的 toast 文案走 i18next 单例；先经 @shared/i18n 完成 init（i18n.md 惯例），
 // 中文字面量断言才成立。
@@ -123,12 +128,36 @@ describe('locked 三来源', () => {
     expect(useTabWorkspace.getState().tabs[0].locked).toBe(true)
   })
 
-  test('draft 快照在场 → locked；清快照后解锁', () => {
+  test('draft 快照 dirty → locked；清快照后解锁（check 波3：判据 dirty-only）', () => {
     bridge.openObjectTab('email', 1)
-    bridge.saveObjectTabDraft('email', 1, { kind: 'compose' })
+    bridge.saveObjectTabDraft('email', 1, { kind: 'compose', dirty: true })
     expect(useTabWorkspace.getState().tabs[0].locked).toBe(true)
     bridge.clearObjectTabDraft('email', 1)
     expect(useTabWorkspace.getState().tabs[0].locked).toBe(false)
+  })
+
+  test('clean 快照（保存过的草稿）不锁 —— 快照保留在场但参与 LRU；dirty 不可淘汰', () => {
+    useTabWorkspace.setState({ maxTabs: 4 })
+    bridge.openObjectTab('email', 1, '存过的草稿')
+    bridge.saveObjectTabDraft('email', 1, { kind: 'compose', dirty: false, lastSavedAtMs: 1 })
+    // 快照在场但 clean → 不锁（旧判据「在场即锁」会让保存过的草稿永久锁死）
+    const tab1 = useTabWorkspace.getState().tabs.find((t) => t.id === 'email:1')
+    expect(tab1?.locked).toBe(false)
+    expect(tab1?.draft).toBeDefined()
+    for (let i = 2; i <= 4; i++) bridge.openObjectTab('email', i, `邮件${i}`)
+    bridge.openObjectTab('email', 5, '邮件5')
+    // email:1 是最老且未锁 → 被 LRU 淘汰，快照随标签消亡（草稿在服务端，重开走 detail）
+    expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'email:1')).toBe(false)
+    // 对照：dirty 快照锁死，同局面不被淘汰（淘汰目标落到下一个未锁的）
+    resetTabs()
+    bridge._resetTabBridgeForTest()
+    useTabWorkspace.setState({ maxTabs: 4 })
+    bridge.openObjectTab('email', 1, '写一半的草稿')
+    bridge.saveObjectTabDraft('email', 1, { kind: 'compose', dirty: true })
+    for (let i = 2; i <= 4; i++) bridge.openObjectTab('email', i, `邮件${i}`)
+    bridge.openObjectTab('email', 5, '邮件5')
+    expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'email:1')).toBe(true)
+    expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'email:2')).toBe(false)
   })
 })
 
@@ -183,5 +212,112 @@ describe('popout no-op', () => {
     bridge.notifyTabChatActivity('email', 1)
     bridge.openSearchTab()
     expect(useTabWorkspace.getState().tabs).toHaveLength(0)
+  })
+})
+
+describe('requestCloseTab（dogfood 波3 关闭守卫入口）', () => {
+  test('非 dirty 标签 → 维持 closeTab 原语义（直接关，消费按键）', () => {
+    bridge.openObjectTab('email', 1, '普通邮件')
+    expect(bridge.requestCloseTab('email:1')).toBe(true)
+    expect(useTabWorkspace.getState().tabs).toHaveLength(0)
+    expect(bridge.useTabCloseGuard.getState().pending).toBeNull()
+  })
+
+  test('dirty 草稿标签 → 先激活再挂请求，不直接关；弹框期间再请求不叠', () => {
+    bridge.openObjectTab('email', 1, '草稿')
+    bridge.openObjectTab('email', 2, '别的')
+    bridge.saveObjectTabDraft('email', 1, { kind: 'compose', dirty: true })
+    expect(useTabWorkspace.getState().active).toBe('email:2')
+    expect(bridge.requestCloseTab('email:1')).toBe(true)
+    // 拍板：先激活再弹框 —— 标签仍在、激活槽切到它、请求挂起
+    expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'email:1')).toBe(true)
+    expect(useTabWorkspace.getState().active).toBe('email:1')
+    expect(bridge.useTabCloseGuard.getState().pending?.tabId).toBe('email:1')
+    // 第二次请求（⌘W 连按）：消费但什么也不做
+    expect(bridge.requestCloseTab('email:1')).toBe(true)
+    expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'email:1')).toBe(true)
+  })
+
+  test('dirty=false 的快照不拦（只有 dirty 位才弹确认）', () => {
+    bridge.openObjectTab('email', 1, '存过的草稿')
+    bridge.saveObjectTabDraft('email', 1, { kind: 'compose', dirty: false })
+    bridge.requestCloseTab('email:1')
+    expect(useTabWorkspace.getState().tabs).toHaveLength(0)
+  })
+
+  test('请求作废清理：目标标签消失 / 激活槽离开目标 → pending 清空', () => {
+    bridge.openObjectTab('email', 1, '草稿')
+    bridge.openObjectTab('email', 2, '别的')
+    bridge.saveObjectTabDraft('email', 1, { kind: 'compose', dirty: true })
+    bridge.requestCloseTab('email:1')
+    expect(bridge.useTabCloseGuard.getState().pending).not.toBeNull()
+    // 弹窗前/下切走（⌘1-9 / ⌃⇥）→ 承接弹窗的面板随详情卸载，请求必须作废
+    useTabWorkspace.getState().activateTab('email:2')
+    expect(bridge.useTabCloseGuard.getState().pending).toBeNull()
+    // 目标被别的路径关掉（404 核销等）同样作废
+    bridge.requestCloseTab('email:1')
+    expect(bridge.useTabCloseGuard.getState().pending).not.toBeNull()
+    useTabWorkspace.getState().closeTab('email:1')
+    expect(bridge.useTabCloseGuard.getState().pending).toBeNull()
+  })
+})
+
+describe('retargetObjectTab（dogfood 波3 replace 换锚接线）', () => {
+  test('标签换锚 + 聊天锁集合跟迁（重算 locked 不丢聊天锁）', () => {
+    bridge.openObjectTab('email', 99, '草稿')
+    bridge.notifyTabChatActivity('email', 99)
+    expect(useTabWorkspace.getState().tabs[0].locked).toBe(true)
+    bridge.retargetObjectTab('email', 99, 200)
+    const tabs = useTabWorkspace.getState().tabs
+    expect(tabs.map((t) => t.id)).toEqual(['email:200'])
+    // 聊天锁按 tab id 键控 —— 不迁的话这里的重算会把锁抹掉
+    expect(tabs[0].locked).toBe(true)
+  })
+
+  test('待关闭请求跟迁（guard 保存路径换锚后 finish 关的是新 id）', () => {
+    bridge.openObjectTab('email', 99, '草稿')
+    bridge.saveObjectTabDraft('email', 99, { kind: 'compose', dirty: true })
+    bridge.requestCloseTab('email:99')
+    expect(bridge.useTabCloseGuard.getState().pending?.tabId).toBe('email:99')
+    bridge.retargetObjectTab('email', 99, 200)
+    expect(bridge.useTabCloseGuard.getState().pending?.tabId).toBe('email:200')
+  })
+
+  test('popout 下 requestCloseTab / retargetObjectTab 全 no-op', () => {
+    bridge.openObjectTab('email', 1, 'A')
+    usePopoutMode.setState({ isPopout: true, emailId: 1 })
+    expect(bridge.requestCloseTab('email:1')).toBe(false)
+    bridge.retargetObjectTab('email', 1, 2)
+    usePopoutMode.setState({ isPopout: false, emailId: null })
+    expect(useTabWorkspace.getState().tabs.map((t) => t.id)).toEqual(['email:1'])
+  })
+})
+
+describe('重启回灌与归一（check 波3：dirty-only 判据对存量档案生效）', () => {
+  test('locked+clean 快照放平；locked 无快照回灌聊天锁；locked+dirty 维持', async () => {
+    // 直接写存档 → resetModules → 重新 import：tab-workspace 先 hydrate，bridge 模块
+    // init 跑「聊天锁回灌 + 启动归一」。旧判据「快照在场即锁」写下的 locked+clean 行
+    // 必须在这里放平，否则存量库的 LRU 满拒要等到某次 recompute 才收敛。
+    memoryStore['mailagent.tabs.v1'] = JSON.stringify({
+      v: 1,
+      tabs: [
+        { kind: 'email', targetId: 1, locked: true, draft: { kind: 'compose', dirty: false } },
+        { kind: 'email', targetId: 2, locked: true },
+        { kind: 'email', targetId: 3, locked: true, draft: { kind: 'compose', dirty: true } }
+      ],
+      active: 'main'
+    })
+    vi.resetModules()
+    const freshWs = await import('../../src/shared/state/tab-workspace')
+    await import('../../src/shared/state/tab-workspace-bridge')
+    const tabs = freshWs.useTabWorkspace.getState().tabs
+    // clean 快照：锁放平（快照本身保留 —— lastSavedAtMs/锚还在）
+    const t1 = tabs.find((t) => t.id === 'email:1')
+    expect(t1?.locked).toBe(false)
+    expect(t1?.draft).toBeDefined()
+    // 无快照：归因聊天锁，保留
+    expect(tabs.find((t) => t.id === 'email:2')?.locked).toBe(true)
+    // dirty：维持
+    expect(tabs.find((t) => t.id === 'email:3')?.locked).toBe(true)
   })
 })

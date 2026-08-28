@@ -15,7 +15,6 @@ import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { openNewCompose } from '@shared/state/compose-new'
 import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
-import { useNavCollapsed } from '@shared/state/nav-shell'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { ContactAgentDrawer } from './ContactAgentDrawer'
@@ -51,8 +50,6 @@ const WORKSPACE_STACKED_QUERY = '(max-width: 860px)'
  *  task 08-27 P1 Lane C 续改：清单列定宽 336px（左列总宽 392 = 导轨 56 + 二级栏 336）。 */
 const WORKSPACE_GRID_CLASS =
   'grid h-full min-h-0 grid-cols-[336px_minmax(430px,1fr)] max-[860px]:grid-cols-1'
-/** 0825 轮 3 —— 清单列被 nav shell 折叠收起时的单列变体（列表 display:none 不参与轨道）。 */
-const WORKSPACE_GRID_CLASS_COLLAPSED = 'grid h-full min-h-0 grid-cols-[minmax(430px,1fr)]'
 
 export function ContactsWorkspace(): React.ReactElement | null {
   const { t } = useTranslation()
@@ -90,9 +87,6 @@ export function ContactsWorkspace(): React.ReactElement | null {
   const [agentOpen, setAgentOpen] = useState(false)
 
   const stacked = useMediaQuery(WORKSPACE_STACKED_QUERY)
-  // 0825 轮 3 —— 清单列 = 通讯录域的「二级栏」（registry second:'page'），收起走 nav shell
-  // 的同一个折叠状态；排除 forced 的理由同 MattersWorkspace（窄窗由 max-[860px] 自治）。
-  const listPanelHidden = useNavCollapsed((s) => s.collapsed && !s.forced)
 
   // 三个显示档位的写回：state 变了就落盘一次（写在 effect 里而不是 setter 里 —— state
   // updater 必须是纯函数，StrictMode 下会被调用两次）。
@@ -355,12 +349,11 @@ export function ContactsWorkspace(): React.ReactElement | null {
   }, [selectedId])
 
   return (
-    <div className={listPanelHidden ? WORKSPACE_GRID_CLASS_COLLAPSED : WORKSPACE_GRID_CLASS}>
+    <div className={WORKSPACE_GRID_CLASS}>
       <div
         className={cn(
           'min-h-0 border-r border-ink-border',
-          selectedId !== null && 'max-[860px]:hidden',
-          listPanelHidden && 'hidden'
+          selectedId !== null && 'max-[860px]:hidden'
         )}
       >
         <ContactListPane
@@ -411,7 +404,7 @@ export function ContactsWorkspace(): React.ReactElement | null {
             contactId={selectedId}
             onBack={backToList}
             actions={actions}
-            showBack={stacked || listPanelHidden}
+            showBack={stacked}
             onMergeRequest={requestMerge}
           />
         ) : (

@@ -37,9 +37,37 @@ describe('readComposeTabDraft', () => {
     expect(readComposeTabDraft(undefined)).toBeNull()
     expect(readComposeTabDraft({})).toBeNull()
     expect(readComposeTabDraft({ ...VALID, kind: 'other' })).toBeNull()
-    expect(readComposeTabDraft({ ...VALID, mode: 'draft-edit' })).toBeNull()
+    // 'new'（写新邮件）与乱值都不进快照链；'draft-edit' 自 dogfood 波3 起是合法模式。
+    expect(readComposeTabDraft({ ...VALID, mode: 'new' })).toBeNull()
+    expect(readComposeTabDraft({ ...VALID, mode: 'nope' })).toBeNull()
     expect(readComposeTabDraft({ ...VALID, to: 'a@x.com' })).toBeNull()
     expect(readComposeTabDraft({ ...VALID, subject: 7 })).toBeNull()
+  })
+
+  test('draft-edit 快照（波3）：mode 合法 + replace 锚字段往返', () => {
+    const draftEdit: ComposeTabDraft = {
+      ...VALID,
+      mode: 'draft-edit',
+      draftRowId: 1000000123,
+      lastSavedAtMs: 1756400000000
+    }
+    const roundtrip = JSON.parse(JSON.stringify(toDraftSnapshot(draftEdit)))
+    expect(readComposeTabDraft(roundtrip)).toEqual(draftEdit)
+  })
+
+  test('波3 新字段向后兼容：旧快照缺 draftRowId/lastSavedAtMs → 键整个不出现；坏值丢弃', () => {
+    const legacy = readComposeTabDraft({ ...VALID, mode: 'draft-edit' })
+    expect(legacy).not.toBeNull()
+    expect(legacy !== null && 'draftRowId' in legacy).toBe(false)
+    expect(legacy !== null && 'lastSavedAtMs' in legacy).toBe(false)
+    const bad = readComposeTabDraft({
+      ...VALID,
+      mode: 'draft-edit',
+      draftRowId: '99',
+      lastSavedAtMs: Number.NaN
+    })
+    expect(bad !== null && 'draftRowId' in bad).toBe(false)
+    expect(bad !== null && 'lastSavedAtMs' in bad).toBe(false)
   })
 
   test('可选/降级字段：importance 非法归 normal，坏附件条目丢弃，bodyHtml 非串归 null', () => {

@@ -47,6 +47,9 @@ vi.mock('../../src/shared/components/email/EmailBodyFrame', () => ({
 
 import i18n from '@shared/i18n'
 import { ComposePanelInner } from '../../src/shared/components/email/compose/ComposePanel'
+import { MAIN_SLOT, useTabWorkspace } from '../../src/shared/state/tab-workspace'
+import { _resetTabBridgeForTest } from '../../src/shared/state/tab-workspace-bridge'
+import { readComposeTabDraft } from '../../src/shared/components/email/compose/composeTabDraft'
 
 await i18n.changeLanguage('zh-CN')
 
@@ -68,6 +71,8 @@ const DRAFT = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  useTabWorkspace.setState({ tabs: [], active: MAIN_SLOT, closedStack: [] })
+  _resetTabBridgeForTest()
   mockSettingsGet.mockResolvedValue({ userEmail: 'me@acme.com', signature: null })
   mockEmailGet.mockResolvedValue(DRAFT)
   mockEmailBody.mockResolvedValue({ content: '<p>草稿正文ABC</p>', format: 'html' })
@@ -310,5 +315,45 @@ describe('ComposePanel — 保存按钮 + C-1 replace 锚 (task 08-20 draft-save
     // 守卫续跑 proceed (ESC 的 proceed = onClose)
     await waitFor(() => expect(onClose).toHaveBeenCalled())
     expect(mockDraft).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ComposePanel — 标签联动 (dogfood 波3: retarget / 标题跟手 / 快照收敛)', () => {
+  test('保存成功 (mirror) → 标签 retarget 到镜像新行，快照带新锚 + dirty=false + lastSavedAtMs', async () => {
+    mockDraft.mockResolvedValue({
+      success: true,
+      mirror_internal_id: 1000000123,
+      mirror_attachment_ids: {},
+      replaced_source_draft_id: 99
+    })
+    useTabWorkspace.getState().openTab('email', 99, '草稿99')
+    renderWithClient(<ComposePanelInner internalId={99} mode="draft-edit" onClose={() => {}} />)
+    await waitFor(() => expect(screen.getByText('chenyq.thu@gmail.com')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /^保存草稿$/ }))
+    await waitFor(() => expect(mockDraft).toHaveBeenCalledTimes(1))
+    // 标签从 email:99 迁到 email:1000000123（不迁 = 标签指着已删行，重启成死标签）
+    await waitFor(() =>
+      expect(useTabWorkspace.getState().tabs.map((t) => t.id)).toEqual(['email:1000000123'])
+    )
+    // 保存后的快照收敛：新锚 + dirty 放平 + 「已保存 HH:MM」跨 remount 的载体
+    await waitFor(() => {
+      const snap = readComposeTabDraft(useTabWorkspace.getState().tabs[0]?.draft)
+      expect(snap?.mode).toBe('draft-edit')
+      expect(snap?.dirty).toBe(false)
+      expect(snap?.draftRowId).toBe(1000000123)
+      expect(typeof snap?.lastSavedAtMs).toBe('number')
+    })
+  })
+
+  test('主题编辑实时联动标签标题；保存后标题即已存主题', async () => {
+    useTabWorkspace.getState().openTab('email', 99, '草稿99')
+    renderWithClient(<ComposePanelInner internalId={99} mode="draft-edit" onClose={() => {}} />)
+    await waitFor(() => expect(screen.getByText('chenyq.thu@gmail.com')).toBeTruthy())
+    // 回填落地后标题 = 行数据主题（与点行快照同源，同值不写）
+    await waitFor(() =>
+      expect(useTabWorkspace.getState().tabs[0]?.title).toBe('Network Intel · 周报')
+    )
+    fireEvent.change(screen.getByLabelText('主题'), { target: { value: '改后的主题' } })
+    await waitFor(() => expect(useTabWorkspace.getState().tabs[0]?.title).toBe('改后的主题'))
   })
 })

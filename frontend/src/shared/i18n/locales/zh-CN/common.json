@@ -495,7 +495,6 @@
       "sendChat": "发送 AI 消息",
       "newChat": "新建 AI 对话",
       "toggleIsland": "切换灵动岛",
-      "toggleNav": "折叠/展开导航",
       "toggleLocale": "切换语言",
       "calViewDay": "日视图",
       "calViewWeek": "周视图",
@@ -730,9 +729,6 @@
     "calendar": "日历",
     "settings": "设置",
     "shortcuts": "快捷键",
-    "toggleTitle": "折叠/展开导航 (⌥B)",
-    "toggleAria": "折叠导航",
-    "expandAria": "展开导航",
     "online": "在线",
     "account": {
       "tooltip": "{email} — 切换账户"
@@ -4200,24 +4196,6 @@
     },
     "synced": "已同步",
     "themeCycle": "主题 · 点击切换",
-    "accent": {
-      "label": "强调色",
-      "title": "强调色",
-      "tooltip": "选择强调色 (查看 → 外观)",
-      "aria": "选择强调色",
-      "note": "影响工具栏 · 标签 · 选中行 · 灵动岛 · 仅本机保存"
-    },
-    "surface": {
-      "title": "界面材质",
-      "tooltip": "切换磨砂 / 实色（设置 → 通用 → 外观可细调玻璃）",
-      "aria": "选择界面材质",
-      "note": "影响 chrome 与所有面板的背景 · 仅本机保存"
-    },
-    "locale": {
-      "label": "语言",
-      "tooltip": "切换语言 (⌥G)",
-      "aria": "切换语言"
-    },
     "update": {
       "available": "发现新版本 v{version} · 点击下载",
       "downloading": "正在下载更新 · {percent}%",
@@ -5040,7 +5018,7 @@
     },
     "moduleTabs": {
       "list": "事项",
-      "board": "看板"
+      "board": "今日看板"
     },
     "scope": {
       "all": "全部",
@@ -6441,7 +6419,7 @@
       "count": "{count} 人"
     },
     "view": {
-      "known": "往来的人",
+      "known": "来往",
       "all": "全部"
     },
     "search": {
@@ -6972,10 +6950,12 @@
     "strip": "工作区标签",
     "close": "关闭标签（⌘W）",
     "locked": "有未完成的工作，不会被自动关闭",
+    "dirty": "有未保存的修改",
     "toast": {
       "evictedOne": "标签已满，顺带关掉了「{title}」",
       "evictedMany": "标签已满，顺带关掉了「{title}」等 {count} 个标签",
-      "full": "标签已满，且都在用（写着回复或聊过），先关一个再开新的"
+      "full": "标签已满，且都在用（写着回复或聊过），先关一个再开新的",
+      "targetGone": "该邮件或草稿已不存在，已关闭它的标签"
     }
   },
   "searchTab": {

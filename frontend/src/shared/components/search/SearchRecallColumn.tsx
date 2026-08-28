@@ -8,19 +8,13 @@
 import { useTranslation } from 'react-i18next'
 import { Bookmark, Clock, Trash2, X } from 'lucide-react'
 
-import { cn } from '@shared/lib/cn'
 import { useSearchHistory } from '@shared/state/search-history'
 
 export interface SearchRecallColumnProps {
-  /** 收起随 nav shell 的同一公式（collapsed && !forced，父级算好传入）。 */
-  readonly hidden: boolean
   onRunQuery(query: string): void
 }
 
-export function SearchRecallColumn({
-  hidden,
-  onRunQuery
-}: SearchRecallColumnProps): React.ReactElement {
+export function SearchRecallColumn({ onRunQuery }: SearchRecallColumnProps): React.ReactElement {
   const { t } = useTranslation()
   const history = useSearchHistory((s) => s.history)
   const savedSearches = useSearchHistory((s) => s.saved)
@@ -29,12 +23,7 @@ export function SearchRecallColumn({
   const removeSaved = useSearchHistory((s) => s.removeSaved)
 
   return (
-    <aside
-      className={cn(
-        'w-[336px] shrink-0 min-h-0 border-r border-ink-border overflow-y-auto scrollbar-thin px-3 py-2',
-        hidden && 'hidden'
-      )}
-    >
+    <aside className="w-[336px] shrink-0 min-h-0 border-r border-ink-border overflow-y-auto scrollbar-thin px-3 py-2">
       <div className="text-micro font-mono uppercase tracking-[0.08em] text-ink-fg-3 px-1 pt-3 pb-1.5 flex items-center">
         <span>{t('searchTab.recentSearches')}</span>
         {history.length > 0 && (

@@ -99,9 +99,9 @@ test('⑥ Settings → Island testConnection → connected (ping-island live)', 
   // brittle when prior specs left the locale as en-US.
   await win.keyboard.press('Meta+,')
 
-  // Settings（0825 轮 3 起）：≥lg 的节导航在 DomainPanel（NavRow button 行），
-  // SettingsRail 只在 <lg 兜底 —— e2e 窗口是桌面宽度，走域面板行；只有点过 tab 行
-  // 之后 island TabsContent（"灵动岛集成" heading）才会 mount（Radix 无 forceMount）。
+  // Settings：节导航是 DomainPanel 里的 NavRow button 行（唯一入口，设置页自己不出
+  // tab 条）；只有点过 tab 行之后 island TabsContent（"灵动岛集成" heading）才会
+  // mount（Radix 无 forceMount）。
   await win.locator('main[aria-label="settings"]').waitFor({ state: 'visible', timeout: 10_000 })
   await win.locator('[data-nav-panel]').waitFor({ state: 'visible', timeout: 10_000 })
   await win.locator('[data-nav-panel] button', { hasText: /灵动岛与更新|Island & Updates/ }).click()

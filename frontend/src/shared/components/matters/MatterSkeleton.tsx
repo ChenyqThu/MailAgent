@@ -2,8 +2,9 @@
 // `contacts/ContactSkeleton.tsx` —— 同一套材质语言、同一条「几何对不上就是白闪一下再跳版」
 // 的纪律，只是把行几何换成 `MatterList::MatterRow` 的。
 //
-// 🔴 骨架只吃**列表体 / 详情体 / 看板体**：头部 chrome（tab 条、搜索框、筛选按钮）在数据到
-// 达前就能用，做成骨架等于把可用的东西藏起来（ContactSkeleton 的裁量 7 同款）。
+// 🔴 骨架只吃**列表体 / 详情体 / 看板体**：头部 chrome（搜索框、筛选按钮）在数据到达前就能
+// 用，做成骨架等于把可用的东西藏起来（ContactSkeleton 的裁量 7 同款）。整页骨架
+// （MattersWorkspaceSkeleton）是例外 —— 那一屏真实组件一个都还没渲染，chrome 也得占位。
 //
 // 🔴 动效纯 CSS：复用 index.css 已有的 `.shimmer`（`agents-shimmer` keyframes，
 // background-position 位移，无 JS、无 rAF）。`prefers-reduced-motion` 的关停挂在本模块自己的
@@ -229,27 +230,24 @@ export function MatterBoardSkeleton(): React.ReactElement {
 export function MattersWorkspaceSkeleton({ tab }: { tab: MatterTab }): React.ReactElement {
   return (
     <div aria-hidden className="flex h-full min-h-0 flex-col" data-testid="matters-skeleton">
-      {/* 42px 模块 tab 栏的占位（几何同 MattersWorkspace 的真实那条）。 */}
-      <div className="flex h-[42px] shrink-0 items-center gap-3 border-b border-ink-border bg-ink-1/45 pl-4 pr-3">
-        <Bar w={48} h={12} />
-        <Bar w={48} h={12} className="opacity-70" />
-        <span aria-hidden className="flex-1" />
-        <Bar w={84} h={26} className="rounded-[var(--r-ctl)] opacity-70" />
-      </div>
-      <div className="min-h-0 flex-1">
-        {tab === 'board' ? (
-          <MatterBoardSkeleton />
-        ) : (
-          <div className="grid h-full min-h-0 grid-cols-[336px_6px_minmax(420px,1fr)] max-[880px]:grid-cols-1">
-            <div className="min-h-0 bg-ink-1/55">
-              <MatterListSkeleton />
-            </div>
-            <span aria-hidden />
-            <div className="min-h-0 max-[880px]:hidden">
-              <MatterDetailSkeleton />
-            </div>
+      {/* 08-27 波 2 —— 几何跟随 MattersWorkspace 的新形态：清单列（含顶部视图折叠组）在两个
+          视图下都在场，右栏按 tab 换看板 / 详情。 */}
+      <div className="grid min-h-0 flex-1 grid-cols-[336px_minmax(420px,1fr)] max-[880px]:grid-cols-1">
+        <div className="flex min-h-0 flex-col border-r border-ink-border bg-ink-1/55">
+          {/* 视图折叠组占位：段头 + 三行（今日看板 / 事项 / 新建事项）。 */}
+          <div className="shrink-0 space-y-1.5 border-b border-ink-border px-3.5 pb-2.5 pt-3.5">
+            <Bar w={34} h={9} className="opacity-70" />
+            {[0, 1, 2].map((index) => (
+              <Bar key={`matter-skel-viewnav-${index}`} w={index === 2 ? 96 : 76} h={14} />
+            ))}
           </div>
-        )}
+          <div className="min-h-0 flex-1">
+            <MatterListSkeleton />
+          </div>
+        </div>
+        <div className="min-h-0 max-[880px]:hidden">
+          {tab === 'board' ? <MatterBoardSkeleton /> : <MatterDetailSkeleton />}
+        </div>
       </div>
     </div>
   )

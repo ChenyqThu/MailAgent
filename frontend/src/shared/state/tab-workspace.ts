@@ -189,6 +189,14 @@ export interface TabWorkspaceState {
   /** ⌘⇧T：弹出最近关掉的那个重开（走 openTab 全套语义，含去重与 LRU）。栈空返回 null。
    *  开不成（满且全锁定）时条目**留在栈里**，等用户腾出位置再按一次。 */
   reopenLastClosed(): OpenTabResult | null
+  /** draft replace 语义（task 08-20）：保存成功后服务端删旧行、建镜像新行 —— 标签跟着
+   *  换锚，否则标签指着已删行（重启后成死标签）。这是**身份延续**不是「关一个开一个」：
+   *  title / draft / scrollTop / drawerOpen / locked / lastActiveAt / 标签条位置全保留，
+   *  只换 id 与 targetId（TabPatch 有意排除 targetId，换锚走这个独立动作）。
+   *  新 targetId 已有同类标签时合并：保留带着会话现场的这一个，移除重复者 ——
+   *  重复者**不进最近关闭栈**（合并不是用户关闭，⌘⇧T 捞回一个重复标签毫无意义）。
+   *  激活槽指向两者任一时改指合并后的标签（激活态连续，lastActiveAt 不刷新）。 */
+  retargetTab(kind: TabKind, oldTargetId: number, newTargetId: number): void
   closeTab(id: TabId): void
   activateTab(id: TabId): void
   activateMain(): void
@@ -469,6 +477,21 @@ export const useTabWorkspace = create<TabWorkspaceState>((set, get) => {
       // 按引用摘除而不是再弹一次栈顶 —— openTab 可能顺带淘汰了别的标签并压了新顶。
       commit({ closedStack: get().closedStack.filter((e) => e !== entry) })
       return result
+    },
+
+    retargetTab(kind, oldTargetId, newTargetId) {
+      // 搜索标签是单例（targetId 恒 SEARCH_TARGET_ID），换锚会破坏单例判据。
+      if (kind === 'search' || oldTargetId === newTargetId) return
+      const state = get()
+      const oldId = tabId(kind, oldTargetId)
+      const source = state.tabs.find((t) => t.id === oldId)
+      if (source === undefined) return
+      const newId = tabId(kind, newTargetId)
+      const moved: TabDescriptor = { ...source, id: newId, targetId: newTargetId }
+      // 先移除已存在的重复者（合并），再原位替换 —— 标签条位置跟着源标签走。
+      const tabs = state.tabs.filter((t) => t.id !== newId).map((t) => (t.id === oldId ? moved : t))
+      const active = state.active === oldId || state.active === newId ? newId : state.active
+      commit({ tabs, active })
     },
 
     closeTab(id) {

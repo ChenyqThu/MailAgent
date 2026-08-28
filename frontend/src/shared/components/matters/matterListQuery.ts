@@ -136,7 +136,8 @@ export const DEFAULT_MATTER_LIST_QUERY: MatterListQuery = {
 
 // ── 图标表（闸：tests/components/matters/matterDesignIcons.test.ts）──────────
 
-/** 设计 `list.jsx::ModuleTabs` 的两个 tab。 */
+/** 设计 `list.jsx::ModuleTabs` 的两个视图（08-27 波 2 起渲染在二级栏顶部的折叠组，
+ *  见 MatterViewNav；通栏 tab 栏已退役）。 */
 export const MATTER_TAB_ICONS: Record<MatterTab, LucideIcon> = {
   list: Briefcase, // briefcase
   board: BarChart3 // barchart

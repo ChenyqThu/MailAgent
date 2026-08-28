@@ -32,15 +32,20 @@ import { qk } from '@shared/lib/queryKeys'
 import { mapLanguage } from '@shared/lib/ai_mapping'
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { useIsBelowLg } from '@shared/hooks/useMediaQuery'
-import { toastError, toastSuccess } from '@shared/state/toast'
+import { toastError, toastInfo, toastSuccess } from '@shared/state/toast'
 import { useActiveEmail, pickNext, pickPrev } from '@shared/state/active-email'
-import { tabId, useTabWorkspace } from '@shared/state/tab-workspace'
+import { usePopoutMode } from '@shared/state/popout-mode'
+import { selectActiveTab, tabId, useTabWorkspace } from '@shared/state/tab-workspace'
 import {
   clearObjectTabDraft,
+  clearTabCloseRequest,
+  closeObjectTab,
   getObjectTabScroll,
   saveObjectTabDraft,
   saveObjectTabScroll,
-  setObjectTabTitle
+  setObjectTabTitle,
+  useTabCloseGuard,
+  type PendingTabClose
 } from '@shared/state/tab-workspace-bridge'
 import { useTogglePin } from '@shared/hooks/usePinnedSync'
 import { usePinned } from '@shared/state/pinned'
@@ -66,7 +71,7 @@ import { MatterBelongsCard } from '../matters/MatterBelongsCard'
 import { MatterLinkPopover } from '../matters/MatterLinkPopover'
 import { CustomAgentDrawer } from '../agents/CustomAgentDrawer'
 import { useTriggerV2Enabled } from '../agents/hooks'
-import { ComposePanel, ComposePanelInner } from './compose/ComposePanel'
+import { ComposePanel, ComposePanelInner, type ComposeCloseReason } from './compose/ComposePanel'
 import type { ComposeGuardHandle } from './compose/useComposeGuard'
 import {
   readComposeTabDraft,
@@ -343,13 +348,12 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   // snapshotRef 取），切回该标签自动重开并回填。getter 只读 ref（面板卸载后仍可安全调用，
   // 域切换时 EmailDetail 整树卸载靠 ComposePanelInner 自己的卸载快照兜底）。
   const composeSnapshotRef = useRef<(() => ComposeTabDraft | null) | null>(null)
-  // T9 同款 hold 模型扩到 draft-edit 分支 (下方草稿点开即编辑, 非 store 驱动: EmailDetail
-  // 直接渲染 ComposePanelInner mode='draft-edit')。切走时若草稿编辑处于 dirty 会直接 unmount
-  // 丢字节 —— 该分支上报 dirty (draftEditDirty) 后把被编辑的草稿钉住 (draftEditHeldFor),
-  // 让切邮件 effect 经守卫句柄 (draftEditGuardRef) 弹确认再放行新 active。clean → 直接切走。
+  // 波3 起 draft-edit 与 overlay 同走「现场快照进标签」：dirty 草稿切走不再钉住弹确认
+  // （T9 拦截退役），卸载兜底把现场写进 TabDescriptor.draft，切回自动恢复。两套拦截的
+  // 终态分工 —— **切换 = 快照静默携带；关标签 = 关闭守卫弹确认**（下方 close-request
+  // effect 经 draftEditGuardRef / overlayGuardRef 承接）。
   const draftEditGuardRef = useRef<ComposeGuardHandle | null>(null)
-  const [draftEditHeldFor, setDraftEditHeldFor] = useState<number | null>(null)
-  const [draftEditDirty, setDraftEditDirty] = useState(false)
+  const overlayGuardRef = useRef<ComposeGuardHandle | null>(null)
   // React 19 "Adjusting state on prop change" pattern (react.dev/learn/you-might-not-need-an-effect):
   // resetting derived state on a prop transition is a render-time concern,
   // not an effect concern.
@@ -359,18 +363,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     setPending(NO_PENDING)
     setPropsExpanded(false)
     // overlay composer 不在渲染期关：切邮件的快照+关闭在下方 effect 做（getter 要在
-    // useExitAnimation 延迟卸载窗口内读到活面板）。draft-edit（T9）钉住模型维持不变。
-    // draft-edit hold (T9): 上一屏 (lastInternalId) 是脏草稿编辑 iff draftEditDirty —
-    // 钉住它让下方 effect 弹守卫, 而非直接 unmount 丢字节。`heldFor === null` 守卫防覆盖
-    // 已有钉住 (连切多封保留最先钉住的那封); clean 草稿编辑不钉 (切走即 unmount, 无字节可丢)。
-    if (draftEditDirty && draftEditHeldFor === null && lastInternalId !== null) {
-      setDraftEditHeldFor(lastInternalId)
-    }
-  }
-  // T9 自愈 — 又切回被钉草稿 (heldFor === internalId): 钉住已无意义, 渲染期复位, 免得之后
-  // 一次 clean 切走还拿旧 id 误钉。同 "adjusting state on prop change" 模式 (非 effect 职责)。
-  if (draftEditHeldFor !== null && draftEditHeldFor === internalId) {
-    setDraftEditHeldFor(null)
+    // useExitAnimation 延迟卸载窗口内读到活面板）。
   }
 
   // The cleanup is a real side-effect (renderer → main IPC), so it stays
@@ -659,6 +652,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   // useExitAnimation 让面板在本次提交后仍活着一小段，getter 此刻可用；域切换（EmailDetail
   // 整树卸载）走 ComposePanelInner 自己的卸载快照，两条路径写的是同一份形状。
   // 随后：本标签挂着 compose 快照且 store 空闲 → 自动重开（「切回来 compose 仍开」）。
+  const autoReopenIdRef = useRef<number | null>(null)
   useEffect(() => {
     const cs = useComposeStore.getState()
     if (cs.open && cs.internalId !== null && cs.internalId !== internalId) {
@@ -668,7 +662,20 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
       }
       closeCompose()
     }
-    if (internalId !== null && composeTabDraft !== null && !useComposeStore.getState().open) {
+    // draft-edit 快照不经 compose store：草稿箱分支直渲面板并回填（波3），这里只管
+    // overlay 三模式的自动重开。🔴 只在「刚到达这封邮件」时重开（arrived 判据）——
+    // composeTabDraft 引用变化也会重跑本 effect（面板的 live dirty 写、清快照都换引用），
+    // 不带这个判据时「显式关闭 + 面板 live 写落在同一 flush」会把用户刚关掉的 composer
+    // 当场再打开（真实关闭 effect 的清快照晚一步，波3 实测抓到的竞态）。
+    const arrived = autoReopenIdRef.current !== internalId
+    autoReopenIdRef.current = internalId
+    if (
+      arrived &&
+      internalId !== null &&
+      composeTabDraft !== null &&
+      composeTabDraft.mode !== 'draft-edit' &&
+      !useComposeStore.getState().open
+    ) {
       useComposeStore.getState().openCompose(internalId, composeTabDraft.mode)
     }
   }, [internalId, composeTabDraft])
@@ -685,26 +692,91 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
       clearObjectTabDraft('email', prev.internalId)
     }
   }, [composeOpen, composeFor, internalId])
-  // T9 draft-edit hold 收敛 (镜像上方 overlay effect)。脏草稿编辑被钉住 (draftEditHeldFor)
-  // 且 active 已切走时, 经该草稿面板的守卫弹确认: 保存/丢弃 → proceed (放钉 → 新 active 渲染);
-  // 取消 → 钉住保留, 面板继续渲染被钉草稿 (列表选中与详情短暂不一致, 与 overlay 路径同语义)。
+  // draft-edit 面板关闭。dismiss（取消编辑 / 守卫放行）只取消选中，标签保留 —— 只有
+  // 对象消亡（删除草稿 / 发送成功即替换删除）才收标签（波3）。次序参照 MattersWorkspace
+  // 的 onRemoved：先清本地选中，再关标签（closeTab 的后继同步会重设选中，反过来会被
+  // null 冲掉）。🔴 关「当前激活的邮件标签」而不是挂载时的 internalId —— 保存过的草稿
+  // 可能已 retarget（replace 换锚），标签的 targetId 是镜像新行。
+  const handleDraftEditClose = useCallback(
+    (reason?: ComposeCloseReason): void => {
+      const activeTab = selectActiveTab(useTabWorkspace.getState())
+      setActive(null)
+      if (reason === 'sent' || reason === 'deleted') {
+        const target =
+          activeTab !== null && activeTab.kind === 'email' ? activeTab.targetId : internalId
+        if (target !== null) closeObjectTab('email', target)
+      }
+    },
+    [setActive, internalId]
+  )
+
+  // ── 关闭守卫承接端（dogfood 波3）────────────────────────────────────────────
+  // requestCloseTab 对 dirty 草稿标签只做「激活 + 挂起请求」；弹窗与保存链都在当页
+  // compose 面板里（draft-edit 直渲 / overlay 自动重开），这里把请求接到面板的守卫
+  // 句柄上：保存 / 丢弃 → 关标签（closedStack 照常入栈），取消 / 保存失败 → 请求作废。
+  // 时序依赖：面板恢复快照把 dirty 翻 true 时会重写标签快照（live 写）→ activeTabDraft
+  // 换引用 → 本组件重渲 → effect 重跑 —— 「守卫句柄还没就位 / 还没吃完恢复」的等待
+  // 靠这条链收敛，不轮询。
+  const closeRequest = useTabCloseGuard((s) => s.pending)
+  const consumedCloseRef = useRef<PendingTabClose | null>(null)
   useEffect(() => {
-    if (draftEditHeldFor === null || draftEditHeldFor === internalId) return
-    const guard = draftEditGuardRef.current
-    const proceed = (): void => {
-      setDraftEditHeldFor(null)
-      setDraftEditDirty(false)
+    if (closeRequest === null || internalId === null) return
+    if (closeRequest.kind !== 'email' || closeRequest.targetId !== internalId) return
+    if (consumedCloseRef.current === closeRequest) return
+    const finish = (): void => {
+      // 🔴 关的目标按**此刻的**pending 解析：guard 保存路径可能已 retarget（bridge 会把
+      // 请求迁到镜像新行）；pending 已被别的路径清掉（404 核销抢先关了标签）则无事可做。
+      const pend = useTabCloseGuard.getState().pending
+      clearTabCloseRequest()
+      if (pend !== null) useTabWorkspace.getState().closeTab(pend.tabId)
     }
-    if (guard) guard.attemptClose(proceed)
-    else proceed()
-  }, [draftEditHeldFor, internalId])
-  // draft-edit 面板关闭 (放弃删草稿/发送成功, 或钉住被放行强关): 放钉 + 复位 dirty, 再回落
-  // mailbox 分支原 onClose 语义 (取消选中)。两处 draft-edit 渲染共用, 保持行为一致。
-  const handleDraftEditClose = useCallback((): void => {
-    setDraftEditHeldFor(null)
-    setDraftEditDirty(false)
-    setActive(null)
-  }, [setActive])
+    const guard = draftEditGuardRef.current ?? overlayGuardRef.current
+    if (guard !== null) {
+      // store 说 dirty、面板还 clean = 快照恢复尚未落地 → 等下一轮（见头注释的重跑链）。
+      // 快照坏到恢复不出来（composeTabDraft 收窄失败）时不等 —— 面板 clean 即直接放行。
+      const rawDirty = (activeTabDraft as { dirty?: unknown } | null)?.dirty === true
+      if (rawDirty && composeTabDraft !== null && !guard.isDirty()) return
+      consumedCloseRef.current = closeRequest
+      guard.attemptClose(finish, clearTabCloseRequest)
+      return
+    }
+    // 没有守卫句柄可承接：overlay 正在自动重开的路上 / 详情还在加载 → 等；drafts 行
+    // 数据已就位 = draft-edit 面板马上挂载 → 也等。其余（快照恢复不出来 / 行已不存在）
+    // 用户明确要关 —— 直接放行，别让 ⌘W 哑掉。
+    const cs = useComposeStore.getState()
+    if (cs.open && cs.internalId === internalId) return
+    if (!detailQ.isSuccess || detailQ.isPlaceholderData) return
+    if (detailQ.data !== null && isDraftsMailbox(detailQ.data.mailbox)) return
+    consumedCloseRef.current = closeRequest
+    finish()
+  }, [
+    closeRequest,
+    internalId,
+    activeTabDraft,
+    composeTabDraft,
+    composeOpenHere,
+    detailQ.isSuccess,
+    detailQ.isPlaceholderData,
+    detailQ.data
+  ])
+
+  // ── 404 轻量核销（dogfood 波3）──────────────────────────────────────────────
+  // 「明确不存在」的判据：两条 API 腿对缺行统一返回 null（ElectronApi 的 getEmail
+  // miss → null；HttpApi 把 E_NOT_FOUND 收敛成 null，见 HttpApi.isNotFound 注释），
+  // 5xx / 网络错则 reject → isError 走错误壳不动。⇒ isSuccess 且 data === null =
+  // 行确实不在 SQLite 里（⌘⇧T 重开死 id 也走到这）。dirty 草稿快照在场时**不核销**
+  // （宁缺勿误杀：行没了但未保存现场还挂在标签上，收标签 = 丢字节）。先查标签在场
+  // 再 toast —— StrictMode 双跑第二遍标签已没了，天然只报一次。
+  useEffect(() => {
+    if (internalId === null) return
+    if (!detailQ.isSuccess || detailQ.isPlaceholderData || detailQ.data !== null) return
+    if (usePopoutMode.getState().isPopout) return
+    const tab = useTabWorkspace.getState().tabs.find((t) => t.id === tabId('email', internalId))
+    if (tab === undefined) return
+    if ((tab.draft as { dirty?: unknown } | undefined)?.dirty === true) return
+    toastInfo(t('tabs.toast.targetGone'))
+    closeObjectTab('email', internalId)
+  }, [internalId, detailQ.isSuccess, detailQ.isPlaceholderData, detailQ.data, t])
 
   // B1 — compose overlay 进/退场. backdrop:false (root 即铺满整个详情区的覆盖层,
   // 非居中卡片). 整列覆盖面板用「淡入 + 上滑」(y:20, 无 scale) —— scale 适合居中小卡片,
@@ -996,22 +1068,6 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     }
   }, [internalId, detailQ.data])
 
-  // T9 — 脏草稿编辑被钉住 (active 已切走): 继续渲染被钉草稿 (独立于新 active 的加载/mailbox
-  // 态), 直到守卫弹窗 (上方 effect) 放行。与下方 mailbox 分支同 key → 面板实例 (+ 其编辑器)
-  // 跨切换存活, 编辑增量不丢。放在所有早退 (null/loading/error) 之前, 让钉住不被新 active 态干扰。
-  if (draftEditHeldFor !== null && draftEditHeldFor !== internalId) {
-    return (
-      <ComposePanelInner
-        key={`draft-${draftEditHeldFor}`}
-        internalId={draftEditHeldFor}
-        mode="draft-edit"
-        onClose={handleDraftEditClose}
-        guardRef={draftEditGuardRef}
-        onDirtyChange={setDraftEditDirty}
-      />
-    )
-  }
-
   if (internalId === null) {
     return (
       <EmptyShell>
@@ -1051,6 +1107,8 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   // 草稿点开即编辑 — 草稿不走只读详情 + 收件箱工具栏, 直接进可编辑 compose
   // (From 只读 / To·主题·正文可编辑, 顶部 发送/放弃[删除草稿])。所有 hook 已在上方
   // 执行, 此处条件 return 合法。key 让切换不同草稿时重挂 (fresh editor + 重新回填)。
+  // 波3: initialTabDraft = 标签上的现场快照（切走再切回 / replace 换锚 remount 后恢复
+  // 正文·收件人·dirty·「已保存 HH:MM」）；guardRef 给关闭守卫承接端。
   if (isDraftsMailbox(email.mailbox)) {
     return (
       <ComposePanelInner
@@ -1059,7 +1117,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         mode="draft-edit"
         onClose={handleDraftEditClose}
         guardRef={draftEditGuardRef}
-        onDirtyChange={setDraftEditDirty}
+        initialTabDraft={composeTabDraft}
       />
     )
   }
@@ -1106,7 +1164,11 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
           "遮盖详情列", 加实心 ink-3 底 (= 详情列标称色) 既挡住正文又保留面板玻璃层次. */}
       {composeShouldRender && (
         <div ref={composeScopeRef} className="absolute inset-0 z-20 flex flex-col bg-ink-3">
-          <ComposePanel snapshotRef={composeSnapshotRef} initialTabDraft={composeTabDraft} />
+          <ComposePanel
+            snapshotRef={composeSnapshotRef}
+            initialTabDraft={composeTabDraft}
+            guardRef={overlayGuardRef}
+          />
         </div>
       )}
       <EmailToolbar

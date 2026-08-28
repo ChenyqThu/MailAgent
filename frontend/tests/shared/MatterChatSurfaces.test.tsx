@@ -457,8 +457,9 @@ describe('MattersWorkspace — fixed-width matter list (drag-to-resize retired)'
       </QueryClientProvider>
     )
 
-    // M1（v3 信息架构）：左轨视图列已退役，进列表 = 点「事项」tab（默认落看板）。
-    fireEvent.click(await screen.findByRole('tab', { name: '事项' }))
+    // M1（v3 信息架构）：左轨视图列已退役；08-27 波 2 起进列表 = 点二级栏折叠组里的
+    // 「事项」行（默认落今日看板）。
+    fireEvent.click(await screen.findByRole('button', { name: '事项' }))
     expect(await screen.findByText('Vendor launch')).toBeTruthy()
 
     expect(screen.queryByRole('separator', { name: '调整事项清单宽度' })).toBeNull()
@@ -497,7 +498,7 @@ describe('MattersWorkspace — tags are a filter facet, not a nav rail (V3-04)',
       </QueryClientProvider>
     )
 
-    fireEvent.click(await screen.findByRole('tab', { name: '事项' }))
+    fireEvent.click(await screen.findByRole('button', { name: '事项' }))
     expect(await screen.findByText('Vendor launch')).toBeTruthy()
     await waitFor(() => expect(mattersApi.listTags).toHaveBeenCalled())
     // 菜单未打开时**列表面**里没有任何标签控件（没有导航轨）。

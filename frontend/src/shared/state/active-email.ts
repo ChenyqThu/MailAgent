@@ -53,7 +53,7 @@ function restoredActive(): number | null {
   return selectActiveTargetId(useTabWorkspace.getState(), 'email')
 }
 
-export const useActiveEmail = create<ActiveEmailStore>((set) => {
+export const useActiveEmail = create<ActiveEmailStore>((set, get) => {
   const initial = restoredActive()
   return {
     activeInternalId: initial,
@@ -65,10 +65,17 @@ export const useActiveEmail = create<ActiveEmailStore>((set) => {
     setActive(id, opts) {
       // 先落本地再转发：转发引起的标签 store 提交会触发下方订阅，此刻投影值已相等
       // → 订阅不再覆写（保住本次调用自己的 navTarget 语义）。
+      const prev = { activeInternalId: get().activeInternalId, navTargetId: get().navTargetId }
       set({ activeInternalId: id, navTargetId: opts?.navTarget && id !== null ? id : null })
       if (id === null || usePopoutMode.getState().isPopout) return
-      if (opts?.mode === 'replace') replaceObjectTab('email', id, opts?.title)
-      else openObjectTab('email', id, opts?.title)
+      const accepted =
+        opts?.mode === 'replace'
+          ? replaceObjectTab('email', id, opts?.title)
+          : openObjectTab('email', id, opts?.title)
+      // 标签满且全 locked 被拒（toast「标签已满」已出）→ 回滚本地投影（check 波3 续改）。
+      // 不回滚 = 详情区显示新邮件、标签条还高亮旧标签，且点那个高亮标签 activateTab
+      // 因 active === id 早退，必须点别的标签才能恢复。
+      if (!accepted) set(prev)
     },
     clearNavTarget() {
       set({ navTargetId: null })

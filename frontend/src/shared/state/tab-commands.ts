@@ -4,7 +4,7 @@
 // 不认识 i18n**。「结果 → 提示」那段的单源是 bridge 的 `announceTabResult`（点行 /
 // 深链 / 键盘三条入口共用一份判据与词表）；这里只做「按键 → store 动作」的翻译。
 
-import { announceTabResult } from '@shared/state/tab-workspace-bridge'
+import { announceTabResult, requestCloseTab } from '@shared/state/tab-workspace-bridge'
 import {
   MAIN_SLOT,
   selectActiveTab,
@@ -29,12 +29,13 @@ function activateSlot(slot: ActiveSlot): void {
 }
 
 /** ⌘W。关掉当前对象标签；主标签激活时**什么也不做**（主标签不可关）。
- *  返回是否真的关掉了一个 —— 调用方无论真假都要消费掉按键（见 GlobalShortcuts）。 */
+ *  dogfood 波3 起经 bridge 的关闭守卫：dirty 草稿标签先弹 UnsavedChangesDialog，
+ *  非 dirty 维持直接关。返回是否消费了这次意图 —— 调用方无论真假都要消费掉按键
+ *  （见 GlobalShortcuts）。 */
 export function closeActiveTab(): boolean {
   const active = selectActiveTab(useTabWorkspace.getState())
   if (active === null) return false
-  useTabWorkspace.getState().closeTab(active.id)
-  return true
+  return requestCloseTab(active.id)
 }
 
 /** ⌃⇥（`+1`）/ ⌃⇧⇥（`-1`）。到头回卷。只有主标签一个槽位时是 no-op。 */

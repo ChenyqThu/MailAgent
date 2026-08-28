@@ -701,3 +701,69 @@ describe('持久化', () => {
     expect(tabs[MAX_TABS_MAX - 1].id).toBe('email:30')
   })
 })
+
+// ── retargetTab（dogfood 波3 —— draft replace 换锚）─────────────────────────
+
+describe('retargetTab —— replace 换锚', () => {
+  test('换锚是身份延续：字段与标签条位置全保留，只换 id / targetId，并持久化', () => {
+    openEmails(3)
+    s().updateTab('email:2', {
+      title: '周报草稿',
+      locked: true,
+      draft: { kind: 'compose', dirty: true },
+      scrollTop: 120
+    })
+    s().retargetTab('email', 2, 200)
+    const tabs = s().tabs
+    // 位置保留（不是关一个开一个挪到尾部）
+    expect(tabs.map((t) => t.id)).toEqual(['email:1', 'email:200', 'email:3'])
+    expect(tabs[1]).toMatchObject({
+      kind: 'email',
+      targetId: 200,
+      title: '周报草稿',
+      locked: true,
+      scrollTop: 120
+    })
+    expect(tabs[1].draft).toEqual({ kind: 'compose', dirty: true })
+    // 换的是后台标签 → 激活槽不动
+    expect(s().active).toBe('email:3')
+    const savedTabs = persisted().tabs as Array<{ targetId: number }>
+    expect(savedTabs.map((t) => t.targetId)).toEqual([1, 200, 3])
+  })
+
+  test('激活槽指向被换锚的标签 → 跟到新 id（激活态连续）', () => {
+    openEmails(2)
+    expect(s().active).toBe('email:2')
+    s().retargetTab('email', 2, 200)
+    expect(s().active).toBe('email:200')
+  })
+
+  test('新 targetId 已有同类标签 → 合并：保留源标签现场，重复者移除且不进最近关闭栈', () => {
+    openEmails(2) // email:1, email:2
+    s().openTab('email', 200, '镜像行提前开着')
+    s().updateTab('email:2', { title: '源标签的现场', scrollTop: 66 })
+    const stackBefore = s().closedStack
+    s().activateTab('email:200')
+    s().retargetTab('email', 2, 200)
+    const tabs = s().tabs
+    // 源标签（原位置 index 1）继承身份，重复者（原 index 2）消失
+    expect(tabs.map((t) => t.id)).toEqual(['email:1', 'email:200'])
+    expect(tabs[1].title).toBe('源标签的现场')
+    expect(tabs[1].scrollTop).toBe(66)
+    // 激活槽原指重复者 → 改指合并后的标签
+    expect(s().active).toBe('email:200')
+    // 合并不是用户关闭 —— ⌘⇧T 捞回一个重复标签毫无意义
+    expect(s().closedStack).toEqual(stackBefore)
+  })
+
+  test('no-op：源标签不存在 / 新旧同值 / 搜索单例不许换锚', () => {
+    openEmails(1)
+    s().openTab('search', SEARCH_TARGET_ID)
+    const before = s().tabs
+    s().retargetTab('email', 999, 1000)
+    s().retargetTab('email', 1, 1)
+    s().retargetTab('search', SEARCH_TARGET_ID, 5)
+    expect(s().tabs).toBe(before)
+    expect(s().tabs.some((t) => t.id === SEARCH_TAB_ID)).toBe(true)
+  })
+})

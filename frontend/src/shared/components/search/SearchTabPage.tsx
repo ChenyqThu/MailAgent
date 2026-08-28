@@ -45,7 +45,6 @@ import { qk } from '@shared/lib/queryKeys'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useEmailFilter } from '@shared/state/email-filter'
 import { useMailbox } from '@shared/state/mailbox'
-import { useNavCollapsed } from '@shared/state/nav-shell'
 import { useSearchHistory } from '@shared/state/search-history'
 import { useSearchTabPage } from '@shared/state/search-tab'
 import { toastSuccess } from '@shared/state/toast'
@@ -89,9 +88,6 @@ export function SearchTabPage(): React.ReactElement {
   const setActiveMailbox = useMailbox((s) => s.setActive)
   const setActiveEmail = useActiveEmail((s) => s.setActive)
   const setView = useEmailFilter((s) => s.setView)
-  // 左列收起 = nav shell 的同一公式（InboxLayout 先例；forced 是 <lg 的导航强制收起，
-  // 内容列不跟）。
-  const sideHidden = useNavCollapsed((s) => s.collapsed && !s.forced)
   const pushHistory = useSearchHistory((s) => s.pushHistory)
 
   // query / AI 结果态 = 会话内 store（续改 1，见文件头）；highlight 是纯视图态留本地。
@@ -370,7 +366,7 @@ export function SearchTabPage(): React.ReactElement {
 
   return (
     <PageFrame ariaLabel="search" mainClassName="flex-1 flex overflow-hidden min-w-0">
-      <SearchRecallColumn hidden={sideHidden} onRunQuery={runStoredQuery} />
+      <SearchRecallColumn onRunQuery={runStoredQuery} />
 
       {/* 主列 —— 原型 .scol：560 居中，空态 margin-top 110；有查询时上移让位结果。 */}
       <section className="min-w-0 flex-1 overflow-y-auto scrollbar-thin">

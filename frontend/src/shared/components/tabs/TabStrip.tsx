@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next'
 import { PlusIcon, SearchIcon, XIcon } from '@shared/components/icons'
 import { NAV_DOMAINS, navDomainLabel } from '@shared/navigation/registry'
 import { openSearchTab } from '@shared/state/tab-commands'
+import { requestCloseTab } from '@shared/state/tab-workspace-bridge'
 import {
   MAIN_SLOT,
   TAB_KIND_DOMAIN,
@@ -61,7 +62,6 @@ export function TabStrip({ trailing }: TabStripProps): React.ReactElement {
   const mainBreadcrumb = useTabWorkspace((s) => s.mainBreadcrumb)
   const activateTab = useTabWorkspace((s) => s.activateTab)
   const activateMain = useTabWorkspace((s) => s.activateMain)
-  const closeTab = useTabWorkspace((s) => s.closeTab)
 
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const [wrap, setWrap] = useState<WrapBox>({ left: TABS_LEFT_FALLBACK, width: 0 })
@@ -154,7 +154,8 @@ export function TabStrip({ trailing }: TabStripProps): React.ReactElement {
             width={tabW}
             selected={tab.id === active}
             onActivate={() => activateTab(tab.id)}
-            onClose={() => closeTab(tab.id)}
+            // dogfood 波3：× 与 ⌘W 同走关闭守卫 —— dirty 草稿标签先激活再弹确认。
+            onClose={() => requestCloseTab(tab.id)}
           />
         ))}
       </div>
@@ -201,6 +202,10 @@ function ObjectTab({
       : tab.title === ''
         ? t('tabs.untitled')
         : tab.title
+  // 改动点（accent）与锁定点（琥珀）互斥，dirty 优先 —— dirty 必带 draft ⇒ 必 locked，
+  // 两个点一起画只是噪音（dogfood 波3）。dirty 位直读快照原始字段，与关闭守卫同判据。
+  const dirty =
+    tab.kind === 'email' && (tab.draft as { dirty?: unknown } | undefined)?.dirty === true
   return (
     <div
       role="tab"
@@ -221,7 +226,11 @@ function ObjectTab({
           用放大镜（与页面 slogo / ⌘K 钮同一枚）。 */}
       {tab.kind === 'search' ? <SearchIcon /> : NAV_DOMAINS[TAB_KIND_DOMAIN[tab.kind]].icon()}
       <span className="ttab-title">{title}</span>
-      {tab.locked && <span className="ttab-lock" title={t('tabs.locked')} />}
+      {dirty ? (
+        <span className="ttab-dirty" title={t('tabs.dirty')} />
+      ) : tab.locked ? (
+        <span className="ttab-lock" title={t('tabs.locked')} />
+      ) : null}
       <button
         type="button"
         className="ttab-close"

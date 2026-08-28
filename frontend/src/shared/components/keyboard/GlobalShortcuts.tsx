@@ -31,7 +31,6 @@ import { navEntry, navigateToNavEntry, navShortcutSpec } from '@shared/navigatio
 import { requestNewAgentSession, toggleChatModal } from '@shared/state/ai-chat-panel'
 import { useCommandPalette } from '@shared/state/command-palette'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
-import { useNavCollapsed } from '@shared/state/nav-shell'
 import { openNewCompose } from '@shared/state/compose-new'
 import {
   closeActiveTab,
@@ -81,7 +80,7 @@ export function GlobalShortcuts(): ReactElement {
   const goSettings = useCallback(() => {
     // Sprint 18 PR C — `/settings` now requires a `tab` search param
     // (validateSearch in router-instance.tsx). ⌘, lands the user on the
-    // first tab; deep-linking to a specific tab is handled by SettingsRail.
+    // first tab; switching sections is the domain panel's job.
     navigateToNavEntry(navigate, settingsEntry)
   }, [navigate])
 
@@ -108,6 +107,7 @@ export function GlobalShortcuts(): ReactElement {
   // 那一支：macOS windowMenu 的 close role 也绑 ⌘W，不拦下来就成了「想关标签，
   // 结果关了整个窗口」。同款「renderer preventDefault 盖过菜单加速键」的先例是
   // useCalendarShortcuts 的 ⌘R（viewMenu reload role）。关窗仍走红绿灯 / ⌘Q。
+  // dogfood 波3：closeActiveTab 内部经 bridge 关闭守卫 —— dirty 草稿标签先弹确认。
   const closeTab = useCallback((evt: KeyboardEvent) => {
     evt.preventDefault()
     closeActiveTab()
@@ -143,10 +143,7 @@ export function GlobalShortcuts(): ReactElement {
     return true
   }, [])
 
-  // Sprint 11 V1.4 — nav-shell collapse + locale toggle.
-  const toggleNav = useCallback(() => {
-    useNavCollapsed.getState().toggle()
-  }, [])
+  // Sprint 11 V1.4 — locale toggle（同批的 ⌥B 折叠导航随二级栏定宽退役）。
   const toggleLocale = useCallback(() => {
     const cur = (i18n.resolvedLanguage ?? i18n.language ?? 'zh-CN') as 'zh-CN' | 'en-US'
     const next: 'zh-CN' | 'en-US' = cur === 'zh-CN' ? 'en-US' : 'zh-CN'
@@ -165,7 +162,6 @@ export function GlobalShortcuts(): ReactElement {
   // 页面可开, 与全局侧边栏「写邮件」按钮一致。editable context 默认 short-circuit,
   // chat / 主题输入框打字不误触。
   useShortcut('cmd+n', () => openNewCompose())
-  useShortcut('alt+b', toggleNav)
   useShortcut('alt+g', toggleLocale)
   useShortcut(TAB_NEW_SPEC, newTab)
   useShortcut(TAB_CLOSE_SPEC, closeTab)

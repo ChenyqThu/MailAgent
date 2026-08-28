@@ -6,7 +6,7 @@
 // router-instance）。issue #68 的纪律：正解是下沉常量，不是照抄一份加句「同源」注释。
 // router-instance 原位 re-export，既有消费方（SettingsShell 等）不用动。
 //
-// Tab order mirrors SettingsRail (the user-facing nav)。
+// Tab order mirrors the user-facing nav (DomainPanel 的设置域行)。
 
 export const SETTINGS_TABS = [
   'general',

@@ -9,18 +9,24 @@
 //                          clean → run `proceed` right away (no dialog).
 //   onSaveDraft:           await saveDraft(); success → run proceed; failure →
 //                          keep the composer + its content (the save mutation
-//                          already surfaced the error toast), just drop dialog.
+//                          already surfaced the error toast), just drop dialog +
+//                          notify `onAbort` (the close intent is off).
 //   onDiscard:             run proceed (drop edits).
-//   onCancel:              forget the pending proceed, stay in the composer.
+//   onCancel:              forget the pending proceed, stay in the composer,
+//                          notify `onAbort`.
+//
+// `onAbort` (dogfood 波3): tab-close requests parked in the bridge must be
+// cleared when the user backs out, or ⌘W goes permanently mute — the optional
+// second argument of attemptClose is that notifier.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 /** Imperative handle a parent uses to route an *external* close (新邮件浮窗的
- *  scrim/× · EmailDetail 切邮件) through the same guard the composer's own ESC /
+ *  scrim/× · 标签关闭守卫) through the same guard the composer's own ESC /
  *  丢弃 paths use. Kept ref-stable so wiring it into a parent ref is cheap. */
 export interface ComposeGuardHandle {
   isDirty: () => boolean
-  attemptClose: (proceed: () => void) => void
+  attemptClose: (proceed: () => void, onAbort?: () => void) => void
 }
 
 interface UseComposeGuardArgs {
@@ -48,6 +54,7 @@ export function useComposeGuard({ dirty, saveDraft }: UseComposeGuardArgs): Comp
   const [unsavedOpen, setUnsavedOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const proceedRef = useRef<(() => void) | null>(null)
+  const abortRef = useRef<(() => void) | null>(null)
   // Latest dirty / saveDraft in refs so guardClose + the imperative handle stay
   // reference-stable (parents capture the handle once) yet still read the current
   // values. Refs are written in an effect — writing them during render violates
@@ -59,20 +66,36 @@ export function useComposeGuard({ dirty, saveDraft }: UseComposeGuardArgs): Comp
     saveDraftRef.current = saveDraft
   })
 
-  const guardClose = useCallback((proceed: () => void): void => {
+  const attemptClose = useCallback((proceed: () => void, onAbort?: () => void): void => {
     if (!dirtyRef.current) {
       proceed()
       return
     }
     proceedRef.current = proceed
+    abortRef.current = onAbort ?? null
     setUnsavedOpen(true)
   }, [])
+
+  const guardClose = useCallback(
+    (proceed: () => void): void => attemptClose(proceed),
+    [attemptClose]
+  )
 
   const runProceed = useCallback((): void => {
     const proceed = proceedRef.current
     proceedRef.current = null
+    abortRef.current = null
     setUnsavedOpen(false)
     proceed?.()
+  }, [])
+
+  // 用户退出关闭意图（取消 / 保存失败留守）→ 通知发起方收回请求。
+  const runAbort = useCallback((): void => {
+    const abort = abortRef.current
+    proceedRef.current = null
+    abortRef.current = null
+    setUnsavedOpen(false)
+    abort?.()
   }, [])
 
   const onDiscard = useCallback((): void => {
@@ -88,23 +111,22 @@ export function useComposeGuard({ dirty, saveDraft }: UseComposeGuardArgs): Comp
       })
       .catch(() => {
         // Save failed — mutation already toasted. Keep the composer + content
-        // so the user can retry; just drop the confirm dialog.
-        setUnsavedOpen(false)
+        // so the user can retry; drop the dialog + abort the close intent.
+        runAbort()
       })
       .finally(() => {
         setSaving(false)
       })
-  }, [runProceed])
+  }, [runProceed, runAbort])
 
   const onCancel = useCallback((): void => {
-    proceedRef.current = null
-    setUnsavedOpen(false)
-  }, [])
+    runAbort()
+  }, [runAbort])
 
   const isDirty = useCallback((): boolean => dirtyRef.current, [])
   const handle = useMemo<ComposeGuardHandle>(
-    () => ({ isDirty, attemptClose: guardClose }),
-    [isDirty, guardClose]
+    () => ({ isDirty, attemptClose }),
+    [isDirty, attemptClose]
   )
 
   return { guardClose, handle, unsavedOpen, saving, onSaveDraft, onDiscard, onCancel }

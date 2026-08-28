@@ -239,6 +239,38 @@ describe('useComposeGuard — 状态机', () => {
     expect(proceed).toHaveBeenCalledTimes(1)
   })
 
+  test('attemptClose 的 onAbort（波3）：取消 / 保存失败通知发起方收回请求，成功不通知', async () => {
+    // 关闭守卫（⌘W / ×）把「待关闭」挂在 bridge —— 取消或保存失败必须经 onAbort 收回，
+    // 否则请求悬着，后续 ⌘W 永久哑掉。
+    const saveOk = vi.fn().mockResolvedValue(undefined)
+    const hook = renderHook(() => useComposeGuard({ dirty: true, saveDraft: saveOk }))
+    const proceed = vi.fn()
+    const abort = vi.fn()
+    act(() => hook.result.current.handle.attemptClose(proceed, abort))
+    act(() => hook.result.current.onCancel())
+    expect(abort).toHaveBeenCalledTimes(1)
+    expect(proceed).not.toHaveBeenCalled()
+    // 保存失败 → onAbort
+    const saveFail = vi.fn().mockRejectedValue(new Error('nope'))
+    const failHook = renderHook(() => useComposeGuard({ dirty: true, saveDraft: saveFail }))
+    const failAbort = vi.fn()
+    act(() => failHook.result.current.handle.attemptClose(proceed, failAbort))
+    await act(async () => {
+      failHook.result.current.onSaveDraft()
+    })
+    await waitFor(() => expect(failAbort).toHaveBeenCalledTimes(1))
+    expect(proceed).not.toHaveBeenCalled()
+    // 保存成功 → proceed，不 abort
+    const okHook = renderHook(() => useComposeGuard({ dirty: true, saveDraft: saveOk }))
+    const okAbort = vi.fn()
+    act(() => okHook.result.current.handle.attemptClose(proceed, okAbort))
+    await act(async () => {
+      okHook.result.current.onSaveDraft()
+    })
+    await waitFor(() => expect(proceed).toHaveBeenCalledTimes(1))
+    expect(okAbort).not.toHaveBeenCalled()
+  })
+
   test('保存成功 → proceed; 保存失败 → 不 proceed (留守)', async () => {
     const okProceed = vi.fn()
     const okSave = vi.fn().mockResolvedValue(undefined)

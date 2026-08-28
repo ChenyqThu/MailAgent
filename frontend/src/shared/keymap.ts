@@ -325,15 +325,8 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     labelKey: 'shortcutHelp.binding.toggleIsland',
     wired: false
   },
-  // ── Sprint 11 V1.4 — nav-shell + locale toggles ────────────────────
-  {
-    id: 'toggleNav',
-    spec: 'alt+b',
-    display: '⌥B',
-    scope: 'global',
-    labelKey: 'shortcutHelp.binding.toggleNav',
-    wired: true
-  },
+  // ── Sprint 11 V1.4 — locale toggle ─────────────────────────────────
+  // （同批的 `toggleNav`(⌥B) 已随二级栏定宽退役：面板不再可折叠，键无处可去。）
   {
     id: 'toggleLocale',
     spec: 'alt+g',

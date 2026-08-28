@@ -1,9 +1,13 @@
-// 标签工作区的 compose 现场快照（task 08-27 P2 Lane W）。
+// 标签工作区的 compose 现场快照（task 08-27 P2 Lane W；dogfood 波3 扩到 draft-edit）。
 //
 // 「写一半回复的标签切走再切回，草稿还在」的载体：ComposePanelInner 卸载时（切邮件 /
-// 切域 / 详情早退分支）若 compose store 仍指向本邮件且 open —— 说明不是用户显式关闭 ——
-// 把可序列化的现场写进 TabDescriptor.draft；切回该标签时 EmailDetail 自动重开 compose，
-// 面板按正常 plan 预填后用快照覆写用户可编辑的字段。
+// 切域 / 详情早退分支）把可序列化的现场写进 TabDescriptor.draft。两条恢复入口：
+//   - overlay（reply/reply-all/forward）：以「compose store 仍指向本邮件且 open」为
+//     非显式关闭的判据；切回该标签时 EmailDetail 自动重开 compose；
+//   - draft-edit（波3）：不经 compose store，EmailDetail 草稿箱分支直渲面板并传
+//     initialTabDraft；卸载兜底只在「dirty 或本会话保存过」时写（干看不锁标签），
+//     显式丢弃经面板的 suppress 位压住。
+// 面板按正常预填后用快照覆写用户可编辑的字段。
 //
 // 🔴 只存**用户改得动的**字段：quoteHtml / splitQuote / preserveOriginal 从 plan 重建
 //（planQ staleTime Infinity，重建逐字节一致）——引用块动辄几百 KB，进 localStorage 会
@@ -24,10 +28,14 @@ export interface ComposeTabDraftAttachment {
   readonly attachmentId?: number
 }
 
+/** 参与快照链的面板模式。dogfood 波3 起 draft-edit（草稿点开即编辑）也进快照 ——
+ *  与 overlay 的差别：它不经 compose store，恢复入口是 EmailDetail 的草稿箱分支。 */
+export type ComposeTabDraftMode = ComposeMode | 'draft-edit'
+
 export interface ComposeTabDraft {
   /** 快照种类标记 —— TabDescriptor.draft 是 store 不解释的开放形状，读侧靠它收窄。 */
   readonly kind: 'compose'
-  readonly mode: ComposeMode
+  readonly mode: ComposeTabDraftMode
   readonly to: readonly string[]
   readonly cc: readonly string[]
   readonly bcc: readonly string[]
@@ -44,9 +52,19 @@ export interface ComposeTabDraft {
    *  hydrate（快照里的 chips 已含原附件，或用户已显式移除它们——重跑会加回来）。 */
   readonly fwdHydrated: boolean
   readonly dirty: boolean
+  /** draft-edit 专用 —— C-1 replace 锚（保存成功后指镜像新行）。旧快照缺省 = 恢复侧
+   *  回落 internalId（换锚后 tab 已 retarget，两者相等）。 */
+  readonly draftRowId?: number
+  /** draft-edit 专用 —— 「已保存 HH:MM」时间戳（epoch ms），恢复时重建 lastSavedAt。 */
+  readonly lastSavedAtMs?: number
 }
 
-const COMPOSE_MODES: readonly ComposeMode[] = ['reply', 'reply-all', 'forward']
+const COMPOSE_MODES: readonly ComposeTabDraftMode[] = [
+  'reply',
+  'reply-all',
+  'forward',
+  'draft-edit'
+]
 
 function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((item) => typeof item === 'string')
@@ -60,7 +78,7 @@ export function readComposeTabDraft(
   if (draft === null || draft === undefined) return null
   const rec = draft as Record<string, unknown>
   if (rec.kind !== 'compose') return null
-  if (!COMPOSE_MODES.includes(rec.mode as ComposeMode)) return null
+  if (!COMPOSE_MODES.includes(rec.mode as ComposeTabDraftMode)) return null
   if (!isStringArray(rec.to) || !isStringArray(rec.cc) || !isStringArray(rec.bcc)) return null
   if (typeof rec.subject !== 'string') return null
   const importance =
@@ -81,7 +99,7 @@ export function readComposeTabDraft(
   }
   return {
     kind: 'compose',
-    mode: rec.mode as ComposeMode,
+    mode: rec.mode as ComposeTabDraftMode,
     to: rec.to,
     cc: rec.cc,
     bcc: rec.bcc,
@@ -93,7 +111,14 @@ export function readComposeTabDraft(
     lineHeightChoice: typeof rec.lineHeightChoice === 'string' ? rec.lineHeightChoice : '',
     attachments,
     fwdHydrated: rec.fwdHydrated === true,
-    dirty: rec.dirty === true
+    dirty: rec.dirty === true,
+    // 波3 新增字段：旧快照缺省 → 不进对象（收窄器给「没有」而不是 undefined 值）。
+    ...(typeof rec.draftRowId === 'number' && Number.isInteger(rec.draftRowId)
+      ? { draftRowId: rec.draftRowId }
+      : {}),
+    ...(typeof rec.lastSavedAtMs === 'number' && Number.isFinite(rec.lastSavedAtMs)
+      ? { lastSavedAtMs: rec.lastSavedAtMs }
+      : {})
   }
 }
 
