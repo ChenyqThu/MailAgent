@@ -79,6 +79,12 @@ _LOG_TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})")
 
 _LOG_TAIL_BYTES = 50 * 1024
 _THROTTLE_WINDOW_SECS = 5 * 60
+# OAuth 失败行同样只认窗口内的 —— 去重靠内存态 `_prev`, 进程一重启就清空,
+# 而尾部 50KB 里可能还躺着几小时前、已经重走过 OAuth 的历史错误行 (davmail
+# 日志安静时能赖很久)。不卡时间窗则每次 app 重启都对同一批陈旧错误重报一次
+# critical (2026-08-27 实测: 重认证已成功、token 正常刷新, 仍收到假告警)。
+# 真失效时 davmail 每次连接都会写新行, 窗口内必有新证据, 不会漏报。
+_OAUTH_ERROR_WINDOW_SECS = 5 * 60
 _PROCESS_DOWN_THRESHOLD = 3  # 连续失败次数
 # 🔴 token 老化门槛的**唯一真源** (issue #68)。level 在本 watchdog 内 live 计算不落盘,
 # 故 admin router (web 面重算) 与 CLI (`mailagent admin health` 提示行) 都要这两个值 ——
@@ -531,7 +537,7 @@ class DavMailWatchdog:
         return age_days, mtime
 
     def _scan_log_tail(self) -> tuple[Optional[str], int]:
-        """扫 davmail.log 末尾 50KB 找 OAuth 失败 + 5min 内 EWS throttle 计数。"""
+        """扫 davmail.log 末尾 50KB 找 5min 内的 OAuth 失败 + EWS throttle 计数。"""
         if not self.log_path.exists():
             return None, 0
         try:
@@ -548,20 +554,29 @@ class DavMailWatchdog:
         lines = text.splitlines()
         oauth_error: Optional[str] = None
         throttle_count = 0
-        cutoff = time.time() - _THROTTLE_WINDOW_SECS
+        now = time.time()
+        throttle_cutoff = now - _THROTTLE_WINDOW_SECS
+        oauth_cutoff = now - _OAUTH_ERROR_WINDOW_SECS
+        last_ts: Optional[float] = None
 
         for line in lines:
+            ts = self._extract_log_ts(line)
+            if ts is not None:
+                last_ts = ts
             if _OAUTH_FAIL_RE.search(line):
-                # 取最后一条（最近）
-                trimmed = line.strip()
-                if len(trimmed) > 240:
-                    trimmed = trimmed[:240] + "…"
-                oauth_error = trimmed
+                # 取窗口内最后一条（最近）。BadPaddingException / TokenExpiredException
+                # 恒落在异常堆栈续行上，本身没有 log4j timestamp —— 继承所属事件头行的
+                # 时间戳，否则整类失败都会被时间窗吃掉。头行时间也拿不到才丢弃。
+                event_ts = ts if ts is not None else last_ts
+                if event_ts is not None and event_ts >= oauth_cutoff:
+                    trimmed = line.strip()
+                    if len(trimmed) > 240:
+                        trimmed = trimmed[:240] + "…"
+                    oauth_error = trimmed
             if _EWS_THROTTLE_RE.search(line):
-                ts = self._extract_log_ts(line)
                 # 只对带 log4j 行首 timestamp 的"事件头"行计数；
                 # stack trace 续行没 timestamp 会被忽略，避免单次事件多行被重复计数。
-                if ts is not None and ts >= cutoff:
+                if ts is not None and ts >= throttle_cutoff:
                     throttle_count += 1
 
         return oauth_error, throttle_count

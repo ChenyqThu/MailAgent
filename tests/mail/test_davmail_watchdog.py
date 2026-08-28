@@ -33,6 +33,11 @@ from src.notify.center import NotifyCenter
 from src.notify.episode import AlertEpisodeTracker
 
 
+def _log_ts(ago_secs: float) -> str:
+    """生成 `ago_secs` 秒前的 log4j 行首时间戳 (OAuth / throttle 都卡时间窗)."""
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - ago_secs))
+
+
 # ────────────────────────────────────────────────────────────────
 # Fixtures
 # ────────────────────────────────────────────────────────────────
@@ -203,9 +208,9 @@ def test_log_tail_picks_up_oauth_failure(
     sync_store: SyncStore, davmail_root: Path, write_log
 ):
     write_log(
-        "2026-05-22 14:00:00,000 INFO logged in\n"
-        "2026-05-22 14:30:00,000 ERROR refresh_token expired\n"
-        "2026-05-22 14:31:00,000 INFO trying again\n"
+        f"{_log_ts(120)},000 INFO logged in\n"
+        f"{_log_ts(60)},000 ERROR refresh_token expired\n"
+        f"{_log_ts(30)},000 INFO trying again\n"
     )
     wd = DavMailWatchdog(
         sync_store=sync_store, alerter=None, davmail_root=davmail_root
@@ -213,6 +218,57 @@ def test_log_tail_picks_up_oauth_failure(
     err, _ = wd._scan_log_tail()
     assert err is not None
     assert "refresh_token expired" in err
+
+
+def test_log_tail_ignores_stale_oauth_failure(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """关键回归 (2026-08-27 假告警): 尾部 50KB 里的陈旧 OAuth 错误行不得触发告警。
+
+    去重靠内存态 `_prev`, app 一重启就清空 —— 不卡时间窗的话, 几小时前那批
+    "已经重走过 OAuth、token 也正常刷新了" 的错误行会被当成新故障重报 critical。
+    """
+    write_log(
+        f"{_log_ts(2 * 3600)},000 ERROR refresh token failed AADSTS70043\n"
+        f"{_log_ts(30)},000 INFO logged in\n"
+    )
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root
+    )
+    err, _ = wd._scan_log_tail()
+    assert err is None, f"2h 前的历史错误行不该再报, got: {err}"
+
+
+def test_log_tail_oauth_stack_trace_inherits_header_ts(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """BadPaddingException 恒落在没 timestamp 的堆栈续行 —— 必须继承事件头行时间,
+    否则加了时间窗之后整类失败会被静默吃掉。"""
+    write_log(
+        f"{_log_ts(45)},000 ERROR davmail.exchange.auth.O365Token - token decrypt\n"
+        "javax.crypto.BadPaddingException: Given final block not properly padded\n"
+        "\tat davmail.exchange.auth.O365Token.load(O365Token.java:255)\n"
+    )
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root
+    )
+    err, _ = wd._scan_log_tail()
+    assert err is not None and "BadPaddingException" in err
+
+
+def test_log_tail_stale_stack_trace_stays_silent(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """续行继承的是**事件头行**的时间, 所以陈旧堆栈同样不该触发。"""
+    write_log(
+        f"{_log_ts(2 * 3600)},000 ERROR davmail.exchange.auth.O365Token - decrypt\n"
+        "javax.crypto.BadPaddingException: Given final block not properly padded\n"
+    )
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root
+    )
+    err, _ = wd._scan_log_tail()
+    assert err is None, f"2h 前的堆栈不该报, got: {err}"
 
 
 def test_log_tail_throttle_within_5min(
@@ -863,7 +919,7 @@ async def test_tick_writes_pause_before_evaluate_alerts(
 async def test_oauth_alert_dedupes_repeat_same_error(
     sync_store: SyncStore, davmail_root: Path, write_log
 ):
-    write_log("2026-05-22 14:30:00,000 ERROR refresh_token expired")
+    write_log(f"{_log_ts(60)},000 ERROR refresh_token expired")
     alerter = _FakeAlerter()
     wd = DavMailWatchdog(
         sync_store=sync_store, alerter=alerter, davmail_root=davmail_root  # type: ignore[arg-type]
@@ -1569,7 +1625,7 @@ async def test_oauth_failure_publishes_notification(
 ):
     """OAuth 失败 (无恢复信号 → 只发不收); 同一行不重复 = 不计次."""
     write_log(
-        "2026-08-21 10:00:00,000 ERROR davmail "
+        f"{_log_ts(60)},000 ERROR davmail "
         "AADSTS700003 refresh token invalid\n"
     )
     wd = DavMailWatchdog(
