@@ -1,7 +1,7 @@
 // task 08-27 P3 —— 三源聚合 hook (GET /api/calendar/agenda)。
 //
-// 消费面: 月视图 / 日视图 / 周视图 (P5 起日/周与月同构) + 二级栏日历源树的成员
-// 聚合; AgendaView 与 recurring 仍走旧 useCalendarEventsInWindow, 不动。
+// 消费面: 月 / 日 / 周 / 日程四视图 + 二级栏日历源树的成员聚合; recurring 视图
+// 仍走旧 useCalendarEventsInWindow (它列的是 RRULE 系列, 不是时间窗口)。
 //
 // 组级开关 (sources) 与成员级排除集 (excluded) 都走 client-side select:
 // queryKey 不含它们, 切勾选不重发请求, 各视图与二级栏日历源树共享同一窗口缓存

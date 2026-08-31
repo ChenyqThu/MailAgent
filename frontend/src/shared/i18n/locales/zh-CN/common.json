@@ -1124,7 +1124,8 @@
       "contact_set_manager": "设置联系人上级",
       "notion_agent_chat": "咨询 Notion Agent",
       "plan_update": "更新计划",
-      "suggest_followups": "准备追问建议"
+      "suggest_followups": "准备追问建议",
+      "submit_feedback": "提交产品反馈"
     },
     "planCard": {
       "title": "计划",
@@ -1767,7 +1768,24 @@
       "decidedOk": "已授权 · 收到回调，开始执行",
       "decidedNo": "已拒绝 · 未对邮箱做任何改动"
     },
-    "truncated": "已截断早期 {n, plural, =1 {1 条消息} other {# 条消息}}"
+    "truncated": "已截断早期 {n, plural, =1 {1 条消息} other {# 条消息}}",
+    "feedbackApprovalCard": {
+      "cardTitle": "提交产品反馈",
+      "kind": "类型",
+      "title": "标题",
+      "detail": "详细说明",
+      "freq": "复现频率",
+      "email": "联系邮箱",
+      "attachments": "附件",
+      "attachDiagnostics": "诊断包（近 7 天脱敏日志）",
+      "attachNone": "无（我截不了图）",
+      "viaAgentNote": "这条会以「主 Agent 代你提交」的身份进反馈库。内容会离开这台机器，所以每次都要你点头。",
+      "edit": "改一改",
+      "editDone": "改好了",
+      "approve": "发送",
+      "sent": "已提交。在设置底部的「查看反馈」里能看处理进度。",
+      "failed": "没发出去。可以在设置底部重新发一条，或打开表单页手动提交。"
+    }
   },
   "admin": {
     "title": "看板",
@@ -2031,6 +2049,42 @@
       "short": "Join",
       "title": "加入会议 — 在 {p} 中打开"
     },
+    "detail": {
+      "matterRole": "事项投影",
+      "agentRole": "Agent 排程",
+      "dueTime": "截止时间",
+      "plannedTime": "计划时刻",
+      "matter": "事项",
+      "item": "行动项",
+      "nextStep": "下一步",
+      "owner": "负责人",
+      "ownerUnset": "未指定",
+      "blockers": "阻塞点",
+      "blockersNone": "没有",
+      "recentProgress": "最近进展",
+      "progressNone": "还没有进展",
+      "loadFailedLabel": "事项详情",
+      "loadFailed": "没取到这件事的详情",
+      "retry": "重试",
+      "goMatter": "去事项",
+      "goMatterTitle": "在事项域打开这件事",
+      "matterNote": "这是事项的投影 —— 改时间或内容要去事项里改",
+      "whatRuns": "这次要跑什么",
+      "triggerRules": "触发规则",
+      "triggerDisabled": "已停用",
+      "lastRun": "上次跑的结果",
+      "agentMissing": "这个 Agent 的配置没取到",
+      "goAgent": "去 Agent",
+      "goAgentTitle": "在团队域打开这个 Agent",
+      "agentNote": "这是排程的投影 —— 改时间要去 Agent 的设置里改",
+      "reportStatus": {
+        "generating": "正在生成",
+        "ready": "已生成",
+        "empty": "没有内容可写",
+        "failed": "失败",
+        "skipped": "跳过"
+      }
+    },
     "drawer": {
       "closeTitle": "关闭 (Esc)",
       "noRelatedEmail": "无关联邮件",
@@ -2108,7 +2162,7 @@
       "allDayToggle": "全天",
       "labelCalendar": "日历",
       "calendarDefault": "默认日历",
-      "calendarEditLocked": "暂不支持跨日历移动事件",
+      "calendarEditLocked": "换日历等于删掉再建一次，事件会换个身份、与会者的回执也跟着丢。要换日历请新建一个事件。",
       "labelLocation": "地点",
       "placeholderLocation": "会议室 / Teams 链接 / 地址",
       "labelDescription": "描述",
@@ -2117,11 +2171,8 @@
       "repeat": {
         "label": "重复",
         "freqNone": "不重复",
-        "freqDaily": "每天",
-        "freqWeekly": "每周",
-        "freqMonthly": "每月",
-        "freqYearly": "每年",
         "everyPrefix": "每",
+        "onDaysPrefix": "的",
         "unitDay": "天",
         "unitWeek": "周",
         "unitMonth": "月",
@@ -2142,7 +2193,16 @@
         "bydayAria": "每周重复日",
         "endAria": "结束方式",
         "countAria": "重复次数",
-        "untilAria": "结束日期"
+        "untilAria": "结束日期",
+        "summary": {
+          "everyUnit": "每{unit}",
+          "everyNUnit": "每 {n} {unit}",
+          "daysJoin": "、",
+          "withDays": "{base}{days}",
+          "withDaysN": "{base}的{days}",
+          "endCount": "{base}，共 {n} 次",
+          "endUntil": "{base}，到 {date} 止"
+        }
       },
       "recurrenceScope": {
         "title": "周期事件",
@@ -2153,9 +2213,12 @@
       },
       "attendees": {
         "label": "与会者",
-        "placeholder": "输入 email 后回车添加",
+        "placeholder": "搜姓名或邮箱，回车添加",
         "hint": "Enter 添加 · ⌫ 删除上一个 · 点 × 移除",
-        "removeChip": "移除 {email}"
+        "removeChip": "移除 {email}",
+        "addRaw": "添加 “{email}”",
+        "addRawHint": "不在通讯录，直接用这个邮箱",
+        "suggestAria": "与会者候选"
       },
       "actions": {
         "cancel": "取消",
@@ -2221,10 +2284,12 @@
         "popDayLabel": "{m} 月 {d} 日"
       },
       "agenda": {
-        "dayOfSpan": "第 {n}/{m} 天",
         "today": "今天",
         "tomorrow": "明天",
-        "dayNum": "{d}日"
+        "tagMatter": "事项",
+        "tagAgent": "Agent",
+        "gapDay": "{d} 无日程",
+        "gapRange": "{from} – {to} 无日程"
       }
     },
     "shortcut": {
@@ -2942,7 +3007,11 @@
           "busy": "导出中…（约 1 分钟）"
         },
         "saved": "诊断包已保存",
-        "failed": "导出诊断包失败"
+        "failed": "导出诊断包失败",
+        "attachToFeedback": {
+          "label": "发送反馈时附上诊断包",
+          "helper": "决定反馈弹窗里那一项的默认勾选状态。与上面导出的是同一个包。"
+        }
       }
     },
     "save": "保存",
@@ -4978,6 +5047,69 @@
       }
     }
   },
+  "agentSettings": {
+    "section": {
+      "identity": "身份",
+      "instructions": "指令",
+      "model": "模型",
+      "when": "什么时候动",
+      "capabilities": "能碰什么",
+      "specific": "它自己的设置",
+      "danger": "删掉它"
+    },
+    "readonly": "只读",
+    "builtinToolsNote": "它的工具是写死的，删不掉也加不了。",
+    "notFound": "没有找到这位成员的配置。",
+    "loading": "配置加载中…",
+    "saveDone": "已保存",
+    "header": {
+      "tryRun": "试运行一次"
+    },
+    "role": {
+      "builtin": "内置成员",
+      "custom": "自定义成员"
+    },
+    "model": {
+      "primary": "主力",
+      "fallback": "失败时回退",
+      "note": "主力模型调用失败（超时、限流或报错）时，才用回退模型再试。"
+    },
+    "when": {
+      "manual": "不定时 · 你找它才动",
+      "timed": "按时间",
+      "event": "按事件",
+      "eventKindLabel": "触发事件",
+      "dailySentence": "每天 {time} 运行",
+      "dailyHourLabel": "每日运行时刻",
+      "dailyHourOnly": "这位成员按天跑一轮，只支持整点时刻。"
+    },
+    "regex": {
+      "ok": "正则可用",
+      "invalid": "正则无法编译：{message}",
+      "jsNote": "校验按浏览器正则语法；个别 Python 专有写法（如命名分组）可能误报。",
+      "tryLabel": "拿最近 5 封标题试一下",
+      "matched": "命中",
+      "missed": "未命中",
+      "empty": "没取到收件箱标题",
+      "loadFailed": "取标题失败，稍后再试"
+    },
+    "notionDb": {
+      "ok": "格式正确",
+      "parsed": "已识别库 ID：{id}",
+      "useParsed": "使用这个 ID",
+      "invalid": "不像 Notion 库 ID：应为 32 位十六进制（可带连字符），也可以直接粘贴库链接"
+    },
+    "docs": {
+      "injected": "注入的身份文档",
+      "sameSource": "与「设置 → AI → 身份文档」是同一份，改哪边都一样。"
+    },
+    "create": {
+      "hint": "先写清身份和指令再保存，要不要定时之后再说；保存后才有对话。"
+    },
+    "main": {
+      "role": "主 Agent · 全局对话本身"
+    }
+  },
   "common": {
     "cancel": "取消",
     "close": "关闭",
@@ -6953,5 +7085,135 @@
     "savedSearches": "已保存搜索",
     "metaEmail": "邮件",
     "metaMatter": "事项"
+  },
+  "feedback": {
+    "kind": {
+      "problem": "问题",
+      "suggestion": "建议",
+      "question": "咨询"
+    },
+    "freq": {
+      "always": "每次必现",
+      "sometimes": "偶发",
+      "once": "仅出现一次"
+    },
+    "entry": {
+      "send": "发送反馈",
+      "view": "查看反馈"
+    },
+    "dialog": {
+      "title": "发送反馈",
+      "step1Hint": "说清楚遇到了什么，比说「不好用」有用得多。",
+      "step2Hint": "下面就是要发出去的全部内容。不想带的可以现在撤掉。",
+      "doneHint": "收到了。",
+      "kind": "类型",
+      "titleField": "标题",
+      "titlePlaceholder": "一句话说清是什么事",
+      "detail": "详细说明",
+      "detailPlaceholder": "做了什么、看到了什么、期望是什么",
+      "freq": "复现频率",
+      "email": "邮箱（选填）",
+      "emailPlaceholder": "留了才能在有进展时回复你",
+      "attachScreenshot": "附上当前界面截图",
+      "attachDiagnostics": "附上诊断包（生成约 1 分钟）",
+      "autoContext": "会自动带上：{context}",
+      "autoContextTitle": "自动带上的运行环境",
+      "screenshotTitle": "界面截图",
+      "screenshotSkipped": "没有勾选，不会发送。",
+      "screenshotFailed": "这次没截到（不影响提交）。",
+      "diagTitle": "诊断包",
+      "diagBusy": "正在组装…（约 1 分钟）",
+      "diagSkipped": "没有勾选，不会发送。",
+      "diagFailed": "诊断包没能组装出来（{error}），这次不带它提交。",
+      "diagLogs": "运行日志：近 7 天",
+      "diagRedacted": "配置快照：令牌、密钥、邮箱地址已抹掉",
+      "diagExcluded": "不含：邮件正文、附件、通讯录",
+      "remove": "撤掉",
+      "cancel": "取消",
+      "next": "下一步",
+      "back": "返回修改",
+      "send": "发送",
+      "close": "关闭",
+      "receipt": "已提交，编号 {id}。在设置底部的「查看反馈」里能看处理进度。",
+      "receiptEmail": "有进展会发到你留的邮箱。",
+      "notSent": "没发出去：{error}",
+      "openForm": "打开表单页手动提交"
+    }
+  },
+  "team": {
+    "tabs": {
+      "aria": "视图档",
+      "chat": "对话",
+      "record": "执行",
+      "settings": "设置"
+    },
+    "goChat": "去对话",
+    "list": {
+      "builtin": "内置",
+      "custom": "自定义",
+      "working": "工作中",
+      "newAgent": "新建智能体"
+    },
+    "noChat": {
+      "preprocess": "它是跟着收信自动跑的流水线环节，逐封分类新邮件，不接对话——想问某封为什么这么判，在那封邮件里问主助手更直接。下面是最近被分类的邮件。",
+      "projectProgress": "确定性流程，不走 AI——没有可对话的推理面，记录只由触发条件产生。",
+      "search": "它的调用面在 ⌘K 命令面板，无独立执行记录，也不在这里对话。"
+    },
+    "record": {
+      "listTitle": "执行记录",
+      "new": "新对话",
+      "auto": "自动",
+      "expandList": "展开记录列",
+      "collapseList": "收起记录列",
+      "newSessionTitle": "和 {name} 开始新对话",
+      "newSessionHint": "输入框接通后就能直接吩咐它；左列的历史记录现在就能看。",
+      "runUntitled": "一次执行",
+      "noOutput": "这次运行没有产生任何输出。",
+      "noOutputError": "这次运行没有产生输出：{error}",
+      "rawPrompt": {
+        "title": "原始记录（任务契约 prompt）",
+        "copy": "复制"
+      },
+      "trigger": {
+        "badge": "自动触发",
+        "manual": "手动触发",
+        "schedule": "排程触发",
+        "cron": "定时触发（cron）",
+        "email": "收信触发",
+        "calendarChange": "日程变动触发",
+        "calendarBefore": "会前触发",
+        "unknown": "触发方式未记录"
+      },
+      "emptyRuns": "还没有执行记录——它由触发条件叫起来才会跑，手动试运行也会记在这里。",
+      "emptyReports": "还没有报告记录——到点生成或手动生成后会出现在这里。",
+      "emptyProgress": "还没有同步记录——收到命中触发词的周报邮件时才会跑。",
+      "emptyPreprocess": "最近没有被分类的邮件——开启 AI 邮件预处理后，新收的邮件会逐封出现在这里。"
+    },
+    "composer": {
+      "pending": "以它身份对话即将可用（写侧接通后开放）；历史记录可正常查看。"
+    },
+    "detail": {
+      "duration": "用时",
+      "steps": "步数",
+      "tokens": "Token",
+      "error": "错误",
+      "model": "模型",
+      "reviewStatus": "标注状态",
+      "noTranscript": "这类执行不建会话、没有过程 transcript，只有结果摘要。",
+      "tokensInOut": "输入 {input} · 输出 {output}",
+      "report": {
+        "trigger": "触发",
+        "output": "输出",
+        "triggerBody": "按{cadence}排程生成 · {date}",
+        "open": "去报告"
+      },
+      "progress": {
+        "counts": "{total} 个项目 · 新建 {created} · 更新 {updated} · 失败 {failed}",
+        "failNote": "这次整批没有写入。确定性流程不会猜测字段——修正来源表格后重发该邮件即可重跑（同一封重跑会覆盖本条记录）。"
+      }
+    },
+    "preprocess": {
+      "detailHint": "这是收信时自动分类的结果。想追问为什么这么判，在那封邮件里问主助手。"
+    }
   }
 }

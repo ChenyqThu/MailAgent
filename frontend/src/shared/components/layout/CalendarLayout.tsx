@@ -106,8 +106,8 @@ export function CalendarLayout(): React.ReactElement {
   //
   // dogfood 轮 2 收敛: 权威状态迁到 calendar-view store 的**邮箱组排除集** ——
   // 二级栏日历源树的邮箱组和这个下拉动的是同一份数据, 两处不许各存一套选中态.
-  // 这里只做「排除集 ⇄ 选中集」的换算: 三源视图 (月/日/周) 直接读 store, 下拉
-  // 与走老 events 端点的那几处 (AgendaView / j-k 巡航 / 副 statusbar) 收这个投影.
+  // 这里只做「排除集 ⇄ 选中集」的换算: 三源视图 (月/日/周/日程) 直接读 store,
+  // 下拉与走老 events 端点的那几处 (j-k 巡航 / 副 statusbar) 收这个投影.
   const excludedMail = useCalendarView((s) => s.excluded.mail)
   const { data: calendarNames } = useCalendarNames()
   const calendars = useMemo(() => calendarNames ?? [], [calendarNames])
@@ -395,11 +395,7 @@ export function CalendarLayout(): React.ReactElement {
             )}
             {view === 'agenda' && (
               <CalendarErrorBoundary viewName={t('calendar.toolbar.viewAgenda', 'Agenda')}>
-                <AgendaView
-                  selectedCalendars={selectedCalendars}
-                  onSelect={handleSelect}
-                  selectedKey={selectedKey}
-                />
+                <AgendaView onSelect={handleSelect} selectedKey={selectedKey} />
               </CalendarErrorBoundary>
             )}
             {view === 'recurring' && (

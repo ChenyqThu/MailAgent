@@ -176,6 +176,8 @@ describe('状态形态化 data-resp/data-status 挂载 (F3/2.6)', () => {
   })
 
   test('AgendaView 行 — data-resp/data-status + ag-bar/ag-title 结构', () => {
+    // P4d 起日程视图也走 agenda 三源主数据 — 状态同样靠同窗口 events 缓存解析回
+    // occurrence, 解析链断了这两个 attr 就整体消失。
     hookState.data = [
       makeOccurrence({
         response_status: 'TENTATIVE',
@@ -189,6 +191,34 @@ describe('状态形态化 data-resp/data-status 挂载 (F3/2.6)', () => {
         occurrence_start_iso: todayIso(11),
         occurrence_end_iso: todayIso(12)
       })
+    ]
+    agendaState.data = [
+      {
+        id: 'mail:uid-morph-1',
+        source: 'mail',
+        hot: false,
+        title: '状态形态样本',
+        startIso: todayIso(9),
+        endIso: todayIso(10),
+        allDay: false,
+        multiDay: false,
+        eventId: 1,
+        icalUid: 'uid-morph-1',
+        recurrenceId: null
+      },
+      {
+        id: 'mail:uid-morph-2',
+        source: 'mail',
+        hot: false,
+        title: '被取消的会',
+        startIso: todayIso(11),
+        endIso: todayIso(12),
+        allDay: false,
+        multiDay: false,
+        eventId: 2,
+        icalUid: 'uid-morph-1',
+        recurrenceId: null
+      }
     ]
     const { container } = render(<AgendaView onSelect={() => {}} />)
     const rows = container.querySelectorAll('.ag-row')

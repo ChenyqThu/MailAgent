@@ -6,9 +6,9 @@
 // 胶囊, 跨天是横跨列的整条色带; 每格容量 4 − 该周色带条数, 超出「还有 N 项」
 // (溢出弹层沿用旧 .more-pop 交互)。
 //
-// 点击路由随源分流: mail → EventDetailDrawer (occurrence 从同窗口 events 缓存
-// 解析, 未命中兜底合成); matter → 事项详情 (useMatterNavigation + registry);
-// agent → 团队域 (registry 导航函数, 不写路径字面量)。
+// 点击一律开 EventDetailDrawer (P4d 起三源同此, 见 useAgendaEntryClick):
+// mail 从同窗口 events 缓存解析成 occurrence (未命中兜底合成); matter / agent 走
+// 投影槽位, 在抽屉里渲染投影形态, 「去事项」「去 Agent」在抽屉内。
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar as CalendarIcon } from 'lucide-react'

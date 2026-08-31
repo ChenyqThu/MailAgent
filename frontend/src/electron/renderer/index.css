@@ -3771,7 +3771,19 @@ body:not([data-batch-mode='true']) .email-row .cb {
   color: rgb(var(--ink-fg-2));
 }
 .ag-head.is-today .ah-day { color: rgb(var(--c-accent)); }
+/* 连续空日折叠行 — 组头与行之间的过渡语气, 不抢眼但说清「这几天没事」。 */
+.ag-gap {
+  margin: 4px 18px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  border: 1px dashed rgb(var(--ink-border) / 0.7);
+  font-size: 11.5px;
+  color: rgb(var(--ink-fg-3));
+}
 .ag-row {
+  /* P4d — 三源色语言 (月/周视图 .m-evt / .m-band 同族): 行的 --src 由 data-src
+     切换, 左 bar 与来源标都取它。 */
+  --src: var(--cal-src-mail);
   display: grid;
   grid-template-columns: 110px 1fr;
   gap: 12px;
@@ -3784,6 +3796,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
   width: 100%;
   text-align: left;
 }
+.ag-row[data-src='matter'] { --src: var(--cal-src-matter); }
+.ag-row[data-src='agent'] { --src: var(--cal-src-agent); }
+.ag-row[data-src='hot'] { --src: var(--cal-src-hot); }
 .ag-row:hover { background: rgb(var(--ink-3) / 0.55); }
 /* F4/Q13 — 选中锚点: --sel-wash 签名 (对齐邮件列表选中语义); 后置声明压过
  * 同特异性 hover. 跨天事件展开的每个日行同 key 同亮. */
@@ -3797,7 +3812,7 @@ body:not([data-batch-mode='true']) .email-row .cb {
 .ag-bar {
   width: 3px;
   border-radius: 2px;
-  background: rgb(var(--c-accent));
+  background: rgb(var(--src));
   align-self: stretch;
   min-height: 18px;
 }
@@ -3825,18 +3840,16 @@ body:not([data-batch-mode='true']) .email-row .cb {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* F22/S6 — agenda 跨天事件「第 n/m 天」标注 (mono 微标签, accent 轻底) */
-.cal-day-badge {
+/* P4d — 事项 / Agent 条目的来源标 (取行的源色, 微标签) */
+.ag-tag {
   flex-shrink: 0;
-  font-family: ui-monospace, 'SF Mono', monospace;
   font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  color: rgb(var(--c-accent));
-  background: rgb(var(--c-accent) / 0.1);
+  color: rgb(var(--src));
+  background: rgb(var(--src) / 0.14);
   padding: 1px 5px;
   border-radius: 4px;
 }
-/* 阶段2·2.5 — agenda 行尾 Join (常显轻量 accent, 与 .cal-day-badge 同语言;
+/* 阶段2·2.5 — agenda 行尾 Join (常显轻量 accent, 与 .ag-tag 同语言;
  * agenda = 「接下来要开的会」清单, Join 是首要动作故不做 hover-reveal). */
 .ag-join {
   flex-shrink: 0;
@@ -3865,16 +3878,16 @@ body:not([data-batch-mode='true']) .email-row .cb {
 .ag-row[data-resp='TENTATIVE'] .ag-bar {
   background: repeating-linear-gradient(
     135deg,
-    rgb(var(--c-accent)) 0 3px,
-    rgb(var(--c-accent) / 0.25) 3px 6px
+    rgb(var(--src)) 0 3px,
+    rgb(var(--src) / 0.25) 3px 6px
   );
 }
 .ag-row[data-resp='NEEDS-ACTION'] {
-  box-shadow: inset 0 0 0 1px rgb(var(--c-accent) / 0.6);
+  box-shadow: inset 0 0 0 1px rgb(var(--src) / 0.6);
 }
 .ag-row[data-resp='NEEDS-ACTION'] .ag-bar {
   background: transparent;
-  box-shadow: inset 0 0 0 1px rgb(var(--c-accent));
+  box-shadow: inset 0 0 0 1px rgb(var(--src));
 }
 .ag-row[data-resp='DECLINED'] .ag-bar { background: rgb(var(--c-norm)); }
 .ag-row[data-resp='DECLINED'] .ag-time { color: rgb(var(--c-norm)); }
@@ -4588,19 +4601,8 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   font-size: 12.5px;
   color: rgb(var(--ink-fg));
 }
-.chip-av {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 8.5px;
-  font-weight: 700;
-  color: rgb(var(--c-accent-fg));
-  background: rgb(var(--c-accent));
-  flex-shrink: 0;
-}
+/* `.chip-av`（与会者 chip 的实心 accent 圆点）随 08-27 P4d 退役：与会者接通讯录后
+   chip 用 compose 的 `RecipientAvatar`，同一个人在补全下拉与 chip 上是同一个色槽。 */
 .chip-x {
   width: 16px;
   height: 16px;

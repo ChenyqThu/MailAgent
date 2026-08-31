@@ -40,12 +40,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, X } from 'lucide-react'
-import { useQuery } from '@tanstack/react-query'
 
 import { cn } from '@shared/lib/cn'
-import { qk } from '@shared/lib/queryKeys'
-import { useMailApi } from '@shared/hooks/useMailApi'
 import type { ContactSuggestion } from '@shared/api/types'
+import { ContactSuggestAddRow, ContactSuggestRow } from './ContactSuggestRow'
+import { useContactSuggest } from './contact-suggest'
 import { RecipientAvatar } from './recipient-avatar'
 import { RecipientDetailPopover } from './recipient-detail'
 import { useRecipientDirectoryNames } from './useRecipientDirectory'
@@ -64,11 +63,6 @@ interface Props {
   /** Focus the input on mount (new-compose To field). */
   autoFocus?: boolean
 }
-
-// 130ms — snappier than the palette's 250ms search debounce so completion feels
-// keystroke-tight, still coarse enough to skip a query per keypress.
-const SUGGEST_DEBOUNCE_MS = 130
-const SUGGEST_LIMIT = 8
 
 // Fixed org whitelist for internal/external classification (owner decision,
 // 2026-07-15). Overridable per-instance via the `internalDomains` prop.
@@ -108,26 +102,6 @@ function extractEmails(raw: string): string[] {
   return out
 }
 
-function localPart(addr: string): string {
-  return addr.split('@')[0] || addr
-}
-
-/** Wrap the first case-insensitive match of `q` in <mark> (React node, no HTML). */
-function highlightMatch(text: string, q: string): React.ReactNode {
-  if (!q) return text
-  const idx = text.toLowerCase().indexOf(q.toLowerCase())
-  if (idx < 0) return text
-  return (
-    <>
-      {text.slice(0, idx)}
-      <mark className="bg-transparent text-ink-fg font-medium">
-        {text.slice(idx, idx + q.length)}
-      </mark>
-      {text.slice(idx + q.length)}
-    </>
-  )
-}
-
 interface ChipContact {
   email: string
   name: string
@@ -146,9 +120,7 @@ export function RecipientField({
   internalDomains,
   autoFocus
 }: Props): React.ReactElement {
-  const mailApi = useMailApi()
   const [input, setInput] = useState('')
-  const [debounced, setDebounced] = useState('')
   const [focused, setFocused] = useState(false)
   // Esc dismisses the dropdown without clearing the input; reset on next edit.
   const [dismissed, setDismissed] = useState(false)
@@ -171,11 +143,6 @@ export function RecipientField({
   useEffect(() => {
     if (autoFocus) inputRef.current?.focus()
   }, [autoFocus])
-
-  useEffect(() => {
-    const id = window.setTimeout(() => setDebounced(input.trim()), SUGGEST_DEBOUNCE_MS)
-    return (): void => window.clearTimeout(id)
-  }, [input])
 
   const valuesLower = useMemo(() => values.map((v) => v.toLowerCase()), [values])
   const valuesLowerSet = useMemo(() => new Set(valuesLower), [valuesLower])
@@ -226,15 +193,9 @@ export function RecipientField({
     [directoryNames, isExternal, internalDomainSet]
   )
 
-  // React Query owns the fetch (debounce feeds `debounced`); gated on focus so
-  // the dropdown only queries while the user is actively in the field.
-  const suggestQ = useQuery<ContactSuggestion[]>({
-    queryKey: qk.contactSuggest(debounced, exclude),
-    queryFn: () => mailApi.email.contactSuggest(debounced, SUGGEST_LIMIT, exclude),
-    enabled: focused && debounced.length >= 1,
-    staleTime: 30_000
-  })
-  const suggestions = useMemo(() => suggestQ.data ?? [], [suggestQ.data])
+  // debounce + 查询键 + 条数上限归 ./contact-suggest（日历与会者字段同源）；
+  // gated on focus so the dropdown only queries while the user is in the field.
+  const { debounced, suggestions } = useContactSuggest({ query: input, enabled: focused, exclude })
 
   // Learn names as suggestions stream in; upgrade any matching chip's label.
   useEffect(() => {
@@ -302,7 +263,6 @@ export function RecipientField({
       if (c.name) nameCacheRef.current.set(c.email.toLowerCase(), c.name)
       addTokens([c.email])
       setInput('')
-      setDebounced('')
       setHighlightedIndex(0)
       inputRef.current?.focus()
     },
@@ -313,7 +273,6 @@ export function RecipientField({
     if (!canonicalInput) return
     addTokens([canonicalInput])
     setInput('')
-    setDebounced('')
     setHighlightedIndex(0)
     inputRef.current?.focus()
   }, [canonicalInput, addTokens])
@@ -626,96 +585,45 @@ export function RecipientField({
             aria-label={label}
             className="glass-pop absolute top-full left-0 mt-1 z-50 w-[344px] max-w-full max-h-[280px] overflow-y-auto py-1"
           >
-            {suggestions.map((c, idx) => {
-              const external = isExternal(c.email)
-              return (
-                <li
-                  key={c.email}
-                  role="option"
-                  id={`${listboxId}-${c.email}`}
-                  aria-selected={idx === highlightedIndex}
-                >
-                  <button
-                    type="button"
-                    // Keep the input focused so onBlur-commit doesn't fire before
-                    // the click resolves and turn a half-typed address into a chip.
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => selectSuggestion(c)}
-                    onMouseEnter={() => setHighlightedIndex(idx)}
-                    className={cn(
-                      'w-full text-left px-2.5 py-1.5 flex items-center gap-2.5',
-                      'transition-colors duration-fast',
-                      idx === highlightedIndex ? 'bg-ink-3' : 'hover:bg-ink-3'
-                    )}
-                  >
-                    <RecipientAvatar name={c.name ?? ''} email={c.email} size={30} />
-                    {/* 行形态 = 通讯录 PersonPicker：姓名（无名字则 local-part 斜体
-                        降级）· 组织 / 主邮箱两行。名字与邮箱都打命中高亮，因为两
-                        者都可能是用户刚敲的那几个字。 */}
-                    <span className="flex flex-col min-w-0 flex-1">
-                      <span className="flex min-w-0 items-center gap-1.5">
-                        <span
-                          className={cn(
-                            'truncate text-body text-ink-fg',
-                            c.name ? 'font-medium' : 'italic text-ink-fg-1'
-                          )}
-                        >
-                          {highlightMatch(c.name || localPart(c.email), debounced)}
-                        </span>
-                        {c.org && (
-                          <span className="min-w-0 flex-1 truncate text-meta text-ink-fg-2">
-                            {highlightMatch(c.org, debounced)}
-                          </span>
-                        )}
-                        {external && (
-                          <span
-                            title="外部联系人"
-                            style={{
-                              width: 6,
-                              height: 6,
-                              borderRadius: 3,
-                              flexShrink: 0,
-                              background: 'rgb(var(--c-warn))',
-                              boxShadow: '0 0 0 2px rgb(var(--c-warn) / 0.18)'
-                            }}
-                          />
-                        )}
-                      </span>
-                      <span className="text-micro font-mono text-ink-fg-3 truncate">
-                        {highlightMatch(c.email, debounced)}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              )
-            })}
+            {/* 行形态（头像 · 姓名/组织 · 邮箱三段 + 命中高亮）= ./ContactSuggestRow，
+                与日历与会者字段同源。这里只补 compose 独有的「外部联系人」黄点。 */}
+            {suggestions.map((c, idx) => (
+              <ContactSuggestRow
+                key={c.email}
+                contact={c}
+                query={debounced}
+                active={idx === highlightedIndex}
+                optionId={`${listboxId}-${c.email}`}
+                onPick={() => selectSuggestion(c)}
+                onHover={() => setHighlightedIndex(idx)}
+                badge={
+                  isExternal(c.email) ? (
+                    <span
+                      title="外部联系人"
+                      style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: 3,
+                        flexShrink: 0,
+                        background: 'rgb(var(--c-warn))',
+                        boxShadow: '0 0 0 2px rgb(var(--c-warn) / 0.18)'
+                      }}
+                    />
+                  ) : undefined
+                }
+              />
+            ))}
 
             {rawAddVisible && (
-              <li
-                role="option"
-                id={`${listboxId}-rawadd`}
-                aria-selected={highlightedIndex === rawOptionIndex}
-              >
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => pickRawAdd()}
-                  onMouseEnter={() => setHighlightedIndex(rawOptionIndex)}
-                  className={cn(
-                    'w-full text-left px-2.5 py-1.5 flex items-center gap-2.5',
-                    'transition-colors duration-fast',
-                    highlightedIndex === rawOptionIndex ? 'bg-ink-3' : 'hover:bg-ink-3'
-                  )}
-                >
-                  <span className="w-[30px] h-[30px] rounded-full bg-ink-4 grid place-items-center text-ink-fg-2 shrink-0">
-                    <Plus size={15} />
-                  </span>
-                  <span className="flex flex-col min-w-0">
-                    <span className="text-aux text-ink-fg truncate">添加 “{canonicalInput}”</span>
-                    <span className="text-aux text-ink-fg-3 truncate">使用这个邮箱地址</span>
-                  </span>
-                </button>
-              </li>
+              <ContactSuggestAddRow
+                label={`添加 “${canonicalInput}”`}
+                hint="使用这个邮箱地址"
+                active={highlightedIndex === rawOptionIndex}
+                optionId={`${listboxId}-rawadd`}
+                onPick={() => pickRawAdd()}
+                onHover={() => setHighlightedIndex(rawOptionIndex)}
+                icon={<Plus size={15} />}
+              />
             )}
           </ul>
         )}

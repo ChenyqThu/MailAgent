@@ -10,6 +10,15 @@
 //
 // Phase 2.5 §11.2 — 删除流程改 undo toast: 关 drawer + push 到 calendar-undo
 // store, 5s 内点 [撤销] 取消, 否则真发 CalDAV DELETE. 不再 window.confirm.
+//
+// task 08-27 P4d — 三源分形态: 本组件是**共用外壳**, 下面这一整套 (RSVP / 编辑 /
+// 删除撤销 / 关联邮件) 是 mail 源专属; matter / agent 两源在日历上是投影, 走
+// AgendaProjectionDetail (不给编辑与删除). 投影条目走 calendar-agenda-detail store
+// 而不是 occurrence 形状 —— 理由见那个 store 的文件头。
+//
+// 🔴 两源同时有值时**投影优先**, 且投影形态渲染时 mail 的那些 mutation hook 仍然挂着
+// (整段在同一个组件里, 只换渲染分支) —— F5 说的「Layout 单挂 drawer 让 deleteMut 不随
+// 切换卸载」这条不变。
 
 import {
   Check,
@@ -26,7 +35,7 @@ import {
   Video,
   X
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
@@ -56,6 +65,9 @@ import { narrowCalendarSource } from '@shared/lib/calendarSource'
 import { Drawer } from '@shared/components/ui/drawer'
 import { qk } from '@shared/lib/queryKeys'
 import { pad } from './lib/format'
+import { AgendaProjectionDetail } from './detail/AgendaProjectionDetail'
+import { MetaRow } from './detail/MetaRow'
+import { useAgendaDetail } from '@shared/state/calendar-agenda-detail'
 import { useUndoToastStore } from '@shared/state/calendar-undo'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
@@ -154,30 +166,11 @@ function AttRow({
   )
 }
 
-interface MetaRowProps {
-  icon?: React.ReactNode
-  label: string
-  children: React.ReactNode
-}
-function MetaRow({ icon, label, children }: MetaRowProps): React.ReactElement {
-  return (
-    <div className="meta-row">
-      <div className="meta-k">
-        {icon && (
-          <span className="text-ink-fg-3" aria-hidden>
-            {icon}
-          </span>
-        )}
-        {label}
-      </div>
-      <div className="meta-v">{children}</div>
-    </div>
-  )
-}
-
 export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): React.ReactElement {
   const { t } = useTranslation()
-  const open = occurrence !== null
+  // P4d — 投影条目 (matter / agent)。与 occurrence 是两个槽位, 同时有值时投影在前。
+  const projection = useAgendaDetail((s) => s.entry)
+  const open = occurrence !== null || projection !== null
   const opts = occurrence
     ? {
         icalUid: occurrence.ical_uid,
@@ -211,7 +204,9 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
   const { data: sourceEmail, isLoading: sourceEmailLoading } = useQuery({
     queryKey: qk.calendar.sourceEmail(occurrence?.ical_uid),
     queryFn: () => mailApi.calendar.eventSourceEmail(occurrence!.ical_uid),
-    enabled: open,
+    // P4d — 门控从 `open` 收窄到「有 occurrence」: 投影形态也让抽屉 open, 但它没有
+    // ical_uid, 沿用 open 会让 queryFn 拿着 undefined 发一次必失败的反查。
+    enabled: occurrence !== null,
     staleTime: 60_000
   })
 
@@ -336,15 +331,38 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
   const myResp = (occurrence?.response_status || '').toUpperCase()
   const isNeedsAction = myResp === 'NEEDS-ACTION'
 
+  // P4d — 关闭恒清两个槽位: 投影是 store 态, 只调 onClose (Layout 的 setActive(null))
+  // 会把它留在那儿, 下次开抽屉还是上一条投影。
+  const closeAll = (): void => {
+    useAgendaDetail.getState().close()
+    onClose()
+  }
+
+  // j/k 巡航的 Enter (CalendarLayout.handleOpenSelected) 与时间轴上的 EventBlock 都直接
+  // 走 onSelect, 绕开点击分流 —— 投影还开着时它会一直压在邮件详情上面。occurrence **换了**
+  // 就让位。
+  //
+  // 🔴 判据是「换了」不是「非空」: 挂载时两边都可能已有值 (先点了一封会再点事项截止, 或
+  // 抽屉重挂时 active 还是旧的), 按非空清会把刚打开的投影当场关掉。
+  const occKey = occurrence ? `${occurrence.ical_uid}|${occurrence.occurrence_start_iso}` : null
+  const prevOccKey = useRef(occKey)
+  useEffect(() => {
+    if (occKey !== null && occKey !== prevOccKey.current) useAgendaDetail.getState().close()
+    prevOccKey.current = occKey
+  }, [occKey])
+
   return (
     <>
       <Drawer
         open={open}
-        onOpenChange={(nextOpen) => !nextOpen && onClose()}
-        ariaLabel={occurrence?.summary || t('calendar.drawer.ariaFallback', '事件详情')}
+        onOpenChange={(nextOpen) => !nextOpen && closeAll()}
+        ariaLabel={
+          projection?.title || occurrence?.summary || t('calendar.drawer.ariaFallback', '事件详情')
+        }
         width={420}
       >
-        {occurrence && (
+        {projection && <AgendaProjectionDetail entry={projection} onClose={closeAll} />}
+        {!projection && occurrence && (
           <>
             <div className="dw-head">
               <span className="dw-accent" aria-hidden />

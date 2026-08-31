@@ -1,68 +1,73 @@
-// 视觉复刻 mockup-calendar.html §agenda (2026-05-23) —
-// 按日期 group, 每 group sticky ah-head, 行 grid 110px/1fr (time / main).
-// Toolbar 已接管 "N 个日程 + 刷新", 这里专注内容呈现.
+// task 08-27 P4d —— 日程视图接三源 (月/周/日之后补上的最后一个视图)。
 //
-// F22/S6 — 跨天事件按 overlap 展开: 与该日窗口重叠的每一天都出一行, 标
-// 「第 n/m 天」; 时间列显示当日实际覆盖段 (首日=开始时间→, 中间日=全天,
-// 末日=→结束时间).
+// 之前它只读 mail 源, 切到「日程」事项截止与 agent 排程整体消失; 现在与
+// 月/周/日同一份数据 (useCalendarAgenda) 同一套源色 (data-src → --src),
+// 组级开关与成员排除集经 hook select 生效, 切勾选不重发请求。
+//
+// 形态: 按日成组 (组头 sticky) + 行 grid 110px/1fr (time / main)。跨天条目按
+// overlap 展开到覆盖的每一天, 时间列显当日实际覆盖段 (首日 `10:00 →` / 中间
+// 「全天」/ 末日 `→ 16:00`); 连续空日折叠成一行。分组与排序在 lib/agendaList。
+//
+// 点击分流复用 useAgendaEntryClick, 三源都开 EventDetailDrawer: mail → 同窗口
+// events 缓存解析回 occurrence 上抛给 Layout (状态形态化 attr / 地点 / Join 也取自
+// 这条解析链); matter / agent → 投影槽位, 抽屉里渲染投影形态并在那儿给「去源头」。
 
 import { useRef } from 'react'
 import { Calendar as CalendarIcon, Video } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 
-import {
-  useCalendarEventsInWindow,
-  expandOccurrencesByLocalDayOverlap,
-  todayStartLocal,
-  addDays,
-  type AgendaDayEntry
-} from '../hooks/useCalendarEvents'
-import type { CalendarEventOccurrence } from '@shared/api/types'
+import { addDays, todayStartLocal, useCalendarEventsInWindow } from '../hooks/useCalendarEvents'
+import { useAgendaEntryClick } from '../hooks/useAgendaEntryClick'
+import { useCalendarAgenda } from '../hooks/useCalendarAgenda'
+import type { AgendaEntry, CalendarEventOccurrence } from '@shared/api/types'
 import { CalendarQueryError } from '../CalendarQueryError'
 import { extractMeetingLink, MEETING_PROVIDER_LABEL, openMeetingLink } from '../lib/meeting-link'
-import { shortTime, ymd } from '../lib/format'
+import { agendaSrc, resolveMailOccurrence } from '../lib/agendaLayout'
+import { buildAgendaSections, type AgendaRow } from '../lib/agendaList'
+import { shortTime } from '../lib/format'
+import { isAgendaEntrySelected } from '../lib/monthGrid'
 import { weekdayLong } from '../lib/weekdays'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { SkeletonRow } from '@shared/components/feedback/LoadingSkeleton'
 import { cn } from '@shared/lib/cn'
 import { DUR, gsap, useGSAP } from '@shared/lib/gsap'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
+import { useCalendarView } from '@shared/state/calendar-view'
 
 interface Props {
   rangeDays?: number // default 14 天
-  calendarName?: string
-  /** Phase 4·#1 — 多 calendar 多选 (client-side filter). 空 = 全部. */
-  selectedCalendars?: string[]
-  /** F5 — view 上提选中事件给 CalendarLayout. */
+  /** F5 — view 上提选中事件给 CalendarLayout (仅 mail 源)。 */
   onSelect: (occ: CalendarEventOccurrence) => void
   /** F4/Q13 — selected event key (= ``${id}-${occurrence_start_iso}``) 由
-   *  Layout 传, 行比对高亮 drawer 当前 occurrence (跨天事件的每个日行同亮). */
+   *  Layout 传, 行比对高亮 drawer 当前 occurrence (跨天条目的每个日行同亮). */
   selectedKey?: string | null
 }
 
-// F32 — pad/ymd/shortTime 抽到 ../lib/format
-
-interface HeaderLabels {
-  ahDay: string
-  ahDate: string
-  isToday: boolean
+function mdLabel(d: Date): string {
+  return `${d.getMonth() + 1}/${d.getDate()}`
 }
 
-// F26 (阶段1·1.7) — 硬编码中文 t() 化; 周几走 weekdayLong 单源 (lib/weekdays).
-function headerLabels(t: TFunction, key: string): HeaderLabels {
-  const [y, m, d] = key.split('-').map(Number)
-  const target = new Date(y, m - 1, d)
-  const today = todayStartLocal()
-  const tomorrow = addDays(today, 1)
-  const tKey = ymd(today)
-  const tomKey = ymd(tomorrow)
-  const wd = weekdayLong(t, target.getDay())
-  const ahDate = `${m}/${d} ${wd}`
-  if (key === tKey) return { ahDay: t('calendar.view.agenda.today', '今天'), ahDate, isToday: true }
-  if (key === tomKey)
+/** 组头: 今天 / 明天 / 周几 + M/D。 */
+function headerLabels(
+  t: TFunction,
+  date: Date,
+  today: Date
+): { ahDay: string; ahDate: string; isToday: boolean } {
+  const offset = Math.round((date.getTime() - today.getTime()) / 86_400_000)
+  const ahDate = mdLabel(date)
+  if (offset === 0) return { ahDay: t('calendar.view.agenda.today', '今天'), ahDate, isToday: true }
+  if (offset === 1)
     return { ahDay: t('calendar.view.agenda.tomorrow', '明天'), ahDate, isToday: false }
-  return { ahDay: t('calendar.view.agenda.dayNum', '{d}日', { d }), ahDate, isToday: false }
+  return { ahDay: weekdayLong(t, date.getDay()), ahDate, isToday: false }
+}
+
+/** 事项 / Agent 条目的来源标 —— 一眼认出它不是普通会议。mail 源不挂 (整屏
+ *  多数是邮箱日程, 每行都标反而是噪音, 源色已经区分)。 */
+function sourceTag(t: TFunction, entry: AgendaEntry): string | null {
+  if (entry.source === 'matter') return t('calendar.view.agenda.tagMatter', '事项')
+  if (entry.source === 'agent') return t('calendar.view.agenda.tagAgent', 'Agent')
+  return null
 }
 
 function hasMeetingLink(occ: CalendarEventOccurrence): boolean {
@@ -73,22 +78,26 @@ function hasMeetingLink(occ: CalendarEventOccurrence): boolean {
 
 export function AgendaView({
   rangeDays = 14,
-  calendarName,
-  selectedCalendars,
   onSelect,
   selectedKey = null
 }: Props): React.ReactElement {
   const { t } = useTranslation()
+  const sources = useCalendarView((s) => s.sources)
+  const excluded = useCalendarView((s) => s.excluded)
   const start = todayStartLocal()
-  const end = addDays(start, rangeDays)
-  const { data, isLoading, isError, refetch } = useCalendarEventsInWindow(
-    {
-      fromIso: start.toISOString(),
-      toIso: end.toISOString(),
-      calendarName
-    },
-    selectedCalendars
+  const fromIso = start.toISOString()
+  const toIso = addDays(start, rangeDays).toISOString()
+
+  const { data, isLoading, isError, refetch } = useCalendarAgenda(
+    { fromIso, toIso },
+    sources,
+    true,
+    excluded
   )
+  // mail 条目解析用的同窗口 occurrences — 与 Layout j/k 巡航同 queryKey,
+  // react-query 缓存命中, 零额外 IPC。
+  const { data: windowEvents } = useCalendarEventsInWindow({ fromIso, toIso })
+  const handleEntryClick = useAgendaEntryClick(onSelect, windowEvents)
 
   // 议程条目挂载/数据变化时逐条 autoAlpha 淡入 (克制 stagger)。stagger 总跨度封顶
   // 0.2s (amount), 条目再多总时长也 ≤ DUR.base+0.2 ≈ DUR.slow 量级。
@@ -110,6 +119,9 @@ export function AgendaView({
     { dependencies: [data, reduce], scope: agendaRef }
   )
 
+  const allDayLabel = t('calendar.shared.allDay', '全天')
+  const untitled = t('calendar.shared.untitled', '未命名事件')
+
   if (isLoading) {
     return (
       <div className="cal-agenda">
@@ -122,9 +134,10 @@ export function AgendaView({
     )
   }
 
+  const entries = data ?? []
   // F21 — query reject 不再伪装成空态; 仅在无可显示数据时换错误屏
   // (keepPreviousData 下后台 refetch 偶发失败, 已在屏的旧数据继续留屏).
-  if (isError && (!data || data.length === 0)) {
+  if (isError && entries.length === 0) {
     return (
       <div className="cal-agenda">
         <CalendarQueryError onRetry={refetch} />
@@ -132,7 +145,7 @@ export function AgendaView({
     )
   }
 
-  if (!data || data.length === 0) {
+  if (entries.length === 0) {
     return (
       <div className="cal-agenda">
         <EmptyState
@@ -144,90 +157,90 @@ export function AgendaView({
     )
   }
 
-  // F22/S6 — overlap 展开可能产出窗口外的 key (跨天事件起于窗口前/止于窗口
-  // 后), 按 [start, end) 过滤; YYYY-MM-DD 字符串序即日期序.
-  const grouped = expandOccurrencesByLocalDayOverlap(data)
-  const startKey = ymd(start)
-  const endKey = ymd(end)
-  const sortedKeys = Array.from(grouped.keys())
-    .filter((k) => k >= startKey && k < endKey)
-    .sort()
+  const sections = buildAgendaSections(entries, start, rangeDays)
+  const occs = windowEvents ?? []
 
-  /** 时间列 — 当日实际覆盖段: all-day 恒「全天」; 跨天 timed 首日显开始
-   *  (14:00 →), 中间日全天, 末日显结束 (→ 16:00); 单日 timed 显起止. */
-  function timeLabel(entry: AgendaDayEntry): string {
-    const { occ, dayIndex, totalDays } = entry
-    const allDayLabel = t('calendar.shared.allDay', '全天')
-    if (occ.is_all_day) return allDayLabel
-    if (totalDays === 1)
-      return `${shortTime(occ.occurrence_start_iso)} – ${shortTime(occ.occurrence_end_iso)}`
-    if (dayIndex === 1) return `${shortTime(occ.occurrence_start_iso)} →`
-    if (dayIndex === totalDays) return `→ ${shortTime(occ.occurrence_end_iso)}`
-    return allDayLabel
+  /** 时间列 — 当日实际覆盖段: 全天恒「全天」; 跨天首日显开始 (14:00 →),
+   *  中间日全天, 末日显结束 (→ 16:00); 单日显起止; 时间点 (matter 截止 /
+   *  agent 排程) 只显时刻, 不撑出假的结束时间。 */
+  function timeLabel(row: AgendaRow): string {
+    const { entry } = row
+    if (entry.allDay) return allDayLabel
+    if (row.spansDays) {
+      if (row.isFirstDay) return `${shortTime(entry.startIso)} →`
+      if (row.isLastDay && entry.endIso) return `→ ${shortTime(entry.endIso)}`
+      return allDayLabel
+    }
+    if (entry.endIso) return `${shortTime(entry.startIso)} – ${shortTime(entry.endIso)}`
+    return shortTime(entry.startIso)
   }
 
   return (
     <div ref={agendaRef} className="cal-agenda scrollbar-thin">
-      {sortedKeys.map((key) => {
-        const lbl = headerLabels(t, key)
-        const items = (grouped.get(key) ?? []).slice().sort((a, b) => {
-          if (a.occ.is_all_day !== b.occ.is_all_day) return a.occ.is_all_day ? -1 : 1
-          // 当日覆盖段起点排序 — 跨午夜 continuation (00:00 起) 排当日最前.
-          return a.segStartMs - b.segStartMs
-        })
+      {sections.map((section) => {
+        if (section.kind === 'gap') {
+          return (
+            <div key={section.key} className="ag-gap">
+              {section.days === 1
+                ? t('calendar.view.agenda.gapDay', '{d} 无日程', { d: mdLabel(section.from) })
+                : t('calendar.view.agenda.gapRange', '{from} – {to} 无日程', {
+                    from: mdLabel(section.from),
+                    to: mdLabel(section.to)
+                  })}
+            </div>
+          )
+        }
+        const lbl = headerLabels(t, section.date, start)
         return (
-          <section key={key} className="ag-group">
+          <section key={section.key} className="ag-group">
             <div className={cn('ag-head', lbl.isToday && 'is-today')}>
               <span className="ah-day">{lbl.ahDay}</span>
               <span className="ah-date">{lbl.ahDate}</span>
             </div>
-            {items.map((entry) => {
-              const occ = entry.occ
-              const timeTxt = timeLabel(entry)
-              const meeting = hasMeetingLink(occ)
-              // 阶段2·2.5 — 行尾 Join (有可识别链接的行才出).
-              const joinLink = extractMeetingLink({ url: occ.url, location: occ.location })
+            {section.rows.map((row) => {
+              const entry = row.entry
+              // 状态形态化 / 地点 / Join 都只对邮箱日程成立 —— 它们是 occurrence
+              // 上的字段, AgendaEntry 不带, 靠同窗口缓存解析回来。
+              const occ = entry.source === 'mail' ? resolveMailOccurrence(entry, occs) : null
+              const joinLink = occ
+                ? extractMeetingLink({ url: occ.url, location: occ.location })
+                : null
               const showLoc =
-                occ.location && !occ.location.toLowerCase().includes('teams.microsoft.com')
-              const untitled = t('calendar.shared.untitled', '未命名事件')
-              const multiDay = entry.totalDays > 1
+                occ?.location && !occ.location.toLowerCase().includes('teams.microsoft.com')
+              const tag = sourceTag(t, entry)
               return (
                 // 2.5 — 行根从 <button> 改 <div role="button"> (EmailRow 同款):
                 // 行尾 Join 是真 <button>, 嵌套 button 非法.
                 <div
-                  key={`${occ.id}-${occ.occurrence_start_iso}`}
+                  key={`${entry.id}-${section.key}`}
                   role="button"
                   tabIndex={0}
                   className={cn(
                     'ag-row',
-                    selectedKey === `${occ.id}-${occ.occurrence_start_iso}` && 'is-selected'
+                    isAgendaEntrySelected(entry, selectedKey) && 'is-selected'
                   )}
-                  data-resp={(occ.response_status || '').toUpperCase()}
-                  data-status={(occ.status || '').toUpperCase()}
-                  onClick={() => onSelect(occ)}
+                  data-src={agendaSrc(entry)}
+                  data-resp={(occ?.response_status || '').toUpperCase() || undefined}
+                  data-status={(occ?.status || '').toUpperCase() || undefined}
+                  onClick={() => handleEntryClick(entry)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault()
-                      onSelect(occ)
+                      handleEntryClick(entry)
                     }
                   }}
-                  title={occ.summary || untitled}
+                  title={entry.title || untitled}
                 >
-                  <div className="ag-time">{timeTxt}</div>
+                  <div className="ag-time">{timeLabel(row)}</div>
                   <div className="ag-main">
                     <span className="ag-bar" aria-hidden />
-                    <span className={cn('ag-title', !occ.summary && 'empty-field')}>
-                      {occ.summary || untitled}
+                    <span className={cn('ag-title', !entry.title && 'empty-field')}>
+                      {entry.title || untitled}
                     </span>
-                    {multiDay && (
-                      <span className="cal-day-badge">
-                        {t('calendar.view.agenda.dayOfSpan', '第 {n}/{m} 天', {
-                          n: entry.dayIndex,
-                          m: entry.totalDays
-                        })}
-                      </span>
+                    {tag && <span className="ag-tag">{tag}</span>}
+                    {occ && hasMeetingLink(occ) && (
+                      <Video className="teams-i" size={11} strokeWidth={2} aria-hidden />
                     )}
-                    {meeting && <Video className="teams-i" size={11} strokeWidth={2} aria-hidden />}
                     {showLoc && <span className="ag-loc">{occ.location}</span>}
                     {joinLink && (
                       <button

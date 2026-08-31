@@ -1124,7 +1124,8 @@
       "contact_set_manager": "Set contact manager",
       "notion_agent_chat": "Ask the Notion agent",
       "plan_update": "Update plan",
-      "suggest_followups": "Suggesting follow-ups"
+      "suggest_followups": "Suggesting follow-ups",
+      "submit_feedback": "Submit product feedback"
     },
     "planCard": {
       "title": "Plan",
@@ -1767,7 +1768,24 @@
       "decidedOk": "Authorized · callback received, executing",
       "decidedNo": "Rejected · no changes made to your mailbox"
     },
-    "truncated": "Earlier {n, plural, =1 {1 message} other {# messages}} truncated"
+    "truncated": "Earlier {n, plural, =1 {1 message} other {# messages}} truncated",
+    "feedbackApprovalCard": {
+      "cardTitle": "Submit product feedback",
+      "kind": "Category",
+      "title": "Title",
+      "detail": "Details",
+      "freq": "Reproduction",
+      "email": "Contact email",
+      "attachments": "Attachments",
+      "attachDiagnostics": "Diagnostics bundle (7 days of redacted logs)",
+      "attachNone": "None (I cannot take a screenshot)",
+      "viaAgentNote": "This will be filed as “submitted by the main agent on your behalf”. It leaves this machine, so it asks every time.",
+      "edit": "Edit it",
+      "editDone": "Done editing",
+      "approve": "Send",
+      "sent": "Submitted. Track it via “View feedback” at the bottom of Settings.",
+      "failed": "It was NOT sent. Send it again from Settings, or open the form page and submit manually."
+    }
   },
   "admin": {
     "title": "Admin",
@@ -2044,6 +2062,42 @@
       "short": "Join",
       "title": "Join meeting — opens in {p}"
     },
+    "detail": {
+      "matterRole": "Matter projection",
+      "agentRole": "Agent schedule",
+      "dueTime": "Due",
+      "plannedTime": "Planned for",
+      "matter": "Matter",
+      "item": "Action item",
+      "nextStep": "Next step",
+      "owner": "Owner",
+      "ownerUnset": "Not assigned",
+      "blockers": "Blockers",
+      "blockersNone": "None",
+      "recentProgress": "Latest progress",
+      "progressNone": "No progress yet",
+      "loadFailedLabel": "Matter detail",
+      "loadFailed": "Could not load this matter",
+      "retry": "Retry",
+      "goMatter": "Open matter",
+      "goMatterTitle": "Open this matter in the Matters domain",
+      "matterNote": "This is a projection of a matter — change the date or content in the matter itself",
+      "whatRuns": "What it will run",
+      "triggerRules": "Trigger",
+      "triggerDisabled": "disabled",
+      "lastRun": "Last run",
+      "agentMissing": "Could not load this agent's config",
+      "goAgent": "Open agent",
+      "goAgentTitle": "Open this agent in the Team domain",
+      "agentNote": "This is a projection of a schedule — change the time in the agent's settings",
+      "reportStatus": {
+        "generating": "Generating",
+        "ready": "Ready",
+        "empty": "Nothing to report",
+        "failed": "Failed",
+        "skipped": "Skipped"
+      }
+    },
     "drawer": {
       "closeTitle": "Close (Esc)",
       "noRelatedEmail": "No related email",
@@ -2121,7 +2175,7 @@
       "allDayToggle": "All day",
       "labelCalendar": "Calendar",
       "calendarDefault": "Default calendar",
-      "calendarEditLocked": "Moving events across calendars isn't supported yet",
+      "calendarEditLocked": "Switching calendars means deleting and re-creating: the event gets a new identity and attendee replies are lost. Create a new event instead.",
       "labelLocation": "Location",
       "placeholderLocation": "Room / Teams link / Address",
       "labelDescription": "Description",
@@ -2130,11 +2184,8 @@
       "repeat": {
         "label": "Repeat",
         "freqNone": "Does not repeat",
-        "freqDaily": "Daily",
-        "freqWeekly": "Weekly",
-        "freqMonthly": "Monthly",
-        "freqYearly": "Yearly",
         "everyPrefix": "Every",
+        "onDaysPrefix": "on",
         "unitDay": "day(s)",
         "unitWeek": "week(s)",
         "unitMonth": "month(s)",
@@ -2155,7 +2206,16 @@
         "bydayAria": "Weekly repeat days",
         "endAria": "End condition",
         "countAria": "Repeat count",
-        "untilAria": "End date"
+        "untilAria": "End date",
+        "summary": {
+          "everyUnit": "Every {unit}",
+          "everyNUnit": "Every {n} {unit}",
+          "daysJoin": ", ",
+          "withDays": "{base} on {days}",
+          "withDaysN": "{base} on {days}",
+          "endCount": "{base}, {n} times",
+          "endUntil": "{base}, until {date}"
+        }
       },
       "recurrenceScope": {
         "title": "Recurring event",
@@ -2166,9 +2226,12 @@
       },
       "attendees": {
         "label": "Attendees",
-        "placeholder": "Type email and press Enter",
+        "placeholder": "Search a name or email, Enter to add",
         "hint": "Enter to add · ⌫ remove last · click × to remove",
-        "removeChip": "Remove {email}"
+        "removeChip": "Remove {email}",
+        "addRaw": "Add “{email}”",
+        "addRawHint": "Not in the directory — use this address",
+        "suggestAria": "Attendee suggestions"
       },
       "actions": {
         "cancel": "Cancel",
@@ -2221,10 +2284,12 @@
         "popDayLabel": "{m}/{d}"
       },
       "agenda": {
-        "dayOfSpan": "Day {n}/{m}",
         "today": "Today",
         "tomorrow": "Tomorrow",
-        "dayNum": "{d}"
+        "tagMatter": "Matter",
+        "tagAgent": "Agent",
+        "gapDay": "Nothing on {d}",
+        "gapRange": "Nothing from {from} to {to}"
       }
     },
     "shortcut": {
@@ -2942,7 +3007,11 @@
           "busy": "Exporting… (~1 min)"
         },
         "saved": "Diagnostics bundle saved",
-        "failed": "Failed to export diagnostics bundle"
+        "failed": "Failed to export diagnostics bundle",
+        "attachToFeedback": {
+          "label": "Attach the diagnostics bundle when sending feedback",
+          "helper": "Controls the default state of that checkbox in the feedback dialog. Same bundle as the export above."
+        }
       }
     },
     "save": "Save",
@@ -4978,6 +5047,69 @@
       }
     }
   },
+  "agentSettings": {
+    "section": {
+      "identity": "Identity",
+      "instructions": "Instructions",
+      "model": "Model",
+      "when": "When it runs",
+      "capabilities": "What it can touch",
+      "specific": "Its own settings",
+      "danger": "Delete it"
+    },
+    "readonly": "Read-only",
+    "builtinToolsNote": "Its tools are hard-wired — nothing can be removed or added.",
+    "notFound": "No configuration found for this member.",
+    "loading": "Loading configuration…",
+    "saveDone": "Saved",
+    "header": {
+      "tryRun": "Run once now"
+    },
+    "role": {
+      "builtin": "Built-in member",
+      "custom": "Custom member"
+    },
+    "model": {
+      "primary": "Primary",
+      "fallback": "Fallback on failure",
+      "note": "The fallback model is only tried when the primary call fails (timeout, rate limit, or error)."
+    },
+    "when": {
+      "manual": "On demand · runs when you ask",
+      "timed": "On a schedule",
+      "event": "On an event",
+      "eventKindLabel": "Trigger event",
+      "dailySentence": "Runs every day at {time}",
+      "dailyHourLabel": "Daily run hour",
+      "dailyHourOnly": "This member runs one batch per day and only supports whole-hour times."
+    },
+    "regex": {
+      "ok": "Regex compiles",
+      "invalid": "Regex does not compile: {message}",
+      "jsNote": "Validated with browser regex syntax; a few Python-only constructs (e.g. named groups) may be flagged incorrectly.",
+      "tryLabel": "Try it on the last 5 subjects",
+      "matched": "match",
+      "missed": "no match",
+      "empty": "No inbox subjects found",
+      "loadFailed": "Failed to fetch subjects, try again later"
+    },
+    "notionDb": {
+      "ok": "Looks valid",
+      "parsed": "Detected database ID: {id}",
+      "useParsed": "Use this ID",
+      "invalid": "Doesn't look like a Notion database ID: expected 32 hex characters (dashes allowed), or paste the database link"
+    },
+    "docs": {
+      "injected": "Injected identity documents",
+      "sameSource": "The same documents as Settings → AI → Identity documents — editing either place edits the same data."
+    },
+    "create": {
+      "hint": "Write its identity and instructions first, then save; scheduling can come later. Chat becomes available after saving."
+    },
+    "main": {
+      "role": "Main agent · the global conversation itself"
+    }
+  },
   "common": {
     "cancel": "Cancel",
     "close": "Close",
@@ -6953,5 +7085,135 @@
     "savedSearches": "Saved searches",
     "metaEmail": "Email",
     "metaMatter": "Matter"
+  },
+  "feedback": {
+    "kind": {
+      "problem": "Issue",
+      "suggestion": "Suggestion",
+      "question": "Question"
+    },
+    "freq": {
+      "always": "Every time",
+      "sometimes": "Sometimes",
+      "once": "Once only"
+    },
+    "entry": {
+      "send": "Send feedback",
+      "view": "View feedback"
+    },
+    "dialog": {
+      "title": "Send feedback",
+      "step1Hint": "Concrete detail helps far more than “it does not work”.",
+      "step2Hint": "This is everything that will be sent. Drop anything you would rather keep.",
+      "doneHint": "Received.",
+      "kind": "Category",
+      "titleField": "Title",
+      "titlePlaceholder": "One line: what happened",
+      "detail": "Details",
+      "detailPlaceholder": "What you did, what you saw, what you expected",
+      "freq": "Reproduction",
+      "email": "Email (optional)",
+      "emailPlaceholder": "Leave it and we can reply when there is progress",
+      "attachScreenshot": "Attach a screenshot of the current view",
+      "attachDiagnostics": "Attach the diagnostics bundle (~1 min to build)",
+      "autoContext": "Sent automatically: {context}",
+      "autoContextTitle": "Runtime context sent automatically",
+      "screenshotTitle": "Screenshot",
+      "screenshotSkipped": "Not selected — it will not be sent.",
+      "screenshotFailed": "Could not capture one this time (submission still works).",
+      "diagTitle": "Diagnostics bundle",
+      "diagBusy": "Building… (~1 min)",
+      "diagSkipped": "Not selected — it will not be sent.",
+      "diagFailed": "The diagnostics bundle could not be built ({error}); submitting without it.",
+      "diagLogs": "Runtime logs: last 7 days",
+      "diagRedacted": "Config snapshot: tokens, secrets and email addresses redacted",
+      "diagExcluded": "Excluded: email bodies, attachments, contacts",
+      "remove": "Drop it",
+      "cancel": "Cancel",
+      "next": "Next",
+      "back": "Back",
+      "send": "Send",
+      "close": "Close",
+      "receipt": "Submitted, reference {id}. Track it via “View feedback” at the bottom of Settings.",
+      "receiptEmail": "We will write to the email you left when there is progress.",
+      "notSent": "It was NOT sent: {error}",
+      "openForm": "Open the form page and submit manually"
+    }
+  },
+  "team": {
+    "tabs": {
+      "aria": "View",
+      "chat": "Chat",
+      "record": "Runs",
+      "settings": "Settings"
+    },
+    "goChat": "Open chat",
+    "list": {
+      "builtin": "Built-in",
+      "custom": "Custom",
+      "working": "Working",
+      "newAgent": "New agent"
+    },
+    "noChat": {
+      "preprocess": "It is a pipeline stage that runs automatically on incoming mail, classifying each message — it does not chat. To ask why a message was judged that way, ask the main assistant on that email. Below are the recently classified messages.",
+      "projectProgress": "Deterministic flow, no AI involved — there is no reasoning surface to chat with; records only come from its trigger.",
+      "search": "Its calling surface is the ⌘K command palette; it keeps no run history and does not chat here."
+    },
+    "record": {
+      "listTitle": "Run history",
+      "new": "New chat",
+      "auto": "auto",
+      "expandList": "Expand record list",
+      "collapseList": "Collapse record list",
+      "newSessionTitle": "Start a new chat with {name}",
+      "newSessionHint": "The composer opens once the write path lands; history on the left is readable now.",
+      "runUntitled": "Run",
+      "noOutput": "This run produced no output.",
+      "noOutputError": "This run produced no output: {error}",
+      "rawPrompt": {
+        "title": "Raw record (task contract prompt)",
+        "copy": "Copy"
+      },
+      "trigger": {
+        "badge": "Auto-triggered",
+        "manual": "Manual run",
+        "schedule": "Scheduled",
+        "cron": "Scheduled (cron)",
+        "email": "Triggered by incoming mail",
+        "calendarChange": "Triggered by a calendar change",
+        "calendarBefore": "Triggered before a meeting",
+        "unknown": "Trigger not recorded"
+      },
+      "emptyRuns": "No runs yet — it only runs when its trigger fires; manual test runs land here too.",
+      "emptyReports": "No reports yet — scheduled or manual generations will show up here.",
+      "emptyProgress": "No sync records yet — it runs when a weekly-report email matching the trigger words arrives.",
+      "emptyPreprocess": "No recently classified mail — with AI preprocessing enabled, new mail shows up here message by message."
+    },
+    "composer": {
+      "pending": "Chatting as this agent is coming soon (pending the write path); history stays readable."
+    },
+    "detail": {
+      "duration": "Duration",
+      "steps": "Steps",
+      "tokens": "Tokens",
+      "error": "Error",
+      "model": "Model",
+      "reviewStatus": "Review status",
+      "noTranscript": "This kind of run creates no session and keeps no transcript — only the result summary.",
+      "tokensInOut": "in {input} · out {output}",
+      "report": {
+        "trigger": "Trigger",
+        "output": "Output",
+        "triggerBody": "Generated on the {cadence} schedule · {date}",
+        "open": "Open report"
+      },
+      "progress": {
+        "counts": "{total} projects · {created} created · {updated} updated · {failed} failed",
+        "failNote": "Nothing was written this time. A deterministic flow never guesses fields — fix the source sheet and resend the email to rerun (a rerun of the same email overwrites this record)."
+      }
+    },
+    "preprocess": {
+      "detailHint": "This is the automatic classification result from mail intake. To dig into why, ask the main assistant on that email."
+    }
   }
 }

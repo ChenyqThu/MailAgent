@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render } from '@testing-library/react'
 
-import type { CalendarEventOccurrence } from '../../src/shared/api/types'
+import type { AgendaEntry, CalendarEventOccurrence } from '../../src/shared/api/types'
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -34,10 +34,11 @@ vi.mock('@shared/hooks/useReducedMotion', () => ({
   useReducedMotion: () => true
 }))
 
-const { hookState } = vi.hoisted(() => ({
+const { hookState, agendaState } = vi.hoisted(() => ({
   hookState: {
     data: undefined as CalendarEventOccurrence[] | undefined
-  }
+  },
+  agendaState: { data: [] as AgendaEntry[] }
 }))
 
 vi.mock('@shared/components/calendar/hooks/useCalendarEvents', async (importOriginal) => {
@@ -54,6 +55,28 @@ vi.mock('@shared/components/calendar/hooks/useCalendarEvents', async (importOrig
       refetch: vi.fn()
     })
   }
+})
+
+// P4d — 日程视图的主数据是三源聚合; Join 仍取自同窗口 events 缓存解析回的
+// occurrence (AgendaEntry 不带 url/location)。
+vi.mock('@shared/components/calendar/hooks/useCalendarAgenda', () => ({
+  useCalendarAgenda: () => ({
+    data: agendaState.data,
+    isLoading: false,
+    isFetching: false,
+    isError: false,
+    refetch: vi.fn()
+  }),
+  localOlsonTz: () => 'UTC'
+}))
+
+vi.mock('@shared/components/matters/navigation', () => ({
+  useMatterNavigation: { getState: () => ({ open: vi.fn() }) }
+}))
+
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+  return { ...actual, useNavigate: () => vi.fn() }
 })
 
 import { EventBlock } from '../../src/shared/components/calendar/EventBlock'
@@ -101,9 +124,27 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   hookState.data = undefined
+  agendaState.data = []
   vi.useRealTimers()
   vi.restoreAllMocks()
 })
+
+/** 与 occurrence 对应的 mail 条目 (eventId + 起点是解析判据)。 */
+function mkEntry(occ: CalendarEventOccurrence): AgendaEntry {
+  return {
+    id: `mail:${occ.ical_uid}::${occ.occurrence_start_iso}`,
+    source: 'mail',
+    hot: false,
+    title: occ.summary,
+    startIso: occ.occurrence_start_iso,
+    endIso: occ.occurrence_end_iso,
+    allDay: false,
+    multiDay: false,
+    eventId: occ.id,
+    icalUid: occ.ical_uid,
+    recurrenceId: null
+  }
+}
 
 describe('EventBlock — hover Join 小钮', () => {
   test('有 Teams url → .evt-join 渲染; 点击 window.open(https) 且不触发开抽屉', () => {
@@ -145,9 +186,10 @@ describe('AgendaView — 行尾 Join', () => {
     const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
     const onSelect = vi.fn()
     hookState.data = [
-      makeOccurrence({ id: 11, summary: '有链接', url: TEAMS_URL }),
-      makeOccurrence({ id: 12, summary: '无链接' })
+      makeOccurrence({ id: 11, ical_uid: 'uid-join-11', summary: '有链接', url: TEAMS_URL }),
+      makeOccurrence({ id: 12, ical_uid: 'uid-join-12', summary: '无链接' })
     ]
+    agendaState.data = hookState.data.map(mkEntry)
     const { container } = render(<AgendaView onSelect={onSelect} />)
     const joins = container.querySelectorAll('.ag-join')
     expect(joins).toHaveLength(1)

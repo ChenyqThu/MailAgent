@@ -1,10 +1,18 @@
-// Phase 4·#3 — RRULE builder 控件 (FREQ / INTERVAL / WEEKLY BYDAY / 结束方式).
-// 受控组件: value: RRuleState + onChange. 纯逻辑在 lib/rrule.ts (build/parse).
-// 视觉沿用现有 .ef-field / .ef-label / .ef-input / .view-chip 设计语言.
+// 重复规则编辑器 —— 一句话式（08-27 P4d 重排形态）。
+//
+// 原来是四个并排下拉各占一行（重复 / 每 N 单位 / 星期 / 结束方式），得把四个控件的
+// 值在脑子里拼起来才知道自己设了什么。现在按读的顺序排成一句：
+//
+//   每 [1] [周▾] 的 [一][三] · [次数后结束▾] [10] 次
+//   每周一、三，共 10 次                      ← 自然语言回显，说的就是上面这行
+//
+// 🔴 逻辑层 `lib/rrule.ts`（build/parse）一行没动，本批只动形态；回显那一句在
+// `lib/rruleSummary.ts`（纯函数 + 词条模板，可脱离 React 单测）。
 
 import { useTranslation } from 'react-i18next'
 
 import { WEEKDAYS, type RRuleState, type RRuleFreq, type RRuleEnd } from './lib/rrule'
+import { rruleSummaryLabels, summarizeRRule } from './lib/rruleSummary'
 import { cn } from '@shared/lib/cn'
 
 interface Props {
@@ -18,28 +26,11 @@ export function RRuleEditor({ value, onChange, seriesHint = false }: Props): Rea
   const { t } = useTranslation()
   const set = (patch: Partial<RRuleState>): void => onChange({ ...value, ...patch })
 
-  const FREQ_OPTS: { v: RRuleFreq; label: string }[] = [
-    { v: 'NONE', label: t('calendar.form.repeat.freqNone', '不重复') },
-    { v: 'DAILY', label: t('calendar.form.repeat.freqDaily', '每天') },
-    { v: 'WEEKLY', label: t('calendar.form.repeat.freqWeekly', '每周') },
-    { v: 'MONTHLY', label: t('calendar.form.repeat.freqMonthly', '每月') },
-    { v: 'YEARLY', label: t('calendar.form.repeat.freqYearly', '每年') }
-  ]
-  const DAY_LABELS: Record<string, string> = {
-    MO: t('calendar.form.repeat.dayMo', '一'),
-    TU: t('calendar.form.repeat.dayTu', '二'),
-    WE: t('calendar.form.repeat.dayWe', '三'),
-    TH: t('calendar.form.repeat.dayTh', '四'),
-    FR: t('calendar.form.repeat.dayFr', '五'),
-    SA: t('calendar.form.repeat.daySa', '六'),
-    SU: t('calendar.form.repeat.daySu', '日')
-  }
-  const UNIT: Record<Exclude<RRuleFreq, 'NONE'>, string> = {
-    DAILY: t('calendar.form.repeat.unitDay', '天'),
-    WEEKLY: t('calendar.form.repeat.unitWeek', '周'),
-    MONTHLY: t('calendar.form.repeat.unitMonth', '月'),
-    YEARLY: t('calendar.form.repeat.unitYear', '年')
-  }
+  // 控件上的单位词 / 星期词与回显那一句共用同一个 bag（见 rruleSummaryLabels）。
+  // 单位词兼任 FREQ 下拉的选项 —— 句子里读作「每 1 周」，不必再有一个「每周」。
+  const labels = rruleSummaryLabels((key, dflt) => t(key, dflt))
+  const UNIT = labels.units
+  const DAY_LABELS = labels.days
 
   const toggleDay = (d: string): void => {
     set({
@@ -47,46 +38,49 @@ export function RRuleEditor({ value, onChange, seriesHint = false }: Props): Rea
     })
   }
 
+  const repeats = value.freq !== 'NONE'
+
   return (
     <div className="ef-field">
       <label className="ef-label" htmlFor="ef-rrule-freq">
         {t('calendar.form.repeat.label', '重复')}
       </label>
-      <select
-        id="ef-rrule-freq"
-        className="ef-input"
-        value={value.freq}
-        onChange={(e) => set({ freq: e.target.value as RRuleFreq })}
-      >
-        {FREQ_OPTS.map((o) => (
-          <option key={o.v} value={o.v}>
-            {o.label}
-          </option>
-        ))}
-      </select>
 
-      {value.freq !== 'NONE' && (
-        <div className="mt-2 space-y-2">
-          {/* INTERVAL — 每 N 单位 */}
-          <div className="flex items-center gap-2 text-aux text-ink-fg-1">
+      {/* 一行读下来就是一句话；窄宽下换行，语序不变。 */}
+      <div className="flex flex-wrap items-center gap-1.5 text-aux text-ink-fg-1">
+        {repeats && (
+          <>
             <span>{t('calendar.form.repeat.everyPrefix', '每')}</span>
             <input
               type="number"
               min={1}
               max={99}
-              className="ef-input w-16 text-center"
+              className="ef-input mono w-16 text-center"
               value={value.interval}
               onChange={(e) =>
                 set({ interval: Math.max(1, parseInt(e.target.value || '1', 10) || 1) })
               }
               aria-label={t('calendar.form.repeat.intervalAria', '重复间隔')}
             />
-            <span>{UNIT[value.freq as Exclude<RRuleFreq, 'NONE'>]}</span>
-          </div>
+          </>
+        )}
+        <select
+          id="ef-rrule-freq"
+          className="ef-input w-auto"
+          value={value.freq}
+          onChange={(e) => set({ freq: e.target.value as RRuleFreq })}
+        >
+          <option value="NONE">{t('calendar.form.repeat.freqNone', '不重复')}</option>
+          <option value="DAILY">{UNIT.DAILY}</option>
+          <option value="WEEKLY">{UNIT.WEEKLY}</option>
+          <option value="MONTHLY">{UNIT.MONTHLY}</option>
+          <option value="YEARLY">{UNIT.YEARLY}</option>
+        </select>
 
-          {/* WEEKLY — 星期多选 */}
-          {value.freq === 'WEEKLY' && (
-            <div
+        {value.freq === 'WEEKLY' && (
+          <>
+            <span>{t('calendar.form.repeat.onDaysPrefix', '的')}</span>
+            <span
               className="flex items-center gap-1"
               role="group"
               aria-label={t('calendar.form.repeat.bydayAria', '每周重复日')}
@@ -102,11 +96,15 @@ export function RRuleEditor({ value, onChange, seriesHint = false }: Props): Rea
                   {DAY_LABELS[d]}
                 </button>
               ))}
-            </div>
-          )}
+            </span>
+          </>
+        )}
 
-          {/* 结束方式 */}
-          <div className="flex items-center gap-2 flex-wrap text-aux text-ink-fg-1">
+        {repeats && (
+          <>
+            <span aria-hidden className="text-ink-fg-3">
+              ·
+            </span>
             <select
               className="ef-input w-auto"
               value={value.end}
@@ -118,12 +116,12 @@ export function RRuleEditor({ value, onChange, seriesHint = false }: Props): Rea
               <option value="until">{t('calendar.form.repeat.endUntil', '直到日期')}</option>
             </select>
             {value.end === 'count' && (
-              <div className="flex items-center gap-1.5">
+              <>
                 <input
                   type="number"
                   min={1}
                   max={999}
-                  className="ef-input w-16 text-center"
+                  className="ef-input mono w-16 text-center"
                   value={value.count}
                   onChange={(e) =>
                     set({ count: Math.max(1, parseInt(e.target.value || '1', 10) || 1) })
@@ -131,7 +129,7 @@ export function RRuleEditor({ value, onChange, seriesHint = false }: Props): Rea
                   aria-label={t('calendar.form.repeat.countAria', '重复次数')}
                 />
                 <span>{t('calendar.form.repeat.countSuffix', '次')}</span>
-              </div>
+              </>
             )}
             {value.end === 'until' && (
               <input
@@ -142,13 +140,19 @@ export function RRuleEditor({ value, onChange, seriesHint = false }: Props): Rea
                 aria-label={t('calendar.form.repeat.untilAria', '结束日期')}
               />
             )}
-          </div>
+          </>
+        )}
+      </div>
 
-          {seriesHint && (
-            <div className="text-meta text-ink-fg-3">
-              {t('calendar.form.repeat.seriesHint', '修改重复规则将应用到整个系列')}
-            </div>
-          )}
+      {repeats && (
+        <div className="mt-2 text-meta text-ink-fg-2" data-testid="rrule-summary">
+          {summarizeRRule(value, labels)}
+        </div>
+      )}
+
+      {repeats && seriesHint && (
+        <div className="mt-1 text-meta text-ink-fg-3">
+          {t('calendar.form.repeat.seriesHint', '修改重复规则将应用到整个系列')}
         </div>
       )}
     </div>

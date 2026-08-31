@@ -2,10 +2,11 @@
 //
 // 变化 vs Phase 2.2/2.3 初版:
 // - 视觉切到 mockup class (.efm-* / .ef-* / .chip-*), 抽到 index.css
-// - attendees 改 chip 输入 (Enter / `,` / `;` 加, Backspace 空输入框删上一个,
-//   点 × 移除); 非法 email .chip-field 短暂 .invalid pulse
 // - 验证改 inline .ef-err.show, 不再 toastError 干扰用户
 // - Esc 关闭 + Tab focus-trap (a11y), 关闭时 restore focus
+//
+// 08-27 P4d: 与会者整块搬到 ./AttendeeField (chip 输入 + 通讯录补全); 重复规则改
+// 一句话式 + 自然语言回显 (./RRuleEditor); 编辑态日历选择器置灰并写明为什么。
 //
 // 接口不变 (open / onClose / occurrence — null=create 非空=edit).
 
@@ -14,6 +15,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { AttendeeField } from './AttendeeField'
 import { CALENDAR_EVENTS_KEY, useCalendarEvent, useCalendarNames } from './hooks/useCalendarEvents'
 import { RRuleEditor } from './RRuleEditor'
 import { buildRRule, parseRRule, defaultRRuleState, type RRuleState } from './lib/rrule'
@@ -84,17 +86,6 @@ function todayDateStr(): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
-function emailRe(s: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)
-}
-
-/** chip avatar initials — mockup §chip-av. */
-function initials(email: string): string {
-  const n = email.split('@')[0].replace(/[._-]/g, ' ').trim()
-  const p = n.split(' ')
-  return ((p[0] || '')[0] || email[0] || '?').toUpperCase()
-}
-
 export function EventFormModal({ open, onClose, occurrence }: Props): React.ReactElement | null {
   const { t } = useTranslation()
   const isEdit = occurrence !== null
@@ -133,11 +124,8 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
   )
   // Phase 4·#3c — 周期事件 (有 RRULE) edit 时保存弹 scope 对话
   const isRecurring = isEdit && !!detail?.rrule
-  // chip 输入: chips = 已确认 attendees, chipInputValue = 当前输入框中字符
+  // chips = 已确认 attendees (输入 / 补全下拉在 AttendeeField 内部)
   const [chips, setChips] = useState<EventAttendeeInput[]>([])
-  const [chipInputValue, setChipInputValue] = useState('')
-  const [chipFocused, setChipFocused] = useState(false)
-  const [chipInvalid, setChipInvalid] = useState(false)
   // Phase 4·#4 — 用户主动改与会者 (加/删 chip) 才置 true. 未 dirty 提交不传
   // attendees → 后端保留原与会者 + partstat (防退化); dirty + 删光 → clearAttendees.
   const [attendeesDirty, setAttendeesDirty] = useState(false)
@@ -150,7 +138,6 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
 
   const titleRef = useRef<HTMLInputElement>(null)
   const startRef = useRef<HTMLInputElement>(null)
-  const chipInputRef = useRef<HTMLInputElement>(null)
   const modalRef = useRef<HTMLDivElement>(null)
   const lastFocusRef = useRef<HTMLElement | null>(null)
   // 退场延迟卸载：backdrop 淡入 + .efm-modal 位移缩放。GSAP 接管进/退两端，
@@ -209,7 +196,6 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
       setDescription('')
       setChips([])
     }
-    setChipInputValue('')
     setErrTitle(false)
     setErrTime(false)
     // Phase 4·#3 — 重置重复规则 (edit 的真实 rrule 由下方 detail effect 异步预填)
@@ -367,41 +353,11 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
     mut.mutate(isEdit ? 'all' : undefined)
   }
 
-  // ── chip ops ──
-  const addChip = useCallback(
-    (raw: string): void => {
-      const v = raw.trim().replace(/[,;]$/, '')
-      if (!v) return
-      if (!emailRe(v)) {
-        setChipInvalid(true)
-        window.setTimeout(() => setChipInvalid(false), 700)
-        return
-      }
-      if (chips.some((c) => c.email.toLowerCase() === v.toLowerCase())) {
-        setChipInputValue('')
-        return
-      }
-      setChips((cs) => [...cs, { email: v }])
-      setChipInputValue('')
-      setAttendeesDirty(true)
-    },
-    [chips]
-  )
-
-  const onChipInputKey = (e: React.KeyboardEvent<HTMLInputElement>): void => {
-    if (e.key === 'Enter' || e.key === ',' || e.key === ';') {
-      e.preventDefault()
-      addChip(chipInputValue)
-    } else if (e.key === 'Backspace' && chipInputValue === '' && chips.length) {
-      setChips((cs) => cs.slice(0, -1))
-      setAttendeesDirty(true)
-    }
-  }
-
-  const onChipInputBlur = (): void => {
-    if (chipInputValue.trim()) addChip(chipInputValue)
-    setChipFocused(false)
-  }
+  // Phase 4·#4 — 用户动手改与会者（AttendeeField 只在加/删时回调；预填不走它）。
+  const handleAttendeesChange = useCallback((next: EventAttendeeInput[]): void => {
+    setChips(next)
+    setAttendeesDirty(true)
+  }, [])
 
   // Esc 关闭 + Tab focus-trap (mockup §a11y)
   useEffect(() => {
@@ -558,35 +514,36 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
             </div>
           </div>
 
-          {/* Phase 4·#1 — 日历归属 (仅多 calendar 显示; edit 只读) */}
+          {/* Phase 4·#1 — 日历归属 (仅多 calendar 显示; edit 置灰) */}
           {calendars.length > 1 && (
             <div className="ef-field">
               <label className="ef-label" htmlFor="ef-cal">
                 {t('calendar.form.labelCalendar', '日历')}
               </label>
-              {isEdit ? (
-                <input
-                  id="ef-cal"
-                  type="text"
-                  className="ef-input"
-                  value={calendarName || t('calendar.form.calendarDefault', '默认日历')}
-                  disabled
-                  title={t('calendar.form.calendarEditLocked', '暂不支持跨日历移动事件')}
-                />
-              ) : (
-                <select
-                  id="ef-cal"
-                  className="ef-input"
-                  value={calendarName}
-                  onChange={(e) => setCalendarName(e.target.value)}
-                >
-                  <option value="">{t('calendar.form.calendarDefault', '默认日历')}</option>
-                  {calendars.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
+              {/* 编辑态明确置灰：更新走 CalDAV PUT 原地替换，calendar 只是查这条
+                  事件用的定位提示，不是移动目标（src/calendar_sync/caldav_writer.py
+                  ::update_event）。下面那行说清为什么，别让人对着一个点不动的控件猜。 */}
+              <select
+                id="ef-cal"
+                className={cn('ef-input', isEdit && 'opacity-60 cursor-not-allowed')}
+                value={calendarName}
+                disabled={isEdit}
+                onChange={(e) => setCalendarName(e.target.value)}
+              >
+                <option value="">{t('calendar.form.calendarDefault', '默认日历')}</option>
+                {calendars.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+              {isEdit && (
+                <div className="mt-1.5 text-meta text-ink-fg-3">
+                  {t(
+                    'calendar.form.calendarEditLocked',
+                    '换日历等于删掉再建一次，事件会换个身份、与会者的回执也跟着丢。要换日历请新建一个事件。'
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -618,72 +575,8 @@ export function EventFormModal({ open, onClose, occurrence }: Props): React.Reac
             />
           </div>
 
-          {/* 与会者 chip 输入 */}
-          <div className="ef-field">
-            <label className="ef-label" htmlFor="ef-att-input">
-              {t('calendar.form.attendees.label', '与会者')}
-            </label>
-            <div
-              className={cn('chip-field', chipFocused && 'focus', chipInvalid && 'invalid')}
-              onClick={() => chipInputRef.current?.focus()}
-            >
-              {chips.map((c) => (
-                <span key={c.email} className="chip">
-                  <span className="chip-av" aria-hidden>
-                    {initials(c.email)}
-                  </span>
-                  <span>{c.email}</span>
-                  <button
-                    type="button"
-                    className="chip-x"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setChips((cs) => cs.filter((x) => x.email !== c.email))
-                      setAttendeesDirty(true)
-                    }}
-                    aria-label={t('calendar.form.attendees.removeChip', '移除 {email}', {
-                      email: c.email
-                    })}
-                    title={t('calendar.shared.closeAria', '关闭')}
-                  >
-                    <svg
-                      width="11"
-                      height="11"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.4"
-                      strokeLinecap="round"
-                    >
-                      <line x1="18" y1="6" x2="6" y2="18" />
-                      <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                  </button>
-                </span>
-              ))}
-              <input
-                ref={chipInputRef}
-                id="ef-att-input"
-                type="text"
-                className="chip-input"
-                value={chipInputValue}
-                onChange={(e) => setChipInputValue(e.target.value)}
-                onKeyDown={onChipInputKey}
-                onFocus={() => setChipFocused(true)}
-                onBlur={onChipInputBlur}
-                placeholder={
-                  chips.length === 0
-                    ? t('calendar.form.attendees.placeholder', '输入 email 后回车添加')
-                    : ''
-                }
-                autoComplete="off"
-                aria-label={t('calendar.form.attendees.label', '与会者')}
-              />
-            </div>
-            <div className="chip-hint">
-              {t('calendar.form.attendees.hint', 'Enter 添加 · ⌫ 删除上一个 · 点 × 移除')}
-            </div>
-          </div>
+          {/* 与会者 —— chip 输入 + 通讯录补全 (P4d，复用 compose 那条链) */}
+          <AttendeeField value={chips} onChange={handleAttendeesChange} />
 
           {/* 描述 */}
           <div className="ef-field">
