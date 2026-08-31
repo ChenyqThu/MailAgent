@@ -537,12 +537,17 @@ async def list_enriched(
     )
 
     snippet_expr = "m.snippet" if has_snippet else "NULL"
+    # llm_status = llm_processing.status **原始值**透传 (task 08-27 P4a)。此前列表面
+    # 只出 labels 派生字段 ⇒ status='failed' 的行 (没有 labels) 与「从没跑过」在读侧
+    # 无法区分, 失败的预处理在团队页记录列里根本看不见 (r10 §0)。
+    llm_status_expr = "l.status" if has_llm else "NULL"
     extra_cols = (
         f"{snippet_expr} AS snippet, "
         f"{lang_expr} AS lang_raw, "
         f"{priority_expr} AS priority_raw, "
         f"{action_expr} AS action_raw, "
         f"{category_expr} AS category_raw, "
+        f"{llm_status_expr} AS llm_status, "
         "COALESCE(a.attach_count, 0) AS attach_count"
     )
 
@@ -603,6 +608,10 @@ def _shape_enriched_item(row: sqlite3.Row) -> dict[str, Any]:
                 row["processing_status"]
                 if row["processing_status"] is not None
                 else None
+            ),
+            # 原始 llm_processing.status (pending/success/failed) —— 见 SELECT 处注释。
+            "llm_status": (
+                row["llm_status"] if row["llm_status"] is not None else None
             ),
         }
     )
@@ -826,17 +835,28 @@ async def ai_fields(
         labels_col = "l.labels_json AS labels_json"
         status_col = "l.status AS llm_status"
         model_col = "l.model AS llm_model"
+        # task 08-27 P4a run transcript: 预处理的「耗时 / token / 重试 / 错误」早就在
+        # llm_processing 行里, 只是从没投影出来 (r10 §2.4) —— 团队页的执行详情要它们。
+        stats_cols = (
+            "l.latency_ms AS latency_ms, l.input_tokens AS input_tokens, "
+            "l.output_tokens AS output_tokens, l.retry_count AS retry_count, "
+            "l.last_error AS last_error"
+        )
     else:
         llm_join = ""
         labels_col = "NULL AS labels_json"
         status_col = "NULL AS llm_status"
         model_col = "NULL AS llm_model"
+        stats_cols = (
+            "NULL AS latency_ms, NULL AS input_tokens, NULL AS output_tokens, "
+            "NULL AS retry_count, NULL AS last_error"
+        )
 
     placeholders = ",".join("?" for _ in ids)
     sql = f"""
         SELECT m.internal_id AS internal_id, m.mailbox AS mailbox,
                m.is_read AS is_read, m.is_flagged AS is_flagged,
-               {proc_col}, {labels_col}, {status_col}, {model_col}
+               {proc_col}, {labels_col}, {status_col}, {model_col}, {stats_cols}
           FROM email_metadata m
           {llm_join}
          WHERE m.internal_id IN ({placeholders})
@@ -860,6 +880,12 @@ def _shape_ai_fields(row: sqlite3.Row) -> dict[str, Any]:
 
     labels_json 安全解析后提升 priority/action_type/sentiment；ai_review_status
     映自 llm_processing.status；ai_model = llm_processing.model (不在 labels_json)。
+
+    task 08-27 P4a 追加六个字段（团队页预处理执行详情用，命名沿 llm_processing 列名）：
+    ``llm_status``（🔴 **原始** status 透传 —— ``ai_review_status`` 把 failed/pending
+    都映成 'pending'，失败行在读侧因此分不出来，这是 r10 §0 抓到的缺陷的根子）·
+    ``latency_ms`` · ``input_tokens`` · ``output_tokens`` · ``retry_count`` ·
+    ``last_error``。无 llm_processing 行 / 旧库缺表时全部 null。
     """
     labels = _parse_labels(row["labels_json"])
     priority_raw = (
@@ -893,4 +919,14 @@ def _shape_ai_fields(row: sqlite3.Row) -> dict[str, Any]:
         "sentiment": _map_sentiment(sentiment_raw),
         "ai_model": row["llm_model"] if row["llm_model"] is not None else None,
         "labels_raw": labels,
+        "llm_status": row["llm_status"] if row["llm_status"] is not None else None,
+        "latency_ms": row["latency_ms"] if row["latency_ms"] is not None else None,
+        "input_tokens": (
+            row["input_tokens"] if row["input_tokens"] is not None else None
+        ),
+        "output_tokens": (
+            row["output_tokens"] if row["output_tokens"] is not None else None
+        ),
+        "retry_count": row["retry_count"] if row["retry_count"] is not None else None,
+        "last_error": row["last_error"] if row["last_error"] is not None else None,
     }

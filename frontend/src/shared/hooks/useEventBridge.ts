@@ -286,6 +286,22 @@ export function useEventBridge(): void {
         debounceInvalidate('notifications:changed', () => refreshNotifications(queryClient))
         return
       }
+      // 今日页「待回邮件」（P4c，`GET /api/today`）。events.ts 里**没有**「某封邮件的
+      // ai_action 变了」这样一条事件；最接近的三条就是这一节进出的全部驱动力：
+      //   · `llm.success` —— 分类落库，一封信这才有 `ai_action`（= 才可能进这一节）
+      //   · `email.new` —— 新信到达（含我方发件入库 → 线程判「已回」→ 出这一节）
+      //   · `email.synced` —— 元数据回填后 mailbox / thread_id 才稳
+      // 🔴 **不 return**：这三条同时也是邮件域的事件，还要继续走 planInvalidation
+      // （提前返回会让主列表停止刷新 —— 一个不报错的错误）。
+      if (
+        ev.event_type === 'llm.success' ||
+        ev.event_type === 'email.new' ||
+        ev.event_type === 'email.synced'
+      ) {
+        debounceInvalidate('today:aggregate', () =>
+          queryClient.invalidateQueries({ queryKey: qk.today.all() })
+        )
+      }
       const directives = planInvalidation(ev.event_type, ev.internal_id, ev.data)
       const ids = eventInternalIds(ev.internal_id, ev.data)
       for (const directive of directives) runDirective(directive, ids)

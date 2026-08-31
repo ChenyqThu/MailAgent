@@ -6,10 +6,13 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { resolveApiBaseUrl } from '@shared/hooks/useLlmModels'
 import { qk } from '@shared/lib/queryKeys'
 import { isSessionUnread } from '@shared/lib/chatUnread'
+import { isJobRunItem, isRunLogItem } from '@shared/lib/agentRunItems'
 import { useEventsStatusStore } from '@shared/state/eventsStatus'
 import type {
   AgentRunHistoryItem,
+  AgentRunLogItem,
   AgentRunPendingCount,
+  AgentRunStep,
   AgentRunToolOptions,
   ChatOpennessFlags,
   ChatSessionListItem,
@@ -435,7 +438,10 @@ export function usePendingRuns(enabled: boolean): {
     enabled,
     staleTime: 4_000
   })
-  return { runs: q.data?.items ?? [], isLoading: q.isLoading }
+  // 审批只发生在 gateway headless run 上；run_log 台账没有审批面（过滤是类型收窄，
+  // 不是行为改变 —— 后端不会给 run_log 行发 paused_pending）。
+  const runs = useMemo(() => (q.data?.items ?? []).filter(isJobRunItem), [q.data])
+  return { runs, isLoading: q.isLoading }
 }
 
 /** S5 — 某 custom agent 的 run 历史（listRuns，读失败返 []）。state 由后端 derive_agent_run_state
@@ -447,6 +453,8 @@ export function useAgentRuns(
   limit = 20
 ): {
   runs: AgentRunHistoryItem[]
+  /** 08-31 — 同一聚合里的 agent_run_log 行（报告 / 画像 / 项目周报的过程台账）。 */
+  runLogs: AgentRunLogItem[]
   isLoading: boolean
   refetch: () => void
   total: number
@@ -466,10 +474,15 @@ export function useAgentRuns(
     },
     enabled: agentId != null
   })
-  const runs = useMemo(() => q.data?.pages.flatMap((p) => p.items) ?? [], [q.data])
+  const items = useMemo(() => q.data?.pages.flatMap((p) => p.items) ?? [], [q.data])
+  // 🔴 两种台账在一个聚合里返回，这里就地分开：既有 6 个消费方（today / 运行历史区 /
+  // 状态徽标 / 日历 …）只认 async_jobs run 行，让它们看到 run_log 行就要各自再判一次 kind。
+  const runs = useMemo(() => items.filter(isJobRunItem), [items])
+  const runLogs = useMemo(() => items.filter(isRunLogItem), [items])
   const total = q.data?.pages[q.data.pages.length - 1]?.total ?? 0
   return {
     runs,
+    runLogs,
     isLoading: q.isLoading,
     refetch: () => void q.refetch(),
     total,
@@ -479,26 +492,53 @@ export function useAgentRuns(
   }
 }
 
-/** P4a 团队页 — origin='agent' 会话全集（记录列时间线的会话源）。与 ChatsTab 的内联
- *  `[...qk.chat.allSessions(), 'agent']` 同 key（共享缓存）；per-member 过滤在
- *  mergeMemberTimeline（exact agent_id 匹配 + 显式排除 matter:* 命名空间）。
- *  🔴 写侧未通（manual chat 恒主 agent 身份）——P4b 接通后这里不用改，新会话自然入列。 */
+/** 08-31 — 一次 run_log 执行的过程节点（transcript 合成源）。runLogId=null → 不发请求。 */
+export function useRunLogSteps(runLogId: number | null): {
+  steps: AgentRunStep[]
+  isLoading: boolean
+} {
+  const api = useMailApi()
+  const q = useQuery({
+    queryKey: qk.agentRuns.runLogSteps(runLogId ?? -1),
+    queryFn: () => api.report.runLogSteps(runLogId as number),
+    enabled: runLogId != null,
+    staleTime: 10_000
+  })
+  return { steps: q.data ?? [], isLoading: q.isLoading }
+}
+
+/** P4a 团队页 — 记录列时间线的会话源：origin='agent'（headless run 会话）+ origin='team'
+ *  （P4b 起：人以 agent 身份开的交互式会话，落 origin='team' 而非 'agent'，两条查询合并）。
+ *  agent 支与 ChatsTab 的内联 `[...qk.chat.allSessions(), 'agent']` 同 key（共享缓存）；
+ *  per-member 过滤在 mergeMemberTimeline（exact agent_id 匹配 + 显式排除 matter:* 命名空间）。 */
 export function useAgentOriginSessions(enabled: boolean): {
   sessions: ChatSessionListItem[]
   isLoading: boolean
 } {
   const api = useMailApi()
-  const q = useQuery({
+  const agentQ = useQuery({
     queryKey: qk.chat.agentOriginSessions(),
     queryFn: () => api.chat.listAllSessions({ origin: 'agent' }),
     enabled,
     staleTime: 10_000
   })
-  return { sessions: q.data ?? [], isLoading: q.isLoading }
+  const teamQ = useQuery({
+    queryKey: qk.chat.teamOriginSessions(),
+    queryFn: () => api.chat.listAllSessions({ origin: 'team' }),
+    enabled,
+    staleTime: 10_000
+  })
+  const sessions = useMemo(
+    () => [...(agentQ.data ?? []), ...(teamQ.data ?? [])],
+    [agentQ.data, teamQ.data]
+  )
+  return { sessions, isLoading: agentQ.isLoading || teamQ.isLoading }
 }
 
 /** P4a 团队页 — 某报告 agent 的最近 N 份报告（记录列时间线的 report 源）。
- *  报告本身即记录（r8 §A.0：report agent 无过程 transcript），行投影成记录条目。 */
+ *  r8 §A.0 当时的事实是「报告本身即记录，无过程 transcript」；08-31 起报告 agent 也写
+ *  `agent_run_log`（有 transcript），所以这一条只剩**产物**语义 —— 有对应 run_log 的产物行
+ *  由 `mergeMemberTimeline` 按 `reportId` 去重掉，剩下的是没有过程台账的老报告。 */
 export function useAgentReports(
   agentId: string | null,
   limit = 30
@@ -529,9 +569,19 @@ export function useRecentPreprocessedEmails(
     queryKey: qk.team.preprocessRecent(limit),
     queryFn: async () => {
       // 多拉一些再过滤：近期邮件里未分类（LLM 关闭/跳过）的行不进执行面。
+      // 🔴 判据首选 `llm_status`（有 llm_processing 行 = 跑过一次预处理）——只看 labels
+      // 派生字段会把 **status='failed' 的行整批滤掉**（失败的行没有 labels），失败的
+      // 预处理在团队页里因此根本看不见（r10 §0）。labels 那一支保留作降级：老后端不返
+      // llm_status，只留新判据会让整个执行面空掉。
       const rows = await api.email.listEnriched({ limit: limit * 3 })
       return rows
-        .filter((r) => r.ai_priority != null || r.ai_action != null || r.ai_category != null)
+        .filter(
+          (r) =>
+            r.llm_status != null ||
+            r.ai_priority != null ||
+            r.ai_action != null ||
+            r.ai_category != null
+        )
         .slice(0, limit)
     },
     enabled,

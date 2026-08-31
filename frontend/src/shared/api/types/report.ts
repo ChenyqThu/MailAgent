@@ -531,6 +531,9 @@ export type AgentRunState =
 
 /** S5 run 历史行（GET /api/agent-runs 投影）。 */
 export interface AgentRunHistoryItem {
+  /** 台账来源判别。缺省 / `'job'` = async_jobs 行（本接口）；`'run_log'` = agent_run_log 行
+   *  （AgentRunLogItem）。同一个聚合端点返两种形状，判别字段是它。 */
+  kind?: 'job'
   jobId: number
   agentId: string
   /** 后端单源读态（derive_agent_run_state）；前端只按此穷举渲染，不自行推导。 */
@@ -567,6 +570,79 @@ export interface AgentRunHistoryItem {
    *  triggerKind 为 null 时本字段恒 null。 */
   triggerFiredAtIso?: string | null
 }
+
+/** 08-31 执行台账 — `agent_run_log` 行（`GET /api/agent-runs` 聚合里 `kind: 'run_log'` 的 item）。
+ *  报告 / 联系人画像 / 项目周报三位不走 gateway headless（LLM 直连 provider 或干脆零 LLM，
+ *  r10 §0.3），没有 session 可读；它们把过程结构化落进 agent_run_log + agent_run_step，
+ *  前端合成 transcript（runStepsToUIMessages）后与会话共用同一个渲染器。
+ *
+ *  形状对齐 `_run_history_item`（后端 `_run_log_item` 的注释明写「字段名不许改」），差别只有
+ *  三处，都在这里标死：
+ *  🔴 `createdAt` / `finishedAt` 是 **ISO 字符串**（async_jobs run 行是 epoch 数字）——
+ *     换算只在读侧 `isoMs` 一处。
+ *  🔴 `sessionId` / `approvalState` **恒 null 是契约不是没写完**：run_log 的三位写入方不开
+ *     会话、不走审批。transcript 走 `runLogSteps` 合成。
+ *  🔴 `state` 直接是 run_state 9 值域（建表 CHECK 钉死）——RunStateBadge 零映射，前端不建
+ *     第二张 status 词表（`_profile_run_item` 的既有纪律：复用 9 值域，不加第 10 个值）。 */
+export interface AgentRunLogItem {
+  kind: 'run_log'
+  runLogId: number
+  /** = runLogId（后端为形状对齐也带了它）。列表 key 一律用 runLogId —— 两套台账的自增
+   *  id 各自从 1 起，拿 jobId 当键必与 async_jobs 行撞号。 */
+  jobId: number
+  agentId: string
+  state: AgentRunState
+  outcome?: string | null
+  /** 记录列直接显示的一行。 */
+  summary?: string | null
+  sessionId?: null
+  approvalState?: null
+  createdAt: string | null
+  finishedAt?: string | null
+  error?: string | null
+  /** 步骤**计数**（明细走 `runLogSteps`）。 */
+  steps?: number | null
+  tokens?: { inputTokens: number; outputTokens: number } | null
+  durationSeconds?: number | null
+  triggerKind?: string | null
+  triggerFiredAtIso?: string | null
+  /** 触发条件的一句话补充（「收到邮件《W35 项目周报》」），喂 AgentRunTriggerBubble。 */
+  triggerDetail?: string | null
+  model?: string | null
+  /** 这次执行产出的报告 id（后端从 out 步骤 `payload.report_id` 抽出）。报告类才有，
+   *  画像 / 项目周报恒 null。empty（这段时间没有新邮件）那一档也带——它同样建了
+   *  `status='empty'` 的 report 行。
+   *  🔴 记录列靠它把「产物行 `report:xxx`」与「过程行 `runlog:N`」收敛成一条 ——
+   *  真实引用，**不是**时间窗启发式。去重后产物的入口改由 runlog 详情头的「去报告」提供。 */
+  reportId?: string | null
+  /** 这次执行的触发邮件 internal_id（后端从首条 trig 步骤 `payload.internal_id` 抽出，
+   *  并在 API 边界加了成员语义门：只对项目周报投影）。其余成员恒 null。
+   *  🔴 与 reportId 同模式：记录列靠它把 `project_progress_sync` 台账行
+   *  （`progress:{internalId}`）与过程行 `runlog:N` 收敛成一条。 */
+  progressEmailId?: number | null
+}
+
+/** transcript 节点词表（design §8.1 定死四类，跨四位共用）。 */
+export type AgentRunStepKind = 'trig' | 'think' | 'tool' | 'out'
+
+/** `agent_run_step` 行（GET /api/agent-runs/run-log/{id}/steps）。
+ *  `payload` 的内部形状不在接缝契约里（只约定「对象或 null」），渲染侧按约定俗成的
+ *  `{input, output}` 分开，缺则整块当请求（runStepsToUIMessages）。 */
+export interface AgentRunStep {
+  seq: number
+  kind: AgentRunStepKind
+  /** tool: 工具名 / out: 产物类型。 */
+  name?: string | null
+  /** 人话（失败时写「为什么这么处置」）。 */
+  detail?: string | null
+  payload?: Record<string, unknown> | null
+  /** 1|0|null；false → 前端标 ✗ + fail 色。 */
+  ok?: boolean | null
+  ms?: number | null
+}
+
+/** `GET /api/agent-runs` 聚合列表的行（两种台账并列）。 */
+export type AgentRunListItem = AgentRunHistoryItem | AgentRunLogItem
 
 export interface ReportRunResult {
   report_id: string
@@ -677,7 +753,10 @@ export interface ReportApi {
     limit?: number
     offset?: number
     state?: AgentRunState
-  }): Promise<ReportPagedResult<AgentRunHistoryItem>>
+  }): Promise<ReportPagedResult<AgentRunListItem>>
+  /** 08-31 — 一次 run_log 执行的过程节点（读）。GET /api/agent-runs/run-log/{id}/steps；
+   *  端点未就绪 / 失败返 []（守读优雅降级 —— 步骤取不到时详情退回「没有输出」而不是崩）。 */
+  runLogSteps(runLogId: number): Promise<AgentRunStep[]>
   /** S6 W1 — 待审批（paused_pending）计数（读）。GET /api/agent-runs/pending-count；
    *  flag off / 失败返 { total: 0, byAgent: {} }（守读优雅降级）。 */
   pendingCount(): Promise<AgentRunPendingCount>

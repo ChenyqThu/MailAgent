@@ -71,6 +71,8 @@ export const qk = {
     // P4a 团队页 — origin='agent' 会话清单。🔴 尾段 'agent' 与 ChatsTab 内联组合的
     // `[...qk.chat.allSessions(), 'agent']` 字面量一致（共享缓存），别改任何一段。
     agentOriginSessions: () => ['chat', 'allSessions', 'agent'] as const,
+    // P4b 团队页 — origin='team' 会话清单（人以 agent 身份开的交互式会话；CHAT_DB v29）。
+    teamOriginSessions: () => ['chat', 'allSessions', 'team'] as const,
     agentUnread: () => ['chat', 'agentUnread'] as const,
     messages: (sessionId: string | number) => ['chat', 'messages', sessionId] as const,
     /** L4 批次3 — 一条行动项名下的会话（执行历史反查，`GET /chat/sessions/all?itemId=`）。
@@ -171,7 +173,10 @@ export const qk = {
       ['agent-runs', agentId ?? 'all', limit] as const,
     toolOptions: () => ['agent-runs', 'tool-options'] as const,
     pendingCount: () => ['agent-runs', 'pending-count'] as const,
-    pausedPending: () => ['agent-runs', 'list', 'paused_pending'] as const
+    pausedPending: () => ['agent-runs', 'list', 'paused_pending'] as const,
+    // 08-31 — 一次 run_log 执行的过程节点（transcript 合成源）。挂 `agent-runs` 前缀，
+    // run 台账失效时步骤跟着刷。
+    runLogSteps: (runLogId: number) => ['agent-runs', 'run-log', runLogId, 'steps'] as const
   },
 
   agent: {
@@ -215,6 +220,14 @@ export const qk = {
       ['report', 'list', 'by-agent', agentId, limit] as const,
     config: () => ['report', 'config'] as const,
     get: (reportId: string | null) => ['report', 'get', reportId] as const
+  },
+
+  // task 08-27 P4c 今日页 — `GET /api/today`（只出「待回邮件」+「下一个硬时间点」）。
+  // 另外四节复用各自既有 key 族（agentRuns / matters / calendar.agenda / report.list），
+  // 它们自带 SSE 定向失效，本 key 只管这一条。
+  today: {
+    all: () => ['today'] as const,
+    aggregate: (tz: string) => ['today', 'aggregate', tz] as const
   },
 
   projectProgressRuns: (limit: number) => ['project-progress-runs', limit] as const,

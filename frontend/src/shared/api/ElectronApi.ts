@@ -40,9 +40,10 @@ import type {
   NotionAgentApi,
   NotionAgentConfig,
   NotionAgentDoctorCheck,
-  AgentRunHistoryItem,
+  AgentRunListItem,
   AgentRunPendingCount,
   AgentRunState,
+  AgentRunStep,
   AgentRunToolOptions,
   NotionAgentListItem,
   ReportApi,
@@ -79,7 +80,6 @@ import type {
   EnrichedEmailMeta,
   FeedbackApi,
   FeedbackDiagnostics,
-  FeedbackScreenshot,
   FeedbackSubmitOpts,
   FolderApi,
   FolderCleanupResult,
@@ -139,6 +139,8 @@ import type {
   SecretsStatus,
   SettingsApi,
   TargetLang,
+  TodayApi,
+  TodayData as TodayApiData,
   TranslateBatchResult,
   TranslationCache,
   UpdateFlagOpts,
@@ -958,11 +960,11 @@ class ElectronReportApi implements ReportApi {
     limit?: number
     offset?: number
     state?: AgentRunState
-  }): Promise<ReportPagedResult<AgentRunHistoryItem>> {
-    return (await invoker()(
-      'report:listRuns',
-      opts ?? {}
-    )) as ReportPagedResult<AgentRunHistoryItem>
+  }): Promise<ReportPagedResult<AgentRunListItem>> {
+    return (await invoker()('report:listRuns', opts ?? {})) as ReportPagedResult<AgentRunListItem>
+  }
+  async runLogSteps(runLogId: number): Promise<AgentRunStep[]> {
+    return (await invoker()('report:runLogSteps', runLogId)) as AgentRunStep[]
   }
   async pendingCount(): Promise<AgentRunPendingCount> {
     return (await invoker()('report:pendingCount')) as AgentRunPendingCount
@@ -975,16 +977,13 @@ class ElectronReportApi implements ReportApi {
   }
 }
 
-// task 08-27 P4a — 快捷反馈。三条链路都只有主进程做得到（截图 capturePage / 诊断包 fork
-// CLI / 提交要绕开 renderer CSP + 统一设 UA），故 renderer 侧全是薄 invoke。
+// task 08-27 P4a — 快捷反馈。两条链路都只有主进程做得到（诊断包 fork CLI / 提交要绕开
+// renderer CSP + 统一设 UA），故 renderer 侧全是薄 invoke。
 // 🔴 submit 失败**照抛**：调用方必须显示「没发出去」并给「打开表单页」的降级 —— 私有
 // API 的失效是静默的，把错误吞掉就等于骗自己。
 class ElectronFeedbackApi implements FeedbackApi {
   async context(route?: string): Promise<string> {
     return (await invoker()('feedback:context', route)) as string
-  }
-  async capture(): Promise<FeedbackScreenshot | null> {
-    return (await invoker()('feedback:capture')) as FeedbackScreenshot | null
   }
   async diagnostics(): Promise<FeedbackDiagnostics> {
     return (await invoker()('feedback:diagnostics')) as FeedbackDiagnostics
@@ -997,6 +996,14 @@ class ElectronFeedbackApi implements FeedbackApi {
   }
   async openForm(): Promise<void> {
     await invoker()('feedback:openForm')
+  }
+}
+
+// task 08-27 P4c — 今日聚合读。handler 经 daemon_api 转发本机 serve-api（与
+// calendar:agenda 同款：判据在 Python 侧，TS 不重写一遍）。
+class ElectronTodayApi implements TodayApi {
+  async get(opts?: { tz?: string; replyLimit?: number }): Promise<TodayApiData> {
+    return (await invoker()('today:get', opts ?? {})) as TodayApiData
   }
 }
 
@@ -1024,5 +1031,6 @@ export class ElectronApi implements MailApi {
   prompts: PromptsApi = new ElectronPromptsApi()
   notionAgent: NotionAgentApi = new ElectronNotionAgentApi()
   report: ReportApi = new ElectronReportApi()
+  today: TodayApi = new ElectronTodayApi()
   feedback: FeedbackApi = new ElectronFeedbackApi()
 }

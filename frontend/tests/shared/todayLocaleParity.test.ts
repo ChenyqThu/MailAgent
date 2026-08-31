@@ -15,6 +15,7 @@ import { MATTER_ITEM_DISPATCH_STATES } from '@shared/api/types/matter'
 import { MATTER_EXEC_PROFILE_OPTIONS } from '@shared/components/matters/matterDispatchVocab'
 import { TODAY_GROUP_IDS } from '@shared/components/today/todayGroups'
 import { TODAY_SIGNAL_ACTION_LABEL_KEY } from '@shared/components/today/todayVocab'
+import { TODAY_SECTIONS } from '@shared/state/today-section'
 
 function flattenKeys(node: unknown, prefix = ''): string[] {
   if (node === null || typeof node !== 'object') return [prefix]
@@ -58,6 +59,19 @@ describe('today locale parity', () => {
       for (const id of TODAY_GROUP_IDS) {
         const label = groups?.[id]
         expect(typeof label === 'string' && label.length > 0, `缺分组文案: ${id}`).toBe(true)
+      }
+    }
+  })
+
+  // P4c：主区五节与二级栏共用 `today.nav.*` —— 加一节忘了补文案的表现是屏幕上出现一段
+  // 写着 `today.nav.xxx` 的节头，没有任何类型错误会拦住它。
+  test('每个节 id 在两份 locale 里都有非空标题', () => {
+    for (const tree of [zhTree, enTree]) {
+      const nav = (tree as { nav?: Record<string, unknown> }).nav
+      expect(nav, 'locale 缺 today.nav 块').toBeTruthy()
+      for (const id of TODAY_SECTIONS) {
+        const label = nav?.[id]
+        expect(typeof label === 'string' && label.length > 0, `缺节标题: ${id}`).toBe(true)
       }
     }
   })

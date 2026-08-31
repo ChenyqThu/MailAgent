@@ -266,14 +266,17 @@ export type ChatAnchorType = 'email' | 'general' | 'matter'
 // API/IPC boundary mirror of shared/chat_model.ts. Keep inline so this file remains import-free;
 // tests/config/test_chat_type_mirror_parity.py locks the string-union values on both sides.
 // 🔴 This is the FILTER vocabulary, NOT the origin COLUMN's value domain (that one is free text —
-// 'agent' | 'im' | NULL=interactive, see ChatSession.origin below). Stage 2 PR-1 (task 08-01)
-// deliberately adds NO 'im' filter: im rows ride the default 'interactive' clause (it only excludes
-// 'agent' — Q18=A desktop visibility) and nothing filters by IM. Adding the literal here without
-// implementing it would type-check on both call paths yet behave differently on each (Electron
-// listAllSessions falls through to the interactive clause; serve-api's Literal[3] query param 422s).
-// A future IM-only filter must land in ALL FOUR mirrors at once: both TS unions, the two listing
-// clauses, src/api/routers/chat.py's Literal and src/chat/db.py's validator tuple.
-export type ChatSessionOriginFilter = 'interactive' | 'agent' | 'im' | 'all'
+// 'agent' | 'im' | 'team' | NULL=interactive, see ChatSession.origin below). Stage 2 PR-1 (task
+// 08-01) deliberately adds NO 'im' filter: im rows ride the default 'interactive' clause (Q18=A
+// desktop visibility) and nothing filters by IM. P4b (task 08-27) adds 'team' — an interactive
+// session opened AS a team agent; the default 'interactive' clause excludes BOTH 'agent' and
+// 'team' (team rows belong to the team page's record column, which filters by this value).
+// Adding a literal here without implementing it would type-check on both call paths yet behave
+// differently on each (Electron listAllSessions falls through to the interactive clause;
+// serve-api's Literal query param 422s). A new filter must land in ALL FOUR mirrors at once:
+// both TS unions, the two listing clauses, src/api/routers/chat.py's Literal and
+// src/chat/db.py's validator tuple.
+export type ChatSessionOriginFilter = 'interactive' | 'agent' | 'im' | 'team' | 'all'
 export type ChatSessionTriggerKind =
   | 'manual'
   | 'cron'
@@ -788,6 +791,9 @@ export interface ChatApi {
     anchorType?: ChatAnchorType
     emailId?: number | null
     matterId?: number
+    /** P4b — 团队页「以指定 agent 身份」的交互式会话：行落 origin='team' + agent_id
+     *  （恒 general anchor；serve-api 校验 agent 存在且 chat-capable）。省略 = 现状。 */
+    agentId?: string | null
     backendKind: ChatBackendKind
     backendModel?: string | null
     backendAgentPageId?: string | null

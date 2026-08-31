@@ -56,6 +56,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       anchorType?: ChatAnchorType
       emailId?: number | null
       matterId?: number
+      agentId?: string | null
       backendKind: ChatBackendKind
       backendModel?: string | null
       backendAgentPageId?: string | null
@@ -65,6 +66,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       // email 路径**逐字节零回归**：不带 anchorType（serve-api 默认 'email'）；'general'
       // 显式带 anchorType:'general' + emailId:null；'matter' 显式带 matterId 且绝不带 emailId。
       // serve-api _validate_session_opts 逐分支校验，createNewSession 始终无条件 INSERT。
+      // P4b：general 支可带 agentId（团队会话 → origin='team' + agent_id；服务端校验
+      // agent 存在且 chat-capable）。仅 general 支转发 —— email/matter 会话没有 agent 身份。
       const base = {
         backendKind: input.backendKind,
         backendModel: input.backendModel ?? null,
@@ -72,7 +75,12 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       }
       const body =
         input.anchorType === 'general'
-          ? { anchorType: 'general', emailId: null, ...base }
+          ? {
+              anchorType: 'general',
+              emailId: null,
+              ...(input.agentId != null ? { agentId: input.agentId } : {}),
+              ...base
+            }
           : input.anchorType === 'matter'
             ? { anchorType: 'matter', matterId: input.matterId, ...base }
             : { emailId: input.emailId ?? null, ...base }

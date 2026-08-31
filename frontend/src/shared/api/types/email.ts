@@ -46,6 +46,11 @@ export interface EnrichedEmailMeta extends EmailMeta {
    *  可能值: '未处理' / 'AI Reviewed' / '已同步' / '已完成' / '草稿已创建';
    *  老邮件未被任何写入触达时为 null. */
   processing_status: string | null
+  /** 08-31 — `llm_processing.status` **原始值**（pending / success / failed；无行 = null）。
+   *  🔴 `ai_review_status` 把 failed 与 pending 都映成 'pending'，失败的预处理在读侧因此
+   *  分不出来（团队页记录列里根本看不见）。列表面要区分失败行只能看这个。老后端无此字段
+   *  → undefined，消费方必须容忍。 */
+  llm_status?: string | null
 }
 
 export interface MailboxSummary {
@@ -81,6 +86,15 @@ export interface AIFields {
   ai_model: string | null
   /** Raw labels blob for Sprint 4 AI Chat context / V1.5 debug. Null if no LLM run. */
   labels_raw: Record<string, unknown> | null
+  /** 08-31 — 团队页「AI 邮件预处理」执行详情用的六个字段（命名沿 `llm_processing` 列名）。
+   *  它们**一直在库里**，只是从没投影出来（r10 §2.4）。旧后端 → undefined。
+   *  `llm_status` 是原始 status（pending / success / failed），见 EnrichedEmailMeta 同名字段。 */
+  llm_status?: string | null
+  latency_ms?: number | null
+  input_tokens?: number | null
+  output_tokens?: number | null
+  retry_count?: number | null
+  last_error?: string | null
 }
 
 export interface ListOpts {

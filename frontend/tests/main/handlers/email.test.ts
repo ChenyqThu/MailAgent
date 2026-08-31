@@ -491,6 +491,24 @@ describe('getAIFields', () => {
     expect(f.labels_raw?.language).toBe('中文')
   })
 
+  // 08-31 — 团队页「AI 邮件预处理」执行详情要的六个字段。DAO（打包 app 的读路径）与
+  // serve-api `_shape_ai_fields`（远程 web 的读路径）必须投影同一组，漏一处 = 桌面端
+  // 详情空着而远程端正常，且两边都不会报错。
+  test('投影预处理执行明细：原始 status + 耗时 / token / 重试 / 错误', () => {
+    const ok = handlers.getAIFields(101)!
+    expect(ok.llm_status).toBe('success')
+    expect(ok.latency_ms).toBe(1500)
+    expect(ok.input_tokens).toBe(6000)
+    expect(ok.output_tokens).toBe(200)
+
+    // 🔴 失败行：ai_review_status 把它压成 'pending'（与「从没跑过」同形），只有
+    // llm_status 分得出来 —— 这是失败的预处理此前在团队页里看不见的根子。
+    const failed = handlers.getAIFields(102)!
+    expect(failed.ai_review_status).toBe('pending')
+    expect(failed.llm_status).toBe('failed')
+    expect(failed.latency_ms).toBeNull()
+  })
+
   test('no llm_processing row at all → ai_* fields null', () => {
     const f = handlers.getAIFields(103)!
     expect(f.processing_status).toBeNull()

@@ -267,6 +267,10 @@ export type {
   ReportAgentCreateInput,
   AgentRunState,
   AgentRunHistoryItem,
+  AgentRunLogItem,
+  AgentRunListItem,
+  AgentRunStep,
+  AgentRunStepKind,
   ReportRunResult,
   ProjectProgressRunItem,
   AgentRunPendingCount,
@@ -278,7 +282,8 @@ export type {
 export type {
   FeedbackApi,
   FeedbackDiagnostics,
-  FeedbackScreenshot,
+  FeedbackImage,
   FeedbackSubmitOpts
 } from './types/feedback'
+export type { TodayApi, TodayData, TodayReplyItem } from './types/today'
 export type { MailApi } from './types/mail-api'

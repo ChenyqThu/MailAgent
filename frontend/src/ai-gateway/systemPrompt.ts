@@ -146,6 +146,17 @@ export function buildGatewaySystemPrompt(args: {
     jobId: number
     sessionId: number
   }
+  /** P4b — the TEAM identity of an owner-present session opened AS an agent (origin='team').
+   *  Server-resolved (cfg.resolveSessionAgent, never from the body). Renders the
+   *  <current_team_agent> block below — the 形态 α identity block: name + duty REFERENCE +
+   *  coarse schedule line. Mutually exclusive with headlessAgentIdentity by construction
+   *  (headless runs are never team sessions); ignored when headlessAgentRun is true. */
+  sessionAgentIdentity?: {
+    agentId: string
+    agentTitle: string
+    duty?: string | null
+    scheduleLine?: string | null
+  } | null
   /** W6 — true iff THIS run's built ToolSet holds suggest_followups (manual chat). Injects the
    *  follow-up guidance block; absent/false → byte-identical prompt (headless / harness / tests). */
   followupToolAvailable?: boolean
@@ -198,6 +209,14 @@ export function buildGatewaySystemPrompt(args: {
     args.headlessAgentRun === true && args.headlessAgentIdentity
       ? `<current_custom_agent>\n  <id>${escapeXml(args.headlessAgentIdentity.agentId)}</id>\n  <title>${escapeXml(args.headlessAgentIdentity.agentTitle)}</title>\n  <job_id>${args.headlessAgentIdentity.jobId}</job_id>\n  <session_id>${args.headlessAgentIdentity.sessionId}</session_id>\n</current_custom_agent>`
       : ''
+  // P4b — team identity block (owner-present sessions opened AS an agent). Reuses the
+  // <current_custom_agent> assembly convention above; the trailing sentence pins the 形态 α
+  // semantics: the duty is a REFERENCE, not an instruction — without it a report agent's prompt
+  // ("generate the daily report") would turn every greeting into a report run.
+  const teamIdentity =
+    args.headlessAgentRun !== true && args.sessionAgentIdentity
+      ? buildTeamAgentIdentityBlock(args.sessionAgentIdentity)
+      : ''
   // W6 — follow-up guidance only when the run's ToolSet holds the tool (manual chat). A constant
   // block per run shape, so the cacheable prefix stays stable across a manual session's turns.
   const followupGuidance = args.followupToolAvailable === true ? FOLLOWUP_SUGGESTIONS_GUIDANCE : ''
@@ -206,9 +225,41 @@ export function buildGatewaySystemPrompt(args: {
   // only when non-empty; the date block is ALWAYS non-empty and remains LAST so the preceding prompt
   // stays a stable cache prefix and the date changes at most once per day.
   const dateBlock = buildCurrentDateBlock(args.contextSnapshot)
-  return [stable, contextBlock, identity, executionDiscipline, followupGuidance, dateBlock]
+  return [
+    stable,
+    contextBlock,
+    identity,
+    teamIdentity,
+    executionDiscipline,
+    followupGuidance,
+    dateBlock
+  ]
     .filter((s) => s.length > 0)
     .join('\n\n')
+}
+
+/** P4b — render the <current_team_agent> identity block. Exported for tests. */
+export function buildTeamAgentIdentityBlock(identity: {
+  agentId: string
+  agentTitle: string
+  duty?: string | null
+  scheduleLine?: string | null
+}): string {
+  const duty = identity.duty?.trim()
+  const schedule = identity.scheduleLine?.trim()
+  const lines = [
+    '<current_team_agent>',
+    `  <id>${escapeXml(identity.agentId)}</id>`,
+    `  <title>${escapeXml(identity.agentTitle)}</title>`,
+    ...(duty ? [`  <duty>${escapeXml(duty)}</duty>`] : []),
+    ...(schedule ? [`  <schedule>${escapeXml(schedule)}</schedule>`] : []),
+    '</current_team_agent>',
+    `你正在以团队成员「${identity.agentTitle}」的身份与用户对话。` +
+      (duty
+        ? '<duty> 是它作为自动化成员的职责设定，仅作背景参考——本会话是用户主动发起的交互对话，除非用户明确要求，不要自行开始执行该任务。'
+        : '本会话是用户主动发起的交互对话。')
+  ]
+  return lines.join('\n')
 }
 
 function escapeXml(value: string): string {

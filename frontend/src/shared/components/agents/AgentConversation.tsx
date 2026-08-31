@@ -104,6 +104,23 @@ export interface AgentConversationProps {
   /** 0813 dogfood 轮 3 #3 —— 场地横向余量紧张（浮窗 / 抽屉 dock）：composer 工具行走紧凑变体
    *  （context 环只画环、不写数值）。/sessions 全页不传 → 现状。判定在场地、不在组件里。 */
   denseControls?: boolean
+  /** P4b（task 08-27 团队对话）—— 以指定 agent 身份对话。与主 agent **完全同构**（同一套
+   *  runtime / 工具面 / 审批面，owner 拍板），差异只有三件、全在这里声明：
+   *  ① 懒建会话带 agentId（→ origin='team' + agent_id，gateway 按 sessionId 反查装配身份）；
+   *  ② 欢迎屏换成 Logo + 名字 + 「它什么时候会自己动」；
+   *  ③ 新会话的 model 选择器初始显示 agent 的 model（不做双向）。
+   *  省略（/sessions / 浮窗 / 事项对话）→ 字节级现状。宿主按成员 key 重挂，本 prop 视为
+   *  mount 常量（进 ChatThreadIdentity 去重键，切成员绝不复用别人的在途创建）。 */
+  agentIdentity?: AgentConversationAgentIdentity
+}
+
+/** P4b — 团队会话的身份描述（宿主 = team/TeamChatHost 组装；本组件只消费）。 */
+export interface AgentConversationAgentIdentity {
+  agentId: string
+  /** agent 行的 model（'' / null = 跟随全局默认）。 */
+  model?: string | null
+  /** 欢迎屏：Logo + 「和 X 开始新对话」 + 排程一句话。 */
+  welcome: { icon?: React.ReactNode; title: string; hint: string }
 }
 
 export function AgentConversation({
@@ -112,7 +129,8 @@ export function AgentConversation({
   welcomeAlign = 'center',
   initialMentionEmailId,
   initialMatterTarget,
-  denseControls
+  denseControls,
+  agentIdentity
 }: AgentConversationProps): React.JSX.Element {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -222,7 +240,9 @@ export function AgentConversation({
   const { model, selectModel: onModelChange } = useSessionModelPreference({
     sessionId: chatActiveSessionId,
     sessionModel,
-    persist: persistSessionModel
+    persist: persistSessionModel,
+    // P4b — 团队会话的新对话初始显示 agent 的 model（拍板：初始态显示即可，不做双向）。
+    newSessionModel: agentIdentity?.model ?? null
   })
   const availableModels = useComposerModels()
   // 08-05 WP-16b — 思考不再是「跟着模型自动开」（去思考开关那一版的做法），而是与邮件面同一套
@@ -474,6 +494,10 @@ export function AgentConversation({
   modelRef.current = model
   const adoptRef = useRef(chatAdoptSession)
   adoptRef.current = chatAdoptSession
+  // P4b — agent 身份进线程去重键（同 anchor 不同 agent 绝不复用在途创建）。ref 形态与
+  // matterAnchorRef 同构；团队宿主按成员 key 重挂，mount 内不变。
+  const agentIdentityRef = useRef(agentIdentity ?? null)
+  agentIdentityRef.current = agentIdentity ?? null
   const onEnsureSession = useMemo(
     () =>
       createEnsureSession({
@@ -481,7 +505,8 @@ export function AgentConversation({
         // 锚点从 ref 读（matter binding 在本 hook 之后才算得出来；真正执行时它已就位）。
         getIdentity: () => ({
           navEpoch: navEpochRef.current,
-          anchorId: matterAnchorRef.current?.id ?? null
+          anchorId: matterAnchorRef.current?.id ?? null,
+          agentId: agentIdentityRef.current?.agentId ?? null
         }),
         createSession: (identity) =>
           mailApiRef.current.chat.newSession(
@@ -492,12 +517,21 @@ export function AgentConversation({
                   backendKind: 'ai-sdk',
                   backendModel: modelRef.current
                 }
-              : {
-                  anchorType: 'general',
-                  emailId: null,
-                  backendKind: 'ai-sdk',
-                  backendModel: modelRef.current
-                }
+              : identity.agentId !== null
+                ? {
+                    // P4b — 团队会话：general anchor + agentId（serve-api 落 origin='team'）。
+                    anchorType: 'general',
+                    emailId: null,
+                    agentId: identity.agentId,
+                    backendKind: 'ai-sdk',
+                    backendModel: modelRef.current
+                  }
+                : {
+                    anchorType: 'general',
+                    emailId: null,
+                    backendKind: 'ai-sdk',
+                    backendModel: modelRef.current
+                  }
           ),
         adopt: (session) => {
           adoptRef.current(session)
@@ -1023,7 +1057,9 @@ export function AgentConversation({
                   runStatusSlot={runStatusSlot}
                   // 0812 G-20 —— 事项对话的空态（非事项对话为 null → 通用现状）。
                   // D15（0813 dogfood）：输入区下的「对话历史不是正式事项知识…」脚注已删。
-                  welcomeOverride={matter.welcome ?? undefined}
+                  // P4b —— 团队会话的空态（Logo + 名字 + 排程一句话）；事项优先（互斥场景，
+                  // 团队宿主不传 matter target）。
+                  welcomeOverride={matter.welcome ?? agentIdentity?.welcome ?? undefined}
                 />
               </MatterChatSurfaceContext.Provider>
             </AiSdkRuntimeProvider>

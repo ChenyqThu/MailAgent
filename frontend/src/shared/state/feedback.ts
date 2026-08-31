@@ -19,6 +19,11 @@ function readAttachDiagnostics(): boolean {
 
 interface FeedbackState {
   open: boolean
+  /** 每次打开 +1。弹窗内容以它作 key —— 开一次就是全新一份表单。
+   *  🔴 不能靠「关掉时 radix 会卸载它」：radix 只卸载 portal 子树，返回 DialogContent 的
+   *  那个组件本身一直挂着，state 会原样留到下一次打开（发完一条再打开会停在上一条的
+   *  回执页，而那一页只有「关闭」按钮，等于第二条反馈发不出去）。 */
+  openSeq: number
   /** 「发送反馈时附上诊断包」的默认值。 */
   attachDiagnosticsDefault: boolean
   openDialog(): void
@@ -28,8 +33,9 @@ interface FeedbackState {
 
 export const useFeedbackStore = create<FeedbackState>((set) => ({
   open: false,
+  openSeq: 0,
   attachDiagnosticsDefault: readAttachDiagnostics(),
-  openDialog: () => set({ open: true }),
+  openDialog: () => set((s) => ({ open: true, openSeq: s.openSeq + 1 })),
   closeDialog: () => set({ open: false }),
   setAttachDiagnosticsDefault: (v) => {
     if (typeof localStorage !== 'undefined') {

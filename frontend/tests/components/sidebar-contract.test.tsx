@@ -61,18 +61,38 @@ vi.mock('@shared/hooks/useMailApi', () => ({
     },
     // 历史上供 TeamNavPanel（P1 过渡二级栏）消费；P4a 团队域转 'page' 后 shell 侧
     // 已无消费点，留着作无害兜底（避免未来 shell 侧新增 report 读面时 mock 缺腿）。
+    // P4c 起 TodayNavPanel 真的要用 report.list / listRuns（二级栏计数与主区同源，
+    // 走同一个 useTodaySections）。
     report: {
       getConfig: vi.fn().mockResolvedValue([
         { id: 'a1', title: '跟进员', type: 'custom', enabled: true, description: '盯事项推进' },
         { id: 'a2', title: '搜索助手', type: 'search', enabled: true, description: null }
-      ])
-    }
+      ]),
+      list: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+      listRuns: vi.fn().mockResolvedValue({ items: [], total: 0 })
+    },
+    today: { get: vi.fn().mockResolvedValue({ reply: [], nextHardPoint: null }) }
+  })
+}))
+
+// P4c — 今日二级栏的计数走 useTodaySections（与主区同源），它会拉日历 agenda。
+vi.mock('@shared/components/calendar/hooks/useCalendarAgenda', () => ({
+  localOlsonTz: () => 'Asia/Shanghai',
+  useCalendarAgenda: () => ({
+    data: [],
+    isLoading: false,
+    isFetching: false,
+    isError: false,
+    refetch: vi.fn()
   })
 }))
 
 vi.mock('@shared/components/matters/hooks', () => ({
   useMattersEnabled: () => gates.matters,
-  useGlobalAttention: () => ({ data: { items: [] } })
+  useGlobalAttention: () => ({ data: { items: [] } }),
+  // P4c — TodayNavPanel 经 useTodaySections → useTodayData 拉这两条（例外面的四源之二）。
+  usePendingMatterUpdates: () => ({ data: { items: [] }, isPending: false, isError: false }),
+  useLiveItemDispatches: () => ({ data: { items: [] }, isPending: false, isError: false })
 }))
 
 vi.mock('@shared/components/contacts/hooks', () => ({

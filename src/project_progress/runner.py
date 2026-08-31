@@ -26,8 +26,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from src.agents.run_log import record_agent_run
 from src.config import config
 
+from .agent_config import PROJECT_PROGRESS_AGENT_ID
 from .detector import ProjectProgressDetector
 from .notion_schema import ProjectProgressSchemaBootstrapper
 from .notion_sync import (
@@ -88,6 +90,111 @@ class SyncSummary:
             f"st_done={self.projects_marked_done} st_suspended={self.projects_marked_suspended} "
             f"dry_run={self.dry_run} dur={self.duration_sec:.1f}s"
         )
+
+
+@dataclass
+class UpsertAllResult:
+    """``_upsert_all`` 的产物: 计数 + 逐项目 outcome + mark-done 逐条动作。
+
+    outcome 明细此前在 tally 累加完就丢, 执行台账 (agent_run_log 步骤表) 要的
+    正是「每一步的对象」(r10 §2.3), 故随计数一起返回。
+    """
+
+    created: int = 0
+    updated: int = 0
+    skipped: int = 0
+    failed: int = 0
+    marked_done: int = 0
+    projects_marked_done_sheet: int = 0
+    projects_marked_suspended_sheet: int = 0
+    failed_samples: List[str] = field(default_factory=list)
+    done_samples: List[str] = field(default_factory=list)
+    outcomes: List[UpsertOutcome] = field(default_factory=list)
+    mark_done_actions: List[Dict[str, Any]] = field(default_factory=list)
+    schema_error: Optional[str] = None
+
+
+#: 逐条步骤行的上限 —— 失败恒逐条 (要说清为什么), 成功写入超过上限折叠成一行汇总,
+#: 防止大 xlsx (千项目级) 把步骤表灌成流水账。
+_PP_STEP_DETAIL_CAP = 50
+
+
+def _upsert_steps(up: UpsertAllResult) -> List[Dict[str, Any]]:
+    """``UpsertAllResult`` → agent_run_log 步骤行 (schema → 逐项目 upsert → mark-done)。"""
+    steps: List[Dict[str, Any]] = []
+    if up.schema_error is not None:
+        steps.append({
+            "kind": "tool", "name": "schema_bootstrap", "ok": False,
+            "detail": (
+                f"Notion schema 补齐失败（non-fatal，缺失字段本轮跳过写入）："
+                f"{up.schema_error[:200]}"
+            ),
+        })
+    shown = 0
+    folded = 0
+    for oc in up.outcomes:
+        if oc.action == "failed":
+            steps.append({
+                "kind": "tool", "name": "upsert_project", "ok": False,
+                "detail": f"{oc.external_id} — 失败：{str(oc.error or '')[:200]}",
+                "payload": {
+                    "external_id": oc.external_id,
+                    "error": str(oc.error or "")[:300],
+                },
+            })
+        elif oc.action in ("created", "updated"):
+            if shown < _PP_STEP_DETAIL_CAP:
+                shown += 1
+                label = "已创建" if oc.action == "created" else "已更新"
+                steps.append({
+                    "kind": "tool", "name": "upsert_project", "ok": True,
+                    "detail": f"{oc.external_id} — {label}",
+                    "payload": {
+                        "external_id": oc.external_id, "action": oc.action,
+                    },
+                })
+            else:
+                folded += 1
+    if folded:
+        steps.append({
+            "kind": "tool", "name": "upsert_project", "ok": True,
+            "detail": f"…另有 {folded} 个项目已写入（明细折叠）",
+        })
+    if up.skipped:
+        steps.append({
+            "kind": "tool", "name": "upsert_project", "ok": True,
+            "detail": f"{up.skipped} 个项目与上次内容一致，跳过写入（幂等）",
+        })
+    mk_shown = 0
+    mk_folded = 0
+    for act in up.mark_done_actions:
+        if act.get("ok") is False:
+            steps.append({
+                "kind": "tool", "name": "mark_done", "ok": False,
+                "detail": (
+                    f"{act.get('external_id')} — 标记 Done 失败："
+                    f"{str(act.get('error') or '')[:200]}"
+                ),
+                "payload": act,
+            })
+        elif mk_shown < _PP_STEP_DETAIL_CAP:
+            mk_shown += 1
+            steps.append({
+                "kind": "tool", "name": "mark_done", "ok": True,
+                "detail": (
+                    f"{act.get('external_id')}: {act.get('title')} — "
+                    f"本周 xlsx 里消失，兜底标记为 Done"
+                ),
+                "payload": act,
+            })
+        else:
+            mk_folded += 1
+    if mk_folded:
+        steps.append({
+            "kind": "tool", "name": "mark_done", "ok": True,
+            "detail": f"…另有 {mk_folded} 个项目兜底标记为 Done（明细折叠）",
+        })
+    return steps
 
 
 class ProjectProgressRunner:
@@ -205,11 +312,47 @@ class ProjectProgressRunner:
 
         notion_email_page_id = notion_email_page_id or email_row.get("notion_page_id")
 
+        # 执行台账 (agent_run_log, task 08-27 P4a): 零 LLM 的确定性流程, transcript 形态
+        # 恒为 触发 → 工具步骤 → 输出, 无 think (design §8.1)。dry_run 全程不落账。
+        run_started_ms = int(time.time() * 1000)
+        trigger_detail = f"收到项目周报邮件《{subject}》"
+        run_steps: List[Dict[str, Any]] = [{
+            "kind": "trig",
+            "detail": f"{trigger_detail}（{date_received}）",
+            "payload": {
+                "internal_id": internal_id,
+                "message_id": email_row.get("message_id"),
+            },
+        }]
+
+        def _run_log(status: str, summary: str, *, error: Optional[str] = None) -> None:
+            if dry_run:
+                return
+            try:
+                record_agent_run(
+                    self.sync_store_db_path,
+                    agent_id=PROJECT_PROGRESS_AGENT_ID,
+                    started_at_ms=run_started_ms,
+                    status=status,
+                    trigger_kind="email_filter",
+                    trigger_detail=trigger_detail,
+                    summary=summary,
+                    error=error,
+                    steps=run_steps,
+                )
+            except Exception as log_exc:  # noqa: BLE001 — 台账是旁路, 绝不影响同步终态
+                logger.debug(f"[pp] run log write skipped: {log_exc}")
+
         # 已处理检查
         existing = self.progress_store.get(internal_id)
         if existing and existing.status == "completed" and not force:
             msg = f"already completed (week={existing.week_tag}, md5={existing.xlsx_md5})"
             logger.info(f"[pp] skip internal_id={internal_id}: {msg}")
+            run_steps.append({
+                "kind": "out", "name": "skip",
+                "detail": f"这封已在 {existing.week_tag} 处理过（同 md5），本次不重复写入",
+            })
+            _run_log("skipped", f"已处理过（{existing.week_tag}）· 未重复写入")
             return SyncSummary(
                 internal_id=internal_id,
                 status="skipped",
@@ -223,12 +366,22 @@ class ProjectProgressRunner:
         xlsx_filename, xlsx_bytes = self._fetch_xlsx(internal_id, mailbox)
         if xlsx_bytes is None:
             msg = "no .xlsx attachment found in email"
+            run_steps.append({
+                "kind": "tool", "name": "fetch_xlsx", "ok": False,
+                "detail": "邮件里找不到 .xlsx 附件 — 整封跳过，一条都没写",
+            })
+            _run_log("failed", "没找到 .xlsx 附件 · 未写入任何项目", error=msg)
             return SyncSummary(
                 internal_id=internal_id, status="failed", error=msg, dry_run=dry_run
             )
         import hashlib
 
         md5 = hashlib.md5(xlsx_bytes).hexdigest()
+        run_steps.append({
+            "kind": "tool", "name": "fetch_xlsx", "ok": True,
+            "detail": f"读取附件 {xlsx_filename}（{len(xlsx_bytes)} 字节）",
+            "payload": {"filename": xlsx_filename, "md5": md5},
+        })
 
         # md5 去重（转发链）
         same_md5 = self.progress_store.get_by_md5(md5)
@@ -243,6 +396,14 @@ class ProjectProgressRunner:
             )
             logger.info(f"[pp] skip internal_id={internal_id}: {msg}")
             self.progress_store.skip(internal_id, msg, md5=md5)
+            run_steps.append({
+                "kind": "out", "name": "skip",
+                "detail": (
+                    f"同一份 xlsx（md5 {md5[:8]}…）已随另一封邮件处理过 —— 转发链"
+                    f"去重，本次不重复写入"
+                ),
+            })
+            _run_log("skipped", "同一份 xlsx 已处理过（转发链去重）· 未重复写入")
             return SyncSummary(
                 internal_id=internal_id,
                 status="skipped",
@@ -260,6 +421,14 @@ class ProjectProgressRunner:
             logger.exception(f"[pp] parse_xlsx failed: {e}")
             msg = f"parse_xlsx failed: {e}"
             self._record_fail(internal_id, subject, date_received, md5, xlsx_filename, msg)
+            run_steps.append({
+                "kind": "tool", "name": "parse_xlsx", "ok": False,
+                "detail": (
+                    f"解析失败 — 整批跳过，一条都没写（表格结构对不上时写进去"
+                    f"的只会是错位数据）：{str(e)[:200]}"
+                ),
+            })
+            _run_log("failed", "xlsx 解析失败 · 未写入任何项目", error=msg[:300])
             return SyncSummary(
                 internal_id=internal_id, status="failed", error=msg, dry_run=dry_run
             )
@@ -269,6 +438,20 @@ class ProjectProgressRunner:
             f"total={parsed.total_rows} enbu={parsed.filtered_rows} "
             f"projects={parsed.projects_total} week={parsed.week_tag}"
         )
+        run_steps.append({
+            "kind": "tool", "name": "parse_xlsx", "ok": True,
+            "detail": (
+                f"解析 {parsed.week_tag}：全表 {parsed.total_rows} 行 · "
+                f"{self.filter_bu} {parsed.filtered_rows} 行 · "
+                f"项目 {parsed.projects_total} 个"
+            ),
+            "payload": {
+                "week_tag": parsed.week_tag,
+                "total_rows": parsed.total_rows,
+                "enbu_rows": parsed.filtered_rows,
+                "projects_total": parsed.projects_total,
+            },
+        })
 
         if project_limit and project_limit > 0 and project_limit < len(parsed.projects):
             head = parsed.projects[:project_limit]
@@ -347,17 +530,7 @@ class ProjectProgressRunner:
         # project_limit 切片时 xlsx 的项目集不完整，跳过避免误标
         do_mark_done = project_limit is None or project_limit <= 0
         try:
-            (
-                created,
-                updated,
-                skipped,
-                failed,
-                marked_done,
-                projects_marked_done,
-                projects_marked_suspended,
-                failed_samples,
-                done_samples,
-            ) = await self._upsert_all(
+            up = await self._upsert_all(
                 parsed,
                 email_url,
                 mark_missing_as_done=do_mark_done,
@@ -365,6 +538,15 @@ class ProjectProgressRunner:
         except Exception as e:
             logger.exception(f"[pp] upsert_all fatal: {e}")
             self.progress_store.fail(record, str(e))
+            run_steps.append({
+                "kind": "tool", "name": "upsert_project", "ok": False,
+                "detail": f"写入中断：{str(e)[:200]}",
+            })
+            _run_log(
+                "failed",
+                f"{parsed.week_tag} · 写入中断 · 未完成",
+                error=str(e)[:300],
+            )
             return SyncSummary(
                 internal_id=internal_id,
                 status="failed",
@@ -377,6 +559,14 @@ class ProjectProgressRunner:
                 projects_total=parsed.projects_total,
                 duration_sec=time.time() - started,
             )
+        created, updated = up.created, up.updated
+        skipped, failed = up.skipped, up.failed
+        marked_done = up.marked_done
+        projects_marked_done = up.projects_marked_done_sheet
+        projects_marked_suspended = up.projects_marked_suspended_sheet
+        failed_samples = up.failed_samples
+        done_samples = up.done_samples
+        run_steps.extend(_upsert_steps(up))
 
         record.projects_created = created
         record.projects_updated = updated
@@ -392,6 +582,24 @@ class ProjectProgressRunner:
             self.progress_store.complete(record)
             status = "completed"
             err = None
+
+        run_summary = (
+            f"{parsed.week_tag} · 项目 {parsed.projects_total} 个："
+            f"新建 {created} · 更新 {updated} · 失败 {failed}"
+            + (f" · 兜底标记完成 {marked_done}" if marked_done else "")
+        )
+        run_steps.append({
+            "kind": "out", "name": "sync_result",
+            "detail": (
+                run_summary if status == "completed"
+                else f"{run_summary} —— 全部项目写入失败，整批按失败处理"
+            ),
+        })
+        _run_log(
+            "completed" if status == "completed" else "failed",
+            run_summary,
+            error=err,
+        )
 
         summary = SyncSummary(
             internal_id=internal_id,
@@ -426,10 +634,12 @@ class ProjectProgressRunner:
         email_url: Optional[str],
         *,
         mark_missing_as_done: bool,
-    ) -> Tuple[int, int, int, int, int, int, int, List[str], List[str]]:
-        """返回 (created, updated, skipped, failed, marked_done_fallback,
-                  projects_marked_done_sheet2, projects_marked_suspended_sheet3,
-                  failed_samples, done_samples)
+    ) -> "UpsertAllResult":
+        """两阶段 upsert 全量执行, 返回 ``UpsertAllResult``。
+
+        计数之外还带**逐项目 outcome** 与 mark-done 逐条动作 —— 执行台账
+        (agent_run_log 步骤表, task 08-27 P4a) 要的就是「每一步的对象」, 此前
+        它们在 tally 累加完就丢了 (r10 §2.3)。
         """
         sem = asyncio.Semaphore(self.UPSERT_CONCURRENCY)
         created = updated = skipped = failed = 0
@@ -438,6 +648,9 @@ class ProjectProgressRunner:
         projects_marked_suspended_sheet = 0  # 因 Sheet=Suspended 写 Status=Suspended 的项目
         failed_samples: List[str] = []
         done_samples: List[str] = []
+        outcomes: List[UpsertOutcome] = []
+        mark_done_actions: List[Dict[str, Any]] = []
+        schema_error: Optional[str] = None
 
         # external_id → SheetKind, 用于 tally 时区分项目所属 sheet
         ext_to_kind: Dict[str, SheetKind] = {p.external_id: p.current_sheet for p in parsed.projects}
@@ -462,10 +675,12 @@ class ProjectProgressRunner:
                 await bootstrapper.ensure_schema()
             except Exception as e:
                 logger.warning(f"[pp] schema bootstrap failed (non-fatal): {e}")
+                schema_error = str(e)[:300]
 
             def tally(outcome: UpsertOutcome):
                 nonlocal created, updated, skipped, failed
                 nonlocal projects_marked_done_sheet, projects_marked_suspended_sheet
+                outcomes.append(outcome)
                 if outcome.action == "created":
                     created += 1
                 elif outcome.action == "updated":
@@ -534,14 +749,18 @@ class ProjectProgressRunner:
 
             # 标记 xlsx 中消失的项目为 Done
             if mark_missing_as_done:
-                marked_done, done_samples = await self._mark_missing_done(
-                    client, parsed
+                marked_done, done_samples, mark_done_actions = (
+                    await self._mark_missing_done(client, parsed)
                 )
 
-        return (
-            created, updated, skipped, failed,
-            marked_done, projects_marked_done_sheet, projects_marked_suspended_sheet,
-            failed_samples, done_samples,
+        return UpsertAllResult(
+            created=created, updated=updated, skipped=skipped, failed=failed,
+            marked_done=marked_done,
+            projects_marked_done_sheet=projects_marked_done_sheet,
+            projects_marked_suspended_sheet=projects_marked_suspended_sheet,
+            failed_samples=failed_samples, done_samples=done_samples,
+            outcomes=outcomes, mark_done_actions=mark_done_actions,
+            schema_error=schema_error,
         )
 
     async def backfill_project_start(
@@ -621,18 +840,25 @@ class ProjectProgressRunner:
 
     async def _mark_missing_done(
         self, client: ProjectProgressNotionClient, parsed: ParseResult
-    ) -> Tuple[int, List[str]]:
+    ) -> Tuple[int, List[str], List[Dict[str, Any]]]:
         """查 Notion 中 BU=TPS-ENBU & Status != Done 的所有页，
         对比本次 xlsx 的 external_id 集合，把"xlsx 消失"的项目标记为 Done。
 
         只在"全量 xlsx 同步"时做（不做切片 / project_limit 时 skip），避免误标。
+
+        返回 (成功数, 前 10 条样本, **逐条动作**)。逐条动作
+        ({external_id, title, ok, error?}) 供执行台账落步骤行 —— 兜底标记是最容易
+        「事后说不清为什么这个项目被标完成了」的一步, 必须逐条留痕。
         """
         bu = parsed.filter_bu
         try:
             active_pages = await client.list_active_pages(bu=bu)
         except Exception as e:
             logger.warning(f"[pp] list_active_pages failed, skip mark-done: {e}")
-            return 0, []
+            return 0, [], [{
+                "external_id": "*", "title": "mark-done 扫描",
+                "ok": False, "error": f"list_active_pages failed: {str(e)[:200]}",
+            }]
         xlsx_ext_ids = {p.external_id for p in parsed.projects}
         to_mark = [
             pg
@@ -644,6 +870,7 @@ class ProjectProgressRunner:
             f"xlsx_ext_ids={len(xlsx_ext_ids)} missing_in_xlsx={len(to_mark)}"
         )
         samples: List[str] = []
+        actions: List[Dict[str, Any]] = []
         cnt = 0
         sem = asyncio.Semaphore(self.UPSERT_CONCURRENCY)
 
@@ -656,13 +883,22 @@ class ProjectProgressRunner:
                     logger.warning(
                         f"[pp] mark Done failed {pg['external_id']!r}: {e}"
                     )
+                    actions.append({
+                        "external_id": pg["external_id"],
+                        "title": (pg.get("title") or "")[:60],
+                        "ok": False, "error": str(e)[:200],
+                    })
                     return
             cnt += 1
+            actions.append({
+                "external_id": pg["external_id"],
+                "title": (pg.get("title") or "")[:60], "ok": True,
+            })
             if len(samples) < 10:
                 samples.append(f"{pg['external_id']}: {pg['title'][:60]}")
 
         await asyncio.gather(*[mark_one(pg) for pg in to_mark])
-        return cnt, samples
+        return cnt, samples, actions
 
     # ---------- helpers ----------
 

@@ -15,6 +15,7 @@ from jsonschema import ValidationError, validate
 from loguru import logger
 
 from src.agents.fence import fence_email_envelope, fence_untrusted, sanitize_untrusted
+from src.agents.run_log import record_agent_run
 from src.config import config as app_config
 from src.contacts import governance
 from src.contacts import service as contact_service
@@ -26,6 +27,7 @@ from src.contacts.org_frame import (
     render_org_frame,
 )
 from src.contacts.profile_config import (
+    CONTACT_PROFILE_AGENT_ID,
     ContactProfileAgentConfig,
     get_contact_profile_agent_config,
 )
@@ -34,7 +36,6 @@ from src.contacts.profile_prompts import (
     PROFILE_TOOL_SCHEMA,
     build_profile_system_prompt,
 )
-from src.contacts.profile_runs import record_profile_run
 from src.contacts.repository import ContactRepository
 from src.contacts.taxonomy import CONTACT_KIND_PERSON, strip_evidence_refs
 from src.llm_agent.client import LLMCallError, LLMClient
@@ -663,15 +664,135 @@ def clear_stale_running(conn: sqlite3.Connection, *, round_started_ms: int) -> i
     return int(cursor.rowcount or 0)
 
 
+def _batch_run_status(stats: Dict[str, int]) -> str:
+    """一轮批处理的统计 → agent_run_log 的 status (9 值域子集, 判据单源)。
+
+    skipped = 这一轮没有候选人 (「没人要更新」与「根本没跑」在记录列上必须分得开);
+    「跑了 N 个人、一个都没成」判 failed 而不是 completed —— 那种情况下 completed 是
+    谎报, 团队页会显示成一次正常执行, 用户看不出画像其实全挂了。
+    """
+    if int(stats.get("candidates", 0)) <= 0:
+        return "skipped"
+    if (
+        int(stats.get("ran", 0)) > 0
+        and int(stats.get("ok", 0)) == 0
+        and int(stats.get("failed", 0)) > 0
+    ):
+        return "failed"
+    return "completed"
+
+
+def _batch_summary(stats: Dict[str, int]) -> str:
+    """记录列直接显示的一行 (口径与 v72 台账读侧的三句话一致, v73 起写侧预生成)。"""
+    if int(stats.get("candidates", 0)) <= 0:
+        return "没有待更新画像的联系人"
+    return (
+        f"画像 {stats.get('ok', 0)} 人 · 跳过 {stats.get('skipped', 0)} "
+        f"· 失败 {stats.get('failed', 0)}"
+    )
+
+
+def _skip_reason(profile_error: Optional[str]) -> str:
+    """contact.profile_error 的 skip payload ({"reason":...}) → 人话; 兜底原文截断。"""
+    if not profile_error:
+        return ""
+    try:
+        parsed = json.loads(profile_error)
+        if isinstance(parsed, dict) and parsed.get("reason"):
+            return str(parsed["reason"])[:200]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return str(profile_error)[:200]
+
+
+def _contact_step(
+    db_path: str,
+    contact_id: int,
+    display_name: str,
+    status: str,
+    *,
+    round_started_ms: int,
+    ms: int,
+) -> Dict[str, Any]:
+    """一个联系人的处理结果 → 一条 tool 步骤行 (detail 一句话, payload 带可追溯字段)。
+
+    细节从 contact 行**读回来** (profile_model / profile_error / profile_json 由
+    generate_contact_profile 的各终态分支刚写完) —— 不改 generate 的返回签名。
+    读回失败只降级成没有细节的一句话, 不影响批处理。
+    """
+    row = None
+    try:
+        conn = sqlite3.connect(db_path, timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT profile_model, profile_error, profile_updated_at, "
+                "substr(profile_json, 1, 200) AS output_preview "
+                "FROM contact WHERE id=?",
+                (contact_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        row = None
+    payload: Dict[str, Any] = {"contact_id": contact_id}
+    ok: Optional[bool] = True
+    if status == "ok":
+        # 本轮真更新了画像 vs 证据不足但保留了既有画像 (_finish_skipped 的 ok 分支):
+        # 判据是 profile_updated_at 有没有被本轮 bump —— 两者对用户是不同的事实。
+        updated_this_round = bool(row) and row["profile_updated_at"] == round_started_ms
+        detail = (
+            f"{display_name} — 已更新画像"
+            if updated_this_round
+            else f"{display_name} — 保留现有画像（本轮证据不足）"
+        )
+        if row and row["profile_model"]:
+            payload["model"] = row["profile_model"]
+        if updated_this_round and row and row["output_preview"]:
+            payload["output_preview"] = row["output_preview"]
+    elif status == "skipped":
+        ok = None  # 跳过不是失败, 不标 ✗
+        reason = _skip_reason(row["profile_error"] if row else None)
+        detail = f"{display_name} — 跳过（{reason}）" if reason else f"{display_name} — 跳过"
+        if reason:
+            payload["reason"] = reason
+    else:  # failed
+        ok = False
+        err = (row["profile_error"] if row else None) or ""
+        detail = f"{display_name} — 失败：{err[:200]}" if err else f"{display_name} — 失败"
+        if err:
+            payload["error"] = err[:500]
+    return {
+        "kind": "tool",
+        "name": "generate_contact_profile",
+        "detail": detail,
+        "payload": payload,
+        "ok": ok,
+        "ms": ms,
+    }
+
+
 async def run_profile_batch(
     *,
     db_path: str,
     cfg: ContactProfileAgentConfig,
     now_ms: Optional[int] = None,
     generate_fn: Callable[..., Any] = generate_contact_profile,
+    trigger_kind: str = "schedule",
 ) -> Dict[str, int]:
     round_started_ms = now_ms or int(time.time() * 1000)
     stats = {"candidates": 0, "ran": 0, "ok": 0, "skipped": 0, "failed": 0}
+    steps: list[Dict[str, Any]] = []
+
+    def _trig_step() -> Dict[str, Any]:
+        return {
+            "kind": "trig",
+            "detail": (
+                f"每日画像批 · 候选 {stats['candidates']} 人"
+                f"（本轮上限 {cfg.daily_limit}）"
+            ),
+        }
+
     try:
         repo = ContactRepository(db_path)
         with repo.transaction() as conn:
@@ -682,6 +803,8 @@ async def run_profile_batch(
         stats["candidates"] = len(candidates)
         for row in candidates:
             contact_id = int(row["id"])
+            display_name = str(row["display_name"] or "") or f"联系人 {contact_id}"
+            step_started = time.monotonic()
             try:
                 if not claim_profile_run(db_path, contact_id, now_ms=round_started_ms):
                     continue
@@ -693,19 +816,48 @@ async def run_profile_batch(
             except Exception as exc:  # noqa: BLE001 — one contact never aborts the batch
                 stats["failed"] += 1
                 _finish_failed(db_path, contact_id, now_ms=round_started_ms, error=str(exc))
+                status = "failed"
+            steps.append(
+                _contact_step(
+                    db_path,
+                    contact_id,
+                    display_name,
+                    status,
+                    round_started_ms=round_started_ms,
+                    ms=int((time.monotonic() - step_started) * 1000),
+                )
+            )
     except Exception as exc:
-        # 批级异常 (选候选人就炸了 / 库不可写): 台账仍落一行 status='fail' —— 团队页
+        # 批级异常 (选候选人就炸了 / 库不可写): 台账仍落一行 failed —— 团队页
         # 「记录」列必须看得见「这一轮根本没跑起来」, 否则那天就只是**没有记录**, 与
-        # 「今天没到点」分不开。record_profile_run 自己吞写失败, 不会盖住原异常。
-        record_profile_run(
-            db_path, started_at_ms=round_started_ms, stats=stats, error=str(exc)
+        # 「今天没到点」分不开。record_agent_run 自己吞写失败, 不会盖住原异常。
+        record_agent_run(
+            db_path,
+            agent_id=CONTACT_PROFILE_AGENT_ID,
+            started_at_ms=round_started_ms,
+            status="failed",
+            trigger_kind=trigger_kind,
+            summary=(
+                f"没跑完 · 候选 {stats['candidates']} 人，已完成 {stats['ok']} 人"
+            ),
+            error=str(exc),
+            steps=[_trig_step(), *steps],
         )
         raise
     logger.info(
         "[contact-profile] batch candidates={} ran={} ok={} skip={} fail={}",
         stats["candidates"], stats["ran"], stats["ok"], stats["skipped"], stats["failed"],
     )
-    record_profile_run(db_path, started_at_ms=round_started_ms, stats=stats)
+    summary = _batch_summary(stats)
+    record_agent_run(
+        db_path,
+        agent_id=CONTACT_PROFILE_AGENT_ID,
+        started_at_ms=round_started_ms,
+        status=_batch_run_status(stats),
+        trigger_kind=trigger_kind,
+        summary=summary,
+        steps=[_trig_step(), *steps, {"kind": "out", "name": "profile_batch", "detail": summary}],
+    )
     return stats
 
 

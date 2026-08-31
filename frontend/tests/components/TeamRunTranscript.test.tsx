@@ -22,19 +22,23 @@ beforeAll(() => {
   }
 })
 
+// 「去报告」的跳转载荷由 navigateToReport（registry 单源）拼，测试只截 navigate 调用。
+const mockNavigate = vi.fn()
 vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => vi.fn()
+  useNavigate: () => mockNavigate
 }))
 
 const mockListMessages = vi.fn()
+const mockRunLogSteps = vi.fn()
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
-    chat: { listMessages: mockListMessages }
+    chat: { listMessages: mockListMessages },
+    report: { runLogSteps: mockRunLogSteps }
   })
 }))
 
 import i18n from '@shared/i18n'
-import type { AgentRunHistoryItem, ChatMessage } from '@shared/api/types'
+import type { AgentRunHistoryItem, AgentRunLogItem, ChatMessage } from '@shared/api/types'
 import { TeamRunTranscript } from '../../src/shared/components/agents/team/TeamRecordDetail'
 
 await i18n.changeLanguage('zh-CN')
@@ -77,6 +81,20 @@ function makeQcWrapper() {
     createElement(QueryClientProvider, { client: qc }, children)
 }
 
+/** 08-31 — 无 session 的执行台账行（报告 / 画像 / 项目周报）。 */
+const RUN_LOG: AgentRunLogItem = {
+  kind: 'run_log',
+  runLogId: 7,
+  jobId: 7,
+  agentId: 'daily_report',
+  state: 'completed',
+  createdAt: '2026-08-31T04:00:00.000Z',
+  summary: '日报已生成',
+  triggerKind: 'schedule',
+  triggerFiredAtIso: '2026-08-31T04:00:00.000Z',
+  triggerDetail: '按日排程 · 2026-08-31'
+} as AgentRunLogItem
+
 beforeEach(() => {
   vi.clearAllMocks()
   // PendingApprovalPanel 的 gateway 探针在测试环境恒失败 → 面板静默不渲染。
@@ -85,6 +103,7 @@ beforeEach(() => {
     msg({ id: 1, role: 'user', content: SEED_MARKER }),
     msg({ id: 2, role: 'assistant', content: '这是执行输出正文' })
   ])
+  mockRunLogSteps.mockResolvedValue([])
 })
 
 afterEach(() => {
@@ -124,5 +143,84 @@ describe('TeamRunTranscript — 触发气泡合成 + 首条 prompt 摘除', () =
     expect(screen.getByText('这次运行没有产生任何输出。')).toBeTruthy()
     expect(screen.queryByText(new RegExp(SEED_MARKER))).toBeNull()
     expect(container.querySelector('[data-run-raw-prompt]')).toBeTruthy()
+  })
+})
+
+// 08-31 — 同一个组件的第二条路：run_log 行没有 session，transcript 由步骤合成。
+describe('TeamRunTranscript — run_log 走步骤合成（不查会话）', () => {
+  test('步骤合成成 transcript：触发气泡带 triggerDetail，输出与工具行在场', async () => {
+    mockRunLogSteps.mockResolvedValue([
+      { seq: 0, kind: 'trig', detail: '按日排程', payload: null, ok: null, ms: null },
+      {
+        seq: 1,
+        kind: 'tool',
+        name: 'fetch_report_briefs',
+        detail: '取数 · 窗口内 34 封邮件',
+        payload: { counts: { total: 34 } },
+        ok: true,
+        ms: 120
+      },
+      { seq: 2, kind: 'out', detail: '日报输出正文', payload: null, ok: null, ms: null }
+    ])
+    const { container } = render(<TeamRunTranscript run={RUN_LOG} agentName="日报" />, {
+      wrapper: makeQcWrapper()
+    })
+    await waitFor(() => expect(screen.getByText('日报输出正文')).toBeTruthy())
+    // 触发气泡走 run 行单源（triggerKind 的人话 + triggerDetail），不是 trig 步骤。
+    expect(container.querySelector('[data-run-trigger-bubble]')).toBeTruthy()
+    expect(screen.getByText(/排程触发 · 按日排程 · 2026-08-31/)).toBeTruthy()
+    // 🔴 run_log 没有 session：绝不去查会话消息（查了就会渲染出别人的 transcript）。
+    expect(mockListMessages).not.toHaveBeenCalled()
+    // 没有任务契约 prompt 可摘 → 原始 prompt 折叠块不出现。
+    expect(container.querySelector('[data-run-raw-prompt]')).toBeNull()
+  })
+
+  test('零步骤 → 无输出说明，不挂 AgentThread（其空态是「新对话」欢迎屏，会撒谎）', async () => {
+    const { container } = render(<TeamRunTranscript run={RUN_LOG} agentName="日报" />, {
+      wrapper: makeQcWrapper()
+    })
+    await waitFor(() => {
+      expect(container.querySelector('[data-run-trigger-bubble]')).toBeTruthy()
+    })
+    expect(screen.getByText('这次运行没有产生任何输出。')).toBeTruthy()
+  })
+})
+
+// 08-31 收敛批 — 产物行已被记录列按 reportId 去重掉，报告只能从这里进。
+describe('TeamRunTranscript — 「去报告」产物入口', () => {
+  test('有 reportId：按钮在场，跳转载荷与 report 详情那一处同源', async () => {
+    const run = { ...RUN_LOG, reportId: 'rep-2026-08-31' } as AgentRunLogItem
+    const { container } = render(<TeamRunTranscript run={run} agentName="日报" />, {
+      wrapper: makeQcWrapper()
+    })
+    const btn = await waitFor(() => {
+      const el = container.querySelector('[data-run-open-report="rep-2026-08-31"]')
+      expect(el).toBeTruthy()
+      return el
+    })
+    fireEvent.click(btn as Element)
+    // navigateToReport(navigate, id) 的载荷 —— 路由字面量只许出现在 registry 里。
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/reports/$reportId',
+      params: { reportId: 'rep-2026-08-31' }
+    })
+  })
+
+  test('reportId 为 null（画像 / 项目周报）→ 不出按钮', async () => {
+    const { container } = render(<TeamRunTranscript run={RUN_LOG} agentName="日报" />, {
+      wrapper: makeQcWrapper()
+    })
+    await waitFor(() => {
+      expect(container.querySelector('[data-run-trigger-bubble]')).toBeTruthy()
+    })
+    expect(container.querySelector('[data-run-open-report]')).toBeNull()
+  })
+
+  test('async_jobs run 行（无 reportId 概念）→ 不出按钮', async () => {
+    const { container } = render(<TeamRunTranscript run={RUN} agentName="跟进员" />, {
+      wrapper: makeQcWrapper()
+    })
+    await waitFor(() => expect(screen.getByText('这是执行输出正文')).toBeTruthy())
+    expect(container.querySelector('[data-run-open-report]')).toBeNull()
   })
 })

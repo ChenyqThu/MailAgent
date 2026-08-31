@@ -38,12 +38,14 @@ const mockGetConfig = vi.fn()
 const mockListRuns = vi.fn()
 const mockReportList = vi.fn()
 const mockProgressRuns = vi.fn()
+const mockRunLogSteps = vi.fn()
 const mockToolOptions = vi.fn()
 const mockCreateAgent = vi.fn()
 const mockSetConfig = vi.fn()
 const mockRunNow = vi.fn()
 const mockConnectorList = vi.fn()
 const mockListAllSessions = vi.fn()
+const mockListGeneralSessions = vi.fn()
 const mockListMessages = vi.fn()
 const mockListSkills = vi.fn()
 const mockListEnriched = vi.fn()
@@ -55,6 +57,7 @@ vi.mock('@shared/hooks/useMailApi', () => ({
       listRuns: mockListRuns,
       list: mockReportList,
       projectProgressRuns: mockProgressRuns,
+      runLogSteps: mockRunLogSteps,
       toolOptions: mockToolOptions,
       createAgent: mockCreateAgent,
       setConfig: mockSetConfig,
@@ -65,6 +68,7 @@ vi.mock('@shared/hooks/useMailApi', () => ({
     },
     chat: {
       listAllSessions: mockListAllSessions,
+      listGeneralSessions: mockListGeneralSessions,
       listMessages: mockListMessages,
       listSkills: mockListSkills
     },
@@ -73,6 +77,23 @@ vi.mock('@shared/hooks/useMailApi', () => ({
       aiFields: mockAiFields
     }
   })
+}))
+
+// P4b — 团队对话的运行时叶（AgentConversation 拖满整棵 assistant-ui 树 + gateway 探活）
+// 打桩；真接线链（TeamRecordPane → TeamChatHost → agentIdentity）保持真组件。桩渲染
+// 身份 data 属性，让「真 composer 在场且是这位成员的身份」可断言（matterChatNewSession
+// 同款打桩纪律）。
+vi.mock('../../src/shared/components/agents/AgentConversation', () => ({
+  AgentConversation: (props: {
+    agentIdentity?: { agentId: string; welcome: { title: string; hint: string } }
+    activeItem: { id: number } | null
+  }) => (
+    <div
+      data-live-conversation
+      data-conversation-agent={props.agentIdentity?.agentId ?? ''}
+      data-conversation-session={props.activeItem?.id ?? 'new'}
+    />
+  )
 }))
 
 import i18n from '@shared/i18n'
@@ -148,6 +169,15 @@ async function renderWorkspace(): Promise<HTMLElement> {
   return container
 }
 
+/** 记录列的会话源现在是**两条**查询（origin='agent' headless run 会话 + origin='team'
+ *  人以 agent 身份开的会话）。mockResolvedValue 会让同一份数据被两条查询各返一次 →
+ *  同一个 session 在时间线里出现两遍（React 还会报 duplicate key）。按 origin 分流。 */
+function setAgentSessions(list: ChatSessionListItem[], teamList: ChatSessionListItem[] = []): void {
+  mockListAllSessions.mockImplementation((opts?: { origin?: string }) =>
+    Promise.resolve(opts?.origin === 'agent' ? list : opts?.origin === 'team' ? teamList : [])
+  )
+}
+
 function mockChatConfigFlags(customAgentsEnabled: boolean): void {
   global.fetch = vi.fn().mockResolvedValue({
     ok: true,
@@ -162,9 +192,11 @@ beforeEach(() => {
   mockListRuns.mockResolvedValue({ items: [], total: 0 })
   mockReportList.mockResolvedValue({ items: [], total: 0 })
   mockProgressRuns.mockResolvedValue([])
+  mockRunLogSteps.mockResolvedValue([])
   mockToolOptions.mockResolvedValue({ tools: [], defaults: [] })
   mockConnectorList.mockResolvedValue([])
-  mockListAllSessions.mockResolvedValue([])
+  setAgentSessions([])
+  mockListGeneralSessions.mockResolvedValue([])
   mockListMessages.mockResolvedValue([])
   mockListSkills.mockResolvedValue([])
   mockListEnriched.mockResolvedValue([])
@@ -197,9 +229,9 @@ describe('清单与分组', () => {
 describe('两档视图', () => {
   test('🔴 换成员恒回第一档（先切到设置再换成员，才测得到 reset）', async () => {
     const container = await renderWorkspace()
-    // 进跟进员：默认第一档（对话）→ 新会话落点。
+    // 进跟进员：默认第一档（对话）→ 新会话落点（P4b：真 composer 宿主）。
     fireEvent.click(container.querySelector('[data-team-member="member:agent:dms_helper"]')!)
-    await waitFor(() => expect(container.querySelector('[data-team-new-session]')).toBeTruthy())
+    await waitFor(() => expect(container.querySelector('[data-team-chat-host]')).toBeTruthy())
     // 切到设置档。
     fireEvent.click(screen.getByRole('tab', { name: '设置' }))
     expect(container.querySelector('[data-team-settings]')).toBeTruthy()
@@ -257,9 +289,7 @@ describe('记录面壳', () => {
       ],
       total: 2
     })
-    mockListAllSessions.mockResolvedValue([
-      makeSession({ id: 100, updated_at: 1_700_000_002_000, title: '中间的会话' })
-    ])
+    setAgentSessions([makeSession({ id: 100, updated_at: 1_700_000_002_000, title: '中间的会话' })])
     const container = await renderWorkspace()
     fireEvent.click(container.querySelector('[data-team-member="member:agent:dms_helper"]')!)
     await waitFor(() =>
@@ -271,10 +301,48 @@ describe('记录面壳', () => {
     expect(rowKeys).toEqual(['run:3', 'session:100', 'run:1'])
     // ⚡自动：schedule run 与 origin=agent 会话都标。
     expect(container.querySelector('[data-record-row="run:3"] [data-auto-badge]')).toBeTruthy()
-    // 能对话：顶部有「新对话」，默认落新会话（composer 禁用 + P4b 说明）。
+    // 能对话：顶部有「新对话」，默认落新会话 —— P4b 起是**真 composer**（TeamChatHost 挂
+    // AgentConversation，身份 = 这位成员），禁用占位条已随写侧接通退役。
     expect(container.querySelector('[data-record-new]')).toBeTruthy()
-    expect(container.querySelector('[data-team-new-session]')).toBeTruthy()
-    expect(container.querySelector('[data-pending-composer]')).toBeTruthy()
+    expect(container.querySelector('[data-team-chat-host="member:agent:dms_helper"]')).toBeTruthy()
+    expect(
+      container.querySelector('[data-live-conversation]')?.getAttribute('data-conversation-agent')
+    ).toBe('dms_helper')
+    expect(container.querySelector('[data-pending-composer]')).toBeNull()
+  })
+
+  test('P4b — 记录列点中 origin=team 会话 → 续聊（真 composer）；origin=agent 保持只读', async () => {
+    setAgentSessions(
+      [makeSession({ id: 300, updated_at: 1_700_000_001_000, title: 'headless 记录' })],
+      [
+        makeSession({
+          id: 301,
+          updated_at: 1_700_000_002_000,
+          title: '上次以它身份的对话',
+          origin: 'team'
+        })
+      ]
+    )
+    const container = await renderWorkspace()
+    fireEvent.click(container.querySelector('[data-team-member="member:agent:dms_helper"]')!)
+    await waitFor(() =>
+      expect(container.querySelector('[data-record-row="session:301"]')).toBeTruthy()
+    )
+    // team 会话 → TeamChatHost（真 composer），activeItem 是该行。
+    fireEvent.click(container.querySelector('[data-record-row="session:301"]')!)
+    await waitFor(() =>
+      expect(
+        container
+          .querySelector('[data-live-conversation]')
+          ?.getAttribute('data-conversation-session')
+      ).toBe('301')
+    )
+    // agent 会话（headless 降级形态行）→ 只读详情，无 composer（P4 红线镜像）。
+    fireEvent.click(container.querySelector('[data-record-row="session:300"]')!)
+    await waitFor(() =>
+      expect(container.querySelector('[data-team-session-detail="300"]')).toBeTruthy()
+    )
+    expect(container.querySelector('[data-live-conversation]')).toBeNull()
   })
 
   test('不能对话（项目周报）：无「新建」，默认落最新一条执行 + 顶部写明为什么不接', async () => {
@@ -345,6 +413,113 @@ describe('记录面壳', () => {
     expect(container.querySelector('[data-record-row="email:102"]')).toBeNull()
     expect(container.querySelector('[data-no-chat-reason]')?.textContent).toContain('流水线')
     expect(container.querySelector('[data-team-preprocess-detail]')).toBeTruthy()
+  })
+
+  // 08-31 — r10 §0 抓到的缺陷：失败的预处理在读侧分不出来（没有 labels ⇒ 被列表面的
+  // labels 判据整批滤掉），团队页里根本看不见。
+  test('🔴 预处理失败行可见且标失败态（判据是 llm_status，不是 labels 派生字段）', async () => {
+    mockListEnriched.mockResolvedValue([
+      {
+        internal_id: 103,
+        subject: '分类失败的邮件',
+        sender: 'c@x.test',
+        date_received: '2026-08-30T12:00:00+08:00',
+        mailbox: '收件箱',
+        is_read: true,
+        is_flagged: false,
+        lang: 'unknown',
+        // 失败行没有任何 labels 派生字段 —— 这正是它此前被滤掉的原因。
+        ai_priority: null,
+        ai_action: null,
+        ai_category: null,
+        attach_count: 0,
+        is_important: false,
+        processing_status: null,
+        snippet: null,
+        llm_status: 'failed'
+      }
+    ])
+    mockAiFields.mockResolvedValue({
+      internal_id: 103,
+      processing_status: null,
+      mailbox: '收件箱',
+      is_read: true,
+      is_flagged: false,
+      ai_priority: null,
+      ai_action: null,
+      ai_review_status: 'pending',
+      sentiment: null,
+      ai_model: 'claude-fable-5',
+      labels_raw: null,
+      llm_status: 'failed',
+      latency_ms: 4200,
+      input_tokens: 1200,
+      output_tokens: 0,
+      retry_count: 3,
+      last_error: 'upstream 529 overloaded'
+    })
+    const container = await renderWorkspace()
+    fireEvent.click(
+      container.querySelector('[data-team-member="member:agent:email_preprocess_agent"]')!
+    )
+    const row = await waitFor(() => {
+      const el = container.querySelector('[data-record-row="email:103"]')
+      expect(el).toBeTruthy()
+      return el!
+    })
+    // 状态点用 fail 色（成功行是 bg-ok），失败一眼看得出来。
+    expect(row.querySelector('.bg-fail')).toBeTruthy()
+    // 详情给出错误原文 + 耗时 + 重试次数，并写清为什么这么处置。
+    await waitFor(() => expect(screen.getByText('upstream 529 overloaded')).toBeTruthy())
+    expect(screen.getByText('4.2s')).toBeTruthy()
+    expect(screen.getByText('这一封没跑通')).toBeTruthy()
+  })
+
+  // 08-31 — 报告 / 画像 / 项目周报的过程台账（agent_run_log）与 async_jobs run、会话
+  // 同一条时间线穿插，不另开一栏。
+  test('🔴 run_log 行穿插进记录列，点开走步骤合成的 transcript', async () => {
+    mockListRuns.mockResolvedValue({
+      items: [
+        {
+          jobId: 1,
+          agentId: 'dms_helper',
+          state: 'completed',
+          createdAt: 1_700_000_001_000,
+          summary: '老台账的执行',
+          triggerKind: 'schedule'
+        },
+        {
+          kind: 'run_log',
+          runLogId: 5,
+          jobId: 5,
+          agentId: 'dms_helper',
+          state: 'completed',
+          createdAt: new Date(1_700_000_003_000).toISOString(),
+          summary: '新台账的执行',
+          triggerKind: 'schedule',
+          triggerDetail: '按日排程'
+        }
+      ],
+      total: 2
+    })
+    setAgentSessions([makeSession({ id: 100, updated_at: 1_700_000_002_000, title: '中间的会话' })])
+    mockRunLogSteps.mockResolvedValue([
+      { seq: 0, kind: 'trig', detail: '按日排程', payload: null, ok: null, ms: null },
+      { seq: 1, kind: 'out', detail: '这是步骤合成的输出', payload: null, ok: null, ms: null }
+    ])
+    const container = await renderWorkspace()
+    fireEvent.click(container.querySelector('[data-team-member="member:agent:dms_helper"]')!)
+    await waitFor(() =>
+      expect(container.querySelector('[data-record-row="runlog:5"]')).toBeTruthy()
+    )
+    const rowKeys = Array.from(container.querySelectorAll('[data-record-row]')).map((el) =>
+      el.getAttribute('data-record-row')
+    )
+    // 时间倒序穿插：run_log(t3) > 会话(t2) > 老 run(t1)，不按来源分块。
+    expect(rowKeys).toEqual(['runlog:5', 'session:100', 'run:1'])
+    fireEvent.click(container.querySelector('[data-record-row="runlog:5"]')!)
+    await waitFor(() => expect(screen.getByText('这是步骤合成的输出')).toBeTruthy())
+    expect(mockRunLogSteps).toHaveBeenCalledWith(5)
   })
 })
 

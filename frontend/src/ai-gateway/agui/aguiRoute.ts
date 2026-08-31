@@ -128,6 +128,13 @@ export async function handleAguiChat(
   // S2 W0 (ADR-001 D1) — the AG-UI mirror is the same owner-driven surface as /api/ai/chat:
   // assert 'manual_chat' in trusted code, AFTER applyInterruptResponse (codex P1-1 — the mode is
   // a prepareChatRun parameter, so no body preprocessing can ever influence it).
+  //
+  // 🔴 P4b gap, recorded on purpose: this mirror does NOT thread the session's team identity
+  // (5th slot), so a run driven through here gets no <current_team_agent> block AND no
+  // custom_agent_call recursion guard — the guard's other leg (`contextMode === 'manual_chat'`)
+  // does not fire, because a team session IS manual_chat. Acceptable only because this route is
+  // the dev-only AG-UI mirror (no product surface reaches it). Wiring a real client to it means
+  // resolving cfg.resolveSessionAgent here first, exactly as server.ts does.
   const prepared = await prepareChatRun(body, cfg, controller.signal, 'manual_chat')
   if (!prepared.ok) {
     writeJson(res, prepared.status, prepared.body)

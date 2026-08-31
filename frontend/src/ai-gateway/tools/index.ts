@@ -173,6 +173,14 @@ export interface BuildGatewayToolsOpts {
   internalAgentToolsEnabled?: boolean
   customAgentCallEnabled?: boolean
   parentSessionId?: number | null
+  /** P4b (task 08-27) — the session's TEAM agent id (origin='team' rows, server-resolved via
+   *  cfg.resolveSessionAgent → prepareChatRun → cfg.buildTools' 7th slot; NEVER from the body).
+   *  🔴 Recursion guard: non-null drops custom_agent_call from the assembly below. The existing
+   *  protection (`contextMode === 'manual_chat'` venue gate + class capability_change matrix)
+   *  no longer suffices on its own — a team session IS manual_chat, so without this condition
+   *  agent X's conversation could delegate to agent Y (Custom Agent 递归禁止, ADR-003).
+   *  Absent/null (every non-team run) → assembly byte-identical. */
+  sessionAgentId?: string | null
   findSessionByParentToolCall?: (parentSessionId: number, parentToolCallId: string) => number | null
   createAgentCallSession?: (input: {
     agentId: string
@@ -524,8 +532,11 @@ export function buildGatewayTools(
       })
     )
   }
+  // P4b — `opts.sessionAgentId == null` is the team-session recursion guard: a session that
+  // already runs AS an agent must not delegate to another agent (see the opts doc above).
   if (
     contextMode === 'manual_chat' &&
+    opts.sessionAgentId == null &&
     opts.customAgentCallEnabled &&
     opts.customAgentToolsEnabled &&
     opts.approvalGuard &&

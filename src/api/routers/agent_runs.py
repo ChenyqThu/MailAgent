@@ -27,8 +27,14 @@ from loguru import logger
 from pydantic import BaseModel
 
 from src.agents.fence import fence_calendar_envelope, fence_email_envelope
+from src.agents.run_log import (
+    count_run_logs,
+    get_run_log,
+    list_run_logs,
+    list_run_steps,
+)
 from src.agents.run_queue import enqueue_agent_run
-from src.agents.run_sources import RUN_SOURCE_CONTACT_PROFILE, resolve_run_source
+from src.agents.run_sources import RUN_SOURCE_RUN_LOG, resolve_run_source
 from src.agents.run_state import AGENT_RUN_STATES, derive_agent_run_state
 from src.agents.trigger import (
     CalendarBeforeStartTrigger,
@@ -46,9 +52,8 @@ from src.agents.trigger import (
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access, verify_local_token
 from src.api.deps import get_job_repo, get_report_store, get_repository
-from src.contacts.profile_config import CONTACT_PROFILE_AGENT_ID
-from src.contacts.profile_runs import count_profile_runs, list_profile_runs
 from src.notify.center import NotifyCenter
+from src.project_progress.agent_config import PROJECT_PROGRESS_AGENT_ID
 from src.sync.async_jobs import AsyncJob
 from src.chat.db import ChatDb
 
@@ -645,58 +650,110 @@ def _run_history_item(
     }
 
 
-# 画像台账的 status（ok/fail/noop）→ run 历史的 9 值域。**复用**既有词表而不是新增第 10 个
-# 值：前端 RunStateBadge 按 9 值域穷举渲染，多一个值就是一处白名单外的静默空白。
-# noop（这一轮没有候选人）落 'skipped' —— 与预算门拒绝同义：没执行 LLM，不是失败。
-_PROFILE_RUN_STATE_BY_STATUS = {"ok": "completed", "fail": "failed", "noop": "skipped"}
+def _ms_iso(ms: Any) -> Optional[str]:
+    """epoch 毫秒 → UTC ISO 字符串（run_log item 时间字段的边界换算，仅此一处）。"""
+    if ms is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(ms) / 1000.0, tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OSError):
+        return None
 
 
-def _profile_run_summary(row: dict[str, Any]) -> str:
-    """一句话交代这一轮干了什么（记录列直接显示这行字）。"""
-    if row.get("status") == "noop":
-        return "没有待更新画像的联系人"
-    if row.get("status") == "fail" and row.get("error"):
-        return f"没跑完 · 候选 {row.get('candidates', 0)} 人，已完成 {row.get('ok_count', 0)} 人"
-    return (
-        f"画像 {row.get('ok_count', 0)} 人 · 跳过 {row.get('skipped', 0)} "
-        f"· 失败 {row.get('failed', 0)}"
-    )
+def _run_log_item(row: dict[str, Any]) -> dict[str, Any]:
+    """``agent_run_log`` 行 → run 历史行投影（L4 P4a run transcript 批）。
 
+    🔴 **接缝契约**（与前端并行 agent 约定，字段名不许改）：形状对齐
+    ``_run_history_item``，另带 ``kind: 'run_log'`` 与 ``runLogId``；时间字段是
+    **ISO 字符串**（台账存毫秒 epoch，换算只在 ``_ms_iso`` 这一处做）。步骤明细走
+    ``GET /api/agent-runs/run-log/{id}/steps``，这里的 ``steps`` 只是计数。
 
-def _profile_run_item(row: dict[str, Any]) -> dict[str, Any]:
-    """``contact_profile_run`` 行 → run 历史行投影（L4 P4a，形状与 ``_run_history_item`` 同）。
+    ``state`` 直接就是台账的 ``status`` —— 建表时 CHECK 钉死为
+    ``run_state.AGENT_RUN_STATES`` 9 值域的子集，前端 RunStateBadge 零映射直接吃；
+    读到白名单外的值仍 fail-closed 落 'failed'（防手工改库的行显示成「成功完成」）。
 
-    🔴 **单位换算就在这一处**：台账的时间列是 epoch **毫秒**（contacts 域全域单位），而
-    run 历史契约里 ``createdAt``/``finishedAt`` 是 ``async_jobs`` 的 ``time.time()`` **秒**。
-    表内不留两种单位，换算只在边界做。
-
-    三个恒空字段各有理由，不是没写完：``sessionId`` —— 画像不开会话（不走 chat 引擎，
-    没有 transcript 可看）；``steps``/``tokens`` —— 逐人的 LLM 用量在 contact 行上，一轮
-    的合计没有台账；``triggerKind``/``triggerFiredAtIso`` —— 沿用「缺失即 None，不臆造
-    触发方式」的既有契约（画像是每日整点 tick，没有 fire_key 可解析）。
+    ``sessionId``/``approvalState`` 恒空是契约不是没写完：run_log 的三位写入方
+    （报告 / 画像 / 项目周报）不开会话、不走审批。
     """
     status = str(row["status"])
-    started = float(row["started_at"]) / 1000.0
-    finished = float(row["completed_at"]) / 1000.0
+    started_ms = float(row["started_at"])
+    completed_ms = row["completed_at"]
+    tokens = None
+    if row.get("input_tokens") is not None or row.get("output_tokens") is not None:
+        tokens = {
+            "inputTokens": row.get("input_tokens") or 0,
+            "outputTokens": row.get("output_tokens") or 0,
+        }
+    trigger_kind = row.get("trigger_kind") or None
     return {
         "jobId": int(row["id"]),
-        "agentId": CONTACT_PROFILE_AGENT_ID,
-        # 未知 status fail-closed 落 'failed'：解读不了的行绝不显示成「成功完成」
-        # （与 derive_agent_run_state 同一条纪律）。库的 CHECK 已经拦住第四个值。
-        "state": _PROFILE_RUN_STATE_BY_STATUS.get(status, "failed"),
+        "agentId": row["agent_id"],
+        "state": status if status in AGENT_RUN_STATES else "failed",
         "outcome": status,
-        "summary": _profile_run_summary(row),
+        "summary": row.get("summary"),
         "approvalState": None,
         "sessionId": None,
-        "createdAt": started,
-        "finishedAt": finished,
-        "error": row["error"],
-        "steps": None,
-        "tokens": None,
-        "durationSeconds": max(0.0, finished - started),
-        "triggerKind": None,
-        "triggerFiredAtIso": None,
+        "createdAt": _ms_iso(started_ms),
+        "finishedAt": _ms_iso(completed_ms),
+        "error": row.get("error"),
+        "steps": row.get("step_count"),
+        "tokens": tokens,
+        "durationSeconds": (
+            max(0.0, (float(completed_ms) - started_ms) / 1000.0)
+            if completed_ms is not None else None
+        ),
+        "triggerKind": trigger_kind,
+        "triggerFiredAtIso": _ms_iso(started_ms) if trigger_kind is not None else None,
+        "triggerDetail": row.get("trigger_detail"),
+        "model": row.get("model"),
+        "kind": RUN_SOURCE_RUN_LOG,
+        "runLogId": int(row["id"]),
+        # 报告类 run 的产物引用 (out 步骤 payload 的 report_id, list_run_logs SQL 抽出)。
+        # 前端记录列靠它把「产物行 report:xxx」与「过程行 runlog:N」收敛成一条 ——
+        # 真实引用而不是时间窗启发式。非报告类的 run 恒 null。
+        "reportId": (
+            str(row["report_id"]) if row.get("report_id") is not None else None
+        ),
+        # 项目周报 run 的触发邮件引用 (trig 步骤 payload 的 internal_id) —— 与
+        # reportId 同模式: 记录列靠它把 project_progress_sync 台账行与 runlog 行
+        # 收敛成一条。语义门在这里: 只对该成员投影, 别的 agent 哪怕 trig 里带了
+        # internal_id 也不冒充周报引用。runner 从 v73 首版起就写结构化 internal_id,
+        # 但坏 payload / 未来写入方缺失时为 null —— 消费侧按可缺省处理。
+        "progressEmailId": (
+            int(row["trig_internal_id"])
+            if (
+                row["agent_id"] == PROJECT_PROGRESS_AGENT_ID
+                and row.get("trig_internal_id") is not None
+            )
+            else None
+        ),
     }
+
+
+@router.get("/run-log/{run_log_id:int}/steps", dependencies=[Depends(verify_cf_access)])
+async def get_run_log_steps(request: Request, run_log_id: int):
+    """一次 run_log 执行的步骤明细（团队页把它合成 transcript 形态渲染）。
+
+    🔴 **接缝契约**（与前端并行 agent 约定，字段名不许改）：
+    ``{"steps": [{seq, kind, name, detail, payload, ok, ms}]}`` —— ``payload`` 是
+    解析后的对象或 null（坏 JSON 落 null 不 500）；``ok`` 是 bool 或 null
+    （false → 前端标 ✗ + fail 色）；``kind`` ∈ trig|think|tool|out（库 CHECK 钉死）。
+
+    鉴权同 run 历史列表（``verify_cf_access``，renderer 调用面）；flag off → 404；
+    未知 run_log id → 404 E_NOT_FOUND（区别于「有这次执行但零步骤」的 steps=[]）。
+    """
+    _require_flag()
+    db_path = str(get_job_repo().db_path)
+    if get_run_log(db_path, run_log_id) is None:
+        raise APIError(
+            "E_NOT_FOUND", f"run log {run_log_id} not found",
+            http_status=404, source="agent-runs",
+        )
+    return success_envelope(
+        {"steps": list_run_steps(db_path, run_log_id)},
+        request=request,
+        source="agent-runs",
+    )
 
 
 @router.post("/call", dependencies=[Depends(verify_cf_access)])
@@ -825,6 +882,10 @@ def _annotate_auto_whitelist(items: list[dict[str, Any]]) -> None:
             logger.warning(f"[agent-runs] auto_whitelist count unavailable: {exc}")
             counts = None
     for it in items:
+        # run_log 行不盖这两个键: 台账的三位写入方不走 gateway, 没有 auto-whitelist
+        # 概念 —— 恒 null 的字段不进契约 (与 kind/runLogId 的接缝契约保持最小面)。
+        if it.get("kind") == "run_log":
+            continue
         sid = it.get("sessionId")
         if counts is not None and isinstance(sid, int):
             bucket = counts.get(sid)
@@ -910,10 +971,16 @@ async def list_agent_runs(
 
     L4 P4a（团队页记录列）：``agentId`` 不再等同于 ``target_key`` —— 经
     ``src.agents.run_sources.resolve_run_source`` 解析出该成员对应的 ``(job_type,
-    target_key)``（🔴 target_key 语义随 job_type 变，见那张表的头注），治理 run 与画像台账
-    因此能进同一条时间线。解析不出（事项域命名空间 / 空 id）→ **空集不报错**。
+    target_key)``（🔴 target_key 语义随 job_type 变，见那张表的头注）。解析不出
+    （事项域命名空间 / 空 id）→ **空集不报错**，且**连 run_log 也不查**（排除纪律）。
     ``agentId`` 缺省（列全部）时口径不变：只列 ``agent_run``，避免把事项域的 run 掺进
     pending-count 之类的全局面。
+
+    L4 P4a run transcript 批：可解析成员**并查** ``agent_run_log`` 统一台账（报告 /
+    画像 / 项目周报的详细过程记录落那里，``agent_id`` 列直接是成员 id 命名空间），
+    与 async_jobs 行按开始时刻合并成同一条时间线。实践中没有成员同时写两处
+    （async_jobs XOR run_log），单源时分页原样透传；两源都有行的兜底档在内存窗口
+    （≤100）里合并再切片。
     """
     _require_flag()
     if state is not None and state not in AGENT_RUN_STATES:
@@ -933,24 +1000,47 @@ async def list_agent_runs(
         if source is None:
             # 本域不认识这个成员（事项域的 `matter:` / `matter_item:` 命名空间恒落这里）。
             items, total = [], 0
-        elif source.kind == RUN_SOURCE_CONTACT_PROFILE:
-            db_path = str(repo.db_path)
-            items = [
-                _profile_run_item(r)
-                for r in list_profile_runs(db_path, limit=limit, offset=offset)
-            ]
-            total = count_profile_runs(db_path)
         else:
-            jobs = repo.list_runs(
-                job_type=source.job_type,
-                target_key=source.target_key,
-                limit=limit,
-                offset=offset,
-            )
-            items = [_run_history_item(j, agent_id_override=agent_id) for j in jobs]
-            total = repo.count_runs(
+            db_path = str(repo.db_path)
+            job_total = repo.count_runs(
                 job_type=source.job_type, target_key=source.target_key
             )
+            log_total = count_run_logs(db_path, agent_id=agent_id)
+            total = job_total + log_total
+            if log_total == 0:
+                jobs = repo.list_runs(
+                    job_type=source.job_type,
+                    target_key=source.target_key,
+                    limit=limit,
+                    offset=offset,
+                )
+                items = [_run_history_item(j, agent_id_override=agent_id) for j in jobs]
+            elif job_total == 0:
+                items = [
+                    _run_log_item(r)
+                    for r in list_run_logs(
+                        db_path, agent_id=agent_id, limit=limit, offset=offset
+                    )
+                ]
+            else:
+                window = min(100, limit + offset)
+                jobs = repo.list_runs(
+                    job_type=source.job_type,
+                    target_key=source.target_key,
+                    limit=window,
+                    offset=0,
+                )
+                rows = list_run_logs(db_path, agent_id=agent_id, limit=window, offset=0)
+                merged = sorted(
+                    [
+                        (float(j.created_at), _run_history_item(j, agent_id_override=agent_id))
+                        for j in jobs
+                    ]
+                    + [(float(r["started_at"]) / 1000.0, _run_log_item(r)) for r in rows],
+                    key=lambda pair: pair[0],
+                    reverse=True,
+                )
+                items = [it for _, it in merged[offset : offset + limit]]
     if state is not None:
         items = [it for it in items if it["state"] == state]
     _annotate_auto_whitelist(items)

@@ -475,6 +475,7 @@ interface EnrichedRow extends EmailMetadataRow {
   // Sprint 15 D 块: Notion Processing Status 镜像 (CLI email flag 写, 反向
   // handler 也维护). EmailRow 用它判断 'done' 三态显示, 不再依赖 sync_status.
   processing_status: string | null
+  llm_status: string | null
 }
 
 interface MailboxRow {
@@ -490,6 +491,12 @@ interface AIFieldsRow extends EmailMetadataRow {
   labels_json: string | null
   llm_status: string | null
   llm_model: string | null
+  // 08-31 — 团队页预处理执行详情（与 serve-api `_shape_ai_fields` 同一组列）。
+  llm_latency_ms: number | null
+  llm_input_tokens: number | null
+  llm_output_tokens: number | null
+  llm_retry_count: number | null
+  llm_last_error: string | null
 }
 
 // Selecting the same metadata columns as LIST_COLS but qualified to the
@@ -526,7 +533,11 @@ const ENRICHED_EXTRA_COLS = `
     -- Sprint 16 perf: attach_count 改 LEFT JOIN 聚合 (之前用相关子查询, 每行
     -- 一次全表扫描; 500 行 → 500 次扫). 配合 v11 的 (internal_id, is_inline)
     -- 索引, listEnriched 整体延迟从 ~200-500ms 降到 ~10-30ms.
-    COALESCE(a.attach_count, 0) AS attach_count
+    COALESCE(a.attach_count, 0) AS attach_count,
+    -- 08-31: llm_processing.status 原始值透传。列表面此前只出 labels 派生字段 ⇒
+    -- status='failed' 的行（没有 labels）与「从没跑过」分不出来，失败的预处理在
+    -- 团队页记录列里根本看不见。与 serve-api list_enriched 的 llm_status 同源。
+    l.status AS llm_status
 `
 
 function buildEnrichedWhere(opts: ListOpts): WhereBuild {
@@ -557,7 +568,8 @@ function shapeEnrichedItem(row: EnrichedRow): EnrichedEmailMeta {
     ai_category: row.category_raw ?? null,
     attach_count: row.attach_count ?? 0,
     // Sprint 15 D 块: Notion Processing Status 镜像. EmailRow 用它判 done 三态.
-    processing_status: row.processing_status ?? null
+    processing_status: row.processing_status ?? null,
+    llm_status: row.llm_status ?? null
   }
 }
 
@@ -633,14 +645,22 @@ export function getAIFields(internalId: number): AIFields | null {
   const db = getDb()
   const row = prep(
     db,
+    // 08-31 改用具名参数：这里已有 4 个相关子查询，再补 5 列耗时/token/重试/错误
+    // （团队页预处理执行详情，与 serve-api `_shape_ai_fields` 同一组）就是 10 个
+    // 重复的位置参数，具名绑定一处即可。
     `SELECT ${LIST_COLS},
             processing_status,
-            (SELECT labels_json FROM llm_processing WHERE internal_id = ?) AS labels_json,
-            (SELECT status     FROM llm_processing WHERE internal_id = ?) AS llm_status,
-            (SELECT model      FROM llm_processing WHERE internal_id = ?) AS llm_model
+            (SELECT labels_json   FROM llm_processing WHERE internal_id = @id) AS labels_json,
+            (SELECT status        FROM llm_processing WHERE internal_id = @id) AS llm_status,
+            (SELECT model         FROM llm_processing WHERE internal_id = @id) AS llm_model,
+            (SELECT latency_ms    FROM llm_processing WHERE internal_id = @id) AS llm_latency_ms,
+            (SELECT input_tokens  FROM llm_processing WHERE internal_id = @id) AS llm_input_tokens,
+            (SELECT output_tokens FROM llm_processing WHERE internal_id = @id) AS llm_output_tokens,
+            (SELECT retry_count   FROM llm_processing WHERE internal_id = @id) AS llm_retry_count,
+            (SELECT last_error    FROM llm_processing WHERE internal_id = @id) AS llm_last_error
        FROM email_metadata
-      WHERE internal_id = ?`
-  ).get(internalId, internalId, internalId, internalId) as AIFieldsRow | undefined
+      WHERE internal_id = @id`
+  ).get({ id: internalId }) as AIFieldsRow | undefined
   if (!row) return null
   const labels = parseLabels(row.labels_json)
   // labels_json fields we promote — see ai_mapping.ts module doc for the
@@ -661,7 +681,13 @@ export function getAIFields(internalId: number): AIFields | null {
     // AI 模型/来源标识来自 llm_processing.model 列 (如 'claude-sonnet-4-6' /
     // 'external:notion'), 不在 labels_json — 头部右侧用它显示来源。
     ai_model: row.llm_model ?? null,
-    labels_raw: labels
+    labels_raw: labels,
+    llm_status: row.llm_status ?? null,
+    latency_ms: row.llm_latency_ms ?? null,
+    input_tokens: row.llm_input_tokens ?? null,
+    output_tokens: row.llm_output_tokens ?? null,
+    retry_count: row.llm_retry_count ?? null,
+    last_error: row.llm_last_error ?? null
   }
 }
 

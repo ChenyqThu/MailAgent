@@ -23,9 +23,10 @@
 // notionAgent.getConfig/listModels/listAgents, settings.get/secretsStatus.
 
 import type {
-  AgentRunHistoryItem,
+  AgentRunListItem,
   AgentRunPendingCount,
   AgentRunState,
+  AgentRunStep,
   AgentRunToolOptions,
   ReportApi,
   ReportAgentConfig,
@@ -110,6 +111,8 @@ import type {
   SendEmailOpts,
   StagedAttachment,
   SystemAlertsData,
+  TodayApi,
+  TodayData as TodayApiData,
   UploadComposeAttachmentOpts,
   TargetLang,
   TranslationCache
@@ -992,9 +995,9 @@ export class HttpApi implements MailApi {
       limit?: number
       offset?: number
       state?: AgentRunState
-    }): Promise<ReportPagedResult<AgentRunHistoryItem>> => {
+    }): Promise<ReportPagedResult<AgentRunListItem>> => {
       try {
-        const { data, meta } = await this.reqWithMeta<AgentRunHistoryItem[]>('GET', '/agent-runs', {
+        const { data, meta } = await this.reqWithMeta<AgentRunListItem[]>('GET', '/agent-runs', {
           query: {
             agentId: opts?.agentId,
             limit: opts?.limit,
@@ -1032,6 +1035,34 @@ export class HttpApi implements MailApi {
       } catch {
         // serve-api 不可达 / 表不存在 → 空态（守 ReportApi「读失败返 []」契约）。
         return []
+      }
+    },
+    runLogSteps: async (runLogId: number): Promise<AgentRunStep[]> => {
+      try {
+        const res = await this.req<{ steps?: AgentRunStep[] }>(
+          'GET',
+          `/agent-runs/run-log/${runLogId}/steps`
+        )
+        return res.steps ?? []
+      } catch {
+        // 端点未就绪 / serve-api 不可达 → 空态（详情退回「没有输出」，不崩）。
+        return []
+      }
+    }
+  }
+
+  // task 08-27 P4c — 今日聚合读。🔴 path/query 与 Electron 侧 `today:get` handler
+  // （daemon_api 转发）严格 mirror，改 wire 时两处同步。
+  today: TodayApi = {
+    get: async (opts?: { tz?: string; replyLimit?: number }): Promise<TodayApiData> => {
+      try {
+        const data = await this.req<TodayApiData>('GET', '/today', {
+          query: { tz: opts?.tz, replyLimit: opts?.replyLimit }
+        })
+        return { reply: data?.reply ?? [], nextHardPoint: data?.nextHardPoint ?? null }
+      } catch {
+        // 守读优雅降级：今日页另外四节自有数据源，这一条挂了不该把整页打成错误态。
+        return { reply: [], nextHardPoint: null }
       }
     }
   }

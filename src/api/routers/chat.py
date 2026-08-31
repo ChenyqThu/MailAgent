@@ -31,7 +31,7 @@ from src.agent_config.enabled_models import (
 )
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
-from src.api.deps import get_chat_db, get_env_file_path, get_settings
+from src.api.deps import get_chat_db, get_env_file_path, get_report_store, get_settings
 from src.chat.kos_save import SaveConversationError, save_conversation_to_kos
 from src.agents.run_state import derive_agent_run_state
 from src.kos.client import KOSClient, KOSError
@@ -186,7 +186,7 @@ def _matter_meta_for_sessions(
 async def list_all_sessions(
     request: Request,
     include_archived: bool = Query(False),
-    origin: Optional[Literal["interactive", "agent", "im", "all"]] = Query(None),
+    origin: Optional[Literal["interactive", "agent", "im", "team", "all"]] = Query(None),
     agent_id: Optional[str] = Query(None, alias="agentId"),
     agent_job_id: Optional[str] = Query(None, alias="agentJobId"),
     trigger_id: Optional[str] = Query(None, alias="triggerId"),
@@ -291,7 +291,7 @@ async def search_sessions(
     request: Request,
     q: str = Query(..., min_length=1, max_length=200),
     limit: int = Query(20, ge=1, le=20),
-    origin: Literal["interactive", "agent", "im", "all"] = Query("all"),
+    origin: Literal["interactive", "agent", "im", "team", "all"] = Query("all"),
     agent_id: Optional[str] = Query(None, alias="agentId"),
     agent_job_id: Optional[str] = Query(None, alias="agentJobId"),
     trigger_id: Optional[str] = Query(None, alias="triggerId"),
@@ -871,14 +871,45 @@ async def open_session(request: Request, body: Optional[Dict[str, Any]] = None):
     return success_envelope(session, request=request, source="sqlite")
 
 
+# P4b —「能对话」成员的判据单源是前端 teamMembers.ts（canChat：design §8.0「接对话的
+# 只剩四类」）。服务端不信前端，这里按同判据校验 —— 两处集合漂移时团队页能建的会话
+# 服务端会拒（400 可见），不会静默放行一个不该有对话面的 agent（如 preprocess/search）。
+_CHAT_CAPABLE_AGENT_TYPES = ("report", "contact_profile", "contact_governance", "custom")
+
+
 @router.post("/sessions/new", dependencies=[Depends(verify_cf_access)])
 async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
     """createNewSession：无条件 INSERT 新 session（绕过复用）。镜像 chat:newSession → ChatSession。
-    P2c / Matters MVP P3：支持 general 与 matter anchor。"""
+    P2c / Matters MVP P3：支持 general 与 matter anchor。
+
+    P4b：``agentId`` 非空 = 团队页「以指定 agent 身份」的交互式会话 → 行落
+    origin='team' + agent_id（恒 general anchor）。身份此后由 gateway 按 sessionId
+    反查（S2 W0：绝不从 chat body 读）。"""
     opts = body or {}
     anchor_type, email_id, matter_id, backend_kind = _validate_session_opts(
         opts, "sessions/new"
     )
+    agent_id = opts.get("agentId")
+    if agent_id is not None:
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise APIError(
+                "E_INVALID_ARG",
+                "sessions/new agentId must be a non-empty string",
+                source="sqlite",
+            )
+        if anchor_type != "general":
+            raise APIError(
+                "E_INVALID_ARG",
+                "sessions/new agent sessions must use the general anchor",
+                source="sqlite",
+            )
+        agent = get_report_store().get_agent(agent_id)
+        if agent is None or (agent.get("type") or "") not in _CHAT_CAPABLE_AGENT_TYPES:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"agent {agent_id!r} missing or not chat-capable",
+                source="sqlite",
+            )
     session = get_chat_db().create_new_session(
         email_id=email_id,
         backend_kind=backend_kind,
@@ -886,6 +917,7 @@ async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
         backend_agent_page_id=opts.get("backendAgentPageId"),
         anchor_type=anchor_type,
         matter_id=matter_id,
+        agent_id=agent_id,
     )
     return success_envelope(session, request=request, source="sqlite")
 

@@ -16,6 +16,7 @@
 
 import type { AgentRunHistoryItem, AgentRunState } from '@shared/api/types'
 import type {
+  MatterAttentionKind,
   MatterAttentionSeverity,
   MatterAttentionSignal,
   MatterItemDispatch,
@@ -60,6 +61,9 @@ export interface TodayProposalItem extends TodayItemBase {
 export interface TodaySignalItem extends TodayItemBase {
   source: 'signal'
   state: 'open'
+  /** 信号种别，原样透传。P4c 起五节要按它把「临期」那三种分出去（`todaySections`
+   *  的 `isDueSignalKind`）—— 判据是**后端的产生条件**，不是前端另定的标签。 */
+  kind: MatterAttentionKind
   link: { matterPublicId: string; signalId: number }
 }
 
@@ -329,6 +333,7 @@ function buildSignalItems(
       id: `signal:${signal.id}`,
       source: 'signal',
       state: 'open',
+      kind: signal.kind,
       title: signal.matter?.title ?? publicId,
       // `why` 是后端写好的中文一句话 —— 例外面的 triage 说明最强的一份现成素材。
       triageLogic:

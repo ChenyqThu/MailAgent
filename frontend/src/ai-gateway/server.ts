@@ -25,7 +25,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 // x-vercel-ai-ui-message-stream: v1 + no-buffering hints).
 import { UI_MESSAGE_STREAM_HEADERS } from 'ai'
 
-import type { AiGatewayConfig } from './config'
+import type { AiGatewayConfig, SessionAgentIdentity } from './config'
 import {
   chatMessageToUIMessage,
   type MailAgentUIMessageMetadata
@@ -204,7 +204,28 @@ async function handleChat(
   // owner-authenticated proxy, or the PR-3 IM bridge on loopback): the mode is asserted by each
   // entrypoint in trusted code (`entry.trustedMode` — /api/ai/chat pins 'manual_chat',
   // /api/ai/im-chat pins 'im_chat'). The body is never consulted for the mode.
-  const prepared = await prepareChatRun(body, cfg, controller.signal, entry.trustedMode)
+  //
+  // P4b — the session's TEAM identity (origin='team' rows) is likewise a SERVER fact: resolved
+  // from the sessionId, never from the body. Non-team sessions (incl. the IM pre-created one)
+  // resolve null → byte-identical. A resolver throw degrades to null EXCEPT for the recursion
+  // guard — cfg.resolveSessionAgent's contract keeps the identity present on a config-fetch
+  // failure (see config.ts), so a plain throw here can only mean "row unreadable", where no
+  // identity exists to guard.
+  let sessionAgent: SessionAgentIdentity | null = null
+  if (bodySessionId != null && cfg.resolveSessionAgent) {
+    try {
+      sessionAgent = (await cfg.resolveSessionAgent(bodySessionId)) ?? null
+    } catch (err) {
+      console.warn('[ai-gateway] resolveSessionAgent failed (run continues as main agent)', err)
+    }
+  }
+  const prepared = await prepareChatRun(
+    body,
+    cfg,
+    controller.signal,
+    entry.trustedMode,
+    sessionAgent
+  )
   if (!prepared.ok) {
     writeJson(res, prepared.status, prepared.body)
     return
@@ -492,7 +513,9 @@ async function handleChat(
             { ...body, messages: retryMessages },
             cfg,
             controller.signal,
-            entry.trustedMode
+            entry.trustedMode,
+            // P4b — the compact-retry replays the SAME session; keep its team identity.
+            sessionAgent
           )
           if (!retryPrepared.ok) {
             await flushChunks(outcome.deferred)

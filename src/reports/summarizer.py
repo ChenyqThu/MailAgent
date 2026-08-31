@@ -201,6 +201,10 @@ class ReportDraft:
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
     model: str = ""
+    # agentic 日报的工具轨迹（ToolLoopResult.tool_calls 原样透传，形状
+    # [{name, input, output_preview, ms}]）——落 agent_run_log 步骤表用（task 08-27
+    # P4a run transcript）。单发 classify 路径（周/月报）恒空列表。
+    tool_calls: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def _build_system(
@@ -637,6 +641,9 @@ async def summarize_report_agentic(
         output_tokens=result.output_tokens,
         cache_read_input_tokens=result.cache_read_input_tokens,
         model=result.model,
+        # 此前这份轨迹只被上面那行 logger.info 打一句就丢（r10 §3.2 的核心发现）；
+        # 现在透传给 worker 落 agent_run_log 步骤表。
+        tool_calls=list(result.tool_calls),
     )
 
 

@@ -24,9 +24,13 @@ job 全被挡在外面 (research/r8 §A.1 第 1 条)。团队页要按成员列�
      由 `is_matter_scoped()` **显式拒绝** —— 靠「反正也查不到」侥幸不算排除, 哪天默认分支
      换了 job_type 就漏出来了。
 
-没在表里的成员 (报告 / 项目周报 / 预处理 / 搜索 / 主 Agent) 落默认档 = 查 `agent_run` +
-target_key=agentId, 结果是空集。这是**如实**的: 它们的记录在各自的表 (`report` /
-`project_progress_sync` / `llm_processing`) 或压根没有, 由聚合层各接各的 (design §8.1)。
+🔴 **`agent_run_log` (DB v73) 是每个可解析成员的隐含第二源**: 不走 gateway 的成员
+(报告 / 联系人画像 / 项目周报) 的执行记录落统一台账 `agent_run_log`, 其 `agent_id`
+列**直接就是**本表的成员 id 命名空间, 不需要 target_key 换算。router
+(`agent_runs.list_agent_runs`) 对 `resolve_run_source` 解析得出的每个成员**都**并查
+run_log 并按时间合并 —— 没写过 run_log 的成员 (自定义 / 治理) 那半边恒空集, 行为不变。
+事项域命名空间在 `resolve_run_source` 返回 None 时**连 run_log 也不查** (排除纪律不许
+靠「反正没写过」侥幸)。
 """
 
 from __future__ import annotations
@@ -36,12 +40,14 @@ from typing import Optional
 
 from src.contacts.governance import CONTACT_GOVERNANCE_JOB_TYPE
 from src.contacts.governance_config import CONTACT_GOVERNANCE_AGENT_ID
-from src.contacts.profile_config import CONTACT_PROFILE_AGENT_ID
 
 #: 记录来自 `async_jobs` 的一行 (投影经 `_run_history_item`)。
 RUN_SOURCE_ASYNC_JOB = "async_job"
-#: 记录来自 `contact_profile_run` 台账 (DB v72; 画像不走 async_jobs)。
-RUN_SOURCE_CONTACT_PROFILE = "contact_profile"
+#: 记录来自 `agent_run_log` 统一台账 (DB v73) 的一行 —— **同时就是** run 历史 item 的
+#: 判别值 `kind`(`_run_log_item` 从这里取, 前端 `AgentRunLogItem.kind` 手抄同一字面量)。
+#: 不是 `RunSource.kind` 的取值: run_log 是 router 对每个可解析成员的**并查源**,
+#: 不占映射表的档位。
+RUN_SOURCE_RUN_LOG = "run_log"
 
 #: 事项域会话/派发的 agent_id 命名空间 (`src/matters/run_spec.py`)。团队页恒排除。
 MATTER_AGENT_ID_PREFIXES = ("matter:", "matter_item:")
@@ -52,10 +58,11 @@ MATTER_JOB_TYPES = frozenset({"matter_followup", "matter_item_run"})
 
 @dataclass(frozen=True)
 class RunSource:
-    """一个团队成员的执行记录来自哪儿。
+    """一个团队成员的 async_jobs 记录来自哪儿 (kind 恒 RUN_SOURCE_ASYNC_JOB)。
 
-    kind == RUN_SOURCE_ASYNC_JOB   → 用 (job_type, target_key) 查 async_jobs;
-    kind == RUN_SOURCE_CONTACT_PROFILE → 查 contact_profile_run 台账 (两个字段恒 None)。
+    统一台账 `agent_run_log` 不在这里表达: 它按 agent_id 直查, router 对每个可解析
+    成员都并查它 (见模块头注)。v72 时代的 RUN_SOURCE_CONTACT_PROFILE 档已随
+    contact_profile_run 表退役 —— 画像的记录 v73 起就在 run_log 里。
     """
 
     kind: str
@@ -68,7 +75,6 @@ BUILTIN_RUN_SOURCES: dict[str, RunSource] = {
     CONTACT_GOVERNANCE_AGENT_ID: RunSource(
         RUN_SOURCE_ASYNC_JOB, CONTACT_GOVERNANCE_JOB_TYPE, "global"
     ),
-    CONTACT_PROFILE_AGENT_ID: RunSource(RUN_SOURCE_CONTACT_PROFILE),
 }
 
 

@@ -19,13 +19,17 @@ export interface ChatThreadIdentity {
   navEpoch: number
   /** 事项锚点的内部 id；null = 通用对话。 */
   anchorId: number | null
+  /** P4b — 团队会话的 agent 身份；null = 主 agent。切成员时不得复用别人的在途创建
+   *  （0812 同款坑的身份维度扩展：A 成员的 `.then(adopt)` 落地会把界面从 B 拽回 A，
+   *  或拿 A 身份的 session 持久化 B 身份的消息）。 */
+  agentId: string | null
 }
 
 /** 会话建好时线程已经切走 —— 调用方按失败处理（范围切换保留原档、发送报错），下轮重来。 */
 export const E_CHAT_THREAD_CHANGED = 'E_CHAT_THREAD_CHANGED'
 
 function sameThreadIdentity(a: ChatThreadIdentity, b: ChatThreadIdentity): boolean {
-  return a.navEpoch === b.navEpoch && a.anchorId === b.anchorId
+  return a.navEpoch === b.navEpoch && a.anchorId === b.anchorId && a.agentId === b.agentId
 }
 
 export interface EnsureSessionDeps {

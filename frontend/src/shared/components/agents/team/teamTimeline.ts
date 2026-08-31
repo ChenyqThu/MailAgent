@@ -9,6 +9,7 @@
 
 import type {
   AgentRunHistoryItem,
+  AgentRunLogItem,
   ChatSessionListItem,
   ProjectProgressRunItem,
   ReportListItem
@@ -16,6 +17,7 @@ import type {
 
 export type TeamRecordEntry =
   | { kind: 'run'; key: string; at: number; auto: boolean; run: AgentRunHistoryItem }
+  | { kind: 'runLog'; key: string; at: number; auto: boolean; runLog: AgentRunLogItem }
   | { kind: 'session'; key: string; at: number; auto: boolean; session: ChatSessionListItem }
   | { kind: 'report'; key: string; at: number; auto: boolean; report: ReportListItem }
   | { kind: 'progress'; key: string; at: number; auto: boolean; progress: ProjectProgressRunItem }
@@ -24,6 +26,14 @@ export type TeamRecordEntry =
 export function epochMs(ts: number | null | undefined): number {
   if (ts == null) return 0
   return ts < 1e12 ? ts * 1000 : ts
+}
+
+/** ISO 字符串 → 毫秒（run_log 台账的时间是 ISO，run 行是 epoch 数 —— 换算只在这一处）。
+ *  不可解析 / 缺失恒 0：排序里落到最末，不伪造一个「现在」。 */
+export function isoMs(iso: string | null | undefined): number {
+  if (!iso) return 0
+  const ms = Date.parse(iso)
+  return Number.isNaN(ms) ? 0 : ms
 }
 
 /** 事项域命名空间（run_spec.py 写 `matter:{public_id}`，行动项写 `matter_item:…`）。 */
@@ -37,6 +47,9 @@ export function mergeMemberTimeline(input: {
   /** 全量 agent-origin 会话（调用方不必预过滤，这里按 agent_id 精确匹配 + 显式排除事项域）。 */
   sessions?: readonly ChatSessionListItem[]
   runs?: readonly AgentRunHistoryItem[]
+  /** 08-31 — agent_run_log 台账行（报告 / 画像 / 项目周报的过程记录）。与 run / 会话
+   *  同一条时间线穿插，不另开一栏。 */
+  runLogs?: readonly AgentRunLogItem[]
   reports?: readonly ReportListItem[]
   progressRuns?: readonly ProjectProgressRunItem[]
 }): TeamRecordEntry[] {
@@ -49,6 +62,21 @@ export function mergeMemberTimeline(input: {
     if (run.sessionId != null) runSessionIds.add(run.sessionId)
   }
 
+  // 同理：runLog.reportId 命中的产物行与这次执行是同一件事 —— runlog 行为准（它带过程
+  // transcript + 状态 / 用时，产物行只有结果）。产物的入口不丢：runlog 详情头有「去报告」。
+  // 🔴 判据是**真实引用**（后端从 out 步骤 payload.report_id 抽出），不是时间窗重叠 ——
+  // 后者会在一次执行产两份报告 / 补跑覆盖时误删。reportId 为 null（画像 / 项目周报——
+  // 后者走下面那条 progressEmailId）或对应 report 行不在本窗口时，两侧行为都原样不变。
+  const runLogReportIds = new Set<string>()
+  // 项目周报同款：runLog.progressEmailId 命中的 project_progress_sync 台账行
+  // （`progress:{internalId}`）与这次执行是同一件事。后端已在 API 边界加了成员语义门
+  // （只对项目周报投影），前端不再二次判成员。
+  const runLogProgressEmailIds = new Set<number>()
+  for (const runLog of input.runLogs ?? []) {
+    if (runLog.reportId) runLogReportIds.add(runLog.reportId)
+    if (runLog.progressEmailId != null) runLogProgressEmailIds.add(runLog.progressEmailId)
+  }
+
   const entries: TeamRecordEntry[] = []
 
   for (const run of runs) {
@@ -59,6 +87,18 @@ export function mergeMemberTimeline(input: {
       // ⚡自动 = 有可信触发来源且不是手动试跑；老行 triggerKind 缺失时不硬标（诚实优先）。
       auto: run.triggerKind != null && run.triggerKind !== 'manual',
       run
+    })
+  }
+
+  for (const runLog of input.runLogs ?? []) {
+    entries.push({
+      kind: 'runLog',
+      // 🔴 与 `run:${jobId}` 不同前缀：两套台账的自增 id 各自从 1 起，同号必撞。
+      key: `runlog:${runLog.runLogId}`,
+      at: isoMs(runLog.createdAt),
+      // ⚡自动的判据与 run 行逐字一致（有可信触发来源且不是手动试跑）。
+      auto: runLog.triggerKind != null && runLog.triggerKind !== 'manual',
+      runLog
     })
   }
 
@@ -78,6 +118,7 @@ export function mergeMemberTimeline(input: {
   }
 
   for (const report of input.reports ?? []) {
+    if (runLogReportIds.has(report.id)) continue
     entries.push({
       kind: 'report',
       key: `report:${report.id}`,
@@ -89,6 +130,7 @@ export function mergeMemberTimeline(input: {
   }
 
   for (const progress of input.progressRuns ?? []) {
+    if (runLogProgressEmailIds.has(progress.internalId)) continue
     entries.push({
       kind: 'progress',
       key: `progress:${progress.internalId}`,

@@ -399,6 +399,9 @@ def test_ai_fields_degraded(client):
         "internal_id", "processing_status", "mailbox", "is_read", "is_flagged",
         "ai_priority", "ai_action", "ai_review_status", "sentiment",
         "ai_model", "labels_raw",
+        # task 08-27 P4a: 预处理执行详情的六个透传字段 (llm_processing 列名原样)。
+        "llm_status", "latency_ms", "input_tokens", "output_tokens",
+        "retry_count", "last_error",
     }
     assert af["mailbox"] == "收件箱"
     assert af["is_flagged"] is True
@@ -408,6 +411,9 @@ def test_ai_fields_degraded(client):
     assert af["ai_model"] is None
     assert af["labels_raw"] is None
     assert af["processing_status"] is None
+    for key in ("llm_status", "latency_ms", "input_tokens", "output_tokens",
+                "retry_count", "last_error"):
+        assert af[key] is None
 
 
 def test_ai_fields_unknown_id_absent(client):
@@ -484,3 +490,87 @@ def test_list_item_meta_cols_emits_sender_email_either_way():
 
     without_col = _list_item_meta_cols({"snippet"})
     assert "NULL AS sender_email" in without_col
+
+
+# ---------------------------------------------------------------------------
+# task 08-27 P4a: llm_processing 透传字段（失败行可见性修复, r10 §0）
+# ---------------------------------------------------------------------------
+# 本模块 conftest 的裸库没有 llm_processing 表（那些用例验降级）。这里用真
+# SyncStore 建全表 + 播 success / failed 两行，验正路径：① ai-fields 六字段透传;
+# ② list-enriched 带 llm_status —— 失败的预处理行 (没有 labels) 此前与「从没跑过」
+# 在读侧无法区分，前端记录列因此永远看不见失败。
+
+
+import pytest as _pytest  # noqa: E402
+
+
+@_pytest.fixture()
+def llm_client(tmp_path):
+    """全 schema 临时库 (SyncStore) + 两行 llm_processing + repo 覆盖。"""
+    import sqlite3 as _sqlite3
+    import time as _time
+
+    from src.api.app import app as _app
+    from src.api.deps import get_repository as _get_repository
+    from src.mail.sync_store import SyncStore as _SyncStore
+    from src.repository import EmailRepository as _EmailRepository
+    from fastapi.testclient import TestClient as _TestClient
+
+    db = tmp_path / "llm_store.db"
+    _SyncStore(str(db))
+    now = _time.time()
+    with _sqlite3.connect(str(db)) as conn:
+        for iid, subject in ((21, "ok mail"), (22, "failed mail")):
+            conn.execute(
+                "INSERT INTO email_metadata (internal_id, message_id, subject, sender, "
+                "mailbox, date_received, sync_status, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (iid, f"<m{iid}@x>", subject, "a@x.com", "收件箱",
+                 "2026-08-28 09:00:00", "synced", now, now),
+            )
+        conn.execute(
+            "INSERT INTO llm_processing (internal_id, status, model, input_tokens, "
+            "output_tokens, latency_ms, retry_count, labels_json, created_at, updated_at) "
+            "VALUES (21, 'success', 'mk', 900, 80, 1234, 0, "
+            "'{\"priority\": \"🟡 重要\"}', ?, ?)",
+            (now, now),
+        )
+        conn.execute(
+            "INSERT INTO llm_processing (internal_id, status, retry_count, last_error, "
+            "created_at, updated_at) VALUES (22, 'failed', 3, 'overloaded', ?, ?)",
+            (now, now),
+        )
+        conn.commit()
+    repo = _EmailRepository(db_path=str(db))
+    _app.dependency_overrides[_get_repository] = lambda: repo
+    with _TestClient(_app, raise_server_exceptions=False) as c:
+        yield c
+    _app.dependency_overrides.pop(_get_repository, None)
+
+
+def test_ai_fields_projects_llm_processing_stats(llm_client):
+    r = llm_client.post("/api/email/ai-fields", json={"internalIds": [21, 22]})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    ok = data["21"]
+    assert ok["llm_status"] == "success"
+    assert ok["latency_ms"] == 1234
+    assert ok["input_tokens"] == 900 and ok["output_tokens"] == 80
+    assert ok["retry_count"] == 0 and ok["last_error"] is None
+    failed = data["22"]
+    # 🔴 r10 §0 的缺陷根子: ai_review_status 把 failed 映成 'pending'，
+    # llm_status 原始透传才让失败行在读侧分得出来。
+    assert failed["ai_review_status"] == "pending"
+    assert failed["llm_status"] == "failed"
+    assert failed["retry_count"] == 3 and failed["last_error"] == "overloaded"
+
+
+def test_list_enriched_carries_raw_llm_status(llm_client):
+    r = llm_client.get("/api/email/list-enriched")
+    assert r.status_code == 200
+    by_id = {row["internal_id"]: row for row in r.json()["data"]}
+    assert by_id[21]["llm_status"] == "success"
+    # 失败行: 没有 labels ⇒ ai_priority 为 null, 但 llm_status 让它与
+    # 「从没跑过」(llm_status null) 分得开 —— 前端按它筛记录列。
+    assert by_id[22]["llm_status"] == "failed"
+    assert by_id[22]["ai_priority"] is None

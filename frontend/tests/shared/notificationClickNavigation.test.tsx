@@ -11,6 +11,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, render, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from '@tanstack/react-router'
 import * as React from 'react'
 
@@ -52,7 +53,15 @@ describe('useNotificationClickNavigation — matter 型', () => {
     const { useMatterNavigation } = await import('../../src/shared/components/matters/navigation')
     useMatterNavigation.getState().clear()
 
-    render(<RouterProvider router={router} />)
+    // 🔴 QueryClientProvider 不是装饰：root 路由挂的是**真**组件树，里面已有用
+    // react-query 的组件（FeedbackDialog 取账户邮箱做预填）。生产恒有 provider，
+    // 所以这里补 harness 而不是让组件去容错。
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    )
     await waitFor(() => expect(handler).toBeTruthy())
 
     handler!({ id: 7, payload: { link: { type: 'matter', publicId: 'm_7fa3' } } })

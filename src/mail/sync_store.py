@@ -77,10 +77,10 @@ from src.matters.models import (
     sql_check_clause,
 )
 from src.matters.resource_identity import MatterError, normalize_resource_key
-# 画像执行台账的 status 值域单源 (零依赖叶子, 见该模块头注): contact_profile_run 的
-# CHECK 引它, 不手抄字符串。反向 import (profile_runs → sync_store) 是循环, 故表 DDL
-# 归本文件、读写归那边。
-from src.contacts.profile_runs import CONTACT_PROFILE_RUN_STATUS_VALUES
+# 统一执行台账的两个值域单源 (零依赖叶子, 见该模块头注): agent_run_log 的 status
+# CHECK 与 agent_run_step 的 kind CHECK 引它们, 不手抄字符串。反向 import
+# (run_log → sync_store) 是循环, 故表 DDL 归本文件、读写归那边。
+from src.agents.run_log import AGENT_RUN_LOG_STATUS_VALUES, AGENT_RUN_STEP_KINDS
 from src.contacts.taxonomy import (
     CONTACT_FUNCTION_VALUES,
     CONTACT_GENDER_VALUES,
@@ -909,49 +909,68 @@ MATTER_UPDATE_ITEM_DISPATCH_INDEX_DDL = (
 )
 
 
-# ==================== contact_profile_run DDL (v72) ====================
-# 联系人画像 Agent 的执行台账 (task 08-27-l4-tab-workspace P4a)。团队页的「记录」列要能
-# 按成员列出最近 N 次执行, 而画像此前**一行都没有** —— 批次统计只 logger.info 一句就丢了
-# (`src/contacts/profile.py::run_profile_batch`), 于是那一栏对它永远是空态。
+# ==================== agent_run_log / agent_run_step DDL (v73) ====================
+# 统一 agent 执行台账 (task 08-27-l4-tab-workspace P4a, research/r10 §4.2)。不走 gateway
+# 的成员 (报告 / 联系人画像 / 项目周报) 没有 session transcript, 详细过程记录落这里:
+# 一次执行 = agent_run_log 一行, 一个节点 = agent_run_step 一行, 前端把步骤合成与会话
+# 同形态的 transcript (design §8.1 的 trig/think/tool/out 四类节点)。
 #
-# 🔴 独立成组, **不进** CONTACT_TABLE_DDLS / CONTACT_INDEX_DDLS / CONTACT_SUGGESTION_*
-# —— 那几组会被 v54 / v63 / v64 等旧块对老库整组重放, 混进去等于给 v54..v71 每一个中间
-# 版本各加一个新炸点 (v52 索引教训)。本组只从 v72 块执行一次 (新库走满迁移梯子同样经
-# v72 拿到)。
-#
-# 形状取自 `project_progress_sync` 的简版 —— 那是同类的「确定性批处理的一次执行」记录;
-# **不抄** matter_run 的全套 (chat_session / trigger_payload / cost 画像根本没有)。
+# 🔴 独立成组, **不进** CONTACT_TABLE_DDLS / MATTER_* / CONTACT_SUGGESTION_* 任何老组
+# —— 那几组会被 v54 / v63 / v64 等旧块对老库整组重放, 混进去等于给每一个中间版本各加
+# 一个新炸点 (v52 索引教训)。本组只从 v73 块执行一次 (新库走满迁移梯子同样经 v73 拿到)。
 #
 # 列语义:
-#   status      ok | fail | noop。判据单源 = `profile_runs.classify_batch_status`
-#               (CHECK 值域也引那里的元组, 不手抄字符串)。noop = 这一轮没有候选人,
-#               不是失败, 也不该在记录列里显示成「跑了一次画像」。
-#   candidates  这一轮选出的候选人数; ran = 真正抢到锁开跑的; ok_count/skipped/failed
-#               是逐人的结果 (与 run_profile_batch 返回的 stats 逐字对应)。
-#   error       仅 status='fail' 时非空 (批级异常原文)。
-#   *_at        epoch **毫秒** (contacts 域全域单位, 与 contact.profile_updated_at 同)。
-#               🔴 与 async_jobs 的 time.time() **秒**不是一回事 —— 投影成 run 历史行时
-#               在 API 边界换算 (`agent_runs._profile_run_item`), 表内不留两种单位。
-CONTACT_PROFILE_RUN_TABLE_DDLS = (
-    f"""CREATE TABLE IF NOT EXISTS contact_profile_run (
+#   agent_id      report_agent.id 命名空间 (run_sources.py 那套; 画像=contact_profile_agent,
+#                 周报=project_progress_sync, 报告=daily_email_digest 等)。🔴 事项域的
+#                 `matter:` / `matter_item:` 命名空间恒不写进来 (团队页排除纪律)。
+#   status        `src.agents.run_state.AGENT_RUN_STATES` 9 值域的**子集** (CHECK 引
+#                 `src.agents.run_log.AGENT_RUN_LOG_STATUS_VALUES`, 不发明词表 ——
+#                 前端 RunStateBadge 零映射直接吃)。
+#   kind          trig|think|tool|out (design §8.1 定死)。🔴 词表保留 think 是给未来开
+#                 extended thinking 留位 —— 本批任何写入方都不写 think 行 (Python 腿
+#                 没开 thinking, 没有数据就不造思考块)。
+#   payload_json  tool: {input, output_preview} / out: {report_id,...}; 解析后经 steps
+#                 端点透出, 坏 JSON 读侧落 None。
+#   ok            1|0|NULL; 0 → 前端标 ✗ + fail 色。
+#   *_at          epoch **毫秒** (对齐 ai_chat_sessions / v72 惯例)。🔴 与 async_jobs 的
+#                 time.time() **秒**不是一回事 —— 投影成 run 历史行时在 API 边界换算
+#                 (`agent_runs._run_log_item`), 表内不留两种单位。
+AGENT_RUN_LOG_TABLE_DDLS = (
+    f"""CREATE TABLE IF NOT EXISTS agent_run_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id TEXT NOT NULL,
         started_at INTEGER NOT NULL,
-        completed_at INTEGER NOT NULL,
-        status TEXT NOT NULL CHECK (status {sql_check_clause(CONTACT_PROFILE_RUN_STATUS_VALUES)}),
-        candidates INTEGER NOT NULL DEFAULT 0,
-        ran INTEGER NOT NULL DEFAULT 0,
-        ok_count INTEGER NOT NULL DEFAULT 0,
-        skipped INTEGER NOT NULL DEFAULT 0,
-        failed INTEGER NOT NULL DEFAULT 0,
+        completed_at INTEGER NULL,
+        status TEXT NOT NULL CHECK (status {sql_check_clause(AGENT_RUN_LOG_STATUS_VALUES)}),
+        trigger_kind TEXT NULL,
+        trigger_detail TEXT NULL,
+        summary TEXT NULL,
+        model TEXT NULL,
+        input_tokens INTEGER NULL,
+        output_tokens INTEGER NULL,
         error TEXT NULL
+    )""",
+    f"""CREATE TABLE IF NOT EXISTS agent_run_step (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL REFERENCES agent_run_log(id) ON DELETE CASCADE,
+        seq INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind {sql_check_clause(AGENT_RUN_STEP_KINDS)}),
+        name TEXT NULL,
+        detail TEXT NULL,
+        payload_json TEXT NULL,
+        ok INTEGER NULL,
+        ms INTEGER NULL,
+        created_at INTEGER NOT NULL
     )""",
 )
 
-CONTACT_PROFILE_RUN_INDEX_DDLS = (
-    # 唯一读面:「最近 N 轮, 倒序」。id DESC 是同毫秒内的稳定次序 (同一 tick 里补落两行
-    # 时没有它, 两次读的顺序可能不一样)。
-    "CREATE INDEX IF NOT EXISTS idx_contact_profile_run_recent "
-    "ON contact_profile_run(started_at DESC, id DESC)",
+AGENT_RUN_LOG_INDEX_DDLS = (
+    # 读面①: 某成员「最近 N 次, 倒序」。id DESC 是同毫秒内的稳定次序。
+    "CREATE INDEX IF NOT EXISTS idx_agent_run_log_recent "
+    "ON agent_run_log(agent_id, started_at DESC, id DESC)",
+    # 读面②: 一次执行的步骤按 seq 取 (稳定次序, 同毫秒不靠 id)。
+    "CREATE INDEX IF NOT EXISTS idx_agent_run_step "
+    "ON agent_run_step(run_id, seq)",
 )
 
 
@@ -1931,22 +1950,30 @@ class SyncStore:
     #                (表 / 列留着不碍事; 要清干净再 DROP TABLE matter_item_dispatch ——
     #                两列 SQLite 得重建表才去得掉, 不值当)。
     # v72 (2026-08-31, L4 团队页 P4a): 新表 contact_profile_run —— 联系人画像 Agent 的
-    #                执行台账。团队页的「记录」列按成员列最近 N 次执行, 而画像此前一行都
-    #                没有 (批次统计只 logger.info 一句就丢了) ⇒ 那一栏对它永远是空态。
-    #                DDL 单源 CONTACT_PROFILE_RUN_TABLE_DDLS / _INDEX_DDLS (🔴 不进
-    #                CONTACT_*/MATTER_* 各组, 理由见该常量头注 = v52 教训), status 的
-    #                CHECK 引 `src/contacts/profile_runs.py` 的值域元组。
-    #                语义: 一轮批处理落一行 —— 与 project_progress_sync 那种「一封邮件一
-    #                行」不同, 这里的粒度是**一次执行**, 逐人的成败进计数列 (画像的逐人状态
-    #                本来就在 contact.profile_status 里, 不在这张表重复一份)。
-    #                数据规则: 时间列是 epoch **毫秒** (contacts 域全域单位); 无播种数据
-    #                —— 存量库升上来一条记录都没有, 🔴 **不拿 contact.profile_updated_at
-    #                回填**成假的执行史 (那是逐人的时间戳, 拼不出「哪一轮跑了哪些人」)。
-    #                幂等: CREATE TABLE / CREATE INDEX IF NOT EXISTS, 表与索引同块
-    #                (纯新表首建, 无 v52 式「索引先于列」的错位面)。重放结果不变。
-    #                回滚 (回退 v71): 旧代码完全不认识这张表, **只降版本号是安全的**
-    #                (表留着不碍事); 要清干净再 `DROP TABLE contact_profile_run`。
-    DB_VERSION = 72
+    #                执行台账 (一轮批处理落一行, 时间列 epoch 毫秒)。
+    #                ⚠️ **v73 已整表迁走**: 行搬进 agent_run_log 后 DROP, 本版本的迁移块
+    #                与 CONTACT_PROFILE_RUN_* DDL 常量、`src/contacts/profile_runs.py`
+    #                模块一并退役 (v73 块对「表不存在」的 <v72 老库直接跳过搬迁)。
+    # v73 (2026-08-31, L4 团队页 P4a run transcript): 新表 agent_run_log + agent_run_step
+    #                —— 统一 agent 执行台账。不走 gateway 的成员 (报告 / 联系人画像 /
+    #                项目周报) 没有 session transcript, 详细过程记录落这里, 前端把步骤
+    #                合成 trig/think/tool/out 的 transcript 形态 (design §8.1)。
+    #                DDL 单源 AGENT_RUN_LOG_TABLE_DDLS / _INDEX_DDLS (🔴 不进
+    #                CONTACT_*/MATTER_* 各组, 理由见该常量头注 = v52 教训); status 的
+    #                CHECK 引 `src/agents/run_log.py` 的值域元组 (9 值域子集, 不发明
+    #                词表), kind 的 CHECK 同引 (trig|think|tool|out)。
+    #                数据搬迁: v72 库的 contact_profile_run 全部行 INSERT..SELECT 进
+    #                agent_run_log (agent_id='contact_profile_agent', ok→completed /
+    #                noop→skipped / fail→failed, 时间列同为毫秒直搬, summary 按读侧
+    #                旧口径 `_profile_run_summary` 的三句话在 SQL CASE 里预生成),
+    #                然后 DROP TABLE contact_profile_run。<v72 老库没有这张表 →
+    #                sqlite_master 探测后跳过搬迁, 只建新表。
+    #                幂等: 建表 IF NOT EXISTS; 搬迁 + DROP 与版本号写入同一事务 ——
+    #                任何一步失败整体 ROLLBACK, 重跑从头再来, 不存在「搬了一半」。
+    #                回滚 (回退 v72): 旧代码读不到 contact_profile_run (已 DROP),
+    #                画像记录列空态但不炸; agent_run_log 留着不碍事。**已迁移的画像
+    #                台账行不会自动搬回去** —— 生产该表 2026-08-31 才建, 行数极少。
+    DB_VERSION = 73
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
 
@@ -4935,18 +4962,58 @@ class SyncStore:
                 _migration_guard_index(
                     cursor, "idx_matter_update_item_dispatch", "v71 migration", e,
                 )
-        # === v72: contact_profile_run 画像执行台账 ===
-        # 语义 / 数据规则 / 回滚代价见 DB_VERSION 注记与 CONTACT_PROFILE_RUN_TABLE_DDLS 头注。
-        # 表与索引同块同 try: 纯新表首建, 不存在 v52 式「索引先于列」的错位面。
-        if current_version < 72:
+        # === v73: agent_run_log / agent_run_step 统一执行台账 + contact_profile_run 迁入 ===
+        # 语义 / 数据规则 / 回滚代价见 DB_VERSION 注记与 AGENT_RUN_LOG_TABLE_DDLS 头注。
+        # (v72 的 contact_profile_run 建表块已随本版本退役: <v72 老库从没有那张表,
+        #  下面的 sqlite_master 探测会跳过搬迁; 恰在 v72 的库走「搬 + DROP」。)
+        if current_version < 73:
             try:
-                for ddl in CONTACT_PROFILE_RUN_TABLE_DDLS:
+                for ddl in AGENT_RUN_LOG_TABLE_DDLS:
                     cursor.execute(ddl)
-                for ddl in CONTACT_PROFILE_RUN_INDEX_DDLS:
+                for ddl in AGENT_RUN_LOG_INDEX_DDLS:
                     cursor.execute(ddl)
+                has_profile_run = cursor.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='table' AND name='contact_profile_run'"
+                ).fetchone() is not None
+                if has_profile_run:
+                    # 字段映射 (v72 → v73):
+                    #   status: ok→completed / noop→skipped / fail→failed (9 值域子集,
+                    #           与旧读侧 _PROFILE_RUN_STATE_BY_STATUS 逐字一致);
+                    #   summary: 旧读侧 _profile_run_summary 的三句话预生成进列
+                    #            (新表存 summary 不存计数列, 逐人明细此后走步骤表);
+                    #   时间列: v72 已是毫秒, 直搬不换算; error 原样。
+                    #   trigger_kind/detail/model/tokens: 旧台账没有 → NULL。
+                    cursor.execute(
+                        """INSERT INTO agent_run_log
+                             (agent_id, started_at, completed_at, status,
+                              trigger_kind, trigger_detail, summary, model,
+                              input_tokens, output_tokens, error)
+                           SELECT 'contact_profile_agent', started_at, completed_at,
+                                  CASE status WHEN 'ok' THEN 'completed'
+                                              WHEN 'noop' THEN 'skipped'
+                                              ELSE 'failed' END,
+                                  NULL, NULL,
+                                  CASE WHEN status = 'noop'
+                                         THEN '没有待更新画像的联系人'
+                                       WHEN status = 'fail' AND error IS NOT NULL
+                                         THEN '没跑完 · 候选 ' || candidates
+                                              || ' 人，已完成 ' || ok_count || ' 人'
+                                       ELSE '画像 ' || ok_count || ' 人 · 跳过 '
+                                            || skipped || ' · 失败 ' || failed
+                                  END,
+                                  NULL, NULL, NULL, error
+                             FROM contact_profile_run
+                            ORDER BY started_at ASC, id ASC"""
+                    )
+                    cursor.execute("DROP TABLE contact_profile_run")
+                    logger.info(
+                        "v73 migration: contact_profile_run rows migrated into "
+                        "agent_run_log, table dropped"
+                    )
             except sqlite3.Error as e:
                 raise SyncStoreMigrationError(
-                    f"v72 migration (contact_profile_run table): {e}"
+                    f"v73 migration (agent_run_log tables): {e}"
                 ) from e
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),

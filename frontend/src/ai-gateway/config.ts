@@ -157,6 +157,27 @@ export interface QueuedInputStore {
   restoreForSession(sessionId: number): number
 }
 
+/** P4b (task 08-27) — the TEAM identity of an interactive session opened AS an agent
+ *  (ai_chat_sessions origin='team' + agent_id, CHAT_DB v29). Resolved SERVER-SIDE by
+ *  cfg.resolveSessionAgent from the sessionId (S2 W0 discipline: never from the body) and
+ *  threaded into prepareChatRun, where it drives exactly three things: the identity block in
+ *  the system prompt, the middle model-priority layer (body.model > agent model > cfg.model),
+ *  and the custom_agent_call recursion guard (tools/index.ts). Everything else — tools,
+ *  approvals, standing context — stays byte-identical to the main agent (owner 拍板: 完全同构). */
+export interface SessionAgentIdentity {
+  agentId: string
+  agentTitle: string
+  /** The agent's prompt as a DUTY REFERENCE (职责设定参考), never a task instruction — a report
+   *  agent's prompt says "generate the daily report" and injecting it as an instruction would
+   *  make the conversation start writing reports unprompted (形态 γ, rejected). */
+  duty?: string | null
+  /** The agent row's model ('' → null). Middle priority: body.model > this > cfg.model. */
+  model?: string | null
+  /** Coarse "when does it act on its own" line (mode naming only — schedule semantics stay
+   *  single-sourced in schedule-rule-contract.md; this never expands occurrences). */
+  scheduleLine?: string | null
+}
+
 export interface AiGatewayConfig {
   /** bind port. host is always 127.0.0.1 (loopback). 0 = kernel-assigned (tests). */
   port: number
@@ -228,7 +249,13 @@ export interface AiGatewayConfig {
      *  convenience can never leak into an unattended run. null/absent → every write asks
      *  (fail-closed), byte-identical to pre-WP-11. */
     toolApprovalPrefs?: GatewayToolApprovalPrefs | null,
-    parentSessionId?: number | null
+    parentSessionId?: number | null,
+    /** P4b — the session's team-agent id (server-resolved via cfg.resolveSessionAgent). Its ONLY
+     *  consumer is the custom_agent_call assembly gate (tools/index.ts): an agent-identity
+     *  session must never delegate to another agent (recursion guard — the manual_chat venue
+     *  gate alone no longer suffices because team sessions ARE manual_chat). The headless
+     *  wrapper's shorter signature structurally never forwards this slot. */
+    sessionAgentId?: string | null
   ) => ToolSet
   /** Test-harness-only override for deterministic single-step fixtures. Production never sets this;
    *  normal manual/headless runs use chatRun's 10k internal sentinel. */
@@ -254,6 +281,19 @@ export interface AiGatewayConfig {
    *  Omitted (harness/test cfgs) → the request-level 'always'|'auto-reversible' semantics apply
    *  unchanged, byte-identical. */
   resolveGlobalApprovalMode?: () => Promise<GlobalApprovalMode> | GlobalApprovalMode
+  /** P4b (task 08-27) — resolve the TEAM identity of a session (origin='team' rows only; every
+   *  other origin — NULL/interactive, 'agent', 'im' — resolves null → byte-identical run).
+   *  Called by handleChat (and approvalResume) with the request's sessionId BEFORE prepareChatRun;
+   *  the sessionId is the ONLY input, so a client can never assert an identity via the body
+   *  (S2 W0). The Electron wrapper reads the ai_chat.db row + the report_agent config row
+   *  (loopback, best-effort). 🔴 CONTRACT: when the session row says 'team' + agent_id, the
+   *  implementation must STILL return the identity (weakened fields) even if the agent config
+   *  fetch fails — dropping it would silently re-register custom_agent_call in an agent session
+   *  (the recursion guard must not depend on serve-api availability). Omitted (tests / harness)
+   *  → no resolution, byte-identical. */
+  resolveSessionAgent?: (
+    sessionId: number
+  ) => Promise<SessionAgentIdentity | null> | SessionAgentIdentity | null
   /** 08-05 WP-11 — hot-read the owner's per-tool approval tiers + send recipient whitelist
    *  (agent_config.db tool_approval_pref / owner_settings via GET /api/agent/tool-prefs). Called
    *  by prepareChatRun ONCE per run and ONLY for manual_chat runs (headless/im never consult it).

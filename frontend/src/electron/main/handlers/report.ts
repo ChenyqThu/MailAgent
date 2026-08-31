@@ -20,8 +20,9 @@ import { daemonRequest, daemonRequestWithMeta } from '../daemon_api'
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 import { clampReportPage } from './reportPage'
 import type {
-  AgentRunHistoryItem,
+  AgentRunListItem,
   AgentRunPendingCount,
+  AgentRunStep,
   AgentRunToolOptions,
   CustomAgentBudget,
   CustomAgentToolPolicy,
@@ -374,9 +375,9 @@ export function registerReportHandlers(): void {
     async (
       _evt,
       opts?: { agentId?: string; limit?: number; offset?: number; state?: string }
-    ): Promise<ReportPagedResult<AgentRunHistoryItem>> => {
+    ): Promise<ReportPagedResult<AgentRunListItem>> => {
       try {
-        const { data, meta } = await daemonRequestWithMeta<AgentRunHistoryItem[]>(
+        const { data, meta } = await daemonRequestWithMeta<AgentRunListItem[]>(
           'GET',
           '/agent-runs',
           {
@@ -437,4 +438,22 @@ export function registerReportHandlers(): void {
       }
     }
   )
+
+  // ── report:runLogSteps — 08-31 执行台账过程节点（读，走 serve-api
+  //    GET /agent-runs/run-log/{id}/steps）。报告 / 画像 / 项目周报三位不走 gateway headless
+  //    （无 session 可读），过程记在 agent_run_step；前端合成 transcript 后与会话共用渲染器。
+  //    端点未就绪 / 不可达 → catch 返 []（详情退回「这次运行没有产生任何输出」，不崩）。
+  ipcMain.handle('report:runLogSteps', async (_evt, runLogId: unknown): Promise<AgentRunStep[]> => {
+    if (typeof runLogId !== 'number' || !Number.isFinite(runLogId)) return []
+    try {
+      const res = await daemonRequest<{ steps?: AgentRunStep[] }>(
+        'GET',
+        `/agent-runs/run-log/${runLogId}/steps`
+      )
+      return res.steps ?? []
+    } catch (err) {
+      console.warn('[report:runLogSteps] serve-api unreachable / 端点未就绪:', err)
+      return []
+    }
+  })
 }

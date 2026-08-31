@@ -27,7 +27,7 @@ import {
   responseMessageAwaitsApproval
 } from './chatRun'
 import { wrapCfgForAgentRun } from './agentRun'
-import type { AiGatewayConfig } from './config'
+import type { AiGatewayConfig, SessionAgentIdentity } from './config'
 import {
   applyApprovalResponseToMessages,
   type ToolApprovalResponsePayload
@@ -187,7 +187,25 @@ export async function resumeApprovalRun(
   // cfg, byte-identical. makePersistOnFinish below holds the SAME wrapped cfg, so a re-pause
   // re-freezes the same context (the chain never widens).
   const runCfg = entry.agentRunContext ? wrapCfgForAgentRun(cfg, entry.agentRunContext) : cfg
-  const prepared = await prepareChatRun(resumeBody, runCfg, abortSignal, entry.contextMode)
+  // P4b — a resume of a TEAM session must rebuild its identity too (the resumed drain rebuilds
+  // the ToolSet, so without this the custom_agent_call recursion guard would silently drop on
+  // resume). Same server-fact discipline as handleChat: resolved from the stashed sessionId,
+  // never from the frozen body. Non-team sessions resolve null → byte-identical replay.
+  let sessionAgent: SessionAgentIdentity | null = null
+  if (entry.sessionId != null && cfg.resolveSessionAgent) {
+    try {
+      sessionAgent = (await cfg.resolveSessionAgent(entry.sessionId)) ?? null
+    } catch {
+      sessionAgent = null
+    }
+  }
+  const prepared = await prepareChatRun(
+    resumeBody,
+    runCfg,
+    abortSignal,
+    entry.contextMode,
+    sessionAgent
+  )
   if (!prepared.ok) {
     return { ok: false, status: 'error', sessionId: entry.sessionId, error: prepared.body.error }
   }

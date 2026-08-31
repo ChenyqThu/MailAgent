@@ -24,6 +24,7 @@ import type {
 } from '@shared/types/cli.gen'
 import type {
   AgentRunHistoryItem,
+  AgentRunListItem,
   AgentRunSpec,
   AgentRunToolOptions,
   ReportBlock,
@@ -2207,12 +2208,10 @@ export class MailAgentDomainClient {
   /** custom_agent_get run history — the agent's recent runs (read態唯一经 derive_agent_run_state
    *  server-side). GET /agent-runs?agentId=&limit=. The 8-value `state` is authoritative; the tool
    *  never re-derives it. */
-  listAgentRuns(
-    agentId: string,
-    limit: number,
-    signal?: AbortSignal
-  ): Promise<AgentRunHistoryItem[]> {
-    return this._req<AgentRunHistoryItem[]>('GET', '/agent-runs', {
+  listAgentRuns(agentId: string, limit: number, signal?: AbortSignal): Promise<AgentRunListItem[]> {
+    // 08-31 起这个聚合返两种台账行：async_jobs run（既有形状）与 agent_run_log
+    // （`kind: 'run_log'`，时间是 ISO 字符串）。工具把整行交给模型，不解读字段。
+    return this._req<AgentRunListItem[]>('GET', '/agent-runs', {
       query: { agentId, limit },
       signal
     })

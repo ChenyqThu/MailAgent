@@ -1,4 +1,6 @@
-// 例外面的取数层（L4 批次 2 设计 §4.1）。
+// 例外面的取数层（L4 批次 2 设计 §4.1）。P4c 起它是**五节里三节**（decide / due / out）
+// 的取数层 —— 上面一层是 `useTodaySections`，它在这份分组结果之上再拆 due、并接上另外
+// 两节（meet / reply）自己的源。本文件的四条源与实时性纪律不变。
 //
 // 四条读端点，复用**既有 query key 族**（前三条是批次 2 就在的，第四条是批次 3 新增的
 // 跨事项聚合）—— 例外面因此不新造实时通道，只在 `useEventBridge` 挂一条定向失效：
@@ -29,6 +31,7 @@ import {
 } from '@shared/components/matters/hooks'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { qk } from '@shared/lib/queryKeys'
+import { isJobRunItem } from '@shared/lib/agentRunItems'
 
 import { buildTodayItems, groupTodayItems, type TodayGroup } from './todayGroups'
 
@@ -96,7 +99,10 @@ export function useTodayData(): TodayData {
       groupTodayItems(
         buildTodayItems(
           {
-            runs: runs.data?.items ?? [],
+            // 08-31 — 聚合里现在还有 agent_run_log 行（报告 / 画像 / 项目周报的过程台账）。
+            // 今日页的四源判据（triage / 24h 窗 / 审批）都建在 async_jobs run 行上，这里只
+            // 取那一档；run_log 要不要进今日是独立一题，不在本批顺手扩。
+            runs: (runs.data?.items ?? []).filter(isJobRunItem),
             proposals: proposals.data?.items ?? [],
             signals: signals.data?.items ?? [],
             dispatches: dispatches.data?.items ?? []

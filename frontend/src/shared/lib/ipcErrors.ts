@@ -45,3 +45,15 @@ export function asWriteError(err: unknown): WriteErrorShape {
 export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
+
+/**
+ * 同上，但再剥掉两层给用户看没用的壳：主进程抛出来的错误经 IPC 会变成
+ * `Error invoking remote method 'feedback:submit': FeedbackSubmitError: 真正的原因`。
+ * 前两截是 Electron 的实现细节，直接摆给用户只会让人更懵 —— 要在界面上展示主进程的
+ * 失败原因时用这个（`errorMessage` 保持原样，它的调用点大多是自己抛的错，没有这两层）。
+ */
+export function readableIpcError(err: unknown): string {
+  return errorMessage(err)
+    .replace(/^Error invoking remote method '[^']*':\s*/, '')
+    .replace(/^\w*Error:\s*/, '')
+}

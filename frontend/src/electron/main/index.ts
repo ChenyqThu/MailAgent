@@ -43,6 +43,7 @@ import { registerLlmStatsHandlers } from './handlers/llm_stats'
 // issue #59 — KOS 入库台账统计 (同一 /llm 页的「知识库入库」区)。
 import { registerKosStatsHandlers } from './handlers/kos_stats'
 import { registerCalendarHandlers } from './handlers/calendar'
+import { registerTodayHandlers } from './handlers/today'
 import { registerSettingsHandlers } from './handlers/settings'
 import { registerNotionAgentHandlers } from './handlers/notion_agent'
 // task 08-20 — Notion OAuth 授权内核 (loopback 回调 + exchange 代理换 token +
@@ -440,6 +441,9 @@ app.whenReady().then(async () => {
   registerLlmStatsHandlers()
   registerKosStatsHandlers()
   registerCalendarHandlers()
+  // task 08-27 P4c — 今日聚合读（待回邮件 + 下一个硬时间点）。经 daemon_api 转发
+  // serve-api，判据全在 Python 侧（与报告的「已回」判定同一份）。
+  registerTodayHandlers()
   registerSettingsHandlers()
   // Notion Agent CLI config bridge — Settings page reads/edits the bound
   // Custom Agent + default model in ~/.notionagents/notion_account.json.

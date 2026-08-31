@@ -430,6 +430,7 @@ from src.api.routers import (  # noqa: E402
     reports,
     settings,
     skills,
+    today,
     web,
 )
 
@@ -455,6 +456,10 @@ app.include_router(matters.router)
 # 已读写面 (M1)。鉴权同 matters/reports (verify_cf_access, 远程 CF Access / 本地
 # ephemeral token 两腿都过)；无 flag 门控 (owner 拍板不设灰度开关, design §8.e)。
 app.include_router(notifications.router)
+# task 08-27 P4c (今日页) — GET /api/today。**只出两块**: 待回邮件 + 下一个硬时间点;
+# 另外四节走各自现成端点 (理由见 src/today/aggregate.py 的模块 docstring —— 那是对
+# design §十「一次算出来」的显式偏离)。鉴权同 matters/reports (verify_cf_access)。
+app.include_router(today.router)
 # Contact Directory WP2 (task 08-13) — /api/contacts* 列表聚合/详情/关联/治理写面。
 # WP7 治理建议落库腿仅接受 verify_local_token。
 app.include_router(contact_agent.router)

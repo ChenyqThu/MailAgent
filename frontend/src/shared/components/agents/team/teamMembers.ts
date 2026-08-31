@@ -19,7 +19,10 @@ export type TeamViewTab = 'record' | 'settings'
 export type TeamRecordSource =
   /** GET /api/agent-runs 完整 run 历史 + transcript（自定义 / 通讯录治理）。 */
   | 'runs'
-  /** 同一端点，但 sessionId 恒 null（联系人画像）→ 详情只有统计摘要。 */
+  /** 同一端点（联系人画像）。名字是 r8 时代的事实：那时它的行 sessionId 恒 null、详情
+   *  只有统计摘要。08-31 起它的记录改落 `agent_run_log`，详情**有** transcript，于是本档
+   *  与 `'runs'` 在行为上已经没有差别 —— 保留是为了不在收口批里动词表与它的测试；
+   *  下次碰团队页时合并掉。 */
   | 'runs-no-transcript'
   /** `report` 行投影（报告本身即记录，无过程 transcript）。 */
   | 'report'

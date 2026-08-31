@@ -7010,13 +7010,13 @@
       "due": "Due soon",
       "out": "Agent output"
     },
-    "title": "Exceptions",
+    "title": "Today",
     "subtitle": "{count, plural, =0 {Nothing waiting} one {# item to look at} other {# items to look at}}",
     "subtitleLoading": "Collecting…",
     "error": "Failed to load matters data — only agent runs are listed below",
     "empty": {
-      "title": "Nothing needs you right now",
-      "hint": "Agent approvals, matter proposals, attention signals and item dispatches collect here. None of them are waiting."
+      "title": "Nothing needs you today",
+      "hint": "Calls to make, today's meetings, emails to answer, things due soon and agent output all collect here. None of them are waiting."
     },
     "group": {
       "waiting": "Waiting on you",
@@ -7061,6 +7061,31 @@
       "answerPlaceholder": "Give it the piece it is missing",
       "answerConfirm": "Answer",
       "answerBack": "Back"
+    },
+    "meet": {
+      "allDay": "All day",
+      "untitled": "Untitled event"
+    },
+    "why": {
+      "meetUpcoming": "Starts {time}",
+      "meetPast": "Started {time}",
+      "report": "{cadence}, generated today"
+    },
+    "meta": {
+      "nextMeet": "Next {time}",
+      "oldestReply": "Oldest {age}"
+    },
+    "action": {
+      "openMail": "Reply",
+      "openCalendar": "Open calendar",
+      "openReport": "Open report"
+    },
+    "next": {
+      "inMinutes": "{n, plural, one {# min left} other {# min left}}",
+      "inHours": "{h}h {m}m left",
+      "inHoursOnly": "{h, plural, one {# hour left} other {# hours left}}",
+      "started": "Started",
+      "pendingBefore": "{count, plural, one {# call to make before then} other {# calls to make before then}}"
     }
   },
   "tabs": {
@@ -7114,13 +7139,15 @@
       "freq": "Reproduction",
       "email": "Email (optional)",
       "emailPlaceholder": "Leave it and we can reply when there is progress",
-      "attachScreenshot": "Attach a screenshot of the current view",
-      "attachDiagnostics": "Attach the diagnostics bundle (~1 min to build)",
-      "autoContext": "Sent automatically: {context}",
+      "emailNone": "(no email left)",
+      "attachments": "Attachments",
+      "imagesLabel": "Images",
+      "imagesHint": "Drop a screenshot here, paste it with ⌘V, or click to pick files",
+      "imagesTitle": "Images ({count})",
+      "imagesSkipped": "No images attached.",
+      "attachDiagnostics": "Attach the diagnostics bundle",
+      "diagHelper": "Last 7 days of runtime logs plus a redacted config snapshot — no email bodies, attachments or contacts. Built after you press Next; takes about a minute.",
       "autoContextTitle": "Runtime context sent automatically",
-      "screenshotTitle": "Screenshot",
-      "screenshotSkipped": "Not selected — it will not be sent.",
-      "screenshotFailed": "Could not capture one this time (submission still works).",
       "diagTitle": "Diagnostics bundle",
       "diagBusy": "Building… (~1 min)",
       "diagSkipped": "Not selected — it will not be sent.",
@@ -7128,6 +7155,7 @@
       "diagLogs": "Runtime logs: last 7 days",
       "diagRedacted": "Config snapshot: tokens, secrets and email addresses redacted",
       "diagExcluded": "Excluded: email bodies, attachments, contacts",
+      "diagRenamed": "Uploaded as .zip.txt (Notion refuses .zip) — drop the .txt to unzip it",
       "remove": "Drop it",
       "cancel": "Cancel",
       "next": "Next",
@@ -7166,7 +7194,6 @@
       "expandList": "Expand record list",
       "collapseList": "Collapse record list",
       "newSessionTitle": "Start a new chat with {name}",
-      "newSessionHint": "The composer opens once the write path lands; history on the left is readable now.",
       "runUntitled": "Run",
       "noOutput": "This run produced no output.",
       "noOutputError": "This run produced no output: {error}",
@@ -7189,8 +7216,20 @@
       "emptyProgress": "No sync records yet — it runs when a weekly-report email matching the trigger words arrives.",
       "emptyPreprocess": "No recently classified mail — with AI preprocessing enabled, new mail shows up here message by message."
     },
-    "composer": {
-      "pending": "Chatting as this agent is coming soon (pending the write path); history stays readable."
+    "welcome": {
+      "cadence": {
+        "daily": "daily",
+        "weekly": "weekly",
+        "monthly": "monthly"
+      },
+      "schedule": {
+        "report": "It runs on its own schedule ({cadence} report); anything you say here is a direct instruction to it.",
+        "daily": "It runs automatically once a day; anything you say here is a direct instruction to it.",
+        "timed": "It runs on its own schedule ({sentence}); anything you say here is a direct instruction to it.",
+        "timedPlain": "It runs on its own schedule; anything you say here is a direct instruction to it.",
+        "event": "It runs automatically when mail or calendar events match its trigger; anything you say here is a direct instruction to it.",
+        "manual": "It has no schedule — it only acts when you come to it. Anything you say here is a direct instruction to it."
+      }
     },
     "detail": {
       "duration": "Duration",
@@ -7205,7 +7244,8 @@
         "trigger": "Trigger",
         "output": "Output",
         "triggerBody": "Generated on the {cadence} schedule · {date}",
-        "open": "Open report"
+        "open": "Open report",
+        "openFromRun": "Open the report this run produced"
       },
       "progress": {
         "counts": "{total} projects · {created} created · {updated} updated · {failed} failed",
@@ -7213,7 +7253,11 @@
       }
     },
     "preprocess": {
-      "detailHint": "This is the automatic classification result from mail intake. To dig into why, ask the main assistant on that email."
+      "detailHint": "This is the automatic classification result from mail intake. To dig into why, ask the main assistant on that email.",
+      "classified": "Classified",
+      "failed": "This one did not go through",
+      "retries": "Retries",
+      "failNote": "No labels were written for this email. Preprocessing retries with backoff; once the retries run out it stops here — the email itself is intact, it just has no AI labels."
     }
   }
 }

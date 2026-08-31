@@ -21,7 +21,12 @@ import {
   type UIMessageStreamOnFinishCallback
 } from 'ai'
 
-import { anthropicBaseUrl, type AiGatewayConfig, type PersistTurnInput } from './config'
+import {
+  anthropicBaseUrl,
+  type AiGatewayConfig,
+  type PersistTurnInput,
+  type SessionAgentIdentity
+} from './config'
 import { createAnthropic } from '@ai-sdk/anthropic'
 // 🔴 MEDIUM-6 (batch1 review) — import from the SDK-free providerRef, NEVER from providers.ts
 // (whose top level pulls six provider SDK packages; it only loads via the lifecycle's flag-on
@@ -289,7 +294,12 @@ export async function prepareChatRun(
   body: Record<string, unknown>,
   cfg: AiGatewayConfig,
   abortSignal: AbortSignal,
-  trustedContextMode?: AgentContextMode
+  trustedContextMode?: AgentContextMode,
+  /** P4b — the session's TEAM identity, resolved by the entrypoint from the sessionId
+   *  (cfg.resolveSessionAgent; S2 W0: never from the body). Drives exactly three seams:
+   *  model middle priority, the <current_team_agent> prompt block, and the custom_agent_call
+   *  recursion guard (via buildTools' sessionAgentId slot). Absent/null → byte-identical. */
+  sessionAgent?: SessionAgentIdentity | null
 ): Promise<PrepareChatOutcome> {
   // HIGH-1 — flag-off keeps the legacy global-key gate byte-identical; the registry path defers
   // to the resolver (per-provider keys), whose typed failure is mapped right below.
@@ -304,7 +314,12 @@ export async function prepareChatRun(
   if (rawMessages.length === 0) {
     return { ok: false, status: 400, body: { error: 'E_INVALID_ARG', hint: 'messages[] required' } }
   }
-  const modelId = typeof body.model === 'string' && body.model.length > 0 ? body.model : cfg.model
+  // P4b — model priority for a team-agent session: body.model (user's explicit pick) >
+  // the agent row's model > gateway default. Non-team runs: sessionAgent is null → unchanged.
+  const agentModel =
+    sessionAgent?.model && sessionAgent.model.length > 0 ? sessionAgent.model : null
+  const modelId =
+    typeof body.model === 'string' && body.model.length > 0 ? body.model : (agentModel ?? cfg.model)
   const sessionId =
     typeof body.sessionId === 'number' && Number.isInteger(body.sessionId) ? body.sessionId : null
   // chat-panel P4 composer-parity C1-① — per-turn extended-thinking toggle. body.thinking===true →
@@ -461,6 +476,10 @@ export async function prepareChatRun(
   // (wrapCfgForAgentRun injects it); manual callers pass undefined there and the prefs ride the
   // 5th slot. The headless wrapper's 3-arg signature structurally drops the 5th argument, so a
   // headless run can never receive the prefs even if this call site changes.
+  // P4b — the 7th slot carries the session's team-agent id into the assembly gate: an
+  // agent-identity session must never register custom_agent_call (recursion guard). Non-team
+  // runs pass undefined → assembly byte-identical.
+  const sessionAgentId = contextMode === 'manual_chat' ? (sessionAgent?.agentId ?? null) : null
   const tools =
     sessionId == null
       ? cfg.buildTools?.(
@@ -469,7 +488,8 @@ export async function prepareChatRun(
           contextMode,
           undefined,
           toolApprovalPrefs,
-          undefined
+          undefined,
+          sessionAgentId
         )
       : cfg.buildTools?.(
           auditEntries,
@@ -477,7 +497,8 @@ export async function prepareChatRun(
           contextMode,
           undefined,
           toolApprovalPrefs,
-          sessionId
+          sessionId,
+          sessionAgentId
         )
   const hasTools = tools != null && Object.keys(tools).length > 0
   // W6 — the run holds the suggest_followups tool (manual chat with a real gateway ToolSet). Drives
@@ -513,6 +534,9 @@ export async function prepareChatRun(
       contextSnapshot,
       headlessAgentRun: isHeadlessAgentRun,
       headlessAgentIdentity: cfg.headlessAgentIdentity,
+      // P4b — team identity block for an owner-present session opened AS an agent (manual only;
+      // a headless run keeps its own <current_custom_agent> block).
+      sessionAgentIdentity: contextMode === 'manual_chat' ? (sessionAgent ?? null) : null,
       // W6 — inject the follow-up guidance only when THIS run's ToolSet holds the tool.
       followupToolAvailable
     })

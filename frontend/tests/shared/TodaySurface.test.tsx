@@ -1,13 +1,16 @@
 // @vitest-environment happy-dom
 //
-// 例外面的渲染闸（L4 批次 2 起，批次 3 加第四源）。分组算法本身在 `todayGroups.test.ts`
-// 单测，这里钉的是**页面真的接得起来**：四条源 → 分组 → 行；以及两条最容易做假的行为 ——
+// 今日页主区的渲染闸（L4 批次 2 起；P4c 起主区是**五节**，例外面装在 decide/due/out 里）。
+// 分组算法本身在 `todayGroups.test.ts` / `todaySections.test.ts` 单测，这里钉的是**页面真的
+// 接得起来**，以及几条最容易做假的行为 ——
 //
 //   🔴 `paused_pending` 行的可操作性由 live 查 `/approval/pending` 决定，miss（gateway 重启 /
 //      TTL 过期）必须**诚实降级**成「已失效」，不能画一个按了没反应的批准入口。
 //   🔴 派发的「等你回答」与「失败」必须长得不一样（不同组 + 不同徽标）。
+//   🔴 二级栏计数与主区行数**同源**（P4c）：两处各数一遍必然漂开。
+//   🔴 组装不出「为什么是今天」的行**不渲染那一行**，不兜底成一句套话。
 //
-// 四条读端点全 mock 在 hook 边界（与 sidebar-contract 同款做法）：真实网络在 happy-dom 下
+// 读端点全 mock 在 hook 边界（与 sidebar-contract 同款做法）：真实网络在 happy-dom 下
 // 只会变成一屏 CORS 噪声，测不出任何东西。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -24,7 +27,13 @@ import {
 } from '@tanstack/react-router'
 
 import i18n from '../../src/shared/i18n'
-import type { AgentRunHistoryItem } from '../../src/shared/api/types'
+import type {
+  AgendaEntry,
+  AgentRunHistoryItem,
+  ReportListItem,
+  TodayData,
+  TodayReplyItem
+} from '../../src/shared/api/types'
 import type {
   MatterAttentionSignal,
   MatterItemDispatch,
@@ -37,6 +46,10 @@ const { state, attentionMutate, dispatchMutate } = vi.hoisted(() => ({
     proposals: [] as MatterPendingUpdatesEntry[],
     signals: [] as MatterAttentionSignal[],
     dispatches: [] as MatterItemDispatch[],
+    /** P4c 三条新源：日历当天窗口 / `GET /api/today` / 当天报告。 */
+    agenda: [] as AgendaEntry[],
+    today: { reply: [], nextHardPoint: null } as TodayData,
+    reports: [] as ReportListItem[],
     /** `fetchPendingApproval` 的返回：null = stash miss（gateway 重启 / 已被别处消费）。 */
     pending: null as { approvalId: string; toolName: string; inputPreview: string } | null
   },
@@ -49,10 +62,25 @@ vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
     report: {
       listRuns: vi.fn(async () => ({ items: state.runs, total: state.runs.length })),
+      list: vi.fn(async () => ({ items: state.reports, total: state.reports.length })),
       getConfig: vi.fn(async () => [
         { id: 'weekly-digest', type: 'custom', enabled: true, title: '周报 Agent' }
       ])
-    }
+    },
+    today: { get: vi.fn(async () => state.today) }
+  })
+}))
+
+// 日历 agenda hook 走 mock：真实的那个会打 IPC/HTTP。`localOlsonTz` 也从这个模块出，
+// 一并给个确定值（换机器时区不该让断言飘）。
+vi.mock('@shared/components/calendar/hooks/useCalendarAgenda', () => ({
+  localOlsonTz: () => 'Asia/Shanghai',
+  useCalendarAgenda: () => ({
+    data: state.agenda,
+    isLoading: false,
+    isFetching: false,
+    isError: false,
+    refetch: vi.fn()
   })
 }))
 
@@ -81,7 +109,8 @@ vi.mock('@shared/assistant/approvalRecordClient', () => ({
 }))
 
 // Importing after the mocks are registered.
-import { TodayExceptionSurface } from '../../src/shared/components/today/TodayExceptionSurface'
+import { TodaySurface } from '../../src/shared/components/today/TodaySurface'
+import { TodayNavPanel } from '../../src/shared/components/today/TodayNavPanel'
 
 function run(over: Partial<AgentRunHistoryItem> & { state: AgentRunHistoryItem['state'] }) {
   return {
@@ -115,14 +144,15 @@ async function renderSurface(): Promise<void> {
   const rootRoute = createRootRoute({
     component: () => (
       <I18nextProvider i18n={i18n}>
-        <TodayExceptionSurface />
+        <TodayNavPanel />
+        <TodaySurface />
         <Outlet />
       </I18nextProvider>
     )
   })
   const router = createRouter({
     routeTree: rootRoute.addChildren(
-      ['/today', '/matters', '/sessions'].map((path) =>
+      ['/today', '/matters', '/sessions', '/', '/admin/calendar', '/reports/$reportId'].map((path) =>
         createRoute({ getParentRoute: () => rootRoute, path, component: () => null })
       )
     ),
@@ -176,6 +206,9 @@ beforeEach(async () => {
   state.proposals = []
   state.signals = []
   state.dispatches = []
+  state.agenda = []
+  state.today = { reply: [], nextHardPoint: null }
+  state.reports = []
   state.pending = null
   attentionMutate.mockClear()
   dispatchMutate.mockClear()
@@ -184,16 +217,17 @@ beforeEach(async () => {
 
 afterEach(() => cleanup())
 
-describe('例外面渲染', () => {
-  test('三源全空 → 引导空态，不渲染任何分组', async () => {
+describe('五节主区渲染', () => {
+  test('全部源为空 → 引导空态，不渲染任何节', async () => {
     await renderSurface()
     await waitFor(() => {
       expect(screen.getByText(i18n.t('today.empty.title'))).toBeTruthy()
     })
     expect(screen.queryAllByTestId('today-group')).toHaveLength(0)
+    expect(screen.queryAllByTestId('today-section')).toHaveLength(0)
   })
 
-  test('分组按固定组序渲染，「等我处理」恒在最上', async () => {
+  test('五节按固定节序渲染；临期信号落 due 节、失败 run 落 out 节', async () => {
     state.runs = [
       run({ jobId: 2, state: 'failed', finishedAt: Date.now() / 1000 - 60 }),
       run({ jobId: 3, state: 'paused_pending', finishedAt: Date.now() / 1000 - 30, sessionId: 9 })
@@ -219,9 +253,16 @@ describe('例外面渲染', () => {
     await waitFor(() => {
       expect(screen.getAllByTestId('today-group').length).toBeGreaterThan(0)
     })
-    expect(screen.getAllByTestId('today-group').map((el) => el.getAttribute('data-group'))).toEqual(
-      ['waiting', 'attention']
-    )
+    // 🔴 三条源分别落三节：paused_pending run → decide、`wait_overdue` 信号 → due
+    // （它是「临期」kind，不再混在等你拍板里）、failed run → out。
+    expect(
+      screen.getAllByTestId('today-section').map((el) => el.getAttribute('data-section'))
+    ).toEqual(['decide', 'due', 'out'])
+    expect(
+      screen
+        .getAllByTestId('today-group')
+        .map((el) => `${el.getAttribute('data-in-section')}/${el.getAttribute('data-group')}`)
+    ).toEqual(['decide/waiting', 'due/waiting', 'out/attention'])
     // 信号的 `why` 直通成 triage 说明（一等字段，行上直读）。
     expect(screen.getByText('等待「供应商报价」已 5 天')).toBeTruthy()
     // agent 名（而不是 agentId）当标题。
@@ -430,5 +471,146 @@ describe('行动项派发（例外面第四源）', () => {
     await renderSurface()
     await waitFor(() => expect(screen.getByText('把报价单发给财务')).toBeTruthy())
     expect(screen.queryByLabelText(i18n.t('today.menu.trigger'))).toBeNull()
+  })
+})
+
+// ───────────── L4 P4c · 五节 + 硬时间点 ─────────────
+//
+// 钉四件事：
+//   ① 二级栏计数与主区行数**同源** —— 两处各数一遍必然漂开（一处算了过滤、一处没算）。
+//   ② 组装不出「为什么是今天」的行**不渲染那一行**，不兜底成一句套话。
+//   ③ 「下一个硬时间点」没有时整条不出现（空占一条会把这一行的「现在就看」磨没）。
+//   ④ 待回邮件是**要动手**那一档（accent 描边 + 动作钮），会与报告是知会档。
+
+function reply(over: Partial<TodayReplyItem> = {}): TodayReplyItem {
+  return {
+    id: 'mail:5001',
+    source: 'mail',
+    title: '关于 6.5 版本兼容表',
+    why: '需要回复 · 等了 26 小时',
+    meta: '张三',
+    atIso: new Date(Date.now() - 26 * 3600_000).toISOString(),
+    waitedMs: 26 * 3600_000,
+    actionable: true,
+    link: { kind: 'mail', internalId: 5001 },
+    ...over
+  }
+}
+
+function agendaEntry(over: Partial<AgendaEntry> = {}): AgendaEntry {
+  return {
+    id: 'mail:uid-1::2026-08-31T06:00:00+00:00',
+    source: 'mail',
+    hot: false,
+    title: 'AW Catch Up · SaaS 2026 Plan',
+    startIso: new Date(Date.now() + 90 * 60_000).toISOString(),
+    endIso: null,
+    allDay: false,
+    multiDay: false,
+    ...over
+  }
+}
+
+/** 二级栏那一行的计数徽标（`data-today-nav-count`）。没有 = 那一节是 0 条。 */
+function navCount(section: string): number | null {
+  const el = document.querySelector(`[data-today-nav-count="${section}"]`)
+  return el === null ? null : Number(el.textContent)
+}
+
+describe('P4c 五节', () => {
+  test('🔴 二级栏计数 = 主区那一节的行数（同源，不是各数一遍）', async () => {
+    state.today = { reply: [reply(), reply({ id: 'mail:5002', link: { kind: 'mail', internalId: 5002 } })], nextHardPoint: null }
+    state.agenda = [agendaEntry(), agendaEntry({ id: 'mail:uid-2::x', title: '周会' })]
+    state.runs = [run({ jobId: 3, state: 'paused_pending', finishedAt: Date.now() / 1000 - 30, sessionId: 9 })]
+    await renderSurface()
+    await waitFor(() => expect(screen.getAllByTestId('today-section').length).toBe(3))
+
+    for (const id of ['decide', 'meet', 'reply'] as const) {
+      const section = document.querySelector(`[data-section="${id}"]`)
+      expect(section, `缺 ${id} 节`).toBeTruthy()
+      const rows =
+        (section?.querySelectorAll('[data-testid="today-item"]').length ?? 0) +
+        (section?.querySelectorAll('[data-testid="today-section-item"]').length ?? 0)
+      expect(navCount(id), `${id}：二级栏计数与主区行数不一致`).toBe(rows)
+    }
+  })
+
+  test('🔴 组装不出「为什么是今天」→ 那一行不渲染 why，不兜底成套话', async () => {
+    state.today = {
+      reply: [reply({ why: '', title: '没有理由的那一封' })],
+      nextHardPoint: null
+    }
+    await renderSurface()
+    await waitFor(() => expect(screen.getByText('没有理由的那一封')).toBeTruthy())
+    const row = screen.getByTestId('today-section-item')
+    // 行里只剩标题与 meta 两段文本；why 那一段整个缺席。
+    expect(row.textContent).toContain('没有理由的那一封')
+    expect(row.textContent).toContain('张三')
+    expect(row.textContent).not.toContain('需要回复')
+  })
+
+  test('待回邮件是「要动手」档（有动作钮）；报告是知会档（没有）', async () => {
+    state.today = { reply: [reply()], nextHardPoint: null }
+    state.reports = [
+      {
+        id: 'rp-1',
+        agent_id: 'daily',
+        cadence: 'daily',
+        report_date: '2026-08-31',
+        window_start: '',
+        window_end: '',
+        status: 'ready',
+        counts: { total: 0, attention: 0, handled: 0, fyi: 0 },
+        headline: '今天的日报',
+        model: null,
+        input_tokens: null,
+        output_tokens: null,
+        cost_usd: null,
+        error: null,
+        created_at: Date.now() / 1000,
+        generated_at: Date.now() / 1000
+      } as ReportListItem
+    ]
+    await renderSurface()
+    await waitFor(() => expect(screen.getAllByTestId('today-section-item').length).toBe(2))
+    const rows = screen.getAllByTestId('today-section-item')
+    const byActionable = rows.map((el) => el.getAttribute('data-actionable'))
+    expect(byActionable).toContain('true')
+    expect(byActionable).toContain('false')
+    expect(screen.getByText(i18n.t('today.action.openMail'))).toBeTruthy()
+    expect(screen.queryByText(i18n.t('today.action.openReport'))).toBeNull()
+  })
+
+  test('「下一个硬时间点」：有就出条、没有整条不渲染', async () => {
+    state.today = { reply: [reply()], nextHardPoint: null }
+    await renderSurface()
+    await waitFor(() => expect(screen.getAllByTestId('today-section-item').length).toBe(1))
+    expect(screen.queryByTestId('today-next-hard-point')).toBeNull()
+
+    cleanup()
+    state.today = {
+      reply: [reply()],
+      nextHardPoint: agendaEntry({ title: 'AW Catch Up · SaaS 2026 Plan' })
+    }
+    await renderSurface()
+    await waitFor(() => expect(screen.getByTestId('today-next-hard-point')).toBeTruthy())
+    const bar = screen.getByTestId('today-next-hard-point')
+    expect(bar.textContent).toContain('AW Catch Up · SaaS 2026 Plan')
+    // 「还剩多久」是现算的。不断言到分钟：`nowMs` 是 react-query 的落地时刻，比
+    // fixture 造出来的 startIso 晚几十毫秒，写死 30 分会变成 flaky（29 分）。
+    // 分钟档的逐档取值由 `remainingLabel` 的纯单测钉（todaySections.test.ts）。
+    expect(bar.textContent).toMatch(/1 小时/)
+    expect(bar.textContent).not.toContain(i18n.t('today.next.started'))
+  })
+
+  test('会议行的 why 说的是几点开始（不是空话）', async () => {
+    state.agenda = [agendaEntry()]
+    await renderSurface()
+    await waitFor(() => expect(screen.getByTestId('today-section-item')).toBeTruthy())
+    const time = new Date(Date.parse(state.agenda[0].startIso)).toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+    expect(screen.getByText(i18n.t('today.why.meetUpcoming', { time }))).toBeTruthy()
   })
 })

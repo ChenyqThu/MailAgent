@@ -123,8 +123,9 @@ describe('chat_db — v6 → v7 anchor migration', () => {
     // v24 — trigger provenance columns + agent/trigger query indexes;
     // v25 — child-session parent provenance; v26 — queued-input persistence;
     // v27 — anchor_type CHECK widened to admit 'matter' sessions (Matters MVP P3);
-    // v28 — item_id + paused_marker_json (L4 批次3 行动项执行契约 / R7 曾暂停 marker).
-    expect(ver).toBe('28')
+    // v28 — item_id + paused_marker_json (L4 批次3 行动项执行契约 / R7 曾暂停 marker);
+    // v29 — origin value-domain registers 'team' (L4 P4b 团队对话, no-op ladder step).
+    expect(ver).toBe('29')
 
     // Anchor columns added + backfilled for the pre-existing email row.
     const row = db.prepare('SELECT * FROM ai_chat_sessions WHERE id = 1').get() as {

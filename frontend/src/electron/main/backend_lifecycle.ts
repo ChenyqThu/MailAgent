@@ -90,7 +90,8 @@ import { getLocalApiToken, LOCAL_TOKEN_ENV } from './local_token'
 // v68: notification 通知中心持久化条目表 (统一通知中心 M1, 08-21).
 // v69: contact +meeting_count/last_met_at/next_meeting_at (日历第三源, 08-24).
 // v71: matter_item_dispatch 行动项执行契约 (08-25).
-export const EXPECTED_DB_VERSION = 72 // contact_profile_run 画像执行台账 (08-31)
+// v72: contact_profile_run 画像执行台账 (08-31; v73 已整表迁入 agent_run_log 并 DROP).
+export const EXPECTED_DB_VERSION = 73 // agent_run_log/agent_run_step 统一执行台账 (08-31)
 
 /** 就绪判据的关键表子集 (02-landing-plan.md P1-6)。admin.py REQUIRED_TABLES 更全,
  *  但开窗门控只需保证「邮件读写主路径」已建: 元数据 / 正文 SSoT / outbox +

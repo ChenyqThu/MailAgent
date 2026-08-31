@@ -15,9 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
-from src.llm_agent.schema import PRIORITY_ENUM
+from src.llm_agent.schema import ACTION_NEEDS_FLAG, PRIORITY_ENUM, URGENT_PRIORITY_LABELS
 from src.mail.mailbox_semantics import DRAFT_LABEL_VARIANTS, SENT_LABEL_VARIANTS
-from src.notify.island_dispatch import ACTION_NEEDS_FLAG, URGENT_PRIORITY_LABELS
 from src.repository.email_repository import EmailRepository
 
 _BEIJING = timezone(timedelta(hours=8))
@@ -167,7 +166,7 @@ def fetch_report_briefs(
     conn = sqlite3.connect(db_path, timeout=30.0)
     conn.row_factory = sqlite3.Row
     briefs: List[ReportEmailBrief] = []
-    history: _ThreadHistory = {}
+    history: ThreadHistory = {}
     try:
         # ① 窗口查询：**含**发件箱（按 mailbox 现场判 is_outbound）。发件箱邮件不铺成
         #    报告条目，但带入用于「已发出」统计 + 让 LLM 了解你回复/处理了什么。
@@ -209,7 +208,7 @@ def fetch_report_briefs(
             seen.add(int(r["internal_id"]))
 
         # 线程全历史状态一次算好：per-email replied 判定 + 每线程正文预载决策共用。
-        history = _thread_history(conn, sorted({b.thread_id for b in briefs if b.thread_id}))
+        history = thread_history(conn, sorted({b.thread_id for b in briefs if b.thread_id}))
         _mark_replied(briefs, history)
     except sqlite3.OperationalError as e:
         logger.warning(f"[report] fetch_report_briefs query failed: {e}")
@@ -236,13 +235,13 @@ def fetch_report_briefs(
 
 
 # 线程全历史状态：thread_id → (最后发件时刻, 最后收件时刻)。
-_ThreadHistory = Dict[str, Tuple[Optional[datetime], Optional[datetime]]]
+ThreadHistory = Dict[str, Tuple[Optional[datetime], Optional[datetime]]]
 
 # 组内按真实时刻排序时 date_received 解析失败的兜底（排最前，不抛）。
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
-def _thread_history(conn: sqlite3.Connection, thread_ids: List[str]) -> _ThreadHistory:
+def thread_history(conn: sqlite3.Connection, thread_ids: List[str]) -> ThreadHistory:
     """按**全历史**（不限报告窗口）算每线程的 (最后发件时刻, 最后收件时刻)。
 
     🔴 必须全历史：owner 案例 —— 7-13 的回复在 24h 窗口外，只看窗口会把已表态的
@@ -277,16 +276,28 @@ def _thread_history(conn: sqlite3.Connection, thread_ids: List[str]) -> _ThreadH
     return {tid: (s[0], s[1]) for tid, s in out.items()}
 
 
-def _mark_replied(briefs: List[ReportEmailBrief], history: _ThreadHistory) -> None:
+def is_replied_in_thread(
+    history: ThreadHistory, thread_id: str, date_received: Optional[str]
+) -> bool:
+    """这一封收件之后，同线程还有没有我方发件（= 我已经表过态）。
+
+    严格 per-email 语义（发件须晚于**这一封**收件，误杀不可能）。发件时刻来自全历史
+    （``thread_history``）。这是仓内「已回」的**唯一判据**，`_mark_replied`（报告）与
+    今日页「待回邮件」共用它 —— 两处各写一遍就是两个口径。
+    """
+    sent_dt = history.get(thread_id, (None, None))[0]
+    recv_dt = _parse_dt(date_received)
+    return bool(sent_dt and recv_dt and sent_dt >= recv_dt)
+
+
+def _mark_replied(briefs: List[ReportEmailBrief], history: ThreadHistory) -> None:
     """对每封 brief：同 thread_id 若存在**更晚**的发件箱邮件 → 标 replied=True。
 
-    严格 per-email 语义（发件须晚于**这一封**收件，误杀不可能）—— assembler 的
-    「replied 不进 attention」硬闸依赖它。发件时刻来自全历史（_thread_history）。
+    assembler 的「replied 不进 attention」硬闸依赖它。判据本体见
+    ``is_replied_in_thread``。
     """
     for b in briefs:
-        sent_dt = history.get(b.thread_id, (None, None))[0]
-        recv_dt = _parse_dt(b.date_received)
-        if sent_dt and recv_dt and sent_dt >= recv_dt:
+        if is_replied_in_thread(history, b.thread_id, b.date_received):
             b.replied = True
 
 
@@ -319,7 +330,7 @@ def _preload_bodies(
     db_path: str,
     briefs: List[ReportEmailBrief],
     priorities: set,
-    history: _ThreadHistory,
+    history: ThreadHistory,
 ) -> None:
     """就地预载正文（截断）—— **每线程只载最新一封收件**（owner 拍板：最新邮件通常
     带引用历史，够用），且线程须满足：
@@ -449,14 +460,14 @@ def build_thread_groups(db_path: str, briefs: List[ReportEmailBrief]) -> List[Th
             order.append(key)
         g.emails.append(b)
 
-    history: _ThreadHistory = {}
+    history: ThreadHistory = {}
     tids = sorted({b.thread_id for b in briefs if b.thread_id})
     if tids:
         try:
             conn = sqlite3.connect(db_path, timeout=30.0)
             conn.row_factory = sqlite3.Row
             try:
-                history = _thread_history(conn, tids)
+                history = thread_history(conn, tids)
             finally:
                 conn.close()
         except sqlite3.Error as e:

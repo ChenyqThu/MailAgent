@@ -273,11 +273,12 @@ def test_chat_session_origin_filter_mirror_parity():
     interactive 子句」这种**类型检查全绿的运行时错**溜过去 —— 阶段 2 PR-1 一度给联合类型加
     了个没有任何实现的 ``'im'``，正是这个形状。
 
-    ⚠️ 与 ``origin`` **列**的值域（自由文本 ``'agent' | 'im' | NULL``，CHAT_DB v22 登记
-    ``'im'``）是两回事：'im' 行有意走默认 interactive 子句（Q18=A 桌面可见），**不需要**
-    也没有对应的筛选值。将来真要做「只看飞书会话」必须四处一起加。
+    ⚠️ 与 ``origin`` **列**的值域（自由文本 ``'agent' | 'im' | 'team' | NULL``，CHAT_DB v22
+    登记 ``'im'``、v29 登记 ``'team'``）是两回事：'im' 行有意走默认 interactive 子句
+    （Q18=A 桌面可见），**不需要**也没有对应的筛选值；'team' 行则**有**筛选值（团队页
+    记录列按它拉取）且被默认 interactive 子句排除（见下一个用例）。
     """
-    expected = {"interactive", "agent", "im", "all"}
+    expected = {"interactive", "agent", "im", "team", "all"}
     model = _parse_string_union("ChatSessionOriginFilter", CHAT_MODEL_TS)
     api = _parse_string_union("ChatSessionOriginFilter", CHAT_TYPES_TS)
     assert model == expected, f"chat_model.ts 的来源筛选契约漂移: {sorted(model)}"
@@ -293,3 +294,31 @@ def test_chat_session_origin_filter_mirror_parity():
     )
     assert api_literal == expected, f"src/api/routers/chat.py 的 origin Literal 漂移: {sorted(api_literal)}"
     assert db_tuple == expected, f"src/chat/db.py 的 origin 校验元组漂移: {sorted(db_tuple)}"
+
+
+def test_chat_interactive_origin_exclusion_mirror_parity():
+    """默认「interactive」过滤的**排除集** SQL 在 TS/Python 各手抄两处，必须逐字对齐。
+
+    P4b（task 08-27）把默认交互过滤从 ``<> 'agent'`` 扩成 ``NOT IN ('agent','team')``：
+    'team' 行（人以 agent 身份开的会话）属团队页，不进主对话历史 / ⌘O 通用列表。四处
+    手抄：TS ``listAllSessions``（originClause 默认支）+ ``listGeneralSessions``、
+    Python ``list_all_sessions`` + ``list_general_sessions``。上一个用例只锁**筛选词表**，
+    锁不住这条 WHERE 子句 —— 漏改一处 = 'team' 行在某一条读路径静默混进通用历史。
+
+    🔴 抽取失败必须红：每个文件至少要命中一处（命中 0 处 = 子句形状变了，解析器需更新）。
+    """
+    expected = {"agent", "team"}
+    sessions_ts = p.REPO_ROOT / "frontend" / "src" / "electron" / "main" / "chat_db" / "sessions.ts"
+    pattern = r"'interactive'\)\s*NOT IN \(([^)]+)\)"
+    for path in (sessions_ts, CHAT_DB_PY):
+        text = path.read_text(encoding="utf-8")
+        groups = re.findall(pattern, text)
+        assert len(groups) >= 2, (
+            f"{path.name}: 默认 interactive 排除子句只命中 {len(groups)} 处（预期 ≥2："
+            "listAllSessions + listGeneralSessions）—— 子句形状变了或漏改，解析器/实现需对齐"
+        )
+        for group in groups:
+            values = set(re.findall(r"'([a-z_]+)'", group))
+            assert values == expected, (
+                f"{path.name}: interactive 排除集漂移: {sorted(values)}（预期 {sorted(expected)}）"
+            )

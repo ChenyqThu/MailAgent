@@ -7,6 +7,7 @@ import { describe, expect, test } from 'vitest'
 
 import type {
   AgentRunHistoryItem,
+  AgentRunLogItem,
   ChatSessionListItem,
   ProjectProgressRunItem,
   ReportListItem
@@ -14,6 +15,7 @@ import type {
 import {
   epochMs,
   isMatterScopedAgentId,
+  isoMs,
   mergeMemberTimeline
 } from '../../../src/shared/components/agents/team/teamTimeline'
 
@@ -25,6 +27,47 @@ function makeRun(over: Partial<AgentRunHistoryItem> = {}): AgentRunHistoryItem {
     createdAt: 1_700_000_000_000,
     ...over
   } as AgentRunHistoryItem
+}
+
+function makeRunLog(over: Partial<AgentRunLogItem> = {}): AgentRunLogItem {
+  return {
+    kind: 'run_log',
+    runLogId: 1,
+    jobId: 1,
+    agentId: 'a1',
+    state: 'completed',
+    createdAt: '2026-08-31T00:00:00Z',
+    ...over
+  } as AgentRunLogItem
+}
+
+function makeReport(over: Partial<ReportListItem> = {}): ReportListItem {
+  return {
+    id: 'r1',
+    agent_id: 'a1',
+    cadence: 'daily',
+    report_date: '2026-08-30',
+    status: 'ready',
+    headline: 'x',
+    created_at: 1_700_000_000,
+    generated_at: 1_700_000_100,
+    ...over
+  } as ReportListItem
+}
+
+/** progress 台账行的时间是 Unix **秒**（run_log 是 ISO，run 行是毫秒 epoch）——
+ *  三种时间制在这个文件里同屏出现，fixture 一律经这个换算写，别手抄裸数字。 */
+function secs(iso: string): number {
+  return Date.parse(iso) / 1000
+}
+
+function makeProgress(over: Partial<ProjectProgressRunItem> = {}): ProjectProgressRunItem {
+  return {
+    internalId: 9,
+    status: 'completed',
+    startedAt: secs('2026-08-31T03:00:00Z'),
+    ...over
+  } as ProjectProgressRunItem
 }
 
 function makeSession(over: Partial<ChatSessionListItem> = {}): ChatSessionListItem {
@@ -152,5 +195,216 @@ describe('mergeMemberTimeline — ⚡自动 标记', () => {
     const byKey = Object.fromEntries(entries.map((e) => [e.key, e.auto]))
     expect(byKey['report:r1']).toBe(false)
     expect(byKey['progress:9']).toBe(true)
+  })
+
+  test('runLog：判据与 run 行逐字一致（非 manual 且非 null 才标）', () => {
+    const entries = mergeMemberTimeline({
+      agentId: 'a1',
+      runLogs: [
+        makeRunLog({ runLogId: 1, createdAt: '2026-08-31T04:00:00Z', triggerKind: 'schedule' }),
+        makeRunLog({ runLogId: 2, createdAt: '2026-08-31T03:00:00Z', triggerKind: 'manual' }),
+        makeRunLog({ runLogId: 3, createdAt: '2026-08-31T02:00:00Z', triggerKind: null })
+      ]
+    })
+    expect(entries.map((e) => [e.key, e.auto])).toEqual([
+      ['runlog:1', true],
+      ['runlog:2', false],
+      ['runlog:3', false]
+    ])
+  })
+})
+
+describe('isoMs — ISO ↔ epoch 两套时间制', () => {
+  test('可解析 ISO → 毫秒；空 / 不可解析 → 0（排序落末，不伪造「现在」）', () => {
+    expect(isoMs('2026-08-31T04:00:00.000Z')).toBe(Date.parse('2026-08-31T04:00:00.000Z'))
+    expect(isoMs(null)).toBe(0)
+    expect(isoMs('not-a-date')).toBe(0)
+  })
+})
+
+describe('mergeMemberTimeline — run_log 穿插进同一条时间线', () => {
+  test('run_log 时刻落在会话与执行之间（分块拼接 / 不排序都得不到这个顺序）', () => {
+    // t1 执行(job) < t2 会话 < t3 run_log < t4 会话 —— 三种来源交替，任何「按来源分块」
+    // 的实现都排不出下面这串。
+    const entries = mergeMemberTimeline({
+      agentId: 'a1',
+      runs: [makeRun({ jobId: 1, createdAt: Date.parse('2026-08-31T01:00:00Z') })],
+      runLogs: [makeRunLog({ runLogId: 5, createdAt: '2026-08-31T03:00:00Z' })],
+      sessions: [
+        makeSession({ id: 100, updated_at: Date.parse('2026-08-31T02:00:00Z') }),
+        makeSession({ id: 101, updated_at: Date.parse('2026-08-31T04:00:00Z') })
+      ]
+    })
+    expect(entries.map((e) => e.key)).toEqual(['session:101', 'runlog:5', 'session:100', 'run:1'])
+  })
+
+  test('两套台账 id 各自从 1 起：同号的 run 与 run_log 都在列，key 不撞', () => {
+    const entries = mergeMemberTimeline({
+      agentId: 'a1',
+      runs: [makeRun({ jobId: 1, createdAt: Date.parse('2026-08-31T01:00:00Z') })],
+      runLogs: [makeRunLog({ runLogId: 1, createdAt: '2026-08-31T02:00:00Z' })]
+    })
+    expect(entries.map((e) => e.key)).toEqual(['runlog:1', 'run:1'])
+  })
+})
+
+// 08-31 收敛批 — 产物行（report:xxx）与过程行（runlog:N）是同一件事，靠 run_log 的
+// reportId **真实引用**去重（不是时间窗启发式）。runlog 行为准，报告入口改由它的详情
+// 头「去报告」提供。
+describe('mergeMemberTimeline — runLog.reportId 收敛产物行', () => {
+  test('同窗口：reportId 命中的 report 行被去掉，只剩 runlog 一条入口', () => {
+    const entries = mergeMemberTimeline({
+      agentId: 'a1',
+      runLogs: [
+        makeRunLog({
+          runLogId: 5,
+          createdAt: '2026-08-31T03:00:00Z',
+          reportId: 'rep-2026-08-31'
+        })
+      ],
+      reports: [
+        makeReport({ id: 'rep-2026-08-31', generated_at: Date.parse('2026-08-31T03:00:05Z') })
+      ]
+    })
+    expect(entries.map((e) => e.key)).toEqual(['runlog:5'])
+  })
+
+  test('🔴 跨窗口不误删：runlog 引用的是别的报告时，本窗口的 report 行原样在列', () => {
+    const entries = mergeMemberTimeline({
+      agentId: 'a1',
+      runLogs: [
+        makeRunLog({
+          runLogId: 5,
+          createdAt: '2026-08-31T03:00:00Z',
+          // 这次执行产出的是 rep-新，窗口里那份 rep-旧 是更早一次执行的产物 ——
+          // 时间上紧挨着（启发式去重会误删它），但引用对不上就不许动。
+          reportId: 'rep-2026-08-31'
+        })
+      ],
+      reports: [
+        makeReport({ id: 'rep-2026-08-30', generated_at: Date.parse('2026-08-31T02:59:00Z') })
+      ]
+    })
+    expect(entries.map((e) => e.key)).toEqual(['runlog:5', 'report:rep-2026-08-30'])
+  })
+
+  test('reportId 为 null（画像 / 项目周报）：一条都不去重', () => {
+    const entries = mergeMemberTimeline({
+      agentId: 'a1',
+      runLogs: [makeRunLog({ runLogId: 5, createdAt: '2026-08-31T03:00:00Z', reportId: null })],
+      reports: [
+        makeReport({ id: 'rep-2026-08-31', generated_at: Date.parse('2026-08-31T02:00:00Z') })
+      ]
+    })
+    expect(entries.map((e) => e.key)).toEqual(['runlog:5', 'report:rep-2026-08-31'])
+  })
+
+  test('多条 runlog 各自引用各自的产物，一一对消', () => {
+    const entries = mergeMemberTimeline({
+      agentId: 'a1',
+      runLogs: [
+        makeRunLog({ runLogId: 5, createdAt: '2026-08-31T03:00:00Z', reportId: 'rep-b' }),
+        makeRunLog({ runLogId: 4, createdAt: '2026-08-30T03:00:00Z', reportId: 'rep-a' })
+      ],
+      reports: [
+        makeReport({ id: 'rep-a', generated_at: Date.parse('2026-08-30T03:00:05Z') }),
+        makeReport({ id: 'rep-b', generated_at: Date.parse('2026-08-31T03:00:05Z') }),
+        makeReport({ id: 'rep-orphan', generated_at: Date.parse('2026-08-29T03:00:00Z') })
+      ]
+    })
+    // 老数据（无 run_log 的 rep-orphan）照旧在列 —— 去重只作用于有引用的那些。
+    expect(entries.map((e) => e.key)).toEqual(['runlog:5', 'runlog:4', 'report:rep-orphan'])
+  })
+
+  // empty（这段时间没有新邮件）那一档同样建了 status='empty' 的 report 行，worker 的
+  // out 步骤也带 report_id ⇒ 走同一条去重，不该退化成两行。
+  test('空报告：empty 状态的 runlog 与「空」report 行同窗口 → 产物行被吸收', () => {
+    const entries = mergeMemberTimeline({
+      agentId: 'a1',
+      runLogs: [
+        makeRunLog({
+          runLogId: 9,
+          createdAt: '2026-08-31T09:00:00Z',
+          // 空窗那次 run 的台账状态是 skipped（活儿跑了，只是没内容可写）。
+          state: 'skipped',
+          summary: '这段时间没有新邮件 · 未生成报告',
+          reportId: 'rep-empty'
+        })
+      ],
+      reports: [
+        makeReport({
+          id: 'rep-empty',
+          status: 'empty',
+          headline: '这段时间没有新邮件',
+          generated_at: Date.parse('2026-08-31T09:00:02Z')
+        })
+      ]
+    })
+    expect(entries.map((e) => e.key)).toEqual(['runlog:9'])
+  })
+})
+
+// 项目周报同款收敛：过程行 runlog:N 与台账行 progress:{internalId} 是同一次执行，
+// 靠 run_log 的 progressEmailId（首条 trig 步骤 payload.internal_id）真实引用去重。
+describe('mergeMemberTimeline — runLog.progressEmailId 收敛周报台账行', () => {
+  test('同窗口：progressEmailId 命中的 progress 行被去掉，只剩 runlog 一条入口', () => {
+    const entries = mergeMemberTimeline({
+      agentId: 'project_progress_sync',
+      runLogs: [
+        makeRunLog({ runLogId: 5, createdAt: '2026-08-31T03:00:00Z', progressEmailId: 4321 })
+      ],
+      progressRuns: [makeProgress({ internalId: 4321, startedAt: secs('2026-08-31T03:00:02Z') })]
+    })
+    expect(entries.map((e) => e.key)).toEqual(['runlog:5'])
+  })
+
+  test('🔴 跨窗口不误删：runlog 引用的是别封邮件时，本窗口的 progress 行原样在列', () => {
+    const entries = mergeMemberTimeline({
+      agentId: 'project_progress_sync',
+      runLogs: [
+        // 这次跑的是 4321；窗口里那条 9999 是更早一次同步（时间紧挨着，启发式会误删）。
+        makeRunLog({ runLogId: 5, createdAt: '2026-08-31T03:00:00Z', progressEmailId: 4321 })
+      ],
+      progressRuns: [makeProgress({ internalId: 9999, startedAt: secs('2026-08-31T02:59:00Z') })]
+    })
+    expect(entries.map((e) => e.key)).toEqual(['runlog:5', 'progress:9999'])
+  })
+
+  test('progressEmailId 为 null（别的成员 / 坏 payload）：一条都不去重', () => {
+    const entries = mergeMemberTimeline({
+      agentId: 'project_progress_sync',
+      runLogs: [
+        makeRunLog({ runLogId: 5, createdAt: '2026-08-31T03:00:00Z', progressEmailId: null })
+      ],
+      progressRuns: [makeProgress({ internalId: 4321, startedAt: secs('2026-08-31T02:59:00Z') })]
+    })
+    expect(entries.map((e) => e.key)).toEqual(['runlog:5', 'progress:4321'])
+  })
+
+  test('多条各自对消；无 run_log 的老同步行照旧在列', () => {
+    const entries = mergeMemberTimeline({
+      agentId: 'project_progress_sync',
+      runLogs: [
+        makeRunLog({ runLogId: 5, createdAt: '2026-08-31T03:00:00Z', progressEmailId: 4321 }),
+        makeRunLog({ runLogId: 4, createdAt: '2026-08-30T03:00:00Z', progressEmailId: 4300 })
+      ],
+      progressRuns: [
+        makeProgress({ internalId: 4321, startedAt: secs('2026-08-31T03:00:02Z') }),
+        makeProgress({ internalId: 4300, startedAt: secs('2026-08-30T03:00:02Z') }),
+        makeProgress({ internalId: 1000, startedAt: secs('2026-08-29T03:00:00Z') })
+      ]
+    })
+    expect(entries.map((e) => e.key)).toEqual(['runlog:5', 'runlog:4', 'progress:1000'])
+  })
+
+  test('🔴 两套 id 各自独立：progressEmailId 不去重同号的 report 行', () => {
+    const entries = mergeMemberTimeline({
+      agentId: 'project_progress_sync',
+      runLogs: [
+        makeRunLog({ runLogId: 5, createdAt: '2026-08-31T03:00:00Z', progressEmailId: 4321 })
+      ],
+      reports: [makeReport({ id: '4321', generated_at: Date.parse('2026-08-31T03:00:05Z') })]
+    })
+    expect(entries.map((e) => e.key)).toEqual(['report:4321', 'runlog:5'])
   })
 })

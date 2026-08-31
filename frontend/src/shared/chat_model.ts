@@ -33,9 +33,11 @@ export type MessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'ab
 // so a sentinel like email_id=0 is impossible by construction (architecture.md §1.4 / DR-5).
 export type AnchorType = 'email' | 'general' | 'matter'
 // FILTER vocabulary (≠ the origin column's free-text value domain, which gained 'im' in CHAT_DB
-// v22): stage 2 PR-1 adds no IM filter — im rows ride the default 'interactive' clause (Q18=A).
+// v22 and 'team' in v29): stage 2 PR-1 adds no IM filter — im rows ride the default 'interactive'
+// clause (Q18=A). P4b adds the 'team' filter (团队页记录列按它拉取)，and the default 'interactive'
+// clause EXCLUDES team rows (they belong to the team page, not the main history).
 // Mirror: api/types/chat.ts (parity gate) + the two Python mirrors, see that file's red note.
-export type ChatSessionOriginFilter = 'interactive' | 'agent' | 'im' | 'all'
+export type ChatSessionOriginFilter = 'interactive' | 'agent' | 'im' | 'team' | 'all'
 export type ChatSessionTriggerKind =
   | 'manual'
   | 'cron'
@@ -186,6 +188,10 @@ export interface OpenSessionInput {
   emailId?: number | null
   /** Required positive internal Matter id when anchorType is 'matter'. */
   matterId?: number
+  /** P4b（team 会话）— 人以指定 agent 身份开的交互式会话：行落 origin='team' + agent_id
+   *  （CHAT_DB v29 值域登记；恒 general anchor）。gateway 按 sessionId 反查这两列装配身份
+   *  （S2 W0：身份绝不从 chat body 读）。省略 → INSERT 字节级不变。 */
+  agentId?: string | null
   backendKind: BackendKind
   backendModel?: string | null
   backendAgentPageId?: string | null

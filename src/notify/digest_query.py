@@ -6,7 +6,7 @@
    取最近 N 小时邮件的 metadata + AI 字段 (category/priority/action_type/ai_summary),
    按 priority DESC + date DESC 排序取前 ``max_emails``。
 2. ``compute_counts`` — 确定性算 ``{unread, urgent, total, by_category}``。urgent 判定
-   复用 ``island_dispatch.URGENT_PRIORITY_LABELS`` + ``ACTION_NEEDS_FLAG``。
+   复用 ``llm_agent.schema.URGENT_PRIORITY_LABELS`` + ``ACTION_NEEDS_FLAG``。
 3. ``select_bulk_candidates`` — 规则确定性选 bulk 候选 (FYI / 系统通知 → 归档; AI
    已分类的可清理 → 标完成 / 标已读)。**internal_id 列表在此确定性生成**, 每个 cap
    ``max_ids``, 只放 ``notion_page_id IS NOT NULL`` 的 (能 update-flag)。
@@ -25,8 +25,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from src.llm_agent.schema import PRIORITY_ENUM
-from src.notify.island_dispatch import ACTION_NEEDS_FLAG, URGENT_PRIORITY_LABELS
+from src.llm_agent.schema import ACTION_NEEDS_FLAG, PRIORITY_ENUM, URGENT_PRIORITY_LABELS
 
 _BEIJING = timezone(timedelta(hours=8))
 
@@ -180,7 +179,7 @@ def _parse_labels(raw: Any) -> Dict[str, Any]:
 def compute_counts(briefs: List[DigestEmailBrief]) -> Dict[str, Any]:
     """确定性算 counts: ``{unread, urgent, total, by_category}``。
 
-    urgent 判定复用 ``island_dispatch.URGENT_PRIORITY_LABELS`` +
+    urgent 判定复用 ``llm_agent.schema.URGENT_PRIORITY_LABELS`` +
     ``ACTION_NEEDS_FLAG`` (与 ``handlers.handle_ai_reviewed`` 飞书通知规则同):
     priority ∈ URGENT_PRIORITY_LABELS AND action_type ∈ ACTION_NEEDS_FLAG。
     """

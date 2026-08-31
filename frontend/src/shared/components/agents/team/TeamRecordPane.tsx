@@ -1,6 +1,7 @@
 // task 08-27 P4a（lane team-shell）— 记录面壳：左记录列（216px，可收起成 18px 把手）
 // + 右详情。能对话与不能对话共用同一个壳（design §8.1），差别只有两处：
-//   • 能对话的顶部有「新对话」，默认落新会话（P4b 写侧未通 → composer 禁用 + 说明）；
+//   • 能对话的顶部有「新对话」，默认落新会话（P4b 起接真 composer —— TeamChatHost，
+//     与主 agent 同一套运行时；origin='team' 的历史会话同样可续聊）；
 //   • 不能对话的没有「新建」，默认落最新一条执行，且顶部写明为什么不接对话。
 //
 // 🔴 记录列是一条时间线：会话与执行按时间倒序穿插（mergeMemberTimeline），不按来源分块。
@@ -23,8 +24,8 @@ import {
 } from '../hooks'
 import type { TeamMember } from './teamMembers'
 import { mergeMemberTimeline, type TeamRecordEntry } from './teamTimeline'
+import { TeamChatHost } from './TeamChatHost'
 import {
-  PendingComposerBar,
   TeamPreprocessDetail,
   TeamProgressDetail,
   TeamReportDetail,
@@ -77,6 +78,15 @@ function entryRow(entry: TeamRecordEntry, t: TFunction): RecordRow {
         auto: entry.auto,
         dot: RUN_DOT[entry.run.state]
       }
+    case 'runLog':
+      // state 已是 9 值域（建表 CHECK 钉死）→ 与 run 行共用同一张点色表，零映射。
+      return {
+        key: entry.key,
+        title: entry.runLog.summary?.trim() || t('team.record.runUntitled'),
+        at: entry.at,
+        auto: entry.auto,
+        dot: RUN_DOT[entry.runLog.state]
+      }
     case 'session':
       return {
         key: entry.key,
@@ -126,6 +136,14 @@ function entryRow(entry: TeamRecordEntry, t: TFunction): RecordRow {
   }
 }
 
+// llm_processing.status（原始值）→ 状态点色。老后端不返该字段（undefined）时按成功渲染
+// —— 那是既有行为，不是「未知状态」。
+const PREPROCESS_DOT: Record<string, string> = {
+  success: 'bg-ok',
+  failed: 'bg-fail',
+  pending: 'bg-info animate-pulse'
+}
+
 function emailRow(email: EnrichedEmailMeta): RecordRow {
   const at = email.date_received != null ? new Date(email.date_received).getTime() : NaN
   return {
@@ -133,7 +151,7 @@ function emailRow(email: EnrichedEmailMeta): RecordRow {
     title: email.subject || String(email.internal_id),
     at: Number.isNaN(at) ? 0 : at,
     auto: true,
-    dot: 'bg-ok'
+    dot: (email.llm_status != null && PREPROCESS_DOT[email.llm_status]) || 'bg-ok'
   }
 }
 
@@ -179,24 +197,6 @@ function RecordRowButton({
   )
 }
 
-/** 「新会话」默认落点（能对话的成员）：写侧未通（P4b），composer 禁用 + 历史照读。 */
-function NewSessionView({ memberTitle }: { memberTitle: string }): React.ReactElement {
-  const { t } = useTranslation()
-  return (
-    <div className="flex min-h-0 flex-1 flex-col" data-team-new-session>
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
-        <h3 className="text-body font-semibold text-ink-fg">
-          {t('team.record.newSessionTitle', { name: memberTitle })}
-        </h3>
-        <p className="max-w-[26rem] text-meta leading-relaxed text-ink-fg-3">
-          {t('team.record.newSessionHint')}
-        </p>
-      </div>
-      <PendingComposerBar />
-    </div>
-  )
-}
-
 export function TeamRecordPane({
   member,
   memberTitle,
@@ -217,10 +217,11 @@ export function TeamRecordPane({
 
   // 数据源按 recordSource 门控（enabled=false 的 hook 不发请求）。
   const wantsTimeline = source === 'runs' || source === 'runs-no-transcript' || source === 'report'
+  const wantsRuns = source === 'runs' || source === 'runs-no-transcript'
   const { sessions } = useAgentOriginSessions(wantsTimeline)
-  const { runs } = useAgentRuns(
-    source === 'runs' || source === 'runs-no-transcript' ? agentId : null
-  )
+  // 08-31 — 同一个聚合端点也返 agent_run_log 行，所以报告 / 项目周报两位也要查：它们的
+  // 过程台账在那里（各自的 report / project_progress_sync 行只有结果，没有过程）。
+  const { runs, runLogs } = useAgentRuns(source === 'preprocess' ? null : agentId)
   const { reports } = useAgentReports(source === 'report' ? agentId : null)
   const { runs: progressRuns } = useProjectProgressRuns(source === 'progress')
   const { emails } = useRecentPreprocessedEmails(source === 'preprocess')
@@ -232,11 +233,12 @@ export function TeamRecordPane({
         : mergeMemberTimeline({
             agentId,
             sessions: wantsTimeline ? sessions : [],
-            runs: source === 'runs' || source === 'runs-no-transcript' ? runs : [],
+            runs: wantsRuns ? runs : [],
+            runLogs,
             reports: source === 'report' ? reports : [],
             progressRuns: source === 'progress' ? progressRuns : []
           }),
-    [source, agentId, wantsTimeline, sessions, runs, reports, progressRuns]
+    [source, agentId, wantsTimeline, wantsRuns, sessions, runs, runLogs, reports, progressRuns]
   )
 
   const rows = useMemo(
@@ -257,7 +259,18 @@ export function TeamRecordPane({
   const effectiveCollapsed = forcedCollapsed || collapsed
 
   const detail = ((): React.ReactElement => {
-    if (effectiveKey === NEW_KEY) return <NewSessionView memberTitle={memberTitle} />
+    // P4b — 新会话默认落点 = 真 composer（与主 agent 同一套运行时）。按 key 重挂：
+    // 换选中项 / 换成员时会话引擎干净重建。
+    if (effectiveKey === NEW_KEY)
+      return (
+        <TeamChatHost
+          key={`team-chat:${member.key}:new`}
+          member={member}
+          memberTitle={memberTitle}
+          sessionId={null}
+          sessionRow={null}
+        />
+      )
     if (source === 'preprocess') {
       const email = emails.find((e) => `email:${e.internal_id}` === effectiveKey) ?? null
       if (email) return <TeamPreprocessDetail email={email} />
@@ -271,8 +284,23 @@ export function TeamRecordPane({
             ) : (
               <TeamRunStatsDetail run={entry.run} />
             )
+          case 'runLog':
+            return <TeamRunTranscript run={entry.runLog} agentName={memberTitle} />
           case 'session':
-            return <TeamSessionDetail session={entry.session} canChat={member.canChat} />
+            // P4b — origin='team'（人以它身份开的交互会话）→ 续聊（真 composer）；
+            // origin='agent'（headless run 的降级形态行）维持只读 —— untrusted trigger
+            // 历史绝不给 manual 续写（P4 红线镜像，见 AgentConversation.isAgentRecord）。
+            return entry.session.origin === 'team' && member.canChat ? (
+              <TeamChatHost
+                key={`team-chat:${member.key}:${entry.session.id}`}
+                member={member}
+                memberTitle={memberTitle}
+                sessionId={entry.session.id}
+                sessionRow={entry.session}
+              />
+            ) : (
+              <TeamSessionDetail session={entry.session} />
+            )
           case 'report':
             return <TeamReportDetail report={entry.report} />
           case 'progress':

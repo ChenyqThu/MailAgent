@@ -48,6 +48,24 @@ ACTION_TYPE_SENT: List[str] = [
 # Union — tool schema enum; we post-validate against mailbox-specific subset
 ACTION_TYPE_ALL: List[str] = sorted({*ACTION_TYPE_INBOX, *ACTION_TYPE_SENT})
 
+# ---- 「这一封还需要我动手」的判据集 -----------------------------------------
+# 消费方（本文件是唯一定义处）：飞书 urgent 通知 / DailyDigest counts / 报告
+# is_attention / 今日页「待回邮件」。
+#
+# 🔴 2026-08-31 从 `src/notify/island_dispatch.py` **下沉到这里**：那是灵动岛模块，
+# 移除评估已完成（`docs/plans/remove-ping-island/`）。判据本身与灵动岛无关 —— 它说的
+# 是「这个 action / priority 值意味着人还得动手」，语义属于上面这两张词表，删岛不该
+# 牵连报告与今日页。岛模块 import 指回这里，集合内容一字未改。
+#
+# ACTION_NEEDS_FLAG **不由 ACTION_TYPE_* 推导**：它是 ACTION_TYPE_ALL 去掉
+# 「仅供参考 / 已完结」的结果，但那两个词表是「LLM 能输出什么」，本集是「哪些值要人
+# 动手」—— 两者碰巧互补不等于同一件事，推导会让往词表里加一个新的 FYI 型 action 时
+# 静默把它算成待办。
+URGENT_PRIORITY_LABELS = {"🔴 紧急", "🟡 重要"}
+ACTION_NEEDS_FLAG = {
+    "需要回复", "需要决策", "需要Review", "需要会议", "需要跟进", "等待响应",
+}
+
 MAIL_ACTIONS_ENUM: List[str] = [
     "✅ Marked as Read",
     "⭐ Starred",

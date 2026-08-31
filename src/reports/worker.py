@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -16,6 +17,7 @@ from zoneinfo import ZoneInfo
 from loguru import logger
 
 from src.agents import schedule_rule
+from src.agents.run_log import record_agent_run
 from src.config import config
 from src.notify.center import NotifyCenter
 from src.reports import data as rdata
@@ -235,6 +237,65 @@ def _due_occurrence(
     return best
 
 
+def _tool_call_steps(tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """``ToolLoopResult.tool_calls``（{name,input,output_preview,ms}）→ 步骤行。
+
+    client.py 的工具错误统一编码成 "error: ..." 回灌给模型（不抛）——以此判 ✗。
+    """
+    steps: List[Dict[str, Any]] = []
+    for tc in tool_calls or []:
+        preview = str(tc.get("output_preview") or "")
+        steps.append(
+            {
+                "kind": "tool",
+                "name": str(tc.get("name") or "?"),
+                "payload": {"input": tc.get("input"), "output_preview": preview},
+                "ok": not preview.startswith("error:"),
+                "ms": tc.get("ms"),
+            }
+        )
+    return steps
+
+
+def _record_report_run_log(
+    db_path: str,
+    *,
+    agent_id: str,
+    started_at_ms: int,
+    status: str,
+    trigger_kind: str,
+    trigger_detail: str,
+    summary: str = "",
+    model: Optional[str] = None,
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
+    error: Optional[str] = None,
+    steps: Optional[List[Dict[str, Any]]] = None,
+) -> None:
+    """报告生成的执行台账（agent_run_log，task 08-27 P4a run transcript）。
+
+    台账是旁路：record_agent_run 自己吞 sqlite 错误，这里再兜一层任何异常 ——
+    绝不因为账本写不进去而影响报告生成终态（_notify_report_terminal 同款纪律）。
+    """
+    try:
+        record_agent_run(
+            db_path,
+            agent_id=agent_id,
+            started_at_ms=started_at_ms,
+            status=status,
+            trigger_kind=trigger_kind,
+            trigger_detail=trigger_detail,
+            summary=summary or None,
+            model=model or None,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            error=error,
+            steps=steps or (),
+        )
+    except Exception as e:  # noqa: BLE001 — 台账失败不阻断报告
+        logger.debug(f"[report] run log write skipped: {e}")
+
+
 async def run_report_once(
     *,
     store: ReportStore,
@@ -245,11 +306,15 @@ async def run_report_once(
     agentic_fn: Callable[..., Awaitable[Any]] = summarize_report_agentic,
     aggregate_fn: Callable[..., Awaitable[Any]] = summarize_aggregate,
     client: Any = None,
+    trigger_kind: str = "manual",
 ) -> str:
     """单次生成一份报告，写 report 表，返回 report_id。
 
     决策：total==0 → status=empty（不调 LLM）；LLM 失败 → fallback 纯规则报告
     （status=ready + error 记因）；fetch/assemble 异常 → status=failed。
+
+    ``trigger_kind``：执行台账（agent_run_log）里这次是怎么被叫起来的 —— tick_loop
+    传 'schedule'，其余调用面（CLI run / API runNow / skill report_run）默认 'manual'。
     """
     now = now or datetime.now(timezone.utc)
     cadence = _cadence_of(agent)
@@ -261,7 +326,7 @@ async def run_report_once(
     if cadence in ("weekly", "monthly"):
         return await _run_aggregate(
             store=store, db_path=db_path, agent=agent, cadence=cadence, n=n, gen_now=n,
-            aggregate_fn=aggregate_fn, client=client,
+            aggregate_fn=aggregate_fn, client=client, trigger_kind=trigger_kind,
         )
 
     # ===== daily：agentic（摘要 + 按需工具下钻 + KOS）=====
@@ -272,6 +337,13 @@ async def run_report_once(
     win_start = win_start_dt.isoformat()
     win_end = win_end_dt.isoformat()
     rid = _report_id(agent["id"], cadence, report_date)
+    run_started_ms = int(time.time() * 1000)
+    trigger_detail = (
+        f"{_CADENCE_LABELS.get(cadence, cadence)}生成 · 报告日 {report_date}"
+    )
+    run_steps: List[Dict[str, Any]] = [
+        {"kind": "trig", "detail": f"{trigger_detail} · 窗口 {win_start} ~ {win_end}"}
+    ]
 
     store.create_report(
         report_id=rid, agent_id=agent["id"], cadence=cadence,
@@ -286,6 +358,15 @@ async def run_report_once(
         )
         counts = rdata.compute_report_counts(briefs)
         counts_json = json.dumps(counts, ensure_ascii=False)
+        run_steps.append(
+            {
+                "kind": "tool",
+                "name": "fetch_report_briefs",
+                "detail": f"取数 · 窗口内 {counts['total']} 封邮件",
+                "payload": {"counts": counts},
+                "ok": True,
+            }
+        )
 
         if counts["total"] == 0:
             store.finish_report(
@@ -295,6 +376,19 @@ async def run_report_once(
             _notify_report_terminal(
                 db_path, rid=rid, cadence=cadence, status="empty",
                 headline="这段时间没有新邮件",
+            )
+            # 🔴 payload.report_id 不可省: 上面 create_report 已经建了 status='empty'
+            # 的 report 行, 前端记录列靠这个真实引用把「产物行 report:xxx」吸收进
+            # runlog 行 —— 缺了它同一次执行显示成两行。
+            run_steps.append(
+                {"kind": "out", "name": "report", "detail": "这段时间没有新邮件",
+                 "payload": {"report_id": rid}}
+            )
+            _record_report_run_log(
+                db_path, agent_id=agent["id"], started_at_ms=run_started_ms,
+                status="skipped", trigger_kind=trigger_kind,
+                trigger_detail=trigger_detail,
+                summary="这段时间没有新邮件 · 未生成报告", steps=run_steps,
             )
             logger.info(f"[report] {rid} empty (no emails in window)")
             return rid
@@ -328,6 +422,43 @@ async def run_report_once(
                 db_path, rid=rid, cadence=cadence, status="ready",
                 headline=doc.derive_headline(),
             )
+            # 步骤序 = trig → 取数 → (agentic loop 的逐次工具) → 摘要 → 装配 → out。
+            run_steps.extend(_tool_call_steps(getattr(draft, "tool_calls", [])))
+            run_steps.append(
+                {
+                    "kind": "tool",
+                    "name": "summarize",
+                    "detail": f"LLM 摘要 · 模型 {draft.model}",
+                    "payload": {
+                        "input_tokens": draft.input_tokens,
+                        "output_tokens": draft.output_tokens,
+                    },
+                    "ok": True,
+                }
+            )
+            run_steps.append(
+                {
+                    "kind": "tool",
+                    "name": "assemble_report_doc",
+                    "detail": f"装配 · {len(doc.blocks)} 个块",
+                    "ok": True,
+                }
+            )
+            run_steps.append(
+                {
+                    "kind": "out",
+                    "name": "report",
+                    "detail": doc.derive_headline(),
+                    "payload": {"report_id": rid},
+                }
+            )
+            _record_report_run_log(
+                db_path, agent_id=agent["id"], started_at_ms=run_started_ms,
+                status="completed", trigger_kind=trigger_kind,
+                trigger_detail=trigger_detail, summary=doc.derive_headline(),
+                model=draft.model, input_tokens=draft.input_tokens,
+                output_tokens=draft.output_tokens, steps=run_steps,
+            )
             logger.info(
                 f"[report] {rid} ready (model={draft.model} "
                 f"in={draft.input_tokens} out={draft.output_tokens} blocks={len(doc.blocks)})"
@@ -349,12 +480,53 @@ async def run_report_once(
                 headline=doc.derive_headline(),
                 error=f"summarize_failed: {str(e)[:200]}",
             )
+            # 失败要写清为什么这么处置（design §8.1）: 摘要挂了 → 降级成纯规则报告
+            # 而不是整份不出 —— 报告的完整性比 AI 措辞重要。run 记 completed（报告
+            # 确实产出了）+ error 记因，摘要那一步标 ✗。
+            run_steps.append(
+                {
+                    "kind": "tool",
+                    "name": "summarize",
+                    "detail": (
+                        f"LLM 摘要失败，降级为纯规则报告（宁可没有 AI 叙述也保住"
+                        f"当日清单）：{str(e)[:200]}"
+                    ),
+                    "ok": False,
+                }
+            )
+            run_steps.append(
+                {
+                    "kind": "tool",
+                    "name": "assemble_fallback_doc",
+                    "detail": f"降级装配 · {len(doc.blocks)} 个块",
+                    "ok": True,
+                }
+            )
+            run_steps.append(
+                {
+                    "kind": "out",
+                    "name": "report",
+                    "detail": doc.derive_headline(),
+                    "payload": {"report_id": rid},
+                }
+            )
+            _record_report_run_log(
+                db_path, agent_id=agent["id"], started_at_ms=run_started_ms,
+                status="completed", trigger_kind=trigger_kind,
+                trigger_detail=trigger_detail, summary=doc.derive_headline(),
+                error=f"summarize_failed: {str(e)[:200]}", steps=run_steps,
+            )
         return rid
     except Exception as e:  # noqa: BLE001
         logger.error(f"[report] {rid} failed: {e}")
         store.finish_report(rid, status="failed", error=str(e)[:300])
         _notify_report_terminal(
             db_path, rid=rid, cadence=cadence, status="failed", error=str(e)[:300],
+        )
+        _record_report_run_log(
+            db_path, agent_id=agent["id"], started_at_ms=run_started_ms,
+            status="failed", trigger_kind=trigger_kind, trigger_detail=trigger_detail,
+            summary="报告生成失败", error=str(e)[:300], steps=run_steps,
         )
         return rid
 
@@ -591,6 +763,7 @@ async def _run_aggregate(
     gen_now: datetime,
     aggregate_fn: Callable[..., Awaitable[Any]],
     client: Any,
+    trigger_kind: str = "manual",
 ) -> str:
     """周 / 月报层级聚合：读上一个完整周期的子报告 → LLM 综合 → ReportDoc。缺则跳过 + 标注。
 
@@ -604,6 +777,11 @@ async def _run_aggregate(
     sub_cadence = "daily"
     sub_unit = "日报"
     rid = _report_id(agent["id"], cadence, report_date)
+    run_started_ms = int(time.time() * 1000)
+    trigger_detail = (
+        f"{_CADENCE_LABELS.get(cadence, cadence)}生成 · 周期 {start_date} ~ {end_date}"
+    )
+    run_steps: List[Dict[str, Any]] = [{"kind": "trig", "detail": trigger_detail}]
     store.create_report(
         report_id=rid, agent_id=agent["id"], cadence=cadence,
         report_date=report_date, window_start=start_date, window_end=end_date,
@@ -633,6 +811,31 @@ async def _run_aggregate(
                 db_path, rid=rid, cadence=cadence, status="empty",
                 headline=f"这段时间没有可综合的{sub_unit}",
             )
+            run_steps.append(
+                {
+                    "kind": "tool",
+                    "name": "select_period_subreports",
+                    "detail": f"取数 · 期间内 0 份{sub_unit}",
+                    "ok": True,
+                }
+            )
+            # 同 daily 空分支: create_report 已建 status='empty' 行, out 必带
+            # report_id 供记录列收敛 (缺了就是双行)。
+            run_steps.append(
+                {
+                    "kind": "out",
+                    "name": "report",
+                    "detail": f"这段时间没有可综合的{sub_unit}",
+                    "payload": {"report_id": rid},
+                }
+            )
+            _record_report_run_log(
+                db_path, agent_id=agent["id"], started_at_ms=run_started_ms,
+                status="skipped", trigger_kind=trigger_kind,
+                trigger_detail=trigger_detail,
+                summary=f"这段时间没有可综合的{sub_unit} · 未生成报告",
+                steps=run_steps,
+            )
             logger.info(f"[report] {rid} empty (no {sub_cadence} reports in period)")
             return rid
         _warn_if_last_day_missing(
@@ -659,6 +862,15 @@ async def _run_aggregate(
         matter_briefs = _safe_matter_briefs(
             db_path, *_period_window(start_date, end_date, n), rid
         )
+        run_steps.append(
+            {
+                "kind": "tool",
+                "name": "select_period_subreports",
+                "detail": f"取数 · 综合 {len(subs)} 份{sub_unit}（缺 {missing} 份）",
+                "payload": {"counts": counts},
+                "ok": True,
+            }
+        )
         try:
             draft = await aggregate_fn(
                 sub_reports=subs, cadence=cadence, now=gen_now,
@@ -668,6 +880,18 @@ async def _run_aggregate(
                 missing_note=missing_note, client=client,
             )
             model_used = draft.model
+            run_steps.append(
+                {
+                    "kind": "tool",
+                    "name": "summarize",
+                    "detail": f"LLM 综合 · 模型 {draft.model}",
+                    "payload": {
+                        "input_tokens": draft.input_tokens,
+                        "output_tokens": draft.output_tokens,
+                    },
+                    "ok": True,
+                }
+            )
         except Exception as e:  # noqa: BLE001 — LLM 失败降级为纯统计 + 缺失说明
             logger.warning(f"[report] {rid} aggregate failed → fallback: {e}")
             draft = ReportDraft(
@@ -675,6 +899,19 @@ async def _run_aggregate(
                 model="",
             )
             model_used = ""
+            # 失败的处置理由（design §8.1）: 综合挂了 → 降级为纯统计 + 缺失说明,
+            # 报告仍产出; run 记 completed + error 记因, 综合那一步标 ✗。
+            run_steps.append(
+                {
+                    "kind": "tool",
+                    "name": "summarize",
+                    "detail": (
+                        f"LLM 综合失败，降级为纯统计 + 缺失说明（各{sub_unit}仍可"
+                        f"单独查看）：{str(e)[:200]}"
+                    ),
+                    "ok": False,
+                }
+            )
 
         doc = assemble_report_doc(
             draft=draft, briefs=[], counts=counts, agent_id=agent["id"],
@@ -693,6 +930,30 @@ async def _run_aggregate(
             headline=doc.derive_headline(),
             error=("" if model_used else "aggregate_fallback"),
         )
+        run_steps.append(
+            {
+                "kind": "tool",
+                "name": "assemble_report_doc",
+                "detail": f"装配 · {len(doc.blocks)} 个块",
+                "ok": True,
+            }
+        )
+        run_steps.append(
+            {
+                "kind": "out",
+                "name": "report",
+                "detail": doc.derive_headline(),
+                "payload": {"report_id": rid},
+            }
+        )
+        _record_report_run_log(
+            db_path, agent_id=agent["id"], started_at_ms=run_started_ms,
+            status="completed", trigger_kind=trigger_kind,
+            trigger_detail=trigger_detail, summary=doc.derive_headline(),
+            model=model_used or None,
+            input_tokens=draft.input_tokens, output_tokens=draft.output_tokens,
+            error=(None if model_used else "aggregate_fallback"), steps=run_steps,
+        )
         logger.info(
             f"[report] {rid} ready (aggregate {len(subs)} {sub_cadence}, missing={missing})"
         )
@@ -702,6 +963,11 @@ async def _run_aggregate(
         store.finish_report(rid, status="failed", error=str(e)[:300])
         _notify_report_terminal(
             db_path, rid=rid, cadence=cadence, status="failed", error=str(e)[:300],
+        )
+        _record_report_run_log(
+            db_path, agent_id=agent["id"], started_at_ms=run_started_ms,
+            status="failed", trigger_kind=trigger_kind, trigger_detail=trigger_detail,
+            summary="报告生成失败", error=str(e)[:300], steps=run_steps,
         )
         return rid
 
@@ -723,7 +989,10 @@ async def tick_loop(
     """
 
     async def _default_run(agent: Dict[str, Any], now: datetime) -> Any:
-        return await run_report_once(store=store, db_path=db_path, agent=agent, now=now)
+        return await run_report_once(
+            store=store, db_path=db_path, agent=agent, now=now,
+            trigger_kind="schedule",
+        )
 
     run_once = run_once or _default_run
     _migrate_fire_markers(sync_store, store)

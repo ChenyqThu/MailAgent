@@ -61,11 +61,12 @@ export const FEEDBACK_PROPERTY_IDS = {
   freq: 'O_T>',
   version: 'b]b_',
   email: '\\NXQ',
+  /** Notion 那边叫「界面截图」，一个 property 可挂多张图（filePropertyIdToTokens 是数组）。 */
   screenshot: '[A]Y',
   diagnostics: 'iIxi'
 } as const
 
-/** 一个待上传的附件（主进程读盘 / 截图后填 body）。 */
+/** 一个待上传的附件（主进程读盘 / renderer 拖入粘贴后填 body）。 */
 export interface FeedbackAttachment {
   name: string
   /** MIME，例如 `image/png` / `application/zip`。 */
@@ -73,8 +74,34 @@ export interface FeedbackAttachment {
   body: Uint8Array
 }
 
-/** 一条反馈的**权威 payload 输入**。UI 的勾选框最终只体现为这里的字段在不在 ——
- *  「撤掉截图」必须真的把 `screenshot` 拿掉，而不是只改个 class。 */
+/**
+ * 🔴 Notion 的表单上传按**文件扩展名**拦，与 MIME、与体积都无关。
+ *
+ * 2026-08-31 实测（`getFormUploadFileUrl`，同一份 470KB 内容换名字）：
+ *   `diag.zip` + 任意 contentType → 400 `Uploading .zip files is not allowed`
+ *   `diag.txt` + `application/zip` → 200（可见判据只看扩展名）
+ *   同样被拦：`.gz` `.tgz` `.7z` `.bin` `.json`；放行：`.txt` `.log` `.pdf` 与各类图片
+ *
+ * P4a 只验过 PNG 附件，所以「勾了诊断包」的提交 100% 撞这个 400 —— owner dogfood
+ * 报的 `feedback upload failed (status 400)` 就是它，与 433KB 这个体积无关。
+ *
+ * 下面这张表**只列实测被拦的**，不做臆测扩充。
+ */
+export const FEEDBACK_BLOCKED_UPLOAD_EXTS = ['zip', 'gz', 'tgz', '7z', 'bin', 'json'] as const
+
+/**
+ * 上传用的文件名：被拦的扩展名再套一层 `.txt`（`x.zip` → `x.zip.txt`，收件人去掉 `.txt`
+ * 就能解压）。只改**上传时报给 Notion 的名字**，本地那个包一个字节不动。
+ */
+export function feedbackUploadName(name: string): string {
+  const dot = name.lastIndexOf('.')
+  if (dot < 0) return name
+  const ext = name.slice(dot + 1).toLowerCase()
+  return (FEEDBACK_BLOCKED_UPLOAD_EXTS as readonly string[]).includes(ext) ? `${name}.txt` : name
+}
+
+/** 一条反馈的**权威 payload 输入**。UI 上的每一次「撤掉」最终只体现为这里的字段在不在 ——
+ *  撤掉一张图必须真的把它从 `images` 里拿掉，而不是只改个 class。 */
 export interface FeedbackSubmitInput {
   kind: FeedbackKind
   title: string
@@ -84,9 +111,10 @@ export interface FeedbackSubmitInput {
   /** 自动带上的运行环境，形如 `2.26.0 · darwin · /settings`。 */
   version?: string
   email?: string
-  screenshot?: FeedbackAttachment
+  /** 用户拖进来 / 粘贴的图片，可多张（一个 file property 挂多个 token）。 */
+  images?: FeedbackAttachment[]
   diagnostics?: FeedbackAttachment
-  /** true = 主 Agent 代发（回执要说清是谁提交的）。截图这一项在 agent 提交时恒无。 */
+  /** true = 主 Agent 代发（回执要说清是谁提交的）。图片这一项在 agent 提交时恒无。 */
   viaAgent?: boolean
 }
 
@@ -145,14 +173,43 @@ interface UploadMeta {
   token?: string
 }
 
+/** 从 Notion / S3 的错误体里抠出一句能给用户看的原因（Notion 的 `debugMessage` 才是真话，
+ *  `message` 恒是 "Something went wrong."；S3 是 XML，取 `<Code>`）。 */
+function uploadFailureReason(body: unknown): string | undefined {
+  if (typeof body === 'string') {
+    const code = /<Code>([^<]+)<\/Code>/.exec(body)?.[1]
+    return code ?? (body.trim().length > 0 ? body.trim().slice(0, 200) : undefined)
+  }
+  if (typeof body !== 'object' || body === null) return undefined
+  const b = body as { debugMessage?: unknown; message?: unknown }
+  if (typeof b.debugMessage === 'string' && b.debugMessage.length > 0) return b.debugMessage
+  if (typeof b.message === 'string' && b.message.length > 0) return b.message
+  return undefined
+}
+
+function uploadError(status: number, body: unknown): FeedbackSubmitError {
+  const reason = uploadFailureReason(body)
+  return new FeedbackSubmitError(
+    'upload',
+    status,
+    body,
+    // 🔴 原因必须进 message：它要一路穿过 IPC 显示给用户。只有 `(status 400)` 的时候
+    //    owner 除了「报错了」什么也看不出来，而真话（"Uploading .zip files is not allowed"）
+    //    就在返回体里。
+    reason ? `feedback upload failed (status ${status}): ${reason}` : undefined
+  )
+}
+
 /** 附件三步的前两步：换签名 URL → multipart POST 到 S3。返回上传 token（JWT，24h 有效）。 */
 async function uploadOne(file: FeedbackAttachment, deps: FeedbackDeps): Promise<string> {
   const doFetch = deps.fetchImpl ?? fetch
+  // 🔴 报给 Notion 的名字要过扩展名闸（诊断包是 .zip，原样发必 400）。
+  const uploadName = feedbackUploadName(file.name)
   const metaRes = await doFetch(`${FEEDBACK_API_BASE}/getFormUploadFileUrl`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'User-Agent': deps.userAgent },
     body: JSON.stringify({
-      name: file.name,
+      name: uploadName,
       contentType: file.type,
       // 🔴 contentLength 是必需字段，漏了直接 400。
       contentLength: file.body.byteLength,
@@ -162,16 +219,19 @@ async function uploadOne(file: FeedbackAttachment, deps: FeedbackDeps): Promise<
   })
   const meta = (await metaRes.json().catch(() => null)) as UploadMeta | null
   if (!metaRes.ok || !meta?.signedPostUrl || !meta.fields || !meta.token) {
-    throw new FeedbackSubmitError('upload', metaRes.status, meta)
+    throw uploadError(metaRes.status, meta)
   }
 
   const form = new FormData()
   for (const [k, v] of Object.entries(meta.fields)) form.append(k, String(v))
   // Blob 只接受 ArrayBuffer 视图；Uint8Array 直接给即可。
-  form.append('file', new Blob([file.body as unknown as BlobPart], { type: file.type }), file.name)
+  // 🔴 `file` 必须是最后一个字段（S3 预签名 POST 的硬要求），别把它挪到 fields 前面。
+  form.append('file', new Blob([file.body as unknown as BlobPart], { type: file.type }), uploadName)
   const put = await doFetch(meta.signedPostUrl, { method: 'POST', body: form })
   // 🔴 S3 预签名 POST 成功是 204（不是 200）。
-  if (put.status !== 204) throw new FeedbackSubmitError('upload', put.status, null)
+  if (put.status !== 204) {
+    throw uploadError(put.status, await put.text().catch(() => null))
+  }
 
   return meta.token
 }
@@ -187,10 +247,11 @@ export async function submitFeedbackToNotion(
 ): Promise<string> {
   const doFetch = deps.fetchImpl ?? fetch
   const filePropertyIdToTokens: Record<string, string[]> = {}
-  if (input.screenshot) {
-    filePropertyIdToTokens[FEEDBACK_PROPERTY_IDS.screenshot] = [
-      await uploadOne(input.screenshot, deps)
-    ]
+  if (input.images && input.images.length > 0) {
+    const tokens: string[] = []
+    // 串行：一次反馈就那么几张图，并发换不来什么，却会同时开多条 S3 连接。
+    for (const image of input.images) tokens.push(await uploadOne(image, deps))
+    filePropertyIdToTokens[FEEDBACK_PROPERTY_IDS.screenshot] = tokens
   }
   if (input.diagnostics) {
     filePropertyIdToTokens[FEEDBACK_PROPERTY_IDS.diagnostics] = [

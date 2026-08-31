@@ -11,7 +11,7 @@
 跨 2 个进程语言（Python serve-api / TS Electron+ai-gateway）+ 1 个 DB 表 + 1 个 LLM 输出 schema/prompt + 6 个非 notify 模块旁路耦合 + 官网站点；约 90+ 文件、≈12,000 行（岛模块 3,896 + Electron 岛桥 1,001 + 测试 ≈5,600 + 散点）。
 
 三个不是「删文件就完事」的点：
-1. `src/reports/data.py:18-20,306` **硬 import** `island_dispatch.py` 的 `URGENT_PRIORITY_LABELS`/`ACTION_NEEDS_FLAG` —— 必须先搬到中立模块，否则删文件直接炸日/周/月报。
+1. ~~`src/reports/data.py:18-20,306` **硬 import** `island_dispatch.py` 的 `URGENT_PRIORITY_LABELS`/`ACTION_NEEDS_FLAG`~~ —— **已解除**（2026-08-31，task 08-27 P4c 顺手做的）：两常量下沉到 `src/llm_agent/schema.py`（action/priority 词表的定义处），`island_dispatch.py` 反过来 import 它们。现在的消费方是 `reports/data.py` · `notify/digest_query.py` · `today/aggregate.py` · `notify/island_dispatch.py`，删岛只需删最后一个。
 2. `src/llm_agent/schema.py:67-104,276,320-327` + `processor.py:38,119-146,561-620` + `prompts/email_inbox.md:138` / `email_sent.md:92` —— 「岛按钮推荐」编进了每封邮件的 LLM 结构化输出（已拍板随删；改 schema 后跑 schema-consistency-reviewer；存量 `result_json` 里的旧字段只是被忽略，无读取方风险）。
 3. `src/service.py:707-741` —— DailyDigest 启动**嵌套**在 `if self.island_enabled:` 内，无独立路径（已拍板随删）。
 
@@ -21,7 +21,7 @@
 
 ### 2.1 Python notify 岛模块（整文件删，共 3,896 行）
 
-`src/notify/` 下：`island_dispatch.py`(1165，**先搬 :58-59 两常量**) · `island_response.py`(548) · `island_agent.py`(304) · `island_reconnect.py`(339) · `island_snooze.py`(228) · `island_envelope.py`(292) · `island_ack.py`(214，连带其自建懒表) · `island_action_whitelist.py`(104) · `island_bootstrap.py`(136) · `island_i18n.py`(116) · `ping_island.py`(162)；另 `src/api/routers/island.py`(288) + `src/api/app.py:420,483` 两行。
+`src/notify/` 下：`island_dispatch.py`(1165，~~先搬 :58-59 两常量~~ 已于 2026-08-31 搬进 `llm_agent/schema.py`，整文件可直接删) · `island_response.py`(548) · `island_agent.py`(304) · `island_reconnect.py`(339) · `island_snooze.py`(228) · `island_envelope.py`(292) · `island_ack.py`(214，连带其自建懒表) · `island_action_whitelist.py`(104) · `island_bootstrap.py`(136) · `island_i18n.py`(116) · `ping_island.py`(162)；另 `src/api/routers/island.py`(288) + `src/api/app.py:420,483` 两行。
 
 ### 2.2 DailyDigest（已拍板随删）
 

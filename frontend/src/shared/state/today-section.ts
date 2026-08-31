@@ -1,8 +1,8 @@
 // 「今日」域二级栏 ↔ 主区的分区手递手（task 08-27-l4-tab-workspace P1）。
 //
 // 写侧: DomainPanel 的 TodayNavPanel（当天五节跳转行）。
-// 读侧: TodayExceptionSurface —— 滚动/高亮到最接近的现有分组（P1 过渡映射在读侧，
-// P4 重做五节主区后主区与这里一一对应）。
+// 读侧: TodaySurface —— 主区五节与这份词表**一一对应**（P4c 起；P1-P3 的
+// `SECTION_TO_GROUP` 过渡映射已随之删除）。选中节同时是主标签面包屑的第二段。
 //
 // 五节词表 = 原型 Main.dc.html 的 todayNav 段（等你拍板 / 今天的会 / 待回邮件 /
 // 临期事项 / 智能体产出）。

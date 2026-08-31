@@ -111,6 +111,7 @@ import { deriveExecRule, ExecRuleDeriveError } from './exec_policy_matcher'
 // Phase 06 (context injection) — the standing-context provider fetches the serve-api
 // /chat/config, projecting the system-prompt fields for the gateway.
 import { request } from '@shared/api/http_client'
+import type { ReportAgentConfig } from '@shared/api/types'
 import type { GatewaySystemPromptConfig } from '../../ai-gateway/systemPrompt'
 import type { SkillCatalogEntry } from '../../ai-gateway/prompts/stable_prompt'
 // 🔴 MEDIUM-6 (batch1 review) — type-only imports from the SDK-FREE providerRef. providers.ts
@@ -178,6 +179,47 @@ function gatewayLogLine(rec: Record<string, unknown>): void {
   } catch {
     /* logging never throws */
   }
+}
+
+/** P4b — coarse「它什么时候会自己动」line for the team-identity prompt block. MODE naming only:
+ *  schedule SEMANTICS stay single-sourced (schedule-rule-contract.md) — this never expands
+ *  occurrences or re-derives next-fire times, it just names which trigger family the agent has.
+ *  Returns null when nothing coarse can be said (unknown type / unparseable trigger). */
+function describeAgentSchedule(agent: ReportAgentConfig): string | null {
+  const type = agent.type
+  if (type === 'report') {
+    const cadence = agent.schedule?.cadence
+    const cadenceLabel =
+      cadence === 'daily'
+        ? '每天'
+        : cadence === 'weekly'
+          ? '每周'
+          : cadence === 'monthly'
+            ? '每月'
+            : null
+    return cadenceLabel ? `按排程自动运行：${cadenceLabel}生成一次报告。` : '按排程自动生成报告。'
+  }
+  if (type === 'contact_profile' || type === 'contact_governance') {
+    return '每天定时自动运行一次。'
+  }
+  if (type === 'custom') {
+    const trigger = agent.trigger
+    const entries =
+      trigger == null
+        ? []
+        : 'triggers' in trigger
+          ? trigger.triggers.filter((entry) => entry.enabled)
+          : [trigger]
+    if (entries.length === 0) return '没有定时任务：只有用户来找它才会动。'
+    const kinds = new Set(entries.map((entry) => entry.kind))
+    const parts: string[] = []
+    if (kinds.has('cron') || kinds.has('schedule')) parts.push('按排程定时自动运行')
+    if (kinds.has('email_filter')) parts.push('邮件命中条件时自动运行')
+    if (kinds.has('calendar_event_change') || kinds.has('calendar_before_start'))
+      parts.push('日程变化/会前自动运行')
+    return parts.length > 0 ? `${parts.join('；')}。` : null
+  }
+  return null
 }
 
 // #12 — keys（`${sessionId}:${userMessageId}`）of user messages already written eagerly at turn
@@ -1181,7 +1223,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       contextMode,
       agentRunContext,
       toolApprovalPrefs,
-      parentSessionId
+      parentSessionId,
+      sessionAgentId
     ) => {
       // Stage 1 PR2/PR3 — dynamic MCP connector tools. Two admitted shapes (shouldLoadConnectorTools):
       // manual_chat without an agentRunContext (PR2, unchanged), and a headless agent run whose
@@ -1323,6 +1366,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           internalAgentToolsEnabled,
           customAgentCallEnabled,
           parentSessionId,
+          // P4b — the team-session recursion guard input (tools/index.ts drops
+          // custom_agent_call when non-null). Threaded verbatim from prepareChatRun's 7th slot.
+          sessionAgentId,
           findSessionByParentToolCall,
           createAgentCallSession: (input) =>
             createAgentSession({
@@ -1346,6 +1392,32 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         },
         collector
       )
+    },
+    // P4b (task 08-27) — TEAM session identity by sessionId reverse lookup (S2 W0: never from
+    // the body). Only origin='team' rows resolve; NULL/'agent'/'im' → null → byte-identical run.
+    // 🔴 Contract (config.ts): when the row says 'team' + agent_id, the identity is returned even
+    // if the report_agent config fetch fails (weakened fields) — the custom_agent_call recursion
+    // guard must not depend on serve-api availability.
+    resolveSessionAgent: async (sessionId) => {
+      const session = getSession(sessionId)
+      if (!session || session.origin !== 'team') return null
+      const agentId = session.agent_id
+      if (typeof agentId !== 'string' || agentId.length === 0) return null
+      try {
+        const agent = await domain.getReportAgent(agentId)
+        if (agent) {
+          return {
+            agentId,
+            agentTitle: agent.title?.trim() || agentId,
+            duty: agent.prompt?.trim() || null,
+            model: agent.model?.trim() || null,
+            scheduleLine: describeAgentSchedule(agent)
+          }
+        }
+      } catch (err) {
+        console.warn('[ai-gateway] team agent config fetch failed (identity degrades)', err)
+      }
+      return { agentId, agentTitle: agentId, duty: null, model: null, scheduleLine: null }
     },
     // Phase 10b — configurable LLM auto-title. getTitleContext reads ai_chat.db (current title + first
     // user message); a non-null title = already-named (manual rename / prior auto-title) so the endpoint

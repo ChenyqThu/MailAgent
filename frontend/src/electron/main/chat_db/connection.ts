@@ -171,7 +171,16 @@ import { resolveDataRoot } from '../db'
 // 🔴 Plain additive ALTERs + one index — the anchor CHECK is untouched (no rebuild): both columns are
 // independent of the anchor triple, and CHAT_DB has no FK to sync_store.db anyway. 🔴 bump 同步刷
 // src/chat/db.py 头注释；NOT backend_lifecycle.EXPECTED_DB_VERSION（两条独立版本梯）。
-const CHAT_DB_VERSION = 28
+// v29 (L4 P4b 团队对话, task 08-27) — origin value-domain registration, NO schema change (v22
+// precedent): ai_chat_sessions.origin gains the fourth value 'team' — an INTERACTIVE session the
+// owner opens AS a team agent (createNewSession with agentId → origin='team' + agent_id; general
+// anchor only). ≠ 'agent' (headless run) — the initiator is the owner, so the composer stays live.
+// 🔴 The default interactive filter changes on BOTH sides in lockstep: COALESCE(origin,
+// 'interactive') NOT IN ('agent','team') — team rows belong to the team page's record column
+// (fetched via the new 'team' filter value), never the main history / ⌘O general list. Gates:
+// tests/config/test_chat_type_mirror_parity.py (filter vocabulary ×4 + exclusion-set SQL ×4).
+// 🔴 bump 同步刷 src/chat/db.py 头注释；NOT backend_lifecycle.EXPECTED_DB_VERSION.
+const CHAT_DB_VERSION = 29
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -1349,6 +1358,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_queued_input_delivery
         ON ai_chat_sessions(item_id, created_at DESC)`)
       db.prepare(
         "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '28')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  // v28 → v29 — L4 P4b 团队对话: NO-OP value-domain registration (v22 样板). The origin column
+  // (v19, free text without a CHECK) gains the fourth value 'team' (interactive sessions opened AS
+  // a team agent, createNewSession with agentId; domain now 'agent' | 'im' | 'team' |
+  // NULL=interactive) — no ALTER is needed, the bump only records in the ladder when 'team' rows
+  // may start appearing. Same idempotent transaction discipline as every step.
+  if (current < 29) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '29')"
       ).run()
       db.exec('COMMIT')
     } catch (err) {

@@ -23,6 +23,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 
+from src.llm_agent.schema import ACTION_NEEDS_FLAG, URGENT_PRIORITY_LABELS
 from src.notify import island_i18n, island_reconnect, ping_island
 from src.notify.island_envelope import (
     BridgeEnvelope,
@@ -55,10 +56,9 @@ DEFAULT_OPTION_IDS = (
     "open_mail",
 )
 
-URGENT_PRIORITY_LABELS = {"🔴 紧急", "🟡 重要"}
-ACTION_NEEDS_FLAG = {
-    "需要回复", "需要决策", "需要Review", "需要会议", "需要跟进", "等待响应",
-}
+# 「还需要人动手」的判据集（`URGENT_PRIORITY_LABELS` / `ACTION_NEEDS_FLAG`）定义已
+# 下沉到 `src/llm_agent/schema.py` —— action / priority 词表的定义处。本模块只是消费方
+# 之一：判据与灵动岛无关，删岛不该把报告 / DailyDigest / 今日页一起带走。见顶部 import。
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -64,8 +64,9 @@ interface AgentThreadProps {
    *  现在只剩事项控件 / 输入队列条这类「贴着输入框」的东西。各自门控，省略即字节级现状。 */
   runStatusSlot?: React.ReactNode
   /** Matters G-20 — 事项对话的空态标题/副标题（设计稿："the empty state names the matter"）。
-   *  省略 → 通用 greetings 一字不变。 */
-  welcomeOverride?: { title: string; hint: string }
+   *  省略 → 通用 greetings 一字不变。
+   *  P4b — `icon`（团队对话：Agent Logo，渲染在标题上方）；省略 → 无图，现状。 */
+  welcomeOverride?: { title: string; hint: string; icon?: React.ReactNode }
   /** task 08-27 P4a — 消息流**最前**的插槽（viewport 内、随流滚动）。执行记录视图用它挂
    *  前端合成的「⚡自动触发」气泡（真实首条 user 消息是 4-7KB 任务契约 prompt，已被摘掉，
    *  见 team/runTranscript.ts）。省略 = 字节级现状。 */
@@ -158,8 +159,9 @@ export function AgentThread({
 function AgentWelcome({
   override
 }: {
-  /** 事项对话把标题换成事项标题（用户内容，不进 i18n）。省略 → 通用 greetings。 */
-  override?: { title: string; hint: string }
+  /** 事项对话把标题换成事项标题（用户内容，不进 i18n）。省略 → 通用 greetings。
+   *  P4b：团队对话另带 icon（Agent Logo，标题上方）。 */
+  override?: { title: string; hint: string; icon?: React.ReactNode }
 }): React.JSX.Element {
   const { t } = useTranslation()
   return (
@@ -178,6 +180,15 @@ function AgentWelcome({
       {/* #1 dogfood: z-10 已移到 .agent-strands-banner { z-index:-1 }，由
           负 z-index 把丝线沉到底层，文案无需再持 z-10 stacking context。
           保留 relative 供 animate-in transform 用。 */}
+      {/* P4b — 团队对话的 Agent Logo（欢迎语上方，owner 拍板）。无 icon → 零节点，现状。 */}
+      {override?.icon != null && (
+        <div
+          className="relative mb-3 animate-in fade-in slide-in-from-bottom-1 fill-mode-both duration-200"
+          data-welcome-agent-icon
+        >
+          {override.icon}
+        </div>
+      )}
       <h1 className="relative animate-in fade-in slide-in-from-bottom-1 fill-mode-both text-balance text-2xl font-semibold text-ink-fg duration-200">
         {override?.title ?? t('agentView.welcome')}
       </h1>

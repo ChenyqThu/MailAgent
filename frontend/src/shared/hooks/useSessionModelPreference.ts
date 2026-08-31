@@ -46,7 +46,8 @@ export interface SessionModelPreference {
 export function useSessionModelPreference({
   sessionId,
   sessionModel,
-  persist
+  persist,
+  newSessionModel
 }: {
   /** 当前活跃会话 id；null = 还没落地的新对话。 */
   sessionId: number | null
@@ -56,8 +57,12 @@ export function useSessionModelPreference({
   sessionModel: string | null | undefined
   /** 落库（best-effort，不抛）。面里通常是 `mailApi.chat.updateSessionModel`。 */
   persist: (sessionId: number, model: string) => void
+  /** P4b — 新对话的初始模型覆盖（团队会话 = agent 行的 model；拍板：初始态显示即可，
+   *  不做双向）。**只进 useState 初始化**（宿主按成员 key 重挂），后续行为一字不变；
+   *  省略/空串 → 全局偏好，既有调用方字节级不变。 */
+  newSessionModel?: string | null
 }): SessionModelPreference {
-  const [model, setModel] = useState(readGlobalModelPref)
+  const [model, setModel] = useState(() => newSessionModel || readGlobalModelPref())
   // 「这个 sessionId 的回填已经判过了」——防止我们自己刚 selectModel 完，稍后 sessions 列表
   // 刷新带回旧 backend_model 时又把用户的选择顶回去。
   const resolvedForRef = useRef<number | null | undefined>(undefined)

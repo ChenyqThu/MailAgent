@@ -183,24 +183,65 @@ export function createNewSession(input: OpenSessionInput): ChatSession {
   const backendAgentPageId = input.backendAgentPageId ?? null
   const backendModel = input.backendModel ?? null
   const { anchorType, emailId, anchorId } = resolveAnchor(input)
-  const result = db
-    .prepare(
-      `INSERT INTO ai_chat_sessions
-        (email_id, anchor_type, anchor_id, backend_kind, backend_model,
-         backend_agent_page_id, title, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      emailId,
-      anchorType,
-      anchorId,
-      input.backendKind,
-      backendModel,
-      backendAgentPageId,
-      input.title ?? null,
-      now,
-      now
-    )
+  // P4b (CHAT_DB v29 value domain) — an interactive session opened AS a team agent: stamp
+  // origin='team' + agent_id so the gateway can assemble the identity by sessionId reverse
+  // lookup (S2 W0: identity is NEVER read from the chat body). Absent agentId → INSERT
+  // byte-identical.
+  // 🔴 The two shape checks below (non-empty id + general anchor) mirror serve-api's
+  // /sessions/new; its THIRD check — the agent row exists and is chat-capable — is deliberately
+  // NOT mirrored here: that needs the report_agent store, which this leaf must not import. The
+  // renderer never reaches this function (every session create goes through createChatRuntime →
+  // serve-api), so the authoritative check is the one that is actually on the live path.
+  const agentId = input.agentId ?? null
+  if (agentId !== null) {
+    if (typeof agentId !== 'string' || agentId.trim().length === 0) {
+      throw new Error('createNewSession: agentId must be a non-empty string')
+    }
+    if (anchorType !== 'general') {
+      throw new Error(
+        `createNewSession: agent sessions must use the general anchor, got ${anchorType}`
+      )
+    }
+  }
+  const result =
+    agentId !== null
+      ? db
+          .prepare(
+            `INSERT INTO ai_chat_sessions
+              (email_id, anchor_type, anchor_id, backend_kind, backend_model,
+               backend_agent_page_id, title, created_at, updated_at, origin, agent_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'team', ?)`
+          )
+          .run(
+            emailId,
+            anchorType,
+            anchorId,
+            input.backendKind,
+            backendModel,
+            backendAgentPageId,
+            input.title ?? null,
+            now,
+            now,
+            agentId
+          )
+      : db
+          .prepare(
+            `INSERT INTO ai_chat_sessions
+              (email_id, anchor_type, anchor_id, backend_kind, backend_model,
+               backend_agent_page_id, title, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .run(
+            emailId,
+            anchorType,
+            anchorId,
+            input.backendKind,
+            backendModel,
+            backendAgentPageId,
+            input.title ?? null,
+            now,
+            now
+          )
   return {
     id: Number(result.lastInsertRowid),
     email_id: emailId,
@@ -212,7 +253,8 @@ export function createNewSession(input: OpenSessionInput): ChatSession {
     title: input.title ?? null,
     archived: false,
     created_at: now,
-    updated_at: now
+    updated_at: now,
+    ...(agentId !== null ? { origin: 'team', agent_id: agentId } : {})
   }
 }
 
@@ -363,9 +405,13 @@ export function listSessionsForItem(itemId: number): ChatSession[] {
  *  is its general-anchor counterpart for the Cmd+O surface (P3). Kept separate
  *  so a general session never leaks into a specific email's sidebar. */
 export function listGeneralSessions(): ChatSession[] {
+  // P4b — 'team' rows (general anchor + agent identity) are excluded like 'agent' rows: their
+  // home is the team page's record column. Exclusion set mirrors src/chat/db.py
+  // list_general_sessions verbatim (gate: test_chat_type_mirror_parity.py
+  // ::test_chat_interactive_origin_exclusion_mirror_parity).
   return getChatDb()
     .prepare(
-      "SELECT * FROM ai_chat_sessions WHERE anchor_type = 'general' AND COALESCE(origin, 'interactive') <> 'agent' ORDER BY updated_at DESC"
+      "SELECT * FROM ai_chat_sessions WHERE anchor_type = 'general' AND COALESCE(origin, 'interactive') NOT IN ('agent', 'team') ORDER BY updated_at DESC"
     )
     .all() as ChatSession[]
 }
@@ -388,18 +434,21 @@ export function listAllSessions(options: ListAllSessionsOptions = {}): ChatSessi
   const includeArchived = options.includeArchived ?? false
   const origin = options.origin ?? 'interactive'
   // Stage 2 PR-1 — origin='im' rows (飞书 conversations, v22 value domain) deliberately RIDE the
-  // default 'interactive' clause: it only excludes 'agent', so IM sessions appear in the desktop
-  // history automatically (Q18=A). The filter SQL is untouched on purpose (both sides — the
-  // Python mirror src/chat/db.py list_all_sessions keeps the identical clause); the 'im' filter
-  // literal exists in ChatSessionOriginFilter as value-domain vocabulary, no caller passes it yet.
+  // default 'interactive' clause, so IM sessions appear in the desktop history automatically
+  // (Q18=A). P4b — origin='team' rows (v29: interactive sessions opened AS a team agent) are
+  // EXCLUDED from the default clause: they belong to the team page (which fetches origin='team').
+  // Exclusion set mirrors src/chat/db.py list_all_sessions verbatim (gate:
+  // test_chat_type_mirror_parity.py::test_chat_interactive_origin_exclusion_mirror_parity).
   const originClause =
     origin === 'agent'
       ? "s.origin = 'agent'"
       : origin === 'im'
         ? "s.origin = 'im'"
-        : origin === 'all'
-          ? '1 = 1'
-          : "COALESCE(s.origin, 'interactive') <> 'agent'"
+        : origin === 'team'
+          ? "s.origin = 'team'"
+          : origin === 'all'
+            ? '1 = 1'
+            : "COALESCE(s.origin, 'interactive') NOT IN ('agent', 'team')"
   // dogfood-3 — includeArchived (default false → only active sessions, byte-identical to before; the
   // agent view passes true to also pull archived rows for its bottom "归档" group). SELECT now carries
   // s.archived so the renderer can split active vs archived. The archived branch is a fixed boolean (no

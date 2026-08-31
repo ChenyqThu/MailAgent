@@ -4,9 +4,8 @@
 // 才拼得出 `app.getVersion()`，统一设一处比每个调用方各设一次可靠（🔴 UA 不对
 // Cloudflare 会 403 error 1010，见 shared/feedback/contract.ts 顶部）。
 //
-// 六个 IPC：
+// 五个 IPC：
 //   feedback:context      — 「自动带上」那一行（版本 · 平台 · 当前页面），显示与实发同一份
-//   feedback:capture      — 截当前窗口一张 PNG（renderer 截不到自己所在的原生窗口）
 //   feedback:diagnostics  — 组装诊断包（复用 admin export-diagnostics，**不弹保存框**）
 //   feedback:submit       — 真提交，成功返回 submissionBlockId
 //   feedback:recent       — 本地对账台账（最近 N 条）
@@ -15,7 +14,7 @@
 // 🔴 失败可见是本模块的第一职责：submit 失败一律**抛**（renderer 弹「没发出去」+ 降级
 //    入口），并且失败那条也进台账 —— 「界面说成功、其实没发出去」是这批最不能出的错。
 
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, ipcMain, shell } from 'electron'
 import { readFileSync, statSync } from 'fs'
 import { basename } from 'path'
 
@@ -30,9 +29,6 @@ import {
   type FeedbackSubmitInput
 } from '@shared/feedback/contract'
 import { buildDiagnosticsZip, cleanupDiagnosticsTmp } from './admin'
-
-/** 截图上限（PNG，1600px 宽足够看清界面且不至于让上传慢到用户以为卡了）。 */
-const SCREENSHOT_MAX_WIDTH = 1600
 
 /** 主进程侧的台账（进程内，重启即清 —— 它只用于「刚才那条发出去没有」的当场对账，
  *  不是长期归档；长期归档在 Notion 库里）。 */
@@ -54,37 +50,6 @@ export function feedbackContextLine(route?: string): string {
   return parts.join(' · ')
 }
 
-export interface CaptureResult {
-  name: string
-  type: string
-  /** base64 PNG —— renderer 拿它做缩略图，提交时原样回传。 */
-  dataBase64: string
-  bytes: number
-}
-
-/** 截当前窗口。失败返回 null（截不到不是错误 —— 用户可以不带截图继续提交）。 */
-export async function runCaptureScreenshot(): Promise<CaptureResult | null> {
-  const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-  if (!win || win.isDestroyed()) return null
-  try {
-    const image = await win.webContents.capturePage()
-    const sized =
-      image.getSize().width > SCREENSHOT_MAX_WIDTH
-        ? image.resize({ width: SCREENSHOT_MAX_WIDTH })
-        : image
-    const buf = sized.toPNG()
-    return {
-      name: `screenshot-${Date.now()}.png`,
-      type: 'image/png',
-      dataBase64: buf.toString('base64'),
-      bytes: buf.byteLength
-    }
-  } catch {
-    // 截图失败不阻断反馈流程（无头 / 窗口刚销毁）。
-    return null
-  }
-}
-
 export interface DiagnosticsResult {
   path: string
   name: string
@@ -103,7 +68,14 @@ export async function runBuildDiagnostics(): Promise<DiagnosticsResult> {
   return { path: zipPath, name: basename(zipPath), bytes }
 }
 
-/** renderer → 主进程的提交请求（附件用「引用」而不是内容：截图是 base64、诊断包是路径）。 */
+/** renderer 拖进来 / 粘贴的一张图（内容随 IPC 走 base64 —— 主进程碰不到 renderer 的 File）。 */
+export interface FeedbackImagePayload {
+  name: string
+  type: string
+  dataBase64: string
+}
+
+/** renderer → 主进程的提交请求（附件用「引用」而不是内容：图片是 base64、诊断包是路径）。 */
 export interface FeedbackSubmitRequest {
   kind: FeedbackKind
   title: string
@@ -112,16 +84,16 @@ export interface FeedbackSubmitRequest {
   email?: string
   /** 当前路由，进「自动带上的上下文」那一行。 */
   route?: string
-  /** 撤掉截图 = **不传这个字段**（而不是传空串）—— payload 必须真的变。 */
-  screenshotBase64?: string
+  /** 撤掉某张图 = **它不在这个数组里**（而不是留个空壳）—— payload 必须真的变。 */
+  images?: FeedbackImagePayload[]
   /** 撤掉诊断包 = **不传这个字段**。 */
   diagnosticsPath?: string
   viaAgent?: boolean
 }
 
-function attachmentFromBase64(b64: string): FeedbackAttachment {
-  const body = Buffer.from(b64, 'base64')
-  return { name: `screenshot-${Date.now()}.png`, type: 'image/png', body: new Uint8Array(body) }
+function attachmentFromImage(img: FeedbackImagePayload): FeedbackAttachment {
+  const body = Buffer.from(img.dataBase64, 'base64')
+  return { name: img.name, type: img.type, body: new Uint8Array(body) }
 }
 
 function attachmentFromPath(path: string): FeedbackAttachment {
@@ -145,7 +117,7 @@ export async function runSubmitFeedback(req: FeedbackSubmitRequest): Promise<{
     version: feedbackContextLine(req.route),
     email: req.email,
     viaAgent: req.viaAgent,
-    ...(req.screenshotBase64 ? { screenshot: attachmentFromBase64(req.screenshotBase64) } : {}),
+    ...(req.images && req.images.length > 0 ? { images: req.images.map(attachmentFromImage) } : {}),
     ...(req.diagnosticsPath ? { diagnostics: attachmentFromPath(req.diagnosticsPath) } : {})
   }
   try {
@@ -191,10 +163,6 @@ export function registerFeedbackHandlers(): void {
   ipcMain.handle(
     'feedback:context',
     async (_evt, route?: string): Promise<string> => feedbackContextLine(route)
-  )
-  ipcMain.handle(
-    'feedback:capture',
-    async (): Promise<CaptureResult | null> => runCaptureScreenshot()
   )
   ipcMain.handle(
     'feedback:diagnostics',

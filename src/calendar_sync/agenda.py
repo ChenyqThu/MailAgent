@@ -54,7 +54,7 @@ AGENDA_EVENT_LIMIT = 2000
 
 #: 「重要邮箱日程」判据 —— 源邮件的 LLM 分类结果。值域单源
 #: ``src/llm_agent/schema.PRIORITY_ENUM``；同款字面量集在
-#: ``src/notify/island_dispatch.URGENT_PRIORITY_LABELS`` /
+#: ``src/llm_agent/schema.URGENT_PRIORITY_LABELS`` /
 #: ``src/mail/reverse_sync.NOTIFY_PRIORITIES`` 已有先例。
 HOT_PRIORITY_LABELS = ("🔴 紧急", "🟡 重要")
 

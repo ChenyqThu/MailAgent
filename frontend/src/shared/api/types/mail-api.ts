@@ -20,6 +20,7 @@ import type {
   ServicesApi,
   SettingsApi
 } from './settings'
+import type { TodayApi } from './today'
 import type { AiApi } from './translate'
 import type { UpdaterApi } from './updater'
 
@@ -65,6 +66,9 @@ export interface MailApi {
   /** Sprint 20 — 报告 Agent (/agents 页): list/get 直读 sync_store.db,
    *  runNow/getConfig/setConfig 经 `mailagent report` CLI fork. */
   report: ReportApi
+  /** task 08-27 P4c — 今日页聚合读（只出「待回邮件」与「下一个硬时间点」两块，
+   *  其余四节走各自现成端点）。 */
+  today: TodayApi
   /** task 08-27 P4a — 快捷反馈。**Electron-only 可选面**（截图 / 诊断包 / 绕 CSP 提交
    *  都只有主进程做得到）；远程 web 不实现，入口按它在不在决定显不显示。 */
   feedback?: FeedbackApi

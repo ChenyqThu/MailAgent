@@ -7010,13 +7010,13 @@
       "due": "临期事项",
       "out": "智能体产出"
     },
-    "title": "例外面",
+    "title": "今天",
     "subtitle": "{count} 条等你看一眼",
     "subtitleLoading": "正在汇总…",
     "error": "事项数据加载失败，下面只列出了 Agent 运行",
     "empty": {
-      "title": "没有需要你处理的事",
-      "hint": "Agent 等审批、事项提案、关注信号、行动项派发都会汇到这里；现在一条都没有。"
+      "title": "今天没有需要你的事",
+      "hint": "等你拍板的、今天的会、待回的信、临期事项、智能体产出，都会汇到这里；现在一条都没有。"
     },
     "group": {
       "waiting": "等我处理",
@@ -7061,6 +7061,31 @@
       "answerPlaceholder": "把它缺的那条信息补给它",
       "answerConfirm": "回答",
       "answerBack": "返回"
+    },
+    "meet": {
+      "allDay": "全天",
+      "untitled": "未命名日程"
+    },
+    "why": {
+      "meetUpcoming": "{time} 开始",
+      "meetPast": "{time} 已经开始",
+      "report": "{cadence}，今天生成的"
+    },
+    "meta": {
+      "nextMeet": "下一场 {time}",
+      "oldestReply": "最久一封 {age}"
+    },
+    "action": {
+      "openMail": "去回复",
+      "openCalendar": "看日历",
+      "openReport": "看报告"
+    },
+    "next": {
+      "inMinutes": "还有 {n} 分钟",
+      "inHours": "还有 {h} 小时 {m} 分",
+      "inHoursOnly": "还有 {h} 小时",
+      "started": "已经开始",
+      "pendingBefore": "在那之前有 {count} 件要拍板"
     }
   },
   "tabs": {
@@ -7114,13 +7139,15 @@
       "freq": "复现频率",
       "email": "邮箱（选填）",
       "emailPlaceholder": "留了才能在有进展时回复你",
-      "attachScreenshot": "附上当前界面截图",
-      "attachDiagnostics": "附上诊断包（生成约 1 分钟）",
-      "autoContext": "会自动带上：{context}",
+      "emailNone": "（没留邮箱）",
+      "attachments": "附件",
+      "imagesLabel": "图片",
+      "imagesHint": "把截图拖进来，或按 ⌘V 粘贴；也可以点这里选文件",
+      "imagesTitle": "图片（{count}）",
+      "imagesSkipped": "没有附图。",
+      "attachDiagnostics": "附上诊断包",
+      "diagHelper": "近 7 天运行日志 + 已脱敏配置快照，不含邮件正文 / 附件 / 通讯录。点「下一步」后开始组装，约 1 分钟。",
       "autoContextTitle": "自动带上的运行环境",
-      "screenshotTitle": "界面截图",
-      "screenshotSkipped": "没有勾选，不会发送。",
-      "screenshotFailed": "这次没截到（不影响提交）。",
       "diagTitle": "诊断包",
       "diagBusy": "正在组装…（约 1 分钟）",
       "diagSkipped": "没有勾选，不会发送。",
@@ -7128,6 +7155,7 @@
       "diagLogs": "运行日志：近 7 天",
       "diagRedacted": "配置快照：令牌、密钥、邮箱地址已抹掉",
       "diagExcluded": "不含：邮件正文、附件、通讯录",
+      "diagRenamed": "上传时改名为 .zip.txt（Notion 不收 .zip），下载后去掉 .txt 即可解压",
       "remove": "撤掉",
       "cancel": "取消",
       "next": "下一步",
@@ -7166,7 +7194,6 @@
       "expandList": "展开记录列",
       "collapseList": "收起记录列",
       "newSessionTitle": "和 {name} 开始新对话",
-      "newSessionHint": "输入框接通后就能直接吩咐它；左列的历史记录现在就能看。",
       "runUntitled": "一次执行",
       "noOutput": "这次运行没有产生任何输出。",
       "noOutputError": "这次运行没有产生输出：{error}",
@@ -7189,8 +7216,20 @@
       "emptyProgress": "还没有同步记录——收到命中触发词的周报邮件时才会跑。",
       "emptyPreprocess": "最近没有被分类的邮件——开启 AI 邮件预处理后，新收的邮件会逐封出现在这里。"
     },
-    "composer": {
-      "pending": "以它身份对话即将可用（写侧接通后开放）；历史记录可正常查看。"
+    "welcome": {
+      "cadence": {
+        "daily": "每天",
+        "weekly": "每周",
+        "monthly": "每月"
+      },
+      "schedule": {
+        "report": "它会按排程自动运行，{cadence}生成一次报告；在这里说话就是直接吩咐它。",
+        "daily": "它每天定时自动跑一轮；在这里说话就是直接吩咐它。",
+        "timed": "它按排程自动运行（{sentence}）；在这里说话就是直接吩咐它。",
+        "timedPlain": "它按排程定时自动运行；在这里说话就是直接吩咐它。",
+        "event": "它在邮件或日程命中条件时自动运行；在这里说话就是直接吩咐它。",
+        "manual": "它没有定时任务，只有你来找它才会动——在这里说话就是直接吩咐它。"
+      }
     },
     "detail": {
       "duration": "用时",
@@ -7205,7 +7244,8 @@
         "trigger": "触发",
         "output": "输出",
         "triggerBody": "按{cadence}排程生成 · {date}",
-        "open": "去报告"
+        "open": "去报告",
+        "openFromRun": "打开这次执行产出的那份报告"
       },
       "progress": {
         "counts": "{total} 个项目 · 新建 {created} · 更新 {updated} · 失败 {failed}",
@@ -7213,7 +7253,11 @@
       }
     },
     "preprocess": {
-      "detailHint": "这是收信时自动分类的结果。想追问为什么这么判，在那封邮件里问主助手。"
+      "detailHint": "这是收信时自动分类的结果。想追问为什么这么判，在那封邮件里问主助手。",
+      "classified": "已分类",
+      "failed": "这一封没跑通",
+      "retries": "重试",
+      "failNote": "这一封没有写入分类结果。预处理失败会按退避重试，重试用完仍失败就停在这里 —— 邮件本身完好，只是没有 AI 标注。"
     }
   }
 }

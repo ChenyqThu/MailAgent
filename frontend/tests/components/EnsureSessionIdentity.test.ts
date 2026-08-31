@@ -32,11 +32,15 @@ function fakeSession(id: number): ChatSession {
 
 /** 可控的建会话：`resolve(id)` 由用例决定何时落地（模拟"在途"那段窗口）。 */
 function deferredCreator(): {
-  create: (identity: { navEpoch: number; anchorId: number | null }) => Promise<ChatSession>
-  calls: { navEpoch: number; anchorId: number | null }[]
+  create: (identity: {
+    navEpoch: number
+    anchorId: number | null
+    agentId: string | null
+  }) => Promise<ChatSession>
+  calls: { navEpoch: number; anchorId: number | null; agentId: string | null }[]
   resolveAll: (id: number) => void
 } {
-  const calls: { navEpoch: number; anchorId: number | null }[] = []
+  const calls: { navEpoch: number; anchorId: number | null; agentId: string | null }[] = []
   const resolvers: ((session: ChatSession) => void)[] = []
   return {
     calls,
@@ -53,7 +57,7 @@ describe('createEnsureSession — 幂等 + 线程身份', () => {
     const creator = deferredCreator()
     const ensure = createEnsureSession({
       getExistingSessionId: () => 77,
-      getIdentity: () => ({ navEpoch: 0, anchorId: null }),
+      getIdentity: () => ({ navEpoch: 0, anchorId: null, agentId: null }),
       createSession: creator.create,
       adopt: vi.fn()
     })
@@ -66,7 +70,7 @@ describe('createEnsureSession — 幂等 + 线程身份', () => {
     const adopt = vi.fn()
     const ensure = createEnsureSession({
       getExistingSessionId: () => null,
-      getIdentity: () => ({ navEpoch: 3, anchorId: 42 }),
+      getIdentity: () => ({ navEpoch: 3, anchorId: 42, agentId: null }),
       createSession: creator.create,
       adopt
     })
@@ -75,13 +79,13 @@ describe('createEnsureSession — 幂等 + 线程身份', () => {
     creator.resolveAll(101)
     expect(await first).toBe(101)
     expect(await second).toBe(101)
-    expect(creator.calls).toEqual([{ navEpoch: 3, anchorId: 42 }])
+    expect(creator.calls).toEqual([{ navEpoch: 3, anchorId: 42, agentId: null }])
     expect(adopt).toHaveBeenCalledTimes(1)
   })
 
   test('🔴 切到另一件事：不复用 A 的在途创建，B 拿到的是 B 自己的会话', async () => {
     const creator = deferredCreator()
-    let identity = { navEpoch: 3, anchorId: 42 }
+    let identity = { navEpoch: 3, anchorId: 42, agentId: null }
     const ensure = createEnsureSession({
       getExistingSessionId: () => null,
       getIdentity: () => identity,
@@ -90,23 +94,52 @@ describe('createEnsureSession — 幂等 + 线程身份', () => {
     })
     const forA = ensure()
     // A 还没落地，用户点到事项 B。
-    identity = { navEpoch: 3, anchorId: 99 }
+    identity = { navEpoch: 3, anchorId: 99, agentId: null }
     const forB = ensure()
     expect(creator.calls).toEqual([
-      { navEpoch: 3, anchorId: 42 },
+      { navEpoch: 3, anchorId: 42, agentId: null },
       // B 必须发起自己的创建，且带的是 B 的 matterId —— 复用 A 的在途 promise 就会把 B 的检索
       // 范围审计记进 A 的会话。
-      { navEpoch: 3, anchorId: 99 }
+      { navEpoch: 3, anchorId: 99, agentId: null }
     ])
     creator.resolveAll(202)
     await expect(forA).rejects.toMatchObject({ code: E_CHAT_THREAD_CHANGED })
     expect(await forB).toBe(202)
   })
 
+  test('🔴 P4b 同 anchor 不同 agent：不复用别人的在途创建（切成员 = 换线程身份）', async () => {
+    const creator = deferredCreator()
+    const adopt = vi.fn()
+    let identity: { navEpoch: number; anchorId: number | null; agentId: string | null } = {
+      navEpoch: 3,
+      anchorId: null,
+      agentId: 'daily_email_digest'
+    }
+    const ensure = createEnsureSession({
+      getExistingSessionId: () => null,
+      getIdentity: () => identity,
+      createSession: creator.create,
+      adopt
+    })
+    const forA = ensure()
+    // A（日报）还没落地，用户切到成员 B（治理）。anchor 完全相同 —— 只有 agent 维度不同，
+    // 去重键漏掉 agentId 时这里会复用 A 的在途创建（B 的消息落进 A 身份的会话）。
+    identity = { navEpoch: 3, anchorId: null, agentId: 'contact_governance' }
+    const forB = ensure()
+    expect(creator.calls).toEqual([
+      { navEpoch: 3, anchorId: null, agentId: 'daily_email_digest' },
+      { navEpoch: 3, anchorId: null, agentId: 'contact_governance' }
+    ])
+    creator.resolveAll(707)
+    await expect(forA).rejects.toMatchObject({ code: E_CHAT_THREAD_CHANGED })
+    expect(await forB).toBe(707)
+    expect(adopt).toHaveBeenCalledTimes(1)
+  })
+
   test('🔴 已经切走 → 绝不 adopt（否则界面会被从 B 拽回 A），调用方按失败处理', async () => {
     const creator = deferredCreator()
     const adopt = vi.fn()
-    let identity = { navEpoch: 3, anchorId: 42 }
+    let identity = { navEpoch: 3, anchorId: 42, agentId: null }
     const ensure = createEnsureSession({
       getExistingSessionId: () => null,
       getIdentity: () => identity,
@@ -114,7 +147,7 @@ describe('createEnsureSession — 幂等 + 线程身份', () => {
       adopt
     })
     const pending = ensure()
-    identity = { navEpoch: 4, anchorId: null } // 换会话 / 新对话
+    identity = { navEpoch: 4, anchorId: null, agentId: null } // 换会话 / 新对话
     creator.resolveAll(303)
     await expect(pending).rejects.toMatchObject({ code: E_CHAT_THREAD_CHANGED })
     expect(adopt).not.toHaveBeenCalled()
@@ -123,7 +156,7 @@ describe('createEnsureSession — 幂等 + 线程身份', () => {
   test('切走那次失败后，回到同一条线程仍能正常再建一次（在途记录已复位）', async () => {
     const creator = deferredCreator()
     const adopt = vi.fn()
-    let identity = { navEpoch: 1, anchorId: 7 }
+    let identity = { navEpoch: 1, anchorId: 7, agentId: null }
     const ensure = createEnsureSession({
       getExistingSessionId: () => null,
       getIdentity: () => identity,
@@ -131,7 +164,7 @@ describe('createEnsureSession — 幂等 + 线程身份', () => {
       adopt
     })
     const stale = ensure()
-    identity = { navEpoch: 2, anchorId: 7 }
+    identity = { navEpoch: 2, anchorId: 7, agentId: null }
     creator.resolveAll(404)
     await expect(stale).rejects.toMatchObject({ code: E_CHAT_THREAD_CHANGED })
     const fresh = ensure()
@@ -146,7 +179,7 @@ describe('createEnsureSession — 幂等 + 线程身份', () => {
     let attempt = 0
     const ensure = createEnsureSession({
       getExistingSessionId: () => null,
-      getIdentity: () => ({ navEpoch: 0, anchorId: null }),
+      getIdentity: () => ({ navEpoch: 0, anchorId: null, agentId: null }),
       createSession: async () => {
         attempt += 1
         calls.push(attempt)

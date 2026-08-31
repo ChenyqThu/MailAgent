@@ -10,6 +10,7 @@ import { describe, expect, test, vi } from 'vitest'
 import {
   appendFeedbackLog,
   buildFeedbackBlockProperties,
+  feedbackUploadName,
   FEEDBACK_LOG_MAX,
   FEEDBACK_PROPERTY_IDS,
   FeedbackSubmitError,
@@ -67,26 +68,38 @@ describe('buildFeedbackBlockProperties', () => {
 // ── 提交（成功路径 + 附件三步） ───────────────────────────────────────────────
 
 /** 一个照 Notion 三个端点应答的假 fetch，记录每次调用。 */
-function fakeFetch(opts?: { submitStatus?: number; submitBody?: unknown; uploadStatus?: number }): {
+function fakeFetch(opts?: {
+  submitStatus?: number
+  submitBody?: unknown
+  uploadStatus?: number
+  /** 换签名 URL 这一步的应答（模拟 Notion 按扩展名拒收）。 */
+  metaFor?: (name: string) => { status: number; body: unknown } | undefined
+}): {
   impl: typeof fetch
   calls: { url: string; init?: RequestInit }[]
 } {
   const calls: { url: string; init?: RequestInit }[] = []
+  let tokenSeq = 0
   const impl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input)
     calls.push({ url, init })
     if (url.endsWith('/getFormUploadFileUrl')) {
+      const name = (JSON.parse(String(init?.body)) as { name: string }).name
+      const canned = opts?.metaFor?.(name)
+      if (canned) return new Response(JSON.stringify(canned.body), { status: canned.status })
       return new Response(
         JSON.stringify({
           signedPostUrl: 'https://s3.test/upload',
           fields: { key: 'k', policy: 'p' },
-          token: 'jwt-token'
+          token: `jwt-token${tokenSeq++ === 0 ? '' : `-${tokenSeq - 1}`}`
         }),
         { status: 200 }
       )
     }
     if (url === 'https://s3.test/upload') {
-      return new Response(null, { status: opts?.uploadStatus ?? 204 })
+      return new Response(opts?.uploadStatus === 204 || !opts?.uploadStatus ? null : 'boom', {
+        status: opts?.uploadStatus ?? 204
+      })
     }
     return new Response(JSON.stringify(opts?.submitBody ?? { submissionBlockId: 'blk-1' }), {
       status: opts?.submitStatus ?? 200
@@ -123,10 +136,7 @@ describe('submitFeedbackToNotion — 成功路径', () => {
     const shot = { name: 's.png', type: 'image/png', body: new Uint8Array([1, 2, 3]) }
 
     const withShot = fakeFetch()
-    await submitFeedbackToNotion(
-      { ...base, screenshot: shot },
-      { ...DEPS, fetchImpl: withShot.impl }
-    )
+    await submitFeedbackToNotion({ ...base, images: [shot] }, { ...DEPS, fetchImpl: withShot.impl })
     expect(submitBodyOf(withShot.calls).filePropertyIdToTokens).toEqual({
       [P.screenshot]: ['jwt-token']
     })
@@ -146,11 +156,117 @@ describe('submitFeedbackToNotion — 成功路径', () => {
     expect(submitBodyOf(calls).filePropertyIdToTokens).toEqual({ [P.diagnostics]: ['jwt-token'] })
   })
 
+  test('多张图 → 同一个 file property 挂多个 token（顺序与传入一致）', async () => {
+    const { impl, calls } = fakeFetch()
+    const img = (n: string) => ({ name: n, type: 'image/png', body: new Uint8Array([1]) })
+    await submitFeedbackToNotion(
+      { ...base, images: [img('a.png'), img('b.png')] },
+      { ...DEPS, fetchImpl: impl }
+    )
+    expect(calls.filter((c) => c.url.endsWith('/getFormUploadFileUrl'))).toHaveLength(2)
+    expect(submitBodyOf(calls).filePropertyIdToTokens).toEqual({
+      [P.screenshot]: ['jwt-token', 'jwt-token-1']
+    })
+  })
+
   test('建议类提交出去的 payload 里也没有复现频率（端到端，不是只测 builder）', async () => {
     const { impl, calls } = fakeFetch()
     await submitFeedbackToNotion({ ...base, kind: '建议' }, { ...DEPS, fetchImpl: impl })
     const props = submitBodyOf(calls).blockProperties as Record<string, unknown>
     expect(props[P.freq]).toEqual([])
+  })
+})
+
+// ── 🔴 诊断包的扩展名闸（08-31 dogfood：勾了诊断包必 400 的那个 bug） ────────────
+//
+// Notion 的表单上传按**扩展名**拦，`.zip` 恒 400 `Uploading .zip files is not allowed`
+// （2026-08-31 对着真端点实测，同一份内容改名就过）。P4a 只验过 PNG，所以这条路一直是坏的。
+
+describe('feedbackUploadName —— 被拦的扩展名再套一层 .txt', () => {
+  test('诊断包 .zip → .zip.txt', () => {
+    expect(feedbackUploadName('mailagent-diagnostics-20260831.zip')).toBe(
+      'mailagent-diagnostics-20260831.zip.txt'
+    )
+  })
+
+  test('实测同样被拦的几种一并处理', () => {
+    expect(feedbackUploadName('a.gz')).toBe('a.gz.txt')
+    expect(feedbackUploadName('a.7z')).toBe('a.7z.txt')
+    expect(feedbackUploadName('a.json')).toBe('a.json.txt')
+  })
+
+  test('放行的一个字都不改（图片是主力附件，改名反而会破坏预览）', () => {
+    expect(feedbackUploadName('shot.png')).toBe('shot.png')
+    expect(feedbackUploadName('a.JPG')).toBe('a.JPG')
+    expect(feedbackUploadName('log.txt')).toBe('log.txt')
+    expect(feedbackUploadName('noext')).toBe('noext')
+  })
+
+  test('大小写不敏感（.ZIP 也是 zip）', () => {
+    expect(feedbackUploadName('D.ZIP')).toBe('D.ZIP.txt')
+  })
+})
+
+describe('🔴 诊断包上传：报给 Notion 的名字必须已过闸', () => {
+  test('.zip 的诊断包上传时报的是 .zip.txt —— 否则真端点 400', async () => {
+    const { impl, calls } = fakeFetch()
+    await submitFeedbackToNotion(
+      {
+        ...base,
+        diagnostics: { name: 'diag.zip', type: 'application/zip', body: new Uint8Array(9) }
+      },
+      { ...DEPS, fetchImpl: impl }
+    )
+    const meta = calls.find((c) => c.url.endsWith('/getFormUploadFileUrl'))
+    const body = JSON.parse(String(meta?.init?.body)) as { name: string }
+    expect(body.name).toBe('diag.zip.txt')
+  })
+
+  test('把真端点的拒收形状原样回放：过了闸的名字才拿得到 token', async () => {
+    // metaFor 复刻实测行为 —— 只看扩展名，`.zip` 一律 400，别的放行。
+    const { impl } = fakeFetch({
+      metaFor: (name) =>
+        name.toLowerCase().endsWith('.zip')
+          ? {
+              status: 400,
+              body: {
+                isNotionError: true,
+                name: 'ValidationError',
+                debugMessage: 'Uploading .zip files is not allowed',
+                message: 'Something went wrong. (400)'
+              }
+            }
+          : undefined
+    })
+    const id = await submitFeedbackToNotion(
+      {
+        ...base,
+        diagnostics: { name: 'diag.zip', type: 'application/zip', body: new Uint8Array(9) }
+      },
+      { ...DEPS, fetchImpl: impl }
+    )
+    expect(id).toBe('blk-1')
+  })
+
+  test('🔴 上传失败时 Notion 说的原因要进 error.message（不然用户只看到 status 400）', async () => {
+    const { impl } = fakeFetch({
+      metaFor: () => ({
+        status: 400,
+        body: {
+          debugMessage: 'Uploading .bin files is not allowed',
+          message: 'Something went wrong. (400)'
+        }
+      })
+    })
+    await expect(
+      submitFeedbackToNotion(
+        {
+          ...base,
+          images: [{ name: 'x.bin', type: 'application/octet-stream', body: new Uint8Array(1) }]
+        },
+        { ...DEPS, fetchImpl: impl }
+      )
+    ).rejects.toThrow(/Uploading \.bin files is not allowed/)
   })
 })
 
@@ -190,7 +306,7 @@ describe('submitFeedbackToNotion — 失败一律抛', () => {
     const { impl, calls } = fakeFetch({ uploadStatus: 200 })
     const shot = { name: 's.png', type: 'image/png', body: new Uint8Array([1]) }
     await expect(
-      submitFeedbackToNotion({ ...base, screenshot: shot }, { ...DEPS, fetchImpl: impl })
+      submitFeedbackToNotion({ ...base, images: [shot] }, { ...DEPS, fetchImpl: impl })
     ).rejects.toMatchObject({ stage: 'upload' })
     expect(calls.some((c) => c.url.endsWith('/submitForm'))).toBe(false)
   })
