@@ -3131,18 +3131,19 @@ body:not([data-batch-mode='true']) .email-row .cb {
 }
 
 /* event block (timeline)
- * P5 三源语言 — 着色从 --c-accent 换 --src (wash 底 + 实色左缘, 月视图同族):
- * timeline 块只承载 mail 源 (data-src mail/hot), matter/agent 走 .evt-mark。 */
+ * P5 三源语言 — 着色从 --c-accent 换 --src (wash 底, 月视图同族):
+ * timeline 块只承载 mail 源 (data-src mail/hot), matter/agent 走 .evt-mark。
+ * F24 — 边框造型对齐 .m-evt: 去掉 border + border-left 实色左缘, 圆角与底色
+ * wash 量级同月视图 (owner 三轮反馈的根因是这层从未被列进验收范围, 见 r9)。 */
 .evt {
   --src: var(--cal-src-mail);
   position: absolute;
-  border-radius: 6px;
+  border-radius: 5px;
   padding: 4px 7px;
   overflow: hidden;
   cursor: pointer;
-  background: rgb(var(--src) / 0.14);
-  border: 1px solid rgb(var(--src) / 0.28);
-  border-left: 3px solid rgb(var(--src));
+  background: rgb(var(--src) / 0.15);
+  border: 0;
   /* F8 — 散装 0.12s/0.08s 收编 fast(120ms) + standard 曲线 */
   transition:
     background 120ms cubic-bezier(0.4, 0, 0.2, 1),
@@ -3184,39 +3185,38 @@ body:not([data-batch-mode='true']) .email-row .cb {
 }
 .evt.is-selected {
   background: rgb(var(--src) / 0.26);
-  box-shadow: 0 0 0 2px rgb(var(--c-accent) / 0.5);
+  box-shadow: 0 0 0 1.5px rgb(var(--c-accent) / 0.5);
   z-index: 6;
 }
-/* F3 (阶段2·2.6) — 状态形态化: 斜纹=暂定 / 空心=待回复 / 删除线+中性灰=拒绝
+/* F3 (阶段2·2.6) — 状态形态化: 斜纹=暂定 / 内环=待回复 / 删除线+中性灰=拒绝
  * 与取消。这些规则后置于 :hover/.is-selected → 状态底纹压过两者的 background,
  * 形态不被洗掉; 选中可辨恒由 .is-selected 的 accent ring (box-shadow) 承担,
  * hover 反馈由各状态的 :hover 变体补回。暂定/待回复取 --src (源色形态化),
- * 拒绝/取消维持中性 --c-norm / --c-low。 */
+ * 拒绝/取消维持中性 --c-norm / --c-low。
+ * F24 — 待回复从「真实 border + 透明底」换成 inset 环 + wash 底（.m-band /
+ * .ag-row 同款手法，index.css:3476-3479 / :3885-3890 参照）；透明底正是 owner
+ * 看到「白底粗框」的来源，wash 底不能丢。暂定斜纹透明度量级对齐 .m-band。 */
 .evt[data-resp='TENTATIVE'] {
   background: repeating-linear-gradient(
     135deg,
-    rgb(var(--src) / 0.2) 0 3px,
-    rgb(var(--src) / 0.05) 3px 7px
-  );
-  border-style: dashed;
-}
-.evt[data-resp='TENTATIVE']:hover {
-  background: repeating-linear-gradient(
-    135deg,
-    rgb(var(--src) / 0.28) 0 3px,
-    rgb(var(--src) / 0.1) 3px 7px
+    rgb(var(--src) / 0.4) 0 3px,
+    rgb(var(--src) / 0.12) 3px 7px
   );
 }
 .evt[data-resp='NEEDS-ACTION'] {
-  border: 1.5px solid rgb(var(--src));
-  border-left-width: 3px;
-  background: transparent;
+  background: rgb(var(--src) / 0.15);
+  box-shadow: inset 0 0 0 1px rgb(var(--src));
 }
-.evt[data-resp='NEEDS-ACTION']:hover { background: rgb(var(--src) / 0.08); }
+.evt[data-resp='NEEDS-ACTION']:hover { background: rgb(var(--src) / 0.22); }
+/* NEEDS-ACTION 与选中态都要用 box-shadow（前者 inset 环，后者 accent 环），
+ * 同特异性时后声明的会整体覆盖对方 —— 叠满两个 shadow 保住选中可辨。 */
+.evt.is-selected[data-resp='NEEDS-ACTION'] {
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--src)),
+    0 0 0 1.5px rgb(var(--c-accent) / 0.5);
+}
 .evt[data-resp='DECLINED'] {
   background: rgb(var(--c-norm) / 0.1);
-  border-color: rgb(var(--c-norm) / 0.3);
-  border-left-color: rgb(var(--c-norm));
 }
 .evt[data-resp='DECLINED']:hover { background: rgb(var(--c-norm) / 0.18); }
 .evt[data-resp='DECLINED'] .e-time { color: rgb(var(--c-norm)); }
@@ -3226,8 +3226,6 @@ body:not([data-batch-mode='true']) .email-row .cb {
 }
 .evt[data-status='CANCELLED'] {
   background: rgb(var(--c-low) / 0.06);
-  border-color: rgb(var(--c-low) / 0.22);
-  border-left-color: rgb(var(--c-low) / 0.55);
 }
 .evt[data-status='CANCELLED']:hover { background: rgb(var(--c-low) / 0.12); }
 .evt[data-status='CANCELLED'] .e-time { color: rgb(var(--c-low)); }
