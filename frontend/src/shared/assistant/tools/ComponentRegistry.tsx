@@ -26,6 +26,7 @@ import { SkillPublishCard } from './generic/SkillPublishCard'
 import { CustomAgentApprovalCard } from './generic/CustomAgentApprovalCard'
 import { CustomAgentCallCard } from './generic/CustomAgentCallCard'
 import { SimpleApprovalCard } from './generic/SimpleApprovalCard'
+import { FeedbackApprovalCard } from './generic/FeedbackApprovalCard'
 import { CalendarApprovalCard } from './calendar/CalendarApprovalCard'
 import { MatterWriteCard } from './matters/MatterWriteCard'
 
@@ -217,5 +218,12 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
       'matter_suggestion_resolve'
     ],
     render: MatterWriteCard
+  },
+  // task 08-27 P4a — submit_feedback。恒 HITL 的对外发送，卡上三个按钮（改一改 / 不发 /
+  // 发送）：「改一改」走 resolve 侧信道改 kind/title/detail/freq，改完发的是改后的 payload。
+  {
+    component: A2UI_COMPONENTS.FeedbackApprovalCard,
+    toolNames: ['submit_feedback'],
+    render: FeedbackApprovalCard
   }
 ])

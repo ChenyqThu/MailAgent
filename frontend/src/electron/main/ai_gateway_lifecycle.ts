@@ -99,6 +99,7 @@ import {
   updateToolCall
 } from './chat_db'
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from './llm_settings'
+import { runBuildDiagnostics, runSubmitFeedback } from './handlers/feedback'
 import { resolveApiPort } from './backend_lifecycle'
 import { getLocalApiToken } from './local_token'
 // task 08-20-notification-center M2 批 B4 — chat run 完成 → 通知中心 loopback publish。
@@ -1296,6 +1297,24 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           calendarToolsEnabled,
           // task 07-21 — notion-agent tool (MAILAGENT_NOTION_AGENT_TOOL, default on; skill-gated).
           notionAgentToolsEnabled,
+          // task 08-27 P4a — submit_feedback 的提交实现。诊断包在**批准之后**才组装（约 1
+          // 分钟，弹卡时不该先花掉），截图恒无（agent 截不了图）。
+          submitFeedback: async (input) => {
+            let diagnosticsPath: string | undefined
+            if (input.attach_diagnostics === true) {
+              const diag = await runBuildDiagnostics()
+              diagnosticsPath = diag.path
+            }
+            return runSubmitFeedback({
+              kind: input.kind,
+              title: input.title,
+              detail: input.detail,
+              freq: input.freq,
+              email: input.email,
+              diagnosticsPath,
+              viaAgent: true
+            })
+          },
           // S5 W3 — conversational custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED, the same
           // flag that gates the S4 headless kernel; default off → byte-identical to the S4 set).
           customAgentToolsEnabled: customAgentsEnabled,

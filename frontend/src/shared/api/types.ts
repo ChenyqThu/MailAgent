@@ -275,4 +275,10 @@ export type {
   ChatOpennessFlags,
   ReportApi
 } from './types/report'
+export type {
+  FeedbackApi,
+  FeedbackDiagnostics,
+  FeedbackScreenshot,
+  FeedbackSubmitOpts
+} from './types/feedback'
 export type { MailApi } from './types/mail-api'

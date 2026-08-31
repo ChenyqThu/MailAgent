@@ -144,7 +144,13 @@ export const A2UI_COMPONENTS = {
   // part to SimpleApprovalCard (D7 identity-level approval — otherwise these edit-tier writes hit
   // the buttonless ToolTraceCard spinner) and a completed one to the write receipt + undo inside
   // the Matter Chat panel (D9).
-  MatterWriteCard: 'MatterWriteCard'
+  MatterWriteCard: 'MatterWriteCard',
+  // task 08-27 P4a — submit_feedback 的审批卡（edit tier + class outbound + 恒 HITL）。
+  // 与 SimpleApprovalCard / MatterWriteCard 同为**只做 ComponentRegistry key**：
+  // `componentForTool` 对它返回 null（不落 audited ui_payload），卡自己读 tool part 的 args。
+  // 三个按钮里的「改一改」走 04a 的 resolve 侧信道（SendApprovalCard 先例）—— agent 整理的
+  // 措辞未必对，只有「发 / 不发」两档不够用。
+  FeedbackApprovalCard: 'FeedbackApprovalCard'
 } as const
 
 /** Which A2UI component renders a given gateway write tool. Unknown / read tools → null

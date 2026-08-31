@@ -47,6 +47,7 @@ import { CommandPalette } from './components/command/CommandPalette'
 import { GlobalShortcuts } from './components/keyboard/GlobalShortcuts'
 import { KeyboardHelpModal } from './components/keyboard/KeyboardHelpModal'
 import { ComposeNewModal } from './components/email/compose/ComposeNewModal'
+import { FeedbackDialog } from './components/feedback/FeedbackDialog'
 import { useMatterNavigation } from './components/matters/navigation'
 // task 08-20-notification-center M2 批 B4 — 系统通知点击深跳：main 的通知 fanout 经
 // 'notifications:navigate' 送来通知行 payload，这里用**单源解析器**收窄（不另抄判据）。
@@ -245,6 +246,8 @@ function RootLayout(): React.ReactElement {
       <CommandPalette />
       {/* 写新邮件居中模态 — 全局单实例, 由列表头「写邮件」CTA / ⌘N 打开。 */}
       <ComposeNewModal />
+      {/* 快捷反馈弹窗 — 全局单实例, 入口在设置域二级栏底部 (task 08-27 P4a)。 */}
+      <FeedbackDialog />
       {PopmenuShowcaseMount !== null && (
         <Suspense fallback={null}>
           <PopmenuShowcaseMount />

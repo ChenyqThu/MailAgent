@@ -72,6 +72,10 @@ function buildAllTools() {
     // skill-gated (GATEWAY_SKILL_TOOLS notion_agent), so the FORWARD/REVERSE drift guards need it
     // built here to see it classified.
     notionAgentToolsEnabled: true,
+    // task 08-27 P4a — submit_feedback（第三个 'outbound' 行）。没有 *Enabled flag：给了
+    // 提交实现才注册，所以 FULL-set 的 drift guard 要在这里把它接上，否则「classified 但不是
+    // 真工具」会红。
+    submitFeedback: async () => ({ submissionBlockId: 'blk-test' }),
     // Matters MVP P3/P4 — the default matter family. 🔴 P3 landed the nine
     // tools WITHOUT adding them here, which is exactly why the FORWARD guard below never noticed
     // that they were also missing from CORE_UNGATED_GATEWAY_TOOLS: two holes cancelling out. P4
@@ -305,6 +309,8 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
       calendarToolsEnabled: true,
       // WP7 — the contact family is CORE_UNGATED, so this probe must build it too or the floor
       // sweep below would assert nine tools it never asked for.
+      // task 08-27 P4a — submit_feedback 同理（CORE_UNGATED，registration 条件是「给了提交实现」）。
+      submitFeedback: async () => ({ submissionBlockId: 'blk-test' }),
       contextMode: 'manual_chat', // manual probe isolates the mount gate from the mode floor
       agentRunContext: { agentId: 'dms', skills: [] }
     })

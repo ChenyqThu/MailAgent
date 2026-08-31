@@ -68,6 +68,9 @@ export const qk = {
   // 'chat' — session list + per-session messages + /chat/config flag probes.
   chat: {
     allSessions: () => ['chat', 'allSessions'] as const,
+    // P4a 团队页 — origin='agent' 会话清单。🔴 尾段 'agent' 与 ChatsTab 内联组合的
+    // `[...qk.chat.allSessions(), 'agent']` 字面量一致（共享缓存），别改任何一段。
+    agentOriginSessions: () => ['chat', 'allSessions', 'agent'] as const,
     agentUnread: () => ['chat', 'agentUnread'] as const,
     messages: (sessionId: string | number) => ['chat', 'messages', sessionId] as const,
     /** L4 批次3 — 一条行动项名下的会话（执行历史反查，`GET /chat/sessions/all?itemId=`）。
@@ -206,11 +209,21 @@ export const qk = {
     // codex MEDIUM-2 — per-agent latest report (agentId filter + limit:1), independent of the
     // paginated list first page so a low-frequency agent's card never falsely shows "no report".
     latest: (agentId: string) => ['report', 'latest', agentId] as const,
+    // P4a 团队页 — 某报告 agent 的最近 N 份（记录列时间线数据源）。挂在 ['report','list']
+    // 前缀下：runNow / delete 的 LIST_KEY invalidate 顺带刷新它。
+    listByAgent: (agentId: string, limit: number) =>
+      ['report', 'list', 'by-agent', agentId, limit] as const,
     config: () => ['report', 'config'] as const,
     get: (reportId: string | null) => ['report', 'get', reportId] as const
   },
 
   projectProgressRuns: (limit: number) => ['project-progress-runs', limit] as const,
+
+  // P4a 团队页 — AI 邮件预处理的「最近被分类的邮件」清单（listEnriched 投影，
+  // llm_processing 无 per-run 概念，执行面按邮件逐封列）。
+  team: {
+    preprocessRecent: (limit: number) => ['team', 'preprocess-recent', limit] as const
+  },
 
   // 08-01 PR4 — MCP connector 设置面。`connectorTools` 挂在 `connectors` 前缀下：连接/断开/
   // sync 之后 invalidate `['connectors']` 一处，工具清单跟着刷（TanStack 前缀匹配）。

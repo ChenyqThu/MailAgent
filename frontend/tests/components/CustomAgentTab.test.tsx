@@ -97,6 +97,8 @@ import {
   CustomAgentDrawer,
   RunStateBadge
 } from '../../src/shared/components/agents/CustomAgentDrawer'
+// P4a：run 历史从配置抽屉移走（归记录列），徽标/run-now 语义闸改为直接钉组件本体。
+import { RunHistorySection } from '../../src/shared/components/agents/custom-agent/RunHistorySection'
 import type { AgentRunState, ReportAgentConfig } from '@shared/api/types'
 import zhCommon from '../../src/shared/i18n/locales/zh-CN/common.json'
 import enCommon from '../../src/shared/i18n/locales/en-US/common.json'
@@ -395,7 +397,7 @@ describe('CustomAgentDrawer — 新建（两段式）', () => {
     renderUi(<CustomAgentDrawer cfg={cfg} open onClose={() => {}} />)
 
     expect(
-      (await screen.findByPlaceholderText('线程 ID（可留空，逗号分隔）') as HTMLInputElement)
+      ((await screen.findByPlaceholderText('线程 ID（可留空，逗号分隔）')) as HTMLInputElement)
         .value
     ).toBe('thread-123')
   })
@@ -623,7 +625,7 @@ describe('CustomAgentDrawer — 新建（两段式）', () => {
         onClose={() => {}}
       />
     )
-    expect((await screen.findByLabelText('提前时间') as HTMLInputElement).value).toBe('1')
+    expect(((await screen.findByLabelText('提前时间')) as HTMLInputElement).value).toBe('1')
     expect(screen.getByText('天')).toBeTruthy()
   })
 
@@ -720,8 +722,12 @@ describe('CustomAgentDrawer — 新建（两段式）', () => {
       />
     )
     await screen.findByText('添加 Trigger')
-    expect((screen.getByPlaceholderText('如 DMS 审批助手') as HTMLInputElement).value).toBe('跟进：采购审批')
-    expect((screen.getByPlaceholderText('线程 ID（可留空，逗号分隔）') as HTMLInputElement).value).toBe('thread-123')
+    expect((screen.getByPlaceholderText('如 DMS 审批助手') as HTMLInputElement).value).toBe(
+      '跟进：采购审批'
+    )
+    expect(
+      (screen.getByPlaceholderText('线程 ID（可留空，逗号分隔）') as HTMLInputElement).value
+    ).toBe('thread-123')
   })
 
   test('字段在场：title / prompt / trigger seg / time budget', async () => {
@@ -1180,7 +1186,13 @@ describe('CustomAgentDrawer — P2 tool_policy 按需发送（NULL 行不被静�
   })
 })
 
-describe('CustomAgentDrawer — run 历史', () => {
+describe('RunHistorySection — run 历史（P4a 起不再进配置抽屉，组件归记录列消费）', () => {
+  test('🔴 配置抽屉不再渲染 run 历史（判据 6：运行记录归记录列）', () => {
+    mockListRuns.mockResolvedValue({ items: [], total: 0 })
+    renderUi(<CustomAgentDrawer cfg={makeCustomCfg()} open onClose={() => {}} />)
+    expect(screen.queryByText('立即运行')).toBeNull()
+  })
+
   test('run-now 按钮走 type:custom；paused_pending 显「等待审批」不显「已完成」', async () => {
     mockListRuns.mockResolvedValue({
       items: [
@@ -1189,7 +1201,7 @@ describe('CustomAgentDrawer — run 历史', () => {
       total: 1
     })
     mockRunNow.mockResolvedValue({ report_id: '9', status: 'generating', headline: '' })
-    renderUi(<CustomAgentDrawer cfg={makeCustomCfg()} open onClose={() => {}} />)
+    renderUi(<RunHistorySection agentId="dms_helper" />)
     // 徽标：等待审批（永不渲染为成功）
     expect(await screen.findByText('等待审批')).toBeTruthy()
     expect(screen.queryByText('已完成')).toBeNull()
@@ -1390,7 +1402,7 @@ describe('CustomAgentDrawer — 自动化策略（S5 W5b）', () => {
       ],
       total: 2
     })
-    renderUi(<CustomAgentDrawer cfg={makeCustomCfg()} open onClose={() => {}} />)
+    renderUi(<RunHistorySection agentId="dms_helper" />)
     expect(await screen.findByText('自动放行 ×2')).toBeTruthy()
     // null 行不渲染 badge（不渲染 ≠ 0 次）—— 全列表恰一个 badge
     expect(screen.getAllByText(/自动放行/)).toHaveLength(1)
@@ -1781,38 +1793,46 @@ describe('P9 Agent Plugins UI', () => {
     global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/report-agents/import') && init?.method === 'POST') {
-        return new Response(JSON.stringify({
+        return new Response(
+          JSON.stringify({
+            status: 'success',
+            schema_version: 1,
+            data: {
+              agent: cfg,
+              enabled_forced_off: true,
+              unmet_dependencies: [
+                { type: 'skill', ref: 'calendar' },
+                { type: 'connector', ref: 'caldav' }
+              ]
+            }
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      }
+      return new Response(
+        JSON.stringify({
           status: 'success',
           schema_version: 1,
           data: {
-            agent: cfg,
-            enabled_forced_off: true,
-            unmet_dependencies: [
-              { type: 'skill', ref: 'calendar' },
-              { type: 'connector', ref: 'caldav' }
-            ]
+            customAgentsEnabled: true,
+            agentPluginsEnabled: true,
+            calendarTriggerEnabled: true,
+            triggerV2Enabled: true,
+            connectorToolsEnabled: true,
+            webToolsEnabled: true,
+            execToolsEnabled: true
           }
-        }), { status: 200, headers: { 'content-type': 'application/json' } })
-      }
-      return new Response(JSON.stringify({
-        status: 'success',
-        schema_version: 1,
-        data: {
-          customAgentsEnabled: true,
-          agentPluginsEnabled: true,
-          calendarTriggerEnabled: true,
-          triggerV2Enabled: true,
-          connectorToolsEnabled: true,
-          webToolsEnabled: true,
-          execToolsEnabled: true
-        }
-      }), { status: 200, headers: { 'content-type': 'application/json' } })
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      )
     }) as typeof fetch
 
     renderUi(<AgentsTab onOpenReports={() => {}} />)
     fireEvent.click(await screen.findByText('用模板创建：会前准备'))
     expect(await screen.findByText(/未满足依赖：skill: calendar, connector: caldav/)).toBeTruthy()
-    const importCall = vi.mocked(global.fetch).mock.calls.find(([input]) => String(input).endsWith('/report-agents/import'))
+    const importCall = vi
+      .mocked(global.fetch)
+      .mock.calls.find(([input]) => String(input).endsWith('/report-agents/import'))
     expect(importCall?.[1]).toMatchObject({
       method: 'POST',
       credentials: 'include',

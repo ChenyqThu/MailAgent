@@ -3,9 +3,9 @@
 //   · mail / chats 转 'page' 域（列表列由页面自己出），本组件不再渲染邮件
 //     MAILBOXES / 文件夹树 / compose CTA / 账户 popover / agents tab 行；
 //   · today 域 = 当天五节跳转（TodayNavPanel）；calendar 域 = 分组日历树
-//     （CalendarSourcePanel）；agents（团队）域 = 简版智能体清单（TeamNavPanel，
-//     P1 过渡档，见 NAV_DOMAINS.agents 注释）；ops / settings 仍是 registry 投影行
-//     （P3 起 reports 也转 'page'：报告清单列就是它的二级栏）。
+//     （CalendarSourcePanel）；ops / settings 仍是 registry 投影行
+//     （P3 起 reports 也转 'page'：报告清单列就是它的二级栏；P4a 起 agents（团队）
+//     也转 'page'：TeamWorkspace 自管清单列，过渡的 TeamNavPanel 已退役）。
 //
 // 08-27 dogfood 修正批：折叠能力整体移除 —— 面板恒在、恒 336，域头只剩域名。
 //
@@ -15,6 +15,7 @@
 import { cloneElement, isValidElement, useState } from 'react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
+import { ExternalLink, MessageSquarePlus } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { AnimatedIconActiveProvider } from '@shared/components/icons'
@@ -31,9 +32,11 @@ import {
 import { useUpdaterStore } from '@shared/state/updater'
 import { clampSettingsTab, SETTINGS_TABS, type SettingsTab } from '@shared/lib/settingsTabs'
 import { useMattersEnabled } from '@shared/components/matters/hooks'
-import { TeamNavPanel } from '@shared/components/agents/TeamNavPanel'
 import { CalendarSourcePanel } from '@shared/components/calendar/CalendarSourcePanel'
 import { TodayNavPanel } from '@shared/components/today/TodayNavPanel'
+import { FEEDBACK_BOARD_URL } from '@shared/feedback/contract'
+import { useFeedbackStore } from '@shared/state/feedback'
+import { useMailApi } from '@shared/hooks/useMailApi'
 
 import { SETTINGS_TAB_ICON, settingsTabLabelKey } from '../settings/settingsTabMeta'
 
@@ -139,6 +142,9 @@ export function DomainPanel({
   })
   const mattersEnabled = useMattersEnabled()
   const appVersion = useUpdaterStore((s) => s.status.currentVersion)
+  const openFeedback = useFeedbackStore((s) => s.openDialog)
+  // 反馈是 Electron-only 面（截图 / 诊断包 / 绕 CSP 提交）—— 远程 web 不出这两行。
+  const feedbackAvailable = useMailApi().feedback != null
 
   const rows = navDomainPanelEntries(entries, domain)
 
@@ -189,8 +195,6 @@ export function DomainPanel({
           <TodayNavPanel />
         ) : domain === 'calendar' ? (
           <CalendarSourcePanel />
-        ) : domain === 'agents' ? (
-          <TeamNavPanel />
         ) : (
           <nav className="flex-1 overflow-y-auto scrollbar-thin px-1.5 pb-2 pt-1.5 space-y-px">
             {domain === 'settings'
@@ -201,12 +205,39 @@ export function DomainPanel({
           </nav>
         )}
 
-        {/* 设置域 footer（版本 + repo）—— 随节导航从设置页内嵌 rail 迁入。 */}
+        {/* 设置域 footer（反馈两行 + 版本 + repo）—— 随节导航从设置页内嵌 rail 迁入。
+            🔴 反馈入口在**二级栏底部**而不是内容区底部：内容区底部属于当前那个 tab，切一下
+            就没了；这里是与 12 个 tab 无关的常驻位（task 08-27 P4a）。也不动导轨底部的
+            同步状态点 —— 那是另一件事。 */}
         {domain === 'settings' && (
           <div className="shrink-0 border-t border-ink-border-soft px-3 py-3 text-micro font-mono text-ink-fg-2">
+            {feedbackAvailable && (
+              <div className="mb-2 space-y-px font-sans">
+                <NavRow
+                  icon={<MessageSquarePlus size={15} strokeWidth={1.75} />}
+                  label={t('feedback.entry.send')}
+                  onClick={openFeedback}
+                />
+                <NavRow
+                  icon={<ExternalLink size={15} strokeWidth={1.75} />}
+                  label={t('feedback.entry.view')}
+                  onClick={() => {
+                    // 只读看板，浏览器打开就好（嵌 iframe 既要放 CSP 又没收益）。
+                    window.open(FEEDBACK_BOARD_URL, '_blank', 'noopener,noreferrer')
+                  }}
+                  right={<span className="text-micro text-ink-fg-3">Notion</span>}
+                />
+              </div>
+            )}
             <div className="flex items-center justify-between">
               <span>version</span>
-              <span>v{appVersion}</span>
+              <button
+                type="button"
+                onClick={() => navigateToSettingsTab(navigate, 'island')}
+                className="hover:text-coral transition-colors duration-fast"
+              >
+                v{appVersion}
+              </button>
             </div>
             <div className="flex items-center justify-between">
               <span>repo</span>

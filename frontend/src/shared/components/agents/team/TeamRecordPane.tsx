@@ -1,0 +1,395 @@
+// task 08-27 P4a（lane team-shell）— 记录面壳：左记录列（216px，可收起成 18px 把手）
+// + 右详情。能对话与不能对话共用同一个壳（design §8.1），差别只有两处：
+//   • 能对话的顶部有「新对话」，默认落新会话（P4b 写侧未通 → composer 禁用 + 说明）；
+//   • 不能对话的没有「新建」，默认落最新一条执行，且顶部写明为什么不接对话。
+//
+// 🔴 记录列是一条时间线：会话与执行按时间倒序穿插（mergeMemberTimeline），不按来源分块。
+// 组件用 `key={member.key}` 挂载（TeamWorkspace 侧）——换成员时选中态自然重置。
+
+import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
+import { ChevronLeft, ChevronRight, MessageSquarePlus, Zap } from 'lucide-react'
+
+import type { AgentRunState, EnrichedEmailMeta } from '@shared/api/types'
+import { cn } from '@shared/lib/cn'
+
+import {
+  useAgentOriginSessions,
+  useAgentReports,
+  useAgentRuns,
+  useProjectProgressRuns,
+  useRecentPreprocessedEmails
+} from '../hooks'
+import type { TeamMember } from './teamMembers'
+import { mergeMemberTimeline, type TeamRecordEntry } from './teamTimeline'
+import {
+  PendingComposerBar,
+  TeamPreprocessDetail,
+  TeamProgressDetail,
+  TeamReportDetail,
+  TeamRunStatsDetail,
+  TeamRunTranscript,
+  TeamSessionDetail
+} from './TeamRecordDetail'
+
+const RECORD_COL_WIDTH = 216
+const HANDLE_WIDTH = 18
+const NEW_KEY = 'new'
+
+// run 9 值域 → 状态点色（label 语义单源仍是 RunStateBadge；这里只管点色，满足穷举
+// —— satisfies 让新增状态在这里编译红，防漏兜）。
+const RUN_DOT = {
+  queued: 'bg-info',
+  running: 'bg-info animate-pulse',
+  completed: 'bg-ok',
+  skipped: 'bg-ink-fg/30',
+  paused_pending: 'bg-warn',
+  paused_expired: 'bg-ink-fg/30',
+  paused_approved: 'bg-ok',
+  paused_rejected: 'bg-fail',
+  failed: 'bg-fail'
+} satisfies Record<AgentRunState, string>
+
+function relTime(epochMsValue: number, t: TFunction): string {
+  const diff = Date.now() - epochMsValue
+  if (diff < 60_000) return t('chat.sidebar.justNow')
+  if (diff < 3_600_000) return t('chat.sidebar.minutesAgo', { n: Math.floor(diff / 60_000) })
+  if (diff < 86_400_000) return t('chat.sidebar.hoursAgo', { n: Math.floor(diff / 3_600_000) })
+  return t('chat.sidebar.daysAgo', { n: Math.floor(diff / 86_400_000) })
+}
+
+interface RecordRow {
+  key: string
+  title: string
+  at: number
+  auto: boolean
+  dot: string
+}
+
+function entryRow(entry: TeamRecordEntry, t: TFunction): RecordRow {
+  switch (entry.kind) {
+    case 'run':
+      return {
+        key: entry.key,
+        title: entry.run.summary?.trim() || t('team.record.runUntitled'),
+        at: entry.at,
+        auto: entry.auto,
+        dot: RUN_DOT[entry.run.state]
+      }
+    case 'session':
+      return {
+        key: entry.key,
+        title:
+          entry.session.title?.trim() ||
+          entry.session.email_subject?.trim() ||
+          entry.session.first_user_message?.trim() ||
+          t('sessions.untitled'),
+        at: entry.at,
+        auto: entry.auto,
+        dot: 'bg-coral/100'
+      }
+    case 'report':
+      return {
+        key: entry.key,
+        title: entry.report.headline?.trim() || entry.report.report_date,
+        at: entry.at,
+        auto: entry.auto,
+        dot:
+          entry.report.status === 'ready'
+            ? 'bg-ok'
+            : entry.report.status === 'failed'
+              ? 'bg-fail'
+              : entry.report.status === 'generating'
+                ? 'bg-info animate-pulse'
+                : 'bg-ink-fg/30'
+      }
+    case 'progress':
+      return {
+        key: entry.key,
+        title:
+          entry.progress.subject?.trim() ||
+          entry.progress.weekTag?.trim() ||
+          entry.progress.filename?.trim() ||
+          t('team.record.runUntitled'),
+        at: entry.at,
+        auto: entry.auto,
+        dot:
+          entry.progress.status === 'completed'
+            ? 'bg-ok'
+            : entry.progress.status === 'failed'
+              ? 'bg-fail'
+              : entry.progress.status === 'processing'
+                ? 'bg-info animate-pulse'
+                : 'bg-ink-fg/30'
+      }
+  }
+}
+
+function emailRow(email: EnrichedEmailMeta): RecordRow {
+  const at = email.date_received != null ? new Date(email.date_received).getTime() : NaN
+  return {
+    key: `email:${email.internal_id}`,
+    title: email.subject || String(email.internal_id),
+    at: Number.isNaN(at) ? 0 : at,
+    auto: true,
+    dot: 'bg-ok'
+  }
+}
+
+function RecordRowButton({
+  row,
+  selected,
+  onSelect,
+  t
+}: {
+  row: RecordRow
+  selected: boolean
+  onSelect: () => void
+  t: TFunction
+}): React.ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      data-record-row={row.key}
+      className={cn(
+        'relative w-full rounded-md border px-2 py-1.5 text-left transition-colors duration-fast',
+        selected
+          ? 'border-[var(--hairline-strong)] bg-ink-fg/[0.07]'
+          : 'border-transparent hover:bg-ink-fg/[0.03]'
+      )}
+    >
+      <div className="flex items-center gap-1.5">
+        <span className={cn('size-1.5 shrink-0 rounded-full', row.dot)} />
+        <span className="min-w-0 flex-1 truncate text-meta text-ink-fg" title={row.title}>
+          {row.title}
+        </span>
+      </div>
+      <div className="mt-0.5 flex items-center gap-1.5 pl-3 font-mono text-micro text-ink-fg-3">
+        {row.auto && (
+          <span className="inline-flex items-center gap-0.5 text-ai" data-auto-badge>
+            <Zap size={9} strokeWidth={2} />
+            {t('team.record.auto')}
+          </span>
+        )}
+        <span>{relTime(row.at, t)}</span>
+      </div>
+    </button>
+  )
+}
+
+/** 「新会话」默认落点（能对话的成员）：写侧未通（P4b），composer 禁用 + 历史照读。 */
+function NewSessionView({ memberTitle }: { memberTitle: string }): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <div className="flex min-h-0 flex-1 flex-col" data-team-new-session>
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
+        <h3 className="text-body font-semibold text-ink-fg">
+          {t('team.record.newSessionTitle', { name: memberTitle })}
+        </h3>
+        <p className="max-w-[26rem] text-meta leading-relaxed text-ink-fg-3">
+          {t('team.record.newSessionHint')}
+        </p>
+      </div>
+      <PendingComposerBar />
+    </div>
+  )
+}
+
+export function TeamRecordPane({
+  member,
+  memberTitle,
+  collapsed,
+  onToggleCollapsed,
+  forcedCollapsed
+}: {
+  member: TeamMember
+  memberTitle: string
+  collapsed: boolean
+  onToggleCollapsed: () => void
+  /** 窄窗强制收起（判据与二级栏 forcedCollapsed 同构：留给详情的宽度不够时列让位）。 */
+  forcedCollapsed: boolean
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const source = member.recordSource
+  const agentId = member.ref.kind === 'agent' ? member.ref.agentId : null
+
+  // 数据源按 recordSource 门控（enabled=false 的 hook 不发请求）。
+  const wantsTimeline = source === 'runs' || source === 'runs-no-transcript' || source === 'report'
+  const { sessions } = useAgentOriginSessions(wantsTimeline)
+  const { runs } = useAgentRuns(
+    source === 'runs' || source === 'runs-no-transcript' ? agentId : null
+  )
+  const { reports } = useAgentReports(source === 'report' ? agentId : null)
+  const { runs: progressRuns } = useProjectProgressRuns(source === 'progress')
+  const { emails } = useRecentPreprocessedEmails(source === 'preprocess')
+
+  const entries = useMemo(
+    () =>
+      source === 'preprocess' || agentId == null
+        ? []
+        : mergeMemberTimeline({
+            agentId,
+            sessions: wantsTimeline ? sessions : [],
+            runs: source === 'runs' || source === 'runs-no-transcript' ? runs : [],
+            reports: source === 'report' ? reports : [],
+            progressRuns: source === 'progress' ? progressRuns : []
+          }),
+    [source, agentId, wantsTimeline, sessions, runs, reports, progressRuns]
+  )
+
+  const rows = useMemo(
+    () =>
+      source === 'preprocess' ? emails.map(emailRow) : entries.map((entry) => entryRow(entry, t)),
+    [source, emails, entries, t]
+  )
+
+  // 选中态：picked 仍有效用它，否则回落默认（能对话 → 新会话；否则最新一条）。
+  const [picked, setPicked] = useState<string | null>(null)
+  const defaultKey = member.canChat ? NEW_KEY : (rows[0]?.key ?? null)
+  const effectiveKey = useMemo(() => {
+    if (picked === NEW_KEY && member.canChat) return NEW_KEY
+    if (picked != null && rows.some((r) => r.key === picked)) return picked
+    return defaultKey
+  }, [picked, rows, member.canChat, defaultKey])
+
+  const effectiveCollapsed = forcedCollapsed || collapsed
+
+  const detail = ((): React.ReactElement => {
+    if (effectiveKey === NEW_KEY) return <NewSessionView memberTitle={memberTitle} />
+    if (source === 'preprocess') {
+      const email = emails.find((e) => `email:${e.internal_id}` === effectiveKey) ?? null
+      if (email) return <TeamPreprocessDetail email={email} />
+    } else {
+      const entry = entries.find((e) => e.key === effectiveKey) ?? null
+      if (entry) {
+        switch (entry.kind) {
+          case 'run':
+            return entry.run.sessionId != null ? (
+              <TeamRunTranscript run={entry.run} agentName={memberTitle} />
+            ) : (
+              <TeamRunStatsDetail run={entry.run} />
+            )
+          case 'session':
+            return <TeamSessionDetail session={entry.session} canChat={member.canChat} />
+          case 'report':
+            return <TeamReportDetail report={entry.report} />
+          case 'progress':
+            return <TeamProgressDetail progress={entry.progress} />
+        }
+      }
+    }
+    // 一条记录都没有：说清原因（prd「记录为空时说清原因，不能只写暂无」）。
+    return (
+      <div className="flex flex-1 items-center justify-center px-8 text-center">
+        <p className="max-w-[26rem] text-meta leading-relaxed text-ink-fg-3">{emptyReason()}</p>
+      </div>
+    )
+  })()
+
+  function emptyReason(): string {
+    switch (source) {
+      case 'runs':
+      case 'runs-no-transcript':
+        return t('team.record.emptyRuns')
+      case 'report':
+        return t('team.record.emptyReports')
+      case 'progress':
+        return t('team.record.emptyProgress')
+      case 'preprocess':
+        return t('team.record.emptyPreprocess')
+      default:
+        return t('team.record.emptyRuns')
+    }
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col" data-team-record-pane>
+      {/* 不接对话的成员：顶部写明为什么（design §8.0 —— 否则看起来像功能缺失）。 */}
+      {member.noChatReasonKey != null && (
+        <div
+          className="shrink-0 border-b border-ink-border-soft px-4 py-2 text-meta leading-relaxed text-ink-fg-2"
+          data-no-chat-reason
+        >
+          {t(member.noChatReasonKey)}
+        </div>
+      )}
+      <div className="flex min-h-0 flex-1">
+        {effectiveCollapsed ? (
+          !forcedCollapsed && (
+            <button
+              type="button"
+              onClick={onToggleCollapsed}
+              aria-label={t('team.record.expandList')}
+              title={t('team.record.expandList')}
+              className="flex shrink-0 items-center justify-center border-r border-ink-border-soft text-ink-fg-3 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+              style={{ width: HANDLE_WIDTH }}
+              data-record-col-handle
+            >
+              <ChevronRight size={13} strokeWidth={2} />
+            </button>
+          )
+        ) : (
+          <div
+            className="flex h-full shrink-0 flex-col border-r border-ink-border-soft"
+            style={{ width: RECORD_COL_WIDTH }}
+            data-record-col
+          >
+            <div className="flex shrink-0 items-center gap-1 px-2 pb-1 pt-2">
+              {member.canChat ? (
+                <button
+                  type="button"
+                  onClick={() => setPicked(NEW_KEY)}
+                  data-record-new
+                  className={cn(
+                    'flex min-w-0 flex-1 items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-meta font-medium transition-colors duration-fast',
+                    effectiveKey === NEW_KEY
+                      ? 'border-[var(--hairline-strong)] bg-ink-fg/[0.07] text-ink-fg'
+                      : 'border-transparent text-ink-fg-1 hover:bg-ink-fg/[0.03] hover:text-ink-fg'
+                  )}
+                >
+                  <MessageSquarePlus size={13} strokeWidth={2} className="shrink-0" />
+                  <span className="truncate">{t('team.record.new')}</span>
+                </button>
+              ) : (
+                <span className="min-w-0 flex-1 truncate px-2 py-1.5 text-micro font-medium uppercase tracking-wider text-ink-fg-3">
+                  {t('team.record.listTitle')}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={onToggleCollapsed}
+                aria-label={t('team.record.collapseList')}
+                title={t('team.record.collapseList')}
+                className="grid size-6 shrink-0 place-items-center rounded-md text-ink-fg-3 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+              >
+                <ChevronLeft size={13} strokeWidth={2} />
+              </button>
+            </div>
+            <div className="scrollbar-thin flex-1 overflow-y-auto px-2 pb-2">
+              {rows.length === 0 ? (
+                <p className="px-2 py-4 text-micro leading-relaxed text-ink-fg-3">
+                  {emptyReason()}
+                </p>
+              ) : (
+                <div className="flex flex-col gap-0.5">
+                  {rows.map((row) => (
+                    <RecordRowButton
+                      key={row.key}
+                      row={row}
+                      selected={row.key === effectiveKey}
+                      onSelect={() => setPicked(row.key)}
+                      t={t}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        {detail}
+      </div>
+    </div>
+  )
+}

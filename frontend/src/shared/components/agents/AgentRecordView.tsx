@@ -28,6 +28,9 @@ import { AgentThread } from './AgentThread'
 import { RunStateBadge } from './CustomAgentDrawer'
 import { ReportIcon } from './primitives'
 import { useAgentRuns, useReportConfig } from './hooks'
+import { AgentRunTriggerBubble, RunRawPromptBlock } from './runRecordBlocks'
+import { splitRunTranscript } from './team/runTranscript'
+import { epochMs } from './team/teamTimeline'
 
 /** epoch（秒或毫秒容错）→ 距今 ms。 */
 function agoMs(ts: number | null | undefined): number | null {
@@ -149,15 +152,36 @@ export function AgentRecordConversation({
     return dispose
   }, [mailApi, activeSessionId, reloadActiveSession, qc])
 
-  const initialMessages = reloadMessagesReady
-    ? chat.messages.map(chatMessageToUIMessage)
-    : undefined
+  // P4a — 首条 user 消息是 4-7KB 任务契约 prompt（r8 §A.2），摘掉不进消息流：
+  // 触发信息由前端合成紫色气泡（run 行缺失时回退 session 自带的 trigger_* 列），
+  // 原始 prompt 收进末尾折叠块。
+  const split = useMemo(() => splitRunTranscript(chat.messages), [chat.messages])
+  const triggerKind = run?.triggerKind ?? activeItem.trigger_kind ?? null
+  const triggerFiredAtIso =
+    run?.triggerFiredAtIso ??
+    (activeItem.trigger_fired_at != null
+      ? new Date(epochMs(activeItem.trigger_fired_at)).toISOString()
+      : null)
+  const triggerBubble = (
+    <AgentRunTriggerBubble triggerKind={triggerKind} firedAtIso={triggerFiredAtIso} />
+  )
+  const initialMessages = reloadMessagesReady ? split.rest.map(chatMessageToUIMessage) : undefined
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <AgentRunRecordBanner agentName={agentName} runState={runState} triggeredAt={triggeredAt} />
       {initialMessages === undefined ? (
         <div className="flex flex-1 items-center justify-center" />
+      ) : initialMessages.length === 0 ? (
+        // run 在产生任何回复前就结束（失败/取消）——AgentThread 空态是「新对话」欢迎屏，
+        // 放在这里会撒谎；改渲染触发气泡 + 无输出说明 + 原始 prompt 折叠块。
+        <div className="scrollbar-thin flex-1 overflow-y-auto px-4 py-4">
+          {triggerBubble}
+          <div className="mx-auto mb-5 w-full max-w-[var(--thread-max-width)] text-meta text-ink-fg-3">
+            {t('team.record.noOutput')}
+          </div>
+          {split.seedPrompt != null && <RunRawPromptBlock prompt={split.seedPrompt} />}
+        </div>
       ) : (
         <AiSdkRuntimeProvider
           key={`agent-record:${activeSessionId ?? 'none'}:${refreshNonce}`}
@@ -167,13 +191,17 @@ export function AgentRecordConversation({
         >
           <AgentThread
             readOnly
+            headerSlot={triggerBubble}
             pendingSlot={
-              <InRecordApprovalPanel
-                sessionId={activeSessionId}
-                runState={runState}
-                agentName={agentName}
-                onDecided={onDecided}
-              />
+              <>
+                <InRecordApprovalPanel
+                  sessionId={activeSessionId}
+                  runState={runState}
+                  agentName={agentName}
+                  onDecided={onDecided}
+                />
+                {split.seedPrompt != null && <RunRawPromptBlock prompt={split.seedPrompt} />}
+              </>
             }
           />
         </AiSdkRuntimeProvider>

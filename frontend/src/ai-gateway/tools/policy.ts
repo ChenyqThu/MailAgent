@@ -367,6 +367,13 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // grants key, so a headless custom-agent run never gets it (放宽留给后续 grant 体系); that is the
   // MVP-safe default (mirrors the send row's un-grantable stance, not a recipient send).
   notion_agent_chat: 'outbound',
+  // submit_feedback (task 08-27 P4a) — 一条反馈（含 owner 写的正文、可选邮箱、可选诊断包）
+  // 离开本机进 owner 的 Notion 反馈库。class 'outbound' 是这里的**安全地板**：manual_chat
+  // 之外既不注册也不执行，且 outbound 没有 grants key —— 结构上不可能被 per-agent grant
+  // 放宽（与 email_prepare_send / notion_agent_chat 同一档）。edit-tier 恒 ask，工厂不接
+  // policyEvaluate、不接 per-tool 档（tool_prefs configurable=False），所以「以后都自动」
+  // 这条路在四个层面上都不存在。
+  submit_feedback: 'outbound',
   // exec — local command / filesystem (S2 W1). manual_chat-only; all three are edit-tier always-ask
   // (never auto-approved by approvalMode) UNLESS a structured PolicyRule whitelist the owner set
   // matches (needsApproval consults /api/agent/policy/evaluate — auto_allow skips the card,

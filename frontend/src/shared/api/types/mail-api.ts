@@ -4,6 +4,7 @@ import type { ChatApi } from './chat'
 import type { ConnectorApi } from './connector'
 import type { EmailApi } from './email'
 import type { EventsApi } from './events'
+import type { FeedbackApi } from './feedback'
 import type { FolderApi } from './folder'
 import type { IslandApi } from './island'
 import type { JobsApi } from './jobs'
@@ -64,4 +65,7 @@ export interface MailApi {
   /** Sprint 20 — 报告 Agent (/agents 页): list/get 直读 sync_store.db,
    *  runNow/getConfig/setConfig 经 `mailagent report` CLI fork. */
   report: ReportApi
+  /** task 08-27 P4a — 快捷反馈。**Electron-only 可选面**（截图 / 诊断包 / 绕 CSP 提交
+   *  都只有主进程做得到）；远程 web 不实现，入口按它在不在决定显不显示。 */
+  feedback?: FeedbackApi
 }

@@ -48,6 +48,8 @@ import { MAX_TABS_MAX, MAX_TABS_MIN, useTabWorkspace } from '@shared/state/tab-w
 import { SUPPORTED_LOCALES, type Locale } from '@shared/i18n'
 import { cn } from '@shared/lib/cn'
 import { Slider } from '@shared/components/ui/slider'
+import { Switch } from '@shared/components/ui/switch'
+import { useFeedbackStore } from '@shared/state/feedback'
 
 import { PageHeader } from '../parts/PageHeader'
 
@@ -537,6 +539,9 @@ export function GeneralTab(): React.ReactElement {
   const mailApi = useMailApi()
   const canExportDiagnostics = typeof mailApi.admin.exportDiagnostics === 'function'
   const [exportingDiagnostics, setExportingDiagnostics] = React.useState(false)
+  // task 08-27 P4a — 反馈弹窗里「附上诊断包」那一项的默认值（同一个包、同一处偏好）。
+  const attachDiagnosticsDefault = useFeedbackStore((s) => s.attachDiagnosticsDefault)
+  const setAttachDiagnosticsDefault = useFeedbackStore((s) => s.setAttachDiagnosticsDefault)
 
   async function handleExportDiagnostics(): Promise<void> {
     if (!mailApi.admin.exportDiagnostics) return
@@ -936,6 +941,25 @@ export function GeneralTab(): React.ReactElement {
                     })
                   : t('settings.general.diagnostics.export.cta', { defaultValue: '导出诊断包' })}
               </button>
+            </div>
+
+            {/* task 08-27 P4a — 「发送反馈时附上诊断包」。🔴 这一行只决定反馈弹窗里那一项的
+                **默认值**，包本身与上面导出的是同一个（复用 admin export-diagnostics），
+                不做两套。 */}
+            <div className="mt-4 flex items-start justify-between gap-4 border-t border-ink-border-soft pt-4">
+              <div className="min-w-0 flex-1">
+                <div className="text-aux font-medium text-ink-fg">
+                  {t('settings.general.diagnostics.attachToFeedback.label')}
+                </div>
+                <p className="text-meta text-ink-fg-2 mt-1 leading-relaxed">
+                  {t('settings.general.diagnostics.attachToFeedback.helper')}
+                </p>
+              </div>
+              <Switch
+                checked={attachDiagnosticsDefault}
+                onCheckedChange={setAttachDiagnosticsDefault}
+                aria-label={t('settings.general.diagnostics.attachToFeedback.label')}
+              />
             </div>
           </div>
         </section>

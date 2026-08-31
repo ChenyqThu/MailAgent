@@ -34,6 +34,7 @@ from src.contacts.profile_prompts import (
     PROFILE_TOOL_SCHEMA,
     build_profile_system_prompt,
 )
+from src.contacts.profile_runs import record_profile_run
 from src.contacts.repository import ContactRepository
 from src.contacts.taxonomy import CONTACT_KIND_PERSON, strip_evidence_refs
 from src.llm_agent.client import LLMCallError, LLMClient
@@ -670,30 +671,41 @@ async def run_profile_batch(
     generate_fn: Callable[..., Any] = generate_contact_profile,
 ) -> Dict[str, int]:
     round_started_ms = now_ms or int(time.time() * 1000)
-    repo = ContactRepository(db_path)
-    with repo.transaction() as conn:
-        clear_stale_running(conn, round_started_ms=round_started_ms)
-        candidates = select_profile_candidates(
-            conn, now_ms=round_started_ms, limit=cfg.daily_limit
-        )
-    stats = {"candidates": len(candidates), "ran": 0, "ok": 0, "skipped": 0, "failed": 0}
-    for row in candidates:
-        contact_id = int(row["id"])
-        try:
-            if not claim_profile_run(db_path, contact_id, now_ms=round_started_ms):
-                continue
-            stats["ran"] += 1
-            status = await generate_fn(
-                db_path, contact_id, cfg=cfg, now_ms=round_started_ms
+    stats = {"candidates": 0, "ran": 0, "ok": 0, "skipped": 0, "failed": 0}
+    try:
+        repo = ContactRepository(db_path)
+        with repo.transaction() as conn:
+            clear_stale_running(conn, round_started_ms=round_started_ms)
+            candidates = select_profile_candidates(
+                conn, now_ms=round_started_ms, limit=cfg.daily_limit
             )
-            stats[status] += 1
-        except Exception as exc:  # noqa: BLE001 — one contact never aborts the batch
-            stats["failed"] += 1
-            _finish_failed(db_path, contact_id, now_ms=round_started_ms, error=str(exc))
+        stats["candidates"] = len(candidates)
+        for row in candidates:
+            contact_id = int(row["id"])
+            try:
+                if not claim_profile_run(db_path, contact_id, now_ms=round_started_ms):
+                    continue
+                stats["ran"] += 1
+                status = await generate_fn(
+                    db_path, contact_id, cfg=cfg, now_ms=round_started_ms
+                )
+                stats[status] += 1
+            except Exception as exc:  # noqa: BLE001 — one contact never aborts the batch
+                stats["failed"] += 1
+                _finish_failed(db_path, contact_id, now_ms=round_started_ms, error=str(exc))
+    except Exception as exc:
+        # 批级异常 (选候选人就炸了 / 库不可写): 台账仍落一行 status='fail' —— 团队页
+        # 「记录」列必须看得见「这一轮根本没跑起来」, 否则那天就只是**没有记录**, 与
+        # 「今天没到点」分不开。record_profile_run 自己吞写失败, 不会盖住原异常。
+        record_profile_run(
+            db_path, started_at_ms=round_started_ms, stats=stats, error=str(exc)
+        )
+        raise
     logger.info(
         "[contact-profile] batch candidates={} ran={} ok={} skip={} fail={}",
         stats["candidates"], stats["ran"], stats["ok"], stats["skipped"], stats["failed"],
     )
+    record_profile_run(db_path, started_at_ms=round_started_ms, stats=stats)
     return stats
 
 

@@ -37,7 +37,7 @@ const { gates } = vi.hoisted(() => ({ gates: { matters: true, contacts: true } }
 // `useMailApi` ships a real ElectronApi by default — that talks to
 // window.electron which doesn't exist under happy-dom. Stub the surface
 // the shell actually touches: settings.get + email.listMailboxes（rail 徽标）+
-// report.getConfig（TeamNavPanel）。
+// report.getConfig（见下方注释）。
 // Must use the @shared alias here — Vitest resolves the import string
 // before applying tsconfig paths, so a relative path silently fails to
 // match the import in Sidebar.tsx.
@@ -59,7 +59,8 @@ vi.mock('@shared/hooks/useMailApi', () => ({
         { mailbox: '发件箱', total: 4, unread: 0, flagged: 0, failed: 0 }
       ])
     },
-    // TeamNavPanel（团队域二级栏）走 /agents 页同一份 useReportConfig 查询。
+    // 历史上供 TeamNavPanel（P1 过渡二级栏）消费；P4a 团队域转 'page' 后 shell 侧
+    // 已无消费点，留着作无害兜底（避免未来 shell 侧新增 report 读面时 mock 缺腿）。
     report: {
       getConfig: vi.fn().mockResolvedValue([
         { id: 'a1', title: '跟进员', type: 'custom', enabled: true, description: '盯事项推进' },
@@ -397,27 +398,21 @@ describe('DomainPanel ↔ nav registry 投影', () => {
   // 08-27 批：所有域恒有二级栏，差别只在 registry NAV_DOMAINS.second ——
   // 'nav' = DomainPanel；'page' = 页面清单列充当二级栏（无 DomainPanel）。
   // mail / chats P1 转 'page'（邮件列表 / 会话列表由页面自己出）；reports P3 转
-  // 'page'（报告清单列就是它的二级栏）；team（agents）过渡期仍留 'nav'
-  // （/agents 还是卡片网格，无自管左列）。
-  test('page 域（邮件/事项/通讯录/对话/报告）：无 DomainPanel', async () => {
-    for (const path of ['/', '/matters', '/contacts', '/sessions', '/reports'] as const) {
+  // 'page'（报告清单列就是它的二级栏）；team（agents）P4a 转 'page'
+  // （TeamWorkspace 自管清单列，过渡的 TeamNavPanel 退役）。
+  test('page 域（邮件/事项/通讯录/对话/团队/报告）：无 DomainPanel', async () => {
+    for (const path of [
+      '/',
+      '/matters',
+      '/contacts',
+      '/sessions',
+      '/agents',
+      '/reports'
+    ] as const) {
       const { container } = await renderShell(path)
       expect(container.querySelector('[data-nav-panel]'), path).toBeNull()
       cleanup()
     }
-  })
-
-  test('团队域（过渡档 nav）：面板 = 简版智能体清单，点行落 /agents', async () => {
-    const { container, router } = await renderShell('/agents')
-    expect(container.querySelector('[data-nav-panel] [data-team-nav]')).toBeTruthy()
-    // 清单行 = useReportConfig 共享缓存里的 agent（名字进 .flex-1 主位）。
-    await waitFor(() => {
-      expect(panelRowLabels(container)).toEqual(['跟进员', '搜索助手'])
-    })
-    const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
-    fireEvent.click(container.querySelector('[data-team-nav] .row')!)
-    expect(navigate.mock.calls.at(-1)?.[0]).toEqual({ to: '/agents' })
-    navigate.mockRestore()
   })
 
   test('今日域：面板 = 当天五节跳转（TodayNavPanel）', async () => {

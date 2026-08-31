@@ -66,6 +66,10 @@ interface AgentThreadProps {
   /** Matters G-20 — 事项对话的空态标题/副标题（设计稿："the empty state names the matter"）。
    *  省略 → 通用 greetings 一字不变。 */
   welcomeOverride?: { title: string; hint: string }
+  /** task 08-27 P4a — 消息流**最前**的插槽（viewport 内、随流滚动）。执行记录视图用它挂
+   *  前端合成的「⚡自动触发」气泡（真实首条 user 消息是 4-7KB 任务契约 prompt，已被摘掉，
+   *  见 team/runTranscript.ts）。省略 = 字节级现状。 */
+  headerSlot?: React.ReactNode
 }
 
 export function AgentThread({
@@ -75,7 +79,8 @@ export function AgentThread({
   onTurnComplete,
   contextChip,
   runStatusSlot,
-  welcomeOverride
+  welcomeOverride,
+  headerSlot
 }: AgentThreadProps): React.JSX.Element {
   const isEmpty = useAuiState(isNewChatView)
   return (
@@ -107,6 +112,8 @@ export function AgentThread({
             <AgentWelcome override={welcomeOverride} />
           </AuiIf>
 
+          {/* 执行记录的合成触发气泡等「消息流最前」内容；空态一并隐藏（同下方消息列纪律）。 */}
+          {headerSlot != null && <div className={cn(isEmpty && 'hidden')}>{headerSlot}</div>}
           {/* 空态显式 hidden（不靠 :empty —— assistant-ui 可能渲染空节点使 :empty 失效，残留 mb-10
             占位把 welcome 和 composer 撑开、破坏整组居中观感）。有消息时正常显示。 */}
           <div className={cn('mb-10 flex flex-col gap-y-5', isEmpty && 'hidden')}>

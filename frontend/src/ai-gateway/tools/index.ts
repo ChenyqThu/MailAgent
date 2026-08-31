@@ -45,6 +45,7 @@ import {
   createMatterWriteTools
 } from './matters'
 import { createNotionAgentTools } from './notion_agent'
+import { createFeedbackTools, type FeedbackSubmitFn } from './feedback'
 import {
   admitDynamicTools,
   applyContextModePolicy,
@@ -194,6 +195,12 @@ export interface BuildGatewayToolsOpts {
    *  notion_agent skill), so the Settings skill toggle (advertisedSkills) is the real on/off; the
    *  flag is the emergency kill-switch (explicit false → not added → byte-identical). */
   notionAgentToolsEnabled?: boolean
+  /** task 08-27 P4a — submit_feedback 的提交实现（主进程注入：拼 UA、按 attach_diagnostics
+   *  组诊断包、落本地对账台账）。给了它（且有 approvalGuard）才注册这个工具；缺任一 →
+   *  不注册 → ToolSet 与本批之前逐字节相同。
+   *  🔴 没有对应的 `*Enabled` flag —— 见 feedback.ts 顶部与 CLAUDE.md 的
+   *  「确定要做的功能不搞灰度开关」：它的开关面是 class 'outbound' 的场地地板 + 恒 HITL。 */
+  submitFeedback?: FeedbackSubmitFn
   /** S2 W0 (ADR-001 D1/D3) — the run's server-asserted context mode, threaded from
    *  prepareChatRun's trustedContextMode. Governs (a) the auto-approve predicate (a reversible
    *  domain write may only skip the card in manual_chat) and (b) the LAST assembly step
@@ -633,6 +640,21 @@ export function buildGatewayTools(
         approvalMode: opts.approvalMode,
         // 08-05 WP-11 — the per-tool tier map (manual only; null-collapsed above).
         toolApprovalPrefs: prefTiers,
+        oneShot: opts.oneShotWrites,
+        contextMode
+      })
+    )
+  }
+  // task 08-27 P4a — submit_feedback（对外发送一条产品反馈）。CORE_UNGATED（无 skill 归属），
+  // 所以放在 skill-gating 之后、context-mode 过滤之前都一样；这里跟着 notion_agent 排，读起来
+  // 是「outbound 两件挨着」。🔴 恒 HITL 且 tool_prefs configurable=False，故**有意不传**
+  // toolApprovalPrefs —— per-tool 档对它无效，传进去只会给「以后都自动」留缝。
+  if (opts.submitFeedback && opts.approvalGuard) {
+    Object.assign(
+      tools,
+      createFeedbackTools(opts.submitFeedback, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
         oneShot: opts.oneShotWrites,
         contextMode
       })

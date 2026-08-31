@@ -176,6 +176,8 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'contact_set_manager',
   // notion
   'notion_agent_chat',
+  // feedback (task 08-27 P4a)
+  'submit_feedback',
   // legacy (deleted engine, still present in persisted history)
   'plan_update'
 ])

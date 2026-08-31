@@ -73,6 +73,12 @@ describe('qk.chat', () => {
     expect(qk.chat.kosAvailable()).toEqual(['chat', 'kosAvailable'])
     expect(qk.chat.config('opennessFlags')).toEqual(['chat', 'config', 'opennessFlags'])
   })
+
+  test('agentOriginSessions — 与 ChatsTab 内联组合的字面量共享缓存（P4a 团队页）', () => {
+    // 🔴 尾段 'agent' 必须与 `[...qk.chat.allSessions(), 'agent']` 字节一致，改任一段 = 缓存分家。
+    expect(qk.chat.agentOriginSessions()).toEqual([...qk.chat.allSessions(), 'agent'])
+    expect(qk.chat.agentOriginSessions()).toEqual(['chat', 'allSessions', 'agent'])
+  })
 })
 
 describe('qk.folder', () => {
@@ -181,9 +187,15 @@ describe('qk — agent-runs / agent / ai-gateway / compose / report / misc', () 
     expect(qk.compose.draftEdit(7)).toEqual(['compose', 'draft-edit', 7])
     expect(qk.report.list()).toEqual(['report', 'list'])
     expect(qk.report.listCadence('all')).toEqual(['report', 'list', 'all'])
+    // P4a 团队页 — 记录列的 per-agent 报告源；挂 ['report','list'] 前缀（runNow/delete
+    // 的 LIST_KEY invalidate 要能顺带刷到它）。
+    expect(qk.report.listByAgent('a1', 30)).toEqual(['report', 'list', 'by-agent', 'a1', 30])
+    expect(qk.report.listByAgent('a1', 30).slice(0, 2)).toEqual([...qk.report.list()])
     expect(qk.report.config()).toEqual(['report', 'config'])
     expect(qk.report.get('r1')).toEqual(['report', 'get', 'r1'])
     expect(qk.projectProgressRuns(50)).toEqual(['project-progress-runs', 50])
+    // P4a 团队页 — 预处理执行面（listEnriched 投影）。
+    expect(qk.team.preprocessRecent(30)).toEqual(['team', 'preprocess-recent', 30])
   })
 
   test('palette / mention / contactSuggest / attachment', () => {

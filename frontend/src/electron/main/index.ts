@@ -20,6 +20,7 @@ import {
 import { resolveAiGatewayPort } from '../../ai-gateway/config'
 import { detectUserState } from './onboarding/detect'
 import { registerOnboardingHandlers } from './handlers/onboarding'
+import { registerFeedbackHandlers } from './handlers/feedback'
 import { MAIN_WINDOW, ONBOARDING_WINDOW } from './lib/window-config'
 import { registerEmailHandlers } from './handlers/email'
 import { registerContactHandlers } from './handlers/contacts'
@@ -473,6 +474,8 @@ app.whenReady().then(async () => {
   registerServicesHandlers()
   // 打包 P2/P3 — onboarding 向导 IPC (status / complete)。
   registerOnboardingHandlers()
+  // task 08-27 P4a — 快捷反馈 (截图 / 诊断包 / 提交 / 台账 / 表单页降级)。
+  registerFeedbackHandlers()
 
   ipcMain.on('ping', () => console.log('pong'))
 

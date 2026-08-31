@@ -466,7 +466,12 @@ function cleanupDiagnosticsTmp(zipPath: string): void {
   }
 }
 
-export async function runExportDiagnostics(): Promise<ExportDiagnosticsResult> {
+/** 组装诊断包，返回 tmp zip 路径 —— **不弹保存对话框**。
+ *
+ *  抽出来是给快捷反馈用的（task 08-27 P4a）：反馈弹窗要把同一个包当附件传上去，而不是
+ *  让用户先另存再手动挑文件。🔴 调用方**必须**在用完后 `cleanupDiagnosticsTmp(zipPath)`，
+ *  否则 tmp 目录留到 OS 回收为止。 */
+export async function buildDiagnosticsZip(): Promise<string> {
   const data = (await callCli(['admin', 'export-diagnostics', '--app-version', app.getVersion()], {
     timeoutMs: DIAGNOSTICS_TIMEOUT_MS
   })) as DiagnosticsCliData
@@ -474,6 +479,13 @@ export async function runExportDiagnostics(): Promise<ExportDiagnosticsResult> {
   if (typeof zipPath !== 'string' || zipPath.length === 0) {
     throw new Error('export-diagnostics 未返回 zip_path')
   }
+  return zipPath
+}
+
+export { cleanupDiagnosticsTmp }
+
+export async function runExportDiagnostics(): Promise<ExportDiagnosticsResult> {
+  const zipPath = await buildDiagnosticsZip()
   const result = await dialog.showSaveDialog({
     title: '保存诊断包',
     defaultPath: basename(zipPath),

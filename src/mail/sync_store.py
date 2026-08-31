@@ -77,6 +77,10 @@ from src.matters.models import (
     sql_check_clause,
 )
 from src.matters.resource_identity import MatterError, normalize_resource_key
+# 画像执行台账的 status 值域单源 (零依赖叶子, 见该模块头注): contact_profile_run 的
+# CHECK 引它, 不手抄字符串。反向 import (profile_runs → sync_store) 是循环, 故表 DDL
+# 归本文件、读写归那边。
+from src.contacts.profile_runs import CONTACT_PROFILE_RUN_STATUS_VALUES
 from src.contacts.taxonomy import (
     CONTACT_FUNCTION_VALUES,
     CONTACT_GENDER_VALUES,
@@ -902,6 +906,52 @@ MATTER_ITEM_DISPATCH_INDEX_DDLS = (
 MATTER_UPDATE_ITEM_DISPATCH_INDEX_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_matter_update_item_dispatch "
     "ON matter_update(item_dispatch_id) WHERE item_dispatch_id IS NOT NULL"
+)
+
+
+# ==================== contact_profile_run DDL (v72) ====================
+# 联系人画像 Agent 的执行台账 (task 08-27-l4-tab-workspace P4a)。团队页的「记录」列要能
+# 按成员列出最近 N 次执行, 而画像此前**一行都没有** —— 批次统计只 logger.info 一句就丢了
+# (`src/contacts/profile.py::run_profile_batch`), 于是那一栏对它永远是空态。
+#
+# 🔴 独立成组, **不进** CONTACT_TABLE_DDLS / CONTACT_INDEX_DDLS / CONTACT_SUGGESTION_*
+# —— 那几组会被 v54 / v63 / v64 等旧块对老库整组重放, 混进去等于给 v54..v71 每一个中间
+# 版本各加一个新炸点 (v52 索引教训)。本组只从 v72 块执行一次 (新库走满迁移梯子同样经
+# v72 拿到)。
+#
+# 形状取自 `project_progress_sync` 的简版 —— 那是同类的「确定性批处理的一次执行」记录;
+# **不抄** matter_run 的全套 (chat_session / trigger_payload / cost 画像根本没有)。
+#
+# 列语义:
+#   status      ok | fail | noop。判据单源 = `profile_runs.classify_batch_status`
+#               (CHECK 值域也引那里的元组, 不手抄字符串)。noop = 这一轮没有候选人,
+#               不是失败, 也不该在记录列里显示成「跑了一次画像」。
+#   candidates  这一轮选出的候选人数; ran = 真正抢到锁开跑的; ok_count/skipped/failed
+#               是逐人的结果 (与 run_profile_batch 返回的 stats 逐字对应)。
+#   error       仅 status='fail' 时非空 (批级异常原文)。
+#   *_at        epoch **毫秒** (contacts 域全域单位, 与 contact.profile_updated_at 同)。
+#               🔴 与 async_jobs 的 time.time() **秒**不是一回事 —— 投影成 run 历史行时
+#               在 API 边界换算 (`agent_runs._profile_run_item`), 表内不留两种单位。
+CONTACT_PROFILE_RUN_TABLE_DDLS = (
+    f"""CREATE TABLE IF NOT EXISTS contact_profile_run (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at INTEGER NOT NULL,
+        completed_at INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK (status {sql_check_clause(CONTACT_PROFILE_RUN_STATUS_VALUES)}),
+        candidates INTEGER NOT NULL DEFAULT 0,
+        ran INTEGER NOT NULL DEFAULT 0,
+        ok_count INTEGER NOT NULL DEFAULT 0,
+        skipped INTEGER NOT NULL DEFAULT 0,
+        failed INTEGER NOT NULL DEFAULT 0,
+        error TEXT NULL
+    )""",
+)
+
+CONTACT_PROFILE_RUN_INDEX_DDLS = (
+    # 唯一读面:「最近 N 轮, 倒序」。id DESC 是同毫秒内的稳定次序 (同一 tick 里补落两行
+    # 时没有它, 两次读的顺序可能不一样)。
+    "CREATE INDEX IF NOT EXISTS idx_contact_profile_run_recent "
+    "ON contact_profile_run(started_at DESC, id DESC)",
 )
 
 
@@ -1880,7 +1930,23 @@ class SyncStore:
     #                回滚 (回退 v70): 旧代码完全不认识这张表与这两列, **只降版本号是安全的**
     #                (表 / 列留着不碍事; 要清干净再 DROP TABLE matter_item_dispatch ——
     #                两列 SQLite 得重建表才去得掉, 不值当)。
-    DB_VERSION = 71
+    # v72 (2026-08-31, L4 团队页 P4a): 新表 contact_profile_run —— 联系人画像 Agent 的
+    #                执行台账。团队页的「记录」列按成员列最近 N 次执行, 而画像此前一行都
+    #                没有 (批次统计只 logger.info 一句就丢了) ⇒ 那一栏对它永远是空态。
+    #                DDL 单源 CONTACT_PROFILE_RUN_TABLE_DDLS / _INDEX_DDLS (🔴 不进
+    #                CONTACT_*/MATTER_* 各组, 理由见该常量头注 = v52 教训), status 的
+    #                CHECK 引 `src/contacts/profile_runs.py` 的值域元组。
+    #                语义: 一轮批处理落一行 —— 与 project_progress_sync 那种「一封邮件一
+    #                行」不同, 这里的粒度是**一次执行**, 逐人的成败进计数列 (画像的逐人状态
+    #                本来就在 contact.profile_status 里, 不在这张表重复一份)。
+    #                数据规则: 时间列是 epoch **毫秒** (contacts 域全域单位); 无播种数据
+    #                —— 存量库升上来一条记录都没有, 🔴 **不拿 contact.profile_updated_at
+    #                回填**成假的执行史 (那是逐人的时间戳, 拼不出「哪一轮跑了哪些人」)。
+    #                幂等: CREATE TABLE / CREATE INDEX IF NOT EXISTS, 表与索引同块
+    #                (纯新表首建, 无 v52 式「索引先于列」的错位面)。重放结果不变。
+    #                回滚 (回退 v71): 旧代码完全不认识这张表, **只降版本号是安全的**
+    #                (表留着不碍事); 要清干净再 `DROP TABLE contact_profile_run`。
+    DB_VERSION = 72
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
 
@@ -4869,6 +4935,19 @@ class SyncStore:
                 _migration_guard_index(
                     cursor, "idx_matter_update_item_dispatch", "v71 migration", e,
                 )
+        # === v72: contact_profile_run 画像执行台账 ===
+        # 语义 / 数据规则 / 回滚代价见 DB_VERSION 注记与 CONTACT_PROFILE_RUN_TABLE_DDLS 头注。
+        # 表与索引同块同 try: 纯新表首建, 不存在 v52 式「索引先于列」的错位面。
+        if current_version < 72:
+            try:
+                for ddl in CONTACT_PROFILE_RUN_TABLE_DDLS:
+                    cursor.execute(ddl)
+                for ddl in CONTACT_PROFILE_RUN_INDEX_DDLS:
+                    cursor.execute(ddl)
+            except sqlite3.Error as e:
+                raise SyncStoreMigrationError(
+                    f"v72 migration (contact_profile_run table): {e}"
+                ) from e
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
         # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →

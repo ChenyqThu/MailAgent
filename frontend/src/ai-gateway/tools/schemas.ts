@@ -11,6 +11,7 @@
 //    (inconsistent) wire params; see python/domainClient.ts.
 
 import { z } from 'zod'
+import { FEEDBACK_FREQUENCIES, FEEDBACK_KINDS } from '../../shared/feedback/contract'
 import { REPORT_CADENCES, reportBlockInputSchema } from '../../shared/api/reportBlocks'
 import {
   MATTER_PROGRESS_BODY_MAX_CHARS,
@@ -2088,3 +2089,38 @@ export const suggestFollowupsSchema = z.object({
     )
 })
 export type SuggestFollowupsInput = z.infer<typeof suggestFollowupsSchema>
+
+/** submit_feedback (task 08-27 P4a) — 主 Agent 代 owner 向产品反馈库提交一条反馈。
+ *
+ *  🔴 词表是 shared/feedback/contract.ts 的单源（select 传的是**显示值字符串**，不是
+ *  option id），这里用 z.enum 引用它，不另抄一份中文字面量。
+ *  🔴 没有截图字段 —— agent 截不了图，那一项在它提交时恒为「无截图」（诊断包由服务端
+ *  按 `attach_diagnostics` 自己组装，模型不经手文件）。 */
+export const submitFeedbackSchema = z.object({
+  kind: z
+    .enum(FEEDBACK_KINDS)
+    .describe('Feedback category: 问题 (bug) / 建议 (suggestion) / 咨询 (question).'),
+  title: z.string().trim().min(1).max(200).describe('One-line summary, in the user’s language.'),
+  detail: z
+    .string()
+    .max(8000)
+    .optional()
+    .describe('What happened / what is expected, reproduction steps if known.'),
+  freq: z
+    .enum(FEEDBACK_FREQUENCIES)
+    .optional()
+    .describe('Reproduction frequency. ONLY meaningful when kind is 问题; ignored otherwise.'),
+  email: z
+    .string()
+    .max(200)
+    .optional()
+    .describe('Optional contact email the owner explicitly provided in this conversation.'),
+  attach_diagnostics: z
+    .boolean()
+    .optional()
+    .describe(
+      'Attach the diagnostics bundle (last 7 days of redacted logs + config snapshot). ' +
+        'Takes about a minute to build — only set it for a reproducible defect.'
+    )
+})
+export type SubmitFeedbackInput = z.infer<typeof submitFeedbackSchema>

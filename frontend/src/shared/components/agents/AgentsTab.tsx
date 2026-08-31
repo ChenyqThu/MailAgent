@@ -3,6 +3,11 @@
 // 移植自 ~/Downloads/agents/agents-tab.jsx，接 report:getConfig/setConfig/runNow。
 // 配置抽屉（Config/Search/Preprocess/ProjectProgress）已机械抽到 ./drawers；本文件保留概览卡
 // 与 tab 装配，抽屉经 import 组合渲染。
+//
+// 🔴 08-27 P4a（lane team-shell）：本组件已从 /agents 路由**卸载**（AgentsLayout 改挂
+// team/TeamWorkspace 的「清单 + 详情」形态），src 侧零挂载点、仅测试还在直渲。留置原因：
+// 八个配置抽屉的调用点在这里 —— 它们已被重组成配置页（agents/settings/AgentSettingsView，
+// 同批落盘），本文件与 ./drawers 一并等收口拍板后清理/瘦身。
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'

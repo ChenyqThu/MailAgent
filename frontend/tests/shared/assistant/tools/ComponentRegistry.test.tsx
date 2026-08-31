@@ -106,6 +106,8 @@ describe('componentRegistry — resolution', () => {
       'skill_install',
       'skill_install_confirm',
       'skill_uninstall',
+      // task 08-27 P4a — 恒 HITL 的对外发送（改一改 / 不发 / 发送）。
+      'submit_feedback',
       'update_system_md',
       'web_fetch',
       'web_search'
@@ -118,6 +120,7 @@ describe('componentRegistry — resolution', () => {
       'DraftComposeCard',
       'DraftReplyCard',
       'ExecApprovalCard',
+      'FeedbackApprovalCard',
       'MatterWriteCard',
       'NotionSyncCard',
       'SendApprovalCard',

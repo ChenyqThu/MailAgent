@@ -12,7 +12,9 @@ import type {
   AgentRunPendingCount,
   AgentRunToolOptions,
   ChatOpennessFlags,
+  ChatSessionListItem,
   ConnectorSummary,
+  EnrichedEmailMeta,
   ProjectProgressRunItem,
   ReportAgentConfig,
   ReportAgentCreateInput,
@@ -475,6 +477,67 @@ export function useAgentRuns(
     isLoadingMore: q.isFetchingNextPage,
     loadMore: () => void q.fetchNextPage()
   }
+}
+
+/** P4a 团队页 — origin='agent' 会话全集（记录列时间线的会话源）。与 ChatsTab 的内联
+ *  `[...qk.chat.allSessions(), 'agent']` 同 key（共享缓存）；per-member 过滤在
+ *  mergeMemberTimeline（exact agent_id 匹配 + 显式排除 matter:* 命名空间）。
+ *  🔴 写侧未通（manual chat 恒主 agent 身份）——P4b 接通后这里不用改，新会话自然入列。 */
+export function useAgentOriginSessions(enabled: boolean): {
+  sessions: ChatSessionListItem[]
+  isLoading: boolean
+} {
+  const api = useMailApi()
+  const q = useQuery({
+    queryKey: qk.chat.agentOriginSessions(),
+    queryFn: () => api.chat.listAllSessions({ origin: 'agent' }),
+    enabled,
+    staleTime: 10_000
+  })
+  return { sessions: q.data ?? [], isLoading: q.isLoading }
+}
+
+/** P4a 团队页 — 某报告 agent 的最近 N 份报告（记录列时间线的 report 源）。
+ *  报告本身即记录（r8 §A.0：report agent 无过程 transcript），行投影成记录条目。 */
+export function useAgentReports(
+  agentId: string | null,
+  limit = 30
+): { reports: ReportListItem[]; isLoading: boolean } {
+  const api = useMailApi()
+  const q = useQuery({
+    queryKey: qk.report.listByAgent(agentId ?? '', limit),
+    queryFn: async () => {
+      const { items } = await api.report.list({ agentId: agentId ?? undefined, limit })
+      return items
+    },
+    enabled: agentId != null,
+    staleTime: 10_000
+  })
+  return { reports: q.data ?? [], isLoading: q.isLoading }
+}
+
+/** P4a 团队页 — AI 邮件预处理的执行面：最近被分类过的邮件（listEnriched 投影，客户端
+ *  过滤出带 AI 字段的行）。llm_processing 没有「一次预处理批」的概念（r8 §A.0），
+ *  per-邮件逐封列就是它的真实形状；无 per-邮件耗时可显（该列不在 listEnriched 投影里，
+ *  不硬凑）。 */
+export function useRecentPreprocessedEmails(
+  enabled: boolean,
+  limit = 30
+): { emails: EnrichedEmailMeta[]; isLoading: boolean } {
+  const api = useMailApi()
+  const q = useQuery({
+    queryKey: qk.team.preprocessRecent(limit),
+    queryFn: async () => {
+      // 多拉一些再过滤：近期邮件里未分类（LLM 关闭/跳过）的行不进执行面。
+      const rows = await api.email.listEnriched({ limit: limit * 3 })
+      return rows
+        .filter((r) => r.ai_priority != null || r.ai_action != null || r.ai_category != null)
+        .slice(0, limit)
+    },
+    enabled,
+    staleTime: 30_000
+  })
+  return { emails: q.data ?? [], isLoading: q.isLoading }
 }
 
 /** R5 (task 07-05) — 项目周报同步执行历史（projectProgressRuns，读失败返 []）。

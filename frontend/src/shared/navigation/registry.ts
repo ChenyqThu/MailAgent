@@ -434,13 +434,12 @@ export const NAV_DOMAINS: Record<NavDomain, NavDomainMeta> = {
     second: 'page'
   },
   // 值名 'agents' 保留（见 NavDomain 注释），域的脸是「团队」。
-  // P1 过渡档 'nav'：/agents 页还是卡片网格、没有页面自管左列，二级栏由 DomainPanel
-  // 的 TeamNavPanel（简版智能体清单）出 —— 否则切到团队域左列只剩 56px 导轨，破
-  // 「切域边界不动」。P4 团队页重做出自管清单列（336）后再定终态档位。
+  // 08-27 P4a：团队页重做出自管清单列（TeamWorkspace 定宽 336）→ 落 'page' 终态档，
+  // P1 过渡的 TeamNavPanel 随之退役。
   agents: {
     label: { i18nKey: 'nav.domain.team' },
     icon: () => createElement(BotIcon),
-    second: 'nav'
+    second: 'page'
   },
   // 报告域的二级栏 = `/reports` 页自管的报告清单列（定宽 336）——「二级栏就是报告
   // 列表通栏行，点行右侧直接出内容」。

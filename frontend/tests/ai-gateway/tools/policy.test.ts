@@ -74,6 +74,10 @@ function buildAllTools(contextMode?: AgentContextMode) {
     // task 07-21 — notion-agent tool (MAILAGENT_NOTION_AGENT_TOOL), classified 'outbound' (edit-tier
     // 恒 HITL, un-grantable → stripped headless). Built here so the FULL-set drift guards see it.
     notionAgentToolsEnabled: true,
+    // task 08-27 P4a — submit_feedback（第三个 'outbound' 行）。没有 *Enabled flag：给了
+    // 提交实现才注册，所以 FULL-set 的 drift guard 要在这里把它接上，否则「classified 但不是
+    // 真工具」会红。
+    submitFeedback: async () => ({ submissionBlockId: 'blk-test' }),
     // Matters MVP P3 (D6) + P4 (D8) — eleven default matter tools, classified
     // read (2) + domain_write (9). The gateway class layer admits them in every venue incl.
     // headless — the real headless gate is the HEADLESS_TOOL_OPTIONS checkbox face (matter is

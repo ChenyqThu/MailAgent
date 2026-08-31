@@ -179,6 +179,12 @@ BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     # ── C 组：真不可逆（D2=a，默认 ask 的体验税恰好为零）─────────────────────────
     BuiltinToolPolicy("email_prepare_send", "outbound", "ask", configurable=False),
     BuiltinToolPolicy("notion_agent_chat", "outbound", "ask", danger_auto=True),
+    # task 08-27 P4a：主 Agent 代发一条产品反馈（正文 + 可选邮箱 + 可选诊断包离开本机）。
+    # 🔴 configurable=False 而不是 notion_agent_chat 那样的 danger_auto：owner 明确拍板
+    # 「不给『以后都自动』——对外发送属于安全地板那一档」（与 run_command / skill 安装同级）。
+    # gateway 侧还有三道同向的地板（class outbound 的场地闸 / edit tier / 工厂不接
+    # policyEvaluate 且不转发 per-tool 档），本行是第四道，四道都指向「每次都问」。
+    BuiltinToolPolicy("submit_feedback", "outbound", "ask", configurable=False),
 )
 
 #: name → policy 的查表投影（读侧单源）。

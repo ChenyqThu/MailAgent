@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 from src.agents.fence import fence_calendar_envelope, fence_email_envelope
 from src.agents.run_queue import enqueue_agent_run
+from src.agents.run_sources import RUN_SOURCE_CONTACT_PROFILE, resolve_run_source
 from src.agents.run_state import AGENT_RUN_STATES, derive_agent_run_state
 from src.agents.trigger import (
     CalendarBeforeStartTrigger,
@@ -45,6 +46,8 @@ from src.agents.trigger import (
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access, verify_local_token
 from src.api.deps import get_job_repo, get_report_store, get_repository
+from src.contacts.profile_config import CONTACT_PROFILE_AGENT_ID
+from src.contacts.profile_runs import count_profile_runs, list_profile_runs
 from src.notify.center import NotifyCenter
 from src.sync.async_jobs import AsyncJob
 from src.chat.db import ChatDb
@@ -585,7 +588,9 @@ async def set_approval_state(request: Request, job_id: int, body: _ApprovalState
 # ── run 历史列表（S5 W1）─────────────────────────────────────────────────────────
 
 
-def _run_history_item(job: AsyncJob) -> dict[str, Any]:
+def _run_history_item(
+    job: AsyncJob, *, agent_id_override: Optional[str] = None
+) -> dict[str, Any]:
     """``AsyncJob`` → run 历史行投影（S5 W1，ADR D4/P6）。
 
     🔴 ``state`` 唯一经 ``derive_agent_run_state`` 派生（9 值域单源）——TS 侧**永不**自行从
@@ -597,6 +602,10 @@ def _run_history_item(job: AsyncJob) -> dict[str, Any]:
     投影，纯展示增强，非状态判定输入——不影响上面那条红线。``params.trigger_kind`` 缺失
     （老行 / 非常规入队路径）→ 两字段恒 None；有值则复用 ``_fired_at_iso`` 同一份 cron
     occurrence 解析，与 ``_assemble_spec`` 的 firedAt 同源不重造第二套解法。
+
+    ``agent_id_override``（L4 P4a）：非 ``agent_run`` 族的 job 的 ``target_key`` **不是成员
+    id**（``contact_governance`` 的是 ``'global'``），投影时回填成团队页认识的成员 id。
+    形状本身一字不变 —— 前端 ``AgentRunHistoryItem`` 已按这个形状消费。
     """
     result = job.result if isinstance(job.result, dict) else {}
     state = derive_agent_run_state(
@@ -616,7 +625,7 @@ def _run_history_item(job: AsyncJob) -> dict[str, Any]:
     )
     return {
         "jobId": job.job_id,
-        "agentId": job.target_key,
+        "agentId": agent_id_override or job.target_key,
         "state": state,
         "outcome": result.get("outcome"),
         "summary": result.get("summary"),
@@ -633,6 +642,60 @@ def _run_history_item(job: AsyncJob) -> dict[str, Any]:
         ),
         "triggerKind": trigger_kind,
         "triggerFiredAtIso": trigger_fired_at_iso,
+    }
+
+
+# 画像台账的 status（ok/fail/noop）→ run 历史的 9 值域。**复用**既有词表而不是新增第 10 个
+# 值：前端 RunStateBadge 按 9 值域穷举渲染，多一个值就是一处白名单外的静默空白。
+# noop（这一轮没有候选人）落 'skipped' —— 与预算门拒绝同义：没执行 LLM，不是失败。
+_PROFILE_RUN_STATE_BY_STATUS = {"ok": "completed", "fail": "failed", "noop": "skipped"}
+
+
+def _profile_run_summary(row: dict[str, Any]) -> str:
+    """一句话交代这一轮干了什么（记录列直接显示这行字）。"""
+    if row.get("status") == "noop":
+        return "没有待更新画像的联系人"
+    if row.get("status") == "fail" and row.get("error"):
+        return f"没跑完 · 候选 {row.get('candidates', 0)} 人，已完成 {row.get('ok_count', 0)} 人"
+    return (
+        f"画像 {row.get('ok_count', 0)} 人 · 跳过 {row.get('skipped', 0)} "
+        f"· 失败 {row.get('failed', 0)}"
+    )
+
+
+def _profile_run_item(row: dict[str, Any]) -> dict[str, Any]:
+    """``contact_profile_run`` 行 → run 历史行投影（L4 P4a，形状与 ``_run_history_item`` 同）。
+
+    🔴 **单位换算就在这一处**：台账的时间列是 epoch **毫秒**（contacts 域全域单位），而
+    run 历史契约里 ``createdAt``/``finishedAt`` 是 ``async_jobs`` 的 ``time.time()`` **秒**。
+    表内不留两种单位，换算只在边界做。
+
+    三个恒空字段各有理由，不是没写完：``sessionId`` —— 画像不开会话（不走 chat 引擎，
+    没有 transcript 可看）；``steps``/``tokens`` —— 逐人的 LLM 用量在 contact 行上，一轮
+    的合计没有台账；``triggerKind``/``triggerFiredAtIso`` —— 沿用「缺失即 None，不臆造
+    触发方式」的既有契约（画像是每日整点 tick，没有 fire_key 可解析）。
+    """
+    status = str(row["status"])
+    started = float(row["started_at"]) / 1000.0
+    finished = float(row["completed_at"]) / 1000.0
+    return {
+        "jobId": int(row["id"]),
+        "agentId": CONTACT_PROFILE_AGENT_ID,
+        # 未知 status fail-closed 落 'failed'：解读不了的行绝不显示成「成功完成」
+        # （与 derive_agent_run_state 同一条纪律）。库的 CHECK 已经拦住第四个值。
+        "state": _PROFILE_RUN_STATE_BY_STATUS.get(status, "failed"),
+        "outcome": status,
+        "summary": _profile_run_summary(row),
+        "approvalState": None,
+        "sessionId": None,
+        "createdAt": started,
+        "finishedAt": finished,
+        "error": row["error"],
+        "steps": None,
+        "tokens": None,
+        "durationSeconds": max(0.0, finished - started),
+        "triggerKind": None,
+        "triggerFiredAtIso": None,
     }
 
 
@@ -844,6 +907,13 @@ async def list_agent_runs(
     task 07-21：``offset`` 补齐分页（透传给 ``list_agent_runs`` 的 SQL OFFSET）；meta 加
     ``total``（同 agent_id filter 的 COUNT(*)，**不叠加** ``state`` —— 那是内存派生后过滤，
     非 SQL-filterable，与 ``count_agent_runs`` 的口径保持一致，详见其 docstring）。
+
+    L4 P4a（团队页记录列）：``agentId`` 不再等同于 ``target_key`` —— 经
+    ``src.agents.run_sources.resolve_run_source`` 解析出该成员对应的 ``(job_type,
+    target_key)``（🔴 target_key 语义随 job_type 变，见那张表的头注），治理 run 与画像台账
+    因此能进同一条时间线。解析不出（事项域命名空间 / 空 id）→ **空集不报错**。
+    ``agentId`` 缺省（列全部）时口径不变：只列 ``agent_run``，避免把事项域的 run 掺进
+    pending-count 之类的全局面。
     """
     _require_flag()
     if state is not None and state not in AGENT_RUN_STATES:
@@ -854,12 +924,36 @@ async def list_agent_runs(
             source="agent-runs",
         )
     repo = get_job_repo()
-    jobs = repo.list_agent_runs(agent_id=agent_id, limit=limit, offset=offset)
-    items = [_run_history_item(j) for j in jobs]
+    if agent_id is None:
+        jobs = repo.list_agent_runs(limit=limit, offset=offset)
+        items = [_run_history_item(j) for j in jobs]
+        total = repo.count_agent_runs()
+    else:
+        source = resolve_run_source(agent_id)
+        if source is None:
+            # 本域不认识这个成员（事项域的 `matter:` / `matter_item:` 命名空间恒落这里）。
+            items, total = [], 0
+        elif source.kind == RUN_SOURCE_CONTACT_PROFILE:
+            db_path = str(repo.db_path)
+            items = [
+                _profile_run_item(r)
+                for r in list_profile_runs(db_path, limit=limit, offset=offset)
+            ]
+            total = count_profile_runs(db_path)
+        else:
+            jobs = repo.list_runs(
+                job_type=source.job_type,
+                target_key=source.target_key,
+                limit=limit,
+                offset=offset,
+            )
+            items = [_run_history_item(j, agent_id_override=agent_id) for j in jobs]
+            total = repo.count_runs(
+                job_type=source.job_type, target_key=source.target_key
+            )
     if state is not None:
         items = [it for it in items if it["state"] == state]
     _annotate_auto_whitelist(items)
-    total = repo.count_agent_runs(agent_id=agent_id)
     return success_envelope(
         items,
         request=request,

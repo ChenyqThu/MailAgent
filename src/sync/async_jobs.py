@@ -404,58 +404,82 @@ class AsyncJobRepository:
         finally:
             conn.close()
 
-    def list_agent_runs(
-        self, *, agent_id: Optional[str] = None, limit: int = 20, offset: int = 0
+    def list_runs(
+        self,
+        *,
+        job_type: str = "agent_run",
+        target_key: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
     ) -> list[AsyncJob]:
-        """列出 agent_run 历史行 (按 created_at desc)——S5 run 历史读侧唯一数据源。
+        """列出某族 run 行 (按 created_at desc)——run 历史读侧唯一数据源。
 
-        agent_id 非空 → 只返回该 agent (target_key 过滤); None → 全部 agent_run。limit clamp
-        进 [1, 100]；offset clamp >= 0（task 07-21 分页）。返回 ``AsyncJob`` 投影 —— 读态
-        (9 值域，含 skipped) 由调用方经 ``src.agents.run_state.derive_agent_run_state`` 派生,
-        **不在此推导**
-        (纯查询)。
+        🔴 ``target_key`` 的语义**随 job_type 变** (agent_run → agent id;
+        contact_governance → 'global'; matter_followup → 事项 public_id), 所以两个参数必须
+        成对给。「哪个成员对应哪一对」是 ``src.agents.run_sources`` 的那张显式映射表的事,
+        本方法只是纯查询, 不解释语义。
+
+        limit clamp 进 [1, 100]；offset clamp >= 0（task 07-21 分页）。返回 ``AsyncJob``
+        投影 —— 读态 (9 值域，含 skipped) 由调用方经
+        ``src.agents.run_state.derive_agent_run_state`` 派生, **不在此推导**。
         """
         lim = max(1, min(100, limit))
         off = max(0, offset)
         conn = self._connect()
         try:
-            if agent_id:
+            if target_key:
                 rows = conn.execute(
-                    "SELECT * FROM async_jobs WHERE job_type='agent_run' AND target_key=? "
+                    "SELECT * FROM async_jobs WHERE job_type=? AND target_key=? "
                     "ORDER BY created_at DESC, job_id DESC LIMIT ? OFFSET ?",
-                    (agent_id, lim, off),
+                    (job_type, target_key, lim, off),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM async_jobs WHERE job_type='agent_run' "
+                    "SELECT * FROM async_jobs WHERE job_type=? "
                     "ORDER BY created_at DESC, job_id DESC LIMIT ? OFFSET ?",
-                    (lim, off),
+                    (job_type, lim, off),
                 ).fetchall()
             return [self._row_to_job(r) for r in rows]
         finally:
             conn.close()
 
-    def count_agent_runs(self, *, agent_id: Optional[str] = None) -> int:
-        """``list_agent_runs`` 同 agent_id filter 的 COUNT(*)（task 07-21 分页 total）。
+    def count_runs(
+        self, *, job_type: str = "agent_run", target_key: Optional[str] = None
+    ) -> int:
+        """``list_runs`` 同 filter 的 COUNT(*)（分页 total）。
 
-        只按 agent_id 过滤（与 ``list_agent_runs`` 的 SQL-filterable 条件一致）——router 侧
-        额外的 ``state`` 过滤是在 ``derive_agent_run_state`` 派生之后的内存过滤，不参与此计数。
+        只按 job_type + target_key 过滤（与 ``list_runs`` 的 SQL-filterable 条件一致）——
+        router 侧额外的 ``state`` 过滤是在 ``derive_agent_run_state`` 派生之后的内存过滤，
+        不参与此计数。
         """
         conn = self._connect()
         try:
-            if agent_id:
+            if target_key:
                 row = conn.execute(
                     "SELECT COUNT(*) AS n FROM async_jobs "
-                    "WHERE job_type='agent_run' AND target_key=?",
-                    (agent_id,),
+                    "WHERE job_type=? AND target_key=?",
+                    (job_type, target_key),
                 ).fetchone()
             else:
                 row = conn.execute(
-                    "SELECT COUNT(*) AS n FROM async_jobs WHERE job_type='agent_run'"
+                    "SELECT COUNT(*) AS n FROM async_jobs WHERE job_type=?",
+                    (job_type,),
                 ).fetchone()
             return int(row["n"]) if row else 0
         finally:
             conn.close()
+
+    def list_agent_runs(
+        self, *, agent_id: Optional[str] = None, limit: int = 20, offset: int = 0
+    ) -> list[AsyncJob]:
+        """``list_runs`` 的 agent_run 特化 (agent_id 即 target_key)——既有调用方的窄门面。"""
+        return self.list_runs(
+            job_type="agent_run", target_key=agent_id, limit=limit, offset=offset
+        )
+
+    def count_agent_runs(self, *, agent_id: Optional[str] = None) -> int:
+        """``count_runs`` 的 agent_run 特化 (agent_id 即 target_key)。"""
+        return self.count_runs(job_type="agent_run", target_key=agent_id)
 
     # ------------------------------------------------------------
     # agent_run fresh-spawn 支持 (S4 D2/D4): claim_token + spec CAS + approval 回写

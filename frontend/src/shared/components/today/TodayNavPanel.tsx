@@ -26,7 +26,7 @@ export function TodayNavPanel(): React.ReactElement {
   const section = useTodaySection((s) => s.section)
   const setSection = useTodaySection((s) => s.setSection)
 
-  // 落点走 registry（path 字面量不出 registry，同 TeamNavPanel）。
+  // 落点走 registry（path 字面量不出 registry）。
   const todayEntry = navEntry('today')
 
   const handleClick = (id: TodaySectionId): void => {

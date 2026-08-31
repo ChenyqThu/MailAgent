@@ -8,6 +8,7 @@
 // The contextBridge guarantees a clean serialization boundary, so all
 // arguments must be structured-clonable.
 
+import type { FeedbackLogEntry } from '../feedback/contract'
 import type {
   AdminApi,
   AdminHealthData,
@@ -76,6 +77,10 @@ import type {
   EmailPinOpts,
   EmailMeta,
   EnrichedEmailMeta,
+  FeedbackApi,
+  FeedbackDiagnostics,
+  FeedbackScreenshot,
+  FeedbackSubmitOpts,
   FolderApi,
   FolderCleanupResult,
   FolderDiscoverResult,
@@ -970,6 +975,31 @@ class ElectronReportApi implements ReportApi {
   }
 }
 
+// task 08-27 P4a — 快捷反馈。三条链路都只有主进程做得到（截图 capturePage / 诊断包 fork
+// CLI / 提交要绕开 renderer CSP + 统一设 UA），故 renderer 侧全是薄 invoke。
+// 🔴 submit 失败**照抛**：调用方必须显示「没发出去」并给「打开表单页」的降级 —— 私有
+// API 的失效是静默的，把错误吞掉就等于骗自己。
+class ElectronFeedbackApi implements FeedbackApi {
+  async context(route?: string): Promise<string> {
+    return (await invoker()('feedback:context', route)) as string
+  }
+  async capture(): Promise<FeedbackScreenshot | null> {
+    return (await invoker()('feedback:capture')) as FeedbackScreenshot | null
+  }
+  async diagnostics(): Promise<FeedbackDiagnostics> {
+    return (await invoker()('feedback:diagnostics')) as FeedbackDiagnostics
+  }
+  async submit(opts: FeedbackSubmitOpts): Promise<{ submissionBlockId: string }> {
+    return (await invoker()('feedback:submit', opts)) as { submissionBlockId: string }
+  }
+  async recent(): Promise<FeedbackLogEntry[]> {
+    return (await invoker()('feedback:recent')) as FeedbackLogEntry[]
+  }
+  async openForm(): Promise<void> {
+    await invoker()('feedback:openForm')
+  }
+}
+
 export class ElectronApi implements MailApi {
   email: EmailApi = new ElectronEmailApi()
   jobs: JobsApi = new ElectronJobsApi()
@@ -994,4 +1024,5 @@ export class ElectronApi implements MailApi {
   prompts: PromptsApi = new ElectronPromptsApi()
   notionAgent: NotionAgentApi = new ElectronNotionAgentApi()
   report: ReportApi = new ElectronReportApi()
+  feedback: FeedbackApi = new ElectronFeedbackApi()
 }

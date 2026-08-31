@@ -196,7 +196,14 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'contact_mark_former_email',
   'contact_refresh_profile',
   'contact_update_fields',
-  'contact_set_manager'
+  'contact_set_manager',
+  // task 08-27 P4a —— 快捷反馈的 agent 提交面。无 skill 归属（Python 无 feedback builtin
+  // skill），永不 skill-gated；它的开关面是 outbound class 的场地地板（只在 manual_chat
+  // 注册）+ 恒 HITL，不是 skill toggle。
+  // 🔴 注意本集合的注释里**不要写单引号包裹的小写词** —— eval 的 catalog 完整性闸是按
+  // `new Set([...])` 整段做正则抽取的，注释里的 `xxx` 会被当成工具名（这条注释原本写着
+  // 单引号的 outbound，闸当场把它当成一个「缺 catalog 行的工具」报红）。
+  'submit_feedback'
 ])
 
 /** 删掉「归属 skill ∉ advertisedSkills 且无任一 advertised skill 仍拥有它 且非 collision-exempt」的

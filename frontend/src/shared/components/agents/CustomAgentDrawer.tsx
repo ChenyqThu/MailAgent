@@ -67,7 +67,6 @@ import {
   type ConnectorGrantMap,
   type WebGrant
 } from './custom-agent/shared'
-import { RunHistorySection } from './custom-agent/RunHistorySection'
 import { AutomationPolicySection } from './custom-agent/AutomationPolicySection'
 import { CapabilityCards } from './custom-agent/CapabilityCards'
 import { AgentIdentityHeader } from './AgentAvatar'
@@ -1228,8 +1227,8 @@ export function CustomAgentDrawer({
             />
           )}
 
-          {/* run 历史（仅编辑既有时；新建时 agent 尚未存在） */}
-          {!create && cfg && <RunHistorySection agentId={cfg.id} />}
+          {/* P4a：run 历史从配置面移走（r7 §三 判据 6）—— 归团队页记录列，组件本体
+              RunHistorySection 保留（RunStateBadge 仍从本文件 re-export）。 */}
 
           {err && (
             <div

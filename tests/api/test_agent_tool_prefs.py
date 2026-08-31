@@ -81,6 +81,10 @@ EXPECTED_FIXED_ASK = {
     # prompt 或某个事项的跟进排程（同 custom_agent_update 的论证）。
     "internal_agent_update",
     "matter_followup_mutate",
+    # task 08-27 P4a：主 Agent 代发一条产品反馈。owner 拍板「不给『以后都自动』——对外
+    # 发送属于安全地板那一档」，所以是 configurable=False 而不是 notion_agent_chat 那样
+    # 的「可配 auto 但带红警告」。
+    "submit_feedback",
 }
 # D2=a：设 auto 需红警告 + 一次性确认。
 EXPECTED_DANGER_AUTO = {"calendar_event_delete", "notion_agent_chat"}
