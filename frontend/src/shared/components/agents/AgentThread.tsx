@@ -65,8 +65,9 @@ interface AgentThreadProps {
   runStatusSlot?: React.ReactNode
   /** Matters G-20 — 事项对话的空态标题/副标题（设计稿："the empty state names the matter"）。
    *  省略 → 通用 greetings 一字不变。
-   *  P4b — `icon`（团队对话：Agent Logo，渲染在标题上方）；省略 → 无图，现状。 */
-  welcomeOverride?: { title: string; hint: string; icon?: React.ReactNode }
+   *  P4b — `icon`（团队对话：Agent Logo）；09-01 起嵌进句中，`titlePre` 是头像前的句首
+   *  片段（「和」），`title` 是头像后的剩余句子；省略 icon → 无图，现状。 */
+  welcomeOverride?: { title: string; hint: string; icon?: React.ReactNode; titlePre?: string }
   /** task 08-27 P4a — 消息流**最前**的插槽（viewport 内、随流滚动）。执行记录视图用它挂
    *  前端合成的「⚡自动触发」气泡（真实首条 user 消息是 4-7KB 任务契约 prompt，已被摘掉，
    *  见 team/runTranscript.ts）。省略 = 字节级现状。 */
@@ -166,8 +167,10 @@ function AgentWelcome({
   override
 }: {
   /** 事项对话把标题换成事项标题（用户内容，不进 i18n）。省略 → 通用 greetings。
-   *  P4b：团队对话另带 icon（Agent Logo，标题上方）。 */
-  override?: { title: string; hint: string; icon?: React.ReactNode }
+   *  P4b：团队对话另带 icon（Agent Logo）。09-01 dogfood：icon 不再置于整句左侧，而是
+   *  嵌进句中（「和 [头像] 名字 开始新对话」）——titlePre 是头像前的句首片段，title 是
+   *  头像后的剩余句子（名字开头）。无 icon 的调用方不用感知这两段。 */
+  override?: { title: string; hint: string; icon?: React.ReactNode; titlePre?: string }
 }): React.JSX.Element {
   const { t } = useTranslation()
   return (
@@ -186,21 +189,25 @@ function AgentWelcome({
       {/* #1 dogfood: z-10 已移到 .agent-strands-banner { z-index:-1 }，由
           负 z-index 把丝线沉到底层，文案无需再持 z-10 stacking context。
           保留 relative 供 animate-in transform 用。 */}
-      {/* P4b — 团队对话的 Agent Logo（owner 拍板改横排：头像 + 标题同一行，
-          排程提示另起一行）。无 icon（主 Agent 默认态 / 事项对话）→ 走原竖排。 */}
+      {/* P4b — 团队对话的 Agent Logo。09-01 dogfood：头像嵌进句中（「和 [头像] 名字 开始
+          新对话」），整句是一个 h1 横排；排程提示另起一行。🔴 h1 必须 flex-wrap：句首片段
+          与头像都是 shrink-0（en-US 句首约 230px），窄面板下名字段要能掉行并在行内折行，
+          否则被 Viewport 的 overflow-x-hidden 硬裁。无 icon（主 Agent 默认态 / 事项对话）
+          → 走原竖排。 */}
       {override?.icon != null ? (
         <>
-          <div
-            className="relative flex animate-in items-center gap-2.5 fade-in slide-in-from-bottom-1 fill-mode-both duration-200"
+          <h1
+            className="relative flex flex-wrap animate-in items-center justify-center gap-2.5 fade-in slide-in-from-bottom-1 fill-mode-both text-2xl font-semibold text-ink-fg duration-200"
             data-welcome-agent-row
           >
-            <span className="shrink-0" data-welcome-agent-icon>
+            {override.titlePre != null && <span className="shrink-0">{override.titlePre}</span>}
+            {/* aria-hidden：AgentAvatar 自带 alt / aria-label = 名字，名字已在句子里，
+                不隐藏则 h1 的可访问名会把名字念两遍。 */}
+            <span className="shrink-0" data-welcome-agent-icon aria-hidden="true">
               {override.icon}
             </span>
-            <h1 className="min-w-0 text-balance text-2xl font-semibold text-ink-fg">
-              {override.title}
-            </h1>
-          </div>
+            <span className="min-w-0 text-balance">{override.title}</span>
+          </h1>
           <p className="relative mt-2 text-aux text-ink-fg-3">{override.hint}</p>
         </>
       ) : (

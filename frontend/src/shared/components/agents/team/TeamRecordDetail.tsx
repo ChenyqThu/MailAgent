@@ -182,7 +182,10 @@ export function TeamRunTranscript({
   )
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col" data-team-run-detail={view.key}>
+    // 🔴 min-w-0 必须在：作为记录面横排 row 的 flex item，缺了它 DetailHeader 超长单行
+    // 标题的 min-content 会把整个详情面撑得比窗口还宽（09-01 dogfood：消息列右缘被窗口
+    // 硬裁、truncate 出不了省略号——溢出发生在这层，header 内部的 min-w-0 救不了）。
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col" data-team-run-detail={view.key}>
       <DetailHeader
         left={
           <>
@@ -404,7 +407,8 @@ export function TeamSessionDetail({
     session.first_user_message?.trim() ||
     t('sessions.untitled')
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-team-session-detail={session.id}>
+    // min-w-0 同 TeamRunTranscript 根：防长标题把详情面撑出窗口。
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-team-session-detail={session.id}>
       <DetailHeader
         left={
           <span className="min-w-0 flex-1 truncate text-body font-medium text-ink-fg" title={title}>

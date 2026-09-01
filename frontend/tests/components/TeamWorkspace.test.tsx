@@ -85,13 +85,18 @@ vi.mock('@shared/hooks/useMailApi', () => ({
 // 同款打桩纪律）。
 vi.mock('../../src/shared/components/agents/AgentConversation', () => ({
   AgentConversation: (props: {
-    agentIdentity?: { agentId: string; welcome: { title: string; hint: string } }
+    agentIdentity?: {
+      agentId: string
+      welcome: { title: string; hint: string; titlePre?: string }
+    }
     activeItem: { id: number } | null
   }) => (
     <div
       data-live-conversation
       data-conversation-agent={props.agentIdentity?.agentId ?? ''}
       data-conversation-session={props.activeItem?.id ?? 'new'}
+      data-conversation-welcome-pre={props.agentIdentity?.welcome.titlePre ?? ''}
+      data-conversation-welcome-title={props.agentIdentity?.welcome.title ?? ''}
     />
   )
 }))
@@ -365,6 +370,15 @@ describe('记录面壳', () => {
       container.querySelector('[data-live-conversation]')?.getAttribute('data-conversation-agent')
     ).toBe('dms_helper')
     expect(container.querySelector('[data-pending-composer]')).toBeNull()
+    // 09-01 dogfood：欢迎句拆成 newSessionTitlePre + newSessionTitleRest 两个 key，改名全程
+    // 无闸——key 打错会渲染裸 key 串且全绿。锁：桩透出的两段 = i18n 解析值，且不是裸 key。
+    const live = container.querySelector('[data-live-conversation]')!
+    const welcomePre = live.getAttribute('data-conversation-welcome-pre')
+    expect(welcomePre).toBe(i18n.t('team.record.newSessionTitlePre'))
+    expect(welcomePre).not.toMatch(/^team\.record\./)
+    expect(live.getAttribute('data-conversation-welcome-title')).toBe(
+      i18n.t('team.record.newSessionTitleRest', { name: '跟进员' })
+    )
   })
 
   test('P4b — 记录列点中 origin=team 会话 → 续聊（真 composer）；origin=agent 保持只读', async () => {
@@ -398,6 +412,11 @@ describe('记录面壳', () => {
     await waitFor(() =>
       expect(container.querySelector('[data-team-session-detail="300"]')).toBeTruthy()
     )
+    // 🔴 会话详情根必须 min-w-0（与 TeamRunTranscript 根同一修点：作为记录面 row 的 flex
+    // item，缺了它 header 超长单行标题把面板撑出窗口）。happy-dom 量不出布局，锁 class。
+    expect(
+      container.querySelector('[data-team-session-detail="300"]')?.classList.contains('min-w-0')
+    ).toBe(true)
     expect(container.querySelector('[data-live-conversation]')).toBeNull()
   })
 

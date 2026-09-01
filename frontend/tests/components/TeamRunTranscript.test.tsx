@@ -120,6 +120,12 @@ describe('TeamRunTranscript — 触发气泡合成 + 首条 prompt 摘除', () =
     await waitFor(() => {
       expect(container.querySelector('[data-run-trigger-bubble]')).toBeTruthy()
     })
+    // 🔴 详情面根必须 min-w-0（09-01 dogfood：作为记录面 row 的 flex item，缺了它
+    // header 超长单行标题的 min-content 会把面板撑得比窗口宽 → 消息列右缘被硬裁）。
+    // happy-dom 量不出布局，这里锁 class 防止重构时无感丢失。
+    expect(container.querySelector('[data-team-run-detail]')?.classList.contains('min-w-0')).toBe(
+      true
+    )
     // 触发气泡 = triggerKind 的人话（收信触发），不是那 4-7KB 的 prompt。
     expect(screen.getByText(/收信触发/)).toBeTruthy()
     // 🔴 首条 user 消息（任务契约 prompt）不得出现在可见 DOM（折叠块默认收起）。

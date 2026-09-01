@@ -64,7 +64,8 @@ export function TeamChatHost({
       agentId,
       model: member.cfg?.model ?? null,
       welcome: {
-        // owner 拍板改横排（头像 + 标题同一行）：44px 置顶居中改成 36px 与标题行高协调。
+        // 09-01 dogfood：头像嵌进句中——「和 [头像] 名字 开始新对话」。titlePre 是头像前
+        // 的句首片段，title 是头像后的剩余句子（名字开头），两段拆开进 i18n。
         icon: (
           <AgentAvatar
             agentId={agentId}
@@ -73,7 +74,8 @@ export function TeamChatHost({
             title={memberTitle}
           />
         ),
-        title: t('team.record.newSessionTitle', { name: memberTitle }),
+        titlePre: t('team.record.newSessionTitlePre'),
+        title: t('team.record.newSessionTitleRest', { name: memberTitle }),
         hint: memberScheduleHint(member.cfg, t, i18n.language)
       }
     }

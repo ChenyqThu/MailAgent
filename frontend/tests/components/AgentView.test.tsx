@@ -150,23 +150,33 @@ describe('Agent view — demo-fidelity thread', () => {
     expect(screen.getByText(i18n.t('agentView.quickActions.summarize.label'))).toBeTruthy()
   })
 
-  // owner 拍板：团队对话空态从「头像置顶居中 + 标题另起一行」改横排（头像在标题左边）。
+  // 09-01 dogfood：头像嵌进句中——「和 [头像] 名字 开始新对话」，整句一个横排 h1。
   // 事项对话的 override（无 icon）不受影响，走原竖排 —— 见下一条用例。
-  test('welcome override with icon (团队对话) — 头像与标题横排同行，排程提示另起一行', async () => {
+  test('welcome override with icon (团队对话) — 头像嵌在句中（和 [头像] 名字…）', async () => {
     mountThread(
       [],
       <AgentThread
         welcomeOverride={{
-          title: '和 跟进员 开始新对话',
+          titlePre: '和',
+          title: '跟进员 开始新对话',
           hint: '每天 9:00 自动运行',
           icon: <span data-testid="welcome-icon">🤖</span>
         }}
       />
     )
-    const title = await screen.findByText('和 跟进员 开始新对话')
+    const title = await screen.findByText('跟进员 开始新对话')
     const icon = screen.getByTestId('welcome-icon')
-    // 头像与标题共享同一个横排容器（同一父节点）——不是各占一行的竖排。
-    expect(icon.closest('[data-welcome-agent-row]')).toBe(title.parentElement)
+    const row = icon.closest('[data-welcome-agent-row]')
+    // 🔴 窄面板换行闸：句首片段与头像都是 shrink-0（en-US 句首约 230px），h1 缺 flex-wrap
+    // 名字段会被 Viewport 的 overflow-x-hidden 硬裁。happy-dom 量不出布局，锁 class。
+    expect(row?.classList.contains('flex-wrap')).toBe(true)
+    // 句首片段、头像、剩余句子同处一个横排容器，且头像在句首片段之后、名字之前。
+    expect(row).toBe(title.parentElement)
+    const pre = screen.getByText('和')
+    expect(pre.parentElement).toBe(row)
+    const order = Array.from(row?.children ?? [])
+    expect(order.indexOf(pre)).toBeLessThan(order.indexOf(icon.parentElement as Element))
+    expect(order.indexOf(icon.parentElement as Element)).toBeLessThan(order.indexOf(title))
     expect(screen.getByText('每天 9:00 自动运行')).toBeTruthy()
   })
 

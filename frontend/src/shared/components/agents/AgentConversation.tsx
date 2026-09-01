@@ -119,8 +119,9 @@ export interface AgentConversationAgentIdentity {
   agentId: string
   /** agent 行的 model（'' / null = 跟随全局默认）。 */
   model?: string | null
-  /** 欢迎屏：Logo + 「和 X 开始新对话」 + 排程一句话。 */
-  welcome: { icon?: React.ReactNode; title: string; hint: string }
+  /** 欢迎屏：「titlePre [Logo] title」句内头像 + 排程一句话（形状与 AgentThread 的
+   *  welcomeOverride 同；🔴 联合上下文下 TS 不做 excess-property 检查，字段漏在这里不会红）。 */
+  welcome: { icon?: React.ReactNode; title: string; hint: string; titlePre?: string }
 }
 
 export function AgentConversation({
