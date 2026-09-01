@@ -1,6 +1,7 @@
 # A3 方案：事项工作群 · Agent 会议 · Agent 成员面
 
 > 状态：方案定稿（2026-08-25 owner 三拍板），未开工；每个批次开工时另建 trellis task。
+> 🔴 **2026-09-01 改判**：P1「确定性主持人、不是 LLM 自由群聊」被 owner 群聊设想推翻——自由群聊进实验性多 agent 体系（README §0，epic `09-01-group-agents-lab`），会议改为「带法官角色位的群」；P2 / P3 / P4 不变。本文其余内容待 G3 落地后按 README §0 表第 4 行重排。
 > 来源：owner 原始想法「行动项 Assign 给不同 Agent（批次 3 已落地）；Agent 之间约日程开会，
 > 开会 = 一群 agent 在一个 session 里，根据事项对齐和推进任务」+ 三项拍板（见 §1）。
 > 位置：L4 epic WS-A A3 的具体化，取代 README §3 A3 行的旧一句话描述；A3 原有的

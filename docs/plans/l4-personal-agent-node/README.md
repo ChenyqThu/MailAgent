@@ -3,7 +3,35 @@
 > 状态：**规划定稿，进入实施**（trellis epic task `08-17-l4-agent-epic-agent-notion`；每个实施批另建独立 task，本 epic 是索引）
 > 形成过程：2026-08-17/18 头脑风暴 session（owner 愿景 + 7 份 Opus 5 调研，档案见 [research/](./research/)，所有「据调研」论断可溯源到 URL）。
 > v2 修订（2026-08-18）：吸收 owner 的 **work-first 架构原则** + 调研档案 05/06 的机制修正 + 三项拍板（契约挂行动项层 / 例外队列=回顾面 / 接线批先行）。
+> v3 修订（2026-09-01）：owner 群聊设想（被 @ 才响应 / 实时响应两档 + 消息权限与工具 + Cumora 式实验性多 agent 体系，狼人杀验收）**改判 A3 P1**，新增 G 系列三批并重排后续 workstream，见 §0。
 > 本文档是这条主线的 **SSoT**。
+
+---
+
+## 0. v3 修订：群聊实验性多 agent 体系（2026-09-01）
+
+owner 指令原话要点：群聊**被 @ 的时候才把近期消息给到 agent，他可以响应**；对应需要**一系列消息权限和工具**给到 AI（查询历史消息、拉群、响应等）；**群设置里可以设置每个 agent 是实时响应还是被 @ 才响应**；**参考 Cumora 搭建一套实验的多 agent 体系**，最终结果是**几个 agent 可以在群里玩狼人杀**；L4 后续按这个设想重排并推进。需求 SSoT = `.trellis/tasks/09-01-group-agents-lab/prd.md`。
+
+**改判**：
+- A3 P1「会议内核 = 确定性主持人，不是 LLM 自由群聊」被改判。自由群聊现在是要做的东西；成本与安全的载体从「确定性主持人」换成**服务端确定性地板**（链上限 / 反独白 / 群级预算 / 速率）+ 结构化沉默 + 成本可观测两指标；会议改为「带法官角色位的群」长在新体系之上。
+- D1「不另起多人平台」**不变**：群成员仍全是 owner 自己的 agent，不引入多人。
+- 批次 1 的范围红线「不做对等 agent 群聊」作废。HITL 地板、递归有界（结构不是 prompt）、memory 不自动吸收群聊结论、hold-token 律四条不变。
+- 调研档案 02 §6「桌面个人助理该用 Orchestrator-Worker 而非对等群聊」的结论保留为**成本告诫**，不再是选型否决：实验性体系进 labs，靠可观测面（silent-run 率 / turns-per-human-message）用数据说话。
+
+**新排序**（epic `.trellis/tasks/09-01-group-agents-lab`，三个子批各有 design.md / implement.md）：
+
+| 序 | 批次 | 内容 | 依赖 |
+|---|---|---|---|
+| 1 | **G1 编排下沉底座** | 成员响应模式（schema + 群设置 UI）；服务端群 run（唤醒 → 候选 → 串行发言 → 地板 / 预算 / 停止）；近期消息窗口 + 结构化沉默；token / run 台账落库；前端订阅推送；成本指标读面 | 无 |
+| 2 | **G2 agent 群工具面** | group_history / group_members / group_create / group_post；场地 × 角色位权限矩阵；群内递归护栏；审批姿态与卡片预览；catalog / policy / i18n 闸 | G1 |
+| 3 | **G3 狼人杀实验** | 法官 + 玩家预设 persona；法官角色位；子群夜晚；一键建局；验收脚本与回放；labs 入口 | G1 + G2 |
+| 4 | A3 重排 | 会议 = 带法官的群；A3b 成员面 / A3c 约日程复用 G1 台账与 G2 工具；A3d 真分身按 G3 数据再判 | G3 |
+| 5 | B2 站会仪式 | 议程由法官 agent 在群里驱动（复用 G2 工具），不再另造会议 run kind | A3 |
+| 6 | B3 / B4 | 信任引擎 / 动态审批：群工具的审批姿态与采纳率是首个真实数据源 | 不变 |
+| 7 | C1 飞书群场地 | 群聊出桌面（web / IM 场地）在 G 系列稳定后 | 不变 |
+| — | A4 / A5 / D 系列 / E0 | 顺序不变，随发版插 | 不变 |
+
+独立 UI 线：Sidebar 优化（`.trellis/tasks/09-01-sidebar-fluid-optimization`），与 G 系列并行。
 
 ---
 
@@ -94,7 +122,7 @@ agent-first（先找 agent、开对话、派任务）是 chat 形态的延续，
 |---|---|---|
 | A1 | **接线批（=批次 1，先行）**：详见 §4 | 档案 01 §8 |
 | A2 | **行动项执行契约（=批次 3，架构中心）**：matter_item 升格有状态机的一等对象（D4）；契约 = 派发/接单 ack/过程 activity（thought/action）/反问 elicitation/交付 result；**委派 ≠ 转移责任**（owner=人恒为负责人，executor=人或 agent，两列分开）；elicitation 进例外面。**档案 07 五条设计约束**：① 执行契约状态由服务端 CAS 强制、业务语义标签可自定义，**两者不合成一列**（Notion 手搓状态机的教训 = agent 忘改状态即静默卡死）② claim = 带 lease 的 CAS（复用 async_jobs fire_key + expect_status 先例 + `lease_expires_at`，到期回 open）③ `awaiting_input` 一等状态（复用 paused_handoff/审批 stash/TTL，「等人」与「死了」在 UI 上必须长得不一样）④ 过程可见性挂行动项不挂会话（`ai_chat_sessions` 加 `item_id` 反查 + 行内 live badge）⑤ propose-only 做成 **per-行动项执行档** `propose_only\|edit_with_approval\|autonomous`（挂行动项不挂 agent，同一 agent 不同行动项可不同档） | Linear AgentSession（04 §2）· AAMP intents（04 §5）· agent-inbox 契约（06 §3）· **Notion 软硬对照（07 §8b）** |
-| A3 | **事项工作群 · Agent 会议 · Agent 成员面**（2026-08-25 owner 拍板具体化，方案 SSoT → [`a3-agent-meetings-and-crew.md`](./a3-agent-meetings-and-crew.md)，拆批 A3a 会议最小版 / A3b Agent 成员面 / A3c 约日程 / A3d 真分身 gated）。原「事项编排者」内核（`custom_agent_call` headless + 小脑 triage 闸 + hold-token 律）后置为 A3d 组成部分 | cumora 协调纪律（02 §5）· Anthropic orchestrator-worker（02 §6）· owner 三拍板（见方案 §1） |
+| A3 | **事项工作群 · Agent 会议 · Agent 成员面**（2026-08-25 owner 拍板具体化，方案 SSoT → [`a3-agent-meetings-and-crew.md`](./a3-agent-meetings-and-crew.md)，拆批 A3a 会议最小版 / A3b Agent 成员面 / A3c 约日程 / A3d 真分身 gated）。原「事项编排者」内核（`custom_agent_call` headless + 小脑 triage 闸 + hold-token 律）后置为 A3d 组成部分。🔴 **2026-09-01 改判**（§0）：P1 确定性主持人作废，会议改为带法官角色位的群，长在 G1–G3 之上；A3 拆批在 G3 后重排 | cumora 协调纪律（02 §5）· Anthropic orchestrator-worker（02 §6）· owner 三拍板（见方案 §1） |
 | A4 | **SOP-as-skill**：事项类别 ↔ SOP skill 绑定；run 后 agent 可提议 SOP 修订（走 P8 trust + 人审 + 可回滚；⚠️ memory/SOP 文件会自我投毒，恒人审） | cumora T6（02 §2.8）· P8 trust-by-hash |
 | A5 | **预约链接**：照抄 Inbox Zero 四表极简 schema（weekday+分钟整数避 DST / cancelTokenHash 无账号取消 / idempotencyToken 防重），不看 cal.diy（官方自认非生产用） | 档案 06 §1 机制④ |
 
