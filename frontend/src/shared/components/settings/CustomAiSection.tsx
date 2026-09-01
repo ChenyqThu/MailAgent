@@ -2,7 +2,7 @@
 //
 // This file is the thin composition layer: it wires the custom-ai/* subfiles together
 // into the CustomAiSection mounted near the bottom of AiTab, and re-exports the symbols
-// other surfaces import (StandingDocsSection is inlined by the AgentsTab preprocess drawer).
+// other surfaces import (StandingDocsSection is inlined by the main-agent settings page).
 //
 // The individual sub-sections live in ./custom-ai/*:
 //   SkillsSection · UserMdCompileSection · MemoryCaptureModelSection · StandingDocsSection ·
@@ -24,7 +24,7 @@ import { SkillDraftsSection } from './custom-ai/SkillDraftsSection'
 import { SystemCapabilitiesSection } from './custom-ai/SystemCapabilitiesSection'
 
 // Re-export the previously public symbols so external / historical import sites resolve
-// unchanged (AgentsTab imports StandingDocsSection from this module).
+// unchanged (MainAssistantSettings imports StandingDocsSection from this module).
 export { StandingDocsSection } from './custom-ai/StandingDocsSection'
 export { ExecPolicySection } from './custom-ai/ExecPolicySection'
 export { SkillPacksSection } from './custom-ai/SkillPacksSection'

@@ -41,7 +41,7 @@ function MemberRow({
   const working = lastState === 'running' || lastState === 'queued'
 
   // 启停色：预处理行的 enabled 列无意义（绑全局 LLM_AGENT_ENABLED）；项目周报还叠
-  // env 总闸（AgentsTab 卡片同款语义）。主 Agent 恒在线。
+  // env 总闸。主 Agent 恒在线。
   const llmAgentOn = useEnvStore((s) =>
     s.state.status === 'ready'
       ? envFlagOn(s.state.snapshot.values['LLM_AGENT_ENABLED'] ?? '')

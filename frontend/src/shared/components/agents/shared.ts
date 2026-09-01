@@ -1,5 +1,5 @@
-// Sprint 20 — /agents 抽屉共享原子：从 AgentsTab.tsx 机械抽出的跨卡片 / 抽屉复用常量与
-// 纯 helper（press scale / web 只读判定 / env flag 解析 / 文档名 / 专型行 agent id）。
+// /agents 共享原子：跨配置页 / 抽屉复用的常量与纯 helper
+// （press scale / web 只读判定 / env flag 解析 / 文档名 / 专型行 agent id）。
 // 组件类共享（Field）在 ./drawers/Field；本文件不导出组件（保 react-refresh 纪律）。
 
 // 内联按钮缺 :active 伪类 → 用 pointer 事件落地 press scale（DESIGN §9.3 / make-interfaces #12）。
@@ -45,12 +45,12 @@ export const CONTACT_PROFILE_AGENT_ID = 'contact_profile_agent'
 // 2026-08-19 cutover 后总闸恒启用（`MAILAGENT_CONTACT_AGENT_ENABLED` 已随五个 venue env
 // 闸一起退役），是否自动运行只看该行 enabled 与排程 —— 不走 useEnvStore。
 // 🔴 与治理台抽屉共用这一个常量（`components/contacts/ContactAgentDrawer.tsx` 的脚部跳转
-// 用它点名要打开哪张卡的配置抽屉）。
+// 用它点名团队页要选中哪个成员、落到哪张设置档）。
 export const CONTACT_GOVERNANCE_AGENT_ID = 'contact_governance_agent'
 
 // 0813 主 Agent（默认助手）的编辑器派生/换一换种子 —— 主 agent 不走 id 派生外观（未配置时
-// 落 OFFICIAL_ASSISTANT_AVATAR），种子只喂 shuffle 递进。卡片与抽屉共用同一个值，否则同一个
-// 「换一换」在两处会走出两条不同的序列。
+// 落 OFFICIAL_ASSISTANT_AVATAR），种子只喂 shuffle 递进。成员列表 / 团队页头部 / 主 Agent
+// 配置页共用同一个值，否则同一个「换一换」在几处会走出不同的序列。
 export const MAIN_ASSISTANT_SEED = 'main-assistant'
 
 // 远程 web 下 env 写只读（镜像 AiTab.isWeb）：env:set 在 HttpApi 是 notImplemented，

@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next'
 
 import type { CalendarEventOccurrence } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import { ConflictMark } from './ConflictMark'
 import { shortTime } from './lib/format'
 import { extractMeetingLink, openMeetingLink } from './lib/meeting-link'
 import { useEventDrag } from './hooks/useEventDrag'
@@ -37,6 +38,8 @@ interface EventBlockProps {
   /** 同时段并发总列数 (≥1). 默认 1. */
   totalCols?: number
   selected?: boolean
+  /** P5 — 与几场日程时间冲突 (0 = 不冲突, 不出标识)。判据单源 lib/conflict.ts. */
+  conflictCount?: number
   onClick?: () => void
   /** Lane C (#5) — 拖拽改期/改时长的提交口. 不传 = 不可拖 (非组织者 / 无写能力). */
   onReschedule?: (next: EventRescheduleInput) => void
@@ -60,6 +63,7 @@ export function EventBlock({
   col = 0,
   totalCols = 1,
   selected = false,
+  conflictCount = 0,
   onClick,
   onReschedule,
   timeOverride = null
@@ -128,6 +132,7 @@ export function EventBlock({
     >
       <div className="e-time">
         <span>{startTxt}</span>
+        {conflictCount > 0 && <ConflictMark count={conflictCount} />}
         {meeting && <Video className="teams-i" size={11} strokeWidth={2} aria-hidden />}
       </div>
       <div

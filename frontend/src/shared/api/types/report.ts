@@ -329,7 +329,7 @@ export type CustomAgentTrigger =
  *
  *  只加进 `ReportConfigPatch`（写面）**不加进 `ReportAgentConfig`**（读面）：读面那个
  *  union 有十来处消费方按 `.v` / `.kind` 判别式收窄，把一个没有判别字段的成员塞进去会
- *  让每一处都失去收窄。读侧由 `ContactProfileConfigDrawer::readSchedule` 就地做运行时
+ *  让每一处都失去收窄。读侧由 `settings/ContactProfileSettings::readSchedule` 就地做运行时
  *  形状检查 —— 那本来也是唯一知道这行是 contact_profile 的地方。 */
 export interface ContactProfileTrigger {
   fire_hour: number
@@ -343,8 +343,8 @@ export interface ContactProfileTrigger {
 /** v2「通讯录治理」单例行的 trigger_json —— 与上面的画像 trigger 同款用法（字面配置列，
  *  不进 `parse_trigger`），但**没有「每轮人数上限」**：治理扫描一次跑完增量、不按人计费。
  *  🔴 同样是整列覆写不是 merge —— 两个字段都要按整列写。
- *  读侧的运行时形状检查在 `ContactGovernanceConfigDrawer::readTrigger`（同上，读面 union
- *  不收它，免得毁掉十来处按判别式的收窄）。 */
+ *  读侧的运行时形状检查在 `settings/ContactGovernanceSettings::readTrigger`（同上，读面
+ *  union 不收它，免得毁掉十来处按判别式的收窄）。 */
 export interface ContactGovernanceTrigger {
   fire_hour: number
   /** 治理扫描先查此人的 KOS（gbrain）wiki 再提身份建议。缺字段默认 true（同上）。 */

@@ -84,7 +84,6 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 })
 
 import { EventBlock } from '../../src/shared/components/calendar/EventBlock'
-import { EventChip } from '../../src/shared/components/calendar/EventChip'
 import { CalendarStatusLegend } from '../../src/shared/components/calendar/CalendarStatusLegend'
 import { AgendaView } from '../../src/shared/components/calendar/views/AgendaView'
 import { DayView } from '../../src/shared/components/calendar/views/DayView'
@@ -132,26 +131,6 @@ afterEach(() => {
 })
 
 describe('状态形态化 data-resp/data-status 挂载 (F3/2.6)', () => {
-  test('EventChip (月/all-day chip) — 四状态 attribute 齐挂', () => {
-    const { container } = render(
-      <>
-        <EventChip event={makeOccurrence({ response_status: 'TENTATIVE' })} />
-        <EventChip event={makeOccurrence({ id: 2, response_status: 'NEEDS-ACTION' })} />
-        <EventChip event={makeOccurrence({ id: 3, response_status: 'DECLINED' })} />
-        <EventChip event={makeOccurrence({ id: 4, status: 'CANCELLED' })} />
-      </>
-    )
-    const chips = container.querySelectorAll('.cal-chip')
-    expect(chips).toHaveLength(4)
-    expect(chips[0].getAttribute('data-resp')).toBe('TENTATIVE')
-    expect(chips[1].getAttribute('data-resp')).toBe('NEEDS-ACTION')
-    expect(chips[2].getAttribute('data-resp')).toBe('DECLINED')
-    expect(chips[3].getAttribute('data-status')).toBe('CANCELLED')
-    // 状态 chip 的 dot/title 结构在位 (空心 dot / 删除线 title 的 CSS hook)
-    expect(chips[1].querySelector('.c-dot')).toBeTruthy()
-    expect(chips[2].querySelector('.c-title')).toBeTruthy()
-  })
-
   test('EventBlock (timeline .evt) — data-resp/data-status + e-time/e-title 结构', () => {
     const { container } = render(
       <>

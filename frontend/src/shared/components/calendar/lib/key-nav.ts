@@ -21,11 +21,12 @@ import {
 } from '../hooks/useCalendarEvents'
 
 import { ymd } from './format'
+import { occurrenceKey } from './occurrence-key'
 
-/** 选中锚点 key — 与 Layout / 四视图的 `${id}-${occurrence_start_iso}` 同一约定. */
-export function occurrenceKey(occ: CalendarEventOccurrence): string {
-  return `${occ.id}-${occ.occurrence_start_iso}`
-}
+/** 选中锚点 key — 与 Layout / 四视图的 `${id}-${occurrence_start_iso}` 同一约定.
+ *  实现下沉到零依赖叶子 lib/occurrence-key.ts (本文件顶层拉 hooks 链, 纯函数
+ *  模块 import 不起); 这里原样再导出, 既有消费点照旧从 key-nav 取. */
+export { occurrenceKey }
 
 /** AgendaView rangeDays 默认值 (Layout 未传参, 与之对齐). */
 const AGENDA_RANGE_DAYS = 14

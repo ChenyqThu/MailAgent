@@ -333,7 +333,7 @@ export function useContactAgentHistory(
 }
 
 /** v2 工作台「运行」tab 的画像批处理只读镜子。同样 `retry:false` + 只在抽屉开着时发。
- *  🔴 有意**不**在这里给画像行的开关：那个开关在 Agents 页的「联系人画像」卡上，两处都能
+ *  🔴 有意**不**在这里给画像行的开关：那个开关在团队页的「联系人画像」配置页上，两处都能
  *  改会立刻分裂出「哪个是权威」（原型裁量 5）。 */
 export function useContactProfileDailySummary(
   enabled: boolean

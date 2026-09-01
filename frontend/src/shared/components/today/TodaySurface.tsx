@@ -30,6 +30,7 @@ import { TodayItemRow, type TodayRowHandlers } from './TodayItemRow'
 import { TodayNextHardPoint } from './TodayNextHardPoint'
 import { TodaySectionRow } from './TodaySectionRow'
 import { TodayListSkeleton } from './TodaySkeleton'
+import { TodayTimeline } from './TodayTimeline'
 import { TODAY_GROUP_ICONS, TODAY_GROUP_TONE, TODAY_TONE_CLASS } from './todayVocab'
 import type { TodaySectionItem } from './todaySections'
 import { useTodaySections } from './useTodaySections'
@@ -110,7 +111,12 @@ export function TodaySurface(): React.ReactElement {
   const total = sections.reduce((n, s) => n + s.count, 0)
 
   return (
-    <div ref={rootRef} className="mx-auto w-full max-w-[880px] px-6 py-6">
+    // 宽窗才让出右边那 292 + 22：窄窗下整列隐藏，主区宽度与没有这一列时**一模一样**
+    // （880 = 1194 - 292 - 22），所以加这一列不会把已有的主区挤窄。
+    <div
+      ref={rootRef}
+      className="mx-auto w-full max-w-[880px] px-6 py-6 [@media(min-width:1360px)]:max-w-[1194px]"
+    >
       <header className="mb-4 flex flex-col gap-[3px]">
         <div className="text-micro font-mono uppercase tracking-wider text-ink-fg-2">
           {t('today.kicker')}
@@ -129,86 +135,100 @@ export function TodaySurface(): React.ReactElement {
         onOpen={() => navigateToNavEntry(navigate, navEntry('calendar'))}
       />
 
-      {isPending ? (
-        <TodayListSkeleton />
-      ) : (
-        <>
-          {/* 事项两条读失败不遮盖已经拿到的条目：报一条横幅，列表照常渲染。 */}
-          {isError && (
-            <div className="mb-3 rounded-[var(--r-ctl)] border border-warn/30 bg-warn/[0.07] px-3 py-2 text-meta text-ink-fg-2">
-              {t('today.error')}
-            </div>
-          )}
-          {total === 0 ? (
-            <EmptyState
-              icon={<Sun size={22} strokeWidth={1.75} />}
-              title={t('today.empty.title')}
-              hint={t('today.empty.hint')}
-              className="min-h-[280px]"
-            />
+      {/* 原型 `.today2` —— 主区 flex-1 + 右侧时间线列 292，gap 22。 */}
+      <div className="flex items-start gap-[22px]">
+        {/* 时间线列把同一批条目的标题 / 副行**再渲染一遍**（同一份数据换一根轴）——
+            两列的文案天然重名，断言必须说清问的是哪一列。 */}
+        <div data-testid="today-main" className="min-w-0 flex-1">
+          {isPending ? (
+            <TodayListSkeleton />
           ) : (
-            sections.map((view) =>
-              view.count === 0 ? null : (
-                <section
-                  key={view.id}
-                  data-testid="today-section"
-                  data-section={view.id}
-                  className="mb-5"
-                >
-                  <SectionHeader id={view.id} count={view.count} selected={section === view.id} />
-                  {/* 简化行在前（会 / 待回的信 / 当天报告 —— 这一节的正题），读态组在后。 */}
-                  {view.rows.map((item) => (
-                    <TodaySectionRow key={item.id} item={item} onOpen={openSectionItem} />
-                  ))}
-                  {view.groups.map((group) => {
-                    const Icon = TODAY_GROUP_ICONS[group.id]
-                    const toneClass = TODAY_TONE_CLASS[TODAY_GROUP_TONE[group.id]]
-                    return (
-                      <div
-                        key={group.id}
-                        data-testid="today-group"
-                        data-group={group.id}
-                        data-in-section={view.id}
-                      >
-                        {/* 节内的读态分块头（比节头轻一档）。只有一个组时不出头 ——
-                            「等我处理」下面再写一遍「等我处理」是废话。 */}
-                        {view.groups.length > 1 && (
-                          <div className="flex items-center gap-2 pb-1 pt-1.5">
-                            <span
-                              className={cn(
-                                'grid size-4 shrink-0 place-items-center rounded',
-                                toneClass.icon
-                              )}
-                            >
-                              <Icon size={10} strokeWidth={2} />
-                            </span>
-                            <span className="text-micro text-ink-fg-3">
-                              {t(`today.group.${group.id}`)}
-                            </span>
-                            <span aria-hidden className="h-px flex-1 bg-ink-border-soft" />
+            <>
+              {/* 事项两条读失败不遮盖已经拿到的条目：报一条横幅，列表照常渲染。 */}
+              {isError && (
+                <div className="mb-3 rounded-[var(--r-ctl)] border border-warn/30 bg-warn/[0.07] px-3 py-2 text-meta text-ink-fg-2">
+                  {t('today.error')}
+                </div>
+              )}
+              {total === 0 ? (
+                <EmptyState
+                  icon={<Sun size={22} strokeWidth={1.75} />}
+                  title={t('today.empty.title')}
+                  hint={t('today.empty.hint')}
+                  className="min-h-[280px]"
+                />
+              ) : (
+                sections.map((view) =>
+                  view.count === 0 ? null : (
+                    <section
+                      key={view.id}
+                      data-testid="today-section"
+                      data-section={view.id}
+                      className="mb-5"
+                    >
+                      <SectionHeader
+                        id={view.id}
+                        count={view.count}
+                        selected={section === view.id}
+                      />
+                      {/* 简化行在前（会 / 待回的信 / 当天报告 —— 这一节的正题），读态组在后。 */}
+                      {view.rows.map((item) => (
+                        <TodaySectionRow key={item.id} item={item} onOpen={openSectionItem} />
+                      ))}
+                      {view.groups.map((group) => {
+                        const Icon = TODAY_GROUP_ICONS[group.id]
+                        const toneClass = TODAY_TONE_CLASS[TODAY_GROUP_TONE[group.id]]
+                        return (
+                          <div
+                            key={group.id}
+                            data-testid="today-group"
+                            data-group={group.id}
+                            data-in-section={view.id}
+                          >
+                            {/* 节内的读态分块头（比节头轻一档）。只有一个组时不出头 ——
+                                「等我处理」下面再写一遍「等我处理」是废话。 */}
+                            {view.groups.length > 1 && (
+                              <div className="flex items-center gap-2 pb-1 pt-1.5">
+                                <span
+                                  className={cn(
+                                    'grid size-4 shrink-0 place-items-center rounded',
+                                    toneClass.icon
+                                  )}
+                                >
+                                  <Icon size={10} strokeWidth={2} />
+                                </span>
+                                <span className="text-micro text-ink-fg-3">
+                                  {t(`today.group.${group.id}`)}
+                                </span>
+                                <span aria-hidden className="h-px flex-1 bg-ink-border-soft" />
+                              </div>
+                            )}
+                            {group.items.map((item) => (
+                              <TodayItemRow
+                                key={item.id}
+                                item={item}
+                                groupId={group.id}
+                                nowMs={nowMs}
+                                expanded={expandedId === item.id}
+                                menuOpen={menuOpenId === item.id}
+                                onMenuOpenChange={setMenuOpenId}
+                                handlers={handlers}
+                              />
+                            ))}
                           </div>
-                        )}
-                        {group.items.map((item) => (
-                          <TodayItemRow
-                            key={item.id}
-                            item={item}
-                            groupId={group.id}
-                            nowMs={nowMs}
-                            expanded={expandedId === item.id}
-                            menuOpen={menuOpenId === item.id}
-                            onMenuOpenChange={setMenuOpenId}
-                            handlers={handlers}
-                          />
-                        ))}
-                      </div>
-                    )
-                  })}
-                </section>
-              )
-            )
+                        )
+                      })}
+                    </section>
+                  )
+                )
+              )}
+            </>
           )}
-        </>
-      )}
+        </div>
+        {/* 骨架期不出这一列：那时 `sections` 还是空的，画一列「今天没有带时刻的条目」
+            是假话（数据还没到，不是真的没有）。 */}
+        {!isPending && <TodayTimeline sections={sections} />}
+      </div>
     </div>
   )
 }

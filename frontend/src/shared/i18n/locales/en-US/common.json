@@ -2120,6 +2120,7 @@
       },
       "meta": {
         "time": "Time",
+        "conflict": "Time conflict",
         "calendar": "Calendar",
         "location": "Location",
         "organizer": "Organizer",
@@ -3401,7 +3402,7 @@
       },
       "model": {
         "label": "Global default model",
-        "helper": "Default for chat and background AI tasks without a dedicated model (restart required); the email-preprocessing model is configured on its agent card"
+        "helper": "Default for chat and background AI tasks without a dedicated model (restart required); the email-preprocessing model is configured on its config page under Team"
       },
       "translate": {
         "title": "Email translation",
@@ -3426,7 +3427,7 @@
       },
       "fallbacks": {
         "label": "Fallback chain",
-        "helper": "Global fallback chain when the primary model fails; email preprocessing can override it on its agent card (defaults to follow global)",
+        "helper": "Global fallback chain when the primary model fails; email preprocessing can override it on its config page under Team (defaults to follow global)",
         "none": "(no fallback)"
       },
       "autoTitle": {
@@ -4271,8 +4272,6 @@
       "allAgents": "All agents"
     },
     "unread": "Unread agent runs",
-    "title": "Report Agents",
-    "subtitle": "Auto-generated, traceable email reports. Daily by default; weekly / monthly share the engine.",
     "reportsMaster": {
       "label": "Keep report service running",
       "hint": "When on, the report service runs continuously and enabling any report takes effect immediately; when off, the first report you enable needs one backend restart before scheduled generation starts.",
@@ -4432,25 +4431,11 @@
     "card": {
       "enabled": "Enabled",
       "disabled": "Disabled",
-      "schedDaily": "Daily {hour}:00",
-      "schedWeekly": "{weekday} {hour}:00",
-      "schedMonthly": "Day {day} monthly {hour}:00",
-      "window": "{hours}h lookback",
-      "lastReport": "Latest report",
-      "noReport": "No report yet — click Run now to generate the first.",
-      "running": "Generating…",
-      "runNow": "Run now",
-      "runningHint": "Generating, ~20–40s…",
-      "configure": "Configure",
       "newAgent": "New Agent",
-      "newAgentHint": "Custom trigger, tools & model · coming soon",
-      "noAgent": "No report agent found (database not initialized?)"
+      "newAgentHint": "Custom trigger, tools & model · coming soon"
     },
     "config": {
-      "title": "Configure · {title}",
-      "viewHistory": "View all history",
       "enable": "Enable this Agent",
-      "enableHint": "Auto-generate on schedule",
       "prompt": "Report Prompt",
       "promptHint": "tune the report's voice",
       "promptNote": "Counts, internal_ids and links are authoritatively filled by the system; the prompt only affects prose, grouping and selection.",
@@ -4521,15 +4506,8 @@
       "emptyTranscript": "No messages in this conversation yet"
     },
     "search": {
-      "section": "Search Agents",
-      "sectionHint": "Powers the command palette AI search. Ask in natural language; it searches your mail.",
       "newAgent": "New Search Agent",
       "newAgentHint": "Custom prompt, model & tools",
-      "customAgentTitle": "Custom Agent",
-      "customAgentHint": "Fully custom agent · Coming soon",
-      "noAgent": "No search agent yet — click New above.",
-      "configTitle": "Search Agent · {title}",
-      "newTitle": "New Search Agent",
       "titlePlaceholder": "e.g. Mail search assistant",
       "promptLabel": "Search Prompt",
       "promptHint": "Built-in default search prompt below — edit to override; placeholders auto-filled at runtime",
@@ -4539,7 +4517,6 @@
       "tool": {
         "email_search_fulltext": "Email full-text search"
       },
-      "create": "Create",
       "delete": "Delete",
       "deleteConfirm": "Delete this search agent?",
       "deleteCancel": "Cancel",
@@ -4547,18 +4524,10 @@
       "errGeneric": "Operation failed, please retry."
     },
     "preprocess": {
-      "section": "AI Email Preprocessing",
-      "sectionHint": "Local LLM auto-classifies, tags and suggests replies for new mail. Model is configured independently from Chat.",
-      "subtitle": "Auto-classify / tag / suggest replies for new mail (local LLM)",
-      "noAgent": "No preprocessing agent found (database not initialized?)",
-      "configTitle": "AI Email Preprocessing · {title}",
       "viewStats": "View processing stats",
-      "enable": "Enable email preprocessing",
-      "enableHint": "Turn on local LLM auto-classification for new mail (global switch LLM_AGENT_ENABLED). Requires a service restart to take effect.",
       "markReadAfterProcessing": "Mark as read after preprocessing",
       "markReadAfterProcessingHint": "When off, AI still classifies, flags, and updates processing status without changing the message's current read state. Effective on save.",
       "restartHint": "Restart required",
-      "modelHint": "Dedicated preprocessing model, effective on save (does not affect Chat); \"Follow global\" = use the global default model",
       "modelFollowGlobal": "Follow global default ({model})",
       "contextDocs": "Injected identity docs",
       "contextDocsHint": "Checked docs are injected into the classification prompt",
@@ -4581,7 +4550,6 @@
       },
       "webReadOnly": "Remote web is read-only: enable state, reference context source and context page ID can't be changed (desktop only); model, fallback and doc selection remain editable.",
       "fallback": "Fallback model",
-      "fallbackHint": "Dedicated preprocessing fallback, effective on save; defaults to following the global setting (Settings → AI → Fallback chain)",
       "fallbackFollowGlobal": "Follow global ({model})",
       "fallbackGlobalUnset": "not set",
       "fallbackNone": "(none)",
@@ -4598,18 +4566,9 @@
       "envSaveError": "Failed to save enable state",
       "rowSaveError": "Failed to save preprocessing config"
     },
-    "contactSection": {
-      "title": "Contacts",
-      "hint": "Two low-frequency agents that only read mail: one writes people profiles, one proposes directory fixes. Neither edits identity fields directly."
-    },
     "contactGovernance": {
-      "subtitle": "Scans once a day with the incremental mail sync and queues merge / missing-field / former-address suggestions for you to confirm",
-      "configTitle": "Contacts governance · {title}",
-      "enable": "Enable the governance agent",
-      "enableHint": "While disabled the daily scan does not run, and “Run a scan now” in the workbench returns E_DISABLED.",
       "schedule": "Schedule",
       "scheduleHint": "One governance scan per day at a fixed hour, alongside the incremental mail sync",
-      "dailyHour": "Daily run hour (0-23)",
       "useKos": "Consult KOS",
       "useKosHint": "Look up this person's KOS wiki before proposing identity changes; no effect when KOS is not configured.",
       "prompt": "System prompt",
@@ -4623,26 +4582,17 @@
       "orgFramePlaceholder": "# Companies\nTP-Link System | tp-link.com.hk | HQ\nTP-Link | tp-link.com, omadanetworks.com\n\n# Department frame\nEBG / ENBU / Product\nCommercial R&D / Systems",
       "orgFrameNote": "Empty = no constraint: the governance agent still proposes, it just stops judging what is off-frame. Once set, suggestions landing outside it carry an “Off-frame” mark so you can extend the frame before adopting.",
       "tools": "Injected tools · {count}",
-      "toolsHint": "Read-only · determined by the ToolSet the gateway actually assembles",
       "queueNote": "Suggestions from this agent queue up under Contacts → the “Agent” pill in the list header, and its run history lives there too.",
-      "errFireHour": "The daily run hour must be a whole number between 0 and 23",
-      "rowSaveError": "Could not save the governance agent configuration"
+      "errFireHour": "The daily run hour must be a whole number between 0 and 23"
     },
     "contactProfile": {
-      "subtitle": "Profiles written in low-frequency batches; any contact can be refreshed by hand",
-      "configTitle": "Contact profiles · {title}",
-      "enable": "Enable the profile agent",
-      "enableHint": "Runs the batch on the schedule below (subject to the Labs master switch).",
       "schedule": "Schedule",
       "scheduleHint": "One pass per day at a fixed hour, capped at this many people",
-      "dailyHour": "Daily run hour (0-23)",
       "dailyCap": "People per pass",
       "useKos": "Consult KOS",
       "useKosHint": "Look up this person's KOS wiki as background before writing the profile; no effect when KOS is not configured.",
-      "modelHint": "Row-level model; following the global default uses the chat model",
       "modelFollowGlobal": "Follow the global default",
       "fallback": "Fallback model",
-      "fallbackHint": "Used when the main model fails; following the global default uses LLM_FALLBACK_MODELS",
       "fallbackFollowGlobal": "Follow the global default",
       "fallbackNone": "No fallback",
       "promptAppend": "Prompt addendum",
@@ -4650,21 +4600,15 @@
       "promptAppendPlaceholder": "e.g. Watch for shifts in how they word contract terms.",
       "promptAppendNote": "The built-in prompt already pins the rule of citing only the supplied evidence and declining when it is thin; an addendum cannot override that.",
       "errFireHour": "The daily run hour must be a whole number between 0 and 23",
-      "errDailyLimit": "The per-pass cap must be a whole number above 0",
-      "rowSaveError": "Could not save the profile agent configuration"
+      "errDailyLimit": "The per-pass cap must be a whole number above 0"
     },
     "projectProgress": {
-      "section": "Project Report Sync",
-      "sectionHint": "Detect project report emails (xlsx attachment) → auto-parse and sync into the Notion progress database. Deterministic pipeline, no AI.",
       "subtitle": "Matched report emails auto-parse xlsx → sync into the Notion progress database",
-      "configTitle": "Project Report Sync · {title}",
       "masterOff": "Master off",
       "masterOnNote": "Master switch is on (env PROJECT_PROGRESS_SYNC_ENABLED). The enable toggle and trigger rules below take effect on save.",
       "masterOffNote": "Master switch is off: the sync will not run. Turn on the master switch below (requires a service restart after saving); the enable toggle and trigger rules are still saved as usual.",
       "master": "Sync master switch",
       "masterHint": "Env PROJECT_PROGRESS_SYNC_ENABLED; requires a backend restart to take effect",
-      "enable": "Enable auto-sync",
-      "enableHint": "Matched report emails auto-trigger the sync (subject to the master switch PROJECT_PROGRESS_SYNC_ENABLED).",
       "subjectPattern": "Subject regex",
       "subjectPatternHint": "Regex against the email subject; a match marks it as a project report (required)",
       "subjectPlaceholder": "e.g. \\[weekly\\] project progress",
@@ -4678,19 +4622,12 @@
       "filterBuHint": "Exact match on the xlsx BU column; other BUs are dropped; empty = no filter. Env PROJECT_PROGRESS_FILTER_BU; requires a restart",
       "filterBuPlaceholder": "TPS-ENBU",
       "capability": "Built-in capability",
-      "capabilityHint": "Always on, not configurable",
       "capabilityChip": "Project report sync script · built-in, always on",
       "capabilityNote": "Runs as a deterministic Python sync script (xlsx parsing → Notion writes) — it does not go through the AI engine and is not part of the skill system, so other skills can't be mounted; use the enable toggle above to stop the whole agent.",
       "webReadOnly": "Remote web is read-only: master switch / database ID / BU filter can't be changed (desktop only); the enable toggle and trigger rules remain editable.",
       "envSaveError": "Failed to save environment variables",
       "errEmptyTrigger": "Subject regex and sender cannot both be empty (use the enable toggle above to disable)",
-      "rowSaveError": "Failed to save project report config",
       "runs": {
-        "section": "Run history",
-        "sectionHint": "Recent sync records",
-        "loading": "Loading…",
-        "empty": "No sync records yet",
-        "counts": "{total} projects · {created} new · {updated} updated",
         "statusCompleted": "Completed",
         "statusFailed": "Failed",
         "statusSkipped": "Skipped",
@@ -4721,13 +4658,8 @@
       }
     },
     "mainAgent": {
-      "title": "Main Agent",
       "badge": "Default assistant",
-      "hint": "Name, avatar and system prompts of the global assistant; the name shows in the thinking line and the panel title",
-      "configure": "Configure main agent",
       "namePlaceholder": "AI Assistant (e.g. Jarvis)",
-      "docsHint": "These system prompts (the SOUL / AGENT / RULES / USER identity docs) are the same ones as in Settings → AI → Identity docs — editing either side edits the same content.",
-      "configTitle": "Main Agent · {name}",
       "identityHint": "Leave empty to keep the default name; the official look is used when no avatar is set"
     },
     "custom": {
@@ -4736,12 +4668,9 @@
       "meetingPrepTemplate": "Create from template: Meeting prep",
       "calendarRequired": "Calendar sync must be enabled",
       "unmetDependencies": "Unmet dependencies: {items}",
-      "section": "Custom Agents",
-      "sectionHint": "Define triggers (schedule / email events), a task prompt, allowed tools and budgets to let an agent run on its own.",
       "newTitle": "New Custom Agent",
       "configTitle": "Custom Agent · {title}",
       "newTileTitle": "New Custom Agent",
-      "newTileHint": "An autonomous agent triggered on a schedule or email events",
       "enableHint": "When enabled, runs automatically on the trigger below (won't run when trigger is None).",
       "titlePlaceholder": "e.g. DMS approval helper",
       "descriptionLabel": "Description",
@@ -4931,8 +4860,6 @@
         "autoWhitelistedGrant": "Card-free: grant ×{n}",
         "viewRecord": "View record",
         "pendingDot": "Approval pending",
-        "pendingBadge": "{count} pending",
-        "sectionDot": "{count} pending approval",
         "recordBanner": "This is an agent execution record — only approvals are interactive (you cannot continue the chat).",
         "triggeredAgo": "Triggered {ago}",
         "unknownAgent": "Unknown agent",
@@ -7086,6 +7013,11 @@
       "inHoursOnly": "{h, plural, one {# hour left} other {# hours left}}",
       "started": "Started",
       "pendingBefore": "{count, plural, one {# call to make before then} other {# calls to make before then}}"
+    },
+    "timeline": {
+      "title": "Today's timeline",
+      "now": "Now {time}",
+      "empty": "Nothing with a time on it today"
     }
   },
   "tabs": {

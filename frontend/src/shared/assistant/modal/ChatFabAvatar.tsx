@@ -123,8 +123,6 @@ export function ChatFabAvatar(): React.JSX.Element {
   //    只是头像放大 + tips」）。故本组件不再收 `hovered` —— 没有输入就不可能有第二条驱动路径。
   //    0814 加的 `mouseInteractive` **不违反**这一条：gaze 动的是头部朝向与眼睛偏移，
   //    表情（状态与索引）不受指针影响；「hover 不改表情」与「眼睛跟着鼠标」是两回事。
-  //    ⚠️ Agents 页那六张卡 hover 换表情（`useAvatarHoverShowcase`）是另一条链、另一次 dogfood
-  //    通过的行为，本文件从未 import 它，删这里不影响那里。
   const animated = !reduce && imageSrc === undefined
   const state = useFabState(animated)
 

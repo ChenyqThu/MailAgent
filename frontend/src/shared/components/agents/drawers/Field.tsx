@@ -1,6 +1,5 @@
-// Sprint 20 — /agents 配置抽屉共享字段容器：label + 可选 hint + children，机械抽自
-// AgentsTab.tsx，供 ConfigDrawer / SearchConfigDrawer / PreprocessConfigDrawer /
-// ProjectProgressConfigDrawer 复用。
+// /agents 共享字段容器：label + 可选 hint + children。八个 settings/ 配置页共用
+//（CustomAgentDrawer 另有一份同形状的私有实现，未收编）。
 export function Field({
   label,
   hint,

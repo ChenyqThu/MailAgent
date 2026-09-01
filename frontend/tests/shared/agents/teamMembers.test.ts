@@ -1,5 +1,5 @@
 // task 08-27 P4a（lane team-shell）— 团队清单成员派生（teamMembers.ts）。
-// 覆盖：分组与顺序（照 AgentsTab 渲染序）· 视图档声明（主 Agent/搜索只有设置档，
+// 覆盖：分组与顺序（内置固定序）· 视图档声明（主 Agent/搜索只有设置档，
 // 主 session 拍板的搜索偏离）· clampMemberTab 纠正（design §8.1 第 2 条）。
 
 import { describe, expect, test } from 'vitest'
@@ -33,7 +33,8 @@ function cfg(id: string, type: string, over: Partial<ReportAgentConfig> = {}): R
 }
 
 const AGENTS: ReportAgentConfig[] = [
-  // 有意乱序进：派生结果必须按 AgentsTab 渲染序稳定输出。
+  // 有意乱序进：派生结果必须按 teamMembers.ts 里的内置固定序稳定输出（TeamMemberList 直接
+  // 照这个顺序渲染，不再自己排一遍）。
   cfg('zz_custom', 'custom'),
   cfg('contact_governance_agent', 'contact_governance'),
   cfg('weekly_email_digest', 'report', { schedule: { cadence: 'weekly', hours: [9] } }),
@@ -43,11 +44,13 @@ const AGENTS: ReportAgentConfig[] = [
   cfg('email_preprocess_agent', 'preprocess'),
   cfg('project_progress_sync', 'project_progress'),
   cfg('contact_profile_agent', 'contact_profile'),
-  cfg('mystery_row', 'unknown_type') // 未知 type：静默丢弃（AgentsTab filter 同款纪律）
+  // 未知 type：deriveTeamMembers 静默丢弃 —— 前端认不出的行不进清单，免得 TeamMemberList
+  // 渲染出一个点开是空白的成员。
+  cfg('mystery_row', 'unknown_type')
 ]
 
 describe('deriveTeamMembers — 分组与顺序', () => {
-  test('内置照 AgentsTab 渲染序（主→报告日→周→搜索→预处理→周报→画像→治理）+ 自定义按 id', () => {
+  test('内置按固定序（主→报告日→周→搜索→预处理→周报→画像→治理）+ 自定义按 id', () => {
     const members = deriveTeamMembers(AGENTS)
     expect(members.map((m) => (m.ref.kind === 'main' ? 'main' : m.ref.agentId))).toEqual([
       'main',

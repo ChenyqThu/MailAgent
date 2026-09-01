@@ -1,5 +1,5 @@
-// P4a agent-config lane — 「AI 邮件预处理」配置页。保存语义逐字段照
-// drawers/PreprocessConfigDrawer（双源写：启用 → env LLM_AGENT_ENABLED + 重启横幅；
+// P4a agent-config lane — 「AI 邮件预处理」配置页。保存语义逐字段：
+// 双源写 —— 启用 → env LLM_AGENT_ENABLED + 重启横幅；
 // 模型 / fallback / 上下文源 / 标已读 / 文档勾选 → report_agent 行 PATCH 保存即生效；
 // 分类 prompt → .md 文件热加载；全部 dirty 追踪，未触碰的字段永不写）。
 //
@@ -112,8 +112,8 @@ export function PreprocessSettings({ cfg }: { cfg: ReportAgentConfig }): React.R
     s.state.status === 'ready' ? (s.state.snapshot.values['LLM_CONTEXT_PAGE_ID'] ?? '') : null
   )
 
-  // env / 异步查询的迟到回填 —— 仅在用户未 dirty 该字段时同步（同 PreprocessConfigDrawer，
-  // codex HIGH：迟到加载纠正显示，但绝不覆盖用户在页面里的编辑）。
+  // env / 异步查询的迟到回填 —— 仅在用户未 dirty 该字段时同步（codex HIGH：迟到加载
+  // 纠正显示，但绝不覆盖用户在页面里的编辑）。
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (envEnabledRaw !== null && !enabledDirty) setEnabled(envFlagOn(envEnabledRaw))

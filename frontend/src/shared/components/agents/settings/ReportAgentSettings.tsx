@@ -1,6 +1,6 @@
-// P4a agent-config lane — 报告 Agent（日/周/月同引擎）配置页。保存语义逐字段照
-// drawers/ConfigDrawer（prompt 默认态回传 / 空时区写实 / cadence 被 lockFreq 锁死 /
-// 头像未触碰不发）；变化只有布局（八区）与两处交互纪律：
+// P4a agent-config lane — 报告 Agent（日/周/月同引擎）配置页。保存语义逐字段：
+// prompt 默认态回传 / 空时区写实 / cadence 被 lockFreq 锁死 / 头像未触碰不发。
+// 布局是八区，另有两处交互纪律：
 //   • 「查看全部历史」入口不再进配置页 —— 运行 / 报告历史归记录列与报告域（r7 §三 判据 6）。
 //   • 注入的身份文档：勾选仍可编辑（那是配置），文档内容以只读卡指路（判据 2）。
 import { useState } from 'react'

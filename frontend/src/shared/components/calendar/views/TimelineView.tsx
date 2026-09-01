@@ -28,6 +28,7 @@ import {
   resolveMailOccurrence,
   splitTimelineEntries
 } from '../lib/agendaLayout'
+import { candidateFromEntry, detectConflicts } from '../lib/conflict'
 import { isTodayLocal, pad, shortTime, ymd } from '../lib/format'
 import { occurrenceKey } from '../lib/key-nav'
 import { canRsvpFor } from '../lib/rsvp'
@@ -218,6 +219,13 @@ export function TimelineView({
             const entryOf = new Map<CalendarEventOccurrence, AgendaEntry>(
               resolved.map((r) => [r.occ, r.entry])
             )
+            // P5 — 时间冲突只在同一天的定时块之间成立 (跨天条目走置顶色带,
+            // 不参与); 判据单源 lib/conflict.ts, 与议程行 / 抽屉同一把尺子。
+            const conflicts = detectConflicts(
+              resolved
+                .map((r) => candidateFromEntry(r.entry, r.occ))
+                .filter((c): c is NonNullable<typeof c> => c !== null)
+            )
             const laid = layoutDay(resolved.map((r) => r.occ))
             const dayMoments = layoutDayMoments(momentsByDay.get(dayKey) ?? [], dayMs, HOUR_PX)
             return (
@@ -249,6 +257,7 @@ export function TimelineView({
                       col={col}
                       totalCols={totalCols}
                       selected={selectedKey === key}
+                      conflictCount={entry ? (conflicts.get(entry.id) ?? 0) : 0}
                       onClick={() => onSelect(occ)}
                       timeOverride={override}
                       onReschedule={canDrag ? (next) => onReschedule?.(occ, next) : undefined}

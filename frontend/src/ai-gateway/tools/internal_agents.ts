@@ -15,7 +15,7 @@
 //   3. `report` 顶层 `cadence` / `hours` / `weekday` —— 新形状下 `cadence_of` 以 `rule.freq`
 //      为权威，顶层是「降级镜像、运行时死数据」（src/reports/store.py）。
 //   4. `report.kos_enrich` —— 由 PR4 的死列闸**自动**抓到（前三个是人肉 grep 找的）：全仓只有
-//      存取链（wire 读写 / store 列 / ConfigDrawer 开关），报告生成流程里没有任何一处读它改变
+//      存取链（wire 读写 / store 列 / 报告配置页的开关），报告生成流程里没有任何一处读它改变
 //      行为。既有的 UI 开关是预存 dead code，本任务只是不把它加进模型的写面（指出不删）。
 // 把死键当有效配置呈现，会让模型（进而让 owner）以为改得动某个其实纹丝不动的东西 —— 审批卡
 // 照弹、行为零变化。所以它们在这里既不返回、也（PR2 起）不可写。
@@ -337,7 +337,7 @@ function toConfigPatch(
       if (input.prompt !== undefined) patch.prompt = input.prompt
       if (input.schedule !== undefined) {
         // 老键先铺（保留后端可能存的未知键），再由 writeReportSchedule 覆盖权威字段 —— 与
-        // ConfigDrawer 的保存路径逐字同款。🔴 cadence 的同步在 writeReportSchedule 里：它
+        // 报告 Agent 配置页的保存路径逐字同款。🔴 cadence 的同步在 writeReportSchedule 里：它
         // 恒写 rule.freq，模型碰不到这个镜像，也就不可能把周报静默改成日报。
         patch.schedule = {
           ...(current.schedule ?? {}),

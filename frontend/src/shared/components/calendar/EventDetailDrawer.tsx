@@ -21,6 +21,7 @@
 // 切换卸载」这条不变。
 
 import {
+  AlertTriangle,
   Check,
   Crown,
   ExternalLink,
@@ -35,7 +36,7 @@ import {
   Video,
   X
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
@@ -44,6 +45,7 @@ import type { TFunction } from 'i18next'
 import { EventFormModal } from './EventFormModal'
 import { RsvpConfirmDialog } from './RsvpConfirmDialog'
 import { calendarCapabilities } from './lib/capabilities'
+import { candidateFromOccurrence, conflictsFor, type ConflictCandidate } from './lib/conflict'
 import { canRsvpFor, normalizeEmail } from './lib/rsvp'
 
 const caps = calendarCapabilities()
@@ -64,7 +66,7 @@ import { viewForMailbox } from '@shared/lib/mailboxSemantics'
 import { narrowCalendarSource } from '@shared/lib/calendarSource'
 import { Drawer } from '@shared/components/ui/drawer'
 import { qk } from '@shared/lib/queryKeys'
-import { pad } from './lib/format'
+import { pad, shortTime } from './lib/format'
 import { AgendaProjectionDetail } from './detail/AgendaProjectionDetail'
 import { MetaRow } from './detail/MetaRow'
 import { useAgendaDetail } from '@shared/state/calendar-agenda-detail'
@@ -209,6 +211,37 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
     enabled: occurrence !== null,
     staleTime: 60_000
   })
+
+  // P5 — 时间冲突: 以本场起止窗查同窗口 occurrences。queryKey 与邮件详情邀请卡的
+  // 冲突 chip 同一把 (缓存共享, 日历写后/同步后 events 族 invalidate 顺带刷新);
+  // 判据单源 lib/conflict.ts, 与日/周事件块、议程行同一把尺子。
+  // 🔴 这里查的是真日历事件, **不吃**二级栏的日历勾选 —— 勾掉某个日历是「不想看」,
+  // 不是「那场会不存在了」, 详情页不该跟着把已经存在的冲突藏起来。
+  const selfCandidate = useMemo(
+    () => (occurrence ? candidateFromOccurrence(occurrence) : null),
+    [occurrence]
+  )
+  const conflictQ = useQuery({
+    queryKey: qk.calendar.inviteConflicts(
+      occurrence?.occurrence_start_iso ?? '',
+      occurrence?.occurrence_end_iso ?? ''
+    ),
+    queryFn: () =>
+      mailApi.calendar.eventsList({
+        fromIso: occurrence!.occurrence_start_iso,
+        toIso: occurrence!.occurrence_end_iso
+      }),
+    // 本场不占时间 (全天 / 已取消 / 自己已拒) 就没有冲突可谈, 连查都不查。
+    enabled: selfCandidate !== null,
+    staleTime: 60_000
+  })
+  const conflicts = useMemo((): ConflictCandidate[] => {
+    if (!selfCandidate || !conflictQ.data) return []
+    return conflictsFor(
+      selfCandidate,
+      conflictQ.data.map(candidateFromOccurrence).filter((c): c is ConflictCandidate => c !== null)
+    )
+  }, [selfCandidate, conflictQ.data])
 
   const setActiveEmail = useActiveEmail((s) => s.setActive)
   const setActiveMailbox = useMailbox((s) => s.setActive)
@@ -411,6 +444,32 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                   )}
                 </span>
               </MetaRow>
+
+              {/* P5 — 无冲突时整行不渲染: 这是「有事才说一声」的轻提示, 每场会都
+                  挂一行「无冲突」只会把真正要看的那行淹掉。 */}
+              {conflicts.length > 0 && (
+                <MetaRow
+                  icon={<AlertTriangle size={13} strokeWidth={2} />}
+                  label={t('calendar.drawer.meta.conflict', '时间冲突')}
+                >
+                  <span className="text-warn">
+                    {t('calendar.invite.conflictCount', '与 {n} 场日程重叠', {
+                      n: conflicts.length
+                    })}
+                  </span>
+                  <div className="mt-1.5">
+                    {conflicts.map((c) => (
+                      <div key={c.id} className="truncate text-[11px] text-ink-fg-2">
+                        <span className="mono">
+                          {shortTime(new Date(c.startMs).toISOString())}–
+                          {shortTime(new Date(c.endMs).toISOString())}
+                        </span>{' '}
+                        {c.title || t('calendar.shared.untitled', '未命名事件')}
+                      </div>
+                    ))}
+                  </div>
+                </MetaRow>
+              )}
 
               {occurrence.calendar_name && (
                 <MetaRow label={t('calendar.drawer.meta.calendar', '日历')}>

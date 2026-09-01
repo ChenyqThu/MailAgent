@@ -1,5 +1,5 @@
-// S5 W2 — 完全自定义 Agent（type='custom'）配置抽屉。复刻 SearchConfigDrawer 三段式
-// 脚手架（进/退场动效 + header/body/footer glass 面板），字段扩为 custom agent 所需：
+// S5 W2 — 完全自定义 Agent（type='custom'）配置抽屉。三段式脚手架
+//（进/退场动效 + header/body/footer glass 面板），字段是 custom agent 所需：
 // title / prompt / model / enabled + trigger 判别式（无 | cron | email_filter）+ allowed_tools
 // 多选 + budget 两门 + run 历史（9 状态穷举）。
 //
@@ -12,7 +12,7 @@
 //  • 新建两段式：createAgent({type:'custom'}) 建草稿 → setConfig 补 trigger/tool_policy/budget。
 //
 // Lane C2（07-07 review 拆分）：run 历史 / 自动化策略 / 额外能力三个 section 已机械搬迁到
-// ./custom-agent/ 子目录（逻辑逐字节不变）；RunStateBadge 在此 re-export，供 AgentsTab /
+// ./custom-agent/ 子目录（逻辑逐字节不变）；RunStateBadge 在此 re-export，供
 // AgentRecordView 沿用 './CustomAgentDrawer' 导入路径不变。
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -98,7 +98,7 @@ const TRIGGER_KINDS: TriggerKind[] = [
 type LeadUnit = CalendarLeadUnit
 
 // title → 稳定 slug（新建 agent id）。保留 CJK + 字母 + 数字，latin 转小写，其余折 `_`；
-// 真正为空才时间戳兜底。镜像 SearchConfigDrawer.slugifyTitle（小助手，允许复制）。
+// 真正为空才时间戳兜底。
 function slugifyTitle(title: string): string {
   const slug = title
     .trim()
@@ -109,8 +109,8 @@ function slugifyTitle(title: string): string {
   return slug || `custom_${Date.now().toString(36)}`
 }
 
-// 小 Field（label + hint + children）；复制自 AgentsTab 的私有 Field（避免 AgentsTab ↔
-// CustomAgentDrawer 循环 import）。
+// 小 Field（label + hint + children）。与 ./drawers/Field 同形状但各自一份 —— 那份是
+// settings/ 八个配置页的共用件，本文件维持私有副本，两边都没有依赖对方。
 function Field({
   label,
   hint,
@@ -232,8 +232,8 @@ export function CustomAgentDrawer({
   // setConfig 失败后原地重试直接走 setConfig，不再重复 create（同 id 撞 409）。打开抽屉重置。
   const [createdId, setCreatedId] = useState<string | null>(null)
 
-  // 打开时按 cfg（编辑）/ 空态（新建）预填。同 SearchConfigDrawer 既有豁免理由：模态打开按
-  // cfg/空态预填多字段表单，React Compiler 迁移债，effect 合理保留。
+  // 打开时按 cfg（编辑）/ 空态（新建）预填。既有豁免理由：模态打开按 cfg/空态预填多字段
+  // 表单，React Compiler 迁移债，effect 合理保留。
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!open) return
@@ -1257,7 +1257,7 @@ export function CustomAgentDrawer({
           flexShrink: 0
         }}
       >
-        {/* 删除：仅编辑既有时；两步确认（同 SearchConfigDrawer 风格）。 */}
+        {/* 删除：仅编辑既有时；两步确认。 */}
         {!create &&
           cfg &&
           (confirming ? (

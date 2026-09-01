@@ -9,8 +9,8 @@
 //     optional 兜底（后端批未合并 → 显示加载失败，不炸页面）；
 //   · 脚部跳转行：在 store 里点名治理行 id 后 navigate 到 /agents。
 //
-// v2 起抽屉里**没有**工具 tab（工具清单迁去 Agents 页配置抽屉），相应断言搬到
-// `tests/components/ContactGovernanceConfigDrawer.test.tsx`。
+// v2 起抽屉里**没有**工具 tab（工具清单迁去团队页的「通讯录治理」配置页），
+// 相应断言随之搬去那一页的测试。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -382,10 +382,7 @@ describe('ContactAgentDrawer · 队列 tab 整批处置', () => {
     fireEvent.click(await screen.findByText('确认'))
 
     await waitFor(() =>
-      expect(toastSuccess).toHaveBeenCalledWith(
-        '已采纳 2 条建议',
-        '1 条合并建议需逐条人工确认'
-      )
+      expect(toastSuccess).toHaveBeenCalledWith('已采纳 2 条建议', '1 条合并建议需逐条人工确认')
     )
   })
 

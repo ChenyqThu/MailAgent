@@ -1,7 +1,7 @@
 // Sprint 18 §PR D — Integrations tab. 外挂模块的 ENV 配置:
 //   1. Office Convert (docx/pptx → PDF, xlsx → CSV)
 //   2. Stats Report + Dashboard + CLI auth
-// (Project Progress 已随 v1.3.0 dogfood 收编进 Agents 页抽屉, 见下方注释)
+// (Project Progress 已随 v1.3.0 dogfood 收编进团队页的「项目周报同步」配置页, 见下方注释)
 //
 // CLI API key 走 <EnvSecretField> 双写 (keytar + .env): main 进程的
 // cli_runner 从 keytar 注入 header, Python CLI 自己从 .env 读 (CRS-style
@@ -37,7 +37,7 @@ function errLabel(err: unknown): string {
  *  KOS_REQUIRE_LABELED=true 时只放行 AI 明确判定过优先级的邮件, 而「判定过」的唯一
  *  来源是 AI 邮件预处理 (LLM_AGENT_ENABLED)。两者一开一关 = 入库开着、凭据齐、看板
  *  显示 active, 但一封都推不进去、零报错。静态 helper 用户不会读 —— 这里按两个 env
- *  值条件渲染 (读 useEnvStore snapshot, 同 AgentsTab 预处理卡的 envFlagOn pattern),
+ *  值条件渲染 (读 useEnvStore snapshot, 走 shared.ts 的 envFlagOn),
  *  并给跳转 Agents 页的链接 (AI 分类的开关在那边)。 */
 function KosRequireLabeledDeadlockWarning(): React.ReactElement | null {
   const { t } = useTranslation()
@@ -360,10 +360,10 @@ export function IntegrationsTab(): React.ReactElement {
       {/* Web 搜索（Tavily key）配置已随 task 07-07 R4 迁到 AI tab → 系统能力区「联网」卡
           （SystemCapabilitiesSection 的 WebCapabilityRow：联网开关 ON 时联动显示）。此处不再重复。 */}
 
-      {/* 项目周报同步 Section 已随 v1.3.0 dogfood 收编进 Agents 页的
-          ProjectProgressConfigDrawer（活字段 SYNC_ENABLED / DATABASE_ID / FILTER_BU
-          搬进抽屉；AUTO_SYNC_ENABLED / SUBJECT_PATTERN / SENDER 是 v31 行迁移后的死
-          配置 —— 活版本 = 抽屉的启用开关 / 发件人 / 标题正则，直接移除）。 */}
+      {/* 项目周报同步 Section 已随 v1.3.0 dogfood 收编进团队页的「项目周报同步」配置页
+          （活字段 SYNC_ENABLED / DATABASE_ID / FILTER_BU 搬了过去；AUTO_SYNC_ENABLED /
+          SUBJECT_PATTERN / SENDER 是 v31 行迁移后的死配置 —— 活版本 = 那一页的启用开关 /
+          发件人 / 标题正则，直接移除）。 */}
       {/* 原「Office 附件转换」区。OFFICE_CONVERT_ENABLED 随 2026-08 Notion 派生退役
           删除（Notion 侧沙盒电脑可直接读 office 文件），本区收窄为附件的文字识别。 */}
       <Section

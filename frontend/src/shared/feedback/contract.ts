@@ -27,7 +27,7 @@ export const FEEDBACK_FREQUENCIES = ['每次必现', '偶发', '仅出现一次'
 export type FeedbackFrequency = (typeof FEEDBACK_FREQUENCIES)[number]
 
 // 🔴 上面两组的**值**是与 Notion 表单对齐的中文枚举，**不许改值**（改了 select 就落不上）。
-// 界面文案走下面这两张 key 表（ConfigDrawer 的 PRIORITY_LABEL_KEYS 先例：value 是权威、
+// 界面文案走下面这两张 key 表（同 ReportAgentSettings 的 PRIORITY_LABEL_KEYS：value 是权威、
 // displayLabel 走 i18n）。
 export const FEEDBACK_KIND_LABEL_KEYS: Record<FeedbackKind, string> = {
   问题: 'feedback.kind.problem',

@@ -22,8 +22,8 @@ import { resolveAiGatewayBaseUrl } from './runtime/flags'
 import { errorMessage } from '@shared/lib/ipcErrors'
 
 // ── 内置默认搜索 prompt（legacy §3.3 同文；prompt=NULL 时用，{today}/{me} 由本客户端填）──
-// SSoT 迁址：legacy shared/chat/search_agent.ts 的同名常量随 W3 删除，AgentsTab 届时改
-// import 这里。
+// SSoT 迁址：legacy shared/chat/search_agent.ts 的同名常量随 W3 删除，本文件是唯一定义处
+//（搜索 Agent 配置页从这里 import）。
 export const DEFAULT_SEARCH_AGENT_PROMPT =
   '你是邮件搜索助手。用户给自然语言，你用 email_search_fulltext（支持 ' +
   'from:/to:/subject:/in:/is:/has:/after:/before: + 引号短语 + -否定 + 大写 OR + ' +

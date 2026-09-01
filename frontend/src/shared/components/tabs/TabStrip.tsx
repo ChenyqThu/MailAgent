@@ -4,8 +4,15 @@
 // （宽度实测 → clamp 84-190，「+」钮 Chrome 式跟在最后一个标签右侧）。dogfood 轮4
 // 起顶栏右簇迁去左段（TitleBar），标签条独占行末 —— 断开的 hairline 一直延伸到行尾。
 //
-// 状态全部来自 useTabWorkspace；本组件只消费 activate / close —— openTab 与它的
-// 静默 LRU 驱逐在列表点击侧（Lane W），内容区的切换淡入也在那边。
+// 状态全部来自 useTabWorkspace；本组件只消费 activate / close / reorder —— openTab
+// 与它的静默 LRU 驱逐在列表点击侧（Lane W），内容区的切换淡入也在那边。
+//
+// 拖拽排序（P5）：dnd-kit 最薄接法（DndContext + horizontalListSortingStrategy +
+// useSortable，整标签即拖柄，8px 起拖保住 × 与激活的点击）。拖拽期间 DOM 序仍是
+// store 序、位移全靠 transform；🔴 滑动面与 hairline 断口不跟随标签 DOM（绝对定位
+// 兄弟），所以坐标必须按**乐观顺序**（dragOrder projection）算 —— 否则拖过激活标签
+// 时选中底停在旧格（劈叉）。落位时 reorderTab 与 projection 清除同批渲染：DOM 重排
+// 与 transform 归零相抵，无旧序帧。
 //
 // 几何：🔴 对象标签宽度用 ResizeObserver 量 .tstrip-tabs 的**实际**宽度算（原型
 // 的 1440 固定窗宽公式只是参考，实现必须响应实际宽度）。滑动面与 hairline 断口
@@ -23,6 +30,24 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragOverEvent,
+  type Modifier
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  arrayMove,
+  horizontalListSortingStrategy,
+  useSortable
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 
 import { PlusIcon, SearchIcon, XIcon } from '@shared/components/icons'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
@@ -55,6 +80,13 @@ const TABS_LEFT_FALLBACK = 195
 /** 动效收尾时点（幽灵卸载 / 入场标记摘除）= --tstrip-dur(440) + 一帧余量。
  *  改 CSS 时长必须同步这里。 */
 const TAB_ANIM_MS = 480
+/** 拖拽期间被挤开标签的位移过渡 —— 与 --tstrip-dur/--tstrip-ease 是同一份数
+ *  （改 CSS 必须同步这里，同 TAB_ANIM_MS）：位移 transform 与滑动面的 left 过渡
+ *  同曲线同时长，断口才能与被挤开的标签逐帧咬合。 */
+const DRAG_TRANSITION = { duration: 440, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' }
+/** 拖拽限横轴：标签条是一行，纵向位移只会把标签拽出条外。@dnd-kit/modifiers 未装，
+ *  一行的事不值得为它加包。 */
+const horizontalOnly: Modifier = ({ transform }) => ({ ...transform, y: 0 })
 
 const NO_DRAG = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
 
@@ -85,12 +117,13 @@ function sameItems(a: readonly StripItem[], b: readonly StripItem[]): boolean {
 
 /** store 标签集 → 渲染列表。三条规则：
  *  1. 消失的标签变幽灵留在原位收缩（reduceMotion 下直接丢弃）；
- *  2. 新出现的标签按 store 序追加并标记入场（store 只会 append，不会重排）；
+ *  2. 新出现的标签按 store 序追加并标记入场（新增只会 append）；
  *  3. 🔴 「一删一增且落在同一格」= 原位换身（replaceActiveTab 的 J/K 翻页、
  *     retargetTab 的草稿换锚）——是同一个标签换了目标，不是关一个开一个，
  *     进/退场都不播（否则连按 J 翻十封邮件会闪十次动画）。
- *  兜底：diff 后存活项的顺序必须与 store 完全一致，对不上（理论不可达的组合序列）
- *  就放弃本轮动画、直接镜像 store —— 幽灵只是观感，顺序错了滑动面会指错格。 */
+ *  兜底：diff 后存活项的顺序必须与 store 完全一致，对不上就放弃本轮动画、直接镜像
+ *  store —— 幽灵只是观感，顺序错了滑动面会指错格。拖拽排序（reorderTab 落位）走的
+ *  就是这条：**有意的**——dnd-kit 的 transform 归零与 DOM 重排相抵，不需要第二层动画。 */
 function diffStripItems(
   prev: readonly StripItem[],
   tabs: readonly TabDescriptor[],
@@ -153,7 +186,16 @@ export function TabStrip(): React.ReactElement {
   const mainBreadcrumb = useTabWorkspace((s) => s.mainBreadcrumb)
   const activateTab = useTabWorkspace((s) => s.activateTab)
   const activateMain = useTabWorkspace((s) => s.activateMain)
+  const reorderTab = useTabWorkspace((s) => s.reorderTab)
   const reduceMotion = useReducedMotion()
+
+  // 拖拽中的乐观顺序（null = 没在拖）。只喂滑动面/断口的坐标计算 —— DOM 序在拖拽
+  // 期间保持 store 序，位移由 dnd-kit 的 transform 表达（文件头注释）。
+  const [dragOrder, setDragOrder] = useState<readonly TabId[] | null>(null)
+  // 8px 起拖（同 SortableBoard 的取值）：× 钮与激活点击都在阈值内不受影响。
+  // KeyboardSensor 有意不挂 —— Enter/Space 已是标签的激活键，挂上会抢按键；
+  // 键盘拖拽本批不做（r13 拍板）。
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }))
 
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const [wrap, setWrap] = useState<WrapBox>({ left: TABS_LEFT_FALLBACK, width: 0 })
@@ -235,11 +277,33 @@ export function TabStrip(): React.ReactElement {
       : Math.max(TAB_MIN, Math.min(TAB_MAX, Math.floor((wrap.width - PLUS_W - TAB_GAP * n) / n)))
 
   // 滑动面：主标签激活时压在主标签上（left=PAD_L, width=MAIN_W），对象标签激活时
-  // 滑到对应格。left/width 变更由 CSS 过渡接管 ⇒ 切换是滑动不是硬切。坐标按 store
-  // 序算（幽灵不占格）：幽灵收缩与本面同曲线同时长，过渡全程逐帧咬合（文件头注释）。
-  const activeIndex = active === MAIN_SLOT ? -1 : tabs.findIndex((tb) => tb.id === active)
+  // 滑到对应格。left/width 变更由 CSS 过渡接管 ⇒ 切换是滑动不是硬切。坐标按**视觉**
+  // 序算：平时 = store 序（幽灵不占格）；拖拽期间 = 乐观顺序 dragOrder —— 激活标签被
+  // 挤开一格时它的 transform 位移与本面的 left 位移同曲线同时长，逐帧咬合（文件头注释）。
+  const liveIds = tabs.map((tb) => tb.id)
+  // dragOrder 里可能残留拖拽期间被 ⌘W 关掉的 id —— 过滤到现存集，别让幽灵占格。
+  const visualIds = dragOrder === null ? liveIds : dragOrder.filter((id) => liveIds.includes(id))
+  // 格号 = 激活标签在**视觉序**里的下标（wrap.left 已是 tabs 区左缘 ⇒ 第 0 格就在
+  // wrap.left，不再叠主标签）；-1（不在场：主标签激活 / 激活标签刚被关掉）落回主标签格。
+  const activeIndex = active === MAIN_SLOT ? -1 : visualIds.indexOf(active)
   const surfLeft = activeIndex >= 0 ? wrap.left + activeIndex * (tabW + TAB_GAP) : PAD_L
   const surfW = activeIndex >= 0 ? tabW : MAIN_W
+
+  const onTabDragOver = (event: DragOverEvent): void => {
+    if (event.over === null) return
+    const from = liveIds.indexOf(String(event.active.id))
+    const to = liveIds.indexOf(String(event.over.id))
+    setDragOrder(from < 0 || to < 0 ? null : arrayMove(liveIds, from, to))
+  }
+
+  const onTabDragEnd = (event: DragEndEvent): void => {
+    // store 更新与 projection 清除同一个事件批渲染（React 18 自动合批）：
+    // DOM 重排与 transform 归零相抵 ⇒ 没有旧序帧，滑动面坐标也不动（乐观序 = 新序）。
+    setDragOrder(null)
+    if (event.over === null) return
+    const to = liveIds.indexOf(String(event.over.id))
+    if (to >= 0) reorderTab(String(event.active.id), to)
+  }
 
   const crumb1 = navDomainLabel(mainPage, t)
   const mainTitle = mainBreadcrumb === null ? crumb1 : `${crumb1} / ${mainBreadcrumb}`
@@ -292,20 +356,34 @@ export function TabStrip(): React.ReactElement {
       <div className="tstrip-sep" aria-hidden />
 
       <div ref={wrapRef} className="tstrip-tabs">
-        {items.map(({ tab, closing, entering }) => (
-          <ObjectTab
-            key={tab.id}
-            tab={tab}
-            width={closing ? 0 : tabW}
-            closing={closing}
-            entering={entering}
-            selected={!closing && tab.id === active}
-            onActivate={() => activateTab(tab.id)}
-            // dogfood 波3：× 与 ⌘W 同走关闭守卫 —— dirty 草稿标签先激活再弹确认
-            // （守卫路径不动 store ⇒ 不触发关闭动效，「取消」后标签原样在场）。
-            onClose={() => requestCloseTab(tab.id)}
-          />
-        ))}
+        {/* DndContext / SortableContext 是纯 context，不产 DOM —— 「+」钮仍是
+            .tstrip-tabs 的最后一个子节点（既有断言依赖这条）。items 用 store 序：
+            拖拽期间 DOM 不重排，位移全靠 strategy 的 transform。 */}
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          modifiers={[horizontalOnly]}
+          onDragOver={onTabDragOver}
+          onDragEnd={onTabDragEnd}
+          onDragCancel={() => setDragOrder(null)}
+        >
+          <SortableContext items={liveIds} strategy={horizontalListSortingStrategy}>
+            {items.map(({ tab, closing, entering }) => (
+              <ObjectTab
+                key={tab.id}
+                tab={tab}
+                width={closing ? 0 : tabW}
+                closing={closing}
+                entering={entering}
+                selected={!closing && tab.id === active}
+                onActivate={() => activateTab(tab.id)}
+                // dogfood 波3：× 与 ⌘W 同走关闭守卫 —— dirty 草稿标签先激活再弹确认
+                // （守卫路径不动 store ⇒ 不触发关闭动效，「取消」后标签原样在场）。
+                onClose={() => requestCloseTab(tab.id)}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
         {/* 「+」新标签页（⌘T 的鼠标入口，原型 .plus）。dogfood 轮4：Chrome 式跟在最后
             一个标签右侧（含收缩中的幽灵 —— 关标签时它随收缩一起左移）；宽度经 PLUS_W
             手动进几何（tabW 公式）。 */}
@@ -344,6 +422,15 @@ function ObjectTab({
   onClose
 }: ObjectTabProps): React.ReactElement {
   const { t } = useTranslation()
+  const reduceMotion = useReducedMotion()
+  // 拖拽排序（P5）：整标签即拖柄（标签条上没地方放 grip；8px 起拖阈值保住点击）。
+  // 幽灵 disabled（它的 id 已不在 SortableContext items 里）。attributes 有意不铺 ——
+  // 它带 role="button" / aria-roledescription，会覆盖 role="tab"；键盘拖拽本批不做。
+  const sortable = useSortable({
+    id: tab.id,
+    disabled: closing,
+    transition: reduceMotion ? null : DRAG_TRANSITION
+  })
   // 搜索标签标题恒定（不读快照 ⇒ 切语言即时跟）；对象标签 deeplink 这类入口先开着
   // 空标题，详情加载完由消费方 updateTab 补（store 契约）。
   const title =
@@ -358,13 +445,24 @@ function ObjectTab({
     tab.kind === 'email' && (tab.draft as { dirty?: unknown } | undefined)?.dirty === true
   return (
     <div
+      ref={sortable.setNodeRef}
       // 幽灵退出可交互序列（不是 tab、不进 a11y 树、不可聚焦）；pointer-events 由
       // .ttab-closing 关掉，onClick 兜底也打不中（activateTab 对不存在的 id no-op）。
       {...(closing
         ? { 'aria-hidden': true as const }
         : { role: 'tab', 'aria-selected': selected, tabIndex: 0 })}
-      className={`ttab${closing ? ' ttab-closing' : ''}${entering ? ' ttab-enter' : ''}`}
-      style={{ width, ...NO_DRAG }}
+      {...(closing ? undefined : sortable.listeners)}
+      className={`ttab${closing ? ' ttab-closing' : ''}${entering ? ' ttab-enter' : ''}${
+        sortable.isDragging ? ' ttab-dragging' : ''
+      }`}
+      // transform/transition 只在拖拽/落位期间由 dnd-kit 给值（平时 undefined ⇒
+      // authored CSS 的过渡照常）。Translate 不取 scale —— 标签等宽，scaleX 恒 1。
+      style={{
+        width,
+        ...NO_DRAG,
+        transform: CSS.Translate.toString(sortable.transform),
+        transition: sortable.transition
+      }}
       title={title}
       onClick={onActivate}
       onKeyDown={(e) => {

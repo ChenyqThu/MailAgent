@@ -2107,6 +2107,7 @@
       },
       "meta": {
         "time": "时间",
+        "conflict": "时间冲突",
         "calendar": "日历",
         "location": "地点",
         "organizer": "组织者",
@@ -3401,7 +3402,7 @@
       },
       "model": {
         "label": "全局默认模型",
-        "helper": "Chat 对话与未单独设模型的后台 AI 任务默认使用（需重启）；邮件预处理模型在 AI 助理页的预处理卡单独配置"
+        "helper": "Chat 对话与未单独设模型的后台 AI 任务默认使用（需重启）；邮件预处理模型在团队页的预处理配置页单独配置"
       },
       "translate": {
         "title": "邮件翻译",
@@ -3426,7 +3427,7 @@
       },
       "fallbacks": {
         "label": "Fallback 链",
-        "helper": "主模型失败时的全局兜底链；邮件预处理可在其 Agent 卡单独设置（默认跟随全局）",
+        "helper": "主模型失败时的全局兜底链；邮件预处理可在团队页的预处理配置页单独设置（默认跟随全局）",
         "none": "（不设备模型）"
       },
       "autoTitle": {
@@ -4271,8 +4272,6 @@
       "allAgents": "全部智能体"
     },
     "unread": "未读 Agent 运行",
-    "title": "报告 Agents",
-    "subtitle": "自动生成、可溯源的邮件报告。日报为主，周报 / 月报同引擎。",
     "reportsMaster": {
       "label": "报告生成服务常驻",
       "hint": "开启后报告生成服务常驻运行，启用任一报告立即生效；关闭时首次启用某个报告后需重启一次后端才开始定时生成。",
@@ -4432,25 +4431,11 @@
     "card": {
       "enabled": "已启用",
       "disabled": "已停用",
-      "schedDaily": "每天 {hour}:00",
-      "schedWeekly": "每{weekday} {hour}:00",
-      "schedMonthly": "每月 {day} 日 {hour}:00",
-      "window": "回看 {hours}h",
-      "lastReport": "最近一次报告",
-      "noReport": "尚无报告，点「立即运行」生成第一份。",
-      "running": "生成中…",
-      "runNow": "立即运行",
-      "runningHint": "生成中，约 20–40 秒…",
-      "configure": "配置",
       "newAgent": "新建 Agent",
-      "newAgentHint": "自定义触发、工具与模型 · 即将推出",
-      "noAgent": "未找到报告 Agent（数据库未初始化？）"
+      "newAgentHint": "自定义触发、工具与模型 · 即将推出"
     },
     "config": {
-      "title": "配置 · {title}",
-      "viewHistory": "查看全部历史",
       "enable": "启用此 Agent",
-      "enableHint": "按排程自动生成报告",
       "prompt": "报告 Prompt",
       "promptHint": "调报告的「口味」",
       "promptNote": "计数、internal_ids、链接由系统权威回填；Prompt 只影响文案、分组与挑选。",
@@ -4521,15 +4506,8 @@
       "emptyTranscript": "这个会话还没有消息"
     },
     "search": {
-      "section": "搜索 Agent",
-      "sectionHint": "命令面板 AI 搜索入口用的智能体。用自然语言搜邮件，自动转检索。",
       "newAgent": "新建搜索 Agent",
       "newAgentHint": "自定义提示词、模型与工具",
-      "customAgentTitle": "Custom Agent",
-      "customAgentHint": "完全自定义 Agent · 待上线",
-      "noAgent": "暂无搜索 Agent，点上方新建。",
-      "configTitle": "搜索 Agent · {title}",
-      "newTitle": "新建搜索 Agent",
       "titlePlaceholder": "如 邮件搜索助手",
       "promptLabel": "搜索 Prompt",
       "promptHint": "下方为内置默认搜索 prompt，可直接覆写；占位符会在运行时自动替换",
@@ -4539,7 +4517,6 @@
       "tool": {
         "email_search_fulltext": "邮件全文搜索"
       },
-      "create": "创建",
       "delete": "删除",
       "deleteConfirm": "确认删除此搜索 Agent？",
       "deleteCancel": "取消",
@@ -4547,18 +4524,10 @@
       "errGeneric": "操作失败，请重试。"
     },
     "preprocess": {
-      "section": "AI 邮件预处理",
-      "sectionHint": "本地 LLM 自动为新邮件分类、打标、建议回复。模型与 Chat 独立配置。",
-      "subtitle": "自动为新邮件分类 / 打标 / 建议回复（本地 LLM）",
-      "noAgent": "未找到预处理 Agent（数据库未初始化？）",
-      "configTitle": "AI 邮件预处理 · {title}",
       "viewStats": "查看处理统计",
-      "enable": "启用邮件预处理",
-      "enableHint": "开启本地 LLM 对新邮件自动分类（全局开关 LLM_AGENT_ENABLED）。需重启服务后生效。",
       "markReadAfterProcessing": "预处理完成后自动标已读",
       "markReadAfterProcessingHint": "关闭后，AI 仍会分类、标旗并更新处理状态，但不会改变邮件当前的已读/未读状态。保存即生效。",
       "restartHint": "需重启生效",
-      "modelHint": "预处理专用模型，保存即生效（不影响 Chat）；「跟随全局」= 用全局默认模型",
       "modelFollowGlobal": "跟随全局默认（{model}）",
       "contextDocs": "注入的身份文档",
       "contextDocsHint": "勾选后注入邮件分类的系统提示",
@@ -4581,7 +4550,6 @@
       },
       "webReadOnly": "远程 Web 为只读：启用状态、参考上下文源与 context page ID 不可修改（仅本地桌面端可改）；模型、fallback 与文档勾选仍可编辑。",
       "fallback": "Fallback 备用模型",
-      "fallbackHint": "预处理专用 fallback，保存即生效；默认跟随全局设置（设置 → AI 的 Fallback 链）",
       "fallbackFollowGlobal": "跟随全局（{model}）",
       "fallbackGlobalUnset": "未设",
       "fallbackNone": "（不设）",
@@ -4598,18 +4566,9 @@
       "envSaveError": "保存启用状态失败",
       "rowSaveError": "保存预处理配置失败"
     },
-    "contactSection": {
-      "title": "通讯录",
-      "hint": "两个只读邮件的低频 Agent：一个写人物画像，一个提治理建议。都不直接改身份字段。"
-    },
     "contactGovernance": {
-      "subtitle": "每天随邮件增量扫一次，提合并 / 补字段 / 曾用邮箱建议，排队等你确认",
-      "configTitle": "通讯录治理 · {title}",
-      "enable": "启用治理 Agent",
-      "enableHint": "停用后每日扫描不跑，工作台里手点「现在跑一次」会返回 E_DISABLED。",
       "schedule": "排程",
       "scheduleHint": "每天固定时刻随邮件增量跑一次治理扫描",
-      "dailyHour": "每日运行时刻（0–23 点）",
       "useKos": "参考 KOS 资料",
       "useKosHint": "治理扫描先查此人的 KOS wiki 再提身份建议；未配置 KOS 时无效。",
       "prompt": "系统提示词",
@@ -4623,26 +4582,17 @@
       "orgFramePlaceholder": "# 公司\nTP-Link System | tp-link.com.hk | 总部\nTP-Link | tp-link.com, omadanetworks.com\n\n# 部门框架\nEBG / ENBU / 产品部\n商用产品研发处 / 系统部",
       "orgFrameNote": "留空 = 不约束：治理 Agent 照常提建议，只是不再判断「框架外」。填了之后，落在框架外的建议值会带一个「框架外」标记，你可以先补框架再采纳。",
       "tools": "注入的工具 · {count} 件",
-      "toolsHint": "只读 · 由 gateway 实际装配的 ToolSet 决定",
       "queueNote": "这个 Agent 产出的建议在 通讯录 → 列表头「Agent」胶囊里排队等确认；它的运行历史也在那儿。",
-      "errFireHour": "每日运行时刻要是 0 到 23 之间的整数",
-      "rowSaveError": "保存治理 Agent 配置失败"
+      "errFireHour": "每日运行时刻要是 0 到 23 之间的整数"
     },
     "contactProfile": {
-      "subtitle": "低频批处理生成人物画像；单个联系人可在档案页手动更新",
-      "configTitle": "联系人画像 · {title}",
-      "enable": "启用画像 Agent",
-      "enableHint": "开启后按下方排程低频跑批处理（受 Labs 总开关约束）。",
       "schedule": "排程",
       "scheduleHint": "每天固定时刻跑一轮，每轮最多处理这么多人",
-      "dailyHour": "每日运行时刻（0–23 点）",
       "dailyCap": "每轮人数上限",
       "useKos": "参考 KOS 资料",
       "useKosHint": "生成画像前先查此人的 KOS wiki 作背景参考；未配置 KOS 时无效。",
-      "modelHint": "行级模型；跟随全局时用聊天的默认模型",
       "modelFollowGlobal": "跟随全局默认",
       "fallback": "兜底模型",
-      "fallbackHint": "主模型失败时改用；跟随全局 = 用全局 LLM_FALLBACK_MODELS",
       "fallbackFollowGlobal": "跟随全局",
       "fallbackNone": "不设兜底",
       "promptAppend": "提示词追加段",
@@ -4650,21 +4600,15 @@
       "promptAppendPlaceholder": "例如：多留意对方在合同条款上的口径变化。",
       "promptAppendNote": "内置提示词已经钉死「只用给定邮件证据、不足就拒写」的纪律，追加段不会覆盖它。",
       "errFireHour": "每日运行时刻要是 0 到 23 之间的整数",
-      "errDailyLimit": "每轮人数上限要是大于 0 的整数",
-      "rowSaveError": "保存画像 Agent 配置失败"
+      "errDailyLimit": "每轮人数上限要是大于 0 的整数"
     },
     "projectProgress": {
-      "section": "项目周报同步",
-      "sectionHint": "识别项目周报邮件（xlsx 附件）→ 自动解析并同步进 Notion 项目进度库。确定性流程，不走 AI。",
       "subtitle": "匹配的周报邮件自动解析 xlsx → 同步进 Notion 项目进度库",
-      "configTitle": "项目周报同步 · {title}",
       "masterOff": "总闸未开",
       "masterOnNote": "总开关已开（环境变量 PROJECT_PROGRESS_SYNC_ENABLED）。下方启用开关与触发规则保存即生效。",
       "masterOffNote": "总开关未开：同步不会运行。可在下方打开「同步总开关」（保存后需重启服务生效）；启用开关与触发规则会照常保存。",
       "master": "同步总开关",
       "masterHint": "环境变量 PROJECT_PROGRESS_SYNC_ENABLED；改后需重启后端生效",
-      "enable": "启用自动同步",
-      "enableHint": "匹配的周报邮件自动触发同步（受总开关 PROJECT_PROGRESS_SYNC_ENABLED 约束）。",
       "subjectPattern": "标题正则",
       "subjectPatternHint": "正则匹配邮件标题；命中才认定为项目周报（必填）",
       "subjectPlaceholder": "例如：\\[weekly\\] 项目进度",
@@ -4678,19 +4622,12 @@
       "filterBuHint": "精确匹配 xlsx 的 BU 列，其他 BU 项目忽略；留空 = 不过滤。环境变量 PROJECT_PROGRESS_FILTER_BU；改后需重启生效",
       "filterBuPlaceholder": "TPS-ENBU",
       "capability": "内置能力",
-      "capabilityHint": "恒启用，不可配置",
       "capabilityChip": "项目周报同步脚本 · 内置恒启用",
       "capabilityNote": "执行为确定性 Python 同步脚本（xlsx 解析 → Notion 写入），不经 AI 引擎、不属于技能体系，无法挂载或卸载其他技能；要停用整个 Agent 请用上方启用开关。",
       "webReadOnly": "远程 Web 为只读：总开关 / 项目库 ID / BU 过滤不可修改（仅本地桌面端可改）；启用开关与触发规则仍可编辑。",
       "envSaveError": "保存环境变量失败",
       "errEmptyTrigger": "标题正则与发件人不能同时为空（要停用请用上方启用开关）",
-      "rowSaveError": "保存项目周报配置失败",
       "runs": {
-        "section": "执行历史",
-        "sectionHint": "近期同步记录",
-        "loading": "加载中…",
-        "empty": "暂无同步记录",
-        "counts": "{total} 个项目 · 新建 {created} · 更新 {updated}",
         "statusCompleted": "已完成",
         "statusFailed": "失败",
         "statusSkipped": "已跳过",
@@ -4721,13 +4658,8 @@
       }
     },
     "mainAgent": {
-      "title": "主 Agent",
       "badge": "默认助手",
-      "hint": "全局对话的名字、头像与系统提示词；名字会出现在「思考中」文案和面板标题里",
-      "configure": "配置主 Agent",
       "namePlaceholder": "AI 助手（比如 Jarvis）",
-      "docsHint": "系统提示词（SOUL / AGENT / RULES / USER 身份文档）与 设置 → AI → 身份文档 是同一份，改哪边都一样。",
-      "configTitle": "主 Agent · {name}",
       "identityHint": "留空则用默认名；头像未设置时用官方形象"
     },
     "custom": {
@@ -4736,12 +4668,9 @@
       "meetingPrepTemplate": "用模板创建：会前准备",
       "calendarRequired": "需启用日历同步",
       "unmetDependencies": "未满足依赖：{items}",
-      "section": "完全自定义 Agent",
-      "sectionHint": "自定义触发（定时 / 邮件事件）、任务提示词、可用工具与预算，让 Agent 自动跑起来。",
       "newTitle": "新建自定义 Agent",
       "configTitle": "自定义 Agent · {title}",
       "newTileTitle": "新建自定义 Agent",
-      "newTileHint": "定时或邮件事件触发的自主 Agent",
       "enableHint": "启用后按下方触发条件自动运行（触发为「无」时不会自动跑）。",
       "titlePlaceholder": "如 DMS 审批助手",
       "descriptionLabel": "说明",
@@ -4931,8 +4860,6 @@
         "autoWhitelistedGrant": "免卡：授权放行 ×{n}",
         "viewRecord": "查看执行记录",
         "pendingDot": "有待审批",
-        "pendingBadge": "待审批 {count}",
-        "sectionDot": "{count} 个待审批",
         "recordBanner": "这是 agent 执行记录，仅审批可交互（不能续写对话）。",
         "triggeredAgo": "触发于 {ago}",
         "unknownAgent": "未知 Agent",
@@ -7086,6 +7013,11 @@
       "inHoursOnly": "还有 {h} 小时",
       "started": "已经开始",
       "pendingBefore": "在那之前有 {count} 件要拍板"
+    },
+    "timeline": {
+      "title": "今天的时间线",
+      "now": "现在 {time}",
+      "empty": "今天还没有带时刻的条目"
     }
   },
   "tabs": {

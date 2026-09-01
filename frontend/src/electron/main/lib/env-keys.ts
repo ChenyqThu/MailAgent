@@ -132,7 +132,7 @@ export const MANAGED_ENV_KEYS = [
   // IslandUpdatesTab「每日巡检」区补齐两者。逗号分隔小时 (本机时区), 默认 9,18。
   'MAILAGENT_DAILY_DIGEST_HOURS',
 
-  // — Report agents (Lane 2 #10, AgentsTab 报告区总闸)。config.py Field 默认 false。
+  // — Report agents (Lane 2 #10, 报告 agent 总闸)。config.py Field 默认 false。
   // 启动条件 = 本 flag OR 任一 report 行 enabled (service.py:737, OR 语义) —— flag 开 =
   // worker 常驻, 之后启用报告行**不用再重启**; flag 关 = 首次启用某报告后需重启一次。
   // 同型的 PROJECT_PROGRESS_SYNC_ENABLED 早有 UI (Agents 页抽屉), 它此前没有。

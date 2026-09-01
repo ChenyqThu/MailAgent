@@ -226,7 +226,7 @@ export function AiTab(): React.ReactElement {
     const result = await applyEnvPatch({ LLM_ENABLED_MODELS: next.join(',') })
     if (result.ok) {
       // LLM_ENABLED_MODELS is hot-read by serve-api dotenv_values — no restart needed.
-      // Invalidate so chat picker and AgentsTab ConfigDrawer immediately reflect the change.
+      // Invalidate so chat picker and the agent config pages immediately reflect the change.
       // No success toast: checkbox state is immediate visual feedback; toasting every
       // checkbox click causes toast storms when enabling multiple models in a row.
       await qc.invalidateQueries({ queryKey: qk.chat.config('enabledModels') })
@@ -238,8 +238,8 @@ export function AiTab(): React.ReactElement {
     }
   }
   // task 07-21 —— 收/发分类 prompt 的路径展示 + 编辑入口已从设置-AI 移除；唯一编辑入口
-  // 收敛到 Custom AI「AI 邮件预处理」抽屉（PreprocessConfigDrawer 内联 textarea，走
-  // 同一 mailApi.prompts 读写）。context page ID 亦随之搬进该抽屉。
+  // 收敛到团队页「AI 邮件预处理」配置页（内联 textarea，走同一 mailApi.prompts 读写）。
+  // context page ID 亦随之搬进那一页。
   async function handleTestGateway(): Promise<void> {
     setTesting(true)
     try {
@@ -288,7 +288,7 @@ export function AiTab(): React.ReactElement {
         {providerRegistryEnabled && <ModelServicesSection />}
       </div>
 
-      {/* LLM_AGENT_ENABLED 已收敛到 Agents 页预处理 Agent 配置抽屉（不再两处）。LLM_MODEL /
+      {/* LLM_AGENT_ENABLED 已收敛到团队页「AI 邮件预处理」配置页（不再两处）。LLM_MODEL /
           LLM_FALLBACK_MODELS 保留在此作全局语义——chat gateway 默认模型 + 后台 AI 任务兜底/
           兜底链（R2 #2：预处理的模型与 fallback 均已拆到行级列，默认跟随这里的全局值）。
           其余为网关基建（API base/key、启用模型列表、test gateway），translate 等沿用不变。 */}
@@ -442,7 +442,7 @@ export function AiTab(): React.ReactElement {
           {/* LLM_FALLBACK_MODELS: single-select (user decided no multi-select ranking).
             Python reads it as comma-separated fallback chain; single value works fine.
             Same orphan handling: if the saved value is not in the enabled list, append it.
-            全局兜底链——邮件预处理可在其 Agent 卡单独设置行级 fallback（默认跟随这里）。
+            全局兜底链——邮件预处理可在团队页的预处理配置页单独设置行级 fallback（默认跟随这里）。
             registry on →「不设」空值哨兵留在未分组区、模型按 provider 分组。 */}
           <EnvField
             envKey="LLM_FALLBACK_MODELS"

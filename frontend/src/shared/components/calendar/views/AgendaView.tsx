@@ -25,6 +25,8 @@ import { CalendarQueryError } from '../CalendarQueryError'
 import { extractMeetingLink, MEETING_PROVIDER_LABEL, openMeetingLink } from '../lib/meeting-link'
 import { agendaSrc, resolveMailOccurrence } from '../lib/agendaLayout'
 import { buildAgendaSections, type AgendaRow } from '../lib/agendaList'
+import { ConflictMark } from '../ConflictMark'
+import { candidateFromEntry, detectConflicts } from '../lib/conflict'
 import { shortTime } from '../lib/format'
 import { isAgendaEntrySelected } from '../lib/monthGrid'
 import { weekdayLong } from '../lib/weekdays'
@@ -159,6 +161,16 @@ export function AgendaView({
 
   const sections = buildAgendaSections(entries, start, rangeDays)
   const occs = windowEvents ?? []
+  // P5 — 时间冲突标识, 判据单源 lib/conflict.ts (与日/周事件块、详情抽屉同一把
+  // 尺子)。用未展开的 entries 算: 跨天条目本来就不参与, 展开出来的日行只是同一
+  // 条目的分身, 拿它们两两比会自己跟自己冲突。
+  const conflicts = detectConflicts(
+    entries
+      .map((e) =>
+        candidateFromEntry(e, e.source === 'mail' ? resolveMailOccurrence(e, occs) : null)
+      )
+      .filter((c): c is NonNullable<typeof c> => c !== null)
+  )
 
   /** 时间列 — 当日实际覆盖段: 全天恒「全天」; 跨天首日显开始 (14:00 →),
    *  中间日全天, 末日显结束 (→ 16:00); 单日显起止; 时间点 (matter 截止 /
@@ -208,6 +220,7 @@ export function AgendaView({
               const showLoc =
                 occ?.location && !occ.location.toLowerCase().includes('teams.microsoft.com')
               const tag = sourceTag(t, entry)
+              const conflictCount = conflicts.get(entry.id) ?? 0
               return (
                 // 2.5 — 行根从 <button> 改 <div role="button"> (EmailRow 同款):
                 // 行尾 Join 是真 <button>, 嵌套 button 非法.
@@ -238,6 +251,7 @@ export function AgendaView({
                       {entry.title || untitled}
                     </span>
                     {tag && <span className="ag-tag">{tag}</span>}
+                    {conflictCount > 0 && <ConflictMark count={conflictCount} />}
                     {occ && hasMeetingLink(occ) && (
                       <Video className="teams-i" size={11} strokeWidth={2} aria-hidden />
                     )}

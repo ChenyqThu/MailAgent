@@ -6,8 +6,8 @@
 // useSyncExternalStore 惯用法的**轻量版**：显示型数据（名字/头像），读失败静默用默认值
 // （与 approval-mode 的「不许伪装」纪律相反 —— 那是安全档，这只是称呼），TTL 内不重取。
 //
-// 写侧只有 设置 Agents 页的主 Agent 卡（PUT 后 primeAssistantIdentity 立即广播，
-// 不等 TTL）。
+// 写侧只有 `components/agents/settings/MainAssistantSettings.tsx`（PUT 后
+// primeAssistantIdentity 立即广播，不等 TTL）。
 
 import { useEffect, useSyncExternalStore } from 'react'
 

@@ -413,7 +413,7 @@ function DocEntry({ doc, onRefetch }: DocEntryProps): React.ReactElement {
   )
 }
 
-// Exported so the AI 邮件预处理 config drawer (AgentsTab) can inline-mount the
+// Exported so the 主 Agent 配置页 can inline-mount the
 // same identity-doc editor — "同组件不同入口" (zero props, self-gating on the
 // standingDocsEditorEnabled flag; renders null when off).
 export function StandingDocsSection(): React.ReactElement | null {

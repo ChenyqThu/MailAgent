@@ -2,7 +2,7 @@
 //
 // FALLBACK_MODELS is the single source of truth for the four supported models
 // used when LLM_ENABLED_MODELS is not configured in .env. All three consumers
-// (AIChatPanel model picker, AgentsTab ConfigDrawer radio list, AiTab selects)
+// (AIChatPanel model picker, the agent config pages' model selects, AiTab selects)
 // import from here so the list only changes in one place.
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -143,7 +143,7 @@ export function useKosGate(): {
  *  the chat runtime determines it (see runtime.ts buildEngine / resolveApiPort).
  *  Intentionally duplicated here to keep this module free of circular imports
  *  with the chat runtime; keep in sync if the port-resolution logic changes.
- *  Exported for other raw-fetch consumers (e.g. AgentsTab 预处理 prompt 查看器). */
+ *  Exported for other raw-fetch consumers (e.g. 「AI 邮件预处理」配置页的 prompt 查看器). */
 export function resolveApiBaseUrl(): string {
   const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env
   if (env?.VITE_BUILD_TARGET === 'web') {

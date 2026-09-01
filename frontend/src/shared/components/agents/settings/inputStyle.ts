@@ -1,4 +1,4 @@
-// P4a agent-config lane — 配置页输入控件的共用内联样式（与既有抽屉的 inputStyle 同值）。
+// P4a agent-config lane — 配置页输入控件的共用内联样式（取值沿用自已退役的 agent 配置抽屉）。
 // 独立 .ts 叶子：component 文件导出非组件值会破 react-refresh 的 Fast Refresh 边界。
 export const INPUT_STYLE: React.CSSProperties = {
   width: '100%',

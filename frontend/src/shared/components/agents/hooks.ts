@@ -161,7 +161,7 @@ export function useDeleteReport(): {
 }
 
 /** F4b — 新建一行 agent（search agent 用，type='search'）。成功后 invalidate
- *  getConfig 查询，让 AgentsTab 列表 + 命令面板 runSearchAgent 取到新行。 */
+ *  getConfig 查询，让团队清单 + 命令面板 runSearchAgent 取到新行。 */
 export function useCreateAgent(): {
   create: (input: ReportAgentCreateInput) => Promise<ReportAgentConfig>
   isCreating: boolean
@@ -447,7 +447,7 @@ export function usePendingRuns(enabled: boolean): {
 /** S5 — 某 custom agent 的 run 历史（listRuns，读失败返 []）。state 由后端 derive_agent_run_state
  *  单源投影，前端只穷举渲染不推导。agentId=null → 不发请求。
  *  task 07-21 — `limit` 现作分页大小（每页条数），支持 loadMore（RunHistorySection 的
- *  「加载更多」按钮）；AgentRecordView / AgentsTab 只用 runs（首页/首屏够用），不受影响。 */
+ *  「加载更多」按钮）；AgentRecordView 只用 runs（首页/首屏够用），不受影响。 */
 export function useAgentRuns(
   agentId: string | null,
   limit = 20

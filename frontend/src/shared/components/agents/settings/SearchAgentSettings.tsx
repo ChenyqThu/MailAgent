@@ -1,8 +1,9 @@
-// P4a agent-config lane — 搜索 Agent 配置页（编辑既有行）。保存 / 删除语义照
-// drawers/SearchConfigDrawer 的编辑路径（prompt 默认态回传 / 头像未触碰不发 / 两步确认删）。
-// ⚠️ 本页没有「新建搜索 Agent」—— SearchConfigDrawer 的 create 分支在旧卡片网格里就已经
-// 没有任何调用点（`setSearchDrawer({mode:'create'})` 零处，HEAD 即如此），不是本批弄丢的；
-// 删掉播种那行之后没有回头路这件事是**预存缺口**，要补得先决定新建入口放哪。
+// P4a agent-config lane — 搜索 Agent 配置页（编辑既有行）。保存 / 删除语义：prompt 默认态
+// 回传 / 头像未触碰不发 / 两步确认删。
+// ⚠️ 本页没有「新建搜索 Agent」—— 旧卡片网格时期的创建态
+// （`setSearchDrawer({ mode: 'create' })`）在退役前的 AgentsTab 里就已经零调用点，
+// 用 `git show HEAD:frontend/src/shared/components/agents/AgentsTab.tsx` 可复核；
+// 不是本批弄丢的。删掉播种那行之后没有回头路这件事是**预存缺口**，要补得先决定新建入口放哪。
 // 唯一一个内置里能删的成员 —— 能力区是真实的多选工具，不渲染「写死」一句话。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'

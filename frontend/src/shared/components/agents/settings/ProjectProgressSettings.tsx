@@ -1,6 +1,6 @@
-// P4a agent-config lane — 「项目周报同步」配置页。保存语义逐字段照
-// drawers/ProjectProgressConfigDrawer（row: enabled + trigger email_filter；env: 总闸 /
-// 项目库 ID / BU 过滤，dirty 追踪 + 重启横幅；空触发前端先拒）。
+// P4a agent-config lane — 「项目周报同步」配置页。保存语义逐字段：
+// row 存 enabled + trigger email_filter；env 存总闸 / 项目库 ID / BU 过滤，
+// 走 dirty 追踪 + 重启横幅；空触发前端先拒。
 //
 // 本页新增的只有交互（r7 §三 判据 4 / 5）：
 //   • 标题正则实时校验 + 「拿最近 5 封标题试一下」（标题走现有 email.list IPC，本地跑
@@ -90,8 +90,8 @@ export function ProjectProgressSettings({ cfg }: { cfg: ReportAgentConfig }): Re
   )
   const masterEnabled = envMasterRaw !== null && envFlagOn(envMasterRaw)
 
-  // env 迟到回填（仅未 dirty 字段，同 ProjectProgressConfigDrawer：env idle→ready 的
-  // 迟到加载能纠正显示，但绝不覆盖用户在页面里的编辑）。
+  // env 迟到回填（仅未 dirty 字段：env idle→ready 的迟到加载能纠正显示，
+  // 但绝不覆盖用户在页面里的编辑）。
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (envMasterRaw !== null && !masterDirty) setMaster(envFlagOn(envMasterRaw))

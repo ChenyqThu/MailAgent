@@ -1,5 +1,5 @@
 // Sprint 20 — /agents 共享原子：ReportIcon / Pip / Badge / StatusBadge /
-// CadencePill / Switch。跨 BlockRenderer / ReportsPage / AgentsTab /
+// CadencePill / Switch。跨 BlockRenderer / ReportsPage / settings 配置页 /
 // EmailSourcePanel 复用。组件集中在本文件（react-refresh：组件文件只导出组件），
 // 纯函数 helpers 在 ./lib。
 import { useTranslation } from 'react-i18next'

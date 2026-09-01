@@ -1,5 +1,4 @@
-// P4a agent-config lane — 「通讯录治理」配置页。保存语义逐字段照
-// drawers/ContactGovernanceConfigDrawer：
+// P4a agent-config lane — 「通讯录治理」配置页。保存语义逐字段：
 //   🔴 保存是两次串行调用（agent 行 + profile doc），任一失败如实报错不吞；
 //   🔴 追加段 / 组织框架读失败时不回写（空草稿覆盖 owner 已有内容的代价太大）；
 //   🔴 trigger_json 整列覆写：{fire_hour, use_kos} 两个字段一起发，仍是字面字段不是

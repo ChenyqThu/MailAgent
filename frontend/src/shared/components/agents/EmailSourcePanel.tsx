@@ -36,8 +36,8 @@ export function EmailSourcePanel({
   const navigate = useNavigate()
   const setActive = useActiveEmail((s) => s.setActive)
 
-  // 进/退场动效：与同区 ConfigDrawer/SearchConfigDrawer 同配方 —— 遮罩与 aside 同步
-  // 进退（syncBackdrop），退场对称、可中断、自动尊重 reduced-motion。open 由 email!==null
+  // 进/退场动效：遮罩与 aside 同步进退（syncBackdrop），退场对称、可中断、
+  // 自动尊重 reduced-motion。open 由 email!==null
   // 驱动；退场期间 email→null，须保留最后一份非空 email 渲染，否则解构会崩。
   const open = email !== null
   const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {

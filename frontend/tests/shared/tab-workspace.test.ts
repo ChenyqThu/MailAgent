@@ -769,3 +769,72 @@ describe('retargetTab —— replace 换锚', () => {
     expect(s().tabs.some((t) => t.id === SEARCH_TAB_ID)).toBe(true)
   })
 })
+
+// ── reorderTab（P5 拖拽排序）────────────────────────────────────────────────
+//
+// 数组序 = 标签条顺序 = ⌘1-9/⌃⇥ 的槽位序（tab-commands 的 slotOrder 直接
+// `tabs.map(id)`，数组序对了它就对）。重排不是激活：lastActiveAt / active 都不动，
+// 否则拖一下标签会改写 LRU 淘汰顺位。
+
+describe('reorderTab —— 拖拽排序', () => {
+  test('移到目标 index，其余标签相对序不变；激活槽不动，并持久化', () => {
+    openEmails(3) // [1,2,3]，active = email:3
+    s().reorderTab('email:1', 2)
+    expect(s().tabs.map((t) => t.id)).toEqual(['email:2', 'email:3', 'email:1'])
+    expect(s().active).toBe('email:3')
+    const savedTabs = persisted().tabs as Array<{ targetId: number }>
+    expect(savedTabs.map((t) => t.targetId)).toEqual([2, 3, 1])
+  })
+
+  test('不刷新 lastActiveAt（重排不是激活，LRU 淘汰顺位不变）', () => {
+    openEmails(3)
+    const before = s().tabs.find((t) => t.id === 'email:1')?.lastActiveAt
+    s().reorderTab('email:1', 2)
+    expect(s().tabs.find((t) => t.id === 'email:1')?.lastActiveAt).toBe(before)
+    // 挪到末位的 email:1 仍是最久未激活的 —— 满员时先淘汰的还是它
+    s().setMaxTabs(4)
+    s().openTab('email', 4, '邮件 4')
+    const result = s().openTab('email', 5, '邮件 5')
+    expect(result.outcome === 'opened' && result.evicted[0]?.id).toBe('email:1')
+  })
+
+  test('越界 index clamp 到首/末位', () => {
+    openEmails(3)
+    s().reorderTab('email:3', -5)
+    expect(s().tabs.map((t) => t.id)).toEqual(['email:3', 'email:1', 'email:2'])
+    s().reorderTab('email:3', 99)
+    expect(s().tabs.map((t) => t.id)).toEqual(['email:1', 'email:2', 'email:3'])
+  })
+
+  test('no-op：同位 / 未知 id / 非有限 index —— 不动状态也不写盘', () => {
+    openEmails(3)
+    const before = s().tabs
+    window.localStorage.clear()
+    s().reorderTab('email:2', 1) // 已在 index 1
+    s().reorderTab('email:999', 0)
+    s().reorderTab('email:1', Number.NaN)
+    expect(s().tabs).toBe(before)
+    expect(window.localStorage.getItem(KEY)).toBeNull()
+  })
+
+  test('只有一个标签：任何 index 都 clamp 回 0 ⇒ 恒 no-op（length-1 边界）', () => {
+    openEmails(1)
+    const before = s().tabs
+    window.localStorage.clear()
+    s().reorderTab('email:1', 0)
+    s().reorderTab('email:1', 3) // clamp 到 length-1 = 0，与原位相同
+    expect(s().tabs).toBe(before)
+    expect(window.localStorage.getItem(KEY)).toBeNull()
+  })
+
+  test('关掉 app 再开：重排后的顺序按存档恢复', async () => {
+    openEmails(3)
+    s().reorderTab('email:3', 0)
+    const fresh = await reboot(window.localStorage.getItem(KEY))
+    expect(fresh.useTabWorkspace.getState().tabs.map((t) => t.id)).toEqual([
+      'email:3',
+      'email:1',
+      'email:2'
+    ])
+  })
+})

@@ -29,7 +29,7 @@ export function pyWeekdayToRule(w: number): number {
 
 // `ruleWeekdayToPy` / `writeReportSchedule` 已下沉到 `@shared/lib/scheduleWire`（零运行时依赖的
 // 叶子），供 gateway 与 renderer 共用 —— 本模块顶层拉着 rrule，main 进程 import 不动它。
-// 这里原样 re-export，既有调用点（ConfigDrawer / index.ts / 测试）一行不改。
+// 这里原样 re-export，既有调用点（配置页 / index.ts / 测试）一行不改。
 export { ruleWeekdayToPy, writeReportSchedule } from '@shared/lib/scheduleWire'
 
 /** 新建规则的默认值（抽屉初始化用）：今天为 anchor、宿主机时区。 */

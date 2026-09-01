@@ -249,7 +249,7 @@ export function CalendarLayout(): React.ReactElement {
   }, [anchor])
 
   // 2.7 — j/k 选中变化把目标滚进视口. 四视图选中元素统一 .is-selected 标记
-  // (EventBlock/EventChip/agenda 行/day rail), Layout 层 querySelector 即可
+  // (EventBlock/agenda 行/day rail), Layout 层 querySelector 即可
   // 不碰视图文件; agenda 跨天多命中取首个 (最早一天).
   useEffect(() => {
     if (!anchor) return

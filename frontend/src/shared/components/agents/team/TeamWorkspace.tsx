@@ -1,5 +1,5 @@
 // task 08-27 P4a（lane team-shell）— 团队域工作台：清单（页面自管二级栏 336）+ 成员详情。
-// 取代旧的「卡片网格 + 点卡开抽屉」（AgentsTab）。
+// 取代旧的「卡片网格 + 点卡开抽屉」形态。
 //
 // design §8.1 的两条硬规则在这里：
 //   🔴 换成员恒回第一档（selectMember 里显式 reset —— 不是「保持上次视图」）。
@@ -181,7 +181,7 @@ export function TeamWorkspace(): React.ReactElement {
   }
 
   // 跨页直达（通讯录工作台「去配置」）：store 点名 agent id → 选中该成员并落设置档。
-  // 🔴 等 isLoading 落定再消费（AgentsTab 同款纪律：查询在途时消费 = 深链被吃掉）；
+  // 🔴 等 isLoading 落定再消费（查询在途时消费 = 深链被吃掉）；
   // 目标不在（老库没播种）时只清 intent。
   const navigationTargetAgentId = useAgentsNavigation((state) => state.targetAgentId)
   const clearAgentsNavigation = useAgentsNavigation((state) => state.clear)

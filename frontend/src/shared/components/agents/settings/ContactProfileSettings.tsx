@@ -1,5 +1,4 @@
-// P4a agent-config lane — 「联系人画像」配置页。保存语义逐字段照
-// drawers/ContactProfileConfigDrawer。
+// P4a agent-config lane — 「联系人画像」配置页。
 //
 // 🔴 「每日运行时刻 0–23」并进排程编辑器的 **UI**（DailyHourSchedule，r7 §三 判据 1），
 // 但写回格式一字不动：trigger_json 仍存 {fire_hour, daily_limit, use_kos} 字面字段
@@ -41,7 +40,7 @@ const DEFAULT_DAILY_LIMIT = 50
  *  开关显示成「关着」。 */
 const DEFAULT_USE_KOS = true
 
-/** 从 trigger_json 读字面排程字段（运行时形状检查，同 ContactProfileConfigDrawer）。 */
+/** 从 trigger_json 读字面排程字段（读面是 union，就地做运行时形状检查）。 */
 function readSchedule(cfg: ReportAgentConfig): {
   fireHour: number
   dailyLimit: number

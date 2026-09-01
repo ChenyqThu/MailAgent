@@ -200,6 +200,11 @@ export interface TabWorkspaceState {
    *  激活槽指向两者任一时改指合并后的标签（激活态连续，lastActiveAt 不刷新）。 */
   retargetTab(kind: TabKind, oldTargetId: number, newTargetId: number): void
   closeTab(id: TabId): void
+  /** 拖拽排序（P5）：把标签移到 `toIndex`（clamp 到 0..length-1）。**不刷新
+   *  lastActiveAt**（重排不是激活，不该动 LRU 淘汰顺位），激活槽也不变。
+   *  未知 id / 非有限 index / 落位与原位相同 → no-op（连持久化都不写）。
+   *  顺序随既有持久化落盘（hydrate 按存档序恢复 ⇒ 重排跨重启白送）。 */
+  reorderTab(id: TabId, toIndex: number): void
   activateTab(id: TabId): void
   activateMain(): void
   /** 切主标签承载（隐含激活主标签）。切到**别的**页面时清掉面包屑第二段。 */
@@ -519,6 +524,17 @@ export const useTabWorkspace = create<TabWorkspaceState>((set, get) => {
         active: heir.id,
         closedStack
       })
+    },
+
+    reorderTab(id, toIndex) {
+      const state = get()
+      const from = state.tabs.findIndex((t) => t.id === id)
+      if (from < 0 || !Number.isFinite(toIndex)) return
+      const to = Math.min(state.tabs.length - 1, Math.max(0, Math.trunc(toIndex)))
+      if (to === from) return
+      const tabs = state.tabs.filter((t) => t.id !== id)
+      tabs.splice(to, 0, state.tabs[from])
+      commit({ tabs })
     },
 
     activateTab(id) {

@@ -1,11 +1,11 @@
-// P4a agent-config lane — 主 Agent 配置页（整页版 MainAssistantDrawer）。
+// P4a agent-config lane — 主 Agent 配置页。
 //
 // 🔴 主 Agent 不是 report_agent 的一行：身份走 chat.setAssistantIdentity（agent_config.db
 // profile），身份文档走 StandingDocsSection（同一份数据、单一可写面）。**绝不**把它塞进
 // PUT /api/report-agents 的 patch 通道（r8 §B.1 的唯一例外）。
 //
-// 保存语义沿 MainAssistantDrawer：名字回显当前生效名但未编辑不落库（nameDirty=false →
-// 仍写 identity.name，可能是 null = 跟随默认名，不把默认字面量写死进库）。
+// 保存语义：名字回显当前生效名但未编辑不落库（nameDirty=false → 仍写 identity.name，
+// 可能是 null = 跟随默认名，不把默认字面量写死进库）。
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -39,7 +39,7 @@ export function MainAssistantSettings(): React.ReactElement {
   const [saveState, setSaveState] = useState<StatefulButtonState>('idle')
 
   // 服务端身份落定后回填 —— 仅未 dirty 的字段（assistantIdentity 是模块级 store，别处
-  // 消费点挂载会触发复取换新对象，无条件回填会把正在编辑的草稿清掉；同 MainAssistantDrawer）。
+  // 消费点挂载会触发复取换新对象，无条件回填会把正在编辑的草稿清掉）。
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!nameDirty) setName(identity.name ?? t('chat.title'))

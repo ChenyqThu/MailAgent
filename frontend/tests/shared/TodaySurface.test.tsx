@@ -14,7 +14,7 @@
 // 只会变成一屏 CORS 噪声，测不出任何东西。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { I18nextProvider } from 'react-i18next'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
@@ -152,8 +152,8 @@ async function renderSurface(): Promise<void> {
   })
   const router = createRouter({
     routeTree: rootRoute.addChildren(
-      ['/today', '/matters', '/sessions', '/', '/admin/calendar', '/reports/$reportId'].map((path) =>
-        createRoute({ getParentRoute: () => rootRoute, path, component: () => null })
+      ['/today', '/matters', '/sessions', '/', '/admin/calendar', '/reports/$reportId'].map(
+        (path) => createRoute({ getParentRoute: () => rootRoute, path, component: () => null })
       )
     ),
     history: createMemoryHistory({ initialEntries: ['/today'] })
@@ -168,6 +168,20 @@ async function renderSurface(): Promise<void> {
   await waitFor(() => {
     expect(screen.getByText(i18n.t('today.title'))).toBeTruthy()
   })
+}
+
+/**
+ * 主区（左列）作用域。
+ *
+ * 🔴 P5 起右侧多了「今天的时间线」列，它按契约把**同一批条目换一根轴再渲染一遍**（标题 +
+ * 副行），于是「标题」「why / triageLogic」这些串在页面上天然各有两份。全局 `getByText`
+ * 会撞 multiple-elements —— 正解是说清问的是哪一列，**不是**换成 `getAllByText()[0]`
+ * （那会把「主区真的渲染了两遍」这类回归一起放过去）。
+ *
+ * 时间线自己那一列的断言走 `getByTestId('today-timeline')`（见本文件末尾两条）。
+ */
+function main(): ReturnType<typeof within> {
+  return within(screen.getByTestId('today-main'))
 }
 
 function dispatch(over: Partial<MatterItemDispatch> = {}): MatterItemDispatch {
@@ -264,9 +278,9 @@ describe('五节主区渲染', () => {
         .map((el) => `${el.getAttribute('data-in-section')}/${el.getAttribute('data-group')}`)
     ).toEqual(['decide/waiting', 'due/waiting', 'out/attention'])
     // 信号的 `why` 直通成 triage 说明（一等字段，行上直读）。
-    expect(screen.getByText('等待「供应商报价」已 5 天')).toBeTruthy()
-    // agent 名（而不是 agentId）当标题。
-    expect(screen.getAllByText('周报 Agent').length).toBe(2)
+    expect(main().getByText('等待「供应商报价」已 5 天')).toBeTruthy()
+    // agent 名（而不是 agentId）当标题。两条 run → 主区恰好两行（时间线那份另计）。
+    expect(main().getAllByText('周报 Agent').length).toBe(2)
   })
 
   test('🔴 stash 命中 → 行上出服务端审批 preview（不是模型自述）', async () => {
@@ -312,7 +326,7 @@ describe('信号 dismiss（可选理由）', () => {
   async function openSignalMenuAndDismiss(): Promise<void> {
     state.signals = [signal()]
     await renderSurface()
-    await waitFor(() => expect(screen.getByText('供应商比价')).toBeTruthy())
+    await waitFor(() => expect(main().getByText('供应商比价')).toBeTruthy())
     fireEvent.click(screen.getByLabelText(i18n.t('today.menu.trigger')))
     await waitFor(() => expect(screen.getByText('忽略本次')).toBeTruthy())
     fireEvent.click(screen.getByText('忽略本次'))
@@ -367,7 +381,7 @@ describe('信号 dismiss（可选理由）', () => {
   test('resolve 仍是一键（不经理由框）', async () => {
     state.signals = [signal()]
     await renderSurface()
-    await waitFor(() => expect(screen.getByText('供应商比价')).toBeTruthy())
+    await waitFor(() => expect(main().getByText('供应商比价')).toBeTruthy())
     fireEvent.click(screen.getByLabelText(i18n.t('today.menu.trigger')))
     await waitFor(() => expect(screen.getByText('解决')).toBeTruthy())
     fireEvent.click(screen.getByText('解决'))
@@ -409,11 +423,11 @@ describe('行动项派发（例外面第四源）', () => {
       ['waiting', 'attention']
     )
     // 标题是**行动项**，事项名另占一行。
-    expect(screen.getByText('把报价单发给财务')).toBeTruthy()
-    expect(screen.getAllByText('供应商比价').length).toBeGreaterThan(0)
+    expect(main().getByText('把报价单发给财务')).toBeTruthy()
+    expect(main().getAllByText('供应商比价').length).toBeGreaterThan(0)
     // triage 说明：等你回答 → 反问原文；挂了 → 服务端写的 message。
-    expect(screen.getByText('要按哪一版报价发？')).toBeTruthy()
-    expect(screen.getByText('这一轮没有交付任何东西')).toBeTruthy()
+    expect(main().getByText('要按哪一版报价发？')).toBeTruthy()
+    expect(main().getByText('这一轮没有交付任何东西')).toBeTruthy()
     // 🔴 两个态的徽标不同 —— 「在等人」与「死了」分得开。
     expect(
       screen.getAllByTestId('dispatch-state-badge').map((el) => el.getAttribute('data-state'))
@@ -434,8 +448,9 @@ describe('行动项派发（例外面第四源）', () => {
   test('点行先展开回答框，不立即提交；填了才调 answer', async () => {
     state.dispatches = [dispatch()]
     await renderSurface()
-    await waitFor(() => expect(screen.getByText('把报价单发给财务')).toBeTruthy())
-    fireEvent.click(screen.getByText('把报价单发给财务'))
+    await waitFor(() => expect(main().getByText('把报价单发给财务')).toBeTruthy())
+    // 🔴 必须点**主区**那一行：时间线那一列按契约没有点击语义（它是一览，不是第二个入口）。
+    fireEvent.click(main().getByText('把报价单发给财务'))
     await waitFor(() => expect(screen.getByTestId('today-dispatch-answer')).toBeTruthy())
     expect(dispatchMutate).not.toHaveBeenCalled()
 
@@ -454,7 +469,7 @@ describe('行动项派发（例外面第四源）', () => {
   test('取消派发：awaiting_input 有菜单入口，failed（终态）没有', async () => {
     state.dispatches = [dispatch()]
     await renderSurface()
-    await waitFor(() => expect(screen.getByText('把报价单发给财务')).toBeTruthy())
+    await waitFor(() => expect(main().getByText('把报价单发给财务')).toBeTruthy())
     fireEvent.click(screen.getByLabelText(i18n.t('today.menu.trigger')))
     await waitFor(() => expect(screen.getByText(i18n.t('today.dispatch.cancel'))).toBeTruthy())
     fireEvent.click(screen.getByText(i18n.t('today.dispatch.cancel')))
@@ -469,7 +484,7 @@ describe('行动项派发（例外面第四源）', () => {
       dispatch({ id: 32, state: 'failed', question: null, ended_at: Date.now() - 1000 })
     ]
     await renderSurface()
-    await waitFor(() => expect(screen.getByText('把报价单发给财务')).toBeTruthy())
+    await waitFor(() => expect(main().getByText('把报价单发给财务')).toBeTruthy())
     expect(screen.queryByLabelText(i18n.t('today.menu.trigger'))).toBeNull()
   })
 })
@@ -519,9 +534,14 @@ function navCount(section: string): number | null {
 
 describe('P4c 五节', () => {
   test('🔴 二级栏计数 = 主区那一节的行数（同源，不是各数一遍）', async () => {
-    state.today = { reply: [reply(), reply({ id: 'mail:5002', link: { kind: 'mail', internalId: 5002 } })], nextHardPoint: null }
+    state.today = {
+      reply: [reply(), reply({ id: 'mail:5002', link: { kind: 'mail', internalId: 5002 } })],
+      nextHardPoint: null
+    }
     state.agenda = [agendaEntry(), agendaEntry({ id: 'mail:uid-2::x', title: '周会' })]
-    state.runs = [run({ jobId: 3, state: 'paused_pending', finishedAt: Date.now() / 1000 - 30, sessionId: 9 })]
+    state.runs = [
+      run({ jobId: 3, state: 'paused_pending', finishedAt: Date.now() / 1000 - 30, sessionId: 9 })
+    ]
     await renderSurface()
     await waitFor(() => expect(screen.getAllByTestId('today-section').length).toBe(3))
 
@@ -603,6 +623,33 @@ describe('P4c 五节', () => {
     expect(bar.textContent).not.toContain(i18n.t('today.next.started'))
   })
 
+  // ── P5 右侧时间线列 ──
+  //
+  // 算法在 `todayTimelineRows.test.ts` 单测；这里只钉「它真的接上了这一页」：列在场 · 条目
+  // 用的是五节那份数据（不是第二个源）· 一条都没有时说清为什么空。
+
+  test('时间线列在场，且吃的是五节那份数据（不另开源）', async () => {
+    state.agenda = [agendaEntry({ title: 'AW Catch Up · SaaS 2026 Plan' })]
+    await renderSurface()
+    await waitFor(() => expect(screen.getByTestId('today-timeline')).toBeTruthy())
+    const column = screen.getByTestId('today-timeline')
+    expect(column.textContent).toContain(i18n.t('today.timeline.title'))
+    expect(column.textContent).toContain('AW Catch Up · SaaS 2026 Plan')
+    // 「现在」那条线恒在场（下一条还没到 → 插在它前面）。
+    expect(screen.getByTestId('today-timeline-now')).toBeTruthy()
+  })
+
+  test('今天没有带时刻的条目 → 空态说清为什么，不是「暂无」', async () => {
+    // 待回邮件的 atMs 是它**到达**的时刻：26 小时前那封落在昨天，进不了今天的时间线。
+    state.today = { reply: [reply()], nextHardPoint: null }
+    await renderSurface()
+    await waitFor(() => expect(screen.getByTestId('today-timeline')).toBeTruthy())
+    expect(screen.getByTestId('today-timeline').textContent).toContain(
+      i18n.t('today.timeline.empty')
+    )
+    expect(screen.queryAllByTestId('today-timeline-row')).toHaveLength(0)
+  })
+
   test('会议行的 why 说的是几点开始（不是空话）', async () => {
     state.agenda = [agendaEntry()]
     await renderSurface()
@@ -611,6 +658,6 @@ describe('P4c 五节', () => {
       hour: '2-digit',
       minute: '2-digit'
     })
-    expect(screen.getByText(i18n.t('today.why.meetUpcoming', { time }))).toBeTruthy()
+    expect(main().getByText(i18n.t('today.why.meetUpcoming', { time }))).toBeTruthy()
   })
 })

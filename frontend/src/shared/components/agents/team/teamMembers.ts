@@ -56,7 +56,7 @@ export interface TeamMember {
 const RECORD_SETTINGS: readonly TeamViewTab[] = ['record', 'settings']
 const SETTINGS_ONLY: readonly TeamViewTab[] = ['settings']
 
-/** 报告 cadence 稳定排序（AgentsTab 同款：日→周→月）。 */
+/** 报告 cadence 稳定排序：日→周→月。 */
 const CADENCE_ORDER: Record<string, number> = { daily: 0, weekly: 1, monthly: 2 }
 
 function builtinMember(cfg: ReportAgentConfig): TeamMember | null {
@@ -120,7 +120,7 @@ function builtinMember(cfg: ReportAgentConfig): TeamMember | null {
         hasLiveRunState: true
       }
     default:
-      // 未知 type：不入清单（AgentsTab 的 type filter 同款静默丢弃纪律）。
+      // 未知 type：不入清单（静默丢弃，不渲染一行没人认识的成员）。
       return null
   }
 }
@@ -139,7 +139,7 @@ export function mainMember(): TeamMember {
   }
 }
 
-/** report_agent 行集 → 团队清单（内置在前，顺序照 AgentsTab 的渲染顺序：
+/** report_agent 行集 → 团队清单（内置在前，固定顺序：
  *  主 Agent → 报告(日→周→月) → 搜索 → 预处理 → 项目周报 → 画像 → 治理；
  *  自定义按 id 稳定排序归第二组）。 */
 export function deriveTeamMembers(agents: readonly ReportAgentConfig[]): TeamMember[] {

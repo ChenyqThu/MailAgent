@@ -11,7 +11,7 @@
 //
 // Active 按钮刻意 **不加 `.on`**（那条规则自带胶囊底 → 与 indicator 双底
 // 叠加）；active 文字色走 authored `.seg button.seg-active`。存量 `.seg` +
-// `.on` 原生用法（AgentsTab 配置排程/窗口选择）不受影响、继续可用。
+// `.on` 原生用法（ScheduleBuilder / 各 agent 配置页的分段选择）不受影响、继续可用。
 //
 // Motion：indicator 的 transition 类有两道闸 —— ① 初次挂载先直接就位
 // （首次定位渲染不带 transition，避免从 x=0 滑入）；② useReducedMotion()

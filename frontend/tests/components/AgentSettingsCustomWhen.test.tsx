@@ -10,7 +10,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createElement } from 'react'
 
-// Radix Select 在 happy-dom 下缺这些 DOM 原语（镜像 AgentsConfigDrawer.test 的 shim）。
+// Radix Select 在 happy-dom 下缺这些 DOM 原语，逐个补上。
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()
   if (!Element.prototype.hasPointerCapture) {

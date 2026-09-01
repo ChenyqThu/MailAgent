@@ -1796,6 +1796,18 @@ body::before {
   background: rgb(var(--c-accent));
   flex-shrink: 0;
 }
+/* 拖拽排序中的标签 (P5, dnd-kit 抬起态)。位移 transform 由 dnd-kit 写内联, 时长与
+ * 曲线是 --tstrip-dur/--tstrip-ease 的同一份数 (TabStrip DRAG_TRANSITION) —— 被挤开
+ * 的标签与滑动面逐帧咬合。飞行中的标签自带一层底色 + lift 投影 (复用 reorder 基座
+ * 的档位): 激活标签的底色平时由滑动面画, 拖起后滑动面移去落位格, 不补这层就是一行
+ * 裸文字。选择器带 .tstrip 抬权重 —— 要压过后到的 [aria-selected]:hover 组合。 */
+.tstrip .ttab.ttab-dragging,
+.tstrip .ttab.ttab-dragging[aria-selected='true'] {
+  background: rgb(var(--ink-fg) / 0.07);
+  box-shadow: var(--reorder-shadow-lift);
+  z-index: 4;
+  cursor: grabbing;
+}
 
 /* 注：`.topbar-left` 不在这一组 —— 它的 220ms width 过渡随折叠能力一起删了，
    现在没有可关停的动画（留着是个恒不命中的空选择器）。 */
@@ -3610,97 +3622,6 @@ body:not([data-batch-mode='true']) .email-row .cb {
   padding: 2px 6px 4px 22px;
   font-size: 10.5px;
   color: rgb(var(--ink-fg-3));
-}
-
-/* event chip (month / agenda all-day strip / week all-day)
- * F1: 改名 .cal-chip 消除与表单 attendee .chip (:3838) 的全局撞名 */
-.cal-chip {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  cursor: pointer;
-  min-height: 20px;
-  background: rgb(var(--c-accent) / 0.13);
-  /* F8 — 散装 0.1s 收编 fast(120ms) + standard 曲线 */
-  transition: background 120ms cubic-bezier(0.4, 0, 0.2, 1);
-  overflow: hidden;
-  border: 0;
-  width: 100%;
-  text-align: left;
-}
-.cal-chip:hover { background: rgb(var(--c-accent) / 0.22); }
-/* F4/Q13 — 选中锚点 (drawer 当前 occurrence): wash 签名; chip 底色本就是
- * accent 平涂 (hover 22% 比 wash 更深), 单靠 wash 不可辨 → 叠 .evt.is-selected
- * 同语言的 accent ring (chip 尺寸小, 1.5px 减重). */
-.cal-chip.is-selected {
-  background: var(--sel-wash);
-  box-shadow: 0 0 0 1.5px rgb(var(--c-accent) / 0.5);
-}
-.cal-chip .c-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: rgb(var(--c-accent));
-  flex-shrink: 0;
-}
-.cal-chip .c-time {
-  font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: 10px;
-  color: rgb(var(--c-accent));
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
-  font-weight: 600;
-}
-.cal-chip .c-title {
-  font-size: 11.5px;
-  color: rgb(var(--ink-fg));
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* F3 (阶段2·2.6) — 状态形态化 (见 .evt 区注)。规则后置于
- * :hover/.is-selected → 状态底纹不被洗掉, 选中恒由 ring 承担。 */
-.cal-chip[data-resp='TENTATIVE'] {
-  background: repeating-linear-gradient(
-    135deg,
-    rgb(var(--c-accent) / 0.2) 0 3px,
-    rgb(var(--c-accent) / 0.05) 3px 7px
-  );
-}
-.cal-chip[data-resp='TENTATIVE']:hover {
-  background: repeating-linear-gradient(
-    135deg,
-    rgb(var(--c-accent) / 0.28) 0 3px,
-    rgb(var(--c-accent) / 0.1) 3px 7px
-  );
-}
-.cal-chip[data-resp='NEEDS-ACTION'] {
-  border: 1px solid rgb(var(--c-accent));
-  background: transparent;
-}
-.cal-chip[data-resp='NEEDS-ACTION']:hover { background: rgb(var(--c-accent) / 0.08); }
-.cal-chip[data-resp='NEEDS-ACTION'] .c-dot {
-  background: transparent;
-  box-sizing: border-box;
-  border: 1.5px solid rgb(var(--c-accent));
-}
-.cal-chip[data-resp='DECLINED'] { background: rgb(var(--c-norm) / 0.12); }
-.cal-chip[data-resp='DECLINED']:hover { background: rgb(var(--c-norm) / 0.2); }
-.cal-chip[data-resp='DECLINED'] .c-dot { background: rgb(var(--c-norm)); }
-.cal-chip[data-resp='DECLINED'] .c-time { color: rgb(var(--c-norm)); }
-.cal-chip[data-resp='DECLINED'] .c-title {
-  text-decoration: line-through;
-  color: rgb(var(--c-norm));
-}
-.cal-chip[data-status='CANCELLED'] { background: rgb(var(--c-low) / 0.07); }
-.cal-chip[data-status='CANCELLED']:hover { background: rgb(var(--c-low) / 0.14); }
-.cal-chip[data-status='CANCELLED'] .c-dot { background: rgb(var(--c-low) / 0.55); }
-.cal-chip[data-status='CANCELLED'] .c-time { color: rgb(var(--c-low)); }
-.cal-chip[data-status='CANCELLED'] .c-title {
-  text-decoration: line-through;
-  color: rgb(var(--c-low));
 }
 
 .more-btn {
@@ -5747,7 +5668,7 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
 /* v0.7.2 统一 SegmentedControl（ui/segmented.tsx）—— 测量式滑动指示器。
  * 指示器复用 .seg button.on 的胶囊语言（暗 ink-fg 半透 / 亮近白，无硬实底）；
  * 组件的 active 按钮不加 .on（避免 indicator + .on 双底叠加），文字色走
- * .seg-active。存量 .seg + .on 原生用法（AgentsTab 配置排程/窗口）不受影响。 */
+ * .seg-active。存量 .seg + .on 原生用法（ScheduleBuilder / 各 agent 配置页）不受影响。 */
 .seg {
   position: relative;
 }

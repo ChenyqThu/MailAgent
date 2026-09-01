@@ -411,3 +411,54 @@ describe('TabStrip — 开合动效（dogfood 轮4：关闭收缩淡出 / 新开
     expect(screen.getAllByRole('tab')).toHaveLength(3)
   })
 })
+
+// ── P5 拖拽排序落位 ─────────────────────────────────────────────────────────
+//
+// 🔴 happy-dom 局限如实声明：dnd-kit 的真实拖拽（PointerSensor 8px 阈值起拖 →
+// closestCenter 碰撞 → transform 位移）依赖真实布局测量（getBoundingClientRect），
+// happy-dom 全返回 0 —— 模拟 pointer 事件序列只会得到「永不越阈 / 永无 over」的
+// 假交互，不造假断言。这里测的是落位那一帧的结果链：store 重排 → 渲染序镜像
+// store（diffStripItems 的重排兜底）→ 滑动面/断口坐标跟新 index 走。拖拽手势本身
+// （含拖拽期间的乐观顺序投影、与 TitleBar app-region drag 的交互）是装机验证项。
+// 纯重排 removed/added 恒为空 ⇒ 动画类断言是护栏，**承重的是顺序与坐标**。
+
+describe('TabStrip — 拖拽排序落位（P5）', () => {
+  test('store 重排后渲染序镜像 store，不产幽灵/入场（落位帧无第二层动画）', () => {
+    const { container } = render(<TabStrip />)
+    act(() => {
+      useTabWorkspace.getState().openTab('email', 1, 'A')
+      useTabWorkspace.getState().openTab('email', 2, 'B')
+      useTabWorkspace.getState().openTab('email', 3, 'C')
+    })
+    act(() => {
+      useTabWorkspace.getState().reorderTab('email:3', 0)
+    })
+    const tabsEls = screen.getAllByRole('tab')
+    expect(tabsEls[1].textContent).toContain('C')
+    expect(tabsEls[2].textContent).toContain('A')
+    expect(tabsEls[3].textContent).toContain('B')
+    expect(container.querySelector('.ttab-closing')).toBeNull()
+    expect(container.querySelector('.ttab-enter')).toBeNull()
+  })
+
+  test('重排后滑动面与断口坐标跟新 index 走（激活标签 1 → 0 格）', () => {
+    const { container } = render(<TabStrip />)
+    act(() => {
+      useTabWorkspace.getState().openTab('email', 1, 'A')
+      useTabWorkspace.getState().openTab('email', 2, 'B') // 激活，index 1
+    })
+    wireGeometry(container) // tabW = 190（同上组推导）
+    expect(surface(container).style.left).toBe('387px') // 195 + 1×(190+2)
+    act(() => {
+      useTabWorkspace.getState().reorderTab('email:2', 0)
+    })
+    const surf = surface(container)
+    expect(surf.style.left).toBe('195px') // 195 + 0×(190+2)
+    expect(surf.style.width).toBe('190px')
+    const [hairL, hairR] = hairs(container)
+    expect(hairL.style.width).toBe('183px') // 195 - 12
+    expect(hairR.style.left).toBe('397px') // 195 + 190 + 12
+    // DOM 序同帧跟上 —— 激活的 B 已是第一个对象标签
+    expect(screen.getAllByRole('tab')[1].textContent).toContain('B')
+  })
+})

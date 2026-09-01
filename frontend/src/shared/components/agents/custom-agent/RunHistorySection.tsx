@@ -1,6 +1,6 @@
 // CustomAgentDrawer 拆分（Lane C2 纯机械搬迁）：run 历史区 + 状态徽标（9 状态穷举）。
 // 原样自 CustomAgentDrawer.tsx 抽出，逻辑逐字节不变。RunStateBadge 由主文件 re-export
-// 供 AgentsTab / AgentRecordView 复用。
+// 供 AgentRecordView 复用。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
