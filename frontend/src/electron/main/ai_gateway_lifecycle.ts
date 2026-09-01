@@ -26,6 +26,7 @@ import { startAiGatewayServer, type AiGatewayHandle } from '../../ai-gateway/ser
 import {
   resolveAiGatewayPort,
   type AiGatewayConfig,
+  type GroupSessionMember,
   type IslandApprovalAnnounce,
   type PersistTurnInput
 } from '../../ai-gateway/config'
@@ -59,6 +60,7 @@ import {
 } from '../../ai-gateway/tools/policy'
 import { ActiveRunRegistry } from '../../ai-gateway/activeRuns'
 import { extractApprovalStashInput } from '../../ai-gateway/chatRun'
+import { parseGroupMemberIds } from '../../ai-gateway/groupChat'
 import { runQueuedInputDispatch } from '../../ai-gateway/queuedInputDispatch'
 import { selectMessagesForModelContext } from '../../ai-gateway/compactSelect'
 import {
@@ -1419,6 +1421,52 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       }
       return { agentId, agentTitle: agentId, duty: null, model: null, scheduleLine: null }
     },
+    // v30（群聊）— GROUP session facts by sessionId reverse lookup (origin='group' rows only;
+    // everything else → null → /api/ai/group-chat answers E_NOT_GROUP). Per-member config fetch
+    // is best-effort (a failure degrades title/duty/model to id/null) but 🔴 NEVER drops the
+    // member: membership is the security fact handleGroupChat validates speakAsAgentId against,
+    // and it must not depend on serve-api availability (resolveSessionAgent's contract, same
+    // rationale).
+    resolveGroupSession: async (sessionId) => {
+      const session = getSession(sessionId)
+      if (!session || session.origin !== 'group') return null
+      const memberIds = parseGroupMemberIds(session.members_json ?? null)
+      const members: GroupSessionMember[] = []
+      for (const memberId of memberIds) {
+        try {
+          const agent = await domain.getReportAgent(memberId)
+          members.push({
+            agentId: memberId,
+            title: agent?.title?.trim() || memberId,
+            duty: agent?.prompt?.trim() || null,
+            model: agent?.model?.trim() || null
+          })
+        } catch (err) {
+          console.warn('[ai-gateway] group member config fetch failed (degrades)', memberId, err)
+          members.push({ agentId: memberId, title: memberId, duty: null, model: null })
+        }
+      }
+      return { members }
+    },
+    // v30（群聊）— the shared transcript, projected for server-side history assembly.
+    listGroupHistory: (sessionId) =>
+      listMessages(sessionId).map((row) => ({
+        role: row.role,
+        content: row.content,
+        speakerAgentId: row.speaker_agent_id ?? null,
+        status: row.status
+      })),
+    // v30（群聊）— persist one group message (owner user message / member reply). appendMessage
+    // bumps the session's updated_at, so the 群聊 list orders by fresh activity like every list.
+    appendGroupMessage: (sessionId, message) =>
+      appendMessage({
+        sessionId,
+        role: message.role,
+        content: message.content,
+        status: 'complete',
+        model: message.model ?? null,
+        speakerAgentId: message.speakerAgentId ?? null
+      }).id,
     // Phase 10b — configurable LLM auto-title. getTitleContext reads ai_chat.db (current title + first
     // user message); a non-null title = already-named (manual rename / prior auto-title) so the endpoint
     // skips regeneration → manual titles never overwritten. saveSessionTitle persists via

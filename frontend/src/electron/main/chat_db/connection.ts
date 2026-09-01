@@ -180,7 +180,21 @@ import { resolveDataRoot } from '../db'
 // (fetched via the new 'team' filter value), never the main history / ⌘O general list. Gates:
 // tests/config/test_chat_type_mirror_parity.py (filter vocabulary ×4 + exclusion-set SQL ×4).
 // 🔴 bump 同步刷 src/chat/db.py 头注释；NOT backend_lifecycle.EXPECTED_DB_VERSION.
-const CHAT_DB_VERSION = 29
+// v30 (L4 群聊, custom agents 群聊 tab) — two additive columns + origin value-domain registration:
+//   • ai_chat_sessions.members_json: the GROUP session's member agent-id array as JSON (e.g.
+//     '["agent_a","agent_b"]'). NULL for every non-group session. Cross-db agent ids (report_agent
+//     lives in agent_config.db) → no FK, same discipline as agent_id (v19).
+//   • ai_chat_messages.speaker_agent_id: WHICH group member spoke an assistant message. NULL keeps
+//     the existing semantics untouched (main agent / user / non-group sessions).
+//   • origin gains the fifth value 'group' (v22/v29 registration precedent — free-text column, no
+//     CHECK change): an owner-driven multi-agent group chat. 🔴 The default interactive filter
+//     exclusion set widens to NOT IN ('agent','team','group') on BOTH carriers in lockstep
+//     (sessions.ts listAllSessions/listGeneralSessions + src/chat/db.py mirrors — gate:
+//     tests/config/test_chat_type_mirror_parity.py). Group rows belong to the sessions domain's
+//     群聊 tab (fetched via the new 'group' filter value), never the main history / ⌘O list.
+// Plain additive ALTERs, hasColumn idempotency guard (v24/v25 样板). 🔴 bump 同步刷
+// src/chat/db.py 头注释；NOT backend_lifecycle.EXPECTED_DB_VERSION.
+const CHAT_DB_VERSION = 30
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -1376,6 +1390,29 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_queued_input_delivery
     try {
       db.prepare(
         "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '29')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  // v29 → v30 — L4 群聊 (custom agents 群聊 tab): ai_chat_sessions.members_json (group member
+  // agent-id array as JSON) + ai_chat_messages.speaker_agent_id (which member spoke an assistant
+  // message; NULL = existing semantics untouched) + origin value-domain registration 'group' (see
+  // the header comment). Plain additive ALTERs, hasColumn idempotency guard (v24/v25 样板).
+  if (current < 30) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'ai_chat_sessions', 'members_json')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN members_json TEXT')
+      }
+      if (!hasColumn(db, 'ai_chat_messages', 'speaker_agent_id')) {
+        db.exec('ALTER TABLE ai_chat_messages ADD COLUMN speaker_agent_id TEXT')
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '30')"
       ).run()
       db.exec('COMMIT')
     } catch (err) {

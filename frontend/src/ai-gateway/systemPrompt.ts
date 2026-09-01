@@ -156,6 +156,10 @@ export function buildGatewaySystemPrompt(args: {
     agentTitle: string
     duty?: string | null
     scheduleLine?: string | null
+    /** v30（群聊）— present ONLY on a group-chat speaker run (handleGroupChat). Renders the
+     *  <current_group_chat> block INSTEAD of <current_team_agent> (a speaking turn needs the
+     *  multi-party framing — member roster + 不冒充他人 — not the 1:1 team framing). */
+    group?: { members: Array<{ agentId: string; title: string }> } | null
   } | null
   /** W6 — true iff THIS run's built ToolSet holds suggest_followups (manual chat). Injects the
    *  follow-up guidance block; absent/false → byte-identical prompt (headless / harness / tests). */
@@ -213,9 +217,17 @@ export function buildGatewaySystemPrompt(args: {
   // <current_custom_agent> assembly convention above; the trailing sentence pins the 形态 α
   // semantics: the duty is a REFERENCE, not an instruction — without it a report agent's prompt
   // ("generate the daily report") would turn every greeting into a report run.
+  // v30（群聊）— a group-chat SPEAKER run renders the multi-party block instead: same identity
+  // fields, plus the roster + speaking discipline (own voice only, no impersonation, no
+  // self-prefix — the [名字] labels in history are assembly artifacts, not a style to copy).
   const teamIdentity =
     args.headlessAgentRun !== true && args.sessionAgentIdentity
-      ? buildTeamAgentIdentityBlock(args.sessionAgentIdentity)
+      ? args.sessionAgentIdentity.group
+        ? buildGroupChatIdentityBlock({
+            ...args.sessionAgentIdentity,
+            group: args.sessionAgentIdentity.group
+          })
+        : buildTeamAgentIdentityBlock(args.sessionAgentIdentity)
       : ''
   // W6 — follow-up guidance only when the run's ToolSet holds the tool (manual chat). A constant
   // block per run shape, so the cacheable prefix stays stable across a manual session's turns.
@@ -258,6 +270,36 @@ export function buildTeamAgentIdentityBlock(identity: {
       (duty
         ? '<duty> 是它作为自动化成员的职责设定，仅作背景参考——本会话是用户主动发起的交互对话，除非用户明确要求，不要自行开始执行该任务。'
         : '本会话是用户主动发起的交互对话。')
+  ]
+  return lines.join('\n')
+}
+
+/** v30（群聊）— render the <current_group_chat> block for a group speaker run. Exported for
+ *  tests. The trailing sentences pin the speaking discipline: own voice only, concise, never
+ *  impersonate另一个成员, never emit a `[名字]` prefix (that labelling is how OTHER
+ *  participants' turns are fed in — see groupChat.ts assembleGroupHistory). */
+export function buildGroupChatIdentityBlock(identity: {
+  agentId: string
+  agentTitle: string
+  duty?: string | null
+  group: { members: Array<{ agentId: string; title: string }> }
+}): string {
+  const duty = identity.duty?.trim()
+  const memberTitles = identity.group.members.map((m) => m.title)
+  const lines = [
+    '<current_group_chat>',
+    `  <self_id>${escapeXml(identity.agentId)}</self_id>`,
+    `  <self_title>${escapeXml(identity.agentTitle)}</self_title>`,
+    ...(duty ? [`  <duty>${escapeXml(duty)}</duty>`] : []),
+    `  <members>${escapeXml(memberTitles.join('、'))}</members>`,
+    '</current_group_chat>',
+    `这是一个多人群聊，成员有：${memberTitles.join('、')}，以及用户本人。` +
+      `你正在以成员「${identity.agentTitle}」的身份发言。历史消息里以「[名字]」开头的是` +
+      '其他成员或用户的发言。请只以你自己的身份简洁发言，不要冒充或代替其他成员发言，' +
+      '也不要在回复前加「[名字]」前缀。' +
+      (duty
+        ? '<duty> 是你的职责设定，仅作背景参考，除非用户明确要求，不要自行开始执行该任务。'
+        : '')
   ]
   return lines.join('\n')
 }

@@ -57,6 +57,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       emailId?: number | null
       matterId?: number
       agentId?: string | null
+      groupMembers?: string[] | null
+      title?: string | null
       backendKind: ChatBackendKind
       backendModel?: string | null
       backendAgentPageId?: string | null
@@ -68,6 +70,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       // serve-api _validate_session_opts 逐分支校验，createNewSession 始终无条件 INSERT。
       // P4b：general 支可带 agentId（团队会话 → origin='team' + agent_id；服务端校验
       // agent 存在且 chat-capable）。仅 general 支转发 —— email/matter 会话没有 agent 身份。
+      // v30：general 支另可带 groupMembers + title（群聊会话 → origin='group' + members_json；
+      // 服务端逐成员校验，与 agentId 互斥）。
       const base = {
         backendKind: input.backendKind,
         backendModel: input.backendModel ?? null,
@@ -79,6 +83,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
               anchorType: 'general',
               emailId: null,
               ...(input.agentId != null ? { agentId: input.agentId } : {}),
+              ...(input.groupMembers != null ? { groupMembers: input.groupMembers } : {}),
+              ...(input.title != null ? { title: input.title } : {}),
               ...base
             }
           : input.anchorType === 'matter'

@@ -14,6 +14,7 @@ import { ChevronLeft, MessageSquare } from 'lucide-react'
 import { useAssistantIdentity } from '@shared/assistant/assistantIdentity'
 import { cn } from '@shared/lib/cn'
 import { navEntry, navigateToNavEntry } from '@shared/navigation/registry'
+import { useEnvStore } from '@shared/state/env'
 import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 
@@ -135,11 +136,14 @@ function MemberDetail({
           forcedCollapsed={forcedRecordCollapsed}
         />
       ) : (
-        <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto" data-team-settings>
+        // 🔴 这里不再滚动：配置页骨架自带滚动容器，外面再套一层 overflow-y-auto 就是
+        // 两条滚动条（骨架 height:100% 时外层恒不溢出而白留一条；一旦上面那句说明把内容
+        // 顶高，两层就同时可滚）。收敛成一层：这里只做 flex 列，滚动交给骨架。
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-team-settings>
           {/* 搜索 Agent：零执行台账（主 session 拍板偏离 design §8.0），设置档顶部一句说明。 */}
           {member.noChatReasonKey != null && !member.tabs.includes('record') && (
             <div
-              className="border-b border-ink-border-soft px-4 py-2 text-meta leading-relaxed text-ink-fg-2"
+              className="shrink-0 border-b border-ink-border-soft px-4 py-2 text-meta leading-relaxed text-ink-fg-2"
               data-no-chat-reason
             >
               {t(member.noChatReasonKey)}
@@ -158,6 +162,15 @@ export function TeamWorkspace(): React.ReactElement {
   const members = useMemo(() => deriveTeamMembers(agents), [agents])
   const identity = useAssistantIdentity()
   const mainName = identity.name ?? t('chat.title')
+
+  // env store 默认 idle（仅设置页 SettingsShell mount 时 refresh，见 env.ts 头注释）；
+  // 团队页的启停徽标（TeamMemberList）与设置档 enable/model 预填（Preprocess/
+  // ProjectProgressSettings）都读它，没开过设置页的会话里会恒灰/恒 stale。P4a 从
+  // AgentsTab 迁移到本组件时丢了这段 mount 补丁（见 git show f49a447d^ 同名注释），
+  // 08-31 回归修复：进团队页主动拉一次。
+  useEffect(() => {
+    if (useEnvStore.getState().state.status === 'idle') void useEnvStore.getState().refresh()
+  }, [])
 
   const narrow = useNarrow()
   const forcedRecordCollapsed = useNarrow(RECORD_FORCE_COLLAPSE_BELOW)
@@ -236,10 +249,8 @@ export function TeamWorkspace(): React.ReactElement {
   )
 
   const detail = creating ? (
-    <div
-      className="scrollbar-thin flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto"
-      data-team-create
-    >
+    // 同设置档：滚动归骨架自己那层，这里只做 flex 列（新建没有外层页头，骨架标题照常在）。
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-team-create>
       <CustomAgentCreateView onCreated={showAgentSettings} />
     </div>
   ) : (

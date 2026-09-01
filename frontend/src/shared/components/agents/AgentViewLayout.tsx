@@ -5,6 +5,10 @@
 // uses: the general sessions list + select/new/delete + the legacy engine — so the left list and the
 // conversation stay in lock-step. A lazy first-user-message preview cache supplies row titles (general
 // sessions carry no subject), mirroring GeneralAgentDialog / the email panel's sessionPreviews.
+//
+// L4 群聊 — the二级栏 now carries a top segment (「AI」｜「群聊」). The 'groups' segment forks the
+// WHOLE surface to GroupChatWorkspace (its own list + view); everything described above is the 'ai'
+// segment. The fork sits after every hook so hook order stays fixed.
 
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -18,11 +22,14 @@ import { qk } from '@shared/lib/queryKeys'
 import { useGeneralChat } from '@shared/hooks/useGeneralChat'
 import { useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
+import { useSessionsSegment, type SessionsSegment } from '@shared/state/sessions-segment'
 import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
+import { SegmentedControl } from '@shared/components/ui/segmented'
 
 import { AgentThreadList } from './AgentThreadList'
 import { titleOf } from './sessionTitle'
 import { AgentConversation } from './AgentConversation'
+import { GroupChatWorkspace } from './groups/GroupChatWorkspace'
 import { useNarrow } from './hooks'
 
 const ALL_SESSIONS_KEY = [...qk.chat.allSessions(), 'interactive'] as const
@@ -53,6 +60,37 @@ export function AgentViewLayout(): React.ReactElement {
   const invalidateSessions = (): void => {
     void qc.invalidateQueries({ queryKey: ALL_SESSIONS_KEY })
   }
+
+  // L4 群聊 — 二级栏顶部分段（「AI」｜「群聊」）。选择进模块级 store（HMR/remount 不丢态）；
+  // 群列表查询只在群聊分段激活时拉。
+  const segment = useSessionsSegment((s) => s.segment)
+  const setSegment = useSessionsSegment((s) => s.setSegment)
+  const activeGroupSessionId = useSessionsSegment((s) => s.activeGroupSessionId)
+  const groupsQ = useQuery({
+    queryKey: qk.chat.groupOriginSessions(),
+    queryFn: () => mailApi.chat.listAllSessions({ origin: 'group' }),
+    enabled: segment === 'groups',
+    staleTime: 10_000
+  })
+  const groupItems = groupsQ.data ?? []
+  const invalidateGroups = (): void => {
+    void qc.invalidateQueries({ queryKey: qk.chat.groupOriginSessions() })
+  }
+  const segmentControl = (
+    <SegmentedControl<SessionsSegment>
+      value={segment}
+      onChange={setSegment}
+      options={[
+        { value: 'ai', label: t('groupChat.segmentAi') },
+        { value: 'groups', label: t('groupChat.segmentGroups') }
+      ]}
+      ariaLabel={t('groupChat.segmentAria')}
+      fluid
+      // .seg 是 inline-flex 收缩包裹；fluid 只让按钮 flex-1，容器不撑满时会缩到
+      // min-content 让「群聊」两字换行——这里显式撑满列宽让两段等分。
+      className="flex w-full"
+    />
+  )
   // A new general session created via send / adoptSession grows useGeneralChat.sessions — mirror it
   // into the unified list so the fresh chat shows up promptly (message_count freshness rides staleTime).
   useEffect(() => {
@@ -101,10 +139,34 @@ export function AgentViewLayout(): React.ReactElement {
   // still needs the exact row metadata so AgentConversation enters locked record mode.
   const activeItem = listedActiveItem ?? directSessionQ.data ?? null
 
-  // 主标签第二段 = 当前会话名（design §三）。标题取列表行的同一份 titleOf；全新会话
-  // （还没落库、activeItem 为 null）不占第二段，主标签就显单段「对话」。
-  // P3 群聊落地后这里换成「会话或群聊名」，取值口径仍是这一处。
-  useMainBreadcrumb('chats', activeItem === null ? null : titleOf(activeItem, t))
+  // 主标签第二段 = 当前会话名或群聊名（design §三）。标题取列表行的同一份 titleOf；全新
+  // 会话/未选中群聊不占第二段，主标签就显单段「对话」。
+  const activeGroupItem =
+    segment === 'groups' && activeGroupSessionId != null
+      ? (groupItems.find((s) => s.id === activeGroupSessionId) ?? null)
+      : null
+  useMainBreadcrumb(
+    'chats',
+    segment === 'groups'
+      ? activeGroupItem === null
+        ? null
+        : titleOf(activeGroupItem, t)
+      : activeItem === null
+        ? null
+        : titleOf(activeItem, t)
+  )
+
+  // L4 群聊 — 分段分叉在全部 hooks 之后（hooks 恒序）；AI 分段字节级走原路径。
+  if (segment === 'groups') {
+    return (
+      <GroupChatWorkspace
+        headerSlot={segmentControl}
+        items={groupItems}
+        invalidate={invalidateGroups}
+        narrow={narrow}
+      />
+    )
+  }
 
   const list = (
     <AgentThreadList
@@ -158,6 +220,7 @@ export function AgentViewLayout(): React.ReactElement {
       collapsed={collapsed}
       onToggleCollapse={() => setCollapsed((c) => !c)}
       fluid={narrow}
+      headerSlot={segmentControl}
     />
   )
 

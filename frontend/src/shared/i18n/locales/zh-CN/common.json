@@ -7194,5 +7194,30 @@
       "retries": "重试",
       "failNote": "这一封没有写入分类结果。预处理失败会按退避重试，重试用完仍失败就停在这里 —— 邮件本身完好，只是没有 AI 标注。"
     }
+  },
+  "groupChat": {
+    "segmentAi": "AI",
+    "segmentGroups": "群聊",
+    "segmentAria": "对话类型",
+    "listTitle": "群聊",
+    "newGroup": "新建群聊",
+    "defaultTitle": "新群聊",
+    "emptyList": "还没有群聊。点「新建群聊」拉几个成员进来。",
+    "emptyThread": "群已建好。发一条消息，成员会依次回复；@某位成员则只点名的回复。",
+    "noSelection": "选择一个群聊，或新建一个。",
+    "memberCount": "{count} 名成员",
+    "dialogTitle": "新建群聊",
+    "dialogTitleLabel": "群名",
+    "dialogMembersLabel": "成员（最多 {max} 名）",
+    "dialogNoCandidates": "没有可入群的成员 —— 先在团队页创建可对话的 agent。",
+    "create": "创建",
+    "cancel": "取消",
+    "creating": "创建中…",
+    "createFailed": "建群失败：{error}",
+    "composerPlaceholder": "发消息，@ 可点名成员…",
+    "sendFailed": "发送失败：{error}",
+    "speakerFailed": "本条回复失败：{error}",
+    "typing": "{name} 正在输入…",
+    "send": "发送"
   }
 }

@@ -57,6 +57,8 @@ export interface AgentThreadListProps {
   onToggleCollapse: () => void
   /** fluid = full-width single pane (narrow / mobile); ignores collapse. */
   fluid?: boolean
+  /** L4 群聊 — 二级栏顶部分段（「AI」｜「群聊」）由 AgentViewLayout 注入；rail 态不渲染。 */
+  headerSlot?: React.ReactNode
 }
 
 // dogfood-3 — 'archived' is a synthetic group pinned to the BOTTOM (collapsed by default); active
@@ -84,7 +86,8 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
     onStar,
     collapsed,
     onToggleCollapse,
-    fluid
+    fluid,
+    headerSlot
   } = props
   const { t } = useTranslation()
   const [renamingId, setRenamingId] = useState<number | null>(null)
@@ -164,6 +167,9 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
           </h2>
         )}
       </div>
+
+      {/* L4 群聊 — 「AI」｜「群聊」分段（rail 态藏，与列表同折叠逻辑）。 */}
+      {!isRail && headerSlot != null && <div className="px-3 pb-2">{headerSlot}</div>}
 
       {/* New-session button — collapses to a centered icon on the rail. */}
       <div className={cn('pb-2', isRail ? 'px-2' : 'px-3')}>

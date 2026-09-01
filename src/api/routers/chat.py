@@ -186,7 +186,7 @@ def _matter_meta_for_sessions(
 async def list_all_sessions(
     request: Request,
     include_archived: bool = Query(False),
-    origin: Optional[Literal["interactive", "agent", "im", "team", "all"]] = Query(None),
+    origin: Optional[Literal["interactive", "agent", "im", "team", "group", "all"]] = Query(None),
     agent_id: Optional[str] = Query(None, alias="agentId"),
     agent_job_id: Optional[str] = Query(None, alias="agentJobId"),
     trigger_id: Optional[str] = Query(None, alias="triggerId"),
@@ -291,7 +291,7 @@ async def search_sessions(
     request: Request,
     q: str = Query(..., min_length=1, max_length=200),
     limit: int = Query(20, ge=1, le=20),
-    origin: Literal["interactive", "agent", "im", "team", "all"] = Query("all"),
+    origin: Literal["interactive", "agent", "im", "team", "group", "all"] = Query("all"),
     agent_id: Optional[str] = Query(None, alias="agentId"),
     agent_job_id: Optional[str] = Query(None, alias="agentJobId"),
     trigger_id: Optional[str] = Query(None, alias="triggerId"),
@@ -884,7 +884,12 @@ async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
 
     P4b：``agentId`` 非空 = 团队页「以指定 agent 身份」的交互式会话 → 行落
     origin='team' + agent_id（恒 general anchor）。身份此后由 gateway 按 sessionId
-    反查（S2 W0：绝不从 chat body 读）。"""
+    反查（S2 W0：绝不从 chat body 读）。
+
+    v30（群聊）：``groupMembers`` 非空 = custom agents 群聊会话 → 行落 origin='group' +
+    members_json（恒 general anchor；与 agentId 互斥）。逐成员按 _CHAT_CAPABLE_AGENT_TYPES
+    校验（不接对话的三位 preprocess/project_progress/search 在此被拒），成员数上限 5。
+    ``title`` = 建群初始标题（可选；仅 str 转发）。"""
     opts = body or {}
     anchor_type, email_id, matter_id, backend_kind = _validate_session_opts(
         opts, "sessions/new"
@@ -910,6 +915,52 @@ async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
                 f"agent {agent_id!r} missing or not chat-capable",
                 source="sqlite",
             )
+    group_members = opts.get("groupMembers")
+    if group_members is not None:
+        if agent_id is not None:
+            raise APIError(
+                "E_INVALID_ARG",
+                "sessions/new groupMembers and agentId are mutually exclusive",
+                source="sqlite",
+            )
+        if (
+            not isinstance(group_members, list)
+            or not group_members
+            or any(not isinstance(m, str) or not m.strip() for m in group_members)
+        ):
+            raise APIError(
+                "E_INVALID_ARG",
+                "sessions/new groupMembers must be a non-empty string array",
+                source="sqlite",
+            )
+        if len(group_members) > 5:
+            raise APIError(
+                "E_INVALID_ARG",
+                "sessions/new groupMembers supports at most 5 members",
+                source="sqlite",
+            )
+        if len(set(group_members)) != len(group_members):
+            raise APIError(
+                "E_INVALID_ARG",
+                "sessions/new groupMembers must be unique",
+                source="sqlite",
+            )
+        if anchor_type != "general":
+            raise APIError(
+                "E_INVALID_ARG",
+                "sessions/new group sessions must use the general anchor",
+                source="sqlite",
+            )
+        store = get_report_store()
+        for member_id in group_members:
+            member = store.get_agent(member_id)
+            if member is None or (member.get("type") or "") not in _CHAT_CAPABLE_AGENT_TYPES:
+                raise APIError(
+                    "E_INVALID_ARG",
+                    f"group member {member_id!r} missing or not chat-capable",
+                    source="sqlite",
+                )
+    title = opts.get("title")
     session = get_chat_db().create_new_session(
         email_id=email_id,
         backend_kind=backend_kind,
@@ -918,6 +969,8 @@ async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
         anchor_type=anchor_type,
         matter_id=matter_id,
         agent_id=agent_id,
+        group_members=group_members,
+        title=title if isinstance(title, str) and title.strip() else None,
     )
     return success_envelope(session, request=request, source="sqlite")
 

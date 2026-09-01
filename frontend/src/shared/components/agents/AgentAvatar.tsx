@@ -301,7 +301,8 @@ export function AgentIdentityHeader({
   name,
   onNameChange,
   namePlaceholder,
-  inputStyle
+  inputStyle,
+  meta
 }: {
   agentId: string
   value?: AgentAvatarConfig | null
@@ -311,18 +312,41 @@ export function AgentIdentityHeader({
   /** 省略 = 该抽屉没有可编辑名称 → 右侧只读展示 name。 */
   onNameChange?: (value: string) => void
   namePlaceholder?: string
-  /** 可编辑态的输入框样式（各抽屉复用自己那份 inputStyle，避免视觉漂移）。 */
+  /** 给了就用调用方那份输入框样式（CustomAgentDrawer 沿用抽屉的普通输入框外观）；
+   *  省略 = 走内建的标题式输入框（配置页 hero 头）。 */
   inputStyle?: React.CSSProperties
+  /** 名称下的一行元信息（模型 / 排程摘要等）。只放现成的事实，缺省就不占位。 */
+  meta?: React.ReactNode
 }): React.ReactElement {
   const { t } = useTranslation()
   const [editing, setEditing] = useState(false)
 
   return (
     <div className="flex flex-col gap-2.5">
-      {/* 单行 48px 基线：头像 / 「更换」/ 名称三者垂直居中对齐（左列若竖排堆按钮，
-          名称输入框的中线会与头像中线错开一截）。 */}
+      {/* 头像与名字紧邻成一组身份（「更换」是对头像的动作，靠右收在行尾，不再插在两者
+          中间把名字推离头像）。56px 基线：hero 头要能一眼看出这是「谁」。 */}
       <div className="flex items-center gap-3">
-        <AgentAvatar agentId={agentId} config={value} size={48} />
+        <AgentAvatar agentId={agentId} config={value} size={56} />
+        <div className="min-w-0 flex-1">
+          {onNameChange ? (
+            <input
+              type="text"
+              value={name}
+              placeholder={namePlaceholder}
+              onChange={(e) => onNameChange(e.target.value)}
+              className={
+                inputStyle
+                  ? undefined
+                  : 'w-full rounded-[var(--r-ctl)] border border-transparent bg-transparent px-2 py-1 text-[16px] font-semibold text-ink-fg transition-colors duration-fast hover:border-ink-border-soft hover:bg-ink-1/40 motion-reduce:transition-none'
+              }
+              style={inputStyle}
+            />
+          ) : (
+            // px-2 与可编辑态输入框的内边距对齐：两态下名字的左边缘落在同一条竖线上。
+            <div className="truncate px-2 text-[16px] font-semibold text-ink-fg">{name}</div>
+          )}
+          {meta && <div className="mt-1 truncate px-2 text-[11.5px] text-ink-fg-3">{meta}</div>}
+        </div>
         <button
           type="button"
           aria-expanded={editing}
@@ -331,24 +355,6 @@ export function AgentIdentityHeader({
         >
           {editing ? t('agents.avatar.collapse') : t('agents.avatar.change')}
         </button>
-        <div className="min-w-0 flex-1">
-          {onNameChange ? (
-            <input
-              type="text"
-              value={name}
-              placeholder={namePlaceholder}
-              onChange={(e) => onNameChange(e.target.value)}
-              style={inputStyle}
-            />
-          ) : (
-            <div
-              className="truncate"
-              style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}
-            >
-              {name}
-            </div>
-          )}
-        </div>
       </div>
 
       {editing && <AgentAvatarEditor agentId={agentId} value={value} onChange={onChange} />}

@@ -387,7 +387,8 @@ export function AutomationPolicySection({
             marginTop: 10,
             padding: '12px 13px',
             borderRadius: 10,
-            background: 'rgb(var(--ink-2) / 0.55)',
+            // 与上方规则行同一档控件层（分区卡是 ink-2，这里再用 ink-2 会与卡面同色）。
+            background: 'rgb(var(--ink-1) / 0.5)',
             border: '1px solid rgb(var(--ink-border))',
             display: 'flex',
             flexDirection: 'column',

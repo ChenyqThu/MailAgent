@@ -48,6 +48,39 @@ export function ChoiceChip({
   )
 }
 
+/** 分区卡内的「一行设置」统一形态：左标题（+ 副说明），右控件。开关行走 SwitchCard，
+ *  其余控件（数字框 / 下拉 / 一组按钮）走 SettingRow —— 两者共用同一副外壳配方，
+ *  卡内不再出现各写一遍的裸 flex 行。 */
+const ROW_CLASS =
+  'flex items-center gap-3 rounded-[var(--r-ctl)] border border-ink-border-soft bg-ink-1/50 px-3.5 py-3'
+
+function RowLabel({ label, hint }: { label: string; hint?: string }): React.ReactElement {
+  return (
+    <div className="min-w-0 flex-1">
+      <div className="text-[13px] font-medium leading-[1.4] text-ink-fg">{label}</div>
+      {hint && <div className="mt-0.5 text-[11.5px] leading-[1.5] text-ink-fg-3">{hint}</div>}
+    </div>
+  )
+}
+
+export function SettingRow({
+  label,
+  hint,
+  children
+}: {
+  label: string
+  hint?: string
+  /** 右侧控件。自带 aria-label（本行的 label 不绑 htmlFor，控件多为非原生元素）。 */
+  children: React.ReactNode
+}): React.ReactElement {
+  return (
+    <div className={ROW_CLASS}>
+      <RowLabel label={label} hint={hint} />
+      <div className="shrink-0">{children}</div>
+    </div>
+  )
+}
+
 export function SwitchCard({
   label,
   hint,
@@ -62,27 +95,12 @@ export function SwitchCard({
   disabled?: boolean
 }): React.ReactElement {
   return (
-    <div
-      className="flex items-center"
-      style={{
-        gap: 12,
-        padding: '13px 14px',
-        borderRadius: 10,
-        background: 'rgb(var(--ink-2) / 0.55)',
-        border: '1px solid rgb(var(--ink-border))'
-      }}
-    >
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>{label}</div>
-        {hint && (
-          <div
-            style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2, lineHeight: 1.5 }}
-          >
-            {hint}
-          </div>
-        )}
-      </div>
-      <span style={disabled ? { opacity: 0.5, pointerEvents: 'none' } : undefined}>
+    <div className={ROW_CLASS}>
+      <RowLabel label={label} hint={hint} />
+      <span
+        className="shrink-0"
+        style={disabled ? { opacity: 0.5, pointerEvents: 'none' } : undefined}
+      >
         <Switch on={on} ariaLabel={label} onChange={onChange} />
       </span>
     </div>
@@ -98,10 +116,12 @@ export function ModelGroup({
   fallback?: React.ReactNode
 }): React.ReactElement {
   const { t } = useTranslation()
+  // 与 Field / SettingRow 的标题同一档（13 / medium），只是靠左定宽成两行标签列。
   const rowLabel: React.CSSProperties = {
     width: 84,
     flexShrink: 0,
-    fontSize: 12.5,
+    fontSize: 13,
+    fontWeight: 500,
     color: 'rgb(var(--ink-fg-2))'
   }
   return (

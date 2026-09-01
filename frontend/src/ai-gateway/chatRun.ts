@@ -479,9 +479,16 @@ export async function prepareChatRun(
   // P4b — the 7th slot carries the session's team-agent id into the assembly gate: an
   // agent-identity session must never register custom_agent_call (recursion guard). Non-team
   // runs pass undefined → assembly byte-identical.
+  // v30（群聊）— 🔴 a group-chat SPEAKER run holds ZERO tools by construction: buildTools is
+  // never called, whatever the client sent (A3 §3 发言 turn 无写工具 posture, enforced
+  // structurally — no allowlist to mis-configure). The custom_agent_call recursion guard is
+  // thereby subsumed (an empty ToolSet cannot delegate); identity.group is only ever set by
+  // handleGroupChat from server-resolved facts, never from the body.
+  const isGroupSpeakerRun = sessionAgent?.group != null
   const sessionAgentId = contextMode === 'manual_chat' ? (sessionAgent?.agentId ?? null) : null
-  const tools =
-    sessionId == null
+  const tools = isGroupSpeakerRun
+    ? undefined
+    : sessionId == null
       ? cfg.buildTools?.(
           auditEntries,
           approvalMode,

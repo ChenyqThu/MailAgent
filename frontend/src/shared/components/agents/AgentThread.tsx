@@ -180,21 +180,33 @@ function AgentWelcome({
       {/* #1 dogfood: z-10 已移到 .agent-strands-banner { z-index:-1 }，由
           负 z-index 把丝线沉到底层，文案无需再持 z-10 stacking context。
           保留 relative 供 animate-in transform 用。 */}
-      {/* P4b — 团队对话的 Agent Logo（欢迎语上方，owner 拍板）。无 icon → 零节点，现状。 */}
-      {override?.icon != null && (
-        <div
-          className="relative mb-3 animate-in fade-in slide-in-from-bottom-1 fill-mode-both duration-200"
-          data-welcome-agent-icon
-        >
-          {override.icon}
-        </div>
+      {/* P4b — 团队对话的 Agent Logo（owner 拍板改横排：头像 + 标题同一行，
+          排程提示另起一行）。无 icon（主 Agent 默认态 / 事项对话）→ 走原竖排。 */}
+      {override?.icon != null ? (
+        <>
+          <div
+            className="relative flex animate-in items-center gap-2.5 fade-in slide-in-from-bottom-1 fill-mode-both duration-200"
+            data-welcome-agent-row
+          >
+            <span className="shrink-0" data-welcome-agent-icon>
+              {override.icon}
+            </span>
+            <h1 className="min-w-0 text-balance text-2xl font-semibold text-ink-fg">
+              {override.title}
+            </h1>
+          </div>
+          <p className="relative mt-2 text-aux text-ink-fg-3">{override.hint}</p>
+        </>
+      ) : (
+        <>
+          <h1 className="relative animate-in fade-in slide-in-from-bottom-1 fill-mode-both text-balance text-2xl font-semibold text-ink-fg duration-200">
+            {override?.title ?? t('agentView.welcome')}
+          </h1>
+          <p className="relative mt-2 text-aux text-ink-fg-3">
+            {override?.hint ?? t('agentView.emptyHint')}
+          </p>
+        </>
       )}
-      <h1 className="relative animate-in fade-in slide-in-from-bottom-1 fill-mode-both text-balance text-2xl font-semibold text-ink-fg duration-200">
-        {override?.title ?? t('agentView.welcome')}
-      </h1>
-      <p className="relative mt-2 text-aux text-ink-fg-3">
-        {override?.hint ?? t('agentView.emptyHint')}
-      </p>
     </div>
   )
 }

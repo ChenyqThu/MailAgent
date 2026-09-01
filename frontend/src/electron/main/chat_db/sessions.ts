@@ -203,6 +203,28 @@ export function createNewSession(input: OpenSessionInput): ChatSession {
       )
     }
   }
+  // v30（群聊）— origin='group' + members_json 双载体写入（恒 general anchor，与 agentId 互斥）。
+  // 形状检查镜像 serve-api /sessions/new 的 group 分支；成员存在性/chat-capable 校验只在
+  // serve-api（live path）做（同 agentId 分支的第三检查纪律）。
+  const groupMembers = input.groupMembers ?? null
+  if (groupMembers !== null) {
+    if (agentId !== null) {
+      throw new Error('createNewSession: groupMembers and agentId are mutually exclusive')
+    }
+    if (
+      !Array.isArray(groupMembers) ||
+      groupMembers.length === 0 ||
+      groupMembers.some((m) => typeof m !== 'string' || m.trim().length === 0)
+    ) {
+      throw new Error('createNewSession: groupMembers must be a non-empty string array')
+    }
+    if (anchorType !== 'general') {
+      throw new Error(
+        `createNewSession: group sessions must use the general anchor, got ${anchorType}`
+      )
+    }
+  }
+  const membersJson = groupMembers !== null ? JSON.stringify(groupMembers) : null
   const result =
     agentId !== null
       ? db
@@ -224,24 +246,44 @@ export function createNewSession(input: OpenSessionInput): ChatSession {
             now,
             agentId
           )
-      : db
-          .prepare(
-            `INSERT INTO ai_chat_sessions
-              (email_id, anchor_type, anchor_id, backend_kind, backend_model,
-               backend_agent_page_id, title, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          )
-          .run(
-            emailId,
-            anchorType,
-            anchorId,
-            input.backendKind,
-            backendModel,
-            backendAgentPageId,
-            input.title ?? null,
-            now,
-            now
-          )
+      : membersJson !== null
+        ? db
+            .prepare(
+              `INSERT INTO ai_chat_sessions
+                (email_id, anchor_type, anchor_id, backend_kind, backend_model,
+                 backend_agent_page_id, title, created_at, updated_at, origin, members_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'group', ?)`
+            )
+            .run(
+              emailId,
+              anchorType,
+              anchorId,
+              input.backendKind,
+              backendModel,
+              backendAgentPageId,
+              input.title ?? null,
+              now,
+              now,
+              membersJson
+            )
+        : db
+            .prepare(
+              `INSERT INTO ai_chat_sessions
+                (email_id, anchor_type, anchor_id, backend_kind, backend_model,
+                 backend_agent_page_id, title, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+            .run(
+              emailId,
+              anchorType,
+              anchorId,
+              input.backendKind,
+              backendModel,
+              backendAgentPageId,
+              input.title ?? null,
+              now,
+              now
+            )
   return {
     id: Number(result.lastInsertRowid),
     email_id: emailId,
@@ -254,7 +296,8 @@ export function createNewSession(input: OpenSessionInput): ChatSession {
     archived: false,
     created_at: now,
     updated_at: now,
-    ...(agentId !== null ? { origin: 'team', agent_id: agentId } : {})
+    ...(agentId !== null ? { origin: 'team', agent_id: agentId } : {}),
+    ...(membersJson !== null ? { origin: 'group', members_json: membersJson } : {})
   }
 }
 
@@ -406,12 +449,13 @@ export function listSessionsForItem(itemId: number): ChatSession[] {
  *  so a general session never leaks into a specific email's sidebar. */
 export function listGeneralSessions(): ChatSession[] {
   // P4b — 'team' rows (general anchor + agent identity) are excluded like 'agent' rows: their
-  // home is the team page's record column. Exclusion set mirrors src/chat/db.py
+  // home is the team page's record column. v30 — 'group' rows likewise (their home is the
+  // sessions domain's 群聊 tab). Exclusion set mirrors src/chat/db.py
   // list_general_sessions verbatim (gate: test_chat_type_mirror_parity.py
   // ::test_chat_interactive_origin_exclusion_mirror_parity).
   return getChatDb()
     .prepare(
-      "SELECT * FROM ai_chat_sessions WHERE anchor_type = 'general' AND COALESCE(origin, 'interactive') NOT IN ('agent', 'team') ORDER BY updated_at DESC"
+      "SELECT * FROM ai_chat_sessions WHERE anchor_type = 'general' AND COALESCE(origin, 'interactive') NOT IN ('agent', 'team', 'group') ORDER BY updated_at DESC"
     )
     .all() as ChatSession[]
 }
@@ -437,6 +481,8 @@ export function listAllSessions(options: ListAllSessionsOptions = {}): ChatSessi
   // default 'interactive' clause, so IM sessions appear in the desktop history automatically
   // (Q18=A). P4b — origin='team' rows (v29: interactive sessions opened AS a team agent) are
   // EXCLUDED from the default clause: they belong to the team page (which fetches origin='team').
+  // v30 — origin='group' rows (multi-agent group chats) are excluded the same way: they belong to
+  // the sessions domain's 群聊 tab (fetched via origin='group').
   // Exclusion set mirrors src/chat/db.py list_all_sessions verbatim (gate:
   // test_chat_type_mirror_parity.py::test_chat_interactive_origin_exclusion_mirror_parity).
   const originClause =
@@ -446,9 +492,11 @@ export function listAllSessions(options: ListAllSessionsOptions = {}): ChatSessi
         ? "s.origin = 'im'"
         : origin === 'team'
           ? "s.origin = 'team'"
-          : origin === 'all'
-            ? '1 = 1'
-            : "COALESCE(s.origin, 'interactive') NOT IN ('agent', 'team')"
+          : origin === 'group'
+            ? "s.origin = 'group'"
+            : origin === 'all'
+              ? '1 = 1'
+              : "COALESCE(s.origin, 'interactive') NOT IN ('agent', 'team', 'group')"
   // dogfood-3 — includeArchived (default false → only active sessions, byte-identical to before; the
   // agent view passes true to also pull archived rows for its bottom "归档" group). SELECT now carries
   // s.archived so the renderer can split active vs archived. The archived branch is a fixed boolean (no
@@ -459,7 +507,7 @@ export function listAllSessions(options: ListAllSessionsOptions = {}): ChatSessi
          s.id, s.email_id, s.anchor_type, s.anchor_id, s.backend_kind, s.backend_model,
          s.backend_agent_page_id, s.title, s.archived, s.created_at, s.updated_at,
          s.origin, s.agent_id, s.agent_job_id, s.trigger_id, s.trigger_kind, s.trigger_fired_at,
-         s.last_read_at, s.pinned_at, s.starred,
+         s.last_read_at, s.pinned_at, s.starred, s.members_json,
          (SELECT substr(m.content, 1, 500) FROM ai_chat_messages m
             WHERE m.session_id = s.id AND m.role = 'user'
             ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,

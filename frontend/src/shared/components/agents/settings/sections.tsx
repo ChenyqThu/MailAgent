@@ -4,10 +4,21 @@
 // 「八区」中的「最近跑了什么」有意不在词表里：运行记录归团队页记录列（r7 §三 判据 6），
 // 配置页只管「它该怎么干活」。每个 agent 的表单以 SectionMap（Partial）声明自己有哪些区，
 // 没有的区整段不渲染 —— SectionMap 本身就是分区声明表，不另立第二份对照数据。
+import { useContext } from 'react'
 import { useTranslation } from 'react-i18next'
+import {
+  Clock,
+  Cpu,
+  FileText,
+  SlidersHorizontal,
+  Trash2,
+  Wrench,
+  type LucideIcon
+} from 'lucide-react'
 
 import { StatefulButton, type StatefulButtonState } from '@shared/components/ui/stateful-button'
 import { Switch } from '../primitives'
+import { SettingsChromeContext } from './chrome'
 
 export type SectionId =
   | 'identity'
@@ -28,6 +39,21 @@ const SECTION_ORDER: readonly SectionId[] = [
   'specific',
   'danger'
 ]
+
+// 分区图标：只做「一眼认出是哪一区」的辨识锚，不承载状态。identity / danger 两区
+// 不走标准卡（见 renderSection），故不在表内。
+const SECTION_ICON: Record<Exclude<SectionId, 'identity' | 'danger'>, LucideIcon> = {
+  instructions: FileText,
+  model: Cpu,
+  when: Clock,
+  capabilities: Wrench,
+  specific: SlidersHorizontal
+}
+
+// 卡面（surface tier）：页底 → 卡 ink-2 → 卡内控件 ink-1（INPUT_STYLE / SwitchCard /
+// ReadonlyCard 都在这一层）。暗色下 ink-1 比 ink-2 深 = 控件内凹；亮色下 ink-1 比
+// ink-2 浅 = 输入框发白，两侧都读得出「卡上放着控件」。
+const CARD_CLASS = 'rounded-[var(--r-card)] border border-ink-border-soft bg-ink-2/50'
 
 export type SectionMap = Partial<Record<SectionId, React.ReactNode>>
 
@@ -52,32 +78,44 @@ export function SettingsScaffold({
   sections: SectionMap
 }): React.ReactElement {
   const { t } = useTranslation()
+  // 嵌在团队页成员详情里时，名字已由外层 52px 页头负责 —— 这里退成一条动作栏，
+  // 左边只留角色副标题（那是外层页头没有的信息），标题不再说第二遍。
+  const { embedded } = useContext(SettingsChromeContext)
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: '1 1 0%', minHeight: 0 }}>
       <header
         className="flex items-center"
         style={{
           gap: 12,
-          padding: '13px 18px',
+          padding: embedded ? '9px 18px' : '13px 18px',
           borderBottom: '1px solid rgb(var(--ink-border-soft))',
           flexShrink: 0
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
-          <h2
-            style={{
-              fontSize: 15,
-              fontWeight: 600,
-              color: 'rgb(var(--ink-fg))',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap'
-            }}
-          >
-            {title}
-          </h2>
+          {!embedded && (
+            <h2
+              style={{
+                fontSize: 15,
+                fontWeight: 600,
+                color: 'rgb(var(--ink-fg))',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              {title}
+            </h2>
+          )}
           {subtitle && (
-            <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', marginTop: 1 }}>
+            <div
+              className="truncate"
+              style={{
+                fontSize: 11.5,
+                color: 'rgb(var(--ink-fg-3))',
+                marginTop: embedded ? 0 : 1
+              }}
+            >
               {subtitle}
             </div>
           )}
@@ -125,30 +163,64 @@ export function SettingsScaffold({
 
       <div className="scrollbar-thin" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         <div
-          style={{ maxWidth: 720, padding: 18, display: 'flex', flexDirection: 'column', gap: 24 }}
+          style={{ maxWidth: 720, padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}
         >
           {banner}
           {SECTION_ORDER.filter((id) => sections[id] != null).map((id) => (
-            <section key={id} aria-label={t(`agentSettings.section.${id}`)}>
-              <div
-                style={{
-                  fontSize: 11.5,
-                  fontWeight: 600,
-                  letterSpacing: '0.04em',
-                  color: 'rgb(var(--ink-fg-3))',
-                  marginBottom: 10
-                }}
-              >
-                {t(`agentSettings.section.${id}`)}
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                {sections[id]}
-              </div>
-            </section>
+            <SettingsSection key={id} id={id} label={t(`agentSettings.section.${id}`)}>
+              {sections[id]}
+            </SettingsSection>
           ))}
         </div>
       </div>
     </div>
+  )
+}
+
+/** 一个分区的外壳。三种形态：
+ *  • identity —— hero 面（ink-3 提亮一档 + 实线边），不出「身份」小标题：头像和名字
+ *    自己就是标题，再压一行标签只是噪音（aria-label 仍在，读屏不丢分区名）。
+ *  • danger —— 不成卡：一条 hairline 分隔 + 弱化标题，收尾而不喊叫。
+ *  • 其余 —— 标准卡：图标 + 标题的页眉行 + hairline + 表单体。 */
+function SettingsSection({
+  id,
+  label,
+  children
+}: {
+  id: SectionId
+  label: string
+  children: React.ReactNode
+}): React.ReactElement {
+  if (id === 'identity') {
+    return (
+      <section
+        aria-label={label}
+        className="flex flex-col gap-4 rounded-[var(--r-card)] border border-ink-border bg-ink-3/45 p-4"
+      >
+        {children}
+      </section>
+    )
+  }
+  if (id === 'danger') {
+    return (
+      <section aria-label={label} className="mt-2 border-t border-ink-border-soft pt-4">
+        <div className="mb-2.5 flex items-center gap-2 text-[12px] font-medium text-ink-fg-3">
+          <Trash2 size={12} strokeWidth={1.9} aria-hidden="true" className="shrink-0" />
+          {label}
+        </div>
+        <div className="flex flex-col gap-3">{children}</div>
+      </section>
+    )
+  }
+  const Icon = SECTION_ICON[id]
+  return (
+    <section aria-label={label} className={CARD_CLASS}>
+      <div className="flex items-center gap-2 border-b border-ink-border-soft px-4 py-3">
+        <Icon size={13} strokeWidth={1.9} aria-hidden="true" className="shrink-0 text-ink-fg-3" />
+        <span className="text-[13px] font-semibold text-ink-fg-1">{label}</span>
+      </div>
+      <div className="flex flex-col gap-4 p-4">{children}</div>
+    </section>
   )
 }
 
@@ -163,33 +235,14 @@ export function ReadonlyCard({
 }): React.ReactElement {
   const { t } = useTranslation()
   return (
-    <div
-      style={{
-        padding: '11px 13px',
-        borderRadius: 10,
-        background: 'rgb(var(--ink-1) / 0.35)',
-        border: '1px dashed rgb(var(--ink-border))'
-      }}
-    >
-      <div className="flex items-center" style={{ gap: 7, marginBottom: 6 }}>
-        {title && (
-          <span style={{ fontSize: 12.5, fontWeight: 500, color: 'rgb(var(--ink-fg-2))' }}>
-            {title}
-          </span>
-        )}
-        <span
-          style={{
-            fontSize: 10.5,
-            padding: '1px 6px',
-            borderRadius: 4,
-            color: 'rgb(var(--ink-fg-3))',
-            border: '1px solid rgb(var(--ink-border))'
-          }}
-        >
+    <div className="rounded-[var(--r-ctl)] border border-dashed border-ink-border bg-ink-1/40 px-3.5 py-3">
+      <div className="mb-1.5 flex items-center gap-2">
+        {title && <span className="text-[12.5px] font-medium text-ink-fg-2">{title}</span>}
+        <span className="rounded-[4px] border border-ink-border px-1.5 py-px text-[10.5px] text-ink-fg-3">
           {t('agentSettings.readonly')}
         </span>
       </div>
-      <div style={{ fontSize: 12, lineHeight: 1.6, color: 'rgb(var(--ink-fg-2))' }}>{children}</div>
+      <div className="text-[12px] leading-[1.6] text-ink-fg-2">{children}</div>
     </div>
   )
 }

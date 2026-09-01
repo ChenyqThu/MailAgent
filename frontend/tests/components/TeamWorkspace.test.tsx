@@ -96,9 +96,17 @@ vi.mock('../../src/shared/components/agents/AgentConversation', () => ({
   )
 }))
 
+// env store 的 refresh() 走 makeMailApi()（不是 useMailApi hook，见 env.ts 头注释）—— 团队页
+// mount 时的自动刷新断言要打这个桩（AccountsTabNotionOauth.test 同款 mock 位置）。
+const mockEnvGet = vi.fn()
+vi.mock('@shared/api/factory', () => ({
+  makeMailApi: () => ({ env: { get: mockEnvGet, set: vi.fn() } })
+}))
+
 import i18n from '@shared/i18n'
 import { useToastStore } from '@shared/state/toast'
-import type { ChatSessionListItem, ReportAgentConfig } from '@shared/api/types'
+import { useEnvStore } from '@shared/state/env'
+import type { ChatSessionListItem, ReportAgentConfig, EnvSnapshot } from '@shared/api/types'
 import { TeamWorkspace } from '../../src/shared/components/agents/team/TeamWorkspace'
 import { useAgentsNavigation } from '../../src/shared/components/agents/navigation'
 
@@ -218,9 +226,21 @@ function importBodyOf(call: unknown[]): unknown {
   return JSON.parse(String((call[1] as { body?: unknown }).body))
 }
 
+function envSnapshot(values: Record<string, string> = {}): EnvSnapshot {
+  return {
+    path: '/tmp/.env',
+    exists: true,
+    values,
+    managedKeys: Object.keys(values),
+    secretKeys: []
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   useAgentsNavigation.getState().clear()
+  useEnvStore.setState({ state: { status: 'idle' } })
+  mockEnvGet.mockResolvedValue(envSnapshot())
   mockGetConfig.mockResolvedValue(AGENTS)
   mockListRuns.mockResolvedValue({ items: [], total: 0 })
   mockReportList.mockResolvedValue({ items: [], total: 0 })
@@ -718,5 +738,59 @@ describe('跨页直达（通讯录「去配置」store-intent）', () => {
     })
     expect(container.querySelector('[data-team-settings]')).toBeTruthy()
     expect(useAgentsNavigation.getState().targetAgentId).toBeNull()
+  })
+})
+
+// 08-31 回归修复：env store 默认 idle，仅 SettingsShell mount 时 refresh。清单列的启停
+// 徽标（TeamMemberList）与设置档的 enable/model 预填（Preprocess/ProjectProgressSettings）
+// 都读它 —— 没开过设置页的会话进团队页必须自己拉一次，否则两个 agent 恒显示禁用
+// （P4a 从 AgentsTab 迁移时丢了这段 mount 补丁）。
+describe('env store 自动刷新（团队页 mount 不依赖先开过设置页）', () => {
+  afterEach(() => useEnvStore.setState({ state: { status: 'idle' } }))
+
+  test('mount 时 env store 为 idle → 自动 refresh 一次，状态转 ready', async () => {
+    useEnvStore.setState({ state: { status: 'idle' } })
+    mockEnvGet.mockResolvedValue(envSnapshot({ LLM_AGENT_ENABLED: 'true' }))
+    await renderWorkspace()
+    await waitFor(() => expect(mockEnvGet).toHaveBeenCalledTimes(1))
+    expect(useEnvStore.getState().state.status).toBe('ready')
+  })
+
+  test('mount 时 env store 已 ready → 不重复 refresh', async () => {
+    useEnvStore.setState({ state: { status: 'ready', snapshot: envSnapshot() } })
+    await renderWorkspace()
+    // 给其余 mount 副作用一点时间落定，再确认没有多余的 env:get 调用。
+    await waitFor(() => expect(mockGetConfig).toHaveBeenCalled())
+    expect(mockEnvGet).not.toHaveBeenCalled()
+  })
+})
+
+// 配置页视觉批（lane C）——设置档外壳收敛的两条不变量。
+describe('设置档外壳收敛', () => {
+  test('外层页头已显示成员名 → 骨架页头不再重复渲染标题（同名标题只有一条）', async () => {
+    const container = await renderWorkspace()
+    fireEvent.click(
+      container.querySelector('[data-team-member="member:agent:email_search_agent"]')!
+    )
+    await waitFor(() => expect(container.querySelector('[data-team-settings]')).toBeTruthy())
+    // 收敛前这里是 2 条：团队页 52px 页头一条 + 配置页骨架页头一条。
+    expect(screen.getAllByRole('heading', { name: '搜索 Agent' })).toHaveLength(1)
+    // 角色副标题是外层页头没有的信息 —— 骨架退成动作栏后它必须留着。
+    expect(screen.getByText('内置成员')).toBeTruthy()
+  })
+
+  test('详情区只剩一层滚动容器（外层交给骨架自己滚）', async () => {
+    const container = await renderWorkspace()
+    fireEvent.click(
+      container.querySelector('[data-team-member="member:agent:email_search_agent"]')!
+    )
+    await waitFor(() => expect(container.querySelector('[data-team-settings]')).toBeTruthy())
+    const host = container.querySelector<HTMLElement>('[data-team-settings]')!
+    const isScroller = (el: HTMLElement): boolean =>
+      el.classList.contains('overflow-y-auto') || el.style.overflowY === 'auto'
+    // 外壳自己不滚（收敛前它是 overflow-y-auto）。
+    expect(isScroller(host)).toBe(false)
+    // 里面恰好一层在滚 —— 骨架那层，不多不少。
+    expect([...host.querySelectorAll<HTMLElement>('*')].filter(isScroller)).toHaveLength(1)
   })
 })

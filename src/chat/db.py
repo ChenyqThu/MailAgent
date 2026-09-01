@@ -1,6 +1,15 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 29）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 30）。
+v30（L4 群聊）= ``ai_chat_sessions.members_json``（群聊成员 agent id 数组 JSON，非群聊行 NULL）
++ ``ai_chat_messages.speaker_agent_id``（群聊里 assistant 消息的发言成员；NULL = 既有语义不变）
+两个 additive 列 + ``origin`` 值域登记 ``'group'``（照 v22/v29 先例；值域现为
+'agent' | 'im' | 'team' | 'group' | NULL=交互）。'group' = custom agents 群聊会话（本文件
+``create_new_session(group_members=…)`` 与 TS ``createNewSession({groupMembers})`` 双载体写入，
+恒 general anchor）。🔴 默认交互过滤两侧同步改为 ``NOT IN ('agent','team','group')``（'group'
+行属对话域「群聊」tab，不进主对话历史/⌘O 通用列表）；筛选词表 + 排除集手抄闸同 v29
+（tests/config/test_chat_type_mirror_parity.py）。speaker_agent_id 只由前端 gateway 写；
+读走 ``SELECT *`` 自动带回。
 v29（L4 P4b 团队对话，task 08-27）= ``ai_chat_sessions.origin`` 值域登记 ``'team'``
 （**无 schema 变更**的 no-op ladder 步，照 v22 'im' 先例：值域现为
 'agent' | 'im' | 'team' | NULL=交互）。'team' = 人在团队页以指定 agent 身份开的**交互式**
@@ -123,6 +132,7 @@ graceful」处理：生产里前端 ``getChatDb()`` 在任何 renderer harness �
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
@@ -311,10 +321,11 @@ class ChatDb:
         listGeneralSessions → ChatSession[]。与 list_sessions_for_email 分开，general session
         绝不漏进某封邮件的 sidebar。"""
         # P4b：'team' 行（general anchor + agent 身份）与 'agent' 行一样不进通用列表 ——
-        # 它们的宿主是团队页。排除集与 TS 镜像 listGeneralSessions 逐字对齐（轻量闸见
+        # 它们的宿主是团队页。v30：'group' 行同理（宿主是对话域「群聊」tab）。
+        # 排除集与 TS 镜像 listGeneralSessions 逐字对齐（轻量闸见
         # test_chat_type_mirror_parity.py::test_chat_interactive_origin_exclusion_mirror_parity）。
         origin_clause = (
-            " AND COALESCE(origin, 'interactive') NOT IN ('agent', 'team')"
+            " AND COALESCE(origin, 'interactive') NOT IN ('agent', 'team', 'group')"
             if self._has_column("ai_chat_sessions", "origin")
             else ""
         )
@@ -349,7 +360,7 @@ class ChatDb:
         旧库），显式引用 last_read_at 会在 pre-v20 库上 OperationalError → _read_all 吞成 []
         = 整个历史列表被清空。``s.*`` 两个世界都成立：列在 → 带回（未读徽标），列不在 →
         缺键（前端按 undefined = 无徽标处理）。"""
-        if origin not in ("interactive", "agent", "im", "team", "all"):
+        if origin not in ("interactive", "agent", "im", "team", "group", "all"):
             raise ValueError(f"invalid session origin filter: {origin!r}")
         clauses = []
         params: list[Any] = []
@@ -361,10 +372,11 @@ class ChatDb:
         has_origin = self._has_column("ai_chat_sessions", "origin")
         if origin == "interactive" and has_origin:
             # P4b：'team'（人以 agent 身份开的会话）不进主对话历史 —— 它们属于团队页
-            # （按 agent_id 读）。排除集与 TS 镜像逐字对齐（chat_db/sessions.ts
+            # （按 agent_id 读）。v30：'group'（群聊会话）同理，属对话域「群聊」tab。
+            # 排除集与 TS 镜像逐字对齐（chat_db/sessions.ts
             # listAllSessions 的 originClause 默认支；轻量闸
             # tests/config/test_chat_type_mirror_parity.py::test_chat_interactive_origin_exclusion_mirror_parity）。
-            clauses.append("COALESCE(s.origin, 'interactive') NOT IN ('agent', 'team')")
+            clauses.append("COALESCE(s.origin, 'interactive') NOT IN ('agent', 'team', 'group')")
         elif origin == "agent":
             if not has_origin:
                 return []
@@ -377,6 +389,10 @@ class ChatDb:
             if not has_origin:
                 return []
             clauses.append("s.origin = 'team'")
+        elif origin == "group":
+            if not has_origin:
+                return []
+            clauses.append("s.origin = 'group'")
         for column, value in (
             ("agent_id", agent_id), ("agent_job_id", agent_job_id),
             ("trigger_id", trigger_id), ("trigger_kind", trigger_kind),
@@ -789,6 +805,8 @@ class ChatDb:
         anchor_type: str = "email",
         matter_id: Optional[int] = None,
         agent_id: Optional[str] = None,
+        group_members: Optional[List[str]] = None,
+        title: Optional[str] = None,
     ) -> Dict[str, Any]:
         """无条件 INSERT 新 session（绕过复用查找）。镜像 chat_db.ts createNewSession
         （「+ 新建会话」显式意图，v4 drop UNIQUE 后多 session/邮件合法；P2c anchor-aware）。
@@ -796,9 +814,18 @@ class ChatDb:
         P4b（team 会话）：``agent_id`` 非空 = 「人以指定 agent 身份开的交互式会话」→
         行落 ``origin='team'`` + ``agent_id``（v29 值域登记；agent 会话恒 general anchor，
         路由层已校验）。gateway ``handleChat`` 按 sessionId 反查这两列装配身份（S2 W0：
-        身份绝不从 body 读）。缺省（None）保持 INSERT 字节级不变。"""
+        身份绝不从 body 读）。缺省（None）保持 INSERT 字节级不变。
+
+        v30（群聊）：``group_members`` 非空 = custom agents 群聊会话 → 行落
+        ``origin='group'`` + ``members_json``（恒 general anchor；成员存在性/chat-capable/上限
+        由路由层校验，与 ``agent_id`` 互斥）。``title`` = 建群时的初始标题，🔴 **只在 group
+        分支写**：group 行必然生在 v30+ 库（title 列恒在），而 team/默认分支保持 INSERT
+        字节级不变（老 fixture / pre-v14 形状库无 title 列，动它就是回归）。"""
         anchor_type, email_id, anchor_id = _resolve_anchor(anchor_type, email_id, matter_id)
         now = _now_ms()
+        members_json = (
+            json.dumps(list(group_members)) if group_members is not None else None
+        )
         with self._write_connection() as conn:
             if agent_id is not None:
                 cur = conn.execute(
@@ -808,6 +835,15 @@ class ChatDb:
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'team', ?)",
                     (email_id, anchor_type, anchor_id, backend_kind, backend_model,
                      backend_agent_page_id, now, now, agent_id),
+                )
+            elif members_json is not None:
+                cur = conn.execute(
+                    "INSERT INTO ai_chat_sessions "
+                    "(email_id, anchor_type, anchor_id, backend_kind, backend_model, "
+                    "backend_agent_page_id, title, created_at, updated_at, origin, members_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'group', ?)",
+                    (email_id, anchor_type, anchor_id, backend_kind, backend_model,
+                     backend_agent_page_id, title, now, now, members_json),
                 )
             else:
                 cur = conn.execute(
@@ -826,10 +862,15 @@ class ChatDb:
                 "backend_kind": backend_kind,
                 "backend_model": backend_model,
                 "backend_agent_page_id": backend_agent_page_id,
-                "title": None,
+                "title": title if members_json is not None else None,
                 "created_at": now,
                 "updated_at": now,
                 **({"origin": "team", "agent_id": agent_id} if agent_id is not None else {}),
+                **(
+                    {"origin": "group", "members_json": members_json}
+                    if members_json is not None
+                    else {}
+                ),
             }
 
     def get_session(self, session_id: int) -> Optional[Dict[str, Any]]:

@@ -20,7 +20,6 @@ import { OFFICIAL_ASSISTANT_AVATAR } from '../agentAvatarIdentity'
 import { MAIN_ASSISTANT_SEED } from '../shared'
 import { Field } from '../drawers/Field'
 import { ReadonlyCard, SettingsScaffold } from './sections'
-import { INPUT_STYLE } from './inputStyle'
 
 /** 名字上限（后端同款截断，PUT 前本地先切）。 */
 const NAME_MAX = 40
@@ -91,7 +90,6 @@ export function MainAssistantSettings(): React.ReactElement {
                 setNameDirty(true)
               }}
               namePlaceholder={t('agents.mainAgent.namePlaceholder')}
-              inputStyle={INPUT_STYLE}
             />
           </Field>
         ),

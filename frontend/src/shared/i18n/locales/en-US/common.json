@@ -7194,5 +7194,30 @@
       "retries": "Retries",
       "failNote": "No labels were written for this email. Preprocessing retries with backoff; once the retries run out it stops here — the email itself is intact, it just has no AI labels."
     }
+  },
+  "groupChat": {
+    "segmentAi": "AI",
+    "segmentGroups": "Groups",
+    "segmentAria": "Conversation type",
+    "listTitle": "Groups",
+    "newGroup": "New group",
+    "defaultTitle": "New group chat",
+    "emptyList": "No group chats yet. Hit \"New group\" to pull some members in.",
+    "emptyThread": "Group created. Send a message and members reply in turn; @mention a member to have only them reply.",
+    "noSelection": "Pick a group chat, or create one.",
+    "memberCount": "{count} members",
+    "dialogTitle": "New group chat",
+    "dialogTitleLabel": "Group name",
+    "dialogMembersLabel": "Members (up to {max})",
+    "dialogNoCandidates": "No chat-capable members yet — create agents on the Team page first.",
+    "create": "Create",
+    "cancel": "Cancel",
+    "creating": "Creating…",
+    "createFailed": "Failed to create group: {error}",
+    "composerPlaceholder": "Message the group, @ to mention a member…",
+    "sendFailed": "Send failed: {error}",
+    "speakerFailed": "This reply failed: {error}",
+    "typing": "{name} is typing…",
+    "send": "Send"
   }
 }

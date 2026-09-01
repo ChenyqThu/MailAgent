@@ -37,7 +37,7 @@ export type AnchorType = 'email' | 'general' | 'matter'
 // clause (Q18=A). P4b adds the 'team' filter (团队页记录列按它拉取)，and the default 'interactive'
 // clause EXCLUDES team rows (they belong to the team page, not the main history).
 // Mirror: api/types/chat.ts (parity gate) + the two Python mirrors, see that file's red note.
-export type ChatSessionOriginFilter = 'interactive' | 'agent' | 'im' | 'team' | 'all'
+export type ChatSessionOriginFilter = 'interactive' | 'agent' | 'im' | 'team' | 'group' | 'all'
 export type ChatSessionTriggerKind =
   | 'manual'
   | 'cron'
@@ -106,6 +106,9 @@ export interface ChatSession {
   // stays process-memory: this column only proves the pause HAPPENED, so a manual session can render
   // the honest「已失效」notice after a gateway restart instead of silently showing nothing.
   paused_marker_json?: string | null
+  // L4 群聊 (ai_chat.db v30) — the GROUP session's member agent-id array as JSON (origin='group'
+  // rows only). NULL/undefined for every non-group session. Cross-db ids (report_agent), no FK.
+  members_json?: string | null
 }
 
 /** L4 批次3 R7 — the JSON shape stored in `ai_chat_sessions.paused_marker_json`.
@@ -171,6 +174,9 @@ export interface ChatMessage {
   // 里会把同一段 prompt 计好几遍；这一列是**末 step** 的 inputTokens（chatRun.ts
   // lastStepContextTokens）。null = legacy / pre-v23 行 / 非 gateway 写入 → 前端不渲染 context 环。
   context_tokens: number | null
+  // v30 (L4 群聊) — WHICH group member spoke an assistant message (origin='group' sessions only).
+  // NULL for user rows / non-group sessions / every pre-v30 row (existing semantics untouched).
+  speaker_agent_id?: string | null
   created_at: number
   updated_at: number
 }
@@ -192,6 +198,9 @@ export interface OpenSessionInput {
    *  （CHAT_DB v29 值域登记；恒 general anchor）。gateway 按 sessionId 反查这两列装配身份
    *  （S2 W0：身份绝不从 chat body 读）。省略 → INSERT 字节级不变。 */
   agentId?: string | null
+  /** L4 群聊（CHAT_DB v30）— custom agents 群聊会话：行落 origin='group' + members_json
+   *  （恒 general anchor；与 agentId 互斥）。省略 → INSERT 字节级不变。 */
+  groupMembers?: string[] | null
   backendKind: BackendKind
   backendModel?: string | null
   backendAgentPageId?: string | null
@@ -215,6 +224,8 @@ export interface AppendMessageInput {
   // v23 (WP-15 context 环) — 末 step 的 inputTokens（≠ tokensInput 的多 step 求和）。
   // 只有 gateway persistTurn 写；其余调用方省略 → NULL。
   contextTokens?: number | null
+  // v30 (L4 群聊) — group speaker attribution; only the gateway group-chat writer sets it.
+  speakerAgentId?: string | null
 }
 
 export interface UpdateMessagePatch {

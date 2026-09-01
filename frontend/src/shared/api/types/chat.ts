@@ -242,6 +242,10 @@ export interface ChatMessage {
    *  产出，行里没有这一列的库（Python 跑在尚未被前端迁到 v23 的 ai_chat.db 上）会整个字段缺席。
    *  读侧一律 `?? null` 兜底 —— 缺席 = 未知 = 不渲染控件，不是 0。 */
   context_tokens?: number | null
+  /** v30 (L4 群聊) — WHICH group member spoke an assistant message (origin='group' sessions
+   *  only). NULL for user rows / non-group sessions. Optional for the same reason as
+   *  context_tokens: the wire is serve-api `SELECT *`, and a pre-v30 DB omits the field. */
+  speaker_agent_id?: string | null
   created_at: number
   updated_at: number
 }
@@ -275,8 +279,10 @@ export type ChatAnchorType = 'email' | 'general' | 'matter'
 // differently on each (Electron listAllSessions falls through to the interactive clause;
 // serve-api's Literal query param 422s). A new filter must land in ALL FOUR mirrors at once:
 // both TS unions, the two listing clauses, src/api/routers/chat.py's Literal and
-// src/chat/db.py's validator tuple.
-export type ChatSessionOriginFilter = 'interactive' | 'agent' | 'im' | 'team' | 'all'
+// src/chat/db.py's validator tuple. v30 (L4 群聊) adds 'group' — multi-agent group chats; the
+// default 'interactive' clause excludes 'agent' + 'team' + 'group' (group rows belong to the
+// sessions domain's 群聊 tab, which filters by this value).
+export type ChatSessionOriginFilter = 'interactive' | 'agent' | 'im' | 'team' | 'group' | 'all'
 export type ChatSessionTriggerKind =
   | 'manual'
   | 'cron'
@@ -332,6 +338,9 @@ export interface ChatSession {
   // render the honest「已失效」notice on a stash miss instead of nothing. 🔴 It proves the pause
   // happened, it does NOT carry resume capability — the stash stays gateway process memory.
   paused_marker_json?: string | null
+  // v30 (L4 群聊) — the GROUP session's member agent-id array as JSON (origin='group' rows only;
+  // NULL/undefined otherwise). The 群聊 tab parses it for the avatar stack + reply fan-out order.
+  members_json?: string | null
 }
 
 export interface ListAllSessionsOptions {
@@ -794,6 +803,11 @@ export interface ChatApi {
     /** P4b — 团队页「以指定 agent 身份」的交互式会话：行落 origin='team' + agent_id
      *  （恒 general anchor；serve-api 校验 agent 存在且 chat-capable）。省略 = 现状。 */
     agentId?: string | null
+    /** v30（群聊）— custom agents 群聊会话：行落 origin='group' + members_json（恒 general
+     *  anchor，与 agentId 互斥；serve-api 逐成员校验存在且 chat-capable，上限 5）。 */
+    groupMembers?: string[] | null
+    /** v30（群聊）— 建群时的初始标题（仅 general 支转发；serve-api 落 title 列）。 */
+    title?: string | null
     backendKind: ChatBackendKind
     backendModel?: string | null
     backendAgentPageId?: string | null

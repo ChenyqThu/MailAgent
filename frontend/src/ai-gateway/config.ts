@@ -176,6 +176,38 @@ export interface SessionAgentIdentity {
   /** Coarse "when does it act on its own" line (mode naming only — schedule semantics stay
    *  single-sourced in schedule-rule-contract.md; this never expands occurrences). */
   scheduleLine?: string | null
+  /** v30（群聊）— set ONLY for a group-chat SPEAKER run (built by /api/ai/group-chat from
+   *  cfg.resolveGroupSession, never for /api/ai/chat). Its presence drives exactly two seams in
+   *  prepareChatRun: the <current_group_chat> prompt block replaces the team block, and 🔴 the
+   *  ToolSet is structurally EMPTY (buildTools is never called — a group speaking turn holds zero
+   *  tools, A3 §3 posture). Absent → byte-identical P4b semantics. */
+  group?: {
+    members: Array<{ agentId: string; title: string }>
+  } | null
+}
+
+/** v30（群聊）— one member of a group session, as resolved by cfg.resolveGroupSession (the
+ *  Electron wrapper reads ai_chat_sessions.members_json + the report_agent config rows,
+ *  best-effort: a failed config fetch degrades title/duty/model, never drops the member —
+ *  membership is the security fact and must not depend on serve-api availability). */
+export interface GroupSessionMember {
+  agentId: string
+  title: string
+  duty?: string | null
+  model?: string | null
+}
+
+/** v30（群聊）— the server-side facts of a group session (origin='group' rows only). */
+export interface GroupSessionFacts {
+  members: GroupSessionMember[]
+}
+
+/** v30（群聊）— one persisted message row projected for group-history assembly. */
+export interface GroupHistoryRow {
+  role: string
+  content: string
+  speakerAgentId: string | null
+  status?: string | null
 }
 
 export interface AiGatewayConfig {
@@ -294,6 +326,33 @@ export interface AiGatewayConfig {
   resolveSessionAgent?: (
     sessionId: number
   ) => Promise<SessionAgentIdentity | null> | SessionAgentIdentity | null
+  /** v30（群聊）— resolve the GROUP facts of a session (origin='group' rows only; every other
+   *  origin resolves null). Called ONLY by POST /api/ai/group-chat; /api/ai/chat never consults
+   *  it, so a group sessionId posted there keeps today's main-agent semantics. The membership
+   *  check itself lives in SERVER CODE (handleGroupChat validates speakAsAgentId ∈ members —
+   *  a client-asserted identity is rejected there, S2 W0 spirit). The Electron wrapper reads
+   *  ai_chat.db members_json + report_agent rows (config fetch best-effort — see
+   *  GroupSessionMember). Omitted (tests / group feature not wired) → the endpoint 404s. */
+  resolveGroupSession?: (
+    sessionId: number
+  ) => Promise<GroupSessionFacts | null> | GroupSessionFacts | null
+  /** v30（群聊）— the session's full persisted message log, oldest-first, for server-side group
+   *  history assembly (assembleGroupHistory maps it per speaker: own rows → assistant, everyone
+   *  else → prefixed user). The Electron wrapper reads chat_db listMessages. */
+  listGroupHistory?: (sessionId: number) => GroupHistoryRow[]
+  /** v30（群聊）— persist one group message (the owner's user message, or a member's finished
+   *  assistant reply stamped speakerAgentId; both status='complete'). Bumps the session's
+   *  updated_at (appendMessage semantics). Returns the new message row id. 🔴 A failed / aborted
+   *  speaker run persists NOTHING — the frontend marks the bubble failed and moves on. */
+  appendGroupMessage?: (
+    sessionId: number,
+    message: {
+      role: 'user' | 'assistant'
+      content: string
+      speakerAgentId: string | null
+      model?: string | null
+    }
+  ) => number
   /** 08-05 WP-11 — hot-read the owner's per-tool approval tiers + send recipient whitelist
    *  (agent_config.db tool_approval_pref / owner_settings via GET /api/agent/tool-prefs). Called
    *  by prepareChatRun ONCE per run and ONLY for manual_chat runs (headless/im never consult it).

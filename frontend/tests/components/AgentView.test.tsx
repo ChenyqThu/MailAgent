@@ -150,6 +150,39 @@ describe('Agent view — demo-fidelity thread', () => {
     expect(screen.getByText(i18n.t('agentView.quickActions.summarize.label'))).toBeTruthy()
   })
 
+  // owner 拍板：团队对话空态从「头像置顶居中 + 标题另起一行」改横排（头像在标题左边）。
+  // 事项对话的 override（无 icon）不受影响，走原竖排 —— 见下一条用例。
+  test('welcome override with icon (团队对话) — 头像与标题横排同行，排程提示另起一行', async () => {
+    mountThread(
+      [],
+      <AgentThread
+        welcomeOverride={{
+          title: '和 跟进员 开始新对话',
+          hint: '每天 9:00 自动运行',
+          icon: <span data-testid="welcome-icon">🤖</span>
+        }}
+      />
+    )
+    const title = await screen.findByText('和 跟进员 开始新对话')
+    const icon = screen.getByTestId('welcome-icon')
+    // 头像与标题共享同一个横排容器（同一父节点）——不是各占一行的竖排。
+    expect(icon.closest('[data-welcome-agent-row]')).toBe(title.parentElement)
+    expect(screen.getByText('每天 9:00 自动运行')).toBeTruthy()
+  })
+
+  // 事项对话只带 title/hint、无 icon —— 必须仍是原竖排（h1 独占一行），横排改动不能
+  // 悄悄波及它（AgentWelcome 的两个分支只按 icon 有无区分）。
+  test('welcome override without icon（事项对话）— 仍是竖排，无横排容器', async () => {
+    mountThread(
+      [],
+      <AgentThread welcomeOverride={{ title: '跟进「Q3 续约」', hint: '继续这件事的对话' }} />
+    )
+    await screen.findByText('跟进「Q3 续约」')
+    expect(screen.getByText('继续这件事的对话')).toBeTruthy()
+    expect(document.querySelector('[data-welcome-agent-row]')).toBeNull()
+    expect(document.querySelector('[data-welcome-agent-icon]')).toBeNull()
+  })
+
   test('readOnly suppresses the composer (D6 read-only mount)', async () => {
     mountThread(
       [fakeMessage({ id: 2, role: 'assistant', content: '历史回答' })],

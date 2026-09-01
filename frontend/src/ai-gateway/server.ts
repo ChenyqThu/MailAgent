@@ -25,7 +25,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 // x-vercel-ai-ui-message-stream: v1 + no-buffering hints).
 import { UI_MESSAGE_STREAM_HEADERS } from 'ai'
 
-import type { AiGatewayConfig, SessionAgentIdentity } from './config'
+import type { AiGatewayConfig, GroupSessionFacts, SessionAgentIdentity } from './config'
+// v30（群聊）— server-side history assembly for a group speaker run (pure helper).
+import { assembleGroupHistory } from './groupChat'
 import {
   chatMessageToUIMessage,
   type MailAgentUIMessageMetadata
@@ -1171,6 +1173,148 @@ async function handleSearchAgent(
   res.end()
 }
 
+/**
+ * `POST /api/ai/group-chat` — L4 群聊 (CHAT_DB v30): custom-agent group-chat writes. Two modes,
+ * both requiring the session to BE a group (cfg.resolveGroupSession non-null; anything else →
+ * 400 E_NOT_GROUP — /api/ai/chat never consults these hooks, so a group sessionId posted THERE
+ * keeps today's main-agent semantics and a `speakAsAgentId` in that body is simply never read):
+ *
+ *   • `{ sessionId, userText }` — append the owner's user message (speaker NULL) → JSON.
+ *   • `{ sessionId, speakAsAgentId, model? }` — ONE member's speaking turn. 🔴 Membership is
+ *     validated HERE in server code against the server-resolved members_json (the body only picks
+ *     among server facts — it can never mint an identity; non-member → 403 E_NOT_GROUP_MEMBER).
+ *     The run reads the FULL persisted transcript server-side (cfg.listGroupHistory →
+ *     assembleGroupHistory: own rows → assistant, everyone else → `[名字]`-prefixed user),
+ *     carries the member's identity + group roster into prepareChatRun (group block replaces the
+ *     team block; 🔴 ToolSet structurally EMPTY — chatRun's isGroupSpeakerRun guard), streams
+ *     `{type:'text-delta'}` SSE frames, then persists the finished reply with speaker_agent_id
+ *     and emits the terminal `{type:'done'}` frame. A failed / client-aborted run persists
+ *     NOTHING (the frontend marks the bubble failed and moves to the next member — 成本护栏:
+ *     the server has NO fan-out; one POST = at most one member reply, sequencing lives in the
+ *     renderer loop, so an agent reply can never trigger another agent).
+ *
+ * Registered unconditionally; the three cfg hooks gate it (404 on hand-built harness cfgs).
+ */
+async function handleGroupChat(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: AiGatewayConfig
+): Promise<void> {
+  const { resolveGroupSession, listGroupHistory, appendGroupMessage } = cfg
+  if (!resolveGroupSession || !listGroupHistory || !appendGroupMessage) {
+    writeJson(res, 404, { error: 'E_NOT_IMPLEMENTED', hint: 'group chat feature not wired' })
+    return
+  }
+  const body = await readJsonBody(req)
+  const sessionId =
+    typeof body.sessionId === 'number' && Number.isInteger(body.sessionId) ? body.sessionId : null
+  if (sessionId == null) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'sessionId (int) required' })
+    return
+  }
+  let facts: GroupSessionFacts | null = null
+  try {
+    facts = (await resolveGroupSession(sessionId)) ?? null
+  } catch (err) {
+    console.warn('[ai-gateway] resolveGroupSession failed', err)
+  }
+  if (facts == null) {
+    writeJson(res, 400, { error: 'E_NOT_GROUP', hint: 'session is not a group chat' })
+    return
+  }
+  const speakAs =
+    typeof body.speakAsAgentId === 'string' && body.speakAsAgentId.length > 0
+      ? body.speakAsAgentId
+      : null
+  const userText =
+    typeof body.userText === 'string' && body.userText.length > 0 ? body.userText : null
+
+  // Append mode — the owner's message enters the shared transcript once, BEFORE any speaker run.
+  if (speakAs == null) {
+    if (userText == null) {
+      writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'speakAsAgentId or userText required' })
+      return
+    }
+    const messageId = appendGroupMessage(sessionId, {
+      role: 'user',
+      content: userText,
+      speakerAgentId: null
+    })
+    writeJson(res, 200, { ok: true, messageId })
+    return
+  }
+
+  // Speaker mode — membership check against server facts (never the body).
+  const member = facts.members.find((m) => m.agentId === speakAs)
+  if (member == null) {
+    writeJson(res, 403, {
+      error: 'E_NOT_GROUP_MEMBER',
+      hint: `agent ${speakAs} is not a member of this group`
+    })
+    return
+  }
+  const titleById = new Map(facts.members.map((m) => [m.agentId, m.title]))
+  const messages = assembleGroupHistory(listGroupHistory(sessionId), speakAs, titleById)
+  if (messages.length === 0) {
+    writeJson(res, 400, {
+      error: 'E_INVALID_ARG',
+      hint: 'group history empty — append a user message first'
+    })
+    return
+  }
+  const identity: SessionAgentIdentity = {
+    agentId: member.agentId,
+    agentTitle: member.title,
+    duty: member.duty ?? null,
+    model: member.model ?? null,
+    scheduleLine: null,
+    group: { members: facts.members.map((m) => ({ agentId: m.agentId, title: m.title })) }
+  }
+  const controller = new AbortController()
+  req.on('close', () => controller.abort())
+  // 🔴 sessionId deliberately NOT in the prepared body: the group writer persists via
+  // appendGroupMessage below, never via makePersistOnFinish / eager user persist (those would
+  // double-write the assembled per-speaker view into the shared transcript).
+  const prepared = await prepareChatRun(
+    {
+      messages,
+      ...(typeof body.model === 'string' && body.model.length > 0 ? { model: body.model } : {})
+    },
+    cfg,
+    controller.signal,
+    'manual_chat',
+    identity
+  )
+  if (!prepared.ok) {
+    writeJson(res, prepared.status, prepared.body)
+    return
+  }
+  res.writeHead(200, { ...SSE_HEADERS, ...corsHeadersFor(req.headers.origin) })
+  try {
+    for await (const delta of prepared.run.result.textStream) {
+      if (controller.signal.aborted) break
+      writeSse(res, { type: 'text-delta', delta })
+    }
+    const text = await prepared.run.result.text
+    if (!controller.signal.aborted) {
+      const messageId = appendGroupMessage(sessionId, {
+        role: 'assistant',
+        content: text,
+        speakerAgentId: speakAs,
+        model: prepared.run.modelId
+      })
+      writeSse(res, { type: 'done', messageId, content: text, speakerAgentId: speakAs })
+    }
+  } catch (err) {
+    // Stream OR persist failure — the reply is not durable, say so (never a silent truncation;
+    // the renderer marks the bubble failed and continues with the next member).
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[ai-gateway] /api/ai/group-chat failed', { message })
+    if (!controller.signal.aborted) writeSse(res, { type: 'error', errorText: message })
+  }
+  res.end()
+}
+
 /** S4 W3 — map a HeadlessAgentResult to the wire JSON the AgentRunWorker consumes. The worker reads
  *  a STRING `error` code (AgentRunResult._map_response str()s it into last_error), so we flatten
  *  error.code; sessionId/steps/summary/usage pass through into the worker's result_json.
@@ -1733,6 +1877,13 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     // S3 W1 — headless agentic search (⌘K palette). Registered unconditionally; no key → 503.
     if (method === 'POST' && path === '/api/ai/search-agent') {
       dispatch('/api/ai/search-agent', res, handleSearchAgent(req, res, cfg))
+      return
+    }
+
+    // v30（群聊）— group-chat writes (user append + member speaker runs). Registered
+    // unconditionally; the three group cfg hooks gate it (404 when not wired).
+    if (method === 'POST' && path === '/api/ai/group-chat') {
+      dispatch('/api/ai/group-chat', res, handleGroupChat(req, res, cfg))
       return
     }
 

@@ -65,7 +65,7 @@ import { CapabilityCards } from '../custom-agent/CapabilityCards'
 import { AgentIdentityHeader } from '../AgentAvatar'
 import { pressHandlers } from '../shared'
 import { SettingsScaffold } from './sections'
-import { ModelGroup } from './controls'
+import { ModelGroup, SettingRow, SwitchCard } from './controls'
 import { INPUT_STYLE } from './inputStyle'
 
 // budget 两门默认 + 上限（与 src/agents/trigger.py DEFAULT_*/CEILING 对齐；浅校验用）。
@@ -626,7 +626,9 @@ export function CustomAgentSettings({
                 name={title}
                 onNameChange={setTitle}
                 namePlaceholder={t('agents.custom.titlePlaceholder')}
-                inputStyle={INPUT_STYLE}
+                // 名字下的一行现成事实：选了哪个模型、按哪种方式起跑。model 为空
+                // （新建、还没选）就只剩起跑方式，不占位也不编造。
+                meta={[model, t(`agentSettings.when.${whenMode}`)].filter(Boolean).join(' · ')}
               />
             </Field>
             <Field
@@ -990,18 +992,13 @@ export function CustomAgentSettings({
             )}
 
             {triggerV2Enabled && editingTriggerIndex !== null && whenMode !== 'manual' && (
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  fontSize: 12.5,
-                  marginTop: 10
-                }}
-              >
-                <Switch on={triggerEnabled} onChange={setTriggerEnabled} />
-                {t('agents.custom.trigger.enabled')}
-              </label>
+              <div style={{ marginTop: 10 }}>
+                <SwitchCard
+                  label={t('agents.custom.trigger.enabled')}
+                  on={triggerEnabled}
+                  onChange={setTriggerEnabled}
+                />
+              </div>
             )}
           </Field>
         ),
@@ -1061,11 +1058,8 @@ export function CustomAgentSettings({
         specific: (
           <>
             <Field label={t('agents.custom.budget.label')} hint={t('agents.custom.budget.hint')}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div className="flex items-center" style={{ gap: 10 }}>
-                  <span style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
-                    {t('agents.custom.budget.maxRunsPerDay')}
-                  </span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <SettingRow label={t('agents.custom.budget.maxRunsPerDay')}>
                   <input
                     type="number"
                     min={0}
@@ -1073,11 +1067,10 @@ export function CustomAgentSettings({
                     onChange={(e) => setMaxRunsPerDay(Number(e.target.value))}
                     style={{ ...INPUT_STYLE, width: 110 }}
                   />
-                </div>
-                <div className="flex items-center" style={{ gap: 10 }}>
-                  <span style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
-                    {t('agents.custom.budget.maxRunSeconds', { max: MAX_RUN_SECONDS_CEILING })}
-                  </span>
+                </SettingRow>
+                <SettingRow
+                  label={t('agents.custom.budget.maxRunSeconds', { max: MAX_RUN_SECONDS_CEILING })}
+                >
                   <input
                     type="number"
                     min={1}
@@ -1086,7 +1079,7 @@ export function CustomAgentSettings({
                     onChange={(e) => setMaxRunSeconds(Number(e.target.value))}
                     style={{ ...INPUT_STYLE, width: 110 }}
                   />
-                </div>
+                </SettingRow>
               </div>
             </Field>
             {create && errBlock}
@@ -1139,16 +1132,18 @@ export function CustomAgentSettings({
                   type="button"
                   onClick={() => setConfirming(true)}
                   className="flex items-center"
+                  // 静息态只留红字：删除入口不该在页面底部拉一道红框喊人。红色留给
+                  // 下一步的确认按钮 —— 那一下才是不可逆的。
                   style={{
                     gap: 6,
                     fontFamily: 'inherit',
                     fontSize: 13,
                     padding: '8px 14px',
-                    borderRadius: 8,
+                    borderRadius: 'var(--r-ctl)',
                     cursor: 'pointer',
                     color: 'rgb(var(--c-fail))',
                     background: 'transparent',
-                    border: '1px solid rgb(var(--c-fail) / 0.3)',
+                    border: '1px solid rgb(var(--ink-border))',
                     transition: 'transform 120ms cubic-bezier(0.4,0,0.2,1)'
                   }}
                   {...pressHandlers()}

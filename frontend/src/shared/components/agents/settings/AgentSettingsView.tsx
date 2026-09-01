@@ -11,6 +11,7 @@ import type { ReportAgentConfig } from '@shared/api/types'
 
 import { useReportConfig } from '../hooks'
 import type { TeamMemberRef } from '../shared'
+import { SettingsChromeContext } from './chrome'
 import { MainAssistantSettings } from './MainAssistantSettings'
 import { ReportAgentSettings } from './ReportAgentSettings'
 import { PreprocessSettings } from './PreprocessSettings'
@@ -49,17 +50,31 @@ function AgentRowSettings({ cfg }: { cfg: ReportAgentConfig }): React.ReactEleme
   }
 }
 
+/** 本组件是「团队页成员详情」这一个挂载点，外层 52px 页头已在显示成员名 —— 骨架页头
+ *  据此退成动作栏（见 chrome.ts）。模块级常量：每次渲染新建对象会让所有消费者白重渲染。 */
+const EMBEDDED_CHROME = { embedded: true } as const
+
 export function AgentSettingsView({ member }: { member: TeamMemberRef }): React.ReactElement {
   const { t } = useTranslation()
   const { agents, isLoading } = useReportConfig()
-  if (member.kind === 'main') return <MainAssistantSettings />
-  const cfg = agents.find((a) => a.id === member.agentId) ?? null
-  if (!cfg) {
-    return (
+  const cfg = member.kind === 'main' ? null : (agents.find((a) => a.id === member.agentId) ?? null)
+  let content: React.ReactElement
+  if (member.kind === 'main') {
+    content = <MainAssistantSettings />
+  } else if (cfg) {
+    content = <AgentRowSettings cfg={cfg} />
+  } else {
+    content = (
       <div style={{ padding: 18, fontSize: 12.5, color: 'rgb(var(--ink-fg-3))' }}>
         {isLoading ? t('agentSettings.loading') : t('agentSettings.notFound')}
       </div>
     )
   }
-  return <AgentRowSettings cfg={cfg} />
+  // Provider 不产生 DOM 节点：骨架根仍是 data-team-settings 的直接子元素，
+  // 单层滚动所依赖的 flex 链不受影响。
+  return (
+    <SettingsChromeContext.Provider value={EMBEDDED_CHROME}>
+      {content}
+    </SettingsChromeContext.Provider>
+  )
 }

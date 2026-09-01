@@ -64,11 +64,12 @@ export function TeamChatHost({
       agentId,
       model: member.cfg?.model ?? null,
       welcome: {
+        // owner 拍板改横排（头像 + 标题同一行）：44px 置顶居中改成 36px 与标题行高协调。
         icon: (
           <AgentAvatar
             agentId={agentId}
             config={member.cfg?.avatar}
-            size={44}
+            size={36}
             title={memberTitle}
           />
         ),

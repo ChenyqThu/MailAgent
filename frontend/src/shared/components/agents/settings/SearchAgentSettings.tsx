@@ -110,7 +110,6 @@ export function SearchAgentSettings({ cfg }: { cfg: ReportAgentConfig }): React.
               name={title}
               onNameChange={setTitle}
               namePlaceholder={t('agents.search.titlePlaceholder')}
-              inputStyle={INPUT_STYLE}
             />
           </Field>
         ),
@@ -207,17 +206,18 @@ export function SearchAgentSettings({ cfg }: { cfg: ReportAgentConfig }): React.
                 type="button"
                 onClick={() => setConfirming(true)}
                 className="flex items-center"
+                // 静息态只留红字（同 CustomAgentSettings）：红框留给确认那一下。
                 style={{
                   gap: 6,
                   alignSelf: 'flex-start',
                   fontFamily: 'inherit',
                   fontSize: 13,
                   padding: '8px 14px',
-                  borderRadius: 8,
+                  borderRadius: 'var(--r-ctl)',
                   cursor: 'pointer',
                   color: 'rgb(var(--c-fail))',
                   background: 'transparent',
-                  border: '1px solid rgb(var(--c-fail) / 0.3)',
+                  border: '1px solid rgb(var(--ink-border))',
                   transition: 'transform 120ms cubic-bezier(0.4,0,0.2,1)'
                 }}
                 {...pressHandlers()}

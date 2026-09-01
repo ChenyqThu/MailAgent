@@ -26,7 +26,7 @@ import { CONTACT_PROFILE_AGENT_ID } from '../shared'
 import { Field } from '../drawers/Field'
 import { ModelSelectItems } from '../drawers/ModelSelectItems'
 import { BuiltinToolsNote, SettingsScaffold } from './sections'
-import { DailyHourSchedule, ModelGroup, SwitchCard } from './controls'
+import { DailyHourSchedule, ModelGroup, SettingRow, SwitchCard } from './controls'
 import { INPUT_STYLE } from './inputStyle'
 
 const FOLLOW_GLOBAL_MODEL = '__follow_global__'
@@ -268,10 +268,7 @@ export function ContactProfileSettings({ cfg }: { cfg: ReportAgentConfig }): Rea
         capabilities: <BuiltinToolsNote />,
         specific: (
           <>
-            <div className="flex items-center" style={{ gap: 10 }}>
-              <span style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
-                {t('agents.contactProfile.dailyCap')}
-              </span>
+            <SettingRow label={t('agents.contactProfile.dailyCap')}>
               <input
                 type="number"
                 min={1}
@@ -283,7 +280,7 @@ export function ContactProfileSettings({ cfg }: { cfg: ReportAgentConfig }): Rea
                 }}
                 style={{ ...INPUT_STYLE, width: 110 }}
               />
-            </div>
+            </SettingRow>
             <SwitchCard
               label={t('agents.contactProfile.useKos')}
               hint={t('agents.contactProfile.useKosHint')}

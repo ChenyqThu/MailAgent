@@ -132,8 +132,10 @@ function CapabilityCard({
   return (
     <section
       className={cn(
+        // 能力卡如今嵌在「能碰什么」分区卡里：面色必须比分区卡低一档（ink-1 控件层），
+        // 否则两层同色只剩一条描边分界，读成一团。
         'flex min-h-[178px] flex-col rounded-[var(--r-card)] border p-3.5',
-        danger ? 'border-fail/30 bg-fail/5' : 'border-ink-border bg-ink-2/55'
+        danger ? 'border-fail/30 bg-fail/5' : 'border-ink-border bg-ink-1/50'
       )}
     >
       <div className="flex items-start gap-2.5">

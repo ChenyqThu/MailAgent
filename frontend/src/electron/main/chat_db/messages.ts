@@ -12,8 +12,8 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
       `INSERT INTO ai_chat_messages
         (session_id, role, content, tokens_input, tokens_output, cost_usd,
          model, status, error_message, metadata, ui_message_json, context_tokens,
-         created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         speaker_agent_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       input.sessionId,
@@ -31,6 +31,8 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
       input.uiMessageJson ?? null,
       // v23 (WP-15) — 末 step 的 inputTokens = 上下文占用（≠ tokens_input 的多 step 求和）。
       input.contextTokens ?? null,
+      // v30 (L4 群聊) — group speaker attribution; non-group callers omit → NULL.
+      input.speakerAgentId ?? null,
       now,
       now
     )
@@ -51,6 +53,7 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
     metadata: input.metadata ?? null,
     ui_message_json: input.uiMessageJson ?? null,
     context_tokens: input.contextTokens ?? null,
+    speaker_agent_id: input.speakerAgentId ?? null,
     // task 06-08-chat 需求 5 — appendMessage never seeds thinking (finalizeMessage
     // writes it on终态 via updateMessage); the inserted row column defaults to NULL.
     thinking: null,
