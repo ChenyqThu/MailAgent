@@ -4,7 +4,7 @@
 //
 // 链路与旧 AgentsTab 一致：POST /report-agents/import，body 两形态
 //   • { payload: <导出的 JSON> } —— 与设置页「导出」的 agent-*.json 互为逆操作
-//   • { template: 'meeting_prep' } —— 后端 agent_templates 里的模板
+//   • { template: 'meeting_prep' | … } —— 后端 agent_templates 里的模板（见下方 TEMPLATES）
 // （不是 SkillDraftsSection 那条 zip → importAgentPlugin 的技能包链，两者不同。）
 // 落地恒 enabled=false 由后端保证（Agent Plugins 1.0 契约），前端不额外置位。
 //
@@ -22,6 +22,18 @@ import { qk } from '@shared/lib/queryKeys'
 import { toastError } from '@shared/state/toast'
 
 import { useAgentPluginsEnabled, useCalendarTriggerEnabled } from '../hooks'
+
+/**
+ * 出厂预设模板（0901）—— 与后端 src/agents/agent_templates.py 的 key 一一对应。
+ * 新装机器没有任何 custom agent 时群聊候选池为空，这排按钮是「一键有队友」的入口。
+ * 顺序即展示顺序；后端不认的 key 会 404，加行前先在 AGENT_TEMPLATES 里落条目。
+ */
+const TEMPLATES: ReadonlyArray<{ key: string; labelKey: string }> = [
+  { key: 'meeting_prep', labelKey: 'agents.custom.meetingPrepTemplate' },
+  { key: 'mail_digest', labelKey: 'agents.custom.mailDigestTemplate' },
+  { key: 'followup_tracker', labelKey: 'agents.custom.followupTrackerTemplate' },
+  { key: 'meeting_scribe', labelKey: 'agents.custom.meetingScribeTemplate' }
+]
 
 interface ImportEnvelope {
   data?: {
@@ -104,14 +116,17 @@ export function TeamAgentImportEntries({
         >
           {t('agents.custom.import')}
         </button>
-        <button
-          type="button"
-          data-team-import-template
-          className="text-meta text-ink-fg-2 transition-colors duration-fast hover:text-ink-fg"
-          onClick={() => void importAgent({ template: 'meeting_prep' })}
-        >
-          {t('agents.custom.meetingPrepTemplate')}
-        </button>
+        {TEMPLATES.map((template) => (
+          <button
+            key={template.key}
+            type="button"
+            data-team-import-template={template.key}
+            className="text-meta text-ink-fg-2 transition-colors duration-fast hover:text-ink-fg"
+            onClick={() => void importAgent({ template: template.key })}
+          >
+            {t(template.labelKey)}
+          </button>
+        ))}
       </div>
       {!calendarTriggerEnabled && (
         <span className="text-micro text-warn" data-team-import-calendar-warn>

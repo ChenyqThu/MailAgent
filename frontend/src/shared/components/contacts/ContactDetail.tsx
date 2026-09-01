@@ -854,7 +854,7 @@ function ContactDetailView({
 
       {/* ── 滚动区（原型：`18px 22px 60px` + 块间 24px + 内容宽 820）── */}
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-none">
-        <div className="flex max-w-[820px] flex-col gap-6 px-[22px] pb-14 pt-[18px]">
+        <div className="mx-auto flex max-w-[820px] flex-col gap-6 px-[22px] pb-14 pt-[18px]">
           {/* 已隐藏说明条 */}
           {detail.hidden_at != null ? (
             <div className="flex items-center gap-2.5 rounded-[var(--r-row)] border border-ink-border bg-ink-fg/[0.03] px-3 py-2">

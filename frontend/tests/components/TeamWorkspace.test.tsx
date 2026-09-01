@@ -668,6 +668,37 @@ describe('导入 Agent / 用模板创建', () => {
     expect(importBodyOf(call)).toEqual({ template: 'meeting_prep' })
   })
 
+  // 0901 出厂预设成员：新装机器一个 custom agent 都没有 → 群聊候选池为空拉不起群。
+  // 这排按钮是「一键有队友」的入口，key 必须与后端 AGENT_TEMPLATES 逐个对上（后端不认的
+  // key 会 404），所以这里同时钉住顺序、key 和点非首个按钮发出去的 template。
+  test('四个模板入口：key 与后端 AGENT_TEMPLATES 对齐，点非首个也发对应 template', async () => {
+    mockChatConfigFlags(true)
+    serveImportedAgentAfterCall()
+    const container = await renderWorkspace()
+    await waitFor(() => expect(container.querySelector('[data-team-import]')).toBeTruthy())
+    const buttons = [...container.querySelectorAll('[data-team-import-template]')]
+    expect(buttons.map((button) => button.getAttribute('data-team-import-template'))).toEqual([
+      'meeting_prep',
+      'mail_digest',
+      'followup_tracker',
+      'meeting_scribe'
+    ])
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      '用模板创建：会前准备',
+      '用模板创建：邮件摘要',
+      '用模板创建：跟进追踪',
+      '用模板创建：会议速记'
+    ])
+
+    fireEvent.click(container.querySelector('[data-team-import-template="followup_tracker"]')!)
+    await waitFor(() => {
+      const call = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find((c) =>
+        String(c[0]).includes('/report-agents/import')
+      )
+      expect(call && importBodyOf(call)).toEqual({ template: 'followup_tracker' })
+    })
+  })
+
   test('选文件导入 → POST {payload}；未满足依赖逐条列出（提示活过跳转，挂在清单列）', async () => {
     mockChatConfigFlags(true)
     serveImportedAgentAfterCall()

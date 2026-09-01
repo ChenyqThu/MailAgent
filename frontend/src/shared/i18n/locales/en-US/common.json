@@ -4666,6 +4666,9 @@
       "import": "Import Agent",
       "export": "Export",
       "meetingPrepTemplate": "Create from template: Meeting prep",
+      "mailDigestTemplate": "Create from template: Mail digest",
+      "followupTrackerTemplate": "Create from template: Follow-up tracker",
+      "meetingScribeTemplate": "Create from template: Meeting scribe",
       "calendarRequired": "Calendar sync must be enabled",
       "unmetDependencies": "Unmet dependencies: {items}",
       "newTitle": "New Custom Agent",
@@ -7180,7 +7183,8 @@
         "output": "Output",
         "triggerBody": "Generated on the {cadence} schedule · {date}",
         "open": "Open report",
-        "openFromRun": "Open the report this run produced"
+        "openFromRun": "Open the report this run produced",
+        "fullText": "Full report"
       },
       "progress": {
         "counts": "{total} projects · {created} created · {updated} updated · {failed} failed",
@@ -7188,7 +7192,14 @@
       }
     },
     "preprocess": {
-      "detailHint": "This is the automatic classification result from mail intake. To dig into why, ask the main assistant on that email.",
+      "labels": {
+        "summary": "Summary",
+        "urgencyReason": "Why this priority",
+        "keyPoints": "Key points",
+        "mailActions": "Suggested actions",
+        "recommendedActions": "Recommended handling",
+        "replySuggestion": "Suggested reply"
+      },
       "classified": "Classified",
       "failed": "This one did not go through",
       "retries": "Retries",
@@ -7209,7 +7220,7 @@
     "dialogTitle": "New group chat",
     "dialogTitleLabel": "Group name",
     "dialogMembersLabel": "Members (up to {max})",
-    "dialogNoCandidates": "No chat-capable members yet — create agents on the Team page first.",
+    "dialogNoCandidates": "No chat-capable members yet — add one on the Team page, or create a preset member from a template.",
     "create": "Create",
     "cancel": "Cancel",
     "creating": "Creating…",

@@ -107,6 +107,37 @@ def test_template_has_v2_trigger_id_and_valid_skills(plugin_client, monkeypatch)
     assert client.post("/api/report-agents/import", json={"template": "unknown"}).status_code == 404
 
 
+# 0901 出厂预设成员：新装机器零 custom agent → 群聊候选池为空拉不起群，模板是「一键有队友」。
+# 它们与 meeting_prep 的差别是 trigger=None（不自动跑）+ 带 bot 头像，所以这里钉三件事：
+# 落库 enabled=False（Agent Plugins 1.0 契约，不因 trigger 为空而走别的分支）、
+# 头像走 wire 的 type=bot 白名单（词表漂移必红）、tool_policy 里的技能都真实存在
+# （unmet_dependencies 为空 —— 发明技能名会让新用户一进门就看到「未满足依赖」）。
+@pytest.mark.parametrize(
+    "template,title,shape,color,skills",
+    [
+        ("mail_digest", "邮件摘要", "capsule", "blue", ["email", "search"]),
+        ("followup_tracker", "跟进追踪", "kirby", "orange", ["email", "search"]),
+        ("meeting_scribe", "会议速记", "cloudee", "purple", ["calendar"]),
+    ],
+)
+def test_preset_templates_land_disabled_with_valid_avatar_and_skills(
+    plugin_client, template, title, shape, color, skills
+):
+    client, store, _, _, _ = plugin_client
+    response = client.post("/api/report-agents/import", json={"template": template})
+    assert response.status_code == 200
+    data = response.json()["data"]
+    agent = data["agent"]
+    assert agent["title"] == title
+    assert data["enabled_forced_off"] is True and agent["enabled"] is False
+    assert store.get_agent(agent["id"])["enabled"] == 0
+    assert agent["trigger"] is None
+    assert agent["avatar"] == {"type": "bot", "shape": shape, "color": color}
+    assert agent["tool_policy"]["skills"] == skills
+    assert data["unmet_dependencies"] == []
+    assert len(agent["prompt"]) >= 150
+
+
 def test_trigger_v2_flag_off_matches_put_path(plugin_client, monkeypatch):
     client, store, _, _, _ = plugin_client
     monkeypatch.setattr("src.agents.trigger.trigger_v2_enabled", lambda: False)

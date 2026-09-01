@@ -163,7 +163,14 @@ export function SettingsScaffold({
 
       <div className="scrollbar-thin" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         <div
-          style={{ maxWidth: 720, padding: 18, display: 'flex', flexDirection: 'column', gap: 12 }}
+          style={{
+            maxWidth: 720,
+            margin: '0 auto',
+            padding: 18,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12
+          }}
         >
           {banner}
           {SECTION_ORDER.filter((id) => sections[id] != null).map((id) => (

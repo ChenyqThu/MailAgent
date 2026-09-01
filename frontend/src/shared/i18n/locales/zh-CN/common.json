@@ -4666,6 +4666,9 @@
       "import": "导入 Agent",
       "export": "导出",
       "meetingPrepTemplate": "用模板创建：会前准备",
+      "mailDigestTemplate": "用模板创建：邮件摘要",
+      "followupTrackerTemplate": "用模板创建：跟进追踪",
+      "meetingScribeTemplate": "用模板创建：会议速记",
       "calendarRequired": "需启用日历同步",
       "unmetDependencies": "未满足依赖：{items}",
       "newTitle": "新建自定义 Agent",
@@ -7180,7 +7183,8 @@
         "output": "输出",
         "triggerBody": "按{cadence}排程生成 · {date}",
         "open": "去报告",
-        "openFromRun": "打开这次执行产出的那份报告"
+        "openFromRun": "打开这次执行产出的那份报告",
+        "fullText": "报告全文"
       },
       "progress": {
         "counts": "{total} 个项目 · 新建 {created} · 更新 {updated} · 失败 {failed}",
@@ -7188,7 +7192,14 @@
       }
     },
     "preprocess": {
-      "detailHint": "这是收信时自动分类的结果。想追问为什么这么判，在那封邮件里问主助手。",
+      "labels": {
+        "summary": "概括",
+        "urgencyReason": "判定理由",
+        "keyPoints": "要点",
+        "mailActions": "建议操作",
+        "recommendedActions": "推荐处理",
+        "replySuggestion": "建议回复"
+      },
       "classified": "已分类",
       "failed": "这一封没跑通",
       "retries": "重试",
@@ -7209,7 +7220,7 @@
     "dialogTitle": "新建群聊",
     "dialogTitleLabel": "群名",
     "dialogMembersLabel": "成员（最多 {max} 名）",
-    "dialogNoCandidates": "没有可入群的成员 —— 先在团队页创建可对话的 agent。",
+    "dialogNoCandidates": "没有可入群的成员 —— 到团队页新建，或用模板一键创建预设成员。",
     "create": "创建",
     "cancel": "取消",
     "creating": "创建中…",

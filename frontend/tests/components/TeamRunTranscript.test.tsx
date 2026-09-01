@@ -30,10 +30,11 @@ vi.mock('@tanstack/react-router', () => ({
 
 const mockListMessages = vi.fn()
 const mockRunLogSteps = vi.fn()
+const mockReportGet = vi.fn()
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
     chat: { listMessages: mockListMessages },
-    report: { runLogSteps: mockRunLogSteps }
+    report: { runLogSteps: mockRunLogSteps, get: mockReportGet }
   })
 }))
 
@@ -132,6 +133,42 @@ describe('TeamRunTranscript — 触发气泡合成 + 首条 prompt 摘除', () =
     expect(screen.getByText(new RegExp(SEED_MARKER))).toBeTruthy()
   })
 
+  // 08-31 dogfood — 折叠块原来挂在流末尾（有输出走 pendingSlot、无输出走分支末尾），
+  // owner 根本没发现它。现在它收进触发气泡本身：完整触发指令属于触发这件事。
+  test('🔴 完整触发指令的折叠块挂在触发气泡内部，且全流只有一处（末尾不再重复）', async () => {
+    const { container } = render(<TeamRunTranscript run={RUN} agentName="跟进员" />, {
+      wrapper: makeQcWrapper()
+    })
+    const bubble = await waitFor(() => {
+      const el = container.querySelector('[data-run-trigger-bubble]')
+      expect(el).toBeTruthy()
+      return el!
+    })
+    await waitFor(() => expect(screen.getByText('这是执行输出正文')).toBeTruthy())
+    // 只有一个折叠块，且它在气泡里。
+    expect(container.querySelectorAll('[data-run-raw-prompt]')).toHaveLength(1)
+    const inBubble = bubble.querySelector('[data-run-raw-prompt]')
+    expect(inBubble).toBeTruthy()
+    // 默认收起 → 原文不可见；点气泡里的展开钮才出现。
+    expect(screen.queryByText(new RegExp(SEED_MARKER))).toBeNull()
+    fireEvent.click(inBubble!.querySelector('button')!)
+    expect(screen.getByText(new RegExp(SEED_MARKER))).toBeTruthy()
+  })
+
+  test('无输出分支同样从气泡里看完整触发指令（两支行为一致）', async () => {
+    mockListMessages.mockResolvedValue([msg({ id: 1, role: 'user', content: SEED_MARKER })])
+    const { container } = render(<TeamRunTranscript run={RUN} agentName="跟进员" />, {
+      wrapper: makeQcWrapper()
+    })
+    const bubble = await waitFor(() => {
+      const el = container.querySelector('[data-run-trigger-bubble]')
+      expect(el).toBeTruthy()
+      return el!
+    })
+    expect(container.querySelectorAll('[data-run-raw-prompt]')).toHaveLength(1)
+    expect(bubble.querySelector('[data-run-raw-prompt]')).toBeTruthy()
+  })
+
   test('run 未产生输出（只有 seed prompt）→ 触发气泡 + 无输出说明，不渲染欢迎空态', async () => {
     mockListMessages.mockResolvedValue([msg({ id: 1, role: 'user', content: SEED_MARKER })])
     const { container } = render(<TeamRunTranscript run={RUN} agentName="跟进员" />, {
@@ -222,5 +259,79 @@ describe('TeamRunTranscript — 「去报告」产物入口', () => {
     })
     await waitFor(() => expect(screen.getByText('这是执行输出正文')).toBeTruthy())
     expect(container.querySelector('[data-run-open-report]')).toBeNull()
+  })
+})
+
+// 08-31 dogfood — 日报/周报的 run 有完整 transcript，但 out 步骤只有 headline；报告本体
+// 内嵌进详情（默认折叠），「去报告」按钮保留。
+describe('TeamRunTranscript — 内嵌报告全文', () => {
+  test('有 reportId：折叠块在场且默认收起，展开前不拉 report:get', async () => {
+    mockReportGet.mockResolvedValue({
+      id: 'rep-2026-08-31',
+      doc: { cadence: 'daily', model: 'claude-fable-5', generated_at: '', blocks: [] }
+    })
+    const run = { ...RUN_LOG, reportId: 'rep-2026-08-31' } as AgentRunLogItem
+    const { container } = render(<TeamRunTranscript run={run} agentName="日报" />, {
+      wrapper: makeQcWrapper()
+    })
+    const block = await waitFor(() => {
+      const el = container.querySelector('[data-run-report-full="rep-2026-08-31"]')
+      expect(el).toBeTruthy()
+      return el!
+    })
+    expect(screen.getByText('报告全文')).toBeTruthy()
+    // 🔴 懒加载：折叠时 query 是 disabled 的，记录列每选一条 run 不该多一次 report:get。
+    expect(mockReportGet).not.toHaveBeenCalled()
+    fireEvent.click(block.querySelector('button')!)
+    await waitFor(() => expect(mockReportGet).toHaveBeenCalledWith('rep-2026-08-31'))
+  })
+
+  test('无 reportId（画像 / 项目周报 / async_jobs run）→ 不挂折叠块', async () => {
+    const { container } = render(<TeamRunTranscript run={RUN} agentName="跟进员" />, {
+      wrapper: makeQcWrapper()
+    })
+    await waitFor(() => expect(screen.getByText('这是执行输出正文')).toBeTruthy())
+    expect(container.querySelector('[data-run-report-full]')).toBeNull()
+  })
+})
+
+// 08-31 dogfood — 超宽详情面板里 44rem 的消息列两侧各空 ~400px（owner 观感「太靠右」）。
+// 🔴 变量定义在 AgentThread Root 的 inline style 上，外层包一层 CSS 变量覆盖无效 → 走 prop。
+describe('TeamRunTranscript — 消息列宽度', () => {
+  const WIDE = 'min(58rem, 100%)'
+
+  test('有输出分支：AgentThread 收到放宽后的 --thread-max-width', async () => {
+    const { container } = render(<TeamRunTranscript run={RUN} agentName="跟进员" />, {
+      wrapper: makeQcWrapper()
+    })
+    await waitFor(() => expect(screen.getByText('这是执行输出正文')).toBeTruthy())
+    const withVar = Array.from(container.querySelectorAll<HTMLElement>('[style]')).filter(
+      (el) => el.style.getPropertyValue('--thread-max-width') !== ''
+    )
+    expect(withVar.length).toBeGreaterThan(0)
+    for (const el of withVar) {
+      expect(el.style.getPropertyValue('--thread-max-width')).toBe(WIDE)
+    }
+  })
+
+  test('🔴 无输出分支不经过 AgentThread：它必须自己定义同一个变量，否则列宽塌成整幅面板', async () => {
+    mockListMessages.mockResolvedValue([msg({ id: 1, role: 'user', content: SEED_MARKER })])
+    const { container } = render(<TeamRunTranscript run={RUN} agentName="跟进员" />, {
+      wrapper: makeQcWrapper()
+    })
+    const bubble = await waitFor(() => {
+      const el = container.querySelector('[data-run-trigger-bubble]')
+      expect(el).toBeTruthy()
+      return el!
+    })
+    // 从气泡往上找，必须有一个祖先真的定义了这个变量（值与有输出分支一致）。
+    let node: HTMLElement | null = bubble.parentElement
+    let found: string | null = null
+    while (node != null && found == null) {
+      const v = node.style?.getPropertyValue('--thread-max-width') ?? ''
+      if (v !== '') found = v
+      node = node.parentElement
+    }
+    expect(found).toBe(WIDE)
   })
 })

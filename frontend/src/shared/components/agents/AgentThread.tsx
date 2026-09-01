@@ -71,6 +71,11 @@ interface AgentThreadProps {
    *  前端合成的「⚡自动触发」气泡（真实首条 user 消息是 4-7KB 任务契约 prompt，已被摘掉，
    *  见 team/runTranscript.ts）。省略 = 字节级现状。 */
   headerSlot?: React.ReactNode
+  /** 消息列宽度 = `--thread-max-width` 的值；默认 44rem（全部 chat 视图现状）。团队页的
+   *  执行详情面板在宽窗口下能到 ~1500px，44rem 的列两侧各空 ~400px，故那一处传更宽的值。
+   *  🔴 变量定义在下面 Root 的 inline style 上 —— 从外层包一层 CSS 变量覆盖**无效**
+   *  （内层 inline 恒赢），只能走这个 prop。 */
+  maxWidth?: string
 }
 
 export function AgentThread({
@@ -81,7 +86,8 @@ export function AgentThread({
   contextChip,
   runStatusSlot,
   welcomeOverride,
-  headerSlot
+  headerSlot,
+  maxWidth = '44rem'
 }: AgentThreadProps): React.JSX.Element {
   const isEmpty = useAuiState(isNewChatView)
   return (
@@ -91,7 +97,7 @@ export function AgentThread({
     <ThreadReadOnlyContext.Provider value={readOnly}>
       <ThreadPrimitive.Root
         className="relative isolate flex min-h-0 flex-1 flex-col glass-3 text-ink-fg"
-        style={{ ['--thread-max-width' as string]: '44rem' }}
+        style={{ ['--thread-max-width' as string]: maxWidth }}
       >
         {onTurnComplete && <TurnCompleteWatcher onComplete={onTurnComplete} />}
         {/* dogfood round-7 — turnAnchor="top"：发送后用户消息钉到视口顶部、回复向下铺开，不再每个 chunk 瞬跳追底
