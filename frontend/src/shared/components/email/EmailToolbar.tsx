@@ -35,6 +35,7 @@ import {
   ChevronDownIcon,
   ChevronUpIcon,
   DeleteIcon,
+  ExternalLinkIcon,
   LanguagesIcon,
   MapPinCheckIcon,
   MapPinIcon,
@@ -137,6 +138,10 @@ interface ToolbarProps {
   isImportant?: boolean
 
   notionUrl?: string | null
+
+  /** task 08-27 P5 —— 「在新窗口打开」这封邮件（Electron 轻窗）。远程 web 没有第二窗口，
+   *  EmailDetail 不传 → 按钮不渲染（不是禁用占位：那会让 web 上多一个永远点不动的钮）。 */
+  onOpenDetached?: () => void
 
   onPrev?: () => void
   onNext?: () => void
@@ -742,6 +747,7 @@ export function EmailToolbar({
   deleteState,
   isImportant,
   notionUrl,
+  onOpenDetached,
   onPrev,
   onNext,
   onBack
@@ -974,6 +980,15 @@ export function EmailToolbar({
           (旧 mockup 的 ← 返回 / ⋯ 更多 占位按钮已移除: 3 栏常驻布局里"返回"无语义,
           "更多"无菜单内容 — 等有真实次要操作时再以溢出菜单引入。) */}
       <div className="ml-auto flex items-center gap-1">
+        {/* task 08-27 P5 —— 在新窗口打开（Electron 轻窗）。挨着「在 Notion 打开」放:
+            两者都是「把这封邮件送到别处看」。web 上 onOpenDetached 不传 → 整钮不渲染。 */}
+        {onOpenDetached && (
+          <IconOnlyBtn
+            icon={<ExternalLinkIcon size={13} strokeWidth={2} />}
+            label={t('detached.openInWindow')}
+            onClick={onOpenDetached}
+          />
+        )}
         <IconOnlyBtn
           icon={<BoxIcon size={13} strokeWidth={2} />}
           label={t('toolbar.openNotion')}

@@ -34,7 +34,7 @@ import { useShortcut } from '@shared/hooks/useShortcut'
 import { useIsBelowLg } from '@shared/hooks/useMediaQuery'
 import { toastError, toastInfo, toastSuccess } from '@shared/state/toast'
 import { useActiveEmail, pickNext, pickPrev } from '@shared/state/active-email'
-import { usePopoutMode } from '@shared/state/popout-mode'
+import { canOpenDetachedWindow, useDetachedMode } from '@shared/state/detached-mode'
 import { selectActiveTab, tabId, useTabWorkspace } from '@shared/state/tab-workspace'
 import {
   clearObjectTabDraft,
@@ -44,6 +44,7 @@ import {
   saveObjectTabDraft,
   saveObjectTabScroll,
   setObjectTabTitle,
+  tabsInert,
   useTabCloseGuard,
   type PendingTabClose
 } from '@shared/state/tab-workspace-bridge'
@@ -331,6 +332,8 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   const mattersEnabled = useMattersEnabled()
   const queryClient = useQueryClient()
   const triggerV2Enabled = useTriggerV2Enabled()
+  // task 08-27 P5 —— 本组件既是主窗详情列，也是轻窗的整窗内容（DetachedShell）。
+  const isDetachedWindow = useDetachedMode((s) => s.isDetached)
   const [showTranslation, setShowTranslation] = useState(false)
   // G-25 —— 「事项」按钮的捕获浮层与「为此线程建立跟进 Agent」抽屉。
   const [matterMenuOpen, setMatterMenuOpen] = useState(false)
@@ -770,7 +773,8 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   useEffect(() => {
     if (internalId === null) return
     if (!detailQ.isSuccess || detailQ.isPlaceholderData || detailQ.data !== null) return
-    if (usePopoutMode.getState().isPopout) return
+    // 没有标签条的窗口（popout / P5 轻窗）没有「核销标签」这回事，连 toast 也不该出。
+    if (tabsInert()) return
     const tab = useTabWorkspace.getState().tabs.find((t) => t.id === tabId('email', internalId))
     if (tab === undefined) return
     if ((tab.draft as { dirty?: unknown } | undefined)?.dirty === true) return
@@ -1234,6 +1238,13 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         isPinned={isPinned}
         isImportant={email.is_important === true}
         notionUrl={email.notion_url}
+        // task 08-27 P5 —— 在新窗口打开。轻窗自己也渲染 EmailDetail，所以在轻窗里
+        // 再挂一次入口就是「开一个一样的窗」，收掉。
+        onOpenDetached={
+          canOpenDetachedWindow() && !isDetachedWindow
+            ? () => mailApi.email.openDetached(email.internal_id)
+            : undefined
+        }
         onArchive={handleArchive}
         archiveState={{ pending: pending.archive }}
         onDelete={() => void handleDelete()}

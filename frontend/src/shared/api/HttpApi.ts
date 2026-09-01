@@ -235,6 +235,12 @@ export class HttpApi implements MailApi {
       }
     },
 
+    openDetached: (_internalId: number): void => {
+      // Electron BrowserWindow 能力（task 08-27 P5 轻窗）—— 远程 web 没有第二窗口的
+      // 场景 → no-op。electron 由 ElectronApi 注入真实 window:openDetached IPC；
+      // 入口本身按 canOpenDetachedWindow() 门控，web 上根本不渲染（放法同 chat.openPopout）。
+    },
+
     body: async (internalId: number, opts?: BodyOpts): Promise<EmailBody | null> => {
       try {
         return await this.req<EmailBody>('GET', `/email/${internalId}/body`, {
@@ -939,6 +945,9 @@ export class HttpApi implements MailApi {
       } catch {
         return null
       }
+    },
+    openDetached: (_reportId: string): void => {
+      // 同 email.openDetached —— web 无第二窗口，no-op。
     },
     getConfig: async (): Promise<ReportAgentConfig[]> => {
       try {

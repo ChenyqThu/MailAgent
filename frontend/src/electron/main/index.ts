@@ -21,7 +21,7 @@ import { resolveAiGatewayPort } from '../../ai-gateway/config'
 import { detectUserState } from './onboarding/detect'
 import { registerOnboardingHandlers } from './handlers/onboarding'
 import { registerFeedbackHandlers } from './handlers/feedback'
-import { MAIN_WINDOW, ONBOARDING_WINDOW } from './lib/window-config'
+import { DETACHED_WINDOW, MAIN_WINDOW, ONBOARDING_WINDOW } from './lib/window-config'
 import { registerEmailHandlers } from './handlers/email'
 import { registerContactHandlers } from './handlers/contacts'
 import { registerFolderHandlers } from './handlers/folder'
@@ -305,6 +305,69 @@ function createPopoutWindow(emailId: number): void {
   }
 }
 
+// task 08-27 P5「拖出成独立窗口」形态 B —— 轻窗。renderer 经 `window:openDetached`
+// 拉起, 把一封邮件 / 一份报告钉在自己的窗口里。范式与 createPopoutWindow 逐环相同
+// (query 带模式 + 目标 id + 两个端口 → renderer 在 React.render 之前 boot 出壳),
+// 差别只有 query 参数与尺寸 (DETACHED_WINDOW: 读正文/长文比 480 宽的 chat popout 要宽)。
+//
+// 🔴 形态 B 有意不做的事 (判据见 .trellis/tasks/08-27-l4-tab-workspace/research/
+// r13-p5-landscape.md §2.4-2.5): 轻窗不挂 router、不渲染标签条、不写任何标签 store。
+// 「把标签整个拖出去」是形态 A, 前提是先翻掉 tab-workspace 的所有权模型 (标签集与主窗
+// 共用同一个 localStorage 键且有意不挂 storage 监听), 不在本批。
+//
+// `id` 一律按字符串过 IPC/query: 邮件是 internal_id (数字), 报告是 report id (字符串),
+// 收敛成一种载体后 URLSearchParams 负责转义, 解析侧 (detached-mode) 再按 kind 收窄。
+function createDetachedWindow(kind: 'email' | 'report', id: string): void {
+  const win = new BrowserWindow({
+    width: DETACHED_WINDOW.width,
+    height: DETACHED_WINDOW.height,
+    minWidth: DETACHED_WINDOW.minWidth,
+    minHeight: DETACHED_WINDOW.minHeight,
+    show: false,
+    title: kind === 'email' ? 'MailAgent — Email' : 'MailAgent — Report',
+    titleBarStyle: 'hiddenInset',
+    // 与主窗 / popout 同走「一块玻璃」: backgroundColor 全交给 surfaceWindowOptions
+    // (frosted 路径不能出现任何不透明锚, 见 createWindow 注释)。
+    ...surfaceWindowOptions(),
+    webPreferences: {
+      preload: join(mainDirname, '../preload/index.mjs'),
+      sandbox: false
+    }
+  })
+
+  win.on('ready-to-show', () => {
+    win.show()
+    applyNativeSurface(win, getPersistedSurface())
+  })
+
+  win.webContents.on('console-message', (event) => {
+    const { level, message, sourceId, lineNumber } = event
+    if (level === 'error' || level === 'warning') {
+      console.error(`[detached:${level}] ${message}\n  at ${sourceId}:${lineNumber}`)
+    }
+  })
+
+  win.webContents.setWindowOpenHandler((details) => {
+    shell.openExternal(details.url)
+    return { action: 'deny' }
+  })
+  attachExternalLinkGuard(win.webContents)
+
+  // 🔴 aiGatewayPort 必带 —— 漏传会让轻窗的 resolveAiGatewayBaseUrl() 返 null,
+  // AI 面整个降级 (popout 就踩过这一次, 见 createPopoutWindow 里的 cutover fix 注释)。
+  const search = new URLSearchParams({
+    detach: kind,
+    id,
+    apiPort: String(resolveApiPort()),
+    aiGatewayPort: String(resolveAiGatewayPort())
+  }).toString()
+  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+    win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}?${search}`)
+  } else {
+    win.loadFile(join(mainDirname, '../renderer/index.html'), { search })
+  }
+}
+
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('ink.chenge.mailagent')
 
@@ -490,6 +553,14 @@ app.whenReady().then(async () => {
   ipcMain.on('window:openChatPopout', (_evt, emailId: number) => {
     if (!Number.isInteger(emailId) || emailId < 0) return
     createPopoutWindow(emailId)
+  })
+
+  // task 08-27 P5 — 轻窗 opener。同 popout: fire-and-forget, 无 envelope; 坏载荷静默丢弃
+  // (renderer 侧已窄化过一次, 这里是最后一道)。
+  ipcMain.on('window:openDetached', (_evt, kind: unknown, id: unknown) => {
+    if (kind !== 'email' && kind !== 'report') return
+    if (typeof id !== 'string' || id === '') return
+    createDetachedWindow(kind, id)
   })
 
   // 打包 P1-4/P1-6 — 后端进程托管 + DB 就绪门控。仅打包模式 (app.isPackaged) 接管:

@@ -189,3 +189,22 @@ describe('EmailToolbar — 「事项」捕获入口 (G-25 Q2=c)', () => {
     expect(screen.queryByRole('button', { name: /^事项$/ })).toBeNull()
   })
 })
+
+// task 08-27 P5 —— 「在新窗口打开」（Electron 轻窗）。EmailDetail 按
+// canOpenDetachedWindow() 决定传不传 onOpenDetached：远程 web 没有第二窗口的概念，
+// 那里应当**根本不渲染**这个钮，而不是渲染一个永远点不动的禁用占位。
+describe('EmailToolbar —— 在新窗口打开', () => {
+  test('传了 onOpenDetached → 钮在场且点击回调一次', () => {
+    const onOpenDetached = vi.fn()
+    render(<EmailToolbar onOpenDetached={onOpenDetached} />)
+    fireEvent.click(screen.getByRole('button', { name: /^在新窗口打开$/ }))
+    expect(onOpenDetached).toHaveBeenCalledTimes(1)
+  })
+
+  test('不传（web / 轻窗自身）→ 钮根本不渲染', () => {
+    render(<EmailToolbar notionUrl="https://notion.so/x" />)
+    expect(screen.queryByRole('button', { name: /^在新窗口打开$/ })).toBeNull()
+    // 邻居仍在 —— 证明右侧簇本身渲染了，缺的只是这一个钮。
+    expect(screen.getByRole('button', { name: /^在 Notion 打开$/ })).toBeTruthy()
+  })
+})

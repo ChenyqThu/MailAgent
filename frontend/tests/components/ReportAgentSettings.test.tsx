@@ -9,8 +9,8 @@
 //   • 空时区写实成宿主机 IANA（留空会让 natural_day 边界退化成 UTC）
 //   • 非 daily 不带 trigger_mode / body_full_priorities / timezone
 // 骨架层再钉一条：SectionMap 没声明的区整段不渲染（报告不可删 → 无「删掉它」）。
-import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createElement } from 'react'
 
@@ -23,7 +23,12 @@ beforeAll(() => {
   }
 })
 
-const { mockSave, mockRun } = vi.hoisted(() => ({ mockSave: vi.fn(), mockRun: vi.fn() }))
+const { mockSave, mockRun, mockApplyEnvPatch, mockToastError } = vi.hoisted(() => ({
+  mockSave: vi.fn(),
+  mockRun: vi.fn(),
+  mockApplyEnvPatch: vi.fn(),
+  mockToastError: vi.fn()
+}))
 mockSave.mockResolvedValue({})
 mockRun.mockResolvedValue({})
 
@@ -42,11 +47,29 @@ vi.mock('@shared/hooks/useLlmModels', () => ({
   useUpstreamModels: () => ({ models: [], isLoading: false, error: undefined, refresh: vi.fn() })
 }))
 
+vi.mock('@shared/state/env', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@shared/state/env')>()),
+  applyEnvPatch: mockApplyEnvPatch
+}))
+
+vi.mock('@shared/state/toast', () => ({ toastError: mockToastError, toastSuccess: vi.fn() }))
+
 import i18n from '@shared/i18n'
 import { ReportAgentSettings } from '../../src/shared/components/agents/settings/ReportAgentSettings'
+import { useEnvStore } from '@shared/state/env'
+import { useRestartStore } from '@shared/state/restart'
 import type { ReportAgentConfig } from '@shared/api/types'
 
 await i18n.changeLanguage('zh-CN')
+
+function setEnv(values: Record<string, string>): void {
+  useEnvStore.setState({
+    state: {
+      status: 'ready',
+      snapshot: { path: '/tmp/.env', exists: true, values, managedKeys: [], secretKeys: [] }
+    }
+  })
+}
 
 function makeQcWrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
@@ -90,10 +113,21 @@ function lastPatch(): Record<string, unknown> {
   return mockSave.mock.calls[0][1] as Record<string, unknown>
 }
 
+beforeEach(() => {
+  mockApplyEnvPatch.mockResolvedValue({
+    ok: true,
+    path: '/tmp/.env',
+    changedKeys: ['MAILAGENT_REPORT_AGENT_ENABLED'],
+    restartRequired: true
+  })
+  setEnv({ MAILAGENT_REPORT_AGENT_ENABLED: 'false' })
+})
+
 afterEach(() => {
   cleanup()
-  mockSave.mockClear()
-  mockRun.mockClear()
+  vi.clearAllMocks()
+  useEnvStore.setState({ state: { status: 'idle' } })
+  useRestartStore.setState({ required: false, changedKeys: [] })
 })
 
 describe('保存语义 — prompt 默认态与头像 dirty', () => {
@@ -213,5 +247,37 @@ describe('骨架 — 声明了才渲染', () => {
     renderSettings()
     fireEvent.click(screen.getByRole('button', { name: '试运行一次' }))
     expect(mockRun).toHaveBeenCalledWith('daily_email_digest')
+  })
+})
+
+// 承接旧 AgentsTab.ReportMasterRow 的三条断言（随 P4a 团队页重组一起丢了 UI，owner 拍板
+// 恢复进本页「它自己的设置」区）：渲染 label/hint、切换即时写 env、失败原样 toast 不吞错。
+describe('报告生成服务总闸 — env MAILAGENT_REPORT_AGENT_ENABLED', () => {
+  test('渲染 label 与 hint 两个 i18n key', () => {
+    renderSettings()
+    expect(screen.getByText('报告生成服务常驻')).toBeTruthy()
+    expect(screen.getByText(/开启后报告生成服务常驻运行/)).toBeTruthy()
+  })
+
+  test('打开总闸 → 即时写 env（不进本页 onSave 的 patch），成功挂重启横幅', async () => {
+    renderSettings()
+    fireEvent.click(screen.getByRole('switch', { name: '报告生成服务常驻' }))
+    await waitFor(() => expect(mockApplyEnvPatch).toHaveBeenCalledTimes(1))
+    expect(mockApplyEnvPatch).toHaveBeenCalledWith({ MAILAGENT_REPORT_AGENT_ENABLED: 'true' })
+    expect(useRestartStore.getState().changedKeys).toContain('MAILAGENT_REPORT_AGENT_ENABLED')
+    // 切开关不经过页面的「保存」按钮 —— onSave 的 patch 通道完全没被碰。
+    expect(mockSave).not.toHaveBeenCalled()
+  })
+
+  test('写 env 失败 → 原样 toast，不吞错，也不挂重启横幅', async () => {
+    mockApplyEnvPatch.mockResolvedValue({
+      ok: false,
+      error: { code: 'E_IO', message: '写入失败' }
+    })
+    renderSettings()
+    fireEvent.click(screen.getByRole('switch', { name: '报告生成服务常驻' }))
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1))
+    expect(mockToastError).toHaveBeenCalledWith('保存报告服务开关失败', 'E_IO: 写入失败')
+    expect(useRestartStore.getState().required).toBe(false)
   })
 })

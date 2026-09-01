@@ -352,6 +352,10 @@ export interface EmailApi {
    *  listByThread returns. Threads with no rows are absent from the map. */
   listByThreads(threadIds: string[]): Promise<Record<string, EmailMeta[]>>
   get(internalId: number): Promise<EmailDetail | null>
+  /** task 08-27 P5 —— 「在新窗口打开」这封邮件（Electron 轻窗）。放法同
+   *  `chat.openPopout`：shared/web 载体是 no-op（远程 web 没有第二窗口的概念），
+   *  Electron 由 ElectronApi 注入真实的 `window:openDetached` IPC。 */
+  openDetached(internalId: number): void
   body(internalId: number, opts?: BodyOpts): Promise<EmailBody | null>
   /** Sprint 2 — joined LLM labels + processing_status for <AIFieldsBlock>. */
   aiFields(internalId: number): Promise<AIFields | null>

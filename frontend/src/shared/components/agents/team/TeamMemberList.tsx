@@ -16,6 +16,7 @@ import { AgentAvatar } from '../AgentAvatar'
 import { OFFICIAL_ASSISTANT_AVATAR } from '../agentAvatarIdentity'
 import { MAIN_ASSISTANT_SEED, envFlagOn } from '../shared'
 import { useAgentRuns } from '../hooks'
+import { TeamAgentImportEntries } from './TeamAgentImportEntries'
 import { memberTitle, type TeamMember } from './teamMembers'
 
 /** 报告域清单列同款定宽（左列总宽 392 = 导轨 56 + 336）。 */
@@ -131,7 +132,8 @@ export function TeamMemberList({
   fluid,
   showCreate,
   createSelected,
-  onCreate
+  onCreate,
+  onImported
 }: {
   members: readonly TeamMember[]
   /** 选中成员 key；null = 选中的是「新建」态。 */
@@ -144,6 +146,8 @@ export function TeamMemberList({
   showCreate?: boolean
   createSelected?: boolean
   onCreate?: () => void
+  /** 导入 / 模板落地后的流转（同新建：选中新成员落设置档）。传了才渲染这两个次级入口。 */
+  onImported?: (agentId: string) => void
 }): React.ReactElement {
   const { t } = useTranslation()
   const identity = useAssistantIdentity()
@@ -226,6 +230,10 @@ export function TeamMemberList({
                         {t('team.list.newAgent')}
                       </span>
                     </button>
+                  )}
+                  {/* 从零建之外的两条路：导入既有 Agent / 套模板（MAILAGENT_AGENT_PLUGINS 门控）。 */}
+                  {showCreate === true && onImported != null && (
+                    <TeamAgentImportEntries onImported={onImported} />
                   )}
                 </div>
               </section>

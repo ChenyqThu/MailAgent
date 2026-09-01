@@ -208,6 +208,14 @@ export function TeamWorkspace(): React.ReactElement {
     setCreating(false)
     selectMember(m)
   }
+  // 新建 / 导入 / 套模板落地后的统一流转：退出新建态 → 选中该行 → 落设置档。
+  // （行本身要等 report.config 刷新才在 members 里；期间 member 回落主 Agent，
+  //   设置档在它那儿也成立，刷新到达后自然对上。）
+  const showAgentSettings = (agentId: string): void => {
+    setCreating(false)
+    setSelectedKey(memberRefKey({ kind: 'agent', agentId }))
+    setTab('settings')
+  }
 
   const title = memberTitle(member, mainName, t('agents.custom.runs.unknownAgent'))
   // 主标签第二段 = 当前那位智能体（design §三「team → 当前智能体」）；新建态显 tile 同款标题。
@@ -223,6 +231,7 @@ export function TeamWorkspace(): React.ReactElement {
       showCreate={customAgentsEnabled}
       createSelected={creating}
       onCreate={startCreate}
+      onImported={showAgentSettings}
     />
   )
 
@@ -231,13 +240,7 @@ export function TeamWorkspace(): React.ReactElement {
       className="scrollbar-thin flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto"
       data-team-create
     >
-      <CustomAgentCreateView
-        onCreated={(agentId) => {
-          setCreating(false)
-          setSelectedKey(memberRefKey({ kind: 'agent', agentId }))
-          setTab('settings')
-        }}
-      />
+      <CustomAgentCreateView onCreated={showAgentSettings} />
     </div>
   ) : (
     <MemberDetail

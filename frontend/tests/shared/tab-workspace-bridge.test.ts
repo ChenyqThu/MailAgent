@@ -33,6 +33,7 @@ const bridge = await import('../../src/shared/state/tab-workspace-bridge')
 const { useComposeStore } = await import('../../src/shared/state/compose')
 const { useAIChatPanel } = await import('../../src/shared/state/ai-chat-panel')
 const { usePopoutMode } = await import('../../src/shared/state/popout-mode')
+const { useDetachedMode } = await import('../../src/shared/state/detached-mode')
 const { useToastStore, __resetToastStore } = await import('../../src/shared/state/toast')
 
 function resetTabs(): void {
@@ -53,6 +54,7 @@ beforeEach(() => {
   useComposeStore.setState({ open: false, internalId: null, mode: 'reply' })
   useAIChatPanel.setState({ visible: false })
   usePopoutMode.setState({ isPopout: false, emailId: null })
+  useDetachedMode.setState({ isDetached: false, target: null })
   __resetToastStore()
 })
 
@@ -225,6 +227,43 @@ describe('popout no-op', () => {
     bridge.notifyTabChatActivity('email', 1)
     bridge.openSearchTab()
     expect(useTabWorkspace.getState().tabs).toHaveLength(0)
+  })
+})
+
+// task 08-27 P5 —— 轻窗（?detach=email|report）同样不渲染标签条，与主窗共用同一个
+// localStorage 键 ⇒ 判据必须与 popout 同款收在 tabsInert()，否则「在新窗口打开一封邮件」
+// 会把主窗的整份标签集覆盖掉（tab-workspace 有意不挂 storage 监听，主窗察觉不到）。
+describe('detached（轻窗）no-op', () => {
+  test('轻窗下所有入口不碰标签 store，且一个字节都不落 localStorage', () => {
+    useDetachedMode.setState({ isDetached: true, target: { kind: 'email', emailId: 1 } })
+    bridge.openObjectTab('email', 1)
+    bridge.replaceObjectTab('email', 2)
+    bridge.notifyTabChatActivity('email', 1)
+    bridge.openSearchTab()
+    bridge.setObjectTabTitle('email', 1, '标题')
+    bridge.saveObjectTabScroll('email', 1, 120)
+    bridge.closeObjectTab('email', 1)
+    expect(useTabWorkspace.getState().tabs).toHaveLength(0)
+    expect(memoryStore['mailagent.tabs.v1']).toBeUndefined()
+  })
+
+  test('tabsInert() 认 popout 与轻窗两种；两者都不在时为 false', () => {
+    expect(bridge.tabsInert()).toBe(false)
+    useDetachedMode.setState({ isDetached: true, target: { kind: 'report', reportId: 'r1' } })
+    expect(bridge.tabsInert()).toBe(true)
+    useDetachedMode.setState({ isDetached: false, target: null })
+    usePopoutMode.setState({ isPopout: true, emailId: 1 })
+    expect(bridge.tabsInert()).toBe(true)
+  })
+
+  test('轻窗下 requestCloseTab 不消费按键、也不关标签（⌘W 该落回窗口的关闭语义）', () => {
+    // 先在「有标签条」的前提下真开一个 —— 否则 requestCloseTab 会因为「标签不存在」
+    // 提前返回 false，测出来的是空壳而不是 inert。
+    bridge.openObjectTab('email', 1, '一封邮件')
+    expect(useTabWorkspace.getState().tabs).toHaveLength(1)
+    useDetachedMode.setState({ isDetached: true, target: { kind: 'email', emailId: 1 } })
+    expect(bridge.requestCloseTab('email:1')).toBe(false)
+    expect(useTabWorkspace.getState().tabs).toHaveLength(1)
   })
 })
 

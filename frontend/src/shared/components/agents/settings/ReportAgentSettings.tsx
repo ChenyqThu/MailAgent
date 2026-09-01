@@ -9,12 +9,15 @@ import { useTranslation } from 'react-i18next'
 import type { AgentAvatarConfig, ReportAgentConfig, ReportConfigPatch } from '@shared/api/types'
 import { Select, SelectContent, SelectTrigger, SelectValue } from '@shared/components/ui/select'
 import { useEnabledModels } from '@shared/hooks/useLlmModels'
+import { applyEnvPatch, useEnvStore } from '@shared/state/env'
+import { useRestartStore } from '@shared/state/restart'
+import { toastError } from '@shared/state/toast'
 import type { StatefulButtonState } from '@shared/components/ui/stateful-button'
 
 import { CadencePill } from '../primitives'
 import { AgentIdentityHeader } from '../AgentAvatar'
 import { useKosAvailable, useRunNow, useSetConfig } from '../hooks'
-import { PREPROCESS_DOCS } from '../shared'
+import { IS_WEB, PREPROCESS_DOCS, envFlagOn } from '../shared'
 import { Field } from '../drawers/Field'
 import { ModelSelectItems } from '../drawers/ModelSelectItems'
 import {
@@ -36,6 +39,42 @@ const PRIORITY_LABEL_KEYS: Record<string, string> = {
   '🟡 重要': 'agents.config.priority.important',
   '🟢 一般': 'agents.config.priority.normal',
   '⚪ 低': 'agents.config.priority.low'
+}
+
+// 报告生成服务总闸（env MAILAGENT_REPORT_AGENT_ENABLED）——同型 PROJECT_PROGRESS_SYNC_ENABLED
+// 总闸早有 UI（见 ProjectProgressSettings 的 master 行），报告总闸此前只能改 .env，随旧
+// AgentsTab 一起丢了 UI。日/周/月三份配置页共用同一引擎、同一 flag，行落每份配置页的
+// 「它自己的设置」区——判据是既有范式「家族总闸进自己的团队页配置页」。
+// 🔴 与「总闸未开=不可用」不同，这里是 OR 语义（service.py:737）：worker 在「flag 开
+// OR 任一报告行 enabled」时启动，flag 关不等于报告不可用，只差「首次启用是否要重启一
+// 次」——hint 文案已把这层说清，不再加会说谎的「未开禁用」徽标。
+// 切换即时写 env（不进本页 onSave 的 patch，与页面主保存态解耦），失败原样 toast。
+function ReportMasterRow(): React.ReactElement {
+  const { t } = useTranslation()
+  const markRestartRequired = useRestartStore((s) => s.markRestartRequired)
+  const envReady = useEnvStore((s) => s.state.status === 'ready')
+  const masterOn = useEnvStore((s) =>
+    s.state.status === 'ready'
+      ? envFlagOn(s.state.snapshot.values['MAILAGENT_REPORT_AGENT_ENABLED'] ?? '')
+      : false
+  )
+  const handleToggle = async (v: boolean): Promise<void> => {
+    const r = await applyEnvPatch({ MAILAGENT_REPORT_AGENT_ENABLED: v ? 'true' : 'false' })
+    if (!r.ok) {
+      toastError(t('agents.reportsMaster.saveError'), `${r.error.code}: ${r.error.message}`)
+      return
+    }
+    if (r.changedKeys.length > 0) markRestartRequired(r.changedKeys)
+  }
+  return (
+    <SwitchCard
+      label={t('agents.reportsMaster.label')}
+      hint={t('agents.reportsMaster.hint')}
+      on={masterOn}
+      onChange={(v) => void handleToggle(v)}
+      disabled={!envReady || IS_WEB}
+    />
+  )
 }
 
 export function ReportAgentSettings({ cfg }: { cfg: ReportAgentConfig }): React.ReactElement {
@@ -253,6 +292,7 @@ export function ReportAgentSettings({ cfg }: { cfg: ReportAgentConfig }): React.
         capabilities: <BuiltinToolsNote />,
         specific: (
           <>
+            <ReportMasterRow />
             {isDaily ? (
               <Field
                 label={t('agents.config.bodyPriorities')}

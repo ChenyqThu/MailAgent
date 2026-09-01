@@ -727,6 +727,10 @@ export interface ReportApi {
   }): Promise<ReportPagedResult<ReportListItem>>
   /** 单份报告详情（含解析后的 doc）。不存在返 null。 */
   get(reportId: string): Promise<ReportDetail | null>
+  /** task 08-27 P5 —— 「在新窗口打开」这份报告（Electron 轻窗）。放法同
+   *  `chat.openPopout` / `email.openDetached`：shared/web 载体是 no-op，
+   *  Electron 由 ElectronApi 注入真实的 `window:openDetached` IPC。 */
+  openDetached(reportId: string): void
   /** agent 配置列表（v1 一个 daily agent）。失败返 []。 */
   getConfig(): Promise<ReportAgentConfig[]>
   /** 部分更新 agent 配置（写, needs auth）。返回更新后的解析配置。 */

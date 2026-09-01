@@ -10,6 +10,8 @@
 // 🔴 弹出窗（popout）不渲染标签条，且与主窗共用同一个 localStorage 键 —— popout 里任何标签
 // 写入都会覆盖主窗的持久化标签集（tab-workspace 有意不挂 storage 监听，写了主窗也察觉不到），
 // 故本模块所有入口在 popout 下一律 no-op（active-email 在 popout 下退回纯本地投影）。
+// task 08-27 P5 起「轻窗」（detached-mode：在新窗口打开一封邮件 / 一份报告）同样不渲染标签条，
+// 判据一并收进 tabsInert()。
 
 // 🔴 引 i18next 单例而不是 `@shared/i18n`：后者顶层拉 react-i18next（initReactI18next），
 // 会把「mock 了 react-i18next 的无关测试」全部炸掉（active-email → bridge 进了它们的
@@ -20,6 +22,7 @@ import { create } from 'zustand'
 
 import { useAIChatPanel } from './ai-chat-panel'
 import { useComposeStore } from './compose'
+import { useDetachedMode } from './detached-mode'
 import { usePopoutMode } from './popout-mode'
 import {
   SEARCH_TARGET_ID,
@@ -35,8 +38,15 @@ import {
 } from './tab-workspace'
 import { toastInfo } from './toast'
 
+/** 「本窗口没有标签条」—— popout 与 P5 轻窗共用的判据。本模块所有入口据此 no-op；
+ *  EmailDetail 的 404 标签核销读同一份（那条同样只在有标签条的窗口才成立）。 */
+export function tabsInert(): boolean {
+  return usePopoutMode.getState().isPopout || useDetachedMode.getState().isDetached
+}
+
+/** 模块内短名（各入口沿用），语义完全等同 tabsInert。 */
 function inert(): boolean {
-  return usePopoutMode.getState().isPopout
+  return tabsInert()
 }
 
 function tr(key: string, opts?: Record<string, unknown>): string {
@@ -230,6 +240,12 @@ for (const tab of useTabWorkspace.getState().tabs) {
 
 // 启动归一：存量档案按旧判据写下的「locked 但快照 clean」主动放平 —— 不放平的话，
 // 这些标签要等到某次涉及它的 recompute 才解锁，LRU 满拒在老库上会继续复现。
+//
+// 🔴 这一段**不能**挂 tabsInert()：它跑在模块求值期，而两个模式 flag 由 renderer/main.tsx
+// 在**全部静态 import 求值之后**才 boot（本模块经 router → GlobalShortcuts → tab-commands
+// 进了 App 的静态图），此刻读恒为 false。之所以可以不管：归一写回的是「按当前存档算出来的
+// 同一份标签集」，主窗自己 boot 时也会跑同一遍，内容零差异（且触发条件是 clean 快照 + locked
+// 这种存量形态，正常档案根本不进这个分支）。
 for (const tab of useTabWorkspace.getState().tabs) {
   if (tab.locked && !chatActivity.has(tab.id) && !draftSnapshotDirty(tab.draft)) {
     useTabWorkspace.getState().updateTab(tab.id, { locked: false })

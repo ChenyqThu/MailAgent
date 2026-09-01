@@ -23,7 +23,7 @@
 // （deeplink / 刷新）→ 确保搜索单例存在并激活。'/search' 不进 per-域落点记忆
 // （recordRouteLocation 对它返回 null 属预期 —— 搜索页不该被记成某个域的落点）。
 //
-// 🔴 popout 窗不挂 router，本 hook 天然不在 popout 里跑，无需另设闸。
+// 🔴 popout 窗与 P5 轻窗（detached）都不挂 router，本 hook 天然不在它们里面跑，无需另设闸。
 
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useRouter, useRouterState } from '@tanstack/react-router'

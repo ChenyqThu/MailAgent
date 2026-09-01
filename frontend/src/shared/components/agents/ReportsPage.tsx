@@ -16,6 +16,8 @@ import { Check, Trash2, X } from 'lucide-react'
 import type { AgentAvatarConfig, ReportCadence, ReportListItem } from '@shared/api/types'
 import { MANUAL_CHAT_REPORT_AGENT_ID, REPORT_CADENCES } from '@shared/api/reportBlocks'
 import { cn } from '@shared/lib/cn'
+import { useMailApi } from '@shared/hooks/useMailApi'
+import { canOpenDetachedWindow, useDetachedMode } from '@shared/state/detached-mode'
 import { navEntry, navigateToNavEntry, navigateToReport } from '@shared/navigation/registry'
 import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
 import { SegmentedControl } from '@shared/components/ui/segmented'
@@ -641,7 +643,9 @@ function EmptyState({ total }: { total: number }): React.ReactElement {
   )
 }
 
-function ReportDetailView({
+/** 详情本体。导出是给 P5 轻窗（DetachedShell 的报告分支）复用的 —— 那里没有清单列，
+ *  `item` 直接喂 `report.get()` 返回的 ReportDetail（ReportListItem 的超集）。 */
+export function ReportDetailView({
   item,
   ctx,
   onRetry,
@@ -653,6 +657,9 @@ function ReportDetailView({
   retrying: boolean
 }): React.ReactElement {
   const { t } = useTranslation()
+  const mailApi = useMailApi()
+  // task 08-27 P5 —— 本组件既是 /reports 的详情面，也是轻窗的整窗内容（DetachedShell）。
+  const detached = useDetachedMode((s) => s.isDetached)
   const { report, isLoading } = useReport(item.id)
   const status = item.status
   // console（定稿）→ 详情全宽，与 Agents/Chats tab 一致（消除右侧留白）；
@@ -687,6 +694,38 @@ function ReportDetailView({
             {t('agents.reports.generatedAt')} {fmtClock(report.doc.generated_at)}
           </span>
           <span style={{ flex: 1 }} />
+          {/* task 08-27 P5 —— 在新窗口打开这份报告（Electron 轻窗）。与「重新生成」同一条
+              概要栏、同一套按钮形态；轻窗自身也渲染 ReportDetailView，所以在轻窗里不再挂
+              入口（开出来只会是一模一样的第二个窗），web 上则没有第二窗口的概念。 */}
+          {canOpenDetachedWindow() && !detached && (
+            <button
+              type="button"
+              onClick={() => mailApi.report.openDetached(item.id)}
+              className="flex items-center"
+              style={{
+                gap: 5,
+                fontFamily: 'inherit',
+                fontSize: 12,
+                color: 'rgb(var(--ink-fg-2))',
+                background: 'transparent',
+                border: 0,
+                cursor: 'pointer',
+                transition:
+                  'color 120ms cubic-bezier(0.4,0,0.2,1), transform 120ms cubic-bezier(0.4,0,0.2,1)'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = 'rgb(var(--c-accent))'
+              }}
+              {...pressHandlers()}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = 'rgb(var(--ink-fg-2))'
+                e.currentTarget.style.transform = 'none'
+              }}
+            >
+              <ReportIcon name="external" size={12} />
+              {t('detached.openInWindow')}
+            </button>
+          )}
           <button
             type="button"
             onClick={onRetry}

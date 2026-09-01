@@ -281,6 +281,12 @@ class ElectronEmailApi implements EmailApi {
   async get(internalId: number): Promise<EmailDetail | null> {
     return (await invoker()('email:get', internalId)) as EmailDetail | null
   }
+  // task 08-27 P5 —— 轻窗。同 chat.openPopout 是 fire-and-forget 的 send（新窗自己
+  // ready-to-show），坏 id 就地丢弃不发 IPC。
+  openDetached(internalId: number): void {
+    if (!Number.isInteger(internalId) || internalId < 0) return
+    sender()?.('window:openDetached', 'email', String(internalId))
+  }
   async body(internalId: number, opts?: BodyOpts): Promise<EmailBody | null> {
     return (await invoker()('email:body', internalId, opts ?? {})) as EmailBody | null
   }
@@ -918,6 +924,11 @@ class ElectronReportApi implements ReportApi {
   }
   async get(reportId: string): Promise<ReportDetail | null> {
     return (await invoker()('report:get', reportId)) as ReportDetail | null
+  }
+  // task 08-27 P5 —— 轻窗（同 ElectronEmailApi.openDetached）。
+  openDetached(reportId: string): void {
+    if (reportId === '') return
+    sender()?.('window:openDetached', 'report', reportId)
   }
   async getConfig(): Promise<ReportAgentConfig[]> {
     return (await invoker()('report:getConfig')) as ReportAgentConfig[]

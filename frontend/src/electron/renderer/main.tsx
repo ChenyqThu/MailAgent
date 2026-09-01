@@ -11,12 +11,15 @@ import { createRoot } from 'react-dom/client'
 // the next tick.
 import { captureAiGatewayPortAtBoot } from '@shared/assistant/runtime/flags'
 import { bootPopoutModeFromQuery } from '@shared/state/popout-mode'
+// task 08-27 P5 — 轻窗（?detach=email|report&id=…）同理，也必须在 React.render 之前解析出来。
+import { bootDetachedModeFromQuery } from '@shared/state/detached-mode'
 
 import App from './App'
 import { OnboardingErrorBoundary } from './onboarding/ErrorBoundary'
 import OnboardingRoot from './onboarding/OnboardingRoot'
 
 bootPopoutModeFromQuery()
+bootDetachedModeFromQuery()
 // 启动即把 ?aiGatewayPort= 存进 sessionStorage —— chat 面板懒挂载，路由改写/硬加载
 // (/sessions) 会把启动 query 冲掉，懒写 stash 存在「从没人读过就丢了」的洞（详见 flags.ts）。
 captureAiGatewayPortAtBoot()

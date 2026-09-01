@@ -7020,6 +7020,9 @@
       "empty": "今天还没有带时刻的条目"
     }
   },
+  "detached": {
+    "openInWindow": "在新窗口打开"
+  },
   "tabs": {
     "untitled": "未命名",
     "searchTitle": "新标签页",

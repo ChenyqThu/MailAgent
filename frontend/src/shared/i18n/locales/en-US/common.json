@@ -7020,6 +7020,9 @@
       "empty": "Nothing with a time on it today"
     }
   },
+  "detached": {
+    "openInWindow": "Open in New Window"
+  },
   "tabs": {
     "untitled": "Untitled",
     "searchTitle": "New Tab",

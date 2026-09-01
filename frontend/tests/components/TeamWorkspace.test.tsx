@@ -97,6 +97,7 @@ vi.mock('../../src/shared/components/agents/AgentConversation', () => ({
 }))
 
 import i18n from '@shared/i18n'
+import { useToastStore } from '@shared/state/toast'
 import type { ChatSessionListItem, ReportAgentConfig } from '@shared/api/types'
 import { TeamWorkspace } from '../../src/shared/components/agents/team/TeamWorkspace'
 import { useAgentsNavigation } from '../../src/shared/components/agents/navigation'
@@ -178,11 +179,43 @@ function setAgentSessions(list: ChatSessionListItem[], teamList: ChatSessionList
   )
 }
 
-function mockChatConfigFlags(customAgentsEnabled: boolean): void {
-  global.fetch = vi.fn().mockResolvedValue({
-    ok: true,
-    json: async () => ({ data: { customAgentsEnabled } })
+/** 导入入口也走裸 fetch（POST /report-agents/import），与 /chat/config 同一个桩 —— 必须
+ *  按 URL 分流，否则 config 的响应会把导入结果一并冒充掉。 */
+let importReply: { ok: boolean; statusText?: string; body: unknown } = {
+  ok: true,
+  body: { data: {} }
+}
+/** 导入请求发出的那一刻的钩子（用例用它把新 agent 加进 getConfig 的返回）。 */
+let onImportRequest: (() => void) | null = null
+function mockChatConfigFlags(
+  customAgentsEnabled: boolean,
+  flags: Record<string, boolean> = {}
+): void {
+  global.fetch = vi.fn().mockImplementation((input: unknown) => {
+    if (String(input).includes('/report-agents/import')) {
+      onImportRequest?.()
+      return Promise.resolve({
+        ok: importReply.ok,
+        statusText: importReply.statusText ?? '',
+        json: async () => importReply.body
+      })
+    }
+    return Promise.resolve({
+      ok: true,
+      json: async () => ({
+        data: {
+          customAgentsEnabled,
+          agentPluginsEnabled: true,
+          calendarTriggerEnabled: true,
+          ...flags
+        }
+      })
+    })
   }) as unknown as typeof fetch
+}
+
+function importBodyOf(call: unknown[]): unknown {
+  return JSON.parse(String((call[1] as { body?: unknown }).body))
 }
 
 beforeEach(() => {
@@ -201,6 +234,9 @@ beforeEach(() => {
   mockListSkills.mockResolvedValue([])
   mockListEnriched.mockResolvedValue([])
   mockAiFields.mockResolvedValue(null)
+  importReply = { ok: true, body: { data: {} } }
+  onImportRequest = null
+  useToastStore.getState().clear()
   // 默认关掉「新建智能体」门控（多数用例不关心它）；create 流的用例单独开。
   mockChatConfigFlags(false)
 })
@@ -545,6 +581,129 @@ describe('新建智能体（design §8.4：新建走设置，只有设置档）'
   test('flag 关 → 无「新建」行', async () => {
     const container = await renderWorkspace()
     expect(container.querySelector('[data-team-create-row]')).toBeNull()
+  })
+})
+
+// 08-31 — P4a 丢掉的 Agent Plugin 入口（导入 / 用模板创建）恢复到清单列。链路是
+// POST /report-agents/import，不是技能包那条 zip 链。
+describe('导入 Agent / 用模板创建', () => {
+  const IMPORTED = cfg('meeting_prep_agent', 'custom', { title: '会前准备' })
+
+  /** 导入成功后清单里才有这行 —— 让 getConfig 在导入请求发出后多返一行（invalidate 会重取）。 */
+  function serveImportedAgentAfterCall(): void {
+    let served = [...AGENTS]
+    mockGetConfig.mockImplementation(async () => served)
+    importReply = { ok: true, body: { data: { agent: IMPORTED } } }
+    onImportRequest = () => {
+      served = [...AGENTS, IMPORTED]
+    }
+  }
+
+  test('flag 开 → 清单列新建行下有两个入口；MAILAGENT_AGENT_PLUGINS 关 → 都不在', async () => {
+    mockChatConfigFlags(true)
+    const container = await renderWorkspace()
+    await waitFor(() => expect(container.querySelector('[data-team-import]')).toBeTruthy())
+    expect(container.querySelector('[data-team-import-file]')?.textContent).toBe('导入 Agent')
+    expect(container.querySelector('[data-team-import-template]')?.textContent).toBe(
+      '用模板创建：会前准备'
+    )
+    // 日历触发在场（桩里 calendarTriggerEnabled=true）→ 不挂那句警示。
+    expect(container.querySelector('[data-team-import-calendar-warn]')).toBeNull()
+
+    cleanup()
+    mockChatConfigFlags(true, { agentPluginsEnabled: false })
+    const off = await renderWorkspace()
+    await waitFor(() => expect(off.querySelector('[data-team-create-row]')).toBeTruthy())
+    expect(off.querySelector('[data-team-import]')).toBeNull()
+  })
+
+  test('日历触发未启用 → 模板入口旁给出前置说明', async () => {
+    mockChatConfigFlags(true, { calendarTriggerEnabled: false })
+    const container = await renderWorkspace()
+    await waitFor(() =>
+      expect(container.querySelector('[data-team-import-calendar-warn]')?.textContent).toBe(
+        '需启用日历同步'
+      )
+    )
+  })
+
+  test('用模板创建 → POST {template:meeting_prep} → 选中新成员并落设置档', async () => {
+    mockChatConfigFlags(true)
+    serveImportedAgentAfterCall()
+    const container = await renderWorkspace()
+    await waitFor(() => expect(container.querySelector('[data-team-import-template]')).toBeTruthy())
+    fireEvent.click(container.querySelector('[data-team-import-template]')!)
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-team-member-detail="member:agent:meeting_prep_agent"]')
+      ).toBeTruthy()
+    })
+    expect(container.querySelector('[data-team-settings]')).toBeTruthy()
+    const call = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find((c) =>
+      String(c[0]).includes('/report-agents/import')
+    )!
+    expect(String(call[0])).toBe('http://127.0.0.1:8200/api/report-agents/import')
+    expect((call[1] as { method?: string }).method).toBe('POST')
+    expect(importBodyOf(call)).toEqual({ template: 'meeting_prep' })
+  })
+
+  test('选文件导入 → POST {payload}；未满足依赖逐条列出（提示活过跳转，挂在清单列）', async () => {
+    mockChatConfigFlags(true)
+    serveImportedAgentAfterCall()
+    importReply = {
+      ok: true,
+      body: {
+        data: {
+          agent: IMPORTED,
+          unmet_dependencies: [
+            { type: 'skill', ref: 'meeting_notes' },
+            { type: 'connector', ref: 'notion' }
+          ]
+        }
+      }
+    }
+    const container = await renderWorkspace()
+    await waitFor(() => expect(container.querySelector('[data-team-import]')).toBeTruthy())
+    const input = container.querySelector('[data-team-import] input[type="file"]')!
+    const file = new File([JSON.stringify({ agent: { title: '会前准备' } })], 'agent-x.json', {
+      type: 'application/json'
+    })
+    fireEvent.change(input, { target: { files: [file] } })
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-team-member-detail="member:agent:meeting_prep_agent"]')
+      ).toBeTruthy()
+    })
+    const call = (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find((c) =>
+      String(c[0]).includes('/report-agents/import')
+    )!
+    expect(importBodyOf(call)).toEqual({ payload: { agent: { title: '会前准备' } } })
+    // 提示留在清单列（跳去新成员的设置档后仍在），且把依赖插值出来 —— 不是字面 {items}。
+    expect(container.querySelector('[data-team-import-notice]')?.textContent).toBe(
+      '未满足依赖：skill: meeting_notes, connector: notion'
+    )
+  })
+
+  test('导入失败不吞错：走 toast 报出后端原因，且不跳转', async () => {
+    mockChatConfigFlags(true)
+    importReply = {
+      ok: false,
+      statusText: 'Bad Request',
+      body: { error: { message: '包格式不对' } }
+    }
+    const container = await renderWorkspace()
+    await waitFor(() => expect(container.querySelector('[data-team-import-template]')).toBeTruthy())
+    fireEvent.click(container.querySelector('[data-team-import-template]')!)
+
+    await waitFor(() => {
+      const toast = useToastStore.getState().items.find((i) => i.title === '导入 Agent')
+      expect(toast?.detail).toBe('包格式不对')
+      expect(toast?.variant).toBe('error')
+    })
+    expect(container.querySelector('[data-team-import-notice]')).toBeNull()
+    expect(container.querySelector('[data-team-member-detail="member:main"]')).toBeTruthy()
   })
 })
 

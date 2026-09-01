@@ -24,10 +24,19 @@ import { useApiReadyRefresh } from '@shared/hooks/useApiReadyRefresh'
 import { useEventBridge } from '@shared/hooks/useEventBridge'
 import { useStartupPrefetch } from '@shared/hooks/useStartupPrefetch'
 import { usePopoutMode } from '@shared/state/popout-mode'
+import { useDetachedMode } from '@shared/state/detached-mode'
 
 const PopoutShell = lazy(() =>
   import('@shared/components/chat/PopoutShell').then((module) => ({
     default: module.PopoutShell
+  }))
+)
+
+// task 08-27 P5 — 轻窗（在新窗口打开一封邮件 / 一份报告）。同 PopoutShell 懒挂：
+// 主窗永远走不到这个分支，没必要把邮件详情 + 报告渲染器一起拉进首屏 chunk。
+const DetachedShell = lazy(() =>
+  import('@shared/components/DetachedShell').then((module) => ({
+    default: module.DetachedShell
   }))
 )
 
@@ -122,6 +131,10 @@ export default function App(): React.ReactElement {
   // means no Sidebar / EmailList / Settings inside the popout — which
   // is the whole point of the dedicated window.
   const isPopout = usePopoutMode((s) => s.isPopout)
+  // task 08-27 P5 — 轻窗与 popout 同源：判据在 React.render 之前 boot 好，第一次读就是终值。
+  // 排在 popout 之前只是消歧（两个 query 同时在场只可能来自手敲 URL），主进程各开各的窗，
+  // 一个窗口恒只带一种 query。
+  const isDetached = useDetachedMode((s) => s.isDetached)
 
   return (
     <ErrorBoundary>
@@ -132,7 +145,11 @@ export default function App(): React.ReactElement {
         {/* 同上: 只依赖 QueryClient, popout / inbox 两种 shell 都要 (popout 里的
             事项/通讯录数据同样走 serve-api)。 */}
         <ApiReadyRefreshMount />
-        {isPopout ? (
+        {isDetached ? (
+          <Suspense fallback={<Skeleton rows={6} className="h-full w-full p-6" width="2/3" />}>
+            <DetachedShell />
+          </Suspense>
+        ) : isPopout ? (
           <Suspense fallback={<Skeleton rows={6} className="h-full w-full p-6" width="2/3" />}>
             <PopoutShell />
           </Suspense>

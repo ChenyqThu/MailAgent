@@ -18,3 +18,13 @@ export const ONBOARDING_WINDOW = {
   minWidth: 768,
   minHeight: 640
 } as const
+
+// task 08-27 P5 —— 「在新窗口打开」的轻窗 (createDetachedWindow)。邮件正文与报告长文
+// 共用一档尺寸: 比 chat popout (480 宽) 宽得多才够读一封带引用的邮件, 又不必到主窗的
+// 1280 —— 轻窗只装一件内容, 没有侧栏 / 列表 / 标签条要占位。
+export const DETACHED_WINDOW = {
+  width: 720,
+  height: 820,
+  minWidth: 480,
+  minHeight: 420
+} as const

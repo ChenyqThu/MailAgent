@@ -16,7 +16,8 @@
 //
 // 跨窗口：**有意不挂 storage 监听**（对照 nav-shell / group-collapse / pinned-folders
 // 那几个偏好 store）。标签集是这一个窗口的工作状态不是偏好，镜像到别的窗口只会让两个
-// 窗口抢同一个 active。弹出窗（popout-mode）本来就不渲染标签条。
+// 窗口抢同一个 active。弹出窗（popout-mode）与 P5 轻窗（detached-mode）本来就不渲染
+// 标签条，写侧一律由 tab-workspace-bridge 的 tabsInert() 短路。
 
 import { create } from 'zustand'
 
