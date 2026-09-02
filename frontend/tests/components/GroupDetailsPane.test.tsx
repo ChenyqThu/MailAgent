@@ -4,15 +4,17 @@
 //
 //   S1 改响应模式 → PUT 只带那一个成员（即改即存，没有保存按钮）；分段控件靠 `details.modeAria`
 //      定位 —— 这条同时钉住那个 aria key 没在 settings.* → details.* 迁移里被丢掉；
-//   S2 法官 Select 单选可空；judgeScopeStale → 警告行 +「重新确认」PUT 同值（重写 hash）；
+//   S2 主持人 Select 单选可空；judgeScopeStale → 警告行 +「重新确认」PUT 同值（重写 hash）；
 //   S3 用量：两指标已知 / 未知 + 24h 行 + 小时地板进度条宽度 = used/cap；
 //   S4 数值项 blur → PUT 数字；「恢复默认」→ PUT **null**（删键 ≠ 不传）；
 //   S5 加人 Popover 排除已在群的；满员禁用；点选 → patchGroupMembers({add});
 //   S6 移出 → **先二次确认**再 patchGroupMembers({remove});
 //   S7 全群模型 → PUT modelOverride / null；S8 通知 Switch → PUT {notify:false};
 //   S9 危险区：删除群 → deleteSession；清空历史 → DELETE messages/from/{firstId};
-//   S10 labs off 只渲染 基本 / 成员 / 危险区（无模式、无法官、无上限、无用量）+ labsOffNote；
-//   S11 config 读失败 → loadFailed + 重试，不静默；S12 近期唤醒表色点 + 空态。
+//   S10 labs off 只渲染 基本 / 成员 / 危险区（无模式、无主持人、无上限、无用量）+ labsOffNote；
+//   S11 config 读失败 → loadFailed + 重试，不静默；S12 近期唤醒表色点 + 空态；
+//   S13 主 Agent（保留 id `main`）在群里可以坐主持人位；
+//   S14 狼人杀预设下主持人候选里没有主 Agent（`@法官 开始游戏` 逐字依赖模板行的 title）。
 //
 // mock 面：groupSettings（serve-api 客户端）+ http_client（清空历史打的是会话消息端点）+
 // useMailApi（改名 / 删会话 / 列消息）+ useEnabledModels + AgentAvatar 探针桩。
@@ -73,14 +75,20 @@ vi.mock('../../src/shared/components/agents/AgentAvatar', () => ({
 }))
 
 import i18n from '@shared/i18n'
-import type { ChatSession, ReportAgentConfig } from '@shared/api/types'
+import type { ChatSession } from '@shared/api/types'
 import { GroupDetailsPane } from '../../src/shared/components/agents/groups/GroupDetailsPane'
-import type { GroupMemberMeta } from '../../src/shared/components/agents/groups/members'
+import type {
+  GroupCandidate,
+  GroupMemberMeta
+} from '../../src/shared/components/agents/groups/members'
 
 await i18n.changeLanguage('zh-CN')
 
 const MEMBER_IDS = ['a1', 'a2']
+/** 主 Agent 在群里的名字来自 assistant identity（工作区拼进 memberMeta，这里当既成事实用）。 */
+const MAIN_MEMBER_IDS = ['main', 'a1']
 const MEMBER_META = new Map<string, GroupMemberMeta>([
+  ['main', { title: '小欧' }],
   ['a1', { title: '调研员' }],
   ['a2', { title: '跟进官' }],
   ['a3', { title: '评审' }]
@@ -102,14 +110,16 @@ const SESSION: ChatSession = {
   members_json: '["a1","a2"]'
 }
 
-function cfg(id: string, title: string, model: string): ReportAgentConfig {
-  return { id, type: 'custom', enabled: true, title, model } as ReportAgentConfig
+function candidate(id: string, title: string, model: string | null): GroupCandidate {
+  return { id, title, avatar: null, model }
 }
 
-const CANDIDATES = [
-  cfg('a1', '调研员', 'claude-opus-4-8'),
-  cfg('a2', '跟进官', 'claude-sonnet-4-8'),
-  cfg('a3', '评审', 'claude-haiku-4-8')
+const CANDIDATES: GroupCandidate[] = [
+  // 主 Agent 排在最前（工作区的候选序），且没有自己的模型。
+  candidate('main', '小欧', null),
+  candidate('a1', '调研员', 'claude-opus-4-8'),
+  candidate('a2', '跟进官', 'claude-sonnet-4-8'),
+  candidate('a3', '评审', 'claude-haiku-4-8')
 ]
 
 const onMembersChanged = vi.fn()
@@ -198,9 +208,9 @@ describe('GroupDetailsPane', () => {
     expect(mockSetGroupConfig).toHaveBeenCalledWith(300, { modes: { a1: 'realtime' } })
   })
 
-  test('S2 法官 Select 单选可空；judgeScopeStale → 警告 +「重新确认」PUT 同值', async () => {
+  test('S2 主持人 Select 单选可空；judgeScopeStale → 警告 +「重新确认」PUT 同值', async () => {
     renderPane()
-    const trigger = await screen.findByRole('combobox', { name: '法官位' })
+    const trigger = await screen.findByRole('combobox', { name: '主持人位' })
     expect(screen.queryByText(/成员名单变过/)).toBeNull()
     fireEvent.click(trigger)
     fireEvent.click(await screen.findByRole('option', { name: '跟进官' }))
@@ -217,7 +227,7 @@ describe('GroupDetailsPane', () => {
     })
     renderPane()
     await waitFor(() => expect(screen.getByText(/成员名单变过/)).toBeTruthy())
-    fireEvent.click(screen.getByText('重新确认法官位'))
+    fireEvent.click(screen.getByText('重新确认主持人位'))
     // 同值也要重写（服务端据此重算 judgeScopeHash = 重新确认那一刻的名单）。
     await waitFor(() =>
       expect(mockSetGroupConfig).toHaveBeenCalledWith(300, { judgeAgentId: 'a1' })
@@ -347,10 +357,10 @@ describe('GroupDetailsPane', () => {
     await waitFor(() => expect(screen.getByText('成员')).toBeTruthy())
     expect(screen.getByText('基本')).toBeTruthy()
     expect(screen.getByText('危险区')).toBeTruthy()
-    expect(screen.getByText(/响应模式、法官位、上限与用量/)).toBeTruthy()
+    expect(screen.getByText(/响应模式、主持人位、上限与用量/)).toBeTruthy()
     // v1 下不生效的东西一律不渲染（渲染出来就是骗人）。
     expect(screen.queryByLabelText('调研员 的响应模式')).toBeNull()
-    expect(screen.queryByRole('combobox', { name: '法官位' })).toBeNull()
+    expect(screen.queryByRole('combobox', { name: '主持人位' })).toBeNull()
     expect(screen.queryByText('上限与预算')).toBeNull()
     expect(screen.queryByText('用量')).toBeNull()
     // 成员本身还在（加 / 踢在 v1 也有意义）。
@@ -400,5 +410,30 @@ describe('GroupDetailsPane', () => {
     expect(row.querySelector('[data-outcome="silent"]')).toBeTruthy()
     expect(row.textContent).toContain('沉默')
     expect(row.textContent).toContain('120')
+  })
+
+  test('S13 主 Agent 在名单里就能坐主持人位（judgeAgentId 写保留 id）', async () => {
+    mockGetGroupConfig.mockResolvedValue({ ...PAYLOAD, members: MAIN_MEMBER_IDS })
+    renderPane(true, MAIN_MEMBER_IDS)
+    fireEvent.click(await screen.findByRole('combobox', { name: '主持人位' }))
+    fireEvent.click(await screen.findByRole('option', { name: '小欧' }))
+    await waitFor(() =>
+      expect(mockSetGroupConfig).toHaveBeenCalledWith(300, { judgeAgentId: 'main' })
+    )
+  })
+
+  test('S14 狼人杀预设：主持人候选里没有主 Agent（其余成员照常在）', async () => {
+    mockGetGroupConfig.mockResolvedValue({
+      ...PAYLOAD,
+      config: { v: 1 as const, preset: 'werewolf' as const },
+      members: MAIN_MEMBER_IDS
+    })
+    renderPane(true, MAIN_MEMBER_IDS)
+    fireEvent.click(await screen.findByRole('combobox', { name: '主持人位' }))
+    // 🔴 不是「整张单子空了」：同一个下拉里别的成员照常可选，只少主 Agent 一条。
+    expect(await screen.findByRole('option', { name: '调研员' })).toBeTruthy()
+    expect(screen.queryByRole('option', { name: '小欧' })).toBeNull()
+    // 成员节里主 Agent 那一行还在（不能当主持人 ≠ 不是成员）。
+    expect(screen.getByText('小欧')).toBeTruthy()
   })
 })

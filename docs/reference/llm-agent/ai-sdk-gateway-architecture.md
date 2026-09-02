@@ -1530,7 +1530,16 @@ item-dispatch 锚下注册，belt 测试钉互不渗透。要点：
 ## 13.29 群聊多 agent 体系（labs `labs_group_agents`，CHAT_DB v31）
 
 一个群 = 一条 `ai_chat_sessions` 行（`origin='group'` + `members_json`），成员是 custom
-agents。总闸是 `owner_settings.labs_group_agents`（**不是** `MAILAGENT_*` env flag：确定要做的
+agents，外加保留 id `main`（`MAIN_AGENT_MEMBER_ID`，TS 单源 `groupFloors.ts` / Python 单源
+`src/chat/group_limits.py`，闸 `test_group_constants_parity.py`）：**主 agent 也能入群当成员或
+坐主持人位**。它没有 `report_agent` 行 —— serve-api 的成员校验对这个 id 短路放行，成员事实由
+`resolveGroupSession` 读 `assistant_identity` 合成（60s TTL；读失败降级成 `AI`，🔴 绝不丢成员，
+成员资格是 `speakAsAgentId` 的安全判据）。入群后它走的是与别人一样的群 speaker run（两件读工具 /
+减重 prompt），**不带**单聊那套工具，且群 speaker run 一律不捕获 memory（群里是其他 agent 的
+半可信输出，不进 `memory.md`）。**一个身份一条入口**：它已是成员的群，单聊里的 `group_post` /
+`group_create` 拒收（`E_GROUP_SELF_MEMBER`）。保留字与真实 agent id 的碰撞由
+`ReportStore.create_agent`（agent 行的唯一写点）拒收，老库的存量行由 `serve` 启动时扫一遍告警
+（只告警不动数据）。总闸是 `owner_settings.labs_group_agents`（**不是** `MAILAGENT_*` env flag：确定要做的
 功能不搞灰度开关，实验性的进 labs）。关掉 = 调度器不构造、群工具不注册，主 agent 的 ToolSet
 与开之前字节一致。
 
@@ -1546,6 +1555,10 @@ body 里的 `speakAsAgentId` 只用来在这份名单里查人，查不到 403 `
 `speakAsGroupMember` 只 drain textStream + usage，落库经 `appendGroupMessage`。
 🔴 群 speaker run **不走** `makePersistOnFinish`：那条通道会把「按发言人组装的私有视图」双写回
 共享转录。代价见 §13.29.5。
+这条路径的 prompt 面与 g1 一致（T4：`groupSpeakerRun:true` 恒减重 —— 群里有其他 agent 的半可信
+输出，技能名单 / connector 名单 / `memory.md` 不进这个 prompt），沉默契约同样生效：回 `[沉默]`
+的 turn 不落消息行、done 帧 `messageId:null`。但它**不带 `sessionId`** → `chatRun` 不调
+`buildGroupSpeakerTools`，零工具姿态不变。
 
 ### 13.29.2 g1 编排基线（调度器）
 
@@ -1572,7 +1585,7 @@ catalog `manual_only:true`。
 
 | 工厂 | 场地 | keys | scope | 免卡 |
 |---|---|---|---|---|
-| `createGroupTools` | 主 agent 单聊（`buildGatewayTools` 装配门） | 四件 | 任意群（`E_NOT_GROUP` 兜底） | 服务端核验型 `user_requested`（§13.29.4） |
+| `createGroupTools` | 主 agent 单聊（`buildGatewayTools` 装配门） | 四件 | 任意群，**自己是成员的群除外**（`E_NOT_GROUP` / `E_GROUP_SELF_MEMBER` 兜底） | 服务端核验型 `user_requested`（§13.29.4） |
 | `createGroupMemberTools` | 群内成员 run | `group_history` / `group_members` | **只本群**，越界 `E_GROUP_SCOPE` 且零后端调用 | 无写工具 |
 | `createGroupJudgeTools` | 群内法官 run | 四件 | family = {本群, 父群} ∪ children(本群)（**不含**同父兄弟） | `judgeScopeHash` 匹配 → `auto_judge_scope` |
 
@@ -1587,8 +1600,13 @@ catalog `manual_only:true`。
   `SUBGROUPS_PER_FAMILY_CAP` 不是计数器：每次建群现读 `resolveGroupSession` 的
   `childSessionIds.length`，所以它跨 turn、跨重启都成立。
 - 错误码 `E_GROUP_SCOPE` / `E_JUDGE_SCOPE_STALE` / `E_GROUP_POST_CAP` / `E_SUBGROUP_CAP` /
-  `E_NOT_GROUP` / `E_GROUP_NOT_ORCHESTRATED` 是**工具层**码，经 `DomainError` 抛给模型，
-  🔴 永不进 `src/api/app.py` 的 `ERROR_CODE_TO_HTTP`。
+  `E_NOT_GROUP` / `E_GROUP_NOT_ORCHESTRATED` / `E_GROUP_SELF_MEMBER` 是**工具层**码，经
+  `DomainError` 抛给模型，🔴 永不进 `src/api/app.py` 的 `ERROR_CODE_TO_HTTP`。
+- **术语对照**：UI 文案里这个位子叫「主持人 / Host」，代码里一律是 `judge*`
+  （`judgeAgentId` / `judgeScopeHash` / `judge_post` / `auto_judge_scope` / `createGroupJudgeTools`）。
+  代码侧的名字是落库 JSON 键 + DB `CHECK` 词表 + 两道 parity 闸的正则目标，**改不得**；
+  本文正文继续用「法官」以对齐代码。狼人杀里的「法官」是游戏角色兼 `@法官 开始游戏`
+  的唤醒口令（`report_agent.title` 逐字），与这条改名无关（§13.29.9）。
 
 ### 13.29.4 动态外层卡：两条免卡通道
 

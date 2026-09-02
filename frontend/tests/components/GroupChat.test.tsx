@@ -9,6 +9,7 @@
 //   W4 创建调用 newSession({groupMembers 按候选序, title}) + 创建后进入群聊视图；
 //   W5/W6 拿不到本地 gateway（端口缺席 / web 构建的空串基址）→ 建群入口禁用 + 说明为什么；
 //   V1 历史渲染（用户消息右对齐；speaker_agent_id 分派到正确成员的名字 + 头像）；
+//   V1b 主 Agent 成员（保留 id `main`）的名字与头像走 assistant identity；
 //   V2 无 @ 发送 → 成员按 members_json 序**串行**各回一轮（第一个未完成时第二个不发起）；
 //   V3 @点名 → 只点名者回；
 //   V4 某成员 run 失败 → 该气泡标失败，仍继续下一个成员。
@@ -39,6 +40,7 @@ const mockMarkRead = vi.fn(async () => undefined)
 const mockSetForeground = vi.fn(async () => undefined)
 // 🔴 同一个对象：真 useMailApi 返回稳定实例，视图的 effect 把 mailApi 放进 deps；每次 render
 // 造新对象会让「选中即已读」「订阅事件」这类 effect 每帧重跑，V21 的计数就失真。
+const mockGetAssistantIdentity = vi.fn()
 const mockMailApi = {
   report: { getConfig: mockGetConfig },
   chat: {
@@ -47,7 +49,8 @@ const mockMailApi = {
     onTurnPersisted: mockOnTurnPersisted,
     onGroupTurn: mockOnGroupTurn,
     markSessionRead: mockMarkRead,
-    setGroupForeground: mockSetForeground
+    setGroupForeground: mockSetForeground,
+    getAssistantIdentity: mockGetAssistantIdentity
   }
 }
 vi.mock('@shared/hooks/useMailApi', () => ({
@@ -89,6 +92,7 @@ vi.mock('../../src/shared/components/agents/AgentAvatar', () => ({
 
 import i18n from '@shared/i18n'
 import type { ChatSession, ChatSessionListItem, ReportAgentConfig } from '@shared/api/types'
+import { __resetAssistantIdentity } from '@shared/assistant/assistantIdentity'
 import { useGroupsView } from '@shared/state/groups-view'
 import { GroupChatWorkspace } from '../../src/shared/components/agents/groups/GroupChatWorkspace'
 import { GroupChatView } from '../../src/shared/components/agents/groups/GroupChatView'
@@ -210,7 +214,10 @@ function msg(
 beforeEach(() => {
   cleanup()
   vi.clearAllMocks()
+  // 模块级缓存（TTL 60s）跨用例存活 —— 不清就只有第一条用例真的走一次取。
+  __resetAssistantIdentity()
   useGroupsView.setState({ activeGroupSessionId: null })
+  mockGetAssistantIdentity.mockResolvedValue({ name: '小欧', avatar: null })
   mockGetConfig.mockResolvedValue(AGENTS)
   mockListMessages.mockResolvedValue([])
   mockAppendUser.mockResolvedValue(1)
@@ -223,11 +230,7 @@ beforeEach(() => {
 
 function renderWorkspace(items: ChatSessionListItem[] = [groupRow()]): HTMLElement {
   const { container } = render(
-    <GroupChatWorkspace
-      items={items}
-      invalidate={vi.fn()}
-      narrow={false}
-    />,
+    <GroupChatWorkspace items={items} invalidate={vi.fn()} narrow={false} />,
     { wrapper: makeQcWrapper() }
   )
   return container
@@ -259,7 +262,8 @@ describe('GroupChatWorkspace', () => {
     expect(screen.queryByText('群名')).toBeNull() // 弹窗未开
     fireEvent.click(screen.getByText('新建群聊'))
     await waitFor(() => expect(screen.getByText('群名')).toBeTruthy())
-    // 候选 = report + custom（chat-capable）；预处理/搜索/项目周报 + 主 Agent 不入群。
+    // 候选 = 主 Agent + report + custom（chat-capable）；预处理/搜索/项目周报不入群。
+    await waitFor(() => expect(screen.getByText('小欧')).toBeTruthy())
     expect(screen.getByText('邮件日报')).toBeTruthy()
     expect(screen.getByText('调研员')).toBeTruthy()
     expect(screen.getByText('跟进官')).toBeTruthy()
@@ -277,12 +281,12 @@ describe('GroupChatWorkspace', () => {
     const extras = Array.from({ length: MAX_GROUP_MEMBERS }, (_, i) =>
       cfg(`x${i}`, 'custom', { title: `成员${i}` })
     )
-    // chat-capable 候选：邮件日报 + 调研员 + 跟进官 + extras = MAX + 3 个（> MAX，够勾满还剩）。
+    // 候选：主 Agent + 邮件日报 + 调研员 + 跟进官 + extras = MAX + 4 个（> MAX，够勾满还剩）。
     mockGetConfig.mockResolvedValue([...AGENTS, ...extras])
     renderWorkspace([])
     await waitFor(() => expect(screen.getByText('新建群聊')).toBeTruthy())
     fireEvent.click(screen.getByText('新建群聊'))
-    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(MAX_GROUP_MEMBERS + 3))
+    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(MAX_GROUP_MEMBERS + 4))
     const boxes = screen.getAllByRole('checkbox') as HTMLButtonElement[]
     for (let i = 0; i < MAX_GROUP_MEMBERS; i++) fireEvent.click(boxes[i])
     await waitFor(() => expect(boxes[MAX_GROUP_MEMBERS].disabled).toBe(true))
@@ -295,11 +299,11 @@ describe('GroupChatWorkspace', () => {
     renderWorkspace([])
     await waitFor(() => expect(screen.getByText('新建群聊')).toBeTruthy())
     fireEvent.click(screen.getByText('新建群聊'))
-    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(3))
+    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(4))
     // 反着点（先跟进官后调研员）—— 创建 payload 仍按候选序 [a1, a2]。
     const boxes = screen.getAllByRole('checkbox')
-    fireEvent.click(boxes[2]) // 跟进官
-    fireEvent.click(boxes[1]) // 调研员
+    fireEvent.click(boxes[3]) // 跟进官
+    fireEvent.click(boxes[2]) // 调研员
     fireEvent.change(screen.getByPlaceholderText('新群聊'), { target: { value: '攻坚群' } })
     fireEvent.click(screen.getByText('创建'))
     await waitFor(() => expect(mockNewSession).toHaveBeenCalledTimes(1))
@@ -378,6 +382,18 @@ describe('GroupChatView', () => {
     expect(a1Row.querySelector('[data-avatar="a1"][data-size="30"]')).toBeTruthy()
     // a2 的气泡分派到「跟进官」。
     expect(screen.getByText('我的跟进结论').previousElementSibling?.textContent).toBe('跟进官')
+  })
+
+  test('V1b 主 Agent 成员的气泡：名字与头像走 assistant identity，不是裸的保留 id', async () => {
+    // 经工作区渲染（而不是直接给 GroupChatView 塞一份含 main 的 memberMeta）：要钉的正是
+    // 「workspace 把主 Agent 拼进 memberMeta」这一段接线 —— 手写的 meta 会让它恒绿。
+    mockListMessages.mockResolvedValue([msg(2, 'assistant', '我来汇总一下', 'main')])
+    renderWorkspace([groupRow({ members_json: '["main","a1"]' })])
+    fireEvent.click(await screen.findByText('项目对齐群'))
+    const bubble = await screen.findByText('我来汇总一下')
+    await waitFor(() => expect(bubble.previousElementSibling?.textContent).toBe('小欧'))
+    const row = bubble.closest('.flex.max-w-\\[86\\%\\]') as HTMLElement
+    expect(row.querySelector('[data-avatar="main"][data-size="30"]')).toBeTruthy()
   })
 
   test('V2 无 @ 发送：先落用户消息，成员按 members_json 序串行各回一轮', async () => {
@@ -523,11 +539,7 @@ describe('GroupChatView（labs on：服务端编排）', () => {
 describe('GroupChatWorkspace — 二级栏契约（09-01 侧栏批）', () => {
   test('W6 清单列读 --app-second-w 且 navHidden 时整列隐藏（与 AgentThreadList 同契约）', () => {
     const { container } = render(
-      <GroupChatWorkspace
-        items={[groupRow()]}
-        invalidate={vi.fn()}
-        narrow={false}
-      />,
+      <GroupChatWorkspace items={[groupRow()]} invalidate={vi.fn()} narrow={false} />,
       { wrapper: makeQcWrapper() }
     )
     const aside = container.querySelector('aside[data-nav-second]') as HTMLElement | null
@@ -537,12 +549,7 @@ describe('GroupChatWorkspace — 二级栏契约（09-01 侧栏批）', () => {
     expect(aside!.style.visibility).not.toBe('hidden')
 
     const { container: hidden } = render(
-      <GroupChatWorkspace
-        items={[groupRow()]}
-        invalidate={vi.fn()}
-        narrow={false}
-        navHidden
-      />,
+      <GroupChatWorkspace items={[groupRow()]} invalidate={vi.fn()} narrow={false} navHidden />,
       { wrapper: makeQcWrapper() }
     )
     const asideHidden = hidden.querySelector('aside[data-nav-second]') as HTMLElement

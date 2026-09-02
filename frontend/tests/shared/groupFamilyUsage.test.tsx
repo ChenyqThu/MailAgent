@@ -55,10 +55,13 @@ vi.mock('../../src/shared/components/agents/AgentAvatar', () => ({
 }))
 
 import i18n from '@shared/i18n'
-import type { ChatSession, ReportAgentConfig } from '@shared/api/types'
+import type { ChatSession } from '@shared/api/types'
 import type { GroupConfig, GroupMetrics } from '@shared/chat_model'
 import { GroupDetailsPane } from '../../src/shared/components/agents/groups/GroupDetailsPane'
-import type { GroupMemberMeta } from '../../src/shared/components/agents/groups/members'
+import type {
+  GroupCandidate,
+  GroupMemberMeta
+} from '../../src/shared/components/agents/groups/members'
 import { WEREWOLF_CHAIN_CAP, WEREWOLF_SESSION_TURN_CAP } from '../../src/ai-gateway/groupFloors'
 
 await i18n.changeLanguage('zh-CN')
@@ -86,9 +89,7 @@ const MEMBER_META = new Map<string, GroupMemberMeta>([
   ['p1', { title: '玩家甲' }]
 ])
 
-const CANDIDATES = [
-  { id: 'judge', type: 'custom', enabled: true, title: '法官' }
-] as ReportAgentConfig[]
+const CANDIDATES: GroupCandidate[] = [{ id: 'judge', title: '法官', avatar: null, model: null }]
 
 function metrics(over: Partial<GroupMetrics> = {}): GroupMetrics {
   return {

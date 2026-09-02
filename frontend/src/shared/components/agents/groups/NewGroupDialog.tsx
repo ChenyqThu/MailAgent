@@ -14,7 +14,7 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation } from '@tanstack/react-query'
 
-import type { ChatSession, ReportAgentConfig } from '@shared/api/types'
+import type { ChatSession } from '@shared/api/types'
 import type { GroupConfigPatch } from '@shared/api/groupSettings'
 import { createWerewolfGame, setGroupConfig } from '@shared/api/groupSettings'
 import { cn } from '@shared/lib/cn'
@@ -41,6 +41,7 @@ import {
 } from '@shared/components/ui/select'
 
 import { AgentAvatar } from '../AgentAvatar'
+import type { GroupCandidate } from './members'
 
 import { MAX_GROUP_MEMBERS, type GroupResponseMode } from '../../../../ai-gateway/groupFloors'
 
@@ -67,7 +68,8 @@ export function NewGroupDialog({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  candidates: ReportAgentConfig[]
+  /** 主 Agent 在最前（保留 id），其余是 report_agent 行。 */
+  candidates: GroupCandidate[]
   onCreated: (session: ChatSession) => void
   /** labs off 时不渲染响应模式与法官位（v1 循环下两者都不生效）。 */
   labsOn: boolean
@@ -85,7 +87,7 @@ export function NewGroupDialog({
   const members = useMemo(() => candidates.filter((c) => picked.has(c.id)), [candidates, picked])
   const namesHint = joinNames(
     i18n.language,
-    members.map((c) => c.title?.trim() || c.id)
+    members.map((c) => c.title)
   )
 
   const toggle = (id: string): void =>
@@ -210,7 +212,7 @@ export function NewGroupDialog({
                 {candidates.map((c) => {
                   const checked = picked.has(c.id)
                   const disabled = !checked && picked.size >= MAX_GROUP_MEMBERS
-                  const name = c.title?.trim() || c.id
+                  const name = c.title
                   return (
                     // 🔴 行不是 <label>：模式分段控件在行内，label 的隐式关联会把「点实时」
                     // 一并当成「点这一行」→ 刚勾上的成员被取消勾选。勾选面只有 Checkbox 与名字。
@@ -260,6 +262,8 @@ export function NewGroupDialog({
                 })}
               </div>
             )}
+            {/* 主 Agent 在候选首位，但它入群后的姿态与单聊不同（只有群内两件读工具，没有邮件 /
+                日历 / exec 那一套）—— 这句是唯一说清这件事的地方。 */}
             <span className="text-micro text-ink-fg-3">{t('groupChat.dialogMainAgentNote')}</span>
           </div>
 
@@ -276,7 +280,7 @@ export function NewGroupDialog({
                   <SelectItem value={JUDGE_NONE}>{t('groupChat.details.judgeNone')}</SelectItem>
                   {members.map((c) => (
                     <SelectItem key={c.id} value={c.id}>
-                      {c.title?.trim() || c.id}
+                      {c.title}
                     </SelectItem>
                   ))}
                 </SelectContent>

@@ -21,7 +21,7 @@ import { useTranslation } from 'react-i18next'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Plus, RotateCcw, X } from 'lucide-react'
 
-import type { ChatSession, ReportAgentConfig } from '@shared/api/types'
+import type { ChatSession } from '@shared/api/types'
 import type { GroupConfig, GroupMetrics, GroupMetricsWindow } from '@shared/chat_model'
 import {
   getGroupConfig,
@@ -64,13 +64,14 @@ import {
 
 import { AgentAvatar } from '../AgentAvatar'
 import { ModelSelectItems } from '../drawers/ModelSelectItems'
-import type { GroupMemberMeta } from './members'
+import type { GroupCandidate, GroupMemberMeta } from './members'
 
 import {
   CHAIN_CAP_DEFAULT,
   HOURLY_TOKENS_DEFAULT,
   HOURLY_TURNS_DEFAULT,
   HOURLY_USD_DEFAULT,
+  MAIN_AGENT_MEMBER_ID,
   MAX_GROUP_MEMBERS,
   WEREWOLF_CHAIN_CAP,
   WEREWOLF_HOURLY_TOKENS,
@@ -173,8 +174,8 @@ export function GroupDetailsPane({
   /** 本群 + 父群 + 子群（自己在首位）。狼人杀预设下用量按这组合计。 */
   familySessionIds: readonly number[]
   memberMeta: Map<string, GroupMemberMeta>
-  /** 可入群的成员（团队页 chat-capable），加人清单从这里减去已在群的。 */
-  candidates: ReportAgentConfig[]
+  /** 可入群的成员（主 Agent + 团队页 chat-capable），加人清单从这里减去已在群的。 */
+  candidates: GroupCandidate[]
   labsOn: boolean
   onClose: () => void
   onRenamed: () => void
@@ -251,6 +252,11 @@ export function GroupDetailsPane({
   const firstMessageId = messagesQ.data?.[0]?.id ?? null
   const addable = candidates.filter((c) => !ids.includes(c.id))
   const full = ids.length >= MAX_GROUP_MEMBERS
+  // 🔴 狼人杀预设的主持人恒是模板「法官」行：开局口令 `@法官 开始游戏` 逐字依赖它的 title，
+  // 模板 duty 也与主 agent 的 standing context 冲突 —— 主 Agent 顶不了这个位，故不进候选。
+  // 其余群里主 Agent 可以当主持人（judgeAgentId 只做字符串比较，与是不是 report_agent 行无关）。
+  const judgeCandidates =
+    config.preset === 'werewolf' ? ids.filter((id) => id !== MAIN_AGENT_MEMBER_ID) : ids
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col" data-group-details={sessionId}>
@@ -371,7 +377,7 @@ export function GroupDetailsPane({
                     </SelectTrigger>
                     <SelectContent className="z-[70]">
                       <SelectItem value={NONE}>{t('groupChat.details.judgeNone')}</SelectItem>
-                      {ids.map((id) => (
+                      {judgeCandidates.map((id) => (
                         <SelectItem key={id} value={id}>
                           {titleOf(id)}
                         </SelectItem>
@@ -699,7 +705,7 @@ function AddMemberButton({
   memberMeta,
   onAdd
 }: {
-  addable: ReportAgentConfig[]
+  addable: GroupCandidate[]
   full: boolean
   memberMeta: Map<string, GroupMemberMeta>
   onAdd: (agentId: string) => void
@@ -739,9 +745,9 @@ function AddMemberButton({
                 agentId={c.id}
                 config={memberMeta.get(c.id)?.avatar ?? c.avatar}
                 size={20}
-                title={c.title ?? c.id}
+                title={c.title}
               />
-              <span className="min-w-0 flex-1 truncate">{c.title?.trim() || c.id}</span>
+              <span className="min-w-0 flex-1 truncate">{c.title}</span>
             </button>
           ))}
         </PopoverContent>

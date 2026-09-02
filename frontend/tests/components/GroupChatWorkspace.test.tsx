@@ -11,7 +11,9 @@
 //   W11 详情面开合按群记忆（切群不串台）；
 //   W12 建群一次填齐：newSession + setGroupConfig({modes, judgeAgentId, topic})；
 //   W13 第二步失败 → 删掉第一步建出来的会话（不留半建群）；
-//   W14 labs off 建群：无模式无法官，只 newSession；W15 模板钮禁用且说明什么时候有。
+//   W14 labs off 建群：无模式无主持人，只 newSession；W15 模板钮禁用且说明什么时候有；
+//   W16 主 Agent 进候选：以 assistant identity 的名字排在最前，勾上后 members 用保留 id `main`；
+//   W17 存量行占着保留 id 时候选里仍只有一条主 Agent。
 //
 // mock 面：useMailApi / groupSettings / useGroupTurnEvents（列表在场态的唯一订阅点）/
 // GroupChatView（lane C 的消息流，这里只需要它的 props 接线）/ AgentAvatar 探针桩。
@@ -26,16 +28,21 @@ const mockListMessages = vi.fn()
 const mockNewSession = vi.fn()
 const mockUpdateTitle = vi.fn()
 const mockDeleteSession = vi.fn()
+const mockGetAssistantIdentity = vi.fn()
+// 🔴 稳定实例：assistantIdentity store 把 useMailApi() 的返回值放进 effect deps，每次
+// render 造新对象会让它每帧重取。
+const mockMailApi = {
+  report: { getConfig: mockGetConfig },
+  chat: {
+    listMessages: mockListMessages,
+    newSession: mockNewSession,
+    updateSessionTitle: mockUpdateTitle,
+    deleteSession: mockDeleteSession,
+    getAssistantIdentity: mockGetAssistantIdentity
+  }
+}
 vi.mock('@shared/hooks/useMailApi', () => ({
-  useMailApi: () => ({
-    report: { getConfig: mockGetConfig },
-    chat: {
-      listMessages: mockListMessages,
-      newSession: mockNewSession,
-      updateSessionTitle: mockUpdateTitle,
-      deleteSession: mockDeleteSession
-    }
-  })
+  useMailApi: () => mockMailApi
 }))
 
 const mockGetLabs = vi.fn()
@@ -105,6 +112,7 @@ vi.mock('../../src/shared/components/agents/AgentAvatar', () => ({
 
 import i18n from '@shared/i18n'
 import type { ChatSession, ChatSessionListItem, ReportAgentConfig } from '@shared/api/types'
+import { __resetAssistantIdentity } from '@shared/assistant/assistantIdentity'
 import { useGroupsView } from '@shared/state/groups-view'
 import { GroupChatWorkspace } from '../../src/shared/components/agents/groups/GroupChatWorkspace'
 
@@ -164,24 +172,22 @@ function makeQcWrapper() {
 }
 
 function renderWorkspace(items: ChatSessionListItem[] = [groupRow()], invalidate = vi.fn()) {
-  const view = render(
-    <GroupChatWorkspace
-      items={items}
-      invalidate={invalidate}
-      narrow={false}
-    />,
-    { wrapper: makeQcWrapper() }
-  )
+  const view = render(<GroupChatWorkspace items={items} invalidate={invalidate} narrow={false} />, {
+    wrapper: makeQcWrapper()
+  })
   return { container: view.container, invalidate }
 }
 
 beforeEach(() => {
   cleanup()
   vi.clearAllMocks()
+  // 模块级缓存（TTL 60s）跨用例存活 —— 不清就只有第一条用例真的走一次取。
+  __resetAssistantIdentity()
   useGroupsView.setState({
     activeGroupSessionId: null,
     detailsOpenBySession: {}
   })
+  mockGetAssistantIdentity.mockResolvedValue({ name: '小欧', avatar: null })
   mockGetConfig.mockResolvedValue(AGENTS)
   mockListMessages.mockResolvedValue([])
   mockUpdateTitle.mockResolvedValue(undefined)
@@ -324,10 +330,11 @@ describe('GroupChatWorkspace — 建群对话框（一次填齐）', () => {
     mockNewSession.mockResolvedValue(created)
     renderWorkspace([])
     fireEvent.click(await screen.findByText('新建群聊'))
-    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(3))
+    // 候选 = 主 Agent + 邮件日报 + 调研员 + 跟进官（主 Agent 在最前）。
+    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(4))
     const boxes = screen.getAllByRole('checkbox')
-    fireEvent.click(boxes[1]) // 调研员
-    fireEvent.click(boxes[2]) // 跟进官
+    fireEvent.click(boxes[2]) // 调研员
+    fireEvent.click(boxes[3]) // 跟进官
     // 勾了人之后：占位仍是「新群聊」（W4 靠它），成员名走下方次级提示。
     expect((screen.getByPlaceholderText('新群聊') as HTMLInputElement).value).toBe('')
     expect(screen.getByText(/留空则用：调研员/)).toBeTruthy()
@@ -341,7 +348,7 @@ describe('GroupChatWorkspace — 建群对话框（一次填齐）', () => {
         (b) => b.textContent === '实时'
       ) as HTMLButtonElement
     )
-    fireEvent.click(screen.getByRole('combobox', { name: '法官（可选）' }))
+    fireEvent.click(screen.getByRole('combobox', { name: '主持人（可选）' }))
     fireEvent.click(await screen.findByRole('option', { name: '跟进官' }))
     fireEvent.click(screen.getByText('创建'))
 
@@ -367,8 +374,8 @@ describe('GroupChatWorkspace — 建群对话框（一次填齐）', () => {
     mockSetGroupConfig.mockRejectedValue(new Error('boom'))
     renderWorkspace([])
     fireEvent.click(await screen.findByText('新建群聊'))
-    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(3))
-    fireEvent.click(screen.getAllByRole('checkbox')[1])
+    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(4))
+    fireEvent.click(screen.getAllByRole('checkbox')[2])
     fireEvent.change(screen.getByPlaceholderText('一句话说明这个群讨论什么'), {
       target: { value: '有用途就有第二步' }
     })
@@ -378,18 +385,62 @@ describe('GroupChatWorkspace — 建群对话框（一次填齐）', () => {
     expect(document.querySelector('[data-group-row="556"]')).toBeNull()
   })
 
-  test('W14 labs off 建群：无响应模式、无法官，只 newSession', async () => {
+  test('W14 labs off 建群：无响应模式、无主持人，只 newSession', async () => {
     mockNewSession.mockResolvedValue({ ...groupRow({ id: 557 }) } as unknown as ChatSession)
     renderWorkspace([])
     fireEvent.click(await screen.findByText('新建群聊'))
-    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(3))
-    fireEvent.click(screen.getAllByRole('checkbox')[1])
+    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(4))
+    fireEvent.click(screen.getAllByRole('checkbox')[2])
     expect(screen.queryByLabelText('调研员 的响应模式')).toBeNull()
-    expect(screen.queryByRole('combobox', { name: '法官（可选）' })).toBeNull()
+    expect(screen.queryByRole('combobox', { name: '主持人（可选）' })).toBeNull()
     fireEvent.click(screen.getByText('创建'))
     await waitFor(() => expect(mockNewSession).toHaveBeenCalledTimes(1))
     await new Promise((r) => setTimeout(r, 20))
     expect(mockSetGroupConfig).not.toHaveBeenCalled()
+  })
+
+  test('W16 主 Agent 进候选：用 assistant identity 的名字 + 保留 id main，也能当主持人', async () => {
+    mockGetLabs.mockResolvedValue({ groupAgents: 'on' })
+    mockNewSession.mockResolvedValue({ ...groupRow({ id: 558 }) } as unknown as ChatSession)
+    const { container } = renderWorkspace([])
+    fireEvent.click(await screen.findByText('新建群聊'))
+    // 名字来自 assistant identity（既不是保留 id `main`，也不是 chat.title 那个缺省）。
+    await waitFor(() => expect(screen.getByText('小欧')).toBeTruthy())
+    expect(screen.queryByText('AI 助手')).toBeNull()
+    // 头像探针钉住「这一行确实是保留 id 那条」——名字对但 id 错会让建群 payload 静默写错。
+    expect(container.ownerDocument.querySelector('[data-avatar="main"][title="小欧"]')).toBeTruthy()
+
+    const boxes = screen.getAllByRole('checkbox')
+    expect(boxes).toHaveLength(4)
+    fireEvent.click(boxes[0]) // 主 Agent 排在最前
+    fireEvent.click(boxes[2]) // 调研员
+    // 主持人位对主 Agent 开放（狼人杀预设除外，那条在 GroupDetailsPane 用例里）。
+    fireEvent.click(screen.getByRole('combobox', { name: '主持人（可选）' }))
+    fireEvent.click(await screen.findByRole('option', { name: '小欧' }))
+    fireEvent.click(screen.getByText('创建'))
+
+    await waitFor(() => expect(mockNewSession).toHaveBeenCalledTimes(1))
+    expect(mockNewSession).toHaveBeenCalledWith({
+      anchorType: 'general',
+      backendKind: 'ai-sdk',
+      groupMembers: ['main', 'a1'],
+      title: '小欧、调研员'
+    })
+    await waitFor(() =>
+      expect(mockSetGroupConfig).toHaveBeenCalledWith(558, { judgeAgentId: 'main' })
+    )
+  })
+
+  test('W17 存量行占着保留 id：候选里仍只有一条主 Agent（不出现同 key 两行）', async () => {
+    // serve-api 拒收新的、启动时只对存量行告警 —— 所以库里**可能**有一条 id 叫 main 的
+    // custom 行。它在 gateway 侧已经解析成主 Agent，再列一遍就是同 key 两行。
+    mockGetConfig.mockResolvedValue([...AGENTS, cfg('main', 'custom', { title: '冒名顶替' })])
+    const { container } = renderWorkspace([])
+    fireEvent.click(await screen.findByText('新建群聊'))
+    await waitFor(() => expect(screen.getByText('小欧')).toBeTruthy())
+    expect(container.ownerDocument.querySelectorAll('[data-avatar="main"]')).toHaveLength(1)
+    expect(screen.queryByText('冒名顶替')).toBeNull()
+    expect(screen.getAllByRole('checkbox')).toHaveLength(4)
   })
 
   test('W15 labs off 时模板入口禁用且说明去哪儿开', async () => {

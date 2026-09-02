@@ -56,11 +56,12 @@ vi.mock('../../src/shared/components/agents/AgentAvatar', () => ({
 }))
 
 import i18n from '@shared/i18n'
-import type { ChatSession, ReportAgentConfig } from '@shared/api/types'
+import type { ChatSession } from '@shared/api/types'
 import { useGroupsView } from '@shared/state/groups-view'
 import { useEnvStore } from '@shared/state/env'
 import { LabsTab } from '../../src/shared/components/settings/tabs/LabsTab'
 import { NewGroupDialog } from '../../src/shared/components/agents/groups/NewGroupDialog'
+import type { GroupCandidate } from '../../src/shared/components/agents/groups/members'
 
 await i18n.changeLanguage('zh-CN')
 
@@ -127,9 +128,7 @@ const onCreated = vi.fn()
 const onOpenChange = vi.fn()
 
 function renderDialog(labsOn: boolean): void {
-  const candidates = [
-    { id: 'a1', type: 'custom', title: '调研员', enabled: true } as ReportAgentConfig
-  ]
+  const candidates: GroupCandidate[] = [{ id: 'a1', title: '调研员', avatar: null, model: null }]
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
   render(
     <QueryClientProvider client={qc}>
@@ -194,7 +193,7 @@ describe('狼人杀一键建局入口', () => {
     fireEvent.click(await screen.findByRole('button', { name: '一键建局' }))
     await waitFor(() =>
       expect(mockToastError).toHaveBeenCalledWith(
-        '已建群，但群设置未写全：请在群详情面重新确认法官位'
+        '已建群，但群设置未写全：请在群详情面重新确认主持人位'
       )
     )
     expect(mockToastSuccess).not.toHaveBeenCalled()
