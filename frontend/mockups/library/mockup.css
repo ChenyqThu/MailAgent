@@ -1,0 +1,104 @@
+/* mockup 专用样式。移植时这一整个文件不进主仓 —— 里面只有「mockup 外壳」
+   （场景导航 / 状态条 / 占位卡）用得着的东西，产品界面本身一条都不需要。 */
+
+/* 场景导航（最左那一列）。故意与 app 的 .nav-rail 不同色，一眼分得出
+   「这是 mockup 的脚手架」还是「这是被 mock 的界面」。 */
+.mk-shell {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  height: 100vh;
+  background: rgb(var(--ink-0));
+  color: rgb(var(--ink-fg));
+}
+.mk-nav {
+  border-right: 1px solid rgb(var(--ink-border));
+  background: rgb(var(--ink-1));
+  overflow-y: auto;
+  padding-bottom: 24px;
+}
+.mk-nav-item {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 12px 5px 14px;
+  text-align: left;
+  font-size: 13px;
+  line-height: 18px;
+  color: rgb(var(--ink-fg-1));
+  border-left: 2px solid transparent;
+}
+.mk-nav-item:hover {
+  background: rgb(var(--ink-3));
+  color: rgb(var(--ink-fg));
+}
+.mk-nav-item[data-active='true'] {
+  background: var(--sel-wash);
+  border-left-color: rgb(var(--c-accent));
+  color: rgb(var(--ink-fg));
+  font-weight: 500;
+}
+.mk-nav-id {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10px;
+  color: rgb(var(--ink-fg-3));
+  width: 20px;
+  flex-shrink: 0;
+}
+
+/* 被 mock 的界面所在的画布。给一圈内边距，好把「界面边界」看清楚。 */
+.mk-stage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.mk-stage-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+/* 应用窗口的仿真外框（带 41px 顶栏基线，与真 app 的 rail 头共线）。 */
+.mk-window {
+  border: 1px solid rgb(var(--ink-border));
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgb(var(--ink-0));
+  display: flex;
+  min-height: 620px;
+}
+
+/* 系统对话框占位卡 —— 明确标注「不 mock」。 */
+.mk-sysdialog {
+  border: 1px dashed rgb(var(--ink-fg-2) / 0.55);
+  background: repeating-linear-gradient(
+    45deg,
+    rgb(var(--ink-fg) / 0.02),
+    rgb(var(--ink-fg) / 0.02) 8px,
+    transparent 8px,
+    transparent 16px
+  );
+}
+
+/* 拖入覆盖层（B2）。 */
+.mk-dropzone {
+  border: 2px dashed rgb(var(--c-accent) / 0.7);
+  background: rgb(var(--c-accent) / 0.08);
+}
+
+/* 树的层级连线（beUI file-tree 的分支线，这里用纯 CSS 近似）。 */
+.mk-tree-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgb(var(--ink-fg) / 0.1);
+}
+
+/* mockup 里的行内提示气泡（真 app 用 ui/tooltip 或 HoverTip）。 */
+.mk-note {
+  border-left: 2px solid rgb(var(--c-info) / 0.5);
+  background: rgb(var(--c-info) / 0.06);
+}
