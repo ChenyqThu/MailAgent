@@ -52,7 +52,8 @@ import { useMatterNavigation } from './components/matters/navigation'
 // task 08-20-notification-center M2 批 B4 — 系统通知点击深跳：main 的通知 fanout 经
 // 'notifications:navigate' 送来通知行 payload，这里用**单源解析器**收窄（不另抄判据）。
 import { resolveNotificationLink } from './components/notifications/navigation'
-import { requestNewAgentSession, requestOpenAgentSession } from './state/ai-chat-panel'
+import { useMailApi } from './hooks/useMailApi'
+import { requestNewAgentSession } from './state/ai-chat-panel'
 import { navigateToGroupSession } from './components/agents/groups/navigation'
 // 一级入口单源（task 08-24-l4-nav-shell Step R）：deeplink 的落点与「AI → General Agent」
 // 菜单项的目标都从 registry 取，不在这里第二次写死 path。
@@ -60,7 +61,10 @@ import { NAV_ENTRIES, navEntry, navigateToNavEntry, NAV_DEEPLINK_PATH } from './
 import { resolveStaticNavGate } from './navigation/useNavGates'
 // 标签工作区 ↔ 路由双向同步（08-27 P2 Lane W）：boot 恢复 / 标签激活跟路由 / rail 切域收敛标签态。
 import { useTabRouteSync } from './navigation/useTabRouteSync'
-import { navigateNotificationRoute } from './components/notifications/navigation'
+import {
+  navigateNotificationRoute,
+  openNotificationSession
+} from './components/notifications/navigation'
 import type { DeeplinkTarget } from './lib/deeplink_target'
 import { clampSettingsTab, type SettingsTab } from './lib/settingsTabs'
 
@@ -186,6 +190,8 @@ function useGeneralAgentMenu(): void {
  */
 function useNotificationClickNavigation(): void {
   const navigate = useNavigate()
+  // session 型的落地要回查会话（老通知行没带 agentId），api 走与组件同一条取法。
+  const mailApi = useMailApi()
   useEffect(() => {
     const notificationsApi = (
       window as unknown as {
@@ -205,8 +211,11 @@ function useNotificationClickNavigation(): void {
       const link = resolveNotificationLink(payload as Record<string, unknown>)
       if (!link) return
       if (link.type === 'session') {
-        requestOpenAgentSession(link.sessionId)
-        void navigate({ to: '/sessions' })
+        // 与面板内点击同一处落地（notifications/navigation）：agent 的活直达团队页记录档，
+        // 其余仍进对话域 AI 分段。
+        void openNotificationSession(navigate, link, {
+          getSession: (id) => mailApi.chat.getSession(id)
+        })
         return
       }
       if (link.type === 'group') {
@@ -224,7 +233,7 @@ function useNotificationClickNavigation(): void {
         navigateNotificationRoute(navigate, link)
       }
     })
-  }, [navigate])
+  }, [navigate, mailApi])
 }
 
 // Popmenu showcase（dev-only 审批物, ⌃⇧P 开）。生产构建时 Vite 把 import.meta.env.DEV

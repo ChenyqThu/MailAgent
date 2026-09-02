@@ -4,12 +4,16 @@
 // 松了 → 一条畸形/未来版本的 link 让条目点下去乱跳或抛异常；紧了 → 真实信源发的 link 点不
 // 动。两侧都只在人工点击时才暴露，故这里对着 M1 三个信源真会发的形状逐条钉住。
 
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { ChatSession } from '@shared/api/types'
+import { useAgentsNavigation } from '@shared/components/agents/navigation'
 import {
   navigateNotificationRoute,
+  openNotificationSession,
   resolveNotificationLink
 } from '@shared/components/notifications/navigation'
+import { useAIChatPanel } from '@shared/state/ai-chat-panel'
 
 describe('resolveNotificationLink — 真实信源形状', () => {
   it('agent run 终态：session 型（run_worker.py 有 session_id 时）', () => {
@@ -17,6 +21,26 @@ describe('resolveNotificationLink — 真实信源形状', () => {
       type: 'session',
       sessionId: 42
     })
+  })
+
+  // 09-02 通知深链修正：`agent_run` / `contact_governance` 两类 job 的 session 型 link
+  // 追加 agentId（matter 系 job 有意不带）。老前端忽略未知字段 = 前向兼容；这里钉住新前端
+  // 把它收窄出来，且**只在非空字符串时**带出 —— 带一个空 id 上路会跳到团队页却什么都不选中。
+  it('agent run 终态：session 型带 agentId（09-02 起）', () => {
+    expect(
+      resolveNotificationLink({
+        link: { type: 'session', sessionId: 263, agentId: 'contact_governance_agent' }
+      })
+    ).toEqual({ type: 'session', sessionId: 263, agentId: 'contact_governance_agent' })
+  })
+
+  it('agentId 是空串 / 非字符串 → 当作没有（落地时回查会话）', () => {
+    expect(
+      resolveNotificationLink({ link: { type: 'session', sessionId: 263, agentId: '' } })
+    ).toEqual({ type: 'session', sessionId: 263 })
+    expect(
+      resolveNotificationLink({ link: { type: 'session', sessionId: 263, agentId: 7 } })
+    ).toEqual({ type: 'session', sessionId: 263 })
   })
 
   it('agent run 终态：无会话时的 route 退化型，search 原样带出', () => {
@@ -157,6 +181,105 @@ describe('navigateNotificationRoute — route 型落地', () => {
     expect(run(resolveNotificationLink({ link: { type: 'route', to: '/admin/kanban' } }))).toEqual({
       to: '/admin/kanban'
     })
+  })
+})
+
+// session 型的落地（09-02 通知深链修正）。owner dogfood 反馈的原症状：点通知落到对话域
+// AI 分段，而那一段按 origin 过滤根本不列 origin='agent' 的行 ⇒ 详情与左侧历史对不上。
+// 归宿改成团队页那位成员的记录档，判据分三支 —— 每一支错一次都是「点了跳错地方」。
+describe('openNotificationSession — 三分支落地', () => {
+  function sessionLink(payload: Record<string, unknown>) {
+    const link = resolveNotificationLink(payload)
+    if (!link || link.type !== 'session') throw new Error('expected session link')
+    return link
+  }
+
+  /** 回查返回的会话行：只有 origin / agent_id 参与判定，其余字段与判据无关。 */
+  function row(over: Partial<ChatSession>): ChatSession {
+    return { id: 263, ...over } as ChatSession
+  }
+
+  async function land(
+    payload: Record<string, unknown>,
+    getSession: (id: number) => Promise<ChatSession | null>
+  ): Promise<{ navigate: ReturnType<typeof vi.fn>; getSession: typeof getSession }> {
+    const navigate = vi.fn()
+    await openNotificationSession(navigate as never, sessionLink(payload), { getSession })
+    return { navigate, getSession }
+  }
+
+  beforeEach(() => {
+    useAgentsNavigation.getState().clear()
+    useAIChatPanel.getState().consumeOpenAgentSession()
+  })
+
+  it('带 agentId → 团队页记录直达，且不回查会话（后端已给出归属）', async () => {
+    const getSession = vi.fn()
+    const { navigate } = await land(
+      { link: { type: 'session', sessionId: 263, agentId: 'contact_governance_agent' } },
+      getSession
+    )
+    expect(getSession).not.toHaveBeenCalled()
+    expect(useAgentsNavigation.getState().targetAgentId).toBe('contact_governance_agent')
+    expect(useAgentsNavigation.getState().targetRecordSessionId).toBe(263)
+    expect(navigate).toHaveBeenCalledWith({ to: '/agents' })
+    expect(useAIChatPanel.getState().pendingAgentSessionId).toBeNull()
+  })
+
+  // 生产库里的 6 条老行（run_worker 还没带 agentId 时发的）只能回查会话本身。
+  it.each([['agent'], ['team']])(
+    '无 agentId + 回查到 origin=%s 的 agent 会话 → 同样直达团队页',
+    async (origin) => {
+      const getSession = vi.fn().mockResolvedValue(row({ origin, agent_id: 'dms_helper' }))
+      const { navigate } = await land({ link: { type: 'session', sessionId: 263 } }, getSession)
+      expect(getSession).toHaveBeenCalledWith(263)
+      expect(useAgentsNavigation.getState().targetAgentId).toBe('dms_helper')
+      expect(useAgentsNavigation.getState().targetRecordSessionId).toBe(263)
+      expect(navigate).toHaveBeenCalledWith({ to: '/agents' })
+    }
+  )
+
+  it('回查到普通交互会话 → 维持现状（AI 分段），不进团队页', async () => {
+    const getSession = vi.fn().mockResolvedValue(row({ origin: null, agent_id: null }))
+    const { navigate } = await land({ link: { type: 'session', sessionId: 263 } }, getSession)
+    expect(useAIChatPanel.getState().pendingAgentSessionId).toBe(263)
+    expect(navigate).toHaveBeenCalledWith({ to: '/sessions' })
+    expect(useAgentsNavigation.getState().targetAgentId).toBeNull()
+  })
+
+  // 事项域命名空间的会话归事项页 —— 团队页没有对应成员，跳过去是一屏什么都没选中。
+  it.each([['matter:m_7fa3'], ['matter_item:m_7fa3']])(
+    'agent_id=%s（事项域）→ 维持现状，不进团队页',
+    async (agentId) => {
+      const getSession = vi.fn().mockResolvedValue(row({ origin: 'agent', agent_id: agentId }))
+      const { navigate } = await land({ link: { type: 'session', sessionId: 263 } }, getSession)
+      expect(useAgentsNavigation.getState().targetAgentId).toBeNull()
+      expect(useAIChatPanel.getState().pendingAgentSessionId).toBe(263)
+      expect(navigate).toHaveBeenCalledWith({ to: '/sessions' })
+    }
+  )
+
+  it('origin=agent 但 agent_id 缺失（老库行）→ 维持现状', async () => {
+    const getSession = vi.fn().mockResolvedValue(row({ origin: 'agent', agent_id: null }))
+    const { navigate } = await land({ link: { type: 'session', sessionId: 263 } }, getSession)
+    expect(useAgentsNavigation.getState().targetAgentId).toBeNull()
+    expect(navigate).toHaveBeenCalledWith({ to: '/sessions' })
+  })
+
+  // 🔴 回查失败不能吞成「点了没反应」：退回原来的 AI 分段分支，至少还打得开那个会话。
+  it('getSession 抛错 / 返回 null → 退回现状分支', async () => {
+    const thrown = await land({ link: { type: 'session', sessionId: 263 } }, () =>
+      Promise.reject(new Error('network down'))
+    )
+    expect(useAIChatPanel.getState().pendingAgentSessionId).toBe(263)
+    expect(thrown.navigate).toHaveBeenCalledWith({ to: '/sessions' })
+
+    useAIChatPanel.getState().consumeOpenAgentSession()
+    const missing = await land({ link: { type: 'session', sessionId: 263 } }, () =>
+      Promise.resolve(null)
+    )
+    expect(useAIChatPanel.getState().pendingAgentSessionId).toBe(263)
+    expect(missing.navigate).toHaveBeenCalledWith({ to: '/sessions' })
   })
 })
 

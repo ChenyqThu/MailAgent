@@ -230,7 +230,8 @@ evaluate/commit 代码一行未动。两处入口 guard 从「无 alerter 直接
 - **铃铛红点档**：`bellBadgeState()` 读 `unread-count.bySeverity`，未读里有 `critical` →
   红点（`SystemAlertBadge` 的 fail 配方），否则 accent 计数点。
 - **deep-link** `navigation.ts::resolveNotificationLink`：判别 union 的单源解析器，支持六
-  型——`session`（跳会话）/ `route`（白名单 `/agents`、`/admin/kanban`、`/settings`，
+  型——`session`（跳会话；落地单源 `navigation.ts::openNotificationSession`，面板点击与
+  macOS 系统通知点击共用）/ `route`（白名单 `/agents`、`/admin/kanban`、`/settings`，
   最后一个是 KOS dead 通知 `/settings?tab=integrations` 的落点，`77984a4a` 补入）/
   `report`（`navigateToReport` 直落 `/reports/$reportId`；08-27 P3 前是 store-intent
   `useReportNavigation` + `/agents?tab=reports`）/
@@ -238,6 +239,14 @@ evaluate/commit 代码一行未动。两处入口 guard 从「无 alerter 直接
   （现成 `useMatterNavigation`）/ `updater_restart`（直调 `api.updater.quitAndInstall()`，
   内建 `state!=='downloaded'` 守卫防误退出）。未知 type / 字段缺失 / 不在白名单 → 返回
   `null`，条目点击只标已读不跳转（前向兼容新版后端加的新 link 型）。
+- **`session` 型的落点（09-02）**：`run_worker.py` 给 `agent_run` / `contact_governance` 两类
+  job 的 link 追加 `agentId`（= report_agent 行 id，治理换算成 `contact_governance_agent`），
+  点击直达**团队页那位成员的记录档**并选中 `run.sessionId` / `session.id` 命中的那一行。
+  没有 `agentId` 的行（本次之前发的，不回填）先 `GET /chat/sessions/{id}` 回查一次：
+  `origin ∈ {agent, team}` 且 `agent_id` 非空且不在事项域命名空间 → 同上；否则维持
+  `requestOpenAgentSession` + `/sessions`（对话域 AI 分段）。🔴 headless run 的会话
+  （`origin='agent'`）不在 AI 分段的列表口径里，只按 sessionId 打开会得到一个左侧历史列
+  不出来的详情 —— 这是 owner dogfood 反馈的原症状。
 - 失效出口：`notificationMutation.ts::refreshNotifications`，query key 树
   `qk.notifications.{all,list,unreadCount}`（`queryKeys.ts`）——通知相关新顶层 key 一律加进
   这一个文件，不在调用点各写一份 `invalidateQueries`。

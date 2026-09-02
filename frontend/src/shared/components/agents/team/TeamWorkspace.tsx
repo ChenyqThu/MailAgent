@@ -6,7 +6,7 @@
 //   🔴 当前档不在新成员可选集里时纠正（clampMemberTab；主 Agent 只有设置档，
 //      从别人的「执行」档切过去不能白屏）。
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { ChevronLeft, MessageSquare } from 'lucide-react'
@@ -50,6 +50,8 @@ function MemberDetail({
   recordCollapsed,
   onToggleRecordCollapsed,
   forcedRecordCollapsed,
+  focusSessionId,
+  onFocusConsumed,
   onBack
 }: {
   member: TeamMember
@@ -59,6 +61,9 @@ function MemberDetail({
   recordCollapsed: boolean
   onToggleRecordCollapsed: () => void
   forcedRecordCollapsed: boolean
+  /** 记录直达要选中的那条记录（通知深链）；null = 无，记录列走它自己的默认落点。 */
+  focusSessionId: number | null
+  onFocusConsumed: () => void
   /** 窄窗单栏时的返回入口；宽窗不传。 */
   onBack?: () => void
 }): React.ReactElement {
@@ -135,6 +140,8 @@ function MemberDetail({
           collapsed={recordCollapsed}
           onToggleCollapsed={onToggleRecordCollapsed}
           forcedCollapsed={forcedRecordCollapsed}
+          focusSessionId={focusSessionId}
+          onFocusConsumed={onFocusConsumed}
         />
       ) : (
         // 🔴 这里不再滚动：配置页骨架自带滚动容器，外面再套一层 overflow-y-auto 就是
@@ -182,6 +189,9 @@ export function TeamWorkspace(): React.ReactElement {
   const [tab, setTab] = useState<TeamViewTab>(members[0].tabs[0])
   const [recordCollapsed, setRecordCollapsed] = useState(false)
   const [mobileDetail, setMobileDetail] = useState(false)
+  // 记录直达的目标会话（通知深链）：由下面的 intent effect 写入，记录列找到那一行即回钩清空。
+  const [focusSessionId, setFocusSessionId] = useState<number | null>(null)
+  const clearFocusSession = useCallback(() => setFocusSessionId(null), [])
   // 新建自定义 Agent 态（design §8.4：新建走设置，只有设置档，保存后才有对话）。
   const [creating, setCreating] = useState(false)
 
@@ -193,13 +203,19 @@ export function TeamWorkspace(): React.ReactElement {
   const selectMember = (m: TeamMember): void => {
     setSelectedKey(m.key)
     setTab(m.tabs[0])
+    // 手动换成员 = 放弃深链的记录目标；留着它会在新成员的记录列里乱选一行。
+    setFocusSessionId(null)
     if (narrow) setMobileDetail(true)
   }
 
-  // 跨页直达（通讯录工作台「去配置」）：store 点名 agent id → 选中该成员并落设置档。
+  // 跨页直达：store 点名 agent id → 选中该成员。两种目标 —— 通讯录「去配置」落设置档；
+  // agent 执行终态通知（09-02）另点名一个 session id，落记录档并把它交给记录列去选中。
   // 🔴 等 isLoading 落定再消费（查询在途时消费 = 深链被吃掉）；
   // 目标不在（老库没播种）时只清 intent。
   const navigationTargetAgentId = useAgentsNavigation((state) => state.targetAgentId)
+  const navigationTargetRecordSessionId = useAgentsNavigation(
+    (state) => state.targetRecordSessionId
+  )
   const clearAgentsNavigation = useAgentsNavigation((state) => state.clear)
   useEffect(() => {
     if (navigationTargetAgentId === null || isLoading) return
@@ -207,11 +223,20 @@ export function TeamWorkspace(): React.ReactElement {
     if (target) {
       setCreating(false)
       setSelectedKey(target.key)
-      setTab('settings')
+      setTab(navigationTargetRecordSessionId != null ? 'record' : 'settings')
+      // 记录列自己按 entries 找那一行（数据可能还在途）—— 这里只把目标递过去。
+      setFocusSessionId(navigationTargetRecordSessionId)
       if (narrow) setMobileDetail(true)
     }
     clearAgentsNavigation()
-  }, [navigationTargetAgentId, isLoading, members, clearAgentsNavigation, narrow])
+  }, [
+    navigationTargetAgentId,
+    navigationTargetRecordSessionId,
+    isLoading,
+    members,
+    clearAgentsNavigation,
+    narrow
+  ])
 
   // 新建入口的门控与流转。表单本体 = agent-config lane 的 CustomAgentCreateView；
   // 创建成功 → 选中新成员落设置档。
@@ -231,6 +256,8 @@ export function TeamWorkspace(): React.ReactElement {
     setCreating(false)
     setSelectedKey(memberRefKey({ kind: 'agent', agentId }))
     setTab('settings')
+    // 同 selectMember：换了成员就放弃深链的记录目标。
+    setFocusSessionId(null)
   }
 
   const title = memberTitle(member, mainName, t('agents.custom.runs.unknownAgent'))
@@ -265,6 +292,8 @@ export function TeamWorkspace(): React.ReactElement {
       recordCollapsed={recordCollapsed}
       onToggleRecordCollapsed={() => setRecordCollapsed((v) => !v)}
       forcedRecordCollapsed={forcedRecordCollapsed}
+      focusSessionId={focusSessionId}
+      onFocusConsumed={clearFocusSession}
       onBack={narrow ? () => setMobileDetail(false) : undefined}
     />
   )

@@ -7,7 +7,7 @@
 // 🔴 记录列是一条时间线：会话与执行按时间倒序穿插（mergeMemberTimeline），不按来源分块。
 // 组件用 `key={member.key}` 挂载（TeamWorkspace 侧）——换成员时选中态自然重置。
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { ChevronLeft, ChevronRight, MessageSquarePlus, Zap } from 'lucide-react'
@@ -202,7 +202,9 @@ export function TeamRecordPane({
   memberTitle,
   collapsed,
   onToggleCollapsed,
-  forcedCollapsed
+  forcedCollapsed,
+  focusSessionId,
+  onFocusConsumed
 }: {
   member: TeamMember
   memberTitle: string
@@ -210,6 +212,9 @@ export function TeamRecordPane({
   onToggleCollapsed: () => void
   /** 窄窗强制收起（判据与二级栏 forcedCollapsed 同构：留给详情的宽度不够时列让位）。 */
   forcedCollapsed: boolean
+  /** 通知深链点名的那条记录（会话 id）。找不到就不动，等下一次 entries 变化。 */
+  focusSessionId?: number | null
+  onFocusConsumed?: () => void
 }): React.ReactElement {
   const { t } = useTranslation()
   const source = member.recordSource
@@ -255,6 +260,21 @@ export function TeamRecordPane({
     if (picked != null && rows.some((r) => r.key === picked)) return picked
     return defaultKey
   }, [picked, rows, member.canChat, defaultKey])
+
+  // 通知深链点名的那条记录：run 行（run.sessionId）与会话行（session.id）都可能是它 ——
+  // 同一个 headless run 在时间线里只留其中一种形态（有 run 台账时会话行被去重掉）。
+  // entries 在途时找不到就等下一次变化，不回落到默认选中项（那会让深链看起来「跳错了」）。
+  useEffect(() => {
+    if (focusSessionId == null) return
+    const hit = entries.find(
+      (entry) =>
+        (entry.kind === 'run' && entry.run.sessionId === focusSessionId) ||
+        (entry.kind === 'session' && entry.session.id === focusSessionId)
+    )
+    if (!hit) return
+    setPicked(hit.key)
+    onFocusConsumed?.()
+  }, [entries, focusSessionId, onFocusConsumed])
 
   const effectiveCollapsed = forcedCollapsed || collapsed
 

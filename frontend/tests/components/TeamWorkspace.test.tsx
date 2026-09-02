@@ -778,6 +778,58 @@ describe('导入 Agent / 用模板创建', () => {
 })
 
 describe('跨页直达（通讯录「去配置」store-intent）', () => {
+  // 09-02 通知深链修正：agent 执行终态通知的落点是**团队页这位成员的那条记录**，不是对话域
+  // AI 分段（那一段按 origin 过滤根本不列 origin='agent' 的行）。这里钉的是 intent 的消费端：
+  // 选中成员 + 落记录档 + 把选中态挪到命中行 —— 三件缺一件，点通知都还是「跳错地方」。
+  test('记录直达：openRecord(agentId, sessionId) → 记录档 + 命中那条 run 行被选中', async () => {
+    mockListRuns.mockResolvedValue({
+      items: [
+        {
+          jobId: 1,
+          agentId: 'dms_helper',
+          state: 'completed',
+          createdAt: 1_700_000_002_000,
+          summary: '别的执行',
+          triggerKind: 'schedule'
+        },
+        // 🔴 目标行故意是**更旧**的那条：默认落点（能对话 → 新会话；不能 → 最新一条）都不是
+        // 它，选中态落在这里才证明 intent 真的生效，而不是恰好等于默认。
+        {
+          jobId: 2,
+          agentId: 'dms_helper',
+          state: 'completed',
+          createdAt: 1_700_000_001_000,
+          summary: '通知指向的执行',
+          sessionId: 263,
+          triggerKind: 'schedule'
+        }
+      ],
+      total: 2
+    })
+    useAgentsNavigation.getState().openRecord('dms_helper', 263)
+    const container = await renderWorkspace()
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-team-member-detail="member:agent:dms_helper"]')
+      ).toBeTruthy()
+    })
+    // 落记录档（「去配置」那条直达才落设置档）。
+    await waitFor(() => expect(container.querySelector('[data-record-row="run:2"]')).toBeTruthy())
+    expect(container.querySelector('[data-team-record-pane]')).toBeTruthy()
+    expect(container.querySelector('[data-team-settings]')).toBeNull()
+    // 选中类落在命中行，且详情面换成了那次执行。
+    const selected = 'bg-ink-fg/[0.07]'
+    await waitFor(() => {
+      expect(container.querySelector('[data-record-row="run:2"]')?.className).toContain(selected)
+    })
+    expect(container.querySelector('[data-record-row="run:1"]')?.className).not.toContain(selected)
+    expect(container.querySelector('[data-record-new]')?.className).not.toContain(selected)
+    expect(container.querySelector('[data-team-run-detail="job:2"]')).toBeTruthy()
+    // intent 消费即清（两个字段一起）。
+    expect(useAgentsNavigation.getState().targetAgentId).toBeNull()
+    expect(useAgentsNavigation.getState().targetRecordSessionId).toBeNull()
+  })
+
   test('store 点名 agent id → 选中该成员并落设置档，消费即清', async () => {
     useAgentsNavigation.getState().openConfig('dms_helper')
     const container = await renderWorkspace()

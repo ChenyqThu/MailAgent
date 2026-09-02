@@ -29,7 +29,6 @@ import {
 import type { NotificationCategory, NotificationItem } from '@shared/api/types/notifications'
 import { cn } from '@shared/lib/cn'
 import { ageLabel } from '@shared/lib/ageLabel'
-import { requestOpenAgentSession } from '@shared/state/ai-chat-panel'
 import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -47,7 +46,11 @@ import {
   useResolveNotification,
   useSnoozeNotification
 } from './hooks'
-import { navigateNotificationRoute, resolveNotificationLink } from './navigation'
+import {
+  navigateNotificationRoute,
+  openNotificationSession,
+  resolveNotificationLink
+} from './navigation'
 import { NotificationListSkeleton } from './NotificationSkeleton'
 import {
   NOTIFICATION_TAB_IDS,
@@ -349,8 +352,11 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
     onClose()
     switch (link.type) {
       case 'session':
-        requestOpenAgentSession(link.sessionId)
-        void navigate({ to: '/sessions' })
+        // 落地单源在 ./navigation（与系统通知点击共用）：带 agentId / 回查判定是 agent 的
+        // 会话 → 团队页那位成员的记录档；其余仍是对话域 AI 分段。
+        void openNotificationSession(navigate, link, {
+          getSession: (id) => api.chat.getSession(id)
+        })
         return
       case 'group':
         // 群会话不是主 agent 会话面：走群聊分段的落地单源（与系统通知点击共用那一处）。

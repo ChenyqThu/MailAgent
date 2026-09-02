@@ -1,8 +1,9 @@
 // 通知条目 deep-link 的**单源解析器**（task 08-20-notification-center 步骤 7；design §6.4）。
 //
-// 载荷来自后端 `payload_json.link`，是判别 union。这里只做「解析 + 白名单」，跳转动作留在
-// 组件里（`useNavigate` 是 hook，且 TanStack Router 的 `to` 是字面量联合类型 —— 解析器返回
-// 收窄后的字面量，组件用 switch 逐个字面量 navigate，全程零 `as any`）。
+// 载荷来自后端 `payload_json.link`，是判别 union。这里做「解析 + 白名单」，以及 route /
+// session 两型的**落地单源**（`navigate` 由调用方传进来 —— `useNavigate` 是 hook，且
+// TanStack Router 的 `to` 是字面量联合类型：解析器返回收窄后的字面量，落地函数用 switch
+// 逐个字面量 navigate，全程零 `as any`）。其余型的落地动作仍在组件里。
 //
 // 🔴 未知 type / 字段缺失 / 路由不在白名单 → 返回 null，条目点击**只标已读不跳转**（前向
 // 兼容：新版后端加了新 link 型，老前端不炸也不乱跳）。白名单只列信源真会发的目标
@@ -25,15 +26,22 @@ import {
 // 只引类型：本模块运行时不依赖 router。
 import type { useNavigate } from '@tanstack/react-router'
 
+import type { ChatSession } from '@shared/api/types'
+import { navigateToTeamRecord } from '@shared/components/agents/navigation'
+import { isMatterScopedAgentId } from '@shared/components/agents/team/teamTimeline'
 import { clampSettingsTab } from '@shared/lib/settingsTabs'
+import { requestOpenAgentSession } from '@shared/state/ai-chat-panel'
 
 export { NOTIFICATION_ROUTE_TARGETS, type NotificationRouteTarget }
 
 export type NotificationLink =
-  | { type: 'session'; sessionId: number }
+  /** agent 执行终态（`run_worker.py`）。`agentId` 自 09-02 起随 `agent_run` /
+   *  `contact_governance` 两类 job 一起发 —— 有它就直达团队页那位成员的那条记录；缺席的
+   *  （生产库里的老行、matter 系 job）由 `openNotificationSession` 回查会话再判归宿。 */
+  | { type: 'session'; sessionId: number; agentId?: string }
   /** 群聊回复（electron main `appendGroupMessage` 的通知投影）→ 对话域「群聊」分段的那个群。
-   *  与 `session` 分开：那一型走 requestOpenAgentSession = AI 分段的主 agent 会话面，塞群 id
-   *  会落空白。 */
+   *  与 `session` 分开：那一型的落点是 AI 分段的主 agent 会话面或团队页记录档，塞个群 id
+   *  进去两边都落空白。 */
   | { type: 'group'; sessionId: number }
   | { type: 'route'; to: NotificationRouteTarget; search: Record<string, unknown> | null }
   /** 报告完成（`reports/worker.py`）→ `/reports/$reportId`（08-27 P3 前是
@@ -66,7 +74,12 @@ export function resolveNotificationLink(
     const sessionId = link.sessionId
     // 后端 `_session_id_of` 拿不到会话时发的是 route 退化型；这里再守一道 0/负数/非整数。
     if (typeof sessionId !== 'number' || !Number.isInteger(sessionId) || sessionId <= 0) return null
-    return { type: 'session', sessionId }
+    // 空串 / 非字符串的 agentId 一律当没有（落地时会去回查会话），不带一个查不到成员的
+    // 空 id 上路 —— 那会让「跳过去什么都没选中」看起来像功能坏了。
+    const agentId = nonEmptyString(link.agentId)
+    return agentId === null
+      ? { type: 'session', sessionId }
+      : { type: 'session', sessionId, agentId }
   }
 
   if (link.type === 'group') {
@@ -136,4 +149,42 @@ export function navigateNotificationRoute(
       return exhaustive
     }
   }
+}
+
+/**
+ * session 型链接的落地单源（09-02 通知深链修正）。面板内点击与 macOS 系统通知点击共用
+ * 这一处 —— 分三支，抄第二份必漂。
+ *
+ * 🔴 归宿判据：agent 干的活（headless run 的降级会话行 / 人以 agent 身份开的会话）在**团队页
+ * 那位成员的记录档**里，不在对话域 AI 分段 —— 后者按 origin 组合过滤根本不列 origin='agent'
+ * 的行，`requestOpenAgentSession` 把它塞进去只会「详情与左侧历史对不上」（owner 09-02 dogfood
+ * 反馈的那一条）。
+ *
+ * `agentId` 缺席的老通知行（生产库 6 条）只能回查会话本身。`getSession` 由调用方注入，落地
+ * 测试因此零网络；回查失败（网络断 / 行已删）不吞成「点了没反应」，退回 AI 分段那一支。
+ */
+export async function openNotificationSession(
+  navigate: NavigateFn,
+  link: Extract<NotificationLink, { type: 'session' }>,
+  deps: { getSession(sessionId: number): Promise<ChatSession | null> }
+): Promise<void> {
+  if (link.agentId !== undefined) {
+    navigateToTeamRecord(navigate, link.agentId, link.sessionId)
+    return
+  }
+  const row = await deps.getSession(link.sessionId).catch(() => null)
+  const agentId = row?.agent_id
+  if (
+    (row?.origin === 'agent' || row?.origin === 'team') &&
+    agentId != null &&
+    agentId.length > 0 &&
+    // 事项域命名空间（`matter:` / `matter_item:`）的会话归事项页，团队页没有对应成员 ——
+    // 判据复用 teamTimeline 的那一处，不在这里手抄第二份前缀表。
+    !isMatterScopedAgentId(agentId)
+  ) {
+    navigateToTeamRecord(navigate, agentId, link.sessionId)
+    return
+  }
+  requestOpenAgentSession(link.sessionId)
+  void navigate({ to: '/sessions' })
 }
