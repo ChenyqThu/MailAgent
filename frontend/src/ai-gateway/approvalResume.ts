@@ -191,6 +191,9 @@ export async function resumeApprovalRun(
   // the ToolSet, so without this the custom_agent_call recursion guard would silently drop on
   // resume). Same server-fact discipline as handleChat: resolved from the stashed sessionId,
   // never from the frozen body. Non-team sessions resolve null → byte-identical replay.
+  // g2 — the GROUP-session counterpart (isGroupSession → main-agent版 group tools withheld) needs
+  // no lookup here: prepareChatRun computes it itself from the replayed body.sessionId, single
+  // source for every entrypoint.
   let sessionAgent: SessionAgentIdentity | null = null
   if (entry.sessionId != null && cfg.resolveSessionAgent) {
     try {

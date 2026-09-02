@@ -11,6 +11,12 @@
 //    (inconsistent) wire params; see python/domainClient.ts.
 
 import { z } from 'zod'
+import {
+  GROUP_HISTORY_LIMIT_MAX,
+  GROUP_POST_TEXT_MAX_CHARS,
+  MAX_GROUP_MEMBERS,
+  RESPONSE_MODES
+} from '../groupFloors'
 import { FEEDBACK_FREQUENCIES, FEEDBACK_KINDS } from '../../shared/feedback/contract'
 import { REPORT_CADENCES, reportBlockInputSchema } from '../../shared/api/reportBlocks'
 import {
@@ -2020,6 +2026,46 @@ export const customAgentCallSchema = z
   })
   .strict()
 export type CustomAgentCallInput = z.infer<typeof customAgentCallSchema>
+
+// ── L4 群聊 g2 — group tool schemas (tools/groups.ts). Shape only: the member-count bound is
+//    the same MAX_GROUP_MEMBERS the serve-api enforces, but existence / chat-capable / subset /
+//    single-level-nesting are business rules that live ONLY in routers/chat.py (红线 5) — zod
+//    never mirrors them. Every numeric bound is imported from groupFloors (no bare numbers). ──
+
+/** group_history — one page of a group transcript, newest page first (`before_message_id` walks
+ *  back). `session_id` omitted = the current group (member / judge runs only). */
+export const groupHistorySchema = z.object({
+  session_id: z.number().int().positive().optional(),
+  before_message_id: z.number().int().positive().optional(),
+  limit: z.number().int().min(1).max(GROUP_HISTORY_LIMIT_MAX).default(20)
+})
+export type GroupHistoryInput = z.infer<typeof groupHistorySchema>
+
+/** group_members — roster / response modes / judge / parent-child / this hour's usage. */
+export const groupMembersSchema = z.object({
+  session_id: z.number().int().positive().optional()
+})
+export type GroupMembersInput = z.infer<typeof groupMembersSchema>
+
+/** group_post — deliver one message into a group and wake its candidates. */
+export const groupPostSchema = z.object({
+  session_id: z.number().int().positive(),
+  text: z.string().min(1).max(GROUP_POST_TEXT_MAX_CHARS),
+  user_requested: z.boolean().optional()
+})
+export type GroupPostInput = z.infer<typeof groupPostSchema>
+
+/** group_create — build a group (optionally a subgroup) with an opening message. */
+export const groupCreateSchema = z.object({
+  title: z.string().min(1).max(200),
+  member_agent_ids: z.array(z.string().min(1).max(128)).min(1).max(MAX_GROUP_MEMBERS),
+  opening_text: z.string().min(1).max(GROUP_POST_TEXT_MAX_CHARS),
+  judge_agent_id: z.string().min(1).max(128).optional(),
+  modes: z.record(z.string(), z.enum(RESPONSE_MODES)).optional(),
+  parent_session_id: z.number().int().positive().optional(),
+  user_requested: z.boolean().optional()
+})
+export type GroupCreateInput = z.infer<typeof groupCreateSchema>
 
 // ── calendar schemas (calendar epic 4.1/4.2) — the agent reads the local calendar SSoT and
 //    proposes reschedule / RSVP / delete. Behind MAILAGENT_CALENDAR_AGENT_TOOLS. Reads are silent

@@ -33,11 +33,14 @@ export const GROUP_MAIN_AGENT_LABEL = '主助理'
 
 /** GroupHistoryRow + the v31 columns the orchestrator reads (row id / chain_id / metadata.via /
  *  created_at). The lifecycle's listGroupHistory projection fills them; hand-built v30 fixtures
- *  without them still satisfy assembleGroupHistory (via is read optionally there). */
+ *  without them still satisfy assembleGroupHistory (via is read optionally there).
+ *  g2 widens `via` with 'judge_post' — a judge's cross-group delivery row (role assistant,
+ *  chainId NULL = chain root, trigger_kind 'judge_post'); assembleGroupHistory labels only
+ *  role='user' rows, so a judge row keeps its speaker's own label. */
 export interface GroupTranscriptRow extends GroupHistoryRow {
   id: number
   chainId: number | null
-  via: 'main_agent' | null
+  via: 'main_agent' | 'judge_post' | null
   createdAt: number
 }
 

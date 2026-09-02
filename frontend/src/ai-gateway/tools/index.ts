@@ -53,11 +53,13 @@ import {
   type AgentContextMode,
   type AgentRunContext
 } from './policy'
-import type {
-  GatewayApprovalMode,
-  GatewayToolApprovalPrefs,
-  GatewayToolAuditCollector
+import {
+  stripOwnerDeniedTools,
+  type GatewayApprovalMode,
+  type GatewayToolApprovalPrefs,
+  type GatewayToolAuditCollector
 } from './types'
+import { createGroupTools, type GroupToolHooks } from './groups'
 // D1 (connector dogfood batch) — catalog row shape (prompt-land canonical, skillCatalog 先例).
 import type { ConnectorCatalogEntry } from '../prompts/stable_prompt'
 
@@ -190,6 +192,21 @@ export interface BuildGatewayToolsOpts {
     invokedBy: 'user' | 'main_agent'
   }) => number
   setAgentSessionJobId?: (sessionId: number, jobId: number) => void
+  /** L4 群聊 g2 — the MAIN-agent group tools (group_history / group_members / group_post /
+   *  group_create, tools/groups.ts). 三者缺一不注册：`enabled` = manual_chat AND labs
+   *  labs_group_agents on (prepareChatRun 热读，失败 false)；`isGroupSession` = the session
+   *  itself is origin='group' (prepareChatRun via cfg.resolveGroupSession, 🔴 fail-closed: a
+   *  failed lookup counts as a group session → not registered — a group run must never hold the
+   *  main-agent版 group tools, that is the recursion guard); `hooks` = the lifecycle-built
+   *  GroupToolHooks; `sessionId` = the current session (user_requested 核验 + 投递行
+   *  sourceSessionId; null → user_requested 恒退 ask). Absent (every non-manual entrypoint, the
+   *  headless wrapper structurally never forwards it) → assembly byte-identical. */
+  groupTools?: {
+    enabled: boolean
+    isGroupSession: boolean
+    hooks: GroupToolHooks
+    sessionId: number | null
+  }
   /** calendar epic 4.1/4.2 (MAILAGENT_CALENDAR_AGENT_TOOLS) — when true AND approvalGuard is
    *  supplied, the five calendar tools are added: calendar_events_list / calendar_event_get
    *  (silent reads; event text comes back CALENDAR_EVENT-fenced) + calendar_event_reschedule /
@@ -558,6 +575,33 @@ export function buildGatewayTools(
       })
     )
   }
+  // g2 — the MAIN-agent版 group tools (group_history / group_members / group_post / group_create).
+  // Three server facts gate it, all threaded from prepareChatRun: manual venue, no team identity
+  // (a team session must not reach into groups — same recursion guard as custom_agent_call), and
+  // 🔴 `isGroupSession !== true` — a group session's OWN run never holds this版 (its speaker turns
+  // get the member / judge factories via cfg.buildGroupSpeakerTools instead). `enabled` is
+  // labs.groupAgents; unlike custom_agent_call there is NO parentSessionId condition — a
+  // session-less chat may still list / create groups (sessionId null only退 user_requested to ask).
+  // Class capability_change (policy.ts) is the second lock for headless / im.
+  if (
+    contextMode === 'manual_chat' &&
+    opts.sessionAgentId == null &&
+    opts.groupTools?.enabled === true &&
+    opts.groupTools.isGroupSession !== true &&
+    opts.approvalGuard
+  ) {
+    Object.assign(
+      tools,
+      createGroupTools(collector, opts.approvalGuard, opts.groupTools.hooks, {
+        sessionId: opts.groupTools.sessionId,
+        contextMode,
+        approvalMode: opts.approvalMode,
+        toolApprovalPrefs: prefTiers,
+        a2uiEnabled: opts.a2uiEnabled,
+        oneShot: opts.oneShotWrites
+      })
+    )
+  }
   // calendar epic 4.1/4.2 — calendar tools behind MAILAGENT_CALENDAR_AGENT_TOOLS. Mixed set
   // (2 silent reads + 3 edit-tier writes) → all-or-nothing on flag + guard (profile-config 先例:
   // a write tool cannot exist without its guard, and registering only the reads would advertise a
@@ -715,20 +759,9 @@ export function buildGatewayTools(
     opts.agentRunContext?.modeGrants,
     opts.imWebEnabled === true ? { imWebEnabled: true } : undefined
   )
-  // 08-05 WP-11 — owner per-tool 'deny' strips the tool from the MANUAL ToolSet (the model
-  // cannot see it — mirrors connector 'off'). Only EXPLICIT owner overrides can deny (factory
-  // defaults are ask|auto), only manual_chat (prefTiers is null otherwise — headless/im matrices
-  // untouched), and only built-in names (the prefs registry never contains mcp__* tools). The
-  // types.ts prefDenied hard-reject is the runtime belt behind this registration-face filter.
-  if (prefTiers) {
-    const denied = Object.entries(prefTiers)
-      .filter(([, p]) => p.source === 'owner' && p.tier === 'deny')
-      .map(([name]) => name)
-    if (denied.some((name) => name in filtered)) {
-      const out: ToolSet = { ...filtered }
-      for (const name of denied) delete out[name]
-      return out
-    }
-  }
-  return filtered
+  // 08-05 WP-11 — owner per-tool 'deny' strips the tool from the MANUAL ToolSet (prefTiers is
+  // null outside manual_chat — headless/im matrices untouched). The filter itself lives in
+  // types.ts (stripOwnerDeniedTools) so the g2 group factories share the exact same semantics;
+  // no hit → the same `filtered` object, byte-identical.
+  return stripOwnerDeniedTools(filtered, prefTiers)
 }

@@ -162,7 +162,8 @@ describe('POST /api/ai/group-chat retry 分支', () => {
               config: { v: 1 as const },
               modes: FACTS.modes,
               parentSessionId: null,
-              childSessionIds: []
+              childSessionIds: [],
+              judgeScopeStale: false
             }
           : null,
       listGroupHistory: () => [],

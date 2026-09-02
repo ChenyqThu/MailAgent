@@ -19,7 +19,7 @@
 // 🔴 read tools NEVER set `needsApproval` (silent tier). Approval lands with write
 //    tools in phase-03b/04b.
 
-import { tool, type FlexibleSchema, type Tool } from 'ai'
+import { tool, type FlexibleSchema, type Tool, type ToolSet } from 'ai'
 
 import { DomainError, type DomainPolicyVerdict } from '../python/domainClient'
 import { type ApprovalGuard, type ApprovalRecord, type ApprovalRisk } from '../security/approval'
@@ -83,7 +83,12 @@ export interface GatewayToolAuditEntry {
    *  08-05 (per-tool built-in tiers, WP-11) adds 'auto_tool_pref' — a BUILT-IN write executed
    *  card-free in manual_chat because its per-tool approval tier resolved 'auto' (explicit owner
    *  override or factory default), or a send whose every recipient sat inside the owner's send
-   *  whitelist (D2=a structured shape). Distinct from the connector-side 'auto_tool_mode'. */
+   *  whitelist (D2=a structured shape). Distinct from the connector-side 'auto_tool_mode'.
+   *  L4 群聊 g2 adds two card-free labels of the group tools (tools/groups.ts):
+   *  'auto_judge_scope' = a group JUDGE run executed group_post / group_create because its
+   *  judgeScopeHash still matched the member roster (no owner present, no card possible);
+   *  'auto_user_requested_verified' = the main agent's user_requested claim was VERIFIED
+   *  server-side against the last human message (never the model's self-report alone). */
   approvalStatus?:
     | 'approved'
     | 'edited'
@@ -96,6 +101,8 @@ export interface GatewayToolAuditEntry {
     | 'auto_reversible'
     | 'auto_user_requested'
     | 'auto_delegation_readonly'
+    | 'auto_judge_scope'
+    | 'auto_user_requested_verified'
     | 'approval_expired'
   /** S2 W1 — exec-tool whitelist audit (chat_tool_call.whitelist_rule_id): the PolicyRule id that
    *  auto-allowed this run without a card (approvalStatus='auto_whitelist'). null/omitted otherwise. */
@@ -184,6 +191,28 @@ export interface GatewayToolApprovalPrefs {
   /** D2=a — the send recipient whitelist (owner_settings, lowercase emails / '@domain' entries).
    *  Empty = the send always asks (the factory-default behaviour). */
   sendRecipientWhitelist: readonly string[]
+}
+
+/** 08-05 WP-11 — owner per-tool 'deny' strips the tool from the MANUAL ToolSet (the model
+ *  cannot see it — mirrors connector 'off'). Only EXPLICIT owner overrides can deny (factory
+ *  defaults are ask|auto), only manual_chat (the caller passes null/undefined prefTiers
+ *  otherwise — headless/im matrices untouched), and only built-in names (the prefs registry never
+ *  contains mcp__* tools). The auditedWriteTool prefDenied hard-reject is the runtime belt behind
+ *  this registration-face filter. No hit → the SAME object is returned (identity, byte-identical);
+ *  a hit → a shallow copy without the denied names. Lives here (a leaf) rather than in index.ts
+ *  so the g2 group factories (tools/groups.ts) can share it without an index↔groups import cycle. */
+export function stripOwnerDeniedTools(
+  tools: ToolSet,
+  prefTiers?: GatewayToolApprovalPrefs['tools']
+): ToolSet {
+  if (!prefTiers) return tools
+  const denied = Object.entries(prefTiers)
+    .filter(([, p]) => p.source === 'owner' && p.tier === 'deny')
+    .map(([name]) => name)
+  if (!denied.some((name) => name in tools)) return tools
+  const out: ToolSet = { ...tools }
+  for (const name of denied) delete out[name]
+  return out
 }
 
 /** True for an abort/cancel error — let it propagate untouched so the AI SDK
@@ -422,7 +451,10 @@ export function auditedWriteTool<I>(
   const whitelistRuleIdByCall = new Map<string, number | null>()
   const whitelistAuditStatusByCall = new Map<
     string,
-    'auto_user_requested' | 'auto_delegation_readonly'
+    | 'auto_user_requested'
+    | 'auto_delegation_readonly'
+    | 'auto_judge_scope'
+    | 'auto_user_requested_verified'
   >()
 
   // 07-16 (codex r1 P2-4) — same idiom for the card-skip paths of needsApproval: stash WHY the

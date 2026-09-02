@@ -35,6 +35,7 @@ import type {
   ReportListItem,
   SearchResult
 } from '@shared/api/types'
+import type { GroupConfig } from '@shared/chat_model'
 
 /** A serve-api domain error surfaced to the caller (tool execute turns it into a
  *  tool-error part). Mirrors the http_client ApiError shape ({code, message, hint?,
@@ -541,7 +542,25 @@ export interface DomainExecFileWriteResult {
 export interface DomainPolicyVerdict {
   decision: 'auto_allow' | 'ask'
   rule_id: number | null
-  audit_status?: 'auto_user_requested' | 'auto_delegation_readonly'
+  /** L4 群聊 g2 adds 'auto_judge_scope' (judge run, judgeScopeHash matched) and
+   *  'auto_user_requested_verified' (main agent, server-verified last human message) — both are
+   *  produced by the in-process group factories (tools/groups.ts), never by serve-api. */
+  audit_status?:
+    | 'auto_user_requested'
+    | 'auto_delegation_readonly'
+    | 'auto_judge_scope'
+    | 'auto_user_requested_verified'
+}
+
+/** L4 群聊 g2 — POST /chat/sessions/new data block of a GROUP session (the subset group_create
+ *  reads back). A subgroup echoes back its parent_session_id / invoked_by; a top-level group
+ *  carries null for both. */
+export interface DomainGroupSessionCreated {
+  id: number
+  title: string | null
+  members_json: string
+  parent_session_id?: number | null
+  invoked_by?: string | null
 }
 
 export interface DomainAgentCallEnqueueResult {
@@ -1522,6 +1541,53 @@ export class MailAgentDomainClient {
     return this._req<DomainChatMessage[]>('GET', `/chat/sessions/${sessionId}/messages`, {
       signal
     })
+  }
+
+  // ── group-session write primitives (L4 群聊 g2) — the ONLY serve-api writes of the group tool
+  //    family (tools/groups.ts): history / members / deliveries go through the in-process cfg
+  //    hooks, building a group and applying its config go here so the authoritative validation
+  //    (chat-capable members / MAX_GROUP_MEMBERS / subgroup ⊆ parent / single-level nesting)
+  //    stays in routers/chat.py — the gateway never mirrors it (红线 5).
+
+  /** group_create step 1 — POST /chat/sessions/new with groupMembers (恒 general anchor).
+   *  parentSessionId (subgroup) / invokedBy ('main_agent' | 'judge') only go on the wire when
+   *  present; a 4xx (non-subset / nested / not-a-group parent …) surfaces as DomainError
+   *  E_INVALID_ARG + hint for the model to read. */
+  createGroupSession(
+    input: {
+      title: string
+      groupMembers: string[]
+      parentSessionId?: number | null
+      invokedBy?: string
+    },
+    signal?: AbortSignal
+  ): Promise<DomainGroupSessionCreated> {
+    const body: Record<string, unknown> = {
+      title: input.title,
+      groupMembers: input.groupMembers
+    }
+    if (typeof input.parentSessionId === 'number') body.parentSessionId = input.parentSessionId
+    if (typeof input.invokedBy === 'string') body.invokedBy = input.invokedBy
+    return this._req<DomainGroupSessionCreated>('POST', '/chat/sessions/new', { body, signal })
+  }
+
+  /** group_create step 2 — PUT /chat/sessions/{id}/group-config (judge / modes / caps…; only
+   *  the keys passed are written, explicit null clears a key). Server-validated. */
+  setGroupConfig(
+    sessionId: number,
+    patch: Partial<GroupConfig> & { modes?: Record<string, 'realtime' | 'mention'> },
+    signal?: AbortSignal
+  ): Promise<void> {
+    return this._req<void>('PUT', `/chat/sessions/${sessionId}/group-config`, {
+      body: patch,
+      signal
+    })
+  }
+
+  /** group_create compensation — DELETE /chat/sessions/{id} (messages + tool calls cascade).
+   *  Idempotent server-side (an unknown id still answers deleted:true). */
+  deleteSession(sessionId: number, signal?: AbortSignal): Promise<void> {
+    return this._req<void>('DELETE', `/chat/sessions/${sessionId}`, { signal })
   }
 
   // ── self-mount primitives (M4) — the agent reads/proposes its own Standing Context docs +

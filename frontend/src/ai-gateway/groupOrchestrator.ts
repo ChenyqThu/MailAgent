@@ -21,6 +21,9 @@
 //    假 deps 即可跑完整条链；生产接线见 server.ts / ai_gateway_lifecycle.ts。
 // 🔴 级联（spoke 后 onGroupMessage(newRow)）由构造参数 `cascade` 控制，默认 true；这是 G5 的
 //    本质代价，递归有界只靠地板 —— 地板变异用例见 tests/ai-gateway/group_orchestrator.test.ts。
+// 🔴 g2 跨群投递（主 agent / 法官经 cfg.deliverGroupMessage 进来）：目标群的 scope 由工具工厂
+//    闭包强制（tools/groups.ts），本处对 sessionId **不做第二次校验**；父群 stopFamily 连带清掉
+//    子群的链与队列是拍板 E 的既定语义（子群 run 的 familySessionIds 含父群）—— g3 夜晚流程须知情。
 
 import { randomUUID } from 'node:crypto'
 
@@ -336,10 +339,20 @@ export class GroupOrchestrator {
     const facts = (await this.deps.resolveFacts(sessionId)) ?? null
     if (!facts) return { queued: [] }
     const chainId = isChainRootRow(row) ? row.id : (row.chainId as number)
+    // g2 — 法官跨群投递行（role assistant + metadata.via='judge_post'，chainId NULL = 链根）
+    // 是第四种触发；不带 via 的 assistant 行仍是成员级联（'agent'）。
     const triggerKind: GroupTriggerKind =
-      row.role === 'user' ? (row.via === 'main_agent' ? 'main_agent' : 'human') : 'agent'
-    // no_candidates 只对人类 / 主 agent 触发发：成员级联末尾候选为空是链正常结束。
-    const announceEmpty = triggerKind === 'human' || triggerKind === 'main_agent'
+      row.role === 'user'
+        ? row.via === 'main_agent'
+          ? 'main_agent'
+          : 'human'
+        : row.via === 'judge_post'
+          ? 'judge_post'
+          : 'agent'
+    // no_candidates 只对人类 / 主 agent / 法官投递触发发：成员级联末尾候选为空是链正常结束，
+    // 而法官投出去却没人醒是要能看见的事。
+    const announceEmpty =
+      triggerKind === 'human' || triggerKind === 'main_agent' || triggerKind === 'judge_post'
     const mentioned = parseGroupMentions(row.content, facts.members)
     const realtime = facts.members
       .filter((m) => (facts.modes[m.agentId] ?? 'mention') === 'realtime')

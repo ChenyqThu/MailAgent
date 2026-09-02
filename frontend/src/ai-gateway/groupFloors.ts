@@ -63,6 +63,10 @@ export const DUP_LOOKBACK = 8
 export const POSTS_PER_TURN_CAP = 2
 /** 一个 family 最多几个子群。 */
 export const SUBGROUPS_PER_FAMILY_CAP = 6
+/** g2 `group_history` 一页最多几行（消费点：tools/schemas.ts 的 zod `limit` 上限）。 */
+export const GROUP_HISTORY_LIMIT_MAX = 50
+/** g2 `group_post` / `group_create` 开场白的文本字符上限（消费点：tools/schemas.ts）。 */
+export const GROUP_POST_TEXT_MAX_CHARS = 4000
 
 // ── 词表（三处共用：system 行 metadata.reason / turn 台账 / i18n groupChat.stopped.<reason>）──
 

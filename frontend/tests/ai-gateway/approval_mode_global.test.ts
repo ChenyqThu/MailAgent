@@ -100,7 +100,9 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       null,
       undefined,
       // P4b — 第 7 槽 sessionAgentId（无团队身份 → null；见 team_agent_chat.test.ts）。
-      null
+      null,
+      // g2 — 第 8 槽 groupTools（本文件无 labs hook、无群会话 → 两者恒 false）。
+      { isGroupSession: false, enabled: false }
     )
   })
 
@@ -116,7 +118,9 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       null,
       undefined,
       // P4b — 第 7 槽 sessionAgentId（无团队身份 → null；见 team_agent_chat.test.ts）。
-      null
+      null,
+      // g2 — 第 8 槽 groupTools（本文件无 labs hook、无群会话 → 两者恒 false）。
+      { isGroupSession: false, enabled: false }
     )
   })
 
@@ -133,7 +137,9 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       null,
       undefined,
       // P4b — 第 7 槽 sessionAgentId（无团队身份 → null；见 team_agent_chat.test.ts）。
-      null
+      null,
+      // g2 — 第 8 槽 groupTools（本文件无 labs hook、无群会话 → 两者恒 false）。
+      { isGroupSession: false, enabled: false }
     )
     // body 'auto-reversible' → honored unchanged
     const b = makeCfg({ resolveGlobalApprovalMode: resolver })
@@ -146,7 +152,9 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       null,
       undefined,
       // P4b — 第 7 槽 sessionAgentId（无团队身份 → null；见 team_agent_chat.test.ts）。
-      null
+      null,
+      // g2 — 第 8 槽 groupTools（本文件无 labs hook、无群会话 → 两者恒 false）。
+      { isGroupSession: false, enabled: false }
     )
   })
 
@@ -165,7 +173,9 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
         null,
         undefined,
         // P4b — 第 7 槽 sessionAgentId（无团队身份 → null）。
-        null
+        null,
+        // g2 — 第 8 槽 groupTools（本文件无 labs hook、无群会话 → 两者恒 false）。
+        { isGroupSession: false, enabled: false }
       )
     }
   )
@@ -184,7 +194,9 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       null,
       undefined,
       // P4b — 第 7 槽 sessionAgentId（无团队身份 → null；见 team_agent_chat.test.ts）。
-      null
+      null,
+      // g2 — 第 8 槽 groupTools（本文件无 labs hook、无群会话 → 两者恒 false）。
+      { isGroupSession: false, enabled: false }
     )
   })
 
@@ -199,7 +211,9 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       null,
       undefined,
       // P4b — 第 7 槽 sessionAgentId（无团队身份 → null；见 team_agent_chat.test.ts）。
-      null
+      null,
+      // g2 — 第 8 槽 groupTools（本文件无 labs hook、无群会话 → 两者恒 false）。
+      { isGroupSession: false, enabled: false }
     )
   })
 
@@ -215,7 +229,9 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       null,
       undefined,
       // P4b — 第 7 槽 sessionAgentId（无团队身份 → null；见 team_agent_chat.test.ts）。
-      null
+      null,
+      // g2 — 第 8 槽 groupTools（本文件无 labs hook、无群会话 → 两者恒 false）。
+      { isGroupSession: false, enabled: false }
     )
     const b = makeCfg({ resolveGlobalApprovalMode: resolver })
     await runPrepared(b.cfg, body({ approvalMode: 'acceptEdits' }), 'manual_chat')
@@ -227,7 +243,9 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       null,
       undefined,
       // P4b — 第 7 槽 sessionAgentId（无团队身份 → null；见 team_agent_chat.test.ts）。
-      null
+      null,
+      // g2 — 第 8 槽 groupTools（本文件无 labs hook、无群会话 → 两者恒 false）。
+      { isGroupSession: false, enabled: false }
     )
   })
 })
@@ -246,7 +264,9 @@ describe('prepareChatRun — 08-05 WP-11 per-tool approval prefs injection (manu
       PREFS,
       undefined,
       // P4b — 第 7 槽 sessionAgentId（无团队身份 → null）。
-      null
+      null,
+      // g2 — 第 8 槽 groupTools（本文件无 labs hook、无群会话 → 两者恒 false）。
+      { isGroupSession: false, enabled: false }
     )
   })
 
@@ -265,7 +285,9 @@ describe('prepareChatRun — 08-05 WP-11 per-tool approval prefs injection (manu
         null,
         undefined,
         // P4b — 第 7 槽 sessionAgentId（无团队身份 → null）。
-        null
+        null,
+        // g2 — 第 8 槽 groupTools（本文件无 labs hook、无群会话 → 两者恒 false）。
+        { isGroupSession: false, enabled: false }
       )
     }
   )
@@ -284,7 +306,9 @@ describe('prepareChatRun — 08-05 WP-11 per-tool approval prefs injection (manu
       null,
       undefined,
       // P4b — 第 7 槽 sessionAgentId（无团队身份 → null；见 team_agent_chat.test.ts）。
-      null
+      null,
+      // g2 — 第 8 槽 groupTools（本文件无 labs hook、无群会话 → 两者恒 false）。
+      { isGroupSession: false, enabled: false }
     )
   })
 })

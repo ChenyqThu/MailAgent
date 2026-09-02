@@ -20,6 +20,7 @@
 
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { appendFileSync, existsSync, mkdirSync } from 'fs'
+import { createHash } from 'node:crypto'
 import { join } from 'path'
 
 import { startAiGatewayServer, type AiGatewayHandle } from '../../ai-gateway/server'
@@ -48,7 +49,17 @@ import {
 } from '../../ai-gateway/tools/connector'
 import type { ConnectorCatalogEntry } from '../../ai-gateway/prompts/stable_prompt'
 import type { ToolSet } from 'ai'
-import type { GatewayToolApprovalPrefs, GlobalApprovalMode } from '../../ai-gateway/tools/types'
+import {
+  stripOwnerDeniedTools,
+  type GatewayToolApprovalPrefs,
+  type GlobalApprovalMode
+} from '../../ai-gateway/tools/types'
+// g2 — the group speaker-run factories (member / judge) + the hook bundle the main-agent版 shares.
+import {
+  createGroupJudgeTools,
+  createGroupMemberTools,
+  type GroupToolHooks
+} from '../../ai-gateway/tools/groups'
 import {
   ApprovalGuard,
   HIGH_RISK_OUTBOUND_APPROVAL_TTL_MS,
@@ -99,6 +110,7 @@ import {
   getQueuedInput,
   getSession,
   listDispatchableQueuedInput,
+  listLastNMessages,
   listQueuedInput,
   listMessages,
   markSent,
@@ -266,16 +278,44 @@ function parseGroupConfig(raw: string | null): GroupConfig {
   }
 }
 
-/** g1 群编排 — 一条群消息的 `metadata.via`。今天只有 'main_agent'（主助理投递进群的行），其余
- *  一律 null。🔴 装配侧据此标 `[主助理]`，**不用** speaker_agent_id 哨兵（那会污染成员命名空间）。 */
-function readMessageVia(metadata: string | null): 'main_agent' | null {
+/** g2 — 法官免卡锚是否失配：有法官位且 `sha256(members_json 原文 utf-8).hexdigest` ≠ 群设置里
+ *  owner 确认法官位时写入的 judgeScopeHash。🔴 钉的是**原文**（等价重排也算变）—— 与 src/chat/db.py
+ *  get_group_config / put_group_config 同口径（闸 tests/config/test_judge_scope_hash_parity.py），
+ *  绝不从解析后的 members[] 重新序列化。无法官 → false。 */
+export function computeJudgeScopeStale(
+  rawMembersJson: string | null,
+  config: { judgeAgentId?: string | null; judgeScopeHash?: string | null }
+): boolean {
+  if (config.judgeAgentId == null) return false
+  const digest = createHash('sha256')
+    .update(rawMembersJson ?? '', 'utf8')
+    .digest('hex')
+  return digest !== config.judgeScopeHash
+}
+
+/** g1 群编排 — 一条群消息的 `metadata.via`：'main_agent'（主助理投递进群的行）、g2 的
+ *  'judge_post'（法官跨群投递的链根行，调度器据此定 trigger_kind），其余一律 null。
+ *  🔴 装配侧据此标 `[主助理]`，**不用** speaker_agent_id 哨兵（那会污染成员命名空间）。 */
+function readMessageVia(metadata: string | null): 'main_agent' | 'judge_post' | null {
   if (typeof metadata !== 'string' || metadata.length === 0) return null
   try {
     const parsed = JSON.parse(metadata) as { via?: unknown }
-    return parsed?.via === 'main_agent' ? 'main_agent' : null
+    if (parsed?.via === 'main_agent') return 'main_agent'
+    if (parsed?.via === 'judge_post') return 'judge_post'
+    return null
   } catch {
     return null
   }
+}
+
+/** g2 — 本会话最近一条 role='user' 行的正文（主 agent 版 group_post / group_create 的
+ *  user_requested 核验只读这一份服务端事实，绝不读请求 body）。近 30 行里没有人类消息 → null
+ *  → 工厂退 ask。 */
+function lastHumanMessageText(sessionId: number): string | null {
+  const last = listLastNMessages(sessionId, 30)
+    .filter((row) => row.role === 'user')
+    .at(-1)
+  return last?.content ?? null
 }
 
 /** L4 群聊 UX 批 — renderer 经 `chat:group-foreground` 上报的「此刻在前台的群」（null = 没有）。
@@ -1313,7 +1353,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       agentRunContext,
       toolApprovalPrefs,
       parentSessionId,
-      sessionAgentId
+      sessionAgentId,
+      groupTools
     ) => {
       // Stage 1 PR2/PR3 — dynamic MCP connector tools. Two admitted shapes (shouldLoadConnectorTools):
       // manual_chat without an agentRunContext (PR2, unchanged), and a headless agent run whose
@@ -1458,6 +1499,17 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // P4b — the team-session recursion guard input (tools/index.ts drops
           // custom_agent_call when non-null). Threaded verbatim from prepareChatRun's 7th slot.
           sessionAgentId,
+          // g2 — the main-agent版 group tools' gate inputs from prepareChatRun's 8th slot
+          // (labs on + not a group session), joined here with the hook bundle. The headless
+          // wrapper's 3-arg signature structurally never forwards the slot → undefined → absent.
+          groupTools: groupTools
+            ? {
+                enabled: groupTools.enabled,
+                isGroupSession: groupTools.isGroupSession,
+                hooks: groupToolHooks,
+                sessionId: parentSessionId ?? null
+              }
+            : undefined,
           findSessionByParentToolCall,
           createAgentCallSession: (input) =>
             createAgentSession({
@@ -1541,12 +1593,14 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         // 只收还在名单里的成员（成员被移出群后残留的设置行不该影响候选集）。
         if (memberIds.includes(row.agentId)) modes[row.agentId] = row.responseMode
       }
+      const config = parseGroupConfig(session.group_config_json ?? null)
       return {
         members,
-        config: parseGroupConfig(session.group_config_json ?? null),
+        config,
         modes,
         parentSessionId: family.parentSessionId,
-        childSessionIds: family.childSessionIds
+        childSessionIds: family.childSessionIds,
+        judgeScopeStale: computeJudgeScopeStale(session.members_json ?? null, config)
       }
     },
     // v30（群聊）— the shared transcript, projected for server-side history assembly.
@@ -1614,6 +1668,31 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     advanceSeenCursor,
     insertGroupTurn: (row) => insertGroupTurn(row),
     groupUsage: (sessionIds, sinceMs) => groupUsage(sessionIds, sinceMs),
+    lastHumanMessageText,
+    // g2 — the group SPEAKER run's ToolSet (调度器 turns only; chatRun calls this instead of
+    // buildTools for identity.group.groupSpeakerRun). labs off → undefined (a member turn keeps
+    // the zero-tool posture; the judge factory is never even constructed — labs off must be
+    // byte-identical to g1). Facts are re-read here (not trusted from the spec) so the judge's
+    // judgeScopeStale is the current roster's. The judge result additionally passes the owner
+    // 'deny' strip: an owner-denied group_post is invisible to the judge, not silently asked.
+    buildGroupSpeakerTools: async (collector, spec) => {
+      if (!(await resolveLabsFlags()).groupAgents) return undefined
+      const facts = (await gatewayConfig.resolveGroupSession?.(spec.sessionId)) ?? null
+      if (!facts) return undefined
+      if (!spec.isJudge) {
+        return createGroupMemberTools(collector, groupToolHooks, { sessionId: spec.sessionId })
+      }
+      const tools = createGroupJudgeTools(collector, approvalGuard, groupToolHooks, {
+        sessionId: spec.sessionId,
+        judgeAgentId: spec.agentId,
+        familySessionIds: spec.familySessionIds,
+        judgeScopeStale: facts.judgeScopeStale,
+        contextMode: 'manual_chat',
+        toolApprovalPrefs: spec.toolApprovalPrefs?.tools,
+        a2uiEnabled
+      })
+      return stripOwnerDeniedTools(tools, spec.toolApprovalPrefs?.tools)
+    },
     // g1 — spoke turn → 一行 agent_run_log（团队页执行记录可见，AC6）。🔴 best-effort：跨库无
     // 事务（run log 在 sync_store.db、群消息在 ai_chat.db），失败只 warn —— ai_chat_group_turn
     // 才是权威源。status 值域按 run_log.py（completed / failed / skipped / running，**无
@@ -1768,6 +1847,40 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // Single-flight + fresh-cache short-circuit inside refreshConnectorManifest; the fetch is
     // 3s-bounded per request and never throws. Flag off → unwired → zero work, byte-identical.
     ensureConnectorManifest: mcpConnectorsEnabled ? () => refreshConnectorManifest() : undefined
+  }
+
+  // g2 — the hook bundle every group tool factory (main agent / member / judge) reads its facts
+  // through. Composed AFTER the cfg literal because it reuses the cfg's own group hooks (the
+  // factories only ever run at request time, long after both exist). 🔴 deliverGroupMessage is
+  // read LAZILY at call time: createAiGatewayServer writes it back onto gatewayConfig after the
+  // 调度器 is built, i.e. after this bundle is composed — capturing the value here would freeze
+  // `undefined` forever (E_GROUP_NOT_ORCHESTRATED on every post). Only group_create goes to
+  // serve-api (the membership / subset / nesting validation lives in routers/chat.py, never here).
+  const groupToolHooks: GroupToolHooks = {
+    resolveGroupSession: (sessionId) => gatewayConfig.resolveGroupSession!(sessionId),
+    listGroupHistory: (sessionId) => gatewayConfig.listGroupHistory!(sessionId),
+    appendGroupMessage: (sessionId, message) =>
+      gatewayConfig.appendGroupMessage!(sessionId, message),
+    groupUsage: (sessionIds, sinceMs) => groupUsage(sessionIds, sinceMs),
+    deliverGroupMessage: () => gatewayConfig.deliverGroupMessage,
+    getSessionTitle: (sessionId) => getSession(sessionId)?.title ?? null,
+    lastHumanMessageText,
+    createGroupSession: async (input) => {
+      const created = await domain.createGroupSession({
+        title: input.title,
+        groupMembers: input.memberAgentIds,
+        parentSessionId: input.parentSessionId,
+        invokedBy: input.invokedBy
+      })
+      return {
+        sessionId: created.id,
+        title: created.title ?? null,
+        members: parseGroupMemberIds(created.members_json),
+        parentSessionId: created.parent_session_id ?? input.parentSessionId
+      }
+    },
+    setGroupConfig: (sessionId, patch) => domain.setGroupConfig(sessionId, patch),
+    deleteSession: (sessionId) => domain.deleteSession(sessionId)
   }
 
   const postTurnChains = new Map<number, Promise<void>>()

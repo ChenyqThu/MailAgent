@@ -1991,6 +1991,13 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     (cfg.compactPersistence ? new CompactCoordinator(cfg, cfg.compactPersistence) : null)
   // g1 — one 调度器 per gateway process (single serial worker across every group session).
   const groupScheduler = buildGroupScheduler(cfg)
+  // g2 — the ONE delivery seam the group tools (group_post / group_create) reach the 调度器
+  // through: a narrow function written back onto the (mutable) cfg, so the lifecycle's tool hooks
+  // can read it lazily at call time without ever holding the instance (stopFamily / requeue never
+  // reach a tool). No 调度器 → the seam stays absent → the tools answer E_GROUP_NOT_ORCHESTRATED.
+  if (groupScheduler) {
+    cfg.deliverGroupMessage = (sessionId, row) => groupScheduler.onGroupMessage(sessionId, row)
+  }
   return createServer((req, res) => {
     const url = req.url ?? '/'
     const method = req.method ?? 'GET'

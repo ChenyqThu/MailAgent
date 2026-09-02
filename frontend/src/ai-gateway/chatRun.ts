@@ -479,15 +479,58 @@ export async function prepareChatRun(
   // P4b — the 7th slot carries the session's team-agent id into the assembly gate: an
   // agent-identity session must never register custom_agent_call (recursion guard). Non-team
   // runs pass undefined → assembly byte-identical.
-  // v30（群聊）— 🔴 a group-chat SPEAKER run holds ZERO tools by construction: buildTools is
-  // never called, whatever the client sent (A3 §3 发言 turn 无写工具 posture, enforced
-  // structurally — no allowlist to mis-configure). The custom_agent_call recursion guard is
-  // thereby subsumed (an empty ToolSet cannot delegate); identity.group is only ever set by
-  // handleGroupChat from server-resolved facts, never from the body.
+  // g2 — the main-agent版 group tools' assembly inputs, both SERVER facts computed HERE and only
+  // here (single source for all three entrypoints — handleChat / compact overflow retry /
+  // approvalResume — because every one of them goes through prepareChatRun; approvalResume
+  // deliberately does no lookup of its own). `isGroupSession` = the session is an origin='group'
+  // row → the main-agent版 group_post / group_create must NOT register (a group run reaching
+  // into groups is the recursion this guards). 🔴 fail-CLOSED: a throwing lookup counts as a
+  // group session — the opposite of resolveSessionAgent's fail-open, because the risk here is a
+  // group run gaining the tools, not a lost identity. `enabled` = labs.groupAgents (owner_settings,
+  // hot-read), any failure → false (never "tools quietly appear"). Both are manual_chat-only: the
+  // assembly gate is manual-only anyway and headless runs must perform zero group lookups.
+  let isGroupSession = false
+  let groupToolsEnabled = false
+  if (contextMode === 'manual_chat' && sessionId != null) {
+    if (cfg.resolveGroupSession) {
+      try {
+        isGroupSession = (await cfg.resolveGroupSession(sessionId)) != null
+      } catch (err) {
+        isGroupSession = true
+        console.warn(
+          '[ai-gateway] resolveGroupSession failed — treating session as a group (group tools withheld)',
+          err
+        )
+      }
+    }
+    if (cfg.resolveLabsFlags) {
+      try {
+        groupToolsEnabled = (await cfg.resolveLabsFlags()).groupAgents === true
+      } catch {
+        groupToolsEnabled = false
+      }
+    }
+  }
+  // v30（群聊）/ g2 — a group-chat SPEAKER run never calls buildTools: its ToolSet is decided by
+  // cfg.buildGroupSpeakerTools (member → the two reads pinned to its own group; judge → all
+  // four, family-scoped), and ONLY for a 调度器-driven turn (identity.group.groupSpeakerRun ===
+  // true). The v30 renderer-driven speaker turn keeps tools=undefined byte-identical (A3 §3
+  // 发言 turn 无写工具 posture). The custom_agent_call recursion guard stays subsumed (neither
+  // factory holds it); identity.group is only ever set by handleGroupChat / speakAsGroupMember
+  // from server-resolved facts, never from the body.
   const isGroupSpeakerRun = sessionAgent?.group != null
   const sessionAgentId = contextMode === 'manual_chat' ? (sessionAgent?.agentId ?? null) : null
+  const groupIdentity = sessionAgent?.group
   const tools = isGroupSpeakerRun
-    ? undefined
+    ? groupIdentity?.groupSpeakerRun === true && groupIdentity.sessionId != null
+      ? await cfg.buildGroupSpeakerTools?.(auditEntries, {
+          sessionId: groupIdentity.sessionId,
+          agentId: sessionAgent!.agentId,
+          isJudge: groupIdentity.isJudge === true,
+          familySessionIds: groupIdentity.familySessionIds ?? [groupIdentity.sessionId],
+          toolApprovalPrefs
+        })
+      : undefined
     : sessionId == null
       ? cfg.buildTools?.(
           auditEntries,
@@ -496,7 +539,8 @@ export async function prepareChatRun(
           undefined,
           toolApprovalPrefs,
           undefined,
-          sessionAgentId
+          sessionAgentId,
+          { isGroupSession, enabled: groupToolsEnabled }
         )
       : cfg.buildTools?.(
           auditEntries,
@@ -505,7 +549,8 @@ export async function prepareChatRun(
           undefined,
           toolApprovalPrefs,
           sessionId,
-          sessionAgentId
+          sessionAgentId,
+          { isGroupSession, enabled: groupToolsEnabled }
         )
   const hasTools = tools != null && Object.keys(tools).length > 0
   // W6 — the run holds the suggest_followups tool (manual chat with a real gateway ToolSet). Drives

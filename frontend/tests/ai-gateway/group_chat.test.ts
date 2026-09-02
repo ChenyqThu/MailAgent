@@ -376,7 +376,8 @@ describe('POST /api/ai/group-chat（服务端成员校验 + 发言 run）', () =
               config: { v: 1 as const },
               modes: {},
               parentSessionId: null,
-              childSessionIds: []
+              childSessionIds: [],
+              judgeScopeStale: false
             }
           : null,
       listGroupHistory: () => [
@@ -776,7 +777,8 @@ function orchestratedHooks(opts: {
             config: { v: 1 as const },
             modes: opts.modes,
             parentSessionId: null,
-            childSessionIds: []
+            childSessionIds: [],
+            judgeScopeStale: false
           }
         : null,
     listGroupHistory: (sessionId) => store.messages.filter((m) => m.sessionId === sessionId),

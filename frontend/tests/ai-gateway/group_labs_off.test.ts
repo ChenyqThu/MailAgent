@@ -110,7 +110,8 @@ function world(labs: 'off' | 'absent' | 'throws' | 'on'): World {
             config: { v: 1 as const },
             modes: { agent_a: 'realtime', agent_b: 'realtime' },
             parentSessionId: null,
-            childSessionIds: []
+            childSessionIds: [],
+            judgeScopeStale: false
           }
         : null,
     listGroupHistory: (sessionId) => messages.filter((m) => m.sessionId === sessionId),
@@ -250,7 +251,7 @@ describe('AC9 ② labs off — speaker 模式与 v30 逐字节一致', () => {
 })
 
 describe('AC9 ③ /api/ai/chat 与 labs 无关', () => {
-  test('labs on / off 的同一请求体 → 响应体 diff 为空；handleChat 从不读 labs hook', async () => {
+  test('labs on / off 的同一请求体 → 响应体 diff 为空；labs 只进 buildTools 第 8 槽，不进响应', async () => {
     const on = world('on')
     const off = world('off')
     const hOn = await start(on.config)
@@ -278,8 +279,10 @@ describe('AC9 ③ /api/ai/chat 与 labs 无关', () => {
       const [textOn, textOff] = await Promise.all([resOn.text(), resOff.text()])
       expect(textOn.length).toBeGreaterThan(0)
       expect(normalize(textOn)).toBe(normalize(textOff))
-      expect(on.resolveLabsFlags).not.toHaveBeenCalled()
-      expect(off.resolveLabsFlags).not.toHaveBeenCalled()
+      // g2 — prepareChatRun 热读 labs 决定主 agent 版群工具的 `enabled`（buildTools 第 8 槽，
+      // groups_assembly.test.ts AS4）；本 world 不接 buildTools，所以读了也不改响应一个字节。
+      expect(on.resolveLabsFlags).toHaveBeenCalledTimes(1)
+      expect(off.resolveLabsFlags).toHaveBeenCalledTimes(1)
       expect(on.turns).toEqual([])
       expect(off.turns).toEqual([])
     } finally {

@@ -114,6 +114,9 @@ import { resolveDataRoot } from '../db'
 // 'auto_bypass' (owner-global mode skips, send included) / 'auto_reversible' (the pre-existing
 // reversible-preview skip, previously indistinguishably audited 'approved') — 'approved'/'edited'
 // now always mean a real human card decision.
+// g2 (task 09-01-g2-agent-group-tools, NO version bump — same free-form-TEXT precedent): the group
+// tools add 'auto_judge_scope' (judge factory, judgeScopeHash matched) / 'auto_user_requested_verified'
+// (main-agent group_post/create, server-verified last human message); no ALTER, no CHECK.
 // v19 (S4 W3, task 07-02-s4-custom-agent-core) — ai_chat_sessions.origin + agent_id + agent_job_id:
 // a headless custom-agent run (cron/email-triggered, ADR-003 D3) persists into a first-class session
 // so it's visible/auditable in the SAME history UI. origin='agent' marks it (NULL for every

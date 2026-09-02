@@ -240,6 +240,10 @@ export interface GroupSessionFacts {
   parentSessionId: number | null
   /** g1 — 本群的子群 id（按 parent_session_id 反查，origin='group' 行）。family = 本群 ∪ 父 ∪ 子。 */
   childSessionIds: number[]
+  /** g2 — 法官免卡锚失配位：judgeAgentId != null 且 sha256(members_json 原文 utf-8).hexdigest !== config.judgeScopeHash。
+   *  🔴 lifecycle 用 session.members_json **原文**算（node:crypto），绝不从 members[] 重新序列化；与 src/chat/db.py
+   *  get_group_config 的 judgeScopeStale 同口径，闸 tests/config/test_judge_scope_hash_parity.py。无法官 → false。 */
+  judgeScopeStale: boolean
 }
 
 /** g1 — labs 实验开关的解析结果（今天只有一项；加项时两侧同批：serve-api `/api/agent/labs`）。 */
@@ -389,7 +393,9 @@ export interface AiGatewayConfig {
      *  session must never delegate to another agent (recursion guard — the manual_chat venue
      *  gate alone no longer suffices because team sessions ARE manual_chat). The headless
      *  wrapper's shorter signature structurally never forwards this slot. */
-    sessionAgentId?: string | null
+    sessionAgentId?: string | null,
+    /** g2 — 主 agent 版群工具的装配输入（一个对象；headless 三元包装器 agentRun.ts:427 结构性丢弃 = fail-closed）。 */
+    groupTools?: { isGroupSession: boolean; enabled: boolean }
   ) => ToolSet
   /** Test-harness-only override for deterministic single-step fixtures. Production never sets this;
    *  normal manual/headless runs use chatRun's 10k internal sentinel. */
@@ -429,12 +435,17 @@ export interface AiGatewayConfig {
     sessionId: number
   ) => Promise<SessionAgentIdentity | null> | SessionAgentIdentity | null
   /** v30（群聊）— resolve the GROUP facts of a session (origin='group' rows only; every other
-   *  origin resolves null). Called ONLY by POST /api/ai/group-chat; /api/ai/chat never consults
-   *  it, so a group sessionId posted there keeps today's main-agent semantics. The membership
-   *  check itself lives in SERVER CODE (handleGroupChat validates speakAsAgentId ∈ members —
-   *  a client-asserted identity is rejected there, S2 W0 spirit). The Electron wrapper reads
-   *  ai_chat.db members_json + report_agent rows (config fetch best-effort — see
-   *  GroupSessionMember). Omitted (tests / group feature not wired) → the endpoint 404s. */
+   *  origin resolves null). Two consumers: (1) POST /api/ai/group-chat (v30) — the membership
+   *  check itself lives in SERVER CODE (handleGroupChat validates speakAsAgentId ∈ members — a
+   *  client-asserted identity is rejected there, S2 W0 spirit); (2) g2 — prepareChatRun's
+   *  registration gate for the main-agent版 group tools: `isGroupSession = facts != null`, and
+   *  🔴 fail-closed — a throwing lookup counts as a group session (tools NOT registered), the
+   *  opposite direction of resolveSessionAgent's fail-open, because the risk here is a group run
+   *  gaining group_post / group_create (recursion), not a lost identity. Covers all three
+   *  entrypoints (handleChat / compact retry / approvalResume) because they all go through
+   *  prepareChatRun. The Electron wrapper reads ai_chat.db members_json + report_agent rows
+   *  (config fetch best-effort — see GroupSessionMember). Omitted (tests / group feature not
+   *  wired) → the group endpoint 404s and the gate treats the session as non-group. */
   resolveGroupSession?: (
     sessionId: number
   ) => Promise<GroupSessionFacts | null> | GroupSessionFacts | null
@@ -474,6 +485,30 @@ export interface AiGatewayConfig {
     }
   ) => number
 
+  /** g2 — 群 speaker run（成员 / 法官）的 ToolSet 工厂。chatRun 的 isGroupSpeakerRun 分支**仅当**
+   *  identity.group.groupSpeakerRun === true（调度器 turn）时调；v30 renderer-driven speaker 分支不调 → tools=undefined
+   *  字节一致。实现在 lifecycle（那里才有 approvalGuard / domain / prefs）。实现方 labs off 必返 undefined。 */
+  buildGroupSpeakerTools?: (
+    collector: GatewayToolAuditEntry[],
+    spec: {
+      sessionId: number
+      agentId: string
+      isJudge: boolean
+      familySessionIds: readonly number[]
+      /** prepareChatRun 已热读的 owner 档位（manual_chat）；法官实现内部只取 deny 条目。 */
+      toolApprovalPrefs: GatewayToolApprovalPrefs | null
+    }
+  ) => Promise<ToolSet | undefined> | ToolSet | undefined
+  /** g2 — 唯一投递缝。🔴 由 createAiGatewayServer 在构造调度器后写回本对象（compactCoordinator 先例
+   *  ai_gateway_lifecycle.ts:1788 证明 cfg 可变）。省略 = 无调度器 → group_post / group_create 返 E_GROUP_NOT_ORCHESTRATED。 */
+  deliverGroupMessage?: (
+    sessionId: number,
+    row: GroupTranscriptRow
+  ) => Promise<{ queued: string[] }>
+  /** g2 — 本会话最近一条 role='user' 行的正文（服务端事实，绝不读请求 body）。lifecycle 实现 =
+   *  listLastNMessages(sessionId, 30).filter(r => r.role === 'user').at(-1)?.content ?? null。 */
+  lastHumanMessageText?: (sessionId: number) => string | null
+
   /** g1 — labs 实验开关热读（真源 = agent_config.db owner_settings `labs_group_agents`，经
    *  serve-api `GET /api/agent/labs`）。照 resolveGlobalApprovalMode 形状：短 TTL 缓存 +
    *  有界超时，🔴 CONTRACTED 失败 → `{ groupAgents: false }`（fail-closed：够不着 serve-api
@@ -502,7 +537,9 @@ export interface AiGatewayConfig {
   /** g1 — the server-side group run 调度器. Omitted (the production shape) → createAiGatewayServer
    *  builds one from the group hooks + activeRuns above (all present → orchestrating is possible;
    *  any missing → null, /api/ai/group-chat answers `orchestrated:false` and never 409s). Set only
-   *  by tests that need `idle()` / `pendingFor()` on the instance the endpoints drive. */
+   *  by tests that need `idle()` / `pendingFor()` on the instance the endpoints drive.
+   *  g2：工具层的投递缝走 deliverGroupMessage（一个窄函数），不暴露实例 —— stopFamily / requeue
+   *  永不递到工具手上。 */
   groupScheduler?: GroupOrchestrator
   /** 08-05 WP-11 — hot-read the owner's per-tool approval tiers + send recipient whitelist
    *  (agent_config.db tool_approval_pref / owner_settings via GET /api/agent/tool-prefs). Called
