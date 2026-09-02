@@ -25,6 +25,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Info } from 'lucide-react'
 
 import type { ChatMessage, ChatSession } from '@shared/api/types'
+import type { GroupAttachment } from '@shared/chat_model'
 import { qk } from '@shared/lib/queryKeys'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useLabsFlags } from '@shared/hooks/useLabsFlags'
@@ -39,6 +40,7 @@ import {
 import { resolveAiGatewayBaseUrl } from '@shared/assistant/runtime/flags'
 import { getGroupConfig, getGroupTurns } from '@shared/api/groupSettings'
 
+import { parseAttachmentsMetadata } from '../../../../ai-gateway/groupAttachments'
 import { GroupComposer } from './GroupComposer'
 import { GroupHeader } from './GroupHeader'
 import type { RetryUiState } from './GroupMetaRow'
@@ -150,7 +152,6 @@ export function GroupChatView({
 
   const [live, setLive] = useState<LiveBubble[]>([])
   const [sending, setSending] = useState(false)
-  const [draft, setDraft] = useState('')
   const [stopping, setStopping] = useState(false)
   const [lastSentAt, setLastSentAt] = useState<number | null>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -291,12 +292,15 @@ export function GroupChatView({
   }, [retryStates, liveEvents.lastEventAt])
 
   /** labs on 的发送：只落一条用户消息，之后由服务端调度器接管（renderer 无发言循环）。 */
-  const sendOrchestrated = async (text: string): Promise<void> => {
+  const sendOrchestrated = async (
+    text: string,
+    attachments: readonly GroupAttachment[]
+  ): Promise<void> => {
     const userKey = `user-${Date.now()}`
     setLive([{ key: userKey, kind: 'user', text, status: 'done' }])
     setLastSentAt(Date.now())
     try {
-      await appendGroupUserMessage(sessionId, text)
+      await appendGroupUserMessage(sessionId, text, attachments)
     } catch (err) {
       patchLive(userKey, { status: 'failed', error: errorMessage(err) })
       setSending(false)
@@ -310,15 +314,15 @@ export function GroupChatView({
     setSending(false)
   }
 
-  const send = async (): Promise<void> => {
-    const text = draft.trim()
+  /** 两条路径共用的发送入口：正文由 GroupComposer trim 好，附件已由它读出（图片 text=null），
+   *  随 append 的 body 落进该行 metadata（T2 落法 β）。 */
+  const send = async (text: string, attachments: readonly GroupAttachment[]): Promise<void> => {
     if (text.length === 0 || sending || memberEntries.length === 0) return
     setSending(true)
-    setDraft('')
     // 上一轮的失败气泡随新一轮开始清掉（不落库，仅本地）。
     setLive([])
     if (await labs.ready()) {
-      await sendOrchestrated(text)
+      await sendOrchestrated(text, attachments)
       return
     }
     const controller = new AbortController()
@@ -328,7 +332,7 @@ export function GroupChatView({
     const userKey = `user-${Date.now()}`
     setLive([{ key: userKey, kind: 'user', text, status: 'done' }])
     try {
-      await appendGroupUserMessage(sessionId, text)
+      await appendGroupUserMessage(sessionId, text, attachments)
     } catch (err) {
       patchLive(userKey, { status: 'failed', error: errorMessage(err) })
       setSending(false)
@@ -380,12 +384,18 @@ export function GroupChatView({
     [messagesQ.data, labsOn, turnsQ.data, liveView, localBubbles]
   )
 
-  const mentionCount = useMemo(
-    () => (draft.trim().length > 0 ? parseGroupMentions(draft, memberEntries).length : 0),
-    [draft, memberEntries]
-  )
-  const wakeCount =
-    labsOn && draft.trim().length > 0 ? (mentionCount > 0 ? mentionCount : realtimeCount) : null
+  // 落库 user 行的附件（metadata.attachments → 气泡下的 chip）。本地气泡不带 chip：两条路径都在
+  // append 后 refetch，落库行接管时 chip 随之出现。
+  const attachmentsById = useMemo(() => {
+    const out = new Map<number, readonly GroupAttachment[]>()
+    for (const m of messagesQ.data ?? []) {
+      if (m.role !== 'user') continue
+      const attachments = parseAttachmentsMetadata(m.metadata)
+      if (attachments != null) out.set(m.id, attachments)
+    }
+    return out
+  }, [messagesQ.data])
+
   const emptyVariant: GroupThreadEmpty = !labsOn
     ? 'v1'
     : realtimeCount === 0
@@ -448,19 +458,21 @@ export function GroupChatView({
         retryStates={retryUiStates}
         onRetry={(item) => void retry(item)}
         onOpenDetails={onToggleDetails}
+        attachmentsById={attachmentsById}
+        // 在场态的 stalled / error 两支要的事实（turn 留痕 + 最近事件时刻）。labs off 没有事件源
+        // → null，在场行只能走 idle（不是「没失败过」，是「不知道」）。
+        live={labsOn ? liveView : null}
       />
 
       <GroupComposer
-        draft={draft}
-        onDraftChange={setDraft}
-        onSend={() => void send()}
+        onSend={send}
         sending={sending}
         disabled={gatewayState !== 'ok' || memberEntries.length === 0}
         members={memberEntries}
         modes={modes}
         labsOn={labsOn}
         labsLoading={labs.loading}
-        wakeCount={wakeCount}
+        realtimeCount={realtimeCount}
         runAlive={runAlive}
       />
     </div>

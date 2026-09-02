@@ -89,7 +89,7 @@ vi.mock('../../src/shared/components/agents/AgentAvatar', () => ({
 
 import i18n from '@shared/i18n'
 import type { ChatSession, ChatSessionListItem, ReportAgentConfig } from '@shared/api/types'
-import { useSessionsSegment } from '@shared/state/sessions-segment'
+import { useGroupsView } from '@shared/state/groups-view'
 import { GroupChatWorkspace } from '../../src/shared/components/agents/groups/GroupChatWorkspace'
 import { GroupChatView } from '../../src/shared/components/agents/groups/GroupChatView'
 import type { GroupMemberMeta } from '../../src/shared/components/agents/groups/members'
@@ -210,7 +210,7 @@ function msg(
 beforeEach(() => {
   cleanup()
   vi.clearAllMocks()
-  useSessionsSegment.setState({ segment: 'groups', activeGroupSessionId: null })
+  useGroupsView.setState({ activeGroupSessionId: null })
   mockGetConfig.mockResolvedValue(AGENTS)
   mockListMessages.mockResolvedValue([])
   mockAppendUser.mockResolvedValue(1)
@@ -224,7 +224,6 @@ beforeEach(() => {
 function renderWorkspace(items: ChatSessionListItem[] = [groupRow()]): HTMLElement {
   const { container } = render(
     <GroupChatWorkspace
-      headerSlot={<div data-header-slot />}
       items={items}
       invalidate={vi.fn()}
       narrow={false}
@@ -236,7 +235,7 @@ function renderWorkspace(items: ChatSessionListItem[] = [groupRow()]): HTMLEleme
 
 describe('GroupChatWorkspace', () => {
   test('W1 群列表行：标题 + 成员头像堆叠（≤3，members_json 序）+ 成员数', async () => {
-    const container = renderWorkspace([
+    renderWorkspace([
       groupRow(),
       groupRow({ id: 301, title: '四人群', members_json: '["a1","a2","x3","x4"]' })
     ])
@@ -252,7 +251,6 @@ describe('GroupChatWorkspace', () => {
     // 成员数文案（memberCount，两行各自的数字）。
     expect(screen.getByText('2 名成员')).toBeTruthy()
     expect(screen.getByText('4 名成员')).toBeTruthy()
-    expect(container.querySelector('[data-header-slot]')).toBeTruthy()
   })
 
   test('W2 新建群聊弹窗开合 + 候选过滤（只有 chat-capable 成员）', async () => {
@@ -313,7 +311,7 @@ describe('GroupChatWorkspace', () => {
     })
     // 创建后：draft 会话被选中 → 右侧群聊视图挂载。
     await waitFor(() => expect(document.querySelector('[data-group-chat="555"]')).toBeTruthy())
-    expect(useSessionsSegment.getState().activeGroupSessionId).toBe(555)
+    expect(useGroupsView.getState().activeGroupSessionId).toBe(555)
   })
 
   test('W5 拿不到本地 gateway（web）：建群入口禁用并说明原因', async () => {
@@ -395,8 +393,8 @@ describe('GroupChatView', () => {
     const container = renderView()
     await sendText(container, '大家汇报下')
     await waitFor(() => expect(mockRunSpeaker).toHaveBeenCalledTimes(1))
-    // 用户消息先落库，且第一个发言者是成员序第一位 a1。
-    expect(mockAppendUser).toHaveBeenCalledWith(300, '大家汇报下')
+    // 用户消息先落库（T2 起第三参恒是附件数组，无附件 = 空数组），且第一个发言者是成员序第一位 a1。
+    expect(mockAppendUser).toHaveBeenCalledWith(300, '大家汇报下', [])
     expect(mockRunSpeaker.mock.calls[0]?.[0]).toMatchObject({
       sessionId: 300,
       speakAsAgentId: 'a1'
@@ -457,7 +455,7 @@ describe('GroupChatView（labs on：服务端编排）', () => {
     const container = renderView()
     await waitForLabsOn()
     await sendText(container, '大家汇报下')
-    await waitFor(() => expect(mockAppendUser).toHaveBeenCalledWith(300, '大家汇报下'))
+    await waitFor(() => expect(mockAppendUser).toHaveBeenCalledWith(300, '大家汇报下', []))
     // 等一拍确认 renderer 没有自己起发言循环。
     await new Promise((r) => setTimeout(r, 30))
     expect(mockRunSpeaker).not.toHaveBeenCalled()
@@ -526,7 +524,6 @@ describe('GroupChatWorkspace — 二级栏契约（09-01 侧栏批）', () => {
   test('W6 清单列读 --app-second-w 且 navHidden 时整列隐藏（与 AgentThreadList 同契约）', () => {
     const { container } = render(
       <GroupChatWorkspace
-        headerSlot={<div data-header-slot />}
         items={[groupRow()]}
         invalidate={vi.fn()}
         narrow={false}
@@ -541,7 +538,6 @@ describe('GroupChatWorkspace — 二级栏契约（09-01 侧栏批）', () => {
 
     const { container: hidden } = render(
       <GroupChatWorkspace
-        headerSlot={<div data-header-slot />}
         items={[groupRow()]}
         invalidate={vi.fn()}
         narrow={false}
@@ -665,7 +661,7 @@ describe('GroupChatView（UX 批：事件 / 台账 / 重试 / composer）', () =
     expect(mockAppendUser).not.toHaveBeenCalled()
     expect(mockRunSpeaker).not.toHaveBeenCalled()
     resolveLabs({ groupAgents: 'on' })
-    await waitFor(() => expect(mockAppendUser).toHaveBeenCalledWith(300, '大家汇报下'))
+    await waitFor(() => expect(mockAppendUser).toHaveBeenCalledWith(300, '大家汇报下', []))
     await tick()
     expect(mockRunSpeaker).not.toHaveBeenCalled()
   })
@@ -691,13 +687,15 @@ describe('GroupChatView（UX 批：事件 / 台账 / 重试 / composer）', () =
     await waitForOn()
     await waitFor(() => expect(screen.getByText('大家汇报下')).toBeTruthy())
     emit({ phase: 'start' })
-    await waitFor(() => expect(screen.getByText('调研员 正在输入…')).toBeTruthy())
+    // T2：start（尚无正文）→ 在场行 connecting；有正文后转 writing（都在 turn-presence 那一行）。
+    await waitFor(() => expect(screen.getByText('正在连接…')).toBeTruthy())
     emit({ phase: 'delta', text: '调研进' })
     await waitFor(() => expect(screen.getByText('调研进')).toBeTruthy())
+    expect(screen.getByText('正在回复…')).toBeTruthy()
     emit({ phase: 'delta', text: '调研进展如下' })
     await waitFor(() => expect(screen.getByText('调研进展如下')).toBeTruthy())
     expect(screen.queryByText('调研进')).toBeNull()
-    expect(screen.queryByText('调研员 正在输入…')).toBeNull()
+    expect(screen.queryByText('正在连接…')).toBeNull()
     // spoke：overlay 顶上；落库行到达后同 messageId 去重 → 仍只有一条。
     mockListMessages.mockResolvedValue([
       msg(1, 'user', '大家汇报下'),
@@ -722,7 +720,8 @@ describe('GroupChatView（UX 批：事件 / 台账 / 重试 / composer）', () =
     emit({ phase: 'silent', usage: { model: 'm', tokensInput: 1, tokensOutput: 1, costUsd: null } })
     await waitFor(() => expect(screen.getByText('调研员 本轮选择不发言')).toBeTruthy())
     expect(document.querySelector('[data-avatar="a1"][data-size="30"]')).toBeNull()
-    expect(screen.queryByText('调研员 正在输入…')).toBeNull()
+    // T2：silent 收尾 → 三元组空且最后一条留痕不是 failed → 整条在场行卸载。
+    expect(screen.queryByTestId('turn-presence')).toBeNull()
   })
 
   test('V12 failed 事件 → 重试钮 → POST retry{agentId, chainId}；409 E_RUN_STOPPED → 禁用 + retryStopped', async () => {
@@ -778,6 +777,20 @@ describe('GroupChatView（UX 批：事件 / 台账 / 重试 / composer）', () =
     await waitFor(() => expect(screen.getByText(/重试需要开启/)).toBeTruthy())
   })
 
+  test('V12c failed → 在场行进 error（留痕经 live 传到 GroupThread；身份取自那条留痕）', async () => {
+    mockListMessages.mockResolvedValue([msg(1, 'user', '大家汇报下')])
+    renderView()
+    await waitForOn()
+    emit({ phase: 'start' })
+    await waitFor(() => expect(screen.getByText('正在连接…')).toBeTruthy())
+    // failed 清掉在写者 → 三元组全空。在场者身份只能来自失败留痕，否则整行不画、error 支是死码。
+    emit({ phase: 'failed', error: 'boom' })
+    await waitFor(() => expect(screen.getByText('响应出错')).toBeTruthy())
+    expect(screen.getByTestId('turn-presence').dataset.botState).toBe('sad')
+    // 终态不挂秒表（走动的读数会读成「还在跑」）。
+    expect(screen.queryByTitle('本回合已运行')).toBeNull()
+  })
+
   test('V13 /run/active 返回 group.preparing 且无租约 → 停止钮渲染', async () => {
     routeFetch(
       () => okJson({ ok: true }),
@@ -792,7 +805,9 @@ describe('GroupChatView（UX 批：事件 / 台账 / 重试 / composer）', () =
     await waitForOn()
     await waitFor(() => expect(screen.getByLabelText('停止本轮')).toBeTruthy())
     // preparing 的成员进在场行（它已出队、尚未拿到租约）——判据是 group.preparing，不是 active 标志。
-    await waitFor(() => expect(screen.getByText('调研员 排队中')).toBeTruthy())
+    // T2：preparing 归写者半边，文案是 AI Chat 那句「正在连接…」（探针只有种子、无事件，不算静默）。
+    await waitFor(() => expect(screen.getByTestId('turn-presence')).toBeTruthy())
+    expect(screen.getByText('正在连接…')).toBeTruthy()
   })
 
   test('V14 no_candidates：事件 → 提示行；刷新后由台账推导（链根零 turn 行且非最后一条）', async () => {
@@ -953,5 +968,165 @@ describe('GroupChatView（UX 批：事件 / 台账 / 重试 / composer）', () =
     await waitFor(() => expect(mockListMessages).toHaveBeenCalled())
     await tick()
     expect(mockGetGroupTurns).not.toHaveBeenCalled()
+  })
+})
+
+// ── T2 lane K：composer 换内胆（useExternalStoreRuntime 只包 composer 段）──────────────────
+//
+//   K1 工具条无 controls：只有「+」与发送（没有模型 / skill / 授权 / effort），「+」菜单只剩附件项；
+//   K2 粘贴 PNG / 文本文件 → chip；发送 body 带 attachments（图片 text=null、文本带正文）+ 发送后 chip 清空；
+//   K3 labs off（v1）发送同样带 attachments；
+//   K4 刷新后落库 user 行的 metadata.attachments → 气泡下 chip（文件名 + 大小），附件正文 / 围栏块不进
+//      气泡，脏 metadata 不炸不画；
+//   K5 条数上限：一次粘贴 GROUP_ATTACHMENTS_MAX + 1 份 → 只收 MAX 份 + toast。
+//
+// 粘贴的驱动方式抄 tests/shared/assistant/composer_paste_image.test.tsx（createEvent.paste 挂 clipboardData）。
+
+import { createEvent } from '@testing-library/react'
+import { GROUP_ATTACHMENTS_MAX } from '@shared/chat_model'
+import { useToastStore } from '@shared/state/toast'
+
+const PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+function pngFile(name = 'screenshot.png'): File {
+  const bin = atob(PNG_BASE64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return new File([bytes], name, { type: 'image/png' })
+}
+
+function textFile(name: string, content: string, type = 'text/plain'): File {
+  return new File([content], name, { type })
+}
+
+function firePaste(el: Element, files: File[]): void {
+  const clipboardData = {
+    files,
+    items: files.map((f) => ({ kind: 'file', type: f.type })),
+    types: [],
+    getData: () => ''
+  }
+  fireEvent(el, createEvent.paste(el, { clipboardData }))
+}
+
+describe('GroupChatView（T2 lane K：composer 换内胆 / 附件）', () => {
+  const mockFetch = vi.fn()
+
+  beforeEach(() => {
+    mockGetLabs.mockResolvedValue({ groupAgents: 'on' })
+    mockFetch.mockReset()
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ active: false }) })
+    vi.stubGlobal('fetch', mockFetch)
+    mockOnGroupTurn.mockReturnValue(() => undefined)
+    mockGetGroupTurns.mockResolvedValue({ turns: [], hasMore: false })
+    useToastStore.setState({ items: [] })
+  })
+
+  const waitForOn = (): Promise<void> =>
+    waitFor(() => expect(document.querySelector('[data-group-mode="orchestrated"]')).toBeTruthy())
+  const textareaOf = (container: HTMLElement): HTMLTextAreaElement =>
+    container.querySelector('textarea') as HTMLTextAreaElement
+
+  test('K1 工具条无 controls：只有「+」与发送；「+」菜单只有附件项', async () => {
+    const container = renderView()
+    await waitForOn()
+    const form = container.querySelector('form') as HTMLFormElement
+    expect(form).not.toBeNull()
+    const labels = Array.from(form.querySelectorAll('button')).map((b) =>
+      b.getAttribute('aria-label')
+    )
+    expect(labels).toEqual(['添加', '发送'])
+    fireEvent.click(screen.getByLabelText('添加'))
+    await waitFor(() => expect(screen.getByRole('menu')).toBeTruthy())
+    expect(screen.getAllByRole('menuitem').map((el) => el.textContent)).toEqual(['添加附件'])
+  })
+
+  test('K2 粘贴 PNG + 文本 → chip；发送 body 带 attachments（图片 text=null）；发送后 chip 清空', async () => {
+    const container = renderView()
+    await waitForOn()
+    const textarea = textareaOf(container)
+    const png = pngFile()
+    firePaste(textarea, [png])
+    await waitFor(() => expect(screen.getByText('screenshot.png')).toBeTruthy())
+    // 图片只留档的提示随图片 chip 出现。
+    expect(screen.getByText(/图片只留档/)).toBeTruthy()
+    const txt = textFile('notes.txt', 'hello log')
+    firePaste(textarea, [txt])
+    await waitFor(() => expect(screen.getByText('notes.txt')).toBeTruthy())
+    await sendText(container, '看看这两个文件')
+    await waitFor(() => expect(mockAppendUser).toHaveBeenCalledTimes(1))
+    expect(mockAppendUser).toHaveBeenCalledWith(300, '看看这两个文件', [
+      { filename: 'screenshot.png', size: png.size, mimeType: 'image/png', text: null },
+      { filename: 'notes.txt', size: txt.size, mimeType: 'text/plain', text: 'hello log' }
+    ])
+    await waitFor(() => expect(screen.queryByText('notes.txt')).toBeNull())
+    expect(screen.queryByText(/图片只留档/)).toBeNull()
+  })
+
+  test('K3 labs off（v1）发送同样带 attachments，随后照常起 speaker 循环', async () => {
+    mockGetLabs.mockResolvedValue({ groupAgents: 'off' })
+    const container = renderView()
+    await waitFor(() => expect(document.querySelector('[data-group-mode="v1"]')).toBeTruthy())
+    const md = textFile('a.md', '# 标题', 'text/markdown')
+    firePaste(textareaOf(container), [md])
+    await waitFor(() => expect(screen.getByText('a.md')).toBeTruthy())
+    await sendText(container, '@调研员 看看')
+    await waitFor(() =>
+      expect(mockAppendUser).toHaveBeenCalledWith(300, '@调研员 看看', [
+        { filename: 'a.md', size: md.size, mimeType: 'text/markdown', text: '# 标题' }
+      ])
+    )
+    await waitFor(() => expect(mockRunSpeaker).toHaveBeenCalledTimes(1))
+    expect(mockRunSpeaker.mock.calls[0]?.[0]).toMatchObject({ speakAsAgentId: 'a1' })
+  })
+
+  test('K4 落库 user 行的 metadata.attachments → 气泡下 chip；正文 / 围栏块不进气泡；脏 metadata 不炸', async () => {
+    mockListMessages.mockResolvedValue([
+      {
+        ...msg(1, 'user', '看看这个'),
+        metadata: JSON.stringify({
+          attachments: [
+            { filename: 'notes.txt', size: 2048, mimeType: 'text/plain', text: 'secret body' },
+            { filename: 'x.png', size: 0, mimeType: 'image/png', text: null }
+          ]
+        })
+      },
+      { ...msg(2, 'user', '脏的'), metadata: '{"attachments":"nope"' },
+      msg(3, 'assistant', '收到', 'a1')
+    ])
+    renderView()
+    await waitForOn()
+    await waitFor(() => expect(screen.getByText('notes.txt')).toBeTruthy())
+    expect(screen.getByText('2.0 KB')).toBeTruthy()
+    expect(screen.getByText('x.png')).toBeTruthy()
+    // 正文仍是气泡 div 的直接文本（DOM 契约）；附件正文与围栏块都不进气泡。
+    const bubble = screen.getByText('看看这个')
+    expect(bubble.textContent).toBe('看看这个')
+    expect(screen.queryByText(/secret body/)).toBeNull()
+    // chip 行是气泡的下一个兄弟，同在右对齐列里；size=0 的那件不写大小。
+    const chips = bubble.nextElementSibling as HTMLElement
+    expect(chips.hasAttribute('data-group-attachments')).toBe(true)
+    expect(chips.closest('.self-end')).toBeTruthy()
+    expect(chips.querySelectorAll('span[title]')).toHaveLength(2)
+    expect(chips.textContent).toBe('notes.txt2.0 KBx.png')
+    // 脏 metadata：不炸、不画；成员气泡没有 chip 行。
+    expect(screen.getByText('脏的').nextElementSibling).toBeNull()
+    expect(screen.getByText('收到').nextElementSibling).toBeNull()
+  })
+
+  test('K5 一次粘贴超过上限 → 只收 GROUP_ATTACHMENTS_MAX 份，超出的 toast', async () => {
+    const container = renderView()
+    await waitForOn()
+    const files = Array.from({ length: GROUP_ATTACHMENTS_MAX + 1 }, (_, i) =>
+      textFile(`f${i}.txt`, `${i}`)
+    )
+    firePaste(textareaOf(container), files)
+    await waitFor(() => expect(screen.getByText(`f${GROUP_ATTACHMENTS_MAX - 1}.txt`)).toBeTruthy())
+    await new Promise((r) => setTimeout(r, 30))
+    expect(screen.queryByText(`f${GROUP_ATTACHMENTS_MAX}.txt`)).toBeNull()
+    expect(
+      useToastStore.getState().items.some((item) => item.title.includes(`${GROUP_ATTACHMENTS_MAX}`))
+    ).toBe(true)
   })
 })

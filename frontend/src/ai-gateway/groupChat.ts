@@ -23,6 +23,7 @@
 
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 import type { GroupHistoryRow } from './config'
+import { renderAttachmentBlock } from './groupAttachments'
 import { WINDOW_MAX_CHARS, WINDOW_MAX_ROWS, WINDOW_TAIL } from './groupFloors'
 
 /** The owner's speaker label in assembled history. One fixed label (not the account name) so the
@@ -123,6 +124,9 @@ export function parseGroupMentions(text: string, members: readonly GroupMentionM
  * Rows admitted: role 'user'|'assistant' with non-empty content, status 'complete' (or absent —
  * hand-built fixtures); error/aborted/streaming rows never reach the model. Returns UIMessages
  * (text parts only — a group speaking turn is text-in/text-out by design).
+ *
+ * T2 群附件：user 行带 `attachments` 时，`renderAttachmentBlock` 的不可信内容围栏块前置进该行
+ * 正文 —— 附件对**所有**候选成员可见（父设计 D10），不是只给第一个回复的人。
  */
 export function assembleGroupHistory(
   rows: readonly (GroupHistoryRow & { via?: GroupTranscriptRow['via'] })[],
@@ -151,7 +155,9 @@ export function assembleGroupHistory(
     if (row.status != null && row.status !== 'complete') continue
     if (row.role === 'user') {
       const label = row.via === 'main_agent' ? GROUP_MAIN_AGENT_LABEL : GROUP_USER_LABEL
-      push('user', `[${label}] ${row.content}`)
+      // T2 群附件：围栏块前置进这条 user 行（在标签之后 —— 块属于这一位说话人的这条消息，
+      // 连续 user 合并后也不会跟别人的话混在一起）。无附件 → 空串，与改动前逐字节相同。
+      push('user', `[${label}] ${renderAttachmentBlock(row.attachments)}${row.content}`)
     } else if (row.role === 'assistant') {
       const speaker = row.speakerAgentId
       if (speaker != null && speaker === speakAsAgentId) {
@@ -232,9 +238,13 @@ export function buildGroupWindow(
   }
   // Trim from the old end: rows first, then chars.
   if (rows.length > limits.maxRows) rows = rows.slice(rows.length - limits.maxRows)
-  let chars = rows.reduce((n, r) => n + r.content.length, 0)
+  // 🔴 字符预算算上附件正文：它一样进模型（assembleGroupHistory 前置围栏块），不算的话一份
+  // 20k 字的附件能把 12k 的窗口撑到三倍而地板毫不知情。无附件的行加 0 → 老行为逐字节不变。
+  const rowChars = (r: GroupTranscriptRow): number =>
+    r.content.length + (r.attachments ?? []).reduce((n, a) => n + (a.text?.length ?? 0), 0)
+  let chars = rows.reduce((n, r) => n + rowChars(r), 0)
   while (rows.length > 1 && chars > limits.maxChars) {
-    chars -= rows[0]!.content.length
+    chars -= rowChars(rows[0]!)
     rows = rows.slice(1)
   }
   while (rows.length > 0 && !isOthers(rows[0]!)) rows = rows.slice(1)

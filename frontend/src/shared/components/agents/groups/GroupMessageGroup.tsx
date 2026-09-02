@@ -13,6 +13,7 @@ import { Fragment, memo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type { AgentAvatarConfig } from '@shared/api/types'
+import type { GroupAttachment } from '@shared/chat_model'
 
 import type { GroupMentionMember } from '../../../../ai-gateway/groupChat'
 import { AgentAvatar } from '../AgentAvatar'
@@ -29,7 +30,8 @@ export const GroupMessageGroup = memo(function GroupMessageGroup({
   avatar,
   members,
   memberIds,
-  now
+  now,
+  attachmentsById
 }: {
   item: GroupTimelineGroup
   /** 成员组的名字（user 组不用）。 */
@@ -39,6 +41,8 @@ export const GroupMessageGroup = memo(function GroupMessageGroup({
   members: readonly GroupMentionMember[]
   memberIds: readonly string[]
   now: number
+  /** T2 — 落库 user 行的附件（按消息 id）；本地气泡 id 为 null，不查。 */
+  attachmentsById: ReadonlyMap<number, readonly GroupAttachment[]>
 }): React.ReactElement {
   const { t } = useTranslation()
   const rel = relativeTimeLabel(item.startedAt, now, t)
@@ -57,6 +61,7 @@ export const GroupMessageGroup = memo(function GroupMessageGroup({
               memberIds={memberIds}
               usage={null}
               title={absoluteTimeLabel(m.createdAt)}
+              attachments={m.id != null ? attachmentsById.get(m.id) : undefined}
             />
             {m.failed && (
               <div className="text-micro text-fail">

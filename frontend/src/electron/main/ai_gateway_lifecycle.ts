@@ -74,6 +74,8 @@ import {
 import { ActiveRunRegistry } from '../../ai-gateway/activeRuns'
 import { extractApprovalStashInput } from '../../ai-gateway/chatRun'
 import { parseGroupMemberIds } from '../../ai-gateway/groupChat'
+// T2 群附件 — metadata.attachments 的读侧（写侧在 server.ts 的 append 分支，同一份编解码）。
+import { parseAttachmentsMetadata } from '../../ai-gateway/groupAttachments'
 // g1 群编排（CHAT_DB v31）— 成员设置 / seen 游标 / turn 台账的读写面。直接从子模块引（chat_db.ts
 // 兼容 barrel 只为保住既有 importer 的路径，新模块无历史包袱）。
 import type { GroupResponseMode } from '../../ai-gateway/groupFloors'
@@ -1608,6 +1610,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // v30（群聊）— the shared transcript, projected for server-side history assembly.
     // g1 (v31): 多带四项 —— 行 id（seen 游标 / 窗口边界）、chain_id（链归属）、metadata.via
     // （主助理投递的装配标签）、created_at。
+    // T2: 再多一项 attachments —— 与 via 同读 metadata 这一列的两个读者，各取各的键、互不影响；
+    // 没有附件的行恒 null（不是空数组），装配侧据此决定要不要前置围栏块。
     listGroupHistory: (sessionId) =>
       listMessages(sessionId).map((row) => ({
         id: row.id,
@@ -1617,6 +1621,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         status: row.status,
         chainId: row.chain_id ?? null,
         via: readMessageVia(row.metadata ?? null),
+        attachments: parseAttachmentsMetadata(row.metadata ?? null),
         createdAt: row.created_at
       })),
     // v30（群聊）— persist one group message (owner user message / member reply). appendMessage

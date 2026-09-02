@@ -50,6 +50,8 @@ import type { ProviderModelResolver, ProviderProtocol } from './providerRef'
 // 🔴 type-only — groupFloors.ts 是零依赖叶子（词表 / 地板常量单源，闸
 // tests/config/test_group_constants_parity.py）。只取三个字符串联合，运行时零拉取。
 import type { GroupResponseMode, GroupTriggerKind, GroupTurnOutcome } from './groupFloors'
+// 🔴 type-only（擦除）— T2 群附件的行形状。chat_model.ts 是零 import 的纯类型叶子。
+import type { GroupAttachment } from '@shared/chat_model'
 // 🔴 type-only — v31 的转录行形状（GroupHistoryRow + 四列）由 groupChat.ts 拥有，窗口函数吃的
 // 就是它；此处只声明 hook 的返回类型，类型循环在 TS 里完全擦除。
 import type { GroupTranscriptRow } from './groupChat'
@@ -314,6 +316,10 @@ export interface GroupHistoryRow {
   content: string
   speakerAgentId: string | null
   status?: string | null
+  /** T2 群附件 — 该行 `metadata.attachments` 解出的附件（`parseAttachmentsMetadata`）。
+   *  null / 省略 = 这行没有附件（**不是**空数组：投影侧不为无附件的行造一个空壳）。
+   *  装配侧据此把围栏块前置进这条 user 行的文本。 */
+  attachments?: GroupAttachment[] | null
 }
 
 export interface AiGatewayConfig {

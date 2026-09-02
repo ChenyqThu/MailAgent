@@ -26,6 +26,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { UI_MESSAGE_STREAM_HEADERS } from 'ai'
 
 import type { AiGatewayConfig, GroupSessionFacts, SessionAgentIdentity } from './config'
+// T2 群附件 — body.attachments 的校验 + metadata 编码（单源，renderer 与投影侧共用同一份）。
+import { encodeAttachmentsMetadata, validateAttachmentsInput } from './groupAttachments'
 // v30（群聊）— server-side history assembly for a group speaker run (pure helper).
 import { assembleGroupHistory, type GroupTranscriptRow } from './groupChat'
 import { buildGameSecret } from './groupGame'
@@ -1199,7 +1201,9 @@ async function handleSearchAgent(
  * 400 E_NOT_GROUP — /api/ai/chat never consults these hooks, so a group sessionId posted THERE
  * keeps today's main-agent semantics and a `speakAsAgentId` in that body is simply never read):
  *
- *   • `{ sessionId, userText }` — append the owner's user message (speaker NULL) → JSON.
+ *   • `{ sessionId, userText, attachments? }` — append the owner's user message (speaker NULL) →
+ *     JSON. T2: `attachments`（renderer 已读出正文；图片 text=null）落 `metadata.attachments`，
+ *     形状不合格 / 超过条数上限 → 400 E_INVALID_ARG（写侧不静默丢）。
  *   • `{ sessionId, speakAsAgentId, model? }` — ONE member's speaking turn. 🔴 Membership is
  *     validated HERE in server code against the server-resolved members_json (the body only picks
  *     among server facts — it can never mint an identity; non-member → 403 E_NOT_GROUP_MEMBER).
@@ -1306,10 +1310,20 @@ async function handleGroupChat(
       writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'speakAsAgentId or userText required' })
       return
     }
+    // T2 群附件 — 形状 / 条数校验在这里（写侧不静默丢，见 validateAttachmentsInput 头注）；
+    // 正文由 renderer 读出，服务端只搬运 + 截断，从不去读文件。
+    const attachments = validateAttachmentsInput(body.attachments)
+    if (!attachments.ok) {
+      writeJson(res, 400, { error: 'E_INVALID_ARG', hint: attachments.hint })
+      return
+    }
+    const metadata = encodeAttachmentsMetadata(attachments.items)
     const messageId = appendGroupMessage(sessionId, {
       role: 'user',
       content: userText,
-      speakerAgentId: null
+      speakerAgentId: null,
+      // 🔴 无附件时**不传** metadata 键 —— 绝大多数消息走这条路径，它与改动前逐字节一致。
+      ...(metadata != null ? { metadata } : {})
     })
     writeJson(res, 200, { ok: true, messageId, orchestrated: orchestrating })
     if (orchestrating) {
@@ -1321,7 +1335,9 @@ async function handleGroupChat(
         status: 'complete',
         chainId: messageId,
         via: null,
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        // 这一行是刚落库那条的投影：带上附件才与 listGroupHistory 之后读回来的形状一致。
+        ...(attachments.items.length > 0 ? { attachments: attachments.items } : {})
       }
       groupScheduler.onGroupMessage(sessionId, row).catch((err: unknown) => {
         console.warn('[ai-gateway] group onGroupMessage failed', { sessionId, messageId, err })

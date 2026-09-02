@@ -41,6 +41,7 @@ import {
   buildStableSystemPrompt,
   type ChatModelConfig
 } from '../../src/ai-gateway/prompts/stable_prompt'
+import type { GroupAttachment } from '../../src/shared/chat_model'
 import { ActiveRunRegistry } from '../../src/ai-gateway/activeRuns'
 import { startAiGatewayServer, type AiGatewayHandle } from '../../src/ai-gateway/server'
 import type {
@@ -267,6 +268,65 @@ describe('g1 groupChat 纯函数', () => {
   })
 })
 
+// ── T2 群附件：装配前置围栏块 + 窗口字符预算 ─────────────────────────────────────────
+
+describe('T2 群附件', () => {
+  const DOC: GroupAttachment = {
+    filename: '周报.md',
+    size: 1024,
+    mimeType: 'text/markdown',
+    text: '本周完成三件事'
+  }
+
+  test('带附件的 user 行：围栏块前置进该行正文，每个候选成员都看得到（D10）', () => {
+    const messages = assembleGroupHistory(
+      [
+        row(1, 'user', '看下这份周报', null, { attachments: [DOC] }),
+        row(2, 'assistant', '好的', 'agent_a')
+      ],
+      'agent_b',
+      new Map([['agent_a', '调研员']])
+    )
+    const text = (messages[0]?.parts[0] as { text: string }).text
+    // 标签在最前（块属于这位说话人的这条消息），随后才是不可信内容围栏。
+    expect(text.startsWith(`[${GROUP_USER_LABEL}] [Attached files`)).toBe(true)
+    expect(text).toContain('[附件 周报.md · 1.0 KB]')
+    expect(text).toContain('本周完成三件事')
+    // 用户自己打的字在块之后，没被块吃掉。
+    expect(text).toContain('---\n\n看下这份周报')
+  })
+
+  test('没有 attachments 的行与改动前逐字节相同（无附件路径零影响）', () => {
+    const messages = assembleGroupHistory([row(1, 'user', '看下这份周报')], 'agent_b', new Map())
+    expect((messages[0]?.parts[0] as { text: string }).text).toBe(
+      `[${GROUP_USER_LABEL}] 看下这份周报`
+    )
+  })
+
+  test('窗口字符预算算上附件正文：长附件把老行挤出去，而不是悄悄撑爆预算', () => {
+    const limits = { tail: 6, maxRows: 40, maxChars: 450 }
+    const withDoc = buildGroupWindow(
+      [
+        row(1, 'user', 'a'.repeat(100)),
+        row(2, 'user', 'b'.repeat(100)),
+        row(3, 'user', 'c', null, { attachments: [{ ...DOC, text: 'z'.repeat(400) }] })
+      ],
+      'agent_b',
+      null,
+      limits
+    )
+    expect(withDoc.rows.map((r) => r.id)).toEqual([3])
+    // 对照（防恒绿）：同样三行、附件正文若不计入，100+100+1 远在预算内 → 三行全留。
+    const withoutDoc = buildGroupWindow(
+      [row(1, 'user', 'a'.repeat(100)), row(2, 'user', 'b'.repeat(100)), row(3, 'user', 'c')],
+      'agent_b',
+      null,
+      limits
+    )
+    expect(withoutDoc.rows.map((r) => r.id)).toEqual([1, 2, 3])
+  })
+})
+
 describe('④ <current_group_chat> 群聊语境块', () => {
   test('unit — 含自我身份 + 成员名单 + 发言纪律；duty 条件句', () => {
     const block = buildGroupChatIdentityBlock({
@@ -453,6 +513,53 @@ describe('POST /api/ai/group-chat（服务端成员校验 + 发言 run）', () =
         }
       ])
       expect(createModel).not.toHaveBeenCalled()
+    } finally {
+      await closeAll()
+    }
+  })
+
+  test('T2 附件 — append 带 attachments → 落 metadata.attachments（上一条用例反过来钉住无附件时不多写 metadata 键）', async () => {
+    const { config, appended } = groupHooks()
+    const h = await start(config)
+    const file = { filename: 'a.md', size: 12, mimeType: 'text/markdown', text: 'hi' }
+    try {
+      const res = await fetch(`http://127.0.0.1:${h.port}/api/ai/group-chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: 7, userText: '看下这个', attachments: [file] })
+      })
+      expect(res.status).toBe(200)
+      expect(appended).toHaveLength(1)
+      const message = appended[0]!.message
+      expect(message.content).toBe('看下这个')
+      expect(JSON.parse(message.metadata as string)).toEqual({ attachments: [file] })
+    } finally {
+      await closeAll()
+    }
+  })
+
+  test('T2 附件 — 超条数上限 / 形状不合格 / 非数组 → 400 E_INVALID_ARG 且一行都不落', async () => {
+    const { config, appended } = groupHooks()
+    const h = await start(config)
+    const file = { filename: 'a.md', size: 12, mimeType: 'text/markdown', text: 'hi' }
+    const post = async (attachments: unknown): Promise<Response> =>
+      fetch(`http://127.0.0.1:${h.port}/api/ai/group-chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: 7, userText: '看下这个', attachments })
+      })
+    try {
+      for (const bad of [
+        Array.from({ length: 7 }, () => file),
+        [file, { size: 3 }],
+        'not-an-array'
+      ]) {
+        const res = await post(bad)
+        expect(res.status).toBe(400)
+        expect(((await res.json()) as { error: string }).error).toBe('E_INVALID_ARG')
+      }
+      // 🔴 写侧不静默丢：拒了就一行都不落（落一半再报错才是最难查的）。
+      expect(appended).toHaveLength(0)
     } finally {
       await closeAll()
     }

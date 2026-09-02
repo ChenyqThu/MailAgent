@@ -181,6 +181,34 @@ export interface GroupMetricsWindow {
   caps?: { turns: number | null; tokens: number | null; costUsd: number | null }
 }
 
+/** T2 群附件 — 一件群消息附件，落在 `ai_chat_messages.metadata` 的 `{attachments:[…]}` 键下
+ *  （落法 β：正文进 metadata，气泡只显示 chip，围栏块由装配侧前置给模型）。
+ *
+ *  `text` = 已读出的可读正文（文本文件本地读、office 经 `/attachment/convert` 转 markdown）；
+ *  **null = 只留档不进模型**（图片 / PDF / 压缩包 —— 模型只看到文件名与大小，绝不假装读过）。
+ *  编解码单源 = `ai-gateway/groupAttachments.ts`，renderer 与 gateway 都用那一份，不各抄。 */
+export interface GroupAttachment {
+  filename: string
+  /** 字节数（显示用；`formatAttachmentSize` 的入参）。 */
+  size: number
+  /** 浏览器给的 MIME；拿不到时是空串（与 `ChatAttachment.mimeType` 同义）。 */
+  mimeType: string
+  text: string | null
+}
+
+/** 一条群消息最多带几件附件。超出的在编码时**从尾部丢弃**（不静默改写前面的）。 */
+export const GROUP_ATTACHMENTS_MAX = 6
+
+/** 单件附件正文进 metadata 的字符上限，超出截断。
+ *
+ *  与 `shared/lib/chat-attachments.ts::ATTACHMENT_MAX_CONTENT_CHARS` 是**同一份预算**（那边还有
+ *  Python 侧的 parity 闸）：renderer 读附件时已按那个值截过一刀，这里是服务端不信任 body 的
+ *  第二刀。🔴 两者**不建等值闸**：判据是「取小者生效」，值真的分叉只意味着模型少看一段，
+ *  不会让 `truncated` 之类的标记说谎。之所以在这里重新写一个数而不是 import 那一个：本文件的
+ *  不变式 1 是零 import，而 chat-attachments.ts 顶层拉了 `apiBaseUrl`（`import.meta.env`），
+ *  gateway 侧模块图不能碰。 */
+export const GROUP_ATTACHMENT_TEXT_MAX_CHARS = 20_000
+
 /** L4 批次3 R7 — the JSON shape stored in `ai_chat_sessions.paused_marker_json`.
  *
  *  🔴 Deliberately carries NO resume capability: no request body, no responseMessage, no resumeToken.

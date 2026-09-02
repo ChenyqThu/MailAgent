@@ -7,20 +7,51 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, Users } from 'lucide-react'
 
+import type { GroupAttachment } from '@shared/chat_model'
 import { cn } from '@shared/lib/cn'
+import { STALL_1_MS, STALL_2_MS } from '@shared/assistant/runtime/useTurnStage'
 
 import type { GroupMentionMember } from '../../../../ai-gateway/groupChat'
 import { GroupMessageGroup } from './GroupMessageGroup'
 import { GroupMetaRow, type RetryUiState } from './GroupMetaRow'
-import { GroupPresenceRow } from './GroupPresenceRow'
-import { colorOfMember, dateSeparatorLabel } from './groupPresentation'
+import { GroupPresenceRow, type GroupPresenceWriter } from './GroupPresenceRow'
+import {
+  colorOfMember,
+  dateSeparatorLabel,
+  groupTurnStage,
+  latestOverlayTurn,
+  type GroupTurnStageView
+} from './groupPresentation'
 import type { GroupTimelineItem, GroupTimelineTail } from './groupTimeline'
 import type { GroupMemberMeta } from './members'
 
 /** 距底 ≤ 80px 视为「在底部」（design §4.2 滚底判据）。 */
 const NEAR_BOTTOM_PX = 80
+/** labs off（无事件源）时的留痕面：空 Map + null 走 groupTurnStage 的 idle 支。 */
+const NO_TURN_OVERLAY: GroupTurnStageView['overlay'] = new Map()
+/** 在场态的读表间隔。stalled 的门槛是 15s / 30s，父层的 `now` 是 60s 节拍（那口表答的是
+ *  「刚刚 / n 分钟前」），分辨不出静默升级。 */
+const PRESENCE_TICK_MS = 1_000
 /** 骨架延迟显示，短暂加载不闪（design §4.2）。 */
 const SKELETON_DELAY_MS = 300
+
+/** 在场态的时钟：**有人在场时**（或刚失败、error 行还没走完新鲜期时）每秒读一次表，其余时候
+ *  停表 —— 空闲的时间线不该每秒重渲一次。读数取两口表里更新的那个（父层 60s 节拍 vs 本地秒表），
+ *  开停表的判据也用它，于是 error 行必定靠时钟自己走完新鲜期后消失、不会冻在最后一帧变成永动的
+ *  红字（overlay 的 failed 留痕没有清理者，停表就等于把红字钉死在群底）。 */
+function usePresenceNow(onStage: boolean, failedAt: number | null, fallbackNow: number): number {
+  const [tick, setTick] = useState(0)
+  const nowRead = Math.max(tick, fallbackNow)
+  const active = onStage || (failedAt != null && nowRead - failedAt < STALL_1_MS)
+  useEffect(() => {
+    if (!active) return
+    const id = setInterval(() => setTick(Date.now()), PRESENCE_TICK_MS)
+    return (): void => {
+      clearInterval(id)
+    }
+  }, [active])
+  return nowRead
+}
 
 export type GroupThreadEmpty = 'v1' | 'orchestrated' | 'noRealtime'
 
@@ -37,7 +68,9 @@ export function GroupThread({
   empty,
   retryStates,
   onRetry,
-  onOpenDetails
+  onOpenDetails,
+  attachmentsById,
+  live
 }: {
   items: readonly GroupTimelineItem[]
   tail: GroupTimelineTail
@@ -52,6 +85,11 @@ export function GroupThread({
   retryStates: ReadonlyMap<string, RetryUiState>
   onRetry: (item: Extract<GroupTimelineItem, { kind: 'meta' }>) => void
   onOpenDetails?: () => void
+  /** T2 — 落库 user 行的附件（消息 id → chip 列表），GroupMessageGroup 按 id 取给 GroupBubble。 */
+  attachmentsById: ReadonlyMap<number, readonly GroupAttachment[]>
+  /** T2 — 在场态要的另外两项事实：turn 留痕（error 支）与最近一次事件时刻（stalled 支）。
+   *  null = 没有事件源（labs off / 未加载），不是「没发生过」—— 此时只走 idle。 */
+  live: Pick<GroupTurnStageView, 'overlay' | 'lastEventAt'> | null
 }): React.ReactElement {
   const { t } = useTranslation()
   const titleOf = (id: string): string => memberMeta.get(id)?.title?.trim() || id
@@ -89,14 +127,46 @@ export function GroupThread({
     }
   }, [loading])
 
-  const typingName =
-    tail.inFlight != null && tail.inFlight.text.length === 0 ? titleOf(tail.inFlight.agentId) : null
+  const overlay = live?.overlay ?? NO_TURN_OVERLAY
+  const lastTurn = latestOverlayTurn(overlay)
+  const onStage = tail.inFlight != null || tail.preparing != null || tail.queued.length > 0
+  const presenceNow = usePresenceNow(
+    onStage,
+    lastTurn?.phase === 'failed' ? lastTurn.ts : null,
+    now
+  )
+  const { stage, stallLevel } = groupTurnStage(
+    {
+      inFlight: tail.inFlight,
+      preparing: tail.preparing,
+      queued: tail.queued,
+      overlay,
+      lastEventAt: live?.lastEventAt ?? null
+    },
+    presenceNow,
+    { level1Ms: STALL_1_MS, level2Ms: STALL_2_MS }
+  )
+  // 在写者先取正在流式的那位，没有就取探针说「正在准备」的那位；error 支三元组已空 —— 在场者
+  // 是刚失败的那位（同一条留痕）。在场态答的是「谁在场」，认不出人就不画写者行（此时纯排队
+  // 由下面那半叙述）。
+  const writerId =
+    tail.inFlight?.agentId ?? tail.preparing ?? (stage === 'error' ? lastTurn?.agentId : null)
+  const writer: GroupPresenceWriter | null =
+    writerId == null || stage === 'idle'
+      ? null
+      : {
+          agentId: writerId,
+          name: titleOf(writerId),
+          avatar: memberMeta.get(writerId)?.avatar,
+          stage,
+          stallLevel
+        }
   const queuedIds =
     tail.preparing != null && !tail.queued.includes(tail.preparing)
       ? [tail.preparing, ...tail.queued]
       : tail.queued
-  const queuedNames = queuedIds.filter((id) => id !== tail.inFlight?.agentId).map(titleOf)
-  const isEmpty = items.length === 0 && typingName == null && queuedNames.length === 0
+  const queuedNames = queuedIds.filter((id) => id !== writerId).map(titleOf)
+  const isEmpty = items.length === 0 && writer == null && queuedNames.length === 0
 
   let content: React.ReactNode
   if (error != null && items.length === 0) {
@@ -178,6 +248,7 @@ export function GroupThread({
                   members={members}
                   memberIds={memberIds}
                   now={now}
+                  attachmentsById={attachmentsById}
                 />
               )
             }
@@ -196,7 +267,7 @@ export function GroupThread({
               return <GroupMetaRow key={item.key} item={item} onOpenDetails={onOpenDetails} />
           }
         })}
-        <GroupPresenceRow typingName={typingName} queuedNames={queuedNames} />
+        <GroupPresenceRow writer={writer} queuedNames={queuedNames} />
       </div>
     )
   }
