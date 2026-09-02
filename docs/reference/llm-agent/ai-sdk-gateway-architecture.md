@@ -1669,7 +1669,87 @@ gateway 工厂不复制成员 / 子集 / 嵌套判定）：
   `GROUP_POST_TEXT_MAX_CHARS=4000`（消费点是 `tools/schemas.ts` 的 zod，**不写裸数字**）。
   `POSTS_PER_TURN_CAP=2` / `SUBGROUPS_PER_FAMILY_CAP=6` 是 g1 已落的预留项，g2 只 import。
 - 跨群投递**不带自己的预算**：目标群按它自己的 chainCap / 小时预算跑。
+- 狼人杀预设下这批地板换一套缺省（数值仍不落库），见 13.29.9。
 - agent_eval `group` lane 四例（`tasks/AGT-GROUP-001..004` + `baselines/group.jsonl` +
   `runner/tests/test_group_coverage.py`）：建群弹卡正例 / 服务端核验型免卡审计 /
   成员 run 只读本群 / headless 群能力缺席（插一条 `group_post` 必触发 R2）。合成 `.test` 域零 PII。
   002 与 `AGT-CALL-003` 同形：frozen R5 会把「无 pending 的 write」判红，故不参与 hard_pass 断言。
+
+### 13.29.9 狼人杀实验（g3）
+
+狼人杀不是产品功能，是这套群聊机制的**集成验收**：一局同时证明「无人值守能推进到终局」「夜晚
+信息只在子群可见是结构保证不是 prompt 承诺」「全程受地板与预算约束」。跑不完就是设计失败，
+不是放宽地板的理由。
+
+**一键建局** `POST /api/agent/labs/werewolf/new-game`（端点在 `routers/agent.py`，业务叶子
+`src/agents/werewolf_lab.py`）。三道门顺序 labs → agent_plugins → custom_agents，都回
+`E_NOT_FOUND` + 显式 `http_status=404`（仓内「功能门关」的现成写法，不新增 ERROR_CODE_TO_HTTP
+条目），三条 message 各自可辨。建局：seeded 洗牌 2 狼 / 1 预言家 / 3 村民 → 预建主群 M（法官 +
+6）、狼群 W（法官 + 2 狼）、预言家群 S（法官 + 预言家），W / S 的 `parent_session_id = M`、
+`invoked_by='setup'`。🔴 成员上限 / 子群 ⊆ 父群 / chat-capable 这些校验**零复制**：三次都走
+`chat.py::create_session_validated`（`POST /chat/sessions/new` 的函数体原样搬出来的那一个）。
+建局无事务，失败按倒序 `delete_session` 补偿；补偿也失败 → 应答 `configApplied:false`（不抛），
+调用方只提示不跳转。🔴 日志与任何 APIError 的 message / hint 里**绝不**出现 roles / players。
+
+**模板查重是近似解**：`report_agent` 表没有 template_key 列（g3 无 schema 变更），查重键是
+`(type=='custom', title.strip())`。owner 把「玩家丙」改个名，下一局就会多出一份模板行 —— 这是
+显式接受的行为，有 pytest 钉着（`test_renamed_title_creates_new_row`），别当 bug「顺手修好」。
+
+**`<game_secret>` 是服务端事实**，不是 prompt 规则：从 `group_config_json.game.roles` 生成
+（法官 = 全表 / 狼人 = 本人 + 队友 / 其他 = 只有自己），纯函数在 `ai-gateway/groupGame.ts`，
+角色词映射全仓只此一处。取名顺序 `game.titles[id]` → 当前群名单 title → agentId：`game.titles`
+是建局写进三群 config 的七个显示名（法官 + 六玩家，取自 `report_agent` 行的 title），子群名单
+只有本群成员，法官在 W / S 里的全表靠它才是标题而不是 agentId（否则预言家说「验玩家丁」时法官
+对不上人）。三处接线：`config.ts` 的 `SessionAgentIdentity.group.gameSecret?`、
+`systemPrompt.ts` 内联 group 类型 + 调用点的显式映射（浅展开**不会**带上 group 内的键，这是
+真踩过的形态）、生成点唯一在 `server.ts speakAsGroupMember`。🔴 v30 renderer-driven 分支不加 →
+labs off 的 prompt 字节与 g2 基线一致。规则不进 standing prompt：`systemPrompt.ts` 里没有
+「游戏结束 / 天黑 / 天亮」。
+
+**预设地板：数值不落库**。`groupFloors.ts` 五个扁平 int + 一个字符串
+（`WEREWOLF_CHAIN_CAP=24 / WEREWOLF_HOURLY_TURNS=150 / WEREWOLF_HOURLY_TOKENS=1_500_000 /
+WEREWOLF_HOURLY_USD=3 / WEREWOLF_SESSION_TURN_CAP=120 / GAME_OVER_PREFIX='【游戏结束】'`），
+`resolveGroupRunConfig` 在 `preset==='werewolf'` 时拿它们当**缺省**（owner 显式配的键仍优先）。
+建局只写 `judgeAgentId / judgeScopeHash / preset / game` 四键 —— 把默认值抄一份进库就与单源
+脱钩了。Python 侧 `src/chat/group_limits.py` 同名镜像（消费点 = manual 脚本判据 + 模板 pytest
+闸），闸 `tests/config/test_group_constants_parity.py`（五个 int + 一个字符串，抽不到必红）。
+`WEREWOLF_SILENT_RATE_MAX_PCT=30` 只有脚本消费，TS 无同名常量，同 `TOPIC_MAX_CHARS` 体例不进闸。
+
+**game_over 不是「停止」**。判据 = `preset==='werewolf'` 且发言者是法官且内容 `trimStart()` 以
+`GAME_OVER_PREFIX` 开头；两处调用（processItem 的 spoke 分支、`onGroupMessage` 里 `via='judge_post'`
+的行）——法官从子群 `group_post` 回投主群宣布终局是常态，只认 spoke 会卡死。命中后：主群写一条
+`{kind:'game_over', runId, chainId}` 系统行（content 空）→ 清 family 队列 → family 每个 sessionId
+进调度器进程内的 `gameOver` 集合（后续 `onGroupMessage` 静默返回 `{queued:[]}`）→ best-effort 把
+`sessionTurnCap` 回写成当前 turn 数（重启兜底）。🔴 **不写 group_stop、不加停止原因词**：走
+session_cap 会给 family 每个群各写一条停止行，正常终局反而看起来像被地板打断。
+
+**两份回放实现，同一套列口径**（`时间 | 群 | 发言者 | 内容 | outcome`）：
+
+| 行来源 | 内容列 | outcome 列 |
+|---|---|---|
+| user / assistant 消息 | 正文（换行折成空格，`\|` 转义） | 空 |
+| `messageId == null` 的 turn | `(沉默)` / `(重复折叠)` / `(跳过:<error>)` / `(失败)` / `(停止:<error>)` | turn 的 outcome |
+| `kind='game_over'` 系统行 | `(游戏结束)` | 空 |
+| `kind='group_stop'` 系统行 | `(停止:<reason>)` | 空 |
+
+排序键 = 消息 `created_at` / turn `startedAt`，并列时消息在前。TS 那份 `ai-gateway/groupReplay.ts`
+是纯函数 + 注入读，`listTurns` 只由零-LLM 测试的假世界提供 —— gateway **没有** turn 读 hook，
+不为回放新开一个；Python 脚本那份直接从 `ai_chat.db` 拼，两边不互相调用。
+
+**manual 脚本三条腿**（`scripts/werewolf_lab_run.py`，只用 stdlib，不进 CI）：① 建局打 serve-api，
+token 从 env `MAILAGENT_LOCAL_API_TOKEN` 读（App 每次启动随机生成、只在内存，pm2 起的 serve-api
+没有它），缺席 exit 2 并打印两条可操作路径；② 开局投递打 gateway `POST /api/ai/group-chat`
+（serve-api 的写消息端点只写库不进调度器）；③ 轮询与费用汇总直读 `ai_chat.db`（group-metrics 是
+单群 + 滚动窗口口径，做不了一局合计）。退出码 0 = 全判据通过 / 1 = 判据失败 / 2 = 环境不可用 /
+3 = 超时（3 与 1 分开，便于「3 局 ≥ 2 局」统计）。判据数值全部 `from src.chat.group_limits import`，
+定价缺失时显式打印「退 tokens 判据」。🔴 装机版的活库在 userData 不在仓库 `data/`，跑装机版要用
+`AI_CHAT_DB_PATH` 指过去。
+
+**已知缺口**（都是有意留的，别当 bug 顺手改）：
+
+- `stoppedChains` 不挡 `onGroupMessage`（g1 预存缺口）：stop 之后同 chainId 的级联行会命中
+  `!run` 分支重新 newRun。game_over 因此靠**按 sessionId** 的 `gameOver` 集合拦，不靠它。
+  改 `stoppedChains` 会动 stop 后的 requeue / 级联语义，要独立评估既有断言。
+- `judge_post` / `judge_denied` 两类系统行在群工作区**不渲染**（g2 遗留）：`groupTimeline` 只
+  放行自己认识的 kind，g3 只加了 `game_over` 一支。
+- 建局无事务、用补偿；模板查重按标题（见上）。

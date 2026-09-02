@@ -54,7 +54,7 @@
   "tests/e2e/smoke.spec.ts": 1,
   "tests/eslint-rules.test.ts": 1,
   "tests/main/backend_lifecycle.test.ts": 1,
-  "tests/main/chat_db.test.ts": 3,
+  "tests/main/chat_db.test.ts": 1,
   "tests/main/envelope.test.ts": 1,
   "tests/shared/api/chat_api.test.ts": 2,
   "tests/shared/api/http_api_config.test.ts": 6,

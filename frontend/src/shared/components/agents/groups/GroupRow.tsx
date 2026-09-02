@@ -30,10 +30,13 @@ export interface GroupRowItem {
   updated_at: number
   last_read_at?: number | null
   last_message?: ChatSessionListItem['last_message']
+  /** 子群（狼人杀的狼群 / 预言家群）→ 父群 id；顶级群恒空。 */
+  parent_session_id?: number | null
 }
 
 export function GroupRow({
   item,
+  parentTitle,
   memberMeta,
   selected,
   unread,
@@ -48,6 +51,8 @@ export function GroupRow({
   onDelete
 }: {
   item: GroupRowItem
+  /** 父群标题（子群才有；父群不在清单里时由 GroupList 传 null，chip 退回 `#id`）。 */
+  parentTitle?: string | null
   memberMeta: Map<string, GroupMemberMeta>
   selected: boolean
   unread: boolean
@@ -163,6 +168,17 @@ export function GroupRow({
             >
               {title}
             </span>
+            {/* 子群标注是群名右侧的小 chip：第二行三态（发言中 / 预览 / 成员数）不让位给它。 */}
+            {item.parent_session_id != null && (
+              <span
+                data-subgroup-of={item.parent_session_id}
+                className="shrink-0 rounded-full bg-ink-3 px-1.5 py-px text-micro text-ink-fg-3"
+              >
+                {t('groupChat.subgroupOf', {
+                  title: parentTitle ?? `#${item.parent_session_id}`
+                })}
+              </span>
+            )}
             <span className="shrink-0 text-meta tabular-nums text-ink-fg-3">{stamp}</span>
           </span>
           <span className={cn('block truncate text-micro', speaking ? 'text-ai' : 'text-ink-fg-3')}>

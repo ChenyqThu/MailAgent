@@ -34,6 +34,7 @@ import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { navigateToReport } from '@shared/navigation/registry'
+import { navigateToGroupSession } from '@shared/components/agents/groups/navigation'
 import { useContactNavigation } from '@shared/components/contacts/navigation'
 import { useMatterNavigation } from '@shared/components/matters/navigation'
 
@@ -350,6 +351,10 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
       case 'session':
         requestOpenAgentSession(link.sessionId)
         void navigate({ to: '/sessions' })
+        return
+      case 'group':
+        // 群会话不是主 agent 会话面：走群聊分段的落地单源（与系统通知点击共用那一处）。
+        navigateToGroupSession(navigate, link.sessionId)
         return
       case 'report':
         // 08-27 P3：报告有了自己的路由，深链直接落 `/reports/$reportId` —— 原来那条

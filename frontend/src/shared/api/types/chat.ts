@@ -350,6 +350,10 @@ export interface ChatSession {
   // 解析后的形状 = shared/chat_model.ts 的 GroupConfig（单一定义，群设置对话框直接 import 它）。
   // NULL/undefined = 全取出厂默认。🔴 写者只有 serve-api 的 PUT /chat/sessions/{id}/group-config。
   group_config_json?: string | null
+  /** v25 列（子群 → 父群互链）。origin='group' 的子群才非空；两条读路径都带它上 wire。 */
+  parent_session_id?: number | null
+  /** v25 列，值域 src/chat/group_limits.SESSION_INVOKED_BY。 */
+  invoked_by?: string | null
 }
 
 export interface ListAllSessionsOptions {
@@ -392,7 +396,8 @@ export interface ChatSessionListItem extends ChatSession {
     content: string
     role: 'user' | 'assistant'
     speaker_agent_id: string | null
-    via: 'main_agent' | null
+    /** 'judge_post' = 法官从子群 group_post 回投进来的行（g2）；狼人杀里这是高频前缀。 */
+    via: 'main_agent' | 'judge_post' | null
     created_at: number
   } | null
 }

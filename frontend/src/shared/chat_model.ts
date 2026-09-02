@@ -113,6 +113,10 @@ export interface ChatSession {
   // 全取出厂默认（默认值单源在 ai-gateway/groupFloors.ts，DB 里不存默认值副本）。
   // 🔴 写者只有 serve-api（PUT /chat/sessions/{id}/group-config）；gateway 只读。
   group_config_json?: string | null
+  /** v25 列（子群 → 父群互链）。origin='group' 的子群才非空；两条读路径都带它上 wire。 */
+  parent_session_id?: number | null
+  /** v25 列，值域 src/chat/group_limits.SESSION_INVOKED_BY。 */
+  invoked_by?: string | null
 }
 
 /** L4 群聊 g1 — `ai_chat_sessions.group_config_json` 解析后的形状（父设计 §3.1）。
@@ -142,6 +146,9 @@ export interface GroupConfig {
     kind: 'werewolf'
     seed: number
     roles: Record<string, 'wolf' | 'seer' | 'villager'>
+    /** 建局写入的七个显示名（法官 + 六玩家）。子群名单只有本群成员，法官在子群的
+     *  <game_secret> 全表靠它取名（groupGame.ts 取名顺序 titles → 本群名单 → agentId）。 */
+    titles?: Record<string, string>
   }
 }
 
@@ -157,6 +164,12 @@ export interface GroupMetrics {
   last1h: GroupMetricsWindow
   last24h: GroupMetricsWindow
   lastStopReason: string | null
+  /** g3 — 无窗口的会话累计（一局的总量，不是小时量）。旧 serve-api 不带 → undefined。
+   *  family 合计由前端把三个群的这三项相加（相加不是平均：g1「不跨群平均」纪律不破）。 */
+  sessionTurns?: number
+  sessionTokens?: number
+  /** 全 NULL → null（未知 ≠ 0）；family 合计要求每个群都非 null，否则整体显示未知。 */
+  sessionCostUsd?: number | null
 }
 
 export interface GroupMetricsWindow {
@@ -164,6 +177,8 @@ export interface GroupMetricsWindow {
   tokens: number
   /** 整窗 cost_usd 全 NULL → null（未知 ≠ 0：金额地板此时不生效，靠 tokens 地板兜底）。 */
   costUsd: number | null
+  /** 服务端按本群配置算出的当窗地板（Python `window()` 一直在回，TS 侧此前漏抄）。 */
+  caps?: { turns: number | null; tokens: number | null; costUsd: number | null }
 }
 
 /** L4 批次3 R7 — the JSON shape stored in `ai_chat_sessions.paused_marker_json`.

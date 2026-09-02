@@ -18,7 +18,7 @@
 
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Plus, RotateCcw, X } from 'lucide-react'
 
 import type { ChatSession, ReportAgentConfig } from '@shared/api/types'
@@ -72,6 +72,11 @@ import {
   HOURLY_TURNS_DEFAULT,
   HOURLY_USD_DEFAULT,
   MAX_GROUP_MEMBERS,
+  WEREWOLF_CHAIN_CAP,
+  WEREWOLF_HOURLY_TOKENS,
+  WEREWOLF_HOURLY_TURNS,
+  WEREWOLF_HOURLY_USD,
+  WEREWOLF_SESSION_TURN_CAP,
   type GroupResponseMode,
   type GroupTurnOutcome
 } from '../../../../ai-gateway/groupFloors'
@@ -92,7 +97,21 @@ const NUMERIC_FIELDS = [
   { key: 'sessionTurnCap', fallback: null, step: 1 }
 ] as const
 
+/** 狼人杀预设下这五项的缺省换一套（调度器按 preset 取同一批常量；数值不落库，所以留空的
+ *  输入框要显示的是**它实际会用的**那个数，而不是出厂默认）。 */
+const WEREWOLF_FALLBACKS: Record<NumericKey, number | null> = {
+  chainCap: WEREWOLF_CHAIN_CAP,
+  hourlyTurns: WEREWOLF_HOURLY_TURNS,
+  hourlyTokens: WEREWOLF_HOURLY_TOKENS,
+  hourlyUsd: WEREWOLF_HOURLY_USD,
+  sessionTurnCap: WEREWOLF_SESSION_TURN_CAP
+}
+
 type NumericKey = (typeof NUMERIC_FIELDS)[number]['key']
+
+function fallbackOf(config: GroupConfig, field: (typeof NUMERIC_FIELDS)[number]): number | null {
+  return config.preset === 'werewolf' ? WEREWOLF_FALLBACKS[field.key] : field.fallback
+}
 
 /** turn outcome → 色点 token（design §4.5：发言 ok / 沉默 norm / 重复 low / 跳过 low /
  *  失败 fail / 停止 warn）。 */
@@ -138,6 +157,7 @@ export function GroupDetailsPane({
   sessionId,
   session,
   memberIds,
+  familySessionIds,
   memberMeta,
   candidates,
   labsOn,
@@ -150,6 +170,8 @@ export function GroupDetailsPane({
   session: ChatSession
   /** members_json 序（= 无 @ 时的回复序）。服务端读回 `members` 后以后者为准。 */
   memberIds: string[]
+  /** 本群 + 父群 + 子群（自己在首位）。狼人杀预设下用量按这组合计。 */
+  familySessionIds: readonly number[]
   memberMeta: Map<string, GroupMemberMeta>
   /** 可入群的成员（团队页 chat-capable），加人清单从这里减去已在群的。 */
   candidates: ReportAgentConfig[]
@@ -396,7 +418,7 @@ export function GroupDetailsPane({
                   label={t(`groupChat.details.${field.key}`)}
                   fieldKey={field.key}
                   step={field.step}
-                  fallback={field.fallback}
+                  fallback={fallbackOf(config, field)}
                   value={config[field.key]}
                   resetLabel={t('groupChat.details.resetDefaults')}
                   onCommit={(next) => setConfigM.mutate(numericPatch(field.key, next))}
@@ -450,6 +472,7 @@ export function GroupDetailsPane({
               metrics={metricsQ.data}
               turns={turnsQ.data?.turns ?? []}
               titleOf={titleOf}
+              familySessionIds={familySessionIds}
             />
           )}
 
@@ -732,20 +755,46 @@ function AddMemberButton({
   )
 }
 
-/** 用量：两指标 + 1h（带进度条）/ 24h 两行 + 上次停止 + 近期唤醒表。 */
+/** 用量：两指标 + 1h（带进度条）/ 24h 两行 + 上次停止 + 近期唤醒表；
+ *  狼人杀预设另加一行「本局合计（含子群）」。 */
 function UsageSection({
   config,
   metrics,
   turns,
-  titleOf
+  titleOf,
+  familySessionIds
 }: {
   config: GroupConfig
   metrics: GroupMetrics | undefined
   turns: GroupTurnWire[]
   titleOf: (id: string) => string
+  familySessionIds: readonly number[]
 }): React.ReactElement {
   const { t } = useTranslation()
   const unknown = t('groupChat.metrics.unknown')
+  const preset = config.preset === 'werewolf'
+  // family 合计：三个群各查一次再相加（**相加不是平均** —— 跨群平均没有意义，g1 已登记）。
+  // 🔴 cost 只要有一个群未知就整体未知：把未知当 0 会让「花了多少」读成一个偏低的确定数。
+  const familyQ = useQueries({
+    queries: (preset ? familySessionIds : []).map((id) => ({
+      queryKey: qk.chat.groupMetrics(id),
+      queryFn: () => getGroupMetrics(id),
+      retry: false
+    }))
+  })
+  // useQueries 每次 render 都给新数组，memo 化只会把「已到达的那几份」藏起来，故直接算。
+  const familyLoaded = familyQ.flatMap((q) => (q.data != null ? [q.data] : []))
+  const familyCosts = familyLoaded.map((m) => m.sessionCostUsd)
+  const family =
+    familyLoaded.length === 0
+      ? null
+      : {
+          turns: familyLoaded.reduce((sum, m) => sum + (m.sessionTurns ?? 0), 0),
+          tokens: familyLoaded.reduce((sum, m) => sum + (m.sessionTokens ?? 0), 0),
+          costUsd: familyCosts.every((c) => typeof c === 'number')
+            ? (familyCosts as number[]).reduce((sum, c) => sum + c, 0)
+            : null
+        }
   const pct = (value: number | null | undefined): string =>
     typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : unknown
   const ratio = (value: number | null | undefined): string =>
@@ -792,6 +841,24 @@ function UsageSection({
           <span>{t('groupChat.details.last24h')}</span>
           <span className="font-mono">{windowText(metrics?.last24h)}</span>
         </div>
+        {preset && family != null && (
+          <div className="flex items-center justify-between gap-2" data-family-usage>
+            <span>{t('groupChat.details.familyUsage')}</span>
+            <span className="font-mono">
+              {t('groupChat.details.familyCap', {
+                used: family.turns,
+                cap: WEREWOLF_SESSION_TURN_CAP
+              })}
+              {' · '}
+              {family.costUsd != null
+                ? t('groupChat.details.familyCap', {
+                    used: `$${family.costUsd.toFixed(2)}`,
+                    cap: `$${WEREWOLF_HOURLY_USD}`
+                  })
+                : unknown}
+            </span>
+          </div>
+        )}
         {metrics?.lastStopReason != null && (
           <div className="text-micro text-ink-fg-3">
             {t('groupChat.details.lastStop', {

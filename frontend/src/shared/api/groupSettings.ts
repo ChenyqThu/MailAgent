@@ -12,7 +12,7 @@
 // 无闸镜像；往那份文件里加 import = 把那条不变式和它撑着的闸的理由一起打破。故本模块独立成面，
 // 与 `api/matters.ts` / `api/contacts.ts` / `api/notifications.ts` 同构。
 
-import type { GroupConfig, GroupMetrics } from '@shared/chat_model'
+import type { ChatSession, GroupConfig, GroupMetrics } from '@shared/chat_model'
 import { resolveApiBaseUrl } from '@shared/lib/apiBaseUrl'
 
 import { request } from './http_client'
@@ -146,4 +146,35 @@ export async function getLabs(): Promise<LabsFlags> {
 
 export async function setLabs(flags: Partial<LabsFlags>): Promise<LabsFlags> {
   return request(resolveApiBaseUrl(), 'PUT', '/agent/labs', { body: flags })
+}
+
+/** g3 一键建局的 body（全部可选；值域校验的权威在服务端，这里不复制判据）。 */
+export interface WerewolfGameInput {
+  seed?: number
+  judgeModel?: string | null
+  playerModel?: string | null
+  titlePrefix?: string | null
+}
+
+export interface WerewolfGamePayload {
+  mainSessionId: number
+  wolfSessionId: number
+  seerSessionId: number
+  mainSession: ChatSession
+  title: string
+  seed: number
+  judgeAgentId: string
+  roles: Record<string, 'wolf' | 'seer' | 'villager'>
+  players: Array<{ agentId: string; title: string; role: 'wolf' | 'seer' | 'villager' }>
+  reusedAgents: boolean
+  /** 群建出来了但群设置没写全（补偿失败）→ 调用方只提示、不当成功跳转。 */
+  configApplied: boolean
+}
+
+/** `POST /api/agent/labs/werewolf/new-game`。labs off → 404（调用方只在 labs on 时渲染入口）。
+ *  🔴 应答里的 `roles` / `players` 是 owner 面板事实：UI 默认折叠，不进 toast、不进日志。 */
+export async function createWerewolfGame(
+  input: WerewolfGameInput = {}
+): Promise<WerewolfGamePayload> {
+  return request(resolveApiBaseUrl(), 'POST', '/agent/labs/werewolf/new-game', { body: input })
 }

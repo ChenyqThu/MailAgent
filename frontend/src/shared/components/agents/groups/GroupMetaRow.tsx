@@ -14,7 +14,7 @@ import type { GroupMetaVariant, GroupTimelineItem } from './groupTimeline'
 
 export type GroupMetaItem = Extract<
   GroupTimelineItem,
-  { kind: 'meta' | 'noCandidates' | 'stopped' }
+  { kind: 'meta' | 'noCandidates' | 'stopped' | 'gameOver' }
 >
 
 /** 失败行重试钮的 UI 态（视图持有，按 item.key 记）。 */
@@ -52,6 +52,15 @@ export function GroupMetaRow({
 }): React.ReactElement {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
+
+  if (item.kind === 'gameOver') {
+    // 终局不是「被停止」：不给展开详情、不给重试，只是一条居中的事实。
+    return (
+      <div className="flex items-center justify-center py-1" data-game-over={item.runId ?? ''}>
+        <span className="text-meta text-ink-fg-2">{t('groupChat.gameOver')}</span>
+      </div>
+    )
+  }
 
   if (item.kind === 'stopped') {
     const human = t(`groupChat.stopped.${item.reason}`, { defaultValue: item.reason })

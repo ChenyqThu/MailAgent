@@ -126,6 +126,7 @@ function renderPane(labsOn = true, memberIds = MEMBER_IDS): HTMLElement {
         sessionId={300}
         session={SESSION}
         memberIds={memberIds}
+        familySessionIds={[300]}
         memberMeta={MEMBER_META}
         candidates={CANDIDATES}
         labsOn={labsOn}

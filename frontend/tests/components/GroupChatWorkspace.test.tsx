@@ -394,11 +394,13 @@ describe('GroupChatWorkspace — 建群对话框（一次填齐）', () => {
     expect(mockSetGroupConfig).not.toHaveBeenCalled()
   })
 
-  test('W15 模板入口禁用且说明什么时候接入', async () => {
+  test('W15 labs off 时模板入口禁用且说明去哪儿开', async () => {
     renderWorkspace([])
     fireEvent.click(await screen.findByText('新建群聊'))
     const template = (await screen.findByText('从模板创建')).closest('button') as HTMLButtonElement
     expect(template.disabled).toBe(true)
-    expect(screen.getByText('模板在下一批接入（狼人杀预设）')).toBeTruthy()
+    expect(
+      screen.getByText('狼人杀预设：法官 + 6 位玩家 + 两个子群（需打开实验室「群聊多 agent」）')
+    ).toBeTruthy()
   })
 })

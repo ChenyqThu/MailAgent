@@ -115,6 +115,17 @@ export function GroupChatWorkspace({
     listed ?? (draftSession != null && draftSession.id === activeId ? draftSession : null)
   const detailsOpen = activeId != null && detailsOpenBySession[activeId] === true
 
+  // 一局 = 本群 + 父群 + 本群的子群（自己在首位）。狼人杀的预算是 family 合计，单群数字
+  // 会低报到看不出问题；父子关系只从这一屏的行里推（清单已含全部 origin='group' 行）。
+  const familySessionIds = useMemo<number[]>(() => {
+    if (activeSession == null) return []
+    const ids = [activeSession.id]
+    const parentId = activeSession.parent_session_id ?? null
+    if (parentId != null) ids.push(parentId)
+    for (const i of items) if (i.parent_session_id === activeSession.id) ids.push(i.id)
+    return [...new Set(ids)]
+  }, [activeSession, items])
+
   const select = (id: number): void => {
     setActiveId(id)
     if (narrow) setMobileDetail(true)
@@ -191,6 +202,7 @@ export function GroupChatWorkspace({
         sessionId={activeSession.id}
         session={activeSession}
         memberIds={parseMembersJson(activeSession.members_json ?? null)}
+        familySessionIds={familySessionIds}
         memberMeta={memberMeta}
         candidates={candidates}
         labsOn={labsOn}

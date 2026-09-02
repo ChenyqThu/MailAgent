@@ -64,6 +64,9 @@ export function GroupList({
   // 相对时间的「现在」：整列一份、挂载时冻结（render 期间调 Date.now() 会被 react-hooks/purity
   // 拒绝；与 MatterList / MatterDetail 同一模式）。行不各自读时钟，同一批行口径一致。
   const [now] = useState(() => Date.now())
+  // 子群 chip 的父群名：只从本列表自己的行里查（父群被删 / 不在这一屏 → chip 退回 `#id`，
+  // 不为一个标注多打一次会话读）。
+  const parentTitleById = new Map(items.map((i) => [i.id, i.title]))
 
   return (
     <aside
@@ -117,6 +120,11 @@ export function GroupList({
                 <GroupRow
                   key={item.id}
                   item={item}
+                  parentTitle={
+                    item.parent_session_id != null
+                      ? (parentTitleById.get(item.parent_session_id) ?? null)
+                      : null
+                  }
                   memberMeta={memberMeta}
                   selected={item.id === activeId}
                   unread={item.id !== activeId && unreadOf(item)}
