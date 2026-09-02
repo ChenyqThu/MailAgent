@@ -1668,6 +1668,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     advanceSeenCursor,
     insertGroupTurn: (row) => insertGroupTurn(row),
     groupUsage: (sessionIds, sinceMs) => groupUsage(sessionIds, sinceMs),
+    // g3 — game_over 的重启兜底：PUT group-config 的 sessionTurnCap 区间下界是 1。
+    setSessionTurnCap: async (sessionId, cap) => {
+      await domain.setGroupConfig(sessionId, { sessionTurnCap: Math.max(1, cap) })
+    },
     lastHumanMessageText,
     // g2 — the group SPEAKER run's ToolSet (调度器 turns only; chatRun calls this instead of
     // buildTools for identity.group.groupSpeakerRun). labs off → undefined (a member turn keeps

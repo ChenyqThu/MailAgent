@@ -161,7 +161,11 @@ export function buildGatewaySystemPrompt(args: {
     /** v30（群聊）— present ONLY on a group-chat speaker run (handleGroupChat). Renders the
      *  <current_group_chat> block INSTEAD of <current_team_agent> (a speaking turn needs the
      *  multi-party framing — member roster + 不冒充他人 — not the 1:1 team framing). */
-    group?: { members: Array<{ agentId: string; title: string }>; topic?: string | null } | null
+    group?: {
+      members: Array<{ agentId: string; title: string }>
+      topic?: string | null
+      gameSecret?: string | null
+    } | null
   } | null
   /** W6 — true iff THIS run's built ToolSet holds suggest_followups (manual chat). Injects the
    *  follow-up guidance block; absent/false → byte-identical prompt (headless / harness / tests). */
@@ -243,7 +247,9 @@ export function buildGatewaySystemPrompt(args: {
         ? buildGroupChatIdentityBlock({
             ...args.sessionAgentIdentity,
             group: args.sessionAgentIdentity.group,
-            silenceContract: groupSpeakerRun
+            silenceContract: groupSpeakerRun,
+            // g3 — 浅展开带不上 group 内的键，必须显式映射（缺省 null → 字节不变）。
+            gameSecret: args.sessionAgentIdentity.group.gameSecret ?? null
           })
         : buildTeamAgentIdentityBlock(args.sessionAgentIdentity)
       : ''

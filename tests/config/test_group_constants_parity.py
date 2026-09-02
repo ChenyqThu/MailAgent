@@ -14,6 +14,9 @@ CHECK 拒绝（整条 turn 台账写不进去 = 指标与地板计数同时静�
 gateway 不认识的响应模式。
 
 🔴 抽取失败必须红：每个抽取器抓不到目标结构就抛（不返回空集），外加逐项 canary 断言非空。
+
+g3 狼人杀预设：五个 ``WEREWOLF_*`` int + 一个 ``GAME_OVER_PREFIX`` str 例外进闸 —— Python 侧的
+消费点是 manual 脚本判据与模板 pytest 闸，TS 侧是调度器缺省与 game_over 判据，两侧必同名同值。
 """
 
 from __future__ import annotations
@@ -44,6 +47,15 @@ VOCAB_FLOOR = {
     "GROUP_TURN_OUTCOMES": 6,
     "GROUP_TRIGGER_KINDS": 4,
 }
+
+#: g3 狼人杀预设的五个 int（groupFloors.ts 与 group_limits.py 同名；数值不落库，两侧各自消费）。
+WEREWOLF_INTS = (
+    "WEREWOLF_CHAIN_CAP",
+    "WEREWOLF_HOURLY_TURNS",
+    "WEREWOLF_HOURLY_TOKENS",
+    "WEREWOLF_HOURLY_USD",
+    "WEREWOLF_SESSION_TURN_CAP",
+)
 
 #: v31 的三条 CHECK 各自对应哪个词表（SQL 列名 → 常量名）。
 CHECK_COLUMNS = {
@@ -91,8 +103,18 @@ def parse_ts_const_int(const_name: str, src: str) -> int:
     return int(m.group(1).replace("_", ""))
 
 
-def parse_py_int_const(const_name: str, path: Path) -> int:
-    """Python 模块级 ``NAME: int = 8`` / ``NAME = 8``（AST，不 import 目标模块）。"""
+def parse_ts_const_string(const_name: str, src: str) -> str:
+    """``export const NAME = '…'``（单引号字符串字面量）→ 字符串；抓不到必抛。"""
+    m = re.search(rf"export const {const_name}\s*(?::\s*[^=]+)?=\s*'([^'\n]*)'", src)
+    if not m:
+        raise AssertionError(
+            f"{GROUP_FLOORS_TS.name}: 没找到 `export const {const_name} = '<str>'` —— 解析器需更新"
+        )
+    return m.group(1)
+
+
+def _py_module_const(const_name: str, path: Path) -> ast.AST:
+    """模块级 ``NAME: T = <value>`` / ``NAME = <value>`` 的值节点（AST，不 import 目标模块）。"""
     tree = ast.parse(_read(path))
     for stmt in tree.body:
         target = None
@@ -106,10 +128,24 @@ def parse_py_int_const(const_name: str, path: Path) -> int:
             target = stmt.targets[0].id
         if target != const_name or stmt.value is None:
             continue
-        if not (isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, int)):
-            raise AssertionError(f"{path.name}: {const_name} 不是整数常量 —— 解析器需更新")
-        return int(stmt.value.value)
-    raise AssertionError(f"{path.name}: 没找到模块级 `{const_name} = <int>` —— 解析器需更新")
+        return stmt.value
+    raise AssertionError(f"{path.name}: 没找到模块级 `{const_name} = <value>` —— 解析器需更新")
+
+
+def parse_py_int_const(const_name: str, path: Path) -> int:
+    """Python 模块级 ``NAME: int = 8`` / ``NAME = 8``（AST，不 import 目标模块）。"""
+    value = _py_module_const(const_name, path)
+    if not (isinstance(value, ast.Constant) and isinstance(value.value, int)):
+        raise AssertionError(f"{path.name}: {const_name} 不是整数常量 —— 解析器需更新")
+    return int(value.value)
+
+
+def parse_py_str_const(const_name: str, path: Path) -> str:
+    """Python 模块级 ``NAME: str = "…"`` / ``NAME = "…"``（AST，同 parse_py_int_const 体例）。"""
+    value = _py_module_const(const_name, path)
+    if not (isinstance(value, ast.Constant) and isinstance(value.value, str)):
+        raise AssertionError(f"{path.name}: {const_name} 不是字符串常量 —— 解析器需更新")
+    return value.value
 
 
 def parse_v31_check_vocabularies() -> Dict[str, Set[str]]:
@@ -194,6 +230,29 @@ def test_chain_cap_max_parity() -> None:
     assert ts == py, f"CHAIN_CAP_MAX 漂了：groupFloors.ts={ts}，group_limits.py={py}"
 
 
+@pytest.mark.parametrize("name", WEREWOLF_INTS)
+def test_werewolf_preset_parity(name: str) -> None:
+    """g3 狼人杀预设五个 int：TS 叶子 = Python 叶子（调度器缺省 / 脚本判据 / 模板闸同数）。"""
+    ts = parse_ts_const_int(name, _read(GROUP_FLOORS_TS))
+    py = parse_py_int_const(name, GROUP_LIMITS_PY)
+    assert ts > 0 and py > 0, f"{name} 解析成 0 —— 解析器坏了"
+    assert ts == py, (
+        f"{name} 漂了：groupFloors.ts={ts}，group_limits.py={py}。"
+        "两侧不同数 = 调度器按一个上限停、manual 脚本按另一个上限判失败。"
+    )
+
+
+def test_game_over_prefix_parity() -> None:
+    """终局前缀：调度器的 startsWith 判据（TS）与脚本 / 模板闸（Python）必须逐字相等。"""
+    ts = parse_ts_const_string("GAME_OVER_PREFIX", _read(GROUP_FLOORS_TS))
+    py = parse_py_str_const("GAME_OVER_PREFIX", GROUP_LIMITS_PY)
+    assert ts and py, "GAME_OVER_PREFIX 解析成空串 —— 解析器坏了"
+    assert ts == py, (
+        f"GAME_OVER_PREFIX 漂了：groupFloors.ts={ts!r}，group_limits.py={py!r}。"
+        "法官模板照 Python 侧措辞、调度器照 TS 侧判前缀 —— 不同字 = 一局永远到不了 game_over。"
+    )
+
+
 def test_chat_router_consumes_the_single_source() -> None:
     """第四处载体（chat.py 的校验点）**必须 import 单源，不许自己写字面量**。
 
@@ -221,3 +280,7 @@ def test_extractors_fail_loudly_on_missing_structures() -> None:
         parse_py_int_const("NO_SUCH_INT_CONST", GROUP_LIMITS_PY)
     with pytest.raises(AssertionError):
         p.parse_py_key_collection("NO_SUCH_VOCAB", path=GROUP_LIMITS_PY)
+    with pytest.raises(AssertionError):
+        parse_ts_const_string("NO_SUCH_STR_CONST", _read(GROUP_FLOORS_TS))
+    with pytest.raises(AssertionError):
+        parse_py_str_const("NO_SUCH_STR_CONST", GROUP_LIMITS_PY)

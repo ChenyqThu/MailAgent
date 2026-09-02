@@ -208,6 +208,9 @@ export interface SessionAgentIdentity {
     /** 群用途（group_config_json.topic）。有值 → 身份块多一个 <topic> 元素 + 一句「群用途」；
      *  缺省 / null → 字节不变。只有 调度器 turn 传（v30 speaker 分支不传）。 */
     topic?: string | null
+    /** g3 — 本 speaker 的身份事实（服务端从 group_config_json.game.roles 生成，不是 prompt 规则）。
+     *  法官 = 全表；狼人 = 本人 + 队友；其他 = 只有自己。null / 缺省 → 身份块字节不变。 */
+    gameSecret?: string | null
   } | null
 }
 
@@ -534,6 +537,10 @@ export interface AiGatewayConfig {
    *  🔴 best-effort：跨库无事务（run log 在 sync_store.db、群消息在 ai_chat.db），失败只 warn，
    *  绝不阻塞或回滚 turn。沉默不镜像（silent 率从 ai_chat_group_turn 读）。 */
   mirrorGroupRunLog?: (input: GroupRunLogMirror) => Promise<void>
+  /** g3 — game_over 后把一个 session 的 sessionTurnCap 钉到当时的 family turn 数（重启后一局不
+   *  复活）。lifecycle 实现 = domain.setGroupConfig(sid, { sessionTurnCap })；best-effort，调度器
+   *  失败只 warn。省略 = 只做进程内 game_over。 */
+  setSessionTurnCap?: (sessionId: number, cap: number) => Promise<void> | void
   /** g1 — the server-side group run 调度器. Omitted (the production shape) → createAiGatewayServer
    *  builds one from the group hooks + activeRuns above (all present → orchestrating is possible;
    *  any missing → null, /api/ai/group-chat answers `orchestrated:false` and never 409s). Set only

@@ -28,6 +28,7 @@ import { UI_MESSAGE_STREAM_HEADERS } from 'ai'
 import type { AiGatewayConfig, GroupSessionFacts, SessionAgentIdentity } from './config'
 // v30（群聊）— server-side history assembly for a group speaker run (pure helper).
 import { assembleGroupHistory, type GroupTranscriptRow } from './groupChat'
+import { buildGameSecret } from './groupGame'
 // g1 — the server-side group run 调度器 (pure Node; deps injected from the cfg group hooks below).
 import { GroupOrchestrator, type GroupSpeakInput, type GroupSpeakResult } from './groupOrchestrator'
 import {
@@ -1448,7 +1449,14 @@ export async function speakAsGroupMember(
         input.facts.config.judgeAgentId === input.agentId,
       familySessionIds: input.facts.familySessionIds,
       groupSpeakerRun: true,
-      topic: input.facts.config.topic ?? null
+      topic: input.facts.config.topic ?? null,
+      // g3 — <game_secret> 的唯一生成点（服务端事实：facts.config.game + speaker 身份）。
+      gameSecret: buildGameSecret(
+        input.facts.config.game,
+        input.agentId,
+        input.facts.config.judgeAgentId ?? null,
+        new Map(input.facts.members.map((m) => [m.agentId, m.title]))
+      )
     }
   }
   const prepared = await prepareChatRun(
@@ -1526,7 +1534,8 @@ function buildGroupScheduler(cfg: AiGatewayConfig): GroupOrchestrator | null {
             sessionId,
             ...(facts.parentSessionId != null ? [facts.parentSessionId] : []),
             ...facts.childSessionIds
-          ]
+          ],
+          parentSessionId: facts.parentSessionId ?? null
         }
       },
       listHistory: listGroupHistory,
@@ -1540,6 +1549,7 @@ function buildGroupScheduler(cfg: AiGatewayConfig): GroupOrchestrator | null {
       registerRun: (sessionId, controller) => activeRuns.register(sessionId, controller),
       releaseRun: (sessionId, runId) => activeRuns.release(sessionId, runId),
       mirrorRunLog: cfg.mirrorGroupRunLog,
+      setSessionTurnCap: cfg.setSessionTurnCap,
       emitEvent: cfg.onGroupTurnEvent,
       now: () => Date.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms))

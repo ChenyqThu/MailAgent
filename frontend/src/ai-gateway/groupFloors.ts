@@ -123,3 +123,15 @@ export function isSilence(text: string): boolean {
 export function normalizeForDup(text: string): string {
   return text.replace(/[\s\p{P}\p{S}]/gu, '').toLowerCase()
 }
+
+// ── g3 狼人杀预设（扁平 int：parity 抽取器只吃 export const NAME = <int>）──────────────────
+
+/** g3 — 狼人杀预设地板：config.preset === 'werewolf' 时 resolveGroupRunConfig 的缺省；owner 显式配的键仍优先。 */
+export const WEREWOLF_CHAIN_CAP = 24
+export const WEREWOLF_HOURLY_TURNS = 150
+export const WEREWOLF_HOURLY_TOKENS = 1_500_000
+/** 🔴 整数美元：parse_ts_const_int 只吃整数字面量。 */
+export const WEREWOLF_HOURLY_USD = 3
+export const WEREWOLF_SESSION_TURN_CAP = 120
+/** g3 — 法官宣布终局的前缀（机制判据，不是 prompt 规则；模板 duty 里的措辞与它逐字一致）。 */
+export const GAME_OVER_PREFIX = '【游戏结束】'
