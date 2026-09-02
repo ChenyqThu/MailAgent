@@ -38,6 +38,7 @@ import {
 } from '../../src/ai-gateway/groupOrchestrator'
 import type { GroupTurnEvent } from '../../src/ai-gateway/groupTurnEvent'
 import type { MailAgentDomainClient } from '../../src/ai-gateway/python/domainClient'
+import type { ReportAgentConfig } from '../../src/shared/api/types'
 import { ApprovalGuard } from '../../src/ai-gateway/security/approval'
 import { createAiGatewayServer } from '../../src/ai-gateway/server'
 import { buildGatewayTools } from '../../src/ai-gateway/tools'
@@ -690,5 +691,72 @@ describe('lifecycle computeJudgeScopeStale — members_json 原文 sha256 vs jud
     ).toBe(true)
     expect(computeJudgeScopeStale(raw, { judgeAgentId: null, judgeScopeHash: 'stale' })).toBe(false)
     expect(computeJudgeScopeStale(null, { judgeAgentId: 'judge', judgeScopeHash: hash })).toBe(true)
+  })
+})
+
+// ── AS15 lifecycle resolveGroupMember（T4 主 agent 入群）────────────────────────────────────────
+// 保留字 main 走 assistant-identity 而不是 report_agent；🔴 任何读失败只降级 title，绝不丢成员
+// （成员资格是 handleGroupChat 校验 speakAsAgentId 的安全事实）。
+
+describe('lifecycle resolveGroupMember — 保留字 main 走 assistant-identity，读失败绝不丢成员', () => {
+  test('AS15 main → {name, duty:null, model:null}；name 空 / null / 抛错 → AI；其余 id 走 report_agent（抛错降级）', async () => {
+    const { resolveGroupMember } = await import('../../src/electron/main/ai_gateway_lifecycle')
+    const reportAgent = vi.fn(async (id: string) =>
+      id === 'a'
+        ? ({ title: ' 调研员 ', prompt: '盯进展', model: 'm1' } as unknown as ReportAgentConfig)
+        : null
+    )
+    const named = {
+      reportAgent,
+      assistantIdentity: async () => ({ name: ' 小助 ', avatar: null })
+    }
+    expect(await resolveGroupMember('main', named)).toEqual({
+      agentId: 'main',
+      title: '小助',
+      duty: null,
+      model: null
+    })
+    expect(reportAgent).not.toHaveBeenCalled()
+    expect(
+      await resolveGroupMember('main', {
+        reportAgent,
+        assistantIdentity: async () => ({ name: '  ', avatar: null })
+      })
+    ).toMatchObject({ title: 'AI' })
+    expect(
+      await resolveGroupMember('main', { reportAgent, assistantIdentity: async () => null })
+    ).toMatchObject({ agentId: 'main', title: 'AI' })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(
+      await resolveGroupMember('main', {
+        reportAgent,
+        assistantIdentity: async () => {
+          throw new Error('serve-api down')
+        }
+      })
+    ).toEqual({ agentId: 'main', title: 'AI', duty: null, model: null })
+    // 其余 id：report_agent 行 → title / duty / model；缺行 → id；抛错 → 降级不丢
+    expect(await resolveGroupMember('a', named)).toEqual({
+      agentId: 'a',
+      title: '调研员',
+      duty: '盯进展',
+      model: 'm1'
+    })
+    expect(await resolveGroupMember('zz', named)).toEqual({
+      agentId: 'zz',
+      title: 'zz',
+      duty: null,
+      model: null
+    })
+    expect(
+      await resolveGroupMember('a', {
+        ...named,
+        reportAgent: async () => {
+          throw new Error('boom')
+        }
+      })
+    ).toEqual({ agentId: 'a', title: 'a', duty: null, model: null })
+    expect(warn).toHaveBeenCalledTimes(2)
+    warn.mockRestore()
   })
 })

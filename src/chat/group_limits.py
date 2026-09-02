@@ -25,6 +25,13 @@ from typing import Optional, Tuple
 #: 群成员上限（含所有 realtime / mention 成员；狼人杀 = 法官 + 6）。v30 时是 5，g1 放宽到 8。
 MAX_GROUP_MEMBERS: int = 8
 
+#: 主 agent 在 ``members_json`` / ``ai_chat_group_member.agent_id`` / ``judgeAgentId`` 里的保留 id。
+#: 它**没有** ``report_agent`` 行（身份单源是 owner_settings.assistant_identity），所以成员校验
+#: 对它短路放行，成员事实由 gateway 侧合成。
+#: 🔴 保留字与真实 agent id 会碰撞，碰撞的后果是主 agent 身份被一行 custom agent 静默顶替 ——
+#: ``ReportStore.create_agent``（agent 行的唯一写点）拒收本值。
+MAIN_AGENT_MEMBER_ID: str = "main"
+
 #: 群设置里 chainCap 的允许区间（默认值 12 在 groupFloors.ts；这里只管「owner 能填多大」）。
 CHAIN_CAP_MIN: int = 1
 CHAIN_CAP_MAX: int = 60

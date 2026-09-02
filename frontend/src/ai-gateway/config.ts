@@ -202,10 +202,11 @@ export interface SessionAgentIdentity {
     isJudge?: boolean
     /** g1 — 本群 ∪ 父群 ∪ 子群（含自身）。 */
     familySessionIds?: number[]
-    /** g1 — true ONLY for a 调度器-driven turn (groupOrchestrator via server.ts's speak adapter).
-     *  Drives the prompt 减重门 (buildGatewaySystemPrompt.groupSpeakerRun) and the 沉默契约
-     *  sentence. The v30 renderer-driven speaker turn (labs off) never sets it → prompt
-     *  byte-identical. */
+    /** g1 — true for a group speaker turn: the 调度器-driven turn (groupOrchestrator via
+     *  server.ts's speak adapter) and, since T4 (design M7), the v30 renderer-driven speaker turn
+     *  (labs off) as well. Drives the prompt 减重门 (buildGatewaySystemPrompt.groupSpeakerRun) and
+     *  the 沉默契约 sentence. Tools additionally need `sessionId` (chatRun) — the v30 turn carries
+     *  none, so it stays zero-tool. */
     groupSpeakerRun?: boolean
     /** 群用途（group_config_json.topic）。有值 → 身份块多一个 <topic> 元素 + 一句「群用途」；
      *  缺省 / null → 字节不变。只有 调度器 turn 传（v30 speaker 分支不传）。 */

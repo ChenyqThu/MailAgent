@@ -27,6 +27,7 @@ import type {
   AgentRunListItem,
   AgentRunSpec,
   AgentRunToolOptions,
+  AssistantIdentity,
   ReportBlock,
   ReportAgentConfig,
   ReportConfigPatch,
@@ -1892,6 +1893,23 @@ export class MailAgentDomainClient {
    *  工具够得着写面（policy_rules 同款纪律）。 */
   getLabsFlags(signal?: AbortSignal): Promise<{ groupAgents: string }> {
     return this._req<{ groupAgents: string }>('GET', '/agent/labs', { signal })
+  }
+
+  /** T4 主 agent 入群 — GET /agent/assistant-identity → owner_settings 的主 agent 显示身份
+   *  ({name, avatar}；缺行 / 坏 JSON serve-api 自己 fail-open 成 {null, null}）。
+   *
+   *  🔴 任何读失败（E_NOT_FOUND / 网络 / serve-api 抖动）→ null，**不 throw**：唯一调用方是
+   *  resolveGroupSession 的保留字分支，那里的硬约束是「成员绝不能因为读配置失败而消失」
+   *  （成员事实是 speakAsAgentId 的安全判据，丢了就是 403）。返回 null 时调用方 push 一个
+   *  降级成员，而不是丢掉这个成员。abort 照 _req 的约定原样抛（调用方要能区分取消）。
+   *  READ-ONLY：身份的写面是 owner UI 的 PUT，没有 gateway 工具够得着。 */
+  async getAssistantIdentity(signal?: AbortSignal): Promise<AssistantIdentity | null> {
+    try {
+      return await this._req<AssistantIdentity>('GET', '/agent/assistant-identity', { signal })
+    } catch (e) {
+      if (e instanceof Error && (e.name === 'AbortError' || /abort/i.test(e.message))) throw e
+      return null
+    }
   }
 
   /** g1 群聊 — POST /agent-runs/run-log：把一个群 spoke turn 镜像成一行 `agent_run_log`

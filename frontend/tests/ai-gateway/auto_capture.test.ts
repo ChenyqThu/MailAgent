@@ -122,7 +122,11 @@ describe('makePersistOnFinish — P4 auto compact trigger', () => {
     await fire(makePersistOnFinish(cfg, makeRun()), { responseMessage: asst, isAborted: false })
 
     expect(order).toEqual(['persist', 'capture', 'auto'])
-    expect(turns[0]).toMatchObject({ sessionId: 42, model: 'claude-sonnet-4-6', protocol: 'anthropic' })
+    expect(turns[0]).toMatchObject({
+      sessionId: 42,
+      model: 'claude-sonnet-4-6',
+      protocol: 'anthropic'
+    })
   })
 
   test('red line — pending auto compact work never blocks onFinish', async () => {
@@ -322,6 +326,37 @@ describe('makePersistOnFinish — P2-2 finishReason=length skips capture', () =>
       captureTurnMemory: (t: PersistTurnInput) => captured.push(t)
     } as AiGatewayConfig
     await fire(makePersistOnFinish(cfg, makeRun()), {
+      responseMessage: asst,
+      isAborted: false,
+      finishReason: 'stop'
+    })
+    expect(captured).toHaveLength(1)
+  })
+})
+
+// T4 (design M6) — a group speaker run (PreparedChatRun.groupSpeakerRun, set by prepareChatRun for
+// every identity.group run) never captures: the transcript is other agents' half-trusted output and
+// memory.md is the stable prefix injected into every single-chat turn.
+describe('makePersistOnFinish — T4 群 speaker run 不捕获 memory', () => {
+  test('groupSpeakerRun=true → captureTurnMemory 不调（persistTurn 照走）；false / 缺省 → 仍捕获（对照）', async () => {
+    const captured: PersistTurnInput[] = []
+    const persisted: PersistTurnInput[] = []
+    const cfg = {
+      persistTurn: (t: PersistTurnInput) => {
+        persisted.push(t)
+      },
+      captureTurnMemory: (t: PersistTurnInput) => {
+        captured.push(t)
+      }
+    } as unknown as AiGatewayConfig
+    await fire(makePersistOnFinish(cfg, makeRun({ groupSpeakerRun: true })), {
+      responseMessage: asst,
+      isAborted: false,
+      finishReason: 'stop'
+    })
+    expect(persisted).toHaveLength(1)
+    expect(captured).toHaveLength(0)
+    await fire(makePersistOnFinish(cfg, makeRun({ groupSpeakerRun: false })), {
       responseMessage: asst,
       isAborted: false,
       finishReason: 'stop'

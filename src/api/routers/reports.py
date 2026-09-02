@@ -26,6 +26,7 @@ from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_report_store
 from src.reports import wire
+from src.reports.store import ReservedAgentIdError
 
 router = APIRouter(prefix="/api", tags=["reports"])
 
@@ -244,6 +245,10 @@ async def create_agent(request: Request, body: Optional[dict[str, Any]] = None):
             prompt=raw.get("prompt"),
             tools_json=tools_json,
         )
+    except ReservedAgentIdError as exc:
+        # 保留字（主 agent 的群成员 id）不是「冲突」——库里没有这行，是这个 id 本身不许用。
+        # 必须排在下面的 ValueError 之前：ReservedAgentIdError 是它的子类。
+        raise APIError("E_INVALID_ARG", str(exc), source="sqlite")
     except ValueError as exc:
         raise APIError("E_CONFLICT", str(exc), http_status=409, source="sqlite")
     # custom：v30 三字段（已在建行前深校验+转换）经 update 落库——store.create_agent 不接受这三列，

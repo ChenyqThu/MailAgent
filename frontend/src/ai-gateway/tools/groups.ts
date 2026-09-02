@@ -1,6 +1,9 @@
 // L4 群聊 g2 — the agent-facing GROUP tool family: group_history / group_members / group_post /
 // group_create. Three factories = three venues (父 design §4 权限矩阵):
-//   • createGroupTools       — the MAIN agent in a plain manual_chat session: all four, any group.
+//   • createGroupTools       — the MAIN agent in a plain manual_chat session: all four, any group
+//                              EXCEPT one it is itself a member of (T4: group_post there /
+//                              group_create with itself → E_GROUP_SELF_MEMBER — one identity,
+//                              one entrance: as a member it speaks IN the group).
 //   • createGroupMemberTools — a group MEMBER's speaking turn: the two reads, scope pinned to its
 //                              own group (anything else → E_GROUP_SCOPE with zero hook calls).
 //   • createGroupJudgeTools  — a group JUDGE's speaking turn: all four, scope = the family
@@ -35,6 +38,7 @@ import {
   HOURLY_TURNS_DEFAULT,
   HOURLY_USD_DEFAULT,
   HOURLY_WINDOW_MS,
+  MAIN_AGENT_MEMBER_ID,
   POSTS_PER_TURN_CAP,
   SUBGROUPS_PER_FAMILY_CAP
 } from '../groupFloors'
@@ -149,8 +153,12 @@ interface GroupWriteCtx {
     tool: 'group_post' | 'group_create',
     input: { session_id?: number; user_requested?: boolean }
   ) => Promise<DomainPolicyVerdict>
-  /** run prologue of group_post (judge: scope / stale / per-turn cap; main agent: nothing). */
+  /** run prologue of group_post, BEFORE any hook call (judge: scope / stale / per-turn cap — an
+   *  out-of-family target must fail with zero hook calls; main agent: nothing). */
   beforePost: (target: number) => void
+  /** second prologue of group_post, AFTER the target's facts are read (main agent: the
+   *  self-member refusal needs the roster; the judge has none). */
+  assertPostTarget?: (target: number, facts: GroupSessionFacts) => void
   /** run prologue of group_create; returns the parent id this venue actually uses (the judge
    *  ALWAYS overrides it with its own group — a judge can never pick another parent). */
   beforeCreate: (input: GroupCreateInput) => Promise<number | null>
@@ -173,6 +181,14 @@ interface GroupToolsCtx {
 
 function scopeError(target: number, why: string): DomainError {
   return new DomainError('E_GROUP_SCOPE', `group ${target} is outside this run's scope: ${why}`)
+}
+
+/** T4 (design M5) — 一个身份一条入口：主 agent 已是目标群成员时只能在群里以成员身份发言，不能再从
+ *  单聊投递（投递行 speakerAgentId=null 会绕过调度器的自排除 → 自问自答；群里也会同时出现
+ *  [主助理] 与成员名两个称呼）。建群同理：不能把自己拉进去，想入群由人在成员选择器里操作。
+ *  与 E_GROUP_SCOPE 同为工具层码（DomainError 抛给模型，永不进 ERROR_CODE_TO_HTTP）。 */
+function selfMemberError(why: string): DomainError {
+  return new DomainError('E_GROUP_SELF_MEMBER', `${why}: 你已是该群成员，请直接在群里发言`)
 }
 
 function resolveTarget(input: { session_id?: number }, ctx: GroupToolsCtx): number {
@@ -387,7 +403,8 @@ function defineGroupTools(ctx: GroupToolsCtx): Record<string, Tool> {
       run: async (input: GroupPostInput) => {
         const target = input.session_id
         w.beforePost(target)
-        await requireGroup(hooks, target)
+        const facts = await requireGroup(hooks, target)
+        w.assertPostTarget?.(target, facts)
         const seam = takeSeam()
         const { id, queued } = await deliver(seam, target, input.text)
         w.onPosted?.()
@@ -524,7 +541,17 @@ export function createGroupTools(
       invokedBy: 'main_agent',
       policyEvaluate: mainPolicyEvaluate,
       beforePost: () => undefined,
-      beforeCreate: async (input) => input.parent_session_id ?? null,
+      assertPostTarget: (target, facts) => {
+        if (facts.members.some((m) => m.agentId === MAIN_AGENT_MEMBER_ID)) {
+          throw selfMemberError(`the main agent is already a member of group ${target}`)
+        }
+      },
+      beforeCreate: async (input) => {
+        if (input.member_agent_ids.includes(MAIN_AGENT_MEMBER_ID)) {
+          throw selfMemberError('the main agent cannot add itself to a group it creates')
+        }
+        return input.parent_session_id ?? null
+      },
       deliveryRow: () => ({
         role: 'user',
         speakerAgentId: null,

@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 
 from src.api.app import app
 from src.chat.db import ChatDb
-from src.chat.group_limits import MAX_GROUP_MEMBERS
+from src.chat.group_limits import MAIN_AGENT_MEMBER_ID, MAX_GROUP_MEMBERS
 
 # v7 anchor CHECK + v19 origin + v25 父子两列 + v30 members_json（群聊写面需要的最小列集；
 # g2 起 create_new_session 的 group 分支写 parent_session_id / invoked_by，两列缺一即 INSERT 炸）。
@@ -205,6 +205,23 @@ def test_group_route_rejects_unknown_member(chat_client: TestClient) -> None:
     res = _new_group(chat_client, ["no_such_agent"])
     assert res.status_code == 400
     assert res.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_group_route_accepts_main_agent_reserved_id(chat_client: TestClient) -> None:
+    """T4：主 agent 用保留 id 入群 —— 它没有 report_agent 行（fake store 里也没有这一行），
+    走 get_agent 必然 None，能建成群就证明短路生效，且保留字原样进 members_json。"""
+    res = _new_group(chat_client, [MAIN_AGENT_MEMBER_ID, "dms_helper"], title="带主 agent 的群")
+    assert res.status_code == 200
+    assert json.loads(res.json()["data"]["members_json"]) == [MAIN_AGENT_MEMBER_ID, "dms_helper"]
+
+
+def test_group_route_main_short_circuit_is_exact_match_only(chat_client: TestClient) -> None:
+    """短路判据是**逐字相等**，不是前缀 / 命名空间：`main_helper` 这类未知 id 仍旧 400。
+    （放宽成 startswith 会把任意 `main*` 都放进群，而群里的成员 id 是发言身份的安全事实。）"""
+    for member in ("main_helper", "mainx", "MAIN"):
+        res = _new_group(chat_client, [member])
+        assert res.status_code == 400, member
+        assert res.json()["error"]["code"] == "E_INVALID_ARG"
 
 
 def test_group_route_rejects_more_than_max_members(chat_client: TestClient) -> None:

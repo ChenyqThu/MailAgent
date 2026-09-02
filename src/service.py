@@ -781,6 +781,18 @@ class EmailNotionSyncApp:
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"[report] list_agents probe failed: {e}")
                 has_enabled_report_agent = False
+            # 存量扫描：保留字拒收是后加的（ReportStore.create_agent），老库里可能已经躺着一行
+            # id='main' 的 agent —— 群里的 members_json 用这个 id 指代主 agent，库里真有这行就会
+            # 顶替它的身份。只告警不动数据：删还是改名是 owner 的决定，静默改别人的 agent 行更糟。
+            try:
+                from src.chat.group_limits import MAIN_AGENT_MEMBER_ID
+                if report_store.get_agent(MAIN_AGENT_MEMBER_ID) is not None:
+                    logger.warning(
+                        f"[report] report_agent 表里存在保留 id 行 {MAIN_AGENT_MEMBER_ID!r} —— "
+                        "它会在群聊里顶替主 agent 的身份，请改名或删除该行"
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"[report] reserved-id probe failed: {e}")
             if config.mailagent_report_agent_enabled or has_enabled_report_agent:
                 from src.reports import worker as report_worker
                 report_worker_task = self._spawn_supervised(

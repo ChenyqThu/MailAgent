@@ -18,6 +18,7 @@ import {
   HOURLY_TOKENS_DEFAULT,
   HOURLY_TURNS_DEFAULT,
   HOURLY_USD_DEFAULT,
+  MAIN_AGENT_MEMBER_ID,
   MIN_TURN_GAP_MS,
   PER_AGENT_RUN_CAP,
   RATE_PER_MINUTE,
@@ -290,6 +291,18 @@ describe('候选集（服务端事实）', () => {
     expect(await send(orch, world, 1, '大家汇报下', 'main_agent')).toEqual(['a', 'c'])
     expect(world.turns.map((t) => t.agentId)).toEqual(['a', 'c'])
     expect(world.turns.every((t) => t.triggerKind === 'main_agent')).toBe(true)
+  })
+
+  test('T4 main_agent 触发行不唤醒 main 成员（投递行 speakerAgentId=null，自排除对它失效）；人类触发照常', async () => {
+    const world = makeWorld()
+    group(world, 1, [MAIN_AGENT_MEMBER_ID, 'a'])
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    expect(await send(orch, world, 1, '大家汇报下', 'main_agent')).toEqual(['a'])
+    expect(world.turns.map((t) => t.agentId)).toEqual(['a'])
+    // 主 agent 从单聊 @ 自己的名字也不醒
+    expect(await send(orch, world, 1, `@${MAIN_AGENT_MEMBER_ID} 你说`, 'main_agent')).toEqual([])
+    // 对照（防恒绿）：人类触发时 main 是普通 realtime 成员，按成员序照常唤醒
+    expect(await send(orch, world, 1, '大家再说说')).toEqual([MAIN_AGENT_MEMBER_ID, 'a'])
   })
 
   test('self 不唤醒 self：成员自己的回复只唤醒其他 realtime 成员，triggerKind=agent', async () => {
@@ -961,7 +974,12 @@ describe('UX 批 — group turn 事件（服务端事实的投影）', () => {
       expect(e.ts).toBe(world.clock.now)
     }
     const [queued, start, spoke] = world.events
-    expect(queued).toMatchObject({ agentId: null, seq: null, queued: ['a'], runId: expect.any(String) })
+    expect(queued).toMatchObject({
+      agentId: null,
+      seq: null,
+      queued: ['a'],
+      runId: expect.any(String)
+    })
     expect(queued!.chainProgress.counted).toBe(0)
     expect(start).toMatchObject({ agentId: 'a', seq: 1, queued: [] })
     expect(spoke).toMatchObject({
@@ -1044,7 +1062,13 @@ describe('UX 批 — group turn 事件（服务端事实的投影）', () => {
     group(stale, 1, ['a', 'b'], { mentionOnly: ['a', 'b'] })
     const t2 = stale.human(1, '@a 说')
     const bRow = stale.nextId++
-    stale.messages.push({ ...t2, id: bRow, role: 'assistant', content: 'b 说', speakerAgentId: 'b' })
+    stale.messages.push({
+      ...t2,
+      id: bRow,
+      role: 'assistant',
+      content: 'b 说',
+      speakerAgentId: 'b'
+    })
     stale.cursors.set('1:a', bRow)
     const orch2 = new GroupOrchestrator({ deps: stale.deps, cascade: false })
     await orch2.onGroupMessage(1, t2)
@@ -1265,7 +1289,13 @@ describe('UX 批 — group turn 事件（服务端事实的投影）', () => {
     group(stale, 1, ['a', 'b'], { mentionOnly: ['a', 'b'] })
     const t2 = stale.human(1, '@a 说')
     const bRow = stale.nextId++
-    stale.messages.push({ ...t2, id: bRow, role: 'assistant', content: 'b 说', speakerAgentId: 'b' })
+    stale.messages.push({
+      ...t2,
+      id: bRow,
+      role: 'assistant',
+      content: 'b 说',
+      speakerAgentId: 'b'
+    })
     stale.cursors.set('1:a', bRow)
     const o2 = new GroupOrchestrator({ deps: stale.deps, cascade: false })
     await o2.onGroupMessage(1, t2)

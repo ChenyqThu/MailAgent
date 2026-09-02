@@ -163,3 +163,53 @@ describe('MailAgentDomainClient — abort', () => {
     })
   })
 })
+
+// T4 主 agent 入群 —— resolveGroupSession 的保留字分支靠这个方法拿名字/头像。它的硬约束是
+// 「读失败绝不 throw」：成员事实是 speakAsAgentId 的安全判据，抛出去会让群里的主 agent 在
+// serve-api 抖动时人间蒸发（403）。调用方拿到 null 要 push 一个降级成员，而不是丢掉它。
+describe('MailAgentDomainClient — getAssistantIdentity', () => {
+  test('GET /agent/assistant-identity → the identity row', async () => {
+    const { fetchImpl, calls } = recordingFetch(() => success({ name: 'Jarvis', avatar: null }))
+    const out = await client(fetchImpl).getAssistantIdentity()
+    expect(calls[0].method).toBe('GET')
+    expect(calls[0].url).toContain('/api/agent/assistant-identity')
+    expect(out).toEqual({ name: 'Jarvis', avatar: null })
+  })
+
+  test('E_NOT_FOUND → null（不 throw）', async () => {
+    const { fetchImpl } = recordingFetch(() => ({
+      status: 404,
+      json: { status: 'error', error: { code: 'E_NOT_FOUND', message: 'missing' } }
+    }))
+    await expect(client(fetchImpl).getAssistantIdentity()).resolves.toBeNull()
+  })
+
+  test('网络故障 / 上游 5xx → null（不 throw）', async () => {
+    const { fetchImpl } = recordingFetch(() => ({
+      status: 500,
+      json: { status: 'error', error: { code: 'E_INTERNAL', message: 'boom' } }
+    }))
+    await expect(client(fetchImpl).getAssistantIdentity()).resolves.toBeNull()
+
+    const throwingFetch = (async () => {
+      throw new TypeError('fetch failed')
+    }) as unknown as typeof fetch
+    await expect(client(throwingFetch).getAssistantIdentity()).resolves.toBeNull()
+  })
+
+  test('abort 仍原样抛（调用方要能区分「取消」与「读不到」）', async () => {
+    const ac = new AbortController()
+    const fetchImpl = (async (_u: string | URL | Request, init?: RequestInit) => {
+      if (init?.signal?.aborted) {
+        const e = new Error('The operation was aborted')
+        e.name = 'AbortError'
+        throw e
+      }
+      return new Response(JSON.stringify({ status: 'success', data: {} }), { status: 200 })
+    }) as unknown as typeof fetch
+    ac.abort()
+    await expect(client(fetchImpl).getAssistantIdentity(ac.signal)).rejects.toMatchObject({
+      name: 'AbortError'
+    })
+  })
+})

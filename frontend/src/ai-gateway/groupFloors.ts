@@ -12,6 +12,11 @@
 /** 群成员上限（含所有 realtime / mention 成员；狼人杀 = 法官 + 6）。 */
 export const MAX_GROUP_MEMBERS = 8
 
+/** 主 agent 作为群成员 / 主持人时的保留 id（members_json、ai_chat_group_member.agent_id、
+ *  judgeAgentId 共用）。它没有 report_agent 行 —— 成员事实由 resolveGroupSession 合成，
+ *  serve-api 的成员校验对它短路放行。 */
+export const MAIN_AGENT_MEMBER_ID = 'main'
+
 // ── 链 / run 级地板（「run」= 一个链根引发的连续处理，chain_id 是它的键）──────────────────
 
 /** 一条链最多几次唤醒（spoke / silent / held_dup 计入；skipped 不计）。owner 可在群设置里改。 */

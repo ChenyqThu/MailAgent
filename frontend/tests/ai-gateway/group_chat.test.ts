@@ -28,7 +28,12 @@ import {
   parseGroupMentions,
   type GroupTranscriptRow
 } from '../../src/ai-gateway/groupChat'
-import { SILENCE_SENTINEL, isSilence, normalizeForDup } from '../../src/ai-gateway/groupFloors'
+import {
+  MAIN_AGENT_MEMBER_ID,
+  SILENCE_SENTINEL,
+  isSilence,
+  normalizeForDup
+} from '../../src/ai-gateway/groupFloors'
 import {
   buildCurrentDateBlock,
   buildGatewaySystemPrompt,
@@ -189,6 +194,31 @@ describe('g1 groupChat 纯函数', () => {
     expect(messages).toHaveLength(1)
     expect((messages[0]?.parts[0] as { text: string }).text).toBe(
       `[${GROUP_MAIN_AGENT_LABEL}] 主 agent 转来的任务\n\n[调研员] 收到\n\n[${GROUP_USER_LABEL}] 再补充一句`
+    )
+  })
+
+  test('T4 assembleGroupHistory — speakAs=main：自己的行走 assistant，他人行走 [名字]；别人视角里它是 [名字]', () => {
+    const titles = new Map([
+      ['agent_a', '调研员'],
+      [MAIN_AGENT_MEMBER_ID, '小助']
+    ])
+    const rows = [
+      row(1, 'user', '大家汇报下'),
+      row(2, 'assistant', '我先说', MAIN_AGENT_MEMBER_ID),
+      row(3, 'assistant', '收到', 'agent_a'),
+      // 主 agent 从单聊投递的行（保留字不是它的 speaker）仍按 via 标 [主助理]
+      row(4, 'user', '单聊转来的', null, { via: 'main_agent' })
+    ]
+    const own = assembleGroupHistory(rows, MAIN_AGENT_MEMBER_ID, titles)
+    expect(own.map((m) => m.role)).toEqual(['user', 'assistant', 'user'])
+    expect((own[1]?.parts[0] as { text: string }).text).toBe('我先说')
+    expect((own[2]?.parts[0] as { text: string }).text).toBe(
+      `[调研员] 收到\n\n[${GROUP_MAIN_AGENT_LABEL}] 单聊转来的`
+    )
+    const other = assembleGroupHistory(rows.slice(0, 2), 'agent_a', titles)
+    expect(other).toHaveLength(1)
+    expect((other[0]?.parts[0] as { text: string }).text).toBe(
+      `[${GROUP_USER_LABEL}] 大家汇报下\n\n[小助] 我先说`
     )
   })
 
@@ -381,6 +411,10 @@ describe('🔴 ② 群聊发言 turn 恒零工具（prepareChatRun 结构守卫�
     expect(grouped.ok).toBe(true)
     if (grouped.ok) expect(grouped.run.toolNames).toEqual([])
     expect(buildTools).not.toHaveBeenCalled()
+    // T4 (design M6) — 同一个 identity.group 判据还要传下去：PreparedChatRun.groupSpeakerRun 是
+    // makePersistOnFinish 跳过 memory 捕获的唯一依据。断在这里而不是只断 makePersistOnFinish，
+    // 是因为那边的用例自己造 run 对象 —— 接线断了它照样绿。
+    if (grouped.ok) expect(grouped.run.groupSpeakerRun).toBe(true)
 
     const teamOnly = await prepareChatRun(
       { messages: MESSAGES },
@@ -391,6 +425,7 @@ describe('🔴 ② 群聊发言 turn 恒零工具（prepareChatRun 结构守卫�
     )
     expect(teamOnly.ok).toBe(true)
     expect(buildTools).toHaveBeenCalledTimes(1)
+    if (teamOnly.ok) expect(teamOnly.run.groupSpeakerRun).toBe(false)
   })
 })
 

@@ -31,6 +31,7 @@ import {
   listGeneralSessions,
   listMessages
 } from '../../src/electron/main/chat_db'
+import { advanceSeenCursor, getGroupMemberConfigs } from '../../src/electron/main/chat_db/groups'
 
 const { appMock } = vi.hoisted(() => ({
   appMock: { isPackaged: false, getPath: (_k: string) => '/tmp' } as {
@@ -208,5 +209,39 @@ describe('v30 group listing exclusion (③) + write faces (④)', () => {
     expect(() =>
       createNewSession({ anchorType: 'general', backendKind: 'ai-sdk', groupMembers: [] })
     ).toThrow(/non-empty/)
+  })
+
+  test('⑤ T4 保留字 main：members_json / ai_chat_group_member.response_mode / speaker_agent_id 三处直接可写可读（无 FK、零迁移）', () => {
+    const group = createNewSession({
+      anchorType: 'general',
+      backendKind: 'ai-sdk',
+      groupMembers: ['main', 'agent_a'],
+      title: 'T'
+    })
+    expect(JSON.parse(group.members_json ?? '[]')).toEqual(['main', 'agent_a'])
+    // serve-api 半边写的列（这里直接 INSERT 模拟 PUT group-config 的列级 UPSERT）
+    getChatDb()
+      .prepare(
+        `INSERT INTO ai_chat_group_member (session_id, agent_id, response_mode, updated_at)
+         VALUES (?, 'main', 'realtime', 1)`
+      )
+      .run(group.id)
+    expect(getGroupMemberConfigs(group.id)).toEqual([
+      { agentId: 'main', responseMode: 'realtime', seenThroughId: null, updatedAt: 1 }
+    ])
+    // gateway 半边：游标列级写，不冲 response_mode
+    advanceSeenCursor(group.id, 'main', 5)
+    expect(getGroupMemberConfigs(group.id)[0]).toMatchObject({
+      responseMode: 'realtime',
+      seenThroughId: 5
+    })
+    appendMessage({
+      sessionId: group.id,
+      role: 'assistant',
+      content: 'hi',
+      status: 'complete',
+      speakerAgentId: 'main'
+    })
+    expect(listMessages(group.id)[0]?.speaker_agent_id).toBe('main')
   })
 })

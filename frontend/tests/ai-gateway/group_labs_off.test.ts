@@ -3,8 +3,9 @@
 // 钉三件事：
 //   ① off（hook 返 off / hook 缺席 / hook 抛错）下 append 只落用户行，`orchestrated:false`，
 //     不唤醒任何成员：零模型调用、零 turn 台账、零游标。
-//   ② off 下 speaker 模式与 v30 逐字节一致：SSE 帧 / 持久化形状 / 进模型的 system prompt
-//     （无减重门、无沉默契约）与 buildGatewaySystemPrompt 的 v30 群路径逐字节相等。
+//   ② off 下 speaker 模式的 SSE 帧 / 持久化形状与 v30 逐字节一致；进模型的 system prompt 自 T4
+//     （design M7）起与调度器 turn 同为减重态（无 memory.md / 技能名单 / connector 名单）+ 沉默契约，
+//     与 buildGatewaySystemPrompt({groupSpeakerRun:true}) 逐字节相等；按契约回 [沉默] 的 turn 不落行。
 //   ③ /api/ai/chat 不读任何群 / labs hook：labs on 与 off 的同一请求体 → 响应体 diff 为空。
 
 import { describe, expect, test, vi } from 'vitest'
@@ -28,7 +29,7 @@ const USAGE = {
 
 type MockDoStream = NonNullable<ConstructorParameters<typeof MockLanguageModelV3>[0]>['doStream']
 
-function okModel(captured: { options?: unknown } = {}): MockLanguageModelV3 {
+function okModel(captured: { options?: unknown } = {}, text = 'ok'): MockLanguageModelV3 {
   return new MockLanguageModelV3({
     doStream: (async (options: unknown) => {
       captured.options = options
@@ -37,7 +38,7 @@ function okModel(captured: { options?: unknown } = {}): MockLanguageModelV3 {
           chunks: [
             { type: 'stream-start' as const, warnings: [] },
             { type: 'text-start' as const, id: '1' },
-            { type: 'text-delta' as const, id: '1', delta: 'ok' },
+            { type: 'text-delta' as const, id: '1', delta: text },
             { type: 'text-end' as const, id: '1' },
             { type: 'finish' as const, finishReason: { unified: 'stop' as const }, usage: USAGE }
           ]
@@ -198,8 +199,8 @@ describe('AC9 ① labs off — append 不唤醒任何成员', () => {
   )
 })
 
-describe('AC9 ② labs off — speaker 模式与 v30 逐字节一致', () => {
-  test('SSE 帧 / 持久化形状 / system prompt（无减重、无沉默契约）== v30 群路径；不写 turn 台账', async () => {
+describe('AC9 ② labs off — speaker 模式：帧 / 持久化 == v30；prompt == 减重态（T4 M7）', () => {
+  test('SSE 帧 / 持久化形状 == v30；system prompt == groupSpeakerRun:true 的 buildGatewaySystemPrompt（去四段 + 沉默契约）；不写 turn 台账', async () => {
     const w = world('off')
     w.config.appendGroupMessage!(7, { role: 'user', content: '大家汇报下', speakerAgentId: null })
     const h = await start(w.config)
@@ -223,7 +224,7 @@ describe('AC9 ② labs off — speaker 模式与 v30 逐字节一致', () => {
         metadata: null
       })
       expect(w.createModel).toHaveBeenCalledWith('member-model')
-      // 进模型的 system == v30 群路径（无 groupSpeakerRun 门）的 buildGatewaySystemPrompt 输出。
+      // 进模型的 system == 减重门开着的 buildGatewaySystemPrompt 输出（T4 M7：labs 两态一致）。
       const system = systemPromptOf(w.captured)
       expect(system).toBe(
         buildGatewaySystemPrompt({
@@ -235,15 +236,37 @@ describe('AC9 ② labs off — speaker 模式与 v30 逐字节一致', () => {
             duty: '盯进展',
             scheduleLine: null,
             group: { members: MEMBERS.map((m) => ({ agentId: m.agentId, title: m.title })) }
-          }
+          },
+          groupSpeakerRun: true
         })
       )
-      expect(system).toContain('MEMORY-LINE')
-      expect(system).toContain('SKILL-X-DESC')
-      expect(system).not.toContain(SILENCE_SENTINEL)
+      expect(system).not.toContain('MEMORY-LINE')
+      expect(system).not.toContain('SKILL-X-DESC')
+      expect(system).toContain(SILENCE_SENTINEL)
       // v1 路径不经调度器：无台账、无游标。
       expect(w.turns).toEqual([])
       expect(w.cursors.size).toBe(0)
+    } finally {
+      await closeAll()
+    }
+  })
+
+  test('T4 沉默契约的 v30 半边：模型回 [沉默] → 不落 assistant 行，done 帧 messageId=null', async () => {
+    const w = world('off')
+    w.createModel.mockImplementation(() => okModel(w.captured, SILENCE_SENTINEL))
+    w.config.appendGroupMessage!(7, { role: 'user', content: '大家汇报下', speakerAgentId: null })
+    const h = await start(w.config)
+    try {
+      const res = await postGroup(h.port, { sessionId: 7, speakAsAgentId: 'agent_a' })
+      expect(res.status).toBe(200)
+      const frames = await readSseFrames(res)
+      expect(frames[frames.length - 1]).toEqual({
+        type: 'done',
+        messageId: null,
+        content: SILENCE_SENTINEL,
+        speakerAgentId: 'agent_a'
+      })
+      expect(w.messages.map((m) => m.role)).toEqual(['user'])
     } finally {
       await closeAll()
     }

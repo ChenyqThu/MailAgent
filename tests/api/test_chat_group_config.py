@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 
 from src.api.app import app
 from src.chat.db import ChatDb
+from src.chat.group_limits import MAIN_AGENT_MEMBER_ID
 
 # v7 anchor CHECK + v19 origin + v30 members_json + v31 群三载体（群设置面需要的最小列集）。
 _DDL = """
@@ -57,6 +58,8 @@ CREATE TABLE ai_chat_group_member (
 """
 
 _MEMBERS = ["a1", "a2", "a3"]
+#: T4 — 主 agent 用保留 id 入群的那一份名单（session 3）。
+_MAIN_MEMBERS = [MAIN_AGENT_MEMBER_ID, "a1"]
 
 
 @pytest.fixture
@@ -74,6 +77,13 @@ def chat_db_path(tmp_path: Path) -> Path:
     conn.execute(
         "INSERT INTO ai_chat_sessions (id, email_id, anchor_type, anchor_id, backend_kind, "
         "archived, created_at, updated_at) VALUES (2, NULL, 'general', NULL, 'ai-sdk', 0, 1, 1)"
+    )
+    # 3 = 主 agent 在名单里的群（T4：主持人位可以是它）。
+    conn.execute(
+        "INSERT INTO ai_chat_sessions (id, email_id, anchor_type, anchor_id, backend_kind, "
+        "archived, created_at, updated_at, origin, members_json) "
+        "VALUES (3, NULL, 'general', NULL, 'ai-sdk', 0, 1, 1, 'group', ?)",
+        (json.dumps(_MAIN_MEMBERS),),
     )
     conn.commit()
     conn.close()
@@ -176,6 +186,23 @@ def test_judge_change_writes_scope_hash(chat_client: TestClient, chat_db_path: P
     cleared = _put(chat_client, {"judgeAgentId": None}).json()["data"]
     assert cleared["config"]["judgeAgentId"] is None
     assert cleared["config"]["judgeScopeHash"] is None
+
+
+def test_main_agent_can_hold_the_host_seat(chat_client: TestClient) -> None:
+    """T4：主持人位可以是主 agent —— 判据只有 ``judge ∈ members``，与 agent id 无关。
+
+    hash 照常按名单原文写（主持人是谁不进 hash），所以主 agent 坐主持人位的免卡锚与别人同源。
+    这条钉住的是「不要为保留字新开一条绕过 members 校验的分支」，也钉住反向的
+    「别给主持人位加一道 report_agent 行存在性检查」—— 主 agent 没有那一行。
+    """
+    data = _put(chat_client, {"judgeAgentId": MAIN_AGENT_MEMBER_ID}, session_id=3).json()["data"]
+    assert data["config"]["judgeAgentId"] == MAIN_AGENT_MEMBER_ID
+    assert data["config"]["judgeScopeHash"] == (
+        hashlib.sha256(json.dumps(_MAIN_MEMBERS).encode("utf-8")).hexdigest()
+    )
+    assert data["judgeScopeStale"] is False
+    # 不在名单里的保留字仍旧 400（session 1 的名单没有主 agent）。
+    assert _put(chat_client, {"judgeAgentId": MAIN_AGENT_MEMBER_ID}).status_code == 400
 
 
 def test_modes_persist_and_merge_with_config(chat_client: TestClient) -> None:

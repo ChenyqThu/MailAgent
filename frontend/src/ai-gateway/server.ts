@@ -30,6 +30,7 @@ import type { AiGatewayConfig, GroupSessionFacts, SessionAgentIdentity } from '.
 import { encodeAttachmentsMetadata, validateAttachmentsInput } from './groupAttachments'
 // v30（群聊）— server-side history assembly for a group speaker run (pure helper).
 import { assembleGroupHistory, type GroupTranscriptRow } from './groupChat'
+import { isSilence } from './groupFloors'
 import { buildGameSecret } from './groupGame'
 // g1 — the server-side group run 调度器 (pure Node; deps injected from the cfg group hooks below).
 import { GroupOrchestrator, type GroupSpeakInput, type GroupSpeakResult } from './groupOrchestrator'
@@ -1378,7 +1379,13 @@ async function handleGroupChat(
     duty: member.duty ?? null,
     model: member.model ?? null,
     scheduleLine: null,
-    group: { members: facts.members.map((m) => ({ agentId: m.agentId, title: m.title })) }
+    group: {
+      members: facts.members.map((m) => ({ agentId: m.agentId, title: m.title })),
+      // T4 (design M7) — labs off 也是减重态 + 沉默契约：群里有其他 agent 的半可信输出，
+      // memory.md / 技能名单 / connector 名单不该进这个 prompt，且两态的 prompt 面必须一致。
+      // sessionId 有意不带 → chatRun 不调 buildGroupSpeakerTools，v30 的零工具姿态不变。
+      groupSpeakerRun: true
+    }
   }
   const controller = new AbortController()
   req.on('close', () => controller.abort())
@@ -1407,12 +1414,17 @@ async function handleGroupChat(
     }
     const text = await prepared.run.result.text
     if (!controller.signal.aborted) {
-      const messageId = appendGroupMessage(sessionId, {
-        role: 'assistant',
-        content: text,
-        speakerAgentId: speakAs,
-        model: prepared.run.modelId
-      })
+      // 沉默契约的 v30 半边：按契约回 [沉默] 的 turn 不落行（落了会被 renderer 下一次 refetch
+      // 当成一条发言显示，还会喂进其他成员的历史）。done 帧 messageId=null，groupChatClient
+      // 本就按 number 判型。
+      const messageId = isSilence(text)
+        ? null
+        : appendGroupMessage(sessionId, {
+            role: 'assistant',
+            content: text,
+            speakerAgentId: speakAs,
+            model: prepared.run.modelId
+          })
       writeSse(res, { type: 'done', messageId, content: text, speakerAgentId: speakAs })
     }
   } catch (err) {

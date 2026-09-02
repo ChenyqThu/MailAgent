@@ -50,6 +50,7 @@ import {
   HOURLY_WINDOW_MS,
   JUDGE_RUN_SHARE_DIVISOR,
   LAPPING_FACTOR,
+  MAIN_AGENT_MEMBER_ID,
   MIN_TURN_GAP_MS,
   PER_AGENT_RUN_CAP,
   RATE_PER_MINUTE,
@@ -399,8 +400,12 @@ export class GroupOrchestrator {
     const realtime = facts.members
       .filter((m) => (facts.modes[m.agentId] ?? 'mention') === 'realtime')
       .map((m) => m.agentId)
+    // T4 (design M5) — 主 agent 从单聊投递的行 speakerAgentId 是 null（via='main_agent'），上面的
+    // 自排除对它失效：主 agent 若也是本群成员，会被自己的投递唤醒（自问自答 + 计入链根配额）。
+    // 工具侧已拒（E_GROUP_SELF_MEMBER）；这里是对历史行与旁路投递的结构兜底。
     const candidates = (mentioned.length ? mentioned : realtime).filter(
-      (id) => id !== row.speakerAgentId
+      (id) =>
+        id !== row.speakerAgentId && !(triggerKind === 'main_agent' && id === MAIN_AGENT_MEMBER_ID)
     )
     let run = this.runs.get(key)
     if (candidates.length === 0) {

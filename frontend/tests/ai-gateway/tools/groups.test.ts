@@ -13,6 +13,7 @@ import type { GroupSessionFacts } from '../../../src/ai-gateway/config'
 import type { GroupTranscriptRow } from '../../../src/ai-gateway/groupChat'
 import {
   GROUP_HISTORY_LIMIT_MAX,
+  MAIN_AGENT_MEMBER_ID,
   POSTS_PER_TURN_CAP,
   SUBGROUPS_PER_FAMILY_CAP
 } from '../../../src/ai-gateway/groupFloors'
@@ -689,6 +690,109 @@ describe('main-agent group tools', () => {
       message: expect.stringContaining('seam boom')
     })
     expect(lastCall(w4.hooks.deleteSession)).toEqual([77])
+  })
+})
+
+// ── G18–G21 主 agent 入群（T4）────────────────────────────────────────────────────────────────
+// 保留字 'main' 没有 report_agent 行；在工具面上它只是又一个成员 id —— 三个工厂零特判。钉的是：
+// 成员 run 仍只有两件读；主持人 run 四件恒免卡、子群名单必须含它、投递行以它为 speaker；
+// 主 agent 单聊版对「自己已是成员的群」拒 group_post、拒把自己拉进 group_create
+// （E_GROUP_SELF_MEMBER：一个身份一条入口）。
+
+describe('T4 主 agent 入群', () => {
+  const HOSTED = 30 // main 是成员且坐主持人位
+  const JOINED = 31 // main 只是普通成员
+  function withMain(w: World): World {
+    w.facts.set(
+      HOSTED,
+      mkFacts([MAIN_AGENT_MEMBER_ID, 'a', 'b'], {
+        config: { v: 1, judgeAgentId: MAIN_AGENT_MEMBER_ID }
+      })
+    )
+    w.facts.set(JOINED, mkFacts(['a', MAIN_AGENT_MEMBER_ID], { modes: { main: 'realtime' } }))
+    w.rows.set(HOSTED, [])
+    w.rows.set(JOINED, [])
+    return w
+  }
+
+  test('G18 main 作为普通成员：成员工厂仍只有两件读；group_members 把它当普通成员列出', async () => {
+    const w = withMain(world())
+    const { tools } = memberTools(w, JOINED)
+    expect(Object.keys(tools).sort()).toEqual(['group_history', 'group_members'])
+    const out = (await execute(tools.group_members!, {})) as {
+      members: Array<Record<string, unknown>>
+    }
+    expect(out.members).toEqual([
+      { agent_id: 'a', title: 'T-a', response_mode: 'mention', is_judge: false },
+      {
+        agent_id: MAIN_AGENT_MEMBER_ID,
+        title: 'T-main',
+        response_mode: 'realtime',
+        is_judge: false
+      }
+    ])
+  })
+
+  test('G19 main 坐主持人位：四件、needsApproval 恒 false、子群名单必须含 main、投递行 speaker=main', async () => {
+    const w = withMain(world())
+    const { tools } = judgeTools(w, {
+      sessionId: HOSTED,
+      judgeAgentId: MAIN_AGENT_MEMBER_ID,
+      familySessionIds: [HOSTED]
+    })
+    expect(Object.keys(tools).sort()).toEqual(FOUR)
+    const create = { title: '子群', member_agent_ids: ['a', 'b'], opening_text: '开会' }
+    expect(await needs(tools.group_create!, create, 'tc-c1')).toBe(false)
+    expect(await needs(tools.group_post!, { session_id: HOSTED, text: 'x' }, 'tc-p1')).toBe(false)
+    // 子群名单不含主持人 → E_GROUP_SCOPE：保留字走的是同一条「必须含 judge」规则
+    await expect(runWrite(tools.group_create!, create, 'tc-c2')).rejects.toMatchObject({
+      code: 'E_GROUP_SCOPE'
+    })
+    const ok = (await runWrite(
+      tools.group_create!,
+      { ...create, member_agent_ids: [MAIN_AGENT_MEMBER_ID, 'a'] },
+      'tc-c3'
+    )) as Record<string, unknown>
+    expect(ok).toMatchObject({ session_id: 77, parent_session_id: HOSTED })
+    const opening = w.appended.find((x) => x.sessionId === 77)!
+    expect(opening.msg).toMatchObject({ role: 'assistant', speakerAgentId: MAIN_AGENT_MEMBER_ID })
+    expect(JSON.parse(opening.msg.metadata!)).toMatchObject({
+      via: 'judge_post',
+      judgeAgentId: MAIN_AGENT_MEMBER_ID
+    })
+  })
+
+  test('G20 主 agent 单聊版 group_post：目标群含 main → E_GROUP_SELF_MEMBER（零投递零落行）；不含 → 照常', async () => {
+    const w = withMain(world())
+    const { tools } = mainTools(w)
+    await expect(
+      runWrite(tools.group_post!, { session_id: JOINED, text: '我来说两句' }, 'tc-self')
+    ).rejects.toMatchObject({
+      code: 'E_GROUP_SELF_MEMBER',
+      message: expect.stringContaining('你已是该群成员，请直接在群里发言')
+    })
+    expect(calls(w.hooks.appendGroupMessage)).toBe(0)
+    expect(calls(w.deliver)).toBe(0)
+    // 对照（防恒绿）：main 不在的群照常投递
+    expect(await runWrite(tools.group_post!, POST, 'tc-ok')).toMatchObject({ ok: true })
+    // 非群目标仍先于成员判定报 E_NOT_GROUP（G13 的口径不变）
+    await expect(
+      runWrite(tools.group_post!, { session_id: PLAIN, text: 'hi' }, 'tc-plain')
+    ).rejects.toMatchObject({ code: 'E_NOT_GROUP' })
+  })
+
+  test('G21 主 agent 单聊版 group_create：member_agent_ids 含 main → E_GROUP_SELF_MEMBER，一步都不走', async () => {
+    const w = world()
+    const { tools } = mainTools(w)
+    await expect(
+      runWrite(
+        tools.group_create!,
+        { title: 't', member_agent_ids: ['a', MAIN_AGENT_MEMBER_ID], opening_text: 'o' },
+        'tc-cm'
+      )
+    ).rejects.toMatchObject({ code: 'E_GROUP_SELF_MEMBER' })
+    expect(calls(w.hooks.createGroupSession)).toBe(0)
+    expect(calls(w.deliver)).toBe(0)
   })
 })
 

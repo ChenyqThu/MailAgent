@@ -145,4 +145,12 @@ describe('maybeNotifyGroupReply', () => {
     })
     expect(() => maybeNotifyGroupReply(reply(), getSession, notForeground)).not.toThrow()
   })
+
+  test('N8 speakerAgentId=main（T4 主 agent 成员）→ 保留字照样问注入的解析器，body 用解析到的主 agent 名', async () => {
+    const titleOfMain = vi.fn(async (id: string) => (id === 'main' ? '小助' : null))
+    maybeNotifyGroupReply(reply({ speakerAgentId: 'main' }), getSession, notForeground, titleOfMain)
+    await vi.waitFor(() => expect(publishBodies()).toHaveLength(1))
+    expect(titleOfMain).toHaveBeenCalledWith('main')
+    expect(publishBodies()[0].body).toBe('小助：调研进展如下：一二三')
+  })
 })

@@ -78,7 +78,7 @@ import { parseGroupMemberIds } from '../../ai-gateway/groupChat'
 import { parseAttachmentsMetadata } from '../../ai-gateway/groupAttachments'
 // g1 群编排（CHAT_DB v31）— 成员设置 / seen 游标 / turn 台账的读写面。直接从子模块引（chat_db.ts
 // 兼容 barrel 只为保住既有 importer 的路径，新模块无历史包袱）。
-import type { GroupResponseMode } from '../../ai-gateway/groupFloors'
+import { MAIN_AGENT_MEMBER_ID, type GroupResponseMode } from '../../ai-gateway/groupFloors'
 import {
   advanceSeenCursor,
   familyOf,
@@ -140,7 +140,7 @@ import { deriveExecRule, ExecRuleDeriveError } from './exec_policy_matcher'
 // Phase 06 (context injection) — the standing-context provider fetches the serve-api
 // /chat/config, projecting the system-prompt fields for the gateway.
 import { request } from '@shared/api/http_client'
-import type { ReportAgentConfig } from '@shared/api/types'
+import type { AssistantIdentity, ReportAgentConfig } from '@shared/api/types'
 import type { GroupConfig } from '@shared/chat_model'
 import type { GatewaySystemPromptConfig } from '../../ai-gateway/systemPrompt'
 import type { SkillCatalogEntry } from '../../ai-gateway/prompts/stable_prompt'
@@ -293,6 +293,43 @@ export function computeJudgeScopeStale(
     .update(rawMembersJson ?? '', 'utf8')
     .digest('hex')
   return digest !== config.judgeScopeHash
+}
+
+/** T4 主 agent 入群 — 一个 members_json 成员 id → GroupSessionMember（导出供测试）。保留字
+ *  `main` 没有 report_agent 行：title 取 owner_settings 的 assistant-identity.name（缺省 'AI'），
+ *  duty 恒 null（SOUL/AGENT 已作 standingContext 恒注入，再塞进 <duty> 是重复注入 + 破坏可缓存
+ *  前缀），model 恒 null（落到主 agent 默认模型，群级 modelOverride 仍优先）。其余 id 走
+ *  report_agent 行。
+ *  🔴 永不 throw、永不丢成员：读失败只降级 title / duty / model —— 成员资格是 handleGroupChat
+ *  校验 speakAsAgentId 的安全事实，不能依赖 serve-api 可用性（resolveSessionAgent 同一契约）。 */
+export async function resolveGroupMember(
+  agentId: string,
+  read: {
+    reportAgent: (agentId: string) => Promise<ReportAgentConfig | null>
+    assistantIdentity: () => Promise<AssistantIdentity | null>
+  }
+): Promise<GroupSessionMember> {
+  if (agentId === MAIN_AGENT_MEMBER_ID) {
+    let name: string | null = null
+    try {
+      name = (await read.assistantIdentity())?.name ?? null
+    } catch (err) {
+      console.warn('[ai-gateway] assistant identity fetch failed (main agent member degrades)', err)
+    }
+    return { agentId, title: name?.trim() || 'AI', duty: null, model: null }
+  }
+  try {
+    const agent = await read.reportAgent(agentId)
+    return {
+      agentId,
+      title: agent?.title?.trim() || agentId,
+      duty: agent?.prompt?.trim() || null,
+      model: agent?.model?.trim() || null
+    }
+  } catch (err) {
+    console.warn('[ai-gateway] group member config fetch failed (degrades)', agentId, err)
+    return { agentId, title: agentId, duty: null, model: null }
+  }
 }
 
 /** g1 群编排 — 一条群消息的 `metadata.via`：'main_agent'（主助理投递进群的行）、g2 的
@@ -863,6 +900,30 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     }
     _labsFlagsCache = { at: now, value }
     return value
+  }
+
+  // T4 主 agent 入群 — 主 agent 显示身份热读（GET /api/agent/assistant-identity），形状照上面的
+  // resolveLabsFlags：TTL + 有界超时，读失败缓存 null（成员降级成 'AI'，绝不丢成员）。TTL 比
+  // labs 长：resolveGroupSession 有意不缓存、每条群消息（含级联里每个 turn 前的事实重读）都
+  // 重跑，没有这层缓存一条消息会放大成 N 次 loopback；改名容忍一分钟延迟。
+  const ASSISTANT_IDENTITY_TTL_MS = 60_000
+  let _assistantIdentityCache: { at: number; value: AssistantIdentity | null } | null = null
+  const resolveAssistantIdentity = async (): Promise<AssistantIdentity | null> => {
+    const now = Date.now()
+    if (_assistantIdentityCache && now - _assistantIdentityCache.at < ASSISTANT_IDENTITY_TTL_MS)
+      return _assistantIdentityCache.value
+    let value: AssistantIdentity | null = null
+    try {
+      value = await domain.getAssistantIdentity(AbortSignal.timeout(3_000))
+    } catch {
+      value = null
+    }
+    _assistantIdentityCache = { at: now, value }
+    return value
+  }
+  const groupMemberReads = {
+    reportAgent: (agentId: string) => domain.getReportAgent(agentId),
+    assistantIdentity: resolveAssistantIdentity
   }
 
   const AUTO_COMPACT_SETTING_TTL_MS = 3_000
@@ -1576,18 +1637,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       const memberIds = parseGroupMemberIds(session.members_json ?? null)
       const members: GroupSessionMember[] = []
       for (const memberId of memberIds) {
-        try {
-          const agent = await domain.getReportAgent(memberId)
-          members.push({
-            agentId: memberId,
-            title: agent?.title?.trim() || memberId,
-            duty: agent?.prompt?.trim() || null,
-            model: agent?.model?.trim() || null
-          })
-        } catch (err) {
-          console.warn('[ai-gateway] group member config fetch failed (degrades)', memberId, err)
-          members.push({ agentId: memberId, title: memberId, duty: null, model: null })
-        }
+        members.push(await resolveGroupMember(memberId, groupMemberReads))
       }
       // g1 (v31) — 群设置 / 每成员响应模式 / family 一并解析。🔴 每次 onGroupMessage 重读、
       // 不缓存：这就是「owner 改完设置对下一条消息生效」的结构性保证（AC1），不靠缓存失效。
@@ -1666,7 +1716,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         },
         getSession,
         isGroupForeground,
-        async (agentId) => (await domain.getReportAgent(agentId))?.title?.trim() || null
+        async (agentId) => (await resolveGroupMember(agentId, groupMemberReads)).title
       )
       return row.id
     },
@@ -1709,6 +1759,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // 才是权威源。status 值域按 run_log.py（completed / failed / skipped / running，**无
     // stopped**），步骤只用 trig / out 两类。
     mirrorGroupRunLog: async (input: GroupRunLogMirror) => {
+      // T4 — 主 agent 成员的 spoke turn 不镜像：团队页的主 Agent 没有记录档（teamMembers.ts
+      // recordSource:'none'），写了也是一行没有入口的孤儿台账；ai_chat_group_turn 仍是权威源。
+      if (input.agentId === MAIN_AGENT_MEMBER_ID) return
       try {
         await domain.postRunLog({
           agentId: input.agentId,

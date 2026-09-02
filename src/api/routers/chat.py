@@ -35,6 +35,7 @@ from src.api.deps import get_chat_db, get_env_file_path, get_report_store, get_s
 from src.chat.group_limits import (
     CHAIN_CAP_MAX,
     CHAIN_CAP_MIN,
+    MAIN_AGENT_MEMBER_ID,
     MAX_GROUP_MEMBERS,
     MODEL_OVERRIDE_MAX_CHARS,
     RESPONSE_MODES,
@@ -906,6 +907,11 @@ _CHAT_CAPABLE_AGENT_TYPES = ("report", "contact_profile", "contact_governance", 
 
 def _require_chat_capable(agent_id: str, *, what: str) -> None:
     """agent 必须存在且「能对话」，否则 400。``what`` 只进 message（建群 / 加人两个入口的措辞）。"""
+    # 主 agent 是保留成员 id：它没有 report_agent 行（身份在 owner_settings.assistant_identity），
+    # 走下面的 get_agent 必然 None → 400。放行判据是**逐字相等**，不是前缀 / 命名空间 ——
+    # 保留字与真实 agent id 的碰撞在 ReportStore.create_agent（唯一写点）那里拒掉。
+    if agent_id == MAIN_AGENT_MEMBER_ID:
+        return
     agent = get_report_store().get_agent(agent_id)
     if agent is None or (agent.get("type") or "") not in _CHAT_CAPABLE_AGENT_TYPES:
         raise APIError(

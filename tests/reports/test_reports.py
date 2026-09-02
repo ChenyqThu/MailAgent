@@ -15,13 +15,14 @@ from pathlib import Path
 
 import pytest
 
+from src.chat.group_limits import MAIN_AGENT_MEMBER_ID
 from src.llm_agent.client import LLMResult
 from src.llm_agent.store import LLMProcessingStore
 from src.mail.sync_store import SyncStore
 from src.reports import data as rdata
 from src.reports import models as m
 from src.reports.assembler import assemble_fallback_doc, assemble_report_doc
-from src.reports.store import ReportStore
+from src.reports.store import ReportStore, ReservedAgentIdError
 from src.reports.summarizer import (
     _FIXED_RULES,
     REPORT_TOOL_SCHEMA,
@@ -354,6 +355,18 @@ class TestStore:
         # 冲突 → ValueError
         with pytest.raises(ValueError):
             store.create_agent("custom_search", type="search")
+
+    def test_create_agent_rejects_main_reserved_id(self, db: Path):
+        """T4：唯一写点拒收主 agent 的保留成员 id —— 四条建行路径都经这里。
+
+        ``ReservedAgentIdError`` 是 ``ValueError`` 子类，所以既有的 ``except ValueError``
+        调用点（CLI agent-create / 插件导入端点）不改一行就已经拒收。
+        """
+        assert issubclass(ReservedAgentIdError, ValueError)  # 三条无专门 handler 的路径靠这个继承
+        store = ReportStore(str(db))
+        with pytest.raises(ReservedAgentIdError):
+            store.create_agent(MAIN_AGENT_MEMBER_ID, type="custom", title="冒名的")
+        assert store.get_agent(MAIN_AGENT_MEMBER_ID) is None
 
     def test_delete_agent(self, db: Path):
         store = ReportStore(str(db))

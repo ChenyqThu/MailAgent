@@ -271,6 +271,11 @@ export interface PreparedChatRun {
    *  the persisted turn / paused persist carry it into the 'chat:turn-persisted' broadcast for
    *  per-run settle dedup. undefined = unleased (headless agent run / no registry / null session). */
   runId?: string
+  /** T4 (design M6) — true for every group SPEAKER run (identity.group present). Read by
+   *  makePersistOnFinish to keep captureTurnMemory off: 群里的内容是其他 agent 的半可信输出，
+   *  不进 memory.md。Today no group path attaches makePersistOnFinish at all (both drain
+   *  textStream directly, see server.ts), so this is the structural guard for the day one does. */
+  groupSpeakerRun?: boolean
 }
 
 export type PrepareChatOutcome =
@@ -514,8 +519,9 @@ export async function prepareChatRun(
   // v30（群聊）/ g2 — a group-chat SPEAKER run never calls buildTools: its ToolSet is decided by
   // cfg.buildGroupSpeakerTools (member → the two reads pinned to its own group; judge → all
   // four, family-scoped), and ONLY for a 调度器-driven turn (identity.group.groupSpeakerRun ===
-  // true). The v30 renderer-driven speaker turn keeps tools=undefined byte-identical (A3 §3
-  // 发言 turn 无写工具 posture). The custom_agent_call recursion guard stays subsumed (neither
+  // true AND a sessionId). The v30 renderer-driven speaker turn sets groupSpeakerRun too (T4 M7:
+  // prompt 减重态两态一致) but carries no sessionId → tools=undefined, its zero-tool posture
+  // unchanged (A3 §3 发言 turn 无写工具). The custom_agent_call recursion guard stays subsumed (neither
   // factory holds it); identity.group is only ever set by handleGroupChat / speakAsGroupMember
   // from server-resolved facts, never from the body.
   const isGroupSpeakerRun = sessionAgent?.group != null
@@ -591,8 +597,8 @@ export async function prepareChatRun(
       sessionAgentIdentity: contextMode === 'manual_chat' ? (sessionAgent ?? null) : null,
       // W6 — inject the follow-up guidance only when THIS run's ToolSet holds the tool.
       followupToolAvailable,
-      // g1 — prompt 减重门 + 沉默契约, set ONLY by the 调度器's speak adapter (server.ts); the v30
-      // renderer-driven speaker turn leaves it unset → byte-identical.
+      // g1 — prompt 减重门 + 沉默契约, set by the 调度器's speak adapter and (T4 M7) the v30
+      // renderer-driven speaker branch (both in server.ts): every group speaker turn is the 减重态.
       groupSpeakerRun: sessionAgent?.group?.groupSpeakerRun === true
     })
   } else {
@@ -679,7 +685,8 @@ export async function prepareChatRun(
       auditEntries,
       toolNames: hasTools ? Object.keys(tools as ToolSet) : [],
       originalBody: body,
-      contextMode
+      contextMode,
+      groupSpeakerRun: isGroupSpeakerRun
     }
   }
 }
@@ -1230,7 +1237,16 @@ export function makePersistOnFinish(
     // warning line may be distilled into memory.md (mem0 would fossilize them into the stable
     // prefix injected on every future turn). Skip capture for the truncated turn entirely —
     // persistTurn above still ran, so the fail-loud history is intact.
-    if (!runHasSuccessfulMemoryWrite(run) && finishReason !== 'length') {
+    //
+    // T4 (design M6) — a group speaker run never captures: 群里的内容是其他 agent 的半可信输出
+    // （狼人杀的 <game_secret> 更是），而 memory.md 是恒注入单聊每一轮的稳定前缀 —— 抽进去就是
+    // 让一个群污染主 agent 自己的人格。Structural guard: today's group paths never attach this
+    // onFinish (see PreparedChatRun.groupSpeakerRun); the day one does, capture stays off.
+    if (
+      run.groupSpeakerRun !== true &&
+      !runHasSuccessfulMemoryWrite(run) &&
+      finishReason !== 'length'
+    ) {
       try {
         cfg.captureTurnMemory?.(turn)
       } catch (err) {

@@ -170,10 +170,11 @@ export function buildGatewaySystemPrompt(args: {
   /** W6 — true iff THIS run's built ToolSet holds suggest_followups (manual chat). Injects the
    *  follow-up guidance block; absent/false → byte-identical prompt (headless / harness / tests). */
   followupToolAvailable?: boolean
-  /** g1 (父设计拍板 D) — a 调度器-driven group speaker turn. True skips the four sections a
-   *  zero-tool speaking turn cannot act on (skill fragments / skill catalog / connector catalog /
-   *  memory.md) and adds the 沉默契约 sentence to the group block. Absent/false on every other
-   *  path (main agent / headless / team / the v30 renderer-driven speaker) → byte-identical. */
+  /** g1 (父设计拍板 D) — a group speaker turn (调度器-driven, and since T4 M7 the v30
+   *  renderer-driven one too). True skips the four sections a zero-tool speaking turn cannot act
+   *  on (skill fragments / skill catalog / connector catalog / memory.md) and adds the 沉默契约
+   *  sentence to the group block. Absent/false on every other path (main agent / headless /
+   *  team) → byte-identical. */
   groupSpeakerRun?: boolean
 }): string {
   const pc = args.promptConfig

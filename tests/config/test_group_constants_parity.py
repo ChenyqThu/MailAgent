@@ -253,6 +253,20 @@ def test_game_over_prefix_parity() -> None:
     )
 
 
+def test_main_agent_member_id_parity() -> None:
+    """主 agent 的保留成员 id：serve-api 的短路放行（Python）与 gateway 合成成员（TS）必须同字。
+
+    两侧不同字 = 一侧把它当保留字放行、另一侧当普通 agent id 去查 report_agent 行 —— 群里的
+    主 agent 要么建不出来（400），要么建出来后在发言时「人间蒸发」（成员事实缺失 → 403）。
+    """
+    ts = parse_ts_const_string("MAIN_AGENT_MEMBER_ID", _read(GROUP_FLOORS_TS))
+    py = parse_py_str_const("MAIN_AGENT_MEMBER_ID", GROUP_LIMITS_PY)
+    assert ts and py, "MAIN_AGENT_MEMBER_ID 解析成空串 —— 解析器坏了"
+    assert ts == py, (
+        f"MAIN_AGENT_MEMBER_ID 漂了：groupFloors.ts={ts!r}，group_limits.py={py!r}。"
+    )
+
+
 def test_chat_router_consumes_the_single_source() -> None:
     """第四处载体（chat.py 的校验点）**必须 import 单源，不许自己写字面量**。
 

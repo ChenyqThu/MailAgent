@@ -20,6 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.app import app
+from src.chat.group_limits import MAIN_AGENT_MEMBER_ID
 from src.mail.sync_store import SyncStore
 from src.reports.models import MANUAL_CHAT_REPORT_AGENT_ID
 from src.reports.store import ReportStore
@@ -454,6 +455,22 @@ def test_create_agent_conflict_409(report_client: TestClient) -> None:
     r = report_client.post("/api/report-agents", json={"id": _AGENT_ID, "type": "report"})
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "E_CONFLICT"
+
+
+def test_create_agent_rejects_main_reserved_id(
+    report_client: TestClient, report_db: Path
+) -> None:
+    """T4：保留字 id（主 agent 的群成员 id）→ 400 E_INVALID_ARG，且**不写行**。
+
+    不是 409：库里并没有这一行，是这个 id 本身不许用。碰撞的后果不是「多一行 agent」，而是
+    群里 members_json 的 'main' 会去读这行的 title/model —— 主 agent 的身份被静默顶替。
+    """
+    r = report_client.post(
+        "/api/report-agents", json={"id": MAIN_AGENT_MEMBER_ID, "type": "report"}
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    assert ReportStore(str(report_db)).get_agent(MAIN_AGENT_MEMBER_ID) is None
 
 
 def test_create_agent_missing_id(report_client: TestClient) -> None:

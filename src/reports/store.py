@@ -14,7 +14,33 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.chat.group_limits import MAIN_AGENT_MEMBER_ID
 from src.reports.models import REPORT_CADENCES
+
+
+class ReservedAgentIdError(ValueError):
+    """agent id 撞上保留字（主 agent 的群成员 id）。
+
+    ``ValueError`` 子类是为了让既有的 ``except ValueError`` 调用点（CLI agent-create、
+    ``POST /report-agents/import``）不改一行就已经拒收；``POST /report-agents`` 单独接住它折
+    400 ``E_INVALID_ARG``（它的 ``except ValueError`` 是给「id 冲突 → 409」用的，语义不同）。
+    """
+
+
+def reject_reserved_agent_id(agent_id: str) -> None:
+    """建 agent 行前的保留字拒收 —— 唯一写点 ``ReportStore.create_agent`` 调它。
+
+    碰撞的后果不是「多一行」而是「主 agent 的身份被这行 custom agent 顶替」：群里的
+    ``members_json`` 用 ``'main'`` 指代主 agent，一旦库里真有这个 id，成员解析会去读它的
+    title / duty / model。四条建行路径（``POST /report-agents`` / 插件导入 /
+    ``agent_templates.ensure_template_agent`` / ``custom_agent_create`` 工具）最终都经唯一写点，
+    故只在那里判一次。
+    """
+    if agent_id == MAIN_AGENT_MEMBER_ID:
+        raise ReservedAgentIdError(
+            f"agent id {agent_id!r} is reserved for the main assistant"
+        )
+
 
 # update_agent 允许 patch 的字段（白名单，防 SQL 注入 + 防误改主键）。
 _AGENT_PATCH_FIELDS = {
@@ -176,7 +202,11 @@ class ReportStore:
         显式创建意图下静默吞掉冲突会掩盖 UI 重复建同名 agent 的 bug，故选硬报错。
         report 专属列（schedule/window/kos_enrich/…）这里不写（留 NULL/DEFAULT），由
         update_agent 后续按需补；search agent 不需要这些列。
+
+        保留字（主 agent 的群成员 id）→ ``ReservedAgentIdError``。这是 agent 行的唯一写点，
+        四条建行路径都在这里过一道。
         """
+        reject_reserved_agent_id(agent_id)
         if self.get_agent(agent_id) is not None:
             raise ValueError(f"report_agent {agent_id!r} already exists")
         with self._connection() as conn:
