@@ -1470,12 +1470,14 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           calendarToolsEnabled,
           // task 07-21 — notion-agent tool (MAILAGENT_NOTION_AGENT_TOOL, default on; skill-gated).
           notionAgentToolsEnabled,
-          // task 08-27 P4a — submit_feedback 的提交实现。诊断包在**批准之后**才组装（约 1
-          // 分钟，弹卡时不该先花掉），截图恒无（agent 截不了图）。
+          // task 08-27 P4a — submit_feedback 的提交实现。诊断包在**批准之后**才组装（弹卡时
+          // 不该先花掉），截图恒无（agent 截不了图）。
+          // 🔴 这条路跳过 `PRAGMA quick_check`：3.2G 的 sync_store 上实测 70s+，对话里这段时间
+          // 模型什么都不吐、看起来就是卡死。设置页的「导出诊断包」是人主动等的，仍跑 quick_check。
           submitFeedback: async (input) => {
             let diagnosticsPath: string | undefined
             if (input.attach_diagnostics === true) {
-              const diag = await runBuildDiagnostics()
+              const diag = await runBuildDiagnostics({ quickCheck: false })
               diagnosticsPath = diag.path
             }
             return runSubmitFeedback({

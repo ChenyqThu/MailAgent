@@ -246,6 +246,13 @@ export function FeedbackApprovalCard(props: ToolCallMessagePartProps): React.JSX
       ) : (
         <>
           <CardParams items={params} />
+          {/* 诊断包在批准之后才组装，3.2G 库上要几十秒；不说一句的话「执行中」的卡看起来
+              就是不动了。只在真会等的那条路（带诊断包）上出现。 */}
+          {phase === 'authorized' && proposed.attachDiagnostics ? (
+            <div data-diagnostics-hint className="text-meta text-ink-fg-3">
+              {t('chat.feedbackApprovalCard.buildingDiagnostics')}
+            </div>
+          ) : null}
           <TerminalBanner phase={phase} />
         </>
       )}

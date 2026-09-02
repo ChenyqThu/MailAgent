@@ -1795,7 +1795,8 @@
       "editDone": "Done editing",
       "approve": "Send",
       "sent": "Submitted. Track it via “View feedback” at the bottom of Settings.",
-      "failed": "It was NOT sent. Send it again from Settings, or open the form page and submit manually."
+      "failed": "It was NOT sent. Send it again from Settings, or open the form page and submit manually.",
+      "buildingDiagnostics": "Building the diagnostics bundle — usually takes tens of seconds"
     },
     "groupCreateCard": {
       "cardTitle": "Create group chat",

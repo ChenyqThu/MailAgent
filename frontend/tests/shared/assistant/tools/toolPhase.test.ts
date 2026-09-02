@@ -262,6 +262,46 @@ describe('🔴 RESOLUTION_WITHOUT_DECISION 是单一定义点（消灭了 _cardS
   })
 })
 
+describe('deriveCardPhase — 免卡执行中不该显示成「已完成」（task 09-02）', () => {
+  // 完全授权模式下 part 上没有 approval 对象，此前执行中的那段时间掉进「重载兜底」判成 done：
+  // 卡片写着已完成、下面却什么都没有（submit_feedback 的诊断包那 74 秒就是这个形态）。
+  // 判据取上游 `ToolCallMessagePartStatus` 里唯一表示「还在跑」的成员 `running`。
+
+  test('running + 无 approval 无 result → authorized', () => {
+    expect(deriveCardPhase({ status: { type: 'running' } } as never)).toBe('authorized')
+  })
+
+  test('🔴 `{}`（重载后只剩壳的 part）仍是 done —— 兜底分支一个字节没动', () => {
+    expect(deriveCardPhase({} as never)).toBe('done')
+    expect(deriveCardPhase({ status: { type: 'complete' } } as never)).toBe('done')
+  })
+
+  test('running 不越过任何终态判定（result / error / rejected / expired 都压过它）', () => {
+    expect(deriveCardPhase({ status: { type: 'running' }, result: { ok: true } } as never)).toBe(
+      'done'
+    )
+    expect(deriveCardPhase({ status: { type: 'running' }, isError: true } as never)).toBe('error')
+    expect(
+      deriveCardPhase({
+        status: { type: 'running' },
+        approval: { id: 'a', approved: false }
+      } as never)
+    ).toBe('rejected')
+    expect(
+      deriveCardPhase({
+        status: { type: 'running' },
+        approval: { id: 'a', resolution: 'expired' }
+      } as never)
+    ).toBe('expired')
+  })
+
+  test('🔴 闸还开着时 pending 压过 running（弹卡期间上游也可能报 running）', () => {
+    expect(deriveCardPhase({ status: { type: 'running' }, approval: { id: 'a' } } as never)).toBe(
+      'pending'
+    )
+  })
+})
+
 describe('formatToolDuration', () => {
   test('sub-minute keeps one decimal second', () => {
     expect(formatToolDuration(0)).toBe('0.0s')

@@ -37,6 +37,7 @@ vi.mock('../../src/electron/main/db', () => ({
 import { CliError } from '../../src/electron/main/cli_runner'
 import {
   __testing,
+  diagnosticsCliArgs,
   runAdminHealth,
   runAdminStats,
   runCleanupDeadLetter,
@@ -155,6 +156,34 @@ describe('admin handlers — write', () => {
       ['admin', 'cleanup-deadletter', '--older-than', '14', '--no-dry-run', '--yes'],
       { write: true, needsAuth: true, timeoutMs: 60_000 }
     )
+  })
+})
+
+// task 09-02 — 诊断包 argv。主 agent 代发反馈那条路要跳过 quick_check（3.2G 的
+// sync_store 上实测 70s+，对话里等不起），设置页的手动导出照旧跑。两条路只差这一个
+// 参数、少了也不报错（只是变慢），所以拼接单独立断言。
+// 🔴 断言的是**纯函数**而不是 buildDiagnosticsZip：后者要 `app.getVersion()`，而
+// ELECTRON_RUN_AS_NODE 下 `electron` 模块只是个路径字符串，`app` 根本不存在。
+describe('diagnosticsCliArgs', () => {
+  test('默认（设置页导出）不带 --no-quick-check', () => {
+    expect(diagnosticsCliArgs('2.31.0')).toEqual([
+      'admin',
+      'export-diagnostics',
+      '--app-version',
+      '2.31.0'
+    ])
+    expect(diagnosticsCliArgs('2.31.0', {})).not.toContain('--no-quick-check')
+    expect(diagnosticsCliArgs('2.31.0', { quickCheck: true })).not.toContain('--no-quick-check')
+  })
+
+  test('quickCheck:false（agent 代发反馈）在末尾追加 --no-quick-check', () => {
+    expect(diagnosticsCliArgs('2.31.0', { quickCheck: false })).toEqual([
+      'admin',
+      'export-diagnostics',
+      '--app-version',
+      '2.31.0',
+      '--no-quick-check'
+    ])
   })
 })
 

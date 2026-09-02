@@ -34,6 +34,11 @@ export function deriveCardPhase(
   if (result !== undefined && result !== null) return 'done'
   // approval gate still open (approved === undefined, no resolution) → ask the user.
   if (approval && approval.approved === undefined) return 'pending'
+  // 🔴 免卡执行（完全授权模式 auto_bypass）的 part 上**根本没有 approval 对象**，于是执行中的
+  // 那段时间会掉进下面那个「重载兜底」分支被判成 done —— 卡片显示「已完成」却空无一物（诊断包
+  // 那 74 秒看起来就是卡死）。上游 `ToolCallMessagePartStatus` 的 union =
+  // `requires-action | running | complete | incomplete`，其中只有 running 明确表示「还在跑」。
+  if (status?.type === 'running') return 'authorized'
   // approved but no result yet (executing), or a reloaded part with neither — treat as
   // authorized/running so the card shows a calm "running" state rather than empty.
   return approval?.approved === true ? 'authorized' : 'done'

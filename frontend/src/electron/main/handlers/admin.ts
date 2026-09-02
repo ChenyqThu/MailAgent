@@ -466,13 +466,26 @@ function cleanupDiagnosticsTmp(zipPath: string): void {
   }
 }
 
+export interface DiagnosticsOpts {
+  /** `false` → 给 CLI 加 `--no-quick-check`，跳过两个库的 `PRAGMA quick_check`。 */
+  quickCheck?: boolean
+}
+
+/** 诊断包 CLI 的 argv。抽成纯函数是为了能不 fork 就断言参数拼接 —— 少一个
+ *  `--no-quick-check` 不会报错，只会让调用方多等一分多钟，是那种测不到就发现不了的差异。 */
+export function diagnosticsCliArgs(appVersion: string, opts?: DiagnosticsOpts): string[] {
+  const args = ['admin', 'export-diagnostics', '--app-version', appVersion]
+  if (opts?.quickCheck === false) args.push('--no-quick-check')
+  return args
+}
+
 /** 组装诊断包，返回 tmp zip 路径 —— **不弹保存对话框**。
  *
  *  抽出来是给快捷反馈用的（task 08-27 P4a）：反馈弹窗要把同一个包当附件传上去，而不是
  *  让用户先另存再手动挑文件。🔴 调用方**必须**在用完后 `cleanupDiagnosticsTmp(zipPath)`，
  *  否则 tmp 目录留到 OS 回收为止。 */
-export async function buildDiagnosticsZip(): Promise<string> {
-  const data = (await callCli(['admin', 'export-diagnostics', '--app-version', app.getVersion()], {
+export async function buildDiagnosticsZip(opts?: DiagnosticsOpts): Promise<string> {
+  const data = (await callCli(diagnosticsCliArgs(app.getVersion(), opts), {
     timeoutMs: DIAGNOSTICS_TIMEOUT_MS
   })) as DiagnosticsCliData
   const zipPath = data?.zip_path

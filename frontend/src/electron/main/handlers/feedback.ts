@@ -28,7 +28,7 @@ import {
   type FeedbackLogEntry,
   type FeedbackSubmitInput
 } from '@shared/feedback/contract'
-import { buildDiagnosticsZip, cleanupDiagnosticsTmp } from './admin'
+import { buildDiagnosticsZip, cleanupDiagnosticsTmp, type DiagnosticsOpts } from './admin'
 
 /** 主进程侧的台账（进程内，重启即清 —— 它只用于「刚才那条发出去没有」的当场对账，
  *  不是长期归档；长期归档在 Notion 库里）。 */
@@ -56,9 +56,11 @@ export interface DiagnosticsResult {
   bytes: number
 }
 
-/** 组装诊断包（约 1 分钟）。renderer 只拿到路径与体积；内容在提交时才读盘。 */
-export async function runBuildDiagnostics(): Promise<DiagnosticsResult> {
-  const zipPath = await buildDiagnosticsZip()
+/** 组装诊断包。renderer 只拿到路径与体积；内容在提交时才读盘。
+ *  默认跑 `PRAGMA quick_check`（约 1 分钟，设置页那条路人在主动等）；
+ *  `{ quickCheck: false }` 跳过它，给等不起的调用方用。 */
+export async function runBuildDiagnostics(opts?: DiagnosticsOpts): Promise<DiagnosticsResult> {
+  const zipPath = await buildDiagnosticsZip(opts)
   let bytes = 0
   try {
     bytes = statSync(zipPath).size
