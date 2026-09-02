@@ -1466,6 +1466,8 @@ class ChatDb:
           ≠ 0）+ ``caps``。🔴 caps 只回 owner **配置过**的值，未配置回 None —— 出厂默认在
           ``groupFloors.ts``（单源），Python 不抄一份数值。
         * ``lastStopReason``：最近一条 outcome='stopped' 行的 error（地板原因词）。
+        * ``sessionTurns`` / ``sessionTokens`` / ``sessionCostUsd``：**无窗口**的会话累计
+          （狼人杀一局的总量是 family 三群相加，不是小时量；cost 全 NULL → None，未知 ≠ 0）。
 
         未迁移的旧库（表缺席）→ 全 None / 零窗口，不报错。
         """
@@ -1483,6 +1485,9 @@ class ChatDb:
                 "last1h": {**empty_window, "caps": caps},
                 "last24h": {**empty_window, "caps": caps},
                 "lastStopReason": None,
+                "sessionTurns": 0,
+                "sessionTokens": 0,
+                "sessionCostUsd": None,
             }
         silent_marks = ",".join("?" * len(SILENT_OUTCOMES))
         totals = self._read_one(
@@ -1532,10 +1537,21 @@ class ChatDb:
             "ORDER BY started_at DESC, id DESC LIMIT 1",
             (session_id,),
         )
+        session_totals = self._read_one(
+            "SELECT COUNT(*) AS turns, "
+            "COALESCE(SUM(COALESCE(tokens_input, 0) + COALESCE(tokens_output, 0)), 0) AS tokens, "
+            "SUM(cost_usd) AS cost_usd "
+            "FROM ai_chat_group_turn WHERE session_id = ?",
+            (session_id,),
+        ) or {}
+        session_cost = session_totals.get("cost_usd")
         return {
             "silentRunRate": silent_rate,
             "turnsPerHumanMessage": per_human,
             "last1h": window(now - 3_600_000),
             "last24h": window(now - 86_400_000),
             "lastStopReason": (stopped or {}).get("error"),
+            "sessionTurns": int(session_totals.get("turns") or 0),
+            "sessionTokens": int(session_totals.get("tokens") or 0),
+            "sessionCostUsd": None if session_cost is None else float(session_cost),
         }

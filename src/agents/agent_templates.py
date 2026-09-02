@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+#: g3 狼人杀实验的法官 / 玩家标题（端点查重键 + 测试共用）。🔴 @ 解析按显示名匹配
+#: （groupChat.parseGroupMentions）：owner 发的是「@法官 开始游戏」，标题改一个字就唤不醒。
+WEREWOLF_JUDGE_TITLE: str = "法官"
+WEREWOLF_PLAYER_TITLES: tuple[str, ...] = ("玩家甲", "玩家乙", "玩家丙", "玩家丁", "玩家戊", "玩家己")
+
 AGENT_TEMPLATES: dict[str, dict] = {
     "meeting_prep": {
         "title": "会前准备",
@@ -35,6 +40,8 @@ AGENT_TEMPLATES: dict[str, dict] = {
     # 拉不起群。它们 trigger=None（草稿态，不自动跑，导入后 enabled 也恒 false），存在的意义
     # 是「一键有队友」——既能被拉进群聊当发言者（零工具，靠人设发言），也能单独对话/自行
     # 配触发后定时跑（此时 tool_policy 里的技能才生效）。prompt 因此都写成双场景可用。
+    # g3 的 werewolf_judge / werewolf_player 两个模板是群聊机制的集成验收用，同样
+    # trigger=None / enabled 恒 false；角色只在 group_config_json.game.roles，prompt 里不写规则补丁。
     "mail_digest": {
         "title": "邮件摘要",
         "description": "把冗长的邮件线程与附件压成三行结论与关键决策点，供快速判断",
@@ -103,5 +110,46 @@ AGENT_TEMPLATES: dict[str, dict] = {
         },
         "budget": {"max_runs_per_day": 24, "max_run_seconds": 1800},
         "avatar": {"type": "bot", "shape": "cloudee", "color": "purple"},
+    },
+    "werewolf_judge": {
+        "title": WEREWOLF_JUDGE_TITLE,
+        "description": "狼人杀实验的法官：无人值守主持一整局，夜晚用子群私聊、白天在主群推进，终局宣布结果",
+        "prompt": (
+            "你是狼人杀法官，独立主持一整局。"
+            "①规则：2 狼人、1 预言家、3 村民；狼人全灭则村民胜，存活狼人数不少于其余存活人数则狼人胜。"
+            "②流程：夜晚用 group_post 在狼群 @两狼要击杀目标，再在预言家群 @预言家要验人对象并答复其身份；"
+            "白天在主群发【天亮】+ 死讯，逐个 @存活玩家发言，再逐个 @存活玩家投票，计票后宣布放逐；"
+            "每条消息只 @ 需要行动的人。"
+            "③跨群说话用 group_post；<game_secret> 是身份表，不得泄露。"
+            "④胜负已分时在主群发一条以【游戏结束】开头的消息说明结果。"
+        ),
+        "model": None,
+        "trigger": None,
+        "tool_policy": {
+            "v": 1,
+            "skills": [],
+            "grant_exec": False,
+            "grant_web": "off",
+        },
+        "budget": {"max_runs_per_day": 24, "max_run_seconds": 1800},
+        "avatar": {"type": "bot", "shape": "onee", "color": "purple"},
+    },
+    "werewolf_player": {
+        "title": WEREWOLF_PLAYER_TITLES[0],
+        "description": "群聊实验的游戏玩家预设：只在被 @ 时按法官要求发言，身份由服务端注入",
+        "prompt": (
+            "你是一名游戏玩家。<game_secret> 是你的身份，不得泄露。只在被 @ 时按法官要求回复，"
+            "不超过 80 字；投票只写「投票：玩家名」；夜晚只在你所在的子群讨论；无需发言回 [沉默]。"
+        ),
+        "model": None,
+        "trigger": None,
+        "tool_policy": {
+            "v": 1,
+            "skills": [],
+            "grant_exec": False,
+            "grant_web": "off",
+        },
+        "budget": {"max_runs_per_day": 24, "max_run_seconds": 1800},
+        "avatar": {"type": "bot", "shape": "sunee", "color": "teal"},
     },
 }

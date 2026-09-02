@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 import os
-import hashlib
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -41,6 +40,7 @@ from src.chat.group_limits import (
     RESPONSE_MODES,
     SESSION_INVOKED_BY,
     TOPIC_MAX_CHARS,
+    group_scope_hash,
 )
 from src.chat.db import parse_group_member_ids
 from src.chat.kos_save import SaveConversationError, save_conversation_to_kos
@@ -915,9 +915,11 @@ def _require_chat_capable(agent_id: str, *, what: str) -> None:
         )
 
 
-@router.post("/sessions/new", dependencies=[Depends(verify_cf_access)])
-async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
-    """createNewSession：无条件 INSERT 新 session（绕过复用）。镜像 chat:newSession → ChatSession。
+async def create_session_validated(opts: Dict[str, Any]) -> Dict[str, Any]:
+    """POST /chat/sessions/new 的权威校验 + create_new_session（红线 5：群校验只有这一条路径）。
+    opts 键 = HTTP body 键（anchorType / emailId / backendKind / agentId / groupMembers / title / parentSessionId / invokedBy）。
+
+    createNewSession：无条件 INSERT 新 session（绕过复用）。镜像 chat:newSession → ChatSession。
     P2c / Matters MVP P3：支持 general 与 matter anchor。
 
     P4b：``agentId`` 非空 = 团队页「以指定 agent 身份」的交互式会话 → 行落
@@ -934,7 +936,6 @@ async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
     全在这里（红线 5：gateway 的建群工厂不复制成员 / 子集 / 嵌套判定），失败一律
     E_INVALID_ARG + hint。子群数上限（SUBGROUPS_PER_FAMILY_CAP）**不在这里判**：那是法官
     一轮之内的配额，只有 gateway 的工厂实例数得清。"""
-    opts = body or {}
     anchor_type, email_id, matter_id, backend_kind = _validate_session_opts(
         opts, "sessions/new"
     )
@@ -1057,7 +1058,15 @@ async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
         parent_session_id=parent_session_id,
         invoked_by=invoked_by,
     )
-    return success_envelope(session, request=request, source="sqlite")
+    return session
+
+
+@router.post("/sessions/new", dependencies=[Depends(verify_cf_access)])
+async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
+    """校验与写入全在 create_session_validated；这里只取 body → 调它 → 包 envelope。"""
+    return success_envelope(
+        await create_session_validated(body or {}), request=request, source="sqlite"
+    )
 
 
 @router.get("/sessions/{session_id:int}", dependencies=[Depends(verify_cf_access)])
@@ -1341,9 +1350,7 @@ async def put_group_config(
         # 名单原文（不是解析后再序列化）—— hash 要钉的就是「owner 确认时看到的那份名单」。
         raw_members = session.get("members_json") or ""
         config["judgeScopeHash"] = (
-            hashlib.sha256(raw_members.encode("utf-8")).hexdigest()
-            if judge is not None
-            else None
+            group_scope_hash(raw_members) if judge is not None else None
         )
 
     for key, low, high in (
