@@ -244,8 +244,8 @@ evaluate/commit 代码一行未动。两处入口 guard 从「无 alerter 直接
   点击直达**团队页那位成员的记录档**并选中 `run.sessionId` / `session.id` 命中的那一行。
   没有 `agentId` 的行（本次之前发的，不回填）先 `GET /chat/sessions/{id}` 回查一次：
   `origin ∈ {agent, team}` 且 `agent_id` 非空且不在事项域命名空间 → 同上；否则维持
-  `requestOpenAgentSession` + `/sessions`（对话域 AI 分段）。🔴 headless run 的会话
-  （`origin='agent'`）不在 AI 分段的列表口径里，只按 sessionId 打开会得到一个左侧历史列
+  `requestOpenAgentSession` + `/sessions`（AI Chat 域）。🔴 headless run 的会话
+  （`origin='agent'`）不在 AI Chat 域左列的列表口径里，只按 sessionId 打开会得到一个左侧历史列
   不出来的详情 —— 这是 owner dogfood 反馈的原症状。
 - 失效出口：`notificationMutation.ts::refreshNotifications`，query key 树
   `qk.notifications.{all,list,unreadCount}`（`queryKeys.ts`）——通知相关新顶层 key 一律加进

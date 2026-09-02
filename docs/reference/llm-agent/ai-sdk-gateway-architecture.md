@@ -1534,6 +1534,9 @@ agents。总闸是 `owner_settings.labs_group_agents`（**不是** `MAILAGENT_*`
 功能不搞灰度开关，实验性的进 labs）。关掉 = 调度器不构造、群工具不注册，主 agent 的 ToolSet
 与开之前字节一致。
 
+群工作区的入口是一级域 `/groups`（09-02 对话域拆分：AI Chat 与群聊各成一个一级域，原来那个
+「AI｜群聊」分段控件退役，`groupChat.segment*` 三个 i18n 键一并删除），⌘G 直达。
+
 ### 13.29.1 v1 手动群聊（renderer 驱动）
 
 `POST /api/ai/group-chat`（`server.ts::handleGroupChat`）。身份**只从服务端事实取**：
@@ -1753,3 +1756,41 @@ token 从 env `MAILAGENT_LOCAL_API_TOKEN` 读（App 每次启动随机生成、�
 - `judge_post` / `judge_denied` 两类系统行在群工作区**不渲染**（g2 遗留）：`groupTimeline` 只
   放行自己认识的 kind，g3 只加了 `game_over` 一支。
 - 建局无事务、用补偿；模板查重按标题（见上）。
+
+### 13.29.10 群消息附件与在场态（T2）
+
+**附件的载体是消息行的 `metadata`**，不是新表新列：`ai_chat_messages.metadata` 的
+`attachments` 键。这一列本来就有别的写者（系统行的 `{kind:'group_stop'}` / `{kind:'game_over'}`、
+主 agent 投递的 `{via:'main_agent'}`），所以编解码只认自己那一个键、其余键原样保留，单源在
+`ai-gateway/groupAttachments.ts`（零 node / electron / react 的叶子，renderer 与 gateway 直引同
+一份）。无附件的行**不写** `attachments` 键 —— 绝大多数消息走这条路径，与本批之前逐字节一致。
+
+- **校验两侧不对称**，这是有意的：写侧 `POST /api/ai/group-chat` 的 append 分支
+  `validateAttachmentsInput`，形状不合格或超过条数上限一律整条 400 `E_INVALID_ARG`（挂了 7 个
+  文件、落库成 6 个还没人告诉用户，比直接报错难查得多）；读侧 `parseAttachmentsMetadata` 面对
+  的是已落库的历史数据，脏 JSON / 缺键 / 数组里没一件合格，一律返 `null` 且**绝不抛**（读侧崩
+  了整条群时间线就没了）。正文超长是**截断**不是错 —— 那是预算，不是契约违反。
+- **正文由 renderer 读出**（文本本地读、Office 经 `/attachment/convert`），服务端只搬运加截断，
+  从不去读文件。两个常量在 `shared/chat_model.ts`：`GROUP_ATTACHMENTS_MAX = 6`（超出从**尾部**
+  丢弃）、`GROUP_ATTACHMENT_TEXT_MAX_CHARS = 20000`。后者与 renderer 侧
+  `chat-attachments.ts::ATTACHMENT_MAX_CONTENT_CHARS` 是同一份预算，🔴 **有意不建等值闸**：判据
+  是「取小者生效」，真分叉只意味着模型少看一段，不会让任何标记说谎。
+- **投影**：`listGroupHistory` 里 `attachments` 与 `via` 是 `metadata` 这一列的两个读者，各取各的
+  键、互不影响；没有附件的行恒 `null`（**不是**空数组）。
+- **装配**：`assembleGroupHistory` 对带附件的 user 行，把 `renderAttachmentBlock` 的不可信内容围栏
+  块前置进正文（在说话人标签之后 —— 连续 user 行合并后也不会跟别人的话混在一起）。附件因此对
+  **所有**候选成员可见，不是只给第一个回复的人。🔴 围栏抬头与 `buildAttachmentBlock`
+  （`shared/lib/chat-attachments.ts`）逐字一致，是**有意的第二份手抄**（那一份顶层拉
+  `apiBaseUrl`，gateway 模块图不能 import），改措辞必须两处同改。
+- **图片只留档**：`text = null`，chip 显示文件名，模型看到的是 `[图片 x.png]`，不传字节。
+- **窗口预算算附件正文**：`buildGroupWindow` 的字符预算含每件附件的 `text` 长度 —— 不算的话一份
+  20k 字的附件能把 12k 的窗口撑到三倍而地板毫不知情。无附件的行加 0。
+- `group_post` 投递 / 回放 / 台账**不认**附件（metadata 里多一个键而已，不会炸）。
+
+**在场态只有四态**。群在场行 `GroupPresenceRow` 用与 AI Chat 同一个 `TurnPresenceRow`（成员动画
+头像 + 状态文案 + 秒表），阶段由纯函数 `groupTurnStage`（`groups/groupPresentation.ts`）从在场三
+元组 + turn overlay 推导，只产 `connecting` / `writing` / `stalled`(1|2) / `error`，收尾回 `idle`。
+🔴 **永不产 `thinking` / `calling-tool`**：`chat:group-turn` 的 delta 只带文本，renderer 看不到工
+具相位（labs on 的成员 run 自 g2 起可能有读工具，但那个相位不上事件通道）—— 这是有意的边界，不
+伪造一个看着像的态。`error` 借 stall 的一级门槛做新鲜期：overlay 的 failed 留痕至今没有清理者，
+不给新鲜期就会在群底留一条永不消失的红字（失败的长期载体是时间线里那条带重试钮的 meta 行）。

@@ -173,6 +173,39 @@ chrome；Web SPA 走 `prefers-color-scheme` MediaQuery listener；Island 通过 
 | 远端 Web HTTPS 读/写 | Cloudflare Access (Zero Trust, Google OAuth + 邮箱白名单) | V2 主路径 |
 | FastAPI 二次校验 | Cf-Access-Jwt-Assertion header (防 tunnel 误配) | V2 防御纵深 |
 
+### 2.8 导航域分两类：对象域开标签，页面域占主槽
+
+一级域的单源是 `shared/navigation/registry.ts`（`NavDomain` / `NavPath` / entry 三件一处）。
+域分两类，导轨（IconRail）先按这个分类分组、再按 `rail.order` 排 —— **分组先于 order**。
+
+| 类 | 域 | 承载 |
+|---|---|---|
+| 对象域（3 个） | `mail` / `matters` / `chats` | 一个对象一个顶栏标签 |
+| 页面域 | `today` / `calendar` / `contacts` / `groups` / `agents` / … | 轮流占用主标签槽，无对象标签 |
+
+对象域与标签种类的对接表是 `state/tab-workspace.ts::TAB_KIND_DOMAIN`
+（`email → mail` / `matter → matters` / `chat → chats`）；它的值集与 registry 的
+`NAV_OBJECT_DOMAINS` 由 `frontend/tests/shared/tab-workspace.test.ts` 锁死（两处是同一件事的
+两种写法，单复数都不同，编译期对不上）。`search` 是无域的「新标签页」单例。
+
+标签配额 `MAX_TABS_DEFAULT = 10`（设置页可调 4–12），满员按 LRU 静默驱逐最久未用的非锁定标签。
+⌘W / ⌘⇧T / ⌃⇥ / ⌘1-9 三个对象域共用。
+
+**AI Chat 标签的临时负 id**：新会话在发出第一条之前没有 session id，先用递减负数
+（`state/active-chat.ts::nextTempChatId`）当 `targetId` 开标签，首发拿到真 id 后 `retargetTab`
+**原位换锚**（标题 / 草稿 / 位置 / 锁定全保留，不是关一个开一个）。🔴 详情区的挂载身份
+`mountKey` **不跟着换** —— 换锚发生在第一条消息正在流式输出的当口，key 跟着换会把正在输出的
+会话卸载重挂。`parseTab` 对 `kind === 'chat' && targetId <= 0` 直接丢弃：没发过消息的空会话
+标签不跨重启恢复。chat 是唯一 `targetId` 可能为负的种类。
+
+**快捷键**：⌘O = 进 AI Chat 域并开一个新会话标签（连按两次开两个）；⌘G = 去群聊域 `/groups`。
+
+**群聊是页面域**：09-02 对话域拆分前，群聊是 AI Chat 页里的「AI｜群聊」分段控件；拆分后它是
+一级域 `/groups`，分段控件退役，`state/sessions-segment.ts` 随之改名
+`state/groups-view.ts`（只剩「当前群」与「详情面按群记忆的开合」两件群聊自己的状态）。
+i18n 闸 `frontend/tests/shared/chatTabsLocaleParity.test.ts` 同时钉住 `chat.tabs` 子树双语对齐
+与三个 `groupChat.segment*` 退役键不许残留。
+
 ---
 
 ## 3. 数据流详图
