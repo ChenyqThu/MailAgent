@@ -24,7 +24,8 @@ from src.api.app import app
 from src.chat.db import ChatDb
 from src.chat.group_limits import MAX_GROUP_MEMBERS
 
-# v7 anchor CHECK + v19 origin + v30 members_json（群聊写面需要的最小列集）。
+# v7 anchor CHECK + v19 origin + v25 父子两列 + v30 members_json（群聊写面需要的最小列集；
+# g2 起 create_new_session 的 group 分支写 parent_session_id / invoked_by，两列缺一即 INSERT 炸）。
 _DDL = """
 CREATE TABLE ai_chat_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,6 +44,7 @@ CREATE TABLE ai_chat_sessions (
     agent_job_id TEXT,
     members_json TEXT,
     parent_session_id INTEGER,
+    invoked_by TEXT,
     CHECK (
         (anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
         OR

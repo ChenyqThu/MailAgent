@@ -49,7 +49,10 @@ v27（Matters MVP P3，task 08-09）= ``ai_chat_sessions.anchor_type`` 新增 ``
 ``email_id`` 必须 NULL，``anchor_id`` 存 Matter 内部正整数 id；前端 rebuild/swap 扩宽 CHECK。
 v26（harness optimization P5，task 08-07）= ``chat_queued_input`` 队列表与调度索引。
 v25（harness optimization P2，task 08-07）= ``ai_chat_sessions.parent_session_id`` /
-``parent_tool_call_id`` / ``invoked_by``。三列均 nullable，父会话删除不级联；Python 只读。
+``parent_tool_call_id`` / ``invoked_by``。三列均 nullable，父会话删除不级联。
+🔴 09-02（g2）起 Python 不再只读这三列中的两列：``create_new_session`` 的 **group 分支**写
+``parent_session_id``（子群回指父群）+ ``invoked_by``（值域 group_limits.SESSION_INVOKED_BY）；
+``parent_tool_call_id`` 仍只由 gateway 写。
 v24（harness optimization P1，task 08-07）= ``ai_chat_sessions.trigger_id`` / ``trigger_kind`` /
 ``trigger_fired_at`` 与 agent/trigger 两个查询索引。三列均 nullable；Python 只读且通过
 ``_has_column`` 兼容尚未迁移的 v23 库。
@@ -85,6 +88,9 @@ v18（S2 W1，task 07-02-s2-exec-skill-install）= ``chat_tool_call.whitelist_ru
 （07-16 approval-mode switcher 无 bump 再加三个自由值：``auto_accept_edits`` / ``auto_bypass``
 （owner 全局模式跳卡，含 send）/ ``auto_reversible``（既有可逆免卡路径，原先不可区分地记 'approved'）；
 'approved'/'edited' 自此专指真实人工卡决定）
+（09-02 群工具 g2 无 bump 再加两个自由值：``auto_judge_scope``（群内法官的 judgeScopeHash
+匹配免卡）/ ``auto_user_requested_verified``（主 agent 群工具的服务端核验型 user_requested）；
+本文件的免卡执行口径 ``count_auto_whitelist_writes`` 已改 IN 三值，人工审批口径不动）
 + ``whitelist_rule_id`` = 命中的规则 id。gateway 在 Electron main 经 chat_db.ts 直写（本 serve-api 路径
 不写此列，同 v10-v12：``append_tool_call`` 既有写面不变、新列默认 NULL；读走 ``SELECT *`` 自动带回）。
 v17（S1 R1，task 07-02 openness wave1）= ``ai_chat_messages_fts``：ai_chat_messages.content 的
@@ -763,6 +769,11 @@ class ChatDb:
         ``tool_name`` 细分（UI 据此区分「全开放联网」vs「搜索授权」）。🔴 投影**不得假设
         rule_id 非空**——grant 级免卡行 rule_id 天然为 null。
 
+        口径是「免卡执行过」而不是某一个字面值：g2 群工具的 ``auto_judge_scope``（法官
+        scope hash 匹配）与 ``auto_user_requested_verified``（服务端核验型用户显式要求）
+        同样是没弹卡就跑了的写，一并计入。人工审批口径（上面
+        ``list_recent_im_approvals`` 的 approved/edited/rejected）**不动**。
+
         返回 ``{session_id: {"total": n, "rule": n, "grant": {tool_name: n}}}``（无命中的 id
         不在 dict，调用方 default 0）。库不存在 / 表未初始化 / 锁 → **None**（调用方把字段
         降级为 null）—— 有意不走 ``_read_all`` 的 graceful ``[]``：badge 必须区分「账本可达
@@ -781,7 +792,8 @@ class ChatDb:
                     "(tc.whitelist_rule_id IS NULL) AS grant_source, COUNT(*) AS n "
                     "FROM chat_tool_call tc "
                     "JOIN ai_chat_messages m ON m.id = tc.message_id "
-                    "WHERE tc.approval_status = 'auto_whitelist' "
+                    "WHERE tc.approval_status IN "
+                    "('auto_whitelist', 'auto_judge_scope', 'auto_user_requested_verified') "
                     f"AND m.session_id IN ({placeholders}) "
                     "GROUP BY m.session_id, tc.tool_name, grant_source",
                     tuple(ids),
@@ -895,6 +907,8 @@ class ChatDb:
         agent_id: Optional[str] = None,
         group_members: Optional[List[str]] = None,
         title: Optional[str] = None,
+        parent_session_id: Optional[int] = None,
+        invoked_by: Optional[str] = None,
     ) -> Dict[str, Any]:
         """无条件 INSERT 新 session（绕过复用查找）。镜像 chat_db.ts createNewSession
         （「+ 新建会话」显式意图，v4 drop UNIQUE 后多 session/邮件合法；P2c anchor-aware）。
@@ -908,7 +922,11 @@ class ChatDb:
         ``origin='group'`` + ``members_json``（恒 general anchor；成员存在性/chat-capable/上限
         由路由层校验，与 ``agent_id`` 互斥）。``title`` = 建群时的初始标题，🔴 **只在 group
         分支写**：group 行必然生在 v30+ 库（title 列恒在），而 team/默认分支保持 INSERT
-        字节级不变（老 fixture / pre-v14 形状库无 title 列，动它就是回归）。"""
+        字节级不变（老 fixture / pre-v14 形状库无 title 列，动它就是回归）。
+
+        g2（agent 群工具面）：``parent_session_id``（子群回指父群）与 ``invoked_by``
+        （发起方，值域 group_limits.SESSION_INVOKED_BY）同样**只在 group 分支写**，理由同
+        title。子集 / 单层嵌套 / 值域校验全在路由层（红线 5），本方法只落列。"""
         anchor_type, email_id, anchor_id = _resolve_anchor(anchor_type, email_id, matter_id)
         now = _now_ms()
         members_json = (
@@ -928,10 +946,12 @@ class ChatDb:
                 cur = conn.execute(
                     "INSERT INTO ai_chat_sessions "
                     "(email_id, anchor_type, anchor_id, backend_kind, backend_model, "
-                    "backend_agent_page_id, title, created_at, updated_at, origin, members_json) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'group', ?)",
+                    "backend_agent_page_id, title, created_at, updated_at, origin, members_json, "
+                    "parent_session_id, invoked_by) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'group', ?, ?, ?)",
                     (email_id, anchor_type, anchor_id, backend_kind, backend_model,
-                     backend_agent_page_id, title, now, now, members_json),
+                     backend_agent_page_id, title, now, now, members_json,
+                     parent_session_id, invoked_by),
                 )
             else:
                 cur = conn.execute(
@@ -955,7 +975,12 @@ class ChatDb:
                 "updated_at": now,
                 **({"origin": "team", "agent_id": agent_id} if agent_id is not None else {}),
                 **(
-                    {"origin": "group", "members_json": members_json}
+                    {
+                        "origin": "group",
+                        "members_json": members_json,
+                        "parent_session_id": parent_session_id,
+                        "invoked_by": invoked_by,
+                    }
                     if members_json is not None
                     else {}
                 ),

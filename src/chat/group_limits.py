@@ -71,3 +71,9 @@ SILENT_OUTCOMES: Tuple[str, ...] = ("silent", "held_dup", "skipped")
 #: 链根的 trigger_kind（design §6：turns_per_human_message 的分母口径）。
 #: 🔴 法官在本群发言**不是**链根（父设计 §3.1 否决「法官消息开新链」）。
 CHAIN_ROOT_TRIGGER_KINDS: Tuple[str, ...] = ("human", "main_agent")
+
+#: ``ai_chat_sessions.invoked_by`` 的值域（v25 已有列，无 CHECK）。'user'/'main_agent' 来自
+#: custom_agent_call（harness P2）；g2/g3 建子群加 'judge'/'setup'。
+#: 🔴 **serve-api 独占消费**，TS 侧无同名常量，故与 TOPIC_MAX_CHARS 同例不进
+#: tests/config/test_group_constants_parity.py 的 VOCABULARIES。
+SESSION_INVOKED_BY: Tuple[str, ...] = ("user", "main_agent", "judge", "setup")

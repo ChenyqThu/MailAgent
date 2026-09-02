@@ -56,7 +56,9 @@ Autonomy：auto / ask / off
 - 高风险 Agent：主 Agent 主动委派时默认显示确认；
 - 第一版接受 `manual_chat` 中模型自报的 `user_requested=true`，用于跳过外层调用卡；该值必须审计；
 - `user_requested` 不属于权限声明，不能扩大目标 Agent 能力，也不能跳过子 Agent 具体工具审批；
-- 父卡不能替代子工具审批。
+- 父卡不能替代子工具审批；
+- 群工具（g2 的 `group_post` / `group_create`）的 `user_requested` 是**服务端核验型**：只认服务端
+  从 DB 读到的最近一条人类消息（含目标群标题 / 建群关键词才免卡），与本节接受模型自报的口径相反。
 
 ### 4.3 递归
 

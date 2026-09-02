@@ -39,6 +39,7 @@ from src.chat.group_limits import (
     MAX_GROUP_MEMBERS,
     MODEL_OVERRIDE_MAX_CHARS,
     RESPONSE_MODES,
+    SESSION_INVOKED_BY,
     TOPIC_MAX_CHARS,
 )
 from src.chat.db import parse_group_member_ids
@@ -925,8 +926,14 @@ async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
 
     v30（群聊）：``groupMembers`` 非空 = custom agents 群聊会话 → 行落 origin='group' +
     members_json（恒 general anchor；与 agentId 互斥）。逐成员按 _CHAT_CAPABLE_AGENT_TYPES
-    校验（不接对话的三位 preprocess/project_progress/search 在此被拒），成员数上限 5。
-    ``title`` = 建群初始标题（可选；仅 str 转发）。"""
+    校验（不接对话的三位 preprocess/project_progress/search 在此被拒），成员数上限
+    MAX_GROUP_MEMBERS。``title`` = 建群初始标题（可选；仅 str 转发）。
+
+    g2（agent 群工具面）：``parentSessionId`` 非空 = 子群 —— 父必须是群、成员必须 ⊆ 父群、
+    只允许一层嵌套；``invokedBy`` ∈ SESSION_INVOKED_BY = 这条会话由谁发起。两者的权威校验
+    全在这里（红线 5：gateway 的建群工厂不复制成员 / 子集 / 嵌套判定），失败一律
+    E_INVALID_ARG + hint。子群数上限（SUBGROUPS_PER_FAMILY_CAP）**不在这里判**：那是法官
+    一轮之内的配额，只有 gateway 的工厂实例数得清。"""
     opts = body or {}
     anchor_type, email_id, matter_id, backend_kind = _validate_session_opts(
         opts, "sessions/new"
@@ -984,6 +991,58 @@ async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
             )
         for member_id in group_members:
             _require_chat_capable(member_id, what="group member")
+    parent_session_id = opts.get("parentSessionId")
+    invoked_by = opts.get("invokedBy")
+    if parent_session_id is not None:
+        if group_members is None:
+            raise APIError(
+                "E_INVALID_ARG",
+                "sessions/new parentSessionId requires groupMembers",
+                hint="只有群会话能有父群",
+                source="sqlite",
+            )
+        if (
+            not isinstance(parent_session_id, int)
+            or isinstance(parent_session_id, bool)
+            or parent_session_id <= 0
+        ):
+            raise APIError(
+                "E_INVALID_ARG",
+                "sessions/new parentSessionId must be a positive integer",
+                source="sqlite",
+            )
+        # 🔴 父不存在也是 400（不复用 _require_group_session：它对缺失 id 抛 404，而
+        # 「父群写错了」与「这条路由不存在」是两回事，UI 拿 404 只会显示通用错误）。
+        parent = get_chat_db().get_session(parent_session_id)
+        if parent is None or (parent.get("origin") or "") != "group":
+            raise APIError(
+                "E_INVALID_ARG",
+                f"sessions/new parentSessionId {parent_session_id} is not a group session",
+                hint="父会话必须是一个群（origin='group'）",
+                source="sqlite",
+            )
+        if parent.get("parent_session_id") is not None:
+            raise APIError(
+                "E_INVALID_ARG",
+                "sessions/new subgroups may not nest (parent already has a parent)",
+                hint="子群不能再有子群（只允许一层嵌套）",
+                source="sqlite",
+            )
+        parent_members = set(parse_group_member_ids(parent.get("members_json")))
+        extra = [m for m in group_members if m not in parent_members]
+        if extra:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"sessions/new subgroup members must be a subset of the parent group: {extra}",
+                hint="子群成员必须都在父群里",
+                source="sqlite",
+            )
+    if invoked_by is not None and invoked_by not in SESSION_INVOKED_BY:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"sessions/new invokedBy must be one of {list(SESSION_INVOKED_BY)}",
+            source="sqlite",
+        )
     title = opts.get("title")
     session = get_chat_db().create_new_session(
         email_id=email_id,
@@ -995,6 +1054,8 @@ async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
         agent_id=agent_id,
         group_members=group_members,
         title=title if isinstance(title, str) and title.strip() else None,
+        parent_session_id=parent_session_id,
+        invoked_by=invoked_by,
     )
     return success_envelope(session, request=request, source="sqlite")
 

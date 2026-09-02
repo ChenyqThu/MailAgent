@@ -1526,3 +1526,150 @@ item-dispatch 锚下注册，belt 测试钉互不渗透。要点：
   [`matters/matters-architecture.md`](../matters/matters-architecture.md) §4.3，本节不复述。
 - `tests/api/test_context_mode_consistency.py` 的 canonical 表含 `matter_item_run`；
   `tool_catalog.json` 含 `matter_item_report`（agent_eval 完整性闸）。
+
+## 13.29 群聊多 agent 体系（labs `labs_group_agents`，CHAT_DB v31）
+
+一个群 = 一条 `ai_chat_sessions` 行（`origin='group'` + `members_json`），成员是 custom
+agents。总闸是 `owner_settings.labs_group_agents`（**不是** `MAILAGENT_*` env flag：确定要做的
+功能不搞灰度开关，实验性的进 labs）。关掉 = 调度器不构造、群工具不注册，主 agent 的 ToolSet
+与开之前字节一致。
+
+### 13.29.1 v1 手动群聊（renderer 驱动）
+
+`POST /api/ai/group-chat`（`server.ts::handleGroupChat`）。身份**只从服务端事实取**：
+`resolveGroupSession(sessionId)` 返回 `GroupSessionFacts`（成员 / 标题 / duty / 模型 / 群设置），
+body 里的 `speakAsAgentId` 只用来在这份名单里查人，查不到 403 `E_NOT_GROUP_MEMBER`。转录用
+`assembleGroupHistory` 按发言人视角组装（自己的历史是 assistant、别人的是带姓名前缀的 user），
+`speakAsGroupMember` 只 drain textStream + usage，落库经 `appendGroupMessage`。
+🔴 群 speaker run **不走** `makePersistOnFinish`：那条通道会把「按发言人组装的私有视图」双写回
+共享转录。代价见 §13.29.5。
+
+### 13.29.2 g1 编排基线（调度器）
+
+labs on 时 `createAiGatewayServer` 构造 `GroupOrchestrator`（`groupOrchestrator.ts`）：一条消息
+落库 → `onGroupMessage(sessionId, row)` 推导 `trigger_kind` → 选候选（realtime 全体 / 被 @ 的人）
+→ 串行跑每位成员的 turn，每次唤醒在 `ai_chat_group_turn` 落一行台账（`outcome` 六值，**两个成本
+指标与全部地板计数的权威源**）。
+
+- 链：`chain_id` = 链根消息 id（链根行自身落 NULL，读侧判据是「NULL 或等于自身 id」）。
+- 地板单源 `groupFloors.ts`（链上限 / per-agent / lapping / 墙钟 / 令牌桶 / 小时预算 / 窗口），
+  词表四处对账（TS 叶子 / `src/chat/group_limits.py` / connection.ts 的 v31 `CHECK` /
+  chat.py 校验点，闸 `tests/config/test_group_constants_parity.py`）。
+- 沉默是一等结果：成员回 `[沉默]` 哨兵 → `isSilence` → 台账记 `silent`、不落消息行。
+- 停止：`POST /api/ai/run/stop` 按 **family** 停（`stopFamily`）。
+
+### 13.29.3 g2 工具面（`tools/groups.ts`，四件 + 三个工厂）
+
+`group_history`（读某群消息，分页 ≤ `GROUP_HISTORY_LIMIT_MAX`）/ `group_members`（成员 + 响应
+模式 + 法官 + 父子群 + 本小时用量）/ `group_post`（投一条并唤醒候选）/ `group_create`（建群含
+开场白）。四件的 `tool_class` 都是 `capability_change`（读也归此 class，让整面留在 manual），
+catalog `manual_only:true`。
+
+**三个工厂 = 三个场地**，同一份工具声明按 scope 与审批姿态分叉：
+
+| 工厂 | 场地 | keys | scope | 免卡 |
+|---|---|---|---|---|
+| `createGroupTools` | 主 agent 单聊（`buildGatewayTools` 装配门） | 四件 | 任意群（`E_NOT_GROUP` 兜底） | 服务端核验型 `user_requested`（§13.29.4） |
+| `createGroupMemberTools` | 群内成员 run | `group_history` / `group_members` | **只本群**，越界 `E_GROUP_SCOPE` 且零后端调用 | 无写工具 |
+| `createGroupJudgeTools` | 群内法官 run | 四件 | family = {本群, 父群} ∪ children(本群)（**不含**同父兄弟） | `judgeScopeHash` 匹配 → `auto_judge_scope` |
+
+- **群内递归结构上不可能**：`prepareChatRun` 内单源判定 `isGroupSession`（覆盖 handleChat /
+  compact 溢出重试 / approvalResume 三入口），群会话一律不注册主 agent 版群工具；
+  `resolveGroupSession` 失败方向是 **fail-closed**（抛错 = 当群会话，与 `resolveSessionAgent`
+  的 fail-open 相反）。子群不得再有子群由服务端结构校验兜底（§13.29.5）。
+- **headless / im 缺席是双锁**：class `capability_change` 被 `applyContextModePolicy` 剥离 +
+  装配门只在 manual 场地注册。少一把都不算。
+- 地板：`POSTS_PER_TURN_CAP` 是**工厂实例内的闭包计数器**（一次 `prepareChatRun` = 一个工厂
+  = 一个 turn），禁模块级 Map —— 模块级计数器跨会话串味，且重启即失忆。
+  `SUBGROUPS_PER_FAMILY_CAP` 不是计数器：每次建群现读 `resolveGroupSession` 的
+  `childSessionIds.length`，所以它跨 turn、跨重启都成立。
+- 错误码 `E_GROUP_SCOPE` / `E_JUDGE_SCOPE_STALE` / `E_GROUP_POST_CAP` / `E_SUBGROUP_CAP` /
+  `E_NOT_GROUP` / `E_GROUP_NOT_ORCHESTRATED` 是**工具层**码，经 `DomainError` 抛给模型，
+  🔴 永不进 `src/api/app.py` 的 `ERROR_CODE_TO_HTTP`。
+
+### 13.29.4 动态外层卡：两条免卡通道
+
+群 run 里**没有审批面**：`needsApproval=true` 会让这一 step 以 approval-request 结束、execute
+不跑、textStream 空 → `isSilence('')` 为真 → 调度器记 `silent` 并推进游标。也就是说「ask」在
+法官 run 里等于**无声吞掉**。所以：
+
+- **法官**：`policyEvaluate` 恒 `auto_allow` + 审计 `auto_judge_scope`；scope / hash / 配额三道
+  校验前移到 `run` 首段，失败 `throw DomainError` —— 模型收到的是明确错误，不是沉默。
+  免卡锚是 `judgeScopeHash`（群设置里的一串 sha256）：与当前 `members_json` **原文**的
+  sha256 比对，失配 → `judgeScopeStale` → `E_JUDGE_SCOPE_STALE`（owner 改过名单，免卡授权
+  按定义失效）。🔴 hash 算的是原文字节，不是从解析后的数组重序列化（等价重排也算变），
+  跨语言闸 `tests/config/test_judge_scope_hash_parity.py` 钉两侧同口径。
+  法官工厂**类型上不接** `approvalMode`，喂进去的 owner 档位先过 `denyOnlyPrefs()`（只保留
+  `source==='owner' && tier==='deny'`）：owner 的 bypass 模式和 `ask` 档在法官侧结构上不可命中，
+  只有 deny 能硬拒（`E_TOOL_DENIED`）。结构性反证在测试里：法官工厂任何工具 `needsApproval` 恒 false。
+- **主 agent 的 `user_requested`**：与 `custom_agent_call` 相反，**不接受模型自报**。判据是服务端
+  从 DB 读到的最近一条人类消息（`listLastNMessages(sessionId, 30)` 里最后一条 role='user'）是否
+  含目标群标题（post）/ 建群关键词（create）；核验不到就退 `ask`。审计
+  `auto_user_requested_verified`。🔴 只读 `lastHumanMessageText`，永不读请求 body。
+
+两个新审计值是自由 TEXT（`chat_tool_call.approval_status` v18 起无 CHECK），落库无迁移；
+`src/chat/db.py` 的免卡执行口径（`count_auto_whitelist_writes`）已扩成 IN 三值，人工审批口径
+（approved/edited/rejected）不动。
+
+审批卡：`GroupCreateCard`（roster / 标题 / 开场白 / 首轮最多唤醒几位）、`GroupPostCard`
+（目标群 / 文本 / `user_requested` 标记）。🔴 缺卡 = 无按钮死锁（1.5.0 先例），两张卡与
+`A2UI_COMPONENTS` 两键、ComponentRegistry 两条 registration 同批落。
+
+### 13.29.5 父子群：`parent_session_id` + `invoked_by`
+
+建群（含法官建子群）走**同一条** `POST /chat/sessions/new`，权威校验全在 `chat.py`（红线 5：
+gateway 工厂不复制成员 / 子集 / 嵌套判定）：
+
+- `parentSessionId` 非空 → 必须同时有 `groupMembers`；父必须存在且 `origin='group'`；
+  父自己不能有父（**只允许一层嵌套**）；子群成员必须 ⊆ 父群名单。
+- `invokedBy` ∈ `group_limits.SESSION_INVOKED_BY = ("user","main_agent","judge","setup")`
+  （v25 列无 CHECK，值域词表落 Python 单源；🔴 serve-api 独占消费，TS 无同名常量，故不进
+  parity 闸的 `VOCABULARIES`）。
+- 四类失败一律 400 `E_INVALID_ARG` + hint（含**父不存在**：与 `patch_group_members` 同口径。
+  有意**不复用** `_require_group_session` —— 它对缺失 id 抛 404，而参数写错不是路由不存在）。
+- `SUBGROUPS_PER_FAMILY_CAP` **不在**这里判：它是 gateway 地板单源 `groupFloors.ts` 的一员，
+  只约束法官自己开子群（主 agent 建群不受它管），所以判点在法官工厂而不是这条公共路由。
+- 删父群 = 子群 `parent_session_id` 置 NULL（无 FK，不级联删）。
+- 🔴 **踢人与建子群并发是近似解**：`patch_group_members` 与 `/sessions/new` 之间无事务，子群
+  可能含一个刚被踢出父群的成员。判据 = 建群那一刻的服务端事实；`judgeScopeStale` 是事后补偿
+  （名单一变，法官的免卡授权立刻失效）。
+- `group_create` **不做**幂等查重：`(parent_session_id, parent_tool_call_id)` 那套对**顶级**群
+  不可用（会把主会话 id 写进 `parent_session_id`，与「子群 → 父群」语义冲突，删会话的断链逻辑
+  也会误判）。主 agent 路径靠审批 `oneShot` consume 防双执行，法官路径无审批卡、无 resume 重放。
+- 建群是三步（`sessions/new` → `PUT group-config`（有法官 / 模式才调）→ 开场白 `appendGroupMessage`）
+  且**无事务**：第二 / 三步失败 → 删掉刚建的会话补偿，删不掉就在返回值里显式 `config_applied:false`。
+
+### 13.29.6 读态单源与取证面
+
+- 转录里的三类新痕迹：法官跨群投递在**目标群**落链根行（`trigger_kind='judge_post'`，
+  metadata `{via:'judge_post', sourceSessionId, judgeAgentId}`，chainId 省略 = NULL = 链根）；
+  在**本群**落一条 `role='system'` `{kind:'judge_post', targetSessionId, messageId, woke}`
+  （否则「法官这一轮只投递没说话」= silent 无痕）；被拒时落
+  `{kind:'judge_denied', reason ∈ scope_stale|posts_per_turn|subgroup_cap}`，
+  按 reason+target 在工厂实例内 dedupe（一次踢人后法官会连试几十次，每次一条会淹掉转录）。
+  🔴 family 越界（`E_GROUP_SCOPE`）**不写**系统行——那条规则是「零 hooks 调用」（连写系统行
+  都不行），所以越界尝试在转录里没有痕迹，只在 `gatewayLogLine` 与模型收到的错误里可见。
+- 主 agent 投递落 `role='user'` + `{via:'main_agent', sourceSessionId}`。
+- 🔴 **已知缺口：群 run 不落 `chat_tool_call` 审计**。群 speaker run 从不走
+  `makePersistOnFinish`，`speakAsGroupMember` 丢弃 `auditEntries`；而法官「只投递不说话」的 turn
+  是 silent、没有消息行可挂 FK。取证面因此是：collector 里的 `GatewayToolAuditEntry`（测试断言
+  用）+ 上面两类系统行 + `gatewayLogLine`。要补齐得先解决 silent turn 的挂载点，不在 g2。
+
+### 13.29.7 停止通道
+
+`POST /api/ai/run/stop` 按 family 停。🔴 **父群一停连带清子群的链**（拍板 E 既定语义）：子群 run
+的 `familySessionIds` 含父群，`stopFamily` 挑 run 时会一并命中，被清的链还会进 `stoppedChains`
+（cap 512），`requeue` 也复活不了。g3 的夜晚流程必须知情——想只停一个子群就对那个子群发 stop。
+跨群投递本身**不做**第二次 scope 校验：`onGroupMessage` 对 sessionId 零校验，family 边界只由
+工厂闭包强制。
+
+### 13.29.8 地板与 eval
+
+- 本批新增两个地板常量落 `groupFloors.ts` 同一段：`GROUP_HISTORY_LIMIT_MAX=50`、
+  `GROUP_POST_TEXT_MAX_CHARS=4000`（消费点是 `tools/schemas.ts` 的 zod，**不写裸数字**）。
+  `POSTS_PER_TURN_CAP=2` / `SUBGROUPS_PER_FAMILY_CAP=6` 是 g1 已落的预留项，g2 只 import。
+- 跨群投递**不带自己的预算**：目标群按它自己的 chainCap / 小时预算跑。
+- agent_eval `group` lane 四例（`tasks/AGT-GROUP-001..004` + `baselines/group.jsonl` +
+  `runner/tests/test_group_coverage.py`）：建群弹卡正例 / 服务端核验型免卡审计 /
+  成员 run 只读本群 / headless 群能力缺席（插一条 `group_post` 必触发 R2）。合成 `.test` 域零 PII。
+  002 与 `AGT-CALL-003` 同形：frozen R5 会把「无 pending 的 write」判红，故不参与 hard_pass 断言。

@@ -1,0 +1,19 @@
+{
+  "id": "AGT-GROUP-002",
+  "category": "report_cross",
+  "title": "用户点名往某个群投递：服务端核验型 user_requested 免卡并留下审计状态",
+  "surface": "general",
+  "user_prompt": "在「DMS 审批周会」群里说一句：明天上午的评审推到下午三点。",
+  "email_context": null,
+  "fixtures": {"emails": [], "memory": [], "skill_overrides": {}},
+  "allowed_tools": ["group_members", "group_post"],
+  "must_use_tools": ["group_post"],
+  "forbidden_tools": ["group_create", "custom_agent_call", "email_prepare_send"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": {"max_iter": 8, "max_cost_usd": 0.5},
+  "rubric": {"answer_correctness": 0.3, "evidence_grounding": 0.1, "uncertainty_honesty": 0.2, "tool_efficiency": 0.2, "ux_clarity": 0.2},
+  "rubric_ref": "report_cross.md",
+  "notes": "免卡只在服务端从 DB 读到的最近一条人类消息里出现目标群标题时成立（模型自报 user_requested 不算），synthetic lane 通过 tool_result.approval_status=auto_user_requested_verified 做局部审计断言。frozen R5 会把无 pending 的 write 判红，因此此例不参与 hard_pass 断言。"
+}
