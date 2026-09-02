@@ -53,7 +53,7 @@ import { useMatterNavigation } from './components/matters/navigation'
 // 'notifications:navigate' 送来通知行 payload，这里用**单源解析器**收窄（不另抄判据）。
 import { resolveNotificationLink } from './components/notifications/navigation'
 import { useMailApi } from './hooks/useMailApi'
-import { requestNewAgentSession } from './state/ai-chat-panel'
+import { openNewChatTab } from './state/active-chat'
 import { navigateToGroupSession } from './components/agents/groups/navigation'
 // 一级入口单源（task 08-24-l4-nav-shell Step R）：deeplink 的落点与「AI → General Agent」
 // 菜单项的目标都从 registry 取，不在这里第二次写死 path。
@@ -143,14 +143,13 @@ function useDeeplinkRouter(): void {
 
 /**
  * 监听 main 菜单 (AI → General Agent) 转发的 'mailagent:open-general-agent' →
- * 切到对话页 (/sessions) **并新建一个会话**。菜单项不绑 accelerator（⌘O 由
+ * 进 AI Chat 域 (/sessions) **并开一个新会话标签**。菜单项不绑 accelerator（⌘O 由
  * renderer GlobalShortcuts 拥有），只走 click → IPC → 这里。RootLayout 仅主 shell
  * 渲染（popout 绕过 router），与 main 端「只发主窗口」对齐。legacy Cmd+O centered
  * dialog 已随 legacy runtime 退役（S3 W2）。
  *
- * 🔴 与 ⌘O 同一套动作（08-27 P2 起 ⌘O = 导航 + 新建会话）：同一个入口的两个触发面
- * 行为必须一致，否则「菜单点进去落在上一次的会话、快捷键开新会话」。新建会话经
- * ai-chat-panel 排一次请求给 AgentViewLayout 消费 —— 会话引擎在那个组件实例里。
+ * 🔴 与 ⌘O 同一套动作：同一个入口的两个触发面行为必须一致，否则「菜单点进去落在上一次
+ * 的会话、快捷键开新的」。动作本身收敛在 `state/active-chat.ts::openNewChatTab`。
  */
 function useGeneralAgentMenu(): void {
   const navigate = useNavigate()
@@ -170,7 +169,7 @@ function useGeneralAgentMenu(): void {
     if (!ipc) return
     const handler = (): void => {
       navigateToNavEntry(navigate, entry)
-      requestNewAgentSession()
+      openNewChatTab()
     }
     const off = ipc.on('mailagent:open-general-agent', handler)
     return typeof off === 'function'
@@ -320,6 +319,15 @@ const sessionsRoute = createRoute({
     () => import('./components/layout/SessionsLayout'),
     'SessionsLayout'
   )
+})
+
+// /groups — 群聊域（09-02 对话域拆分：从 `/sessions` 的「AI｜群聊」分段里拆出来）。
+// 无搜索参数：选中哪个群是 groups-view store 的会话内状态，不进 URL（与 `/sessions`
+// 选中哪个会话同口径）。
+const groupsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/groups',
+  component: lazyRouteComponent(() => import('./components/layout/GroupsLayout'), 'GroupsLayout')
 })
 
 // /agents — 团队域（智能体清单与配置）。08-27 P3：报告与对话拆成各自的一级域
@@ -509,6 +517,7 @@ export const router = createRouter({
     inboxRoute,
     todayRoute,
     sessionsRoute,
+    groupsRoute,
     agentsRoute,
     reportsRoute.addChildren([reportDetailRoute]),
     mattersRoute,

@@ -30,7 +30,7 @@ type NavigateFn = ReturnType<typeof useNavigate>
 /** 路由 search 的原样搬运形状：只从 router 拿、只原样递回 navigate，不在这里解释字段。 */
 export type RouteSearch = Record<string, unknown>
 
-/** 域 → 该域的缺省落点 entry。每个域恰有一格 rail（导轨 8+2 已满员），直接从 registry
+/** 域 → 该域的缺省落点 entry。每个域恰有一格 rail（导轨 9+2 已满员），直接从 registry
  *  派生 —— 不另抄一份 domain→path 映射表（会漂）。 */
 export function domainDefaultEntry(domain: NavDomain): NavEntry | null {
   return navRailEntries(NAV_ENTRIES).find((e) => e.domain === domain) ?? null

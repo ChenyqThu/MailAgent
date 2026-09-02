@@ -201,8 +201,10 @@ export function IconRail({
   const { t } = useTranslation()
   const cells = navRailEntries(entries)
   const top = cells.filter((e) => !BOTTOM_DOMAINS.includes(e.domain))
-  // 对象域（邮件 / 事项）与页面域之间隔一条分隔线（原型 railsep）—— 前者点开
+  // 对象域（邮件 / 事项 / AI Chat）与页面域之间隔一条分隔线（原型 railsep）—— 前者点开
   // 对象标签，后者轮流占用主标签，rail 上把这两种语义分开。
+  // 🔴 分组先于 rail.order：AI Chat 的 order 是 4，升对象域后它排在分隔线**上方**的
+  // 事项后面，而不是页面域里的今日(2) 后面。手写期望的闸见 sidebar-contract 的 ALL_RAIL。
   const objectCells = top.filter((e) => NAV_OBJECT_DOMAINS.includes(e.domain))
   const pageCells = top.filter((e) => !NAV_OBJECT_DOMAINS.includes(e.domain))
   const bottom = cells.filter((e) => BOTTOM_DOMAINS.includes(e.domain))

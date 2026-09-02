@@ -30,6 +30,7 @@ const PAGE_LISTS: Partial<Record<NavDomain, PeekList>> = {
   matters: lazy(() => import('./peek/MattersPeekList')),
   contacts: lazy(() => import('./peek/ContactsPeekList')),
   chats: lazy(() => import('./peek/ChatsPeekList')),
+  groups: lazy(() => import('./peek/GroupsPeekList')),
   agents: lazy(() => import('./peek/TeamPeekList')),
   reports: lazy(() => import('./peek/ReportsPeekList'))
 }

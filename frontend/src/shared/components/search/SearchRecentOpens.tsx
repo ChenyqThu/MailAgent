@@ -6,12 +6,27 @@
 
 import { useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Briefcase, Mail } from 'lucide-react'
+import { Briefcase, Mail, MessagesSquare } from 'lucide-react'
 
-import { useTabWorkspace, type TabKind } from '@shared/state/tab-workspace'
+import { useTabWorkspace, type DomainTabKind, type TabKind } from '@shared/state/tab-workspace'
 import { openObjectTab } from '@shared/state/tab-workspace-bridge'
 
 const RECENTS_LIMIT = 6
+
+/** 行的图标与右侧类别字，按种类查表。写成 `satisfies Record<DomainTabKind, …>` 而不是
+ *  两臂三元：再加一种对象标签时这里缺键当场红（09-02 加 `chat` 前是三元式的，新种类
+ *  会被静默画成事项图标 + 写着「事项」）。chat 复用域名（AI Chat），不另起一套说法。 */
+const KIND_ICON = {
+  email: Mail,
+  matter: Briefcase,
+  chat: MessagesSquare
+} as const satisfies Record<DomainTabKind, typeof Mail>
+
+const KIND_META_KEY = {
+  email: 'searchTab.metaEmail',
+  matter: 'searchTab.metaMatter',
+  chat: 'nav.domain.chats'
+} as const satisfies Record<DomainTabKind, string>
 
 interface RecentEntry {
   readonly kind: Exclude<TabKind, 'search'>
@@ -56,25 +71,24 @@ export function SearchRecentOpens(): React.ReactElement | null {
         {t('searchTab.recents')}
       </div>
       <div className="space-y-px">
-        {recents.map((entry) => (
-          <div
-            key={`${entry.kind}:${entry.targetId}`}
-            className="flex h-[42px] cursor-pointer items-center gap-3 rounded-[9px] px-3 hover:bg-ink-fg/[0.05]"
-            onClick={() => openRecent(entry)}
-          >
-            <span className="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-lg bg-ink-fg/[0.06] text-ink-fg-2">
-              {entry.kind === 'email' ? (
-                <Mail size={14} strokeWidth={1.8} aria-hidden />
-              ) : (
-                <Briefcase size={14} strokeWidth={1.8} aria-hidden />
-              )}
-            </span>
-            <span className="min-w-0 flex-1 truncate text-body text-ink-fg">{entry.title}</span>
-            <span className="shrink-0 font-mono text-meta text-ink-fg-3">
-              {entry.kind === 'email' ? t('searchTab.metaEmail') : t('searchTab.metaMatter')}
-            </span>
-          </div>
-        ))}
+        {recents.map((entry) => {
+          const Icon = KIND_ICON[entry.kind]
+          return (
+            <div
+              key={`${entry.kind}:${entry.targetId}`}
+              className="flex h-[42px] cursor-pointer items-center gap-3 rounded-[9px] px-3 hover:bg-ink-fg/[0.05]"
+              onClick={() => openRecent(entry)}
+            >
+              <span className="grid h-[26px] w-[26px] shrink-0 place-items-center rounded-lg bg-ink-fg/[0.06] text-ink-fg-2">
+                <Icon size={14} strokeWidth={1.8} aria-hidden />
+              </span>
+              <span className="min-w-0 flex-1 truncate text-body text-ink-fg">{entry.title}</span>
+              <span className="shrink-0 font-mono text-meta text-ink-fg-3">
+                {t(KIND_META_KEY[entry.kind])}
+              </span>
+            </div>
+          )
+        })}
       </div>
     </>
   )

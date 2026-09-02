@@ -33,6 +33,8 @@ import {
   TAB_KIND_DOMAIN,
   selectActiveTab,
   useTabWorkspace,
+  type DomainTabKind,
+  type ObjectDomain,
   type TabDescriptor,
   type TabKind,
   type TabWorkspaceState
@@ -49,7 +51,7 @@ const SEARCH_ROUTE_PATH = '/search'
 /** `activeSlotDomain` 的搜索槽哨兵 —— 搜索标签不归任何域，路由目标是 '/search' 专属面。 */
 export const SEARCH_SLOT = 'search' as const
 
-/** 激活槽的路由目标：十个域之一，或搜索面。 */
+/** 激活槽的路由目标：某个域，或搜索面。 */
 export type SlotRouteTarget = NavDomain | typeof SEARCH_SLOT
 
 /** 激活槽归属的路由目标：对象标签按 kind 查 TAB_KIND_DOMAIN，搜索标签 = SEARCH_SLOT
@@ -91,11 +93,26 @@ function mostRecentOfKind(tabs: readonly TabDescriptor[], kind: TabKind): TabDes
   return best
 }
 
+/** 对象域 → 标签种类（`TAB_KIND_DOMAIN` 的反表）。写成 `satisfies Record<ObjectDomain, …>`
+ *  而不是一串 `if`：registry 再升一个对象域时这里缺键当场红（此前是硬编码的
+ *  `domain === 'mail' || domain === 'matters'`，漏改只会静默走进页面域那一支）。 */
+const OBJECT_DOMAIN_KIND = {
+  mail: 'email',
+  matters: 'matter',
+  chats: 'chat'
+} as const satisfies Record<ObjectDomain, DomainTabKind>
+
+/** 谓词而不是「取值返回 null」：`domain` 在下面的页面域分支要窄化成 `MainPage`
+ *  才能喂给 `setMainPage`。 */
+function isObjectDomain(domain: NavDomain): domain is ObjectDomain {
+  return Object.hasOwn(OBJECT_DOMAIN_KIND, domain)
+}
+
 /** route → tab 的一次收敛（纯 store 操作，不导航）。导出供单测。 */
 export function reconcileRouteToTabs(domain: NavDomain): void {
   const state = useTabWorkspace.getState()
-  if (domain === 'mail' || domain === 'matters') {
-    const kind: TabKind = domain === 'mail' ? 'email' : 'matter'
+  if (isObjectDomain(domain)) {
+    const kind: TabKind = OBJECT_DOMAIN_KIND[domain]
     const active = selectActiveTab(state)
     if (active !== null && active.kind === kind) return
     const candidate = mostRecentOfKind(state.tabs, kind)

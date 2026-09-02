@@ -1,4 +1,4 @@
-// L4 群聊 UX 批 — 清单列（列头 + 分段 + 新建 + 行列表 + 空态）。
+// L4 群聊 UX 批 — 清单列（列头 + 新建 + 行列表 + 空态）。
 //
 // 从 GroupChatWorkspace 抽出：那个文件现在是三栏壳，列表的选中 / 重命名 / 删除确认这些行级状态
 // 住在这里。行本身见 GroupRow。
@@ -25,7 +25,6 @@ import { GroupRow, type GroupRowItem } from './GroupRow'
 import type { GroupLiveTriple } from './useGroupTurnEvents'
 
 export function GroupList({
-  headerSlot,
   items,
   memberMeta,
   activeId,
@@ -40,7 +39,6 @@ export function GroupList({
   onRename,
   onDelete
 }: {
-  headerSlot: React.ReactNode
   /** 清单行（serve-api 的 origin='group' 列表；零消息群也在里面）。 */
   items: GroupRowItem[]
   memberMeta: Map<string, GroupMemberMeta>
@@ -86,7 +84,6 @@ export function GroupList({
           {t('groupChat.listTitle')}
         </h2>
       </div>
-      <div className="px-3 pb-2">{headerSlot}</div>
       <div className="px-3 pb-2">
         <button
           type="button"

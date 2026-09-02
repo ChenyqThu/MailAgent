@@ -1,7 +1,7 @@
-// L4 群聊 — 对话域「群聊」分段的整个工作区：三栏壳（清单列 ｜ 群聊视图 ｜ 群详情面）。
+// L4 群聊 — 群聊域（`/groups`）的整个工作区：三栏壳（清单列 ｜ 群聊视图 ｜ 群详情面）。
 //
-// 数据源：`GET /chat/sessions/all?origin=group`（AgentViewLayout 注入 items + invalidate —— 与
-// AI 分段同构，列表数据归 layout 管）。serve-api 对 origin='group' 放宽了「有消息才出现」的判据，
+// 数据源：`GET /chat/sessions/all?origin=group`（GroupsLayout 注入 items + invalidate —— 列表数据
+// 归 layout 管，与 AI Chat 侧同构）。serve-api 对 origin='group' 放宽了「有消息才出现」的判据，
 // 零消息新群建好即在列表里；draftSession 只兜住「建群成功 → 列表 refetch 到达」之间那一拍。
 // 成员候选 = 团队页可对话成员（deriveTeamMembers canChat 判据，排除主 agent 与
 // 预处理/项目周报/搜索三位），上限 MAX_GROUP_MEMBERS —— serve-api /sessions/new 同判据兜底
@@ -9,7 +9,7 @@
 // 闸 tests/config/test_group_constants_parity.py。
 //
 // 本组件持有三件跨栏状态：
-//   ① 详情面开合 —— 落 `useSessionsSegment.detailsOpenBySession`，**按群记忆**（右栏是常驻面，
+//   ① 详情面开合 —— 落 `useGroupsView.detailsOpenBySession`，**按群记忆**（右栏是常驻面，
 //      切回某个群应该还是离开时那副样子）。
 //   ② `useGroupLiveMap(labsOn)` —— 列表级在场态的**唯一订阅点**：一次订阅下发给清单列的脉冲，
 //      同时作为群聊视图的初值（每行各订阅一次 = 行数倍的 IPC 监听）。
@@ -28,7 +28,7 @@ import { useLabsFlags } from '@shared/hooks/useLabsFlags'
 import { toastError } from '@shared/state/toast'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { isSessionUnread } from '@shared/lib/chatUnread'
-import { useSessionsSegment } from '@shared/state/sessions-segment'
+import { useGroupsView } from '@shared/state/groups-view'
 import { Drawer } from '@shared/components/ui/drawer'
 
 import { resolveAiGatewayBaseUrl } from '@shared/assistant/runtime/flags'
@@ -54,28 +54,25 @@ function chatCapableMembers(agents: readonly ReportAgentConfig[]): ReportAgentCo
 }
 
 export function GroupChatWorkspace({
-  headerSlot,
   items,
   invalidate,
   narrow,
   navHidden = false
 }: {
-  /** 「AI」｜「群聊」分段控件（与 AI 分段同一实例形态，由 AgentViewLayout 注入）。 */
-  headerSlot: React.ReactNode
   items: ChatSessionListItem[]
   invalidate: () => void
   narrow: boolean
-  /** 09-01 侧栏批：对话域二级栏折叠时整列隐藏（与 AgentThreadList.navHidden 同语义，
-   *  由 AgentViewLayout 按 useDomainCollapsed('chats') 注入）；窄窗单栏形态下无意义。 */
+  /** 09-01 侧栏批：群聊二级栏折叠时整列隐藏（与 AgentThreadList.navHidden 同语义，
+   *  由 GroupsLayout 按 useDomainCollapsed('groups') 注入）；窄窗单栏形态下无意义。 */
   navHidden?: boolean
 }): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
   const { agents } = useReportConfig()
-  const activeId = useSessionsSegment((s) => s.activeGroupSessionId)
-  const setActiveId = useSessionsSegment((s) => s.setActiveGroupSessionId)
-  const detailsOpenBySession = useSessionsSegment((s) => s.detailsOpenBySession)
-  const setDetailsOpen = useSessionsSegment((s) => s.setDetailsOpen)
+  const activeId = useGroupsView((s) => s.activeGroupSessionId)
+  const setActiveId = useGroupsView((s) => s.setActiveGroupSessionId)
+  const detailsOpenBySession = useGroupsView((s) => s.detailsOpenBySession)
+  const setDetailsOpen = useGroupsView((s) => s.setDetailsOpen)
   const [dialogOpen, setDialogOpen] = useState(false)
   // 刚建好、列表还没 refetch 到的群，本地持有一拍。
   const [draftSession, setDraftSession] = useState<ChatSession | null>(null)
@@ -158,7 +155,6 @@ export function GroupChatWorkspace({
 
   const list = (
     <GroupList
-      headerSlot={headerSlot}
       items={rows}
       memberMeta={memberMeta}
       activeId={activeId}

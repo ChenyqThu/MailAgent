@@ -105,7 +105,7 @@ vi.mock('../../src/shared/components/agents/AgentAvatar', () => ({
 
 import i18n from '@shared/i18n'
 import type { ChatSession, ChatSessionListItem, ReportAgentConfig } from '@shared/api/types'
-import { useSessionsSegment } from '@shared/state/sessions-segment'
+import { useGroupsView } from '@shared/state/groups-view'
 import { GroupChatWorkspace } from '../../src/shared/components/agents/groups/GroupChatWorkspace'
 
 const GATEWAY_PORT_KEY = 'mailagent:aiGatewayPort'
@@ -166,7 +166,6 @@ function makeQcWrapper() {
 function renderWorkspace(items: ChatSessionListItem[] = [groupRow()], invalidate = vi.fn()) {
   const view = render(
     <GroupChatWorkspace
-      headerSlot={<div data-header-slot />}
       items={items}
       invalidate={invalidate}
       narrow={false}
@@ -179,8 +178,7 @@ function renderWorkspace(items: ChatSessionListItem[] = [groupRow()], invalidate
 beforeEach(() => {
   cleanup()
   vi.clearAllMocks()
-  useSessionsSegment.setState({
-    segment: 'groups',
+  useGroupsView.setState({
     activeGroupSessionId: null,
     detailsOpenBySession: {}
   })

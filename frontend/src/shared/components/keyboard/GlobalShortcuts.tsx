@@ -30,7 +30,8 @@ import {
 // ⌘, / ⌘O 的**目标**来自 nav registry（与侧栏、⌘K jump 同一条 entry），**组合键**仍来自
 // keymap.ts（registry 只引用它的 binding id）—— 两者都不在本文件写死。
 import { navEntry, navigateToNavEntry, navShortcutSpec } from '@shared/navigation/registry'
-import { requestNewAgentSession, toggleChatModal } from '@shared/state/ai-chat-panel'
+import { openNewChatTab } from '@shared/state/active-chat'
+import { toggleChatModal } from '@shared/state/ai-chat-panel'
 import { useCommandPalette } from '@shared/state/command-palette'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
 import { useNavShell } from '@shared/state/nav-shell'
@@ -46,6 +47,7 @@ import {
 // 模块级常量：entry 是静态数据，没必要每次 render 再查一次。
 const settingsEntry = navEntry('settings')
 const generalAgentEntry = navEntry('sessions')
+const groupsEntry = navEntry('groups')
 
 /** ⌘1-9 各注册一条。写成叶子组件而不是在循环里调 hook —— 数组长度虽然恒定，
  *  循环里调 hook 仍然违反 hooks 规则（也过不了 eslint），而九个手写 `useShortcut`
@@ -95,14 +97,18 @@ export function GlobalShortcuts(): ReactElement {
     toggleChatModal()
   }, [])
 
-  // ⌘O — 切到对话页 (/sessions) **并新建一个会话**（08-27 P2；原来只是导航过去，
-  // 落在上一次的会话上）。两半分工：导航走 registry 的同一条 entry（与侧栏 / ⌘K jump
-  // 同源），新建会话经 ai-chat-panel 排一次请求给 AgentViewLayout 消费 —— 会话引擎
-  // (useGeneralChat) 的状态在那个组件实例里，这里够不着。
-  // 🔴 ⌘O 不开对象标签：对话是主标签的八种承载之一。
+  // ⌘O — 进 AI Chat 域 (/sessions) **并开一个新会话标签**（09-02 对话域拆分；08-27 那版
+  // 是「导航 + 在页内新建会话」，会话引擎在组件实例里、模块级 handler 够不着，故绕
+  // ai-chat-panel 排一次性请求 —— `chats` 升对象域后新会话就是一个标签，那条通道退役）。
+  // 连按三次 = 三个「新对话」标签（openTab 的去重键是 kind+targetId，临时 id 每次都新）。
   const openNewChat = useCallback(() => {
     navigateToNavEntry(navigate, generalAgentEntry)
-    requestNewAgentSession()
+    openNewChatTab()
+  }, [navigate])
+
+  // ⌘G — 去群聊域 (/groups)。只导航，不建群。
+  const goGroups = useCallback(() => {
+    navigateToNavEntry(navigate, groupsEntry)
   }, [navigate])
 
   // ── 标签工作区（08-27 P2）───────────────────────────────────────────────
@@ -189,6 +195,7 @@ export function GlobalShortcuts(): ReactElement {
   useShortcut(navShortcutSpec(settingsEntry), goSettings)
   useShortcut('cmd+j', toggleModal)
   useShortcut(navShortcutSpec(generalAgentEntry), openNewChat)
+  useShortcut(navShortcutSpec(groupsEntry), goGroups)
   // ⌘N — 写新邮件 (居中模态, ComposeNewModal 挂 RootLayout)。global scope: 任意
   // 页面可开, 与全局侧边栏「写邮件」按钮一致。editable context 默认 short-circuit,
   // chat / 主题输入框打字不误触。

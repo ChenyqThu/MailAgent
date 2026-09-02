@@ -1,7 +1,7 @@
 // 标签工作区的状态单源（task 08-27-l4-tab-workspace P2 波1）。
 //
-// 右侧详情区从「单一对象槽」改成多标签：邮件与事项会开成对象标签（判据是「需不需要
-// 同时开两个来比对」），外加一个「新标签页」搜索单例（TabKind 词表注释）；八个页面型
+// 右侧详情区从「单一对象槽」改成多标签：邮件、事项与 AI Chat 会话会开成对象标签（判据是
+// 「需不需要同时开两个来比对」），外加一个「新标签页」搜索单例（TabKind 词表注释）；页面型
 // 承载共用最左那个**主标签**单例槽 —— 所以主标签不在 `tabs` 数组里，它是独立的
 // `mainPage` + `mainBreadcrumb`。
 //
@@ -31,14 +31,19 @@ const SCHEMA_VERSION = 1
 
 // ── 词表 ────────────────────────────────────────────────────────────────────
 
-/** 会开成对象标签的内容种类。email / matter 是对象（各归一个一级域）；`'search'` 是
+/** 会开成对象标签的内容种类。email / matter / chat 是对象（各归一个一级域）；`'search'` 是
  *  「新标签页」（⌘T / 标签条「+」）—— 单例（targetId 恒 `SEARCH_TARGET_ID`），承载在
  *  `/search` 路由上，不归任何域。它走标签的全部通用语义（LRU 可淘汰 / ⌘W 可关 /
  *  closedStack 可找回 / 持久化恢复），仅两处不同：标题恒定（渲染侧按 kind 取 i18n，
- *  不读快照）、**永不 locked**（没有草稿 / 抽屉工作现场，updateTab 丢弃锁定写入）。 */
-export type TabKind = 'email' | 'matter' | 'search'
+ *  不读快照）、**永不 locked**（没有草稿 / 抽屉工作现场，updateTab 丢弃锁定写入）。
+ *
+ *  `'chat'`（09-02 对话域拆分）= 一个 AI Chat 会话，`targetId` 是 session id。还没发过第一条
+ *  的新会话拿不到 session id，先用**递减负数**当临时 targetId（`nextTempChatId`），首发拿到
+ *  真 id 后 `retargetTab` 换锚 —— 故 chat 是唯一 targetId 可能为负的种类，且负 id 标签不跨
+ *  重启恢复（见 parseTab）。 */
+export type TabKind = 'email' | 'matter' | 'search' | 'chat'
 
-export const TAB_KINDS: readonly TabKind[] = ['email', 'matter', 'search']
+export const TAB_KINDS: readonly TabKind[] = ['email', 'matter', 'search', 'chat']
 
 /** 归属一级域的对象种类（= TabKind 减去无域的搜索标签）。 */
 export type DomainTabKind = Exclude<TabKind, 'search'>
@@ -55,13 +60,14 @@ export const SEARCH_TARGET_ID = 0
  *  registry 里新增一个对象域而这里没跟，那条闸会红。 */
 export const TAB_KIND_DOMAIN = {
   email: 'mail',
-  matter: 'matters'
+  matter: 'matters',
+  chat: 'chats'
 } as const satisfies Record<DomainTabKind, NavDomain>
 
 /** 对象域（会开标签的）。 */
 export type ObjectDomain = (typeof TAB_KIND_DOMAIN)[DomainTabKind]
 
-/** 主标签的八种承载 = 全部域减去对象域。**类型从 NavDomain 派生**，不手写第二份并集。 */
+/** 主标签的页面型承载 = 全部域减去对象域。**类型从 NavDomain 派生**，不手写第二份并集。 */
 export type MainPage = Exclude<NavDomain, ObjectDomain>
 
 /** 运行时表（持久化校验 + 设置面要遍历时用）。
@@ -71,7 +77,7 @@ const MAIN_PAGE_SET = {
   today: true,
   calendar: true,
   contacts: true,
-  chats: true,
+  groups: true,
   agents: true,
   reports: true,
   ops: true,
@@ -90,7 +96,9 @@ export type TabId = string
  *  留着别名是为了让签名读得出意图）。 */
 export type ActiveSlot = typeof MAIN_SLOT | TabId
 
-export const MAX_TABS_DEFAULT = 8
+// 09-02 对话域拆分：AI Chat 会话也进标签条，8 个位置要同时装下邮件 / 事项 / 会话三类，
+// 缺省抬到 10（设置页滑杆的 4-12 区间不动；调过滑杆的老库读存档值，不受影响）。
+export const MAX_TABS_DEFAULT = 10
 export const MAX_TABS_MIN = 4
 export const MAX_TABS_MAX = 12
 
@@ -257,6 +265,9 @@ function parseTab(raw: unknown): TabDescriptor | null {
   // 搜索标签是单例：targetId 只有 SEARCH_TARGET_ID 一个合法值，存档被手改出第二个
   // 搜索标签也不放进来（会破坏「已存在则激活」的单例判据）。
   if (rec.kind === 'search' && targetId !== SEARCH_TARGET_ID) return null
+  // 临时负 id 的 chat 标签 = 还没发过第一条的空会话，服务端没有它的行 —— 跨重启恢复出来
+  // 只会是一个永远加载不出内容的死标签，直接丢弃。发过一条的（真 session id，恒正）照常恢复。
+  if (rec.kind === 'chat' && targetId <= 0) return null
   const lastActiveAt =
     typeof rec.lastActiveAt === 'number' && Number.isFinite(rec.lastActiveAt) ? rec.lastActiveAt : 0
   const scrollTop =

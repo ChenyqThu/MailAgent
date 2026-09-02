@@ -98,15 +98,23 @@ vi.mock('@shared/hooks/useMailApi', () => ({
       }),
       getPrefs: vi.fn().mockResolvedValue({ prefs: [] })
     },
-    // 09-01 侧栏批：对话格「群聊有未读」dot 的数据源（origin='group'）。
+    // 09-01 侧栏批：群聊格「有未读」dot 的数据源（origin='group'）；09-02 起群聊 peek
+    // 的清单也读它。群恒在，`signals.groupUnread` 只拨 last_read_at —— 未读判据是
+    // `updated_at > last_read_at`，读过的那份取 3_000（晚于 updated_at ⇒ 不未读）。
     chat: {
-      listAllSessions: vi
-        .fn()
-        .mockImplementation(async (opts: { origin?: string }) =>
-          opts.origin === 'group' && signals.groupUnread > 0
-            ? [{ id: 900, updated_at: 2_000, last_read_at: 1_000, archived: false, title: 'g' }]
-            : []
-        )
+      listAllSessions: vi.fn().mockImplementation(async (opts: { origin?: string }) =>
+        opts.origin === 'group'
+          ? [
+              {
+                id: 900,
+                updated_at: 2_000,
+                last_read_at: signals.groupUnread > 0 ? 1_000 : 3_000,
+                archived: false,
+                title: '狼人杀实验局'
+              }
+            ]
+          : []
+      )
     },
     // 历史上供 TeamNavPanel（P1 过渡二级栏）消费；P4a 团队域转 'page' 后 shell 侧
     // 已无消费点，留着作无害兜底（避免未来 shell 侧新增 report 读面时 mock 缺腿）。
@@ -164,6 +172,7 @@ import {
 } from '../../src/shared/state/nav-shell'
 import {
   NAV_ENTRIES,
+  NAV_OBJECT_DOMAINS,
   navDomainLabel,
   navDomainPanelEntries,
   navLabel,
@@ -175,11 +184,25 @@ import {
   recordRouteLocation
 } from '../../src/shared/navigation/domain-location'
 import { useEmailFilter } from '../../src/shared/state/email-filter'
+import { useGroupsView } from '../../src/shared/state/groups-view'
 import { SETTINGS_TABS } from '../../src/shared/lib/settingsTabs'
 
-/** 门控全开时的导轨格（自上而下 = 屏幕上的顺序），**手写**期望。08-27 批：对象域
- *  （邮件/事项）在前、页面域在后（两组之间有 .nav-rail-sep 分隔线），共十格。 */
-const ALL_RAIL = ['邮件', '事项', '今日', '日历', '对话', '通讯录', '团队', '报告', '运维', '设置']
+/** 门控全开时的导轨格（自上而下 = 屏幕上的顺序），**手写**期望。08-27 批：对象域在前、
+ *  页面域在后（两组之间有 .nav-rail-sep 分隔线）。09-02 对话域拆分：AI Chat 升对象域
+ *  （跨过分隔线排到「事项」后面）、群聊拿到自己的一格（页面域末位），共十一格。 */
+const ALL_RAIL = [
+  '邮件',
+  '事项',
+  'AI Chat',
+  '今日',
+  '日历',
+  '通讯录',
+  '团队',
+  '报告',
+  '群聊',
+  '运维',
+  '设置'
+]
 const BOTTOM_RAIL = ['运维', '设置']
 
 function makeWrappedRouter(
@@ -200,6 +223,7 @@ function makeWrappedRouter(
     '/',
     '/today',
     '/sessions',
+    '/groups',
     '/agents',
     '/reports',
     '/matters',
@@ -259,11 +283,20 @@ function panelRowLabels(container: HTMLElement): string[] {
   )
 }
 
-/** registry 投影出的导轨格标签（门控全开）。 */
+/** registry 投影出的导轨格标签（门控全开）。
+ *  🔴 DOM 序 = 「对象域组 → 分隔线 → 页面域组」，`rail.order` 只在组内比较。09-02 之前
+ *  两者恰好同序（对象域占 order 0/1 这个前缀），AI Chat 升对象域后 order 4 排到了 today(2)
+ *  前面 —— 投影这半必须跟着分组，否则钉的是那个巧合。分组判据取自 NAV_OBJECT_DOMAINS
+ *  （与 IconRail 同一个单源），不在这里手抄第二份域名单。 */
 function projectedRail(): string[] {
-  return navRailEntries(NAV_ENTRIES.filter((e) => e.gate !== 'never')).map((e) =>
-    navDomainLabel(e.domain, i18n.t)
-  )
+  const cells = navRailEntries(NAV_ENTRIES.filter((e) => e.gate !== 'never'))
+  const bottom = cells.filter((e) => e.domain === 'ops' || e.domain === 'settings')
+  const top = cells.filter((e) => !bottom.includes(e))
+  return [
+    ...top.filter((e) => NAV_OBJECT_DOMAINS.includes(e.domain)),
+    ...top.filter((e) => !NAV_OBJECT_DOMAINS.includes(e.domain)),
+    ...bottom
+  ].map((e) => navDomainLabel(e.domain, i18n.t))
 }
 
 function projectedPanel(domain: NavDomain): string[] {
@@ -284,6 +317,8 @@ beforeEach(async () => {
   __resetNavShellForTest()
   // 邮件 peek 的点行会写 view（模块级 store），复位免得污染后面的用例。
   useEmailFilter.setState({ view: 'inbox', customMailbox: null, customMailboxPath: [] })
+  // 群聊 peek 点行会写模块级 store，复位免得后面的用例读到上一条的选中群。
+  useGroupsView.setState({ activeGroupSessionId: null })
   spies.listEnriched.mockClear()
   await i18n.changeLanguage('zh-CN')
 })
@@ -331,7 +366,7 @@ describe('nav shell 结构契约', () => {
 describe('IconRail ↔ nav registry 投影', () => {
   afterEach(() => cleanup())
 
-  test('门控全开：10 格，顺序 = registry 的 rail.order（手写 + 投影两半）', async () => {
+  test('门控全开：11 格，顺序 = 对象域组 → 页面域组（手写 + 投影两半）', async () => {
     const { container } = await renderShell()
     expect(railLabels(container)).toEqual(ALL_RAIL)
     expect(railLabels(container)).toEqual(projectedRail())
@@ -349,10 +384,13 @@ describe('IconRail ↔ nav registry 投影', () => {
     expect(railLabels(container)).toEqual(ALL_RAIL.filter((l) => l !== '事项' && l !== '通讯录'))
   })
 
-  test('选中格恰 1 且 = 当前路由归属域（/sessions 归对话格）', async () => {
+  // 09-02 对话域拆分：/sessions 与 /groups 各高亮各的格 —— 拆域后仍共用一格的话，
+  // 在群聊里导轨会亮着 AI Chat（二级栏跟着切错域）。
+  test('选中格恰 1 且 = 当前路由归属域（/sessions 归 AI Chat、/groups 归群聊）', async () => {
     for (const [path, label] of [
       ['/', '邮件'],
-      ['/sessions', '对话'],
+      ['/sessions', 'AI Chat'],
+      ['/groups', '群聊'],
       ['/admin/llm', '运维'],
       ['/admin/calendar', '日历']
     ] as const) {
@@ -375,7 +413,8 @@ describe('IconRail ↔ nav registry 投影', () => {
   })
 
   test('逐格点击：切域 = 落到该格 entry 的目标（含 search 默认值）', async () => {
-    // 从 /sessions 起手 —— agents 域激活，其余六格都是「切域」路径。
+    // 从 /sessions 起手 —— chats 域激活，其余各格都是「切域」路径（当前域那一格由
+    // 下面「点当前域的格」两条单独覆盖，这里有意不重复）。
     const { container, router } = await renderShell('/sessions')
     const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
     const clickCell = (label: string): void => {
@@ -393,6 +432,7 @@ describe('IconRail ↔ nav registry 投影', () => {
       '通讯录',
       '团队',
       '报告',
+      '群聊',
       '运维',
       '设置'
     ]) {
@@ -412,6 +452,7 @@ describe('IconRail ↔ nav registry 投影', () => {
       { to: '/contacts' },
       { to: '/agents' },
       { to: '/reports' },
+      { to: '/groups' },
       { to: '/admin/kanban' },
       { to: '/settings', search: { tab: 'general' } }
     ])
@@ -497,12 +538,14 @@ describe('DomainPanel ↔ nav registry 投影', () => {
   // mail / chats P1 转 'page'（邮件列表 / 会话列表由页面自己出）；reports P3 转
   // 'page'（报告清单列就是它的二级栏）；team（agents）P4a 转 'page'
   // （TeamWorkspace 自管清单列，过渡的 TeamNavPanel 退役）。
-  test('page 域（邮件/事项/通讯录/对话/团队/报告）：无 DomainPanel', async () => {
+  // 09-02 对话域拆分：群聊的二级栏 = GroupChatWorkspace 自管的群清单列，同样落 'page'。
+  test('page 域（邮件/事项/通讯录/AI Chat/群聊/团队/报告）：无 DomainPanel', async () => {
     for (const path of [
       '/',
       '/matters',
       '/contacts',
       '/sessions',
+      '/groups',
       '/agents',
       '/reports'
     ] as const) {
@@ -774,6 +817,30 @@ describe('全域 peek（09-01 侧栏批）', () => {
     navigate.mockRestore()
   })
 
+  // 09-02 对话域拆分：群聊是新的 page 域，peek 清单要显式登记进 NavPeek.PAGE_LISTS ——
+  // 那张表是 `Partial<Record<NavDomain, …>>`，漏登记**不会**编译红，只会在折叠态 hover
+  // 群聊格时浮出一个空面板（DomainPanel 对 page 域投影不出任何行）。故只能从这里钉。
+  test('折叠态聚焦群聊格 → peek 是群清单；点行选中该群并进 /groups', async () => {
+    useNavShell.getState().setCollapsed('today', true)
+    const { container, router } = await renderShell('/today')
+    const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
+    fireEvent.focus(railCell(container, 'groups'))
+    await waitFor(() => expect(container.querySelector('[data-nav-peek="groups"]')).toBeTruthy(), {
+      timeout: 1500
+    })
+    const rows = (): HTMLElement[] =>
+      Array.from(container.querySelectorAll<HTMLElement>('[data-nav-peek-list="groups"] .row'))
+    await waitFor(() => expect(rows()).toHaveLength(1), { timeout: 4000 })
+    expect(rows()[0].textContent).toContain('狼人杀实验局')
+    fireEvent.click(rows()[0])
+    // 「跳到某个群」是两段动作，落地单源是 navigateToGroupSession（选群 + 进域）——
+    // 只导航不点名群，进去的是空态。
+    expect(useGroupsView.getState().activeGroupSessionId).toBe(900)
+    expect(navigate.mock.calls.at(-1)?.[0]).toEqual({ to: '/groups' })
+    await waitFor(() => expect(container.querySelector('[data-nav-peek]')).toBeNull())
+    navigate.mockRestore()
+  })
+
   test('离开导轨 300ms 后关；切域时 peek 随之关', async () => {
     useNavShell.getState().setCollapsed('today', true)
     const { container } = await renderShell('/today')
@@ -796,19 +863,23 @@ describe('全域 peek（09-01 侧栏批）', () => {
 describe('状态点形状按 registry 单源（09-01 侧栏批）', () => {
   afterEach(() => cleanup())
 
-  test('对话格：群聊有未读 → 6px dot（不是数字）；无未读 → 无', async () => {
+  // 09-02 对话域拆分：这颗点的口径一直是群聊（origin='group'），拆域后回到群聊格 ——
+  // 挂错格 = AI Chat 因为「别人在群里说话」亮点，而群聊本身不亮。
+  test('群聊格：群聊有未读 → 6px dot（不是数字）；无未读 → 无', async () => {
     signals.groupUnread = 1
     const { container } = await renderShell('/today')
     await waitFor(() => {
-      const badge = railCell(container, 'chats').querySelector('.railbadge')
+      const badge = railCell(container, 'groups').querySelector('.railbadge')
       expect(badge?.getAttribute('data-shape')).toBe('dot')
       expect(badge?.textContent).toBe('')
     })
+    // AI Chat 格本批无徽标（会话未读没有对应查询，加它是新决策）。
+    expect(railCell(container, 'chats').querySelector('.railbadge')).toBeNull()
     cleanup()
     signals.groupUnread = 0
     const { container: quiet } = await renderShell('/today')
     await sleep(50)
-    expect(railCell(quiet, 'chats').querySelector('.railbadge')).toBeNull()
+    expect(railCell(quiet, 'groups').querySelector('.railbadge')).toBeNull()
   })
 
   test('事项格：关注计数为 0 且有进行中派发 → dot', async () => {

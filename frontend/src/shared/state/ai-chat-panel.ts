@@ -61,15 +61,6 @@ interface AIChatPanelStore {
   requestOpenAgentSession(sessionId: number): void
   consumeOpenAgentSession(): void
 
-  // 08-27 标签工作区 P2 — ⌘O 从「导航到对话页」升级为「导航过去**并新建会话**」。
-  // 会话引擎（useGeneralChat）的状态是 AgentViewLayout 实例内的 useState，模块级的
-  // 快捷键 handler 够不着它，所以这里只**排队一次请求**，由 AgentViewLayout 消费成
-  // `chat.newSession()`。用自增 nonce 而不是 boolean：连按两次 ⌘O 得是两次新建，
-  // boolean 在「已经排着队」时会把第二次吞掉（同 pendingPrompt 的 nonce 理由）。
-  pendingNewAgentSession: number
-  requestNewAgentSession(): void
-  consumeNewAgentSession(nonce: number): void
-
   // Matters MVP P6-A lane A5 / 0812 收口 — 事项**不再有第二套 chat UI**：`matterTarget` 现在只是
   // 「这次唤出 dock 时默认带上哪件事」的**种子**（与 activeEmailId 同性质），由 AgentConversation
   // 渲染成一枚可移除的 context chip。`matterConversationEpoch` 每次显式「事项对话」自增 —— dock 已
@@ -180,14 +171,6 @@ export const useAIChatPanel = create<AIChatPanelStore>((set, get) => ({
   consumeOpenAgentSession() {
     set({ pendingAgentSessionId: null })
   },
-  pendingNewAgentSession: 0,
-  requestNewAgentSession() {
-    set((state) => ({ pendingNewAgentSession: state.pendingNewAgentSession + 1 }))
-  },
-  consumeNewAgentSession(nonce) {
-    // 只清「自己那一条」：消费落地前用户可能又按了一次 ⌘O，无条件归零会吞掉它。
-    set((state) => (state.pendingNewAgentSession === nonce ? { pendingNewAgentSession: 0 } : {}))
-  },
   matterTarget: null,
   matterConversationEpoch: 0,
   openMatterChat(target) {
@@ -262,12 +245,6 @@ export function toggleChatModal(): void {
  *  router navigate + hideChatModal(). */
 export function requestOpenAgentSession(sessionId: number): void {
   useAIChatPanel.getState().requestOpenAgentSession(sessionId)
-}
-
-/** ⌘O — 排一次「新建会话」，调用方负责先/后把路由带到 /sessions（AgentViewLayout 挂上
- *  就会消费掉它）。已经在对话页时也成立：请求照样落地，当场开一个新会话。 */
-export function requestNewAgentSession(): void {
-  useAIChatPanel.getState().requestNewAgentSession()
 }
 
 /** Open the main-window assistant dock carrying THIS matter as its default context chip. */

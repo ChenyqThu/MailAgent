@@ -477,7 +477,8 @@
       "settings": "Open settings",
       "shortcutHelp": "Show keyboard help",
       "composeNew": "Compose new email",
-      "generalAgent": "Open Chats and start a new session",
+      "generalAgent": "Open AI Chat in a new session tab",
+      "groups": "Go to Groups",
       "tabNew": "New tab (search)",
       "tabClose": "Close current tab",
       "tabReopen": "Reopen last closed tab",
@@ -547,6 +548,7 @@
     "jump": {
       "generalAgent": "General Agent",
       "generalAgentMeta": "Custom AI · ⌘O",
+      "groupsMeta": "Multi-agent group chat · ⌘G",
       "aiHistory": "AI conversations",
       "aiHistoryMeta": "Open AI panel",
       "admin": "Admin kanban",
@@ -711,7 +713,8 @@
     },
     "domain": {
       "mail": "Mail",
-      "chats": "Chats",
+      "chats": "AI Chat",
+      "groups": "Groups",
       "team": "Team",
       "reports": "Reports",
       "ops": "Ops"
@@ -914,6 +917,10 @@
     "history": "History",
     "historyHint": "Toggle session history · ⇧⌥H",
     "closePanel": "Hide panel · ⌘L",
+    "tabs": {
+      "newChat": "New chat",
+      "missing": "This conversation no longer exists"
+    },
     "fab": {
       "label": "Chat about this page",
       "hint": "Chat about this page · ⌘J"
@@ -7258,9 +7265,6 @@
     }
   },
   "groupChat": {
-    "segmentAi": "AI",
-    "segmentGroups": "Groups",
-    "segmentAria": "Conversation type",
     "listTitle": "Groups",
     "newGroup": "New group",
     "defaultTitle": "New group chat",
@@ -7302,6 +7306,10 @@
     "creating": "Creating…",
     "createFailed": "Failed to create group: {error}",
     "composerPlaceholder": "Message the group, @ to mention a member…",
+    "composer": {
+      "attachTooMany": "At most {max} attachments per message",
+      "attachImageNote": "Images are kept on the record only — members can't read the image itself"
+    },
     "sendFailed": "Send failed: {error}",
     "speakerFailed": "This reply failed: {error}",
     "typing": "{name} is typing…",

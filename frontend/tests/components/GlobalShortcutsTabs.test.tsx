@@ -17,7 +17,6 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }))
 
 import { GlobalShortcuts } from '@shared/components/keyboard/GlobalShortcuts'
 import { __resetShortcutBus } from '@shared/hooks/useShortcut'
-import { useAIChatPanel } from '@shared/state/ai-chat-panel'
 import {
   DEFAULT_MAIN_PAGE,
   MAIN_SLOT,
@@ -59,7 +58,6 @@ beforeEach(() => {
     maxTabs: 8,
     closedStack: []
   })
-  useAIChatPanel.setState({ pendingNewAgentSession: 0 })
   const store = useTabWorkspace.getState()
   store.openTab('email', 1, '邮件1')
   store.openTab('email', 2, '邮件2')
@@ -130,14 +128,31 @@ describe('GlobalShortcuts — 标签快捷键接线', () => {
     expect(evt.defaultPrevented).toBe(true)
   })
 
-  test('⌘O 导航到对话页并排一次「新建会话」，不开对象标签', () => {
+  // 09-02 对话域拆分（owner 拍板推翻 08-27 的「不开对象标签」语义）：`chats` 升对象域后
+  // 一个会话就是一个标签，⌘O = 进 AI Chat 域 + 开一个**新**会话标签。
+  test('⌘O 进 AI Chat 域并开一个新会话标签；连按两次开两个', () => {
     press('o', { meta: true })
     expect(navigate).toHaveBeenCalledTimes(1)
     expect(JSON.stringify(navigate.mock.calls[0][0])).toContain('/sessions')
-    expect(useAIChatPanel.getState().pendingNewAgentSession).toBe(1)
-    expect(ids()).toHaveLength(2)
-    // 连按两次是两次新建（nonce 自增，不被「已经排着队」吞掉）。
+    expect(ids()).toHaveLength(3)
+    const first = ids()[2]
+    expect(useTabWorkspace.getState().active).toBe(first)
+
     press('o', { meta: true })
-    expect(useAIChatPanel.getState().pendingNewAgentSession).toBe(2)
+    expect(ids()).toHaveLength(4)
+    // 🔴 去重键是 `kind:targetId` —— 临时 id 每次都新，两次按出来的是两个标签而不是
+    // 「第二次只激活第一个」。发出第一条前它们都是负 id（不跨重启恢复）。
+    expect(ids()[3]).not.toBe(first)
+    for (const id of [ids()[2], ids()[3]]) {
+      expect(id.startsWith('chat:-'), id).toBe(true)
+    }
+  })
+
+  test('⌘G 去群聊域，不碰标签集', () => {
+    press('g', { meta: true })
+    expect(navigate).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(navigate.mock.calls[0][0])).toContain('/groups')
+    // 群聊是页面域（主标签承载），不该开对象标签。
+    expect(ids()).toEqual([tabId('email', 1), tabId('email', 2)])
   })
 })

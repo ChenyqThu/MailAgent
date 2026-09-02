@@ -39,7 +39,6 @@ function row(over: Partial<GroupRowItem> = {}): GroupRowItem {
 function renderList(items: GroupRowItem[]): void {
   render(
     <GroupList
-      headerSlot={null}
       items={items}
       memberMeta={MEMBER_META}
       activeId={null}

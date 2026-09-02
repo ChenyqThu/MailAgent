@@ -63,14 +63,16 @@ export type NavDomain =
   | 'matters'
   | 'contacts'
   | 'chats'
+  | 'groups'
   | 'agents'
   | 'reports'
   | 'ops'
   | 'settings'
 
-/** 对象域 = 内容会开成对象标签的两类（邮件 / 事项）；其余都是页面域（P2 起轮流
- *  占用主标签的单例槽）。导轨在这两组之间画一条分隔线（原型 railsep）。 */
-export const NAV_OBJECT_DOMAINS: readonly NavDomain[] = ['mail', 'matters']
+/** 对象域 = 内容会开成对象标签的三类（邮件 / 事项 / AI Chat 会话）；其余都是页面域
+ *  （P2 起轮流占用主标签的单例槽）。导轨在这两组之间画一条分隔线（原型 railsep）。
+ *  09-02 对话域拆分：`chats` 升对象域（一个会话 = 一个标签），群聊留在页面域。 */
+export const NAV_OBJECT_DOMAINS: readonly NavDomain[] = ['mail', 'matters', 'chats']
 
 /** 可导航到的路由 path（TanStack 路由树里真实存在的那些）。 */
 export type NavPath =
@@ -78,6 +80,7 @@ export type NavPath =
   | '/today'
   | '/matters'
   | '/sessions'
+  | '/groups'
   | '/agents'
   | '/reports'
   | '/admin/llm'
@@ -98,9 +101,10 @@ export type NavBadgeKind =
   | 'matterAttention'
   | 'agentUnread'
   /** 09-01 侧栏批：无数字状态点的两个来源（值仍是 number：>0 = 亮点）。
-   *  matterRunning = 有进行中的行动项派发；chatUnread = 群聊会话有未读。 */
+   *  matterRunning = 有进行中的行动项派发；groupUnread = 群聊会话有未读
+   *  （09-02 对话域拆分前叫 chatUnread，口径一直是群聊，改名对齐它挂的那一格）。 */
   | 'matterRunning'
-  | 'chatUnread'
+  | 'groupUnread'
 
 export interface NavBadgeSpec {
   readonly kind: NavBadgeKind
@@ -115,7 +119,7 @@ export interface NavBadgeSpec {
 }
 
 /** keymap.ts 里的 binding id（组合键仍以 keymap 为准，registry 只引用它）。 */
-export type NavShortcutId = 'settings' | 'generalAgent'
+export type NavShortcutId = 'settings' | 'generalAgent' | 'groups'
 
 export type NavLabel = { readonly i18nKey: string } | { readonly literal: string }
 
@@ -286,8 +290,9 @@ const ENTRIES = [
     palette: { order: 30, metaI18nKey: 'palette.jump.mattersMeta' },
     preloadOnHover: true
   },
-  // 对话域（08-27 批从 agents 域拆出）：过渡期落 `/sessions`（SessionsLayout 既有），
-  // P3 做页面层拆分（会话与群聊混装列表）。
+  // AI Chat 域（08-27 批从 agents 域拆出）：路由仍是 `/sessions`（十几处字面量，改路径
+  // 收益纯语义）。09-02 对话域拆分：群聊搬去 `groups` 域，本条只剩主 agent 会话；未读点
+  // 随之搬走（AI Chat 本批无徽标 —— 会话未读没有对应查询，加它是新决策）。
   {
     id: 'sessions',
     domain: 'chats',
@@ -297,11 +302,25 @@ const ENTRIES = [
     icon: () => createElement(SparklesIcon, { className: 'text-coral' }),
     gate: 'always',
     match: { exact: ['/sessions'] },
-    // 09-01 侧栏批：群聊有未读 → 6px 点（不是数字：群聊消息数没有信号价值）。
-    badge: { kind: 'chatUnread', rail: true, shape: 'dot' },
     rail: { order: 4 },
     palette: { order: 10, metaI18nKey: 'palette.jump.generalAgentMeta' },
     shortcutId: 'generalAgent'
+  },
+  // 群聊域（09-02 对话域拆分：原「AI｜群聊」分段的群聊那一半升一级域）。
+  {
+    id: 'groups',
+    domain: 'groups',
+    to: '/groups',
+    label: { i18nKey: 'nav.domain.groups' },
+    icon: () => createElement(UsersRoundIcon),
+    gate: 'always',
+    match: { exact: ['/groups'] },
+    // 群聊有未读 → 6px 点（不是数字：群聊消息数没有信号价值）。09-01 侧栏批建的这颗点
+    // 原本挂在对话格上，口径一直是 origin='group'，拆域后回到它该在的那一格。
+    badge: { kind: 'groupUnread', rail: true, shape: 'dot' },
+    rail: { order: 8 },
+    palette: { order: 15, metaI18nKey: 'palette.jump.groupsMeta' },
+    shortcutId: 'groups'
   },
   // 团队域（NavDomain 值仍是 'agents'，见类型定义处注释）。
   {
@@ -448,6 +467,12 @@ export const NAV_DOMAINS: Record<NavDomain, NavDomainMeta> = {
   chats: {
     label: { i18nKey: 'nav.domain.chats' },
     icon: () => createElement(MessageSquareIcon),
+    second: 'page'
+  },
+  // 群聊域的二级栏 = 页面自管的群清单列（GroupList），同 chats 的形态。
+  groups: {
+    label: { i18nKey: 'nav.domain.groups' },
+    icon: () => createElement(UsersRoundIcon),
     second: 'page'
   },
   // 值名 'agents' 保留（见 NavDomain 注释），域的脸是「团队」。
@@ -623,6 +648,9 @@ export function navigateToNavEntry(navigate: NavigateFn, entry: NavEntry): void 
       return
     case '/sessions':
       void navigate({ to: '/sessions' })
+      return
+    case '/groups':
+      void navigate({ to: '/groups' })
       return
     case '/agents':
       void navigate({ to: '/agents' })

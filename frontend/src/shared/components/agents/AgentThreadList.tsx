@@ -57,8 +57,6 @@ export interface AgentThreadListProps {
   onToggleCollapse: () => void
   /** fluid = full-width single pane (narrow / mobile); ignores collapse. */
   fluid?: boolean
-  /** L4 群聊 — 二级栏顶部分段（「AI」｜「群聊」）由 AgentViewLayout 注入；rail 态不渲染。 */
-  headerSlot?: React.ReactNode
   /** 09-01 侧栏批：nav shell 的二级栏折叠（对话域的二级栏 = 这一列，按域记忆）。整列
    *  0 宽 + visibility hidden **不卸载**（保滚动位置与分组展开态）。与列自己的 48px rail
    *  折叠（`collapsed`）正交：两者叠加时 navHidden 优先（整列都不在场，rail 宽窄无意义）。 */
@@ -91,7 +89,6 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
     collapsed,
     onToggleCollapse,
     fluid,
-    headerSlot,
     navHidden = false
   } = props
   const { t } = useTranslation()
@@ -177,9 +174,6 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
           </h2>
         )}
       </div>
-
-      {/* L4 群聊 — 「AI」｜「群聊」分段（rail 态藏，与列表同折叠逻辑）。 */}
-      {!isRail && headerSlot != null && <div className="px-3 pb-2">{headerSlot}</div>}
 
       {/* New-session button — collapses to a centered icon on the rail. */}
       <div className={cn('pb-2', isRail ? 'px-2' : 'px-3')}>

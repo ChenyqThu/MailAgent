@@ -5,7 +5,7 @@
 // 钉四件事：
 //   L1 labs off → 实验室里连按钮都不渲染（狼人杀是这套编排的集成验收，开关关着时它一条都不生效）；
 //   L2 labs on → 点一下调 createWerewolfGame 一次，成功后 toast 带局名 + 落到主群
-//      （segment='groups' + activeGroupSessionId=主群 id + navigate('/sessions')）；
+//      （activeGroupSessionId=主群 id + navigate('/groups')）；
 //   L3 configApplied:false → 只提示不跳（群在，但没有法官位，跳过去看到的是个说不清的群）；
 //   L4 端点失败 → toastError，不跳；
 //   L5 NewGroupDialog 的「从模板创建」：labs off 禁用；labs on 点击 → 主群交给 onCreated 并关窗。
@@ -57,7 +57,7 @@ vi.mock('../../src/shared/components/agents/AgentAvatar', () => ({
 
 import i18n from '@shared/i18n'
 import type { ChatSession, ReportAgentConfig } from '@shared/api/types'
-import { useSessionsSegment } from '@shared/state/sessions-segment'
+import { useGroupsView } from '@shared/state/groups-view'
 import { useEnvStore } from '@shared/state/env'
 import { LabsTab } from '../../src/shared/components/settings/tabs/LabsTab'
 import { NewGroupDialog } from '../../src/shared/components/agents/groups/NewGroupDialog'
@@ -147,7 +147,7 @@ function renderDialog(labsOn: boolean): void {
 beforeEach(() => {
   mockGetLabs.mockResolvedValue({ groupAgents: 'off' })
   mockCreateWerewolfGame.mockResolvedValue(payload())
-  useSessionsSegment.setState({ segment: 'ai', activeGroupSessionId: null })
+  useGroupsView.setState({ activeGroupSessionId: null })
 })
 
 afterEach(() => {
@@ -176,9 +176,8 @@ describe('狼人杀一键建局入口', () => {
     await waitFor(() => expect(mockCreateWerewolfGame).toHaveBeenCalledTimes(1))
     expect(mockCreateWerewolfGame).toHaveBeenCalledWith({})
     await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('已建局：狼人杀 #1'))
-    expect(useSessionsSegment.getState().segment).toBe('groups')
-    expect(useSessionsSegment.getState().activeGroupSessionId).toBe(901)
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/sessions' })
+    expect(useGroupsView.getState().activeGroupSessionId).toBe(901)
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/groups' })
     // 🔴 角色分配永不上界面。判据是「谁是什么」这条映射的两头：应答里的六个玩家 id / 标题，
     // 与 roles 的三个值，都不许出现在 toast 参数或 DOM 里。
     // （不能笼统地 grep「狼人」——helper 文案本来就要说明「建了一个狼人子群」，那是群结构不是身份。）
@@ -200,7 +199,7 @@ describe('狼人杀一键建局入口', () => {
     )
     expect(mockToastSuccess).not.toHaveBeenCalled()
     expect(mockNavigate).not.toHaveBeenCalled()
-    expect(useSessionsSegment.getState().activeGroupSessionId).toBeNull()
+    expect(useGroupsView.getState().activeGroupSessionId).toBeNull()
   })
 
   test('L4 端点失败 → toastError，不跳转', async () => {

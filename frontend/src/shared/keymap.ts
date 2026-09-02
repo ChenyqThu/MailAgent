@@ -128,15 +128,25 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     wired: true
   },
   {
-    // ⌘O — 切到对话页（/sessions）**并新建一个会话**（08-27 标签工作区批：原语义
-    // 只是导航过去，接着上一次的会话）。目标 entry 在 registry（`shortcutId` 引用
-    // 本条），新建会话由 GlobalShortcuts 经 ai-chat-panel 的一次性请求投给
-    // AgentViewLayout。🔴 它**不开对象标签** —— 对话是主标签的八种承载之一。
+    // ⌘O — 进 AI Chat 域（/sessions）**并开一个新会话标签**（09-02 对话域拆分：`chats`
+    // 升对象域后，一个会话就是一个对象标签，连按三次 = 三个「新对话」标签；08-27 那版
+    // 「不开对象标签、只在页内新建会话」的语义随之作废）。目标 entry 在 registry
+    // （`shortcutId` 引用本条），开标签由 GlobalShortcuts 直接调 openTab。
     id: 'generalAgent',
     spec: 'cmd+o',
     display: '⌘O',
     scope: 'global',
     labelKey: 'shortcutHelp.binding.generalAgent',
+    wired: true
+  },
+  {
+    // ⌘G — 去群聊域（/groups）。只导航不建群（建群是一次有成员选择的动作，不该被快捷键
+    // 直接触发）。⌘⇧O / ⌥⌘O / ⌘⇧A 已被邮件列表三个筛选占用，故用 ⌘G。
+    id: 'groups',
+    spec: 'cmd+g',
+    display: '⌘G',
+    scope: 'global',
+    labelKey: 'shortcutHelp.binding.groups',
     wired: true
   },
   // ── 标签工作区（08-27 P2）— 注册在 GlobalShortcuts，spec 取上面的常量 ──────

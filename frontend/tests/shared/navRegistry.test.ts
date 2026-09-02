@@ -81,6 +81,7 @@ describe('nav registry — 条目自身的不变量', () => {
     expect(navPaletteEntries(NAV_ENTRIES).map((e) => e.id)).toEqual([
       'today',
       'sessions',
+      'groups',
       'kanban',
       'calendar',
       'matters',
@@ -133,6 +134,8 @@ describe('nav registry — deeplink 通道', () => {
 })
 
 describe('nav registry — 通知深链白名单', () => {
+  // 09-02 对话域拆分：群聊拿到 `/groups` 后**没有**跟着进白名单 —— 群聊通知落的是
+  // link 型（`navigateToGroupSession` 要先点名群会话再进域），路由目标白名单帮不上忙。
   test('只有现状三条（加档要先确认真有信源会发它）', () => {
     expect([...NOTIFICATION_ROUTE_TARGETS].sort()).toEqual([
       '/admin/kanban',
@@ -148,10 +151,12 @@ describe('nav registry — 通知深链白名单', () => {
 })
 
 describe('nav registry — 全局快捷键', () => {
-  test('⌘, → 设置 · ⌘O → 通用 agent 视图（组合键权威仍是 keymap.ts）', () => {
+  test('⌘, → 设置 · ⌘O → AI Chat · ⌘G → 群聊（组合键权威仍是 keymap.ts）', () => {
     expect(navShortcutSpec(navEntry('settings'))).toBe('cmd+,')
     expect(navShortcutDisplay(navEntry('settings'))).toBe('⌘,')
     expect(navShortcutSpec(navEntry('sessions'))).toBe('cmd+o')
+    expect(navShortcutSpec(navEntry('groups'))).toBe('cmd+g')
+    expect(navShortcutDisplay(navEntry('groups'))).toBe('⌘G')
   })
 
   test('每个 shortcutId 在 keymap 里都存在（改了 id 不会静默变成永不命中的空 spec）', () => {
@@ -201,11 +206,14 @@ describe('nav registry — i18n key 在两个 locale 都在', () => {
 })
 
 describe('nav registry — 域推导（导轨选中格 = 面板域）', () => {
-  test('每条路由归它该归的域；/sessions 归 chats、/reports 归报告（08-27 批从 agents 拆出）', () => {
+  test('每条路由归它该归的域；/sessions 归 chats、/groups 归 groups、/reports 归报告', () => {
     const cases: ReadonlyArray<[string, NavDomain]> = [
       ['/', 'mail'],
       ['/today', 'today'],
+      // 09-02 对话域拆分：两条路径各归各的域 —— 群聊若还归 chats，导轨会在 /groups 上
+      // 高亮 AI Chat 那一格，二级栏也会跟着切错。
       ['/sessions', 'chats'],
+      ['/groups', 'groups'],
       ['/agents', 'agents'],
       ['/reports', 'reports'],
       ['/matters', 'matters'],

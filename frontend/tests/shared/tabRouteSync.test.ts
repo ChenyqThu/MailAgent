@@ -62,6 +62,10 @@ describe('activeSlotDomain', () => {
     expect(activeSlotDomain(useTabWorkspace.getState())).toBe('mail')
     useTabWorkspace.getState().openTab('matter', 2)
     expect(activeSlotDomain(useTabWorkspace.getState())).toBe('matters')
+    // 09-02 对话域拆分：chats 升对象域，AI Chat 会话标签也按 kind 落域（落错 = 激活一个
+    // 会话标签会把人导航到别的域去）。
+    useTabWorkspace.getState().openTab('chat', 3)
+    expect(activeSlotDomain(useTabWorkspace.getState())).toBe('chats')
   })
 
   // 搜索标签无域：目标是 SEARCH_SLOT 哨兵（订阅腿据此绕过 navigateToDomain 直落
@@ -139,6 +143,26 @@ describe('reconcileRouteToTabs', () => {
     useTabWorkspace.getState().openTab('matter', 9)
     reconcileRouteToTabs('mail')
     expect(useTabWorkspace.getState().active).toBe('matter:9')
+  })
+
+  // 09-02 对话域拆分的两腿：chats 走对象域分支（激活该域最近的会话标签）而不是页面域
+  // 分支。判据是 useTabRouteSync 的 OBJECT_DOMAIN_KIND 反表 —— 漏一条不会报错，只会
+  // 静默走进 setMainPage（`chats` 已不是 MainPage，主标签会被换成一个不存在的承载）。
+  test('对象域 chats：rail 切回 AI Chat → 激活最近用过的会话标签', () => {
+    useTabWorkspace.getState().openTab('chat', 11)
+    useTabWorkspace.getState().openTab('chat', 12)
+    useTabWorkspace.getState().openTab('email', 1)
+    reconcileRouteToTabs('chats')
+    expect(useTabWorkspace.getState().active).toBe('chat:12')
+    // 主标签承载没被动过（走错分支就会在这里变成 'chats'）。
+    expect(useTabWorkspace.getState().mainPage).toBe('today')
+  })
+
+  test('对象域 chats：一个会话标签都没有 → 维持现状（不硬拗主标签）', () => {
+    useTabWorkspace.getState().openTab('email', 1)
+    reconcileRouteToTabs('chats')
+    expect(useTabWorkspace.getState().active).toBe('email:1')
+    expect(useTabWorkspace.getState().mainPage).toBe('today')
   })
 
   test('搜索标签激活时 rail 切对象域 → 激活该域标签，搜索标签保留不关', () => {

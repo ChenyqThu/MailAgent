@@ -55,6 +55,10 @@ import {
   ChatPromptDispatcher,
   type ChatPromptRequest
 } from '@shared/assistant/components/ChatPromptDispatcher'
+import {
+  ComposerDraftBridge,
+  type ComposerDraftBridgeProps
+} from '@shared/assistant/components/ComposerDraftBridge'
 import { ConversationContextChip } from '@shared/components/agents/ConversationContextChip'
 import { MatterChatSurfaceContext } from '@shared/components/matters/matterChatContext'
 import {
@@ -112,6 +116,10 @@ export interface AgentConversationProps {
    *  省略（/sessions / 浮窗 / 事项对话）→ 字节级现状。宿主按成员 key 重挂，本 prop 视为
    *  mount 常量（进 ChatThreadIdentity 去重键，切成员绝不复用别人的在途创建）。 */
   agentIdentity?: AgentConversationAgentIdentity
+  /** 09-02 对话域拆分 —— composer 文本与标签草稿快照的桥（/sessions 的标签宿主传；浮窗 /
+   *  事项对话 / 团队宿主不传 → 字节级现状）。桥必须挂在 runtime provider 里面，故由本组件
+   *  代为挂载，形状见 ComposerDraftBridge。 */
+  composerDraft?: ComposerDraftBridgeProps
 }
 
 /** P4b — 团队会话的身份描述（宿主 = team/TeamChatHost 组装；本组件只消费）。 */
@@ -131,7 +139,8 @@ export function AgentConversation({
   initialMentionEmailId,
   initialMatterTarget,
   denseControls,
-  agentIdentity
+  agentIdentity,
+  composerDraft
 }: AgentConversationProps): React.JSX.Element {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -1046,6 +1055,8 @@ export function AgentConversation({
               <ThreadRunningBridge runningRef={aiSdkRunningRef} onRunningChange={setAiSdkRunning} />
               {/* 0812 —— 外部指令派发（渲染 null；住在 provider 里才拿得到 thread）。 */}
               <ChatPromptDispatcher request={promptRequest} onDispatched={onPromptDispatched} />
+              {/* 09-02 —— 标签草稿快照桥（渲染 null；同样要 thread 上下文）。 */}
+              {composerDraft !== undefined && <ComposerDraftBridge {...composerDraft} />}
               {/* 0812 —— 事项写入回执 + 撤销的 surface。没有它，matter 写入卡会 fall through 成
                   通用 ToolTraceCard（回执与撤销当场消失）。非事项对话 surface=null → 现状不变。 */}
               <MatterChatSurfaceContext.Provider value={matter.surface}>

@@ -66,4 +66,15 @@ describe('KeyboardHelpModal', () => {
       expect(screen.getAllByText(display).length, display).toBeGreaterThan(0)
     }
   })
+
+  // 09-02 对话域拆分 —— 两个域各一条全局直达键。同上：面板按 keymap 目录渲染，这里锁的
+  // 是「⌘G 进了 SHORTCUTS 而不是只写在 GlobalShortcuts 里」（只写接线的话按得动、但用户
+  // 在帮助面板里永远发现不了它）。
+  test('renders the AI Chat / Groups navigation bindings', () => {
+    openKeyboardHelp()
+    renderModal()
+    for (const display of ['⌘O', '⌘G']) {
+      expect(screen.getAllByText(display).length, display).toBeGreaterThan(0)
+    }
+  })
 })
