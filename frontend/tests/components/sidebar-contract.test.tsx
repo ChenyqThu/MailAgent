@@ -32,7 +32,11 @@ import {
 import i18n from '../../src/shared/i18n'
 
 // 门控开关（gate 求值走这两个 hook + 平台判定）。默认全开，用例里按需关。
-const { gates } = vi.hoisted(() => ({ gates: { matters: true, contacts: true } }))
+// signals：09-01 侧栏批两个无数字状态点的数据源（事项进行中派发 / 群聊未读），用例里按需拨。
+const { gates, signals } = vi.hoisted(() => ({
+  gates: { matters: true, contacts: true },
+  signals: { dispatches: 0, groupUnread: 0 }
+}))
 
 // `useMailApi` ships a real ElectronApi by default — that talks to
 // window.electron which doesn't exist under happy-dom. Stub the surface
@@ -57,7 +61,41 @@ vi.mock('@shared/hooks/useMailApi', () => ({
       listMailboxes: vi.fn().mockResolvedValue([
         { mailbox: '收件箱', total: 12, unread: 3, flagged: 1, failed: 0 },
         { mailbox: '发件箱', total: 4, unread: 0, flagged: 0, failed: 0 }
+      ]),
+      // 09-01 侧栏批：邮件域 peek 的投影走主列表同一份查询配方（listOptsForView → listEnriched）。
+      listEnriched: vi.fn().mockResolvedValue([
+        {
+          internal_id: 101,
+          message_id: '<msg-101@example.com>',
+          thread_id: 'thread-A',
+          subject: 'redis timeout debug session',
+          sender: 'alice@example.com',
+          sender_name: 'Alice',
+          date_received: '2026-05-15T09:00:00+08:00',
+          mailbox: '收件箱',
+          is_read: true,
+          is_flagged: false,
+          sync_status: 'synced',
+          notion_page_id: null,
+          notion_url: null,
+          snippet: 'Hey, the redis client keeps timing out after 5s.',
+          lang: 'en',
+          ai_priority: 'critical',
+          ai_action: '需要回复',
+          attach_count: 2,
+          is_important: true
+        }
       ])
+    },
+    // 09-01 侧栏批：对话格「群聊有未读」dot 的数据源（origin='group'）。
+    chat: {
+      listAllSessions: vi
+        .fn()
+        .mockImplementation(async (opts: { origin?: string }) =>
+          opts.origin === 'group' && signals.groupUnread > 0
+            ? [{ id: 900, updated_at: 2_000, last_read_at: 1_000, archived: false, title: 'g' }]
+            : []
+        )
     },
     // 历史上供 TeamNavPanel（P1 过渡二级栏）消费；P4a 团队域转 'page' 后 shell 侧
     // 已无消费点，留着作无害兜底（避免未来 shell 侧新增 report 读面时 mock 缺腿）。
@@ -92,7 +130,12 @@ vi.mock('@shared/components/matters/hooks', () => ({
   useGlobalAttention: () => ({ data: { items: [] } }),
   // P4c — TodayNavPanel 经 useTodaySections → useTodayData 拉这两条（例外面的四源之二）。
   usePendingMatterUpdates: () => ({ data: { items: [] }, isPending: false, isError: false }),
-  useLiveItemDispatches: () => ({ data: { items: [] }, isPending: false, isError: false })
+  // 09-01 侧栏批：事项格「进行中」dot 读它（关注计数为 0 时才画）。
+  useLiveItemDispatches: () => ({
+    data: { items: Array.from({ length: signals.dispatches }, (_, i) => ({ id: i })) },
+    isPending: false,
+    isError: false
+  })
 }))
 
 vi.mock('@shared/components/contacts/hooks', () => ({
@@ -101,6 +144,13 @@ vi.mock('@shared/components/contacts/hooks', () => ({
 
 // Importing after the mocks are registered.
 import { Sidebar } from '../../src/shared/components/layout/Sidebar'
+import { GlobalShortcuts } from '../../src/shared/components/keyboard/GlobalShortcuts'
+import {
+  __resetNavShellForTest,
+  domainPref,
+  NAV_SHELL_STORAGE_KEY,
+  useNavShell
+} from '../../src/shared/state/nav-shell'
 import {
   NAV_ENTRIES,
   navDomainLabel,
@@ -120,10 +170,14 @@ import { SETTINGS_TABS } from '../../src/shared/lib/settingsTabs'
 const ALL_RAIL = ['邮件', '事项', '今日', '日历', '对话', '通讯录', '团队', '报告', '运维', '设置']
 const BOTTOM_RAIL = ['运维', '设置']
 
-function makeWrappedRouter(initialPath: string): ReturnType<typeof createRouter> {
+function makeWrappedRouter(
+  initialPath: string,
+  withShortcuts = false
+): ReturnType<typeof createRouter> {
   const rootRoute = createRootRoute({
     component: () => (
       <I18nextProvider i18n={i18n}>
+        {withShortcuts && <GlobalShortcuts />}
         <Sidebar />
         <Outlet />
       </I18nextProvider>
@@ -156,14 +210,17 @@ function makeWrappedRouter(initialPath: string): ReturnType<typeof createRouter>
   })
 }
 
-async function renderShell(initialPath = '/'): Promise<{
+async function renderShell(
+  initialPath = '/',
+  opts: { withShortcuts?: boolean } = {}
+): Promise<{
   container: HTMLElement
   router: ReturnType<typeof createRouter>
 }> {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } }
   })
-  const router = makeWrappedRouter(initialPath)
+  const router = makeWrappedRouter(initialPath, opts.withShortcuts === true)
   const { container } = render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -207,8 +264,12 @@ function projectedPanel(domain: NavDomain): string[] {
 beforeEach(async () => {
   gates.matters = true
   gates.contacts = true
+  signals.dispatches = 0
+  signals.groupUnread = 0
   // 每域落点记忆是模块级的；不清会让「回放」用例污染后面按缺省 entry 断言的用例。
   __resetDomainLocations()
+  // 每域折叠 / 宽度记忆同理（localStorage + store）。
+  __resetNavShellForTest()
   await i18n.changeLanguage('zh-CN')
 })
 
@@ -372,8 +433,9 @@ describe('IconRail ↔ nav registry 投影', () => {
     navigate.mockRestore()
   })
 
-  // 08-27 dogfood 修正批：二级栏不可收起了，「点当前域的格 = 折叠」这条短路取消 ——
-  // 每一格恒是「回该域上次的落点」，包括当前域自己（回放的就是当前位置，等效无感）。
+  // 08-27 dogfood 修正批：「点当前域的格 = 折叠」这条短路取消 —— 每一格恒是「回该域
+  // 上次的落点」，包括当前域自己（回放的就是当前位置，等效无感）。09-01 侧栏批把折叠
+  // 按域带回来了，但入口只有开合钮 / 面板头钮 / `[`，导轨格**仍然只导航不折叠**。
   test('点当前域的格 = 正常导航到该域落点，不再是折叠短路', async () => {
     for (const [path, label, expected] of [
       ['/', '邮件', { to: '/', search: { view: 'inbox' } }],
@@ -487,6 +549,214 @@ describe('DomainPanel ↔ nav registry 投影', () => {
     cleanup()
     const { container: c2 } = await renderShell('/admin/llm')
     expect(c2.querySelector('[data-nav-panel] .nav-panel-header')!.textContent).toContain('运维')
+  })
+})
+
+// ── 09-01 侧栏批：按域折叠 / 全域 peek / 拖宽 / 快捷键 / 状态点 ────────────────────────
+//
+// 覆盖 design.md §5 列的六条新断言：每域独立持久化与回放、peek 只在折叠态、页面域 peek
+// 有真内容、拖宽夹取、`[` 在输入框内不触发、状态点形状按 registry 单源。
+// happy-dom 量不到布局与动效（220ms 变量过渡 / 浮层几何），那些在实测清单里。
+
+function railCell(container: HTMLElement, domain: string): HTMLElement {
+  const cell = container.querySelector(`[data-nav-rail] .nav-rail-cell[data-domain="${domain}"]`)
+  if (!(cell instanceof HTMLElement)) throw new Error(`导轨没有 ${domain} 格`)
+  return cell
+}
+
+function shell(container: HTMLElement): HTMLElement {
+  const el = container.querySelector('[data-app-nav]')
+  if (!(el instanceof HTMLElement)) throw new Error('shell 根不在')
+  return el
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+describe('按域折叠（09-01 侧栏批）', () => {
+  afterEach(() => cleanup())
+
+  test('rail 底部开合钮：aria-expanded 跟折叠态；点它只折叠当前域', async () => {
+    const { container } = await renderShell('/today')
+    const toggle = container.querySelector('[data-nav-toggle]')
+    expect(toggle).toBeTruthy()
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true')
+    expect(shell(container).getAttribute('data-collapsed')).toBe('false')
+    fireEvent.click(toggle as HTMLElement)
+    expect(shell(container).getAttribute('data-collapsed')).toBe('true')
+    expect(container.querySelector('[data-nav-toggle]')?.getAttribute('aria-expanded')).toBe(
+      'false'
+    )
+    const { prefs } = useNavShell.getState()
+    expect(domainPref(prefs, 'today').collapsed).toBe(true)
+    expect(domainPref(prefs, 'ops').collapsed).toBe(false)
+    // 变量由 store 唯一写入：折叠 = 56 / 0。
+    expect(document.documentElement.style.getPropertyValue('--app-nav-w')).toBe('56px')
+    expect(document.documentElement.style.getPropertyValue('--app-second-w')).toBe('0px')
+  })
+
+  test('面板头折叠钮 → 折叠并持久化到新键；重新渲染同域回放，别的域不受影响', async () => {
+    const { container } = await renderShell('/today')
+    fireEvent.click(container.querySelector('[data-nav-panel-collapse]') as HTMLElement)
+    expect(shell(container).getAttribute('data-collapsed')).toBe('true')
+    expect(JSON.parse(window.localStorage.getItem(NAV_SHELL_STORAGE_KEY) ?? '{}')).toEqual({
+      today: { collapsed: true, width: 336 }
+    })
+    cleanup()
+    const { container: again } = await renderShell('/today')
+    expect(shell(again).getAttribute('data-collapsed')).toBe('true')
+    // 折叠态没有拖宽手柄；面板本体仍挂载（不卸载）。
+    expect(again.querySelector('[data-nav-resize]')).toBeNull()
+    expect(again.querySelector('[data-nav-panel]')).toBeTruthy()
+    cleanup()
+    const { container: ops } = await renderShell('/admin/llm')
+    expect(shell(ops).getAttribute('data-collapsed')).toBe('false')
+    expect(ops.querySelector('[data-nav-resize]')).toBeTruthy()
+  })
+
+  test('拖宽夹取：+60 → 396；−200 → 280 夹住；+300 → 420 夹住；双击复位 336', async () => {
+    const { container } = await renderShell('/admin/llm')
+    const handle = container.querySelector('[data-nav-resize]') as HTMLElement
+    const drag = (from: number, to: number): void => {
+      fireEvent.pointerDown(handle, { clientX: from, button: 0, pointerId: 1 })
+      fireEvent.pointerMove(handle, { clientX: to, pointerId: 1 })
+      fireEvent.pointerUp(handle, { clientX: to, pointerId: 1 })
+    }
+    const widthOf = (): number => domainPref(useNavShell.getState().prefs, 'ops').width
+    drag(400, 460)
+    expect(widthOf()).toBe(396)
+    expect(document.documentElement.style.getPropertyValue('--app-second-w')).toBe('396px')
+    drag(400, 200)
+    expect(widthOf()).toBe(280)
+    drag(400, 700)
+    expect(widthOf()).toBe(420)
+    fireEvent.doubleClick(handle)
+    expect(widthOf()).toBe(336)
+    // 只动了 ops，别的域仍是默认。
+    expect(domainPref(useNavShell.getState().prefs, 'today').width).toBe(336)
+    expect(document.documentElement.hasAttribute('data-nav-dragging')).toBe(false)
+  })
+
+  test('`[` 翻当前域折叠；焦点在 <input> 里时 `[` 不触发', async () => {
+    const { container } = await renderShell('/today', { withShortcuts: true })
+    fireEvent.keyDown(document.body, { key: '[' })
+    expect(shell(container).getAttribute('data-collapsed')).toBe('true')
+    fireEvent.keyDown(document.body, { key: '[' })
+    expect(shell(container).getAttribute('data-collapsed')).toBe('false')
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    input.focus()
+    fireEvent.keyDown(input, { key: '[' })
+    expect(shell(container).getAttribute('data-collapsed')).toBe('false')
+    input.remove()
+  })
+})
+
+describe('全域 peek（09-01 侧栏批）', () => {
+  afterEach(() => cleanup())
+
+  test('展开态 hover / 聚焦导轨格不 peek', async () => {
+    const { container } = await renderShell('/today')
+    fireEvent.focus(railCell(container, 'mail'))
+    await sleep(400)
+    expect(container.querySelector('[data-nav-peek]')).toBeNull()
+  })
+
+  test('折叠态聚焦今日格 → 150ms 后 peek 浮出（内容 = 五节）；Esc 关', async () => {
+    useNavShell.getState().setCollapsed('today', true)
+    const { container } = await renderShell('/today')
+    expect(shell(container).getAttribute('data-collapsed')).toBe('true')
+    fireEvent.focus(railCell(container, 'today'))
+    // 150ms 之内还没有（延时进入）。
+    expect(container.querySelector('[data-nav-peek]')).toBeNull()
+    await waitFor(() => expect(container.querySelector('[data-nav-peek="today"]')).toBeTruthy(), {
+      timeout: 1500
+    })
+    // peek 里的是 DomainPanel 的 peek 变体（不是契约闸认的常驻那份）。
+    expect(container.querySelectorAll('[data-nav-panel]')).toHaveLength(1)
+    expect(container.querySelectorAll('[data-nav-panel-peek]')).toHaveLength(1)
+    expect(
+      Array.from(container.querySelectorAll('[data-nav-panel-peek] .row')).map((row) =>
+        (row.querySelector('span.flex-1') as HTMLElement | null)?.textContent?.trim()
+      )
+    ).toEqual(['等你拍板', '今天的会', '待回邮件', '临期事项', '智能体产出'])
+    // 左列边界不动：浮层脱流。
+    expect(document.documentElement.style.getPropertyValue('--app-nav-w')).toBe('56px')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(container.querySelector('[data-nav-peek]')).toBeNull())
+  })
+
+  test('折叠态聚焦邮件格 → page 域 peek 渲染真清单（EmailRow，走 listEnriched 缓存）；点行导航并关', async () => {
+    useNavShell.getState().setCollapsed('today', true)
+    const { container, router } = await renderShell('/today')
+    const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
+    fireEvent.focus(railCell(container, 'mail'))
+    await waitFor(() => expect(container.querySelector('[data-nav-peek="mail"]')).toBeTruthy(), {
+      timeout: 1500
+    })
+    // lazy chunk + 查询：先骨架后到数据。
+    await waitFor(
+      () =>
+        expect(container.querySelectorAll('[data-nav-peek-list="mail"] .email-row')).toHaveLength(
+          1
+        ),
+      { timeout: 4000 }
+    )
+    expect(container.querySelector('[data-nav-peek-list="mail"]')?.textContent).toContain(
+      'redis timeout debug session'
+    )
+    fireEvent.click(
+      container.querySelector('[data-nav-peek-list="mail"] .email-row') as HTMLElement
+    )
+    expect(navigate.mock.calls.at(-1)?.[0]).toEqual({ to: '/', search: { view: 'inbox' } })
+    await waitFor(() => expect(container.querySelector('[data-nav-peek]')).toBeNull())
+    navigate.mockRestore()
+  })
+
+  test('离开导轨 300ms 后关；切域时 peek 随之关', async () => {
+    useNavShell.getState().setCollapsed('today', true)
+    const { container } = await renderShell('/today')
+    const cell = railCell(container, 'calendar')
+    fireEvent.focus(cell)
+    await waitFor(
+      () => expect(container.querySelector('[data-nav-peek="calendar"]')).toBeTruthy(),
+      {
+        timeout: 1500
+      }
+    )
+    fireEvent.blur(cell)
+    expect(container.querySelector('[data-nav-peek="calendar"]')).toBeTruthy()
+    await waitFor(() => expect(container.querySelector('[data-nav-peek]')).toBeNull(), {
+      timeout: 1500
+    })
+  })
+})
+
+describe('状态点形状按 registry 单源（09-01 侧栏批）', () => {
+  afterEach(() => cleanup())
+
+  test('对话格：群聊有未读 → 6px dot（不是数字）；无未读 → 无', async () => {
+    signals.groupUnread = 1
+    const { container } = await renderShell('/today')
+    await waitFor(() => {
+      const badge = railCell(container, 'chats').querySelector('.railbadge')
+      expect(badge?.getAttribute('data-shape')).toBe('dot')
+      expect(badge?.textContent).toBe('')
+    })
+    cleanup()
+    signals.groupUnread = 0
+    const { container: quiet } = await renderShell('/today')
+    await sleep(50)
+    expect(railCell(quiet, 'chats').querySelector('.railbadge')).toBeNull()
+  })
+
+  test('事项格：关注计数为 0 且有进行中派发 → dot', async () => {
+    signals.dispatches = 2
+    const { container } = await renderShell('/today')
+    await waitFor(() => {
+      expect(
+        railCell(container, 'matters').querySelector('.railbadge')?.getAttribute('data-shape')
+      ).toBe('dot')
+    })
   })
 })
 

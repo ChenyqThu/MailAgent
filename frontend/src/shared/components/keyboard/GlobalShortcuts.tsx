@@ -18,6 +18,8 @@ import i18n from '@shared/i18n'
 
 import { useShortcut } from '@shared/hooks/useShortcut'
 import {
+  NAV_EXPAND_FOCUS_SPEC,
+  NAV_TOGGLE_SPEC,
   TAB_CLOSE_SPEC,
   TAB_CYCLE_NEXT_SPEC,
   TAB_CYCLE_PREV_SPEC,
@@ -31,6 +33,7 @@ import { navEntry, navigateToNavEntry, navShortcutSpec } from '@shared/navigatio
 import { requestNewAgentSession, toggleChatModal } from '@shared/state/ai-chat-panel'
 import { useCommandPalette } from '@shared/state/command-palette'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
+import { useNavShell } from '@shared/state/nav-shell'
 import { openNewCompose } from '@shared/state/compose-new'
 import {
   closeActiveTab,
@@ -143,11 +146,39 @@ export function GlobalShortcuts(): ReactElement {
     return true
   }, [])
 
-  // Sprint 11 V1.4 — locale toggle（同批的 ⌥B 折叠导航随二级栏定宽退役）。
+  // Sprint 11 V1.4 — locale toggle（同批的 ⌥B 折叠导航在 08-27 二级栏定宽时退役；
+  // 09-01 侧栏批折叠回来后换成下面的 `[` / `]`，⌥B 不复活）。
   const toggleLocale = useCallback(() => {
     const cur = (i18n.resolvedLanguage ?? i18n.language ?? 'zh-CN') as 'zh-CN' | 'en-US'
     const next: 'zh-CN' | 'en-US' = cur === 'zh-CN' ? 'en-US' : 'zh-CN'
     void i18n.changeLanguage(next)
+  }, [])
+
+  // ── 导航壳（09-01 侧栏批）：`[` 折叠 / 展开当前域二级栏；`]` 展开并聚焦二级栏首项。
+  // 抽屉态两键作用于抽屉。preventDefault 防 `[` 落进正在聚焦的非编辑控件（如 range）。
+  const toggleNav = useCallback((evt: KeyboardEvent) => {
+    evt.preventDefault()
+    const s = useNavShell.getState()
+    if (s.mode === 'drawer') s.setDrawerOpen(!s.drawerOpen)
+    else s.toggleCollapsed()
+    return true
+  }, [])
+  const expandNav = useCallback((evt: KeyboardEvent) => {
+    evt.preventDefault()
+    const s = useNavShell.getState()
+    if (s.mode === 'drawer') {
+      s.setDrawerOpen(true)
+      return true
+    }
+    s.setCollapsed(s.domain, false)
+    // 展开后下一帧再聚焦：折叠态的二级栏 visibility:hidden，同一拍 focus 会落空。
+    requestAnimationFrame(() => {
+      const target = document.querySelector<HTMLElement>(
+        '[data-nav-second] button, [data-nav-second] [role="button"], [data-nav-second] [tabindex="0"], [data-nav-second] input'
+      )
+      target?.focus()
+    })
+    return true
   }, [])
 
   // `?` requires shift on US/UK keyboards; the parser already keys on the
@@ -163,6 +194,8 @@ export function GlobalShortcuts(): ReactElement {
   // chat / 主题输入框打字不误触。
   useShortcut('cmd+n', () => openNewCompose())
   useShortcut('alt+g', toggleLocale)
+  useShortcut(NAV_TOGGLE_SPEC, toggleNav)
+  useShortcut(NAV_EXPAND_FOCUS_SPEC, expandNav)
   useShortcut(TAB_NEW_SPEC, newTab)
   useShortcut(TAB_CLOSE_SPEC, closeTab)
   useShortcut(TAB_REOPEN_SPEC, reopenTab)

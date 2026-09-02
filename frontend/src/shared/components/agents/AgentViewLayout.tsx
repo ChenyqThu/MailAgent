@@ -22,6 +22,7 @@ import { qk } from '@shared/lib/queryKeys'
 import { useGeneralChat } from '@shared/hooks/useGeneralChat'
 import { useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
+import { useDomainCollapsed } from '@shared/state/nav-shell'
 import { useSessionsSegment, type SessionsSegment } from '@shared/state/sessions-segment'
 import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
 import { SegmentedControl } from '@shared/components/ui/segmented'
@@ -41,6 +42,9 @@ export function AgentViewLayout(): React.ReactElement {
   const narrow = useNarrow()
   const chat = useGeneralChat()
   const [collapsed, setCollapsed] = useState(false)
+  // 会话列 = 对话域的「二级栏」（registry second:'page'）：折叠读 nav-shell store（09-01 侧栏批，
+  // 按域一份）。窄窗（<780）单栏由 useNarrow 自治，列是整页，不藏。
+  const navHidden = useDomainCollapsed('chats')
   // Narrow single-pane back-stack: the list and the conversation alternate (a row tap / "New" pushes
   // the conversation; the back arrow returns to the list).
   const [mobileDetail, setMobileDetail] = useState(false)
@@ -221,6 +225,7 @@ export function AgentViewLayout(): React.ReactElement {
       onToggleCollapse={() => setCollapsed((c) => !c)}
       fluid={narrow}
       headerSlot={segmentControl}
+      navHidden={navHidden}
     />
   )
 

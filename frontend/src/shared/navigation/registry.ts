@@ -93,7 +93,14 @@ export type NavGate = 'always' | 'never' | 'matters' | 'contacts' | 'calendar'
  *  08-27 标签工作区批：草稿箱 / 已标旗 / 所有邮件三个总数随邮件域面板退役 —— 内建
  *  视图行搬进列表头的文件夹下拉后不再显计数（口径单源只有 Sidebar 一份，抄进下拉会
  *  分叉），三个 kind 没有渲染面，一并删。 */
-export type NavBadgeKind = 'inboxUnread' | 'matterAttention' | 'agentUnread'
+export type NavBadgeKind =
+  | 'inboxUnread'
+  | 'matterAttention'
+  | 'agentUnread'
+  /** 09-01 侧栏批：无数字状态点的两个来源（值仍是 number：>0 = 亮点）。
+   *  matterRunning = 有进行中的行动项派发；chatUnread = 群聊会话有未读。 */
+  | 'matterRunning'
+  | 'chatUnread'
 
 export interface NavBadgeSpec {
   readonly kind: NavBadgeKind
@@ -102,6 +109,9 @@ export interface NavBadgeSpec {
    *  剩下的都是 rail 上要显的未读/待办计数 —— 这一位保留作声明位，加新徽标时按
    *  「是不是几千级大数字」定（大数字角标失去信号价值还占位）。 */
   readonly rail: boolean
+  /** 角标形状：缺省 `'count'`（数字）；`'dot'` = 6px 无数字状态点（09-01 侧栏批，
+   *  参考站的 unread dot）。值 >0 才画，数值本身不显示。 */
+  readonly shape?: 'count' | 'dot'
 }
 
 /** keymap.ts 里的 binding id（组合键仍以 keymap 为准，registry 只引用它）。 */
@@ -109,11 +119,11 @@ export type NavShortcutId = 'settings' | 'generalAgent'
 
 export type NavLabel = { readonly i18nKey: string } | { readonly literal: string }
 
-/** 域的二级栏形态（08-27 标签工作区批：二级栏**恒存在且定宽 336**，`'none'` 档
- *  取消 —— 左列总宽固定 392 = 导轨 56 + 二级栏 336，切域时边界不动；dogfood
- *  修正批起亦不可收起）：
- *  - `'nav'`  = DomainPanel（336px 导航栏：今日五节/日历源树/团队清单/设置 tab 行…）；
- *  - `'page'` = 页面自带的列表列充当二级栏（邮件/事项/通讯录/对话的 list，同样定宽 336）。 */
+/** 域的二级栏形态（08-27 标签工作区批：二级栏**恒存在**，`'none'` 档取消；09-01 侧栏批：
+ *  每域各记一份折叠态与宽度 —— state/nav-shell.ts，默认展开 336）：
+ *  - `'nav'`  = DomainPanel（导航栏：今日五节/日历源树/运维行/设置 tab 行…）；
+ *  - `'page'` = 页面自带的列表列充当二级栏（邮件/事项/通讯录/对话/团队/报告的 list），
+ *    宽同样读 `--app-second-w`。 */
 export type NavDomainSecond = 'nav' | 'page'
 
 /** 域元数据（方案 B 导轨格的脸）：格标签与格图标是**域**的身份，不是域内某条 entry 的
@@ -148,6 +158,9 @@ export interface NavEntry {
   /** 选中态判据。缺省 = `pathname === to`。 */
   readonly match?: NavMatch
   readonly badge?: NavBadgeSpec
+  /** 次级状态点（09-01 侧栏批）：主角标 `badge` 计数为 0 时改画这个 6px 点。事项格用它
+   *  表达「有进行中的行动项派发」而不挤掉关注计数。缺席 = 没有次级点。 */
+  readonly dot?: { readonly kind: NavBadgeKind }
   /** 域二级栏（DomainPanel）里的落位：序在**本域**内比较（Step B 起面板按域切换，
    *  跨域不同行没有相对序可言）。缺席 = 不在二级栏出现。
    *  `kbd` = 行尾显组合键（只有设置行这么做，⌘O 的会话行有意不显）。
@@ -267,6 +280,7 @@ const ENTRIES = [
     gate: 'matters',
     match: { exact: ['/matters'] },
     badge: { kind: 'matterAttention', rail: true },
+    dot: { kind: 'matterRunning' },
     panel: { order: 0 },
     rail: { order: 1 },
     palette: { order: 30, metaI18nKey: 'palette.jump.mattersMeta' },
@@ -283,6 +297,8 @@ const ENTRIES = [
     icon: () => createElement(SparklesIcon, { className: 'text-coral' }),
     gate: 'always',
     match: { exact: ['/sessions'] },
+    // 09-01 侧栏批：群聊有未读 → 6px 点（不是数字：群聊消息数没有信号价值）。
+    badge: { kind: 'chatUnread', rail: true, shape: 'dot' },
     rail: { order: 4 },
     palette: { order: 10, metaI18nKey: 'palette.jump.generalAgentMeta' },
     shortcutId: 'generalAgent'
@@ -406,8 +422,9 @@ const ENTRIES = [
  *  沿用该入口的既有图标身份，不为导轨另造第二个 glyph。 */
 export const NAV_DOMAINS: Record<NavDomain, NavDomainMeta> = {
   today: { label: { i18nKey: 'nav.today' }, icon: () => createElement(SunIcon), second: 'nav' },
-  // 08-27 批：mail 的二级栏 = 邮件列表本身（InboxLayout 定宽 336，文件夹树退役、
-  // 文件夹选择器进列表头）—— DomainPanel 不再为 mail 渲染面板。
+  // 08-27 批：mail 的二级栏 = 邮件列表本身（InboxLayout 那一列，文件夹树退役、
+  // 文件夹选择器进列表头）—— DomainPanel 不再为 mail 渲染面板。列宽 09-01 侧栏批起
+  // 读 `--app-second-w`（邮件域自己的记忆，默认 336）。
   mail: {
     label: { i18nKey: 'nav.domain.mail' },
     icon: () => createElement(MailCheckIcon),
@@ -434,15 +451,15 @@ export const NAV_DOMAINS: Record<NavDomain, NavDomainMeta> = {
     second: 'page'
   },
   // 值名 'agents' 保留（见 NavDomain 注释），域的脸是「团队」。
-  // 08-27 P4a：团队页重做出自管清单列（TeamWorkspace 定宽 336）→ 落 'page' 终态档，
+  // 08-27 P4a：团队页重做出自管清单列（TeamWorkspace 的 TeamMemberList）→ 落 'page' 终态档，
   // P1 过渡的 TeamNavPanel 随之退役。
   agents: {
     label: { i18nKey: 'nav.domain.team' },
     icon: () => createElement(BotIcon),
     second: 'page'
   },
-  // 报告域的二级栏 = `/reports` 页自管的报告清单列（定宽 336）——「二级栏就是报告
-  // 列表通栏行，点行右侧直接出内容」。
+  // 报告域的二级栏 = `/reports` 页自管的报告清单列——「二级栏就是报告列表通栏行，
+  // 点行右侧直接出内容」。
   reports: {
     label: { i18nKey: 'nav.domain.reports' },
     icon: () => createElement(FileChartLineIcon),

@@ -67,6 +67,13 @@ export const TAB_REOPEN_SPEC = 'shift+cmd+t'
 export const TAB_CYCLE_NEXT_SPEC = 'ctrl+tab'
 export const TAB_CYCLE_PREV_SPEC = 'ctrl+shift+tab'
 
+// ── 导航壳（task 09-01-sidebar-fluid-optimization）─────────────────────────
+// `[` 折叠 / 展开当前域的二级栏；`]` 展开并把焦点移到二级栏首个可聚焦项（三条恢复入口
+// 之一）。抽屉态（远程 web <768）两键都作用于抽屉开合。plain key ⇒ useShortcut 的
+// editable-target gating 自动生效：输入框 / contenteditable 里打 `[` 不触发。
+export const NAV_TOGGLE_SPEC = '['
+export const NAV_EXPAND_FOCUS_SPEC = ']'
+
 /** ⌘1-9 位置直达：**⌘1 = 主标签**，⌘2-9 = 对象标签按标签条顺序的第 1-8 个。
  *  数组序 = 位置序，GlobalShortcuts 按下标注册。 */
 export const TAB_JUMP_SPECS: ReadonlyArray<string> = [
@@ -326,13 +333,31 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     wired: false
   },
   // ── Sprint 11 V1.4 — locale toggle ─────────────────────────────────
-  // （同批的 `toggleNav`(⌥B) 已随二级栏定宽退役：面板不再可折叠，键无处可去。）
+  // （同批的 `toggleNav`(⌥B) 已在 08-27 二级栏定宽时退役；09-01 侧栏批折叠回来后
+  //   换了绑定，见上面的 navToggle `[` / navExpandFocus `]`，⌥B 不再复活。）
   {
     id: 'toggleLocale',
     spec: 'alt+g',
     display: '⌥G',
     scope: 'global',
     labelKey: 'shortcutHelp.binding.toggleLocale',
+    wired: true
+  },
+  // ── 导航壳（09-01 侧栏批）——注册在 GlobalShortcuts ─────────────────────
+  {
+    id: 'navToggle',
+    spec: NAV_TOGGLE_SPEC,
+    display: '[',
+    scope: 'global',
+    labelKey: 'shortcutHelp.binding.navToggle',
+    wired: true
+  },
+  {
+    id: 'navExpandFocus',
+    spec: NAV_EXPAND_FOCUS_SPEC,
+    display: ']',
+    scope: 'global',
+    labelKey: 'shortcutHelp.binding.navExpandFocus',
     wired: true
   },
   // ── Calendar (阶段2·2.7, ux-benchmark §五-5 统一登记) ─────────────────

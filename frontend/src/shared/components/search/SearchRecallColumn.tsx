@@ -1,20 +1,27 @@
-// /search 左列 336 —— palette 空查询态的召回面（最近搜索 + 已保存搜索），从
-// SearchTabPage 拆出（组件 300 行上限，spec css-design/quality）。
+// /search 左列（宽读 `--app-second-w`，09-01 侧栏批起跟随邮件域的折叠 / 宽度记忆 ——
+// Sidebar 在 /search 上同样回落 mail 域）—— palette 空查询态的召回面（最近搜索 +
+// 已保存搜索），从 SearchTabPage 拆出（组件 300 行上限，spec css-design/quality）。
 //
 // 🔴 这一列不是装饰：/search 不属于任何 NavDomain（Sidebar 无 DomainPanel），没有它
-// 左列边界会从 392 塌到 56（SearchTabPage 头注释）。数据 = useSearchHistory（与 ⌘K
+// 左列边界会塌回导轨的 56（SearchTabPage 头注释）。数据 = useSearchHistory（与 ⌘K
 // palette 同一份 localStorage 账本）；点行回放交给父级 onRunQuery（写 search-tab store）。
 
 import { useTranslation } from 'react-i18next'
 import { Bookmark, Clock, Trash2, X } from 'lucide-react'
 
+import { cn } from '@shared/lib/cn'
 import { useSearchHistory } from '@shared/state/search-history'
 
 export interface SearchRecallColumnProps {
   onRunQuery(query: string): void
+  /** 09-01 侧栏批：/search 不属于任何域，左列跟随邮件域的折叠记忆（Sidebar 同一回落）。 */
+  hidden?: boolean
 }
 
-export function SearchRecallColumn({ onRunQuery }: SearchRecallColumnProps): React.ReactElement {
+export function SearchRecallColumn({
+  onRunQuery,
+  hidden = false
+}: SearchRecallColumnProps): React.ReactElement {
   const { t } = useTranslation()
   const history = useSearchHistory((s) => s.history)
   const savedSearches = useSearchHistory((s) => s.saved)
@@ -23,7 +30,14 @@ export function SearchRecallColumn({ onRunQuery }: SearchRecallColumnProps): Rea
   const removeSaved = useSearchHistory((s) => s.removeSaved)
 
   return (
-    <aside className="w-[336px] shrink-0 min-h-0 border-r border-ink-border overflow-y-auto scrollbar-thin px-3 py-2">
+    <aside
+      data-nav-second
+      className={cn(
+        // 宽读 `--app-second-w`（邮件域记忆，折叠 0）；过渡在 :root 变量上。
+        'w-[var(--app-second-w,336px)] shrink-0 min-h-0 border-r border-ink-border overflow-x-hidden overflow-y-auto scrollbar-thin px-3 py-2',
+        hidden && 'invisible border-r-0'
+      )}
+    >
       <div className="text-micro font-mono uppercase tracking-[0.08em] text-ink-fg-3 px-1 pt-3 pb-1.5 flex items-center">
         <span>{t('searchTab.recentSearches')}</span>
         {history.length > 0 && (

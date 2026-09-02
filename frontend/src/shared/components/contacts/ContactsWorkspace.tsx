@@ -1,5 +1,6 @@
-// 通讯录双栏工作台（task 08-13 WP2）。列表列定宽 336px（task 08-27 P1 Lane C 续改：
-// 拖拽调宽体系退役，二级栏恒 336，切域时左列边界不动）+ 详情列 minmax(430px,1fr)；
+// 通讯录双栏工作台（task 08-13 WP2）。列表列 = 通讯录域的二级栏，宽读 `--app-second-w`
+//（08-27 P1 Lane C 续改删掉了工作台自带的拖拽调宽；09-01 侧栏批把折叠 / 拖宽收进 nav shell
+// 按域记忆：默认 336、可拖 280–420、折叠 0）+ 详情列 minmax(430px,1fr)；
 // 断点 **860px**（设计实测值，两处一致：grid 的 `max-[860px]:grid-cols-1` 与
 // WORKSPACE_STACKED_QUERY —— 镜像不猜数）；单列态折叠用 `hidden`（display:none 保滚动位）。
 
@@ -15,6 +16,7 @@ import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { openNewCompose } from '@shared/state/compose-new'
 import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
+import { useDomainCollapsed, useDomainWidth } from '@shared/state/nav-shell'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { ContactAgentDrawer } from './ContactAgentDrawer'
@@ -47,9 +49,10 @@ import { useContactNavigation } from './navigation'
 // 用同一个数字的两份拷贝必须互相指认，漂了两处会各说各话。
 const WORKSPACE_STACKED_QUERY = '(max-width: 860px)'
 /** 双栏骨架（config 加载中）与真实布局共用同一份 grid 类，几何不对就是白闪一下再跳版。
- *  task 08-27 P1 Lane C 续改：清单列定宽 336px（左列总宽 392 = 导轨 56 + 二级栏 336）。 */
+ *  清单列宽读 `--app-second-w`（09-01 侧栏批：通讯录域自己的记忆，默认 336、可拖 280–420、
+ *  折叠 0；过渡在 :root 的变量上）。 */
 const WORKSPACE_GRID_CLASS =
-  'grid h-full min-h-0 grid-cols-[336px_minmax(430px,1fr)] max-[860px]:grid-cols-1'
+  'grid h-full min-h-0 grid-cols-[var(--app-second-w,336px)_minmax(430px,1fr)] max-[860px]:grid-cols-1'
 
 export function ContactsWorkspace(): React.ReactElement | null {
   const { t } = useTranslation()
@@ -87,6 +90,10 @@ export function ContactsWorkspace(): React.ReactElement | null {
   const [agentOpen, setAgentOpen] = useState(false)
 
   const stacked = useMediaQuery(WORKSPACE_STACKED_QUERY)
+  // 清单列 = 通讯录域的「二级栏」（registry second:'page'）：折叠态与记忆宽读 nav-shell store
+  // （09-01 侧栏批，按域一份）。窄窗单列（≤860）由 max-[860px] 断点自治，不受折叠影响。
+  const listCollapsed = useDomainCollapsed('contacts')
+  const listWidth = useDomainWidth('contacts')
 
   // 三个显示档位的写回：state 变了就落盘一次（写在 effect 里而不是 setter 里 —— state
   // updater 必须是纯函数，StrictMode 下会被调用两次）。
@@ -352,51 +359,63 @@ export function ContactsWorkspace(): React.ReactElement | null {
     <div className={WORKSPACE_GRID_CLASS}>
       <div
         className={cn(
-          'min-h-0 border-r border-ink-border',
+          // 外壳 .nav-second-col：宽读变量、overflow 裁切、折叠态 visibility 延翻；窄窗单列占满。
+          'nav-second-col flex-col border-r border-ink-border',
           selectedId !== null && 'max-[860px]:hidden'
         )}
+        data-nav-second
+        data-collapsed={!stacked && listCollapsed ? 'true' : 'false'}
+        // 窄窗单列占满：authored .nav-second-col 在 utilities 之后，`max-[860px]:w-full` 压不过它，
+        // 用内联写死（内联恒赢）。
+        style={stacked ? { width: '100%' } : undefined}
       >
-        <ContactListPane
-          view={view}
-          onViewChange={(next) => {
-            setView(next)
-            selectContact(null)
-          }}
-          onSearchChange={setQ}
-          sort={sort}
-          onSortChange={setSort}
-          groupBy={groupBy}
-          onGroupByChange={setGroupBy}
-          density={density}
-          onDensityChange={setDensity}
-          kindFilter={kindFilter}
-          onKindFilterToggle={(bucket) =>
-            setKindFilter((previous) => {
-              const next = new Set(previous)
-              if (next.has(bucket)) next.delete(bucket)
-              else next.add(bucket)
-              return next
-            })
-          }
-          rows={rows}
-          total={headerCount}
-          loading={list.isPending}
-          onLoadMore={loadMore}
-          hasMore={hasNextPage}
-          progress={progress.data}
-          selectedId={selectedId}
-          selectionMode={selectionMode}
-          checkedIds={checkedIds}
-          onExitSelection={exitSelection}
-          onMergePair={(pair) => setMergeState({ sourceId: null, pair })}
-          menuOpenId={menuOpenId}
-          onMenuOpenChange={setMenuOpenId}
-          onToggleGroup={toggleGroup}
-          actions={actions}
-          agentEnabled
-          pendingCount={agentStatus.data?.pending_count ?? 0}
-          onOpenAgent={() => setAgentOpen(true)}
-        />
+        <div
+          // 内层按记忆值定宽：过渡期间虚拟列表不重排（同 .nav-panel-inner 手法）。
+          className="nav-second-col-inner min-h-0 flex-1 flex-col"
+          style={{ width: stacked ? '100%' : listWidth }}
+        >
+          <ContactListPane
+            view={view}
+            onViewChange={(next) => {
+              setView(next)
+              selectContact(null)
+            }}
+            onSearchChange={setQ}
+            sort={sort}
+            onSortChange={setSort}
+            groupBy={groupBy}
+            onGroupByChange={setGroupBy}
+            density={density}
+            onDensityChange={setDensity}
+            kindFilter={kindFilter}
+            onKindFilterToggle={(bucket) =>
+              setKindFilter((previous) => {
+                const next = new Set(previous)
+                if (next.has(bucket)) next.delete(bucket)
+                else next.add(bucket)
+                return next
+              })
+            }
+            rows={rows}
+            total={headerCount}
+            loading={list.isPending}
+            onLoadMore={loadMore}
+            hasMore={hasNextPage}
+            progress={progress.data}
+            selectedId={selectedId}
+            selectionMode={selectionMode}
+            checkedIds={checkedIds}
+            onExitSelection={exitSelection}
+            onMergePair={(pair) => setMergeState({ sourceId: null, pair })}
+            menuOpenId={menuOpenId}
+            onMenuOpenChange={setMenuOpenId}
+            onToggleGroup={toggleGroup}
+            actions={actions}
+            agentEnabled
+            pendingCount={agentStatus.data?.pending_count ?? 0}
+            onOpenAgent={() => setAgentOpen(true)}
+          />
+        </div>
       </div>
       <div className={cn('min-h-0', selectedId === null && 'max-[860px]:hidden')}>
         {selectedId !== null ? (
@@ -404,7 +423,7 @@ export function ContactsWorkspace(): React.ReactElement | null {
             contactId={selectedId}
             onBack={backToList}
             actions={actions}
-            showBack={stacked}
+            showBack={stacked || listCollapsed}
             onMergeRequest={requestMerge}
           />
         ) : (

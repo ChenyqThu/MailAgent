@@ -340,7 +340,7 @@ const mattersRoute = createRoute({
 // /search — 「新标签页」搜索标签（08-27 P2 补批 Lane S）的承载路由。⌘T / 标签条「+」
 // 开出 kind='search' 单例标签，useTabRouteSync 的特判腿把它与本路由双向同步。
 // 🔴 有意不进 nav registry：NavDomain 十域不动、rail 不加格，navActiveDomain('/search')
-// 返回 null 属预期（Sidebar 回落 mail 档；页面自带 336 左列守住 392 边界）。
+// 返回 null 属预期（Sidebar 回落 mail 档；页面清单列读 --app-second-w，随邮件域的记忆宽 / 折叠态走）。
 const searchRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/search',

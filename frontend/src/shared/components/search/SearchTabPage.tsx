@@ -42,6 +42,7 @@ import { toggleDslToken } from '@shared/lib/dsl_token'
 import { extractTerms } from '@shared/lib/highlight_terms'
 import { viewForMailbox } from '@shared/lib/mailboxSemantics'
 import { qk } from '@shared/lib/queryKeys'
+import { useDomainCollapsed } from '@shared/state/nav-shell'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useEmailFilter } from '@shared/state/email-filter'
 import { useMailbox } from '@shared/state/mailbox'
@@ -89,6 +90,8 @@ export function SearchTabPage(): React.ReactElement {
   const setActiveEmail = useActiveEmail((s) => s.setActive)
   const setView = useEmailFilter((s) => s.setView)
   const pushHistory = useSearchHistory((s) => s.pushHistory)
+  // /search 左列跟随邮件域的折叠记忆（Sidebar 在 /search 上回落 mail 域）。
+  const recallHidden = useDomainCollapsed('mail')
 
   // query / AI 结果态 = 会话内 store（续改 1，见文件头）；highlight 是纯视图态留本地。
   const query = useSearchTabPage((s) => s.query)
@@ -366,7 +369,7 @@ export function SearchTabPage(): React.ReactElement {
 
   return (
     <PageFrame ariaLabel="search" mainClassName="flex-1 flex overflow-hidden min-w-0">
-      <SearchRecallColumn onRunQuery={runStoredQuery} />
+      <SearchRecallColumn onRunQuery={runStoredQuery} hidden={recallHidden} />
 
       {/* 主列 —— 原型 .scol：560 居中，空态 margin-top 110；有查询时上移让位结果。 */}
       <section className="min-w-0 flex-1 overflow-y-auto scrollbar-thin">

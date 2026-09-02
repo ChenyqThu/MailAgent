@@ -7,7 +7,12 @@
 //     （P3 起 reports 也转 'page'：报告清单列就是它的二级栏；P4a 起 agents（团队）
 //     也转 'page'：TeamWorkspace 自管清单列，过渡的 TeamNavPanel 已退役）。
 //
-// 08-27 dogfood 修正批：折叠能力整体移除 —— 面板恒在、恒 336，域头只剩域名。
+// task 09-01-sidebar-fluid-optimization — 按域折叠 / 拖宽（state/nav-shell）：
+//   · 外层 `.nav-panel` 宽读 `--app-second-w`（折叠态 0，过渡在 :root 变量上）；内层
+//     `.nav-panel-inner` 按该域记忆值写内联 px，过渡期间行不换行不挤压；
+//   · 域头右侧折叠钮（三条恢复入口之一的反向：收起）；
+//   · `peek` 变体：折叠态 hover 导轨格时在浮层里渲染同一份内容 —— 根节点挂
+//     `data-nav-panel-peek` 而不是 `data-nav-panel`（契约闸只认常驻那份），无折叠钮。
 //
 // 数据与写路径留在 Sidebar（组装层）：本组件只拿点击 handler，自己读只读的
 // 路由 store 来定选中态。
@@ -15,7 +20,7 @@
 import { cloneElement, isValidElement, useState } from 'react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { ExternalLink, MessageSquarePlus } from 'lucide-react'
+import { ChevronsLeft, ExternalLink, MessageSquarePlus } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { AnimatedIconActiveProvider } from '@shared/components/icons'
@@ -125,13 +130,22 @@ export interface DomainPanelProps {
   /** 条目点击 —— 与 IconRail 的格点击共用 Sidebar 里的同一个 handler。 */
   onEntryClick(entry: NavEntry): void
   onEntryHover(entry: NavEntry): void
+  /** 域头右侧的收起钮；不传 = 不渲染（peek 变体 / 抽屉态）。 */
+  onCollapse?: () => void
+  /** peek 变体（折叠态浮层里的那份）。 */
+  peek?: boolean
+  /** 内层定宽（该域记忆值 px）；过渡期间内容不随外层挤压。peek 变体不用。 */
+  innerWidth?: number
 }
 
 export function DomainPanel({
   domain,
   entries,
   onEntryClick,
-  onEntryHover
+  onEntryHover,
+  onCollapse,
+  peek = false,
+  innerWidth
 }: DomainPanelProps): React.ReactElement {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -179,15 +193,35 @@ export function DomainPanel({
     )
   }
 
+  // 契约闸只认常驻那份（`[data-nav-panel]` 恰 1）；peek 变体另挂属性。
+  const rootAttrs = peek
+    ? { 'data-nav-panel-peek': true }
+    : { 'data-nav-panel': true, 'data-nav-second': true }
+
   return (
-    <div className="nav-panel" data-nav-panel>
-      <div className="nav-panel-inner">
-        {/* ── 41px 域头 · 域名 ───────────────────────────────────────────
+    <div className={cn('nav-panel', peek && 'nav-panel--peek')} {...rootAttrs}>
+      <div
+        className="nav-panel-inner"
+        style={!peek && innerWidth !== undefined ? { width: innerWidth } : undefined}
+      >
+        {/* ── 41px 域头 · 域名 + 收起钮 ───────────────────────────────────
             与 rail 头 / 右侧内容区顶栏 (height 41) 的分割线共线（画布修正版基线）。 */}
-        <div className="nav-panel-header">
+        <div className="nav-panel-header gap-1.5">
           <span className="flex-1 min-w-0 text-[13px] font-semibold text-ink-fg truncate">
             {navDomainLabel(domain, t)}
           </span>
+          {onCollapse !== undefined && !peek && (
+            <button
+              type="button"
+              onClick={onCollapse}
+              data-nav-panel-collapse
+              className="shrink-0 p-1 rounded hover:bg-ink-3 active:bg-ink-4 text-ink-fg-2 hover:text-ink-fg transition-colors duration-fast"
+              title={`${t('nav.collapse')} · [`}
+              aria-label={t('nav.collapse')}
+            >
+              <ChevronsLeft size={13} strokeWidth={2} />
+            </button>
+          )}
         </div>
 
         {/* ── 域内容 ─────────────────────────────────────────────────── */}

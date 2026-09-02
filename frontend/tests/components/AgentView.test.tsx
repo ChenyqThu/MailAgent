@@ -278,12 +278,18 @@ describe('Agent view — unified history list (Phase 9)', () => {
     expect(screen.getByText(i18n.t('agentView.emptyHistory'))).toBeTruthy()
   })
 
-  // 08-27 标签工作区批：对话域的页面自管列充当二级栏，展开态定宽 336
-  //（rail 56 + 336 = 392，与其他域左列边界对齐）。改这个数 = 改左列总宽契约，
-  // 要与 .nav-panel(336) / nav-shell NAV_W_EXPANDED(392) 一起动。
-  test('展开态列宽 336（392px 左列对齐契约）；折叠仍是 48px rail', () => {
+  // 08-27 标签工作区批：对话域的页面自管列充当二级栏；09-01 侧栏批起展开态宽读
+  // `--app-second-w`（对话域自己的记忆，默认 336，nav-shell store 写）—— 不再手抄像素。
+  // 改这里 = 改左列宽度契约，要与 tests/shared/nav-shell.test.ts 的变量闸一起动。
+  test('展开态列宽读 --app-second-w（默认 336）；折叠仍是 48px rail；nav 折叠整列 0 宽不可见', () => {
     const { container } = render(<AgentThreadList items={[]} {...handlers} />)
-    expect(container.querySelector('aside')?.className).toContain('w-[336px]')
+    expect(container.querySelector('aside')?.className).toContain('w-[var(--app-second-w,336px)]')
+    expect(container.querySelector('aside')?.getAttribute('data-nav-second')).not.toBeNull()
+    cleanup()
+    const { container: hidden } = render(<AgentThreadList items={[]} {...handlers} navHidden />)
+    const aside = hidden.querySelector('aside') as HTMLElement
+    expect(aside.style.width).toBe('0px')
+    expect(aside.style.visibility).toBe('hidden')
   })
 })
 

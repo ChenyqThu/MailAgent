@@ -306,6 +306,15 @@ export const useAppearance = create<Store>((set) => ({
 > 编号钉在 2.11：全仓代码注释（index.css / layout 组件 / 测试）历史上一直引用
 > 「DESIGN.md §2.11」作为 nav shell contract 的锚点，沿用编号让那些引用继续成立。
 > 老 §2.11（单栏 240↔56 双宽态、三段 11 行、收起态 icon-only 行）**已整体退役**。
+>
+> **2026-09-01 更新（task 09-01-sidebar-fluid-optimization，owner 拍板 A′+C 混合）**：下文
+> 的「232px 面板 / `'none'` 档 / 全域一份折叠态 / `mailagent.nav.panelCollapsed`」是 08-25 时的
+> 形态，08-27 P1 把二级栏统一成 336、08-27 修正批删掉折叠，09-01 批按**域**重新引入折叠与拖宽：
+> 每域各记一份 `{collapsed, width}`（`state/nav-shell.ts`，键 `mailagent.nav.domainPrefs`，
+> 默认展开 336，可拖 280–420），左列宽走 `@property` 变量 `--app-nav-w` / `--app-second-w`
+> 的 220ms 过渡（§18.2），折叠态 hover / 聚焦导轨格 150ms 浮出该域 peek（`.glass-pop`，全部域
+> 真内容），`[` / `]` 快捷键，远程 web <768 抽屉。权威描述见
+> `.trellis/tasks/09-01-sidebar-fluid-optimization/design.md`；本节其余文字保留作历史锚点。
 
 **形态**：`Sidebar.tsx`（组装层 + 数据层）= AppShell 中行的**单个** flex item
 （`<aside data-app-nav class="app-nav">`，内部 flex row），装两列：
@@ -1839,7 +1848,7 @@ opaque", not a coincidence). Consequences worth knowing:
 - `ShimmerText` (thinking shimmer), `DotMatrix` connecting dots. (**2026-07-15 update, harness-chat lane B:** the random-rotation `ThinkingPhrases` component was retired — the chat status line is now truth-driven via `TurnStatusLine`/`useTurnStage` [stops on idle/writing/awaiting-approval, never spins while stalled/errored] and consecutive tool calls fold into `ToolGroupCard`; both still use only `ShimmerText`/`DotMatrix`, no new vocabulary — see `docs/motion-gsap.md` §9.1.) (**2026-08-13 update, living-bot-avatar WP5:** `TurnStatusLine` was absorbed into `TurnPresence` — the in-flow status row is now an animated `BotAvatar` + the same truth-driven text discipline; `DotMatrix` is retired **from the message flow only**, and stays in the composer-side `ThreadRunStatusBar`.)
 - **Bot avatar loop motion** (`shared/bot-avatar/`, 2026-08-13; v2 parametric-3D engine same day): the state-driven head-turn/blink/expression/gaze/ambient loop is a sanctioned duration-tier exemption (like Strands) — transition easing is engine-internal, NOT the GSAP spring whitelist's concern. Static tier is the default everywhere; `animated` exists at exactly 3 sites (TurnPresence 28px, panel header 20px, editor preview 48px) — adding an animated site requires a perf review. v2 note: ambient-active states (slowDrift breathing) keep animated instances redrawing at a 30fps cap instead of settling — an intentional cost confined to those 3 sites. Reduced-motion short-circuits in JS to the static tier. See `docs/bot-avatar.md`.
 - All GSAP orchestration: inbox-tab indicator slide, settings-panel fade-in, thinking-block height auto↔0, and everything in `docs/motion-gsap.md` §8.
-- Nav panel collapse `transition: width`（方案 B 起 288↔56 = DomainPanel 232→0 显隐，rail 常驻；chat 260↔48）— layout-property animation is existing product behavior.
+- Nav shell width motion（2026-09-01 task 09-01-sidebar-fluid-optimization）：左列宽度是两个 `@property` 注册的自定义属性 `--app-nav-w` / `--app-second-w`，过渡挂在 `:root`（220ms `--ease-out-strong`），按域记忆的折叠 / 拖宽 / 切域回放都经它一处滑动——顶栏左段、DomainPanel、六个 page 域清单列、`#batch-bar.floating` 同帧跟随，**不再各自写 `transition: width`**；拖拽期间（`html[data-nav-dragging]`）与 reduced-motion 关。chat 260↔48 列内折叠仍是 `transition: width`（正交机制，未动）。
 - Row hover / press feedback; approval-card phase-pill state transitions.
 - List-performance rules (ARCHITECTURE §7.1) — unaffected by v3.
 

@@ -472,6 +472,8 @@
     },
     "binding": {
       "commandPalette": "命令面板",
+      "navToggle": "收起 / 展开二级栏",
+      "navExpandFocus": "展开二级栏并聚焦",
       "settings": "打开设置",
       "shortcutHelp": "显示快捷键帮助",
       "composeNew": "写新邮件",
@@ -728,6 +730,11 @@
     "calendar": "日历",
     "settings": "设置",
     "shortcuts": "快捷键",
+    "collapse": "收起二级栏",
+    "expand": "展开二级栏",
+    "resize": "拖动调整二级栏宽度，双击复位",
+    "drawer": "打开导航",
+    "peekTitle": "{domain} · 预览",
     "online": "在线",
     "account": {
       "tooltip": "{email} — 切换账户"
@@ -3072,6 +3079,10 @@
       "advanced": {
         "label": "高级实验",
         "helper": "面向协议兼容与开发调试的低层能力。"
+      },
+      "groupAgents": {
+        "label": "群聊多 agent（实验）",
+        "helper": "由本机的 AI 服务接管群里的发言：按每位成员的响应模式决定谁开口、成员之间可以互相接话，并受链上限与每小时预算约束。关掉就退回原来的「你发一条、成员各回一轮」。开关立即生效，不需要重启。"
       },
       "mcpConnectors": {
         "label": "外部服务连接器",
@@ -7230,6 +7241,57 @@
     "sendFailed": "发送失败：{error}",
     "speakerFailed": "本条回复失败：{error}",
     "typing": "{name} 正在输入…",
-    "send": "发送"
+    "send": "发送",
+    "desktopOnly": "群聊需要本机的 AI 服务，远程网页版建不了群。",
+    "speaking": "成员正在发言…",
+    "stop": "停止本轮",
+    "stopFailed": "停止失败：{error}",
+    "stoppedPrefix": "已停止：{reason}",
+    "stopped": {
+      "chain_cap": "这条对话链已达唤醒上限",
+      "per_agent_cap": "单个成员在本轮的发言次数已达上限",
+      "lapping": "成员之间开始重复绕圈",
+      "hourly_turns": "已达每小时发言次数上限",
+      "hourly_tokens": "已达每小时 token 上限",
+      "hourly_budget": "已达每小时费用上限",
+      "session_cap": "已达本群累计发言上限",
+      "wall": "本轮已超时",
+      "rate": "发言过于频繁",
+      "owner_stop": "你停止了本轮",
+      "labs_off": "群聊多 agent 实验已关闭",
+      "error": "连续失败次数过多"
+    },
+    "settings": {
+      "open": "群设置",
+      "title": "群设置",
+      "modes": "响应模式",
+      "modesHelper": "实时 = 群里每来一条别人的消息都可能回；点名 = 只有被 @ 才回。默认点名。",
+      "modeRealtime": "实时",
+      "modeMention": "点名",
+      "modeAria": "{name} 的响应模式",
+      "judge": "法官位",
+      "judgeHelper": "法官可以在本群与它建的子群之间投递消息。最多一位，也可以不设。",
+      "judgeNone": "不设法官",
+      "judgeStaleHint": "成员名单变动后，需要回到这里重新确认法官位。",
+      "limits": "上限与预算",
+      "chainCap": "一条链最多唤醒",
+      "hourlyTurns": "每小时最多发言",
+      "hourlyTokens": "每小时 token 上限",
+      "hourlyUsd": "每小时费用上限（美元）",
+      "defaultHint": "留空 = 用出厂默认（输入框里的灰字就是默认值）。",
+      "usage": "用量",
+      "save": "保存",
+      "saving": "保存中…",
+      "saved": "群设置已保存",
+      "saveFailed": "群设置保存失败：{error}",
+      "cancel": "取消"
+    },
+    "metrics": {
+      "silentRunRate": "沉默率",
+      "turnsPerHumanMessage": "每条人类消息的唤醒数",
+      "last1h": "最近 1 小时",
+      "window": "{turns} 次 · {tokens} token · {cost}",
+      "unknown": "—"
+    }
   }
 }

@@ -1,4 +1,5 @@
-// task 08-27 P4a（lane team-shell）— 团队域二级栏：智能体清单（页面自管列，定宽 336）。
+// task 08-27 P4a（lane team-shell）— 团队域二级栏：智能体清单（页面自管列；宽读
+// `--app-second-w`，09-01 侧栏批起是团队域自己的记忆值，默认 336）。
 //
 // 分组按**内置 / 自定义**（design §8.0：不按运行状态 —— 状态每行自己写了，拿它当分组
 // 会让同一个成员今天在这组明天在那组）。每行：头像 + 名 + 状态点 + 一句状态文案。
@@ -18,9 +19,6 @@ import { MAIN_ASSISTANT_SEED, envFlagOn } from '../shared'
 import { useAgentRuns } from '../hooks'
 import { TeamAgentImportEntries } from './TeamAgentImportEntries'
 import { memberTitle, type TeamMember } from './teamMembers'
-
-/** 报告域清单列同款定宽（左列总宽 392 = 导轨 56 + 336）。 */
-const LIST_WIDTH = 336
 
 function MemberRow({
   member,
@@ -180,7 +178,8 @@ export function TeamMemberList({
       data-team-member-list
       className="flex h-full shrink-0 flex-col"
       style={{
-        width: fluid ? '100%' : LIST_WIDTH,
+        // 宽读 `--app-second-w`（团队域自己的记忆，09-01 侧栏批；外壳在 TeamWorkspace）。
+        width: fluid ? '100%' : 'var(--app-second-w, 336px)',
         borderRight: fluid ? 'none' : '1px solid rgb(var(--ink-border))'
       }}
     >

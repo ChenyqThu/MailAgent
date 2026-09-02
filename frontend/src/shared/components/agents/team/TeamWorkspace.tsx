@@ -16,6 +16,7 @@ import { cn } from '@shared/lib/cn'
 import { navEntry, navigateToNavEntry } from '@shared/navigation/registry'
 import { useEnvStore } from '@shared/state/env'
 import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
+import { useDomainCollapsed } from '@shared/state/nav-shell'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 
 import { AgentAvatar } from '../AgentAvatar'
@@ -174,6 +175,8 @@ export function TeamWorkspace(): React.ReactElement {
 
   const narrow = useNarrow()
   const forcedRecordCollapsed = useNarrow(RECORD_FORCE_COLLAPSE_BELOW)
+  // 清单列 = 团队域的「二级栏」：折叠态读 nav-shell store（09-01 侧栏批，按域一份）。
+  const listCollapsed = useDomainCollapsed('agents')
 
   const [selectedKey, setSelectedKey] = useState<string>(members[0].key)
   const [tab, setTab] = useState<TeamViewTab>(members[0].tabs[0])
@@ -276,7 +279,14 @@ export function TeamWorkspace(): React.ReactElement {
 
   return (
     <div className="flex h-full min-h-0">
-      {list}
+      {/* 二级栏外壳（09-01 侧栏批）：宽读变量、折叠态 visibility hidden 不卸载。 */}
+      <div
+        className="nav-second-col"
+        data-nav-second
+        data-collapsed={listCollapsed ? 'true' : 'false'}
+      >
+        {list}
+      </div>
       {detail}
     </div>
   )

@@ -442,12 +442,12 @@ describe('MattersWorkspace — flag off', () => {
   })
 })
 
-// task 08-27 P1 Lane C（续改）—— 拖拽调宽体系整体退役：清单列不再可拖，恒 336px（左列
-// 总宽 392 = 导轨 56 + 二级栏 336），切域时左列边界不动。原「resizable matter list」
-// 三条测试（拖拽 / 键盘步进 / 宽窗默认宽度）随被测能力一起删除，改钉「没有拖拽把手、
-// 宽度恒 336」这条新不变量。
-describe('MattersWorkspace — fixed-width matter list (drag-to-resize retired)', () => {
-  test('no resize handle is rendered and the list column is a fixed 336px track', async () => {
+// task 08-27 P1 Lane C（续改）—— 工作台自带的拖拽调宽体系退役；09-01 侧栏批起清单列宽读
+// nav-shell 的 `--app-second-w`（事项域自己的记忆，默认 336），拖宽是 nav shell 的手柄
+// （layout/NavResizeHandle）而不是工作台的：这里仍钉「工作台没有自己的拖拽把手、grid
+// 第一轨读变量、不往 --matter-list-width 写值」。
+describe('MattersWorkspace — matter list width comes from the nav shell variable', () => {
+  test('no workspace resize handle; the list column track reads --app-second-w', async () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
     })
@@ -466,7 +466,9 @@ describe('MattersWorkspace — fixed-width matter list (drag-to-resize retired)'
 
     const grid = container.querySelector('.grid') as HTMLDivElement | null
     expect(grid).toBeTruthy()
-    expect(grid?.className).toContain('grid-cols-[336px_minmax(420px,1fr)]')
+    expect(grid?.className).toContain('grid-cols-[var(--app-second-w,336px)_minmax(420px,1fr)]')
+    // 清单列是二级栏（nav shell 的 `]` 聚焦 / 折叠都靠这个标记找它）。
+    expect(grid?.querySelector('[data-nav-second]')).toBeTruthy()
     // 拖拽体系连带的 CSS 变量写面也一并退役——不该再有任何组件往这个变量上写值。
     expect(grid?.style.getPropertyValue('--matter-list-width')).toBe('')
   })

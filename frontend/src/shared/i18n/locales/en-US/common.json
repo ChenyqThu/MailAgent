@@ -472,6 +472,8 @@
     },
     "binding": {
       "commandPalette": "Command palette",
+      "navToggle": "Collapse / expand sidebar panel",
+      "navExpandFocus": "Expand sidebar panel and focus it",
       "settings": "Open settings",
       "shortcutHelp": "Show keyboard help",
       "composeNew": "Compose new email",
@@ -728,6 +730,11 @@
     "calendar": "Calendar",
     "settings": "Settings",
     "shortcuts": "Shortcuts",
+    "collapse": "Collapse sidebar panel",
+    "expand": "Expand sidebar panel",
+    "resize": "Drag to resize the panel, double-click to reset",
+    "drawer": "Open navigation",
+    "peekTitle": "{domain} · peek",
     "online": "online",
     "account": {
       "tooltip": "{email} — switch account"
@@ -3072,6 +3079,10 @@
       "advanced": {
         "label": "Advanced experiments",
         "helper": "Low-level capabilities for protocol compatibility and developer debugging."
+      },
+      "groupAgents": {
+        "label": "Multi-agent group chat (experimental)",
+        "helper": "Lets the local AI service drive who speaks in a group: each member's response mode decides who wakes up, members can reply to each other, and every round is bounded by the chain cap and hourly budgets. Turn it off to go back to \"you send one message, each member replies once\". Takes effect immediately — no restart."
       },
       "mcpConnectors": {
         "label": "External service connectors",
@@ -7230,6 +7241,57 @@
     "sendFailed": "Send failed: {error}",
     "speakerFailed": "This reply failed: {error}",
     "typing": "{name} is typing…",
-    "send": "Send"
+    "send": "Send",
+    "desktopOnly": "Group chat needs the local AI service — groups can't be created from the remote web app.",
+    "speaking": "A member is speaking…",
+    "stop": "Stop this round",
+    "stopFailed": "Stop failed: {error}",
+    "stoppedPrefix": "Stopped: {reason}",
+    "stopped": {
+      "chain_cap": "this chain hit its turn cap",
+      "per_agent_cap": "a member hit its per-run speaking cap",
+      "lapping": "members started lapping each other",
+      "hourly_turns": "hourly turn budget reached",
+      "hourly_tokens": "hourly token budget reached",
+      "hourly_budget": "hourly cost budget reached",
+      "session_cap": "this group hit its total turn cap",
+      "wall": "this round timed out",
+      "rate": "speaking too fast",
+      "owner_stop": "you stopped this round",
+      "labs_off": "the multi-agent group experiment was turned off",
+      "error": "too many consecutive failures"
+    },
+    "settings": {
+      "open": "Group settings",
+      "title": "Group settings",
+      "modes": "Response mode",
+      "modesHelper": "Realtime = may reply to every message from others; Mention = replies only when @mentioned. Mention is the default.",
+      "modeRealtime": "Realtime",
+      "modeMention": "Mention",
+      "modeAria": "Response mode for {name}",
+      "judge": "Judge",
+      "judgeHelper": "The judge can post between this group and the subgroups it creates. At most one; none is fine.",
+      "judgeNone": "No judge",
+      "judgeStaleHint": "After the member list changes, come back here and confirm the judge again.",
+      "limits": "Caps and budgets",
+      "chainCap": "Turns per chain",
+      "hourlyTurns": "Turns per hour",
+      "hourlyTokens": "Tokens per hour",
+      "hourlyUsd": "Cost per hour (USD)",
+      "defaultHint": "Leave blank to use the factory default (shown greyed in the field).",
+      "usage": "Usage",
+      "save": "Save",
+      "saving": "Saving…",
+      "saved": "Group settings saved",
+      "saveFailed": "Failed to save group settings: {error}",
+      "cancel": "Cancel"
+    },
+    "metrics": {
+      "silentRunRate": "Silent rate",
+      "turnsPerHumanMessage": "Turns per human message",
+      "last1h": "Last hour",
+      "window": "{turns} turns · {tokens} tokens · {cost}",
+      "unknown": "—"
+    }
   }
 }

@@ -95,3 +95,44 @@ describe('TitleBar — 组装（dogfood 轮4：簇迁左段，右侧腾空给标
     expect(children.length).toBe(2)
   })
 })
+
+// ── 09-01 侧栏批：折叠态左段 56px 装不下簇，簇迁标签条右端（design.md §2.4）──────────
+// 展开态上面五条原样成立（右侧零常驻控件）；这里钉折叠态的例外：header 三个子节点，
+// 簇是第三个、成员与顺序不变，左段挂 data-collapsed。
+import { __resetNavShellForTest, useNavShell } from '@shared/state/nav-shell'
+
+describe('TitleBar — 折叠态簇迁右端（09-01 侧栏批）', () => {
+  afterEach(() => __resetNavShellForTest())
+
+  test('当前域折叠：header = 左段 · 标签条 · 簇；簇成员顺序不变；左段 data-collapsed', () => {
+    __resetNavShellForTest()
+    useNavShell.getState().setDomain('today')
+    useNavShell.getState().setCollapsed('today', true)
+    const { container } = render(<TitleBar />)
+    const header = container.querySelector('header')
+    const children = [...(header?.children ?? [])]
+    expect(children.length).toBe(3)
+    expect(children[0]?.classList.contains('topbar-left')).toBe(true)
+    expect(children[0]?.getAttribute('data-collapsed')).toBe('true')
+    expect(children[1]?.getAttribute('data-testid')).toBe('stub-tabstrip')
+    expect(children[2]?.classList.contains('topbar-cluster--trailing')).toBe(true)
+    expect(leftSegment(container).contains(cluster())).toBe(false)
+    const members = [...cluster().children].map(
+      (el) => el.getAttribute('data-testid') ?? el.getAttribute('aria-label')
+    )
+    expect(members).toEqual([
+      'stub-update',
+      i18n.t('search.title'),
+      'stub-bell',
+      'stub-theme',
+      i18n.t('nav.shortcuts')
+    ])
+  })
+
+  test('展开态（默认）：簇回到左段，右侧仍零常驻控件', () => {
+    __resetNavShellForTest()
+    const { container } = render(<TitleBar />)
+    expect(container.querySelector('header')?.children.length).toBe(2)
+    expect(leftSegment(container).contains(cluster())).toBe(true)
+  })
+})

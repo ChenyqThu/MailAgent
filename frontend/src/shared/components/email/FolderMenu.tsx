@@ -199,7 +199,8 @@ export function FolderMenu({
       role="group"
       aria-label={t('list.folder.menuAria')}
       className={cn(
-        'glass-pop absolute z-50 left-3 top-[calc(100%+0.375rem)] w-[292px]',
+        // 09-01 侧栏批：二级栏可拖到 280，下拉 292 会被 .nav-second-col 的 overflow 裁；上限跟随记忆宽。
+        'glass-pop absolute z-50 left-3 top-[calc(100%+0.375rem)] w-[292px] max-w-[calc(var(--app-second-w,336px)-1.5rem)]',
         'rounded-[var(--r-pop)] border border-ink-border p-1.5',
         'max-h-[420px] overflow-y-auto scrollbar-thin'
       )}

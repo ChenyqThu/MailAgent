@@ -215,12 +215,16 @@
    * (亮档与 vib-off/solid 的同名覆盖见各自 block)。 */
   --tab-strip-surface: rgb(255 255 255 / 0.046);
 
-  /* 左列总宽 —— 恒定 392 = `.nav-rail`(56) + `.nav-panel`(336)。二级栏不可收起
-   * （dogfood 拍板：切域时左列边界恒不动），所以这是个静态 token，没有 JS 写入路径。
-   * 消费者：`.topbar-left`（顶栏左段与左列共宽）与 `#batch-bar.floating`
-   * （portal 到 body、量不到左列，只能读这个变量对齐）。
-   * 🔴 与那两条 authored 宽度手抄三处，闸在 tests/shared/nav-shell.test.ts。 */
+  /* 左列两个宽度（task 09-01-sidebar-fluid-optimization，按域折叠 / 拖宽）：
+   *   --app-second-w = 第二列（DomainPanel 或 page 域清单列）当前宽；折叠态 0。
+   *   --app-nav-w    = 左列总宽 = `.nav-rail`(56) + --app-second-w；抽屉态 44。
+   * 这里只是 JS 前的首帧默认值（展开 336 ⇒ 392）；运行时**唯一写入点**是
+   * state/nav-shell.ts 的 applyNavWidthVars（写 documentElement 内联样式）。
+   * 两个变量在 nav shell 段用 @property 注册并挂了 220ms 过渡 —— 切域 / 折叠 / 拖宽时
+   * 顶栏左段、DomainPanel、六个清单列、`#batch-bar.floating` 同帧跟随，不必各自 transition。
+   * 🔴 默认值与 `.nav-rail` 宽手抄两处，闸在 tests/shared/nav-shell.test.ts。 */
   --app-nav-w: 392px;
+  --app-second-w: 336px;
 
   /* 无 vibrancy 平台 (data-vib=off / web) 的内置回退壁纸 — 单光源, 与
    * ambient 同向, accent 派生换色自动跟; 本身是平滑渐变, 零 blur。 */
@@ -1294,8 +1298,10 @@ body::before {
 
 /* ─── task 08-24-l4-nav-shell Step B — 方案 B nav shell (IconRail + DomainPanel) ─
  * 视觉基准 = 提案画布方案 B 板 (ProposalB.dc.html)。老「240↔56 双宽态」collapse
- * contract（Sprint 11 V1.4 §2.11）退役；08-27 dogfood 修正批起**折叠能力整体移除**：
- * 56px 图标导轨 + 336px 域面板恒在，左列恒 392（见 :root 的 --app-nav-w）。
+ * contract（Sprint 11 V1.4 §2.11）退役；08-27 dogfood 修正批曾把折叠能力整体移除；
+ * task 09-01-sidebar-fluid-optimization（owner 看过 demo 后拍板 A′+C 混合）按**域**
+ * 记忆重新引入：56px 图标导轨常驻，第二列（DomainPanel / page 域清单列）每域各记一份
+ * `{collapsed, width}`，宽 280–420 可拖，折叠 = --app-second-w 收 0。
  * 材质（0825 dogfood 拍板）：rail/panel 一律挂 --tier-side —— 画布的不透明
  * ink 明度序会掉出 v3 surface-tier 透明体系（左 288px 对 Frosted/Surface
  * 失效、吃不到壁纸辉光，与右侧透明面直接色裂）；分层交给 hairline。
@@ -1303,9 +1309,38 @@ body::before {
  * Authored CSS class names are load-bearing — Tailwind never sees these so
  * the contract survives purge. 结构契约（`railbtn > svg` 直子等）有渲染期闸
  * (tests/components/sidebar-contract.test.tsx)。 */
+
+/* 左列宽度变量注册成可过渡的自定义属性：切域回放另一个域的记忆 / 折叠 / 拖宽时，
+ * 过渡挂在 :root 的**变量**上，所有消费者（顶栏左段 .topbar-left、.nav-panel、六个
+ * page 域清单列、#batch-bar.floating 的 left）读到的是同一份插值 ⇒ 每帧共线，不必各自
+ * 写 transition。新挂载的清单列（切域）读到的也是插值，所以「从旧宽滑到新宽」自然成立。
+ * 拖拽期间（html[data-nav-dragging]，nav-shell store 写）关过渡跟手；reduced-motion 全关。
+ * 时长 220ms（base 档）/ 曲线 --ease-out-strong（v3 UI 过渡默认）。 */
+@property --app-nav-w {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 392px;
+}
+@property --app-second-w {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 336px;
+}
+:root {
+  transition:
+    --app-nav-w 220ms var(--ease-out-strong),
+    --app-second-w 220ms var(--ease-out-strong);
+}
+:root[data-nav-dragging] {
+  transition: none;
+}
+
 .app-nav {
   display: flex;
   flex-shrink: 0;
+  /* 拖宽手柄（.nav-resize-handle）按 --app-nav-w 绝对定位在左列右缘 —— page 域时
+   * .app-nav 自身只有 56 宽（清单列在页面里），手柄仍要落在 392 那条线上。 */
+  position: relative;
 }
 
 /* ── IconRail · 56px 常驻 ── */
@@ -1373,6 +1408,29 @@ body::before {
   border-radius: 50%;
   flex-shrink: 0;
   margin-bottom: 2px;
+}
+/* 面板开合按钮（三条恢复入口之一；0825 dogfood：收起态唯一展开入口 = 再点当前域格
+ * 太隐蔽）。抽屉态由 TSX 隐藏（那里没有折叠这回事）。 */
+.nav-rail-toggle {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: rgb(var(--ink-fg-3));
+  transition:
+    background-color 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.nav-rail-toggle:hover,
+.nav-rail-toggle:focus-visible {
+  background: rgb(var(--ink-3));
+  color: rgb(var(--ink-fg));
+}
+.nav-rail-toggle > svg {
+  width: 18px !important;
+  height: 18px !important;
 }
 /* 格 = 40×40 按钮 + 9px 标签（画布 .railbtn/.raillabel/.railbadge 逐属性）。
  * 0825 dogfood: hover/selected 的 pill 从 40×40 icon 框上移到**整格**（icon 与
@@ -1445,6 +1503,17 @@ body::before {
   color: rgb(var(--c-accent-fg));
   pointer-events: none;
 }
+/* 无数字状态点（registry `NavBadgeSpec.shape:'dot'` / `NavEntry.dot`）：6px 圆点与角标
+ * 同锚（icon 右上），底色描一圈让它压在 icon 线条上也能读出来。 */
+.railbadge[data-shape='dot'] {
+  min-width: 6px;
+  width: 6px;
+  height: 6px;
+  padding: 0;
+  top: 6px;
+  right: 7px;
+  box-shadow: 0 0 0 2px rgb(var(--ink-0) / 0.6);
+}
 .raillabel {
   font-size: 9px;
   line-height: 1;
@@ -1455,13 +1524,11 @@ body::before {
   color: rgb(var(--c-accent));
 }
 
-/* ── DomainPanel · 336px 恒定（08-27 标签工作区批：二级栏定宽 336，左列总宽
- * 392 = rail 56 + 336；'page' 域的页面列表列同宽，切域左列边界不动。dogfood
- * 修正批：折叠能力移除，这一列不再有第二种宽度）。
- * 🔴 宽度在 .nav-panel 与 .nav-panel-inner 手抄两处，改必成对 —— inner 定宽是
- * 「面板本身 overflow:hidden 时行不换行不挤压」的前提。 */
+/* ── DomainPanel · 宽读 --app-second-w（每域一份记忆，默认 336；折叠态 0）。
+ * 外层 overflow:hidden 裁切；内层 .nav-panel-inner 的宽由 DomainPanel 按该域记忆值
+ * 写内联 px（过渡期间内容不换行不挤压，同 08-25 手法），CSS 只给无 JS 时的兜底。 */
 .nav-panel {
-  width: 336px;
+  width: var(--app-second-w, 336px);
   flex-shrink: 0;
   position: relative;
   display: flex;
@@ -1470,13 +1537,29 @@ body::before {
   background: var(--tier-side);
   border-right: 1px solid var(--hairline);
 }
-/* 内容定宽 336px — 行不换行不挤压, 溢出由 .nav-panel 裁切。 */
 .nav-panel-inner {
-  width: 336px;
+  width: var(--app-second-w, 336px);
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+/* 折叠 = 变量收 0（宽度动画由 :root 的变量过渡负责）+ visibility hidden（挡键盘焦点进
+ * 被裁掉的面板；离散过渡延到宽度动画结束那一拍才翻，展开时立刻可见）。 */
+.app-nav[data-collapsed='true'] .nav-panel {
+  border-right-width: 0;
+  visibility: hidden;
+  transition: visibility 0s linear 220ms;
+}
+/* peek 变体：折叠态 hover 导轨格浮出的同一份面板 —— 浮层里没有折叠钮 / 手柄，
+ * 宽由 NavPeek 按该域记忆值写内联。 */
+.nav-panel--peek {
+  width: 100%;
+  border-right: 0;
+  background: transparent;
+}
+.nav-panel--peek .nav-panel-inner {
+  width: 100%;
 }
 /* 面板头 41px — 域名 + 域级动作位, 分割线与 rail 头共线。 */
 .nav-panel-header {
@@ -1515,12 +1598,182 @@ body::before {
   background: var(--tier-side);
   border-right: 1px solid var(--hairline);
 }
-/* 内容定宽 392 — 行不换行不挤压 (同 .nav-panel-inner 手法)。 */
+/* 内层同样读 --app-nav-w（折叠态 56、抽屉态 44），过渡由 :root 的变量过渡负责。
+ * 🔴 这里**不能**像 .nav-panel-inner 那样定宽：左段的内容是「72px 红绿灯位 + 弹性空档 +
+ * 行尾控件簇」，簇必须贴着左列右缘那条 hairline。定宽 392 时，二级栏拖窄到 280（左列 336）
+ * 会被 .topbar-left 的 overflow:hidden 直接裁掉簇尾的「?」与亮暗钮；拖宽到 420 则簇停在
+ * 392、与 476 的边界脱节。中间只有空档在伸缩，没有会换行的行，所以跟随变量是安全的。 */
 .topbar-left-inner {
-  width: 392px;
+  width: var(--app-nav-w, 392px);
   height: 100%;
   display: flex;
   align-items: center;
+}
+/* 折叠态：左段只剩红绿灯，被裁掉的簇由 TitleBar 改渲染到标签条右端（.topbar-cluster--trailing）；
+ * 这里把裁掉的内层设 hidden，挡键盘焦点进不可见区。 */
+.topbar-left[data-collapsed='true'] .topbar-left-inner {
+  visibility: hidden;
+  transition: visibility 0s linear 220ms;
+}
+/* 抽屉态（远程 web <768）：左段 44 = 汉堡钮。 */
+.topbar-left[data-nav-mode='drawer'] .topbar-left-inner {
+  width: 44px;
+  justify-content: center;
+}
+.topbar-cluster {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.topbar-cluster--trailing {
+  flex-shrink: 0;
+  align-self: center;
+  padding: 0 10px 0 6px;
+  background: var(--tier-bar);
+  height: 100%;
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* ── page 域清单列外壳（InboxLayout / Matters / Contacts / Team / Reports / Chats / Search）
+ * 与 .nav-panel 同一套：外层宽读变量、overflow 裁切、折叠态 visibility 延翻；内层由页面
+ * 按该域记忆值写内联 px。 */
+.nav-second-col {
+  width: var(--app-second-w, 336px);
+  flex-shrink: 0;
+  position: relative;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+.nav-second-col[data-collapsed='true'] {
+  visibility: hidden;
+  transition: visibility 0s linear 220ms;
+}
+.nav-second-col-inner {
+  width: var(--app-second-w, 336px);
+  flex-shrink: 0;
+  display: flex;
+  min-height: 0;
+}
+
+/* ── 拖宽手柄：贴在左列右缘（--app-nav-w 那条线）的 7px 热区，hover / 拖拽时显 1px accent 线。 */
+.nav-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--app-nav-w, 392px) - 4px);
+  width: 7px;
+  cursor: col-resize;
+  z-index: 3;
+  touch-action: none;
+}
+.nav-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: transparent;
+  transition: background-color 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.nav-resize-handle:hover::after,
+.nav-resize-handle:focus-visible::after,
+:root[data-nav-dragging] .nav-resize-handle::after {
+  background: rgb(var(--c-accent));
+}
+
+/* ── peek 浮层（折叠态 hover / 聚焦导轨格 150ms 后浮出该域第二列；离开 300ms 关）。
+ * 脱流不改 --app-nav-w；材质 = .glass-pop（08-05 拍板浮层不透明）；宽由 NavPeek 按该域
+ * 记忆值写内联；z 40 与 batch-bar 同层、低于 popover 50。 */
+.nav-peek {
+  position: fixed;
+  left: 62px;
+  top: 52px;
+  bottom: 8px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateX(-4px);
+  transition:
+    opacity 120ms var(--ease-out-strong),
+    transform 120ms var(--ease-out-strong);
+}
+.nav-peek[data-open='true'] {
+  opacity: 1;
+  transform: none;
+}
+.nav-peek-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* 未访问过的 page 域：先骨架后到数据（30px 灰条 × 8）。 */
+.nav-peek-skeleton {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.nav-peek-skeleton > i {
+  display: block;
+  height: 30px;
+  border-radius: var(--r-ctl);
+  background: rgb(var(--ink-fg) / 0.06);
+}
+.nav-peek-skeleton > i:nth-child(odd) {
+  width: 82%;
+}
+.nav-peek-skeleton > i:nth-child(even) {
+  width: 64%;
+}
+
+/* ── 抽屉态（远程 web <768，build target 判据在 Sidebar）：左列 off-canvas，遮罩点击 / Esc 关。 */
+.app-nav[data-nav-mode='drawer'] {
+  position: fixed;
+  top: 44px;
+  bottom: 0;
+  left: 0;
+  z-index: 45;
+  width: min(var(--app-drawer-w, 392px), calc(100vw - 48px));
+  background: rgb(var(--ink-1));
+  box-shadow: var(--pop-shadow);
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition:
+    transform 220ms var(--ease-out-strong),
+    visibility 0s linear 220ms;
+}
+.app-nav[data-nav-mode='drawer'][data-drawer-open='true'] {
+  transform: none;
+  visibility: visible;
+  transition: transform 220ms var(--ease-out-strong);
+}
+.app-nav[data-nav-mode='drawer'] .nav-panel {
+  width: auto;
+  flex: 1;
+}
+.app-nav[data-nav-mode='drawer'] .nav-panel-inner {
+  width: 100% !important;
+}
+.nav-scrim {
+  position: fixed;
+  top: 44px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 44;
+  background: rgb(0 0 0 / 0.32);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms var(--ease-out-strong);
+}
+.nav-scrim[data-open='true'] {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .tstrip {
@@ -1809,8 +2062,9 @@ body::before {
   cursor: grabbing;
 }
 
-/* 注：`.topbar-left` 不在这一组 —— 它的 220ms width 过渡随折叠能力一起删了，
-   现在没有可关停的动画（留着是个恒不命中的空选择器）。 */
+/* 注：`.topbar-left` 不在这一组 —— 09-01 侧栏批起它的宽度动画来自 `:root` 的
+   `--app-nav-w` 变量过渡，关停点在 nav shell 段那条 reduced-motion 规则里（`:root`
+   打头的那组），本元素自己没有 transition 可关。 */
 @media (prefers-reduced-motion: reduce) {
   .tstrip-hair,
   .tstrip-surface,
@@ -1868,8 +2122,15 @@ body::before {
 /* Account dropdown popover — 主题 v2: 材质由组件同挂的 .glass-pop 提供,
  * 旧的自带 bg + blur(24px) 是重复涂层 (双 blur), 删除。 */
 
-/* Reduced-motion: flatten chrome transitions. Layout identical. */
+/* Reduced-motion: flatten chrome transitions. Layout identical.
+ * :root 那条是左列宽度变量过渡（nav shell 段）；peek / 抽屉 / 遮罩 / 开合钮一并压平。 */
 @media (prefers-reduced-motion: reduce) {
+  :root,
+  .nav-peek,
+  .nav-rail-toggle,
+  .nav-resize-handle::after,
+  .app-nav[data-nav-mode='drawer'],
+  .nav-scrim,
   .railbtn {
     transition: none;
   }
@@ -2187,9 +2448,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
    动画，故移除。 */
 
 /* Floating batch action bar — fixed at the bottom edge of the inbox column,
- * right of the left columns. `--app-nav-w`（:root 静态 token，392 = rail 56 +
- * 二级栏 336）让 bar 不用测量就能贴住左列右缘 —— bar 是 portal 到 body 的
- * fixed 元素，量不到左列。 */
+ * right of the left columns. `--app-nav-w`（nav-shell store 写；折叠 56 / 展开
+ * 56 + 该域记忆宽）让 bar 不用测量就能贴住左列右缘 —— bar 是 portal 到 body 的
+ * fixed 元素，量不到左列。left 的动画来自 :root 的变量过渡，这里不另写 transition。 */
 #batch-bar.floating {
   position: fixed;
   left: calc(var(--app-nav-w, 392px) + 16px);
@@ -2206,8 +2467,8 @@ body:not([data-batch-mode='true']) .email-row .cb {
     0 12px 28px rgba(0, 0, 0, 0.32),
     0 2px 6px rgba(0, 0, 0, 0.2);
   z-index: 40;
-  /* 无 transition：opacity/transform 进退场交给 GSAP（双重动画会打架）；left 恒定
-     （--app-nav-w 是静态 token），没有可过渡的量。 */
+  /* 无 transition：opacity/transform 进退场交给 GSAP（双重动画会打架）；left 跟随
+     --app-nav-w 的变量过渡，本元素不再叠一层。 */
 }
 /* 0 selected — dim the bulk-op buttons (but keep the count badge, the
  * "select all N", "clear" links, kbd Esc, and × close bright). */

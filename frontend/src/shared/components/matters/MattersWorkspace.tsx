@@ -9,6 +9,7 @@ import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { openAttentionFor } from '@shared/lib/matterDerive'
 import { qk } from '@shared/lib/queryKeys'
+import { useDomainCollapsed, useDomainWidth } from '@shared/state/nav-shell'
 import { selectActiveTargetId, useTabWorkspace } from '@shared/state/tab-workspace'
 import { closeObjectTab } from '@shared/state/tab-workspace-bridge'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -98,6 +99,10 @@ export function MattersWorkspace(): React.ReactElement | null {
   // 的另一行。只在窄屏折叠成单列、详情独占视口时才露出（design detail.jsx:174 `narrow &&
   // <PrevNext.../>` 同一判据）。
   const stackedLayout = useMediaQuery(WORKSPACE_STACKED_QUERY)
+  // 清单列 = 事项域的「二级栏」（registry second:'page'）：折叠态与记忆宽读 nav-shell store
+  // （09-01 侧栏批，按域一份）。窄窗单列（≤880）由下面的 max-[880px] 断点自治，不受折叠影响。
+  const listCollapsed = useDomainCollapsed('matters')
+  const listWidth = useDomainWidth('matters')
 
   // 活跃行（deleted/archived 皆 NULL）—— 看板、open/done 两个 scope、提案扇出都吃这一份。
   // options 单源在 matterLiveListOptions（与启动预热共用, 防 key 漂移）; 缓存配方
@@ -363,46 +368,58 @@ export function MattersWorkspace(): React.ReactElement | null {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div
-        // V3-10 —— 单列折叠断点按设计定 880；清单列定宽 336px（task 08-27 P1 Lane C 续改：
-        // 拖拽调宽体系退役，左列总宽 392 = 导轨 56 + 二级栏 336，切域时左列边界不动）。
+        // V3-10 —— 单列折叠断点按设计定 880；清单列宽读 `--app-second-w`（09-01 侧栏批：
+        // 事项域自己的记忆，默认 336、可拖 280–420、折叠 0；过渡在 :root 的变量上）。
         // 08-27 波 2 —— 看板视图也走这套 grid：清单列是事项域的二级栏，不随视图消失
         // （原来 tab='board' 是通栏，左列边界会当场塌回 56）。
-        className="grid min-h-0 flex-1 max-[880px]:grid-cols-1 grid-cols-[336px_minmax(420px,1fr)]"
+        className="grid min-h-0 flex-1 max-[880px]:grid-cols-1 grid-cols-[var(--app-second-w,336px)_minmax(420px,1fr)]"
       >
         <div
           className={cn(
             // 🔴 列容器不铺底色：菜单与清单各自铺 `bg-ink-1/55`（MatterList 的 section 自带
             // 一层），这里再铺一层同色会在清单区叠成两层、与菜单区分出一道色差。
-            'flex min-h-0 flex-col border-r border-ink-border',
+            // 外壳 .nav-second-col：宽读变量、overflow 裁切、折叠态 visibility 延翻；窄窗单列占满。
+            'nav-second-col flex-col border-r border-ink-border',
             contentPaneVisible && 'max-[880px]:hidden'
           )}
+          data-nav-second
+          data-collapsed={!stackedLayout && listCollapsed ? 'true' : 'false'}
+          // 窄窗单列占满：authored .nav-second-col 在 utilities 之后，`max-[880px]:w-full` 压不过它，
+          // 用内联写死（内联恒赢）。
+          style={stackedLayout ? { width: '100%' } : undefined}
         >
-          <MatterViewNav
-            tab={tab}
-            boardBadge={boardBadge}
-            onSelectTab={setTab}
-            onCreate={() => setCreateOpen(true)}
-          />
-          <div className="min-h-0 flex-1">
-            <MatterList
-              matters={visible}
-              query={query}
-              onQueryChange={setQuery}
-              scopeTotal={scopeTotal}
-              tags={tagDefinitions}
-              // V3-05 —— 清单的分组与工作台的筛选/排序/导航序必须同一个「此刻」：
-              // MatterList 随路由切换卸载重挂，自持一份的话跨零点会与 visibleIds 劈叉。
-              now={now}
-              selectedId={selectedId}
-              attention={attentionIndex}
-              updates={updateIndex}
-              search={search}
-              loading={rowsPending}
-              onSearchChange={setSearch}
-              onSelect={handleSelectMatter}
+          <div
+            // 内层按记忆值定宽：过渡期间虚拟列表不重排（同 .nav-panel-inner 手法）。
+            className="nav-second-col-inner flex-1 flex-col"
+            style={{ width: stackedLayout ? '100%' : listWidth }}
+          >
+            <MatterViewNav
+              tab={tab}
+              boardBadge={boardBadge}
+              onSelectTab={setTab}
               onCreate={() => setCreateOpen(true)}
-              onManageTags={() => setTagManagerOpen(true)}
             />
+            <div className="min-h-0 flex-1">
+              <MatterList
+                matters={visible}
+                query={query}
+                onQueryChange={setQuery}
+                scopeTotal={scopeTotal}
+                tags={tagDefinitions}
+                // V3-05 —— 清单的分组与工作台的筛选/排序/导航序必须同一个「此刻」：
+                // MatterList 随路由切换卸载重挂，自持一份的话跨零点会与 visibleIds 劈叉。
+                now={now}
+                selectedId={selectedId}
+                attention={attentionIndex}
+                updates={updateIndex}
+                search={search}
+                loading={rowsPending}
+                onSearchChange={setSearch}
+                onSelect={handleSelectMatter}
+                onCreate={() => setCreateOpen(true)}
+                onManageTags={() => setTagManagerOpen(true)}
+              />
+            </div>
           </div>
         </div>
         <div className={cn('min-h-0', !contentPaneVisible && 'max-[880px]:hidden')}>

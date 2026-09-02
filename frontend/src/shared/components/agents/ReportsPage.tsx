@@ -2,7 +2,7 @@
 // + generating/failed/empty 态）。窄屏单栏 + 返回栈。移植自 ~/Downloads/agents/reports.jsx。
 //
 // 08-27 P3：从 `/agents?tab=reports` 拆成一级域 `/reports`。清单列即报告域的二级栏
-// （定宽 336，左列总宽 392 = 导轨 56 + 336），选中项由 URL 的 `$reportId` 决定 ——
+// （宽读 `--app-second-w`：09-01 侧栏批起是报告域自己的记忆值，默认 336），选中项由 URL 的 `$reportId` 决定 ——
 // 原来的组件内 `picked` state 与 reportNavigation store-intent 一并退役。
 //
 // 窄屏（<780，只在 web 构件里够得着）的单栏切换同样看 URL：有 `$reportId` 就是详情、
@@ -20,6 +20,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { canOpenDetachedWindow, useDetachedMode } from '@shared/state/detached-mode'
 import { navEntry, navigateToNavEntry, navigateToReport } from '@shared/navigation/registry'
 import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
+import { useDomainCollapsed } from '@shared/state/nav-shell'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { ShimmerText } from '@shared/components/ShimmerText'
 import { ErrorBoundary } from '@shared/components/ErrorBoundary'
@@ -275,10 +276,9 @@ function ReportListRow({
 // 距底多少 px 触发预取下一页（EmailList 70%/8 行阈值同款思路，这里数据量小，固定距离足够）。
 const PREFETCH_THRESHOLD_PX = 200
 
-/** 报告域二级栏定宽（左列总宽 392 = 导轨 56 + 336）。邮件/事项/通讯录同值。 */
-const LIST_WIDTH = 336
-
-function ReportList({
+/** 报告域二级栏（页面自管列）。宽读 `--app-second-w`（报告域自己的记忆，nav-shell store）；
+ *  导出给侧栏 peek 复用同一组件（layout/peek/ReportsPeekList，`fluid` 档）。 */
+export function ReportList({
   items,
   total,
   selectedId,
@@ -332,7 +332,7 @@ function ReportList({
   return (
     <div
       style={{
-        width: fluid ? '100%' : LIST_WIDTH,
+        width: fluid ? '100%' : 'var(--app-second-w, 336px)',
         flexShrink: 0,
         borderRight: fluid ? 'none' : '1px solid rgb(var(--ink-border))',
         display: 'flex',
@@ -824,6 +824,7 @@ export function ReportsPage(): React.ReactElement {
   })
   const [sourceEmail, setSourceEmail] = useState<ReportEmailItemForPanel | null>(null)
   const narrow = useNarrow()
+  const listCollapsed = useDomainCollapsed('reports')
   const { run, isRunning } = useRunNow()
   const { remove } = useDeleteReport()
   // 删除当前选中项时，refetch 后 URL 上那个 id 不再命中 → selected 自动回落第一份（派生逻辑）。
@@ -935,21 +936,28 @@ export function ReportsPage(): React.ReactElement {
 
   return (
     <div style={{ position: 'relative', display: 'flex', height: '100%', minHeight: 0 }}>
-      <ReportList
-        items={items}
-        total={total}
-        selectedId={selectedId}
-        onSelect={onSelect}
-        onDelete={onDelete}
-        filter={filter}
-        onFilter={setFilter}
-        loading={isLoading}
-        hasMore={hasMore}
-        isFetchingMore={isFetchingMore}
-        onFetchMore={fetchMore}
-        agentNames={agentNames}
-        agentAvatars={agentAvatars}
-      />
+      {/* 二级栏外壳（09-01 侧栏批）：折叠态 visibility hidden 不卸载。 */}
+      <div
+        className="nav-second-col"
+        data-nav-second
+        data-collapsed={listCollapsed ? 'true' : 'false'}
+      >
+        <ReportList
+          items={items}
+          total={total}
+          selectedId={selectedId}
+          onSelect={onSelect}
+          onDelete={onDelete}
+          filter={filter}
+          onFilter={setFilter}
+          loading={isLoading}
+          hasMore={hasMore}
+          isFetchingMore={isFetchingMore}
+          onFetchMore={fetchMore}
+          agentNames={agentNames}
+          agentAvatars={agentAvatars}
+        />
+      </div>
       {detail}
       {panel}
     </div>

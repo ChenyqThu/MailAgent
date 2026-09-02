@@ -1,6 +1,6 @@
 // redesign Phase 1 — MailAgent view LEFT session-history sidebar.
 //
-// A collapsible (336px ↔ 48px) thread-list for the general-agent surface, restyled from the
+// A collapsible (`--app-second-w`，默认 336 ↔ 48px rail) thread-list for the general-agent surface, restyled from the
 // assistant-ui base template with our coral/ink tokens. Visual DNA borrowed from the ChatsTab
 // SessionRow/SessionListPane (the read-only /sessions browser this view replaces). Pure
 // props-driven — the parent AgentViewLayout owns the session state — so the same component serves
@@ -59,6 +59,10 @@ export interface AgentThreadListProps {
   fluid?: boolean
   /** L4 群聊 — 二级栏顶部分段（「AI」｜「群聊」）由 AgentViewLayout 注入；rail 态不渲染。 */
   headerSlot?: React.ReactNode
+  /** 09-01 侧栏批：nav shell 的二级栏折叠（对话域的二级栏 = 这一列，按域记忆）。整列
+   *  0 宽 + visibility hidden **不卸载**（保滚动位置与分组展开态）。与列自己的 48px rail
+   *  折叠（`collapsed`）正交：两者叠加时 navHidden 优先（整列都不在场，rail 宽窄无意义）。 */
+  navHidden?: boolean
 }
 
 // dogfood-3 — 'archived' is a synthetic group pinned to the BOTTOM (collapsed by default); active
@@ -87,7 +91,8 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
     collapsed,
     onToggleCollapse,
     fluid,
-    headerSlot
+    headerSlot,
+    navHidden = false
   } = props
   const { t } = useTranslation()
   const [renamingId, setRenamingId] = useState<number | null>(null)
@@ -130,6 +135,7 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
 
   return (
     <aside
+      data-nav-second
       className={cn(
         // 会话侧栏材质与右侧对话区（AgentThread glass-3）统一为玻璃，暗色下不再是孤立纯色块。
         'glass-panel flex h-full shrink-0 flex-col overflow-hidden',
@@ -137,12 +143,16 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
           ? 'w-full'
           : cn(
               'border-r border-ink-border transition-[width] duration-base ease-standard motion-reduce:transition-none',
-              // 08-27 标签工作区批：对话域的页面自管列充当二级栏，展开态定宽 336
-              //（rail 56 + 336 = 392，与其他域左列边界对齐）。折叠到 48px rail 是
-              // 用户主动行为，保留；P3 对话域重做时再统一。
-              isRail ? 'w-12' : 'w-[336px]'
+              // 08-27 标签工作区批：对话域的页面自管列充当二级栏，展开态宽读
+              // `--app-second-w`（09-01 侧栏批：对话域自己的记忆，默认 336）。折叠到
+              // 48px rail 是用户主动行为，保留；P3 对话域重做时再统一。
+              isRail ? 'w-12' : 'w-[var(--app-second-w,336px)]'
             )
       )}
+      // nav shell 折叠：0 宽 + 不可见（内联样式压过上面的宽度类，不靠 Tailwind 顺序）。
+      style={
+        navHidden && !fluid ? { width: 0, visibility: 'hidden', borderRightWidth: 0 } : undefined
+      }
     >
       {/* Header — PanelLeft collapse toggle (demo icon) + fading title. */}
       <div
