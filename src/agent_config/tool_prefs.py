@@ -164,6 +164,12 @@ BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     BuiltinToolPolicy("custom_agent_delete", "agents", "ask", configurable=False),
     BuiltinToolPolicy("custom_agent_run_now", "agents", "auto"),
     BuiltinToolPolicy("custom_agent_call", "agents", "ask", configurable=False),
+    # L4 群聊 g2：主 agent 往群里投递 / 建群。group 归 "agents"；class 仍是 capability_change。
+    # group_post 是本组唯一可配行（拍板 Q3：owner 可把投递调 auto = 对已展示档位的确认）；
+    # 法官 run 不经 owner 档位（工厂只喂 deny 条目，免卡走 auto_judge_scope），别为组内一致改成 False。
+    BuiltinToolPolicy("group_post", "agents", "ask"),
+    # 建群与 custom_agent_call 同形状：恒 ask 不可配，免卡只走服务端核验型 user_requested。
+    BuiltinToolPolicy("group_create", "agents", "ask", configurable=False),
     # ── 内建 agent（task 08-14）：改的是日报 / 搜索 / 预处理 / 周报同步这些**已经在跑**的
     #    agent 的排程·模型·prompt，与 custom_agent_update 同待遇 —— 恒 ask 且不可配 auto。
     #    设 auto 意味着邮件正文里的一句注入就能改掉每日报告的 prompt 或排程。

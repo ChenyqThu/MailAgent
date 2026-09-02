@@ -1085,6 +1085,10 @@
       "custom_agent_delete": "删除 Custom Agent",
       "custom_agent_run_now": "立即运行 Custom Agent",
       "custom_agent_call": "调用 Custom Agent",
+      "group_history": "查看群聊记录",
+      "group_members": "查看群成员",
+      "group_post": "在群里发言",
+      "group_create": "创建群聊",
       "internal_agent_list": "列出内建 Agent",
       "internal_agent_get": "读取内建 Agent",
       "internal_agent_update": "修改内建 Agent",
@@ -1792,6 +1796,31 @@
       "approve": "发送",
       "sent": "已提交。在设置底部的「查看反馈」里能看处理进度。",
       "failed": "没发出去。可以在设置底部重新发一条，或打开表单页手动提交。"
+    },
+    "groupCreateCard": {
+      "cardTitle": "创建群聊",
+      "groupTitle": "群名称",
+      "members": "成员",
+      "judge": "主持人",
+      "opening": "开场白",
+      "wake": "首轮唤醒",
+      "wakeValue": "最多 {count} 位",
+      "approve": "建群",
+      "created": "已创建群聊「{title}」（#{id}）。",
+      "configWarning": "群建好了，但主持人 / 响应模式没写进去，请到群详情里确认一次。",
+      "woke": "已唤醒：{names}",
+      "wokeNone": "无"
+    },
+    "groupPostCard": {
+      "cardTitle": "在群里发言",
+      "target": "目标群",
+      "text": "内容",
+      "source": "模型声明",
+      "userRequested": "标记为「用户显式要求」——服务端未采信，仍需你确认",
+      "approve": "发送",
+      "posted": "已发送（消息 #{id}）。",
+      "woke": "已唤醒：{names}",
+      "wokeNone": "无"
     }
   },
   "admin": {

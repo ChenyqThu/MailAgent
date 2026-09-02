@@ -34,11 +34,13 @@ import {
   type GatewayToolClass
 } from '../../../src/ai-gateway/tools/policy'
 import { ApprovalGuard } from '../../../src/ai-gateway/security/approval'
-import { mockDomain, okEnvelope } from './_helpers'
+import { fakeGroupHooks, mockDomain, okEnvelope } from './_helpers'
 
 /** The FULL gateway tool set (every flag on) under an explicit mode — policy.test's source of
  *  truth for "every real gateway tool". Mirrors skill_gating.test's buildAllTools (🔴 keep the
- *  flag list in sync when a new tool-gating flag lands, same red-letter rule). */
+ *  flag list in sync when a new tool-gating flag lands, same red-letter rule).
+ *  🔴 同一条纪律的第二种形状（L4 群聊 g2）：不是 flag 而是一整块 opts（groupTools）—— 漏了它
+ *  这四个工具就不在 FULL set 里，FORWARD/REVERSE 完整性守护看不见它们，漏归类不会变红。 */
 function buildAllTools(contextMode?: AgentContextMode) {
   return buildGatewayTools({
     domain: mockDomain(() => okEnvelope([])),
@@ -78,6 +80,9 @@ function buildAllTools(contextMode?: AgentContextMode) {
     // 提交实现才注册，所以 FULL-set 的 drift guard 要在这里把它接上，否则「classified 但不是
     // 真工具」会红。
     submitFeedback: async () => ({ submissionBlockId: 'blk-test' }),
+    // L4 群聊 g2 — 群工具面四件（labs labs_group_agents）。isGroupSession:false = 主 agent 单聊
+    // 那条装配路径（群 run 内的成员 / 法官工厂不经 buildGatewayTools）。
+    groupTools: { enabled: true, isGroupSession: false, hooks: fakeGroupHooks(), sessionId: 1 },
     // Matters MVP P3 (D6) + P4 (D8) — eleven default matter tools, classified
     // read (2) + domain_write (9). The gateway class layer admits them in every venue incl.
     // headless — the real headless gate is the HEADLESS_TOOL_OPTIONS checkbox face (matter is

@@ -119,6 +119,11 @@ export const A2UI_COMPONENTS = {
   // "before" can never come from model input).
   CustomAgentApprovalCard: 'CustomAgentApprovalCard',
   CustomAgentCallCard: 'CustomAgentCallCard',
+  // L4 群聊 g2 — group_create / group_post 的审批卡（edit tier + capability_change）。与
+  // SimpleApprovalCard / MatterWriteCard 同为**只做 ComponentRegistry key**：componentForTool
+  // 对这两个工具返回 null（不落 audited ui_payload），卡自己读 tool part 的 args / result。
+  GroupCreateCard: 'GroupCreateCard',
+  GroupPostCard: 'GroupPostCard',
   // 1.5.0 dogfood (task 07-07) — the identity-only edit-tier approval card shared by web_fetch /
   // web_search / custom_agent_delete / custom_agent_run_now. These tools deliberately produce NO
   // audited ui_payload (componentForTool returns null for them, unchanged), so this key is a

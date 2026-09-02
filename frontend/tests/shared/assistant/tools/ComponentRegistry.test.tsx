@@ -85,6 +85,9 @@ describe('componentRegistry — resolution', () => {
       'email_resync',
       'file_read',
       'file_write',
+      // L4 群聊 g2 — 两个群写工具各有一张卡（建群 / 投递）。
+      'group_create',
+      'group_post',
       // Matters MVP P3 + P4 + 0813 批R — every matter write tool shares MatterWriteCard (approval → real
       // approve/reject; completed → the write receipt, but only inside the Matter Chat panel).
       'matter_add_note',
@@ -121,6 +124,8 @@ describe('componentRegistry — resolution', () => {
       'DraftReplyCard',
       'ExecApprovalCard',
       'FeedbackApprovalCard',
+      'GroupCreateCard',
+      'GroupPostCard',
       'MatterWriteCard',
       'NotionSyncCard',
       'SendApprovalCard',

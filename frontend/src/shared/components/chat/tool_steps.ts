@@ -119,6 +119,11 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'custom_agent_delete',
   'custom_agent_run_now',
   'custom_agent_call',
+  // L4 群聊 g2 — 群工具面四件。
+  'group_history',
+  'group_members',
+  'group_post',
+  'group_create',
   // task 08-14 — 内建 agent 工具面 + 事项跟进的逐条编辑。
   'internal_agent_list',
   'internal_agent_get',

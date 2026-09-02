@@ -85,6 +85,9 @@ EXPECTED_FIXED_ASK = {
     # 发送属于安全地板那一档」，所以是 configurable=False 而不是 notion_agent_chat 那样
     # 的「可配 auto 但带红警告」。
     "submit_feedback",
+    # L4 群聊 g2：建群与 custom_agent_call 同形状（恒 ask 不可配）——免卡只走服务端核验型
+    # user_requested。同批的 group_post 是本组唯一可配行（拍板 Q3），故不在本集合里。
+    "group_create",
 }
 # D2=a：设 auto 需红警告 + 一次性确认。
 EXPECTED_DANGER_AUTO = {"calendar_event_delete", "notion_agent_chat"}

@@ -333,6 +333,14 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   internal_agent_list: 'capability_change',
   internal_agent_get: 'capability_change',
   internal_agent_update: 'capability_change',
+  // L4 群聊 g2 — 群工具面（labs labs_group_agents）。建群 / 投递直接改「哪些 agent 在跑、谁能
+  // 收到什么」，与 custom_agent_* 同一条论证；两个读也归本 class（同 custom_agent_list/get 先例：
+  // 让整个群面留在 manual 会话里）。class 只管 headless / im 的结构性缺席 —— 成员 / 法官工厂是
+  // 群 run 内不经 buildGatewayTools 的第二条注册路径，它们的场地由服务端 identity.group 决定。
+  group_history: 'capability_change',
+  group_members: 'capability_change',
+  group_post: 'capability_change',
+  group_create: 'capability_change',
   // S2 W4 — skill_read is a silent read (its third-party content is SKILL_DOC-fenced at the tool).
   skill_read: 'read',
   // calendar epic 4.1 — calendar reads (event text is CALENDAR_EVENT-fenced at the tool).

@@ -25,6 +25,7 @@ import { SkillUninstallCard } from './generic/SkillUninstallCard'
 import { SkillPublishCard } from './generic/SkillPublishCard'
 import { CustomAgentApprovalCard } from './generic/CustomAgentApprovalCard'
 import { CustomAgentCallCard } from './generic/CustomAgentCallCard'
+import { GroupCreateCard, GroupPostCard } from './generic/GroupApprovalCards'
 import { SimpleApprovalCard } from './generic/SimpleApprovalCard'
 import { FeedbackApprovalCard } from './generic/FeedbackApprovalCard'
 import { CalendarApprovalCard } from './calendar/CalendarApprovalCard'
@@ -150,6 +151,18 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
     component: A2UI_COMPONENTS.CustomAgentCallCard,
     toolNames: ['custom_agent_call'],
     render: CustomAgentCallCard
+  },
+  // L4 群聊 g2 — 两个群写工具。没有卡 = 审批暂停的 part 落到无按钮的 ToolTraceCard（永久
+  // spinner，只能从灵动岛批），就是 1.5.0 那次死锁；所以卡与工具同批登记。
+  {
+    component: A2UI_COMPONENTS.GroupCreateCard,
+    toolNames: ['group_create'],
+    render: GroupCreateCard
+  },
+  {
+    component: A2UI_COMPONENTS.GroupPostCard,
+    toolNames: ['group_post'],
+    render: GroupPostCard
   },
   // 1.5.0 dogfood (task 07-07) — identity-only edit-tier approval card for the four tools that were
   // missing a rich card and so fell through to the buttonless ToolTraceCard (approval-paused shown

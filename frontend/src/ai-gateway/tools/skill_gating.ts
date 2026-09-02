@@ -203,7 +203,14 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   // 🔴 注意本集合的注释里**不要写单引号包裹的小写词** —— eval 的 catalog 完整性闸是按
   // `new Set([...])` 整段做正则抽取的，注释里的 `xxx` 会被当成工具名（这条注释原本写着
   // 单引号的 outbound，闸当场把它当成一个「缺 catalog 行的工具」报红）。
-  'submit_feedback'
+  'submit_feedback',
+  // L4 群聊 g2 —— 群工具面四件（labs labs_group_agents）。Python 无 group builtin skill，
+  // GATEWAY_SKILL_TOOLS 无映射，永不 skill-gated；它们的开关面是 labs 实验开关 + class
+  // capability_change 的场地地板 + 群 run 内的工厂选择，都不是 skill toggle。
+  'group_history',
+  'group_members',
+  'group_post',
+  'group_create'
 ])
 
 /** 删掉「归属 skill ∉ advertisedSkills 且无任一 advertised skill 仍拥有它 且非 collision-exempt」的

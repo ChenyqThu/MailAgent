@@ -1085,6 +1085,10 @@
       "custom_agent_delete": "Delete custom agent",
       "custom_agent_run_now": "Run custom agent now",
       "custom_agent_call": "Call custom agent",
+      "group_history": "Read group chat",
+      "group_members": "List group members",
+      "group_post": "Post to group",
+      "group_create": "Create group chat",
       "internal_agent_list": "List built-in agents",
       "internal_agent_get": "Read built-in agent",
       "internal_agent_update": "Update built-in agent",
@@ -1792,6 +1796,31 @@
       "approve": "Send",
       "sent": "Submitted. Track it via “View feedback” at the bottom of Settings.",
       "failed": "It was NOT sent. Send it again from Settings, or open the form page and submit manually."
+    },
+    "groupCreateCard": {
+      "cardTitle": "Create group chat",
+      "groupTitle": "Group name",
+      "members": "Members",
+      "judge": "Host",
+      "opening": "Opening message",
+      "wake": "First round",
+      "wakeValue": "wakes at most {count}",
+      "approve": "Create group",
+      "created": "Created group “{title}” (#{id}).",
+      "configWarning": "The group was created, but the host / response modes were NOT applied — check them in the group details.",
+      "woke": "Woke: {names}",
+      "wokeNone": "nobody"
+    },
+    "groupPostCard": {
+      "cardTitle": "Post to group",
+      "target": "Target group",
+      "text": "Message",
+      "source": "Model's claim",
+      "userRequested": "flagged as owner-requested — not accepted server-side, still needs you",
+      "approve": "Post",
+      "posted": "Posted (message #{id}).",
+      "woke": "Woke: {names}",
+      "wokeNone": "nobody"
     }
   },
   "admin": {
