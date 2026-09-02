@@ -2,7 +2,7 @@
 
 ``create_new_session(group_members=…)`` 落 ``origin='group'`` + ``members_json``（恒 general
 anchor，与 ``agent_id`` 互斥）；路由 ``POST /api/chat/sessions/new`` 逐成员按
-_CHAT_CAPABLE_AGENT_TYPES 校验（不接对话的三位被拒）、上限 5、去重。
+_CHAT_CAPABLE_AGENT_TYPES 校验（不接对话的三位被拒）、上限 MAX_GROUP_MEMBERS（g1 起 8）、去重。
 
 过滤面：'group' 行**不进**默认 interactive 列表 / general 列表（宿主是对话域「群聊」tab），
 ``origin='group'`` 筛选值单独取（词表 + 排除集手抄闸在 tests/config/test_chat_type_mirror_parity.py）。
@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 
 from src.api.app import app
 from src.chat.db import ChatDb
+from src.chat.group_limits import MAX_GROUP_MEMBERS
 
 # v7 anchor CHECK + v19 origin + v30 members_json（群聊写面需要的最小列集）。
 _DDL = """
@@ -102,6 +103,9 @@ def chat_client(monkeypatch: pytest.MonkeyPatch, chat_db_path: Path) -> Iterator
             "a4": {"id": "a4", "type": "custom", "enabled": True},
             "a5": {"id": "a5", "type": "custom", "enabled": True},
             "a6": {"id": "a6", "type": "custom", "enabled": True},
+            "a7": {"id": "a7", "type": "custom", "enabled": True},
+            "a8": {"id": "a8", "type": "custom", "enabled": True},
+            "a9": {"id": "a9", "type": "custom", "enabled": True},
         }
     )
     monkeypatch.setattr(_chat_router, "get_report_store", lambda: store)
@@ -200,8 +204,13 @@ def test_group_route_rejects_unknown_member(chat_client: TestClient) -> None:
     assert res.json()["error"]["code"] == "E_INVALID_ARG"
 
 
-def test_group_route_rejects_more_than_five_members(chat_client: TestClient) -> None:
-    res = _new_group(chat_client, ["dms_helper", "daily_email_digest", "a3", "a4", "a5", "a6"])
+def test_group_route_rejects_more_than_max_members(chat_client: TestClient) -> None:
+    """g1 起上限从 5 放宽到 8（狼人杀 = 法官 + 6，父设计拍板 Q5），单源
+    ``src.chat.group_limits.MAX_GROUP_MEMBERS``。上限值不在这里硬写 —— 用常量构造刚好越界的
+    一组，改常量时本用例自动跟随（改错了由 test_group_constants_parity 抓）。"""
+    ok_members = ["dms_helper", "a3", "a4", "a5", "a6", "a7", "a8", "a9"][:MAX_GROUP_MEMBERS]
+    assert _new_group(chat_client, ok_members).status_code == 200
+    res = _new_group(chat_client, [*ok_members, "daily_email_digest"])
     assert res.status_code == 400
     assert res.json()["error"]["code"] == "E_INVALID_ARG"
 

@@ -545,7 +545,10 @@ export async function prepareChatRun(
       // a headless run keeps its own <current_custom_agent> block).
       sessionAgentIdentity: contextMode === 'manual_chat' ? (sessionAgent ?? null) : null,
       // W6 — inject the follow-up guidance only when THIS run's ToolSet holds the tool.
-      followupToolAvailable
+      followupToolAvailable,
+      // g1 — prompt 减重门 + 沉默契约, set ONLY by the 调度器's speak adapter (server.ts); the v30
+      // renderer-driven speaker turn leaves it unset → byte-identical.
+      groupSpeakerRun: sessionAgent?.group?.groupSpeakerRun === true
     })
   } else {
     const bodySystem =

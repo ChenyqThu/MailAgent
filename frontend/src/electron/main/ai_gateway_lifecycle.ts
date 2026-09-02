@@ -26,8 +26,10 @@ import { startAiGatewayServer, type AiGatewayHandle } from '../../ai-gateway/ser
 import {
   resolveAiGatewayPort,
   type AiGatewayConfig,
+  type GroupRunLogMirror,
   type GroupSessionMember,
   type IslandApprovalAnnounce,
+  type LabsFlags,
   type PersistTurnInput
 } from '../../ai-gateway/config'
 import { MailAgentDomainClient } from '../../ai-gateway/python/domainClient'
@@ -61,6 +63,17 @@ import {
 import { ActiveRunRegistry } from '../../ai-gateway/activeRuns'
 import { extractApprovalStashInput } from '../../ai-gateway/chatRun'
 import { parseGroupMemberIds } from '../../ai-gateway/groupChat'
+// g1 群编排（CHAT_DB v31）— 成员设置 / seen 游标 / turn 台账的读写面。直接从子模块引（chat_db.ts
+// 兼容 barrel 只为保住既有 importer 的路径，新模块无历史包袱）。
+import type { GroupResponseMode } from '../../ai-gateway/groupFloors'
+import {
+  advanceSeenCursor,
+  familyOf,
+  getGroupMemberConfigs,
+  getSeenCursor,
+  groupUsage,
+  insertGroupTurn
+} from './chat_db/groups'
 import { runQueuedInputDispatch } from '../../ai-gateway/queuedInputDispatch'
 import { selectMessagesForModelContext } from '../../ai-gateway/compactSelect'
 import {
@@ -114,6 +127,7 @@ import { deriveExecRule, ExecRuleDeriveError } from './exec_policy_matcher'
 // /chat/config, projecting the system-prompt fields for the gateway.
 import { request } from '@shared/api/http_client'
 import type { ReportAgentConfig } from '@shared/api/types'
+import type { GroupConfig } from '@shared/chat_model'
 import type { GatewaySystemPromptConfig } from '../../ai-gateway/systemPrompt'
 import type { SkillCatalogEntry } from '../../ai-gateway/prompts/stable_prompt'
 // 🔴 MEDIUM-6 (batch1 review) — type-only imports from the SDK-FREE providerRef. providers.ts
@@ -236,6 +250,32 @@ const eagerWrittenUserMessages = new Set<string>()
 /** #12 — dedup key for one eagerly-written user message. */
 function eagerUserMessageKey(sessionId: number, userMessageId: string): string {
   return `${sessionId}:${userMessageId}`
+}
+
+/** g1 群编排 — `ai_chat_sessions.group_config_json` → GroupConfig。🔴 脏值/坏 JSON 一律回落
+ *  `{ v: 1 }` = 全取出厂默认（地板默认值单源在 groupFloors.ts）：一行坏 JSON 不该让整个群停摆，
+ *  而「取默认」永远是更严的那一侧（默认地板最紧）。 */
+function parseGroupConfig(raw: string | null): GroupConfig {
+  if (typeof raw !== 'string' || raw.length === 0) return { v: 1 }
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) return { v: 1 }
+    return { ...(parsed as GroupConfig), v: 1 }
+  } catch {
+    return { v: 1 }
+  }
+}
+
+/** g1 群编排 — 一条群消息的 `metadata.via`。今天只有 'main_agent'（主助理投递进群的行），其余
+ *  一律 null。🔴 装配侧据此标 `[主助理]`，**不用** speaker_agent_id 哨兵（那会污染成员命名空间）。 */
+function readMessageVia(metadata: string | null): 'main_agent' | null {
+  if (typeof metadata !== 'string' || metadata.length === 0) return null
+  try {
+    const parsed = JSON.parse(metadata) as { via?: unknown }
+    return parsed?.via === 'main_agent' ? 'main_agent' : null
+  } catch {
+    return null
+  }
 }
 
 /** harness-chat lane A (B2) — broadcast a chat event to every renderer window (the same
@@ -735,6 +775,27 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       value = 'manual' // fail-closed
     }
     _approvalModeCache = { at: now, value }
+    return value
+  }
+
+  // g1 群编排 — labs 实验开关热读（真源 = agent_config.db owner_settings `labs_group_agents`，
+  // 经 serve-api GET /api/agent/labs）。形状照上面的 resolveGlobalApprovalMode：短 TTL（LabsTab
+  // 里一拨开关，下一条群消息就按新值走）+ 有界超时，🔴 **fail-closed**：够不着 serve-api / 脏行
+  // 一律 `{ groupAgents: false }` = 退回 v1（renderer 自己的循环），绝不能是「服务端悄悄开始
+  // 编排」——那会在 owner 完全不知情的情况下开始烧 token。
+  const LABS_FLAGS_TTL_MS = 5_000
+  let _labsFlagsCache: { at: number; value: LabsFlags } | null = null
+  const resolveLabsFlags = async (): Promise<LabsFlags> => {
+    const now = Date.now()
+    if (_labsFlagsCache && now - _labsFlagsCache.at < LABS_FLAGS_TTL_MS) return _labsFlagsCache.value
+    let value: LabsFlags = { groupAgents: false }
+    try {
+      const r = await domain.getLabsFlags(AbortSignal.timeout(3_000))
+      value = { groupAgents: r.groupAgents === 'on' }
+    } catch {
+      value = { groupAgents: false } // fail-closed
+    }
+    _labsFlagsCache = { at: now, value }
     return value
   }
 
@@ -1446,27 +1507,109 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           members.push({ agentId: memberId, title: memberId, duty: null, model: null })
         }
       }
-      return { members }
+      // g1 (v31) — 群设置 / 每成员响应模式 / family 一并解析。🔴 每次 onGroupMessage 重读、
+      // 不缓存：这就是「owner 改完设置对下一条消息生效」的结构性保证（AC1），不靠缓存失效。
+      const family = familyOf(sessionId)
+      const modes: Record<string, GroupResponseMode> = {}
+      for (const row of getGroupMemberConfigs(sessionId)) {
+        // 只收还在名单里的成员（成员被移出群后残留的设置行不该影响候选集）。
+        if (memberIds.includes(row.agentId)) modes[row.agentId] = row.responseMode
+      }
+      return {
+        members,
+        config: parseGroupConfig(session.group_config_json ?? null),
+        modes,
+        parentSessionId: family.parentSessionId,
+        childSessionIds: family.childSessionIds
+      }
     },
     // v30（群聊）— the shared transcript, projected for server-side history assembly.
+    // g1 (v31): 多带四项 —— 行 id（seen 游标 / 窗口边界）、chain_id（链归属）、metadata.via
+    // （主助理投递的装配标签）、created_at。
     listGroupHistory: (sessionId) =>
       listMessages(sessionId).map((row) => ({
+        id: row.id,
         role: row.role,
         content: row.content,
         speakerAgentId: row.speaker_agent_id ?? null,
-        status: row.status
+        status: row.status,
+        chainId: row.chain_id ?? null,
+        via: readMessageVia(row.metadata ?? null),
+        createdAt: row.created_at
       })),
     // v30（群聊）— persist one group message (owner user message / member reply). appendMessage
     // bumps the session's updated_at, so the 群聊 list orders by fresh activity like every list.
-    appendGroupMessage: (sessionId, message) =>
-      appendMessage({
+    // g1 (v31): token / cost / chain_id / metadata 一并落库（AC6 成本可见 + 链上限地板的计数
+    // 依据），写完广播 chat:turn-persisted 让 renderer 刷新（labs on 的群视图只 append + 订阅）。
+    appendGroupMessage: (sessionId, message) => {
+      const row = appendMessage({
         sessionId,
         role: message.role,
         content: message.content,
         status: 'complete',
         model: message.model ?? null,
-        speakerAgentId: message.speakerAgentId ?? null
-      }).id,
+        speakerAgentId: message.speakerAgentId ?? null,
+        tokensInput: message.tokensInput ?? null,
+        tokensOutput: message.tokensOutput ?? null,
+        costUsd: message.costUsd ?? null,
+        chainId: message.chainId ?? null,
+        metadata: message.metadata ?? null
+      })
+      // 🔴 runId:null = 「无租约持久化」语义（headless run 同款，:374 那一处的注释）：renderer 的
+      // settle 门不会因为对不上 runId 而丢弃它。group:true 让群视图只 invalidate 本群。
+      try {
+        broadcastChatEvent('chat:turn-persisted', {
+          sessionId,
+          status: 'finished',
+          runId: null,
+          group: true
+        })
+      } catch (err) {
+        console.error('[ai-gateway] group turn-persisted broadcast failed (persist landed)', err)
+      }
+      return row.id
+    },
+    resolveLabsFlags,
+    getSeenCursor,
+    advanceSeenCursor,
+    insertGroupTurn: (row) => insertGroupTurn(row),
+    groupUsage: (sessionIds, sinceMs) => groupUsage(sessionIds, sinceMs),
+    // g1 — spoke turn → 一行 agent_run_log（团队页执行记录可见，AC6）。🔴 best-effort：跨库无
+    // 事务（run log 在 sync_store.db、群消息在 ai_chat.db），失败只 warn —— ai_chat_group_turn
+    // 才是权威源。status 值域按 run_log.py（completed / failed / skipped / running，**无
+    // stopped**），步骤只用 trig / out 两类。
+    mirrorGroupRunLog: async (input: GroupRunLogMirror) => {
+      try {
+        await domain.postRunLog({
+          agentId: input.agentId,
+          startedAtMs: input.startedAtMs,
+          completedAtMs: input.finishedAtMs,
+          status: input.status,
+          triggerKind: 'group_chat',
+          triggerDetail: `session:${input.sessionId};chain:${input.chainId};run:${input.runId}`,
+          summary: input.summary,
+          model: input.model ?? null,
+          inputTokens: input.tokensInput ?? null,
+          outputTokens: input.tokensOutput ?? null,
+          error: input.error ?? null,
+          steps: [
+            {
+              kind: 'trig',
+              name: '群聊唤醒',
+              detail: `窗口 #${input.windowFromId ?? '-'}-#${input.windowToId ?? '-'}`
+            },
+            {
+              kind: 'out',
+              name: '发言',
+              detail: input.messageId == null ? null : `message:${input.messageId}`,
+              ok: input.status === 'completed'
+            }
+          ]
+        })
+      } catch (err) {
+        console.warn('[ai-gateway] group run-log mirror failed (turn ledger is authoritative)', err)
+      }
+    },
     // Phase 10b — configurable LLM auto-title. getTitleContext reads ai_chat.db (current title + first
     // user message); a non-null title = already-named (manual rename / prior auto-title) so the endpoint
     // skips regeneration → manual titles never overwritten. saveSessionTitle persists via

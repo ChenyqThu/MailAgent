@@ -1,6 +1,22 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 30）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 31）。
+v31（L4 群聊 g1 编排底座，task 09-01）= 群编排的三载体 + 一列，全部 additive：
+``ai_chat_sessions.group_config_json``（群设置 JSON：法官位 / 链上限 / 小时预算 / 预设；
+NULL = 全取出厂默认，默认值单源在 ``ai-gateway/groupFloors.ts``，DB 不存默认值副本）、
+``ai_chat_group_member``（每成员 ``response_mode`` + gateway 的 ``seen_through_id`` 游标，
+缺行 = mention + 游标空）、``ai_chat_group_turn``（每次唤醒一行的台账，**两个成本指标与全部
+地板计数的权威源**）、``ai_chat_messages.chain_id``（链归属：成员回复写触发消息的 chain_id，
+链根行落库为 **NULL**——一次 INSERT 拿不到自身 id，g1 不回填；读侧判据是「NULL 或等于自身 id
+即链根」。地板与指标都按 ``ai_chat_group_turn.chain_id`` 计数，不读本列）。
+🔴 **两写者列级纪律**：``ai_chat_group_member`` 一张表两个写者 —— ``response_mode`` 只由
+serve-api 写（本文件 ``upsert_group_member_modes``，**列级 UPSERT，语句里绝不出现
+seen_through_id**），``seen_through_id`` 只由 gateway 写（chat_db/groups.ts 的列级 UPDATE）。
+任何一侧整行覆写都会静默冲掉对方的列（owner 刚改的响应模式被一次游标推进冲回 mention）。
+``group_config_json`` 归 serve-api 写（``update_group_config``）；``ai_chat_group_turn`` /
+``chain_id`` 归 gateway 写，本文件**只读**。词表（response_mode / outcome / trigger_kind）
+单源 ``src/chat/group_limits.py``，闸 ``tests/config/test_group_constants_parity.py``。
+本文件的群读写一律经 ``_has_table`` / ``_has_column`` 兼容尚未迁移的旧库（返空不报错）。
 v30（L4 群聊）= ``ai_chat_sessions.members_json``（群聊成员 agent id 数组 JSON，非群聊行 NULL）
 + ``ai_chat_messages.speaker_agent_id``（群聊里 assistant 消息的发言成员；NULL = 既有语义不变）
 两个 additive 列 + ``origin`` 值域登记 ``'group'``（照 v22/v29 先例；值域现为
@@ -138,6 +154,9 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
+
+# g1 群聊（v31）— 值域 / 指标口径词表单源（闸 tests/config/test_group_constants_parity.py）。
+from src.chat.group_limits import CHAIN_ROOT_TRIGGER_KINDS, SILENT_OUTCOMES
 
 
 def _now_ms() -> int:
@@ -304,6 +323,21 @@ class ChatDb:
             with self._connection() as conn:
                 rows = conn.execute(f"PRAGMA table_info({table})")
                 return any(row["name"] == column for row in rows)
+        except sqlite3.Error:
+            return False
+
+    def _has_table(self, table: str) -> bool:
+        """Best-effort 表存在探针（v31 群三载体在尚未被前端迁移的库上整表缺席 → 读面返空、
+        写面 no-op，而不是 500）。"""
+        if not os.path.exists(self.db_path):
+            return False
+        try:
+            with self._connection() as conn:
+                row = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+                    (table,),
+                ).fetchone()
+                return row is not None
         except sqlite3.Error:
             return False
 
@@ -1161,3 +1195,157 @@ class ChatDb:
             "SELECT * FROM chat_tool_call WHERE message_id = ? AND tool_use_id = ?",
             (message_id, tool_use_id),
         )
+
+    # ── 群聊 g1（CHAT_DB v31）─────────────────────────────────────────────
+
+    def get_group_config(self, session_id: int) -> Dict[str, Any]:
+        """群设置读面：``{"modes": {agentId: 'realtime'|'mention'}, "config": {...}}``。
+
+        缺行的成员**不出现**在 modes 里（读侧一律 ``?? 'mention'``，PRD Q1）；
+        ``group_config_json`` 为 NULL / 脏 JSON → ``{"v": 1}``（全取出厂默认）。
+        未迁移的旧库（表/列缺席）→ 空 modes + 默认 config，不报错。
+        """
+        config: Dict[str, Any] = {"v": 1}
+        if self._has_column("ai_chat_sessions", "group_config_json"):
+            row = self._read_one(
+                "SELECT group_config_json FROM ai_chat_sessions WHERE id = ?", (session_id,)
+            )
+            raw = (row or {}).get("group_config_json")
+            if isinstance(raw, str) and raw:
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        config = {**parsed, "v": 1}
+                except (ValueError, TypeError):
+                    config = {"v": 1}
+        modes: Dict[str, str] = {}
+        if self._has_table("ai_chat_group_member"):
+            for member in self._read_all(
+                "SELECT agent_id, response_mode FROM ai_chat_group_member "
+                "WHERE session_id = ? ORDER BY agent_id ASC",
+                (session_id,),
+            ):
+                modes[str(member["agent_id"])] = str(member["response_mode"])
+        return {"modes": modes, "config": config}
+
+    def update_group_config(self, session_id: int, config: Dict[str, Any]) -> None:
+        """写 ``ai_chat_sessions.group_config_json``（整块覆写，调用方已把旧值 merge 好）。
+
+        刻意不 bump ``updated_at``（改设置不该把群顶到列表最前，同 title / archived 纪律）。
+        列缺席（旧库）→ no-op。
+        """
+        if not self._has_column("ai_chat_sessions", "group_config_json"):
+            return
+        payload = json.dumps({**config, "v": 1}, ensure_ascii=False)
+        with self._write_connection() as conn:
+            conn.execute(
+                "UPDATE ai_chat_sessions SET group_config_json = ? WHERE id = ?",
+                (payload, session_id),
+            )
+
+    def upsert_group_member_modes(self, session_id: int, modes: Dict[str, str]) -> None:
+        """写每成员响应模式（**列级 UPSERT**）。
+
+        🔴 语句里**只有** ``response_mode`` 一列 —— ``seen_through_id`` 归 gateway 写，
+        整行 UPSERT 会把成员的 seen 游标冲成 NULL（模型下一轮把整段历史当新消息重看一遍）。
+        这条纪律由 ``tests/api/test_chat_group_config.py`` 的语句文本断言钉住。
+        表缺席（旧库）→ no-op。
+        """
+        if not modes or not self._has_table("ai_chat_group_member"):
+            return
+        now = _now_ms()
+        with self._write_connection() as conn:
+            for agent_id, mode in modes.items():
+                conn.execute(
+                    "INSERT INTO ai_chat_group_member (session_id, agent_id, response_mode, updated_at) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(session_id, agent_id) DO UPDATE SET "
+                    "response_mode = excluded.response_mode, updated_at = excluded.updated_at",
+                    (session_id, agent_id, mode, now),
+                )
+
+    def group_metrics(self, session_id: int) -> Dict[str, Any]:
+        """群成本两指标 + 两个滚动窗口（只读 ``ai_chat_group_turn``，design §6）。
+
+        * ``silentRunRate`` = COUNT(outcome ∈ silent/held_dup/skipped) / COUNT(*)；
+          无 turn 行 → None（未知，不是 0）。
+        * ``turnsPerHumanMessage`` = 「链根 trigger ∈ human/main_agent」的那些链上的全部 turn 数
+          / 这样的链数。链根判据落在**链**上（同一 chain_id 出现过 human/main_agent 触发），
+          不是逐行判 trigger_kind —— 成员级联行的 trigger_kind 是 'agent'，逐行判会把分子清零。
+        * ``last1h`` / ``last24h``：turns / tokens / costUsd（整窗 cost 全 NULL → None：金额未知
+          ≠ 0）+ ``caps``。🔴 caps 只回 owner **配置过**的值，未配置回 None —— 出厂默认在
+          ``groupFloors.ts``（单源），Python 不抄一份数值。
+        * ``lastStopReason``：最近一条 outcome='stopped' 行的 error（地板原因词）。
+
+        未迁移的旧库（表缺席）→ 全 None / 零窗口，不报错。
+        """
+        empty_window = {"turns": 0, "tokens": 0, "costUsd": None}
+        config = self.get_group_config(session_id)["config"]
+        caps = {
+            "turns": config.get("hourlyTurns"),
+            "tokens": config.get("hourlyTokens"),
+            "costUsd": config.get("hourlyUsd"),
+        }
+        if not self._has_table("ai_chat_group_turn"):
+            return {
+                "silentRunRate": None,
+                "turnsPerHumanMessage": None,
+                "last1h": {**empty_window, "caps": caps},
+                "last24h": {**empty_window, "caps": caps},
+                "lastStopReason": None,
+            }
+        silent_marks = ",".join("?" * len(SILENT_OUTCOMES))
+        totals = self._read_one(
+            "SELECT COUNT(*) AS total, "
+            f"SUM(CASE WHEN outcome IN ({silent_marks}) THEN 1 ELSE 0 END) AS silent "
+            "FROM ai_chat_group_turn WHERE session_id = ?",
+            (*SILENT_OUTCOMES, session_id),
+        ) or {}
+        total = int(totals.get("total") or 0)
+        silent_rate = (int(totals.get("silent") or 0) / total) if total else None
+
+        root_marks = ",".join("?" * len(CHAIN_ROOT_TRIGGER_KINDS))
+        human = self._read_one(
+            "WITH human_chains AS ("
+            "  SELECT DISTINCT chain_id FROM ai_chat_group_turn "
+            f"   WHERE session_id = ? AND trigger_kind IN ({root_marks})"
+            ") "
+            "SELECT (SELECT COUNT(*) FROM ai_chat_group_turn t "
+            "         WHERE t.session_id = ? AND t.chain_id IN (SELECT chain_id FROM human_chains)"
+            "       ) AS turns, "
+            "       (SELECT COUNT(*) FROM human_chains) AS chains",
+            (session_id, *CHAIN_ROOT_TRIGGER_KINDS, session_id),
+        ) or {}
+        chains = int(human.get("chains") or 0)
+        per_human = (int(human.get("turns") or 0) / chains) if chains else None
+
+        now = _now_ms()
+
+        def window(since_ms: int) -> Dict[str, Any]:
+            row = self._read_one(
+                "SELECT COUNT(*) AS turns, "
+                "COALESCE(SUM(COALESCE(tokens_input, 0) + COALESCE(tokens_output, 0)), 0) AS tokens, "
+                "SUM(cost_usd) AS cost_usd "
+                "FROM ai_chat_group_turn WHERE session_id = ? AND started_at >= ?",
+                (session_id, since_ms),
+            ) or {}
+            cost = row.get("cost_usd")
+            return {
+                "turns": int(row.get("turns") or 0),
+                "tokens": int(row.get("tokens") or 0),
+                "costUsd": None if cost is None else float(cost),
+                "caps": caps,
+            }
+
+        stopped = self._read_one(
+            "SELECT error FROM ai_chat_group_turn WHERE session_id = ? AND outcome = 'stopped' "
+            "ORDER BY started_at DESC, id DESC LIMIT 1",
+            (session_id,),
+        )
+        return {
+            "silentRunRate": silent_rate,
+            "turnsPerHumanMessage": per_human,
+            "last1h": window(now - 3_600_000),
+            "last24h": window(now - 86_400_000),
+            "lastStopReason": (stopped or {}).get("error"),
+        }

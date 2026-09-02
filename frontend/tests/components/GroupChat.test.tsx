@@ -5,16 +5,24 @@
 // 不追求全覆盖，钉住最会碎的行为：
 //   W1 群列表行渲染（标题 + 成员头像堆叠 ≤3 + 成员数）；
 //   W2 「新建群聊」弹窗开合 + 候选过滤（只有 chat-capable：preprocess/search/项目周报不入群）；
-//   W3 成员多选上限 5 → 第 6 个 checkbox 禁用；
+//   W3 成员多选上限 MAX_GROUP_MEMBERS → 第 MAX+1 个 checkbox 禁用；
 //   W4 创建调用 newSession({groupMembers 按候选序, title}) + 创建后进入群聊视图；
+//   W5/W6 拿不到本地 gateway（端口缺席 / web 构建的空串基址）→ 建群入口禁用 + 说明为什么；
 //   V1 历史渲染（用户消息右对齐；speaker_agent_id 分派到正确成员的名字 + 头像）；
 //   V2 无 @ 发送 → 成员按 members_json 序**串行**各回一轮（第一个未完成时第二个不发起）；
 //   V3 @点名 → 只点名者回；
 //   V4 某成员 run 失败 → 该气泡标失败，仍继续下一个成员。
+//   ── g1 labs on（服务端编排）──
+//   V5 发送只 append，**不**调 runGroupSpeaker（发言循环在服务端）；
+//   V6 `chat:turn-persisted` 广播（本群）→ 重新拉 transcript；
+//   V7 停止按钮 → POST /api/ai/run/stop。
 //
-// mock 面：useMailApi（listMessages/newSession/report.getConfig）+ groupChatClient
-// （appendGroupUserMessage/runGroupSpeaker —— 组件直 import，模块 mock）+ AgentAvatar
-// （渲染 data-avatar/data-size 探针，让「头像分派到哪个成员、哪个尺寸档」可断言）。
+// 🔴 V2/V3/V4 是 labs off 的 v1 回归钉（AC9），随 g1 一字未改。
+//
+// mock 面：useMailApi（listMessages/newSession/onTurnPersisted/report.getConfig）+ groupChatClient
+// （appendGroupUserMessage/runGroupSpeaker —— 组件直 import，模块 mock）+ groupSettings
+// （labs / 群设置的 serve-api 客户端）+ AgentAvatar（渲染 data-avatar/data-size 探针，让
+// 「头像分派到哪个成员、哪个尺寸档」可断言）。
 
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -24,10 +32,30 @@ import { createElement } from 'react'
 const mockGetConfig = vi.fn()
 const mockListMessages = vi.fn()
 const mockNewSession = vi.fn()
+const mockOnTurnPersisted = vi.fn()
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
     report: { getConfig: mockGetConfig },
-    chat: { listMessages: mockListMessages, newSession: mockNewSession }
+    chat: {
+      listMessages: mockListMessages,
+      newSession: mockNewSession,
+      onTurnPersisted: mockOnTurnPersisted
+    }
+  })
+}))
+
+const mockGetLabs = vi.fn()
+vi.mock('@shared/api/groupSettings', () => ({
+  getLabs: (...args: unknown[]) => mockGetLabs(...args),
+  setLabs: vi.fn(),
+  getGroupConfig: vi.fn().mockResolvedValue({ modes: {}, config: { v: 1 } }),
+  setGroupConfig: vi.fn(),
+  getGroupMetrics: vi.fn().mockResolvedValue({
+    silentRunRate: null,
+    turnsPerHumanMessage: null,
+    last1h: { turns: 0, tokens: 0, costUsd: null },
+    last24h: { turns: 0, tokens: 0, costUsd: null },
+    lastStopReason: null
   })
 }))
 
@@ -51,6 +79,10 @@ import { useSessionsSegment } from '@shared/state/sessions-segment'
 import { GroupChatWorkspace } from '../../src/shared/components/agents/groups/GroupChatWorkspace'
 import { GroupChatView } from '../../src/shared/components/agents/groups/GroupChatView'
 import type { GroupMemberMeta } from '../../src/shared/components/agents/groups/members'
+import { MAX_GROUP_MEMBERS } from '../../src/ai-gateway/groupFloors'
+
+/** renderer 认 gateway 的口子（sessionStorage stash，见 assistant/runtime/flags.ts）。 */
+const GATEWAY_PORT_KEY = 'mailagent:aiGatewayPort'
 
 await i18n.changeLanguage('zh-CN')
 
@@ -169,6 +201,10 @@ beforeEach(() => {
   mockListMessages.mockResolvedValue([])
   mockAppendUser.mockResolvedValue(1)
   mockRunSpeaker.mockResolvedValue({ messageId: 2, content: 'ok' })
+  // 默认 = 桌面（有 gateway）+ labs off，即 v1 路径；labs on 的用例各自覆写。
+  window.sessionStorage.setItem(GATEWAY_PORT_KEY, '8321')
+  mockGetLabs.mockResolvedValue({ groupAgents: 'off' })
+  mockOnTurnPersisted.mockReturnValue(() => undefined)
 })
 
 function renderWorkspace(items: ChatSessionListItem[] = [groupRow()]): HTMLElement {
@@ -223,21 +259,22 @@ describe('GroupChatWorkspace', () => {
     await waitFor(() => expect(screen.queryByText('群名')).toBeNull())
   })
 
-  test('W3 成员多选上限 5：勾满 5 个后未勾的 checkbox 禁用', async () => {
-    mockGetConfig.mockResolvedValue([
-      ...AGENTS,
-      cfg('a3', 'custom', { title: '成员三' }),
-      cfg('a4', 'custom', { title: '成员四' }),
-      cfg('a5', 'custom', { title: '成员五' })
-    ]) // chat-capable 候选：邮件日报 + 调研员 + 跟进官 + 三/四/五 = 6 个
+  test('W3 成员多选上限 = MAX_GROUP_MEMBERS：勾满后未勾的 checkbox 禁用', async () => {
+    // 🔴 上限不写死在用例里：它是 groupFloors.ts 的常量（跨语言闸盯着 TS / Python / SQL CHECK
+    // 三处），写死 8 会让「改了常量但忘了改 UI」这类漂移在这条用例上仍然绿。
+    const extras = Array.from({ length: MAX_GROUP_MEMBERS }, (_, i) =>
+      cfg(`x${i}`, 'custom', { title: `成员${i}` })
+    )
+    // chat-capable 候选：邮件日报 + 调研员 + 跟进官 + extras = MAX + 3 个（> MAX，够勾满还剩）。
+    mockGetConfig.mockResolvedValue([...AGENTS, ...extras])
     renderWorkspace([])
     await waitFor(() => expect(screen.getByText('新建群聊')).toBeTruthy())
     fireEvent.click(screen.getByText('新建群聊'))
-    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(6))
+    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(MAX_GROUP_MEMBERS + 3))
     const boxes = screen.getAllByRole('checkbox') as HTMLButtonElement[]
-    for (let i = 0; i < 5; i++) fireEvent.click(boxes[i])
-    await waitFor(() => expect(boxes[5].disabled).toBe(true))
-    expect(boxes[4].disabled).toBe(false) // 已勾的仍可反选
+    for (let i = 0; i < MAX_GROUP_MEMBERS; i++) fireEvent.click(boxes[i])
+    await waitFor(() => expect(boxes[MAX_GROUP_MEMBERS].disabled).toBe(true))
+    expect(boxes[MAX_GROUP_MEMBERS - 1].disabled).toBe(false) // 已勾的仍可反选
   })
 
   test('W4 创建：newSession({groupMembers 按候选序, title}) + 创建后进入群聊视图', async () => {
@@ -263,6 +300,37 @@ describe('GroupChatWorkspace', () => {
     // 创建后：draft 会话被选中 → 右侧群聊视图挂载。
     await waitFor(() => expect(document.querySelector('[data-group-chat="555"]')).toBeTruthy())
     expect(useSessionsSegment.getState().activeGroupSessionId).toBe(555)
+  })
+
+  test('W5 拿不到本地 gateway（web）：建群入口禁用并说明原因', async () => {
+    // 群聊发言链路走本地 gateway，web 上恒 E_UNSUPPORTED —— 建群不该在那里放行。
+    window.sessionStorage.removeItem(GATEWAY_PORT_KEY)
+    renderWorkspace([])
+    await waitFor(() => expect(screen.getByText('新建群聊')).toBeTruthy())
+    const button = screen.getByText('新建群聊').closest('button') as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    expect(screen.getByText(/远程网页版建不了群/)).toBeTruthy()
+    // 点了也开不出弹窗。
+    fireEvent.click(button)
+    await new Promise((r) => setTimeout(r, 10))
+    expect(screen.queryByText('群名')).toBeNull()
+  })
+
+  test('W6 web 构建（gateway 基址是空串，不是 null）同样禁用建群', async () => {
+    // 🔴 这条钉的是判据本身：resolveAiGatewayBaseUrl 在 web 构建下返回**空串**（同源代理语义），
+    // 用 `!= null` 判「有没有 gateway」会在 web 上放行建群 —— 正好漏掉要堵的那个洞。
+    window.sessionStorage.removeItem(GATEWAY_PORT_KEY)
+    const previous = process.env.VITE_BUILD_TARGET
+    process.env.VITE_BUILD_TARGET = 'web'
+    try {
+      renderWorkspace([])
+      await waitFor(() => expect(screen.getByText('新建群聊')).toBeTruthy())
+      const button = screen.getByText('新建群聊').closest('button') as HTMLButtonElement
+      expect(button.disabled).toBe(true)
+    } finally {
+      if (previous === undefined) delete process.env.VITE_BUILD_TARGET
+      else process.env.VITE_BUILD_TARGET = previous
+    }
   })
 })
 
@@ -349,5 +417,124 @@ describe('GroupChatView', () => {
     await waitFor(() => expect(screen.getByText(/本条回复失败.*boom/)).toBeTruthy())
     // 第二个成员照常发言。
     expect(mockRunSpeaker.mock.calls[1]?.[0]).toMatchObject({ speakAsAgentId: 'a2' })
+  })
+})
+
+describe('GroupChatView（labs on：服务端编排）', () => {
+  // gateway 的两个探针端点（/run/active、/run/stop）由组件直 fetch —— 桩掉全局 fetch，
+  // 默认「没人在发言」，需要发言态的用例各自覆写。
+  const mockFetch = vi.fn()
+
+  beforeEach(() => {
+    mockGetLabs.mockResolvedValue({ groupAgents: 'on' })
+    mockFetch.mockReset()
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ active: false }) })
+    vi.stubGlobal('fetch', mockFetch)
+  })
+
+  const waitForLabsOn = async (): Promise<void> => {
+    // 齿轮只在 labs on 时渲染 —— 它出现 = 开关已读到并生效。
+    await waitFor(() => expect(screen.getByLabelText('群设置')).toBeTruthy())
+  }
+
+  test('V5 发送只 append，不调 runGroupSpeaker（发言循环在服务端）', async () => {
+    const container = renderView()
+    await waitForLabsOn()
+    await sendText(container, '大家汇报下')
+    await waitFor(() => expect(mockAppendUser).toHaveBeenCalledWith(300, '大家汇报下'))
+    // 等一拍确认 renderer 没有自己起发言循环。
+    await new Promise((r) => setTimeout(r, 30))
+    expect(mockRunSpeaker).not.toHaveBeenCalled()
+  })
+
+  test('V6 本群的 turn-persisted 广播 → 重新拉 transcript（别群的不动）', async () => {
+    renderView()
+    await waitForLabsOn()
+    await waitFor(() => expect(mockListMessages).toHaveBeenCalledTimes(1))
+    const handler = mockOnTurnPersisted.mock.calls[0]?.[0] as (p: {
+      sessionId: number
+      status: string
+      runId: string | null
+    }) => void
+    expect(typeof handler).toBe('function')
+    // 别的会话：不刷本群。
+    handler({ sessionId: 999, status: 'finished', runId: null })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(mockListMessages).toHaveBeenCalledTimes(1)
+    // 本群：invalidate → refetch。
+    handler({ sessionId: 300, status: 'finished', runId: null })
+    await waitFor(() => expect(mockListMessages).toHaveBeenCalledTimes(2))
+  })
+
+  test('V7 有人在发言时出现停止按钮 → POST /api/ai/run/stop', async () => {
+    mockFetch.mockImplementation((url: string) =>
+      Promise.resolve(
+        String(url).includes('/run/active')
+          ? { ok: true, json: async () => ({ active: true, runId: 'r1', ageMs: 10 }) }
+          : { ok: true, json: async () => ({ stopped: true }) }
+      )
+    )
+    renderView()
+    await waitForLabsOn()
+    const stopButton = await waitFor(() => screen.getByLabelText('停止本轮'))
+    fireEvent.click(stopButton)
+    await waitFor(() =>
+      expect(
+        mockFetch.mock.calls.some(
+          (call) =>
+            String(call[0]).endsWith('/api/ai/run/stop') &&
+            (call[1] as { method?: string } | undefined)?.method === 'POST'
+        )
+      ).toBe(true)
+    )
+  })
+
+  test('V8 地板命中的 system 行渲染成「已停止：<原因>」', async () => {
+    mockListMessages.mockResolvedValue([
+      msg(1, 'user', '大家汇报下'),
+      {
+        ...msg(2, 'assistant', '收到', 'a1'),
+        id: 3,
+        role: 'system',
+        content: '',
+        metadata: JSON.stringify({ kind: 'group_stop', reason: 'chain_cap', runId: 'r1' }),
+        speaker_agent_id: null
+      }
+    ])
+    renderView()
+    await waitFor(() => expect(screen.getByText(/已停止：这条对话链已达唤醒上限/)).toBeTruthy())
+  })
+})
+
+describe('GroupChatWorkspace — 二级栏契约（09-01 侧栏批）', () => {
+  test('W6 清单列读 --app-second-w 且 navHidden 时整列隐藏（与 AgentThreadList 同契约）', () => {
+    const { container } = render(
+      <GroupChatWorkspace
+        headerSlot={<div data-header-slot />}
+        items={[groupRow()]}
+        invalidate={vi.fn()}
+        narrow={false}
+      />,
+      { wrapper: makeQcWrapper() }
+    )
+    const aside = container.querySelector('aside[data-nav-second]') as HTMLElement | null
+    expect(aside).not.toBeNull()
+    // 宽度来自对话域记忆（默认 336），不是手抄 336。
+    expect(aside!.className).toContain('w-[var(--app-second-w,336px)]')
+    expect(aside!.style.visibility).not.toBe('hidden')
+
+    const { container: hidden } = render(
+      <GroupChatWorkspace
+        headerSlot={<div data-header-slot />}
+        items={[groupRow()]}
+        invalidate={vi.fn()}
+        narrow={false}
+        navHidden
+      />,
+      { wrapper: makeQcWrapper() }
+    )
+    const asideHidden = hidden.querySelector('aside[data-nav-second]') as HTMLElement
+    expect(asideHidden.style.width).toBe('0px')
+    expect(asideHidden.style.visibility).toBe('hidden')
   })
 })

@@ -1819,6 +1819,52 @@ export class MailAgentDomainClient {
     return this._req<{ mode: string }>('GET', '/agent/approval-mode', { signal })
   }
 
+  /** g1 群聊 labs — GET /agent/labs → owner_settings 的实验开关行（今天只有
+   *  `{groupAgents: 'on'|'off'}`，key `labs_group_agents`；缺行 / 脏值 serve-api 一律返 'off'）。
+   *  由 lifecycle 的 resolveLabsFlags 消费（短 TTL + 有界超时，任何失败 → off，fail-closed）。
+   *  READ-ONLY from the gateway：开关是 owner UI 动作（verify_cf_access PUT），没有任何 gateway
+   *  工具够得着写面（policy_rules 同款纪律）。 */
+  getLabsFlags(signal?: AbortSignal): Promise<{ groupAgents: string }> {
+    return this._req<{ groupAgents: string }>('GET', '/agent/labs', { signal })
+  }
+
+  /** g1 群聊 — POST /agent-runs/run-log：把一个群 spoke turn 镜像成一行 `agent_run_log`
+   *  （团队页执行记录可见）。🔴 best-effort 语义在**调用方**（lifecycle 的 mirrorGroupRunLog
+   *  catch 掉一切只 warn）：群消息在 ai_chat.db、run log 在 sync_store.db，跨库无事务，
+   *  `ai_chat_group_turn` 才是指标权威源。
+   *  🔴 `status` 值域 = run_log.py 的 AGENT_RUN_LOG_STATUS_VALUES（running / completed /
+   *  failed / skipped，**没有 'stopped'**）；`steps[].kind` ∈ AGENT_RUN_STEP_KINDS，本路径只用
+   *  trig / out。越域由服务端 400，不在这里静默改写。 */
+  postRunLog(
+    input: {
+      agentId: string
+      startedAtMs: number
+      completedAtMs?: number | null
+      status: string
+      triggerKind?: string | null
+      triggerDetail?: string | null
+      summary?: string | null
+      model?: string | null
+      inputTokens?: number | null
+      outputTokens?: number | null
+      error?: string | null
+      steps?: Array<{
+        kind: string
+        name?: string | null
+        detail?: string | null
+        payload?: Record<string, unknown> | null
+        ok?: boolean | null
+        ms?: number | null
+      }>
+    },
+    signal?: AbortSignal
+  ): Promise<{ runLogId: number | null }> {
+    return this._req<{ runLogId: number | null }>('POST', '/agent-runs/run-log', {
+      body: input,
+      signal
+    })
+  }
+
   /** P4 GET /agent/auto-compact. Read-only from the gateway; only owner UI reaches PUT. */
   getAutoCompactSetting(signal?: AbortSignal): Promise<{ mode: string }> {
     return this._req<{ mode: string }>('GET', '/agent/auto-compact', { signal })

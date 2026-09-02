@@ -4,7 +4,13 @@
 // AI 分段同构，列表数据归 layout 管）。listAllSessions 排除零消息会话，所以**刚建好还没发言
 // 的群**由本组件以 draftSession 本地持有并选中；第一条消息落库后它自然进列表。
 // 成员候选 = 团队页可对话成员（deriveTeamMembers canChat 判据，排除主 agent 与
-// 预处理/项目周报/搜索三位），上限 5 —— serve-api /sessions/new 同判据兜底校验。
+// 预处理/项目周报/搜索三位），上限 MAX_GROUP_MEMBERS —— serve-api /sessions/new 同判据兜底
+// 校验，两侧共读 ai-gateway/groupFloors.ts（TS 单源）与 src/chat/group_limits.py（Python 单源），
+// 闸 tests/config/test_group_constants_parity.py。
+//
+// 🔴 群聊是桌面-only（发言链路走本地 gateway；groupChatClient 在 web 上恒 E_UNSUPPORTED）。
+// 建群本身走 serve-api，在 web 上会「建得出来但一句话都发不了」——所以拿不到 gateway 时
+// 直接禁用建群入口并说明原因，不留这个洞。
 
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -27,13 +33,16 @@ import { Checkbox } from '@shared/components/ui/checkbox'
 import { Input } from '@shared/components/ui/input'
 import { Button } from '@shared/components/ui/button'
 
+import { resolveAiGatewayBaseUrl } from '@shared/assistant/runtime/flags'
+
 import { AgentAvatar } from '../AgentAvatar'
 import { useReportConfig } from '../hooks'
 import { deriveTeamMembers } from '../team/teamMembers'
 import { GroupChatView } from './GroupChatView'
 import { parseMembersJson, type GroupMemberMeta } from './members'
 
-const MAX_GROUP_MEMBERS = 5
+// 成员上限单源（照 members.ts 对 parseGroupMemberIds 的路子直引 gateway 叶子，不手抄数字）。
+import { MAX_GROUP_MEMBERS } from '../../../../ai-gateway/groupFloors'
 
 /** 团队清单 → 可入群成员（canChat 且是真 agent 行；主 Agent 不入群）。 */
 function chatCapableMembers(agents: readonly ReportAgentConfig[]): ReportAgentConfig[] {
@@ -46,13 +55,17 @@ export function GroupChatWorkspace({
   headerSlot,
   items,
   invalidate,
-  narrow
+  narrow,
+  navHidden = false
 }: {
   /** 「AI」｜「群聊」分段控件（与 AI 分段同一实例形态，由 AgentViewLayout 注入）。 */
   headerSlot: React.ReactNode
   items: ChatSessionListItem[]
   invalidate: () => void
   narrow: boolean
+  /** 09-01 侧栏批：对话域二级栏折叠时整列隐藏（与 AgentThreadList.navHidden 同语义，
+   *  由 AgentViewLayout 按 useDomainCollapsed('chats') 注入）；窄窗单栏形态下无意义。 */
+  navHidden?: boolean
 }): React.ReactElement {
   const { t } = useTranslation()
   const { agents } = useReportConfig()
@@ -62,6 +75,11 @@ export function GroupChatWorkspace({
   // 刚建好、还没有消息（listAllSessions 拉不到）的群，本地持有到第一条消息落库。
   const [draftSession, setDraftSession] = useState<ChatSession | null>(null)
   const [mobileDetail, setMobileDetail] = useState(false)
+  // 拿不到本地 gateway（web 构建 / 端口未注入）→ 建出来的群一句话都发不了，禁用入口。
+  // 🔴 判据是**真值**不是 `!= null`：web 构建下 resolveAiGatewayBaseUrl 返回空串（同源代理
+  // 语义），而群聊链路把空串当「没有 gateway」（groupChatClient 的 `if (!baseUrl)` 抛
+  // E_UNSUPPORTED）—— 用 `!= null` 会在 web 上放行建群，正好漏掉要堵的那个洞。
+  const canCreate = useMemo(() => Boolean(resolveAiGatewayBaseUrl()), [])
 
   // agentId → 展示元数据（名字/头像），群列表行与群聊视图共用。
   const memberMeta = useMemo(() => {
@@ -83,10 +101,16 @@ export function GroupChatWorkspace({
 
   const list = (
     <aside
+      data-nav-second
       className={cn(
         'glass-panel flex h-full shrink-0 flex-col overflow-hidden',
-        narrow ? 'w-full' : 'w-[336px] border-r border-ink-border'
+        // 09-01 侧栏批：清单列读对话域的记忆宽（默认 336），折叠时整列隐藏——与 AgentThreadList 同契约，
+        // 否则 `[` 折叠后顶栏左段收到 56 而这一列纹丝不动，hairline 与列边界错开。
+        narrow ? 'w-full' : 'w-[var(--app-second-w,336px)] border-r border-ink-border'
       )}
+      style={
+        navHidden && !narrow ? { width: 0, visibility: 'hidden', borderRightWidth: 0 } : undefined
+      }
     >
       <div className="flex h-12 shrink-0 items-center px-3">
         <h2 className="min-w-0 flex-1 truncate text-body font-semibold text-ink-fg">
@@ -98,14 +122,21 @@ export function GroupChatWorkspace({
         <button
           type="button"
           onClick={() => setDialogOpen(true)}
+          disabled={!canCreate}
           className={cn(
             'flex h-8 w-full items-center gap-2 rounded-lg border border-ink-border-soft bg-ink-2 px-2.5',
-            'text-body font-medium text-ink-fg transition-colors duration-fast hover:bg-ink-3'
+            'text-body font-medium text-ink-fg transition-colors duration-fast hover:bg-ink-3',
+            'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-ink-2'
           )}
         >
           <Plus size={15} strokeWidth={2} className="shrink-0 text-coral" />
           <span className="truncate">{t('groupChat.newGroup')}</span>
         </button>
+        {!canCreate && (
+          <p className="mt-1.5 text-micro leading-relaxed text-ink-fg-3">
+            {t('groupChat.desktopOnly')}
+          </p>
+        )}
       </div>
       <div className="scrollbar-thin flex-1 overflow-y-auto px-2 pb-2">
         {items.length === 0 && draftSession == null ? (

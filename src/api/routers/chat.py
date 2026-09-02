@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import hashlib
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -32,6 +33,12 @@ from src.agent_config.enabled_models import (
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_chat_db, get_env_file_path, get_report_store, get_settings
+from src.chat.group_limits import (
+    CHAIN_CAP_MAX,
+    CHAIN_CAP_MIN,
+    MAX_GROUP_MEMBERS,
+    RESPONSE_MODES,
+)
 from src.chat.kos_save import SaveConversationError, save_conversation_to_kos
 from src.agents.run_state import derive_agent_run_state
 from src.kos.client import KOSClient, KOSError
@@ -933,10 +940,10 @@ async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
                 "sessions/new groupMembers must be a non-empty string array",
                 source="sqlite",
             )
-        if len(group_members) > 5:
+        if len(group_members) > MAX_GROUP_MEMBERS:
             raise APIError(
                 "E_INVALID_ARG",
-                "sessions/new groupMembers supports at most 5 members",
+                f"sessions/new groupMembers supports at most {MAX_GROUP_MEMBERS} members",
                 source="sqlite",
             )
         if len(set(group_members)) != len(group_members):
@@ -1027,6 +1034,157 @@ async def update_session_title(
         raise APIError("E_INVALID_ARG", "title requires title:str", source="sqlite")
     get_chat_db().update_session_title(session_id, title)
     return success_envelope({"updated": True}, request=request, source="sqlite")
+
+
+def _require_group_session(session_id: int) -> Dict[str, Any]:
+    """群端点的共用前置：会话必须存在且 origin='group'，返回该行。
+
+    🔴 非群会话一律 400 而不是「按空群处理」——群设置写到普通会话行上是静默的数据污染
+    （那一列在别的读面上不显示，谁都不会发现）。"""
+    session = get_chat_db().get_session(session_id)
+    if session is None:
+        raise APIError("E_NOT_FOUND", f"session {session_id} not found", source="sqlite")
+    if (session.get("origin") or "") != "group":
+        raise APIError(
+            "E_INVALID_ARG", f"session {session_id} is not a group session", source="sqlite"
+        )
+    return session
+
+
+def _group_member_ids(session: Dict[str, Any]) -> List[str]:
+    """``members_json`` → 成员 id 列表（宽容解析，与 TS ``parseGroupMemberIds`` 同口径：
+    坏 JSON / 非数组 / 非字符串项一律丢弃 → 空名单 = 任何 modes 键都不合法）。"""
+    raw = session.get("members_json")
+    if not isinstance(raw, str) or not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [m for m in parsed if isinstance(m, str) and m.strip()]
+
+
+@router.get("/sessions/{session_id:int}/group-config", dependencies=[Depends(verify_cf_access)])
+async def get_group_config(request: Request, session_id: int):
+    """群设置读面（g1，CHAT_DB v31）：``{modes, config}``。
+
+    ``modes`` 只含**有行**的成员（缺行 = 'mention'，PRD Q1，读侧兜底）；``config`` 为
+    ``group_config_json`` 解析结果，NULL / 脏 JSON → ``{"v": 1}`` = 全取出厂默认（默认值单源在
+    ``ai-gateway/groupFloors.ts``，服务端不抄一份数值）。非群会话 400。"""
+    _require_group_session(session_id)
+    return success_envelope(
+        get_chat_db().get_group_config(session_id), request=request, source="sqlite"
+    )
+
+
+@router.put("/sessions/{session_id:int}/group-config", dependencies=[Depends(verify_cf_access)])
+async def put_group_config(
+    request: Request, session_id: int, body: Optional[Dict[str, Any]] = None
+):
+    """群设置写面（g1）：响应模式 + 法官位 + 链上限 / 小时预算。
+
+    body = ``{modes?, judgeAgentId?, chainCap?, hourlyTurns?, hourlyTokens?, hourlyUsd?,
+    sessionTurnCap?}``（全部可选，只写传了的键）。**权威校验在服务端**：会话必须
+    origin='group'；modes 的键必须 ⊆ 本群 members_json；judgeAgentId 必须 ∈ members 或 null；
+    响应模式值域按 ``group_limits.RESPONSE_MODES``；chainCap ∈ [CHAIN_CAP_MIN, CHAIN_CAP_MAX]。
+
+    🔴 judgeAgentId **变更**时同步写 ``judgeScopeHash = sha256(members_json 原文)`` —— 这是 g2
+    法官免卡的锚（成员名单一变 hash 就失配，法官的建群/投递工具直接拒绝而不是弹一张无人在场
+    的卡）。g1 只写不用。
+
+    modes 走**列级 UPSERT**（``upsert_group_member_modes``，语句里没有 seen_through_id）——
+    见 src/chat/db.py 头注的两写者纪律。"""
+    session = _require_group_session(session_id)
+    opts = body or {}
+    members = _group_member_ids(session)
+    db = get_chat_db()
+    current = db.get_group_config(session_id)
+    config: Dict[str, Any] = dict(current["config"])
+
+    modes = opts.get("modes")
+    if modes is not None:
+        if not isinstance(modes, dict):
+            raise APIError("E_INVALID_ARG", "group-config modes must be an object", source="sqlite")
+        for agent_id, mode in modes.items():
+            if agent_id not in members:
+                raise APIError(
+                    "E_INVALID_ARG",
+                    f"group-config modes key {agent_id!r} is not a member of this group",
+                    source="sqlite",
+                )
+            if mode not in RESPONSE_MODES:
+                raise APIError(
+                    "E_INVALID_ARG",
+                    f"group-config response mode must be one of {list(RESPONSE_MODES)}",
+                    source="sqlite",
+                )
+
+    if "judgeAgentId" in opts:
+        judge = opts.get("judgeAgentId")
+        if judge is not None and (not isinstance(judge, str) or judge not in members):
+            raise APIError(
+                "E_INVALID_ARG",
+                "group-config judgeAgentId must be a member of this group or null",
+                source="sqlite",
+            )
+        if judge != current["config"].get("judgeAgentId"):
+            config["judgeAgentId"] = judge
+            # 名单原文（不是解析后再序列化）—— hash 要钉的就是「owner 确认时看到的那份名单」。
+            raw_members = session.get("members_json") or ""
+            config["judgeScopeHash"] = (
+                hashlib.sha256(raw_members.encode("utf-8")).hexdigest()
+                if judge is not None
+                else None
+            )
+
+    for key, low, high in (
+        ("chainCap", CHAIN_CAP_MIN, CHAIN_CAP_MAX),
+        ("hourlyTurns", 1, 100_000),
+        ("hourlyTokens", 1, 100_000_000),
+        ("sessionTurnCap", 1, 100_000),
+    ):
+        if key not in opts:
+            continue
+        value = opts.get(key)
+        if key == "sessionTurnCap" and value is None:
+            config[key] = None
+            continue
+        if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"group-config {key} must be an integer in [{low}, {high}]",
+                source="sqlite",
+            )
+        config[key] = value
+
+    if "hourlyUsd" in opts:
+        usd = opts.get("hourlyUsd")
+        if isinstance(usd, bool) or not isinstance(usd, (int, float)) or not 0 < usd <= 1000:
+            raise APIError(
+                "E_INVALID_ARG",
+                "group-config hourlyUsd must be a number in (0, 1000]",
+                source="sqlite",
+            )
+        config["hourlyUsd"] = float(usd)
+
+    db.update_group_config(session_id, config)
+    if modes:
+        db.upsert_group_member_modes(session_id, modes)
+    return success_envelope(db.get_group_config(session_id), request=request, source="sqlite")
+
+
+@router.get("/sessions/{session_id:int}/group-metrics", dependencies=[Depends(verify_cf_access)])
+async def get_group_metrics(request: Request, session_id: int):
+    """群成本两指标 + 两个滚动窗口（g1，只读 ``ai_chat_group_turn``，design §6）。
+
+    先于级联上线（红线 4：先量得出来再让 agent 互相唤醒）。指标口径见
+    ``ChatDb.group_metrics``；未迁移的旧库返空窗口而不是报错。"""
+    _require_group_session(session_id)
+    return success_envelope(
+        get_chat_db().group_metrics(session_id), request=request, source="sqlite"
+    )
 
 
 @router.patch("/sessions/{session_id:int}/read", dependencies=[Depends(verify_cf_access)])

@@ -168,6 +168,7 @@ export function AgentViewLayout(): React.ReactElement {
         items={groupItems}
         invalidate={invalidateGroups}
         narrow={narrow}
+        navHidden={navHidden}
       />
     )
   }

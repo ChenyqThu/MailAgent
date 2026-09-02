@@ -194,7 +194,38 @@ import { resolveDataRoot } from '../db'
 //     群聊 tab (fetched via the new 'group' filter value), never the main history / ⌘O list.
 // Plain additive ALTERs, hasColumn idempotency guard (v24/v25 样板). 🔴 bump 同步刷
 // src/chat/db.py 头注释；NOT backend_lifecycle.EXPECTED_DB_VERSION.
-const CHAT_DB_VERSION = 30
+// v31 (L4 群聊 g1 编排底座, task 09-01) — 服务端群编排的三载体 + 一列, 全部 additive:
+//   • ai_chat_sessions.group_config_json: 群设置 JSON ({v:1, judgeAgentId?, judgeScopeHash?,
+//     chainCap?, hourlyTurns?, hourlyTokens?, hourlyUsd?, sessionTurnCap?, preset?, game?})。
+//     NULL = 全取出厂默认 (默认值单源在 ai-gateway/groupFloors.ts, DB 里不存默认值副本)。
+//   • ai_chat_group_member(session_id, agent_id, response_mode, seen_through_id, updated_at):
+//     每成员的响应模式 (realtime = 每条他人消息都唤醒 / mention = 只被 @ 时) + gateway 的
+//     seen 游标。缺行 = mention + 游标空。
+//   • ai_chat_group_turn: 每次唤醒一行的台账 (outcome / trigger_kind / chain_id / run_id /
+//     token / cost / 窗口边界)。**两个成本指标与全部地板计数的权威源** —— agent_run_log 只
+//     镜像 spoke 行且跨库无事务, 失败只 warn。
+//   • ai_chat_messages.chain_id: 链归属。成员回复写触发消息的 chain_id; 链根 (人类消息 /
+//     主 agent 投递 / 跨群投递) 落库为 **NULL** —— 一次 INSERT 拿不到自身 id, g1 也没有回填,
+//     读侧判据因此是「chain_id 为 NULL 或等于自身 id 即链根」(groupChat.ts isChainRootRow)。
+//     🔴 链上限地板与两个指标都按 ai_chat_group_turn.chain_id 计数 (那里恒是链根消息 id,
+//     NOT NULL), 不读本列 —— 要按本列给 UI 分组得先补回填。
+// 🔴 **两写者列级纪律** (父设计 §3.1): ai_chat_group_member 一张表两个写者 ——
+//   `response_mode` 只由 serve-api 写 (PUT /chat/sessions/{id}/group-config, 列级 UPSERT),
+//   `seen_through_id` 只由 gateway 写 (INSERT OR IGNORE + UPDATE 单列)。任何一侧整行覆写都会
+//   静默冲掉对方的列 (owner 刚改的响应模式被游标推进冲回 mention)。group_config_json 归
+//   serve-api; ai_chat_group_turn / chain_id 归 gateway。
+// 值域登记 (无 ALTER):
+//   • ai_chat_messages.role='system' 开始出现在 origin='group' 会话: metadata =
+//     {kind:'group_stop', reason, runId} (reason ∈ GROUP_STOP_REASONS) 或 {kind:'game_over'}(g3)。
+//   • 主 agent 投递进群 = role='user' + metadata={via:'main_agent', sourceSessionId} (装配时
+//     标 `[主助理]`; 🔴 **不用** speaker_agent_id 哨兵 —— 那会污染 members 命名空间)。
+//   • ai_chat_sessions.parent_session_id (v25 已有列) 的 invoked_by 值域加 'judge' / 'setup'
+//     (g2/g3 建子群时写)。
+// 🔴 词表三处手抄 (本文件三条 CHECK / ai-gateway/groupFloors.ts / src/chat/group_limits.py) +
+//   chat.py 的校验元组, 闸 = tests/config/test_group_constants_parity.py (抽不到任一侧必红)。
+// Plain additive ALTER + CREATE TABLE IF NOT EXISTS, hasColumn 幂等守卫 (v24/v25 样板)。
+// 🔴 bump 同步刷 src/chat/db.py 头注释; NOT backend_lifecycle.EXPECTED_DB_VERSION (两条独立版本梯)。
+const CHAT_DB_VERSION = 31
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -1413,6 +1444,64 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_queued_input_delivery
       }
       db.prepare(
         "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '30')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  // v30 → v31 — L4 群聊 g1 (编排下沉底座): 群设置列 + 成员表 + turn 台账表 + 链归属列。
+  // 全部 additive (两条 ALTER 带 hasColumn 守卫 + 两条 CREATE TABLE IF NOT EXISTS), 老代码
+  // 忽略新列即可回退 —— 见头注的载体说明与两写者列级纪律。
+  if (current < 31) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'ai_chat_sessions', 'group_config_json')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN group_config_json TEXT')
+      }
+      if (!hasColumn(db, 'ai_chat_messages', 'chain_id')) {
+        db.exec('ALTER TABLE ai_chat_messages ADD COLUMN chain_id INTEGER')
+      }
+      // 🔴 三条 CHECK 的值域字符串是 groupFloors.ts / group_limits.py 的第三处手抄 —— 改词表
+      // 必四处同步 (闸 tests/config/test_group_constants_parity.py)。
+      db.exec(`CREATE TABLE IF NOT EXISTS ai_chat_group_member (
+        session_id INTEGER NOT NULL,
+        agent_id TEXT NOT NULL,
+        response_mode TEXT NOT NULL DEFAULT 'mention'
+          CHECK (response_mode IN ('realtime','mention')),
+        seen_through_id INTEGER NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (session_id, agent_id)
+      )`)
+      db.exec(`CREATE TABLE IF NOT EXISTS ai_chat_group_turn (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL,
+        run_id TEXT NOT NULL,
+        chain_id INTEGER NOT NULL,
+        seq INTEGER NOT NULL,
+        agent_id TEXT NOT NULL,
+        trigger_kind TEXT NOT NULL
+          CHECK (trigger_kind IN ('human','main_agent','agent','judge_post')),
+        outcome TEXT NOT NULL
+          CHECK (outcome IN ('spoke','silent','held_dup','skipped','failed','stopped')),
+        message_id INTEGER NULL,
+        model TEXT NULL,
+        tokens_input INTEGER NULL,
+        tokens_output INTEGER NULL,
+        cost_usd REAL NULL,
+        window_from_id INTEGER NULL,
+        window_to_id INTEGER NULL,
+        started_at INTEGER NOT NULL,
+        finished_at INTEGER NULL,
+        error TEXT NULL
+      )`)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_group_turn_session_time
+        ON ai_chat_group_turn(session_id, started_at DESC)`)
+      db.exec('CREATE INDEX IF NOT EXISTS idx_group_turn_chain ON ai_chat_group_turn(chain_id)')
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '31')"
       ).run()
       db.exec('COMMIT')
     } catch (err) {

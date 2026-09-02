@@ -12,8 +12,8 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
       `INSERT INTO ai_chat_messages
         (session_id, role, content, tokens_input, tokens_output, cost_usd,
          model, status, error_message, metadata, ui_message_json, context_tokens,
-         speaker_agent_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         speaker_agent_id, chain_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       input.sessionId,
@@ -33,6 +33,10 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
       input.contextTokens ?? null,
       // v30 (L4 群聊) — group speaker attribution; non-group callers omit → NULL.
       input.speakerAgentId ?? null,
+      // v31 (g1 群编排) — 链归属；只有群调度器写，成员回复带触发消息的 chain_id。
+      // 链根行（人类消息 / 主 agent 投递）恒 NULL：一次 INSERT 拿不到自身 id，g1 不回填，
+      // 读侧判据是 groupChat.ts 的 isChainRootRow（NULL 或等于自身 id 即链根）。
+      input.chainId ?? null,
       now,
       now
     )
@@ -54,6 +58,7 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
     ui_message_json: input.uiMessageJson ?? null,
     context_tokens: input.contextTokens ?? null,
     speaker_agent_id: input.speakerAgentId ?? null,
+    chain_id: input.chainId ?? null,
     // task 06-08-chat 需求 5 — appendMessage never seeds thinking (finalizeMessage
     // writes it on终态 via updateMessage); the inserted row column defaults to NULL.
     thinking: null,

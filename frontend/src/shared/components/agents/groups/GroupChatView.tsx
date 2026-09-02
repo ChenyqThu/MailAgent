@@ -4,27 +4,83 @@
 // 彩色名字 + 左对齐气泡（圆角 4 12 12 12）；用户消息右对齐（sel-wash 底，圆角 12 4 12 12）。
 // 名字色 = token 调色板按成员序取（不引新十六进制）。
 //
-// 驱动（searchAgentClient 同形态，不上 assistant-ui runtime）：
-//   发送 = ① appendGroupUserMessage 落用户消息 → ② 目标成员串行 runGroupSpeaker（一个说完
-//   下一个说；流式增量喂本地 live 气泡）→ ③ refetch 落库 transcript、清掉成功的 live 气泡。
-//   有 @ → 只点名的成员回；无 @ → 全员按 members_json 序各回一轮。某成员失败 → 该气泡标
-//   失败继续下一个（失败气泡不落库，保留在 live 区直到下一轮发送）。
+// 驱动有两条，由 labs 开关 `labs_group_agents` 选（g1）：
+//
+//   labs OFF（v1，默认）—— 发送 = ① appendGroupUserMessage 落用户消息 → ② 目标成员串行
+//   runGroupSpeaker（一个说完下一个说；流式增量喂本地 live 气泡）→ ③ refetch 落库
+//   transcript、清掉成功的 live 气泡。有 @ → 只点名的成员回；无 @ → 全员按 members_json 序
+//   各回一轮。某成员失败 → 该气泡标失败继续下一个（失败气泡不落库，保留在 live 区直到下一轮
+//   发送）。**这条路径在 labs on 之后一字未动**（AC9：关掉开关就是 v1）。
+//
+//   labs ON —— 发送只把消息落进共享 transcript，谁回、回几轮由 gateway 的调度器决定（候选集 /
+//   地板 / 台账全在服务端）。renderer 不再持有发言循环，改为：订阅 `chat:turn-persisted`
+//   刷新（🔴 用返回的 disposer 清理）+ 30s `/api/ai/run/active` 兜底探针 + 一个停止按钮
+//   （POST `/api/ai/run/stop`）。地板命中时服务端会写一条 `role='system'` 行，这里渲染成居中
+//   灰字「已停止：<原因>」。
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { SendHorizontal } from 'lucide-react'
+import { SendHorizontal, Settings, Square } from 'lucide-react'
 
 import type { AgentAvatarConfig, ChatMessage, ChatSession } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { qk } from '@shared/lib/queryKeys'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useLabsFlags } from '@shared/hooks/useLabsFlags'
 import { errorMessage } from '@shared/lib/ipcErrors'
+import { toastError } from '@shared/state/toast'
 import { appendGroupUserMessage, runGroupSpeaker } from '@shared/assistant/groupChatClient'
+import { resolveAiGatewayBaseUrl } from '@shared/assistant/runtime/flags'
 
 import { AgentAvatar } from '../AgentAvatar'
+import { GroupSettingsDialog } from './GroupSettingsDialog'
 import { detectMentionDraft, parseGroupMentions } from './mentions'
 import { parseMembersJson, type GroupMemberMeta } from './members'
+
+/** 兜底轮询节拍。Electron 有 `chat:turn-persisted` 广播 → 轮询纯属保险，取 30s
+ *  （与 useBackgroundChatRun 的 ACTIVE_RUN_POLL_WITH_BROADCAST_MS 同一判据）。 */
+const GROUP_RUN_POLL_MS = 30_000
+
+/** 群里此刻有没有成员在发言（gateway 的 ActiveRunRegistry 真源）。够不着 / 非 200 → false
+ *  （fail-closed：宁可不显示「正在发言」，也不显示一个编出来的状态）。 */
+async function probeGroupRunActive(sessionId: number): Promise<boolean> {
+  const baseUrl = resolveAiGatewayBaseUrl()
+  if (!baseUrl) return false
+  try {
+    const res = await fetch(`${baseUrl}/api/ai/run/active?sessionId=${sessionId}`)
+    if (!res.ok) return false
+    const body = (await res.json()) as { active?: unknown }
+    return body.active === true
+  } catch {
+    return false
+  }
+}
+
+/** 停止本群这一轮（registry 中止当前 turn；调度器按 family 清队列并各写一条系统行）。 */
+async function stopGroupRun(sessionId: number): Promise<void> {
+  const baseUrl = resolveAiGatewayBaseUrl()
+  if (!baseUrl) return
+  const res = await fetch(`${baseUrl}/api/ai/run/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId })
+  })
+  if (!res.ok) throw new Error(`run/stop HTTP ${res.status}`)
+}
+
+/** 群停止系统行的原因词（`metadata={kind:'group_stop', reason, runId}`）。
+ *  🔴 只放行 `kind==='group_stop'`：其他 system 行不属于群 transcript，宁可不渲染也不猜它是什么。 */
+function groupStopReason(message: ChatMessage): string | null {
+  if (message.role !== 'system' || message.metadata == null) return null
+  try {
+    const parsed = JSON.parse(message.metadata) as { kind?: unknown; reason?: unknown }
+    if (parsed.kind !== 'group_stop') return null
+    return typeof parsed.reason === 'string' && parsed.reason.length > 0 ? parsed.reason : 'error'
+  } catch {
+    return null
+  }
+}
 
 /** 成员名字色（按 members_json 序取模）。全 token，不引新色值。 */
 const NAME_COLORS = [
@@ -74,7 +130,9 @@ export function GroupChatView({
   const rows = useMemo(
     () =>
       (messagesQ.data ?? []).filter(
-        (m) => (m.role === 'user' || m.role === 'assistant') && m.status === 'complete'
+        (m) =>
+          m.status === 'complete' &&
+          (m.role === 'user' || m.role === 'assistant' || groupStopReason(m) != null)
       ),
     [messagesQ.data]
   )
@@ -82,11 +140,68 @@ export function GroupChatView({
   const [live, setLive] = useState<LiveBubble[]>([])
   const [sending, setSending] = useState(false)
   const [draft, setDraft] = useState('')
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [stopping, setStopping] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   useEffect(() => () => abortRef.current?.abort(), [])
 
+  // ── labs on 的服务端编排模态 ─────────────────────────────────────────────────────
+  const { groupAgents: labsOn } = useLabsFlags()
+
+  const runActiveQ = useQuery({
+    queryKey: qk.chat.groupRunActive(sessionId),
+    queryFn: () => probeGroupRunActive(sessionId),
+    enabled: labsOn,
+    retry: false,
+    refetchInterval: GROUP_RUN_POLL_MS
+  })
+  const speaking = labsOn && runActiveQ.data === true
+
+  // 🔴 IPC 订阅必须用返回的 disposer 清理（useBackgroundChatRun.ts:32 同一纪律）；
+  // onTurnPersisted 在 web（HttpApi）缺省 → `?.`，此时只剩 30s 轮询兜底。
+  useEffect(() => {
+    if (!labsOn) return undefined
+    return mailApi.chat.onTurnPersisted?.((payload) => {
+      if (payload.sessionId !== sessionId) return
+      void qc.invalidateQueries({ queryKey: qk.chat.messages(sessionId) })
+      void qc.invalidateQueries({ queryKey: qk.chat.groupRunActive(sessionId) })
+      void qc.invalidateQueries({ queryKey: qk.chat.groupOriginSessions() })
+    })
+  }, [labsOn, mailApi, qc, sessionId])
+
   const patchLive = (key: string, patch: Partial<LiveBubble>): void =>
     setLive((prev) => prev.map((b) => (b.key === key ? { ...b, ...patch } : b)))
+
+  const stop = async (): Promise<void> => {
+    setStopping(true)
+    try {
+      await stopGroupRun(sessionId)
+    } catch (err) {
+      toastError(t('groupChat.stopFailed', { error: errorMessage(err) }))
+    } finally {
+      setStopping(false)
+      void qc.invalidateQueries({ queryKey: qk.chat.groupRunActive(sessionId) })
+    }
+  }
+
+  /** labs on 的发送：只落一条用户消息，之后由服务端调度器接管（renderer 无发言循环）。 */
+  const sendOrchestrated = async (text: string): Promise<void> => {
+    const userKey = `user-${Date.now()}`
+    setLive([{ key: userKey, kind: 'user', text, status: 'done' }])
+    try {
+      await appendGroupUserMessage(sessionId, text)
+    } catch (err) {
+      patchLive(userKey, { status: 'failed', error: errorMessage(err) })
+      setSending(false)
+      return
+    }
+    await messagesQ.refetch()
+    setLive((prev) => prev.filter((b) => b.status === 'failed'))
+    onActivity()
+    void qc.invalidateQueries({ queryKey: qk.chat.groupOriginSessions() })
+    void qc.invalidateQueries({ queryKey: qk.chat.groupRunActive(sessionId) })
+    setSending(false)
+  }
 
   const send = async (): Promise<void> => {
     const text = draft.trim()
@@ -95,6 +210,10 @@ export function GroupChatView({
     setDraft('')
     // 上一轮的失败气泡随新一轮开始清掉（不落库，仅本地）。
     setLive([])
+    if (labsOn) {
+      await sendOrchestrated(text)
+      return
+    }
     const controller = new AbortController()
     abortRef.current = controller
     const mentioned = parseGroupMentions(text, memberEntries)
@@ -185,7 +304,43 @@ export function GroupChatView({
         <span className="shrink-0 text-micro text-ink-fg-3">
           {t('groupChat.memberCount', { count: memberIds.length })}
         </span>
+        <span className="ml-auto flex shrink-0 items-center gap-2">
+          {speaking && (
+            <>
+              <span className="text-micro text-ink-fg-3">{t('groupChat.speaking')}</span>
+              <button
+                type="button"
+                onClick={() => void stop()}
+                disabled={stopping}
+                aria-label={t('groupChat.stop')}
+                className="grid size-7 place-items-center rounded-md text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg disabled:opacity-40"
+              >
+                <Square size={12} strokeWidth={2} fill="currentColor" />
+              </button>
+            </>
+          )}
+          {labsOn && (
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
+              aria-label={t('groupChat.settings.open')}
+              className="grid size-7 place-items-center rounded-md text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+            >
+              <Settings size={15} strokeWidth={2} />
+            </button>
+          )}
+        </span>
       </div>
+
+      {labsOn && (
+        <GroupSettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          sessionId={sessionId}
+          memberIds={memberIds}
+          memberMeta={memberMeta}
+        />
+      )}
 
       {/* 消息流。 */}
       <div ref={scrollRef} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-4 py-4">
@@ -195,15 +350,20 @@ export function GroupChatView({
           </div>
         ) : (
           <div className="flex flex-col gap-3.5">
-            {rows.map((m) => (
-              <PersistedBubble
-                key={m.id}
-                message={m}
-                titleOfMember={titleOfMember}
-                colorOfMember={colorOfMember}
-                memberMeta={memberMeta}
-              />
-            ))}
+            {rows.map((m) => {
+              const stopped = groupStopReason(m)
+              return stopped != null ? (
+                <StoppedRow key={m.id} reason={stopped} t={t} />
+              ) : (
+                <PersistedBubble
+                  key={m.id}
+                  message={m}
+                  titleOfMember={titleOfMember}
+                  colorOfMember={colorOfMember}
+                  memberMeta={memberMeta}
+                />
+              )
+            })}
             {live.map((b) =>
               b.kind === 'user' ? (
                 <UserBubble
@@ -293,6 +453,25 @@ export function GroupChatView({
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+/** 地板命中时服务端写的 `role='system'` 行：居中灰字「已停止：<原因>」。
+ *  原因词表单源 = groupFloors.ts 的 GROUP_STOP_REASONS；查不到 i18n 条目就显示原始词
+ *  （宁可露出机器词，也不把一个新增的停止原因静默渲染成空白）。 */
+function StoppedRow({
+  reason,
+  t
+}: {
+  reason: string
+  t: ReturnType<typeof useTranslation>['t']
+}): React.ReactElement {
+  return (
+    <div className="py-1 text-center text-micro text-ink-fg-3">
+      {t('groupChat.stoppedPrefix', {
+        reason: t(`groupChat.stopped.${reason}`, { defaultValue: reason })
+      })}
     </div>
   )
 }

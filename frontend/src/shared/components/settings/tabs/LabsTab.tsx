@@ -1,13 +1,23 @@
-// Labs 收编纪律：只收默认 OFF 的灰度 flag；cutover 恒启用后从此处撤条目。
+// Labs 收编纪律：只收默认 OFF 的灰度 flag **或** owner_settings 型实验开关；cutover 恒启用后
+// 从此处撤条目。
+//
+// 两种形态、两条写路径，UI 上刻意长得不一样：
+//   • env 型（`MAILAGENT_*`）—— ExperimentalFlagRow：写 .env，多数要重启后端 / 重开 App 才生效，
+//     所以带 restartHint 与「重启后端」按钮，且 web 构建下不可写（没有本机 .env）。
+//   • owner_settings 型 —— OwnerSettingRow：写 agent_config.db 的一行 owner setting，热读生效，
+//     **没有重启提示**，桌面与远程 web 共享同一个值（照 chat_approval_mode 的先例）。
+//     新实验一律走这条（红线 6：不新增 MAILAGENT_* 变量）。
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
 
 import { useOpennessFlags } from '@shared/components/agents/hooks'
 import { Button } from '@shared/components/ui/button'
 import { Switch } from '@shared/components/ui/switch'
+import { setLabs, type LabsFlagValue } from '@shared/api/groupSettings'
+import { useLabsFlags } from '@shared/hooks/useLabsFlags'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
@@ -105,6 +115,28 @@ function ExperimentalFlagRow({
   )
 }
 
+/** owner_settings 型实验行：热读生效 → 无 restartHint、无「重启后端」按钮；写走 serve-api
+ *  （不是 .env），所以远程 web 上同样可写，不带 ExperimentalFlagRow 的 isWeb 禁用。 */
+function OwnerSettingRow({
+  label,
+  helper,
+  checked,
+  busy,
+  onToggle
+}: {
+  label: string
+  helper: React.ReactNode
+  checked: boolean
+  busy: boolean
+  onToggle: (checked: boolean) => void
+}): React.ReactElement {
+  return (
+    <Row label={label} helper={helper}>
+      <Switch checked={checked} disabled={busy} onCheckedChange={onToggle} aria-label={label} />
+    </Row>
+  )
+}
+
 function isEnabled(raw: string): boolean {
   return ['1', 'true'].includes(raw.trim().toLowerCase())
 }
@@ -117,6 +149,16 @@ export function LabsTab(): React.ReactElement {
   const runtimeFlags = useOpennessFlags(true)
   const [savingKey, setSavingKey] = React.useState<LabFlag | null>(null)
   const [restartingKey, setRestartingKey] = React.useState<LabFlag | null>(null)
+  const labs = useLabsFlags()
+  const saveLabs = useMutation({
+    mutationFn: (next: LabsFlagValue) => setLabs({ groupAgents: next }),
+    // 服务端回的是**落库后的**值（pessimistic）：直接写进缓存，群聊视图的下一次渲染就是新模态。
+    onSuccess: (flags) => {
+      queryClient.setQueryData(qk.labsFlags(), flags)
+      toastSuccess(t('settings.labs.saved'))
+    },
+    onError: (err) => toastError(t('settings.labs.saveFailed'), errorMessage(err))
+  })
 
   const ready = envState.status === 'ready'
   const values = ready ? envState.snapshot.values : {}
@@ -188,6 +230,16 @@ export function LabsTab(): React.ReactElement {
         <AlertTriangle size={14} className="mt-0.5 shrink-0 text-warn" aria-hidden="true" />
         <p className="text-aux leading-relaxed text-ink-fg-1">{t('settings.labs.warning')}</p>
       </div>
+
+      <Section title={t('settings.labs.groupAgents.label')}>
+        <OwnerSettingRow
+          label={t('settings.labs.groupAgents.label')}
+          helper={t('settings.labs.groupAgents.helper')}
+          checked={labs.groupAgents}
+          busy={labs.loading || saveLabs.isPending}
+          onToggle={(checked) => saveLabs.mutate(checked ? 'on' : 'off')}
+        />
+      </Section>
 
       <Section title={t('settings.labs.mcpConnectors.label')}>
         <ExperimentalFlagRow

@@ -109,6 +109,54 @@ export interface ChatSession {
   // L4 群聊 (ai_chat.db v30) — the GROUP session's member agent-id array as JSON (origin='group'
   // rows only). NULL/undefined for every non-group session. Cross-db ids (report_agent), no FK.
   members_json?: string | null
+  // L4 群聊 g1 (ai_chat.db v31) — 群设置 JSON（解析后的形状见 GroupConfig）。NULL/undefined =
+  // 全取出厂默认（默认值单源在 ai-gateway/groupFloors.ts，DB 里不存默认值副本）。
+  // 🔴 写者只有 serve-api（PUT /chat/sessions/{id}/group-config）；gateway 只读。
+  group_config_json?: string | null
+}
+
+/** L4 群聊 g1 — `ai_chat_sessions.group_config_json` 解析后的形状（父设计 §3.1）。
+ *
+ *  全部字段可缺：缺 = 取出厂默认。🔴 地板默认值不在这里（groupFloors.ts 是单源），本类型只
+ *  描述「owner 改过的那些值长什么样」。**单一定义**：gateway（GroupSessionFacts.config）与
+ *  renderer（群设置对话框）都 import 这一份，不另抄。 */
+export interface GroupConfig {
+  v: 1
+  judgeAgentId?: string | null
+  /** owner 确认法官位时写入的 `sha256(members_json 原文)`；g2 的免卡判据（失配即拒）。 */
+  judgeScopeHash?: string | null
+  chainCap?: number
+  hourlyTurns?: number
+  hourlyTokens?: number
+  hourlyUsd?: number
+  sessionTurnCap?: number | null
+  preset?: 'werewolf' | null
+  game?: {
+    kind: 'werewolf'
+    seed: number
+    roles: Record<string, 'wolf' | 'seer' | 'villager'>
+  }
+}
+
+/** L4 群聊 g1 — `GET /chat/sessions/{id}/group-metrics` 的读面形状（design §6 两指标 + 两个
+ *  滚动窗口）。🔴 `lastStopReason` 的值域是 groupFloors.ts 的 GROUP_STOP_REASONS，此处**有意**
+ *  留 string：多一处字面量联合就是多一处无闸手抄，渲染侧按 i18n key `groupChat.stopped.<reason>`
+ *  查表，查不到就显示原字符串。 */
+export interface GroupMetrics {
+  /** COUNT(outcome ∈ silent|held_dup|skipped) / COUNT(*)；无 turn 行 → null（未知，不是 0）。 */
+  silentRunRate: number | null
+  /** COUNT(turns WHERE 链根 trigger ∈ human|main_agent) / COUNT(DISTINCT 该类 chain_id)。 */
+  turnsPerHumanMessage: number | null
+  last1h: GroupMetricsWindow
+  last24h: GroupMetricsWindow
+  lastStopReason: string | null
+}
+
+export interface GroupMetricsWindow {
+  turns: number
+  tokens: number
+  /** 整窗 cost_usd 全 NULL → null（未知 ≠ 0：金额地板此时不生效，靠 tokens 地板兜底）。 */
+  costUsd: number | null
 }
 
 /** L4 批次3 R7 — the JSON shape stored in `ai_chat_sessions.paused_marker_json`.
@@ -177,6 +225,11 @@ export interface ChatMessage {
   // v30 (L4 群聊) — WHICH group member spoke an assistant message (origin='group' sessions only).
   // NULL for user rows / non-group sessions / every pre-v30 row (existing semantics untouched).
   speaker_agent_id?: string | null
+  // v31 (L4 群聊 g1) — 链归属：成员回复继承触发消息的 chain_id；链根行（人类消息 / 主 agent
+  // 投递 / 跨群投递）落库 NULL（g1 不回填自身 id），读侧判据 = groupChat.ts isChainRootRow。
+  // 🔴 链上限地板与两个指标按 ai_chat_group_turn.chain_id 计数，不读本列。
+  // NULL for 非群会话 / 每个 pre-v31 行。
+  chain_id?: number | null
   created_at: number
   updated_at: number
 }
@@ -226,6 +279,10 @@ export interface AppendMessageInput {
   contextTokens?: number | null
   // v30 (L4 群聊) — group speaker attribution; only the gateway group-chat writer sets it.
   speakerAgentId?: string | null
+  // v31 (L4 群聊 g1) — 链归属；只有群调度器写，成员回复带触发消息的 chain_id。
+  // 链根行省略本字段（id 由 INSERT 产生，拿不到自身 id）→ 落库 NULL，g1 不回填；
+  // 读侧判据是 groupChat.ts 的 isChainRootRow（NULL 或等于自身 id 即链根）。
+  chainId?: number | null
 }
 
 export interface UpdateMessagePatch {

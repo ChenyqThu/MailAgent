@@ -246,6 +246,11 @@ export interface ChatMessage {
    *  only). NULL for user rows / non-group sessions. Optional for the same reason as
    *  context_tokens: the wire is serve-api `SELECT *`, and a pre-v30 DB omits the field. */
   speaker_agent_id?: string | null
+  /** v31 (L4 群聊 g1) — 链归属：成员回复继承触发消息的 chain_id；链根行（人类消息 / 主 agent
+   *  投递 / 跨群投递）落库 NULL（g1 不回填自身 id）。🔴 链上限地板与两个指标按
+   *  ai_chat_group_turn.chain_id 计数，不读本列。NULL for 非群会话 / 每个 pre-v31 行。
+   *  Optional for the same reason as context_tokens（serve-api `SELECT *`，pre-v31 库整列缺席）。 */
+  chain_id?: number | null
   created_at: number
   updated_at: number
 }
@@ -341,6 +346,10 @@ export interface ChatSession {
   // v30 (L4 群聊) — the GROUP session's member agent-id array as JSON (origin='group' rows only;
   // NULL/undefined otherwise). The 群聊 tab parses it for the avatar stack + reply fan-out order.
   members_json?: string | null
+  // v31 (L4 群聊 g1) — 群设置 JSON（响应模式以外的那部分：法官位 / 链上限 / 小时预算 / 预设）。
+  // 解析后的形状 = shared/chat_model.ts 的 GroupConfig（单一定义，群设置对话框直接 import 它）。
+  // NULL/undefined = 全取出厂默认。🔴 写者只有 serve-api 的 PUT /chat/sessions/{id}/group-config。
+  group_config_json?: string | null
 }
 
 export interface ListAllSessionsOptions {

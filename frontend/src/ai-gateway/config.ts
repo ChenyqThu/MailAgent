@@ -10,9 +10,10 @@
 import type { LanguageModel, ToolSet } from 'ai'
 
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
-// 🔴 type-only — the ai_chat.db v28 marker shape lives with ChatSession (shared/chat_model.ts, no
-// better-sqlite3 import), so the gateway core and the Electron writer share one definition.
-import type { PausedApprovalMarker } from '@shared/chat_model'
+// 🔴 type-only — the ai_chat.db v28 marker shape and the v31 群设置 JSON shape live with
+// ChatSession (shared/chat_model.ts, no better-sqlite3 import), so the gateway core, the Electron
+// writer and the renderer share ONE definition each (no 手抄镜像).
+import type { GroupConfig, PausedApprovalMarker } from '@shared/chat_model'
 // 🔴 type-only import — fully erased, so config.ts keeps ZERO runtime dependency on
 // tools/types (which DOES import `tool` from 'ai'). index.ts statically imports
 // config.ts for resolveAiGatewayPort; this must never pull the heavy `ai` chunk into
@@ -45,8 +46,17 @@ import type { AgentRunSpec } from '@shared/api/types'
 // MEDIUM-6 — type-only + from the SDK-free providerRef: providers.ts (six provider SDK imports)
 // must only ever load via the lifecycle's flag-on dynamic import.
 import type { ProviderModelResolver, ProviderProtocol } from './providerRef'
+// 🔴 type-only — groupFloors.ts 是零依赖叶子（词表 / 地板常量单源，闸
+// tests/config/test_group_constants_parity.py）。只取三个字符串联合，运行时零拉取。
+import type { GroupResponseMode, GroupTriggerKind, GroupTurnOutcome } from './groupFloors'
+// 🔴 type-only — v31 的转录行形状（GroupHistoryRow + 四列）由 groupChat.ts 拥有，窗口函数吃的
+// 就是它；此处只声明 hook 的返回类型，类型循环在 TS 里完全擦除。
+import type { GroupTranscriptRow } from './groupChat'
 import type { CompactPersistence } from './compact'
 import type { CompactCoordinator } from './compact'
+// 🔴 type-only — the 调度器 is constructed by server.ts (createAiGatewayServer, like the
+// CompactCoordinator) from the group hooks below; this slot only lets a test inject its own.
+import type { GroupOrchestrator } from './groupOrchestrator'
 import type { SelectedModelContext } from './compactSelect'
 
 /** Part B — what makePersistOnFinish tells the lifecycle when a turn pauses at an island-eligible
@@ -183,6 +193,17 @@ export interface SessionAgentIdentity {
    *  tools, A3 §3 posture). Absent → byte-identical P4b semantics. */
   group?: {
     members: Array<{ agentId: string; title: string }>
+    /** g1 — the group session id (server fact; g2's tool factories pin their scope to it). */
+    sessionId?: number
+    /** g1 — this speaker is the group's judge (group_config_json.judgeAgentId). */
+    isJudge?: boolean
+    /** g1 — 本群 ∪ 父群 ∪ 子群（含自身）。 */
+    familySessionIds?: number[]
+    /** g1 — true ONLY for a 调度器-driven turn (groupOrchestrator via server.ts's speak adapter).
+     *  Drives the prompt 减重门 (buildGatewaySystemPrompt.groupSpeakerRun) and the 沉默契约
+     *  sentence. The v30 renderer-driven speaker turn (labs off) never sets it → prompt
+     *  byte-identical. */
+    groupSpeakerRun?: boolean
   } | null
 }
 
@@ -197,9 +218,83 @@ export interface GroupSessionMember {
   model?: string | null
 }
 
-/** v30（群聊）— the server-side facts of a group session (origin='group' rows only). */
+/** v30（群聊）— the server-side facts of a group session (origin='group' rows only).
+ *  g1 (v31) widens it from「成员名单」to「本群的全部服务端事实」: the 调度器 candidate set is
+ *  decided ONLY from these (成员序 / 每成员响应模式 / @ 解析 / seen 游标)，never from the request
+ *  body. 🔴 resolveGroupSession is re-read on EVERY onGroupMessage (no cache) — that is what makes
+ *  「改完设置对下一条消息生效」a structural property instead of a cache-invalidation promise. */
 export interface GroupSessionFacts {
   members: GroupSessionMember[]
+  /** g1 — 群设置（ai_chat_sessions.group_config_json 解析后）。缺列 / 脏 JSON → `{ v: 1 }`，
+   *  即「全部取出厂默认」（地板默认值在 groupFloors.ts，不在这里兜底）。 */
+  config: GroupConfig
+  /** g1 — 每成员响应模式（ai_chat_group_member.response_mode）。缺行 = 'mention'（PRD Q1），
+   *  故 modes 只含**有行**的成员，读侧一律 `modes[agentId] ?? 'mention'`。 */
+  modes: Record<string, GroupResponseMode>
+  /** g1 — 父群 id（子群才非 null；ai_chat_sessions.parent_session_id，v25 已有列）。g2 的法官
+   *  family scope 与 g1 的 stopFamily / 小时预算 family 窗口都据此推。 */
+  parentSessionId: number | null
+  /** g1 — 本群的子群 id（按 parent_session_id 反查，origin='group' 行）。family = 本群 ∪ 父 ∪ 子。 */
+  childSessionIds: number[]
+}
+
+/** g1 — labs 实验开关的解析结果（今天只有一项；加项时两侧同批：serve-api `/api/agent/labs`）。 */
+export interface LabsFlags {
+  groupAgents: boolean
+}
+
+/** g1 — 一行 `ai_chat_group_turn` 台账（每次唤醒写一行，outcome 记录它怎么收场的）。
+ *  🔴 outcome / triggerKind 的值域来自 groupFloors.ts，与 group_limits.py、connection.ts v31 的
+ *  两条 CHECK、chat.py 的校验元组四处对账（tests/config/test_group_constants_parity.py）。 */
+export interface GroupTurnInsert {
+  sessionId: number
+  runId: string
+  chainId: number
+  seq: number
+  agentId: string
+  triggerKind: GroupTriggerKind
+  outcome: GroupTurnOutcome
+  /** spoke 时的消息行 id；其余 outcome 为 null（沉默 / HOLD / 跳过都不落消息行）。 */
+  messageId?: number | null
+  model?: string | null
+  tokensInput?: number | null
+  tokensOutput?: number | null
+  costUsd?: number | null
+  /** 本轮窗口的首末行 id（可回放「模型当时看见了什么」）。 */
+  windowFromId?: number | null
+  windowToId?: number | null
+  startedAt: number
+  finishedAt?: number | null
+  /** failed 的错误摘要 / stopped 的地板原因（GROUP_STOP_REASONS 之一）。 */
+  error?: string | null
+}
+
+/** g1 — 一个 family 在滚动窗口内的用量（小时预算三条地板的输入）。 */
+export interface GroupUsage {
+  turns: number
+  tokens: number
+  /** 整窗 cost_usd 全 NULL → null（未知，不是 0）。 */
+  costUsd: number | null
+}
+
+/** g1 — spoke turn 的 `agent_run_log` 镜像输入（design §6）。status 的值域是
+ *  run_log.py 的 AGENT_RUN_LOG_STATUS_VALUES —— 🔴 **没有 'stopped'**（sync_store 的 CHECK 会拒）。 */
+export interface GroupRunLogMirror {
+  agentId: string
+  sessionId: number
+  chainId: number
+  runId: string
+  status: 'completed' | 'failed'
+  summary: string
+  model?: string | null
+  tokensInput?: number | null
+  tokensOutput?: number | null
+  startedAtMs: number
+  finishedAtMs: number
+  windowFromId?: number | null
+  windowToId?: number | null
+  messageId?: number | null
+  error?: string | null
 }
 
 /** v30（群聊）— one persisted message row projected for group-history assembly. */
@@ -338,8 +433,11 @@ export interface AiGatewayConfig {
   ) => Promise<GroupSessionFacts | null> | GroupSessionFacts | null
   /** v30（群聊）— the session's full persisted message log, oldest-first, for server-side group
    *  history assembly (assembleGroupHistory maps it per speaker: own rows → assistant, everyone
-   *  else → prefixed user). The Electron wrapper reads chat_db listMessages. */
-  listGroupHistory?: (sessionId: number) => GroupHistoryRow[]
+   *  else → prefixed user). The Electron wrapper reads chat_db listMessages.
+   *  g1 (v31): the projection now carries `id / chainId / via / createdAt` too — the 调度器 needs the
+   *  row id (seen 游标 + 窗口边界), the chain id (链归属), and `metadata.via='main_agent'`
+   *  (主助理投递的装配标签). 🔴 每个 turn 前重读一次（新鲜度重算），不缓存快照。 */
+  listGroupHistory?: (sessionId: number) => GroupTranscriptRow[]
   /** v30（群聊）— persist one group message (the owner's user message, or a member's finished
    *  assistant reply stamped speakerAgentId; both status='complete'). Bumps the session's
    *  updated_at (appendMessage semantics). Returns the new message row id. 🔴 A failed / aborted
@@ -347,12 +445,58 @@ export interface AiGatewayConfig {
   appendGroupMessage?: (
     sessionId: number,
     message: {
-      role: 'user' | 'assistant'
+      /** g1: 'system' joins the domain — the 调度器 writes ONE `role='system'` row per stop
+       *  (`metadata={kind:'group_stop', reason, runId}`), rendered as 居中灰字 by the 群视图. */
+      role: 'user' | 'assistant' | 'system'
       content: string
       speakerAgentId: string | null
       model?: string | null
+      /** g1 — 本轮 usage（AC6 成本可见）。省略 → NULL（未知，不是 0）。 */
+      tokensInput?: number | null
+      tokensOutput?: number | null
+      /** g1 — modelCost 查表结果；查不到 NULL（UI 标「估」，绝不猜价）。 */
+      costUsd?: number | null
+      /** g1 — 链归属（v31 ai_chat_messages.chain_id）。链根行传自身 id 是不可能的（id 由
+       *  INSERT 产生），故链根省略本字段 → 落库 NULL，g1 **不**回填；读侧判据是
+       *  groupChat.ts 的 isChainRootRow（NULL 或等于自身 id 即链根）。地板与指标都按
+       *  ai_chat_group_turn.chain_id 计数（那里恒是链根消息 id），不读本列。 */
+      chainId?: number | null
+      /** g1 — 原样落 `ai_chat_messages.metadata`（已 JSON 序列化的字符串）。用于 group_stop
+       *  系统行与主 agent 投递的 `via`。 */
+      metadata?: string | null
     }
   ) => number
+
+  /** g1 — labs 实验开关热读（真源 = agent_config.db owner_settings `labs_group_agents`，经
+   *  serve-api `GET /api/agent/labs`）。照 resolveGlobalApprovalMode 形状：短 TTL 缓存 +
+   *  有界超时，🔴 CONTRACTED 失败 → `{ groupAgents: false }`（fail-closed：够不着 serve-api
+   *  只能意味着「退回 v1 语义」，绝不能是「服务端悄悄开始编排」）。省略（tests / 未接线）→
+   *  调用方按 off 处理，字节级等同 v30。 */
+  resolveLabsFlags?: () => Promise<LabsFlags> | LabsFlags
+  /** g1 — 某成员在本群的 seen 游标（`ai_chat_group_member.seen_through_id`）。缺行 → null
+   *  = 首轮（窗口取最后 WINDOW_MAX_ROWS 行）。 */
+  getSeenCursor?: (sessionId: number, agentId: string) => number | null
+  /** g1 — 推进 seen 游标。🔴 **列级写入**：`INSERT OR IGNORE` + `UPDATE ... SET seen_through_id`，
+   *  绝不整行 UPSERT —— 同一张表的 `response_mode` 列归 serve-api 写，整行覆写会把 owner 刚改
+   *  的响应模式冲掉（父设计 §3.1 两写者纪律）。spoke / silent / held_dup / skipped 推进，
+   *  failed / stopped 不推进。 */
+  advanceSeenCursor?: (sessionId: number, agentId: string, throughId: number) => void
+  /** g1 — 写一行 `ai_chat_group_turn` 台账（每次唤醒一行，无论说没说话）。这张表是两个成本
+   *  指标与所有地板计数的**权威源**（agent_run_log 只是 spoke 的镜像，写失败只 warn）。 */
+  insertGroupTurn?: (row: GroupTurnInsert) => number
+  /** g1 — family 的滚动窗口用量（`ai_chat_group_turn` 聚合，`started_at >= sinceMs`）。小时
+   *  预算三条地板读它。costUsd 在整窗全 NULL 时返 null（未知 ≠ 0：金额地板此时不生效，靠
+   *  tokens 地板兜底）。 */
+  groupUsage?: (sessionIds: readonly number[], sinceMs: number) => GroupUsage
+  /** g1 — 把一个 **spoke** turn 镜像成一行 `agent_run_log`（团队页执行记录可见，AC6）。
+   *  🔴 best-effort：跨库无事务（run log 在 sync_store.db、群消息在 ai_chat.db），失败只 warn，
+   *  绝不阻塞或回滚 turn。沉默不镜像（silent 率从 ai_chat_group_turn 读）。 */
+  mirrorGroupRunLog?: (input: GroupRunLogMirror) => Promise<void>
+  /** g1 — the server-side group run 调度器. Omitted (the production shape) → createAiGatewayServer
+   *  builds one from the group hooks + activeRuns above (all present → orchestrating is possible;
+   *  any missing → null, /api/ai/group-chat answers `orchestrated:false` and never 409s). Set only
+   *  by tests that need `idle()` / `pendingFor()` on the instance the endpoints drive. */
+  groupScheduler?: GroupOrchestrator
   /** 08-05 WP-11 — hot-read the owner's per-tool approval tiers + send recipient whitelist
    *  (agent_config.db tool_approval_pref / owner_settings via GET /api/agent/tool-prefs). Called
    *  by prepareChatRun ONCE per run and ONLY for manual_chat runs (headless/im never consult it).

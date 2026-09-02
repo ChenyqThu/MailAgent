@@ -27,7 +27,9 @@ import { UI_MESSAGE_STREAM_HEADERS } from 'ai'
 
 import type { AiGatewayConfig, GroupSessionFacts, SessionAgentIdentity } from './config'
 // v30（群聊）— server-side history assembly for a group speaker run (pure helper).
-import { assembleGroupHistory } from './groupChat'
+import { assembleGroupHistory, type GroupTranscriptRow } from './groupChat'
+// g1 — the server-side group run 调度器 (pure Node; deps injected from the cfg group hooks below).
+import { GroupOrchestrator, type GroupSpeakInput, type GroupSpeakResult } from './groupOrchestrator'
 import {
   chatMessageToUIMessage,
   type MailAgentUIMessageMetadata
@@ -733,7 +735,8 @@ function handleRunActive(res: ServerResponse, cfg: AiGatewayConfig, url: string)
 async function handleRunStop(
   req: IncomingMessage,
   res: ServerResponse,
-  cfg: AiGatewayConfig
+  cfg: AiGatewayConfig,
+  groupScheduler: GroupOrchestrator | null
 ): Promise<void> {
   if (!cfg.activeRuns) {
     writeJson(res, 404, { error: 'E_NOT_IMPLEMENTED', hint: 'detached chat runs not enabled' })
@@ -747,11 +750,15 @@ async function handleRunStop(
     return
   }
   const out = cfg.activeRuns.stop(sessionId)
+  // g1 (父设计拍板 E) — a group session's stop also clears the whole family's queues and writes
+  // one `group_stop` system row per family session. Idempotent with the registry abort above:
+  // the aborted turn's own stop call finds the family already stopped and writes nothing.
+  const groupStop = groupScheduler ? groupScheduler.stopFamily(sessionId) : { stopped: false }
   if (cfg.queuedInputStore) {
     cfg.queuedInputStore.restoreForSession(sessionId)
     cfg.onQueuedInputChanged?.(sessionId)
   }
-  writeJson(res, 200, { stopped: out.stopped })
+  writeJson(res, 200, { stopped: out.stopped || groupStop.stopped })
 }
 
 function queuedInputNotImplemented(res: ServerResponse): void {
@@ -1194,11 +1201,17 @@ async function handleSearchAgent(
  *     renderer loop, so an agent reply can never trigger another agent).
  *
  * Registered unconditionally; the three cfg hooks gate it (404 on hand-built harness cfgs).
+ *
+ * g1 (labs `groupAgents` on, 调度器 built) — the append branch answers FIRST, then hands the new
+ * row to `groupScheduler.onGroupMessage` (the chain runs detached, never tied to `req`); the
+ * speaker branch is refused 409 E_LABS_ORCHESTRATED (the two drivers are mutually exclusive).
+ * labs off / 调度器 absent → both branches byte-identical to v30 (`orchestrated:false`).
  */
 async function handleGroupChat(
   req: IncomingMessage,
   res: ServerResponse,
-  cfg: AiGatewayConfig
+  cfg: AiGatewayConfig,
+  groupScheduler: GroupOrchestrator | null
 ): Promise<void> {
   const { resolveGroupSession, listGroupHistory, appendGroupMessage } = cfg
   if (!resolveGroupSession || !listGroupHistory || !appendGroupMessage) {
@@ -1228,6 +1241,7 @@ async function handleGroupChat(
       : null
   const userText =
     typeof body.userText === 'string' && body.userText.length > 0 ? body.userText : null
+  const orchestrating = groupScheduler != null && (await labsGroupAgentsOn(cfg))
 
   // Append mode — the owner's message enters the shared transcript once, BEFORE any speaker run.
   if (speakAs == null) {
@@ -1240,7 +1254,30 @@ async function handleGroupChat(
       content: userText,
       speakerAgentId: null
     })
-    writeJson(res, 200, { ok: true, messageId })
+    writeJson(res, 200, { ok: true, messageId, orchestrated: orchestrating })
+    if (orchestrating) {
+      const row: GroupTranscriptRow = {
+        id: messageId,
+        role: 'user',
+        content: userText,
+        speakerAgentId: null,
+        status: 'complete',
+        chainId: messageId,
+        via: null,
+        createdAt: Date.now()
+      }
+      groupScheduler.onGroupMessage(sessionId, row).catch((err: unknown) => {
+        console.warn('[ai-gateway] group onGroupMessage failed', { sessionId, messageId, err })
+      })
+    }
+    return
+  }
+
+  if (orchestrating) {
+    writeJson(res, 409, {
+      error: 'E_LABS_ORCHESTRATED',
+      hint: 'group speaker turns are driven server-side while labs.groupAgents is on'
+    })
     return
   }
 
@@ -1313,6 +1350,123 @@ async function handleGroupChat(
     if (!controller.signal.aborted) writeSse(res, { type: 'error', errorText: message })
   }
   res.end()
+}
+
+/** g1 — labs `groupAgents` as the endpoints see it: hook absent (harness / not wired) or any
+ *  failure → off (fail-closed, the hook's own contract restated at the call site). */
+async function labsGroupAgentsOn(cfg: AiGatewayConfig): Promise<boolean> {
+  if (!cfg.resolveLabsFlags) return false
+  try {
+    return (await cfg.resolveLabsFlags()).groupAgents === true
+  } catch {
+    return false
+  }
+}
+
+/** g1 — one 调度器 member turn = one prepareChatRun with the member's identity + the group roster
+ *  (same seams as the v30 speaker branch above: member model middle priority, <current_group_chat>
+ *  block, 🔴 zero tools by construction), plus `groupSpeakerRun:true` for the prompt 减重门 and
+ *  the 沉默契约. The run's text + usage go back to the 调度器, which decides silent / held_dup /
+ *  spoke and does the persisting — nothing here writes the transcript. */
+async function speakAsGroupMember(
+  cfg: AiGatewayConfig,
+  input: GroupSpeakInput
+): Promise<GroupSpeakResult> {
+  const identity: SessionAgentIdentity = {
+    agentId: input.member.agentId,
+    agentTitle: input.member.title,
+    duty: input.member.duty ?? null,
+    model: input.member.model ?? null,
+    scheduleLine: null,
+    group: {
+      members: input.facts.members.map((m) => ({ agentId: m.agentId, title: m.title })),
+      sessionId: input.sessionId,
+      isJudge:
+        input.facts.config.judgeAgentId != null &&
+        input.facts.config.judgeAgentId === input.agentId,
+      familySessionIds: input.facts.familySessionIds,
+      groupSpeakerRun: true
+    }
+  }
+  const prepared = await prepareChatRun(
+    { messages: input.messages },
+    cfg,
+    input.signal,
+    'manual_chat',
+    identity
+  )
+  if (!prepared.ok) throw new Error(`${prepared.body.error}: ${prepared.body.hint}`)
+  const text = await prepared.run.result.text
+  const usage = await prepared.run.result.usage
+  return {
+    text,
+    modelId: prepared.run.modelId,
+    usage: {
+      inputTokens: usage.inputTokens ?? null,
+      outputTokens: usage.outputTokens ?? null
+    },
+    protocol: prepared.run.protocol
+  }
+}
+
+/** g1 — build the 调度器 from the cfg group hooks (all seven + activeRuns present), else null =
+ *  orchestration impossible (endpoint stays v30 whatever labs says). Mirrors the CompactCoordinator
+ *  construction point: cfg.groupScheduler (tests) wins over a fresh instance. */
+function buildGroupScheduler(cfg: AiGatewayConfig): GroupOrchestrator | null {
+  if (cfg.groupScheduler) return cfg.groupScheduler
+  const {
+    resolveGroupSession,
+    listGroupHistory,
+    appendGroupMessage,
+    getSeenCursor,
+    advanceSeenCursor,
+    insertGroupTurn,
+    groupUsage,
+    activeRuns
+  } = cfg
+  if (
+    !resolveGroupSession ||
+    !listGroupHistory ||
+    !appendGroupMessage ||
+    !getSeenCursor ||
+    !advanceSeenCursor ||
+    !insertGroupTurn ||
+    !groupUsage ||
+    !activeRuns
+  ) {
+    return null
+  }
+  return new GroupOrchestrator({
+    deps: {
+      resolveFacts: async (sessionId) => {
+        const facts = (await resolveGroupSession(sessionId)) ?? null
+        if (!facts) return null
+        return {
+          members: facts.members,
+          modes: facts.modes,
+          config: facts.config,
+          familySessionIds: [
+            sessionId,
+            ...(facts.parentSessionId != null ? [facts.parentSessionId] : []),
+            ...facts.childSessionIds
+          ]
+        }
+      },
+      listHistory: listGroupHistory,
+      appendMessage: appendGroupMessage,
+      getSeenCursor,
+      advanceSeenCursor,
+      insertTurn: insertGroupTurn,
+      groupUsage,
+      resolveLabs: async () => ({ groupAgents: await labsGroupAgentsOn(cfg) }),
+      speak: (input) => speakAsGroupMember(cfg, input),
+      registerRun: (sessionId, controller) => activeRuns.register(sessionId, controller),
+      releaseRun: (sessionId, runId) => activeRuns.release(sessionId, runId),
+      mirrorRunLog: cfg.mirrorGroupRunLog,
+      now: () => Date.now(),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+    }
+  })
 }
 
 /** S4 W3 — map a HeadlessAgentResult to the wire JSON the AgentRunWorker consumes. The worker reads
@@ -1757,6 +1911,8 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
   const compactCoordinator =
     cfg.compactCoordinator ??
     (cfg.compactPersistence ? new CompactCoordinator(cfg, cfg.compactPersistence) : null)
+  // g1 — one 调度器 per gateway process (single serial worker across every group session).
+  const groupScheduler = buildGroupScheduler(cfg)
   return createServer((req, res) => {
     const url = req.url ?? '/'
     const method = req.method ?? 'GET'
@@ -1883,7 +2039,7 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     // v30（群聊）— group-chat writes (user append + member speaker runs). Registered
     // unconditionally; the three group cfg hooks gate it (404 when not wired).
     if (method === 'POST' && path === '/api/ai/group-chat') {
-      dispatch('/api/ai/group-chat', res, handleGroupChat(req, res, cfg))
+      dispatch('/api/ai/group-chat', res, handleGroupChat(req, res, cfg, groupScheduler))
       return
     }
 
@@ -1910,7 +2066,7 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
       return
     }
     if (method === 'POST' && path === '/api/ai/run/stop') {
-      dispatch('/api/ai/run/stop', res, handleRunStop(req, res, cfg))
+      dispatch('/api/ai/run/stop', res, handleRunStop(req, res, cfg, groupScheduler))
       return
     }
 

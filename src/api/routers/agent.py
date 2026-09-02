@@ -366,6 +366,60 @@ async def set_auto_compact(request: Request, body: Optional[dict[str, Any]] = No
     return success_envelope({"mode": mode}, request=request, source="sqlite")
 
 
+# ── labs 实验开关（g1 群聊，task 09-01）────────────────────────────────────────────────
+#
+# owner_settings 型实验开关（**不新增 MAILAGENT_* env**，父设计拍板 C / 红线 6）：出厂 off，
+# owner 在设置-实验室里打开。今天只有一项：
+#   labs_group_agents —— 群聊多 agent 服务端编排。on = gateway 接管发言循环（候选集 / 地板 /
+#   台账）；off = 退回 v1（renderer 自己的循环），v31 的表与列保留不删（AC9）。
+#
+# 🔴 gateway 侧读失败 **fail-closed 到 off**（lifecycle 的 resolveLabsFlags）：够不着 serve-api
+# 不能变成「服务端悄悄开始编排」——那会在 owner 完全不知情时开始烧 token。
+# 写入只来自 owner UI（verify_cf_access），没有任何 gateway 工具够得着（policy_rules 同款纪律）。
+
+LABS_FLAG_VALUES: tuple[str, ...] = ("on", "off")
+_LABS_GROUP_AGENTS_KEY = "labs_group_agents"
+
+
+@router.get("/labs", dependencies=[Depends(verify_cf_access)])
+async def get_labs_flags(request: Request):
+    """读 labs 实验开关。缺行 / 脏值 → 'off'（fail-closed，同 gateway 侧的兜底值）。"""
+    raw = get_agent_config_store().get_owner_setting(_LABS_GROUP_AGENTS_KEY)
+    return success_envelope(
+        {"groupAgents": raw if raw in LABS_FLAG_VALUES else "off"},
+        request=request,
+        source="sqlite",
+    )
+
+
+@router.put("/labs", dependencies=[Depends(verify_cf_access)])
+async def set_labs_flags(request: Request, body: Optional[dict[str, Any]] = None):
+    """写 labs 实验开关。body = {groupAgents: 'on'|'off'}（只写传了的键）；越域值一律 400。
+
+    切换落一条 INFO 审计日志 —— 打开它等于把「谁来驱动群里的发言」从 renderer 换成服务端。"""
+    opts = body or {}
+    if "groupAgents" not in opts:
+        raise APIError(
+            "E_INVALID_ARG",
+            "body must carry at least one labs flag (groupAgents)",
+            http_status=400,
+            source="sqlite",
+        )
+    value = opts.get("groupAgents")
+    if value not in LABS_FLAG_VALUES:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"body.groupAgents must be one of {LABS_FLAG_VALUES}",
+            http_status=400,
+            source="sqlite",
+        )
+    store = get_agent_config_store()
+    previous = store.get_owner_setting(_LABS_GROUP_AGENTS_KEY) or "off"
+    store.set_owner_setting(_LABS_GROUP_AGENTS_KEY, value)
+    logger.info(f"labs group-agents switched: {previous} → {value} (owner UI)")
+    return success_envelope({"groupAgents": value}, request=request, source="sqlite")
+
+
 # ── 主 agent 身份（0813）：名字 + 头像 ──────────────────────────────────────────────
 #
 # owner 级全局设置：默认助手（interactive chat）的显示名与头像。

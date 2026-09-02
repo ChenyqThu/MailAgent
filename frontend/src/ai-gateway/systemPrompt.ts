@@ -24,6 +24,8 @@ import {
 } from './prompts/stable_prompt'
 import { buildContextSystemBlock } from '@shared/assistant/context/contextSerializer'
 import type { AgentContextSnapshot } from '@shared/assistant/context/contextSnapshot'
+// g1 — 零依赖叶子；沉默契约那一句与调度器的 isSilence 判定共用同一个哨兵字面量。
+import { SILENCE_SENTINEL } from './groupFloors'
 
 /** The /chat/config projection the gateway needs to assemble the stable system prefix — the SAME
  *  fields the legacy HttpPlatformConfig carries (standing context + user context + memory + KOS
@@ -164,21 +166,33 @@ export function buildGatewaySystemPrompt(args: {
   /** W6 — true iff THIS run's built ToolSet holds suggest_followups (manual chat). Injects the
    *  follow-up guidance block; absent/false → byte-identical prompt (headless / harness / tests). */
   followupToolAvailable?: boolean
+  /** g1 (父设计拍板 D) — a 调度器-driven group speaker turn. True skips the four sections a
+   *  zero-tool speaking turn cannot act on (skill fragments / skill catalog / connector catalog /
+   *  memory.md) and adds the 沉默契约 sentence to the group block. Absent/false on every other
+   *  path (main agent / headless / team / the v30 renderer-driven speaker) → byte-identical. */
+  groupSpeakerRun?: boolean
 }): string {
   const pc = args.promptConfig
+  const groupSpeakerRun = args.groupSpeakerRun === true
   const cfg: ChatModelConfig = {
     defaultModel: '', // unused by buildStableSystemPrompt
     kosConsumerEnabled: false,
     kosConfigured: pc?.kosConfigured ?? false,
     kosL1HotBlockEnabled: false, // the gateway does no L1 sender-digest prefetch
     userContext: pc?.userContext && pc.userContext.length > 0 ? pc.userContext : null,
-    memorySummary: pc?.memorySummary && pc.memorySummary.length > 0 ? pc.memorySummary : null,
+    memorySummary:
+      !groupSpeakerRun && pc?.memorySummary && pc.memorySummary.length > 0
+        ? pc.memorySummary
+        : null,
     // 🔴 manual chat only (08-02 review F8). The only fragment shipped today is the Custom Agent
     // builder workflow, and its six CRUD tools are capability_change — structurally absent from a
     // headless run's ToolSet (isToolClassAllowedInMode). Injecting it there taught an unattended
     // agent a procedure it cannot perform, and burned cacheable prefix on every scheduled run.
     skillFragments:
-      !args.headlessAgentRun && pc?.trustedSkillFragments && pc.trustedSkillFragments.length > 0
+      !args.headlessAgentRun &&
+      !groupSpeakerRun &&
+      pc?.trustedSkillFragments &&
+      pc.trustedSkillFragments.length > 0
         ? pc.trustedSkillFragments
         : null,
     // 阶段 0.5 — 🔴 manual chat only, deliberately following the SAME conservative line as the
@@ -187,15 +201,18 @@ export function buildGatewaySystemPrompt(args: {
     // not have would be prompt weight it can act on in exactly zero ways. Whether headless should
     // ever see it is a separate owner call; F8's judgement is untouched here.
     skillCatalog:
-      !args.headlessAgentRun && pc?.skillCatalog && pc.skillCatalog.length > 0
+      !args.headlessAgentRun && !groupSpeakerRun && pc?.skillCatalog && pc.skillCatalog.length > 0
         ? pc.skillCatalog
         : null,
     // D1 — 🔴 deliberately NOT the skillCatalog manual-only gate: a granted headless run really
     // holds connector tools (grant_connectors), so hiding the catalog there would recreate the
     // dogfood blind spot for scheduled agents. The run-scoping already happened in prepareChatRun
     // (scopeConnectorCatalogForRun → connectorCatalogForRun): what arrives here IS the run's set.
+    // g1 — a group speaker turn holds zero tools of any kind, so its catalog is always empty.
     connectorCatalog:
-      pc?.connectorCatalog && pc.connectorCatalog.length > 0 ? pc.connectorCatalog : null,
+      !groupSpeakerRun && pc?.connectorCatalog && pc.connectorCatalog.length > 0
+        ? pc.connectorCatalog
+        : null,
     standingContext:
       pc?.standingContext && pc.standingContext.length > 0 ? pc.standingContext : null
   }
@@ -225,7 +242,8 @@ export function buildGatewaySystemPrompt(args: {
       ? args.sessionAgentIdentity.group
         ? buildGroupChatIdentityBlock({
             ...args.sessionAgentIdentity,
-            group: args.sessionAgentIdentity.group
+            group: args.sessionAgentIdentity.group,
+            silenceContract: groupSpeakerRun
           })
         : buildTeamAgentIdentityBlock(args.sessionAgentIdentity)
       : ''
@@ -277,14 +295,20 @@ export function buildTeamAgentIdentityBlock(identity: {
 /** v30（群聊）— render the <current_group_chat> block for a group speaker run. Exported for
  *  tests. The trailing sentences pin the speaking discipline: own voice only, concise, never
  *  impersonate另一个成员, never emit a `[名字]` prefix (that labelling is how OTHER
- *  participants' turns are fed in — see groupChat.ts assembleGroupHistory). */
+ *  participants' turns are fed in — see groupChat.ts assembleGroupHistory).
+ *  g1 — `silenceContract` (调度器 turns only) appends the one-sentence 沉默契约; `gameSecret`
+ *  (g3) renders a <game_secret> element with the speaker's OWN role facts — server-side facts,
+ *  never a prompt rule. */
 export function buildGroupChatIdentityBlock(identity: {
   agentId: string
   agentTitle: string
   duty?: string | null
   group: { members: Array<{ agentId: string; title: string }> }
+  silenceContract?: boolean
+  gameSecret?: string | null
 }): string {
   const duty = identity.duty?.trim()
+  const gameSecret = identity.gameSecret?.trim()
   const memberTitles = identity.group.members.map((m) => m.title)
   const lines = [
     '<current_group_chat>',
@@ -292,6 +316,7 @@ export function buildGroupChatIdentityBlock(identity: {
     `  <self_title>${escapeXml(identity.agentTitle)}</self_title>`,
     ...(duty ? [`  <duty>${escapeXml(duty)}</duty>`] : []),
     `  <members>${escapeXml(memberTitles.join('、'))}</members>`,
+    ...(gameSecret ? [`  <game_secret>${escapeXml(gameSecret)}</game_secret>`] : []),
     '</current_group_chat>',
     `这是一个多人群聊，成员有：${memberTitles.join('、')}，以及用户本人。` +
       `你正在以成员「${identity.agentTitle}」的身份发言。历史消息里以「[名字]」开头的是` +
@@ -299,7 +324,8 @@ export function buildGroupChatIdentityBlock(identity: {
       '也不要在回复前加「[名字]」前缀。' +
       (duty
         ? '<duty> 是你的职责设定，仅作背景参考，除非用户明确要求，不要自行开始执行该任务。'
-        : '')
+        : '') +
+      (identity.silenceContract === true ? `若这轮无需你发言，只回复 ${SILENCE_SENTINEL}。` : '')
   ]
   return lines.join('\n')
 }

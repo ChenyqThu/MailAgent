@@ -9,6 +9,6 @@ export interface GroupMemberMeta {
 }
 
 /** members_json → 成员 id 数组。单源 = gateway groupChat.ts 的 parseGroupMemberIds
- *  （该文件是显式纯叶子：零运行时依赖、type-only imports，renderer 直引不带进任何
- *  main 侧包袱）——不手抄第二份容错口径。 */
+ *  （该文件是显式纯叶子：type-only imports 之外只引 groupFloors 常量，同样零依赖，
+ *  renderer 直引不带进任何 main 侧包袱）——不手抄第二份容错口径。 */
 export { parseGroupMemberIds as parseMembersJson } from '../../../../ai-gateway/groupChat'

@@ -82,8 +82,18 @@ export const qk = {
     itemSessions: (itemId: number) => ['chat', 'itemSessions', itemId] as const,
     queuedInput: (sessionId: number | null) => ['chat', 'queuedInput', sessionId] as const,
     kosAvailable: () => ['chat', 'kosAvailable'] as const,
-    config: (flag: string) => ['chat', 'config', flag] as const
+    config: (flag: string) => ['chat', 'config', flag] as const,
+    // L4 群聊 g1 — 群设置 / 群成本指标（serve-api `/chat/sessions/{id}/group-config|metrics`）。
+    groupConfig: (sessionId: number) => ['chat', 'groupConfig', sessionId] as const,
+    groupMetrics: (sessionId: number) => ['chat', 'groupMetrics', sessionId] as const,
+    /** L4 群聊 g1 — 服务端编排下「这个群此刻有没有成员在发言」（gateway `/api/ai/run/active`
+     *  探针，30s 兜底轮询；真正的即时刷新走 `chat:turn-persisted` 广播）。 */
+    groupRunActive: (sessionId: number) => ['chat', 'groupRunActive', sessionId] as const
   },
+
+  /** L4 群聊 g1 — labs 实验开关（owner_settings，`GET/PUT /api/agent/labs`）。设置页与群聊
+   *  视图共读同一份缓存：在实验室里一开，切回群聊就是新模态。 */
+  labsFlags: () => ['agent', 'labs'] as const,
 
   folder: {
     all: () => ['folder'] as const,

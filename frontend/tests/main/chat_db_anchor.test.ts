@@ -126,7 +126,7 @@ describe('chat_db — v6 → v7 anchor migration', () => {
     // v28 — item_id + paused_marker_json (L4 批次3 行动项执行契约 / R7 曾暂停 marker);
     // v29 — origin value-domain registers 'team' (L4 P4b 团队对话, no-op ladder step);
     // v30 — members_json + speaker_agent_id (L4 群聊), origin value-domain registers 'group'.
-    expect(ver).toBe('30')
+    expect(ver).toBe('31')
 
     // Anchor columns added + backfilled for the pre-existing email row.
     const row = db.prepare('SELECT * FROM ai_chat_sessions WHERE id = 1').get() as {

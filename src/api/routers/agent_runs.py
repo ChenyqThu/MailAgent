@@ -28,10 +28,13 @@ from pydantic import BaseModel
 
 from src.agents.fence import fence_calendar_envelope, fence_email_envelope
 from src.agents.run_log import (
+    AGENT_RUN_LOG_STATUS_VALUES,
+    AGENT_RUN_STEP_KINDS,
     count_run_logs,
     get_run_log,
     list_run_logs,
     list_run_steps,
+    record_agent_run,
 )
 from src.agents.run_queue import enqueue_agent_run
 from src.agents.run_sources import RUN_SOURCE_RUN_LOG, resolve_run_source
@@ -728,6 +731,77 @@ def _run_log_item(row: dict[str, Any]) -> dict[str, Any]:
             else None
         ),
     }
+
+
+class _RunLogStepBody(BaseModel):
+    kind: str
+    name: Optional[str] = None
+    detail: Optional[str] = None
+    payload: Optional[dict[str, Any]] = None
+    ok: Optional[bool] = None
+    ms: Optional[int] = None
+
+
+class _RunLogBody(BaseModel):
+    agentId: str
+    startedAtMs: int
+    status: str
+    completedAtMs: Optional[int] = None
+    triggerKind: Optional[str] = None
+    triggerDetail: Optional[str] = None
+    summary: Optional[str] = None
+    model: Optional[str] = None
+    inputTokens: Optional[int] = None
+    outputTokens: Optional[int] = None
+    error: Optional[str] = None
+    steps: list[_RunLogStepBody] = []
+
+
+@router.post("/run-log", dependencies=[Depends(verify_local_token)])
+async def post_run_log(request: Request, body: _RunLogBody):
+    """gateway → 一行 ``agent_run_log``（g1 群聊：群成员的 spoke turn 镜像进团队页执行记录）。
+
+    🔴 鉴权 = ``verify_local_token``（本机 gateway loopback 专用腿，不接受 CF JWT）——与
+    ``/{job_id}/approval-state`` 同款纪律：这是 gateway 内部回写面，不是 renderer 调用面。
+
+    🔴 值域**不发明词表**：``status`` ∈ ``run_log.AGENT_RUN_LOG_STATUS_VALUES``
+    （running / completed / failed / skipped，**没有 'stopped'** —— 表 CHECK 会拒），
+    ``steps[].kind`` ∈ ``AGENT_RUN_STEP_KINDS``。越域 400，绝不静默改写：静默改写会让台账
+    里的状态与真实发生的事劈叉，而这张表正是「执行历史」的唯一可见来源。
+
+    ``record_agent_run`` 自身写失败只 warning 返 None（活儿已经干完，台账写不进去不该反过来
+    炸调用方）；本端点如实回 ``{"runLogId": null}``，调用方（best-effort 镜像）据此只 warn。
+    """
+    _require_flag()
+    if body.status not in AGENT_RUN_LOG_STATUS_VALUES:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"status must be one of {AGENT_RUN_LOG_STATUS_VALUES}",
+            http_status=400, source="agent-runs",
+        )
+    for step in body.steps:
+        if step.kind not in AGENT_RUN_STEP_KINDS:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"step kind must be one of {AGENT_RUN_STEP_KINDS}",
+                http_status=400, source="agent-runs",
+            )
+    run_log_id = record_agent_run(
+        str(get_job_repo().db_path),
+        agent_id=body.agentId,
+        started_at_ms=body.startedAtMs,
+        status=body.status,
+        completed_at_ms=body.completedAtMs,
+        trigger_kind=body.triggerKind,
+        trigger_detail=body.triggerDetail,
+        summary=body.summary,
+        model=body.model,
+        input_tokens=body.inputTokens,
+        output_tokens=body.outputTokens,
+        error=body.error,
+        steps=[step.model_dump(exclude_none=False) for step in body.steps],
+    )
+    return success_envelope({"runLogId": run_log_id}, request=request, source="agent-runs")
 
 
 @router.get("/run-log/{run_log_id:int}/steps", dependencies=[Depends(verify_cf_access)])
