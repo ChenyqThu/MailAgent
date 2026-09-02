@@ -662,7 +662,7 @@ class AgentRunWorker:
             )
         except Exception:  # noqa: BLE001 — 读态推导失败 → 保守不发
             return
-        agent_id = str((job.params or {}).get("agent_id") or job.target_key or "")
+        agent_id = self._job_agent_id(job)
         if state == "paused_pending":
             await self._publish_paused_notification(job, agent_id, result)
             return
@@ -694,7 +694,7 @@ class AgentRunWorker:
         🔴 通知失败仅 warning，绝不影响 job 终态（`_execute` :157-160 同款纪律）——
         ``NotifyCenter.publish`` 自身正常 raise（单测友好），吞在挂点侧。
         """
-        link = self._notification_link(session_id)
+        link = self._notification_link(job, session_id, agent_id)
         # 终态到达 = 这条 run 的「待审批」待办不再待办 → 先归档再发终态通知（顺序要紧：
         # 反过来会让面板上先多一条、下一次 refetch 才少一条）。无活跃行时 resolve 返 0，
         # 不抛；单独 try 是为了让 resolve 失败也不吃掉终态那一条。
@@ -750,7 +750,7 @@ class AgentRunWorker:
                 body=self._paused_body(result),
                 severity="warn",
                 dedupe_key=f"{_PAUSED_DEDUPE_PREFIX}{job.job_id}",
-                payload={"link": self._notification_link(session_id)},
+                payload={"link": self._notification_link(job, session_id, agent_id)},
             )
         except Exception as exc:  # noqa: BLE001 — 通知失败绝不影响 job 终态（已在 _mark 落库）
             logger.warning(
@@ -844,16 +844,36 @@ class AgentRunWorker:
         return "等待审批"
 
     @staticmethod
-    def _notification_link(session_id: int) -> dict:
+    def _notification_link(job: "AsyncJob", session_id: int, agent_id: str) -> dict:
         """通知条目 deep-link：有会话进会话，没有则退化到团队页。
 
         `/agents` 自 08-27 P3（报告与对话拆成一级域）起不再有 `?tab=` 搜索参数。
+
+        带 `agentId` 的 session 链接落在团队页该成员的记录档：headless run 的会话
+        （origin='agent'）不在对话域 AI 分段的列表口径里，只给 sessionId 会打开一个
+        左侧历史列不出的详情。matter 系 job 的归宿是事项页（它们另有 `type='matter'`
+        的链接），所以这里按 job_type 白名单追加而不是「有 agent_id 就带」。
         """
-        return (
-            {"type": "session", "sessionId": session_id}
-            if session_id > 0
-            else {"type": "route", "to": "/agents"}
-        )
+        if session_id <= 0:
+            return {"type": "route", "to": "/agents"}
+        link: dict = {"type": "session", "sessionId": session_id}
+        if agent_id and job.job_type in ("agent_run", "contact_governance"):
+            link["agentId"] = agent_id
+        return link
+
+    @staticmethod
+    def _job_agent_id(job: "AsyncJob") -> str:
+        """job → 团队页成员 id（标题解析与 deep-link 共用一处推导）。
+
+        `contact_governance` 的 target_key 恒 `'global'`（治理是全局的一件事，不是
+        per-agent），直接当 agent_id 用会让标题回落成「global」、深链也指不到成员 ——
+        换算到 seed 行 id 就是 `run_sources.BUILTIN_RUN_SOURCES` 那张表的反向。
+        """
+        if job.job_type == "contact_governance":
+            from src.contacts.governance_config import CONTACT_GOVERNANCE_AGENT_ID
+
+            return CONTACT_GOVERNANCE_AGENT_ID
+        return str((job.params or {}).get("agent_id") or job.target_key or "")
 
     def _run_title(self, job: "AsyncJob", agent_id: str) -> str:
         """通知/岛卡标题「{agent 名} · {触发源}」—— 终态卡与待审批卡同源。"""
@@ -861,6 +881,8 @@ class AgentRunWorker:
         trigger_kind = str((job.params or {}).get("trigger_kind") or "")
         trigger_label = {
             "cron": "定时",
+            # 内建成员的每日入队写的 kind 是 `schedule`（治理走 new_watcher）。
+            "schedule": "定时",
             "email_filter": "邮件",
             "calendar_event_change": "日历变化",
             "calendar_before_start": "会前",
@@ -882,9 +904,8 @@ class AgentRunWorker:
         return title, summary
 
     def _default_title_resolver(self, job: "AsyncJob") -> Optional[str]:
-        """缺省 title resolver：report_agent 行 title（既有行为字节级不变）。"""
-        agent_id = str((job.params or {}).get("agent_id") or job.target_key or "")
-        return self._agent_title(agent_id)
+        """缺省 title resolver：report_agent 行 title（自定义 agent 行为不变）。"""
+        return self._agent_title(self._job_agent_id(job))
 
     def _agent_title(self, agent_id: str) -> Optional[str]:
         """从 report_agent 行取 title（岛卡展示用）。读失败/无 title → None（回退 agent_id）。"""

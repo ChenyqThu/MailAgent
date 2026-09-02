@@ -422,7 +422,10 @@ def test_completed_publishes_result_notification(env, monkeypatch):
     assert row["dedupe_key"] == f"agent_run:{job_id}"  # 成功按 job（每次运行各一条）
     assert row["state"] == "open" and row["read_at"] is None
     assert "DMS" in row["title"] and row["body"] == "跑完了"  # 文案与岛卡同源
-    assert json.loads(row["payload_json"])["link"] == {"type": "session", "sessionId": 7}
+    # deep-link 带 agentId → 落团队页该成员的记录档（headless run 的会话不在 AI 分段口径里）
+    assert json.loads(row["payload_json"])["link"] == {
+        "type": "session", "sessionId": 7, "agentId": "dms",
+    }
 
 
 def test_failed_publishes_warn_notification_keyed_by_agent(env, monkeypatch):
@@ -486,6 +489,57 @@ def test_contact_governance_notification_lands_in_reviews(env, monkeypatch):
     assert rows[0]["dedupe_key"] == f"agent_run:{job_id}"
 
 
+def test_contact_governance_notification_names_agent_and_links_to_team_record(env, monkeypatch):
+    """生产形状的治理 job（target_key='global' + trigger_kind='schedule'，new_watcher 每日入队）。
+
+    这两个字段直接用会得到「global · schedule」（dogfood 实证，生产库 6 条）：名字要换算
+    到 DB v65 播的 seed 行，触发源要有中文标签。
+    """
+    repo, store = env
+    job_id, _ = repo.enqueue(
+        job_type="contact_governance", target_kind="contact_directory",
+        target_key="global", params={"trigger_kind": "schedule"},
+        idempotency_key="contact-governance-schedule",
+    )
+    worker = AgentRunWorker(repo=repo, store=store)
+
+    async def no_island(*a, **k):
+        return None
+
+    monkeypatch.setattr(worker, "_post_announce", no_island)
+    _run(worker._announce_terminal(
+        repo.get(job_id), "succeeded",
+        {"outcome": "completed", "sessionId": 263, "summary": "新增 2 条建议"}, None,
+    ))
+
+    row = _notifications(repo)[0]
+    assert row["title"] == "通讯录治理 · 定时"
+    assert json.loads(row["payload_json"])["link"] == {
+        "type": "session", "sessionId": 263, "agentId": "contact_governance_agent",
+    }
+
+
+def test_matter_job_session_link_carries_no_agent_id(env):
+    """matter 系 job 的归宿是事项页（另有 `type='matter'` 链接）→ session 链接不带 agentId。
+
+    这类 job 在 `_execute` 就分派走了、走不到这条链路；断言压的是白名单本身 —— 换成
+    「有 agent_id 就带」会把事项跟进的会话也送去团队页。
+    """
+    repo, store = env
+    job_id, _ = repo.enqueue(
+        job_type="matter_followup", target_kind="matter", target_key="MAT-0001",
+        params={"agent_id": "matter:MAT-0001", "trigger_kind": "schedule"},
+        idempotency_key="matter-followup-link",
+    )
+    worker = AgentRunWorker(repo=repo, store=store)
+    job = repo.get(job_id)
+
+    assert worker._job_agent_id(job) == "matter:MAT-0001"
+    assert worker._notification_link(job, 42, worker._job_agent_id(job)) == {
+        "type": "session", "sessionId": 42,
+    }
+
+
 def test_paused_pending_publishes_action_required_todo(env, monkeypatch):
     """M2 信源 ①：等审批 = 待办条目（action_required），且**不推岛**（审批卡已 announce）。"""
     repo, store = env
@@ -504,7 +558,9 @@ def test_paused_pending_publishes_action_required_todo(env, monkeypatch):
     assert row["source"] == "agent_run"
     assert row["dedupe_key"] == f"agent_run_paused:{job_id}"  # 逐条待办, 不按 agent 合并
     assert "DMS" in row["title"] and row["body"] == "等待审批"  # 无 TTL → 不硬造期限
-    assert json.loads(row["payload_json"])["link"] == {"type": "session", "sessionId": 5}
+    assert json.loads(row["payload_json"])["link"] == {
+        "type": "session", "sessionId": 5, "agentId": "dms",
+    }
     assert _announce_calls(calls) == []  # 岛卡链路不变（防双卡）
 
 
