@@ -53,6 +53,7 @@ import { useMatterNavigation } from './components/matters/navigation'
 // 'notifications:navigate' 送来通知行 payload，这里用**单源解析器**收窄（不另抄判据）。
 import { resolveNotificationLink } from './components/notifications/navigation'
 import { requestNewAgentSession, requestOpenAgentSession } from './state/ai-chat-panel'
+import { useSessionsSegment } from './state/sessions-segment'
 // 一级入口单源（task 08-24-l4-nav-shell Step R）：deeplink 的落点与「AI → General Agent」
 // 菜单项的目标都从 registry 取，不在这里第二次写死 path。
 import { NAV_ENTRIES, navEntry, navigateToNavEntry, NAV_DEEPLINK_PATH } from './navigation/registry'
@@ -205,6 +206,12 @@ function useNotificationClickNavigation(): void {
       if (!link) return
       if (link.type === 'session') {
         requestOpenAgentSession(link.sessionId)
+        void navigate({ to: '/sessions' })
+        return
+      }
+      if (link.type === 'group') {
+        useSessionsSegment.getState().setSegment('groups')
+        useSessionsSegment.getState().setActiveGroupSessionId(link.sessionId)
         void navigate({ to: '/sessions' })
         return
       }

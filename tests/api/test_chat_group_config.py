@@ -190,6 +190,111 @@ def test_modes_persist_and_merge_with_config(chat_client: TestClient) -> None:
     assert data["modes"] == {"a1": "realtime", "a2": "mention"}
 
 
+# ── 三个新键 + 显式 null 删键（g1 之后的 UX 批）───────────────────────────
+
+
+def test_topic_roundtrip_and_max_200(chat_client: TestClient) -> None:
+    """群用途：trim 后落库，上限 TOPIC_MAX_CHARS，空白 / null = 删键（= 没有用途）。"""
+    from src.chat.group_limits import TOPIC_MAX_CHARS
+
+    data = _put(chat_client, {"topic": "  排期与验收  "}).json()["data"]
+    assert data["config"]["topic"] == "排期与验收"
+
+    assert _put(chat_client, {"topic": "x" * TOPIC_MAX_CHARS}).status_code == 200
+    over = _put(chat_client, {"topic": "x" * (TOPIC_MAX_CHARS + 1)})
+    assert over.status_code == 400
+    assert over.json()["error"]["code"] == "E_INVALID_ARG"
+    assert over.json()["error"]["hint"]
+    assert _put(chat_client, {"topic": 42}).status_code == 400
+
+    for blank in (None, "   "):
+        assert _put(chat_client, {"topic": "临时"}).status_code == 200
+        cleared = _put(chat_client, {"topic": blank}).json()["data"]
+        assert "topic" not in cleared["config"], f"topic={blank!r} 应该删键而不是存空值"
+
+
+def test_model_override_roundtrip_null_pops_key(chat_client: TestClient) -> None:
+    data = _put(chat_client, {"modelOverride": "anthropic:claude-sonnet-4-6"}).json()["data"]
+    assert data["config"]["modelOverride"] == "anthropic:claude-sonnet-4-6"
+    cleared = _put(chat_client, {"modelOverride": None}).json()["data"]
+    assert "modelOverride" not in cleared["config"]
+    assert _put(chat_client, {"modelOverride": True}).status_code == 400
+
+
+def test_notify_bool_only(chat_client: TestClient) -> None:
+    assert _put(chat_client, {"notify": False}).json()["data"]["config"]["notify"] is False
+    assert _put(chat_client, {"notify": True}).json()["data"]["config"]["notify"] is True
+    cleared = _put(chat_client, {"notify": None}).json()["data"]
+    assert "notify" not in cleared["config"]  # 缺键 = 出厂默认（发通知）
+    for bad in ("true", 1, 0):
+        assert _put(chat_client, {"notify": bad}).status_code == 400, f"notify={bad!r}"
+
+
+def test_numeric_null_pops_key(chat_client: TestClient) -> None:
+    """五个数值键显式 null = 恢复默认（**删键**，不是存 None）。
+
+    存 None 的话读侧分不清「owner 清回默认」与「owner 设了个空值」，而且默认值副本一落库就
+    与 groupFloors.ts 的单源脱钩 —— 那边改了默认，这个群还按老值跑。
+    """
+    keys = {
+        "chainCap": 20,
+        "hourlyTurns": 90,
+        "hourlyTokens": 500_000,
+        "hourlyUsd": 2.5,
+        "sessionTurnCap": 120,
+    }
+    assert _put(chat_client, keys).status_code == 200
+    config = chat_client.get("/api/chat/sessions/1/group-config").json()["data"]["config"]
+    assert all(config[k] == v for k, v in keys.items())
+
+    cleared = _put(chat_client, {k: None for k in keys}).json()["data"]["config"]
+    for key in keys:
+        assert key not in cleared, f"{key} 传 null 后应该从 config 里消失"
+
+
+def test_judge_same_value_rewrites_hash(chat_client: TestClient, chat_db_path: Path) -> None:
+    """传同一个 judgeAgentId 也重写 hash —— 这是「重新确认法官位」唯一的写法。
+
+    g1 只在**变更**时写，于是 owner 改完成员名单后没有任何办法让 hash 跟上（改成别人再改回来
+    也不行：中间那一步同样要过校验）。判据因此是「传了就写」。
+    """
+    assert _put(chat_client, {"judgeAgentId": "a2"}).status_code == 200
+    conn = sqlite3.connect(str(chat_db_path))
+    conn.execute(
+        "UPDATE ai_chat_sessions SET members_json = ? WHERE id = 1", (json.dumps(["a1", "a2"]),)
+    )
+    conn.commit()
+    conn.close()
+    stale = chat_client.get("/api/chat/sessions/1/group-config").json()["data"]
+    assert stale["judgeScopeStale"] is True
+
+    data = _put(chat_client, {"judgeAgentId": "a2"}).json()["data"]
+    assert data["config"]["judgeAgentId"] == "a2"
+    assert data["config"]["judgeScopeHash"] == hashlib.sha256(
+        json.dumps(["a1", "a2"]).encode("utf-8")
+    ).hexdigest()
+    assert data["judgeScopeStale"] is False
+
+
+def test_payload_has_members_and_judge_scope_stale(chat_client: TestClient) -> None:
+    data = chat_client.get("/api/chat/sessions/1/group-config").json()["data"]
+    assert data["members"] == _MEMBERS
+    assert data["judgeScopeStale"] is False
+
+
+def test_judge_null_stale_false(chat_client: TestClient, chat_db_path: Path) -> None:
+    """没有法官位 = 无所谓失配：名单怎么变 judgeScopeStale 都是 false（否则详情面恒挂警告）。"""
+    conn = sqlite3.connect(str(chat_db_path))
+    conn.execute(
+        "UPDATE ai_chat_sessions SET members_json = ? WHERE id = 1", (json.dumps(["a1"]),)
+    )
+    conn.commit()
+    conn.close()
+    data = chat_client.get("/api/chat/sessions/1/group-config").json()["data"]
+    assert data["config"].get("judgeAgentId") is None
+    assert data["judgeScopeStale"] is False
+
+
 # ── 🔴 两写者列级纪律 ─────────────────────────────────────────────────────
 
 
@@ -259,7 +364,14 @@ def test_old_db_without_v31_carriers_degrades(tmp_path: Path, monkeypatch) -> No
     conn.commit()
     conn.close()
     old = ChatDb(db_path=str(db))
-    assert old.get_group_config(1) == {"modes": {}, "config": {"v": 1}}
+    # members / judgeScopeStale 不需要 v31 载体（前者读 v30 的 members_json，后者是纯计算）——
+    # 旧库上照样出得来，缺的只是 modes（成员表缺席）与 config（设置列缺席）。
+    assert old.get_group_config(1) == {
+        "modes": {},
+        "config": {"v": 1},
+        "members": ["a1"],
+        "judgeScopeStale": False,
+    }
     old.update_group_config(1, {"chainCap": 12})  # no-op, 不抛
     old.upsert_group_member_modes(1, {"a1": "realtime"})  # no-op, 不抛
     assert old.group_metrics(1)["silentRunRate"] is None

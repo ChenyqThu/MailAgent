@@ -704,7 +704,12 @@ async function handleImChat(
  * to reload when the run settles (active→gone transition). Read-only. miss (nothing running /
  * registry unwired) → 404 { active:false } — the fail-closed truth, mirroring /approval/pending.
  */
-function handleRunActive(res: ServerResponse, cfg: AiGatewayConfig, url: string): void {
+function handleRunActive(
+  res: ServerResponse,
+  cfg: AiGatewayConfig,
+  url: string,
+  groupScheduler: GroupOrchestrator | null
+): void {
   const raw = new URL(url, 'http://127.0.0.1').searchParams.get('sessionId')
   const sessionId = raw != null && /^-?\d+$/.test(raw) ? Number(raw) : null
   if (sessionId == null) {
@@ -713,6 +718,13 @@ function handleRunActive(res: ServerResponse, cfg: AiGatewayConfig, url: string)
   }
   const entry = cfg.activeRuns ? cfg.activeRuns.getActive(sessionId) : null
   if (!entry) {
+    // 群：registry 无租约但 调度器 还有人在写 / 准备中 / 排队 → 群里仍在跑（停止钮在两 turn 间隙
+    // 与单候选的准备窗口都不消失）。三者都空 → 404 不变。
+    const live = groupScheduler ? groupScheduler.liveState(sessionId) : null
+    if (live && (live.inFlight != null || live.preparing != null || live.queued.length > 0)) {
+      writeJson(res, 200, { active: true, runId: null, group: live })
+      return
+    }
     writeJson(res, 404, { active: false })
     return
   }
@@ -1243,6 +1255,50 @@ async function handleGroupChat(
     typeof body.userText === 'string' && body.userText.length > 0 ? body.userText : null
   const orchestrating = groupScheduler != null && (await labsGroupAgentsOn(cfg))
 
+  // Retry mode — `{ sessionId, retry: { agentId, chainId } }`: re-enqueue one member on its chain
+  // (调度器.requeue). Only meaningful under server-side orchestration; membership is checked
+  // against server facts inside requeue; a stopped chain is never revived (409 E_RUN_STOPPED).
+  // Not gated on「上一条是不是 failed」: the UI only offers the button on a failed row and a
+  // double click is folded by enqueueCoalesced.
+  const retry = body.retry
+  if (retry != null && typeof retry === 'object' && !Array.isArray(retry)) {
+    const r = retry as { agentId?: unknown; chainId?: unknown }
+    const agentId = typeof r.agentId === 'string' && r.agentId.length > 0 ? r.agentId : null
+    const chainId = typeof r.chainId === 'number' && Number.isInteger(r.chainId) ? r.chainId : null
+    if (agentId == null || chainId == null) {
+      writeJson(res, 400, {
+        error: 'E_INVALID_ARG',
+        hint: 'retry.agentId + retry.chainId required'
+      })
+      return
+    }
+    if (!orchestrating || groupScheduler == null) {
+      writeJson(res, 409, {
+        error: 'E_LABS_ORCHESTRATED',
+        hint: 'retry needs server-side orchestration (labs.groupAgents on)'
+      })
+      return
+    }
+    const out = await groupScheduler.requeue(sessionId, agentId, chainId)
+    if (out.error === 'E_NOT_GROUP_MEMBER') {
+      writeJson(res, 403, {
+        error: 'E_NOT_GROUP_MEMBER',
+        hint: `agent ${agentId} is not a member of this group`
+      })
+      return
+    }
+    if (out.error === 'E_RUN_STOPPED') {
+      writeJson(res, 409, { error: 'E_RUN_STOPPED', hint: 'this chain was stopped' })
+      return
+    }
+    if (out.error != null) {
+      writeJson(res, 400, { error: 'E_NOT_GROUP', hint: 'session is not a group chat' })
+      return
+    }
+    writeJson(res, 200, { ok: true, queued: out.queued })
+    return
+  }
+
   // Append mode — the owner's message enters the shared transcript once, BEFORE any speaker run.
   if (speakAs == null) {
     if (userText == null) {
@@ -1363,12 +1419,18 @@ async function labsGroupAgentsOn(cfg: AiGatewayConfig): Promise<boolean> {
   }
 }
 
+/** 流式 delta 事件的最小间隔（≤ 10 帧/秒，红线 5）；尾帧不受节流。 */
+const GROUP_DELTA_THROTTLE_MS = 100
+
 /** g1 — one 调度器 member turn = one prepareChatRun with the member's identity + the group roster
  *  (same seams as the v30 speaker branch above: member model middle priority, <current_group_chat>
  *  block, 🔴 zero tools by construction), plus `groupSpeakerRun:true` for the prompt 减重门 and
  *  the 沉默契约. The run's text + usage go back to the 调度器, which decides silent / held_dup /
- *  spoke and does the persisting — nothing here writes the transcript. */
-async function speakAsGroupMember(
+ *  spoke and does the persisting — nothing here writes the transcript.
+ *  UX 批 — the text is drained from `textStream` (accumulated, throttled to `input.onDelta`, tail
+ *  frame always sent) so the renderer can show the reply growing; `GroupSpeakResult` is unchanged.
+ *  🔴 `config.modelOverride` (全群统一模型) is read HERE and nowhere else. */
+export async function speakAsGroupMember(
   cfg: AiGatewayConfig,
   input: GroupSpeakInput
 ): Promise<GroupSpeakResult> {
@@ -1376,7 +1438,7 @@ async function speakAsGroupMember(
     agentId: input.member.agentId,
     agentTitle: input.member.title,
     duty: input.member.duty ?? null,
-    model: input.member.model ?? null,
+    model: input.facts.config.modelOverride ?? input.member.model ?? null,
     scheduleLine: null,
     group: {
       members: input.facts.members.map((m) => ({ agentId: m.agentId, title: m.title })),
@@ -1385,7 +1447,8 @@ async function speakAsGroupMember(
         input.facts.config.judgeAgentId != null &&
         input.facts.config.judgeAgentId === input.agentId,
       familySessionIds: input.facts.familySessionIds,
-      groupSpeakerRun: true
+      groupSpeakerRun: true,
+      topic: input.facts.config.topic ?? null
     }
   }
   const prepared = await prepareChatRun(
@@ -1396,7 +1459,21 @@ async function speakAsGroupMember(
     identity
   )
   if (!prepared.ok) throw new Error(`${prepared.body.error}: ${prepared.body.hint}`)
-  const text = await prepared.run.result.text
+  let text = ''
+  let lastSentAt = 0
+  let lastSent: string | null = null
+  for await (const delta of prepared.run.result.textStream) {
+    text += delta
+    if (!input.onDelta) continue
+    const now = Date.now()
+    if (now - lastSentAt >= GROUP_DELTA_THROTTLE_MS) {
+      lastSentAt = now
+      lastSent = text
+      input.onDelta(text)
+    }
+  }
+  // 尾帧：保证末字到达（节流可能吞掉最后一段）。
+  if (input.onDelta && text.length > 0 && lastSent !== text) input.onDelta(text)
   const usage = await prepared.run.result.usage
   return {
     text,
@@ -1463,6 +1540,7 @@ function buildGroupScheduler(cfg: AiGatewayConfig): GroupOrchestrator | null {
       registerRun: (sessionId, controller) => activeRuns.register(sessionId, controller),
       releaseRun: (sessionId, runId) => activeRuns.release(sessionId, runId),
       mirrorRunLog: cfg.mirrorGroupRunLog,
+      emitEvent: cfg.onGroupTurnEvent,
       now: () => Date.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms))
     }
@@ -2062,7 +2140,7 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     // B1 (harness-chat lane A) — detached-run truth probe + explicit stop channel. Registered
     // unconditionally; cfg.activeRuns gates them (miss/404 when detached runs are off).
     if (method === 'GET' && path === '/api/ai/run/active') {
-      handleRunActive(res, cfg, url)
+      handleRunActive(res, cfg, url, groupScheduler)
       return
     }
     if (method === 'POST' && path === '/api/ai/run/stop') {

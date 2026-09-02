@@ -162,3 +162,72 @@ describe('ElectronApi.chat — S3 直 fetch ChatApi 形状', () => {
     }
   })
 })
+
+describe('ElectronApi.chat — onGroupTurn / setGroupForeground（L4 群聊 UX 批）', () => {
+  test('I1 onGroupTurn 用 on() 返回的 disposer 反订阅', () => {
+    const dispose = vi.fn()
+    const onMock = vi.fn((_channel: string, _fn: unknown) => dispose)
+    ;(window as unknown as { electron: unknown }).electron = {
+      ipcRenderer: { invoke: vi.fn(), send: sendMock, on: onMock }
+    }
+    const api = new ElectronApi()
+    const off = api.chat.onGroupTurn!(() => {})
+    expect(onMock).toHaveBeenCalledTimes(1)
+    expect(onMock.mock.calls[0]![0]).toBe('chat:group-turn')
+    expect(dispose).not.toHaveBeenCalled()
+    off()
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
+
+  test('I2 形状不符事件不触发 handler；合法事件窄化后到达', () => {
+    let listener: ((...args: unknown[]) => void) | null = null
+    const onMock = vi.fn((_channel: string, fn: (...args: unknown[]) => void) => {
+      listener = fn
+      return () => undefined
+    })
+    ;(window as unknown as { electron: unknown }).electron = {
+      ipcRenderer: { invoke: vi.fn(), send: sendMock, on: onMock }
+    }
+    const api = new ElectronApi()
+    const handler = vi.fn()
+    api.chat.onGroupTurn!(handler)
+    expect(listener).not.toBeNull()
+    const emit = (payload: unknown): void => listener!({}, payload)
+    emit({ v: 1, sessionId: 7, phase: 'typing' })
+    emit({ v: 2 })
+    emit(null)
+    expect(handler).not.toHaveBeenCalled()
+    const valid = {
+      v: 1,
+      sessionId: 7,
+      runId: 'r',
+      chainId: 1,
+      seq: 1,
+      agentId: 'a',
+      phase: 'delta',
+      ts: 5,
+      queued: [],
+      chainProgress: { counted: 0, cap: 12 },
+      text: '正在写',
+      messageId: 'not-a-number'
+    }
+    emit(valid)
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(handler.mock.calls[0]![0]).toEqual({ ...valid, messageId: undefined })
+    expect('messageId' in handler.mock.calls[0]![0]).toBe(false)
+  })
+
+  test('I3 setGroupForeground → invoke chat:group-foreground {sessionId}', async () => {
+    const invoke = vi.fn(async () => undefined)
+    ;(window as unknown as { electron: unknown }).electron = {
+      ipcRenderer: { invoke, send: sendMock, on: vi.fn(() => () => undefined) }
+    }
+    const api = new ElectronApi()
+    await api.chat.setGroupForeground!(9)
+    await api.chat.setGroupForeground!(null)
+    expect(invoke.mock.calls).toEqual([
+      ['chat:group-foreground', { sessionId: 9 }],
+      ['chat:group-foreground', { sessionId: null }]
+    ])
+  })
+})

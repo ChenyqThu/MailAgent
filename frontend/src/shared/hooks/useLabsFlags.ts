@@ -7,17 +7,40 @@
 // 设置页（LabsTab）与群聊视图共读同一个 query key（qk.labsFlags）：在实验室里一开，
 // 切回群聊就是新模态，不需要重启也不需要刷新。
 
-import { useQuery } from '@tanstack/react-query'
+import { useCallback } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { getLabs } from '@shared/api/groupSettings'
 import { qk } from '@shared/lib/queryKeys'
 
-export function useLabsFlags(): { groupAgents: boolean; loading: boolean } {
+const LABS_STALE_MS = 30_000
+
+export function useLabsFlags(): {
+  groupAgents: boolean
+  loading: boolean
+  /** 等开关到达再判（同 key 的 fetchQuery：已加载即刻 resolve）；读不到 → false（fail-closed）。
+   *  群视图的 send 用它：loading 期间的发送不按 off 走 v1 路径，等真值到了再分派。 */
+  ready: () => Promise<boolean>
+} {
+  const qc = useQueryClient()
   const q = useQuery({
     queryKey: qk.labsFlags(),
     queryFn: getLabs,
-    staleTime: 30_000,
+    staleTime: LABS_STALE_MS,
     retry: false
   })
-  return { groupAgents: q.data?.groupAgents === 'on', loading: q.isLoading }
+  const ready = useCallback(async (): Promise<boolean> => {
+    try {
+      const flags = await qc.fetchQuery({
+        queryKey: qk.labsFlags(),
+        queryFn: getLabs,
+        staleTime: LABS_STALE_MS,
+        retry: false
+      })
+      return flags.groupAgents === 'on'
+    } catch {
+      return false
+    }
+  }, [qc])
+  return { groupAgents: q.data?.groupAgents === 'on', loading: q.isLoading, ready }
 }

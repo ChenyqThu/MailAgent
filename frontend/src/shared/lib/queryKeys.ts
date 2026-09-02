@@ -86,6 +86,9 @@ export const qk = {
     // L4 群聊 g1 — 群设置 / 群成本指标（serve-api `/chat/sessions/{id}/group-config|metrics`）。
     groupConfig: (sessionId: number) => ['chat', 'groupConfig', sessionId] as const,
     groupMetrics: (sessionId: number) => ['chat', 'groupMetrics', sessionId] as const,
+    /** L4 群聊 UX 批 — 群唤醒台账（serve-api `/chat/sessions/{id}/group-turns`，非 spoke 的
+     *  turn 行还原成 meta 行）。since / limit 走 queryFn 参数不进 key：同群只留一份缓存。 */
+    groupTurns: (sessionId: number) => ['chat', 'groupTurns', sessionId] as const,
     /** L4 群聊 g1 — 服务端编排下「这个群此刻有没有成员在发言」（gateway `/api/ai/run/active`
      *  探针，30s 兜底轮询；真正的即时刷新走 `chat:turn-persisted` 广播）。 */
     groupRunActive: (sessionId: number) => ['chat', 'groupRunActive', sessionId] as const

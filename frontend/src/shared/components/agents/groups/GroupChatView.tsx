@@ -1,8 +1,5 @@
-// L4 群聊 — 单个群聊会话的消息流 + 发送框（飞书/Slack 式）。
-//
-// 视觉基准（原型 .msg/.av/.who/.bub，色值换 v3 token）：成员消息 = AgentAvatar 30px 左置 +
-// 彩色名字 + 左对齐气泡（圆角 4 12 12 12）；用户消息右对齐（sel-wash 底，圆角 12 4 12 12）。
-// 名字色 = token 调色板按成员序取（不引新十六进制）。
+// L4 群聊 — 单个群聊会话的编排：群头 / 消息流 / 发送框三件拆在 GroupHeader / GroupThread /
+// GroupComposer，本文件只持有数据流与两条驱动的分派。
 //
 // 驱动有两条，由 labs 开关 `labs_group_agents` 选（g1）：
 //
@@ -13,49 +10,55 @@
 //   发送）。**这条路径在 labs on 之后一字未动**（AC9：关掉开关就是 v1）。
 //
 //   labs ON —— 发送只把消息落进共享 transcript，谁回、回几轮由 gateway 的调度器决定（候选集 /
-//   地板 / 台账全在服务端）。renderer 不再持有发言循环，改为：订阅 `chat:turn-persisted`
-//   刷新（🔴 用返回的 disposer 清理）+ 30s `/api/ai/run/active` 兜底探针 + 一个停止按钮
-//   （POST `/api/ai/run/stop`）。地板命中时服务端会写一条 `role='system'` 行，这里渲染成居中
-//   灰字「已停止：<原因>」。
+//   地板 / 台账全在服务端）。renderer 不持有发言循环，改为：订阅 `chat:group-turn`（在场态 /
+//   流式正文 / 沉默 / 失败 / 停止，useGroupTurnEvents）+ `chat:turn-persisted` 刷新（🔴 用返回的
+//   disposer 清理）+ `group-turns` 台账（刷新后还原 meta 行）+ `/api/ai/run/active` 三态探针
+//   （runAlive 判据 = 事件三元组任一非空 ‖ 探针 active）+ 停止 / 重试两个动作。
+//
+// 🔴 labs 开关未到达时的发送**不**按 off 走 v1：send 先 `await labs.ready()` 再分派（发送钮不因
+//    loading 禁用；design §4.6 / §10 Q11）。否则 loading 期间被当成 off 起本地循环、服务端又同时
+//    编排 = 双跑。
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { SendHorizontal, Settings, Square } from 'lucide-react'
+import { Info } from 'lucide-react'
 
-import type { AgentAvatarConfig, ChatMessage, ChatSession } from '@shared/api/types'
-import { cn } from '@shared/lib/cn'
+import type { ChatMessage, ChatSession } from '@shared/api/types'
 import { qk } from '@shared/lib/queryKeys'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useLabsFlags } from '@shared/hooks/useLabsFlags'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { toastError } from '@shared/state/toast'
-import { appendGroupUserMessage, runGroupSpeaker } from '@shared/assistant/groupChatClient'
+import {
+  appendGroupUserMessage,
+  probeGroupRun,
+  retryGroupTurn,
+  runGroupSpeaker
+} from '@shared/assistant/groupChatClient'
 import { resolveAiGatewayBaseUrl } from '@shared/assistant/runtime/flags'
+import { getGroupConfig, getGroupTurns } from '@shared/api/groupSettings'
 
-import { AgentAvatar } from '../AgentAvatar'
-import { GroupSettingsDialog } from './GroupSettingsDialog'
-import { detectMentionDraft, parseGroupMentions } from './mentions'
+import { GroupComposer } from './GroupComposer'
+import { GroupHeader } from './GroupHeader'
+import type { RetryUiState } from './GroupMetaRow'
+import { GroupThread, type GroupThreadEmpty } from './GroupThread'
+import { buildGroupTimeline, groupStopMeta, type GroupTimelineItem } from './groupTimeline'
+import { parseGroupMentions } from './mentions'
 import { parseMembersJson, type GroupMemberMeta } from './members'
+import {
+  useGroupTurnEvents,
+  useNowTick,
+  withSeed,
+  type GroupLiveTriple
+} from './useGroupTurnEvents'
 
-/** 兜底轮询节拍。Electron 有 `chat:turn-persisted` 广播 → 轮询纯属保险，取 30s
- *  （与 useBackgroundChatRun 的 ACTIVE_RUN_POLL_WITH_BROADCAST_MS 同一判据）。 */
+/** 兜底轮询节拍。Electron 有 `chat:group-turn` / `chat:turn-persisted` 广播 → 轮询纯属保险，取 30s
+ *  （与 useBackgroundChatRun 的 ACTIVE_RUN_POLL_WITH_BROADCAST_MS 同一判据），且只在最近 60s 内
+ *  发过消息或收到过事件时才转。 */
 const GROUP_RUN_POLL_MS = 30_000
-
-/** 群里此刻有没有成员在发言（gateway 的 ActiveRunRegistry 真源）。够不着 / 非 200 → false
- *  （fail-closed：宁可不显示「正在发言」，也不显示一个编出来的状态）。 */
-async function probeGroupRunActive(sessionId: number): Promise<boolean> {
-  const baseUrl = resolveAiGatewayBaseUrl()
-  if (!baseUrl) return false
-  try {
-    const res = await fetch(`${baseUrl}/api/ai/run/active?sessionId=${sessionId}`)
-    if (!res.ok) return false
-    const body = (await res.json()) as { active?: unknown }
-    return body.active === true
-  } catch {
-    return false
-  }
-}
+const RECENT_ACTIVITY_MS = 60_000
+const GROUP_TURNS_LIMIT = 200
 
 /** 停止本群这一轮（registry 中止当前 turn；调度器按 family 清队列并各写一条系统行）。 */
 async function stopGroupRun(sessionId: number): Promise<void> {
@@ -69,28 +72,6 @@ async function stopGroupRun(sessionId: number): Promise<void> {
   if (!res.ok) throw new Error(`run/stop HTTP ${res.status}`)
 }
 
-/** 群停止系统行的原因词（`metadata={kind:'group_stop', reason, runId}`）。
- *  🔴 只放行 `kind==='group_stop'`：其他 system 行不属于群 transcript，宁可不渲染也不猜它是什么。 */
-function groupStopReason(message: ChatMessage): string | null {
-  if (message.role !== 'system' || message.metadata == null) return null
-  try {
-    const parsed = JSON.parse(message.metadata) as { kind?: unknown; reason?: unknown }
-    if (parsed.kind !== 'group_stop') return null
-    return typeof parsed.reason === 'string' && parsed.reason.length > 0 ? parsed.reason : 'error'
-  } catch {
-    return null
-  }
-}
-
-/** 成员名字色（按 members_json 序取模）。全 token，不引新色值。 */
-const NAME_COLORS = [
-  'rgb(var(--c-ai))',
-  'rgb(var(--c-info))',
-  'rgb(var(--c-ok))',
-  'rgb(var(--c-impt))',
-  'rgb(var(--c-accent))'
-] as const
-
 interface LiveBubble {
   key: string
   kind: 'user' | 'speaker'
@@ -100,14 +81,30 @@ interface LiveBubble {
   error?: string
 }
 
+type GroupMetaFailed = Extract<GroupTimelineItem, { kind: 'meta' }>
+
+/** 重试 UI 态的存储形：「重试中」多记一个点击时刻，派生成 RetryUiState 时与最近事件时刻比较。 */
+type RetryStore = Exclude<RetryUiState, { kind: 'retrying' }> | { kind: 'retrying'; at: number }
+
 export function GroupChatView({
   session,
   memberMeta,
-  onActivity
+  onActivity,
+  detailsOpen,
+  onToggleDetails,
+  initialLive,
+  onSendingChange
 }: {
   session: ChatSession
   memberMeta: Map<string, GroupMemberMeta>
   onActivity: () => void
+  /** 群详情面开合（Workspace 持有；缺省 = 不渲染详情钮）。 */
+  detailsOpen?: boolean
+  onToggleDetails?: () => void
+  /** Workspace 的 useGroupLiveMap 给的在场三元组初值（事件未到前的兜底）。 */
+  initialLive?: GroupLiveTriple | null
+  /** labs off 的 v1 发送期间上抛，供列表「发言中」脉冲。 */
+  onSendingChange?: (sending: boolean) => void
 }): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
@@ -115,12 +112,17 @@ export function GroupChatView({
   const sessionId = session.id
   const memberIds = useMemo(() => parseMembersJson(session.members_json), [session.members_json])
   const memberEntries = useMemo(
-    () => memberIds.map((id) => ({ agentId: id, title: memberMeta.get(id)?.title?.trim() || id })),
+    () =>
+      memberIds.map((id) => ({
+        agentId: id,
+        title: memberMeta.get(id)?.title?.trim() || id,
+        avatar: memberMeta.get(id)?.avatar
+      })),
     [memberIds, memberMeta]
   )
-  const titleOfMember = (id: string): string => memberMeta.get(id)?.title?.trim() || id
-  const colorOfMember = (id: string): string =>
-    NAME_COLORS[Math.max(0, memberIds.indexOf(id)) % NAME_COLORS.length]
+  const nowMs = useNowTick()
+  // 🔴 判据是真值不是 `!= null`：web 构建下 resolveAiGatewayBaseUrl 返回空串（GroupChatWorkspace 同注）。
+  const hasGateway = useMemo(() => Boolean(resolveAiGatewayBaseUrl()), [])
 
   const messagesQ = useQuery({
     queryKey: qk.chat.messages(sessionId),
@@ -132,42 +134,118 @@ export function GroupChatView({
       (messagesQ.data ?? []).filter(
         (m) =>
           m.status === 'complete' &&
-          (m.role === 'user' || m.role === 'assistant' || groupStopReason(m) != null)
+          (m.role === 'user' || m.role === 'assistant' || groupStopMeta(m) != null)
       ),
     [messagesQ.data]
+  )
+  const earliestCreatedAt = useMemo(
+    () =>
+      rows.reduce<number | null>(
+        (acc, m) =>
+          m.role !== 'system' && (acc == null || m.created_at < acc) ? m.created_at : acc,
+        null
+      ),
+    [rows]
   )
 
   const [live, setLive] = useState<LiveBubble[]>([])
   const [sending, setSending] = useState(false)
   const [draft, setDraft] = useState('')
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const [stopping, setStopping] = useState(false)
+  const [lastSentAt, setLastSentAt] = useState<number | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   useEffect(() => () => abortRef.current?.abort(), [])
+  useEffect(() => {
+    onSendingChange?.(sending)
+  }, [sending, onSendingChange])
 
   // ── labs on 的服务端编排模态 ─────────────────────────────────────────────────────
-  const { groupAgents: labsOn } = useLabsFlags()
+  const labs = useLabsFlags()
+  const labsOn = labs.groupAgents
 
-  const runActiveQ = useQuery({
+  const { live: liveEvents, dispatch } = useGroupTurnEvents(sessionId, labsOn, initialLive)
+
+  const recentActivity =
+    (liveEvents.lastEventAt != null && nowMs - liveEvents.lastEventAt < RECENT_ACTIVITY_MS) ||
+    (lastSentAt != null && nowMs - lastSentAt < RECENT_ACTIVITY_MS)
+  const probeQ = useQuery({
     queryKey: qk.chat.groupRunActive(sessionId),
-    queryFn: () => probeGroupRunActive(sessionId),
-    enabled: labsOn,
+    queryFn: () => probeGroupRun(sessionId),
+    enabled: labsOn && hasGateway,
     retry: false,
-    refetchInterval: GROUP_RUN_POLL_MS
+    refetchInterval: recentActivity ? GROUP_RUN_POLL_MS : false
   })
-  const speaking = labsOn && runActiveQ.data === true
+  // 事件未到前用探针的三元组兜底（刷新 / 重开群时的初值）。
+  const liveView = useMemo(
+    () => withSeed(liveEvents, probeQ.data?.group ?? null),
+    [liveEvents, probeQ.data]
+  )
+  const runAlive =
+    labsOn &&
+    (liveView.inFlight != null ||
+      liveView.preparing != null ||
+      liveView.queued.length > 0 ||
+      probeQ.data?.state === 'active')
+  const gatewayState: 'ok' | 'web' | 'unreachable' = !hasGateway
+    ? 'web'
+    : probeQ.data?.state === 'unreachable'
+      ? 'unreachable'
+      : 'ok'
+
+  const configQ = useQuery({
+    queryKey: qk.chat.groupConfig(sessionId),
+    queryFn: () => getGroupConfig(sessionId),
+    enabled: labsOn,
+    staleTime: 30_000
+  })
+  const modes = labsOn ? (configQ.data?.modes ?? null) : null
+  const topic = configQ.data?.config.topic?.trim() || null
+  const realtimeCount =
+    modes != null ? memberIds.filter((id) => modes[id] === 'realtime').length : null
+
+  // 台账：since = 最早一条落库消息（无消息 → 不请求；清空历史后旧 meta 行随之退出对话）。
+  const turnsQ = useQuery({
+    queryKey: qk.chat.groupTurns(sessionId),
+    queryFn: () =>
+      getGroupTurns(sessionId, { limit: GROUP_TURNS_LIMIT, since: earliestCreatedAt ?? undefined }),
+    enabled: labsOn && earliestCreatedAt != null,
+    staleTime: 5_000
+  })
+  // since 不进 key（同群一份缓存）→ 最早消息变了要主动失效。
+  useEffect(() => {
+    void qc.invalidateQueries({ queryKey: qk.chat.groupTurns(sessionId) })
+  }, [qc, sessionId, earliestCreatedAt])
 
   // 🔴 IPC 订阅必须用返回的 disposer 清理（useBackgroundChatRun.ts:32 同一纪律）；
-  // onTurnPersisted 在 web（HttpApi）缺省 → `?.`，此时只剩 30s 轮询兜底。
+  // onTurnPersisted 在 web（HttpApi）缺省 → `?.`，此时只剩探针兜底。
   useEffect(() => {
     if (!labsOn) return undefined
     return mailApi.chat.onTurnPersisted?.((payload) => {
       if (payload.sessionId !== sessionId) return
-      void qc.invalidateQueries({ queryKey: qk.chat.messages(sessionId) })
+      void qc.refetchQueries({ queryKey: qk.chat.messages(sessionId) }).then(() => {
+        const data = qc.getQueryData<ChatMessage[]>(qk.chat.messages(sessionId))
+        if (data != null) {
+          dispatch({ type: 'persisted', messageIds: new Set(data.map((m) => m.id)) })
+        }
+      })
+      void qc.invalidateQueries({ queryKey: qk.chat.groupTurns(sessionId) })
       void qc.invalidateQueries({ queryKey: qk.chat.groupRunActive(sessionId) })
       void qc.invalidateQueries({ queryKey: qk.chat.groupOriginSessions() })
     })
-  }, [labsOn, mailApi, qc, sessionId])
+  }, [labsOn, mailApi, qc, sessionId, dispatch])
+
+  // 选中即已读；告诉 main 本群在前台（通知投影据此跳过），卸载 / 切群上报 null。
+  useEffect(() => {
+    void mailApi.chat.markSessionRead(sessionId).then(() => {
+      void qc.invalidateQueries({ queryKey: qk.chat.groupOriginSessions() })
+    })
+  }, [mailApi, qc, sessionId])
+  useEffect(() => {
+    void mailApi.chat.setGroupForeground?.(sessionId)
+    return () => {
+      void mailApi.chat.setGroupForeground?.(null)
+    }
+  }, [mailApi, sessionId])
 
   const patchLive = (key: string, patch: Partial<LiveBubble>): void =>
     setLive((prev) => prev.map((b) => (b.key === key ? { ...b, ...patch } : b)))
@@ -184,10 +262,39 @@ export function GroupChatView({
     }
   }
 
+  // 失败行重试：按 item.key 记 UI 态；「重试中」持续到点击之后的第一条事件到达（requeue 会发 queued）。
+  const [retryStates, setRetryStates] = useState<Map<string, RetryStore>>(() => new Map())
+  const setRetryState = (key: string, state: RetryStore): void =>
+    setRetryStates((prev) => new Map(prev).set(key, state))
+  const retry = async (item: GroupMetaFailed): Promise<void> => {
+    setRetryState(item.key, { kind: 'retrying', at: Date.now() })
+    try {
+      await retryGroupTurn(sessionId, item.agentId, item.chainId)
+    } catch (err) {
+      const code = (err as { code?: unknown }).code
+      if (code === 'E_RUN_STOPPED') setRetryState(item.key, { kind: 'stopped' })
+      else if (code === 'E_LABS_ORCHESTRATED') setRetryState(item.key, { kind: 'labsOff' })
+      else setRetryState(item.key, { kind: 'error', message: errorMessage(err) })
+    }
+  }
+  const retryUiStates = useMemo(() => {
+    const out = new Map<string, RetryUiState>()
+    for (const [key, state] of retryStates) {
+      if (state.kind === 'retrying') {
+        const resolved = liveEvents.lastEventAt != null && liveEvents.lastEventAt >= state.at
+        out.set(key, resolved ? { kind: 'idle' } : { kind: 'retrying' })
+      } else {
+        out.set(key, state)
+      }
+    }
+    return out
+  }, [retryStates, liveEvents.lastEventAt])
+
   /** labs on 的发送：只落一条用户消息，之后由服务端调度器接管（renderer 无发言循环）。 */
   const sendOrchestrated = async (text: string): Promise<void> => {
     const userKey = `user-${Date.now()}`
     setLive([{ key: userKey, kind: 'user', text, status: 'done' }])
+    setLastSentAt(Date.now())
     try {
       await appendGroupUserMessage(sessionId, text)
     } catch (err) {
@@ -210,7 +317,7 @@ export function GroupChatView({
     setDraft('')
     // 上一轮的失败气泡随新一轮开始清掉（不落库，仅本地）。
     setLive([])
-    if (labsOn) {
+    if (await labs.ready()) {
       await sendOrchestrated(text)
       return
     }
@@ -259,332 +366,103 @@ export function GroupChatView({
     setSending(false)
   }
 
-  // 自动滚底（消息/流式增量变化时）。
-  const scrollRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [rows.length, live])
+  // 本地气泡恒在落库行之后：ts 取当前分钟节拍 + 序号（只影响日期分隔与「刚刚」）。
+  const localBubbles = useMemo(() => live.map((b, i) => ({ ...b, ts: nowMs + i })), [live, nowMs])
+  const timeline = useMemo(
+    () =>
+      buildGroupTimeline({
+        messages: messagesQ.data ?? [],
+        turns: labsOn && turnsQ.data != null ? turnsQ.data.turns : null,
+        turnsHasMore: turnsQ.data?.hasMore ?? false,
+        live: labsOn ? liveView : null,
+        local: localBubbles
+      }),
+    [messagesQ.data, labsOn, turnsQ.data, liveView, localBubbles]
+  )
 
-  // @ 补全弹层。
-  const inputRef = useRef<HTMLTextAreaElement | null>(null)
-  const [mention, setMention] = useState<{ query: string; start: number } | null>(null)
-  const mentionCandidates = mention
-    ? memberEntries.filter((m) => m.title.toLowerCase().includes(mention.query.toLowerCase()))
-    : []
-  const refreshMention = (value: string, caret: number | null): void =>
-    setMention(caret == null ? null : detectMentionDraft(value, caret))
-  const pickMention = (title: string): void => {
-    if (!mention) return
-    const caret = inputRef.current?.selectionStart ?? draft.length
-    const next = `${draft.slice(0, mention.start)}@${title} ${draft.slice(caret)}`
-    setDraft(next)
-    setMention(null)
-    inputRef.current?.focus()
+  const mentionCount = useMemo(
+    () => (draft.trim().length > 0 ? parseGroupMentions(draft, memberEntries).length : 0),
+    [draft, memberEntries]
+  )
+  const wakeCount =
+    labsOn && draft.trim().length > 0 ? (mentionCount > 0 ? mentionCount : realtimeCount) : null
+  const emptyVariant: GroupThreadEmpty = !labsOn
+    ? 'v1'
+    : realtimeCount === 0
+      ? 'noRealtime'
+      : 'orchestrated'
+  const showChain =
+    runAlive ||
+    (liveEvents.lastEventAt != null && nowMs - liveEvents.lastEventAt < RECENT_ACTIVITY_MS)
+  const onStop = (): void => {
+    if (labsOn) void stop()
+    else abortRef.current?.abort()
   }
 
   const groupTitle = session.title ?? t('groupChat.defaultTitle')
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-group-chat={sessionId}>
-      {/* 群头：标题 + 成员头像行。 */}
-      <div className="flex h-12 shrink-0 items-center gap-2.5 border-b border-ink-border px-4">
-        <span className="min-w-0 truncate text-body font-semibold text-ink-fg">{groupTitle}</span>
-        <span className="flex shrink-0 items-center -space-x-1.5">
-          {memberIds.map((id) => (
-            <AgentAvatar
-              key={id}
-              agentId={id}
-              config={memberMeta.get(id)?.avatar}
-              size={20}
-              title={titleOfMember(id)}
-            />
-          ))}
-        </span>
-        <span className="shrink-0 text-micro text-ink-fg-3">
-          {t('groupChat.memberCount', { count: memberIds.length })}
-        </span>
-        <span className="ml-auto flex shrink-0 items-center gap-2">
-          {speaking && (
-            <>
-              <span className="text-micro text-ink-fg-3">{t('groupChat.speaking')}</span>
-              <button
-                type="button"
-                onClick={() => void stop()}
-                disabled={stopping}
-                aria-label={t('groupChat.stop')}
-                className="grid size-7 place-items-center rounded-md text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg disabled:opacity-40"
-              >
-                <Square size={12} strokeWidth={2} fill="currentColor" />
-              </button>
-            </>
-          )}
-          {labsOn && (
-            <button
-              type="button"
-              onClick={() => setSettingsOpen(true)}
-              aria-label={t('groupChat.settings.open')}
-              className="grid size-7 place-items-center rounded-md text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
-            >
-              <Settings size={15} strokeWidth={2} />
-            </button>
-          )}
-        </span>
-      </div>
+    <div
+      className="flex min-h-0 min-w-0 flex-1 flex-col"
+      data-group-chat={sessionId}
+      data-group-mode={labs.loading ? undefined : labsOn ? 'orchestrated' : 'v1'}
+    >
+      <GroupHeader
+        title={groupTitle}
+        topic={labsOn ? topic : null}
+        memberIds={memberIds}
+        memberMeta={memberMeta}
+        inFlight={labsOn ? (liveView.inFlight?.agentId ?? null) : null}
+        queued={labsOn ? liveView.queued : []}
+        chainProgress={labsOn ? liveEvents.chainProgress : null}
+        showChain={labsOn && showChain}
+        runAlive={labsOn ? runAlive : sending}
+        stopping={stopping}
+        onStop={onStop}
+        detailsOpen={detailsOpen}
+        onToggleDetails={onToggleDetails}
+      />
 
-      {labsOn && (
-        <GroupSettingsDialog
-          open={settingsOpen}
-          onOpenChange={setSettingsOpen}
-          sessionId={sessionId}
-          memberIds={memberIds}
-          memberMeta={memberMeta}
-        />
+      {gatewayState !== 'ok' && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-ink-border bg-ink-2 px-4 py-1.5 text-meta text-ink-fg-2">
+          <Info size={13} strokeWidth={2} className="shrink-0" />
+          <span>
+            {t(
+              gatewayState === 'web' ? 'groupChat.gatewayWebOnly' : 'groupChat.gatewayUnreachable'
+            )}
+          </span>
+        </div>
       )}
 
-      {/* 消息流。 */}
-      <div ref={scrollRef} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {rows.length === 0 && live.length === 0 ? (
-          <div className="px-6 py-10 text-center text-meta text-ink-fg-3">
-            {t('groupChat.emptyThread')}
-          </div>
-        ) : (
-          <div className="flex flex-col gap-3.5">
-            {rows.map((m) => {
-              const stopped = groupStopReason(m)
-              return stopped != null ? (
-                <StoppedRow key={m.id} reason={stopped} t={t} />
-              ) : (
-                <PersistedBubble
-                  key={m.id}
-                  message={m}
-                  titleOfMember={titleOfMember}
-                  colorOfMember={colorOfMember}
-                  memberMeta={memberMeta}
-                />
-              )
-            })}
-            {live.map((b) =>
-              b.kind === 'user' ? (
-                <UserBubble
-                  key={b.key}
-                  text={b.text}
-                  failed={b.status === 'failed'}
-                  error={b.error}
-                  t={t}
-                />
-              ) : (
-                <SpeakerBubble
-                  key={b.key}
-                  agentId={b.agentId as string}
-                  name={titleOfMember(b.agentId as string)}
-                  color={colorOfMember(b.agentId as string)}
-                  avatar={memberMeta.get(b.agentId as string)?.avatar}
-                  text={b.text}
-                  streaming={b.status === 'streaming'}
-                  failed={b.status === 'failed'}
-                  error={b.error}
-                  t={t}
-                />
-              )
-            )}
-          </div>
-        )}
-      </div>
+      <GroupThread
+        items={timeline.items}
+        tail={timeline.tail}
+        memberIds={memberIds}
+        memberMeta={memberMeta}
+        members={memberEntries}
+        now={nowMs}
+        loading={messagesQ.isLoading}
+        error={messagesQ.isError ? errorMessage(messagesQ.error) : null}
+        onRetryLoad={() => void messagesQ.refetch()}
+        empty={emptyVariant}
+        retryStates={retryUiStates}
+        onRetry={(item) => void retry(item)}
+        onOpenDetails={onToggleDetails}
+      />
 
-      {/* 发送框（@ 补全弹层贴在上方）。 */}
-      <div className="relative shrink-0 border-t border-ink-border px-4 py-3">
-        {mention && mentionCandidates.length > 0 && (
-          <div className="glass-pop absolute bottom-full left-4 z-10 mb-1 w-56 rounded-[var(--r-ctl)] border border-ink-border-soft p-1">
-            {mentionCandidates.map((m) => (
-              <button
-                key={m.agentId}
-                type="button"
-                onClick={() => pickMention(m.title)}
-                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-aux text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3"
-              >
-                <AgentAvatar
-                  agentId={m.agentId}
-                  config={memberMeta.get(m.agentId)?.avatar}
-                  size={20}
-                  title={m.title}
-                />
-                <span className="min-w-0 flex-1 truncate">{m.title}</span>
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="flex items-end gap-2">
-          <textarea
-            ref={inputRef}
-            value={draft}
-            rows={1}
-            placeholder={t('groupChat.composerPlaceholder')}
-            onChange={(e) => {
-              setDraft(e.target.value)
-              refreshMention(e.target.value, e.target.selectionStart)
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault()
-                setMention(null)
-                void send()
-              } else if (e.key === 'Escape') {
-                setMention(null)
-              }
-            }}
-            className={cn(
-              'max-h-32 min-h-9 flex-1 resize-none rounded-lg border border-ink-border-soft bg-ink-2 px-3 py-2',
-              'text-body text-ink-fg outline-none placeholder:text-ink-fg-3'
-            )}
-          />
-          <button
-            type="button"
-            onClick={() => void send()}
-            disabled={sending || draft.trim().length === 0}
-            aria-label={t('groupChat.send')}
-            className={cn(
-              'grid size-9 shrink-0 place-items-center rounded-lg text-white transition-opacity duration-fast',
-              'disabled:opacity-40'
-            )}
-            style={{ background: 'rgb(var(--c-accent))' }}
-          >
-            <SendHorizontal size={15} strokeWidth={2} />
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-/** 地板命中时服务端写的 `role='system'` 行：居中灰字「已停止：<原因>」。
- *  原因词表单源 = groupFloors.ts 的 GROUP_STOP_REASONS；查不到 i18n 条目就显示原始词
- *  （宁可露出机器词，也不把一个新增的停止原因静默渲染成空白）。 */
-function StoppedRow({
-  reason,
-  t
-}: {
-  reason: string
-  t: ReturnType<typeof useTranslation>['t']
-}): React.ReactElement {
-  return (
-    <div className="py-1 text-center text-micro text-ink-fg-3">
-      {t('groupChat.stoppedPrefix', {
-        reason: t(`groupChat.stopped.${reason}`, { defaultValue: reason })
-      })}
-    </div>
-  )
-}
-
-function PersistedBubble({
-  message,
-  titleOfMember,
-  colorOfMember,
-  memberMeta
-}: {
-  message: ChatMessage
-  titleOfMember: (id: string) => string
-  colorOfMember: (id: string) => string
-  memberMeta: Map<string, GroupMemberMeta>
-}): React.ReactElement {
-  const { t } = useTranslation()
-  if (message.role === 'user') {
-    return <UserBubble text={message.content} failed={false} t={t} />
-  }
-  const speaker = message.speaker_agent_id ?? null
-  return (
-    <SpeakerBubble
-      agentId={speaker ?? 'assistant'}
-      name={speaker != null ? titleOfMember(speaker) : 'AI'}
-      color={speaker != null ? colorOfMember(speaker) : 'rgb(var(--c-ai))'}
-      avatar={speaker != null ? memberMeta.get(speaker)?.avatar : null}
-      text={message.content}
-      streaming={false}
-      failed={false}
-      t={t}
-    />
-  )
-}
-
-function SpeakerBubble({
-  agentId,
-  name,
-  color,
-  avatar,
-  text,
-  streaming,
-  failed,
-  error,
-  t
-}: {
-  agentId: string
-  name: string
-  color: string
-  avatar?: AgentAvatarConfig | null
-  text: string
-  streaming: boolean
-  failed: boolean
-  error?: string
-  t: ReturnType<typeof useTranslation>['t']
-}): React.ReactElement {
-  return (
-    <div className="flex max-w-[86%] items-start gap-2.5">
-      <div className="shrink-0 pt-0.5">
-        <AgentAvatar agentId={agentId} config={avatar} size={30} title={name} />
-      </div>
-      <div className="min-w-0">
-        <div className="mb-0.5 text-micro font-semibold" style={{ color }}>
-          {name}
-        </div>
-        <div
-          className={cn(
-            'whitespace-pre-wrap rounded-[4px_12px_12px_12px] bg-ink-3 px-3 py-2 text-body leading-relaxed text-ink-fg',
-            failed && 'opacity-70'
-          )}
-        >
-          {text.length > 0 ? (
-            text
-          ) : streaming ? (
-            <span className="text-ink-fg-3">{t('groupChat.typing', { name })}</span>
-          ) : null}
-          {streaming && text.length > 0 && (
-            <span className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse rounded-sm bg-ink-fg-3 align-middle" />
-          )}
-        </div>
-        {failed && (
-          <div className="mt-1 text-micro text-fail">
-            {t('groupChat.speakerFailed', { error: error ?? 'unknown' })}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function UserBubble({
-  text,
-  failed,
-  error,
-  t
-}: {
-  text: string
-  failed: boolean
-  error?: string
-  t: ReturnType<typeof useTranslation>['t']
-}): React.ReactElement {
-  return (
-    <div className="flex flex-col items-end self-end">
-      <div
-        className="max-w-full whitespace-pre-wrap rounded-[12px_4px_12px_12px] px-3 py-2 text-body leading-relaxed text-ink-fg"
-        style={{ backgroundImage: 'var(--sel-wash)' }}
-      >
-        {text}
-      </div>
-      {failed && (
-        <div className="mt-1 text-micro text-fail">
-          {t('groupChat.sendFailed', { error: error ?? 'unknown' })}
-        </div>
-      )}
+      <GroupComposer
+        draft={draft}
+        onDraftChange={setDraft}
+        onSend={() => void send()}
+        sending={sending}
+        disabled={gatewayState !== 'ok' || memberEntries.length === 0}
+        members={memberEntries}
+        modes={modes}
+        labsOn={labsOn}
+        labsLoading={labs.loading}
+        wakeCount={wakeCount}
+        runAlive={runAlive}
+      />
     </div>
   )
 }

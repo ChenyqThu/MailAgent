@@ -515,7 +515,7 @@ export function listAllSessions(options: ListAllSessionsOptions = {}): ChatSessi
        FROM ai_chat_sessions s
        WHERE ${includeArchived ? '1 = 1' : 's.archived = 0'}
          AND ${originClause}
-         AND EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)
+         AND ${origin === 'group' ? '1 = 1' : 'EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)'}
        ORDER BY s.updated_at DESC
        LIMIT ?`
     )

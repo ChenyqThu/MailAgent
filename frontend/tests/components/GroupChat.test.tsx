@@ -33,23 +33,35 @@ const mockGetConfig = vi.fn()
 const mockListMessages = vi.fn()
 const mockNewSession = vi.fn()
 const mockOnTurnPersisted = vi.fn()
+// UX 批：群视图新接的三个 ChatApi 面（事件订阅 / 已读水位 / 前台上报）。
+const mockOnGroupTurn = vi.fn()
+const mockMarkRead = vi.fn(async () => undefined)
+const mockSetForeground = vi.fn(async () => undefined)
+// 🔴 同一个对象：真 useMailApi 返回稳定实例，视图的 effect 把 mailApi 放进 deps；每次 render
+// 造新对象会让「选中即已读」「订阅事件」这类 effect 每帧重跑，V21 的计数就失真。
+const mockMailApi = {
+  report: { getConfig: mockGetConfig },
+  chat: {
+    listMessages: mockListMessages,
+    newSession: mockNewSession,
+    onTurnPersisted: mockOnTurnPersisted,
+    onGroupTurn: mockOnGroupTurn,
+    markSessionRead: mockMarkRead,
+    setGroupForeground: mockSetForeground
+  }
+}
 vi.mock('@shared/hooks/useMailApi', () => ({
-  useMailApi: () => ({
-    report: { getConfig: mockGetConfig },
-    chat: {
-      listMessages: mockListMessages,
-      newSession: mockNewSession,
-      onTurnPersisted: mockOnTurnPersisted
-    }
-  })
+  useMailApi: () => mockMailApi
 }))
 
 const mockGetLabs = vi.fn()
+const mockGetGroupTurns = vi.fn()
 vi.mock('@shared/api/groupSettings', () => ({
   getLabs: (...args: unknown[]) => mockGetLabs(...args),
   setLabs: vi.fn(),
   getGroupConfig: vi.fn().mockResolvedValue({ modes: {}, config: { v: 1 } }),
   setGroupConfig: vi.fn(),
+  getGroupTurns: (...args: unknown[]) => mockGetGroupTurns(...args),
   getGroupMetrics: vi.fn().mockResolvedValue({
     silentRunRate: null,
     turnsPerHumanMessage: null,
@@ -61,7 +73,9 @@ vi.mock('@shared/api/groupSettings', () => ({
 
 const mockAppendUser = vi.fn()
 const mockRunSpeaker = vi.fn()
-vi.mock('@shared/assistant/groupChatClient', () => ({
+// probeGroupRun / retryGroupTurn 保留真实现：它们只是 fetch 的薄封装，用例经 vi.stubGlobal('fetch') 桩。
+vi.mock('@shared/assistant/groupChatClient', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@shared/assistant/groupChatClient')>()),
   appendGroupUserMessage: (...args: unknown[]) => mockAppendUser(...args),
   runGroupSpeaker: (...args: unknown[]) => mockRunSpeaker(...args)
 }))
@@ -433,8 +447,10 @@ describe('GroupChatView（labs on：服务端编排）', () => {
   })
 
   const waitForLabsOn = async (): Promise<void> => {
-    // 齿轮只在 labs on 时渲染 —— 它出现 = 开关已读到并生效。
-    await waitFor(() => expect(screen.getByLabelText('群设置')).toBeTruthy())
+    // 根元素的 data-group-mode 只在 labs 读到后才有值 —— "orchestrated" 出现 = 开关已读到并生效。
+    await waitFor(() =>
+      expect(document.querySelector('[data-group-mode="orchestrated"]')).toBeTruthy()
+    )
   }
 
   test('V5 发送只 append，不调 runGroupSpeaker（发言循环在服务端）', async () => {
@@ -536,5 +552,406 @@ describe('GroupChatWorkspace — 二级栏契约（09-01 侧栏批）', () => {
     const asideHidden = hidden.querySelector('aside[data-nav-second]') as HTMLElement
     expect(asideHidden.style.width).toBe('0px')
     expect(asideHidden.style.visibility).toBe('hidden')
+  })
+})
+
+// ── L4 群聊 UX 批（lane C）：事件驱动的在场态 / 台账还原 / 重试 / composer ──────────────────
+//
+//   V9  labs 未 resolve 时点发送不分派；resolve 为 on 只 append、为 off 才起 v1 循环；
+//   V10 start → 「A 正在输入…」；delta → live 气泡含累计文本；spoke + refetch → 落库气泡替换不重复；
+//   V11 silent → meta 行且无气泡；V12 failed → 重试钮 → POST retry{agentId, chainId}；
+//       409 E_RUN_STOPPED → 禁用 + retryStopped；E_LABS_ORCHESTRATED → retryOrchestratedOnly；
+//   V13 探针 group.preparing 且无租约 → 停止钮；V14 no_candidates 事件行 + 台账推导行；
+//   V15 markdown 渲染 <strong>；V16 owner 消息 @ chip 带成员色；V17 刷新还原四条 meta 文案；
+//   V18 @ 弹层键盘；V19 「将唤醒 N 位」；V20 探针不可达 / web 说明条 + composer 禁用；
+//   V21 选中即 markSessionRead；V22 labs off 不订阅事件；V23 无消息不请求台账。
+
+import { act } from '@testing-library/react'
+import type { GroupTurnEvent } from '../../src/ai-gateway/groupTurnEvent'
+
+function turnEvent(
+  over: Partial<GroupTurnEvent> & { phase: GroupTurnEvent['phase'] }
+): GroupTurnEvent {
+  return {
+    v: 1,
+    sessionId: 300,
+    runId: 'r1',
+    chainId: 1,
+    seq: 1,
+    agentId: 'a1',
+    ts: Date.now(),
+    queued: [],
+    chainProgress: { counted: 1, cap: 12 },
+    ...over
+  }
+}
+
+function groupTurn(
+  over: Partial<{
+    id: number
+    runId: string
+    chainId: number
+    seq: number
+    agentId: string
+    outcome: string
+    error: string | null
+    startedAt: number
+  }>
+): Record<string, unknown> {
+  return {
+    id: 1,
+    runId: 'r1',
+    chainId: 1,
+    seq: 1,
+    agentId: 'a1',
+    triggerKind: 'human',
+    outcome: 'silent',
+    messageId: null,
+    model: null,
+    tokensInput: null,
+    tokensOutput: null,
+    costUsd: null,
+    error: null,
+    startedAt: 2,
+    finishedAt: null,
+    ...over
+  }
+}
+
+describe('GroupChatView（UX 批：事件 / 台账 / 重试 / composer）', () => {
+  const mockFetch = vi.fn()
+  let turnHandlers: Array<(e: unknown) => void> = []
+
+  const okJson = (body: unknown) => ({ ok: true, json: async () => body })
+  const routeFetch = (
+    groupChat: () => unknown,
+    runActive: () => unknown = () => okJson({ active: false })
+  ) =>
+    mockFetch.mockImplementation((url: string) =>
+      Promise.resolve(String(url).includes('/run/active') ? runActive() : groupChat())
+    )
+
+  beforeEach(() => {
+    mockGetLabs.mockResolvedValue({ groupAgents: 'on' })
+    mockFetch.mockReset()
+    mockFetch.mockResolvedValue(okJson({ active: false }))
+    vi.stubGlobal('fetch', mockFetch)
+    turnHandlers = []
+    mockOnGroupTurn.mockImplementation((h: (e: unknown) => void) => {
+      turnHandlers.push(h)
+      return () => {
+        turnHandlers = turnHandlers.filter((x) => x !== h)
+      }
+    })
+    mockGetGroupTurns.mockResolvedValue({ turns: [], hasMore: false })
+  })
+
+  const emit = (over: Partial<GroupTurnEvent> & { phase: GroupTurnEvent['phase'] }): void => {
+    act(() => {
+      for (const h of turnHandlers) h(turnEvent(over))
+    })
+  }
+  const waitForOn = (): Promise<void> =>
+    waitFor(() => expect(document.querySelector('[data-group-mode="orchestrated"]')).toBeTruthy())
+  const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 30))
+
+  test('V9 labs 未 resolve 时点发送 → 不分派；resolve 为 on → 只 appendUser', async () => {
+    let resolveLabs!: (v: { groupAgents: 'on' | 'off' }) => void
+    mockGetLabs.mockReset()
+    mockGetLabs.mockImplementation(() => new Promise((res) => (resolveLabs = res)))
+    const container = renderView()
+    await sendText(container, '大家汇报下')
+    await tick()
+    expect(mockAppendUser).not.toHaveBeenCalled()
+    expect(mockRunSpeaker).not.toHaveBeenCalled()
+    resolveLabs({ groupAgents: 'on' })
+    await waitFor(() => expect(mockAppendUser).toHaveBeenCalledWith(300, '大家汇报下'))
+    await tick()
+    expect(mockRunSpeaker).not.toHaveBeenCalled()
+  })
+
+  test('V9b labs 未 resolve 时点发送；resolve 为 off → runSpeaker（v1 循环）', async () => {
+    let resolveLabs!: (v: { groupAgents: 'on' | 'off' }) => void
+    mockGetLabs.mockReset()
+    mockGetLabs.mockImplementation(() => new Promise((res) => (resolveLabs = res)))
+    const container = renderView()
+    await sendText(container, '大家汇报下')
+    await tick()
+    expect(mockRunSpeaker).not.toHaveBeenCalled()
+    resolveLabs({ groupAgents: 'off' })
+    // 无 @ → v1 循环按成员序各回一轮（a1 → a2），与 V2 同一路径。
+    await waitFor(() => expect(mockRunSpeaker).toHaveBeenCalledTimes(2))
+    expect(mockRunSpeaker.mock.calls[0]?.[0]).toMatchObject({ speakAsAgentId: 'a1' })
+    expect(mockRunSpeaker.mock.calls[1]?.[0]).toMatchObject({ speakAsAgentId: 'a2' })
+  })
+
+  test('V10 start → 正在输入；delta → 累计正文；spoke + refetch → 落库气泡替换、不重复', async () => {
+    mockListMessages.mockResolvedValue([msg(1, 'user', '大家汇报下')])
+    renderView()
+    await waitForOn()
+    await waitFor(() => expect(screen.getByText('大家汇报下')).toBeTruthy())
+    emit({ phase: 'start' })
+    await waitFor(() => expect(screen.getByText('调研员 正在输入…')).toBeTruthy())
+    emit({ phase: 'delta', text: '调研进' })
+    await waitFor(() => expect(screen.getByText('调研进')).toBeTruthy())
+    emit({ phase: 'delta', text: '调研进展如下' })
+    await waitFor(() => expect(screen.getByText('调研进展如下')).toBeTruthy())
+    expect(screen.queryByText('调研进')).toBeNull()
+    expect(screen.queryByText('调研员 正在输入…')).toBeNull()
+    // spoke：overlay 顶上；落库行到达后同 messageId 去重 → 仍只有一条。
+    mockListMessages.mockResolvedValue([
+      msg(1, 'user', '大家汇报下'),
+      msg(2, 'assistant', '调研进展如下', 'a1')
+    ])
+    emit({ phase: 'spoke', text: '调研进展如下', messageId: 2 })
+    expect(screen.getAllByText('调研进展如下')).toHaveLength(1)
+    const handler = mockOnTurnPersisted.mock.calls[0]?.[0] as (p: unknown) => void
+    act(() => handler({ sessionId: 300, status: 'finished', runId: 'r1' }))
+    await waitFor(() => expect(mockListMessages).toHaveBeenCalledTimes(2))
+    await tick()
+    expect(screen.getAllByText('调研进展如下')).toHaveLength(1)
+    // 落库气泡挂在 a1 名下（V1 同一 DOM 契约）。
+    expect(screen.getByText('调研进展如下').previousElementSibling?.textContent).toBe('调研员')
+  })
+
+  test('V11 silent 事件 → meta 行「本轮选择不发言」且无气泡', async () => {
+    mockListMessages.mockResolvedValue([msg(1, 'user', '大家汇报下')])
+    renderView()
+    await waitForOn()
+    emit({ phase: 'start' })
+    emit({ phase: 'silent', usage: { model: 'm', tokensInput: 1, tokensOutput: 1, costUsd: null } })
+    await waitFor(() => expect(screen.getByText('调研员 本轮选择不发言')).toBeTruthy())
+    expect(document.querySelector('[data-avatar="a1"][data-size="30"]')).toBeNull()
+    expect(screen.queryByText('调研员 正在输入…')).toBeNull()
+  })
+
+  test('V12 failed 事件 → 重试钮 → POST retry{agentId, chainId}；409 E_RUN_STOPPED → 禁用 + retryStopped', async () => {
+    mockListMessages.mockResolvedValue([msg(1, 'user', '大家汇报下')])
+    routeFetch(() => okJson({ ok: true, queued: true }))
+    renderView()
+    await waitForOn()
+    emit({ phase: 'failed', error: 'boom', chainId: 7 })
+    await waitFor(() => expect(screen.getByText(/本轮失败：boom/)).toBeTruthy())
+    fireEvent.click(screen.getByText('重试'))
+    await waitFor(() =>
+      expect(
+        mockFetch.mock.calls.some((call) => {
+          if (!String(call[0]).endsWith('/api/ai/group-chat')) return false
+          const body = JSON.parse((call[1] as { body: string }).body) as {
+            sessionId: number
+            retry?: { agentId: string; chainId: number }
+          }
+          return body.sessionId === 300 && body.retry?.agentId === 'a1' && body.retry.chainId === 7
+        })
+      ).toBe(true)
+    )
+    // 重试中，直到点击之后的第一条事件（requeue 发的 queued）到达。
+    expect(screen.getByText('重试中…')).toBeTruthy()
+    emit({ phase: 'queued', agentId: null, seq: null, queued: ['a1'], chainId: 7 })
+    await waitFor(() => expect(screen.getByText('重试')).toBeTruthy())
+    // 该链已被停掉：gateway 409 → 钮禁用 + 人话。
+    routeFetch(() => ({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'E_RUN_STOPPED', hint: 'chain stopped' })
+    }))
+    fireEvent.click(screen.getByText('重试'))
+    await waitFor(() => expect(screen.getByText('本链已停止，发一条新消息继续')).toBeTruthy())
+    expect(
+      (screen.getByText('本链已停止，发一条新消息继续').closest('button') as HTMLButtonElement)
+        .disabled
+    ).toBe(true)
+  })
+
+  test('V12b 409 E_LABS_ORCHESTRATED → retryOrchestratedOnly', async () => {
+    mockListMessages.mockResolvedValue([msg(1, 'user', '大家汇报下')])
+    routeFetch(() => ({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'E_LABS_ORCHESTRATED', hint: 'labs off' })
+    }))
+    renderView()
+    await waitForOn()
+    emit({ phase: 'failed', error: 'boom' })
+    await waitFor(() => expect(screen.getByText('重试')).toBeTruthy())
+    fireEvent.click(screen.getByText('重试'))
+    await waitFor(() => expect(screen.getByText(/重试需要开启/)).toBeTruthy())
+  })
+
+  test('V13 /run/active 返回 group.preparing 且无租约 → 停止钮渲染', async () => {
+    routeFetch(
+      () => okJson({ ok: true }),
+      () =>
+        okJson({
+          active: true,
+          runId: null,
+          group: { inFlight: null, preparing: 'a1', queued: [] }
+        })
+    )
+    renderView()
+    await waitForOn()
+    await waitFor(() => expect(screen.getByLabelText('停止本轮')).toBeTruthy())
+    // preparing 的成员进在场行（它已出队、尚未拿到租约）——判据是 group.preparing，不是 active 标志。
+    await waitFor(() => expect(screen.getByText('调研员 排队中')).toBeTruthy())
+  })
+
+  test('V14 no_candidates：事件 → 提示行；刷新后由台账推导（链根零 turn 行且非最后一条）', async () => {
+    renderView()
+    await waitForOn()
+    emit({
+      phase: 'no_candidates',
+      agentId: null,
+      seq: null,
+      runId: null,
+      chainId: 5,
+      reason: 'no_realtime_members'
+    })
+    await waitFor(() => expect(screen.getByText(/这条消息没有唤醒任何成员/)).toBeTruthy())
+    cleanup()
+    // 另一例：无事件，两条 user 消息、台账为空 → 第一条下方有该行、第二条（最后一条）没有。
+    mockListMessages.mockResolvedValue([msg(1, 'user', '一'), msg(2, 'user', '二')])
+    renderView()
+    await waitForOn()
+    await waitFor(() => expect(screen.getByText('二')).toBeTruthy())
+    await waitFor(() => expect(mockGetGroupTurns).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getAllByText(/这条消息没有唤醒任何成员/)).toHaveLength(1))
+    const row = screen.getByText(/这条消息没有唤醒任何成员/).closest('div') as HTMLElement
+    // 该行紧跟第一条消息组之后、第二条之前。
+    const first = screen.getByText('一').closest('.self-end') as HTMLElement
+    expect(first.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const second = screen.getByText('二').closest('.self-end') as HTMLElement
+    expect(row.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  test('V15 成员消息 markdown：**粗** 渲染为 strong', async () => {
+    mockListMessages.mockResolvedValue([msg(2, 'assistant', '**粗** 正文', 'a1')])
+    renderView()
+    await waitForOn()
+    await waitFor(() => expect(document.querySelector('[data-streamdown="strong"]')).toBeTruthy())
+    expect(document.querySelector('[data-streamdown="strong"]')?.textContent).toBe('粗')
+  })
+
+  test('V16 owner 消息 @跟进官 → chip 元素带成员色', async () => {
+    mockListMessages.mockResolvedValue([msg(1, 'user', '@跟进官 看一下')])
+    renderView()
+    await waitForOn()
+    const chip = await waitFor(() => document.querySelector('[data-mention="a2"]') as HTMLElement)
+    expect(chip.textContent).toBe('@跟进官')
+    // 成员色按 members_json 序：a2 是第二位 → NAME_COLORS[1]（--c-info）。
+    expect(chip.getAttribute('style')).toContain('--c-info')
+    expect(document.querySelector('[data-mention="a1"]')).toBeNull()
+  })
+
+  test('V17 刷新还原：无事件但台账含 silent + 三种 skipped 行 → 四条不同 meta 文案', async () => {
+    mockListMessages.mockResolvedValue([msg(1, 'user', '开始')])
+    mockGetGroupTurns.mockResolvedValue({
+      turns: [
+        groupTurn({
+          id: 4,
+          seq: 4,
+          agentId: 'a2',
+          outcome: 'skipped',
+          error: 'removed',
+          startedAt: 5
+        }),
+        groupTurn({
+          id: 3,
+          seq: 3,
+          agentId: 'a1',
+          outcome: 'skipped',
+          error: 'no_new_messages',
+          startedAt: 4
+        }),
+        groupTurn({
+          id: 2,
+          seq: 2,
+          agentId: 'a2',
+          outcome: 'skipped',
+          error: 'monologue',
+          startedAt: 3
+        }),
+        groupTurn({ id: 1, seq: 1, agentId: 'a1', outcome: 'silent', startedAt: 2 })
+      ],
+      hasMore: false
+    })
+    renderView()
+    await waitForOn()
+    await waitFor(() => expect(screen.getByText('调研员 本轮选择不发言')).toBeTruthy())
+    expect(screen.getByText('跟进官 已跳过（上一条就是它说的）')).toBeTruthy()
+    expect(screen.getByText('调研员 已跳过（没有新消息可回应）')).toBeTruthy()
+    expect(screen.getByText('跟进官 已不在群里，排队项已丢弃')).toBeTruthy()
+    // 台账传了 since = 最早消息时间。
+    expect(mockGetGroupTurns).toHaveBeenCalledWith(300, expect.objectContaining({ since: 1 }))
+  })
+
+  test('V18 composer @ 弹层：首项「所有人」；ArrowDown+Enter 采纳第二项；Esc 关闭；弹层开时 Enter 不发送', async () => {
+    const container = renderView()
+    await waitForOn()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: '@', selectionStart: 1 } })
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeTruthy())
+    const options = screen.getAllByRole('option')
+    expect(options[0].textContent).toContain('所有人')
+    expect(options[1].textContent).toContain('调研员')
+    fireEvent.keyDown(textarea, { key: 'ArrowDown' })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    await waitFor(() => expect(textarea.value).toBe('@调研员 '))
+    expect(screen.queryByRole('listbox')).toBeNull()
+    expect(mockAppendUser).not.toHaveBeenCalled()
+    // Esc 关闭。
+    fireEvent.change(textarea, { target: { value: '@调研员 @', selectionStart: 6 } })
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeTruthy())
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
+    expect(mockAppendUser).not.toHaveBeenCalled()
+  })
+
+  test('V19 「将唤醒 N 位」：@所有人 → N=成员数；无 @ 零 realtime → wakeNone', async () => {
+    const container = renderView()
+    await waitForOn()
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: '@所有人 开会', selectionStart: 7 } })
+    await waitFor(() => expect(screen.getByText('将唤醒 2 位')).toBeTruthy())
+    fireEvent.change(textarea, { target: { value: '大家好', selectionStart: 3 } })
+    await waitFor(() => expect(screen.getByText(/不会唤醒任何人/)).toBeTruthy())
+  })
+
+  test('V20 探针 fetch 抛错 → gatewayUnreachable 说明条 + composer 禁用，历史仍渲染；无 baseUrl → gatewayWebOnly', async () => {
+    mockListMessages.mockResolvedValue([msg(1, 'user', '大家汇报下')])
+    mockFetch.mockRejectedValue(new Error('ECONNREFUSED'))
+    const container = renderView()
+    await waitForOn()
+    await waitFor(() => expect(screen.getByText(/本机 AI 服务未连接/)).toBeTruthy())
+    expect((container.querySelector('textarea') as HTMLTextAreaElement).disabled).toBe(true)
+    expect(screen.getByText('大家汇报下')).toBeTruthy()
+    cleanup()
+    window.sessionStorage.removeItem(GATEWAY_PORT_KEY)
+    const web = renderView()
+    await waitFor(() => expect(screen.getByText(/群聊是桌面功能/)).toBeTruthy())
+    expect((web.querySelector('textarea') as HTMLTextAreaElement).disabled).toBe(true)
+  })
+
+  test('V21 选中群 → markSessionRead 被调一次', async () => {
+    renderView()
+    await waitForOn()
+    await waitFor(() => expect(mockMarkRead).toHaveBeenCalledWith(300))
+    expect(mockMarkRead).toHaveBeenCalledTimes(1)
+  })
+
+  test('V22 labs off：不订阅 group-turn 事件源', async () => {
+    mockGetLabs.mockResolvedValue({ groupAgents: 'off' })
+    renderView()
+    await waitFor(() => expect(document.querySelector('[data-group-mode="v1"]')).toBeTruthy())
+    await tick()
+    expect(mockOnGroupTurn).not.toHaveBeenCalled()
+  })
+
+  test('V23 无消息（清空历史后）→ 台账不请求', async () => {
+    mockListMessages.mockResolvedValue([])
+    renderView()
+    await waitForOn()
+    await waitFor(() => expect(mockListMessages).toHaveBeenCalled())
+    await tick()
+    expect(mockGetGroupTurns).not.toHaveBeenCalled()
   })
 })

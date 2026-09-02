@@ -67,11 +67,31 @@ function isBoundary(ch: string | undefined): boolean {
   return !/[A-Za-z0-9_]/.test(ch)
 }
 
+/** `@全员` 保留字（composer 弹层置顶项与 parseGroupMentions 共用）。命中 = 唤醒全部成员一次，
+ *  仍受全部地板约束；保留字优先于成员名（成员恰好叫「所有人」/「all」时被遮蔽，有意）。 */
+export const GROUP_MENTION_ALL_TOKENS = ['@所有人', '@all'] as const
+
+/** 文本里是否出现保留字（边界判定与成员名相同：`@allx` 不算）。 */
+function mentionsAll(text: string): boolean {
+  for (const token of GROUP_MENTION_ALL_TOKENS) {
+    let from = 0
+    for (;;) {
+      const idx = text.indexOf(token, from)
+      if (idx === -1) break
+      if (isBoundary(text[idx + token.length])) return true
+      from = idx + 1
+    }
+  }
+  return false
+}
+
 /** 解析文本中被 @ 点名的成员 id。无点名 → []（调用方按「全员各回一轮」/ realtime 候选处理）。
  *  按**显示名**匹配，返回值恒按 members 传入序（= members_json 成员序 = 回复顺序），去重；
- *  先按名字长度降序检出、再回到成员序输出，长名优先吃掉重叠。 */
+ *  先按名字长度降序检出、再回到成员序输出，长名优先吃掉重叠。
+ *  保留字 `@所有人` / `@all` 命中 → 全体成员 id（成员序），先于逐名匹配。 */
 export function parseGroupMentions(text: string, members: readonly GroupMentionMember[]): string[] {
   if (!text.includes('@') || members.length === 0) return []
+  if (mentionsAll(text)) return members.map((m) => m.agentId)
   const hit = new Set<string>()
   // 长名优先：避免短名作为长名前缀时双命中（去重靠 Set，但边界判定在长名场景下更稳）。
   const byLength = [...members]
@@ -188,7 +208,11 @@ export function buildGroupWindow(
   snapshot: readonly GroupTranscriptRow[],
   speakAsAgentId: string,
   seenThroughId: number | null,
-  limits: GroupWindowLimits = { tail: WINDOW_TAIL, maxRows: WINDOW_MAX_ROWS, maxChars: WINDOW_MAX_CHARS }
+  limits: GroupWindowLimits = {
+    tail: WINDOW_TAIL,
+    maxRows: WINDOW_MAX_ROWS,
+    maxChars: WINDOW_MAX_CHARS
+  }
 ): GroupWindow {
   const admitted = snapshot.filter(isWindowRow).sort((a, b) => a.id - b.id)
   const maxId = admitted.length ? admitted[admitted.length - 1]!.id : null

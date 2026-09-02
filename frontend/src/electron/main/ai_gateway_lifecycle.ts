@@ -18,7 +18,7 @@
 // S3 — the gateway starts unconditionally (the ONLY chat engine); index.ts still
 // dynamic-imports this module so the heavy `ai` deps stay in a lazy chunk.
 
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { appendFileSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
 
@@ -118,7 +118,7 @@ import { runBuildDiagnostics, runSubmitFeedback } from './handlers/feedback'
 import { resolveApiPort } from './backend_lifecycle'
 import { getLocalApiToken } from './local_token'
 // task 08-20-notification-center M2 批 B4 — chat run 完成 → 通知中心 loopback publish。
-import { maybeNotifyChatRunFinished } from './notification_fanout'
+import { maybeNotifyChatRunFinished, maybeNotifyGroupReply } from './notification_fanout'
 // task 07-21 — the env kill-switch parser lives in a pure lib module (pinned by a
 // lightweight vitest; the Python side src/skills/invoke.py mirrors its truth table).
 import { envBool } from './lib/env-bool'
@@ -276,6 +276,28 @@ function readMessageVia(metadata: string | null): 'main_agent' | null {
   } catch {
     return null
   }
+}
+
+/** L4 群聊 UX 批 — renderer 经 `chat:group-foreground` 上报的「此刻在前台的群」（null = 没有）。
+ *  通知投影据此跳过 owner 正盯着看的群；未上报过 = 不在前台 → 发（按链合并，有界）。 */
+let foregroundGroupSessionId: number | null = null
+
+function isGroupForeground(sessionId: number): boolean {
+  return BrowserWindow.getFocusedWindow() != null && foregroundGroupSessionId === sessionId
+}
+
+/** `chat:group-foreground {sessionId | null}` 的 ipcMain.handle（一处）。restart 会再走一遍
+ *  startEmbeddedAiGateway，先 removeHandler 防「second handler」抛错。 */
+function registerGroupForegroundHandler(): void {
+  ipcMain.removeHandler('chat:group-foreground')
+  ipcMain.handle('chat:group-foreground', (_evt, payload: unknown) => {
+    const raw =
+      payload != null && typeof payload === 'object'
+        ? (payload as { sessionId?: unknown }).sessionId
+        : undefined
+    foregroundGroupSessionId =
+      typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : null
+  })
 }
 
 /** harness-chat lane A (B2) — broadcast a chat event to every renderer window (the same
@@ -503,6 +525,7 @@ async function getSystemPromptConfig(
  */
 export async function startEmbeddedAiGateway(): Promise<number | null> {
   if (_handle) return _handle.port
+  registerGroupForegroundHandler()
   const apiKey = await getLlmApiKey()
   const llmBaseUrl = getLlmBaseUrl()
   const providerRegistryEnabled = isLlmProviderRegistryEnabled()
@@ -787,7 +810,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   let _labsFlagsCache: { at: number; value: LabsFlags } | null = null
   const resolveLabsFlags = async (): Promise<LabsFlags> => {
     const now = Date.now()
-    if (_labsFlagsCache && now - _labsFlagsCache.at < LABS_FLAGS_TTL_MS) return _labsFlagsCache.value
+    if (_labsFlagsCache && now - _labsFlagsCache.at < LABS_FLAGS_TTL_MS)
+      return _labsFlagsCache.value
     let value: LabsFlags = { groupAgents: false }
     try {
       const r = await domain.getLabsFlags(AbortSignal.timeout(3_000))
@@ -978,6 +1002,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     model: getLlmModel(),
     providerRegistryEnabled,
     providerModelResolver,
+    // L4 群聊 UX 批 — 调度器 turn 生命周期 → renderer（在场态 / 流式正文 / 沉默 / 停止原因）。
+    onGroupTurnEvent: (event) => broadcastChatEvent('chat:group-turn', { ...event }),
     ...(queuedInputEnabled
       ? {
           queuedInputStore: {
@@ -1567,6 +1593,20 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       } catch (err) {
         console.error('[ai-gateway] group turn-persisted broadcast failed (persist landed)', err)
       }
+      // L4 群聊 UX 批 — 通知中心投影（判据与 dedupe 见 maybeNotifyGroupReply 头注）。labs on / off
+      // 两条路径都经这里 → 同样生效。
+      maybeNotifyGroupReply(
+        {
+          sessionId,
+          role: message.role,
+          content: message.content,
+          speakerAgentId: message.speakerAgentId ?? null,
+          chainId: message.chainId ?? null
+        },
+        getSession,
+        isGroupForeground,
+        async (agentId) => (await domain.getReportAgent(agentId))?.title?.trim() || null
+      )
       return row.id
     },
     resolveLabsFlags,

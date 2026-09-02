@@ -14,6 +14,7 @@ import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // ChatSession (shared/chat_model.ts, no better-sqlite3 import), so the gateway core, the Electron
 // writer and the renderer share ONE definition each (no 手抄镜像).
 import type { GroupConfig, PausedApprovalMarker } from '@shared/chat_model'
+import type { GroupTurnEvent } from './groupTurnEvent'
 // 🔴 type-only import — fully erased, so config.ts keeps ZERO runtime dependency on
 // tools/types (which DOES import `tool` from 'ai'). index.ts statically imports
 // config.ts for resolveAiGatewayPort; this must never pull the heavy `ai` chunk into
@@ -204,6 +205,9 @@ export interface SessionAgentIdentity {
      *  sentence. The v30 renderer-driven speaker turn (labs off) never sets it → prompt
      *  byte-identical. */
     groupSpeakerRun?: boolean
+    /** 群用途（group_config_json.topic）。有值 → 身份块多一个 <topic> 元素 + 一句「群用途」；
+     *  缺省 / null → 字节不变。只有 调度器 turn 传（v30 speaker 分支不传）。 */
+    topic?: string | null
   } | null
 }
 
@@ -339,6 +343,9 @@ export interface AiGatewayConfig {
   queuedInputStore?: QueuedInputStore
   /** P5 renderer invalidation signal after any queue state transition. */
   onQueuedInputChanged?: (sessionId: number) => void
+  /** L4 群聊 UX 批 — 调度器 group turn 生命周期事件（groupTurnEvent.ts 单一定义）。lifecycle
+   *  接成 broadcastChatEvent('chat:group-turn')；省略（harness / 未接线）→ 调度器不发。 */
+  onGroupTurnEvent?: (event: GroupTurnEvent) => void
   /** P4 owner setting resolver. Any failure must resolve false at the injection boundary. */
   resolveAutoCompactEnabled?: () => Promise<boolean> | boolean
   /** Build the LanguageModel for a model id. Injected by tests (mock model); the

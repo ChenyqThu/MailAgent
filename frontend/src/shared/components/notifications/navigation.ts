@@ -31,6 +31,10 @@ export { NOTIFICATION_ROUTE_TARGETS, type NotificationRouteTarget }
 
 export type NotificationLink =
   | { type: 'session'; sessionId: number }
+  /** 群聊回复（electron main `appendGroupMessage` 的通知投影）→ 对话域「群聊」分段的那个群。
+   *  与 `session` 分开：那一型走 requestOpenAgentSession = AI 分段的主 agent 会话面，塞群 id
+   *  会落空白。 */
+  | { type: 'group'; sessionId: number }
   | { type: 'route'; to: NotificationRouteTarget; search: Record<string, unknown> | null }
   /** 报告完成（`reports/worker.py`）→ `/reports/$reportId`（08-27 P3 前是
    *  `/agents?tab=reports` + store-intent）。 */
@@ -63,6 +67,12 @@ export function resolveNotificationLink(
     // 后端 `_session_id_of` 拿不到会话时发的是 route 退化型；这里再守一道 0/负数/非整数。
     if (typeof sessionId !== 'number' || !Number.isInteger(sessionId) || sessionId <= 0) return null
     return { type: 'session', sessionId }
+  }
+
+  if (link.type === 'group') {
+    const sessionId = link.sessionId
+    if (typeof sessionId !== 'number' || !Number.isInteger(sessionId) || sessionId <= 0) return null
+    return { type: 'group', sessionId }
   }
 
   if (link.type === 'route') {

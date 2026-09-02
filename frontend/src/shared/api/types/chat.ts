@@ -384,6 +384,17 @@ export interface ChatSessionListItem extends ChatSession {
   // 非 matter 行恒 null（判据带 anchor_type：email 的 anchor_id 与 matter.id 是两个 id 空间）。
   matter_public_id?: string | null
   matter_title?: string | null
+  // L4 群聊 UX 批 — 群列表行的「最后一条」投影（serve-api `/chat/sessions/all?origin=group`
+  // 的五列子查询折成一个对象；role ∈ user/assistant 且 status='complete' 的最新一条，system 行
+  // 不算）。`via='main_agent'` = 主助理投递的 user 行，列表前缀据此写「主助理：」而不是「你：」。
+  // 🔴 同 email_subject：join 投影，不是 ai_chat.db 的列。无消息 / 旧 serve-api → null / 缺省。
+  last_message?: {
+    content: string
+    role: 'user' | 'assistant'
+    speaker_agent_id: string | null
+    via: 'main_agent' | null
+    created_at: number
+  } | null
 }
 
 // Sprint 19 §D #3 — chat_tool_call audit row, mirrored from main-side
@@ -1127,4 +1138,44 @@ export interface ChatApi {
     }) => void
   ): () => void
   onQueuedInputChanged?(handler: (payload: { sessionId: number }) => void): () => void
+  /**
+   * L4 群聊 UX 批 — subscribe to the 调度器's group turn lifecycle (`chat:group-turn`
+   * main→renderer broadcast): queued / start / delta / spoke / silent / held_dup / skipped /
+   * failed / stopped / no_candidates. The single definition is ai-gateway/groupTurnEvent.ts
+   * (`GroupTurnEvent`); this signature is an INLINE structural supertype of it because this
+   * file must stay import-free (test_boundary_invariant_api_types_chat_has_no_imports) —
+   * ElectronApi narrows with `narrowGroupTurnEvent` before handing the event over.
+   * Electron-only; optional — web (HttpApi) omits it and the group view falls back to
+   * `onTurnPersisted` + the /run/active probe.
+   */
+  onGroupTurn?(
+    handler: (event: {
+      v: 1
+      sessionId: number
+      runId: string | null
+      chainId: number
+      seq: number | null
+      agentId: string | null
+      phase: string
+      ts: number
+      queued: string[]
+      chainProgress: { counted: number; cap: number }
+      text?: string
+      messageId?: number
+      reason?: string
+      error?: string
+      usage?: {
+        model: string | null
+        tokensInput: number | null
+        tokensOutput: number | null
+        costUsd: number | null
+      }
+    }) => void
+  ): () => void
+  /**
+   * L4 群聊 UX 批 — tell main which group session is in the foreground (null = none). The
+   * lifecycle's `appendGroupMessage` notification projection skips a reply whose group is on
+   * screen in a focused window. Electron-only; optional (web has no notification projection).
+   */
+  setGroupForeground?(sessionId: number | null): Promise<void>
 }

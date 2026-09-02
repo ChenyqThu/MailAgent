@@ -130,6 +130,13 @@ export interface GroupConfig {
   hourlyTokens?: number
   hourlyUsd?: number
   sessionTurnCap?: number | null
+  /** 群用途 / 议题（≤ 200，上限只在 serve-api 校验）。进每位成员的 <current_group_chat> 身份块。 */
+  topic?: string
+  /** 全群统一模型（`providerId:modelId`）；缺省 = 各成员用自己 agent 行的 model。
+   *  🔴 唯一读点 = server.ts speakAsGroupMember。 */
+  modelOverride?: string | null
+  /** 群不在前台时是否投影到通知中心（按链合并）。缺省 = true。 */
+  notify?: boolean
   preset?: 'werewolf' | null
   game?: {
     kind: 'werewolf'

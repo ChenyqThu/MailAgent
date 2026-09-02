@@ -161,7 +161,7 @@ export function buildGatewaySystemPrompt(args: {
     /** v30（群聊）— present ONLY on a group-chat speaker run (handleGroupChat). Renders the
      *  <current_group_chat> block INSTEAD of <current_team_agent> (a speaking turn needs the
      *  multi-party framing — member roster + 不冒充他人 — not the 1:1 team framing). */
-    group?: { members: Array<{ agentId: string; title: string }> } | null
+    group?: { members: Array<{ agentId: string; title: string }>; topic?: string | null } | null
   } | null
   /** W6 — true iff THIS run's built ToolSet holds suggest_followups (manual chat). Injects the
    *  follow-up guidance block; absent/false → byte-identical prompt (headless / harness / tests). */
@@ -303,12 +303,14 @@ export function buildGroupChatIdentityBlock(identity: {
   agentId: string
   agentTitle: string
   duty?: string | null
-  group: { members: Array<{ agentId: string; title: string }> }
+  /** `topic` = 群用途（group_config_json.topic）：有值 → <topic> 元素 + 尾句；缺省字节不变。 */
+  group: { members: Array<{ agentId: string; title: string }>; topic?: string | null }
   silenceContract?: boolean
   gameSecret?: string | null
 }): string {
   const duty = identity.duty?.trim()
   const gameSecret = identity.gameSecret?.trim()
+  const topic = identity.group.topic?.trim()
   const memberTitles = identity.group.members.map((m) => m.title)
   const lines = [
     '<current_group_chat>',
@@ -316,6 +318,7 @@ export function buildGroupChatIdentityBlock(identity: {
     `  <self_title>${escapeXml(identity.agentTitle)}</self_title>`,
     ...(duty ? [`  <duty>${escapeXml(duty)}</duty>`] : []),
     `  <members>${escapeXml(memberTitles.join('、'))}</members>`,
+    ...(topic ? [`  <topic>${escapeXml(topic)}</topic>`] : []),
     ...(gameSecret ? [`  <game_secret>${escapeXml(gameSecret)}</game_secret>`] : []),
     '</current_group_chat>',
     `这是一个多人群聊，成员有：${memberTitles.join('、')}，以及用户本人。` +
@@ -325,7 +328,8 @@ export function buildGroupChatIdentityBlock(identity: {
       (duty
         ? '<duty> 是你的职责设定，仅作背景参考，除非用户明确要求，不要自行开始执行该任务。'
         : '') +
-      (identity.silenceContract === true ? `若这轮无需你发言，只回复 ${SILENCE_SENTINEL}。` : '')
+      (identity.silenceContract === true ? `若这轮无需你发言，只回复 ${SILENCE_SENTINEL}。` : '') +
+      (topic ? `群用途：${topic}。` : '')
   ]
   return lines.join('\n')
 }

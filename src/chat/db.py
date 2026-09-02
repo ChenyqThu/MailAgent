@@ -14,7 +14,11 @@ serve-api 写（本文件 ``upsert_group_member_modes``，**列级 UPSERT，语�
 seen_through_id**），``seen_through_id`` 只由 gateway 写（chat_db/groups.ts 的列级 UPDATE）。
 任何一侧整行覆写都会静默冲掉对方的列（owner 刚改的响应模式被一次游标推进冲回 mention）。
 ``group_config_json`` 归 serve-api 写（``update_group_config``）；``ai_chat_group_turn`` /
-``chain_id`` 归 gateway 写，本文件**只读**。词表（response_mode / outcome / trigger_kind）
+``chain_id`` 归 gateway 写，本文件**只读**。``members_json`` 也归 serve-api 写，有两个写点：
+建群（``create_new_session(group_members=…)``）与加人/踢人（``update_group_members``，
+PATCH /chat/sessions/{id}/group-members）。后者连带 **DELETE** 被动名单的
+``ai_chat_group_member`` 整行（行级删除，不是列级覆写：不再是成员 ⇒ 模式与游标一起消失）。
+词表（response_mode / outcome / trigger_kind）
 单源 ``src/chat/group_limits.py``，闸 ``tests/config/test_group_constants_parity.py``。
 本文件的群读写一律经 ``_has_table`` / ``_has_column`` 兼容尚未迁移的旧库（返空不报错）。
 v30（L4 群聊）= ``ai_chat_sessions.members_json``（群聊成员 agent id 数组 JSON，非群聊行 NULL）
@@ -148,6 +152,7 @@ graceful」处理：生产里前端 ``getChatDb()`` 在任何 renderer harness �
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -162,6 +167,20 @@ from src.chat.group_limits import CHAIN_ROOT_TRIGGER_KINDS, SILENT_OUTCOMES
 def _now_ms() -> int:
     """epoch 毫秒（对齐 chat_db.ts ``Date.now()``，所有写的 created_at/updated_at 用它）。"""
     return int(time.time() * 1000)
+
+
+def parse_group_member_ids(raw: Any) -> List[str]:
+    """``members_json`` 原文 → 成员 id 列表（宽容解析，与 TS ``parseGroupMemberIds`` 同口径：
+    坏 JSON / 非数组 / 非字符串项一律丢弃 → 空名单）。路由层的 ``_group_member_ids`` 引本函数。"""
+    if not isinstance(raw, str) or not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [m for m in parsed if isinstance(m, str) and m.strip()]
 
 
 _ANCHOR_TYPES = ("email", "general", "matter")
@@ -385,8 +404,9 @@ class ChatDb:
         matter_id: Optional[int] = None,
         item_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """跨邮件 session 历史（含 first_user_message 预览 + message_count，排除无消息 session）。
-        镜像 listAllSessions → ChatSessionSummary[]。
+        """跨邮件 session 历史（含 first_user_message 预览 + message_count + last_message_*
+        五列投影；除 origin='group' 外排除无消息 session）。镜像 listAllSessions →
+        ChatSessionSummary[]（``last_message_*`` 由路由层折成 ``last_message`` 对象）。
         include_archived=False（默认）只返回活跃会话（archived=0）；
         include_archived=True 返回全部含归档会话（用于归档分组视图）。
 
@@ -464,15 +484,49 @@ class ChatDb:
                 return []
             clauses.append("s.item_id = ?")
             params.append(item_id)
-        clauses.append("EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)")
+        if origin != "group":
+            # 🔴 'group' 行豁免这一条：群是**先建后说话**的（建群对话框一次填齐，第一条消息可能
+            # 几分钟后才发）。要求「有消息才可见」会让刚建的群在列表里不存在，renderer 只能靠
+            # 一个本地过渡态假装它在 —— 重启即消失。其余 origin 字节不变（无消息的会话是
+            # getOrCreateSession 留下的空壳，本就不该进历史）。
+            clauses.append("EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)")
         where_clause = " AND ".join(clauses)
+        # 群列表行的「最后一条发言」预览（U5）。🔴 每个可能缺席的列都要探一次：pre-v30 库没有
+        # speaker_agent_id、更旧的 mirror schema 没有 status / metadata —— 引用一个不存在的列
+        # 会 OperationalError → _read_all 吞成 [] = **整个历史列表被清空**（同 v20 的 s.* 教训）。
+        def _col(name: str, expr: str) -> str:
+            return expr if self._has_column("ai_chat_messages", name) else "NULL"
+
+        speaker_col = _col("speaker_agent_id", "m.speaker_agent_id")
+        via_col = _col("metadata", "json_extract(m.metadata, '$.via')")
+        # status 缺席的库退化成「不过滤 streaming 行」而不是整表读不出来。
+        status_filter = " AND m.status = 'complete'" if self._has_column(
+            "ai_chat_messages", "status"
+        ) else ""
+        # 每列一个相关子查询而不是一次 join：SQLite 对 `WHERE session_id=? ORDER BY created_at
+        # DESC LIMIT 1` 走同一条索引，写法与上面两列一致。role 只取 user/assistant ——
+        # system 行是 group_stop 之类的编排痕迹，不是「谁说了什么」。
+        last_message_cols = ",\n                 ".join(
+            f"(SELECT {expr} FROM ai_chat_messages m"
+            " WHERE m.session_id = s.id AND m.role IN ('user', 'assistant')"
+            f"{status_filter}"
+            f" ORDER BY m.created_at DESC, m.id DESC LIMIT 1) AS {alias}"
+            for expr, alias in (
+                ("substr(m.content, 1, 200)", "last_message_content"),
+                ("m.role", "last_message_role"),
+                (speaker_col, "last_message_speaker_agent_id"),
+                (via_col, "last_message_via"),
+                ("m.created_at", "last_message_created_at"),
+            )
+        )
         return self._read_all(
             f"""SELECT
                  s.*,
                  (SELECT substr(m.content, 1, 500) FROM ai_chat_messages m
                     WHERE m.session_id = s.id AND m.role = 'user'
                     ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,
-                 (SELECT COUNT(*) FROM ai_chat_messages m WHERE m.session_id = s.id) AS message_count
+                 (SELECT COUNT(*) FROM ai_chat_messages m WHERE m.session_id = s.id) AS message_count,
+                 {last_message_cols}
                FROM ai_chat_sessions s
                WHERE {where_clause}
                ORDER BY s.updated_at DESC
@@ -918,8 +972,20 @@ class ChatDb:
         deleteSession（3c-2 补：cutover 后 renderer ChatRuntime.deleteSession 经此删，取代
         electron chat:deleteSession IPC）。CASCADE 由 _write_connection 的 ``PRAGMA foreign_keys
         = ON`` + 真实 schema 的 message→session / tool_call→message FK 生效（删不存在的 id 是
-        no-op，对齐 fire-and-forget 语义）。"""
+        no-op，对齐 fire-and-forget 语义）。
+
+        群（origin='group'）多一步 **断子群的链**：``parent_session_id`` 没有 FK，删了父群后
+        子群那一列会指向一个不存在的会话（读侧无从区分「父群被删」与「父群 id 写错了」）。
+        置 NULL = 子群保留、只是不再能跳回父群。非群会话的父子关系（custom_agent_call 的
+        子会话）保持原样：那条链另有语义，不在本批的改动半径里。"""
         with self._write_connection() as conn:
+            if self._has_column("ai_chat_sessions", "parent_session_id"):
+                conn.execute(
+                    "UPDATE ai_chat_sessions SET parent_session_id = NULL "
+                    "WHERE parent_session_id = "
+                    "(SELECT id FROM ai_chat_sessions WHERE id = ? AND origin = 'group')",
+                    (session_id,),
+                )
             conn.execute("DELETE FROM ai_chat_sessions WHERE id = ?", (session_id,))
 
     def update_session_title(self, session_id: int, title: str) -> None:
@@ -1199,25 +1265,32 @@ class ChatDb:
     # ── 群聊 g1（CHAT_DB v31）─────────────────────────────────────────────
 
     def get_group_config(self, session_id: int) -> Dict[str, Any]:
-        """群设置读面：``{"modes": {agentId: 'realtime'|'mention'}, "config": {...}}``。
+        """群设置读面：``{"modes", "config", "members", "judgeScopeStale"}``。
 
         缺行的成员**不出现**在 modes 里（读侧一律 ``?? 'mention'``，PRD Q1）；
         ``group_config_json`` 为 NULL / 脏 JSON → ``{"v": 1}``（全取出厂默认）。
-        未迁移的旧库（表/列缺席）→ 空 modes + 默认 config，不报错。
+        ``members`` = ``members_json`` 的成员序（群详情面一次拿全，不用再打一次 /sessions/{id}）。
+        ``judgeScopeStale`` = 有法官位且 ``judgeScopeHash`` 与当前名单原文的 sha256 失配
+        （= 名单在 owner 确认法官位之后变过；g2 的免卡判据同源，UI 据此提示「重新确认」）。
+        未迁移的旧库（表/列缺席）→ 空 modes + 默认 config，不报错（``SELECT *`` 让缺列变缺键）。
         """
         config: Dict[str, Any] = {"v": 1}
-        if self._has_column("ai_chat_sessions", "group_config_json"):
-            row = self._read_one(
-                "SELECT group_config_json FROM ai_chat_sessions WHERE id = ?", (session_id,)
-            )
-            raw = (row or {}).get("group_config_json")
-            if isinstance(raw, str) and raw:
-                try:
-                    parsed = json.loads(raw)
-                    if isinstance(parsed, dict):
-                        config = {**parsed, "v": 1}
-                except (ValueError, TypeError):
-                    config = {"v": 1}
+        row = self._read_one("SELECT * FROM ai_chat_sessions WHERE id = ?", (session_id,)) or {}
+        raw = row.get("group_config_json")
+        if isinstance(raw, str) and raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    config = {**parsed, "v": 1}
+            except (ValueError, TypeError):
+                config = {"v": 1}
+        raw_members = row.get("members_json")
+        members = parse_group_member_ids(raw_members)
+        # hash 钉的是**原文**（owner 确认那一刻看到的那份名单），与写侧 put_group_config 同口径 ——
+        # 等价重排也算变。
+        judge_scope_stale = config.get("judgeAgentId") is not None and config.get(
+            "judgeScopeHash"
+        ) != hashlib.sha256((raw_members or "").encode("utf-8")).hexdigest()
         modes: Dict[str, str] = {}
         if self._has_table("ai_chat_group_member"):
             for member in self._read_all(
@@ -1226,7 +1299,12 @@ class ChatDb:
                 (session_id,),
             ):
                 modes[str(member["agent_id"])] = str(member["response_mode"])
-        return {"modes": modes, "config": config}
+        return {
+            "modes": modes,
+            "config": config,
+            "members": members,
+            "judgeScopeStale": judge_scope_stale,
+        }
 
     def update_group_config(self, session_id: int, config: Dict[str, Any]) -> None:
         """写 ``ai_chat_sessions.group_config_json``（整块覆写，调用方已把旧值 merge 好）。
@@ -1263,6 +1341,93 @@ class ChatDb:
                     "response_mode = excluded.response_mode, updated_at = excluded.updated_at",
                     (session_id, agent_id, mode, now),
                 )
+
+    def update_group_members(
+        self, session_id: int, members: List[str], cleared: List[str]
+    ) -> None:
+        """写新成员名单（加人 / 踢人），并删掉 ``cleared`` 名下的 ``ai_chat_group_member`` 整行。
+
+        🔴 ``cleared = remove ∪ add``，**add 的 id 也要删**：gateway 推游标走的是
+        ``INSERT OR IGNORE`` + 单列 UPDATE（chat_db/groups.ts ``advanceSeenCursor``），在
+        「取出队列项 → 复核成员资格 → speak → 推游标」这段秒级窗口里被踢的成员，会在
+        serve-api 删完行之后把行**重建回来**并带上推进后的游标。add 时再删一次，才能保证
+        「踢掉 → 加回」之间不可能残留游标 —— 重新加回的成员从首轮窗口（最后 40 行）开始读，
+        这是有意的：残留游标会让它错过中间历史的「新鲜」判定。
+
+        🔴 这里是**行级删除**，不是列级覆写：删的是「不再是成员」的整行，``response_mode`` 与
+        ``seen_through_id`` 一起消失，不违反两写者纪律（本语句里没有任何一列的名字）。
+
+        刻意不 bump ``updated_at``（改名单不该把群顶到列表最前，同 title / 设置纪律）。
+        """
+        with self._write_connection() as conn:
+            conn.execute(
+                "UPDATE ai_chat_sessions SET members_json = ? WHERE id = ?",
+                (json.dumps(members), session_id),
+            )
+            if cleared:
+                marks = ",".join("?" * len(cleared))
+                conn.execute(
+                    f"DELETE FROM ai_chat_group_member WHERE session_id = ? AND agent_id IN ({marks})",
+                    (session_id, *cleared),
+                )
+
+    def list_group_turns(
+        self,
+        session_id: int,
+        limit: int = 200,
+        before_id: Optional[int] = None,
+        since_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """turn 台账只读分页（新→旧）：``{"turns": [...], "hasMore": bool}``。
+
+        renderer 用它在刷新后还原沉默 / 重复 / 跳过 / 失败 / 停止的 meta 行 —— 那些 turn
+        **没有**落库消息，只有这张表证明它们发生过。``since_ms`` 恒由 renderer 传「最早一条
+        落库消息的时间」：清空历史后旧 meta 行就不再回到对话里（台账本身保留，用量不变）。
+        投影是 camelCase（同 group_metrics），且**不含** window_from_id / window_to_id ——
+        那两列是调度器的内部窗口边界，UI 没有消费点。
+        未迁移的旧库（表缺席）→ 空结果，不报错。
+        """
+        if not self._has_table("ai_chat_group_turn"):
+            return {"turns": [], "hasMore": False}
+        limit = max(1, min(int(limit), 500))
+        clauses = ["session_id = ?"]
+        params: list[Any] = [session_id]
+        if before_id is not None:
+            clauses.append("id < ?")
+            params.append(int(before_id))
+        if since_ms is not None:
+            clauses.append("started_at >= ?")
+            params.append(int(since_ms))
+        rows = self._read_all(
+            "SELECT * FROM ai_chat_group_turn WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY started_at DESC, id DESC LIMIT ?",
+            (*params, limit + 1),  # 多取一行 = hasMore 的判据，不用再打一次 COUNT
+        )
+        has_more = len(rows) > limit
+        return {
+            "turns": [
+                {
+                    "id": r["id"],
+                    "runId": r["run_id"],
+                    "chainId": r["chain_id"],
+                    "seq": r["seq"],
+                    "agentId": r["agent_id"],
+                    "triggerKind": r["trigger_kind"],
+                    "outcome": r["outcome"],
+                    "messageId": r["message_id"],
+                    "model": r["model"],
+                    "tokensInput": r["tokens_input"],
+                    "tokensOutput": r["tokens_output"],
+                    "costUsd": r["cost_usd"],
+                    "error": r["error"],
+                    "startedAt": r["started_at"],
+                    "finishedAt": r["finished_at"],
+                }
+                for r in rows[:limit]
+            ],
+            "hasMore": has_more,
+        }
 
     def group_metrics(self, session_id: int) -> Dict[str, Any]:
         """群成本两指标 + 两个滚动窗口（只读 ``ai_chat_group_turn``，design §6）。

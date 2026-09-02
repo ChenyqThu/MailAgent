@@ -159,3 +159,16 @@ describe('navigateNotificationRoute — route 型落地', () => {
     })
   })
 })
+
+describe('resolveNotificationLink — group 型（L4 群聊 UX 批）', () => {
+  it('L1 {type:group, sessionId:7} → group 链接；sessionId 非正整数 → null', () => {
+    expect(resolveNotificationLink({ link: { type: 'group', sessionId: 7 } })).toEqual({
+      type: 'group',
+      sessionId: 7
+    })
+    expect(resolveNotificationLink({ link: { type: 'group', sessionId: 0 } })).toBeNull()
+    expect(resolveNotificationLink({ link: { type: 'group', sessionId: 1.5 } })).toBeNull()
+    expect(resolveNotificationLink({ link: { type: 'group', sessionId: '7' } })).toBeNull()
+    expect(resolveNotificationLink({ link: { type: 'group' } })).toBeNull()
+  })
+})

@@ -26,6 +26,12 @@ MAX_GROUP_MEMBERS: int = 8
 CHAIN_CAP_MIN: int = 1
 CHAIN_CAP_MAX: int = 60
 
+#: 群用途（``GroupConfig.topic``，注入每位成员身份块）与全群模型覆写的长度上限。
+#: 🔴 **serve-api 独占消费**：renderer 不设 maxLength、只显示 400 的 hint，所以这不是跨语言
+#: 手抄，不进 parity 闸。加第二个消费点（前端也想自己拦一下）之前先想清楚要不要建闸。
+TOPIC_MAX_CHARS: int = 200
+MODEL_OVERRIDE_MAX_CHARS: int = 200
+
 #: ``ai_chat_group_member.response_mode`` 的值域（缺行 = 'mention'，PRD Q1）。
 RESPONSE_MODES: Tuple[str, ...] = ("realtime", "mention")
 

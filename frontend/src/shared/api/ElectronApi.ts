@@ -147,6 +147,7 @@ import type {
   UpdaterApi,
   UpdaterStatus
 } from './types'
+import { narrowGroupTurnEvent, type GroupTurnEvent } from '../../ai-gateway/groupTurnEvent'
 import { createChatRuntime } from './chat_api'
 import { createConnectorApi } from './connector_api'
 import { HttpApi } from './HttpApi'
@@ -762,6 +763,17 @@ function createElectronChatRuntime(): ChatApi {
           handler({ sessionId: payload.sessionId })
         }
       })
+    },
+    // L4 群聊 UX 批 — 调度器 group turn 事件（lifecycle onGroupTurnEvent 广播）。运行时窄化走
+    // 叶子 narrowGroupTurnEvent（必填形状不符丢整条；可选字段类型不符只丢字段）。
+    onGroupTurn(handler: (event: GroupTurnEvent) => void): () => void {
+      return subscribe('chat:group-turn', (...args: unknown[]) => {
+        const event = narrowGroupTurnEvent(args[0])
+        if (event) handler(event)
+      })
+    },
+    async setGroupForeground(sessionId: number | null): Promise<void> {
+      await invoker()('chat:group-foreground', { sessionId })
     }
   }
 }

@@ -37,8 +37,11 @@ from src.chat.group_limits import (
     CHAIN_CAP_MAX,
     CHAIN_CAP_MIN,
     MAX_GROUP_MEMBERS,
+    MODEL_OVERRIDE_MAX_CHARS,
     RESPONSE_MODES,
+    TOPIC_MAX_CHARS,
 )
+from src.chat.db import parse_group_member_ids
 from src.chat.kos_save import SaveConversationError, save_conversation_to_kos
 from src.agents.run_state import derive_agent_run_state
 from src.kos.client import KOSClient, KOSError
@@ -185,6 +188,22 @@ def _matter_meta_for_sessions(
     return meta
 
 
+def _with_last_message(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """把 ``list_all_sessions`` 的五个 ``last_message_*`` 列折成一个 ``last_message`` 对象。
+
+    五列全 None（会话一条消息都没有 —— 群可以先建后说话）→ ``None``。``via`` 来自消息
+    ``metadata.$.via``：主助理投递进群的行是 ``role='user' + via='main_agent'``，列表预览据此
+    写「主助理：」而不是「你：」（同一条 user 行，只有这一个字段能区分）。"""
+    fields = {
+        "content": summary.pop("last_message_content", None),
+        "role": summary.pop("last_message_role", None),
+        "speaker_agent_id": summary.pop("last_message_speaker_agent_id", None),
+        "via": summary.pop("last_message_via", None),
+        "created_at": summary.pop("last_message_created_at", None),
+    }
+    return {**summary, "last_message": None if all(v is None for v in fields.values()) else fields}
+
+
 # 注意路由顺序：静态 /sessions/all 在动态 /sessions/{id}/messages 之前声明。后者 {session_id:int}
 # 约束已能挡住 "all"（非 int 不匹配），此处顺序仅为可读性 + 双保险。
 
@@ -260,7 +279,7 @@ async def list_all_sessions(
 
     items = [
         {
-            **s,
+            **_with_last_message(s),
             "email_subject": meta.get(s["email_id"], {}).get("subject"),
             "email_sender": meta.get(s["email_id"], {}).get("sender"),
             **_matter_fields(s),
@@ -884,6 +903,17 @@ async def open_session(request: Request, body: Optional[Dict[str, Any]] = None):
 _CHAT_CAPABLE_AGENT_TYPES = ("report", "contact_profile", "contact_governance", "custom")
 
 
+def _require_chat_capable(agent_id: str, *, what: str) -> None:
+    """agent 必须存在且「能对话」，否则 400。``what`` 只进 message（建群 / 加人两个入口的措辞）。"""
+    agent = get_report_store().get_agent(agent_id)
+    if agent is None or (agent.get("type") or "") not in _CHAT_CAPABLE_AGENT_TYPES:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"{what} {agent_id!r} missing or not chat-capable",
+            source="sqlite",
+        )
+
+
 @router.post("/sessions/new", dependencies=[Depends(verify_cf_access)])
 async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
     """createNewSession：无条件 INSERT 新 session（绕过复用）。镜像 chat:newSession → ChatSession。
@@ -915,13 +945,7 @@ async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
                 "sessions/new agent sessions must use the general anchor",
                 source="sqlite",
             )
-        agent = get_report_store().get_agent(agent_id)
-        if agent is None or (agent.get("type") or "") not in _CHAT_CAPABLE_AGENT_TYPES:
-            raise APIError(
-                "E_INVALID_ARG",
-                f"agent {agent_id!r} missing or not chat-capable",
-                source="sqlite",
-            )
+        _require_chat_capable(agent_id, what="agent")
     group_members = opts.get("groupMembers")
     if group_members is not None:
         if agent_id is not None:
@@ -958,15 +982,8 @@ async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
                 "sessions/new group sessions must use the general anchor",
                 source="sqlite",
             )
-        store = get_report_store()
         for member_id in group_members:
-            member = store.get_agent(member_id)
-            if member is None or (member.get("type") or "") not in _CHAT_CAPABLE_AGENT_TYPES:
-                raise APIError(
-                    "E_INVALID_ARG",
-                    f"group member {member_id!r} missing or not chat-capable",
-                    source="sqlite",
-                )
+            _require_chat_capable(member_id, what="group member")
     title = opts.get("title")
     session = get_chat_db().create_new_session(
         email_id=email_id,
@@ -1054,16 +1071,140 @@ def _require_group_session(session_id: int) -> Dict[str, Any]:
 def _group_member_ids(session: Dict[str, Any]) -> List[str]:
     """``members_json`` → 成员 id 列表（宽容解析，与 TS ``parseGroupMemberIds`` 同口径：
     坏 JSON / 非数组 / 非字符串项一律丢弃 → 空名单 = 任何 modes 键都不合法）。"""
-    raw = session.get("members_json")
-    if not isinstance(raw, str) or not raw:
+    return parse_group_member_ids(session.get("members_json"))
+
+
+def _require_id_list(value: Any, field: str) -> List[str]:
+    """``{add, remove}`` 的一项 → 去空白后的 id 列表。非数组 / 非字符串项 / 组内重复 → 400。"""
+    if value is None:
         return []
-    try:
-        parsed = json.loads(raw)
-    except (ValueError, TypeError):
-        return []
-    if not isinstance(parsed, list):
-        return []
-    return [m for m in parsed if isinstance(m, str) and m.strip()]
+    if not isinstance(value, list) or any(
+        not isinstance(m, str) or not m.strip() for m in value
+    ):
+        raise APIError(
+            "E_INVALID_ARG",
+            f"group-members {field} must be an array of agent ids",
+            hint=f"{field} 只接受非空字符串数组（省略该键 = 不动）",
+            source="sqlite",
+        )
+    ids = [m.strip() for m in value]
+    if len(set(ids)) != len(ids):
+        raise APIError(
+            "E_INVALID_ARG",
+            f"group-members {field} must not repeat an agent id",
+            hint=f"{field} 里有重复的成员 id",
+            source="sqlite",
+        )
+    return ids
+
+
+@router.patch(
+    "/sessions/{session_id:int}/group-members", dependencies=[Depends(verify_cf_access)]
+)
+async def patch_group_members(
+    request: Request, session_id: int, body: Optional[Dict[str, Any]] = None
+):
+    """群成员写面：加人 / 踢人。body = ``{add?: [agentId], remove?: [agentId]}``（至少一项非空）。
+
+    **权威校验全在这里**（红线 5：UI 只是礼貌提示）：会话必须 origin='group'；add 的每一位
+    必须存在且 chat-capable；add 不许已在群里；remove 必须都在群里；add ∩ remove = ∅；
+    结果名单 1 ≤ len ≤ MAX_GROUP_MEMBERS（空群拒 —— 没有成员的群谁都唤不醒，只会静默不回）。
+    全部 4xx 走 ``E_INVALID_ARG`` + ``hint``，**不新增错误码**：没在 ERROR_CODE_TO_HTTP 登记的
+    码会被 app.py 兜底成 500，UI 拿到的就是「服务器错误」而不是「这个人已经在群里了」。
+
+    新名单 = 原序 − remove + add（append 到尾）—— 成员序就是无 @ 时的回复序，加人不该打乱
+    既有顺序。踢掉法官 → ``judgeAgentId`` 与 ``judgeScopeHash`` 一并清空（没有法官就没有免卡
+    锚）；踢的不是法官 → hash **不动**，于是自然失配 = ``judgeScopeStale``，UI 提示重新确认。
+    """
+    session = _require_group_session(session_id)
+    opts = body or {}
+    add = _require_id_list(opts.get("add"), "add")
+    remove = _require_id_list(opts.get("remove"), "remove")
+    if not add and not remove:
+        raise APIError(
+            "E_INVALID_ARG",
+            "group-members requires a non-empty add or remove",
+            hint="body 至少要有一个非空的 add 或 remove",
+            source="sqlite",
+        )
+    overlap = [m for m in add if m in remove]
+    if overlap:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"group-members add and remove overlap: {overlap}",
+            hint="同一个成员不能同时加和踢",
+            source="sqlite",
+        )
+    members = _group_member_ids(session)
+    for member_id in add:
+        _require_chat_capable(member_id, what="group member")
+        if member_id in members:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"group-members {member_id!r} is already a member",
+                hint="该成员已经在群里了",
+                source="sqlite",
+            )
+    missing = [m for m in remove if m not in members]
+    if missing:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"group-members cannot remove non-members: {missing}",
+            hint="要移出的成员不在这个群里（名单可能刚被别处改过，刷新再试）",
+            source="sqlite",
+        )
+    next_members = [m for m in members if m not in remove] + add
+    if not next_members:
+        raise APIError(
+            "E_INVALID_ARG",
+            "group-members cannot remove the last member",
+            hint="群至少要留一位成员；不要这个群就整个删掉",
+            source="sqlite",
+        )
+    if len(next_members) > MAX_GROUP_MEMBERS:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"group-members supports at most {MAX_GROUP_MEMBERS} members",
+            hint=f"已达成员上限（{MAX_GROUP_MEMBERS}）",
+            source="sqlite",
+        )
+
+    db = get_chat_db()
+    config = dict(db.get_group_config(session_id)["config"])
+    # 🔴 cleared = remove ∪ add：add 也删行，清掉 gateway 在踢人窗口里 INSERT OR IGNORE 重建的
+    # 残留游标行（见 ChatDb.update_group_members 的头注）。
+    db.update_group_members(session_id, next_members, [*remove, *add])
+    if config.get("judgeAgentId") in remove:
+        config["judgeAgentId"] = None
+        config["judgeScopeHash"] = None
+        db.update_group_config(session_id, config)
+    return success_envelope(db.get_group_config(session_id), request=request, source="sqlite")
+
+
+@router.get(
+    "/sessions/{session_id:int}/group-turns", dependencies=[Depends(verify_cf_access)]
+)
+async def get_group_turns(
+    request: Request,
+    session_id: int,
+    limit: int = Query(200, ge=1, le=500),
+    before: Optional[int] = Query(None, ge=1),
+    since: Optional[int] = Query(None, ge=0),
+):
+    """turn 台账只读分页（新→旧）：``{turns, hasMore}``。
+
+    renderer 靠它在刷新后还原「沉默 / 重复折叠 / 跳过 / 失败 / 停止」那些**没有落库消息**的
+    turn（红线 1：在场态只能来自服务端事实，前端不推断）。``before`` = 上一页最旧一行的 id；
+    ``since`` = 只要 ``started_at >= since`` 的行，renderer 恒传「最早一条落库消息的时间」，
+    使清空历史后旧 meta 行不再回到对话里。未迁移的旧库 → 空结果。"""
+    _require_group_session(session_id)
+    return success_envelope(
+        get_chat_db().list_group_turns(
+            session_id, limit=limit, before_id=before, since_ms=since
+        ),
+        request=request,
+        source="sqlite",
+    )
 
 
 @router.get("/sessions/{session_id:int}/group-config", dependencies=[Depends(verify_cf_access)])
@@ -1083,16 +1224,22 @@ async def get_group_config(request: Request, session_id: int):
 async def put_group_config(
     request: Request, session_id: int, body: Optional[Dict[str, Any]] = None
 ):
-    """群设置写面（g1）：响应模式 + 法官位 + 链上限 / 小时预算。
+    """群设置写面（g1）：响应模式 + 法官位 + 链上限 / 小时预算 + 用途 / 全群模型 / 通知。
 
     body = ``{modes?, judgeAgentId?, chainCap?, hourlyTurns?, hourlyTokens?, hourlyUsd?,
-    sessionTurnCap?}``（全部可选，只写传了的键）。**权威校验在服务端**：会话必须
-    origin='group'；modes 的键必须 ⊆ 本群 members_json；judgeAgentId 必须 ∈ members 或 null；
-    响应模式值域按 ``group_limits.RESPONSE_MODES``；chainCap ∈ [CHAIN_CAP_MIN, CHAIN_CAP_MAX]。
+    sessionTurnCap?, topic?, modelOverride?, notify?}``（全部可选，只写传了的键）。
+    **权威校验在服务端**：会话必须 origin='group'；modes 的键必须 ⊆ 本群 members_json；
+    judgeAgentId 必须 ∈ members 或 null；响应模式值域按 ``group_limits.RESPONSE_MODES``；
+    chainCap ∈ [CHAIN_CAP_MIN, CHAIN_CAP_MAX]。
 
-    🔴 judgeAgentId **变更**时同步写 ``judgeScopeHash = sha256(members_json 原文)`` —— 这是 g2
-    法官免卡的锚（成员名单一变 hash 就失配，法官的建群/投递工具直接拒绝而不是弹一张无人在场
-    的卡）。g1 只写不用。
+    **显式 null = 删键**（不是存 None）：五个数值键 + topic / modelOverride / notify 传 null
+    （或空白字符串）都从 JSON 里 pop 掉 = 恢复出厂默认。存 None 会让读侧分不清「owner 清回
+    默认」与「owner 设了个空值」，且默认值副本一旦落库就与 groupFloors.ts 的单源脱钩。
+
+    🔴 judgeAgentId 只要**传了**就重写 ``judgeScopeHash = sha256(members_json 原文)`` —— 这是
+    g2 法官免卡的锚（成员名单一变 hash 就失配，法官的建群/投递工具直接拒绝而不是弹一张无人
+    在场的卡）。传同值也重写 = 群详情面「重新确认法官位」的写法（g1 只在变更时写，那样
+    owner 就没有任何办法在改完名单后重新确认）。
 
     modes 走**列级 UPSERT**（``upsert_group_member_modes``，语句里没有 seen_through_id）——
     见 src/chat/db.py 头注的两写者纪律。"""
@@ -1129,15 +1276,14 @@ async def put_group_config(
                 "group-config judgeAgentId must be a member of this group or null",
                 source="sqlite",
             )
-        if judge != current["config"].get("judgeAgentId"):
-            config["judgeAgentId"] = judge
-            # 名单原文（不是解析后再序列化）—— hash 要钉的就是「owner 确认时看到的那份名单」。
-            raw_members = session.get("members_json") or ""
-            config["judgeScopeHash"] = (
-                hashlib.sha256(raw_members.encode("utf-8")).hexdigest()
-                if judge is not None
-                else None
-            )
+        config["judgeAgentId"] = judge
+        # 名单原文（不是解析后再序列化）—— hash 要钉的就是「owner 确认时看到的那份名单」。
+        raw_members = session.get("members_json") or ""
+        config["judgeScopeHash"] = (
+            hashlib.sha256(raw_members.encode("utf-8")).hexdigest()
+            if judge is not None
+            else None
+        )
 
     for key, low, high in (
         ("chainCap", CHAIN_CAP_MIN, CHAIN_CAP_MAX),
@@ -1148,8 +1294,8 @@ async def put_group_config(
         if key not in opts:
             continue
         value = opts.get(key)
-        if key == "sessionTurnCap" and value is None:
-            config[key] = None
+        if value is None:
+            config.pop(key, None)
             continue
         if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
             raise APIError(
@@ -1161,13 +1307,58 @@ async def put_group_config(
 
     if "hourlyUsd" in opts:
         usd = opts.get("hourlyUsd")
-        if isinstance(usd, bool) or not isinstance(usd, (int, float)) or not 0 < usd <= 1000:
+        if usd is None:
+            config.pop("hourlyUsd", None)
+        elif isinstance(usd, bool) or not isinstance(usd, (int, float)) or not 0 < usd <= 1000:
             raise APIError(
                 "E_INVALID_ARG",
                 "group-config hourlyUsd must be a number in (0, 1000]",
                 source="sqlite",
             )
-        config["hourlyUsd"] = float(usd)
+        else:
+            config["hourlyUsd"] = float(usd)
+
+    for key, max_chars in (
+        ("topic", TOPIC_MAX_CHARS),
+        ("modelOverride", MODEL_OVERRIDE_MAX_CHARS),
+    ):
+        if key not in opts:
+            continue
+        value = opts.get(key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            # 空白 = 没填 = 删键（UI 的输入框清空与显式 null 走同一条路，读侧只有「有值 / 没值」）。
+            config.pop(key, None)
+            continue
+        if not isinstance(value, str):
+            raise APIError(
+                "E_INVALID_ARG",
+                f"group-config {key} must be a string or null",
+                hint=f"{key} 只接受字符串；清空传 null",
+                source="sqlite",
+            )
+        trimmed = value.strip()
+        if len(trimmed) > max_chars:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"group-config {key} must be at most {max_chars} characters",
+                hint=f"最多 {max_chars} 个字符（当前 {len(trimmed)}）",
+                source="sqlite",
+            )
+        config[key] = trimmed
+
+    if "notify" in opts:
+        notify = opts.get("notify")
+        if notify is None:
+            config.pop("notify", None)
+        elif not isinstance(notify, bool):
+            raise APIError(
+                "E_INVALID_ARG",
+                "group-config notify must be a boolean or null",
+                hint="notify 只接受 true / false；恢复默认传 null",
+                source="sqlite",
+            )
+        else:
+            config["notify"] = notify
 
     db.update_group_config(session_id, config)
     if modes:

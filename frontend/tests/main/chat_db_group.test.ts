@@ -8,6 +8,9 @@
 //     crash-before-meta shape) re-runs without "duplicate column" (hasColumn guard).
 //   ③ origin='group' rows are EXCLUDED from the interactive listAllSessions default clause and
 //     from listGeneralSessions, and returned by the 'group' filter (the 群聊 tab's query).
+//   ③b (UX 批) the 'group' filter drops the "has at least one message" EXISTS clause — a group is
+//     visible the moment it is created; every other origin still requires a message. Mirrors
+//     src/chat/db.py::list_all_sessions (pytest test_group_origin_lists_zero_message_session).
 //   ④ createNewSession({groupMembers}) stamps origin='group' + members_json; appendMessage
 //     persists speaker_agent_id and listMessages returns it (NULL for user rows).
 //
@@ -158,6 +161,18 @@ describe('v30 group listing exclusion (③) + write faces (④)', () => {
     const general = listGeneralSessions().map((s) => s.id)
     expect(general).toContain(plain.id)
     expect(general).not.toContain(group.id)
+  })
+
+  test('③b 零消息的群立刻可见；零消息的 interactive 仍要有消息才进列表', () => {
+    const emptyPlain = createNewSession({ anchorType: 'general', backendKind: 'ai-sdk' })
+    const emptyGroup = createNewSession({
+      anchorType: 'general',
+      backendKind: 'ai-sdk',
+      groupMembers: ['a1', 'a2'],
+      title: '空群'
+    })
+    expect(listAllSessions({ origin: 'group' }).map((s) => s.id)).toEqual([emptyGroup.id])
+    expect(listAllSessions({ origin: 'interactive' }).map((s) => s.id)).not.toContain(emptyPlain.id)
   })
 
   test('④ group create stamps members_json; appendMessage persists speaker_agent_id', () => {

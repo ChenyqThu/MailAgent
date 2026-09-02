@@ -19,6 +19,7 @@ import type { ToolSet } from 'ai'
 import { prepareChatRun } from '../../src/ai-gateway/chatRun'
 import {
   GROUP_MAIN_AGENT_LABEL,
+  GROUP_MENTION_ALL_TOKENS,
   GROUP_USER_LABEL,
   assembleGroupHistory,
   buildGroupWindow,
@@ -1026,4 +1027,68 @@ describe('g1 — labs on：append 即应答、链 detached、/run/active、/run/
       await closeAll()
     }
   }, 20_000)
+})
+
+// ── UX 批：@全员 保留字 + 群用途进身份块 ──────────────────────────────────────────
+
+describe('UX 批 — parseGroupMentions 保留字 @所有人 / @all', () => {
+  const members = [
+    { agentId: 'b', title: '跟进官' },
+    { agentId: 'a', title: '调研员' },
+    { agentId: 'c', title: 'agent1' }
+  ]
+
+  test('M1 @所有人 → 全体成员 id（成员序）', () => {
+    expect(parseGroupMentions('@所有人 各说一轮', members)).toEqual(['b', 'a', 'c'])
+    expect(parseGroupMentions('大家好@所有人', members)).toEqual(['b', 'a', 'c'])
+  })
+
+  test('M2 @all 同 M1；@allx 不命中；@all，（中文标点）命中', () => {
+    expect(parseGroupMentions('@all please', members)).toEqual(['b', 'a', 'c'])
+    expect(parseGroupMentions('@allx please', members)).toEqual([])
+    expect(parseGroupMentions('@all，请', members)).toEqual(['b', 'a', 'c'])
+    expect(GROUP_MENTION_ALL_TOKENS).toEqual(['@所有人', '@all'])
+  })
+
+  test('M3 保留字与成员名同时出现 → 全体（去重，仍是成员序）', () => {
+    expect(parseGroupMentions('@调研员 你先，@所有人 补充', members)).toEqual(['b', 'a', 'c'])
+  })
+
+  test('M4 成员名恰为「所有人」被保留字遮蔽（记录行为）', () => {
+    const shadowed = [
+      { agentId: 'x', title: '所有人' },
+      { agentId: 'y', title: '评审' }
+    ]
+    expect(parseGroupMentions('@所有人 说', shadowed)).toEqual(['x', 'y'])
+  })
+})
+
+describe('UX 批 — buildGroupChatIdentityBlock 的 group.topic', () => {
+  test('T1 有值 → 含 <topic> 与「群用途：」；缺省 / null / 空白 → 与 g1 字节相同', () => {
+    const base = {
+      agentId: 'agent_b',
+      agentTitle: '跟进官',
+      group: GROUP_IDENTITY.group!
+    }
+    const g1 = buildGroupChatIdentityBlock(base)
+    expect(g1).not.toContain('topic')
+    expect(buildGroupChatIdentityBlock({ ...base, group: { ...base.group, topic: null } })).toBe(g1)
+    expect(buildGroupChatIdentityBlock({ ...base, group: { ...base.group, topic: '  ' } })).toBe(g1)
+    const withTopic = buildGroupChatIdentityBlock({
+      ...base,
+      group: { ...base.group, topic: '讨论 <Q3> 招聘计划' }
+    })
+    expect(withTopic).toContain('  <topic>讨论 &lt;Q3&gt; 招聘计划</topic>')
+    expect(withTopic).toContain('群用途：讨论 <Q3> 招聘计划。')
+    // 透传：buildGatewaySystemPrompt 整体透传 group（chatRun 零改动的挂点）。
+    const prompt = buildGatewaySystemPrompt({
+      promptConfig: { standingContext: 'STAND' },
+      contextSnapshot: null,
+      sessionAgentIdentity: {
+        ...GROUP_IDENTITY,
+        group: { ...GROUP_IDENTITY.group!, topic: '周报' }
+      }
+    })
+    expect(prompt).toContain('<topic>周报</topic>')
+  })
 })

@@ -42,6 +42,7 @@ CREATE TABLE ai_chat_sessions (
     agent_id TEXT,
     agent_job_id TEXT,
     members_json TEXT,
+    parent_session_id INTEGER,
     CHECK (
         (anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
         OR
@@ -221,3 +222,148 @@ def test_group_route_rejects_duplicates_and_empty_and_agent_mix(chat_client: Tes
     res = _new_group(chat_client, ["dms_helper"], agentId="dms_helper")
     assert res.status_code == 400
     assert res.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+# ── 群列表读面（零消息可见 + last_message 预览投影）──────────────────────────
+
+
+def _insert_message(
+    db_path: Path,
+    session_id: int,
+    role: str,
+    content: str,
+    created_at: int,
+    *,
+    status: str = "complete",
+    speaker_agent_id: str | None = None,
+    metadata: str | None = None,
+) -> None:
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "INSERT INTO ai_chat_messages (session_id, role, content, status, speaker_agent_id, "
+        "metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (session_id, role, content, status, speaker_agent_id, metadata, created_at, created_at),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _list_group(client: TestClient) -> list:
+    return client.get("/api/chat/sessions/all", params={"origin": "group"}).json()["data"]
+
+
+def test_group_origin_lists_zero_message_session(
+    chatdb: ChatDb, chat_db_path: Path, chat_client: TestClient
+) -> None:
+    """群是**先建后说话**的：刚建、一条消息都没有的群必须立刻出现在列表里。
+
+    要求「有消息才可见」的话，renderer 只能靠一个本地过渡态假装它在 —— 重启即消失。
+    """
+    group = chatdb.create_new_session(
+        anchor_type="general", backend_kind="ai-sdk", group_members=["dms_helper"]
+    )
+    assert [row["id"] for row in _list_group(chat_client)] == [group["id"]]
+    assert _list_group(chat_client)[0]["last_message"] is None
+
+
+def test_interactive_origin_still_requires_messages(
+    chatdb: ChatDb, chat_db_path: Path, chat_client: TestClient
+) -> None:
+    """豁免只给 'group'：空壳交互会话（getOrCreateSession 留下的）照旧不进历史。"""
+    plain = chatdb.create_new_session(anchor_type="general", backend_kind="ai-sdk")
+    ids = [row["id"] for row in chat_client.get("/api/chat/sessions/all").json()["data"]]
+    assert plain["id"] not in ids
+    _insert_message(chat_db_path, plain["id"], "user", "hi", 100)
+    ids = [row["id"] for row in chat_client.get("/api/chat/sessions/all").json()["data"]]
+    assert plain["id"] in ids
+
+
+def test_last_message_projection_latest_user_or_assistant_only(
+    chatdb: ChatDb, chat_db_path: Path, chat_client: TestClient
+) -> None:
+    """预览取最后一条 user/assistant 的 **complete** 行；system 行不算。
+
+    system 行是 group_stop 之类的编排痕迹 —— 让它当预览，群列表第二行就成了「已停止：…」。
+    """
+    group = chatdb.create_new_session(
+        anchor_type="general", backend_kind="ai-sdk", group_members=["dms_helper", "a3"]
+    )
+    _insert_message(chat_db_path, group["id"], "user", "开工", 100)
+    _insert_message(
+        chat_db_path, group["id"], "assistant", "收到", 200, speaker_agent_id="dms_helper"
+    )
+    _insert_message(chat_db_path, group["id"], "system", "已停止：链上限", 300)
+    _insert_message(chat_db_path, group["id"], "assistant", "半截", 400, status="streaming")
+
+    last = _list_group(chat_client)[0]["last_message"]
+    assert last["content"] == "收到"
+    assert last["role"] == "assistant"
+    assert last["speaker_agent_id"] == "dms_helper"
+    assert last["via"] is None
+    assert last["created_at"] == 200
+
+
+def test_last_message_projection_carries_via(
+    chatdb: ChatDb, chat_db_path: Path, chat_client: TestClient
+) -> None:
+    """主助理投递进群的行是 role='user' + metadata.via='main_agent'。
+
+    只有这一个字段能把它与 owner 自己发的消息分开 —— 少了它，列表预览会把主助理写成「你」。
+    """
+    delivered = chatdb.create_new_session(
+        anchor_type="general", backend_kind="ai-sdk", group_members=["dms_helper"]
+    )
+    _insert_message(
+        chat_db_path,
+        delivered["id"],
+        "user",
+        "帮我问一下排期",
+        100,
+        metadata=json.dumps({"via": "main_agent", "sourceSessionId": 9}),
+    )
+    typed = chatdb.create_new_session(
+        anchor_type="general", backend_kind="ai-sdk", group_members=["a3"]
+    )
+    _insert_message(chat_db_path, typed["id"], "user", "我自己说的", 200)
+
+    by_id = {row["id"]: row["last_message"] for row in _list_group(chat_client)}
+    assert by_id[delivered["id"]]["via"] == "main_agent"
+    assert by_id[typed["id"]]["via"] is None
+
+
+def test_last_message_null_when_empty(
+    chatdb: ChatDb, chat_db_path: Path, chat_client: TestClient
+) -> None:
+    """只有 system 行的群同样是 None（五列全 None → last_message 整个是 null，不是空对象）。"""
+    group = chatdb.create_new_session(
+        anchor_type="general", backend_kind="ai-sdk", group_members=["dms_helper"]
+    )
+    _insert_message(chat_db_path, group["id"], "system", "已停止：你停止了本轮", 100)
+    row = _list_group(chat_client)[0]
+    assert row["last_message"] is None
+    assert "last_message_content" not in row  # 五个原始列不出网
+
+
+def test_delete_group_unlinks_children(chatdb: ChatDb, chat_db_path: Path) -> None:
+    """删父群 → 子群保留但断链（parent_session_id 无 FK，悬空 id 读侧无从解释）。"""
+    parent = chatdb.create_new_session(
+        anchor_type="general", backend_kind="ai-sdk", group_members=["dms_helper"]
+    )
+    child = chatdb.create_new_session(
+        anchor_type="general", backend_kind="ai-sdk", group_members=["a3"]
+    )
+    conn = sqlite3.connect(str(chat_db_path))
+    conn.execute(
+        "UPDATE ai_chat_sessions SET parent_session_id = ? WHERE id = ?", (parent["id"], child["id"])
+    )
+    conn.commit()
+    conn.close()
+
+    chatdb.delete_session(parent["id"])
+
+    conn = sqlite3.connect(str(chat_db_path))
+    row = conn.execute(
+        "SELECT id, parent_session_id FROM ai_chat_sessions WHERE id = ?", (child["id"],)
+    ).fetchone()
+    conn.close()
+    assert row == (child["id"], None)

@@ -35,6 +35,7 @@ import {
   type GroupTurnRow,
   type GroupUsage
 } from '../../src/ai-gateway/groupOrchestrator'
+import { GROUP_SKIP_REASONS, type GroupTurnEvent } from '../../src/ai-gateway/groupTurnEvent'
 
 type OrchestratorModule = typeof import('../../src/ai-gateway/groupOrchestrator')
 type FloorsModule = typeof import('../../src/ai-gateway/groupFloors')
@@ -63,6 +64,10 @@ interface World {
   registry: ActiveRunRegistry
   mirrored: Array<Record<string, unknown>>
   speakImpl: (input: GroupSpeakInput, n: number) => Promise<GroupSpeakResult>
+  /** deps.emitEvent 收到的事件，按发出序（UX 批）。 */
+  events: GroupTurnEvent[]
+  /** 可选的 emitEvent 替身（EV11：抛错）；先于 events.push 调用。 */
+  emitImpl: ((event: GroupTurnEvent) => void) | null
   deps: GroupOrchestratorDeps
   nextId: number
   /** system 行的 metadata.reason，按写入序。 */
@@ -100,6 +105,8 @@ function makeWorld(opts: { speak?: World['speakImpl']; labs?: boolean } = {}): W
     registry,
     mirrored: [],
     speakImpl: opts.speak ?? defaultSpeak,
+    events: [],
+    emitImpl: null,
     nextId: 1,
     deps: undefined as unknown as GroupOrchestratorDeps,
     stopReasons(sessionId) {
@@ -187,6 +194,10 @@ function makeWorld(opts: { speak?: World['speakImpl']; labs?: boolean } = {}): W
     mirrorRunLog: (input) => {
       world.mirrored.push(input as unknown as Record<string, unknown>)
       return Promise.resolve()
+    },
+    emitEvent: (event) => {
+      world.emitImpl?.(event)
+      world.events.push(event)
     },
     now: () => clock.now,
     sleep: (ms) => {
@@ -911,5 +922,369 @@ describe('speak 适配器（prepareChatRun 集成）', () => {
     const wire = JSON.stringify(captured.options)
     expect(wire).toContain('<current_group_chat>')
     expect(wire).toContain('[用户] 大家汇报下')
+  })
+})
+
+// ── UX 批：事件通道 / 成员复核 / requeue / liveState ──────────────────────────────
+
+/** resolveFacts 按调用序返回不同事实（模拟 owner 在排队 / 发言期间改名单或设置）。 */
+function factsByCall(world: World, ...sequence: GroupRunFacts[]): { calls: () => number } {
+  let n = 0
+  world.deps.resolveFacts = () => {
+    n += 1
+    return sequence[Math.min(n, sequence.length) - 1]!
+  }
+  return { calls: () => n }
+}
+
+function phases(world: World, sessionId?: number): string[] {
+  return world.events
+    .filter((e) => sessionId == null || e.sessionId === sessionId)
+    .map((e) => e.phase)
+}
+
+describe('UX 批 — group turn 事件（服务端事实的投影）', () => {
+  test('EV1 人类 @a → queued → start → spoke，每条带 queued[] 与 chainProgress；spoke 带 messageId / text / usage', async () => {
+    const world = makeWorld()
+    group(world, 1, ['a', 'b'], { mentionOnly: ['a', 'b'] })
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    const root = world.human(1, '@a 说')
+    await orch.onGroupMessage(1, root)
+    await orch.idle()
+    expect(phases(world)).toEqual(['queued', 'start', 'spoke'])
+    for (const e of world.events) {
+      expect(e.v).toBe(1)
+      expect(e.sessionId).toBe(1)
+      expect(e.chainId).toBe(root.id)
+      expect(Array.isArray(e.queued)).toBe(true)
+      expect(e.chainProgress).toEqual({ counted: expect.any(Number), cap: CHAIN_CAP_DEFAULT })
+      expect(e.ts).toBe(world.clock.now)
+    }
+    const [queued, start, spoke] = world.events
+    expect(queued).toMatchObject({ agentId: null, seq: null, queued: ['a'], runId: expect.any(String) })
+    expect(queued!.chainProgress.counted).toBe(0)
+    expect(start).toMatchObject({ agentId: 'a', seq: 1, queued: [] })
+    expect(spoke).toMatchObject({
+      agentId: 'a',
+      seq: 1,
+      messageId: world.assistantRows(1)[0]?.id,
+      text: 'a 第 1 次发言',
+      usage: { model: SONNET, tokensInput: 100, tokensOutput: 10, costUsd: expect.any(Number) },
+      chainProgress: { counted: 1, cap: CHAIN_CAP_DEFAULT }
+    })
+    expect(spoke!.runId).toBe(world.turns[0]?.runId)
+  })
+
+  test('EV2 无 @ 零 realtime → no_candidates{reason:no_realtime_members}；成员级联末尾候选空不发', async () => {
+    const world = makeWorld()
+    group(world, 1, ['a', 'b'], { mentionOnly: ['a', 'b'] })
+    const orch = new GroupOrchestrator({ deps: world.deps })
+    await send(orch, world, 1, '有人吗')
+    expect(world.events).toHaveLength(1)
+    expect(world.events[0]).toMatchObject({
+      phase: 'no_candidates',
+      reason: 'no_realtime_members',
+      runId: null,
+      agentId: null,
+      queued: []
+    })
+
+    // 级联：a 回复后候选 = realtime − self = 空，这是链正常结束，不发 no_candidates。
+    const cascade = makeWorld()
+    group(cascade, 2, ['a'])
+    await send(new GroupOrchestrator({ deps: cascade.deps }), cascade, 2, '开场')
+    expect(cascade.outcomes()).toEqual(['spoke'])
+    expect(phases(cascade)).not.toContain('no_candidates')
+  })
+
+  test('EV3 沉默 → silent 事件带 usage，不落消息行', async () => {
+    const world = makeWorld({
+      speak: () =>
+        Promise.resolve({
+          text: SILENCE_SENTINEL,
+          modelId: SONNET,
+          usage: { inputTokens: 50, outputTokens: 2 },
+          protocol: 'anthropic'
+        })
+    })
+    group(world, 1, ['a'])
+    await send(new GroupOrchestrator({ deps: world.deps }), world, 1, '开场')
+    expect(world.assistantRows()).toEqual([])
+    const silent = world.events.find((e) => e.phase === 'silent')
+    expect(silent).toMatchObject({
+      agentId: 'a',
+      usage: { model: SONNET, tokensInput: 50, tokensOutput: 2 },
+      chainProgress: { counted: 1, cap: CHAIN_CAP_DEFAULT }
+    })
+    expect(silent?.text).toBeUndefined()
+  })
+
+  test('EV4 反独白 / 无新消息 → skipped{reason}，turn 行 error 同词', async () => {
+    const mono = makeWorld()
+    group(mono, 1, ['a'], { mentionOnly: ['a'] })
+    const trigger = mono.human(1, '@a 说')
+    mono.messages.push({
+      ...trigger,
+      id: mono.nextId++,
+      role: 'assistant',
+      content: '我刚说过了',
+      speakerAgentId: 'a',
+      chainId: trigger.id
+    })
+    const orch = new GroupOrchestrator({ deps: mono.deps, cascade: false })
+    await orch.onGroupMessage(1, trigger)
+    await orch.idle()
+    expect(mono.turns[0]).toMatchObject({ outcome: 'skipped', error: 'monologue' })
+    expect(mono.events.find((e) => e.phase === 'skipped')).toMatchObject({
+      agentId: 'a',
+      reason: 'monologue'
+    })
+
+    const stale = makeWorld()
+    group(stale, 1, ['a', 'b'], { mentionOnly: ['a', 'b'] })
+    const t2 = stale.human(1, '@a 说')
+    const bRow = stale.nextId++
+    stale.messages.push({ ...t2, id: bRow, role: 'assistant', content: 'b 说', speakerAgentId: 'b' })
+    stale.cursors.set('1:a', bRow)
+    const orch2 = new GroupOrchestrator({ deps: stale.deps, cascade: false })
+    await orch2.onGroupMessage(1, t2)
+    await orch2.idle()
+    expect(stale.turns[0]).toMatchObject({ outcome: 'skipped', error: 'no_new_messages' })
+    expect(stale.events.find((e) => e.phase === 'skipped')).toMatchObject({
+      agentId: 'a',
+      reason: 'no_new_messages'
+    })
+  })
+
+  test('EV5 speak 抛错 → failed{error}', async () => {
+    const world = makeWorld({ speak: () => Promise.reject(new Error('boom')) })
+    group(world, 1, ['a'])
+    await send(new GroupOrchestrator({ deps: world.deps, cascade: false }), world, 1, '开场')
+    expect(phases(world)).toEqual(['queued', 'start', 'failed'])
+    expect(world.events[2]).toMatchObject({ agentId: 'a', seq: 1, error: 'boom' })
+  })
+
+  test('EV6 地板命中 → stopped 每 family session 一条，与 system 行数相等；processItem 的 stopped 不单发', async () => {
+    const world = makeWorld()
+    group(world, 1, ['a', 'b'], { family: [1, 2], config: { chainCap: 1 } })
+    group(world, 2, ['x'], { family: [1, 2] })
+    await send(new GroupOrchestrator({ deps: world.deps, cascade: false }), world, 1, '开场')
+    const stopped = world.events.filter((e) => e.phase === 'stopped')
+    const systemRows = world.messages.filter((m) => m.role === 'system')
+    expect(systemRows).toHaveLength(2)
+    expect(stopped).toHaveLength(systemRows.length)
+    expect(stopped.map((e) => e.sessionId).sort()).toEqual([1, 2])
+    for (const e of stopped) {
+      expect(e).toMatchObject({ reason: 'chain_cap', agentId: null, seq: null, queued: [] })
+      expect(e.runId).toBe(world.turns[0]?.runId)
+    }
+  })
+
+  test('EV7 排队期间踢人 → skipped{reason:removed}，error=removed，游标不推进，不 speak', async () => {
+    const world = makeWorld()
+    const withA = group(world, 1, ['a', 'b'])
+    const withoutA: GroupRunFacts = { ...withA, members: [member('b')], modes: { b: 'realtime' } }
+    factsByCall(world, withA, withoutA)
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    await orch.onGroupMessage(1, world.human(1, '开场'))
+    await orch.idle()
+    expect(world.turns.map((t) => [t.agentId, t.outcome, t.error])).toEqual([
+      ['a', 'skipped', 'removed'],
+      ['b', 'spoke', null]
+    ])
+    expect(world.events.find((e) => e.phase === 'skipped')).toMatchObject({
+      agentId: 'a',
+      reason: 'removed'
+    })
+    expect(world.cursors.has('1:a')).toBe(false)
+    expect(world.speakCalls.map((c) => c.agentId)).toEqual(['b'])
+  })
+
+  test('EV7b 复核通过、advance 前名单已不含 a（resolveFacts 再读）→ advanceSeenCursor 不写', async () => {
+    const world = makeWorld()
+    const withA = group(world, 1, ['a'])
+    const withoutA: GroupRunFacts = { ...withA, members: [], modes: {} }
+    // 1 = onGroupMessage，2 = 取出时复核，3+ = 写游标前再读。
+    factsByCall(world, withA, withA, withoutA)
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    await orch.onGroupMessage(1, world.human(1, '开场'))
+    await orch.idle()
+    expect(world.outcomes()).toEqual(['spoke'])
+    expect(world.assistantRows()).toHaveLength(1)
+    expect(world.cursors.has('1:a')).toBe(false)
+  })
+
+  test('EV8 requeue：非成员 → E_NOT_GROUP_MEMBER；成员 → queued 事件 + 折叠（连点两次只一项）', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const world = makeWorld({
+      speak: async (input, n) => {
+        if (n === 1) await gate
+        return defaultSpeak(input, n)
+      }
+    })
+    group(world, 1, ['a'], { mentionOnly: ['a'] })
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    const root = world.human(1, '@a 说')
+    await orch.onGroupMessage(1, root)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(await orch.requeue(1, 'zzz', root.id)).toEqual({
+      queued: false,
+      error: 'E_NOT_GROUP_MEMBER'
+    })
+    expect(await orch.requeue(1, 'a', root.id)).toEqual({ queued: true })
+    expect(await orch.requeue(1, 'a', root.id)).toEqual({ queued: false })
+    expect(orch.pendingFor(1)).toEqual(['a'])
+    expect(phases(world).filter((p) => p === 'queued')).toHaveLength(3)
+    release()
+    await orch.idle()
+    expect(world.turns.filter((t) => t.agentId === 'a')).toHaveLength(2)
+  })
+
+  test('EV8b requeue 目标链已被地板 / owner 停掉 → E_RUN_STOPPED，队列不变、无事件', async () => {
+    const world = makeWorld()
+    group(world, 1, EIGHT, { config: { chainCap: 1 } })
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    const root = world.human(1, '开场')
+    await orch.onGroupMessage(1, root)
+    await orch.idle()
+    expect(world.stopReasons(1)).toEqual(['chain_cap'])
+    const before = world.events.length
+    expect(await orch.requeue(1, 'c', root.id)).toEqual({ queued: false, error: 'E_RUN_STOPPED' })
+    expect(orch.pendingFor(1)).toEqual([])
+    expect(world.events).toHaveLength(before)
+
+    // owner_stop 同样登记。
+    const owner = makeWorld({
+      speak: (input) =>
+        new Promise((_, reject) => {
+          input.signal.addEventListener('abort', () => reject(new Error('aborted')))
+        })
+    })
+    group(owner, 1, ['a', 'b'])
+    const orch2 = new GroupOrchestrator({ deps: owner.deps })
+    const root2 = owner.human(1, '开场')
+    await orch2.onGroupMessage(1, root2)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(orch2.stopFamily(1)).toEqual({ stopped: true })
+    await orch2.idle()
+    expect(await orch2.requeue(1, 'b', root2.id)).toEqual({ queued: false, error: 'E_RUN_STOPPED' })
+  })
+
+  test('EV9 requeue 在 run 正常跑完被 reap 后重建 run：新 runId，chainProgress.counted 从 0', async () => {
+    const world = makeWorld()
+    group(world, 1, ['a'], { mentionOnly: ['a'] })
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    const root = world.human(1, '@a 说')
+    await orch.onGroupMessage(1, root)
+    await orch.idle()
+    const firstRunId = world.turns[0]!.runId
+    expect(world.events.at(-1)?.chainProgress.counted).toBe(1)
+    expect(await orch.requeue(1, 'a', root.id)).toEqual({ queued: true })
+    const queued = world.events.at(-1)!
+    expect(queued.phase).toBe('queued')
+    expect(queued.chainProgress.counted).toBe(0)
+    expect(queued.runId).not.toBe(firstRunId)
+    await orch.idle()
+    expect(world.turns[1]).toMatchObject({ chainId: root.id, seq: 1 })
+    expect(world.turns[1]!.runId).not.toBe(firstRunId)
+  })
+
+  test('EV10 liveState：出队后租约前 preparing=a / queued=[] / inFlight=null；speak 期间 inFlight=a；结束后全空', async () => {
+    let releaseSleep!: () => void
+    const sleepGate = new Promise<void>((r) => (releaseSleep = r))
+    let releaseSpeak!: () => void
+    const speakGate = new Promise<void>((r) => (releaseSpeak = r))
+    const world = makeWorld({
+      speak: async (input, n) => {
+        await speakGate
+        return defaultSpeak(input, n)
+      }
+    })
+    world.deps.sleep = (ms) => (ms === MIN_TURN_GAP_MS ? sleepGate : Promise.resolve())
+    group(world, 1, ['a'], { mentionOnly: ['a'] })
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    await orch.onGroupMessage(1, world.human(1, '@a 说'))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(orch.liveState(1)).toEqual({ inFlight: null, preparing: 'a', queued: [] })
+    expect(world.registry.hasActive(1)).toBe(false)
+    expect(orch.liveState(2)).toEqual({ inFlight: null, preparing: null, queued: [] })
+    releaseSleep()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(orch.liveState(1).inFlight).toBe('a')
+    expect(world.registry.hasActive(1)).toBe(true)
+    releaseSpeak()
+    await orch.idle()
+    expect(orch.liveState(1)).toEqual({ inFlight: null, preparing: null, queued: [] })
+  })
+
+  test('EV11 emitEvent 抛错只 warn，turn 照常落账', async () => {
+    const world = makeWorld()
+    const warned: string[] = []
+    world.deps.warn = (message) => warned.push(message)
+    world.emitImpl = () => {
+      throw new Error('renderer gone')
+    }
+    group(world, 1, ['a'])
+    await send(new GroupOrchestrator({ deps: world.deps, cascade: false }), world, 1, '开场')
+    expect(world.outcomes()).toEqual(['spoke'])
+    expect(world.assistantRows()).toHaveLength(1)
+    expect(world.events).toEqual([])
+    expect(warned.some((m) => m.includes('emitEvent'))).toBe(true)
+  })
+
+  test('EV12 排队项取出时刷新事实：入队后改 modelOverride，speak 收到的 facts.config 是新值', async () => {
+    const world = makeWorld()
+    const before = group(world, 1, ['a'])
+    const after: GroupRunFacts = { ...before, config: { modelOverride: 'override-model' } }
+    factsByCall(world, before, after)
+    await send(new GroupOrchestrator({ deps: world.deps, cascade: false }), world, 1, '开场')
+    expect(world.speakCalls).toHaveLength(1)
+    expect(world.speakCalls[0]?.facts.config.modelOverride).toBe('override-model')
+  })
+
+  test('EV13 三种 skipped 的 turn 行 error 互不相同且 ⊆ GROUP_SKIP_REASONS', async () => {
+    const errors = new Set<string>()
+
+    const mono = makeWorld()
+    group(mono, 1, ['a'], { mentionOnly: ['a'] })
+    const trigger = mono.human(1, '@a 说')
+    mono.messages.push({
+      ...trigger,
+      id: mono.nextId++,
+      role: 'assistant',
+      content: '刚说过',
+      speakerAgentId: 'a',
+      chainId: trigger.id
+    })
+    const o1 = new GroupOrchestrator({ deps: mono.deps, cascade: false })
+    await o1.onGroupMessage(1, trigger)
+    await o1.idle()
+
+    const stale = makeWorld()
+    group(stale, 1, ['a', 'b'], { mentionOnly: ['a', 'b'] })
+    const t2 = stale.human(1, '@a 说')
+    const bRow = stale.nextId++
+    stale.messages.push({ ...t2, id: bRow, role: 'assistant', content: 'b 说', speakerAgentId: 'b' })
+    stale.cursors.set('1:a', bRow)
+    const o2 = new GroupOrchestrator({ deps: stale.deps, cascade: false })
+    await o2.onGroupMessage(1, t2)
+    await o2.idle()
+
+    const kicked = makeWorld()
+    const withA = group(kicked, 1, ['a'], { mentionOnly: ['a'] })
+    factsByCall(kicked, withA, { ...withA, members: [], modes: {} })
+    const o3 = new GroupOrchestrator({ deps: kicked.deps, cascade: false })
+    await o3.onGroupMessage(1, kicked.human(1, '@a 说'))
+    await o3.idle()
+
+    for (const w of [mono, stale, kicked]) {
+      expect(w.turns).toHaveLength(1)
+      expect(w.turns[0]?.outcome).toBe('skipped')
+      errors.add(w.turns[0]!.error!)
+      expect(w.events.find((e) => e.phase === 'skipped')?.reason).toBe(w.turns[0]!.error)
+    }
+    expect(errors.size).toBe(3)
+    for (const e of errors) expect(GROUP_SKIP_REASONS).toContain(e)
   })
 })

@@ -150,6 +150,88 @@ export function maybeNotifyChatRunFinished(
   }
 }
 
+// ---- ①c 群聊成员回复 → 通知中心（L4 群聊 UX 批；调用点 ai_gateway_lifecycle
+// ---- appendGroupMessage 的 broadcast 之后） ---------------------------------
+
+/** `appendGroupMessage` 入参的本模块消费子集。 */
+export interface GroupReplyRef {
+  sessionId: number
+  role: string
+  content: string
+  speakerAgentId: string | null
+  chainId: number | null
+}
+
+/** `ChatSession` 的本模块消费子集（group_config_json 只读 `notify` 一键）。 */
+export interface GroupSessionRef extends ChatSessionRef {
+  group_config_json?: string | null
+}
+
+/** 通知正文里成员回复的截取长度。 */
+const GROUP_REPLY_BODY_CHARS = 80
+
+/** `group_config_json.notify`：只有显式 false 才关（缺列 / 坏 JSON / 缺键 = 开）。 */
+function groupNotifyEnabled(raw: string | null | undefined): boolean {
+  if (typeof raw !== 'string' || raw.length === 0) return true
+  try {
+    const parsed = JSON.parse(raw) as { notify?: unknown } | null
+    return parsed?.notify !== false
+  } catch {
+    return true
+  }
+}
+
+/**
+ * 群聊成员回复的通知中心投影。判据三条：`role==='assistant'`（owner 自己的消息 / group_stop
+ * 系统行不发）、`config.notify !== false`（群级开关）、群**不在前台**（renderer 经
+ * `chat:group-foreground` 上报的群 id + 窗口有焦点；未上报过 = 不在前台 → 发）。
+ *
+ * dedupe 键 = `group_chain:{sessionId}:{chainId}`：同链后续回复命中同 key → 服务端计次，
+ * 一条链一条通知；v1（labs off）路径无 chain_id → 退化为 `group_chain:{sessionId}:null`
+ * = 每群一条活跃通知合并。深链是新型 `{type:'group'}`（`session` 型会落到主 agent 会话面）。
+ *
+ * `resolveSpeakerTitle` 由调用点注入（lifecycle 传 report_agent 读），失败回落 agent id。
+ * 永不 throw。
+ */
+export function maybeNotifyGroupReply(
+  reply: GroupReplyRef,
+  getSessionById: (sessionId: number) => GroupSessionRef | null,
+  isForeground: (sessionId: number) => boolean,
+  resolveSpeakerTitle?: (agentId: string) => Promise<string | null> | string | null
+): void {
+  try {
+    if (reply.role !== 'assistant') return
+    const session = getSessionById(reply.sessionId)
+    if (!groupNotifyEnabled(session?.group_config_json)) return
+    if (isForeground(reply.sessionId)) return
+    const sessionTitle = typeof session?.title === 'string' ? session.title.trim() : ''
+    const speakerId = reply.speakerAgentId
+    void (async () => {
+      let speaker = speakerId ?? ''
+      if (speakerId != null && resolveSpeakerTitle) {
+        try {
+          const title = await resolveSpeakerTitle(speakerId)
+          if (typeof title === 'string' && title.trim().length > 0) speaker = title.trim()
+        } catch {
+          /* 标题只是装饰，回落 id */
+        }
+      }
+      const excerpt = reply.content.trim().slice(0, GROUP_REPLY_BODY_CHARS)
+      await publishNotificationToCenter({
+        category: 'results',
+        source: 'group_chat',
+        severity: 'info',
+        title: sessionTitle.length > 0 ? sessionTitle : '群聊',
+        body: speaker.length > 0 ? `${speaker}：${excerpt}` : excerpt,
+        dedupeKey: `group_chain:${reply.sessionId}:${reply.chainId}`,
+        payload: { link: { type: 'group', sessionId: reply.sessionId } }
+      })
+    })()
+  } catch (err) {
+    console.warn('[ai-gateway] group-reply notification skipped (append landed OK)', err)
+  }
+}
+
 // ---- ② macOS 原生通知 fanout ---------------------------------------------
 
 /** 连发合并窗口：一轮批量 publish 会连发多条 notification.changed（每条 commit 后
