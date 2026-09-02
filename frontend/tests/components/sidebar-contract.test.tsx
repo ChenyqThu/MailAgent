@@ -33,9 +33,11 @@ import i18n from '../../src/shared/i18n'
 
 // 门控开关（gate 求值走这两个 hook + 平台判定）。默认全开，用例里按需关。
 // signals：09-01 侧栏批两个无数字状态点的数据源（事项进行中派发 / 群聊未读），用例里按需拨。
-const { gates, signals } = vi.hoisted(() => ({
+// spies：需要跨 render 稳定引用的那几枚（mock 工厂每次调用都新建对象，断言调用次数要用它）。
+const { gates, signals, spies } = vi.hoisted(() => ({
   gates: { matters: true, contacts: true },
-  signals: { dispatches: 0, groupUnread: 0 }
+  signals: { dispatches: 0, groupUnread: 0 },
+  spies: { listEnriched: vi.fn().mockResolvedValue([]) }
 }))
 
 // `useMailApi` ships a real ElectronApi by default — that talks to
@@ -62,30 +64,39 @@ vi.mock('@shared/hooks/useMailApi', () => ({
         { mailbox: '收件箱', total: 12, unread: 3, flagged: 1, failed: 0 },
         { mailbox: '发件箱', total: 4, unread: 0, flagged: 0, failed: 0 }
       ]),
-      // 09-01 侧栏批：邮件域 peek 的投影走主列表同一份查询配方（listOptsForView → listEnriched）。
-      listEnriched: vi.fn().mockResolvedValue([
-        {
-          internal_id: 101,
-          message_id: '<msg-101@example.com>',
-          thread_id: 'thread-A',
-          subject: 'redis timeout debug session',
-          sender: 'alice@example.com',
-          sender_name: 'Alice',
-          date_received: '2026-05-15T09:00:00+08:00',
-          mailbox: '收件箱',
-          is_read: true,
-          is_flagged: false,
-          sync_status: 'synced',
-          notion_page_id: null,
-          notion_url: null,
-          snippet: 'Hey, the redis client keeps timing out after 5s.',
-          lang: 'en',
-          ai_priority: 'critical',
-          ai_action: '需要回复',
-          attach_count: 2,
-          is_important: true
-        }
-      ])
+      // 0902 dogfood 轮 1 后邮件 peek 是**邮箱列表**，不再投影邮件行 —— 这枚 spy 留作
+      // 反向探针（下面的用例断言它零调用），别删。
+      listEnriched: spies.listEnriched
+    },
+    // 0902 dogfood 轮 1：邮件 peek 的 FOLDERS 段与列表头下拉同一份数据链
+    // （whitelist × discover × folder_pref）。🔴 数组序 = 用户自定义显示顺序。
+    folder: {
+      getWhitelist: vi.fn().mockResolvedValue({ folders: ['Projects', 'Projects/2026'] }),
+      discover: vi.fn().mockResolvedValue({
+        folders: [
+          {
+            imap_name: 'Projects',
+            display_name: '项目',
+            delimiter: '/',
+            special_use: null,
+            is_system: false,
+            has_children: true,
+            parent: null,
+            message_count: null
+          },
+          {
+            imap_name: 'Projects/2026',
+            display_name: '项目/2026',
+            delimiter: '/',
+            special_use: null,
+            is_system: false,
+            has_children: false,
+            parent: 'Projects',
+            message_count: null
+          }
+        ]
+      }),
+      getPrefs: vi.fn().mockResolvedValue({ prefs: [] })
     },
     // 09-01 侧栏批：对话格「群聊有未读」dot 的数据源（origin='group'）。
     chat: {
@@ -163,6 +174,7 @@ import {
   __resetDomainLocations,
   recordRouteLocation
 } from '../../src/shared/navigation/domain-location'
+import { useEmailFilter } from '../../src/shared/state/email-filter'
 import { SETTINGS_TABS } from '../../src/shared/lib/settingsTabs'
 
 /** 门控全开时的导轨格（自上而下 = 屏幕上的顺序），**手写**期望。08-27 批：对象域
@@ -270,6 +282,9 @@ beforeEach(async () => {
   __resetDomainLocations()
   // 每域折叠 / 宽度记忆同理（localStorage + store）。
   __resetNavShellForTest()
+  // 邮件 peek 的点行会写 view（模块级 store），复位免得污染后面的用例。
+  useEmailFilter.setState({ view: 'inbox', customMailbox: null, customMailboxPath: [] })
+  spies.listEnriched.mockClear()
   await i18n.changeLanguage('zh-CN')
 })
 
@@ -572,6 +587,26 @@ function shell(container: HTMLElement): HTMLElement {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
+/** 邮件 peek 里的行（NavRow：label 在 span.flex-1 上），两段按 DOM 序拼在一起。 */
+function peekMailRows(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>('[data-nav-peek-list="mail"] .row'))
+}
+
+function peekMailRowLabels(container: HTMLElement): string[] {
+  return peekMailRows(container).map(
+    (row) => (row.querySelector('span.flex-1') as HTMLElement | null)?.textContent?.trim() ?? ''
+  )
+}
+
+function peekMailRow(container: HTMLElement, label: string): HTMLElement {
+  const rows = peekMailRows(container)
+  const hit = rows.find(
+    (row) => (row.querySelector('span.flex-1') as HTMLElement | null)?.textContent?.trim() === label
+  )
+  if (hit === undefined) throw new Error(`邮件 peek 里没有「${label}」行`)
+  return hit
+}
+
 describe('按域折叠（09-01 侧栏批）', () => {
   afterEach(() => cleanup())
 
@@ -685,7 +720,9 @@ describe('全域 peek（09-01 侧栏批）', () => {
     await waitFor(() => expect(container.querySelector('[data-nav-peek]')).toBeNull())
   })
 
-  test('折叠态聚焦邮件格 → page 域 peek 渲染真清单（EmailRow，走 listEnriched 缓存）；点行导航并关', async () => {
+  // 0902 dogfood 轮 1：owner 要的邮件 peek 是「切邮箱」的那份清单（demo 同款），不是把
+  // 邮件行再画一遍 —— 邮件行在右边的主列表里本来就有。
+  test('折叠态聚焦邮件格 → peek 是邮箱列表两段（五视图 + 已同步文件夹）；点行切视图并关', async () => {
     useNavShell.getState().setCollapsed('today', true)
     const { container, router } = await renderShell('/today')
     const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
@@ -693,21 +730,46 @@ describe('全域 peek（09-01 侧栏批）', () => {
     await waitFor(() => expect(container.querySelector('[data-nav-peek="mail"]')).toBeTruthy(), {
       timeout: 1500
     })
-    // lazy chunk + 查询：先骨架后到数据。
+    // lazy chunk + 两条查询：MAILBOXES = registry 五视图（序 = panel.order）；
+    // FOLDERS = whitelist × discover（🔴 数组序，父在前子紧随）。
     await waitFor(
       () =>
-        expect(container.querySelectorAll('[data-nav-peek-list="mail"] .email-row')).toHaveLength(
-          1
-        ),
+        expect(peekMailRowLabels(container)).toEqual([
+          '收件箱',
+          '发件箱',
+          '草稿箱',
+          '已标旗',
+          '所有邮件',
+          '项目',
+          '2026'
+        ]),
       { timeout: 4000 }
     )
-    expect(container.querySelector('[data-nav-peek-list="mail"]')?.textContent).toContain(
-      'redis timeout debug session'
-    )
-    fireEvent.click(
-      container.querySelector('[data-nav-peek-list="mail"] .email-row') as HTMLElement
-    )
-    expect(navigate.mock.calls.at(-1)?.[0]).toEqual({ to: '/', search: { view: 'inbox' } })
+    // 行尾计数与 rail 徽标同一条数据链（收件箱 = 未读 3）。
+    expect(peekMailRow(container, '收件箱').textContent).toContain('3')
+    // 🔴 反向探针：邮箱列表不该再拉邮件行。
+    expect(spies.listEnriched).not.toHaveBeenCalled()
+    expect(container.querySelectorAll('[data-nav-peek-list="mail"] .email-row')).toHaveLength(0)
+    // 点内建视图行 = 列表头下拉同一套动作（useSelectMailbox）：setView + `?view=` 导航。
+    fireEvent.click(peekMailRow(container, '已标旗'))
+    expect(navigate.mock.calls.at(-1)?.[0]).toEqual({ to: '/', search: { view: 'flagged' } })
+    expect(useEmailFilter.getState().view).toBe('flagged')
+    await waitFor(() => expect(container.querySelector('[data-nav-peek]')).toBeNull())
+    navigate.mockRestore()
+  })
+
+  test('邮件 peek 点自定义文件夹行 → 写 customMailbox 过滤 key（完整 display_name）+ 切回邮件域', async () => {
+    useNavShell.getState().setCollapsed('today', true)
+    const { container, router } = await renderShell('/today')
+    const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
+    fireEvent.focus(railCell(container, 'mail'))
+    // 等 discover 那棵树（seed 树的根标签是 imap 原名 'Projects'，会误导下面的断言）。
+    await waitFor(() => expect(peekMailRowLabels(container)).toContain('项目'), { timeout: 4000 })
+    fireEvent.click(peekMailRow(container, '2026'))
+    // 🔴 过滤 key 是完整 display_name（后端 email_metadata.mailbox 存完整解码路径）。
+    expect(useEmailFilter.getState().customMailbox).toBe('项目/2026')
+    // 文件夹行自己不导航（列表头本就在邮件域），peek 从别的域浮出 ⇒ 补切域。
+    expect(navigate).toHaveBeenCalled()
     await waitFor(() => expect(container.querySelector('[data-nav-peek]')).toBeNull())
     navigate.mockRestore()
   })

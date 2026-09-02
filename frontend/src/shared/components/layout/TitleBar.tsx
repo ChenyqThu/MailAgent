@@ -15,6 +15,10 @@
 // task 09-01-sidebar-fluid-optimization：左列可按域折叠到 56（design.md §2.4）—— 56px
 // 装不下五件簇，**折叠态把簇渲染到标签条右端**（header 的第三个子节点，no-drag）；展开态
 // 原样在左段，「右侧零常驻控件」在展开态维持。远程 web <768 抽屉态：左段 44 = 汉堡钮。
+// 🔴 折叠态左段的**盒宽**不跟到 56：下面那 72px 红绿灯占位随内层一起 visibility:hidden，
+// 而红绿灯是 OS 画在上层的（x 7–59），左段真收到 56 就等于让标签条从 x=56 起画、被灯簇压住
+// （0902 dogfood 轮 1）。保底 80 在 index.css 的 `.topbar-left:not([data-nav-mode='drawer'])`，
+// 与这里的 72 占位是同一口径（72 + 8 间隙）；改这里的占位数要连那条一起改。
 
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'

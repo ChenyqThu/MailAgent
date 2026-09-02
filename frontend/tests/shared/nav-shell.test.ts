@@ -86,6 +86,44 @@ describe('左列宽度 —— index.css 手抄互锁', () => {
     )
   })
 
+  // 0902 dogfood 轮 1 修的两条几何：peek 被折叠规则连坐、折叠态红绿灯压标签条。
+  test('折叠隐藏只作用常驻 .nav-panel（子代组合器）—— peek 变体在同一个 .app-nav 下', () => {
+    const block = mustMatch(
+      /\n\.app-nav\[data-collapsed='true'\]\s*>\s*\.nav-panel\s*\{([^}]*)\}/s,
+      '折叠隐藏规则（子代组合器）'
+    )[1]
+    expect(block).toMatch(/visibility:\s*hidden/)
+    // 🔴 后代选择器会把浮层里那份 DomainPanel（.nav-panel--peek，同在 .app-nav 内）一起
+    // 隐藏，且特异度 (0,2,0) 压过 .nav-panel--peek —— 「折叠态 hover 今日/日历/运维/设置
+    // 一片空白」的真因。常驻那份是 .app-nav 的直接子节点，子代组合器正好把两者分开。
+    expect(css, '折叠隐藏不许退回后代选择器').not.toMatch(
+      /\.app-nav\[data-collapsed='true'\]\s+\.nav-panel[\s,{]/
+    )
+  })
+
+  test('.topbar-left 非抽屉态保底 80 —— 折叠后红绿灯不压标签条', () => {
+    const block = mustMatch(
+      /\n\.topbar-left:not\(\[data-nav-mode='drawer'\]\)\s*\{([^}]*)\}/s,
+      '.topbar-left 非抽屉态宽度'
+    )[1]
+    const m = /width:\s*max\(var\(--app-nav-w,\s*(\d+)px\),\s*(\d+)px\)/.exec(block)
+    expect(m, '非抽屉态宽度必须是 max(var(--app-nav-w, 兜底), 保底)').toBeTruthy()
+    const [, fallback, floor] = m as RegExpExecArray
+    expect(Number(fallback)).toBe(RAIL_W + SECOND_W_DEFAULT)
+    // 保底值必须盖住 TitleBar 里那 72px 红绿灯占位 + 8px 间隙（两处手抄，这里互锁）。
+    const titleBar = readFileSync(
+      resolve(process.cwd(), 'src/shared/components/layout/TitleBar.tsx'),
+      'utf8'
+    )
+    const lights = /w-\[(\d+)px\] shrink-0" aria-hidden/.exec(titleBar)
+    expect(lights, 'TitleBar 的红绿灯占位抽不到 —— 先修这个闸').toBeTruthy()
+    expect(Number(floor)).toBeGreaterThanOrEqual(Number((lights as RegExpExecArray)[1]) + 8)
+    // 80 的右缘与 rail 的 56 边界错位 ⇒ 折叠态不画那条竖 hairline。
+    expect(css).toMatch(
+      /\.topbar-left\[data-collapsed='true'\]\s*\{[^}]*border-right-color:\s*transparent/s
+    )
+  })
+
   test(':root 上挂了两个变量的过渡；拖拽 / reduced-motion 关', () => {
     const rootTransition = mustMatch(/:root\s*\{\s*transition:\s*([^;]+);/s, ':root transition')[1]
     expect(rootTransition).toMatch(/--app-nav-w 220ms var\(--ease-out-strong\)/)

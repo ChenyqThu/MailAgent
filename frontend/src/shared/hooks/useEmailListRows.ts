@@ -75,9 +75,7 @@ import {
 // ─── List query opts per Sidebar view ────────────────────────────────
 // customMailbox 非空 (多文件夹同步 P3 — 选中某自定义文件夹) 时优先, 列表只拉该
 // mailbox (= display_name), 跳过内建 view 语义。
-// 导出给侧栏 peek 的邮件投影（layout/peek/MailPeekList）：与主列表**同一份**查询配方
-// 才能命中同一个缓存（09-01 侧栏批）。
-export function listOptsForView(
+function listOptsForView(
   view: EmailView,
   limit: number,
   customMailbox: string | null,
@@ -97,7 +95,7 @@ export function listOptsForView(
 // 非标旗邮件抢占 head, 导致非置顶标旗邮件矮行 + 丢 AI strip。
 const EMPTY_THREAD_SUPPLEMENT: ReadonlyMap<string, ReadonlyArray<EnrichedEmailMeta>> = new Map()
 
-export const PAGE_SIZE = 100
+const PAGE_SIZE = 100
 const MAX_PAGES = 30 // safety cap — 3000 rows is enough for visual scrolling
 // 线程展开子行入场动画的存活窗口: 覆盖 DUR.base(220ms) + 最大 stagger 延迟, 留余量。
 // 过后清标 → 之后因滚动重挂的子行是静态的, 不会重播入场 (虚拟列表的关键约束)。

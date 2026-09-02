@@ -25,7 +25,6 @@
 //     这种自相矛盾的组合出现在菜单里。
 
 import { useCallback, useRef, useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, Filter, ListChecks } from 'lucide-react'
 
@@ -33,29 +32,22 @@ import {
   ALL_CATEGORIES,
   ALL_PRIORITIES,
   useEmailFilter,
-  type EmailCategory,
-  type EmailView
+  type EmailCategory
 } from '@shared/state/email-filter'
 import { useBatch } from '@shared/state/batch'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { useSyncedFolderTree } from '@shared/hooks/useSyncedFolderTree'
 import { useFolderPrefMap } from '@shared/hooks/useFolderPrefs'
+import { MAIL_VIEW_ENTRIES, useSelectMailbox } from '@shared/hooks/useSelectMailbox'
 import { cn } from '@shared/lib/cn'
 import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { EMAIL_SORT_KEYS, type EmailSortKey } from '@shared/lib/emailSort'
-import { flattenFolderTree, type FolderNode } from '@shared/lib/folderTree'
-import { mailboxForView } from '@shared/lib/mailboxSemantics'
+import { flattenFolderTree } from '@shared/lib/folderTree'
 import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
 import { FolderGlyph, SquarePenIcon } from '@shared/components/icons'
-import {
-  NAV_ENTRIES,
-  navDomainPanelEntries,
-  navigateToNavEntry,
-  navLabel
-} from '@shared/navigation/registry'
+import { navLabel } from '@shared/navigation/registry'
 import { openNewCompose } from '@shared/state/compose-new'
-import { useMailbox } from '@shared/state/mailbox'
 import { MAX_PINNED_FOLDERS, pinnedFolderKey, usePinnedFolders } from '@shared/state/pinned-folders'
 import { toastInfo } from '@shared/state/toast'
 import type { AIPriority } from '@shared/api/types'
@@ -92,12 +84,6 @@ const PRIORITY_DOT_CLASS: Record<AIPriority, string> = {
   low: 'bg-low'
 }
 
-/** 五个内建邮箱视图行 —— registry 投影（标签 / 图标 / 落点的单源仍在那里）。
- *  registry 是零副作用的叶子模块，模块级取一次即可，不必每 render 过一遍。 */
-const MAIL_VIEW_ENTRIES = navDomainPanelEntries(NAV_ENTRIES, 'mail').filter(
-  (e) => e.view !== undefined
-)
-
 /** 方向两档的文案 key 随排序键变 —— 「按发件人 · 由新到旧」是无意义组合。 */
 const DIR_LABEL_KEY: Record<EmailSortKey, { desc: string; asc: string }> = {
   date: { desc: 'list.sort.dir.newest', asc: 'list.sort.dir.oldest' },
@@ -113,16 +99,14 @@ export function EmailListHeader({
   userEmail
 }: EmailListHeaderProps): React.ReactElement {
   const { t, i18n } = useTranslation()
-  const navigate = useNavigate()
   const view = useEmailFilter((s) => s.view)
   // 多文件夹同步 (P3) — 当前自定义文件夹 (mailbox=display_name); 非空时列表只拉它。
   const customMailbox = useEmailFilter((s) => s.customMailbox)
   const customMailboxPath = useEmailFilter((s) => s.customMailboxPath)
   const tab = useEmailFilter((s) => s.tab)
   const setTab = useEmailFilter((s) => s.setTab)
-  const setView = useEmailFilter((s) => s.setView)
-  const setCustomMailbox = useEmailFilter((s) => s.setCustomMailbox)
-  const setActiveMailbox = useMailbox((s) => s.setActive)
+  // 点行语义（内建视图 / 自定义文件夹）与折叠态 peek 的邮箱列表共用同一个 hook。
+  const { selectView, selectFolder } = useSelectMailbox()
   /** 收件箱视图（有分栏的那一档）—— 自定义文件夹与其余内建视图都没有重点/其他。 */
   const isInboxView = customMailbox === null && view === 'inbox'
 
@@ -201,30 +185,6 @@ export function EmailListHeader({
   const { tree } = useSyncedFolderTree()
   const prefMap = useFolderPrefMap()
   const pinned = usePinnedFolders((s) => s.pinned)
-
-  /** 内建视图切换 —— setView + StatusBar mailbox 联动 + `?view=` 同步，与侧栏行
-   *  （Sidebar.handleViewClick）同一套动作；路径字面量仍只在 registry 里。 */
-  const selectView = useCallback(
-    (next: EmailView): void => {
-      setView(next)
-      const nextMailbox = mailboxForView(next)
-      // flagged / all 是跨邮箱虚拟视图，没有具体 mailbox —— 保持 StatusBar 原值。
-      if (nextMailbox) setActiveMailbox(nextMailbox)
-      const entry = MAIL_VIEW_ENTRIES.find((e) => e.view === next)
-      if (entry) navigateToNavEntry(navigate, entry)
-    },
-    [navigate, setActiveMailbox, setView]
-  )
-
-  /** 自定义文件夹切换 —— 过滤 key 必须是完整 display_name（后端
-   *  `email_metadata.mailbox` 存完整解码路径）；path 供列表头显示叶子名。 */
-  const selectFolder = useCallback(
-    (node: FolderNode): void => {
-      setCustomMailbox(node.fullDisplayName, node.path)
-      setActiveMailbox(node.fullDisplayName)
-    },
-    [setActiveMailbox, setCustomMailbox]
-  )
 
   const notifyPinLimit = useCallback((): void => {
     toastInfo(t('list.folder.pinLimit', { count: MAX_PINNED_FOLDERS }))

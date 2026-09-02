@@ -1545,8 +1545,13 @@ body::before {
   flex-direction: column;
 }
 /* 折叠 = 变量收 0（宽度动画由 :root 的变量过渡负责）+ visibility hidden（挡键盘焦点进
- * 被裁掉的面板；离散过渡延到宽度动画结束那一拍才翻，展开时立刻可见）。 */
-.app-nav[data-collapsed='true'] .nav-panel {
+ * 被裁掉的面板；离散过渡延到宽度动画结束那一拍才翻，展开时立刻可见）。
+ * 🔴 必须是**子代**组合器：peek 浮层里的那份 DomainPanel（.nav-panel--peek）也在同一个
+ * `.app-nav[data-collapsed='true']` 里（NavPeek 是 Sidebar 的子节点），后代选择器会把它一起
+ * 隐藏 —— 折叠态 hover 今日 / 日历 / 运维 / 设置四个 nav 域只见空浮层（0902 dogfood 轮 1）。
+ * 特异度上 (0,2,0) 也压过 .nav-panel--peek 的 (0,1,0)，不能靠反向覆盖救。常驻那份是
+ * `.app-nav` 的直接子节点，peek 那份在 .nav-peek > .nav-peek-body 下，子代组合器正好分开。 */
+.app-nav[data-collapsed='true'] > .nav-panel {
   border-right-width: 0;
   visibility: hidden;
   transition: visibility 0s linear 220ms;
@@ -1597,6 +1602,18 @@ body::before {
   overflow: hidden;
   background: var(--tier-side);
   border-right: 1px solid var(--hairline);
+}
+/* 🔴 折叠态保底 80：左段宽跟 --app-nav-w（折叠后 56），而 macOS 红绿灯是 OS 画在上层的、
+ * 占 x 7–59（TitleBar 里那 72px 占位随内层一起 visibility:hidden 了）⇒ 标签条从 x=56 起画，
+ * 灯簇压在标签上（0902 dogfood 轮 1 owner 反馈）。max() 只在折叠态起作用（展开态 ≥336 是
+ * no-op），宽度过渡仍由 :root 的变量过渡负责。Windows 无红绿灯：多出的 24px 留白与既有
+ * 72px 占位同一口径，不加平台分支。抽屉态（远程 web <768）左段是 44 的汉堡钮，排除在外。 */
+.topbar-left:not([data-nav-mode='drawer']) {
+  width: max(var(--app-nav-w, 392px), 80px);
+}
+/* 折叠态的 80 右缘与 rail 的 56 边界错位，那条竖 hairline 画出来是条断头线 —— 隐掉。 */
+.topbar-left[data-collapsed='true'] {
+  border-right-color: transparent;
 }
 /* 内层同样读 --app-nav-w（折叠态 56、抽屉态 44），过渡由 :root 的变量过渡负责。
  * 🔴 这里**不能**像 .nav-panel-inner 那样定宽：左段的内容是「72px 红绿灯位 + 弹性空档 +
