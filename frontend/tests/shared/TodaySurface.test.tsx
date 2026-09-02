@@ -512,6 +512,12 @@ function reply(over: Partial<TodayReplyItem> = {}): TodayReplyItem {
   }
 }
 
+function endOfToday(): number {
+  const d = new Date()
+  d.setHours(23, 59, 0, 0)
+  return d.getTime()
+}
+
 function agendaEntry(over: Partial<AgendaEntry> = {}): AgendaEntry {
   return {
     id: 'mail:uid-1::2026-08-31T06:00:00+00:00',
@@ -629,7 +635,15 @@ describe('P4c 五节', () => {
   // 用的是五节那份数据（不是第二个源）· 一条都没有时说清为什么空。
 
   test('时间线列在场，且吃的是五节那份数据（不另开源）', async () => {
-    state.agenda = [agendaEntry({ title: 'AW Catch Up · SaaS 2026 Plan' })]
+    // 时间线只收「今天」的条目：默认 fixture 的 +90 分钟在本地 22:30 之后会跨到明天而闪断
+    //（2026-09-02 全量闸复现），这里钳在今天 23:59 之内。别的用例要的是「还有 1 小时」的相对时长，
+    // 默认值不动。
+    state.agenda = [
+      agendaEntry({
+        title: 'AW Catch Up · SaaS 2026 Plan',
+        startIso: new Date(Math.min(Date.now() + 90 * 60_000, endOfToday())).toISOString()
+      })
+    ]
     await renderSurface()
     await waitFor(() => expect(screen.getByTestId('today-timeline')).toBeTruthy())
     const column = screen.getByTestId('today-timeline')
