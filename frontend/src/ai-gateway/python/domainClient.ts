@@ -2503,16 +2503,21 @@ export class MailAgentDomainClient {
   }
 }
 
+/** `LibraryFolderPage` —— 🔴 没有 has_more，分页靠 total/limit/offset
+ *  （单源 `frontend/src/shared/api/types/library.ts`）。 */
 export interface DomainLibraryFolder {
   path?: unknown
   folders?: unknown
   files?: unknown
   total?: unknown
-  has_more?: unknown
+  limit?: unknown
+  offset?: unknown
 }
 
+/** `LibrarySearchResponse` —— 🔴 键是 `hits` / `warnings`（不是 items / warning）。 */
 export interface DomainLibrarySearch {
   query?: unknown
-  warning?: unknown
-  items?: unknown
+  mode?: unknown
+  hits?: unknown
+  warnings?: unknown
 }

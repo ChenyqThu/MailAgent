@@ -11,15 +11,26 @@
 // 非文本类文件（pdf / office / 图片）`library_read` 返回的**是服务端解析出来的 markdown**
 // （`library_text` 那一份，与预览面 / FTS / 嵌入同源，design L18），二进制永不进模型。
 //
-// serve-api wire（design §3；响应体 snake_case = DB 列名）：
-//   GET /library/folder?path=&limit=&offset=
-//       → {path, folders:[{path,name,file_count}], files:[row], total, has_more}
-//   GET /library/file/{id}?max_bytes=       → row & {content, text_status, extractor?, truncated?}
-//   GET /library/file/{id}/text?max_bytes=  → {markdown, extractor, truncated, source_hash,
-//                                              text_status, hint?}   ← 抽取兜底：pending 时触发
-//   GET /library/search?q=&limit=           → {query, count, warning?, items:[row & {snippet}]}
-//   row = {id, rel_path, parent_path, filename, kind, size_bytes, mime, mtime, updated_at,
-//          source, content_hash, text_status, status}
+// serve-api wire —— 权威是 `frontend/src/shared/api/types/library.ts`（本文件按它读，别按 design
+// §3 的草稿形状读；两者在 hits/warnings、has_more、path 三处不同，2026-09-03 已按类型面对齐）：
+//   GET /library/folder?path=&limit=&offset= → LibraryFolderPage
+//       {path, folders:[LibraryFolderNode], files:[LibraryFile], total, limit, offset}
+//       🔴 **没有 has_more** —— 由 offset + files.length < total 推。
+//   GET /library/file/{id}?max_bytes=      → LibraryFileDetail = LibraryFile & {content}
+//       content 只对文本类且 ≤2 MB 给，否则 null（可读正文走 /text 的解析版）。
+//   GET /library/file/{id}/text?max_bytes= → LibraryFileText
+//       {file_id, text_status, markdown, extractor, truncated, source_hash, content_hash, stale}
+//       ← 抽取兜底：pending 时就地触发抽取。`hint` 由 router 在非 extracted 时附送（类型面
+//         没列，故这里恒有本地兜底文案）。
+//   GET /library/search?q=&limit=          → LibrarySearchResponse
+//       {query, mode, hits:[LibraryFile & {snippet, rank, match}], warnings:string[]}
+//       warnings 是机器可读码（`cjk_too_short:<字>`），正常时空数组。
+//   LibraryFile 关键列：{id, path, rel_path, parent_path, filename, kind, mime, size_bytes,
+//       mtime, content_hash, source, status, text_status, updated_at}
+//   🔴 `path` 是**虚拟路径**（`<根 slug>/<相对路径>`，挂载根形如 `@label/sub/x.md`）——
+//      寻址与显示都用它；`rel_path` 是根内相对路径，跨根重名，绝不能当返回体的 path。
+//   🔴 投影行（mail-attachments）**没有 library id**：`is_projection:true` + `attachment_id`，
+//      `/library/file/{id}` 那一整套对它全走不通（见 library_list 的描述与投影字段）。
 
 import type { Tool } from 'ai'
 import { z } from 'zod'
@@ -89,15 +100,18 @@ function num(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null
 }
 
-/** 八个恒有字段 + 三个便宜的判别列。
+/** 八个恒有字段 + 三个便宜的判别列（+ 投影行的三件专属）。
+ *
+ *  🔴 `path` 取 wire 的 `path`（**虚拟路径**）而不是 `rel_path`：rel_path 是根内相对路径，
+ *  跨根重名，模型拿它回传给 library_list 会指到别的根去。
  *
  *  🔴 `name` 走 `sanitizeProse`（纯展示串，控制字符折叠 + 围栏 token 破坏），`path` 只走
- *  `sanitizeUntrusted`（破围栏 token，不折叠空白）—— path 是模型要**原样回传**给 library_list
- *  的标识符，折叠掉「两个空格的文件夹名」里的空白会让它下一次调用 404。 */
+ *  `sanitizeUntrusted`（破围栏 token，不折叠空白）—— path 是模型要**原样回传**的标识符，
+ *  折叠掉「两个空格的文件夹名」里的空白会让它下一次调用 404。 */
 function projectRow(row: ServerRow): Record<string, unknown> {
-  const path = str(row.rel_path)
+  const path = str(row.path)
   const name = str(row.filename)
-  return {
+  const out: Record<string, unknown> = {
     file_id: num(row.id),
     path: path == null ? null : sanitizeUntrusted(path),
     name: name == null ? null : sanitizeProse(name),
@@ -110,6 +124,16 @@ function projectRow(row: ServerRow): Record<string, unknown> {
     text_status: str(row.text_status),
     status: str(row.status)
   }
+  // 投影行（邮件附件）：没有 library id ⇒ file_id 恒 null ⇒ library_read 对它结构上不可调。
+  // 不点破的话模型会拿着 null 反复重试；给出 attachment_id + 来源串，它就能改走
+  // email_attachment_text（description 里也写了这条改道）。
+  if (row.is_projection === true) {
+    out.is_projection = true
+    out.attachment_id = num(row.attachment_id)
+    const label = str(row.source_label)
+    if (label != null) out.source_label = sanitizeProse(label)
+  }
+  return out
 }
 
 /** 工具返回上限（§1.2「两层各自说清」的**工具**那层）：字符上限在这里裁，字节上限
@@ -141,7 +165,10 @@ export function createLibraryReadTools(
         '`kind` says what a file is (markdown / html / pdf / office / image / text / placeholder ' +
         '/ other) and `text_status` whether its text has been extracted yet. Use this to find ' +
         'out what exists, then library_read for one file, or library_search to look across the ' +
-        'whole library by keyword. Paged (`limit` / `offset`, `has_more`).',
+        'whole library by keyword. Paged (`limit` / `offset`, `has_more`). Rows under ' +
+        'mail-attachments are projections with `is_projection: true` and NO `file_id`: read one ' +
+        'with email_attachment_text(attachment_id) instead of library_read, or ask the user to ' +
+        'save it into the library first.',
       inputSchema: listSchema,
       run: async (input, signal) => {
         const data = await domain.libraryFolder(
@@ -150,12 +177,17 @@ export function createLibraryReadTools(
         )
         const folders = Array.isArray(data.folders) ? data.folders : []
         const files = Array.isArray(data.files) ? data.files : []
+        // 🔴 wire 上没有 has_more（LibraryFolderPage 只给 total/limit/offset）—— 由本页起点
+        // 加本页条数是否够到 total 推。读 data.has_more 会恒 false，模型永远看不到第二页。
+        const total = num(data.total)
         return {
           path: str(data.path) ?? '',
           folder_count: folders.length,
           file_count: files.length,
-          total: num(data.total),
-          has_more: data.has_more === true,
+          total,
+          has_more: total != null && num(data.offset) != null
+            ? (num(data.offset) as number) + files.length < total
+            : false,
           folders: folders.map((f) => {
             const folder = f as ServerRow
             const fpath = str(folder.path)
@@ -203,6 +235,7 @@ export function createLibraryReadTools(
             content: null,
             extractor: null,
             truncated: false,
+            stale: false,
             hint:
               status === 'trashed'
                 ? 'This file is in the trash; restore it before reading.'
@@ -220,7 +253,8 @@ export function createLibraryReadTools(
             text_status: 'extracted',
             content: fenceBody(clipped.text, fileId, 'content'),
             extractor: 'native',
-            truncated: clipped.truncated || row.truncated === true,
+            truncated: clipped.truncated,
+            stale: false,
             hint: null
           }
         }
@@ -237,6 +271,7 @@ export function createLibraryReadTools(
             content: null,
             extractor: str(text.extractor),
             truncated: false,
+            stale: text.stale === true,
             hint: textStatusHint(parsedStatus, str(text.hint))
           }
         }
@@ -247,6 +282,8 @@ export function createLibraryReadTools(
           content: fenceBody(clipped.text, fileId, 'parsed'),
           extractor: str(text.extractor),
           truncated: clipped.truncated || text.truncated === true,
+          // 正文改过、解析版还没重抽 —— 模型据此知道读到的是旧版本，而不是当场把它当现状。
+          stale: text.stale === true,
           hint: null
         }
       }
@@ -262,24 +299,32 @@ export function createLibraryReadTools(
         'PLAIN KEYWORDS ONLY — this search has no field syntax and no operators: the whole ' +
         'query is matched as text, so anything that looks like a filter is matched literally ' +
         'and returns nothing. Pass the words themselves (服务协议 续签 / "Atlas rollout plan"). ' +
-        'Chinese works; a single character is too short and comes back as a `warning` with no ' +
+        'Chinese works; a single character is too short and comes back in `warnings` with no ' +
         'results — give at least two. Returns ranked hits with a snippet plus the file ' +
-        'metadata; read the whole document with library_read. This searches LIBRARY FILES only ' +
-        '— for the text of emails themselves use email_search_fulltext.',
+        'metadata; `match` says whether the hit came from the file TEXT or only its FILENAME ' +
+        '(a filename-only hit says nothing about what is inside). Read the whole document with ' +
+        'library_read. This searches LIBRARY FILES only — for the text of emails themselves use ' +
+        'email_search_fulltext.',
       inputSchema: searchSchema,
       run: async (input, signal) => {
         const data = await domain.librarySearch({ q: input.q, limit: input.limit }, signal)
-        const items = Array.isArray(data.items) ? data.items : []
+        // 🔴 wire 的键是 hits / warnings（LibrarySearchResponse），不是 items / warning ——
+        // 读错了不会报错，只会恒返回零命中且没有任何 warning，正是本工具最该防的那种静默。
+        const hits = Array.isArray(data.hits) ? data.hits : []
         return {
           query: input.q,
-          count: items.length,
-          warning: str(data.warning),
-          items: items.map((raw) => {
+          count: hits.length,
+          // 机器可读码（`cjk_too_short:<字>`）整组透传：只取第一条会在多条时静默丢信息。
+          warnings: Array.isArray(data.warnings)
+            ? data.warnings.filter((w): w is string => typeof w === 'string')
+            : [],
+          items: hits.map((raw) => {
             const row = raw as ServerRow
             const base = projectRow(row)
             const snippet = str(row.snippet)
             return {
               ...base,
+              match: str(row.match),
               snippet:
                 snippet == null
                   ? null

@@ -22,10 +22,13 @@ import { ApprovalGuard } from '../../../src/ai-gateway/security/approval'
 import type { GatewayToolAuditCollector } from '../../../src/ai-gateway/tools/types'
 import { mockDomain, okEnvelope, runTool } from './_helpers'
 
-/** 一行 serve-api 文件行（snake_case = DB 列名；`mime` 是服务端派生列）。 */
+/** 一行 serve-api 文件行（`LibraryFile`）。🔴 `path` 是虚拟路径、`rel_path` 是根内相对路径，
+ *  两者**故意不同**：投影出去的必须是 path，读成 rel_path 就会跨根指错。 */
 const ROW = {
   id: 42,
-  rel_path: 'agent-docs/atlas/plan.md',
+  mount_id: 0,
+  path: 'agent-docs/atlas/plan.md',
+  rel_path: 'atlas/plan.md',
   parent_path: 'agent-docs/atlas',
   filename: 'plan.md',
   kind: 'markdown',
@@ -42,7 +45,8 @@ const ROW = {
 const PDF_ROW = {
   ...ROW,
   id: 43,
-  rel_path: 'mail-attachments/2026-08/合同.pdf',
+  path: 'my-docs/合同/合同.pdf',
+  rel_path: '合同/合同.pdf',
   filename: '合同.pdf',
   kind: 'pdf',
   mime: 'application/pdf',
@@ -99,10 +103,11 @@ describe('library_list', () => {
       seen.push(url)
       return okEnvelope({
         path: 'agent-docs',
-        folders: [{ path: 'agent-docs/atlas', name: 'atlas', file_count: 3 }],
+        folders: [{ path: 'agent-docs/atlas', parent_path: 'agent-docs', name: 'atlas', mount_id: 0, file_count: 3 }],
         files: [ROW],
         total: 1,
-        has_more: false
+        limit: 10,
+        offset: 0
       })
     })
     const out = (await runTool(t.library_list, {
@@ -117,6 +122,8 @@ describe('library_list', () => {
     expect(out.path).toBe('agent-docs')
     expect(out.folders).toEqual([{ path: 'agent-docs/atlas', name: 'atlas', file_count: 3 }])
     const file = (out.files as Record<string, unknown>[])[0]
+    // 🔴 虚拟 path，不是 rel_path（'atlas/plan.md' 跨根重名，回传给 library_list 会指错根）。
+    expect(file.path).not.toBe('atlas/plan.md')
     expect(file).toMatchObject({
       file_id: 42,
       path: 'agent-docs/atlas/plan.md',
@@ -140,6 +147,57 @@ describe('library_list', () => {
     })
     await runTool(t.library_list, {})
     expect(seen[0]).not.toContain('path=')
+  })
+
+  test('has_more is DERIVED from total/offset — the wire has no such field', async () => {
+    const page = (files: unknown[], total: number, offset: number) =>
+      tools(() => okEnvelope({ path: 'my-docs', folders: [], files, total, limit: 2, offset }))
+    const more = (await runTool(page([ROW, PDF_ROW], 5, 0).library_list, {
+      path: 'my-docs',
+      limit: 2,
+      offset: 0
+    })) as Record<string, unknown>
+    expect(more.has_more).toBe(true)
+    const last = (await runTool(page([ROW], 5, 4).library_list, {
+      path: 'my-docs',
+      limit: 2,
+      offset: 4
+    })) as Record<string, unknown>
+    expect(last.has_more).toBe(false)
+  })
+
+  test('a mail-attachments projection row has no file_id and says how to read it instead', async () => {
+    const t = tools(() =>
+      okEnvelope({
+        path: 'mail-attachments/2026-08',
+        folders: [],
+        files: [
+          {
+            ...ROW,
+            id: null,
+            path: 'mail-attachments/2026-08/合同.pdf',
+            filename: '合同.pdf',
+            source: 'mail',
+            is_projection: true,
+            attachment_id: 907,
+            source_label: '服务协议续签 · vendor@x.test'
+          }
+        ],
+        total: 1,
+        limit: 50,
+        offset: 0
+      })
+    )
+    const out = (await runTool(t.library_list, { path: 'mail-attachments/2026-08' })) as {
+      files: Record<string, unknown>[]
+    }
+    expect(out.files[0].file_id).toBeNull()
+    expect(out.files[0].is_projection).toBe(true)
+    expect(out.files[0].attachment_id).toBe(907)
+    expect(out.files[0].source_label).toBe('服务协议续签 · vendor@x.test')
+    // 🔴 拿着 file_id:null 去 library_read 是死路；描述必须把改道写清楚。
+    const desc = String((t.library_list as Tool).description)
+    expect(desc).toContain('email_attachment_text')
   })
 
   test('a fence token inside a filename cannot close the fence family', async () => {
@@ -201,6 +259,8 @@ describe('library_read', () => {
           extractor: 'anydoc',
           truncated: true,
           source_hash: 'h2',
+          content_hash: 'h2',
+          stale: false,
           text_status: 'extracted'
         })
       }
@@ -211,6 +271,7 @@ describe('library_read', () => {
     expect(seen.some((u) => u.includes('/library/file/43/text'))).toBe(true)
     expect(out.extractor).toBe('anydoc')
     expect(out.truncated).toBe(true)
+    expect(out.stale).toBe(false)
     expect(out.mime).toBe('application/pdf')
     expect(String(out.content)).toContain('甲方')
     expect(out).not.toHaveProperty('bytes')
@@ -238,7 +299,28 @@ describe('library_read', () => {
     expect(seen.some((u) => u.includes('/library/file/43/text'))).toBe(true)
     expect(out.text_status).toBe('pending')
     expect(out.content).toBeNull()
+    // 类型面没有 hint 字段（router 才附送）—— 本地兜底文案必须顶上，不能返回 undefined。
     expect(String(out.hint)).not.toHaveLength(0)
+  })
+
+  test('a stale parsed version is flagged, not passed off as current', async () => {
+    const t = tools((url) =>
+      url.includes('/text')
+        ? okEnvelope({
+            file_id: 43,
+            markdown: '# 合同（旧版）',
+            extractor: 'anydoc',
+            truncated: false,
+            source_hash: 'old',
+            content_hash: 'h2',
+            stale: true,
+            text_status: 'extracted'
+          })
+        : okEnvelope({ ...PDF_ROW, content: null })
+    )
+    const out = (await runTool(t.library_read, { file_id: 43 })) as Record<string, unknown>
+    expect(out.stale).toBe(true)
+    expect(String(out.content)).toContain('旧版')
   })
 
   test('a missing file answers from metadata alone — no extraction round trip', async () => {
@@ -296,42 +378,58 @@ describe('library_search', () => {
       seen.push(url)
       return okEnvelope({
         query: '续签',
-        count: 1,
-        warning: null,
-        items: [{ ...PDF_ROW, snippet: '…自动<b>续签</b>一年…' }]
+        mode: 'trigram',
+        warnings: [],
+        hits: [{ ...PDF_ROW, snippet: '…自动[续签]一年…', rank: 1.5, match: 'text' }]
       })
     })
     const out = (await runTool(t.library_search, { q: '续签', limit: 5 })) as Record<string, unknown>
 
     expect(seen[0]).toContain('/library/search')
     expect(seen[0]).toContain('limit=5')
+    expect(out.count).toBe(1)
     const hit = (out.items as Record<string, unknown>[])[0]
     expect(hit).toMatchObject({
       file_id: 43,
-      path: 'mail-attachments/2026-08/合同.pdf',
+      path: 'my-docs/合同/合同.pdf',
       name: '合同.pdf',
       size: 1234,
       mime: 'application/pdf',
       updated_at: 1_760_000_001,
       source: 'mail',
-      content_hash: 'h2'
+      content_hash: 'h2',
+      match: 'text'
     })
     expect(String(hit.snippet)).toContain('UNTRUSTED_LIBRARY_FILE_START')
     expect(String(hit.snippet)).toContain('续签')
   })
 
-  test('a too-short query returns the server warning instead of silent zero hits', async () => {
+  test("reading the wire's OWN keys — items/warning would be a silent zero-hit", async () => {
+    // 服务端的键是 hits / warnings。喂一份「只有 items / warning」的旧形状进来必须命中为 0，
+    // 证明这道用例真的在盯键名（而不是恰好两种写法都能过）。
     const t = tools(() =>
-      okEnvelope({ query: '合', count: 0, warning: '查询过短（至少 2 个字）', items: [] })
+      okEnvelope({ query: '续签', mode: 'trigram', items: [{ ...PDF_ROW, snippet: 'x' }], warning: 'w' })
+    )
+    const out = (await runTool(t.library_search, { q: '续签' })) as Record<string, unknown>
+    expect(out.count).toBe(0)
+    expect(out.warnings).toEqual([])
+  })
+
+  test('a too-short query surfaces the whole warnings array, not a silent zero hit', async () => {
+    const t = tools(() =>
+      okEnvelope({ query: '合', mode: 'too_short', warnings: ['cjk_too_short:合'], hits: [] })
     )
     const out = (await runTool(t.library_search, { q: '合' })) as Record<string, unknown>
     expect(out.count).toBe(0)
-    expect(String(out.warning)).toContain('过短')
+    expect(out.warnings).toEqual(['cjk_too_short:合'])
   })
 
   test('description says plain keywords only and teaches NO field syntax', () => {
     const desc = String((tools(() => okEnvelope({})).library_search as Tool).description)
     expect(desc.toLowerCase()).toContain('no field syntax')
+    // `in:` 这类前缀不许出现，但 `warnings` / `match` 这两个返回体字段要教给模型。
+    expect(desc).toContain('warnings')
+    expect(desc).toContain('match')
     // 🔴 the email DSL vocabulary must never appear here — a model that copies `from:` / `in:`
     //    into q gets those tokens matched as literal text (zero hits, zero warnings).
     expect(desc).not.toMatch(/\b(from|to|in|subject|after|before|is|has|newer_than|filename):/)
