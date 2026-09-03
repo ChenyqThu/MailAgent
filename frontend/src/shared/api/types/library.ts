@@ -57,6 +57,13 @@ export interface LibraryFile {
   updated_at: number
 
   // ── 投影行（邮件附件）专属，`is_projection` 为 true 时才有 ────────────────────
+  //
+  // 🔴 投影行**没有 library id**，`/library/file/{id}` 那一整套对它全都走不通。三件事各有去处
+  // （2026-09-03 与 serve-api lane 确认；投影是零成本索引投影，P1 有意不给它第二条 library 读面）：
+  //   · 预览原件 → 既有附件面 `useMailApi().attachment` 的 `readDataUrl` / `localPath` /
+  //     `download`（底下就是 `GET /api/attachment/{id}/inline`，Range 206）；
+  //   · 解析文本 → `GET /api/attachment/{id}/text`（`email_attachment_text`，pending 时有同步抽取兜底）；
+  //   · 另存到资料库 → `POST /library/keep-attachment`，返回库内文件对象，此后就是普通 `id`。
   is_projection?: boolean
   attachment_id?: number
   /** 附件所属邮件的 `internal_id`（点「来源」跳回邮件用）。 */
@@ -186,10 +193,13 @@ export interface LibraryHistoryEntry {
   snapshot_bytes: number
 }
 
-/** `POST /library/rescan` 的回执。 */
+/** `POST /library/rescan` 的回执。🔴 键名是 `changed` 不是 `updated`。 */
 export interface LibraryRescanResult {
   scanned: number
   added: number
-  updated: number
+  /** 外部改动、对账时补记 `changed_by='external'` 的那一类。 */
+  changed: number
   missing: number
+  /** 顺带清掉的过期废纸篓条目数（`.trash` 30 天 sweep）。 */
+  swept: number
 }
