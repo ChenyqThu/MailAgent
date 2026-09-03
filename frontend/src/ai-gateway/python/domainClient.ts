@@ -2447,4 +2447,72 @@ export class MailAgentDomainClient {
       { query: { calendarName }, signal }
     )
   }
+
+  // ── 资料库（Library）read face — design §3. Rows come back snake_case (= DB columns); the
+  //    projection into the tool's return shape lives in tools/library.ts, not here. `maxBytes` is
+  //    the wire ceiling (READ_TOOL_MAX_BYTES); the 12000-char cap is applied tool-side. ──
+
+  /** library_list — GET /library/folder. Omitting `path` asks for the library root. */
+  libraryFolder(
+    opts: { path?: string; limit: number; offset: number },
+    signal?: AbortSignal
+  ): Promise<DomainLibraryFolder> {
+    return this._req<DomainLibraryFolder>('GET', '/library/folder', {
+      query: { path: opts.path, limit: opts.limit, offset: opts.offset },
+      signal
+    })
+  }
+
+  /** library_read step 1 — GET /library/file/{id}: metadata + `content_hash` +, for text files,
+   *  the body itself. */
+  libraryFile(
+    fileId: number,
+    maxBytes: number,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('GET', `/library/file/${fileId}`, {
+      query: { max_bytes: maxBytes },
+      signal
+    })
+  }
+
+  /** library_read step 2 — GET /library/file/{id}/text: the parsed markdown (`library_text`), the
+   *  same one the preview pane and FTS read. 🔴 This call is also what TRIGGERS extraction for a
+   *  `pending` file (design §3 抽取兜底), so it is never a skippable round trip. */
+  libraryFileText(
+    fileId: number,
+    maxBytes: number,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('GET', `/library/file/${fileId}/text`, {
+      query: { max_bytes: maxBytes },
+      signal
+    })
+  }
+
+  /** library_search — GET /library/search. Keyword only (no DSL); `warning` carries the
+   *  too-short-query notice so a 1-character query is not a silent zero-hit. */
+  librarySearch(
+    opts: { q: string; limit: number },
+    signal?: AbortSignal
+  ): Promise<DomainLibrarySearch> {
+    return this._req<DomainLibrarySearch>('GET', '/library/search', {
+      query: { q: opts.q, limit: opts.limit },
+      signal
+    })
+  }
+}
+
+export interface DomainLibraryFolder {
+  path?: unknown
+  folders?: unknown
+  files?: unknown
+  total?: unknown
+  has_more?: unknown
+}
+
+export interface DomainLibrarySearch {
+  query?: unknown
+  warning?: unknown
+  items?: unknown
 }

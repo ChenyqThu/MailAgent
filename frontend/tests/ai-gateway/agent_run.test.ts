@@ -1850,6 +1850,11 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
     'kos_list_pages',
     'kos_query',
     'kos_search',
+    // 资料库 P1-L7 —— 三个读工具同样由 class 推导进来（design §9.1：跟进 run 经工具免费拿到
+    // 资料库检索）。它们出现在这里就是那条推导还活着的证据。
+    'library_list',
+    'library_read',
+    'library_search',
     'matter_attention_list',
     'matter_find',
     'matter_get',
@@ -2771,6 +2776,11 @@ describe('contact_governance — the governance venue (WP7)', () => {
     'kos_list_pages',
     'kos_query',
     'kos_search',
+    // 资料库 P1-L7 —— 三个读工具同样由 class 推导进来（design §9.1：跟进 run 经工具免费拿到
+    // 资料库检索）。它们出现在这里就是那条推导还活着的证据。
+    'library_list',
+    'library_read',
+    'library_search',
     'matter_attention_list',
     'matter_find',
     'matter_get',

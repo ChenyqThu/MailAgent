@@ -1,0 +1,19 @@
+{
+  "id": "AGT-LIBRARY-001",
+  "category": "search_read",
+  "title": "资料库读文件：先定位再读解析版正文",
+  "surface": "general",
+  "user_prompt": "资料库里那份 Atlas 上线计划，写的上线窗口是哪天？",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["library_list", "library_search", "library_read"],
+  "must_use_tools": ["library_read"],
+  "forbidden_tools": ["library_write", "library_delete", "library_move", "library_append", "email_prepare_send", "email_send", "run_command"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.4, "evidence_grounding": 0.1, "uncertainty_honesty": 0.1, "tool_efficiency": 0.2, "ux_clarity": 0.2 },
+  "rubric_ref": "search_read.md",
+  "notes": "P1-L7 资料库 silent read lane：先定位到 file_id 再 library_read 精读，答案必须来自围栏里的正文而不是文件名猜测；零写工具 dispatch。"
+}

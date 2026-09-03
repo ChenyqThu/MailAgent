@@ -172,6 +172,13 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   contact_search: 'read',
   contact_get: 'read',
   contact_list_mails: 'read',
+  // 资料库 P1-L7 — the library read face. Class `read` is what keeps them out of every approval
+  // ladder (none touches a file) AND what will put them inside an unattended run once the P2
+  // capability card exists; the untrusted file text they return is fenced at the tool
+  // (LIBRARY_FILE), exactly like email_attachment_text.
+  library_list: 'read',
+  library_read: 'read',
+  library_search: 'read',
   email_get: 'read',
   email_body: 'read',
   email_list_thread: 'read',

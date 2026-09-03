@@ -197,6 +197,14 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'contact_refresh_profile',
   'contact_update_fields',
   'contact_set_manager',
+  // 资料库 P1-L7 —— 三个读工具。Python 无 library builtin skill，GATEWAY_SKILL_TOOLS 无映射，
+  // 永不 skill-gated；design §5.1 明写整族 CORE_UNGATED、注册条件只有 approvalGuard、无 flag。
+  // 🔴 这三个名字的 canonical 在 frontend/src/shared/libraryConstants.ts（跨 renderer / main /
+  // gateway 三处的零依赖叶子）；这里是本集合唯一允许的字面量抄写点 —— eval 的 catalog 名字
+  // 宇宙正是靠抽取本 Set 的字面量才看得见它们（library.ts 里是 import 而非字面量数组）。
+  'library_list',
+  'library_read',
+  'library_search',
   // task 08-27 P4a —— 快捷反馈的 agent 提交面。无 skill 归属（Python 无 feedback builtin
   // skill），永不 skill-gated；它的开关面是 outbound class 的场地地板（只在 manual_chat
   // 注册）+ 恒 HITL，不是 skill toggle。

@@ -45,6 +45,7 @@ import {
   createMatterRunTools,
   createMatterWriteTools
 } from './matters'
+import { createLibraryReadTools } from './library'
 import { createNotionAgentTools } from './notion_agent'
 import { createFeedbackTools, type FeedbackSubmitFn } from './feedback'
 import { createImageTools, type ImageGenToolDeps } from './image'
@@ -693,6 +694,14 @@ export function buildGatewayTools(
         contextMode
       })
     )
+  }
+  // 资料库 P1-L7 — the library read face (design §5.1). Three silent reads, so the guard is not a
+  // functional dependency but the family gate: it is what says "the tool面 is assembled", and P2's
+  // library writes join this same `if`. CORE_UNGATED (no skill ownership) so neither applySkillGating
+  // pass drops them; class `read` (policy.ts) so the last assembly step keeps them everywhere.
+  // No flag: 确定要做的功能不搞灰度开关 —— rollback is reverting the lane.
+  if (opts.approvalGuard) {
+    Object.assign(tools, createLibraryReadTools(opts.domain, collector))
   }
   // task 07-21 — notion-agent tool behind MAILAGENT_NOTION_AGENT_TOOL. One edit-tier write (恒 HITL,
   // class 'outbound') → needs the approval guard (all-or-nothing on flag + guard). Registered here

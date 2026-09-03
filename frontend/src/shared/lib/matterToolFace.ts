@@ -97,6 +97,14 @@ export const MATTER_TOOL_FACE_GROUPS: readonly MatterToolGroup[] = [
     skill: 'search',
     tools: ['email_search_fulltext', 'email_search_attachments']
   },
+  {
+    id: 'library',
+    tier: 'fixed',
+    // 资料库 P1-L7 —— 三个读工具。跟进 run 拿得到它们不是「顺手带上」而是 design §9.1 写死的
+    // （事项资料以 `library:{id}` 关联，run 要能读到那份正文），推导路径与 matter / contacts
+    // 两组相同：class `read` + CORE_UNGATED（无 skill 归属 ⇒ 本组不标 skill，永不被开关影响）。
+    tools: ['library_list', 'library_read', 'library_search']
+  },
   { id: 'calendar', tier: 'fixed', tools: ['calendar_events_list', 'calendar_event_get'] },
   {
     id: 'session',
