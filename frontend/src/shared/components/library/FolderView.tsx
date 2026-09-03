@@ -200,21 +200,38 @@ function TrashRow({
   const { t } = useTranslation()
   const days = trashDaysLeft(file)
   return (
-    <div className="flex items-center gap-3 border-b border-ink-border-soft px-4 py-2">
+    <div
+      data-testid="library-trash-row"
+      className="flex items-center gap-3 border-b border-ink-border-soft px-4 py-2"
+    >
       <div className="min-w-0 flex-1">
         <div className="truncate text-aux text-ink-fg">{file.filename}</div>
-        <div className="truncate font-mono text-micro text-ink-fg-3">
-          {t('library.trash.originalLocation', { path: file.path })}
+        {/* 🔴 「原位置」= `parent_path`（软删时服务端**有意保留**它供 restore），不是 `path`
+            —— 后者已经被搬成 `.trash/{id}/{filename}`，显示出来等于没说文件原来在哪。
+            行是 truncate 的，长路径靠 title 兜住。 */}
+        <div
+          title={file.parent_path}
+          data-trash-origin={file.parent_path}
+          className="truncate font-mono text-micro text-ink-fg-3"
+        >
+          {t('library.trash.originalLocation', { path: file.parent_path })}
         </div>
       </div>
       <Pill tone={days <= 5 ? 'warn' : 'ink'}>{t('library.trash.fileTrashedHint', { days })}</Pill>
-      <Button size="sm" variant="secondary" onClick={() => actions.restore(file)}>
+      <Button
+        size="sm"
+        variant="secondary"
+        data-testid="library-trash-restore"
+        onClick={() => actions.restore(file)}
+      >
         <RotateCcw size={13} aria-hidden />
         {t('library.trash.restoreAction')}
       </Button>
+      {/* F11：立即永久删除。二次确认在 `useLibraryFileActions` 的对话框里 —— 这里只开框。 */}
       <Button
         size="sm"
         variant="ghost"
+        data-testid="library-trash-purge"
         className="text-fail hover:bg-fail/10 hover:text-fail"
         onClick={() => actions.purge(file)}
       >
@@ -449,9 +466,18 @@ export function FolderView({
             </Notice>
           </div>
         ) : empty ? (
-          <div className="grid place-items-center gap-1 px-6 py-16 text-center">
-            <div className="text-aux text-ink-fg-1">{t('library.empty.folderTitle')}</div>
-            <div className="text-meta text-ink-fg-3">{t('library.empty.folderHint')}</div>
+          // 废纸篓的空态是它自己的一句：普通文件夹那句「把文件拖进来，或新建 markdown」
+          // 在这里是错的（废纸篓不能拖入、也不能新建）。
+          <div
+            data-testid={trash ? 'library-trash-empty' : undefined}
+            className="grid place-items-center gap-1 px-6 py-16 text-center"
+          >
+            <div className="text-aux text-ink-fg-1">
+              {t(trash ? 'library.trash.emptyTitle' : 'library.empty.folderTitle')}
+            </div>
+            <div className="text-meta text-ink-fg-3">
+              {t(trash ? 'library.trash.emptyHint' : 'library.empty.folderHint')}
+            </div>
           </div>
         ) : trash ? (
           <div>
