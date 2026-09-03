@@ -13,6 +13,7 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import type { AgentRunState, ReportAgentConfig } from '@shared/api/types'
+import type { AgentCallReference } from '@shared/agentCallReference'
 import { AgentAvatar } from '@shared/components/agents/AgentAvatar'
 import { requestOpenAgentSession } from '@shared/state/ai-chat-panel'
 import { projectAgentCallState, type AgentCallProjectedState } from '@shared/lib/agentCallState'
@@ -35,12 +36,6 @@ interface AgentCallArgs {
   calendar_event_ids?: string[]
   notion_refs?: Array<{ connector_id?: string; object_id?: string; object_type?: string }>
   report_ids?: string[]
-}
-
-interface AgentCallReference {
-  type: string
-  id: string | number
-  title?: string
 }
 
 interface AgentCallView {
