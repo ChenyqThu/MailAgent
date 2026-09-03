@@ -395,3 +395,15 @@ def test_load_encoder_defaults_to_cpu_only():
     from src.library import embed as E
 
     assert inspect.signature(E.load_encoder).parameters["use_coreml"].default is False
+
+
+def test_vector_floor_stays_below_a_literal_phrase_match():
+    """🔴 向量腿的地板是**噪声地板**，不是相关度阈值。
+
+    2026-09-03 用真权重实测：文档里**原样出现**的词组「续约条款」余弦只有 0.290，而旧值
+    0.3 恰好卡在它上面 —— 用户搜一句自己文档里的原话，向量腿一个结果都不给。地板必须留在
+    这条观测之下。（乱码 query 实测上限 0.232，所以 0.232 < 地板 < 0.290 是可用区间。）
+    """
+    from src.library.constants import VECTOR_MIN_SCORE
+
+    assert 0.232 < VECTOR_MIN_SCORE < 0.290
