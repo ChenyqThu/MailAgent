@@ -7549,7 +7549,7 @@
         "toWritable": "设为可写",
         "revealInFinder": "在访达中显示",
         "unmount": "卸载",
-        "unmountHint": "只删索引，磁盘上的文件一个都不动"
+        "unmountHint": "磁盘上的文件一个都不动；已有引用会灰显而不是失效，重新挂回同一目录会沿用原来的文件"
       }
     },
     "folder": {
@@ -7567,6 +7567,7 @@
       "sortDate": "按时间",
       "filterPlaceholder": "在当前文件夹中过滤",
       "searchLibraryPlaceholder": "搜索整个资料库",
+      "unknownDateGroup": "日期未知",
       "dropTarget": "复制到「{folder}」",
       "scanning": "正在建立索引 {done} / {total}"
     },

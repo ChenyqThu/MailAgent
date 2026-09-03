@@ -7549,7 +7549,7 @@
         "toWritable": "Set to writable",
         "revealInFinder": "Reveal in Finder",
         "unmount": "Unmount",
-        "unmountHint": "Only removes the index — nothing on disk is touched"
+        "unmountHint": "Nothing on disk is touched. Existing references gray out instead of breaking, and remounting the same folder picks up the same files"
       }
     },
     "folder": {
@@ -7567,6 +7567,7 @@
       "sortDate": "By date",
       "filterPlaceholder": "Filter in this folder",
       "searchLibraryPlaceholder": "Search the whole library",
+      "unknownDateGroup": "Unknown date",
       "dropTarget": "Copy to “{folder}”",
       "scanning": "Indexing {done} / {total}"
     },
