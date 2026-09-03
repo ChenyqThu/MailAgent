@@ -362,6 +362,25 @@ const reportDetailRoute = createRoute({
   path: '$reportId'
 })
 
+// /library — 资料库域（design §2.1）。唯一的 search 参数 `?file=` 是深链
+// （`components/library/deeplink.ts::libraryFileHref`）：进域 + 展开所在文件夹 + 选中文件，
+// 落地在 LibraryWorkspace。选中哪个文件夹不进 URL（是 state/library-tree 的域内记忆，
+// 与 `/sessions` 选中哪个会话同口径）。
+export interface LibrarySearch {
+  file?: number
+}
+
+const libraryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/library',
+  component: lazyRouteComponent(() => import('./components/layout/LibraryLayout'), 'LibraryLayout'),
+  validateSearch: (search: Record<string, unknown>): LibrarySearch => {
+    // 深链里 `file` 是字符串（history.push 的 query），点导轨进来时它压根不在。
+    const id = Number(search.file)
+    return Number.isInteger(id) && id > 0 ? { file: id } : {}
+  }
+})
+
 const mattersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/matters',
@@ -532,6 +551,7 @@ export const router = createRouter({
     mattersRoute,
     searchRoute,
     contactsRoute,
+    libraryRoute,
     connectorsRoute,
     adminRoute.addChildren([adminIndexRoute, adminLlmRoute, adminKanbanRoute, adminCalendarRoute]),
     settingsRoute
