@@ -91,6 +91,8 @@ class CreateTextRequest(BaseModel):
     filename: str
     content: str
     source: str = "user"
+    #: ``derived`` = 原文件 id（「派生自 X」回链，F2）；``chat`` = '{sessionId}:{uiMessageId}'（§1.4）。
+    source_ref: Optional[str] = None
     change_note: Optional[str] = None
     actor: Optional[ActorSpec] = None
 
@@ -348,8 +350,10 @@ def library_attachment_inline(request: Request, attachment_id: int, repo=Depends
 
 @router.post("/files")
 async def library_create_file(request: Request, service: LibraryService = Depends(get_library_service)):
-    """新建 / 上传。JSON ``{parent_path, filename, content, source?, change_note?, actor?}`` 写文本；
-    ``application/octet-stream`` + query ``parent_path, filename, source?`` 落二进制。已存在 → 409。"""
+    """新建 / 上传。JSON ``{parent_path, filename, content, source?, source_ref?, change_note?, actor?}``
+    写文本；``application/octet-stream`` + query ``parent_path, filename, source?, source_ref?`` 落二进制。
+    已存在 → 409。``source_ref``：``derived`` 存原文件 id（F2 回链），``chat`` 存
+    ``'{sessionId}:{uiMessageId}'``（§1.4）。"""
     content_type = request.headers.get("content-type", "")
     if content_type.startswith("application/json"):
         try:
@@ -359,19 +363,22 @@ async def library_create_file(request: Request, service: LibraryService = Depend
         body = _validate(CreateTextRequest, payload)
         data = body.content.encode("utf-8")
         parent, filename, source = body.parent_path, body.filename, body.source
+        source_ref = body.source_ref
         change_note, actor = body.change_note, _actor(body.actor)
     else:
         data = await request.body()
         parent = request.query_params.get("parent_path", "")
         filename = request.query_params.get("filename", "")
         source = request.query_params.get("source", "user")
+        source_ref = request.query_params.get("source_ref")
         change_note, actor = None, Actor()
         if not filename:
             raise APIError("E_INVALID_ARG", "query param `filename` is required for binary uploads", source=_SOURCE)
     _require_source(source)
     path = f"{parent}/{filename}" if parent else filename
     return await run_in_threadpool(
-        _run, request, service.create_file, path, data, actor=actor, source=source, change_note=change_note
+        _run, request, service.create_file, path, data,
+        actor=actor, source=source, source_ref=source_ref, change_note=change_note,
     )
 
 
