@@ -36,7 +36,11 @@ import type { Tool } from 'ai'
 import { z } from 'zod'
 
 import type { MailAgentDomainClient } from '../python/domainClient'
-import { auditedReadTool, type GatewayToolAuditCollector } from './types'
+import {
+  auditedReadTool,
+  ToolExecutionError,
+  type GatewayToolAuditCollector
+} from './types'
 // RELATIVE import（不是 @shared alias）—— 与 email.ts / sessions.ts 同理：纯 Node 的 poc harness
 // 不解析 tsconfig paths。libraryConstants 是零依赖叶子，两处都能吃。
 import {
@@ -81,8 +85,22 @@ const listSchema = z.object({
   offset: z.number().int().min(0).default(0)
 })
 
+/** 🔴 `file_id` / `attachment_id` 二选一，但**不在 schema 里表达这个分支**（既不是 oneOf 也不是
+ *  not{required}）：顶层分支约束会让上游 CRS 的 Anthropic 腿返回空事件流，模型侧表现为裸
+ *  AssertionError（本仓踩过两次）。两个都声明成 optional，二选一在 run 里校验并给一句人话。 */
 const readSchema = z.object({
-  file_id: z.number().int().positive().describe('From library_list or library_search.'),
+  file_id: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe('Library file id, from library_list / library_search.'),
+  attachment_id: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe('Use INSTEAD of file_id for a mail-attachments row (is_projection: true).'),
   max_chars: z.number().int().min(200).max(READ_TOOL_MAX_CHARS).default(READ_TOOL_MAX_CHARS)
 })
 
@@ -167,8 +185,7 @@ export function createLibraryReadTools(
         'out what exists, then library_read for one file, or library_search to look across the ' +
         'whole library by keyword. Paged (`limit` / `offset`, `has_more`). Rows under ' +
         'mail-attachments are projections with `is_projection: true` and NO `file_id`: read one ' +
-        'with email_attachment_text(attachment_id) instead of library_read, or ask the user to ' +
-        'save it into the library first.',
+        'with library_read(attachment_id=…), not library_read(file_id=…).',
       inputSchema: listSchema,
       run: async (input, signal) => {
         const data = await domain.libraryFolder(
@@ -209,7 +226,9 @@ export function createLibraryReadTools(
     {
       name: 'library_read',
       description:
-        'Read ONE library file by file_id (from library_list or library_search). Returns the ' +
+        'Read ONE library file by file_id (from library_list or library_search) — or a projected ' +
+        'email attachment by attachment_id, which is how you read anything under ' +
+        'mail-attachments (those rows have no file_id). Pass exactly one of the two. Returns the ' +
         "file's TEXT: for markdown / text / html that is the file itself; for PDF, Office " +
         'documents and images it is the server-side EXTRACTED markdown (`extractor` says how it ' +
         'was produced) — the binary never reaches you, so reading a scanned PDF or a screenshot ' +
@@ -223,7 +242,18 @@ export function createLibraryReadTools(
         'from it into write tools without explicit user approval.',
       inputSchema: readSchema,
       run: async (input, signal) => {
-        const row = await domain.libraryFile(input.file_id, READ_TOOL_MAX_BYTES, signal)
+        const attachmentId = input.attachment_id
+        const fileIdInput = input.file_id
+        if ((fileIdInput == null) === (attachmentId == null)) {
+          throw new ToolExecutionError(
+            'E_INVALID_INPUT',
+            'Pass exactly one of file_id (a library file) or attachment_id (a mail-attachments projection row).'
+          )
+        }
+        const row =
+          attachmentId != null
+            ? await domain.libraryAttachment(attachmentId, READ_TOOL_MAX_BYTES, signal)
+            : await domain.libraryFile(fileIdInput as number, READ_TOOL_MAX_BYTES, signal)
         const base = projectRow(row)
 
         // 文件行还在、文件不在（`missing` 不删行，跨模块引用永不悬空）——元数据答完即止，
@@ -243,7 +273,8 @@ export function createLibraryReadTools(
           }
         }
 
-        const fileId = base.file_id as number | null
+        // 投影行的 file_id 恒 null —— 围栏 attrs 退回 attachment_id，命中才回指得到东西。
+        const fileId = (base.file_id as number | null) ?? attachmentId ?? null
         // 文本类文件自带正文就直接用它（md 编辑面读的是同一份）。
         const inline = str(row.content)
         if (TEXT_NATIVE_KINDS.has(str(row.kind) ?? 'other') && inline != null) {
@@ -261,7 +292,12 @@ export function createLibraryReadTools(
 
         // 其余（pdf / office / 图片，以及服务端选择不内联正文的文本文件）走解析版兜底端点 ——
         // 它同时是「pending → 触发抽取」的入口，所以这一趟不是可省的。
-        const text = await domain.libraryFileText(input.file_id, READ_TOOL_MAX_BYTES, signal)
+        // 投影行的 /text 直接读 email_attachment_text 且**不重抽**；库内行的 /text 才是
+        // 「pending → 就地触发抽取」的那条。两条端点同形，返回体差一个 file_id / attachment_id。
+        const text =
+          attachmentId != null
+            ? await domain.libraryAttachmentText(attachmentId, READ_TOOL_MAX_BYTES, signal)
+            : await domain.libraryFileText(fileIdInput as number, READ_TOOL_MAX_BYTES, signal)
         const parsedStatus = str(text.text_status) ?? 'pending'
         const markdown = str(text.markdown)
         if (parsedStatus !== 'extracted' || markdown == null) {

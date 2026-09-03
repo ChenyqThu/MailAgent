@@ -15,6 +15,7 @@ import { GATEWAY_TOOL_CLASSES } from '../../../src/ai-gateway/tools/policy'
 import { CORE_UNGATED_GATEWAY_TOOLS } from '../../../src/ai-gateway/tools/skill_gating'
 import {
   GATEWAY_LIBRARY_READ_TOOL_NAMES,
+  GATEWAY_LIBRARY_WRITE_TOOL_NAMES,
   READ_TOOL_MAX_BYTES,
   READ_TOOL_MAX_CHARS
 } from '../../../src/shared/libraryConstants'
@@ -86,6 +87,11 @@ describe('library tools — registration surface', () => {
     expect(Object.keys(tools(() => okEnvelope({}))).sort()).toEqual(
       [...GATEWAY_LIBRARY_READ_TOOL_NAMES].sort()
     )
+    // P2-L1 — the writes live in their own factory (library_write.test.ts); the read factory
+    // must never grow one, or a headless belt that copies "the read factory" would carry a write.
+    for (const name of GATEWAY_LIBRARY_WRITE_TOOL_NAMES) {
+      expect(tools(() => okEnvelope({}))[name], `${name} leaked into the read factory`).toBeUndefined()
+    }
   })
 
   test('class read + CORE_UNGATED (no skill owns them, no flag gates them)', () => {
@@ -197,7 +203,7 @@ describe('library_list', () => {
     expect(out.files[0].source_label).toBe('服务协议续签 · vendor@x.test')
     // 🔴 拿着 file_id:null 去 library_read 是死路；描述必须把改道写清楚。
     const desc = String((t.library_list as Tool).description)
-    expect(desc).toContain('email_attachment_text')
+    expect(desc).toContain('attachment_id')
   })
 
   test('a fence token inside a filename cannot close the fence family', async () => {
@@ -360,6 +366,60 @@ describe('library_read', () => {
     const out = (await runTool(t.library_read, { file_id: 42 })) as { content: string }
     // exactly one real terminator: the one the fence itself wrote.
     expect(out.content.split('UNTRUSTED_LIBRARY_FILE_END')).toHaveLength(2)
+  })
+
+  test('a projection row is read through /library/attachment, fenced the same way', async () => {
+    const seen: string[] = []
+    const t = tools((url) => {
+      seen.push(url)
+      if (url.includes('/text')) {
+        return okEnvelope({
+          file_id: null,
+          attachment_id: 907,
+          markdown: '# 服务协议\n\n第 7 条…',
+          extractor: 'anydoc',
+          truncated: false,
+          source_hash: null,
+          content_hash: null,
+          stale: false,
+          text_status: 'extracted'
+        })
+      }
+      return okEnvelope({
+        ...PDF_ROW,
+        id: null,
+        path: 'mail-attachments/2026-08/服务协议.pdf',
+        filename: '服务协议.pdf',
+        is_projection: true,
+        attachment_id: 907,
+        content: null
+      })
+    })
+    const out = (await runTool(t.library_read, { attachment_id: 907 })) as Record<string, unknown>
+
+    // 🔴 /library/file/{id} 那一套对投影行走不通 —— 一次都不许打过去。
+    expect(seen.every((u) => u.includes('/library/attachment/907'))).toBe(true)
+    expect(out.file_id).toBeNull()
+    expect(out.is_projection).toBe(true)
+    expect(out.attachment_id).toBe(907)
+    // file_id 是 null，围栏 attrs 退回 attachment_id，否则命中回指不到任何东西。
+    expect(String(out.content)).toContain('file_id=907')
+    expect(String(out.content)).toContain('第 7 条')
+  })
+
+  test('exactly one of file_id / attachment_id — the branch is runtime-checked, not in the schema', async () => {
+    const t = tools(() => okEnvelope({ ...ROW, content: 'x' }))
+    await expect(runTool(t.library_read, {})).rejects.toThrow(/exactly one/i)
+    await expect(runTool(t.library_read, { file_id: 42, attachment_id: 907 })).rejects.toThrow(
+      /exactly one/i
+    )
+    // 🔴 schema 顶层不许出现分支约束（oneOf / not-required）—— 上游 CRS 的 Anthropic 腿会
+    //    对它返回空事件流，模型侧表现为裸 AssertionError。两个字段都必须是普通 optional。
+    const schema = (t.library_read as { inputSchema?: unknown }).inputSchema as {
+      safeParse: (v: unknown) => { success: boolean }
+    }
+    expect(schema.safeParse({}).success).toBe(true)
+    expect(schema.safeParse({ file_id: 42, attachment_id: 907 }).success).toBe(true)
   })
 
   test('audits under its own tool name', async () => {

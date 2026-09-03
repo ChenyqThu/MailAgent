@@ -2490,6 +2490,32 @@ export class MailAgentDomainClient {
     })
   }
 
+  /** library_read on a PROJECTED mail attachment — GET /library/attachment/{attachment_id}
+   *  and its /text sibling. Projections have no library id, so the `/file/{id}` family is
+   *  structurally uncallable for them; these two are the library-native read face (the /text one
+   *  reads `email_attachment_text` and does NOT re-extract). */
+  libraryAttachment(
+    attachmentId: number,
+    maxBytes: number,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('GET', `/library/attachment/${attachmentId}`, {
+      query: { max_bytes: maxBytes },
+      signal
+    })
+  }
+
+  libraryAttachmentText(
+    attachmentId: number,
+    maxBytes: number,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('GET', `/library/attachment/${attachmentId}/text`, {
+      query: { max_bytes: maxBytes },
+      signal
+    })
+  }
+
   /** library_search — GET /library/search. Keyword only (no DSL); `warning` carries the
    *  too-short-query notice so a 1-character query is not a silent zero-hit. */
   librarySearch(
