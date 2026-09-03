@@ -40,6 +40,8 @@ VOCABULARIES = (
     "MOUNT_DENY_DIRS",
     "GATEWAY_LIBRARY_READ_TOOL_NAMES",
     "GATEWAY_LIBRARY_WRITE_TOOL_NAMES",
+    "SEARCH_MODES",
+    "SEARCH_LANES",
 )
 
 #: 每组词表的成员数下限（canary：解析器退化成「抓到个空数组」时必须红，而不是平凡绿）。
@@ -56,6 +58,8 @@ VOCAB_FLOOR = {
     "MOUNT_DENY_DIRS": 1,
     "GATEWAY_LIBRARY_READ_TOOL_NAMES": 3,
     "GATEWAY_LIBRARY_WRITE_TOOL_NAMES": 4,
+    "SEARCH_MODES": 2,
+    "SEARCH_LANES": 3,
 }
 
 #: 数值上限（两侧同名；TS 侧允许 ``1024 * 1024`` 乘法表达式，Python 侧同样）。
@@ -71,6 +75,7 @@ INT_CONSTANTS = (
     "FOLDER_PAGE_SIZE",
     "MOUNT_MAX_FILES",
     "TREE_VIRTUALIZE_THRESHOLD",
+    "EMBED_MODEL_APPROX_BYTES",
 )
 
 #: 字符串常量（两侧同名）。

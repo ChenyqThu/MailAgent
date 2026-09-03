@@ -102,3 +102,25 @@ export const GATEWAY_LIBRARY_WRITE_TOOL_NAMES = [
   'library_move',
   'library_delete',
 ] as const
+
+/**
+ * 语义检索（P3-L1，design §9.1）。
+ *
+ * 🔴 没下载权重 = 纯 FTS，模型在不在就是开关（无 `MAILAGENT_*` 灰度变量）。
+ * 前端只消费这三项：设置页的下载文案用 `EMBED_MODEL_APPROX_BYTES`，
+ * 检索请求的 `mode` 用 `SEARCH_MODES`，命中行的 lane 徽标用 `SEARCH_LANES`。
+ */
+
+/** 权重体积 —— 「下载语义模型（614 MB）」这句文案的单源。 */
+export const EMBED_MODEL_APPROX_BYTES = 614 * 1024 * 1024
+
+/** 检索模式（`GET /library/search` 的 `mode` 入参）。 */
+export const SEARCH_MODES = ['fts', 'hybrid'] as const
+export type LibrarySearchMode = (typeof SEARCH_MODES)[number]
+
+/**
+ * 命中来自哪条 lane（响应体 `lane`）。
+ * 🔴 与 P1 的 `match: 'filename' | 'text'` **不是一回事**，两个字段各自独立。
+ */
+export const SEARCH_LANES = ['fts', 'vec', 'both'] as const
+export type LibrarySearchLane = (typeof SEARCH_LANES)[number]

@@ -7,6 +7,10 @@
 唯一键 ``(mount_id, rel_key)``。两张**外部内容** FTS5（porter / trigram）挂在 ``library_text`` 上，
 三个 trigger 维护 —— 外部内容表删旧行必须走 ``'delete'`` 特殊命令并给出旧值，否则旧 token 残留。
 
+``library_chunk``（v2）是语义 lane 的向量表：一行一块，``vec`` 是 int8 量化的 1024 维（1 KB），
+``source_hash`` 记的是嵌入当时 ``library_text.source_hash`` —— 「这个文件按当前正文嵌过了没有」就靠它，
+``model`` 进主键，换模型 = 旧向量被 ``WHERE model=?`` 自然排除，不需要迁移。
+
 连接姿态与 ``MatterRepository`` 同款：per-call 短连接、``BEGIN IMMEDIATE`` 事务、WAL 下并发安全。
 """
 
@@ -19,7 +23,7 @@ from typing import Iterator, Optional
 
 from src.library.constants import FILE_STATUS, KINDS, MOUNT_MODES, MOUNT_STATUS, SOURCES, TEXT_STATUS
 
-LIBRARY_SCHEMA_VERSION = 1
+LIBRARY_SCHEMA_VERSION = 2
 LIBRARY_DB_FILENAME = "library.db"
 LIBRARY_DIRNAME = "library"
 
@@ -86,6 +90,19 @@ CREATE TABLE IF NOT EXISTS library_text (
     truncated    INTEGER NOT NULL DEFAULT 0,
     extracted_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS library_chunk (
+    file_id     INTEGER NOT NULL,
+    model       TEXT NOT NULL,
+    idx         INTEGER NOT NULL,
+    char_start  INTEGER NOT NULL,
+    char_end    INTEGER NOT NULL,
+    text_hash   TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
+    vec         BLOB NOT NULL,
+    created_at  REAL NOT NULL,
+    PRIMARY KEY (file_id, model, idx)
+);
+CREATE INDEX IF NOT EXISTS idx_library_chunk_model ON library_chunk(model);
 CREATE VIRTUAL TABLE IF NOT EXISTS library_fts USING fts5(
     text_content, filename,
     content='library_text', content_rowid='file_id',

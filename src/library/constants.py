@@ -97,3 +97,51 @@ GATEWAY_LIBRARY_WRITE_TOOL_NAMES: Tuple[str, ...] = (
     "library_move",
     "library_delete",
 )
+
+# ── 语义检索（P3-L1，design §9.1）────────────────────────────────────────────
+# 权重不进 .app：设置页按需下载到 ``DATA_ROOT/library/embed_cache/``。
+# 🔴 **没下载 = 纯 FTS**，模型在不在就是开关 —— 不加 ``MAILAGENT_*`` 灰度变量。
+
+#: 权重仓库与文件（onnx-community 的 Qwen3-Embedding-0.6B ONNX 导出）。
+EMBED_MODEL_REPO: str = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
+EMBED_MODEL_FILE: str = "onnx/model_int8.onnx"
+#: ``library_chunk.model`` 的值。换模型 = 换这个 id，旧向量被查询的 ``WHERE model=?`` 自然排除。
+EMBED_MODEL_ID: str = "qwen3-embedding-0.6b-int8"
+#: 向量维度（int8 量化后 1 KB / 块）。
+EMBED_DIM: int = 1024
+#: 权重目录名（挂在库根下；库根的树 / 扫描只走 ROOT_WRITABLE_TOP，因此天然不被索引）。
+EMBED_CACHE_DIRNAME: str = "embed_cache"
+#: query 侧指令前缀的 task 描述（``Instruct: {task}\nQuery: {q}``）；**文档侧不带前缀**。
+EMBED_QUERY_TASK: str = "Given a search query, retrieve relevant documents from the personal library"
+#: 权重体积 —— 「下载语义模型（614 MB）」这句文案的单源。
+EMBED_MODEL_APPROX_BYTES: int = 614 * 1024 * 1024
+
+#: 切块：约 400 token 一块、15% 重叠（60 token）；比 CHUNK_MIN_TOKENS 还短的尾块并进上一块。
+CHUNK_TARGET_TOKENS: int = 400
+CHUNK_OVERLAP_TOKENS: int = 60
+CHUNK_MIN_TOKENS: int = 24
+#: 单文件块数上限（256 KB 抽取上限下的自然天花板，外加防病态文本）。
+CHUNK_MAX_PER_FILE: int = 400
+#: 模型上下文里给一块留的 token 上限（前缀 + 正文；超出由 tokenizer 截断）。
+CHUNK_MAX_MODEL_TOKENS: int = 640
+
+#: 混合检索：两条 lane 各取 top-N 再 RRF。
+SEARCH_LANE_TOP_K: int = 50
+#: 🔴 与 ``src/repository/email_repository.py::_RRF_K`` 同值（那边是 60.0 float）。
+SEARCH_RRF_K: int = 60
+#: 向量腿的相关度地板（余弦，向量已 L2 归一）。**没有地板 = 任何 query 都恒返 50 个文件**
+#: （点积排序没有「不相关」这个概念），搜 `asdfgh` 也会出一屏结果。
+#: 🔴 0.3 是**待 PoC 校准的起始值**，不是实测结论 —— 权重下载后按 §9.1 的 200 份样本重定。
+VECTOR_MIN_SCORE: float = 0.3
+#: 暴力点积的块数警戒线；超过它再考虑 faiss（design §9.1 「10 万块以内不上 faiss」）。
+VECTOR_BRUTE_FORCE_MAX_CHUNKS: int = 100000
+
+#: 后台低速队列：一批几个文件 + 批间隔秒数（低速 = 不跟前台抢 CPU）。
+EMBED_BATCH_FILES: int = 4
+EMBED_BATCH_SLEEP_SEC: int = 1
+
+#: 检索模式（``GET /library/search`` 的 ``mode`` 入参）。
+SEARCH_MODES: Tuple[str, ...] = ("fts", "hybrid")
+#: 命中来自哪条 lane（响应体 ``lane``）。
+#: 🔴 与 P1 的 ``match: 'filename'|'text'`` **不是一回事**，两个字段各自独立。
+SEARCH_LANES: Tuple[str, ...] = ("fts", "vec", "both")

@@ -20,7 +20,12 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from src.library.constants import FOLDER_PAGE_SIZE, HISTORY_MAX_PER_FILE, HISTORY_MAX_TOTAL_BYTES
+from src.library.constants import (
+    FOLDER_PAGE_SIZE,
+    HISTORY_MAX_PER_FILE,
+    HISTORY_MAX_TOTAL_BYTES,
+    SEARCH_RRF_K,
+)
 from src.library.db import LibraryDb
 from src.repository.email_repository import _is_cjk_char
 
@@ -53,6 +58,26 @@ class SearchResult:
     hits: list[dict[str, Any]]
     warnings: list[str] = field(default_factory=list)
     mode: str = "empty"  # empty | too_short | like | trigram | porter
+
+
+def rrf_fuse(lanes: dict[str, list[int]], *, limit: int, k: int = SEARCH_RRF_K) -> list[tuple[int, float, str]]:
+    """Reciprocal Rank Fusion：每条 lane 内按位次记 ``1/(k + pos)`` 求和。
+
+    🔴 ``k`` 与 ``src/repository/email_repository.py::_RRF_K`` 同值（那边是 ``60.0``）—— 邮件核与资料库
+    的融合口径不该分裂。返回 ``(file_id, score, lane)``，``lane`` 是 ``'fts' | 'vec' | 'both'``。
+    """
+    scores: dict[int, float] = {}
+    seen: dict[int, set[str]] = {}
+    for lane, ids in lanes.items():
+        for pos, fid in enumerate(ids):
+            scores[fid] = scores.get(fid, 0.0) + 1.0 / (k + pos)
+            seen.setdefault(fid, set()).add(lane)
+    order = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
+    out: list[tuple[int, float, str]] = []
+    for fid, score in order[:limit]:
+        marks = seen[fid]
+        out.append((fid, score, "both" if len(marks) > 1 else next(iter(marks))))
+    return out
 
 
 def _has_cjk(value: str) -> bool:
@@ -130,6 +155,7 @@ class LibraryRepository:
     def delete_file(self, conn: sqlite3.Connection, file_id: int) -> None:
         """永久删除（purge）：行 + 历史 + 文本（FTS 由 trigger 清）。"""
         conn.execute("DELETE FROM library_history WHERE file_id=?", (int(file_id),))
+        conn.execute("DELETE FROM library_chunk WHERE file_id=?", (int(file_id),))
         conn.execute("DELETE FROM library_text WHERE file_id=?", (int(file_id),))
         conn.execute("DELETE FROM library_file WHERE id=?", (int(file_id),))
 
@@ -376,6 +402,104 @@ class LibraryRepository:
             d["match"] = "filename" if "[" in snip_name else "text"
             hits.append(d)
         return SearchResult(hits, [], "trigram" if cjk else "porter")
+
+    # ── 向量（语义 lane，design §9.1）───────────────────────────────────────
+
+    def chunk_vectors_by_hash(self, conn: sqlite3.Connection, file_id: int, model: str) -> dict[str, bytes]:
+        """该文件已存的 ``{text_hash: vec}`` —— 重嵌时按 hash 复用，**只嵌变化的块**。"""
+        rows = conn.execute(
+            "SELECT text_hash, vec FROM library_chunk WHERE file_id=? AND model=?", (int(file_id), model)
+        ).fetchall()
+        return {str(r["text_hash"]): bytes(r["vec"]) for r in rows}
+
+    def replace_chunks(self, conn: sqlite3.Connection, file_id: int, model: str, rows: list[dict[str, Any]]) -> None:
+        """整文件替换（先删后插）。行的 idx / 偏移可能变而 hash 没变，写便宜、嵌昂贵，故不做行级 diff。"""
+        conn.execute("DELETE FROM library_chunk WHERE file_id=? AND model=?", (int(file_id), model))
+        if not rows:
+            return
+        conn.executemany(
+            "INSERT INTO library_chunk (file_id, model, idx, char_start, char_end, text_hash, source_hash, vec, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (int(file_id), model, int(r["idx"]), int(r["char_start"]), int(r["char_end"]),
+                 str(r["text_hash"]), str(r["source_hash"]), r["vec"], float(r["created_at"]))
+                for r in rows
+            ],
+        )
+
+    def delete_chunks(self, conn: sqlite3.Connection, *, file_id: Optional[int] = None, model: Optional[str] = None) -> int:
+        where, params = [], []
+        if file_id is not None:
+            where.append("file_id=?")
+            params.append(int(file_id))
+        if model is not None:
+            where.append("model=?")
+            params.append(model)
+        sql = "DELETE FROM library_chunk" + (" WHERE " + " AND ".join(where) if where else "")
+        return int(conn.execute(sql, params).rowcount or 0)
+
+    def count_chunks(self, conn: sqlite3.Connection, model: str) -> int:
+        return int(conn.execute("SELECT COUNT(*) FROM library_chunk WHERE model=?", (model,)).fetchone()[0])
+
+    def vector_signature(self, conn: sqlite3.Connection, model: str) -> tuple[int, int, float]:
+        """向量矩阵的廉价指纹（进程内缓存的失效判据）：行数 + 最大 rowid + 最新写入时刻。"""
+        row = conn.execute(
+            "SELECT COUNT(*), COALESCE(MAX(rowid), 0), COALESCE(MAX(created_at), 0.0) FROM library_chunk WHERE model=?",
+            (model,),
+        ).fetchone()
+        return int(row[0]), int(row[1]), float(row[2])
+
+    def load_vectors(self, conn: sqlite3.Connection, model: str) -> tuple[list[int], list[int], list[int], list[bytes]]:
+        """全量向量（只含 present 的文件）：``(file_ids, char_starts, char_ends, blobs)``，行序即矩阵行序。"""
+        rows = conn.execute(
+            "SELECT c.file_id, c.char_start, c.char_end, c.vec FROM library_chunk c"
+            " JOIN library_file f ON f.id = c.file_id"
+            " WHERE c.model=? AND f.status='present' ORDER BY c.file_id, c.idx",
+            (model,),
+        ).fetchall()
+        return (
+            [int(r["file_id"]) for r in rows],
+            [int(r["char_start"]) for r in rows],
+            [int(r["char_end"]) for r in rows],
+            [bytes(r["vec"]) for r in rows],
+        )
+
+    #: 「按当前正文嵌过了没有」——判据是 ``library_chunk.source_hash == library_text.source_hash``。
+    #: 🔴 空正文切不出块 ⇒ 永远留不下 chunk 行，不排除掉就会被每一轮重新领走（不是 sentinel 行的活）。
+    _NEEDS_EMBED_WHERE = (
+        " FROM library_text t JOIN library_file f ON f.id = t.file_id"
+        " WHERE f.status='present' AND NOT EXISTS ("
+        "   SELECT 1 FROM library_chunk c WHERE c.file_id = t.file_id AND c.model = ? AND c.source_hash = t.source_hash)"
+        " AND length(trim(t.text_content)) > 0"
+    )
+
+    def files_needing_embed(self, conn: sqlite3.Connection, model: str, *, limit: int) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            "SELECT t.file_id, t.filename, t.source_hash" + self._NEEDS_EMBED_WHERE + " ORDER BY t.file_id ASC LIMIT ?",
+            (model, int(limit)),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def count_files_needing_embed(self, conn: sqlite3.Connection, model: str) -> int:
+        return int(conn.execute("SELECT COUNT(*)" + self._NEEDS_EMBED_WHERE, (model,)).fetchone()[0])
+
+    def count_embeddable_files(self, conn: sqlite3.Connection) -> int:
+        """有抽取文本的 present 文件数（索引进度的分母）。"""
+        return int(
+            conn.execute(
+                "SELECT COUNT(*) FROM library_text t JOIN library_file f ON f.id = t.file_id"
+                " WHERE f.status='present' AND length(trim(t.text_content)) > 0"
+            ).fetchone()[0]
+        )
+
+    def text_snippet(self, conn: sqlite3.Connection, file_id: int, start: int, end: int, *, pad: int = 40) -> str:
+        """按块偏移从 ``library_text`` 取一段（向量命中的 snippet —— FTS 那条腿没跑，snippet() 用不了）。"""
+        row = conn.execute("SELECT text_content FROM library_text WHERE file_id=?", (int(file_id),)).fetchone()
+        if row is None:
+            return ""
+        text = str(row["text_content"] or "")
+        lo = max(0, int(start) - pad)
+        return " ".join(text[lo:int(end)].split())[:160]
 
     # ── 邮件附件投影（跨库读 sync_store.db）──────────────────────────────────
 
