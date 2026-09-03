@@ -187,6 +187,20 @@ class LibraryRepository:
         ).fetchall()
         return [dict(r) for r in rows], total
 
+    def recent_files(self, conn: sqlite3.Connection, *, limit: int = 20) -> list[dict[str, Any]]:
+        """跨全部根按 mtime 取最近改动的文件（不含 trashed / missing）。
+
+        「最近」必须跨根且不限层级——拿 ``list_folder`` 拼是错的，它按 ``parent_path`` 精确取
+        直接子项，既不跨根也不递归，结果只覆盖各根顶层，用户存在子目录里的文件不会出现，
+        看到的人会据此断定库里没有它。宁可少一个入口，也不给一张会撒谎的「最近」。
+        """
+        rows = conn.execute(
+            "SELECT * FROM library_file WHERE status = 'present' "
+            "ORDER BY COALESCE(mtime, updated_at) DESC LIMIT ?",
+            [max(1, int(limit))],
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def folder_counts(self, conn: sqlite3.Connection) -> dict[tuple[int, str], int]:
         """每个 (mount_id, parent_path) 的 present 文件数（树节点角标一次查全）。"""
         rows = conn.execute(

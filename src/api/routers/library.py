@@ -228,6 +228,17 @@ def library_files(
     return _run(request, service.files, file_ids)
 
 
+@router.get("/recent")
+def library_recent(
+    request: Request,
+    limit: int = Query(20, ge=1, le=100),
+    service: LibraryService = Depends(get_library_service),
+):
+    """跨根按 mtime 取最近改动的文件。资料选择器在用户还没输关键词时用它——
+    `/folder` 按 parent_path 精确取直接子项，拿它拼「最近」只覆盖各根顶层，会撒谎。"""
+    return _run(request, service.recent, limit=limit)
+
+
 @router.get("/search")
 def library_search(
     request: Request,

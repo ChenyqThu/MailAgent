@@ -380,3 +380,27 @@ def test_download_is_refused_when_the_model_is_already_there(lib, monkeypatch):
     monkeypatch.setattr(embed_mod, "model_present", lambda _root: True)
     c, _ = lib
     assert _err(c.post("/api/library/embed/download"))[:2] == (409, "E_INVALID_STATE")
+
+
+def test_recent_spans_roots_and_is_not_folder_scoped(lib):
+    """「最近」必须跨根、不限层级 —— 拿 /folder 拼只能覆盖各根顶层，会漏掉子目录里的文件。"""
+    c, svc = lib
+    _create(c, "my-docs", "top.md", "v")
+    _create(c, "my-docs/深/更深", "nested.md", "v")
+    _create(c, "agent-docs", "other.md", "v")
+    names = [f["filename"] for f in _data(c.get("/api/library/recent?limit=10"))["files"]]
+    assert "nested.md" in names, "子目录里的文件必须出现在最近里"
+    assert {"top.md", "other.md"} <= set(names), "必须跨根"
+    # 与 /folder 对照：它只给 my-docs 的直接子项，拿它拼「最近」就会漏掉 nested.md
+    folder_names = [f["filename"] for f in _data(c.get("/api/library/folder?path=my-docs"))["files"]]
+    assert "nested.md" not in folder_names
+
+
+def test_recent_orders_by_mtime_desc_and_excludes_trashed(lib):
+    c, svc = lib
+    old = _create(c, "my-docs", "old.md", "v")
+    new = _create(c, "my-docs", "new.md", "v")
+    svc.trash_file(new["id"])
+    names = [f["filename"] for f in _data(c.get("/api/library/recent?limit=10"))["files"]]
+    assert "new.md" not in names, "trashed 不进最近"
+    assert names[0] == "old.md"

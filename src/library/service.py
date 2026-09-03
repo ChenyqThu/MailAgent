@@ -635,6 +635,16 @@ class LibraryService:
                 "hint": _text_hint(status) if text is None else None,
             }
 
+    def recent(self, *, limit: int = 20) -> dict[str, Any]:
+        """跨根最近改动的文件，用于「还没输关键词」时的资料选择器。只读，命中形状与 search 同构。"""
+        conn = self.db.connect()
+        try:
+            rows = self.repo.recent_files(conn, limit=limit)
+            files = [self._file_dict(r, self._mount_by_id_lenient(conn, int(r["mount_id"]))) for r in rows]
+        finally:
+            conn.close()
+        return {"files": files, "limit": int(limit)}
+
     def search(self, query: str, *, limit: int = 20, mode: str = "hybrid") -> dict[str, Any]:
         """关键词腿（P1，四条 CJK 纪律）+ 语义腿（P3）经 RRF 混合。
 
