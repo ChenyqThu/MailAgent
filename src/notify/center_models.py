@@ -38,6 +38,23 @@ NOTIFICATION_STATE_VALUES: Tuple[str, ...] = (
 #: matter 信源接入时两侧值可直接透传, 无需映射表。
 NOTIFICATION_SEVERITY_VALUES: Tuple[str, ...] = ("info", "warn", "critical")
 
+#: `payload_json.link.type`（deep-link 判别 union, TS 侧单源在
+#: `frontend/src/shared/components/notifications/navigation.ts::NotificationLink`）里
+#: **Python 侧会构造**的判别值。只收这个子集 —— `group` / `thread` / `updater_restart`
+#: 三型恒在 Electron main（`frontend/src/electron/main/notification_fanout.ts` /
+#: `handlers/updater.ts`）单侧构造 + 同进程解析, 不跨 Python/TS 边界, 没有可漂移的手抄
+#: 副本, 不进本表（TS 镜像因此也只手抄这六个, 见 notifications.ts 同名常量头注）。
+#: 09-03（library-p2-write-and-links）新增 `library`——`src/notify/library_signals.py`
+#: 是目前唯一的构造点。
+NOTIFICATION_LINK_TYPE_VALUES: Tuple[str, ...] = (
+    "session",
+    "route",
+    "report",
+    "contact_queue",
+    "matter",
+    "library",
+)
+
 #: 计次更新时 severity **只升不降** 的比较基准 (design §3.2 规则 2;
 #: 形状照抄 src/matters/attention.py:30 的同名常量)。
 _SEVERITY_RANK: Dict[str, int] = {"info": 0, "warn": 1, "critical": 2}

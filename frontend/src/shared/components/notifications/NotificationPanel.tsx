@@ -11,7 +11,7 @@
 // `navigation.ts` 单源，这里只负责「解析结果 → 落地动作」的那一跳）。
 
 import { useMemo, useRef, useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
+import { useNavigate, useRouter } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import {
   AlertTriangle,
@@ -38,6 +38,7 @@ import {
   navigateToGroupThread
 } from '@shared/components/agents/groups/navigation'
 import { useContactNavigation } from '@shared/components/contacts/navigation'
+import { navigateToLibraryFile } from '@shared/components/library/deeplink'
 import { useMatterNavigation } from '@shared/components/matters/navigation'
 
 import {
@@ -302,6 +303,10 @@ function NotificationRow({
 export function NotificationPanel({ onClose }: { onClose(): void }): React.ReactElement {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  // `library` 型的落地借道 `router.history.push`（不是 `navigate({ to: '/library' })`）——
+  // 该路由由另一批注册，注册前 `to` 字面量过不了 typecheck；history 是路由器的公开面，
+  // push 之后照常走匹配（见 `library/deeplink.ts` 头注）。
+  const router = useRouter()
   const api = useMailApi()
   const [tab, setTab] = useState<NotificationTabId>('all')
   const [menuOpenId, setMenuOpenId] = useState<number | null>(null)
@@ -386,6 +391,11 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
       case 'updater_restart':
         // 现成守卫：`updater.ts` 在 state !== 'downloaded' 时直接 no-op，不会误退出。
         void api.updater.quitAndInstall()
+        return
+      case 'library':
+        // `/library` 页读 URL 的 `file` 参数后自行展开所在文件夹 + 选中 + missing/trashed
+        // 时 toast（design §9.5），这里只负责把 URL 换过去。
+        navigateToLibraryFile(router, link.fileId)
         return
       case 'route':
         // 落地 switch 单源在 ./navigation（与系统通知点击共用；含 `/settings` case 与

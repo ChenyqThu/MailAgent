@@ -196,6 +196,18 @@ evaluate/commit 代码一行未动。两处入口 guard 从「无 alerter 直接
 `MAILAGENT_ASYNC_JOBS_ENABLED` 已随本专项翻默认 `true`（结束 C1 灰度，2026-08），维护族 job
 挂点在默认安装下即可触发；CLI 直跑的长任务不经 `JobWorker`，不产生这类通知。
 
+### 09-03（library-p2-write-and-links，第一条跨 M1-M3 专项的新信源）
+
+| 信源 | 挂点 | category | severity | dedupe_key |
+|---|---|---|---|---|
+| 资料库文件无人值守写入 | `src/notify/library_signals.py::notify_library_file_written`——agent 无人值守（cron_headless/untrusted_trigger）写完 `agent-docs/` 后调用一次；交互式 manual chat 写入不发（用户本来就盯着屏幕）。调用方须在写事务 **commit 之后**调用（同事务内调用会与 `NotifyCenter` 的 `BEGIN IMMEDIATE` 死锁，同 §9 决策①） | results | info | `library_file:{file_id}`（同文件反复写聚合计次） |
+
+`payload.link` 形状 `{"type": "library", "fileId": file_id}` → deep-link `library` 型（§7）。
+`link.type` 的 Python 构造子集单独建了一道跨语言闸：`center_models.py::NOTIFICATION_LINK_TYPE_VALUES`
+↔ `notifications.ts` 同名常量（`tests/config/test_notification_enum_parity.py` 的 `PAIRS`），
+只收 Python 会构造的六型（`group`/`thread`/`updater_restart` 三型恒在 Electron main 单侧构造+
+解析，不跨语言边界，两侧头注写明为何不进这张表）。
+
 ## 7. 前端（`frontend/src/shared/components/notifications/`）
 
 - **铃铛** `NotificationBellBadge.tsx`：M3-C5 起是 TitleBar 右簇**唯一**的告警/待办
@@ -247,6 +259,13 @@ evaluate/commit 代码一行未动。两处入口 guard 从「无 alerter 直接
   `requestOpenAgentSession` + `/sessions`（AI Chat 域）。🔴 headless run 的会话
   （`origin='agent'`）不在 AI Chat 域左列的列表口径里，只按 sessionId 打开会得到一个左侧历史列
   不出来的详情 —— 这是 owner dogfood 反馈的原症状。
+- **`library` 型（09-03，第 9 型；上面「支持六型」是 M2 批当时的计数，此后 `group`/
+  `thread`/`library` 陆续加入未回填）**：`{type:'library', fileId}` 解析 + 落地都已接线
+  （跨语言闸见 §6 09-03 小节）。落地借道 `library/deeplink.ts::navigateToLibraryFile`——
+  `router.history.push('/library?file={id}')` 而不是 `navigate({ to: '/library' })`，
+  因为 `/library` 路由由另一批单独注册、注册前 `to` 字面量过不了 typecheck，history 是
+  路由器的公开面，push 之后照常走匹配。design §9.5 的「展开所在文件夹 + 选中文件 +
+  missing/trashed 时 toast」由 `/library` 页读 `file` 搜索参数后自行处理，不在这里做。
 - 失效出口：`notificationMutation.ts::refreshNotifications`，query key 树
   `qk.notifications.{all,list,unreadCount}`（`queryKeys.ts`）——通知相关新顶层 key 一律加进
   这一个文件，不在调用点各写一份 `invalidateQueries`。
@@ -351,7 +370,8 @@ design.md 规划的 M1/M2/M3 三个分期均已完成或裁决（M3 六个 commi
   `tests/utils/test_supervise.py`、`tests/im/test_worker.py`、
   `tests/mail/test_davmail_watchdog.py`、`tests/notify/test_service_alert_checks.py`、
   `tests/mail/test_project_progress_hook.py`、`tests/reports/test_reports.py`、
-  `tests/contacts/test_governance.py`（含死锁回归用例）、`tests/kos/test_ingest_reliability.py`。
+  `tests/contacts/test_governance.py`（含死锁回归用例）、`tests/kos/test_ingest_reliability.py`；
+  09-03 新增 `tests/notify/test_library_signals.py`（含同款死锁回归用例）。
 - `frontend/tests/main/notification_fanout.test.ts`——macOS fanout（水位/去重/档位）；
   `frontend/tests/shared/NotificationPanel.test.tsx` / `notificationNavigation.test.ts` /
   `notificationModel.test.ts` / `notificationsLocaleParity.test.ts`——面板交互与六型

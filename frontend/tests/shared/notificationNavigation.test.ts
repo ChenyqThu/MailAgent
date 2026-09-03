@@ -102,6 +102,15 @@ describe('resolveNotificationLink — 真实信源形状', () => {
       type: 'updater_restart'
     })
   })
+
+  // 09-03（library-p2-write-and-links）：agent 无人值守写完 `agent-docs/` 后
+  // `notify_library_file_written` 发的 link（`src/notify/library_signals.py`）。
+  it('资料库文件写入：library 型带 fileId', () => {
+    expect(resolveNotificationLink({ link: { type: 'library', fileId: 12 } })).toEqual({
+      type: 'library',
+      fileId: 12
+    })
+  })
 })
 
 describe('resolveNotificationLink — 拒绝的形状（一律 null = 只标已读不跳转）', () => {
@@ -127,7 +136,12 @@ describe('resolveNotificationLink — 拒绝的形状（一律 null = 只标已�
     ],
     ['reportId 是空串', { link: { type: 'report', reportId: '' } }],
     ['matter 缺 publicId', { link: { type: 'matter' } }],
-    ['matter 的 publicId 是空串', { link: { type: 'matter', publicId: '' } }]
+    ['matter 的 publicId 是空串', { link: { type: 'matter', publicId: '' } }],
+    ['library 缺 fileId', { link: { type: 'library' } }],
+    ['library 的 fileId 是字符串', { link: { type: 'library', fileId: '12' } }],
+    ['library 的 fileId 为 0', { link: { type: 'library', fileId: 0 } }],
+    ['library 的 fileId 为负', { link: { type: 'library', fileId: -1 } }],
+    ['library 的 fileId 非整数', { link: { type: 'library', fileId: 1.5 } }]
   ])('%s → null', (_label, payload) => {
     expect(resolveNotificationLink(payload as Record<string, unknown> | null)).toBeNull()
   })
