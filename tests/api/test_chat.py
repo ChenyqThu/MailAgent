@@ -252,6 +252,44 @@ def test_list_all_sessions_projects_matter_identity(
     assert by_id[SESSION_ID]["matter_public_id"] is None
 
 
+def test_list_all_sessions_by_anchor_type_only_returns_matter_rows(
+    chat_client: TestClient, ai_chat_db: Path
+) -> None:
+    """09-02 misc05 —— ``?anchorType=matter`` 只回事项锚定的会话（过滤在 SQL）。
+
+    团队页「事项跟进」成员的会话 lane 靠这条。它以前拉 origin='interactive' 全量再前端筛，
+    事项会话一多就被那 300 条上限挤掉 —— lane 少一半却仍是 200。
+    """
+    now = int(time.time() * 1000)
+    conn = sqlite3.connect(str(ai_chat_db))
+    conn.execute(
+        "INSERT INTO ai_chat_sessions (id, email_id, anchor_type, anchor_id, backend_kind, "
+        "created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+        (778, None, "matter", 4242, "ai-sdk", now, now),
+    )
+    conn.execute(
+        "INSERT INTO ai_chat_messages (session_id, role, content, status, created_at, "
+        "updated_at) VALUES (?,?,?,?,?,?)",
+        (778, "user", "这件事到哪了?", "complete", now, now),
+    )
+    conn.commit()
+    conn.close()
+
+    r = chat_client.get("/api/chat/sessions/all", params={"anchorType": "matter"})
+    assert r.status_code == 200
+    assert [row["id"] for row in r.json()["data"]] == [778]
+    # 不传就是不过滤：那封邮件的会话仍在（其余读路径字节级不变）。
+    ids = [row["id"] for row in chat_client.get("/api/chat/sessions/all").json()["data"]]
+    assert SESSION_ID in ids and 778 in ids
+
+
+def test_list_all_sessions_rejects_unknown_anchor_type(chat_client: TestClient) -> None:
+    """值域暂只有 'matter'：其余值由 Literal 拦下（同 ``origin`` 的失败形状）。"""
+    r = chat_client.get("/api/chat/sessions/all", params={"anchorType": "general"})
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
 def _seed_item_sessions(ai_chat_db: Path) -> None:
     """一条行动项（item_id=88）名下两场会话 + 一场属于别的行动项的会话。
 

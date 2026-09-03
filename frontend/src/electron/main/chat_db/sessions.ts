@@ -471,6 +471,10 @@ export interface ListAllSessionsOptions {
   limit?: number
   includeArchived?: boolean
   origin?: ChatSessionOriginFilter
+  /** 09-02 misc05 — 按 anchor 归属取数（团队页「事项跟进」成员的会话 lane）。值域暂只有
+   *  'matter'（serve-api 的 Literal 同样只收它 —— 在 TS 里放宽 = 到 Python 就 422）。
+   *  与 listSessionsForMatter 分开：那个是点名一件事，这个是全部事项会话。 */
+  anchorType?: 'matter'
 }
 
 export function listAllSessions(options: ListAllSessionsOptions = {}): ChatSessionSummary[] {
@@ -502,6 +506,10 @@ export function listAllSessions(options: ListAllSessionsOptions = {}): ChatSessi
             : origin === 'all'
               ? '1 = 1'
               : "COALESCE(s.origin, 'interactive') NOT IN ('agent', 'team', 'group')"
+  // 09-02 misc05 — anchor 归属过滤（可选）。🔴 子句与 Python 镜像 src/chat/db.py
+  // ::list_all_sessions 逐字对齐（闸 test_chat_type_mirror_parity.py
+  // ::test_session_anchor_filter_mirror_parity）。
+  const anchorClause = options.anchorType ? ' AND s.anchor_type = ?' : ''
   // T3 (v32) — 群行的派生列「底下有没有未读话题」。话题回复只 bump 话题行的 updated_at，父群行
   // 一动不动 —— 不派生这一列，群列表 / rail / peek 就永远不会因为话题里的回复而亮。口径与群行
   // 自己的未读一致（`last_read_at IS NOT NULL` = 从没打开过不算未读）。只在群清单这一支算：
@@ -530,12 +538,12 @@ export function listAllSessions(options: ListAllSessionsOptions = {}): ChatSessi
          (SELECT COUNT(*) FROM ai_chat_messages m WHERE m.session_id = s.id) AS message_count${threadUnreadCol}
        FROM ai_chat_sessions s
        WHERE ${includeArchived ? '1 = 1' : 's.archived = 0'}
-         AND ${originClause}
+         AND ${originClause}${anchorClause}
          AND ${origin === 'group' ? '1 = 1' : 'EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)'}
        ORDER BY s.updated_at DESC
        LIMIT ?`
     )
-    .all(limit) as ChatSessionSummary[]
+    .all(...(options.anchorType ? [options.anchorType, limit] : [limit])) as ChatSessionSummary[]
   // 🔴 SQLite 的 EXISTS 给的是 0/1，读侧判据是 `has_unread_threads === true`（isGroupRowUnread）
   // —— 不折成真 boolean，拿到的就是个 1，群行永远不亮而且没人会报错。
   if (!threadUnreadCol) return rows

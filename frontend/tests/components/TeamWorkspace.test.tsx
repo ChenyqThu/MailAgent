@@ -291,12 +291,15 @@ describe('清单与分组', () => {
 
 // 09-02 misc05 —「事项跟进」：合成成员（无 report_agent 行），会话按 anchor 归属。
 describe('事项跟进成员', () => {
-  /** 该成员的会话源是 origin='interactive' 全量（服务端无 anchorType 过滤参数）——
-   *  桩里连同别人的会话一起返回，过滤对不对才测得出来。 */
+  /** 桩即服务端语义：`anchorType` 由 serve-api 过滤。读侧漏传这个参数 → 这里回全量，
+   *  下面「别人的历史不串进来」当场红。 */
   function setInteractiveSessions(list: ChatSessionListItem[]): void {
-    mockListAllSessions.mockImplementation((opts?: { origin?: string }) =>
-      Promise.resolve(opts?.origin === 'interactive' ? list : [])
-    )
+    mockListAllSessions.mockImplementation((opts?: { origin?: string; anchorType?: string }) => {
+      if (opts?.origin !== 'interactive') return Promise.resolve([])
+      return Promise.resolve(
+        opts.anchorType ? list.filter((row) => row.anchor_type === opts.anchorType) : list
+      )
+    })
   }
 
   test('记录列只列 anchor_type=matter 的会话，别人的历史不串进来', async () => {
@@ -326,6 +329,11 @@ describe('事项跟进成员', () => {
       expect(container.querySelector('[data-record-row="session:501"]')).toBeTruthy()
     )
     expect(container.querySelector('[data-record-row="session:502"]')).toBeNull()
+    // 过滤在服务端：请求必须带 anchorType（拉全量再前端筛会被那 300 条上限挤掉）。
+    expect(mockListAllSessions).toHaveBeenCalledWith({
+      origin: 'interactive',
+      anchorType: 'matter'
+    })
     expect(container.querySelector('[data-record-row="session:501"]')?.textContent).toContain(
       '续签合同'
     )

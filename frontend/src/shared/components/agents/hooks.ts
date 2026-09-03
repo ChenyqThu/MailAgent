@@ -537,10 +537,8 @@ export function useAgentOriginSessions(enabled: boolean): {
 
 /** 09-02 misc05 团队页 —「事项跟进」成员的记录列会话源：`anchor_type='matter'` 的**交互**会话。
  *
- *  🔴 过滤在前端：serve-api 的 `/chat/sessions/all` 只有点名单件事的 `matterId`，没有
- *  `anchorType` 过滤参数（加它要动 `src/chat/db.py` 的 list_all_sessions + 路由 Literal，
- *  不在本批半径内）。行为与团队页其余成员「拉全量 + per-member 过滤」同构；代价是共享
- *  那 300 条的上限。
+ *  🔴 过滤在服务端（`anchorType='matter'`）：拉全量再前端筛会让事项会话多起来时被那 300 条
+ *  上限挤掉 —— 列表少一半却仍是 200。
  *  🔴 只拉 `origin='interactive'`：事项域的 headless run 会话**同样**锚在 matter 上
  *  （gateway `createAgentSession` 的 `anchor:{type:'matter'}`），但它们有好几种 kind ——
  *  跟进 / 创建带调研 / 行动项派发 —— 会话行上分不出来，一并塞进「事项跟进」就是张冠李戴。
@@ -552,10 +550,7 @@ export function useMatterAnchoredSessions(enabled: boolean): {
   const api = useMailApi()
   const q = useQuery({
     queryKey: qk.chat.matterAnchoredSessions(),
-    queryFn: async () => {
-      const rows = await api.chat.listAllSessions({ origin: 'interactive' })
-      return rows.filter((row) => row.anchor_type === 'matter')
-    },
+    queryFn: () => api.chat.listAllSessions({ origin: 'interactive', anchorType: 'matter' }),
     enabled,
     staleTime: 10_000
   })

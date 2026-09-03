@@ -245,13 +245,18 @@ async def list_all_sessions(
     starred: Optional[bool] = Query(None),
     matter_id: Optional[int] = Query(None, alias="matterId", ge=1),
     item_id: Optional[int] = Query(None, alias="itemId", ge=1),
+    anchor_type: Optional[Literal["matter"]] = Query(None, alias="anchorType"),
     limit: int = Query(300, ge=1, le=300),
 ):
     """跨邮件 session 历史（含 first_user_message 预览 + message_count + join email
     subject/sender）。镜像 chat:listAllSessions → ChatSessionListItem[]。
     include_archived=true 时含归档会话（用于归档分组视图）。
 
-    ``itemId``（L4 批次3，ai_chat.db v28）= 一条行动项名下的全部会话（执行历史反查）。"""
+    ``itemId``（L4 批次3，ai_chat.db v28）= 一条行动项名下的全部会话（执行历史反查）。
+
+    ``anchorType``（09-02 misc05）= 按 anchor 归属取数（团队页「事项跟进」成员的会话 lane）。
+    值域暂只有 ``'matter'`` —— 非法值由 ``Literal`` 拦成 E_INVALID_ARG（同 ``origin``），
+    与点名单件事的 ``matterId`` 分开（后者是一件事，这里是全部事项会话）。"""
     # 🔴 ``origin`` 的缺省按查询对象分流，而不是恒 'interactive'：行动项要看的**正是** headless
     # 执行 run（``origin='agent'``），沿用旧缺省会把它们全过滤掉 —— 端点 200、列表恒空，
     # 「查不到」与「没有」又混成一个值。缺省只在**调用方没传**时生效（其余查询字节级不变；
@@ -263,6 +268,7 @@ async def list_all_sessions(
         trigger_id=trigger_id, trigger_kind=trigger_kind,
         created_after=created_after, created_before=created_before,
         archived=archived, starred=starred, matter_id=matter_id, item_id=item_id,
+        anchor_type=anchor_type,
     )
     _project_session_runs(summaries, get_settings().sync_store_db_path)
     # codex review NIT — general sessions have email_id=None; exclude them so the

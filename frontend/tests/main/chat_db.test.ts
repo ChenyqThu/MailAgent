@@ -2219,6 +2219,30 @@ describe('listAllSessions — global cross-email history', () => {
     )
   })
 
+  test('anchorType 只回 anchor_type=matter 的行（过滤在 SQL，不靠调用方筛）', () => {
+    const matterSession = createNewSession({
+      anchorType: 'matter',
+      matterId: 7,
+      backendKind: 'ai-sdk'
+    })
+    appendMessage({
+      sessionId: matterSession.id,
+      role: 'user',
+      content: '这件事到哪了',
+      status: 'complete'
+    })
+    const general = createNewSession({ anchorType: 'general', backendKind: 'ai-sdk' })
+    appendMessage({ sessionId: general.id, role: 'user', content: '随便聊聊', status: 'complete' })
+
+    expect(listAllSessions({ anchorType: 'matter' }).map((row) => row.id)).toEqual([
+      matterSession.id
+    ])
+    // 不传就是不过滤（其余读路径字节级不变）。
+    expect(listAllSessions().map((row) => row.id)).toEqual(
+      expect.arrayContaining([matterSession.id, general.id])
+    )
+  })
+
   test('pin and star persist independently without bumping updated_at', () => {
     const session = createNewSession({ anchorType: 'general', backendKind: 'ai-sdk' })
     const before = getSession(session.id)!.updated_at

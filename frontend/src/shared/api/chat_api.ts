@@ -213,7 +213,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
           query: {
             ...(includeArchived ? { include_archived: 'true' } : {}),
             ...(options.origin !== undefined ? { origin: options.origin } : {}),
-            ...(options.itemId !== undefined ? { itemId: options.itemId } : {})
+            ...(options.itemId !== undefined ? { itemId: options.itemId } : {}),
+            ...(options.anchorType !== undefined ? { anchorType: options.anchorType } : {})
           }
         })
       } catch {

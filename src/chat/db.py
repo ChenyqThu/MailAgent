@@ -421,6 +421,7 @@ class ChatDb:
         starred: Optional[bool] = None,
         matter_id: Optional[int] = None,
         item_id: Optional[int] = None,
+        anchor_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """跨邮件 session 历史（含 first_user_message 预览 + message_count + last_message_*
         五列投影；除 origin='group' 外排除无消息 session）。镜像 listAllSessions →
@@ -509,6 +510,17 @@ class ChatDb:
                 return []
             clauses.append("s.item_id = ?")
             params.append(item_id)
+        if anchor_type is not None:
+            # 09-02 misc05 —— 按 anchor 归属取数（团队页「事项跟进」成员的会话 lane 传
+            # 'matter'）。以前那条 lane 是前端拉全量再筛，事项会话一多就被 300 条上限挤掉。
+            # 与 matter_id 分开：这里要的是**全部**事项会话，不是点名某一件事。
+            # 旧库（pre-v7，无 anchor_type 列）返回 [] 而不是让 SQL 报错吞成整表。
+            # 🔴 子句与 TS 镜像 chat_db/sessions.ts::listAllSessions 逐字对齐（闸
+            # test_chat_type_mirror_parity.py::test_session_anchor_filter_mirror_parity）。
+            if not self._has_column("ai_chat_sessions", "anchor_type"):
+                return []
+            clauses.append("s.anchor_type = ?")
+            params.append(anchor_type)
         if origin != "group":
             # 🔴 'group' 行豁免这一条：群是**先建后说话**的（建群对话框一次填齐，第一条消息可能
             # 几分钟后才发）。要求「有消息才可见」会让刚建的群在列表里不存在，renderer 只能靠

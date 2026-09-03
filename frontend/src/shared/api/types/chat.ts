@@ -370,6 +370,10 @@ export interface ListAllSessionsOptions {
   // 🔴 与 origin 联动：不传 origin 时服务端对 itemId 查询的缺省是 'all'，因为行动项要看的
   // 正是 headless 执行 run（origin='agent'）；旧缺省 'interactive' 会把它们全过滤掉。
   itemId?: number
+  // 09-02 misc05 — 按 anchor 归属取数（团队页「事项跟进」成员的会话 lane）。值域暂只有
+  // 'matter'：serve-api 的 Literal 同样只收它，在这里放宽 = 到 Python 就 422。与点名单件事的
+  // matterId 分开（后者是一件事，这里是全部事项会话）。
+  anchorType?: 'matter'
 }
 
 // Row of the global "AI 会话历史" page (chat.listAllSessions). A ChatSession

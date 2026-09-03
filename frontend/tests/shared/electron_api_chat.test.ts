@@ -100,6 +100,12 @@ describe('ElectronApi.chat — listAllSessions 的 query 拼装（L4 批次3）'
     await api.chat.listAllSessions({ itemId: 7, origin: 'interactive' })
     expect(String(fetchMock.mock.calls[0][0])).toContain('origin=interactive')
   })
+
+  test('anchorType 上 wire（09-02 misc05 —— 事项会话 lane 的过滤在服务端）', async () => {
+    const api = new ElectronApi()
+    await api.chat.listAllSessions({ origin: 'interactive', anchorType: 'matter' })
+    expect(String(fetchMock.mock.calls[0][0])).toContain('anchorType=matter')
+  })
 })
 
 describe('ElectronApi.chat — 3c-3 openPopout override', () => {

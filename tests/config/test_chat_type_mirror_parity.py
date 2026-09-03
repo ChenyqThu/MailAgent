@@ -327,6 +327,26 @@ def test_chat_interactive_origin_exclusion_mirror_parity():
             )
 
 
+def test_session_anchor_filter_mirror_parity():
+    """09-02 misc05 — 会话列表的 anchor 归属过滤子句，TS/Python 各一份手抄。
+
+    团队页「事项跟进」成员的会话 lane 走 ``anchorType='matter'``：桌面 / 远程仍是两条实现
+    （TS ``listAllSessions`` vs HTTP → Python ``list_all_sessions``），漏改一侧就是「一边
+    只出事项会话、另一边把整部历史倒给这条 lane」的静默错 —— 两处都编译得过、都不报错。
+
+    🔴 抽取失败必须红：子句在每个文件里必须**恰好命中一次**（0 次 = 子句形状变了或被删；
+    多次 = 有人复制了一份）。
+    """
+    sessions_ts = p.REPO_ROOT / "frontend" / "src" / "electron" / "main" / "chat_db" / "sessions.ts"
+    pattern = r"s\.anchor_type = \?"
+    for path in (sessions_ts, CHAT_DB_PY):
+        hits = re.findall(pattern, path.read_text(encoding="utf-8"))
+        assert len(hits) == 1, (
+            f"{path.name}: anchor 归属过滤子句命中 {len(hits)} 处（预期恰好 1）—— "
+            "两侧 SQL 漂移了，或解析器需要跟着实现更新"
+        )
+
+
 def test_group_list_thread_exclusion_mirror_parity():
     """T3（v32）— 群清单的「话题不进列表」子句 + 未读话题派生列，TS/Python 各一份手抄。
 
