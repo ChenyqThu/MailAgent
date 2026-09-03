@@ -14,7 +14,7 @@ import { SegmentedControl } from '@shared/components/ui/segmented'
 import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import { errorMessage } from '@shared/lib/ipcErrors'
 
-import { openWithApp, stripFrontmatter, type LibraryFileRef } from './fileMeta'
+import { openWithApp, splitPdfPages, stripFrontmatter, type LibraryFileRef } from './fileMeta'
 import { useLibraryTextQuery } from './hooks'
 import { FrontmatterLine } from './MarkdownEditor'
 import { Notice } from './parts'
@@ -36,12 +36,6 @@ function OpenWithButton({
       {app ? t('library.actions.openWith', { app: t(`library.common.app.${app}`) }) : t('library.actions.openSystem')}
     </Button>
   )
-}
-
-/** PDF 抽取文本按 form feed 分页（pypdf 逐页拼接时用 `\f` 分隔）；没有分隔符就整段一页。 */
-export function splitPdfPages(text: string): string[] {
-  const pages = text.split('\f').map((p) => p.replace(/^\n+|\n+$/g, ''))
-  return pages.length > 1 ? pages : [text]
 }
 
 interface Props {

@@ -3,7 +3,13 @@
 
 import type { LibraryFile } from '@shared/api/types/library'
 import { pickIconTone, type IconTone } from '@shared/components/email/attachmentPreview'
-import { PROJECTION_SLUG, TRASH_TTL_DAYS, type LibrarySource } from '@shared/libraryConstants'
+import {
+  PROJECTION_SLUG,
+  TRASH_SLUG,
+  TRASH_TTL_DAYS,
+  type LibrarySource
+} from '@shared/libraryConstants'
+import { MOUNTS_GROUP_PATH } from './tree'
 
 /** 文件寻址：库内文件按 `id`，邮件附件投影行按 `attachment_id`（`id` 为 null，design §1.1）。
  *  预览面只认这个 ref，端点选择在 hooks 层做，子视图不分支。 */
@@ -175,4 +181,20 @@ export function stripFrontmatter(markdown: string): { body: string; meta: Frontm
     else if (key === 'tags') meta.tags = parseTags(m[2], lines.slice(index + 1))
   })
   return { body, meta }
+}
+
+
+/** 顶层根的 i18n key。两处 path→key 偏移：`.trash` 去前导点、挂载分组用固定 `mounts`。
+ *  放在这个叶子里而不是 `LibraryTreePanel`，是因为 `react-refresh/only-export-components`
+ *  要求组件文件只导出组件 —— 规则给的修法就是「换个文件放共享常量与函数」。 */
+export function rootLabelKey(path: string): string {
+  if (path === TRASH_SLUG) return 'library.tree.roots.trash'
+  if (path === MOUNTS_GROUP_PATH) return 'library.tree.roots.mounts'
+  return `library.tree.roots.${path}`
+}
+
+/** PDF 抽取文本按 form feed 分页（pypdf 逐页拼接时用 `\f` 分隔）；没有分隔符就整段一页。 */
+export function splitPdfPages(text: string): string[] {
+  const pages = text.split('\f').map((p) => p.replace(/^\n+|\n+$/g, ''))
+  return pages.length > 1 ? pages : [text]
 }

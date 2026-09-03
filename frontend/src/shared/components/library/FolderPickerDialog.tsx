@@ -18,7 +18,7 @@ import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import { PROJECTION_SLUG, TRASH_SLUG } from '@shared/libraryConstants'
 
 import { useLibraryTreeQuery } from './hooks'
-import { rootLabelKey } from './LibraryTreePanel'
+import { rootLabelKey } from './fileMeta'
 import { BUILT_IN_ROOT_SLUGS, buildLibraryTree, MOUNTS_GROUP_PATH, type LibraryTreeNode } from './tree'
 
 export type FolderPickerMode = 'move' | 'keep'

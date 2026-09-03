@@ -35,7 +35,9 @@ import {
 import { FileTree, type FileTreeNode } from '@shared/components/ui/FileTree'
 import { Input } from '@shared/components/ui/input'
 import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
-import { PROJECTION_SLUG, TRASH_SLUG } from '@shared/libraryConstants'
+import { PROJECTION_SLUG } from '@shared/libraryConstants'
+
+import { rootLabelKey } from './fileMeta'
 import { toastError } from '@shared/state/toast'
 
 import { useAddMountFlow } from './useAddMountFlow'
@@ -55,12 +57,6 @@ const ROOT_ICONS: Record<string, ReactElement> = {
   'chat-attachments': <MessagesSquare size={ICON_SIZE} strokeWidth={1.9} aria-hidden />,
   'agent-docs': <Bot size={ICON_SIZE} strokeWidth={1.9} aria-hidden />,
   'my-docs': <User size={ICON_SIZE} strokeWidth={1.9} aria-hidden />
-}
-
-export function rootLabelKey(path: string): string {
-  if (path === TRASH_SLUG) return 'library.tree.roots.trash'
-  if (path === MOUNTS_GROUP_PATH) return 'library.tree.roots.mounts'
-  return `library.tree.roots.${path}`
 }
 
 interface Props {

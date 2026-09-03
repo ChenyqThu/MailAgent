@@ -14,7 +14,7 @@ import { useTranslation } from 'react-i18next'
 import { Folder, FolderTree, Trash2 } from 'lucide-react'
 
 import { useLibraryTreeQuery } from '@shared/components/library/hooks'
-import { rootLabelKey } from '@shared/components/library/LibraryTreePanel'
+import { rootLabelKey } from '@shared/components/library/fileMeta'
 import { buildLibraryTree, flattenLibraryTree } from '@shared/components/library/tree'
 import { cn } from '@shared/lib/cn'
 import { navEntry, navigateToNavEntry } from '@shared/navigation/registry'
