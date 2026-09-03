@@ -1,0 +1,20 @@
+{
+  "id": "AGT-LIBRARY-004",
+  "category": "email_action",
+  "title": "资料库改文件撞版本：409 后把当前内容合并进来、带新 hash 重试恰一次",
+  "surface": "general",
+  "user_prompt": "把资料库里 Atlas 上线计划的「回滚」一节补一句：回滚后 30 分钟内通知交付组。",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["library_search", "library_read", "library_write"],
+  "allowed_support_tools": ["library_list"],
+  "must_use_tools": ["library_read", "library_write"],
+  "forbidden_tools": ["library_delete", "library_move", "library_append", "file_write", "run_command", "email_prepare_send", "email_send"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.4, "evidence_grounding": 0.1, "uncertainty_honesty": 0.1, "tool_efficiency": 0.2, "ux_clarity": 0.2 },
+  "rubric_ref": "email_action.md",
+  "notes": "CAS 地板（design §4）：改一节 = overwrite，expected_hash 必须是 library_read 刚返回的 content_hash（append 会把句子塞到文末，故禁）。撞 409 时工具把 current_hash + 围栏里的 current_content 透传回来；正确行为 = 把自己的改动合并进当前内容（别人的改动保留）、带 current_hash 重试**恰一次**，不覆盖别人、不无限重试。出厂 auto → 免卡录制形状。"
+}
