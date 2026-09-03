@@ -179,6 +179,15 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   library_list: 'read',
   library_read: 'read',
   library_search: 'read',
+  // 资料库 P2-L1 — the four writes. domain_write on purpose: in-domain and cheap to undo (every
+  // write leaves a full snapshot in library_history, delete is a .trash move with restore) — the
+  // matter family's argument. The class is ALSO the headless boundary: a matter_followup /
+  // contact_governance matrix row denies the whole class, so no belt admits them by accident
+  // (P2-L3 opens library_append there by NAME, the MATTER_RUN_PROPOSE_TOOL precedent).
+  library_append: 'domain_write',
+  library_write: 'domain_write',
+  library_move: 'domain_write',
+  library_delete: 'domain_write',
   email_get: 'read',
   email_body: 'read',
   email_list_thread: 'read',

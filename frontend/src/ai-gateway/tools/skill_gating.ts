@@ -205,6 +205,14 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'library_list',
   'library_read',
   'library_search',
+  // 资料库 P2-L1 —— 四个写工具，同一族同一理由（无 skill 归属、注册条件只有 approvalGuard、无
+  // flag）。开关面是 tool_prefs 的 per-tool 档 + 第 8 张能力卡，不是 skill toggle。名字仍以
+  // libraryConstants 的 GATEWAY_LIBRARY_WRITE_TOOL_NAMES 为 canonical，这里是 catalog 名字宇宙的
+  // 唯一字面量抄写点。
+  'library_append',
+  'library_write',
+  'library_move',
+  'library_delete',
   // task 08-27 P4a —— 快捷反馈的 agent 提交面。无 skill 归属（Python 无 feedback builtin
   // skill），永不 skill-gated；它的开关面是 outbound class 的场地地板（只在 manual_chat
   // 注册）+ 恒 HITL，不是 skill toggle。
