@@ -308,7 +308,7 @@ class OnnxEncoder:
     ``providers`` 缺省先试 CoreML 再回落 CPU；int8 图在 CoreML 上常整体回落 CPU，是否真有加速由 PoC 定。
     """
 
-    def __init__(self, model_dir: str, *, use_coreml: bool = True, max_tokens: int = CHUNK_MAX_MODEL_TOKENS) -> None:
+    def __init__(self, model_dir: str, *, use_coreml: bool = False, max_tokens: int = CHUNK_MAX_MODEL_TOKENS) -> None:
         import onnxruntime as ort  # 函数级：~150 MB，只有真跑语义时才付
         from tokenizers import Tokenizer
 
@@ -404,10 +404,22 @@ class OnnxEncoder:
         return self.encode([query_text(query)])[0]
 
 
-def load_encoder(library_root: str, *, use_coreml: bool = True) -> Optional[Any]:
+def load_encoder(library_root: str, *, use_coreml: bool = False) -> Optional[Any]:
     """有权重就开会话，**没权重返回 None**（不是异常 —— 纯 FTS 是合法的常态）。
 
     开会话本身失败（图不匹配 / EP 挂了）也返回 None：语义 lane 是增强，不该把检索整条打死。
+
+    🔴 ``use_coreml`` 默认 **False**（2026-09-03 实测改的）。CoreML EP 会接下这张图的 141 个分区，
+    但一 ``run`` 就炸：
+
+        coreml_execution_provider.cc:222 Input (past_key_values.0.key) has a dynamic shape
+        ({-1,8,-1,128}) but the runtime shape ({3,8,0,128}) has zero elements.
+
+    Qwen3 的导出图带 KV-cache 输入，首次前向时它们是**零元素**张量，而 CoreML EP 不收零元素的
+    动态形状。这不是机器差异，是这张图的结构决定的 —— 任何 Mac 都会撞。更麻烦的是 ORT 不会为此
+    回落到 CPU：分区在 CoreML 上失败就整条 ``run`` 抛异常，而 ``load_encoder`` 只捕获**建会话**
+    阶段的异常，所以留着这个默认值等于交出一个「建得起来、一用就炸」的 encoder。
+    参数保留：将来 ORT / CoreML 支持零元素动态形状后，重测一次就能翻回来。
     """
     if not model_present(library_root):
         return None

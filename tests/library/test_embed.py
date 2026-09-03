@@ -382,3 +382,16 @@ def test_download_failure_does_not_chain_into_indexing(svc: LibraryService, monk
 
     assert job.error == "network down" and job.running is False
     assert kicks == []
+
+
+def test_load_encoder_defaults_to_cpu_only():
+    """🔴 CoreML EP 接得下这张图但一 run 就炸（Qwen3 的 KV-cache 输入首次前向是零元素张量，
+    `coreml_execution_provider.cc:222` 不收零元素动态形状），而 ORT 不会为此回落到 CPU ——
+    分区失败就整条 run 抛。`load_encoder` 只捕获建会话阶段的异常，所以默认值一旦是 True，
+    交出去的就是「建得起来、一用就炸」的 encoder。默认必须是 CPU-only。
+    """
+    import inspect
+
+    from src.library import embed as E
+
+    assert inspect.signature(E.load_encoder).parameters["use_coreml"].default is False
