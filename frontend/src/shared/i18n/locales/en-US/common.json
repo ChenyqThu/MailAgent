@@ -7362,7 +7362,8 @@
     "composerPlaceholder": "Message the group, @ to mention a member…",
     "composer": {
       "attachTooMany": "At most {max} attachments per message",
-      "attachImageNote": "Images are kept on the record only — members can't read the image itself"
+      "attachImageNote": "Images are kept on the record only — members can't read the image itself",
+      "libraryTooMany": "At most {max} library files per message"
     },
     "sendFailed": "Send failed: {error}",
     "speakerFailed": "This reply failed: {error}",
@@ -7550,7 +7551,8 @@
         "revealInFinder": "Reveal in Finder",
         "unmount": "Unmount",
         "unmountHint": "Nothing on disk is touched. Existing references gray out instead of breaking, and remounting the same folder picks up the same files"
-      }
+      },
+      "nodeMenuAria": "Folder actions"
     },
     "folder": {
       "viewGrid": "Grid",
@@ -7569,7 +7571,19 @@
       "searchLibraryPlaceholder": "Search the whole library",
       "unknownDateGroup": "Unknown date",
       "dropTarget": "Copy to “{folder}”",
-      "scanning": "Indexing {done} / {total}"
+      "scanning": "Indexing {done} / {total}",
+      "fileMenuAria": "File actions",
+      "loadFailed": "Could not load this folder",
+      "loadMore": "Load more",
+      "menuOpen": "More actions",
+      "moreAria": "More",
+      "openAria": "Open",
+      "sortAria": "Sort by",
+      "sortDisabledHint": "Sorting for this folder is fixed on the server for now",
+      "tooLargeToast": "“{name}” is over {limit} and was not saved",
+      "uploadFailedToast": "Could not save “{name}” to the library",
+      "uploadedToast": "Saved “{name}”",
+      "viewAria": "View"
     },
     "empty": {
       "folderTitle": "No files in this folder yet",
@@ -7596,7 +7610,22 @@
     },
     "history": {
       "changeNoteLabel": "Change note (optional)",
-      "changeNotePlaceholder": "e.g. Added Q3 channel data"
+      "changeNotePlaceholder": "e.g. Added Q3 channel data",
+      "changedByUser": "You",
+      "changedByExternal": "Outside the app",
+      "noNote": "No note",
+      "externalNoNote": "Changed outside the app, no note",
+      "empty": "No history for this file yet",
+      "loadFailed": "Could not load the history",
+      "retention": "Keeps the latest {n} snapshots per file; {size} across the library, oldest trimmed first",
+      "currentVersion": "Current",
+      "currentVersionHint": "This snapshot matches the file on disk — nothing to roll back to",
+      "rollbackConfirmBody": "Rolling back writes this snapshot's content again (same version check, and it records a new history entry). The current content is not lost.",
+      "rollbackDoneToast": "Rolled back to the selected version",
+      "conflictTitle": "The file changed — nothing was rolled back",
+      "conflictBody": "It was edited outside the app after you opened this panel. The current version has been reloaded — you can roll back again.",
+      "snapshotFailed": "Could not load this snapshot",
+      "snapshotEmpty": "(empty file)"
     },
     "preview": {
       "tabParsed": "Parsed view",
@@ -7628,7 +7657,24 @@
       "conflictChangedBy": "Changed by {who}",
       "relatedMatters": "Linked matters",
       "sourceJumpMail": "Open source email",
-      "sourceJumpChat": "Open source chat"
+      "sourceJumpChat": "Open source chat",
+      "currentVersion": "Show the current version",
+      "mineUnsaved": "Keep my text",
+      "savedToast": "Saved",
+      "saveFailedToast": "Not saved",
+      "loadFailed": "Could not load this file",
+      "noContent": "This file has no text to show",
+      "truncated": "Long file — only the beginning is shown",
+      "stale": "The parsed text is older than the file; re-parsing",
+      "extractor": "Parsed with {name}",
+      "pendingHint": "Parsing — check back shortly",
+      "failedHint": "Could not get any text out of this file",
+      "placeholderNotice": "This is an iCloud placeholder — the content is not on this Mac yet",
+      "derivedFilename": "{name} (parsed)",
+      "imageTooLarge": "Image is too large to show inline",
+      "imageViewAria": "Image view",
+      "pdfViewAria": "PDF view",
+      "pdfOriginalPlaceholder": "Inline preview of the original is not built yet — open it in your PDF reader"
     },
     "mount": {
       "add": "Add folder",
@@ -7672,7 +7718,8 @@
       "matchVec": "Semantic",
       "matchBoth": "Keyword + semantic",
       "noSemantic": "Semantic search isn't on (model not downloaded) — matching by keyword only.",
-      "groupTitle": "Library"
+      "groupTitle": "Library",
+      "clear": "Clear search"
     },
     "agent": {
       "expectedHashLabel": "Based on version",
@@ -7699,13 +7746,19 @@
       "tabSearch": "Search",
       "selectedCount": "{n} selected",
       "confirmLink": "Link",
-      "confirmAttach": "Add as attachment"
+      "confirmAttach": "Add as attachment",
+      "from": "From",
+      "to": "To",
+      "keepDesc": "Pick a folder to save this attachment into. Once saved, it no longer depends on the email.",
+      "moveDesc": "Pick a new location. References to this file still work, but paths written down elsewhere will change.",
+      "treeAria": "Folders"
     },
     "matter": {
       "tabLibrary": "Library",
       "proposalTitle": "Unconfirmed agent suggestions",
       "accept": "Accept",
-      "ignore": "Ignore"
+      "ignore": "Ignore",
+      "searchPrompt": "Type a keyword to find files in your library"
     },
     "compose": {
       "pickFromLibrary": "Choose attachment from Library"
@@ -7718,7 +7771,12 @@
       "exportToLibrary": "Export to Library"
     },
     "toast": {
-      "openAction": "Open"
+      "openAction": "Open",
+      "keptTo": "Saved to “{path}”",
+      "movedTo": "Moved to “{path}”",
+      "derivedSaved": "Parsed copy saved as “{name}”",
+      "openFailed": "Could not open this file",
+      "actionFailed": "That didn't go through"
     },
     "trash": {
       "notice": "Deleted files stay in Trash for 30 days, then are cleared automatically.",
@@ -7736,7 +7794,9 @@
       "deleteForeverAction": "Delete permanently",
       "deleteForeverConfirmTitle": "Permanently delete “{name}”?",
       "deleteForeverConfirmBody": "This can't be undone — the file skips the 30-day trash window and is removed from disk immediately.",
-      "deleteForeverConfirm": "Delete Forever"
+      "deleteForeverConfirm": "Delete Forever",
+      "originalLocation": "Was in {path}",
+      "deleteConfirmBodyLibrary": "The file goes to the trash and stays there for 30 days — you can restore it during that time."
     },
     "common": {
       "sourceLabel": {
@@ -7746,6 +7806,9 @@
         "agent": "Agent",
         "derived": "Parsed version"
       }
+    },
+    "chat": {
+      "prompt": "About this file, I'd like to ask:"
     }
   }
 }

@@ -7362,7 +7362,8 @@
     "composerPlaceholder": "发消息，@ 可点名成员…",
     "composer": {
       "attachTooMany": "一次最多带 {max} 个附件",
-      "attachImageNote": "图片只留档，成员读不到图片内容"
+      "attachImageNote": "图片只留档，成员读不到图片内容",
+      "libraryTooMany": "一次最多带 {max} 份资料"
     },
     "sendFailed": "发送失败：{error}",
     "speakerFailed": "本条回复失败：{error}",
@@ -7550,7 +7551,8 @@
         "revealInFinder": "在访达中显示",
         "unmount": "卸载",
         "unmountHint": "磁盘上的文件一个都不动；已有引用会灰显而不是失效，重新挂回同一目录会沿用原来的文件"
-      }
+      },
+      "nodeMenuAria": "文件夹操作"
     },
     "folder": {
       "viewGrid": "网格",
@@ -7569,7 +7571,19 @@
       "searchLibraryPlaceholder": "搜索整个资料库",
       "unknownDateGroup": "日期未知",
       "dropTarget": "复制到「{folder}」",
-      "scanning": "正在建立索引 {done} / {total}"
+      "scanning": "正在建立索引 {done} / {total}",
+      "fileMenuAria": "文件操作",
+      "loadFailed": "这个文件夹没能加载出来",
+      "loadMore": "加载更多",
+      "menuOpen": "更多操作",
+      "moreAria": "更多",
+      "openAria": "打开",
+      "sortAria": "排序方式",
+      "sortDisabledHint": "这个文件夹的排序由服务端决定，暂不可改",
+      "tooLargeToast": "「{name}」超过 {limit}，没有存入",
+      "uploadFailedToast": "「{name}」没能存进资料库",
+      "uploadedToast": "已存入「{name}」",
+      "viewAria": "视图"
     },
     "empty": {
       "folderTitle": "这个文件夹还没有文件",
@@ -7596,7 +7610,22 @@
     },
     "history": {
       "changeNoteLabel": "变更说明（可选）",
-      "changeNotePlaceholder": "例：补充 Q3 渠道数据"
+      "changeNotePlaceholder": "例：补充 Q3 渠道数据",
+      "changedByUser": "你",
+      "changedByExternal": "应用之外",
+      "noNote": "没有备注",
+      "externalNoNote": "在应用之外改动，没有备注",
+      "empty": "这个文件还没有历史版本",
+      "loadFailed": "历史没能加载出来",
+      "retention": "每个文件保留最近 {n} 条快照；全库快照总量 {size}，超出按最旧裁",
+      "currentVersion": "当前版本",
+      "currentVersionHint": "这一版就是磁盘上的当前正文，不需要回滚",
+      "rollbackConfirmBody": "回滚 = 把这一版的正文重新写入一次（走同一道校验，也会新记一条历史）。当前内容不会丢。",
+      "rollbackDoneToast": "已回滚到所选版本",
+      "conflictTitle": "文件已被改动，这次没有回滚",
+      "conflictBody": "你打开历史之后，这个文件在应用之外被改过。当前版本已经重新载入，可以再回滚一次。",
+      "snapshotFailed": "这一版的正文没能加载出来",
+      "snapshotEmpty": "（空文件）"
     },
     "preview": {
       "tabParsed": "解析视图",
@@ -7628,7 +7657,24 @@
       "conflictChangedBy": "改动来自 {who}",
       "relatedMatters": "关联的事项",
       "sourceJumpMail": "打开来源邮件",
-      "sourceJumpChat": "打开来源会话"
+      "sourceJumpChat": "打开来源会话",
+      "currentVersion": "显示当前版本",
+      "mineUnsaved": "保留我的文本",
+      "savedToast": "已保存",
+      "saveFailedToast": "没保存成功",
+      "loadFailed": "这个文件没能加载出来",
+      "noContent": "这个文件没有可显示的正文",
+      "truncated": "正文太长，只显示了前面一段",
+      "stale": "解析版比文件旧，正在重新解析",
+      "extractor": "解析方式：{name}",
+      "pendingHint": "正在解析，稍后再看",
+      "failedHint": "这个文件没能解析出文字",
+      "placeholderNotice": "这是 iCloud 的占位文件，内容还没下载到本机",
+      "derivedFilename": "{name}（解析版）",
+      "imageTooLarge": "图片太大，没有内联显示",
+      "imageViewAria": "图片视图",
+      "pdfViewAria": "PDF 视图",
+      "pdfOriginalPlaceholder": "原件内嵌预览还没做，先用系统阅读器打开"
     },
     "mount": {
       "add": "添加文件夹",
@@ -7672,7 +7718,8 @@
       "matchVec": "语义",
       "matchBoth": "关键词+语义",
       "noSemantic": "语义检索未启用（模型未下载），当前只按关键词匹配。",
-      "groupTitle": "资料库"
+      "groupTitle": "资料库",
+      "clear": "清除搜索"
     },
     "agent": {
       "expectedHashLabel": "基于版本",
@@ -7699,13 +7746,19 @@
       "tabSearch": "搜索",
       "selectedCount": "已选 {n} 个",
       "confirmLink": "关联",
-      "confirmAttach": "添加为附件"
+      "confirmAttach": "添加为附件",
+      "from": "从",
+      "to": "到",
+      "keepDesc": "选一个文件夹，把这个附件存进去。存进去之后它就与邮件无关了。",
+      "moveDesc": "选一个新位置。文件的引用不会断，但别处记着的路径会变。",
+      "treeAria": "文件夹"
     },
     "matter": {
       "tabLibrary": "资料库",
       "proposalTitle": "未确认的 agent 建议",
       "accept": "确认",
-      "ignore": "忽略"
+      "ignore": "忽略",
+      "searchPrompt": "输入关键词，从资料库里找文件"
     },
     "compose": {
       "pickFromLibrary": "从资料库选附件"
@@ -7718,7 +7771,12 @@
       "exportToLibrary": "导出到资料库"
     },
     "toast": {
-      "openAction": "打开"
+      "openAction": "打开",
+      "keptTo": "已存到「{path}」",
+      "movedTo": "已移到「{path}」",
+      "derivedSaved": "解析版已存为「{name}」",
+      "openFailed": "这个文件打不开",
+      "actionFailed": "这一步没做成"
     },
     "trash": {
       "notice": "删除的文件在废纸篓保留 30 天，之后自动清理。",
@@ -7736,7 +7794,9 @@
       "deleteForeverAction": "立即永久删除",
       "deleteForeverConfirmTitle": "永久删除「{name}」？",
       "deleteForeverConfirmBody": "此操作无法撤销，文件不会进入 30 天保留期，将立刻从磁盘清除。",
-      "deleteForeverConfirm": "永久删除"
+      "deleteForeverConfirm": "永久删除",
+      "originalLocation": "原位置：{path}",
+      "deleteConfirmBodyLibrary": "文件会进废纸篓，保留 30 天，期间可以恢复。"
     },
     "common": {
       "sourceLabel": {
@@ -7746,6 +7806,9 @@
         "agent": "Agent",
         "derived": "解析版"
       }
+    },
+    "chat": {
+      "prompt": "关于这份资料，我想问："
     }
   }
 }
