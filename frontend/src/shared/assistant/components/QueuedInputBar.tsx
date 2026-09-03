@@ -8,16 +8,26 @@ import type { QueuedInput } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { qk } from '@shared/lib/queryKeys'
 
+/** Queued (not yet sent) follow-ups, rendered at the END of the message stream as user bubbles in a
+ *  waiting state (task 09-02). Not real message rows — the dispatcher still merges them into one
+ *  `<queued_followups>` envelope; once that envelope persists, the rows are `sent` and drop out of
+ *  the list. `dispatchedRowIds` closes the reload window in between (messages reloaded before the
+ *  queue refetched → the same text would show twice). "Insert now" stops the current run and sends
+ *  exactly this row (`POST /api/ai/queued-input/interrupt`); it is disabled while an approval is
+ *  pending — there is no run to abort, and queued text never stands in for a decision. */
 export function QueuedInputBar({
   enabled,
   gatewayBaseUrl,
   sessionId,
-  approvalPendingExists
+  approvalPendingExists,
+  dispatchedRowIds
 }: {
   enabled: boolean
   gatewayBaseUrl: string | null
   sessionId: number | null
   approvalPendingExists: boolean
+  /** Row ids already carried by a persisted `<queued_followups>` message (metadata rowIds). */
+  dispatchedRowIds?: ReadonlySet<number>
 }): React.JSX.Element | null {
   const { t } = useTranslation()
   const aui = useAui()
@@ -53,7 +63,7 @@ export function QueuedInputBar({
   }, [enabled, mailApi, queryClient, queryKey, sessionId])
 
   const mutate = useMutation({
-    mutationFn: async ({ path, id }: { path: 'cancel' | 'send'; id: number }) => {
+    mutationFn: async ({ path, id }: { path: 'cancel' | 'send' | 'interrupt'; id: number }) => {
       const response = await fetch(`${gatewayBaseUrl}/api/ai/queued-input/${path}`, {
         method: 'POST',
         credentials: 'include',
@@ -62,10 +72,20 @@ export function QueuedInputBar({
       })
       if (!response.ok) throw new Error('queued input mutation failed')
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey })
+    onSuccess: (_result, { path }) => {
+      void queryClient.invalidateQueries({ queryKey })
+      // The interrupt run starts server-side (loopback) — re-probe /run/active the same way the
+      // turn-persisted handler does so the background-run placeholder shows without waiting for
+      // the poll. Prefix key: every nonce'd instance.
+      if (path === 'interrupt') {
+        void queryClient.invalidateQueries({
+          queryKey: qk.aiGateway.runActive(gatewayBaseUrl, sessionId, 0).slice(0, 4)
+        })
+      }
+    }
   })
 
-  const items = query.data ?? []
+  const items = (query.data ?? []).filter((item) => !dispatchedRowIds?.has(item.id))
   if (!enabled || items.length === 0) return null
 
   const statusText = (item: QueuedInput): string => {
@@ -76,19 +96,29 @@ export function QueuedInputBar({
   }
 
   return (
-    <div className="mx-3 mb-2 ml-auto flex max-w-[88%] flex-col gap-1.5" data-testid="queued-input-bar">
-      {items.map((item) => (
-        <div
-          key={item.id}
-          className="rounded-lg border border-[var(--hairline)] bg-ink-2 px-2.5 py-2 text-xs shadow-sm"
-        >
-          <div className="flex items-start gap-2">
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-ink-fg">{item.content}</p>
-              <p className="mt-0.5 text-ink-fg-3">{statusText(item)}</p>
+    <div className="flex w-full flex-col" data-testid="queued-input-bar">
+      {items.map((item) => {
+        const editable = item.status === 'queued' || item.status === 'restored'
+        return (
+          <div key={item.id} className="mb-4 flex w-full flex-col items-end">
+            {/* Same bubble as message.tsx UserMessage — the row IS the user's message, just not sent yet. */}
+            <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[rgb(var(--c-accent))] px-3.5 py-2 text-body leading-relaxed text-[rgb(var(--c-accent-fg))] shadow-sm [overflow-wrap:anywhere]">
+              <p className="whitespace-pre-wrap">{item.content}</p>
             </div>
-            <div className="flex shrink-0 items-center gap-1">
-              {(item.status === 'queued' || item.status === 'restored') && (
+            <div className="mt-1 flex items-center gap-1 text-micro text-ink-fg-3">
+              <span className="mr-1">{statusText(item)}</span>
+              {editable && (
+                <button
+                  type="button"
+                  disabled={approvalPendingExists}
+                  title={approvalPendingExists ? t('chat.queuedInput.interruptBlocked') : undefined}
+                  onClick={() => mutate.mutate({ path: 'interrupt', id: item.id })}
+                  className="rounded px-1.5 py-0.5 text-ink-fg-2 hover:bg-ink-3 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                >
+                  {t('chat.queuedInput.interrupt')}
+                </button>
+              )}
+              {editable && (
                 <button
                   type="button"
                   aria-label={t('chat.queuedInput.edit')}
@@ -111,7 +141,7 @@ export function QueuedInputBar({
                   <Send size={13} />
                 </button>
               )}
-              {(item.status === 'queued' || item.status === 'restored') && (
+              {editable && (
                 <button
                   type="button"
                   aria-label={t('chat.queuedInput.delete')}
@@ -123,8 +153,8 @@ export function QueuedInputBar({
               )}
             </div>
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

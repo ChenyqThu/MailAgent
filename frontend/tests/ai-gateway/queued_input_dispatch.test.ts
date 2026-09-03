@@ -79,22 +79,25 @@ describe('queued input dispatcher', () => {
     expect(body.messages.at(-1)?.metadata?.queuedInputDispatch?.rowIds).toEqual([1, 3])
   })
 
-  test.each(['non-ok', 'throw'] as const)('%s post reverts claimed rows and broadcasts', async (mode) => {
-    const deps = makeDeps({
-      postChat:
-        mode === 'non-ok'
-          ? vi.fn(async () => ({ ok: false, drain: vi.fn(async () => undefined) }))
-          : vi.fn(async () => {
-              throw new Error('network')
-            })
-    })
+  test.each(['non-ok', 'throw'] as const)(
+    '%s post reverts claimed rows and broadcasts',
+    async (mode) => {
+      const deps = makeDeps({
+        postChat:
+          mode === 'non-ok'
+            ? vi.fn(async () => ({ ok: false, drain: vi.fn(async () => undefined) }))
+            : vi.fn(async () => {
+                throw new Error('network')
+              })
+      })
 
-    await runQueuedInputDispatch(deps, 7)
+      await runQueuedInputDispatch(deps, 7)
 
-    expect(deps.revert).toHaveBeenCalledWith([1])
-    expect(deps.broadcast).toHaveBeenNthCalledWith(1, 7)
-    expect(deps.broadcast).toHaveBeenNthCalledWith(2, 7)
-  })
+      expect(deps.revert).toHaveBeenCalledWith([1])
+      expect(deps.broadcast).toHaveBeenNthCalledWith(1, 7)
+      expect(deps.broadcast).toHaveBeenNthCalledWith(2, 7)
+    }
+  )
 
   test('active run returns before listing or claiming', async () => {
     const deps = makeDeps({ hasActiveRun: vi.fn(() => true) })
@@ -121,6 +124,128 @@ describe('queued input dispatcher', () => {
     expect(deps.claim).not.toHaveBeenCalled()
     expect(deps.revert).not.toHaveBeenCalled()
   })
+
+  test('ids filter claims and sends only the picked row; the rest stay untouched', async () => {
+    const deps = makeDeps({
+      listDispatchable: vi.fn(() => [
+        { id: 1, content: 'one' },
+        { id: 2, content: 'two' }
+      ])
+    })
+
+    await runQueuedInputDispatch(deps, 7, { ids: [2] })
+
+    expect(deps.claim).toHaveBeenCalledWith([2], 100)
+    expect(dispatchedEnvelope(deps.postChat)).toBe(buildQueuedFollowupsEnvelope(['two']))
+  })
+
+  test('waitForIdleMs waits for the lease to clear, then dispatches', async () => {
+    let now = 0
+    let active = true
+    const deps = makeDeps({
+      hasActiveRun: vi.fn(() => active),
+      now: vi.fn(() => now),
+      sleep: vi.fn(async (ms) => {
+        now += ms
+        if (now >= 300) active = false
+      })
+    })
+
+    await runQueuedInputDispatch(deps, 7, { waitForIdleMs: 5_000 })
+
+    expect(deps.sleep).toHaveBeenCalledTimes(3)
+    expect(deps.claim).toHaveBeenCalledTimes(1)
+  })
+
+  test('waitForIdleMs is bounded: a lease that never clears leaves rows queued', async () => {
+    let now = 0
+    const deps = makeDeps({
+      hasActiveRun: vi.fn(() => true),
+      now: vi.fn(() => now),
+      sleep: vi.fn(async (ms) => {
+        now += ms
+      })
+    })
+
+    await runQueuedInputDispatch(deps, 7, { waitForIdleMs: 500 })
+
+    expect(deps.sleep).toHaveBeenCalledTimes(5)
+    expect(deps.claim).not.toHaveBeenCalled()
+    expect(deps.revert).not.toHaveBeenCalled()
+  })
+
+  test('revertIds are reverted and broadcast before the picked row is claimed', async () => {
+    const order: string[] = []
+    const deps = makeDeps({
+      revert: vi.fn(() => {
+        order.push('revert')
+      }),
+      claim: vi.fn((ids) => {
+        order.push('claim')
+        return ids
+      })
+    })
+
+    await runQueuedInputDispatch(deps, 7, { ids: [1], revertIds: [9] })
+
+    expect(deps.revert).toHaveBeenCalledWith([9])
+    expect(order).toEqual(['revert', 'claim'])
+    expect(deps.broadcast).toHaveBeenCalledTimes(2)
+  })
+
+  test.each([
+    { order: 'drain first', drainDelayedByCompact: false },
+    { order: 'interrupt first', drainDelayedByCompact: true }
+  ])(
+    'interrupt racing an onFinish drain ($order) sends the picked row exactly once — claim is the gate',
+    async ({ drainDelayedByCompact }) => {
+      const status = new Map<number, string>([
+        [1, 'queued'],
+        [2, 'queued']
+      ])
+      let compactTicks = drainDelayedByCompact ? 1 : 0
+      const deps = makeDeps({
+        compactActive: vi.fn(() => {
+          if (compactTicks > 0) {
+            compactTicks -= 1
+            return true
+          }
+          return false
+        }),
+        listDispatchable: vi.fn(() =>
+          [...status]
+            .filter(([, value]) => value === 'queued')
+            .map(([id]) => ({ id, content: `m${id}` }))
+        ),
+        claim: vi.fn((ids: number[]) =>
+          ids.filter((id) => {
+            if (status.get(id) !== 'queued') return false
+            status.set(id, 'claimed')
+            return true
+          })
+        )
+      })
+
+      await Promise.all([
+        runQueuedInputDispatch(deps, 7),
+        runQueuedInputDispatch(deps, 7, { ids: [1] })
+      ])
+
+      const sentRowIds = vi.mocked(deps.postChat).mock.calls.flatMap(
+        ([body]) =>
+          (
+            body as {
+              messages: Array<{ metadata?: { queuedInputDispatch?: { rowIds: number[] } } }>
+            }
+          ).messages.at(-1)?.metadata?.queuedInputDispatch?.rowIds ?? []
+      )
+      expect(sentRowIds.filter((id) => id === 1)).toHaveLength(1)
+      expect([...sentRowIds].sort()).toEqual([1, 2])
+      if (drainDelayedByCompact) {
+        expect(vi.mocked(deps.postChat).mock.calls).toHaveLength(2)
+      }
+    }
+  )
 
   test('a run becoming active during compact wait returns without claiming', async () => {
     let active = false

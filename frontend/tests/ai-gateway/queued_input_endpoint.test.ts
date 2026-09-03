@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { ActiveRunRegistry } from '../../src/ai-gateway/activeRuns'
+import type { ApprovalRunStash } from '../../src/ai-gateway/approvalStash'
 import type {
   AiGatewayConfig,
   GatewayQueuedInput,
@@ -14,10 +15,14 @@ afterEach(async () => {
   while (handles.length > 0) await handles.pop()!.close()
 })
 
-function makeStore(): QueuedInputStore & { items: GatewayQueuedInput[]; restoreForSession: ReturnType<typeof vi.fn> } {
+function makeStore(): QueuedInputStore & {
+  items: GatewayQueuedInput[]
+  restoreForSession: ReturnType<typeof vi.fn>
+} {
   let nextId = 1
   const items: GatewayQueuedInput[] = []
-  const get = (id: number): GatewayQueuedInput | null => items.find((item) => item.id === id) ?? null
+  const get = (id: number): GatewayQueuedInput | null =>
+    items.find((item) => item.id === id) ?? null
   return {
     items,
     list: (sessionId) =>
@@ -75,7 +80,10 @@ function makeStore(): QueuedInputStore & { items: GatewayQueuedInput[]; restoreF
     restoreForSession: vi.fn((sessionId: number) => {
       let changed = 0
       for (const item of items) {
-        if (item.sessionId === sessionId && (item.status === 'queued' || item.status === 'claimed')) {
+        if (
+          item.sessionId === sessionId &&
+          (item.status === 'queued' || item.status === 'claimed')
+        ) {
           item.status = 'restored'
           changed += 1
         }
@@ -105,14 +113,15 @@ const post = (base: string, path: string, body: unknown): Promise<Response> =>
   })
 
 describe('queued input endpoints', () => {
-  test('flag off returns 404 E_NOT_IMPLEMENTED for all five endpoints', async () => {
+  test('flag off returns 404 E_NOT_IMPLEMENTED for all six endpoints', async () => {
     const base = await start()
     const responses = [
       await fetch(`${base}/api/ai/queued-input?sessionId=1`),
       await post(base, '/api/ai/queued-input', { sessionId: 1, content: 'x' }),
       await post(base, '/api/ai/queued-input/update', { id: 1, content: 'x' }),
       await post(base, '/api/ai/queued-input/cancel', { id: 1 }),
-      await post(base, '/api/ai/queued-input/send', { id: 1 })
+      await post(base, '/api/ai/queued-input/send', { id: 1 }),
+      await post(base, '/api/ai/queued-input/interrupt', { id: 1 })
     ]
     for (const response of responses) {
       expect(response.status).toBe(404)
@@ -124,9 +133,12 @@ describe('queued input endpoints', () => {
     const store = makeStore()
     const base = await start({ queuedInputStore: store })
     expect((await post(base, '/api/ai/queued-input', { content: 'x' })).status).toBe(400)
-    expect((await post(base, '/api/ai/queued-input', { sessionId: 1, content: '   ' })).status).toBe(400)
     expect(
-      (await post(base, '/api/ai/queued-input', { sessionId: 1, content: 'x'.repeat(16_385) })).status
+      (await post(base, '/api/ai/queued-input', { sessionId: 1, content: '   ' })).status
+    ).toBe(400)
+    expect(
+      (await post(base, '/api/ai/queued-input', { sessionId: 1, content: 'x'.repeat(16_385) }))
+        .status
     ).toBe(400)
     for (let index = 0; index < 20; index += 1) store.enqueue(1, `row-${index}`)
     const response = await post(base, '/api/ai/queued-input', { sessionId: 1, content: 'overflow' })
@@ -140,9 +152,9 @@ describe('queued input endpoints', () => {
       queuedInputStore: makeStore(),
       dispatchQueuedInputIfIdle: idleDispatch
     })
-    expect((await post(idleBase, '/api/ai/queued-input', { sessionId: 1, content: 'idle' })).status).toBe(
-      200
-    )
+    expect(
+      (await post(idleBase, '/api/ai/queued-input', { sessionId: 1, content: 'idle' })).status
+    ).toBe(200)
     expect(idleDispatch).toHaveBeenCalledWith(1)
 
     const activeRuns = new ActiveRunRegistry()
@@ -174,21 +186,102 @@ describe('queued input endpoints', () => {
     const store = makeStore()
     const dispatch = vi.fn()
     const base = await start({ queuedInputStore: store, dispatchQueuedInputIfIdle: dispatch })
-    expect((await post(base, '/api/ai/queued-input/update', { id: 999, content: 'x' })).status).toBe(409)
+    expect(
+      (await post(base, '/api/ai/queued-input/update', { id: 999, content: 'x' })).status
+    ).toBe(409)
     expect((await post(base, '/api/ai/queued-input/cancel', { id: 999 })).status).toBe(409)
     expect((await post(base, '/api/ai/queued-input/send', { id: 999 })).status).toBe(409)
 
     const sent = store.enqueue(1, 'sent')
     sent.status = 'sent'
-    expect((await post(base, '/api/ai/queued-input/update', { id: sent.id, content: 'x' })).status).toBe(
-      409
-    )
+    expect(
+      (await post(base, '/api/ai/queued-input/update', { id: sent.id, content: 'x' })).status
+    ).toBe(409)
 
     const restored = store.enqueue(1, 'restored')
     restored.status = 'restored'
     expect((await post(base, '/api/ai/queued-input/send', { id: restored.id })).status).toBe(200)
     expect(restored.status).toBe('queued')
     expect(dispatch).toHaveBeenCalledWith(1)
+  })
+
+  test('interrupt stops the run, keeps other rows queued and hands claimed rows to the dispatcher', async () => {
+    const store = makeStore()
+    const picked = store.enqueue(5, 'picked')
+    const other = store.enqueue(5, 'other')
+    const claimed = store.enqueue(5, 'claimed')
+    claimed.status = 'claimed'
+    const activeRuns = new ActiveRunRegistry()
+    const controller = new AbortController()
+    activeRuns.register(5, controller)
+    const interrupt = vi.fn()
+    const idle = vi.fn()
+    const changed = vi.fn()
+    const base = await start({
+      activeRuns,
+      queuedInputStore: store,
+      dispatchQueuedInputInterrupt: interrupt,
+      dispatchQueuedInputIfIdle: idle,
+      onQueuedInputChanged: changed
+    })
+
+    const response = await post(base, '/api/ai/queued-input/interrupt', { id: picked.id })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: true, stopped: true })
+    expect(controller.signal.aborted).toBe(true)
+    expect(activeRuns.hasActive(5)).toBe(false)
+    expect(interrupt).toHaveBeenCalledWith(5, picked.id, [claimed.id])
+    expect(idle).not.toHaveBeenCalled()
+    expect(store.restoreForSession).not.toHaveBeenCalled()
+    expect(picked.status).toBe('queued')
+    expect(other.status).toBe('queued')
+    expect(changed).toHaveBeenCalledWith(5)
+  })
+
+  test('interrupt confirms a restored row, reports stopped=false when idle, 409s on other states', async () => {
+    const store = makeStore()
+    const restored = store.enqueue(6, 'restored')
+    restored.status = 'restored'
+    const sent = store.enqueue(6, 'sent')
+    sent.status = 'sent'
+    const interrupt = vi.fn()
+    const base = await start({
+      activeRuns: new ActiveRunRegistry(),
+      queuedInputStore: store,
+      dispatchQueuedInputInterrupt: interrupt
+    })
+
+    const ok = await post(base, '/api/ai/queued-input/interrupt', { id: restored.id })
+    expect(ok.status).toBe(200)
+    expect(await ok.json()).toEqual({ ok: true, stopped: false })
+    expect(restored.status).toBe('queued')
+    expect(interrupt).toHaveBeenCalledWith(6, restored.id, [])
+
+    expect((await post(base, '/api/ai/queued-input/interrupt', { id: sent.id })).status).toBe(409)
+    expect((await post(base, '/api/ai/queued-input/interrupt', { id: 999 })).status).toBe(409)
+    expect((await post(base, '/api/ai/queued-input/interrupt', {})).status).toBe(400)
+    expect(interrupt).toHaveBeenCalledTimes(1)
+  })
+
+  test("interrupt with a pending approval never hands the paused run's claimed rows back", async () => {
+    const store = makeStore()
+    const picked = store.enqueue(8, 'picked')
+    const claimed = store.enqueue(8, 'claimed')
+    claimed.status = 'claimed'
+    const activeRuns = new ActiveRunRegistry()
+    activeRuns.register(8, new AbortController())
+    const interrupt = vi.fn()
+    const base = await start({
+      activeRuns,
+      queuedInputStore: store,
+      dispatchQueuedInputInterrupt: interrupt,
+      approvalStash: { peekBySession: () => ({}) } as unknown as ApprovalRunStash
+    })
+
+    expect((await post(base, '/api/ai/queued-input/interrupt', { id: picked.id })).status).toBe(200)
+    expect(interrupt).toHaveBeenCalledWith(8, picked.id, [])
+    expect(claimed.status).toBe('claimed')
   })
 
   test('run stop restores queued and claimed rows and broadcasts even when nothing stopped', async () => {

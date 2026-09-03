@@ -152,7 +152,9 @@ export function EffortPicker({
   )
 
   return (
-    <div className="relative" ref={ref}>
+    // 定宽图标钮：包裹层是工具条那行的 flex item，明确 shrink-0，让窄宽度下的收缩落到旁边
+    // 能 truncate 的模型 / 授权 chip 上（两面的触发器都是 28px 方钮，没有可压的文字）。
+    <div className="relative shrink-0" ref={ref}>
       <HoverTip
         text={disabled ? t('chat.effort.unsupported') : `${label} · ${activeText}`}
         side="top"

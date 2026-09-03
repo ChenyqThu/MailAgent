@@ -42,6 +42,12 @@ from src.api.app import app
 # ---------------------------------------------------------------------------
 
 
+# task 09-02 — 非 UTF-8、含 NUL 的字节串（PNG 签名开头），透传测试用：任何按文本 / JSON 处理的
+# 代理都会把它弄坏。
+_FAKE_PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\xff\xfe\x00\x01"
+_GENERATED_ID = "42-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.png"
+
+
 class _FakeGatewayHandler(BaseHTTPRequestHandler):
     """最小 fake gateway：回显 path/method + 受控 status/body，支持流式 chunk。
 
@@ -93,6 +99,15 @@ class _FakeGatewayHandler(BaseHTTPRequestHandler):
             )
         elif self.path == "/api/ai/config":
             self._json(200, {"service": "fake-gateway", "modelConfigured": True})
+        elif self.path.startswith("/api/ai/generated/"):
+            # task 09-02 — 二进制体 + image content-type + immutable cache 头。对**任何** id 都回
+            # 200：这样代理侧「非法 id 直接 404」的用例能证明请求根本没打到这里。
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Cache-Control", "private, max-age=31536000, immutable")
+            self.send_header("Content-Length", str(len(_FAKE_PNG)))
+            self.end_headers()
+            self.wfile.write(_FAKE_PNG)
         else:
             self._json(404, {"error": "not_found", "path": self.path})
 
@@ -233,6 +248,50 @@ def test_proxy_config_json(proxy_client: TestClient):
     r = proxy_client.get("/api/ai/config")
     assert r.status_code == 200
     assert r.json()["service"] == "fake-gateway"
+
+
+def test_proxy_generated_image_binary_passthrough(proxy_client: TestClient):
+    """task 09-02 — GET /api/ai/generated/{file_id}：字节原样 + content-type + cache-control 透传。"""
+    r = proxy_client.get(f"/api/ai/generated/{_GENERATED_ID}")
+    assert r.status_code == 200
+    assert r.content == _FAKE_PNG
+    assert r.headers["content-type"] == "image/png"
+    assert "immutable" in r.headers["cache-control"]
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.png",  # 无 session 前缀
+        "42-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.txt",  # 非图片扩展名
+        "42-AAAAAAAA-bbbb-cccc-dddd-eeeeeeeeeeee.png",  # 大写 hex
+        "42",
+    ],
+)
+def test_proxy_generated_image_rejects_bad_id_without_upstream(proxy_client: TestClient, bad_id: str):
+    """非法 file_id → 代理侧直接 404，**不打上游**（fake gateway 对任何 /api/ai/generated/* 都回
+    200，这里拿到 404 就证明请求被正则挡在代理里）。"""
+    r = proxy_client.get(f"/api/ai/generated/{bad_id}")
+    assert r.status_code == 404
+    assert r.json()["error"] == "E_IMAGE_NOT_FOUND"
+
+
+def test_proxy_generated_image_traversal_never_reaches_upstream(proxy_client: TestClient):
+    """编码的 `..%2F` 被 Starlette 解码成多段路径 → 根本匹配不上 `{file_id}` 单段路由 → 404
+    （体是 serve-api 的通用 404，不是本路由的）。fake gateway 对 /api/ai/generated/* 恒 200，
+    所以 404 = 上游没被打到。"""
+    r = proxy_client.get("/api/ai/generated/..%2F..%2Fetc%2Fpasswd")
+    assert r.status_code == 404
+    assert r.content != _FAKE_PNG
+
+
+def test_proxy_generated_image_requires_auth_401(
+    proxy_client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    """bypass OFF + 无凭证 → 401（取图面与其它代理端点同一鉴权腿）。"""
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    r = proxy_client.get(f"/api/ai/generated/{_GENERATED_ID}")
+    assert r.status_code == 401
 
 
 def test_proxy_buffered_passes_through_non_2xx(proxy_client: TestClient):

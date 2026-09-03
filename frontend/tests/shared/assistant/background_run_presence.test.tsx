@@ -11,8 +11,9 @@
 // 外加两件本轮新增的机器判据：
 //   3. 「可以切走」那条提示（`chat.runStatus.safeToLeave`）中英两份 locale 都已清干净，且退役的
 //      组件文件真的不在了 —— 只删组件不删文案（或反过来）都会在这里红。
-//   4. 两个 thread shell 仍然把 `runStatusSlot` 渲染出来（运行条虽退役，这个槽还装着输入队列条 /
-//      事项控件；将来谁把这个 prop 顺手删了会在这里红）。
+//   4. 通用面 AgentThread 仍然把 `runStatusSlot` 渲染出来（运行条虽退役，这个槽还装着事项控件；
+//      将来谁把这个 prop 顺手删了会在这里红）。邮件面 AssistantThread 的槽 09-02 起已删：输入
+//      队列条搬进了消息流末尾（pendingSlot 尾部），那个面只剩 pendingSlot 要验。
 
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -155,12 +156,12 @@ describe('运行条整条退役（组件 + 文案一起）', () => {
   })
 })
 
-// --- ③ 两个面的槽还在 ---------------------------------------------------------------------------
+// --- ③ 槽还在 -------------------------------------------------------------------------------------
 //
-// jsdom 不排版，验不了「在 composer 上方」；能验的是 **slot 真的接上了** —— 两个 thread shell 都
-// 把 runStatusSlot 渲染出来了（运行条退役后它装的是输入队列条 / 事项控件）。
+// jsdom 不排版，验不了「在 composer 上方」；能验的是 **slot 真的接上了** —— AgentThread 把
+// runStatusSlot 渲染出来了（运行条退役后它装的是事项控件）；两个 shell 的 pendingSlot 都渲染。
 
-describe('两个 thread shell 都挂 runStatusSlot', () => {
+describe('thread shell 的槽', () => {
   const marker = <div data-testid="run-slot">bar</div>
   // 两个 shell 都会把真 composer 拉进来，composer 里有走 react-query 的子件 → 必须给 client。
   const mount = (thread: React.ReactElement): ReturnType<typeof render> =>
@@ -173,11 +174,6 @@ describe('两个 thread shell 都挂 runStatusSlot', () => {
         </AiSdkRuntimeProvider>
       </QueryClientProvider>
     )
-
-  test('邮件面 AssistantThread（Viewport 与 composer 之间 → 不随消息流滚动）', async () => {
-    mount(<AssistantThread runStatusSlot={marker} />)
-    await waitFor(() => expect(screen.getByTestId('run-slot')).toBeTruthy())
-  })
 
   test('通用面 AgentThread（sticky ViewportFooter 内 → 跟着 composer 走）', async () => {
     mount(<AgentThread runStatusSlot={marker} />)

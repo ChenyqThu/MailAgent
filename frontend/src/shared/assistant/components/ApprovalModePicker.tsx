@@ -179,7 +179,7 @@ export function ApprovalModePicker({ variant }: { variant: 'icon' | 'chip' }): R
         aria-haspopup="menu"
         aria-busy={saving || undefined}
         className={cn(
-          'flex h-7 items-center gap-1.5 rounded-full px-2 text-meta font-medium transition-colors duration-fast',
+          'flex h-7 min-w-0 items-center gap-1.5 rounded-full px-2 text-meta font-medium transition-colors duration-fast',
           isBypass
             ? 'bg-[rgb(var(--c-fail)/0.12)] text-[rgb(var(--c-fail))]'
             : isUnknown
@@ -191,13 +191,20 @@ export function ApprovalModePicker({ variant }: { variant: 'icon' | 'chip' }): R
         )}
       >
         <ModeIcon mode={mode} size={14} />
-        <span className="max-w-[104px] truncate">{activeTitle}</span>
+        {/* 窄档只留图标 + chevron（pill 底色保留 —— bypass / 未知的警示色是这枚 chip 的主要
+            信息量，收文字不等于收警示）。档位由 AgentComposer 的工具条行写在 group/composer
+            上，见那里的阈值常量；没有那层 group 的场地（邮件面 icon variant）恒显示文字。 */}
+        <span className="max-w-[104px] truncate group-data-[narrow=md]/composer:hidden group-data-[narrow=sm]/composer:hidden">
+          {activeTitle}
+        </span>
         <ChevronDown size={13} strokeWidth={2} className="shrink-0 opacity-60" />
       </button>
     )
 
   return (
-    <div className="relative" ref={ref}>
+    // 包裹层是工具条那行的 flex item：默认 `min-width:auto` 会让整枚 chip 保持 max-content 宽度，
+    // 触发器里的 truncate 永远不触发（同 ModelPicker 的注释）。icon 面是固定 28px 方钮 → shrink-0。
+    <div className={cn('relative', variant === 'chip' ? 'min-w-0' : 'shrink-0')} ref={ref}>
       <HoverTip text={`${label} · ${activeTitle}`} side="top">
         {trigger}
       </HoverTip>

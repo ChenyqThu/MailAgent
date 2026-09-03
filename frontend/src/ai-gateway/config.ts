@@ -353,6 +353,10 @@ export interface AiGatewayConfig {
   dispatchQueuedInput?: (turn: PersistTurnInput) => void
   /** P5 idle trigger used by queue endpoints after enqueue/confirm. */
   dispatchQueuedInputIfIdle?: (sessionId: number) => void
+  /** Interrupt trigger (POST /api/ai/queued-input/interrupt): dispatch exactly `id` on the same
+   *  post-turn chain once the stopped run's lease clears; `revertIds` are the rows that run had
+   *  already claimed (CAS'd back to queued before the claim). */
+  dispatchQueuedInputInterrupt?: (sessionId: number, id: number, revertIds: number[]) => void
   /** P5 store is Electron-main-owned; omitted keeps all endpoints flag-off. */
   queuedInputStore?: QueuedInputStore
   /** P5 renderer invalidation signal after any queue state transition. */

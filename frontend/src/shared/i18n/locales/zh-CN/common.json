@@ -1640,7 +1640,9 @@
       "delete": "删除排队消息",
       "send": "发送排队消息",
       "enqueueFailed": "消息入队失败",
-      "dispatchedLabel": "排队补充"
+      "dispatchedLabel": "排队补充",
+      "interrupt": "立即插入",
+      "interruptBlocked": "先处理挂起的审批"
     },
     "approvalMode": {
       "label": "授权模式",

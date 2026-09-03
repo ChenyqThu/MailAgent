@@ -164,7 +164,8 @@ export function ComposerPlusMenu({
     )
 
   return (
-    <div className="relative" ref={ref}>
+    // 定宽图标钮 → shrink-0（同 EffortPicker 的注释）：窄宽度下该被压的是旁边的模型 / 授权 chip。
+    <div className="relative shrink-0" ref={ref}>
       <HoverTip text={label} side="top">
         {trigger}
       </HoverTip>

@@ -27,7 +27,7 @@
 // model / attachment state from useChatComposerControls(); when no provider is mounted only send / cancel
 // show (a read-only thread / bare render) — lexical input stays, the toolbar chrome drops.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   ArrowUp,
@@ -289,6 +289,38 @@ const SLASH_ICONS: Record<string, Unstable_IconComponent> = {
   todo: (props) => <ListTodo {...props} />
 }
 
+// ── 工具条窄档（侧栏 / 浮窗拖窄时逐级降级） ──────────────────────────────────────────────────
+// 量的是 composer 根 <form> 的宽度 = 侧栏宽度减 33（Viewport 的 px-4 共 32 + 侧栏那圈
+// border-l 1；实测值，别按 32 推）：侧栏 320（AssistantChatModal 的 SIDEBAR_WIDTH_MIN）/ 360 /
+// 400（默认）/ 720（MAX）对应 form 287 / 327 / 367 / 687。
+//   'md'（form ≤ 367 = 侧栏 ≤ 400 默认宽）：授权档 pill 收成纯图标 —— 到这一档右组已在压模型名，
+//     而授权档的信息量在图标与底色（bypass / 未知的警示色）里，文字是这一行最先该让的位置。
+//   'sm'（form ≤ 327 = 侧栏 ≤ 360）：模型名再收一档，别让它把仅剩的余量吃光。
+// 项目没有 container query，宽度自适应的现成范式是 ResizeObserver（量法抄 ComposerToolsMenu：
+// 从自己 closest('form') 拿 composer 根）。
+const NARROW_MD_MAX_W = 367
+const NARROW_SM_MAX_W = 327
+
+type NarrowTier = 'md' | 'sm'
+
+function useNarrowTier(ref: React.RefObject<HTMLElement | null>): NarrowTier | undefined {
+  const [tier, setTier] = useState<NarrowTier | undefined>(undefined)
+  useLayoutEffect(() => {
+    const host = ref.current?.closest('form')
+    if (!host) return undefined
+    const measure = (): void => {
+      const w = host.getBoundingClientRect().width
+      setTier(w <= NARROW_SM_MAX_W ? 'sm' : w <= NARROW_MD_MAX_W ? 'md' : undefined)
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const ro = new ResizeObserver(measure)
+    ro.observe(host)
+    return (): void => ro.disconnect()
+  }, [ref])
+  return tier
+}
+
 export function AgentComposer({
   contextChip
 }: {
@@ -301,6 +333,9 @@ export function AgentComposer({
   const aui = useAui()
   const controls = useChatComposerControls()
   const emailMention = useEmailMentionAdapter(controls)
+  // 工具条窄档（见上）——ref 挂在工具条那一行，量的是它的 closest('form')。
+  const toolbarRef = useRef<HTMLDivElement>(null)
+  const narrowTier = useNarrowTier(toolbarRef)
   // codex r2 [D] — sendDisabled gates EVERY send path, not just the Send button: the Lexical
   // input's Enter calls aui.composer().send() directly (submitMode 'none' turns it off), slash
   // commands append through the thread (guarded in execute below), and the Root form gate covers
@@ -411,7 +446,16 @@ export function AgentComposer({
         {/* AI 对话框 — reactbits 官方 BorderGlow 包裹（卡片自带 bg/border/圆角 + hover mesh 彩虹边框 +
             edge-light 辉光环；inner 容器只提供 flex + 内边距，去掉旧 shell 的 bg/rounded/accent 描边以免
             双层）。glowRadius 20（< 官方 40）控外扩，避免窄浮窗里 edge-light 撑出横向滚动条。 */}
-        <BorderGlow borderRadius={16} glowRadius={20} className="w-full">
+        {/* 🔴 `[&>.rb-border-glow-inner]:min-w-0` —— 卡是 grid、inner 是它的 grid item，默认
+            `min-width:auto` = 不小于 min-content：工具条那行的 min-content（各 chip 的 max-content
+            之和）于是把整张卡撑到比 form 还宽，发送按钮随之被顶出侧栏（窄宽度下 chip 里的
+            truncate 一律不触发，因为根本没人逼它收缩）。这一层放开后，收缩才会传导到下面
+            ComposerFrame 的 min-w-0 → 工具条 → 各 picker 包裹层的 min-w-0。 */}
+        <BorderGlow
+          borderRadius={16}
+          glowRadius={20}
+          className="w-full [&>.rb-border-glow-inner]:min-w-0"
+        >
           {/* issue #61 Lane 3 (A2) — one wrapper carries BOTH file entry points: the Dropzone
               primitive owns drag&drop (handlers + data-dragging highlight), onPaste rides its
               ...rest spread for the Lexical paste wiring above.
@@ -426,7 +470,7 @@ export function AgentComposer({
             onPaste={onComposerPaste}
             chipMaxWidthClass="max-w-[220px]"
             chipRowClassName="px-2.5"
-            className="rounded-2xl"
+            className="rounded-2xl min-w-0"
           >
             <LexicalComposerInput
               directiveChip={AgentDirectiveChip}
@@ -443,7 +487,14 @@ export function AgentComposer({
             {/* 🔴 `relative` = WP-22 context 明细弹层的包含块（环在右组第一位，按它自己的右缘
                 锚会在 320px 窄侧栏被 overflow-hidden 裁掉；算式见 ContextUsageRing 的注释）。
                 其余弹层各自有 `div.relative` 包裹，不受这层影响。 */}
-            <div className="relative flex items-center justify-between gap-1 px-0.5">
+            {/* `group/composer` + `data-narrow` = 窄档的唯一载体：各 picker 用
+                `group-data-[narrow=…]/composer:` 自己读档，没有这层 group 的场地（邮件面
+                composer）恒是宽档，与引入前逐字一致。 */}
+            <div
+              ref={toolbarRef}
+              data-narrow={narrowTier}
+              className="group/composer relative flex items-center justify-between gap-1 px-0.5"
+            >
               <div className="flex min-w-0 items-center gap-0.5">
                 {/* 「+」= 往这轮对话里加内容。agent 面的 @ 在正文里（Lexical directive chip），
                     所以这里**不**给 mention 项 —— 见 ComposerPlusMenu 文件头最后一段。 */}

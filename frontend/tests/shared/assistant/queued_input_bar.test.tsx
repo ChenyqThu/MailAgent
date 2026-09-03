@@ -71,7 +71,11 @@ function item(overrides: Partial<QueuedInput> = {}): QueuedInput {
 
 function renderBar(
   items: QueuedInput[],
-  options: { approvalPendingExists?: boolean; queryClient?: QueryClient } = {}
+  options: {
+    approvalPendingExists?: boolean
+    queryClient?: QueryClient
+    dispatchedRowIds?: ReadonlySet<number>
+  } = {}
 ) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
@@ -97,6 +101,7 @@ function renderBar(
         gatewayBaseUrl="http://gateway"
         sessionId={7}
         approvalPendingExists={options.approvalPendingExists === true}
+        dispatchedRowIds={options.dispatchedRowIds}
       />
     </QueryClientProvider>
   )
@@ -162,8 +167,45 @@ describe('QueuedInputBar', () => {
     )
   })
 
+  test('insert-now posts the interrupt endpoint and re-probes run-active', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } }
+    })
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
+    const view = renderBar([item({ id: 5 })], { queryClient })
+    fireEvent.click(await screen.findByRole('button', { name: 'Insert now' }))
+    await waitFor(() =>
+      expect(view.fetchMock).toHaveBeenCalledWith(
+        'http://gateway/api/ai/queued-input/interrupt',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ id: 5 }) })
+      )
+    )
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: ['ai-gateway', 'run-active', 'http://gateway', 7]
+      })
+    )
+  })
+
+  test('insert-now is disabled with a hint while an approval is pending', async () => {
+    renderBar([item()], { approvalPendingExists: true })
+    const button = (await screen.findByRole('button', { name: 'Insert now' })) as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    expect(button.title).toBe('Resolve the pending approval first')
+  })
+
+  test('rows already carried by a persisted envelope are hidden', async () => {
+    renderBar([item({ id: 1 }), item({ id: 2, content: 'still queued' })], {
+      dispatchedRowIds: new Set([1])
+    })
+    expect(await screen.findByText('still queued')).toBeTruthy()
+    expect(screen.queryByText('queued text')).toBeNull()
+  })
+
   test('queued-input broadcast invalidates only matching session and disposers run on unmount', async () => {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } }
+    })
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
     const view = renderBar([item()], { queryClient })
     await screen.findByTestId('queued-input-bar')

@@ -1640,7 +1640,9 @@
       "delete": "Delete queued message",
       "send": "Send queued message",
       "enqueueFailed": "Could not queue message",
-      "dispatchedLabel": "Queued follow-ups"
+      "dispatchedLabel": "Queued follow-ups",
+      "interrupt": "Insert now",
+      "interruptBlocked": "Resolve the pending approval first"
     },
     "approvalMode": {
       "label": "Permission mode",

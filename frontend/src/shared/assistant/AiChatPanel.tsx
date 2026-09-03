@@ -23,7 +23,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
 import { History, Maximize2, Plus, Settings, X } from 'lucide-react'
 
-import type { ChatBackendKind, ReportAgentConfig, SearchHit } from '@shared/api/types'
+import type { ChatBackendKind, QueuedInput, ReportAgentConfig, SearchHit } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { useActiveEmail } from '@shared/state/active-email'
 import { hideAIChatPanel, useAIChatPanel } from '@shared/state/ai-chat-panel'
@@ -515,10 +515,18 @@ export function AIChatPanel({
         body: JSON.stringify({ sessionId: chat.activeSessionId, content })
       })
         .then(async (response) => {
-          if (!response.ok) throw new Error((await response.json())?.error ?? 'enqueue failed')
-          await queryClientForRead.invalidateQueries({
-            queryKey: qk.chat.queuedInput(chat.activeSessionId)
-          })
+          const body = (await response.json()) as { error?: string; item?: QueuedInput }
+          if (!response.ok) throw new Error(body?.error ?? 'enqueue failed')
+          // task 09-02 — seed the list with the returned row (real id) so the bubble is on screen
+          // before the refetch round-trip; the invalidation right after keeps it authoritative.
+          const queryKey = qk.chat.queuedInput(chat.activeSessionId)
+          if (body.item) {
+            const item = body.item
+            queryClientForRead.setQueryData<QueuedInput[]>(queryKey, (old = []) =>
+              old.some((row) => row.id === item.id) ? old : [...old, item]
+            )
+          }
+          await queryClientForRead.invalidateQueries({ queryKey })
         })
         .catch((error: unknown) =>
           toastError(t('chat.queuedInput.enqueueFailed'), errorMessage(error))
@@ -597,6 +605,18 @@ export function AIChatPanel({
   // 🔴 为什么不能挂 TurnPresence：那个必须在 message scope 里（`message.isLast`），而切回来时后台
   // run 可能还没产出任何 part —— 那条 assistant 消息根本不存在，没有宿主。pendingSlot 在消息流内、
   // 消息之外，不受这条约束。
+  // task 09-02 — queued follow-ups sit LAST in the stream (after the in-flight run's card / presence
+  // row): they are the user's next messages, shown as waiting user bubbles. Rows already carried by
+  // a persisted envelope are hidden so a reload never paints the same text twice.
+  const dispatchedRowIds = useMemo(
+    () =>
+      new Set(
+        (initialMessages ?? []).flatMap(
+          (message) => message.metadata?.queuedInputDispatch?.rowIds ?? []
+        )
+      ),
+    [initialMessages]
+  )
   const pendingSlotContent = (
     <>
       {pendingApprovalCard}
@@ -605,15 +625,14 @@ export function AIChatPanel({
         startedAt={backgroundStartedAt}
         className="mb-4"
       />
+      <QueuedInputBar
+        enabled={queuedInputEnabled}
+        gatewayBaseUrl={gatewayBaseUrl}
+        sessionId={chat.activeSessionId}
+        approvalPendingExists={approvalPendingExists}
+        dispatchedRowIds={dispatchedRowIds}
+      />
     </>
-  )
-  const runStatusSlot = (
-    <QueuedInputBar
-      enabled={queuedInputEnabled}
-      gatewayBaseUrl={gatewayBaseUrl}
-      sessionId={chat.activeSessionId}
-      approvalPendingExists={approvalPendingExists}
-    />
   )
 
   // Sidebar session preview cache (lazy on open).
@@ -931,11 +950,10 @@ export function AIChatPanel({
                         runningRef={aiSdkRunningRef}
                         onRunningChange={setAiSdkRunning}
                       />
-                      {/* pendingSlot — B3 in-panel approval card + 后台 run 在场行（两者都自门控，
-                          不适用时渲染 null）；runStatusSlot — composer 上方的输入队列条。 */}
+                      {/* pendingSlot — B3 in-panel approval card + 后台 run 在场行 + 排队中的用户
+                          消息（三者都自门控，不适用时渲染 null）。 */}
                       <AssistantThread
                         pendingSlot={pendingSlotContent}
-                        runStatusSlot={runStatusSlot}
                         emptyState={emptyMessages}
                       />
                     </AiSdkRuntimeProvider>

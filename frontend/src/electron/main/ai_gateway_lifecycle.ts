@@ -87,7 +87,10 @@ import {
   groupUsage,
   insertGroupTurn
 } from './chat_db/groups'
-import { runQueuedInputDispatch } from '../../ai-gateway/queuedInputDispatch'
+import {
+  INTERRUPT_IDLE_WAIT_LIMIT_MS,
+  runQueuedInputDispatch
+} from '../../ai-gateway/queuedInputDispatch'
 import { selectMessagesForModelContext } from '../../ai-gateway/compactSelect'
 import {
   CompactCoordinator,
@@ -2055,6 +2058,21 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       if (turn.sessionId != null) scheduleDispatch(turn.sessionId)
     }
     gatewayConfig.dispatchQueuedInputIfIdle = scheduleDispatch
+    // Same per-session chain as the drain: an onFinish drain already queued ahead of this task
+    // claims the row first and this dispatch then finds nothing — claim() is the only dedup gate.
+    gatewayConfig.dispatchQueuedInputInterrupt = (sessionId, id, revertIds): void => {
+      setTimeout(
+        () =>
+          chainPostTurn(sessionId, () =>
+            runQueuedInputDispatch(dispatchDeps, sessionId, {
+              ids: [id],
+              waitForIdleMs: INTERRUPT_IDLE_WAIT_LIMIT_MS,
+              revertIds
+            })
+          ),
+        0
+      )
+    }
   }
 
   const handle = await startAiGatewayServer(gatewayConfig)

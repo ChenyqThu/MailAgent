@@ -320,13 +320,20 @@ export function ModelPicker({
           providerId={activeOption?.providerId ?? (current ? refProviderId(current) : null)}
           protocol={activeOption?.protocol}
         />
-        <span className="min-w-0 max-w-[140px] truncate">{activeText}</span>
+        {/* 最窄档再收一档上限（档位见 AgentComposer 的阈值常量）：到那个宽度余量只够几个字，
+            140 的上限已经不起作用，收窄是为了把省下的宽度留给发送按钮而不是省略号。 */}
+        <span className="min-w-0 max-w-[140px] truncate group-data-[narrow=sm]/composer:max-w-[72px]">
+          {activeText}
+        </span>
         <ChevronDown size={13} strokeWidth={2} className="shrink-0 opacity-60" />
       </button>
     )
 
   return (
-    <div className="relative" ref={ref}>
+    // 🔴 触发器自己的 `min-w-0`（见上）只有在**这一层也能收缩**时才生效：包裹层是工具条那行的
+    // flex item，默认 `min-width:auto` 会把整枚 chip 钉在 max-content 宽度，里面的 truncate 永远
+    // 不触发。chip 面（可变宽的胶囊）→ min-w-0；icon 面是固定 28px 方钮，反过来要 shrink-0。
+    <div className={cn('relative', variant === 'chip' ? 'min-w-0' : 'shrink-0')} ref={ref}>
       <HoverTip
         text={disabled ? t('chat.composer.modelHint') : `${label} · ${activeText}`}
         side="top"

@@ -27,8 +27,10 @@ gateway 的 chatRun.ts/streamText（经代理透传），不在 Python 重写引
                                    ?sessionId= 随 query 透传；miss/未启用 → gateway 404 透传）
   - POST /api/ai/run/stop          非流式 JSON（07-15 lane A B1：显式停止通道 —— detached 模式
                                    下 client abort 不再中止上游，composer 停止按钮经此）
-  - GET/POST /api/ai/queued-input  非流式 JSON（P5 queued-input CRUD/confirm；GET query 透传）
+  - GET/POST /api/ai/queued-input  非流式 JSON（P5 queued-input CRUD/confirm/interrupt；GET query 透传）
   - GET  /api/ai/config            非流式 JSON
+  - GET  /api/ai/generated/{id}    非流式**二进制**（task 09-02 generate_image 产物取图；file_id 经与
+                                   gateway 同一条严格正则校验，非法直接 404 不打上游）
   - GET  /health                   **裸路径**（非 /api/ai）：renderer 健康探针打
                                    ``${base}/health`` → 代理到 gateway /health。鉴权豁免（纯
                                    存活探针；与 serve-api 自己的 /api/health liveness 区分）。
@@ -62,6 +64,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any, AsyncIterator
 
 import httpx
@@ -345,6 +348,34 @@ async def proxy_queued_input_send(
     request: Request, _: None = Depends(verify_cf_access)
 ) -> Response:
     return await _proxy_buffered(request, "/api/ai/queued-input/send")
+
+
+@router.post("/api/ai/queued-input/interrupt")
+async def proxy_queued_input_interrupt(
+    request: Request, _: None = Depends(verify_cf_access)
+) -> Response:
+    return await _proxy_buffered(request, "/api/ai/queued-input/interrupt")
+
+
+# task 09-02 — generate_image 产物的 file_id 形状，与 gateway ``tools/image.ts`` 的 FILE_ID_RE
+# 逐字同源（``<sessionId>-<uuid v4>.<png|jpg|webp>``）。代理侧先验一遍：非法 id 直接 404，
+# 不让一个探测串走到上游；合法 id 无分隔符 / 无多余点，路径段天然干净。
+_GENERATED_FILE_ID_RE = re.compile(
+    r"^\d{1,12}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|webp)$"
+)
+
+
+@router.get("/api/ai/generated/{file_id}")
+async def proxy_generated_image(
+    file_id: str, request: Request, _: None = Depends(verify_cf_access)
+) -> Response:
+    """代理 GET /api/ai/generated/{file_id} → gateway（task 09-02，远程 web 取 generate_image 产物）。
+
+    二进制透传：``_proxy_buffered`` 原样回传 bytes body，content-type / cache-control 经
+    ``_passthrough_response_headers`` 一并透传（framing 由 Starlette 自算）。"""
+    if not _GENERATED_FILE_ID_RE.match(file_id):
+        return JSONResponse({"error": "E_IMAGE_NOT_FOUND"}, status_code=404)
+    return await _proxy_buffered(request, f"/api/ai/generated/{file_id}")
 
 
 @router.get("/api/ai/config")
