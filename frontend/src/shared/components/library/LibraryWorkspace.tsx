@@ -17,7 +17,9 @@ import type { LibraryFile } from '@shared/api/types/library'
 import { AssistantChatDock } from '@shared/assistant/modal/AssistantChatDock'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { PageFrame } from '@shared/components/layout/PageFrame'
+import { useMediaQuery } from '@shared/hooks/useMediaQuery'
 import { TRASH_SLUG } from '@shared/libraryConstants'
+import { useDomainCollapsed, useDomainWidth } from '@shared/state/nav-shell'
 import { useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { useLibraryTree } from '@shared/state/library-tree'
 import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
@@ -33,20 +35,23 @@ import { LibraryTreePanel, rootLabelKey } from './LibraryTreePanel'
 import { revealLibraryTarget } from './libraryIpc'
 import { useLibraryFileActions } from './useLibraryFileActions'
 
-/** 🔴 `'library'` 要等 P1-L8 把它加进 `NavDomain` 才是合法的 `MainPage`。断言只是那条 lane
- *  落地前的桥：`useMainBreadcrumb` 自带 `mainPage === page` 守卫，域不存在时它一次都不写。
- *  L8 合并后这一行可以直接删掉（字面量本身就成立）。 */
-const LIBRARY_MAIN_PAGE = 'library' as MainPage
+const LIBRARY_MAIN_PAGE: MainPage = 'library'
 
 /** 两列几何抄 ContactsWorkspace：树列宽读 `--app-second-w`（nav shell 按域记忆的那份），
  *  内容列 `minmax(430px,1fr)`，窄窗塌成单列。 */
 const WORKSPACE_GRID_CLASS =
   'grid h-full min-h-0 grid-cols-[var(--app-second-w,336px)_minmax(430px,1fr)] max-[860px]:grid-cols-1'
+/** 与上面那条 `max-[860px]` 断点是同一个值 —— 镜像不猜数（同 ContactsWorkspace）。 */
+const WORKSPACE_STACKED_QUERY = '(max-width: 860px)'
 
 export function LibraryWorkspace(): ReactElement {
   const { t } = useTranslation()
   const api = useLibraryApi()
   const upload = useLibraryUpload()
+
+  const stacked = useMediaQuery(WORKSPACE_STACKED_QUERY)
+  const listCollapsed = useDomainCollapsed('library')
+  const listWidth = useDomainWidth('library')
 
   const expanded = useLibraryTree((s) => s.expanded)
   const selectedPath = useLibraryTree((s) => s.selectedPath)
@@ -194,8 +199,19 @@ export function LibraryWorkspace(): ReactElement {
       rightDock={<AssistantChatDock />}
     >
       <div className={WORKSPACE_GRID_CLASS}>
-        <div className="nav-second-col flex-col border-r border-ink-border" data-nav-second>
-          <div className="nav-second-col-inner min-h-0 flex-1 flex-col">
+        <div
+          className="nav-second-col flex-col border-r border-ink-border"
+          data-nav-second
+          // 🔴 折叠态靠这个属性拿到 `.nav-second-col[data-collapsed='true']{visibility:hidden}`：
+          // 只把宽收成 0 的话内容仍可被键盘聚焦（Tab 能跳进一棵看不见的树）。
+          data-collapsed={!stacked && listCollapsed ? 'true' : 'false'}
+          style={stacked ? { width: '100%' } : undefined}
+        >
+          <div
+            // 内层按记忆宽定宽：220ms 过渡期间树不跟着重排。
+            className="nav-second-col-inner min-h-0 flex-1 flex-col"
+            style={{ width: stacked ? '100%' : listWidth }}
+          >
             <LibraryTreePanel
               selectedPath={selectedPath}
               expanded={expanded}
