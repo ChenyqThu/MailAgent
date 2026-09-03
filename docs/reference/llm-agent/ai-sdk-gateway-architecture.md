@@ -1230,8 +1230,8 @@ Claude Code permission-mode 参照的 owner 级全局审批模式。**08-05 WP-1
 
 - **来源列**：`ai_chat_sessions` + `trigger_id`/`trigger_kind`/`trigger_fired_at` 三列两索引（migration 与落列**不受 flag 控制**；`trigger_id` 恒 NULL 至 P6 多 Trigger v2——v1 trigger 无稳定 ID，不许发明）。
 - **可信身份**：headless System Prompt 注入 `<current_custom_agent>`（agentId/agentTitle/jobId/sessionId，**仅**从服务端 spec + `createAgentSession` 结果构造、XML 转义，不来自 request body；`systemPrompt.ts` 拼接位于 stable→context→identity）。
-- **组合查询**：`chat_session_list/search` 加 agent/trigger/时间窗/archived/starred 过滤（契约=附录 A.1；未知 triggerKind fail-open 筛空）；🔴 headless self-history 服务端强制 `agent_id=current`（`X-MailAgent-Agent-Id` header 由 gateway 可信代码设置，工具入参解除不了），all-history 需 knowledge/sessions grant。
-- **agent_catalog_list/get**：只读目录工具，headless×flag×grant 三条件才注册（manual chat 恒无）。
+- **组合查询**：`chat_session_list/search` 加 agent/trigger/时间窗/archived/starred 过滤（契约=附录 A.1；未知 triggerKind fail-open 筛空）；🔴 headless self-history 服务端强制 `agent_id=current`（`X-MailAgent-Agent-Id` header 由 gateway 可信代码设置，工具入参解除不了）。**task 09-02 起**读取半径是独立授权项 `tool_policy.grant_sessions ∈ {own, all}`（默认 own；spec 仅 all 时投影 `grantSessions`，gateway `parseSessionsGrant` fail-closed），不再与 knowledge 卡捆绑：三个 `chat_session_*` 工具对 custom agent **恒注册**（`wrapCfgForAgentRun` 按名豁免 allowed_tools 交集，`HEADLESS_TOOL_OPTIONS` 与能力卡词表同批退出它们），`GET /chat/sessions/{id}/messages` 与列表/搜索同款 scope 校验（own 下读别人的会话 → `E_NOT_FOUND`，不是空列表），manual chat（无 header）恒全部。存量迁移只在 `parse_tool_policy` 一处：键缺席且 `allowed_tools` 含 `chat_session_list`（旧 allowAllHistory 判据）→ all；`wire.py` 读投影把有效值物化给设置面，设置面保存时恒显式写回（否则存量 all 行关不回 own）。`origin` 入参值域补 `team | group`。
+- **agent_catalog_list/get**：只读目录工具，headless×flag×grant 三条件才注册（manual chat 恒无）；grant 判据自 09-02 起是 knowledge 卡自己的成员 `agent_catalog_list` 在 allowed_tools 里（此前借用 `chat_session_list`，拆分后新保存的 knowledge=on 行不再带它）。
 - **未读**：Agents 导航/行红点，renderer 经 `/chat/config.sessionProvenanceEnabled` 投影取态（`_hot_bool` 热读镜像 main-env，**不直读 env snapshot**——修复轮抓到的真 bug，此后成惯例）。
 
 ### 13.24.3 P2 — custom_agent_call 与父子 Session（`MAILAGENT_CUSTOM_AGENT_CALL`，默认 ON，CHAT_DB v24→25 + SyncStore v42→43）
@@ -1282,8 +1282,8 @@ Run active（含审批等待）时 Enter 入队不发请求；Run 真正 onFinis
 
 - **DB（B.3 逐字）**：`chat_queued_input`（status ∈ queued/claimed/sent/canceled/restored + mode CHECK[只产 `follow_up`，`steering` 预留] + FK CASCADE + `idx_chat_queued_input_dispatch` + partial UNIQUE `idx_chat_queued_input_delivery`）。store 单一写者 = Electron main（`chat_db/queuedInput.ts`）：护栏 = content trim 非空 ≤16384 字符、per-session queued+claimed ≤20（`E_QUEUE_FULL`）；CAS claim 用 B.3 SQL 逐字（per-id `status IN ('queued','restored')`——**选取层**只喂 queued，restored 进 claim 只有 confirm-send 路径）；`markSent` 带 **session 闸**（`AND session_id=?`，防 metadata rowIds 跨 session 误标）＋首行绑 `delivered_message_id`、同批其余行 sent 但 delivered 留 NULL（partial UNIQUE 约束下的取舍）。Python `src/chat/db.py` 只刷头注释（0 CREATE TABLE 不变式；Python 不读此表故 `tests/api/test_chat.py` 不加 seed DDL）。
 - **Dispatcher（只活在 lifecycle，单进程单点；CAS 是兜底不是主防线）**：纯逻辑抽在 `ai-gateway/queuedInputDispatch.ts`（deps 注入可单测，镜像 P4 `shouldAutoCompact` 纪律）。链路 = `makePersistOnFinish` 在 maybeAutoCompact **之后**调 `cfg.dispatchQueuedInput?.(turn)`（独立 try/catch）→ lifecycle `setTimeout(0)` → **per-session post-turn 串行链**（`chainPostTurn`，P4 compact 任务与 P5 dispatch 任务同链、注册顺序 FIFO ⇒ 恒 compact 先 dispatch 后；🔴 未来 P6+ 的 post-turn 动作必须进这条链）。算法：active 复检 → compact 有界等待（2s 步进、300s 上限，放弃则行留 queued 等下个触发）→ 只选 `status='queued'` → CAS claim → `<queued_followups><message>…</message></queued_followups>` 信封（05§4.4，XML 转义 `& < >`，保留逐条边界）→ 从 DB 重建 `messages = listMessages().map(chatMessageToUIMessage)`（P4 overflow 先例）+ 追加信封 user UIMessage（`metadata.queuedInputDispatch.rowIds`）→ **loopback 自调 `POST /api/ai/chat`**（复用完整 registry/409/审批 stash/drain/persistTurn/broadcast 路径；trustedMode 自然 = manual_chat）→ 响应 body **读到底丢弃**（兼容 `MAILAGENT_CHAT_DETACHED_RUNS=false` 回退位 close→abort）→ 非 2xx/异常 → revertClaimed 回 queued。**sent 落点在 persistTurn**：插入信封 user 行后按 metadata rowIds `markSent`——崩溃于 run 中途 ⇒ 行停 claimed ⇒ 重启 `restoreAllStale()` 转 restored ⇒ 消息未落库故用户确认重发**不双投**（自洽闭环，无补偿事务）。审批暂停 ⇒ persistTurn 不被调 ⇒ 行留 claimed（UI「发送中」）；resume 走 `approvalResume.ts` 完整 onFinish ⇒ markSent + 下一批 dispatch 自然触发。stop ⇒ `isAborted` 早退不 dispatch，`handleRunStop` 调 `restoreForSession`（G9）。
-- **端点（5 条，flag-off 全 404 E_NOT_IMPLEMENTED 先例形态）**：`GET /api/ai/queued-input?sessionId=` / `POST …`（enqueue；成功且无 active run → `dispatchQueuedInputIfIdle` 兜住 renderer stale 入队滞留）/ `POST …/update` / `POST …/cancel` / `POST …/send`（confirm restored→queued + IfIdle）。400 E_INVALID_ARG·E_QUEUE_FULL / 409 E_QUEUED_INPUT_STATE。五条全入 `ai_gateway_proxy.py` allowlist（GET query 透传；远程 web 可用）。🔴 renderer 对 gateway 的 fetch 一律带 `credentials:'include'`（P3 compact fetch 漏带是已知既有缺陷，P5 未抄）。
-- **UI**：composer onSubmit 优先级 = `sendDisabled`（approval-busy/compactActive 仍禁一切含入队）→ `/compact` 全等拦截 → **queueMode enqueue**（preventDefault + POST + 清空；空文本不发）→ 正常发送；queue 模式 Input 可输入、附件 Dropzone 禁用（队列 v1 纯文本）。queueMode 真值 = `queuedInputEnabled && (aiSdkRunning[ThreadRunningBridge 修正值] || backgroundActive || approvalPendingExists)`——审批等待期照常排队（05§4.5，队列消息**不代表**批准/拒绝）。`QueuedInputBar` 挂 runStatusSlot（composer 上方靠右，13 决策 I；空队列零 DOM）：逐条删除/编辑（=cancel + 取回 composer）/restored 行「发送」钮 + 状态文案（排队/审批后送达/发送中/待确认）。信封用户消息 renderer 轻量 prettify（逐条段落 + 标注，解析失败回退原文；DB/模型层恒信封原文）。新广播 `chat:queued-input-changed {sessionId}`（ChatApi optional 方法；web HttpApi 不实现 = mutation/turn-persisted 收敛，v1 已知缝）。
+- **端点（6 条，flag-off 全 404 E_NOT_IMPLEMENTED 先例形态）**：`GET /api/ai/queued-input?sessionId=` / `POST …`（enqueue；成功且无 active run → `dispatchQueuedInputIfIdle` 兜住 renderer stale 入队滞留）/ `POST …/update` / `POST …/cancel` / `POST …/send`（confirm restored→queued + IfIdle）/ **`POST …/interrupt {id}`（09-02「立即插入」）**：`activeRuns.stop(sessionId)` → 仅该 id confirm（restored 才需要）→ `dispatchQueuedInputInterrupt(sessionId, id, revertIds)` 进**同一条** `chainPostTurn` 链，dispatcher 以 `{ids:[id], waitForIdleMs:5s, revertIds}` 跑：有界等 lease 释放（超时 = 行留 queued）→ 把被停 run 已 claim 的行 CAS 回 queued（abort 的 run 不落库，等于没投递；**审批挂起时不回退**——那些 claimed 行属于暂停中的 run，resume 后由 markSent 收口，回退会双投）→ 只 claim 该 id → 信封 loopback。🔴 与 `/run/stop` 的区别：**不做** `restoreForSession`，其余行保持 queued、随插入 run 的 onFinish 正常 drain；去重唯一闸 = `claim()` CAS（同链串行 + 状态 CAS，onFinish drain 与 interrupt 并发只派发一次，闸 `tests/ai-gateway/queued_input_dispatch.test.ts` race case）。返回 `{ok, stopped}`；非 queued/restored → 409。400 E_INVALID_ARG·E_QUEUE_FULL / 409 E_QUEUED_INPUT_STATE。六条全入 `ai_gateway_proxy.py` allowlist（GET query 透传；远程 web 可用）。🔴 renderer 对 gateway 的 fetch 一律带 `credentials:'include'`（P3 compact fetch 漏带是已知既有缺陷，P5 未抄）。
+- **UI**：composer onSubmit 优先级 = `sendDisabled`（approval-busy/compactActive 仍禁一切含入队）→ `/compact` 全等拦截 → **queueMode enqueue**（preventDefault + POST + 清空；空文本不发）→ 正常发送；queue 模式 Input 可输入、附件 Dropzone 禁用（队列 v1 纯文本）。queueMode 真值 = `queuedInputEnabled && (aiSdkRunning[ThreadRunningBridge 修正值] || backgroundActive || approvalPendingExists)`——审批等待期照常排队（05§4.5，队列消息**不代表**批准/拒绝）。`QueuedInputBar`（09-02 起）挂 **`pendingSlot` 尾部 = 消息流末尾**（审批卡 / 后台 run 在场行之后；`AssistantThread.runStatusSlot` 随之删除；空队列零 DOM）：每行 = 与 `UserMessage` 同款用户气泡（乐观上屏，**不落真实 user 行**，信封合并机制不变）+ 状态文案（排队/审批后送达/发送中/待确认）+ 操作钮「立即插入」（→ `/interrupt`；`approvalPendingExists` 时 disabled + title 提示，无 run 可 abort、排队文本不代表审批决定）/ 编辑（=cancel + 取回 composer）/ 删除 / restored 行「发送」。入队成功后先用返回的 item 写 react-query 缓存再 invalidate（即时上屏、真实 id）；面板按已落库消息的 `metadata.queuedInputDispatch.rowIds` 过滤（`dispatchedRowIds`）——消息重载先于队列 refetch 到达时，同一段文字不会短暂双份。信封用户消息 renderer 轻量 prettify（逐条段落 + 标注，解析失败回退原文；DB/模型层恒信封原文）。新广播 `chat:queued-input-changed {sessionId}`（ChatApi optional 方法；web HttpApi 不实现 = mutation/turn-persisted 收敛，v1 已知缝）。
 - **flag**：双载体投影 `/chat/config.chatQueuedInputEnabled`（`_hot_bool`）+ lifecycle `envBool`；CROSS_LANGUAGE_FLAGS `[_LIFECYCLE, _CHAT]`。off = 端点 404、store/dispatcher/boot-recovery 不注入、queue bar 不渲染、composer 字节级现状（迁移照跑，惯例）。
 - **范围钉死**：v1 只 manual chat 面板；mode 只产 `follow_up`（Tool-boundary steering = 05§4.6 future）；dispatch 自调不带 system/contextSnapshot（少一段注入，agentRun 先例代价可接受）。
 
@@ -1812,3 +1812,85 @@ token 从 env `MAILAGENT_LOCAL_API_TOKEN` 读（App 每次启动随机生成、�
 具相位（labs on 的成员 run 自 g2 起可能有读工具，但那个相位不上事件通道）—— 这是有意的边界，不
 伪造一个看着像的态。`error` 借 stall 的一级门槛做新鲜期：overlay 的 failed 留痕至今没有清理者，
 不给新鲜期就会在群底留一条永不消失的红字（失败的长期载体是时间线里那条带重试钮的 meta 行）。
+## 13.30 图像生成：`generate_image` 工具 + `IMAGE_GEN_MODEL`（task 09-02）
+
+> 需求与拍板 = `.trellis/tasks/09-02-misc04-image-gen/prd.md`。本节只写运行语义。
+
+**一句话**：设置-AI 选一个「图像生成模型」（`providerId:modelId`），chat 里主 agent 用 `generate_image`
+生成图片或基于已有图片编辑；产物落本机文件，tool result 只回文件引用，卡片经 gateway 只读路由取图。
+
+### 13.30.1 配置键
+
+- `.env` `IMAGE_GEN_MODEL`：值是 providerRef，**只有 `openai` / `openai-compatible` 两种 protocol 的
+  provider 能选**（AI SDK 只有这两家实现了 `imageModel()`：`/images/generations` + `/images/edits`）。
+  受管白名单两侧（`env-keys.ts` / `settings.py`）都登记；Python 不读它（无对等能力），故进
+  `tests/config/env_example_orphans_baseline.txt`。
+- **热读**：`ai_gateway_lifecycle.ts::readImageGenModelRef()` 每次装配工具时解析 `.env`，保存即生效
+  （EnvField `hotReload`，不拉重启横幅）。
+- 设置面 `settings/custom-ai/ImageModelSection.tsx`（挂 AiTab 翻译区之后，锚点
+  `AI_TAB_ANCHOR_IDS.imageGenModel`）：候选集 = `/chat/config.enabledModels` 经
+  `imageModelCandidates()` 按 provider protocol 过滤，protocol 集单源是 `providerRef.ts`
+  `IMAGE_MODEL_PROTOCOLS`（resolver 拒绝什么，设置面就不列什么）；当前 `.env` 值作 orphan 保留可选。
+  **不扩 `capabilities_json`**（无 image 位，不臆造）——选了文本模型的诚实面是首次调用的 typed error。
+
+### 13.30.2 模型解析
+
+`providers.ts::resolveImageModel(built, ref)`：parse ref → provider 行 → protocol ∈ 两家 → key 规则与语言模型
+逐字相同（行 key 权威；openai-compatible 可无 key）→ `registry.imageModel('pid:mid')`。非两家协议 /
+provider 不存在 → typed `ProviderImageModelError`（`E_IMAGE_MODEL_UNSUPPORTED`）。resolver 面
+`ProviderModelResolver.resolveImageModel?` **有意无 legacy 腿**（env 回退是 anthropic 单例，结构上没有
+图像模型）：快照不可达 → typed error，不静默回落。`llm_provider_resolver.ts` 原样透传。
+
+### 13.30.3 工具 `generate_image`（`tools/image.ts`）
+
+- 入参 `{ prompt, size?: "WxH", n?: 1..2, source_images?: string[] ≤4 }`，**平铺 schema，无
+  oneOf 分支**（reference_prompt_schema_drift_trap）：`source_images` 非空即编辑模式。
+- **来源引用两种形式**（都在工具内解析，模型永不碰字节）：
+  1. 本会话之前 `generate_image` 返回的 `file_id`（连续编辑）；
+  2. `attached:last` / `attached:<n>` —— 用户在本会话消息里贴的第 n 张图（1-based，会话顺序）。字节
+     来自 AI SDK execute options 的 `messages`（`auditedWriteTool.run` ctx 新增 `messages`），即模型
+     看到的同一份 file part；只认 data URL / base64 / typed array，**不 fetch 远程 URL**。
+- class **`outbound`**（`policy.ts`）：prompt + 用户的图出境到图像 provider，无 grants key ⇒
+  headless / im_chat 结构性不注册（prd 的「headless 排除」就是这一行，没有 venue gate）。
+  CORE_UNGATED（无 skill 归属）。`tools/index.ts` 的注册条件 = `opts.imageGen` deps + approvalGuard
+  （**无 flag**）；未配 `IMAGE_GEN_MODEL` 时工具仍注册、调用返回 `E_IMAGE_MODEL_NOT_CONFIGURED` 指去设置。
+- 审批档：`tool_prefs.py` 出厂 **auto** 可配 ask / deny（group `web`）；catalog 行
+  `tier=edit / write / tool_class=outbound / default_approval=auto`。
+- typed errors：`E_IMAGE_MODEL_NOT_CONFIGURED` / `E_IMAGE_MODEL_UNSUPPORTED` / `E_NO_LLM_KEY` /
+  `E_IMAGE_SOURCE_INVALID` / `E_IMAGE_NOT_FOUND`（含跨会话 file_id）/ `E_IMAGE_GENERATION_FAILED`
+  （上游错误经 `sanitizedUpstreamErrorMessage`，正文不透传）。
+
+### 13.30.4 落盘与路由
+
+- 目录 `DATA_ROOT/data/generated/<sessionId>/<uuid>.<ext>`（与 `data/attachments` 同级；session-less
+  chat 用 `0`）。`file_id = <sessionId>-<uuid>.<ext>`，ext ∈ png/jpg/webp。
+- tool result **只回** `{ mode, model, images: [{ file_id, mime, width, height, url }] }`，无 base64；
+  宽高由 `readImageDimensions` 从 PNG / JPEG / WebP 头解析（解析不出为 null）。
+- `GET /api/ai/generated/:fileId`（server.ts，`cfg.generatedImagesDir` 缺席 → 404）：id 经
+  `resolveGeneratedFilePath` 严格正则 + 「解析后路径必须在根目录下」双重锁；坏 id / 越界 / 不存在一律
+  404 `E_IMAGE_NOT_FOUND`（探测者学不到区别）；命中回 mime + `immutable` 缓存头 + 文件流。
+  🔴 工具与路由**共用同一个** `resolveGeneratedFilePath`，写侧与读侧对「合法 id」的判定不可能分叉。
+- renderer 取图 = `resolveAiGatewayBaseUrl() + url`。远程 web（base = `''` 同源）经 serve-api
+  `ai_gateway_proxy.py` 的 `GET /api/ai/generated/{file_id}` 代理到 gateway：`_proxy_buffered`
+  原样透传二进制 body + content-type / cache-control；代理侧用与 gateway **同一条**严格 file_id
+  正则先验，非法 id 直接 404 不打上游（`tests/api/test_ai_gateway_proxy.py`）。
+
+### 13.30.5 卡片
+
+`shared/assistant/tools/image/ImageGenCard.tsx`（ComponentRegistry key only，`componentForTool` 返 null）：
+generating = 按 `size` 比例的占位（默认 1:1）+ 模糊光斑 + 脉动（`useReducedMotion` 下去掉 `animate-pulse`）
++ prompt 小字 + 分辨率角标（`text-meta` mono，纯数字）；complete = `<img>` + 复用 `ImageLightbox` 放大
++「下载」（fetch → blob → `<a download>`，跨域 `<a download>` 会被 Chromium 忽略，打包态 renderer 是
+file:// 对 loopback 本就是跨域）；error = 本地化失败行 + `toolErrorDetail` +「重试」
+（`ThreadPrimitive.Suggestion` 以同一 prompt 重发一条用户消息，只在有 composer 的活面渲染）；
+pending（owner 调成 ask）= prompt 复核 + approve / reject。纯逻辑在 `imageGenCard.lib.ts`。
+
+### 13.30.6 假设与未做
+
+- **CRS 假设**：`crs.chenge.ink` 只在暴露标准 OpenAI 形状的 `/v1/images/*` 时可用（作为 openai-compatible
+  provider 选它的模型）；仓库内零证据表明它提供图像接口，未验证。非 OpenAI 形状的图像 API 不在范围。
+- 不显示费用；无 Python 侧对等能力；不做 mask / inpainting（SDK 支持 `mask`，本轮未暴露）。
+- 闸：`tests/ai-gateway/tools/image.test.ts`（mock image model 覆盖生成 / 编辑两路 + 引用词汇 + 越界）、
+  `tests/ai-gateway/generated_image_route.test.ts`、`tests/shared/assistant/tools/ImageGenCard.test.tsx`、
+  `tests/shared/imageModelCandidates.test.ts`、`providers.test.ts` 的 `resolveImageModel` 组；既有的
+  catalog / tool_prefs parity / 中文名 / toolTitle / policy / skill_gating 闸全部覆盖到本工具。
