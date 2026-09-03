@@ -40,6 +40,7 @@ from src.chat.group_limits import (
     MODEL_OVERRIDE_MAX_CHARS,
     RESPONSE_MODES,
     SESSION_INVOKED_BY,
+    THREAD_TITLE_MAX_CHARS,
     TOPIC_MAX_CHARS,
     group_scope_hash,
 )
@@ -1469,6 +1470,166 @@ async def get_group_metrics(request: Request, session_id: int):
     _require_group_session(session_id)
     return success_envelope(
         get_chat_db().group_metrics(session_id), request=request, source="sqlite"
+    )
+
+
+# ── 话题 thread（T3，CHAT_DB v32）───────────────────────────────────────────
+#
+# 话题 = 从群里某一条消息开出来的**独立上下文子会话**（``invoked_by='thread'``）。发言 / 停止 /
+# 已读 / 改名 / 删除 / 列消息全部复用既有的会话端点（话题 id 与群 id 同一个命名空间），所以这里
+# 只有两个新端点：建话题、列本群的话题。
+#
+# 🔴 契约：
+#   • 顶层群限定 —— 父群必须 ``parent_session_id IS NULL``；在子群 / 话题上开话题一律 400
+#     （单层嵌套校验不放宽：family 的定义与停止通道都建立在「至多一层」上）。
+#   • 根消息必须属于该群且 ``role in ('user','assistant')``。
+#   • 同一条根消息重复 POST 是**幂等**的：返回已有话题（200），不是 409，也不建第二个
+#     —— 落库根据是 v32 的唯一部分索引 ``idx_chat_sessions_thread_root``。
+#   • 建行走 ``create_session_validated``（members 取父群快照、``group_config_json`` 复制父群、
+#     title = 根消息前 ``THREAD_TITLE_MAX_CHARS`` 字），**不复制** ``ai_chat_group_member`` 行
+#     （话题内的唤醒是参与者制，由 gateway 按事实推导）。
+#   • 创建者的 ``last_read_at`` 写成 now —— 否则「没打开过不算未读」的口径会让别人回的第一条
+#     永远不亮。
+def _thread_title(content: Any) -> str:
+    """根消息正文 → 话题标题（连续空白折成一个空格后截 ``THREAD_TITLE_MAX_CHARS`` 字）。
+
+    截在**服务端**：标题作为 ``title`` 列落库，前端只显示那一列，不自己再截一刀（没有第二处
+    手抄，所以 THREAD_TITLE_MAX_CHARS 不进 parity 闸）。正文为空（只带附件的消息）→ 空串，
+    ``create_session_validated`` 会把它落成 NULL —— 读侧照 ``title or ''`` 拿到空串，由前端
+    决定显示什么，这里不编一个服务端中文兜底字符串。"""
+    return " ".join(str(content or "").split())[:THREAD_TITLE_MAX_CHARS]
+
+
+def _thread_summary(row: Dict[str, Any]) -> Dict[str, Any]:
+    """``ChatDb.list_threads`` 的一行 → ``GroupThreadSummary``（形状见 shared/chat_model.ts）。
+
+    ``unread`` 与群行同口径：``last_read_at IS NOT NULL`` 且 ``updated_at > last_read_at``
+    —— 「从没打开过」不算未读（建话题时创建者的 last_read_at 已写成 now）。"""
+    updated_at = int(row.get("updated_at") or 0)
+    last_read_at = row.get("last_read_at")
+    content = row.get("last_message_content")
+    role = row.get("last_message_role")
+    return {
+        "sessionId": int(row["session_id"]),
+        "rootMessageId": int(row["root_message_id"]),
+        "title": row.get("title") or "",
+        "replyCount": int(row.get("reply_count") or 0),
+        # 两列任一为 NULL = 话题里还没有 user/assistant 行（刚开出来的话题）。
+        "lastMessage": None
+        if content is None or role is None
+        else {
+            "role": role,
+            "content": content,
+            "speakerAgentId": row.get("last_message_speaker_agent_id"),
+            "createdAt": int(row.get("last_message_created_at") or 0),
+        },
+        "updatedAt": updated_at,
+        "unread": last_read_at is not None and updated_at > int(last_read_at),
+    }
+
+
+@router.post("/sessions/{session_id:int}/threads", dependencies=[Depends(verify_cf_access)])
+async def create_group_thread(
+    request: Request, session_id: int, body: Optional[Dict[str, Any]] = None
+):
+    """建话题（body ``{rootMessageId: int}``）→ ``{sessionId, rootMessageId, title}``。"""
+    db = get_chat_db()
+    group = _require_group_session(session_id)
+    if group.get("parent_session_id") is not None:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"session {session_id} is not a top-level group",
+            hint="话题只能开在顶层群（子群 / 话题里不能再开话题）",
+            source="sqlite",
+        )
+    root_message_id = (body or {}).get("rootMessageId")
+    if (
+        not isinstance(root_message_id, int)
+        or isinstance(root_message_id, bool)
+        or root_message_id <= 0
+    ):
+        raise APIError(
+            "E_INVALID_ARG",
+            "threads requires rootMessageId:int (positive)",
+            source="sqlite",
+        )
+    message = db.get_message(root_message_id)
+    # 🔴 「消息不存在」与「消息属于**别的**会话」是同一个 400：话题的根必须在这个群里，
+    # 否则话题卡会挂到一条谁都看不见的消息下面（而且 family 预算算到别人头上）。
+    if message is None or int(message.get("session_id") or 0) != session_id:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"message {root_message_id} does not belong to group {session_id}",
+            hint="根消息必须是这个群里的一条消息",
+            source="sqlite",
+        )
+    if (message.get("role") or "") not in ("user", "assistant"):
+        raise APIError(
+            "E_INVALID_ARG",
+            f"message {root_message_id} is not a user/assistant message",
+            hint="只能在人或成员说的话上开话题（system 行是编排痕迹）",
+            source="sqlite",
+        )
+    existing = db.find_thread_by_root(session_id, root_message_id)
+    if existing is not None:
+        # 幂等：「开话题」与「进已有话题」是同一个动作，重复 POST 返回已有的那个（不是 409）。
+        return success_envelope(
+            {
+                "sessionId": int(existing["id"]),
+                "rootMessageId": root_message_id,
+                "title": existing.get("title") or "",
+            },
+            request=request,
+            source="sqlite",
+        )
+    title = _thread_title(message.get("content"))
+    thread = await create_session_validated(
+        {
+            "anchorType": "general",
+            "emailId": None,
+            "backendKind": group.get("backend_kind") or "ai-sdk",
+            # 父群名单的**快照**（此后加人 / 踢人不追平话题：话题是那一刻这群人的一段讨论）。
+            "groupMembers": _group_member_ids(group),
+            "title": title,
+            "parentSessionId": session_id,
+            "invokedBy": "thread",
+        }
+    )
+    thread_id = int(thread["id"])
+    try:
+        db.attach_thread_root(thread_id, root_message_id, group.get("group_config_json"))
+    except sqlite3.IntegrityError:
+        # 并发的第二个 POST：唯一部分索引挡住了第二个话题（先查再建的检查挡不住这个窗口）。
+        # 回收刚 INSERT 的空壳行，返回先到的那一个 —— 幂等对并发同样成立。
+        db.delete_session(thread_id)
+        winner = db.find_thread_by_root(session_id, root_message_id)
+        if winner is None:
+            raise
+        return success_envelope(
+            {
+                "sessionId": int(winner["id"]),
+                "rootMessageId": root_message_id,
+                "title": winner.get("title") or "",
+            },
+            request=request,
+            source="sqlite",
+        )
+    return success_envelope(
+        {"sessionId": thread_id, "rootMessageId": root_message_id, "title": title},
+        request=request,
+        source="sqlite",
+    )
+
+
+@router.get("/sessions/{session_id:int}/threads", dependencies=[Depends(verify_cf_access)])
+async def list_group_threads(request: Request, session_id: int):
+    """列本群的话题（新→旧）→ ``GroupThreadSummary[]``（形状见 shared/chat_model.ts）。
+
+    子群 / 话题上调用返回 ``[]``（它们底下不可能有话题）—— 读面不因此报错。"""
+    _require_group_session(session_id)
+    items = [_thread_summary(row) for row in get_chat_db().list_threads(session_id)]
+    return success_envelope(
+        items, request=request, source="sqlite", meta_extra={"count": len(items)}
     )
 
 

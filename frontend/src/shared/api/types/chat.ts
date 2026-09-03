@@ -357,6 +357,10 @@ export interface ChatSession {
   parent_session_id?: number | null
   /** v25 列，值域 src/chat/group_limits.SESSION_INVOKED_BY。 */
   invoked_by?: string | null
+  /** v32 列（L4 话题）— 这个话题是从群里的哪一条消息开出来的。NULL/undefined = 这行不是话题。
+   *  🔴 判「是不是话题」的判据是 `invoked_by === 'thread'`，不是本列非空（子群也有
+   *  parent_session_id，两者只差 invoked_by 这一个值）。 */
+  thread_root_message_id?: number | null
 }
 
 export interface ListAllSessionsOptions {
@@ -403,6 +407,12 @@ export interface ChatSessionListItem extends ChatSession {
     via: 'main_agent' | 'judge_post' | null
     created_at: number
   } | null
+  // T3（v32）— 这个**群**行底下有没有未读话题。同 last_message：相关子查询派生的投影，不是
+  // ai_chat.db 的列。群行自己的未读判据不变（updated_at > last_read_at）—— 话题回复只 bump
+  // 话题行的 updated_at，父群行一动不动，不派生这一列群列表就永远不亮。
+  // 🔴 缺省 / 旧 serve-api → undefined，读侧一律 `=== true` 判真（唯一读点是
+  // shared/lib/groupUnread.ts 的 isGroupRowUnread，`isSessionUnread` 单源不动）。
+  has_unread_threads?: boolean
 }
 
 // Sprint 19 §D #3 — chat_tool_call audit row, mirrored from main-side
@@ -1184,6 +1194,9 @@ export interface ChatApi {
    * L4 群聊 UX 批 — tell main which group session is in the foreground (null = none). The
    * lifecycle's `appendGroupMessage` notification projection skips a reply whose group is on
    * screen in a focused window. Electron-only; optional (web has no notification projection).
+   * T3 — the report is a pair: `threadId` is the thread pane currently open inside that group
+   * (null = main timeline). A reply inside a thread is suppressed only when THAT thread is open;
+   * a reply on the main timeline only when no thread pane covers it (design §4.8).
    */
-  setGroupForeground?(sessionId: number | null): Promise<void>
+  setGroupForeground?(target: { groupId: number; threadId: number | null } | null): Promise<void>
 }

@@ -117,6 +117,10 @@ export interface ChatSession {
   parent_session_id?: number | null
   /** v25 列，值域 src/chat/group_limits.SESSION_INVOKED_BY。 */
   invoked_by?: string | null
+  /** v32 列（L4 话题）— 这个话题是从群里的哪一条消息开出来的。NULL/undefined = 这行不是话题。
+   *  🔴 判「是不是话题」的判据是 `invoked_by === 'thread'`，不是本列非空：本列只是根消息指针，
+   *  分家判据单源在 invoked_by（子群也有 parent_session_id，两者只差这一个值）。 */
+  thread_root_message_id?: number | null
 }
 
 /** L4 群聊 g1 — `ai_chat_sessions.group_config_json` 解析后的形状（父设计 §3.1）。
@@ -181,6 +185,39 @@ export interface GroupMetricsWindow {
   caps?: { turns: number | null; tokens: number | null; costUsd: number | null }
 }
 
+/** T3 话题 — `GET /chat/sessions/{groupId}/threads` 的一行（父设计 §4.2 §4.5）。
+ *
+ *  一个话题 = 一条独立上下文的子会话（`ai_chat_sessions` 里 `invoked_by='thread'` 的行），
+ *  从群里的某一条消息开出来。本类型是**读面投影**，不是行镜像：`replyCount` / `lastMessage` /
+ *  `unread` 都由服务端子查询算好，前端不再逐话题打 `/messages`。
+ *
+ *  🔴 `unread` 的口径与群行一致（`updated_at > last_read_at` 且 `last_read_at IS NOT NULL`）：
+ *  「从没打开过」不算未读 —— 建话题时创建者的 `last_read_at` 由端点写成 now，否则别人回的
+ *  第一条永远不亮。
+ *
+ *  与 `GroupConfig` / `GroupMetrics` 同例住在本文件（**单一定义**，客户端 `api/groupSettings.ts`
+ *  与渲染侧都 import 这一份）；不抄进 `api/types/chat.ts`（那份文件的零 import 不变式）。 */
+export interface GroupThreadSummary {
+  /** 话题自己的会话 id（发言 / 停止 / 已读 / 改名 / 删除全用它，与群 id 同一个命名空间）。 */
+  sessionId: number
+  /** 根消息 id（父群 `ai_chat_messages` 的行 id）。主时间线按它把话题卡挂到那条消息下面。 */
+  rootMessageId: number
+  /** 服务端从根消息正文截出的摘要（上限 `group_limits.THREAD_TITLE_MAX_CHARS`）。 */
+  title: string
+  /** 话题内的回复条数（不含根消息 —— 根消息在父群里，不在话题会话里）。 */
+  replyCount: number
+  /** 话题内最新一条（role ∈ user/assistant）；一条都没有 → null（刚开的话题）。 */
+  lastMessage: {
+    role: 'user' | 'assistant'
+    content: string
+    /** 说话的成员 id；人发的行为 null。 */
+    speakerAgentId: string | null
+    createdAt: number
+  } | null
+  updatedAt: number
+  unread: boolean
+}
+
 /** T2 群附件 — 一件群消息附件，落在 `ai_chat_messages.metadata` 的 `{attachments:[…]}` 键下
  *  （落法 β：正文进 metadata，气泡只显示 chip，围栏块由装配侧前置给模型）。
  *
@@ -235,6 +272,12 @@ export interface ChatSessionSummary extends ChatSession {
    *  seeded by automation that never got a user turn. */
   first_user_message: string | null
   message_count: number
+  /** T3（v32）— 这个**群**行底下有没有未读话题（相关子查询派生，不是 ai_chat.db 的列，同
+   *  first_user_message 的性质）。群行自己的未读判据不变（updated_at > last_read_at）：话题回复
+   *  只 bump 话题行的 updated_at，父群行一动不动，不派生这一列群列表就永远不亮。
+   *  🔴 缺省 / 旧后端 → undefined，读侧一律 `=== true` 判真（`isGroupRowUnread` 是唯一读点，
+   *  `isSessionUnread` 单源不动）。 */
+  has_unread_threads?: boolean
 }
 
 export interface ChatMessage {

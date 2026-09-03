@@ -83,10 +83,18 @@ SILENT_OUTCOMES: Tuple[str, ...] = ("silent", "held_dup", "skipped")
 CHAIN_ROOT_TRIGGER_KINDS: Tuple[str, ...] = ("human", "main_agent")
 
 #: ``ai_chat_sessions.invoked_by`` 的值域（v25 已有列，无 CHECK）。'user'/'main_agent' 来自
-#: custom_agent_call（harness P2）；g2/g3 建子群加 'judge'/'setup'。
+#: custom_agent_call（harness P2）；g2/g3 建子群加 'judge'/'setup'；T3 话题加 'thread'。
+#: 🔴 'thread' 是**读侧分家的唯一判据**（v32）：话题与子群同是 origin='group' + parent_session_id
+#: 非空，群清单 / family / 子群配额 / 法官 scope 全靠 ``COALESCE(invoked_by,'') = 'thread'``
+#: 把它们分开。
 #: 🔴 **serve-api 独占消费**，TS 侧无同名常量，故与 TOPIC_MAX_CHARS 同例不进
 #: tests/config/test_group_constants_parity.py 的 VOCABULARIES。
-SESSION_INVOKED_BY: Tuple[str, ...] = ("user", "main_agent", "judge", "setup")
+SESSION_INVOKED_BY: Tuple[str, ...] = ("user", "main_agent", "judge", "setup", "thread")
+
+#: 话题标题（从根消息正文截出来的摘要）的长度上限。
+#: 🔴 与 TOPIC_MAX_CHARS 同例 **serve-api 独占消费**：标题由建话题端点在服务端截好落库，
+#: 前端只显示 ``title`` 列，不自己截 —— 没有第二处手抄，故不进 parity 闸。
+THREAD_TITLE_MAX_CHARS: int = 40
 
 #: g3 狼人杀预设地板（与 groupFloors.ts 的 WEREWOLF_* 同名同值；闸 test_group_constants_parity.py）。
 #: gateway 在 config.preset == 'werewolf' 时把它们当缺省；Python 侧只服务 manual 脚本判据与模板闸，

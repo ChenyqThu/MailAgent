@@ -15,6 +15,11 @@ interface GroupsViewStore {
    *  离开时那副样子；一个全局 boolean 会让「在 A 群开着」跟着切到 B 群。 */
   detailsOpenBySession: Record<number, boolean>
   setDetailsOpen(sessionId: number, open: boolean): void
+  /** T3 — 当前打开的话题，**按群记忆**（缺键 / null = 没开话题），理由同 detailsOpenBySession。
+   *  🔴 与详情面**互斥**：话题面顶替右栏，开一个就该收起另一个 —— 互斥由消费方（工作区）执行，
+   *  store 只存两件事实，不在这里替调用方做联动（那会让「同时收起」也做不到）。 */
+  activeThreadBySession: Record<number, number | null>
+  setActiveThread(sessionId: number, threadId: number | null): void
 }
 
 export const useGroupsView = create<GroupsViewStore>((set) => ({
@@ -22,5 +27,8 @@ export const useGroupsView = create<GroupsViewStore>((set) => ({
   setActiveGroupSessionId: (id) => set({ activeGroupSessionId: id }),
   detailsOpenBySession: {},
   setDetailsOpen: (sessionId, open) =>
-    set((s) => ({ detailsOpenBySession: { ...s.detailsOpenBySession, [sessionId]: open } }))
+    set((s) => ({ detailsOpenBySession: { ...s.detailsOpenBySession, [sessionId]: open } })),
+  activeThreadBySession: {},
+  setActiveThread: (sessionId, threadId) =>
+    set((s) => ({ activeThreadBySession: { ...s.activeThreadBySession, [sessionId]: threadId } }))
 }))

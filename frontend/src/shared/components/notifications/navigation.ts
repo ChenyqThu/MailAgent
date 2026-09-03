@@ -43,6 +43,10 @@ export type NotificationLink =
    *  与 `session` 分开：那一型的落点是 AI 分段的主 agent 会话面或团队页记录档，塞个群 id
    *  进去两边都落空白。 */
   | { type: 'group'; sessionId: number }
+  /** 群里某个**话题**的回复（T3）→ 那个群 + 打开那个话题面。与 `group` 分开：只带群 id 会落到
+   *  主时间线，而话题回复不在主时间线上（它们在另一条会话里），用户点了通知等于什么都没看到。
+   *  两个 id 都是会话 id（话题也是一行 `ai_chat_sessions`），命名空间同一个。 */
+  | { type: 'thread'; groupId: number; threadId: number }
   | { type: 'route'; to: NotificationRouteTarget; search: Record<string, unknown> | null }
   /** 报告完成（`reports/worker.py`）→ `/reports/$reportId`（08-27 P3 前是
    *  `/agents?tab=reports` + store-intent）。 */
@@ -59,6 +63,11 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
+/** 正整数会话 id 的统一取法（session / group / thread 三型共用同一道守卫）。 */
+function positiveInt(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -71,9 +80,9 @@ export function resolveNotificationLink(
   if (!isRecord(link)) return null
 
   if (link.type === 'session') {
-    const sessionId = link.sessionId
     // 后端 `_session_id_of` 拿不到会话时发的是 route 退化型；这里再守一道 0/负数/非整数。
-    if (typeof sessionId !== 'number' || !Number.isInteger(sessionId) || sessionId <= 0) return null
+    const sessionId = positiveInt(link.sessionId)
+    if (sessionId === null) return null
     // 空串 / 非字符串的 agentId 一律当没有（落地时会去回查会话），不带一个查不到成员的
     // 空 id 上路 —— 那会让「跳过去什么都没选中」看起来像功能坏了。
     const agentId = nonEmptyString(link.agentId)
@@ -83,9 +92,18 @@ export function resolveNotificationLink(
   }
 
   if (link.type === 'group') {
-    const sessionId = link.sessionId
-    if (typeof sessionId !== 'number' || !Number.isInteger(sessionId) || sessionId <= 0) return null
+    const sessionId = positiveInt(link.sessionId)
+    if (sessionId === null) return null
     return { type: 'group', sessionId }
+  }
+
+  if (link.type === 'thread') {
+    // 🔴 两个 id 都要在：只有群 id 落地会打开主时间线，而话题回复根本不在主时间线上 ——
+    // 与其跳到一个看不见那条回复的地方，不如返 null（只标已读、不跳）。
+    const groupId = positiveInt(link.groupId)
+    const threadId = positiveInt(link.threadId)
+    if (groupId === null || threadId === null) return null
+    return { type: 'thread', groupId, threadId }
   }
 
   if (link.type === 'route') {

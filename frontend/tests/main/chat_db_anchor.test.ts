@@ -125,8 +125,9 @@ describe('chat_db — v6 → v7 anchor migration', () => {
     // v27 — anchor_type CHECK widened to admit 'matter' sessions (Matters MVP P3);
     // v28 — item_id + paused_marker_json (L4 批次3 行动项执行契约 / R7 曾暂停 marker);
     // v29 — origin value-domain registers 'team' (L4 P4b 团队对话, no-op ladder step);
-    // v30 — members_json + speaker_agent_id (L4 群聊), origin value-domain registers 'group'.
-    expect(ver).toBe('31')
+    // v30 — members_json + speaker_agent_id (L4 群聊), origin value-domain registers 'group';
+    // v31 — 群编排三载体 + chain_id; v32 — thread_root_message_id + 话题唯一部分索引.
+    expect(ver).toBe('32')
 
     // Anchor columns added + backfilled for the pre-existing email row.
     const row = db.prepare('SELECT * FROM ai_chat_sessions WHERE id = 1').get() as {

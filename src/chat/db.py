@@ -1,6 +1,18 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 31）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 32）。
+v32（L4 群聊话题 thread，task 09-02 T3）= ``ai_chat_sessions.thread_root_message_id``（话题的
+根消息 id；NULL = 这行不是话题）+ 唯一部分索引 ``idx_chat_sessions_thread_root``
+（``UNIQUE(parent_session_id, thread_root_message_id) WHERE thread_root_message_id IS NOT NULL``
+= 「一条消息至多一个话题」，建话题端点的幂等根据）+ ``invoked_by`` 值域登记 ``'thread'``。
+话题行 = ``origin='group'`` + ``parent_session_id``=父群 + ``invoked_by='thread'`` +
+``members_json`` 取父群快照 + ``group_config_json`` 复制父群；**不复制**
+``ai_chat_group_member`` 行（话题内的唤醒是参与者制，由 gateway 按事实推导，不读响应模式）。
+🔴 **读侧分家判据恒是 ``COALESCE(invoked_by,'') = 'thread'`` 这一个显式条件**：话题与子群
+同是 ``origin='group'`` + ``parent_session_id`` 非空，只按这两列区分不出来（群清单会列出话题、
+family 会把话题当子群算进子群配额与法官 scope）。词表单源 ``src/chat/group_limits.py``
+``SESSION_INVOKED_BY``。本列只由 serve-api 的建话题端点写，读走 ``SELECT *`` 自动带回，
+群支的排除条件与派生列一律经 ``_has_column`` 兼容尚未迁移的旧库。
 v31（L4 群聊 g1 编排底座，task 09-01）= 群编排的三载体 + 一列，全部 additive：
 ``ai_chat_sessions.group_config_json``（群设置 JSON：法官位 / 链上限 / 小时预算 / 预设；
 NULL = 全取出厂默认，默认值单源在 ``ai-gateway/groupFloors.ts``，DB 不存默认值副本）、
@@ -453,6 +465,13 @@ class ChatDb:
             if not has_origin:
                 return []
             clauses.append("s.origin = 'group'")
+            if self._has_column("ai_chat_sessions", "invoked_by"):
+                # T3（v32）— 话题不进群清单。话题与子群同是 origin='group' + parent_session_id
+                # 非空，**只有 invoked_by 这一个显式判据**能把它们分开：漏了这条，每开一个话题
+                # 群列表就多出一行（且那一行点进去是个没有群设置面的半残群）。
+                # 🔴 与 TS 镜像 chat_db/sessions.ts::listAllSessions 的 'group' 支逐字对齐
+                # （闸 test_chat_type_mirror_parity.py::test_group_list_thread_exclusion_mirror_parity）。
+                clauses.append("COALESCE(s.invoked_by, '') <> 'thread'")
         for column, value in (
             ("agent_id", agent_id), ("agent_job_id", agent_job_id),
             ("trigger_id", trigger_id), ("trigger_kind", trigger_kind),
@@ -525,20 +544,42 @@ class ChatDb:
                 ("m.created_at", "last_message_created_at"),
             )
         )
-        return self._read_all(
+        # T3（v32）— 群行的派生列「底下有没有未读话题」。话题回复只 bump 话题行的 updated_at，
+        # 父群行一动不动 —— 不派生这一列，群列表 / rail / peek 就永远不会因为话题里的回复而亮。
+        # 口径与群行自己的未读一致（``last_read_at IS NOT NULL`` = 从没打开过不算未读）。
+        # 只在群清单这一支算：其余读路径（历史 / ⌘O / 团队页）没有消费点，白搭一个逐行子查询。
+        # 🔴 与 TS 镜像 chat_db/sessions.ts::listAllSessions 的同名列逐字对齐。
+        thread_unread_col = ""
+        if origin == "group" and all(
+            self._has_column("ai_chat_sessions", column)
+            for column in ("parent_session_id", "invoked_by", "last_read_at")
+        ):
+            thread_unread_col = (
+                ",\n                 EXISTS (SELECT 1 FROM ai_chat_sessions t"
+                " WHERE t.parent_session_id = s.id AND COALESCE(t.invoked_by, '') = 'thread'"
+                " AND t.last_read_at IS NOT NULL AND t.updated_at > t.last_read_at)"
+                " AS has_unread_threads"
+            )
+        rows = self._read_all(
             f"""SELECT
                  s.*,
                  (SELECT substr(m.content, 1, 500) FROM ai_chat_messages m
                     WHERE m.session_id = s.id AND m.role = 'user'
                     ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,
                  (SELECT COUNT(*) FROM ai_chat_messages m WHERE m.session_id = s.id) AS message_count,
-                 {last_message_cols}
+                 {last_message_cols}{thread_unread_col}
                FROM ai_chat_sessions s
                WHERE {where_clause}
                ORDER BY s.updated_at DESC
                LIMIT ?""",
             (*params, max(1, min(int(limit), 300))),
         )
+        # 🔴 SQLite 的 EXISTS 给的是 0/1，读侧判据是 ``has_unread_threads === true``（前端
+        # isGroupRowUnread）—— 不折成真 bool，JSON 里就是个 1，群行永远不亮而且没人会报错。
+        if thread_unread_col:
+            for row in rows:
+                row["has_unread_threads"] = bool(row.get("has_unread_threads"))
+        return rows
 
     # ── messages ──────────────────────────────────────────────────────────
 
@@ -1002,9 +1043,23 @@ class ChatDb:
         群（origin='group'）多一步 **断子群的链**：``parent_session_id`` 没有 FK，删了父群后
         子群那一列会指向一个不存在的会话（读侧无从区分「父群被删」与「父群 id 写错了」）。
         置 NULL = 子群保留、只是不再能跳回父群。非群会话的父子关系（custom_agent_call 的
-        子会话）保持原样：那条链另有语义，不在本批的改动半径里。"""
+        子会话）保持原样：那条链另有语义，不在本批的改动半径里。
+
+        T3（v32）：**话题（``invoked_by='thread'``）随父群一起删**，与子群相反。子群断链后
+        仍是群清单里的一等会话（自己有名单、有设置面，进得去）；话题不是 —— 它按定义只挂在
+        父群的某一条消息下，群没了那条根消息也没了，断链只会留下群清单看不见、任何入口都
+        到不了的孤儿行（连同它的全部消息）。话题的消息经 FK ON DELETE CASCADE 一并删。
+        🔴 顺序：先删话题，再把**剩下的**子群置 NULL —— 反过来写会先把话题的 parent 抹成
+        NULL，第二条语句就再也认不出它们了。"""
         with self._write_connection() as conn:
             if self._has_column("ai_chat_sessions", "parent_session_id"):
+                if self._has_column("ai_chat_sessions", "invoked_by"):
+                    conn.execute(
+                        "DELETE FROM ai_chat_sessions WHERE parent_session_id = "
+                        "(SELECT id FROM ai_chat_sessions WHERE id = ? AND origin = 'group') "
+                        "AND COALESCE(invoked_by, '') = 'thread'",
+                        (session_id,),
+                    )
                 conn.execute(
                     "UPDATE ai_chat_sessions SET parent_session_id = NULL "
                     "WHERE parent_session_id = "
@@ -1555,3 +1610,118 @@ class ChatDb:
             "sessionTokens": int(session_totals.get("tokens") or 0),
             "sessionCostUsd": None if session_cost is None else float(session_cost),
         }
+
+    # ── 话题 thread（CHAT_DB v32）─────────────────────────────────────────
+
+    def find_thread_by_root(
+        self, group_id: int, root_message_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """某群下以某条消息为根的话题行 or None（建话题端点的幂等读侧）。
+
+        判据与 v32 的唯一部分索引 ``(parent_session_id, thread_root_message_id)`` 同形：同一个
+        父群 + 同一条根消息至多一行。``COALESCE(invoked_by,'') = 'thread'`` 是多写的那一条 ——
+        它不改变结果集（只有话题会写 thread_root_message_id），但**读侧的分家判据恒是它**，
+        写在这里才不会有人以为「根消息列非空」也能当判据。
+        列缺席的旧库 → None（那样的库里不可能有话题）。
+        """
+        if not all(
+            self._has_column("ai_chat_sessions", column)
+            for column in ("parent_session_id", "invoked_by", "thread_root_message_id")
+        ):
+            return None
+        return self._read_one(
+            "SELECT * FROM ai_chat_sessions WHERE parent_session_id = ? "
+            "AND thread_root_message_id = ? AND COALESCE(invoked_by, '') = 'thread'",
+            (group_id, root_message_id),
+        )
+
+    def list_threads(self, group_id: int) -> List[Dict[str, Any]]:
+        """本群的话题行（新→旧），带 ``reply_count`` + ``last_message_*`` 投影。
+
+        路由层把这些列折成 ``GroupThreadSummary``（camelCase + ``unread``）。子查询范式抄
+        ``list_all_sessions``：每列一个相关子查询，**逐列 ``_has_column`` 探测** —— 引用一个
+        不存在的列会 OperationalError → ``_read_all`` 吞成 ``[]``，主时间线上所有话题卡一起
+        消失，且没有任何报错（v20 的 ``s.*`` 教训）。
+
+        ``reply_count`` 只数 ``role IN ('user','assistant')``：system 行是 group_stop 之类的
+        编排痕迹，不是「谁回了一句」，与 ``last_message_*`` 的取行口径同源。根消息不在这个
+        会话里（它在父群），所以这个数天然就是「回复数」。
+        """
+        if not all(
+            self._has_column("ai_chat_sessions", column)
+            for column in ("parent_session_id", "invoked_by", "thread_root_message_id")
+        ):
+            return []
+        title_col = (
+            "s.title" if self._has_column("ai_chat_sessions", "title") else "NULL"
+        )
+        last_read_col = (
+            "s.last_read_at"
+            if self._has_column("ai_chat_sessions", "last_read_at")
+            else "NULL"
+        )
+        speaker_col = (
+            "m.speaker_agent_id"
+            if self._has_column("ai_chat_messages", "speaker_agent_id")
+            else "NULL"
+        )
+        status_filter = (
+            " AND m.status = 'complete'"
+            if self._has_column("ai_chat_messages", "status")
+            else ""
+        )
+        last_message_cols = ",\n                 ".join(
+            f"(SELECT {expr} FROM ai_chat_messages m"
+            " WHERE m.session_id = s.id AND m.role IN ('user', 'assistant')"
+            f"{status_filter}"
+            f" ORDER BY m.created_at DESC, m.id DESC LIMIT 1) AS {alias}"
+            for expr, alias in (
+                ("substr(m.content, 1, 200)", "last_message_content"),
+                ("m.role", "last_message_role"),
+                (speaker_col, "last_message_speaker_agent_id"),
+                ("m.created_at", "last_message_created_at"),
+            )
+        )
+        return self._read_all(
+            f"""SELECT
+                 s.id AS session_id,
+                 s.thread_root_message_id AS root_message_id,
+                 {title_col} AS title,
+                 s.updated_at AS updated_at,
+                 {last_read_col} AS last_read_at,
+                 (SELECT COUNT(*) FROM ai_chat_messages m
+                    WHERE m.session_id = s.id AND m.role IN ('user', 'assistant')
+                    {status_filter}) AS reply_count,
+                 {last_message_cols}
+               FROM ai_chat_sessions s
+               WHERE s.parent_session_id = ? AND COALESCE(s.invoked_by, '') = 'thread'
+                 AND s.thread_root_message_id IS NOT NULL
+               ORDER BY s.updated_at DESC, s.id DESC""",
+            (group_id,),
+        )
+
+    def attach_thread_root(
+        self,
+        session_id: int,
+        root_message_id: int,
+        group_config_json: Optional[str],
+        read_at: Optional[int] = None,
+    ) -> None:
+        """建话题的第二步：补上 ``create_new_session`` 落不了的三列（一条 UPDATE，一个事务）。
+
+        ``thread_root_message_id`` = 根消息指针；``group_config_json`` = 父群设置的**原样副本**
+        （连 ``judgeScopeHash`` 一起抄：话题继承父群的地板与预设，不另开一套设置面）；
+        ``last_read_at`` = now，创建者视角**开出来就是已读的** —— 「``last_read_at IS NOT NULL``
+        才算未读」的口径下，不写这一列，别人回的第一条永远不会亮。
+
+        🔴 唯一部分索引 ``idx_chat_sessions_thread_root`` 在这一步生效：同群同根第二次写会抛
+        ``sqlite3.IntegrityError``，调用方据此转幂等分支。**那才是幂等的落库根据** —— 先查再建
+        的检查挡不住并发的两个 POST。
+        """
+        now = read_at if read_at is not None else _now_ms()
+        with self._write_connection() as conn:
+            conn.execute(
+                "UPDATE ai_chat_sessions SET thread_root_message_id = ?, "
+                "group_config_json = ?, last_read_at = ? WHERE id = ?",
+                (root_message_id, group_config_json, now, session_id),
+            )

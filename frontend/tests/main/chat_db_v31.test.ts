@@ -108,7 +108,10 @@ function seedV30ChatDb(): void {
       archived INTEGER NOT NULL DEFAULT 0,
       origin TEXT,
       agent_id TEXT,
-      members_json TEXT
+      members_json TEXT,
+      -- v25 加的列。真实的 v30 库一定有它（迁移梯走过 v25），种子也得有：v32 的唯一部分索引
+      -- 建在 (parent_session_id, thread_root_message_id) 上，少这一列迁移会当场炸。
+      parent_session_id INTEGER
     );
     CREATE TABLE ai_chat_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,7 +132,7 @@ function seedV30ChatDb(): void {
 }
 
 describe('CHAT_DB v31 migration', () => {
-  test('① fresh DB carries every v31 carrier at schema_version 31', () => {
+  test('① fresh DB carries every v31 carrier at the head schema_version', () => {
     expect(columnNames('ai_chat_sessions')).toContain('group_config_json')
     expect(columnNames('ai_chat_messages')).toContain('chain_id')
     expect(tableNames()).toEqual(
@@ -138,14 +141,14 @@ describe('CHAT_DB v31 migration', () => {
     expect(indexNames()).toEqual(
       expect.arrayContaining(['idx_group_turn_session_time', 'idx_group_turn_chain'])
     )
-    expect(schemaVersion()).toBe(31)
+    expect(schemaVersion()).toBe(32)
   })
 
   test('② v30-shaped old DB upgrades; a second run (meta rollback) is idempotent', () => {
     seedV30ChatDb()
     expect(columnNames('ai_chat_sessions')).toContain('group_config_json')
     expect(columnNames('ai_chat_messages')).toContain('chain_id')
-    expect(schemaVersion()).toBe(31)
+    expect(schemaVersion()).toBe(32)
     // Pre-existing group row survives untouched (additive migration).
     const row = getChatDb()
       .prepare('SELECT origin, members_json, group_config_json FROM ai_chat_sessions')
@@ -161,7 +164,7 @@ describe('CHAT_DB v31 migration', () => {
       .run()
     closeChatDb()
     expect(() => schemaVersion()).not.toThrow()
-    expect(schemaVersion()).toBe(31)
+    expect(schemaVersion()).toBe(32)
   })
 })
 
@@ -316,8 +319,29 @@ describe('v31 read/write faces (④⑤)', () => {
       .prepare('UPDATE ai_chat_sessions SET parent_session_id = ? WHERE id = ?')
       .run(parent, sub.id)
 
-    expect(familyOf(parent)).toEqual({ parentSessionId: null, childSessionIds: [child] })
+    expect(familyOf(parent)).toEqual({
+      parentSessionId: null,
+      childSessionIds: [child],
+      // T3（v32）：话题走独立一支，这个群一个话题也没有。
+      threadSessionIds: []
+    })
     expect(familyOf(child).parentSessionId).toBe(parent)
+  })
+
+  test('⑤ familyOf splits threads out of childSessionIds (T3, v32)', () => {
+    const parent = newGroup(['a1'])
+    const child = newGroup(['a1'], parent)
+    const thread = newGroup(['a1'], parent)
+    getChatDb()
+      .prepare("UPDATE ai_chat_sessions SET invoked_by = 'thread' WHERE id = ?")
+      .run(thread)
+
+    // 🔴 话题与子群同是 origin='group' + parent_session_id=父群；分家判据只有 invoked_by。
+    // 混在一起 = 「这个群有几个子群」当场失真（子群配额 / 法官 scope / group_members 工具）。
+    expect(familyOf(parent).childSessionIds).toEqual([child])
+    expect(familyOf(parent).threadSessionIds).toEqual([thread])
+    // 话题自己回指父群（family 预算窗口据此把话题的开销算进这个群）。
+    expect(familyOf(thread).parentSessionId).toBe(parent)
   })
 
   test('⑤ insertGroupTurn writes every outcome; listGroupTurns reads newest first', () => {

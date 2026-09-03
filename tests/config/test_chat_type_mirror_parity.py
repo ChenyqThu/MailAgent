@@ -325,3 +325,38 @@ def test_chat_interactive_origin_exclusion_mirror_parity():
             assert values == expected, (
                 f"{path.name}: interactive 排除集漂移: {sorted(values)}（预期 {sorted(expected)}）"
             )
+
+
+def test_group_list_thread_exclusion_mirror_parity():
+    """T3（v32）— 群清单的「话题不进列表」子句 + 未读话题派生列，TS/Python 各一份手抄。
+
+    话题与子群同是 ``origin='group'`` + ``parent_session_id`` 非空，**只有 invoked_by 这一个
+    值**能把它们分开。桌面走 TS ``listAllSessions``、远程 web 走 Python ``list_all_sessions``
+    —— 漏改一侧就是「桌面群列表干净、远程多出一堆话题行」这种两边行为不一致的静默错
+    （两处都编译得过、都不报错）。
+
+    第二段锁的是 ``has_unread_threads`` 的相关子查询：判据（``invoked_by='thread'`` +
+    ``last_read_at IS NOT NULL`` + ``updated_at > last_read_at``）在两侧各写了一遍，改一处
+    漏一处 = 同一个群在桌面亮、在远程不亮。
+
+    🔴 抽取失败必须红：每个 pattern 在每个文件里必须**恰好命中一次**（命中 0 次 = 子句形状
+    变了或被删；命中多次 = 有人复制了一份，该收敛）。
+    """
+    sessions_ts = p.REPO_ROOT / "frontend" / "src" / "electron" / "main" / "chat_db" / "sessions.ts"
+    # 逐条独立匹配而不是拼成一条长正则：两侧的 SQL 都是拼字符串来的（Python 的隐式串联 /
+    # TS 的模板字面量换行），子句中间必然夹着引号与缩进，跨行的整段匹配只会脆。
+    patterns = {
+        "群支的话题排除": r"COALESCE\(s\.invoked_by, ''\) <> 'thread'",
+        "未读话题派生列的话题判据": r"COALESCE\(t\.invoked_by, ''\) = 'thread'",
+        "未读话题派生列的水位判据": (
+            r"t\.last_read_at IS NOT NULL AND t\.updated_at > t\.last_read_at"
+        ),
+    }
+    for path in (sessions_ts, CHAT_DB_PY):
+        text = path.read_text(encoding="utf-8")
+        for what, pattern in patterns.items():
+            hits = re.findall(pattern, text)
+            assert len(hits) == 1, (
+                f"{path.name}: {what} 命中 {len(hits)} 处（预期恰好 1）—— "
+                "两侧 SQL 漂移了，或解析器需要跟着实现更新"
+            )

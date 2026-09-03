@@ -5,14 +5,15 @@
 // unwrap，失败 throw `Error & {code}`，调用方 toast / 渲染错误面。
 //
 // 🔴 为什么不挂在 `ChatApi`（chat_api.ts / api/types/chat.ts）上：`GroupConfig` /
-// `GroupMetrics` 的**单一定义**在 `shared/chat_model.ts`（那边的注释明写「群设置对话框直接
-// import 它」），而 `api/types/chat.ts` 至今**一个 import 都没有** —— 这条 import-free 不变式
-// 正是 tests/config/test_chat_type_mirror_parity.py 保留两份行类型手抄的理由（"将来真出现一列
-// 不该出网时，re-export 会把「让它别出网」变成不可能"）。把这三个类型抄进那份边界文件 = 又一处
-// 无闸镜像；往那份文件里加 import = 把那条不变式和它撑着的闸的理由一起打破。故本模块独立成面，
-// 与 `api/matters.ts` / `api/contacts.ts` / `api/notifications.ts` 同构。
+// `GroupMetrics` / `GroupThreadSummary` 的**单一定义**在 `shared/chat_model.ts`（那边的注释
+// 明写「群设置对话框直接 import 它」），而 `api/types/chat.ts` 至今**一个 import 都没有** ——
+// 这条 import-free 不变式正是 tests/config/test_chat_type_mirror_parity.py 保留两份行类型手抄
+// 的理由（"将来真出现一列不该出网时，re-export 会把「让它别出网」变成不可能"）。把这些类型
+// 抄进那份边界文件 = 又一处无闸镜像；往那份文件里加 import = 把那条不变式和它撑着的闸的理由
+// 一起打破。故本模块独立成面，与 `api/matters.ts` / `api/contacts.ts` /
+// `api/notifications.ts` 同构。
 
-import type { ChatSession, GroupConfig, GroupMetrics } from '@shared/chat_model'
+import type { ChatSession, GroupConfig, GroupMetrics, GroupThreadSummary } from '@shared/chat_model'
 import { resolveApiBaseUrl } from '@shared/lib/apiBaseUrl'
 
 import { request } from './http_client'
@@ -136,6 +137,35 @@ export async function getGroupTurns(
 
 export async function getGroupMetrics(sessionId: number): Promise<GroupMetrics> {
   return request(resolveApiBaseUrl(), 'GET', `/chat/sessions/${sessionId}/group-metrics`)
+}
+
+/** `POST /chat/sessions/{groupId}/threads` 的应答（新建与幂等命中同形）。
+ *  `sessionId` 就是话题的会话 id —— 发言 / 停止 / 已读 / 列消息全用它走既有会话端点。 */
+export interface GroupThreadCreated {
+  sessionId: number
+  rootMessageId: number
+  title: string
+}
+
+/** 在群里的某一条消息上开话题。
+ *
+ *  🔴 **幂等**：同一条根消息重复调用返回**已有**的那个话题（不是 409、也不会建第二个），
+ *  所以调用方不必先查再建 —— 「开话题」与「进已有话题」是同一个动作。
+ *  失败一律 throw `Error & {code}`（`E_INVALID_ARG` = 不是顶层群 / 根消息不属于该群），
+ *  调用方显示服务端的 hint，不在这里复制一份判据。 */
+export async function createGroupThread(
+  groupId: number,
+  rootMessageId: number
+): Promise<GroupThreadCreated> {
+  return request(resolveApiBaseUrl(), 'POST', `/chat/sessions/${groupId}/threads`, {
+    body: { rootMessageId }
+  })
+}
+
+/** 本群的话题清单（新→旧）。主时间线按 `rootMessageId` 把话题卡挂到那条消息下面，
+ *  所以这一趟就要把 `replyCount` / `lastMessage` / `unread` 都拿全（不逐话题再打 /messages）。 */
+export async function listGroupThreads(groupId: number): Promise<GroupThreadSummary[]> {
+  return request(resolveApiBaseUrl(), 'GET', `/chat/sessions/${groupId}/threads`)
 }
 
 /** `GET /api/agent/labs`。🔴 传输失败一律 throw（调用方 fail-closed 到 off）—— 不在这里

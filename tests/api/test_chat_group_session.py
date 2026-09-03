@@ -24,8 +24,12 @@ from src.api.app import app
 from src.chat.db import ChatDb
 from src.chat.group_limits import MAIN_AGENT_MEMBER_ID, MAX_GROUP_MEMBERS
 
-# v7 anchor CHECK + v19 origin + v25 父子两列 + v30 members_json（群聊写面需要的最小列集；
-# g2 起 create_new_session 的 group 分支写 parent_session_id / invoked_by，两列缺一即 INSERT 炸）。
+# v7 anchor CHECK + v19 origin + v20 last_read_at + v25 父子两列 + v30 members_json +
+# v31 group_config_json / ai_chat_group_member + v32 thread_root_message_id 与唯一部分索引
+# （群聊写面需要的最小列集；g2 起 create_new_session 的 group 分支写 parent_session_id /
+# invoked_by，两列缺一即 INSERT 炸）。
+# 🔴 v32 的索引必须原样带上：它是「一条消息至多一个话题」的**落库根据**，建话题端点的并发
+# 幂等分支靠它抛 IntegrityError —— 种子里漏了这条索引，那条分支在测试里就是死代码。
 _DDL = """
 CREATE TABLE ai_chat_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,15 +46,21 @@ CREATE TABLE ai_chat_sessions (
     origin TEXT,
     agent_id TEXT,
     agent_job_id TEXT,
+    last_read_at INTEGER,
     members_json TEXT,
+    group_config_json TEXT,
     parent_session_id INTEGER,
     invoked_by TEXT,
+    thread_root_message_id INTEGER,
     CHECK (
         (anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
         OR
         (anchor_type = 'general' AND anchor_id IS NULL AND email_id IS NULL)
     )
 );
+CREATE UNIQUE INDEX idx_chat_sessions_thread_root
+    ON ai_chat_sessions(parent_session_id, thread_root_message_id)
+    WHERE thread_root_message_id IS NOT NULL;
 CREATE TABLE ai_chat_messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
@@ -59,6 +69,14 @@ CREATE TABLE ai_chat_messages (
     status TEXT NOT NULL, error_message TEXT, metadata TEXT, thinking TEXT,
     speaker_agent_id TEXT,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE ai_chat_group_member (
+    session_id INTEGER NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    response_mode TEXT NOT NULL DEFAULT 'mention',
+    seen_through_id INTEGER,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, agent_id)
 );
 """
 

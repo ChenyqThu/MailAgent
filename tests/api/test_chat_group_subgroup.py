@@ -102,7 +102,7 @@ def test_top_level_group_has_null_parent(chat_client: TestClient, chat_db_path: 
 
 
 def test_invoked_by_all_vocab_accepted(chat_client: TestClient, chat_db_path: Path) -> None:
-    """值域四值各建一个顶级群（invokedBy 不依赖 parentSessionId）。"""
+    """值域各值各建一个顶级群（invokedBy 不依赖 parentSessionId）。"""
     for value in SESSION_INVOKED_BY:
         group = _created(_new_group(chat_client, ["a3"], invokedBy=value))
         assert _row(chat_db_path, group["id"]) == (None, value)

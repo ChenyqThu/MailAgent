@@ -54,7 +54,10 @@ import { useMatterNavigation } from './components/matters/navigation'
 import { resolveNotificationLink } from './components/notifications/navigation'
 import { useMailApi } from './hooks/useMailApi'
 import { openNewChatTab } from './state/active-chat'
-import { navigateToGroupSession } from './components/agents/groups/navigation'
+import {
+  navigateToGroupSession,
+  navigateToGroupThread
+} from './components/agents/groups/navigation'
 // 一级入口单源（task 08-24-l4-nav-shell Step R）：deeplink 的落点与「AI → General Agent」
 // 菜单项的目标都从 registry 取，不在这里第二次写死 path。
 import { NAV_ENTRIES, navEntry, navigateToNavEntry, NAV_DEEPLINK_PATH } from './navigation/registry'
@@ -219,6 +222,12 @@ function useNotificationClickNavigation(): void {
       }
       if (link.type === 'group') {
         navigateToGroupSession(navigate, link.sessionId)
+        return
+      }
+      if (link.type === 'thread') {
+        // T3：与面板内点击同一处落地（groups/navigation）——话题回复不在群主时间线上，
+        // 只点名群等于跳过去看不见那条回复。
+        navigateToGroupThread(navigate, link.groupId, link.threadId)
         return
       }
       if (link.type === 'matter') {

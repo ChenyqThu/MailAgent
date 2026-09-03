@@ -105,7 +105,7 @@ describe('queued input store', () => {
       .get() as {
       value: string
     }
-    expect(version.value).toBe('31')
+    expect(version.value).toBe('32')
     const sql = db
       .prepare("SELECT sql FROM sqlite_master WHERE name='chat_queued_input'")
       .get() as {

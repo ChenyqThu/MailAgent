@@ -90,7 +90,10 @@ function seedV29ChatDb(): void {
       title TEXT,
       archived INTEGER NOT NULL DEFAULT 0,
       origin TEXT,
-      agent_id TEXT
+      agent_id TEXT,
+      -- v25 加的列。真实的 v29 库一定有它（迁移梯走过 v25），种子也得有：v32 的唯一部分索引
+      -- 建在 (parent_session_id, thread_root_message_id) 上，少这一列迁移会当场炸。
+      parent_session_id INTEGER
     );
     CREATE TABLE ai_chat_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -110,10 +113,10 @@ function seedV29ChatDb(): void {
 }
 
 describe('CHAT_DB v30 migration', () => {
-  test('① fresh DB carries both v30 columns at schema_version 30', () => {
+  test('① fresh DB carries both v30 columns at the head schema_version', () => {
     expect(columnNames('ai_chat_sessions')).toContain('members_json')
     expect(columnNames('ai_chat_messages')).toContain('speaker_agent_id')
-    expect(schemaVersion()).toBe(31)
+    expect(schemaVersion()).toBe(32)
   })
 
   test('② v29-shaped old DB upgrades safely; meta-rollback re-entry is idempotent', () => {
@@ -121,7 +124,7 @@ describe('CHAT_DB v30 migration', () => {
     // Upgrade the old library.
     expect(columnNames('ai_chat_sessions')).toContain('members_json')
     expect(columnNames('ai_chat_messages')).toContain('speaker_agent_id')
-    expect(schemaVersion()).toBe(31)
+    expect(schemaVersion()).toBe(32)
     // Pre-existing row survives untouched.
     const row = getChatDb().prepare('SELECT origin, members_json FROM ai_chat_sessions').get() as {
       origin: string
@@ -130,12 +133,12 @@ describe('CHAT_DB v30 migration', () => {
     expect(row.origin).toBe('team')
     expect(row.members_json).toBeNull()
     // Crash-before-meta replay: physical v30 + meta rolled back to 29 → re-open must not throw
-    // ("duplicate column name") and must converge back to 30.
+    // ("duplicate column name") and must converge back to the head version.
     getChatDb()
       .prepare("INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '29')")
       .run()
     closeChatDb()
-    expect(schemaVersion()).toBe(31)
+    expect(schemaVersion()).toBe(32)
   })
 })
 

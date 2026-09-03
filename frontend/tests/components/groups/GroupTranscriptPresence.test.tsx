@@ -2,7 +2,7 @@
 //
 // T2 check — 在场态的**接线**（纯函数的真值表在 groupTurnStage.test.ts，这里只钉「事实到不到得了
 // 那个函数」）：
-//   T1 lastEventAt 经 live 传到 GroupThread → 静默 15s 显示 stalled 文案（不是恒 connecting）；
+//   T1 lastEventAt 经 live 传到 GroupTranscript → 静默 15s 显示 stalled 文案（不是恒 connecting）；
 //   T2 在场期间时钟自己走：不靠父层重渲，跨过 15s 门槛后当场降级
 //      —— 父层的 `now` 是 60s 节拍，只有它就意味着 stalled 最坏晚 60s 才出现（AC3 要的是 15s）。
 //
@@ -12,7 +12,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 
 import i18n from '@shared/i18n'
-import { GroupThread } from '../../../src/shared/components/agents/groups/GroupThread'
+import { GroupTranscript } from '../../../src/shared/components/agents/groups/GroupTranscript'
 import type { GroupMemberMeta } from '../../../src/shared/components/agents/groups/members'
 
 await i18n.changeLanguage('zh-CN')
@@ -24,7 +24,7 @@ afterEach(() => {
 
 const MEMBER_META = new Map<string, GroupMemberMeta>([['a1', { title: '调研员', avatar: null }]])
 
-function renderThread(over: {
+function renderTranscript(over: {
   now: number
   lastEventAt: number | null
   text?: string
@@ -37,7 +37,7 @@ function renderThread(over: {
       : [['r1:1', { turnKey: 'r1:1', phase: 'failed' as const, agentId: 'a1', ts: over.failedAt }]]
   )
   return render(
-    <GroupThread
+    <GroupTranscript
       items={[]}
       tail={{
         inFlight:
@@ -63,10 +63,10 @@ function renderThread(over: {
   )
 }
 
-describe('GroupThread 在场态接线', () => {
+describe('GroupTranscript 在场态接线', () => {
   test('T1 lastEventAt 已静默 16s → stalled 文案（事实确实到得了 groupTurnStage）', () => {
     const now = Date.now()
-    renderThread({ now, lastEventAt: now - 16_000 })
+    renderTranscript({ now, lastEventAt: now - 16_000 })
     expect(screen.getByText('仍在等待响应…')).toBeTruthy()
   })
 
@@ -74,7 +74,7 @@ describe('GroupThread 在场态接线', () => {
     vi.useFakeTimers()
     const now = Date.now()
     // 起点：刚收到事件 → writing。父层的 now 此后一动不动（60s 节拍还没到）。
-    renderThread({ now, lastEventAt: now })
+    renderTranscript({ now, lastEventAt: now })
     expect(screen.getByText('正在回复…')).toBeTruthy()
     act(() => {
       vi.advanceTimersByTime(16_000)
@@ -89,7 +89,7 @@ describe('GroupThread 在场态接线', () => {
   test('T3 收尾后的 error 行会自己走完新鲜期消失（失败留痕没有清理者，停表就是永动红字）', () => {
     vi.useFakeTimers()
     const now = Date.now()
-    renderThread({ now, lastEventAt: now, failedAt: now })
+    renderTranscript({ now, lastEventAt: now, failedAt: now })
     expect(screen.getByText('响应出错')).toBeTruthy()
     act(() => {
       vi.advanceTimersByTime(16_000)

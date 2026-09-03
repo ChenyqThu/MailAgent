@@ -163,12 +163,19 @@ export function groupUsage(sessionIds: readonly number[], sinceMs: number): Grou
   }
 }
 
-/** 本群的 family：父群 id（子群才非 null）+ 子群 id 列表（按 parent_session_id 反查）。
- *  子群只认 origin='group' 行 —— `parent_session_id` 也被 custom_agent_call 的子会话用（v27），
- *  那些不是群、不该进 family 的预算窗口与 stopFamily。 */
+/** 本群的 family：父群 id（子群才非 null）+ 子群 id 列表 + 话题 id 列表（都按 parent_session_id
+ *  反查）。子群与话题都只认 origin='group' 行 —— `parent_session_id` 也被 custom_agent_call 的
+ *  子会话用（v27），那些不是群、不该进 family 的预算窗口与 stopFamily。
+ *
+ *  🔴 **两支分家的判据恒是 `invoked_by`**（v32）：话题（`invoked_by='thread'`）与子群同样是
+ *  origin='group' + parent_session_id 非空，不显式分开的话，话题会被当子群算进
+ *  `SUBGROUPS_PER_FAMILY_CAP`、进 `group_members` 工具的 `child_sessions`、进法官 scope。
+ *  两支都进小时预算 / stopFamily 的 family 窗口（话题的开销是这个群的开销），但**只有
+ *  `childSessionIds` 是「子群」语义**，凡是问「这个群有哪些子群」的读点都只能用它。 */
 export function familyOf(sessionId: number): {
   parentSessionId: number | null
   childSessionIds: number[]
+  threadSessionIds: number[]
 } {
   const db = getChatDb()
   const self = db
@@ -176,13 +183,14 @@ export function familyOf(sessionId: number): {
     .get(sessionId) as { parent_session_id: number | null } | undefined
   const children = db
     .prepare(
-      `SELECT id FROM ai_chat_sessions
+      `SELECT id, COALESCE(invoked_by, '') AS invoked_by FROM ai_chat_sessions
         WHERE parent_session_id = ? AND origin = 'group' ORDER BY id ASC`
     )
-    .all(sessionId) as Array<{ id: number }>
+    .all(sessionId) as Array<{ id: number; invoked_by: string }>
   return {
     parentSessionId: self?.parent_session_id ?? null,
-    childSessionIds: children.map((r) => Number(r.id))
+    childSessionIds: children.filter((r) => r.invoked_by !== 'thread').map((r) => Number(r.id)),
+    threadSessionIds: children.filter((r) => r.invoked_by === 'thread').map((r) => Number(r.id))
   }
 }
 

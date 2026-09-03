@@ -493,15 +493,31 @@ export function listAllSessions(options: ListAllSessionsOptions = {}): ChatSessi
         : origin === 'team'
           ? "s.origin = 'team'"
           : origin === 'group'
-            ? "s.origin = 'group'"
+            ? // T3 (v32) — 话题不进群清单。话题与子群同是 origin='group' + parent_session_id
+              // 非空，**只有 invoked_by 这一个显式判据**能把它们分开：漏了这条，每开一个话题
+              // 群列表就多出一行。🔴 与 Python 镜像 src/chat/db.py::list_all_sessions 的 'group'
+              // 支逐字对齐（闸 test_chat_type_mirror_parity.py
+              // ::test_group_list_thread_exclusion_mirror_parity）。
+              "s.origin = 'group' AND COALESCE(s.invoked_by, '') <> 'thread'"
             : origin === 'all'
               ? '1 = 1'
               : "COALESCE(s.origin, 'interactive') NOT IN ('agent', 'team', 'group')"
+  // T3 (v32) — 群行的派生列「底下有没有未读话题」。话题回复只 bump 话题行的 updated_at，父群行
+  // 一动不动 —— 不派生这一列，群列表 / rail / peek 就永远不会因为话题里的回复而亮。口径与群行
+  // 自己的未读一致（`last_read_at IS NOT NULL` = 从没打开过不算未读）。只在群清单这一支算：
+  // 其余读路径没有消费点，白搭一个逐行子查询。🔴 与 Python 镜像 list_all_sessions 的同名列对齐。
+  const threadUnreadCol =
+    origin === 'group'
+      ? `,
+         EXISTS (SELECT 1 FROM ai_chat_sessions t WHERE t.parent_session_id = s.id
+           AND COALESCE(t.invoked_by, '') = 'thread'
+           AND t.last_read_at IS NOT NULL AND t.updated_at > t.last_read_at) AS has_unread_threads`
+      : ''
   // dogfood-3 — includeArchived (default false → only active sessions, byte-identical to before; the
   // agent view passes true to also pull archived rows for its bottom "归档" group). SELECT now carries
   // s.archived so the renderer can split active vs archived. The archived branch is a fixed boolean (no
   // user input), so inlining it in the WHERE is injection-safe.
-  return getChatDb()
+  const rows = getChatDb()
     .prepare(
       `SELECT
          s.id, s.email_id, s.anchor_type, s.anchor_id, s.backend_kind, s.backend_model,
@@ -511,7 +527,7 @@ export function listAllSessions(options: ListAllSessionsOptions = {}): ChatSessi
          (SELECT substr(m.content, 1, 500) FROM ai_chat_messages m
             WHERE m.session_id = s.id AND m.role = 'user'
             ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,
-         (SELECT COUNT(*) FROM ai_chat_messages m WHERE m.session_id = s.id) AS message_count
+         (SELECT COUNT(*) FROM ai_chat_messages m WHERE m.session_id = s.id) AS message_count${threadUnreadCol}
        FROM ai_chat_sessions s
        WHERE ${includeArchived ? '1 = 1' : 's.archived = 0'}
          AND ${originClause}
@@ -520,6 +536,13 @@ export function listAllSessions(options: ListAllSessionsOptions = {}): ChatSessi
        LIMIT ?`
     )
     .all(limit) as ChatSessionSummary[]
+  // 🔴 SQLite 的 EXISTS 给的是 0/1，读侧判据是 `has_unread_threads === true`（isGroupRowUnread）
+  // —— 不折成真 boolean，拿到的就是个 1，群行永远不亮而且没人会报错。
+  if (!threadUnreadCol) return rows
+  return rows.map((row) => ({
+    ...row,
+    has_unread_threads: (row.has_unread_threads as unknown as number) === 1
+  }))
 }
 
 export function getSession(sessionId: number): ChatSession | null {

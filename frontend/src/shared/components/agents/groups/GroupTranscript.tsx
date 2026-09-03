@@ -2,6 +2,10 @@
 // 覆盖边界）+ 末尾在场行 + 滚底（只在用户已在底部附近时随流滚，否则不打断阅读、给「回到最新」钮）
 // + 空态 / 加载态 / 错误态。
 // 列表性能：折叠组与气泡都是 memo，流式 delta 只改 tail / 最后一组的 text。
+//
+// 🔴 09-02（T3）从 `GroupThread.tsx` 改名过来：`thread` 在本域已经是「话题」的专名（父设计
+// D5），一个叫 GroupThread 的「群消息流」会和 GroupThreadPane / GroupThreadCard 正面撞车。
+// 本组件被主时间线与话题面**共用**（话题面传 `sessionId=threadId` 的那份 items）。
 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -15,6 +19,7 @@ import type { GroupMentionMember } from '../../../../ai-gateway/groupChat'
 import { GroupMessageGroup } from './GroupMessageGroup'
 import { GroupMetaRow, type RetryUiState } from './GroupMetaRow'
 import { GroupPresenceRow, type GroupPresenceWriter } from './GroupPresenceRow'
+import { GroupThreadCard } from './GroupThreadCard'
 import {
   colorOfMember,
   dateSeparatorLabel,
@@ -53,9 +58,17 @@ function usePresenceNow(onStage: boolean, failedAt: number | null, fallbackNow: 
   return nowRead
 }
 
-export type GroupThreadEmpty = 'v1' | 'orchestrated' | 'noRealtime'
+/** 空态四分：三种群空态 + 话题面自己的（`thread` = 刚开的话题还没有一条回复）。 */
+export type GroupTranscriptEmpty = 'v1' | 'orchestrated' | 'noRealtime' | 'thread'
 
-export function GroupThread({
+const EMPTY_KEYS: Record<GroupTranscriptEmpty, string> = {
+  v1: 'groupChat.emptyThread',
+  noRealtime: 'groupChat.emptyThreadNoRealtime',
+  orchestrated: 'groupChat.emptyThreadOrchestrated',
+  thread: 'groupChat.thread.empty'
+}
+
+export function GroupTranscript({
   items,
   tail,
   memberIds,
@@ -70,7 +83,10 @@ export function GroupThread({
   onRetry,
   onOpenDetails,
   attachmentsById,
-  live
+  live,
+  onOpenThread,
+  onCreateThread,
+  threadRootIds
 }: {
   items: readonly GroupTimelineItem[]
   tail: GroupTimelineTail
@@ -81,7 +97,7 @@ export function GroupThread({
   loading: boolean
   error: string | null
   onRetryLoad: () => void
-  empty: GroupThreadEmpty
+  empty: GroupTranscriptEmpty
   retryStates: ReadonlyMap<string, RetryUiState>
   onRetry: (item: Extract<GroupTimelineItem, { kind: 'meta' }>) => void
   onOpenDetails?: () => void
@@ -90,6 +106,11 @@ export function GroupThread({
   /** T2 — 在场态要的另外两项事实：turn 留痕（error 支）与最近一次事件时刻（stalled 支）。
    *  null = 没有事件源（labs off / 未加载），不是「没发生过」—— 此时只走 idle。 */
   live: Pick<GroupTurnStageView, 'overlay' | 'lastEventAt'> | null
+  /** T3 — 点话题卡 → 打开那个话题面（threadCard 项只在顶层群的主时间线里出现）。 */
+  onOpenThread?: (threadId: number) => void
+  /** T3 — hover「开话题」；缺省 = 不画（子群 / 话题面）。透传 GroupMessageGroup。 */
+  onCreateThread?: (messageId: number) => void
+  threadRootIds?: ReadonlySet<number>
 }): React.ReactElement {
   const { t } = useTranslation()
   const titleOf = (id: string): string => memberMeta.get(id)?.title?.trim() || id
@@ -172,13 +193,13 @@ export function GroupThread({
   if (error != null && items.length === 0) {
     content = (
       <div className="flex flex-col items-center gap-2 px-6 py-10 text-center text-meta text-ink-fg-3">
-        <span>{t('groupChat.thread.loadFailed')}</span>
+        <span>{t('groupChat.transcript.loadFailed')}</span>
         <button
           type="button"
           onClick={onRetryLoad}
           className="text-aux text-ink-fg-1 underline-offset-2 hover:underline"
         >
-          {t('groupChat.thread.retryLoad')}
+          {t('groupChat.transcript.retryLoad')}
         </button>
       </div>
     )
@@ -194,15 +215,7 @@ export function GroupThread({
     content = (
       <div className="flex flex-col items-center gap-2 px-6 py-10 text-center text-meta text-ink-fg-3">
         <Users size={20} strokeWidth={1.5} />
-        <span>
-          {t(
-            empty === 'v1'
-              ? 'groupChat.emptyThread'
-              : empty === 'noRealtime'
-                ? 'groupChat.emptyThreadNoRealtime'
-                : 'groupChat.emptyThreadOrchestrated'
-          )}
-        </span>
+        <span>{t(EMPTY_KEYS[empty])}</span>
         {empty === 'noRealtime' && onOpenDetails && (
           <button
             type="button"
@@ -249,9 +262,22 @@ export function GroupThread({
                   memberIds={memberIds}
                   now={now}
                   attachmentsById={attachmentsById}
+                  onCreateThread={onCreateThread}
+                  threadRootIds={threadRootIds}
                 />
               )
             }
+            case 'threadCard':
+              return (
+                <GroupThreadCard
+                  key={item.key}
+                  thread={item.thread}
+                  memberMeta={memberMeta}
+                  align={item.speaker.type === 'user' ? 'end' : 'start'}
+                  now={now}
+                  onOpen={() => onOpenThread?.(item.thread.sessionId)}
+                />
+              )
             case 'meta':
               return (
                 <GroupMetaRow
@@ -278,7 +304,7 @@ export function GroupThread({
         ref={scrollRef}
         onScroll={onScroll}
         className="scrollbar-thin h-full overflow-y-auto px-4 py-4"
-        data-group-thread
+        data-group-transcript
       >
         {content}
       </div>

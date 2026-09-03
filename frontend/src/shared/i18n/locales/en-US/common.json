@@ -7380,9 +7380,21 @@
     "mentionModeRealtime": "Realtime",
     "mentionModeMention": "Mention",
     "scrollToLatest": "Back to latest",
-    "thread": {
+    "transcript": {
       "loadFailed": "Failed to load messages.",
       "retryLoad": "Retry"
+    },
+    "thread": {
+      "open": "Start thread",
+      "reply": "Reply in thread",
+      "count": "{count} replies",
+      "latest": "Latest",
+      "close": "Close thread",
+      "viewInGroup": "View in group",
+      "participants": "Participants",
+      "topLevelOnly": "Threads can only be started in a top-level group",
+      "paneTitle": "Thread",
+      "empty": "No replies yet — @mention a member to start the discussion"
     },
     "dateToday": "Today",
     "dateYesterday": "Yesterday",

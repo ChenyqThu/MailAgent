@@ -7380,9 +7380,21 @@
     "mentionModeRealtime": "实时",
     "mentionModeMention": "点名",
     "scrollToLatest": "回到最新",
-    "thread": {
+    "transcript": {
       "loadFailed": "消息读取失败。",
       "retryLoad": "重试"
+    },
+    "thread": {
+      "open": "开话题",
+      "reply": "回复话题",
+      "count": "{count} 条回复",
+      "latest": "最新",
+      "close": "关闭话题",
+      "viewInGroup": "在群里查看",
+      "participants": "参与者",
+      "topLevelOnly": "话题只能开在顶层群",
+      "paneTitle": "话题",
+      "empty": "还没有回复，@ 一位成员开始讨论"
     },
     "dateToday": "今天",
     "dateYesterday": "昨天",

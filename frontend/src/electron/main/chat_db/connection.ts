@@ -228,7 +228,26 @@ import { resolveDataRoot } from '../db'
 //   chat.py 的校验元组, 闸 = tests/config/test_group_constants_parity.py (抽不到任一侧必红)。
 // Plain additive ALTER + CREATE TABLE IF NOT EXISTS, hasColumn 幂等守卫 (v24/v25 样板)。
 // 🔴 bump 同步刷 src/chat/db.py 头注释; NOT backend_lifecycle.EXPECTED_DB_VERSION (两条独立版本梯)。
-const CHAT_DB_VERSION = 31
+// v32 (L4 群聊话题 thread, task 09-02 T3) — 一列 + 一个唯一部分索引 + 一个值域登记:
+//   • ai_chat_sessions.thread_root_message_id: 话题的**根消息** id (话题从群里的哪一条消息开出来)。
+//     NULL = 这行不是话题 (所有既有行)。话题行本身 = origin='group' + parent_session_id=父群 +
+//     invoked_by='thread' + members_json 取父群快照 + group_config_json 复制父群。跨表引用
+//     ai_chat_messages(id) 但**不建 FK**: 根消息被删 (清空历史) 时话题该留着自己的上下文,
+//     级联删会连带毁掉一整段讨论。
+//   • idx_chat_sessions_thread_root: UNIQUE(parent_session_id, thread_root_message_id)
+//     WHERE thread_root_message_id IS NOT NULL —— 「一条消息至多一个话题」的**建端点幂等根据**
+//     (同根重复 POST 返回已有话题而不是建第二个)。部分索引 (WHERE 子句) 是必需的: 不加它,
+//     全部 thread_root_message_id 为 NULL 的普通会话会挤在同一个 (parent, NULL) 键上 —— SQLite
+//     的 UNIQUE 虽把 NULL 视作互不相等而不会拒插, 但索引会白白覆盖全表 (先例
+//     idx_chat_queued_input_delivery, v26)。
+//   • ai_chat_sessions.invoked_by (v25 已有列, 无 CHECK) 的值域加 'thread'。🔴 读侧分家判据恒
+//     是 `COALESCE(invoked_by,'') = 'thread'` 这一个显式条件 —— 话题与子群同是 origin='group' +
+//     parent_session_id 非空, 只按这两列区分不出来 (群清单会列出话题、familyOf 会把话题当子群
+//     算进 SUBGROUPS_PER_FAMILY_CAP 与法官 scope)。词表单源 src/chat/group_limits.py
+//     SESSION_INVOKED_BY (serve-api 独占, 有意不进 test_group_constants_parity 的 VOCABULARIES)。
+// Plain additive ALTER + CREATE UNIQUE INDEX IF NOT EXISTS, hasColumn 幂等守卫 (v30/v31 样板)。
+// 🔴 bump 同步刷 src/chat/db.py 头注释; NOT backend_lifecycle.EXPECTED_DB_VERSION。
+const CHAT_DB_VERSION = 32
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -1505,6 +1524,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_queued_input_delivery
       db.exec('CREATE INDEX IF NOT EXISTS idx_group_turn_chain ON ai_chat_group_turn(chain_id)')
       db.prepare(
         "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '31')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  // v31 → v32 — L4 群聊话题 (task 09-02 T3): 话题根消息列 + 「一条消息至多一个话题」的唯一
+  // 部分索引 + invoked_by 值域登记 'thread'（见头注）。additive ALTER + CREATE UNIQUE INDEX
+  // IF NOT EXISTS，老代码忽略新列即可回退。
+  if (current < 32) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'ai_chat_sessions', 'thread_root_message_id')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN thread_root_message_id INTEGER')
+      }
+      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_sessions_thread_root
+        ON ai_chat_sessions(parent_session_id, thread_root_message_id)
+        WHERE thread_root_message_id IS NOT NULL`)
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '32')"
       ).run()
       db.exec('COMMIT')
     } catch (err) {

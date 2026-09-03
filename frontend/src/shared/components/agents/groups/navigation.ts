@@ -18,3 +18,22 @@ export function navigateToGroupSession(
   useGroupsView.getState().setActiveGroupSessionId(sessionId)
   void navigate({ to: '/groups' })
 }
+
+/** T3 — 跳到某个群里的某个**话题**（通知 link 型 `thread` 的落地单源）。
+ *
+ *  比 `navigateToGroupSession` 多一段：先点名话题再点名群。两件都点名是必需的 —— 话题面挂在
+ *  群视图里，只点名话题会落到「群没选中、右栏无处可挂」；只点名群则打开的是主时间线，
+ *  用户还得自己找回那条话题卡（通知说的「谁在话题里回了你」当场落空）。
+ *
+ *  与 `navigateToGroupSession` 同样只引 router 的类型，实例由调用方传进来；同样两处调用
+ *  （面板内点击 + 系统通知点击）共用这一份。 */
+export function navigateToGroupThread(
+  navigate: ReturnType<typeof useNavigate>,
+  groupId: number,
+  threadId: number
+): void {
+  const state = useGroupsView.getState()
+  state.setActiveThread(groupId, threadId)
+  state.setActiveGroupSessionId(groupId)
+  void navigate({ to: '/groups' })
+}
