@@ -157,6 +157,22 @@ v52 教训，有专门闸）；v51/v53–v55 是其它域的迁移
 | `matter_resource_rejection` | 资料建议的拒绝记忆 | 见 §5 |
 | `matter_search_document` | 搜索投影 | `matter` 表本身**没有** `search_` 前缀列 |
 
+**`kind='file'` 的两个前缀**（09-03 资料库 epic）：`external_key` 现在有两族 —— 邮件附件
+`attachment:{id}` 与资料库文件 `library:{file_id}`，同一命名空间靠**前缀**区分。
+🔴 `uq_resource_provider_key` 是 `(provider, external_key)`、**不含 kind**，所以前缀必须互斥：
+去掉前缀 `attachment:7` 与 `library:7` 就会折成一份资料。identity 落点在
+`resource_identity.py`（`library_resource_key()` / `is_library_resource_key()` /
+`parse_library_resource_key()`，前缀取 `src.library.constants.RESOURCE_KEY_PREFIX`，不手抄字面量）。
+存在性判定（`repository.resource_available` 的 `library:` 分支）走一个**注入的回调** ——
+matters **不直接 import 资料库存储层**，回调实现在 library 侧（`src/library/resource_resolver.py`），
+serve-api 与主服务各注册一次。🔴 **没注册回调时 fail-closed**（`library:` 键恒判不可用）：那道判定
+唯一的作用是挡住模型编造的 file id，「读不到就放行」等于把它整条关掉；代价是漏注册 = 已关联的库
+文件在列表里显示不可用（显示降级，不崩、不放行）。跟进 run 可以**提议**挂库文件：提案白名单吃的是
+`MAILAGENT_PROPOSAL_KINDS`（= `MAILAGENT_IDENTITY_KINDS ∪ {file}`），与提议邮件同待遇，进「未确认的
+agent 建议」由人确认。🔴 `file` **有意不进** `MAILAGENT_IDENTITY_KINDS`：那个集合的成员会被
+`normalize_resource_key` 规范、被 `parse_resource_key` 认领，而 `file` 的 `external_key` 恒原样透传 ——
+两个集合分开，跟进 run 能提议挂库文件而 normalize / parse 的行为一个字节不变。
+
 **标签的两个维度**：颜色与形状彼此独立（同色靠形状区分，同形靠颜色区分）。
 `tags_json` 里出现、但定义表没有的名字**不是孤儿** —— 读取时回退默认样式并照常可选可改；
 过滤掉它们会让存量标签变成「看不见但还挂在事项上」。
