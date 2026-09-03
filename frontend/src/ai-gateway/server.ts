@@ -32,6 +32,7 @@ import type { AiGatewayConfig, GroupSessionFacts, SessionAgentIdentity } from '.
 import { GENERATED_IMAGE_ROUTE_PREFIX, resolveGeneratedFilePath } from './tools/image'
 // T2 群附件 — body.attachments 的校验 + metadata 编码（单源，renderer 与投影侧共用同一份）。
 import { encodeAttachmentsMetadata, validateAttachmentsInput } from './groupAttachments'
+import { encodeLibraryRefsMetadata, readLibraryRefsInput } from './groupLibraryRefs'
 // v30（群聊）— server-side history assembly for a group speaker run (pure helper).
 import { assembleGroupHistory, type GroupTranscriptRow } from './groupChat'
 import { isSilence } from './groupFloors'
@@ -1374,7 +1375,17 @@ async function handleGroupChat(
       writeJson(res, 400, { error: 'E_INVALID_ARG', hint: attachments.hint })
       return
     }
-    const metadata = encodeAttachmentsMetadata(attachments.items)
+    // P2-L13 群 @ 资料 — 同一纪律：形状不合格整条 400。落进同一个 metadata 对象的另一个键，
+    // 两个编码器都保留 base 的其余键，所以链起来即可（都空 → metadata 恒 null，行字节不变）。
+    const libraryRefs = readLibraryRefsInput(body)
+    if (!libraryRefs.ok) {
+      writeJson(res, 400, { error: 'E_INVALID_ARG', hint: libraryRefs.hint })
+      return
+    }
+    const metadata = encodeLibraryRefsMetadata(
+      libraryRefs.items,
+      encodeAttachmentsMetadata(attachments.items)
+    )
     const messageId = appendGroupMessage(sessionId, {
       role: 'user',
       content: userText,
@@ -1393,8 +1404,9 @@ async function handleGroupChat(
         chainId: messageId,
         via: null,
         createdAt: Date.now(),
-        // 这一行是刚落库那条的投影：带上附件才与 listGroupHistory 之后读回来的形状一致。
-        ...(attachments.items.length > 0 ? { attachments: attachments.items } : {})
+        // 这一行是刚落库那条的投影：带上附件 / 资料引用才与 listGroupHistory 之后读回来的形状一致。
+        ...(attachments.items.length > 0 ? { attachments: attachments.items } : {}),
+        ...(libraryRefs.items.length > 0 ? { libraryRefs: libraryRefs.items } : {})
       }
       groupScheduler.onGroupMessage(sessionId, row).catch((err: unknown) => {
         console.warn('[ai-gateway] group onGroupMessage failed', { sessionId, messageId, err })

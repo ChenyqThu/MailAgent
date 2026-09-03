@@ -918,3 +918,84 @@ describe('structural guards', () => {
     expect(Object.keys(tools).sort()).toEqual(FOUR)
   })
 })
+
+// ── P2-L13 群内 run 的资料库读工具（design §9.3 (b)）──────────────────────────────────────────
+
+describe('group venues — library read tools', () => {
+  /** 只实现两个读工具真正会碰的方法；多一个都不给，被调错方法就 TypeError。 */
+  function fakeLibraryDomain(hits: unknown[] = []) {
+    const calls: string[] = []
+    const domain = {
+      librarySearch: (input: { q: string; limit: number }) => {
+        calls.push(`search:${input.q}`)
+        return Promise.resolve({ query: input.q, mode: 'like', hits, warnings: [] })
+      },
+      libraryFile: (fileId: number) => {
+        calls.push(`file:${fileId}`)
+        return Promise.resolve({
+          id: fileId,
+          path: 'my-docs/a.md',
+          filename: 'a.md',
+          kind: 'markdown',
+          status: 'present',
+          content: '正文一行'
+        })
+      }
+    }
+    return { domain: domain as never, calls }
+  }
+
+  test('L13-1 成员 run 拿到 library_read / library_search（不含 library_list）', () => {
+    const collector: GatewayToolAuditEntry[] = []
+    const tools = createGroupMemberTools(collector, world().hooks, {
+      sessionId: WOLVES,
+      libraryDomain: fakeLibraryDomain().domain
+    })
+    expect(Object.keys(tools).sort()).toEqual([
+      'group_history',
+      'group_members',
+      'library_read',
+      'library_search'
+    ])
+  })
+
+  test('L13-2 法官 run 同样给（四件群工具 + 两件资料读）', () => {
+    const { tools } = judgeTools(world(), { libraryDomain: fakeLibraryDomain().domain })
+    expect(Object.keys(tools).sort()).toEqual([...FOUR, 'library_read', 'library_search'].sort())
+  })
+
+  test('L13-3 缺 libraryDomain（老调用点）时与改动前逐字一致', () => {
+    const { tools } = memberTools(world())
+    expect(Object.keys(tools).sort()).toEqual(['group_history', 'group_members'])
+  })
+
+  test('L13-4 两件都是 silent read：零审批面（群 run 里一张卡没人点得动）', () => {
+    const collector: GatewayToolAuditEntry[] = []
+    const tools = createGroupMemberTools(collector, world().hooks, {
+      sessionId: WOLVES,
+      libraryDomain: fakeLibraryDomain().domain
+    })
+    for (const name of ['library_read', 'library_search']) {
+      const tool = tools[name] as Tool & { needsApproval?: unknown }
+      expect(tool.needsApproval).not.toBe(true)
+    }
+  })
+
+  test('L13-5 走的是 tools/library.ts 的真实现（打到同一个 domain 方法）', async () => {
+    const { domain, calls } = fakeLibraryDomain()
+    const collector: GatewayToolAuditEntry[] = []
+    const tools = createGroupMemberTools(collector, world().hooks, {
+      sessionId: WOLVES,
+      libraryDomain: domain
+    })
+    const read = tools.library_read as Tool & {
+      execute: (i: unknown, o: unknown) => Promise<unknown>
+    }
+    const out = (await read.execute({ file_id: 42, max_chars: 2000 }, {})) as {
+      content: string | null
+    }
+    expect(calls).toEqual(['file:42'])
+    // 围栏是 library.ts 那一份的产物 —— 这里没有第二份实现可以漏掉它。
+    expect(out.content).toContain('UNTRUSTED_LIBRARY_FILE')
+  })
+})
