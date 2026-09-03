@@ -416,7 +416,7 @@ describe('GroupChatView', () => {
     await sendText(container, '大家汇报下')
     await waitFor(() => expect(mockRunSpeaker).toHaveBeenCalledTimes(1))
     // 用户消息先落库（T2 起第三参恒是附件数组，无附件 = 空数组），且第一个发言者是成员序第一位 a1。
-    expect(mockAppendUser).toHaveBeenCalledWith(300, '大家汇报下', [])
+    expect(mockAppendUser).toHaveBeenCalledWith(300, '大家汇报下', [], [])
     expect(mockRunSpeaker.mock.calls[0]?.[0]).toMatchObject({
       sessionId: 300,
       speakAsAgentId: 'a1'
@@ -477,7 +477,7 @@ describe('GroupChatView（labs on：服务端编排）', () => {
     const container = renderView()
     await waitForLabsOn()
     await sendText(container, '大家汇报下')
-    await waitFor(() => expect(mockAppendUser).toHaveBeenCalledWith(300, '大家汇报下', []))
+    await waitFor(() => expect(mockAppendUser).toHaveBeenCalledWith(300, '大家汇报下', [], []))
     // 等一拍确认 renderer 没有自己起发言循环。
     await new Promise((r) => setTimeout(r, 30))
     expect(mockRunSpeaker).not.toHaveBeenCalled()
@@ -674,7 +674,7 @@ describe('GroupChatView（UX 批：事件 / 台账 / 重试 / composer）', () =
     expect(mockAppendUser).not.toHaveBeenCalled()
     expect(mockRunSpeaker).not.toHaveBeenCalled()
     resolveLabs({ groupAgents: 'on' })
-    await waitFor(() => expect(mockAppendUser).toHaveBeenCalledWith(300, '大家汇报下', []))
+    await waitFor(() => expect(mockAppendUser).toHaveBeenCalledWith(300, '大家汇报下', [], []))
     await tick()
     expect(mockRunSpeaker).not.toHaveBeenCalled()
   })
@@ -1069,10 +1069,15 @@ describe('GroupChatView（T2 lane K：composer 换内胆 / 附件）', () => {
     await waitFor(() => expect(screen.getByText('notes.txt')).toBeTruthy())
     await sendText(container, '看看这两个文件')
     await waitFor(() => expect(mockAppendUser).toHaveBeenCalledTimes(1))
-    expect(mockAppendUser).toHaveBeenCalledWith(300, '看看这两个文件', [
-      { filename: 'screenshot.png', size: png.size, mimeType: 'image/png', text: null },
-      { filename: 'notes.txt', size: txt.size, mimeType: 'text/plain', text: 'hello log' }
-    ])
+    expect(mockAppendUser).toHaveBeenCalledWith(
+      300,
+      '看看这两个文件',
+      [
+        { filename: 'screenshot.png', size: png.size, mimeType: 'image/png', text: null },
+        { filename: 'notes.txt', size: txt.size, mimeType: 'text/plain', text: 'hello log' }
+      ],
+      []
+    )
     await waitFor(() => expect(screen.queryByText('notes.txt')).toBeNull())
     expect(screen.queryByText(/图片只留档/)).toBeNull()
   })
@@ -1086,9 +1091,12 @@ describe('GroupChatView（T2 lane K：composer 换内胆 / 附件）', () => {
     await waitFor(() => expect(screen.getByText('a.md')).toBeTruthy())
     await sendText(container, '@调研员 看看')
     await waitFor(() =>
-      expect(mockAppendUser).toHaveBeenCalledWith(300, '@调研员 看看', [
-        { filename: 'a.md', size: md.size, mimeType: 'text/markdown', text: '# 标题' }
-      ])
+      expect(mockAppendUser).toHaveBeenCalledWith(
+        300,
+        '@调研员 看看',
+        [{ filename: 'a.md', size: md.size, mimeType: 'text/markdown', text: '# 标题' }],
+        []
+      )
     )
     await waitFor(() => expect(mockRunSpeaker).toHaveBeenCalledTimes(1))
     expect(mockRunSpeaker.mock.calls[0]?.[0]).toMatchObject({ speakAsAgentId: 'a1' })

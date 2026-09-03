@@ -16,9 +16,9 @@
 // 读取结果经 bridge 落在本组件的 map 里，发送时映射成 `GroupAttachment[]`（图片 `text=null` 只留档）随
 // body 走；条数上限 `GROUP_ATTACHMENTS_MAX` 在 add 前拦，超出 toast。
 
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowUp, Users } from 'lucide-react'
+import { ArrowUp, FileText, Users } from 'lucide-react'
 import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
@@ -50,10 +50,20 @@ import { createMailAgentAttachmentAdapter } from '@shared/assistant/runtime/chat
 
 import { GROUP_MENTION_ALL_TOKENS } from '../../../../ai-gateway/groupChat'
 import type { GroupResponseMode } from '../../../../ai-gateway/groupFloors'
+import { createLibraryApi } from '@shared/api/library'
+import { resolveApiBaseUrl } from '@shared/components/settings/custom-ai/shared'
+
+import {
+  GROUP_LIBRARY_REFS_MAX,
+  type GroupLibraryRef
+} from '../../../../ai-gateway/groupLibraryRefs'
 import { AgentAvatar } from '../AgentAvatar'
 import { detectMentionDraft, parseGroupMentions } from './mentions'
 
 const MAX_MENTION_ITEMS = 8
+/** 资料组的检索节流 / 条数（形状照 useLibraryMentionAdapter，那是 AgentComposer 的同一组）。 */
+const LIBRARY_SEARCH_DEBOUNCE_MS = 180
+const LIBRARY_SEARCH_LIMIT = 6
 /** 稳定引用：每次 render 新造 `[]` 会让 external store 重新走一遍消息转换（虽然是空的）。 */
 const EMPTY_MESSAGES: readonly ThreadMessage[] = []
 
@@ -64,8 +74,13 @@ export interface GroupComposerMember {
 }
 
 export interface GroupComposerProps {
-  /** 发送：正文 + 已读出的附件。附件正文由 renderer 读好，服务端只校验形状与上限。 */
-  onSend: (text: string, attachments: readonly GroupAttachment[]) => Promise<void>
+  /** 发送：正文 + 已读出的附件 + @ 出来的资料引用。附件正文由 renderer 读好，服务端只校验形状
+   *  与上限；资料引用**只有标识没有正文**（P2-L13，正文由成员自己 library_read 取）。 */
+  onSend: (
+    text: string,
+    attachments: readonly GroupAttachment[],
+    libraryRefs: readonly GroupLibraryRef[]
+  ) => Promise<void>
   sending: boolean
   disabled: boolean
   members: readonly GroupComposerMember[]
@@ -78,7 +93,10 @@ export interface GroupComposerProps {
   runAlive: boolean
 }
 
-type MentionItem = { kind: 'all' } | { kind: 'member'; member: GroupComposerMember }
+type MentionItem =
+  | { kind: 'all' }
+  | { kind: 'member'; member: GroupComposerMember }
+  | { kind: 'library'; ref: GroupLibraryRef }
 
 /** 条数上限包在 adapter 外面：三个入口（粘贴 / 拖入 / 「+」）都经 `composer.addAttachment` →
  *  adapter.add，拦这一处就够。计数 = composer 里已有的 + 本 adapter 还在 add 中的：core 要等 add
@@ -108,6 +126,13 @@ function withGroupAttachmentCap(
   }
 }
 
+/** 弹层每行的稳定 key（三类 item 各有各的天然主键）。 */
+function itemKey(item: MentionItem): string {
+  if (item.kind === 'all') return '__all__'
+  if (item.kind === 'library') return `lib-${item.ref.fileId}`
+  return item.member.agentId
+}
+
 function appendedText(message: AppendMessage): string {
   let text = ''
   for (const part of message.content) if (part.type === 'text') text += part.text
@@ -135,6 +160,8 @@ export function GroupComposer(props: GroupComposerProps): React.ReactElement {
   const { onSend, sending, disabled } = props
   // 非图片附件的读取结果（adapter 经 bridge 写入，chip 移除 / 发送后删除）。
   const readRef = useRef(new Map<string, ChatAttachment>())
+  // P2-L13 —— 本条消息 @ 出来的资料引用。存在这一层（不是 body 里）是因为发送发生在 onNew。
+  const pickedRefs = useRef<GroupLibraryRef[]>([])
   const runtimeRef = useRef<AssistantRuntime | null>(null)
   const onSendRef = useRef(onSend)
   onSendRef.current = onSend
@@ -161,7 +188,11 @@ export function GroupComposer(props: GroupComposerProps): React.ReactElement {
         const attached = message.attachments ?? []
         const attachments = toGroupAttachments(attached, readRef.current)
         for (const a of attached) readRef.current.delete(a.id)
-        await onSendRef.current(appendedText(message).trim(), attachments)
+        const text = appendedText(message).trim()
+        // 🔴 只发正文里还留着 `@名称` 的那几条：用户选完又把那段字删了，引用就不该跟着走。
+        const refs = pickedRefs.current.filter((r) => text.includes(`@${r.name}`))
+        pickedRefs.current = []
+        await onSendRef.current(text, attachments, refs)
       }
     }),
     [disabled, sending, adapter]
@@ -170,7 +201,7 @@ export function GroupComposer(props: GroupComposerProps): React.ReactElement {
   runtimeRef.current = runtime
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <GroupComposerBody {...props} />
+      <GroupComposerBody {...props} pickedRefs={pickedRefs} />
     </AssistantRuntimeProvider>
   )
 }
@@ -183,8 +214,11 @@ function GroupComposerBody({
   labsOn,
   labsLoading,
   realtimeCount,
-  runAlive
-}: GroupComposerProps): React.ReactElement {
+  runAlive,
+  pickedRefs
+}: GroupComposerProps & {
+  pickedRefs: React.MutableRefObject<GroupLibraryRef[]>
+}): React.ReactElement {
   const { t } = useTranslation()
   const aui = useAui()
   const text = useAuiState((s) => s.composer.text)
@@ -193,10 +227,48 @@ function GroupComposerBody({
   const listId = useId()
   const [mention, setMention] = useState<{ query: string; start: number } | null>(null)
   const [activeIndex, setActiveIndex] = useState(0)
+  // P2-L13 「资料」组：走既有的 GET /library/search（⌘K / 事项关联 / agent 的 library_search
+  // 同一个服务端内核），不新建端点。
+  const libraryApi = useMemo(() => createLibraryApi(resolveApiBaseUrl()), [])
+  const [libraryHits, setLibraryHits] = useState<readonly GroupLibraryRef[]>([])
   // 发送后 composer 自己把 text 清空（不经 onChange），弹层状态跟着清，否则会悬在空框上。
   useEffect(() => {
     if (text.length === 0) setMention(null)
   }, [text])
+
+  const draftQuery = mention?.query.trim() ?? ''
+  useEffect(() => {
+    if (draftQuery.length === 0) {
+      setLibraryHits([])
+      return
+    }
+    let live = true
+    const timer = setTimeout(() => {
+      void libraryApi
+        .search(draftQuery, LIBRARY_SEARCH_LIMIT)
+        .then((res) => {
+          if (!live) return
+          setLibraryHits(
+            res.hits
+              // 🔴 投影行（mail-attachments 下的邮件附件）id 恒 null，library_read(file_id=…)
+              // 对它结构上不可调 —— 宁可 @ 不到，也不给出一个成员读不开的引用。
+              .filter((hit) => typeof hit.id === 'number')
+              .map((hit) => ({
+                fileId: hit.id as number,
+                path: hit.path,
+                name: hit.filename || hit.path
+              }))
+          )
+        })
+        .catch(() => {
+          if (live) setLibraryHits([])
+        })
+    }, LIBRARY_SEARCH_DEBOUNCE_MS)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [draftQuery, libraryApi])
 
   const query = mention?.query.toLowerCase() ?? ''
   const allLabel = t('groupChat.mentionAll')
@@ -208,9 +280,11 @@ function GroupComposerBody({
         ...members
           .filter((m) => m.title.toLowerCase().includes(query))
           .slice(0, MAX_MENTION_ITEMS)
-          .map((member) => ({ kind: 'member', member }) as const)
+          .map((member) => ({ kind: 'member', member }) as const),
+        ...libraryHits.map((ref) => ({ kind: 'library', ref }) as const)
       ]
     : []
+  const firstLibraryIndex = items.findIndex((i) => i.kind === 'library')
   const open = mention != null && items.length > 0
   const active = open ? Math.min(activeIndex, items.length - 1) : 0
 
@@ -220,7 +294,21 @@ function GroupComposerBody({
   }
   const pick = (item: MentionItem): void => {
     if (!mention) return
-    const label = item.kind === 'all' ? GROUP_MENTION_ALL_TOKENS[0] : `@${item.member.title}`
+    if (item.kind === 'library') {
+      // 条数上限拦在登记之前（与附件那道 cap 同一位置：三个入口都经这里）。
+      const already = pickedRefs.current.some((r) => r.fileId === item.ref.fileId)
+      if (!already && pickedRefs.current.length >= GROUP_LIBRARY_REFS_MAX) {
+        toastError(t('groupChat.composer.libraryTooMany', { max: GROUP_LIBRARY_REFS_MAX }))
+        return
+      }
+      if (!already) pickedRefs.current.push(item.ref)
+    }
+    const label =
+      item.kind === 'all'
+        ? GROUP_MENTION_ALL_TOKENS[0]
+        : item.kind === 'library'
+          ? `@${item.ref.name}`
+          : `@${item.member.title}`
     const caret = inputRef.current?.selectionStart ?? text.length
     aui.composer().setText(`${text.slice(0, mention.start)}${label} ${text.slice(caret)}`)
     setMention(null)
@@ -272,51 +360,68 @@ function GroupComposerBody({
             const selected = i === active
             const id = `${listId}-${i}`
             return (
-              <button
-                key={item.kind === 'all' ? '__all__' : item.member.agentId}
-                id={id}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => pick(item)}
-                onMouseEnter={() => setActiveIndex(i)}
-                className={cn(
-                  'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-aux text-ink-fg-1 transition-colors duration-fast',
-                  selected && 'bg-ink-3'
+              <Fragment key={itemKey(item)}>
+                {/* 「资料」组只在有命中时出现一条组名；成员那一段维持原样，无组名。 */}
+                {i === firstLibraryIndex && (
+                  <div className="px-2 pb-0.5 pt-1.5 text-micro text-ink-fg-3">
+                    {t('library.mention.groupShort')}
+                  </div>
                 )}
-              >
-                {item.kind === 'all' ? (
-                  <>
-                    <span className="grid size-5 shrink-0 place-items-center text-ink-fg-2">
-                      <Users size={15} strokeWidth={2} />
-                    </span>
-                    <span className="min-w-0 flex-1 truncate">{allLabel}</span>
-                    <span className="truncate text-micro text-ink-fg-3">
-                      {t('groupChat.mentionAllHint')}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <AgentAvatar
-                      agentId={item.member.agentId}
-                      config={item.member.avatar}
-                      size={20}
-                      title={item.member.title}
-                    />
-                    <span className="min-w-0 flex-1 truncate">{item.member.title}</span>
-                    {labsOn && modes != null && (
-                      <span className="rounded-full bg-ink-3 px-1.5 text-micro text-ink-fg-3">
-                        {t(
-                          (modes[item.member.agentId] ?? 'mention') === 'realtime'
-                            ? 'groupChat.mentionModeRealtime'
-                            : 'groupChat.mentionModeMention'
-                        )}
+                <button
+                  id={id}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => pick(item)}
+                  onMouseEnter={() => setActiveIndex(i)}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-aux text-ink-fg-1 transition-colors duration-fast',
+                    selected && 'bg-ink-3'
+                  )}
+                >
+                  {item.kind === 'all' ? (
+                    <>
+                      <span className="grid size-5 shrink-0 place-items-center text-ink-fg-2">
+                        <Users size={15} strokeWidth={2} />
                       </span>
-                    )}
-                  </>
-                )}
-              </button>
+                      <span className="min-w-0 flex-1 truncate">{allLabel}</span>
+                      <span className="truncate text-micro text-ink-fg-3">
+                        {t('groupChat.mentionAllHint')}
+                      </span>
+                    </>
+                  ) : item.kind === 'library' ? (
+                    <>
+                      <span className="grid size-5 shrink-0 place-items-center text-ink-fg-2">
+                        <FileText size={15} strokeWidth={2} />
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">{item.ref.name}</span>
+                      <span className="max-w-[45%] truncate text-micro text-ink-fg-3">
+                        {item.ref.path}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <AgentAvatar
+                        agentId={item.member.agentId}
+                        config={item.member.avatar}
+                        size={20}
+                        title={item.member.title}
+                      />
+                      <span className="min-w-0 flex-1 truncate">{item.member.title}</span>
+                      {labsOn && modes != null && (
+                        <span className="rounded-full bg-ink-3 px-1.5 text-micro text-ink-fg-3">
+                          {t(
+                            (modes[item.member.agentId] ?? 'mention') === 'realtime'
+                              ? 'groupChat.mentionModeRealtime'
+                              : 'groupChat.mentionModeMention'
+                          )}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </button>
+              </Fragment>
             )
           })}
         </div>
