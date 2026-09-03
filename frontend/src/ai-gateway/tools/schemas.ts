@@ -1897,6 +1897,8 @@ const customAgentEmailCapabilitySchema = z.enum(['read', 'organize', 'draft'])
 const customAgentCalendarCapabilitySchema = z.enum(['off', 'read', 'write'])
 const customAgentToggleCapabilitySchema = z.enum(['off', 'on'])
 const customAgentReportCapabilitySchema = z.enum(['read', 'produce'])
+// task 09-02 资料库 —— 第 8 张能力卡，三档逐级 superset（write ⊃ read ⊃ off）。
+const customAgentLibraryCapabilitySchema = z.enum(['off', 'read', 'write'])
 // task 09-02 — chat-history read radius; defaults to 'own' so a profile authored before the card
 // existed still parses as a complete profile.
 const customAgentSessionsCapabilitySchema = z.enum(['own', 'all'])
@@ -1907,6 +1909,7 @@ const customAgentCapabilityFields = {
   knowledge: customAgentToggleCapabilitySchema,
   sessions: customAgentSessionsCapabilitySchema,
   reports: customAgentReportCapabilitySchema,
+  library: customAgentLibraryCapabilitySchema,
   web: customAgentWebGrantSchema,
   files: customAgentToggleCapabilitySchema
 }
@@ -1918,7 +1921,9 @@ const customAgentCapabilityFields = {
 export const customAgentCapabilityProfileSchema = z
   .object({
     ...customAgentCapabilityFields,
-    sessions: customAgentSessionsCapabilitySchema.default('own')
+    sessions: customAgentSessionsCapabilitySchema.default('own'),
+    // 同 sessions：09-03 才有的卡，缺省成 'off' 才不会把此前写好的完整 profile 判成不完整。
+    library: customAgentLibraryCapabilitySchema.default('off')
   })
   .strict()
 export type CustomAgentCapabilityProfileInput = z.infer<typeof customAgentCapabilityProfileSchema>
