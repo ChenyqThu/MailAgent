@@ -35,9 +35,17 @@ import i18n from '../../src/shared/i18n'
 // signals：09-01 侧栏批两个无数字状态点的数据源（事项进行中派发 / 群聊未读），用例里按需拨。
 // spies：需要跨 render 稳定引用的那几枚（mock 工厂每次调用都新建对象，断言调用次数要用它）。
 const { gates, signals, spies } = vi.hoisted(() => ({
-  gates: { matters: true, contacts: true },
+  gates: { matters: true, contacts: true, platform: 'darwin' as 'darwin' | 'win32' | 'other' },
   signals: { dispatches: 0, groupUnread: 0 },
   spies: { listEnriched: vi.fn().mockResolvedValue([]) }
+}))
+
+// 平台判定 —— gate `calendar`（Windows 日历出范围）与 `desktopMac`（资料库域 macOS-only，
+// design §2.5）都从这一个纯函数取值。🔴 不去伪造 `window.electron`：那个全局同时是全仓
+// 「桌面 / 网页」的探针，伪造它会把一堆 no-op 分支翻成真去摸 ipcRenderer 的分支。
+vi.mock('@shared/lib/mailBackend', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@shared/lib/mailBackend')>()),
+  detectUiPlatform: () => gates.platform
 }))
 
 // `useMailApi` ships a real ElectronApi by default — that talks to
@@ -189,7 +197,8 @@ import { SETTINGS_TABS } from '../../src/shared/lib/settingsTabs'
 
 /** 门控全开时的导轨格（自上而下 = 屏幕上的顺序），**手写**期望。08-27 批：对象域在前、
  *  页面域在后（两组之间有 .nav-rail-sep 分隔线）。09-02 对话域拆分：AI Chat 升对象域
- *  （跨过分隔线排到「事项」后面）、群聊拿到自己的一格（页面域末位），共十一格。 */
+ *  （跨过分隔线排到「事项」后面）、群聊拿到自己的一格（页面域末位）。09-03 资料库域：
+ *  页面域末位再加一格（rail.order 9 —— 群聊 8 与运维 10 之间那个空位），共十二格。 */
 const ALL_RAIL = [
   '邮件',
   '事项',
@@ -200,6 +209,7 @@ const ALL_RAIL = [
   '团队',
   '报告',
   '群聊',
+  '资料库',
   '运维',
   '设置'
 ]
@@ -309,6 +319,7 @@ function projectedPanel(domain: NavDomain): string[] {
 beforeEach(async () => {
   gates.matters = true
   gates.contacts = true
+  gates.platform = 'darwin'
   signals.dispatches = 0
   signals.groupUnread = 0
   // 每域落点记忆是模块级的；不清会让「回放」用例污染后面按缺省 entry 断言的用例。
@@ -366,7 +377,7 @@ describe('nav shell 结构契约', () => {
 describe('IconRail ↔ nav registry 投影', () => {
   afterEach(() => cleanup())
 
-  test('门控全开：11 格，顺序 = 对象域组 → 页面域组（手写 + 投影两半）', async () => {
+  test('门控全开：12 格，顺序 = 对象域组 → 页面域组（手写 + 投影两半）', async () => {
     const { container } = await renderShell()
     expect(railLabels(container)).toEqual(ALL_RAIL)
     expect(railLabels(container)).toEqual(projectedRail())
@@ -382,6 +393,28 @@ describe('IconRail ↔ nav registry 投影', () => {
     gates.contacts = false
     const { container } = await renderShell()
     expect(railLabels(container)).toEqual(ALL_RAIL.filter((l) => l !== '事项' && l !== '通讯录'))
+  })
+
+  // 09-03 资料库域：gate `desktopMac`（design §2.5）—— 远程 web 打不到 loopback serve-api，
+  // Windows 侧两个本机 IPC 不存在，整域隐藏（同日历在 Windows 的整域关）。
+  // 🔴 判据有两半，各钉一次：只钉平台会让 web 构建漏出一个点进去全是错的域。
+  test('资料库域 gate：非 mac 隐藏；web 构建即便在 mac 上也隐藏', async () => {
+    gates.platform = 'win32'
+    const win = await renderShell()
+    // Windows 上日历也一并出范围（既有语义），资料库是这一批新加的那一格。
+    expect(railLabels(win.container)).toEqual(
+      ALL_RAIL.filter((l) => l !== '资料库' && l !== '日历')
+    )
+    cleanup()
+
+    gates.platform = 'darwin'
+    vi.stubEnv('VITE_BUILD_TARGET', 'web')
+    try {
+      const web = await renderShell()
+      expect(railLabels(web.container)).toEqual(ALL_RAIL.filter((l) => l !== '资料库'))
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   // 09-02 对话域拆分：/sessions 与 /groups 各高亮各的格 —— 拆域后仍共用一格的话，

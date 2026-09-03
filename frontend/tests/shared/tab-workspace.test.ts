@@ -102,11 +102,12 @@ describe('词表 ↔ registry', () => {
     expect([...Object.values(TAB_KIND_DOMAIN)].sort()).toEqual([...NAV_OBJECT_DOMAINS].sort())
   })
 
-  test('MAIN_PAGES = 全部域 − 对象域（八种承载，一个不多一个不少）', () => {
+  test('MAIN_PAGES = 全部域 − 对象域（九种承载，一个不多一个不少）', () => {
     const all = Object.keys(NAV_DOMAINS) as NavDomain[]
     const expected = all.filter((d) => !NAV_OBJECT_DOMAINS.includes(d))
     expect([...MAIN_PAGES].sort()).toEqual([...expected].sort())
-    expect(MAIN_PAGES).toHaveLength(8)
+    // 09-03 资料库域进页面型承载（八 → 九）。
+    expect(MAIN_PAGES).toHaveLength(9)
   })
 
   test('默认承载是 registry 里真实存在的域', () => {

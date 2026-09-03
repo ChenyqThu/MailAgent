@@ -22,10 +22,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AssistantRuntime } from '@assistant-ui/react'
 import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/react-ai-sdk'
+import { generateId as generateFallbackId } from 'ai'
 
 import type { AgentContextSnapshot } from '@shared/assistant/context/contextSnapshot'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 import type { EffortTier } from '@shared/modelCatalog/effortTiers'
+import { createLibraryApi } from '@shared/api/library'
+import { createChatAttachmentArchiver } from '@shared/lib/chat-attachments'
+import { resolveApiBaseUrl } from '@shared/lib/apiBaseUrl'
 
 import {
   createMailAgentAttachmentAdapter,
@@ -216,8 +220,14 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
   // which base64'd every file — including .txt, whose established path is the injectedContext block.
   const attachmentBridgeRef = useRef(attachmentBridge)
   attachmentBridgeRef.current = attachmentBridge
+  // P2-L5 —— 附件发送即入库（design §1.4）。会话 id 从同一个 latch 读：这条对话已经有 id 就
+  // 用它，还没有（新会话的第一条消息，session 由 transport 懒创建）就是 null，`source_ref`
+  // 的会话段留空。这里**不**调 onEnsureSession —— 拖个附件不该凭空建出一个空会话。
   const [attachmentAdapter] = useState(() =>
-    createMailAgentAttachmentAdapter(() => attachmentBridgeRef.current ?? null)
+    createMailAgentAttachmentAdapter(() => attachmentBridgeRef.current ?? null, undefined, {
+      archive: createChatAttachmentArchiver(createLibraryApi(resolveApiBaseUrl())),
+      getSessionId: () => latchRef.current.id
+    })
   )
 
   // Extra body fields ride along with `messages` on every send (AI SDK HttpChatTransportInitOptions
@@ -323,6 +333,14 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
     // issue #61 Lane 3 (A2) — MailAgent attachment adapter (images → bounded file parts; text/binary
     // → the panel injectedContext path). Key name pinned by UseChatRuntimeOptions.adapters.
     adapters: { attachments: attachmentAdapter },
+    // P2-L5 —— 把附件入库时铸的 UIMessage id 盖到**这条**用户消息上。
+    // 🔴 为什么钩 generateId 而不是别处：`source_ref='{sessionId}:{uiMessageId}'` 只有等于持久化
+    // 下来的 `ui_message_json.$.id` 才反查得到（`chat_db/messages.ts::findMessageRowIdByUiId`），
+    // 而附件 send() 跑在消息造出来之前。ai@7 的 Chat 只在两处发 id，次序固定：先
+    // `sendMessage → pushMessage`（用户消息，`uiMessage.id ?? generateId()`），再
+    // `makeRequest`（助手消息）。所以「取一次就清空」的 takeArchivedMessageId 恰好落在用户
+    // 消息上，助手那次自然回落默认生成器。没入库过的批次返回 null，行为与从前一模一样。
+    generateId: () => attachmentAdapter.takeArchivedMessageId() ?? generateFallbackId(),
     // dogfood — resume after a write-tool approval. AI SDK's addToolApprovalResponse only updates the
     // local message state (approval-responded); without a sendAutomaticallyWhen predicate it never
     // re-POSTs /api/ai/chat, so the approved tool stays stuck "executing". This local predicate fires

@@ -13,6 +13,10 @@ import {
   isCustomAgentManagedTool,
   type CustomAgentCapabilityProfile
 } from '../../src/shared/lib/customAgentCapabilities'
+import {
+  GATEWAY_LIBRARY_READ_TOOL_NAMES,
+  GATEWAY_LIBRARY_WRITE_TOOL_NAMES
+} from '../../src/shared/libraryConstants'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const AGENT_RUNS_PY = resolve(REPO_ROOT, 'src/api/routers/agent_runs.py')
@@ -62,7 +66,9 @@ function profiles(): CustomAgentCapabilityProfile[] {
           for (const reports of CUSTOM_AGENT_CAPABILITY_TIERS.reports) {
             for (const web of CUSTOM_AGENT_CAPABILITY_TIERS.web) {
               for (const files of CUSTOM_AGENT_CAPABILITY_TIERS.files) {
-                out.push({ email, calendar, knowledge, sessions, reports, web, files })
+                for (const library of CUSTOM_AGENT_CAPABILITY_TIERS.library) {
+                  out.push({ email, calendar, knowledge, sessions, reports, web, files, library })
+                }
               }
             }
           }
@@ -74,10 +80,10 @@ function profiles(): CustomAgentCapabilityProfile[] {
 }
 
 describe('customAgentCapabilities', () => {
-  test('all 432 canonical profiles round-trip through allowed_tools + grants', () => {
+  test('all 1296 canonical profiles round-trip through allowed_tools + grants', () => {
     const all = profiles()
-    // 3 email × 3 calendar × 2 knowledge × 2 sessions × 2 reports × 3 web × 2 files
-    expect(all).toHaveLength(432)
+    // 3 email × 3 calendar × 2 knowledge × 2 sessions × 2 reports × 3 web × 2 files × 3 library
+    expect(all).toHaveLength(1296)
     for (const profile of all) {
       const policy = customAgentPolicyFromCapabilities(profile)
       expect(deriveCustomAgentCapabilities(policy)).toEqual({ profile, customized: [] })
@@ -92,7 +98,8 @@ describe('customAgentCapabilities', () => {
       sessions: 'own',
       reports: 'read',
       web: 'off',
-      files: 'off'
+      files: 'off',
+      library: 'off'
     }
     expect(customAgentPolicyFromCapabilities(base).allowedTools).not.toContain('report_write')
     expect(
@@ -134,7 +141,8 @@ describe('customAgentCapabilities', () => {
       sessions: 'own',
       reports: 'read',
       web: 'off',
-      files: 'off'
+      files: 'off',
+      library: 'off'
     }
     const own = customAgentPolicyFromCapabilities(base)
     const all = customAgentPolicyFromCapabilities({ ...base, sessions: 'all' })
@@ -298,5 +306,86 @@ describe('capability tier projection never understates granted power', () => {
     const understated = selected.filter((tool) => !tierTools('email', oldTier).includes(tool))
     expect(understated.length).toBeGreaterThan(0)
     expect(understated).toContain('email_draft_reply')
+  })
+})
+
+// =============================================================================
+// 第 8 张卡「资料库」（library epic P2-L2）
+//
+// 三档 off | read | write，逐级 superset。工具名的唯一来源是零依赖叶子
+// `shared/libraryConstants.ts`（Python 侧 `src/library/constants.py` 与它有 parity 闸）——
+// 本文件断言映射表**引用**的就是那两个数组，而不是又手抄一遍名字：只要有人在能力卡里
+// 抄第三份名单，下面第一条就红。
+// =============================================================================
+
+describe('library capability card', () => {
+  test('the three tiers are exactly [] ⊂ reads ⊂ reads+writes, sourced from libraryConstants', () => {
+    // canary：叶子表缩水会让下面的相等断言变成空 == 空。
+    expect(GATEWAY_LIBRARY_READ_TOOL_NAMES).toHaveLength(3)
+    expect(GATEWAY_LIBRARY_WRITE_TOOL_NAMES).toHaveLength(4)
+
+    expect(CUSTOM_AGENT_CAPABILITY_TIERS.library).toEqual(['off', 'read', 'write'])
+    expect(tierTools('library', 'off')).toEqual([])
+    expect(tierTools('library', 'read')).toEqual([...GATEWAY_LIBRARY_READ_TOOL_NAMES])
+    expect(tierTools('library', 'write')).toEqual([
+      ...GATEWAY_LIBRARY_READ_TOOL_NAMES,
+      ...GATEWAY_LIBRARY_WRITE_TOOL_NAMES
+    ])
+    // 没有第三处名单：卡片管的工具集恰好是那 7 个。
+    expect(managedTools('library').sort()).toEqual(
+      [...GATEWAY_LIBRARY_READ_TOOL_NAMES, ...GATEWAY_LIBRARY_WRITE_TOOL_NAMES].sort()
+    )
+  })
+
+  test('off grants nothing; read grants only the read three; write grants all seven', () => {
+    const base = { allowedTools: [], grantWeb: 'off' as const, grantExec: false, grantSessions: 'own' as const }
+    expect(applyCustomAgentCapabilityPatch(base, { library: 'off' }).allowedTools).toEqual([])
+    expect(applyCustomAgentCapabilityPatch(base, { library: 'read' }).allowedTools).toEqual([
+      ...GATEWAY_LIBRARY_READ_TOOL_NAMES
+    ])
+    for (const name of GATEWAY_LIBRARY_WRITE_TOOL_NAMES) {
+      expect(applyCustomAgentCapabilityPatch(base, { library: 'read' }).allowedTools).not.toContain(
+        name
+      )
+      expect(applyCustomAgentCapabilityPatch(base, { library: 'write' }).allowedTools).toContain(
+        name
+      )
+    }
+  })
+
+  test('dropping to off removes every library tool and leaves other cards alone', () => {
+    const full = applyCustomAgentCapabilityPatch(
+      {
+        allowedTools: ['email_get', 'future_tool_x'],
+        grantWeb: 'gated',
+        grantExec: true,
+        grantSessions: 'all'
+      },
+      { library: 'write' }
+    )
+    const off = applyCustomAgentCapabilityPatch(full, { library: 'off' })
+    expect(off.allowedTools).toEqual(['email_get', 'future_tool_x'])
+    expect(off.grantWeb).toBe('gated')
+    expect(off.grantExec).toBe(true)
+    expect(off.grantSessions).toBe('all')
+  })
+
+  test('🔴 一个写工具就必须显示成「写入」—— 向上取整在第 8 张卡上同样成立', () => {
+    // 这是本卡最容易出的撒谎形态：只勾了 library_append（Advanced 微调，或未来某个写工具进了
+    // write 档而没进 read 档），若向下取整就会渲染成「读取」，卡片说它只能读，实际能改文件。
+    const derived = deriveCustomAgentCapabilities({
+      allowedTools: [...GATEWAY_LIBRARY_READ_TOOL_NAMES, 'library_append'],
+      grantWeb: 'off',
+      grantExec: false,
+      grantSessions: 'own'
+    })
+    expect(derived.profile.library).toBe('write')
+    expect(derived.customized).toContain('library')
+  })
+
+  test('library tools are managed atomics (a card edit owns them, unlike the session three)', () => {
+    for (const name of [...GATEWAY_LIBRARY_READ_TOOL_NAMES, ...GATEWAY_LIBRARY_WRITE_TOOL_NAMES]) {
+      expect(isCustomAgentManagedTool(name)).toBe(true)
+    }
   })
 })

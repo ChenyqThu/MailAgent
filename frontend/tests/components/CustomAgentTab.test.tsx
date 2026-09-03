@@ -1303,7 +1303,7 @@ describe('CustomAgentDrawer — 自动化策略（S5 W5b）', () => {
     renderUi(
       <CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />
     )
-    fireEvent.click(await screen.findByRole('button', { name: '文件与命令: 开启' }))
+    fireEvent.click(await screen.findByRole('button', { name: '命令与本机文件: 开启' }))
     // 确认对话在场，未确认前开关不翻（保存也不带 tool_policy）
     expect(await screen.findByText(/确定开启/)).toBeTruthy()
     fireEvent.click(screen.getByText('确认开启'))
@@ -1319,7 +1319,7 @@ describe('CustomAgentDrawer — 自动化策略（S5 W5b）', () => {
     renderUi(
       <CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />
     )
-    fireEvent.click(await screen.findByRole('button', { name: '文件与命令: 开启' }))
+    fireEvent.click(await screen.findByRole('button', { name: '命令与本机文件: 开启' }))
     await screen.findByText(/确定开启/)
     // 「取消」出现两处（grant 确认块 + 抽屉 footer）—— 确认块的在 DOM 前（body 先于 footer）。
     fireEvent.click(screen.getAllByText('取消')[0])
@@ -1494,15 +1494,19 @@ describe('CustomAgentDrawer — 工具分组（R3）', () => {
   })
 })
 
-describe('CustomAgentDrawer — 六能力卡（W5）', () => {
-  test('默认视图显示能力卡（含会话）、知识默认关闭、会话默认只读自己，并保留高级原子工具入口', async () => {
+describe('CustomAgentDrawer — 能力卡（W5）', () => {
+  test('默认视图显示能力卡（含会话 / 资料库）、知识与资料库默认关闭、会话默认只读自己，并保留高级原子工具入口', async () => {
     renderUi(
       <CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />
     )
-    for (const title of ['邮件', '日历', '知识', '会话', '报告', 'Web', '文件与命令']) {
+    // library epic P2-L2：第 8 张「资料库」卡入列；同批把 exec 那张卡改名「命令与本机文件」
+    //（原名「文件与命令」与资料库卡语义相撞）。
+    for (const title of ['邮件', '日历', '知识', '会话', '报告', 'Web', '命令与本机文件', '资料库']) {
       expect(await screen.findByRole('heading', { name: title })).toBeTruthy()
     }
     expect(screen.getByRole('button', { name: '知识: 关闭', pressed: true })).toBeTruthy()
+    // 资料库不进默认安全集 ⇒ NULL tool_policy 行渲染成「关闭」。
+    expect(screen.getByRole('button', { name: '资料库: 关闭', pressed: true })).toBeTruthy()
     // task 09-02 — 会话卡是 grant 维度：默认 own，且不受 toolOptions 就位与否影响（无 disabled）。
     expect(screen.getByRole('button', { name: '会话: 只读自己', pressed: true })).toBeTruthy()
     expect(screen.getByRole('button', { name: '会话: 读全部', pressed: false })).toBeTruthy()
@@ -1568,7 +1572,7 @@ describe('CustomAgentDrawer — 额外能力区 + openness flag 接线（R3）',
     expect(gated.disabled).toBe(true)
     fireEvent.click(gated)
     expect(screen.queryByText(/web_search 免审批外送/)).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: '文件与命令: 开启' }))
+    fireEvent.click(screen.getByRole('button', { name: '命令与本机文件: 开启' }))
     expect(screen.queryByText(/确定开启/)).toBeNull()
     // clearAllMocks 只清调用记录不清 mockResolvedValue 实现 —— 显式恢复空 fetch，
     // 防 flag-off 响应残留污染后续用例（useOpennessFlags 会读到 stale false → 误禁用）。

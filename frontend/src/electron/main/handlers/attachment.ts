@@ -77,6 +77,15 @@ export function getAttachmentLocalPath(attachmentId: number): string | null {
   return join(dirname(dirname(resolveDbPath())), stored)
 }
 
+// task 09-03 资料库投影：`libpreview://library/mail-attachments/<id>/<filename>` 的末段按
+// `email_attachment.filename` 认，磁盘 basename 可能被 sanitize / 去重过，两者都要能对上。
+export function getAttachmentFilename(attachmentId: number): string | null {
+  const row = getDb()
+    .prepare('SELECT filename FROM email_attachment WHERE id = ?')
+    .get(attachmentId) as { filename: string } | undefined
+  return row?.filename ?? null
+}
+
 // Sprint 13 — inline-image data URL. The sandboxed body iframe (srcdoc,
 // `sandbox="allow-same-origin"`, no allow-scripts) cannot load `file://`
 // URLs even when Electron disables web security for the renderer — the

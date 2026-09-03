@@ -18,6 +18,7 @@ import { cn } from '@shared/lib/cn'
 import { useEnvStore } from '@shared/state/env'
 import type { PersistentSettings } from '@shared/api/types'
 
+import { LibrarySection } from '../LibrarySection'
 import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
 import { Row } from '../parts/Row'
@@ -183,6 +184,11 @@ export function RealtimeStorageTab(): React.ReactElement {
       </Section>
 
       <KeepAliveSection />
+
+      {/* 资料库（design §1.5 / §8.2 / §9.1）：库占用 · 重扫 · 挂载列表 · 语义检索。
+       *  落在「实时与存储」而不是自己一个 tab —— `SETTINGS_TABS` 是导航侧的枚举单源，
+       *  多一个 tab 要连带 `settings.tabs.library` 文案与导航面一起改，那是另一条 lane 的文件。 */}
+      <LibrarySection />
 
       <AdvancedSubsection />
     </>

@@ -33,7 +33,9 @@ import { toastError } from '@shared/state/toast'
 
 import {
   DOC_PROVIDER_ICONS,
+  LIBRARY_RESOURCE_ICON,
   RESOURCE_KIND_ICONS,
+  isLibraryFileResource,
   groupMatterResources,
   isMatterResourceAvailable
 } from './matterResource'
@@ -512,7 +514,12 @@ function ResourceRow({
   const api = useMattersApi()
   const pushUndoToast = useMatterUndoToast()
   // 成员索引而非查表函数：react-hooks/static-components 只认得前者（见 matterResource.ts）。
+  // 第一档是库文件（P2-L10）：与邮件附件同为 kind='file'，靠 external_key 前缀区分。
+  // 🔴 `!!` 不是装饰：判据是函数调用，规则只认**语法上**可证明是布尔的表达式（比较 / `!`），
+  // 调用结果哪怕先存进局部变量也会顺着数据流被判红。详见 matterResource.ts 文末。
+  const isLibraryFile = !!isLibraryFileResource(item.resource.kind, item.resource.external_key)
   const Icon =
+    (isLibraryFile && LIBRARY_RESOURCE_ICON) ||
     (item.resource.kind === 'doc' && DOC_PROVIDER_ICONS[item.resource.provider.toLowerCase()]) ||
     RESOURCE_KIND_ICONS[item.resource.kind]
   const suggested = item.link.confirmed_at === null

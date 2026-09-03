@@ -10,7 +10,8 @@
 
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, Copy, Paperclip } from 'lucide-react'
+import { AlertCircle, Archive, Check, Copy, Paperclip } from 'lucide-react'
+import { useRouter } from '@tanstack/react-router'
 import {
   ComposerPrimitive,
   MessagePrimitive,
@@ -20,6 +21,8 @@ import {
 
 import { cn } from '@shared/lib/cn'
 import { ImageLightbox } from '@shared/components/email/EmailBodyFrame'
+import { navigateToLibraryFile } from '@shared/components/library/deeplink'
+import type { ChatLibraryPartData } from '@shared/assistant/runtime/chatAttachmentAdapter'
 
 import { getAssistantPartComponents } from '../tools/registerToolUIs'
 import { TurnPresence, TurnPresenceEmpty } from './TurnPresence'
@@ -100,6 +103,71 @@ export function UserMessageAttachments(): React.JSX.Element {
   )
 }
 
+/** P2-L5（design §1.4）—— 「已存入资料库 / 未归档」chip 行。
+ *
+ *  数据来自用户消息的 `data-library` part（`chatAttachmentAdapter.send()` 挂的）。为什么读
+ *  `message.content` 而不是走 `MessagePrimitive.Parts` 的 `data.by_name` 槽：那个槽渲染在
+ *  **气泡里**，而这行是气泡外的附件区；而且纯图发送时气泡整个不渲染（`hasBubbleContent`），
+ *  chip 会跟着消失。react-ai-sdk 的 converter 把 `data-*` 转成 `{type:'data', name, data}` 并
+ *  保留在 user content 里（只有 `file` part 被搬去 attachments），所以这里读得到。
+ *
+ *  🔴 与 `UserMessageAttachments` 一样，两个用户气泡渲染器（本文件 + AgentMessage.tsx）共用
+ *  这一份；第三份副本只会再次分叉。 */
+export function UserMessageLibraryChips(): React.JSX.Element | null {
+  const { t } = useTranslation()
+  // useRouter({ warn: false }) 而非 useNavigate()：本组件也出现在没有 router 的场地
+  // （AssistantChatModal / 未来的独立窗口），同 ModelPicker 的既有理由。
+  const router = useRouter({ warn: false })
+  // 🔴 selector 只取**引用稳定**的 content 本身，filter 放到 useMemo 里：`useAuiState` 底下是
+  // useSyncExternalStore，selector 每次返回一个新数组会让 getSnapshot 的缓存失效 → 无限重渲染
+  // （React 的 "The result of getSnapshot should be cached" + Maximum update depth）。
+  const content = useAuiState((s) => s.message.content)
+  const chips = useMemo(
+    () =>
+      content.filter(
+        (part): part is { type: 'data'; name: string; data: ChatLibraryPartData } =>
+          part.type === 'data' && (part as { name?: string }).name === 'library'
+      ),
+    [content]
+  )
+  if (chips.length === 0) return null
+  return (
+    <div className="mt-1 flex max-w-[80%] flex-wrap justify-end gap-1">
+      {chips.map((chip, index) => {
+        const { archived, fileId, name } = chip.data
+        const canOpen = archived && fileId != null
+        return (
+          <button
+            key={`${name}-${index}`}
+            type="button"
+            disabled={!canOpen}
+            title={archived ? name : t('library.chip.notArchivedHint')}
+            onClick={() => {
+              if (canOpen) navigateToLibraryFile(router, fileId)
+            }}
+            className={cn(
+              'inline-flex max-w-[220px] items-center gap-1 rounded-md border px-2 py-0.5 text-micro',
+              canOpen
+                ? 'cursor-pointer border-ink-border bg-ink-3 text-ink-fg-2 hover:border-[rgb(var(--c-accent))] hover:text-ink-fg'
+                : 'cursor-default border-ink-border bg-ink-2 text-ink-fg-3'
+            )}
+          >
+            {archived ? (
+              <Archive size={10} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
+            ) : (
+              <AlertCircle size={10} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
+            )}
+            <span className="truncate">{name}</span>
+            <span className="shrink-0 text-ink-fg-3">
+              {archived ? t('library.chip.archived') : t('library.chip.notArchived')}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 export function UserMessage(): React.JSX.Element {
   const { t } = useTranslation()
   const hasAttachments = useAuiState((s) => (s.message.attachments?.length ?? 0) > 0)
@@ -138,6 +206,7 @@ export function UserMessage(): React.JSX.Element {
         </div>
       )}
       {hasAttachments && <UserMessageAttachments />}
+      <UserMessageLibraryChips />
       <UserActionBar />
     </MessagePrimitive.Root>
   )

@@ -29,7 +29,10 @@ vi.mock('@shared/hooks/useConnectorQuickRows', () => ({
   useConnectorQuickRows: () => ({ rows: [], available: false, anyActive: false })
 }))
 vi.mock('@shared/components/settings/custom-ai/shared', () => ({
-  fetchConnectorToolsEnabled: vi.fn(async () => false)
+  fetchConnectorToolsEnabled: vi.fn(async () => false),
+  // P2-L10 起弹窗还从这里取 serve-api base（第四 tab 的 `GET /library/search`）。整模块
+  // 被替换掉，缺一个导出就是 import 期报错 —— 邮件 tab 的用例也跟着挂。
+  resolveApiBaseUrl: () => 'http://127.0.0.1:8765/api'
 }))
 vi.mock('@shared/components/matters/useMatterUndoToast', () => ({
   useMatterUndoToast: () => vi.fn()

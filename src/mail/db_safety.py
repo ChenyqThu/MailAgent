@@ -157,6 +157,7 @@ def run_startup_db_safety(
     keep: int = 3,
     min_interval_hours: float = 24.0,
     marker_path: Optional[PathLike] = None,
+    critical: bool = True,
 ) -> None:
     """启动安全通道: 对每个存在的库做 (节流的) quick_check + 滚动备份。
 
@@ -166,9 +167,12 @@ def run_startup_db_safety(
         keep: 每库保留的备份份数。
         min_interval_hours: 距该库最新备份不足此时长 → 本次跳过 (check+backup 都省)。
         marker_path: 完整性失败 marker 落点 (None = 不写 marker, 测试用)。
+        critical: True (默认) = quick_check 失败写 marker + raise, 调用方 fail-fast (三库现状);
+            False = 失败只告警、不写 marker、不 raise —— 给可重建的索引库 (``library.db``:
+            索引坏了只重扫, 不能让 App 起不来)。两档都对坏库不备份、不轮转。
 
     Raises:
-        DbIntegrityError: 任一库 quick_check 失败 (所有库都检完、失败合并上报;
+        DbIntegrityError: ``critical`` 且任一库 quick_check 失败 (所有库都检完、失败合并上报;
             失败库不做备份、不轮转, 已有备份原样保留)。
     """
     dest_dir = Path(backups_dir)
@@ -206,14 +210,18 @@ def run_startup_db_safety(
 
     resolved_marker = Path(marker_path) if marker_path is not None else None
     if failures:
+        summary = "; ".join(f"{f['db']}: {f['detail']}" for f in failures)
+        if not critical:
+            # 可重建的索引库: 只告警, 不写 marker、不 fail-fast (坏库同样已被跳过备份与轮转)。
+            logger.warning(f"[db_safety] 非关键库校验失败 (不阻断启动, 索引可重建): {summary}")
+            return
         if resolved_marker is not None:
             _write_marker(resolved_marker, failures, dest_dir)
-        summary = "; ".join(f"{f['db']}: {f['detail']}" for f in failures)
         raise DbIntegrityError(
             f"数据库完整性校验失败 —— {summary}。已有备份保留在 {dest_dir}, "
             f"恢复步骤见 docs/reference/packaging/packaging-release.md「数据恢复」。"
         )
-    if resolved_marker is not None and resolved_marker.exists():
+    if critical and resolved_marker is not None and resolved_marker.exists():
         try:
             resolved_marker.unlink()
             logger.info("[db_safety] 完整性恢复, 已清除失败 marker")

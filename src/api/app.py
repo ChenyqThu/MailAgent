@@ -423,6 +423,7 @@ from src.api.routers import (  # noqa: E402
     island,
     jobs,
     kos,
+    library,
     llm,
     llm_providers,
     matter_agent,
@@ -509,6 +510,19 @@ app.include_router(connector.router)
 # 远程浏览器不该发起)。status/approvals **有意不挂** MAILAGENT_IM_FEISHU 门:「未启用」
 # 本身就是要如实呈现的状态, 整区 409 只会让设置页显示「加载失败」。src.im.* lazy import。
 app.include_router(im.router)
+# 09-03 资料库 P1 (task 09-03-library-p1-foundation) — /api/library/*: 多根文件树 / library.db 索引 /
+# CAS 写面 / 邮件附件投影 / 挂载根。鉴权 verify_local_token (与 exec 家族同姿态; 远程 web 只读面 P3 再议)。
+app.include_router(library.router)
+
+# matters ← library 的存在性 / 摘要回调（进程级装一次）。不装 = 所有 `library:` 资料在
+# 事项里显示不可用、跟进 run 提议库文件恒被判 resource_not_found（fail-closed，见
+# src/library/resource_resolver.py 的模块注释）。
+try:
+    from src.library.resource_resolver import install_library_resolver
+
+    install_library_resolver(library.get_library_service)
+except Exception as _lib_resolver_err:  # noqa: BLE001 — 装不上只降级，不挡 serve-api 起来
+    logger.warning(f"[library] matters resolver 未装上: {_lib_resolver_err}")
 # task A — 远程 web 切 AI SDK: 把 web 的 chat 请求 (/api/ai/{chat,title,approval/resolve,
 # config}, /api/ai/agui/chat) + 裸 /health 代理到同机 loopback AI SDK Gateway。在 SPA catch-all
 # mount (/app, 文件末尾) 之前注册，确保 /api/ai/* 与 /health 不被静态 SPA 遮蔽。/api/ai/* 子路径

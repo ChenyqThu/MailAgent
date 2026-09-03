@@ -42,6 +42,8 @@
 
 import type { ToolSet } from 'ai'
 
+import { GATEWAY_LIBRARY_WRITE_TOOL_NAMES } from '@shared/libraryConstants'
+
 /** Run-level provenance of a chat run (ADR-001 D1). Order of severity: manual_chat is the only
  *  human-in-front-of-screen mode; the other two exist for S4 (email-triggered / scheduled runs)
  *  and are already enforced here so S4 cannot forget them.
@@ -172,6 +174,22 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   contact_search: 'read',
   contact_get: 'read',
   contact_list_mails: 'read',
+  // 资料库 P1-L7 — the library read face. Class `read` is what keeps them out of every approval
+  // ladder (none touches a file) AND what will put them inside an unattended run once the P2
+  // capability card exists; the untrusted file text they return is fenced at the tool
+  // (LIBRARY_FILE), exactly like email_attachment_text.
+  library_list: 'read',
+  library_read: 'read',
+  library_search: 'read',
+  // 资料库 P2-L1 — the four writes. domain_write on purpose: in-domain and cheap to undo (every
+  // write leaves a full snapshot in library_history, delete is a .trash move with restore) — the
+  // matter family's argument. The class is ALSO the headless boundary: a matter_followup /
+  // contact_governance matrix row denies the whole class, so no belt admits them by accident
+  // (P2-L3 opens library_append there by NAME, the MATTER_RUN_PROPOSE_TOOL precedent).
+  library_append: 'domain_write',
+  library_write: 'domain_write',
+  library_move: 'domain_write',
+  library_delete: 'domain_write',
   email_get: 'read',
   email_body: 'read',
   email_list_thread: 'read',
@@ -708,6 +726,15 @@ export const MATTER_RUN_PROPOSE_TOOL = 'matter_update_propose'
  *  GATEWAY_MATTER_ITEM_RUN_TOOL_NAMES the catalog extractor scans); matters.test.ts pins the two
  *  spellings equal. */
 export const MATTER_ITEM_REPORT_TOOL = 'matter_item_report'
+
+/** P2-L3 (task 09-03) — the ONE library write the three unattended belts admit, BY NAME.
+ *  All four library writes share class `domain_write`, so a class-level admission would drag
+ *  write/move/delete in with it: append is additive (zero conflict surface), overwrite can
+ *  clobber, and move/delete break the path strings other agents remember. The annotation pins
+ *  the spelling to the single source in `@shared/libraryConstants` — drop it from that list and
+ *  this line stops compiling rather than silently naming a tool that no longer exists. */
+export const LIBRARY_RUN_APPEND_TOOL: (typeof GATEWAY_LIBRARY_WRITE_TOOL_NAMES)[number] =
+  'library_append'
 
 /** The artifact NAMES the matter_followup row admits. Two, because the row serves BOTH unattended
  *  matter venues — the follow-up run (matter_update_propose) and the item-dispatch run

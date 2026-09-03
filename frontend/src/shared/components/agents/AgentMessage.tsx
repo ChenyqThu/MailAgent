@@ -18,7 +18,10 @@ import { ComposerPrimitive, MessagePrimitive, useAuiState } from '@assistant-ui/
 
 import { MessageTiming } from '@shared/assistant/components/MessageTiming'
 import { TurnPresence, TurnPresenceEmpty } from '@shared/assistant/components/TurnPresence'
-import { UserMessageAttachments } from '@shared/assistant/components/message'
+import {
+  UserMessageAttachments,
+  UserMessageLibraryChips
+} from '@shared/assistant/components/message'
 import { getAssistantPartComponents } from '@shared/assistant/tools/registerToolUIs'
 import { AssistantActionBar, UserActionBar } from '@shared/assistant/components/action-bar'
 import { FollowupSuggestions } from '@shared/assistant/components/FollowupSuggestions'
@@ -60,6 +63,7 @@ export function AgentUserMessage(): React.JSX.Element {
         </div>
       </div>
       {hasAttachments && <UserMessageAttachments />}
+      <UserMessageLibraryChips />
     </MessagePrimitive.Root>
   )
 }

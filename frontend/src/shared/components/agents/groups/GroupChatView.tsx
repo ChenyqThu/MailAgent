@@ -52,6 +52,7 @@ import {
 } from '@shared/api/groupSettings'
 
 import { parseAttachmentsMetadata } from '../../../../ai-gateway/groupAttachments'
+import type { GroupLibraryRef } from '../../../../ai-gateway/groupLibraryRefs'
 import { AgentAvatar } from '../AgentAvatar'
 import { GroupBubble } from './GroupBubble'
 import { GroupComposer } from './GroupComposer'
@@ -398,13 +399,14 @@ export function GroupChatView({
   /** labs on 的发送：只落一条用户消息，之后由服务端调度器接管（renderer 无发言循环）。 */
   const sendOrchestrated = async (
     text: string,
-    attachments: readonly GroupAttachment[]
+    attachments: readonly GroupAttachment[],
+    libraryRefs: readonly GroupLibraryRef[]
   ): Promise<void> => {
     const userKey = `user-${Date.now()}`
     setLive([{ key: userKey, kind: 'user', text, status: 'done' }])
     setLastSentAt(Date.now())
     try {
-      await appendGroupUserMessage(sessionId, text, attachments)
+      await appendGroupUserMessage(sessionId, text, attachments, libraryRefs)
     } catch (err) {
       patchLive(userKey, { status: 'failed', error: errorMessage(err) })
       setSending(false)
@@ -419,14 +421,19 @@ export function GroupChatView({
   }
 
   /** 两条路径共用的发送入口：正文由 GroupComposer trim 好，附件已由它读出（图片 text=null），
-   *  随 append 的 body 落进该行 metadata（T2 落法 β）。 */
-  const send = async (text: string, attachments: readonly GroupAttachment[]): Promise<void> => {
+   *  资料引用由它的 @ 弹层选出（只有标识没有正文，P2-L13）；两者都随 append 的 body 落进该行
+   *  metadata（T2 落法 β / library_refs）。 */
+  const send = async (
+    text: string,
+    attachments: readonly GroupAttachment[],
+    libraryRefs: readonly GroupLibraryRef[]
+  ): Promise<void> => {
     if (text.length === 0 || sending || memberEntries.length === 0) return
     setSending(true)
     // 上一轮的失败气泡随新一轮开始清掉（不落库，仅本地）。
     setLive([])
     if (await labs.ready()) {
-      await sendOrchestrated(text, attachments)
+      await sendOrchestrated(text, attachments, libraryRefs)
       return
     }
     const controller = new AbortController()
@@ -436,7 +443,7 @@ export function GroupChatView({
     const userKey = `user-${Date.now()}`
     setLive([{ key: userKey, kind: 'user', text, status: 'done' }])
     try {
-      await appendGroupUserMessage(sessionId, text, attachments)
+      await appendGroupUserMessage(sessionId, text, attachments, libraryRefs)
     } catch (err) {
       patchLive(userKey, { status: 'failed', error: errorMessage(err) })
       setSending(false)

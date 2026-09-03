@@ -30,10 +30,12 @@ import os
 import re
 import shutil
 import urllib.parse
-from typing import TYPE_CHECKING, Annotated, Any, Collection, Literal, Optional, Union
+from typing import TYPE_CHECKING, Annotated, Any, Callable, Collection, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# 零依赖叶子（只 stdlib typing）—— 上限与顶层 slug 都从这里引，不手抄数值 / 字符串。
+from src.library.constants import AGENT_DOCS_SLUG, TEXT_WRITE_MAX_BYTES
 from src.skills.secret_names import FIXED_EXEC_PATH
 
 # 受约束参数位的 regex 自身长度上限（owner 配置侧 ReDoS 纪律，镜像 trigger.MAX_PATTERN_LEN）。
@@ -410,6 +412,101 @@ def _match_domain_write(matcher: DomainWriteMatcher, action: dict[str, Any]) -> 
     return isinstance(tool, str) and tool == matcher.tool
 
 
+# ---------------------------------------------------------------------------
+# 资料库无人值守免卡通道（design §5.3 B）—— 内建规则，不是 policy_rules 行
+# ---------------------------------------------------------------------------
+#
+# 这是本仓唯一一条**抬高无人值守写面**的通道：headless 里 domain_write 恒弹卡 → paused_handoff
+# 等人，owner 2026-09-02 拍板允许 agent 无人值守写资料库的 agent-docs/。缓解四件：路径限
+# agent-docs/ + 大小上限 + 每次写留全快照可回滚 + 读侧围栏（LIBRARY_FILE）。
+#
+# 🔴 不变的地板（tests/agent_config/test_policy_library.py 正面钉死）：
+#   * my-docs/ 与挂载根（@label/…）、投影区（mail-attachments）、.trash 在 headless 恒弹卡；
+#   * library_move / library_delete 永不进本通道（改名 / 删除会断别处记着的路径字符串）；
+#   * manual_chat 逐字节不受影响 —— 仍走 per-tool 档（本通道对它直接不生效）。
+#
+# 🔴 目标路径的判据是**服务端事实**，不是模型给的字符串：`library_write` 的 overwrite 形态只带
+# `file_id`（mode 分支在工具的 run 里，不在 schema 里），模型完全可以在同一次调用里再塞一个漂亮的
+# `path`。因此规则是「**入参里每一个可寻址的目标**都必须落在 agent-docs/ 下」——`file_id` 经注入的
+# 反查回调取当前虚拟路径（模块边界：agent_config 不触 library.db，回调由 API 层注入，先例
+# `src/library/resource_resolver.py` 给 matters 的那一个），`path` 按字面判。反查不出 / 没接回调 /
+# 回调抛异常一律 ask。这样无论工具 run 里走的是哪个 mode 分支，落盘的那一处都在 agent-docs/ 内。
+#
+# 调用方（gateway 写工具的 policyEvaluate 缝）要给的 action descriptor：
+#   {tool: 'library_append'|'library_write', size_bytes: <本次写入内容的 UTF-8 字节数>,
+#    file_id?: <append 恒有 / write 的 overwrite 形态有>, path?: <write 的 create_new 形态有>}
+# 缺 size_bytes / 两个目标字段都没有 → ask（未接线恒更窄）。
+
+#: 本通道认的工具名（只追加与写，**不含** move / delete）。
+LIBRARY_UNATTENDED_WRITE_TOOLS: frozenset = frozenset({"library_append", "library_write"})
+#: 只在这两个无人值守 context mode 生效（manual_chat 不在内）。
+LIBRARY_UNATTENDED_MODES: frozenset = frozenset({"cron_headless", "untrusted_trigger"})
+#: 单次写入字节上限 —— 与服务端写面同一个常量，不手抄数值。
+LIBRARY_UNATTENDED_MAX_BYTES: int = TEXT_WRITE_MAX_BYTES
+
+#: ``file_id`` → 该文件当前的虚拟路径（``<根 slug>/<相对路径>``）；行不存在 / 非 present → None。
+LibraryPathResolver = Callable[[int], Optional[str]]
+
+
+def _library_path_under_agent_docs(path: Any) -> bool:
+    """虚拟路径是否指向 ``agent-docs/`` 下的**一个文件**（根目录本身不算）。
+
+    只认逐字的 ``agent-docs`` 首段（大小写敏感 —— 库根在 APFS 上大小写不敏感，收窄一侧总是安全的），
+    拒绝绝对路径 / NUL / 含 ``..`` 段的路径；``.`` 段与重复分隔符折叠。挂载根（``@label/…``）与其余
+    顶层 slug 因首段不等而天然落在外面。
+    """
+    if not isinstance(path, str):
+        return False
+    p = path.strip()
+    if not p or "\x00" in p or p.startswith("/"):
+        return False
+    segments = [s for s in p.split("/") if s and s != "."]
+    if any(s == ".." for s in segments):
+        return False
+    return len(segments) >= 2 and segments[0] == AGENT_DOCS_SLUG
+
+
+def _library_unattended_auto_allow(
+    action: dict[str, Any],
+    context_mode: str,
+    resolver: Optional[LibraryPathResolver],
+) -> bool:
+    """本通道是否放行这一次写。任何判不了的情形一律 False（→ ask），见本节头注释。"""
+    if context_mode not in LIBRARY_UNATTENDED_MODES:
+        return False
+    tool = action.get("tool")
+    if not isinstance(tool, str) or tool not in LIBRARY_UNATTENDED_WRITE_TOOLS:
+        return False
+    size = action.get("size_bytes")
+    if not isinstance(size, int) or isinstance(size, bool):
+        return False
+    if size < 0 or size > LIBRARY_UNATTENDED_MAX_BYTES:
+        return False
+
+    targets: list[str] = []
+    file_id = action.get("file_id")
+    if file_id is not None:
+        if not isinstance(file_id, int) or isinstance(file_id, bool) or file_id <= 0:
+            return False
+        if resolver is None:
+            return False
+        try:
+            resolved = resolver(file_id)
+        except Exception:  # noqa: BLE001 — 反查失败 → 判不了目标 → ask
+            return False
+        if not isinstance(resolved, str) or not resolved:
+            return False
+        targets.append(resolved)
+    path = action.get("path")
+    if path is not None:
+        if not isinstance(path, str):
+            return False
+        targets.append(path)
+    if not targets:
+        return False
+    return all(_library_path_under_agent_docs(t) for t in targets)
+
+
 def _match(capability: str, matcher: BaseModel, action: dict[str, Any]) -> bool:
     if capability == "exec" and isinstance(matcher, ExecMatcher):
         return _match_exec(matcher, action)
@@ -652,6 +749,7 @@ def evaluate(
     context_mode: str,
     agent_id: Optional[str] = None,
     mounted_skills: Optional[Collection[str]] = None,
+    library_path_resolver: Optional[LibraryPathResolver] = None,
 ) -> dict[str, Any]:
     """评估一次动作 → ``{"decision": "auto_allow"|"ask", "rule_id": int|None}``。
 
@@ -674,11 +772,24 @@ def evaluate(
     tool_policy_json 解析传入，本模块不触 sync_store —— 模块边界）。不在集内 / 集未提供
     （``None`` = 调用方未接线，恒更窄）→ skip 该规则（owner 卸挂载 → 规则静默 dormant）。
     非 exec capability 不消费此参数（builtin skill 工具由 gateway 注册期挂载门控管）。
+
+    🔴 资料库无人值守免卡（P2-L3 B，design §5.3）：``library_append`` / ``library_write`` 写
+    ``agent-docs/`` 且大小合规 → auto_allow，**不需要任何 policy_rules 行**（``rule_id`` 恒 None）。
+    只在 ``cron_headless`` / ``untrusted_trigger`` 生效；判据与地板见
+    :func:`_library_unattended_auto_allow` 那一节的头注释。``library_path_resolver`` 是
+    ``file_id`` → 当前虚拟路径的注入回调（模块边界：本模块不触 library.db），不传 = 未接线，
+    带 ``file_id`` 的调用恒 ask。
     """
     ask: dict[str, Any] = {"decision": "ask", "rule_id": None}
     try:
         if capability not in CAPABILITIES or context_mode not in CONTEXT_MODES:
             return ask
+        # 内建通道（无 DB 行）先判：它不依赖 store，因此 store 不可用时也不改判，且无人值守写
+        # 资料库不必为每次 append 走一趟候选查询。
+        if capability == "domain_write" and _library_unattended_auto_allow(
+            action_descriptor, context_mode, library_path_resolver
+        ):
+            return {"decision": "auto_allow", "rule_id": None}
         if capability == "exec" and _skill_gate_forces_ask(store, action_descriptor):
             return ask
         candidates = store.candidate_policy_rules(capability, context_mode, agent_id=agent_id)

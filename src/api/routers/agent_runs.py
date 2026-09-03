@@ -151,6 +151,12 @@ HEADLESS_TOOL_OPTIONS: tuple[tuple[str, str], ...] = (
     ("kos_list_pages", "read"),
     ("kos_query", "read"),
     ("kos_search", "read"),
+    # 资料库读族（library epic P2-L2）：silent + `fenceUntrusted('LIBRARY_FILE')` 围栏
+    # （库里有邮件附件正文）。同样不进 DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS —— 资料库不是
+    # 每个 headless agent 的最小工作集，owner 在第 8 张能力卡上选「读取」才有。
+    ("library_list", "read"),
+    ("library_read", "read"),
+    ("library_search", "read"),
     ("report_get", "read"),
     ("report_list", "read"),
     ("report_write", "artifact"),
@@ -170,6 +176,13 @@ HEADLESS_TOOL_OPTIONS: tuple[tuple[str, str], ...] = (
     ("email_flag", "domain_write"),
     ("email_pin", "domain_write"),
     ("email_resync", "domain_write"),
+    # 资料库写族（library epic P2-L2）：class=domain_write，headless 保注册。**注册 ≠ 免卡** ——
+    # 免卡通道是 P2-L3 那条 policyEvaluate 规则（目标以 agent-docs/ 开头且大小达标才 auto_allow），
+    # 写 my-docs/ 或挂载根在 headless 仍恒 paused_handoff；move / delete 永不进那条规则。
+    ("library_append", "domain_write"),
+    ("library_delete", "domain_write"),
+    ("library_move", "domain_write"),
+    ("library_write", "domain_write"),
 )
 
 

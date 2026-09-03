@@ -214,8 +214,13 @@ export type ComposeWireMode = ComposeMode | 'new'
 
 /** D1 附件引用 — compose draft/send 请求体 `attachments` 数组元素。key 是 **snake_case**
  *  (对齐 PRD D1 契约字面): stage_id = staging 上传回执引用; attachment_id = 库内已有附件
- *  (email_attachment.id, 服务端复用 forward 收集器读取路径)。 */
-export type ComposeAttachmentRef = { stage_id: string } | { attachment_id: number }
+ *  (email_attachment.id, 服务端复用 forward 收集器读取路径); library_file_id = 资料库内
+ *  已有文件 (library_file.id, P2-L9: 服务端经 LibraryService.stream_target() 读盘, 经资料库
+ *  自己的路径 jail, 见 mail_write.py::_resolve_attachment_refs)。 */
+export type ComposeAttachmentRef =
+  | { stage_id: string }
+  | { attachment_id: number }
+  | { library_file_id: number }
 
 /** `PUT /email/compose-attachment?filename=…` 的 data 块 (staging 暂存回执, snake_case)。 */
 export interface StagedAttachment {

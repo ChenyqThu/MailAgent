@@ -43,23 +43,27 @@ describe('palette matter helpers', () => {
   })
 
   test('filters provider groups by scope', () => {
-    // 通讯录 WP4：既有三档（all/email/matter）语义不变，contact 组随 all 可见。
+    // 通讯录 WP4 + 资料库 P2-L7：既有三档（all/email/matter）语义不变，
+    // contact / library 两组随 all 可见。
     expect(paletteScopeVisibility('all')).toEqual({
       showEmail: true,
       showMatter: true,
       showContact: true,
+      showLibrary: true,
       showNonProviderGroups: true
     })
     expect(paletteScopeVisibility('email')).toEqual({
       showEmail: true,
       showMatter: false,
       showContact: false,
+      showLibrary: false,
       showNonProviderGroups: true
     })
     expect(paletteScopeVisibility('matter')).toEqual({
       showEmail: false,
       showMatter: true,
       showContact: false,
+      showLibrary: false,
       showNonProviderGroups: false
     })
   })
@@ -69,6 +73,17 @@ describe('palette matter helpers', () => {
       showEmail: false,
       showMatter: false,
       showContact: true,
+      showLibrary: false,
+      showNonProviderGroups: false
+    })
+  })
+
+  test("scope 'library' shows only the library group (P2-L7, mirrors 'contact')", () => {
+    expect(paletteScopeVisibility('library')).toEqual({
+      showEmail: false,
+      showMatter: false,
+      showContact: false,
+      showLibrary: true,
       showNonProviderGroups: false
     })
   })

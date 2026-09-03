@@ -23,7 +23,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowUp, AtSign, Paperclip, X } from 'lucide-react'
+import { Archive, ArrowUp, AtSign, Paperclip, X } from 'lucide-react'
 import {
   AttachmentPrimitive,
   ComposerPrimitive,
@@ -143,6 +143,53 @@ function ComposerAttachmentChips({
   )
 }
 
+/** P2-L5（design §1.4）—— 对话附件「发送即入库」的一次性告知。
+ *
+ *  隐私语义变了（此前附件只活在 renderer 内存里，现在原件会落到资料库并长期留存），这种变化
+ *  必须出现在用户看得见的地方，而不是只写在文档里。挂在附件 chips 那一行的**上方**，只在真有
+ *  待发附件时出现，点 × 之后永不再来。
+ *
+ *  localStorage 读写都 try/catch —— storage 被禁时提示每次都出，方向是多提醒不是漏提醒
+ *  （抄 `connectors/consoleShared.ts` 的两处一次性提示同款姿态）。 */
+const CHAT_ATTACHMENT_LIBRARY_NOTICE_KEY = 'mailagent.chat.attachmentLibraryNotice.v1'
+
+function readLibraryNoticeAck(): boolean {
+  try {
+    return window.localStorage.getItem(CHAT_ATTACHMENT_LIBRARY_NOTICE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function ChatAttachmentLibraryNotice(): React.JSX.Element | null {
+  const { t } = useTranslation()
+  const [acked, setAcked] = useState(readLibraryNoticeAck)
+  if (acked) return null
+  return (
+    // w-full：这是 flex-wrap 行里的一员，占满一行才不会和 chips 挤在一起（框跟着长高的
+    // 结构因此保持不变，见下面 ComposerFrame 的注释）。
+    <div className="flex w-full items-center gap-1.5 text-meta text-ink-fg-3">
+      <Archive size={11} strokeWidth={2} className="shrink-0" />
+      <span className="min-w-0 flex-1 truncate">{t('library.chip.composerNotice')}</span>
+      <button
+        type="button"
+        aria-label={t('common.close')}
+        onClick={() => {
+          try {
+            window.localStorage.setItem(CHAT_ATTACHMENT_LIBRARY_NOTICE_KEY, '1')
+          } catch {
+            /* storage 不可用 → 下次还会提示，可接受 */
+          }
+          setAcked(true)
+        }}
+        className="shrink-0 text-ink-fg-3 hover:text-ink-fg"
+      >
+        <X size={11} strokeWidth={2.5} />
+      </button>
+    </div>
+  )
+}
+
 /** C2 chip stack — referenced-email chips (panel state) + attachment chips (composer state) above
  *  the input. Nothing renders when both are empty (byte-identical to no chips). Mention chips stay
  *  controls-driven (their send-time excerpt resolution lives in the panel); attachment chips render
@@ -182,6 +229,7 @@ function ComposerChipRow({
   if (leadingChips == null && mentionList.length === 0 && attachmentCount === 0) return null
   return (
     <div className={cn('flex flex-wrap items-center gap-1.5', className)}>
+      {attachmentCount > 0 && <ChatAttachmentLibraryNotice />}
       {leadingChips}
       {controls &&
         mentionList.map((m) => (

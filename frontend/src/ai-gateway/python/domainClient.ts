@@ -46,12 +46,21 @@ export class DomainError extends Error {
   readonly code: string
   readonly hint?: string
   readonly httpStatus?: number
-  constructor(code: string, message: string, opts?: { hint?: string; httpStatus?: number }) {
+  /** Structured error payload (`error.data`) when the endpoint carries one. Today only the library
+   *  CAS 409 does (E_VERSION_CONFLICT → {content_hash, content}, design §4); every other envelope
+   *  leaves it undefined. */
+  readonly data?: unknown
+  constructor(
+    code: string,
+    message: string,
+    opts?: { hint?: string; httpStatus?: number; data?: unknown }
+  ) {
     super(message)
     this.name = 'DomainError'
     this.code = code
     this.hint = opts?.hint
     this.httpStatus = opts?.httpStatus
+    this.data = opts?.data
   }
 }
 
@@ -705,6 +714,22 @@ export interface DomainSessionQuery {
   limit?: number
 }
 
+/** 资料库 P2-L1 — who is writing, in the router's own vocabulary (routers/library.py::ActorSpec,
+ *  `extra="forbid"` — nothing else may ride along): the main assistant, or a custom agent with
+ *  its agent_id. A request with NO actor is the renderer (= user); the gateway always sends one,
+ *  and Python jails the write on it (custom agent → agent-docs/ only, main agent also my-docs/). */
+export interface DomainLibraryActor {
+  kind: 'main_agent' | 'custom_agent'
+  agentId?: string
+}
+
+function libraryActorWire(actor: DomainLibraryActor): Record<string, unknown> {
+  return {
+    kind: actor.kind,
+    ...(actor.agentId !== undefined ? { agent_id: actor.agentId } : {})
+  }
+}
+
 export class MailAgentDomainClient {
   private readonly baseUrl: string
   private readonly localToken: string | null
@@ -772,11 +797,14 @@ export class MailAgentDomainClient {
     if (envelope.status === 'success' || envelope.status === 'partial_failure') {
       return envelope.data as T
     }
-    // status:error (or missing/unknown status) → typed DomainError.
+    // status:error (or missing/unknown status) → typed DomainError. An error envelope's `data` is
+    // null everywhere except the library CAS 409 (routers/library.py::_conflict_response puts
+    // {content_hash, content} there) — surfaced as DomainError.data, undefined when null.
     const err = envelope.error ?? {}
     throw new DomainError(err.code ?? 'E_UPSTREAM', err.message ?? `serve-api ${resp.status}`, {
       hint: err.hint,
-      httpStatus: resp.status
+      httpStatus: resp.status,
+      data: envelope.data ?? undefined
     })
   }
 
@@ -2447,4 +2475,199 @@ export class MailAgentDomainClient {
       { query: { calendarName }, signal }
     )
   }
+
+  // ── 资料库（Library）read face — design §3. Rows come back snake_case (= DB columns); the
+  //    projection into the tool's return shape lives in tools/library.ts, not here. `maxBytes` is
+  //    the wire ceiling (READ_TOOL_MAX_BYTES); the 12000-char cap is applied tool-side. ──
+
+  /** library_list — GET /library/folder. Omitting `path` asks for the library root. */
+  libraryFolder(
+    opts: { path?: string; limit: number; offset: number },
+    signal?: AbortSignal
+  ): Promise<DomainLibraryFolder> {
+    return this._req<DomainLibraryFolder>('GET', '/library/folder', {
+      query: { path: opts.path, limit: opts.limit, offset: opts.offset },
+      signal
+    })
+  }
+
+  /** library_read step 1 — GET /library/file/{id}: metadata + `content_hash` +, for text files,
+   *  the body itself. */
+  libraryFile(
+    fileId: number,
+    maxBytes: number,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('GET', `/library/file/${fileId}`, {
+      query: { max_bytes: maxBytes },
+      signal
+    })
+  }
+
+  /** library_read step 2 — GET /library/file/{id}/text: the parsed markdown (`library_text`), the
+   *  same one the preview pane and FTS read. 🔴 This call is also what TRIGGERS extraction for a
+   *  `pending` file (design §3 抽取兜底), so it is never a skippable round trip. */
+  libraryFileText(
+    fileId: number,
+    maxBytes: number,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('GET', `/library/file/${fileId}/text`, {
+      query: { max_bytes: maxBytes },
+      signal
+    })
+  }
+
+  /** library_read on a PROJECTED mail attachment — GET /library/attachment/{attachment_id}
+   *  and its /text sibling. Projections have no library id, so the `/file/{id}` family is
+   *  structurally uncallable for them; these two are the library-native read face (the /text one
+   *  reads `email_attachment_text` and does NOT re-extract). */
+  libraryAttachment(
+    attachmentId: number,
+    maxBytes: number,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('GET', `/library/attachment/${attachmentId}`, {
+      query: { max_bytes: maxBytes },
+      signal
+    })
+  }
+
+  libraryAttachmentText(
+    attachmentId: number,
+    maxBytes: number,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('GET', `/library/attachment/${attachmentId}/text`, {
+      query: { max_bytes: maxBytes },
+      signal
+    })
+  }
+
+  /** library_search — GET /library/search. Keyword only (no DSL); `warning` carries the
+   *  too-short-query notice so a 1-character query is not a silent zero-hit. */
+  librarySearch(
+    opts: { q: string; limit: number },
+    signal?: AbortSignal
+  ): Promise<DomainLibrarySearch> {
+    return this._req<DomainLibrarySearch>('GET', '/library/search', {
+      query: { q: opts.q, limit: opts.limit },
+      signal
+    })
+  }
+
+  // ── 资料库 write face (P2-L1) — routers/library.py 的写端点。Every write carries `actor` (see
+  //    DomainLibraryActor). Authorization is SERVER-side (mail-attachments projection / .trash /
+  //    ro mount refuse; custom agent → agent-docs/ only; main agent also my-docs/; WRITE_EXT_ALLOWLIST;
+  //    size cap): the gateway sends identity + target, never a verdict, and a refusal comes back as a
+  //    DomainError the tool surfaces verbatim. A CAS miss is 409 E_VERSION_CONFLICT with the envelope's
+  //    top-level data = {content_hash, content} (DomainError.data, see _req). Request models are
+  //    `extra="forbid"` — send exactly these keys. Rows come back as LibraryFile rows like the read face;
+  //    projection lives in tools/library.ts. ──
+
+  /** library_write mode=create_new — POST /library/files JSON (the renderer's createTextFile body
+   *  + actor). `source` is fixed to 'agent': the gateway is the only agent-side producer. An
+   *  occupied path → 409 E_VERSION_CONFLICT (no data). */
+  libraryCreateFile(
+    input: { parentPath: string; filename: string; content: string; changeNote?: string },
+    actor: DomainLibraryActor,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('POST', '/library/files', {
+      body: {
+        parent_path: input.parentPath,
+        filename: input.filename,
+        content: input.content,
+        source: 'agent',
+        change_note: input.changeNote ?? null,
+        actor: libraryActorWire(actor)
+      },
+      signal
+    })
+  }
+
+  /** library_write mode=overwrite — PUT /library/file/{id} {content, expected_hash, change_note,
+   *  actor}. expected_hash ≠ current (or null) → 409 with data={content_hash, content}; same
+   *  content → no-op (row returned unchanged, no history row). */
+  libraryWriteFile(
+    fileId: number,
+    input: { content: string; expectedHash: string | null; changeNote?: string },
+    actor: DomainLibraryActor,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('PUT', `/library/file/${fileId}`, {
+      body: {
+        content: input.content,
+        expected_hash: input.expectedHash,
+        change_note: input.changeNote ?? null,
+        actor: libraryActorWire(actor)
+      },
+      signal
+    })
+  }
+
+  /** library_append — POST /library/file/{id}/append {content, change_note, actor}. Additive (no
+   *  CAS): the snapshot in history is still the full post-append text. */
+  libraryAppendFile(
+    fileId: number,
+    input: { content: string; changeNote?: string },
+    actor: DomainLibraryActor,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('POST', `/library/file/${fileId}/append`, {
+      body: {
+        content: input.content,
+        change_note: input.changeNote ?? null,
+        actor: libraryActorWire(actor)
+      },
+      signal
+    })
+  }
+
+  /** library_move — POST /library/file/{id}/move {target_path, actor}. `target_path` is a virtual
+   *  path (a full new path, or an existing folder → filename kept). */
+  libraryMoveFile(
+    fileId: number,
+    targetPath: string,
+    actor: DomainLibraryActor,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('POST', `/library/file/${fileId}/move`, {
+      body: { target_path: targetPath, actor: libraryActorWire(actor) },
+      signal
+    })
+  }
+
+  /** library_delete — DELETE /library/file/{id}?actor_kind=&agent_id= : SOFT delete → .trash
+   *  (restorable). The endpoint's `purge` query is a renderer-only affordance (mockup F11) the
+   *  gateway never sends — omitted, so the server default (false) applies. */
+  libraryTrashFile(
+    fileId: number,
+    actor: DomainLibraryActor,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('DELETE', `/library/file/${fileId}`, {
+      query: { actor_kind: actor.kind, agent_id: actor.agentId },
+      signal
+    })
+  }
+}
+
+/** `LibraryFolderPage` —— 🔴 没有 has_more，分页靠 total/limit/offset
+ *  （单源 `frontend/src/shared/api/types/library.ts`）。 */
+export interface DomainLibraryFolder {
+  path?: unknown
+  folders?: unknown
+  files?: unknown
+  total?: unknown
+  limit?: unknown
+  offset?: unknown
+}
+
+/** `LibrarySearchResponse` —— 🔴 键是 `hits` / `warnings`（不是 items / warning）。 */
+export interface DomainLibrarySearch {
+  query?: unknown
+  mode?: unknown
+  hits?: unknown
+  warnings?: unknown
 }

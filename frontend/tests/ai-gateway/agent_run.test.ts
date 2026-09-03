@@ -1850,6 +1850,11 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
     'kos_list_pages',
     'kos_query',
     'kos_search',
+    // 资料库 P1-L7 —— 三个读工具同样由 class 推导进来（design §9.1：跟进 run 经工具免费拿到
+    // 资料库检索）。它们出现在这里就是那条推导还活着的证据。
+    'library_list',
+    'library_read',
+    'library_search',
     'matter_attention_list',
     'matter_find',
     'matter_get',
@@ -2041,6 +2046,42 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
       'web_search'
     ])
   })
+
+  // 🔴 P2-L3 通道 C（task 09-03）——三条无人值守 belt 按名放行 library_append，且**只放行 append**。
+  // 这是本 epic 唯一抬高无人值守写面的口子，地板是「同族的另外三个写工具一个都进不来」：
+  // library_write 能覆写、library_move / library_delete 改的是别人记着的路径，都必须继续弹卡。
+  // 判据是名字不是 class —— 四件同为 domain_write，靠 class 放行会把整族带进来。
+  test.each([
+    ['matter', { matterRun: { matterId: 42, publicId: 'MAT-000042', runId: 7 } }, 'matter_followup'],
+    ['item', { matterItemRun: { matterId: 42, itemId: 9, runId: 7 } }, 'matter_followup'],
+    ['contact', { contactGovernanceRun: true }, 'contact_governance']
+  ] as const)(
+    '%s belt: library_append 按名进面，同族另外三个写工具一个都不进',
+    (_label, ctxPatch, mode) => {
+      const donor = tool({ description: 'd', inputSchema: z.object({}), execute: async () => ({}) })
+      const base: AiGatewayConfig = {
+        port: 0,
+        baseUrl: 'https://crs.example/api',
+        apiKey: 'sk-test',
+        model: 'claude-sonnet-4-6',
+        buildTools: () => ({
+          library_search: donor, // class read —— 本来就该在
+          library_append: donor,
+          library_write: donor,
+          library_move: donor,
+          library_delete: donor
+        })
+      }
+      const wrapped = wrapCfgForAgentRun(base, {
+        agentId: 'matter:MAT-000042',
+        // 敌意 allowedTools：把三个禁入的名字全列上，belt 必须不理会它
+        allowedTools: ['library_write', 'library_move', 'library_delete'],
+        ...ctxPatch
+      } as Parameters<typeof wrapCfgForAgentRun>[1])
+      const built = wrapped.buildTools!([], undefined, mode)
+      expect(Object.keys(built).sort()).toEqual(['library_append', 'library_search'])
+    }
+  )
 
   test('no grantWeb in the spec → the web pair does not register (the grant is the only lift)', async () => {
     const seenTools: string[][] = []
@@ -2771,6 +2812,11 @@ describe('contact_governance — the governance venue (WP7)', () => {
     'kos_list_pages',
     'kos_query',
     'kos_search',
+    // 资料库 P1-L7 —— 三个读工具同样由 class 推导进来（design §9.1：跟进 run 经工具免费拿到
+    // 资料库检索）。它们出现在这里就是那条推导还活着的证据。
+    'library_list',
+    'library_read',
+    'library_search',
     'matter_attention_list',
     'matter_find',
     'matter_get',

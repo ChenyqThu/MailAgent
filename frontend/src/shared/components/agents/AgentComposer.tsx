@@ -34,6 +34,7 @@ import {
   Bot,
   ClipboardList,
   FileText,
+  FolderTree,
   ListTodo,
   Mail,
   PenLine,
@@ -70,11 +71,13 @@ import { ModelPicker } from '@shared/assistant/components/ModelPicker'
 
 import {
   AGENT_MENTION_CATEGORY_ID,
+  LIBRARY_MENTION_CATEGORY_ID,
   MATTER_MENTION_CATEGORY_ID,
   parseComposerMentionIds
 } from './agentMention'
 import { AgentDirectiveChip, AgentTriggerPopover } from './AgentTriggerPopover'
 import { useAgentMentionAdapter } from './useAgentMentionAdapter'
+import { useLibraryMentionAdapter } from './useLibraryMentionAdapter'
 import { useMatterMentionAdapter } from './useMatterMentionAdapter'
 
 // ── @ email mention adapter (async FTS search bridged into a sync trigger adapter) ───────────────
@@ -201,42 +204,55 @@ function AgentMentionTrigger({
   // S4 (task 08-18) — 第三组「事项」。自门控：本面不供 onAddMatterMention（事项对话）或 Matters
   // 总闸关着 → categories()/search() 恒空，`@` 与引入前逐字一致。
   const matterMention = useMatterMentionAdapter(controls)
+  // P2-L8（资料库 epic）— 第四组「资料库」。同样自门控：本面不供 onAddLibraryMention →
+  // categories()/search() 恒空，`@` 与引入前逐字一致。
+  const libraryMention = useLibraryMentionAdapter(controls)
   const adapter = useMemo<TriggerAdapter>(
     () => ({
       categories: () => [
         { id: EMAIL_MENTION_CATEGORY_ID, label: t('agentView.mention.emails') },
         ...agentMention.adapter.categories(),
-        ...matterMention.adapter.categories()
+        ...matterMention.adapter.categories(),
+        ...libraryMention.adapter.categories()
       ],
       categoryItems: (categoryId: string) =>
         categoryId === EMAIL_MENTION_CATEGORY_ID
           ? emailMention.adapter.categoryItems(categoryId)
           : categoryId === MATTER_MENTION_CATEGORY_ID
             ? matterMention.adapter.categoryItems(categoryId)
-            : agentMention.adapter.categoryItems(categoryId),
+            : categoryId === LIBRARY_MENTION_CATEGORY_ID
+              ? libraryMention.adapter.categoryItems(categoryId)
+              : agentMention.adapter.categoryItems(categoryId),
       search: (query: string) => [
         ...emailMention.adapter.search(query),
         ...agentMention.adapter.search(query),
-        ...matterMention.adapter.search(query)
+        ...matterMention.adapter.search(query),
+        ...libraryMention.adapter.search(query)
       ]
     }),
-    [agentMention.adapter, emailMention.adapter, matterMention.adapter, t]
+    [agentMention.adapter, emailMention.adapter, libraryMention.adapter, matterMention.adapter, t]
   )
   const onInserted = useCallback(
     (item: Unstable_TriggerItem): void => {
       if (item.type === 'agent') agentMention.onInserted(item)
       else if (item.type === 'matter') matterMention.onInserted(item)
+      else if (item.type === 'library') libraryMention.onInserted(item)
       else emailMention.onInserted(item)
     },
-    [agentMention, emailMention, matterMention]
+    [agentMention, emailMention, libraryMention, matterMention]
   )
   return (
     <AgentTriggerPopover
       char="@"
       adapter={adapter}
-      isLoading={emailMention.isLoading || agentMention.isLoading || matterMention.isLoading}
+      isLoading={
+        emailMention.isLoading ||
+        agentMention.isLoading ||
+        matterMention.isLoading ||
+        libraryMention.isLoading
+      }
       directive={{ onInserted }}
-      iconMap={{ email: Mail, agent: Bot, matter: ClipboardList }}
+      iconMap={{ email: Mail, agent: Bot, matter: ClipboardList, library: FolderTree }}
       fallbackIcon={(props) => <Mail {...props} />}
       loadingLabel={t('agentView.mention.loading')}
       emptyItemsLabel={(activeCategoryId) =>
@@ -421,10 +437,14 @@ export function AgentComposer({
     // S4 (task 08-18) — 事项 mention 接的是**同一条**对账：@ 一件事同样在 controls 里留了一条会
     // 随发送注入的记录，chip 被删而记录还在 = 用户以为撤回了引用、模型却仍收到那件事的标识。
     const matterMentions = controls.matterMentions ?? []
+    // P2-L8 —— 资料库 mention 同样接这条对账：chip 被删而记录还在 = 用户以为撤回了引用、模型却
+    // 仍收到那个 file id（且能拿它去 library_read 读正文）。
+    const libraryMentions = controls.libraryMentions ?? []
     if (
       controls.mentions.length === 0 &&
       agentMentions.length === 0 &&
-      matterMentions.length === 0
+      matterMentions.length === 0 &&
+      libraryMentions.length === 0
     ) {
       return
     }
@@ -439,6 +459,9 @@ export function AgentComposer({
     for (const matter of matterMentions) {
       if (!present.matterIds.has(matter.public_id))
         controls.onRemoveMatterMention?.(matter.public_id)
+    }
+    for (const file of libraryMentions) {
+      if (!present.libraryIds.has(file.file_id)) controls.onRemoveLibraryMention?.(file.file_id)
     }
   }, [composerText, controls])
 

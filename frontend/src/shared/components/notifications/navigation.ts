@@ -57,6 +57,14 @@ export type NotificationLink =
   | { type: 'matter'; publicId: string }
   /** 应用更新就绪（Electron main 的 updater）→ 重启装更新。 */
   | { type: 'updater_restart' }
+  /** 资料库文件（`src/notify/library_signals.py::notify_library_file_written`，目前
+   *  唯一信源是 agent 无人值守写完 `agent-docs/`）→ 深链 `/library?file={id}`（design
+   *  09-02-library-knowledge-base §9.5）：进域 + 展开所在文件夹 + 选中文件；文件
+   *  `missing`/`trashed` 时进域并 toast，落地页自己判。落地单源
+   *  `library/deeplink.ts::navigateToLibraryFile`（`NotificationPanel.tsx::activate`
+   *  消费）——借道 `router.history.push` 而不是 `navigate({ to: '/library' })`，因为
+   *  `/library` 由另一批单独注册，注册前 `to` 字面量过不了 typecheck。 */
+  | { type: 'library'; fileId: number }
 
 /** 非空字符串字段的统一取法（reportId / publicId 都是不透明 id，只校验形状）。 */
 function nonEmptyString(value: unknown): string | null {
@@ -129,6 +137,11 @@ export function resolveNotificationLink(
   if (link.type === 'matter') {
     const publicId = nonEmptyString(link.publicId)
     return publicId === null ? null : { type: 'matter', publicId }
+  }
+
+  if (link.type === 'library') {
+    const fileId = positiveInt(link.fileId)
+    return fileId === null ? null : { type: 'library', fileId }
   }
 
   return null

@@ -82,6 +82,7 @@ from .resource_identity import (
     event_resource_key,
     evidence_fingerprint,
     email_resource_key,
+    library_resource_content,
     normalize_resource_key,
     rejection_resource_key,
     thread_resource_key,
@@ -5406,6 +5407,7 @@ class MatterService:
         existing = conn.execute("SELECT * FROM resource WHERE provider=? AND external_key=?", (provider, external_key)).fetchone()
         if existing and existing["kind"] != kind:
             raise MatterError("E_RESOURCE_IDENTITY_CONFLICT", "resource identity already exists with another kind")
+        data = self._with_library_content(provider, kind, external_key, data)
         summary = self._resource_summary_fields(conn, provider, kind, external_key, data, now)
         return self.repository.upsert_resource(conn, {
             "kind": kind, "provider": provider, "external_key": external_key,
@@ -5417,6 +5419,38 @@ class MatterService:
             "sync_state": data.get("sync_state"), "access_policy": data.get("access_policy") or "allowed",
             "last_checked_at": data.get("last_checked_at"), "created_at": now, "updated_at": now,
         })
+
+    def _with_library_content(
+        self, provider: str, kind: str, external_key: str, data: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        """资料库文件的摘要与摘录**由服务端填**（design §9.2），不让模型编。
+
+        - ``sum``：调用方（含跟进 run 的提案）给了就用它 —— ``sum_src='agent'`` 语义不变；
+          没给才落 frontmatter 的 summary / description，再缺才取抽取文本首 300 字。
+        - ``metadata.cached_excerpt``：抽取文本前 2000 字，只 ``setdefault``（调用方带了
+          自己的摘录不覆盖）。填进去之后这份库文件**自然**进 ``context_snapshot`` 的资料
+          投影 —— 那里已经在读 ``cached_excerpt`` 并套 ``UNTRUSTED_MATTER_EXCERPT`` 围栏，
+          所以本改动零新增注入路径。
+
+        ``access_policy='metadata_only'`` 整段跳过：那一档的语义就是不外露内容
+        （``_resource_summary_fields`` 对 ``sum`` 已同判据，这里补上摘录那半边）。
+        """
+        if provider != EMAIL_PROVIDER or kind != "file":
+            return data
+        if (data.get("access_policy") or "allowed") == "metadata_only":
+            return data
+        default_sum, excerpt = library_resource_content(external_key)
+        if default_sum is None and excerpt is None:
+            return data
+        values = dict(data)
+        if default_sum and not str(values.get("sum") or "").strip():
+            values["sum"] = default_sum
+            values["sum_src"] = MatterResourceSummarySource.AGENT.value
+        if excerpt:
+            metadata = dict(values.get("metadata") or {})
+            metadata.setdefault(URL_CACHE_TEXT_KEY, excerpt)
+            values["metadata"] = metadata
+        return values
 
     def _resource_summary_fields(
         self,

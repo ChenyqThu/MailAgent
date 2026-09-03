@@ -29,8 +29,10 @@ from .models import MATTER_RESOURCE_KINDS, MATTER_RESOURCE_SUMMARY_MAX_CHARS
 from .resource_identity import (
     EMAIL_PROVIDER,
     MAILAGENT_IDENTITY_KINDS,
+    MAILAGENT_PROPOSAL_KINDS,
     MatterError,
     normalize_resource_key,
+    parse_library_resource_key,
 )
 
 #: 不经 connector、结构上恒可达的两个来源。
@@ -44,8 +46,12 @@ PROPOSAL_BUILTIN_PROVIDERS: frozenset[str] = frozenset({EMAIL_PROVIDER, WEB_PROV
 #: 各 provider 允许的 resource kind。``MAILAGENT_IDENTITY_KINDS``（email/thread/event）
 #: 是 mailagent 的身份空间专属（``repository.resource_available`` 的存在性判定就钉在
 #: provider=='mailagent' 上），让 connector 认领这些 kind 会造出一条永远验不了的资料。
+#: mailagent 侧多一个 ``file``（``MAILAGENT_PROPOSAL_KINDS``，design §9.2）：跟进 run 允许
+#: 提议挂**资料库**文件，进「未确认的 agent 建议」由人确认，与提议邮件同待遇。它只在提案
+#: 白名单里加宽，``_CONNECTOR_KINDS`` 照旧从身份空间取补集 —— connector 侧的 ``file``
+#: 语义一个字节不变。
 _KINDS_BY_PROVIDER: dict[str, frozenset[str]] = {
-    EMAIL_PROVIDER: MAILAGENT_IDENTITY_KINDS,
+    EMAIL_PROVIDER: MAILAGENT_PROPOSAL_KINDS,
     WEB_PROVIDER: frozenset({"url"}),
 }
 _CONNECTOR_KINDS: frozenset[str] = (
@@ -234,6 +240,16 @@ def _optional_diff(value: Any, *, provider: str, kind: str) -> Optional[str]:
 
 def _normalize_external_key(provider: str, kind: str, value: str) -> str:
     if provider == EMAIL_PROVIDER:
+        if kind == "file":
+            # 🔴 提案通道只收**资料库**文件键。``normalize_resource_key`` 对 file 原样透传，
+            # 所以这里不拦的话，模型写 ``attachment:<任意数字>`` 也会一路通过 —— 邮件附件
+            # 没有本地存在性判定（``library_file_available`` 对非 library 前缀恒 True），
+            # 等于凭空造出一条永远验不了的资料。附件走人工关联，不进提案通道。
+            try:
+                parse_library_resource_key(value)
+            except ValueError as exc:
+                raise ResourceProposalError(REASON_KEY_INVALID, str(exc)) from exc
+            return value
         try:
             return normalize_resource_key(provider, kind, value)
         except (MatterError, ValueError) as exc:

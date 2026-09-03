@@ -1,0 +1,19 @@
+{
+  "id": "AGT-LIBRARY-002",
+  "category": "search_read",
+  "title": "资料库关键词检索：纯关键词，不得塞字段语法",
+  "surface": "general",
+  "user_prompt": "资料库里有没有讲服务协议续签的资料？",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["library_search", "library_list", "library_read"],
+  "must_use_tools": ["library_search"],
+  "forbidden_tools": ["email_search_fulltext", "library_write", "library_delete", "email_prepare_send", "email_send", "run_command"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.4, "evidence_grounding": 0.1, "uncertainty_honesty": 0.1, "tool_efficiency": 0.2, "ux_clarity": 0.2 },
+  "rubric_ref": "search_read.md",
+  "notes": "library_search 没有字段语法：q 里出现 from: / in: / has: 之类会被当字面文本参与召回，命中归零且没有 warning。本用例钉住 q 是纯关键词（test_library_coverage 逐条查 q 的形状）。"
+}

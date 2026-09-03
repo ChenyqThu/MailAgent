@@ -3,7 +3,7 @@
 // Sidebar 在折叠态 hover / 聚焦导轨格 150ms 后把 `peekDomain` 写进 store，本组件挂载；
 // 离开导轨与浮层 300ms 后 Sidebar 清掉它，本组件卸载。这里只管：
 //   · 几何与材质（index.css `.nav-peek` = fixed 脱流 + .glass-pop；宽 = 该域记忆宽 px）；
-//   · 内容分派：nav 域 = `DomainPanel` 的 peek 变体；page 域 = 六个 lazy 清单
+//   · 内容分派：nav 域 = `DomainPanel` 的 peek 变体；page 域 = 八个 lazy 清单
 //     （同一组件或只读投影，走各域 react-query 缓存 —— 访问过零请求，没访问过先骨架）；
 //   · 关闭时机：Esc / 路由变化（DomainPanel 行点击导航后）/ page 清单显式 onNavigate。
 // 🔴 不改 --app-nav-w：浮层脱流，左列边界纹丝不动。
@@ -32,7 +32,8 @@ const PAGE_LISTS: Partial<Record<NavDomain, PeekList>> = {
   chats: lazy(() => import('./peek/ChatsPeekList')),
   groups: lazy(() => import('./peek/GroupsPeekList')),
   agents: lazy(() => import('./peek/TeamPeekList')),
-  reports: lazy(() => import('./peek/ReportsPeekList'))
+  reports: lazy(() => import('./peek/ReportsPeekList')),
+  library: lazy(() => import('./peek/LibraryPeekList'))
 }
 
 export interface NavPeekProps {

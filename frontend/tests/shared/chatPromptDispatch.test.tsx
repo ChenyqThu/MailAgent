@@ -21,25 +21,29 @@ const { threadState, append, setText, composerState, listeners } = vi.hoisted(()
   threadState: { isRunning: false, messages: [] as FakeMessage[] },
   append: vi.fn(),
   setText: vi.fn(),
-  composerState: { runConfig: { marker: 'run-config' } },
+  // `text` 是 09-03 加的：dispatcher 现在也把 composer 正文当观测面（预置库文件提及那条腿要
+  // 等正文真的落地才记引用），所以这份替身得有它。
+  composerState: { runConfig: { marker: 'run-config' }, text: '' },
   listeners: new Set<() => void>()
 }))
 
-// useAuiState 只被 dispatcher 当"thread 变了没"的观测面用；这里以最小实现镜像它
-// （selector(state) + 订阅），让测试能显式驱动"消息落地"这一刻。
+// useAuiState 是 dispatcher 的两个观测面：thread 变了没 + composer 正文是什么；这里以最小实现
+// 镜像它（selector(state) + 订阅），让测试能显式驱动"消息落地"这一刻。
 vi.mock('@assistant-ui/react', () => ({
   useAui: () => ({
     thread: () => ({ getState: () => threadState, append }),
     composer: () => ({ getState: () => composerState, setText })
   }),
-  useAuiState: (selector: (state: { thread: typeof threadState }) => unknown) => {
+  useAuiState: (
+    selector: (state: { thread: typeof threadState; composer: typeof composerState }) => unknown
+  ) => {
     const { useSyncExternalStore } = require('react') as typeof import('react')
     return useSyncExternalStore(
       (onChange: () => void) => {
         listeners.add(onChange)
         return () => listeners.delete(onChange)
       },
-      () => selector({ thread: threadState })
+      () => selector({ thread: threadState, composer: composerState })
     )
   }
 }))

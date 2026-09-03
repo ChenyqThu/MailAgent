@@ -518,7 +518,7 @@ log4j.logger.davmail=INFO
 
 **详见**：[`docs/multi-folder-sync-prd.md`](../folder-sync/multi-folder-sync-prd.md) · [`docs/multi-folder-sync-design.md`](../folder-sync/multi-folder-sync-design.md) · [`docs/multi-folder-sync-handoff.md`](../../archive/2026-06/multi-folder-sync-handoff.md) · 看板 [`docs/multi-folder-sync-matrix.md`](../folder-sync/multi-folder-sync-matrix.md)。
 
-## 跨语言手抄常量的一致性闸（可复用模式，现存二十四闸）
+## 跨语言手抄常量的一致性闸（可复用模式，现存二十六闸）
 
 **问题形态**：一个常量 / 派生表 / 集合，在 Python 与 TypeScript（或多个 TS 文件）里各有一份**手抄**镜像。
 类型系统跨不过语言边界，import 也跨不过 —— 于是改一处、漏另一处，**测试全绿、编译干净、运行时静默错**。
@@ -552,10 +552,10 @@ log4j.logger.davmail=INFO
    闸失效等于没有闸，而且没人会发现。所以抽取器只认当前的单行习语，重构者被迫回来同步更新抽取器，
    顺手核对镜像仍一致。
 
-**现存二十四闸**（前四条是原有的，中间八条随 issue #68 补齐，再四条随 08-02 custom-agent review 补齐，
+**现存二十六闸**（前四条是原有的，中间八条随 issue #68 补齐，再四条随 08-02 custom-agent review 补齐，
 再两条随 08-01 MCP connector PR3 补齐，再一条随 08-05 列表筛选/排序菜单重做补齐，
 一条随 08-06 connector 双轨目录补齐，再两条随 08-20 perf epic 补齐，
-末两条随 08-24 通讯录收尾批补齐）：
+再两条随 08-24 通讯录收尾批补齐，末两条随 09-03 资料库 epic 补齐）：
 
 | 镜像的东西 | 镜像在哪几处 | 闸 | 漏改的后果 |
 |---|---|---|---|
@@ -583,6 +583,8 @@ log4j.logger.davmail=INFO
 | connector 目录 **track** 词表（08-06 双轨）+ track↔source 双射 | `src/connectors/catalog.py::CONNECTOR_TRACKS`（canonical）+ `TRACK_TO_SOURCE`（两套词表的**唯一**对接点）· `frontend/src/shared/api/types/connector.ts::ConnectorTrack`（编译期类型联合，无运行时值可 import） | `tests/config/test_connector_contract_parity.py` ③c（跨语言有序相等）+ `tests/connectors/test_catalog_tracks.py::test_track_and_source_are_a_bijection`（**Python 内**：`TRACK_TO_SOURCE` 的值恰好铺满 `store.CONNECTOR_SOURCES`） | TS 少一档 → 新轨道的目录卡走进 default 分支：`direct` 卡被当 `composio` 卡渲染成「先填 Composio key」的 disabled 态，而那一轨恰恰**不需要 key** ⇒ 一整家结构上连不上，且没有任何报错指向真因。双射漏一边 → `row_is_off_track` 把一整轨的**正确**行判成「已被目录取代」，把 owner 诱导去断开重连一个本来就对的连接 |
 | 通讯录 kind / 可锁字段词表（08-24 通讯录收尾批） | `src/contacts/taxonomy.py::CONTACT_KIND_VALUES`/`CONTACT_LOCKABLE_FIELDS`（Python 单源）· `frontend/src/ai-gateway/tools/contacts.ts` 局部未导出 const `CONTACT_KINDS`/`CONTACT_IDENTITY_FIELDS`（chat 写工具的 `z.enum` 输入白名单；同文件另两个枚举 `CONTACT_FUNCTION/SENIORITY_VALUES` 走 `shared/api/types/contact.ts` 导入，已有 `tests/config/test_contact_enum_parity.py` 盖） | `frontend/tests/ai-gateway/contact_taxonomy_mirror.test.ts`（两侧都文本抽取——TS 侧 const 未导出、Python 侧 import 不到；集合相等，唯一消费点 `z.enum` 与序无关） | Python 加 kind / 可锁字段而 TS 不动 → chat 写工具对该值恒报「非法参数」，模型与用户都以为是自己填错，没有任何指向词表漂移的报错 |
 | compose 补全 `DIRECTORY_SQL`（逐字镜像，跨进程跨语言） | `frontend/src/electron/main/handlers/contacts.ts::DIRECTORY_SQL`（桌面 electron main 的通讯录 lane）· `src/repository/email_repository.py::_CONTACT_DIRECTORY_SQL`（远程 web `GET /api/email/contacts` 同款取数） | `frontend/tests/main/contact_directory_sql_mirror.test.ts`（两侧文本抽取字节级相等——两份文件注释本就自标「逐字同款必须同步改」，此前只有注释无闸） | 两份劈叉 = 桌面与远程 web 的收件人补全语义分裂（merged/hidden/is_self 排除集、曾用邮箱标记各判各的），两边各自看都自洽、零报错 |
+| 资料库值域事实：顶层 slug / kind / text_status / file_status / source / mount 词表 + 各上限 + 七个工具名单（09-03 资料库 epic） | `src/library/constants.py`（Python 零依赖叶子：serve-api 校验 / 存储层 SQL 的 `CHECK` 词表 / 路径 jail 拒收后缀都引它）· `frontend/src/shared/libraryConstants.ts`（TS 零依赖叶子，renderer / electron main / ai-gateway 三处共用） | `tests/config/test_library_constants_parity.py`（AST + 正则两侧抽取对账；词表按**列表逐位**比较——顺序也是契约，前端 select 选项序与树的顶层序按它渲染；🔴 抽取失败必红 + 逐项 canary 下限） | 改一侧的 slug / kind / 上限而另一侧不动：编译过、测试过，直到 renderer 把 `library.db` 里没有的 kind 当合法值渲染，或 serve-api 按 1 MB 拒了 gateway 按 2 MB 放行的写入 |
+| `AgentCallReference` 判别 union 的 `type` 值域（**同语言两消费方**，09-03 资料库 epic 加 `'library'` 档） | 曾各手抄一份：`frontend/src/ai-gateway/tools/agent_call.ts`（严格字面量 union）· `shared/assistant/tools/generic/CustomAgentCallCard.tsx`（偷懒写成 `string`，比前者更松）。**已消灭镜像**：两处改为 import 零依赖叶子 `frontend/src/shared/agentCallReference.ts` | `tests/config/test_agent_call_reference_parity.py`（范式抄 `test_group_constants_parity.py` 第 4 条：钉住两处消费方 import 单源、**不许再自己写一份字面量**，同时钉 `'library'` 档与 `customAgentCallSchema.library_file_ids` 的落地形状） | 给工具执行侧加新 `type` 分支而卡片渲染侧认不出：卡片侧类型本就更宽，**类型检查挡不住**——那类引用在卡片上静默不渲染 |
 
 **什么时候必须建新闸**：你要在**第二处**手抄一个已有的常量 / 枚举 / 派生表，且两处无法共享同一个源
 （跨语言 / 跨部署 / 跨构件种类 / 跨进程 / 打包边界）。每闸的成本都在 100-200 行量级，

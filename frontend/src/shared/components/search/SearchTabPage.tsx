@@ -11,7 +11,8 @@
 //   - SearchRecallColumn —— 左列 336 召回面（最近搜索 + 已保存；🔴 不是装饰，/search
 //     无 NavDomain ⇒ Sidebar 无 DomainPanel，没有它左列边界会从 392 塌到 56）；
 //   - SearchRecentOpens —— 空态「最近打开」（标签工作区自己的数据）；
-//   - SearchResultGroups —— 结果四组（🔴 组序 = 本文件 flat 键盘序，两侧同步改）。
+//   - SearchResultGroups —— 结果五组（🔴 组序 matter → contact → library → ai → email
+//     = 本文件 flat 键盘序，两侧同步改）。
 //
 // 点结果：email/matter → 开对象标签（搜索标签保留不变身，原型 open() 语义）；
 // contact → 主标签导航（palette 现行语义）。
@@ -23,16 +24,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
+import { useNavigate, useRouter } from '@tanstack/react-router'
 import { AlertTriangle, Search as SearchGlyph, X } from 'lucide-react'
 
 import type { SearchHit, SearchResult } from '@shared/api/types'
 import type { ContactRowDto } from '@shared/api/types/contact'
 import type { Matter } from '@shared/api/types/matter'
 import { runGatewaySearchAgent } from '@shared/assistant/searchAgentClient'
+import { LIBRARY_MAX_HITS, libraryAddressableHits } from '@shared/components/command/paletteLibrary'
 import { useContactsApi, useContactsEnabled } from '@shared/components/contacts/hooks'
 import { useContactNavigation } from '@shared/components/contacts/navigation'
 import { PageFrame } from '@shared/components/layout/PageFrame'
+// 资料库：API 单例与深链都用资料库域自己的那一份（第二处手抄 = 两个会漂的真相）。
+import { navigateToLibraryFile } from '@shared/components/library/deeplink'
+import { useLibraryApi } from '@shared/components/library/hooks'
 import { useMattersApi, useMattersEnabled } from '@shared/components/matters/hooks'
 import { useMatterNavigation } from '@shared/components/matters/navigation'
 import { useDebouncedValue } from '@shared/hooks/useDebouncedValue'
@@ -79,11 +84,14 @@ interface FlatEntry {
 export function SearchTabPage(): React.ReactElement {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  // 深链走 `router.history.push`（`/library` 还不是已注册路由，见 deeplink.ts 头注）。
+  const router = useRouter()
   const mailApi = useMailApi()
   const mattersApi = useMattersApi()
   const mattersEnabled = useMattersEnabled()
   const contactsApi = useContactsApi()
   const { enabled: contactsEnabled } = useContactsEnabled()
+  const libraryApi = useLibraryApi()
   const openMatter = useMatterNavigation((state) => state.open)
   const openContact = useContactNavigation((state) => state.open)
   const setActiveMailbox = useMailbox((s) => s.setActive)
@@ -237,6 +245,22 @@ export function SearchTabPage(): React.ReactElement {
   const visibleContactHits = contactsEnabled ? contactHits : []
   const contactOverflow = Math.max(0, (contactsQ.data?.total ?? 0) - visibleContactHits.length)
 
+  // 资料库第五路（P2-L7）—— 与 ⌘K 同 query key、同 limit ⇒ 共享缓存与那一次请求。
+  // 远程 web build 整域隐藏（design §2.5），连请求都不发。
+  const libraryQ = useQuery({
+    queryKey: qk.library.paletteSearch(normalised),
+    queryFn: () => libraryApi.search(normalised, LIBRARY_MAX_HITS),
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+    enabled: !IS_WEB && hasQuery
+  })
+  const libraryHits = useMemo(
+    () => libraryAddressableHits(libraryQ.data?.hits ?? []),
+    [libraryQ.data?.hits]
+  )
+  const libraryWarnings: string[] =
+    libraryQ.isPlaceholderData || IS_WEB ? [] : (libraryQ.data?.warnings ?? [])
+
   // AI 命中已显示的邮件不在 EMAIL 组重复（palette G-A7 ⑤ 同规则）。
   const dedupedHits: SearchHit[] = useMemo(() => {
     if (aiHits.length === 0) return hits
@@ -273,22 +297,33 @@ export function SearchTabPage(): React.ReactElement {
     [navigate, openContact]
   )
 
+  // 资料库深链 `/library?file={id}`（design §9.5）—— 与 ⌘K 同一条路径。
+  const activateLibraryFile = useCallback(
+    (fileId: number): void => {
+      navigateToLibraryFile(router, fileId)
+    },
+    [router]
+  )
+
   // ── 键盘：↑↓ 走扁平序（🔴 与 SearchResultGroups 的组渲染同序），⏎ 开高亮，⌘⏎ AI ──
 
   const flat: FlatEntry[] = useMemo(() => {
     const out: FlatEntry[] = []
     for (const matter of visibleMatterHits) out.push({ run: () => activateMatter(matter) })
     for (const contact of visibleContactHits) out.push({ run: () => activateContact(contact) })
+    for (const file of libraryHits) out.push({ run: () => activateLibraryFile(file.id) })
     for (const h of aiHits) out.push({ run: () => activateHit(h) })
     for (const h of dedupedHits) out.push({ run: () => activateHit(h) })
     return out
   }, [
     visibleMatterHits,
     visibleContactHits,
+    libraryHits,
     aiHits,
     dedupedHits,
     activateMatter,
     activateContact,
+    activateLibraryFile,
     activateHit
   ])
 
@@ -449,12 +484,16 @@ export function SearchTabPage(): React.ReactElement {
               contactHits={visibleContactHits}
               contactsBusy={contactsQ.isFetching && hasQuery}
               contactOverflow={contactOverflow}
+              libraryHits={libraryHits}
+              libraryBusy={libraryQ.isFetching && hasQuery}
+              libraryWarnings={libraryWarnings}
               aiHits={aiHits}
               dedupedHits={dedupedHits}
               emailBusy={isSearching}
               onActivateHit={activateHit}
               onActivateMatter={activateMatter}
               onActivateContact={activateContact}
+              onActivateLibraryFile={activateLibraryFile}
             />
           )}
         </div>

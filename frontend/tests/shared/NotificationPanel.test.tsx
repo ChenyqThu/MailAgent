@@ -20,6 +20,9 @@ import type { NotificationItem } from '../../src/shared/api/types/notifications'
 
 const hoisted = vi.hoisted(() => ({
   navigate: vi.fn(),
+  /** `library` 型落地借道 `router.history.push`（见 ./navigation `library` 型头注），
+   *  不是 `useNavigate`——两条钩子分开桩，各管各的断言。 */
+  historyPush: vi.fn(),
   quitAndInstall: vi.fn(),
   listSpy: vi.fn(),
   historySpy: vi.fn(),
@@ -33,7 +36,10 @@ const hoisted = vi.hoisted(() => ({
   resolve: vi.fn()
 }))
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => hoisted.navigate }))
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => hoisted.navigate,
+  useRouter: () => ({ history: { push: hoisted.historyPush } })
+}))
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({ updater: { quitAndInstall: hoisted.quitAndInstall } })
 }))
@@ -353,6 +359,28 @@ describe('NotificationPanel — 条目点击', () => {
       to: '/reports/$reportId',
       params: { reportId: 'daily-2026-08-21' }
     })
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  // 09-03（library-p2-write-and-links）：落地借道 `router.history.push`（不是
+  // `useNavigate`）——`/library` 由另一批单独注册，注册前 `to` 字面量过不了 typecheck。
+  test('library 型：标已读 + history.push 深链到 /library?file={id}', () => {
+    hoisted.listState.items = [
+      item({
+        id: 5,
+        title: 'Agent 写了资料库文件',
+        body: '已写入 agent-docs/2026-09-03.md',
+        payload: { link: { type: 'library', fileId: 12 } }
+      })
+    ]
+    const onClose = vi.fn()
+    render(<NotificationPanel onClose={onClose} />)
+
+    fireEvent.click(screen.getByText('Agent 写了资料库文件'))
+
+    expect(hoisted.markRead).toHaveBeenCalledWith(5)
+    expect(hoisted.historyPush).toHaveBeenCalledWith('/library?file=12')
+    expect(hoisted.navigate).not.toHaveBeenCalled()
     expect(onClose).toHaveBeenCalled()
   })
 })

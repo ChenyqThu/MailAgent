@@ -9,6 +9,10 @@
 //   • createGroupJudgeTools  — a group JUDGE's speaking turn: all four, scope = the family
 //                              ({self, parent} ∪ children(self)); card-free ONLY while the
 //                              judgeScopeHash still matches the roster (audited 'auto_judge_scope').
+// P2-L13（资料库）在两个**群内** venue（member / judge）上再挂 `library_read` / `library_search`
+// 两件 —— 工厂来自 tools/library.ts，见 libraryReadPair。主 agent 单聊版不挂：那边的工具装配本来
+// 就给它整套资料库工具。
+//
 // Every factory is pure over `GroupToolHooks` — zero chat_db / SQL / HTTP inside; the lifecycle
 // composes the hooks from the existing cfg group hooks + domainClient. headless / im never see any
 // of these (class capability_change, tools/policy.ts) and a group session's own run never holds
@@ -43,7 +47,12 @@ import {
   SUBGROUPS_PER_FAMILY_CAP
 } from '../groupFloors'
 import { GROUP_MAIN_AGENT_LABEL, GROUP_USER_LABEL, type GroupTranscriptRow } from '../groupChat'
-import { DomainError, type DomainPolicyVerdict } from '../python/domainClient'
+import {
+  DomainError,
+  type DomainPolicyVerdict,
+  type MailAgentDomainClient
+} from '../python/domainClient'
+import { createLibraryReadTools } from './library'
 import type { ApprovalGuard } from '../security/approval'
 // RELATIVE import (not @shared) so the pure-Node poc harness can load the gateway tools — same
 // rationale as sessions.ts. contextSerializer is pure TS (no react/electron).
@@ -177,6 +186,27 @@ interface GroupToolsCtx {
   /** Read scope: throws E_GROUP_SCOPE without touching a hook. */
   assertReadScope: (target: number) => void
   writes: GroupWriteCtx | null
+}
+
+/**
+ * P2-L13（资料库 design §9.3 (b)）— 群内 run 的两个资料库读工具。
+ *
+ * g2 之后成员 / 法官拿到 `group_history` / `group_members` 两个读工具，但**没有任何文件读能力**：
+ * 用户在群里 @ 了一份资料、装配那一行给了路径，成员却读不开它。这里补上，与那两个 group 读工具
+ * 同一档（class `read` / silent / 零审批面 —— 群 run 没有审批面，一张卡没人点得动，见文件头注）。
+ *
+ * 🔴 工具实现**直接复用** `tools/library.ts` 的工厂：描述、schema（含 `file_id` / `attachment_id`
+ * 二选一那条「分支不上 schema 顶层」的纪律）、LIBRARY_FILE 围栏全都只有那一份，这里绝不另写。
+ * 🔴 只取两件：`library_list`（浏览整库）不在 design §9.3 的清单里 —— 群成员的入口是用户 @ 出来的
+ * 那几份 + 关键词检索，不是端着目录树逛。
+ */
+function libraryReadPair(
+  domain: MailAgentDomainClient | undefined,
+  collector: GatewayToolAuditCollector
+): Record<string, Tool> {
+  if (domain == null) return {}
+  const { library_read, library_search } = createLibraryReadTools(domain, collector)
+  return { library_read, library_search }
 }
 
 function scopeError(target: number, why: string): DomainError {
@@ -566,26 +596,31 @@ export function createGroupTools(
   })
 }
 
-/** 群内成员 run：只 group_history + group_members，scope 钉死本群。参数里**没有** guard / approvalMode / prefs。 */
+/** 群内成员 run：group_history + group_members（scope 钉死本群）+ P2-L13 的两个资料库读工具。
+ *  参数里**没有** guard / approvalMode / prefs —— 四件全是 class read，群 run 无审批面。
+ *  `libraryDomain` 缺席（老调用点 / 测试）→ 只有原来那两件，与改动前逐字一致。 */
 export function createGroupMemberTools(
   collector: GatewayToolAuditCollector,
   hooks: Pick<
     GroupToolHooks,
     'resolveGroupSession' | 'listGroupHistory' | 'groupUsage' | 'getSessionTitle'
   >,
-  opts: { sessionId: number }
+  opts: { sessionId: number; libraryDomain?: MailAgentDomainClient }
 ): Record<string, Tool> {
-  return defineGroupTools({
-    collector,
-    hooks,
-    defaultSessionId: opts.sessionId,
-    assertReadScope: (target) => {
-      if (target !== opts.sessionId) {
-        throw scopeError(target, 'a group member may only read its own group')
-      }
-    },
-    writes: null
-  })
+  return {
+    ...defineGroupTools({
+      collector,
+      hooks,
+      defaultSessionId: opts.sessionId,
+      assertReadScope: (target) => {
+        if (target !== opts.sessionId) {
+          throw scopeError(target, 'a group member may only read its own group')
+        }
+      },
+      writes: null
+    }),
+    ...libraryReadPair(opts.libraryDomain, collector)
+  }
 }
 
 /** 群内法官 run：四件，scope = family。🔴 opts 类型**不含** approvalMode（TS excess property check 挡手滑）。 */
@@ -605,6 +640,8 @@ export function createGroupJudgeTools(
     /** 🔴 只允许 deny 条目：实现内部再过一次 denyOnlyPrefs()，传全量也无害。 */
     toolApprovalPrefs?: GatewayToolApprovalPrefs['tools']
     a2uiEnabled?: boolean
+    /** P2-L13 —— 法官同样给两个资料库读工具（design §9.3 (b)：「法官同样给」）。 */
+    libraryDomain?: MailAgentDomainClient
   }
 ): Record<string, Tool> {
   const family = new Set<number>(opts.familySessionIds)
@@ -647,7 +684,7 @@ export function createGroupJudgeTools(
     audit_status: 'auto_judge_scope'
   })
 
-  return defineGroupTools({
+  const groupTools = defineGroupTools({
     collector,
     hooks,
     defaultSessionId: opts.sessionId,
@@ -728,6 +765,7 @@ export function createGroupJudgeTools(
       }
     }
   })
+  return { ...groupTools, ...libraryReadPair(opts.libraryDomain, collector) }
 }
 
 /** 从 GatewayToolApprovalPrefs['tools'] 里只留 owner 显式 deny 的条目（法官工厂用；导出供测试）。

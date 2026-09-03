@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
+import { useNavigate, useRouter } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import {
   ChevronDown,
@@ -25,6 +25,7 @@ import type {
   MatterResourceSubscriptionState,
   MatterResourceVersion
 } from '@shared/api/types/matter'
+import { navigateToLibraryFile } from '@shared/components/library/deeplink'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { errorMessage } from '@shared/lib/ipcErrors'
@@ -34,8 +35,11 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 
 import {
   DOC_PROVIDER_ICONS,
+  LIBRARY_RESOURCE_ICON,
   RESOURCE_KIND_ICONS,
-  isMatterResourceAvailable
+  isLibraryFileResource,
+  isMatterResourceAvailable,
+  libraryResourceFileId
 } from './matterResource'
 import { useMattersApi } from './hooks'
 import { useMatterMutation } from './matterMutation'
@@ -91,6 +95,7 @@ export function ResourceDrawer({
   const { t } = useTranslation()
   const api = useMattersApi()
   const navigate = useNavigate()
+  const router = useRouter()
   const setActiveEmail = useActiveEmail((state) => state.setActive)
   const pushUndoToast = useMatterUndoToast()
 
@@ -168,15 +173,25 @@ export function ResourceDrawer({
     resource.kind === 'email' && resource.external_key.startsWith('email:')
       ? Number(resource.external_key.slice('email:'.length))
       : null
+  // P2-L10（design §9.2「打开」段）—— 第三条打开分支。🔴 判据是 `external_key` 前缀而不是
+  // kind：库文件与邮件附件同为 `kind='file'`，按 kind 分会把 `attachment:{id}` 也推去
+  // `/library?file=<附件 id>`（另一套 id 空间，落地只会 toast「文件已不在资料库」）。
+  // 🔴 `!!` 不是装饰：`isLibraryFile` 下面要进图标派生式，而 react-hooks/static-components
+  // 只认语法上可证明是布尔的表达式（比较 / `!`），函数调用的结果先存进局部变量也会顺着数据流
+  // 被判红。详见 matterResource.ts 文末。
+  const isLibraryFile = !!isLibraryFileResource(resource.kind, resource.external_key)
+  const libraryFileId = isLibraryFile ? libraryResourceFileId(resource.external_key) : null
   // 🔴 logo 接缝（V3-19 / 批 8）：整个面板**只有这一个**取图标的派生式，头部方块与
   // 「来源」属性行共用它。批 8 把它换成 appLogos 表的成员索引即可，调用点不用再找。
   // 成员索引而非查表函数：eslint react-hooks/static-components 只认前者（见 matterResource.ts）。
   const SourceIcon =
+    (isLibraryFile && LIBRARY_RESOURCE_ICON) ||
     (resource.kind === 'doc' && DOC_PROVIDER_ICONS[resource.provider.toLowerCase()]) ||
     RESOURCE_KIND_ICONS[resource.kind]
-  const KindIcon = RESOURCE_KIND_ICONS[resource.kind]
+  const KindIcon = (isLibraryFile && LIBRARY_RESOURCE_ICON) || RESOURCE_KIND_ICONS[resource.kind]
   const canonicalUrl = resource.canonical_url
-  const canOpenSource = Boolean(canonicalUrl) || (mailId !== null && Number.isFinite(mailId))
+  const canOpenSource =
+    Boolean(canonicalUrl) || (mailId !== null && Number.isFinite(mailId)) || libraryFileId !== null
   const metadata = resource.metadata ?? {}
   const excerpt = resourceExcerpt(metadata)
   // V3-16 —— 摘要是 v56 真列（批 M4），不是 metadata 里的缓存摘录。三键可能整组缺失
@@ -200,7 +215,10 @@ export function ResourceDrawer({
     : resource.revision === null
       ? 'emptyNeverChecked'
       : null
-  const openInSourceLabel = t('matters.resource.openInSource', { name: sourceName })
+  // 库文件的「来源」说的是资料库，不是 provider 词表里的「本地邮件库」（那是邮件那一档）。
+  const openInSourceLabel = t('matters.resource.openInSource', {
+    name: libraryFileId !== null ? t('library.matter.tabLibrary') : sourceName
+  })
   const metaLabel =
     typeof metadata.sender === 'string'
       ? metadata.sender
@@ -217,6 +235,13 @@ export function ResourceDrawer({
         : null
 
   const openSource = (): void => {
+    if (libraryFileId !== null) {
+      // 深链 `/library?file={id}`：进域 + 展开所在文件夹 + 选中；文件 missing / trashed 由
+      // 落地页自己 toast（design §9.5，与通知中心、入库回执三处同一个去处）。
+      navigateToLibraryFile(router, libraryFileId)
+      onClose()
+      return
+    }
     if (mailId !== null && Number.isFinite(mailId)) {
       // navTarget：跨域跳转目标可能不在当前列表，豁免 active-reset（08-27 标签工作区）。
       setActiveEmail(mailId, { navTarget: true })

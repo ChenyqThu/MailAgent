@@ -45,6 +45,7 @@ import {
   createMatterRunTools,
   createMatterWriteTools
 } from './matters'
+import { createLibraryReadTools, createLibraryWriteTools } from './library'
 import { createNotionAgentTools } from './notion_agent'
 import { createFeedbackTools, type FeedbackSubmitFn } from './feedback'
 import { createImageTools, type ImageGenToolDeps } from './image'
@@ -691,6 +692,32 @@ export function buildGatewayTools(
         toolApprovalPrefs: prefTiers,
         oneShot: opts.oneShotWrites,
         contextMode
+      })
+    )
+  }
+  // 资料库 P1-L7 — the library read face (design §5.1). Three silent reads, so the guard is not a
+  // functional dependency but the family gate: it is what says "the tool面 is assembled", and P2's
+  // library writes join this same `if`. CORE_UNGATED (no skill ownership) so neither applySkillGating
+  // pass drops them; class `read` (policy.ts) so the last assembly step keeps them everywhere.
+  // No flag: 确定要做的功能不搞灰度开关 —— rollback is reverting the lane.
+  if (opts.approvalGuard) {
+    Object.assign(tools, createLibraryReadTools(opts.domain, collector))
+    // P2-L1 — the four edit-tier writes (design §5.1) under the SAME gate: the guard IS the write
+    // gate. Class domain_write (policy.ts) → registered in every venue and stripped inside a
+    // matter_followup / contact_governance run like every other write; factory tiers append /
+    // write = auto, move / delete = ask (tool_prefs.py). agentRunContext is threaded ONLY for the
+    // `caller` identity the server jails on (custom agent → agent-docs/) — NOT for a per-agent
+    // 免卡 whitelist: the headless auto_allow rule (agent-docs/ + size cap) is P2-L3's
+    // policyEvaluate seam, deliberately absent here.
+    Object.assign(
+      tools,
+      createLibraryWriteTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
+        toolApprovalPrefs: prefTiers,
+        oneShot: opts.oneShotWrites,
+        contextMode,
+        agentRunContext: opts.agentRunContext
       })
     )
   }

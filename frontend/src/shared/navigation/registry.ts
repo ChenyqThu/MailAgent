@@ -41,6 +41,7 @@ import {
   ChartLineIcon,
   ChartPieIcon,
   FileChartLineIcon,
+  FolderTreeIcon,
   GripIcon,
   MAILBOX_ICON_COMPONENT,
   MailCheckIcon,
@@ -66,6 +67,7 @@ export type NavDomain =
   | 'groups'
   | 'agents'
   | 'reports'
+  | 'library'
   | 'ops'
   | 'settings'
 
@@ -83,14 +85,16 @@ export type NavPath =
   | '/groups'
   | '/agents'
   | '/reports'
+  | '/library'
   | '/admin/llm'
   | '/admin/kanban'
   | '/admin/calendar'
   | '/contacts'
   | '/settings'
 
-/** 门控名。求值在 `useNavGates.ts`（那里才碰 hooks）。 */
-export type NavGate = 'always' | 'never' | 'matters' | 'contacts' | 'calendar'
+/** 门控名。求值在 `useNavGates.ts`（那里才碰 hooks）。
+ *  `desktopMac` = 资料库域（design §2.5）：整域只在 macOS 桌面客户端出现。 */
+export type NavGate = 'always' | 'never' | 'matters' | 'contacts' | 'calendar' | 'desktopMac'
 
 /** 徽标的**数据来源**（数值由各通道自己取，registry 只说「这一行挂哪个计数」）。
  *  08-27 标签工作区批：草稿箱 / 已标旗 / 所有邮件三个总数随邮件域面板退役 —— 内建
@@ -361,6 +365,21 @@ const ENTRIES = [
     palette: { order: 45, metaI18nKey: 'palette.jump.reportsMeta' },
     preloadOnHover: true
   },
+  // 资料库域（design §2.1）：受管的本机文件夹树。二级栏 = 页面自管的文件夹树列
+  // （NAV_DOMAINS.library 是 'page' 档），故无 panel 落位。gate 见 NavGate.desktopMac ——
+  // 远程 web 打不到 loopback serve-api、Windows 侧两个本机 IPC 不存在，整域隐藏。
+  {
+    id: 'library',
+    domain: 'library',
+    to: '/library',
+    label: { i18nKey: 'nav.domain.library' },
+    icon: () => createElement(FolderTreeIcon),
+    gate: 'desktopMac',
+    match: { exact: ['/library'] },
+    rail: { order: 9 },
+    palette: { order: 35, metaI18nKey: 'palette.jump.libraryMeta' },
+    preloadOnHover: true
+  },
 
   // ── VIEW 段 ─────────────────────────────────────────────────────────────
   {
@@ -499,6 +518,12 @@ export const NAV_DOMAINS: Record<NavDomain, NavDomainMeta> = {
   reports: {
     label: { i18nKey: 'nav.domain.reports' },
     icon: () => createElement(FileChartLineIcon),
+    second: 'page'
+  },
+  // 资料库域的二级栏 = 页面自管的文件夹树列（LibraryTreePanel），同 reports / groups 的形态。
+  library: {
+    label: { i18nKey: 'nav.domain.library' },
+    icon: () => createElement(FolderTreeIcon),
     second: 'page'
   },
   ops: {
@@ -671,6 +696,11 @@ export function navigateToNavEntry(navigate: NavigateFn, entry: NavEntry): void 
     case '/reports':
       void navigate({ to: '/reports' })
       return
+    case '/library':
+      // 不带 search：`?file=` 是深链专用（navigateToLibraryFile），从导轨/⌘K 进域时
+      // 落在树上次的选中文件夹（state/library-tree 自己记）。
+      void navigate({ to: '/library' })
+      return
     case '/admin/llm':
       void navigate({ to: '/admin/llm' })
       return
@@ -719,6 +749,9 @@ export function preloadNavEntry(router: RouterLike, entry: NavEntry): void {
       return
     case '/reports':
       void router.preloadRoute({ to: '/reports' }).catch(() => {})
+      return
+    case '/library':
+      void router.preloadRoute({ to: '/library' }).catch(() => {})
       return
     default:
       return

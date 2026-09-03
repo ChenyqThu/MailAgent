@@ -6,6 +6,10 @@
 // 新工具落 FALLBACK「其他」组渲染，不许静默丢（tests/components/toolGroups.test.ts
 // 断言全集归属 + fallback 行为）。
 import type { AgentRunToolOption } from '@shared/api/types'
+import {
+  GATEWAY_LIBRARY_READ_TOOL_NAMES,
+  GATEWAY_LIBRARY_WRITE_TOOL_NAMES
+} from '@shared/libraryConstants'
 
 /** 未映射工具的兜底组 id（i18n key agents.custom.tools.group.other）。 */
 export const FALLBACK_TOOL_GROUP_ID = 'other'
@@ -69,6 +73,12 @@ export const TOOL_GROUPS: ReadonlyArray<{ id: string; tools: readonly string[] }
       'kos_list_pages',
       'kos_get_backlinks'
     ]
+  },
+  {
+    // library epic P2-L2：资料库七件（三读在前 silent，四写在后 edit-tier，writeBadge 由 class
+    // 驱动）。名单从零依赖叶子 libraryConstants 展开，不在这里手抄第二份。
+    id: 'library',
+    tools: [...GATEWAY_LIBRARY_READ_TOOL_NAMES, ...GATEWAY_LIBRARY_WRITE_TOOL_NAMES]
   }
 ]
 

@@ -80,6 +80,7 @@ const MAIN_PAGE_SET = {
   groups: true,
   agents: true,
   reports: true,
+  library: true,
   ops: true,
   settings: true
 } satisfies Record<MainPage, true>

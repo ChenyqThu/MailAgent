@@ -1,10 +1,10 @@
-// /search 的结果区（palette 同组序：matter → contact → ai → email），从 SearchTabPage
-// 拆出（组件 300 行上限）。纯视图：数据数组与激活回调由页面传入；AI 展示态
+// /search 的结果区（palette 同组序：matter → contact → library → ai → email），从
+// SearchTabPage 拆出（组件 300 行上限）。纯视图：数据数组与激活回调由页面传入；AI 展示态
 // （searching / summary / phase / completed）直接读 search-tab store —— 它就是 SSoT，
 // 经 props 转一手只会多一层会漂的镜像。
 //
-// 🔴 组渲染顺序 = SearchTabPage 里 flat 键盘序的构造顺序（matter → contact → ai →
-// email），两边靠这条注释互指：改任一侧顺序必须同步另一侧，否则 ↑↓ 高亮会落错行。
+// 🔴 组渲染顺序 = SearchTabPage 里 flat 键盘序的构造顺序（matter → contact → library →
+// ai → email），两边靠这条注释互指：改任一侧顺序必须同步另一侧，否则 ↑↓ 高亮会落错行。
 // FLAT_BASE 让行 DOM id（`palette-opt-N`）与叠在页面上的 ⌘K 面板错开，不撞重复 id。
 
 import { useTranslation } from 'react-i18next'
@@ -12,8 +12,10 @@ import { Loader2, Search as SearchGlyph, Sparkles } from 'lucide-react'
 
 import type { SearchHit } from '@shared/api/types'
 import type { ContactRowDto } from '@shared/api/types/contact'
+import type { LibrarySearchHit } from '@shared/api/types/library'
 import type { Matter } from '@shared/api/types/matter'
 import { EmailHitRow } from '@shared/components/command/EmailHitRow'
+import { LibraryHitRow, LibrarySearchWarnings } from '@shared/components/command/LibraryHitRow'
 import { MatterHitRow } from '@shared/components/command/MatterHitRow'
 import { PersonHitRow } from '@shared/components/command/PersonHitRow'
 import { PaletteThinkingPhrases } from '@shared/components/command/PaletteThinkingPhrases'
@@ -70,6 +72,11 @@ export interface SearchResultGroupsProps {
   readonly contactHits: readonly ContactRowDto[]
   readonly contactsBusy: boolean
   readonly contactOverflow: number
+  /** 资料库命中（P2-L7）。🔴 `libraryWarnings` 是复数数组：中文 1 个字的 query 被服务端
+   *  拦下时**出提示不出结果**，那条提示就在这里，命中为空也要渲染这一组。 */
+  readonly libraryHits: readonly (LibrarySearchHit & { id: number })[]
+  readonly libraryBusy: boolean
+  readonly libraryWarnings: readonly string[]
   /** AI 命中与去重后的 FTS 命中（去重在页面 —— flat 序也用同两份，保证下标对齐）。 */
   readonly aiHits: readonly SearchHit[]
   readonly dedupedHits: readonly SearchHit[]
@@ -77,6 +84,7 @@ export interface SearchResultGroupsProps {
   onActivateHit(hit: SearchHit): void
   onActivateMatter(matter: Matter): void
   onActivateContact(contact: ContactRowDto): void
+  onActivateLibraryFile(fileId: number): void
 }
 
 export function SearchResultGroups({
@@ -88,12 +96,16 @@ export function SearchResultGroups({
   contactHits,
   contactsBusy,
   contactOverflow,
+  libraryHits,
+  libraryBusy,
+  libraryWarnings,
   aiHits,
   dedupedHits,
   emailBusy,
   onActivateHit,
   onActivateMatter,
-  onActivateContact
+  onActivateContact,
+  onActivateLibraryFile
 }: SearchResultGroupsProps): React.ReactElement {
   const { t } = useTranslation()
   const aiSearching = useSearchTabPage((s) => s.aiSearching)
@@ -109,7 +121,8 @@ export function SearchResultGroups({
   // flat 序的组起点（与 SearchTabPage 的 flat 构造保持同序，见文件头 🔴）。
   const matterStart = 0
   const contactStart = matterStart + matterHits.length
-  const aiStart = contactStart + contactHits.length
+  const libraryStart = contactStart + contactHits.length
+  const aiStart = libraryStart + libraryHits.length
   const emailStart = aiStart + aiHits.length
 
   return (
@@ -168,6 +181,38 @@ export function SearchResultGroups({
           {contactOverflow > 0 && (
             <div className="px-2 pb-1 pt-0.5 text-[10px] text-ink-fg-3">
               {t('palette.contacts.moreMatches', { n: contactOverflow })}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* 资料库组（P2-L7）：命中为空但有 warning 时也要渲染 —— 那条提示就是这次搜索的
+          全部结果（中文 1 个字被拦下）。 */}
+      {(libraryHits.length > 0 || libraryWarnings.length > 0) && (
+        <>
+          <GroupHead
+            title="Library"
+            count={libraryHits.length}
+            busy={libraryBusy}
+            busyLabel={t('palette.searching')}
+          />
+          <LibrarySearchWarnings warnings={libraryWarnings} className="px-2 pb-1 pt-0.5" />
+          {libraryHits.length > 0 && (
+            <div className="space-y-px">
+              {libraryHits.map((file, i) => {
+                const idx = FLAT_BASE + libraryStart + i
+                return (
+                  <LibraryHitRow
+                    key={file.id}
+                    hit={file}
+                    flatIdx={idx}
+                    selected={idx - FLAT_BASE === highlight}
+                    setHighlight={onRowHighlight}
+                    queryTerms={queryTerms}
+                    onActivate={() => onActivateLibraryFile(file.id)}
+                  />
+                )
+              })}
             </div>
           )}
         </>

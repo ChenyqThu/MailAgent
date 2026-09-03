@@ -33,6 +33,10 @@ PAIRS = (
     "NOTIFICATION_CATEGORY_VALUES",
     "NOTIFICATION_STATE_VALUES",
     "NOTIFICATION_SEVERITY_VALUES",
+    # 09-03（library-p2-write-and-links）新增：`payload.link.type` 的 Python 构造子集
+    # （`group`/`thread`/`updater_restart` 三型不跨语言边界，两侧头注解释了为何不在
+    # 这张表里）。这一对与上面三对同形状，直接并入同一个参数化测试。
+    "NOTIFICATION_LINK_TYPE_VALUES",
 )
 
 

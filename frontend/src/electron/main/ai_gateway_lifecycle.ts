@@ -76,6 +76,7 @@ import { extractApprovalStashInput } from '../../ai-gateway/chatRun'
 import { parseGroupMemberIds } from '../../ai-gateway/groupChat'
 // T2 群附件 — metadata.attachments 的读侧（写侧在 server.ts 的 append 分支，同一份编解码）。
 import { parseAttachmentsMetadata } from '../../ai-gateway/groupAttachments'
+import { parseLibraryRefsMetadata } from '../../ai-gateway/groupLibraryRefs'
 // g1 群编排（CHAT_DB v31）— 成员设置 / seen 游标 / turn 台账的读写面。直接从子模块引（chat_db.ts
 // 兼容 barrel 只为保住既有 importer 的路径，新模块无历史包袱）。
 import { MAIN_AGENT_MEMBER_ID, type GroupResponseMode } from '../../ai-gateway/groupFloors'
@@ -1736,6 +1737,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // （主助理投递的装配标签）、created_at。
     // T2: 再多一项 attachments —— 与 via 同读 metadata 这一列的两个读者，各取各的键、互不影响；
     // 没有附件的行恒 null（不是空数组），装配侧据此决定要不要前置围栏块。
+    // P2-L13: libraryRefs 是同一列的第三个读者（键 library_refs，由 groupLibraryRefs.ts 单源）。
     listGroupHistory: (sessionId) =>
       listMessages(sessionId).map((row) => ({
         id: row.id,
@@ -1746,6 +1748,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         chainId: row.chain_id ?? null,
         via: readMessageVia(row.metadata ?? null),
         attachments: parseAttachmentsMetadata(row.metadata ?? null),
+        libraryRefs: parseLibraryRefsMetadata(row.metadata ?? null),
         createdAt: row.created_at
       })),
     // v30（群聊）— persist one group message (owner user message / member reply). appendMessage
@@ -1816,7 +1819,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       const facts = (await gatewayConfig.resolveGroupSession?.(spec.sessionId)) ?? null
       if (!facts) return undefined
       if (!spec.isJudge) {
-        return createGroupMemberTools(collector, groupToolHooks, { sessionId: spec.sessionId })
+        return createGroupMemberTools(collector, groupToolHooks, {
+          sessionId: spec.sessionId,
+          libraryDomain: domain
+        })
       }
       const tools = createGroupJudgeTools(collector, approvalGuard, groupToolHooks, {
         sessionId: spec.sessionId,
@@ -1825,7 +1831,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         judgeScopeStale: facts.judgeScopeStale,
         contextMode: 'manual_chat',
         toolApprovalPrefs: spec.toolApprovalPrefs?.tools,
-        a2uiEnabled
+        a2uiEnabled,
+        libraryDomain: domain
       })
       return stripOwnerDeniedTools(tools, spec.toolApprovalPrefs?.tools)
     },

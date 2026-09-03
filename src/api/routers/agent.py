@@ -1937,6 +1937,29 @@ async def delete_policy_rule(rule_id: int, request: Request):
     return success_envelope({"id": rule_id, "removed": removed}, request=request, source="sqlite")
 
 
+def _library_path_resolver():
+    """``file_id`` → 该文件**当前**的虚拟路径（``<根 slug>/<相对路径>``）；判不了就 None。
+
+    P2-L3 B 的目标路径判据（design §5.3）。只认 ``status == 'present'`` 的行 —— 行不存在 / 已软删 /
+    磁盘上丢了都返 None，policy 侧据此 ask（「读不到就放行」等于把地板拆了）。走 ``files()`` 而不是
+    ``file()``：后者会把文本类文件整个读进内存，而这里只要一列元数据。
+    """
+
+    def _resolve(file_id: int):
+        from src.api.routers.library import get_library_service
+
+        rows = get_library_service().files([int(file_id)])
+        if not rows:
+            return None
+        row = rows[0]
+        if row.get("status") != "present":
+            return None
+        path = row.get("path")
+        return path if isinstance(path, str) and path else None
+
+    return _resolve
+
+
 @router.post("/policy/evaluate", dependencies=[Depends(verify_local_token)])
 async def evaluate_policy(request: Request, body: Optional[dict[str, Any]] = None):
     """评估一次动作是否命中白名单 → {decision: auto_allow|ask, ruleId}。gateway W1b 的 needsApproval
@@ -1980,8 +2003,14 @@ async def evaluate_policy(request: Request, body: Optional[dict[str, Any]] = Non
                 mounted_skills = resolve_mounted_skills(get_report_store().get_agent(agent_id))
         except Exception:  # noqa: BLE001 — store 读失败 → 空集（dormant，绝不放行）
             mounted_skills = frozenset()
+    # P2-L3 B（design §5.3）：资料库无人值守免卡按**服务端事实**判目标路径 —— `file_id` 在这里反查
+    # 成当前虚拟路径再交给 policy。agent_config 不触 library.db（模块边界），故是注入的回调；
+    # 先例 = src/library/resource_resolver.py 给 matters 的那一个。只在 domain_write 上构造，
+    # 其余 capability 一趟 LibraryService 都不建。
+    library_path_resolver = _library_path_resolver() if capability == "domain_write" else None
     # 返回 {decision, rule_id}（snake）= policy 判决单一 verdict 形状，与 exec 端点响应的 policy 字段
     # 一致（W1b 一个 verdict 类型消费两处：/evaluate 前置调用 + exec 响应审计）。
     result = evaluate(get_agent_config_store(), capability, action, context_mode,
-                      agent_id=agent_id, mounted_skills=mounted_skills)
+                      agent_id=agent_id, mounted_skills=mounted_skills,
+                      library_path_resolver=library_path_resolver)
     return success_envelope(result, request=request, source="sqlite")

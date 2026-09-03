@@ -13,6 +13,7 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import type { AgentRunState, ReportAgentConfig } from '@shared/api/types'
+import type { AgentCallReference } from '@shared/agentCallReference'
 import { AgentAvatar } from '@shared/components/agents/AgentAvatar'
 import { requestOpenAgentSession } from '@shared/state/ai-chat-panel'
 import { projectAgentCallState, type AgentCallProjectedState } from '@shared/lib/agentCallState'
@@ -35,12 +36,7 @@ interface AgentCallArgs {
   calendar_event_ids?: string[]
   notion_refs?: Array<{ connector_id?: string; object_id?: string; object_type?: string }>
   report_ids?: string[]
-}
-
-interface AgentCallReference {
-  type: string
-  id: string | number
-  title?: string
+  library_file_ids?: number[]
 }
 
 interface AgentCallView {
@@ -145,6 +141,7 @@ function inputReferences(args: AgentCallArgs, sessionId?: number): AgentCallRefe
     if (typeof ref.object_id === 'string') refs.push({ type: 'notion', id: ref.object_id })
   }
   for (const id of args.report_ids ?? []) refs.push({ type: 'report', id })
+  for (const id of args.library_file_ids ?? []) refs.push({ type: 'library', id })
   if (sessionId != null && !refs.some((ref) => ref.type === 'session' && ref.id === sessionId)) {
     refs.push({ type: 'session', id: sessionId })
   }

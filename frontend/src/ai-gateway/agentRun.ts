@@ -36,6 +36,7 @@ import {
 import {
   classOfTool,
   CONTACT_PROPOSE_TOOLS,
+  LIBRARY_RUN_APPEND_TOOL,
   MATTER_ITEM_REPORT_TOOL,
   MATTER_RUN_PROPOSE_TOOL,
   normalizeContextMode,
@@ -452,6 +453,7 @@ export function wrapCfgForAgentRun(
           if (
             cls === 'read' ||
             name === MATTER_RUN_PROPOSE_TOOL ||
+            name === LIBRARY_RUN_APPEND_TOOL ||
             matterRunAdmitsWeb(name, cls, webFace)
           )
             out[name] = t
@@ -468,6 +470,7 @@ export function wrapCfgForAgentRun(
           if (
             cls === 'read' ||
             name === MATTER_ITEM_REPORT_TOOL ||
+            name === LIBRARY_RUN_APPEND_TOOL ||
             matterRunAdmitsWeb(name, cls, webFace)
           )
             out[name] = t
@@ -475,7 +478,8 @@ export function wrapCfgForAgentRun(
         }
         if (contactReadFace) {
           if (!contactUseKos && name.startsWith('kos_')) continue
-          if (cls === 'read' || CONTACT_PROPOSE_TOOLS.has(name)) out[name] = t
+          if (cls === 'read' || CONTACT_PROPOSE_TOOLS.has(name) || name === LIBRARY_RUN_APPEND_TOOL)
+            out[name] = t
           continue
         }
         if (

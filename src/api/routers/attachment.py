@@ -782,9 +782,15 @@ def attachment_text(
 # 🔴 与本文件其余端点的根本区别：**这里的输入不是已入库的附件**，没有 attachment_id、
 # 不碰 email_attachment / AttachmentStore、不查库。就是「一段字节进、一段 markdown 出」。
 #
-# 🔴 **全程 in-memory，文件永不落盘**：走 anydoc 的 to_markdown_bytes（实测与路径版产出
-# 逐字节相同）。这既省掉一整类临时文件泄漏面，也与 chat 附件「从未落盘」的现状语义一致
-# —— 用户往对话里拖的文件不该因为要读它而在磁盘上留下副本。
+# 🔴 **本端点全程 in-memory，不写任何持久化位置**：走 anydoc 的 to_markdown_bytes（实测与
+# 路径版产出逐字节相同），省掉一整类临时文件泄漏面。
+#
+# ⚠️ 2026-09-03（design §1.4，P2-L5）更正：这段此前写的「与 chat 附件『从未落盘』的现状语义
+# 一致」**已经不成立**。chat 附件现在是发送即入库 —— renderer 在发消息的同一刻把**原字节**
+# `POST /library/files` 写进资料库的 `chat-attachments/{YYYY-MM}/`（`source='chat'`）。
+# 落盘的是那条路径，不是这里：本端点仍然只是「一段字节进、一段 markdown 出」，转换产物不落盘、
+# 也不回写库行。两条路互不知道对方存在，改任一条都别顺手把另一条也改了。
+# TS 侧同批改写的对应注释在 `frontend/src/shared/lib/chat-attachments.ts` 头部。
 #
 # 鉴权沿用本 router 的 verify_cf_access（桌面 = 主进程 webRequest 注入本地 token，
 # 远程 web = CF Access cookie）。本端点是 Python serve-api 自己的路由，远程天然可达，

@@ -78,6 +78,19 @@ describe('custom_agent_call', () => {
     expect(built.linked()).toEqual([2, 7])
   })
 
+  test('library_file_ids map to library-typed references on completion', async () => {
+    const built = build()
+    const input = { agent_id: 'reader', instruction: 'summarize', library_file_ids: [101, 102] }
+    expect(await needs(built.tool, input)).toBe(false)
+    const result = (await execute(built.tool, input)) as { references?: Array<{ type: string; id: unknown }> }
+    expect(result.references).toEqual(
+      expect.arrayContaining([
+        { type: 'library', id: 101 },
+        { type: 'library', id: 102 }
+      ])
+    )
+  })
+
   test('risky delegation asks unless user_requested', async () => {
     const risky = { ...readonlyAgent, tool_policy: { v: 1, allowed_tools: ['email_archive'] } }
     expect(await needs(build(risky).tool, { agent_id: 'reader', instruction: 'archive' })).toBe(true)

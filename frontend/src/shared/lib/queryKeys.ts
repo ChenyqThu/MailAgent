@@ -276,6 +276,14 @@ export const qk = {
     search: (normalised: string) => ['mention', 'search', normalised] as const
   },
 
+  // 资料库（design 09-02-library-knowledge-base）。
+  library: {
+    // P2-L7 检索面：⌘K 第五 lane 与 `/search` 页组共享这一个 key（也就共享缓存与那
+    // 一次请求）。🔴 共享缓存 ⇒ 两个消费方必须传同一个 limit（`LIBRARY_MAX_HITS`），
+    // 否则谁先跑谁的形状就成了另一个人的结果集。
+    paletteSearch: (normalised: string) => ['library', 'palette-search', normalised] as const
+  },
+
   matters: {
     all: () => ['matters'] as const,
     list: (q?: string) => (q ? (['matters', 'list', q] as const) : (['matters', 'list'] as const)),

@@ -6,6 +6,7 @@ import {
   FileText,
   Globe2,
   History,
+  Library,
   Mail,
   Network,
   Plug,
@@ -245,7 +246,8 @@ export function CapabilityCards({
       patch.email !== undefined ||
       patch.calendar !== undefined ||
       patch.knowledge !== undefined ||
-      patch.reports !== undefined
+      patch.reports !== undefined ||
+      patch.library !== undefined
     ) {
       onSelectedToolsChange(
         (currentTools) =>
@@ -297,7 +299,7 @@ export function CapabilityCards({
   /** The displayed tier is rounded UP, so a `customized` capability means "enabled ⊊ this tier".
    *  Say that on the badge — an unlabelled "ADV" left the card reading as an exact tier match. */
   const subsetProps = (
-    capability: 'email' | 'calendar' | 'knowledge' | 'reports'
+    capability: 'email' | 'calendar' | 'knowledge' | 'reports' | 'library'
   ): { customized: boolean; subsetLabel: string; subsetHint: string } => ({
     customized: derived.customized.includes(capability),
     subsetLabel: t('agents.custom.capabilityCards.subsetBadge'),
@@ -427,6 +429,35 @@ export function CapabilityCards({
             <p className="mt-2 text-meta leading-relaxed text-ink-fg-3">
               {t('agents.custom.capabilityCards.reports.produceHint')}
             </p>
+          )}
+        </CapabilityCard>
+
+        {/* library epic P2-L2 — 第 8 卡：资料库三档（关 / 读取 / 写入，逐级 superset）。与
+            「命令与本机文件」那张卡是两回事：这张管的是资料库这一个域，写面由服务端围栏兜底
+            （投影区拒写 / 只读挂载拒写 / custom agent 的写只落 agent-docs 与可写挂载根）。 */}
+        <CapabilityCard
+          icon={<Library size={16} />}
+          title={t('agents.custom.capabilityCards.library.title')}
+          description={t('agents.custom.capabilityCards.library.description')}
+          {...subsetProps('library')}
+        >
+          <TierButtons
+            tiers={CUSTOM_AGENT_CAPABILITY_TIERS.library}
+            value={derived.profile.library}
+            disabled={toolsDisabled}
+            groupLabel={t('agents.custom.capabilityCards.library.title')}
+            label={(tier) => t(`agents.custom.capabilityCards.library.tier.${tier}`)}
+            onChange={(library) => update({ library })}
+          />
+          {/* 一次只出一条：只读档要回答的是「它能看见什么」（读面覆盖全部根，含邮件附件
+              投影），可写档要回答的是「它能改哪儿」。两条同时挂会把 178px 的卡撑变形。 */}
+          {derived.profile.library === 'read' && (
+            <p className="mt-2 text-meta leading-relaxed text-ink-fg-3">
+              {t('agents.custom.capabilityCards.library.readScope')}
+            </p>
+          )}
+          {derived.profile.library === 'write' && (
+            <Guidance>{t('agents.custom.capabilityCards.library.writeHint')}</Guidance>
           )}
         </CapabilityCard>
 

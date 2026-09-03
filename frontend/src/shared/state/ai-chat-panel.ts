@@ -12,6 +12,7 @@
 import { create } from 'zustand'
 
 import type { ChatBackendKind } from '@shared/api/types'
+import type { LibraryMentionRef } from '@shared/lib/mention-context'
 
 export interface MatterChatTarget {
   id: number
@@ -75,8 +76,16 @@ interface AIChatPanelStore {
   // （→ injectedContext）承载 —— 不新造注入路径。
   // `nonce` 让同一条指令能被连点两次（内容相同也算两次请求）；`emailId` 是「等这封邮件的 chip 就位
   // 再发」的门（没有它就会发出一条指着空气的指令）。
-  pendingPrompt: { text: string; emailId: number | null; nonce: number } | null
-  requestChatPrompt(text: string, emailId: number | null): void
+  // 09-03（资料库 P2-L14）—— `library` 是「这条指令还随身带一枚库文件提及」：资料库页的
+  // 「对话」按钮预置的那一枚。挂在**同一条** pendingPrompt 上而不是另起一条 pending 通道 ——
+  // 两条通道就有两个生命周期，落单的那条会在之后某次重挂时突然把引用注入进一场无关的对话。
+  pendingPrompt: {
+    text: string
+    emailId: number | null
+    nonce: number
+    library?: LibraryMentionRef
+  } | null
+  requestChatPrompt(text: string, emailId: number | null, library?: LibraryMentionRef): void
   consumeChatPrompt(nonce: number): void
 
   // 09-02 —— 对象标签 ↔ dock 会话绑定。FAB 打开 dock 时按激活标签的绑定递一条请求：
@@ -191,9 +200,9 @@ export const useAIChatPanel = create<AIChatPanelStore>((set, get) => ({
     set({ matterTarget: null })
   },
   pendingPrompt: null,
-  requestChatPrompt(text, emailId) {
+  requestChatPrompt(text, emailId, library) {
     set((state) => ({
-      pendingPrompt: { text, emailId, nonce: (state.pendingPrompt?.nonce ?? 0) + 1 }
+      pendingPrompt: { text, emailId, library, nonce: (state.pendingPrompt?.nonce ?? 0) + 1 }
     }))
   },
   consumeChatPrompt(nonce) {
@@ -279,6 +288,20 @@ export function startChatWithPrompt(text: string, emailId: number | null): void 
   state.clearMatterChat()
   state.openChatModal()
   state.requestChatPrompt(text, emailId)
+}
+
+/** 09-03（资料库 P2-L14）—— 资料库预览面的「对话」按钮：唤出 dock 并递一条**带着这份资料**的
+ *  指令。与 `startChatWithPrompt` 的差别只有一处：指令随身带一枚库文件提及（`library`），由
+ *  AgentConversation 用既有的 `onAddLibraryMention` 把它记进会随发送注入的那份列表。
+ *
+ *  🔴 指令文本里必须已经含有这枚提及的 **directive 文本**（`buildLibraryChatPrompt` 负责），
+ *  因为 AgentComposer 那条「chip 被删就摘掉 mention」的对账只认 composer 正文里的 chip ——
+ *  正文里没有 chip 的提及会被当场摘掉。这也正是隐私地板：用户删了 chip 模型就不该再收到。 */
+export function startLibraryChatWithPrompt(file: LibraryMentionRef, text: string): void {
+  const state = useAIChatPanel.getState()
+  state.clearMatterChat()
+  state.openChatModal()
+  state.requestChatPrompt(text, null, file)
 }
 
 /** 0813 dogfood #17b —— 事项详情的「立即跟进」：唤出 dock **带着这件事的身份**，再把一条跟进

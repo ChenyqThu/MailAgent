@@ -176,6 +176,33 @@ def test_send_attachments_camel_case_tolerated(client, compose_spy):
     assert req.attachments == [{"stage_id": "b" * 32}, {"attachment_id": 9}]
 
 
+def test_draft_attachments_library_file_id_snake_case(client, compose_spy):
+    r = client.post(
+        "/api/email/draft",
+        json={
+            "internalId": EMAIL_ID, "mode": "reply", "bodyHtml": "<p>x</p>",
+            "attachments": [{"library_file_id": 5}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    req = _last_request(compose_spy)
+    assert req.attachments == [{"library_file_id": 5}]
+
+
+def test_draft_attachments_library_file_id_camel_case_tolerated(client, compose_spy):
+    r = client.post(
+        "/api/email/draft",
+        json={
+            "internalId": EMAIL_ID, "mode": "reply", "bodyHtml": "<p>x</p>",
+            "attachments": [{"libraryFileId": 5}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    req = _last_request(compose_spy)
+    # camelCase 镜像归一成 canonical snake_case 再进 service
+    assert req.attachments == [{"library_file_id": 5}]
+
+
 def test_attachments_key_absent_is_none(client, compose_spy):
     client.post(
         "/api/email/draft",
@@ -211,12 +238,15 @@ def test_attachments_local_path_rejected_400(client, compose_spy):
 @pytest.mark.parametrize(
     "bad",
     [
-        [{"stage_id": "x", "attachment_id": 1}],   # 两键同给
-        [{"stage_id": ""}],                        # 空串
-        [{"attachment_id": "7"}],                  # 非 int
-        [{"attachment_id": True}],                 # bool 不是合法 id
-        ["not-an-object"],                         # 非 dict 项
-        "not-a-list",                              # 非 list
+        [{"stage_id": "x", "attachment_id": 1}],    # 两键同给
+        [{"stage_id": ""}],                         # 空串
+        [{"attachment_id": "7"}],                   # 非 int
+        [{"attachment_id": True}],                  # bool 不是合法 id
+        [{"stage_id": "x", "library_file_id": 1}],  # 两键同给 (跨表单)
+        [{"library_file_id": "7"}],                 # 非 int
+        [{"library_file_id": True}],                # bool 不是合法 id
+        ["not-an-object"],                          # 非 dict 项
+        "not-a-list",                               # 非 list
     ],
 )
 def test_attachments_invalid_shapes_400(client, compose_spy, bad):

@@ -23,10 +23,16 @@ const NOW = new Date(2026, 7, 21, 14, 30).getTime()
 const hoisted = vi.hoisted(() => ({
   list: vi.fn(),
   unreadCount: vi.fn(),
-  navigate: vi.fn()
+  navigate: vi.fn(),
+  // `library` 型落地借道 `router.history.push`（见 NotificationPanel.tsx 里的
+  // `useRouter` 调用）——这个文件不测那条分支，只需要一个不炸的桩。
+  historyPush: vi.fn()
 }))
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => hoisted.navigate }))
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => hoisted.navigate,
+  useRouter: () => ({ history: { push: hoisted.historyPush } })
+}))
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({ updater: { quitAndInstall: vi.fn() } })
 }))

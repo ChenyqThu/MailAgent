@@ -31,7 +31,12 @@ import type {
 import { useEnterAnimation } from '@shared/hooks/useEnterAnimation'
 
 import { diffGoalChecks } from './goalChecksDiff'
-import { DOC_PROVIDER_ICONS, RESOURCE_KIND_ICONS } from './matterResource'
+import {
+  DOC_PROVIDER_ICONS,
+  LIBRARY_RESOURCE_ICON,
+  RESOURCE_KIND_ICONS,
+  isLibraryFileResource
+} from './matterResource'
 
 // 逐项照设计原型 review.jsx 的 `CHANGE_KIND` 词表（icon + tone + label + hint 四件）。
 // 🔴 改动前三处不符：action/resource 的 tone 用了 ai（稿子是 info）、两条 hint 是空的、
@@ -566,7 +571,11 @@ function NewResourceCard({
   const summary = resource.summary?.trim() || ''
   // 🔴 成员索引而非查表函数：react-hooks/static-components 不接受 `const C = fn(...)`
   //（见 matterResource.ts 文末的说明）。与抽屉 / 上下文 tab 同一套图标单源。
+  // 🔴 `!!` 不是装饰：判据是函数调用，规则只认语法上可证明是布尔的表达式，调用结果先存进局部
+  // 变量也会顺着数据流被判红。
+  const isLibraryFile = !!isLibraryFileResource(resource.kind, resource.external_key)
   const Icon =
+    (isLibraryFile && LIBRARY_RESOURCE_ICON) ||
     (resource.kind === 'doc' && DOC_PROVIDER_ICONS[resource.provider.toLowerCase()]) ||
     RESOURCE_KIND_ICONS[resource.kind]
   return (

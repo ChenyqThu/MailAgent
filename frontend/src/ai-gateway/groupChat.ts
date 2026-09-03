@@ -24,6 +24,7 @@
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 import type { GroupHistoryRow } from './config'
 import { renderAttachmentBlock } from './groupAttachments'
+import { renderLibraryRefsLine } from './groupLibraryRefs'
 import { WINDOW_MAX_CHARS, WINDOW_MAX_ROWS, WINDOW_TAIL } from './groupFloors'
 
 /** The owner's speaker label in assembled history. One fixed label (not the account name) so the
@@ -127,6 +128,9 @@ export function parseGroupMentions(text: string, members: readonly GroupMentionM
  *
  * T2 群附件：user 行带 `attachments` 时，`renderAttachmentBlock` 的不可信内容围栏块前置进该行
  * 正文 —— 附件对**所有**候选成员可见（父设计 D10），不是只给第一个回复的人。
+ *
+ * P2-L13 群 @ 资料：user 行带 `libraryRefs` 时，`renderLibraryRefsLine` 的一行指路前置在附件围栏
+ * **之前** —— 那一行是我们自己生成的可信元数据，不该落进「以下都是不可信内容」的围栏里面。
  */
 export function assembleGroupHistory(
   rows: readonly (GroupHistoryRow & { via?: GroupTranscriptRow['via'] })[],
@@ -156,8 +160,11 @@ export function assembleGroupHistory(
     if (row.role === 'user') {
       const label = row.via === 'main_agent' ? GROUP_MAIN_AGENT_LABEL : GROUP_USER_LABEL
       // T2 群附件：围栏块前置进这条 user 行（在标签之后 —— 块属于这一位说话人的这条消息，
-      // 连续 user 合并后也不会跟别人的话混在一起）。无附件 → 空串，与改动前逐字节相同。
-      push('user', `[${label}] ${renderAttachmentBlock(row.attachments)}${row.content}`)
+      // 连续 user 合并后也不会跟别人的话混在一起）。无附件 / 无引用 → 空串，与改动前逐字节相同。
+      push(
+        'user',
+        `[${label}] ${renderLibraryRefsLine(row.libraryRefs)}${renderAttachmentBlock(row.attachments)}${row.content}`
+      )
     } else if (row.role === 'assistant') {
       const speaker = row.speakerAgentId
       if (speaker != null && speaker === speakAsAgentId) {
@@ -240,8 +247,11 @@ export function buildGroupWindow(
   if (rows.length > limits.maxRows) rows = rows.slice(rows.length - limits.maxRows)
   // 🔴 字符预算算上附件正文：它一样进模型（assembleGroupHistory 前置围栏块），不算的话一份
   // 20k 字的附件能把 12k 的窗口撑到三倍而地板毫不知情。无附件的行加 0 → 老行为逐字节不变。
+  // 资料引用同理：那一行也进模型（只是短得多 —— 恒一行、条数有上限）。
   const rowChars = (r: GroupTranscriptRow): number =>
-    r.content.length + (r.attachments ?? []).reduce((n, a) => n + (a.text?.length ?? 0), 0)
+    r.content.length +
+    (r.attachments ?? []).reduce((n, a) => n + (a.text?.length ?? 0), 0) +
+    renderLibraryRefsLine(r.libraryRefs).length
   let chars = rows.reduce((n, r) => n + rowChars(r), 0)
   while (rows.length > 1 && chars > limits.maxChars) {
     chars -= rowChars(rows[0]!)

@@ -26,11 +26,26 @@
 // add() owns its failure surface (toast + rethrow): the built-in paste handler and
 // the Dropzone primitive only console.error a rejected addAttachment, so without a
 // toast here a failed read would be silent (regression face #8).
+//
+// P2-L5（design §1.4）—— send() 现在还多做一件事：**发送即入库**。两条分支都先把原字节写进
+// 资料库的 `chat-attachments/{YYYY-MM}/`，再在 content 里并列挂一个 `data-library` part
+// （气泡据此画 chip）。三条边界：
+//   · 入库能力是**注入**的（`archiveIo`）。不传 = 一个字节都不上传、content 与本 lane 之前
+//     逐字相同 —— 群聊 composer（GroupComposer，落法另有 lane）和既有单测走的就是这条。
+//   · 入库失败**不阻断发送**：data part 照挂但 `archived:false`，气泡画「未归档」，文本预置
+//     那条老路一点没动，模型看到的内容不变。
+//   · `data-library` 不塞进封闭的 `FileUIPart`，走 assistant-ui 的 `{type:'data', name}`
+//     —— react-ai-sdk 的 `toCreateMessage` 把它转成 UIMessage 的 `data-library` part
+//     （仓里 `ai-gateway/compact.ts` 的 `data-compact` 是同款先例），零 CHAT_DB 迁移。
 
 import type { AttachmentAdapter, CompleteAttachment, PendingAttachment } from '@assistant-ui/react'
 
 import i18n from '@shared/i18n'
-import { readAttachment, type ChatAttachment } from '@shared/lib/chat-attachments'
+import {
+  readAttachment,
+  type ChatAttachment,
+  type ChatAttachmentArchiver
+} from '@shared/lib/chat-attachments'
 import { toastError } from '@shared/state/toast'
 
 /** Max pending image attachments per message. 4 × ~1 MB base64 leaves ample room
@@ -60,6 +75,45 @@ export interface AttachmentPanelBridge {
 export interface PreparedImagePayload {
   dataUrl: string
   mediaType: string
+}
+
+/** `data-library` part 的 data 载荷。气泡 chip 与深链 `/library?file={fileId}` 全靠它。
+ *
+ *  🔴 `archived:false` 是**一等状态**，不是「缺字段」：入库失败时这个 part 照挂，chip 画
+ *  「未归档」告诉用户这份文件只在这一轮的上下文里、资料库里找不到。少了它，失败就是静默的。 */
+export interface ChatLibraryPartData {
+  /** 用户看到的文件名（入库改过名时是**库里那个**名字，chip 与磁盘一致）。 */
+  name: string
+  archived: boolean
+  /** `library_file.id`，仅 `archived` 时有。 */
+  fileId?: number
+  /** 虚拟路径 `chat-attachments/{YYYY-MM}/{name}`，仅 `archived` 时有。 */
+  path?: string
+}
+
+/** send() 时入库这一步的注入点。 */
+export interface ChatAttachmentArchiveIo {
+  archive: ChatAttachmentArchiver
+  /** 当前会话 id。**新会话的第一条消息拿不到**（session 由 transport 在发送时懒创建），
+   *  这时 `source_ref` 的会话段是空串 —— uiMessageId 本身是 uuid，反查照样唯一。 */
+  getSessionId: () => number | null
+}
+
+/** 本批发送将要落到的 UIMessage id。
+ *
+ *  🔴 为什么要自己发这个 id：`source_ref='{sessionId}:{uiMessageId}'` 只有在等于持久化下来的
+ *  `ui_message_json.$.id` 时才反查得到（`chat_db/messages.ts::findMessageRowIdByUiId` 就是按
+ *  这个键查的）。而 assistant-ui 的调用次序是「先 send() 每个附件 → 再造消息」，等消息造好
+ *  id 才由 AI SDK 生成，那时上传早发出去了。所以 id 在**第一个** send() 里现铸，随后由
+ *  `useMailAgentAiSdkRuntime` 的 `toCreateMessage` 取走盖在消息上（AI SDK 的 `sendMessage`
+ *  认 `uiMessage.id ?? generateId()`，给了就用给的）。
+ *
+ *  一批 = 一次 composer 发送：`base-composer-runtime-core` 用 `Promise.all` 把本次所有附件的
+ *  send() 同步启动，`??=` 在第一个 await 之前跑完，所以同批共享一个 id、跨批不会串。 */
+interface OutgoingMessageId {
+  id: string
+  /** 只有真入库成功过才盖 —— 全批都失败时消息 id 交回 AI SDK 生成，不留一个没人用的 uuid。 */
+  used: boolean
 }
 
 export function isImageFile(file: File): boolean {
@@ -137,6 +191,14 @@ function newAttachmentId(file: File): string {
     : `${file.name}-${file.size}-${Date.now()}`
 }
 
+/** 本批发送的 UIMessage id。uuid 而不是递增数：它要和 AI SDK 自己生成的 id 共处一个命名
+ *  空间（同一会话里两种来源的消息交替出现），撞了就会把两条消息认成一条。 */
+function newMessageId(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 /** Error subtype for guardrail rejections that already surfaced their own toast —
  *  add() must not double-toast them under the generic read-failed catch. */
 class AttachmentGuardrailError extends Error {}
@@ -147,21 +209,64 @@ function guardrailFail(key: string, fallback: string, options?: Record<string, u
   throw new AttachmentGuardrailError(message)
 }
 
+export interface MailAgentAttachmentAdapter extends AttachmentAdapter {
+  /** 取走本批入库用的 UIMessage id 并清空（一次消费）。返回 null = 这批没有任何附件真的
+   *  入库成功，消息 id 交回 AI SDK 生成。由 `useMailAgentAiSdkRuntime` 的
+   *  `toCreateMessage` 在 send() 批次结束后立刻调用。 */
+  takeArchivedMessageId(): string | null
+}
+
 /**
  * Build the MailAgent attachment adapter. `getBridge` is a live getter (the runtime
  * holds the panel callbacks in a ref) so chip add/remove never rebuilds the adapter.
+ * `archiveIo` 缺省 = 不入库（行为与 P2-L5 之前逐字相同）。
  */
 export function createMailAgentAttachmentAdapter(
   getBridge: () => AttachmentPanelBridge | null,
-  io: PrepareImageIo = defaultIo
-): AttachmentAdapter {
+  io: PrepareImageIo = defaultIo,
+  archiveIo: ChatAttachmentArchiveIo | null = null
+): MailAgentAttachmentAdapter {
   // Prepared image payloads keyed by attachment id. Doubles as the pending-image
   // counter for the count guardrail: send()/remove() (incl. composer reset, which
   // calls remove for every pending attachment) delete their entry.
   const preparedImages = new Map<string, PreparedImagePayload>()
+  let outgoing: OutgoingMessageId | null = null
+
+  /** 入库一份附件，返回要挂在 content 上的 data part；未接入库能力 / 没有原始 File 时返回
+   *  null（content 与从前逐字相同）。任何失败都落到 `archived:false`，绝不抛。 */
+  async function archivePart(
+    file: File | undefined,
+    fallbackName: string
+  ): Promise<{ type: 'data'; name: 'library'; data: ChatLibraryPartData } | null> {
+    if (!archiveIo || !file) return null
+    const batch = (outgoing ??= { id: newMessageId(), used: false })
+    const sessionId = archiveIo.getSessionId()
+    const result = await archiveIo.archive(file, `${sessionId ?? ''}:${batch.id}`)
+    if (!result.ok) {
+      return { type: 'data', name: 'library', data: { name: fallbackName, archived: false } }
+    }
+    batch.used = true
+    return {
+      type: 'data',
+      name: 'library',
+      data: {
+        // 库里的真名（同名去重后可能是 `report_1.docx`），chip 点开看到的就是它。
+        name: result.path.slice(result.path.lastIndexOf('/') + 1),
+        archived: true,
+        fileId: result.fileId,
+        path: result.path
+      }
+    }
+  }
 
   return {
     accept: '*',
+
+    takeArchivedMessageId(): string | null {
+      const batch = outgoing
+      outgoing = null
+      return batch?.used ? batch.id : null
+    },
 
     async add({ file }): Promise<PendingAttachment> {
       if (isImageFile(file)) {
@@ -223,6 +328,8 @@ export function createMailAgentAttachmentAdapter(
 
     async send(attachment): Promise<CompleteAttachment> {
       const prepared = preparedImages.get(attachment.id)
+      // 入库对两条分支一视同仁：图片也归档（design §1.4「图片走同一条入库路径」）。
+      const libraryPart = await archivePart(attachment.file, attachment.name)
       if (prepared) {
         preparedImages.delete(attachment.id)
         return {
@@ -231,20 +338,27 @@ export function createMailAgentAttachmentAdapter(
           // toCreateMessage maps {type:'file', data, mimeType, filename} → a
           // FileUIPart {type:'file', url, mediaType, filename} → gateway
           // convertToModelMessages → model image content.
+          // 图片的 file part 与 data part **并列**，不是二选一：前者喂模型，后者画 chip。
           content: [
             {
               type: 'file',
               mimeType: prepared.mediaType,
               filename: attachment.name,
               data: prepared.dataUrl
-            }
+            },
+            ...(libraryPart ? [libraryPart] : [])
           ]
         }
       }
       // Panel-state entries ride body.injectedContext (buildAttachmentBlock →
       // untrusted-framed text block); empty content keeps the parts clean. The panel
       // clears its list via onConsumeInjected after the transport captured the block.
-      return { ...attachment, status: { type: 'complete' }, content: [] }
+      // 非图片分支唯一多出来的东西就是这个 data part —— 模型侧一个字节都没变。
+      return {
+        ...attachment,
+        status: { type: 'complete' },
+        content: libraryPart ? [libraryPart] : []
+      }
     }
   }
 }

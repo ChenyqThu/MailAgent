@@ -90,6 +90,43 @@ def test_default_tiers_match_catalog_default_approval():
         )
 
 
+def test_library_write_family_factory_tiers():
+    """library epic P2-L2 —— 资料库四写的出厂档（design §5.1）逐条钉死。
+
+    上面两条闸只保证「注册表与 catalog 不漂移」，钉不住**具体是哪个档**：把 library_delete
+    出厂改成 auto、或把 danger_auto 摘掉，两条都照样绿。这里就是那份拍板的落点：
+      * append / write = auto（本地、每写留全文快照、要被日常维护）
+      * move / delete  = ask；delete 另带 danger_auto（设 auto 时红警告 + 一次性确认）
+      * delete **不是** configurable=False —— 软删进 .trash 保留期内可恢复，够不上
+        send / run_command 那一档的安全地板；写成 False 会连「owner 想调 auto」都堵死。
+    """
+    from src.agent_config.tool_prefs import BUILTIN_TOOL_POLICY_BY_NAME
+
+    expected = {
+        "library_append": ("auto", True, False),
+        "library_write": ("auto", True, False),
+        "library_move": ("ask", True, False),
+        "library_delete": ("ask", True, True),
+    }
+    for name, (tier, configurable, danger_auto) in expected.items():
+        policy = BUILTIN_TOOL_POLICY_BY_NAME.get(name)
+        assert policy is not None, f"{name} 不在 BUILTIN_TOOL_POLICIES —— 出厂档没登记"
+        assert policy.group == "library", f"{name} 的设置页分组应为 library，实为 {policy.group!r}"
+        assert (policy.default_tier, policy.configurable, policy.danger_auto) == (
+            tier,
+            configurable,
+            danger_auto,
+        ), (
+            f"{name} 出厂档漂移：得到 "
+            f"({policy.default_tier!r}, configurable={policy.configurable}, "
+            f"danger_auto={policy.danger_auto})，期望 ({tier!r}, {configurable}, {danger_auto})"
+        )
+
+    # 三个读工具是 silent，**不进**审批链注册表（进了就等于给只读操作加了一张卡）。
+    for name in ("library_list", "library_read", "library_search"):
+        assert name not in BUILTIN_TOOL_POLICY_BY_NAME, f"{name} 是 silent 读工具，不该有出厂档"
+
+
 def test_non_configurable_tools_never_default_auto():
     """configurable=False 的固定形状行（send / run_command / 供应链 / CRUD）恒 ask ——
     出厂就 auto 会让「不可配置」变成「不可配置地免卡」，方向反了。"""

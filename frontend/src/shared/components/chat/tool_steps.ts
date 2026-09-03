@@ -179,6 +179,16 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'contact_refresh_profile',
   'contact_update_fields',
   'contact_set_manager',
+  // 资料库 (P1-L7 三个 silent 读 + P2 四个 edit 写)。🔴 这里的名字集与
+  // toolDisplayNames.ts 的 TOOL_DISPLAY_NAMES_ZH、两份 locale 的 chat.toolTitle.* 是同一集
+  // 的四份镜像（toolTitle.test.ts / toolDisplayNames.test.ts 双向钉死），加名字四处一起加。
+  'library_list',
+  'library_read',
+  'library_search',
+  'library_append',
+  'library_write',
+  'library_move',
+  'library_delete',
   // notion
   'notion_agent_chat',
   // feedback (task 08-27 P4a)

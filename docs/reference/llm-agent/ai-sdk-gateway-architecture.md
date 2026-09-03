@@ -1954,3 +1954,62 @@ pending（owner 调成 ask）= prompt 复核 + approve / reject。纯逻辑在 `
   `tests/ai-gateway/generated_image_route.test.ts`、`tests/shared/assistant/tools/ImageGenCard.test.tsx`、
   `tests/shared/imageModelCandidates.test.ts`、`providers.test.ts` 的 `resolveImageModel` 组；既有的
   catalog / tool_prefs parity / 中文名 / toolTitle / policy / skill_gating 闸全部覆盖到本工具。
+
+## 13.31 资料库工具家族：7 个 `library_*` 工具（task 09-03，无 flag）
+
+> 模块全貌（存储 / jail / 端点 / 预览 / 跨模块引用）= [`library/library-architecture.md`](../library/library-architecture.md)。
+> 本节只写 gateway 侧：工具家族、围栏、能力卡、无人值守免卡通道。
+
+工具工厂 `frontend/src/ai-gateway/tools/library.ts`（`createLibraryReadTools` / `createLibraryWriteTools`）。
+名单的单源是零依赖叶子 `@shared/libraryConstants` 的 `GATEWAY_LIBRARY_READ_TOOL_NAMES` /
+`GATEWAY_LIBRARY_WRITE_TOOL_NAMES`（Python `src/library/constants.py` 有 parity 闸）。
+
+| 工具 | tier | class | tool_prefs 出厂 | 说明 |
+|---|---|---|---|---|
+| `library_list` | silent | `read` | — | 浏览文件夹；投影行（邮件附件）没有 library id，`file_id` 恒 null，用 `attachment_id` 走三条只读兄弟端点 |
+| `library_read` | silent | `read` | — | 读一个文件。**非文本类（pdf / office / 图片）返回的是服务端解析出的 markdown**（`library_text` 那一份，与预览面 / FTS / 嵌入同源），二进制永不进模型；上限 12000 chars / 2 MB |
+| `library_search` | silent | `read` | — | 纯关键词，**无字段语法**（描述里明说，不抄 `email_search_fulltext` 的 DSL 说明——否则模型往里塞 `from:` / `in:` 被当字面文本，召回归零且无 warning） |
+| `library_append` | edit | `domain_write` | `auto` | 只追加，冲突面为零 |
+| `library_write` | edit | `domain_write` | `auto` | `mode: create_new`（带 `path`）/ `overwrite`（带 `file_id` + `expected_hash`）；CAS 409 把当前 hash 与内容透传回模型，**重试恰一次** |
+| `library_move` | edit | `domain_write` | `ask` | 跨模块引用走 `library:{id}` 不会断；会断的是别人记着的路径字符串与文档里的相对链接 |
+| `library_delete` | edit | `domain_write` | `ask`（`danger_auto=True`） | 进 `.trash`，可恢复，故不设 `configurable=False` |
+
+**三条家族纪律**（改任何一条前先读工厂文件头注）：
+
+1. class `read` + `CORE_UNGATED`（无 skill 归属）+ 注册条件只有 `if (opts.approvalGuard)` —— **没有 flag**；
+2. 返回体恒带 `{file_id, path, name, size, mime, updated_at, source, content_hash}` 八件，三个读工具共用
+   同一个投影函数；
+3. 🔴 一切来自文件的正文 / 摘要恒过 `fenceUntrusted('LIBRARY_FILE', …)` —— 库里放着邮件附件正文和挂载
+   目录里的任意文件，是彻头彻尾的第二方内容。CAS 409 回传的「当前内容」同样过围栏（它可能是别人刚写进去的）。
+
+🔴 `path` 是**虚拟路径**（`<根 slug>/<相对路径>`，挂载根形如 `@label/sub/x.md`），寻址与显示都用它；
+返回体里的 `rel_path` 是根内相对路径、跨根重名，**绝不能**当 `path` 回传。
+
+**能力卡**：第 8 张「资料库」`library: off | read | write`（三档逐级 superset，
+`shared/lib/customAgentCapabilities.ts`）。七件全进 `HEADLESS_TOOL_OPTIONS`
+（`src/api/routers/agent_runs.py`）—— 🔴 **注册 ≠ 免卡**。
+
+**无人值守免卡（两条通道，S4「headless 写零免卡通道」的第一处显式例外）**：
+
+- **通道 B（`policyEvaluate` 内建规则，非 `policy_rules` 行，命中时 `rule_id` 恒 None）**：
+  `library_append` / `library_write` + `context_mode ∈ {cron_headless, untrusted_trigger}` +
+  `size_bytes ≤ TEXT_WRITE_MAX_BYTES` + **入参里每一个可寻址的目标都落在 `agent-docs/` 下** → `auto_allow`。
+  🔴 目标路径的判据是**服务端事实**：`library_write` 的 overwrite 形态只带 `file_id`（mode 分支在 run 里、
+  不在 schema 里），模型可以在同一次调用里再塞一个漂亮的 `path` —— 所以 `file_id` 经注入的回调反查当前
+  虚拟路径、`path` 按字面判，**两者都必须过**；反查不出 / 没接回调 / 回调抛异常一律 ask
+  （`src/agent_config/policy.py`，回调由 `/policy/evaluate` 注入，模块边界同 `resource_resolver` 给 matters 那一个）。
+- **通道 C（三条 belt 按名放行）**：事项跟进 / 行动项 / 通讯录治理三条 belt 此前只放行 `class === 'read'`，
+  现各加一条 `name === LIBRARY_RUN_APPEND_TOOL`（`agentRun.ts` + `tools/policy.ts`）。
+  🔴 **判据是名字不是 class**：四个写工具同为 `domain_write`，按 class 放行会把 write / move / delete 一起
+  带进来。常量的类型钉在 `GATEWAY_LIBRARY_WRITE_TOOL_NAMES` 上——名字离开那张表这行就编译不过。
+
+**不变的地板**：`my-docs/` 与挂载根 `@label/…` 与投影区与 `.trash` 在 headless 恒弹卡；
+`library_move` / `library_delete` **永不**进任何免卡通道；`manual_chat` 逐字节不受影响，仍走 per-tool 档。
+服务端 `LibraryService._assert_writable` 是最终判据（前端与 policy 都只是前置）。
+
+**闸**：`frontend/tests/ai-gateway/tools/library.test.ts` + `library_write.test.ts` ·
+`frontend/tests/ai-gateway/agent_run.test.ts`（三条 belt 各一例 + 同族另三个一个都不进 + 敌意 `allowedTools`
+列名也不放行）· `tests/agent_config/test_policy_library.py` + `tests/api/test_agent_policy_library.py` ·
+agent_eval `baselines/library.jsonl` + `AGT-LIBRARY-001..004`（含 CAS 重试地板与「文档里塞指令不得触发
+`library_delete`」的注入地板）· 既有的 catalog / tool_prefs parity / 能力卡 parity / 中文名 / toolTitle
+闸全部覆盖到这七件。

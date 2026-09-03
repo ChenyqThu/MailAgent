@@ -1,5 +1,6 @@
 import type { Tool } from 'ai'
 
+import type { AgentCallReference } from '@shared/agentCallReference'
 import { projectAgentCallState } from '@shared/lib/agentCallState'
 import type { MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard } from '../security/approval'
@@ -12,12 +13,6 @@ export const GATEWAY_AGENT_CALL_TOOL_NAMES = ['custom_agent_call'] as const
 export const CUSTOM_AGENT_CALL_WAIT_MS = 180_000
 const CUSTOM_AGENT_CALL_POLL_MS = 2_000
 
-export interface AgentCallReference {
-  type: 'session' | 'report' | 'notion' | 'email' | 'calendar'
-  id: string | number
-  title?: string
-}
-
 function inputReferences(input: CustomAgentCallInput): AgentCallReference[] {
   return [
     ...(input.source_session_id == null
@@ -27,7 +22,8 @@ function inputReferences(input: CustomAgentCallInput): AgentCallReference[] {
     ...(input.email_thread_ids ?? []).map((id) => ({ type: 'email' as const, id })),
     ...(input.calendar_event_ids ?? []).map((id) => ({ type: 'calendar' as const, id })),
     ...(input.notion_refs ?? []).map((ref) => ({ type: 'notion' as const, id: ref.object_id })),
-    ...(input.report_ids ?? []).map((id) => ({ type: 'report' as const, id }))
+    ...(input.report_ids ?? []).map((id) => ({ type: 'report' as const, id })),
+    ...(input.library_file_ids ?? []).map((id) => ({ type: 'library' as const, id }))
   ]
 }
 

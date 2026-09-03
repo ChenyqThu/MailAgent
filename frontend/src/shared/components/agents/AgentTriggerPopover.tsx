@@ -215,7 +215,9 @@ export function AgentDirectiveChip({
           ? 'agentView.mention.agentChip'
           : directiveType === 'matter'
             ? 'agentView.mention.matterChip'
-            : 'agentView.mention.emailChip',
+            : directiveType === 'library'
+              ? 'agentView.mention.libraryChip'
+              : 'agentView.mention.emailChip',
         { label }
       )}
     >

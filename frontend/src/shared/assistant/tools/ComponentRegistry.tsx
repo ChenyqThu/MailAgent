@@ -187,7 +187,17 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
       // identity-only (no editableFields on the gateway side either), so the pinned-value shell
       // is exactly right.
       'agent_profile_restore',
-      'agent_memory_update'
+      'agent_memory_update',
+      // 资料库 P2-L1 — the four library writes on the generic shell (design §5.1「先用通用卡，
+      // 富卡片可后补」). library_move / library_delete ship `ask`, and an owner may set the other
+      // two to ask: without a card every one of them would pause onto the buttonless ToolTraceCard
+      // (the v1.5.0 deadlock a fourth time). No SPECS entry yet → fallbackTitle + the args as the
+      // review value (move / delete carry `path` precisely so that review value names the file).
+      // Gate: ComponentRegistry.test.tsx judges by GATEWAY_LIBRARY_WRITE_TOOL_NAMES.
+      'library_append',
+      'library_write',
+      'library_move',
+      'library_delete'
     ],
     render: SimpleApprovalCard
   },
