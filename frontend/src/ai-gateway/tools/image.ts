@@ -31,7 +31,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { join, resolve, sep } from 'node:path'
 
-import { generateImage, type ImageModel, type ModelMessage, type Tool } from 'ai'
+import { APICallError, generateImage, type ImageModel, type ModelMessage, type Tool } from 'ai'
 
 import type { ApprovalGuard } from '../security/approval'
 import { isProviderCredentialsError } from '../providerRef'
@@ -254,6 +254,30 @@ export function collectAttachedImages(messages: readonly ModelMessage[]): Source
   return out
 }
 
+// ── failure copy ─────────────────────────────────────────────────────────────
+
+/** E_IMAGE_GENERATION_FAILED 的正文。脱敏基线（`HTTP <status> <name>`，绝不带上游 message /
+ *  responseBody）之外补两件能自诊断的事实：请求打到了哪个端点、以及 404 的常见成因 —— 0903
+ *  dogfood 里错误只有一句 `HTTP 404 AI_APICallError`，看不出是模型名写错还是那台中转压根没有
+ *  图像端点（实测：同一 base 上 /v1/chat/completions 返 401 而 /v1/images/generations 返 404）。
+ *  URL 只取 origin + pathname：有的 provider 把密钥放在查询串里，而端点本身已足够定位。 */
+export function imageGenerationFailureMessage(err: unknown): string {
+  const base = sanitizedUpstreamErrorMessage(err)
+  if (!APICallError.isInstance(err)) return base
+  let endpoint = ''
+  try {
+    const u = new URL(err.url)
+    endpoint = ` (POST ${u.origin}${u.pathname})`
+  } catch {
+    /* provider 配错时 url 未必是绝对地址；少这一段不影响其余信息 */
+  }
+  if (err.statusCode !== 404) return `${base}${endpoint}`
+  return (
+    `${base}${endpoint} —— 该 provider 未提供 OpenAI 图像端点（/v1/images/generations），` +
+    '请在「设置 → AI」换一个支持图像生成的 provider 或模型。'
+  )
+}
+
 // ── the tool ─────────────────────────────────────────────────────────────────
 
 export interface GeneratedImageRef {
@@ -399,7 +423,7 @@ export function createImageTools(
           // Upstream bodies can echo request headers (api key) — never forward them verbatim.
           throw new ToolExecutionError(
             'E_IMAGE_GENERATION_FAILED',
-            sanitizedUpstreamErrorMessage(e)
+            imageGenerationFailureMessage(e)
           )
         }
         await mkdir(sessionDir, { recursive: true })

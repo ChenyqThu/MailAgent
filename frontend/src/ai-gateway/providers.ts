@@ -225,12 +225,12 @@ export function resolveProviderModel(
   return resolveFromRegistry(built, ref)
 }
 
-/** task 09-02 (generate_image) — resolve an IMAGE model from the same registry / providerRef
- *  vocabulary. Only the two OpenAI-shaped protocols carry `imageModel()` (`/images/generations`
- *  + `/images/edits`); every other enabled row throws the typed `ProviderImageModelError` so the
- *  tool can say "pick an OpenAI-protocol model in Settings" instead of surfacing whatever the
- *  registry would throw for a provider without image support. The credentials rule is the
- *  language-model rule verbatim (row key is the authority; openai-compatible may run keyless). */
+/** task 09-02 (generate_image) — resolve an IMAGE model by the providerRef vocabulary. Only the
+ *  two OpenAI-shaped protocols carry an image model (`/images/generations` + `/images/edits`);
+ *  every other enabled row throws the typed `ProviderImageModelError` so the tool can say "pick an
+ *  openai-protocol model in Settings" instead of surfacing an opaque upstream failure. The
+ *  credentials rule is the language-model rule verbatim (row key is the authority;
+ *  openai-compatible may run keyless). */
 export function resolveImageModel(built: BuiltProviderRegistry, ref: string): ImageModel {
   const parsed = parseProviderRef(ref)
   const provider = built.providers.get(parsed.providerId)
@@ -247,7 +247,18 @@ export function resolveImageModel(built: BuiltProviderRegistry, ref: string): Im
       `LLM provider ${parsed.providerId} 缺少 API key（Settings → 模型服务中补全后重试）`
     )
   }
-  return built.registry.imageModel(`${parsed.providerId}:${parsed.modelId}`)
+  // 0903 dogfood — 图像模型两种协议都用**原生 openai 腿**现造，不取共享 registry 里的实例。
+  // 图像线本就是同一套 OpenAI 线格式，差别只在请求体：@ai-sdk/openai-compatible 的图像腿在
+  // `...args` 之后**无条件**拼 `response_format: 'b64_json'`（providerOptions 覆盖不掉），而
+  // gpt-image-* 家族恒返 b64_json、带上该字段官方直接 400；原生 @ai-sdk/openai 有
+  // `hasDefaultResponseFormat(modelId)` 对这一族省掉该字段。baseURL / headers / keyless 判据与
+  // 该 provider 的 chat 腿逐字一致（canonicalApiBase；空 base 省略 → 走 SDK 官方默认端点）。
+  const rawBaseUrl = provider.baseUrl.trim()
+  return createOpenAI({
+    apiKey: provider.apiKey,
+    headers: sanitizeProviderHeaders(provider),
+    ...(rawBaseUrl ? { baseURL: canonicalApiBase(rawBaseUrl) } : {})
+  }).imageModel(parsed.modelId)
 }
 
 function createLegacyResolution(config: LegacyProviderConfig, ref: string): ResolvedProviderModel {

@@ -28,6 +28,12 @@
                                      (URL.createObjectURL — 只有本 renderer
                                      自己创建的 blob 能被引用, 不开远程口子;
                                      缺它则拖入图片附件预览被 CSP 拦成裂图)
+        - http://127.0.0.1:*         generate_image 生成的图片走 ai-gateway 的
+                                     只读文件路由 (GET /api/ai/generated/:id),
+                                     renderer 用 <img src> 直接加载 —— 这条走
+                                     img-src, 上面 connect-src 的同名放行**不**
+                                     覆盖它 (缺它则出图成功但恒裂图)。gateway
+                                     只监听 loopback, 不开远程口子。
         - https://*.onecdn.static.microsoft  Office/Outlook 邮件正文里嵌的
                                               sysfile.svg 等附件类型图标
                                               (line 16 起源全是 Microsoft CDN)
@@ -38,7 +44,7 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'sha256-+/aDVUkVEjs5BEmxhoHnyHv2iuPqBLuJRmkC6F2x0WY='; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: blob: https://*.onecdn.static.microsoft; connect-src 'self' ws://localhost:* http://localhost:* http://127.0.0.1:*"
+      content="default-src 'self'; script-src 'self' 'sha256-+/aDVUkVEjs5BEmxhoHnyHv2iuPqBLuJRmkC6F2x0WY='; style-src 'self' 'unsafe-inline'; img-src 'self' data: file: blob: http://127.0.0.1:* https://*.onecdn.static.microsoft; connect-src 'self' ws://localhost:* http://localhost:* http://127.0.0.1:*"
     />
     <!--
       Theme bootstrap (REVIEW-LOG C-07): set data-theme + dark class on <html>

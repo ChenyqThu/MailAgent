@@ -429,9 +429,66 @@ describe('createProviderModelResolver', () => {
 describe('resolveImageModel', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it.each(['openai', 'openai-compatible'])('%s → registry.imageModel(providerId:modelId)', (protocol) => {
-    const built = buildProviderRegistry(snapshot(1, [provider('img', protocol)]))
-    expect(resolveImageModel(built, 'img:gpt-image-1')).toEqual({ imageModelId: 'gpt-image-1' })
+  // 0903 dogfood — 两种协议都改用原生 openai 腿现造（不再取共享 registry 里的实例）：
+  // compatible 腿的图像请求体无条件带 response_format，gpt-image-* 家族会被官方 400。
+  // baseURL / headers 与该 provider 的 chat 腿同源（canonicalApiBase + sanitizeProviderHeaders）。
+  it.each(['openai', 'openai-compatible'])(
+    '%s → createOpenAI({ canonicalApiBase }).imageModel(modelId)',
+    (protocol) => {
+      const built = buildProviderRegistry(snapshot(1, [provider('img', protocol)]))
+      // 🔴 清掉 build 期的那一次 createOpenAI（openai 行建 registry 时也会调它），
+      // 否则 openai 分支的断言会被 build 的调用满足 —— 变异（改回走 registry）也不会红。
+      mocks.createOpenAI.mockClear()
+
+      expect(resolveImageModel(built, 'img:gpt-image-2')).toEqual({ imageModelId: 'gpt-image-2' })
+      expect(mocks.createOpenAI.mock.calls.at(-1)?.[0]).toEqual({
+        apiKey: 'img-key',
+        baseURL: 'https://img.example.test/v1',
+        headers: { 'x-provider': 'img' }
+      })
+    }
+  )
+
+  it('an openai row with an empty base omits baseURL (official default endpoint)', () => {
+    const built = buildProviderRegistry(snapshot(1, [provider('oai', 'openai', { baseUrl: '  ' })]))
+    mocks.createOpenAI.mockClear()
+
+    resolveImageModel(built, 'oai:gpt-image-2')
+
+    expect(mocks.createOpenAI.mock.calls.at(-1)?.[0]).toEqual({
+      apiKey: 'oai-key',
+      headers: { 'x-provider': 'oai' }
+    })
+  })
+
+  it('M2 — the image leg strips custom auth headers too (system apiKey still wins)', () => {
+    const built = buildProviderRegistry(
+      snapshot(1, [
+        provider('gw', 'openai-compatible', {
+          headers: { Authorization: 'Bearer custom', 'x-tenant': 't1' }
+        })
+      ])
+    )
+
+    resolveImageModel(built, 'gw:gpt-image-2')
+
+    expect(mocks.createOpenAI.mock.calls.at(-1)?.[0]).toEqual({
+      apiKey: 'gw-key',
+      baseURL: 'https://gw.example.test/v1',
+      headers: { 'x-tenant': 't1' }
+    })
+  })
+
+  it('an openai-compatible row never reaches the compatible SDK image leg', () => {
+    const built = buildProviderRegistry(snapshot(1, [provider('compat', 'openai-compatible')]))
+
+    resolveImageModel(built, 'compat:gpt-image-2')
+
+    const compatInstance = mocks.createOpenAICompatible.mock.results[0]?.value as {
+      imageModel: ReturnType<typeof vi.fn>
+    }
+    expect(compatInstance.imageModel).not.toHaveBeenCalled()
+    expect(mocks.createOpenAI).toHaveBeenCalledOnce()
   })
 
   it.each(['anthropic', 'google', 'deepseek', 'openrouter'])(
