@@ -229,11 +229,15 @@ class ComposeRequest:
     # True 用于"只给回复正文、由服务端拼引用"的调用方 (chat email_draft_reply 工具:
     # body_markdown 是纯回复内容, 语义=插在 quoted source 之上)。
     quote_original: bool = False
-    # attachments: 附件引用列表 (prd 07-04 D1/D2), 每项 dict 三选一:
-    #   {"stage_id": str}      compose-attachment 上传暂存 (serve-api 两段式)
-    #   {"attachment_id": int} 库内已有附件 (email_attachment.id, 转发沿用)
-    #   {"local_path": str}    本地文件 — 仅 CLI in-process 信任面 (--attach),
-    #                          serve-api adapter 拒绝该形态
+    # attachments: 附件引用列表 (prd 07-04 D1/D2; library_file_id 见 09-02 design
+    # §9.4), 每项 dict 四选一:
+    #   {"stage_id": str}         compose-attachment 上传暂存 (serve-api 两段式)
+    #   {"attachment_id": int}    库内已有附件 (email_attachment.id, 转发沿用)
+    #   {"library_file_id": int}  资料库内已有文件 (library_file.id, 经
+    #                             LibraryService.stream_target() 读盘, 走资料库
+    #                             自己的路径 jail)
+    #   {"local_path": str}       本地文件 — 仅 CLI in-process 信任面 (--attach),
+    #                             serve-api adapter 拒绝该形态
     # None = 未提供 (forward 保持自动收集原附件); 显式提供 (含 []) 时为权威列表,
     # forward 不再自动收集 (语义同 to_override 覆盖推导)。
     attachments: Optional[list[dict]] = None
@@ -1758,20 +1762,30 @@ class MailWriteService:
         行时分流 (task 08-20 draft-save D2 隐藏保真集: 出站 MIME 编回 cid part,
         不进 Content-Disposition: attachment 列表)。
 
-        三种 ref 形态见 ComposeRequest.attachments 注释 (stage_id / attachment_id /
-        local_path)。显式引用 = 用户明确要带的附件 — 任何解析失败 / 超 cap 直接
-        ``ServiceInvalidArgError`` **不静默跳过** (区别于 forward 自动收集的
+        四种 ref 形态见 ComposeRequest.attachments 注释 (stage_id / attachment_id /
+        library_file_id / local_path)。显式引用 = 用户明确要带的附件 — 任何解析失败 /
+        超 cap 直接 ``ServiceInvalidArgError`` **不静默跳过** (区别于 forward 自动收集的
         warn+skip: 静默丢用户点名的附件等于数据丢失)。cap 与自动收集共用
         ``MAX_COMPOSE_ATTACH_BYTES``, ``total_so_far`` 传入已收集部分的字节数,
         inline 部件同样计入 (都进出站 EML)。
+
+        library_file_id 走 ``LibraryService.stream_target()`` 拿已校验 (路径 jail 内)
+        的 abs_path 再读盘 —— 与 ``/library/file/{id}/inline`` 端点同一读法, 不在这里
+        自己拼绝对路径。``LibraryService`` 懒建且只建一次 (多个 library_file_id 引用
+        共用同一实例, 避免每条引用各开一次 sqlite 连接)。投影行 (mail-attachments 下
+        的邮件附件镜像) 在 wire 上 ``id`` 恒 null, 序列化不出合法 int, 天然到不了这条
+        分支。
         """
         from pathlib import Path
 
+        from src.library.db import resolve_library_db_path, resolve_library_root
+        from src.library.service import LibraryError, LibraryService
         from src.services.compose_staging import guess_mime, read_staged
 
         out: list = []
         inline_out: list = []
         total = total_so_far
+        library_service: Optional[LibraryService] = None
         for ref in refs:
             if not isinstance(ref, dict):
                 raise ServiceInvalidArgError(
@@ -1806,6 +1820,40 @@ class MailWriteService:
                 # AttachmentRecord 恒有。
                 if getattr(rec, "is_inline", False) and getattr(rec, "content_id", None):
                     inline_cid = str(rec.content_id)
+            elif "library_file_id" in ref:
+                lib_id = ref["library_file_id"]
+                if not isinstance(lib_id, int) or isinstance(lib_id, bool):
+                    raise ServiceInvalidArgError(
+                        f"library_file_id 必须是 int, got {lib_id!r}"
+                    )
+                # 懒建且只建一次: 多个 library_file_id 引用共用同一 LibraryService,
+                # 避免每条引用各开一次 sqlite 连接 (构造只持路径, 连接 per-call)。
+                if library_service is None:
+                    sync_db = self._ctx.config.sync_store_db_path
+                    library_service = LibraryService(
+                        resolve_library_db_path(sync_db),
+                        resolve_library_root(sync_db),
+                        sync_db,
+                    )
+                # stream_target() 内部已过路径 jail (_require_file → _reconcile_file →
+                # _resolve_row); 这里只消费它吐出的、已校验的 abs_path, 不自己拼路径 ——
+                # 与 /library/file/{id}/inline 端点读原件同一读法。
+                try:
+                    abs_path, lib_filename, _lib_mime, _lib_size = (
+                        library_service.stream_target(lib_id)
+                    )
+                except LibraryError as e:
+                    raise ServiceInvalidArgError(
+                        f"资料库文件不存在或不可读 (library_file_id={lib_id}): {e.message}"
+                    )
+                try:
+                    data = Path(abs_path).read_bytes()
+                except OSError as e:
+                    raise ServiceInvalidArgError(
+                        f"资料库文件读取失败 (library_file_id={lib_id}, {e})"
+                    )
+                filename = lib_filename
+                mime = guess_mime(lib_filename)
             elif "local_path" in ref:
                 # 仅 CLI in-process 信任面 (--attach); serve-api adapter 拒绝该形态。
                 p = Path(str(ref["local_path"] or ""))
@@ -1817,7 +1865,8 @@ class MailWriteService:
                 mime = guess_mime(p.name)
             else:
                 raise ServiceInvalidArgError(
-                    "attachment ref 需含 stage_id / attachment_id / local_path 之一, "
+                    "attachment ref 需含 stage_id / attachment_id / "
+                    "library_file_id / local_path 之一, "
                     f"got {sorted(ref.keys())}"
                 )
             if total + len(data) > MAX_COMPOSE_ATTACH_BYTES:

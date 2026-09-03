@@ -964,12 +964,14 @@ def _validate_compose_mode(mode: Any) -> str:
 
 
 def _parse_compose_attachments(opts: dict[str, Any]) -> Optional[list[dict]]:
-    """body.attachments → ``ComposeRequest.attachments`` 引用列表 (prd 07-04 D1)。
+    """body.attachments → ``ComposeRequest.attachments`` 引用列表 (prd 07-04 D1;
+    library_file_id 见 09-02 design §9.4)。
 
-    canonical = snake_case (``stage_id`` / ``attachment_id``, prd 契约), 容忍
-    camelCase 镜像 (stageId / attachmentId) 防双 lane 漂移。``local_path`` 形态是
-    CLI in-process 专用 — HTTP 面一律拒 (信任边界, 落 else 分支)。键缺省 → None
-    (forward 保持自动收集原附件); ``[]`` → 显式空列表 (forward 不带附件)。
+    canonical = snake_case (``stage_id`` / ``attachment_id`` / ``library_file_id``,
+    prd 契约), 容忍 camelCase 镜像 (stageId / attachmentId / libraryFileId) 防双
+    lane 漂移。``local_path`` 形态是 CLI in-process 专用 — HTTP 面一律拒 (信任边界,
+    不在下方判别集合里, 落「都没给」分支)。键缺省 → None (forward 保持自动收集原
+    附件); ``[]`` → 显式空列表 (forward 不带附件)。
     """
     if "attachments" not in opts or opts.get("attachments") is None:
         return None
@@ -988,7 +990,15 @@ def _parse_compose_attachments(opts: dict[str, Any]) -> Optional[list[dict]]:
             )
         sid = item.get("stage_id", item.get("stageId"))
         aid = item.get("attachment_id", item.get("attachmentId"))
-        if sid is not None and aid is None:
+        lid = item.get("library_file_id", item.get("libraryFileId"))
+        if len([v for v in (sid, aid, lid) if v is not None]) != 1:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"attachments[{i}] must have exactly one of stage_id / "
+                "attachment_id / library_file_id",
+                source="cli",
+            )
+        if sid is not None:
             if not isinstance(sid, str) or not sid.strip():
                 raise APIError(
                     "E_INVALID_ARG",
@@ -996,7 +1006,7 @@ def _parse_compose_attachments(opts: dict[str, Any]) -> Optional[list[dict]]:
                     source="cli",
                 )
             out.append({"stage_id": sid})
-        elif aid is not None and sid is None:
+        elif aid is not None:
             if not isinstance(aid, int) or isinstance(aid, bool):
                 raise APIError(
                     "E_INVALID_ARG",
@@ -1005,11 +1015,13 @@ def _parse_compose_attachments(opts: dict[str, Any]) -> Optional[list[dict]]:
                 )
             out.append({"attachment_id": aid})
         else:
-            raise APIError(
-                "E_INVALID_ARG",
-                f"attachments[{i}] must have exactly one of stage_id / attachment_id",
-                source="cli",
-            )
+            if not isinstance(lid, int) or isinstance(lid, bool):
+                raise APIError(
+                    "E_INVALID_ARG",
+                    f"attachments[{i}].library_file_id must be an int",
+                    source="cli",
+                )
+            out.append({"library_file_id": lid})
     return out
 
 

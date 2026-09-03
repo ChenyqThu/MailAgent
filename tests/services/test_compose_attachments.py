@@ -7,12 +7,15 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 import src.services.mail_write as mail_write
+from src.library.db import resolve_library_db_path, resolve_library_root
+from src.library.service import USER, LibraryService
 from src.services.compose_staging import stage_attachment, staging_root
 from src.services.errors import ServiceInvalidArgError
 from src.services.guards import Actor
@@ -184,7 +187,10 @@ def test_local_path_missing_raises(svc, tmp_path):
 
 
 def test_unknown_ref_shape_raises(svc):
-    with pytest.raises(ServiceInvalidArgError, match="stage_id / attachment_id / local_path"):
+    with pytest.raises(
+        ServiceInvalidArgError,
+        match="stage_id / attachment_id / library_file_id / local_path",
+    ):
         _prepare(svc, mode="reply", attachments=[{"foo": 1}])
     with pytest.raises(ServiceInvalidArgError, match="必须是 dict"):
         _prepare(svc, mode="reply", attachments=["not-a-dict"])
@@ -196,6 +202,98 @@ def test_cap_breach_raises_not_skips(svc, tmp_path, monkeypatch):
     big.write_bytes(b"x" * 11)
     with pytest.raises(ServiceInvalidArgError, match="总大小超"):
         _prepare(svc, mode="reply", attachments=[{"local_path": str(big)}])
+
+
+# ---------------------------------------------------------------------------
+# library_file_id (09-02 design §9.4 P2-L9): 资料库内已有文件, 经 LibraryService
+# 路径 jail 读盘 —— 与 stage_id/attachment_id 同款「解析失败必硬报错」纪律
+# ---------------------------------------------------------------------------
+
+
+def _library(ctx) -> LibraryService:
+    """指向与 ``ctx.config.sync_store_db_path`` 同一 tmp_path 的真实 LibraryService
+
+    (library.db / library/ 与它同目录并列, 见 resolve_library_db_path/root) ——
+    与 ``_resolve_attachment_refs`` 内部懒建的那个实例读同一份库, 不 mock 存储层。
+    """
+    sync_db = ctx.config.sync_store_db_path
+    return LibraryService(
+        resolve_library_db_path(sync_db), resolve_library_root(sync_db), sync_db
+    )
+
+
+def test_library_file_id_ref_resolves_and_hash_matches(svc, ctx):
+    # P2 验收 #5: compose 从资料库选的附件发出去后, 收件方拿到的附件与库内文件
+    # hash 相同 —— 断言解析出的 bytes 与 library_file 行的 content_hash 一致。
+    lib = _library(ctx)
+    content = b"%PDF-fake-report-bytes"
+    row = lib.create_file("my-docs/report.pdf", content, actor=USER)
+    draft, warnings = _prepare(
+        svc, mode="reply", attachments=[{"library_file_id": row["id"]}]
+    )
+    assert warnings == []
+    assert len(draft.attachments) == 1
+    filename, data, mime = draft.attachments[0]
+    assert filename == "report.pdf"
+    assert mime == "application/pdf"
+    assert data == content
+    assert hashlib.sha256(data).hexdigest() == row["content_hash"]
+
+
+def test_multiple_library_file_id_refs_share_one_library_service(svc, ctx):
+    lib = _library(ctx)
+    row1 = lib.create_file("my-docs/one.pdf", b"ONE-BYTES", actor=USER)
+    row2 = lib.create_file("my-docs/two.csv", b"a,b\n1,2\n", actor=USER)
+    draft, warnings = _prepare(
+        svc,
+        mode="reply",
+        attachments=[
+            {"library_file_id": row1["id"]},
+            {"library_file_id": row2["id"]},
+        ],
+    )
+    assert warnings == []
+    assert [a[0] for a in draft.attachments] == ["one.pdf", "two.csv"]
+    assert draft.attachments[0] == ("one.pdf", b"ONE-BYTES", "application/pdf")
+    assert draft.attachments[1][2] == "text/csv"
+
+
+def test_library_file_id_mixes_with_attachment_id(svc, ctx):
+    # 与既有 attachment_id 表单同一请求混用 —— 两条读源互不干扰。
+    lib = _library(ctx)
+    row = lib.create_file("my-docs/mix.csv", b"x,y\n1,2\n", actor=USER)
+    draft, warnings = _prepare(
+        svc,
+        mode="reply",
+        attachments=[{"attachment_id": 7}, {"library_file_id": row["id"]}],
+    )
+    assert warnings == []
+    assert [a[0] for a in draft.attachments] == ["lib.pdf", "mix.csv"]
+
+
+def test_library_file_id_non_int_raises(svc):
+    with pytest.raises(ServiceInvalidArgError, match="library_file_id 必须是 int"):
+        _prepare(svc, mode="reply", attachments=[{"library_file_id": "7"}])
+
+
+def test_library_file_id_bool_raises(svc):
+    with pytest.raises(ServiceInvalidArgError, match="library_file_id 必须是 int"):
+        _prepare(svc, mode="reply", attachments=[{"library_file_id": True}])
+
+
+def test_unknown_library_file_id_raises(svc, ctx):
+    # 空库也能建 (LibraryService 构造即建表/建根目录), 只是查不到这一行。
+    _library(ctx)
+    with pytest.raises(ServiceInvalidArgError, match="资料库文件不存在或不可读"):
+        _prepare(svc, mode="reply", attachments=[{"library_file_id": 999999}])
+
+
+def test_trashed_library_file_id_raises(svc, ctx):
+    lib = _library(ctx)
+    row = lib.create_file("my-docs/gone.txt", b"bye", actor=USER)
+    lib.trash_file(row["id"])
+    with pytest.raises(ServiceInvalidArgError, match="资料库文件不存在或不可读"):
+        _prepare(svc, mode="reply", attachments=[{"library_file_id": row["id"]}])
 
 
 # ---------------------------------------------------------------------------
