@@ -155,7 +155,11 @@ export const A2UI_COMPONENTS = {
   // `componentForTool` 对它返回 null（不落 audited ui_payload），卡自己读 tool part 的 args。
   // 三个按钮里的「改一改」走 04a 的 resolve 侧信道（SendApprovalCard 先例）—— agent 整理的
   // 措辞未必对，只有「发 / 不发」两档不够用。
-  FeedbackApprovalCard: 'FeedbackApprovalCard'
+  FeedbackApprovalCard: 'FeedbackApprovalCard',
+  // task 09-02 — generate_image 的结果卡（生成中占位 / 完成图片 / 失败重试）。与 SimpleApprovalCard
+  // 同为**只做 ComponentRegistry key**：`componentForTool` 对它返回 null（tool result 只回文件
+  // 引用 + url，卡自己从 tool part 的 args / result 读），审批暂停时同一张卡出 approve / reject。
+  ImageGenCard: 'ImageGenCard'
 } as const
 
 /** Which A2UI component renders a given gateway write tool. Unknown / read tools → null

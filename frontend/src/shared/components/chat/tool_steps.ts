@@ -183,6 +183,8 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'notion_agent_chat',
   // feedback (task 08-27 P4a)
   'submit_feedback',
+  // image generation / editing (task 09-02)
+  'generate_image',
   // legacy (deleted engine, still present in persisted history)
   'plan_update'
 ])

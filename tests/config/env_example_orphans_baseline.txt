@@ -83,6 +83,9 @@ MAILAGENT_CALENDAR_TRIGGER
 MAILAGENT_SKILL_CATALOG_PROMPT
 MAILAGENT_SKILL_SELF_MOUNT
 MAILAGENT_STANDING_CONTEXT_ENABLED
+# 图像生成模型 providerRef (task 09-02)：Electron main 热读 .env 喂 gateway generate_image 工具，
+# Python 无对等能力不读；受管白名单两侧都有 (设置-AI「图像生成模型」区写它)。
+IMAGE_GEN_MODEL
 # Notion OAuth 接入 (task 08-20)：四键全部 Electron main / renderer 侧消费，Python 不读。
 # WORKSPACE 两键 = OAuth 成功后 main 原子写入的展示信息 (受管白名单有、config.py 无字段)；
 # PROXY_URL = notion_oauth.ts process.env 读的 exchange 代理覆盖 (调试 knob 不进 UI)；

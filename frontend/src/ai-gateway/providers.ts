@@ -13,14 +13,21 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { createOpenAI } from '@ai-sdk/openai'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
-import { createProviderRegistry, defaultSettingsMiddleware, wrapLanguageModel } from 'ai'
+import {
+  createProviderRegistry,
+  defaultSettingsMiddleware,
+  wrapLanguageModel,
+  type ImageModel
+} from 'ai'
 
 import { anthropicBaseUrl } from './config'
 import {
   canonicalApiBase,
   canonicalRoot,
+  IMAGE_MODEL_PROTOCOLS,
   parseProviderRef,
   ProviderCredentialsError,
+  ProviderImageModelError,
   type LegacyProviderConfig,
   type ProviderModelResolver,
   type ProviderRegistryLogger,
@@ -36,9 +43,11 @@ import {
 export {
   canonicalApiBase,
   canonicalRoot,
+  IMAGE_MODEL_PROTOCOLS,
   isProviderCredentialsError,
   parseProviderRef,
-  ProviderCredentialsError
+  ProviderCredentialsError,
+  ProviderImageModelError
 } from './providerRef'
 export type {
   LegacyProviderConfig,
@@ -216,6 +225,31 @@ export function resolveProviderModel(
   return resolveFromRegistry(built, ref)
 }
 
+/** task 09-02 (generate_image) — resolve an IMAGE model from the same registry / providerRef
+ *  vocabulary. Only the two OpenAI-shaped protocols carry `imageModel()` (`/images/generations`
+ *  + `/images/edits`); every other enabled row throws the typed `ProviderImageModelError` so the
+ *  tool can say "pick an OpenAI-protocol model in Settings" instead of surfacing whatever the
+ *  registry would throw for a provider without image support. The credentials rule is the
+ *  language-model rule verbatim (row key is the authority; openai-compatible may run keyless). */
+export function resolveImageModel(built: BuiltProviderRegistry, ref: string): ImageModel {
+  const parsed = parseProviderRef(ref)
+  const provider = built.providers.get(parsed.providerId)
+  if (!provider) {
+    throw new ProviderImageModelError(`No enabled LLM provider: ${parsed.providerId}`)
+  }
+  if (!IMAGE_MODEL_PROTOCOLS.has(provider.protocol)) {
+    throw new ProviderImageModelError(
+      `LLM provider ${parsed.providerId} (${provider.protocol}) has no image model — IMAGE_GEN_MODEL must point at an openai / openai-compatible provider`
+    )
+  }
+  if (!provider.apiKey && !KEY_OPTIONAL_PROTOCOLS.has(provider.protocol)) {
+    throw new ProviderCredentialsError(
+      `LLM provider ${parsed.providerId} 缺少 API key（Settings → 模型服务中补全后重试）`
+    )
+  }
+  return built.registry.imageModel(`${parsed.providerId}:${parsed.modelId}`)
+}
+
 function createLegacyResolution(config: LegacyProviderConfig, ref: string): ResolvedProviderModel {
   // HIGH-1 — this fail-open leg only runs on the FLAG-ON path (snapshot unreachable / cold start).
   // With the global pre-gate skipped, an empty legacy key here must fail typed rather than fire a
@@ -279,6 +313,17 @@ export function createProviderModelResolver(options: {
       return registry
         ? resolveFromRegistry(registry, ref)
         : createLegacyResolution(options.legacy, ref)
+    },
+    // task 09-02 — no legacy leg on purpose: the env fallback is an anthropic single-provider
+    // config, which structurally has no image model. Snapshot unreachable → typed error.
+    async resolveImageModel(ref: string): Promise<ImageModel> {
+      const registry = await refresh()
+      if (!registry) {
+        throw new ProviderImageModelError(
+          'LLM provider 快照不可用，无法解析图像模型（检查 serve-api 后重试）'
+        )
+      }
+      return resolveImageModel(registry, ref)
     }
   }
 }

@@ -1396,6 +1396,22 @@
       "summaryDisable": "Disable skill \"{name}\"",
       "error": "The operation failed — please retry."
     },
+    "imageGenCard": {
+      "title": "Generate image",
+      "titleEdit": "Edit image",
+      "pendingLabel": "The following prompt will be sent to the image model (needs your approval):",
+      "pendingLabelEdit": "{count} source image(s) will be edited with the following prompt (needs your approval):",
+      "generating": "Generating…",
+      "editing": "Editing…",
+      "sources": "Based on {count} image(s)",
+      "download": "Download",
+      "downloadFailed": "Download failed: {error}",
+      "preview": "View full size",
+      "imageAlt": "Generated image",
+      "retry": "Retry",
+      "retryPrompt": "Please regenerate this image: {prompt}",
+      "error": "Image generation failed"
+    },
     "simpleApprovalCard": {
       "webFetch": {
         "title": "Fetch web page",
@@ -2713,6 +2729,14 @@
       "saveError": "Could not save memory",
       "deleteError": "Could not delete memory",
       "loadError": "Could not load memory"
+    },
+    "imageGenModel": {
+      "title": "Image Generation Model",
+      "desc": "The model the generate_image tool uses to create or edit images in chat. Only OpenAI or OpenAI-compatible providers can be selected (the AI SDK implements the image endpoints for those two protocols only). Takes effect on save, no restart needed.",
+      "label": "Image model",
+      "helper": "Candidates = enabled models of the enabled OpenAI / OpenAI-compatible providers under Model Services. Leave empty and an image request in chat will point you back here.",
+      "placeholder": "Not configured",
+      "noCandidates": "No candidate models: add and enable an OpenAI or OpenAI-compatible provider under Model Services first, then enable its image model (e.g. gpt-image-1)."
     },
     "memoryCaptureModel": {
       "title": "Memory Extraction Model",

@@ -110,7 +110,9 @@ export async function getLlmProviderModelResolver(): Promise<MainProcessProvider
               snapshotModel
             })
           }
-        }
+        },
+        // task 09-02 — image models need no maxOutput / contextWindow decoration; pass through.
+        resolveImageModel: (ref: string) => resolver.resolveImageModel!(ref)
       }
     })()
   }

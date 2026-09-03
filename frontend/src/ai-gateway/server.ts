@@ -1947,6 +1947,62 @@ async function handleApprovalDecide(
 }
 
 /**
+ * `GET /api/ai/generated/:fileId` — task 09-02: the read-only file route for images the
+ * generate_image tool wrote under cfg.generatedImagesDir. The tool result carries only
+ * `{file_id, url}` (never bytes), and the renderer's ImageGenCard loads `<img src>` from here.
+ *
+ * Security posture: the id is validated by the SAME strict `<sessionId>-<uuid>.<ext>` regex the
+ * tool uses to mint it (resolveGeneratedFilePath) — no separators / dots can reach the path — and
+ * the resolved path must stay under the store root (second belt). Anything else, and any missing
+ * file, is a plain 404 (no distinction between "bad id" and "gone": a probe learns nothing).
+ * Registered unconditionally; a cfg without generatedImagesDir answers 404 like an unknown path.
+ */
+async function handleGeneratedImage(
+  res: ServerResponse,
+  cfg: AiGatewayConfig,
+  path: string
+): Promise<void> {
+  const notFound = (): void => writeJson(res, 404, { error: 'E_IMAGE_NOT_FOUND' })
+  if (!cfg.generatedImagesDir) {
+    notFound()
+    return
+  }
+  let fileId: string
+  try {
+    fileId = decodeURIComponent(path.slice(GENERATED_IMAGE_ROUTE_PREFIX.length))
+  } catch {
+    notFound()
+    return
+  }
+  const resolved = resolveGeneratedFilePath(cfg.generatedImagesDir, fileId)
+  if (!resolved) {
+    notFound()
+    return
+  }
+  let size: number
+  try {
+    const st = await stat(resolved.path)
+    if (!st.isFile()) {
+      notFound()
+      return
+    }
+    size = st.size
+  } catch {
+    notFound()
+    return
+  }
+  res.writeHead(200, {
+    'Content-Type': resolved.mime,
+    'Content-Length': size,
+    // The id is a uuid — the bytes behind it never change, so the renderer may cache forever.
+    'Cache-Control': 'private, max-age=31536000, immutable'
+  })
+  const stream = createReadStream(resolved.path)
+  stream.on('error', () => res.destroy())
+  stream.pipe(res)
+}
+
+/**
  * `GET /api/ai/approval/pending?sessionId=N` — the pending-approval TRUTH probe. Two consumers:
  *   - Part B island notice (AiChatPanel): a reloaded session shows only the REDACTED paused turn
  *     (approval parts stripped, R2-3), but with island agent on the approval may still be live in
@@ -2235,6 +2291,13 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     if (method === 'GET' && path === '/api/ai/approval/pending') {
       // Async since #6 (the preview line is fetched from serve-api) → through the crash belt.
       dispatch('/api/ai/approval/pending', res, handleApprovalPending(res, cfg, url))
+      return
+    }
+
+    // task 09-02 — generate_image's read-only file route (cfg.generatedImagesDir gates it: absent
+    // → 404, same as an unknown path). Async (stat) → through the crash belt.
+    if (method === 'GET' && path.startsWith(GENERATED_IMAGE_ROUTE_PREFIX)) {
+      dispatch('/api/ai/generated', res, handleGeneratedImage(res, cfg, path))
       return
     }
 

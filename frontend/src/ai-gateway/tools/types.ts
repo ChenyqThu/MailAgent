@@ -19,7 +19,7 @@
 // 🔴 read tools NEVER set `needsApproval` (silent tier). Approval lands with write
 //    tools in phase-03b/04b.
 
-import { tool, type FlexibleSchema, type Tool, type ToolSet } from 'ai'
+import { tool, type FlexibleSchema, type ModelMessage, type Tool, type ToolSet } from 'ai'
 
 import { DomainError, type DomainPolicyVerdict } from '../python/domainClient'
 import { type ApprovalGuard, type ApprovalRecord, type ApprovalRisk } from '../security/approval'
@@ -407,7 +407,16 @@ export function auditedWriteTool<I>(
     forceApproval?: (input: I) => boolean
     run: (
       input: I,
-      ctx: { userEdited: boolean; signal: AbortSignal | undefined; toolCallId: string }
+      ctx: {
+        userEdited: boolean
+        signal: AbortSignal | undefined
+        toolCallId: string
+        /** task 09-02 — the model messages of the run so far (the AI SDK's ToolCallOptions
+         *  `messages`), exactly as streamText hands them to execute. generate_image reads the
+         *  user's attached image parts out of it (`attached:<n>` source refs); every other
+         *  factory ignores the field. */
+        messages: ModelMessage[]
+      }
     ) => Promise<unknown>
   },
   collector: GatewayToolAuditCollector,
@@ -550,7 +559,7 @@ export function auditedWriteTool<I>(
       }
       return true
     },
-    execute: async (input, { toolCallId, abortSignal }) => {
+    execute: async (input, { toolCallId, abortSignal, messages }) => {
       const start = Date.now()
       // S2 W0 runtime double-insurance (ADR-001 D3): a capability_change/exec/outbound tool must
       // never run outside a manual session — hard-reject before any guard/domain interaction.
@@ -631,7 +640,8 @@ export function auditedWriteTool<I>(
         const output = await opts.run(effectiveInput as I, {
           userEdited,
           signal: abortSignal,
-          toolCallId
+          toolCallId,
+          messages
         })
         collector.push({
           toolUseId: toolCallId,

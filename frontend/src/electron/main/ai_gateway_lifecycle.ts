@@ -19,7 +19,7 @@
 // dynamic-imports this module so the heavy `ai` deps stay in a lazy chunk.
 
 import { app, BrowserWindow, ipcMain } from 'electron'
-import { appendFileSync, existsSync, mkdirSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'fs'
 import { createHash } from 'node:crypto'
 import { join } from 'path'
 
@@ -152,8 +152,17 @@ import type { SkillCatalogEntry } from '../../ai-gateway/prompts/stable_prompt'
 // import inside startEmbeddedAiGateway: MAILAGENT_LLM_PROVIDER_REGISTRY off keeps the module
 // graph free of the new SDKs (a broken provider package can't take down the flag-off gateway).
 // Pinned by tests/ai-gateway/provider_lazy_import.test.ts.
-import { parseProviderRef, type ProviderModelResolver } from '../../ai-gateway/providerRef'
+import {
+  parseProviderRef,
+  ProviderImageModelError,
+  type ProviderModelResolver
+} from '../../ai-gateway/providerRef'
 import { resolveContextWindow } from '@shared/modelCatalog/contextWindow'
+// task 09-02 — IMAGE_GEN_MODEL is hot-read from .env per tool assembly (no restart banner), and
+// the generate_image store lives next to data/attachments under DATA_ROOT.
+import { resolveDataRoot } from './db'
+import { resolveEnvPath } from './lib/env-path'
+import { parseEnv, toRecord } from './lib/env-parser'
 import {
   backfillLegacyDefaultProviderKey,
   getLlmProviderModelResolver,
@@ -211,6 +220,21 @@ function gatewayLogLine(rec: Record<string, unknown>): void {
     appendFileSync(p, JSON.stringify({ ts: new Date().toISOString(), ...rec }) + '\n', 'utf8')
   } catch {
     /* logging never throws */
+  }
+}
+
+/** task 09-02 — the IMAGE_GEN_MODEL providerRef as currently in the managed .env, or null when
+ *  unset / unreadable. Read per tool assembly (one small file parse per chat turn) so a Settings
+ *  change takes effect on the next message without a restart — the same hot-read posture as the
+ *  serve-api's dotenv_values keys, and why the EnvField is `hotReload`. Never throws. */
+function readImageGenModelRef(): string | null {
+  try {
+    const path = resolveEnvPath()
+    if (!existsSync(path)) return null
+    const value = toRecord(parseEnv(readFileSync(path, 'utf8')))['IMAGE_GEN_MODEL']?.trim()
+    return value ? value : null
+  } catch {
+    return null
   }
 }
 
@@ -620,6 +644,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     await backfillLegacyDefaultProviderKey()
     providerModelResolver = await getLlmProviderModelResolver()
   }
+  // task 09-02 — generate_image store, sibling of data/attachments (created lazily by the tool).
+  const generatedImagesDir = join(resolveDataRoot(), 'data', 'generated')
   // Phase 03a — domain client → Python serve-api READ endpoints (loopback +
   // same-machine local token, mirrors the renderer's auth leg). The read-tool
   // registry binds to it; the gateway core never reaches SQLite directly.
@@ -1578,6 +1604,24 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
                 sessionId: parentSessionId ?? null
               }
             : undefined,
+          // task 09-02 — generate_image deps. The model ref is hot-read from .env on every
+          // assembly (Settings change → next turn); the resolver is the flag-on registry one
+          // (flag off → typed E_IMAGE_MODEL_UNSUPPORTED, never a bare throw). The session id
+          // scopes the on-disk folder + the chain-edit file_id namespace. Registered in manual
+          // chat only through the outbound class row (tools/index.ts).
+          imageGen: {
+            modelRef: readImageGenModelRef(),
+            resolveImageModel: (ref) =>
+              providerModelResolver?.resolveImageModel
+                ? providerModelResolver.resolveImageModel(ref)
+                : Promise.reject(
+                    new ProviderImageModelError(
+                      'LLM provider registry is off — image models need MAILAGENT_LLM_PROVIDER_REGISTRY on'
+                    )
+                  ),
+            generatedDir: generatedImagesDir,
+            sessionId: parentSessionId ?? null
+          },
           findSessionByParentToolCall,
           createAgentCallSession: (input) =>
             createAgentSession({
@@ -1813,6 +1857,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     islandAgentEnabled,
     serverResumeEnabled,
     approvalStash,
+    // task 09-02 — the generate_image store root; the GET /api/ai/generated/:fileId route reads
+    // from the SAME path the tool factory above writes to.
+    generatedImagesDir,
     approvalTtlResponseEnabled: customAgentCallEnabled,
     // B1 — detach-tolerant chat runs (MAILAGENT_CHAT_DETACHED_RUNS, default on). Registry undefined
     // when the env kill-switch is false → /api/ai/chat keeps close→abort + run endpoints 404.

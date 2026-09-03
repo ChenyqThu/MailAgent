@@ -161,6 +161,11 @@ export const MANAGED_ENV_KEYS = [
   // (memory_capture_model, default claude-haiku-4-5) → 改动需重启 serve-api 生效
   // (EnvField markRestartRequired), 同 LLM_MODEL. CustomAiSection 的记忆抽取模型下拉写它.
   'MEMORY_CAPTURE_MODEL',
+  // 图像生成模型 (task 09-02 misc04)。值 = providerRef `providerId:modelId`, 只有 openai /
+  // openai-compatible 协议的 provider 可选 (AI SDK 只有这两家有 imageModel)。Node gateway 每次
+  // 装配工具时从 .env 热读 (ai_gateway_lifecycle readImageGenModelRef) → hotReload, 不拉重启横幅。
+  // Python 不读它 (无 Python 侧对等能力)。设置-AI「图像生成模型」区 ImageModelSection 写它。
+  'IMAGE_GEN_MODEL',
   // AI 记忆双开关 (Lane 2 #8, 隐私级意图「AI 要不要记住我说的话」——此前能选抽取模型、
   // 却关不掉记忆, 是倒置的)。两个都默认 ON (2026-07-02 cutover), 显式 false 应急回退;
   // EnvField defaultOn 让未设时如实显示为开。CAPTURE = Node gateway 启动 envBool 读一次

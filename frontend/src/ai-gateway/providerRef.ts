@@ -8,7 +8,7 @@
 //    the typed credentials error — lives HERE, with zero runtime imports (the 'ai' import below is
 //    type-only, fully erased). Never add a value import of an SDK package to this file.
 
-import type { LanguageModel } from 'ai'
+import type { ImageModel, LanguageModel } from 'ai'
 
 export type ProviderProtocol =
   | 'anthropic'
@@ -73,6 +73,27 @@ export interface ResolvedProviderModel extends ParsedProviderRef {
 
 export interface ProviderModelResolver {
   resolve(ref: string): Promise<ResolvedProviderModel>
+  /** task 09-02 (generate_image) — resolve an IMAGE model by the same providerRef vocabulary.
+   *  Only openai / openai-compatible rows can answer (the two AI SDK providers with an image
+   *  model); any other protocol throws `ProviderImageModelError`. Optional so the legacy /
+   *  test-mock resolvers stay source-compatible — absent means "no image model available". */
+  resolveImageModel?(ref: string): Promise<ImageModel>
+}
+
+/** Protocols whose AI SDK provider implements `imageModel()` (OpenAI /images/* wire shape).
+ *  Doubles as the Settings candidate filter (ImageModelSection) — one list, two consumers. */
+export const IMAGE_MODEL_PROTOCOLS: ReadonlySet<string> = new Set(['openai', 'openai-compatible'])
+
+/** task 09-02 — the selected provider cannot serve an image model (wrong protocol / not enabled).
+ *  Typed so the generate_image tool can turn it into a model-readable tool error that points the
+ *  user at Settings instead of an opaque upstream failure. */
+export class ProviderImageModelError extends Error {
+  readonly code = 'E_IMAGE_MODEL_UNSUPPORTED' as const
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'ProviderImageModelError'
+  }
 }
 
 export type ProviderSnapshotFetcher = () => Promise<ProviderSnapshot>

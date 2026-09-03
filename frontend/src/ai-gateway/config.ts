@@ -741,6 +741,11 @@ export interface AiGatewayConfig {
    *  turn pauses awaiting approval; POST /api/ai/approval/decide claims + resumes from it. Omitted →
    *  no server-side resume (renderer path only). */
   approvalStash?: ApprovalRunStash
+  /** task 09-02 — root of the generate_image store (DATA_ROOT/data/generated). Registers the
+   *  read-only `GET /api/ai/generated/:fileId` route (server.ts); the tool factory gets the SAME
+   *  path through buildTools' imageGen deps so writer and reader agree by construction. Omitted
+   *  (hand-built cfg / harness) → the route answers 404 like any unknown path. */
+  generatedImagesDir?: string
   /** P2 custom_agent_call — emit per-entry approvalTtlSec on paused headless results. Main-process
    *  flag only; absent/false preserves the legacy result shape. */
   approvalTtlResponseEnabled?: boolean

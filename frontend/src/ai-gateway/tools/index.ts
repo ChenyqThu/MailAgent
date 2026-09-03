@@ -47,6 +47,7 @@ import {
 } from './matters'
 import { createNotionAgentTools } from './notion_agent'
 import { createFeedbackTools, type FeedbackSubmitFn } from './feedback'
+import { createImageTools, type ImageGenToolDeps } from './image'
 import {
   admitDynamicTools,
   applyContextModePolicy,
@@ -208,6 +209,12 @@ export interface BuildGatewayToolsOpts {
     hooks: GroupToolHooks
     sessionId: number | null
   }
+  /** task 09-02 — generate_image 的宿主依赖（图像模型 resolver + 落盘目录 + 当前会话 id +
+   *  热读到的 IMAGE_GEN_MODEL）。给了它（且有 approvalGuard）才注册；缺任一 → 不注册 →
+   *  ToolSet 与本批之前逐字节相同。🔴 没有 `*Enabled` flag（「确定要做的功能不搞灰度开关」）：
+   *  它的开关面是设置-AI 有没有选图像模型（没选 = 工具在、调用返回 typed error 指去设置）+
+   *  class outbound 的场地地板（manual_chat 之外结构性不注册，这就是 prd 的「headless 排除」）。 */
+  imageGen?: ImageGenToolDeps
   /** calendar epic 4.1/4.2 (MAILAGENT_CALENDAR_AGENT_TOOLS) — when true AND approvalGuard is
    *  supplied, the five calendar tools are added: calendar_events_list / calendar_event_get
    *  (silent reads; event text comes back CALENDAR_EVENT-fenced) + calendar_event_reschedule /
@@ -711,6 +718,22 @@ export function buildGatewayTools(
       createFeedbackTools(opts.submitFeedback, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
+        oneShot: opts.oneShotWrites,
+        contextMode
+      })
+    )
+  }
+  // task 09-02 — generate_image（生成 / 编辑图片）。CORE_UNGATED（无 skill 归属），class
+  // outbound（prompt + 用户贴的图出境到图像 provider）⇒ applyContextModePolicy 在 manual_chat 之外
+  // 整个剔除。与 submit_feedback 不同：它**接** per-tool 档（tool_prefs 出厂 auto，owner 可调
+  // ask / deny），因为产物是本地文件、可反复重做，出境面与 web_search 同型。
+  if (opts.imageGen && opts.approvalGuard) {
+    Object.assign(
+      tools,
+      createImageTools(collector, opts.approvalGuard, opts.imageGen, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
+        toolApprovalPrefs: prefTiers,
         oneShot: opts.oneShotWrites,
         contextMode
       })

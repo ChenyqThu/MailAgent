@@ -204,6 +204,9 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   // `new Set([...])` 整段做正则抽取的，注释里的 `xxx` 会被当成工具名（这条注释原本写着
   // 单引号的 outbound，闸当场把它当成一个「缺 catalog 行的工具」报红）。
   'submit_feedback',
+  // task 09-02 —— generate_image（图像生成 / 编辑）。无 skill 归属（Python 无对等能力），
+  // 永不 skill-gated；开关面 = 设置-AI 的 IMAGE_GEN_MODEL 有没有配 + outbound class 的场地地板。
+  'generate_image',
   // L4 群聊 g2 —— 群工具面四件（labs labs_group_agents）。Python 无 group builtin skill，
   // GATEWAY_SKILL_TOOLS 无映射，永不 skill-gated；它们的开关面是 labs 实验开关 + class
   // capability_change 的场地地板 + 群 run 内的工厂选择，都不是 skill toggle。

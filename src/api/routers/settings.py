@@ -142,6 +142,8 @@ _MANAGED_ENV_KEYS: List[str] = [
     "LLM_CACHE_TTL",
     # memory.md auto-capture 抽取模型（CustomAiSection 的下拉写它）。
     "MEMORY_CAPTURE_MODEL",
+    # 图像生成模型 providerRef（设置-AI「图像生成模型」区写它；Node gateway 热读，Python 不读）。
+    "IMAGE_GEN_MODEL",
     # AI 记忆双开关 (Lane 2 #8, 均默认 ON)。CAPTURE = gateway 启动读一次 (restart);
     # RETRIEVAL = chat.py 每请求 dotenv_values 热读 (保存即生效)。
     "MAILAGENT_MEM0_CAPTURE",

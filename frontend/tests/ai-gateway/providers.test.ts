@@ -6,7 +6,8 @@ const mocks = vi.hoisted(() => {
       const provider = vi.fn((modelId: string) => ({ modelId }))
       return Object.assign(provider, {
         options,
-        languageModel: vi.fn((modelId: string) => ({ modelId }))
+        languageModel: vi.fn((modelId: string) => ({ modelId })),
+        imageModel: vi.fn((modelId: string) => ({ imageModelId: modelId }))
       })
     })
 
@@ -18,12 +19,21 @@ const mocks = vi.hoisted(() => {
     createGoogleGenerativeAI: makeProviderFactory(),
     createOpenRouter: makeProviderFactory(),
     createProviderRegistry: vi.fn(
-      (providers: Record<string, { languageModel(modelId: string): unknown }>) => ({
+      (
+        providers: Record<
+          string,
+          { languageModel(modelId: string): unknown; imageModel(modelId: string): unknown }
+        >
+      ) => ({
         languageModel(ref: string) {
           const separatorIndex = ref.indexOf(':')
           return providers[ref.slice(0, separatorIndex)]!.languageModel(
             ref.slice(separatorIndex + 1)
           )
+        },
+        imageModel(ref: string) {
+          const separatorIndex = ref.indexOf(':')
+          return providers[ref.slice(0, separatorIndex)]!.imageModel(ref.slice(separatorIndex + 1))
         }
       })
     ),
@@ -56,6 +66,8 @@ import {
   createProviderModelResolver,
   isProviderCredentialsError,
   parseProviderRef,
+  ProviderImageModelError,
+  resolveImageModel,
   resolveProviderModel,
   type ProviderSnapshot,
   type ProviderSnapshotProvider
@@ -408,5 +420,67 @@ describe('createProviderModelResolver', () => {
 
     await expect(resolver.resolve('claude-legacy')).rejects.toSatisfy(isProviderCredentialsError)
     expect(mocks.createAnthropic).not.toHaveBeenCalled()
+  })
+})
+
+// task 09-02 — image models: only the two OpenAI-shaped protocols can answer; the row key rule
+// is the language-model rule; the resolver has NO legacy leg (an env anthropic config has no
+// image model), so a cold-start fetch failure is a typed error, not a silent fallback.
+describe('resolveImageModel', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it.each(['openai', 'openai-compatible'])('%s → registry.imageModel(providerId:modelId)', (protocol) => {
+    const built = buildProviderRegistry(snapshot(1, [provider('img', protocol)]))
+    expect(resolveImageModel(built, 'img:gpt-image-1')).toEqual({ imageModelId: 'gpt-image-1' })
+  })
+
+  it.each(['anthropic', 'google', 'deepseek', 'openrouter'])(
+    '%s → ProviderImageModelError (no image model in that SDK)',
+    (protocol) => {
+      const built = buildProviderRegistry(snapshot(1, [provider('p', protocol)]))
+      expect(() => resolveImageModel(built, 'p:whatever')).toThrow(ProviderImageModelError)
+      expect(() => resolveImageModel(built, 'p:whatever')).toThrow(/openai/)
+    }
+  )
+
+  it('unknown / disabled provider → ProviderImageModelError', () => {
+    const built = buildProviderRegistry(
+      snapshot(1, [provider('gone', 'openai', { enabled: false })])
+    )
+    expect(() => resolveImageModel(built, 'gone:gpt-image-1')).toThrow(ProviderImageModelError)
+  })
+
+  it('openai without a key → ProviderCredentialsError; openai-compatible may run keyless', () => {
+    const built = buildProviderRegistry(
+      snapshot(1, [
+        provider('oai', 'openai', { apiKey: '' }),
+        provider('lan', 'openai-compatible', { apiKey: '' })
+      ])
+    )
+    let thrown: unknown
+    try {
+      resolveImageModel(built, 'oai:gpt-image-1')
+    } catch (e) {
+      thrown = e
+    }
+    expect(isProviderCredentialsError(thrown)).toBe(true)
+    expect(resolveImageModel(built, 'lan:flux')).toEqual({ imageModelId: 'flux' })
+  })
+
+  it('resolver.resolveImageModel: snapshot-backed; cold-start failure is typed (no legacy leg)', async () => {
+    const ok = createProviderModelResolver({
+      fetchSnapshot: vi.fn().mockResolvedValue(snapshot(1, [provider('oai', 'openai')])),
+      legacy: { apiKey: 'legacy-key', baseUrl: 'https://legacy.test/api' }
+    })
+    expect(await ok.resolveImageModel!('oai:gpt-image-1')).toEqual({ imageModelId: 'gpt-image-1' })
+
+    const cold = createProviderModelResolver({
+      fetchSnapshot: vi.fn().mockRejectedValue(new Error('offline')),
+      legacy: { apiKey: 'legacy-key', baseUrl: 'https://legacy.test/api' },
+      logger: { warn: vi.fn() }
+    })
+    await expect(cold.resolveImageModel!('oai:gpt-image-1')).rejects.toBeInstanceOf(
+      ProviderImageModelError
+    )
   })
 })

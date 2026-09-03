@@ -85,6 +85,8 @@ describe('componentRegistry — resolution', () => {
       'email_resync',
       'file_read',
       'file_write',
+      // task 09-02 — generate_image（生成中 / 完成 / 失败 三活面 + ask 档的审批面）。
+      'generate_image',
       // L4 群聊 g2 — 两个群写工具各有一张卡（建群 / 投递）。
       'group_create',
       'group_post',
@@ -126,6 +128,7 @@ describe('componentRegistry — resolution', () => {
       'FeedbackApprovalCard',
       'GroupCreateCard',
       'GroupPostCard',
+      'ImageGenCard',
       'MatterWriteCard',
       'NotionSyncCard',
       'SendApprovalCard',

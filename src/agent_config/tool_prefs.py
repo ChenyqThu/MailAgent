@@ -102,6 +102,10 @@ BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     # ── 第一刀：联网读（URL query 是出境面，owner 已在 07-16 AE 语义里接受过一次）──
     BuiltinToolPolicy("web_fetch", "web", "auto"),
     BuiltinToolPolicy("web_search", "web", "auto"),
+    # task 09-02：generate_image（图像生成 / 编辑）。出境面与 web_search 同型（prompt +
+    # 用户贴的图发给配置的图像 provider），产物是本地文件、可反复重做，出厂 auto 可配 ask/deny。
+    # gateway 侧 class 是 outbound（headless / im 结构性不注册），group 归 "web" 只管设置页分组。
+    BuiltinToolPolicy("generate_image", "web", "auto"),
     # ── B 组：日历（D4 一刀切拆开定档；delete 是 C 组 danger_auto）────────────────
     BuiltinToolPolicy("calendar_event_reschedule", "calendar", "ask"),
     BuiltinToolPolicy("calendar_event_rsvp", "calendar", "ask"),

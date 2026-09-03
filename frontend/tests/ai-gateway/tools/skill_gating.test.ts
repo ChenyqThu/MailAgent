@@ -76,6 +76,15 @@ function buildAllTools() {
     // 提交实现才注册，所以 FULL-set 的 drift guard 要在这里把它接上，否则「classified 但不是
     // 真工具」会红。
     submitFeedback: async () => ({ submissionBlockId: 'blk-test' }),
+    // task 09-02 — generate_image（CORE_UNGATED，registration 条件是「给了 deps」），同理。
+    imageGen: {
+      modelRef: 'oai:gpt-image-1',
+      resolveImageModel: async () => {
+        throw new Error('unused in assembly tests')
+      },
+      generatedDir: '/tmp/unused-generated',
+      sessionId: 1
+    },
     // L4 群聊 g2 — 群工具面四件（CORE_UNGATED，无 skill 归属）。🔴 同上那条红字纪律的第二种
     // 形状：不是 flag 而是一整块 opts，漏了它 FORWARD 守护就看不见这四个名字。
     groupTools: { enabled: true, isGroupSession: false, hooks: fakeGroupHooks(), sessionId: 1 },
@@ -314,6 +323,15 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
       // sweep below would assert nine tools it never asked for.
       // task 08-27 P4a — submit_feedback 同理（CORE_UNGATED，registration 条件是「给了提交实现」）。
       submitFeedback: async () => ({ submissionBlockId: 'blk-test' }),
+      // task 09-02 — generate_image 同理（CORE_UNGATED floor sweep 会断言它）。
+      imageGen: {
+        modelRef: 'oai:gpt-image-1',
+        resolveImageModel: async () => {
+          throw new Error('unused in assembly tests')
+        },
+        generatedDir: '/tmp/unused-generated',
+        sessionId: 1
+      },
       // L4 群聊 g2 — 群工具面同样是 CORE_UNGATED，这个探针必须把它们建出来，否则下面的
       // floor sweep 会去断言四个它自己没要过的工具。
       groupTools: { enabled: true, isGroupSession: false, hooks: fakeGroupHooks(), sessionId: 1 },

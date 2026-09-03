@@ -37,6 +37,8 @@ EXPECTED_DEFAULT_AUTO = {
     "email_draft_update",
     "web_fetch",
     "web_search",
+    # task 09-02：图像生成 —— 出境面与 web_search 同型，产物是本地文件，出厂 auto 可配。
+    "generate_image",
     "skill_uninstall",
     "skill_draft_create",
     "skill_draft_write_file",

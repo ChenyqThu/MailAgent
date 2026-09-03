@@ -56,6 +56,7 @@ import { EnvSecretField } from '../parts/EnvSecretField'
 import { ModelServicesSection } from '../providers/ModelServicesSection'
 import { buildModelOptionGroups } from '../providers/modelOptionGroups'
 import { CustomAiSection } from '../CustomAiSection'
+import { ImageModelSection } from '../custom-ai/ImageModelSection'
 import { AI_TAB_ANCHOR_IDS, AI_TAB_ANCHOR_SCROLL_MT, useAiTabAnchorItems } from '../aiTabAnchors'
 import { useSettingsScrollRef } from '../settingsScrollContext'
 
@@ -580,6 +581,11 @@ export function AiTab(): React.ReactElement {
             </Row>
           )}
         </Section>
+      </div>
+
+      {/* task 09-02 — 图像生成模型（generate_image 工具用）。registry off 时该区自己 return null。 */}
+      <div id={AI_TAB_ANCHOR_IDS.imageGenModel} className={AI_TAB_ANCHOR_SCROLL_MT}>
+        <ImageModelSection />
       </div>
 
       <div id={AI_TAB_ANCHOR_IDS.cache} className={AI_TAB_ANCHOR_SCROLL_MT}>

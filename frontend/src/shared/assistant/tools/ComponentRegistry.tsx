@@ -30,6 +30,7 @@ import { SimpleApprovalCard } from './generic/SimpleApprovalCard'
 import { FeedbackApprovalCard } from './generic/FeedbackApprovalCard'
 import { CalendarApprovalCard } from './calendar/CalendarApprovalCard'
 import { MatterWriteCard } from './matters/MatterWriteCard'
+import { ImageGenCard } from './image/ImageGenCard'
 
 /** One registration: an A2UI component (by name) + the tool names that render through it. */
 export interface ToolUIRegistration {
@@ -238,5 +239,13 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
     component: A2UI_COMPONENTS.FeedbackApprovalCard,
     toolNames: ['submit_feedback'],
     render: FeedbackApprovalCard
+  },
+  // task 09-02 — generate_image。一张卡三个活面（生成中占位 / 图片 + 放大 + 下载 / 失败 + 重试）
+  // 加审批面：出厂 auto 免卡，但 owner 把档位调成 ask 时同一张卡出 approve / reject —— 否则
+  // 又是 ToolTraceCard 无按钮 spinner 那个死锁。
+  {
+    component: A2UI_COMPONENTS.ImageGenCard,
+    toolNames: ['generate_image'],
+    render: ImageGenCard
   }
 ])

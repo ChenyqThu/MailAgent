@@ -2170,3 +2170,25 @@ export const submitFeedbackSchema = z.object({
     )
 })
 export type SubmitFeedbackInput = z.infer<typeof submitFeedbackSchema>
+
+/** generate_image (task 09-02) — text → image, or edit when `source_images` is non-empty.
+ *  🔴 Flat object on purpose (reference_prompt_schema_drift_trap): the generate/edit branch is
+ *  decided by `source_images.length`, never by a oneOf/not schema branch. */
+export const generateImageSchema = z.object({
+  prompt: z.string().min(1).max(4000),
+  size: z
+    .string()
+    .regex(/^\d{3,4}x\d{3,4}$/, 'size must look like 1024x1024')
+    .optional()
+    .describe('Requested "<width>x<height>" (model-dependent). Omit for the model default.'),
+  n: z.number().int().min(1).max(2).default(1),
+  source_images: z
+    .array(z.string().min(1).max(200))
+    .max(4)
+    .default([])
+    .describe(
+      'Edit mode when non-empty: file_id values from earlier generate_image results, or ' +
+        '"attached:last" / "attached:<n>" for images the user attached (1-based, conversation order).'
+    )
+})
+export type GenerateImageInput = z.infer<typeof generateImageSchema>

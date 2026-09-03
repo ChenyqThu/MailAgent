@@ -382,6 +382,13 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // policyEvaluate、不接 per-tool 档（tool_prefs configurable=False），所以「以后都自动」
   // 这条路在四个层面上都不存在。
   submit_feedback: 'outbound',
+  // generate_image (task 09-02) — the prompt (and any source images the user attached / a prior
+  // generation) leave the machine toward the configured image provider (IMAGE_GEN_MODEL). Class
+  // 'outbound' for the same reason as notion_agent_chat: owner-authored content egresses to an
+  // external service, there is NO grants key, so a headless / im run structurally never gets it
+  // (the prd's「headless 排除」is this class row, not a venue gate). Unlike the send it is a local
+  // artifact producer — tool_prefs.py ships it default auto (owner-configurable ask / deny).
+  generate_image: 'outbound',
   // exec — local command / filesystem (S2 W1). manual_chat-only; all three are edit-tier always-ask
   // (never auto-approved by approvalMode) UNLESS a structured PolicyRule whitelist the owner set
   // matches (needsApproval consults /api/agent/policy/evaluate — auto_allow skips the card,

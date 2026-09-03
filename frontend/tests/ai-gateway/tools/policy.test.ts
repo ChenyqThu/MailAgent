@@ -80,6 +80,16 @@ function buildAllTools(contextMode?: AgentContextMode) {
     // 提交实现才注册，所以 FULL-set 的 drift guard 要在这里把它接上，否则「classified 但不是
     // 真工具」会红。
     submitFeedback: async () => ({ submissionBlockId: 'blk-test' }),
+    // task 09-02 — generate_image（第四个 'outbound' 行）。同 submit_feedback：没有 flag，给了
+    // deps 才注册，FULL-set drift guard 要在这里接上才看得见它。
+    imageGen: {
+      modelRef: 'oai:gpt-image-1',
+      resolveImageModel: async () => {
+        throw new Error('unused in assembly tests')
+      },
+      generatedDir: '/tmp/unused-generated',
+      sessionId: 1
+    },
     // L4 群聊 g2 — 群工具面四件（labs labs_group_agents）。isGroupSession:false = 主 agent 单聊
     // 那条装配路径（群 run 内的成员 / 法官工厂不经 buildGatewayTools）。
     groupTools: { enabled: true, isGroupSession: false, hooks: fakeGroupHooks(), sessionId: 1 },

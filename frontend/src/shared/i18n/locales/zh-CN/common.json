@@ -1396,6 +1396,22 @@
       "summaryDisable": "停用技能「{name}」",
       "error": "操作失败，请重试。"
     },
+    "imageGenCard": {
+      "title": "生成图片",
+      "titleEdit": "编辑图片",
+      "pendingLabel": "将把以下描述发给图像模型生成图片（需你批准）：",
+      "pendingLabelEdit": "将基于 {count} 张图按以下描述编辑（需你批准）：",
+      "generating": "生成中…",
+      "editing": "编辑中…",
+      "sources": "基于 {count} 张图",
+      "download": "下载",
+      "downloadFailed": "下载失败：{error}",
+      "preview": "查看大图",
+      "imageAlt": "生成的图片",
+      "retry": "重试",
+      "retryPrompt": "请重新生成这张图：{prompt}",
+      "error": "图片生成失败"
+    },
     "simpleApprovalCard": {
       "webFetch": {
         "title": "联网抓取网页",
@@ -2713,6 +2729,14 @@
       "saveError": "无法保存记忆",
       "deleteError": "无法删除记忆",
       "loadError": "无法加载记忆"
+    },
+    "imageGenModel": {
+      "title": "图像生成模型",
+      "desc": "对话里 generate_image 工具生成或编辑图片时所用的模型。只能选 OpenAI 或 OpenAI 兼容协议的服务商（AI SDK 只有这两类实现了图像接口）。保存即生效，不需重启。",
+      "label": "图像模型",
+      "helper": "候选集 = 「模型服务」里已启用的 OpenAI / OpenAI 兼容服务商的已启用模型。留空时，对话里请求画图会提示先来这里配置。",
+      "placeholder": "未配置",
+      "noCandidates": "没有可选模型：先在「模型服务」里添加并启用一个 OpenAI 或 OpenAI 兼容协议的服务商，并勾选其图像模型（如 gpt-image-1）。"
     },
     "memoryCaptureModel": {
       "title": "记忆抽取模型",
