@@ -1597,6 +1597,22 @@ async def run_service():
     except Exception as e:
         logger.warning(f"[db_safety] library.db 安全检查异常 (不阻断启动): {e}")
 
+    # matters ← library 的存在性 / 摘要回调。进程级事实, serve-api 与主服务各装一次
+    # (跟进 run 跑在主服务里)。不装 = 已关联的库文件恒判不可用、run 提议库文件恒被驳回。
+    try:
+        from src.library.db import resolve_library_db_path, resolve_library_root
+        from src.library.service import LibraryService
+        from src.library.resource_resolver import install_library_resolver
+
+        _sync_db = config.sync_store_db_path
+        install_library_resolver(
+            lambda: LibraryService(
+                resolve_library_db_path(_sync_db), resolve_library_root(_sync_db), _sync_db
+            )
+        )
+    except Exception as e:
+        logger.warning(f"[library] matters resolver 未装上 (事项里的库文件会显示不可用): {e}")
+
     app = EmailNotionSyncApp()
 
     # mem guard (MAILAGENT_MEM_LIMIT_MB): RSS 超限 → 诊断 dump + 优雅退出 +
