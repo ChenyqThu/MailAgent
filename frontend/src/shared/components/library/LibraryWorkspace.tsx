@@ -30,6 +30,7 @@ import { parseLibraryFileParam } from './deeplink'
 import { isProjection, refKey, refOf, type LibraryFileRef } from './fileMeta'
 import { FilePreview } from './FilePreview'
 import { FolderView } from './FolderView'
+import { LibrarySearchBar, LibrarySearchResults } from './LibrarySearchPanel'
 import { useLibraryApi, useLibraryTreeQuery, useLibraryUpload } from './hooks'
 import { LibraryTreePanel, rootLabelKey } from './LibraryTreePanel'
 import { revealLibraryTarget } from './libraryIpc'
@@ -64,6 +65,9 @@ export function LibraryWorkspace(): ReactElement {
   // 投影行没有 library id（`id: null`），store 的 `selectedFileId` 装不下它 —— 另存一份
   // attachment 寻址。两者互斥：选中哪一种就把另一种清掉。
   const [attachmentRef, setAttachmentRef] = useState<LibraryFileRef | null>(null)
+  // 全库搜索的关键词。非空 = 内容区显示结果面（不是「另开一个页面」，清空即原样回来）。
+  const [query, setQuery] = useState('')
+  const searching = query.trim() !== ''
   const fileRef: LibraryFileRef | null =
     selectedFileId !== null ? { id: selectedFileId } : attachmentRef
 
@@ -187,6 +191,17 @@ export function LibraryWorkspace(): ReactElement {
     [api, openFile, openFolder, t]
   )
 
+  // 命中一行 = 去那个文件：清掉搜索词（否则结果面继续盖着预览）、展开它所在的文件夹、选中它。
+  const openHit = useCallback(
+    (hit: { id: number; parent_path: string }): void => {
+      setQuery('')
+      revealPath(hit.parent_path)
+      setAttachmentRef(null)
+      selectFile(hit.id)
+    },
+    [revealPath, selectFile]
+  )
+
   const projection = isProjection({ path })
   const trash = path === TRASH_SLUG || path.startsWith(`${TRASH_SLUG}/`)
   const readonly =
@@ -230,7 +245,13 @@ export function LibraryWorkspace(): ReactElement {
           </div>
         </div>
         <div className="flex h-full min-h-0 flex-col overflow-hidden">
-          {fileRef !== null ? (
+          {/* 全库搜索恒在页头（design §9.1 / mockup B3）：与文件夹工具条上那个窄的
+              「在当前文件夹中过滤」是两件事，刻意不合成一个框。有关键词时结果面**顶掉**
+              下面的文件夹 / 预览，清空即回到原来看的东西。 */}
+          <LibrarySearchBar value={query} onChange={setQuery} />
+          {searching ? (
+            <LibrarySearchResults query={query} onSelectFile={openHit} />
+          ) : fileRef !== null ? (
             <FilePreview
               // 换文件 = 换实例：编辑态草稿 / 冲突态 / 历史抽屉都是「这一个文件」的局部状态，
               // 跨文件保留下来就会把 A 的未保存文本带进 B 的编辑框。
