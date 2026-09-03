@@ -319,6 +319,14 @@ def library_file_inline(request: Request, file_id: int, service: LibraryService 
     )
 
 
+@router.get("/file/{file_id}/history/{history_id}")
+def library_file_history_snapshot(
+    request: Request, file_id: int, history_id: int, service: LibraryService = Depends(get_library_service)
+):
+    """单条历史的快照正文 + 该行元数据。列表端点只给 snapshot_bytes，展开看正文走这条。"""
+    return _run(request, service.history_snapshot, file_id, history_id)
+
+
 @router.get("/file/{file_id}/history")
 def library_file_history(request: Request, file_id: int, service: LibraryService = Depends(get_library_service)):
     """最新在前，不带快照正文（``snapshot_bytes`` 代替）。"""

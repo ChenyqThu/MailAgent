@@ -404,3 +404,20 @@ def test_recent_orders_by_mtime_desc_and_excludes_trashed(lib):
     names = [f["filename"] for f in _data(c.get("/api/library/recent?limit=10"))["files"]]
     assert "new.md" not in names, "trashed 不进最近"
     assert names[0] == "old.md"
+
+
+def test_history_snapshot_returns_body_and_refuses_cross_file_ids(lib):
+    """快照正文按 (file_id, history_id) 取；只知道 history_id 读不到别的文件的正文。"""
+    c, svc = lib
+    a = _create(c, "my-docs", "a.md", "v1")
+    c.put(f"/api/library/file/{a['id']}", json={"content": "v2", "expected_hash": a["content_hash"]})
+    b = _create(c, "my-docs", "b.md", "other-secret")
+    hist = _data(c.get(f"/api/library/file/{a['id']}/history"))
+    assert hist and "content_snapshot" not in hist[0], "列表不带正文，只给 snapshot_bytes"
+    # 语义两条：列表新→旧排序，快照存的是「该次写入后」的正文（不是写入前）
+    assert [h["id"] for h in hist] == sorted((h["id"] for h in hist), reverse=True)
+    assert _data(c.get(f"/api/library/file/{a['id']}/history/{hist[0]['id']}"))["content_snapshot"] == "v2"
+    snap = _data(c.get(f"/api/library/file/{a['id']}/history/{hist[-1]['id']}"))
+    assert snap["content_snapshot"] == "v1"
+    # 拿 a 的 history_id 去 b 的路径下读 → 404，不是把 a 的正文交出去
+    assert _err(c.get(f"/api/library/file/{b['id']}/history/{hist[0]['id']}"))[:2] == (404, "E_NOT_FOUND")

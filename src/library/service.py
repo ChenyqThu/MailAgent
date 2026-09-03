@@ -958,6 +958,23 @@ class LibraryService:
         finally:
             conn.close()
 
+    def history_snapshot(self, file_id: int, history_id: int) -> dict[str, Any]:
+        """单条历史的快照正文。
+
+        列表端点只给 ``snapshot_bytes``（一次拉 50 条正文太重），要看正文走这里。
+        🔴 必须校验 ``history_id`` 确实属于 ``file_id``：不校验的话，知道任意 history_id
+        就能读到别的文件的正文，等于绕过按文件的存在性检查。
+        """
+        conn = self.db.connect()
+        try:
+            self._require_file(conn, file_id)
+            row = self.repo.get_history(conn, int(history_id))
+            if row is None or int(row["file_id"]) != int(file_id):
+                raise LibraryError("E_NOT_FOUND", f"history {history_id} not found for file {file_id}")
+            return dict(row)
+        finally:
+            conn.close()
+
     # ── 写面 ──────────────────────────────────────────────────────────────────
 
     def _assert_writable(self, mount: MountRoot, rel_path: str, actor: Actor, *, check_ext: bool = True) -> None:
