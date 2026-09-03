@@ -82,9 +82,19 @@ import { mainDirname, requireFromMain } from './lib/esm-paths'
 // Sprint 19 island F6 — mailagent:// deeplink (灵动岛 open_mail/open_notion →
 // 打开前端对应邮件/视图). 解析 + cold-start buffer 在 ./deeplink.
 import { dispatchDeeplink, extractDeeplinkFromArgv, setDeeplinkSink } from './deeplink'
+// 资料库（task 09-03 P1-L5）：两个 IPC（openPath / showInFolder）+ `libpreview://` 预览协议
+// （design §2.6：HTML 按浏览器语义渲染，走真实协议响应而不是 srcdoc，才能不继承 renderer 的
+// CSP）。scheme 注册必须早于 whenReady，见 registerLibraryPreviewScheme 注释。
+import { registerLibraryHandlers } from './handlers/library'
+import {
+  installLibraryPreviewProtocol,
+  registerLibraryPreviewScheme
+} from './library_preview_protocol'
 
 bootstrapDotenv()
 ensureCliApiKey()
+// 🔴 Electron 硬约束：privileged scheme 只能在 app ready 之前登记。
+registerLibraryPreviewScheme()
 
 // F6 — 注册 mailagent:// custom protocol scheme. dev 模式 (electron-vite 跑
 // electron 二进制) 需带 execPath + script path, 否则系统注册的是 Electron.app 而非
@@ -543,6 +553,9 @@ app.whenReady().then(async () => {
   registerOnboardingHandlers()
   // task 08-27 P4a — 快捷反馈 (截图 / 诊断包 / 提交 / 台账 / 表单页降级)。
   registerFeedbackHandlers()
+  // task 09-03 P1-L5 — 资料库：打开 / 访达显示（主进程持路径，renderer 只递 id）+ 预览协议。
+  registerLibraryHandlers()
+  installLibraryPreviewProtocol()
 
   ipcMain.on('ping', () => console.log('pong'))
 
