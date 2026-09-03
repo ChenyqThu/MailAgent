@@ -143,6 +143,7 @@ agent 与 UI 看到的路径恒为 **`<根 slug>/<相对路径>`**：内置根�
 | `GET /tree` | 扁平文件夹节点 + 挂载根摘要（**无 abs_path**）+ 文件总数 |
 | `GET /folder?path=&offset=&limit=&q=&sort=&dir=` | 文件夹条目；**服务端排序后分页**（`limit ≤ FOLDER_PAGE_SIZE`=200）。投影文件夹的 `q` 同时匹配文件名与来源列 |
 | `GET /files?ids=` | 批量按 id 现查（存在性 / 显示名），一次最多 200 个 |
+| `GET /recent?limit=` | 跨根按 mtime 取最近改动的文件（资料选择器在用户还没输关键词时用它）。🔴 **不能拿 `/folder` 拼**：那条按 `parent_path` 精确取直接子项，拼出来只覆盖各根顶层，会撒谎 |
 | `GET /search?q=&limit=&mode=` | `mode ∈ fts,hybrid`；FTS 双表 + 语义腿 RRF 融合 |
 | `GET /embed/status` · `POST /embed/download` · `POST /embed/rebuild` | 语义索引面板 / 下载权重 / 重建索引 |
 | `GET /file/{id}?max_bytes=` | 元数据 + 文本类正文 + `content_hash`（打开即对账） |
