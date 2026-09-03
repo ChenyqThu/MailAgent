@@ -7,7 +7,8 @@
 // `X-MailAgent-Local-Token`。所以本文件**一个 header 都不用加**，与 contacts / notifications
 // 同姿态；远程 web 构建打不到 loopback（域整个隐藏，design §2.5）。
 //
-// 🔴 wire 字段一律 snake_case，见 `api/types/library.ts` 的头注。
+// 🔴 wire 字段一律 snake_case；形状是 2026-09-03 与 serve-api lane 逐条对过的最终契约，
+// 见 `api/types/library.ts` 的头注。
 
 import { request, requestRaw } from './http_client'
 import type {
@@ -27,17 +28,28 @@ import type { LibraryMountMode, LibrarySource } from '@shared/libraryConstants'
 export const LIBRARY_VERSION_CONFLICT = 'E_VERSION_CONFLICT'
 
 /** 冲突判据单点 —— 编辑器要据此切「已被改动 / 显示当前版本 / 保留我的文本」三态。
- *  🔴 冲突时的**当前版本**要靠再拉一次 `getFile(id)`：envelope 的 error 只有
- *  `{code,message,hint}`，`http_client` 的解包不会把额外字段带出来，服务端即便在 409 body
- *  里塞了 hash + content 也到不了这里。 */
+ *  🔴 服务端在 409 的 `data` 里确实带了 `{content_hash, content}`（agent 工具那条腿要用），
+ *  但 `http_client` 在 `status==='error'` 上是**抛出**，只把 `{code,message,hint}` 带进
+ *  ApiError，`data` 到不了这里。UI 这条腿撞冲突后再拉一次 `file(id)` 取当前版本。 */
 export function isLibraryVersionConflict(error: unknown): boolean {
   return (error as { code?: string } | null)?.code === LIBRARY_VERSION_CONFLICT
 }
+
+/** 文件夹内容区的排序维度（design §2.3）。🔴 排序是**服务端**做的：分页 200 之后
+ *  客户端排序只能排当前这一页。 */
+export type LibraryFolderSort = 'name' | 'size' | 'type' | 'date'
+export type LibrarySortDirection = 'asc' | 'desc'
 
 export interface LibraryFolderQuery {
   /** 默认走服务端的 `FOLDER_PAGE_SIZE`（200）。 */
   limit?: number
   offset?: number
+  /** 文件夹内过滤（服务端 LIKE；投影区同时匹配文件名与来源列）。 */
+  q?: string
+  /** 缺省 `name`。🔴 投影文件夹忽略它，固定按邮件日期倒序。 */
+  sort?: LibraryFolderSort
+  /** 缺省 `asc`。 */
+  dir?: LibrarySortDirection
 }
 
 export interface LibraryCreateTextFile {
@@ -46,13 +58,14 @@ export interface LibraryCreateTextFile {
   content: string
   /** 缺省 `user`（人在 UI 里新建）。 */
   source?: LibrarySource
+  change_note?: string
 }
 
 export interface LibraryUploadFile {
   parent_path: string
   filename: string
-  mime: string
   bytes: ArrayBuffer | Uint8Array
+  source?: LibrarySource
 }
 
 export interface LibraryWrite {
@@ -76,13 +89,16 @@ export interface LibraryApi {
   moveFile(fileId: number, targetPath: string): Promise<LibraryFile>
   /** 软删 → `.trash`（挂载区走系统废纸篓，由服务端按 mount 分流）。 */
   trashFile(fileId: number): Promise<LibraryFile>
+  /** 立即永久删除（mockup F11）。🔴 只对**已在废纸篓**的行成立，服务端会拒别的行。 */
+  purgeFile(fileId: number): Promise<LibraryFile>
   restoreFile(fileId: number): Promise<LibraryFile>
   history(fileId: number): Promise<LibraryHistoryEntry[]>
   /** 回滚 = 用那条快照做一次普通写（享受同一道 CAS 校验，见 design §4）。 */
   rollback(fileId: number, historyId: number): Promise<LibraryFile>
   /** 邮件附件「另存到资料库」：真复制，从此与邮件解耦（design §1.1）。 */
   keepAttachment(attachmentId: number, targetPath: string): Promise<LibraryFile>
-  rescan(): Promise<LibraryRescanResult>
+  /** 不传 `mountId` = 全库对账。 */
+  rescan(mountId?: number): Promise<LibraryRescanResult>
   mounts(): Promise<LibraryMount[]>
   addMount(absPath: string, label?: string, mode?: LibraryMountMode): Promise<LibraryMount>
   patchMount(
@@ -90,7 +106,7 @@ export interface LibraryApi {
     patch: { label?: string; mode?: LibraryMountMode }
   ): Promise<LibraryMount>
   /** 卸载：挂载行标 `unmounted`、其下文件行标 `missing`，**不删行、不动磁盘**（§8.2）。 */
-  removeMount(mountId: number): Promise<void>
+  removeMount(mountId: number): Promise<LibraryMount>
 }
 
 export function createLibraryApi(baseUrl: string): LibraryApi {
@@ -101,7 +117,14 @@ export function createLibraryApi(baseUrl: string): LibraryApi {
 
     folder(path: string, query: LibraryFolderQuery = {}): Promise<LibraryFolderPage> {
       return request(baseUrl, 'GET', '/library/folder', {
-        query: { path, limit: query.limit, offset: query.offset }
+        query: {
+          path,
+          limit: query.limit,
+          offset: query.offset,
+          q: query.q,
+          sort: query.sort,
+          dir: query.dir
+        }
       })
     },
 
@@ -131,12 +154,13 @@ export function createLibraryApi(baseUrl: string): LibraryApi {
       // /email/compose-attachment`）同一姿态。多一条 multipart 路径就要在 renderer 侧
       // 复制一份 envelope 解包（`http_client` 的 request 恒 JSON.stringify body，
       // 解包函数不导出），而 envelope「只在一处解析」是那个文件的立身之本。
+      // mime 不发 —— 服务端按扩展名猜，发了也是被忽略。
       const bytes = input.bytes instanceof Uint8Array ? input.bytes : new Uint8Array(input.bytes)
       return requestRaw(baseUrl, 'POST', '/library/files', bytes, 'application/octet-stream', {
         query: {
           parent_path: input.parent_path,
           filename: input.filename,
-          mime: input.mime
+          source: input.source
         }
       })
     },
@@ -161,6 +185,10 @@ export function createLibraryApi(baseUrl: string): LibraryApi {
       return request(baseUrl, 'DELETE', `/library/file/${fileId}`)
     },
 
+    purgeFile(fileId: number): Promise<LibraryFile> {
+      return request(baseUrl, 'DELETE', `/library/file/${fileId}`, { query: { purge: true } })
+    },
+
     restoreFile(fileId: number): Promise<LibraryFile> {
       return request(baseUrl, 'POST', `/library/file/${fileId}/restore`)
     },
@@ -181,8 +209,10 @@ export function createLibraryApi(baseUrl: string): LibraryApi {
       })
     },
 
-    rescan(): Promise<LibraryRescanResult> {
-      return request(baseUrl, 'POST', '/library/rescan')
+    rescan(mountId?: number): Promise<LibraryRescanResult> {
+      return request(baseUrl, 'POST', '/library/rescan', {
+        body: mountId != null ? { mount_id: mountId } : {}
+      })
     },
 
     mounts(): Promise<LibraryMount[]> {
@@ -202,7 +232,7 @@ export function createLibraryApi(baseUrl: string): LibraryApi {
       return request(baseUrl, 'PATCH', `/library/mounts/${mountId}`, { body: patch })
     },
 
-    removeMount(mountId: number): Promise<void> {
+    removeMount(mountId: number): Promise<LibraryMount> {
       return request(baseUrl, 'DELETE', `/library/mounts/${mountId}`)
     }
   }

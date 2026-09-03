@@ -13,7 +13,7 @@
 //   · 父行缺失的文件夹升到自己的根下、根也认不出就自成一根 —— 树是唯一导航面，
 //     丢一行等于那一批文件在 UI 上不可达。
 
-import type { LibraryFolderNode, LibraryMount } from '@shared/api/types/library'
+import type { LibraryFolderNode, LibraryMountSummary } from '@shared/api/types/library'
 import { PROJECTION_SLUG, TOP_LEVEL_SLUGS, TRASH_SLUG } from '@shared/libraryConstants'
 
 /** 「挂载的文件夹」分组头的合成路径。🔴 服务端永不返回它，也不是任何文件的 parent。 */
@@ -39,7 +39,7 @@ export interface LibraryTreeNode {
   readonly: boolean
   /** 卷拔了 / 目录移走的挂载，向下传染（行不删，灰显）。 */
   unavailable: boolean
-  mount: LibraryMount | null
+  mount: LibraryMountSummary | null
   children: LibraryTreeNode[]
 }
 
@@ -51,7 +51,8 @@ export type LibraryTreeRow = Omit<LibraryTreeNode, 'children'> & {
 
 export interface LibraryTreeInput {
   folders: readonly LibraryFolderNode[]
-  mounts: readonly LibraryMount[]
+  /** `GET /library/tree` 内嵌的挂载投影（不带 `abs_path`，绝对路径只在设置页出现）。 */
+  mounts: readonly LibraryMountSummary[]
 }
 
 function rootSegment(path: string): string {
@@ -110,7 +111,8 @@ export function buildLibraryTree(input: LibraryTreeInput): LibraryTreeNode[] {
 
   // 挂载根：身份来自 `library_mount` 行，不来自 folders（卸载 / 不可用时 folders 可能没这一支）。
   const mountRoots = input.mounts.map((mount) => {
-    const path = `@${mount.label}`
+    // 🔴 用服务端给的 `path`，别自己拼 `@${label}` —— label 可能含斜杠等特殊字符。
+    const path = mount.path
     const node = nodes.get(path) ?? emptyNode(path, path, 'root')
     node.kind = 'root'
     node.name = path
@@ -138,8 +140,9 @@ export function buildLibraryTree(input: LibraryTreeInput): LibraryTreeNode[] {
     if (rootPaths.has(row.path)) continue
     const node = nodes.get(row.path)
     if (!node) continue
+    // `parent_path` 是**空串**表示根行（不是 null）。
     const parent =
-      (row.parent_path != null ? nodes.get(row.parent_path) : undefined) ??
+      (row.parent_path !== '' ? nodes.get(row.parent_path) : undefined) ??
       nodes.get(rootSegment(row.path))
     if (!parent || parent === node) {
       orphanRoots.push(node)

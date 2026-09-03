@@ -12,7 +12,7 @@
 
 import { beforeEach, describe, expect, test } from 'vitest'
 
-import type { LibraryFolderNode, LibraryMount } from '@shared/api/types/library'
+import type { LibraryFolderNode, LibraryMountSummary } from '@shared/api/types/library'
 import {
   MOUNTS_GROUP_PATH,
   ancestorPaths,
@@ -22,7 +22,8 @@ import {
 import { useLibraryTree, resetLibraryTreeState } from '@shared/state/library-tree'
 
 function folder(path: string, overrides: Partial<LibraryFolderNode> = {}): LibraryFolderNode {
-  const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : null
+  // 🔴 服务端的根行 `parent_path` 是**空串**不是 null。
+  const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
   return {
     path,
     parent_path: parent,
@@ -33,15 +34,16 @@ function folder(path: string, overrides: Partial<LibraryFolderNode> = {}): Libra
   }
 }
 
-function mount(overrides: Partial<LibraryMount> = {}): LibraryMount {
+/** `GET /library/tree` 内嵌的挂载投影 —— 不带 `abs_path`（那只在 `GET /library/mounts` 上）。 */
+function mount(overrides: Partial<LibraryMountSummary> = {}): LibraryMountSummary {
+  const label = overrides.label ?? '工作区'
   return {
     id: 1,
-    label: '工作区',
-    abs_path: '/Users/me/Documents/工作区',
+    label,
+    path: `@${label}`,
     mode: 'rw',
     status: 'ok',
     file_count: 12,
-    added_at: 1_756_000_000,
     ...overrides
   }
 }
@@ -75,7 +77,17 @@ describe('buildLibraryTree — 多根', () => {
     expect(group?.fileCount).toBe(2)
     expect(group?.children.map((n) => n.path)).toEqual(['@工作区', '@素材'])
     expect(group?.children[0].children.map((n) => n.path)).toEqual(['@工作区/notes'])
-    expect(group?.children[0].mount?.abs_path).toBe('/Users/me/Documents/工作区')
+    expect(group?.children[0].mount?.id).toBe(1)
+  })
+
+  test('挂载根用服务端给的 path，不自己拼 @label（label 里有斜杠也不会劈成两层）', () => {
+    const roots = buildLibraryTree({
+      folders: [],
+      mounts: [mount({ id: 7, label: 'a/b', path: '@a-b' })]
+    })
+    const group = roots.find((n) => n.path === MOUNTS_GROUP_PATH)
+
+    expect(group?.children.map((n) => n.path)).toEqual(['@a-b'])
   })
 })
 
