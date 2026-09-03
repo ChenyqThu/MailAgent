@@ -23,6 +23,8 @@ vi.mock('@shared/components/agents/AgentAvatar', () => ({
   AgentAvatar: ({ title }: { title?: string }) => createElement('span', null, title ?? '')
 }))
 
+import type { GroupLibraryRef } from '../../../src/ai-gateway/groupLibraryRefs'
+import type { GroupAttachment } from '@shared/chat_model'
 import { GroupComposer } from '@shared/components/agents/groups/GroupComposer'
 
 const MEMBERS = [{ agentId: 'a1', title: '策划' }]
@@ -32,11 +34,16 @@ function hit(id: number | null, path: string, filename: string) {
   return { id, path, filename }
 }
 
-type SendRefs = { fileId: number; path: string; name: string }[]
-/** onSend 的形参在这里标全，`mock.calls[0]` 才带类型 —— 否则它是空元组，
- *  下面两处只能靠 `as [...]` 硬转，而 TS2352 会拦住「空元组转三元组」。 */
+/** onSend 的形参用组件 prop 的**真实类型**标全，`mock.calls[0]` 才带类型 —— 否则它是空元组，
+ *  断言只能靠 `as [...]` 硬转，而 TS2352 会拦住「空元组转三元组」。 */
 function renderComposer(
-  onSend = vi.fn(async (_text: string, _attachments: unknown[], _refs: SendRefs) => undefined)
+  onSend = vi.fn(
+    async (
+      _text: string,
+      _attachments: readonly GroupAttachment[],
+      _refs: readonly GroupLibraryRef[]
+    ): Promise<void> => undefined
+  )
 ) {
   render(
     createElement(GroupComposer, {
