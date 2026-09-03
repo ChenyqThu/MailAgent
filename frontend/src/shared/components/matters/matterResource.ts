@@ -1,6 +1,7 @@
 import {
   Calendar,
   FileText,
+  FolderTree,
   GitBranch,
   Link,
   Mail,
@@ -16,6 +17,7 @@ import {
   NotionLogo,
   type AppLogoIcon
 } from '@shared/components/icons/apps/appLogos'
+import { RESOURCE_KEY_PREFIX } from '@shared/libraryConstants'
 import type {
   MatterResourceKind,
   MatterResourceLinkHit,
@@ -107,11 +109,54 @@ export const DOC_PROVIDER_ICONS: Record<string, LucideIcon | AppLogoIcon> = {
   github: GitBranch
 }
 
+// 资料库文件（P2-L10，design 09-02-library-knowledge-base §9.2 / §9.5）。
+//
+// 🔴 库文件与邮件附件**同为 `kind='file'`、同在 mailagent 身份空间**，唯一的区分判据是
+// `external_key` 前缀（`library:{id}` vs `attachment:{id}`）—— 后端 `uq_resource_provider_key`
+// 是 `(provider, external_key)` 不含 kind，两个前缀因此必须互斥（见
+// `src/matters/resource_identity.py` 的 docstring）。前缀值取零依赖叶子
+// `@shared/libraryConstants`（与 `src/library/constants.py` 有跨语言闸
+// `tests/config/test_library_constants_parity.py`），不在这里手抄第二份。
+export function isLibraryFileResource(kind: MatterResourceKind, externalKey: string): boolean {
+  return kind === 'file' && externalKey.startsWith(RESOURCE_KEY_PREFIX)
+}
+
+/** 关联键构造 —— Python 侧 `resource_identity.library_resource_key()` 的对面。 */
+export function libraryResourceKey(fileId: number): string {
+  return `${RESOURCE_KEY_PREFIX}${fileId}`
+}
+
+/** `library:302` → 302。不是库文件键、或尾巴不是正整数 → null：深链没有去处时调用点
+ *  就不该给「打开」按钮（宁可少一个钮，也不要点了什么都不发生）。 */
+export function libraryResourceFileId(externalKey: string): number | null {
+  if (!externalKey.startsWith(RESOURCE_KEY_PREFIX)) return null
+  const raw = externalKey.slice(RESOURCE_KEY_PREFIX.length)
+  if (!/^[0-9]+$/.test(raw)) return null
+  const id = Number(raw)
+  return Number.isSafeInteger(id) && id > 0 ? id : null
+}
+
+// design §9.2「打开」段：attachments 分组里库文件与邮件附件用**不同**图标。库文件用
+// `FolderTree` —— 与资料库域自己的标识同一枚（`AgentComposer` 的 `iconMap.library`、
+// `LibraryWorkspace` 的页头），点开去的也正是那个域。
+export const LIBRARY_RESOURCE_ICON: LucideIcon = FolderTree
+
 // 🔴 有意导出「表」而不是「查表函数」：eslint 的 react-hooks/static-components 不接受
 // `const Icon = someFn(...)` —— 调用表达式无法被证明每次 render 返回同一个组件身份，会报
-// 「Cannot create components during render」；成员索引（MAP[key]）可以。故调用点写成：
+// 「Cannot create components during render」；成员索引（MAP[key]）与常量标识符可以。
+//
+// 🔴 这条约束覆盖派生式里的**每一个**调用表达式，不只是最外层那个：把判据直接写成
+// `(isLibraryFileResource(kind, key) && LIBRARY_RESOURCE_ICON) || ...` 一样会红（规则指着
+// 那个调用说「组件在这里被创建」）。而且**先存进局部变量也不够** —— 规则顺着数据流追，
+// `const b = fn(...)` 再 `(b && ICON) || …` 照样红（`Boolean(fn(...))` 也一样，实测）。
+// 它认的是**语法上**可证明是布尔的表达式：比较（`kind === 'doc'`）与 `!` / `!!`。
+// 故判据一律写成 `!!fn(...)`，派生式里只剩标识符与成员索引；调用点三处逐字相同
+//（闸在 `frontend/tests/shared/matterResource.test.ts`）：
+//   const isLibraryFile = !!isLibraryFileResource(kind, externalKey)
 //   const Icon =
-//     (kind === 'doc' && DOC_PROVIDER_ICONS[provider.toLowerCase()]) || RESOURCE_KIND_ICONS[kind]
+//     (isLibraryFile && LIBRARY_RESOURCE_ICON) ||
+//     (kind === 'doc' && DOC_PROVIDER_ICONS[provider.toLowerCase()]) ||
+//     RESOURCE_KIND_ICONS[kind]
 
 export function buildMatterResourceLookupKeys(
   internalId: number | null,

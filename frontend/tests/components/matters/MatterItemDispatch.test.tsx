@@ -81,7 +81,12 @@ vi.mock('@shared/state/ai-chat-panel', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@shared/state/ai-chat-panel')>()
   return { ...actual, requestOpenAgentSession: openAgentSession }
 })
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }))
+// `useRouter` 是 P2-L10 起 ResourceDrawer 走资料库深链要的（`router.history.push`）。
+// 本用例不点深链，但整模块替换缺一个导出就是 import 期报错，MatterDetail 整棵树渲不出来。
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => vi.fn(),
+  useRouter: () => ({ history: { push: vi.fn() } })
+}))
 
 const { MatterDetail } = await import('@shared/components/matters/MatterDetail')
 

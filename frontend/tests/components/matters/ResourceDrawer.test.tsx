@@ -26,6 +26,7 @@ import type {
 
 const {
   navigate,
+  historyPush,
   patchResource,
   unlinkResource,
   listResourceVersions,
@@ -34,6 +35,7 @@ const {
   writeText
 } = vi.hoisted(() => ({
   navigate: vi.fn(),
+  historyPush: vi.fn(),
   patchResource: vi.fn(),
   unlinkResource: vi.fn(),
   listResourceVersions: vi.fn(),
@@ -42,7 +44,12 @@ const {
   writeText: vi.fn()
 }))
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }))
+// 资料库深链走 `router.history.push`（`library/deeplink.ts` 的头注：`/library` 由另一批
+// 单独注册，注册前 `navigate({ to: '/library' })` 的字面量过不了 typecheck）。
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => navigate,
+  useRouter: () => ({ history: { push: historyPush } })
+}))
 vi.mock('@shared/components/matters/hooks', () => ({
   useMattersApi: () => ({ patchResource, unlinkResource, listResourceVersions }),
   useMatterChatApi: () => ({ applyUndo: vi.fn() })
@@ -362,5 +369,38 @@ describe('ResourceDrawer —— V3-22 版本轨迹', () => {
     listResourceVersions.mockReturnValue(new Promise(() => {}))
     renderDrawer(trailUrlItem())
     expect(screen.queryByText('版本轨迹')).toBeNull()
+  })
+})
+
+// P2-L10（资料库 epic §9.2「打开」段 / §9.5 深链）—— 抽屉的第三条打开分支。
+//
+// 库文件与邮件附件同为 `kind='file'`，判据只能是 `external_key` 前缀。写成按 kind 分的话，
+// 邮件附件也会被推去 `/library?file=<attachment_id>`（那是另一套 id 空间，落地页只会 toast
+// 「文件已不在资料库」），而库文件反过来一个去处都没有。
+describe('ResourceDrawer —— 库文件的打开分支（design §9.2 / §9.5）', () => {
+  function libraryItem(): MatterResourceListItem {
+    return resourceItem({ kind: 'file', provider: 'mailagent', externalKey: 'library:302' })
+  }
+
+  test('库文件 → 深链 /library?file={id}，按钮说「在 资料库 中打开」', () => {
+    renderDrawer(libraryItem())
+    const button = screen.getByRole('button', { name: '在 资料库 中打开' })
+    fireEvent.click(button)
+    expect(historyPush).toHaveBeenCalledWith('/library?file=302')
+    // 库文件不是外链，绝不走 window.open。
+    expect(navigate).not.toHaveBeenCalled()
+  })
+
+  test('邮件附件（attachment:）没有资料库去处 —— 不长出这个按钮', () => {
+    renderDrawer(
+      resourceItem({ kind: 'file', provider: 'mailagent', externalKey: 'attachment:9182' })
+    )
+    expect(screen.queryByRole('button', { name: '在 资料库 中打开' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /中打开/ })).toBeNull()
+  })
+
+  test('前缀对但 id 不是正整数 → 同样不给按钮（点了什么都不发生比按钮更坏）', () => {
+    renderDrawer(resourceItem({ kind: 'file', provider: 'mailagent', externalKey: 'library:abc' }))
+    expect(screen.queryByRole('button', { name: /中打开/ })).toBeNull()
   })
 })

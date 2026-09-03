@@ -10,12 +10,17 @@
 //      connector 行；闸关 / 还没取到 / 这家没有 connector 时说中性话，**不谎报「已连接」**。
 //   ③ 附件 —— Q5 裁定只做「本事项已关联邮件的附件」引用，**无本地上传区**；一次批量取
 //      （`GET /{id}/resource-attachments`），不按封扇出。
+//   ④ 资料库 —— P2-L10（design §9.2 三条入口里的「人」这一条）。走 `GET /library/search`
+//      （⌘K 第五 lane / agent `library_search` 同一个服务端内核），纯关键词、无字段语法。
+//      落库形状与 ③ 同为 `kind='file'`，靠 `library:` 前缀与附件的 `attachment:` 互斥。
 
 import { useEffect, useMemo, useState } from 'react'
 import { useIsFetching, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { Link2, Loader2, Mail, Paperclip, Search, Sparkles } from 'lucide-react'
+import { FolderTree, Link2, Loader2, Mail, Paperclip, Search, Sparkles } from 'lucide-react'
 
+import { createLibraryApi } from '@shared/api/library'
+import type { LibrarySearchHit } from '@shared/api/types/library'
 import type {
   Matter,
   MatterMutationResult,
@@ -23,8 +28,14 @@ import type {
   MatterResourceCandidate,
   MatterResourceListItem
 } from '@shared/api/types/matter'
+import {
+  libraryAddressableHits,
+  libraryWarningLabelKey,
+  LIBRARY_MAX_HITS,
+  parseLibrarySnippet
+} from '@shared/components/command/paletteLibrary'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
-import { fetchConnectorToolsEnabled } from '@shared/components/settings/custom-ai/shared'
+import { fetchConnectorToolsEnabled, resolveApiBaseUrl } from '@shared/components/settings/custom-ai/shared'
 import { Checkbox } from '@shared/components/ui/checkbox'
 import {
   Dialog,
@@ -50,10 +61,11 @@ import {
   matterLinkConnectionState,
   normalizeMatterLinkUrl
 } from './matterLinkProviders'
+import { libraryResourceKey } from './matterResource'
 import { useMatterMutation } from './matterMutation'
 import { useMatterUndoToast } from './useMatterUndoToast'
 
-export type MatterLinkResourceTab = 'mail' | 'link' | 'file'
+export type MatterLinkResourceTab = 'mail' | 'link' | 'file' | 'library'
 
 const MAIL_SEARCH_LIMIT = 25
 const RECENT_MAIL_LIMIT = 20
@@ -87,6 +99,14 @@ interface LinkCard {
   title: string
 }
 
+/** 勾中的库文件。存**行**而不是 id：换一次查询后结果集就没这一行了，只留 id 的话提交时
+ *  取不到 `title`（附件 tab 那条 `if (!row) continue` 会静默丢掉换查询前勾的选择）。 */
+interface LibraryPickRow {
+  fileId: number
+  filename: string
+  path: string
+}
+
 export function MatterLinkResourceModal({
   matter,
   resources,
@@ -102,8 +122,10 @@ export function MatterLinkResourceModal({
 
   const [tab, setTab] = useState<MatterLinkResourceTab>(initialTab)
   const [search, setSearch] = useState('')
+  const [librarySearch, setLibrarySearch] = useState('')
   const [mailPicked, setMailPicked] = useState<number[]>([])
   const [attachmentPicked, setAttachmentPicked] = useState<string[]>([])
+  const [libraryPicked, setLibraryPicked] = useState<LibraryPickRow[]>([])
   const [rawLinks, setRawLinks] = useState('')
   const [linkOff, setLinkOff] = useState<string[]>([])
   const [subscribeThread, setSubscribeThread] = useState(true)
@@ -114,8 +136,10 @@ export function MatterLinkResourceModal({
     if (!open) return
     setTab(initialTab)
     setSearch('')
+    setLibrarySearch('')
     setMailPicked([])
     setAttachmentPicked([])
+    setLibraryPicked([])
     setRawLinks('')
     setLinkOff([])
     setSubscribeThread(true)
@@ -235,8 +259,34 @@ export function MatterLinkResourceModal({
     (row) => !row.linked && !linkedKeys.has(row.external_key)
   )
 
+  // ── tab ④ 数据（资料库检索） ──────────────────────────────────────────────
+  const libraryApi = useMemo(() => createLibraryApi(resolveApiBaseUrl()), [])
+  const normalisedLibraryQuery = useDebouncedValue(librarySearch.trim(), MAIL_SEARCH_DEBOUNCE_MS)
+  // 🔴 与 ⌘K 第五 lane / `/search` 页共享 `qk.library.paletteSearch` ⇒ **必须同 limit**
+  // （`LIBRARY_MAX_HITS`），否则谁先跑谁的形状就成了另一个人的结果集。
+  // 🔴 空 query 不发：服务端 `q` 是 `Query(..., min_length=1)`，空串是 422 不是空结果。
+  const library = useQuery({
+    queryKey: qk.library.paletteSearch(normalisedLibraryQuery),
+    queryFn: () => libraryApi.search(normalisedLibraryQuery, LIBRARY_MAX_HITS),
+    enabled: open && tab === 'library' && normalisedLibraryQuery.length > 0,
+    staleTime: 15_000
+  })
+  // 🔴 类型写成 `LibrarySearchHit[]` 会把 `libraryAddressableHits` 的收窄（`id: number`）
+  // 又放宽回 `number | null`，`LibraryTab` 那边就得再判一次 null —— 收窄的意义正在于判据只
+  // 有一处。故用它的返回类型，不另写标注。
+  const libraryRows: Array<LibrarySearchHit & { id: number }> = useMemo(
+    () =>
+      // 投影行（`mail-attachments` 下的邮件附件）`id` 恒 null，关联键构造不出来 —— 由共享
+      // 叶子 `libraryAddressableHits` 统一剔除，勾得上却提交不了的候选一行都不出。
+      libraryAddressableHits(library.data?.hits ?? []).filter(
+        (hit) => !linkedKeys.has(libraryResourceKey(hit.id))
+      ),
+    [library.data, linkedKeys]
+  )
+
   // ── 提交 ─────────────────────────────────────────────────────────────────
-  const selectedCount = mailPicked.length + activeLinkCards.length + attachmentPicked.length
+  const selectedCount =
+    mailPicked.length + activeLinkCards.length + attachmentPicked.length + libraryPicked.length
 
   const link = useMatterMutation({
     matterId: matter.public_id,
@@ -313,6 +363,26 @@ export function MatterLinkResourceModal({
           )
         )
       }
+      for (const row of libraryPicked) {
+        advance(
+          await api.linkResource(
+            matter.public_id,
+            {
+              // 与附件同为 `kind='file'`，靠 `library:` 前缀区分（`uq_resource_provider_key`
+              // 是 `(provider, external_key)` 不含 kind，两个前缀必须互斥）。
+              // 🔴 `sum` 与 `metadata.cached_excerpt` 由**服务端**填（frontmatter summary →
+              // 抽取文本首 300 字 / 前 2000 字），前端一个字都不发。
+              provider: 'mailagent',
+              kind: 'file',
+              external_key: libraryResourceKey(row.fileId),
+              title: row.filename,
+              pinned,
+              confirmed: true
+            },
+            { expectedVersion: version, reason: 'user_linked_library_file_from_context' }
+          )
+        )
+      }
       return {
         version,
         lastResult: lastResult as MatterMutationResult | null,
@@ -340,10 +410,33 @@ export function MatterLinkResourceModal({
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
 
-  const tabs: Array<{ key: MatterLinkResourceTab; icon: typeof Mail; count: number }> = [
-    { key: 'mail', icon: Mail, count: mailPicked.length },
-    { key: 'link', icon: Link2, count: activeLinkCards.length },
-    { key: 'file', icon: Paperclip, count: attachmentPicked.length }
+  // labelKey 显式写出来而不是由 key 拼：第四 tab 的文案属于资料库自己的命名空间
+  // （`library.matter.*`，与 ⌘K / 预览面同一份），不在 `matters.linkResource.tabs` 下。
+  const tabs: Array<{
+    key: MatterLinkResourceTab
+    icon: typeof Mail
+    count: number
+    labelKey: string
+  }> = [
+    { key: 'mail', icon: Mail, count: mailPicked.length, labelKey: 'matters.linkResource.tabs.mail' },
+    {
+      key: 'link',
+      icon: Link2,
+      count: activeLinkCards.length,
+      labelKey: 'matters.linkResource.tabs.link'
+    },
+    {
+      key: 'file',
+      icon: Paperclip,
+      count: attachmentPicked.length,
+      labelKey: 'matters.linkResource.tabs.file'
+    },
+    {
+      key: 'library',
+      icon: FolderTree,
+      count: libraryPicked.length,
+      labelKey: 'library.matter.tabLibrary'
+    }
   ]
 
   return (
@@ -378,7 +471,7 @@ export function MatterLinkResourceModal({
                 )}
               >
                 <TabIcon size={13} />
-                {t(`matters.linkResource.tabs.${entry.key}`)}
+                {t(entry.labelKey)}
                 {entry.count > 0 ? (
                   <span className="font-mono text-meta">{entry.count}</span>
                 ) : null}
@@ -436,6 +529,25 @@ export function MatterLinkResourceModal({
                   current.includes(key)
                     ? current.filter((value) => value !== key)
                     : [...current, key]
+                )
+              }
+            />
+          ) : null}
+
+          {tab === 'library' ? (
+            <LibraryTab
+              rows={libraryRows}
+              search={librarySearch}
+              activeQuery={normalisedLibraryQuery}
+              onSearch={setLibrarySearch}
+              loading={library.isFetching}
+              warnings={library.data?.warnings ?? []}
+              picked={libraryPicked}
+              onToggle={(row) =>
+                setLibraryPicked((current) =>
+                  current.some((item) => item.fileId === row.fileId)
+                    ? current.filter((item) => item.fileId !== row.fileId)
+                    : [...current, row]
                 )
               }
             />
@@ -760,6 +872,112 @@ function FileTab({
         </PickerRow>
       ))}
     </PickerGroup>
+  )
+}
+
+// ── tab ④ 资料库（P2-L10 / design §9.2） ────────────────────────────────────
+
+function LibraryTab({
+  rows,
+  search,
+  activeQuery,
+  onSearch,
+  loading,
+  warnings,
+  picked,
+  onToggle
+}: {
+  rows: Array<LibrarySearchHit & { id: number }>
+  search: string
+  /** 防抖后**已经生效**的查询串（分组标题与空态按它取，理由同邮件 tab）。 */
+  activeQuery: string
+  onSearch(value: string): void
+  loading: boolean
+  /** 🔴 服务端 `warnings` 是**数组**，逐条渲染，不要只取 `[0]`。 */
+  warnings: readonly string[]
+  picked: LibraryPickRow[]
+  onToggle(row: LibraryPickRow): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <div className="space-y-3">
+      <label className="flex items-center gap-2 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2.5 py-1.5">
+        <Search size={13} className="shrink-0 text-ink-fg-3" />
+        <input
+          value={search}
+          onChange={(event) => onSearch(event.target.value)}
+          placeholder={t('library.search.placeholder')}
+          className="min-w-0 flex-1 bg-transparent text-aux outline-none placeholder:text-ink-fg-3"
+        />
+        {loading ? <Loader2 size={12} className="shrink-0 animate-spin text-ink-fg-3" /> : null}
+      </label>
+
+      {warnings.map((code) => (
+        <p key={code} className="text-meta leading-5 text-ink-fg-3">
+          {t(libraryWarningLabelKey(code))}
+        </p>
+      ))}
+
+      {rows.length > 0 ? (
+        <PickerGroup label={t('library.search.groupTitle')} count={rows.length}>
+          {rows.map((row) => {
+            const segments = parseLibrarySnippet(row.snippet)
+            return (
+              <PickerRow
+                key={row.id}
+                on={picked.some((item) => item.fileId === row.id)}
+                onToggle={() =>
+                  onToggle({ fileId: row.id, filename: row.filename, path: row.path })
+                }
+              >
+                <FolderTree size={13} className="shrink-0 text-ink-fg-3" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-body text-ink-fg">{row.filename}</span>
+                  <span className="mt-0.5 block truncate text-meta text-ink-fg-3">
+                    {[row.path, formatBytes(row.size_bytes)].filter(Boolean).join(' · ')}
+                  </span>
+                  {segments.length > 0 ? (
+                    // 服务端 snippet 的命中标记是一对**字面括号** `[` `]`，切成段按 React
+                    // 节点渲染 —— 正文一个字符都不进 innerHTML，故无需消毒。
+                    <span className="mt-1 block truncate text-meta leading-4 text-ink-fg-2">
+                      {segments.map((segment, index) => (
+                        <span
+                          key={index}
+                          className={segment.hit ? 'font-medium text-ink-fg' : undefined}
+                        >
+                          {segment.text}
+                        </span>
+                      ))}
+                    </span>
+                  ) : null}
+                </span>
+              </PickerRow>
+            )
+          })}
+        </PickerGroup>
+      ) : null}
+
+      {/* 🔴 有 warning 时不叠「没有匹配的文件」：那句话的意思是「查过了，库里没有」，而
+          服务端回 warning 恰恰表示这一串**没被拿去查**（中文 1 字整串既进不了 trigram 也不
+          该退化成全表 LIKE）。两句一起出会让人以为库里真没有。 */}
+      {rows.length === 0 && !loading && warnings.length === 0 ? (
+        <EmptyState
+          icon={<FolderTree size={22} />}
+          // 还没输入时给的是「怎么用」（这条腿一个请求都不发），输入了没结果才是「没找到」。
+          //
+          // 🔴 design §9.2 写的是「空 query 显示最近文件」，这里**没做到**，缺的是服务端腿而
+          // 不是这几行：`GET /library/search` 的 `q` 是 `Query(..., min_length=1)`；能不带
+          // 关键词列文件的只有 `GET /library/folder`，而它按 `parent_path` 精确取直接子项
+          // （`repository.list_folder`），既不跨根也不递归。拿它拼「最近」只能覆盖各根**顶层**
+          // ——用户昨天存进 `my-docs/产品/` 的文件不会出现在这张表里，看到的人会据此断定库里
+          // 没有它。宁可让人先敲两个字，也不给一张会撒谎的「最近」。
+          // 补法：服务端加一条按 `mtime DESC` 跨根取 N 行的只读腿（邮件 tab 的
+          // `email.list({limit})` 就是这个形状），前端这里把它接上即可，本组件其余不动。
+          title={activeQuery ? t('library.search.empty') : t('library.matter.searchPrompt')}
+          hint={activeQuery ? t('library.search.emptyHint') : undefined}
+        />
+      ) : null}
+    </div>
   )
 }
 
