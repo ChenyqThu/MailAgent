@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import threading
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -31,25 +32,35 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from src.library import embed as E
 from src.library import paths as P
 from src.library.constants import (
     AGENT_DOCS_SLUG,
+    EMBED_BATCH_FILES,
+    EMBED_BATCH_SLEEP_SEC,
+    EMBED_MODEL_APPROX_BYTES,
+    EMBED_MODEL_ID,
+    EMBED_MODEL_REPO,
     FOLDER_PAGE_SIZE,
     MOUNT_MAX_FILES,
     MOUNT_MODES,
     PROJECTION_SLUG,
     READ_TOOL_MAX_BYTES,
+    SEARCH_LANE_TOP_K,
+    SEARCH_MODES,
     TEXT_WRITE_MAX_BYTES,
     TOP_LEVEL_SLUGS,
     TRASH_SLUG,
     TRASH_TTL_DAYS,
     UPLOAD_MAX_BYTES,
+    VECTOR_BRUTE_FORCE_MAX_CHUNKS,
+    VECTOR_MIN_SCORE,
     WRITE_EXT_ALLOWLIST,
 )
 from src.library.db import LibraryDb
 from src.library.extract import ensure_text, initial_text_status, kind_for_filename
 from src.library.paths import MountRoot, PathError, ResolvedPath
-from src.library.repository import FOLDER_SORTS, LibraryRepository, SearchResult
+from src.library.repository import FOLDER_SORTS, LibraryRepository, SearchResult, rrf_fuse
 from src.services.compose_staging import guess_mime
 
 
@@ -82,6 +93,25 @@ class Actor:
         if self.kind == "user":
             return "user"
         return self.agent_id or self.kind
+
+
+@dataclass
+class _Job:
+    """一次后台作业（下载权重 / 建索引）的进度。进程内单实例 —— 两种作业不并发。"""
+
+    kind: str
+    total: int = 0
+    done: int = 0
+    running: bool = True
+    error: Optional[str] = None
+    started_at: float = 0.0
+    finished_at: Optional[float] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind, "running": self.running, "done": self.done, "total": self.total,
+            "error": self.error, "started_at": self.started_at, "finished_at": self.finished_at,
+        }
 
 
 USER = Actor()
@@ -144,6 +174,13 @@ class LibraryService:
         for slug in ROOT_WRITABLE_TOP + (TRASH_SLUG,):
             os.makedirs(os.path.join(self.root_path, slug), exist_ok=True)
         self.root = MountRoot(id=0, label="", abs_path=self.root_path, mode="rw")
+        # 语义 lane 的进程内状态：encoder 懒加载一次、向量矩阵按指纹缓存、后台作业单实例。
+        self._encoder: Optional[Any] = None
+        self._encoder_loaded = False
+        self._encoder_lock = threading.Lock()
+        self._vec_cache: Optional[tuple[tuple[int, int, float], tuple[list[int], list[int], list[int], Any]]] = None
+        self._job: Optional[_Job] = None
+        self._job_lock = threading.Lock()
 
     # ── 挂载根 ────────────────────────────────────────────────────────────────
 
@@ -236,7 +273,7 @@ class LibraryService:
             return self._mount_dict(conn, self.repo.get_mount(conn, mount_id))
 
     def remove_mount(self, mount_id: int) -> dict[str, Any]:
-        """卸载：挂载行标 ``unmounted``、其下文件行标 ``missing``、清文本 / FTS；不删行、不动磁盘。"""
+        """卸载：挂载行标 ``unmounted``、其下文件行标 ``missing``、清文本 / FTS / 向量；不删行、不动磁盘。"""
         with self.db.transaction() as conn:
             row = self.repo.get_mount(conn, int(mount_id))
             if row is None or row["status"] == "unmounted":
@@ -244,6 +281,7 @@ class LibraryService:
             now = time.time()
             for f in self.repo.list_mount_rows(conn, int(mount_id)):
                 self.repo.delete_text(conn, int(f["id"]))
+                self.repo.delete_chunks(conn, file_id=int(f["id"]))
                 self.repo.update_file(conn, int(f["id"]), status="missing", text_status=None, updated_at=now)
             self.repo.update_mount(conn, int(mount_id), status="unmounted")
             return self._mount_dict(conn, self.repo.get_mount(conn, int(mount_id)))
@@ -597,7 +635,19 @@ class LibraryService:
                 "hint": _text_hint(status) if text is None else None,
             }
 
-    def search(self, query: str, *, limit: int = 20) -> dict[str, Any]:
+    def search(self, query: str, *, limit: int = 20, mode: str = "hybrid") -> dict[str, Any]:
+        """关键词腿（P1，四条 CJK 纪律）+ 语义腿（P3）经 RRF 混合。
+
+        🔴 **没下载权重 = 纯 FTS，返回体形状完全一致**（多出来的 ``lane`` / ``search_mode`` / ``semantic``
+        两条路径都有）。``search_mode`` 说的是**实际**跑了哪条：请求 hybrid 但没模型 → ``'fts'``，
+        且 ``semantic.available=False``；能力缺席不进 ``warnings``（理由见下面那段注释）。
+
+        两个易混字段：``mode`` 仍是 P1 的 FTS 路由结果（``empty|too_short|like|trigram|porter``），
+        ``lane`` 才是「这条命中来自哪条腿」（``fts|vec|both``）；每条命中的 ``match``（``filename|text``）
+        也照旧，与 ``lane`` 各说各的。
+        """
+        if mode not in SEARCH_MODES:
+            raise LibraryError("E_INVALID_ARG", f"invalid mode: {mode!r}", hint=f"mode ∈ {', '.join(SEARCH_MODES)}")
         limit = max(1, min(int(limit), 100))
         with self.db.transaction() as conn:
             for row in self.repo.list_pending_extraction(conn, limit=EXTRACT_ON_SEARCH_CAP):
@@ -608,14 +658,287 @@ class LibraryService:
                 row = self._reconcile_file(conn, row)
                 if row["status"] == "present":
                     ensure_text(self.repo, conn, row, resolved.abs_path)
-            result: SearchResult = self.repo.search(conn, query, limit=limit)
-            hits = []
-            for h in result.hits:
-                mount = self._mount_by_id_lenient(conn, int(h["mount_id"]))
-                d = self._file_dict(h, mount)
-                d.update({"snippet": h["snippet"], "rank": h["rank"], "match": h["match"]})
-                hits.append(d)
-            return {"query": query, "mode": result.mode, "hits": hits, "warnings": result.warnings}
+            chunks = self.repo.count_chunks(conn, EMBED_MODEL_ID)
+            semantic = mode == "hybrid" and self._get_encoder() is not None
+            pending = self.repo.count_files_needing_embed(conn, EMBED_MODEL_ID) if semantic else 0
+            # 🔴 「没下载模型」**不进 warnings**：warnings 说的是这次 query 出了什么事
+            #（`cjk_too_short:X` 那种），能力在不在是 `semantic.available` 的事。放进 warnings =
+            # 下载之前每一次搜索都挂一条同样的提示，UI 只能整条忽略。
+            warnings: list[str] = []
+            result: SearchResult = self.repo.search(conn, query, limit=SEARCH_LANE_TOP_K if semantic else limit)
+            if semantic:
+                hits = self._hybrid_hits(conn, query, result, limit=limit, warnings=warnings)
+            else:
+                hits = [self._search_hit(conn, h, lane="fts") for h in result.hits]
+            payload = {
+                "query": query,
+                "mode": result.mode,
+                "search_mode": "hybrid" if semantic else "fts",
+                "semantic": {"available": semantic, "model": EMBED_MODEL_ID if semantic else None, "chunks": chunks},
+                "hits": hits,
+                "warnings": result.warnings + warnings,
+            }
+        # 🔴 踢队列必须在事务外：后台作业要写库，握着 BEGIN IMMEDIATE 的写锁去起它
+        # 等于让它先撞满 30s busy_timeout。
+        if pending:
+            self._kick_index()
+        return payload
+
+    def _search_hit(self, conn, row: dict[str, Any], *, lane: str) -> dict[str, Any]:
+        mount = self._mount_by_id_lenient(conn, int(row["mount_id"]))
+        d = self._file_dict(row, mount)
+        d.update({"snippet": row.get("snippet", ""), "rank": row.get("rank"), "match": row.get("match", "text"), "lane": lane})
+        return d
+
+    def _hybrid_hits(self, conn, query: str, fts: SearchResult, *, limit: int, warnings: list[str]) -> list[dict[str, Any]]:
+        """FTS top-50 ∪ 向量 top-50 → RRF（k 与邮件核同值）→ top-k。``rank`` 取 ``-rrf_score``（越小越相关，
+        与 ``email_repository`` 的融合口径一致）。"""
+        fts_ids = [int(h["id"]) for h in fts.hits]
+        vec_ids, vec_best = self._vector_lane(conn, query, limit=SEARCH_LANE_TOP_K, warnings=warnings)
+        fused = rrf_fuse({"fts": fts_ids, "vec": vec_ids}, limit=limit)
+        by_id = {int(h["id"]): h for h in fts.hits}
+        missing = [fid for fid, _score, _lane in fused if fid not in by_id]
+        for row in self.repo.get_files(conn, missing):
+            by_id[int(row["id"])] = dict(row)
+        out: list[dict[str, Any]] = []
+        for fid, score, lane in fused:
+            row = by_id.get(fid)
+            if row is None:
+                continue
+            hit = self._search_hit(conn, row, lane=lane)
+            hit["rank"] = -float(score)
+            if not hit["snippet"] and fid in vec_best:
+                _s, start, end = vec_best[fid]
+                hit["snippet"] = self.repo.text_snippet(conn, fid, start, end)
+            out.append(hit)
+        return out
+
+    # ── 语义 lane（design §9.1）──────────────────────────────────────────────
+
+    def _get_encoder(self) -> Optional[Any]:
+        """懒加载一次。**没权重返回 None 是常态**，不是异常（纯 FTS 是合法姿态）。"""
+        with self._encoder_lock:
+            if not self._encoder_loaded:
+                self._encoder = E.load_encoder(self.root_path)
+                self._encoder_loaded = True
+            return self._encoder
+
+    def _reset_encoder(self) -> None:
+        with self._encoder_lock:
+            self._encoder, self._encoder_loaded = None, False
+
+    def _vectors(self, conn) -> tuple[list[int], list[int], list[int], Any]:
+        """全库向量矩阵，按 ``(行数, max rowid, 最新写入时刻)`` 指纹缓存 —— 每次检索重读几十 MB 会卡。"""
+        sig = self.repo.vector_signature(conn, EMBED_MODEL_ID)
+        if self._vec_cache is not None and self._vec_cache[0] == sig:
+            return self._vec_cache[1]
+        ids, starts, ends, blobs = self.repo.load_vectors(conn, EMBED_MODEL_ID)
+        payload = (ids, starts, ends, E.dequantize(blobs))
+        self._vec_cache = (sig, payload)
+        return payload
+
+    def _vector_lane(self, conn, query: str, *, limit: int, warnings: list[str]) -> tuple[list[int], dict[int, tuple[float, int, int]]]:
+        """numpy 暴力点积 → 按文件取最好的那块 → top-N。文件级得分 = 块得分的最大值，低于地板的块直接丢。"""
+        encoder = self._get_encoder()
+        if encoder is None:
+            return [], {}
+        ids, starts, ends, matrix = self._vectors(conn)
+        if not ids:
+            return [], {}
+        if len(ids) > VECTOR_BRUTE_FORCE_MAX_CHUNKS:
+            warnings.append(f"vector_index_large:{len(ids)}")
+        try:
+            qvec = encoder.encode_query(query)
+        except Exception as exc:  # noqa: BLE001 — 语义腿坏了只降级，不打死整条检索
+            logger.warning(f"[library] query embedding failed: {exc}")
+            warnings.append("semantic_query_failed")
+            return [], {}
+        scores = matrix @ qvec
+        best: dict[int, tuple[float, int, int]] = {}
+        for i, fid in enumerate(ids):
+            score = float(scores[i])
+            if score < VECTOR_MIN_SCORE:  # 没地板 = 任何 query 都恒返满额（见常量注释）
+                continue
+            current = best.get(fid)
+            if current is None or score > current[0]:
+                best[fid] = (score, starts[i], ends[i])
+        ranked = sorted(best.items(), key=lambda kv: (-kv[1][0], kv[0]))[:limit]
+        return [fid for fid, _ in ranked], dict(ranked)
+
+    # ── 嵌入队列（后台低速；抄附件抽取 worker 的批 + 间隔范式）────────────────
+
+    def embed_status(self) -> dict[str, Any]:
+        """设置页的进度面：模型在不在 / 索引到哪了 / 有没有作业在跑。**不含任何绝对路径**。"""
+        conn = self.db.connect()
+        try:
+            total = self.repo.count_embeddable_files(conn)
+            pending = self.repo.count_files_needing_embed(conn, EMBED_MODEL_ID)
+            chunks = self.repo.count_chunks(conn, EMBED_MODEL_ID)
+        finally:
+            conn.close()
+        available = E.model_present(self.root_path)
+        with self._job_lock:
+            job = self._job.to_dict() if self._job is not None else None
+        return {
+            "model": {
+                "available": available, "model_id": EMBED_MODEL_ID, "repo": EMBED_MODEL_REPO,
+                "approx_bytes": EMBED_MODEL_APPROX_BYTES,
+                "bytes_on_disk": E.model_bytes_on_disk(self.root_path) if available else 0,
+            },
+            "index": {
+                "files_total": total, "files_indexed": max(0, total - pending), "files_pending": pending, "chunks": chunks,
+            },
+            "job": job,
+        }
+
+    def _embed_one(self, encoder: Any, file_id: int) -> int:
+        """一个文件：切块 → 只嵌 hash 变了的块 → 整文件替换。返回**真正跑了模型**的块数。
+
+        编码在事务外做（几百毫秒起步），写回时重读 ``source_hash``：正文在编码期间被改过就整批丢弃，
+        下一轮队列会重新领走它。
+        """
+        conn = self.db.connect()
+        try:
+            text_row = self.repo.get_text(conn, file_id)
+            existing = self.repo.chunk_vectors_by_hash(conn, file_id, EMBED_MODEL_ID)
+        finally:
+            conn.close()
+        if text_row is None:
+            return 0
+        source_hash = str(text_row["source_hash"])
+        chunks = E.chunk_text(str(text_row["text_content"] or ""), filename=str(text_row["filename"]))
+        todo = [c for c in chunks if c.text_hash not in existing]
+        if todo:
+            vectors = encoder.encode([c.payload for c in todo])
+            for chunk, vec in zip(todo, vectors):
+                existing[chunk.text_hash] = E.quantize(vec)
+        now = time.time()
+        rows = [
+            {"idx": c.idx, "char_start": c.char_start, "char_end": c.char_end, "text_hash": c.text_hash,
+             "source_hash": source_hash, "vec": existing[c.text_hash], "created_at": now}
+            for c in chunks
+        ]
+        with self.db.transaction() as conn:
+            fresh = self.repo.get_text(conn, file_id)
+            if fresh is None or str(fresh["source_hash"]) != source_hash:
+                return 0
+            self.repo.replace_chunks(conn, file_id, EMBED_MODEL_ID, rows)
+        return len(todo)
+
+    def embed_pending(self, *, max_files: int = EMBED_BATCH_FILES) -> dict[str, Any]:
+        """一批（可反复调用，天然可恢复：队列状态全在库里，不在内存）。"""
+        encoder = self._get_encoder()
+        if encoder is None:
+            return {"available": False, "files": 0, "chunks": 0, "remaining": 0}
+        files = chunks = 0
+        conn = self.db.connect()
+        try:
+            queue = self.repo.files_needing_embed(conn, EMBED_MODEL_ID, limit=max_files)
+        finally:
+            conn.close()
+        for row in queue:
+            chunks += self._embed_one(encoder, int(row["file_id"]))
+            files += 1
+        conn = self.db.connect()
+        try:
+            remaining = self.repo.count_files_needing_embed(conn, EMBED_MODEL_ID)
+        finally:
+            conn.close()
+        return {"available": True, "files": files, "chunks": chunks, "remaining": remaining}
+
+    def rebuild_index(self) -> dict[str, Any]:
+        """清掉本模型的全部向量并重新后台建（换模型 / 怀疑索引坏了时用）。没模型 → ``E_INVALID_STATE``。
+
+        🔴 先判模型再清：反过来 = 没模型时把索引清了才报错，用户点一下丢一次索引。
+        """
+        if self._get_encoder() is None:
+            raise LibraryError("E_INVALID_STATE", "semantic model is not downloaded", hint="先在设置页下载语义模型")
+        with self.db.transaction() as conn:
+            removed = self.repo.delete_chunks(conn, model=EMBED_MODEL_ID)
+        self._vec_cache = None
+        logger.info(f"[library] semantic index rebuild: dropped {removed} chunks")
+        # 🔴 已有作业在跑就让它跑（它自己会领走刚清空的全部文件）—— 不能因为「有人在建」
+        # 就把「已经清掉了」这件事包装成报错扔回去。
+        self._kick_index()
+        return self.embed_status()
+
+    # ── 后台作业（下载 / 建索引各一个，进程内单实例）──────────────────────────
+
+    def _spawn_job(self, kind: str, target: Any) -> None:
+        """起一个后台作业。进程内单实例 —— 已有作业在跑就 ``E_INVALID_STATE``。"""
+        with self._job_lock:
+            if self._job is not None and self._job.running:
+                raise LibraryError("E_INVALID_STATE", f"job {self._job.kind!r} is already running")
+            job = _Job(kind=kind, started_at=time.time())
+            self._job = job
+        threading.Thread(target=target, args=(job,), name=f"library-{kind}", daemon=True).start()
+
+    def _kick_index(self) -> None:
+        """把队列交给后台低速作业（搜索时顺带踢一脚，与 ``search`` 里「pending 文件顺带抽取」同一姿态）。
+
+        🔴 没有这一下，新写入 / 改过的文件只能等用户点「重建索引」—— 那是把全库推倒重来，
+        而这里要的是「只补新的那几个」。已有作业在跑就让它跑：队列状态全在库里，它自己会领走新文件。
+        """
+        try:
+            self._spawn_job("index", self._run_index)
+        except LibraryError:
+            pass
+
+    def start_download_job(self) -> dict[str, Any]:
+        """下载权重（约 614 MB）。🔴 只在用户显式点「下载语义模型」时才走到这里。"""
+        if E.model_present(self.root_path):
+            raise LibraryError("E_INVALID_STATE", "semantic model is already downloaded")
+        self._spawn_job("download", self._run_download)
+        return self.embed_status()
+
+    def start_index_job(self) -> dict[str, Any]:
+        if self._get_encoder() is None:
+            raise LibraryError("E_INVALID_STATE", "semantic model is not downloaded", hint="先在设置页下载语义模型")
+        self._spawn_job("index", self._run_index)
+        return self.embed_status()
+
+    def _run_download(self, job: _Job) -> None:
+        try:
+            job.total = EMBED_MODEL_APPROX_BYTES
+
+            def progress(done: int, total: int) -> None:
+                job.done, job.total = done, max(total, done)
+
+            E.download_model(self.root_path, progress=progress)
+            self._reset_encoder()
+        except Exception as exc:  # noqa: BLE001 — 作业失败进 job.error，由设置页显示
+            job.error = str(exc)
+            logger.warning(f"[library] semantic model download failed: {exc}")
+        finally:
+            job.running, job.finished_at = False, time.time()
+        # 下完接着建一次索引：否则用户等完 614 MB 看到的仍是 files_pending 一动不动，
+        # 而唯一能按的按钮叫「重建索引」（名字说的是另一件事）。
+        # 🔴 必须在 finally **之后** —— 作业是进程内单实例，还挂着 running 时起第二个会被自己挡掉。
+        if job.error is None:
+            self._kick_index()
+
+    def _run_index(self, job: _Job) -> None:
+        """低速循环：一批 ``EMBED_BATCH_FILES`` 个文件，批间 sleep，不跟前台抢 CPU。"""
+        try:
+            stalled, last_remaining = 0, -1
+            while True:
+                batch = self.embed_pending(max_files=EMBED_BATCH_FILES)
+                job.done += int(batch["files"])
+                job.total = job.done + int(batch["remaining"])
+                if not batch["available"] or batch["files"] == 0:
+                    break
+                # 领了文件却没让队列变短（正文一直在被改 / 该文件反复失败）→ 三轮后收手，不空转。
+                stalled = stalled + 1 if batch["remaining"] == last_remaining else 0
+                last_remaining = int(batch["remaining"])
+                if stalled >= 3:
+                    job.error = "index stalled: queue not shrinking"
+                    break
+                time.sleep(EMBED_BATCH_SLEEP_SEC)
+        except Exception as exc:  # noqa: BLE001 — 同上
+            job.error = str(exc)
+            logger.warning(f"[library] semantic index job failed: {exc}")
+        finally:
+            job.running, job.finished_at = False, time.time()
 
     def history(self, file_id: int) -> list[dict[str, Any]]:
         conn = self.db.connect()

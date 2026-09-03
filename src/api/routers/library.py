@@ -37,7 +37,7 @@ from src.api.routers.attachment import (
     _resolve_guarded_path,
     _stream_response,
 )
-from src.library.constants import FOLDER_PAGE_SIZE, READ_TOOL_MAX_BYTES, SOURCES
+from src.library.constants import FOLDER_PAGE_SIZE, READ_TOOL_MAX_BYTES, SEARCH_MODES, SOURCES
 from src.library.service import TEXT_KINDS, Actor, LibraryError, LibraryService, _cap_text
 
 router = APIRouter(
@@ -233,10 +233,41 @@ def library_search(
     request: Request,
     q: str = Query(..., min_length=1, max_length=200),
     limit: int = Query(20, ge=1, le=100),
+    mode: str = Query("hybrid", description=f"检索模式 ∈ {', '.join(SEARCH_MODES)}（design §9.1）"),
     service: LibraryService = Depends(get_library_service),
 ):
-    """FTS 双表（含 CJK 走 trigram，1 字拦截进 ``warnings``）；pending 文件顺带抽取。"""
-    return _run(request, service.search, q, limit=limit)
+    """FTS 双表（含 CJK 走 trigram，1 字拦截进 ``warnings``）+ 语义腿经 RRF 混合；pending 文件顺带抽取。
+
+    🔴 没下载语义模型时 ``mode=hybrid`` **自动退化成纯 FTS**，返回体形状不变：``search_mode`` 说实际跑了
+    哪条、``semantic.available`` 说模型在不在、每条命中的 ``lane`` 恒为 ``'fts'``。能力缺席**不进
+    ``warnings``**（那里只放这次 query 自身的事，如 ``cjk_too_short:X``）。
+    """
+    return _run(request, service.search, q, limit=limit, mode=mode)
+
+
+@router.get("/embed/status")
+def library_embed_status(request: Request, service: LibraryService = Depends(get_library_service)):
+    """语义索引面板：``{model:{available, model_id, repo, approx_bytes, bytes_on_disk},
+    index:{files_total, files_indexed, files_pending, chunks}, job:{kind, running, done, total, error, …}|null}``。
+
+    设置页轮询它（作业跑着时约 1s 一次，跑完停）。**不含任何绝对路径**（renderer 永不拿到）。
+    """
+    return _run(request, service.embed_status)
+
+
+@router.post("/embed/download")
+def library_embed_download(request: Request, service: LibraryService = Depends(get_library_service)):
+    """下载语义模型权重（约 614 MB）→ 立即返回一份 status，进度经 ``GET /embed/status`` 的 ``job`` 轮询。
+
+    已下载 → ``E_INVALID_STATE``；已有作业在跑 → 同样 ``E_INVALID_STATE``（进程内单实例）。
+    """
+    return _run(request, service.start_download_job)
+
+
+@router.post("/embed/rebuild")
+def library_embed_rebuild(request: Request, service: LibraryService = Depends(get_library_service)):
+    """清掉本模型的全部向量并重新后台建索引（低速队列）；返回一份 status，进度同上。没模型 → ``E_INVALID_STATE``。"""
+    return _run(request, service.rebuild_index)
 
 
 @router.get("/file/{file_id}")
