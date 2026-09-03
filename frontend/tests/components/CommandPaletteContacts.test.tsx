@@ -53,6 +53,14 @@ vi.mock('@shared/hooks/useMailApi', () => ({
   })
 }))
 
+vi.mock('@shared/hooks/useLibraryApi', () => ({
+  // 资料库第五 lane（P2-L7）跟着任何一次渲染发查询；本文件不测它，给个空结果，
+  // 免得真去 fetch loopback serve-api。
+  useLibraryApi: () => ({
+    search: async () => ({ query: '', mode: 'empty', hits: [], warnings: [] })
+  })
+}))
+
 vi.mock('@shared/assistant/searchAgentClient', () => ({
   runGatewaySearchAgent: vi.fn(async () => ({ ok: true, hits: [], summary: null }))
 }))

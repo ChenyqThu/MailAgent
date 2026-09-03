@@ -75,6 +75,14 @@ vi.mock('@shared/hooks/useMailApi', () => ({
 // S3 W1 — the palette now calls the gateway search client (runGatewaySearchAgent), not
 // mailApi.chat.runSearchAgent. The adapter drops the leading `reads` arg so every
 // existing single-arg assertion (calledWith({query,…}) / calls[0][0].signal) still holds.
+vi.mock('@shared/hooks/useLibraryApi', () => ({
+  // 资料库第五 lane（P2-L7）跟着任何一次渲染发查询；本文件不测它，给个空结果，
+  // 免得真去 fetch loopback serve-api。
+  useLibraryApi: () => ({
+    search: async () => ({ query: '', mode: 'empty', hits: [], warnings: [] })
+  })
+}))
+
 vi.mock('@shared/assistant/searchAgentClient', () => ({
   runGatewaySearchAgent: (_reads: unknown, input: unknown) => mockRunSearchAgent(input)
 }))

@@ -5,13 +5,15 @@ import type {
 } from '@shared/api/types/matter'
 import type { SearchHit } from '@shared/api/types'
 
-export type PaletteScope = 'all' | 'email' | 'matter' | 'contact'
+export type PaletteScope = 'all' | 'email' | 'matter' | 'contact' | 'library'
 
 export interface PaletteScopeVisibility {
   showEmail: boolean
   showMatter: boolean
   /** 通讯录 WP4「人」组：scope 'all' 与 'contact' 下可见。 */
   showContact: boolean
+  /** 资料库第五 lane（P2-L7）：scope 'all' 与 'library' 下可见。 */
+  showLibrary: boolean
   showNonProviderGroups: boolean
 }
 
@@ -49,13 +51,15 @@ export function getMatterMatchDetails(
 }
 
 export function paletteScopeVisibility(scope: PaletteScope): PaletteScopeVisibility {
-  // 既有三档（all/email/matter）的可见性逐字不变；'contact' 档 = 只看「人」组
-  // （镜像 'matter' 档只看事项组的语义：email/jump/actions 全藏）。
+  // 既有三档（all/email/matter）的可见性逐字不变；'contact' / 'library' 两档 = 只看
+  // 自己那一组（镜像 'matter' 档只看事项组的语义：email/jump/actions 全藏）。
+  const soloProvider = scope === 'contact' || scope === 'library'
   return {
-    showEmail: scope !== 'matter' && scope !== 'contact',
-    showMatter: scope !== 'email' && scope !== 'contact',
+    showEmail: scope !== 'matter' && !soloProvider,
+    showMatter: scope !== 'email' && !soloProvider,
     showContact: scope === 'all' || scope === 'contact',
-    showNonProviderGroups: scope !== 'matter' && scope !== 'contact'
+    showLibrary: scope === 'all' || scope === 'library',
+    showNonProviderGroups: scope !== 'matter' && !soloProvider
   }
 }
 

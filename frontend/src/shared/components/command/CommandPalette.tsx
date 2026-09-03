@@ -87,6 +87,7 @@ import { hasDslToken, toggleDslToken } from '@shared/lib/dsl_token'
 import type { MailboxSummary, SearchAgentPhase, SearchHit, SearchResult } from '@shared/api/types'
 import type { Matter } from '@shared/api/types/matter'
 import type { ContactRowDto } from '@shared/api/types/contact'
+import { useLibraryApi } from '@shared/hooks/useLibraryApi'
 import { useMattersApi, useMattersEnabled } from '@shared/components/matters/hooks'
 import { useMatterNavigation } from '@shared/components/matters/navigation'
 import { useContactsApi, useContactsEnabled } from '@shared/components/contacts/hooks'
@@ -101,9 +102,11 @@ import {
 } from '@shared/navigation/registry'
 import { useVisibleNavEntries } from '@shared/navigation/useNavGates'
 import { EmailHitRow } from './EmailHitRow'
+import { LibraryHitRow, LibrarySearchWarnings } from './LibraryHitRow'
 import { MatterHitRow } from './MatterHitRow'
 import { PersonHitRow } from './PersonHitRow'
 import { PaletteThinkingPhrases } from './PaletteThinkingPhrases'
+import { LIBRARY_MAX_HITS, libraryAddressableHits, navigateToLibraryFile } from './paletteLibrary'
 import {
   buildPaletteMatterLookupKeys,
   lookupMattersForEmail,
@@ -167,7 +170,7 @@ const FIXED_FACETS: ReadonlyArray<{ token: string; labelKey: string }> = [
   { token: 'has:attachment', labelKey: 'palette.facet.hasAttachment' }
 ]
 
-type Group = 'jump' | 'matter' | 'contact' | 'ai' | 'email' | 'actions'
+type Group = 'jump' | 'matter' | 'contact' | 'library' | 'ai' | 'email' | 'actions'
 
 // ─── Tiny helpers ──────────────────────────────────────────────────────
 
@@ -241,6 +244,7 @@ export function CommandPalette(): React.ReactElement | null {
   const mattersEnabled = useMattersEnabled()
   const contactsApi = useContactsApi()
   const { enabled: contactsEnabled } = useContactsEnabled()
+  const libraryApi = useLibraryApi()
   // jump 静态段的一级入口（门控过滤 + 按 palette.order 排好）。
   const visibleNavEntries = useVisibleNavEntries()
   const paletteNavEntries: readonly NavEntry[] = useMemo(
@@ -298,6 +302,16 @@ export function CommandPalette(): React.ReactElement | null {
       void navigate({ to: '/contacts' })
     },
     [navigate, openContact]
+  )
+
+  // 资料库 P2-L7 —— 命中直达深链 `/library?file={id}`（design §9.5）：不落 store
+  // intent，展开文件夹 / 选中 / missing 时 toast 全由落地页读 `file` 搜索参数自己做。
+  const activateLibraryFile = useCallback(
+    (fileId: number): void => {
+      closeCommandPalette()
+      navigateToLibraryFile(navigate, fileId)
+    },
+    [navigate]
   )
 
   const [query, setQuery] = useState('')
@@ -490,6 +504,27 @@ export function CommandPalette(): React.ReactElement | null {
   // overflow —— 它们在通讯录页里可以搜到。
   const contactOverflow = Math.max(0, (contactsQ.data?.total ?? 0) - visibleContactHits.length)
   const isSearchingContacts = contactsQ.isFetching && hasQuery
+
+  // 资料库 P2-L7 —— 第五 lane（useQuery 形状同上面两条）。
+  // 🔴 纯关键词，不接字段语法：query 原样发 `GET /library/search`，服务端自己按 CJK /
+  // 长度分流（1 字拦截 + warning ／ 2 字 LIKE ／ ≥3 字整串 MATCH）。
+  // 远程 web build 整域隐藏（design §2.5），连请求都不发。
+  const libraryQ = useQuery({
+    queryKey: qk.library.paletteSearch(normalised),
+    queryFn: () => libraryApi.search(normalised, LIBRARY_MAX_HITS),
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+    enabled: open && !IS_WEB && hasQuery
+  })
+  const libraryHits = useMemo(
+    () => libraryAddressableHits(libraryQ.data?.hits ?? []),
+    [libraryQ.data?.hits]
+  )
+  // placeholderData 期间的 warning 属于上一个 query，别让它比结果慢一拍（与上面
+  // `parseWarnings` 同款判据）。
+  const libraryWarnings: string[] =
+    libraryQ.isPlaceholderData || IS_WEB ? [] : (libraryQ.data?.warnings ?? [])
+  const isSearchingLibrary = libraryQ.isFetching && hasQuery
 
   // G-B3 — record history on a *settled* successful search (not every keystroke):
   // debounce → normalised → searchQ resolves (non-placeholder) → push once. This
@@ -971,6 +1006,13 @@ export function CommandPalette(): React.ReactElement | null {
         out.push({ group: 'contact', indexInGroup: i, run: () => activateContact(contact) })
       )
     }
+    // 资料库第五 lane 紧跟「人」组（jump → matter → contact → library → ai → email →
+    // actions）—— 三个对象域排在（可能很长的）邮件与 AI 结果之前。
+    if (scopeVisibility.showLibrary) {
+      libraryHits.forEach((file, i) =>
+        out.push({ group: 'library', indexInGroup: i, run: () => activateLibraryFile(file.id) })
+      )
+    }
     // AI agentic hits: same activate closure as EMAIL hits; the AI summary row
     // and the in-flight phrase row are NOT entries (non-interactive).
     if (scopeVisibility.showEmail) {
@@ -1002,12 +1044,14 @@ export function CommandPalette(): React.ReactElement | null {
     jumpItems,
     visibleMatterHits,
     visibleContactHits,
+    libraryHits,
     aiHits,
     dedupedHits,
     actionItems,
     scopeVisibility,
     activateMatter,
     activateContact,
+    activateLibraryFile,
     activateHit
   ])
 
@@ -1025,7 +1069,7 @@ export function CommandPalette(): React.ReactElement | null {
   const jumpToGroupBoundary = useCallback(
     (forward: boolean) => {
       if (flat.length === 0) return
-      const order: Group[] = ['jump', 'matter', 'contact', 'ai', 'email', 'actions']
+      const order: Group[] = ['jump', 'matter', 'contact', 'library', 'ai', 'email', 'actions']
       const present = order.filter((g) => flat.some((f) => f.group === g))
       if (present.length <= 1) return
       const curGroup = flat[highlight]?.group ?? present[0]
@@ -1113,22 +1157,27 @@ export function CommandPalette(): React.ReactElement | null {
     totalIndexed === null
       ? `${dedupedHits.length}`
       : t('palette.email.countLabel', { n: dedupedHits.length, total: totalIndexed })
-  // scope chips：matter/contact 各自跟 flag 走（off 不出 chip）；'all' 计数 =
-  // 可见 provider 组之和。chips 行本身的渲染 gate 见下方（matters 或 contacts
-  // 任一开启即渲染 —— contacts-only 时 contact scope 也要可达）。
+  // scope chips：matter/contact 各自跟 flag 走（off 不出 chip）；资料库跟 build target
+  // 走（远程 web 整域隐藏）；'all' 计数 = 可见 provider 组之和。chips 行本身的渲染 gate
+  // 见下方（matters / contacts / library 任一可见即渲染）。
   const scopeItems: ReadonlyArray<{ id: PaletteScope; count: number }> = [
     {
       id: 'all',
-      count: emailProviderCount + visibleMatterHits.length + visibleContactHits.length
+      count:
+        emailProviderCount +
+        visibleMatterHits.length +
+        visibleContactHits.length +
+        libraryHits.length
     },
     { id: 'email', count: emailProviderCount },
     ...(mattersEnabled ? [{ id: 'matter', count: visibleMatterHits.length } as const] : []),
-    ...(contactsEnabled ? [{ id: 'contact', count: visibleContactHits.length } as const] : [])
+    ...(contactsEnabled ? [{ id: 'contact', count: visibleContactHits.length } as const] : []),
+    ...(IS_WEB ? [] : [{ id: 'library', count: libraryHits.length } as const])
   ]
 
   // Pre-compute flat index offsets for each group so renderer can stamp
   // data-flat-idx without recomputing during the map. Order matches the flat
-  // index builder: jump → matter → contact → ai → email → actions.
+  // index builder: jump → matter → contact → library → ai → email → actions.
   let cursor = 0
   const jumpStartIdx = cursor
   cursor += scopeVisibility.showNonProviderGroups ? jumpItems.length : 0
@@ -1136,6 +1185,8 @@ export function CommandPalette(): React.ReactElement | null {
   cursor += scopeVisibility.showMatter ? visibleMatterHits.length : 0
   const contactStartIdx = cursor
   cursor += scopeVisibility.showContact ? visibleContactHits.length : 0
+  const libraryStartIdx = cursor
+  cursor += scopeVisibility.showLibrary ? libraryHits.length : 0
   const aiStartIdx = cursor
   cursor += scopeVisibility.showEmail ? aiHits.length : 0
   const emailStartIdx = cursor
@@ -1286,7 +1337,7 @@ export function CommandPalette(): React.ReactElement | null {
           </div>
         )}
 
-        {(mattersEnabled || contactsEnabled) && hasQuery ? (
+        {(mattersEnabled || contactsEnabled || !IS_WEB) && hasQuery ? (
           <div className="flex shrink-0 items-center gap-1.5 border-b border-ink-border-soft px-4 py-1.5">
             {scopeItems.map((item) => (
               <button
@@ -1508,6 +1559,81 @@ export function CommandPalette(): React.ReactElement | null {
                   </div>
                 </div>
               )}
+            </>
+          ) : null}
+
+          {/* 资料库 P2-L7 —— 第五 lane（形状照上面的「人」组）。
+              命中为空但有 warning（中文 1 个字被拦下）时**只出提示不出空态**：
+              「没有匹配的文件」会把「这次根本没查」说成「查了没有」。 */}
+          {!IS_WEB &&
+          scopeVisibility.showLibrary &&
+          hasQuery &&
+          (libraryHits.length > 0 || libraryWarnings.length > 0 || scope === 'library') ? (
+            <>
+              <GroupHeader
+                title={t('library.search.groupTitle')}
+                countLabel={String(libraryHits.length)}
+                aside={
+                  isSearchingLibrary ? (
+                    <>
+                      <Loader2
+                        size={12}
+                        strokeWidth={2}
+                        className="animate-spin text-ink-fg-2 motion-reduce:animate-none"
+                        aria-hidden
+                      />
+                      <span>{t('palette.searching')}</span>
+                    </>
+                  ) : undefined
+                }
+              />
+              <LibrarySearchWarnings warnings={libraryWarnings} className="px-5 pb-1 pt-0.5" />
+              {libraryHits.length > 0 ? (
+                <div className="space-y-px px-3">
+                  {libraryHits.map((file, index) => {
+                    const idx = libraryStartIdx + index
+                    return (
+                      <LibraryHitRow
+                        key={file.id}
+                        hit={file}
+                        flatIdx={idx}
+                        selected={idx === highlight}
+                        setHighlight={setHighlight}
+                        queryTerms={queryTerms}
+                        onActivate={() => activateLibraryFile(file.id)}
+                      />
+                    )
+                  })}
+                </div>
+              ) : libraryWarnings.length === 0 ? (
+                <div className="px-5">
+                  <div className="empty-tile">
+                    {isSearchingLibrary ? (
+                      <Loader2
+                        size={18}
+                        strokeWidth={1.75}
+                        className="animate-spin text-ink-fg-3 motion-reduce:animate-none"
+                        aria-hidden
+                      />
+                    ) : (
+                      <SearchIcon
+                        size={18}
+                        strokeWidth={1.75}
+                        className="text-ink-fg-3"
+                        aria-hidden
+                      />
+                    )}
+                    <div className="text-aux text-ink-fg-1">
+                      {isSearchingLibrary ? t('palette.searching') : t('library.search.empty')}
+                    </div>
+                    {!isSearchingLibrary ? (
+                      <div className="text-center text-meta text-ink-fg-3">
+                        {t('library.search.emptyHint')}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
             </>
           ) : null}
 
