@@ -1,4 +1,4 @@
-// L4 群聊 — 单个群聊会话的编排：群头 / 消息流 / 发送框三件拆在 GroupHeader / GroupThread /
+// L4 群聊 — 单个群聊会话的编排：群头 / 消息流 / 发送框三件拆在 GroupHeader / GroupTranscript /
 // GroupComposer，本文件只持有数据流与两条驱动的分派。
 //
 // 驱动有两条，由 labs 开关 `labs_group_agents` 选（g1）：
@@ -18,14 +18,20 @@
 // 🔴 labs 开关未到达时的发送**不**按 off 走 v1：send 先 `await labs.ready()` 再分派（发送钮不因
 //    loading 禁用；design §4.6 / §10 Q11）。否则 loading 期间被当成 off 起本地循环、服务端又同时
 //    编排 = 双跑。
+//
+// T3 话题：同一条管线跑两种会话。顶层群的主时间线多三件事 —— 拉话题清单（挂 threadCard）、hover
+// 「开话题」（createGroupThread 幂等，建好就打开话题面）、前台上报二元组 `{groupId, threadId}`；
+// `thread` 模式（话题面里挂的就是本组件，`session.id` = 话题 id）则换群头为「话题 + 关闭」、把根消息
+// 挂在消息流上方、composer 的唤醒人数改按参与者算，且**不**上报前台（父群视图报二元组）、不再拉
+// 话题清单（话题不能再开话题，单层嵌套）。
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Info } from 'lucide-react'
 
 import type { ChatMessage, ChatSession } from '@shared/api/types'
-import type { GroupAttachment } from '@shared/chat_model'
+import type { GroupAttachment, GroupThreadSummary } from '@shared/chat_model'
 import { qk } from '@shared/lib/queryKeys'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useLabsFlags } from '@shared/hooks/useLabsFlags'
@@ -38,13 +44,22 @@ import {
   runGroupSpeaker
 } from '@shared/assistant/groupChatClient'
 import { resolveAiGatewayBaseUrl } from '@shared/assistant/runtime/flags'
-import { getGroupConfig, getGroupTurns } from '@shared/api/groupSettings'
+import {
+  createGroupThread,
+  getGroupConfig,
+  getGroupTurns,
+  listGroupThreads
+} from '@shared/api/groupSettings'
 
 import { parseAttachmentsMetadata } from '../../../../ai-gateway/groupAttachments'
+import { AgentAvatar } from '../AgentAvatar'
+import { GroupBubble } from './GroupBubble'
 import { GroupComposer } from './GroupComposer'
 import { GroupHeader } from './GroupHeader'
 import type { RetryUiState } from './GroupMetaRow'
-import { GroupThread, type GroupThreadEmpty } from './GroupThread'
+import { GroupTranscript, type GroupTranscriptEmpty } from './GroupTranscript'
+import { absoluteTimeLabel, colorOfMember, previewPrefix } from './groupPresentation'
+import { groupThreadsKey } from './groupThreads'
 import { buildGroupTimeline, groupStopMeta, type GroupTimelineItem } from './groupTimeline'
 import { parseGroupMentions } from './mentions'
 import { parseMembersJson, type GroupMemberMeta } from './members'
@@ -61,6 +76,18 @@ import {
 const GROUP_RUN_POLL_MS = 30_000
 const RECENT_ACTIVITY_MS = 60_000
 const GROUP_TURNS_LIMIT = 200
+/** 稳定引用：子群 / 话题面没有话题清单，每次 render 新造 `[]` 会让 threadRootIds 的 memo 失效。 */
+const NO_THREADS: readonly GroupThreadSummary[] = []
+
+/** T3 — 话题面模式的输入（GroupThreadPane 解析好再交进来）。 */
+export interface GroupChatThreadMode {
+  groupId: number
+  summary: GroupThreadSummary
+  /** 父群里的根消息行；父群消息未加载 / 根消息已清 → null，只显示摘要。 */
+  rootMessage: ChatMessage | null
+  onClose: () => void
+  onViewInGroup: () => void
+}
 
 /** 停止本群这一轮（registry 中止当前 turn；调度器按 family 清队列并各写一条系统行）。 */
 async function stopGroupRun(sessionId: number): Promise<void> {
@@ -95,7 +122,10 @@ export function GroupChatView({
   detailsOpen,
   onToggleDetails,
   initialLive,
-  onSendingChange
+  onSendingChange,
+  activeThreadId,
+  onOpenThread,
+  thread
 }: {
   session: ChatSession
   memberMeta: Map<string, GroupMemberMeta>
@@ -107,11 +137,21 @@ export function GroupChatView({
   initialLive?: GroupLiveTriple | null
   /** labs off 的 v1 发送期间上抛，供列表「发言中」脉冲。 */
   onSendingChange?: (sending: boolean) => void
+  /** T3 — 当前打开的话题（Workspace 持有），只用于前台上报的二元组；缺省 = 没开。 */
+  activeThreadId?: number | null
+  /** T3 — 打开某个话题面（hover「开话题」建好之后 / 点话题卡）。缺省 = 没有话题入口。 */
+  onOpenThread?: (threadId: number) => void
+  /** T3 — 话题面模式：本视图渲染的是话题会话（`session.id` = 话题 id）。 */
+  thread?: GroupChatThreadMode
 }): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
   const qc = useQueryClient()
   const sessionId = session.id
+  const isThread = thread != null
+  const threadGroupId = thread?.groupId ?? null
+  // 只有顶层群能开话题（单层嵌套：子群 / 话题里都不渲染入口，服务端同判据 400 兜底）。
+  const canThread = !isThread && (session.parent_session_id ?? null) == null
   const memberIds = useMemo(() => parseMembersJson(session.members_json), [session.members_json])
   const memberEntries = useMemo(
     () =>
@@ -193,16 +233,67 @@ export function GroupChatView({
       ? 'unreachable'
       : 'ok'
 
+  // 话题里响应模式不生效（参与者制，design §4.4），群配置不拉：拉了也只会把 realtime 成员画成
+  // 「会自动回复」，而话题里他们不会。
   const configQ = useQuery({
     queryKey: qk.chat.groupConfig(sessionId),
     queryFn: () => getGroupConfig(sessionId),
-    enabled: labsOn,
+    enabled: labsOn && !isThread,
     staleTime: 30_000
   })
-  const modes = labsOn ? (configQ.data?.modes ?? null) : null
+  const modes = labsOn && !isThread ? (configQ.data?.modes ?? null) : null
   const topic = configQ.data?.config.topic?.trim() || null
-  const realtimeCount =
-    modes != null ? memberIds.filter((id) => modes[id] === 'realtime').length : null
+  // 话题的参与者 = 根消息说话人 ∪ 话题里已发过言的成员（gateway 的候选集判据，这里只为「将唤醒
+  // N 位」与群头的头像行算同一份事实；人发的根消息说话人为 null，不计）。
+  const rootSpeakerId = thread?.rootMessage?.speaker_agent_id ?? null
+  const participantIds = useMemo(() => {
+    if (!isThread) return memberIds
+    const ids = new Set<string>()
+    if (rootSpeakerId != null) ids.add(rootSpeakerId)
+    for (const m of messagesQ.data ?? []) {
+      if (m.role === 'assistant' && m.speaker_agent_id != null) ids.add(m.speaker_agent_id)
+    }
+    return [...ids]
+  }, [isThread, memberIds, rootSpeakerId, messagesQ.data])
+  const realtimeCount = isThread
+    ? participantIds.length
+    : modes != null
+      ? memberIds.filter((id) => modes[id] === 'realtime').length
+      : null
+
+  // T3 — 话题清单：只有顶层群拉；key 有意不挂 allSessions 前缀（话题一动不该连带重拉群列表）。
+  const threadsQ = useQuery({
+    queryKey: groupThreadsKey(sessionId),
+    queryFn: () => listGroupThreads(sessionId),
+    enabled: canThread,
+    staleTime: 5_000
+  })
+  const threads = canThread ? (threadsQ.data ?? NO_THREADS) : NO_THREADS
+  const threadRootIds = useMemo(() => new Set(threads.map((th) => th.rootMessageId)), [threads])
+  // turn-persisted 的分派要认「这条是不是本群某个话题的」；用 ref 免得清单一变就重订阅。
+  const threadIdsRef = useRef<ReadonlySet<number>>(new Set())
+  useEffect(() => {
+    threadIdsRef.current = new Set(threads.map((th) => th.sessionId))
+  }, [threads])
+  const onOpenThreadRef = useRef(onOpenThread)
+  useEffect(() => {
+    onOpenThreadRef.current = onOpenThread
+  }, [onOpenThread])
+  // 幂等：同一条根重复点返回已有话题（serve-api 契约），所以「开」与「进」是同一个动作。
+  // 🔴 引用稳定：它经 GroupTranscript 落到每个 memo 的 GroupMessageGroup 上，流式 delta 期间
+  // 每帧换一个新函数就等于把整条时间线的 memo 全废了。
+  const createThread = useCallback(
+    async (messageId: number): Promise<void> => {
+      try {
+        const created = await createGroupThread(sessionId, messageId)
+        await qc.invalidateQueries({ queryKey: groupThreadsKey(sessionId) })
+        onOpenThreadRef.current?.(created.sessionId)
+      } catch (err) {
+        toastError(errorMessage(err))
+      }
+    },
+    [sessionId, qc]
+  )
 
   // 台账：since = 最早一条落库消息（无消息 → 不请求；清空历史后旧 meta 行随之退出对话）。
   const turnsQ = useQuery({
@@ -222,6 +313,13 @@ export function GroupChatView({
   useEffect(() => {
     if (!labsOn) return undefined
     return mailApi.chat.onTurnPersisted?.((payload) => {
+      // 本群某个话题里落了一条：只刷话题卡（回复数 / 最新 / 未读）与群列表的 has_unread_threads，
+      // 主时间线不动 —— 话题回复不在这条会话里。
+      if (threadIdsRef.current.has(payload.sessionId)) {
+        void qc.invalidateQueries({ queryKey: groupThreadsKey(sessionId) })
+        void qc.invalidateQueries({ queryKey: qk.chat.groupOriginSessions() })
+        return
+      }
       if (payload.sessionId !== sessionId) return
       void qc.refetchQueries({ queryKey: qk.chat.messages(sessionId) }).then(() => {
         const data = qc.getQueryData<ChatMessage[]>(qk.chat.messages(sessionId))
@@ -235,18 +333,24 @@ export function GroupChatView({
     })
   }, [labsOn, mailApi, qc, sessionId, dispatch])
 
-  // 选中即已读；告诉 main 本群在前台（通知投影据此跳过），卸载 / 切群上报 null。
+  // 选中即已读（话题面打开即已读同一条）；话题读过还要刷父群的话题卡（unread 点）。
   useEffect(() => {
     void mailApi.chat.markSessionRead(sessionId).then(() => {
       void qc.invalidateQueries({ queryKey: qk.chat.groupOriginSessions() })
+      if (threadGroupId != null) {
+        void qc.invalidateQueries({ queryKey: groupThreadsKey(threadGroupId) })
+      }
     })
-  }, [mailApi, qc, sessionId])
+  }, [mailApi, qc, sessionId, threadGroupId])
+  // 告诉 main 前台是哪个群 + 哪个话题（通知投影据此跳过），卸载 / 切群上报 null。
+  // 🔴 只有群视图报：话题面自己不报，否则两处 effect 互相覆盖、关话题面还会把群一并报成 null。
   useEffect(() => {
-    void mailApi.chat.setGroupForeground?.(sessionId)
+    if (isThread) return undefined
+    void mailApi.chat.setGroupForeground?.({ groupId: sessionId, threadId: activeThreadId ?? null })
     return () => {
       void mailApi.chat.setGroupForeground?.(null)
     }
-  }, [mailApi, sessionId])
+  }, [mailApi, sessionId, isThread, activeThreadId])
 
   const patchLive = (key: string, patch: Partial<LiveBubble>): void =>
     setLive((prev) => prev.map((b) => (b.key === key ? { ...b, ...patch } : b)))
@@ -379,9 +483,10 @@ export function GroupChatView({
         turns: labsOn && turnsQ.data != null ? turnsQ.data.turns : null,
         turnsHasMore: turnsQ.data?.hasMore ?? false,
         live: labsOn ? liveView : null,
-        local: localBubbles
+        local: localBubbles,
+        threads
       }),
-    [messagesQ.data, labsOn, turnsQ.data, liveView, localBubbles]
+    [messagesQ.data, labsOn, turnsQ.data, liveView, localBubbles, threads]
   )
 
   // 落库 user 行的附件（metadata.attachments → 气泡下的 chip）。本地气泡不带 chip：两条路径都在
@@ -396,11 +501,13 @@ export function GroupChatView({
     return out
   }, [messagesQ.data])
 
-  const emptyVariant: GroupThreadEmpty = !labsOn
-    ? 'v1'
-    : realtimeCount === 0
-      ? 'noRealtime'
-      : 'orchestrated'
+  const emptyVariant: GroupTranscriptEmpty = isThread
+    ? 'thread'
+    : !labsOn
+      ? 'v1'
+      : realtimeCount === 0
+        ? 'noRealtime'
+        : 'orchestrated'
   const showChain =
     runAlive ||
     (liveEvents.lastEventAt != null && nowMs - liveEvents.lastEventAt < RECENT_ACTIVITY_MS)
@@ -410,17 +517,21 @@ export function GroupChatView({
   }
 
   const groupTitle = session.title ?? t('groupChat.defaultTitle')
+  const titleOf = (id: string): string => memberMeta.get(id)?.title?.trim() || id
+  const root = thread?.rootMessage ?? null
 
   return (
     <div
       className="flex min-h-0 min-w-0 flex-1 flex-col"
-      data-group-chat={sessionId}
+      data-group-chat={isThread ? undefined : sessionId}
+      data-group-thread={isThread ? sessionId : undefined}
       data-group-mode={labs.loading ? undefined : labsOn ? 'orchestrated' : 'v1'}
     >
       <GroupHeader
-        title={groupTitle}
-        topic={labsOn ? topic : null}
-        memberIds={memberIds}
+        // 话题面：「话题」+ 摘要作副标题、头像行只画参与者、无详情钮、多一个关闭钮；停止钮照旧。
+        title={isThread ? t('groupChat.thread.paneTitle') : groupTitle}
+        topic={isThread ? thread.summary.title || null : labsOn ? topic : null}
+        memberIds={participantIds}
         memberMeta={memberMeta}
         inFlight={labsOn ? (liveView.inFlight?.agentId ?? null) : null}
         queued={labsOn ? liveView.queued : []}
@@ -429,9 +540,75 @@ export function GroupChatView({
         runAlive={labsOn ? runAlive : sending}
         stopping={stopping}
         onStop={onStop}
-        detailsOpen={detailsOpen}
-        onToggleDetails={onToggleDetails}
+        detailsOpen={isThread ? undefined : detailsOpen}
+        onToggleDetails={isThread ? undefined : onToggleDetails}
+        onClose={thread?.onClose}
       />
+
+      {thread != null && (
+        // 根消息原样挂在消息流上方（它在父群里，不在话题会话里），带「在群里查看」回跳。
+        <div
+          className="flex shrink-0 flex-col gap-1.5 border-b border-ink-border px-4 py-3"
+          data-thread-root={thread.summary.rootMessageId}
+        >
+          {root != null ? (
+            <div className="flex items-start gap-2.5">
+              {rootSpeakerId != null && (
+                <div className="shrink-0 pt-0.5">
+                  <AgentAvatar
+                    agentId={rootSpeakerId}
+                    config={memberMeta.get(rootSpeakerId)?.avatar}
+                    size={24}
+                    title={titleOf(rootSpeakerId)}
+                  />
+                </div>
+              )}
+              <div className="flex min-w-0 flex-col items-start">
+                <div
+                  data-time={absoluteTimeLabel(root.created_at)}
+                  className="mb-0.5 text-micro font-semibold after:ml-1.5 after:font-normal after:tabular-nums after:text-ink-fg-3 after:content-[attr(data-time)] after:text-meta"
+                  style={{
+                    color:
+                      rootSpeakerId != null
+                        ? colorOfMember(memberIds, rootSpeakerId)
+                        : 'rgb(var(--ink-fg-1))'
+                  }}
+                >
+                  {previewPrefix(
+                    {
+                      role: root.role === 'user' ? 'user' : 'assistant',
+                      speaker_agent_id: rootSpeakerId,
+                      via: null
+                    },
+                    titleOf,
+                    t
+                  )}
+                </div>
+                <GroupBubble
+                  text={root.content}
+                  streaming={false}
+                  variant={root.role === 'user' ? 'user' : 'member'}
+                  members={memberEntries}
+                  memberIds={memberIds}
+                  usage={null}
+                  attachments={
+                    root.role === 'user' ? parseAttachmentsMetadata(root.metadata) : null
+                  }
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="text-meta text-ink-fg-2">{thread.summary.title}</div>
+          )}
+          <button
+            type="button"
+            onClick={thread.onViewInGroup}
+            className="self-start text-aux text-ink-fg-1 underline-offset-2 hover:underline"
+          >
+            {t('groupChat.thread.viewInGroup')}
+          </button>
+        </div>
+      )}
 
       {gatewayState !== 'ok' && (
         <div className="flex shrink-0 items-center gap-2 border-b border-ink-border bg-ink-2 px-4 py-1.5 text-meta text-ink-fg-2">
@@ -444,7 +621,7 @@ export function GroupChatView({
         </div>
       )}
 
-      <GroupThread
+      <GroupTranscript
         items={timeline.items}
         tail={timeline.tail}
         memberIds={memberIds}
@@ -457,11 +634,14 @@ export function GroupChatView({
         empty={emptyVariant}
         retryStates={retryUiStates}
         onRetry={(item) => void retry(item)}
-        onOpenDetails={onToggleDetails}
+        onOpenDetails={isThread ? undefined : onToggleDetails}
         attachmentsById={attachmentsById}
         // 在场态的 stalled / error 两支要的事实（turn 留痕 + 最近事件时刻）。labs off 没有事件源
         // → null，在场行只能走 idle（不是「没失败过」，是「不知道」）。
         live={labsOn ? liveView : null}
+        onOpenThread={onOpenThread}
+        onCreateThread={canThread ? createThread : undefined}
+        threadRootIds={threadRootIds}
       />
 
       <GroupComposer

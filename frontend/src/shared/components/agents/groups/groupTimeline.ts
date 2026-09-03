@@ -11,6 +11,7 @@
 
 import type { ChatMessage } from '@shared/api/types'
 import type { GroupTurnWire } from '@shared/api/groupSettings'
+import type { GroupThreadSummary } from '@shared/chat_model'
 
 import {
   GROUP_SKIP_REASONS,
@@ -74,6 +75,9 @@ export interface GroupTimelineInput {
   turnsHasMore: boolean
   live: GroupLiveSnapshot | null
   local: readonly GroupLocalBubble[]
+  /** T3 — 本群的话题清单（顶层群的主时间线传；话题面自己的时间线与子群不传）。命中根消息
+   *  → 紧随那条消息之后插一张 `threadCard`。话题内的回复**不在**这里：它们落在另一条会话。 */
+  threads?: readonly GroupThreadSummary[]
 }
 
 export type GroupSpeaker = { type: 'user' } | { type: 'member'; agentId: string }
@@ -126,6 +130,16 @@ export type GroupTimelineItem =
   | { kind: 'stopped'; key: string; ts: number; reason: string; runId: string | null }
   | { kind: 'gameOver'; key: string; ts: number; runId: string | null }
   | { kind: 'turnsBoundary'; key: string; ts: number }
+  /** T3 — 挂在根消息正下方的话题卡（回复数 / 最新一条 / 未读）。它打断折叠组：同人在根消息之后
+   *  再发的消息另起一组，卡才能「紧随根消息」而不是沉到整组末尾。 */
+  | {
+      kind: 'threadCard'
+      key: string
+      ts: number
+      thread: GroupThreadSummary
+      /** 根消息的说话人：卡跟着根消息的对齐方向（user 根右对齐、成员根缩进到气泡列）。 */
+      speaker: GroupSpeaker
+    }
 
 export interface GroupTimelineTail {
   /** 在写者；`text` 为空时由在场行显示「正在输入…」，非空时已作为流式气泡进 items。 */
@@ -230,7 +244,9 @@ export function buildGroupTimeline(input: GroupTimelineInput): {
   items: GroupTimelineItem[]
   tail: GroupTimelineTail
 } {
-  const { messages, turns, turnsHasMore, live, local } = input
+  const { messages, turns, turnsHasMore, live, local, threads } = input
+  const threadByRoot = new Map<number, GroupThreadSummary>()
+  for (const th of threads ?? []) threadByRoot.set(th.rootMessageId, th)
   const rows = messages.filter((m) => m.status === 'complete')
   const chatRows = rows.filter((m) => m.role === 'user' || m.role === 'assistant')
   const earliest = chatRows.reduce<number | null>(
@@ -532,6 +548,19 @@ export function buildGroupTimeline(input: GroupTimelineInput): {
       items.push(currentGroup)
     }
     lastMsgTs = e.ts
+    // T3：这条落库消息是某个话题的根 → 卡紧随其后，并关掉当前折叠组（下一条同人消息另起一组）。
+    // 本地气泡 / 未落库的 overlay 项 id 为 null，查不到，天然不挂卡。
+    const thread = e.msg.id != null ? threadByRoot.get(e.msg.id) : undefined
+    if (thread != null) {
+      items.push({
+        kind: 'threadCard',
+        key: `tc:${thread.sessionId}`,
+        ts: e.ts,
+        thread,
+        speaker: e.speaker
+      })
+      currentGroup = null
+    }
   }
 
   return {

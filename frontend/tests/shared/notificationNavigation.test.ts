@@ -7,6 +7,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ChatSession } from '@shared/api/types'
+import { navigateToGroupThread } from '@shared/components/agents/groups/navigation'
 import { useAgentsNavigation } from '@shared/components/agents/navigation'
 import {
   navigateNotificationRoute,
@@ -14,6 +15,7 @@ import {
   resolveNotificationLink
 } from '@shared/components/notifications/navigation'
 import { useAIChatPanel } from '@shared/state/ai-chat-panel'
+import { useGroupsView } from '@shared/state/groups-view'
 
 describe('resolveNotificationLink — 真实信源形状', () => {
   it('agent run 终态：session 型（run_worker.py 有 session_id 时）', () => {
@@ -293,5 +295,52 @@ describe('resolveNotificationLink — group 型（L4 群聊 UX 批）', () => {
     expect(resolveNotificationLink({ link: { type: 'group', sessionId: 1.5 } })).toBeNull()
     expect(resolveNotificationLink({ link: { type: 'group', sessionId: '7' } })).toBeNull()
     expect(resolveNotificationLink({ link: { type: 'group' } })).toBeNull()
+  })
+})
+
+// T3 话题：thread 型两个 id 都是会话 id，缺一个就不跳（只有群 id 会落到主时间线，而话题回复
+// 不在主时间线上 —— 跳过去等于什么都没看到）。
+describe('resolveNotificationLink — thread 型（T3）', () => {
+  it('T1 {type:thread, groupId, threadId} → thread 链接', () => {
+    expect(resolveNotificationLink({ link: { type: 'thread', groupId: 7, threadId: 9 } })).toEqual({
+      type: 'thread',
+      groupId: 7,
+      threadId: 9
+    })
+  })
+
+  it.each([
+    ['缺 threadId', { link: { type: 'thread', groupId: 7 } }],
+    ['缺 groupId', { link: { type: 'thread', threadId: 9 } }],
+    ['groupId 为 0', { link: { type: 'thread', groupId: 0, threadId: 9 } }],
+    ['threadId 为 0', { link: { type: 'thread', groupId: 7, threadId: 0 } }],
+    ['threadId 非整数', { link: { type: 'thread', groupId: 7, threadId: 1.5 } }],
+    ['groupId 是字符串', { link: { type: 'thread', groupId: '7', threadId: 9 } }],
+    ['threadId 为负', { link: { type: 'thread', groupId: 7, threadId: -1 } }]
+  ])('T2 %s → null', (_label, payload) => {
+    expect(resolveNotificationLink(payload as Record<string, unknown>)).toBeNull()
+  })
+})
+
+// thread 型落地单源（groups/navigation）：点名话题 + 点名群 + 进 /groups，三件缺一件都是
+// 「跳过去看不见那条回复」（面板内点击与系统通知点击共用这一处）。
+describe('navigateToGroupThread — thread 型落地', () => {
+  beforeEach(() => {
+    useGroupsView.setState({ activeGroupSessionId: null, activeThreadBySession: {} })
+  })
+
+  it('点名群 + 点名话题 + navigate(/groups)', () => {
+    const navigate = vi.fn()
+    navigateToGroupThread(navigate as never, 7, 9)
+    expect(useGroupsView.getState().activeGroupSessionId).toBe(7)
+    expect(useGroupsView.getState().activeThreadBySession[7]).toBe(9)
+    expect(navigate).toHaveBeenCalledWith({ to: '/groups' })
+  })
+
+  it('换到另一个群的话题：旧群的话题键不动（按群记忆），新群被点名', () => {
+    useGroupsView.setState({ activeGroupSessionId: 7, activeThreadBySession: { 7: 9 } })
+    navigateToGroupThread(vi.fn() as never, 8, 10)
+    expect(useGroupsView.getState().activeGroupSessionId).toBe(8)
+    expect(useGroupsView.getState().activeThreadBySession).toEqual({ 7: 9, 8: 10 })
   })
 })

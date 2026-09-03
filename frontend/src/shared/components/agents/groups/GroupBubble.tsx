@@ -15,7 +15,7 @@
 
 import { memo, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Paperclip } from 'lucide-react'
+import { MessageSquarePlus, Paperclip } from 'lucide-react'
 
 import type { GroupAttachment } from '@shared/chat_model'
 import { cn } from '@shared/lib/cn'
@@ -41,6 +41,9 @@ export interface GroupBubbleProps {
   className?: string
   /** T2 — 这条消息的附件（落库行的 metadata.attachments）；空 / 缺省 = 不画 chip 行。 */
   attachments?: readonly GroupAttachment[] | null
+  /** T3 — hover「开话题」：缺省 = 不画（子群 / 话题面 / 已有话题的根 / 未落库的气泡）。
+   *  与 meta chip 同一条纪律：绝对定位、常驻 DOM、只切 opacity，不进 getNodeText、不占布局。 */
+  onOpenThread?: () => void
 }
 
 /** `rgb(var(--c-x))` → 同色 12% 底。 */
@@ -109,7 +112,8 @@ export const GroupBubble = memo(function GroupBubble({
   usage,
   title,
   className,
-  attachments
+  attachments,
+  onOpenThread
 }: GroupBubbleProps): React.ReactElement {
   const { t } = useTranslation()
   const plain = variant === 'user' || isPlainText(text)
@@ -172,6 +176,23 @@ export const GroupBubble = memo(function GroupBubble({
           >
             {chip}
           </span>
+        )}
+        {onOpenThread != null && (
+          <button
+            type="button"
+            onClick={onOpenThread}
+            aria-label={t('groupChat.thread.open')}
+            title={t('groupChat.thread.open')}
+            data-thread-open
+            className={cn(
+              'glass-pop pointer-events-none absolute top-1/2 grid size-6 -translate-y-1/2 place-items-center rounded-[var(--r-ctl)] text-ink-fg-2 opacity-0 transition-opacity duration-fast',
+              'hover:text-ink-fg group-hover/bubble:pointer-events-auto group-hover/bubble:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100',
+              // 成员气泡靠左 → 钮挂在右外侧；user 气泡贴着右边 → 挂在左外侧（挂右侧会撑出横向滚动条）。
+              variant === 'member' ? 'left-full ml-1.5' : 'right-full mr-1.5'
+            )}
+          >
+            <MessageSquarePlus size={13} strokeWidth={2} />
+          </button>
         )}
       </div>
       {attachments != null && attachments.length > 0 && (

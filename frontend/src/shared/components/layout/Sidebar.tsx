@@ -35,7 +35,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { useIsBelowMd } from '@shared/hooks/useMediaQuery'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { isWebBuild } from '@shared/lib/buildTarget'
-import { isSessionUnread } from '@shared/lib/chatUnread'
+import { isGroupRowUnread } from '@shared/lib/groupUnread'
 import { isInboxMailbox, mailboxForView } from '@shared/lib/mailboxSemantics'
 import { navigateToDomain } from '@shared/navigation/domain-location'
 import {
@@ -266,7 +266,8 @@ export function Sidebar(): React.ReactElement {
 
   // 09-01 侧栏批的两个无数字状态点：
   //   · 事项「进行中」= 有活的行动项派发（与今日面板 / 事项工作台同一份查询，共享缓存）；
-  //   · 群聊「有新消息」= 群聊会话（origin='group'）有未读。30s 一拉，SSE 不推它；
+  //   · 群聊「有新消息」= 群聊会话（origin='group'）有未读，含底下有未读话题（T3，
+  //     `isGroupRowUnread` 与群列表行 / peek 同一判据）。30s 一拉，SSE 不推它；
   //     没配群聊时 mock / 旧 serve-api 返回空数组或报错都只是「无点」。09-02 对话域拆分
   //     前这颗点挂在对话格上（口径一直是群聊），拆域后随 registry 的 badge 落到群聊格。
   const liveDispatches = useLiveItemDispatches(mattersEnabled)
@@ -276,7 +277,7 @@ export function Sidebar(): React.ReactElement {
     queryFn: () => mailApi.chat.listAllSessions({ origin: 'group' }),
     staleTime: 30_000
   })
-  const groupUnread = (groupSessions.data ?? []).filter((s) => isSessionUnread(s)).length
+  const groupUnread = (groupSessions.data ?? []).filter((s) => isGroupRowUnread(s)).length
 
   // 徽标数值按 registry 的 badge.kind 索引 —— rail 格只问「这一格挂哪个计数」，
   // 不逐处手接变量。

@@ -1,5 +1,5 @@
 // L4 群聊 — 发送框。T2 起换成与 AI Chat 同一套内胆：本组件自己挂一个只包住 composer 段 DOM 的
-// `useExternalStoreRuntime`（`messages` 恒空、时间线仍由 GroupThread 渲染），于是 `ComposerFrame`
+// `useExternalStoreRuntime`（`messages` 恒空、时间线仍由 GroupTranscript 渲染），于是 `ComposerFrame`
 // 的 chips 行 / 长高 / 拖入、`ComposerPrimitive.Input` 内置的粘贴附件、`ComposerPlusMenu` 的「+」
 // 三个附件入口与 AI Chat 逐字同源。**不挂** `ChatComposerControlsProvider` —— 模型 / skill / 授权 /
 // effort / 上下文环整组随 `controls === null` 消失（composer.tsx 文件头写明的「裸 composer」契约）。

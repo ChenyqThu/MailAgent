@@ -12,12 +12,16 @@
 // （它没有 report_agent 行）。serve-api 的成员校验对这个 id 短路放行，gateway 侧由
 // resolveGroupSession 合成成员事实 —— renderer 这一侧只负责让它出现在候选与 memberMeta 里。
 //
-// 本组件持有三件跨栏状态：
+// 本组件持有四件跨栏状态：
 //   ① 详情面开合 —— 落 `useGroupsView.detailsOpenBySession`，**按群记忆**（右栏是常驻面，
 //      切回某个群应该还是离开时那副样子）。
-//   ② `useGroupLiveMap(labsOn)` —— 列表级在场态的**唯一订阅点**：一次订阅下发给清单列的脉冲，
+//   ② 话题面（T3）—— 落 `useGroupsView.activeThreadBySession`，同样按群记忆。🔴 与详情面**互斥**
+//      且互斥在这里执行（store 只存两件事实）：右栏的归属按「话题面优先」派生 —— 有话题就画话题面，
+//      详情面只在没话题时才算开；点详情钮先收话题，开话题先收详情。通知直达
+//      （`navigateToGroupThread`）只点名话题不碰详情键，派生规则保证它照样顶掉详情面。
+//   ③ `useGroupLiveMap(labsOn)` —— 列表级在场态的**唯一订阅点**：一次订阅下发给清单列的脉冲，
 //      同时作为群聊视图的初值（每行各订阅一次 = 行数倍的 IPC 监听）。
-//   ③ `sendingSessionId` —— labs off 的 v1 发送期间由群聊视图上抛（那条路径没有服务端事件，
+//   ④ `sendingSessionId` —— labs off 的 v1 发送期间由群聊视图上抛（那条路径没有服务端事件，
 //      列表的「发言中」只能靠它）。
 //
 // 🔴 群聊是桌面-only（发言链路走本地 gateway；groupChatClient 在 web 上恒 E_UNSUPPORTED）。
@@ -31,7 +35,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { useLabsFlags } from '@shared/hooks/useLabsFlags'
 import { toastError } from '@shared/state/toast'
 import { errorMessage } from '@shared/lib/ipcErrors'
-import { isSessionUnread } from '@shared/lib/chatUnread'
+import { isGroupRowUnread } from '@shared/lib/groupUnread'
 import { useGroupsView } from '@shared/state/groups-view'
 import { Drawer } from '@shared/components/ui/drawer'
 
@@ -45,6 +49,7 @@ import { deriveTeamMembers } from '../team/teamMembers'
 import { GroupChatView } from './GroupChatView'
 import { GroupList } from './GroupList'
 import { GroupDetailsPane } from './GroupDetailsPane'
+import { GroupThreadPane } from './GroupThreadPane'
 import { NewGroupDialog } from './NewGroupDialog'
 import { useGroupLiveMap } from './useGroupTurnEvents'
 import { parseMembersJson, type GroupCandidate, type GroupMemberMeta } from './members'
@@ -52,7 +57,7 @@ import type { GroupRowItem } from './GroupRow'
 
 import { MAIN_AGENT_MEMBER_ID } from '../../../../ai-gateway/groupFloors'
 
-/** 详情面宽度（右栏；窄屏改 Drawer）。 */
+/** 详情面 / 话题面宽度（右栏；窄屏改 Drawer）。 */
 const DETAILS_WIDTH = 300
 
 /** 团队清单 → 可入群的 agent 行（canChat 且是真 agent 行；主 Agent 另行拼在最前）。 */
@@ -99,6 +104,8 @@ export function GroupChatWorkspace({
   const setActiveId = useGroupsView((s) => s.setActiveGroupSessionId)
   const detailsOpenBySession = useGroupsView((s) => s.detailsOpenBySession)
   const setDetailsOpen = useGroupsView((s) => s.setDetailsOpen)
+  const activeThreadBySession = useGroupsView((s) => s.activeThreadBySession)
+  const setActiveThread = useGroupsView((s) => s.setActiveThread)
   const [dialogOpen, setDialogOpen] = useState(false)
   // 刚建好、列表还没 refetch 到的群，本地持有一拍。
   const [draftSession, setDraftSession] = useState<ChatSession | null>(null)
@@ -146,10 +153,26 @@ export function GroupChatWorkspace({
   const listed = activeId != null ? (items.find((s) => s.id === activeId) ?? null) : null
   const activeSession: ChatSession | null =
     listed ?? (draftSession != null && draftSession.id === activeId ? draftSession : null)
-  const detailsOpen = activeId != null && detailsOpenBySession[activeId] === true
+  // 右栏归属：话题面优先；详情面只在没话题时才算开（互斥的派生一半，写侧另一半见下面两个动作）。
+  const activeThreadId = activeId != null ? (activeThreadBySession[activeId] ?? null) : null
+  const detailsOpen =
+    activeThreadId == null && activeId != null && detailsOpenBySession[activeId] === true
+  const openThread = (groupId: number, threadId: number): void => {
+    setActiveThread(groupId, threadId)
+    setDetailsOpen(groupId, false)
+  }
+  const toggleDetails = (groupId: number): void => {
+    if (!detailsOpen) setActiveThread(groupId, null)
+    setDetailsOpen(groupId, !detailsOpen)
+  }
 
   // 一局 = 本群 + 父群 + 本群的子群（自己在首位）。狼人杀的预算是 family 合计，单群数字
-  // 会低报到看不出问题；父子关系只从这一屏的行里推（清单已含全部 origin='group' 行）。
+  // 会低报到看不出问题；父子关系只从这一屏的行里推。
+  // 🔴 T3 起这份 family **不含话题**：群清单按 `invoked_by='thread'` 把话题排除了，这里推不出
+  // 它们。调度器那侧的预算窗口是含话题的（RunState.familySessionIds），所以群里开了话题之后，
+  // 详情面的「本局合计」会比调度器实际计的少一截。取舍：补齐要按群再拉一趟话题清单 + 逐话题一
+  // 次 metrics，而这个数只在狼人杀预设下显示（那三个群按流程不开话题）。真要补，从
+  // groupThreadsKey 拿 id 加进来即可。
   const familySessionIds = useMemo<number[]>(() => {
     if (activeSession == null) return []
     const ids = [activeSession.id]
@@ -197,7 +220,7 @@ export function GroupChatWorkspace({
       liveBySession={liveBySession}
       sendingSessionId={sendingSessionId}
       canCreate={canCreate}
-      unreadOf={(item) => isSessionUnread(item)}
+      unreadOf={(item) => isGroupRowUnread(item)}
       narrow={narrow}
       navHidden={navHidden}
       onSelect={select}
@@ -214,9 +237,11 @@ export function GroupChatWorkspace({
       memberMeta={memberMeta}
       onActivity={invalidate}
       detailsOpen={detailsOpen}
-      onToggleDetails={() => setDetailsOpen(activeSession.id, !detailsOpen)}
+      onToggleDetails={() => toggleDetails(activeSession.id)}
       initialLive={liveBySession.get(activeSession.id) ?? null}
       onSendingChange={(sending) => setSendingSessionId(sending ? activeSession.id : null)}
+      activeThreadId={activeThreadId}
+      onOpenThread={(threadId) => openThread(activeSession.id, threadId)}
     />
   ) : (
     <div className="grid flex-1 place-items-center text-meta text-ink-fg-3">
@@ -249,6 +274,21 @@ export function GroupChatWorkspace({
         onMembersChanged={invalidate}
       />
     ) : null
+
+  // 话题面顶替右栏；`key` 带话题 id，换话题整体重挂（数据 hook 同群视图，按 key 重跑）。
+  const threadPane =
+    activeSession != null && activeThreadId != null ? (
+      <GroupThreadPane
+        key={`${activeSession.id}:${activeThreadId}`}
+        groupId={activeSession.id}
+        threadId={activeThreadId}
+        group={activeSession}
+        memberMeta={memberMeta}
+        initialLive={liveBySession.get(activeThreadId) ?? null}
+        onClose={() => setActiveThread(activeSession.id, null)}
+      />
+    ) : null
+  const sidePane = threadPane ?? (detailsOpen ? details : null)
 
   const dialog = (
     <NewGroupDialog
@@ -288,16 +328,20 @@ export function GroupChatWorkspace({
         ) : (
           <div className="h-full w-full">{list}</div>
         )}
-        {/* 窄屏没有第三栏的宽度：详情面改抽屉（同一份组件，壳不同）。 */}
+        {/* 窄屏没有第三栏的宽度：详情面 / 话题面改抽屉（同一份组件，壳不同）。 */}
         <Drawer
-          open={detailsOpen && activeSession != null}
+          open={sidePane != null}
           onOpenChange={(open) => {
-            if (!open && activeSession != null) setDetailsOpen(activeSession.id, false)
+            if (open || activeSession == null) return
+            if (activeThreadId != null) setActiveThread(activeSession.id, null)
+            else setDetailsOpen(activeSession.id, false)
           }}
-          ariaLabel={t('groupChat.details.title')}
+          ariaLabel={t(
+            activeThreadId != null ? 'groupChat.thread.paneTitle' : 'groupChat.details.title'
+          )}
           width={DETAILS_WIDTH}
         >
-          {details}
+          {sidePane}
         </Drawer>
         {dialog}
       </div>
@@ -308,12 +352,12 @@ export function GroupChatWorkspace({
     <div className="flex h-full min-h-0">
       {list}
       <div className="flex min-w-0 flex-1 flex-col">{detail}</div>
-      {detailsOpen && details != null && (
+      {sidePane != null && (
         <aside
           className="glass-panel flex h-full shrink-0 flex-col overflow-hidden border-l border-ink-border"
           style={{ width: DETAILS_WIDTH }}
         >
-          {details}
+          {sidePane}
         </aside>
       )}
       {dialog}

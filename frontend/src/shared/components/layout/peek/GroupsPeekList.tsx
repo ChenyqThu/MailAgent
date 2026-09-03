@@ -11,7 +11,7 @@ import { UsersRound } from 'lucide-react'
 import { navigateToGroupSession } from '@shared/components/agents/groups/navigation'
 import { formatRelativeTime } from '@shared/format'
 import { useMailApi } from '@shared/hooks/useMailApi'
-import { isSessionUnread } from '@shared/lib/chatUnread'
+import { isGroupRowUnread } from '@shared/lib/groupUnread'
 import { cn } from '@shared/lib/cn'
 import { qk } from '@shared/lib/queryKeys'
 
@@ -43,7 +43,7 @@ export default function GroupsPeekList({ onNavigate }: PeekListProps): React.Rea
           <PeekEmpty text={t('groupChat.emptyList')} />
         ) : (
           items.map((session) => {
-            const unread = isSessionUnread(session)
+            const unread = isGroupRowUnread(session)
             return (
               <button
                 key={session.id}

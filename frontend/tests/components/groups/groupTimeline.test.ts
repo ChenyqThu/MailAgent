@@ -11,6 +11,7 @@ import { describe, expect, test } from 'vitest'
 
 import type { ChatMessage } from '@shared/api/types'
 import type { GroupTurnWire } from '@shared/api/groupSettings'
+import type { GroupThreadSummary } from '@shared/chat_model'
 import {
   buildGroupTimeline,
   type GroupLiveSnapshot,
@@ -314,5 +315,53 @@ describe('groupTimeline', () => {
       metas(build(messages, [failed], { live: live({ stoppedByRun: new Set(['r1']) }) }))[0]
         .retryDisabled
     ).toBe(true)
+  })
+
+  // T3 话题卡：根消息命中 → 卡**紧随其后**并打断折叠（同人后续消息另起一组）；不传清单 / 根不在
+  // 消息里 → 无卡；卡记根消息的说话人（user 根右对齐）。
+  test('TL14 话题卡紧随根消息、打断折叠；非根 / 不传清单不挂卡；卡带根消息说话人', () => {
+    const messages = [
+      row(1, 'assistant', '一', BASE, { speaker_agent_id: 'a1' }),
+      row(2, 'assistant', '二', BASE + MIN, { speaker_agent_id: 'a1' }),
+      row(3, 'assistant', '三', BASE + 2 * MIN, { speaker_agent_id: 'a1' })
+    ]
+    const thread: GroupThreadSummary = {
+      sessionId: 900,
+      rootMessageId: 2,
+      title: '二',
+      replyCount: 1,
+      lastMessage: null,
+      updatedAt: BASE + MIN,
+      unread: false
+    }
+    const withCard = (threads: GroupThreadSummary[], rows = messages) =>
+      buildGroupTimeline({
+        messages: rows,
+        turns: null,
+        turnsHasMore: false,
+        live: null,
+        local: [],
+        threads
+      }).items
+
+    const items = withCard([thread])
+    expect(kinds(items)).toEqual(['date', 'group', 'threadCard', 'group'])
+    expect(groups(items)[0].messages.map((m) => m.text)).toEqual(['一', '二'])
+    expect(groups(items)[1].messages.map((m) => m.text)).toEqual(['三'])
+    expect(items[2]).toMatchObject({
+      kind: 'threadCard',
+      key: 'tc:900',
+      ts: BASE + MIN,
+      thread,
+      speaker: { type: 'member', agentId: 'a1' }
+    })
+
+    // 不传清单：三条照常折成一组、零卡。
+    expect(kinds(build(messages, null))).toEqual(['date', 'group'])
+    // 根消息不在这一屏：不挂卡也不打断。
+    expect(kinds(withCard([{ ...thread, rootMessageId: 99 }]))).toEqual(['date', 'group'])
+    // user 根：卡的 speaker 是 user（渲染侧据此右对齐）。
+    const userRoot = withCard([{ ...thread, rootMessageId: 7 }], [row(7, 'user', '问', BASE)])
+    expect(userRoot[2]).toMatchObject({ kind: 'threadCard', speaker: { type: 'user' } })
   })
 })

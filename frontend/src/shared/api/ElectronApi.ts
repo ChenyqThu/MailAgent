@@ -772,8 +772,13 @@ function createElectronChatRuntime(): ChatApi {
         if (event) handler(event)
       })
     },
-    async setGroupForeground(sessionId: number | null): Promise<void> {
-      await invoker()('chat:group-foreground', { sessionId })
+    async setGroupForeground(
+      target: { groupId: number; threadId: number | null } | null
+    ): Promise<void> {
+      await invoker()('chat:group-foreground', {
+        groupId: target?.groupId ?? null,
+        threadId: target?.threadId ?? null
+      })
     }
   }
 }

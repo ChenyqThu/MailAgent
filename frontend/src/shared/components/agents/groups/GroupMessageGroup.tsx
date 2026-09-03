@@ -31,7 +31,9 @@ export const GroupMessageGroup = memo(function GroupMessageGroup({
   members,
   memberIds,
   now,
-  attachmentsById
+  attachmentsById,
+  onCreateThread,
+  threadRootIds
 }: {
   item: GroupTimelineGroup
   /** 成员组的名字（user 组不用）。 */
@@ -43,9 +45,18 @@ export const GroupMessageGroup = memo(function GroupMessageGroup({
   now: number
   /** T2 — 落库 user 行的附件（按消息 id）；本地气泡 id 为 null，不查。 */
   attachmentsById: ReadonlyMap<number, readonly GroupAttachment[]>
+  /** T3 — hover「开话题」（只有顶层群的主时间线传）；已有话题的根消息（threadRootIds 命中）
+   *  不再画：它下面已经挂着卡，入口是卡。本地 / 未落库气泡 id 为 null，同样不画。 */
+  onCreateThread?: (messageId: number) => void
+  threadRootIds?: ReadonlySet<number>
 }): React.ReactElement {
   const { t } = useTranslation()
   const rel = relativeTimeLabel(item.startedAt, now, t)
+  const openThreadOf = (messageId: number | null): (() => void) | undefined => {
+    if (onCreateThread == null || messageId == null) return undefined
+    if (threadRootIds?.has(messageId)) return undefined
+    return () => onCreateThread(messageId)
+  }
 
   if (item.speaker.type === 'user') {
     return (
@@ -62,6 +73,7 @@ export const GroupMessageGroup = memo(function GroupMessageGroup({
               usage={null}
               title={absoluteTimeLabel(m.createdAt)}
               attachments={m.id != null ? attachmentsById.get(m.id) : undefined}
+              onOpenThread={openThreadOf(m.id)}
             />
             {m.failed && (
               <div className="text-micro text-fail">
@@ -100,6 +112,7 @@ export const GroupMessageGroup = memo(function GroupMessageGroup({
               usage={m.usage}
               title={absoluteTimeLabel(m.createdAt)}
               className={i > 0 ? 'mt-1' : undefined}
+              onOpenThread={openThreadOf(m.id)}
             />
             {m.failed && (
               <div className="mt-1 text-micro text-fail">

@@ -59,12 +59,17 @@ vi.mock('@shared/hooks/useMailApi', () => ({
 
 const mockGetLabs = vi.fn()
 const mockGetGroupTurns = vi.fn()
+// T3：话题清单 / 开话题（serve-api 客户端）。
+const mockListGroupThreads = vi.fn()
+const mockCreateGroupThread = vi.fn()
 vi.mock('@shared/api/groupSettings', () => ({
   getLabs: (...args: unknown[]) => mockGetLabs(...args),
   setLabs: vi.fn(),
   getGroupConfig: vi.fn().mockResolvedValue({ modes: {}, config: { v: 1 } }),
   setGroupConfig: vi.fn(),
   getGroupTurns: (...args: unknown[]) => mockGetGroupTurns(...args),
+  listGroupThreads: (...args: unknown[]) => mockListGroupThreads(...args),
+  createGroupThread: (...args: unknown[]) => mockCreateGroupThread(...args),
   getGroupMetrics: vi.fn().mockResolvedValue({
     silentRunRate: null,
     turnsPerHumanMessage: null,
@@ -226,6 +231,7 @@ beforeEach(() => {
   window.sessionStorage.setItem(GATEWAY_PORT_KEY, '8321')
   mockGetLabs.mockResolvedValue({ groupAgents: 'off' })
   mockOnTurnPersisted.mockReturnValue(() => undefined)
+  mockListGroupThreads.mockResolvedValue([])
 })
 
 function renderWorkspace(items: ChatSessionListItem[] = [groupRow()]): HTMLElement {
@@ -784,7 +790,7 @@ describe('GroupChatView（UX 批：事件 / 台账 / 重试 / composer）', () =
     await waitFor(() => expect(screen.getByText(/重试需要开启/)).toBeTruthy())
   })
 
-  test('V12c failed → 在场行进 error（留痕经 live 传到 GroupThread；身份取自那条留痕）', async () => {
+  test('V12c failed → 在场行进 error（留痕经 live 传到 GroupTranscript；身份取自那条留痕）', async () => {
     mockListMessages.mockResolvedValue([msg(1, 'user', '大家汇报下')])
     renderView()
     await waitForOn()
@@ -1135,5 +1141,141 @@ describe('GroupChatView（T2 lane K：composer 换内胆 / 附件）', () => {
     expect(
       useToastStore.getState().items.some((item) => item.title.includes(`${GROUP_ATTACHMENTS_MAX}`))
     ).toBe(true)
+  })
+})
+
+// ── T3 话题（主时间线侧）──────────────────────────────────────────────────────────────────
+//
+//   H1 顶层群：落库消息 hover 有「开话题」；点它 → createGroupThread(群 id, 消息 id) →
+//      onOpenThread(新话题 id)；
+//   H2 子群（parent_session_id 非空）：一颗「开话题」都不渲染（单层嵌套，入口在 renderer 就不给）；
+//   H3 已有话题的根消息：不再画「开话题」，改挂话题卡（计数 / 最新一条 / 未读点）；点卡 → onOpenThread；
+//   H4 本群某个话题的 turn-persisted → 只重拉话题清单，主时间线不动（话题回复不在这条会话里）；
+//   H5 前台上报二元组：{groupId, threadId|null}，随 activeThreadId 变。
+
+import type { GroupThreadSummary } from '@shared/chat_model'
+
+function threadSummary(over: Partial<GroupThreadSummary> = {}): GroupThreadSummary {
+  return {
+    sessionId: 900,
+    rootMessageId: 2,
+    title: '调研进展如下',
+    replyCount: 3,
+    lastMessage: { role: 'assistant', content: '补充一点', speakerAgentId: 'a2', createdAt: 5 },
+    updatedAt: 5,
+    unread: true,
+    ...over
+  }
+}
+
+describe('GroupChatView（T3 话题：主时间线侧）', () => {
+  const mockFetch = vi.fn()
+
+  beforeEach(() => {
+    mockGetLabs.mockResolvedValue({ groupAgents: 'on' })
+    mockFetch.mockReset()
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ active: false }) })
+    vi.stubGlobal('fetch', mockFetch)
+    mockGetGroupTurns.mockResolvedValue({ turns: [], hasMore: false })
+    mockListMessages.mockResolvedValue([
+      msg(1, 'user', '大家汇报下'),
+      msg(2, 'assistant', '调研进展如下', 'a1')
+    ])
+  })
+
+  const renderThreadView = (
+    over: Partial<React.ComponentProps<typeof GroupChatView>> = {}
+  ): { onOpenThread: ReturnType<typeof vi.fn> } => {
+    const onOpenThread = vi.fn()
+    render(
+      <GroupChatView
+        session={VIEW_SESSION}
+        memberMeta={MEMBER_META}
+        onActivity={vi.fn()}
+        onOpenThread={onOpenThread}
+        {...over}
+      />,
+      { wrapper: makeQcWrapper() }
+    )
+    return { onOpenThread }
+  }
+
+  test('H1 顶层群：hover「开话题」→ createGroupThread → onOpenThread(新话题 id)', async () => {
+    mockCreateGroupThread.mockResolvedValue({ sessionId: 900, rootMessageId: 2, title: '调研进展如下' })
+    const { onOpenThread } = renderThreadView()
+    const bubble = await screen.findByText('调研进展如下')
+    const open = bubble.querySelector('[data-thread-open]') as HTMLButtonElement
+    expect(open).toBeTruthy()
+    // 钮常驻 DOM 只切 opacity：正文仍是气泡的直接文本子节点、名字仍是气泡的前一个兄弟（V1 契约）。
+    expect(bubble.previousElementSibling?.textContent).toBe('调研员')
+    fireEvent.click(open)
+    await waitFor(() => expect(mockCreateGroupThread).toHaveBeenCalledWith(300, 2))
+    await waitFor(() => expect(onOpenThread).toHaveBeenCalledWith(900))
+  })
+
+  test('H2 子群：不渲染任何「开话题」', async () => {
+    renderThreadView({ session: { ...VIEW_SESSION, parent_session_id: 1 } })
+    await screen.findByText('调研进展如下')
+    expect(document.querySelectorAll('[data-thread-open]')).toHaveLength(0)
+    // 子群也不拉话题清单。
+    expect(mockListGroupThreads).not.toHaveBeenCalled()
+  })
+
+  test('H3 已有话题的根消息：不画「开话题」，挂话题卡；点卡 → onOpenThread', async () => {
+    mockListGroupThreads.mockResolvedValue([threadSummary()])
+    const { onOpenThread } = renderThreadView()
+    const card = (await waitFor(() => {
+      const el = document.querySelector('[data-thread-card="900"]')
+      expect(el).toBeTruthy()
+      return el
+    })) as HTMLElement
+    expect(card.textContent).toContain('3 条回复')
+    expect(card.textContent).toContain('跟进官：补充一点')
+    expect(card.hasAttribute('data-thread-unread')).toBe(true)
+    // 根消息不再给「开话题」（入口是卡）；别的消息照旧给。
+    const root = screen.getByText('调研进展如下')
+    expect(root.querySelector('[data-thread-open]')).toBeNull()
+    expect(screen.getByText('大家汇报下').querySelector('[data-thread-open]')).toBeTruthy()
+    fireEvent.click(card)
+    expect(onOpenThread).toHaveBeenCalledWith(900)
+    expect(mockCreateGroupThread).not.toHaveBeenCalled()
+  })
+
+  test('H4 话题里的 turn-persisted → 重拉话题清单，主时间线不动', async () => {
+    mockListGroupThreads.mockResolvedValue([threadSummary()])
+    renderThreadView()
+    await waitFor(() => expect(document.querySelector('[data-thread-card="900"]')).toBeTruthy())
+    await waitFor(() => expect(mockOnTurnPersisted).toHaveBeenCalled())
+    expect(mockListMessages).toHaveBeenCalledTimes(1)
+    expect(mockListGroupThreads).toHaveBeenCalledTimes(1)
+    const handler = mockOnTurnPersisted.mock.calls[0]?.[0] as (p: {
+      sessionId: number
+      status: string
+      runId: string | null
+    }) => void
+    handler({ sessionId: 900, status: 'finished', runId: null })
+    await waitFor(() => expect(mockListGroupThreads).toHaveBeenCalledTimes(2))
+    expect(mockListMessages).toHaveBeenCalledTimes(1)
+  })
+
+  test('H5 前台上报二元组 {groupId, threadId}', async () => {
+    const { rerender } = render(
+      <GroupChatView session={VIEW_SESSION} memberMeta={MEMBER_META} onActivity={vi.fn()} />,
+      { wrapper: makeQcWrapper() }
+    )
+    await waitFor(() =>
+      expect(mockSetForeground).toHaveBeenCalledWith({ groupId: 300, threadId: null })
+    )
+    rerender(
+      <GroupChatView
+        session={VIEW_SESSION}
+        memberMeta={MEMBER_META}
+        onActivity={vi.fn()}
+        activeThreadId={900}
+      />
+    )
+    await waitFor(() =>
+      expect(mockSetForeground).toHaveBeenLastCalledWith({ groupId: 300, threadId: 900 })
+    )
   })
 })

@@ -3,7 +3,7 @@
 // 在场态两态 + 排队，不做五态（服务端无 waiting / resting 语义，红线 1）。
 
 import { useTranslation } from 'react-i18next'
-import { PanelRight, Square } from 'lucide-react'
+import { PanelRight, Square, X } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 
@@ -23,7 +23,8 @@ export function GroupHeader({
   stopping,
   onStop,
   detailsOpen,
-  onToggleDetails
+  onToggleDetails,
+  onClose
 }: {
   title: string
   topic: string | null
@@ -38,6 +39,8 @@ export function GroupHeader({
   onStop: () => void
   detailsOpen?: boolean
   onToggleDetails?: () => void
+  /** T3 — 话题面用同一个群头（标题 = 话题摘要、头像行 = 参与者、停止钮照旧），多一个关闭钮。 */
+  onClose?: () => void
 }): React.ReactElement {
   const { t } = useTranslation()
   const nearCap =
@@ -114,6 +117,16 @@ export function GroupHeader({
             )}
           >
             <PanelRight size={15} strokeWidth={2} />
+          </button>
+        )}
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t('groupChat.thread.close')}
+            className="grid size-7 place-items-center rounded-md text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+          >
+            <X size={15} strokeWidth={2} />
           </button>
         )}
       </span>
