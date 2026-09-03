@@ -276,6 +276,8 @@ describe('清单与分组', () => {
     )
     expect(keys).toEqual([
       'member:main',
+      // 09-02 misc05 — 第二个合成成员（事项跟进）：不是 report_agent 行，恒在主 Agent 之后。
+      'member:matter_followup',
       'member:agent:daily_email_digest',
       'member:agent:email_search_agent',
       'member:agent:email_preprocess_agent',
@@ -284,6 +286,75 @@ describe('清单与分组', () => {
     ])
     expect(screen.getByText('内置')).toBeTruthy()
     expect(screen.getByText('自定义')).toBeTruthy()
+  })
+})
+
+// 09-02 misc05 —「事项跟进」：合成成员（无 report_agent 行），会话按 anchor 归属。
+describe('事项跟进成员', () => {
+  /** 该成员的会话源是 origin='interactive' 全量（服务端无 anchorType 过滤参数）——
+   *  桩里连同别人的会话一起返回，过滤对不对才测得出来。 */
+  function setInteractiveSessions(list: ChatSessionListItem[]): void {
+    mockListAllSessions.mockImplementation((opts?: { origin?: string }) =>
+      Promise.resolve(opts?.origin === 'interactive' ? list : [])
+    )
+  }
+
+  test('记录列只列 anchor_type=matter 的会话，别人的历史不串进来', async () => {
+    setInteractiveSessions([
+      makeSession({
+        id: 501,
+        origin: 'interactive',
+        agent_id: null,
+        anchor_type: 'matter',
+        anchor_id: 7,
+        title: '续签合同',
+        updated_at: 1_700_000_005_000
+      }),
+      // 同一份全量里的普通对话 —— 归主对话历史，不该出现在这条 lane。
+      makeSession({
+        id: 502,
+        origin: 'interactive',
+        agent_id: null,
+        anchor_type: 'general',
+        title: '随便聊聊',
+        updated_at: 1_700_000_009_000
+      })
+    ])
+    const container = await renderWorkspace()
+    fireEvent.click(container.querySelector('[data-team-member="member:matter_followup"]')!)
+    await waitFor(() =>
+      expect(container.querySelector('[data-record-row="session:501"]')).toBeTruthy()
+    )
+    expect(container.querySelector('[data-record-row="session:502"]')).toBeNull()
+    expect(container.querySelector('[data-record-row="session:501"]')?.textContent).toContain(
+      '续签合同'
+    )
+    // 不接对话：没有「新对话」入口，也不挂真 composer（对话在那件事里开）。
+    expect(container.querySelector('[data-record-new]')).toBeNull()
+    expect(container.querySelector('[data-live-conversation]')).toBeNull()
+    expect(container.querySelector('[data-no-chat-reason]')).toBeTruthy()
+    // 第一档不叫「执行」：这位成员一条执行台账都没有（跟进 run 的归宿是那件事的页面）。
+    expect(screen.getByRole('tab', { name: '事项对话' })).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: '执行' })).toBeNull()
+  })
+
+  test('清单行不渲染启停徽标 —— 跑不跑由每件事的跟进规则决定', async () => {
+    setInteractiveSessions([])
+    const container = await renderWorkspace()
+    const row = container.querySelector('[data-team-member="member:matter_followup"]')!
+    expect(row.textContent).toContain('按事项规则')
+    // 🔴 它没有全局启停位：渲染成「已停用」/「已启用」都是撒谎。
+    expect(row.textContent).not.toContain('已停用')
+    expect(row.textContent).not.toContain('已启用')
+  })
+
+  test('设置档 = 事项域深链（不复制第二套配置表单）', async () => {
+    setInteractiveSessions([])
+    const container = await renderWorkspace()
+    fireEvent.click(container.querySelector('[data-team-member="member:matter_followup"]')!)
+    fireEvent.click(screen.getByRole('tab', { name: '设置' }))
+    expect(container.querySelector('[data-matter-followup-settings]')).toBeTruthy()
+    expect(screen.getByText('打开全局跟进配置')).toBeTruthy()
   })
 })
 

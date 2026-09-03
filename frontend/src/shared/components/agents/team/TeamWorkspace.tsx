@@ -33,6 +33,7 @@ import {
   clampMemberTab,
   deriveTeamMembers,
   findMemberByAgentId,
+  memberAvatarSeed,
   memberTitle,
   type TeamMember,
   type TeamViewTab
@@ -79,7 +80,11 @@ function MemberDetail({
         ? t('team.tabs.settings')
         : member.canChat
           ? t('team.tabs.chat')
-          : t('team.tabs.record')
+          : // 事项跟进：这一档里一条执行台账都没有（跟进 run 的归宿是那件事的页面），
+            // 列的全是事项会话 —— 标「执行」是撒谎，与记录列标题同一句文案。
+            member.recordSource === 'matter'
+            ? t('team.record.listTitleMatter')
+            : t('team.tabs.record')
   }))
 
   return (
@@ -105,7 +110,7 @@ function MemberDetail({
           />
         ) : (
           <AgentAvatar
-            agentId={member.cfg?.id ?? 'unknown'}
+            agentId={memberAvatarSeed(member)}
             config={member.cfg?.avatar}
             size={30}
             title={title}
@@ -260,7 +265,12 @@ export function TeamWorkspace(): React.ReactElement {
     setFocusSessionId(null)
   }
 
-  const title = memberTitle(member, mainName, t('agents.custom.runs.unknownAgent'))
+  const title = memberTitle(
+    member,
+    mainName,
+    t('agents.custom.runs.unknownAgent'),
+    t('team.matterFollowup.title')
+  )
   // 主标签第二段 = 当前那位智能体（design §三「team → 当前智能体」）；新建态显 tile 同款标题。
   useMainBreadcrumb('agents', creating ? t('agents.custom.newTileTitle') : title)
 

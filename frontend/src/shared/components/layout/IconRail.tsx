@@ -29,12 +29,12 @@ import {
 import {
   NAV_DOMAINS,
   NAV_OBJECT_DOMAINS,
-  navDomainLabel,
   navRailEntries,
   type NavBadgeKind,
   type NavDomain,
   type NavEntry
 } from '@shared/navigation/registry'
+import { useNavDomainLabel } from '@shared/navigation/useNavDomainLabel'
 
 /** 底部沉的两个域（方案 B 板：运维 + 设置贴底）。 */
 const BOTTOM_DOMAINS: readonly NavDomain[] = ['ops', 'settings']
@@ -66,7 +66,6 @@ function railBadge(
 
 function RailCell({
   entry,
-  label,
   selected,
   badge,
   onClick,
@@ -75,7 +74,6 @@ function RailCell({
   onLeave
 }: {
   entry: NavEntry
-  label: string
   selected: boolean
   badge: React.ReactElement | null
   onClick(): void
@@ -86,6 +84,9 @@ function RailCell({
   // hover/focus 播放动画、selected 常态静止（prd v2 R3 的触发档）—— 与 NavRow 同款
   // AnimatedIconActiveProvider 机制；reduce 降级统一在 IconShell 内处理。
   const [iconActive, setIconActive] = useState(false)
+  // task 09-02 misc10a —— AI Chat 格显示主 agent 名，取不到回落域 i18n；组件级 hook 调用
+  // （每格一个 RailCell 实例，不是父层循环里调），Rules of Hooks 安全。
+  const label = useNavDomainLabel(entry.domain)
   const meta = NAV_DOMAINS[entry.domain]
   const enter = (): void => {
     setIconActive(true)
@@ -198,7 +199,6 @@ export function IconRail({
   onCellEnter,
   onCellLeave
 }: IconRailProps): React.ReactElement {
-  const { t } = useTranslation()
   const cells = navRailEntries(entries)
   const top = cells.filter((e) => !BOTTOM_DOMAINS.includes(e.domain))
   // 对象域（邮件 / 事项 / AI Chat）与页面域之间隔一条分隔线（原型 railsep）—— 前者点开
@@ -213,7 +213,6 @@ export function IconRail({
     <RailCell
       key={entry.id}
       entry={entry}
-      label={navDomainLabel(entry.domain, t)}
       selected={entry.domain === activeDomain}
       badge={railBadge(entry, badgeValue)}
       onClick={() => onCellClick(entry)}

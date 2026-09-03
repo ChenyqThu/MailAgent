@@ -75,6 +75,10 @@ export const qk = {
     teamOriginSessions: () => ['chat', 'allSessions', 'team'] as const,
     // L4 群聊 — origin='group' 会话清单（custom agents 群聊；CHAT_DB v30）。
     groupOriginSessions: () => ['chat', 'allSessions', 'group'] as const,
+    // 09-02 misc05 团队页 —「事项跟进」成员的会话（anchor_type='matter'）。尾段与上面三条
+    // 并列但**不共享缓存**：查的是 origin='interactive' 全量再按 anchor 收窄（服务端无
+    // anchorType 过滤参数），投影后的行集与主对话历史那份不是同一份。
+    matterAnchoredSessions: () => ['chat', 'allSessions', 'matter-anchored'] as const,
     agentUnread: () => ['chat', 'agentUnread'] as const,
     messages: (sessionId: string | number) => ['chat', 'messages', sessionId] as const,
     /** L4 批次3 — 一条行动项名下的会话（执行历史反查，`GET /chat/sessions/all?itemId=`）。

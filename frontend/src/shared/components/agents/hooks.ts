@@ -535,6 +535,33 @@ export function useAgentOriginSessions(enabled: boolean): {
   return { sessions, isLoading: agentQ.isLoading || teamQ.isLoading }
 }
 
+/** 09-02 misc05 团队页 —「事项跟进」成员的记录列会话源：`anchor_type='matter'` 的**交互**会话。
+ *
+ *  🔴 过滤在前端：serve-api 的 `/chat/sessions/all` 只有点名单件事的 `matterId`，没有
+ *  `anchorType` 过滤参数（加它要动 `src/chat/db.py` 的 list_all_sessions + 路由 Literal，
+ *  不在本批半径内）。行为与团队页其余成员「拉全量 + per-member 过滤」同构；代价是共享
+ *  那 300 条的上限。
+ *  🔴 只拉 `origin='interactive'`：事项域的 headless run 会话**同样**锚在 matter 上
+ *  （gateway `createAgentSession` 的 `anchor:{type:'matter'}`），但它们有好几种 kind ——
+ *  跟进 / 创建带调研 / 行动项派发 —— 会话行上分不出来，一并塞进「事项跟进」就是张冠李戴。
+ *  它们的归宿仍是那件事页面的 run 时间线（记录面顶部的说明指向那里）。 */
+export function useMatterAnchoredSessions(enabled: boolean): {
+  sessions: ChatSessionListItem[]
+  isLoading: boolean
+} {
+  const api = useMailApi()
+  const q = useQuery({
+    queryKey: qk.chat.matterAnchoredSessions(),
+    queryFn: async () => {
+      const rows = await api.chat.listAllSessions({ origin: 'interactive' })
+      return rows.filter((row) => row.anchor_type === 'matter')
+    },
+    enabled,
+    staleTime: 10_000
+  })
+  return { sessions: q.data ?? [], isLoading: q.isLoading }
+}
+
 /** P4a 团队页 — 某报告 agent 的最近 N 份报告（记录列时间线的 report 源）。
  *  r8 §A.0 当时的事实是「报告本身即记录，无过程 transcript」；08-31 起报告 agent 也写
  *  `agent_run_log`（有 transcript），所以这一条只剩**产物**语义 —— 有对应 run_log 的产物行

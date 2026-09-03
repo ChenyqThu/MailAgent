@@ -7202,12 +7202,22 @@
       "newAgent": "New agent"
     },
     "noChat": {
+      "matterFollowup": "Follow-up always belongs to one matter: you chat with it inside that matter, and its run history lives on that matter's page (one timeline per matter). Listed here are the existing matter chats.",
       "preprocess": "It is a pipeline stage that runs automatically on incoming mail, classifying each message — it does not chat. To ask why a message was judged that way, ask the main assistant on that email. Below are the recently classified messages.",
       "projectProgress": "Deterministic flow, no AI involved — there is no reasoning surface to chat with; records only come from its trigger.",
       "search": "Its calling surface is the ⌘K command palette; it keeps no run history and does not chat here."
     },
+    "matterFollowup": {
+      "title": "Matter follow-up",
+      "badge": "Per-matter rules",
+      "settingsIntro": "Its configuration lives in the matters domain: the global defaults (task contract, model, tool face) are in the panel below; each matter's own follow-up rule is edited on that matter's page.",
+      "openGlobalConfig": "Open global follow-up settings",
+      "perMatterTitle": "Per-matter follow-up rules",
+      "perMatterNote": "How often it follows up and what it looks at is decided by each matter's own follow-up rule — edit it in that matter's follow-up settings on the matters page."
+    },
     "record": {
       "listTitle": "Run history",
+      "listTitleMatter": "Matter chats",
       "new": "New chat",
       "auto": "auto",
       "expandList": "Expand record list",
@@ -7234,7 +7244,8 @@
       "emptyRuns": "No runs yet — it only runs when its trigger fires; manual test runs land here too.",
       "emptyReports": "No reports yet — scheduled or manual generations will show up here.",
       "emptyProgress": "No sync records yet — it runs when a weekly-report email matching the trigger words arrives.",
-      "emptyPreprocess": "No recently classified mail — with AI preprocessing enabled, new mail shows up here message by message."
+      "emptyPreprocess": "No recently classified mail — with AI preprocessing enabled, new mail shows up here message by message.",
+      "emptyMatterSessions": "No matter chats yet — once you talk to the AI inside a matter, those conversations show up here."
     },
     "welcome": {
       "cadence": {

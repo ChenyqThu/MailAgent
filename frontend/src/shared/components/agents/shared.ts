@@ -70,14 +70,24 @@ export function envFlagOn(raw: string): boolean {
 // 消费侧一律按 `cfg.type === 'search'` 过滤（单例行 id 在 sync_store.py 播种，前端无需点名）。
 export const EMAIL_PREPROCESS_AGENT_ID = 'email_preprocess_agent'
 
-// 团队页成员引用：除主 Agent 外，内置专型 / 报告 / 自定义全部是 report_agent 行，
+// 「事项跟进」合成成员的 id（09-02 misc05）。它**不是** report_agent 行：跟进跑的是
+// `matter_followup` job_type，配置在事项域（owner_settings.matter_agent_defaults + 逐事项
+// 的跟进规则）。这个字面量只作头像种子 / 选中态 key 用，不拿去查任何一张表。
+export const MATTER_FOLLOWUP_MEMBER_ID = 'matter_followup'
+
+// 团队页成员引用：除主 Agent 与事项跟进外，内置专型 / 报告 / 自定义全部是 report_agent 行，
 // 用行 id 即可寻址（分组与视图档由行的 type 派生，不进 ref）。
 // 🔴 报告类（type='report'）是可变行集（日/周/月），不设 id 常量，恒按 type 过滤。
 // 🔴 会话侧 `ai_chat_sessions.agent_id` 的 `matter:*` / `matter_item:*` 命名空间属事项域，
 //    永不映射成 TeamMemberRef —— 聚合查询显式排除，不靠「查不到」侥幸。
-export type TeamMemberRef = { kind: 'main' } | { kind: 'agent'; agentId: string }
+export type TeamMemberRef =
+  | { kind: 'main' }
+  | { kind: 'matterFollowup' }
+  | { kind: 'agent'; agentId: string }
 
 /** 选中态 / 列表 key 用的稳定序列化（'main' 与 agent id 无碰撞：id 均为 snake_case）。 */
 export function memberRefKey(ref: TeamMemberRef): string {
-  return ref.kind === 'main' ? 'member:main' : `member:agent:${ref.agentId}`
+  if (ref.kind === 'main') return 'member:main'
+  if (ref.kind === 'matterFollowup') return `member:${MATTER_FOLLOWUP_MEMBER_ID}`
+  return `member:agent:${ref.agentId}`
 }

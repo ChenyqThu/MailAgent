@@ -19,11 +19,12 @@ import {
   useAgentOriginSessions,
   useAgentReports,
   useAgentRuns,
+  useMatterAnchoredSessions,
   useProjectProgressRuns,
   useRecentPreprocessedEmails
 } from '../hooks'
 import type { TeamMember } from './teamMembers'
-import { mergeMemberTimeline, type TeamRecordEntry } from './teamTimeline'
+import { matterSessionTimeline, mergeMemberTimeline, type TeamRecordEntry } from './teamTimeline'
 import { TeamChatHost } from './TeamChatHost'
 import {
   TeamPreprocessDetail,
@@ -230,20 +231,35 @@ export function TeamRecordPane({
   const { reports } = useAgentReports(source === 'report' ? agentId : null)
   const { runs: progressRuns } = useProjectProgressRuns(source === 'progress')
   const { emails } = useRecentPreprocessedEmails(source === 'preprocess')
+  // 事项跟进：会话按 anchor 归属（agent_id 恒 NULL），走自己的源与自己的合并函数。
+  const { sessions: matterSessions } = useMatterAnchoredSessions(source === 'matter')
 
   const entries = useMemo(
     () =>
-      source === 'preprocess' || agentId == null
-        ? []
-        : mergeMemberTimeline({
-            agentId,
-            sessions: wantsTimeline ? sessions : [],
-            runs: wantsRuns ? runs : [],
-            runLogs,
-            reports: source === 'report' ? reports : [],
-            progressRuns: source === 'progress' ? progressRuns : []
-          }),
-    [source, agentId, wantsTimeline, wantsRuns, sessions, runs, runLogs, reports, progressRuns]
+      source === 'matter'
+        ? matterSessionTimeline(matterSessions)
+        : source === 'preprocess' || agentId == null
+          ? []
+          : mergeMemberTimeline({
+              agentId,
+              sessions: wantsTimeline ? sessions : [],
+              runs: wantsRuns ? runs : [],
+              runLogs,
+              reports: source === 'report' ? reports : [],
+              progressRuns: source === 'progress' ? progressRuns : []
+            }),
+    [
+      source,
+      agentId,
+      wantsTimeline,
+      wantsRuns,
+      sessions,
+      matterSessions,
+      runs,
+      runLogs,
+      reports,
+      progressRuns
+    ]
   )
 
   const rows = useMemo(
@@ -347,6 +363,8 @@ export function TeamRecordPane({
         return t('team.record.emptyProgress')
       case 'preprocess':
         return t('team.record.emptyPreprocess')
+      case 'matter':
+        return t('team.record.emptyMatterSessions')
       default:
         return t('team.record.emptyRuns')
     }
@@ -402,7 +420,8 @@ export function TeamRecordPane({
                 </button>
               ) : (
                 <span className="min-w-0 flex-1 truncate px-2 py-1.5 text-micro font-medium uppercase tracking-wider text-ink-fg-3">
-                  {t('team.record.listTitle')}
+                  {/* 事项跟进这条 lane 列的是会话不是执行 —— 标题跟着说实话。 */}
+                  {t(source === 'matter' ? 'team.record.listTitleMatter' : 'team.record.listTitle')}
                 </span>
               )}
               <button

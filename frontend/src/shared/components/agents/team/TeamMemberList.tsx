@@ -11,14 +11,16 @@ import { Plus } from 'lucide-react'
 
 import { useAssistantIdentity } from '@shared/assistant/assistantIdentity'
 import { cn } from '@shared/lib/cn'
+import { CollapseChevron, CollapsibleRegion } from '@shared/components/ui/collapsible'
 import { useEnvStore } from '@shared/state/env'
+import { useTeamGroupCollapse, type TeamGroupKey } from '@shared/state/team-group-collapse'
 
 import { AgentAvatar } from '../AgentAvatar'
 import { OFFICIAL_ASSISTANT_AVATAR } from '../agentAvatarIdentity'
 import { MAIN_ASSISTANT_SEED, envFlagOn } from '../shared'
 import { useAgentRuns } from '../hooks'
 import { TeamAgentImportEntries } from './TeamAgentImportEntries'
-import { memberTitle, type TeamMember } from './teamMembers'
+import { memberAvatarSeed, memberTitle, type TeamMember } from './teamMembers'
 
 function MemberRow({
   member,
@@ -52,7 +54,7 @@ function MemberRow({
       : false
   )
   const enabled =
-    member.ref.kind === 'main'
+    member.ref.kind === 'main' || member.ref.kind === 'matterFollowup'
       ? true
       : member.cfg?.type === 'preprocess'
         ? llmAgentOn
@@ -60,14 +62,18 @@ function MemberRow({
           ? progressMasterOn && (member.cfg?.enabled ?? false)
           : (member.cfg?.enabled ?? false)
 
+  // 🔴 事项跟进没有全局启停位：跑不跑由**每件事**自己的跟进规则决定。渲染成「已停用」
+  // 就是撒谎，渲染成「已启用」也不对 —— 说清开关在哪一层。
   const statusText =
     member.ref.kind === 'main'
       ? t('agents.mainAgent.badge')
-      : working
-        ? t('team.list.working')
-        : enabled
-          ? t('agents.card.enabled')
-          : t('agents.card.disabled')
+      : member.ref.kind === 'matterFollowup'
+        ? t('team.matterFollowup.badge')
+        : working
+          ? t('team.list.working')
+          : enabled
+            ? t('agents.card.enabled')
+            : t('agents.card.disabled')
 
   return (
     <button
@@ -97,7 +103,7 @@ function MemberRow({
         />
       ) : (
         <AgentAvatar
-          agentId={member.cfg?.id ?? 'unknown'}
+          agentId={memberAvatarSeed(member)}
           config={member.cfg?.avatar}
           size={30}
           title={title}
@@ -153,25 +159,56 @@ export function TeamMemberList({
   const builtin = members.filter((m) => m.group === 'builtin')
   const custom = members.filter((m) => m.group === 'custom')
 
-  const group = (labelKey: string, rows: readonly TeamMember[]): React.ReactElement => (
-    <section>
-      <div className="flex items-center gap-2 px-2.5 pb-1 pt-2 text-micro font-medium uppercase tracking-wider text-ink-fg-3">
-        <span className="min-w-0 flex-1 truncate">{t(labelKey)}</span>
-        <span className="font-mono tabular-nums opacity-60">{rows.length}</span>
-      </div>
-      <div className="flex flex-col gap-0.5">
-        {rows.map((m) => (
-          <MemberRow
-            key={m.key}
-            member={m}
-            title={memberTitle(m, mainName, t('agents.custom.runs.unknownAgent'))}
-            selected={m.key === selectedKey}
-            onSelect={() => onSelect(m)}
-          />
-        ))}
-      </div>
-    </section>
-  )
+  // task 09-02 misc08 —— 分组标题变可点击折叠头，折叠态记 localStorage（`mailagent.
+  // team.groupsCollapsed`，先例 EmailList 日期分组）。`CollapsibleRegion` 恒挂载内容
+  // （只是 height:0 + inert），选中成员即便所在组被折叠也不丢选中态。
+  const collapsedMap = useTeamGroupCollapse((s) => s.collapsed)
+  const toggleGroup = useTeamGroupCollapse((s) => s.toggle)
+  const isGroupCollapsed = (key: TeamGroupKey): boolean => collapsedMap[key] === true
+
+  const group = (
+    key: TeamGroupKey,
+    labelKey: string,
+    rows: readonly TeamMember[],
+    footer?: React.ReactNode
+  ): React.ReactElement => {
+    const expanded = !isGroupCollapsed(key)
+    const bodyId = `team-group-${key}`
+    return (
+      <section>
+        <button
+          type="button"
+          onClick={() => toggleGroup(key)}
+          aria-expanded={expanded}
+          aria-controls={bodyId}
+          className="flex w-full items-center gap-2 px-2.5 pb-1 pt-2 text-left text-micro font-medium uppercase tracking-wider text-ink-fg-3 transition-colors duration-fast hover:text-ink-fg-2"
+        >
+          <CollapseChevron expanded={expanded} size={10} />
+          <span className="min-w-0 flex-1 truncate">{t(labelKey)}</span>
+          <span className="font-mono tabular-nums opacity-60">{rows.length}</span>
+        </button>
+        <CollapsibleRegion expanded={expanded} id={bodyId}>
+          <div className="flex flex-col gap-0.5">
+            {rows.map((m) => (
+              <MemberRow
+                key={m.key}
+                member={m}
+                title={memberTitle(
+                  m,
+                  mainName,
+                  t('agents.custom.runs.unknownAgent'),
+                  t('team.matterFollowup.title')
+                )}
+                selected={m.key === selectedKey}
+                onSelect={() => onSelect(m)}
+              />
+            ))}
+            {footer}
+          </div>
+        </CollapsibleRegion>
+      </section>
+    )
+  }
 
   return (
     <div
@@ -192,23 +229,13 @@ export function TeamMemberList({
           <div className="px-2 py-6 text-meta text-ink-fg-3">{t('agents.reports.loading')}</div>
         ) : (
           <div className="flex flex-col gap-2.5">
-            {group('team.list.builtin', builtin)}
-            {(custom.length > 0 || showCreate === true) && (
-              <section>
-                <div className="flex items-center gap-2 px-2.5 pb-1 pt-2 text-micro font-medium uppercase tracking-wider text-ink-fg-3">
-                  <span className="min-w-0 flex-1 truncate">{t('team.list.custom')}</span>
-                  <span className="font-mono tabular-nums opacity-60">{custom.length}</span>
-                </div>
-                <div className="flex flex-col gap-0.5">
-                  {custom.map((m) => (
-                    <MemberRow
-                      key={m.key}
-                      member={m}
-                      title={memberTitle(m, mainName, t('agents.custom.runs.unknownAgent'))}
-                      selected={m.key === selectedKey}
-                      onSelect={() => onSelect(m)}
-                    />
-                  ))}
+            {group('builtin', 'team.list.builtin', builtin)}
+            {(custom.length > 0 || showCreate === true) &&
+              group(
+                'custom',
+                'team.list.custom',
+                custom,
+                <>
                   {showCreate === true && (
                     <button
                       type="button"
@@ -234,9 +261,8 @@ export function TeamMemberList({
                   {showCreate === true && onImported != null && (
                     <TeamAgentImportEntries onImported={onImported} />
                   )}
-                </div>
-              </section>
-            )}
+                </>
+              )}
           </div>
         )}
       </div>

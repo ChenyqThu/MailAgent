@@ -144,3 +144,24 @@ export function mergeMemberTimeline(input: {
   // 时间倒序；同刻按 key 稳定排（避免 refetch 抖动）。
   return entries.sort((a, b) => (b.at !== a.at ? b.at - a.at : a.key.localeCompare(b.key)))
 }
+
+/** 09-02 misc05 —「事项跟进」成员的记录列：事项会话（`anchor_type='matter'`）排成时间线。
+ *  入参已由 `useMatterAnchoredSessions` 按 anchor 收窄 —— 这里不重复判一次。
+ *
+ *  🔴 与 mergeMemberTimeline 的口径不相交，所以是独立一条：事项会话的 `agent_id` 恒 NULL
+ *  （归属靠 anchor 而不是 agent 身份），拿它去 exact-match 成员 id 永远是空集。
+ *  🔴 只有会话没有执行行：跟进 run 的台账是逐事项的（`GET /matters/{id}/runs`），跨事项
+ *  的聚合面不存在 —— 这里不去 N 次请求拼一个，缺口如实写在记录面的说明里。 */
+export function matterSessionTimeline(sessions: readonly ChatSessionListItem[]): TeamRecordEntry[] {
+  return sessions
+    .map((session) => ({
+      kind: 'session' as const,
+      key: `session:${session.id}`,
+      at: epochMs(session.updated_at),
+      // ⚡判据与 mergeMemberTimeline 逐字一致。调用方只喂 interactive 行（人开的会话，
+      // 恒 false），但判据不写死 —— 来源换了这里不该跟着撒谎。
+      auto: session.origin === 'agent',
+      session
+    }))
+    .sort((a, b) => (b.at !== a.at ? b.at - a.at : a.key.localeCompare(b.key)))
+}

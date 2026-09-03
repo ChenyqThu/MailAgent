@@ -16,6 +16,7 @@ import {
   epochMs,
   isMatterScopedAgentId,
   isoMs,
+  matterSessionTimeline,
   mergeMemberTimeline
 } from '../../../src/shared/components/agents/team/teamTimeline'
 
@@ -98,6 +99,39 @@ describe('epochMs — 秒/毫秒容错', () => {
     expect(epochMs(1_700_000_000)).toBe(1_700_000_000_000)
     expect(epochMs(1_700_000_000_000)).toBe(1_700_000_000_000)
     expect(epochMs(null)).toBe(0)
+  })
+})
+
+// 09-02 misc05 —「事项跟进」成员的记录列（anchor 归属，与 agentId exact-match 无关）。
+// anchor 收窄在 useMatterAnchoredSessions（组件级用例 TeamWorkspace.test 守）；这里守投影与排序。
+describe('matterSessionTimeline — 倒序投影', () => {
+  test('输入顺序打乱仍按时间倒序（不是「拿到什么顺序就渲染什么顺序」）', () => {
+    const entries = matterSessionTimeline([
+      makeSession({ id: 1, anchor_type: 'matter', anchor_id: 7, updated_at: 1_700_000_001_000 }),
+      makeSession({ id: 4, anchor_type: 'matter', anchor_id: 8, updated_at: 1_700_000_003_000 }),
+      makeSession({ id: 2, anchor_type: 'matter', anchor_id: 9, updated_at: 1_700_000_002_000 })
+    ])
+    expect(entries.map((e) => e.key)).toEqual(['session:4', 'session:2', 'session:1'])
+  })
+
+  test('🔴 事项会话的 agent_id 恒 NULL —— 它照样在列（归属靠 anchor 不靠身份）', () => {
+    const entries = matterSessionTimeline([
+      makeSession({
+        id: 5,
+        anchor_type: 'matter',
+        anchor_id: 7,
+        agent_id: null,
+        origin: 'interactive'
+      })
+    ])
+    expect(entries).toHaveLength(1)
+    expect(entries[0].kind).toBe('session')
+    // 人开的会话 —— 不标 ⚡；⚡判据仍是 origin='agent'（与 mergeMemberTimeline 同一句）。
+    expect(entries[0].auto).toBe(false)
+    expect(
+      matterSessionTimeline([makeSession({ id: 6, anchor_type: 'matter', origin: 'agent' })])[0]
+        .auto
+    ).toBe(true)
   })
 })
 

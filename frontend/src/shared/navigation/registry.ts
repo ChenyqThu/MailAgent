@@ -123,6 +123,16 @@ export type NavShortcutId = 'settings' | 'generalAgent' | 'groups'
 
 export type NavLabel = { readonly i18nKey: string } | { readonly literal: string }
 
+/** 域标签（`NAV_DOMAINS` 专用，比 entry 级 `NavLabel` 多一种形态）：显示主 agent 名
+ *  （`useAssistantIdentity`），取不到名字（未命名/取失败）回落 `fallbackI18nKey`。不并进
+ *  共享的 `NavLabel` —— entry 级标签没有这个需求，并进去会逼每个消费 `NavEntry.label`
+ *  的分支都要处理一种理论上不会出现的形态。本模块零 hooks 依赖（叶子纪律），求值走
+ *  `useNavDomainLabel`（navigation/useNavDomainLabel.ts）；`navDomainLabel()` 这个纯函数
+ *  拿不到 identity，遇到这个形态直接回落 i18n。 */
+export type NavDomainLabel =
+  | NavLabel
+  | { readonly assistantIdentity: true; readonly fallbackI18nKey: string }
+
 /** 域的二级栏形态（08-27 标签工作区批：二级栏**恒存在**，`'none'` 档取消；09-01 侧栏批：
  *  每域各记一份折叠态与宽度 —— state/nav-shell.ts，默认展开 336）：
  *  - `'nav'`  = DomainPanel（导航栏：今日五节/日历源树/运维行/设置 tab 行…）；
@@ -133,7 +143,7 @@ export type NavDomainSecond = 'nav' | 'page'
 /** 域元数据（方案 B 导轨格的脸）：格标签与格图标是**域**的身份，不是域内某条 entry 的
  *  身份 —— 邮件格画信封（域概念），面板里的收件箱行才画收件托盘（视图概念）。 */
 export interface NavDomainMeta {
-  readonly label: NavLabel
+  readonly label: NavDomainLabel
   /** 同 NavEntry.icon 的 D6 契约：只返回裸组件。 */
   readonly icon: () => ReactElement
   readonly second: NavDomainSecond
@@ -464,8 +474,9 @@ export const NAV_DOMAINS: Record<NavDomain, NavDomainMeta> = {
     icon: () => createElement(UsersRoundIcon),
     second: 'page'
   },
+  // task 09-02 misc10a —— 域格显示主 agent 名，取不到回落 'nav.domain.chats'（「AI Chat」）。
   chats: {
-    label: { i18nKey: 'nav.domain.chats' },
+    label: { assistantIdentity: true, fallbackI18nKey: 'nav.domain.chats' },
     icon: () => createElement(MessageSquareIcon),
     second: 'page'
   },
@@ -578,9 +589,11 @@ export function isNavEntryActive(entry: NavEntry, pathname: string): boolean {
   return match.prefix?.some((p) => pathname.startsWith(p)) === true
 }
 
-/** 域标签（导轨格 / 域面板头共用）。 */
+/** 域标签（导轨格 / 域面板头共用）。纯函数版——`assistantIdentity` 形态没有 identity 数据
+ *  可读，直接回落 `fallbackI18nKey`；要显真名字的三处渲染点走 `useNavDomainLabel`（hook）。 */
 export function navDomainLabel(domain: NavDomain, t: NavTranslate): string {
   const label = NAV_DOMAINS[domain].label
+  if ('assistantIdentity' in label) return t(label.fallbackI18nKey)
   return 'i18nKey' in label ? t(label.i18nKey) : label.literal
 }
 

@@ -26,7 +26,6 @@ import { cn } from '@shared/lib/cn'
 import { AnimatedIconActiveProvider } from '@shared/components/icons'
 import {
   isNavEntryActive,
-  navDomainLabel,
   navDomainPanelEntries,
   navigateToSettingsTab,
   navLabel,
@@ -34,6 +33,7 @@ import {
   type NavDomain,
   type NavEntry
 } from '@shared/navigation/registry'
+import { useNavDomainLabel } from '@shared/navigation/useNavDomainLabel'
 import { useUpdaterStore } from '@shared/state/updater'
 import { clampSettingsTab, SETTINGS_TABS, type SettingsTab } from '@shared/lib/settingsTabs'
 import { useMattersEnabled } from '@shared/components/matters/hooks'
@@ -148,6 +148,7 @@ export function DomainPanel({
   innerWidth
 }: DomainPanelProps): React.ReactElement {
   const { t } = useTranslation()
+  const domainLabel = useNavDomainLabel(domain)
   const navigate = useNavigate()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   // `?tab=` 搜索参 —— settings 域的 12 个 tab 直达行按 tab 细分选中。
@@ -208,7 +209,7 @@ export function DomainPanel({
             与 rail 头 / 右侧内容区顶栏 (height 41) 的分割线共线（画布修正版基线）。 */}
         <div className="nav-panel-header gap-1.5">
           <span className="flex-1 min-w-0 text-[13px] font-semibold text-ink-fg truncate">
-            {navDomainLabel(domain, t)}
+            {domainLabel}
           </span>
           {onCollapse !== undefined && !peek && (
             <button

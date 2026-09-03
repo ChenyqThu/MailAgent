@@ -51,7 +51,8 @@ import { CSS } from '@dnd-kit/utilities'
 
 import { PlusIcon, SearchIcon, XIcon } from '@shared/components/icons'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
-import { NAV_DOMAINS, navDomainLabel } from '@shared/navigation/registry'
+import { NAV_DOMAINS } from '@shared/navigation/registry'
+import { useNavDomainLabel } from '@shared/navigation/useNavDomainLabel'
 import { openSearchTab } from '@shared/state/tab-commands'
 import { requestCloseTab } from '@shared/state/tab-workspace-bridge'
 import {
@@ -305,7 +306,7 @@ export function TabStrip(): React.ReactElement {
     if (to >= 0) reorderTab(String(event.active.id), to)
   }
 
-  const crumb1 = navDomainLabel(mainPage, t)
+  const crumb1 = useNavDomainLabel(mainPage)
   const mainTitle = mainBreadcrumb === null ? crumb1 : `${crumb1} / ${mainBreadcrumb}`
 
   return (

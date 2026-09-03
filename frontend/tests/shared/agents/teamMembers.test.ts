@@ -8,7 +8,10 @@ import type { ReportAgentConfig } from '@shared/api/types'
 import {
   clampMemberTab,
   deriveTeamMembers,
-  findMemberByAgentId
+  findMemberByAgentId,
+  memberAvatarSeed,
+  memberTitle,
+  type TeamMember
 } from '../../../src/shared/components/agents/team/teamMembers'
 
 function cfg(id: string, type: string, over: Partial<ReportAgentConfig> = {}): ReportAgentConfig {
@@ -49,11 +52,19 @@ const AGENTS: ReportAgentConfig[] = [
   cfg('mystery_row', 'unknown_type')
 ]
 
+/** ref → 可读标识（'main' / 'matter_followup' 两个合成成员没有 agentId）。 */
+function refId(member: TeamMember): string {
+  if (member.ref.kind === 'main') return 'main'
+  if (member.ref.kind === 'matterFollowup') return 'matter_followup'
+  return member.ref.agentId
+}
+
 describe('deriveTeamMembers — 分组与顺序', () => {
-  test('内置按固定序（主→报告日→周→搜索→预处理→周报→画像→治理）+ 自定义按 id', () => {
+  test('内置按固定序（主→事项跟进→报告日→周→搜索→预处理→周报→画像→治理）+ 自定义按 id', () => {
     const members = deriveTeamMembers(AGENTS)
-    expect(members.map((m) => (m.ref.kind === 'main' ? 'main' : m.ref.agentId))).toEqual([
+    expect(members.map(refId)).toEqual([
       'main',
+      'matter_followup',
       'daily_email_digest',
       'weekly_email_digest',
       'email_search_agent',
@@ -88,6 +99,35 @@ describe('deriveTeamMembers — 分组与顺序', () => {
 
   test('未知 type 不入清单', () => {
     expect(findMemberByAgentId(deriveTeamMembers(AGENTS), 'mystery_row')).toBeNull()
+  })
+})
+
+// 09-02 misc05 —「事项跟进」是第二个合成成员（不是 report_agent 行 → cfg 恒 null）。
+// 变异验证：把 memberTitle / memberAvatarSeed 里的 matterFollowup 分支删掉，
+// 下面两条分别红在「拿到 未知 Agent」与「拿到 unknown」。
+describe('matterFollowup —— cfg:null 的三处特判', () => {
+  const member = (): TeamMember =>
+    deriveTeamMembers(AGENTS).find((m) => m.ref.kind === 'matterFollowup')!
+
+  test('标题走固定文案，不落 untitled 兜底', () => {
+    expect(memberTitle(member(), '主助理', '未知 Agent', '事项跟进')).toBe('事项跟进')
+    // 兜底仍归 report_agent 行用（合成成员绝不落到它）。
+    expect(memberTitle(member(), '主助理', '未知 Agent', '')).toBe('')
+  })
+
+  test('头像种子是合成 id，不与别的无配置成员撞成同一张脸', () => {
+    expect(memberAvatarSeed(member())).toBe('matter_followup')
+    expect(memberAvatarSeed(deriveTeamMembers(AGENTS)[0])).toBe('unknown') // 主 Agent 不走这里
+  })
+
+  test('记录源 = matter 会话；不接对话但有记录档', () => {
+    expect(member().recordSource).toBe('matter')
+    expect(member().tabs).toEqual(['record', 'settings'])
+    expect(member().canChat).toBe(false)
+    expect(member().noChatReasonKey).toBe('team.noChat.matterFollowup')
+    // 🔴 它没有 run 读态（跟进 run 不进 /api/agent-runs 口径）——标「工作中」就是装饰。
+    expect(member().hasLiveRunState).toBe(false)
+    expect(member().key).toBe('member:matter_followup')
   })
 })
 

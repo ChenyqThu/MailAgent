@@ -10,7 +10,7 @@
 
 import type { ReportAgentConfig } from '@shared/api/types'
 
-import { memberRefKey, type TeamMemberRef } from '../shared'
+import { MATTER_FOLLOWUP_MEMBER_ID, memberRefKey, type TeamMemberRef } from '../shared'
 
 /** 视图档：第一档（对话/执行，名字随 canChat 变）+ 第二档设置。 */
 export type TeamViewTab = 'record' | 'settings'
@@ -30,6 +30,10 @@ export type TeamRecordSource =
   | 'progress'
   /** llm_processing per-邮件（经 listEnriched 投影，无 per-run 概念）。 */
   | 'preprocess'
+  /** `anchor_type='matter'` 的会话（事项跟进成员；这些行 agent_id 恒 NULL，与
+   *  `mergeMemberTimeline` 的 exact-match 口径不相交）。执行台账**不在**这里：
+   *  matter run 只有逐事项的 `GET /matters/{id}/runs`，没有跨事项聚合面。 */
+  | 'matter'
   /** 无记录面（主 Agent / 搜索 —— 两者都只有设置档）。 */
   | 'none'
 
@@ -38,7 +42,8 @@ export interface TeamMember {
   /** memberRefKey(ref) —— 选中态 / react key。 */
   key: string
   group: 'builtin' | 'custom'
-  /** 配置行；主 Agent 不是 report_agent 行 → null（名字/头像走 assistant identity）。 */
+  /** 配置行；合成成员不是 report_agent 行 → null（主 Agent 的名字/头像走 assistant
+   *  identity，事项跟进走固定文案 + 合成 id 派生头像）。 */
   cfg: ReportAgentConfig | null
   /** 跟它说话有没有意义（design §8.0 判据）。决定第一档叫「对话」还是「执行」。 */
   canChat: boolean
@@ -139,8 +144,35 @@ export function mainMember(): TeamMember {
   }
 }
 
+/** 「事项跟进」成员（09-02 misc05）—— 同 mainMember 是合成的：跟进不是 report_agent 行，
+ *  所以 `cfg` 恒 null（标题 / 头像 / 设置档三处各有特判，见 memberTitle /
+ *  memberAvatarSeed / AgentSettingsView）。
+ *  🔴 不接对话：跟进对话是**跟某一件事**说话，入口在那件事里（团队页开不出「跟所有事项
+ *  聊天」这种会话）。记录面只列已有的事项会话。 */
+export function matterFollowupMember(): TeamMember {
+  return {
+    ref: { kind: 'matterFollowup' },
+    key: memberRefKey({ kind: 'matterFollowup' }),
+    group: 'builtin',
+    cfg: null,
+    canChat: false,
+    tabs: RECORD_SETTINGS,
+    recordSource: 'matter',
+    noChatReasonKey: 'team.noChat.matterFollowup',
+    hasLiveRunState: false
+  }
+}
+
+/** 头像种子：report_agent 行用行 id，合成成员用自己的合成 id。
+ *  🔴 合成成员不能落到 'unknown'（两个 cfg 为 null 的成员会派生出同一张脸）；主 Agent 不
+ *  走这里 —— 它的外观由 assistant identity 决定（种子是 MAIN_ASSISTANT_SEED）。 */
+export function memberAvatarSeed(member: TeamMember): string {
+  if (member.ref.kind === 'matterFollowup') return MATTER_FOLLOWUP_MEMBER_ID
+  return member.cfg?.id ?? 'unknown'
+}
+
 /** report_agent 行集 → 团队清单（内置在前，固定顺序：
- *  主 Agent → 报告(日→周→月) → 搜索 → 预处理 → 项目周报 → 画像 → 治理；
+ *  主 Agent → 事项跟进 → 报告(日→周→月) → 搜索 → 预处理 → 项目周报 → 画像 → 治理；
  *  自定义按 id 稳定排序归第二组）。 */
 export function deriveTeamMembers(agents: readonly ReportAgentConfig[]): TeamMember[] {
   const byType = (type: string): ReportAgentConfig[] => agents.filter((a) => a.type === type)
@@ -157,7 +189,7 @@ export function deriveTeamMembers(agents: readonly ReportAgentConfig[]): TeamMem
     ...byType('contact_governance')
   ]
 
-  const members: TeamMember[] = [mainMember()]
+  const members: TeamMember[] = [mainMember(), matterFollowupMember()]
   for (const cfg of builtinOrder) {
     const m = builtinMember(cfg)
     if (m) members.push(m)
@@ -183,9 +215,16 @@ export function clampMemberTab(member: TeamMember, tab: TeamViewTab): TeamViewTa
   return member.tabs.includes(tab) ? tab : member.tabs[0]
 }
 
-/** 清单/页头共用的成员显示名：主 Agent 用 assistant identity 名，其余用配置行 title。 */
-export function memberTitle(member: TeamMember, mainName: string, untitled: string): string {
+/** 清单/页头共用的成员显示名：主 Agent 用 assistant identity 名，事项跟进用固定文案
+ *  （它没有配置行可取名），其余用配置行 title。 */
+export function memberTitle(
+  member: TeamMember,
+  mainName: string,
+  untitled: string,
+  matterFollowupName: string
+): string {
   if (member.ref.kind === 'main') return mainName
+  if (member.ref.kind === 'matterFollowup') return matterFollowupName
   return member.cfg?.title?.trim() || member.cfg?.id || untitled
 }
 
