@@ -1,13 +1,11 @@
 // P2-L7 —— 资料库检索面叶子（⌘K 第五 lane 与 /search 页组共用的纯函数）。
-import { describe, expect, test, vi } from 'vitest'
+import { describe, expect, test } from 'vitest'
 
 import type { LibrarySearchHit } from '../../../src/shared/api/types/library'
 import {
   LIBRARY_MAX_HITS,
   libraryAddressableHits,
-  libraryFileLinkTarget,
   libraryWarningLabelKey,
-  navigateToLibraryFile,
   parseLibrarySnippet
 } from '../../../src/shared/components/command/paletteLibrary'
 
@@ -88,18 +86,6 @@ describe('libraryAddressableHits', () => {
   test('滤掉没有 library id 的行（没有 id 就没有深链去处）', () => {
     const rows = [hit({ id: 7 }), hit({ id: null }), hit({ id: 9 })]
     expect(libraryAddressableHits(rows).map((row) => row.id)).toEqual([7, 9])
-  })
-})
-
-describe('资料库深链（design §9.5）', () => {
-  test('目标形状恒 /library?file={id}', () => {
-    expect(libraryFileLinkTarget(42)).toEqual({ to: '/library', search: { file: 42 } })
-  })
-
-  test('navigateToLibraryFile 把这个形状原样交给 navigate', () => {
-    const navigate = vi.fn()
-    navigateToLibraryFile(navigate as never, 42)
-    expect(navigate).toHaveBeenCalledWith({ to: '/library', search: { file: 42 } })
   })
 })
 

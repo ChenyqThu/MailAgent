@@ -38,7 +38,8 @@ vi.mock('@shared/hooks/useMailApi', () => ({
   })
 }))
 
-vi.mock('@shared/hooks/useLibraryApi', () => ({
+vi.mock('@shared/components/library/hooks', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   // 资料库第五 lane（P2-L7）跟着任何一次渲染发查询；本文件不测它，给个空结果，
   // 免得真去 fetch loopback serve-api。
   useLibraryApi: () => ({
@@ -47,7 +48,9 @@ vi.mock('@shared/hooks/useLibraryApi', () => ({
 }))
 
 vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => mockNavigate
+  useNavigate: () => mockNavigate,
+  // 资料库深链走 router.history.push（deeplink.ts）—— 组件无条件取 router。
+  useRouter: () => ({ history: { push: vi.fn() } })
 }))
 
 // 事项 / 通讯录两路关掉（本测只钉邮件内核那条腿；两组的查询在 enabled=false 下不发）。

@@ -70,7 +70,10 @@ vi.mock('@shared/state/mailbox', () => {
   return { useMailbox }
 })
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }))
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => vi.fn(),
+  useRouter: () => ({ history: { push: vi.fn() } })
+}))
 vi.mock('@shared/state/toast', () => ({ toastSuccess: vi.fn(), toastError: vi.fn() }))
 
 import i18n from '@shared/i18n'

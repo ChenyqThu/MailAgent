@@ -75,7 +75,8 @@ vi.mock('@shared/hooks/useMailApi', () => ({
 // S3 W1 — the palette now calls the gateway search client (runGatewaySearchAgent), not
 // mailApi.chat.runSearchAgent. The adapter drops the leading `reads` arg so every
 // existing single-arg assertion (calledWith({query,…}) / calls[0][0].signal) still holds.
-vi.mock('@shared/hooks/useLibraryApi', () => ({
+vi.mock('@shared/components/library/hooks', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   // 资料库第五 lane（P2-L7）跟着任何一次渲染发查询；本文件不测它，给个空结果，
   // 免得真去 fetch loopback serve-api。
   useLibraryApi: () => ({
@@ -110,7 +111,9 @@ vi.mock('@shared/state/mailbox', async () => {
 })
 
 vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => mockNavigate
+  useNavigate: () => mockNavigate,
+  // 资料库深链走 router.history.push（deeplink.ts）—— 组件无条件取 router。
+  useRouter: () => ({ history: { push: vi.fn() } })
 }))
 
 // F3 — mock toast so the fallbackDsl path's friendly toast is assertable

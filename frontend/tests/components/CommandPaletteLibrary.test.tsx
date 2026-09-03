@@ -16,12 +16,15 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { LibrarySearchHit } from '@shared/api/types/library'
 import { useCommandPalette } from '@shared/state/command-palette'
 
-const { mockSearch, mockListMailboxes, mockLibrarySearch, mockNavigate } = vi.hoisted(() => ({
-  mockSearch: vi.fn(),
-  mockListMailboxes: vi.fn(),
-  mockLibrarySearch: vi.fn(),
-  mockNavigate: vi.fn()
-}))
+const { mockSearch, mockListMailboxes, mockLibrarySearch, mockNavigate, mockPush } = vi.hoisted(
+  () => ({
+    mockSearch: vi.fn(),
+    mockListMailboxes: vi.fn(),
+    mockLibrarySearch: vi.fn(),
+    mockNavigate: vi.fn(),
+    mockPush: vi.fn()
+  })
+)
 
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
@@ -48,7 +51,8 @@ vi.mock('@shared/hooks/useMailApi', () => ({
   })
 }))
 
-vi.mock('@shared/hooks/useLibraryApi', () => ({
+vi.mock('@shared/components/library/hooks', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   useLibraryApi: () => ({ search: mockLibrarySearch })
 }))
 
@@ -56,7 +60,11 @@ vi.mock('@shared/assistant/searchAgentClient', () => ({
   runGatewaySearchAgent: vi.fn(async () => ({ ok: true, hits: [], summary: null }))
 }))
 
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => mockNavigate }))
+// 深链走 router.history.push（`/library` 还不是已注册路由，见 library/deeplink.ts）。
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => mockNavigate,
+  useRouter: () => ({ history: { push: mockPush } })
+}))
 
 vi.mock('@shared/components/matters/hooks', () => ({
   useMattersApi: () => ({
@@ -241,7 +249,7 @@ describe('CommandPalette — 资料库第五 lane', () => {
     await typeQuery('合同评审')
     const path = await screen.findByText('my-docs/notes/合同评审.md')
     fireEvent.click(path.closest('li') as HTMLElement)
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/library', search: { file: 31 } })
+    expect(mockPush).toHaveBeenCalledWith('/library?file=31')
     expect(useCommandPalette.getState().open).toBe(false)
   })
 

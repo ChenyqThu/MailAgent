@@ -24,25 +24,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
+import { useNavigate, useRouter } from '@tanstack/react-router'
 import { AlertTriangle, Search as SearchGlyph, X } from 'lucide-react'
 
 import type { SearchHit, SearchResult } from '@shared/api/types'
 import type { ContactRowDto } from '@shared/api/types/contact'
 import type { Matter } from '@shared/api/types/matter'
 import { runGatewaySearchAgent } from '@shared/assistant/searchAgentClient'
-import {
-  LIBRARY_MAX_HITS,
-  libraryAddressableHits,
-  navigateToLibraryFile
-} from '@shared/components/command/paletteLibrary'
+import { LIBRARY_MAX_HITS, libraryAddressableHits } from '@shared/components/command/paletteLibrary'
 import { useContactsApi, useContactsEnabled } from '@shared/components/contacts/hooks'
 import { useContactNavigation } from '@shared/components/contacts/navigation'
 import { PageFrame } from '@shared/components/layout/PageFrame'
+// 资料库：API 单例与深链都用资料库域自己的那一份（第二处手抄 = 两个会漂的真相）。
+import { navigateToLibraryFile } from '@shared/components/library/deeplink'
+import { useLibraryApi } from '@shared/components/library/hooks'
 import { useMattersApi, useMattersEnabled } from '@shared/components/matters/hooks'
 import { useMatterNavigation } from '@shared/components/matters/navigation'
 import { useDebouncedValue } from '@shared/hooks/useDebouncedValue'
-import { useLibraryApi } from '@shared/hooks/useLibraryApi'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
 import { toggleDslToken } from '@shared/lib/dsl_token'
@@ -86,6 +84,8 @@ interface FlatEntry {
 export function SearchTabPage(): React.ReactElement {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  // 深链走 `router.history.push`（`/library` 还不是已注册路由，见 deeplink.ts 头注）。
+  const router = useRouter()
   const mailApi = useMailApi()
   const mattersApi = useMattersApi()
   const mattersEnabled = useMattersEnabled()
@@ -300,9 +300,9 @@ export function SearchTabPage(): React.ReactElement {
   // 资料库深链 `/library?file={id}`（design §9.5）—— 与 ⌘K 同一条路径。
   const activateLibraryFile = useCallback(
     (fileId: number): void => {
-      navigateToLibraryFile(navigate, fileId)
+      navigateToLibraryFile(router, fileId)
     },
-    [navigate]
+    [router]
   )
 
   // ── 键盘：↑↓ 走扁平序（🔴 与 SearchResultGroups 的组渲染同序），⏎ 开高亮，⌘⏎ AI ──

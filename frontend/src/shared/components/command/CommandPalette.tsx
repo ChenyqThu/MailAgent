@@ -46,7 +46,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
+import { useNavigate, useRouter } from '@tanstack/react-router'
 import {
   Bookmark,
   BookmarkPlus,
@@ -87,11 +87,13 @@ import { hasDslToken, toggleDslToken } from '@shared/lib/dsl_token'
 import type { MailboxSummary, SearchAgentPhase, SearchHit, SearchResult } from '@shared/api/types'
 import type { Matter } from '@shared/api/types/matter'
 import type { ContactRowDto } from '@shared/api/types/contact'
-import { useLibraryApi } from '@shared/hooks/useLibraryApi'
 import { useMattersApi, useMattersEnabled } from '@shared/components/matters/hooks'
 import { useMatterNavigation } from '@shared/components/matters/navigation'
 import { useContactsApi, useContactsEnabled } from '@shared/components/contacts/hooks'
 import { useContactNavigation } from '@shared/components/contacts/navigation'
+// 资料库：API 单例与深链都用资料库域自己的那一份（第二处手抄 = 两个会漂的真相）。
+import { navigateToLibraryFile } from '@shared/components/library/deeplink'
+import { useLibraryApi } from '@shared/components/library/hooks'
 // jump 段的静态行 = nav registry 投影（task 08-24-l4-nav-shell Step R）：一级入口
 // 加/删/改门控只动 registry 一处，⌘K 自动跟上（此前是三行手抄，新入口从来不会出现在这里）。
 import {
@@ -106,7 +108,7 @@ import { LibraryHitRow, LibrarySearchWarnings } from './LibraryHitRow'
 import { MatterHitRow } from './MatterHitRow'
 import { PersonHitRow } from './PersonHitRow'
 import { PaletteThinkingPhrases } from './PaletteThinkingPhrases'
-import { LIBRARY_MAX_HITS, libraryAddressableHits, navigateToLibraryFile } from './paletteLibrary'
+import { LIBRARY_MAX_HITS, libraryAddressableHits } from './paletteLibrary'
 import {
   buildPaletteMatterLookupKeys,
   lookupMattersForEmail,
@@ -252,6 +254,8 @@ export function CommandPalette(): React.ReactElement | null {
     [visibleNavEntries]
   )
   const navigate = useNavigate()
+  // 深链走 `router.history.push`（`/library` 还不是已注册路由，见 deeplink.ts 头注）。
+  const router = useRouter()
   const queryClient = useQueryClient()
   const openMatter = useMatterNavigation((state) => state.open)
   const openContact = useContactNavigation((state) => state.open)
@@ -309,9 +313,9 @@ export function CommandPalette(): React.ReactElement | null {
   const activateLibraryFile = useCallback(
     (fileId: number): void => {
       closeCommandPalette()
-      navigateToLibraryFile(navigate, fileId)
+      navigateToLibraryFile(router, fileId)
     },
-    [navigate]
+    [router]
   )
 
   const [query, setQuery] = useState('')

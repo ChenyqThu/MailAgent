@@ -6,8 +6,6 @@
 // parser 硬编 `email_metadata` 别名，字段词表也全是邮件语义。所以这里既没有 DSL 提示
 // 词表，UI 文案也不许暗示有字段语法 —— 塞进去只会被当字面文本召回归零。
 
-import type { useNavigate } from '@tanstack/react-router'
-
 import type { LibrarySearchHit } from '@shared/api/types/library'
 
 /** 两个入口共用的截断口径。🔴 与 `qk.library.paletteSearch` 绑定：同一个 query key 的
@@ -71,28 +69,6 @@ export function libraryAddressableHits(
   return hits.filter((hit): hit is LibrarySearchHit & { id: number } => hit.id !== null)
 }
 
-/** 资料库深链（design §9.5）：`/library?file={id}`，落地 = 进域 + 展开所在文件夹 +
- *  选中文件；`missing` / `trashed` 由落地页自己 toast。 */
-export const LIBRARY_ROUTE = '/library'
-
-export function libraryFileLinkTarget(fileId: number): {
-  to: string
-  search: { file: number }
-} {
-  return { to: LIBRARY_ROUTE, search: { file: fileId } }
-}
-
-type PaletteNavigate = ReturnType<typeof useNavigate>
-type LooseNavigate = (options: { to: string; search?: Record<string, unknown> }) => unknown
-
-/**
- * 跳到某个库文件。
- *
- * 🔴 `/library` 还不是已注册的路由（资料库导航接入是另一条 lane），TanStack 的 `to`
- * 是路由字面量联合类型 ⇒ 这里必须绕过一次类型检查。**绕过只在这一行**：路由落地后把
- * 下面的 `as unknown as LooseNavigate` 删掉即可，目标形状与所有调用点都不用动。
- * 同一处缺口在 `NotificationPanel.tsx::activate` 的 `case 'library'` 也有一份占位。
- */
-export function navigateToLibraryFile(navigate: PaletteNavigate, fileId: number): void {
-  void (navigate as unknown as LooseNavigate)(libraryFileLinkTarget(fileId))
-}
+// 深链（`/library?file={id}`）**不在这里**：单源是 `components/library/deeplink.ts`
+// 的 `libraryFileHref` / `navigateToLibraryFile`，与「另存到资料库」等回执共用同一个
+// 去处（design §9.5 + F3）。两个入口直接 import 那一份。

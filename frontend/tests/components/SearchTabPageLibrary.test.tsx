@@ -29,10 +29,11 @@ vi.stubGlobal('localStorage', {
   }
 })
 
-const { mockSearch, mockLibrarySearch, mockNavigate } = vi.hoisted(() => ({
+const { mockSearch, mockLibrarySearch, mockNavigate, mockPush } = vi.hoisted(() => ({
   mockSearch: vi.fn(),
   mockLibrarySearch: vi.fn(),
-  mockNavigate: vi.fn()
+  mockNavigate: vi.fn(),
+  mockPush: vi.fn()
 }))
 
 vi.mock('@shared/hooks/useMailApi', () => ({
@@ -43,12 +44,15 @@ vi.mock('@shared/hooks/useMailApi', () => ({
   })
 }))
 
-vi.mock('@shared/hooks/useLibraryApi', () => ({
+vi.mock('@shared/components/library/hooks', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   useLibraryApi: () => ({ search: mockLibrarySearch })
 }))
 
+// 深链走 router.history.push（`/library` 还不是已注册路由，见 library/deeplink.ts）。
 vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => mockNavigate
+  useNavigate: () => mockNavigate,
+  useRouter: () => ({ history: { push: mockPush } })
 }))
 
 vi.mock('@shared/components/matters/hooks', async (importOriginal) => ({
@@ -138,6 +142,7 @@ beforeEach(() => {
     warnings: []
   })
   mockNavigate.mockReset()
+  mockPush.mockReset()
   _resetSearchTabForTest()
   useSearchHistory.setState({ history: [], saved: [] })
   useTabWorkspace.setState({
@@ -181,7 +186,7 @@ describe('SearchTabPage — 资料库组', () => {
 
     // ② flat 键盘序（SearchTabPage）：highlight 从 0 起，⏎ 必须落在资料库第一行。
     fireEvent.keyDown(input, { key: 'Enter' })
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/library', search: { file: 31 } })
+    expect(mockPush).toHaveBeenCalledWith('/library?file=31')
     expect(mockNavigate).not.toHaveBeenCalledWith({ to: '/', search: { view: 'inbox' } })
   })
 
@@ -190,7 +195,7 @@ describe('SearchTabPage — 资料库组', () => {
     fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), { target: { value: 'redis' } })
     const path = await screen.findByText('my-docs/notes/runbook.md')
     fireEvent.click(path.closest('li') as HTMLElement)
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/library', search: { file: 31 } })
+    expect(mockPush).toHaveBeenCalledWith('/library?file=31')
   })
 
   test('中文 1 个字：资料库组仍渲染，只出 warning 不出命中行', async () => {
