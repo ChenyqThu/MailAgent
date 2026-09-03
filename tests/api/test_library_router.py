@@ -322,3 +322,61 @@ def test_binary_upload_via_octet_stream(lib):
     assert _err(c.post("/api/library/files", content=b"x", headers={"content-type": "application/octet-stream"}))[:2] == (400, "E_INVALID_ARG")
     assert _err(c.post("/api/library/files", json={"parent_path": "my-docs", "filename": "s.md", "content": "x", "source": "nope"}))[:2] == (400, "E_INVALID_ARG")
     assert _err(c.post("/api/library/files", content=b"{not json", headers={"content-type": "application/json"}))[:2] == (400, "E_INVALID_ARG")
+
+
+# ── 语义检索三端点（design §9.1）──────────────────────────────────────────────
+# 🔴 本节一次也不下载 614 MB 权重：`download_model` 恒被替换掉，只验契约形状。
+
+
+def test_search_response_carries_the_semantic_contract_even_without_a_model(lib):
+    """没下载权重时返回体形状**完全一致** —— 前端按同一份键写代码，不做两套分支。"""
+    c, _ = lib
+    _create(c, "my-docs", "ops.md", "redis timeout on the cache cluster")
+    s = _data(c.get("/api/library/search", params={"q": "redis timeout"}))
+    assert set(s) == {"query", "mode", "search_mode", "semantic", "hits", "warnings"}
+    assert s["search_mode"] == "fts"
+    assert s["semantic"] == {"available": False, "model": None, "chunks": 0}
+    assert all(h["lane"] == "fts" for h in s["hits"])
+    # mode=fts 与默认的 hybrid 在没模型时逐键同形。
+    assert set(_data(c.get("/api/library/search", params={"q": "redis", "mode": "fts"}))) == set(s)
+    assert _err(c.get("/api/library/search", params={"q": "redis", "mode": "semantic"}))[:2] == (400, "E_INVALID_ARG")
+
+
+def test_embed_status_shape_without_a_model(lib):
+    c, _ = lib
+    st = _data(c.get("/api/library/embed/status"))
+    assert set(st) == {"model", "index", "job"}
+    assert set(st["model"]) == {"available", "model_id", "repo", "approx_bytes", "bytes_on_disk"}
+    assert st["model"]["available"] is False and st["model"]["approx_bytes"] > 0
+    assert set(st["index"]) == {"files_total", "files_indexed", "files_pending", "chunks"}
+    assert st["job"] is None
+    # 🔴 不含任何绝对路径（renderer 永不拿到库根的真实位置）。
+    assert "/" not in st["model"]["model_id"]
+
+
+def test_rebuild_is_refused_without_a_model(lib):
+    """E_INVALID_STATE 走 409（不是 400）—— 前端按状态码分支时别抄错。"""
+    c, _ = lib
+    assert _err(c.post("/api/library/embed/rebuild"))[:2] == (409, "E_INVALID_STATE")
+
+
+def test_download_endpoint_returns_a_status_with_the_job_attached(lib, monkeypatch):
+    """下载端点立即返回一份 status，进度经 `GET /embed/status` 的 `job` 轮询。"""
+    from src.library import embed as embed_mod
+
+    monkeypatch.setattr(embed_mod, "download_model", lambda _root, **_kw: "")  # 🔴 绝不真下 614 MB
+    c, _ = lib
+    st = _data(c.post("/api/library/embed/download"))
+    assert set(st["job"]) == {"kind", "running", "done", "total", "error", "started_at", "finished_at"}
+    # 🔴 下载**完成后会自动接上建索引**，所以这里读到的 job 可能已经是 'index' 了（本测试里
+    # 下载被替换成瞬时 no-op，必然如此）。前端渲染进度必须按 `job.kind` 分两种文案，
+    # 不能假定「点了下载 → job 恒为 download」。
+    assert st["job"]["kind"] in ("download", "index")
+
+
+def test_download_is_refused_when_the_model_is_already_there(lib, monkeypatch):
+    from src.library import embed as embed_mod
+
+    monkeypatch.setattr(embed_mod, "model_present", lambda _root: True)
+    c, _ = lib
+    assert _err(c.post("/api/library/embed/download"))[:2] == (409, "E_INVALID_STATE")
