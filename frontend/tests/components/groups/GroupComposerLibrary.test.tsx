@@ -32,7 +32,12 @@ function hit(id: number | null, path: string, filename: string) {
   return { id, path, filename }
 }
 
-function renderComposer(onSend = vi.fn(async () => undefined)) {
+type SendRefs = { fileId: number; path: string; name: string }[]
+/** onSend 的形参在这里标全，`mock.calls[0]` 才带类型 —— 否则它是空元组，
+ *  下面两处只能靠 `as [...]` 硬转，而 TS2352 会拦住「空元组转三元组」。 */
+function renderComposer(
+  onSend = vi.fn(async (_text: string, _attachments: unknown[], _refs: SendRefs) => undefined)
+) {
   render(
     createElement(GroupComposer, {
       onSend,
@@ -109,11 +114,7 @@ describe('GroupComposer — @ 资料组', () => {
     fireEvent.change(input, { target: { value: `${input.value}看看这个` } })
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(onSend).toHaveBeenCalled())
-    const [text, attachments, refs] = onSend.mock.calls[0] as [
-      string,
-      unknown[],
-      { fileId: number; path: string; name: string }[]
-    ]
+    const [text, attachments, refs] = onSend.mock.calls[0]
     expect(text).toContain('@报价单.pdf')
     expect(attachments).toEqual([])
     expect(refs).toEqual([{ fileId: 42, path: 'my-docs/报价单.pdf', name: '报价单.pdf' }])
@@ -136,7 +137,7 @@ describe('GroupComposer — @ 资料组', () => {
     fireEvent.change(input, { target: { value: '算了，换个说法' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(onSend).toHaveBeenCalled())
-    const [, , refs] = onSend.mock.calls[0] as [string, unknown[], unknown[]]
+    const [, , refs] = onSend.mock.calls[0]
     expect(refs).toEqual([])
   })
 })
