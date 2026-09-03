@@ -93,9 +93,8 @@ function snapshotPayload(): MatterContextSnapshotPayload {
   }
 }
 
-/** 观测面：把绑定里能脱离 thread 渲染的两块（chip / controls）摆出来，其余（anchor / surface /
- *  quickPrompts）写进 data-* 供断言 —— quickPrompts 里有 ThreadPrimitive.Suggestion，
- *  必须活在 runtime 里，这里只判它在不在。 */
+/** 观测面：把绑定里能脱离 thread 渲染的两块（chip / controls）摆出来，其余（anchor / surface）
+ *  写进 data-* 供断言。 */
 interface HarnessProps {
   seed?: MatterChatTarget | null
   sessionMatter?: MatterChatTarget | null
@@ -125,7 +124,6 @@ function Harness(props: HarnessProps): React.JSX.Element {
       data-testid="harness"
       data-anchor={binding.anchor?.publicId ?? ''}
       data-surface={binding.surface === null ? 'none' : binding.surface.publicId}
-      data-prompts={binding.quickPrompts === null ? 'none' : 'present'}
     >
       {binding.controls}
       {binding.chip}
@@ -172,8 +170,6 @@ describe('useMatterConversation — 锚点与 chip', () => {
     expect(screen.getByTestId('harness').dataset.anchor).toBe('MAT-0042')
     // 写入回执 surface 随锚点在场 —— 没有它 matter 写入卡会退化成通用工具卡。
     expect(screen.getByTestId('harness').dataset.surface).toBe('MAT-0042')
-    // 快捷动作换成事项这一组（位置仍是全局面板的那个槽）。
-    expect(screen.getByTestId('harness').dataset.prompts).toBe('present')
 
     fireEvent.click(screen.getByRole('button', { name: '移除上下文' }))
     await waitFor(() => expect(screen.queryByText('MAT-0042 · Vendor launch')).toBeNull())
@@ -256,12 +252,11 @@ describe('matterIdentityFromSession — 🔴「缺元数据」与「普通会话
 })
 
 describe('useMatterConversation — 身份未就绪时整个绑定惰性', () => {
-  test('unresolved → 无 chip / 无控件 / 无 surface / 无快捷 prompt', () => {
+  test('unresolved → 无 chip / 无控件 / 无 surface', () => {
     renderBinding({ seed: MATTER, sessionMatterUnresolved: true })
     const harness = screen.getByTestId('harness')
     expect(harness.dataset.anchor).toBe('')
     expect(harness.dataset.surface).toBe('none')
-    expect(harness.dataset.prompts).toBe('none')
     expect(screen.queryByTestId('matter-chat-controls')).toBeNull()
   })
 

@@ -45,6 +45,7 @@ const {
   TAB_KIND_DOMAIN,
   selectActiveTab,
   selectActiveTargetId,
+  selectDockAnchorTab,
   tabId,
   useTabWorkspace
 } = await import('@shared/state/tab-workspace')
@@ -350,6 +351,17 @@ describe('updateTab', () => {
     s().updateTab('email:404', { title: '幽灵' })
     expect(s()).toBe(before)
   })
+
+  test('09-02 chatSessionId（dock 会话绑定）随标签走，并持久化；写 undefined 即清掉', () => {
+    openEmails(2)
+    s().updateTab('email:1', { chatSessionId: 5 })
+    expect(s().tabs.find((t) => t.id === 'email:1')?.chatSessionId).toBe(5)
+    expect(s().tabs.find((t) => t.id === 'email:2')?.chatSessionId).toBeUndefined()
+    const stored = persisted().tabs as Array<Record<string, unknown>>
+    expect(stored.find((t) => t.targetId === 1)?.chatSessionId).toBe(5)
+    s().updateTab('email:1', { chatSessionId: undefined })
+    expect(s().tabs.find((t) => t.id === 'email:1')?.chatSessionId).toBeUndefined()
+  })
 })
 
 // ── 搜索标签（「新标签页」单例，P2 补批 Lane S）─────────────────────────────
@@ -604,6 +616,18 @@ describe('选择器', () => {
     expect(selectActiveTargetId(s(), 'matter')).toBe(12)
     expect(selectActiveTargetId(s(), 'email')).toBeNull()
   })
+
+  test('09-02 selectDockAnchorTab —— 邮件 / 事项标签给标签本体；主标签 / 搜索标签 null', () => {
+    expect(selectDockAnchorTab(s())).toBeNull()
+    s().openTab('email', 1, '邮件一')
+    expect(selectDockAnchorTab(s())?.id).toBe('email:1')
+    s().openTab('matter', 12, '事项十二')
+    expect(selectDockAnchorTab(s())?.id).toBe('matter:12')
+    s().openTab('search', SEARCH_TARGET_ID, '搜索')
+    expect(selectDockAnchorTab(s())).toBeNull()
+    s().activateMain()
+    expect(selectDockAnchorTab(s())).toBeNull()
+  })
 })
 
 // ── 持久化 ──────────────────────────────────────────────────────────────────
@@ -671,6 +695,28 @@ describe('持久化', () => {
     expect(tabs.map((t) => t.id)).toEqual(['email:1', 'matter:3'])
     expect(tabs[0].drawerOpen).toBe(true)
     expect(tabs[1]).toMatchObject({ title: '', locked: false, drawerOpen: false, scrollTop: 0 })
+  })
+
+  test('09-02 存档里的 chatSessionId：正整数保留，其余（负数 / 0 / 非数）丢弃', async () => {
+    const fresh = await reboot(
+      JSON.stringify({
+        v: 1,
+        maxTabs: 8,
+        mainPage: 'today',
+        active: 'main',
+        tabs: [
+          { kind: 'email', targetId: 1, chatSessionId: 5 },
+          { kind: 'email', targetId: 2, chatSessionId: -3 },
+          { kind: 'matter', targetId: 3, chatSessionId: 0 },
+          { kind: 'matter', targetId: 4, chatSessionId: 'x' }
+        ]
+      })
+    )
+    const byId = new Map(fresh.useTabWorkspace.getState().tabs.map((t) => [t.id, t]))
+    expect(byId.get('email:1')?.chatSessionId).toBe(5)
+    expect(byId.get('email:2')?.chatSessionId).toBeUndefined()
+    expect(byId.get('matter:3')?.chatSessionId).toBeUndefined()
+    expect(byId.get('matter:4')?.chatSessionId).toBeUndefined()
   })
 
   test('存档里的 active 指向一个不存在的标签 → 回主标签', async () => {

@@ -192,6 +192,46 @@ describe('per-tab 抽屉开合', () => {
   })
 })
 
+describe('bindTabChatSession（09-02 对象标签 ↔ dock 会话）', () => {
+  const chatSessionOf = (id: string): number | undefined =>
+    useTabWorkspace.getState().tabs.find((t) => t.id === id)?.chatSessionId
+
+  test('写到指定标签；同值不写；null 清掉', () => {
+    bridge.openObjectTab('email', 1)
+    bridge.bindTabChatSession('email:1', 5)
+    expect(chatSessionOf('email:1')).toBe(5)
+    const before = useTabWorkspace.getState().tabs
+    bridge.bindTabChatSession('email:1', 5)
+    expect(useTabWorkspace.getState().tabs).toBe(before)
+    bridge.bindTabChatSession('email:1', null)
+    expect(chatSessionOf('email:1')).toBeUndefined()
+  })
+
+  test('🔴 写回认「对话所属的标签」而不是此刻激活的；两个标签各绑各的，不串', () => {
+    bridge.openObjectTab('email', 1)
+    bridge.openObjectTab('matter', 7) // 激活位已切到事项标签
+    // 邮件标签上的对话首发拿到 id 时用户已经切走 —— 仍要落回邮件标签
+    bridge.bindTabChatSession('email:1', 5)
+    bridge.bindTabChatSession('matter:7', 9)
+    expect(chatSessionOf('email:1')).toBe(5)
+    expect(chatSessionOf('matter:7')).toBe(9)
+    bridge.bindTabChatSession('email:1', null)
+    expect(chatSessionOf('email:1')).toBeUndefined()
+    expect(chatSessionOf('matter:7')).toBe(9)
+  })
+
+  test('tabId 为 null（无对象标签）/ 标签已关 → no-op；popout 下 no-op', () => {
+    bridge.openObjectTab('email', 1)
+    bridge.bindTabChatSession(null, 5)
+    bridge.bindTabChatSession('email:404', 5)
+    expect(chatSessionOf('email:1')).toBeUndefined()
+    expect(useTabWorkspace.getState().tabs).toHaveLength(1)
+    usePopoutMode.setState({ isPopout: true, emailId: 1 })
+    bridge.bindTabChatSession('email:1', 5)
+    expect(chatSessionOf('email:1')).toBeUndefined()
+  })
+})
+
 describe('标题 / 滚动位置', () => {
   test('setObjectTabTitle 同值不写（每次 updateTab 都落 localStorage）', () => {
     bridge.openObjectTab('email', 1, 'A')

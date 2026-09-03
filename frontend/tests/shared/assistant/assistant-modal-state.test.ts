@@ -38,7 +38,12 @@ afterEach(() => {
   vi.unstubAllEnvs()
   localStorage.clear()
   // Reset the singleton store between tests (zustand persists across the module's lifetime).
-  useAIChatPanel.setState({ visible: false, mode: 'floating', pendingAgentSessionId: null })
+  useAIChatPanel.setState({
+    visible: false,
+    mode: 'floating',
+    pendingAgentSessionId: null,
+    pendingTabSession: null
+  })
 })
 
 describe('useAIChatPanel — assistant-modal three-mode state', () => {
@@ -69,6 +74,19 @@ describe('useAIChatPanel — assistant-modal three-mode state', () => {
     expect(useAIChatPanel.getState().pendingAgentSessionId).toBe(42)
     useAIChatPanel.getState().consumeOpenAgentSession()
     expect(useAIChatPanel.getState().pendingAgentSessionId).toBeNull()
+  })
+
+  test('09-02 pendingTabSession slot: nonce 递增；consume 只清自己那一条，不吞后来的请求', () => {
+    const s = useAIChatPanel.getState()
+    s.requestTabSession(7)
+    expect(useAIChatPanel.getState().pendingTabSession).toEqual({ sessionId: 7, nonce: 1 })
+    // 派发落地前又点了一次（这回是个没绑定的标签）
+    s.requestTabSession(null)
+    expect(useAIChatPanel.getState().pendingTabSession).toEqual({ sessionId: null, nonce: 2 })
+    s.consumeTabSession(1)
+    expect(useAIChatPanel.getState().pendingTabSession?.nonce).toBe(2)
+    s.consumeTabSession(2)
+    expect(useAIChatPanel.getState().pendingTabSession).toBeNull()
   })
 
   test('legacy visible/toggle stays orthogonal to mode (no regression)', () => {

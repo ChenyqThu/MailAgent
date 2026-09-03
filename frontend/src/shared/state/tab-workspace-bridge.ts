@@ -328,6 +328,18 @@ useTabWorkspace.subscribe((state, prev) => {
   if (panel.visible !== tab.drawerOpen) panel.setVisible(tab.drawerOpen)
 })
 
+/** 09-02 —— dock 会话 → 对象标签（email / matter）的绑定。AssistantChatModal 在
+ *  `chat.activeSessionId` **变化**时调，标签是这场对话**所属**的那个（不一定是此刻激活的）：
+ *  换会话 / 首发拿到真 id → 写；新建会话（null）→ 清。标签不在（已关 / 无对象标签）→ no-op。
+ *  同值不写（updateTab 每次都落 localStorage）。 */
+export function bindTabChatSession(tabId: TabId | null, sessionId: number | null): void {
+  if (inert() || tabId === null) return
+  const ws = useTabWorkspace.getState()
+  const tab = ws.tabs.find((t) => t.id === tabId) ?? null
+  if (tab === null || (tab.chatSessionId ?? null) === sessionId) return
+  ws.updateTab(tab.id, { chatSessionId: sessionId ?? undefined })
+}
+
 // 抽屉开合 → 记到当前激活的对象标签上。
 useAIChatPanel.subscribe((state, prev) => {
   if (inert()) return

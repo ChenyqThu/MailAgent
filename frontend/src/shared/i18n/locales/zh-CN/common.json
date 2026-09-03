@@ -6062,7 +6062,6 @@
     },
     "chat": {
       "title": "事项对话",
-      "open": "事项对话",
       "agentName": "事项 Agent",
       "removeContext": "移除上下文",
       "newSession": "新会话",
@@ -6078,17 +6077,6 @@
         "pinnedUnknown": "置顶资料",
         "changes": "自上次接受更新以来的变化",
         "unavailable": "上下文计数暂时读不到，不影响对话。"
-      },
-      "prompts": {
-        "status": "总结当前状态",
-        "nextStep": "补一个下一步",
-        "draftFollowup": "起草跟进邮件",
-        "updateSummary": "更新摘要",
-        "updateSummaryPrompt": "把这件事的「当前状态」摘要更新一下。先读现有摘要、未完成条目和最近动态，然后写给读的人看：第一句说现在卡在哪或最重要的结论，第二句写下一步（谁在什么时候做什么）。不要写成操作记录（「我把状态改成了…、加了两个行动项」这种不要），也不要复述背景与目标。动手改之前先把你准备写的摘要给我看。"
-      },
-      "empty": {
-        "title": "从这里推进这件事",
-        "hint": "基于本事项的 {count} 条上下文回答，或用 @ 带上别的资料"
       },
       "writeLabels": {
         "matter_create": "已创建事项",

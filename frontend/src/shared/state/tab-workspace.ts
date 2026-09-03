@@ -121,6 +121,10 @@ export interface TabDescriptor {
   readonly draft?: DraftSnapshot
   readonly drawerOpen: boolean
   readonly scrollTop: number
+  /** 09-02 —— 这个对象标签绑定的 dock 会话（AI Chat 浮窗）。FAB 打开 dock / dock 开着切到本标签时：
+   *  绑了就回到它，没绑就开新会话并在首发拿到真 id 后写回。只有 email / matter 标签会写（写侧
+   *  tab-workspace-bridge::bindTabChatSession）。 */
+  readonly chatSessionId?: number
 }
 
 export function tabId(kind: TabKind, targetId: number): TabId {
@@ -169,7 +173,7 @@ export const CLOSED_STACK_CAP = 10
 
 /** updateTab 可写的字段（id / kind / targetId 是身份，不可改；lastActiveAt 归激活语义管）。 */
 export type TabPatch = Partial<
-  Pick<TabDescriptor, 'title' | 'locked' | 'draft' | 'drawerOpen' | 'scrollTop'>
+  Pick<TabDescriptor, 'title' | 'locked' | 'draft' | 'drawerOpen' | 'scrollTop' | 'chatSessionId'>
 >
 
 export interface TabWorkspaceState {
@@ -276,6 +280,13 @@ function parseTab(raw: unknown): TabDescriptor | null {
     rec.draft !== null && typeof rec.draft === 'object' && !Array.isArray(rec.draft)
       ? (rec.draft as DraftSnapshot)
       : undefined
+  // 会话 id 恒正（负数只是 chat 标签首发前的临时锚，不会被绑到别的标签上）。
+  const chatSessionId =
+    typeof rec.chatSessionId === 'number' &&
+    Number.isInteger(rec.chatSessionId) &&
+    rec.chatSessionId > 0
+      ? rec.chatSessionId
+      : undefined
   return {
     // id 按 kind + targetId 重算而不是照抄存的那份 —— 存的 id 被手改过也不会让去重失效。
     id: tabId(rec.kind, targetId),
@@ -287,7 +298,8 @@ function parseTab(raw: unknown): TabDescriptor | null {
     locked: rec.locked === true && rec.kind !== 'search',
     drawerOpen: rec.drawerOpen === true,
     scrollTop,
-    ...(draft === undefined ? {} : { draft })
+    ...(draft === undefined ? {} : { draft }),
+    ...(chatSessionId === undefined ? {} : { chatSessionId })
   }
 }
 
@@ -611,4 +623,11 @@ export function selectActiveTab(state: Slice): TabDescriptor | null {
 export function selectActiveTargetId(state: Slice, kind: TabKind): number | null {
   const tab = selectActiveTab(state)
   return tab !== null && tab.kind === kind ? tab.targetId : null
+}
+
+/** 09-02 —— AI Chat FAB / dock 的锚对象标签：激活的是邮件或事项标签时给它；主标签 / 搜索 /
+ *  chat 标签 → null（chat 标签本身就是一场对话，没有 FAB 也不绑 dock 会话）。 */
+export function selectDockAnchorTab(state: Slice): TabDescriptor | null {
+  const tab = selectActiveTab(state)
+  return tab !== null && (tab.kind === 'email' || tab.kind === 'matter') ? tab : null
 }

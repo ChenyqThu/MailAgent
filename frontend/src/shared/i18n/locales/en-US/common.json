@@ -6062,7 +6062,6 @@
     },
     "chat": {
       "title": "Matter chat",
-      "open": "Matter chat",
       "agentName": "Matter Agent",
       "removeContext": "Remove context",
       "newSession": "New conversation",
@@ -6078,17 +6077,6 @@
         "pinnedUnknown": "Pinned resources",
         "changes": "Changes since the last accepted update",
         "unavailable": "Context counts are unavailable right now; the chat still works."
-      },
-      "prompts": {
-        "status": "Summarize current status",
-        "nextStep": "Add a next step",
-        "draftFollowup": "Draft a follow-up email",
-        "updateSummary": "Update the summary",
-        "updateSummaryPrompt": "Update this Matter's \"current state\" summary. Read the existing summary, the open items and the recent activity first, then write for a reader: lead with the current blocker or the most important conclusion, then the next step (who does what, by when). Do not write an operation log (no \"I changed the status / added two items\"), and do not restate the background and goal. Show me the summary you plan to write before saving it."
-      },
-      "empty": {
-        "title": "Move this forward from here",
-        "hint": "Answering from {count} context items in this matter, or @-mention other material"
       },
       "writeLabels": {
         "matter_create": "Matter created",

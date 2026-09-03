@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 //
 // Matters MVP P6-A lane A5 — the two surface-level invariants:
-//   · MatterDetail: 事项对话 targets the existing AI dock (0812: the context rail is gone,
-//     so the same tests now pin its absence and the header pill's follow-up modal);
+//   · MatterDetail: no second chat UI (0812: the context rail is gone, so the same tests now pin
+//     its absence and the header pill's follow-up modal; 09-02: the header「事项对话」button is
+//     gone too — the entry is the shared bottom-right FAB, see chatModalFabTabSession.test.tsx);
 //   · MattersWorkspace with the flag off: nothing renders and nothing is requested.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -211,25 +212,8 @@ describe('MatterDetail — chat entry, no context rail', () => {
     await waitFor(() => expect(screen.getByText('Vendor launch')).toBeTruthy())
     expect(screen.queryByText('还没有关联资料。解除关联不会删除原始邮件或文档。')).toBeNull()
     expect(screen.queryByTestId('matter-chat-panel')).toBeNull()
-    expect(screen.getByRole('button', { name: '事项对话' })).toBeTruthy()
-  })
-
-  test('clicking 事项对话 targets the AI dock and starts a new round each time', async () => {
-    renderDetail()
-    const openButton = await screen.findByRole('button', { name: '事项对话' })
-
-    fireEvent.click(openButton)
-    expect(useAIChatPanel.getState().visible).toBe(true)
-    expect(useAIChatPanel.getState().matterTarget).toEqual({
-      id: 42,
-      publicId: 'MAT-0042',
-      title: 'Vendor launch'
-    })
-    expect(useAIChatPanel.getState().matterConversationEpoch).toBe(1)
-    expect(screen.queryByTestId('matter-chat-panel')).toBeNull()
-
-    fireEvent.click(openButton)
-    expect(useAIChatPanel.getState().matterConversationEpoch).toBe(2)
+    // 09-02 —— 头部「事项对话」按钮已删：入口是与邮件页同一个右下角 FAB。
+    expect(screen.queryByRole('button', { name: '事项对话' })).toBeNull()
   })
 
   // 0812 D-B 的核心 bug：跟进配置入口此前只在右栏里，窄窗口下不可达。现在挂在详情头的

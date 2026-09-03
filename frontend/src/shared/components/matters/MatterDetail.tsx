@@ -15,7 +15,6 @@ import {
   FileCheck,
   Hourglass,
   Link2,
-  MessageSquare,
   MoreHorizontal,
   Pencil,
   Play,
@@ -85,11 +84,7 @@ import {
   saveObjectTabScroll,
   setObjectTabTitle
 } from '@shared/state/tab-workspace-bridge'
-import {
-  openMatterChat,
-  startMatterChatWithPrompt,
-  useAIChatPanel
-} from '@shared/state/ai-chat-panel'
+import { startMatterChatWithPrompt } from '@shared/state/ai-chat-panel'
 import { toastError, toastInfo, toastSuccess } from '@shared/state/toast'
 
 import { AddItemModal } from './AddItemModal'
@@ -197,8 +192,6 @@ export function MatterDetail({
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const setActiveEmail = useActiveEmail((state) => state.setActive)
-  const assistantVisible = useAIChatPanel((state) => state.visible)
-  const activeMatterChatId = useAIChatPanel((state) => state.matterTarget?.id ?? null)
   const [tab, setTab] = useState<DetailTab>('state')
   const [addKind, setAddKind] = useState<MatterItemKind>('action')
   const [addOpen, setAddOpen] = useState(false)
@@ -325,7 +318,6 @@ export function MatterDetail({
     gcTime: 15 * 60_000
   })
   const matter = detail.data?.matter
-  const chatOpen = Boolean(matter && assistantVisible && activeMatterChatId === matter.id)
   const items = detail.data?.items ?? []
   // curated 进展（task 08-25）与全量事件是**两份**数据：前者是「事情的发展脉络」，
   // 后者是操作日志。同一次 detail 请求取回，不各发一次。
@@ -1001,8 +993,6 @@ export function MatterDetail({
                 />
               </div>
             </div>
-            {/* P3 — 事项对话 entry. Sits left of the 「更多」 menu (the design's 「立即跟进」
-                neighbour is P4 and is deliberately not rendered yet: 界面跟 Phase 走). */}
             {showNavigation ? (
               <MatterPrevNext
                 current={navigationIndex + 1}
@@ -1015,22 +1005,6 @@ export function MatterDetail({
                 onNext={handleNextMatter}
               />
             ) : null}
-            <button
-              type="button"
-              onClick={() =>
-                openMatterChat({ id: matter.id, publicId: matter.public_id, title: matter.title })
-              }
-              aria-pressed={chatOpen}
-              className={cn(
-                'inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-ctl)] px-2.5 py-1.5 text-aux transition-colors duration-fast',
-                chatOpen
-                  ? 'bg-coral/12 text-coral'
-                  : 'border border-ink-border text-ink-fg-1 hover:bg-ink-3'
-              )}
-            >
-              <MessageSquare size={13} />
-              {t('matters.chat.open')}
-            </button>
             {matterAgentEnabled ? (
               <button
                 type="button"
@@ -1434,8 +1408,8 @@ function MatterPrevNext({
 }: MatterPrevNextProps): React.ReactElement {
   return (
     <div className="inline-flex shrink-0 items-center overflow-hidden rounded-[var(--r-ctl)] border border-ink-border bg-ink-1 text-ink-fg-1">
-      {/* E10④（dogfood 轮 2）—— 高度改 `h-8`（32px）对齐相邻的「事项对话」/「立即跟进」按钮
-          （两者 `py-1.5` + `text-aux` 20px 行高 = 32px）：这三颗按钮共处 header 的
+      {/* E10④（dogfood 轮 2）—— 高度改 `h-8`（32px）对齐相邻的「立即跟进」按钮
+          （它 `py-1.5` + `text-aux` 20px 行高 = 32px）：这两颗按钮共处 header 的
           `items-start` 一行，原来的 `size-7`（28px）比邻居矮 4px，顶边对齐、底边错位。 */}
       <button
         type="button"

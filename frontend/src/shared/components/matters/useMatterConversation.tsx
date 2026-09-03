@@ -3,14 +3,15 @@
 // 设计稿 `matters/chat.jsx` 开头逐字写着：*Matter Chat — the SAME shell as the global AI panel.
 // Only three things change: the context chips are the matter, the quick actions are matter actions,
 // and the empty state names the matter. **No second chat UI.*** 实现侧曾另起 MatterChatPanel，本
-// 模块就是把那三件事搬回主 chat 的适配层 —— 它**不渲染 thread、不建 runtime**，只产出
-// AgentConversation 要挂上去的几个槽位 + 锚点/快照/写入回执 surface。
+// 模块就是把事项那几件事搬回主 chat 的适配层 —— 它**不渲染 thread、不建 runtime**，只产出
+// AgentConversation 要挂上去的几个槽位 + 锚点/快照/写入回执 surface。三件事里的后两件
+// （事项快捷 prompt / 点名事项的空态）已于 09-02 随入口与邮件页统一（右下角 FAB）退役：
+// 事项对话的空态与快捷动作回落通用面板那一组。
 //
 // 保住的能力（删 MatterChatPanel 时逐个搬过来的，少一个都算功能倒退）：
 //   · 可移除的事项 context chip（+ 移除后不再自动重新 seed，与邮件 chip 同款 ref 记忆）
 //   · 上下文缺口卡（MatterContextGapCard）—— CTA 自 task 08-25 起是「让 Agent 找」
 //     （关键词命中式的「授权扩检索」整条退役，见卡片头注）
-//   · 事项快捷 prompt（设计稿：位置与全局面板的快捷动作一致 —— 换一组，不是删掉）
 //   · MatterChatSurface（写入回执 + 撤销）—— 没有它，matter 写入卡会 fall through 成通用工具卡
 //
 // 🔴 锚点二源：`sessionMatter`（会话行自己的 anchor，从历史里选中时的真相）优先于 `seed`
@@ -30,7 +31,6 @@ import type { MatterChatTarget } from '@shared/state/ai-chat-panel'
 import { startMatterChatWithPrompt } from '@shared/state/ai-chat-panel'
 
 import { MatterContextGapCard } from './MatterContextGapCard'
-import { MatterQuickPrompts } from './MatterQuickPrompts'
 import type { MatterChatSurface } from './matterChatContext'
 import { useMatterContextSnapshot } from './useMatterContextSnapshot'
 import { useMatterUndoRunner } from './useMatterUndoRunner'
@@ -87,7 +87,7 @@ export interface UseMatterConversationInput {
   sessionMatter: MatterChatTarget | null
   /** 🔴 会话**是**事项对话、但公共编号没拿到（`matterIdentityFromSession` 的 `unresolved`）。
    *  true 时整个绑定退成惰性：不采纳 dock 带的种子（那会把这场对话悄悄绑到**另一件**事上）、
-   *  不出 chip / 控件 / 快捷 prompt / 写入回执 surface。调用方负责摆出「上下文未就绪」并禁发。 */
+   *  不出 chip / 控件 / 写入回执 surface。调用方负责摆出「上下文未就绪」并禁发。 */
   sessionMatterUnresolved?: boolean
   /** 这场对话还是空的（seed 只在空会话上采纳，与邮件 chip 同门）。 */
   chatIsEmpty: boolean
@@ -116,11 +116,6 @@ export interface MatterConversationBinding {
   chip: React.ReactNode
   /** chip 之上的一组事项控件（上下文缺口卡）。 */
   controls: React.ReactNode
-  /** 空态快捷 prompt（换一组，不是删掉 —— 设计稿位置同全局面板）。 */
-  quickPrompts: React.ReactNode
-  /** G-20 空态标题/副标题（设计稿："the empty state names the matter"）；非事项对话为 null，
-   *  调用方据此回落通用 welcome。 */
-  welcome: { title: string; hint: string } | null
 }
 
 export function useMatterConversation(
@@ -205,7 +200,6 @@ export function useMatterConversation(
   // 带上全部置顶摘录（注入面零变化；hook 侧那个恒空的剔除参数也已一并删除）。
   const {
     snapshot,
-    chips,
     hasContextGap,
     isError: snapshotFailed
   } = useMatterContextSnapshot({
@@ -214,10 +208,6 @@ export function useMatterConversation(
     capabilities,
     enabled: snapshotEnabled
   })
-
-  const contextCount = chips
-    ? 1 + chips.openItems + chips.stakeholders + chips.pinnedResources + chips.changes
-    : 0
 
   // task 08-25 —— 缺口卡的动作：往**这场对话**递一条「帮我找找相关邮件和资料」的指令。
   //
@@ -288,26 +278,10 @@ export function useMatterConversation(
       </div>
     ) : null
 
-  const quickPrompts = anchor ? <MatterQuickPrompts /> : null
-
-  // G-20 —— 设计稿文件头三件事之三：「the empty state names the matter」。标题就是事项标题
-  // （用户内容，不翻译），副标题给出这轮带了多少条上下文 + 还能用 @ 补别的资料。
-  const welcome = anchor
-    ? { title: anchor.title, hint: t('matters.chat.empty.hint', { count: contextCount }) }
-    : null
-
   // 🔴 未就绪 = 整个绑定惰性。半个事项 UI（chip 在、编号不在）比没有更危险：它会让用户以为
   // 上下文已经就位。调用方另外摆「上下文未就绪」并禁发（见 AgentConversation）。
   if (unresolved) {
-    return {
-      anchor: null,
-      snapshot: null,
-      surface: null,
-      chip: null,
-      controls: null,
-      quickPrompts: null,
-      welcome: null
-    }
+    return { anchor: null, snapshot: null, surface: null, chip: null, controls: null }
   }
-  return { anchor, snapshot, surface, chip, controls, quickPrompts, welcome }
+  return { anchor, snapshot, surface, chip, controls }
 }

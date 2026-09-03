@@ -1003,18 +1003,20 @@ function MatterRow({
     <button
       type="button"
       onClick={onSelect}
+      data-critical={critical || undefined}
       className={cn(
         'relative block w-full border-b border-ink-border px-4 py-2.5 text-left transition-colors duration-fast',
+        // R-#7 —— critical 整行淡色底（手法同 `.email-row[data-flag='flagged']`：
+        // background-color 独立层，与下面选中态的 background-image `--sel-wash` 天然共存）。
+        critical && 'bg-[rgb(var(--c-fail)/0.05)] hover:bg-[rgb(var(--c-fail)/0.1)]',
         // E12 —— 选中态整行 wash（AgentThreadList 同款 `--sel-wash` 写法）；未选中保留 hover。
-        selected ? '[background-image:var(--sel-wash)]' : 'hover:bg-ink-3'
+        selected ? '[background-image:var(--sel-wash)]' : !critical && 'hover:bg-ink-3'
       )}
     >
       {selected ? (
-        // 通高直角条（同 EmailRow.is-selected::before 的几何：top-0/bottom-0，方角）。
+        // 通高直角条（同 EmailRow.is-selected::before 的几何：top-0/bottom-0，方角）。选中态是
+        // 唯一还画左条的分支——R-#7 后 critical 改走整行淡色底，不再抢这根条的几何。
         <span aria-hidden className="absolute inset-y-0 left-0 w-[3px] bg-coral/100" />
-      ) : critical ? (
-        // 胶囊左条（设计 `list.jsx::MatterRow` 的 `top:8/bottom:8/borderRadius:2`）。
-        <span aria-hidden className="absolute left-0 top-2 bottom-2 w-[3px] rounded-sm bg-fail" />
       ) : null}
       <span className="flex min-w-0 items-center gap-2">
         <span className="truncate text-body font-medium text-ink-fg">{matter.title}</span>

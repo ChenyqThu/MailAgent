@@ -90,6 +90,18 @@ describe('MatterList row', () => {
     expect(screen.getByPlaceholderText('在已归档中搜索…')).toBeTruthy()
     expect(screen.getByText('归档区为空')).toBeTruthy()
   })
+
+  // R-#7 —— critical 行改为整行淡色底，不再画左侧竖条（左侧 `w-[3px]` 条由 selected 独占）。
+  test('critical row is a whole-row tint, not a side bar', () => {
+    const { container } = renderList(matter(), {
+      signals: [{ id: 9, kind: 'deadline_near', state: 'open', severity: 'critical' }]
+    })
+
+    const row = container.querySelector('[data-critical="true"]')
+    expect(row).toBeTruthy()
+    expect(row?.className).toContain('bg-[rgb(var(--c-fail)/0.05)]')
+    expect(container.querySelector('.bg-fail')).toBeNull()
+  })
 })
 
 // task 08-14 —— 默认范围改 all 后，筛选条 chip 的显隐基线要跟着从 'open' 换成 'all'，

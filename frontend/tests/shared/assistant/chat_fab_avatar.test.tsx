@@ -36,6 +36,7 @@ import { ChatModalFab } from '@shared/assistant/modal/ChatModalFab'
 import { AVATAR_SHELL_RADIUS_RATIO } from '@shared/components/agents/avatarShell'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useAIChatPanel } from '@shared/state/ai-chat-panel'
+import { MAIN_SLOT, useTabWorkspace } from '@shared/state/tab-workspace'
 
 const getAssistantIdentity = vi.fn(
   async (): Promise<AssistantIdentity> => ({
@@ -177,7 +178,13 @@ describe('ChatFabAvatar — 外投影', () => {
 describe('ChatModalFab — hover 只放大 + tips，不换表情', () => {
   beforeEach(() => {
     useAIChatPanel.setState({ visible: false })
+    // 09-02 —— FAB 的锚是激活的对象标签（邮件 / 事项）+ 其详情在显示；开一个邮件标签
+    // 让 active-email 的投影跟着落到 42。
+    useTabWorkspace.getState().openTab('email', 42, '邮件 42')
     useActiveEmail.setState({ activeInternalId: 42 })
+  })
+  afterEach(() => {
+    useTabWorkspace.setState({ tabs: [], active: MAIN_SLOT })
   })
 
   test('hover：出 tooltip，且表情逐字节不变（0813 owner：hover 不要改表情）', () => {
@@ -248,6 +255,13 @@ describe('ChatModalFab — hover 只放大 + tips，不换表情', () => {
     cleanup()
     useActiveEmail.setState({ activeInternalId: 42 })
     useAIChatPanel.setState({ visible: true })
+    render(<ChatModalFab />)
+    expect(document.querySelector('.chat-fab-avatar')).toBeNull()
+  })
+
+  test('09-02：激活的是主标签（没有对象标签）→ 不渲染，哪怕 activeInternalId 还在', () => {
+    useTabWorkspace.getState().activateMain()
+    useActiveEmail.setState({ activeInternalId: 42 })
     render(<ChatModalFab />)
     expect(document.querySelector('.chat-fab-avatar')).toBeNull()
   })

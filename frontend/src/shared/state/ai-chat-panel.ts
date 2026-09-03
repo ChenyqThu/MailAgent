@@ -78,6 +78,13 @@ interface AIChatPanelStore {
   pendingPrompt: { text: string; emailId: number | null; nonce: number } | null
   requestChatPrompt(text: string, emailId: number | null): void
   consumeChatPrompt(nonce: number): void
+
+  // 09-02 —— 对象标签 ↔ dock 会话绑定。FAB 打开 dock 时按激活标签的绑定递一条请求：
+  // `sessionId` 非空 = 回到该标签绑定的会话；null = 这个标签还没绑 → 开新会话。
+  // 一次性，由 AssistantChatModal 消费（它才持有 useGeneralChat）。`nonce` 让同一标签连点两次各算一次。
+  pendingTabSession: { sessionId: number | null; nonce: number } | null
+  requestTabSession(sessionId: number | null): void
+  consumeTabSession(nonce: number): void
 }
 
 const SIDEBAR_STORAGE_KEY = 'mailagent.chat.sidebarOpen'
@@ -193,6 +200,16 @@ export const useAIChatPanel = create<AIChatPanelStore>((set, get) => ({
     // 只清「自己那一条」：消费与新请求可能交错（用户在派发落地前又点了一次），
     // 无条件置 null 会把后来的那条一起吞掉。
     set((state) => (state.pendingPrompt?.nonce === nonce ? { pendingPrompt: null } : {}))
+  },
+  pendingTabSession: null,
+  requestTabSession(sessionId) {
+    set((state) => ({
+      pendingTabSession: { sessionId, nonce: (state.pendingTabSession?.nonce ?? 0) + 1 }
+    }))
+  },
+  consumeTabSession(nonce) {
+    // 同 consumeChatPrompt：只清自己那一条。
+    set((state) => (state.pendingTabSession?.nonce === nonce ? { pendingTabSession: null } : {}))
   }
 }))
 

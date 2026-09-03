@@ -20,7 +20,7 @@
 //
 // InboxLayout mounts this unconditionally (S3: the ASSISTANT_MODAL flag was GA'd away).
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
@@ -46,9 +46,12 @@ import {
   requestOpenAgentSession,
   type AssistantMode
 } from '@shared/state/ai-chat-panel'
+import { selectDockAnchorTab, useTabWorkspace, type TabId } from '@shared/state/tab-workspace'
+import { bindTabChatSession } from '@shared/state/tab-workspace-bridge'
 import { AgentConversation } from '@shared/components/agents/AgentConversation'
 import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
 import { ChatModalHistoryDropdown } from './ChatModalHistoryDropdown'
+import { openDockForTab } from './dockForTab'
 import { titleOf } from './sessionTitle'
 
 // sidebar 内嵌可调宽 — 宽度缓存（范式同 InboxLayout 旧 AI 面板：clamp + localStorage + try-catch）。
@@ -119,16 +122,23 @@ function AssistantChatModalInner(): React.JSX.Element {
   const matterTarget = useAIChatPanel((s) => s.matterTarget)
   const matterConversationEpoch = useAIChatPanel((s) => s.matterConversationEpoch)
   const clearMatterChat = useAIChatPanel((s) => s.clearMatterChat)
+  const pendingTabSession = useAIChatPanel((s) => s.pendingTabSession)
+  const consumeTabSession = useAIChatPanel((s) => s.consumeTabSession)
+  const pendingPrompt = useAIChatPanel((s) => s.pendingPrompt)
+  const anchorTabId = useTabWorkspace((s) => selectDockAnchorTab(s)?.id ?? null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const sidebar = mode === 'sidebar'
 
-  // harness-chat lane A（07-15 owner 需求「切出回来原样呈现」）— 唤出（FAB / ⌘J，最小化→展开）
+  // harness-chat lane A（07-15 owner 需求「切出回来原样呈现」）— 唤出（⌘J，最小化→展开）
   // **恢复上次活跃会话**，不再在 visible 上升沿强开新会话（旧行为把最小化→展开也当"新对话"，
   // 正在后台输出/待审批的会话被丢在视野外）。body 是 mount-once + CSS 隐藏，useGeneralChat 状态
   // 跨最小化存活 → 什么都不做就是"原样恢复"。显式「新对话」入口保留（header PenSquare 按钮 →
   // chat.newSession）。首次打开天然是空会话；AgentConversation 的 email-context effect 仍只在
   // 空会话上 seed 当前 activeEmailId（chatIsEmpty 门未变）。
+  // 09-02 —— FAB 唤出多一层：按激活对象标签的 `chatSessionId` 绑定递请求（见下方 pendingTabSession
+  // effect），标签绑了就回它的会话、没绑就开新；dock 开着切对象标签走同一套解析（见下方切标签
+  // 同步 effect）。没有对象标签（⌘J / 通用场景）仍是上面那条。
 
   // sidebar 内嵌可调宽：宽度 state + 左缘拖拽手柄（仅 sidebar 模式；floating 用固定尺寸）。拖拽中直接写
   // inline width 跟手（不走 React state 避免每帧 re-render），mouseup 才落 state + localStorage。teardown
@@ -221,14 +231,91 @@ function AssistantChatModalInner(): React.JSX.Element {
   // navEpoch → runtime 重挂 → 照样把它冲掉。而「已经是空的新对话」本来就等于「新开了一场」，
   // 什么都不做才是对的。取值走 ref：把 messages 放进 deps 会让每次消息变化都重开一场对话。
   const chatNewSession = chat.newSession
+  const chatSelectSession = chat.selectSession
   const matterTargetId = matterTarget?.id ?? null
   const chatIsFreshRef = useRef(false)
   chatIsFreshRef.current = chat.activeSessionId === null && chat.messages.length === 0
+
+  // 09-02 —— dock 里这场对话**属于哪个对象标签**（email / matter）。会话变化的写回、切标签时的
+  // 同步判据都看它，而不是「此刻激活的标签」：「立即跟进」的指令还在飞时用户切走了标签，首发拿到
+  // 的会话 id 必须落回发起它的那个标签。每次显式重定向（FAB / 切标签同步 / 立即跟进 / header
+  // 新建·换会话）都把它拨到当时的锚标签；主标签 / chat 标签激活时为 null（无处可记）。
+  const ownerTabRef = useRef<TabId | null>(anchorTabId)
+  const retargetOwner = useCallback((): void => {
+    ownerTabRef.current = selectDockAnchorTab(useTabWorkspace.getState())?.id ?? null
+  }, [])
+  // 按绑定选会话时记下尝试的 id —— 它已被删除时 selectSession 落 E_LOAD，由下方回落成新会话。
+  const attemptedSelectRef = useRef<number | null>(null)
+  // 绑了 → 回到那场会话；没绑 → 开新（已经是一场空的新对话则原地不动，理由见 chatIsFresh 门）。
+  const applyBinding = useCallback(
+    (sessionId: number | null): void => {
+      if (sessionId !== null) {
+        attemptedSelectRef.current = sessionId
+        void chatSelectSession(sessionId)
+        return
+      }
+      if (!chatIsFreshRef.current) chatNewSession()
+    },
+    [chatSelectSession, chatNewSession]
+  )
+
+  // 09-02 —— FAB 在事项标签上唤出时，同一次点击还递了这个标签的会话请求（下一个 effect 消费）；
+  // 那条请求才是这场对话的归宿（回到绑定的会话 / 开新），本 effect 让位 —— 否则绑定的会话会先
+  // 被这里的 newSession 冲掉。走 ref 读渲染期的值：两个 effect 同一次 commit 里跑，与声明顺序无关。
+  const pendingTabSessionRef = useRef(pendingTabSession)
+  pendingTabSessionRef.current = pendingTabSession
   useEffect(() => {
     if (matterTargetId === null) return
+    if (pendingTabSessionRef.current !== null) return
+    retargetOwner()
     if (chatIsFreshRef.current) return
     chatNewSession()
-  }, [matterTargetId, matterConversationEpoch, chatNewSession])
+  }, [matterTargetId, matterConversationEpoch, chatNewSession, retargetOwner])
+
+  // 09-02 —— 对象标签 ↔ dock 会话绑定（FAB / 切标签同步递来的一次性请求）。
+  useEffect(() => {
+    if (pendingTabSession === null) return
+    consumeTabSession(pendingTabSession.nonce)
+    retargetOwner()
+    applyBinding(pendingTabSession.sessionId)
+  }, [pendingTabSession, consumeTabSession, retargetOwner, applyBinding])
+
+  // 09-02 —— dock 开着时切对象标签：按 FAB 同一套解析同步会话（新激活标签绑了 → 回它的会话；
+  // 没绑 → 开新，首发后写回）。owner 原话：「原来的 ai chat 窗口是保留的，显示为原来的；新开的
+  // 显示新会话」。有待发指令（立即跟进的 pendingPrompt）或标签请求在飞时本次跳过 —— 同步会换掉
+  // runtime 把它冲掉；它们落地后本 effect 因依赖变化再跑一次，那时再按绑定处理。dock 收着时不动
+  // （FAB 点击时才解析）。
+  const inFlight = pendingPrompt !== null || pendingTabSession !== null
+  useEffect(() => {
+    if (!visible || inFlight) return
+    const tab = selectDockAnchorTab(useTabWorkspace.getState())
+    if (tab === null || tab.id === ownerTabRef.current) return
+    openDockForTab(tab)
+  }, [visible, anchorTabId, inFlight])
+
+  // 09-02 —— 标签绑定的会话已被删除：selectSession 落 E_LOAD → 回落成新会话（newSession 顺带清
+  // 错误；activeSessionId 变 null 让下方写回清掉死绑定，首发拿到新 id 再写回同一标签）。只认自己
+  // 按绑定发起的那次选择（attemptedSelectRef），别的 E_LOAD 不归这里管；加载成功即注销记录。
+  useEffect(() => {
+    const attempted = attemptedSelectRef.current
+    if (attempted === null || chat.activeSessionId !== attempted) return
+    if (chat.error?.code === 'E_LOAD') {
+      attemptedSelectRef.current = null
+      chatNewSession()
+      return
+    }
+    if (chat.messagesSessionId === attempted) attemptedSelectRef.current = null
+  }, [chat.activeSessionId, chat.error, chat.messagesSessionId, chatNewSession])
+
+  // 会话**变化** → 写回这场对话所属的对象标签（换会话 / header 新建 / 首发拿到真 id）。挂载那一帧的
+  // 值不是用户动作，不写：dock 宿主随 layout 重挂时 useGeneralChat 从 null 起步，写下去会把标签
+  // 原有的绑定清掉。
+  const boundSessionRef = useRef(chat.activeSessionId)
+  useEffect(() => {
+    if (boundSessionRef.current === chat.activeSessionId) return
+    boundSessionRef.current = chat.activeSessionId
+    bindTabChatSession(ownerTabRef.current, chat.activeSessionId)
+  }, [chat.activeSessionId])
 
   // fullscreen = ACTION: park the active session for AgentViewLayout to select (P6), navigate, minimise.
   const onFullscreen = (): void => {
@@ -345,8 +432,9 @@ function AssistantChatModalInner(): React.JSX.Element {
               activeSessionId={chat.activeSessionId}
               onSelect={(id) => {
                 // 显式换会话 = 不再跟着上一次的事项种子走（选中的会话若本身锚在某件事上，
-                // AgentConversation 会从它自己的 anchor 认出来）。
+                // AgentConversation 会从它自己的 anchor 认出来）。这场对话从此属于当前锚标签。
                 clearMatterChat()
+                retargetOwner()
                 void chat.selectSession(id)
                 setHistoryOpen(false)
               }}
@@ -357,7 +445,10 @@ function AssistantChatModalInner(): React.JSX.Element {
         <div className="flex shrink-0 items-center gap-0.5">
           <button
             type="button"
-            onClick={() => chat.newSession()}
+            onClick={() => {
+              retargetOwner()
+              chat.newSession()
+            }}
             aria-label={t('chat.modal.newSession')}
             title={t('chat.modal.newSession')}
             className={HEADER_BTN}

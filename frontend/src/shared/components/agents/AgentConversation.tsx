@@ -551,7 +551,7 @@ export function AgentConversation({
     []
   )
 
-  // ── matter binding (chip / 检索范围 / 缺口卡 / 快捷 prompt / 写入回执 surface) ──────────────
+  // ── matter binding (chip / 检索范围 / 缺口卡 / 写入回执 surface) ─────────────────────────────
   // 0812：事项对话没有第二套 UI —— 这里只是往同一个 thread 上挂事项那几件事。
   const chatIsEmptyForMatter = chat.activeSessionId === null && chat.messages.length === 0
   // 0813 #6 —— 「事项对话 / 立即跟进」每点一次自增；传给 binding 作「新的用户动作」的标记
@@ -1061,17 +1061,15 @@ export function AgentConversation({
                   通用 ToolTraceCard（回执与撤销当场消失）。非事项对话 surface=null → 现状不变。 */}
               <MatterChatSurfaceContext.Provider value={matter.surface}>
                 <AgentThread
-                  quickActions={matter.quickPrompts ?? <AgentQuickActions />}
+                  quickActions={<AgentQuickActions />}
                   onTurnComplete={handleTurnComplete}
                   welcomeAlign={welcomeAlign}
                   contextChip={contextChips}
                   pendingSlot={pendingSlotContent}
                   runStatusSlot={runStatusSlot}
-                  // 0812 G-20 —— 事项对话的空态（非事项对话为 null → 通用现状）。
-                  // D15（0813 dogfood）：输入区下的「对话历史不是正式事项知识…」脚注已删。
-                  // P4b —— 团队会话的空态（Logo + 名字 + 排程一句话）；事项优先（互斥场景，
-                  // 团队宿主不传 matter target）。
-                  welcomeOverride={matter.welcome ?? agentIdentity?.welcome ?? undefined}
+                  // P4b —— 团队会话的空态（Logo + 名字 + 排程一句话）；其余宿主（含事项对话）
+                  // 走通用 welcome。
+                  welcomeOverride={agentIdentity?.welcome ?? undefined}
                 />
               </MatterChatSurfaceContext.Provider>
             </AiSdkRuntimeProvider>
