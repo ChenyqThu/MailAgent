@@ -78,92 +78,100 @@ const modelField = z.string().max(128).optional()
 const promptField = z.string().max(20_000).nullable().optional()
 const docsField = z.array(z.string().min(1).max(32)).max(8).optional()
 
+/** `report_agent` 表里的四类内建 type —— 即「非 custom」。**不是**手抄的枚举：Python 侧
+ *  `src/api/routers/reports.py` 的 create 白名单是 report|search|preprocess(|custom)，
+ *  project_progress 由 v31 seed 单例行引入。 */
+export const INTERNAL_AGENT_TYPES = ['report', 'search', 'preprocess', 'project_progress'] as const
+export type InternalAgentType = (typeof INTERNAL_AGENT_TYPES)[number]
+
 /**
  * internal_agent_update —— per-type 白名单（PRD D1）。
  *
- * 每一支只列**该 type 真有运行时消费者**的字段，`.strict()` 让别的字段连解析都过不去。于是
- * 三个死键是**结构性**拒绝，而不是运行时才报错：
- *   · `preprocess.prompt` —— 那一支根本没有 prompt 字段（persona 层 v1.1.0 已移除）。
- *   · `preprocess.enabled` —— 同上；真开关是 env `LLM_AGENT_ENABLED`。
- *   · report 顶层 `cadence`/`hours`/`weekday` —— schedule 只收 rule/anchor/timezone，
- *     镜像由 `writeReportSchedule` 服务端语义统一产出。
- * 另外全类共同排除 `tool_policy` / `budget` / `avatar` / project_progress 的 Notion 库 id
- * （env 权威）—— 它们不在任何一支里，故 wire body 也不可能带上。
+ * 🔴 根节点必须是一个扁平 object，**不能**是 `z.discriminatedUnion('type', ...)`：union 作根时
+ * zod 产出的 JSON Schema 只有 `{$schema, oneOf}`（没有 `type`），OpenAI 兼容的严格校验方
+ * （DeepSeek）会据此拒掉**整个请求** —— 一个工具 schema 的形状不对，整场对话都发不出去，与那个
+ * 工具用没用上无关。闸在 `tests/ai-gateway/tools/schema_root_shape.test.ts`。
  *
- * `type` 是判别键，模型必须先 `internal_agent_get` 才写得出；run 里还会拿它与服务端行的实际
+ * 代价是 per-type 白名单从「结构性不可表达」变成 run 第一步的显式校验
+ * （`UPDATE_FIELDS_BY_TYPE` + `assertTypeFieldWhitelist`）。拒绝的字段集与理由一字未改：
+ *   · `preprocess.prompt` —— persona 层 v1.1.0 已移除，运行时忽略该列。
+ *   · `preprocess.enabled` —— 同上；真开关是 env `LLM_AGENT_ENABLED`。
+ *   · report 顶层 `cadence`/`hours`/`weekday` —— 镜像由 `writeReportSchedule` 服务端语义统一
+ *     产出；这里连字段都没有，schedule 内层的 `.strict()` 也照旧拦住 `cadence`。
+ * 全类共同排除的 `tool_policy` / `budget` / `avatar` / project_progress 的 Notion 库 id（env
+ * 权威）不在这份 schema 里，根上的 `.strict()` 仍然结构性拒绝它们。
+ *
+ * `type` 是模型必须先 `internal_agent_get` 才写得出的字段；run 里还会拿它与服务端行的实际
  * type 对一次（防「读的是 A、改的是 B」）。
  */
-const internalAgentUpdateSchema = z.discriminatedUnion('type', [
-  z
-    .object({
-      type: z.literal('report'),
-      agent_id: agentIdField,
-      title: titleField,
-      enabled: z.boolean().optional(),
-      model: modelField,
-      prompt: promptField,
-      schedule: z
-        .object({
-          rule: scheduleRuleSchema,
-          /** 相位原点，本地日历日期（在 timezone 里解释）。 */
-          anchor: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-          /** IANA 时区，必填 —— 空时区正是当年两个调度器分叉的根因。 */
-          timezone: z.string().min(1).max(64)
-        })
-        .strict()
-        .optional(),
-      window_hours: z
-        .number()
-        .int()
-        .min(1)
-        .max(24 * 90)
-        .optional(),
-      trigger_mode: z.enum(['rolling_24h', 'natural_day']).optional(),
-      body_full_priorities: z.array(z.string().min(1).max(32)).max(8).optional(),
-      context_docs: docsField
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal('search'),
-      agent_id: agentIdField,
-      title: titleField,
-      enabled: z.boolean().optional(),
-      model: modelField,
-      prompt: promptField
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal('preprocess'),
-      agent_id: agentIdField,
-      title: titleField,
-      model: modelField,
-      context_docs: docsField,
-      context_source: z.enum(['standing_docs', 'notion_context']).nullable().optional(),
-      mark_read_after_processing: z.boolean().optional(),
-      /** null = 重置回跟随全局；[] = 显式不设兜底。 */
-      fallback_models: z.array(z.string().min(1).max(128)).max(8).nullable().optional()
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal('project_progress'),
-      agent_id: agentIdField,
-      title: titleField,
-      enabled: z.boolean().optional(),
-      /** 触发判据（sender/subject 正则）。深校验（ReDoS 上限等）在 Python 侧。 */
-      email_filter: z
-        .object({
-          subject_pattern: z.string().max(256).optional(),
-          sender_pattern: z.string().max(256).optional()
-        })
-        .strict()
-        .optional()
-    })
-    .strict()
-])
+const internalAgentUpdateSchema = z
+  .object({
+    type: z.enum(INTERNAL_AGENT_TYPES),
+    agent_id: agentIdField,
+    title: titleField,
+    enabled: z.boolean().optional(),
+    model: modelField,
+    prompt: promptField,
+    schedule: z
+      .object({
+        rule: scheduleRuleSchema,
+        /** 相位原点，本地日历日期（在 timezone 里解释）。 */
+        anchor: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        /** IANA 时区，必填 —— 空时区正是当年两个调度器分叉的根因。 */
+        timezone: z.string().min(1).max(64)
+      })
+      .strict()
+      .optional(),
+    window_hours: z
+      .number()
+      .int()
+      .min(1)
+      .max(24 * 90)
+      .optional(),
+    trigger_mode: z.enum(['rolling_24h', 'natural_day']).optional(),
+    body_full_priorities: z.array(z.string().min(1).max(32)).max(8).optional(),
+    context_docs: docsField,
+    context_source: z.enum(['standing_docs', 'notion_context']).nullable().optional(),
+    mark_read_after_processing: z.boolean().optional(),
+    /** null = 重置回跟随全局；[] = 显式不设兜底。 */
+    fallback_models: z.array(z.string().min(1).max(128)).max(8).nullable().optional(),
+    /** 触发判据（sender/subject 正则）。深校验（ReDoS 上限等）在 Python 侧。 */
+    email_filter: z
+      .object({
+        subject_pattern: z.string().max(256).optional(),
+        sender_pattern: z.string().max(256).optional()
+      })
+      .strict()
+      .optional()
+  })
+  .strict()
 type InternalAgentUpdateInput = z.infer<typeof internalAgentUpdateSchema>
+
+/** 每个 type 真正可写的字段 —— 即原 discriminatedUnion 四支 `.strict()` 的白名单，逐字照搬。
+ *  `type` / `agent_id` 是全类共有的定位键，不进表。 */
+const UPDATE_FIELDS_BY_TYPE: Record<InternalAgentType, readonly string[]> = {
+  report: [
+    'title',
+    'enabled',
+    'model',
+    'prompt',
+    'schedule',
+    'window_hours',
+    'trigger_mode',
+    'body_full_priorities',
+    'context_docs'
+  ],
+  search: ['title', 'enabled', 'model', 'prompt'],
+  preprocess: [
+    'title',
+    'model',
+    'context_docs',
+    'context_source',
+    'mark_read_after_processing',
+    'fallback_models'
+  ],
+  project_progress: ['title', 'enabled', 'email_filter']
+}
 
 /** 本家族的工具名。导出供测试 + eval catalog 完整性闸（静态抽取每个 GATEWAY_*_TOOL_NAMES 数组）。 */
 export const GATEWAY_INTERNAL_AGENT_TOOL_NAMES = [
@@ -171,12 +179,6 @@ export const GATEWAY_INTERNAL_AGENT_TOOL_NAMES = [
   'internal_agent_get',
   'internal_agent_update'
 ] as const
-
-/** `report_agent` 表里的四类内建 type —— 即「非 custom」。**不是**手抄的枚举：Python 侧
- *  `src/api/routers/reports.py` 的 create 白名单是 report|search|preprocess(|custom)，
- *  project_progress 由 v31 seed 单例行引入。 */
-export const INTERNAL_AGENT_TYPES = ['report', 'search', 'preprocess', 'project_progress'] as const
-export type InternalAgentType = (typeof INTERNAL_AGENT_TYPES)[number]
 
 export function isInternalAgentType(type: string): type is InternalAgentType {
   return (INTERNAL_AGENT_TYPES as readonly string[]).includes(type)
@@ -322,6 +324,29 @@ function invalidArg(message: string): never {
   throw new DomainError('E_INVALID_ARG', message)
 }
 
+/** per-type 白名单：不属于本 type 的字段一律拒绝，在任何读写之前。扁平 schema（见上）换来的
+ *  那道校验 —— 拒绝集与 discriminatedUnion 时代逐字相同，只是从解析期挪到了 run 的第一步。 */
+function assertTypeFieldWhitelist(input: InternalAgentUpdateInput): void {
+  const allowed = UPDATE_FIELDS_BY_TYPE[input.type]
+  const fields = input as Record<string, unknown>
+  const rejected = Object.keys(fields).filter(
+    (key) =>
+      key !== 'type' && key !== 'agent_id' && fields[key] !== undefined && !allowed.includes(key)
+  )
+  if (rejected.length === 0) return
+  const deadPreprocessKey =
+    input.type === 'preprocess' && rejected.some((key) => key === 'prompt' || key === 'enabled')
+  invalidArg(
+    `${rejected.join(', ')} cannot be set on a '${input.type}' agent (it accepts ` +
+      `${allowed.join(', ')}) — nothing was changed` +
+      (deadPreprocessKey
+        ? '. The preprocessor has NO prompt of its own (the persona layer was removed in v1.1.0) ' +
+          'and its on/off is the env flag LLM_AGENT_ENABLED, which only the owner can change in ' +
+          '设置 → AI'
+        : '')
+  )
+}
+
 /** 入参 → wire friendly patch。**逐字段组装**（不是把 input 摊开）—— 这样 `tool_policy` /
  *  `budget` / `avatar` 之类即使将来混进 schema 也进不了 wire body（同 custom_agent_update 纪律）。 */
 function toConfigPatch(
@@ -363,7 +388,8 @@ function toConfigPatch(
       if (input.prompt !== undefined) patch.prompt = input.prompt
       return patch
     case 'preprocess':
-      // enabled / prompt 结构上不在这一支的 schema 里（两者都是死列）。
+      // enabled / prompt 是这一支的死列：扁平 schema 后它们由 assertTypeFieldWhitelist 在 run
+      // 第一步拒掉，走不到这里；这个 switch 仍然逐字段组装，绝不把 input 摊开。
       if (input.model !== undefined) patch.model = input.model
       if (input.context_docs !== undefined) patch.context_docs = input.context_docs
       if (input.context_source !== undefined) patch.context_source = input.context_source
@@ -470,6 +496,8 @@ export function createInternalAgentTools(
           oneShot: opts.oneShot,
           contextMode: opts.contextMode,
           run: async (input: InternalAgentUpdateInput, { userEdited, signal }) => {
+            // 第一步就把不属于本 type 的字段挡住（扁平 schema 后这道校验不再由解析器代劳）。
+            assertTypeFieldWhitelist(input)
             // 🔴 fail-closed 的 merge base：读不到当前行就整单放弃。「读不到」既包括不存在，
             // 也包括后端瞬时故障 —— 后者若继续，patch 会落在一个我们没核对过 type 的行上。
             let current: ReportAgentConfig | null

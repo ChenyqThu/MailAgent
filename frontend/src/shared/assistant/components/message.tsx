@@ -10,7 +10,7 @@
 
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Paperclip } from 'lucide-react'
+import { Check, Copy, Paperclip } from 'lucide-react'
 import {
   ComposerPrimitive,
   MessagePrimitive,
@@ -150,6 +150,7 @@ export function UserMessage(): React.JSX.Element {
  *  hint when the conversation carries image attachments (no provider capability table yet — batch 2). */
 function AssistantMessageError(): React.JSX.Element | null {
   const { t } = useTranslation()
+  const [copied, setCopied] = useState(false)
   const error = useAuiState((s) =>
     s.message.status?.type === 'incomplete' && s.message.status.reason === 'error'
       ? s.message.status.error
@@ -164,10 +165,26 @@ function AssistantMessageError(): React.JSX.Element | null {
   const detail = typeof error === 'string' ? error : JSON.stringify(error)
   return (
     <div className="rounded-md border border-fail/30 bg-fail/10 px-2.5 py-1.5 text-aux text-fail">
-      <div className="font-medium">{t('chat.aiSdk.turnError')}</div>
+      <div className="flex items-center justify-between gap-2">
+        <div className="font-medium">{t('chat.aiSdk.turnError')}</div>
+        {/* task 09-02 — 复制的是**完整**明细（上游拒绝的判据常常在末尾，比如 DeepSeek 说清是哪
+            一份工具 schema 不合规的那句），而不是下面那段被截断的展示文本。 */}
+        {detail.length > 0 && (
+          <button
+            type="button"
+            className="shrink-0 opacity-70 transition-opacity hover:opacity-100"
+            aria-label={t('chat.messageActions.copy')}
+            onClick={() => {
+              void navigator.clipboard.writeText(detail).then(() => setCopied(true))
+            }}
+          >
+            {copied ? <Check size={12} strokeWidth={2} /> : <Copy size={12} strokeWidth={2} />}
+          </button>
+        )}
+      </div>
       {detail.length > 0 && (
         <div className="mt-0.5 break-words font-mono text-micro opacity-80">
-          {detail.slice(0, 400)}
+          {detail.slice(0, 800)}
         </div>
       )}
       {threadHasImage && (

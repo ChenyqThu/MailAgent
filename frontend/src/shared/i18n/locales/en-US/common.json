@@ -1143,7 +1143,8 @@
       "notion_agent_chat": "Ask the Notion agent",
       "plan_update": "Update plan",
       "suggest_followups": "Suggesting follow-ups",
-      "submit_feedback": "Submit product feedback"
+      "submit_feedback": "Submit product feedback",
+      "generate_image": "Generate image"
     },
     "planCard": {
       "title": "Plan",

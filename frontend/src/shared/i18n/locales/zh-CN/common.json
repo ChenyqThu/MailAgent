@@ -1143,7 +1143,8 @@
       "notion_agent_chat": "咨询 Notion Agent",
       "plan_update": "更新计划",
       "suggest_followups": "准备追问建议",
-      "submit_feedback": "提交产品反馈"
+      "submit_feedback": "提交产品反馈",
+      "generate_image": "生成图片"
     },
     "planCard": {
       "title": "计划",

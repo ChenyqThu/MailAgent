@@ -18,14 +18,18 @@
 // streamText + tools + double-guard approval. The mirror route is registered only when
 // cfg.aguiMirrorEnabled (MAILAGENT_AG_UI_MIRROR) — flag-off it is unreachable (404).
 
+import { createReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 
 // B1 (detached runs) — the exact header set ai@7's pipeUIMessageStreamToResponse sends, so the manual
 // server-side drain below stays wire-identical for the client (content-type text/event-stream +
 // x-vercel-ai-ui-message-stream: v1 + no-buffering hints).
-import { UI_MESSAGE_STREAM_HEADERS } from 'ai'
+import { APICallError, UI_MESSAGE_STREAM_HEADERS } from 'ai'
 
 import type { AiGatewayConfig, GroupSessionFacts, SessionAgentIdentity } from './config'
+// task 09-02 — the generate_image store's id → path mapper (shared with the tool, single source).
+import { GENERATED_IMAGE_ROUTE_PREFIX, resolveGeneratedFilePath } from './tools/image'
 // T2 群附件 — body.attachments 的校验 + metadata 编码（单源，renderer 与投影侧共用同一份）。
 import { encodeAttachmentsMetadata, validateAttachmentsInput } from './groupAttachments'
 // v30（群聊）— server-side history assembly for a group speaker run (pure helper).
@@ -336,7 +340,13 @@ async function handleChat(
     onError: (error: unknown) => {
       const msg = error instanceof Error ? error.message : String(error)
       console.error('[ai-gateway] /api/ai/chat stream error', error)
-      return msg
+      // task 09-02 — provider 拒绝的**判据**在 APICallError.responseBody 里，message 往往只有
+      // 一句「Bad Request」。不带上它，UI 那句「响应出错」就没有任何可查线索（DeepSeek 拒收一
+      // 份工具 JSON Schema 时，说清是哪个 schema 哪一条的整句都只在 responseBody 中）。压平换行
+      // 并截到 400 字符 —— 它进的是聊天气泡里的错误行，不是日志。
+      const responseBody = APICallError.isInstance(error) ? error.responseBody : undefined
+      const detail = responseBody?.replace(/\s+/g, ' ').trim().slice(0, 400)
+      return detail ? `${msg} — ${detail}` : msg
     },
     onFinish: makePersistOnFinish(cfg, run, { isClientGone })
   }

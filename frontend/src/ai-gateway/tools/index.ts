@@ -21,6 +21,7 @@ import { createReportTools } from './report'
 import { createWriteTools } from './write'
 import { createSendTools } from './send'
 import { applySkillGating } from './skill_gating'
+import { applyToolDisplayNames } from './display_names'
 import { createSelfMountTools } from './self_mount'
 import { createSessionTools } from './sessions'
 import { createProfileTools } from './profile'
@@ -763,5 +764,8 @@ export function buildGatewayTools(
   // null outside manual_chat — headless/im matrices untouched). The filter itself lives in
   // types.ts (stripOwnerDeniedTools) so the g2 group factories share the exact same semantics;
   // no hit → the same `filtered` object, byte-identical.
-  return stripOwnerDeniedTools(filtered, prefTiers)
+  // 中文显示名注入 LAST —— 在最终 ToolSet（含 dynamic tools、两道 gating、mode 过滤、owner deny）
+  // 上一次拼完，是唯一的注入点：任何新增工具族不用各自记得加前缀。只改 description，不改工具名 /
+  // 入参 / execute，所以对上面每一道装配语义都是透明的。
+  return applyToolDisplayNames(stripOwnerDeniedTools(filtered, prefTiers))
 }

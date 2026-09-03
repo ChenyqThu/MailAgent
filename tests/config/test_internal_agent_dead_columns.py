@@ -30,56 +30,42 @@ INTERNAL_AGENTS_TS = ROOT / "frontend/src/ai-gateway/tools/internal_agents.ts"
 PREPROCESS_CONFIG_PY = ROOT / "src/llm_agent/preprocess_config.py"
 
 
-def _balanced_object(source: str, open_index: int) -> str:
-    """从 `source[open_index] == '{'` 起按大括号配平取出整个对象字面量。"""
-    assert source[open_index] == "{", "配平起点必须是 '{'"
+def _balanced(source: str, open_index: int, opener: str, closer: str) -> str:
+    """从 `source[open_index] == opener` 起按括号配平取出整段字面量。"""
+    assert source[open_index] == opener, f"配平起点必须是 {opener!r}"
     depth = 0
     for index in range(open_index, len(source)):
         char = source[index]
-        if char == "{":
+        if char == opener:
             depth += 1
-        elif char == "}":
+        elif char == closer:
             depth -= 1
             if depth == 0:
                 return source[open_index : index + 1]
-    raise AssertionError("大括号不配平——抽取器读到了文件尾")
+    raise AssertionError("括号不配平——抽取器读到了文件尾")
 
 
 def branch_fields(source: str, type_literal: str) -> set[str]:
-    """抽 `internalAgentUpdateSchema` 里某一支的顶层字段名。
+    """抽某个 type 在 TS 侧的可写字段白名单。
 
-    判据 = `type: z.literal('<x>')` 所在的那个 `z.object({...})`。找不到即抛（红），
-    绝不返回空集合——空集合会让下面每一条断言都「通过」。
+    单源 = `UPDATE_FIELDS_BY_TYPE`。task 09-02 把 `internalAgentUpdateSchema` 的根从
+    `z.discriminatedUnion` 改成了扁平 `z.object`（union 作根时 JSON Schema 只有
+    `{$schema, oneOf}`，没有 `type`，严格校验的 OpenAI 兼容上游会拒掉整个请求），于是
+    per-type 白名单从「解析期结构性拒绝」挪成了 run 第一步的显式校验，那张表就是白名单的
+    唯一真相源。`type` / `agent_id` 是全类共有的定位键，本就不在表里。
+
+    三步都 assert：找不到常量 / 找不到该 type 的键 / 抽出空集合，一律红。绝不返回空集合——
+    空集合会让下面每一条断言都「通过」。
     """
-    marker = f"type: z.literal('{type_literal}')"
-    position = source.find(marker)
-    assert position != -1, f"抽取失败：找不到 {marker}（schema 形状变了？）"
-    open_index = source.rindex("{", 0, position)
-    body = _balanced_object(source, open_index)
-    # 顶层键 = 配平深度为 1 处的 `name:`。用逐字符扫描而不是正则，避免嵌套对象里的键混进来。
-    fields: set[str] = set()
-    depth = 0
-    token = ""
-    for index, char in enumerate(body):
-        if char == "{":
-            depth += 1
-            token = ""
-            continue
-        if char == "}":
-            depth -= 1
-            token = ""
-            continue
-        if depth == 1:
-            if char == ":" and token.strip():
-                name = token.strip().split()[-1]
-                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
-                    fields.add(name)
-                token = ""
-            elif char in ",\n":
-                token = ""
-            else:
-                token += char
-    fields.discard("type")
+    anchor = "const UPDATE_FIELDS_BY_TYPE"
+    position = source.find(anchor)
+    assert position != -1, f"抽取失败：找不到 {anchor}（白名单搬家了？）"
+    table = _balanced(source, source.index("{", position), "{", "}")
+    match = re.search(rf"\b{re.escape(type_literal)}\s*:\s*\[", table)
+    assert match, f"抽取失败：{anchor} 里没有 {type_literal} 这一支（type 改名了？）"
+    array = _balanced(table, match.end() - 1, "[", "]")
+    fields = set(re.findall(r"'([A-Za-z_][A-Za-z0-9_]*)'", array))
+    assert fields, f"抽取失败：{type_literal} 的白名单抽出来是空的（字面量写法变了？）"
     return fields
 
 
@@ -96,23 +82,26 @@ def preprocess_runtime_columns() -> set[str]:
 
 
 def test_the_extractor_actually_sees_a_planted_dead_key():
-    """🔴 若把 `prompt` 加回 preprocess 支，闸必须抓到 —— 否则它只是块绿色的装饰。"""
+    """🔴 若把 `prompt` 加回 preprocess 的白名单，闸必须抓到 —— 否则它只是块绿色的装饰。"""
     synthetic = """
-      z
-        .object({
-          type: z.literal('preprocess'),
-          agent_id: agentIdField,
-          prompt: promptField,
-          context_docs: docsField
-        })
-        .strict(),
+    const UPDATE_FIELDS_BY_TYPE: Record<InternalAgentType, readonly string[]> = {
+      report: ['title'],
+      preprocess: [
+        'title',
+        'prompt',
+        'context_docs'
+      ]
+    }
     """
-    assert branch_fields(synthetic, "preprocess") == {"agent_id", "prompt", "context_docs"}
+    assert branch_fields(synthetic, "preprocess") == {"title", "prompt", "context_docs"}
 
 
 def test_the_extractor_fails_loudly_when_the_branch_is_gone():
     with pytest.raises(AssertionError, match="抽取失败"):
         branch_fields("const x = 1", "preprocess")
+    # 表还在、但某个 type 的键没了：同样必须红，而不是安静地返回空集合。
+    with pytest.raises(AssertionError, match="抽取失败"):
+        branch_fields("const UPDATE_FIELDS_BY_TYPE = { report: ['title'] }", "preprocess")
 
 
 # ── 硬闸：preprocess ────────────────────────────────────────────────────────────
@@ -121,7 +110,7 @@ def test_the_extractor_fails_loudly_when_the_branch_is_gone():
 def test_preprocess_writable_fields_are_exactly_the_columns_the_runtime_reads():
     """preprocess 支的可写字段 ⊆ 运行时 SELECT 的列（外加纯展示的 title）。"""
     source = INTERNAL_AGENTS_TS.read_text(encoding="utf-8")
-    fields = branch_fields(source, "preprocess") - {"agent_id"}
+    fields = branch_fields(source, "preprocess")
     columns = preprocess_runtime_columns()
     # wire 的 friendly 名 → DB 列名（wire.py 的 config_patch_to_db 负责这层改名）。
     aliases = {"context_docs": "context_docs_json", "fallback_models": "fallback_models_json"}
@@ -194,12 +183,19 @@ FIELD_CONSUMERS: dict[str, dict[str, tuple[str, str]]] = {
 @pytest.mark.parametrize("branch", sorted(FIELD_CONSUMERS))
 def test_every_writable_field_points_at_a_real_consumer(branch: str):
     source = INTERNAL_AGENTS_TS.read_text(encoding="utf-8")
-    fields = branch_fields(source, branch) - {"agent_id"}
+    fields = branch_fields(source, branch)
     declared = FIELD_CONSUMERS[branch]
     undeclared = fields - set(declared)
     assert not undeclared, (
         f"{branch} 支新增了未登记消费点的字段：{sorted(undeclared)}。"
         "先确认它真有运行时消费者（别再造第四个死键），然后在 FIELD_CONSUMERS 里登记。"
+    )
+    # 反向也闸住：本表是该支白名单的**完整**登记册，不是「见过的字段」清单。少一个 = 要么
+    # 白名单被误删（模型从此改不了那个字段，而且不会有任何报错），要么删对了但没销登记。
+    unlisted = set(declared) - fields
+    assert not unlisted, (
+        f"{branch} 支的白名单里没有已登记的字段：{sorted(unlisted)}。"
+        "若是有意收回写权限，请连同 FIELD_CONSUMERS 里的那一行一起删。"
     )
     for field in sorted(fields):
         path, needle = declared[field]

@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from 'vitest'
 
-import type { Tool } from 'ai'
+import { asSchema, type Tool } from 'ai'
 
 import { buildGatewayTools } from '../../../src/ai-gateway/tools'
 import {
@@ -318,7 +318,28 @@ describe('internal_agent_get — effective config only (dead keys structurally a
   })
 })
 
-describe('internal_agent_update — per-type allowlist (dead keys rejected at the schema)', () => {
+/** 走完整 run 并期望它在任何写入之前拒绝；回报错文案。 */
+async function refusal(input: unknown): Promise<string> {
+  const { tools, puts } = writableTools()
+  let message = ''
+  try {
+    await approveAndRun(tools.internal_agent_update, input)
+  } catch (e) {
+    message = (e as Error).message
+  }
+  expect(puts).toHaveLength(0)
+  return message
+}
+
+/** 同一 type 的合法字段照常落到 wire —— 证明拒的是那个字段，不是整个 type 坏掉。 */
+async function accepted(input: unknown): Promise<Record<string, unknown>> {
+  const { tools, puts } = writableTools()
+  await approveAndRun(tools.internal_agent_update, input)
+  expect(puts).toHaveLength(1)
+  return puts[0].body
+}
+
+describe('internal_agent_update — per-type allowlist (dead keys refused before any write)', () => {
   const parse = (input: unknown): { success: boolean } => {
     const { tools } = writableTools()
     const schema = (
@@ -329,21 +350,42 @@ describe('internal_agent_update — per-type allowlist (dead keys rejected at th
     return schema.safeParse(input)
   }
 
-  test('🔴 preprocess.prompt is structurally unrepresentable', () => {
-    expect(
-      parse({ type: 'preprocess', agent_id: 'email_preprocess_agent', prompt: 'be nicer' }).success
-    ).toBe(false)
-    // 同一支的合法字段照常通过，证明拒绝的是 prompt 本身而不是整支坏掉。
-    expect(
-      parse({ type: 'preprocess', agent_id: 'email_preprocess_agent', context_docs: ['soul'] })
-        .success
-    ).toBe(true)
+  test('🔴 the input schema is a FLAT object — a union root breaks strict OpenAI-compatible upstreams', () => {
+    // task 09-02：根节点是 discriminatedUnion 时 JSON Schema 只有 {$schema, oneOf}，DeepSeek 会
+    // 拒掉整个请求。全量闸在 schema_root_shape.test.ts；这里钉住本工具自己的形状。
+    const { tools } = writableTools()
+    const jsonSchema = asSchema(tools.internal_agent_update.inputSchema).jsonSchema as Record<
+      string,
+      unknown
+    >
+    expect(jsonSchema.type).toBe('object')
+    expect(jsonSchema).not.toHaveProperty('oneOf')
+    const properties = jsonSchema.properties as Record<string, { enum?: string[] }>
+    expect(properties.type.enum).toEqual(['report', 'search', 'preprocess', 'project_progress'])
   })
 
-  test('🔴 preprocess.enabled is structurally unrepresentable (real switch is env)', () => {
+  test('🔴 preprocess.prompt is refused (the persona layer was removed in v1.1.0)', async () => {
     expect(
-      parse({ type: 'preprocess', agent_id: 'email_preprocess_agent', enabled: true }).success
-    ).toBe(false)
+      await refusal({ type: 'preprocess', agent_id: 'email_preprocess_agent', prompt: 'be nicer' })
+    ).toMatch(/prompt cannot be set on a 'preprocess' agent/)
+    // 同一支的合法字段照常通过，证明拒绝的是 prompt 本身而不是整支坏掉。
+    expect(
+      await accepted({
+        type: 'preprocess',
+        agent_id: 'email_preprocess_agent',
+        context_docs: ['soul']
+      })
+    ).toEqual({ context_docs: ['soul'] })
+  })
+
+  test('🔴 preprocess.enabled is refused and points at the env flag (the real switch)', async () => {
+    const message = await refusal({
+      type: 'preprocess',
+      agent_id: 'email_preprocess_agent',
+      enabled: true
+    })
+    expect(message).toMatch(/enabled cannot be set on a 'preprocess' agent/)
+    expect(message).toContain('LLM_AGENT_ENABLED')
   })
 
   test('🔴 report top-level cadence / hours / weekday are unrepresentable (they are mirrors)', () => {
@@ -363,16 +405,60 @@ describe('internal_agent_update — per-type allowlist (dead keys rejected at th
     )
   })
 
-  test('project_progress has no prompt; report/search do', () => {
+  test('project_progress has no prompt; report/search do', async () => {
     expect(
-      parse({ type: 'project_progress', agent_id: 'project_progress_sync', prompt: 'x' }).success
-    ).toBe(false)
-    expect(parse({ type: 'search', agent_id: 'email_search_agent', prompt: 'x' }).success).toBe(
-      true
+      await refusal({ type: 'project_progress', agent_id: 'project_progress_sync', prompt: 'x' })
+    ).toMatch(/prompt cannot be set on a 'project_progress' agent/)
+    expect(await accepted({ type: 'search', agent_id: 'email_search_agent', prompt: 'x' })).toEqual(
+      {
+        prompt: 'x'
+      }
     )
-    expect(parse({ type: 'report', agent_id: 'daily_email_digest', prompt: 'x' }).success).toBe(
-      true
+    expect(await accepted({ type: 'report', agent_id: 'daily_email_digest', prompt: 'x' })).toEqual(
+      {
+        prompt: 'x'
+      }
     )
+  })
+
+  test("each type refuses another type's knobs", async () => {
+    // report-only → 别的 type 拿不到
+    expect(
+      await refusal({ type: 'search', agent_id: 'email_search_agent', window_hours: 48 })
+    ).toMatch(/window_hours cannot be set on a 'search' agent/)
+    expect(
+      await refusal({ type: 'project_progress', agent_id: 'project_progress_sync', model: 'm' })
+    ).toMatch(/model cannot be set on a 'project_progress' agent/)
+    // preprocess-only → report 拿不到
+    expect(
+      await refusal({ type: 'report', agent_id: 'daily_email_digest', fallback_models: ['m'] })
+    ).toMatch(/fallback_models cannot be set on a 'report' agent/)
+    expect(
+      await refusal({
+        type: 'report',
+        agent_id: 'daily_email_digest',
+        context_source: 'standing_docs'
+      })
+    ).toMatch(/context_source cannot be set on a 'report' agent/)
+    // project_progress-only → preprocess 拿不到
+    expect(
+      await refusal({
+        type: 'preprocess',
+        agent_id: 'email_preprocess_agent',
+        email_filter: { sender_pattern: 'x' }
+      })
+    ).toMatch(/email_filter cannot be set on a 'preprocess' agent/)
+  })
+
+  test('title is the one field all four types accept', async () => {
+    for (const [type, agent_id] of [
+      ['report', 'daily_email_digest'],
+      ['search', 'email_search_agent'],
+      ['preprocess', 'email_preprocess_agent'],
+      ['project_progress', 'project_progress_sync']
+    ] as const) {
+      expect(await accepted({ type, agent_id, title: 't' })).toEqual({ title: 't' })
+    }
   })
 
   test('tool_policy / budget / avatar cannot enter any branch', () => {
