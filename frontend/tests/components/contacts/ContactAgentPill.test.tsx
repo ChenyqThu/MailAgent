@@ -30,13 +30,9 @@ await i18n.changeLanguage('zh-CN')
 
 const actions: ContactRowActions = {
   onOpen: vi.fn(),
-  onCompose: vi.fn(),
-  onComposeCc: vi.fn(),
   onSetKind: vi.fn(),
   onToggleSelf: vi.fn(),
-  onToggleHidden: vi.fn(),
-  onEnterSelection: vi.fn(),
-  onToggleCheck: vi.fn()
+  onToggleHidden: vi.fn()
 }
 
 function renderPane(over: Partial<ContactListPaneProps>): void {
@@ -59,12 +55,6 @@ function renderPane(over: Partial<ContactListPaneProps>): void {
     hasMore: false,
     progress: undefined,
     selectedId: null,
-    selectionMode: false,
-    checkedIds: new Set(),
-    onExitSelection: vi.fn(),
-    onMergePair: vi.fn(),
-    menuOpenId: null,
-    onMenuOpenChange: vi.fn(),
     onToggleGroup: vi.fn(),
     actions,
     agentEnabled: true,

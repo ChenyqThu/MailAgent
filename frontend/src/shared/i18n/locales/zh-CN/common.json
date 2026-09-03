@@ -6612,7 +6612,6 @@
       "more": "更多操作"
     },
     "action": {
-      "open": "打开人物页",
       "compose": "写邮件",
       "merge": "合并到另一条记录…",
       "kindRobot": "改判为机器人",
@@ -6621,14 +6620,7 @@
       "markSelf": "标记为「我」",
       "unmarkSelf": "取消「我」标记",
       "hide": "隐藏",
-      "unhide": "取消隐藏",
-      "select": "选中此条（进入多选）"
-    },
-    "select": {
-      "n": "已选 {n} 条",
-      "merge": "合并这两条",
-      "mergeHint": "合并需要正好选中两条记录",
-      "exit": "退出多选"
+      "unhide": "取消隐藏"
     },
     "backfill": {
       "progress": "正在从历史邮件建立通讯录 · 已扫描 {scanned}/{total}",

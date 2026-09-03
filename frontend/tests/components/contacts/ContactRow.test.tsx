@@ -1,19 +1,13 @@
 // @vitest-environment happy-dom
 //
-// 通讯录行「…」菜单的**挂载点**契约（task 08-18-contacts-row-menu-align）。
+// 通讯录列表行的**无操作控件**契约 + 名字后的性别小图标。
 //
-// 0818 owner 报「popup 是个半透明的背景，根本看不见」。根因不是颜色：列表是
-// react-window 虚拟滚动，每行是 `position:absolute` 且**没有 z-index** 的兄弟节点，
-// 定位元素无 z-index 时按 DOM 顺序绘制 ⇒ 排在后面的行全部画在行内 absolute 的菜单
-// 上面（头像 / 姓名 / TwoWayBar 糊一脸），贴底的行还会被滚动容器裁掉。
-// 复现与修复截图：`.trellis/tasks/08-18-contacts-row-menu-align/shots/`。
-//
-// 修法是让这份菜单走 Popmenu 的 portal 档（原型 `contacts/cui.jsx::Menu` 从一开始
-// 就是 createPortal + fixed）。这里钉住那个「必须逃出行子树」的事实 —— 有人日后把
-// `portal` 删掉图省事，行为会静默退回 owner 报的那个样子，肉眼在单测里看不出来。
+// 行上原先有一颗 hover「…」钮（右键同一菜单）与多选态 checkbox；09-02 起两者都删了 ——
+// 点行只做一件事：打开人物页。治理与写邮件全部走档案页右上角「更多操作」。这里钉住
+// 「行里不再有任何按钮 / 菜单」，把它加回来（或者恢复右键菜单）必须先改这份测试。
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import i18n from '@shared/i18n'
 import type { ContactRowDto } from '@shared/api/types/contact'
@@ -27,13 +21,9 @@ await i18n.changeLanguage('zh-CN')
 
 const actions: ContactRowActions = {
   onOpen: vi.fn(),
-  onCompose: vi.fn(),
-  onComposeCc: vi.fn(),
   onSetKind: vi.fn(),
   onToggleSelf: vi.fn(),
-  onToggleHidden: vi.fn(),
-  onEnterSelection: vi.fn(),
-  onToggleCheck: vi.fn()
+  onToggleHidden: vi.fn()
 }
 
 function contact(overrides: Partial<ContactRowDto> = {}): ContactRowDto {
@@ -65,15 +55,11 @@ function contact(overrides: Partial<ContactRowDto> = {}): ContactRowDto {
   }
 }
 
-function renderRow(item: ContactRowDto, menuOpenId: number | null) {
+function renderRow(item: ContactRowDto) {
   const rowProps: ContactRowsProps = {
     rows: [{ type: 'contact', key: `c${item.id}`, item }],
     density: 'compact',
     selectedId: null,
-    selectionMode: false,
-    checkedIds: new Set(),
-    menuOpenId,
-    onMenuOpenChange: vi.fn(),
     onToggleGroup: vi.fn(),
     ...actions
   }
@@ -89,65 +75,70 @@ function renderRow(item: ContactRowDto, menuOpenId: number | null) {
   )
 }
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+})
 
-describe('通讯录行菜单 · 挂载点', () => {
-  test('菜单打开时逃出行子树、挂到 document.body（portal 档）', () => {
-    const { container } = renderRow(contact(), 7)
-    const menu = screen.getByRole('menu', { name: '更多操作' })
-    const root = menu.closest('[data-popmenu-portal="true"]')
+describe('通讯录行 · 行上没有操作控件', () => {
+  test('行里没有按钮，也没有 portal 菜单', () => {
+    renderRow(contact())
 
-    // 🔴 判据是「不在行里」而不是「渲染出来了」—— 旧实现同样渲染得出菜单，
-    // 它只是被后面的行画在了上面。
-    expect(root).not.toBeNull()
-    expect(container.querySelector('[role="menu"]')).toBeNull()
-    expect(root!.parentElement).toBe(document.body)
-  })
-
-  test('menuOpenId 不是本行时不渲染菜单', () => {
-    renderRow(contact(), null)
+    expect(screen.queryByRole('button', { name: '更多操作' })).toBeNull()
     expect(screen.queryByRole('menu')).toBeNull()
+    expect(document.querySelector('[data-popmenu-portal="true"]')).toBeNull()
   })
 
-  test('「隐藏」是危险项、「取消隐藏」不是（原型 capp.jsx::menuItems 同款）', () => {
-    renderRow(contact(), 7)
-    expect(screen.getByRole('menuitem', { name: '隐藏' }).className).toContain('text-destructive')
+  test('右键不再开菜单（点行本身仍是打开人物页）', () => {
+    const { container } = renderRow(contact())
+    const row = container.querySelector('[data-contact-id="7"]') as HTMLElement
 
-    cleanup()
-    renderRow(contact({ hidden_at: 1_700_000_000 }), 7)
-    expect(screen.getByRole('menuitem', { name: '取消隐藏' }).className).not.toContain(
-      'text-destructive'
-    )
+    fireEvent.contextMenu(row)
+    expect(screen.queryByRole('menu')).toBeNull()
+
+    fireEvent.click(row)
+    expect(actions.onOpen).toHaveBeenCalledTimes(1)
+  })
+
+  // 🔴 ⌘/Ctrl 点行原先是「进入多选」的显式入口之一 —— 多选整体删掉之后它必须与
+  // 普通点击一样只打开人物页（留着旧分支 = 按住 ⌘ 点人什么也不发生）。
+  test('⌘/Ctrl 点行也是打开人物页', () => {
+    const { container } = renderRow(contact())
+    const row = container.querySelector('[data-contact-id="7"]') as HTMLElement
+
+    fireEvent.click(row, { metaKey: true })
+    fireEvent.click(row, { ctrlKey: true })
+    expect(actions.onOpen).toHaveBeenCalledTimes(2)
   })
 })
 
 // 名字后的性别小图标。🔴 判据是「只有 male/female 才渲染」——「没填」不该在每行占位。
 describe('通讯录行 · 性别小图标', () => {
   test('male / female 渲染带 title 的图标，未知与缺字段都不渲染', () => {
-    renderRow(contact({ gender: 'male' }), null)
+    renderRow(contact({ gender: 'male' }))
     expect(screen.getByTitle('男')).toBeTruthy()
     expect(screen.queryByTitle('女')).toBeNull()
 
     cleanup()
-    renderRow(contact({ gender: 'female' }), null)
+    renderRow(contact({ gender: 'female' }))
     expect(screen.getByTitle('女')).toBeTruthy()
 
     // 🔴 判据是「一个性别图标都没渲染」，不是「没有『男』这个字」—— 值不合法时
     // `t()` 会退回原样的 key（`contacts.gender.undefined`），按文案断言抓不到。
     cleanup()
-    renderRow(contact({ gender: null }), null)
+    renderRow(contact({ gender: null }))
     expect(screen.queryByRole('img')).toBeNull()
 
     // 老后端 / 老缓存整个键都没有 —— 与 null 一样不渲染，不能漏出个瞎选的图标。
     cleanup()
     const { gender: _omit, ...withoutGender } = contact()
     void _omit
-    renderRow(withoutGender as ContactRowDto, null)
+    renderRow(withoutGender as ContactRowDto)
     expect(screen.queryByRole('img')).toBeNull()
   })
 
   test('图标只作弱标注：不占文本宽度，姓名行文本里没有「男」「女」字样', () => {
-    const { container } = renderRow(contact({ gender: 'male' }), null)
+    const { container } = renderRow(contact({ gender: 'male' }))
     expect(screen.getByTitle('男').textContent).toBe('')
     expect(container.textContent).not.toContain('男')
   })

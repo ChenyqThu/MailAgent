@@ -14,7 +14,6 @@ import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { useMediaQuery } from '@shared/hooks/useMediaQuery'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
-import { openNewCompose } from '@shared/state/compose-new'
 import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
 import { useDomainCollapsed, useDomainWidth } from '@shared/state/nav-shell'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -25,7 +24,7 @@ import { ContactListPane } from './ContactListPane'
 import { readLastContactVisit, writeLastContactVisit } from './contactLastVisit'
 import { readContactListPrefs, writeContactListPrefs } from './contactListPrefs'
 import { MergeContactsDialog } from './MergeContactsDialog'
-import type { ContactGovernanceTarget, ContactRowActions } from './ContactRow'
+import type { ContactRowActions } from './ContactRow'
 import {
   buildContactRows,
   isGroupCollapsed,
@@ -79,11 +78,8 @@ export function ContactsWorkspace(): React.ReactElement | null {
   const [selectedId, setSelectedId] = useState<number | null>(
     () => useContactNavigation.getState().targetContactId ?? readLastContactVisit()?.id ?? null
   )
-  const [selectionMode, setSelectionMode] = useState(false)
-  const [checkedIds, setCheckedIds] = useState<ReadonlySet<number>>(() => new Set())
-  const [menuOpenId, setMenuOpenId] = useState<number | null>(null)
-  /** WP3 合并入口状态：入口 ①（详情页发起，sourceId）或入口 ②（多选恰 2 条，pair）。
-   *  WP7 的 merge 类建议采纳复用入口 ②（服务端只交回 id 对，合并仍走这条唯一人工路径）。 */
+  /** WP3 合并入口状态：详情页「更多操作 → 合并」发起（sourceId），或 WP7 治理台采纳
+   *  merge 建议（服务端只交回 id 对，合并仍走这条唯一人工路径）。 */
   const [mergeState, setMergeState] = useState<
     { sourceId: number; pair: null } | { sourceId: null; pair: [number, number] } | null
   >(null)
@@ -232,7 +228,7 @@ export function ContactsWorkspace(): React.ReactElement | null {
     setSelectedId(orderedIds[0] ?? null)
   }, [initialSelectionApplied, list.isSuccess, navigationTarget, orderedIds])
 
-  // ── 治理写面（行菜单与档案头共用同一套 handler + toast + 失效）──────────────
+  // ── 治理写面（档案头「更多操作」的 handler + toast + 失效）──────────────────
   // 🔴 只解构 `mutate`（task 08-20 P1-6）：react-query v5 的 `useMutation` **每次 render 都
   // 返回一个新对象**，把整个返回值放进下面 `actions` 的依赖数组 = 那份 useMemo 永不命中 ⇒
   // `actions` 每次都是新引用 ⇒ 摊进 rowProps 后 react-window 的浅比较全线失效（可见行全量
@@ -268,57 +264,9 @@ export function ContactsWorkspace(): React.ReactElement | null {
     onError: (error) => toastError(t('contacts.toast.saveFailed'), errorMessage(error))
   })
 
-  const enterSelection = useCallback((item: ContactGovernanceTarget): void => {
-    setSelectionMode(true)
-    setCheckedIds((previous) => {
-      const next = new Set(previous)
-      next.add(item.id)
-      return next
-    })
-  }, [])
-  const toggleCheck = useCallback((item: ContactGovernanceTarget): void => {
-    setCheckedIds((previous) => {
-      const next = new Set(previous)
-      if (next.has(item.id)) next.delete(item.id)
-      else next.add(item.id)
-      return next
-    })
-  }, [])
-  const exitSelection = useCallback((): void => {
-    setSelectionMode(false)
-    setCheckedIds(new Set())
-  }, [])
-
   const actions: ContactRowActions = useMemo(
     () => ({
       onOpen: (item) => selectContact(item.id),
-      onCompose: (item) => {
-        openNewCompose(item.primary_email ?? undefined)
-        if (item.primary_email) {
-          toastSuccess(t('contacts.toast.composePrefill', { email: item.primary_email }))
-        }
-      },
-      // WP5「写邮件并抄送上级」：收件人 = TA、抄送 = TA 的上级。列表行只带上级
-      // id（裁决 5），主邮箱点击时按 id 取详情解析；取不到（异常兜底）降级为
-      // 仅预填收件人。
-      onComposeCc: (item, managerContactId) => {
-        void (async () => {
-          let managerEmail: string | undefined
-          try {
-            const managerDetail = await api.get(managerContactId)
-            managerEmail =
-              managerDetail.emails.find((email) => email.is_primary)?.address ??
-              managerDetail.emails[0]?.address ??
-              undefined
-          } catch {
-            managerEmail = undefined
-          }
-          openNewCompose(item.primary_email ?? undefined, managerEmail ? [managerEmail] : undefined)
-          if (item.primary_email) {
-            toastSuccess(t('contacts.toast.composePrefill', { email: item.primary_email }))
-          }
-        })()
-      },
       onSetKind: (item, kind) => setContactKind({ id: item.id, kind }),
       onToggleSelf: (item) => setContactSelf({ id: item.id, isSelf: !item.is_self }),
       onToggleHidden: (item) =>
@@ -326,20 +274,9 @@ export function ContactsWorkspace(): React.ReactElement | null {
           id: item.id,
           hidden: item.hidden_at == null,
           name: item.display_name ?? item.primary_email ?? ''
-        }),
-      onEnterSelection: enterSelection,
-      onToggleCheck: toggleCheck
+        })
     }),
-    [
-      api,
-      enterSelection,
-      hideContact,
-      selectContact,
-      setContactKind,
-      setContactSelf,
-      t,
-      toggleCheck
-    ]
+    [hideContact, selectContact, setContactKind, setContactSelf]
   )
 
   // 下面三个回调都必须是稳定引用：`toggleGroup` 会被摊进 rowProps（浅比较），另外两个是
@@ -403,12 +340,6 @@ export function ContactsWorkspace(): React.ReactElement | null {
             hasMore={hasNextPage}
             progress={progress.data}
             selectedId={selectedId}
-            selectionMode={selectionMode}
-            checkedIds={checkedIds}
-            onExitSelection={exitSelection}
-            onMergePair={(pair) => setMergeState({ sourceId: null, pair })}
-            menuOpenId={menuOpenId}
-            onMenuOpenChange={setMenuOpenId}
             onToggleGroup={toggleGroup}
             actions={actions}
             agentEnabled
@@ -442,9 +373,8 @@ export function ContactsWorkspace(): React.ReactElement | null {
         sourceId={mergeState?.sourceId ?? null}
         pairIds={mergeState?.pair ?? null}
         onMerged={(winnerId) => {
-          // 成功：列表/详情切到保留方 + 退出多选（失效在 dialog 内做完）。
+          // 成功：列表/详情切到保留方（失效在 dialog 内做完）。
           setMergeState(null)
-          exitSelection()
           selectContact(winnerId)
         }}
       />

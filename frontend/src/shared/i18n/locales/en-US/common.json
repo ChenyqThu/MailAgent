@@ -6612,7 +6612,6 @@
       "more": "More actions"
     },
     "action": {
-      "open": "Open profile",
       "compose": "New email",
       "merge": "Merge with another record…",
       "kindRobot": "Reclassify as robot",
@@ -6621,14 +6620,7 @@
       "markSelf": "Mark as me",
       "unmarkSelf": "Unmark as me",
       "hide": "Hide",
-      "unhide": "Unhide",
-      "select": "Select this (start multi-select)"
-    },
-    "select": {
-      "n": "{n} selected",
-      "merge": "Merge these two",
-      "mergeHint": "Merging needs exactly two records",
-      "exit": "Exit multi-select"
+      "unhide": "Unhide"
     },
     "backfill": {
       "progress": "Building contacts from your mail · {scanned}/{total} scanned",

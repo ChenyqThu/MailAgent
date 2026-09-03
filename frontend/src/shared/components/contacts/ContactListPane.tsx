@@ -4,8 +4,7 @@
 //   ① [users icon] 通讯录 [计数] ————— [视图分段]
 //   ② [搜索 flex-1] [分组] [排序] [密度]        ← 三个工具钮各自独立，各开各的菜单
 //   ③ 「全部」视图的 kind 筛选 chips
-// 之后：BackfillBar（通栏）→ 虚拟滚动行（react-window v2，定高 O(1)，§7.1 铁律）
-// → 多选底部条。
+// 之后：BackfillBar（通栏）→ 虚拟滚动行（react-window v2，定高 O(1)，§7.1 铁律）。
 //
 // 🔴 面：列间竖线由 `ContactsWorkspace` 的拖拽分隔条唯一负责，本组件**不画
 // `border-r`**（会与分隔条并排成双线，matters E19 同款缺陷）。
@@ -35,7 +34,6 @@ import { cn } from '@shared/lib/cn'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
 import { SegmentedControl } from '@shared/components/ui/segmented'
-import { toastInfo } from '@shared/state/toast'
 
 import { BackfillBar } from './BackfillBar'
 import { ContactListSkeleton } from './ContactSkeleton'
@@ -96,13 +94,6 @@ export interface ContactListPaneProps {
   hasMore: boolean
   progress: ContactBackfillProgress | undefined
   selectedId: number | null
-  selectionMode: boolean
-  checkedIds: ReadonlySet<number>
-  onExitSelection(): void
-  /** WP3 入口 ②：多选恰 2 条 →「合并这两条」直入合并预览（dialog 挂在 Workspace）。 */
-  onMergePair(pair: [number, number]): void
-  menuOpenId: number | null
-  onMenuOpenChange(id: number | null): void
   onToggleGroup(groupKey: string): void
   actions: ContactRowActions
   /** WP7 治理台入口。2026-08-19 cutover 后总闸已退役，唯一调用方（Workspace）恒传 true；
@@ -181,10 +172,6 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
     rows: props.rows,
     density: props.density,
     selectedId: props.selectedId,
-    selectionMode: props.selectionMode,
-    checkedIds: props.checkedIds,
-    menuOpenId: props.menuOpenId,
-    onMenuOpenChange: props.onMenuOpenChange,
     onToggleGroup: props.onToggleGroup,
     ...props.actions
   }
@@ -404,44 +391,6 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
           />
         )}
       </div>
-
-      {/* 多选底部条（WP3：「合并这两条」恒渲染、仅恰 2 条可用；点不可用位给提示）。 */}
-      {props.selectionMode ? (
-        <div className="flex shrink-0 items-center gap-2 border-t border-ink-border bg-ink-2 px-3 py-2">
-          <ListChecks size={13} aria-hidden className="shrink-0 text-ink-fg-2" />
-          <span className="min-w-0 flex-1 truncate text-meta text-ink-fg-1">
-            {t('contacts.select.n', { n: props.checkedIds.size })}
-          </span>
-          <button
-            type="button"
-            onClick={props.onExitSelection}
-            className="shrink-0 rounded-[var(--r-ctl)] px-2.5 py-1 text-meta text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-fg/[0.06]"
-          >
-            {t('contacts.select.exit')}
-          </button>
-          <button
-            type="button"
-            aria-disabled={props.checkedIds.size !== 2}
-            title={props.checkedIds.size !== 2 ? t('contacts.select.mergeHint') : undefined}
-            onClick={() => {
-              const ids = [...props.checkedIds]
-              if (ids.length !== 2) {
-                toastInfo(t('contacts.select.mergeHint'))
-                return
-              }
-              props.onMergePair([ids[0]!, ids[1]!])
-            }}
-            className={cn(
-              'shrink-0 rounded-[var(--r-ctl)] border px-2.5 py-1 text-meta font-medium transition-colors duration-fast ease-standard',
-              props.checkedIds.size === 2
-                ? 'border-coral/30 bg-coral/10 text-coral hover:bg-coral/[0.17]'
-                : 'border-ink-border text-ink-fg-3 opacity-70 hover:bg-ink-3'
-            )}
-          >
-            {t('contacts.select.merge')}
-          </button>
-        </div>
-      ) : null}
     </section>
   )
 }

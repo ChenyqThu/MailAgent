@@ -652,7 +652,41 @@ function ContactDetailView({
     if (next !== (detail.display_name ?? '')) patch.mutate({ display_name: next })
   }
 
+  const compose = (): void => {
+    openNewCompose(primaryEmail ?? undefined)
+    if (primaryEmail) toastSuccess(t('contacts.toast.composePrefill', { email: primaryEmail }))
+  }
+  // WP5「写邮件并抄送上级」：收件人 = TA、抄送 = TA 的上级。上级主邮箱直接取
+  // `detail.manager`（同 `ContactOrgSection` 的抄送钮），不为它再取一次详情。
+  const composeCc = (): void => {
+    const manager = detail.manager
+    if (!manager) return
+    openNewCompose(
+      primaryEmail ?? undefined,
+      manager.primary_email ? [manager.primary_email] : undefined
+    )
+    if (primaryEmail) toastSuccess(t('contacts.toast.composePrefill', { email: primaryEmail }))
+  }
+
   const headMenuItems: PopmenuItem[] = [
+    {
+      kind: 'action',
+      id: 'compose',
+      label: t('contacts.action.compose'),
+      onSelect: compose
+    },
+    // 有上级才出这一项（可用性判据 = detail.manager）。
+    ...(detail.manager
+      ? ([
+          {
+            kind: 'action',
+            id: 'compose-cc',
+            label: t('contacts.org.composeCc'),
+            onSelect: composeCc
+          }
+        ] satisfies PopmenuItem[])
+      : []),
+    { kind: 'separator', id: 'sep-compose' },
     ...(['robot', 'list', 'person'] as const)
       .filter((kind) => kind !== detail.kind)
       .map(
@@ -693,11 +727,6 @@ function ContactDetailView({
         ] satisfies PopmenuItem[])
       : [])
   ]
-
-  const compose = (): void => {
-    openNewCompose(primaryEmail ?? undefined)
-    if (primaryEmail) toastSuccess(t('contacts.toast.composePrefill', { email: primaryEmail }))
-  }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -846,6 +875,9 @@ function ContactDetailView({
                 triggerRef={headMenuRef}
                 align="end"
                 width={220}
+                // 满配 9 行（7 项 + 2 分隔线）≈ 290px，刚过基座默认的 288px 上限 ——
+                // 不抬就为 2px 多出一条内滚。真放不下时基座仍按「面板顶到视口底」二次夹取。
+                maxHeight={320}
               />
             </div>
           </div>
