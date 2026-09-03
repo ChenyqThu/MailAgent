@@ -18,11 +18,20 @@ import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Mail, Settings } from 'lucide-react'
 
-import type { ChatBackendKind, ChatSession, ReportAgentConfig, SearchHit } from '@shared/api/types'
+import type {
+  ChatBackendKind,
+  ChatSession,
+  QueuedInput,
+  ReportAgentConfig,
+  SearchHit
+} from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { qk } from '@shared/lib/queryKeys'
+import { errorMessage } from '@shared/lib/ipcErrors'
+import { toastError } from '@shared/state/toast'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import type { UseGeneralChatReturn } from '@shared/hooks/useGeneralChat'
+import { useChatQueuedInputEnabled } from '@shared/hooks/useChatQueuedInputEnabled'
 import { useComposerEffort } from '@shared/hooks/useComposerEffort'
 import { useComposerModels } from '@shared/hooks/useComposerModels'
 import { useSessionModelPreference } from '@shared/hooks/useSessionModelPreference'
@@ -43,10 +52,12 @@ import { ThreadRunningBridge } from '@shared/assistant/runtime/ThreadRunningBrid
 import { makeSessionSettledHandler } from '@shared/assistant/runtime/threadRunningGuard'
 import { useBackgroundChatRun } from '@shared/assistant/runtime/useBackgroundChatRun'
 import { useApprovalDecideBusy } from '@shared/assistant/useApprovalDecideBusy'
+import { fetchPendingApproval } from '@shared/assistant/approvalRecordClient'
 import { PendingApprovalPanel } from '@shared/assistant/PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from '@shared/assistant/runtime/flags'
 import { ChatComposerControlsProvider } from '@shared/assistant/components/composerControls'
 import { BackgroundRunPresence } from '@shared/assistant/components/TurnPresence'
+import { QueuedInputBar } from '@shared/assistant/components/QueuedInputBar'
 import { type ChatComposerControls } from '@shared/assistant/components/composerControlsContext'
 import { useAgentContextSnapshot } from '@shared/assistant/context/useAgentContextSnapshot'
 import type { CapabilityContext, ContextScope } from '@shared/assistant/context/contextSnapshot'
@@ -430,56 +441,8 @@ export function AgentConversation({
   // 于是注入不了这件事的上下文快照（事项写工具也没有 surface）。放行 = 用户以为在这件事里说话、
   // 模型手里却没有它的任何上下文，可能检索/操作**另一件**事。宁可让这一屏说"上下文未就绪"。
   const sendDisabled = approvalSendDisabled || matterContextUnresolved
-  const composerControls = useMemo<ChatComposerControls>(
-    () => ({
-      effort: effort.control,
-      model,
-      availableModels,
-      onModelChange,
-      modelPickerDisabled: false,
-      sendDisabled,
-      mentions,
-      onAddMention,
-      onRemoveMention,
-      agentMentions,
-      onAddAgentMention,
-      onRemoveAgentMention,
-      // 不允许时**不供 onAdd** → composer 的「事项」组整个不出现（判据在 composerControlsContext）；
-      // 列表同步收成空（= 不注入），摘除回调照常供给（对账只会摘已在场的那些）。
-      matterMentions: activeMatterMentions,
-      onAddMatterMention: matterMentionAllowed ? onAddMatterMention : undefined,
-      onRemoveMatterMention,
-      attachments,
-      onAddAttachment,
-      onRemoveAttachment,
-      // WP-15 — context 环读这个会话最新一轮的 context_tokens。
-      sessionId: chatActiveSessionId,
-      // 0813 #3 —— 场地说了算的紧凑档（浮窗/抽屉）；undefined = 全页现状。
-      denseControls
-    }),
-    [
-      effort.control,
-      model,
-      availableModels,
-      onModelChange,
-      sendDisabled,
-      mentions,
-      onAddMention,
-      onRemoveMention,
-      agentMentions,
-      onAddAgentMention,
-      onRemoveAgentMention,
-      matterMentionAllowed,
-      activeMatterMentions,
-      onAddMatterMention,
-      onRemoveMatterMention,
-      attachments,
-      onAddAttachment,
-      onRemoveAttachment,
-      chatActiveSessionId,
-      denseControls
-    ]
-  )
+  // composerControls 的构造下沉到 useBackgroundChatRun 之后 —— 它现在要带排队三件套，而
+  // queueModeActive 的判据之一（后台 run 在跑）到那里才算得出来。
 
   // ── session creation (lazy, at-most-once, anchor-aware) ────────────────────
   // ai-sdk: create the session on the FIRST send, adopt it (history / reload), and hand the id to the
@@ -709,6 +672,113 @@ export function AgentConversation({
       void chatRefreshGeneralSessions()
     }
   })
+
+  // ── 排队输入（task 09-03 Lane A）─────────────────────────────────────────────
+  // 0902 那一批只把排队接在 AiChatPanel（弹出窗）上，而 dock / 浮窗 / 标签 / 事项对话走的都是
+  // 本组件 —— 于是 owner 日常那条链路上「运行中根本发不出消息」。判据与 AiChatPanel 同源：
+  // 会话里有一轮在跑（前台或后台）、或有一件待决审批时，这一轮说的话进队列而不是直接发。
+  const queuedInputEnabled = useChatQueuedInputEnabled()
+  const pendingApprovalTruth = useQuery({
+    queryKey: qk.agentApprovalPending(chatActiveSessionId),
+    queryFn: () =>
+      chatActiveSessionId == null
+        ? Promise.resolve(null)
+        : fetchPendingApproval(chatActiveSessionId),
+    enabled: queuedInputEnabled && chatActiveSessionId != null,
+    staleTime: 3_000,
+    refetchOnWindowFocus: true
+  })
+  const approvalPendingExists = pendingApprovalTruth.data != null
+  const queueModeActive =
+    queuedInputEnabled &&
+    chatActiveSessionId != null &&
+    (aiSdkRunning || backgroundActive || approvalPendingExists)
+  const onEnqueueQueuedInput = useCallback(
+    (content: string): void => {
+      if (gatewayBaseUrl == null || chatActiveSessionId == null) return
+      void fetch(`${gatewayBaseUrl}/api/ai/queued-input`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: chatActiveSessionId, content })
+      })
+        .then(async (response) => {
+          const body = (await response.json()) as { error?: string; item?: QueuedInput }
+          if (!response.ok) throw new Error(body?.error ?? 'enqueue failed')
+          // 先用返回的真行把列表种上（气泡当场出现），紧接着的失效再让它回到权威值。
+          const queryKey = qk.chat.queuedInput(chatActiveSessionId)
+          if (body.item) {
+            const item = body.item
+            queryClient.setQueryData<QueuedInput[]>(queryKey, (old = []) =>
+              old.some((row) => row.id === item.id) ? old : [...old, item]
+            )
+          }
+          await queryClient.invalidateQueries({ queryKey })
+        })
+        .catch((error: unknown) =>
+          toastError(t('chat.queuedInput.enqueueFailed'), errorMessage(error))
+        )
+    },
+    [chatActiveSessionId, gatewayBaseUrl, queryClient, t]
+  )
+
+  const composerControls = useMemo<ChatComposerControls>(
+    () => ({
+      effort: effort.control,
+      model,
+      availableModels,
+      onModelChange,
+      modelPickerDisabled: false,
+      sendDisabled,
+      queuedInputEnabled,
+      queueModeActive,
+      onEnqueueQueuedInput,
+      mentions,
+      onAddMention,
+      onRemoveMention,
+      agentMentions,
+      onAddAgentMention,
+      onRemoveAgentMention,
+      // 不允许时**不供 onAdd** → composer 的「事项」组整个不出现（判据在 composerControlsContext）；
+      // 列表同步收成空（= 不注入），摘除回调照常供给（对账只会摘已在场的那些）。
+      matterMentions: activeMatterMentions,
+      onAddMatterMention: matterMentionAllowed ? onAddMatterMention : undefined,
+      onRemoveMatterMention,
+      attachments,
+      onAddAttachment,
+      onRemoveAttachment,
+      // WP-15 — context 环读这个会话最新一轮的 context_tokens。
+      sessionId: chatActiveSessionId,
+      // 0813 #3 —— 场地说了算的紧凑档（浮窗/抽屉）；undefined = 全页现状。
+      denseControls
+    }),
+    [
+      effort.control,
+      model,
+      availableModels,
+      onModelChange,
+      sendDisabled,
+      queuedInputEnabled,
+      queueModeActive,
+      onEnqueueQueuedInput,
+      mentions,
+      onAddMention,
+      onRemoveMention,
+      agentMentions,
+      onAddAgentMention,
+      onRemoveAgentMention,
+      matterMentionAllowed,
+      activeMatterMentions,
+      onAddMatterMention,
+      onRemoveMatterMention,
+      attachments,
+      onAddAttachment,
+      onRemoveAttachment,
+      chatActiveSessionId,
+      denseControls
+    ]
+  )
+
   // B4 — read watermark: the active session's rows just (re)loaded → the user is reading them.
   useEffect(() => {
     if (chatActiveSessionId == null || chat.messagesSessionId !== chatActiveSessionId) return
@@ -773,10 +843,23 @@ export function AgentConversation({
         onDecideBusyChange={onDecideBusyChange}
       />
     ) : undefined
+  // task 09-03 —— 已被某条 `<queued_followups>` 信封带走的队列行（按 rowIds），排队气泡据此隐去
+  // 它们，免得「消息已重载、队列还没重取」的那一瞬同一句话画两遍。
+  const dispatchedRowIds = useMemo(
+    () =>
+      new Set(
+        (initialMessages ?? []).flatMap(
+          (message) => message.metadata?.queuedInputDispatch?.rowIds ?? []
+        )
+      ),
+    [initialMessages]
+  )
   // 0813 轮 5（D）—— 后台 run 的在场行也走 pendingSlot（它 WP-14 之前的老家），呈现与回合头像行
   // 同一套「头像 + 状态 + 秒表」。🔴 不能挂 TurnPresence：那个必须在 message scope 里
   // （`message.isLast`），而切回来时后台 run 可能还没产出任何 part —— 宿主消息根本不存在。
   // 对齐类跟 AgentAssistantMessage 的消息列（同一个 max-width 列 + px-1）。
+  // task 09-03 —— 排队中的追问排在这一槽的最末：它们是用户接下来要说的话，按等待中的用户气泡
+  // 呈现，所以排在「在跑那一轮」的卡与在场行之后。
   const pendingSlotContent = (
     <>
       {pendingApprovalCard}
@@ -785,6 +868,15 @@ export function AgentConversation({
         startedAt={backgroundStartedAt}
         className="mx-auto mb-4 w-full max-w-[var(--thread-max-width)] px-1"
       />
+      <div className="mx-auto w-full max-w-[var(--thread-max-width)]">
+        <QueuedInputBar
+          enabled={queuedInputEnabled}
+          gatewayBaseUrl={gatewayBaseUrl}
+          sessionId={chatActiveSessionId}
+          approvalPendingExists={approvalPendingExists}
+          dispatchedRowIds={dispatchedRowIds}
+        />
+      </div>
     </>
   )
   // 事项控件（缺口卡 + 检索范围）住 composer 上方的常驻带，跟着 composer 走、不随消息流滚走。

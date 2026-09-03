@@ -44,6 +44,7 @@ import {
   ComposerPrimitive,
   ThreadPrimitive,
   unstable_useSlashCommandAdapter,
+  unstable_useTriggerPopoverAriaProps,
   useAui,
   useAuiState,
   type Unstable_IconComponent,
@@ -291,8 +292,8 @@ const SLASH_ICONS: Record<string, Unstable_IconComponent> = {
 
 // ── 工具条窄档（侧栏 / 浮窗拖窄时逐级降级） ──────────────────────────────────────────────────
 // 量的是 composer 根 <form> 的宽度 = 侧栏宽度减 33（Viewport 的 px-4 共 32 + 侧栏那圈
-// border-l 1；实测值，别按 32 推）：侧栏 320（AssistantChatModal 的 SIDEBAR_WIDTH_MIN）/ 360 /
-// 400（默认）/ 720（MAX）对应 form 287 / 327 / 367 / 687。
+// border-l 1；实测值，别按 32 推）：侧栏 350（AssistantChatModal 的 SIDEBAR_WIDTH_MIN）/ 360 /
+// 400（默认）/ 720（MAX）对应 form 317 / 327 / 367 / 687。
 //   'md'（form ≤ 367 = 侧栏 ≤ 400 默认宽）：授权档 pill 收成纯图标 —— 到这一档右组已在压模型名，
 //     而授权档的信息量在图标与底色（bypass / 未知的警示色）里，文字是这一行最先该让的位置。
 //   'sm'（form ≤ 327 = 侧栏 ≤ 360）：模型名再收一档，别让它把仅剩的余量吃光。
@@ -321,6 +322,70 @@ function useNarrowTier(ref: React.RefObject<HTMLElement | null>): NarrowTier | u
   return tier
 }
 
+// ── 排队模式（task 09-03 Lane A）─────────────────────────────────────────────────────────────────
+/** 「这一轮说的话进队列而不是直接发」。判据由宿主给（run 在跑 / 后台在跑 / 有待决审批）。 */
+function isQueueModeActive(controls: ChatComposerControls | null): boolean {
+  return controls?.queuedInputEnabled === true && controls.queueModeActive === true
+}
+
+/** 入队并清空输入。Enter 与发送键共用的是**入队动作本身**；守卫按入口不同：Enter 那条多一道
+ *  trigger popover 守卫（`@` / `/` 候选列表要用 Enter 选中），点击没有这重歧义。`sendDisabled`
+ *  两条路径都受约束 —— Enter 在守卫里判，键靠 `disabled` 属性。 */
+function enqueueComposerText(
+  aui: ReturnType<typeof useAui>,
+  controls: ChatComposerControls | null
+): void {
+  const text = aui.composer().getState().text.trim()
+  if (text === '') return
+  controls?.onEnqueueQueuedInput?.(text)
+  aui.composer().setText('')
+}
+
+/** Lexical 输入 + 排队模式下的 Enter 拦截。
+ *
+ *  🔴 单独成组件只为一件事：trigger popover 的开合态（`unstable_useTriggerPopoverAriaProps` 的
+ *  `aria-expanded`）只有在 `Unstable_TriggerPopoverRoot` **内部**才读得到，而那个 Root 是
+ *  AgentComposer 自己渲染的 —— 在 AgentComposer 里读恒是「没开」，`@` / `/` 候选列表用 Enter
+ *  选中就会被下面的拦截吃掉。
+ *
+ *  拦截必须走 capture 阶段并 stopPropagation：Enter 在 Lexical 里由 contenteditable 自己的
+ *  keydown 监听转成 KEY_ENTER_COMMAND，而 React 的 capture 处理器在根容器上先跑，停掉传播那条
+ *  监听就收不到事件。只 preventDefault 不够 —— 库不看 defaultPrevented，且「待决审批 / 后台 run」
+ *  这两档 `isRunning` 为假，库会真的把这一轮发出去。 */
+function AgentComposerInput(): React.JSX.Element {
+  const { t } = useTranslation()
+  const aui = useAui()
+  const controls = useChatComposerControls()
+  const sendDisabled = controls?.sendDisabled === true
+  const queueModeActive = isQueueModeActive(controls)
+  const triggerPopoverOpen = unstable_useTriggerPopoverAriaProps()['aria-expanded'] === true
+  // dogfood-3: placeholder 只在首次空对话(welcome 态)显示长引导文案；进入对话后底部 docked composer
+  // 不再显示 placeholder（用户要求）。空线程 = thread.messages 为空（同 AgentThread 的 isNewChatView）。
+  const isEmptyThread = useAuiState((s) => s.thread.messages.length === 0)
+  const onKeyDownCapture = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>): void => {
+      if (!queueModeActive || sendDisabled || triggerPopoverOpen) return
+      if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
+      e.preventDefault()
+      e.stopPropagation()
+      enqueueComposerText(aui, controls)
+    },
+    [aui, controls, queueModeActive, sendDisabled, triggerPopoverOpen]
+  )
+  return (
+    <LexicalComposerInput
+      directiveChip={AgentDirectiveChip}
+      placeholder={isEmptyThread ? t('agentView.composer.placeholder') : ''}
+      // codex r2 [D] — the Lexical Enter path calls aui.composer().send() DIRECTLY (no form
+      // submit to gate), so busy turns Enter-submit off entirely.
+      submitMode={sendDisabled ? 'none' : 'enter'}
+      onKeyDownCapture={onKeyDownCapture}
+      autoFocus
+      className="scrollbar-thin relative max-h-32 min-h-[2.5rem] w-full resize-none bg-transparent px-2.5 py-1 text-body leading-snug text-ink-fg outline-none [&_.aui-lexical-input]:min-h-lh [&_.aui-lexical-input]:outline-none [&_.aui-lexical-placeholder]:pointer-events-none [&_.aui-lexical-placeholder]:absolute [&_.aui-lexical-placeholder]:left-0 [&_.aui-lexical-placeholder]:right-0 [&_.aui-lexical-placeholder]:top-0 [&_.aui-lexical-placeholder]:truncate [&_.aui-lexical-placeholder]:px-2.5 [&_.aui-lexical-placeholder]:py-1 [&_.aui-lexical-placeholder]:text-ink-fg-3"
+    />
+  )
+}
+
 export function AgentComposer({
   contextChip
 }: {
@@ -341,6 +406,7 @@ export function AgentComposer({
   // commands append through the thread (guarded in execute below), and the Root form gate covers
   // any residual requestSubmit.
   const sendDisabled = controls?.sendDisabled === true
+  const queueModeActive = isQueueModeActive(controls)
 
   // Privacy guard (codex HIGH-1): the in-field @ inserts a directive chip AND records the email in
   // controls.mentions (the send-time buildMentionContext source). Lexical exposes no "directive removed"
@@ -349,9 +415,6 @@ export function AgentComposer({
   // gone, so a visually-removed email is never sent. The effect only REMOVES (never adds) → it can't race
   // the insert (a freshly-inserted chip is already in the text by the time this runs).
   const composerText = useAuiState((s) => s.composer.text)
-  // dogfood-3: placeholder 只在首次空对话(welcome 态)显示长引导文案；进入对话后底部 docked composer
-  // 不再显示 placeholder（用户要求）。空线程 = thread.messages 为空（同 AgentThread 的 isNewChatView）。
-  const isEmptyThread = useAuiState((s) => s.thread.messages.length === 0)
   useEffect(() => {
     if (!controls) return
     const agentMentions = controls.agentMentions ?? []
@@ -472,15 +535,7 @@ export function AgentComposer({
             chipRowClassName="px-2.5"
             className="rounded-2xl min-w-0"
           >
-            <LexicalComposerInput
-              directiveChip={AgentDirectiveChip}
-              placeholder={isEmptyThread ? t('agentView.composer.placeholder') : ''}
-              // codex r2 [D] — the Lexical Enter path calls aui.composer().send() DIRECTLY (no form
-              // submit to gate), so busy turns Enter-submit off entirely.
-              submitMode={sendDisabled ? 'none' : 'enter'}
-              autoFocus
-              className="scrollbar-thin relative max-h-32 min-h-[2.5rem] w-full resize-none bg-transparent px-2.5 py-1 text-body leading-snug text-ink-fg outline-none [&_.aui-lexical-input]:min-h-lh [&_.aui-lexical-input]:outline-none [&_.aui-lexical-placeholder]:pointer-events-none [&_.aui-lexical-placeholder]:absolute [&_.aui-lexical-placeholder]:left-0 [&_.aui-lexical-placeholder]:right-0 [&_.aui-lexical-placeholder]:top-0 [&_.aui-lexical-placeholder]:truncate [&_.aui-lexical-placeholder]:px-2.5 [&_.aui-lexical-placeholder]:py-1 [&_.aui-lexical-placeholder]:text-ink-fg-3"
-            />
+            <AgentComposerInput />
             {/* 08-05 WP-13+16b — 工具条重组：左 [+][滑块][授权]、右 [环][effort][模型][发送]
                 （两面同一套顺序，见 composer.tsx 文件头）。两个组都 min-w-0：320px 侧栏里
                 chip 的文字要能被 truncate 压掉，否则整行会被撑出去。 */}
@@ -512,17 +567,23 @@ export function AgentComposer({
                 {controls?.effort && <EffortPicker control={controls.effort} variant="chip" />}
                 {/* 08-04 W8 — 两个 composer 共用的模型选择器（chip variant）。 */}
                 {controls && <ModelPicker controls={controls} variant="chip" />}
-                <ThreadPrimitive.If running={false}>
-                  <ComposerPrimitive.Send
-                    aria-label={t('chat.composer.send')}
-                    title={t('chat.composer.send')}
-                    // P1-2 — an approval decide holds the session's run lease; sending would 409.
-                    disabled={sendDisabled}
-                    className="grid size-8 shrink-0 place-items-center rounded-full bg-[rgb(var(--c-accent))] text-[rgb(var(--c-accent-fg))] transition-opacity duration-fast hover:opacity-90 disabled:opacity-40"
-                  >
-                    <ArrowUp size={17} strokeWidth={2.5} />
-                  </ComposerPrimitive.Send>
-                </ThreadPrimitive.If>
+                {/* 🔴 排队模式下 `ComposerPrimitive.Send` 一律不渲染：它是 `type="button"` 直调
+                    send()（不提交 form，Root 的 onSubmit 拦不住），而排队模式有两档 isRunning 为假
+                    （待决审批 / 后台 run）—— 那两档它可点且真发，会与 stash 的审批抢 run lease（409）
+                    或起一条竞争 run。换成下面那颗恒显示的入队键。 */}
+                {!queueModeActive && (
+                  <ThreadPrimitive.If running={false}>
+                    <ComposerPrimitive.Send
+                      aria-label={t('chat.composer.send')}
+                      title={t('chat.composer.send')}
+                      // P1-2 — an approval decide holds the session's run lease; sending would 409.
+                      disabled={sendDisabled}
+                      className="grid size-8 shrink-0 place-items-center rounded-full bg-[rgb(var(--c-accent))] text-[rgb(var(--c-accent-fg))] transition-opacity duration-fast hover:opacity-90 disabled:opacity-40"
+                    >
+                      <ArrowUp size={17} strokeWidth={2.5} />
+                    </ComposerPrimitive.Send>
+                  </ThreadPrimitive.If>
+                )}
                 <ThreadPrimitive.If running>
                   <ComposerPrimitive.Cancel
                     aria-label={t('chat.composer.cancel')}
@@ -532,6 +593,21 @@ export function AgentComposer({
                     <Square size={14} strokeWidth={2.5} className="fill-current" />
                   </ComposerPrimitive.Cancel>
                 </ThreadPrimitive.If>
+                {/* 排队模式的发送键（点击 = Enter 同一条入队）：恒显示、不分 isRunning，在停止键右边。
+                    disabled 判据与 Enter 那条守卫同源 —— sendDisabled 在事项对话里是持续状态，
+                    只挡 Enter 会变成「回车被拒、点键却入队」。 */}
+                {queueModeActive && (
+                  <button
+                    type="button"
+                    aria-label={t('chat.composer.send')}
+                    title={t('chat.composer.send')}
+                    disabled={sendDisabled}
+                    onClick={() => enqueueComposerText(aui, controls)}
+                    className="grid size-8 shrink-0 place-items-center rounded-full bg-[rgb(var(--c-accent))] text-[rgb(var(--c-accent-fg))] transition-opacity duration-fast hover:opacity-90 disabled:opacity-40"
+                  >
+                    <ArrowUp size={17} strokeWidth={2.5} />
+                  </button>
+                )}
               </div>
             </div>
           </ComposerFrame>

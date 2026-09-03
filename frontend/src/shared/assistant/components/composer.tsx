@@ -274,6 +274,14 @@ export function ThreadComposer(): React.JSX.Element {
   const sendDisabled = controls?.sendDisabled === true
   const queueModeActive = controls?.queuedInputEnabled === true && controls.queueModeActive === true
   const composerText = useAuiState((state) => state.composer.text)
+  /** task 09-03 —— 入队并清空输入。form submit / Enter / 发送键三条路径共用的是**入队动作本身**；
+   *  守卫按入口不同（Enter 那条自己判 sendDisabled，键靠 `disabled` 属性）。 */
+  const enqueueQueuedText = (): void => {
+    const text = composerText.trim()
+    if (!text) return
+    controls?.onEnqueueQueuedInput?.(text)
+    aui.composer().setText('')
+  }
   return (
     <ComposerPrimitive.Root
       onSubmit={(e) => {
@@ -289,10 +297,7 @@ export function ThreadComposer(): React.JSX.Element {
         }
         if (queueModeActive) {
           e.preventDefault()
-          const text = composerText.trim()
-          if (!text) return
-          controls?.onEnqueueQueuedInput?.(text)
-          aui.composer().setText('')
+          enqueueQueuedText()
         }
       }}
       // 0813 — 底色从 ink-2 降到 ink-1（= 消息区 ThreadPrimitive.Root 的底色）：ink-2 让给了
@@ -328,6 +333,17 @@ export function ThreadComposer(): React.JSX.Element {
           placeholder={t('chat.composer.placeholder')}
           aria-label={t('chat.composer.placeholder')}
           disabled={sendDisabled}
+          // task 09-03 —— 运行中 Enter 入队。库自己的 Enter 处理在 `isRunning && !capabilities.queue`
+          // 时直接 return（我们的 ai-sdk runtime 恒无 queue 能力），所以上面 onSubmit 里那条排队分支
+          // 运行中根本到不了 —— 这条 keydown 才是真入口。radix composeEventHandlers 默认
+          // checkForDefaultPrevented ⇒ preventDefault 让库那段整段跳过（待决审批 / 后台 run 这两档
+          // isRunning 为假，不拦它会真的把这一轮发出去）。
+          onKeyDown={(e) => {
+            if (!queueModeActive || sendDisabled) return
+            if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
+            e.preventDefault()
+            enqueueQueuedText()
+          }}
           className={cn(
             'scrollbar-thin max-h-32 w-full resize-none border-0 bg-transparent px-1.5 py-1',
             'text-body leading-snug text-ink-fg outline-none placeholder:text-ink-fg-3',
@@ -359,21 +375,27 @@ export function ThreadComposer(): React.JSX.Element {
             {controls?.effort && <EffortPicker control={controls.effort} variant="icon" />}
             {/* 08-04 W8 — 两个 composer 共用的模型选择器（icon variant）。 */}
             {controls && <ModelPicker controls={controls} variant="icon" />}
-            <ThreadPrimitive.If running={false}>
-              <ComposerPrimitive.Send
-                aria-label={t('chat.composer.send', { defaultValue: 'Send' })}
-                title={`${t('chat.composer.send', { defaultValue: 'Send' })} (⌘↩)`}
-                // P1-2 — an approval decide holds the session's run lease; sending would 409.
-                disabled={sendDisabled}
-                className={cn(
-                  'grid h-9 w-9 shrink-0 place-items-center rounded-lg',
-                  'bg-[rgb(var(--c-accent))] text-[rgb(var(--c-accent-fg))]',
-                  'transition-opacity duration-fast hover:opacity-90 disabled:opacity-40'
-                )}
-              >
-                <ArrowUp size={16} strokeWidth={2.5} />
-              </ComposerPrimitive.Send>
-            </ThreadPrimitive.If>
+            {/* 🔴 排队模式下 `ComposerPrimitive.Send` 一律不渲染：它是 `type="button"` 直调 send()
+                （不提交 form，Root 的 onSubmit 拦不住），而排队模式有两档 isRunning 为假（待决审批 /
+                后台 run）—— 那两档它可点且真发，会与 stash 的审批抢 run lease（409）或起一条竞争
+                run。换成下面那颗恒显示的入队键。 */}
+            {!queueModeActive && (
+              <ThreadPrimitive.If running={false}>
+                <ComposerPrimitive.Send
+                  aria-label={t('chat.composer.send', { defaultValue: 'Send' })}
+                  title={`${t('chat.composer.send', { defaultValue: 'Send' })} (⌘↩)`}
+                  // P1-2 — an approval decide holds the session's run lease; sending would 409.
+                  disabled={sendDisabled}
+                  className={cn(
+                    'grid h-9 w-9 shrink-0 place-items-center rounded-lg',
+                    'bg-[rgb(var(--c-accent))] text-[rgb(var(--c-accent-fg))]',
+                    'transition-opacity duration-fast hover:opacity-90 disabled:opacity-40'
+                  )}
+                >
+                  <ArrowUp size={16} strokeWidth={2.5} />
+                </ComposerPrimitive.Send>
+              </ThreadPrimitive.If>
+            )}
             <ThreadPrimitive.If running>
               <ComposerPrimitive.Cancel
                 aria-label={t('chat.composer.cancel', { defaultValue: 'Stop' })}
@@ -387,6 +409,24 @@ export function ThreadComposer(): React.JSX.Element {
                 <X size={15} strokeWidth={2.5} />
               </ComposerPrimitive.Cancel>
             </ThreadPrimitive.If>
+            {/* 排队模式的发送键（点击 = Enter 同一条入队）：恒显示、不分 isRunning，在停止键右边。
+                disabled 判据与 Enter 那条守卫同源 —— 只挡 Enter 会变成「回车被拒、点键却入队」。 */}
+            {queueModeActive && (
+              <button
+                type="button"
+                aria-label={t('chat.composer.send', { defaultValue: 'Send' })}
+                title={t('chat.composer.send', { defaultValue: 'Send' })}
+                disabled={sendDisabled}
+                onClick={enqueueQueuedText}
+                className={cn(
+                  'grid h-9 w-9 shrink-0 place-items-center rounded-lg',
+                  'bg-[rgb(var(--c-accent))] text-[rgb(var(--c-accent-fg))]',
+                  'transition-opacity duration-fast hover:opacity-90 disabled:opacity-40'
+                )}
+              >
+                <ArrowUp size={16} strokeWidth={2.5} />
+              </button>
+            )}
           </div>
         </div>
       </ComposerFrame>
