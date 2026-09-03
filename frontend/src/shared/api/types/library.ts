@@ -58,11 +58,12 @@ export interface LibraryFile {
 
   // ── 投影行（邮件附件）专属，`is_projection` 为 true 时才有 ────────────────────
   //
-  // 🔴 投影行**没有 library id**，`/library/file/{id}` 那一整套对它全都走不通。三件事各有去处
-  // （2026-09-03 与 serve-api lane 确认；投影是零成本索引投影，P1 有意不给它第二条 library 读面）：
-  //   · 预览原件 → 既有附件面 `useMailApi().attachment` 的 `readDataUrl` / `localPath` /
-  //     `download`（底下就是 `GET /api/attachment/{id}/inline`，Range 206）；
-  //   · 解析文本 → `GET /api/attachment/{id}/text`（`email_attachment_text`，pending 时有同步抽取兜底）；
+  // 🔴 投影行**没有 library id**，`/library/file/{id}` 那一整套对它全都走不通。library router
+  // 另给三条**只读兄弟端点**（与 `/file/{id}` 家族同形，client 上是 `attachment*` 三个方法）：
+  //   · 行对象 → `GET /library/attachment/{attachment_id}`（文本类附件带 `content`）；
+  //   · 解析文本 → `GET /library/attachment/{attachment_id}/text`（直接读 `email_attachment_text`，
+  //     **不重抽**；返回体的 `file_id` 是 null，多一个 `attachment_id`）；
+  //   · 原件字节 → `GET /library/attachment/{attachment_id}/inline`（Range 206）。
   //   · 另存到资料库 → `POST /library/keep-attachment`，返回库内文件对象，此后就是普通 `id`。
   is_projection?: boolean
   attachment_id?: number
@@ -141,7 +142,10 @@ export interface LibraryFileDetail extends LibraryFile {
 
 /** `GET /library/file/{id}/text` —— 解析版（`library_text`），预览 / 搜索 / agent 读同一来源。 */
 export interface LibraryFileText {
-  file_id: number
+  /** 🔴 投影腿（`/library/attachment/{id}/text`）为 null —— 那份文本不属于任何 library 行。 */
+  file_id: number | null
+  /** 只有投影腿带。 */
+  attachment_id?: number
   text_status: LibraryTextStatus
   /** 三态未就绪时 null。 */
   markdown: string | null
@@ -154,6 +158,8 @@ export interface LibraryFileText {
   content_hash: string | null
   /** `source_hash !== content_hash` —— 正文变了、解析版还没重抽。 */
   stale: boolean
+  /** 说明性提示（投影腿才有，例如附件尚未抽取）。语义未细化，按字符串透传。 */
+  hint?: string | null
 }
 
 /** 搜索命中 = 文件对象**摊平**再挂三个命中字段（不是 `{file, …}` 嵌套）。 */
@@ -193,13 +199,12 @@ export interface LibraryHistoryEntry {
   snapshot_bytes: number
 }
 
-/** `POST /library/rescan` 的回执。🔴 键名是 `changed` 不是 `updated`。 */
+/** `POST /library/rescan` 的回执。 */
 export interface LibraryRescanResult {
   scanned: number
   added: number
   /** 外部改动、对账时补记 `changed_by='external'` 的那一类。 */
-  changed: number
+  updated: number
   missing: number
-  /** 顺带清掉的过期废纸篓条目数（`.trash` 30 天 sweep）。 */
-  swept: number
+  elapsed_ms: number
 }

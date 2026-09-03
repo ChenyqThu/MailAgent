@@ -7,9 +7,13 @@
 // **不**持久化 `selectedFileId` —— 文件可能已被删/移走，冷启第一帧就撞 missing 态没意义；
 // 重新打开某个文件是深链（`/library?file={id}`）的事。
 //
-// 🔴 本文件不 import registry / router / api（仓内既有纪律：状态叶子保持可单测）。
+// 🔴 本文件不 import registry / router，也不 import api 的**运行时**（仓内既有纪律：
+// 状态叶子保持可单测）。排序两个类型是 `import type`（编译期擦除，不引入任何运行时依赖），
+// 因为它们的值要原样发给服务端，权威在 wire 那一侧。
 
 import { create } from 'zustand'
+
+import type { LibraryFolderSort, LibrarySortDirection } from '@shared/api/library'
 
 import { MOUNTS_GROUP_PATH, ancestorPaths, BUILT_IN_ROOT_SLUGS } from '@shared/components/library/tree'
 
@@ -17,9 +21,10 @@ const KEY = 'mailagent.library.tree.v1'
 
 /** 文件夹内容区的两种视图（design §2.3，`ui/segmented` 切）。 */
 export type LibraryFolderView = 'grid' | 'list'
-/** 排序维度（design §2.3）。 */
-export type LibrarySortKey = 'name' | 'size' | 'type' | 'date'
-export type LibrarySortDir = 'asc' | 'desc'
+/** 排序维度（design §2.3）。🔴 **不在这里第二次声明值域** —— 它们要原样进
+ *  `GET /library/folder` 的 query，权威是 `api/library.ts`；这里只给域内惯用的别名。 */
+export type LibrarySortKey = LibraryFolderSort
+export type LibrarySortDir = LibrarySortDirection
 
 const VIEWS: readonly LibraryFolderView[] = ['grid', 'list']
 const SORT_KEYS: readonly LibrarySortKey[] = ['name', 'size', 'type', 'date']

@@ -82,6 +82,15 @@ export interface LibraryApi {
   /** 原件字节的 URL（iframe / img 直接用；不经 envelope，服务端支持 Range 206）。 */
   inlineUrl(fileId: number): string
   text(fileId: number): Promise<LibraryFileText>
+
+  // ── 邮件附件投影行（`id: null`）的三条只读兄弟端点 ────────────────────────────
+  // 形状与上面的 `file` / `text` / `inlineUrl` 一一对应，只是按 `attachment_id` 寻址。
+  /** 行对象（`is_projection: true`；文本类附件带 `content`）。 */
+  attachment(attachmentId: number, maxBytes?: number): Promise<LibraryFileDetail>
+  /** 解析文本 —— 直接读 `email_attachment_text`，**不重抽**（返回体 `file_id` 为 null）。 */
+  attachmentText(attachmentId: number, maxBytes?: number): Promise<LibraryFileText>
+  attachmentInlineUrl(attachmentId: number): string
+
   search(q: string, limit?: number): Promise<LibrarySearchResponse>
   createTextFile(input: LibraryCreateTextFile): Promise<LibraryFile>
   uploadFile(input: LibraryUploadFile): Promise<LibraryFile>
@@ -138,6 +147,22 @@ export function createLibraryApi(baseUrl: string): LibraryApi {
 
     text(fileId: number): Promise<LibraryFileText> {
       return request(baseUrl, 'GET', `/library/file/${fileId}/text`)
+    },
+
+    attachment(attachmentId: number, maxBytes?: number): Promise<LibraryFileDetail> {
+      return request(baseUrl, 'GET', `/library/attachment/${attachmentId}`, {
+        query: { max_bytes: maxBytes }
+      })
+    },
+
+    attachmentText(attachmentId: number, maxBytes?: number): Promise<LibraryFileText> {
+      return request(baseUrl, 'GET', `/library/attachment/${attachmentId}/text`, {
+        query: { max_bytes: maxBytes }
+      })
+    },
+
+    attachmentInlineUrl(attachmentId: number): string {
+      return `${baseUrl}/library/attachment/${attachmentId}/inline`
     },
 
     search(q: string, limit?: number): Promise<LibrarySearchResponse> {
