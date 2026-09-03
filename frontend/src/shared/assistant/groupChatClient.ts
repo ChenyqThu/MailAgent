@@ -17,6 +17,10 @@
 
 import type { GroupAttachment } from '@shared/chat_model'
 
+import {
+  libraryRefsBodyPatch,
+  type GroupLibraryRef
+} from '../../ai-gateway/groupLibraryRefs'
 import { resolveAiGatewayBaseUrl } from './runtime/flags'
 
 function gatewayBaseUrlOrThrow(): string {
@@ -51,11 +55,15 @@ async function throwHttpError(res: Response): Promise<never> {
  *  T2 群附件：`attachments` 里的正文已由 renderer 读出（文本本地读 / office 经
  *  `/attachment/convert`；图片 `text=null` 只留档）。服务端会再过一遍形状与上限
  *  （`groupAttachments.ts`）后落进该行的 `metadata.attachments`。
- *  🔴 省略 / 空数组 → body 与改动前**字节一致**（不发一个空 attachments 键）。 */
+ *  🔴 省略 / 空数组 → body 与改动前**字节一致**（不发一个空 attachments 键）。
+ *
+ *  P2-L13 群 @ 资料：`libraryRefs` 同一纪律，键名与形状由 `groupLibraryRefs.ts` 单源出
+ *  （`libraryRefsBodyPatch` 无引用时返回空对象，展开进 body 不留痕）。 */
 export async function appendGroupUserMessage(
   sessionId: number,
   text: string,
-  attachments?: readonly GroupAttachment[]
+  attachments?: readonly GroupAttachment[],
+  libraryRefs?: readonly GroupLibraryRef[]
 ): Promise<number> {
   const baseUrl = gatewayBaseUrlOrThrow()
   const res = await fetch(`${baseUrl}/api/ai/group-chat`, {
@@ -63,8 +71,8 @@ export async function appendGroupUserMessage(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(
       attachments != null && attachments.length > 0
-        ? { sessionId, userText: text, attachments }
-        : { sessionId, userText: text }
+        ? { sessionId, userText: text, attachments, ...libraryRefsBodyPatch(libraryRefs) }
+        : { sessionId, userText: text, ...libraryRefsBodyPatch(libraryRefs) }
     )
   })
   if (!res.ok) await throwHttpError(res)
