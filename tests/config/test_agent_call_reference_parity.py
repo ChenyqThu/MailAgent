@@ -14,7 +14,8 @@
 修法（CLAUDE.md：先问能不能消灭镜像，消灭不了才建闸）：两处都改成从零依赖叶子
 ``frontend/src/shared/agentCallReference.ts`` import 同一个类型；本闸钉住「它们不许再自己写一份」
 ——范式抄 ``tests/config/test_group_constants_parity.py`` 第 4 条（消费方 import 单源，闸钉住
-「不许自己再写一份字面量」）。
+「不许自己再写一份字面量」）。P2-L12 在消灭镜像之上加了 `'library'` 一档 +
+`customAgentCallSchema.library_file_ids`，本闸同时钉住这一档的落地形状。
 
 🔴 抽取失败必须红：每个抽取器抓不到目标结构就抛（不返回空集），外加逐项 canary 断言非空。
 """
@@ -41,11 +42,12 @@ CARD_TSX = (
     / "generic"
     / "CustomAgentCallCard.tsx"
 )
+SCHEMAS_TS = p.REPO_ROOT / "frontend" / "src" / "ai-gateway" / "tools" / "schemas.ts"
 
-#: 值域下限（canary）—— 消灭镜像前既有的五个类型。
-REFERENCE_TYPE_FLOOR = 5
+#: 值域下限（canary）—— 消灭镜像前的五个 + P2-L12 新增的 'library'。
+REFERENCE_TYPE_FLOOR = 6
 #: 精确值域 —— 这是叶子自己的内容期望（不是第二份生产镜像），漂移即改坏了值域本身。
-EXPECTED_REFERENCE_TYPES = {"session", "report", "notion", "email", "calendar"}
+EXPECTED_REFERENCE_TYPES = {"session", "report", "notion", "email", "calendar", "library"}
 
 
 # =============================================================================
@@ -100,6 +102,61 @@ def declares_own_interface(src: str) -> bool:
     return _OWN_INTERFACE_RE.search(src) is not None
 
 
+def custom_agent_call_schema_block(src: str) -> str:
+    """`customAgentCallSchema` 定义体（从声明到它自己的 `.strict()` 结尾）。
+
+    只在这个切片里找 `library_file_ids`——避免文件里别的 schema 恰好也叫这个名字的字段时
+    被误判命中（部分抽取比抽不到更毒）。
+    """
+    start = src.find("export const customAgentCallSchema")
+    if start == -1:
+        raise AssertionError(
+            f"{SCHEMAS_TS.name}: 没找到 `export const customAgentCallSchema` —— 解析器需更新"
+        )
+    end = src.find(".strict()", start)
+    if end == -1:
+        raise AssertionError(
+            f"{SCHEMAS_TS.name}: customAgentCallSchema 后面没找到 `.strict()` 结尾 —— 解析器需更新"
+        )
+    return src[start:end]
+
+
+def _balanced_parens(src: str, open_idx: int, label: str) -> str:
+    """从 ``src[open_idx]``（必须是 `(`）取到配对 `)` 的整块（含两端）。
+
+    `z.array(z.number().int().positive())` 的数组元素类型本身含多个顺次的空括号调用
+    （`.int()` / `.positive()`），朴素的 `[^)]*` 正则会在第一个 `)` 处提前截断（部分抽取比
+    抽不到更毒）——这里用括号深度计数正确跨过它们，只在配对的外层 `)` 处停。
+    """
+    if src[open_idx] != "(":
+        raise AssertionError(f"{label}: 期望 `(` 起始 —— 解析器需更新")
+    depth = 0
+    for i in range(open_idx, len(src)):
+        if src[i] == "(":
+            depth += 1
+        elif src[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return src[open_idx : i + 1]
+    raise AssertionError(f"{label}: 圆括号未闭合 —— 解析器需更新")
+
+
+def library_file_ids_field(block: str) -> tuple:
+    """`library_file_ids: z.array(<inner>).max(<N>).optional()` → (inner 类型文本, N)。"""
+    label = f"{SCHEMAS_TS.name}:customAgentCallSchema.library_file_ids"
+    m = re.search(r"library_file_ids\s*:\s*z\.array\(", block)
+    if not m:
+        raise AssertionError(f"{label}: 没找到 `library_file_ids: z.array(` —— 解析器需更新")
+    open_idx = m.end() - 1
+    array_call = _balanced_parens(block, open_idx, label)
+    inner = array_call[1:-1]
+    rest = block[open_idx + len(array_call) :]
+    tail_m = re.match(r"\s*\.max\((\d+)\)\.optional\(\)", rest)
+    if not tail_m:
+        raise AssertionError(f"{label}: `z.array(...)` 后面没跟 `.max(<N>).optional()` —— 解析器需更新")
+    return inner, int(tail_m.group(1))
+
+
 # =============================================================================
 # 对账
 # =============================================================================
@@ -115,7 +172,7 @@ def test_leaf_has_zero_imports() -> None:
 
 
 def test_leaf_reference_types_are_exactly_the_expected_set() -> None:
-    """叶子的 `AGENT_CALL_REFERENCE_TYPES` 值域 —— 消灭镜像前既有的五个类型。"""
+    """叶子的 `AGENT_CALL_REFERENCE_TYPES` 值域 —— 五个既有类型 + P2-L12 新增的 'library'。"""
     types = parse_ts_const_string_array(
         "AGENT_CALL_REFERENCE_TYPES", _read(LEAF_TS), label=LEAF_TS.name
     )
@@ -127,7 +184,7 @@ def test_leaf_reference_types_are_exactly_the_expected_set() -> None:
         f"AGENT_CALL_REFERENCE_TYPES 漂了：\n"
         f"  解析到：{sorted(set(types))}\n"
         f"  期望：  {sorted(EXPECTED_REFERENCE_TYPES)}\n"
-        "→ 消灭镜像这一步不该改变值域本身，只是换个地方存放。"
+        "→ 'library' 缺失 = P2-L12 的加值没有落地；少了别的成员 = 消灭镜像那一步误删了既有值域。"
     )
 
 
@@ -149,6 +206,19 @@ def test_consumer_imports_the_single_source(path: Path) -> None:
     )
 
 
+def test_custom_agent_call_schema_has_library_file_ids_bounded_to_50() -> None:
+    """`customAgentCallSchema.library_file_ids`：数字数组，上限 50（design §5.1「跨 agent」）。"""
+    block = custom_agent_call_schema_block(_read(SCHEMAS_TS))
+    inner, cap = library_file_ids_field(block)
+    assert "z.number()" in inner, (
+        f"library_file_ids 的数组元素类型不是 z.number()（实际：{inner!r}）—— "
+        "library_file.id 是 SQLite INTEGER PRIMARY KEY，schema 侧也应是数字，不是字符串。"
+    )
+    assert cap == 50, (
+        f"library_file_ids 的 .max() 上限是 {cap}，design §5.1 与本任务规格要求 50。"
+    )
+
+
 def test_extractors_fail_loudly_on_missing_structures() -> None:
     """反向用例：抽取器抓不到目标结构时必须抛（否则整道闸会退化成平凡绿）。"""
     with pytest.raises(AssertionError):
@@ -157,3 +227,11 @@ def test_extractors_fail_loudly_on_missing_structures() -> None:
         parse_ts_const_string_array(
             "EMPTY", "export const EMPTY = [] as const\n", label="synthetic"
         )
+    with pytest.raises(AssertionError):
+        custom_agent_call_schema_block("no such marker anywhere in this string")
+    with pytest.raises(AssertionError):
+        custom_agent_call_schema_block("export const customAgentCallSchema = z.object({})")
+    with pytest.raises(AssertionError):
+        library_file_ids_field("agent_id: z.string()")
+    with pytest.raises(AssertionError):
+        library_file_ids_field("library_file_ids: z.array(z.number()).optional()")  # 漏 .max()

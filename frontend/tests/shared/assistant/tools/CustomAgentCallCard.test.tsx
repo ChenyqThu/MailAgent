@@ -92,6 +92,17 @@ describe('CustomAgentCallCard — six states', () => {
     expect(screen.queryByText('取消')).toBeNull()
   })
 
+  test('completed view renders a library reference chip computed from args', () => {
+    render(
+      <CustomAgentCallCard
+        {...props(result('completed', { final_answer: '已完成。' }), {
+          args: { agent_id: 'reader', instruction: '整理资料。', library_file_ids: [42] }
+        })}
+      />
+    )
+    expect(screen.getByText('library:42')).toBeTruthy()
+  })
+
   test('outer approval shows server-fact risk and wires approve', async () => {
     const respond = vi.fn()
     vi.stubGlobal(

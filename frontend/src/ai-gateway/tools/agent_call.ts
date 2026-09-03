@@ -22,7 +22,8 @@ function inputReferences(input: CustomAgentCallInput): AgentCallReference[] {
     ...(input.email_thread_ids ?? []).map((id) => ({ type: 'email' as const, id })),
     ...(input.calendar_event_ids ?? []).map((id) => ({ type: 'calendar' as const, id })),
     ...(input.notion_refs ?? []).map((ref) => ({ type: 'notion' as const, id: ref.object_id })),
-    ...(input.report_ids ?? []).map((id) => ({ type: 'report' as const, id }))
+    ...(input.report_ids ?? []).map((id) => ({ type: 'report' as const, id })),
+    ...(input.library_file_ids ?? []).map((id) => ({ type: 'library' as const, id }))
   ]
 }
 

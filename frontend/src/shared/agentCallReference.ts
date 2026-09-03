@@ -18,7 +18,8 @@ export const AGENT_CALL_REFERENCE_TYPES = [
   'report',
   'notion',
   'email',
-  'calendar'
+  'calendar',
+  'library'
 ] as const
 
 export type AgentCallReferenceType = (typeof AGENT_CALL_REFERENCE_TYPES)[number]

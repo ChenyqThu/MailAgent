@@ -2040,6 +2040,7 @@ export const customAgentCallSchema = z
       .max(50)
       .optional(),
     report_ids: z.array(z.string().min(1).max(256)).max(50).optional(),
+    library_file_ids: z.array(z.number().int().positive()).max(50).optional(),
     user_requested: z.boolean().optional()
   })
   .strict()
