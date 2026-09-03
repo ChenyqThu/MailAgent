@@ -6,7 +6,8 @@ import { readableIpcError } from '@shared/lib/ipcErrors'
 import {
   LIBRARY_IPC,
   type LibraryOpenResult,
-  type LibraryOpenTarget
+  type LibraryOpenTarget,
+  type LibraryUsageResult
 } from '@shared/libraryIpcContract'
 
 type Invoke = (channel: string, ...args: unknown[]) => Promise<unknown>
@@ -33,6 +34,23 @@ export function openLibraryTarget(target: LibraryOpenTarget): Promise<LibraryOpe
 
 export function revealLibraryTarget(target: LibraryOpenTarget): Promise<LibraryOpenResult> {
   return call(LIBRARY_IPC.showInFolder, target)
+}
+
+/** 挂载区删除（design §8.2 F12）：走系统废纸篓，不进库内 `.trash`。
+ *  🔴 服务端对挂载区文件的 `DELETE /library/file/{id}` 恒拒，`mount_id > 0` 的删除只能走这条。 */
+export function trashLibraryTarget(target: LibraryOpenTarget): Promise<LibraryOpenResult> {
+  return call(LIBRARY_IPC.trashItem, target)
+}
+
+/** 设置页「库占用」。非 Electron（web 构建 / 测试）恒 0 —— 那里没有本机库可量。 */
+export async function libraryUsageBytes(): Promise<number> {
+  const invoke = ipcInvoke()
+  if (invoke === null) return 0
+  try {
+    return ((await invoke(LIBRARY_IPC.usage)) as LibraryUsageResult).bytes
+  } catch {
+    return 0
+  }
 }
 
 /** 文件对象 → IPC 目标（库内按 id、投影按 attachment_id；两者都没有 = 不可打开）。 */

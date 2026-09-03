@@ -11,7 +11,12 @@ export const LIBRARY_IPC = {
   /** `shell.openPath`：主进程按目标解析绝对路径，renderer 永不拿到路径。 */
   openPath: 'library:openPath',
   /** `shell.showItemInFolder`，同上。 */
-  showInFolder: 'library:showInFolder'
+  showInFolder: 'library:showInFolder',
+  /** `shell.trashItem`：挂载区的删除走**系统**废纸篓，不进库内 `.trash`（design §8.2 F12）。
+   *  服务端对挂载区文件的 `DELETE /library/file/{id}` 是恒拒的（`E_AUTH_FAILED`），删除只能走这条。 */
+  trashItem: 'library:trashItem',
+  /** 设置页「库占用」：主进程量库根 + `library.db` 的字节数。只回数字，不回路径。 */
+  usage: 'library:usage'
 } as const
 
 /** 打开 / 访达显示的目标。三种寻址各有来源：
@@ -24,6 +29,11 @@ export type LibraryOpenTarget =
   | { kind: 'folder'; path: string }
 
 export type LibraryOpenResult = { ok: true } | { ok: false; code: string; message: string }
+
+/** `library:usage` 的返回。`bytes` 是库根 + 索引库的字节合计；量不到（非 Electron / 目录不存在）恒 0。 */
+export interface LibraryUsageResult {
+  bytes: number
+}
 
 /** 自定义协议：`libpreview://library/<根 slug>/<相对路径>`。页面里的相对引用能在同一个根内解析。 */
 export const LIBRARY_PREVIEW_SCHEME = 'libpreview'

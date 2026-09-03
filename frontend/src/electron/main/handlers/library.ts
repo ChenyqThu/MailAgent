@@ -9,6 +9,7 @@
 // 返回值是 `LibraryOpenResult` 而不是 throw：这两个动作的失败对用户是一句 toast，
 // 不需要 renderer 再从 `Error invoking remote method …` 里剥壳。
 
+import { readdirSync, statSync, type Dirent } from 'node:fs'
 import { join } from 'node:path'
 
 import { ipcMain, shell } from 'electron'
@@ -17,7 +18,8 @@ import type { LibraryMount } from '@shared/api/types/library'
 import {
   LIBRARY_IPC,
   type LibraryOpenResult,
-  type LibraryOpenTarget
+  type LibraryOpenTarget,
+  type LibraryUsageResult
 } from '@shared/libraryIpcContract'
 import { daemonRead } from '../daemon_api'
 import { resolveDataRoot } from '../db'
@@ -150,9 +152,71 @@ export async function openLibraryTarget(
   }
 }
 
+/**
+ * 挂载区删除 —— 走系统废纸篓（design §8.2 F12）。
+ *
+ * 🔴 扩展名黑名单在这里**不适用**：那道闸挡的是「从 App 里执行一个可执行文件」，
+ * 而扔进废纸篓不执行任何东西；套上它反而会让挂载目录里的 `.sh` 删不掉。jail 仍然生效
+ * （`resolveOpenTarget` 解析不出三座 jail 内的路径就抛）。
+ */
+export async function trashLibraryTarget(
+  target: unknown,
+  shellLike: Pick<typeof shell, 'trashItem'> = shell
+): Promise<LibraryOpenResult> {
+  if (!isTarget(target)) return { ok: false, code: 'E_INVALID_ARG', message: 'bad trash target' }
+  try {
+    await shellLike.trashItem(await resolveOpenTarget(target))
+    return { ok: true }
+  } catch (err) {
+    return failure(err)
+  }
+}
+
+/** 递归累加目录字节（best-effort：单项失败跳过，不抛）。 */
+function dirSizeBytes(dir: string): number {
+  let entries: Dirent[]
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  let total = 0
+  for (const entry of entries) {
+    const child = join(dir, String(entry.name))
+    try {
+      if (entry.isDirectory()) total += dirSizeBytes(child)
+      else if (entry.isFile()) total += statSync(child).size
+    } catch {
+      /* 符号链接 / 权限 / 竞态删除：跳过这一项继续累加。 */
+    }
+  }
+  return total
+}
+
+/**
+ * 设置页「库占用」= 库根目录 + `library.db` 三件套（`db` / `-wal` / `-shm`）。
+ *
+ * 邮件附件投影区不算 —— 它的字节归邮件模块，在这里重复计一次会让两处口径打架
+ * （design §1.1：投影方案零增量）。挂载根同样不算：那些文件本来就在用户自己的目录里。
+ */
+export function libraryUsageBytes(): LibraryUsageResult {
+  const dataDir = join(resolveDataRoot(), 'data')
+  let total = dirSizeBytes(join(dataDir, 'library'))
+  for (const suffix of ['', '-wal', '-shm']) {
+    try {
+      total += statSync(join(dataDir, `library.db${suffix}`)).size
+    } catch {
+      /* 还没建库 / 没开 WAL：这一项当 0。 */
+    }
+  }
+  return { bytes: total }
+}
+
 export function registerLibraryHandlers(): void {
   ipcMain.handle(LIBRARY_IPC.openPath, (_evt, target: unknown) => openLibraryTarget(target, 'open'))
   ipcMain.handle(LIBRARY_IPC.showInFolder, (_evt, target: unknown) =>
     openLibraryTarget(target, 'reveal')
   )
+  ipcMain.handle(LIBRARY_IPC.trashItem, (_evt, target: unknown) => trashLibraryTarget(target))
+  ipcMain.handle(LIBRARY_IPC.usage, () => libraryUsageBytes())
 }
