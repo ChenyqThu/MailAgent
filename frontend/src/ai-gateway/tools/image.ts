@@ -18,6 +18,11 @@
 // `GET /api/ai/generated/:fileId` route (server.ts), which reuses `resolveGeneratedFilePath` below
 // so the two sides can never disagree on what a valid id is.
 //
+// 0903 dogfood — 生成的图片**再落一份进资料库**的「对话附件」(`chat-attachments/{YYYY-MM}/`)，
+// 与用户发送的附件同一个落点，这样它能在资料库里被翻到、被检索、被 `library_read` 读到。
+// 归档在 gateway 侧做而不是 renderer 侧：`MAILAGENT_CHAT_DETACHED_RUNS` 默认开，关掉面板 run
+// 照跑，renderer 的 onFinish 会漏；这里字节还在手上，一次做完。三条不变量见 archiveToLibrary。
+//
 // 🔴 `file_id` = `<sessionId>-<uuid>.<ext>` and is validated by a strict regex before it ever
 //    touches a path: no separators, no dots outside the extension → traversal is structurally
 //    impossible, and the belt below (resolved path must stay under generatedDir) is the second
@@ -47,6 +52,8 @@ import type { AgentContextMode } from './policy'
 import { generateImageSchema, type GenerateImageInput } from './schemas'
 // RELATIVE import（不是 @shared alias）—— 同 library.ts：纯 Node 的 poc harness 不解析 tsconfig paths。
 import { GENERATED_IMAGE_ROUTE_PREFIX } from '../../shared/generatedImages'
+import { chatAttachmentParentPath } from '../../shared/chatAttachmentPaths'
+import type { LibrarySource } from '../../shared/libraryConstants'
 
 /** Names of the image tools (eval catalog completeness gate extracts this array). */
 export const GATEWAY_IMAGE_TOOL_NAMES = ['generate_image'] as const
@@ -57,6 +64,19 @@ export const GENERATE_IMAGE_TOOL_NAME = 'generate_image'
  *  in a zero-dependency leaf and is re-exported here so the renderer's markdown layer — which cannot
  *  import this file (node:fs / ai at the top) — recognises the same prefix without a second copy. */
 export { GENERATED_IMAGE_ROUTE_PREFIX }
+
+/** 资料库写面的最小切面 —— generate_image 只需要「把这份字节存进对话附件」这一件事。
+ *  用结构类型而不是整个 `MailAgentDomainClient`：读代码的人一眼看到这条路只能上传，测试也
+ *  只需给一个方法。生产实现就是 gateway 的 domain client（tools/index.ts 传进来）。 */
+export interface ChatAttachmentUploader {
+  libraryUploadBinary(input: {
+    parentPath: string
+    filename: string
+    bytes: Uint8Array
+    source: LibrarySource
+    sourceRef?: string
+  }): Promise<unknown>
+}
 
 /** Everything the tool needs from the host (Electron main); nothing here is body-derived. */
 export interface ImageGenToolDeps {
@@ -69,6 +89,10 @@ export interface ImageGenToolDeps {
   generatedDir: string
   /** The current chat session (folder + file_id namespace). null (session-less chat) → 0. */
   sessionId: number | null
+  /** 资料库归档的出口。**不是** Electron main 给的（那侧没有 domain client）—— tools/index.ts
+   *  在装配时用 `opts.domain` 补上。缺省 / null → 不归档，工具其余行为一字不变（poc harness
+   *  与只关心生成路径的测试就是这条）。 */
+  library?: ChatAttachmentUploader | null
 }
 
 const MIME_TO_EXT: Readonly<Record<string, GeneratedExt>> = {
@@ -302,6 +326,18 @@ function extOf(mediaType: string): GeneratedExt {
   return MIME_TO_EXT[mediaType] ?? 'png'
 }
 
+/** 归档进资料库时用的文件名：`image-<本地时间戳>-<uuid 前 8 位>.<ext>`。
+ *
+ *  🔴 **一个字的 prompt 都不进文件名**。prompt 是模型控制的文本，拼进路径就是一条注入面
+ *  （`../`、`/`、NUL、几千字的长名），而这条路的服务端身份是「用户」，不像 library_write
+ *  那样有写半径兜底。确定性安全名同时还能按时间排序，同一秒的两张图靠 uuid 分开。 */
+export function generatedImageArchiveName(now: Date, uuid: string, ext: GeneratedExt): string {
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  const day = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
+  const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  return `image-${day}-${time}-${uuid.slice(0, 8)}.${ext}`
+}
+
 export function createImageTools(
   collector: GatewayToolAuditCollector,
   guard: ApprovalGuard,
@@ -317,6 +353,42 @@ export function createImageTools(
 ): Record<string, Tool> {
   const sessionId = deps.sessionId ?? 0
   const sessionDir = join(deps.generatedDir, String(sessionId))
+
+  /** 把刚生成的图片再落一份进资料库的「对话附件」，与用户发送的附件同一个落点。
+   *
+   *  三条不变量，改这里前先读：
+   *   · **尽力而为，绝不让工具失败** —— 图片已经生成、已经写进 generatedDir、url 已经能用；
+   *     归档失败（serve-api 没起 / 撞同名 / 磁盘满）只记一条 warning，工具照常返回成功。
+   *   · **服务端身份是「用户」不是 agent** —— 走的是 `POST /library/files` 的 octet-stream
+   *     分支，那一支 hardcode `actor = Actor()`。所以能写 `chat-attachments/` 和 `.png`，
+   *     而 agent 自己写库（library_write / library_append）仍被服务端 `_assert_writable` 关在
+   *     `agent-docs/`、`my-docs/` 与 `WRITE_EXT_ALLOWLIST` 里。🔴 **这不是说 gateway 能随便
+   *     写库**：这条路的父目录、文件名、source 全由本文件算死，模型只控制 prompt，而 prompt
+   *     一个字都不进文件名（见 generatedImageArchiveName）。语义上与 renderer 侧的「发送即
+   *     入库」(`shared/lib/chat-attachments.ts`) 是同一件事：app 代用户归档这次对话的产物。
+   *   · **归档的是原字节** —— 与 generatedDir 里那份、与工具结果 url 指向的那份完全同一份。 */
+  async function archiveToLibrary(
+    fileId: string,
+    uuid: string,
+    ext: GeneratedExt,
+    bytes: Uint8Array
+  ): Promise<void> {
+    const library = deps.library
+    if (!library) return
+    try {
+      await library.libraryUploadBinary({
+        parentPath: chatAttachmentParentPath(),
+        filename: generatedImageArchiveName(new Date(), uuid, ext),
+        bytes,
+        source: 'chat',
+        // design §1.4 的 chat 来源形状（`{sessionId}:{...}`）；后半截用 file_id，回溯得到是
+        // 哪一次生成产出的它。
+        sourceRef: `${sessionId}:${fileId}`
+      })
+    } catch (e) {
+      console.warn('[ai-gateway] generate_image: 归档到资料库失败（图片已生成，不影响结果）', e)
+    }
+  }
 
   async function loadSources(
     refs: readonly string[],
@@ -433,13 +505,16 @@ export function createImageTools(
         await mkdir(sessionDir, { recursive: true })
         const images: GeneratedImageRef[] = []
         for (const file of generated.images) {
-          const fileName = `${randomUUID()}.${extOf(file.mediaType)}`
+          const ext = extOf(file.mediaType)
+          const uuid = randomUUID()
+          const fileName = `${uuid}.${ext}`
           const fileId = `${sessionId}-${fileName}`
           await writeFile(join(sessionDir, fileName), file.uint8Array)
+          await archiveToLibrary(fileId, uuid, ext, file.uint8Array)
           const dims = readImageDimensions(file.uint8Array)
           images.push({
             file_id: fileId,
-            mime: EXT_TO_MIME[extOf(file.mediaType)],
+            mime: EXT_TO_MIME[ext],
             width: dims?.width ?? null,
             height: dims?.height ?? null,
             url: `${GENERATED_IMAGE_ROUTE_PREFIX}${fileId}`

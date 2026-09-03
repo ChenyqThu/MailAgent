@@ -32,7 +32,8 @@
 
 import { resolveApiBaseUrl } from './apiBaseUrl'
 import { isLibraryVersionConflict, type LibraryApi } from '@shared/api/library'
-import { UPLOAD_MAX_BYTES, type TopLevelSlug } from '@shared/libraryConstants'
+import { UPLOAD_MAX_BYTES } from '@shared/libraryConstants'
+import { chatAttachmentParentPath } from '@shared/chatAttachmentPaths'
 
 /** Cap each attachment's text content at this many characters before
  *  prepending it to the prompt.
@@ -279,20 +280,15 @@ export function buildAttachmentBlock(attachments: ReadonlyArray<ChatAttachment>)
 
 // ── P2-L5 发送即入库 ────────────────────────────────────────────────────────────
 
-/** 对话附件的落盘根。写成带类型标注的字面量而不是 `TOP_LEVEL_SLUGS[1]`：常量叶子里改了名
- *  这一行会红，而下标写法只会静默错位。 */
-const CHAT_ATTACHMENTS_SLUG: TopLevelSlug = 'chat-attachments'
+/** 落盘根 + 按月分桶的目录算法都在共用叶子 `@shared/chatAttachmentPaths` 里 —— gateway 侧
+ *  generate_image 的归档要落到同一个地方，而那个文件 import 不了本文件（本文件拉了 renderer
+ *  的 api 层）。这里原样再导出一次，本模块的既有使用者（含测试）不必知道它搬了家。 */
+export { chatAttachmentParentPath }
 
 /** 同名文件的重试次数上限。服务端 `create_file` 撞已存在路径是 409 而不是自动改名
  *  （`keep_attachment` 才带 `_1 _2` 去重），所以「同一个月里重发同名文件」这个常见动作
  *  必须由客户端接住。沿用服务端同款 `_N` 后缀，不发明第二套命名。 */
 const ARCHIVE_RENAME_ATTEMPTS = 5
-
-/** 按月分桶的落盘目录（本地时区 —— 用户找文件时想的是「我这个月发的那份」）。 */
-export function chatAttachmentParentPath(now: Date = new Date()): string {
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  return `${CHAT_ATTACHMENTS_SLUG}/${now.getFullYear()}-${month}`
-}
 
 /** `name (2).ext` 风格的加后缀：`report.docx` + 1 → `report_1.docx`。无扩展名的按整名加。 */
 function suffixedFilename(filename: string, n: number): string {
@@ -302,9 +298,7 @@ function suffixedFilename(filename: string, n: number): string {
 }
 
 /** 入库结果。`ok:false` 只有一种后果：回落「内存 + 文本预置」，chip 标未归档。 */
-export type ChatAttachmentArchiveResult =
-  | { ok: true; fileId: number; path: string }
-  | { ok: false }
+export type ChatAttachmentArchiveResult = { ok: true; fileId: number; path: string } | { ok: false }
 
 /** 入库这一步的注入点。测试给假件；生产给 `createChatAttachmentArchiver` 的产物。
  *  接口只有一个方法是有意的 —— 调用方（附件 adapter）只该知道「把这份字节存起来，

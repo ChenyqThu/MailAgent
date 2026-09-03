@@ -37,6 +37,7 @@ import type {
   SearchResult
 } from '@shared/api/types'
 import type { GroupConfig } from '@shared/chat_model'
+import type { LibrarySource } from '@shared/libraryConstants'
 
 /** A serve-api domain error surfaced to the caller (tool execute turns it into a
  *  tool-error part). Mirrors the http_client ApiError shape ({code, message, hint?,
@@ -748,6 +749,9 @@ export class MailAgentDomainClient {
     opts?: {
       query?: Record<string, QueryValue>
       body?: unknown
+      /** 二进制请求体，`body` 的互斥替身（`POST /library/files` 的 octet-stream 分支是唯一
+       *  用户；它的参数走 query）。响应仍是 envelope JSON，下面的解析路径一个字不变。 */
+      rawBody?: Uint8Array
       signal?: AbortSignal
       /** Extra request headers (e.g. S4's X-Claim-Token). Merged after the Accept / local-token /
        *  Content-Type defaults; a caller-supplied key overrides a default. */
@@ -758,6 +762,7 @@ export class MailAgentDomainClient {
     const headers: Record<string, string> = { Accept: 'application/json' }
     if (this.localToken) headers[LOCAL_TOKEN_HEADER] = this.localToken
     if (opts?.body !== undefined) headers['Content-Type'] = 'application/json'
+    else if (opts?.rawBody !== undefined) headers['Content-Type'] = 'application/octet-stream'
     if (opts?.headers) Object.assign(headers, opts.headers)
 
     let resp: Response
@@ -765,7 +770,13 @@ export class MailAgentDomainClient {
       resp = await this.fetchImpl(url, {
         method,
         headers,
-        body: opts?.body !== undefined ? JSON.stringify(opts.body) : undefined,
+        // 二进制体要显式转一次：lib.dom 的 `BufferSource` 把底层 buffer 钉死成 `ArrayBuffer`，
+        // 而我们手上的是 `Uint8Array<ArrayBufferLike>`（AI SDK / node:fs 给出来的都是这个）——
+        // 运行时是同一件东西，差的只是类型收窄。
+        body:
+          opts?.body !== undefined
+            ? JSON.stringify(opts.body)
+            : (opts?.rawBody as BodyInit | undefined),
         signal: opts?.signal
       })
     } catch (e) {
@@ -2582,6 +2593,38 @@ export class MailAgentDomainClient {
         change_note: input.changeNote ?? null,
         actor: libraryActorWire(actor)
       },
+      signal
+    })
+  }
+
+  /** 二进制入库 —— `POST /library/files` 的 **octet-stream 分支**
+   *  (routers/library.py::library_create_file 的 else 支：参数走 query，请求体是裸字节)。
+   *
+   *  🔴 与上面 / 下面那几个写方法不同，这条**不带 actor**：那个分支服务端 hardcode
+   *  `actor = Actor()`（= 用户），因为它是「app 代用户归档」的通道 —— renderer 的发送即入库、
+   *  gateway 的 generate_image 归档，路径与文件名都由我们自己的代码算出，不是模型给的。
+   *  **这不是给 agent 开的后门**：模型自己写库仍只能走 libraryCreateFile / libraryWriteFile /
+   *  libraryAppendFile 那三条带 actor 的路，服务端照旧把 main agent 关在 agent-docs/ 与
+   *  my-docs/ 里、且只允许 WRITE_EXT_ALLOWLIST 的文本扩展名。
+   *  路径已被占用 → 409 E_VERSION_CONFLICT（与 create 同一条服务端语义）。 */
+  libraryUploadBinary(
+    input: {
+      parentPath: string
+      filename: string
+      bytes: Uint8Array
+      source: LibrarySource
+      sourceRef?: string
+    },
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('POST', '/library/files', {
+      query: {
+        parent_path: input.parentPath,
+        filename: input.filename,
+        source: input.source,
+        source_ref: input.sourceRef
+      },
+      rawBody: input.bytes,
       signal
     })
   }

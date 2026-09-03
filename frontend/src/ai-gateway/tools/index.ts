@@ -762,13 +762,21 @@ export function buildGatewayTools(
   if (opts.imageGen && opts.approvalGuard) {
     Object.assign(
       tools,
-      createImageTools(collector, opts.approvalGuard, opts.imageGen, {
-        a2uiEnabled: opts.a2uiEnabled,
-        approvalMode: opts.approvalMode,
-        toolApprovalPrefs: prefTiers,
-        oneShot: opts.oneShotWrites,
-        contextMode
-      })
+      // `library` 在这里补而不在 Electron main 的 deps 里给：main 那侧没有 domain client，
+      // 装配面有。它只用来把生成的图片再落一份进资料库的「对话附件」（image.ts
+      // archiveToLibrary），失败不影响工具返回。
+      createImageTools(
+        collector,
+        opts.approvalGuard,
+        { ...opts.imageGen, library: opts.domain },
+        {
+          a2uiEnabled: opts.a2uiEnabled,
+          approvalMode: opts.approvalMode,
+          toolApprovalPrefs: prefTiers,
+          oneShot: opts.oneShotWrites,
+          contextMode
+        }
+      )
     )
   }
   // M4a — skill→tool gating after the full set is assembled, behind MAILAGENT_SKILL_SELF_MOUNT.

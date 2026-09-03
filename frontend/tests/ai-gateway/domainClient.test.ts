@@ -12,7 +12,8 @@ interface Recorded {
   url: string
   method?: string
   headers: Record<string, string>
-  body?: string
+  /** JSON 端点是 string，二进制入库那条是裸字节 —— 断言处各自 narrow。 */
+  body?: unknown
 }
 
 function recordingFetch(responder: (url: string) => { status?: number; json: unknown }): {
@@ -25,7 +26,7 @@ function recordingFetch(responder: (url: string) => { status?: number; json: unk
     const headers = Object.fromEntries(
       Object.entries((init?.headers as Record<string, string>) ?? {})
     )
-    calls.push({ url, method: init?.method, headers, body: init?.body as string | undefined })
+    calls.push({ url, method: init?.method, headers, body: init?.body })
     const r = responder(url)
     return new Response(JSON.stringify(r.json), {
       status: r.status ?? 200,
@@ -211,5 +212,28 @@ describe('MailAgentDomainClient — getAssistantIdentity', () => {
     await expect(client(fetchImpl).getAssistantIdentity(ac.signal)).rejects.toMatchObject({
       name: 'AbortError'
     })
+  })
+})
+
+describe('MailAgentDomainClient — libraryUploadBinary（octet-stream 分支）', () => {
+  test('参数走 query、请求体是裸字节、Content-Type 不是 JSON', async () => {
+    const { fetchImpl, calls } = recordingFetch(() => success({ id: 9, path: 'x' }))
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
+    await client(fetchImpl).libraryUploadBinary({
+      parentPath: 'chat-attachments/2026-09',
+      filename: 'image-20260903-101112-0a1b2c3d.png',
+      bytes,
+      source: 'chat',
+      sourceRef: '42:42-uuid.png'
+    })
+    const u = new URL(calls[0].url)
+    expect(u.pathname).toBe('/api/library/files')
+    expect(u.searchParams.get('parent_path')).toBe('chat-attachments/2026-09')
+    expect(u.searchParams.get('filename')).toBe('image-20260903-101112-0a1b2c3d.png')
+    expect(u.searchParams.get('source')).toBe('chat')
+    expect(u.searchParams.get('source_ref')).toBe('42:42-uuid.png')
+    // 🔴 Content-Type 一旦是 application/json，FastAPI 就走文本分支去 parse body → 400。
+    expect(calls[0].headers['Content-Type']).toBe('application/octet-stream')
+    expect(calls[0].body).toBe(bytes)
   })
 })

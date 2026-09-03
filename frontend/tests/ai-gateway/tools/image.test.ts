@@ -21,11 +21,14 @@ import {
   collectAttachedImages,
   createImageTools,
   GATEWAY_IMAGE_TOOL_NAMES,
+  generatedImageArchiveName,
   parseSourceRef,
   readImageDimensions,
   resolveGeneratedFilePath,
+  type ChatAttachmentUploader,
   type ImageGenToolDeps
 } from '../../../src/ai-gateway/tools/image'
+import { chatAttachmentParentPath } from '../../../src/shared/chatAttachmentPaths'
 import { GATEWAY_TOOL_CLASSES } from '../../../src/ai-gateway/tools/policy'
 import { CORE_UNGATED_GATEWAY_TOOLS } from '../../../src/ai-gateway/tools/skill_gating'
 import { ApprovalGuard } from '../../../src/ai-gateway/security/approval'
@@ -487,5 +490,119 @@ describe('readImageDimensions', () => {
   })
   test('unknown bytes → null', () => {
     expect(readImageDimensions(new Uint8Array([1, 2, 3, 4]))).toBeNull()
+  })
+})
+
+// ── 归档进资料库的「对话附件」（0903 dogfood）────────────────────────────────────
+
+/** 记录每次归档调用的假资料库写面（生产实现是 gateway 的 MailAgentDomainClient）。 */
+function fakeLibrary(opts: { fail?: boolean } = {}): {
+  library: ChatAttachmentUploader
+  calls: Array<Parameters<ChatAttachmentUploader['libraryUploadBinary']>[0]>
+} {
+  const calls: Array<Parameters<ChatAttachmentUploader['libraryUploadBinary']>[0]> = []
+  return {
+    calls,
+    library: {
+      libraryUploadBinary: async (input) => {
+        calls.push(input)
+        if (opts.fail) throw new Error('serve-api down')
+        return { id: 7, path: `${input.parentPath}/${input.filename}` }
+      }
+    }
+  }
+}
+
+describe('generate_image — 归档进资料库的「对话附件」', () => {
+  test('原字节落一份到 chat-attachments/{YYYY-MM}，source=chat，source_ref 指回这次生成', async () => {
+    const bytes = pngHeader(512, 512)
+    const { model } = mockModel([bytes])
+    const lib = fakeLibrary()
+    const tool = build(deps({ resolveImageModel: async () => model, library: lib.library }))
+    const out = (await run(tool, { prompt: '一只柴犬', n: 1, source_images: [] })) as {
+      images: Array<{ file_id: string }>
+    }
+
+    expect(lib.calls).toHaveLength(1)
+    const call = lib.calls[0]!
+    expect(call.parentPath).toMatch(/^chat-attachments\/\d{4}-\d{2}$/)
+    expect(call.parentPath).toBe(chatAttachmentParentPath())
+    expect(call.source).toBe('chat')
+    expect(call.sourceRef).toBe(`42:${out.images[0]!.file_id}`)
+    // 归档的是原字节 —— 与 generatedDir 里那份、与工具结果 url 指向的那份完全同一份。
+    expect(call.bytes).toEqual(bytes)
+    const resolved = resolveGeneratedFilePath(dir, out.images[0]!.file_id)!
+    expect(new Uint8Array(await readFile(resolved.path))).toEqual(call.bytes)
+  })
+
+  test('n=2 → 两张各归档一次，各自的 source_ref 指向自己的 file_id', async () => {
+    const { model } = mockModel([pngHeader(64, 64), pngHeader(32, 32)])
+    const lib = fakeLibrary()
+    const tool = build(deps({ resolveImageModel: async () => model, library: lib.library }))
+    const out = (await run(tool, { prompt: 'p', n: 2, source_images: [] })) as {
+      images: Array<{ file_id: string }>
+    }
+    expect(lib.calls.map((c) => c.sourceRef)).toEqual(out.images.map((i) => `42:${i.file_id}`))
+    expect(lib.calls[0]!.filename).not.toBe(lib.calls[1]!.filename)
+  })
+
+  test('归档失败只记一条 warning：工具照常返回，文件照常在盘上', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { model } = mockModel([pngHeader(64, 64)])
+      const lib = fakeLibrary({ fail: true })
+      const tool = build(deps({ resolveImageModel: async () => model, library: lib.library }))
+      const out = (await run(tool, { prompt: 'p', n: 1, source_images: [] })) as {
+        images: Array<{ file_id: string; url: string }>
+      }
+      expect(out.images).toHaveLength(1)
+      // 图片已经生成、已经写盘、url 已经能用 —— 归档只是尽力而为。
+      const resolved = resolveGeneratedFilePath(dir, out.images[0]!.file_id)!
+      expect(new Uint8Array(await readFile(resolved.path))).toEqual(pngHeader(64, 64))
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0]![0])).toContain('generate_image')
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  test('没有资料库写面（deps.library 缺省）→ 不归档、不告警，其余行为一字不变', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const tool = build(deps())
+      const out = (await run(tool, { prompt: 'p', n: 1, source_images: [] })) as {
+        images: Array<{ file_id: string }>
+      }
+      expect(out.images).toHaveLength(1)
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  test('文件名里一个 prompt 字符都没有（prompt 是模型控制的文本，不进路径）', async () => {
+    const lib = fakeLibrary()
+    const tool = build(deps({ library: lib.library }))
+    await run(tool, {
+      prompt: '../../../etc/passwd 一只柴犬/subdir',
+      n: 1,
+      source_images: []
+    })
+    const name = lib.calls[0]!.filename
+    expect(name).toMatch(/^image-\d{8}-\d{6}-[0-9a-f]{8}\.png$/)
+    expect(name).not.toContain('passwd')
+    expect(name).not.toContain('柴犬')
+    expect(name).not.toContain('/')
+  })
+})
+
+describe('generatedImageArchiveName', () => {
+  test('确定性安全名：本地时间戳（补零）+ uuid 前 8 位 + 扩展名', () => {
+    const name = generatedImageArchiveName(
+      new Date(2026, 0, 3, 4, 5, 6),
+      '0a1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d',
+      'webp'
+    )
+    expect(name).toBe('image-20260103-040506-0a1b2c3d.webp')
   })
 })
