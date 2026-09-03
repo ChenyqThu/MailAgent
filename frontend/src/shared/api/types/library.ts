@@ -132,6 +132,8 @@ export interface LibraryFolderPage {
   total: number
   limit: number
   offset: number
+  /** 服务端算好的「还有下一页」——别用 `offset + files.length < total` 自己推。 */
+  has_more: boolean
 }
 
 /** `GET /library/file/{id}` —— 文件对象 + 正文。`content` 只对文本类且 ≤2 MB 给，

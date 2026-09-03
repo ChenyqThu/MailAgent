@@ -1584,6 +1584,19 @@ async def run_service():
     except Exception as e:
         logger.warning(f"[db_safety] 启动安全检查异常 (不阻断启动): {e}")
 
+    # library.db 单独走一次 critical=False: 它只是索引 (正文 SSoT 是文件系统),
+    # 坏了重扫即可 —— 不能让它把 App 拦在门外。进备份清单, 不写 marker、不 fail-fast。
+    try:
+        from src.library.db import resolve_library_db_path
+
+        run_startup_db_safety(
+            [resolve_library_db_path(config.sync_store_db_path)],
+            Path(DATA_ROOT) / "data" / "backups",
+            critical=False,
+        )
+    except Exception as e:
+        logger.warning(f"[db_safety] library.db 安全检查异常 (不阻断启动): {e}")
+
     app = EmailNotionSyncApp()
 
     # mem guard (MAILAGENT_MEM_LIMIT_MB): RSS 超限 → 诊断 dump + 优雅退出 +

@@ -58,6 +58,10 @@ export interface LibraryCreateTextFile {
   content: string
   /** 缺省 `user`（人在 UI 里新建）。 */
   source?: LibrarySource
+  /** 派生来源 —— 「另存解析版为 markdown」传原文件 id 的字符串形式（design §2.3 F2 的
+   *  「派生自 X」回链靠它）。不传就不发：`CreateTextRequest` 是 `extra="forbid"`，
+   *  发一个服务端没声明的键会被 422 打回，不是被忽略。 */
+  source_ref?: string
   change_note?: string
 }
 

@@ -427,7 +427,7 @@ class LibraryService:
             return {
                 "path": PROJECTION_SLUG, "is_projection": True, "files": [],
                 "folders": [{"name": m["month"], "path": f"{PROJECTION_SLUG}/{m['month']}", "count": m["count"]} for m in months],
-                "total": 0, "offset": offset, "limit": limit,
+                "total": 0, "offset": offset, "limit": limit, "has_more": False,
             }
         if len(parts) != 2:
             raise LibraryError("E_NOT_FOUND", f"unknown projection folder: {rel}")
@@ -521,7 +521,7 @@ class LibraryService:
             rows, total = self.repo.list_trash(conn, offset=offset, limit=limit)
             return {
                 "path": TRASH_SLUG, "files": [self._file_dict(r, self.root) for r in rows], "folders": [],
-                "total": total, "offset": offset, "limit": limit,
+                "total": total, "offset": offset, "limit": limit, "has_more": offset + len(rows) < total,
             }
         finally:
             conn.close()
