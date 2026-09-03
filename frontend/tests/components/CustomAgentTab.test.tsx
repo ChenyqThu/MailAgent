@@ -975,7 +975,8 @@ describe('CustomAgentDrawer — P2 tool_policy 按需发送（NULL 行不被静�
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
     const patch = mockSetConfig.mock.calls[0][1]
     expect('tool_policy' in patch).toBe(true)
-    expect(patch.tool_policy).toEqual({ v: 1, allowed_tools: ['email_get'] })
+    // task 09-02 起每次重建 tool_policy 恒显式写 grant_sessions（NULL 行缺省 own）。
+    expect(patch.tool_policy).toEqual({ v: 1, allowed_tools: ['email_get'], grant_sessions: 'own' })
   })
 
   // MCP connector PR4 T3 —— grant_connectors 进抽屉 state（第七「外部服务」卡）：打开预填、
@@ -1310,7 +1311,7 @@ describe('CustomAgentDrawer — 自动化策略（S5 W5b）', () => {
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
     const patch = mockSetConfig.mock.calls[0][1]
     // 触碰 grant = 触碰 tool_policy；NULL 行只带 grant_exec，allowed_tools 缺省（默认安全集不物化）
-    expect(patch.tool_policy).toEqual({ v: 1, grant_exec: true })
+    expect(patch.tool_policy).toEqual({ v: 1, grant_exec: true, grant_sessions: 'own' })
   })
 
   test('grant_exec 取消确认 → 开关不翻，保存不带 tool_policy', async () => {
@@ -1376,7 +1377,11 @@ describe('CustomAgentDrawer — web grant 三档（S6 W3-3）', () => {
     fireEvent.click(screen.getByText('保存'))
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
     // NULL 行只带 grant_web；allowed_tools / skills 缺省（默认集不物化）
-    expect(mockSetConfig.mock.calls[0][1].tool_policy).toEqual({ v: 1, grant_web: 'gated' })
+    expect(mockSetConfig.mock.calls[0][1].tool_policy).toEqual({
+      v: 1,
+      grant_web: 'gated',
+      grant_sessions: 'own'
+    })
   })
 
   test('open 档：红样式全开放警示 + email_filter（untrusted_trigger）叠加最大暴露面警示', async () => {
@@ -1431,6 +1436,7 @@ describe('CustomAgentDrawer — web grant 三档（S6 W3-3）', () => {
       allowed_tools: ['email_list_filter'],
       grant_exec: true,
       grant_web: 'gated',
+      grant_sessions: 'own',
       skills: ['email']
     })
   })
@@ -1462,7 +1468,11 @@ describe('CustomAgentDrawer — 工具分组（R3）', () => {
     expect(screen.getByRole('button', { name: 'email_get', pressed: false })).toBeTruthy()
     fireEvent.click(screen.getByText('保存'))
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
-    expect(mockSetConfig.mock.calls[0][1].tool_policy).toEqual({ v: 1, allowed_tools: [] })
+    expect(mockSetConfig.mock.calls[0][1].tool_policy).toEqual({
+      v: 1,
+      allowed_tools: [],
+      grant_sessions: 'own'
+    })
   })
 
   test('组级全选：「其他」组全选 → compose_reply 加入选择（组内 chip 仍可单控）', async () => {
@@ -1478,20 +1488,24 @@ describe('CustomAgentDrawer — 工具分组（R3）', () => {
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
     expect(mockSetConfig.mock.calls[0][1].tool_policy).toEqual({
       v: 1,
-      allowed_tools: ['email_list_filter', 'email_get', 'compose_reply']
+      allowed_tools: ['email_list_filter', 'email_get', 'compose_reply'],
+      grant_sessions: 'own'
     })
   })
 })
 
 describe('CustomAgentDrawer — 六能力卡（W5）', () => {
-  test('默认视图显示六张卡、知识默认关闭，并保留高级原子工具入口', async () => {
+  test('默认视图显示能力卡（含会话）、知识默认关闭、会话默认只读自己，并保留高级原子工具入口', async () => {
     renderUi(
       <CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />
     )
-    for (const title of ['邮件', '日历', '知识与会话', '报告', 'Web', '文件与命令']) {
+    for (const title of ['邮件', '日历', '知识', '会话', '报告', 'Web', '文件与命令']) {
       expect(await screen.findByRole('heading', { name: title })).toBeTruthy()
     }
-    expect(screen.getByRole('button', { name: '知识与会话: 关闭', pressed: true })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '知识: 关闭', pressed: true })).toBeTruthy()
+    // task 09-02 — 会话卡是 grant 维度：默认 own，且不受 toolOptions 就位与否影响（无 disabled）。
+    expect(screen.getByRole('button', { name: '会话: 只读自己', pressed: true })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '会话: 读全部', pressed: false })).toBeTruthy()
     expect(screen.getByText('高级：逐工具微调')).toBeTruthy()
   })
 
@@ -1619,6 +1633,7 @@ describe('CustomAgentDrawer — skill 挂载（S6 W3-3）', () => {
     // 触碰挂载 → 显式列表（defaults email/search/report + dms-approval）；allowed_tools 缺省（NULL 不物化）
     expect(mockSetConfig.mock.calls[0][1].tool_policy).toEqual({
       v: 1,
+      grant_sessions: 'own',
       skills: ['email', 'search', 'report', 'dms-approval']
     })
   })

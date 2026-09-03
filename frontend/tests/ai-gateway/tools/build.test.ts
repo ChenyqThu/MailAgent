@@ -24,7 +24,7 @@ describe('buildGatewayTools', () => {
       ...base,
       sessionProvenanceEnabled: false,
       contextMode: 'cron_headless',
-      agentRunContext: { agentId: 'a', allowedTools: ['chat_session_list'], skills: [] }
+      agentRunContext: { agentId: 'a', allowedTools: ['agent_catalog_list'], skills: [] }
     })
     expect(off.agent_catalog_list).toBeUndefined()
     expect(off.agent_catalog_get).toBeUndefined()
@@ -32,7 +32,7 @@ describe('buildGatewayTools', () => {
       ...base,
       sessionProvenanceEnabled: true,
       contextMode: 'cron_headless',
-      agentRunContext: { agentId: 'a', allowedTools: ['chat_session_list'], skills: [] }
+      agentRunContext: { agentId: 'a', allowedTools: ['agent_catalog_list'], skills: [] }
     })
     expect(on.agent_catalog_list).toBeDefined()
     expect(on.agent_catalog_get).toBeDefined()

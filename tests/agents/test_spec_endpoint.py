@@ -268,6 +268,30 @@ def test_spec_grant_web_projection(env, client):
     assert "grantWeb" not in d4["toolPolicy"] and "grantExec" not in d4["toolPolicy"]
 
 
+def test_spec_grant_sessions_projection(env, client):
+    """task 09-02：grantSessions 镜像 grantWeb 的「仅非默认值输出」—— 'all' 才投影；显式 own /
+    缺省键不出现。键缺席的存量行按迁移规则：allowed_tools 含 chat_session_list → 'all'。"""
+    _seed_custom(env.store, agent_id="s_all", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": ["email_get"], "grant_sessions": "all"})
+    jid = _running_job(env.repo, agent_id="s_all", token="sa")
+    d = client.get(f"/api/agent-runs/{jid}/spec", headers={"X-Claim-Token": "sa"}).json()["data"]
+    assert d["toolPolicy"] == {"allowedTools": ["email_get"], "grantSessions": "all",
+                               "skills": _DEFAULT_SKILLS}
+
+    _seed_custom(env.store, agent_id="s_own", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": ["email_get"], "grant_sessions": "own"})
+    jid2 = _running_job(env.repo, agent_id="s_own", token="so")
+    d2 = client.get(f"/api/agent-runs/{jid2}/spec", headers={"X-Claim-Token": "so"}).json()["data"]
+    assert d2["toolPolicy"] == {"allowedTools": ["email_get"], "skills": _DEFAULT_SKILLS}
+
+    # 存量行（键缺席）：旧 knowledge=on 的 allowed_tools 带 chat_session_list → 投影 all。
+    _seed_custom(env.store, agent_id="s_legacy", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": ["email_get", "chat_session_list"]})
+    jid3 = _running_job(env.repo, agent_id="s_legacy", token="sl")
+    d3 = client.get(f"/api/agent-runs/{jid3}/spec", headers={"X-Claim-Token": "sl"}).json()["data"]
+    assert d3["toolPolicy"]["grantSessions"] == "all"
+
+
 def test_spec_grant_connectors_projection(env, client):
     """MCP connector PR3（PRD 决策 5 + grill Q3=B）：grantConnectors 镜像 grantWeb 的
     「仅非默认值输出」—— 非空才投影为普通 object；缺省 / 显式 {} / 坏值（读侧宽容 →

@@ -141,12 +141,24 @@ class Budget:
 # tool_policy_json v1 允许键（additive：S4 = allowed_tools；S5 ADR-004 §4.1 += grant_exec；
 # S6 W3 ADR-004 rev3.1 D6 += grant_web + skills；MCP connector PR3 += grant_connectors）。
 _TOOL_POLICY_KEYS = frozenset(
-    {"v", "allowed_tools", "grant_exec", "grant_web", "skills", "grant_connectors"}
+    {
+        "v", "allowed_tools", "grant_exec", "grant_web", "skills", "grant_connectors",
+        "grant_sessions",
+    }
 )
 
 # grant_web 三态枚举（ADR-004 rev3.1 §3.1：off=headless 不注册 / gated=域名白名单免卡 /
 # open=全开放免卡）。非法态「web 关着却全开放」结构上不可表示。
 _WEB_GRANT_VALUES = ("off", "gated", "open")
+
+# grant_sessions 两态（task 09-02 会话读取分档）：own = 三个 chat_session_* 工具只能读**自己**
+# （agent_id = 当前 agent）的历史；all = 可读全部 agent 的历史。会话工具对 custom agent 恒注册，
+# 这把 grant 只管读取半径，不管注册。
+_SESSIONS_GRANT_VALUES = ("own", "all")
+
+# 存量迁移判据：旧模型里「能读全部」= allowed_tools 含 chat_session_list（gateway 曾据此置
+# allowAllHistory）。键缺席的行按它取值，避免升级后已授全量的 agent 静默降成 own。
+_LEGACY_ALL_HISTORY_TOOL = "chat_session_list"
 
 # grant_connectors 的 crud 天花板**有效**值域（MCP connector PRD 决策 5 + grill Q3=B）：
 # read < write < update 单调递增，**这就是 crud 的全部值域**（08-03 起 delete 档位整体退役：
@@ -164,6 +176,8 @@ class ToolPolicy:
     默认安全集（ADR-004 §5.1，对 ADR-003 D6「NULL=不收窄」的显式修订）；``()`` = owner 显式
     空集（verbatim 透传）。``grant_exec`` 仅字面 ``True`` 有效（投影仅当 True 才输出）；
     ``grant_web`` 仅字面 ``'gated'``/``'open'`` 有效（缺省 ``'off'``，投影仅非 off 才输出）。
+    ``grant_sessions``（会话读取半径）：``'own'``（缺省）/ ``'all'``（投影仅 all 才输出）；
+    键缺席时按存量规则取值（``allowed_tools`` 含 ``chat_session_list`` → ``'all'``）。
     ``skills``（S6 W3 rev3.1 §3.2/§5.1 —— per-agent skill 挂载列表，**收窄面**非 grants 键）：
     ``None`` = 未配置 → 投影层落 ``DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS`` 默认挂载集；
     ``()`` = owner 显式零挂载（verbatim，门控工具全缺席）。挂载词汇 strict-effect：未知/未装
@@ -179,6 +193,7 @@ class ToolPolicy:
     grant_web: str = "off"
     skills: Optional[Tuple[str, ...]] = None
     grant_connectors: Tuple[Tuple[str, str], ...] = ()
+    grant_sessions: str = "own"
 
 
 def _as_dict(raw: Union[str, dict, None]) -> Optional[dict]:
@@ -617,6 +632,8 @@ def parse_tool_policy(raw: Union[str, dict, None]) -> ToolPolicy:
     - ``grant_exec``：缺省 → False；必须 JSON boolean（``"yes"`` / ``1`` → 拒）
     - ``grant_web``：缺省 → ``'off'``；必须 ∈ ``('off','gated','open')`` 字面量
       （``True`` / ``1`` / ``"yes"`` → 拒，镜像 grant_exec 严格化）
+    - ``grant_sessions``：必须 ∈ ``('own','all')`` 字面量（同样严格）；缺省 → 存量规则
+      （``allowed_tools`` 含 ``chat_session_list`` → ``'all'``，否则 ``'own'``）
     - ``skills``：缺省/null → None（未配置 → 投影默认挂载集）；list[str]（滤空串）→ tuple
       （显式 ``[]`` → ``()`` 零挂载）；其它类型 → 拒（``"email"`` 裸串 → 拒，镜像 allowed_tools）
     - ``grant_connectors``：缺省/null → ``()``；必须是 ``{connector_id: 天花板}`` object
@@ -654,6 +671,13 @@ def parse_tool_policy(raw: Union[str, dict, None]) -> ToolPolicy:
         raise ToolPolicyValidationError(
             f"grant_web must be one of {list(_WEB_GRANT_VALUES)}"
         )
+    grant_sessions = data.get("grant_sessions")
+    if grant_sessions is None:
+        grant_sessions = legacy_sessions_grant(allowed)
+    elif not isinstance(grant_sessions, str) or grant_sessions not in _SESSIONS_GRANT_VALUES:
+        raise ToolPolicyValidationError(
+            f"grant_sessions must be one of {list(_SESSIONS_GRANT_VALUES)}"
+        )
     skills_raw = data.get("skills")
     if skills_raw is None:
         skills: Optional[Tuple[str, ...]] = None
@@ -690,7 +714,15 @@ def parse_tool_policy(raw: Union[str, dict, None]) -> ToolPolicy:
         grant_web=grant_web,
         skills=skills,
         grant_connectors=connectors,
+        grant_sessions=grant_sessions,
     )
+
+
+def legacy_sessions_grant(allowed_tools: Optional[Tuple[str, ...]]) -> str:
+    """``grant_sessions`` 键缺席时的取值（存量迁移，唯一实现点：parse 与 wire 读投影共用）。"""
+    if allowed_tools is not None and _LEGACY_ALL_HISTORY_TOOL in allowed_tools:
+        return "all"
+    return "own"
 
 
 def validate_agent_config_patch(patch: dict) -> None:

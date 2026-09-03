@@ -5,6 +5,7 @@ import {
   ChevronDown,
   FileText,
   Globe2,
+  History,
   Mail,
   Network,
   Plug,
@@ -26,6 +27,7 @@ import {
   deriveHeadlessMode,
   type ConnectorGrantMap,
   type ConnectorGrantValue,
+  type SessionsGrant,
   type WebGrant
 } from './shared'
 import { DangerBlock } from './DangerBlock'
@@ -192,6 +194,8 @@ export function CapabilityCards({
   onGrantWebChange,
   grantExec,
   onGrantExecChange,
+  grantSessions,
+  onGrantSessionsChange,
   agentTitle,
   triggerKind,
   flags,
@@ -206,6 +210,9 @@ export function CapabilityCards({
   onGrantWebChange: (next: WebGrant) => void
   grantExec: boolean
   onGrantExecChange: (next: boolean) => void
+  /** task 09-02 — 会话读取半径（own = 只读自己的历史 / all = 读全部 agent 的历史）。 */
+  grantSessions: SessionsGrant
+  onGrantSessionsChange: (next: SessionsGrant) => void
   agentTitle: string
   triggerKind: string | null
   flags: ChatOpennessFlags
@@ -227,9 +234,10 @@ export function CapabilityCards({
       deriveCustomAgentCapabilities({
         allowedTools: selectedTools,
         grantWeb,
-        grantExec
+        grantExec,
+        grantSessions
       }),
-    [selectedTools, grantWeb, grantExec]
+    [selectedTools, grantWeb, grantExec, grantSessions]
   )
 
   const update = (patch: CustomAgentCapabilityPatch): void => {
@@ -242,12 +250,15 @@ export function CapabilityCards({
       onSelectedToolsChange(
         (currentTools) =>
           applyCustomAgentCapabilityPatch(
-            { allowedTools: currentTools, grantWeb, grantExec },
+            { allowedTools: currentTools, grantWeb, grantExec, grantSessions },
             patch
           ).allowedTools
       )
     }
     if (patch.web !== undefined && patch.web !== grantWeb) onGrantWebChange(patch.web)
+    if (patch.sessions !== undefined && patch.sessions !== grantSessions) {
+      onGrantSessionsChange(patch.sessions)
+    }
     if (patch.files !== undefined && (patch.files === 'on') !== grantExec) {
       onGrantExecChange(patch.files === 'on')
     }
@@ -379,6 +390,23 @@ export function CapabilityCards({
             label={(tier) => t(`agents.custom.capabilityCards.knowledge.tier.${tier}`)}
             onChange={(knowledge) => update({ knowledge })}
           />
+        </CapabilityCard>
+
+        <CapabilityCard
+          icon={<History size={16} />}
+          title={t('agents.custom.capabilityCards.sessions.title')}
+          description={t('agents.custom.capabilityCards.sessions.description')}
+        >
+          <TierButtons
+            tiers={CUSTOM_AGENT_CAPABILITY_TIERS.sessions}
+            value={derived.profile.sessions}
+            groupLabel={t('agents.custom.capabilityCards.sessions.title')}
+            label={(tier) => t(`agents.custom.capabilityCards.sessions.tier.${tier}`)}
+            onChange={(sessions) => update({ sessions })}
+          />
+          {grantSessions === 'all' && (
+            <Guidance>{t('agents.custom.capabilityCards.sessions.allHint')}</Guidance>
+          )}
         </CapabilityCard>
 
         <CapabilityCard

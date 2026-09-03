@@ -1537,9 +1537,21 @@ export class MailAgentDomainClient {
   }
 
   /** chat_session_get — all messages of one session (chronological). GET
-   *  /chat/sessions/{id}/messages. Missing session → [] (the endpoint reads gracefully). */
-  getSessionMessages(sessionId: number, signal?: AbortSignal): Promise<DomainChatMessage[]> {
+   *  /chat/sessions/{id}/messages. Missing session → [] (the endpoint reads gracefully); an
+   *  out-of-scope session under an own-radius `scope` → E_NOT_FOUND (server-enforced, same
+   *  headers as list/search). */
+  getSessionMessages(
+    sessionId: number,
+    signal?: AbortSignal,
+    scope?: { currentAgentId: string; allowAllHistory: boolean }
+  ): Promise<DomainChatMessage[]> {
     return this._req<DomainChatMessage[]>('GET', `/chat/sessions/${sessionId}/messages`, {
+      headers: scope
+        ? {
+            'X-MailAgent-Agent-Id': scope.currentAgentId,
+            'X-MailAgent-Allow-All-History': scope.allowAllHistory ? '1' : '0'
+          }
+        : undefined,
       signal
     })
   }

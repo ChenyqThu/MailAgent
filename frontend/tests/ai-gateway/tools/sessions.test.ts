@@ -10,7 +10,27 @@ import {
   GATEWAY_SESSION_TOOL_NAMES
 } from '../../../src/ai-gateway/tools/sessions'
 import type { GatewayToolAuditCollector } from '../../../src/ai-gateway/tools/types'
+import { MailAgentDomainClient } from '../../../src/ai-gateway/python/domainClient'
 import { mockDomain, okEnvelope, runTool } from './_helpers'
+
+/** A domain client that records the request headers of every call (mockDomain drops them). */
+function headerRecordingDomain(): {
+  domain: MailAgentDomainClient
+  seen: Array<{ url: string; headers: Record<string, string> }>
+} {
+  const seen: Array<{ url: string; headers: Record<string, string> }> = []
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    seen.push({ url: String(input), headers: { ...(init?.headers as Record<string, string>) } })
+    return new Response(JSON.stringify(okEnvelope([]).json), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    })
+  }) as unknown as typeof fetch
+  return {
+    domain: new MailAgentDomainClient({ baseUrl: 'http://127.0.0.1:8200/api', localToken: 't', fetchImpl }),
+    seen
+  }
+}
 
 const SESSION_ROW = {
   id: 5,
@@ -182,6 +202,84 @@ describe('chat_session_search', () => {
     expect(sn?.snippet).toContain('UNTRUSTED_CHAT_HISTORY_START session_id=9')
     expect(sn?.snippet).toContain('redis 超时根因是连接池')
     expect(sn?.snippet.endsWith('UNTRUSTED_CHAT_HISTORY_END')).toBe(true)
+  })
+})
+
+// ── task 09-02 — read radius: the SAME scope headers on all three tools (get included), driven
+//    by the grant_sessions key of the run context, never by allowed_tools ────────────────────────
+
+describe('chat-session scope headers (grant_sessions)', () => {
+  const scopeOf = (headers: Record<string, string>) => ({
+    agent: headers['X-MailAgent-Agent-Id'],
+    all: headers['X-MailAgent-Allow-All-History']
+  })
+
+  test('createSessionTools: own radius stamps Agent-Id + Allow-All-History=0 on list/search/get', async () => {
+    const { domain, seen } = headerRecordingDomain()
+    const tools = createSessionTools(domain, [], { currentAgentId: 'dms', allowAllHistory: false })
+    await runTool(tools.chat_session_list, {})
+    await runTool(tools.chat_session_search, { query: 'redis' })
+    await runTool(tools.chat_session_get, { session_id: 31 })
+    expect(seen).toHaveLength(3)
+    for (const call of seen) expect(scopeOf(call.headers)).toEqual({ agent: 'dms', all: '0' })
+    expect(seen[2]?.url).toContain('/chat/sessions/31/messages')
+  })
+
+  test('createSessionTools: allowAllHistory → Allow-All-History=1 on get too', async () => {
+    const { domain, seen } = headerRecordingDomain()
+    const tools = createSessionTools(domain, [], { currentAgentId: 'dms', allowAllHistory: true })
+    await runTool(tools.chat_session_get, { session_id: 31 })
+    expect(scopeOf(seen[0]!.headers)).toEqual({ agent: 'dms', all: '1' })
+  })
+
+  test('manual chat (no currentAgentId) sends no scope headers at all', async () => {
+    const { domain, seen } = headerRecordingDomain()
+    const tools = createSessionTools(domain, [])
+    await runTool(tools.chat_session_get, { session_id: 31 })
+    expect(seen[0]?.headers['X-MailAgent-Agent-Id']).toBeUndefined()
+    expect(seen[0]?.headers['X-MailAgent-Allow-All-History']).toBeUndefined()
+  })
+
+  test('buildGatewayTools: the radius is the run context grantSessions, NOT allowed_tools', async () => {
+    // own (grantSessions absent) — even with the list tool in allowed_tools (the old判据).
+    const own = headerRecordingDomain()
+    const ownTools = buildGatewayTools({
+      domain: own.domain,
+      sessionToolsEnabled: true,
+      contextMode: 'cron_headless',
+      agentRunContext: { agentId: 'dms', allowedTools: ['chat_session_list'], skills: [] }
+    })
+    await runTool(ownTools.chat_session_get!, { session_id: 31 })
+    expect(scopeOf(own.seen[0]!.headers)).toEqual({ agent: 'dms', all: '0' })
+    // all — grantSessions:'all' with an EMPTY allowed_tools.
+    const all = headerRecordingDomain()
+    const allTools = buildGatewayTools({
+      domain: all.domain,
+      sessionToolsEnabled: true,
+      contextMode: 'cron_headless',
+      agentRunContext: { agentId: 'dms', allowedTools: [], skills: [], grantSessions: 'all' }
+    })
+    await runTool(allTools.chat_session_get!, { session_id: 31 })
+    expect(scopeOf(all.seen[0]!.headers)).toEqual({ agent: 'dms', all: '1' })
+  })
+
+  test('chat_session_get surfaces the serve-api typed scope error (E_NOT_FOUND), not []', async () => {
+    const domain = mockDomain((url) =>
+      /\/chat\/sessions\/31\/messages/.test(url)
+        ? {
+            status: 404,
+            json: {
+              status: 'error',
+              data: null,
+              error: { code: 'E_NOT_FOUND', message: "session 31 is outside this agent's history scope" }
+            }
+          }
+        : okEnvelope([])
+    )
+    const tools = createSessionTools(domain, [], { currentAgentId: 'dms', allowAllHistory: false })
+    await expect(runTool(tools.chat_session_get, { session_id: 31 })).rejects.toMatchObject({
+      code: 'E_NOT_FOUND'
+    })
   })
 })
 

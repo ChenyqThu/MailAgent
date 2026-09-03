@@ -14,16 +14,14 @@ import { CUSTOM_AGENT_MANAGED_ALLOWED_TOOLS } from '../../src/shared/lib/customA
 import enCommon from '../../src/shared/i18n/locales/en-US/common.json'
 import zhCommon from '../../src/shared/i18n/locales/zh-CN/common.json'
 
-// 镜像 src/api/routers/agent_runs.py::HEADLESS_TOOL_OPTIONS（35 个，/tool-options 契约冻结）。
+// 镜像 src/api/routers/agent_runs.py::HEADLESS_TOOL_OPTIONS（33 个，/tool-options 契约冻结；
+// task 09-02 起 chat_session_* 三件结构性缺席 —— 恒注册 + grant_sessions 管读取半径）。
 // 后端加工具 → 此 fixture 必须跟着补（连同 TOOL_GROUPS 归属），否则首个用例红。
 const HEADLESS_TOOL_OPTIONS: AgentRunToolOption[] = [
   { name: 'agent_profile_history', class: 'read' },
   { name: 'agent_profile_read', class: 'read' },
   { name: 'calendar_event_get', class: 'read' },
   { name: 'calendar_events_list', class: 'read' },
-  { name: 'chat_session_get', class: 'read' },
-  { name: 'chat_session_list', class: 'read' },
-  { name: 'chat_session_search', class: 'read' },
   { name: 'discover_skills', class: 'read' },
   { name: 'email_attachment_text', class: 'read' },
   { name: 'email_body', class: 'read' },

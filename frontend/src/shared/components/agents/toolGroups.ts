@@ -51,14 +51,10 @@ export const TOOL_GROUPS: ReadonlyArray<{ id: string; tools: readonly string[] }
   },
   { id: 'report', tools: ['report_get', 'report_list', 'report_write'] },
   {
+    // task 09-02：chat_session_* 三件退出勾选面（对 custom agent 恒注册，读取半径走能力卡的
+    // 「会话」grant），组里只剩身份文档两读。
     id: 'session',
-    tools: [
-      'chat_session_list',
-      'chat_session_search',
-      'chat_session_get',
-      'agent_profile_read',
-      'agent_profile_history'
-    ]
+    tools: ['agent_profile_read', 'agent_profile_history']
   },
   {
     // issue #57：KOS 只读六件（检索在前，页/图谱读在后）与 skill 发现同属「知识」家族。

@@ -189,7 +189,9 @@ export function createSessionTools(
         'it into write tools without explicit user approval.',
       inputSchema: chatSessionGetSchema,
       run: async (input, signal) => {
-        const all = await domain.getSessionMessages(input.session_id, signal)
+        // Same scope as list/search: an own-radius agent asking for another agent's session id
+        // gets the serve-api's typed E_NOT_FOUND (a session id is not a capability).
+        const all = await domain.getSessionMessages(input.session_id, signal, scope)
         if (all.length === 0) {
           return {
             session_id: input.session_id,

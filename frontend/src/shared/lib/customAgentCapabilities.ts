@@ -2,6 +2,7 @@ export const CUSTOM_AGENT_CAPABILITY_TIERS = {
   email: ['read', 'organize', 'draft'],
   calendar: ['off', 'read', 'write'],
   knowledge: ['off', 'on'],
+  sessions: ['own', 'all'],
   reports: ['read', 'produce'],
   web: ['off', 'gated', 'open'],
   files: ['off', 'on']
@@ -47,10 +48,9 @@ const CALENDAR_WRITE_TOOLS = [
   'calendar_event_delete'
 ] as const
 
-const KNOWLEDGE_AND_SESSION_TOOLS = [
-  'chat_session_list',
-  'chat_session_search',
-  'chat_session_get',
+// task 09-02 — chat_session_list/search/get left this card: they register in every custom-agent
+// run and the `sessions` grant (own/all) is their read radius, so they are no longer atomic picks.
+const KNOWLEDGE_TOOLS = [
   'agent_catalog_list',
   'agent_catalog_get',
   'agent_profile_read',
@@ -69,8 +69,9 @@ const REPORT_READ_TOOLS = ['report_get', 'report_list'] as const
 const REPORT_PRODUCE_TOOLS = [...REPORT_READ_TOOLS, 'report_write'] as const
 
 /**
- * Canonical capability-to-policy mapping. Web and files are grants, so they intentionally have no
- * allowed-tools entries; the gateway matrix remains the authority that admits those tool classes.
+ * Canonical capability-to-policy mapping. Web, files and sessions are grants, so they intentionally
+ * have no allowed-tools entries; the gateway matrix remains the authority that admits those tool
+ * classes (sessions: the tools are always admitted, the grant only sets their read radius).
  */
 export const CUSTOM_AGENT_CAPABILITY_TOOL_SETS = {
   email: {
@@ -85,7 +86,7 @@ export const CUSTOM_AGENT_CAPABILITY_TOOL_SETS = {
   },
   knowledge: {
     off: [],
-    on: KNOWLEDGE_AND_SESSION_TOOLS
+    on: KNOWLEDGE_TOOLS
   },
   reports: {
     read: REPORT_READ_TOOLS,
@@ -109,6 +110,7 @@ export interface CustomAgentCapabilityPolicy {
   allowedTools: string[]
   grantWeb: CustomAgentCapabilityProfile['web']
   grantExec: boolean
+  grantSessions: CustomAgentCapabilityProfile['sessions']
 }
 
 export interface DerivedCustomAgentCapabilities {
@@ -174,16 +176,17 @@ export function applyCustomAgentCapabilityPatch(
   return {
     allowedTools,
     grantWeb: patch.web ?? current.grantWeb,
-    grantExec: patch.files === undefined ? current.grantExec : patch.files === 'on'
+    grantExec: patch.files === undefined ? current.grantExec : patch.files === 'on',
+    grantSessions: patch.sessions ?? current.grantSessions
   }
 }
 
-/** Convert a complete six-card profile into the existing allowed_tools + grants contract. */
+/** Convert a complete card profile into the existing allowed_tools + grants contract. */
 export function customAgentPolicyFromCapabilities(
   profile: CustomAgentCapabilityProfile
 ): CustomAgentCapabilityPolicy {
   return applyCustomAgentCapabilityPatch(
-    { allowedTools: [], grantWeb: 'off', grantExec: false },
+    { allowedTools: [], grantWeb: 'off', grantExec: false, grantSessions: 'own' },
     profile
   )
 }
@@ -234,6 +237,7 @@ export function deriveCustomAgentCapabilities(
       email: email.tier,
       calendar: calendar.tier,
       knowledge: knowledge.tier,
+      sessions: policy.grantSessions,
       reports: reports.tier,
       web: policy.grantWeb,
       files: policy.grantExec ? 'on' : 'off'

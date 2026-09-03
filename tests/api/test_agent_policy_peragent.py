@@ -512,6 +512,9 @@ def test_tool_options_consistent_with_tool_catalog():
             and not meta.get("manual_only")
             and not meta.get("headless_excluded")
             and name != "plan_update"  # core-unmanaged: every headless run gets the local no-op plan tool
+            # task 09-02：会话三工具对 custom agent 恒注册（wrapCfgForAgentRun 按名豁免交集），读取
+            # 半径走 grant_sessions —— 与 exec/web 一样不是勾选项，结构性不进 HEADLESS_TOOL_OPTIONS。
+            and name not in ("chat_session_list", "chat_session_search", "chat_session_get")
         }
     assert dict(HEADLESS_TOOL_OPTIONS) == expected
     # 默认安全集成员必须都在 headless 地板内。

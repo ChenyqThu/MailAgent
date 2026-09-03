@@ -142,6 +142,9 @@ export interface AgentRunSpec {
     grantExec?: true
     grantWeb?: 'gated' | 'open'
     grantConnectors?: Record<string, 'read' | 'write' | 'update'>
+    /** task 09-02 — projected ONLY when 'all' (same non-default-only shape as grantWeb); absent =
+     *  'own'. Gateway re-derives it via parseSessionsGrant (fail-closed). */
+    grantSessions?: 'all'
   }
   budget: { maxRunSeconds: number }
   /** Ordered backup models. `runHeadlessAgent` retries the whole turn on the next entry ONLY when

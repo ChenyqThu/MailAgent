@@ -58,6 +58,7 @@ import {
   leadParts,
   type CalendarLeadUnit,
   type ConnectorGrantMap,
+  type SessionsGrant,
   type WebGrant
 } from '../custom-agent/shared'
 import { AutomationPolicySection } from '../custom-agent/AutomationPolicySection'
@@ -220,6 +221,11 @@ export function CustomAgentSettings({
     !create && cfg ? (cfg.tool_policy?.grant_web ?? 'off') : 'off'
   )
   const [webDirty, setWebDirty] = useState(false)
+  // grant_sessions（task 09-02）：保存时恒显式写回（沿 CustomAgentDrawer 的理由）。
+  const [grantSessions, setGrantSessions] = useState<SessionsGrant>(
+    !create && cfg ? (cfg.tool_policy?.grant_sessions ?? 'own') : 'own'
+  )
+  const [sessionsDirty, setSessionsDirty] = useState(false)
   const [grantConnectors, setGrantConnectors] = useState<ConnectorGrantMap>(
     !create && cfg ? { ...(cfg.tool_policy?.grant_connectors ?? {}) } : {}
   )
@@ -447,6 +453,7 @@ export function CustomAgentSettings({
     const toolPolicy: CustomAgentToolPolicy = { v: 1, allowed_tools: selectedTools }
     if (grantExec) toolPolicy.grant_exec = true
     if (grantWeb !== 'off') toolPolicy.grant_web = grantWeb
+    toolPolicy.grant_sessions = grantSessions
     if (Object.keys(grantConnectors).length > 0) toolPolicy.grant_connectors = grantConnectors
     if (create) {
       const id = createdId ?? slugifyTitle(title)
@@ -497,11 +504,12 @@ export function CustomAgentSettings({
     // 编辑「按需发送」tool_policy（沿 CustomAgentDrawer：任一子面 dirty → 从当前 state 整体
     // 重建；allowed_tools / skills 仅「被触碰或行本就显式」时携带；grant_exec 仅 true、
     // grant_web 仅非 'off' 携带；grant_connectors 空但行原非空 → 显式 {} 清空）。
-    if (toolsDirty || grantDirty || webDirty || skillsDirty || connectorsDirty) {
+    if (toolsDirty || grantDirty || webDirty || sessionsDirty || skillsDirty || connectorsDirty) {
       const tp: CustomAgentToolPolicy = { v: 1 }
       if (toolsDirty || toolsMode === 'explicit') tp.allowed_tools = selectedTools
       if (grantExec) tp.grant_exec = true
       if (grantWeb !== 'off') tp.grant_web = grantWeb
+      tp.grant_sessions = grantSessions
       if (skillsDirty || skillsMode === 'explicit') tp.skills = mountedSkills
       if (Object.keys(grantConnectors).length > 0) {
         tp.grant_connectors = grantConnectors
@@ -1021,6 +1029,11 @@ export function CustomAgentSettings({
               onGrantWebChange={(next) => {
                 setGrantWeb(next)
                 setWebDirty(true)
+              }}
+              grantSessions={grantSessions}
+              onGrantSessionsChange={(next) => {
+                setGrantSessions(next)
+                setSessionsDirty(true)
               }}
               flags={opennessFlags}
               toolOptions={toolOptions}

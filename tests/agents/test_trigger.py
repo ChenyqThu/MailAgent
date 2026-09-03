@@ -336,6 +336,27 @@ def test_parse_tool_policy_grant_web_literals(grant_web):
     assert tp.grant_web == grant_web
 
 
+@pytest.mark.parametrize("grant_sessions", ["own", "all"])
+def test_parse_tool_policy_grant_sessions_literals(grant_sessions):
+    # task 09-02 会话读取分档：两态字面量逐个可解析，显式值优先于存量规则。
+    tp = parse_tool_policy(
+        {"v": 1, "allowed_tools": ["chat_session_list"], "grant_sessions": grant_sessions}
+    )
+    assert tp.grant_sessions == grant_sessions
+
+
+def test_parse_tool_policy_grant_sessions_legacy_rule():
+    """键缺席 → 存量迁移：旧「能读全部」判据 = allowed_tools 含 chat_session_list。"""
+    assert parse_tool_policy(None).grant_sessions == "own"
+    assert parse_tool_policy({"v": 1}).grant_sessions == "own"
+    assert parse_tool_policy({"v": 1, "allowed_tools": ["email_get"]}).grant_sessions == "own"
+    # 只有 list 工具是判据（旧 gateway 判 allowAllHistory 只看它）。
+    assert parse_tool_policy({"v": 1, "allowed_tools": ["chat_session_get"]}).grant_sessions == "own"
+    assert parse_tool_policy(
+        {"v": 1, "allowed_tools": ["email_get", "chat_session_list"]}
+    ).grant_sessions == "all"
+
+
 def test_parse_tool_policy_skills_shapes():
     """S6 W3（ADR-004 rev3.1 §3.2/§5.1）：skills 镜像 allowed_tools 的解析形状 —— 缺省 None /
     显式 [] → ()（零挂载 verbatim）/ list[str] 滤空串 → tuple。未安装名不校验（strict-effect）。"""
@@ -399,6 +420,9 @@ def test_parse_tool_policy_rejects_delete_ceiling():
         {"grant_web": "yes"},                        # 面外字符串 → 拒
         {"grant_web": "OPEN"},                       # 大小写敏感 → 拒（fail-closed）
         {"grant_web": {}},                           # object → 拒
+        {"grant_sessions": True},                    # bool → 拒（必须两态字面量）
+        {"grant_sessions": "ALL"},                   # 大小写敏感 → 拒
+        {"grant_sessions": "everyone"},              # 面外字符串 → 拒
         {"allowed_tools": "email_get"},              # 非 list
         {"allowed_tools": [1, 2]},                   # 非 str 项
         {"skills": "email"},                         # skills 非 list（裸串）→ 拒（rev3.1）

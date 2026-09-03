@@ -4863,12 +4863,21 @@
           "hitl": "Calendar writes always require human approval and cannot use card-free rules."
         },
         "knowledge": {
-          "title": "Knowledge & sessions",
-          "description": "Access past sessions, profile docs, Skills, and KOS knowledge. Off by default.",
+          "title": "Knowledge",
+          "description": "Access profile docs, Skills, and KOS knowledge. Off by default.",
           "tier": {
             "off": "Off",
             "on": "On"
           }
+        },
+        "sessions": {
+          "title": "Sessions",
+          "description": "The chat-history tools are always available; this sets how far they read: only this agent's own history, or every agent's.",
+          "tier": {
+            "own": "Own only",
+            "all": "All agents"
+          },
+          "allHint": "All agents = can read the transcripts of other agents and the main agent (including any email content quoted in them)."
         },
         "reports": {
           "title": "Reports",

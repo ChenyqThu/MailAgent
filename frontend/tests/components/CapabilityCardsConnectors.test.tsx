@@ -32,6 +32,8 @@ function renderCards(over: Partial<Props> = {}): Props {
     onGrantWebChange: vi.fn(),
     grantExec: false,
     onGrantExecChange: vi.fn(),
+    grantSessions: 'own',
+    onGrantSessionsChange: vi.fn(),
     agentTitle: '测试 Agent',
     triggerKind: null,
     flags: {},

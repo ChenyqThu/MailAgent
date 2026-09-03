@@ -10,6 +10,7 @@ export const WEB_GRANTS: WebGrant[] = ['off', 'gated', 'open']
 // MCP connector PR4 T3 — grant_connectors 的值域**派生自** CustomAgentToolPolicy（wire 契约
 // 单源），不在这里手抄 'read'|'write'|'update' 字面量：服务端值域变了这里跟着编译期红。
 export type ConnectorGrantMap = NonNullable<CustomAgentToolPolicy['grant_connectors']>
+export type SessionsGrant = NonNullable<CustomAgentToolPolicy['grant_sessions']>
 export type ConnectorGrantValue = ConnectorGrantMap[string]
 
 export type CalendarLeadUnit = 'minutes' | 'hours' | 'days'

@@ -357,14 +357,19 @@ export function buildGatewayTools(
       createSessionTools(opts.domain, collector, {
         provenanceEnabled: opts.sessionProvenanceEnabled,
         currentAgentId: opts.agentRunContext?.agentId,
-        allowAllHistory: opts.agentRunContext?.allowedTools?.includes('chat_session_list') === true
+        // task 09-02 — the read radius is the grant_sessions key (spec-projected only when 'all',
+        // parseSessionsGrant fail-closed), no longer "has the list tool in allowed_tools": that
+        // conflated registering the tools with reading OTHER agents' history.
+        allowAllHistory: opts.agentRunContext?.grantSessions === 'all'
       })
     )
   }
+  // 09-02 — the catalog tools ride the knowledge card's own member (agent_catalog_list), not the
+  // session tools (which left that card and register unconditionally for custom agents).
   if (
     opts.sessionProvenanceEnabled &&
     opts.agentRunContext &&
-    opts.agentRunContext.allowedTools?.includes('chat_session_list')
+    opts.agentRunContext.allowedTools?.includes('agent_catalog_list')
   ) {
     Object.assign(tools, createAgentCatalogTools(opts.domain, collector))
   }

@@ -705,6 +705,9 @@ describe('update merge — a partial grants patch must not wipe the untouched to
         allowed_tools: ['email_get', 'future_tool_x', 'report_get', 'report_list', 'report_write'],
         grant_exec: true,
         grant_web: 'gated',
+        // task 09-02 — a capability patch always materializes grant_sessions (the row leaves the
+        // legacy "absent key → migration rule" era); the server row had none → default 'own'.
+        grant_sessions: 'own',
         skills: ['email']
       }
     })
@@ -733,7 +736,7 @@ describe('update merge — a partial grants patch must not wipe the untouched to
         'email_get',
         'calendar_events_list',
         'report_write',
-        'chat_session_list',
+        'agent_catalog_list',
         'agent_profile_read',
         'kos_query'
       ])

@@ -105,7 +105,7 @@ function buildAllTools() {
     contextMode: 'cron_headless',
     agentRunContext: {
       agentId: 'dms',
-      allowedTools: ['chat_session_list'],
+      allowedTools: ['agent_catalog_list'],
       skills: []
     }
   })

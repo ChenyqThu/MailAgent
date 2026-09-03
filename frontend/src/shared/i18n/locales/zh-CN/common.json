@@ -4863,12 +4863,21 @@
           "hitl": "日历写操作永久需要人工审批，不能配置免卡规则。"
         },
         "knowledge": {
-          "title": "知识与会话",
-          "description": "访问历史会话、身份文档、Skills 与 KOS 知识。默认关闭。",
+          "title": "知识",
+          "description": "访问身份文档、Skills 与 KOS 知识。默认关闭。",
           "tier": {
             "off": "关闭",
             "on": "开启"
           }
+        },
+        "sessions": {
+          "title": "会话",
+          "description": "历史会话工具始终可用；这里决定能读多远：只读它自己的历史，或读全部 Agent 的历史。",
+          "tier": {
+            "own": "只读自己",
+            "all": "读全部"
+          },
+          "allHint": "读全部 = 可读取其他 Agent 与主 Agent 的会话正文（含其中引用的邮件内容）。"
         },
         "reports": {
           "title": "报告",

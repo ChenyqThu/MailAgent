@@ -2225,3 +2225,39 @@ def test_session_query_headless_scope_cannot_be_overridden(chat_client: TestClie
     assert response.status_code == 200
     rows = response.json()["data"]
     assert [row["agent_id"] for row in rows] == ["self-agent"]
+
+
+def test_session_messages_headless_scope(chat_client: TestClient, ai_chat_db: Path) -> None:
+    """task 09-02：GET /sessions/{id}/messages 与列表面同款 scope —— own 半径读别人的会话正文
+    → E_NOT_FOUND；sessions=all 放开；无 header（manual chat）恒全部。"""
+    now = int(time.time() * 1000)
+    conn = sqlite3.connect(str(ai_chat_db))
+    for sid, agent in ((30, "self-agent"), (31, "other-agent")):
+        conn.execute(
+            "INSERT INTO ai_chat_sessions (id,email_id,anchor_type,anchor_id,backend_kind,title,created_at,updated_at,origin,agent_id,agent_job_id,trigger_kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (sid, None, "general", None, "ai-sdk", agent, now, now, "agent", agent, str(sid), "cron"),
+        )
+        conn.execute(
+            "INSERT INTO ai_chat_messages (session_id,role,content,status,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+            (sid, "user", f"history {agent}", "complete", now, now),
+        )
+    conn.commit()
+    conn.close()
+    own_headers = {"X-MailAgent-Agent-Id": "self-agent", "X-MailAgent-Allow-All-History": "0"}
+    all_headers = {"X-MailAgent-Agent-Id": "self-agent", "X-MailAgent-Allow-All-History": "1"}
+
+    # own：自己的读得到，别人的 typed error（不是空列表 —— 空列表会与「会话为空」混成一个值）。
+    r = chat_client.get("/api/chat/sessions/30/messages", headers=own_headers)
+    assert r.status_code == 200 and [m["content"] for m in r.json()["data"]] == ["history self-agent"]
+    r = chat_client.get("/api/chat/sessions/31/messages", headers=own_headers)
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "E_NOT_FOUND"
+    # own 下不存在的会话维持既有「读不到返 []」契约。
+    r = chat_client.get("/api/chat/sessions/999/messages", headers=own_headers)
+    assert r.status_code == 200 and r.json()["data"] == []
+    # all：别人的也放开。
+    r = chat_client.get("/api/chat/sessions/31/messages", headers=all_headers)
+    assert r.status_code == 200 and [m["content"] for m in r.json()["data"]] == ["history other-agent"]
+    # manual chat（无 header）恒全部。
+    r = chat_client.get("/api/chat/sessions/31/messages")
+    assert r.status_code == 200 and len(r.json()["data"]) == 1

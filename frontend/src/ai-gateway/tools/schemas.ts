@@ -1591,7 +1591,7 @@ export const chatSessionListSchema = z.object({
   limit: z.number().int().min(1).max(50).default(20)
 })
 const sessionQueryFields = {
-  origin: z.enum(['interactive', 'agent', 'im', 'all']).optional(),
+  origin: z.enum(['interactive', 'agent', 'im', 'team', 'group', 'all']).optional(),
   agentId: z.string().min(1).optional(),
   agentJobId: z.string().min(1).optional(),
   triggerId: z.string().min(1).optional(),
@@ -1897,22 +1897,35 @@ const customAgentEmailCapabilitySchema = z.enum(['read', 'organize', 'draft'])
 const customAgentCalendarCapabilitySchema = z.enum(['off', 'read', 'write'])
 const customAgentToggleCapabilitySchema = z.enum(['off', 'on'])
 const customAgentReportCapabilitySchema = z.enum(['read', 'produce'])
+// task 09-02 — chat-history read radius; defaults to 'own' so a profile authored before the card
+// existed still parses as a complete profile.
+const customAgentSessionsCapabilitySchema = z.enum(['own', 'all'])
 
-/** The six-card capability contract shown in Settings. Create uses a complete profile so the
- *  approval card describes the entire capability surface; update accepts a non-empty patch. */
+const customAgentCapabilityFields = {
+  email: customAgentEmailCapabilitySchema,
+  calendar: customAgentCalendarCapabilitySchema,
+  knowledge: customAgentToggleCapabilitySchema,
+  sessions: customAgentSessionsCapabilitySchema,
+  reports: customAgentReportCapabilitySchema,
+  web: customAgentWebGrantSchema,
+  files: customAgentToggleCapabilitySchema
+}
+
+/** The capability-card contract shown in Settings. Create uses a complete profile so the
+ *  approval card describes the entire capability surface (`sessions` defaults to 'own' there so a
+ *  profile authored before that card existed still counts as complete); update accepts a
+ *  non-empty patch — built from the UNdefaulted fields so `{}` stays empty and is rejected. */
 export const customAgentCapabilityProfileSchema = z
   .object({
-    email: customAgentEmailCapabilitySchema,
-    calendar: customAgentCalendarCapabilitySchema,
-    knowledge: customAgentToggleCapabilitySchema,
-    reports: customAgentReportCapabilitySchema,
-    web: customAgentWebGrantSchema,
-    files: customAgentToggleCapabilitySchema
+    ...customAgentCapabilityFields,
+    sessions: customAgentSessionsCapabilitySchema.default('own')
   })
   .strict()
 export type CustomAgentCapabilityProfileInput = z.infer<typeof customAgentCapabilityProfileSchema>
 
-export const customAgentCapabilityPatchSchema = customAgentCapabilityProfileSchema
+export const customAgentCapabilityPatchSchema = z
+  .object(customAgentCapabilityFields)
+  .strict()
   .partial()
   .refine((patch) => Object.keys(patch).length > 0, 'capabilities must change at least one tier')
 export type CustomAgentCapabilityPatchInput = z.infer<typeof customAgentCapabilityPatchSchema>

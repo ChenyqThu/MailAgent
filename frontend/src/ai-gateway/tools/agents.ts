@@ -154,7 +154,8 @@ function specSummary(
     ? deriveCustomAgentCapabilities({
         allowedTools: [...allowedTools],
         grantWeb: agent.tool_policy?.grant_web ?? 'off',
-        grantExec: agent.tool_policy?.grant_exec === true
+        grantExec: agent.tool_policy?.grant_exec === true,
+        grantSessions: agent.tool_policy?.grant_sessions ?? 'own'
       })
     : null
   return {
@@ -173,6 +174,7 @@ function specSummary(
     allowed_tools: allowedTools,
     grant_exec: agent.tool_policy?.grant_exec === true,
     grant_web: agent.tool_policy?.grant_web ?? 'off',
+    grant_sessions: agent.tool_policy?.grant_sessions ?? 'own',
     skills: agent.tool_policy?.skills ?? null,
     grant_connectors: agent.tool_policy?.grant_connectors ?? null,
     budget: agent.budget ?? null,
@@ -252,6 +254,7 @@ function toConfigPatch(
     if (cur?.allowed_tools !== undefined) tp.allowed_tools = cur.allowed_tools
     if (cur?.grant_exec !== undefined) tp.grant_exec = cur.grant_exec
     if (cur?.grant_web !== undefined) tp.grant_web = cur.grant_web
+    if (cur?.grant_sessions !== undefined) tp.grant_sessions = cur.grant_sessions
     if (cur?.skills !== undefined) tp.skills = cur.skills
     if (cur?.grant_connectors !== undefined) tp.grant_connectors = cur.grant_connectors
     if (input.capabilities !== undefined) {
@@ -259,13 +262,15 @@ function toConfigPatch(
         {
           allowedTools: cur?.allowed_tools ?? [],
           grantWeb: cur?.grant_web ?? 'off',
-          grantExec: cur?.grant_exec === true
+          grantExec: cur?.grant_exec === true,
+          grantSessions: cur?.grant_sessions ?? 'own'
         },
         input.capabilities
       )
       tp.allowed_tools = mapped.allowedTools
       tp.grant_web = mapped.grantWeb
       tp.grant_exec = mapped.grantExec
+      tp.grant_sessions = mapped.grantSessions
     }
     if (input.allowed_tools !== undefined) tp.allowed_tools = input.allowed_tools
     if (input.grant_exec !== undefined) tp.grant_exec = input.grant_exec
@@ -433,8 +438,10 @@ export function createCustomAgentTools(
       'produces; ALL 10 rule keys are required (send defaults for the ones the freq ignores) and ' +
       'weekdays/weekday count 0=Sunday; OR {kind:"email_filter", subject_pattern?, ' +
       'sender_pattern?, folders?} to fire on matching mail — omit for a disabled draft), the list of ' +
-      'six capability tiers: Email read/organize/draft; Calendar off/read/write; Knowledge and ' +
-      'sessions off/on; Reports read/produce; Web off/gated/open; Files and commands off/on. Use ' +
+      'capability tiers: Email read/organize/draft; Calendar off/read/write; Knowledge off/on; ' +
+      'Sessions own/all (how far the always-present chat-history tools read: own = only this ' +
+      "agent's past sessions, all = every agent's); Reports read/produce; Web off/gated/open; " +
+      'Files and commands off/on. Use ' +
       'the complete `capabilities` profile for normal requests. `allowed_tools` plus grant fields ' +
       'remain only for an explicitly requested Advanced atomic configuration and must not be mixed ' +
       'with `capabilities`. A budget may set max_runs_per_day/max_run_seconds; skills may mount ' +

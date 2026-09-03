@@ -41,6 +41,7 @@ import {
   normalizeContextMode,
   parseConnectorGrants,
   parseMatterRunWebFace,
+  parseSessionsGrant,
   parseWebGrant,
   type AgentContextMode,
   type AgentRunContext,
@@ -51,10 +52,20 @@ import {
 // connector tools, used below to exempt them from the allowedTools intersection by NAME (their
 // classes are 'read'/'connector_write', so a class-based exemption cannot see them).
 import { isMcpToolName } from '../shared/assistant/tools/mcpToolName'
+// task 09-02 — the ONE naming source for the chat-session tools, exempted from the allowedTools
+// intersection by NAME below: they register in every custom-agent run (their read radius is the
+// grant_sessions key, not a checkbox), so allowed_tools has no legal say over their presence.
+import { GATEWAY_SESSION_TOOL_NAMES } from './tools/sessions'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // Relative type-only import (erased) — same discipline as searchAgentRun.ts: the pure-Node harness
 // (tsx) must be able to load this module without resolving vite aliases.
 import type { AgentRunSpec, HeadlessAgentResult } from '../shared/api/types'
+
+/** task 09-02 — chat_session_list/search/get are exempt from the allowedTools intersection BY
+ *  NAME (like plan_update): a custom agent always holds them, and grant_sessions ('own' default /
+ *  'all') decides how far they read, so a Settings checkbox for them no longer exists
+ *  (HEADLESS_TOOL_OPTIONS dropped them the same batch). */
+const SESSION_TOOL_NAMES: ReadonlySet<string> = new Set(GATEWAY_SESSION_TOOL_NAMES)
 
 export const DEFAULT_AGENT_RUN_SECONDS = 1800
 export const MAX_AGENT_RUN_SECONDS = 1800
@@ -214,6 +225,9 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
   // register a report tool that cannot address any dispatch).
   const matterItemRun = matterItemRunFromSpec(spec)
   const specUseKos = (spec as AgentRunSpec & { useKos?: unknown }).useKos
+  // task 09-02 — the chat-history read radius, same discriminated funnel as the grants: only the
+  // exact 'all' literal widens; conditional include keeps every pre-09-02 context byte-identical.
+  const grantSessions = parseSessionsGrant(toolPolicy?.grantSessions)
   return {
     agentId: spec.agentId,
     allowedTools: Array.isArray(allowedRaw)
@@ -231,6 +245,7 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
     // record-view pending projection. Conditional include: a caller that omits it (every existing
     // test + the shared type's cast callers) yields the pre-S6 object shape, byte-identical.
     ...(jobId != null ? { jobId } : {}),
+    ...(grantSessions === 'all' ? { grantSessions } : {}),
     // P4 — conditional include for the same reason: a non-matter run's context object keeps the
     // pre-P4 shape (the stash-freeze assertions depend on that).
     ...(matterRun !== undefined ? { matterRun } : {}),
@@ -465,6 +480,7 @@ export function wrapCfgForAgentRun(
         }
         if (
           name === 'plan_update' ||
+          SESSION_TOOL_NAMES.has(name) ||
           cls === 'exec' ||
           cls === 'web' ||
           isMcpToolName(name) ||

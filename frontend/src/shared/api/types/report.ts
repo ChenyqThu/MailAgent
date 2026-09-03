@@ -372,6 +372,11 @@ export interface CustomAgentToolPolicy {
   /** S6 W3 ADR-004 rev3.1 §3.1 — per-agent web 三档（缺省 = 'off'）：off=web 工具 headless
    *  不注册；gated=注册 + web_fetch 仅域名白名单免卡；open=任意 URL 免卡（高危，UI 红样式）。 */
   grant_web?: 'off' | 'gated' | 'open'
+  /** task 09-02 — 会话读取半径（缺省 = 'own'）：chat_session_* 三工具对 custom agent 恒注册，
+   *  own = 只读 agent_id 为自己的历史；all = 读全部 agent 的历史。读投影（wire.py）对键缺席的
+   *  存量行按 parse_tool_policy 的迁移规则物化（allowed_tools 含 chat_session_list → all），
+   *  所以前端读到的恒是有效值；保存时恒显式写回，键一旦落地迁移规则即失效。 */
+  grant_sessions?: 'own' | 'all'
   /** S6 W3 rev3.1 §3.2 — per-agent skill 挂载列表（收窄面）。缺失/null = 默认挂载集
    *  ("email","search")；[] = 显式零挂载。 */
   skills?: string[]

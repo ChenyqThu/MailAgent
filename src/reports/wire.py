@@ -234,6 +234,17 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
     trigger = _parse_obj(agent.get("trigger_json")) if _projects_trigger else None
     if _is_custom:
         tool_policy = _parse_obj(agent.get("tool_policy_json"))
+        if isinstance(tool_policy, dict) and "grant_sessions" not in tool_policy:
+            # task 09-02：键缺席的存量行按 parse_tool_policy 的迁移规则物化有效值，让设置面
+            # 的「会话」卡显示真实半径（不低报）；规则只在 trigger.py 一处，这里不复刻。
+            from src.agents.trigger import legacy_sessions_grant
+
+            allowed = tool_policy.get("allowed_tools")
+            tool_policy["grant_sessions"] = legacy_sessions_grant(
+                tuple(t for t in allowed if isinstance(t, str))
+                if isinstance(allowed, list)
+                else None
+            )
     else:
         # MCP connector PR3：**报告 Agent 也是 connector 的调用方**（PRD 决策 8），故 report 行
         # 的 tool_policy 需要能 round-trip 回来 —— 否则 owner PUT 了 grant_connectors、GET 读不到，

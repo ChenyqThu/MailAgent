@@ -66,6 +66,25 @@ def _session_scope(request: Request, requested_agent_id: Optional[str]) -> Optio
     return requested_agent_id if allow_all else current
 
 
+def _require_session_in_scope(request: Request, session_id: int) -> None:
+    """``_session_scope`` 的单会话版：headless own 半径下，别的 agent 的会话正文读不到。
+
+    无 header（manual chat / renderer 直读）或 ``Allow-All-History=1`` → 不校验；own 半径下
+    会话存在且 ``agent_id != current`` → E_NOT_FOUND（与列表面「看不见」同口径，不做存在性
+    oracle）；会话不存在 → 放行，维持端点「读不到返 []」的既有契约。"""
+    current = (request.headers.get("X-MailAgent-Agent-Id") or "").strip()
+    if not current or request.headers.get("X-MailAgent-Allow-All-History") == "1":
+        return
+    session = get_chat_db().get_session(session_id)
+    if session is not None and (session.get("agent_id") or "") != current:
+        raise APIError(
+            "E_NOT_FOUND",
+            f"session {session_id} is outside this agent's history scope",
+            hint="only this agent's own sessions are readable without the sessions=all grant",
+            source="sqlite",
+        )
+
+
 def _project_session_runs(items: List[Dict[str, Any]], sync_db_path: str) -> None:
     job_ids = [int(s["agent_job_id"]) for s in items if s.get("origin") == "agent" and str(s.get("agent_job_id") or "").isdigit()]
     if not job_ids or not os.path.exists(sync_db_path):
@@ -354,6 +373,7 @@ async def search_sessions(
 @router.get("/sessions/{session_id:int}/messages", dependencies=[Depends(verify_cf_access)])
 async def list_messages(request: Request, session_id: int):
     """某 session 的全部消息（按 created_at/id 升序）。镜像 chat:listMessages → ChatMessage[]。"""
+    _require_session_in_scope(request, session_id)
     messages = get_chat_db().list_messages(session_id)
     return success_envelope(
         messages, request=request, source="sqlite", meta_extra={"count": len(messages)}

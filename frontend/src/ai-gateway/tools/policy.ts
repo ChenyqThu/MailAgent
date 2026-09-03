@@ -506,6 +506,19 @@ export function parseWebGrant(raw: unknown): WebGrant {
   return raw === 'gated' || raw === 'open' ? raw : 'off'
 }
 
+/** task 09-02 — the per-agent chat-history READ RADIUS of the three chat_session_* tools (which
+ *  register in every custom-agent run regardless of allowed_tools): 'own' = only sessions whose
+ *  agent_id is this agent (default), 'all' = every agent's history. NOT a matrix input (the tools
+ *  are class 'read' and always admitted) — it only decides the X-MailAgent-Allow-All-History header
+ *  the serve-api enforces. */
+export type SessionsGrant = 'own' | 'all'
+
+/** Fail-closed parse of a spec's grantSessions: ONLY the exact literal 'all' widens; anything else
+ *  (absent / junk / 'own') collapses to 'own' — the sessions mirror of parseWebGrant. */
+export function parseSessionsGrant(raw: unknown): SessionsGrant {
+  return raw === 'all' ? 'all' : 'own'
+}
+
 /** Stage 1 PR3 (harness-expansion epic, grill Q2/Q3=B) — a per-connector crud CEILING of a
  *  headless custom-agent run. 🔴 The vocabulary is read < write < update and deliberately has NO
  *  'delete' member (grill Q3=B: the ceiling value-domain excludes delete; Python rejects it at
@@ -586,6 +599,11 @@ export interface AgentRunContext {
    *  business-state semantics). Never widens: CORE_UNGATED / collision-exempt floors stay. */
   skills?: string[]
   modeGrants?: AgentModeGrants
+  /** task 09-02 — the chat-history read radius (parseSessionsGrant of the spec's grantSessions).
+   *  Present ONLY when 'all' (conditional include, so every pre-09-02 context object — and the
+   *  stash-freeze assertions on it — stays byte-identical); absent = 'own'. Consumed by ONE
+   *  reader: buildGatewayTools' session-tool binding (allowAllHistory). */
+  grantSessions?: SessionsGrant
   /** S6 W1 — the async_jobs row id of this headless run, frozen into the run context so a paused
    *  approval carries it into the stash (maybeStashAndAnnounceApproval freezes the whole context).
    *  Read-only metadata for GET /api/ai/approval/pending's record-view projection; NEVER consulted

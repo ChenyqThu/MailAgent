@@ -65,6 +65,7 @@ import {
   leadParts,
   type CalendarLeadUnit,
   type ConnectorGrantMap,
+  type SessionsGrant,
   type WebGrant
 } from './custom-agent/shared'
 import { AutomationPolicySection } from './custom-agent/AutomationPolicySection'
@@ -215,6 +216,11 @@ export function CustomAgentDrawer({
   // （含 []）」两态（镜像 toolsMode）—— 未触碰的 NULL 行保存后仍是 NULL，投影层默认集继续生效。
   const [grantWeb, setGrantWeb] = useState<WebGrant>('off')
   const [webDirty, setWebDirty] = useState(false)
+  // grant_sessions（task 09-02）：会话读取半径两档。读到的恒是投影层物化过的有效值（存量行
+  // 按迁移规则代入），保存时**恒显式写回**（见 onSave）—— 不循「仅非默认携带」：键缺席时服务端
+  // 会重新套迁移规则，存量 all 行就关不回 own。
+  const [grantSessions, setGrantSessions] = useState<SessionsGrant>('own')
+  const [sessionsDirty, setSessionsDirty] = useState(false)
   // grant_connectors（MCP connector PR4 T3）：第七「外部服务」卡的 state。🔴 永远存服务端
   // **原始值**（含 UI 没有对应档的 'write'）——展示折叠在 CapabilityCards，这里必须无损往返；
   // 服务端语义 = whole-map replace（显式 {} = 清空），物化规则见 onSave。
@@ -383,6 +389,8 @@ export function CustomAgentDrawer({
     setGrantDirty(false)
     setGrantWeb(cfg.tool_policy?.grant_web ?? 'off')
     setWebDirty(false)
+    setGrantSessions(cfg.tool_policy?.grant_sessions ?? 'own')
+    setSessionsDirty(false)
     // 服务端原始 grant 原样进 state（含 'write'）；浅拷贝防 setConnectorTier 的展开写触碰 cfg。
     setGrantConnectors({ ...(cfg.tool_policy?.grant_connectors ?? {}) })
     setConnectorsDirty(false)
@@ -612,6 +620,7 @@ export function CustomAgentDrawer({
     // grant 键；按需物化（false/'off' 缺省 = parse_tool_policy 默认），镜像编辑路径纪律。
     if (grantExec) toolPolicy.grant_exec = true
     if (grantWeb !== 'off') toolPolicy.grant_web = grantWeb
+    toolPolicy.grant_sessions = grantSessions
     // grant_connectors 仅非空携带（镜像 grant_web 仅非 off 携带）——新建行缺省 = 未授权任何
     // connector（parse_tool_policy 默认），键不物化。
     if (Object.keys(grantConnectors).length > 0) toolPolicy.grant_connectors = grantConnectors
@@ -673,11 +682,12 @@ export function CustomAgentDrawer({
     // 都不会抹掉其它键（W3-2 教训）。各键的「按需物化」纪律：allowed_tools / skills 仅在「被触碰
     // 或行本就显式」时携带 —— 只翻 grant 的 NULL 行保持二者缺省（投影层默认集/默认挂载集不被物化）；
     // grant_exec 仅 true 携带、grant_web 仅非 'off' 携带（缺省语义 = parse_tool_policy 的 false/'off'）。
-    if (toolsDirty || grantDirty || webDirty || skillsDirty || connectorsDirty) {
+    if (toolsDirty || grantDirty || webDirty || sessionsDirty || skillsDirty || connectorsDirty) {
       const tp: CustomAgentToolPolicy = { v: 1 }
       if (toolsDirty || toolsMode === 'explicit') tp.allowed_tools = selectedTools
       if (grantExec) tp.grant_exec = true
       if (grantWeb !== 'off') tp.grant_web = grantWeb
+      tp.grant_sessions = grantSessions
       if (skillsDirty || skillsMode === 'explicit') tp.skills = mountedSkills
       // grant_connectors 从**当前 state**物化（PR4 起它进了「整体重建」不变量的覆盖范围，
       // PR3 的「照抄服务端行」临时块已删）：state 打开时从 cfg 预填、未触碰即原始值无损往返
@@ -1162,6 +1172,11 @@ export function CustomAgentDrawer({
             onGrantWebChange={(next) => {
               setGrantWeb(next)
               setWebDirty(true)
+            }}
+            grantSessions={grantSessions}
+            onGrantSessionsChange={(next) => {
+              setGrantSessions(next)
+              setSessionsDirty(true)
             }}
             flags={opennessFlags}
             toolOptions={toolOptions}

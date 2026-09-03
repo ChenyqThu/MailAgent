@@ -217,17 +217,20 @@ describe('ElectronApi.chat — onGroupTurn / setGroupForeground（L4 群聊 UX �
     expect('messageId' in handler.mock.calls[0]![0]).toBe(false)
   })
 
-  test('I3 setGroupForeground → invoke chat:group-foreground {sessionId}', async () => {
+  // T3：上报的是二元组 {groupId, threadId}（话题面开着时 threadId 非空；null = 主时间线）。
+  test('I3 setGroupForeground → invoke chat:group-foreground {groupId, threadId}', async () => {
     const invoke = vi.fn(async () => undefined)
     ;(window as unknown as { electron: unknown }).electron = {
       ipcRenderer: { invoke, send: sendMock, on: vi.fn(() => () => undefined) }
     }
     const api = new ElectronApi()
-    await api.chat.setGroupForeground!(9)
+    await api.chat.setGroupForeground!({ groupId: 9, threadId: null })
+    await api.chat.setGroupForeground!({ groupId: 9, threadId: 12 })
     await api.chat.setGroupForeground!(null)
     expect(invoke.mock.calls).toEqual([
-      ['chat:group-foreground', { sessionId: 9 }],
-      ['chat:group-foreground', { sessionId: null }]
+      ['chat:group-foreground', { groupId: 9, threadId: null }],
+      ['chat:group-foreground', { groupId: 9, threadId: 12 }],
+      ['chat:group-foreground', { groupId: null, threadId: null }]
     ])
   })
 })

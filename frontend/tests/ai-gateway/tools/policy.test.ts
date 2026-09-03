@@ -177,7 +177,7 @@ function buildGrantedHeadlessCatalogTools() {
     contextMode: 'cron_headless',
     agentRunContext: {
       agentId: 'dms',
-      allowedTools: ['chat_session_list'],
+      allowedTools: ['agent_catalog_list'],
       skills: []
     }
   })
@@ -1085,7 +1085,7 @@ describe('buildGatewayTools × contextMode (registration-time filter wiring)', (
       domain: mockDomain(() => okEnvelope([])),
       sessionProvenanceEnabled: false,
       contextMode: 'cron_headless',
-      agentRunContext: { agentId: 'dms', allowedTools: ['chat_session_list'], skills: [] }
+      agentRunContext: { agentId: 'dms', allowedTools: ['agent_catalog_list'], skills: [] }
     })
     expect(flagOff.agent_catalog_list).toBeUndefined()
     expect(flagOff.agent_catalog_get).toBeUndefined()

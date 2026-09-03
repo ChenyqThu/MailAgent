@@ -124,6 +124,8 @@ def resolve_mounted_skills(agent: Optional[dict[str, Any]]) -> frozenset[str]:
 # tests/api 有 catalog 一致性闸，新读/写工具漏此表必红）。exec / outbound /
 # capability_change 结构性缺席（ADR-004 D2/D3：exec 走 grant_exec 矩阵例外，非此列表）；
 # web（web_fetch/web_search，S6 起 class=web）同样结构性缺席 —— 走 grant_web 三档授权。
+# chat_session_list/search/get（task 09-02）也结构性缺席：对 custom agent **恒注册**（gateway
+# wrapCfgForAgentRun 按名豁免交集），读取半径走 grant_sessions 两档（own/all），不是勾选项。
 HEADLESS_TOOL_OPTIONS: tuple[tuple[str, str], ...] = (
     ("agent_catalog_get", "read"),
     ("agent_catalog_list", "read"),
@@ -131,9 +133,6 @@ HEADLESS_TOOL_OPTIONS: tuple[tuple[str, str], ...] = (
     ("agent_profile_read", "read"),
     ("calendar_event_get", "read"),
     ("calendar_events_list", "read"),
-    ("chat_session_get", "read"),
-    ("chat_session_list", "read"),
-    ("chat_session_search", "read"),
     ("discover_skills", "read"),
     ("email_attachment_text", "read"),
     ("email_body", "read"),
@@ -475,6 +474,9 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
         # connector 工具不进 HEADLESS_TOOL_OPTIONS（镜像 exec/web 的结构性缺席）：授权走这把
         # per-connector 天花板，缺省 = 该 connector 整族不注册。
         tool_policy_out["grantConnectors"] = dict(tool_policy.grant_connectors)
+    if tool_policy.grant_sessions == "all":
+        # 镜像 grantWeb：仅非默认值（own）才投影；gateway 侧 parseSessionsGrant 再判别一次。
+        tool_policy_out["grantSessions"] = "all"
     # S6 W3（rev3.1 §5.1）：skills **恒输出**解析完的数组（NULL → 默认挂载集已代入；显式 []
     # → []）—— gateway 不手抄默认集第二份；gateway 侧对缺 skills 的 spec 按 [] fail-closed。
     tool_policy_out["skills"] = (

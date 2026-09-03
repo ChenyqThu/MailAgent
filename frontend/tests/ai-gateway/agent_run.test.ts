@@ -836,6 +836,55 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
     expect(seenJunk[0]).toEqual(['plan_update'])
   })
 
+  // task 09-02 — the three chat-session tools are exempt from the intersection BY NAME (like
+  // plan_update): a custom agent always holds them; grant_sessions only sets their read radius.
+  test('chat_session_* survive an EMPTY allowedTools (恒注册); the radius rides grantSessions', async () => {
+    const seenTools: string[][] = []
+    const guard = new ApprovalGuard()
+    const cfg: AiGatewayConfig = {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      createModel: () => captureToolsModel(seenTools),
+      buildTools: (collector, _am, mode, agentRunContext) =>
+        buildGatewayTools(
+          {
+            domain: minimalDomain(),
+            writeToolsEnabled: true,
+            approvalGuard: guard,
+            sessionToolsEnabled: true,
+            contextMode: mode,
+            agentRunContext
+          },
+          collector
+        ),
+      persistTurn: () => {}
+    }
+    const spec = makeSpec({ toolPolicy: { allowedTools: [] } })
+    await runHeadlessAgent(cfg, { jobId: 7, spec, sessionId: null }, new AbortController().signal)
+    expect(seenTools[0]?.sort()).toEqual(
+      ['chat_session_get', 'chat_session_list', 'chat_session_search', 'plan_update'].sort()
+    )
+  })
+
+  test.each([
+    ['"all"', 'all', 'all'],
+    ['"own"', 'own', undefined],
+    ['true (junk)', true, undefined],
+    ['"ALL" (case junk)', 'ALL', undefined],
+    ['undefined (absent)', undefined, undefined]
+  ])('grantSessions = %s → context grantSessions:%s (only the exact literal widens)', (_l, value, expected) => {
+    const ctx = agentRunContextFromSpec(
+      makeSpec({
+        toolPolicy: { allowedTools: [], grantSessions: value } as unknown as AgentRunSpec['toolPolicy']
+      })
+    )
+    expect(ctx.grantSessions).toBe(expected)
+    // conditional include: an own/absent/junk spec keeps the pre-09-02 context shape.
+    expect('grantSessions' in ctx).toBe(expected !== undefined)
+  })
+
   test('allowedTools MISSING fail-closes capability tools while the P0 core plan tool remains', async () => {
     const seenTools: string[][] = []
     const spec = makeSpec({ toolPolicy: {} })

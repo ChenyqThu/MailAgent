@@ -10,6 +10,7 @@ import {
   applyCustomAgentCapabilityPatch,
   customAgentPolicyFromCapabilities,
   deriveCustomAgentCapabilities,
+  isCustomAgentManagedTool,
   type CustomAgentCapabilityProfile
 } from '../../src/shared/lib/customAgentCapabilities'
 
@@ -57,10 +58,12 @@ function profiles(): CustomAgentCapabilityProfile[] {
   for (const email of CUSTOM_AGENT_CAPABILITY_TIERS.email) {
     for (const calendar of CUSTOM_AGENT_CAPABILITY_TIERS.calendar) {
       for (const knowledge of CUSTOM_AGENT_CAPABILITY_TIERS.knowledge) {
-        for (const reports of CUSTOM_AGENT_CAPABILITY_TIERS.reports) {
-          for (const web of CUSTOM_AGENT_CAPABILITY_TIERS.web) {
-            for (const files of CUSTOM_AGENT_CAPABILITY_TIERS.files) {
-              out.push({ email, calendar, knowledge, reports, web, files })
+        for (const sessions of CUSTOM_AGENT_CAPABILITY_TIERS.sessions) {
+          for (const reports of CUSTOM_AGENT_CAPABILITY_TIERS.reports) {
+            for (const web of CUSTOM_AGENT_CAPABILITY_TIERS.web) {
+              for (const files of CUSTOM_AGENT_CAPABILITY_TIERS.files) {
+                out.push({ email, calendar, knowledge, sessions, reports, web, files })
+              }
             }
           }
         }
@@ -71,8 +74,11 @@ function profiles(): CustomAgentCapabilityProfile[] {
 }
 
 describe('customAgentCapabilities', () => {
-  test('all 216 canonical profiles round-trip through allowed_tools + grants', () => {
-    for (const profile of profiles()) {
+  test('all 432 canonical profiles round-trip through allowed_tools + grants', () => {
+    const all = profiles()
+    // 3 email × 3 calendar × 2 knowledge × 2 sessions × 2 reports × 3 web × 2 files
+    expect(all).toHaveLength(432)
+    for (const profile of all) {
       const policy = customAgentPolicyFromCapabilities(profile)
       expect(deriveCustomAgentCapabilities(policy)).toEqual({ profile, customized: [] })
     }
@@ -83,6 +89,7 @@ describe('customAgentCapabilities', () => {
       email: 'read',
       calendar: 'off',
       knowledge: 'off',
+      sessions: 'own',
       reports: 'read',
       web: 'off',
       files: 'off'
@@ -98,7 +105,8 @@ describe('customAgentCapabilities', () => {
       {
         allowedTools: ['email_get', 'calendar_event_get', 'future_tool_x'],
         grantWeb: 'gated',
-        grantExec: true
+        grantExec: true,
+        grantSessions: 'all'
       },
       { reports: 'produce' }
     )
@@ -112,13 +120,48 @@ describe('customAgentCapabilities', () => {
     ])
     expect(next.grantWeb).toBe('gated')
     expect(next.grantExec).toBe(true)
+    expect(next.grantSessions).toBe('all')
+  })
+
+  // task 09-02 — sessions is a GRANT dimension (read radius of the always-registered
+  // chat_session_* tools), not a tool set: it never touches allowed_tools, and the three
+  // session tool names are no longer managed by any card.
+  test('sessions is a grant: own/all round-trip without touching allowed_tools', () => {
+    const base: CustomAgentCapabilityProfile = {
+      email: 'read',
+      calendar: 'off',
+      knowledge: 'on',
+      sessions: 'own',
+      reports: 'read',
+      web: 'off',
+      files: 'off'
+    }
+    const own = customAgentPolicyFromCapabilities(base)
+    const all = customAgentPolicyFromCapabilities({ ...base, sessions: 'all' })
+    expect(own.grantSessions).toBe('own')
+    expect(all.grantSessions).toBe('all')
+    expect(all.allowedTools).toEqual(own.allowedTools)
+    expect(deriveCustomAgentCapabilities(all).profile.sessions).toBe('all')
+    for (const name of ['chat_session_list', 'chat_session_search', 'chat_session_get']) {
+      expect(own.allowedTools).not.toContain(name)
+      expect(isCustomAgentManagedTool(name)).toBe(false)
+    }
+    // A legacy row still carrying the session names keeps them as unmanaged atomics — a card
+    // edit must not delete them (and they are harmless: the gateway exempts them by name).
+    const legacy = applyCustomAgentCapabilityPatch(
+      { allowedTools: ['chat_session_list', 'email_get'], grantWeb: 'off', grantExec: false, grantSessions: 'all' },
+      { knowledge: 'off' }
+    )
+    expect(legacy.allowedTools).toContain('chat_session_list')
+    expect(legacy.grantSessions).toBe('all')
   })
 
   test('advanced partial selections are retained and surfaced as customized', () => {
     const policy = {
       allowedTools: ['email_get', 'email_draft_reply'],
       grantWeb: 'off' as const,
-      grantExec: false
+      grantExec: false,
+      grantSessions: 'own' as const
     }
     const derived = deriveCustomAgentCapabilities(policy)
     expect(derived.customized).toContain('email')
@@ -144,7 +187,8 @@ function assertTierNeverUnderstates(
   const derived = deriveCustomAgentCapabilities({
     allowedTools: [...selected],
     grantWeb: 'off',
-    grantExec: false
+    grantExec: false,
+    grantSessions: 'own'
   })
   const shown = tierTools(capability, derived.profile[capability])
   const understated = selected.filter(
@@ -174,7 +218,8 @@ describe('capability tier projection never understates granted power', () => {
     const { profile } = deriveCustomAgentCapabilities({
       allowedTools: defaults,
       grantWeb: 'off',
-      grantExec: false
+      grantExec: false,
+      grantSessions: 'own'
     })
     expect(profile.email).toBe('draft')
     expect(profile.reports).toBe('produce')
@@ -202,6 +247,23 @@ describe('capability tier projection never understates granted power', () => {
     for (const capability of TOOL_CAPABILITIES) {
       assertTierNeverUnderstates(capability, [], `空集 / ${capability}`)
       assertTierNeverUnderstates(capability, managedTools(capability), `全集 / ${capability}`)
+    }
+  })
+
+  test('grant dimensions project verbatim — a granted sessions=all is never shown as own', () => {
+    // 投影恒不撒谎的 grant 版：三个 grant 维度（web / files / sessions）没有档位阶梯可取整，
+    // 唯一诚实的投影就是原值。存量 knowledge=on 行由 Python 迁移规则物化成 all，这里钉住
+    // 「all 进来必须 all 出去」。
+    for (const sessions of CUSTOM_AGENT_CAPABILITY_TIERS.sessions) {
+      const derived = deriveCustomAgentCapabilities({
+        allowedTools: [],
+        grantWeb: 'off',
+        grantExec: false,
+        grantSessions: sessions
+      })
+      expect(derived.profile.sessions).toBe(sessions)
+      // a grant never marks the card customized (there is no atomic selection behind it)
+      expect(derived.customized).not.toContain('sessions')
     }
   })
 
