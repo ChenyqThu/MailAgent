@@ -83,6 +83,30 @@ def _now() -> int:
     return int(time.time())
 
 
+def _fetched_meta_columns(
+    meta: Optional[dict[str, Any]],
+) -> tuple[Optional[str], Optional[str], Optional[int], Optional[int]]:
+    """上游 meta dict → ``(display_name, capabilities_json, max_output, context_window)``。
+
+    任何一项拿不到（缺席 / None / 空串 / 非正整数）都落 None —— merge 侧用 COALESCE 写，
+    None = 这一列不动。**不臆造**：上游没标注能力就是 NULL，不是「全 false」。"""
+    meta = meta or {}
+    name = meta.get("display_name")
+    name = name.strip() if isinstance(name, str) and name.strip() else None
+    caps = meta.get("capabilities")
+    caps_json = (
+        json.dumps(caps, ensure_ascii=False, sort_keys=True) if isinstance(caps, dict) else None
+    )
+
+    def _positive_int(value: Any) -> Optional[int]:
+        ok = isinstance(value, int) and not isinstance(value, bool) and value > 0
+        return value if ok else None
+
+    max_output = _positive_int(meta.get("max_output"))
+    context_window = _positive_int(meta.get("context_window"))
+    return name, caps_json, max_output, context_window
+
+
 # ---------------------------------------------------------------------------
 # 行投影 dataclass
 # ---------------------------------------------------------------------------
@@ -465,15 +489,26 @@ class LlmProviderStore:
             conn.commit()
         return cur.rowcount > 0
 
-    def merge_fetched_models(self, provider_id: str, model_ids: Iterable[str]) -> int:
+    def merge_fetched_models(
+        self, provider_id: str, models: Iterable[tuple[str, Optional[dict[str, Any]]]]
+    ) -> int:
         """上游拉取结果 merge 进 ``llm_model``（prd §4.4）：新 id → INSERT
-        ``source='fetched', enabled=0``；已有行（含 manual）→ 只刷 ``fetched_at``，
-        **不覆盖** source / enabled / 元数据。返回新插入行数。"""
+        ``source='fetched', enabled=0`` 并落上游给出的元数据；已有行（含 manual）→ 刷
+        ``fetched_at`` + **只填 NULL 列**（COALESCE），**不覆盖** source / enabled /
+        用户手填过的元数据。返回新插入行数。
+
+        每项是 ``(model_id, meta)``；``meta`` 的键是列名子集
+        （``display_name`` / ``capabilities`` / ``max_output`` / ``context_window``），
+        缺席或 None = 上游没给这一项，不写（**不写 = 保留原值**，不是清空）。"""
         now = _now()
         inserted = 0
         # 先查存量集合再插/刷（同一连接、单事务）——upsert 的 rowcount 区分不了插入与更新，
         # 且本方法非热路径（行数 ≤ 数百），显式两步最直白。
-        ids = [m.strip() for m in model_ids if (m or "").strip()]
+        items = [
+            (mid.strip(), _fetched_meta_columns(meta))
+            for mid, meta in models
+            if (mid or "").strip()
+        ]
         with self._connection() as conn:
             existing = {
                 r["model_id"]
@@ -481,22 +516,27 @@ class LlmProviderStore:
                     "SELECT model_id FROM llm_model WHERE provider_id = ?", (provider_id,)
                 ).fetchall()
             }
-            for mid in ids:
+            for mid, cols in items:
                 if mid in existing:
                     conn.execute(
-                        "UPDATE llm_model SET fetched_at = ? "
+                        "UPDATE llm_model SET fetched_at = ?, "
+                        " display_name = COALESCE(display_name, ?), "
+                        " capabilities_json = COALESCE(capabilities_json, ?), "
+                        " max_output = COALESCE(max_output, ?), "
+                        " context_window = COALESCE(context_window, ?) "
                         "WHERE provider_id = ? AND model_id = ?",
-                        (now, provider_id, mid),
+                        (now, *cols, provider_id, mid),
                     )
                 else:
                     conn.execute(
                         "INSERT INTO llm_model "
-                        "(provider_id, model_id, enabled, source, fetched_at) "
-                        "VALUES (?,?,0,'fetched',?)",
-                        (provider_id, mid, now),
+                        "(provider_id, model_id, enabled, source, fetched_at, "
+                        " display_name, capabilities_json, max_output, context_window) "
+                        "VALUES (?,?,0,'fetched',?,?,?,?,?)",
+                        (provider_id, mid, now, *cols),
                     )
                     inserted += 1
-            if ids:
+            if items:
                 self._bump_version_conn(conn)
             conn.commit()
         return inserted

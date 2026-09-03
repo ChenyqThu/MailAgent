@@ -41,8 +41,10 @@ Settings「模型服务」区 / onboarding AI 步（可跳过）
 | `llm_provider_meta` | `snapshot_version` 单行计数 | 任何 provider/model CRUD 写后同事务 +1；gateway 按 version 缓存 registry 实例 |
 
 - `default` 行**禁删**（legacy 无冒号 ref 解析到它，删了 = 老配置引用悬空）。
-- 模型发现 merge 语义（`merge_fetched_models`）：新 id → INSERT `source='fetched', enabled=0`；
-  已有行（含 manual）→ 只刷 `fetched_at`，**不覆盖** source/enabled/元数据。
+- 模型发现 merge 语义（`merge_fetched_models`，收 `(model_id, meta)`）：新 id → INSERT
+  `source='fetched', enabled=0` 并落上游给出的元数据；已有行（含 manual）→ 刷 `fetched_at`
+  + **只填 NULL 列**（`COALESCE`），**不覆盖** source/enabled/用户手填过的元数据。`meta` 缺席
+  某键 = 上游没给这一项 → 该列不动（**不是**清空）。
 
 ## 3. providerRef 与 legacy 兼容
 
@@ -75,7 +77,7 @@ models=`LLM_ENABLED_MODELS`∪`LLM_MODEL`，enabled=1/source='manual'）。
 | 端点 | 鉴权 | 说明 |
 |---|---|---|
 | `GET ''` / `GET /{id}/models` | `verify_cf_access`（本地 token / CF JWT 双腿，远程可看） | 列表对 key 只回掩码（`hasKey` + `keyLast4`），**永不回明文**；`GET /{id}/models` = **纯 SQLite 读、零上游外呼**（旧 `?refresh=true` 入参被忽略——上游拉取拆去下面的 POST refresh，批 2 HIGH-2） |
-| `POST /{id}/models/refresh` | `verify_local_token`（**仅**本地 token） | 按 protocol 拉上游 `/models` merge 进表（出网 + 写表归写面，远程 CF 会话 403）；拉取失败恒 200 + `error` 可读消息（中转不透传 /models → 手动添加兜底）；base_url 仅 http/https、拒 userinfo |
+| `POST /{id}/models/refresh` | `verify_local_token`（**仅**本地 token） | 按 protocol 拉上游 `/models` merge 进表（出网 + 写表归写面，远程 CF 会话 403）；拉取失败恒 200 + `error` 可读消息（中转不透传 /models → 手动添加兜底）；base_url 仅 http/https、拒 userinfo。**元数据按 protocol 分流解析**（下面「模型元数据两条来源」） |
 | `POST ''` / `PATCH /{id}` / `DELETE /{id}` | `verify_local_token`（**仅**本地 token） | provider CRUD；PATCH 部分更新（`api_key` 传非空=重加密替换、传 None/空=清除）；create/PATCH 严格 schema（拒未知字段/隐式类型转换，终审 MEDIUM-4） |
 | `PUT /{id}/models` / `DELETE /{id}/models` | `verify_local_token` | model 行写面（P3）：PUT merge 语义——body 出现的键才动（防「勾启用」清掉 maxOutput）；model_id 走 body 防含 `/` 的 wire id 撞路由 |
 | `POST /{id}/test` | `verify_local_token` | 连通性测试（拿解密 key 发极小上游请求，探测面不给远程会话驱动） |
@@ -97,6 +99,25 @@ models=`LLM_ENABLED_MODELS`∪`LLM_MODEL`，enabled=1/source='manual'）。
 
 旧 `GET /api/llm/models`（llm.py，main/translate 两 profile + 内存 TTL 缓存）**保留不动**——
 flag off 的现状路径。
+
+### 5.1 模型元数据两条来源（2026-09-02）
+
+模型的 displayName / 上下文窗口 / 最大输出 / 能力位有**两条**来源，优先级恒
+**DB 行 > 目录 > 裸 id**（用户手填的必须赢，否则「改了没用」）：
+
+| 来源 | 何时进来 | 覆盖面 |
+|---|---|---|
+| 上游 `/models` 响应 | 用户在设置-AI 点「拉取模型列表」（`POST /{id}/models/refresh`） | 只有两家给：anthropic 给 `display_name`；openrouter 给 `context_length` / `top_provider.max_completion_tokens` / `architecture.input_modalities`(→vision) / `supported_parameters`(∋tools、reasoning)。openai / openai-compatible / deepseek / google 的响应行里只有 id，meta 恒空 |
+| models.dev 快照 | 前端入库生成物 `frontend/src/shared/modelCatalog/catalog.json`，`.github/workflows/sync-model-catalog.yml` 每周一开同步 PR | 18 provider / ~480 模型，含价格；查表 `modelCatalog/lookup.ts`（protocol → 首选 provider 有序链） |
+
+- 解析在 `src/api/routers/llm_providers.py::_parse_models_payload(body, protocol)`，落库在
+  `merge_fetched_models`（只填 NULL 列）。🔴 **有意不解析 openrouter 的 `pricing`**：
+  `llm_model` 没有价格列，成本估算走前端目录快照。
+- 🔴 运行时**不拉 models.dev**：桌面可能离线、远程 web 在 CF Access 后面。refresh 打的是
+  用户自己配的那个上游，且只在用户手动点击时发生（依据见 `modelCatalog/NOTICE.md`）。
+- 前端合并单源 = `useComposerModels.ts::composeComposerModelOption`；composer 选择器与
+  设置-AI 的 `ProviderModelsPanel` 走**同一个**函数（面板里目录值只进只读位 —— chip 与
+  输入框 placeholder，绝不进 value，否则 blur 会把目录猜测当手填值写回 DB）。
 
 ## 6. Node gateway（TS registry）
 

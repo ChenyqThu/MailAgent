@@ -8,8 +8,9 @@
 //   4. 覆写位走「DB 行权威、目录兜底」（布尔覆写赢，null/缺席落回 catalog）。
 //
 // ⚠️ 家族判定用例吃 catalog.json 真快照（定期覆写的生成物）——只挑长寿命 id
-// （claude-sonnet-4-6 / gpt-4o / gemini-2.5-pro / deepseek-chat），只断言家族与档位集合，
-// 不断言快照里的易变字段。
+// （claude-sonnet-4-6 / gpt-4o / gemini-2.5-pro / deepseek-v4-pro），只断言家族与档位集合，
+// 不断言快照里的易变字段。「长寿命」也只是相对的：09-02 那次同步里 deepseek-chat 就被上游
+// 下线了 —— 快照同步后本文件红属正常，按新快照更正前提，不要去改内核迁就旧断言。
 
 import { afterEach, describe, expect, test } from 'vitest'
 
@@ -156,10 +157,13 @@ describe('effortOptionsForModel — 家族阶梯 ∩ 协议子集', () => {
   })
 
   test('验收项：无 reasoning cap（catalog 标注了 caps 但不含 reasoning）→ 仅 [none] 且 applicable=false', () => {
+    // 曾经这里还有一行 ['deepseek-chat', 'deepseek']：09-02 同步快照后上游把
+    // deepseek-chat / deepseek-reasoner 整个下线了，deepseek 那家现存三个模型全带
+    // reasoning cap ⇒ 该协议下已经不存在「标了 caps 但不含 reasoning」的模型。
+    // 目录 miss 走的是 unknown 分支（阶梯照给），不是本用例的前提，故移出。
     for (const [id, protocol] of [
       ['gpt-4o', 'openai'],
-      ['gpt-image-2', 'openai'],
-      ['deepseek-chat', 'deepseek']
+      ['gpt-image-2', 'openai']
     ] as const) {
       const r = effortOptionsForModel(id, protocol)
       expect(r.options, id).toEqual(['none'])

@@ -293,7 +293,9 @@ def test_merge_fetched_preserves_manual_rows_and_enabled_state(tmp_path):
     st.create_provider("dash", protocol="openai-compatible")
     st.upsert_model("dash", "qwen-max", enabled=True, source="manual")
 
-    inserted = st.merge_fetched_models("dash", ["qwen-max", "qwen-plus", "  ", "qwen-turbo"])
+    inserted = st.merge_fetched_models(
+        "dash", [("qwen-max", None), ("qwen-plus", None), ("  ", None), ("qwen-turbo", None)]
+    )
     assert inserted == 2
     by_id = {m.model_id: m for m in st.list_models("dash")}
     # manual 行不被覆盖：source/enabled 原样，仅刷 fetched_at
@@ -303,7 +305,54 @@ def test_merge_fetched_preserves_manual_rows_and_enabled_state(tmp_path):
     assert by_id["qwen-plus"].source == "fetched" and by_id["qwen-plus"].enabled is False
 
     # 再 merge 同一批 → 零新增
-    assert st.merge_fetched_models("dash", ["qwen-max", "qwen-plus"]) == 0
+    assert st.merge_fetched_models("dash", [("qwen-max", None), ("qwen-plus", None)]) == 0
+
+
+def test_merge_fetched_meta_only_fills_null_columns(tmp_path):
+    """上游元数据只填 NULL 列：用户手填过的 display_name / max_output / context_window /
+    capabilities 恒赢；空着的列才由上游补。"""
+    st = _store(tmp_path)
+    st.create_provider("router", protocol="openrouter")
+    st.upsert_model(
+        "router",
+        "anthropic/claude-sonnet-4.5",
+        display_name="我的 Sonnet",
+        max_output=8192,
+        source="manual",
+    )
+    meta = {
+        "display_name": "Anthropic: Claude Sonnet 4.5",
+        "context_window": 200000,
+        "max_output": 64000,
+        "capabilities": {"tools": True, "reasoning": True, "vision": True},
+    }
+    st.merge_fetched_models(
+        "router", [("anthropic/claude-sonnet-4.5", meta), ("openai/gpt-5", meta)]
+    )
+    by_id = {m.model_id: m for m in st.list_models("router")}
+
+    kept = by_id["anthropic/claude-sonnet-4.5"]
+    assert kept.display_name == "我的 Sonnet"  # 手填值不被上游覆盖
+    assert kept.max_output == 8192
+    # 手填时留白的两列由上游补上
+    assert kept.context_window == 200000
+    assert kept.capabilities == {"tools": True, "reasoning": True, "vision": True}
+
+    fresh = by_id["openai/gpt-5"]
+    assert fresh.source == "fetched" and fresh.enabled is False
+    assert fresh.display_name == "Anthropic: Claude Sonnet 4.5"
+    assert fresh.context_window == 200000 and fresh.max_output == 64000
+
+
+def test_merge_fetched_meta_absent_keys_leave_columns_untouched(tmp_path):
+    """meta 缺席某键 = 上游没给这一项 → 该列不动（**不是**清空）。openai / 自建中转的
+    /models 只有 id，重复 refresh 不该把已有元数据抹掉。"""
+    st = _store(tmp_path)
+    st.create_provider("gw", protocol="openai-compatible")
+    st.upsert_model("gw", "m1", display_name="手填名", context_window=131072, source="manual")
+    st.merge_fetched_models("gw", [("m1", {})])
+    row = st.list_models("gw")[0]
+    assert row.display_name == "手填名" and row.context_window == 131072
 
 
 # ── snapshot（prd §4.3b 契约形状）+ version ──────────────────────────────────────────

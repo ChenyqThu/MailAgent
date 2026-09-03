@@ -7,7 +7,8 @@
   4. /snapshot §4.3b 形状 + 解密 key + CRUD 后 version 递增 + 纯读不 bump
   5. POST /{id}/models/refresh 上游 merge（fetched 不覆盖 manual/enabled）+ 失败可读
      error + 鉴权 = verify_local_token；GET /{id}/models 纯 SQLite 读零外呼、旧
-     ?refresh=true 入参被忽略（批2 HIGH-2 拆分）
+     ?refresh=true 入参被忽略（批2 HIGH-2 拆分）；元数据解析按 protocol 分流
+     （anthropic display_name / openrouter context+capabilities / 其余空）且只填 NULL 列
   6. /{id}/test 连通性探测（_probe_provider MockTransport 单元 + 端点转发）
   7. /chat/config enabledModels：flag off 字节级现状（表有行也不读）/ flag on 聚合投影
   8. P3 写面鉴权收紧：provider POST/PATCH/DELETE + model PUT/DELETE + /models/refresh +
@@ -33,7 +34,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import httpx
 import pytest
@@ -54,6 +55,9 @@ SEED_KEY = "seed-key-abcd1234"
 LOCAL_TOK = "ephemeral-secret-p0-llmprov"
 CF_HEADERS = {"Cf-Access-Jwt-Assertion": "header.payload.sig"}
 LOCAL_HEADERS = {auth_mod.LOCAL_TOKEN_HEADER: LOCAL_TOK}
+
+# `_fetch_provider_models` 的返回形状：(model_id, meta)，meta 键 = llm_model 列名子集。
+_Fetched = List[Tuple[str, Dict[str, Any]]]
 
 
 def _force_keyfile(monkeypatch):
@@ -610,8 +614,8 @@ def test_model_id_with_slash_roundtrip(client: TestClient):
 
 
 def test_models_refresh_merges_fetched_without_touching_manual(client: TestClient, monkeypatch):
-    async def _fake_fetch(protocol: str, base: str, api_key: str, **_kw) -> List[str]:
-        return ["claude-sonnet-4-6", "claude-new-model"]
+    async def _fake_fetch(protocol: str, base: str, api_key: str, **_kw) -> _Fetched:
+        return [("claude-sonnet-4-6", {}), ("claude-new-model", {})]
 
     monkeypatch.setattr(lp_router, "_fetch_provider_models", _fake_fetch)
     r = client.post(f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models/refresh")
@@ -632,6 +636,90 @@ def test_models_refresh_merges_fetched_without_touching_manual(client: TestClien
     data = r.json()["data"]
     assert len(data["models"]) == 3
     assert data["fetchedNew"] == 0 and data["error"] is None
+
+
+def test_parse_models_payload_anthropic_takes_display_name():
+    body = {
+        "data": [
+            {"id": "claude-sonnet-4-6", "display_name": "Claude Sonnet 4.6", "type": "model"},
+            {"id": "claude-haiku-4-5"},
+            {"no_id": True},
+        ]
+    }
+    parsed = lp_router._parse_models_payload(body, "anthropic")
+    assert [mid for mid, _ in parsed] == ["claude-sonnet-4-6", "claude-haiku-4-5"]
+    assert parsed[0][1]["display_name"] == "Claude Sonnet 4.6"
+    # 上游没给 display_name → 键值 None（存储层落 NULL，不臆造）
+    assert parsed[1][1]["display_name"] is None
+
+
+def test_parse_models_payload_openrouter_takes_context_and_capabilities():
+    body = {
+        "data": [
+            {
+                "id": "anthropic/claude-sonnet-4.5",
+                "name": "Anthropic: Claude Sonnet 4.5",
+                "context_length": 1000000,
+                "architecture": {"input_modalities": ["text", "image", "file"]},
+                "supported_parameters": ["tools", "reasoning", "temperature"],
+                "top_provider": {"max_completion_tokens": 64000},
+                "pricing": {"prompt": "0.000003", "completion": "0.000015"},
+            },
+            {
+                "id": "text-only/model",
+                "context_length": 8192,
+                "architecture": {"input_modalities": ["text"]},
+                "supported_parameters": ["temperature"],
+            },
+        ]
+    }
+    by_id = dict(lp_router._parse_models_payload(body, "openrouter"))
+    rich = by_id["anthropic/claude-sonnet-4.5"]
+    assert rich["display_name"] == "Anthropic: Claude Sonnet 4.5"
+    assert rich["context_window"] == 1000000 and rich["max_output"] == 64000
+    assert rich["capabilities"] == {"tools": True, "reasoning": True, "vision": True}
+    # supported_parameters 是完整枚举 → 缺席的能力位是显式 false，不是「未标注」
+    lean = by_id["text-only/model"]
+    assert lean["capabilities"] == {"tools": False, "reasoning": False, "vision": False}
+    assert lean["context_window"] == 8192 and lean["max_output"] is None
+    # 有意不解析 pricing（llm_model 无价格列，成本估算走前端目录快照）
+    assert "pricing" not in rich and "cost" not in rich
+
+
+def test_parse_models_payload_other_protocols_carry_no_meta():
+    body = {"data": [{"id": "gpt-5.5", "display_name": "GPT 5.5", "context_length": 400000}]}
+    for protocol in ("openai", "openai-compatible", "deepseek", "google"):
+        assert lp_router._parse_models_payload(body, protocol) == [("gpt-5.5", {})]
+
+
+def test_models_refresh_fills_metadata_without_overwriting_manual_values(
+    client: TestClient, monkeypatch
+):
+    """refresh 把上游元数据落进空列，但用户在 Settings 手填过的值恒赢。"""
+    client.get("/api/llm/providers")  # seed（claude-sonnet-4-6 是 manual 行）
+    client.put(
+        f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models",
+        json={"id": "claude-sonnet-4-6", "displayName": "我的 Sonnet", "maxOutput": 8192},
+    )
+
+    async def _fake_fetch(protocol: str, base: str, api_key: str, **_kw) -> _Fetched:
+        meta = {
+            "display_name": "Claude Sonnet 4.6",
+            "context_window": 200000,
+            "max_output": 64000,
+        }
+        return [("claude-sonnet-4-6", meta), ("claude-new-model", meta)]
+
+    monkeypatch.setattr(lp_router, "_fetch_provider_models", _fake_fetch)
+    data = client.post(f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models/refresh").json()["data"]
+    by_id = {m["id"]: m for m in data["models"]}
+
+    edited = by_id["claude-sonnet-4-6"]
+    assert edited["displayName"] == "我的 Sonnet" and edited["maxOutput"] == 8192
+    assert edited["contextWindow"] == 200000  # 留白的那列才由上游补
+    fresh = by_id["claude-new-model"]
+    assert fresh["displayName"] == "Claude Sonnet 4.6" and fresh["contextWindow"] == 200000
+    assert fresh["maxOutput"] == 64000
 
 
 def test_models_get_is_pure_read_and_ignores_legacy_refresh_param(
@@ -664,7 +752,7 @@ def test_models_refresh_requires_local_token(client: TestClient, monkeypatch):
     assert client.post(url).status_code == 403
     assert client.post(url, headers=CF_HEADERS).status_code == 403
 
-    async def _fake(*_a, **_k) -> List[str]:
+    async def _fake(*_a, **_k) -> _Fetched:
         return []
 
     monkeypatch.setattr(lp_router, "_fetch_provider_models", _fake)
@@ -672,7 +760,7 @@ def test_models_refresh_requires_local_token(client: TestClient, monkeypatch):
 
 
 def test_models_refresh_failure_is_readable_not_5xx(client: TestClient, monkeypatch):
-    async def _fail(*_a, **_k) -> List[str]:
+    async def _fail(*_a, **_k) -> _Fetched:
         raise ValueError(
             "models endpoint not available (HTTP 404) — this upstream may not expose "
             "/models; add models manually"
@@ -902,7 +990,7 @@ def test_models_refresh_passes_provider_headers(client: TestClient, monkeypatch)
     )
     seen: Dict[str, Any] = {}
 
-    async def _fake(protocol: str, base: str, api_key: str, **kw) -> List[str]:
+    async def _fake(protocol: str, base: str, api_key: str, **kw) -> _Fetched:
         seen.update(kw)
         return []
 

@@ -5,18 +5,28 @@
 // 手动添加兜底）；启用勾选 / maxOutput 编辑 → PUT model 行（后端 merge 语义，只动
 // 传的键）；手动添加默认 enabled。capabilities 为 null = 上游未标注 → 不渲染标签
 // （勿当 false 渲染，prd §4.3b 注记②）。
+//
+// 元数据的呈现走**与 composer 模型选择器同一个 selector**（`composeComposerModelOption`）：
+// DB 行赢、models.dev 目录只填留白（09-02）。此前本面板只读 DB 行，而真实机器上
+// `capabilities_json` / `context_window` 几乎全 NULL —— 能力 chip 从落地那天起就没显示过。
+// 🔴 目录值只进**只读位**（chip + 两个 Input 的 placeholder），绝不写进 Input 的 value ——
+// 那会让 blur 把目录猜测当成用户手填值写回 DB。
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, Plus, RefreshCw, X } from 'lucide-react'
 
+import { formatTokens } from '@shared/assistant/components/modelDetailCard.lib'
+import { composeComposerModelOption } from '@shared/hooks/useComposerModels'
 import {
   deleteLlmProviderModel,
   refreshLlmProviderModels,
   upsertLlmProviderModel,
   useLlmProviderModels,
-  type LlmProviderModel
+  type LlmModelCapabilities,
+  type LlmProviderModel,
+  type LlmProviderProtocol
 } from '@shared/hooks/useLlmProviders'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
@@ -25,18 +35,40 @@ import { Button } from '@shared/components/ui/button'
 import { Checkbox } from '@shared/components/ui/checkbox'
 import { Input } from '@shared/components/ui/input'
 
+/** DB 行 → 与 composer 同口径的合并结果（行赢、目录填留白）。**不导出**：本文件是 .tsx，
+ *  `react-refresh/only-export-components` 只许导出组件。 */
+function mergeWithCatalog(
+  providerId: string,
+  protocol: LlmProviderProtocol | null,
+  model: LlmProviderModel
+): ReturnType<typeof composeComposerModelOption> {
+  return composeComposerModelOption({
+    ref: `${providerId}:${model.id}`,
+    providerId,
+    providerLabel: null,
+    protocol,
+    modelId: model.id,
+    rowDisplayName: model.displayName,
+    rowCapabilities: model.capabilities,
+    rowMaxOutput: model.maxOutput,
+    rowContextWindow: model.contextWindow
+  })
+}
+
 /** capabilities 标签：仅显式 true 的能力位渲染 chip；null（未标注）→ 整块不渲染。 */
-function CapabilityTags({ model }: { model: LlmProviderModel }): React.ReactElement | null {
+function CapabilityTags({
+  capabilities
+}: {
+  capabilities: LlmModelCapabilities | null
+}): React.ReactElement | null {
   const { t } = useTranslation()
-  if (model.capabilities === null) return null
+  if (capabilities === null) return null
   const entries: Array<[string, string]> = [
     ['tools', t('settings.providers.models.cap.tools')],
     ['vision', t('settings.providers.models.cap.vision')],
     ['reasoning', t('settings.providers.models.cap.reasoning')]
   ]
-  const active = entries.filter(
-    ([k]) => (model.capabilities as Record<string, unknown>)[k] === true
-  )
+  const active = entries.filter(([k]) => (capabilities as Record<string, unknown>)[k] === true)
   if (active.length === 0) return null
   return (
     <span className="flex items-center gap-1">
@@ -51,9 +83,12 @@ function CapabilityTags({ model }: { model: LlmProviderModel }): React.ReactElem
 
 export function ProviderModelsPanel({
   providerId,
+  protocol,
   readOnly
 }: {
   providerId: string
+  /** 目录查表的 protocol 依据（`llm_provider.protocol`）——决定查哪家的元数据。 */
+  protocol: LlmProviderProtocol | null
   readOnly: boolean
 }): React.ReactElement {
   const { t } = useTranslation()
@@ -193,56 +228,73 @@ export function ProviderModelsPanel({
         <div className="py-2 text-aux text-ink-fg-3">{t('settings.providers.models.empty')}</div>
       ) : (
         <div className="flex max-h-[280px] flex-col gap-0.5 overflow-y-auto">
-          {models.map((m) => (
-            <div key={m.id} className="flex items-center gap-2 rounded-sm px-1 py-1 hover:bg-ink-3">
-              <Checkbox
-                disabled={readOnly}
-                checked={m.enabled}
-                onCheckedChange={(checked) => void handleToggle(m.id, checked === true)}
-                aria-label={m.id}
-              />
-              <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-fg">
-                {m.id}
-              </span>
-              <CapabilityTags model={m} />
-              {m.source === 'manual' && (
-                <span className="rounded bg-ink-3 px-1 py-0.5 text-meta text-ink-fg-3">
-                  {t('settings.providers.models.manualBadge')}
+          {models.map((m) => {
+            const merged = mergeWithCatalog(providerId, protocol, m)
+            return (
+              <div
+                key={m.id}
+                className="flex items-center gap-2 rounded-sm px-1 py-1 hover:bg-ink-3"
+              >
+                <Checkbox
+                  disabled={readOnly}
+                  checked={m.enabled}
+                  onCheckedChange={(checked) => void handleToggle(m.id, checked === true)}
+                  aria-label={m.id}
+                />
+                <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-fg">
+                  {m.id}
                 </span>
-              )}
-              <Input
-                type="number"
-                disabled={readOnly}
-                value={maxOutputDraft[m.id] ?? m.maxOutput?.toString() ?? ''}
-                placeholder={t('settings.providers.models.maxOutputPlaceholder')}
-                onChange={(e) => setMaxOutputDraft((d) => ({ ...d, [m.id]: e.target.value }))}
-                onBlur={(e) => void handleMaxOutputBlur(m, e.target.value)}
-                className="h-6 w-[92px] px-1.5 text-[11px]"
-                aria-label={t('settings.providers.models.maxOutputAria', { model: m.id })}
-              />
-              <Input
-                type="number"
-                disabled={readOnly}
-                value={contextWindowDraft[m.id] ?? m.contextWindow?.toString() ?? ''}
-                placeholder={t('settings.providers.models.contextWindowPlaceholder')}
-                onChange={(e) =>
-                  setContextWindowDraft((draft) => ({ ...draft, [m.id]: e.target.value }))
-                }
-                onBlur={(e) => void handleContextWindowBlur(m, e.target.value)}
-                className="h-6 w-[92px] px-1.5 text-[11px]"
-                aria-label={t('settings.providers.models.contextWindowAria', { model: m.id })}
-              />
-              {!readOnly && (
-                <button
-                  onClick={() => void handleDelete(m.id)}
-                  aria-label={t('settings.providers.models.deleteAria', { model: m.id })}
-                  className="rounded p-0.5 text-ink-fg-3 transition-colors hover:bg-ink-3 hover:text-ink-fg"
-                >
-                  <X className="size-3.5" />
-                </button>
-              )}
-            </div>
-          ))}
+                <CapabilityTags capabilities={merged.capabilities} />
+                {m.source === 'manual' && (
+                  <span className="rounded bg-ink-3 px-1 py-0.5 text-meta text-ink-fg-3">
+                    {t('settings.providers.models.manualBadge')}
+                  </span>
+                )}
+                <Input
+                  type="number"
+                  disabled={readOnly}
+                  value={maxOutputDraft[m.id] ?? m.maxOutput?.toString() ?? ''}
+                  // 空着时 placeholder 显示目录值 = 这一行**实际生效**的数字（灰字，非 value
+                  // ⇒ blur 不会把它写进 DB）。短写法与选择器药丸同口径（92px 放不下 1000000）。
+                  // 目录也没有才退回字面提示。
+                  placeholder={
+                    merged.maxOutput !== null
+                      ? formatTokens(merged.maxOutput)
+                      : t('settings.providers.models.maxOutputPlaceholder')
+                  }
+                  onChange={(e) => setMaxOutputDraft((d) => ({ ...d, [m.id]: e.target.value }))}
+                  onBlur={(e) => void handleMaxOutputBlur(m, e.target.value)}
+                  className="h-6 w-[92px] px-1.5 text-[11px]"
+                  aria-label={t('settings.providers.models.maxOutputAria', { model: m.id })}
+                />
+                <Input
+                  type="number"
+                  disabled={readOnly}
+                  value={contextWindowDraft[m.id] ?? m.contextWindow?.toString() ?? ''}
+                  placeholder={
+                    merged.contextWindow !== null
+                      ? formatTokens(merged.contextWindow)
+                      : t('settings.providers.models.contextWindowPlaceholder')
+                  }
+                  onChange={(e) =>
+                    setContextWindowDraft((draft) => ({ ...draft, [m.id]: e.target.value }))
+                  }
+                  onBlur={(e) => void handleContextWindowBlur(m, e.target.value)}
+                  className="h-6 w-[92px] px-1.5 text-[11px]"
+                  aria-label={t('settings.providers.models.contextWindowAria', { model: m.id })}
+                />
+                {!readOnly && (
+                  <button
+                    onClick={() => void handleDelete(m.id)}
+                    aria-label={t('settings.providers.models.deleteAria', { model: m.id })}
+                    className="rounded p-0.5 text-ink-fg-3 transition-colors hover:bg-ink-3 hover:text-ink-fg"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
       {/* 手动添加（中转不透传 /models 时的兜底，source='manual'） */}

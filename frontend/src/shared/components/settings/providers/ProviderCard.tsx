@@ -428,7 +428,11 @@ export function ProviderCard({
                 ))}
             </div>
           </FieldRow>
-          <ProviderModelsPanel providerId={provider.id} readOnly={readOnly} />
+          <ProviderModelsPanel
+            providerId={provider.id}
+            protocol={provider.protocol}
+            readOnly={readOnly}
+          />
         </div>
       )}
     </div>

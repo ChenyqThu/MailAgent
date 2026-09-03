@@ -1,6 +1,9 @@
-// 模型元数据目录（models.dev）快照生成器 —— **手动跑、产物入库**。
+// 模型元数据目录（models.dev）快照生成器 —— **产物入库**。
 //
 //   pnpm catalog:models        # 拉最新快照并覆写 src/shared/modelCatalog/catalog.json
+//
+// 除手动跑外，`.github/workflows/sync-model-catalog.yml` 每周一在 CI 跑同一条命令，有 diff
+// 就开一个同步 PR（出网只在 runner 上；不自动合，价格 / context 漂移要人扫一眼）。
 //
 // 🔴 为什么是「生成物入库」而不是运行时联网拉：
 //   - 桌面 App 可能离线；远程 web 在 CF Access 后面。运行时拉取会把「模型名显示不出来」
@@ -8,7 +11,7 @@
 //   - 与本仓 `requirements.lock.txt` 同一条纪律：生成物入库，保打包再现性。
 //   - 快照过期的后果是**降级**（新模型查不到 → 只显示裸 id，和引入目录之前一模一样），不是崩。
 //
-// 更新节奏建议：跟发版走（bump version 时顺手跑一次，diff 进同一个 commit）。
+// 更新节奏：CI 每周一开同步 PR；发版前想更稳可以再手动跑一次。
 //
 // 授权：上游 anomalyco/models.dev 是 **MIT**（见 src/shared/modelCatalog/NOTICE.md）。
 // 🔴 有意**不用** lobehub 的 `model-bank`：那个包继承 LobeHub Community License，

@@ -1,0 +1,60 @@
+# 模型元数据目录快照的每周同步 PR
+#
+# `frontend/src/shared/modelCatalog/catalog.json` 是 models.dev 的**入库生成物**（运行时
+# 零联网，理由见同目录 NOTICE.md）。代价是快照会过期 —— 上一次手动跑到本 workflow 建起来
+# 之间差了 28 个新模型（claude-fable-5-1 / gemini-3.8-flash / glm-5.3-flash / grok-4.6 …）
+# 与 14 处漂移（gemini-3.6-flash 输入价 1.5 → 0.75）。过期的后果是**降级**（查不到就只显示
+# 裸 id）+ 数字过时，不是崩，所以这里只开 PR，不自动合。
+#
+# 🔴 出网只发生在 CI runner 上，产物经 PR 进库 —— App 运行时仍然一次都不拉 models.dev。
+#
+# 分支固定 `chore/sync-model-catalog`：peter-evans/create-pull-request 对同名分支是
+# force-push 覆盖，所以连开数周不会攒出一堆 PR，只有一个恒定最新的。
+
+name: Sync model catalog
+
+on:
+  schedule:
+    - cron: '17 4 * * 1' # 每周一 04:17 UTC（错开整点，GitHub 定时任务整点最拥挤）
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # 推同步分支
+  pull-requests: write # 开/更新 PR
+
+concurrency:
+  group: sync-model-catalog
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22 # 与 ci-test.yml / build-mac.yml 一致
+
+      # 脚本零依赖（只用 node:fs / node:path / 内置 fetch），故不装 pnpm 依赖。
+      # 上游 provider 改名/下线时脚本自己 throw —— 抽取失败必须红在这里，不许静默少一家。
+      - name: Regenerate snapshot
+        working-directory: frontend
+        run: node scripts/sync-model-catalog.mjs
+
+      - name: Open sync PR if the snapshot changed
+        uses: peter-evans/create-pull-request@v7
+        with:
+          add-paths: frontend/src/shared/modelCatalog/catalog.json
+          branch: chore/sync-model-catalog
+          delete-branch: true
+          commit-message: 'chore(catalog): sync model metadata snapshot from models.dev'
+          title: 'chore(catalog): sync model metadata snapshot'
+          body: |
+            `frontend/src/shared/modelCatalog/catalog.json` 由
+            `frontend/scripts/sync-model-catalog.mjs` 从 models.dev（MIT）重新生成。
+
+            合之前扫一眼 diff：主要看新增模型与**价格 / context 的漂移**（这两项会直接进
+            成本估算与上下文用量环）。`providerIcons.test.ts` 的覆盖闸会在新厂商进来时红，
+            那时需要补 logo 别名或显式登记「无资产」。

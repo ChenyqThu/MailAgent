@@ -144,14 +144,64 @@ def _outbound_base_problem(base: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _parse_models_payload(body: Any) -> List[str]:
-    """GET /models 响应解析 data[].id（OpenAI / Anthropic / OpenRouter 三家同形）。"""
+def _anthropic_model_meta(item: Dict[str, Any]) -> Dict[str, Any]:
+    """anthropic ``/v1/models`` 行 → meta。它只多给一个 ``display_name``
+    （"Claude Sonnet 4.5"），没有 context / 能力标注 —— 那些靠前端 models.dev 目录兜底。"""
+    return {"display_name": item.get("display_name")}
+
+
+def _openrouter_model_meta(item: Dict[str, Any]) -> Dict[str, Any]:
+    """openrouter ``/models`` 行 → meta。这是唯一一家在 /models 里就把上下文窗口与能力
+    枚举齐了的上游，故值得逐字段解析。
+
+    ``supported_parameters`` 是**完整枚举**（不是「已知支持的一部分」），故这里给出的
+    capabilities 三键都是显式 true/false —— 与「上游未标注 = NULL」不冲突：能拿到这个
+    数组本身就是标注。拿不到数组时整个 capabilities 缺席（不臆造全 false）。
+
+    🔴 有意不解析 ``pricing``：``llm_model`` 没有价格列，成本估算走前端目录快照
+    （`modelCost.ts`）。解析一个没有落点的字段等于写一段死代码。"""
+    top = item.get("top_provider")
+    arch = item.get("architecture")
+    modalities = arch.get("input_modalities") if isinstance(arch, dict) else None
+    params = item.get("supported_parameters")
+    meta: Dict[str, Any] = {
+        "display_name": item.get("name"),
+        "context_window": item.get("context_length"),
+        "max_output": top.get("max_completion_tokens") if isinstance(top, dict) else None,
+    }
+    if isinstance(params, list):
+        meta["capabilities"] = {
+            "tools": "tools" in params,
+            "reasoning": "reasoning" in params,
+            "vision": isinstance(modalities, list) and "image" in modalities,
+        }
+    return meta
+
+
+def _parse_models_payload(body: Any, protocol: str) -> List[Tuple[str, Dict[str, Any]]]:
+    """GET /models 响应解析 ``(id, meta)``（OpenAI / Anthropic / OpenRouter 三家 data[] 同形）。
+
+    meta 按 protocol 分流：anthropic 与 openrouter 各自的 /models 带元数据（见上面两个
+    helper）；其余（openai / openai-compatible / deepseek / google 的 OpenAI 兼容面）的响应
+    行里只有 id + 时间戳，meta 恒空。meta 的键 = ``llm_model`` 列名子集，语义由
+    ``merge_fetched_models`` 定：只填 NULL 列，绝不覆盖用户手填值。"""
     if not isinstance(body, dict):
         return []
     data = body.get("data")
     if not isinstance(data, list):
         return []
-    return [i["id"] for i in data if isinstance(i, dict) and isinstance(i.get("id"), str)]
+    out: List[Tuple[str, Dict[str, Any]]] = []
+    for item in data:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        if protocol == "anthropic":
+            meta = _anthropic_model_meta(item)
+        elif protocol == "openrouter":
+            meta = _openrouter_model_meta(item)
+        else:
+            meta = {}
+        out.append((item["id"], meta))
+    return out
 
 
 def _merge_headers(
@@ -195,10 +245,11 @@ async def _fetch_provider_models(
     *,
     headers: Optional[Dict[str, str]] = None,
     transport: Optional[httpx.AsyncBaseTransport] = None,
-) -> List[str]:
-    """按 protocol 拉上游模型列表。anthropic 腿 401 时再退 Bearer 一轮（CRS 类中转两种
-    鉴权头都存在，镜像 llm.py 双协议探测风格）。失败抛 ValueError（消息可读、不含 key），
-    由端点转成 payload 的 error 字段（不 5xx —— 中转不透传 /models 时手动添加是正路）。"""
+) -> List[Tuple[str, Dict[str, Any]]]:
+    """按 protocol 拉上游模型列表，返回 ``(id, meta)``。anthropic 腿 401 时再退 Bearer 一轮
+    （CRS 类中转两种鉴权头都存在，镜像 llm.py 双协议探测风格）。失败抛 ValueError（消息可读、
+    不含 key），由端点转成 payload 的 error 字段（不 5xx —— 中转不透传 /models 时手动添加是
+    正路）。"""
     url, req_headers = _models_request(protocol, base, api_key, headers)
     async with httpx.AsyncClient(timeout=_UPSTREAM_TIMEOUT, transport=transport) as client:
         try:
@@ -218,7 +269,7 @@ async def _fetch_provider_models(
     if not r.is_success:
         raise ValueError(f"models endpoint returned HTTP {r.status_code}")
     try:
-        models = _parse_models_payload(r.json())
+        models = _parse_models_payload(r.json(), protocol)
     except ValueError as exc:
         raise ValueError("models endpoint returned non-JSON payload") from exc
     return models
@@ -546,7 +597,13 @@ async def refresh_provider_models(
     **不覆盖** manual 行与已有 enabled 状态），再返回全量模型行。归写面 =
     verify_local_token（review 批2 HIGH-2：出网 + merge 写表，远程 CF 会话恒 403）。
     拉取失败 → 恒 200 + ``error`` 可读消息 + 现存行照常返回（中转不透传 /models 时
-    走手动添加兜底）。响应形状与旧 ``GET ?refresh=true`` 一致。"""
+    走手动添加兜底）。响应形状与旧 ``GET ?refresh=true`` 一致。
+
+    响应里带的元数据（display_name / context_window / max_output / capabilities）只来自
+    **该 provider 自己的 ``/models``**（anthropic 与 openrouter 会给，见
+    ``_parse_models_payload``），且只填 NULL 列 —— 用户手填过的值恒赢。这是运行时唯一的
+    元数据出网点，挂在用户手动点「刷新」上；不拉 models.dev（前端目录是入库的离线快照，
+    见 ``frontend/src/shared/modelCatalog/NOTICE.md``）。"""
     store = ensure_seeded_store()
     prov = _require_provider(store, provider_id)
     error: Optional[str] = None
@@ -559,10 +616,10 @@ async def refresh_provider_models(
     if error is None:
         api_key = store.get_provider_api_key(provider_id) or ""
         try:
-            ids = await _fetch_provider_models(
+            fetched = await _fetch_provider_models(
                 prov.protocol, base, api_key, headers=prov.headers
             )
-            fetched_new = store.merge_fetched_models(provider_id, ids)
+            fetched_new = store.merge_fetched_models(provider_id, fetched)
         except ValueError as exc:
             error = str(exc)
         except Exception:  # noqa: BLE001 — 防御兜底；不 5xx

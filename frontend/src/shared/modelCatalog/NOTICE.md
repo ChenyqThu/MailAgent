@@ -21,7 +21,7 @@
   modalities.input∋image / attachment / release_date / knowledge / status==='deprecated'`。
   其余（`settings` / `reasoning_options` / `experimental` / `open_weights` …）全丢。
 
-规模：18 provider / 466 模型 / 129KB raw（gzip ~18KB）。
+规模：18 provider / 479 模型 / 133KB raw（gzip ~18KB）。
 `src/shared/` 会同时进桌面 renderer 与远程 web 两个 bundle，所以宁可窄不要宽。
 
 ## 怎么更新
@@ -30,12 +30,20 @@
 cd frontend && node scripts/sync-model-catalog.mjs
 ```
 
-手动跑、**产物入库**（与 `requirements.lock.txt` 同一条纪律：生成物入库，保打包再现性）。
-建议跟发版走 —— bump version 时顺手跑一次，diff 进同一个 commit。
+**产物入库**（与 `requirements.lock.txt` 同一条纪律：生成物入库，保打包再现性）。
+`.github/workflows/sync-model-catalog.yml` 每周一自动跑同一个脚本，有 diff 就往固定分支
+`chore/sync-model-catalog` 开（覆盖）一个 PR —— 出网只发生在 CI runner 上。**不自动合**：
+价格 / context 的漂移值得人扫一眼。手动跑仍然随时可以（发版前顺手跑一次最省事）。
 
 🔴 **不要**运行时联网拉：桌面 App 可能离线、远程 web 在 CF Access 后面，运行时拉取会把
 「模型名显示不出来」变成一个网络故障面。快照过期的后果只是**降级**（新模型查不到 → 只显示
 裸 id，和引入目录之前一模一样），不是崩。
+
+这条 2026-09-02 有一次**边界澄清**（不是放宽）：用户在设置-AI 点「拉取模型列表」时，后端
+`POST /api/llm/providers/{id}/models/refresh` 会解析**该 provider 自己 `/models` 响应里带的**
+元数据（anthropic 的 `display_name`；openrouter 的 `context_length` / `supported_parameters`
+/ `top_provider.max_completion_tokens`），只填 `llm_model` 的 NULL 列。那是用户手动触发的、
+打向用户自己配的上游的一次请求，**不是**拉 models.dev —— 本快照仍然是运行时零出网的离线件。
 
 🔴 **不要**手改 `catalog.json`：它是生成物，下次 sync 会被整份覆写。要补上游没有的模型
 （已知缺口：豆包 / 火山）请写 `lookup.ts` 的 `LOCAL_CATALOG_OVERRIDES`。

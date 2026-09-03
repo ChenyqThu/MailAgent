@@ -32,21 +32,28 @@ import type { LlmProviderProtocol } from '@shared/hooks/useLlmProviders'
 import {
   AnthropicColorIcon,
   AnthropicIcon,
+  CohereIcon,
   DeepSeekColorIcon,
   DeepSeekIcon,
   DoubaoColorIcon,
   DoubaoIcon,
+  FireworksIcon,
   GeminiColorIcon,
   GeminiIcon,
+  GroqIcon,
   KimiIcon,
   MiniMaxColorIcon,
   MiniMaxIcon,
+  MistralIcon,
   OpenAiIcon,
   OpenRouterIcon,
+  PerplexityIcon,
   QwenColorIcon,
   QwenIcon,
   SiliconCloudColorIcon,
   SiliconCloudIcon,
+  TogetherAiIcon,
+  XaiIcon,
   ZhipuColorIcon,
   ZhipuIcon,
   type ProviderIconProps
@@ -64,9 +71,9 @@ export type ProviderIconVariant = 'mono' | 'color'
  *
  *  🔴 目录侧的 key 与我们的历史 key 不同名的那几家（`alibaba`/`alibaba-cn` = Qwen、
  *  `moonshotai` = Kimi、`zhipuai`/`zai` = 智谱/Z.AI）必须在这里补齐别名，否则目录命中了却
- *  查不到 logo，会静默降级回 providerId —— 正是本次要修的那个错。目录里有条目但我们**有意**
- *  没有资产的七家（cohere / fireworks-ai / groq / mistral / perplexity / togetherai / xai）
- *  由 providerIcons.test.ts 的覆盖闸逐个登记，快照更新后冒出新厂商时那道闸会红。 */
+ *  查不到 logo，会静默降级回 providerId —— 正是本次要修的那个错。曾经登记「有意无资产」的
+ *  七家（cohere / fireworks-ai / groq / mistral / perplexity / togetherai / xai）09-02 已补齐
+ *  mono 资产，`providerIcons.test.ts` 的无资产名单随之清空；快照更新后冒出新厂商时那道闸会红。 */
 export const PROVIDER_ICONS: Record<string, ProviderIconRender> = {
   anthropic: AnthropicIcon,
   claude: AnthropicIcon,
@@ -90,7 +97,17 @@ export const PROVIDER_ICONS: Record<string, ProviderIconRender> = {
   minimax: MiniMaxIcon,
   doubao: DoubaoIcon,
   siliconflow: SiliconCloudIcon,
-  siliconcloud: SiliconCloudIcon
+  siliconcloud: SiliconCloudIcon,
+  xai: XaiIcon,
+  grok: XaiIcon,
+  mistral: MistralIcon,
+  groq: GroqIcon,
+  perplexity: PerplexityIcon,
+  togetherai: TogetherAiIcon,
+  together: TogetherAiIcon,
+  cohere: CohereIcon,
+  'fireworks-ai': FireworksIcon,
+  fireworks: FireworksIcon
 }
 
 /** 上表的 color 对应物。**只列真的有可用 color 资产的家** —— 查不到就自动落回 mono 表，

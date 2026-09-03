@@ -144,16 +144,11 @@ describe('PROVIDER_COLOR_ICONS 与 mono 表的关系', () => {
 })
 
 /** 目录里有条目、但本仓**有意**没有 logo 资产的家。解析对它们会降级到 providerId/protocol
- *  （= 与引入目录之前逐字一样），不是 bug。要加资产就从这里删一行。 */
-const CATALOG_PROVIDERS_WITHOUT_ICON = new Set([
-  'cohere',
-  'fireworks-ai',
-  'groq',
-  'mistral',
-  'perplexity',
-  'togetherai',
-  'xai'
-])
+ *  （= 与引入目录之前逐字一样），不是 bug。要加资产就从这里删一行。
+ *
+ *  09-02 清空：原先登记的七家（cohere / fireworks-ai / groq / mistral / perplexity /
+ *  togetherai / xai）已从 lobe-icons 补齐 mono 资产。 */
+const CATALOG_PROVIDERS_WITHOUT_ICON = new Set<string>([])
 
 describe('目录厂商 × 图标表的覆盖闸', () => {
   test('🔴 catalog.json 的每个 provider 要么有 logo，要么显式登记在「无资产」名单里', () => {
@@ -168,6 +163,16 @@ describe('目录厂商 × 图标表的覆盖闸', () => {
   test('「无资产」名单不许留过期项（真加了资产要同步删）', () => {
     for (const pid of CATALOG_PROVIDERS_WITHOUT_ICON) {
       expect(PROVIDER_ICONS[pid], `${pid} 已有 logo，应从无资产名单里删掉`).toBeUndefined()
+    }
+  })
+
+  test('09-02 补的七家：mono 与 color 语境都解析得出 logo（color 逐级回退 mono）', () => {
+    const added = ['xai', 'mistral', 'groq', 'perplexity', 'cohere', 'togetherai', 'fireworks-ai']
+    for (const pid of added) {
+      const mono = resolveProviderIcon({ catalogProviderId: pid }, 'mono')
+      expect(mono, `${pid} 没有 mono logo`).not.toBeNull()
+      // 这七家只拷了 mono；彩色语境必须回退到自己的 mono，而不是掉成 lucide Cpu（=null）。
+      expect(resolveProviderIcon({ catalogProviderId: pid }, 'color')).toBe(mono)
     }
   })
 })

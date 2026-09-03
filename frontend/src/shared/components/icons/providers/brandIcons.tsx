@@ -2,7 +2,8 @@
 //
 // 🔴 资产来源与授权：
 //   MIT © LobeHub — https://github.com/lobehub/lobe-icons
-//   mono 逐字取自 `@lobehub/icons-static-svg@1.72.0` 的 `icons/<name>.svg`；
+//   mono 逐字取自 `@lobehub/icons-static-svg` 的 `icons/<name>.svg`（首批 **1.72.0**；
+//   09-02 补的 xai / mistral / groq / perplexity / cohere / together / fireworks 七家取自 **1.94.0**）；
 //   color 逐字取自 `@lobehub/icons-static-svg@1.94.0` 的 `icons/<name>-color.svg`。
 //   同目录 NOTICE.md 是归属声明的正本，改动本文件请同步那里的清单与版本号。
 //
@@ -149,6 +150,85 @@ export function SiliconCloudIcon(props: ProviderIconProps): React.JSX.Element {
       <path
         clipRule="evenodd"
         d="M22.956 6.521H12.522c-.577 0-1.044.468-1.044 1.044v3.13c0 .577-.466 1.044-1.043 1.044H1.044c-.577 0-1.044.467-1.044 1.044v4.174C0 17.533.467 18 1.044 18h10.434c.577 0 1.044-.467 1.044-1.043v-3.13c0-.578.466-1.044 1.043-1.044h9.391c.577 0 1.044-.467 1.044-1.044V7.565c0-.576-.467-1.044-1.044-1.044z"
+      />
+    </svg>
+  )
+}
+
+/** xAI — lobe-icons `xai` (mono；上游 `<title>` 写的是 Grok，同一枚标)。 */
+export function XaiIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path d="M6.469 8.776L16.512 23h-4.464L2.005 8.776H6.47zm-.004 7.9l2.233 3.164L6.467 23H2l4.465-6.324zM22 2.582V23h-3.659V7.764L22 2.582zM22 1l-9.952 14.095-2.233-3.163L17.533 1H22z" />
+    </svg>
+  )
+}
+
+/** Mistral — lobe-icons `mistral` (mono). */
+export function MistralIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path
+        clipRule="evenodd"
+        d="M3.428 3.4h3.429v3.428h3.429v3.429h-.002 3.431V6.828h3.427V3.4h3.43v13.714H24v3.429H13.714v-3.428h-3.428v-3.429h-3.43v3.428h3.43v3.429H0v-3.429h3.428V3.4zm10.286 13.715h3.428v-3.429h-3.427v3.429z"
+      />
+    </svg>
+  )
+}
+
+/** Groq — lobe-icons `groq` (mono). */
+export function GroqIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path d="M12.036 2c-3.853-.035-7 3-7.036 6.781-.035 3.782 3.055 6.872 6.908 6.907h2.42v-2.566h-2.292c-2.407.028-4.38-1.866-4.408-4.23-.029-2.362 1.901-4.298 4.308-4.326h.1c2.407 0 4.358 1.915 4.365 4.278v6.305c0 2.342-1.944 4.25-4.323 4.279a4.375 4.375 0 01-3.033-1.252l-1.851 1.818A7 7 0 0012.029 22h.092c3.803-.056 6.858-3.083 6.879-6.816v-6.5C18.907 4.963 15.817 2 12.036 2z" />
+    </svg>
+  )
+}
+
+/** Perplexity — lobe-icons `perplexity` (mono). */
+export function PerplexityIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path d="M19.785 0v7.272H22.5V17.62h-2.935V24l-7.037-6.194v6.145h-1.091v-6.152L4.392 24v-6.465H1.5V7.188h2.884V0l7.053 6.494V.19h1.09v6.49L19.786 0zm-7.257 9.044v7.319l5.946 5.234V14.44l-5.946-5.397zm-1.099-.08l-5.946 5.398v7.235l5.946-5.234V8.965zm8.136 7.58h1.844V8.349H13.46l6.105 5.54v2.655zm-8.982-8.28H2.59v8.195h1.8v-2.576l6.192-5.62zM5.475 2.476v4.71h5.115l-5.115-4.71zm13.219 0l-5.115 4.71h5.115v-4.71z" />
+    </svg>
+  )
+}
+
+/** Cohere — lobe-icons `cohere` (mono). */
+export function CohereIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path
+        clipRule="evenodd"
+        d="M8.128 14.099c.592 0 1.77-.033 3.398-.703 1.897-.781 5.672-2.2 8.395-3.656 1.905-1.018 2.74-2.366 2.74-4.18A4.56 4.56 0 0018.1 1H7.549A6.55 6.55 0 001 7.55c0 3.617 2.745 6.549 7.128 6.549z"
+      />
+      <path
+        clipRule="evenodd"
+        d="M9.912 18.61a4.387 4.387 0 012.705-4.052l3.323-1.38c3.361-1.394 7.06 1.076 7.06 4.715a5.104 5.104 0 01-5.105 5.104l-3.597-.001a4.386 4.386 0 01-4.386-4.387z"
+      />
+      <path d="M4.776 14.962A3.775 3.775 0 001 18.738v.489a3.776 3.776 0 007.551 0v-.49a3.775 3.775 0 00-3.775-3.775z" />
+    </svg>
+  )
+}
+
+/** together.ai — lobe-icons `together` (mono). */
+export function TogetherAiIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path d="M23.197 4.503A6 6 0 0015 2.307a5.973 5.973 0 00-2.995 4.933l5.996.008v.515h-5.996c.039.937.298 1.87.8 2.74a6 6 0 1010.39-6z" />
+      <path d="M.805 4.5A6 6 0 003 12.697a5.972 5.972 0 005.77.127L5.779 7.627l.446-.257 2.997 5.192A6 6 0 10.804 4.5z" />
+      <path d="M12 23.894a6 6 0 005.999-6c0-2.13-1.1-3.996-2.775-5.06l-3.005 5.189-.444-.258 2.997-5.192A6 6 0 1012 23.894z" />
+    </svg>
+  )
+}
+
+/** Fireworks AI — lobe-icons `fireworks` (mono). */
+export function FireworksIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path
+        clipRule="evenodd"
+        d="M14.8 5l-2.801 6.795L9.195 5H7.397l3.072 7.428a1.64 1.64 0 003.038.002L16.598 5H14.8zm1.196 10.352l5.124-5.244-.699-1.669-5.596 5.739a1.664 1.664 0 00-.343 1.807 1.642 1.642 0 001.516 1.012L16 17l8-.02-.699-1.669-7.303.041h-.002zM2.88 10.104l.699-1.669 5.596 5.739c.468.479.603 1.189.343 1.807a1.643 1.643 0 01-1.516 1.012l-8-.018-.002.002.699-1.669 7.303.042-5.122-5.246z"
       />
     </svg>
   )
