@@ -107,6 +107,7 @@ function libraryHit(overrides: Partial<LibrarySearchHit> = {}): LibrarySearchHit
     snippet: null,
     rank: null,
     match: 'text',
+    lane: 'fts',
     ...overrides
   }
 }

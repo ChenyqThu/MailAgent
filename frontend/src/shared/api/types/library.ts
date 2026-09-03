@@ -14,6 +14,8 @@ import type {
   LibraryKind,
   LibraryMountMode,
   LibraryMountStatus,
+  LibrarySearchLane,
+  LibrarySearchMode,
   LibrarySource,
   LibraryTextStatus
 } from '@shared/libraryConstants'
@@ -166,7 +168,7 @@ export interface LibraryFileText {
   hint: string | null
 }
 
-/** 搜索命中 = 文件对象**摊平**再挂三个命中字段（不是 `{file, …}` 嵌套）。 */
+/** 搜索命中 = 文件对象**摊平**再挂四个命中字段（不是 `{file, …}` 嵌套）。 */
 export type LibrarySearchHit = LibraryFile & {
   /** FTS5 snippet（含高亮标记），无正文时 null。 */
   snippet: string | null
@@ -174,6 +176,10 @@ export type LibrarySearchHit = LibraryFile & {
   rank: number | null
   /** 服务端报的命中来源（正文 / 文件名），按字符串透传不做收窄。 */
   match: string | null
+  /** 这条命中来自哪条腿（关键词 / 语义 / 两者）。🔴 与 `match` 是**两个独立词表**，别混：
+   *  `match` 说的是「命中在文件名还是正文」，`lane` 说的是「哪条检索腿捞出来的」。
+   *  值域走 `libraryConstants` 的 `SEARCH_LANES`（与 `src/library/constants.py` 有 parity 闸）。 */
+  lane: LibrarySearchLane
 }
 
 export interface LibrarySearchResponse {
@@ -182,13 +188,37 @@ export interface LibrarySearchResponse {
    *  （`src/library/repository.py::SearchResult.mode`）—— 只用于显示，故不在这里收窄成
    *  联合类型：跨语言手抄一份枚举而没有闸，漂了比不收窄更坏。 */
   mode: string
+  /** **实际**跑了哪条：请求 `hybrid` 但模型没下载 → 服务端自动退化，这里回 `'fts'`。
+   *  🔴 与入参的 `mode` 不是一回事（那是「请求了什么」），也与上面的 `mode` 不是一回事
+   *  （那是 FTS 路由结果）—— 三个字段各说各的。 */
+  search_mode: LibrarySearchMode
+  /** 语义腿的能力事实。🔴 `available === false` **不进 `warnings`**（服务端有意为之：
+   *  能力缺席是常态，塞进 warnings 会让 UI 每次搜索都挂同一条提示只好整条忽略）——
+   *  所以「当前只按关键词匹配」这句必须由 UI 按这个字段自己渲。 */
+  semantic: {
+    available: boolean
+    /** 就绪时的模型 id；未就绪 null。 */
+    model: string | null
+    /** 已建索引的块数（未就绪时也可能 > 0：换模型 / 正在重建）。 */
+    chunks: number
+  }
   hits: LibrarySearchHit[]
-  /** 机器可读的「查了但没查成」说明，如 `cjk_too_short:<字>`；正常时空数组。 */
+  /** 机器可读的「查了但没查成」说明，如 `cjk_too_short:<字>`；正常时空数组。
+   *  🔴 中文 1 字 query 走的就是这条腿：**出提示、不出结果** —— 渲染成「没有匹配的文件」
+   *  等于把「这次根本没查」说成「查了没有」。 */
   warnings: string[]
 }
 
-/** `GET /library/file/{id}/history` 的一行（`library_history`）。
- *  🔴 列表**不带快照正文**，只给字节数；要看内容走 rollback 前的单独取用。 */
+/** `GET /library/recent?limit=` —— 跨根按 mtime 取最近改动的文件（不含 trashed / missing）。
+ *  用在「还没输关键词」的资料选择器空态；命中形状与 search 同构，但没有 snippet / lane。 */
+export interface LibraryRecentResponse {
+  files: LibraryFile[]
+  limit: number
+}
+
+/** `GET /library/file/{id}/history` 的一行（`library_history`），**新 → 旧**排序。
+ *  🔴 列表**不带快照正文**，只给字节数；看某一条的正文走
+ *  `GET /library/file/{id}/history/{history_id}`（`LibraryHistorySnapshot`）。 */
 export interface LibraryHistoryEntry {
   id: number
   file_id: number
@@ -201,6 +231,16 @@ export interface LibraryHistoryEntry {
   message_id: number | null
   created_at: number
   snapshot_bytes: number
+}
+
+/** `GET /library/file/{id}/history/{history_id}` —— 单条历史的快照正文 + 该行元数据。
+ *
+ *  🔴 **快照存的是那次写入之后的正文**（不是写入之前）：所以「回滚到这一版」= 把这份
+ *  `content_snapshot` 原样写回去，UI 措辞不能写成「恢复到这次修改之前」。
+ *  🔴 服务端强校验 `history_id` 属于 `file_id`，跨文件取是 404。
+ *  形状 = `library_history` 整行**减去** `snapshot_bytes`（那是列表端点算出来的派生列）。 */
+export type LibraryHistorySnapshot = Omit<LibraryHistoryEntry, 'snapshot_bytes'> & {
+  content_snapshot: string
 }
 
 /** `POST /library/rescan` 的回执。 */

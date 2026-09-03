@@ -92,7 +92,14 @@ function searchResponse(
   warnings: string[] = [],
   mode = 'porter'
 ): LibrarySearchResponse {
-  return { query: 'q', mode, hits, warnings }
+  return {
+    query: 'q',
+    mode,
+    search_mode: 'fts',
+    semantic: { available: false, model: null, chunks: 0 },
+    hits,
+    warnings
+  }
 }
 
 function renderModal(resources: MatterResourceListItem[] = []): void {

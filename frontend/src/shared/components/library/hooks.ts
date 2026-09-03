@@ -8,7 +8,15 @@
 
 import { useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+  type InfiniteData,
+  type UseInfiniteQueryResult,
+  type UseQueryResult
+} from '@tanstack/react-query'
 
 import {
   createLibraryApi,
@@ -23,11 +31,13 @@ import type {
   LibraryFileText,
   LibraryFolderPage,
   LibraryHistoryEntry,
+  LibraryHistorySnapshot,
   LibraryMountSummary,
+  LibrarySearchResponse,
   LibraryTreeResponse
 } from '@shared/api/types/library'
 import { resolveApiBaseUrl } from '@shared/components/settings/custom-ai/shared'
-import { UPLOAD_MAX_BYTES } from '@shared/libraryConstants'
+import { UPLOAD_MAX_BYTES, type LibrarySearchMode } from '@shared/libraryConstants'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
@@ -45,7 +55,11 @@ export const libQk = {
     ['library', 'folder', path, query.q ?? '', query.sort ?? 'name', query.dir ?? 'asc'] as const,
   file: (ref: LibraryFileRef) => ['library', 'file', refKey(ref)] as const,
   text: (ref: LibraryFileRef) => ['library', 'text', refKey(ref)] as const,
-  history: (fileId: number) => ['library', 'history', fileId] as const
+  history: (fileId: number) => ['library', 'history', fileId] as const,
+  snapshot: (fileId: number, historyId: number) =>
+    ['library', 'snapshot', fileId, historyId] as const,
+  search: (q: string, mode: LibrarySearchMode, limit: number) =>
+    ['library', 'search', q, mode, limit] as const
 }
 
 export function fetchDetail(api: LibraryApi, ref: LibraryFileRef): Promise<LibraryFileDetail> {
@@ -62,7 +76,7 @@ export function inlineUrlOf(api: LibraryApi, ref: LibraryFileRef): string {
   return 'id' in ref ? api.inlineUrl(ref.id) : api.attachmentInlineUrl(ref.attachmentId)
 }
 
-export function useLibraryTreeQuery(enabled = true) {
+export function useLibraryTreeQuery(enabled = true): UseQueryResult<LibraryTreeResponse> {
   const api = useLibraryApi()
   return useQuery<LibraryTreeResponse>({
     queryKey: libQk.tree(),
@@ -79,7 +93,10 @@ export interface FolderListOptions {
 }
 
 /** 文件夹内容分页（`FOLDER_PAGE_SIZE`）；`offset` 是 pageParam，换过滤 / 排序换 key 重头拉。 */
-export function useLibraryFolderPages(path: string | null, options: FolderListOptions) {
+export function useLibraryFolderPages(
+  path: string | null,
+  options: FolderListOptions
+): UseInfiniteQueryResult<InfiniteData<LibraryFolderPage>> {
   const api = useLibraryApi()
   const trimmed = options.q?.trim() ?? ''
   const base: Pick<LibraryFolderQuery, 'q' | 'sort' | 'dir'> = {
@@ -101,7 +118,7 @@ export function useLibraryFolderPages(path: string | null, options: FolderListOp
   })
 }
 
-export function useLibraryFileQuery(ref: LibraryFileRef | null) {
+export function useLibraryFileQuery(ref: LibraryFileRef | null): UseQueryResult<LibraryFileDetail> {
   const api = useLibraryApi()
   return useQuery<LibraryFileDetail>({
     queryKey: ref ? libQk.file(ref) : ['library', 'file', 'none'],
@@ -111,7 +128,10 @@ export function useLibraryFileQuery(ref: LibraryFileRef | null) {
   })
 }
 
-export function useLibraryTextQuery(ref: LibraryFileRef | null, enabled = true) {
+export function useLibraryTextQuery(
+  ref: LibraryFileRef | null,
+  enabled = true
+): UseQueryResult<LibraryFileText> {
   const api = useLibraryApi()
   return useQuery<LibraryFileText>({
     queryKey: ref ? libQk.text(ref) : ['library', 'text', 'none'],
@@ -121,13 +141,55 @@ export function useLibraryTextQuery(ref: LibraryFileRef | null, enabled = true) 
   })
 }
 
-export function useLibraryHistoryQuery(fileId: number | null, enabled: boolean) {
+export function useLibraryHistoryQuery(
+  fileId: number | null,
+  enabled: boolean
+): UseQueryResult<LibraryHistoryEntry[]> {
   const api = useLibraryApi()
   return useQuery<LibraryHistoryEntry[]>({
     queryKey: fileId !== null ? libQk.history(fileId) : ['library', 'history', 'none'],
     queryFn: () => api.history(fileId as number),
     enabled: fileId !== null && enabled,
     staleTime: 5_000
+  })
+}
+
+/** 单条快照的正文。列表端点只给 `snapshot_bytes`，展开某一行才拉这一条（`historyId=null` = 没展开）。
+ *  快照是**不可变的历史行**，`staleTime: Infinity` —— 同一条永远不需要重拉。 */
+export function useLibraryHistorySnapshotQuery(
+  fileId: number | null,
+  historyId: number | null
+): UseQueryResult<LibraryHistorySnapshot> {
+  const api = useLibraryApi()
+  const on = fileId !== null && historyId !== null
+  return useQuery<LibraryHistorySnapshot>({
+    queryKey: on ? libQk.snapshot(fileId, historyId) : ['library', 'snapshot', 'none'],
+    queryFn: () => api.historySnapshot(fileId as number, historyId as number),
+    enabled: on,
+    staleTime: Infinity
+  })
+}
+
+/** 页内搜索一次取多少条。⌘K 那条 lane 是 `LIBRARY_MAX_HITS`（8，弹层里只放得下这些）；
+ *  页内是完整结果面，给得多一些，仍远低于服务端上限 100。 */
+export const SEARCH_PAGE_LIMIT = 30
+
+/** 页内全库搜索（design §9.1）。空 query 不发请求 —— 服务端 `q` 是 `min_length=1`。
+ *  🔴 `mode` 进 key：切模式必须重查，不能读到另一档的结果。 */
+export function useLibrarySearchQuery(
+  query: string,
+  mode: LibrarySearchMode,
+  limit = SEARCH_PAGE_LIMIT
+): UseQueryResult<LibrarySearchResponse> {
+  const api = useLibraryApi()
+  const q = query.trim()
+  return useQuery<LibrarySearchResponse>({
+    queryKey: q === '' ? ['library', 'search', 'none'] : libQk.search(q, mode, limit),
+    queryFn: () => api.search(q, limit, mode),
+    enabled: q !== '',
+    // 换关键词时保留上一份结果：输入过程中列表整段闪骨架比等半秒更难受。
+    placeholderData: keepPreviousData,
+    staleTime: 10_000
   })
 }
 

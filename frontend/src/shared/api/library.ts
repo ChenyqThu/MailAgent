@@ -16,13 +16,19 @@ import type {
   LibraryFileDetail,
   LibraryFileText,
   LibraryHistoryEntry,
+  LibraryHistorySnapshot,
   LibraryFolderPage,
   LibraryMount,
+  LibraryRecentResponse,
   LibraryRescanResult,
   LibrarySearchResponse,
   LibraryTreeResponse
 } from './types/library'
-import type { LibraryMountMode, LibrarySource } from '@shared/libraryConstants'
+import type {
+  LibraryMountMode,
+  LibrarySearchMode,
+  LibrarySource
+} from '@shared/libraryConstants'
 
 /** 写入撞上并发改动时服务端回的 code（design §4；`src/api/app.py` 里映射到 HTTP 409）。 */
 export const LIBRARY_VERSION_CONFLICT = 'E_VERSION_CONFLICT'
@@ -33,6 +39,37 @@ export const LIBRARY_VERSION_CONFLICT = 'E_VERSION_CONFLICT'
  *  ApiError，`data` 到不了这里。UI 这条腿撞冲突后再拉一次 `file(id)` 取当前版本。 */
 export function isLibraryVersionConflict(error: unknown): boolean {
   return (error as { code?: string } | null)?.code === LIBRARY_VERSION_CONFLICT
+}
+
+/** 语义索引的后台作业（design §9.1）。进程内单实例，两种作业不并发。
+ *
+ *  🔴 `done` / `total` 的**单位随 kind 变**：`download` 是字节（614 MB 权重），`index` 是文件数。
+ *  设置页因此必须按 kind 分两种进度文案，不能共用一条。
+ *  🔴 下载跑完会自动接一次建索引，所以 `POST /embed/download` 返回体里的 kind 可能已经是
+ *  `'index'` —— 别把「按了下载」与「正在下载」当成同一件事。 */
+export interface LibraryEmbedJob {
+  kind: 'download' | 'index'
+  running: boolean
+  done: number
+  total: number
+  /** 作业内部失败进这里（不是 HTTP 错误）；设置页原样展示。 */
+  error: string | null
+  started_at: number
+  finished_at: number | null
+}
+
+/** `GET /library/embed/status` —— 设置页语义检索区的唯一数据源。**不含任何绝对路径**。 */
+export interface LibraryEmbedStatus {
+  model: {
+    /** 权重在不在就是开关（design §9.1：不加 `MAILAGENT_*` flag）。 */
+    available: boolean
+    model_id: string
+    repo: string
+    approx_bytes: number
+    bytes_on_disk: number
+  }
+  index: { files_total: number; files_indexed: number; files_pending: number; chunks: number }
+  job: LibraryEmbedJob | null
 }
 
 /** 文件夹内容区的排序维度（design §2.3）。🔴 排序是**服务端**做的：分页 200 之后
@@ -99,7 +136,11 @@ export interface LibraryApi {
   attachmentText(attachmentId: number, maxBytes?: number): Promise<LibraryFileText>
   attachmentInlineUrl(attachmentId: number): string
 
-  search(q: string, limit?: number): Promise<LibrarySearchResponse>
+  /** 全库检索。`mode` 缺省走服务端默认 `hybrid`；**没下载语义模型时服务端自动退化成纯 FTS**，
+   *  返回体形状不变（看 `search_mode` / `semantic.available`，不看 `warnings`）。 */
+  search(q: string, limit?: number, mode?: LibrarySearchMode): Promise<LibrarySearchResponse>
+  /** 最近改动的文件（不含 trashed / missing）——「还没输关键词」时的选择器空态。 */
+  recent(limit?: number): Promise<LibraryRecentResponse>
   createTextFile(input: LibraryCreateTextFile): Promise<LibraryFile>
   uploadFile(input: LibraryUploadFile): Promise<LibraryFile>
   writeFile(fileId: number, input: LibraryWrite): Promise<LibraryFile>
@@ -109,8 +150,12 @@ export interface LibraryApi {
   /** 立即永久删除（mockup F11）。🔴 只对**已在废纸篓**的行成立，服务端会拒别的行。 */
   purgeFile(fileId: number): Promise<LibraryFile>
   restoreFile(fileId: number): Promise<LibraryFile>
+  /** 版本历史，**新 → 旧**，不带快照正文。 */
   history(fileId: number): Promise<LibraryHistoryEntry[]>
-  /** 回滚 = 用那条快照做一次普通写（享受同一道 CAS 校验，见 design §4）。 */
+  /** 单条快照的正文（列表端点一次拉 50 条正文太重，故分开）。 */
+  historySnapshot(fileId: number, historyId: number): Promise<LibraryHistorySnapshot>
+  /** 回滚 = 用那条快照做一次普通写（享受同一道 CAS 校验，见 design §4）——
+   *  所以它**也可能撞 409**：两次读之间文件被应用之外改了。 */
   rollback(fileId: number, historyId: number): Promise<LibraryFile>
   /** 邮件附件「另存到资料库」：真复制，从此与邮件解耦（design §1.1）。 */
   keepAttachment(attachmentId: number, targetPath: string): Promise<LibraryFile>
@@ -124,6 +169,14 @@ export interface LibraryApi {
   ): Promise<LibraryMount>
   /** 卸载：挂载行标 `unmounted`、其下文件行标 `missing`，**不删行、不动磁盘**（§8.2）。 */
   removeMount(mountId: number): Promise<LibraryMount>
+
+  // ── 语义索引（design §9.1）────────────────────────────────────────────────
+  /** 作业跑着时设置页约 1s 轮询一次，跑完停。 */
+  embedStatus(): Promise<LibraryEmbedStatus>
+  /** 下载权重（约 614 MB）。已下载 / 已有作业在跑都是 `E_INVALID_STATE`（HTTP **409**，不是 400）。 */
+  embedDownload(): Promise<LibraryEmbedStatus>
+  /** 清掉本模型的全部向量重建。没模型同样 `E_INVALID_STATE`。 */
+  embedRebuild(): Promise<LibraryEmbedStatus>
 }
 
 export function createLibraryApi(baseUrl: string): LibraryApi {
@@ -173,8 +226,12 @@ export function createLibraryApi(baseUrl: string): LibraryApi {
       return `${baseUrl}/library/attachment/${attachmentId}/inline`
     },
 
-    search(q: string, limit?: number): Promise<LibrarySearchResponse> {
-      return request(baseUrl, 'GET', '/library/search', { query: { q, limit } })
+    search(q: string, limit?: number, mode?: LibrarySearchMode): Promise<LibrarySearchResponse> {
+      return request(baseUrl, 'GET', '/library/search', { query: { q, limit, mode } })
+    },
+
+    recent(limit?: number): Promise<LibraryRecentResponse> {
+      return request(baseUrl, 'GET', '/library/recent', { query: { limit } })
     },
 
     createTextFile(input: LibraryCreateTextFile): Promise<LibraryFile> {
@@ -231,6 +288,10 @@ export function createLibraryApi(baseUrl: string): LibraryApi {
       return request(baseUrl, 'GET', `/library/file/${fileId}/history`)
     },
 
+    historySnapshot(fileId: number, historyId: number): Promise<LibraryHistorySnapshot> {
+      return request(baseUrl, 'GET', `/library/file/${fileId}/history/${historyId}`)
+    },
+
     rollback(fileId: number, historyId: number): Promise<LibraryFile> {
       return request(baseUrl, 'POST', `/library/file/${fileId}/rollback`, {
         body: { history_id: historyId }
@@ -268,6 +329,18 @@ export function createLibraryApi(baseUrl: string): LibraryApi {
 
     removeMount(mountId: number): Promise<LibraryMount> {
       return request(baseUrl, 'DELETE', `/library/mounts/${mountId}`)
+    },
+
+    embedStatus(): Promise<LibraryEmbedStatus> {
+      return request(baseUrl, 'GET', '/library/embed/status')
+    },
+
+    embedDownload(): Promise<LibraryEmbedStatus> {
+      return request(baseUrl, 'POST', '/library/embed/download')
+    },
+
+    embedRebuild(): Promise<LibraryEmbedStatus> {
+      return request(baseUrl, 'POST', '/library/embed/rebuild')
     }
   }
 }

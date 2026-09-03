@@ -119,6 +119,7 @@ function libraryHit(overrides: Partial<LibrarySearchHit> = {}): LibrarySearchHit
     snippet: '连接池里的 [redis] 超时阈值',
     rank: -1.2,
     match: 'text',
+    lane: 'fts',
     ...overrides
   }
 }
