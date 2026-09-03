@@ -32,6 +32,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactElement,
   type ReactNode
 } from 'react'
@@ -83,6 +84,8 @@ export interface FileTreeProps {
   rowHeight?: number
   /** pill 的类名覆盖（默认 = 全仓选中配方：`.acc-select` 底色 + `.row-selected` 左光条）。 */
   pillClassName?: string
+  /** 行级右键（资料库树的节点菜单）。不传 = 浏览器默认行为。 */
+  onNodeContextMenu?: (node: FileTreeNode, event: MouseEvent<HTMLButtonElement>) => void
   className?: string
   classNames?: FileTreeClassNames
 }
@@ -167,6 +170,7 @@ function FileTreeRow(props: {
   onFocus: () => void
   onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void
   onClick: () => void
+  onContextMenu?: (event: MouseEvent<HTMLButtonElement>) => void
 }): ReactElement {
   const { row, isOpen, isSelected, classNames } = props
   const { node } = row
@@ -185,6 +189,7 @@ function FileTreeRow(props: {
       onFocus={props.onFocus}
       onKeyDown={props.onKeyDown}
       onClick={props.onClick}
+      onContextMenu={props.onContextMenu}
       style={{ paddingLeft: 8 + row.depth * props.indent, height: props.rowHeight }}
       className={cn(
         'row group/file-tree relative flex w-full items-center gap-2 overflow-hidden pr-2',
@@ -239,6 +244,7 @@ type VirtualRowProps = {
   onFocus: (value: string) => void
   onKeyDown: (event: KeyboardEvent<HTMLButtonElement>, row: FlatRow) => void
   onActivate: (row: FlatRow) => void
+  onContextMenu?: (node: FileTreeNode, event: MouseEvent<HTMLButtonElement>) => void
 }
 
 function VirtualRow({
@@ -255,7 +261,8 @@ function VirtualRow({
   registerRef,
   onFocus,
   onKeyDown,
-  onActivate
+  onActivate,
+  onContextMenu
 }: RowComponentProps<VirtualRowProps>): ReactElement {
   const row = rows[index]
   return (
@@ -274,6 +281,7 @@ function VirtualRow({
         onFocus={() => onFocus(row.node.value)}
         onKeyDown={(event) => onKeyDown(event, row)}
         onClick={() => onActivate(row)}
+        onContextMenu={onContextMenu ? (event) => onContextMenu(row.node, event) : undefined}
       />
     </div>
   )
@@ -292,6 +300,7 @@ export function FileTree({
   virtualizeThreshold = 500,
   rowHeight = DEFAULT_ROW_HEIGHT,
   pillClassName,
+  onNodeContextMenu,
   className,
   classNames
 }: FileTreeProps): ReactElement {
@@ -440,7 +449,8 @@ export function FileTree({
             registerRef,
             onFocus: setFocusedId,
             onKeyDown: handleKeyDown,
-            onActivate: activateRow
+            onActivate: activateRow,
+            onContextMenu: onNodeContextMenu
           }}
           className="scrollbar-thin"
           style={{ height: '100%' }}
@@ -491,6 +501,9 @@ export function FileTree({
             onFocus={() => setFocusedId(row.node.value)}
             onKeyDown={(event) => handleKeyDown(event, row)}
             onClick={() => activateRow(row)}
+            onContextMenu={
+              onNodeContextMenu ? (event) => onNodeContextMenu(row.node, event) : undefined
+            }
           />
         </motion.div>
       ))}
