@@ -155,6 +155,19 @@ describe('EmailDetail — switch-email translation abort (REVIEW-LOG M-3)', () =
   })
 })
 
+describe('EmailDetail — 未选中邮件的空态 (0903 dogfood E1)', () => {
+  test('图标与文案的容器带 text-center（EmptyShell 只负责外层居中，行内对齐要自己声明）', async () => {
+    const { screen } = await import('@testing-library/react')
+    renderWithClient(<EmailDetail internalId={null} />)
+    // 文案节点的父级 = 图标与文案共处的那个容器；居中类掉了这里就左对齐。
+    const box = screen.getByText(i18n.t('empty.state')).parentElement
+    expect(box).toBeTruthy()
+    expect(box?.className.split(/\s+/)).toContain('text-center')
+    // 图标与文案同容器 —— 否则「居中类在文案上」也能骗过上面那条。
+    expect(box?.querySelector('svg')).toBeTruthy()
+  })
+})
+
 describe('EmailDetail — draft-edit 在 replace 删行后的存活 (task 08-20 draft-save)', () => {
   const DRAFT_ROW = {
     internal_id: 99,

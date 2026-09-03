@@ -7,7 +7,7 @@
 // 的越界判据（发送按钮右缘 ≤ 输入框右缘）在任务的 dev 预览实测里，不是本文件能覆盖的。
 //
 // 宽度取值用侧栏四档的实测 form 宽（侧栏宽 − 32px 的 Viewport px-4 − 1px 的 border-l）：
-//   侧栏 320 → 287 · 360 → 327 · 400 → 367 · 720 → 687。
+//   侧栏 350 → 317 · 360 → 327 · 400 → 367 · 720 → 687。
 
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
@@ -144,7 +144,7 @@ async function mount(): Promise<{
 }
 
 describe('AgentComposer 工具条窄档（data-narrow）', () => {
-  test('四档侧栏宽度 → 档位：720/400 各自一档，360 与 320 同为最窄档', async () => {
+  test('四档侧栏宽度 → 档位：720/400 各自一档，360 与 350 同为最窄档', async () => {
     const { toolbar, setFormWidth } = await mount()
 
     setFormWidth(687) // 侧栏 720（SIDEBAR_WIDTH_MAX）
@@ -156,7 +156,7 @@ describe('AgentComposer 工具条窄档（data-narrow）', () => {
     setFormWidth(327) // 侧栏 360
     expect(toolbar.getAttribute('data-narrow')).toBe('sm')
 
-    setFormWidth(287) // 侧栏 320（SIDEBAR_WIDTH_MIN）
+    setFormWidth(317) // 侧栏 350（SIDEBAR_WIDTH_MIN）
     expect(toolbar.getAttribute('data-narrow')).toBe('sm')
   })
 

@@ -1075,7 +1075,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   if (internalId === null) {
     return (
       <EmptyShell>
-        <div className="text-aux text-ink-fg-2">
+        <div className="text-aux text-center text-ink-fg-2">
           <Mail size={28} strokeWidth={1.5} className="inline-block opacity-30 mb-2" />
           <div>{t('empty.state')}</div>
         </div>

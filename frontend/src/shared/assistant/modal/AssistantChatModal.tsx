@@ -53,40 +53,13 @@ import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
 import { ChatModalHistoryDropdown } from './ChatModalHistoryDropdown'
 import { openDockForTab } from './dockForTab'
 import { titleOf } from './sessionTitle'
-
-// sidebar 内嵌可调宽 — 宽度缓存（范式同 InboxLayout 旧 AI 面板：clamp + localStorage + try-catch）。
-// 独立 key（不复用旧面板的 mailagent.chat.panelWidth）：dock 与旧面板是两套不同实体。
-const SIDEBAR_WIDTH_DEFAULT = 400
-const SIDEBAR_WIDTH_MIN = 320
-const SIDEBAR_WIDTH_MAX = 720
-const SIDEBAR_WIDTH_PREF = 'mailagent.chat.dockSidebarWidth'
-//: 侧栏最多吃掉视口的一半 —— 上界只有固定的 720px 时，窗口缩窄不会让侧栏让位，
-//: 400px 的默认宽能把主内容区挤到几乎没有（0812 dogfood：「宽度很小时溢出」）。
-//: 视口本身比 MIN 还窄时以 MIN 为准（那种尺寸下横向滚动已不可避免，不再叠加压缩）。
-const SIDEBAR_VIEWPORT_SHARE = 0.5
-function sidebarWidthCap(): number {
-  if (typeof window === 'undefined') return SIDEBAR_WIDTH_MAX
-  return Math.max(SIDEBAR_WIDTH_MIN, Math.round(window.innerWidth * SIDEBAR_VIEWPORT_SHARE))
-}
-function clampSidebarWidth(px: number): number {
-  const upper = Math.min(SIDEBAR_WIDTH_MAX, sidebarWidthCap())
-  return Math.min(upper, Math.max(SIDEBAR_WIDTH_MIN, px))
-}
-function readSidebarWidthPref(): number {
-  try {
-    const raw = Number(localStorage.getItem(SIDEBAR_WIDTH_PREF))
-    return Number.isFinite(raw) && raw > 0 ? clampSidebarWidth(raw) : SIDEBAR_WIDTH_DEFAULT
-  } catch {
-    return SIDEBAR_WIDTH_DEFAULT
-  }
-}
-function writeSidebarWidthPref(px: number): void {
-  try {
-    localStorage.setItem(SIDEBAR_WIDTH_PREF, String(px))
-  } catch {
-    /* localStorage 在 sandbox / privacy 模式可能拒写; 偏好丢失无伤大雅 */
-  }
-}
+import {
+  clampSidebarWidth,
+  readSidebarWidthPref,
+  writeSidebarWidthPref,
+  SIDEBAR_WIDTH_MAX,
+  SIDEBAR_WIDTH_MIN
+} from './sidebarWidth'
 
 /** Mount-once gate: the dock body (useGeneralChat + its session load) only mounts after the FIRST open,
  *  so a user who never opens it pays no IPC. After that it stays mounted (hidden via CSS when minimised)

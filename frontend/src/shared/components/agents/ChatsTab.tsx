@@ -196,7 +196,9 @@ function SessionListPane({
         {isLoading && items.length === 0 ? (
           <div className="px-2 py-6 text-meta text-ink-fg-3">{t('agents.reports.loading')}</div>
         ) : items.length === 0 ? (
-          <div className="px-2 py-6 text-meta text-ink-fg-3">{t('sessions.noMatchTitle')}</div>
+          <div className="px-2 py-6 text-center text-meta text-ink-fg-3">
+            {t('sessions.noMatchTitle')}
+          </div>
         ) : (
           <div className="flex flex-col gap-2">
             {Array.from(

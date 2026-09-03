@@ -386,7 +386,7 @@ describe('ContextUsageDetails — 点环出明细', () => {
     }
   })
 
-  // 🔴 **两面各一格**。这条不变式在 agent 面比邮件面更要紧（320px 是侧栏的 SIDEBAR_WIDTH_MIN），
+  // 🔴 **两面各一格**。这条不变式在 agent 面比邮件面更要紧（350px 是侧栏的 SIDEBAR_WIDTH_MIN），
   // 偏偏 agent 面的 `ComposerPrimitive.Root` 自己就是 `relative` —— 把行上的 relative 拿掉，
   // 包含块会**静默**上移到那个 Root 而不是报错，「往上第一个 relative 装着发送钮」这种判据
   // 因此在 agent 面恒真、拦不住任何东西（复核时实测：删掉 agent 行的 relative，全部用例照绿）。

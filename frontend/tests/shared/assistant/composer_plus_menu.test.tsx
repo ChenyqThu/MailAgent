@@ -18,7 +18,7 @@
 //   6. **布局红线**：happy-dom 不排版（getBoundingClientRect 恒 0），所以抄 model_picker.test.tsx
 //      的分两半机械化验法 —— (a) 弹层锚定类 + 固定宽度；(b) 在**真的** composer 里断言控件次序
 //      （算式唯一会悄悄失效的前提就是有人往前面插钮）。🔴 红线场地改钉 **320px + chip**
-//      （侧栏最窄档 SIDEBAR_WIDTH_MIN；旧的 360px 邮件面板分支已无消费者）。
+//      （旧的 360px 邮件面板分支已无消费者；侧栏最窄档 0903 起是 350，320 作为更严的下界留着）。
 //
 // connector / skill 侧（那一项出不出、常驻强调点、二级面板全功能）在 ConnectorQuickPanel.test.tsx
 // 与 composer_tools_menu.test.tsx 里用全 mock 的 api 测。
@@ -239,8 +239,9 @@ describe('ComposerPlusMenu — 关闭语义', () => {
 })
 
 // 🔴 08-05 WP-13：红线场地从「邮件面 360px」改钉 **320px + chip**。理由：AiChatPanel 的
-// `w-[360px]` 分支已无消费者，真实最窄的是浮窗/侧栏的 chip 面（SIDEBAR_WIDTH_MIN=320，
-// AssistantChatModal）。算式里的可用宽按 composer 卡内边距折算 ≈ 288。
+// `w-[360px]` 分支已无消费者，真实最窄的是浮窗/侧栏的 chip 面（AssistantChatModal 的
+// SIDEBAR_WIDTH_MIN，0903 起 350）。算式里的可用宽按 composer 卡内边距折算 ≈ 288。
+// 场地仍钉 320：比现在能拖到的最窄还窄一档，红线更严，过了就一定也过 350。
 describe('composer 工具条 — 320px 窄面布局红线', () => {
   test('「+」一级菜单 left-0 + 196px：320px 侧栏也不越界', () => {
     render(

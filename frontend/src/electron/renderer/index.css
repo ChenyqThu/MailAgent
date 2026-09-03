@@ -3291,6 +3291,9 @@ body:not([data-batch-mode='true']) .email-row .cb {
 .empty-tile {
   display: grid;
   place-items: center;
+  /* place-items 只把每个格子居中, 换行的提示文案仍会左对齐 —— 与 EmptyState
+     组件同档需要显式 text-align (长 hint 已在两处调用点手打 text-center)。 */
+  text-align: center;
   padding: 18px 16px;
   border-radius: 8px;
   gap: 6px;
