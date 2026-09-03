@@ -55,7 +55,7 @@ const MENTIONED: LibraryMentionRef = {
 }
 
 /** 「对话」按钮真正预填进 composer 的那段文本（含 directive）。 */
-const PROMPT = buildLibraryChatPrompt(MENTIONED, (key, vars) =>
+const PROMPT = buildLibraryChatPrompt(MENTIONED, (_key, vars) =>
   Object.entries(vars).reduce((out, [k, v]) => out.replaceAll(`{${k}}`, v), `{mention}｜{path}`)
 )
 
