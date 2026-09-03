@@ -1527,7 +1527,7 @@ item-dispatch 锚下注册，belt 测试钉互不渗透。要点：
 - `tests/api/test_context_mode_consistency.py` 的 canonical 表含 `matter_item_run`；
   `tool_catalog.json` 含 `matter_item_report`（agent_eval 完整性闸）。
 
-## 13.29 群聊多 agent 体系（labs `labs_group_agents`，CHAT_DB v31）
+## 13.29 群聊多 agent 体系（labs `labs_group_agents`，CHAT_DB v32）
 
 一个群 = 一条 `ai_chat_sessions` 行（`origin='group'` + `members_json`），成员是 custom
 agents，外加保留 id `main`（`MAIN_AGENT_MEMBER_ID`，TS 单源 `groupFloors.ts` / Python 单源
@@ -1812,6 +1812,66 @@ token 从 env `MAILAGENT_LOCAL_API_TOKEN` 读（App 每次启动随机生成、�
 具相位（labs on 的成员 run 自 g2 起可能有读工具，但那个相位不上事件通道）—— 这是有意的边界，不
 伪造一个看着像的态。`error` 借 stall 的一级门槛做新鲜期：overlay 的 failed 留痕至今没有清理者，
 不给新鲜期就会在群底留一条永不消失的红字（失败的长期载体是时间线里那条带重试钮的 meta 行）。
+
+### 13.29.11 话题（thread，T3，CHAT_DB v32）
+
+群里任意一条 user / assistant 消息都能开一个**话题**：独立上下文的子会话，主时间线上只留一张卡。
+
+**载体**：话题就是一行 `ai_chat_sessions` —— `origin='group'` + `parent_session_id`=父群 +
+`invoked_by='thread'` + v32 新列 `thread_root_message_id`（根消息 id）+ `members_json` 取父群
+**快照** + `group_config_json` 复制父群。**不复制** `ai_chat_group_member` 行（响应模式在话题里
+不生效，见下）。发言 / 停止 / 已读 / 改名 / 删除 / 列消息全部复用既有会话端点（话题 id 与群 id
+同一个命名空间），新端点只有两个：`POST /chat/sessions/{groupId}/threads {rootMessageId}`（顶层
+群限定；根消息必须属于该群且 role ∈ user/assistant；**同根幂等**返回已有话题）与
+`GET .../threads`（`replyCount` / `lastMessage` / `unread` 服务端算好）。
+🔴 幂等的落库根据是唯一部分索引 `idx_chat_sessions_thread_root(parent_session_id,
+thread_root_message_id) WHERE thread_root_message_id IS NOT NULL` —— 先查再建挡不住并发的两个
+POST，撞 `IntegrityError` 的那一侧回收空壳行、返回先到者。单层嵌套校验**不放宽**：话题开不出
+话题，子群里也开不出。
+
+🔴 **读侧分家的判据恒是 `COALESCE(invoked_by,'') = 'thread'` 这一个显式条件**。话题与子群同是
+`origin='group'` + `parent_session_id` 非空，只按这两列区分不出来。分家有三处，漏一处就是一种
+静默错：
+
+| 处 | 位置 | 漏了会怎样 |
+|---|---|---|
+| 群清单 | `src/chat/db.py::list_all_sessions` + `chat_db/sessions.ts::listAllSessions` 的 group 支（两侧逐字，闸 `test_group_list_thread_exclusion_mirror_parity`） | 每开一个话题群列表多一行；桌面与远程 web 还可能只改了一侧 → 两边行为不一致 |
+| `familyOf` | `chat_db/groups.ts`：`childSessionIds` 只含子群，话题另走 `threadSessionIds` | 话题被当子群算进 `SUBGROUPS_PER_FAMILY_CAP`、进 `group_members.child_sessions`、进法官 scope |
+| 删父群 | `db.py::delete_session` 先删话题、再把**剩下的**子群 `parent_session_id` 置 NULL（顺序反了第二条语句就认不出话题） | 话题成为群清单看不见、任何入口都到不了的孤儿行 |
+
+**预算与停止**：话题的开销算这个群的 —— `RunState.familySessionIds` = 群 ∪ 父 ∪ 子群 ∪ **话题**
+（`group_members` 工具的 usage 窗口同口径）。但 `GroupSessionFacts.familySessionIds` 本身**不含**
+话题：那一项原样透传给 speak 的 `identity.group.familySessionIds` = 法官 `group_post` 的投递
+scope。停止是精确的：`stopFamily(话题)` 只清它的队列、只中止它的在飞 turn、只给它写一条 system
+行；`stopFamily(群)` 连带话题（话题 run 的 family 含父群）。🔴 话题 run 因地板 / abort / 连败而
+停时，范围也只有自己（`stopScope`）—— 按 `familySessionIds` 算会顺着父群 id 把父群的活 run 一起
+停掉。
+
+**参与者制（拍板 D2）**：话题内的候选集 = `@点名 ∪ 参与者`，参与者 = 根消息说话人 ∪ 已在本话题
+以 assistant 身份发过言的成员（只收仍在名单里的）。**父群的 realtime 响应模式在话题里不生效**：
+话题不复制成员设置行，gateway 按事实推导。🔴 这条判据**只落在 `pool` 那一个三元的话题支上**
+（`realtime` 只有群支读它）—— 别再往 `realtime` 上加一层 `isThread` 守卫，两处冗余谁都不承重，
+单点改坏「realtime 成员未被 @ 不醒」的用例不会红。
+
+**未读**：话题行自有 `last_read_at`（建话题时创建者的水位写成 now，否则「从没打开过不算未读」
+的口径会让别人回的第一条永远不亮）。群行加**派生列** `has_unread_threads`（相关子查询，Python /
+TS 两侧手抄同一条判据）：话题回复只 bump 话题行的 `updated_at`，父群行一动不动，不派生这一列群
+列表 / rail / peek 就永远不会亮。🔴 SQLite 的 `EXISTS` 给 0/1，两侧都显式折成真 bool —— 不折，
+JSON 里就是个 `1`，读侧 `=== true` 恒假、群行永远不亮而且没人会报错。前端唯一读点是
+`shared/lib/groupUnread.ts::isGroupRowUnread`（`isSessionUnread` 单源不动），群列表行 / rail 群聊
+格 / peek 三处共用。
+
+**通知**：话题回复走 `source='group_thread'`、标题取**父群**名、正文「话题：<标题> · <说话人>：
+<摘要>」、dedupe `group_thread:{groupId}:{threadId}`、深链新型 `{type:'thread', groupId,
+threadId}`（`NotificationPanel` 与 `router-instance` **两处**都要接，漏一处就是「面板能跳、系统
+通知没反应」）。群级 `notify` 开关只读父群那一份（话题复制的副本会过期）。前台抑制改**二元组**
+`(groupId, threadId|null)`：盯着群主线时话题回复照发，反之亦然。🔴 `chat:group-foreground` 的载荷
+键名（`groupId` / `threadId`）在 renderer 与 main 各手写一遍，跨进程的 `unknown` 边界上没有类型 ——
+键名对不上不报错、只让抑制恒不生效，闸 `tests/main/group_foreground_ipc.test.ts`。
+
+**命名**：代码里 `thread` 恒指「话题」，原来那个群消息流容器 `GroupThread.tsx` 因此改名
+`GroupTranscript.tsx`（话题面与主时间线共用它）。`GroupConfig.topic`（群用途）是另一回事，一字未动。
+
 ## 13.30 图像生成：`generate_image` 工具 + `IMAGE_GEN_MODEL`（task 09-02）
 
 > 需求与拍板 = `.trellis/tasks/09-02-misc04-image-gen/prd.md`。本节只写运行语义。
