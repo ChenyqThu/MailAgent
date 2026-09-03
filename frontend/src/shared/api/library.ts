@@ -70,6 +70,10 @@ export interface LibraryUploadFile {
   filename: string
   bytes: ArrayBuffer | Uint8Array
   source?: LibrarySource
+  /** 派生来源，取值口径按 `source` 分档（与 `LibraryFile.source_ref` 同一列）：
+   *  `chat` = `'{sessionId}:{uiMessageId}'`（对话附件发送即入库，design §1.4）、
+   *  `derived` = 原文件 id 的字符串形式、`agent` = agent_id。不传就不发。 */
+  source_ref?: string
 }
 
 export interface LibraryWrite {
@@ -189,7 +193,8 @@ export function createLibraryApi(baseUrl: string): LibraryApi {
         query: {
           parent_path: input.parent_path,
           filename: input.filename,
-          source: input.source
+          source: input.source,
+          source_ref: input.source_ref
         }
       })
     },
