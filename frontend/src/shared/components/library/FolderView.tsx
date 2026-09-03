@@ -21,7 +21,14 @@ import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { useLibraryTree } from '@shared/state/library-tree'
 
-import { displayName, fileTimeLabel, isProjection, libraryIconTone, trashDaysLeft } from './fileMeta'
+import {
+  deleteActionLabelKey,
+  displayName,
+  fileTimeLabel,
+  isProjection,
+  libraryIconTone,
+  trashDaysLeft
+} from './fileMeta'
 import { useLibraryFolderPages } from './hooks'
 import { FileStatusPill, Notice, Pill, SourcePill, TextStatusPill } from './parts'
 import type { LibraryFileActions } from './useLibraryFileActions'
@@ -347,7 +354,8 @@ export function FolderView({
       items.push({
         kind: 'action',
         id: 'del',
-        label: t('library.actions.delete'),
+        // F12：挂载区删的是磁盘上的真文件、进系统废纸篓，文案必须与库内那条分开。
+        label: t(deleteActionLabelKey(file)),
         tone: 'danger',
         onSelect: () => actions.trash(file)
       })

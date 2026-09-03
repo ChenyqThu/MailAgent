@@ -24,7 +24,12 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 import { useLibraryOpenToast } from './deeplink'
 import { FolderPickerDialog } from './FolderPickerDialog'
 import { useInvalidateLibrary, useLibraryApi } from './hooks'
-import { openLibraryTarget, openTargetOf, revealLibraryTarget } from './libraryIpc'
+import {
+  openLibraryTarget,
+  openTargetOf,
+  revealLibraryTarget,
+  trashLibraryTarget
+} from './libraryIpc'
 
 export interface LibraryFileActions {
   open(file: LibraryFile): void
@@ -124,13 +129,29 @@ export function useLibraryFileActions(handlers: LibraryFileActionHandlers = {}):
     if (kind === undefined || file === undefined || id == null) return
     setBusy(true)
     try {
-      if (kind === 'trash') {
+      if (kind === 'trash' && file.mount_id > 0) {
+        // 🔴 挂载区删除走**系统废纸篓**（F12 / design §8.2）：服务端对挂载区文件的
+        // `DELETE /library/file/{id}` 恒拒 `E_AUTH_FAILED` —— 那是有意的，我们不接管用户
+        // 自己目录里的文件。删完让索引对账一次，否则那一行会以 present 的样子留在列表里
+        // 直到下次有人打开它。
+        const target = openTargetOf(file)
+        const result = target
+          ? await trashLibraryTarget(target)
+          : ({ ok: false, code: 'E_INVALID_ARG', message: 'no target' } as const)
+        if (!result.ok) {
+          toastError(t('library.toast.actionFailed'), result.message)
+          return
+        }
+        await api.rescan(file.mount_id).catch(() => undefined)
+        await invalidate.all()
+        setConfirm(null)
+        toastSuccess(t('library.trash.deletedToastMount'))
+        handlers.onTrashed?.(file)
+      } else if (kind === 'trash') {
         await api.trashFile(id)
         await invalidate.all()
         setConfirm(null)
-        toastSuccess(
-          t(file.mount_id > 0 ? 'library.trash.deletedToastMount' : 'library.trash.deletedToastLibrary')
-        )
+        toastSuccess(t('library.trash.deletedToastLibrary'))
         handlers.onTrashed?.(file)
       } else {
         await api.purgeFile(id)

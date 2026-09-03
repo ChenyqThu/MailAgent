@@ -5,7 +5,7 @@
 // 提示「已被改动」、显示当前版本（🔴 靠重拉 `GET /library/file/{id}`，409 body 到不了 UI）、
 // 保留我的文本不丢。「用我的覆盖」= 拿当前版本的 hash 再写一次；「放弃」= 回到当前版本。
 
-import { useEffect, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { TriangleAlert } from 'lucide-react'
 
@@ -58,6 +58,20 @@ export function MarkdownEditor({ file, mode, onModeChange }: Props): ReactElemen
   const [saving, setSaving] = useState(false)
   const [conflict, setConflict] = useState<LibraryFileDetail | null>(null)
 
+  // F5（owner 09-02 拍板）「不丢」：挂载根切只读时正在编辑的文件降级为只读，**未保存文本不丢**。
+  // 判据是「上一次是怎么离开编辑态的」：
+  //   · 用户自己离开（取消 / 保存成功 / 放弃冲突，都经 `leaveEdit`）→ 回到编辑态按磁盘正文重新起草
+  //     （「取消 = 丢弃草稿」的语义就在这里）；
+  //   · 被 readonly 压出去（mode prop 自己从 edit 变 read，没人经过 `leaveEdit`）→ 切回可写时
+  //     **跳过** reseed，草稿原样留在编辑框里。
+  // 🔴 不要改成「content 没变就不 seed」—— 那会连带把取消的丢弃语义一起改掉。
+  // 头部那枚「编辑」按钮再点一次也属于后者（它是显示开关，不是取消）：草稿留着。
+  const userLeftEdit = useRef(true)
+  const leaveEdit = useCallback((): void => {
+    userLeftEdit.current = true
+    onModeChange('read')
+  }, [onModeChange])
+
   // 进编辑态时从当前正文起草；只读态下正文更新（别处保存 / 外部改动）也跟着刷。
   const [seeded, setSeeded] = useState<{ hash: string | null; mode: MarkdownMode }>({
     hash: file.content_hash,
@@ -66,12 +80,13 @@ export function MarkdownEditor({ file, mode, onModeChange }: Props): ReactElemen
   useEffect(() => {
     if (seeded.mode === mode && seeded.hash === file.content_hash) return
     setSeeded({ hash: file.content_hash, mode })
-    if (mode === 'edit' && seeded.mode !== 'edit') {
+    if (mode === 'edit' && seeded.mode !== 'edit' && userLeftEdit.current) {
       // 刚进编辑态：草稿 = 磁盘原文（含 frontmatter，用户编辑的是真文件）。
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setText(content)
       setNote('')
       setConflict(null)
+      userLeftEdit.current = false
     }
   }, [content, file.content_hash, mode, seeded])
 
@@ -86,7 +101,7 @@ export function MarkdownEditor({ file, mode, onModeChange }: Props): ReactElemen
       })
       await invalidate.file({ id: file.id })
       setConflict(null)
-      onModeChange('read')
+      leaveEdit()
       toastSuccess(t('library.preview.savedToast'))
     } catch (err) {
       if (isLibraryVersionConflict(err)) {
@@ -135,7 +150,7 @@ export function MarkdownEditor({ file, mode, onModeChange }: Props): ReactElemen
           aria-label={t('library.history.changeNoteLabel')}
           className="h-8 min-w-0 flex-1 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2.5 text-aux text-ink-fg outline-none placeholder:text-ink-fg-3 focus-visible:border-coral/60"
         />
-        <Button size="sm" variant="ghost" disabled={saving} onClick={() => onModeChange('read')}>
+        <Button size="sm" variant="ghost" disabled={saving} onClick={leaveEdit}>
           {t('library.actions.cancel')}
         </Button>
         <Button size="sm" disabled={saving} onClick={() => void write(file.content_hash)}>
@@ -175,7 +190,7 @@ export function MarkdownEditor({ file, mode, onModeChange }: Props): ReactElemen
             onClick={() => {
               setText(conflict.content ?? '')
               setConflict(null)
-              onModeChange('read')
+              leaveEdit()
             }}
           >
             {t('library.preview.conflictDiscard')}

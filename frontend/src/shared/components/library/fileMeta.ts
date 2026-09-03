@@ -79,6 +79,15 @@ export function openWithApp(file: Pick<LibraryFile, 'filename' | 'mime'>): OpenW
   return null
 }
 
+/** 删除动作的文案 key（F12）。
+ *
+ *  🔴 库内与挂载区**删的不是同一件事**：库内进 `.trash`（30 天可恢复），挂载区动的是用户
+ *  磁盘上的真文件、交给系统废纸篓（服务端对挂载区的 `DELETE /library/file/{id}` 恒拒）。
+ *  差异前移到菜单文案上 —— 都叫「删除」会让用户以为进的是库内废纸篓。 */
+export function deleteActionLabelKey(file: Pick<LibraryFile, 'mount_id'>): string {
+  return file.mount_id > 0 ? 'library.trash.moveToSystemTrash' : 'library.actions.delete'
+}
+
 export function sourceTone(source: LibrarySource): 'info' | 'ai' | 'ink' {
   if (source === 'mail') return 'info'
   if (source === 'agent') return 'ai'

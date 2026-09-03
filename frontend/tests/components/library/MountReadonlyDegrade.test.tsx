@@ -150,16 +150,10 @@ describe('挂载根切只读时正在编辑的文件（F5）', () => {
     expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull()
   })
 
-  // 🔴 **已知缺口，等 `MarkdownEditor.tsx` 的属主改完再 un-skip**（跨 lane，本 lane 不动那个文件）。
-  // 现状：草稿在只读期间确实留在 `MarkdownEditor` 的 state 里，但切回可写时 mode 由 read→edit，
-  // 那个 seed effect 判到「刚进编辑态」就 `setText(content)`，把草稿换成了磁盘正文 —— 实测断言
-  // 拿到 'on disk' 而不是 'my unsaved draft'。F5 三句里「降级只读」「不拒切」已成立，「不丢」只在
-  // 只读期间成立。
-  // 修法（4 行，落在 `MarkdownEditor.tsx`）：用一个 ref 区分「用户自己退出编辑态」（cancel / 保存成功 /
-  // 放弃冲突，都经 `onModeChange('read')`）与「被 readonly 压出去」（mode prop 自己变），后者回到
-  // edit 时跳过 `setText(content)`。别改成「只要 content 没变就不 seed」—— 那会连带把 cancel 的
-  // 「丢弃草稿」语义一起改掉。
-  test.skip('切回可写：未保存的草稿还在编辑框里（没被磁盘正文盖掉）', async () => {
+  // 09-03 已修（`MarkdownEditor.tsx`）：`userLeftEdit` ref 区分「用户自己退出编辑态」（取消 /
+  // 保存成功 / 放弃冲突，都经 `leaveEdit`）与「被 readonly 压出去」（mode prop 自己变），后者回到
+  // edit 时跳过 `setText(content)`，草稿原样留着。
+  test('切回可写：未保存的草稿还在编辑框里（没被磁盘正文盖掉）', async () => {
     renderPreview()
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
     await waitFor(() => expect(textarea()).not.toBeNull())

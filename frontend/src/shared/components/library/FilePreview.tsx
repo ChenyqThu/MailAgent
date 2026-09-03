@@ -33,6 +33,7 @@ import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 
 import {
+  deleteActionLabelKey,
   derivedSourceId,
   displayName,
   fileTimeLabel,
@@ -313,7 +314,8 @@ export function FilePreview({
     })
     specs.push({
       id: 'delete',
-      label: t('library.actions.delete'),
+      // F12：挂载区那条是「移到系统废纸篓」——不是库内 `.trash`，文案在这里就分开。
+      label: t(deleteActionLabelKey(file)),
       icon: <Trash2 size={13} aria-hidden />,
       danger: true,
       onClick: () => actions.trash(file)
