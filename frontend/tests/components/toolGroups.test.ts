@@ -14,7 +14,7 @@ import { CUSTOM_AGENT_MANAGED_ALLOWED_TOOLS } from '../../src/shared/lib/customA
 import enCommon from '../../src/shared/i18n/locales/en-US/common.json'
 import zhCommon from '../../src/shared/i18n/locales/zh-CN/common.json'
 
-// 镜像 src/api/routers/agent_runs.py::HEADLESS_TOOL_OPTIONS（33 个，/tool-options 契约冻结；
+// 镜像 src/api/routers/agent_runs.py::HEADLESS_TOOL_OPTIONS（40 个，/tool-options 契约冻结；
 // task 09-02 起 chat_session_* 三件结构性缺席 —— 恒注册 + grant_sessions 管读取半径）。
 // 后端加工具 → 此 fixture 必须跟着补（连同 TOOL_GROUPS 归属），否则首个用例红。
 const HEADLESS_TOOL_OPTIONS: AgentRunToolOption[] = [
@@ -37,6 +37,10 @@ const HEADLESS_TOOL_OPTIONS: AgentRunToolOption[] = [
   { name: 'kos_list_pages', class: 'read' },
   { name: 'kos_query', class: 'read' },
   { name: 'kos_search', class: 'read' },
+  // library epic P2-L2 — 资料库三读（silent）。
+  { name: 'library_list', class: 'read' },
+  { name: 'library_read', class: 'read' },
+  { name: 'library_search', class: 'read' },
   { name: 'report_get', class: 'read' },
   { name: 'report_list', class: 'read' },
   { name: 'report_write', class: 'artifact' },
@@ -51,7 +55,12 @@ const HEADLESS_TOOL_OPTIONS: AgentRunToolOption[] = [
   { name: 'email_draft_update', class: 'domain_write' },
   { name: 'email_flag', class: 'domain_write' },
   { name: 'email_pin', class: 'domain_write' },
-  { name: 'email_resync', class: 'domain_write' }
+  { name: 'email_resync', class: 'domain_write' },
+  // library epic P2-L2 — 资料库四写（edit-tier，writeBadge 由 class 驱动）。
+  { name: 'library_append', class: 'domain_write' },
+  { name: 'library_delete', class: 'domain_write' },
+  { name: 'library_move', class: 'domain_write' },
+  { name: 'library_write', class: 'domain_write' }
 ]
 
 describe('toolGroups — R3 工具分组常量', () => {
@@ -67,7 +76,7 @@ describe('toolGroups — R3 工具分组常量', () => {
     expect(new Set(all).size).toBe(all.length)
   })
 
-  test('六能力映射覆盖全部 headless 原子工具', () => {
+  test('能力卡映射覆盖全部 headless 原子工具', () => {
     const managed = new Set(CUSTOM_AGENT_MANAGED_ALLOWED_TOOLS)
     expect(
       HEADLESS_TOOL_OPTIONS.map((tool) => tool.name).filter((name) => !managed.has(name))

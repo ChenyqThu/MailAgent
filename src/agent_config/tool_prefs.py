@@ -60,6 +60,7 @@ TOOL_PREF_GROUPS: tuple[str, ...] = (
     "calendar",
     "matters",
     "contacts",
+    "library",
     "capability",
     "supply",
     "agents",
@@ -149,6 +150,19 @@ BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     # 界面上那一下点击 = 这里的这张卡。
     BuiltinToolPolicy("contact_update_fields", "contacts", "ask"),
     BuiltinToolPolicy("contact_set_manager", "contacts", "ask"),
+    # ── B 组：资料库四写（library epic P2-L2，design §5.1）────────────────────────
+    # append / write 出厂 auto：都只动本机资料库，且每次写都留全文快照（历史抽屉可逐条回滚），
+    # 与 matter 家族同一条论证 —— 本地、可恢复、要被日常维护，每写一条弹一张卡就没人用了。
+    # 🔴 出厂 auto 只作用于 manual_chat；无人值守那条免卡通道是 P2-L3 的 policyEvaluate 规则
+    # （限 agent-docs/ + 大小上限），与这里的档位是两套，别把这两件事合成一件。
+    BuiltinToolPolicy("library_append", "library", "auto"),
+    BuiltinToolPolicy("library_write", "library", "auto"),
+    # move / delete 出厂 ask：move 会断掉别的 agent 记着的路径字符串与文档里的相对链接
+    # （跨模块引用走 library:{id} 不会断，但那两类会）；delete 是删除动作。
+    # delete 另带 danger_auto —— 设成 auto 时红警告 + 一次性确认。**不是** configurable=False：
+    # 它进的是 .trash（保留期内可恢复），够不上 send / run_command 那一档的安全地板。
+    BuiltinToolPolicy("library_move", "library", "ask"),
+    BuiltinToolPolicy("library_delete", "library", "ask", danger_auto=True),
     # ── B 组：能力/身份面（全部有 history/rollback 补偿）─────────────────────────
     BuiltinToolPolicy("set_skill_enabled", "capability", "ask"),
     BuiltinToolPolicy("update_system_md", "capability", "ask"),

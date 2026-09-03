@@ -1,3 +1,8 @@
+import {
+  GATEWAY_LIBRARY_READ_TOOL_NAMES,
+  GATEWAY_LIBRARY_WRITE_TOOL_NAMES
+} from '../libraryConstants'
+
 export const CUSTOM_AGENT_CAPABILITY_TIERS = {
   email: ['read', 'organize', 'draft'],
   calendar: ['off', 'read', 'write'],
@@ -5,7 +10,8 @@ export const CUSTOM_AGENT_CAPABILITY_TIERS = {
   sessions: ['own', 'all'],
   reports: ['read', 'produce'],
   web: ['off', 'gated', 'open'],
-  files: ['off', 'on']
+  files: ['off', 'on'],
+  library: ['off', 'read', 'write']
 } as const
 
 export type CustomAgentCapabilityId = keyof typeof CUSTOM_AGENT_CAPABILITY_TIERS
@@ -68,6 +74,14 @@ const KNOWLEDGE_TOOLS = [
 const REPORT_READ_TOOLS = ['report_get', 'report_list'] as const
 const REPORT_PRODUCE_TOOLS = [...REPORT_READ_TOOLS, 'report_write'] as const
 
+// library epic P2-L2 — 第 8 张卡。工具名的唯一来源是零依赖叶子 `shared/libraryConstants.ts`
+// （Python `src/library/constants.py` 与它有 parity 闸）：这里只做档位编排，不再抄一份名单。
+const LIBRARY_READ_TOOLS = [...GATEWAY_LIBRARY_READ_TOOL_NAMES] as const
+const LIBRARY_WRITE_TOOLS = [
+  ...LIBRARY_READ_TOOLS,
+  ...GATEWAY_LIBRARY_WRITE_TOOL_NAMES
+] as const
+
 /**
  * Canonical capability-to-policy mapping. Web, files and sessions are grants, so they intentionally
  * have no allowed-tools entries; the gateway matrix remains the authority that admits those tool
@@ -91,6 +105,11 @@ export const CUSTOM_AGENT_CAPABILITY_TOOL_SETS = {
   reports: {
     read: REPORT_READ_TOOLS,
     produce: REPORT_PRODUCE_TOOLS
+  },
+  library: {
+    off: [],
+    read: LIBRARY_READ_TOOLS,
+    write: LIBRARY_WRITE_TOOLS
   }
 } as const
 
@@ -173,6 +192,9 @@ export function applyCustomAgentCapabilityPatch(
   if (patch.reports !== undefined) {
     allowedTools = replaceToolCapability(allowedTools, 'reports', patch.reports)
   }
+  if (patch.library !== undefined) {
+    allowedTools = replaceToolCapability(allowedTools, 'library', patch.library)
+  }
   return {
     allowedTools,
     grantWeb: patch.web ?? current.grantWeb,
@@ -232,6 +254,7 @@ export function deriveCustomAgentCapabilities(
   const calendar = deriveToolTier('calendar', policy.allowedTools)
   const knowledge = deriveToolTier('knowledge', policy.allowedTools)
   const reports = deriveToolTier('reports', policy.allowedTools)
+  const library = deriveToolTier('library', policy.allowedTools)
   return {
     profile: {
       email: email.tier,
@@ -240,13 +263,15 @@ export function deriveCustomAgentCapabilities(
       sessions: policy.grantSessions,
       reports: reports.tier,
       web: policy.grantWeb,
-      files: policy.grantExec ? 'on' : 'off'
+      files: policy.grantExec ? 'on' : 'off',
+      library: library.tier
     },
     customized: [
       ...(email.customized ? (['email'] as const) : []),
       ...(calendar.customized ? (['calendar'] as const) : []),
       ...(knowledge.customized ? (['knowledge'] as const) : []),
-      ...(reports.customized ? (['reports'] as const) : [])
+      ...(reports.customized ? (['reports'] as const) : []),
+      ...(library.customized ? (['library'] as const) : [])
     ]
   }
 }

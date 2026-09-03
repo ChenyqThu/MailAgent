@@ -8,7 +8,7 @@
 
 * **能力档工具集 ↔ headless 可选工具集**：两者不是同一份数据的两份拷贝 —— Python 侧
   ``HEADLESS_TOOL_OPTIONS`` 是「headless run 能挂哪些工具」的清单（后端权威，端点直接投影给
-  前端），TS 侧 ``CUSTOM_AGENT_CAPABILITY_TOOL_SETS`` 是「这些工具怎么分成六张能力卡的档位」的
+  前端），TS 侧 ``CUSTOM_AGENT_CAPABILITY_TOOL_SETS`` 是「这些工具怎么分成能力卡的档位」的
   产品语义。**但分档必须恰好覆盖清单全集**：清单里有而没被任何档收录的工具，用户一动能力卡就
   会被 ``replaceToolCapability`` 判为「非 managed」而永久滞留；档里有而清单里没有的名字，写进
   ``allowed_tools`` 后会被 gateway 的交集（``agentRun.ts`` ``wrapCfgForAgentRun``）默默丢掉 ——
@@ -41,6 +41,7 @@ AGENT_RUNS_PY = REPO_ROOT / "src/api/routers/agent_runs.py"
 RUN_STATE_PY = REPO_ROOT / "src/agents/run_state.py"
 TRIGGER_PY = REPO_ROOT / "src/agents/trigger.py"
 CAPABILITIES_TS = REPO_ROOT / "frontend/src/shared/lib/customAgentCapabilities.ts"
+LIBRARY_CONSTANTS_TS = REPO_ROOT / "frontend/src/shared/libraryConstants.ts"
 REPORT_TYPES_TS = REPO_ROOT / "frontend/src/shared/api/types/report.ts"
 AGENT_RUN_TS = REPO_ROOT / "frontend/src/ai-gateway/agentRun.ts"
 
@@ -153,14 +154,32 @@ def parse_ts_tool_constants(src: str) -> Dict[str, Set[str]]:
 
 
 def capability_card_tools() -> Set[str]:
-    """六能力卡映射表实际引用到的全部原子工具名（含 spread 展开）。
+    """能力卡映射表实际引用到的全部原子工具名（含 spread 展开）。
 
     🔴 不是「文件里所有字符串」：只收 ``CUSTOM_AGENT_CAPABILITY_TOOL_SETS`` 块真正引用到的常量，
     并断言其引用的每个标识符都已解析到 —— 少解析一个常量（部分抽取）比抽不到更毒，那会让闸
     在「TS 侧多了一族工具」时照样绿。
+
+    解析域是**两个**文件：能力卡本体，加上它 import 的零依赖叶子 ``shared/libraryConstants.ts``
+    （library epic P2-L2 起，第 8 张卡的 7 个工具名单以那里为单源，能力卡只 spread 不手抄）。
+    少了叶子这一半，``expand()`` 会在 ``...GATEWAY_LIBRARY_*_TOOL_NAMES`` 上抽取失败。
     """
-    src = CAPABILITIES_TS.read_text(encoding="utf-8")
+    src = (
+        CAPABILITIES_TS.read_text(encoding="utf-8")
+        + "\n"
+        + LIBRARY_CONSTANTS_TS.read_text(encoding="utf-8")
+    )
     constants = parse_ts_tool_constants(src)
+    # 叶子 canary：两个名单数组必须解析到且尺寸对得上 —— 叶子改名/被 import 掉/正则失配时，
+    # 下面的 `unknown` 断言只会说「引用了未解析到的常量」，看不出是解析域没跟上。
+    for leaf_const, size in (
+        ("GATEWAY_LIBRARY_READ_TOOL_NAMES", 3),
+        ("GATEWAY_LIBRARY_WRITE_TOOL_NAMES", 4),
+    ):
+        assert len(constants.get(leaf_const, ())) == size, (
+            f"{LIBRARY_CONSTANTS_TS.name}:{leaf_const} 解析到 "
+            f"{len(constants.get(leaf_const, ()))} 项（期望 {size}）—— 解析域或叶子结构变了"
+        )
 
     block_match = re.search(
         r"export const CUSTOM_AGENT_CAPABILITY_TOOL_SETS\s*=\s*\{(.*?)\n\}\s*as\s+const", src, re.S
@@ -214,7 +233,7 @@ def parse_ts_int_const(name: str, path: Path) -> int:
 
 
 # =============================================================================
-# 闸 13 — 六能力卡的工具词表 ↔ headless 可选工具集
+# 闸 13 — 能力卡的工具词表 ↔ headless 可选工具集
 # =============================================================================
 
 
@@ -238,13 +257,50 @@ def test_capability_cards_cover_exactly_the_headless_tool_options():
     headless_only = sorted(set(headless) - cards)
     cards_only = sorted(cards - set(headless))
     assert not (headless_only or cards_only), (
-        "六能力卡的工具词表与 headless 可选工具集漂移了：\n"
+        "能力卡的工具词表与 headless 可选工具集漂移了：\n"
         f"  只在 Python HEADLESS_TOOL_OPTIONS（没有任何能力档收录它 → 用户动能力卡时它成孤儿）："
         f"{headless_only}\n"
         f"  只在 TS 能力档映射（gateway 交集会丢掉它 → UI 说开了其实不存在）：{cards_only}\n"
         "→ 加/改/重命名 headless 工具时两处必须同批改：\n"
         "  src/api/routers/agent_runs.py（HEADLESS_TOOL_OPTIONS）\n"
-        "  frontend/src/shared/lib/customAgentCapabilities.ts（六档映射表）"
+        "  frontend/src/shared/lib/customAgentCapabilities.ts（能力档映射表）"
+    )
+
+
+def test_library_family_is_covered_by_the_eighth_capability_card():
+    """library epic P2-L2 —— 7 个资料库工具两侧齐全，且读/写 class 分得对。
+
+    上面那条集合相等闸已经能挡「一侧少了」，但它只报名字、不报 class；而资料库这一族的
+    read（silent、免卡）与 domain_write（edit-tier、恒卡直到 P2-L3 的规则命中）差别正是
+    这张卡三档的全部意义。class 标错方向只有一个后果值得防：写工具被标成 read ⇒ 它跟着
+    「读取」档一起发出去，卡片说只读、实际能改文件。
+    """
+    headless = parse_py_pair_tuple("HEADLESS_TOOL_OPTIONS", AGENT_RUNS_PY)
+    cards = capability_card_tools()
+
+    reads = ("library_list", "library_read", "library_search")
+    writes = ("library_append", "library_delete", "library_move", "library_write")
+    for name in reads:
+        assert headless.get(name) == "read", f"{name} 不在 HEADLESS_TOOL_OPTIONS 或 class 不是 read"
+        assert name in cards, f"{name} 没被任何能力档收录"
+    for name in writes:
+        assert headless.get(name) == "domain_write", (
+            f"{name} 不在 HEADLESS_TOOL_OPTIONS 或 class 不是 domain_write —— "
+            "标成 read 会让它跟着「读取」档一起发出去"
+        )
+        assert name in cards, f"{name} 没被任何能力档收录"
+
+    # 资料库不进默认安全集：新建的 headless agent 出厂拿不到它，owner 在第 8 张卡上选才有。
+    block = re.search(
+        r"DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS[^=]*=\s*\((.*?)\n\)",
+        AGENT_RUNS_PY.read_text(encoding="utf-8"),
+        re.S,
+    )
+    assert block, "没找到 DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS —— 解析器需更新"
+    default_tools = set(re.findall(r'"([a-z0-9_]+)"', block.group(1)))
+    assert "email_get" in default_tools, "默认集抽取 canary 失败"
+    assert not (default_tools & set(reads + writes)), (
+        f"资料库工具进了默认安全集：{sorted(default_tools & set(reads + writes))}"
     )
 
 

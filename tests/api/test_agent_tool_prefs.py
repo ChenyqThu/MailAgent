@@ -61,6 +61,10 @@ EXPECTED_DEFAULT_AUTO = {
     # 0813 轮 3 批 R：关注信号处置 / 资料建议整批处置 —— 同为本地派生态写，同档。
     "matter_attention_triage",
     "matter_suggestion_resolve",
+    # library epic P2-L2：资料库的加性/覆写两写 —— 本地、每写留全文快照（历史抽屉可逐条
+    # 回滚）、要被日常维护，与 matter 家族同一条论证。move / delete 不在此集合（ask）。
+    "library_append",
+    "library_write",
 }
 # configurable=False（固定形状）：send=收件人白名单 / run_command=policy_rules /
 # 供应链两卡 / custom-agent CRUD（run_now 除外）。
@@ -92,7 +96,8 @@ EXPECTED_FIXED_ASK = {
     "group_create",
 }
 # D2=a：设 auto 需红警告 + 一次性确认。
-EXPECTED_DANGER_AUTO = {"calendar_event_delete", "notion_agent_chat"}
+# library_delete 同待遇而非 configurable=False：软删进 .trash，保留期内可恢复。
+EXPECTED_DANGER_AUTO = {"calendar_event_delete", "notion_agent_chat", "library_delete"}
 
 
 def test_get_factory_defaults_full_table(client, fresh_agent_cfg):
