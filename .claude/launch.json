@@ -4,20 +4,63 @@
     {
       "name": "web-dev",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["-C", "frontend", "dev:web"],
+      "runtimeArgs": [
+        "-C",
+        "frontend",
+        "dev:web"
+      ],
       "port": 5173
     },
     {
       "name": "stakeholder-mockup",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["-C", "frontend", "exec", "vite", "--config", "mockups/stakeholder/vite.config.ts"],
+      "runtimeArgs": [
+        "-C",
+        "frontend",
+        "exec",
+        "vite",
+        "--config",
+        "mockups/stakeholder/vite.config.ts"
+      ],
       "port": 5199
     },
     {
       "name": "dragreorder-mockup",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["-C", "frontend", "exec", "vite", "--config", "mockups/dragreorder/vite.config.ts"],
+      "runtimeArgs": [
+        "-C",
+        "frontend",
+        "exec",
+        "vite",
+        "--config",
+        "mockups/dragreorder/vite.config.ts"
+      ],
       "port": 5201
+    },
+    {
+      "name": "library-mockup",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "-C",
+        "frontend",
+        "exec",
+        "vite",
+        "--config",
+        "mockups/library/vite.config.ts"
+      ],
+      "port": 5202
+    },
+    {
+      "name": "proto-static",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8199",
+        "--directory",
+        "/private/tmp/claude-501/-Users-chenyuanquan-Documents-MailAgent/7b86b4a7-b304-419c-b7c7-98c8536112ab/scratchpad/tabws"
+      ],
+      "port": 8199
     }
   ]
 }

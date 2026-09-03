@@ -17,7 +17,8 @@ ai_priority 镜像率    : ~99% (4 NULL = LLM 流转中)
 frontend flag 延迟    : ~5ms (IPC 直写 SQLite, 之前 ~500-1000ms CLI fork)
 AppleScript 路径       : 保留, .env 切回即激活 (emergency fallback)
 关键死线              : EWS 2026-10-01 起默认阻断; 上游 DavMail 6.8.x 已带 Graph backend,
-                        授权路线已验证可行(不需 IT 审批), 但成熟度不足 → 2026-07-31 决定暂不迁移 (§5.1)
+                        授权路线已验证可行(不需 IT 审批), 但成熟度不足 → 2026-08-26 复查后仍等待,
+                        两周后(2026-09 上旬)再看; 复查判据 = refresh resource bug 修没修 (§5.1)
 最高优先级            : 观察 1-2 周稳定性 → DavMail OAuth 监控 → EWS 关停应对启动
 ```
 
@@ -295,6 +296,10 @@ mailagent admin backfill-processing-status [--since-date=YYYY-MM-DD] [--mailbox=
 > **2026-07-31 调研更新**: 上游 Graph backend 已发版, Path A 成立且**不需要 IT 审批** —— 决策从
 > "二选一" 收敛为 "跟随上游, 等成熟"。owner 当日拍板: **暂不迁移 PoC**, 成熟度不够, 继续观察。
 > 以下为该次调研的实证结论, 取代此前 "#404 未 merge / 需 IT 审批" 的判断。
+>
+> **2026-08-26 复查更新**: 仍无 6.9, 最新正式版仍是 6.8.1。但 trunk 已累积 115 个 commit,
+> 三条观察触发条件中**两条在 trunk 满足、一条完全没动**(那一行 refresh resource bug)。
+> owner 当日拍板: **继续等待, 两周后(2026-09 上旬)再看**。复查判据见本节末尾。
 
 **微软侧时间线**:
 - 2026-07-01: frontline/kiosk SKU 邮箱先行阻断
@@ -308,6 +313,18 @@ mailagent admin backfill-processing-status [--since-date=YYYY-MM-DD] [--mailbox=
 | 6.8.0 (2026-06-12) | **首个把 Graph 做成正式可选 backend 的版本**。配置重构: `mode`(协议) 与 `authentication`(认证) 拆成两个键, 新增 `O365EWS` / `O365Graph` / `ExchangeEWS` |
 | 6.8.1 (2026-06-30) | 当前最新正式版。带回 `davmail.folderFetchPageSize`(默认 500) 修 Graph 大文件夹分页 |
 | trunk (2026-07 全月) | delta sync (`davmail.graph.deltaSync=true`) / folder 全量缓存 / 限流重试 / recurrence 修正 —— **尚未发版** |
+| trunk (2026-08-26 核查, HEAD `003d76c`) | 自 6.8.1 起 **115 commit**。关键: 8-14 `Graph: add missing datereceived mapping` 修 #506; 8-16 **delta sync 默认开启**; 8-14 `O365: fix scope check in O365Token` 新增 token 兼容性检查(见下 a 项, 放大了 refresh bug 的后果) —— **仍未发版** |
+
+**三条观察触发条件的状态 (2026-08-26 核查)**:
+
+| 触发条件 | 状态 | 依据 |
+|---|---|---|
+| delta sync 进正式版 | ⚠️ 进 trunk, **未发版** | 7-11 实现, 8-16 默认开启; [#500](https://github.com/mguessan/davmail/issues/500) 作者 8-22 实测 20k 文件夹正常 |
+| [#506](https://github.com/mguessan/davmail/issues/506) APPEND 修复 | ✅ trunk 已修, **未发版** | 8-14 mguessan 回帖 "fixed in trunk", issue 仍 open |
+| refresh resource bug 修复 | ❌ **完全没动** | `O365Token.java:255` 仍写死 `getOutlookUrl()` |
+
+⇒ **可以做 PoC, 不能切生产**。且 PoC 必须自建 trunk + 一行 patch —— 等 6.9 是被动等待,
+而这一行不修, 任何 Graph 实例都活不过 1 小时。
 
 [Issue #404](https://github.com/mguessan/davmail/issues/404) 仍 open, 但作者 2026-05-02 明确表态
 "应该能赶上十月的 deadline"。**本项目 = 跟随上游, 零自研工程** (见 memory `feedback_mailagent_ews_davmail_scope`)。
@@ -364,6 +381,38 @@ Graph 调用 401。**进程不退出, 表现为"跑了一阵突然全线 401"**�
 `O365: set resource parameter on token request only if OIDC is explicitly set to false`(2026-06-15)
 引入, 说明**这条路作者自己没跑过**。处置: 报上游 issue, 或自行 patch + Ant build。
 
+> **2026-08-26 更新 —— 后果比 7 月判断更严重**。上游 8-14 给 `setJsonToken` 加了 token 兼容性检查
+> (`O365Token.java:190-195`):
+> ```java
+> if (Settings.isGraphEnabled()) {
+>     if (scope != null && (!scope.contains("Mail.ReadWrite") || scope.contains(Settings.getOutlookUrl()))) {
+>         Settings.storeRefreshToken(username, "");        // ← 清空存储的 refresh token
+>         throw new IOException("Found EWS stored token, incompatible with Graph API");
+>     }
+> }
+> ```
+> refresh 换回 EWS 资源 token 后, 若响应 `scope` 含 outlook url 即命中该分支 ⇒ 1h 后不再只是
+> "静默 401", 而可能是**refresh token 被清空、必须重新人工 OAuth**。走哪条取决于 v1 token 响应里
+> `scope` 字段的实际形态(短名列表 vs 完整 URI), **这是 PoC 的头号必测项**。
+> 🔴 直接推论: PoC **必须用独立 token 目录** —— 指向生产 `token.dat` 时一次失败就清掉生产凭证。
+>
+> **patch (一行, 可同时提给上游)**:
+> ```java
+> // src/java/davmail/exchange/auth/O365Token.java:254
+> if (!Settings.getBooleanProperty("davmail.enableOidc", Settings.isGraphEnabled())) {
+>     parameters.add(new BasicNameValuePair("resource",
+>             Settings.isGraphEnabled() ? Settings.getGraphUrl() : Settings.getOutlookUrl()));
+> }
+> ```
+> 默认值一并从 `true` 改为 `Settings.isGraphEnabled()`, 与同文件 `buildTokenUrl:105` 对齐(两处不一致
+> 本身就是隐患)。`getGraphUrl()` 返回 `https://graph.microsoft.com`(不含 `/beta`, 版本前缀由
+> `GraphRequestBuilder` 另拼), 正好可直接作 v1 resource。
+>
+> ⚠️ 评估过一个零构建替代: 设 `davmail.outlookUrl=https://graph.microsoft.com` 让 refresh 的 resource
+> 自然变成 graph。能 work, 但会连带污染 `getO365Url()`(变成 `https://graph.microsoft.com/EWS/Exchange.asmx`),
+> 影响 `O365ManualAuthenticator:49` 的 `ewsUrl`, 同时把上面那段 scope 检查的判据一起改掉 ——
+> 用一个键表达两处相反语义, **仅在构建链完全卡住时作为应急**。
+
 **b) Graph backend 成熟度 —— 按本项目实际用到的能力分项**:
 
 | 能力 | Graph 下状态 |
@@ -395,15 +444,40 @@ Graph 调用 401。**进程不退出, 表现为"跑了一阵突然全线 401"**�
   - ⇒ `email_metadata.imap_uid` / `imap_uidvalidity` 不失效。
 - `davmail.folderSizeLimit` 在 Graph 模式下**仍生效**(见 #500 讨论), `src/mail/davmail_properties.py`
   那套单键同步无需改动。
+- **配置必须改写, 不是"换版本就到 Graph"** (2026-08-26 查明的 legacy fallback 边界):
+  - 现有 PoC 配置是 6.7 旧格式 `davmail.mode=O365Manual`(那时 mode 兼管协议与认证)。6.8 起
+    `mode`(协议) 与 `authentication`(认证) 拆键。
+  - 旧配置**向后兼容**: `ExchangeSessionFactory:160-168` 先读 `davmail.authentication`, 取不到才
+    `getAuthenticatorClass(mode)` "fallback to legacy modes"。而 `setDefaultSettings()` 里
+    `davmail.authentication=O365Interactive` 这个默认值**只在配置文件不存在时写**(`Settings.load():161-170`
+    —— 文件存在则只 load, 不设默认) ⇒ 我们的文件没写该键 = 取到 null = 走 legacy fallback ✅
+  - ⇒ **单纯升级 jar 是安全的**(`isGraphEnabled()` 判 `mode=O365Graph`, 旧值仍走 EWS, 行为不变),
+    但也意味着**不改配置就不会切到 Graph**。
+  - 🔴 一旦把 mode 改成 `O365Graph`, legacy fallback 就不再兜底 ⇒ **必须显式补写
+    `davmail.authentication=O365Manual`**, 否则 authenticatorClass 为 null, 落到不带 authenticator 的
+    老式认证分支。
 
 #### 当前决策与下一步
 
-**2026-07-31 owner 拍板: 不迁移**, 留档观察。理由 = 上表 b) 的成熟度, 与授权无关。
+**2026-08-26 owner 拍板: 继续等待, 两周后(2026-09 上旬)复查。** 距 10-01 默认阻断仍有约 5 周余量。
+(前次 2026-07-31 拍板不迁移, 理由 = 上表 b) 的成熟度, 与授权无关 —— 该判断依然成立。)
 
-- **观察触发条件**: 上游发布 6.9(delta sync 进正式版) / #506 APPEND 修复 / refresh resource bug 修复。
-- **真正动手前的第一道闸(半天)**: 影子实例验授权 —— 独立端口 + 独立 config + 独立 token 目录,
-  不碰 pm2 上的生产实例; 只验两件事: ① `mode=O365Graph` + `enableOidc=false` 能否拿到 Graph token,
-  ② 放置 1h 后 refresh 是否 401。这是唯一可能"结构性堵死"的一关。
+- 🔴 **复查判据不是"有没有 6.9", 而是"那一行修没修"**: 若 6.9 发版但 `O365Token.java` 的 refresh
+  resource 仍写死 `getOutlookUrl()`, 方案不变(仍需自建 + patch), 换版本解决不了。
+  一条命令即可判定:
+  ```bash
+  curl -sL https://raw.githubusercontent.com/mguessan/davmail/master/src/java/davmail/exchange/auth/O365Token.java \
+    | sed -n '245,260p'
+  ```
+- **次要复查项**: 6.9 是否发版(delta sync + #506 修复随之进正式版) / [#501](https://github.com/mguessan/davmail/issues/501)
+  `ErrorRestrictionTooComplex` 是否有结论(打中我们两处 `uid search HEADER Message-ID`)。
+- **真正动手前的第一道闸(半天)**: 影子实例验授权 —— 独立端口(IMAP 1243 / SMTP 1125 / CalDAV 1082)
+  + 独立 config + **独立 token 目录**, 不碰 pm2 上的生产实例; 只验两件事:
+  ① `mode=O365Graph` + `enableOidc=false` 能否拿到 Graph token(**记下日志里 `Obtained token for scopes:`
+  的确切形态**), ② 放置 65min 后 refresh 是否 401 / 是否清空 token.dat。这是唯一可能"结构性堵死"的一关。
+- **过闸后的回归项**(全部打在我们实际用的 IMAP 命令上): 大文件夹 SELECT(delta sync) /
+  草稿 APPEND(#506 回归) / `uid search HEADER Message-ID`(#501) / `uid copy` + `store \Deleted`(归档) /
+  SMTP 发信 / CalDAV 日历读。
 - **兜底**: 若 2026-09 上游仍不可用 → 才需要重新评估自研 Graph backend(`src/mail/backend/graph_backend.py`,
   复用 IMailBackend Protocol, 估 3-4 周), 该路径依赖公司 IT 的 Azure app 注册审批, **非当前计划**。
 
@@ -557,7 +631,8 @@ if ctx:
 [○○○○○○○○○○] DavMail 后端切换跟进 (P2 §4.5, 7 项)                          ⚪ 待启动
 [○○○○○○○○○○] 监控告警建设 (P2 §4.2 + §4.5.1-3)                            ⚪ 待启 (已加 2 个 hook)
 [○○○○○○○○○○] AppleScript 下架评估 (P2 §4.1)                              ⚪ 等观察期满 3 月
-[●●○○○○○○○○] EWS 2026-10 关停应对 (P3 §5.1)                              ⚪ 2026-07-31 调研完成, 决定暂不迁移, 等上游 6.9
+[●●●○○○○○○○] EWS 2026-10 关停应对 (P3 §5.1)                              🟡 2026-08-26 复查: 3 条触发条件 2 条在 trunk 满足,
+                                                                          refresh bug 未修 → 继续等待, 2026-09 上旬再看
 [○○○○○○○○○○] Frontend Sprint 18 Settings 重做 (P3 §5.3)                  ⚪ 等 handoff
 [○○○○○○○○○○] 用户自定义 AI 字段 (P3, Settings UI + 动态 schema)          ⚪ 不急
 ```
