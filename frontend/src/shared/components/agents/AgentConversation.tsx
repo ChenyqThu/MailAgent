@@ -918,6 +918,18 @@ export function AgentConversation({
   const promptRequest = useMemo<ChatPromptRequest | null>(() => {
     if (pendingPrompt === null || !chatIsEmptyForMatter) return null
     if (matterSeedPending) return null
+    // P2-L14（资料库 epic）—— 资料库「对话」按钮预置的那枚库文件提及跟着指令走（同一个 nonce
+    // 生命周期，随它一起被消费）。**恒预填**：指令正文里带着这枚提及的 directive，chip 必须先
+    // 落进 composer，引用才不会被 AgentComposer 那条对账当成「chip 已被删」摘掉；记引用这件事
+    // 由 dispatcher 在正文落地之后做（见 `ChatPromptRequest.library`）。
+    if (pendingPrompt.library != null) {
+      return {
+        nonce: pendingPrompt.nonce,
+        text: pendingPrompt.text,
+        prefillOnly: true,
+        library: pendingPrompt.library
+      }
+    }
     if (pendingPrompt.emailId == null) {
       return { nonce: pendingPrompt.nonce, text: pendingPrompt.text, prefillOnly: false }
     }

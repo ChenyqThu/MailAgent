@@ -20,7 +20,7 @@ import { PageFrame } from '@shared/components/layout/PageFrame'
 import { useMediaQuery } from '@shared/hooks/useMediaQuery'
 import { TRASH_SLUG } from '@shared/libraryConstants'
 import { useDomainCollapsed, useDomainWidth } from '@shared/state/nav-shell'
-import { useAIChatPanel } from '@shared/state/ai-chat-panel'
+import { startLibraryChatWithPrompt, useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { useLibraryTree } from '@shared/state/library-tree'
 import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
 import type { MainPage } from '@shared/state/tab-workspace'
@@ -30,6 +30,7 @@ import { parseLibraryFileParam } from './deeplink'
 import { isProjection, refKey, refOf, type LibraryFileRef } from './fileMeta'
 import { FilePreview } from './FilePreview'
 import { FolderView } from './FolderView'
+import { buildLibraryChatPrompt, libraryMentionRefOf } from './libraryChat'
 import { LibrarySearchBar, LibrarySearchResults } from './LibrarySearchPanel'
 import { useLibraryApi, useLibraryTreeQuery, useLibraryUpload } from './hooks'
 import { LibraryTreePanel, rootLabelKey } from './LibraryTreePanel'
@@ -191,6 +192,21 @@ export function LibraryWorkspace(): ReactElement {
     [api, openFile, openFolder, t]
   )
 
+  // 「对话」按钮（design §9.4 「资料库页 dock」+ L16）：**不加 ConversationContextSource
+  // 第五档**，走显式声明那条路 —— 唤出 dock 并预置一枚与用户自己 @ 出来逐字一样的库文件提及。
+  // 投影行（邮件附件，没有 library id）没法被 `library_read` 读，只开 dock 不预置。
+  const openChatFor = useCallback(
+    (file: LibraryFile): void => {
+      const ref = libraryMentionRefOf(file)
+      if (ref === null) {
+        useAIChatPanel.getState().openChatModal()
+        return
+      }
+      startLibraryChatWithPrompt(ref, buildLibraryChatPrompt(ref, (key, vars) => t(key, vars)))
+    },
+    [t]
+  )
+
   // 命中一行 = 去那个文件：清掉搜索词（否则结果面继续盖着预览）、展开它所在的文件夹、选中它。
   const openHit = useCallback(
     (hit: { id: number; parent_path: string }): void => {
@@ -259,7 +275,7 @@ export function LibraryWorkspace(): ReactElement {
               fileRef={fileRef}
               actions={actions}
               onSelectFile={selectRef}
-              onChat={() => useAIChatPanel.getState().openChatModal()}
+              onChat={openChatFor}
             />
           ) : selectedPath !== null ? (
             <FolderView
