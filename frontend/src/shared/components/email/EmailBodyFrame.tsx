@@ -18,10 +18,13 @@ import { useTranslation } from 'react-i18next'
 import DOMPurify from 'dompurify'
 import { Minus, Plus, RotateCw, X } from 'lucide-react'
 
+import { request } from '@shared/api/http_client'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import { useAppearance, type BodyFont } from '@shared/state/appearance'
+import { resolveApiBaseUrl } from '@shared/lib/apiBaseUrl'
 import { adaptHtmlForDarkMode } from '@shared/lib/emailDarkMode'
+import { rewriteRemoteImages } from '@shared/lib/emailRemoteImages'
 import { EMAIL_PURIFY_OPTS } from '@shared/lib/emailSanitize'
 import { plaintextToHtml } from '@shared/lib/plaintext_html'
 import type { EmailDetail, TranslationSegment } from '@shared/api/types'
@@ -43,6 +46,13 @@ interface Props {
 
 // 消毒配置已抽到 @shared/lib/emailSanitize (EMAIL_PURIFY_OPTS) —— 阅读区与 compose
 // 发送拼回引用块共用同一套硬化规则。独立断言见 tests/components/dompurify_xss.test.ts。
+
+/** `POST /api/email/remote-image/grant` 回的一张放行票 (后端 HMAC 签发)。 */
+interface RemoteImageGrant {
+  url: string
+  exp: number
+  sig: string
+}
 
 const BODY_CSS = `
   :root {
@@ -167,15 +177,40 @@ const BODY_CSS = `
     border-radius: 6px;
     cursor: zoom-in;
   }
-  /* Override <table width="600"> attributes (common in HTML newsletter
-     boilerplate) so the email body re-flows when the user shrinks the
-     column. !important wins over inline style="width:600px" from the
-     senders MUA. */
-  table { border-collapse: collapse; max-width: 100% !important; width: auto !important; table-layout: auto; }
+  /* 表格宽度: 只压上限, 不改写作者的宽度。此前这里是
+       table { border-collapse: collapse; max-width:100% !important; width:auto !important; ... }
+     而新闻信的排版骨架就是「固定 600px 居中 + 多层嵌套表格」—— width:auto
+     !important 把每一层作者写的宽度全部作废, 嵌套一塌, 正文被挤成中间一窄条
+     (0903 owner 反馈, 同一封在 Outlook 里正常)。留 max-width:100% 防超宽表格撑破
+     详情列; 真正压不下去的宽数据表由 .mailagent-table-scroll 容器横向滚动兜底 (见下)。
+     border-collapse 一并撤掉: 它只服务于下面那圈 1px 网格线 (现在只画给作者声明了
+     边框的数据表格), 全局 collapse 反而会吃掉作者用 cellspacing 做的栏间距 —— 那是
+     排版被压扁的另一半。浏览器默认的 separate 与 Outlook / 各家 webmail 一致。 */
+  table { max-width: 100% !important; table-layout: auto; }
+  /* 布局表格不画边框。HTML 邮件几乎全部用表格排版 (role="presentation" /
+     border="0" / 嵌套若干层), 原来那条无差别的 table td, table th 边框规则
+     把每一层布局表格的每一格都描了框 = owner 截图里满屏莫名其妙的方框。
+     判据不能一刀切, 只有「作者自己声明了边框」的数据表格才补网格线:
+       ① HTML border 属性非 0;
+       ② 表格或它自己的某个单元格 inline style 里有真实 border 声明。
+     判定在 post-processing 做 (hasAuthorBorder → .mailagent-table-bordered), 不用纯
+     CSS 的 [style*="border"]: newsletter 模板里 border-collapse:collapse /
+     border-spacing:0 / border-radius 满地都是, 子串匹配会把布局表格重新全部框起来。
+     padding / font-size / word-break 不影响布局, 无差别保留。 */
   table td, table th {
-    border: 1px solid rgb(var(--ink-border));
     padding: 6px 10px; font-size: 13px;
     word-break: break-word;
+  }
+  /* 只作用于被判定表自己的单元格 (子孙组合器会让「外层容器表写了一条
+     border-top」把整封信的嵌套单元格重新框起来 —— 那就是原 bug 复发)。 */
+  table.mailagent-table-bordered { border-collapse: collapse; }
+  table.mailagent-table-bordered > thead > tr > td,
+  table.mailagent-table-bordered > thead > tr > th,
+  table.mailagent-table-bordered > tbody > tr > td,
+  table.mailagent-table-bordered > tbody > tr > th,
+  table.mailagent-table-bordered > tfoot > tr > td,
+  table.mailagent-table-bordered > tfoot > tr > th {
+    border: 1px solid rgb(var(--ink-border));
   }
   /* #8 宽表格横向滚动: 后处理把每个 <table> 包进 .mailagent-table-scroll 容器。
      容器 max-width:100% 填满 body 宽 (不撑破 body — body overflow:hidden 只裁自身),
@@ -219,6 +254,19 @@ const BODY_CSS = `
     display: block;
     margin: 2px 0 6px;
   }
+  /* H3 远程图片占位。默认拦截时 <img> 的 src 被摘走存进 data-mailagent-remote-src
+     (改写在 shared/lib/emailRemoteImages.ts), 这里只负责"留出位置": 尺寸从 img 自己的
+     width/height 属性或 inline style 推导后写进 --ma-remote-w/h 两个变量, 推不出时用
+     一个低调的小方块。
+     🔴 height 必须带 !important 且选择器比裸 img 更具体 —— 上面 img{height:auto
+     !important} 会盖掉任何 inline height, 占位框当场塌成 0 高, 版式照塌。
+     只给底色不描边: 追踪像素常是 1x1 / 20x1 的 spacer, 描边会把它们变成满屏虚线点。 */
+  img.mailagent-remote-image {
+    width: var(--ma-remote-w, 28px);
+    height: var(--ma-remote-h, 28px) !important;
+    background: rgb(var(--ink-fg) / 0.06);
+    cursor: default;
+  }
 `
 
 /** 正文字体族 (appearance store 的 bodyFont 枚举 → CSS font 栈)。注入 <html>
@@ -240,6 +288,24 @@ export function EmailBodyFrame({
   const { t } = useTranslation()
   const [expandedInternalId, setExpandedInternalId] = useState<number | null>(null)
   const showFullBody = expandedInternalId === internalId
+  // H3 远程图片放行的作用域 = **这封邮件的这次查看**。存 internalId 而不是 boolean, 与上面
+  // 的 expandedInternalId 同一手法: 本组件切邮件时不重挂载 (只有 BodyIframe 有 key),
+  // 一个 boolean 会把上一封的"已同意"带到下一封。不做持久化, 也没有"总是信任该发件人"
+  // (那是后续项)。
+  //
+  // 🔴 放行态 = **后端签发的放行票**, 不是一个本地 boolean (0903 返工批 B2): 代理只认
+  // 签名, 所以"已同意"这件事必须是一份正文伪造不出来的凭据。拿不到票 = 不放行。
+  //
+  // `missing` = 送上去换票、但没换回票的条数（后端对脏 URL 静默不签，超过签发上限的也丢掉）。
+  // 放行后这些位置仍是占位，用户会看到「有几张就是出不来」—— 得说清楚，别让它像个 bug。
+  const [remoteGrants, setRemoteGrants] = useState<{
+    id: number
+    map: ReadonlyMap<string, string>
+    missing: number
+  } | null>(null)
+  const [remoteGrantPendingFor, setRemoteGrantPendingFor] = useState<number | null>(null)
+  const [remoteGrantFailedFor, setRemoteGrantFailedFor] = useState<number | null>(null)
+  const remoteImagesAllowed = remoteGrants !== null && remoteGrants.id === internalId
   const resolvedTheme = useAppearance((s) => s.resolvedTheme)
   // 正文外观 (设置面板「正文外观」可调) — 注入 srcDoc <html> 的 CSS 变量。
   const bodyFont = useAppearance((s) => s.bodyFont)
@@ -348,9 +414,17 @@ export function EmailBodyFrame({
     return { byCid, byBaseName }
   }, [imageCandidates, dataUrlQueries])
 
-  const srcDoc = useMemo(() => {
+  // srcDoc 与「这封信里有几张远程图片」是同一趟改写算出来的 —— 提示条要不要出、出几张,
+  // 判据只能是真正被拦下的那些 img, 所以一起返回而不是另开一遍扫描。
+  const { srcDoc, remoteImageCount, remoteImageUrls } = useMemo<{
+    srcDoc: string | null
+    remoteImageCount: number
+    remoteImageUrls: string[]
+  }>(() => {
     const html = hasOverride ? htmlOverride : bodyQ.data?.content
-    if (typeof html !== 'string' || html.length === 0) return null
+    if (typeof html !== 'string' || html.length === 0) {
+      return { srcDoc: null, remoteImageCount: 0, remoteImageUrls: [] }
+    }
     let sanitized = DOMPurify.sanitize(html, EMAIL_PURIFY_OPTS)
     // Sprint 13 — single-pass rewrite of EVERY `cid:...` in the body so
     // we don't depend on the backend's content_id mapping (which is
@@ -413,6 +487,20 @@ export function EmailBodyFrame({
     if (resolvedTheme === 'dark') {
       sanitized = adaptHtmlForDarkMode(sanitized)
     }
+    // H3 — 远程 http(s) 图片默认拦成占位, 用户点过「加载图片」并换到放行票后改写成走本机
+    // 代理 (页面 CSP 的 img-src 只放行 127.0.0.1, 运行时改不了 CSP)。cid: / data: /
+    // attachments 相对路径不受影响, 判据 (含 srcset / poster / background / CSS url())
+    // 见 emailRemoteImages.ts。
+    // baseUrl 传 document.baseURI: srcdoc 文档继承父文档的 base, 归一化必须用同一个基准,
+    // 否则 `//host/x` 与 `http:/host/x` 这类写法在打包态 (file://) 会算出别的结果。
+    const remote = rewriteRemoteImages(sanitized, {
+      allow: remoteImagesAllowed,
+      baseUrl: document.baseURI,
+      proxyBase: `${resolveApiBaseUrl()}/email/remote-image`,
+      grants: remoteGrants?.map,
+      placeholderLabel: t('emailDetail.remoteImages.placeholderAlt')
+    })
+    sanitized = remote.html
     // Sprint 14 round 15 — no inline <script>.  iframe sandbox is
     // `allow-same-origin` *without* `allow-scripts`, so any inline
     // script we put inside srcDoc would never execute and the iframe
@@ -424,7 +512,8 @@ export function EmailBodyFrame({
     // BODY_FONT_STACK 含双引号 (如 "SF Pro Text"), 放进 HTML style attribute 会
     // 截断 attr 导致变量残缺; 放进 CSS 文本里双引号合法。size/lh 是 clamp 后的
     // number, 拼接安全。
-    return `<!doctype html>
+    return {
+      srcDoc: `<!doctype html>
 <html data-theme="${resolvedTheme}">
 <head>
   <meta charset="utf-8" />
@@ -432,7 +521,10 @@ export function EmailBodyFrame({
 :root { --ma-body-font: ${BODY_FONT_STACK[bodyFont]}; --ma-body-size: ${bodyFontSize}px; --ma-body-lh: ${bodyLineHeight}; }</style>
 </head>
 <body>${sanitized}</body>
-</html>`
+</html>`,
+      remoteImageCount: remote.remoteCount,
+      remoteImageUrls: remote.remoteUrls
+    }
   }, [
     hasOverride,
     htmlOverride,
@@ -443,8 +535,46 @@ export function EmailBodyFrame({
     resolvedTheme,
     bodyFont,
     bodyFontSize,
-    bodyLineHeight
+    bodyLineHeight,
+    remoteImagesAllowed,
+    remoteGrants,
+    t
   ])
+
+  // 「加载图片」= 用一次**已鉴权**的写请求把这封信里的远程 URL 换成签名放行票, 再重渲染。
+  // 正文自己发不出这个请求 (iframe 无 allow-scripts), 所以票据是正文伪造不出来的。
+  // 一条票都没换到 (全部 URL 被后端判为签不了) 也算失败 —— 否则会静默地什么都不显示。
+  const loadRemoteImages = useCallback(async (): Promise<void> => {
+    if (remoteImageUrls.length === 0) return
+    setRemoteGrantPendingFor(internalId)
+    setRemoteGrantFailedFor(null)
+    try {
+      const res = await request<{ grants?: RemoteImageGrant[] }>(
+        resolveApiBaseUrl(),
+        'POST',
+        '/email/remote-image/grant',
+        { body: { urls: remoteImageUrls } }
+      )
+      const map = new Map<string, string>()
+      for (const g of res.grants ?? []) {
+        map.set(
+          g.url,
+          `url=${encodeURIComponent(g.url)}&exp=${g.exp}&sig=${encodeURIComponent(g.sig)}`
+        )
+      }
+      if (map.size === 0) setRemoteGrantFailedFor(internalId)
+      else
+        setRemoteGrants({
+          id: internalId,
+          map,
+          missing: Math.max(0, remoteImageUrls.length - map.size)
+        })
+    } catch {
+      setRemoteGrantFailedFor(internalId)
+    } finally {
+      setRemoteGrantPendingFor(null)
+    }
+  }, [internalId, remoteImageUrls])
 
   const [previewSrc, setPreviewSrc] = useState<string | null>(null)
   const handleImageClick = useCallback((src: string) => setPreviewSrc(src), [])
@@ -474,6 +604,34 @@ export function EmailBodyFrame({
   }
   return (
     <>
+      {remoteImageCount > 0 && !remoteImagesAllowed && (
+        <div className="mb-4 flex items-center justify-between gap-4 rounded-lg border border-ink-border-soft bg-ink-2/40 px-4 py-3">
+          <p className="text-aux text-ink-fg-2">
+            {remoteGrantFailedFor === internalId
+              ? t('emailDetail.remoteImages.loadFailed')
+              : t('emailDetail.remoteImages.notice', { n: remoteImageCount })}
+          </p>
+          <button
+            type="button"
+            className="shrink-0 rounded-md border border-ink-border-soft px-3 py-1.5 text-aux text-ink-fg transition-colors hover:bg-ink-3 disabled:cursor-wait disabled:opacity-60"
+            disabled={remoteGrantPendingFor === internalId}
+            onClick={() => {
+              void loadRemoteImages()
+            }}
+          >
+            {t('emailDetail.remoteImages.load')}
+          </button>
+        </div>
+      )}
+      {remoteImagesAllowed && (remoteGrants?.missing ?? 0) > 0 && (
+        // 换到票的已经显示了, 这几张换不到票 (脏 URL / 超过签发上限) 仍是占位 —— 说清有几张,
+        // 别让「点了加载但有图出不来」看着像个 bug。
+        <div className="mb-4 rounded-lg border border-ink-border-soft bg-ink-2/40 px-4 py-3">
+          <p className="text-aux text-ink-fg-2">
+            {t('emailDetail.remoteImages.partial', { n: remoteGrants?.missing ?? 0 })}
+          </p>
+        </div>
+      )}
       <BodyIframe
         srcDoc={srcDoc}
         key={internalId}
@@ -518,6 +676,48 @@ interface BodyIframeProps {
 /** Remove any previously-injected translation nodes from the iframe doc. */
 function clearInjectedTranslations(doc: Document): void {
   doc.querySelectorAll('.mailagent-translation').forEach((n) => n.remove())
+}
+
+/** 会画出线的 border 属性 (border / border-top / border-left-width / border-style …)。
+ *  刻意不含 border-collapse / border-spacing / border-radius / border-image —— 那些是
+ *  布局与圆角声明, newsletter 模板里满地都是, 算进来就等于给所有布局表格描框。
+ *  也不含 border-color: 单独一条 border-color 不画线 (border-style 默认 none)。 */
+const BORDER_PROP_RE = /^border(-(top|right|bottom|left))?(-(width|style))?$/
+
+/** inline style 字符串里是否有真实的边框声明。`border: 0` / `border: 1px none #ccc` /
+ *  `border-style: hidden` 是作者显式「不要边框」, 不算。 */
+function declaresBorder(style: string | null | undefined): boolean {
+  if (!style) return false
+  for (const decl of style.split(';')) {
+    const colon = decl.indexOf(':')
+    if (colon < 0) continue
+    const prop = decl.slice(0, colon).trim().toLowerCase()
+    if (!BORDER_PROP_RE.test(prop)) continue
+    const value = decl
+      .slice(colon + 1)
+      .trim()
+      .toLowerCase()
+    if (value === '') continue
+    if (/(^|\s)(none|hidden)(\s|$)/.test(value)) continue
+    if (/^0(\.0+)?(px|pt|em|rem|%)?$/.test(value)) continue
+    return true
+  }
+  return false
+}
+
+/** 这张表是不是「作者自己声明了边框」的数据表格 —— 判据与顺序见 BODY_CSS 里 table
+ *  那段注释。`role="presentation"` / `border="0"` / 没有任何边框声明的排版表格恒 false,
+ *  于是不再被我们无差别描框。 */
+function hasAuthorBorder(table: HTMLTableElement): boolean {
+  const attr = table.getAttribute('border')?.trim()
+  if (attr !== undefined && attr !== '' && attr !== '0') return true
+  if (declaresBorder(table.getAttribute('style'))) return true
+  // 作者只在单元格上写 border 的数据表。先用子串把候选缩到极少数, 再逐条按声明判定
+  // (子串会命中 border-collapse 之类, 不能直接采信); 嵌套表的单元格归它自己那层。
+  const cells = table.querySelectorAll('td[style*="border"], th[style*="border"]')
+  return Array.from(cells).some(
+    (cell) => cell.closest('table') === table && declaresBorder(cell.getAttribute('style'))
+  )
 }
 
 function BodyIframe({ srcDoc, translations, onImageClick }: BodyIframeProps): React.ReactElement {
@@ -614,6 +814,10 @@ function BodyIframe({ srcDoc, translations, onImageClick }: BodyIframeProps): Re
       // .mailagent-table-scroll)。超宽数据表格不再被 body overflow:hidden 截断, 而是
       // 在容器内左右滚动。幂等 (已包裹则跳过), 在 measure() 前跑使测高基于最终布局。
       doc!.querySelectorAll('table').forEach((tbl) => {
+        // 只给作者声明了边框的数据表格补网格线, 布局表格保持无边框 (判据见 BODY_CSS
+        // 里 table 那段注释)。classList.add 幂等, 放在下面的「已包裹则跳过」之前,
+        // 使同一份文档被接管两次时也一定标到。
+        if (hasAuthorBorder(tbl)) tbl.classList.add('mailagent-table-bordered')
         const parent = tbl.parentElement
         if (parent && parent.classList.contains('mailagent-table-scroll')) return
         const wrap = doc!.createElement('div')

@@ -100,6 +100,13 @@
     "bodyPreviewTruncated": "正文较大，当前仅显示预览。",
     "bodyShowFull": "显示完整正文",
     "bodyLoadingFull": "正在加载…",
+    "remoteImages": {
+      "notice": "为保护隐私，已拦截 {n, plural, =1 {1 张远程图片} other {# 张远程图片}}。",
+      "load": "加载图片",
+      "loadFailed": "这次没能加载远程图片，请再试一次。",
+      "partial": "还有 {n, plural, =1 {1 张远程图片} other {# 张远程图片}}没能加载。",
+      "placeholderAlt": "已拦截的远程图片"
+    },
     "lightbox": {
       "ariaLabel": "图片预览",
       "zoomIn": "放大",

@@ -415,6 +415,7 @@ from src.api.routers import (  # noqa: E402
     contact_agent,
     contacts,
     email,
+    email_remote_image,
     email_views,
     exec as exec_router,  # 'exec' 是内建名，别名避免遮蔽
     folder,
@@ -449,6 +450,10 @@ app.include_router(calendar.router)
 app.include_router(folder.router)
 app.include_router(ai.router)
 app.include_router(email_views.router)
+# H3a — GET /api/email/remote-image（邮件远程图片代理，SSRF 硬化）。与 email.router
+# 同 prefix 不同文件：那边是 CLI 契约镜像的 CRUD，本端点是出网取字节的独立关注点。
+# 路由不撞：email.py 的动态段是 `{internal_id:int}`，'remote-image' 匹配不到 int 转换器。
+app.include_router(email_remote_image.router)
 app.include_router(jobs.router)
 app.include_router(reports.router)
 app.include_router(matters.router)

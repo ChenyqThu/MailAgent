@@ -100,6 +100,13 @@
     "bodyPreviewTruncated": "This message is large, so only a preview is shown.",
     "bodyShowFull": "Show full message",
     "bodyLoadingFull": "Loading…",
+    "remoteImages": {
+      "notice": "Blocked {n, plural, =1 {1 remote image} other {# remote images}} to protect your privacy.",
+      "load": "Load images",
+      "loadFailed": "Could not load the remote images this time. Please try again.",
+      "partial": "{n, plural, =1 {1 remote image} other {# remote images}} still could not be loaded.",
+      "placeholderAlt": "Blocked remote image"
+    },
     "lightbox": {
       "ariaLabel": "Image preview",
       "zoomIn": "Zoom in",
