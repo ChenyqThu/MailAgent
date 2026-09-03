@@ -244,8 +244,26 @@ export interface GroupSessionFacts {
   /** g1 — 父群 id（子群才非 null；ai_chat_sessions.parent_session_id，v25 已有列）。g2 的法官
    *  family scope 与 g1 的 stopFamily / 小时预算 family 窗口都据此推。 */
   parentSessionId: number | null
-  /** g1 — 本群的子群 id（按 parent_session_id 反查，origin='group' 行）。family = 本群 ∪ 父 ∪ 子。 */
+  /** g1 — 本群的子群 id（按 parent_session_id 反查，origin='group' 行）。family = 本群 ∪ 父 ∪ 子。
+   *  🔴 T3 起**只含子群，不含话题**：`group_members` 工具的 `child_sessions`、子群配额、法官
+   *  scope 都读这一项，混进话题会让「这个群有几个子群」当场失真。 */
   childSessionIds: number[]
+  // ── T3 话题事实（三项）─────────────────────────────────────────────────
+  // 🔴 三项**都可缺**，缺 = 「不是话题 / 没有话题」，读侧一律 `?? []` / `=== true`：
+  //   ① 唯一生产者是 lifecycle 的 resolveGroupSession，它恒填三项（不是可选实现）；
+  //   ② 可选是为了让 g3 狼人杀那套 facts 替身**一行不改**继续绿 —— 那是「换引擎不回退」的
+  //      金标准闸（AC6），为加三个字段去动它等于把闸的意义抹掉。
+  // 加第二个生产者时先想清楚：漏填不会有类型错误，只会让话题静默不进 family 预算。
+  /** T3 — 本群底下的话题 id（`invoked_by='thread'` 的子会话）。与 `childSessionIds` 同源反查、
+   *  按 invoked_by 分家。话题**进** family 的小时预算窗口与 stopFamily（开销算这个群的），
+   *  但不是子群。本群自己就是话题时恒空（不放宽单层嵌套：话题里开不出话题）。 */
+  threadSessionIds?: number[]
+  /** T3 — 本会话是不是话题（`invoked_by === 'thread'`）。候选集口径的分叉点：话题内按
+   *  参与者制唤醒（@ ∪ 根消息说话人 ∪ 已发言者），`modes`（父群 realtime）不生效。 */
+  isThread?: boolean
+  /** T3 — 话题根消息的说话人 agent id（根消息是人发的 → null；本会话不是话题 → null）。
+   *  参与者集合的种子：对着谁的话开的话题，那位默认就在场。 */
+  threadRootSpeakerAgentId?: string | null
   /** g2 — 法官免卡锚失配位：judgeAgentId != null 且 sha256(members_json 原文 utf-8).hexdigest !== config.judgeScopeHash。
    *  🔴 lifecycle 用 session.members_json **原文**算（node:crypto），绝不从 members[] 重新序列化；与 src/chat/db.py
    *  get_group_config 的 judgeScopeStale 同口径，闸 tests/config/test_judge_scope_hash_parity.py。无法官 → false。 */

@@ -306,6 +306,20 @@ describe('read scope', () => {
     expect(family).toEqual([MAIN, WOLVES, SEER])
     expect(Date.now() - since).toBeGreaterThanOrEqual(3_600_000 - 50)
   })
+
+  test('T3 group_members: child_sessions 不含话题（只列子群）；预算 family 含话题', async () => {
+    const THREAD = 31
+    const w = world()
+    w.facts.set(MAIN, { ...w.facts.get(MAIN)!, threadSessionIds: [THREAD] })
+    const { tools } = judgeTools(w)
+    const m = (await execute(tools.group_members!, {})) as Record<string, unknown>
+    expect(m.child_sessions).toEqual([
+      { id: WOLVES, title: '狼群' },
+      { id: SEER, title: '预言家群' }
+    ])
+    const [family] = lastCall(w.hooks.groupUsage) as [number[], number]
+    expect(family).toEqual([MAIN, WOLVES, SEER, THREAD])
+  })
 })
 
 // ── G6–G11 judge writes ─────────────────────────────────────────────────────────────────────────

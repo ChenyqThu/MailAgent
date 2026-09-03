@@ -112,6 +112,7 @@ import {
   findAssistantMessageRowIdByUiId,
   findUserMessageRowIdByUiId,
   getFirstUserText,
+  getMessage,
   getQueuedInput,
   getSession,
   listDispatchableQueuedInput,
@@ -385,24 +386,37 @@ function lastHumanMessageText(sessionId: number): string | null {
 }
 
 /** L4 群聊 UX 批 — renderer 经 `chat:group-foreground` 上报的「此刻在前台的群」（null = 没有）。
- *  通知投影据此跳过 owner 正盯着看的群；未上报过 = 不在前台 → 发（按链合并，有界）。 */
-let foregroundGroupSessionId: number | null = null
+ *  通知投影据此跳过 owner 正盯着看的群；未上报过 = 不在前台 → 发（按链合并，有界）。
+ *  T3 起是二元组 {groupId, threadId|null}：群主线在前台 = threadId null；话题面在前台 = 该话题
+ *  id。抑制判据 = 群相同 **且** threadId 相同（盯着群主线时话题回复照发，反之亦然）。 */
+let foregroundGroup: { groupId: number; threadId: number | null } | null = null
 
-function isGroupForeground(sessionId: number): boolean {
-  return BrowserWindow.getFocusedWindow() != null && foregroundGroupSessionId === sessionId
+function isGroupForeground(groupId: number, threadId: number | null): boolean {
+  return (
+    BrowserWindow.getFocusedWindow() != null &&
+    foregroundGroup != null &&
+    foregroundGroup.groupId === groupId &&
+    foregroundGroup.threadId === threadId
+  )
 }
 
-/** `chat:group-foreground {sessionId | null}` 的 ipcMain.handle（一处）。restart 会再走一遍
- *  startEmbeddedAiGateway，先 removeHandler 防「second handler」抛错。 */
+/** `chat:group-foreground {groupId: number | null, threadId: number | null}` 的 ipcMain.handle
+ *  （一处）。🔴 两个键名与 renderer 侧唯一的发送点 `ElectronApi.setGroupForeground` 逐字对齐
+ *  （闸 tests/main/group_foreground_ipc.test.ts）—— 键名对不上不会有类型错、也不会报错，
+ *  只会让 foregroundGroup 恒为 null，表现成「群明明开着，通知照发」。`threadId` 缺省 /
+ *  非正整数 = null（群主线在前台）。restart 会再走一遍 startEmbeddedAiGateway，先
+ *  removeHandler 防「second handler」抛错。 */
 function registerGroupForegroundHandler(): void {
   ipcMain.removeHandler('chat:group-foreground')
   ipcMain.handle('chat:group-foreground', (_evt, payload: unknown) => {
-    const raw =
+    const body =
       payload != null && typeof payload === 'object'
-        ? (payload as { sessionId?: unknown }).sessionId
-        : undefined
-    foregroundGroupSessionId =
+        ? (payload as { groupId?: unknown; threadId?: unknown })
+        : {}
+    const positive = (raw: unknown): number | null =>
       typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : null
+    const groupId = positive(body.groupId)
+    foregroundGroup = groupId == null ? null : { groupId, threadId: positive(body.threadId) }
   })
 }
 
@@ -1695,12 +1709,25 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         if (memberIds.includes(row.agentId)) modes[row.agentId] = row.responseMode
       }
       const config = parseGroupConfig(session.group_config_json ?? null)
+      // T3（v32）— 话题事实。判据恒是 invoked_by（话题与子群同是 origin='group' + 父群非空）。
+      // 根消息的说话人从 messages 表现查：它是参与者集合的种子（对着谁的话开的话题，那位默认
+      // 在场），人发的根消息 → null。根消息已被删（清空历史）→ getMessage 返 null → 同样退化成
+      // null，话题照常能开，只是少一个默认参与者。
+      const isThread = session.invoked_by === 'thread'
+      const rootMessageId = session.thread_root_message_id ?? null
+      const threadRootSpeakerAgentId =
+        isThread && rootMessageId != null
+          ? (getMessage(rootMessageId)?.speaker_agent_id ?? null)
+          : null
       return {
         members,
         config,
         modes,
         parentSessionId: family.parentSessionId,
         childSessionIds: family.childSessionIds,
+        threadSessionIds: family.threadSessionIds,
+        isThread,
+        threadRootSpeakerAgentId,
         judgeScopeStale: computeJudgeScopeStale(session.members_json ?? null, config)
       }
     },
@@ -1752,7 +1779,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         console.error('[ai-gateway] group turn-persisted broadcast failed (persist landed)', err)
       }
       // L4 群聊 UX 批 — 通知中心投影（判据与 dedupe 见 maybeNotifyGroupReply 头注）。labs on / off
-      // 两条路径都经这里 → 同样生效。
+      // 两条路径都经这里 → 同样生效。T3：话题行（invoked_by='thread'）由它自己按父群分支，
+      // getSession 同时充当父群的读取器。
       maybeNotifyGroupReply(
         {
           sessionId,

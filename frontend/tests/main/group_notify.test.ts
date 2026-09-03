@@ -154,3 +154,111 @@ describe('maybeNotifyGroupReply', () => {
     expect(publishBodies()[0].body).toBe('小助：调研进展如下：一二三')
   })
 })
+
+// ── T3 话题分支 ─────────────────────────────────────────────────────────────────
+
+const GROUP = 5
+const THREAD = 7
+
+/** 7 是 5 底下的话题（invoked_by='thread'），5 是父群；其余 id → null。 */
+function sessionsWithThread(
+  overrides: {
+    group?: Record<string, unknown>
+    thread?: Record<string, unknown>
+  } = {}
+): (id: number) => Record<string, unknown> | null {
+  return (id: number) => {
+    if (id === THREAD) {
+      return {
+        title: '预算怎么分',
+        origin: 'group',
+        invoked_by: 'thread',
+        parent_session_id: GROUP,
+        ...overrides.thread
+      }
+    }
+    if (id === GROUP) return { title: '策划群', origin: 'group', ...overrides.group }
+    return null
+  }
+}
+
+describe('maybeNotifyGroupReply — T3 话题', () => {
+  test('N9 话题回复：source=group_thread、标题=父群名、body=「话题：<标题> · <说话人>：<摘要>」、dedupe=group_thread:{g}:{t}、link=thread 型', async () => {
+    getSession.mockImplementation(sessionsWithThread())
+    maybeNotifyGroupReply(
+      reply({ sessionId: THREAD, chainId: 70 }),
+      getSession,
+      notForeground,
+      titleOf
+    )
+    await vi.waitFor(() => expect(publishBodies()).toHaveLength(1))
+    expect(publishBodies()[0]).toEqual({
+      category: 'results',
+      source: 'group_thread',
+      severity: 'info',
+      title: '策划群',
+      body: '话题：预算怎么分 · 调研员：调研进展如下：一二三',
+      dedupe_key: 'group_thread:5:7',
+      payload: { link: { type: 'thread', groupId: 5, threadId: 7 } }
+    })
+  })
+
+  test('N9b 话题标题空 → 「未命名话题」占位；父群名空 → 「群聊」', async () => {
+    getSession.mockImplementation(
+      sessionsWithThread({ thread: { title: '  ' }, group: { title: '' } })
+    )
+    maybeNotifyGroupReply(reply({ sessionId: THREAD, chainId: 70 }), getSession, notForeground)
+    await vi.waitFor(() => expect(publishBodies()).toHaveLength(1))
+    expect(publishBodies()[0]).toMatchObject({
+      title: '群聊',
+      body: '话题：未命名话题 · a1：调研进展如下：一二三'
+    })
+  })
+
+  test('N10 notify 开关只读父群：父群 notify=false → 话题不发；话题自己那份 notify=false 不算数', async () => {
+    getSession.mockImplementation(
+      sessionsWithThread({ group: { group_config_json: JSON.stringify({ v: 1, notify: false }) } })
+    )
+    maybeNotifyGroupReply(reply({ sessionId: THREAD, chainId: 70 }), getSession, notForeground)
+    await flush()
+    expect(fetch).not.toHaveBeenCalled()
+
+    getSession.mockImplementation(
+      sessionsWithThread({ thread: { group_config_json: JSON.stringify({ v: 1, notify: false }) } })
+    )
+    maybeNotifyGroupReply(reply({ sessionId: THREAD, chainId: 70 }), getSession, notForeground)
+    await vi.waitFor(() => expect(publishBodies()).toHaveLength(1))
+  })
+
+  test('N11 前台二元组：话题回复问 (父群, 话题)，群主线回复问 (群, null)；只有二元组全等才抑制', async () => {
+    getSession.mockImplementation(sessionsWithThread())
+    // 盯着话题面：话题回复不发，群主线回复照发。
+    const onThread = vi.fn((g: number, t: number | null) => g === GROUP && t === THREAD)
+    maybeNotifyGroupReply(reply({ sessionId: THREAD, chainId: 70 }), getSession, onThread)
+    maybeNotifyGroupReply(reply({ sessionId: GROUP, chainId: 11 }), getSession, onThread)
+    await vi.waitFor(() => expect(publishBodies()).toHaveLength(1))
+    expect(onThread.mock.calls).toEqual([
+      [GROUP, THREAD],
+      [GROUP, null]
+    ])
+    expect(publishBodies()[0].dedupe_key).toBe('group_chain:5:11')
+
+    // 盯着群主线：话题回复照发。
+    vi.mocked(fetch).mockClear()
+    const onGroupLine = (g: number, t: number | null): boolean => g === GROUP && t === null
+    maybeNotifyGroupReply(reply({ sessionId: THREAD, chainId: 70 }), getSession, onGroupLine)
+    await vi.waitFor(() => expect(publishBodies()).toHaveLength(1))
+    expect(publishBodies()[0].dedupe_key).toBe('group_thread:5:7')
+  })
+
+  test('N12 invoked_by=thread 但没有父群 id（坏行）→ 按群处理，不 throw', async () => {
+    getSession.mockImplementation(sessionsWithThread({ thread: { parent_session_id: null } }))
+    maybeNotifyGroupReply(reply({ sessionId: THREAD, chainId: 70 }), getSession, notForeground)
+    await vi.waitFor(() => expect(publishBodies()).toHaveLength(1))
+    expect(publishBodies()[0]).toMatchObject({
+      source: 'group_chat',
+      dedupe_key: 'group_chain:7:70',
+      payload: { link: { type: 'group', sessionId: 7 } }
+    })
+  })
+})

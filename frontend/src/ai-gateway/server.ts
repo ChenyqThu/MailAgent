@@ -1619,7 +1619,11 @@ function buildGroupScheduler(cfg: AiGatewayConfig): GroupOrchestrator | null {
             ...(facts.parentSessionId != null ? [facts.parentSessionId] : []),
             ...facts.childSessionIds
           ],
-          parentSessionId: facts.parentSessionId ?? null
+          parentSessionId: facts.parentSessionId ?? null,
+          // T3 — 话题事实：三项在 GroupSessionFacts 上可缺，这里归一（`?? []` / `=== true`）。
+          threadSessionIds: facts.threadSessionIds ?? [],
+          isThread: facts.isThread === true,
+          threadRootSpeakerAgentId: facts.threadRootSpeakerAgentId ?? null
         }
       },
       listHistory: listGroupHistory,

@@ -162,13 +162,20 @@ export interface GroupReplyRef {
   chainId: number | null
 }
 
-/** `ChatSession` 的本模块消费子集（group_config_json 只读 `notify` 一键）。 */
+/** `ChatSession` 的本模块消费子集（group_config_json 只读 `notify` 一键；T3 再读两列判话题）。 */
 export interface GroupSessionRef extends ChatSessionRef {
   group_config_json?: string | null
+  /** T3 — 话题判据恒是 `invoked_by === 'thread'`（不是 thread_root_message_id 非空）。 */
+  invoked_by?: string | null
+  /** T3 — 话题的父群 id（通知的标题 / notify 开关 / 深链都以父群为准）。 */
+  parent_session_id?: number | null
 }
 
 /** 通知正文里成员回复的截取长度。 */
 const GROUP_REPLY_BODY_CHARS = 80
+
+/** T3 — 话题标题空（根消息无正文）时通知正文里的占位。 */
+const THREAD_TITLE_FALLBACK = '未命名话题'
 
 /** `group_config_json.notify`：只有显式 false 才关（缺列 / 坏 JSON / 缺键 = 开）。 */
 function groupNotifyEnabled(raw: string | null | undefined): boolean {
@@ -190,21 +197,34 @@ function groupNotifyEnabled(raw: string | null | undefined): boolean {
  * 一条链一条通知；v1（labs off）路径无 chain_id → 退化为 `group_chain:{sessionId}:null`
  * = 每群一条活跃通知合并。深链是新型 `{type:'group'}`（`session` 型会落到主 agent 会话面）。
  *
+ * T3 话题分支（父 design §4.8）：session 是话题（`invoked_by==='thread'` 且有父群）→
+ * `source='group_thread'`、标题 = **父群**名、正文 = 「话题：<标题> · <说话人>：<摘要>」、
+ * dedupe `group_thread:{groupId}:{threadId}`（一个话题一条活跃通知）、深链 `{type:'thread',
+ * groupId, threadId}`。群级 `notify` 开关**只读父群**配置（话题复制的那份会随父群改动而过期）。
+ * 前台抑制是二元组 `(groupId, threadId|null)`：群主线回复问 (群, null)，话题回复问 (父群, 话题)。
+ *
  * `resolveSpeakerTitle` 由调用点注入（lifecycle 传 report_agent 读），失败回落 agent id。
  * 永不 throw。
  */
 export function maybeNotifyGroupReply(
   reply: GroupReplyRef,
   getSessionById: (sessionId: number) => GroupSessionRef | null,
-  isForeground: (sessionId: number) => boolean,
+  isForeground: (groupId: number, threadId: number | null) => boolean,
   resolveSpeakerTitle?: (agentId: string) => Promise<string | null> | string | null
 ): void {
   try {
     if (reply.role !== 'assistant') return
     const session = getSessionById(reply.sessionId)
-    if (!groupNotifyEnabled(session?.group_config_json)) return
-    if (isForeground(reply.sessionId)) return
-    const sessionTitle = typeof session?.title === 'string' ? session.title.trim() : ''
+    const parentId = session?.parent_session_id
+    const isThread = session?.invoked_by === 'thread' && typeof parentId === 'number'
+    // 话题以父群为准：标题 / notify 开关 / 深链的群 id 都读父群那一行。
+    const group = isThread ? getSessionById(parentId) : session
+    const groupId = isThread ? parentId : reply.sessionId
+    const threadId = isThread ? reply.sessionId : null
+    if (!groupNotifyEnabled(group?.group_config_json)) return
+    if (isForeground(groupId, threadId)) return
+    const groupTitle = typeof group?.title === 'string' ? group.title.trim() : ''
+    const threadTitle = typeof session?.title === 'string' ? session.title.trim() : ''
     const speakerId = reply.speakerAgentId
     void (async () => {
       let speaker = speakerId ?? ''
@@ -217,14 +237,23 @@ export function maybeNotifyGroupReply(
         }
       }
       const excerpt = reply.content.trim().slice(0, GROUP_REPLY_BODY_CHARS)
+      const line = speaker.length > 0 ? `${speaker}：${excerpt}` : excerpt
       await publishNotificationToCenter({
         category: 'results',
-        source: 'group_chat',
+        source: isThread ? 'group_thread' : 'group_chat',
         severity: 'info',
-        title: sessionTitle.length > 0 ? sessionTitle : '群聊',
-        body: speaker.length > 0 ? `${speaker}：${excerpt}` : excerpt,
-        dedupeKey: `group_chain:${reply.sessionId}:${reply.chainId}`,
-        payload: { link: { type: 'group', sessionId: reply.sessionId } }
+        title: groupTitle.length > 0 ? groupTitle : '群聊',
+        body: isThread
+          ? `话题：${threadTitle.length > 0 ? threadTitle : THREAD_TITLE_FALLBACK} · ${line}`
+          : line,
+        dedupeKey: isThread
+          ? `group_thread:${groupId}:${threadId}`
+          : `group_chain:${reply.sessionId}:${reply.chainId}`,
+        payload: {
+          link: isThread
+            ? { type: 'thread', groupId, threadId }
+            : { type: 'group', sessionId: reply.sessionId }
+        }
       })
     })()
   } catch (err) {

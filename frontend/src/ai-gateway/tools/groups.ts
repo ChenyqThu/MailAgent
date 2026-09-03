@@ -292,9 +292,13 @@ function defineGroupTools(ctx: GroupToolsCtx): Record<string, Tool> {
         const target = resolveTarget(input, ctx)
         ctx.assertReadScope(target)
         const facts = await requireGroup(hooks, target)
-        const family = [target, facts.parentSessionId, ...facts.childSessionIds].filter(
-          (id): id is number => id != null
-        )
+        // T3 — 预算窗口含话题（与调度器 checkFloors 同口径）；child_sessions 仍只列子群。
+        const family = [
+          target,
+          facts.parentSessionId,
+          ...facts.childSessionIds,
+          ...(facts.threadSessionIds ?? [])
+        ].filter((id): id is number => id != null)
         const usage = hooks.groupUsage(family, Date.now() - HOURLY_WINDOW_MS)
         const judgeAgentId = facts.config.judgeAgentId ?? null
         return {

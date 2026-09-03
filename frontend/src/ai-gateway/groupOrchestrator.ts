@@ -26,6 +26,10 @@
 //    子群的链与队列是拍板 E 的既定语义（子群 run 的 familySessionIds 含父群）—— g3 夜晚流程须知情。
 // 🔴 g3 game_over 不是停止：不写 group_stop、不进 GROUP_STOP_REASONS；靠 gameOver 集合按 sessionId
 //    拦（family 全体），主群一条 {kind:'game_over'} 系统行是唯一落盘痕迹（maybeGameOver）。
+// 🔴 T3 话题（facts.isThread）：候选集走参与者制（@ ∪ 根消息说话人 ∪ 已发言者，父群 realtime 不
+//    生效）；话题的开销进父群的预算窗口（RunState.familySessionIds 含 threadSessionIds），但话题
+//    run 的停止范围只有自己（stopScope），stopFamily(话题) 精确停、stopFamily(群) 连带话题。
+//    facts.familySessionIds 本身不含话题 —— 它原样透传给法官 scope。
 
 import { randomUUID } from 'node:crypto'
 
@@ -97,10 +101,20 @@ export interface GroupRunFacts {
     preset?: 'werewolf' | null
     game?: WerewolfGame
   }
-  /** 本群 + 父群 + 子群（含自身）；小时预算、session_cap、停止范围都按它算。 */
+  /** 本群 + 父群 + 子群（含自身）；小时预算、session_cap、停止范围都按它算。
+   *  🔴 不含话题：这一项原样透传给 speak 的 identity.group.familySessionIds = 法官的投递 scope，
+   *  话题不该成为法官的 group_post 目标（父 design §4.3）。话题进预算 / 停止范围走下面的
+   *  threadSessionIds，由 newRun 合进 RunState.familySessionIds。 */
   familySessionIds: number[]
   /** g3 — 父群 id（子群才非空）。game_over 系统行只写 family 的根：有父 → 父群，无父 → 本群。 */
   parentSessionId?: number | null
+  // ── T3 话题事实（三项都可缺，缺 = 不是话题 / 没有话题；口径见 config.ts GroupSessionFacts）──
+  /** 本群底下的话题 id。进小时预算 / session_cap / 父群 stopFamily 的范围，不进法官 scope。 */
+  threadSessionIds?: number[]
+  /** 本会话是不是话题。true → 候选集走参与者制，父群 realtime 不生效；停止范围只有自己。 */
+  isThread?: boolean
+  /** 话题根消息的说话人（人发的 → null）：参与者集合的种子。 */
+  threadRootSpeakerAgentId?: string | null
 }
 
 export interface GroupTurnRow {
@@ -239,7 +253,11 @@ interface RunState {
   runId: string
   sessionId: number
   chainId: number
+  /** 预算窗口（小时地板 / session_cap）的 session 集：本群 ∪ 父 ∪ 子群 ∪ 话题。群 run 的停止范围
+   *  也是它；话题 run 的停止范围只有自己（stopScope）。 */
   familySessionIds: number[]
+  /** T3 — 本 run 跑在话题里（facts.isThread）。停止范围据此收窄到本 session。 */
+  isThread: boolean
   startedAt: number
   seq: number
   turns: Array<{ agentId: string; outcome: GroupTurnOutcome }>
@@ -342,6 +360,10 @@ export class GroupOrchestrator {
   private readonly stoppedChains = new Set<string>()
   /** g3 — 已终局的 session（family 全体）：onGroupMessage 对它们零候选、零 turn。 */
   private readonly gameOver = new Set<number>()
+  /** T3 — 见过的话题 session（每次读事实都刷新：本会话 isThread + 群的 threadSessionIds）。
+   *  stopFamily 是同步接口、拿不到事实，靠它判「目标是话题」→ 精确停。话题里只要发过一条消息
+   *  就一定进了集合；父群每个 turn 重读事实也会把新开的话题登记进来。 */
+  private readonly threadSessions = new Set<number>()
   private readonly bucket: RateBucket
   private inFlight: {
     sessionId: number
@@ -365,6 +387,7 @@ export class GroupOrchestrator {
   async onGroupMessage(sessionId: number, row: GroupTranscriptRow): Promise<{ queued: string[] }> {
     const facts = (await this.deps.resolveFacts(sessionId)) ?? null
     if (!facts) return { queued: [] }
+    this.rememberThreads(sessionId, facts)
     if (this.gameOver.has(sessionId)) return { queued: [] }
     const chainId = isChainRootRow(row) ? row.id : (row.chainId as number)
     // g2 — 法官跨群投递行（role assistant + metadata.via='judge_post'，chainId NULL = 链根）
@@ -397,13 +420,27 @@ export class GroupOrchestrator {
       return { queued: [] }
     }
     const mentioned = parseGroupMentions(row.content, facts.members)
+    const isThread = facts.isThread === true
     const realtime = facts.members
       .filter((m) => (facts.modes[m.agentId] ?? 'mention') === 'realtime')
       .map((m) => m.agentId)
+    // T3 参与者制（父 design §4.4 / D2）：话题候选 = @ ∪ 参与者，参与者 = 根消息说话人 ∪ 已在本
+    // 话题以 assistant 身份发过言者；群里仍是「@ 优先 → realtime」。并集恒按成员序输出。
+    // 🔴 「父群 realtime 在话题里不生效」就落在下面这个三元的话题支上（realtime 只有群支读它）
+    // —— **判据只此一处**。别再往 realtime 上加一层 isThread 守卫：两处冗余谁都不承重，
+    // 单点改坏 P4「realtime 成员未被 @ 不醒」不会红，变异闸当场失效。
+    const participants = isThread ? this.threadParticipants(sessionId, facts) : []
+    const pool = isThread
+      ? facts.members
+          .filter((m) => mentioned.includes(m.agentId) || participants.includes(m.agentId))
+          .map((m) => m.agentId)
+      : mentioned.length
+        ? mentioned
+        : realtime
     // T4 (design M5) — 主 agent 从单聊投递的行 speakerAgentId 是 null（via='main_agent'），上面的
     // 自排除对它失效：主 agent 若也是本群成员，会被自己的投递唤醒（自问自答 + 计入链根配额）。
     // 工具侧已拒（E_GROUP_SELF_MEMBER）；这里是对历史行与旁路投递的结构兜底。
-    const candidates = (mentioned.length ? mentioned : realtime).filter(
+    const candidates = pool.filter(
       (id) =>
         id !== row.speakerAgentId && !(triggerKind === 'main_agent' && id === MAIN_AGENT_MEMBER_ID)
     )
@@ -413,8 +450,9 @@ export class GroupOrchestrator {
         this.emit(sessionId, run ?? null, facts.config, {
           phase: 'no_candidates',
           chainId,
-          reason:
-            mentioned.length === 0 && realtime.length === 0 ? 'no_realtime_members' : 'self_only'
+          // 话题里 pool 为空 = 没 @ 谁也还没有参与者，沿用 no_realtime_members 一词（渲染文案
+          // 「也没 @ 谁」对话题同样成立；reason 词表不为话题扩项）。
+          reason: pool.length === 0 ? 'no_realtime_members' : 'self_only'
         })
       }
       return { queued: [] }
@@ -465,6 +503,7 @@ export class GroupOrchestrator {
   ): Promise<{ queued: boolean; error?: GroupRequeueError }> {
     const facts = (await this.deps.resolveFacts(sessionId)) ?? null
     if (!facts) return { queued: false, error: 'E_NOT_GROUP' }
+    this.rememberThreads(sessionId, facts)
     if (!facts.members.some((m) => m.agentId === agentId)) {
       return { queued: false, error: 'E_NOT_GROUP_MEMBER' }
     }
@@ -491,6 +530,9 @@ export class GroupOrchestrator {
    *  stopped, abort the in-flight turn, write one system row per family session. Returns false
    *  when nothing involving `sessionId` was queued or running (no rows written). */
   stopFamily(sessionId: number, reason: GroupStopReason = 'owner_stop'): { stopped: boolean } {
+    // T3 — 目标是话题 → 精确停：只清它的队列、只中止它的在飞 turn、只给它写 system 行；父群与
+    // 兄弟话题不受影响。目标是群 → 现状（全家含话题：话题 run 的 familySessionIds 含父群）。
+    if (this.threadSessions.has(sessionId)) return this.stopThread(sessionId, reason)
     const family = new Set<number>([sessionId])
     const runs: RunState[] = []
     for (const run of this.runs.values()) {
@@ -539,7 +581,12 @@ export class GroupOrchestrator {
       runId: randomUUID(),
       sessionId,
       chainId,
-      familySessionIds: [...new Set([sessionId, ...facts.familySessionIds])],
+      // T3 — 话题进群 run 的预算 / 停止范围（facts.familySessionIds 本身不含话题：它还要原样
+      // 透传给法官 scope）。
+      familySessionIds: [
+        ...new Set([sessionId, ...facts.familySessionIds, ...(facts.threadSessionIds ?? [])])
+      ],
+      isThread: facts.isThread === true,
       startedAt: this.deps.now(),
       seq: 0,
       turns: [],
@@ -679,6 +726,7 @@ export class GroupOrchestrator {
 
     // 成员资格复核：取出时重读事实（owner 在排队期间可能踢人 / 改模式 / 改模型），刷新给本 turn。
     const fresh = (await deps.resolveFacts(sessionId)) ?? null
+    if (fresh) this.rememberThreads(sessionId, fresh)
     if (!fresh || !fresh.members.some((m) => m.agentId === item.agentId)) {
       skip('removed')
       return
@@ -689,12 +737,8 @@ export class GroupOrchestrator {
     const floor = await this.checkFloors(item, run)
     if (floor) {
       record('stopped', { error: floor })
-      this.stopRuns(
-        this.runsInFamily(run.familySessionIds),
-        new Set(run.familySessionIds),
-        floor,
-        run.runId
-      )
+      const scope = this.stopScope(run)
+      this.stopRuns(scope.runs, scope.family, floor, run.runId)
       return
     }
 
@@ -763,12 +807,10 @@ export class GroupOrchestrator {
 
     if (controller.signal.aborted) {
       record('stopped', { error: 'owner_stop', ...windowIds })
-      this.stopRuns(
-        this.runsInFamily(run.familySessionIds),
-        new Set(run.familySessionIds),
-        'owner_stop',
-        run.runId
-      )
+      // 🔴 话题 run 被停后这里的范围也必须是自己：按 familySessionIds 算会顺着父群 id 把父群的
+      // 活 run 一起停掉 —— 精确停的第二半在这里，不只在 stopFamily。
+      const scope = this.stopScope(run)
+      this.stopRuns(scope.runs, scope.family, 'owner_stop', run.runId)
       return
     }
     const usageOf = (
@@ -876,12 +918,8 @@ export class GroupOrchestrator {
 
   private maybeStopOnFailures(run: RunState): void {
     if (run.consecutiveFailed < CONSECUTIVE_FAILED_STOP) return
-    this.stopRuns(
-      this.runsInFamily(run.familySessionIds),
-      new Set(run.familySessionIds),
-      'error',
-      run.runId
-    )
+    const scope = this.stopScope(run)
+    this.stopRuns(scope.runs, scope.family, 'error', run.runId)
   }
 
   // ── 停止 ────────────────────────────────────────────────────────────────────
@@ -890,6 +928,54 @@ export class GroupOrchestrator {
     return [...this.runs.values()].filter(
       (r) => !r.stopped && r.familySessionIds.some((sid) => familySessionIds.includes(sid))
     )
+  }
+
+  /** T3 — 一个 run 的停止范围：群 run = family（含话题）；话题 run = 只有自己。预算窗口不在此列
+   *  （checkFloors 恒读 run.familySessionIds：话题的开销仍算整群的）。
+   *  🔴 话题的 runs 按 `run.sessionId` 选，不能走 runsInFamily([话题])：父群 run 的 family 含这个
+   *  话题，会被它反向命中。 */
+  private stopScope(run: RunState): { runs: RunState[]; family: Set<number> } {
+    if (run.isThread) {
+      return {
+        runs: [...this.runs.values()].filter((r) => !r.stopped && r.sessionId === run.sessionId),
+        family: new Set([run.sessionId])
+      }
+    }
+    return {
+      runs: this.runsInFamily(run.familySessionIds),
+      family: new Set(run.familySessionIds)
+    }
+  }
+
+  /** T3 — 精确停一个话题：只看 run.sessionId === 话题 的 run、只清它的队列、只中止它的在飞 turn。
+   *  父群的活 run 哪怕 familySessionIds 含这个话题也不碰。 */
+  private stopThread(sessionId: number, reason: GroupStopReason): { stopped: boolean } {
+    const runs = [...this.runs.values()].filter((r) => !r.stopped && r.sessionId === sessionId)
+    const inFlightHere = this.inFlight != null && this.inFlight.sessionId === sessionId
+    const hasQueued = (this.queues.get(sessionId)?.length ?? 0) > 0
+    if (runs.length === 0 && !inFlightHere && !hasQueued) return { stopped: false }
+    const runId = this.inFlight && inFlightHere ? this.inFlight.run.runId : (runs[0]?.runId ?? null)
+    this.stopRuns(runs, new Set([sessionId]), reason, runId)
+    return { stopped: true }
+  }
+
+  /** T3 — 每次读到事实都登记话题 session（本会话是话题 / 本群底下有哪些话题），stopFamily 据此
+   *  判目标是不是话题。 */
+  private rememberThreads(sessionId: number, facts: GroupRunFacts): void {
+    if (facts.isThread === true) this.threadSessions.add(sessionId)
+    else this.threadSessions.delete(sessionId)
+    for (const tid of facts.threadSessionIds ?? []) this.threadSessions.add(tid)
+  }
+
+  /** T3 — 话题的参与者：根消息说话人 ∪ 已在本话题以 assistant 身份发过言者，只收仍在名单里的
+   *  （被移出群的成员即使发过言也不再被唤醒）。按成员序输出。 */
+  private threadParticipants(sessionId: number, facts: GroupRunFacts): string[] {
+    const ids = new Set<string>()
+    if (facts.threadRootSpeakerAgentId) ids.add(facts.threadRootSpeakerAgentId)
+    for (const row of this.deps.listHistory(sessionId)) {
+      if (row.role === 'assistant' && row.speakerAgentId) ids.add(row.speakerAgentId)
+    }
+    return facts.members.filter((m) => ids.has(m.agentId)).map((m) => m.agentId)
   }
 
   /** A run whose chain has nothing queued and nothing in flight is over: drop its state so a

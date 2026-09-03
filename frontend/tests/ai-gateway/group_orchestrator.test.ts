@@ -1318,3 +1318,216 @@ describe('UX 批 — group turn 事件（服务端事实的投影）', () => {
     for (const e of errors) expect(GROUP_SKIP_REASONS).toContain(e)
   })
 })
+
+// ── T3 话题：参与者制 / 精确停止 / family 预算 ───────────────────────────────────
+
+/** T3 建话题：members **全 realtime**（证明话题里父群 realtime 不生效），isThread + 根消息说话人。 */
+function thread(
+  world: World,
+  threadId: number,
+  groupId: number,
+  agentIds: string[],
+  opts: { rootSpeaker?: string | null; config?: GroupRunFacts['config'] } = {}
+): GroupRunFacts {
+  const facts: GroupRunFacts = {
+    members: agentIds.map((id) => member(id)),
+    modes: Object.fromEntries(agentIds.map((id) => [id, 'realtime'])),
+    config: opts.config ?? {},
+    familySessionIds: [threadId, groupId],
+    parentSessionId: groupId,
+    isThread: true,
+    threadRootSpeakerAgentId: opts.rootSpeaker ?? null
+  }
+  world.facts.set(threadId, facts)
+  return facts
+}
+
+/** speak 在指定 session 里挂起，直到 release()。 */
+function gateOn(world: World, sessionId: number): () => void {
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  world.speakImpl = async (input, n) => {
+    if (input.sessionId === sessionId) await gate
+    return defaultSpeak(input, n)
+  }
+  return release
+}
+
+const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+
+describe('T3 话题 — 参与者制候选集（@ ∪ 根消息说话人 ∪ 已发言者；realtime 不生效）', () => {
+  test('P1 只 @：根消息是人发的（无种子）→ 只有被 @ 的成员醒，全 realtime 名单不生效', async () => {
+    const world = makeWorld()
+    group(world, 1, ['a', 'b', 'c'])
+    thread(world, 2, 1, ['a', 'b', 'c'])
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    expect(await send(orch, world, 2, '@b 你看看')).toEqual(['b'])
+    expect(world.turns.map((t) => [t.sessionId, t.agentId, t.outcome])).toEqual([[2, 'b', 'spoke']])
+  })
+
+  test('P2 根消息说话人自动参与：对着 a 的消息开的话题，不 @ 任何人 → a 回', async () => {
+    const world = makeWorld()
+    group(world, 1, ['a', 'b', 'c'])
+    thread(world, 2, 1, ['a', 'b', 'c'], { rootSpeaker: 'a' })
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    expect(await send(orch, world, 2, '展开说说')).toEqual(['a'])
+    expect(world.turns.map((t) => t.agentId)).toEqual(['a'])
+  })
+
+  test('P3 发过言者持续参与：@b 后 a、b 都成参与者，之后不 @ 也都回；被移出名单的参与者不再醒；c 始终不醒', async () => {
+    const world = makeWorld()
+    group(world, 1, ['a', 'b', 'c'])
+    const facts = thread(world, 2, 1, ['a', 'b', 'c'], { rootSpeaker: 'a' })
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    // 并集按成员序：a（根）在 b（@）前。
+    expect(await send(orch, world, 2, '@b 你也来')).toEqual(['a', 'b'])
+    expect(await send(orch, world, 2, '继续')).toEqual(['a', 'b'])
+    // a 被移出群：发过言也不再是候选。
+    world.facts.set(2, { ...facts, members: facts.members.filter((m) => m.agentId !== 'a') })
+    expect(await send(orch, world, 2, '再来')).toEqual(['b'])
+    expect(world.turns.some((t) => t.agentId === 'c')).toBe(false)
+  })
+
+  test('P4 父群 realtime 成员未被 @ 不醒：零参与者 + 无 @ → 零 turn，no_candidates 照发', async () => {
+    const world = makeWorld()
+    group(world, 1, ['a', 'b', 'c'])
+    thread(world, 2, 1, ['a', 'b', 'c'])
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    expect(await send(orch, world, 2, '没有点名')).toEqual([])
+    expect(world.turns).toEqual([])
+    expect(world.events.map((e) => [e.phase, e.reason])).toEqual([
+      ['no_candidates', 'no_realtime_members']
+    ])
+  })
+
+  test('P5 群里的候选集不受影响：同样的名单在群里仍是「@ 优先 → realtime」', async () => {
+    const world = makeWorld()
+    group(world, 1, ['a', 'b', 'c'], { mentionOnly: ['c'] })
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    expect(await send(orch, world, 1, '大家看看')).toEqual(['a', 'b'])
+  })
+})
+
+describe('T3 话题 — 精确停止（停话题不停父群；停父群连带话题）', () => {
+  test('S1 话题在写、父群在队：stopFamily(话题) 只中止话题 turn、父群队列与 run 不动、只给话题写 system 行', async () => {
+    const world = makeWorld()
+    group(world, 1, ['a', 'b'])
+    world.facts.set(1, { ...world.facts.get(1)!, threadSessionIds: [2] })
+    thread(world, 2, 1, ['a', 'b'])
+    const release = gateOn(world, 2)
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    await orch.onGroupMessage(2, world.human(2, '@a 来'))
+    await tick()
+    expect(orch.liveState(2).inFlight).toBe('a')
+    await orch.onGroupMessage(1, world.human(1, '开场'))
+    expect(orch.pendingFor(1)).toEqual(['a', 'b'])
+
+    expect(orch.stopFamily(2)).toEqual({ stopped: true })
+    release()
+    await orch.idle()
+
+    expect(world.turns.map((t) => [t.sessionId, t.agentId, t.outcome])).toEqual([
+      [2, 'a', 'stopped'],
+      [1, 'a', 'spoke'],
+      [1, 'b', 'spoke']
+    ])
+    expect(world.stopReasons(2)).toEqual(['owner_stop'])
+    expect(world.stopReasons(1)).toEqual([])
+  })
+
+  test('S2 停一个空闲话题：父群在写也不受影响（{stopped:false}，零 system 行）', async () => {
+    const world = makeWorld()
+    group(world, 1, ['a', 'b'])
+    world.facts.set(1, { ...world.facts.get(1)!, threadSessionIds: [2] })
+    thread(world, 2, 1, ['a', 'b'])
+    const release = gateOn(world, 1)
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    await orch.onGroupMessage(1, world.human(1, '开场'))
+    await tick()
+    expect(orch.liveState(1).inFlight).toBe('a')
+
+    expect(orch.stopFamily(2)).toEqual({ stopped: false })
+    release()
+    await orch.idle()
+
+    expect(world.turns.map((t) => [t.sessionId, t.agentId, t.outcome])).toEqual([
+      [1, 'a', 'spoke'],
+      [1, 'b', 'spoke']
+    ])
+    expect(world.stopReasons()).toEqual([])
+  })
+
+  test('S3 stopFamily(父群) 连带话题：话题在写被中止、父群队列清空、两边各一条 system 行', async () => {
+    const world = makeWorld()
+    group(world, 1, ['a', 'b'])
+    world.facts.set(1, { ...world.facts.get(1)!, threadSessionIds: [2] })
+    thread(world, 2, 1, ['a', 'b'])
+    const release = gateOn(world, 2)
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    await orch.onGroupMessage(2, world.human(2, '@a 来'))
+    await tick()
+    await orch.onGroupMessage(1, world.human(1, '开场'))
+    expect(orch.pendingFor(1)).toEqual(['a', 'b'])
+
+    expect(orch.stopFamily(1)).toEqual({ stopped: true })
+    release()
+    await orch.idle()
+
+    expect(world.turns.map((t) => [t.sessionId, t.agentId, t.outcome])).toEqual([
+      [2, 'a', 'stopped']
+    ])
+    expect(orch.pendingFor(1)).toEqual([])
+    expect(world.stopReasons(1)).toEqual(['owner_stop'])
+    expect(world.stopReasons(2)).toEqual(['owner_stop'])
+  })
+})
+
+describe('T3 话题 — family 预算含话题', () => {
+  test('B1 话题里跑掉的 turn 计入父群的小时窗口：群自己零 turn 也命中 hourly_turns，停止连带话题', async () => {
+    const world = makeWorld()
+    group(world, 1, ['a', 'b'], { config: { hourlyTurns: 3 } })
+    world.facts.set(1, { ...world.facts.get(1)!, threadSessionIds: [2] })
+    thread(world, 2, 1, ['a', 'b'], { config: { hourlyTurns: 99 } })
+    const usageCalls: number[][] = []
+    const groupUsage = world.deps.groupUsage
+    world.deps.groupUsage = (ids, since) => {
+      usageCalls.push([...ids])
+      return groupUsage(ids, since)
+    }
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    await send(orch, world, 2, '@a 来')
+    // 第二条：a 已是参与者，与被 @ 的 b 一起入队（人类消息在末尾 → 不算独白）；话题里三行。
+    await send(orch, world, 2, '@b 来')
+    expect(world.turns.map((t) => [t.sessionId, t.outcome])).toEqual([
+      [2, 'spoke'],
+      [2, 'spoke'],
+      [2, 'spoke']
+    ])
+    await send(orch, world, 1, '@a 群里说')
+    expect(world.turns.at(-1)).toMatchObject({ sessionId: 1, agentId: 'a', outcome: 'stopped' })
+    expect(world.stopReasons(1)).toEqual(['hourly_turns'])
+    expect(world.stopReasons(2)).toEqual(['hourly_turns'])
+    // 群 run 的窗口确实带上了话题 id。
+    expect(usageCalls.at(-1)).toEqual(expect.arrayContaining([1, 2]))
+  })
+
+  test('B2 反向：父群的 turn 也计入话题的窗口；话题里命中地板只停话题不停父群', async () => {
+    const world = makeWorld()
+    group(world, 1, ['a', 'b'], { config: { hourlyTurns: 99 } })
+    world.facts.set(1, { ...world.facts.get(1)!, threadSessionIds: [2] })
+    thread(world, 2, 1, ['a', 'b'], { config: { hourlyTurns: 2 } })
+    const orch = new GroupOrchestrator({ deps: world.deps, cascade: false })
+    await send(orch, world, 1, '@a 来')
+    await send(orch, world, 1, '@b 来')
+    await send(orch, world, 2, '@a 话题里说')
+    expect(world.turns.map((t) => [t.sessionId, t.outcome])).toEqual([
+      [1, 'spoke'],
+      [1, 'spoke'],
+      [2, 'stopped']
+    ])
+    expect(world.stopReasons(2)).toEqual(['hourly_turns'])
+    expect(world.stopReasons(1)).toEqual([])
+  })
+})
