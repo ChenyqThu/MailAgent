@@ -9,6 +9,7 @@ import pytest
 from src.api.routers import chat
 from src.api.routers.matters import MatterPatchWithScheduleRequest
 from src.api.schemas.matters import MatterCreateRequest, MatterProposalNewResource
+from src.library.constants import RESOURCE_KEY_PREFIX
 from src.mail import sync_store
 from src.matters import (
     models,
@@ -120,9 +121,15 @@ RESOURCE_KIND_IDENTITY_PROBES = {
     "event": ("uid-1", lambda: resource_identity.event_resource_key("uid-1")),
 }
 
-#: 身份空间之外但仍有 identity 函数的 kind：`file` 走 `attachment_resource_key`
-#: （normalize 原样透传，函数 docstring 写明 kind='file' 的用法）。
-RESOURCE_KIND_FILE_PROBE = lambda: resource_identity.attachment_resource_key(7)  # noqa: E731
+#: 身份空间之外但仍有 identity 函数的 kind：`file` 有**两个**并列的发号函数，共用
+#: provider='mailagent' 这一个身份空间、靠前缀区分（design §9.2；`uq_resource_provider_key`
+#: 是 `(provider, external_key)` 不含 kind，所以前缀必须互斥）。normalize 对 file 原样透传。
+#: 🔴 前缀不在这里手抄字面量：`library:` 取 `src.library.constants.RESOURCE_KEY_PREFIX`
+#: （跨模块单源），下面另有一条断言钉住 identity 函数确实用的是它。
+RESOURCE_KIND_FILE_PROBES = {
+    "attachment:": lambda: resource_identity.attachment_resource_key(7),
+    RESOURCE_KEY_PREFIX: lambda: resource_identity.library_resource_key(7),
+}
 
 #: 显式豁免 —— identity 层**有意**不给这两个 kind 发号：
 #:   doc: connector 词表 kind，external_key 按 `resource_proposal._CONNECTOR_KEY_RE`
@@ -165,15 +172,58 @@ def test_every_resource_kind_has_an_identity_landing_or_explicit_exemption():
         assert kind in resource_proposal._KINDS_BY_PROVIDER[resource_identity.EMAIL_PROVIDER]
         assert kind not in resource_proposal._CONNECTOR_KINDS
 
-    file_key = RESOURCE_KIND_FILE_PROBE()
-    assert file_key.startswith("attachment:")
-    # file 的 key 不在 normalize 的规范范围内 —— 原样透传即是契约。
-    assert (
-        resource_identity.normalize_resource_key(
-            resource_identity.EMAIL_PROVIDER, "file", file_key
+    # 🔴 canary：两个前缀都得在，抽剩一个就是有人删了发号函数而闸没红。
+    assert len(RESOURCE_KIND_FILE_PROBES) == 2
+    file_keys = set()
+    for prefix, probe in RESOURCE_KIND_FILE_PROBES.items():
+        file_key = probe()
+        assert file_key.startswith(prefix), f"{prefix} 发号函数产出前缀不对: {file_key!r}"
+        # file 的 key 不在 normalize 的规范范围内 —— 原样透传即是契约。
+        assert (
+            resource_identity.normalize_resource_key(
+                resource_identity.EMAIL_PROVIDER, "file", file_key
+            )
+            == file_key
         )
-        == file_key
-    )
+        file_keys.add(file_key)
+    # 同一个 id、不同前缀 = 两份不同的资料（唯一键不含 kind，前缀是唯一的区分手段）。
+    assert len(file_keys) == len(RESOURCE_KIND_FILE_PROBES)
+    # 提案词表：`file` 被 mailagent 收编（跟进 run 可提议挂库文件），但**不进**身份空间
+    # —— 进了 normalize / parse 就会去规范它，而 file 的 key 恒原样透传。
+    assert "file" in resource_proposal._KINDS_BY_PROVIDER[resource_identity.EMAIL_PROVIDER]
+    assert "file" not in resource_identity.MAILAGENT_IDENTITY_KINDS
+    assert "file" in resource_identity.MAILAGENT_PROPOSAL_KINDS
+
+
+def test_file_proposals_only_admit_the_library_prefix_and_check_existence():
+    """提案通道对 kind='file' 的两条硬约束（design §9.2）。
+
+    ① 只收 `library:` —— 邮件附件没有本地存在性判定，放进来等于凭空造资料；
+    ② 存在性经**注入的 resolver 回调**判，没注册回调 fail-closed（这正是「挡住模型编造的
+       file id」那道闸；放行 = 整条判定形同虚设）。
+    """
+    library_key = resource_identity.library_resource_key(7)
+    allowed = frozenset({resource_identity.EMAIL_PROVIDER})
+    spec = {"provider": resource_identity.EMAIL_PROVIDER, "kind": "file"}
+
+    with pytest.raises(resource_proposal.ResourceProposalError) as exc:
+        resource_proposal.normalize_new_resource(
+            {**spec, "external_key": resource_identity.attachment_resource_key(7)},
+            allowed_providers=allowed,
+            exists=lambda provider, kind, key: True,
+        )
+    assert exc.value.reason == resource_proposal.REASON_KEY_INVALID
+
+    # 没注册回调：存在性判定说「不在」——于是提案被丢，理由是 not_found 而不是放行。
+    resource_identity.set_library_file_resolver(None)
+    assert resource_identity.library_file_available(library_key) is False
+    with pytest.raises(resource_proposal.ResourceProposalError) as exc:
+        resource_proposal.normalize_new_resource(
+            {**spec, "external_key": library_key},
+            allowed_providers=allowed,
+            exists=lambda provider, kind, key: resource_identity.library_file_available(key),
+        )
+    assert exc.value.reason == resource_proposal.REASON_NOT_FOUND
 
 
 def test_migration_ddl_uses_canonical_sql_check_helper():

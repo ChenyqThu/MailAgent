@@ -13,7 +13,11 @@ from .models import (
     MATTER_TAG_DEFAULT_COLOR,
     MATTER_TAG_DEFAULT_SHAPE,
 )
-from .resource_identity import MAILAGENT_IDENTITY_KINDS, parse_resource_key
+from .resource_identity import (
+    MAILAGENT_IDENTITY_KINDS,
+    library_file_available,
+    parse_resource_key,
+)
 
 #: 「下一步」的档位表（越小越优先）。值域与前端 `matterDerive.MatterNextActionKind` 的
 #: 条目那三档同名 —— 状态派生的 monitoring / done / missing 三档不在这里（见
@@ -1119,7 +1123,14 @@ class MatterRepository:
         return results
 
     def resource_available(self, conn: sqlite3.Connection, provider: str, kind: str, external_key: str) -> bool:
-        if provider != "mailagent" or kind not in MAILAGENT_IDENTITY_KINDS:
+        if provider != "mailagent":
+            return True
+        # 资料库文件（design §9.2）：判定经**注入的 resolver 回调**查 library.db —— matters
+        # 不直接 import library 存储层。非 `library:` 前缀的 file 键（邮件附件）恒 True，
+        # 没注册回调恒 False，理由都在 `library_file_available` 的 docstring 里。
+        if kind == "file":
+            return library_file_available(external_key)
+        if kind not in MAILAGENT_IDENTITY_KINDS:
             return True
         try:
             parsed_kind, identifier = parse_resource_key(
