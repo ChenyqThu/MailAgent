@@ -28,6 +28,8 @@ import sys
 import time
 from typing import Optional
 
+from src.library.constants import MOUNT_DENY_SUFFIXES
+
 
 class FloorDenied(Exception):
     """目标命中 deny 地板（敏感路径 / inode）。端点 → E_EXEC_FLOOR_DENIED (403)。"""
@@ -95,6 +97,20 @@ def _skills_root() -> Optional[str]:
         return None
 
 
+def _library_db(data_root: str) -> str:
+    """``library.db`` 现值：与 sync_store.db 同目录（跟 ``_sync_store_db`` 走同一条解析，override 时不分家）。"""
+    from src.library.db import library_db_for
+
+    return library_db_for(_sync_store_db(data_root))
+
+
+def _library_root(data_root: str) -> str:
+    """资料库目录 ``<data>/library/`` 现值（同上）。"""
+    from src.library.db import library_root_for
+
+    return library_root_for(_sync_store_db(data_root))
+
+
 def _app_bundle_root() -> Optional[str]:
     """打包态 macOS ``.app`` bundle 根：从 ``sys.executable`` 上溯首个 ``*.app`` 目录。
 
@@ -128,17 +144,19 @@ class ExecFloor:
         self._exact_files: set[str] = set()  # realpath 化的精确匹配文件
         self._prefix_trees: list[str] = []  # realpath 化的前缀目录
         self._sensitive_inodes: set[tuple[int, int]] = set()
+        self._library_root: Optional[str] = None  # 资料库目录：放行，但目录下密钥类后缀拒
         self._build()
 
     def _build(self) -> None:
         data_root = _data_root()
 
         exacts: list[str] = [os.path.join(data_root, ".env")]
-        for db in (_agent_config_db(), _sync_store_db(data_root), _ai_chat_db(data_root)):
+        for db in (_agent_config_db(), _sync_store_db(data_root), _ai_chat_db(data_root), _library_db(data_root)):
             if db:
                 for suf in _DB_SUFFIXES:
                     exacts.append(db + suf)
         exacts.append(os.path.join(data_root, "data", "skill_secrets.key"))
+        self._library_root = os.path.realpath(_library_root(data_root))
 
         for p in exacts:
             rp = os.path.realpath(p)
@@ -173,6 +191,12 @@ class ExecFloor:
             return "sensitive file"
         if os.path.basename(realpath) in _DENIED_BASENAMES:
             return "sensitive file (token.dat)"
+        # 资料库目录本身放行（``data/library/**`` 不在任何前缀树里），但目录下密钥类后缀一律拒 ——
+        # 与挂载根内的拒收词表同源（MOUNT_DENY_SUFFIXES），``.env*`` 含 ``.env.local`` 这类变体。
+        if self._library_root and (realpath == self._library_root or realpath.startswith(self._library_root + os.sep)):
+            base = os.path.basename(realpath).lower()
+            if base == ".env" or base.startswith(".env.") or os.path.splitext(base)[1] in MOUNT_DENY_SUFFIXES:
+                return "sensitive suffix in library"
         for pfx in self._prefix_trees:
             if realpath == pfx or realpath.startswith(pfx + os.sep):
                 return "sensitive tree"
