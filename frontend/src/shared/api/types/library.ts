@@ -158,8 +158,10 @@ export interface LibraryFileText {
   content_hash: string | null
   /** `source_hash !== content_hash` —— 正文变了、解析版还没重抽。 */
   stale: boolean
-  /** 说明性提示（投影腿才有，例如附件尚未抽取）。语义未细化，按字符串透传。 */
-  hint?: string | null
+  /** 给人 / 模型看的说明串，两条腿都有，`extracted` 时恒 null。
+   *  🔴 **选文案的判据是 `text_status`，不是它** —— `hint` 只作兜底展示，永远不要拿它
+   *  做分支（它是自由文本，不是枚举）。 */
+  hint: string | null
 }
 
 /** 搜索命中 = 文件对象**摊平**再挂三个命中字段（不是 `{file, …}` 嵌套）。 */
