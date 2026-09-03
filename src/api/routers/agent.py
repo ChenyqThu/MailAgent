@@ -370,25 +370,29 @@ async def set_auto_compact(request: Request, body: Optional[dict[str, Any]] = No
 
 # ── labs 实验开关（g1 群聊，task 09-01）────────────────────────────────────────────────
 #
-# owner_settings 型实验开关（**不新增 MAILAGENT_* env**，父设计拍板 C / 红线 6）：出厂 off，
-# owner 在设置-实验室里打开。今天只有一项：
+# owner_settings 型实验开关（**不新增 MAILAGENT_* env**，父设计拍板 C / 红线 6）。今天只有一项：
 #   labs_group_agents —— 群聊多 agent 服务端编排。on = gateway 接管发言循环（候选集 / 地板 /
 #   台账）；off = 退回 v1（renderer 自己的循环），v31 的表与列保留不删（AC9）。
 #
-# 🔴 gateway 侧读失败 **fail-closed 到 off**（lifecycle 的 resolveLabsFlags）：够不着 serve-api
-# 不能变成「服务端悄悄开始编排」——那会在 owner 完全不知情时开始烧 token。
+# 出厂默认 **on**：这套编排已是群聊的正常形态，开关只留给 owner 临时退回 v1 排查问题。缺行 /
+# 脏行都读成出厂默认（同一条规则，不为「脏行」单开一档）。owner 显式关过的库留 'off' 行，
+# 本次翻默认不迁移它 —— 那是一次明确的选择，不该被版本升级悄悄推翻。
+#
+# 🔴 gateway 侧**读不到**时仍 fail-closed 到 off（lifecycle 的 resolveLabsFlags）：那一档管的是
+# 「够不着 serve-api」，与本处的出厂默认是两件事 —— 后端都没起来时不该自行开始编排。
 # 写入只来自 owner UI（verify_cf_access），没有任何 gateway 工具够得着（policy_rules 同款纪律）。
 
 LABS_FLAG_VALUES: tuple[str, ...] = ("on", "off")
 _LABS_GROUP_AGENTS_KEY = "labs_group_agents"
+_LABS_GROUP_AGENTS_DEFAULT = "on"
 
 
 @router.get("/labs", dependencies=[Depends(verify_cf_access)])
 async def get_labs_flags(request: Request):
-    """读 labs 实验开关。缺行 / 脏值 → 'off'（fail-closed，同 gateway 侧的兜底值）。"""
+    """读 labs 实验开关。缺行 / 脏值 → 出厂默认（``_LABS_GROUP_AGENTS_DEFAULT``）。"""
     raw = get_agent_config_store().get_owner_setting(_LABS_GROUP_AGENTS_KEY)
     return success_envelope(
-        {"groupAgents": raw if raw in LABS_FLAG_VALUES else "off"},
+        {"groupAgents": raw if raw in LABS_FLAG_VALUES else _LABS_GROUP_AGENTS_DEFAULT},
         request=request,
         source="sqlite",
     )
@@ -416,7 +420,7 @@ async def set_labs_flags(request: Request, body: Optional[dict[str, Any]] = None
             source="sqlite",
         )
     store = get_agent_config_store()
-    previous = store.get_owner_setting(_LABS_GROUP_AGENTS_KEY) or "off"
+    previous = store.get_owner_setting(_LABS_GROUP_AGENTS_KEY) or _LABS_GROUP_AGENTS_DEFAULT
     store.set_owner_setting(_LABS_GROUP_AGENTS_KEY, value)
     logger.info(f"labs group-agents switched: {previous} → {value} (owner UI)")
     return success_envelope({"groupAgents": value}, request=request, source="sqlite")

@@ -3170,7 +3170,7 @@
       "page": {
         "eyebrow": "LABS",
         "title": "Labs",
-        "intro": "Manage default-off experimental capabilities that are still under staged validation."
+        "intro": "Manage experimental capabilities that are still under validation."
       },
       "warning": "Experimental features may be unstable. Once promoted, they move into their regular settings area.",
       "saved": "Experimental setting saved",
