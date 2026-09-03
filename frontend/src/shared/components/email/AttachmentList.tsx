@@ -14,15 +14,17 @@
 // This stays mockup-faithful (the mockup only depicts one PDF per file)
 // while exposing the conversion artefact when the user wants it.
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Download, Eye, Paperclip } from 'lucide-react'
+import { Download, Eye, MoreHorizontal, Paperclip } from 'lucide-react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
 
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { formatFileSize } from '@shared/format'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useLibraryFileActions } from '@shared/components/library/useLibraryFileActions'
+import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
 import { qk } from '@shared/lib/queryKeys'
 import type { EmailDetail } from '@shared/api/types'
 
@@ -54,6 +56,30 @@ export function AttachmentList({ attachments }: Props): React.ReactElement | nul
   // Thumbnails that failed to decode fall back to the type icon so a broken
   // image never ships in the tile.
   const [thumbFailed, setThumbFailed] = useState<ReadonlySet<number>>(() => new Set())
+  // task 09-03 P1-L6 —— 行菜单「另存到资料库」（design §9.4）。选目标文件夹 →
+  // `POST /library/keep-attachment` → 成功 toast 恒带「打开」深链（F3）。预览 / 下载不进菜单：
+  // 它们在这个组件里已经是常驻按钮，再进一次菜单就是同一动作的两条路径。
+  const [menuFor, setMenuFor] = useState<Attachment | null>(null)
+  const menuTrigger = useRef<HTMLButtonElement | null>(null)
+  const libraryActions = useLibraryFileActions()
+  const menuItems = useMemo(
+    (): readonly PopmenuItem[] =>
+      menuFor === null
+        ? []
+        : [
+            {
+              kind: 'action',
+              id: 'keep',
+              label: t('library.actions.keepToLibrary'),
+              onSelect: () =>
+                libraryActions.keepAttachment({
+                  attachmentId: menuFor.id,
+                  filename: menuFor.filename
+                })
+            }
+          ],
+    [libraryActions, menuFor, t]
+  )
 
   // Bucket the rows: visible originals (non-inline, no `derived_from`)
   // become tiles; the rest get indexed by parent so the parent tile can
@@ -289,11 +315,42 @@ export function AttachmentList({ attachments }: Props): React.ReactElement | nul
                 >
                   <Download size={13} strokeWidth={2} />
                 </button>
+                <button
+                  type="button"
+                  aria-label={t('library.actions.keepToLibrary')}
+                  title={t('library.actions.keepToLibrary')}
+                  onClick={(e) => {
+                    menuTrigger.current = e.currentTarget
+                    setMenuFor(a)
+                  }}
+                  className={cn(
+                    'grid place-items-center w-6 h-6 rounded cursor-pointer',
+                    'text-ink-fg-3 hover:text-ink-fg-1 hover:bg-ink-4',
+                    'transition-colors duration-fast'
+                  )}
+                >
+                  <MoreHorizontal size={13} strokeWidth={2} />
+                </button>
               </div>
             </div>
           )
         })}
       </div>
+
+      {menuFor !== null && (
+        <Popmenu
+          open
+          onClose={() => setMenuFor(null)}
+          ariaLabel={t('library.actions.keepToLibrary')}
+          title={menuFor.filename}
+          portal
+          align="end"
+          width={248}
+          triggerRef={menuTrigger}
+          items={menuItems}
+        />
+      )}
+      {libraryActions.dialogs}
 
       {previewSrc !== null && (
         <ImageLightbox src={previewSrc} onClose={() => setPreviewSrc(null)} />
