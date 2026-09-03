@@ -3,7 +3,7 @@
 // store 本体（tab-workspace.ts，波 1 定稿，51 条专测钉着语义）不认识 i18n / 别的 store；
 // 「开标签顺带要做的事」全收敛在这里：
 //   - 结局 toast（dogfood 轮4 起**只剩 rejected 一支**出声；LRU 驱逐静默，见 announceTabResult）；
-//   - locked 的两个来源（compose 打开指向该标签 · AI 抽屉里就它发过消息）+ draft 快照 dirty；
+//   - locked 的两个来源（compose 打开指向该标签 · draft 快照 dirty）；
 //   - per-tab 抽屉开合的记录与恢复（useAIChatPanel.visible 是全局单例，切标签时按目标标签
 //     的 drawerOpen 恢复）。
 //
@@ -178,8 +178,8 @@ useTabWorkspace.subscribe((state) => {
   }
 })
 
-/** draft replace 换锚（保存成功后服务端删旧行建新行）—— 标签、聊天锁集合、待关闭
- *  请求一起迁。🔴 pending 先迁：store 提交会触发上面的 vanish 清理，后迁会被误清。 */
+/** draft replace 换锚（保存成功后服务端删旧行建新行）—— 标签与待关闭请求一起迁。
+ *  🔴 pending 先迁：store 提交会触发上面的 vanish 清理，后迁会被误清。 */
 export function retargetObjectTab(kind: TabKind, oldTargetId: number, newTargetId: number): void {
   if (inert()) return
   const oldId = tabId(kind, oldTargetId)
@@ -188,8 +188,6 @@ export function retargetObjectTab(kind: TabKind, oldTargetId: number, newTargetI
   if (pend !== null && pend.tabId === oldId) {
     useTabCloseGuard.setState({ pending: { tabId: newId, kind, targetId: newTargetId } })
   }
-  // 聊天锁集合按 tab id 键控 —— 跟着迁，否则换锚后重算 locked 丢聊天锁。
-  if (chatActivity.delete(oldId)) chatActivity.add(newId)
   useTabWorkspace.getState().retargetTab(kind, oldTargetId, newTargetId)
   recomputeObjectTabLock(kind, newTargetId)
 }
@@ -216,38 +214,39 @@ export function getObjectTabScroll(kind: TabKind, targetId: number): number {
   return getObjectTab(kind, targetId)?.scrollTop ?? 0
 }
 
-// ── locked：两个来源 + draft 快照 dirty ─────────────────────────────────────
+// ── locked：两个来源 —— compose 打开 · draft 快照 dirty ──────────────────────
 //
+// 语义一句话：**关掉就没了的未保存现场**。
 // ① compose 打开且指向该邮件标签（compose store 订阅驱动，open/close 都重算）；
-// ② 本标签的对象在 AI 抽屉里发过消息（AgentConversation 的 send 路径上报）；
-// ③ 标签快照 **dirty**（写了一半没保存 —— 未保存现场不许被 LRU 淘汰）。
+// ② 标签快照 **dirty**（写了一半没保存 —— 未保存现场不许被 LRU 淘汰）。
 //    🔴 check 波3 续改拍板：判据从「快照在场」收紧到 dirty-only —— 保存过的草稿快照
 //    恒在场（携带 lastSavedAtMs / draftRowId 锚），按在场判会让这类标签永久 locked
 //    且跨重启，攒满上限后 openTab 恒 rejected。clean 快照标签参与 LRU，被淘汰时
 //    快照随标签消亡（草稿已在服务端，重开走 detail 拉取）。
 //
-// ② 是会话级内存集合：重启后 locked 位本身随标签持久化恢复，模块加载时把
-// 「locked 且无 draft」的标签回灌进集合 —— 否则重启后第一次 compose open/close
-// 重算会把上一会话聊出来的锁误清掉。快照在场时锁**不可归因**（可能来自聊天，也可能
-// 是旧版「在场即锁」写下的），不进集合 —— 归因给聊天会让 clean 快照标签永久锁死，
-// 正是本次要收掉的形态；代价是「聊过 + clean 快照」的锁不跨重启，接受。
+// 🔴 dogfood 轮2 删掉了第三个来源「本标签的对象在 AI 抽屉里发过消息」（会话级粘性集合，
+// 只增不减）。三条理由：
+//   - **在 LRU 这条路上**冗余：pickEvictable 本来就跳过当前激活标签，而「正在和它聊天」
+//     的那个必然是激活标签。但在 **replace 这条路上不冗余** —— replaceActiveTab（J/K、
+//     归档后续选）会把当前激活标签就地换掉，锁是当时唯一挡住它的东西。故 0903 返工把
+//     这件事从 locked 里摘出来单独立判据：tab-workspace 按标签自己的 `chatSessionId`
+//     非空挡 replace（只挡就地替换，照常参与 LRU 淘汰），不再借 locked 表达；
+//   - 它唯一的实际效果是：聊过一次之后该标签在本次会话内永不可淘汰，攒够上限就恒
+//     rejected（owner 看到的「请手动关闭一个」）；
+//   - 聊天内容不是未保存现场：会话服务端持久化，历史里找得到；compose 的未发正文只在
+//     内存里，那才是 lock 要保护的东西。
+// 代价（有意接受）：聊过的标签被 LRU 淘汰后，标签↔会话的绑定（chatSessionId）随标签
+// 消失，重开那封邮件会开新会话（旧会话仍在历史里）。
 
-const chatActivity = new Set<string>()
-
-for (const tab of useTabWorkspace.getState().tabs) {
-  if (tab.locked && tab.draft === undefined) chatActivity.add(tab.id)
-}
-
-// 启动归一：存量档案按旧判据写下的「locked 但快照 clean」主动放平 —— 不放平的话，
-// 这些标签要等到某次涉及它的 recompute 才解锁，LRU 满拒在老库上会继续复现。
+// 启动归一：存量档案按旧判据（快照在场即锁 / 聊过即锁）写下的 locked 主动放平 —— 不放平
+// 的话，这些标签要等到某次涉及它的 recompute 才解锁，LRU 满拒在老库上会继续复现。
 //
 // 🔴 这一段**不能**挂 tabsInert()：它跑在模块求值期，而两个模式 flag 由 renderer/main.tsx
 // 在**全部静态 import 求值之后**才 boot（本模块经 router → GlobalShortcuts → tab-commands
 // 进了 App 的静态图），此刻读恒为 false。之所以可以不管：归一写回的是「按当前存档算出来的
-// 同一份标签集」，主窗自己 boot 时也会跑同一遍，内容零差异（且触发条件是 clean 快照 + locked
-// 这种存量形态，正常档案根本不进这个分支）。
+// 同一份标签集」，主窗自己 boot 时也会跑同一遍，内容零差异（写回只动 locked 位，不增删标签）。
 for (const tab of useTabWorkspace.getState().tabs) {
-  if (tab.locked && !chatActivity.has(tab.id) && !draftSnapshotDirty(tab.draft)) {
+  if (tab.locked && !draftSnapshotDirty(tab.draft)) {
     useTabWorkspace.getState().updateTab(tab.id, { locked: false })
   }
 }
@@ -262,16 +261,14 @@ export function recomputeObjectTabLock(kind: TabKind, targetId: number): void {
   if (inert()) return
   const tab = getObjectTab(kind, targetId)
   if (tab === null) return
-  const locked =
-    composeLocksTarget(kind, targetId) || chatActivity.has(tab.id) || draftSnapshotDirty(tab.draft)
+  const locked = composeLocksTarget(kind, targetId) || draftSnapshotDirty(tab.draft)
   if (tab.locked !== locked) useTabWorkspace.getState().updateTab(tab.id, { locked })
 }
 
-/** AI 抽屉里带着这个对象发出一轮（AgentConversation 的 send 路径调用）。幂等。 */
-export function notifyTabChatActivity(kind: TabKind, targetId: number | null): void {
-  if (inert() || targetId === null) return
-  chatActivity.add(tabId(kind, targetId))
-  recomputeObjectTabLock(kind, targetId)
+/** AI 抽屉里带着这个对象发出一轮（AgentConversation 的 send 路径调用）。 */
+export function notifyTabChatActivity(_kind: TabKind, _targetId: number | null): void {
+  // 🔴 dogfood 轮2 起是**空操作**：聊天不再产生 locked（理由见上面 locked 段）。签名与
+  // 导出保留，等 AgentConversation 那侧一并清理调用点。
 }
 
 /** draft 快照写入（compose 面板卸载时的现场快照）。顺带重算 locked。 */
@@ -350,8 +347,7 @@ useAIChatPanel.subscribe((state, prev) => {
   ws.updateTab(tab.id, { drawerOpen: state.visible })
 })
 
-/** 测试用复位 —— 模块级集合与待关闭请求跨用例存活。 */
+/** 测试用复位 —— 待关闭请求是模块级状态，跨用例存活。 */
 export function _resetTabBridgeForTest(): void {
-  chatActivity.clear()
   clearTabCloseRequest()
 }

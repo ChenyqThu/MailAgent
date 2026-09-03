@@ -182,7 +182,7 @@ describe('openTab —— 满了之后的淘汰', () => {
     expect(r.outcome === 'opened' && r.evicted).toEqual([{ id: 'email:2', title: '邮件 2' }])
   })
 
-  test('锁定的那个不参与淘汰（写回复中 / 抽屉聊过）', () => {
+  test('锁定的那个不参与淘汰（写回复中 / 草稿写了一半）', () => {
     s().setMaxTabs(4)
     openEmails(4)
     s().updateTab('email:1', { locked: true })
@@ -479,6 +479,37 @@ describe('replaceActiveTab', () => {
     expect(r.outcome).toBe('opened')
     expect(s().tabs.map((t) => t.id)).toEqual(['email:1', 'email:2'])
     expect(s().tabs[0].draft).toEqual({ body: '写到一半的回复' })
+  })
+
+  // 0903 返工：「绑着一段对话」是**独立于 locked** 的不原位替换判据（判据 = chatSessionId
+  // 非空 = 抽屉里真的产生了会话）。挡的是「在抽屉里聊完这封、顺手按一下 J，那段对话的落脚
+  // 标签当场被下一封吃掉」—— 原位变身有意不进最近关闭栈，⌘⇧T 也捞不回。
+  test('🔴 绑着对话的标签 → 不原位变身，改开新标签', () => {
+    openEmails(1)
+    s().updateTab('email:1', { chatSessionId: 42 })
+    const r = s().replaceActiveTab('email', 2, '邮件 2')
+    expect(r.outcome).toBe('opened')
+    expect(s().tabs.map((t) => t.id)).toEqual(['email:1', 'email:2'])
+    expect(s().tabs[0].chatSessionId).toBe(42)
+  })
+
+  test('🔴 绑着对话只挡原位变身，**不**挡 LRU 淘汰（它不进 locked 的全部意义）', () => {
+    s().setMaxTabs(MAX_TABS_MIN)
+    openEmails(MAX_TABS_MIN)
+    s().updateTab('email:1', { chatSessionId: 42 })
+    const r = s().openTab('email', 9, '邮件 9')
+    expect(r.outcome).toBe('opened')
+    // 最久没看的仍是聊过的 email:1 —— 它照常被挤掉（进最近关闭栈，⌘⇧T 捞得回）。
+    expect(s().tabs.map((t) => t.id)).toEqual(['email:2', 'email:3', 'email:4', 'email:9'])
+  })
+
+  test('对话解绑（绑定的会话被删 → 写回 null）后又能就地变身', () => {
+    openEmails(1)
+    s().updateTab('email:1', { chatSessionId: 42 })
+    s().updateTab('email:1', { chatSessionId: undefined })
+    const r = s().replaceActiveTab('email', 2, '邮件 2')
+    expect(r.outcome).toBe('replaced')
+    expect(s().tabs.map((t) => t.id)).toEqual(['email:2'])
   })
 
   test('目标已经开在别的标签里 → 只激活它，当前标签原样保留', () => {

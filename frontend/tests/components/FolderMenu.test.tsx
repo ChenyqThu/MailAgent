@@ -11,6 +11,7 @@
 //   - discover 未就绪的 seed 行可点 + 🔴 顺序 = whitelist 数组序（sorted() 变异必红）
 //   - per-folder 图标（v62 folder_pref.icon），缺行/不认识的 key 退回兜底 folder
 //   - pin: 钉到列表头第一行、上限 4、再点取消
+//   - pin chip 的未读红点（0903 dogfood E3）: 口径是**未读**的档才给点
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -515,5 +516,80 @@ describe('文件夹选择器 — pin', () => {
     expect(chip).not.toBeNull()
     fireEvent.click(chip as HTMLButtonElement)
     await waitFor(() => expect(useEmailFilter.getState().view).toBe('drafts'))
+  })
+})
+
+// ── pin chip 的未读红点（0903 dogfood E3）──────────────────────────────────
+//
+// chip 只有 28px，红点只回答「有没有未读」，不显数字（数字在下拉行尾与折叠态 peek 里）。
+//
+// 🔴 内建视图的判据不是「计数 > 0」而是「计数的口径是未读」——`mailboxViewCount` 给
+// 草稿箱 / 已标旗的是**总数**，拿总数画点会把「草稿箱有 5 封」读成「有未读」。
+describe('pin chip — 未读红点', () => {
+  /** 收件箱有未读 · 草稿箱只有总数（零未读）· Jira 有未读 · Quiet 零未读。 */
+  const CHIP_SUMMARIES = [
+    mb('收件箱', { total: 100, unread: 7 }),
+    mb('草稿箱', { total: 5, unread: 0 }),
+    mb('Jira', { total: 80, unread: 9 }),
+    mb('Quiet', { total: 12, unread: 0 })
+  ]
+
+  /** 钉满四枚（= 上限）后渲染；返回 container。 */
+  async function renderChips(): Promise<HTMLElement> {
+    mockGetWhitelist.mockResolvedValue({ folders: ['Jira', 'Quiet'] })
+    mockDiscover.mockResolvedValue(
+      discoverData(
+        [fi('Jira', 'Jira', null, null), fi('Quiet', 'Quiet', null, null)],
+        ['Jira', 'Quiet']
+      )
+    )
+    mockListMailboxes.mockResolvedValue(CHIP_SUMMARIES)
+    usePinnedFolders.setState({
+      pinned: [
+        { kind: 'view', view: 'inbox' },
+        { kind: 'view', view: 'drafts' },
+        { kind: 'folder', mailbox: 'Jira' },
+        { kind: 'folder', mailbox: 'Quiet' }
+      ]
+    })
+    const { container } = renderHeader()
+    // settle 锚点 = 「该有点的两枚都到了」。红点只在 listMailboxes 回来后才可能出现，
+    // 不等就断言「某枚没有点」是恒绿装饰。锚点里带上收件箱（内建视图那枚只可能由
+    // listMailboxes 的数据点亮），所以锚点过了 = 数据确实落到 chip 上了。
+    await waitFor(() => {
+      expect(
+        chip(container, '收件箱（有未读）').querySelector('[data-pin-unread-dot]')
+      ).toBeTruthy()
+      expect(chip(container, 'Jira（有未读）').querySelector('[data-pin-unread-dot]')).toBeTruthy()
+    })
+    return container
+  }
+
+  /** 第一行里可及名为 name 的那枚 chip。 */
+  function chip(container: HTMLElement, name: string): HTMLElement {
+    const el = container.querySelector<HTMLElement>(`button[aria-label="${name}"]`)
+    if (!el) throw new Error(`chip not found: ${name}`)
+    return el
+  }
+
+  test('自定义文件夹有未读 → chip 有点, 可及名补「有未读」', async () => {
+    const container = await renderChips()
+    expect(chip(container, 'Jira（有未读）').querySelector('[data-pin-unread-dot]')).toBeTruthy()
+  })
+
+  test('自定义文件夹零未读 → chip 无点, 可及名不变', async () => {
+    const container = await renderChips()
+    // total 12 —— 拿总数当判据的变异在这里必红。
+    expect(chip(container, 'Quiet').querySelector('[data-pin-unread-dot]')).toBeNull()
+  })
+
+  test('内建视图 收件箱（未读口径）有未读 → chip 有点', async () => {
+    const container = await renderChips()
+    expect(chip(container, '收件箱（有未读）').querySelector('[data-pin-unread-dot]')).toBeTruthy()
+  })
+
+  test('🔴 内建视图 草稿箱是总数口径 → 有 5 封也不给点', async () => {
+    const container = await renderChips()
+    expect(chip(container, '草稿箱').querySelector('[data-pin-unread-dot]')).toBeNull()
   })
 })

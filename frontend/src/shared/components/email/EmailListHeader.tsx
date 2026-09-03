@@ -7,7 +7,8 @@
 // CSS classes (.inbox-tabs / .filter-btn / .list-cta) live in index.css。
 //
 // task 08-27 P1 Lane B —— 两行列表头（原型 TabAnatomy「列表头：邮件双行」）：
-//   第一行  文件夹选择器（下拉，取代常驻文件夹树）· pin 的文件夹图标 · 写邮件实心 CTA
+//   第一行  文件夹选择器（下拉，取代常驻文件夹树）· pin 的文件夹图标（有未读带红点）
+//           · 写邮件实心 CTA
 //   第二行  重点/其他分栏 + 「N 未读 · 共 M」左对齐紧跟其后；批量与筛选推到右端
 // 🔴 非收件箱视图只是分栏消失，第二行**行高不变**（高度由右端 28px 工具钮定，不由
 // 24px 分栏定）—— 切文件夹时列表不能跳。老的自定义文件夹面包屑随之退役：当前文件夹
@@ -25,6 +26,7 @@
 //     这种自相矛盾的组合出现在菜单里。
 
 import { useCallback, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, Filter, ListChecks } from 'lucide-react'
 
@@ -35,6 +37,7 @@ import {
   type EmailCategory
 } from '@shared/state/email-filter'
 import { useBatch } from '@shared/state/batch'
+import { useMailApi } from '@shared/hooks/useMailApi'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { useSyncedFolderTree } from '@shared/hooks/useSyncedFolderTree'
@@ -44,6 +47,8 @@ import { cn } from '@shared/lib/cn'
 import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { EMAIL_SORT_KEYS, type EmailSortKey } from '@shared/lib/emailSort'
 import { flattenFolderTree } from '@shared/lib/folderTree'
+import { folderUnreadCount, mailboxViewCount, viewCountIsUnread } from '@shared/lib/mailboxCounts'
+import { qk } from '@shared/lib/queryKeys'
 import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
 import { FolderGlyph, SquarePenIcon } from '@shared/components/icons'
 import { navLabel } from '@shared/navigation/registry'
@@ -190,6 +195,17 @@ export function EmailListHeader({
     toastInfo(t('list.folder.pinLimit', { count: MAX_PINNED_FOLDERS }))
   }, [t])
 
+  // pin chip 的未读点数据源 —— 与下拉（FolderMenu）、折叠态 peek、侧栏徽标同一份缓存
+  // （SSE 失效 + Sidebar 兜底轮询已经在喂这个 key），这里只是又一个 observer。
+  // 🔴 不加 `enabled`：chip 常驻第一行，下拉关着时也得知道有没有未读。
+  const mailApi = useMailApi()
+  const { data: mailboxData } = useQuery({
+    queryKey: qk.mailboxes(),
+    queryFn: () => mailApi.email.listMailboxes(),
+    staleTime: 30_000
+  })
+  const mailboxes = mailboxData ?? []
+
   // pin 图标解析：内建视图取 registry 的图标/标签；自定义文件夹按**当前**树解析
   // （文件夹被移出白名单时退回兜底图标 + 存下的完整名，不自动清 pin）。
   const flatFolders = flattenFolderTree(tree)
@@ -202,6 +218,9 @@ export function EmailListHeader({
         // 图标不裹 AnimatedIconActiveProvider —— standalone 档（默认 trigger='self'）
         // 自己挂 hover，裹上等于把动画钉死在 normal。
         icon: entry ? entry.icon() : null,
+        // 🔴 判据不是「计数 > 0」而是「这一档的计数口径是未读」（口径单源在
+        // lib/mailboxCounts）：草稿箱给的是总数，拿它画红点会把「草稿箱有 1 封」读成「有未读」。
+        unread: viewCountIsUnread(pin.view) && (mailboxViewCount(mailboxes, pin.view) ?? 0) > 0,
         active: customMailbox === null && view === pin.view,
         onClick: () => selectView(pin.view)
       }
@@ -210,6 +229,9 @@ export function EmailListHeader({
     return {
       pin,
       label: node?.displayName ?? pin.mailbox,
+      // 未读判据用**存下的完整名**（= email_metadata.mailbox），不用 node —— 文件夹被移出
+      // 白名单时 node 解析不到，但 pin 还在，chip 也还在。
+      unread: folderUnreadCount(mailboxes, pin.mailbox) > 0,
       icon: (
         <FolderGlyph
           iconKey={node ? prefMap.get(node.imapName)?.icon : null}
@@ -469,25 +491,42 @@ export function EmailListHeader({
           <span className="sr-only">{t('list.folder.trigger')}</span>
         </button>
         <div className="flex-1" />
-        {pinChips.map((chip) => (
-          <button
-            key={pinnedFolderKey(chip.pin)}
-            type="button"
-            onClick={chip.onClick}
-            title={chip.label}
-            aria-label={chip.label}
-            aria-current={chip.active ? 'true' : undefined}
-            className={cn(
-              'shrink-0 w-7 h-7 rounded-[var(--r-ctl)] flex items-center justify-center',
-              'transition-colors duration-fast',
-              chip.active
-                ? 'text-coral bg-coral/10'
-                : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3'
-            )}
-          >
-            {chip.icon}
-          </button>
-        ))}
+        {pinChips.map((chip) => {
+          // 有未读时可及名补一句 —— chip 只有图标，红点对读屏是不可见的。
+          const chipName = chip.unread
+            ? t('list.folder.pinUnread', { name: chip.label })
+            : chip.label
+          return (
+            <button
+              key={pinnedFolderKey(chip.pin)}
+              type="button"
+              onClick={chip.onClick}
+              title={chipName}
+              aria-label={chipName}
+              aria-current={chip.active ? 'true' : undefined}
+              className={cn(
+                'relative shrink-0 w-7 h-7 rounded-[var(--r-ctl)] flex items-center justify-center',
+                'transition-colors duration-fast',
+                chip.active
+                  ? 'text-coral bg-coral/10'
+                  : 'text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3'
+              )}
+            >
+              {chip.icon}
+              {chip.unread && (
+                // 未读点 —— 6px accent 圆点，与 rail 的 `.railbadge[data-shape=dot]` 和列表
+                // 行的未读点同一套 token 与尺寸（不显数字：chip 只有 28px，数字在下拉与
+                // peek 浮窗里已经有了）。2px 底色描边把它从图标笔画里切出来，同 rail。
+                <span
+                  data-pin-unread-dot
+                  aria-hidden="true"
+                  className="absolute top-[3px] right-[3px] w-1.5 h-1.5 rounded-full bg-coral/100"
+                  style={{ boxShadow: '0 0 0 2px rgb(var(--ink-0) / 0.6)' }}
+                />
+              )}
+            </button>
+          )
+        })}
         {pinChips.length > 0 && (
           <span className="shrink-0 w-px h-4 mx-0.5 bg-ink-border" aria-hidden="true" />
         )}

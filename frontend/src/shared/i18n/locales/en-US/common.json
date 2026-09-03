@@ -58,7 +58,8 @@
       "unpin": "Unpin",
       "pinNamed": "Pin “{name}” to the list header",
       "unpinNamed": "Unpin “{name}” from the list header",
-      "pinLimit": "You can pin at most {count} folders to the list header"
+      "pinLimit": "You can pin at most {count} folders to the list header",
+      "pinUnread": "{name} (unread)"
     },
     "priority": {
       "critical": "Critical",
@@ -3019,7 +3020,7 @@
           "label": "Tab limit",
           "meta": "How many email / matter tabs can stay open at once"
         },
-        "note": "Opening one more past the limit closes the least recently viewed tab and tells you which one. Tabs with a draft in progress, or that you have chatted with in the AI drawer, are never closed automatically. Lowering the limit does not close anything retroactively — it applies the next time you open a tab."
+        "note": "Opening one more past the limit closes the least recently viewed tab. Only an unsaved reply or draft keeps a tab from closing automatically; a tab you have chatted with in the AI drawer closes like any other — it just isn't reused when you move to the next or previous email. Lowering the limit does not close anything retroactively — it applies the next time you open a tab."
       },
       "bodyText": {
         "title": "Body text",
@@ -7108,7 +7109,7 @@
     "locked": "Unfinished work here — won't be auto-closed",
     "dirty": "Unsaved changes here",
     "toast": {
-      "full": "Every tab is in use (draft in progress or chatted) — close one first",
+      "full": "The other tabs all still have unfinished work — close one first",
       "targetGone": "That email or draft no longer exists — its tab was closed"
     }
   },

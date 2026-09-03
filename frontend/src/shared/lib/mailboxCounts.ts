@@ -21,6 +21,18 @@ import { isDraftsMailbox, mailboxFilterLabels, mailboxForView } from './mailboxS
 
 type CountField = 'total' | 'unread' | 'flagged'
 
+/** 内建视图 → 计数口径（null = 这一档不显计数）。**顶部那段口径描述的机器可读形态**：
+ *  `mailboxViewCount` 自己读它取字段，消费方要判「这个数是不是未读」也读它
+ *  （`viewCountIsUnread`），不许在别处再抄一份视图名单 —— 抄第二份就会出现
+ *  「口径改了、红点还按旧名单画」。EmailView 加一档而这里漏填 → 缺键，typecheck 当场红。 */
+const VIEW_COUNT_FIELD = {
+  inbox: 'unread',
+  drafts: 'total',
+  flagged: 'flagged',
+  all: 'unread',
+  outbox: null
+} as const satisfies Record<EmailView, CountField | null>
+
 /** 按判定集求和：内建 canonical → 变体全集；自定义文件夹名 → 单元素精确匹配。 */
 function sumByLabels(
   summaries: readonly MailboxSummary[],
@@ -41,26 +53,26 @@ function sumCrossMailbox(summaries: readonly MailboxSummary[], field: CountField
   return sum
 }
 
+/** 这一档的计数口径是不是「未读」。红点这类「有没有未读」的判据读它 —— 判据不是
+ *  「计数 > 0」：草稿箱给的是总数、已标旗给的是旗标数，拿它们画红点会把「草稿箱有 5 封」
+ *  读成「有未读」。 */
+export function viewCountIsUnread(view: EmailView): boolean {
+  return VIEW_COUNT_FIELD[view] === 'unread'
+}
+
 /** 内建视图行的计数；null = 这一档不显计数（发件箱）。 */
 export function mailboxViewCount(
   summaries: readonly MailboxSummary[],
   view: EmailView
 ): number | null {
-  switch (view) {
-    case 'inbox':
-    case 'drafts': {
-      // view↔mailbox 映射的单源仍在 mailboxSemantics，这里不手写 canonical 字面量。
-      const mailbox = mailboxForView(view)
-      if (mailbox === null) return null
-      return sumByLabels(summaries, mailbox, view === 'inbox' ? 'unread' : 'total')
-    }
-    case 'flagged':
-      return sumCrossMailbox(summaries, 'flagged')
-    case 'all':
-      return sumCrossMailbox(summaries, 'unread')
-    case 'outbox':
-      return null
-  }
+  const field = VIEW_COUNT_FIELD[view]
+  if (field === null) return null
+  // 跨邮箱虚拟视图（已标旗 / 所有邮件）没有具体 mailbox，走全库求和。
+  if (view === 'flagged' || view === 'all') return sumCrossMailbox(summaries, field)
+  // view↔mailbox 映射的单源仍在 mailboxSemantics，这里不手写 canonical 字面量。
+  const mailbox = mailboxForView(view)
+  if (mailbox === null) return null
+  return sumByLabels(summaries, mailbox, field)
 }
 
 /** 自定义同步文件夹行的计数 = 该文件夹的未读数（过滤 key 是完整 display_name）。 */

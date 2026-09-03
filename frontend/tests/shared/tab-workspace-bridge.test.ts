@@ -1,5 +1,5 @@
 // tab-workspace-bridge 接线层测试（08-27 P2 Lane W）：结局 toast、跨类 replace 保护、
-// locked 的三来源重算（compose / 抽屉聊过 / draft 快照）、per-tab 抽屉开合记录与恢复、
+// locked 的两来源重算（compose / draft 快照 dirty）、per-tab 抽屉开合记录与恢复、
 // popout 全线 no-op。
 
 import { beforeEach, describe, expect, test, vi } from 'vitest'
@@ -124,7 +124,7 @@ describe('openObjectTab / replaceObjectTab', () => {
   })
 })
 
-describe('locked 三来源', () => {
+describe('locked 两来源', () => {
   test('compose 打开指向标签 → locked；关闭且无其他来源 → 解锁', () => {
     bridge.openObjectTab('email', 1)
     useComposeStore.getState().openCompose(1, 'reply')
@@ -133,14 +133,30 @@ describe('locked 三来源', () => {
     expect(useTabWorkspace.getState().tabs[0].locked).toBe(false)
   })
 
-  test('抽屉聊过（notifyTabChatActivity）→ locked，且 compose 开合不误清', () => {
-    bridge.openObjectTab('email', 1)
-    bridge.notifyTabChatActivity('email', 1)
-    expect(useTabWorkspace.getState().tabs[0].locked).toBe(true)
+  test('compose 打开指向的标签不参与 LRU 淘汰（未发正文只在内存里，关掉就没了）', () => {
+    useTabWorkspace.setState({ maxTabs: 4 })
+    for (let i = 1; i <= 4; i++) bridge.openObjectTab('email', i, `邮件${i}`)
     useComposeStore.getState().openCompose(1, 'reply')
-    useComposeStore.getState().closeCompose()
-    // 聊过的锁不随 compose 关闭消失
-    expect(useTabWorkspace.getState().tabs[0].locked).toBe(true)
+    bridge.openObjectTab('email', 5, '邮件5')
+    const ids = useTabWorkspace.getState().tabs.map((t) => t.id)
+    // email:1 最老但锁着 → 淘汰目标落到下一个未锁的
+    expect(ids).toContain('email:1')
+    expect(ids).not.toContain('email:2')
+  })
+
+  // dogfood 轮2 拍板：删掉「抽屉里聊过」这个来源。在 LRU 这条路上它是冗余的（pickEvictable
+  // 本就跳过当前激活标签，而「正在和它聊天」的必然是激活标签），唯一效果是聊过之后标签在
+  // 本次会话内永不可淘汰、攒满上限恒 rejected（owner 撞到的「请手动关闭一个」）。
+  // 0903 返工补：它在 **replace 那条路上不冗余** —— 那件事已改由 tab-workspace 按
+  // `chatSessionId` 单独挡（只挡就地替换，不挡淘汰），闸在 tests/shared/tab-workspace.test.ts。
+  test('抽屉里聊过不再 locked，照常参与 LRU 淘汰（notifyTabChatActivity 已是空操作）', () => {
+    useTabWorkspace.setState({ maxTabs: 4 })
+    bridge.openObjectTab('email', 1, '聊过的邮件')
+    bridge.notifyTabChatActivity('email', 1)
+    expect(useTabWorkspace.getState().tabs[0].locked).toBe(false)
+    for (let i = 2; i <= 4; i++) bridge.openObjectTab('email', i, `邮件${i}`)
+    bridge.openObjectTab('email', 5, '邮件5')
+    expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'email:1')).toBe(false)
   })
 
   test('draft 快照 dirty → locked；清快照后解锁（check 波3：判据 dirty-only）', () => {
@@ -264,7 +280,6 @@ describe('popout no-op', () => {
     usePopoutMode.setState({ isPopout: true, emailId: 1 })
     bridge.openObjectTab('email', 1)
     bridge.replaceObjectTab('email', 2)
-    bridge.notifyTabChatActivity('email', 1)
     bridge.openSearchTab()
     expect(useTabWorkspace.getState().tabs).toHaveLength(0)
   })
@@ -278,7 +293,6 @@ describe('detached（轻窗）no-op', () => {
     useDetachedMode.setState({ isDetached: true, target: { kind: 'email', emailId: 1 } })
     bridge.openObjectTab('email', 1)
     bridge.replaceObjectTab('email', 2)
-    bridge.notifyTabChatActivity('email', 1)
     bridge.openSearchTab()
     bridge.setObjectTabTitle('email', 1, '标题')
     bridge.saveObjectTabScroll('email', 1, 120)
@@ -355,14 +369,14 @@ describe('requestCloseTab（dogfood 波3 关闭守卫入口）', () => {
 })
 
 describe('retargetObjectTab（dogfood 波3 replace 换锚接线）', () => {
-  test('标签换锚 + 聊天锁集合跟迁（重算 locked 不丢聊天锁）', () => {
+  test('标签换锚 + dirty 草稿的锁跟到新 id（换锚后的重算读的是迁过去的快照）', () => {
     bridge.openObjectTab('email', 99, '草稿')
-    bridge.notifyTabChatActivity('email', 99)
+    bridge.saveObjectTabDraft('email', 99, { kind: 'compose', dirty: true })
     expect(useTabWorkspace.getState().tabs[0].locked).toBe(true)
     bridge.retargetObjectTab('email', 99, 200)
     const tabs = useTabWorkspace.getState().tabs
     expect(tabs.map((t) => t.id)).toEqual(['email:200'])
-    // 聊天锁按 tab id 键控 —— 不迁的话这里的重算会把锁抹掉
+    // 快照随标签迁 ⇒ 换锚末尾的 recomputeObjectTabLock 仍判 dirty，锁不掉
     expect(tabs[0].locked).toBe(true)
   })
 
@@ -385,11 +399,11 @@ describe('retargetObjectTab（dogfood 波3 replace 换锚接线）', () => {
   })
 })
 
-describe('重启回灌与归一（check 波3：dirty-only 判据对存量档案生效）', () => {
-  test('locked+clean 快照放平；locked 无快照回灌聊天锁；locked+dirty 维持', async () => {
+describe('重启归一（dirty-only 判据对存量档案生效）', () => {
+  test('locked+clean 快照放平；locked 无快照（旧聊天锁）也放平；locked+dirty 维持', async () => {
     // 直接写存档 → resetModules → 重新 import：tab-workspace 先 hydrate，bridge 模块
-    // init 跑「聊天锁回灌 + 启动归一」。旧判据「快照在场即锁」写下的 locked+clean 行
-    // 必须在这里放平，否则存量库的 LRU 满拒要等到某次 recompute 才收敛。
+    // init 跑启动归一。旧判据（「快照在场即锁」/「聊过即锁」）写下的 locked 行必须在
+    // 这里放平，否则存量库的 LRU 满拒要等到某次 recompute 才收敛。
     memoryStore['mailagent.tabs.v1'] = JSON.stringify({
       v: 1,
       tabs: [
@@ -407,8 +421,8 @@ describe('重启回灌与归一（check 波3：dirty-only 判据对存量档案�
     const t1 = tabs.find((t) => t.id === 'email:1')
     expect(t1?.locked).toBe(false)
     expect(t1?.draft).toBeDefined()
-    // 无快照：归因聊天锁，保留
-    expect(tabs.find((t) => t.id === 'email:2')?.locked).toBe(true)
+    // 无快照：只可能来自上一会话的聊天锁 / compose 锁（compose 不跨重启）—— 一律放平
+    expect(tabs.find((t) => t.id === 'email:2')?.locked).toBe(false)
     // dirty：维持
     expect(tabs.find((t) => t.id === 'email:3')?.locked).toBe(true)
   })

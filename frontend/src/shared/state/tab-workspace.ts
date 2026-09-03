@@ -116,14 +116,16 @@ export interface TabDescriptor {
   readonly title: string
   /** LRU 依据：最后一次成为激活标签的单调时间戳。 */
   readonly lastActiveAt: number
-  /** 正在写回复 / 抽屉里聊过 → 不参与自动淘汰（标签上画琥珀点）。 */
+  /** 有关掉就没了的未保存现场（写回复中 / 草稿写了一半）→ 不参与自动淘汰（标签上画琥珀点）。
+   *  判据单源在 tab-workspace-bridge::recomputeObjectTabLock。 */
   readonly locked: boolean
   readonly draft?: DraftSnapshot
   readonly drawerOpen: boolean
   readonly scrollTop: number
   /** 09-02 —— 这个对象标签绑定的 dock 会话（AI Chat 浮窗）。FAB 打开 dock / dock 开着切到本标签时：
    *  绑了就回到它，没绑就开新会话并在首发拿到真 id 后写回。只有 email / matter 标签会写（写侧
-   *  tab-workspace-bridge::bindTabChatSession）。 */
+   *  tab-workspace-bridge::bindTabChatSession）。
+   *  非空还兼作「这个标签绑着一段对话」的判据：J/K 不把它就地换掉（见 replaceActiveTab）。 */
   readonly chatSessionId?: number
 }
 
@@ -146,7 +148,7 @@ export interface EvictedTab {
  *  - `opened`：开了新标签；`evicted` 非空 = 顺带**静默**关掉了谁（dogfood 轮4 拍板：
  *    满员驱逐不再出 toast —— 被挤掉的进最近关闭栈，⌘⇧T 可找回；evicted 信息保留
  *    给测试与将来可能的「刚关掉了 X」轻提示用）；
- *  - `rejected`：满了且**全部锁定**（写回复中 / 抽屉聊过），没开也没关，提示用户先关一个。 */
+ *  - `rejected`：满了且**全部锁定**（写回复中 / 草稿写了一半），没开也没关，提示用户先关一个。 */
 export type OpenTabResult =
   | { readonly outcome: 'activated'; readonly id: TabId }
   | { readonly outcome: 'opened'; readonly id: TabId; readonly evicted: readonly EvictedTab[] }
@@ -193,9 +195,12 @@ export interface TabWorkspaceState {
   /** J/K 导航、归档后续选 —— 在**当前激活的对象标签里原位换目标**，不是每按一次开一个
    *  （连按十次 J 开十个标签会把 LRU 打爆）。三条分支：
    *  - 目标已经开在**别的**标签里 → 只激活它，当前标签原样保留（不关不改）；
-   *  - 当前激活的是主标签，**或**当前标签已锁定 → 退回 openTab 语义（开新的）。
+   *  - 当前激活的是主标签、当前标签已锁定、**或当前标签绑着一段对话**（chatSessionId 非空）
+   *    → 退回 openTab 语义（开新的）。
    *    🔴 锁定态不原位变身：锁定的含义就是「这里有没完成的工作」，变身会把草稿快照
    *    与抽屉状态一起抹掉 —— 连自动淘汰都不许碰的东西，J 一下更不该碰。
+   *    🔴 绑着对话的也不原位变身，但那是**另一个**判据（不是 locked）：聊过不算未保存
+   *    现场，它照常参与 LRU 淘汰，只是不该被 J/K 就地吃掉。
    *  - 其余 → 原位变身：id 按新 kind+targetId 重算，title 换，lastActiveAt 刷新，
    *    draft / scrollTop / drawerOpen / locked 一律回默认（新目标没写过任何东西）。
    *  变身掉的旧目标**不进最近关闭栈** —— 否则翻十封邮件就把 ⌘⇧T 的队列灌满，
@@ -476,9 +481,20 @@ export const useTabWorkspace = create<TabWorkspaceState>((set, get) => {
       const state = get()
       const current = selectActiveTab(state)
       const id = tabId(kind, targetId)
-      // 主标签激活 / 当前标签锁定 / 目标已经开在别处 —— 三种都退回 openTab：
-      // 它已经把「去重只激活」「满了先淘汰」「全锁定就拒绝」都算全了。
-      if (current === null || current.locked || state.tabs.some((t) => t.id === id)) {
+      // 主标签激活 / 当前标签锁定 / 当前标签绑着一段对话 / 目标已经开在别处 —— 四种都退回
+      // openTab：它已经把「去重只激活」「满了先淘汰」「全锁定就拒绝」都算全了。
+      //
+      // 🔴 「绑着对话」这条只挡原位变身，不进 locked（locked 是「关掉就没了的未保存现场」，
+      // 聊天在服务端留着，不是）。挡 replace 比挡 LRU 更要紧：LRU 淘汰的是**别的**标签、
+      // 且被挤掉的进最近关闭栈（⌘⇧T 捞得回），而原位变身吃掉的是**当前这个**、还
+      // 有意不 pushClosed（下方 commit）—— 在抽屉里聊完这封再顺手按一下 J，那段对话的
+      // 落脚标签当场没了且撤不回。
+      if (
+        current === null ||
+        current.locked ||
+        current.chatSessionId !== undefined ||
+        state.tabs.some((t) => t.id === id)
+      ) {
         return get().openTab(kind, targetId, title)
       }
       const stamp = nextStamp()
