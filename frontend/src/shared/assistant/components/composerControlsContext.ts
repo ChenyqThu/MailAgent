@@ -8,7 +8,7 @@ import type { ReportAgentConfig, SearchHit } from '@shared/api/types'
 import type { ChatAttachment } from '@shared/lib/chat-attachments'
 import type { ComposerEffortControl } from '@shared/hooks/useComposerEffort'
 import type { ComposerModelOption } from '@shared/hooks/useComposerModels'
-import type { MatterMentionRef } from '@shared/lib/mention-context'
+import type { LibraryMentionRef, MatterMentionRef } from '@shared/lib/mention-context'
 
 export interface ChatComposerControls {
   /** WP-16b (task 08-05) — effort 档位控件的数据 + 选档回调（`useComposerEffort` 的产物）。
@@ -62,6 +62,17 @@ export interface ChatComposerControls {
   matterMentions?: ReadonlyArray<MatterMentionRef>
   onAddMatterMention?: (matter: MatterMentionRef) => void
   onRemoveMatterMention?: (publicId: string) => void
+  /** P2-L8（资料库 epic）— @ 资料库文件。与 matterMentions 同类（可信本地元数据），同样
+   *  **只带标识**（file_id / path / name / size_bytes）：库里存着邮件附件的解析正文，把它当可信
+   *  元数据注入等于给不可信内容开一条绕过邮件围栏的通路 —— 判据与代价写在
+   *  `mention-context.ts::LibraryMentionRef`，正文由模型自己调 `library_read` 读（那条腿有
+   *  UNTRUSTED_LIBRARY_FILE 围栏）。
+   *
+   *  三件套**可选**：不供给 → 「资料库」这一组整个不出现（`@` 仍是原来的三组，与引入前逐字
+   *  一致）。资料库没有功能总闸，所以「供不供」就是这一组唯一的门。 */
+  libraryMentions?: ReadonlyArray<LibraryMentionRef>
+  onAddLibraryMention?: (file: LibraryMentionRef) => void
+  onRemoveLibraryMention?: (fileId: number) => void
   // C2-② attachments — local text/binary chips. Text content (≤5k chars) is prepended as an untrusted
   // block; binary chips are metadata-only (the model acknowledges but can't read them).
   attachments: ReadonlyArray<ChatAttachment>

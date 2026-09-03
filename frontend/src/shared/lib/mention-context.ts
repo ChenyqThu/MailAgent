@@ -83,6 +83,53 @@ export function buildMatterMentionEnvelope(matters: ReadonlyArray<MatterMentionR
   ].join('\n')
 }
 
+/** The identity-only projection of a library file for an @ mention (P2-L8, 资料库 epic).
+ *
+ *  🔴 **Deliberately four fields, and none of them is content.** The library holds email
+ *  attachments (extracted text of untrusted mail) alongside the user's own documents; injecting a
+ *  file's text — or even the search snippet — as trusted metadata would open a bypass around the
+ *  `~~~email-excerpt` fence in this very file. The model reads content with `library_read`, which
+ *  fences it as UNTRUSTED_LIBRARY_FILE. Narrowing at the type keeps that guarantee mechanical.
+ *
+ *  Not structural: `LibrarySearchHit` calls these `id` / `filename`, so the adapter maps the row
+ *  explicitly (`useLibraryMentionAdapter`) — that map IS the single narrowing point. */
+export interface LibraryMentionRef {
+  file_id: number
+  path: string
+  name: string
+  /** Null when the server has no size for the row; rendered as an empty attribute. */
+  size_bytes: number | null
+}
+
+/** Trusted local metadata for explicit @ library-file references. Same class as
+ *  `buildAgentMentionEnvelope` / `buildMatterMentionEnvelope` (trusted, sits before the untrusted
+ *  fences), and the same shape of instruction: hand the model an EXACT id and name the tool that
+ *  resolves it.
+ *
+ *  🔴 The "read it again whenever you need it" wording is load-bearing, not politeness: an
+ *  approval resume re-runs the turn WITHOUT `injectedContext` (`approvalResume.ts` — existing
+ *  behavior, deliberately not changed here), so this block is simply gone on the continued run.
+ *  A model that treated the mention as "the file was handed to me once" would answer from
+ *  nothing; one that re-reads by id is correct in both cases. */
+export function buildLibraryMentionEnvelope(files: ReadonlyArray<LibraryMentionRef>): string {
+  if (files.length === 0) return ''
+  const rows = files.map(
+    (file) =>
+      `  <file id="${file.file_id}" path="${escapeXml(file.path)}" name="${escapeXml(file.name)}" size_bytes="${file.size_bytes ?? ''}" />`
+  )
+  return [
+    '<mentioned_library_files>',
+    ...rows,
+    '</mentioned_library_files>',
+    'The user explicitly @-mentioned the library file(s) above. Their CONTENT is not included',
+    'here — call library_read with the EXACT id attribute as file_id to read it. This block is',
+    'not repeated on later turns (an approval resume drops it), so re-read by id whenever you',
+    'need the content again.',
+    '',
+    ''
+  ].join('\n')
+}
+
 /** Cap each mentioned email's body excerpt at this many characters before
  *  fencing it into the prompt. Matches the attachment content budget class:
  *  five mentions × 600 chars stays well under the per-turn context budget. */

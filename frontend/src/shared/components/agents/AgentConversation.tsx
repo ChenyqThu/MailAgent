@@ -30,9 +30,11 @@ import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-atta
 import {
   buildMentionContext,
   buildAgentMentionEnvelope,
+  buildLibraryMentionEnvelope,
   buildMatterMentionEnvelope,
   renderEmailExcerptBlock,
   wrapUntrustedEmailContext,
+  type LibraryMentionRef,
   type MatterMentionRef
 } from '@shared/lib/mention-context'
 import { readAutoTitleSettings } from '@shared/lib/autoTitle'
@@ -278,6 +280,9 @@ export function AgentConversation({
     () => (matterMentionAllowed ? matterMentions : []),
     [matterMentionAllowed, matterMentions]
   )
+  // P2-L8（资料库 epic）— @ 提及的库文件，**只存标识四件**（收窄在 useLibraryMentionAdapter 的
+  // fetch 处）。与事项那组不同：资料库没有「当前这一件」的语义冲突，四种对话一律给。
+  const [libraryMentions, setLibraryMentions] = useState<LibraryMentionRef[]>([])
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
   // assistant-modal P5 — the modal's removable email context (general session + the current email's body
   // injected at send). INDEPENDENT of `mentions` on purpose: a mention rides a lexical in-field directive
@@ -318,6 +323,14 @@ export function AgentConversation({
   const onRemoveMatterMention = useCallback((publicId: string): void => {
     setMatterMentions((cur) => cur.filter((matter) => matter.public_id !== publicId))
   }, [])
+  const onAddLibraryMention = useCallback((file: LibraryMentionRef): void => {
+    setLibraryMentions((cur) =>
+      cur.some((item) => item.file_id === file.file_id) ? cur : [...cur, file]
+    )
+  }, [])
+  const onRemoveLibraryMention = useCallback((fileId: number): void => {
+    setLibraryMentions((cur) => cur.filter((file) => file.file_id !== fileId))
+  }, [])
   const onAddAttachment = useCallback((attachment: ChatAttachment): void => {
     setAttachments((cur) => [...cur, attachment])
   }, [])
@@ -328,6 +341,7 @@ export function AgentConversation({
     setMentions([])
     setAgentMentions([])
     setMatterMentions([])
+    setLibraryMentions([])
     setAttachments([])
   }, [])
   // issue #61 Lane 3 (A2) — chips now render from the assistant-ui composer state (fed by the
@@ -370,11 +384,21 @@ export function AgentConversation({
     const agentContext = buildAgentMentionEnvelope(agentMentions)
     // S4 —— 与 agent 信封同类（可信本地元数据），排在所有不可信围栏**之前**。
     const matterContext = buildMatterMentionEnvelope(activeMatterMentions)
+    // P2-L8 —— 同为可信本地元数据（只有标识，正文由模型自己调 library_read 读）。
+    const libraryContext = buildLibraryMentionEnvelope(libraryMentions)
     const emailContextBlock = await buildEmailContextBlock()
     const mentionContext = await buildMentionContext(mentions, mailApi)
     const attachmentContext = buildAttachmentBlock(attachments)
-    return `${agentContext}${matterContext}${emailContextBlock}${attachmentContext}${mentionContext}`
-  }, [agentMentions, activeMatterMentions, buildEmailContextBlock, mentions, mailApi, attachments])
+    return `${agentContext}${matterContext}${libraryContext}${emailContextBlock}${attachmentContext}${mentionContext}`
+  }, [
+    agentMentions,
+    activeMatterMentions,
+    libraryMentions,
+    buildEmailContextBlock,
+    mentions,
+    mailApi,
+    attachments
+  ])
 
   // assistant-modal — keep the modal's default email context pointing at the CURRENTLY active email while
   // the chat is NEW/empty (user: 每次唤出默认带的是当前这封, not the previous one). Re-resolves whenever the
@@ -449,6 +473,9 @@ export function AgentConversation({
       matterMentions: activeMatterMentions,
       onAddMatterMention: matterMentionAllowed ? onAddMatterMention : undefined,
       onRemoveMatterMention,
+      libraryMentions,
+      onAddLibraryMention,
+      onRemoveLibraryMention,
       attachments,
       onAddAttachment,
       onRemoveAttachment,
@@ -473,6 +500,9 @@ export function AgentConversation({
       activeMatterMentions,
       onAddMatterMention,
       onRemoveMatterMention,
+      libraryMentions,
+      onAddLibraryMention,
+      onRemoveLibraryMention,
       attachments,
       onAddAttachment,
       onRemoveAttachment,
