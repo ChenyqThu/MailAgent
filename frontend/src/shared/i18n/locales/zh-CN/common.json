@@ -561,7 +561,8 @@
       "customAiMeta": "智能体团队 · 配置与运行",
       "reportsMeta": "日报 · 周报 · 自定义产出",
       "llmMeta": "分类与用量",
-      "settingsMeta": "偏好与账户"
+      "settingsMeta": "偏好与账户",
+      "libraryMeta": "本机受管的多根文件夹树"
     },
     "email": {
       "countLabel": "{n} / {total}",
@@ -717,7 +718,8 @@
       "groups": "群聊",
       "team": "团队",
       "reports": "报告",
-      "ops": "运维"
+      "ops": "运维",
+      "library": "资料库"
     },
     "composeNew": "写邮件",
     "today": "今日",
@@ -1144,7 +1146,14 @@
       "plan_update": "更新计划",
       "suggest_followups": "准备追问建议",
       "submit_feedback": "提交产品反馈",
-      "generate_image": "生成图片"
+      "generate_image": "生成图片",
+      "library_list": "浏览资料库",
+      "library_read": "读取资料库文件",
+      "library_search": "搜索资料库",
+      "library_append": "追加到资料库文件",
+      "library_write": "写入资料库文件",
+      "library_move": "移动资料库文件",
+      "library_delete": "删除资料库文件"
     },
     "planCard": {
       "title": "计划",
@@ -3572,7 +3581,8 @@
           "supply": "Skill 供应链",
           "agents": "Agent 配置",
           "exec": "本地文件与命令",
-          "outbound": "外发与外呼"
+          "outbound": "外发与外呼",
+          "library": "资料库"
         },
         "bulk": {
           "label": "批量",
@@ -4826,7 +4836,8 @@
           "report": "报告",
           "session": "会话与身份",
           "knowledge": "技能与知识",
-          "other": "其他"
+          "other": "其他",
+          "library": "资料库"
         },
         "groupSelectAll": "全选",
         "groupClearAll": "清空"
@@ -4898,7 +4909,7 @@
           }
         },
         "files": {
-          "title": "文件与命令",
+          "title": "命令与本机文件",
           "description": "读取/写入文件并运行已授权的本地命令或 Skill 入口。",
           "tier": {
             "off": "关闭",
@@ -4918,6 +4929,18 @@
           "warn": "可写 = 授予「读 + 新建 + 修改」权限上限：该 Agent 后台运行可在该服务里新建和修改数据（删除永不可用）。",
           "empty": "尚未连接任何外部服务。先到 设置 → AI 完成连接，再回这里为该 Agent 授权。",
           "notConnected": "未连接"
+        },
+        "library": {
+          "title": "资料库",
+          "description": "读取、检索与写入资料库里的文件。",
+          "tier": {
+            "off": "关闭",
+            "read": "只读",
+            "write": "可写"
+          },
+          "writeHint": "可写 Agents 文档与「可写」挂载根，不含「我的文档」。",
+          "readScope": "可读全部根（含邮件附件投影）。",
+          "headlessNote": "无人值守时只有 Agents 文档免卡；挂载根恒只读，移动 / 删除恒弹卡。"
         },
         "subsetBadge": "部分",
         "subsetHint": "当前启用的工具是「{tier}」档的一个子集——档位表示权限上限，不代表该档每个工具都开着。展开下方「高级」可看确切清单。"
@@ -6351,6 +6374,10 @@
           },
           "web": {
             "label": "网页检索"
+          },
+          "library": {
+            "label": "资料库",
+            "desc": "浏览资料库目录、读取文件解析后的正文、按关键词检索全库"
           }
         },
         "skillOff": {
@@ -7486,6 +7513,238 @@
       "last1h": "最近 1 小时",
       "window": "{turns} 次 · {tokens} token · {cost}",
       "unknown": "—"
+    }
+  },
+  "library": {
+    "tree": {
+      "domainTitle": "资料库",
+      "domainSub": "本机受管的多根文件夹树",
+      "roots": {
+        "mail-attachments": "邮件附件",
+        "chat-attachments": "对话附件",
+        "agent-docs": "Agents 文档",
+        "my-docs": "我的文档",
+        "mounts": "挂载的文件夹",
+        "trash": "废纸篓"
+      },
+      "rootHint": {
+        "mail-attachments": "投影区 · 只读",
+        "chat-attachments": "发送即入库",
+        "agent-docs": "agent 可读写",
+        "my-docs": "agent 默认只读"
+      },
+      "addFolder": "添加文件夹",
+      "projectionNotice": "投影区文件随邮件删除消失，不含邮件正文里的内嵌图；要长期保留请「另存到资料库」。",
+      "readonlyRoot": "这是索引投影，不在磁盘上，不能写入。",
+      "mountUnavailable": "目录不可用（外置卷已拔出或已移走）；索引保留，文件暂不可读。",
+      "menu": {
+        "newFolder": "新建文件夹",
+        "newMarkdown": "新建 markdown",
+        "importFile": "导入文件…",
+        "rename": "重命名",
+        "moveTo": "移到…",
+        "delete": "删除",
+        "renameLabel": "重命名标签",
+        "toReadonly": "设为只读",
+        "toWritable": "设为可写",
+        "revealInFinder": "在访达中显示",
+        "unmount": "卸载",
+        "unmountHint": "只删索引，磁盘上的文件一个都不动"
+      }
+    },
+    "folder": {
+      "viewGrid": "网格",
+      "viewList": "列表",
+      "colName": "名称",
+      "colSize": "大小",
+      "colMtime": "修改时间",
+      "colKind": "类型",
+      "colSource": "来源",
+      "colCreator": "创建者",
+      "sortName": "按名称",
+      "sortSize": "按大小",
+      "sortType": "按类型",
+      "sortDate": "按时间",
+      "filterPlaceholder": "在当前文件夹中过滤",
+      "searchLibraryPlaceholder": "搜索整个资料库",
+      "dropTarget": "复制到「{folder}」",
+      "scanning": "正在建立索引 {done} / {total}"
+    },
+    "empty": {
+      "folderTitle": "这个文件夹还没有文件",
+      "folderHint": "把文件拖进来，或用右上角「新建 markdown」。"
+    },
+    "actions": {
+      "edit": "编辑",
+      "openWith": "用{app}打开",
+      "openSystem": "用系统应用打开",
+      "reveal": "在访达中显示",
+      "keepToLibrary": "另存到资料库",
+      "saveParsedMd": "另存解析版为 markdown",
+      "moveTo": "移到…",
+      "delete": "删除",
+      "history": "历史",
+      "chat": "对话",
+      "save": "保存",
+      "cancel": "取消",
+      "retry": "重试",
+      "rollback": "回滚到这一版",
+      "viewSnapshot": "查看快照",
+      "confirm": "确定",
+      "close": "关闭"
+    },
+    "history": {
+      "changeNoteLabel": "变更说明（可选）",
+      "changeNotePlaceholder": "例：补充 Q3 渠道数据"
+    },
+    "preview": {
+      "tabParsed": "解析视图",
+      "tabOriginal": "原件",
+      "tabText": "文字",
+      "tabImage": "图片",
+      "parsedHint": "这是解析出来的 markdown，供预览、检索与 agent 阅读；原件请用对应应用打开。",
+      "pdfParsedHint": "PDF 解析版是带页分隔的纯文本（anydoc 的 pdf lane 默认不开）。",
+      "originalUnavailable": "原件在这台机器上暂时读不到，只能看解析视图。",
+      "htmlNotice": "按浏览器网页处理：脚本、样式正常渲染，与应用本身隔离。",
+      "noInline": "这类文件不在应用内预览。",
+      "ocrBadge": "OCR 文字",
+      "pending": "正在解析…",
+      "failed": "解析失败",
+      "unsupported": "这个类型暂不支持解析",
+      "pageSep": "第 {n} 页",
+      "derivedFrom": "派生自「{name}」",
+      "textStatusPending": "解析中",
+      "textStatusExtracted": "已解析",
+      "textStatusFailed": "解析失败",
+      "textStatusUnsupported": "不支持解析",
+      "fileStatusPresent": "正常",
+      "fileStatusMissing": "文件已不在磁盘上",
+      "fileStatusMissingHint": "引用保留（事项 / 会话里的链接不会悬空）；重新放回原位后可恢复。",
+      "conflictTitle": "文件已被改动",
+      "conflictBody": "你打开之后，这个文件被别人改过了。下面是当前版本；你的文本仍在编辑框里。",
+      "conflictKeepMine": "用我的覆盖",
+      "conflictDiscard": "放弃我的修改",
+      "conflictChangedBy": "改动来自 {who}",
+      "relatedMatters": "关联的事项",
+      "sourceJumpMail": "打开来源邮件",
+      "sourceJumpChat": "打开来源会话"
+    },
+    "mount": {
+      "add": "添加文件夹",
+      "pickHint": "选一个本机目录挂进资料库；文件留在原地，我们只建索引。",
+      "label": "显示名",
+      "mode": "权限",
+      "ro": "只读",
+      "rw": "可写",
+      "roHint": "人和 agent 都只能看，不能改。随时可以改回可写。",
+      "rwHint": "人可以改；agent 在对话中按能力卡的可写档可以改（与 Agents 文档同档，出厂默认允许）。无人值守时挂载根恒只读。",
+      "estimate": "预估 {n} 个文件",
+      "skipHint": "跳过 .git / node_modules / 隐藏目录。",
+      "tooManyTitle": "这个文件夹太大了",
+      "tooMany": "预估 {n} 个文件，超过 20,000 的上限。请选一个更小的子目录。",
+      "refusedTitle": "这个目录不能挂载",
+      "absPathNote": "绝对路径只在这里显示；界面其他地方和 agent 看到的都是 @标签 开头的虚拟路径。"
+    },
+    "settings": {
+      "title": "资料库",
+      "mounted": "挂载的文件夹",
+      "usage": "库占用",
+      "rescan": "重扫资料库",
+      "rescanHint": "按需对账：核对磁盘与索引，补记外部改动。没有文件监听。",
+      "trashPolicy": "废纸篓保留 30 天",
+      "chatArchiveTitle": "对话附件会保存到资料库",
+      "chatArchiveHint": "发送时写入 chat-attachments/年-月/ 目录；删会话不会删这些文件。",
+      "semanticTitle": "语义检索",
+      "semanticNotReady": "当前为纯关键词检索（FTS5）。下载语义模型后可混合检索。",
+      "downloadModel": "下载语义模型（614 MB）",
+      "downloading": "正在下载模型",
+      "modelReady": "模型已就绪 · Qwen3-Embedding-0.6B（int8 ONNX）",
+      "rebuildIndex": "重建索引",
+      "indexProgress": "已嵌入 {done} / {total} 个文件"
+    },
+    "search": {
+      "placeholder": "搜索文件名与正文",
+      "tooShort": "至少输入 2 个字",
+      "empty": "没有匹配的文件",
+      "emptyHint": "试试更短的关键词，或换成文件名的一段。",
+      "matchFts": "关键词",
+      "matchVec": "语义",
+      "matchBoth": "关键词+语义",
+      "noSemantic": "语义检索未启用（模型未下载），当前只按关键词匹配。",
+      "groupTitle": "资料库"
+    },
+    "agent": {
+      "expectedHashLabel": "基于版本",
+      "conflictRetryNote": "文件已被改动，工具会读回当前版本再试一次。"
+    },
+    "chip": {
+      "archived": "已存入资料库",
+      "notArchived": "未归档",
+      "notArchivedHint": "入库失败（后端未启动或磁盘满），这次只把抽取文本发给了模型。",
+      "composerNotice": "对话附件会保存到资料库",
+      "attachedRefs": "附带资料"
+    },
+    "mention": {
+      "group": "资料库",
+      "groupShort": "资料",
+      "recent": "最近文件"
+    },
+    "notify": {
+      "libraryTitle": "Agent 写了资料库文件"
+    },
+    "picker": {
+      "title": "从资料库选择",
+      "tabTree": "按文件夹",
+      "tabSearch": "搜索",
+      "selectedCount": "已选 {n} 个",
+      "confirmLink": "关联",
+      "confirmAttach": "添加为附件"
+    },
+    "matter": {
+      "tabLibrary": "资料库",
+      "proposalTitle": "未确认的 agent 建议",
+      "accept": "确认",
+      "ignore": "忽略"
+    },
+    "compose": {
+      "pickFromLibrary": "从资料库选附件"
+    },
+    "deeplink": {
+      "missingToast": "文件已不在资料库",
+      "trashedToast": "文件在废纸篓里，已为你打开废纸篓"
+    },
+    "report": {
+      "exportToLibrary": "导出到资料库"
+    },
+    "toast": {
+      "openAction": "打开"
+    },
+    "trash": {
+      "notice": "删除的文件在废纸篓保留 30 天，之后自动清理。",
+      "emptyAction": "清空废纸篓",
+      "restoreAction": "恢复",
+      "restoredToast": "已恢复到原位置",
+      "moveToSystemTrash": "移到系统废纸篓",
+      "deleteConfirmTitleLibrary": "移到资料库废纸篓？",
+      "deleteConfirmTitleMount": "移到系统废纸篓？",
+      "deleteConfirmBodyMount": "挂载区的删除交给系统，我们不接管；之后在访达的废纸篓里恢复。",
+      "deletedToastLibrary": "已移到废纸篓（30 天内可恢复）",
+      "deletedToastMount": "已移到系统废纸篓",
+      "fileTrashedLabel": "在废纸篓里",
+      "fileTrashedHint": "{days} 天后自动清理",
+      "deleteForeverAction": "立即永久删除",
+      "deleteForeverConfirmTitle": "永久删除「{name}」？",
+      "deleteForeverConfirmBody": "此操作无法撤销，文件不会进入 30 天保留期，将立刻从磁盘清除。",
+      "deleteForeverConfirm": "永久删除"
+    },
+    "common": {
+      "sourceLabel": {
+        "user": "我",
+        "mail": "邮件",
+        "chat": "对话",
+        "agent": "Agent",
+        "derived": "解析版"
+      }
     }
   }
 }

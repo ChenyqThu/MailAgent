@@ -561,7 +561,8 @@
       "customAiMeta": "Agent team · config & runs",
       "reportsMeta": "Daily · weekly · custom output",
       "llmMeta": "Classification & usage",
-      "settingsMeta": "Preferences & accounts"
+      "settingsMeta": "Preferences & accounts",
+      "libraryMeta": "A locally managed, multi-root folder tree"
     },
     "email": {
       "countLabel": "{n} / {total}",
@@ -717,7 +718,8 @@
       "groups": "Groups",
       "team": "Team",
       "reports": "Reports",
-      "ops": "Ops"
+      "ops": "Ops",
+      "library": "Library"
     },
     "composeNew": "Compose",
     "today": "Today",
@@ -1144,7 +1146,14 @@
       "plan_update": "Update plan",
       "suggest_followups": "Suggesting follow-ups",
       "submit_feedback": "Submit product feedback",
-      "generate_image": "Generate image"
+      "generate_image": "Generate image",
+      "library_list": "Browse library",
+      "library_read": "Read library file",
+      "library_search": "Search library",
+      "library_append": "Append to library file",
+      "library_write": "Write library file",
+      "library_move": "Move library file",
+      "library_delete": "Delete library file"
     },
     "planCard": {
       "title": "Plan",
@@ -3572,7 +3581,8 @@
           "supply": "Skill supply chain",
           "agents": "Agent config",
           "exec": "Local files & commands",
-          "outbound": "Outbound"
+          "outbound": "Outbound",
+          "library": "Library"
         },
         "bulk": {
           "label": "Bulk",
@@ -4826,7 +4836,8 @@
           "report": "Reports",
           "session": "Sessions & identity",
           "knowledge": "Skills & knowledge",
-          "other": "Other"
+          "other": "Other",
+          "library": "Library"
         },
         "groupSelectAll": "Select all",
         "groupClearAll": "Clear"
@@ -4898,7 +4909,7 @@
           }
         },
         "files": {
-          "title": "Files & commands",
+          "title": "Commands & local files",
           "description": "Read/write files and run authorized local commands or Skill entrypoints.",
           "tier": {
             "off": "Off",
@@ -4918,6 +4929,18 @@
           "warn": "Writable grants the \"read + create + update\" ceiling: this agent's background runs may create and modify data in the service (delete is never available).",
           "empty": "No external service is connected yet. Connect one in Settings → AI first, then grant it to this agent here.",
           "notConnected": "Not connected"
+        },
+        "library": {
+          "title": "Library",
+          "description": "Read, search, and write files in the library.",
+          "tier": {
+            "off": "Off",
+            "read": "Read-only",
+            "write": "Writable"
+          },
+          "writeHint": "Writes to Agent docs and “writable” mounted folders — not My docs.",
+          "readScope": "Can read every root, including the mail-attachment projection.",
+          "headlessNote": "Unattended runs skip approval only for Agent docs; mounted folders are always read-only, and move/delete always require approval."
         },
         "subsetBadge": "SUBSET",
         "subsetHint": "The enabled tools are a subset of the “{tier}” tier. A tier states the upper bound of granted power, not that every tool in it is on. Expand “Advanced” for the exact list."
@@ -6351,6 +6374,10 @@
           },
           "web": {
             "label": "Web search"
+          },
+          "library": {
+            "label": "Library",
+            "desc": "Browse library folders, read a file's extracted text, and search the library by keyword"
           }
         },
         "skillOff": {
@@ -7486,6 +7513,238 @@
       "last1h": "Last hour",
       "window": "{turns} turns · {tokens} tokens · {cost}",
       "unknown": "—"
+    }
+  },
+  "library": {
+    "tree": {
+      "domainTitle": "Library",
+      "domainSub": "A locally managed, multi-root folder tree",
+      "roots": {
+        "mail-attachments": "Mail attachments",
+        "chat-attachments": "Chat attachments",
+        "agent-docs": "Agent docs",
+        "my-docs": "My docs",
+        "mounts": "Mounted folders",
+        "trash": "Trash"
+      },
+      "rootHint": {
+        "mail-attachments": "Projection · read-only",
+        "chat-attachments": "Archived on send",
+        "agent-docs": "Agent read/write",
+        "my-docs": "Agent read-only by default"
+      },
+      "addFolder": "Add folder",
+      "projectionNotice": "Projection files disappear when the email is deleted, and exclude inline images in the body; to keep one, use “Save to Library.”",
+      "readonlyRoot": "This is an index projection — it isn't on disk and can't be written to.",
+      "mountUnavailable": "This folder is unavailable (the external volume was unplugged or moved). The index is kept, but files can't be read right now.",
+      "menu": {
+        "newFolder": "New folder",
+        "newMarkdown": "New markdown",
+        "importFile": "Import file…",
+        "rename": "Rename",
+        "moveTo": "Move to…",
+        "delete": "Delete",
+        "renameLabel": "Rename label",
+        "toReadonly": "Set to read-only",
+        "toWritable": "Set to writable",
+        "revealInFinder": "Reveal in Finder",
+        "unmount": "Unmount",
+        "unmountHint": "Only removes the index — nothing on disk is touched"
+      }
+    },
+    "folder": {
+      "viewGrid": "Grid",
+      "viewList": "List",
+      "colName": "Name",
+      "colSize": "Size",
+      "colMtime": "Modified",
+      "colKind": "Type",
+      "colSource": "Source",
+      "colCreator": "Creator",
+      "sortName": "By name",
+      "sortSize": "By size",
+      "sortType": "By type",
+      "sortDate": "By date",
+      "filterPlaceholder": "Filter in this folder",
+      "searchLibraryPlaceholder": "Search the whole library",
+      "dropTarget": "Copy to “{folder}”",
+      "scanning": "Indexing {done} / {total}"
+    },
+    "empty": {
+      "folderTitle": "No files in this folder yet",
+      "folderHint": "Drop files in, or use “New markdown” in the top right."
+    },
+    "actions": {
+      "edit": "Edit",
+      "openWith": "Open with {app}",
+      "openSystem": "Open with system app",
+      "reveal": "Reveal in Finder",
+      "keepToLibrary": "Save to Library",
+      "saveParsedMd": "Save parsed version as Markdown",
+      "moveTo": "Move to…",
+      "delete": "Delete",
+      "history": "History",
+      "chat": "Chat",
+      "save": "Save",
+      "cancel": "Cancel",
+      "retry": "Retry",
+      "rollback": "Roll back to this version",
+      "viewSnapshot": "View snapshot",
+      "confirm": "Confirm",
+      "close": "Close"
+    },
+    "history": {
+      "changeNoteLabel": "Change note (optional)",
+      "changeNotePlaceholder": "e.g. Added Q3 channel data"
+    },
+    "preview": {
+      "tabParsed": "Parsed view",
+      "tabOriginal": "Original",
+      "tabText": "Text",
+      "tabImage": "Image",
+      "parsedHint": "This is the parsed markdown, used for preview, search, and agent reading. Open the original with its matching app to see it as-is.",
+      "pdfParsedHint": "The PDF parsed version is plain text with page breaks (anydoc's PDF lane is off by default).",
+      "originalUnavailable": "The original can't be read on this machine right now — only the parsed view is available.",
+      "htmlNotice": "Rendered like a normal web page — scripts and styles run as-is, isolated from the app itself.",
+      "noInline": "This file type can't be previewed in the app.",
+      "ocrBadge": "OCR text",
+      "pending": "Parsing…",
+      "failed": "Parsing failed",
+      "unsupported": "Parsing isn't supported for this type yet",
+      "pageSep": "Page {n}",
+      "derivedFrom": "Derived from “{name}”",
+      "textStatusPending": "Parsing",
+      "textStatusExtracted": "Parsed",
+      "textStatusFailed": "Parsing failed",
+      "textStatusUnsupported": "Parsing not supported",
+      "fileStatusPresent": "Present",
+      "fileStatusMissing": "File is no longer on disk",
+      "fileStatusMissingHint": "The reference is kept — links in matters or chats won't dangle. Put the file back to restore it.",
+      "conflictTitle": "File was changed",
+      "conflictBody": "Someone changed this file after you opened it. Below is the current version; your text is still in the edit box.",
+      "conflictKeepMine": "Overwrite with mine",
+      "conflictDiscard": "Discard my changes",
+      "conflictChangedBy": "Changed by {who}",
+      "relatedMatters": "Linked matters",
+      "sourceJumpMail": "Open source email",
+      "sourceJumpChat": "Open source chat"
+    },
+    "mount": {
+      "add": "Add folder",
+      "pickHint": "Pick a local folder to mount into the library. Files stay where they are — we only build an index.",
+      "label": "Display name",
+      "mode": "Permission",
+      "ro": "Read-only",
+      "rw": "Writable",
+      "roHint": "Both you and agents can view but not change these files. You can switch to writable anytime.",
+      "rwHint": "You can edit these files; in chat, agents can too when their capability card is set to the write tier (same default as Agent docs). Unattended runs always treat mounted folders as read-only.",
+      "estimate": "Estimated {n, plural, one {# file} other {# files}}",
+      "skipHint": "Skips .git, node_modules, and hidden folders.",
+      "tooManyTitle": "This folder is too large",
+      "tooMany": "Estimated {n, plural, one {# file} other {# files}}, over the 20,000-file limit. Choose a smaller subfolder.",
+      "refusedTitle": "This folder can't be mounted",
+      "absPathNote": "The absolute path is shown only here. Everywhere else in the app, and to agents, this folder appears as a virtual @label path."
+    },
+    "settings": {
+      "title": "Library",
+      "mounted": "Mounted folders",
+      "usage": "Library usage",
+      "rescan": "Rescan library",
+      "rescanHint": "On-demand reconciliation: checks disk against the index and records external changes. There's no file watcher.",
+      "trashPolicy": "Trash keeps files for 30 days",
+      "chatArchiveTitle": "Chat attachments are saved to the library",
+      "chatArchiveHint": "Written to a chat-attachments/year-month/ folder on send; deleting the chat doesn't delete these files.",
+      "semanticTitle": "Semantic search",
+      "semanticNotReady": "Currently keyword-only search (FTS5). Download the semantic model to enable hybrid search.",
+      "downloadModel": "Download semantic model (614 MB)",
+      "downloading": "Downloading model",
+      "modelReady": "Model ready · Qwen3-Embedding-0.6B (int8 ONNX)",
+      "rebuildIndex": "Rebuild index",
+      "indexProgress": "Embedded {done} / {total} files"
+    },
+    "search": {
+      "placeholder": "Search filenames and contents",
+      "tooShort": "Type at least 2 characters",
+      "empty": "No matching files",
+      "emptyHint": "Try a shorter query, or part of the filename.",
+      "matchFts": "Keyword",
+      "matchVec": "Semantic",
+      "matchBoth": "Keyword + semantic",
+      "noSemantic": "Semantic search isn't on (model not downloaded) — matching by keyword only.",
+      "groupTitle": "Library"
+    },
+    "agent": {
+      "expectedHashLabel": "Based on version",
+      "conflictRetryNote": "The file changed — the tool will re-read the current version and try again."
+    },
+    "chip": {
+      "archived": "Saved to Library",
+      "notArchived": "Not archived",
+      "notArchivedHint": "Archiving failed (backend not running or disk full) — only the extracted text was sent to the model this time.",
+      "composerNotice": "Chat attachments are saved to the library",
+      "attachedRefs": "Attached resources"
+    },
+    "mention": {
+      "group": "Library",
+      "groupShort": "Library",
+      "recent": "Recent files"
+    },
+    "notify": {
+      "libraryTitle": "Agent wrote a library file"
+    },
+    "picker": {
+      "title": "Choose from Library",
+      "tabTree": "By folder",
+      "tabSearch": "Search",
+      "selectedCount": "{n} selected",
+      "confirmLink": "Link",
+      "confirmAttach": "Add as attachment"
+    },
+    "matter": {
+      "tabLibrary": "Library",
+      "proposalTitle": "Unconfirmed agent suggestions",
+      "accept": "Accept",
+      "ignore": "Ignore"
+    },
+    "compose": {
+      "pickFromLibrary": "Choose attachment from Library"
+    },
+    "deeplink": {
+      "missingToast": "This file is no longer in the library",
+      "trashedToast": "This file is in Trash — opened Trash for you"
+    },
+    "report": {
+      "exportToLibrary": "Export to Library"
+    },
+    "toast": {
+      "openAction": "Open"
+    },
+    "trash": {
+      "notice": "Deleted files stay in Trash for 30 days, then are cleared automatically.",
+      "emptyAction": "Empty Trash",
+      "restoreAction": "Restore",
+      "restoredToast": "Restored to its original location",
+      "moveToSystemTrash": "Move to System Trash",
+      "deleteConfirmTitleLibrary": "Move to Library Trash?",
+      "deleteConfirmTitleMount": "Move to System Trash?",
+      "deleteConfirmBodyMount": "Deletions in mounted folders go through the system — we don't manage them. Restore later from Trash in Finder.",
+      "deletedToastLibrary": "Moved to Trash (recoverable for 30 days)",
+      "deletedToastMount": "Moved to System Trash",
+      "fileTrashedLabel": "In Trash",
+      "fileTrashedHint": "Cleared automatically in {days} days",
+      "deleteForeverAction": "Delete permanently",
+      "deleteForeverConfirmTitle": "Permanently delete “{name}”?",
+      "deleteForeverConfirmBody": "This can't be undone — the file skips the 30-day trash window and is removed from disk immediately.",
+      "deleteForeverConfirm": "Delete Forever"
+    },
+    "common": {
+      "sourceLabel": {
+        "user": "Me",
+        "mail": "Mail",
+        "chat": "Chat",
+        "agent": "Agent",
+        "derived": "Parsed version"
+      }
     }
   }
 }
