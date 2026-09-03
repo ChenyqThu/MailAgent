@@ -7,10 +7,10 @@
 
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
-import { MoreHorizontal, RotateCcw, Search, Trash2 } from 'lucide-react'
+import { ChevronRight, Folder, MoreHorizontal, RotateCcw, Search, Trash2 } from 'lucide-react'
 
 import type { LibraryFolderSort } from '@shared/api/library'
-import type { LibraryFile } from '@shared/api/types/library'
+import type { LibraryFile, LibraryFolderEntry } from '@shared/api/types/library'
 import { Button } from '@shared/components/ui/button'
 import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
 import { SegmentedControl } from '@shared/components/ui/segmented'
@@ -21,9 +21,12 @@ import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { useLibraryTree } from '@shared/state/library-tree'
 
+import { TOP_LEVEL_SLUGS } from '@shared/libraryConstants'
+
 import {
   deleteActionLabelKey,
   displayName,
+  rootLabelKey,
   fileTimeLabel,
   isProjection,
   libraryIconTone,
@@ -176,6 +179,87 @@ function Row({
   )
 }
 
+/* ── 子文件夹（网格磁贴 / 列表行）──────────────────────────────────
+   dogfood 0903：文件夹视图原本只画文件，于是「一个文件夹下全是子文件夹」被渲染成空态
+   （`mail-attachments` 根、按月分组那一层就是这个形态）。左树能进，但内容区看着像空的。
+   这里把服务端一直在返的 `folders` 画出来，排在文件之前 —— 与文件管理器同序。 */
+
+function folderCountLabel(entry: LibraryFolderEntry, t: (k: string, v?: Record<string, unknown>) => string): string {
+  return entry.file_count > 0 ? t('library.folder.folderItems', { count: entry.file_count }) : ''
+}
+
+function FolderTile({
+  entry,
+  label,
+  onOpen
+}: {
+  entry: LibraryFolderEntry
+  label: string
+  onOpen(): void
+}): ReactElement {
+  const { t } = useTranslation()
+  const count = folderCountLabel(entry, t)
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      data-testid="library-folder-tile"
+      aria-label={t('library.folder.openFolderAria', { name: label })}
+      className="group/folder flex items-center gap-3 rounded-md border border-ink-border bg-ink-2 px-3 py-2.5 text-left transition-colors duration-fast hover:bg-ink-3"
+    >
+      <span className="grid size-9 shrink-0 place-items-center rounded-md border border-ink-border bg-ink-3">
+        <Folder size={16} strokeWidth={2} className="text-ink-fg-1" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-aux font-medium text-ink-fg">{label}</span>
+        <span className="block font-mono text-meta tabular-nums text-ink-fg-2">
+          {count || t('library.folder.kindFolder')}
+        </span>
+      </span>
+      <ChevronRight size={14} strokeWidth={2} aria-hidden className="shrink-0 text-ink-fg-3" />
+    </button>
+  )
+}
+
+function FolderRow({
+  entry,
+  label,
+  projection,
+  onOpen
+}: {
+  entry: LibraryFolderEntry
+  label: string
+  projection: boolean
+  onOpen(): void
+}): ReactElement {
+  const { t } = useTranslation()
+  return (
+    <div
+      data-testid="library-folder-row"
+      className="group/row grid items-center gap-3 border-b border-ink-border-soft px-3 py-1.5 text-aux hover:bg-ink-3/60"
+      style={{ gridTemplateColumns: columns(projection) }}
+    >
+      <span className="grid size-5 place-items-center rounded bg-ink-3">
+        <Folder size={12} strokeWidth={2} className="text-ink-fg-1" />
+      </span>
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={t('library.folder.openFolderAria', { name: label })}
+        className="min-w-0 text-left"
+      >
+        <span className="block truncate text-ink-fg">{label}</span>
+      </button>
+      <span className="font-mono text-meta tabular-nums text-ink-fg-3">—</span>
+      <span className="font-mono text-meta tabular-nums text-ink-fg-3">—</span>
+      <span className="text-meta text-ink-fg-2">{t('library.folder.kindFolder')}</span>
+      <span className="truncate text-meta text-ink-fg-2">{folderCountLabel(entry, t)}</span>
+      <span />
+      <span />
+    </div>
+  )
+}
+
 function ListHeader({ projection }: { projection: boolean }): ReactElement {
   const { t } = useTranslation()
   return (
@@ -258,6 +342,8 @@ export interface FolderViewProps {
   trash: boolean
   actions: LibraryFileActions
   onOpenFile(file: LibraryFile): void
+  /** 进入子文件夹（内容区双列同步：树也跟着展开 / 选中，见 LibraryWorkspace.openFolder）。 */
+  onOpenFolder(path: string): void
   onDropFiles(files: File[]): void
 }
 
@@ -267,6 +353,7 @@ export function FolderView({
   trash,
   actions,
   onOpenFile,
+  onOpenFolder,
   onDropFiles
 }: FolderViewProps): ReactElement {
   const { t } = useTranslation()
@@ -289,6 +376,17 @@ export function FolderView({
   const pages = useLibraryFolderPages(path, { q: debouncedFilter, sort: sortKey, dir: sortDir })
   const files = useMemo(() => (pages.data?.pages ?? []).flatMap((p) => p.files), [pages.data])
   const total = pages.data?.pages[0]?.total ?? 0
+  // 🔴 子文件夹只在第 0 页给（服务端每页都返同一份，`folders` 不分页），所以取第 0 页而不是
+  // 跨页 flatMap —— 后者会在翻页后把同一批文件夹重复画出来。
+  //
+  // 过滤词对文件夹是**客户端**匹配，与文件相反：文件分页所以必须服务端筛，文件夹一次给全，
+  // 客户端筛才是对的（服务端 `q` 根本不看文件夹）。
+  const folders = useMemo(() => {
+    const all = pages.data?.pages[0]?.folders ?? []
+    const needle = debouncedFilter.trim().toLowerCase()
+    if (needle === '') return all
+    return all.filter((f) => f.name.toLowerCase().includes(needle))
+  }, [debouncedFilter, pages.data])
 
   const [sortOpen, setSortOpen] = useState(false)
   const sortTrigger = useRef<HTMLButtonElement | null>(null)
@@ -393,9 +491,13 @@ export function FolderView({
     if (dropped.length > 0) onDropFiles(dropped)
   }
 
+  // 顶层那五个是磁盘 slug，显示要走 i18n；再往下是真实目录名，原样显示。
+  const folderLabel = (entry: LibraryFolderEntry): string =>
+    (TOP_LEVEL_SLUGS as readonly string[]).includes(entry.path) ? t(rootLabelKey(entry.path)) : entry.name
+
   const folderName = path.split('/').pop() ?? path
   const sortLocked = projection || trash
-  const empty = !pages.isPending && files.length === 0
+  const empty = !pages.isPending && files.length === 0 && folders.length === 0
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -495,6 +597,14 @@ export function FolderView({
           </div>
         ) : view === 'grid' ? (
           <div className="grid grid-cols-2 gap-2 p-3">
+            {folders.map((entry) => (
+              <FolderTile
+                key={`d:${entry.path}`}
+                entry={entry}
+                label={folderLabel(entry)}
+                onOpen={() => onOpenFolder(entry.path)}
+              />
+            ))}
             {files.map((file) => (
               <Tile
                 key={file.id ?? `a:${file.attachment_id}`}
@@ -507,6 +617,15 @@ export function FolderView({
         ) : (
           <div>
             <ListHeader projection={projection} />
+            {folders.map((entry) => (
+              <FolderRow
+                key={`d:${entry.path}`}
+                entry={entry}
+                label={folderLabel(entry)}
+                projection={projection}
+                onOpen={() => onOpenFolder(entry.path)}
+              />
+            ))}
             {files.map((file) => (
               <Row
                 key={file.id ?? `a:${file.attachment_id}`}

@@ -1865,6 +1865,31 @@
       "posted": "Posted (message #{id}).",
       "woke": "Woke: {names}",
       "wokeNone": "nobody"
+    },
+    "libraryWriteCard": {
+      "fileLabel": "File",
+      "fromLabel": "From",
+      "toLabel": "To",
+      "noBaseline": "This overwrite carries no version baseline — it is not based on a version that was read.",
+      "trashNote": "Goes to the trash; restorable for {days} days.",
+      "create": {
+        "title": "Create file",
+        "contentLabel": "Content to write"
+      },
+      "overwrite": {
+        "title": "Overwrite file",
+        "contentLabel": "Full content after the overwrite"
+      },
+      "append": {
+        "title": "Append to file",
+        "contentLabel": "Content to append"
+      },
+      "move": {
+        "title": "Move file"
+      },
+      "delete": {
+        "title": "Delete file"
+      }
     }
   },
   "admin": {
@@ -7591,7 +7616,10 @@
       "tooLargeToast": "“{name}” is over {limit} and was not saved",
       "uploadFailedToast": "Could not save “{name}” to the library",
       "uploadedToast": "Saved “{name}”",
-      "viewAria": "View"
+      "viewAria": "View",
+      "kindFolder": "Folder",
+      "folderItems": "{count} files",
+      "openFolderAria": "Open folder {name}"
     },
     "empty": {
       "folderTitle": "No files in this folder yet",
@@ -7682,7 +7710,8 @@
       "imageTooLarge": "Image is too large to show inline",
       "imageViewAria": "Image view",
       "pdfViewAria": "PDF view",
-      "pdfOriginalPlaceholder": "Inline preview of the original is not built yet — open it in your PDF reader"
+      "pdfOriginalPlaceholder": "Inline preview of the original is not built yet — open it in your PDF reader",
+      "back": "Back to {folder}"
     },
     "mount": {
       "add": "Add folder",

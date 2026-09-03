@@ -102,6 +102,8 @@ function renderPreview(): void {
       <FilePreview
         fileRef={{ id: 1 }}
         actions={stubActions()}
+        onBack={vi.fn()}
+        backLabel="my-docs"
         onSelectFile={vi.fn()}
         onChat={vi.fn()}
       />

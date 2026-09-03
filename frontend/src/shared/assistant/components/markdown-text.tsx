@@ -19,9 +19,16 @@ import { CollapsibleRegion } from '@shared/components/ui/collapsible'
 import { ShimmerText } from '@shared/components/ShimmerText'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
 import { formatToolDuration, useToolElapsed } from '@shared/assistant/tools/generic/useToolElapsed'
+import { assistantMarkdownUrlTransform } from '@shared/assistant/tools/image/imageGenCard.lib'
 
 export function MarkdownText({ text, status }: TextMessagePartProps): React.JSX.Element {
-  return <TranslatedBody text={text} streaming={status?.type === 'running'} />
+  return (
+    <TranslatedBody
+      text={text}
+      streaming={status?.type === 'running'}
+      urlTransform={assistantMarkdownUrlTransform}
+    />
+  )
 }
 
 export function ReasoningText({ text, status }: ReasoningMessagePartProps): React.JSX.Element {

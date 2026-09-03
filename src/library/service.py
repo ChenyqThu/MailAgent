@@ -464,7 +464,9 @@ class LibraryService:
             months = self._projection_months_safe()
             return {
                 "path": PROJECTION_SLUG, "is_projection": True, "files": [],
-                "folders": [{"name": m["month"], "path": f"{PROJECTION_SLUG}/{m['month']}", "count": m["count"]} for m in months],
+                # 🔴 键名是 ``file_count``，与 ``/folder`` 其余分支和 ``/tree`` 一致 —— 曾写成
+                # ``count``，前端拿不到就恒显示 0（这一支恰恰是「文件夹里只有子文件夹」的典型）。
+                "folders": [{"name": m["month"], "path": f"{PROJECTION_SLUG}/{m['month']}", "file_count": m["count"]} for m in months],
                 "total": 0, "offset": offset, "limit": limit, "has_more": False,
             }
         if len(parts) != 2:

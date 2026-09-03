@@ -91,7 +91,7 @@ describe('componentRegistry — resolution', () => {
       // L4 群聊 g2 — 两个群写工具各有一张卡（建群 / 投递）。
       'group_create',
       'group_post',
-      // 资料库 P2-L1 — 四个 edit 写工具走通用的 SimpleApprovalCard（design §5.1「先用通用卡」）。
+      // 资料库 —— 四个 edit 写工具走 LibraryWriteCard（dogfood 0903 从通用卡换成富卡）。
       'library_append',
       'library_delete',
       'library_move',
@@ -135,6 +135,7 @@ describe('componentRegistry — resolution', () => {
       'GroupCreateCard',
       'GroupPostCard',
       'ImageGenCard',
+      'LibraryWriteCard',
       'MatterWriteCard',
       'NotionSyncCard',
       'SendApprovalCard',
@@ -168,16 +169,18 @@ describe('componentRegistry — resolution', () => {
     }
   })
 
-  // 资料库 P2-L1 — same gate shape as the matter family above, judged by the gateway's OWN leaf
-  // list: library_move / library_delete ship `ask` (tool_prefs.py), so an approval-paused part
-  // WITHOUT a card would be the buttonless-ToolTraceCard deadlock a fourth time. The generic
-  // SimpleApprovalCard is the design's「先用通用卡」; a richer card may replace it later, but the
-  // gate only requires "some card that is not the trace fallback".
-  test('every gateway library write tool resolves to the SimpleApprovalCard (not the buttonless fallback)', () => {
+  // 资料库 — same gate shape as the matter family above, judged by the gateway's OWN leaf list:
+  // library_move / library_delete ship `ask` (tool_prefs.py), so an approval-paused part WITHOUT a
+  // card would be the buttonless-ToolTraceCard deadlock a fourth time. dogfood 0903 replaced the
+  // generic SimpleApprovalCard with LibraryWriteCard (path + change note + markdown-rendered body).
+  test('every gateway library write tool shares one component instance (LibraryWriteCard)', () => {
     expect(GATEWAY_LIBRARY_WRITE_TOOL_NAMES.length).toBeGreaterThan(0)
-    const simple = componentRegistry.resolve('web_fetch')
+    const card = componentRegistry.resolve(GATEWAY_LIBRARY_WRITE_TOOL_NAMES[0])
+    expect(card).toBeTypeOf('function')
+    // dogfood 0903 起它们不再共用 SimpleApprovalCard —— 那张通用卡把 args 拍成一行 JSON。
+    expect(card).not.toBe(componentRegistry.resolve('web_fetch'))
     for (const name of GATEWAY_LIBRARY_WRITE_TOOL_NAMES) {
-      expect(componentRegistry.resolve(name), `${name} has no registered card`).toBe(simple)
+      expect(componentRegistry.resolve(name), `${name} has no registered card`).toBe(card)
       expect(componentRegistry.resolve(name)).not.toBe(ToolTraceCard)
     }
     // the silent reads stay card-less (a card on a read is the R5 tier-drift smell).

@@ -187,7 +187,10 @@ def test_projection_folder_via_service(svc: LibraryService) -> None:
     finally:
         conn.close()
     root = svc.folder(PROJECTION_SLUG)
-    assert root["is_projection"] and root["folders"] == [{"name": "2026-07", "path": f"{PROJECTION_SLUG}/2026-07", "count": 1}]
+    # 🔴 键名是 ``file_count`` —— ``/folder`` 三个分支（顶层 / 投影 / 普通目录）与 ``/tree``
+    # 用同一个名字，前端与 gateway 的 library_list 都按这个名字读。这里曾写成 ``count``，
+    # 于是这一支的子文件夹角标在前端恒为 0、给模型的 file_count 恒为 null。
+    assert root["is_projection"] and root["folders"] == [{"name": "2026-07", "path": f"{PROJECTION_SLUG}/2026-07", "file_count": 1}]
     month = svc.folder(f"{PROJECTION_SLUG}/2026-07")
     item = month["files"][0]
     assert item["id"] is None and item["attachment_id"] == 1 and item["is_projection"] is True

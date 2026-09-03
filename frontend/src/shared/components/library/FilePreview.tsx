@@ -14,6 +14,7 @@
 import { useState, type ReactElement, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
+  ArrowLeft,
   Clock3,
   ExternalLink,
   FileDown,
@@ -148,10 +149,14 @@ interface ActionSpec {
 function FileHeader({
   file,
   actions,
+  backLabel,
+  onBack,
   onChat
 }: {
   file: LibraryFileDetail
   actions: readonly ActionSpec[]
+  backLabel: string
+  onBack(): void
   onChat(): void
 }): ReactElement {
   const { t } = useTranslation()
@@ -159,6 +164,17 @@ function FileHeader({
   const I = tone.Icon
   return (
     <header className="border-b border-ink-border px-4 py-3">
+      {/* dogfood 0903：预览面**整块顶掉**文件夹视图（不是抽屉、不是分栏），所以没有返回入口时
+          只能靠左树重新点一次文件夹才回得去。这一行就是那条回路。 */}
+      <button
+        type="button"
+        onClick={onBack}
+        data-testid="library-preview-back"
+        className="-ml-1 mb-2 flex items-center gap-1 rounded px-1 py-0.5 text-meta text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+      >
+        <ArrowLeft size={13} strokeWidth={2} aria-hidden />
+        {t('library.preview.back', { folder: backLabel })}
+      </button>
       <div className="flex items-start gap-3">
         <span
           className={cn(
@@ -214,6 +230,10 @@ function FileHeader({
 export interface FilePreviewProps {
   fileRef: LibraryFileRef
   actions: LibraryFileActions
+  /** 返回按钮的落点：清掉选中文件，内容区回到当前文件夹视图。 */
+  onBack(): void
+  /** 返回按钮里那个文件夹名（已过 i18n）。 */
+  backLabel: string
   /** F2 回链 / 深链落点：换成另一个文件。 */
   onSelectFile(ref: LibraryFileRef): void
   /** P1 只开 dock（预置 @ 提及是 P2）。 */
@@ -223,6 +243,8 @@ export interface FilePreviewProps {
 export function FilePreview({
   fileRef,
   actions,
+  onBack,
+  backLabel,
   onSelectFile,
   onChat
 }: FilePreviewProps): ReactElement {
@@ -235,9 +257,23 @@ export function FilePreview({
   // 「另存解析版」在头部，正文在 ParsedTextView —— 同一个 query key，TanStack 只发一次请求。
   const text = useLibraryTextQuery(fileRef, file !== null && file.kind !== 'markdown')
 
+  // 🔴 返回入口在这两个早退分支里也要有：文件读不出来（挂载拔了 / 行被清了）时，没有它
+  // 用户就被钉在一个空错误面上，只能去左树重新点一次文件夹。
+  const backLink = (
+    <button
+      type="button"
+      onClick={onBack}
+      data-testid="library-preview-back"
+      className="-ml-1 mb-2 flex items-center gap-1 rounded px-1 py-0.5 text-meta text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+    >
+      <ArrowLeft size={13} strokeWidth={2} aria-hidden />
+      {t('library.preview.back', { folder: backLabel })}
+    </button>
+  )
   if (detail.isPending) {
     return (
       <div className="p-4">
+        {backLink}
         <Skeleton rows={8} width="2/3" />
       </div>
     )
@@ -245,6 +281,7 @@ export function FilePreview({
   if (detail.isError || file === null) {
     return (
       <div className="p-4">
+        {backLink}
         <Notice tone="fail">
           {t('library.preview.loadFailed')}
           <span className="ml-1.5 text-ink-fg-3">{errorMessage(detail.error)}</span>
@@ -332,7 +369,13 @@ export function FilePreview({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <FileHeader file={file} actions={specs} onChat={() => onChat(file)} />
+      <FileHeader
+        file={file}
+        actions={specs}
+        backLabel={backLabel}
+        onBack={onBack}
+        onChat={() => onChat(file)}
+      />
       <StatusBanner
         file={file}
         mountUnavailable={mountUnavailable}

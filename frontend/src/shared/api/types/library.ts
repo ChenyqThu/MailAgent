@@ -125,11 +125,25 @@ export interface LibraryTreeResponse {
   file_count: number
 }
 
+/** `/library/folder` 里的子文件夹条目。🔴 **比 `LibraryFolderNode` 窄**：这一路只给
+ *  `{name, path, file_count}`，没有 `parent_path` / `mount_id`（`path` 已经含全部寻址信息）。
+ *  以前这里错标成 `LibraryFolderNode`，因为没人读过它所以一直没暴露。 */
+export interface LibraryFolderEntry {
+  /** 末段显示名。顶层是 slug（UI 走 i18n 换文案），投影根是 `YYYY-MM`。 */
+  name: string
+  /** 虚拟路径，直接可当 `/library/folder?path=` 的入参。 */
+  path: string
+  /** 该目录直属的 present 文件数。 */
+  file_count: number
+}
+
 /** `GET /library/folder?path=` —— 子文件夹 + 文件条目，文件侧分页（`FOLDER_PAGE_SIZE`）。
- *  🔴 排序在**服务端**做完再分页：客户端排序只能排当前这一页，第 2 页起就是错的。 */
+ *  🔴 排序在**服务端**做完再分页：客户端排序只能排当前这一页，第 2 页起就是错的。
+ *  🔴 `folders` **不分页**（一次给全），所以文件夹侧的过滤 / 排序在客户端做是对的；
+ *  文件侧相反。 */
 export interface LibraryFolderPage {
   path: string
-  folders: LibraryFolderNode[]
+  folders: LibraryFolderEntry[]
   files: LibraryFile[]
   total: number
   limit: number

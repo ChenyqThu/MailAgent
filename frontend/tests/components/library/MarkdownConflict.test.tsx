@@ -92,7 +92,14 @@ function renderPreview(): void {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
   render(
     <QueryClientProvider client={qc}>
-      <FilePreview fileRef={{ id: 1 }} actions={actions} onSelectFile={vi.fn()} onChat={vi.fn()} />
+      <FilePreview
+        fileRef={{ id: 1 }}
+        actions={actions}
+        onBack={vi.fn()}
+        backLabel="my-docs"
+        onSelectFile={vi.fn()}
+        onChat={vi.fn()}
+      />
     </QueryClientProvider>
   )
 }

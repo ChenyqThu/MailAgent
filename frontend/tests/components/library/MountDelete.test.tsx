@@ -98,7 +98,14 @@ function Harness(): React.JSX.Element {
   const actions = useLibraryFileActions()
   return (
     <>
-      <FilePreview fileRef={{ id: 1 }} actions={actions} onSelectFile={vi.fn()} onChat={vi.fn()} />
+      <FilePreview
+        fileRef={{ id: 1 }}
+        actions={actions}
+        onBack={vi.fn()}
+        backLabel="my-docs"
+        onSelectFile={vi.fn()}
+        onChat={vi.fn()}
+      />
       {actions.dialogs}
     </>
   )

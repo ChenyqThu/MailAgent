@@ -45,14 +45,18 @@ import {
 } from './types'
 import type { AgentContextMode } from './policy'
 import { generateImageSchema, type GenerateImageInput } from './schemas'
+// RELATIVE import（不是 @shared alias）—— 同 library.ts：纯 Node 的 poc harness 不解析 tsconfig paths。
+import { GENERATED_IMAGE_ROUTE_PREFIX } from '../../shared/generatedImages'
 
 /** Names of the image tools (eval catalog completeness gate extracts this array). */
 export const GATEWAY_IMAGE_TOOL_NAMES = ['generate_image'] as const
 
 export const GENERATE_IMAGE_TOOL_NAME = 'generate_image'
 
-/** The URL prefix of the gateway's read-only image route (server.ts registers it). */
-export const GENERATED_IMAGE_ROUTE_PREFIX = '/api/ai/generated/'
+/** The URL prefix of the gateway's read-only image route (server.ts registers it). The value lives
+ *  in a zero-dependency leaf and is re-exported here so the renderer's markdown layer — which cannot
+ *  import this file (node:fs / ai at the top) — recognises the same prefix without a second copy. */
+export { GENERATED_IMAGE_ROUTE_PREFIX }
 
 /** Everything the tool needs from the host (Electron main); nothing here is body-derived. */
 export interface ImageGenToolDeps {

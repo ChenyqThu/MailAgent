@@ -31,6 +31,8 @@ import { FeedbackApprovalCard } from './generic/FeedbackApprovalCard'
 import { CalendarApprovalCard } from './calendar/CalendarApprovalCard'
 import { MatterWriteCard } from './matters/MatterWriteCard'
 import { ImageGenCard } from './image/ImageGenCard'
+import { LibraryWriteCard } from './library/LibraryWriteCard'
+import { GATEWAY_LIBRARY_WRITE_TOOL_NAMES } from '@shared/libraryConstants'
 
 /** One registration: an A2UI component (by name) + the tool names that render through it. */
 export interface ToolUIRegistration {
@@ -187,19 +189,21 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
       // identity-only (no editableFields on the gateway side either), so the pinned-value shell
       // is exactly right.
       'agent_profile_restore',
-      'agent_memory_update',
-      // 资料库 P2-L1 — the four library writes on the generic shell (design §5.1「先用通用卡，
-      // 富卡片可后补」). library_move / library_delete ship `ask`, and an owner may set the other
-      // two to ask: without a card every one of them would pause onto the buttonless ToolTraceCard
-      // (the v1.5.0 deadlock a fourth time). No SPECS entry yet → fallbackTitle + the args as the
-      // review value (move / delete carry `path` precisely so that review value names the file).
-      // Gate: ComponentRegistry.test.tsx judges by GATEWAY_LIBRARY_WRITE_TOOL_NAMES.
-      'library_append',
-      'library_write',
-      'library_move',
-      'library_delete'
+      'agent_memory_update'
     ],
     render: SimpleApprovalCard
+  },
+  // dogfood 0903 — 资料库四个写工具的富卡。P2-L1 时它们挂在上面那张通用卡上（design §5.1
+  // 「先用通用卡，富卡片可后补」），但通用卡把整个 args 拍成一行 JSON：一份三千字的
+  // markdown 变成带转义符的长串，用户读不出「什么内容写进哪个文件」。这就是那张后补的卡。
+  //
+  // 🔴 这份名单必须等于 GATEWAY_LIBRARY_WRITE_TOOL_NAMES（gateway 自己那份写工具叶子）——
+  // 由 ComponentRegistry.test.tsx 判。少一个 = 那个工具被设成 `ask` 时暂停在无按钮的
+  // ToolTraceCard 上（v1.5.0 那个死锁）。
+  {
+    component: A2UI_COMPONENTS.LibraryWriteCard,
+    toolNames: [...GATEWAY_LIBRARY_WRITE_TOOL_NAMES],
+    render: LibraryWriteCard
   },
   // calendar epic 4.2 — the calendar write approval card (behind MAILAGENT_CALENDAR_AGENT_TOOLS).
   // Reschedule renders a server-fact before→after time diff; rsvp/delete carry the irrevocable

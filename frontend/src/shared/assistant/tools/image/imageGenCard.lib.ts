@@ -2,6 +2,9 @@
 // 文件只导出组件。本文件是图片卡的**纯逻辑**面（tool part args / result 的读法、占位比例、绝对
 // URL、重试文案），零 JSX —— 组件在 ImageGenCard.tsx，两边合起来是一张卡。
 
+import { defaultUrlTransform, type UrlTransform } from 'streamdown'
+
+import { isGeneratedImagePath } from '@shared/generatedImages'
 import { resolveAiGatewayBaseUrl } from '../../runtime/flags'
 
 export interface ImageGenInput {
@@ -78,4 +81,20 @@ export function buildRetryPrompt(
   prompt: string
 ): string {
   return t('chat.imageGenCard.retryPrompt', { prompt })
+}
+
+/** 助手正文（Streamdown）的地址改写。唯一一件事：把 `generate_image` 结果那种**根相对**的
+ *  `/api/ai/generated/<file_id>` 补成 gateway 的绝对地址，与上面那张卡用的是同一条路。
+ *
+ *  🔴 为什么必须改：打包态 renderer 跑在 `file://` 上，根相对地址会解析成
+ *  `file:///api/ai/generated/…`，加载必失败，Streamdown 于是渲染它的 `imageNotAvailable`
+ *  兜底 —— 正文里那两个斜体「图片不可用」，而同一张图在工具卡里是好的。
+ *
+ *  🔴 其余地址必须显式交回 `defaultUrlTransform`：给 Streamdown 传了 `urlTransform` 就是
+ *  接管了整条改写通道，自己 return url 等于把上游那一份永久旁路掉。streamdown@2.5 的
+ *  `defaultUrlTransform` 实测是恒等的（正文净化在它的 rehype-harden 那一层，不在这里），
+ *  但委托关系要留着 —— 上游哪天给它加了过滤，我们是继承而不是绕过。 */
+export const assistantMarkdownUrlTransform: UrlTransform = (url, key, node) => {
+  if (isGeneratedImagePath(url)) return absoluteImageUrl(url)
+  return defaultUrlTransform(url, key, node)
 }

@@ -1865,6 +1865,31 @@
       "posted": "已发送（消息 #{id}）。",
       "woke": "已唤醒：{names}",
       "wokeNone": "无"
+    },
+    "libraryWriteCard": {
+      "fileLabel": "文件",
+      "fromLabel": "从",
+      "toLabel": "到",
+      "noBaseline": "这次覆写没有带版本基线，不是基于已读到的那一版改的。",
+      "trashNote": "进废纸篓，{days} 天内可以恢复。",
+      "create": {
+        "title": "新建资料",
+        "contentLabel": "将写入的内容"
+      },
+      "overwrite": {
+        "title": "覆写资料",
+        "contentLabel": "覆写后的完整内容"
+      },
+      "append": {
+        "title": "追加到资料",
+        "contentLabel": "将追加的内容"
+      },
+      "move": {
+        "title": "移动资料"
+      },
+      "delete": {
+        "title": "删除资料"
+      }
     }
   },
   "admin": {
@@ -7591,7 +7616,10 @@
       "tooLargeToast": "「{name}」超过 {limit}，没有存入",
       "uploadFailedToast": "「{name}」没能存进资料库",
       "uploadedToast": "已存入「{name}」",
-      "viewAria": "视图"
+      "viewAria": "视图",
+      "kindFolder": "文件夹",
+      "folderItems": "{count} 个文件",
+      "openFolderAria": "打开文件夹 {name}"
     },
     "empty": {
       "folderTitle": "这个文件夹还没有文件",
@@ -7682,7 +7710,8 @@
       "imageTooLarge": "图片太大，没有内联显示",
       "imageViewAria": "图片视图",
       "pdfViewAria": "PDF 视图",
-      "pdfOriginalPlaceholder": "原件内嵌预览还没做，先用系统阅读器打开"
+      "pdfOriginalPlaceholder": "原件内嵌预览还没做，先用系统阅读器打开",
+      "back": "返回 {folder}"
     },
     "mount": {
       "add": "添加文件夹",

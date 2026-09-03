@@ -159,7 +159,13 @@ export const A2UI_COMPONENTS = {
   // task 09-02 — generate_image 的结果卡（生成中占位 / 完成图片 / 失败重试）。与 SimpleApprovalCard
   // 同为**只做 ComponentRegistry key**：`componentForTool` 对它返回 null（tool result 只回文件
   // 引用 + url，卡自己从 tool part 的 args / result 读），审批暂停时同一张卡出 approve / reject。
-  ImageGenCard: 'ImageGenCard'
+  ImageGenCard: 'ImageGenCard',
+  // dogfood 0903 — 资料库四个写工具（library_write / _append / _move / _delete）的富审批卡，
+  // 取代它们在 P2-L1 时挂的 SimpleApprovalCard。与那张卡同为**只做 ComponentRegistry key**：
+  // `componentForTool` 对这四个返回 null（不落 audited ui_payload），卡自己读 tool part 的 args；
+  // overwrite / append 只有 `file_id` 时，路径由卡片向 serve-api 查一次补上（CalendarApprovalCard
+  // 先例 —— 展示用的服务端事实绝不从模型参数里推）。
+  LibraryWriteCard: 'LibraryWriteCard'
 } as const
 
 /** Which A2UI component renders a given gateway write tool. Unknown / read tools → null

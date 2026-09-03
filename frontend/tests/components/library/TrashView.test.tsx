@@ -80,6 +80,7 @@ function Harness(): React.JSX.Element {
         trash
         actions={actions}
         onOpenFile={vi.fn()}
+        onOpenFolder={vi.fn()}
         onDropFiles={vi.fn()}
       />
       {actions.dialogs}

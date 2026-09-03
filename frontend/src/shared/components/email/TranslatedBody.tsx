@@ -20,7 +20,7 @@
 // theme / 离线 lang pack 用的增强项. 想加后续 `import code from
 // '@streamdown/code'` 再传 plugins 即可.
 
-import { Streamdown, type StreamdownTranslations } from 'streamdown'
+import { Streamdown, type StreamdownTranslations, type UrlTransform } from 'streamdown'
 // Streamdown 的 caret + 控件样式需要它的 keyframes/样式。一次性全局引入 (Vite 去重)。
 import 'streamdown/styles.css'
 
@@ -29,6 +29,10 @@ interface Props {
   /** True = 消息仍在流式输出。驱动 Streamdown 的 `isAnimating` + streaming 模式,
    *  定稿后切 static 让历史消息走稳定的整段渲染。省略 / false = 静态完整渲染。 */
   streaming?: boolean
+  /** 链接 / 图片地址的改写钩子（Streamdown 的 `urlTransform`）。省略 = Streamdown 自己那份
+   *  （只做协议白名单）。chat 用它把 gateway 的**根相对**图片地址补成绝对地址 —— 打包态
+   *  renderer 是 `file://`，`/api/...` 会解析成 `file:///api/...` 而裂图。 */
+  urlTransform?: UrlTransform
 }
 
 // Streamdown defaultTranslations 是英文; UI 是中文环境就 override 复制
@@ -68,7 +72,7 @@ const STREAMDOWN_ZH_TRANSLATIONS: Partial<StreamdownTranslations> = {
   tableFormatTsv: 'TSV'
 }
 
-export function TranslatedBody({ text, streaming = false }: Props): React.ReactElement {
+export function TranslatedBody({ text, streaming = false, urlTransform }: Props): React.ReactElement {
   // 流式体验: parseIncompleteMarkdown 让未闭合标记 (**/```/#) 中途自动补全 (闭合
   // 即定稿, 无字面量闪烁); 定稿后切 static 让历史消息走稳定整段渲染。
   //
@@ -89,6 +93,7 @@ export function TranslatedBody({ text, streaming = false }: Props): React.ReactE
         parseIncompleteMarkdown
         isAnimating={streaming}
         translations={STREAMDOWN_ZH_TRANSLATIONS}
+        urlTransform={urlTransform}
       >
         {text}
       </Streamdown>

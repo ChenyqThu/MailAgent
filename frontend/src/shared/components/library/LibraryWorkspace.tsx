@@ -79,10 +79,10 @@ export function LibraryWorkspace(): ReactElement {
   const tree = useLibraryTreeQuery()
   const mount =
     tree.data?.mounts.find((m) => path === m.path || path.startsWith(`${m.path}/`)) ?? null
-  const breadcrumb = path
-    .split('/')
-    .map((seg, index) => (index === 0 ? t(rootLabelKey(seg)) : seg))
-    .join(' / ')
+  const segments = path.split('/').map((seg, index) => (index === 0 ? t(rootLabelKey(seg)) : seg))
+  const breadcrumb = segments.join(' / ')
+  /** 预览面返回按钮上的落点名 —— 当前文件夹的末段（顶层走 i18n，同面包屑）。 */
+  const currentFolderLabel = segments[segments.length - 1] ?? path
   useMainBreadcrumb(LIBRARY_MAIN_PAGE, breadcrumb)
 
   const openFile = useCallback(
@@ -275,6 +275,8 @@ export function LibraryWorkspace(): ReactElement {
               key={refKey(fileRef)}
               fileRef={fileRef}
               actions={actions}
+              onBack={clearSelection}
+              backLabel={currentFolderLabel}
               onSelectFile={selectRef}
               onChat={openChatFor}
             />
@@ -285,6 +287,7 @@ export function LibraryWorkspace(): ReactElement {
               trash={trash}
               actions={actions}
               onOpenFile={openFile}
+              onOpenFolder={openFolder}
               onDropFiles={(files) => void upload(path, files)}
             />
           ) : (
