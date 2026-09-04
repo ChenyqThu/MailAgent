@@ -19,6 +19,32 @@ import type { QueuedInput } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { qk } from '@shared/lib/queryKeys'
 
+/** 进程内「这个会话的队列被带外改动了」信号。
+ *
+ *  存在的理由只有一个：改动方拿不到 QueryClient。transport 的 fetch 包装（撞 409 转投队列那条，
+ *  见 useMailAgentAiSdkRuntime）住在 runtime provider 外面，而且它所在的组件树在不少场景下压根
+ *  没有 QueryClientProvider —— 在那里调 `useQueryClient()` 会**直接抛**（实测打挂 20 条既有用例）。
+ *  所以由改动方发信号、由本 hook（读侧唯一入口，天然在 QueryClientProvider 里）来失效。
+ *
+ *  Electron 另有 `chat:queued-input-changed` 广播走同一条失效路径；这个信号是 web（无 IPC）那侧
+ *  的等价物，两边因此表现一致。 */
+type QueuedInputListener = () => void
+const queuedInputListeners = new Map<number, Set<QueuedInputListener>>()
+
+export function notifyQueuedInputChanged(sessionId: number): void {
+  for (const listener of queuedInputListeners.get(sessionId) ?? []) listener()
+}
+
+function subscribeQueuedInputChanged(sessionId: number, listener: QueuedInputListener): () => void {
+  const set = queuedInputListeners.get(sessionId) ?? new Set<QueuedInputListener>()
+  set.add(listener)
+  queuedInputListeners.set(sessionId, set)
+  return () => {
+    set.delete(listener)
+    if (set.size === 0) queuedInputListeners.delete(sessionId)
+  }
+}
+
 export interface QueuedInputRowsState {
   rows: QueuedInput[]
   /** 有行已被 dispatcher claim → 这个会话上有一轮派发 run 正在起（或已经在跑）。 */
@@ -58,9 +84,11 @@ export function useQueuedInputRows(opts: {
     }
     const disposeQueued = mailApi.chat.onQueuedInputChanged?.(invalidate)
     const disposeTurn = mailApi.chat.onTurnPersisted?.((payload) => invalidate(payload))
+    const disposeLocal = subscribeQueuedInputChanged(sessionId, () => invalidate({ sessionId }))
     return () => {
       disposeQueued?.()
       disposeTurn?.()
+      disposeLocal()
     }
   }, [enabled, mailApi, queryClient, queryKey, sessionId])
 

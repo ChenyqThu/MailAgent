@@ -36,6 +36,41 @@ import {
   type AttachmentPanelBridge
 } from './chatAttachmentAdapter'
 import { recordOwnRun, registerOwnRunOwner, type OwnRunOwner } from './ownRuns'
+import { publishComposerRecovery } from './composerRecovery'
+import { notifyQueuedInputChanged } from './useQueuedInputRows'
+
+/** 会话租约拒绝的唯一判据。gateway 在 register 拿不到位子时回这一对（server.ts 的
+ *  `writeJson(res, 409, { error: 'E_RUN_ACTIVE', … })`），而且是在 onTurnStart 之前 —— 库里
+ *  一行不落，那句话只活在内存线程里。
+ *  🔴 必须同时满足状态码与错误码：别的 409（队列状态冲突）、别的非 2xx（鉴权 / 体积超限 /
+ *  上游拒绝）都不是「稍后再发就行」，把它们也转投队列 = 把真错误伪装成「已排队」，用户以为
+ *  发出去了其实永远不会发。判不出就维持现状（丢，但至少不撒谎）。 */
+const RUN_LEASE_REJECTED_STATUS = 409
+const RUN_LEASE_REJECTED_CODE = 'E_RUN_ACTIVE'
+
+/** 这一轮请求体里最后那条用户消息的纯文本；拿不到（resume 轮的末条不是用户消息、体不是 JSON）
+ *  返回 null —— 没有「用户刚说的话」可救，就什么都不做。 */
+function lastUserTextOf(body: BodyInit | null | undefined): string | null {
+  if (typeof body !== 'string') return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return null
+  }
+  const messages = (parsed as { messages?: unknown }).messages
+  if (!Array.isArray(messages)) return null
+  const last = messages.at(-1) as AiSdkMessageLike | undefined
+  if (!last || last.role !== 'user' || !Array.isArray(last.parts)) return null
+  const text = last.parts
+    .map((part) => {
+      const candidate = part as { type?: unknown; text?: unknown }
+      return candidate.type === 'text' && typeof candidate.text === 'string' ? candidate.text : ''
+    })
+    .join('')
+    .trim()
+  return text.length > 0 ? text : null
+}
 
 type AiSdkMessageLike = { role?: unknown; parts?: unknown[] }
 type AiSdkToolPartLike = { type: string; state?: unknown }
@@ -242,6 +277,44 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
       ? { type: contextSnapshot.scope.anchorType, id: contextSnapshot.scope.anchorId }
       : null
     const enabledSkills = contextSnapshot?.capabilities.enabledSkills ?? []
+    // 0903 —— 撞上会话租约的那一句话转投队列，而不是凭空消失。判据见 RUN_LEASE_REJECTED_CODE
+    // 的红字（同时认状态码与错误码，别的一律维持现状）。返回是否真的转投成功。
+    const redirectRejectedSendToQueue = async (
+      rejection: Response,
+      init?: RequestInit
+    ): Promise<boolean> => {
+      let code: unknown
+      try {
+        code = ((await rejection.json()) as { error?: unknown }).error
+      } catch {
+        return false // 体不是 JSON → 判不出是哪种拒绝 → 维持现状
+      }
+      if (code !== RUN_LEASE_REJECTED_CODE) return false
+      const sid = latchRef.current.id
+      const text = lastUserTextOf(init?.body)
+      if (sid == null || text == null) return false
+      try {
+        const queued = await fetch(`${gatewayBaseUrl}/api/ai/queued-input`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: sid, content: text })
+        })
+        if (!queued.ok) throw new Error('enqueue rejected')
+        // 排队条据此立刻画出那条气泡（Electron 另有 chat:queued-input-changed 广播走同一条失效
+        // 路径；这个进程内信号是 web 那侧的等价物）。🔴 不在这里直接用 QueryClient：本闭包所在的
+        // 组件树不保证有 QueryClientProvider，`useQueryClient()` 在那种挂载下会直接抛。
+        notifyQueuedInputChanged(sid)
+        return true
+      } catch {
+        // 入队端点也挂了：把文本交还 composer。选它而不是「就这么丢掉」，是因为丢掉正是本次
+        // 要修的那个 bug；选它而不是「只弹个 toast」，是因为 toast 一消失字就没了。
+        // 🔴 无条件覆盖 composer：这中间只隔一次 loopback 往返（毫秒级），用户几乎不可能已经
+        // 打了新内容；ChatPromptDispatcher 对同一种失败也是这么做的（那里的窗口还有 4 秒）。
+        publishComposerRecovery(sid, text)
+        return false
+      }
+    }
     return new AssistantChatTransport({
       api: `${gatewayBaseUrl}/api/ai/chat`,
       // harness-chat lane A B1 (task 07-15) — explicit-stop side-channel. With detached runs the
@@ -277,9 +350,16 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
         // no record, the poll-mask degrade path handles it. codex r3 P1 — recorded under THIS
         // runtime instance's owner token: the mask holds only while this mount is alive; a header
         // landing after unmount records against a released owner = background from the start.
-        return fetch(input, init).then((res) => {
+        return fetch(input, init).then(async (res) => {
           const runId = res.headers.get('x-mailagent-run-id')
           if (runId) recordOwnRun(ownRunOwner, runId)
+          if (res.status === RUN_LEASE_REJECTED_STATUS) {
+            const redirected = await redirectRejectedSendToQueue(res.clone(), init)
+            if (redirected) {
+              // 已经在排队条里等着了 —— 这一轮就此终止，但不是「消息没了」。
+              return res
+            }
+          }
           return res
         })
       },
