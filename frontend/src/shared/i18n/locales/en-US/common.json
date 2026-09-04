@@ -7600,6 +7600,8 @@
       "sortSize": "By size",
       "sortType": "By type",
       "sortDate": "By date",
+      "sortAsc": "Ascending",
+      "sortDesc": "Descending",
       "filterPlaceholder": "Filter in this folder",
       "searchLibraryPlaceholder": "Search the whole library",
       "unknownDateGroup": "Unknown date",
@@ -7756,7 +7758,8 @@
       "matchBoth": "Keyword + semantic",
       "noSemantic": "Semantic search isn't on (model not downloaded) — matching by keyword only.",
       "groupTitle": "Library",
-      "clear": "Clear search"
+      "clear": "Clear search",
+      "warnGeneric": "One part of this search didn't run."
     },
     "agent": {
       "expectedHashLabel": "Based on version",
@@ -7833,7 +7836,9 @@
       "deleteForeverConfirmBody": "This can't be undone — the file skips the 30-day trash window and is removed from disk immediately.",
       "deleteForeverConfirm": "Delete Forever",
       "originalLocation": "Was in {path}",
-      "deleteConfirmBodyLibrary": "The file goes to the trash and stays there for 30 days — you can restore it during that time."
+      "deleteConfirmBodyLibrary": "The file goes to the trash and stays there for 30 days — you can restore it during that time.",
+      "emptyTitle": "Trash is empty",
+      "emptyHint": "Deleted files stay here for 30 days."
     },
     "common": {
       "sourceLabel": {
@@ -7842,10 +7847,28 @@
         "chat": "Chat",
         "agent": "Agent",
         "derived": "Parsed version"
+      },
+      "kind": {
+        "markdown": "Markdown",
+        "html": "Web page",
+        "pdf": "PDF",
+        "office": "Office document",
+        "image": "Image",
+        "text": "Text",
+        "placeholder": "Not downloaded",
+        "other": "File"
+      },
+      "app": {
+        "word": "Word",
+        "excel": "Excel",
+        "powerpoint": "PowerPoint",
+        "preview": "Preview",
+        "browser": "Browser",
+        "player": "Player"
       }
     },
     "chat": {
-      "prompt": "About this file, I'd like to ask:"
+      "prompt": "About {mention}, I'd like to ask:"
     }
   }
 }

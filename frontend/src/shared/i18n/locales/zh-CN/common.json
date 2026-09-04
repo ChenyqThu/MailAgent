@@ -7600,6 +7600,8 @@
       "sortSize": "按大小",
       "sortType": "按类型",
       "sortDate": "按时间",
+      "sortAsc": "升序",
+      "sortDesc": "降序",
       "filterPlaceholder": "在当前文件夹中过滤",
       "searchLibraryPlaceholder": "搜索整个资料库",
       "unknownDateGroup": "日期未知",
@@ -7756,7 +7758,8 @@
       "matchBoth": "关键词+语义",
       "noSemantic": "语义检索未启用（模型未下载），当前只按关键词匹配。",
       "groupTitle": "资料库",
-      "clear": "清除搜索"
+      "clear": "清除搜索",
+      "warnGeneric": "这次检索有一处没生效。"
     },
     "agent": {
       "expectedHashLabel": "基于版本",
@@ -7833,7 +7836,9 @@
       "deleteForeverConfirmBody": "此操作无法撤销，文件不会进入 30 天保留期，将立刻从磁盘清除。",
       "deleteForeverConfirm": "永久删除",
       "originalLocation": "原位置：{path}",
-      "deleteConfirmBodyLibrary": "文件会进废纸篓，保留 30 天，期间可以恢复。"
+      "deleteConfirmBodyLibrary": "文件会进废纸篓，保留 30 天，期间可以恢复。",
+      "emptyTitle": "废纸篓是空的",
+      "emptyHint": "删除的文件会在这里保留 30 天。"
     },
     "common": {
       "sourceLabel": {
@@ -7842,10 +7847,28 @@
         "chat": "对话",
         "agent": "Agent",
         "derived": "解析版"
+      },
+      "kind": {
+        "markdown": "Markdown",
+        "html": "网页",
+        "pdf": "PDF",
+        "office": "Office 文档",
+        "image": "图片",
+        "text": "文本",
+        "placeholder": "未下载",
+        "other": "文件"
+      },
+      "app": {
+        "word": "Word",
+        "excel": "Excel",
+        "powerpoint": "PowerPoint",
+        "preview": "预览",
+        "browser": "浏览器",
+        "player": "播放器"
       }
     },
     "chat": {
-      "prompt": "关于这份资料，我想问："
+      "prompt": "关于 {mention}，我想问："
     }
   }
 }
