@@ -29,11 +29,15 @@ const update = process.argv.includes('--update')
 
 /** 跑 tsc 拿原始输出。tsc 有错时退出码非 0 —— 那是预期，不是失败。
  *  🔴 不用 `node_modules/.bin/tsc`：那是 POSIX shell shim，Windows 上 spawnSync
- *  直接 ENOENT（v2.17.0 首跑 Win CI 实证）。用 node 跑 typescript 包的 JS 入口。 */
+ *  直接 ENOENT（v2.17.0 首跑 Win CI 实证）。用 node 跑 typescript 包的 JS 入口。
+ *  🔴 显式抬堆：本程序（tests/ + src/shared + src/electron + src/web）实测峰值 2.67 GB，
+ *  而 node 的老生代默认上限**随可用内存变**——开发机足够，GitHub runner 上是 ~2 GB，于是
+ *  只在 CI 里 OOM（v3.0.0 发版当天实证：mark-compact 反复失效后 FATAL）。写死在这里而不是
+ *  workflow 的 env，是因为 OOM 属于这个程序自身的规模事实，换 CI、换本地机器都得带着。 */
 function runTsc() {
   const tscJs = join(root, 'node_modules', 'typescript', 'bin', 'tsc')
   try {
-    execFileSync(process.execPath, [tscJs, '--noEmit', '-p', 'tsconfig.tests.json'], {
+    execFileSync(process.execPath, ['--max-old-space-size=4096', tscJs, '--noEmit', '-p', 'tsconfig.tests.json'], {
       cwd: root,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe']
