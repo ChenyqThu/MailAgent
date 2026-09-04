@@ -80,6 +80,8 @@ function renderTree(): void {
       <LibraryTreePanel
         selectedPath="my-docs"
         expanded={new Set(['__mounts__'])}
+        searchQuery=""
+        onSearchChange={vi.fn()}
         onSelectFolder={vi.fn()}
         onExpandedChange={vi.fn()}
         onNewMarkdown={vi.fn()}

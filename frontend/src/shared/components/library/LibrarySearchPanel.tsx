@@ -44,6 +44,13 @@ const LANE_LABEL_KEY: Record<LibrarySearchLane, string> = {
   both: 'library.search.matchBoth'
 }
 
+/** 全库搜索的输入框。dogfood 0903 第 3 件后它住在**左树头部**（`LibraryTreePanel`），不再是
+ *  内容区顶上那条通栏 —— 所以这里只画那一枚 pill，外框（padding / 分隔线）归头部管。
+ *
+ *  形状逐属性抄通讯录清单列头部第二行（`ContactListPane` 的搜索 label）：h-7 / gap-[7px] /
+ *  px-2.5 / Search 13 / 清除钮 `hover:bg-ink-fg/[0.08]` + X 11。唯一一处有意不同是
+ *  `focus-within:border-coral/60`：通讯录那枚没有焦点态，而这枚原来有，跟着抄等于把已有的
+ *  焦点提示删掉。 */
 export function LibrarySearchBar({
   value,
   onChange
@@ -53,40 +60,32 @@ export function LibrarySearchBar({
 }): ReactElement {
   const { t } = useTranslation()
   return (
-    <div className="border-b border-ink-border-soft px-4 py-2">
-      <label className="flex h-9 items-center gap-2 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 focus-within:border-coral/60">
-        <Search size={14} strokeWidth={2} aria-hidden className="shrink-0 text-ink-fg-3" />
-        <input
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          data-testid="library-search-input"
-          placeholder={t('library.search.placeholder')}
-          aria-label={t('library.folder.searchLibraryPlaceholder')}
-          className="min-w-0 flex-1 bg-transparent text-body text-ink-fg outline-none placeholder:text-ink-fg-3"
-        />
-        {value !== '' ? (
-          <button
-            type="button"
-            data-testid="library-search-clear"
-            aria-label={t('library.search.clear')}
-            onClick={() => onChange('')}
-            className="grid size-5 shrink-0 place-items-center rounded text-ink-fg-3 hover:bg-ink-3 hover:text-ink-fg"
-          >
-            <X size={12} strokeWidth={2} aria-hidden />
-          </button>
-        ) : null}
-      </label>
-    </div>
+    <label className="flex h-7 min-w-0 flex-1 items-center gap-[7px] rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2.5 focus-within:border-coral/60">
+      <Search size={13} aria-hidden className="shrink-0 text-ink-fg-3" />
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        data-testid="library-search-input"
+        placeholder={t('library.search.placeholder')}
+        aria-label={t('library.folder.searchLibraryPlaceholder')}
+        className="min-w-0 flex-1 bg-transparent text-body text-ink-fg outline-none placeholder:text-ink-fg-3"
+      />
+      {value !== '' ? (
+        <button
+          type="button"
+          data-testid="library-search-clear"
+          aria-label={t('library.search.clear')}
+          onClick={() => onChange('')}
+          className="grid size-5 shrink-0 place-items-center rounded-[var(--r-ctl)] text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-fg/[0.08] hover:text-ink-fg-1"
+        >
+          <X size={11} aria-hidden />
+        </button>
+      ) : null}
+    </label>
   )
 }
 
-function HitRow({
-  hit,
-  onSelect
-}: {
-  hit: LibrarySearchHit
-  onSelect(): void
-}): ReactElement {
+function HitRow({ hit, onSelect }: { hit: LibrarySearchHit; onSelect(): void }): ReactElement {
   const { t } = useTranslation()
   const tone = libraryIconTone(hit)
   const Icon = tone.Icon

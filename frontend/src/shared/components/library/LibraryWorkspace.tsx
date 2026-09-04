@@ -31,7 +31,7 @@ import { isProjection, refKey, refOf, type LibraryFileRef } from './fileMeta'
 import { FilePreview } from './FilePreview'
 import { FolderView } from './FolderView'
 import { buildLibraryChatPrompt, libraryMentionRefOf } from './libraryChat'
-import { LibrarySearchBar, LibrarySearchResults } from './LibrarySearchPanel'
+import { LibrarySearchResults } from './LibrarySearchPanel'
 import { useLibraryApi, useLibraryTreeQuery, useLibraryUpload } from './hooks'
 import { LibraryTreePanel } from './LibraryTreePanel'
 import { rootLabelKey } from './fileMeta'
@@ -203,7 +203,10 @@ export function LibraryWorkspace(): ReactElement {
         useAIChatPanel.getState().openChatModal()
         return
       }
-      startLibraryChatWithPrompt(ref, buildLibraryChatPrompt(ref, (key, vars) => t(key, vars)))
+      startLibraryChatWithPrompt(
+        ref,
+        buildLibraryChatPrompt(ref, (key, vars) => t(key, vars))
+      )
     },
     [t]
   )
@@ -247,6 +250,8 @@ export function LibraryWorkspace(): ReactElement {
             <LibraryTreePanel
               selectedPath={selectedPath}
               expanded={expanded}
+              searchQuery={query}
+              onSearchChange={setQuery}
               onSelectFolder={openFolder}
               onExpandedChange={(next) => {
                 for (const p of next) if (!expanded.has(p)) setExpanded(p, true)
@@ -257,15 +262,16 @@ export function LibraryWorkspace(): ReactElement {
                 openFolder(folderPath)
                 void upload(folderPath, files)
               }}
-              onReveal={(folderPath) => void revealLibraryTarget({ kind: 'folder', path: folderPath })}
+              onReveal={(folderPath) =>
+                void revealLibraryTarget({ kind: 'folder', path: folderPath })
+              }
             />
           </div>
         </div>
         <div className="flex h-full min-h-0 flex-col overflow-hidden">
-          {/* 全库搜索恒在页头（design §9.1 / mockup B3）：与文件夹工具条上那个窄的
-              「在当前文件夹中过滤」是两件事，刻意不合成一个框。有关键词时结果面**顶掉**
-              下面的文件夹 / 预览，清空即回到原来看的东西。 */}
-          <LibrarySearchBar value={query} onChange={setQuery} />
+          {/* 全库搜索的输入口在左树头部（dogfood 0903 第 3 件：页头那条通栏太重）；内容区只按
+              关键词切面 —— 有关键词时结果面**顶掉**文件夹 / 预览，清空即回到原来看的东西。
+              它与文件夹工具条上那个窄的「在当前文件夹中过滤」仍是两件事，刻意不合成一个框。 */}
           {searching ? (
             <LibrarySearchResults query={query} onSelectFile={openHit} />
           ) : fileRef !== null ? (

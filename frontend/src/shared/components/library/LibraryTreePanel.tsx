@@ -2,6 +2,10 @@
 // 文件数角标 / 只读锁 / 不可用警示 / 节点右键菜单。呈现层是收编的 `ui/FileTree`，数据层是
 // `components/library/tree.ts`；这里只做「树节点 → FileTreeNode」的映射与菜单。
 //
+// 头部（dogfood 0903 第 3 件）：全库搜索框从内容区顶上那条通栏搬到这里，形状抄通讯录清单列
+// 头部（`ContactListPane`）—— 两行、搜索 flex-1、右侧 26px 工具钮。排序也一并搬上来：它改的是
+// `library-tree` store 里那份全局 sortKey/sortDir，FolderView 只是读它，**同一份状态不放两个控件**。
+//
 // i18n：内置根按 slug 直查 `library.tree.roots.<slug>`；两处 path→key 偏移在这里处理 ——
 // 废纸篓 path 是 `.trash`（key `trash`），挂载分组头是合成的 `__mounts__`（key `mounts`）。
 //
@@ -12,6 +16,7 @@
 import { useMemo, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
+  ArrowUpDown,
   Bot,
   ExternalLink,
   Lock,
@@ -35,22 +40,34 @@ import {
 import { FileTree, type FileTreeNode } from '@shared/components/ui/FileTree'
 import { Input } from '@shared/components/ui/input'
 import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
-import { PROJECTION_SLUG } from '@shared/libraryConstants'
+import { cn } from '@shared/lib/cn'
+import { PROJECTION_SLUG, TRASH_SLUG } from '@shared/libraryConstants'
+import { useLibraryTree, type LibrarySortKey } from '@shared/state/library-tree'
 
-import { rootLabelKey } from './fileMeta'
+import { isProjection, rootLabelKey } from './fileMeta'
 import { toastError } from '@shared/state/toast'
 
+import { LibrarySearchBar } from './LibrarySearchPanel'
 import { useAddMountFlow } from './useAddMountFlow'
 import { useCursorMenu } from './cursorMenu'
 import { useLibraryTreeQuery } from './hooks'
 import { mountErrorText, useMountMutations } from './mountHooks'
-import {
-  buildLibraryTree,
-  MOUNTS_GROUP_PATH,
-  type LibraryTreeNode
-} from './tree'
+import { buildLibraryTree, MOUNTS_GROUP_PATH, type LibraryTreeNode } from './tree'
 
 const ICON_SIZE = 14
+
+/** 头部工具钮：逐属性抄通讯录清单列的 `TOOL_BUTTON_CLASS`（26px 方钮 + 8% 前景 hover 底）。 */
+const TOOL_BUTTON_CLASS =
+  'grid size-[26px] shrink-0 place-items-center rounded-[var(--r-ctl)] text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-fg/[0.08] hover:text-ink-fg disabled:cursor-not-allowed disabled:opacity-50'
+
+/** 排序值域与文案 —— 从 FolderView 的工具条搬上来（同一份 store 状态只留一个控件）。 */
+const SORT_KEYS: readonly LibrarySortKey[] = ['name', 'size', 'type', 'date']
+const SORT_LABEL_KEY: Record<LibrarySortKey, string> = {
+  name: 'library.folder.sortName',
+  size: 'library.folder.sortSize',
+  type: 'library.folder.sortType',
+  date: 'library.folder.sortDate'
+}
 
 const ROOT_ICONS: Record<string, ReactElement> = {
   'mail-attachments': <Mail size={ICON_SIZE} strokeWidth={1.9} aria-hidden />,
@@ -62,6 +79,9 @@ const ROOT_ICONS: Record<string, ReactElement> = {
 interface Props {
   selectedPath: string | null
   expanded: ReadonlySet<string>
+  /** 全库搜索词。住在 workspace（内容区要按它切结果面），头部只是它的输入口。 */
+  searchQuery: string
+  onSearchChange(next: string): void
   onSelectFolder(path: string): void
   onExpandedChange(next: string[]): void
   onNewMarkdown(folderPath: string): void
@@ -72,6 +92,8 @@ interface Props {
 export function LibraryTreePanel({
   selectedPath,
   expanded,
+  searchQuery,
+  onSearchChange,
   onSelectFolder,
   onExpandedChange,
   onNewMarkdown,
@@ -87,6 +109,38 @@ export function LibraryTreePanel({
   const mounts = useMountMutations()
   const [renaming, setRenaming] = useState<{ id: number; label: string } | null>(null)
   const [unmounting, setUnmounting] = useState<{ id: number; label: string } | null>(null)
+  const [sortOpen, setSortOpen] = useState(false)
+  const sortTrigger = useRef<HTMLButtonElement | null>(null)
+  const sortKey = useLibraryTree((s) => s.sortKey)
+  const sortDir = useLibraryTree((s) => s.sortDir)
+  const setSort = useLibraryTree((s) => s.setSort)
+
+  // 投影区与废纸篓的排序由服务端定死（`library.folder.sortDisabledHint`）—— 判据与
+  // FolderView 那支逐字一致，选中的是哪个文件夹就锁哪个。
+  const path = selectedPath ?? ''
+  const sortLocked =
+    isProjection({ path }) || path === TRASH_SLUG || path.startsWith(`${TRASH_SLUG}/`)
+
+  const sortItems = useMemo((): readonly PopmenuItem[] => {
+    const keys: PopmenuItem[] = SORT_KEYS.map((key) => ({
+      kind: 'radio',
+      id: key,
+      label: t(SORT_LABEL_KEY[key]),
+      checked: sortKey === key,
+      closeOnSelect: true,
+      // 不带方向 = store 的「点同一项切正反、换项回该项的自然序」（见 setSort）。
+      onSelect: () => setSort(key)
+    }))
+    const dirs: PopmenuItem[] = (['asc', 'desc'] as const).map((dir) => ({
+      kind: 'radio',
+      id: `dir-${dir}`,
+      label: t(dir === 'asc' ? 'library.folder.sortAsc' : 'library.folder.sortDesc'),
+      checked: sortDir === dir,
+      closeOnSelect: true,
+      onSelect: () => setSort(sortKey, dir)
+    }))
+    return [...keys, { kind: 'separator', id: 'sort-dir' }, ...dirs]
+  }, [setSort, sortDir, sortKey, t])
 
   const roots = useMemo(
     () =>
@@ -160,7 +214,8 @@ export function LibraryTreePanel({
   const menuItems = useMemo((): readonly PopmenuItem[] => {
     const node = menu.payload
     if (node === null) return []
-    if (node.kind === 'trash') return [{ kind: 'label', id: 'notice', label: t('library.trash.notice') }]
+    if (node.kind === 'trash')
+      return [{ kind: 'label', id: 'notice', label: t('library.trash.notice') }]
     if (node.path.startsWith(PROJECTION_SLUG)) {
       return [
         { kind: 'label', id: 'ro', label: t('library.tree.readonlyRoot') },
@@ -202,14 +257,18 @@ export function LibraryTreePanel({
         {
           kind: 'action',
           id: 'toggle-mode',
-          label: t(toMode === 'ro' ? 'library.tree.menu.toReadonly' : 'library.tree.menu.toWritable'),
+          label: t(
+            toMode === 'ro' ? 'library.tree.menu.toReadonly' : 'library.tree.menu.toWritable'
+          ),
           // 🔴 切只读**不问**有没有文件正在编辑：F5 拍板是「编辑器降级只读并保留未保存文本」，
           // 不是拒绝切换。降级由 `FilePreview` 按 `mount.mode` 自己完成（本次 PATCH 失效树查询
           // → 它读到 ro → 编辑面收起，草稿留在编辑器 state 里）。
           onSelect: () => {
             void mounts.patch(mount.id, { mode: toMode }).catch((err: unknown) => {
               toastError(
-                t(toMode === 'ro' ? 'library.tree.menu.toReadonly' : 'library.tree.menu.toWritable'),
+                t(
+                  toMode === 'ro' ? 'library.tree.menu.toReadonly' : 'library.tree.menu.toWritable'
+                ),
                 mountErrorText(err)
               )
             })
@@ -245,15 +304,52 @@ export function LibraryTreePanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="nav-panel-header shrink-0">
-        <span className="flex-1 truncate text-body font-medium text-ink-fg">
-          {t('library.tree.domainTitle')}
-        </span>
-        {tree.data ? (
-          <span className="shrink-0 font-mono text-micro tabular-nums text-ink-fg-3">
-            {tree.data.file_count}
+      {/* 头部两行，形状抄通讯录清单列（`ContactListPane`）：① 域名 + 计数；② 搜索 + 排序。
+          🔴 因此这里**不再用 `nav-panel-header`** —— 那是固定 41px 的单行域头，塞不下第二行；
+          容器的 padding / 分隔线换成通讯录那一份（px-3 / pb-2 / pt-2.5 / border-b）。 */}
+      <div className="shrink-0 border-b border-ink-border px-3 pb-2 pt-2.5">
+        <div className="flex items-center gap-2">
+          <span className="flex-1 truncate text-body font-medium text-ink-fg">
+            {t('library.tree.domainTitle')}
           </span>
-        ) : null}
+          {tree.data ? (
+            <span className="shrink-0 font-mono text-micro tabular-nums text-ink-fg-3">
+              {tree.data.file_count}
+            </span>
+          ) : null}
+        </div>
+        <div className="mt-2 flex items-center gap-1.5">
+          <LibrarySearchBar value={searchQuery} onChange={onSearchChange} />
+          <div className="relative">
+            <button
+              ref={sortTrigger}
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={sortOpen}
+              aria-label={t('library.folder.sortAria')}
+              data-testid="library-tree-sort"
+              disabled={sortLocked}
+              title={
+                sortLocked
+                  ? t('library.folder.sortDisabledHint')
+                  : `${t('library.folder.sortAria')}：${t(SORT_LABEL_KEY[sortKey])}`
+              }
+              onClick={() => setSortOpen((open) => !open)}
+              className={cn(TOOL_BUTTON_CLASS, sortOpen && 'bg-ink-fg/[0.08] text-ink-fg')}
+            >
+              <ArrowUpDown size={14} />
+            </button>
+            <Popmenu
+              open={sortOpen}
+              onClose={() => setSortOpen(false)}
+              ariaLabel={t('library.folder.sortAria')}
+              items={sortItems}
+              triggerRef={sortTrigger}
+              align="end"
+              width={200}
+            />
+          </div>
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5 scrollbar-thin">
         <FileTree
@@ -362,7 +458,13 @@ function RenameMountDialog({
     >
       {target !== null ? (
         // key = 挂载 id：换一根时重挂，输入框回到那一根的当前标签。
-        <RenameMountBody key={target.id} target={target} onClose={onClose} onSubmit={onSubmit} busy={busy} />
+        <RenameMountBody
+          key={target.id}
+          target={target}
+          onClose={onClose}
+          onSubmit={onSubmit}
+          busy={busy}
+        />
       ) : null}
     </Dialog>
   )

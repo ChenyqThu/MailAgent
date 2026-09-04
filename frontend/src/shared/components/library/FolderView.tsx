@@ -3,13 +3,16 @@
 //
 // 🔴 过滤与排序都发给服务端：分页 200 之后，客户端只能排 / 筛当前这一页（第 2 页起就是错的）。
 // 投影区的 `q` 在服务端同时匹配文件名与来源列（主题 / 发件人，F4）；投影文件夹忽略 sort
-// （固定按邮件日期倒序），排序控件在那儿置灰。
+// （固定按邮件日期倒序）。
+//
+// 排序**控件**不在这条工具条上（dogfood 0903 第 3 件搬去了左树头部）：它改的是 `library-tree`
+// store 里那份全局 sortKey/sortDir，这里只读。工具条留下的两件都是「这一个文件夹」的：过滤词
+// 与网格 / 列表。
 
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight, Folder, MoreHorizontal, RotateCcw, Search, Trash2 } from 'lucide-react'
 
-import type { LibraryFolderSort } from '@shared/api/library'
 import type { LibraryFile, LibraryFolderEntry } from '@shared/api/types/library'
 import { Button } from '@shared/components/ui/button'
 import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
@@ -36,13 +39,6 @@ import { useLibraryFolderPages } from './hooks'
 import { FileStatusPill, Notice, Pill, SourcePill, TextStatusPill } from './parts'
 import type { LibraryFileActions } from './useLibraryFileActions'
 
-const SORT_KEYS: readonly LibraryFolderSort[] = ['name', 'size', 'type', 'date']
-const SORT_LABEL_KEY: Record<LibraryFolderSort, string> = {
-  name: 'library.folder.sortName',
-  size: 'library.folder.sortSize',
-  type: 'library.folder.sortType',
-  date: 'library.folder.sortDate'
-}
 const FILTER_DEBOUNCE_MS = 250
 
 function hasFiles(event: DragEvent): boolean {
@@ -83,7 +79,11 @@ function Tile({
       <button
         type="button"
         onClick={onOpen}
-        className={cn('grid size-9 shrink-0 place-items-center rounded-md border', tone.bg, tone.border)}
+        className={cn(
+          'grid size-9 shrink-0 place-items-center rounded-md border',
+          tone.bg,
+          tone.border
+        )}
         aria-label={t('library.folder.openAria', { name: file.filename })}
       >
         <I size={16} strokeWidth={2} className={tone.text} />
@@ -184,7 +184,10 @@ function Row({
    （`mail-attachments` 根、按月分组那一层就是这个形态）。左树能进，但内容区看着像空的。
    这里把服务端一直在返的 `folders` 画出来，排在文件之前 —— 与文件管理器同序。 */
 
-function folderCountLabel(entry: LibraryFolderEntry, t: (k: string, v?: Record<string, unknown>) => string): string {
+function folderCountLabel(
+  entry: LibraryFolderEntry,
+  t: (k: string, v?: Record<string, unknown>) => string
+): string {
   return entry.file_count > 0 ? t('library.folder.folderItems', { count: entry.file_count }) : ''
 }
 
@@ -362,7 +365,6 @@ export function FolderView({
   const sortKey = useLibraryTree((s) => s.sortKey)
   const sortDir = useLibraryTree((s) => s.sortDir)
   const setView = useLibraryTree((s) => s.setView)
-  const setSort = useLibraryTree((s) => s.setSort)
 
   const [filter, setFilter] = useState('')
   const debouncedFilter = useDebouncedValue(filter, FILTER_DEBOUNCE_MS)
@@ -388,8 +390,6 @@ export function FolderView({
     return all.filter((f) => f.name.toLowerCase().includes(needle))
   }, [debouncedFilter, pages.data])
 
-  const [sortOpen, setSortOpen] = useState(false)
-  const sortTrigger = useRef<HTMLButtonElement | null>(null)
   const [menuFile, setMenuFile] = useState<LibraryFile | null>(null)
   const menuTrigger = useRef<HTMLButtonElement | null>(null)
   const [dragging, setDragging] = useState(false)
@@ -399,24 +399,16 @@ export function FolderView({
     dragDepth.current = 0
   }, [path])
 
-  const sortItems = useMemo(
-    (): readonly PopmenuItem[] =>
-      SORT_KEYS.map((key) => ({
-        kind: 'radio',
-        id: key,
-        label: t(SORT_LABEL_KEY[key]),
-        checked: sortKey === key,
-        closeOnSelect: true,
-        onSelect: () => setSort(key)
-      })),
-    [setSort, sortKey, t]
-  )
-
   const fileMenuItems = useMemo((): readonly PopmenuItem[] => {
     const file = menuFile
     if (file === null) return []
     const items: PopmenuItem[] = [
-      { kind: 'action', id: 'open', label: t('library.folder.menuOpen'), onSelect: () => onOpenFile(file) },
+      {
+        kind: 'action',
+        id: 'open',
+        label: t('library.folder.menuOpen'),
+        onSelect: () => onOpenFile(file)
+      },
       {
         kind: 'action',
         id: 'system',
@@ -493,10 +485,11 @@ export function FolderView({
 
   // 顶层那五个是磁盘 slug，显示要走 i18n；再往下是真实目录名，原样显示。
   const folderLabel = (entry: LibraryFolderEntry): string =>
-    (TOP_LEVEL_SLUGS as readonly string[]).includes(entry.path) ? t(rootLabelKey(entry.path)) : entry.name
+    (TOP_LEVEL_SLUGS as readonly string[]).includes(entry.path)
+      ? t(rootLabelKey(entry.path))
+      : entry.name
 
   const folderName = path.split('/').pop() ?? path
-  const sortLocked = projection || trash
   const empty = !pages.isPending && files.length === 0 && folders.length === 0
 
   return (
@@ -513,27 +506,6 @@ export function FolderView({
             className="min-w-0 flex-1 bg-transparent text-meta text-ink-fg outline-none placeholder:text-ink-fg-3"
           />
         </label>
-        <div className="relative">
-          <button
-            ref={sortTrigger}
-            type="button"
-            disabled={sortLocked}
-            title={sortLocked ? t('library.folder.sortDisabledHint') : undefined}
-            onClick={() => setSortOpen((v) => !v)}
-            className="h-7 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2.5 text-meta text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {t(SORT_LABEL_KEY[sortKey])}
-          </button>
-          <Popmenu
-            open={sortOpen}
-            onClose={() => setSortOpen(false)}
-            ariaLabel={t('library.folder.sortAria')}
-            triggerRef={sortTrigger}
-            align="start"
-            width={200}
-            items={sortItems}
-          />
-        </div>
         <div className="ml-auto flex items-center gap-2">
           <SegmentedControl
             value={view}
