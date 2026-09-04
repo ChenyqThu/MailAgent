@@ -23,6 +23,7 @@ import { ChatComposerControlsProvider } from '@shared/assistant/components/compo
 import { type ChatComposerControls } from '@shared/assistant/components/composerControlsContext'
 import { _resetOwnRunsForTest } from '@shared/assistant/runtime/ownRuns'
 import { useQueuedInputRows } from '@shared/assistant/runtime/useQueuedInputRows'
+import { ChatPromptDispatcher } from '@shared/assistant/components/ChatPromptDispatcher'
 import type { QueuedInput } from '@shared/api/types'
 import i18n from '@shared/i18n'
 
@@ -211,6 +212,39 @@ describe('撞上租约 409 的那一句话转投队列', () => {
     // 🔴 判据是排队条读到的**真行**，不是「发过一次 POST」——静默转投正是要避免的那种修法。
     await waitFor(() => expect(seen.map((row) => row.content)).toEqual([TEXT]))
   })
+
+  // 🔴 与既有那条恢复路的交界。ChatPromptDispatcher（邮件工具栏「创建事项」那条）自己也处理
+  // 「409 或 transport 构造失败」：append 之后盯 thread，有界窗口内那条用户消息没落地就把文本
+  // 交还 composer。两条路要是都动手，同一句话会**既进队列又回到输入框**，用户按一次回车就发
+  // 第二遍。本用例钉的就是这个不变量：转投成功时 composer 必须保持空。
+  test('与 ChatPromptDispatcher 不打架：指令撞 409 后只进队列，不同时回填 composer', async () => {
+    const fetchMock = stubFetch(RUN_ACTIVE_409)
+    const onDispatched = vi.fn()
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <AiSdkRuntimeProvider gatewayBaseUrl="http://127.0.0.1:8300" sessionId={SESSION_ID}>
+          <ChatComposerControlsProvider value={stubControls()}>
+            <ChatPromptDispatcher
+              request={{ nonce: 1, text: TEXT }}
+              onDispatched={onDispatched}
+            />
+            <ThreadComposer />
+          </ChatComposerControlsProvider>
+        </AiSdkRuntimeProvider>
+      </QueryClientProvider>
+    )
+
+    await waitFor(() => expect(enqueuePosts(fetchMock)).toHaveLength(1))
+    expect(enqueuePosts(fetchMock)[0]).toEqual({ sessionId: SESSION_ID, content: TEXT })
+
+    // 等过 ChatPromptDispatcher 的 4 秒兜底窗（PROMPT_ACCEPT_TIMEOUT_MS）——它若也动手，
+    // composer 这时就会拿到同一句话。
+    await new Promise((r) => setTimeout(r, 4300))
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    expect(textarea.value).toBe('')
+    expect(enqueuePosts(fetchMock)).toHaveLength(1)
+  }, 10_000)
 
   test('转投失败 → 文本回填 composer（至少不丢字）', async () => {
     const fetchMock = stubFetch(RUN_ACTIVE_409, false)
