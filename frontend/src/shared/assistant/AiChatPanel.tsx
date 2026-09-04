@@ -51,6 +51,7 @@ import { AiSdkRuntimeProvider } from './runtime/AiSdkRuntimeProvider'
 import { ThreadRunningBridge } from './runtime/ThreadRunningBridge'
 import { makeSessionSettledHandler } from './runtime/threadRunningGuard'
 import { useBackgroundChatRun } from './runtime/useBackgroundChatRun'
+import { useQueuedInputRows } from './runtime/useQueuedInputRows'
 import { useAssistantIdentity } from './assistantIdentity'
 import { useApprovalDecideBusy } from './useApprovalDecideBusy'
 import { PendingApprovalPanel } from './PendingApprovalPanel'
@@ -501,10 +502,19 @@ export function AIChatPanel({
     refetchOnWindowFocus: true
   })
   const approvalPendingExists = pendingApprovalTruth.data != null
+  // 0903 dogfood —— 派发一轮排队追问的头几秒 `/run/active` 还探不到 run（探针在 active:false 之后
+  // 停轮询，dispatcher 的 run 要等 prepareChatRun 走完才 register），面板于是既不显示在场行、又不进
+  // 排队模式，这时按下的 Enter 走直发、撞会话租约 409 被丢掉。判据补上 claim 那一刻就广播出来的
+  // `claimed` 行（见 useQueuedInputRows 头注）。AgentConversation 同源。
+  const queuedRows = useQueuedInputRows({
+    enabled: queuedInputEnabled,
+    gatewayBaseUrl,
+    sessionId: chat.activeSessionId
+  })
   const queueModeActive =
     queuedInputEnabled &&
     chat.activeSessionId != null &&
-    (aiSdkRunning || backgroundActive || approvalPendingExists)
+    (aiSdkRunning || backgroundActive || approvalPendingExists || queuedRows.dispatchInFlight)
   const onEnqueueQueuedInput = useCallback(
     (content: string): void => {
       if (gatewayBaseUrl == null || chat.activeSessionId == null) return
@@ -621,8 +631,8 @@ export function AIChatPanel({
     <>
       {pendingApprovalCard}
       <BackgroundRunPresence
-        active={backgroundActive}
-        startedAt={backgroundStartedAt}
+        active={backgroundActive || queuedRows.dispatchInFlight}
+        startedAt={backgroundStartedAt ?? queuedRows.dispatchStartedAt}
         className="mb-4"
       />
       <QueuedInputBar
@@ -729,8 +739,9 @@ export function AIChatPanel({
           {/* living-bot-avatar WP5 — the 13px Sparkles gave way to the official assistant bot:
               idle micro-motion when quiet, `working` while a BACKGROUND run is active (own-run
               is already masked inside useBackgroundChatRun, so a foreground stream stays idle
-              here — the in-flow TurnPresence narrates that one). */}
-          <AssistantPanelBotAvatar working={backgroundActive} />
+              here — the in-flow TurnPresence narrates that one), and likewise while a claimed
+              queued row's dispatch run is still being born (the probe can't see it yet). */}
+          <AssistantPanelBotAvatar working={backgroundActive || queuedRows.dispatchInFlight} />
           {/* 0813 主 agent 身份：起了名（如 Jarvis）标题即名字；未配置回 i18n 默认 */}
           {assistantIdentity.name ?? t('chat.title')}
         </div>

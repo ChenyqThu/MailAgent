@@ -174,6 +174,49 @@ describe('queued input dispatcher', () => {
     expect(deps.revert).not.toHaveBeenCalled()
   })
 
+  test.each([
+    {
+      lane: 'idle wait times out',
+      overrides: () => {
+        let now = 0
+        return {
+          hasActiveRun: vi.fn(() => true),
+          now: vi.fn(() => now),
+          sleep: vi.fn(async (ms: number) => {
+            now += ms
+          })
+        }
+      }
+    },
+    {
+      lane: 'compact wait times out',
+      overrides: () => {
+        let now = 0
+        return {
+          compactActive: vi.fn(() => true),
+          now: vi.fn(() => now),
+          sleep: vi.fn(async (ms: number) => {
+            now += ms
+          })
+        }
+      }
+    }
+  ])(
+    'revertIds survive an early return ($lane) — the stopped run\'s claimed rows never stay claimed',
+    async ({ overrides }) => {
+      const deps = makeDeps(overrides())
+
+      await runQueuedInputDispatch(deps, 7, {
+        ids: [1],
+        waitForIdleMs: 500,
+        revertIds: [9]
+      })
+
+      expect(deps.revert).toHaveBeenCalledWith([9])
+      expect(deps.claim).not.toHaveBeenCalled()
+    }
+  )
+
   test('revertIds are reverted and broadcast before the picked row is claimed', async () => {
     const order: string[] = []
     const deps = makeDeps({

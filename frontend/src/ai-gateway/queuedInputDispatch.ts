@@ -21,7 +21,8 @@ export interface QueuedInputDispatchOptions {
    *  out leaves the rows queued. */
   waitForIdleMs?: number
   /** Rows the stopped run had already claimed: CAS them back to queued so the next drain re-sends
-   *  them (an aborted run never persists, so nothing was delivered). */
+   *  them (an aborted run never persists, so nothing was delivered). Applied before the waits below
+   *  so no early return can strand them. */
   revertIds?: number[]
 }
 
@@ -45,6 +46,16 @@ export async function runQueuedInputDispatch(
   sessionId: number,
   opts: QueuedInputDispatchOptions = {}
 ): Promise<void> {
+  // Runs FIRST, before either wait below: the caller (the interrupt endpoint) has already aborted
+  // the run that claimed these rows, so they are orphaned from this moment on. Reverting after the
+  // waits meant every early return (idle-wait timeout / compact-wait timeout / a run appearing
+  // mid-compact) left them stuck in 'claimed' — invisible to listDispatchable, so nothing would
+  // ever send them again until the next app start's restoreAllStale().
+  if (opts.revertIds && opts.revertIds.length > 0) {
+    deps.revert(opts.revertIds)
+    deps.broadcast(sessionId)
+  }
+
   if (deps.hasActiveRun(sessionId)) {
     const idleWaitLimit = opts.waitForIdleMs ?? 0
     const idleWaitStartedAt = deps.now()
@@ -64,11 +75,6 @@ export async function runQueuedInputDispatch(
     }
     await deps.sleep(COMPACT_WAIT_STEP_MS)
     if (deps.hasActiveRun(sessionId)) return
-  }
-
-  if (opts.revertIds && opts.revertIds.length > 0) {
-    deps.revert(opts.revertIds)
-    deps.broadcast(sessionId)
   }
 
   const onlyIds = opts.ids

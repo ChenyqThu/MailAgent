@@ -53,6 +53,7 @@ import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProv
 import { ThreadRunningBridge } from '@shared/assistant/runtime/ThreadRunningBridge'
 import { makeSessionSettledHandler } from '@shared/assistant/runtime/threadRunningGuard'
 import { useBackgroundChatRun } from '@shared/assistant/runtime/useBackgroundChatRun'
+import { useQueuedInputRows } from '@shared/assistant/runtime/useQueuedInputRows'
 import { useApprovalDecideBusy } from '@shared/assistant/useApprovalDecideBusy'
 import { fetchPendingApproval } from '@shared/assistant/approvalRecordClient'
 import { PendingApprovalPanel } from '@shared/assistant/PendingApprovalPanel'
@@ -713,10 +714,19 @@ export function AgentConversation({
     refetchOnWindowFocus: true
   })
   const approvalPendingExists = pendingApprovalTruth.data != null
+  // 0903 dogfood —— 派发一轮排队追问的那 2~8 秒里 `/run/active` 探针还探不到 run（它在 active:false
+  // 之后停轮询，而 dispatcher 的 run 要等 prepareChatRun 走完才 register），面板于是既不显示在场行、
+  // 又不进排队模式，这时按下的 Enter 走直发、撞会话租约 409 被丢掉。claim 那一刻广播出来的
+  // `claimed` 行是同一件事的即时事实来源，判据补上它（见 useQueuedInputRows 头注）。
+  const queuedRows = useQueuedInputRows({
+    enabled: queuedInputEnabled,
+    gatewayBaseUrl,
+    sessionId: chatActiveSessionId
+  })
   const queueModeActive =
     queuedInputEnabled &&
     chatActiveSessionId != null &&
-    (aiSdkRunning || backgroundActive || approvalPendingExists)
+    (aiSdkRunning || backgroundActive || approvalPendingExists || queuedRows.dispatchInFlight)
   const onEnqueueQueuedInput = useCallback(
     (content: string): void => {
       if (gatewayBaseUrl == null || chatActiveSessionId == null) return
@@ -894,8 +904,8 @@ export function AgentConversation({
     <>
       {pendingApprovalCard}
       <BackgroundRunPresence
-        active={backgroundActive}
-        startedAt={backgroundStartedAt}
+        active={backgroundActive || queuedRows.dispatchInFlight}
+        startedAt={backgroundStartedAt ?? queuedRows.dispatchStartedAt}
         className="mx-auto mb-4 w-full max-w-[var(--thread-max-width)] px-1"
       />
       <div className="mx-auto w-full max-w-[var(--thread-max-width)]">

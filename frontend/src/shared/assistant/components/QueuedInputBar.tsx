@@ -1,12 +1,12 @@
-import { useEffect, useMemo } from 'react'
+import { useMemo } from 'react'
 import { useAui } from '@assistant-ui/react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Pencil, Send, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import type { QueuedInput } from '@shared/api/types'
-import { useMailApi } from '@shared/hooks/useMailApi'
 import { qk } from '@shared/lib/queryKeys'
+import { useQueuedInputRows } from '@shared/assistant/runtime/useQueuedInputRows'
 
 /** Queued (not yet sent) follow-ups, rendered at the END of the message stream as user bubbles in a
  *  waiting state (task 09-02). Not real message rows — the dispatcher still merges them into one
@@ -31,36 +31,9 @@ export function QueuedInputBar({
 }): React.JSX.Element | null {
   const { t } = useTranslation()
   const aui = useAui()
-  const mailApi = useMailApi()
   const queryClient = useQueryClient()
   const queryKey = useMemo(() => qk.chat.queuedInput(sessionId), [sessionId])
-  const query = useQuery({
-    queryKey,
-    queryFn: async () => {
-      const response = await fetch(
-        `${gatewayBaseUrl}/api/ai/queued-input?sessionId=${encodeURIComponent(String(sessionId))}`,
-        { credentials: 'include' }
-      )
-      if (!response.ok) throw new Error('queued input fetch failed')
-      const body = (await response.json()) as { items?: QueuedInput[] }
-      return body.items ?? []
-    },
-    enabled: enabled && gatewayBaseUrl != null && sessionId != null,
-    retry: false
-  })
-
-  useEffect(() => {
-    if (!enabled || sessionId == null) return undefined
-    const invalidate = (payload: { sessionId: number }): void => {
-      if (payload.sessionId === sessionId) void queryClient.invalidateQueries({ queryKey })
-    }
-    const disposeQueued = mailApi.chat.onQueuedInputChanged?.(invalidate)
-    const disposeTurn = mailApi.chat.onTurnPersisted?.((payload) => invalidate(payload))
-    return () => {
-      disposeQueued?.()
-      disposeTurn?.()
-    }
-  }, [enabled, mailApi, queryClient, queryKey, sessionId])
+  const { rows } = useQueuedInputRows({ enabled, gatewayBaseUrl, sessionId })
 
   const mutate = useMutation({
     mutationFn: async ({ path, id }: { path: 'cancel' | 'send' | 'interrupt'; id: number }) => {
@@ -85,7 +58,7 @@ export function QueuedInputBar({
     }
   })
 
-  const items = (query.data ?? []).filter((item) => !dispatchedRowIds?.has(item.id))
+  const items = rows.filter((item) => !dispatchedRowIds?.has(item.id))
   if (!enabled || items.length === 0) return null
 
   const statusText = (item: QueuedInput): string => {

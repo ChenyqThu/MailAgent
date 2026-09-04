@@ -14,7 +14,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vi
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 
-import type { ChatMessage, ChatSession, ChatSessionListItem } from '@shared/api/types'
+import type {
+  ChatMessage,
+  ChatSession,
+  ChatSessionListItem,
+  QueuedInput
+} from '@shared/api/types'
 import type { UseGeneralChatReturn } from '@shared/hooks/useGeneralChat'
 import type { ChatComposerControls } from '@shared/assistant/components/composerControlsContext'
 import i18n from '@shared/i18n'
@@ -197,6 +202,8 @@ function mount(chat: UseGeneralChatReturn = fakeChat()): void {
 }
 
 let queuedInputPosts: Array<{ sessionId: number; content: string }> = []
+/** GET /api/ai/queued-input 的回包（用例按需塞 claimed 行）。 */
+let queuedInputRows: QueuedInput[] = []
 /** 有待决审批时 /api/ai/approval/pending 回 hit。 */
 let approvalPending = false
 let queuedInputEnabledConfig = true
@@ -208,6 +215,7 @@ beforeEach(() => {
   capture.onRunningChange = null
   capture.backgroundActive = false
   queuedInputPosts = []
+  queuedInputRows = []
   approvalPending = false
   queuedInputEnabledConfig = true
   vi.stubEnv('VITE_BUILD_TARGET', 'web')
@@ -234,6 +242,9 @@ beforeEach(() => {
           : { ok: false, status: 404, json: async () => ({}) }
       }
       if (url.includes('/api/ai/queued-input')) {
+        if ((init?.method ?? 'GET').toUpperCase() === 'GET') {
+          return { ok: true, json: async () => ({ items: queuedInputRows }) }
+        }
         queuedInputPosts.push(
           JSON.parse(String(init?.body ?? '{}')) as { sessionId: number; content: string }
         )
@@ -297,6 +308,29 @@ describe('AgentConversation —— 排队输入接进主场地', () => {
     })
     await waitFor(() => expect(queuedInputPosts).toHaveLength(1))
     expect(queuedInputPosts[0]).toEqual({ sessionId: 10, content: '排队的追问' })
+  })
+
+  // 0903 dogfood —— 派发一轮排队追问期间面板整个「看起来死了」的那段盲窗。
+  // `/run/active` 探针在 active:false 之后停轮询，而 dispatcher 的 run 要 2~8 秒后才 register，
+  // 于是 backgroundActive 恒假：既不显示在场行，`queueModeActive` 也是假的 —— 这时按下的 Enter
+  // 走直发、撞会话租约 409 被丢掉。判据改用 dispatcher claim 那一刻就广播出来的 `claimed` 行。
+  test('有 claimed 行（派发 run 正在起）→ 进排队模式并显示后台在场行', async () => {
+    queuedInputRows = [
+      {
+        id: 2,
+        sessionId: 10,
+        runId: null,
+        mode: 'follow_up',
+        content: '你能干什么',
+        status: 'claimed',
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_010_000
+      }
+    ]
+    mount()
+
+    await waitFor(() => expect(capture.composerControls?.queueModeActive).toBe(true))
+    await waitFor(() => expect(screen.getByTestId('background-run-presence')).toBeTruthy())
   })
 
   test('排队气泡挂在消息流末尾，已被信封带走的行按 rowIds 隐去', async () => {
