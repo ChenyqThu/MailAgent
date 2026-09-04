@@ -3190,15 +3190,6 @@
         "label": "群聊多 agent（实验）",
         "helper": "由本机的 AI 服务接管群里的发言：按每位成员的响应模式决定谁开口、成员之间可以互相接话，并受链上限与每小时预算约束。关掉就退回原来的「你发一条、成员各回一轮」。开关立即生效，不需要重启。"
       },
-      "werewolf": {
-        "label": "狼人杀实验",
-        "helper": "一键建一局：主群（法官 + 6 位玩家）+ 狼人子群 + 预言家子群。角色由服务端洗牌，只经身份块告知本人。到对话域「群聊」里发「@法官 开始游戏」开局。",
-        "cta": "一键建局",
-        "creating": "建局中…",
-        "created": "已建局：{title}",
-        "partial": "已建群，但群设置未写全：请在群详情面重新确认主持人位",
-        "failed": "建局失败"
-      },
       "mcpConnectors": {
         "label": "外部服务连接器",
         "helper": "连接 Notion / Atlassian 直连服务与 Composio 托管连接器；开启后左侧导航会出现「连接与工具」的外部连接段。",
@@ -5123,7 +5114,8 @@
           "defaultTag": "默认挂载集（email / search / report）",
           "empty": "显式零挂载：该 Agent 无任何 Skill 工具。"
         }
-      }
+      },
+      "deleteConfirm": "确认删除此 Agent？"
     }
   },
   "agentSettings": {
@@ -7369,9 +7361,6 @@
     "dialogModeLabel": "响应模式",
     "dialogJudgeLabel": "主持人（可选）",
     "dialogMainAgentNote": "主助理也可以入群：入群后它只作为成员发言，不带单聊里的工具。",
-    "dialogTemplate": "从模板创建",
-    "dialogTemplateSoon": "狼人杀预设：法官 + 6 位玩家 + 两个子群（需打开实验室「群聊多 agent」）",
-    "gameOver": "本局已结束",
     "subgroupOf": "子群 · {title}",
     "previewYou": "你",
     "previewMainAgent": "主助理",
@@ -7514,8 +7503,6 @@
       "notify": "本群通知",
       "notifyHelper": "群不在前台时，每条链合并成一条通知。",
       "usage": "用量",
-      "familyUsage": "本局合计（含子群）",
-      "familyCap": "{used} / {cap}",
       "last24h": "最近 24 小时",
       "lastStop": "上次停止：{reason}",
       "recentTurns": "近期唤醒",

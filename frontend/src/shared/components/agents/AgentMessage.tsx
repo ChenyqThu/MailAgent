@@ -20,6 +20,7 @@ import { MessageTiming } from '@shared/assistant/components/MessageTiming'
 import { TurnPresence, TurnPresenceEmpty } from '@shared/assistant/components/TurnPresence'
 import {
   UserMessageAttachments,
+  UserMessageBody,
   UserMessageLibraryChips
 } from '@shared/assistant/components/message'
 import { getAssistantPartComponents } from '@shared/assistant/tools/registerToolUIs'
@@ -54,7 +55,10 @@ export function AgentUserMessage(): React.JSX.Element {
           // 后者(break-word)不参与 min-content 计算, 在被 flex/max-w 约束的盒子里对单个超长 token
           // 仍会溢出; anywhere 会, 这正是这里需要的。break-all 不可用——它对中英文正文一律逐字断。
           <div className="rounded-2xl rounded-br-md border border-[var(--hairline)] bg-ink-3 px-3.5 py-2 text-body leading-relaxed text-ink-fg [overflow-wrap:anywhere]">
-            <MessagePrimitive.Parts />
+            {/* dogfood 0903 —— 正文走共用的 UserMessageBody 而不是裸 Parts：run 期间入队的追问
+                是一条 `<queued_followups>` 信封消息，裸 Parts 会把那段 XML 原样打在气泡里
+                （owner 在事项跟进里撞到的就是这个）。 */}
+            <UserMessageBody />
           </div>
         )}
         {/* edit 按钮悬浮在气泡左侧外(demo idiom：absolute -translate-x-full)，hover 才出现(dogfood-2)。 */}

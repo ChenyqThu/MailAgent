@@ -1292,7 +1292,7 @@ export function CustomAgentDrawer({
                   border: '1px solid rgb(var(--c-fail) / 0.3)'
                 }}
               >
-                {t('agents.search.deleteConfirm')}
+                {t('agents.custom.deleteConfirm')}
               </button>
               <button
                 type="button"

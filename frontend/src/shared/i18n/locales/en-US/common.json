@@ -3190,15 +3190,6 @@
         "label": "Multi-agent group chat (experimental)",
         "helper": "Lets the local AI service drive who speaks in a group: each member's response mode decides who wakes up, members can reply to each other, and every round is bounded by the chain cap and hourly budgets. Turn it off to go back to \"you send one message, each member replies once\". Takes effect immediately — no restart."
       },
-      "werewolf": {
-        "label": "Werewolf lab",
-        "helper": "Creates one game: a main group (judge + 6 players) plus wolf and seer subgroups. Roles are shuffled server-side and revealed only to their owner. Say \"@法官 开始游戏\" in the group chat to begin.",
-        "cta": "Set up a game",
-        "creating": "Setting up…",
-        "created": "Game ready: {title}",
-        "partial": "Groups created, but settings were not fully applied — re-confirm the host seat in the group details",
-        "failed": "Could not set up the game"
-      },
       "mcpConnectors": {
         "label": "External service connectors",
         "helper": "Connect direct Notion / Atlassian services and Composio-managed connectors. When enabled, an external connections section appears under Connections & Tools in the sidebar.",
@@ -5123,7 +5114,8 @@
           "defaultTag": "default mount set (email / search / report)",
           "empty": "Explicit zero mount: this agent has no skill tools."
         }
-      }
+      },
+      "deleteConfirm": "Delete this agent?"
     }
   },
   "agentSettings": {
@@ -7369,9 +7361,6 @@
     "dialogModeLabel": "Response mode",
     "dialogJudgeLabel": "Host (optional)",
     "dialogMainAgentNote": "The main assistant can join too: inside a group it only speaks as a member, without its one-on-one tools.",
-    "dialogTemplate": "Create from template",
-    "dialogTemplateSoon": "Werewolf preset: judge + 6 players + two subgroups (requires the group-agents lab)",
-    "gameOver": "Game over",
     "subgroupOf": "Subgroup of {title}",
     "previewYou": "You",
     "previewMainAgent": "Main assistant",
@@ -7514,8 +7503,6 @@
       "notify": "Group notifications",
       "notifyHelper": "When the group is not in the foreground, each chain is merged into one notification.",
       "usage": "Usage",
-      "familyUsage": "Game total (incl. subgroups)",
-      "familyCap": "{used} / {cap}",
       "last24h": "Last 24 hours",
       "lastStop": "Last stop: {reason}",
       "recentTurns": "Recent turns",

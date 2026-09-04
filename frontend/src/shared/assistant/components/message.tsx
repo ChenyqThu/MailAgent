@@ -23,6 +23,7 @@ import { cn } from '@shared/lib/cn'
 import { ImageLightbox } from '@shared/components/email/EmailBodyFrame'
 import { navigateToLibraryFile } from '@shared/components/library/deeplink'
 import type { ChatLibraryPartData } from '@shared/assistant/runtime/chatAttachmentAdapter'
+import { parseQueuedFollowups } from '@shared/assistant/queuedFollowups'
 
 import { getAssistantPartComponents } from '../tools/registerToolUIs'
 import { TurnPresence, TurnPresenceEmpty } from './TurnPresence'
@@ -168,20 +169,37 @@ export function UserMessageLibraryChips(): React.JSX.Element | null {
   )
 }
 
-export function UserMessage(): React.JSX.Element {
+/** 用户气泡的正文。普通消息走 `MessagePrimitive.Parts`；`<queued_followups>` 信封拆成几条
+ *  正常的消息行 —— 那个 XML 是发给模型的载体，不是给人看的。
+ *
+ *  🔴 两处用户气泡（本文件的邮件面板版 + components/agents/AgentMessage.tsx 的 agent 视图版）
+ *  必须都用它。dogfood 0903 owner 在事项跟进里看到的就是没走这条路的那份：气泡里原样打着
+ *  `<queued_followups><message>…</message></queued_followups>`。样式差异留在各自气泡壳上，
+ *  正文只有这一份。 */
+export function UserMessageBody(): React.JSX.Element {
   const { t } = useTranslation()
-  const hasAttachments = useAuiState((s) => (s.message.attachments?.length ?? 0) > 0)
-  const queuedEnvelope = useAuiState((s) => {
+  const queued = useAuiState((s) => {
     const text = s.message.content
       .filter((part) => part.type === 'text')
       .map((part) => ('text' in part ? part.text : ''))
       .join('')
-    if (!text.startsWith('<queued_followups>')) return null
-    const messages = [...text.matchAll(/<message>([\s\S]*?)<\/message>/g)].map((match) =>
-      match[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
-    )
-    return messages.length > 0 ? messages : null
+    return parseQueuedFollowups(text)
   })
+  if (queued === null) return <MessagePrimitive.Parts />
+  return (
+    <div className="space-y-1.5">
+      <div className="text-micro font-medium opacity-75">
+        {t('chat.queuedInput.dispatchedLabel')}
+      </div>
+      {queued.map((message, index) => (
+        <p key={index}>{message}</p>
+      ))}
+    </div>
+  )
+}
+
+export function UserMessage(): React.JSX.Element {
+  const hasAttachments = useAuiState((s) => (s.message.attachments?.length ?? 0) > 0)
   // An image-only send has no text part — skip the accent bubble instead of painting an empty pill.
   const hasBubbleContent = useAuiState((s) => s.message.content.length > 0)
   return (
@@ -191,18 +209,7 @@ export function UserMessage(): React.JSX.Element {
         // token, 不给断点就会撑破 max-w-[80%] 横向溢出。两处气泡是同一缺陷的两份副本, 改一处
         // 必改另一处(该文件顶部注释已记过这两个 surface 容易分叉)。
         <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[rgb(var(--c-accent))] px-3.5 py-2 text-body leading-relaxed text-[rgb(var(--c-accent-fg))] shadow-sm [overflow-wrap:anywhere]">
-          {queuedEnvelope ? (
-            <div className="space-y-1.5">
-              <div className="text-micro font-medium opacity-75">
-                {t('chat.queuedInput.dispatchedLabel')}
-              </div>
-              {queuedEnvelope.map((message, index) => (
-                <p key={index}>{message}</p>
-              ))}
-            </div>
-          ) : (
-            <MessagePrimitive.Parts />
-          )}
+          <UserMessageBody />
         </div>
       )}
       {hasAttachments && <UserMessageAttachments />}
