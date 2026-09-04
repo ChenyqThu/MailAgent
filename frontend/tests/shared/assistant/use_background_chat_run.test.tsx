@@ -175,6 +175,53 @@ describe('useBackgroundChatRun', () => {
   // codex r3 P1 (assertion corrected) — the own-run mask holds only while the OWNING RUNTIME
   // INSTANCE is mounted (live owner), not "forever once this renderer started it": after the
   // owning instance unmounts, the very same runId settles like any background run.
+  // 0903 dogfood 现象 B 的真机序列重放（session 287，毫秒级取自 ai_chat.db）：
+  //   18:06:21.4 附着流那一轮 persist（own run，被 isOwnRun 掩蔽 → 不 settle，但会失效探针）
+  //   18:06:21.5 被失效的探针重探 → 此刻派发 run 还没 register → active:false → 探针就此停轮询
+  //   18:06:23.9 派发 run register（面板全程看不见）
+  //   18:06:34.3 派发轮 persist → 广播带的是**别人的 runId**
+  // 问的就是最后那一下：面板到底会不会被叫起来重载。
+  test('派发轮的 persist 广播必定 settle 一次 —— 哪怕它整轮都没被探针看见过', async () => {
+    const owner = {}
+    const releaseOwner = registerOwnRunOwner(owner)
+    recordOwnRun(owner, 'r-own-913')
+    const state = { active: false as boolean, runId: undefined as string | undefined }
+    stubRunActiveFetch(state)
+    const onSettled = vi.fn()
+    const { rerender } = renderHook(
+      ({ localRunning }: { localRunning: boolean }) =>
+        useBackgroundChatRun({
+          gatewayBaseUrl: 'http://127.0.0.1:8300',
+          sessionId: 287,
+          enabled: true,
+          refreshNonce: 0,
+          localRunning,
+          onSettled
+        }),
+      { wrapper, initialProps: { localRunning: true } }
+    )
+
+    // ① 附着流收尾 + 它自己的 persist 广播：own run → 掩蔽，不 settle。
+    broadcast({ sessionId: 287, status: 'finished', runId: 'r-own-913' })
+    rerender({ localRunning: false })
+    await new Promise((r) => setTimeout(r, 30))
+    expect(onSettled).not.toHaveBeenCalled()
+
+    // ② 派发 run 起来了，但探针早已闩在 active:false（不再轮询）—— 面板整轮都不知道它存在。
+    state.active = true
+    state.runId = 'r-dispatch'
+    await new Promise((r) => setTimeout(r, 30))
+    expect(onSettled).not.toHaveBeenCalled()
+
+    // ③ 派发轮 persist：runId 不是自己的 → settle 一次（这就是回复补上来的那一下）。
+    state.active = false
+    state.runId = undefined
+    broadcast({ sessionId: 287, status: 'finished', runId: 'r-dispatch' })
+    await waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1))
+
+    releaseOwner()
+  })
+
   test('own attached stream masks placeholder + settle while its runtime is mounted; releases after unmount', async () => {
     const owner = {} // runtime instance #1's token (useMailAgentAiSdkRuntime lazy-state identity)
     const releaseOwner = registerOwnRunOwner(owner)
