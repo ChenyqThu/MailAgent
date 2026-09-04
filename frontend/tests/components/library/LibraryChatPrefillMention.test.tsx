@@ -12,6 +12,11 @@
 // 只有资料库搜索面被替身），验两件事：
 //   ① 预填之后引用还在（信封含该 id）—— 竞态没吃掉它；
 //   ② 用户把 chip 删掉后引用作废（信封不再含它）—— 隐私地板没被绕过。
+//
+// 🔴 指令文本走**真 i18n**，不是替身 t。0903 dogfood 报的「对话没把资料注入上下文」根因就在
+// 译文里：`library.chat.prompt` 两个 locale 都没有 `{mention}` 占位符 ⇒ 预填的是一句没有
+// chip 的白话 ⇒ 对账当场把引用摘掉。当时这个文件用的替身 t 自带占位符，于是链路测得全绿、
+// 功能却是坏的 —— 替身把被测的那处契约替掉了。
 
 import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
@@ -54,13 +59,15 @@ const MENTIONED: LibraryMentionRef = {
   size_bytes: 900
 }
 
-/** 「对话」按钮真正预填进 composer 的那段文本（含 directive）。 */
-const PROMPT = buildLibraryChatPrompt(MENTIONED, (_key, vars) =>
-  Object.entries(vars).reduce((out, [k, v]) => out.replaceAll(`{${k}}`, v), `{mention}｜{path}`)
-)
+/** 「对话」按钮真正预填进 composer 的那段文本（含 directive）。beforeAll 里按真 locale 算 —— 
+ *  模块求值时 i18n 还没切到 zh-CN。 */
+let PROMPT = ''
 
 beforeAll(async () => {
   await i18n.changeLanguage('zh-CN')
+  PROMPT = buildLibraryChatPrompt(MENTIONED, (key, vars) => i18n.t(key, vars))
+  // 译文丢了占位符 = 整条功能是坏的，先在这里把它钉死（下面两条都建立在 chip 真的在正文里）。
+  expect(PROMPT).toContain(String(MENTIONED.file_id))
   if (!('ResizeObserver' in globalThis)) {
     ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
       observe(): void {}

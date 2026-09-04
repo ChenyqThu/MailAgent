@@ -41,10 +41,16 @@ export function libraryMentionText(ref: LibraryMentionRef): string {
   })
 }
 
-/** 「对话」按钮预置的指令。`{mention}` 那一段是 directive 文本，翻译时当一个整体的词。 */
+/** 「对话」按钮预置的指令。
+ *
+ *  🔴 `{mention}` 那一段是 directive 文本，**译文里必须留着这个占位符**：少了它，预填进
+ *  composer 的就是一句没有 chip 的白话，AgentComposer 那条「chip 被删就摘掉 mention」的对账
+ *  下一拍就把引用摘掉 —— 表现为「点了对话，agent 却完全不知道在说哪份资料」（0903 owner
+ *  报的正是这个，两个 locale 当时都没有这个占位符）。闸在
+ *  `tests/components/library/libraryI18nKeys.test.ts`。 */
 export function buildLibraryChatPrompt(
   ref: LibraryMentionRef,
   t: (key: string, vars: Record<string, string>) => string
 ): string {
-  return t('library.chat.prompt', { mention: libraryMentionText(ref), path: ref.path })
+  return t('library.chat.prompt', { mention: libraryMentionText(ref) })
 }
