@@ -14,7 +14,7 @@
 //    闸：tests/ai-gateway/group_library_refs.test.ts 的「跨进程键名单源」一节 —— 把常量改坏，
 //    真 `appendGroupUserMessage` 发出的 body 就过不了真 `readLibraryRefsInput`。
 //
-// 🔴 `metadata` 这一列不是本模块专用（`{via:'main_agent'}` / `{kind:'game_over'}` / attachments
+// 🔴 `metadata` 这一列不是本模块专用（`{via:'main_agent'}` / `{kind:'group_stop'}` / attachments
 //    都住在同一个对象里）：编码是「往同一个 JSON 对象里加一个键」，其余键原样保留。
 // 🔴 解析对脏输入恒返 null、绝不抛（读侧面对的是历史数据，崩了整条群时间线就没了）。
 // 🔴 Pure：零 node / electron / react import（与 groupChat.ts / groupAttachments.ts 同一纪律）。

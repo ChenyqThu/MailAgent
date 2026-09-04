@@ -37,8 +37,8 @@ import {
 // 20 = an unrelated group · 5 = a plain (non-group) session · 1 = the main agent's chat session.
 
 const MAIN = 10
-const WOLVES = 11
-const SEER = 12
+const SUB_A = 11
+const SUB_B = 12
 const OTHER = 20
 const PLAIN = 5
 
@@ -94,24 +94,24 @@ function world(): World {
       mkFacts(['j', 'a', 'b', 'c'], {
         config: { v: 1, judgeAgentId: 'j', chainCap: 5 },
         modes: { a: 'realtime' },
-        childSessionIds: [WOLVES, SEER]
+        childSessionIds: [SUB_A, SUB_B]
       })
     ],
-    [WOLVES, mkFacts(['j', 'a', 'b'], { parentSessionId: MAIN })],
-    [SEER, mkFacts(['j', 'c'], { parentSessionId: MAIN })],
+    [SUB_A, mkFacts(['j', 'a', 'b'], { parentSessionId: MAIN })],
+    [SUB_B, mkFacts(['j', 'c'], { parentSessionId: MAIN })],
     [OTHER, mkFacts(['x', 'y'])]
   ])
   const titles = new Map<number, string>([
-    [MAIN, '狼人杀主群'],
-    [WOLVES, '狼群'],
-    [SEER, '预言家群'],
+    [MAIN, '项目主群'],
+    [SUB_A, '子群甲'],
+    [SUB_B, '子群乙'],
     [OTHER, '别的群'],
     [PLAIN, '普通会话']
   ])
   const rows = new Map<number, GroupTranscriptRow[]>([
     [MAIN, []],
-    [WOLVES, []],
-    [SEER, []],
+    [SUB_A, []],
+    [SUB_B, []],
     [OTHER, []]
   ])
   let nextId = 1000
@@ -194,20 +194,20 @@ function judgeTools(w: World, opts: Partial<Parameters<typeof createGroupJudgeTo
   const tools = createGroupJudgeTools(collector, new ApprovalGuard(), w.hooks, {
     sessionId: MAIN,
     judgeAgentId: 'j',
-    familySessionIds: [MAIN, WOLVES, SEER],
+    familySessionIds: [MAIN, SUB_A, SUB_B],
     judgeScopeStale: false,
     contextMode: 'manual_chat',
     ...opts
   })
   return { tools, collector }
 }
-function memberTools(w: World, sessionId = WOLVES) {
+function memberTools(w: World, sessionId = SUB_A) {
   const collector: GatewayToolAuditEntry[] = []
   return { tools: createGroupMemberTools(collector, w.hooks, { sessionId }), collector }
 }
 
 const FOUR = [...GATEWAY_GROUP_TOOL_NAMES].sort()
-const POST = { session_id: WOLVES, text: '天黑请闭眼' }
+const POST = { session_id: SUB_A, text: '子群里说一句' }
 
 // ── G1–G3 factory surfaces ──────────────────────────────────────────────────────────────────────
 
@@ -237,8 +237,8 @@ describe('group tool factories — surfaces', () => {
 describe('read scope', () => {
   test('G4 member reading its parent / a sibling → E_GROUP_SCOPE with zero hook calls; own group ok', async () => {
     const w = world()
-    const { tools } = memberTools(w, WOLVES)
-    for (const target of [MAIN, SEER, OTHER]) {
+    const { tools } = memberTools(w, SUB_A)
+    for (const target of [MAIN, SUB_B, OTHER]) {
       await expect(execute(tools.group_history!, { session_id: target })).rejects.toMatchObject({
         code: 'E_GROUP_SCOPE'
       })
@@ -251,18 +251,18 @@ describe('read scope', () => {
     expect(calls(w.hooks.groupUsage)).toBe(0)
     // omitted session_id = the current group
     expect(await execute(tools.group_members!, {})).toMatchObject({
-      session_id: WOLVES,
-      title: '狼群'
+      session_id: SUB_A,
+      title: '子群甲'
     })
-    expect(await execute(tools.group_history!, { session_id: WOLVES })).toMatchObject({
-      session_id: WOLVES
+    expect(await execute(tools.group_history!, { session_id: SUB_A })).toMatchObject({
+      session_id: SUB_A
     })
   })
 
   test('G5 judge reads the three family groups; outside the family → E_GROUP_SCOPE, zero calls', async () => {
     const w = world()
     const { tools } = judgeTools(w)
-    for (const target of [MAIN, WOLVES, SEER]) {
+    for (const target of [MAIN, SUB_A, SUB_B]) {
       expect(await execute(tools.group_members!, { session_id: target })).toMatchObject({
         session_id: target
       })
@@ -282,11 +282,11 @@ describe('read scope', () => {
     const m = (await execute(tools.group_members!, {})) as Record<string, unknown>
     expect(m).toMatchObject({
       session_id: MAIN,
-      title: '狼人杀主群',
+      title: '项目主群',
       parent_session_id: null,
       child_sessions: [
-        { id: WOLVES, title: '狼群' },
-        { id: SEER, title: '预言家群' }
+        { id: SUB_A, title: '子群甲' },
+        { id: SUB_B, title: '子群乙' }
       ],
       judge_scope_stale: false,
       budget: {
@@ -303,7 +303,7 @@ describe('read scope', () => {
       { agent_id: 'c', title: 'T-c', response_mode: 'mention', is_judge: false }
     ])
     const [family, since] = lastCall(w.hooks.groupUsage) as [number[], number]
-    expect(family).toEqual([MAIN, WOLVES, SEER])
+    expect(family).toEqual([MAIN, SUB_A, SUB_B])
     expect(Date.now() - since).toBeGreaterThanOrEqual(3_600_000 - 50)
   })
 
@@ -314,11 +314,11 @@ describe('read scope', () => {
     const { tools } = judgeTools(w)
     const m = (await execute(tools.group_members!, {})) as Record<string, unknown>
     expect(m.child_sessions).toEqual([
-      { id: WOLVES, title: '狼群' },
-      { id: SEER, title: '预言家群' }
+      { id: SUB_A, title: '子群甲' },
+      { id: SUB_B, title: '子群乙' }
     ])
     const [family] = lastCall(w.hooks.groupUsage) as [number[], number]
-    expect(family).toEqual([MAIN, WOLVES, SEER, THREAD])
+    expect(family).toEqual([MAIN, SUB_A, SUB_B, THREAD])
   })
 })
 
@@ -339,10 +339,10 @@ describe('judge group_post / group_create', () => {
       approvalStatus: 'auto_judge_scope'
     })
     // the delivery row in the TARGET group
-    const delivery = w.appended.find((a) => a.sessionId === WOLVES)!
+    const delivery = w.appended.find((a) => a.sessionId === SUB_A)!
     expect(delivery.msg).toMatchObject({
       role: 'assistant',
-      content: '天黑请闭眼',
+      content: '子群里说一句',
       speakerAgentId: 'j'
     })
     expect(Object.prototype.hasOwnProperty.call(delivery.msg, 'chainId')).toBe(false)
@@ -354,7 +354,7 @@ describe('judge group_post / group_create', () => {
     // the seam
     expect(calls(w.deliver)).toBe(1)
     const [target, seamRow] = lastCall(w.deliver) as [number, GroupTranscriptRow]
-    expect(target).toBe(WOLVES)
+    expect(target).toBe(SUB_A)
     expect(seamRow).toMatchObject({
       id: delivery.id,
       role: 'assistant',
@@ -372,7 +372,7 @@ describe('judge group_post / group_create', () => {
     })
     // the trace in the judge's OWN group
     expect(systemRows(w, MAIN)).toEqual([
-      { kind: 'judge_post', targetSessionId: WOLVES, messageId: delivery.id, woke: ['a', 'b'] }
+      { kind: 'judge_post', targetSessionId: SUB_A, messageId: delivery.id, woke: ['a', 'b'] }
     ])
   })
 
@@ -383,14 +383,14 @@ describe('judge group_post / group_create', () => {
       code: 'E_JUDGE_SCOPE_STALE'
     })
     expect(systemRows(w, MAIN)).toEqual([
-      { kind: 'judge_denied', reason: 'scope_stale', targetSessionId: WOLVES }
+      { kind: 'judge_denied', reason: 'scope_stale', targetSessionId: SUB_A }
     ])
     await expect(runWrite(tools.group_post!, POST, 'tc-b')).rejects.toMatchObject({
       code: 'E_JUDGE_SCOPE_STALE'
     })
     expect(systemRows(w, MAIN)).toHaveLength(1)
     expect(calls(w.deliver)).toBe(0)
-    expect(w.appended.filter((a) => a.sessionId === WOLVES)).toHaveLength(0)
+    expect(w.appended.filter((a) => a.sessionId === SUB_A)).toHaveLength(0)
     // group_create under a stale anchor is refused the same way (no target)
     await expect(
       runWrite(
@@ -413,10 +413,10 @@ describe('judge group_post / group_create', () => {
       })
     }
     await expect(
-      runWrite(tools.group_post!, { session_id: SEER, text: '预言家请睁眼' }, 'tc-cap')
+      runWrite(tools.group_post!, { session_id: SUB_B, text: '第三次投递' }, 'tc-cap')
     ).rejects.toMatchObject({ code: 'E_GROUP_POST_CAP' })
     expect(systemRows(w, MAIN).filter((r) => r.kind === 'judge_denied')).toEqual([
-      { kind: 'judge_denied', reason: 'posts_per_turn', targetSessionId: SEER }
+      { kind: 'judge_denied', reason: 'posts_per_turn', targetSessionId: SUB_B }
     ])
     expect(calls(w.deliver)).toBe(POSTS_PER_TURN_CAP)
     const fresh = judgeTools(w)
@@ -477,13 +477,13 @@ describe('judge group_post / group_create', () => {
     const w = world()
     const { tools, collector } = judgeTools(w)
     const out = (await runWrite(tools.group_create!, {
-      title: '狼群',
+      title: '子群甲',
       member_agent_ids: ['j', 'a', 'b'],
-      opening_text: '狼人请睁眼',
+      opening_text: '开场白',
       parent_session_id: 999
     })) as Record<string, unknown>
     expect(lastCall(w.hooks.createGroupSession)[0]).toEqual({
-      title: '狼群',
+      title: '子群甲',
       memberAgentIds: ['j', 'a', 'b'],
       parentSessionId: MAIN,
       invokedBy: 'judge'
@@ -500,7 +500,7 @@ describe('judge group_post / group_create', () => {
     expect(opening.msg).toMatchObject({
       role: 'assistant',
       speakerAgentId: 'j',
-      content: '狼人请睁眼'
+      content: '开场白'
     })
     expect(systemRows(w, MAIN)).toEqual([
       { kind: 'judge_post', targetSessionId: 77, messageId: opening.id, woke: ['a', 'b'] }
@@ -546,7 +546,7 @@ describe('judge group_post / group_create', () => {
 describe('main-agent group tools', () => {
   test('G12 user_requested is server-verified: title in last human message → auto_user_requested_verified; else ask', async () => {
     const w = world()
-    w.last = '把这句话发到狼群里'
+    w.last = '把这句话发到子群甲里'
     const { tools, collector } = mainTools(w)
     const verified = { ...POST, user_requested: true }
     expect(await needs(tools.group_post!, verified, 'tc-1')).toBe(false)
@@ -556,16 +556,16 @@ describe('main-agent group tools', () => {
     w.last = '随便聊聊'
     expect(await needs(tools.group_post!, verified, 'tc-2')).toBe(true)
     // another group's title in the message does not verify THIS target
-    w.last = '发到预言家群'
+    w.last = '发到子群乙'
     expect(await needs(tools.group_post!, verified, 'tc-3')).toBe(true)
     // no claim → ask even when the title is present
-    w.last = '把这句话发到狼群里'
+    w.last = '把这句话发到子群甲里'
     expect(await needs(tools.group_post!, POST, 'tc-4')).toBe(true)
     // nothing readable → ask
     w.last = null
     expect(await needs(tools.group_post!, verified, 'tc-5')).toBe(true)
     // no session → ask (lastHumanMessageText never consulted)
-    w.last = '把这句话发到狼群里'
+    w.last = '把这句话发到子群甲里'
     const nosession = mainTools(w, { sessionId: null })
     const before = calls(w.hooks.lastHumanMessageText)
     expect(await needs(nosession.tools.group_post!, verified, 'tc-6')).toBe(true)
@@ -601,11 +601,11 @@ describe('main-agent group tools', () => {
     // and with the seam back: user-role chain-root row, via main_agent, sourceSessionId = the chat
     w.deliver = vi.fn(async () => ({ queued: ['a'] }))
     const out = (await runWrite(tools.group_post!, POST, 'tc-ok')) as Record<string, unknown>
-    const delivery = w.appended.find((a) => a.sessionId === WOLVES)!
+    const delivery = w.appended.find((a) => a.sessionId === SUB_A)!
     expect(delivery.msg).toMatchObject({
       role: 'user',
       speakerAgentId: null,
-      content: '天黑请闭眼'
+      content: '子群里说一句'
     })
     expect(Object.prototype.hasOwnProperty.call(delivery.msg, 'chainId')).toBe(false)
     expect(JSON.parse(delivery.msg.metadata!)).toEqual({ via: 'main_agent', sourceSessionId: 1 })
@@ -840,7 +840,7 @@ describe('group_history', () => {
     expect(page1.messages.at(-1)!.id).toBe(60)
     expect(page1.has_more).toBe(true)
     expect(page1.oldest_id).toBe(41)
-    expect(page1.title).toBe('狼人杀主群')
+    expect(page1.title).toBe('项目主群')
     expect(page1.messages.map((m) => m.id)).not.toContain(61)
     expect(page1.messages.map((m) => m.id)).not.toContain(62)
 
@@ -948,7 +948,7 @@ describe('group venues — library read tools', () => {
   test('L13-1 成员 run 拿到 library_read / library_search（不含 library_list）', () => {
     const collector: GatewayToolAuditEntry[] = []
     const tools = createGroupMemberTools(collector, world().hooks, {
-      sessionId: WOLVES,
+      sessionId: SUB_A,
       libraryDomain: fakeLibraryDomain().domain
     })
     expect(Object.keys(tools).sort()).toEqual([
@@ -972,7 +972,7 @@ describe('group venues — library read tools', () => {
   test('L13-4 两件都是 silent read：零审批面（群 run 里一张卡没人点得动）', () => {
     const collector: GatewayToolAuditEntry[] = []
     const tools = createGroupMemberTools(collector, world().hooks, {
-      sessionId: WOLVES,
+      sessionId: SUB_A,
       libraryDomain: fakeLibraryDomain().domain
     })
     for (const name of ['library_read', 'library_search']) {
@@ -985,7 +985,7 @@ describe('group venues — library read tools', () => {
     const { domain, calls } = fakeLibraryDomain()
     const collector: GatewayToolAuditEntry[] = []
     const tools = createGroupMemberTools(collector, world().hooks, {
-      sessionId: WOLVES,
+      sessionId: SUB_A,
       libraryDomain: domain
     })
     const read = tools.library_read as Tool & {

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 //
-// g3 lane U — 群列表里的子群标注（狼人杀的狼群 / 预言家群挂在主群下）。
+// 群列表里的子群标注（子群挂在主群下）。
 //
 //   C1 父群在同一屏 → chip 写「子群 · <父群标题>」；
 //   C2 父群不在这一屏（删了 / 没翻到）→ 退回 `#id`，不吞掉标注也不多打一次读；
@@ -22,14 +22,14 @@ import type { GroupMemberMeta } from '../../src/shared/components/agents/groups/
 await i18n.changeLanguage('zh-CN')
 
 const MEMBER_META = new Map<string, GroupMemberMeta>([
-  ['judge', { title: '法官' }],
-  ['p1', { title: '玩家甲' }]
+  ['judge', { title: '主持人' }],
+  ['p1', { title: '成员甲' }]
 ])
 
 function row(over: Partial<GroupRowItem> = {}): GroupRowItem {
   return {
     id: 901,
-    title: '狼人杀 #1',
+    title: '项目主群',
     members_json: '["judge","p1"]',
     updated_at: 1_700_000_000_000,
     ...over
@@ -63,12 +63,12 @@ afterEach(() => {
 
 describe('群列表的子群标注', () => {
   test('C1 父群在同一屏 → chip 用父群标题', () => {
-    renderList([row(), row({ id: 902, title: '狼人杀 #1 · 狼群', parent_session_id: 901 })])
-    expect(screen.getByText('子群 · 狼人杀 #1')).toBeTruthy()
+    renderList([row(), row({ id: 902, title: '项目主群 · 子群甲', parent_session_id: 901 })])
+    expect(screen.getByText('子群 · 项目主群')).toBeTruthy()
   })
 
   test('C2 父群不在这一屏 → chip 退回 #id', () => {
-    renderList([row({ id: 902, title: '狼人杀 #1 · 狼群', parent_session_id: 901 })])
+    renderList([row({ id: 902, title: '项目主群 · 子群甲', parent_session_id: 901 })])
     expect(screen.getByText('子群 · #901')).toBeTruthy()
   })
 
@@ -78,7 +78,7 @@ describe('群列表的子群标注', () => {
   })
 
   test('C4 chip 不挤掉第二行的「N 名成员」', () => {
-    renderList([row(), row({ id: 902, title: '狼人杀 #1 · 狼群', parent_session_id: 901 })])
+    renderList([row(), row({ id: 902, title: '项目主群 · 子群甲', parent_session_id: 901 })])
     // 两行都没有 last_message → 两行的第二行都是成员数文案。
     expect(screen.getAllByText('2 名成员')).toHaveLength(2)
   })

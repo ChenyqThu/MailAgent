@@ -1334,7 +1334,6 @@ function thread(
     modes: Object.fromEntries(agentIds.map((id) => [id, 'realtime'])),
     config: opts.config ?? {},
     familySessionIds: [threadId, groupId],
-    parentSessionId: groupId,
     isThread: true,
     threadRootSpeakerAgentId: opts.rootSpeaker ?? null
   }

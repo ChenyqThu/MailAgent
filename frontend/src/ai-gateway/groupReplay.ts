@@ -1,22 +1,20 @@
 // L4 群聊 g3 — 群回放导出：一组群（family）的消息行 + turn 台账合并成一张 markdown 表。
 //
-// 纯函数 + 注入读，零 I/O、零运行时 import。只服务零-LLM 整局 vitest
-// （tests/ai-gateway/group_werewolf.test.ts）：gateway cfg 没有 turn 读 hook，`listTurns`
-// 由测试假世界注入，**不**为它新开 cfg hook；manual 脚本（scripts/werewolf_lab_run.py）
-// 自己从 messages + turns 拼同一列口径的 markdown，调不到本函数。
+// 纯函数 + 注入读，零 I/O、零运行时 import：gateway cfg 没有 turn 读 hook，`listTurns` 由调用方
+// 注入，**不**为它新开 cfg hook。今天的消费点只有 vitest（tests/ai-gateway/group_replay.test.ts）。
 //
 // 列：`时间 | 群 | 发言者 | 内容 | outcome`
 //   • 消息行（user / assistant）一行；assistant 行的 outcome 取 messageId 指向它的 turn。
 //   • messageId 为空的 turn 各成一行（沉默 / 折叠 / 跳过 / 失败 / 停止都不落消息行）。
-//   • 系统行只认 game_over / group_stop（judge_post / judge_denied 是法官自群里的标记，
+//   • 系统行只认 group_stop（judge_post / judge_denied 是法官自群里的标记，
 //     投递本体已作为目标群的 assistant 行出现，不再重复一行）。
 // 排序键 = 消息 createdAt / turn startedAt，并列时消息在前。
 
 import type { GroupTranscriptRow } from './groupChat'
 import type { GroupTurnRow } from './groupOrchestrator'
 
-/** 转录行 + 系统行的 metadata 原文（game_over / group_stop 的 kind 只能从这里读；
- *  GroupTranscriptRow 本身不带它，两种系统行的 content 又都可能为空）。 */
+/** 转录行 + 系统行的 metadata 原文（group_stop 的 kind 只能从这里读；GroupTranscriptRow
+ *  本身不带它，系统行的 content 又可能为空）。 */
 export type ReplayHistoryRow = GroupTranscriptRow & { metadata?: string | null }
 
 export interface ReplaySource {
@@ -71,7 +69,6 @@ function systemLabel(row: ReplayHistoryRow): string | null {
   } catch {
     return null
   }
-  if (meta.kind === 'game_over') return '(游戏结束)'
   if (meta.kind === 'group_stop') {
     return `(停止:${typeof meta.reason === 'string' ? meta.reason : ''})`
   }

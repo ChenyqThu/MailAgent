@@ -1,6 +1,6 @@
 """L4 群聊 g2 — 子群写面（``POST /api/chat/sessions/new`` 的 ``parentSessionId`` / ``invokedBy``）。
 
-法官在群里建子群（狼人杀的「狼人夜聊」）走的是**同一条**建群路由：权威校验全在服务端
+法官在群里建子群走的是**同一条**建群路由：权威校验全在服务端
 （红线 5 —— gateway 的建群工厂只是把参数递过来，不复制成员 / 子集 / 嵌套判定）。四类失败
 一律 ``E_INVALID_ARG`` + ``hint``：没在 ERROR_CODE_TO_HTTP 登记的码会被 app.py 兜底成 500，
 模型收到的就成了「服务器错误」而不是「这几位不在父群里」。
@@ -81,7 +81,7 @@ def test_subgroup_ok_persists_parent_and_invoked_by(
         _new_group(
             chat_client,
             ["a3", "a4"],
-            title="狼人夜聊",
+            title="夜间小组",
             parentSessionId=parent["id"],
             invokedBy="judge",
         )

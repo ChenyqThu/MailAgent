@@ -60,18 +60,18 @@ function doneProps(
 }
 
 const CREATE_ARGS = {
-  title: '狼人杀第一局',
-  member_agent_ids: ['judge', 'wolf-a', 'wolf-b', 'seer'],
-  opening_text: '天黑请闭眼。',
+  title: '交换机升级评审',
+  member_agent_ids: ['judge', 'member-a', 'member-b', 'member-c'],
+  opening_text: '先过一遍升级窗口。',
   judge_agent_id: 'judge'
 }
 
 describe('GroupCreateCard', () => {
   test('K1 审批相渲染 roster / 标题 / 开场白，并把首轮唤醒上界说成一句话', () => {
     render(<GroupCreateCard {...pendingProps('group_create', CREATE_ARGS, vi.fn())} />)
-    expect(screen.getByText('狼人杀第一局')).toBeTruthy()
-    expect(screen.getByText('judge、wolf-a、wolf-b、seer')).toBeTruthy()
-    expect(screen.getByText('天黑请闭眼。')).toBeTruthy()
+    expect(screen.getByText('交换机升级评审')).toBeTruthy()
+    expect(screen.getByText('judge、member-a、member-b、member-c')).toBeTruthy()
+    expect(screen.getByText('先过一遍升级窗口。')).toBeTruthy()
     // 无 modes = 全员 realtime（服务端出厂默认），四名成员 → 最多 4 位。
     expect(screen.getByText('最多 4 位')).toBeTruthy()
   })
@@ -81,7 +81,12 @@ describe('GroupCreateCard', () => {
       'modes 里两个 realtime → 只数 realtime',
       {
         ...CREATE_ARGS,
-        modes: { judge: 'realtime', 'wolf-a': 'realtime', 'wolf-b': 'mention', seer: 'mention' }
+        modes: {
+          judge: 'realtime',
+          'member-a': 'realtime',
+          'member-b': 'mention',
+          'member-c': 'mention'
+        }
       },
       '最多 2 位'
     ],
@@ -123,14 +128,14 @@ describe('GroupCreateCard', () => {
       <GroupCreateCard
         {...doneProps('group_create', CREATE_ARGS, {
           session_id: 77,
-          title: '狼人杀第一局',
+          title: '交换机升级评审',
           members: CREATE_ARGS.member_agent_ids,
           config_applied: false,
-          woke: ['wolf-a']
+          woke: ['member-a']
         })}
       />
     )
-    expect(screen.getByText(/已创建群聊「狼人杀第一局」（#77）/)).toBeTruthy()
+    expect(screen.getByText(/已创建群聊「交换机升级评审」（#77）/)).toBeTruthy()
     expect(screen.getByText(/主持人 \/ 响应模式没写进去/)).toBeTruthy()
 
     cleanup()
@@ -138,10 +143,10 @@ describe('GroupCreateCard', () => {
       <GroupCreateCard
         {...doneProps('group_create', CREATE_ARGS, {
           session_id: 77,
-          title: '狼人杀第一局',
+          title: '交换机升级评审',
           members: CREATE_ARGS.member_agent_ids,
           config_applied: true,
-          woke: ['wolf-a']
+          woke: ['member-a']
         })}
       />
     )
@@ -150,13 +155,13 @@ describe('GroupCreateCard', () => {
 })
 
 describe('GroupPostCard', () => {
-  const POST_ARGS = { session_id: 42, text: '狼人请睁眼。', user_requested: true }
+  const POST_ARGS = { session_id: 42, text: '把窗口定在周六凌晨。', user_requested: true }
 
   test('K4 审批相渲染目标群 / 文本 / user_requested 模型声明行，批准可点', () => {
     const respond = vi.fn()
     render(<GroupPostCard {...pendingProps('group_post', POST_ARGS, respond)} />)
     expect(screen.getByText('#42')).toBeTruthy()
-    expect(screen.getByText('狼人请睁眼。')).toBeTruthy()
+    expect(screen.getByText('把窗口定在周六凌晨。')).toBeTruthy()
     expect(screen.getByText('标记为「用户显式要求」——服务端未采信，仍需你确认')).toBeTruthy()
     fireEvent.click(screen.getByText('发送'))
     expect(respond).toHaveBeenCalledWith({ approved: true })
@@ -165,7 +170,7 @@ describe('GroupPostCard', () => {
   test('K4 没有 user_requested 时不显示模型声明那一行', () => {
     render(
       <GroupPostCard
-        {...pendingProps('group_post', { session_id: 42, text: '狼人请睁眼。' }, vi.fn())}
+        {...pendingProps('group_post', { session_id: 42, text: '把窗口定在周六凌晨。' }, vi.fn())}
       />
     )
     expect(screen.queryByText('标记为「用户显式要求」——服务端未采信，仍需你确认')).toBeNull()
@@ -178,12 +183,12 @@ describe('GroupPostCard', () => {
           ok: true,
           message_id: 901,
           chain_id: 901,
-          woke: ['wolf-a', 'wolf-b']
+          woke: ['member-a', 'member-b']
         })}
       />
     )
     expect(screen.getByText(/已发送（消息 #901）/)).toBeTruthy()
-    expect(screen.getByText('已唤醒：wolf-a、wolf-b')).toBeTruthy()
+    expect(screen.getByText('已唤醒：member-a、member-b')).toBeTruthy()
   })
 
   test('K5 没人被唤醒时说「无」，不是空白', () => {

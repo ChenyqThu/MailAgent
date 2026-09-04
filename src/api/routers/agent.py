@@ -9,12 +9,10 @@ Bearer（Bearer 是 ``/api/skills`` 的外部 agent 通道，agent 改自身配�
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import binascii
 import json
 import os
-import secrets
 import uuid
 from typing import Any, Optional
 
@@ -424,92 +422,6 @@ async def set_labs_flags(request: Request, body: Optional[dict[str, Any]] = None
     store.set_owner_setting(_LABS_GROUP_AGENTS_KEY, value)
     logger.info(f"labs group-agents switched: {previous} → {value} (owner UI)")
     return success_envelope({"groupAgents": value}, request=request, source="sqlite")
-
-
-# ── 狼人杀实验（g3）：一键建局 ────────────────────────────────────────────────────────
-#
-# 群聊多 agent 机制的集成验收入口：七个 agent 行（跨局复用）+ 三个群 + 三份群设置。
-# 三道 404 门（labs → agent_plugins → custom_agents）与 reports.py 的导入端点同口径；
-# 后两道**刻意不跨 router import** 它的私有函数（reports.py 头注纪律），各自内联薄读法。
-#
-# 🔴 owner 连点两次 = 两局六群（会话行不去重），故整段建局串行在一把进程内锁里。
-# 🔴 日志只打 session id / seed / reusedAgents：roles 是身份表，进日志就是一次泄漏。
-
-_WEREWOLF_LOCK = asyncio.Lock()
-_WEREWOLF_TITLE_PREFIX_DEFAULT = "狼人杀"
-_WEREWOLF_TITLE_PREFIX_MAX_CHARS = 40
-_WEREWOLF_SEED_MAX = 2**31 - 1
-
-
-@router.post("/labs/werewolf/new-game", dependencies=[Depends(verify_cf_access)])
-async def werewolf_new_game(request: Request, body: Optional[dict[str, Any]] = None):
-    """建一局狼人杀（labs 实验）。body 全部可选：seed / judgeModel / playerModel / titlePrefix。
-
-    模型引用的 provider 未配置 → 400（**不静默回落全局默认**：回落的代价是第三个 turn 整局死）。
-    """
-    if get_agent_config_store().get_owner_setting(_LABS_GROUP_AGENTS_KEY) != "on":
-        raise APIError(
-            "E_NOT_FOUND",
-            "group agents lab is disabled",
-            http_status=404,
-            hint="到设置 → 实验室打开「群聊多 agent」",
-            source="sqlite",
-        )
-    from src.skills.flags import agent_plugins_enabled
-
-    if not agent_plugins_enabled():
-        raise APIError(
-            "E_NOT_FOUND", "agent plugins feature is disabled", http_status=404, source="sqlite"
-        )
-    if not _custom_agents_enabled():
-        raise APIError(
-            "E_NOT_FOUND", "custom agents feature is disabled", http_status=404, source="sqlite"
-        )
-
-    opts = body or {}
-    seed = opts.get("seed")
-    if seed is None:
-        seed = secrets.randbits(31)
-    elif not isinstance(seed, int) or isinstance(seed, bool) or not 0 <= seed <= _WEREWOLF_SEED_MAX:
-        raise APIError(
-            "E_INVALID_ARG",
-            f"body.seed must be an integer within [0, {_WEREWOLF_SEED_MAX}]",
-            http_status=400,
-            source="sqlite",
-        )
-    raw_prefix = opts.get("titlePrefix")
-    if raw_prefix is not None and not isinstance(raw_prefix, str):
-        raise APIError(
-            "E_INVALID_ARG", "body.titlePrefix must be a string", http_status=400, source="sqlite"
-        )
-    title_prefix = (raw_prefix or "").strip() or _WEREWOLF_TITLE_PREFIX_DEFAULT
-    if len(title_prefix) > _WEREWOLF_TITLE_PREFIX_MAX_CHARS:
-        raise APIError(
-            "E_INVALID_ARG",
-            f"body.titlePrefix must be at most {_WEREWOLF_TITLE_PREFIX_MAX_CHARS} characters",
-            http_status=400,
-            source="sqlite",
-        )
-
-    from src.agents import werewolf_lab
-
-    async with _WEREWOLF_LOCK:
-        result = await werewolf_lab.new_game(
-            seed=seed,
-            judge_model=opts.get("judgeModel"),
-            player_model=opts.get("playerModel"),
-            title_prefix=title_prefix,
-        )
-    logger.info(
-        "labs werewolf new-game: main={} wolf={} seer={} seed={} reused={}".format(
-            result["mainSessionId"],
-            result["wolfSessionId"],
-            result["seerSessionId"],
-            result["seed"],
-            result["reusedAgents"],
-        )
-    )
-    return success_envelope(result, request=request, source="sqlite")
 
 
 # ── 主 agent 身份（0813）：名字 + 头像 ──────────────────────────────────────────────

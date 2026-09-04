@@ -23,9 +23,7 @@
 //    本质代价，递归有界只靠地板 —— 地板变异用例见 tests/ai-gateway/group_orchestrator.test.ts。
 // 🔴 g2 跨群投递（主 agent / 法官经 cfg.deliverGroupMessage 进来）：目标群的 scope 由工具工厂
 //    闭包强制（tools/groups.ts），本处对 sessionId **不做第二次校验**；父群 stopFamily 连带清掉
-//    子群的链与队列是拍板 E 的既定语义（子群 run 的 familySessionIds 含父群）—— g3 夜晚流程须知情。
-// 🔴 g3 game_over 不是停止：不写 group_stop、不进 GROUP_STOP_REASONS；靠 gameOver 集合按 sessionId
-//    拦（family 全体），主群一条 {kind:'game_over'} 系统行是唯一落盘痕迹（maybeGameOver）。
+//    子群的链与队列是拍板 E 的既定语义（子群 run 的 familySessionIds 含父群）。
 // 🔴 T3 话题（facts.isThread）：候选集走参与者制（@ ∪ 根消息说话人 ∪ 已发言者，父群 realtime 不
 //    生效）；话题的开销进父群的预算窗口（RunState.familySessionIds 含 threadSessionIds），但话题
 //    run 的停止范围只有自己（stopScope），stopFamily(话题) 精确停、stopFamily(群) 连带话题。
@@ -47,7 +45,6 @@ import {
   CHAIN_CAP_DEFAULT,
   CONSECUTIVE_FAILED_STOP,
   DUP_LOOKBACK,
-  GAME_OVER_PREFIX,
   HOURLY_TOKENS_DEFAULT,
   HOURLY_TURNS_DEFAULT,
   HOURLY_USD_DEFAULT,
@@ -60,11 +57,6 @@ import {
   RATE_PER_MINUTE,
   RUN_WALL_MS,
   SESSION_TURN_CAP_DEFAULT,
-  WEREWOLF_CHAIN_CAP,
-  WEREWOLF_HOURLY_TOKENS,
-  WEREWOLF_HOURLY_TURNS,
-  WEREWOLF_HOURLY_USD,
-  WEREWOLF_SESSION_TURN_CAP,
   isSilence,
   normalizeForDup,
   type GroupResponseMode,
@@ -72,7 +64,6 @@ import {
   type GroupTriggerKind,
   type GroupTurnOutcome
 } from './groupFloors'
-import type { WerewolfGame } from './groupGame'
 import type { GroupSkipReason, GroupTurnEvent, GroupTurnUsage } from './groupTurnEvent'
 import { costUsdFor, type TokenUsage } from './modelCost'
 
@@ -93,21 +84,16 @@ export interface GroupRunFacts {
   members: GroupSessionMember[]
   /** 每成员响应模式；缺行 = 'mention'。 */
   modes: Record<string, GroupResponseMode>
-  /** GroupConfig 的宽形状：地板键之外（topic / modelOverride / notify）由 speak 适配器读；
-   *  preset / game（g3）由 resolveGroupRunConfig 的缺省与 game_over 判据读。 */
+  /** GroupConfig 的宽形状：地板键之外（topic / modelOverride / notify）由 speak 适配器读。 */
   config: Partial<GroupRunConfig> & {
     topic?: string | null
     modelOverride?: string | null
-    preset?: 'werewolf' | null
-    game?: WerewolfGame
   }
   /** 本群 + 父群 + 子群（含自身）；小时预算、session_cap、停止范围都按它算。
    *  🔴 不含话题：这一项原样透传给 speak 的 identity.group.familySessionIds = 法官的投递 scope，
    *  话题不该成为法官的 group_post 目标（父 design §4.3）。话题进预算 / 停止范围走下面的
    *  threadSessionIds，由 newRun 合进 RunState.familySessionIds。 */
   familySessionIds: number[]
-  /** g3 — 父群 id（子群才非空）。game_over 系统行只写 family 的根：有父 → 父群，无父 → 本群。 */
-  parentSessionId?: number | null
   // ── T3 话题事实（三项都可缺，缺 = 不是话题 / 没有话题；口径见 config.ts GroupSessionFacts）──
   /** 本群底下的话题 id。进小时预算 / session_cap / 父群 stopFamily 的范围，不进法官 scope。 */
   threadSessionIds?: number[]
@@ -217,8 +203,6 @@ export interface GroupOrchestratorDeps {
   mirrorRunLog?: (input: GroupRunLogMirror) => Promise<void>
   /** Best-effort turn lifecycle projection (renderer 在场态)。抛错只 warn，台账照常。 */
   emitEvent?: (event: GroupTurnEvent) => void
-  /** g3 — best-effort 把一个 session 的 sessionTurnCap 钉到当前值（重启后一局不复活）。失败只 warn。 */
-  setSessionTurnCap?: (sessionId: number, cap: number) => Promise<void> | void
   now: () => number
   sleep: (ms: number) => Promise<void>
   warn?: (message: string, data: Record<string, unknown>) => void
@@ -291,19 +275,13 @@ function runKey(sessionId: number, chainId: number): string {
 }
 
 export function resolveGroupRunConfig(input: GroupRunFacts['config'] | undefined): GroupRunConfig {
-  const preset = input?.preset === 'werewolf'
   return {
     judgeAgentId: input?.judgeAgentId ?? null,
-    chainCap: input?.chainCap ?? (preset ? WEREWOLF_CHAIN_CAP : CHAIN_CAP_DEFAULT),
-    hourlyTurns: input?.hourlyTurns ?? (preset ? WEREWOLF_HOURLY_TURNS : HOURLY_TURNS_DEFAULT),
-    hourlyTokens: input?.hourlyTokens ?? (preset ? WEREWOLF_HOURLY_TOKENS : HOURLY_TOKENS_DEFAULT),
-    hourlyUsd: input?.hourlyUsd ?? (preset ? WEREWOLF_HOURLY_USD : HOURLY_USD_DEFAULT),
-    sessionTurnCap:
-      input?.sessionTurnCap === undefined
-        ? preset
-          ? WEREWOLF_SESSION_TURN_CAP
-          : SESSION_TURN_CAP_DEFAULT
-        : input.sessionTurnCap
+    chainCap: input?.chainCap ?? CHAIN_CAP_DEFAULT,
+    hourlyTurns: input?.hourlyTurns ?? HOURLY_TURNS_DEFAULT,
+    hourlyTokens: input?.hourlyTokens ?? HOURLY_TOKENS_DEFAULT,
+    hourlyUsd: input?.hourlyUsd ?? HOURLY_USD_DEFAULT,
+    sessionTurnCap: input?.sessionTurnCap ?? SESSION_TURN_CAP_DEFAULT
   }
 }
 
@@ -358,8 +336,6 @@ export class GroupOrchestrator {
   private readonly rotation: number[] = []
   private readonly runs = new Map<string, RunState>()
   private readonly stoppedChains = new Set<string>()
-  /** g3 — 已终局的 session（family 全体）：onGroupMessage 对它们零候选、零 turn。 */
-  private readonly gameOver = new Set<number>()
   /** T3 — 见过的话题 session（每次读事实都刷新：本会话 isThread + 群的 threadSessionIds）。
    *  stopFamily 是同步接口、拿不到事实，靠它判「目标是话题」→ 精确停。话题里只要发过一条消息
    *  就一定进了集合；父群每个 turn 重读事实也会把新开的话题登记进来。 */
@@ -388,7 +364,6 @@ export class GroupOrchestrator {
     const facts = (await this.deps.resolveFacts(sessionId)) ?? null
     if (!facts) return { queued: [] }
     this.rememberThreads(sessionId, facts)
-    if (this.gameOver.has(sessionId)) return { queued: [] }
     const chainId = isChainRootRow(row) ? row.id : (row.chainId as number)
     // g2 — 法官跨群投递行（role assistant + metadata.via='judge_post'，chainId NULL = 链根）
     // 是第四种触发；不带 via 的 assistant 行仍是成员级联（'agent'）。
@@ -405,20 +380,6 @@ export class GroupOrchestrator {
     const announceEmpty =
       triggerKind === 'human' || triggerKind === 'main_agent' || triggerKind === 'judge_post'
     const key = runKey(sessionId, chainId)
-    // g3 — 法官从子群 group_post 回投的终局行不经 processItem，判据在这里跑一次。run 此时可能
-    // 尚不存在：临时 newRun 只为拿 runId / family，不放进 this.runs。
-    if (
-      triggerKind === 'judge_post' &&
-      this.maybeGameOver(
-        sessionId,
-        row.speakerAgentId,
-        row.content,
-        facts,
-        this.runs.get(key) ?? this.newRun(sessionId, chainId, facts)
-      )
-    ) {
-      return { queued: [] }
-    }
     const mentioned = parseGroupMentions(row.content, facts.members)
     const isThread = facts.isThread === true
     const realtime = facts.members
@@ -871,7 +832,6 @@ export class GroupOrchestrator {
       null,
       result
     )
-    if (this.maybeGameOver(sessionId, item.agentId, result.text, item.facts, run)) return
     if (this.cascade) {
       await this.onGroupMessage(sessionId, {
         id: messageId,
@@ -994,49 +954,6 @@ export class GroupOrchestrator {
       if (oldest !== undefined) this.stoppedChains.delete(oldest)
     }
     this.stoppedChains.add(runKey(run.sessionId, run.chainId))
-  }
-
-  /** g3 — 法官在 werewolf 预设群里以 GAME_OVER_PREFIX 开头发言 = 一局终局。不是停止：不写
-   *  group_stop、不进 GROUP_STOP_REASONS；只写一条 game_over 系统行到主群（family 的根），
-   *  family 每个 session 进 gameOver 集合 + 清队列，之后的唤醒在 onGroupMessage 顶部静默。
-   *  `setSessionTurnCap` 回写是重启兜底（进程内集合不落盘），best-effort 只 warn。
-   *  返回 true = 命中，调用方跳过级联。 */
-  private maybeGameOver(
-    sessionId: number,
-    speakerAgentId: string | null,
-    content: string,
-    facts: GroupRunFacts,
-    run: RunState
-  ): boolean {
-    if (facts.config.preset !== 'werewolf') return false
-    if (speakerAgentId == null || speakerAgentId !== facts.config.judgeAgentId) return false
-    if (!content.trimStart().startsWith(GAME_OVER_PREFIX)) return false
-    const mainSessionId = facts.parentSessionId ?? sessionId
-    this.deps.appendMessage(mainSessionId, {
-      role: 'system',
-      content: '',
-      speakerAgentId: null,
-      metadata: JSON.stringify({ kind: 'game_over', runId: run.runId, chainId: run.chainId })
-    })
-    for (const sid of run.familySessionIds) {
-      this.gameOver.add(sid)
-      this.queues.get(sid)?.splice(0)
-    }
-    this.markChainStopped(run)
-    const cap = this.deps.groupUsage(run.familySessionIds, 0).turns
-    const pin = async (sid: number): Promise<void> => {
-      await this.deps.setSessionTurnCap?.(sid, cap)
-    }
-    for (const sid of run.familySessionIds) {
-      void pin(sid).catch((err: unknown) => {
-        this.warn('[group-run] setSessionTurnCap failed (game_over landed)', {
-          sessionId: sid,
-          cap,
-          error: err instanceof Error ? err.message : String(err)
-        })
-      })
-    }
-    return true
   }
 
   private stopRuns(

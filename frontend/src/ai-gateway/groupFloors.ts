@@ -9,7 +9,7 @@
 // 🔴 零依赖：本文件被 renderer（GroupChatWorkspace 的成员上限）与 gateway 两侧直引，
 //    不得 import 任何运行时模块（照 groupChat.ts / modelCatalog/lookup.ts 的叶子纪律）。
 
-/** 群成员上限（含所有 realtime / mention 成员；狼人杀 = 法官 + 6）。 */
+/** 群成员上限（含所有 realtime / mention 成员）。 */
 export const MAX_GROUP_MEMBERS = 8
 
 /** 主 agent 作为群成员 / 主持人时的保留 id（members_json、ai_chat_group_member.agent_id、
@@ -64,7 +64,7 @@ export const DUP_LOOKBACK = 8
 
 // ── g2 / g3 预留（g1 不消费，单源先落）──────────────────────────────────────────────
 
-/** 法官一个 turn 里最多 group_post 几次（一轮夜晚 = 投狼群 + 投预言家群）。 */
+/** 法官一个 turn 里最多 group_post 几次。 */
 export const POSTS_PER_TURN_CAP = 2
 /** 一个 family 最多几个子群。 */
 export const SUBGROUPS_PER_FAMILY_CAP = 6
@@ -128,15 +128,3 @@ export function isSilence(text: string): boolean {
 export function normalizeForDup(text: string): string {
   return text.replace(/[\s\p{P}\p{S}]/gu, '').toLowerCase()
 }
-
-// ── g3 狼人杀预设（扁平 int：parity 抽取器只吃 export const NAME = <int>）──────────────────
-
-/** g3 — 狼人杀预设地板：config.preset === 'werewolf' 时 resolveGroupRunConfig 的缺省；owner 显式配的键仍优先。 */
-export const WEREWOLF_CHAIN_CAP = 24
-export const WEREWOLF_HOURLY_TURNS = 150
-export const WEREWOLF_HOURLY_TOKENS = 1_500_000
-/** 🔴 整数美元：parse_ts_const_int 只吃整数字面量。 */
-export const WEREWOLF_HOURLY_USD = 3
-export const WEREWOLF_SESSION_TURN_CAP = 120
-/** g3 — 法官宣布终局的前缀（机制判据，不是 prompt 规则；模板 duty 里的措辞与它逐字一致）。 */
-export const GAME_OVER_PREFIX = '【游戏结束】'

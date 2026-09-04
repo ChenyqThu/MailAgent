@@ -407,7 +407,7 @@ export interface ChatSessionListItem extends ChatSession {
     content: string
     role: 'user' | 'assistant'
     speaker_agent_id: string | null
-    /** 'judge_post' = 法官从子群 group_post 回投进来的行（g2）；狼人杀里这是高频前缀。 */
+    /** 'judge_post' = 法官从子群 group_post 回投进来的行（g2）。 */
     via: 'main_agent' | 'judge_post' | null
     created_at: number
   } | null

@@ -128,7 +128,6 @@ export type GroupTimelineItem =
     }
   | { kind: 'noCandidates'; key: string; ts: number; reason: string | null }
   | { kind: 'stopped'; key: string; ts: number; reason: string; runId: string | null }
-  | { kind: 'gameOver'; key: string; ts: number; runId: string | null }
   | { kind: 'turnsBoundary'; key: string; ts: number }
   /** T3 — 挂在根消息正下方的话题卡（回复数 / 最新一条 / 未读）。它打断折叠组：同人在根消息之后
    *  再发的消息另起一组，卡才能「紧随根消息」而不是沉到整组末尾。 */
@@ -166,21 +165,6 @@ export function groupStopMeta(
         typeof parsed.reason === 'string' && parsed.reason.length > 0 ? parsed.reason : 'error',
       runId: typeof parsed.runId === 'string' ? parsed.runId : null
     }
-  } catch {
-    return null
-  }
-}
-
-/** g3 终局系统行（`metadata={kind:'game_over', runId, chainId}`，只写主群）。
- *  🔴 同 groupStopMeta 只放行自己那一个 kind：judge_post / judge_denied 是 g2 遗留的不可见行，
- *  本函数**不**顺手认它们（认了就得为每种猜一套文案）。game_over 不是停止：不写 group_stop、
- *  不进 GROUP_STOP_REASONS，所以它有自己的时间线项而不是复用 stopped。 */
-export function gameOverMeta(message: ChatMessage): { runId: string | null } | null {
-  if (message.role !== 'system' || message.metadata == null) return null
-  try {
-    const parsed = JSON.parse(message.metadata) as { kind?: unknown; runId?: unknown }
-    if (parsed.kind !== 'game_over') return null
-    return { runId: typeof parsed.runId === 'string' ? parsed.runId : null }
   } catch {
     return null
   }
@@ -278,15 +262,6 @@ export function buildGroupTimeline(input: GroupTimelineInput): {
           failed: false,
           usage: m.role === 'assistant' ? usageOfMessage(m) : null
         }
-      })
-      continue
-    }
-    const over = gameOverMeta(m)
-    if (over != null) {
-      entries.push({
-        ts: m.created_at,
-        rank: 1,
-        item: { kind: 'gameOver', key: `go:${m.id}`, ts: m.created_at, runId: over.runId }
       })
       continue
     }

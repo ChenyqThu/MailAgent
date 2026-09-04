@@ -13,8 +13,7 @@
 //   S9 危险区：删除群 → deleteSession；清空历史 → DELETE messages/from/{firstId};
 //   S10 labs off 只渲染 基本 / 成员 / 危险区（无模式、无主持人、无上限、无用量）+ labsOffNote；
 //   S11 config 读失败 → loadFailed + 重试，不静默；S12 近期唤醒表色点 + 空态；
-//   S13 主 Agent（保留 id `main`）在群里可以坐主持人位；
-//   S14 狼人杀预设下主持人候选里没有主 Agent（`@法官 开始游戏` 逐字依赖模板行的 title）。
+//   S13 主 Agent（保留 id `main`）在群里可以坐主持人位。
 //
 // mock 面：groupSettings（serve-api 客户端）+ http_client（清空历史打的是会话消息端点）+
 // useMailApi（改名 / 删会话 / 列消息）+ useEnabledModels + AgentAvatar 探针桩。
@@ -136,7 +135,6 @@ function renderPane(labsOn = true, memberIds = MEMBER_IDS): HTMLElement {
         sessionId={300}
         session={SESSION}
         memberIds={memberIds}
-        familySessionIds={[300]}
         memberMeta={MEMBER_META}
         candidates={CANDIDATES}
         labsOn={labsOn}
@@ -420,20 +418,5 @@ describe('GroupDetailsPane', () => {
     await waitFor(() =>
       expect(mockSetGroupConfig).toHaveBeenCalledWith(300, { judgeAgentId: 'main' })
     )
-  })
-
-  test('S14 狼人杀预设：主持人候选里没有主 Agent（其余成员照常在）', async () => {
-    mockGetGroupConfig.mockResolvedValue({
-      ...PAYLOAD,
-      config: { v: 1 as const, preset: 'werewolf' as const },
-      members: MAIN_MEMBER_IDS
-    })
-    renderPane(true, MAIN_MEMBER_IDS)
-    fireEvent.click(await screen.findByRole('combobox', { name: '主持人位' }))
-    // 🔴 不是「整张单子空了」：同一个下拉里别的成员照常可选，只少主 Agent 一条。
-    expect(await screen.findByRole('option', { name: '调研员' })).toBeTruthy()
-    expect(screen.queryByRole('option', { name: '小欧' })).toBeNull()
-    // 成员节里主 Agent 那一行还在（不能当主持人 ≠ 不是成员）。
-    expect(screen.getByText('小欧')).toBeTruthy()
   })
 })

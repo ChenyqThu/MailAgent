@@ -11,7 +11,7 @@
 //   W11 详情面开合按群记忆（切群不串台）；
 //   W12 建群一次填齐：newSession + setGroupConfig({modes, judgeAgentId, topic})；
 //   W13 第二步失败 → 删掉第一步建出来的会话（不留半建群）；
-//   W14 labs off 建群：无模式无主持人，只 newSession；W15 模板钮禁用且说明什么时候有；
+//   W14 labs off 建群：无模式无主持人，只 newSession；
 //   W16 主 Agent 进候选：以 assistant identity 的名字排在最前，勾上后 members 用保留 id `main`；
 //   W17 存量行占着保留 id 时候选里仍只有一条主 Agent。
 //
@@ -414,7 +414,7 @@ describe('GroupChatWorkspace — 建群对话框（一次填齐）', () => {
     expect(boxes).toHaveLength(4)
     fireEvent.click(boxes[0]) // 主 Agent 排在最前
     fireEvent.click(boxes[2]) // 调研员
-    // 主持人位对主 Agent 开放（狼人杀预设除外，那条在 GroupDetailsPane 用例里）。
+    // 主持人位对主 Agent 开放。
     fireEvent.click(screen.getByRole('combobox', { name: '主持人（可选）' }))
     fireEvent.click(await screen.findByRole('option', { name: '小欧' }))
     fireEvent.click(screen.getByText('创建'))
@@ -441,15 +441,5 @@ describe('GroupChatWorkspace — 建群对话框（一次填齐）', () => {
     expect(container.ownerDocument.querySelectorAll('[data-avatar="main"]')).toHaveLength(1)
     expect(screen.queryByText('冒名顶替')).toBeNull()
     expect(screen.getAllByRole('checkbox')).toHaveLength(4)
-  })
-
-  test('W15 labs off 时模板入口禁用且说明去哪儿开', async () => {
-    renderWorkspace([])
-    fireEvent.click(await screen.findByText('新建群聊'))
-    const template = (await screen.findByText('从模板创建')).closest('button') as HTMLButtonElement
-    expect(template.disabled).toBe(true)
-    expect(
-      screen.getByText('狼人杀预设：法官 + 6 位玩家 + 两个子群（需打开实验室「群聊多 agent」）')
-    ).toBeTruthy()
   })
 })

@@ -118,7 +118,7 @@ vi.mock('@shared/hooks/useMailApi', () => ({
                 updated_at: 2_000,
                 last_read_at: signals.groupUnread > 0 ? 1_000 : 3_000,
                 archived: false,
-                title: '狼人杀实验局'
+                title: '项目周会群'
               }
             ]
           : []
@@ -864,7 +864,7 @@ describe('全域 peek（09-01 侧栏批）', () => {
     const rows = (): HTMLElement[] =>
       Array.from(container.querySelectorAll<HTMLElement>('[data-nav-peek-list="groups"] .row'))
     await waitFor(() => expect(rows()).toHaveLength(1), { timeout: 4000 })
-    expect(rows()[0].textContent).toContain('狼人杀实验局')
+    expect(rows()[0].textContent).toContain('项目周会群')
     fireEvent.click(rows()[0])
     // 「跳到某个群」是两段动作，落地单源是 navigateToGroupSession（选群 + 进域）——
     // 只导航不点名群，进去的是空态。

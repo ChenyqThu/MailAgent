@@ -12,11 +12,10 @@
 
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useMutation } from '@tanstack/react-query'
 
 import type { ChatSession } from '@shared/api/types'
 import type { GroupConfigPatch } from '@shared/api/groupSettings'
-import { createWerewolfGame, setGroupConfig } from '@shared/api/groupSettings'
+import { setGroupConfig } from '@shared/api/groupSettings'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -105,22 +104,6 @@ export function NewGroupDialog({
     setModes({})
     setJudge(JUDGE_NONE)
   }
-
-  // 狼人杀预设：不走下面那条两步建群路径（三群 + 七个 agent 行全在服务端一次建完），
-  // 成功后与手工建群一样把主群交给 onCreated 选中。
-  const fromTemplate = useMutation({
-    mutationFn: () => createWerewolfGame({}),
-    onSuccess: (payload) => {
-      if (!payload.configApplied) {
-        toastError(t('settings.labs.werewolf.partial'))
-        return
-      }
-      onCreated(payload.mainSession)
-      onOpenChange(false)
-      reset()
-    },
-    onError: (err) => toastError(t('settings.labs.werewolf.failed'), errorMessage(err))
-  })
 
   const create = async (): Promise<void> => {
     if (members.length === 0 || creating) return
@@ -287,22 +270,6 @@ export function NewGroupDialog({
               </Select>
             </div>
           )}
-
-          {/* 从模板创建 = 狼人杀预设一键建局（服务端一次建出主群 + 两个子群）。labs off 时
-              这套编排一条都不生效，按钮禁用并由下方说明指路。 */}
-          <div className="flex flex-col gap-1">
-            <Button
-              variant="outline"
-              disabled={!labsOn || fromTemplate.isPending}
-              title={t('groupChat.dialogTemplateSoon')}
-              onClick={() => fromTemplate.mutate()}
-            >
-              {fromTemplate.isPending
-                ? t('settings.labs.werewolf.creating')
-                : t('groupChat.dialogTemplate')}
-            </Button>
-            <span className="text-micro text-ink-fg-3">{t('groupChat.dialogTemplateSoon')}</span>
-          </div>
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>

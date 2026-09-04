@@ -1238,9 +1238,8 @@ export function makePersistOnFinish(
     // prefix injected on every future turn). Skip capture for the truncated turn entirely —
     // persistTurn above still ran, so the fail-loud history is intact.
     //
-    // T4 (design M6) — a group speaker run never captures: 群里的内容是其他 agent 的半可信输出
-    // （狼人杀的 <game_secret> 更是），而 memory.md 是恒注入单聊每一轮的稳定前缀 —— 抽进去就是
-    // 让一个群污染主 agent 自己的人格。Structural guard: today's group paths never attach this
+    // T4 (design M6) — a group speaker run never captures: 群里的内容是其他 agent 的半可信输出，
+    // 而 memory.md 是恒注入单聊每一轮的稳定前缀 —— 抽进去就是让一个群污染主 agent 自己的人格。Structural guard: today's group paths never attach this
     // onFinish (see PreparedChatRun.groupSpeakerRun); the day one does, capture stays off.
     if (
       run.groupSpeakerRun !== true &&

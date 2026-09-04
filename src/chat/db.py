@@ -1534,7 +1534,7 @@ class ChatDb:
           ``groupFloors.ts``（单源），Python 不抄一份数值。
         * ``lastStopReason``：最近一条 outcome='stopped' 行的 error（地板原因词）。
         * ``sessionTurns`` / ``sessionTokens`` / ``sessionCostUsd``：**无窗口**的会话累计
-          （狼人杀一局的总量是 family 三群相加，不是小时量；cost 全 NULL → None，未知 ≠ 0）。
+          （本群自己的总量，不是小时量；cost 全 NULL → None，未知 ≠ 0）。
 
         未迁移的旧库（表缺席）→ 全 None / 零窗口，不报错。
         """

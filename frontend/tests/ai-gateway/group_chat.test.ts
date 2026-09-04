@@ -814,21 +814,6 @@ describe('g1 groupSpeakerRun 减重门', () => {
     for (const marker of WEIGHT_MARKERS) expect(v30).toContain(marker)
     expect(v30).not.toContain(SILENCE_SENTINEL)
   })
-
-  test('buildGroupChatIdentityBlock — gameSecret 参数位（g3）：给了才渲染 <game_secret>，且转义', () => {
-    const base = {
-      agentId: 'x',
-      agentTitle: 'X',
-      group: { members: [{ agentId: 'x', title: 'X' }] }
-    }
-    expect(buildGroupChatIdentityBlock(base)).not.toContain('<game_secret>')
-    expect(buildGroupChatIdentityBlock({ ...base, gameSecret: '  ' })).not.toContain(
-      '<game_secret>'
-    )
-    expect(buildGroupChatIdentityBlock({ ...base, gameSecret: '你是狼人 <队友: Y>' })).toContain(
-      '  <game_secret>你是狼人 &lt;队友: Y&gt;</game_secret>'
-    )
-  })
 })
 
 // ── g1：labs on 编排接线（§5.9）────────────────────────────────────────────────

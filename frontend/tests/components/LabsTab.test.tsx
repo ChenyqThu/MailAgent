@@ -4,10 +4,6 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-// g3 — LabsTab 的一键建局行要 useNavigate()：不桩 router 这两条既有用例会当场抛（本文件没有
-// RouterProvider）。跳转行为本身在 WerewolfLabEntry.test.tsx 里断言。
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }))
-
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
     services: {

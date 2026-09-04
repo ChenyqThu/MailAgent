@@ -36,7 +36,6 @@ import { encodeLibraryRefsMetadata, readLibraryRefsInput } from './groupLibraryR
 // v30（群聊）— server-side history assembly for a group speaker run (pure helper).
 import { assembleGroupHistory, type GroupTranscriptRow } from './groupChat'
 import { isSilence } from './groupFloors'
-import { buildGameSecret } from './groupGame'
 // g1 — the server-side group run 调度器 (pure Node; deps injected from the cfg group hooks below).
 import { GroupOrchestrator, type GroupSpeakInput, type GroupSpeakResult } from './groupOrchestrator'
 import {
@@ -1545,14 +1544,7 @@ export async function speakAsGroupMember(
         input.facts.config.judgeAgentId === input.agentId,
       familySessionIds: input.facts.familySessionIds,
       groupSpeakerRun: true,
-      topic: input.facts.config.topic ?? null,
-      // g3 — <game_secret> 的唯一生成点（服务端事实：facts.config.game + speaker 身份）。
-      gameSecret: buildGameSecret(
-        input.facts.config.game,
-        input.agentId,
-        input.facts.config.judgeAgentId ?? null,
-        new Map(input.facts.members.map((m) => [m.agentId, m.title]))
-      )
+      topic: input.facts.config.topic ?? null
     }
   }
   const prepared = await prepareChatRun(
@@ -1631,7 +1623,6 @@ function buildGroupScheduler(cfg: AiGatewayConfig): GroupOrchestrator | null {
             ...(facts.parentSessionId != null ? [facts.parentSessionId] : []),
             ...facts.childSessionIds
           ],
-          parentSessionId: facts.parentSessionId ?? null,
           // T3 — 话题事实：三项在 GroupSessionFacts 上可缺，这里归一（`?? []` / `=== true`）。
           threadSessionIds: facts.threadSessionIds ?? [],
           isThread: facts.isThread === true,
@@ -1649,7 +1640,6 @@ function buildGroupScheduler(cfg: AiGatewayConfig): GroupOrchestrator | null {
       registerRun: (sessionId, controller) => activeRuns.register(sessionId, controller),
       releaseRun: (sessionId, runId) => activeRuns.release(sessionId, runId),
       mirrorRunLog: cfg.mirrorGroupRunLog,
-      setSessionTurnCap: cfg.setSessionTurnCap,
       emitEvent: cfg.onGroupTurnEvent,
       now: () => Date.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms))

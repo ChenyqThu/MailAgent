@@ -11,19 +11,12 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
 import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
 
 import { useOpennessFlags } from '@shared/components/agents/hooks'
-import { navigateToGroupSession } from '@shared/components/agents/groups/navigation'
 import { Button } from '@shared/components/ui/button'
 import { Switch } from '@shared/components/ui/switch'
-import {
-  createWerewolfGame,
-  setLabs,
-  type LabsFlagValue,
-  type WerewolfGameInput
-} from '@shared/api/groupSettings'
+import { setLabs, type LabsFlagValue } from '@shared/api/groupSettings'
 import { useLabsFlags } from '@shared/hooks/useLabsFlags'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { errorMessage } from '@shared/lib/ipcErrors'
@@ -157,22 +150,6 @@ export function LabsTab(): React.ReactElement {
   const [savingKey, setSavingKey] = React.useState<LabFlag | null>(null)
   const [restartingKey, setRestartingKey] = React.useState<LabFlag | null>(null)
   const labs = useLabsFlags()
-  const navigate = useNavigate()
-  // 一键建局：三群 + 七个 agent 行都在服务端一次建完，成功后直接落到主群。
-  // 🔴 应答里的 roles / players 是身份事实，只留在应答里 —— 不进 toast、不进日志。
-  const newGame = useMutation({
-    mutationFn: (input: WerewolfGameInput) => createWerewolfGame(input),
-    onSuccess: (payload) => {
-      if (!payload.configApplied) {
-        // 群建出来了但设置没写全：跳过去只会看到一个没有法官位的群，说清楚再让 owner 决定。
-        toastError(t('settings.labs.werewolf.partial'))
-        return
-      }
-      toastSuccess(t('settings.labs.werewolf.created', { title: payload.title }))
-      navigateToGroupSession(navigate, payload.mainSessionId)
-    },
-    onError: (err) => toastError(t('settings.labs.werewolf.failed'), errorMessage(err))
-  })
   const saveLabs = useMutation({
     mutationFn: (next: LabsFlagValue) => setLabs({ groupAgents: next }),
     // 服务端回的是**落库后的**值（pessimistic）：直接写进缓存，群聊视图的下一次渲染就是新模态。
@@ -262,25 +239,6 @@ export function LabsTab(): React.ReactElement {
           busy={labs.loading || saveLabs.isPending}
           onToggle={(checked) => saveLabs.mutate(checked ? 'on' : 'off')}
         />
-        {/* 狼人杀是这套群聊机制的集成验收，不是产品功能：开关关着时连入口都不该在。 */}
-        {labs.groupAgents === true && (
-          <Row
-            label={t('settings.labs.werewolf.label')}
-            helper={t('settings.labs.werewolf.helper')}
-          >
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={newGame.isPending}
-              onClick={() => newGame.mutate({})}
-            >
-              {newGame.isPending
-                ? t('settings.labs.werewolf.creating')
-                : t('settings.labs.werewolf.cta')}
-            </Button>
-          </Row>
-        )}
       </Section>
 
       <Section title={t('settings.labs.mcpConnectors.label')}>

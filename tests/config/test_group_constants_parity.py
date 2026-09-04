@@ -14,9 +14,6 @@ CHECK 拒绝（整条 turn 台账写不进去 = 指标与地板计数同时静�
 gateway 不认识的响应模式。
 
 🔴 抽取失败必须红：每个抽取器抓不到目标结构就抛（不返回空集），外加逐项 canary 断言非空。
-
-g3 狼人杀预设：五个 ``WEREWOLF_*`` int + 一个 ``GAME_OVER_PREFIX`` str 例外进闸 —— Python 侧的
-消费点是 manual 脚本判据与模板 pytest 闸，TS 侧是调度器缺省与 game_over 判据，两侧必同名同值。
 """
 
 from __future__ import annotations
@@ -47,15 +44,6 @@ VOCAB_FLOOR = {
     "GROUP_TURN_OUTCOMES": 6,
     "GROUP_TRIGGER_KINDS": 4,
 }
-
-#: g3 狼人杀预设的五个 int（groupFloors.ts 与 group_limits.py 同名；数值不落库，两侧各自消费）。
-WEREWOLF_INTS = (
-    "WEREWOLF_CHAIN_CAP",
-    "WEREWOLF_HOURLY_TURNS",
-    "WEREWOLF_HOURLY_TOKENS",
-    "WEREWOLF_HOURLY_USD",
-    "WEREWOLF_SESSION_TURN_CAP",
-)
 
 #: v31 的三条 CHECK 各自对应哪个词表（SQL 列名 → 常量名）。
 CHECK_COLUMNS = {
@@ -228,29 +216,6 @@ def test_chain_cap_max_parity() -> None:
     ts = parse_ts_const_int("CHAIN_CAP_MAX", _read(GROUP_FLOORS_TS))
     py = parse_py_int_const("CHAIN_CAP_MAX", GROUP_LIMITS_PY)
     assert ts == py, f"CHAIN_CAP_MAX 漂了：groupFloors.ts={ts}，group_limits.py={py}"
-
-
-@pytest.mark.parametrize("name", WEREWOLF_INTS)
-def test_werewolf_preset_parity(name: str) -> None:
-    """g3 狼人杀预设五个 int：TS 叶子 = Python 叶子（调度器缺省 / 脚本判据 / 模板闸同数）。"""
-    ts = parse_ts_const_int(name, _read(GROUP_FLOORS_TS))
-    py = parse_py_int_const(name, GROUP_LIMITS_PY)
-    assert ts > 0 and py > 0, f"{name} 解析成 0 —— 解析器坏了"
-    assert ts == py, (
-        f"{name} 漂了：groupFloors.ts={ts}，group_limits.py={py}。"
-        "两侧不同数 = 调度器按一个上限停、manual 脚本按另一个上限判失败。"
-    )
-
-
-def test_game_over_prefix_parity() -> None:
-    """终局前缀：调度器的 startsWith 判据（TS）与脚本 / 模板闸（Python）必须逐字相等。"""
-    ts = parse_ts_const_string("GAME_OVER_PREFIX", _read(GROUP_FLOORS_TS))
-    py = parse_py_str_const("GAME_OVER_PREFIX", GROUP_LIMITS_PY)
-    assert ts and py, "GAME_OVER_PREFIX 解析成空串 —— 解析器坏了"
-    assert ts == py, (
-        f"GAME_OVER_PREFIX 漂了：groupFloors.ts={ts!r}，group_limits.py={py!r}。"
-        "法官模板照 Python 侧措辞、调度器照 TS 侧判前缀 —— 不同字 = 一局永远到不了 game_over。"
-    )
 
 
 def test_main_agent_member_id_parity() -> None:

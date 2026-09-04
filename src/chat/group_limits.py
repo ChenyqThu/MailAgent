@@ -13,8 +13,6 @@ serve-api 的校验（``PUT /chat/sessions/{id}/group-config``、建群成员上
 
 地板**数值**（链上限 / 小时预算 / 窗口大小 …）不在这里：它们只有 gateway 消费，单源在
 groupFloors.ts。本文件只保留 serve-api 真正要校验的两项数值（成员上限、chainCap 的允许区间）。
-狼人杀预设五个 int 例外——消费点是 manual 脚本判据 + 模板 pytest 闸，与 groupFloors.ts 同名
-同值，闸 test_group_constants_parity.py。
 """
 
 from __future__ import annotations
@@ -22,7 +20,7 @@ from __future__ import annotations
 import hashlib
 from typing import Optional, Tuple
 
-#: 群成员上限（含所有 realtime / mention 成员；狼人杀 = 法官 + 6）。v30 时是 5，g1 放宽到 8。
+#: 群成员上限（含所有 realtime / mention 成员）。v30 时是 5，g1 放宽到 8。
 MAX_GROUP_MEMBERS: int = 8
 
 #: 主 agent 在 ``members_json`` / ``ai_chat_group_member.agent_id`` / ``judgeAgentId`` 里的保留 id。
@@ -83,7 +81,8 @@ SILENT_OUTCOMES: Tuple[str, ...] = ("silent", "held_dup", "skipped")
 CHAIN_ROOT_TRIGGER_KINDS: Tuple[str, ...] = ("human", "main_agent")
 
 #: ``ai_chat_sessions.invoked_by`` 的值域（v25 已有列，无 CHECK）。'user'/'main_agent' 来自
-#: custom_agent_call（harness P2）；g2/g3 建子群加 'judge'/'setup'；T3 话题加 'thread'。
+#: custom_agent_call（harness P2）；g2 建子群加 'judge'，'setup' 是服务端一次建好整组群的入口
+#: （g3 退役后暂无生产者，老库仍有这个值的行）；T3 话题加 'thread'。
 #: 🔴 'thread' 是**读侧分家的唯一判据**（v32）：话题与子群同是 origin='group' + parent_session_id
 #: 非空，群清单 / family / 子群配额 / 法官 scope 全靠 ``COALESCE(invoked_by,'') = 'thread'``
 #: 把它们分开。
@@ -96,21 +95,8 @@ SESSION_INVOKED_BY: Tuple[str, ...] = ("user", "main_agent", "judge", "setup", "
 #: 前端只显示 ``title`` 列，不自己截 —— 没有第二处手抄，故不进 parity 闸。
 THREAD_TITLE_MAX_CHARS: int = 40
 
-#: g3 狼人杀预设地板（与 groupFloors.ts 的 WEREWOLF_* 同名同值；闸 test_group_constants_parity.py）。
-#: gateway 在 config.preset == 'werewolf' 时把它们当缺省；Python 侧只服务 manual 脚本判据与模板闸，
-#: **不写进** group_config_json。
-WEREWOLF_CHAIN_CAP: int = 24
-WEREWOLF_HOURLY_TURNS: int = 150
-WEREWOLF_HOURLY_TOKENS: int = 1_500_000
-WEREWOLF_HOURLY_USD: int = 3
-WEREWOLF_SESSION_TURN_CAP: int = 120
-#: 法官宣布终局的前缀（机制判据；模板 duty 的措辞与它逐字一致，由 tests/agents 钉）。
-GAME_OVER_PREFIX: str = "【游戏结束】"
-#: 🔴 脚本独占消费（silent 率判据）；TS 无同名常量，同 TOPIC_MAX_CHARS 体例不进 parity 闸。
-WEREWOLF_SILENT_RATE_MAX_PCT: int = 30
-
 
 def group_scope_hash(raw_members_json: Optional[str]) -> str:
-    """sha256(members_json 列原文 utf-8).hexdigest —— 法官免卡锚的**写侧**单源（put_group_config + 建局端点）。
+    """sha256(members_json 列原文 utf-8).hexdigest —— 法官免卡锚的**写侧**单源（put_group_config）。
     🔴 db.py::get_group_config 里的读侧表达式保持字面不动：tests/config/test_judge_scope_hash_parity.py 逐字扫那个函数体。"""
     return hashlib.sha256((raw_members_json or "").encode("utf-8")).hexdigest()

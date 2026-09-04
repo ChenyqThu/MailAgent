@@ -7,8 +7,8 @@
 //   • `groupChat.ts::assembleGroupHistory` 用 `renderAttachmentBlock` 把围栏块前置进那条 user 行。
 //
 // 🔴 `metadata` 这一列**不是附件专用**：系统行写 `{kind:'group_stop', reason, runId}`、主 agent
-//    投递写 `{via:'main_agent'}`、g3 写 `{kind:'game_over'}`。所以编码是「往同一个 JSON 对象里
-//    加一个 attachments 键」，其余键原样保留；解析也只认 attachments 键，别的键一律不碰。
+//    投递写 `{via:'main_agent'}`。所以编码是「往同一个 JSON 对象里加一个 attachments 键」，
+//    其余键原样保留；解析也只认 attachments 键，别的键一律不碰。
 // 🔴 解析对脏输入恒返 null、绝不抛：metadata 是历史数据，读侧崩了整条群时间线就没了。
 // 🔴 Pure：零 node / electron / react import（与 groupChat.ts 同一纪律，renderer 直引这一份）。
 

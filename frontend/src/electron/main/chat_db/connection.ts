@@ -219,11 +219,11 @@ import { resolveDataRoot } from '../db'
 //   serve-api; ai_chat_group_turn / chain_id 归 gateway。
 // 值域登记 (无 ALTER):
 //   • ai_chat_messages.role='system' 开始出现在 origin='group' 会话: metadata =
-//     {kind:'group_stop', reason, runId} (reason ∈ GROUP_STOP_REASONS) 或 {kind:'game_over'}(g3)。
+//     {kind:'group_stop', reason, runId} (reason ∈ GROUP_STOP_REASONS)。
 //   • 主 agent 投递进群 = role='user' + metadata={via:'main_agent', sourceSessionId} (装配时
 //     标 `[主助理]`; 🔴 **不用** speaker_agent_id 哨兵 —— 那会污染 members 命名空间)。
 //   • ai_chat_sessions.parent_session_id (v25 已有列) 的 invoked_by 值域加 'judge' / 'setup'
-//     (g2/g3 建子群时写)。
+//     ('judge' = g2 法官建子群; 'setup' 随 g3 退役已无生产者, 老库仍有这个值的行)。
 // 🔴 词表三处手抄 (本文件三条 CHECK / ai-gateway/groupFloors.ts / src/chat/group_limits.py) +
 //   chat.py 的校验元组, 闸 = tests/config/test_group_constants_parity.py (抽不到任一侧必红)。
 // Plain additive ALTER + CREATE TABLE IF NOT EXISTS, hasColumn 幂等守卫 (v24/v25 样板)。

@@ -212,9 +212,6 @@ export interface SessionAgentIdentity {
     /** 群用途（group_config_json.topic）。有值 → 身份块多一个 <topic> 元素 + 一句「群用途」；
      *  缺省 / null → 字节不变。只有 调度器 turn 传（v30 speaker 分支不传）。 */
     topic?: string | null
-    /** g3 — 本 speaker 的身份事实（服务端从 group_config_json.game.roles 生成，不是 prompt 规则）。
-     *  法官 = 全表；狼人 = 本人 + 队友；其他 = 只有自己。null / 缺省 → 身份块字节不变。 */
-    gameSecret?: string | null
   } | null
 }
 
@@ -252,7 +249,7 @@ export interface GroupSessionFacts {
   // ── T3 话题事实（三项）─────────────────────────────────────────────────
   // 🔴 三项**都可缺**，缺 = 「不是话题 / 没有话题」，读侧一律 `?? []` / `=== true`：
   //   ① 唯一生产者是 lifecycle 的 resolveGroupSession，它恒填三项（不是可选实现）；
-  //   ② 可选是为了让 g3 狼人杀那套 facts 替身**一行不改**继续绿 —— 那是「换引擎不回退」的
+  //   ② 可选是为了让 g1/g2 那批 facts 替身**一行不改**继续绿 —— 那是「换引擎不回退」的
   //      金标准闸（AC6），为加三个字段去动它等于把闸的意义抹掉。
   // 加第二个生产者时先想清楚：漏填不会有类型错误，只会让话题静默不进 family 预算。
   /** T3 — 本群底下的话题 id（`invoked_by='thread'` 的子会话）。与 `childSessionIds` 同源反查、
@@ -571,10 +568,6 @@ export interface AiGatewayConfig {
    *  🔴 best-effort：跨库无事务（run log 在 sync_store.db、群消息在 ai_chat.db），失败只 warn，
    *  绝不阻塞或回滚 turn。沉默不镜像（silent 率从 ai_chat_group_turn 读）。 */
   mirrorGroupRunLog?: (input: GroupRunLogMirror) => Promise<void>
-  /** g3 — game_over 后把一个 session 的 sessionTurnCap 钉到当时的 family turn 数（重启后一局不
-   *  复活）。lifecycle 实现 = domain.setGroupConfig(sid, { sessionTurnCap })；best-effort，调度器
-   *  失败只 warn。省略 = 只做进程内 game_over。 */
-  setSessionTurnCap?: (sessionId: number, cap: number) => Promise<void> | void
   /** g1 — the server-side group run 调度器. Omitted (the production shape) → createAiGatewayServer
    *  builds one from the group hooks + activeRuns above (all present → orchestrating is possible;
    *  any missing → null, /api/ai/group-chat answers `orchestrated:false` and never 409s). Set only

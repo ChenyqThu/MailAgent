@@ -1,9 +1,9 @@
-// L4 群聊 g3 — exportGroupReplay（groupReplay.ts）的列口径与排序契约。
+// L4 群聊 — exportGroupReplay（groupReplay.ts）的列口径与排序契约。
 //
 // 纯数据：三个群的消息行 + turn 台账由测试直接注入（ReplaySource），不经调度器。
 //   R1 三群消息 + turn 合并后按时间单调，并列时消息在前
 //   R2 messageId 为空的 silent / held_dup / skipped / failed / stopped turn 各成一行
-//   R3 game_over / group_stop 系统行标注；其它系统行不渲染
+//   R3 group_stop 系统行标注；其它 kind 的系统行不渲染
 //   R4 空输入 → 只有表头
 //   R5 titleOf 缺 → 用 agentId
 
@@ -134,7 +134,7 @@ describe('exportGroupReplay', () => {
     ])
   })
 
-  test('R3 game_over / group_stop 系统行标注；judge_post / 脏 metadata 的系统行不渲染', () => {
+  test('R3 group_stop 系统行标注；judge_post / 脏 metadata / 退役 kind 的系统行不渲染', () => {
     const md = exportGroupReplay(
       [1],
       source(
@@ -147,6 +147,8 @@ describe('exportGroupReplay', () => {
               metadata: JSON.stringify({ kind: 'group_stop', reason: 'session_cap', runId: 'r' })
             }),
             row(3, 3_000, 'system', '', null, { metadata: '{not json' }),
+            // 老库里可能还有 g3（狼人杀）留下的 game_over 行：kind 已无渲染分支，
+            // 与任何未知 kind 一样整行不出现。
             row(4, 4_000, 'system', '', null, {
               metadata: JSON.stringify({ kind: 'game_over', runId: 'r', chainId: 9 })
             })
@@ -155,7 +157,7 @@ describe('exportGroupReplay', () => {
         {}
       )
     )
-    expect(body(md).map((r) => r[3])).toEqual(['(停止:session_cap)', '(游戏结束)'])
+    expect(body(md).map((r) => r[3])).toEqual(['(停止:session_cap)'])
   })
 
   test('R4 空输入 → 只有表头（非空字符串）', () => {

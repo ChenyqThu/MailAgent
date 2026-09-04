@@ -145,15 +145,6 @@ export interface GroupConfig {
   modelOverride?: string | null
   /** 群不在前台时是否投影到通知中心（按链合并）。缺省 = true。 */
   notify?: boolean
-  preset?: 'werewolf' | null
-  game?: {
-    kind: 'werewolf'
-    seed: number
-    roles: Record<string, 'wolf' | 'seer' | 'villager'>
-    /** 建局写入的七个显示名（法官 + 六玩家）。子群名单只有本群成员，法官在子群的
-     *  <game_secret> 全表靠它取名（groupGame.ts 取名顺序 titles → 本群名单 → agentId）。 */
-    titles?: Record<string, string>
-  }
 }
 
 /** L4 群聊 g1 — `GET /chat/sessions/{id}/group-metrics` 的读面形状（design §6 两指标 + 两个
@@ -168,8 +159,7 @@ export interface GroupMetrics {
   last1h: GroupMetricsWindow
   last24h: GroupMetricsWindow
   lastStopReason: string | null
-  /** g3 — 无窗口的会话累计（一局的总量，不是小时量）。旧 serve-api 不带 → undefined。
-   *  family 合计由前端把三个群的这三项相加（相加不是平均：g1「不跨群平均」纪律不破）。 */
+  /** 无窗口的会话累计（本群自己的总量，不是小时量）。旧 serve-api 不带 → undefined。 */
   sessionTurns?: number
   sessionTokens?: number
   /** 全 NULL → null（未知 ≠ 0）；family 合计要求每个群都非 null，否则整体显示未知。 */

@@ -166,22 +166,6 @@ export function GroupChatWorkspace({
     setDetailsOpen(groupId, !detailsOpen)
   }
 
-  // 一局 = 本群 + 父群 + 本群的子群（自己在首位）。狼人杀的预算是 family 合计，单群数字
-  // 会低报到看不出问题；父子关系只从这一屏的行里推。
-  // 🔴 T3 起这份 family **不含话题**：群清单按 `invoked_by='thread'` 把话题排除了，这里推不出
-  // 它们。调度器那侧的预算窗口是含话题的（RunState.familySessionIds），所以群里开了话题之后，
-  // 详情面的「本局合计」会比调度器实际计的少一截。取舍：补齐要按群再拉一趟话题清单 + 逐话题一
-  // 次 metrics，而这个数只在狼人杀预设下显示（那三个群按流程不开话题）。真要补，从
-  // groupThreadsKey 拿 id 加进来即可。
-  const familySessionIds = useMemo<number[]>(() => {
-    if (activeSession == null) return []
-    const ids = [activeSession.id]
-    const parentId = activeSession.parent_session_id ?? null
-    if (parentId != null) ids.push(parentId)
-    for (const i of items) if (i.parent_session_id === activeSession.id) ids.push(i.id)
-    return [...new Set(ids)]
-  }, [activeSession, items])
-
   const select = (id: number): void => {
     setActiveId(id)
     if (narrow) setMobileDetail(true)
@@ -259,7 +243,6 @@ export function GroupChatWorkspace({
         sessionId={activeSession.id}
         session={activeSession}
         memberIds={parseMembersJson(activeSession.members_json ?? null)}
-        familySessionIds={familySessionIds}
         memberMeta={memberMeta}
         candidates={candidates}
         labsOn={labsOn}

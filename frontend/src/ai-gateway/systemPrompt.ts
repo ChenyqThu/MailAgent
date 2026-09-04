@@ -164,7 +164,6 @@ export function buildGatewaySystemPrompt(args: {
     group?: {
       members: Array<{ agentId: string; title: string }>
       topic?: string | null
-      gameSecret?: string | null
     } | null
   } | null
   /** W6 — true iff THIS run's built ToolSet holds suggest_followups (manual chat). Injects the
@@ -248,9 +247,7 @@ export function buildGatewaySystemPrompt(args: {
         ? buildGroupChatIdentityBlock({
             ...args.sessionAgentIdentity,
             group: args.sessionAgentIdentity.group,
-            silenceContract: groupSpeakerRun,
-            // g3 — 浅展开带不上 group 内的键，必须显式映射（缺省 null → 字节不变）。
-            gameSecret: args.sessionAgentIdentity.group.gameSecret ?? null
+            silenceContract: groupSpeakerRun
           })
         : buildTeamAgentIdentityBlock(args.sessionAgentIdentity)
       : ''
@@ -303,9 +300,7 @@ export function buildTeamAgentIdentityBlock(identity: {
  *  tests. The trailing sentences pin the speaking discipline: own voice only, concise, never
  *  impersonate另一个成员, never emit a `[名字]` prefix (that labelling is how OTHER
  *  participants' turns are fed in — see groupChat.ts assembleGroupHistory).
- *  g1 — `silenceContract` (调度器 turns only) appends the one-sentence 沉默契约; `gameSecret`
- *  (g3) renders a <game_secret> element with the speaker's OWN role facts — server-side facts,
- *  never a prompt rule. */
+ *  g1 — `silenceContract` (调度器 turns only) appends the one-sentence 沉默契约. */
 export function buildGroupChatIdentityBlock(identity: {
   agentId: string
   agentTitle: string
@@ -313,10 +308,8 @@ export function buildGroupChatIdentityBlock(identity: {
   /** `topic` = 群用途（group_config_json.topic）：有值 → <topic> 元素 + 尾句；缺省字节不变。 */
   group: { members: Array<{ agentId: string; title: string }>; topic?: string | null }
   silenceContract?: boolean
-  gameSecret?: string | null
 }): string {
   const duty = identity.duty?.trim()
-  const gameSecret = identity.gameSecret?.trim()
   const topic = identity.group.topic?.trim()
   const memberTitles = identity.group.members.map((m) => m.title)
   const lines = [
@@ -326,7 +319,6 @@ export function buildGroupChatIdentityBlock(identity: {
     ...(duty ? [`  <duty>${escapeXml(duty)}</duty>`] : []),
     `  <members>${escapeXml(memberTitles.join('、'))}</members>`,
     ...(topic ? [`  <topic>${escapeXml(topic)}</topic>`] : []),
-    ...(gameSecret ? [`  <game_secret>${escapeXml(gameSecret)}</game_secret>`] : []),
     '</current_group_chat>',
     `这是一个多人群聊，成员有：${memberTitles.join('、')}，以及用户本人。` +
       `你正在以成员「${identity.agentTitle}」的身份发言。历史消息里以「[名字]」开头的是` +

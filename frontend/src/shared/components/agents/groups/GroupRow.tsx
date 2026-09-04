@@ -30,7 +30,7 @@ export interface GroupRowItem {
   updated_at: number
   last_read_at?: number | null
   last_message?: ChatSessionListItem['last_message']
-  /** 子群（狼人杀的狼群 / 预言家群）→ 父群 id；顶级群恒空。 */
+  /** 子群 → 父群 id；顶级群恒空。 */
   parent_session_id?: number | null
   /** T3 — 底下有未读话题（serve-api 派生列）；`isGroupRowUnread` 读它，行本身不判。 */
   has_unread_threads?: boolean

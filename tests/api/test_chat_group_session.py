@@ -243,7 +243,7 @@ def test_group_route_main_short_circuit_is_exact_match_only(chat_client: TestCli
 
 
 def test_group_route_rejects_more_than_max_members(chat_client: TestClient) -> None:
-    """g1 起上限从 5 放宽到 8（狼人杀 = 法官 + 6，父设计拍板 Q5），单源
+    """g1 起上限从 5 放宽到 8（父设计拍板 Q5），单源
     ``src.chat.group_limits.MAX_GROUP_MEMBERS``。上限值不在这里硬写 —— 用常量构造刚好越界的
     一组，改常量时本用例自动跟随（改错了由 test_group_constants_parity 抓）。"""
     ok_members = ["dms_helper", "a3", "a4", "a5", "a6", "a7", "a8", "a9"][:MAX_GROUP_MEMBERS]
