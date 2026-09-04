@@ -35,7 +35,6 @@ import { errorMessage } from '@shared/lib/ipcErrors'
 
 import {
   deleteActionLabelKey,
-  derivedSourceId,
   displayName,
   fileTimeLabel,
   isProjection,
@@ -44,6 +43,7 @@ import {
   trashDaysLeft,
   type LibraryFileRef
 } from './fileMeta'
+import { FileRelations } from './FileRelations'
 import { HistoryDrawer } from './HistoryDrawer'
 import { useLibraryFileQuery, useLibraryTextQuery, useMountSummary } from './hooks'
 import { HtmlPreview } from './HtmlPreview'
@@ -60,32 +60,6 @@ function isNonInlineKind(file: Pick<LibraryFile, 'kind' | 'mime'>): boolean {
   if (file.kind === 'placeholder') return true
   const mime = file.mime ?? ''
   return mime.startsWith('video/') || mime.startsWith('audio/')
-}
-
-/** F2：解析版顶部的「派生自 X」回链。单向 —— 原文件那侧不显示自己被另存过（design §2.3）。 */
-function DerivedFromChip({
-  sourceId,
-  onSelect
-}: {
-  sourceId: number
-  onSelect(ref: LibraryFileRef): void
-}): ReactElement | null {
-  const { t } = useTranslation()
-  const source = useLibraryFileQuery({ id: sourceId })
-  if (source.isError) return null
-  const name = source.data ? displayName(source.data) : '…'
-  return (
-    <div className="px-4 pt-3">
-      <button
-        type="button"
-        onClick={() => onSelect({ id: sourceId })}
-        className="inline-flex items-center gap-1.5 rounded-full border border-ink-border bg-ink-2 px-2.5 py-1 text-meta text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
-      >
-        <ExternalLink size={11} strokeWidth={2} aria-hidden className="text-ink-fg-3" />
-        {t('library.preview.derivedFrom', { name })}
-      </button>
-    </div>
-  )
 }
 
 function StatusBanner({
@@ -295,7 +269,6 @@ export function FilePreview({
   const readonly = projection || mountUnavailable || (mount !== null && mount.mode === 'ro')
   const present = file.status === 'present'
   const app = openWithApp(file)
-  const derivedFrom = derivedSourceId(file)
   const parsedMarkdown = text.data?.markdown ?? null
 
   const specs: ActionSpec[] = []
@@ -381,9 +354,9 @@ export function FilePreview({
         mountUnavailable={mountUnavailable}
         onRestore={() => actions.restore(file)}
       />
-      {derivedFrom !== null ? (
-        <DerivedFromChip sourceId={derivedFrom} onSelect={onSelectFile} />
-      ) : null}
+      {/* dogfood 0903 第 2 件：这份资料与邮件 / 会话 / 原文件 / 事项的关联（design §9.2 的
+          「反向」那条）。数据全来自已有的列与已有的端点，本组件不新造关联。 */}
+      <FileRelations file={file} onSelectFile={onSelectFile} />
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto scrollbar-thin">
         {mountUnavailable ? (
           // 挂载不可用 = 一次盘都不读；元信息与历史仍在（design §8.2）。

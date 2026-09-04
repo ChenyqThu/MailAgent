@@ -5,6 +5,7 @@ import type { LibraryFile } from '@shared/api/types/library'
 import { pickIconTone, type IconTone } from '@shared/components/email/attachmentPreview'
 import {
   PROJECTION_SLUG,
+  RESOURCE_KEY_PREFIX,
   TRASH_SLUG,
   TRASH_TTL_DAYS,
   type LibrarySource
@@ -71,7 +72,54 @@ export function derivedSourceId(file: Pick<LibraryFile, 'source' | 'source_ref'>
   return Number.isInteger(id) && id > 0 ? id : null
 }
 
-export type OpenWithApp = 'word' | 'excel' | 'powerpoint' | 'preview' | 'browser' | 'player'
+/** 来源邮件的附件 id（`source='mail'` 时 `source_ref` 就是 `email_attachment.id`，见
+ *  `src/library/service.py::keep_attachment`）。
+ *
+ *  🔴 投影行**不走这里**：它自己带 `internal_id` / `subject` / `sender`，不必再查一次。
+ *  这个函数只服务「另存到资料库」之后的库内行 —— 那种行上除了 `source_ref` 什么邮件信息都没有。 */
+export function mailSourceAttachmentId(
+  file: Pick<LibraryFile, 'source' | 'source_ref' | 'is_projection' | 'path'>
+): number | null {
+  if (isProjection(file) || file.source !== 'mail' || !file.source_ref) return null
+  const id = Number(file.source_ref)
+  return Number.isInteger(id) && id > 0 ? id : null
+}
+
+/** 来源会话的 session id（`source='chat'` 时 `source_ref` 是 `'{sessionId}:{uiMessageId}'`）。
+ *
+ *  🔴 会话段**可能是空串**：新会话的第一条消息在发出时 session 还没持久化下来
+ *  （`chatAttachmentAdapter.ts` 的注释说的就是这一种），那种行没有可跳转的落点，返回 null。 */
+export function chatSourceSessionId(
+  file: Pick<LibraryFile, 'source' | 'source_ref'>
+): number | null {
+  if (file.source !== 'chat' || !file.source_ref) return null
+  const id = Number(file.source_ref.split(':')[0])
+  return Number.isInteger(id) && id > 0 ? id : null
+}
+
+/** 跨模块引用键（design §9.0）：事项侧就是拿这个串挂的资料。 */
+export function libraryResourceKey(fileId: number): string {
+  return `${RESOURCE_KEY_PREFIX}${fileId}`
+}
+
+/** 「用 X 打开」里那个 X 的值域。
+ *
+ *  🔴 是**固定产品名**，不是本机默认应用的真名。取真名唯一可行的路子是
+ *  `NSWorkspace.URLForApplicationToOpenURL`（osascript / JXA），而它只对**存在的文件**返回结果，
+ *  且给的是**系统语言**的本地化名 —— 与 app 自己的 i18n 语言无关，两个 locale 都管不到它。
+ *  见 `library.common.app.*` 的取舍说明。
+ *
+ *  数组形态是为了让 i18n 闸能遍历（`tests/components/library/libraryI18nKeys.test.ts`）——
+ *  这几个 key 曾整片缺失、UI 上原样吐出 `library.common.app.excel`。 */
+export const OPEN_WITH_APPS = [
+  'word',
+  'excel',
+  'powerpoint',
+  'preview',
+  'browser',
+  'player'
+] as const
+export type OpenWithApp = (typeof OPEN_WITH_APPS)[number]
 
 /** 原件该交给哪个应用打开（design §2.4「原件 · 用 X 打开」）；null = 泛称「系统应用」。 */
 export function openWithApp(file: Pick<LibraryFile, 'filename' | 'mime'>): OpenWithApp | null {
