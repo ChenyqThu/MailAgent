@@ -44,9 +44,11 @@ interface StoredRun extends ActiveRunEntry {
 export class ActiveRunRegistry {
   private readonly bySession = new Map<number, StoredRun>()
   private readonly now: () => number
+  private readonly onSessionIdle?: (sessionId: number) => void
 
-  constructor(opts?: { now?: () => number }) {
+  constructor(opts?: { now?: () => number; onSessionIdle?: (sessionId: number) => void }) {
     this.now = opts?.now ?? (() => Date.now())
+    this.onSessionIdle = opts?.onSessionIdle
   }
 
   /** True when a live run is registered for this session. Aborted entries age out defensively. */
@@ -84,10 +86,26 @@ export class ActiveRunRegistry {
   }
 
   /** Remove a finished run. runId-matched: a stale release (this run was already stopped and a new
-   *  one registered) is a no-op, so a finally can always call it safely. */
-  release(sessionId: number, runId: string): void {
+   *  one registered) is a no-op, so a finally can always call it safely. Returns whether THIS call
+   *  is the one that ended the run.
+   *
+   *  0903 —— 这里是「一轮结束了」的唯一收敛点。chat 的三条排干路径（attached response close /
+   *  detached finally / overflow finally）、/decide resume、headless agent run、群调度器，全都在
+   *  终止时经过这一行；而 onFinish 只覆盖「跑到了收尾回调」的那些（drain 自己抛、pipe 同步抛、
+   *  abort 都到不了它）。排队追问的 drain 因此挂在 onSessionIdle 而不是 onFinish 上。
+   *  🔴 stop() 有意不通知：那条路的队列语义由 /run/stop（restoreForSession）与 interrupt 端点
+   *  自己负责，被停那一轮随后的 release 返回 false，不会再触发一次。 */
+  release(sessionId: number, runId: string): boolean {
     const entry = this.bySession.get(sessionId)
-    if (entry && entry.runId === runId) this.bySession.delete(sessionId)
+    if (!entry || entry.runId !== runId) return false
+    this.bySession.delete(sessionId)
+    try {
+      this.onSessionIdle?.(sessionId)
+    } catch (err) {
+      // 通知失败绝不能把释放本身变成异常（释放没完成 = 会话被永久锁住，比漏一次 drain 更糟）。
+      console.error('[ai-gateway] onSessionIdle threw (run released OK)', err)
+    }
+    return true
   }
 
   /** Explicit stop (POST /api/ai/run/stop): abort the run's controller AND remove the entry so the

@@ -1262,11 +1262,10 @@ export function makePersistOnFinish(
     } catch (err) {
       console.error('[ai-gateway] maybeAutoCompact threw (turn streamed OK)', err)
     }
-    try {
-      cfg.dispatchQueuedInput?.(turn)
-    } catch (err) {
-      console.error('[ai-gateway] dispatchQueuedInput threw (turn streamed OK)', err)
-    }
+    // 0903 —— 排队追问的 drain 曾经挂在这里（onFinish 末尾），于是只有「跑到了收尾回调」的那些
+    // 终止路径会 drain：drain 自己抛 / pipe 同步抛 / abort 都到不了这一行，那条路上排队的追问就
+    // 无限期躺在队列里。触发点已收敛到 ActiveRunRegistry.release()（每条终止路径的唯一交汇处），
+    // 见 activeRuns.ts 的 onSessionIdle。这里不再有第二个触发点。
   }
 }
 

@@ -15,6 +15,7 @@ import {
   listQueuedInput,
   markSent,
   restoreAllStale,
+  restoreClaimedForSession,
   restoreForSession,
   updateQueuedInput
 } from '../../src/electron/main/chat_db'
@@ -74,6 +75,33 @@ describe('queued input store', () => {
     expect(restoreAllStale()).toBe(2)
     expect(listQueuedInput(sid).map((item) => item.status)).toEqual(['restored', 'restored'])
     expect(first.id).toBeLessThan(second.id)
+  })
+
+  // 0903 —— 一轮 run 结束时的收尾：只把「那一轮没能送出去」的 claimed 行还给用户，还排着队的
+  // queued 行不动（用户随时可改可撤，降级它没道理）。落 'restored' 而不是 'queued' 是循环闸。
+  test('restoreClaimedForSession 只降级 claimed，且落 restored（不是 queued）', () => {
+    const sid = sessionId()
+    const claimed = enqueueQueuedInput(sid, '被那一轮带走但没送到')
+    const stillQueued = enqueueQueuedInput(sid, '还排着队')
+    expect(claimQueuedInput([claimed.id], Date.now())).toEqual([claimed.id])
+
+    expect(restoreClaimedForSession(sid)).toBe(1)
+
+    expect(getQueuedInput(claimed.id)?.status).toBe('restored')
+    expect(getQueuedInput(stillQueued.id)?.status).toBe('queued')
+  })
+
+  test('restoreClaimedForSession 是会话内的，不碰别的会话', () => {
+    const mine = sessionId()
+    const other = sessionId()
+    const a = enqueueQueuedInput(mine, 'a')
+    const b = enqueueQueuedInput(other, 'b')
+    claimQueuedInput([a.id, b.id], Date.now())
+
+    expect(restoreClaimedForSession(mine)).toBe(1)
+
+    expect(getQueuedInput(a.id)?.status).toBe('restored')
+    expect(getQueuedInput(b.id)?.status).toBe('claimed')
   })
 
   test('markSent is session-scoped, idempotent, and binds delivered id only to the first row', () => {

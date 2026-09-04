@@ -369,9 +369,9 @@ export interface AiGatewayConfig {
   captureTurnMemory?: (turn: PersistTurnInput) => void
   /** P4 automatic compact trigger. Fire-and-forget only; onFinish never awaits it. */
   maybeAutoCompact?: (turn: PersistTurnInput) => void
-  /** P5 queued-input dispatcher. Lifecycle serializes this after maybeAutoCompact. */
-  dispatchQueuedInput?: (turn: PersistTurnInput) => void
-  /** P5 idle trigger used by queue endpoints after enqueue/confirm. */
+  /** P5 idle trigger used by queue endpoints after enqueue/confirm. 一轮 run **结束**时的 drain
+   *  不走这里：它收敛在 ActiveRunRegistry.release() 的 onSessionIdle 上（activeRuns.ts），由
+   *  lifecycle 构造注册表时注入。 */
   dispatchQueuedInputIfIdle?: (sessionId: number) => void
   /** Interrupt trigger (POST /api/ai/queued-input/interrupt): dispatch exactly `id` on the same
    *  post-turn chain once the stopped run's lease clears; `revertIds` are the rows that run had

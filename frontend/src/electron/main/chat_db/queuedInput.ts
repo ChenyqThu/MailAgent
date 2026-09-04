@@ -192,6 +192,21 @@ export function restoreForSession(sessionId: number): number {
     .run(Date.now(), sessionId).changes
 }
 
+/** 0903 —— 一轮 run 结束时还留在 'claimed' 的行 = 那一轮没能把它送出去（送到了就已经 markSent）。
+ *  还给用户，但落 'restored' 而不是 'queued'：restored 不进 listDispatchableQueuedInput，所以
+ *  「上游一直报错 → 反复自动重发」这个循环在状态机层面就不成立 —— 每行最多自动派发一次，之后
+ *  只有用户按「发送」才会再走一次。与 /run/stop 的 restoreForSession 同一套词汇，只是范围收窄到
+ *  claimed（还排着队、用户随时可改可撤的 queued 行不该被降级）。 */
+export function restoreClaimedForSession(sessionId: number): number {
+  return getChatDb()
+    .prepare(
+      `UPDATE chat_queued_input
+       SET status = 'restored', claimed_at = NULL, updated_at = ?
+       WHERE session_id = ? AND status = 'claimed'`
+    )
+    .run(Date.now(), sessionId).changes
+}
+
 export function restoreAllStale(): number {
   return getChatDb()
     .prepare(

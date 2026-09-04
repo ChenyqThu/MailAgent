@@ -583,7 +583,7 @@ async function handleChat(
     if (runToken != null && run.sessionId != null) {
       const releaseSessionId = run.sessionId
       const releaseRunId = runToken.runId
-      const release = (): void => cfg.activeRuns!.release(releaseSessionId, releaseRunId)
+      const release = (): boolean => cfg.activeRuns!.release(releaseSessionId, releaseRunId)
       if (res.destroyed || res.writableEnded) release()
       else res.on('close', release)
     }

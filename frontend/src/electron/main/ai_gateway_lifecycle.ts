@@ -124,6 +124,7 @@ import {
   markToolCallApprovalExpired,
   setAgentSessionJobId,
   restoreAllStale,
+  restoreClaimedForSession,
   restoreForSession,
   revertClaimed,
   updateQueuedInput,
@@ -741,7 +742,13 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // approval-resume mutex kept". CLAUDE.md 开关表 carries the same wording.
   const detachedRunsEnabled = envBool('MAILAGENT_CHAT_DETACHED_RUNS', true)
   const queuedInputEnabled = envBool('MAILAGENT_CHAT_QUEUED_INPUT', true)
-  const activeRuns = new ActiveRunRegistry()
+  // 0903 —— 「一轮结束了」的唯一收敛点。真正的处理器要等 dispatchDeps / chainPostTurn 建好才装得上
+  // （它们在本函数后半段），所以这里只留一个可后填的槽；装上之前 release 的通知是 no-op（启动早期
+  // 本来也没有在跑的 run）。
+  let onChatRunSettled: ((sessionId: number) => void) | undefined
+  const activeRuns = new ActiveRunRegistry({
+    onSessionIdle: (sessionId) => onChatRunSettled?.(sessionId)
+  })
   // Set after the server listens (chicken-and-egg: the announce needs the gateway's own port, known
   // only post-listen; a paused approval fires well after startup so this is populated by then).
   let gatewayPort = 0
@@ -2132,8 +2139,32 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         0
       )
     }
-    gatewayConfig.dispatchQueuedInput = (turn): void => {
-      if (turn.sessionId != null) scheduleDispatch(turn.sessionId)
+    // 一轮 run 终止 → 排队追问的收尾。挂在 ActiveRunRegistry.release() 上（chat 三条排干路径 /
+    // resume / headless / 群调度器的唯一交汇处），不再挂 onFinish —— 后者漏掉 abort 与 drain 自己
+    // 抛的那些终止，那条路上排队的追问会无限期躺在队列里。
+    //
+    // 🔴 审批暂停的那一轮也会释放租约（run 结束了，在等人），但它的队列语义是「等决定」：排着的
+    // 追问不该趁这个空档发出去，已 claim 的行属于那一轮、resume 时会被 markSent。所以有待决审批
+    // 时整个 settle 不做事。
+    // 🔴 循环闸：走到这里还留着的 claimed 行 = 那一轮没能把它送出去，还给用户但落 'restored'
+    // （不进 listDispatchable）。于是每行最多自动派发一次 —— 上游持续报错也只会是
+    // 「queued → 试一次 → restored，停」，不会反复重发。
+    onChatRunSettled = (sessionId: number): void => {
+      if (approvalStash?.peekBySession(sessionId) != null) return
+      setTimeout(
+        () =>
+          chainPostTurn(sessionId, async () => {
+            try {
+              if (restoreClaimedForSession(sessionId) > 0) {
+                broadcastChatEvent('chat:queued-input-changed', { sessionId })
+              }
+            } catch (err) {
+              console.error('[ai-gateway] queued-input restore on run settle failed', err)
+            }
+            await runQueuedInputDispatch(dispatchDeps, sessionId)
+          }),
+        0
+      )
     }
     gatewayConfig.dispatchQueuedInputIfIdle = scheduleDispatch
     // Same per-session chain as the drain: an onFinish drain already queued ahead of this task

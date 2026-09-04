@@ -87,6 +87,7 @@ export {
   listQueuedInput,
   markSent,
   restoreAllStale,
+  restoreClaimedForSession,
   restoreForSession,
   revertClaimed,
   updateQueuedInput
