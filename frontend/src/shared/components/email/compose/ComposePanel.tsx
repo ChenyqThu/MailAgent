@@ -24,6 +24,7 @@ import { useEditor } from '@tiptap/react'
 import {
   ChevronDown,
   ChevronRight,
+  FileDown,
   Flag,
   Loader2,
   Paperclip,
@@ -50,6 +51,9 @@ import {
 import { useAppearance } from '@shared/state/appearance'
 import { plaintextToHtml } from '@shared/lib/plaintext_html'
 import { splitQuoteHtml } from '@shared/lib/quoteSplit'
+import { LibraryFilePickerDialog } from '@shared/components/library/LibraryFilePickerDialog'
+import { desktopMacEnabled } from '@shared/navigation/useNavGates'
+import type { LibraryFile } from '@shared/api/types/library'
 import type {
   ComposeAttachmentRef,
   ComposeImportance,
@@ -107,10 +111,20 @@ const IMPORTANCE_OPTS: ReadonlyArray<{ value: ComposeImportance; key: string }> 
  *  前端先拦是 UX; 服务端 staging 端点是权威复核。 */
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
-/** compose 附件 chip 本地态。二选一来源:
+/** chip → wire ref (snake_case 契约字面)。三条腿互斥, 服务端 `_normalize_attachment_refs`
+ *  强制"恰好一个键"。 */
+function attachmentRefOf(a: ComposeAttachmentChip): ComposeAttachmentRef {
+  if (a.stageId != null) return { stage_id: a.stageId }
+  if (a.libraryFileId != null) return { library_file_id: a.libraryFileId }
+  return { attachment_id: a.attachmentId as number }
+}
+
+/** compose 附件 chip 本地态。三选一来源 (发送时各落成一种 ref, 见 attachmentRefOf):
  *  - staged: 用户新上传 → staging 端点回执 stageId → payload {stage_id}
- *  - existing: draft-edit 回填的库内已有附件 → payload {attachment_id}
- *    (draft-edit 发送是 mode='new' 新邮件, 不引用原草稿附件就会丢) */
+ *  - existing: draft-edit 回填 / forward hydrate 的库内已有邮件附件 → payload {attachment_id}
+ *    (draft-edit 发送是 mode='new' 新邮件, 不引用原草稿附件就会丢)
+ *  - library: 资料库选择器挑来的库内文件 → payload {library_file_id}; 字节已在资料库里,
+ *    没有上传步骤, 落地即 'done' (服务端按 id 过路径 jail 后自己读原件) */
 interface ComposeAttachmentChip {
   localId: number
   filename: string
@@ -118,6 +132,7 @@ interface ComposeAttachmentChip {
   status: 'uploading' | 'done' | 'error'
   stageId?: string
   attachmentId?: number
+  libraryFileId?: number
   /** staged 图片的本地缩略预览 (URL.createObjectURL); 移除/卸载时 revoke。 */
   previewUrl?: string
 }
@@ -273,8 +288,14 @@ export function ComposePanelInner({
   // D2 Bug B — draft-edit 按 data-ma-quote marker 拆分成功: 回复段在编辑器里,
   // 引用段在下方折叠引用区 (quoteHtml), 发送时原样拼回 (marker 保留)。
   const [splitQuote, setSplitQuote] = useState(false)
-  // D6 — 附件 chips (staged 上传 + draft-edit 回填 + forward hydrate 的库内已有附件)。
+  // D6 — 附件 chips (staged 上传 + draft-edit 回填 + forward hydrate 的库内已有附件 +
+  // 资料库选择器挑来的库内文件)。
   const [attachList, setAttachList] = useState<ComposeAttachmentChip[]>([])
+  const [libraryPickerOpen, setLibraryPickerOpen] = useState(false)
+  // 「从资料库选附件」跟资料库整域走同一道门 (registry.ts 的 library 条目 gate='desktopMac'):
+  // 选择器展示的就是那个域的内容, web 构建下它在导航里根本不存在, 单给 compose 开一个入口
+  // 等于把用户领进一个这个构建目标里没有的域。判据函数与导航共用一份, 不在这里另写平台判定。
+  const libraryPickerAvailable = desktopMacEnabled()
   // D2 隐藏保真集 (task 08-20 draft-save) — 草稿正文引用的 inline 部件 (cid:) 不进
   // AttachmentTray 显示, 但随 refs 带走: 服务端把对应 MIME part 重新编入出站 EML
   // (否则替换保存后的草稿有 cid 引用无 part, 内联图确定性丢)。filename 用于保存后
@@ -569,7 +590,8 @@ export function ComposePanelInner({
           size: a.size,
           status: 'done' as const,
           ...(a.stageId !== undefined ? { stageId: a.stageId } : {}),
-          ...(a.attachmentId !== undefined ? { attachmentId: a.attachmentId } : {})
+          ...(a.attachmentId !== undefined ? { attachmentId: a.attachmentId } : {}),
+          ...(a.libraryFileId !== undefined ? { libraryFileId: a.libraryFileId } : {})
         }))
       )
     }
@@ -604,7 +626,8 @@ export function ComposePanelInner({
             filename: a.filename,
             size: a.size,
             ...(a.stageId !== undefined ? { stageId: a.stageId } : {}),
-            ...(a.attachmentId !== undefined ? { attachmentId: a.attachmentId } : {})
+            ...(a.attachmentId !== undefined ? { attachmentId: a.attachmentId } : {}),
+            ...(a.libraryFileId !== undefined ? { libraryFileId: a.libraryFileId } : {})
           })
         ),
       fwdHydrated: mode !== 'forward' || fwdAttachState === 'done',
@@ -782,6 +805,42 @@ export function ComposePanelInner({
     [uploadAttachment, t, markDirty]
   )
 
+  // 资料库选择器的回执 —— 库内文件不经 staging (字节已在库里), 落地即 'done';
+  // 服务端按 library_file_id 过路径 jail 后自己读原件。
+  const addLibraryFiles = useCallback(
+    (files: readonly LibraryFile[]) => {
+      // 已在列表里的不重复添加。投影行 (邮件附件) 走 attachmentId, 与 forward hydrate
+      // 出来的原附件 chip 是同一个身份空间, 一条判据同时覆盖两种重复。
+      const already = (file: LibraryFile): boolean =>
+        file.id != null
+          ? attachList.some((a) => a.libraryFileId === file.id)
+          : attachList.some((a) => a.attachmentId === file.attachment_id)
+      const added: ComposeAttachmentChip[] = []
+      for (const file of files) {
+        if (already(file)) continue
+        // 与本机文件那条路同口径 (服务端 20MB 复核是权威, 前端先拦是 UX)。
+        if (file.size_bytes != null && file.size_bytes > MAX_ATTACHMENT_BYTES) {
+          toastError(t('compose.toast.attachmentTooLarge', { name: file.filename, max: 20 }))
+          continue
+        }
+        added.push({
+          localId: ++attachSeq.current,
+          filename: file.filename,
+          size: file.size_bytes,
+          status: 'done',
+          // 投影行没有 library id (id: null), 只能走已有的 {attachment_id} 腿。
+          ...(file.id != null
+            ? { libraryFileId: file.id }
+            : { attachmentId: file.attachment_id as number })
+        })
+      }
+      if (added.length === 0) return
+      setAttachList((prev) => [...prev, ...added])
+      markDirty()
+    },
+    [attachList, markDirty, t]
+  )
+
   const removeAttachment = useCallback(
     (localId: number) => {
       // 只移除本地引用; staging 残留由服务端 TTL/send 后清理, 无需删端点。
@@ -853,14 +912,10 @@ export function ComposePanelInner({
         code: 'E_FORWARD_ATTACH'
       })
     }
-    // D1 refs: staged → {stage_id}, 库内已有 → {attachment_id} (snake_case 契约字面)。
+    // D1 refs: 三条腿见 attachmentRefOf。
     // draft-edit 追加 D2 隐藏保真集 (inline 部件, 不显示为 chip 但必须过线)。
     const refs: ComposeAttachmentRef[] = [
-      ...attachList
-        .filter((a) => a.status === 'done')
-        .map((a) =>
-          a.stageId != null ? { stage_id: a.stageId } : { attachment_id: a.attachmentId as number }
-        ),
+      ...attachList.filter((a) => a.status === 'done').map(attachmentRefOf),
       ...inlineRefs.map((a) => ({ attachment_id: a.id }))
     ]
     return {
@@ -1254,6 +1309,19 @@ export function ComposePanelInner({
           <Paperclip size={13} strokeWidth={2} />
           {t('compose.attach')}
         </button>
+        {libraryPickerAvailable && (
+          <button
+            type="button"
+            onClick={() => setLibraryPickerOpen(true)}
+            disabled={busy}
+            className="gbtn gbtn-bare"
+            style={{ height: '34px' }}
+            title={t('library.compose.pickFromLibrary')}
+          >
+            <FileDown size={13} strokeWidth={2} />
+            {t('library.compose.pickFromLibrary')}
+          </button>
+        )}
         <input
           ref={fileInputRef}
           type="file"
@@ -1545,6 +1613,13 @@ export function ComposePanelInner({
         onConfirm={() => sendMut.mutate()}
         onCancel={() => setSendOpen(false)}
       />
+      {libraryPickerAvailable && (
+        <LibraryFilePickerDialog
+          open={libraryPickerOpen}
+          onOpenChange={setLibraryPickerOpen}
+          onConfirm={addLibraryFiles}
+        />
+      )}
       <DeleteDraftDialog
         open={deleteConfirmOpen}
         pending={deleteMut.isPending}

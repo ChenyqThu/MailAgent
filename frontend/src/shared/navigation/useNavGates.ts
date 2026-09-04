@@ -16,8 +16,9 @@ import { NAV_ENTRIES, type NavEntry, type NavGate } from './registry'
 /** 资料库域的平台门（design §2.5）：v1 只在 macOS 桌面客户端出现 —— 远程 web 打不到
  *  loopback serve-api，Windows 侧 `library:openPath` / `library:showInFolder` 两个本机 IPC
  *  不存在。判据抄 `calendarUiEnabled` 的整域关先例，多的那一半是构建目标。
- *  🔴 两处求值（本 hook + `resolveStaticNavGate`）共用这一个函数，别各写一遍。 */
-function desktopMacEnabled(): boolean {
+ *  🔴 两处求值（本 hook + `resolveStaticNavGate`）共用这一个函数，别各写一遍 —— compose 的
+ *  「从资料库选附件」入口也 import 它（那个入口展示的是资料库域的内容，门必须同一个）。 */
+export function desktopMacEnabled(): boolean {
   return !isWebBuild() && detectUiPlatform() === 'darwin'
 }
 

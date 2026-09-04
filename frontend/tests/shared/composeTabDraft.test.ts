@@ -82,4 +82,24 @@ describe('readComposeTabDraft', () => {
     expect(parsed?.bodyHtml).toBeNull()
     expect(parsed?.attachments).toEqual([{ filename: 'ok.txt', size: null }])
   })
+
+  test('🔴 附件的三条来源腿都过往返：漏一条 = 恢复回来的 chip 没有 ref，发送时静默变坏', () => {
+    const parsed = readComposeTabDraft(
+      JSON.parse(
+        JSON.stringify({
+          ...VALID,
+          attachments: [
+            { filename: 'a.pdf', size: 12, stageId: 's1' },
+            { filename: 'b.pdf', size: 34, attachmentId: 77 },
+            { filename: 'c.md', size: 56, libraryFileId: 11 }
+          ]
+        })
+      )
+    )
+    expect(parsed?.attachments).toEqual([
+      { filename: 'a.pdf', size: 12, stageId: 's1' },
+      { filename: 'b.pdf', size: 34, attachmentId: 77 },
+      { filename: 'c.md', size: 56, libraryFileId: 11 }
+    ])
+  })
 })

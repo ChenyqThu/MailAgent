@@ -26,6 +26,9 @@ export interface ComposeTabDraftAttachment {
   readonly size: number | null
   readonly stageId?: string
   readonly attachmentId?: number
+  /** 资料库选来的库内文件（chip 三条腿之一）。🔴 漏了它，快照往返回来的 chip 三个来源
+   *  字段全空 → 发送时落成 `{attachment_id: undefined}`，附件静默变成一条坏 ref。 */
+  readonly libraryFileId?: number
 }
 
 /** 参与快照链的面板模式。dogfood 波3 起 draft-edit（草稿点开即编辑）也进快照 ——
@@ -93,7 +96,8 @@ export function readComposeTabDraft(
         filename: a.filename,
         size: typeof a.size === 'number' ? a.size : null,
         ...(typeof a.stageId === 'string' ? { stageId: a.stageId } : {}),
-        ...(typeof a.attachmentId === 'number' ? { attachmentId: a.attachmentId } : {})
+        ...(typeof a.attachmentId === 'number' ? { attachmentId: a.attachmentId } : {}),
+        ...(typeof a.libraryFileId === 'number' ? { libraryFileId: a.libraryFileId } : {})
       })
     }
   }

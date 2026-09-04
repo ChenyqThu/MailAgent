@@ -21,19 +21,33 @@ import { useLibraryTreeQuery } from './hooks'
 import { rootLabelKey } from './fileMeta'
 import { BUILT_IN_ROOT_SLUGS, buildLibraryTree, MOUNTS_GROUP_PATH, type LibraryTreeNode } from './tree'
 
-export type FolderPickerMode = 'move' | 'keep'
+/** `export` = 报告「导出到资料库」：与 `keep` 同形（都是「往库里新建一个文件」，只有落点
+ *  预览没有来源路径），只是标题与描述换成报告的说法。 */
+export type FolderPickerMode = 'move' | 'keep' | 'export'
 
 interface Props {
   open: boolean
   onOpenChange(open: boolean): void
   mode: FolderPickerMode
-  /** 被移动 / 被另存的文件：显示名进描述句，`path` 给「从 → 到」预览。
-   *  `path` 只在 `move` 档用得着 —— `keep` 的来源是邮件附件，它在库里还没有路径。 */
+  /** 被移动 / 被另存 / 被导出的文件：显示名进描述句，`path` 给「从 → 到」预览。
+   *  `path` 只在 `move` 档用得着 —— `keep` 的来源是邮件附件、`export` 的来源是一份报告，
+   *  两者在库里都还没有路径。 */
   file: { filename: string; path?: string }
   /** 额外禁选的文件夹（如「移到…」里文件当前所在的文件夹）。 */
   disabledPaths?: readonly string[]
   busy?: boolean
   onConfirm(targetPath: string): void
+}
+
+const TITLE_KEY: Record<FolderPickerMode, string> = {
+  keep: 'library.actions.keepToLibrary',
+  move: 'library.actions.moveTo',
+  export: 'library.report.exportToLibrary'
+}
+const DESC_KEY: Record<FolderPickerMode, string> = {
+  keep: 'library.picker.keepDesc',
+  move: 'library.picker.moveDesc',
+  export: 'library.picker.exportDesc'
 }
 
 function selectable(node: LibraryTreeNode): boolean {
@@ -97,14 +111,8 @@ export function FolderPickerDialog({
     >
       <DialogContent className="w-[520px]">
         <DialogHeader>
-          <DialogTitle>
-            {mode === 'keep' ? t('library.actions.keepToLibrary') : t('library.actions.moveTo')}
-          </DialogTitle>
-          <DialogDescription>
-            {mode === 'keep'
-              ? t('library.picker.keepDesc', { name: file.filename })
-              : t('library.picker.moveDesc', { name: file.filename })}
-          </DialogDescription>
+          <DialogTitle>{t(TITLE_KEY[mode])}</DialogTitle>
+          <DialogDescription>{t(DESC_KEY[mode], { name: file.filename })}</DialogDescription>
         </DialogHeader>
         <div className="space-y-2.5">
           <div className="max-h-64 overflow-y-auto rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 p-1 scrollbar-thin">
@@ -123,7 +131,7 @@ export function FolderPickerDialog({
               />
             )}
           </div>
-          {mode === 'keep' ? (
+          {mode !== 'move' ? (
             <div className="rounded-[var(--r-ctl)] border border-ink-border-soft bg-ink-2 px-2.5 py-1.5 font-mono text-micro text-ink-fg-3">
               {target ?? '…'}/{file.filename}
             </div>

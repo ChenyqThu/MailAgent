@@ -19,6 +19,7 @@ import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { canOpenDetachedWindow, useDetachedMode } from '@shared/state/detached-mode'
 import { navEntry, navigateToNavEntry, navigateToReport } from '@shared/navigation/registry'
+import { resolveStaticNavGate } from '@shared/navigation/useNavGates'
 import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
 import { useDomainCollapsed } from '@shared/state/nav-shell'
 import { SegmentedControl } from '@shared/components/ui/segmented'
@@ -26,6 +27,7 @@ import { ShimmerText } from '@shared/components/ShimmerText'
 import { ErrorBoundary } from '@shared/components/ErrorBoundary'
 import { BlockRenderer } from './BlockRenderer'
 import { EmailSourcePanel } from './EmailSourcePanel'
+import { ReportExportButton } from './ReportExportButton'
 import { CadencePill, ReportIcon, StatusBadge } from './primitives'
 import { AgentAvatar } from './AgentAvatar'
 import {
@@ -694,6 +696,16 @@ export function ReportDetailView({
             {t('agents.reports.generatedAt')} {fmtClock(report.doc.generated_at)}
           </span>
           <span style={{ flex: 1 }} />
+          {/* 导出到资料库。两条显隐判据：
+              ① 资料库整域的门是 `desktopMac`（registry.ts 的 library 条目）—— 远程 web
+                 打不到 loopback serve-api，写进去的文件也没有地方能打开，所以门关着时
+                 连按钮都不该在；判据复用 `resolveStaticNavGate` 而不是自己再写一遍平台
+                 检测（useNavGates 的注释明写「两处求值共用一个函数」）。
+              ② 轻窗（DetachedShell）里不挂：那个壳**有意不挂 router**，成功回执的「打开」
+                 深链在里面无处可去 —— 而「没有去处的回执一律视为缺陷」（design §9.5）。 */}
+          {resolveStaticNavGate('desktopMac') && !detached && (
+            <ReportExportButton doc={report.doc} fallbackTitle={item.headline} />
+          )}
           {/* task 08-27 P5 —— 在新窗口打开这份报告（Electron 轻窗）。与「重新生成」同一条
               概要栏、同一套按钮形态；轻窗自身也渲染 ReportDetailView，所以在轻窗里不再挂
               入口（开出来只会是一模一样的第二个窗），web 上则没有第二窗口的概念。 */}

@@ -7778,7 +7778,10 @@
       "to": "To",
       "keepDesc": "Pick a folder to save this attachment into. Once saved, it no longer depends on the email.",
       "moveDesc": "Pick a new location. References to this file still work, but paths written down elsewhere will change.",
-      "treeAria": "Folders"
+      "exportDesc": "Pick a folder to save this report into as Markdown.",
+      "treeAria": "Folders",
+      "emptyFolder": "No files in this folder",
+      "pickHint": "The files you pick are sent as attachments; the originals stay in the Library."
     },
     "matter": {
       "tabLibrary": "Library",
@@ -7795,7 +7798,8 @@
       "trashedToast": "This file is in Trash — opened Trash for you"
     },
     "report": {
-      "exportToLibrary": "Export to Library"
+      "exportToLibrary": "Export to Library",
+      "exportedAs": "Report saved as \u201c{name}\u201d"
     },
     "toast": {
       "openAction": "Open",

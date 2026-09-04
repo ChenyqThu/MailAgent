@@ -7778,7 +7778,10 @@
       "to": "到",
       "keepDesc": "选一个文件夹，把这个附件存进去。存进去之后它就与邮件无关了。",
       "moveDesc": "选一个新位置。文件的引用不会断，但别处记着的路径会变。",
-      "treeAria": "文件夹"
+      "exportDesc": "选一个文件夹，把这份报告存成 Markdown。",
+      "treeAria": "文件夹",
+      "emptyFolder": "这个文件夹里没有文件",
+      "pickHint": "选中的文件会作为附件随邮件发出，原文件仍留在资料库里。"
     },
     "matter": {
       "tabLibrary": "资料库",
@@ -7795,7 +7798,8 @@
       "trashedToast": "文件在废纸篓里，已为你打开废纸篓"
     },
     "report": {
-      "exportToLibrary": "导出到资料库"
+      "exportToLibrary": "导出到资料库",
+      "exportedAs": "报告已存为「{name}」"
     },
     "toast": {
       "openAction": "打开",
