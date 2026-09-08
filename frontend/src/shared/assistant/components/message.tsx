@@ -178,13 +178,22 @@ export function UserMessageLibraryChips(): React.JSX.Element | null {
  *  正文只有这一份。 */
 export function UserMessageBody(): React.JSX.Element {
   const { t } = useTranslation()
-  const queued = useAuiState((s) => {
-    const text = s.message.content
-      .filter((part) => part.type === 'text')
-      .map((part) => ('text' in part ? part.text : ''))
-      .join('')
-    return parseQueuedFollowups(text)
-  })
+  // 🔴 与 UserMessageLibraryChips 同一条纪律（那边的长注释是这条的出处）：selector 只取
+  // 引用稳定的 content，解析放 useMemo。parseQueuedFollowups 命中时返回**新数组**，放在
+  // selector 里会让 useAuiState 底下 useSyncExternalStore 的 getSnapshot 每次都变 → 整页
+  // 崩在 Maximum update depth exceeded。未命中返回 null（稳定）所以只有带
+  // `<queued_followups>` 信封的会话会炸 —— 0903 dogfood 实测：团队 → 事项跟进一点就白屏。
+  const content = useAuiState((s) => s.message.content)
+  const queued = useMemo(
+    () =>
+      parseQueuedFollowups(
+        content
+          .filter((part) => part.type === 'text')
+          .map((part) => ('text' in part ? part.text : ''))
+          .join('')
+      ),
+    [content]
+  )
   if (queued === null) return <MessagePrimitive.Parts />
   return (
     <div className="space-y-1.5">
