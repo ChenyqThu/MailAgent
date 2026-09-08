@@ -47,6 +47,17 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _VALID_TTL = {"5m", "1h"}
 _VALID_CONTEXT_SOURCES = {"notion_context", "standing_docs"}
 
+#: tool-call 格式漂移的残迹（见 client.LLMSchemaDriftError）：模型写完第一个参数的值后
+#: 改用 XML 语法把剩余参数续在同一个字符串里。client 的 required 闸已经把这类响应挡在
+#: 落库之前，这里是第二道防线 —— 万一出现闸拦不住的新变体，至少别把残迹渲染给用户。
+_DRIFT_MARKER_RE = re.compile(r"</ai_summary>|<parameter\b|</invoke>")
+
+
+def strip_tool_call_drift(text: str) -> str:
+    """Cut `text` at the first tool-call drift marker; returns it unchanged if clean."""
+    m = _DRIFT_MARKER_RE.search(text or "")
+    return text if m is None else text[: m.start()].rstrip()
+
 #: 分类带 connector 工具时的 loop 轮次上限（MCP connector PR3）。分类是**同步热路径**——
 #: 逐封邮件跑、直接决定同步吞吐，每轮 = 一次 LLM 往返（+ 可能一次外部网络调用）。3 =
 #: 「最多两轮自由查询 + 最后一轮强制收尾」（run_tool_loop 在最后一轮 tool_choice 钉死
@@ -602,8 +613,16 @@ class LLMProcessor:
                 f"[llm] recommended_actions not a list: {type(raw_recs).__name__}; dropping"
             )
 
+        ai_summary = (ti.get("ai_summary") or "")[:2000]
+        cleaned_summary = strip_tool_call_drift(ai_summary)
+        if cleaned_summary != ai_summary:
+            logger.warning(
+                f"[llm] ai_summary carried tool-call drift markers (model={result.model}); "
+                f"truncated {len(ai_summary)} → {len(cleaned_summary)} chars"
+            )
+
         return AILabels(
-            ai_summary=(ti.get("ai_summary") or "")[:2000],
+            ai_summary=cleaned_summary,
             key_points=(ti.get("key_points") or "").strip(),
             category=category,
             language=language,

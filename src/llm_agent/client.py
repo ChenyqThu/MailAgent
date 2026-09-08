@@ -98,6 +98,25 @@ class LLMCallError(RuntimeError):
     """Raised on network/parse/validation failures; caller converts to retry."""
 
 
+class LLMSchemaDriftError(LLMCallError):
+    """tool_use 的参数缺 required 字段 —— 模型 tool-call 格式漂移。
+
+    实测形态（2026-06 起在 Anthropic 腿低频出现，opus-4-8 约 1.4% / sonnet-5 约
+    0.9%，OpenAI 腿零发生）：模型写完第一个参数的值后不闭合 JSON，改用 XML 语法把
+    剩余参数塞进同一个字符串里，SDK 拿到的是**合法但只有一个 key** 的 dict，例如
+    ``{"ai_summary": "正文…</ai_summary>\\n<category>产品管理</category>\\n</invoke>"}``。
+    模型不是理解错了而是采样时滑了一下，所以 classify 对它先原模型重试一次再换模型。
+    """
+
+
+def _missing_required(
+    tool_input: Dict[str, Any], tool_schema: Dict[str, Any]
+) -> List[str]:
+    """Return required keys absent from `tool_input` (schema order preserved)."""
+    required = (tool_schema.get("input_schema") or {}).get("required") or []
+    return [k for k in required if k not in tool_input]
+
+
 def _is_openai_proto(model: str) -> bool:
     return model.lower().startswith(_OPENAI_PROTO_PREFIXES)
 
@@ -316,40 +335,53 @@ class LLMClient:
         """Call LLM forcing tool_use; walk fallback chain on LLMCallError.
 
         `model_chain` defaults to [cfg.llm_model, *cfg.llm_fallback_models].
+
+        每次调用回来都校验 required 字段齐全；缺字段（LLMSchemaDriftError）先**原模型
+        重试一次**——漂移是随机滑移，重跑一次通常就正常，且换模型会连带换掉分类口径
+        （不同模型对同一封邮件的 category / priority 判断不一致）。重试仍缺才走下面
+        换模型的 fallback。
         """
         chain = _resolve_model_chain(model_chain)
         if not chain:
             raise LLMCallError("model chain is empty (LLM_MODEL unset?)")
 
+        async def _call(model: str) -> LLMResult:
+            # flag off / fail-open → route=None → legacy 前缀路由（现状字节级）；
+            # 显式 ref 路由失败 → LLMCallError → 调用方 except 走 fallback（MEDIUM-4）。
+            route = _route_or_raise(model)
+            leg = _leg_for(model, route)
+            if leg == "unsupported":
+                raise LLMCallError(
+                    f"provider protocol 'google' is not supported on the Python leg "
+                    f"(model={model}); skipping"
+                )
+            classify_leg = (
+                self._classify_openai if leg == "openai" else self._classify_anthropic
+            )
+            result = await classify_leg(
+                model=model,
+                system_blocks=system_blocks,
+                user_content=user_content,
+                tool_schema=tool_schema,
+                tool_name=tool_name,
+                route=route,
+            )
+            missing = _missing_required(result.tool_input, tool_schema)
+            if missing:
+                raise LLMSchemaDriftError(
+                    f"tool args missing required {missing} (model={model}, "
+                    f"tool={tool_name}); got_keys={sorted(result.tool_input)}"
+                )
+            return result
+
         last_err: Optional[BaseException] = None
         for i, model in enumerate(chain):
             try:
-                # flag off / fail-open → route=None → legacy 前缀路由（现状字节级）；
-                # 显式 ref 路由失败 → LLMCallError → 本 except 走 fallback（MEDIUM-4）。
-                route = _route_or_raise(model)
-                leg = _leg_for(model, route)
-                if leg == "unsupported":
-                    raise LLMCallError(
-                        f"provider protocol 'google' is not supported on the Python leg "
-                        f"(model={model}); skipping"
-                    )
-                if leg == "openai":
-                    return await self._classify_openai(
-                        model=model,
-                        system_blocks=system_blocks,
-                        user_content=user_content,
-                        tool_schema=tool_schema,
-                        tool_name=tool_name,
-                        route=route,
-                    )
-                return await self._classify_anthropic(
-                    model=model,
-                    system_blocks=system_blocks,
-                    user_content=user_content,
-                    tool_schema=tool_schema,
-                    tool_name=tool_name,
-                    route=route,
-                )
+                try:
+                    return await _call(model)
+                except LLMSchemaDriftError as e:
+                    logger.warning(f"[llm] schema drift on {model}, retrying once: {e}")
+                    return await _call(model)
             except LLMCallError as e:
                 last_err = e
                 if i + 1 < len(chain):

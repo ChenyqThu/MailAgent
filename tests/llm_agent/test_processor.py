@@ -5,7 +5,11 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from src.llm_agent.client import LLMResult
-from src.llm_agent.processor import LLMProcessor, _build_cache_control
+from src.llm_agent.processor import (
+    LLMProcessor,
+    _build_cache_control,
+    strip_tool_call_drift,
+)
 
 
 def _fake_email(**overrides):
@@ -948,3 +952,38 @@ def test_classification_factory_failure_falls_back_to_single_shot(monkeypatch):
     labels = asyncio.run(p.process_email(_fake_email()))
     assert labels.category == "💼 产品管理"
     assert len(client.classify_calls) == 1 and not client.loop_calls
+
+
+# --- tool-call 漂移残迹兜底（client 的 required 闸之后的第二道防线）-----------
+
+def test_strip_tool_call_drift_cuts_at_first_marker():
+    """样本取自 internal_id 1000016126（claude-sonnet-5，2026-09-08）。"""
+    polluted = (
+        "曾东彪同步 Controller H1 版本规划已基本对齐。</ai_summary>\n"
+        "<category>💼 产品管理</category>\n"
+        "</invoke>\n"
+    )
+    assert strip_tool_call_drift(polluted) == "曾东彪同步 Controller H1 版本规划已基本对齐。"
+
+
+def test_strip_tool_call_drift_leaves_clean_text_alone():
+    """正常摘要里的 HTML 尖括号不该被误伤。"""
+    clean = "他建议把 <p> 标签的处理逻辑独立出来，另外 a < b 的判断也要改。"
+    assert strip_tool_call_drift(clean) == clean
+
+
+def test_parse_strips_drift_markers_from_ai_summary():
+    p = _bare_processor()
+    result = LLMResult(
+        tool_input={
+            "ai_summary": "摘要正文。</ai_summary>\n<category>💼 产品管理</category>\n</invoke>",
+            "category": "💼 产品管理", "language": "中文",
+            "sender_priority": "核心团队", "action_required": True,
+            "action_type": "需要回复", "priority": "🟢 一般",
+        },
+        input_tokens=100, output_tokens=50,
+        cache_creation_input_tokens=0, cache_read_input_tokens=0,
+        model="test-model", latency_ms=100,
+    )
+    labels = p._parse(result, "收件箱")
+    assert labels.ai_summary == "摘要正文。"
