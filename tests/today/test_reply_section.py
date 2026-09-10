@@ -102,6 +102,21 @@ def test_dismiss_snapshot_persists_and_undo_does_not_erase_newer_decision(db):
     assert build_reply_section(str(db), now=_NOW)[0]["internalIds"] == [1, 2, 3]
 
 
+def test_dismissal_survives_metadata_resave(db):
+    """同 internal_id 重复入库走 INSERT OR REPLACE（先删后插），不能把人工决定一起删掉。"""
+    from src.today.service import dismiss_replies
+    _insert(db, 1, date_received=_iso(3), thread_id="t")
+    dismiss_replies(str(db), [1])
+    SyncStore(str(db)).save_email({
+        "internal_id": 1, "subject": "S", "sender": "a@x.com",
+        "date_received": _iso(3), "mailbox": "收件箱", "thread_id": "t",
+    })
+    # REPLACE 写回的列不含 ai_action；模拟 LLM 重新分类后它再次成为候选。
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute("UPDATE email_metadata SET ai_action='需要回复' WHERE internal_id=1")
+    assert build_reply_section(str(db), now=_NOW) == []
+
+
 # ============================================================
 # 常量下沉（岛模块 → llm_agent.schema）
 # ============================================================

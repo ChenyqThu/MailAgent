@@ -1973,6 +1973,10 @@ class SyncStore:
     #                回滚 (回退 v72): 旧代码读不到 contact_profile_run (已 DROP),
     #                画像记录列空态但不炸; agent_run_log 留着不碍事。**已迁移的画像
     #                台账行不会自动搬回去** —— 生产该表 2026-08-31 才建, 行数极少。
+    # v74 (2026-09-09, Notion 反馈批): 新表 today_reply_dismissal —— 今日页「无需回复」的
+    #                逐封人工决定 (operation_id 管撤销; 有意不挂 email_metadata 外键, 理由见
+    #                迁移块); email_metadata 加 sync_skip_reason (新 skipped 行记录原因, 老行
+    #                NULL = 未知)。纯增量: 回退 v73 时旧代码忽略二者。
     DB_VERSION = 74
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -5018,10 +5022,13 @@ class SyncStore:
         # v74: per-message manual reply dismissal (seconds, local-only), and
         # explicit Notion skip provenance. NULL provenance stays unknown for old rows.
         # Additive rollback: old binaries simply ignore both structures.
+        # 🔴 today_reply_dismissal 有意不挂 email_metadata 外键：_save_email_v3 对已存在的
+        # internal_id 走 INSERT OR REPLACE（先删后插），外键 CASCADE 会把人工决定一起删掉。
+        # 读侧只做 NOT EXISTS，孤儿行无害。
         if current_version < 74:
             try:
                 cursor.execute("""CREATE TABLE IF NOT EXISTS today_reply_dismissal (
-                    internal_id INTEGER PRIMARY KEY REFERENCES email_metadata(internal_id) ON DELETE CASCADE,
+                    internal_id INTEGER PRIMARY KEY,
                     operation_id TEXT NOT NULL,
                     dismissed_at REAL NOT NULL
                 )""")
