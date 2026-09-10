@@ -9,8 +9,9 @@
 // 闸 tests/config/test_group_constants_parity.py。
 //
 // 🔴 主 Agent 用保留 id `MAIN_AGENT_MEMBER_ID` 入名单，名字与头像来自 assistant identity
-// （它没有 report_agent 行）。serve-api 的成员校验对这个 id 短路放行，gateway 侧由
-// resolveGroupSession 合成成员事实 —— renderer 这一侧只负责让它出现在候选与 memberMeta 里。
+// （它没有 report_agent 行）。事项跟进同理用 `MATTER_FOLLOWUP_MEMBER_ID`，名字是固定的
+// `MATTER_FOLLOWUP_MEMBER_TITLE`。serve-api 的成员校验对这两个 id 短路放行，gateway 侧由
+// resolveGroupSession 合成成员事实 —— renderer 这一侧只负责让它们出现在候选与 memberMeta 里。
 //
 // 本组件持有四件跨栏状态：
 //   ① 详情面开合 —— 落 `useGroupsView.detailsOpenBySession`，**按群记忆**（右栏是常驻面，
@@ -55,7 +56,11 @@ import { useGroupLiveMap } from './useGroupTurnEvents'
 import { parseMembersJson, type GroupCandidate, type GroupMemberMeta } from './members'
 import type { GroupRowItem } from './GroupRow'
 
-import { MAIN_AGENT_MEMBER_ID } from '../../../../ai-gateway/groupFloors'
+import {
+  MAIN_AGENT_MEMBER_ID,
+  MATTER_FOLLOWUP_MEMBER_ID,
+  MATTER_FOLLOWUP_MEMBER_TITLE
+} from '../../../../ai-gateway/groupFloors'
 
 /** 详情面 / 话题面宽度（右栏；窄屏改 Drawer）。 */
 const DETAILS_WIDTH = 300
@@ -66,8 +71,8 @@ function chatCapableMembers(agents: readonly ReportAgentConfig[]): GroupCandidat
     deriveTeamMembers(agents)
       .filter((m) => m.canChat && m.ref.kind === 'agent' && m.cfg != null)
       // 存量行可能占着保留 id（serve-api 只在启动时告警，不动数据）。它在下游已经不可寻址
-      // ——gateway 把这个 id 解析成主 Agent —— 再列一遍就是同一 key 的两行。
-      .filter((m) => m.cfg?.id !== MAIN_AGENT_MEMBER_ID)
+      // ——gateway 把这个 id 解析成主 Agent / 事项跟进 —— 再列一遍就是同一 key 的两行。
+      .filter((m) => m.cfg?.id !== MAIN_AGENT_MEMBER_ID && m.cfg?.id !== MATTER_FOLLOWUP_MEMBER_ID)
       .map((m) => {
         const cfg = m.cfg as ReportAgentConfig
         return {
@@ -129,14 +134,22 @@ export function GroupChatWorkspace({
     // 保留 id 最后写：万一库里真有一行 id 叫 `main`（serve-api 已拒收 + 启动扫存量），
     // 展示面也以主 Agent 身份为准，不让它被顶替。
     map.set(MAIN_AGENT_MEMBER_ID, { title: mainTitle, avatar: mainAvatar })
+    // 头像留空 = 按 id 派生，与团队页事项跟进成员同一张脸（种子同是这个 id）。
+    map.set(MATTER_FOLLOWUP_MEMBER_ID, { title: MATTER_FOLLOWUP_MEMBER_TITLE, avatar: null })
     return map
   }, [agents, mainTitle, mainAvatar])
 
   // 可入群成员：建群对话框与详情面「加人」共用一份（每处各算一次会给两个组件各发一个新数组）。
-  // 主 Agent 排在最前 —— 与团队页清单同序（那里也是「主 Agent → 内置 → 自定义」）。
+  // 主 Agent → 事项跟进 → 其余，与团队页清单同序（那里也是「主 Agent → 内置 → 自定义」）。
   const candidates = useMemo<GroupCandidate[]>(
     () => [
       { id: MAIN_AGENT_MEMBER_ID, title: mainTitle, avatar: mainAvatar, model: null },
+      {
+        id: MATTER_FOLLOWUP_MEMBER_ID,
+        title: MATTER_FOLLOWUP_MEMBER_TITLE,
+        avatar: null,
+        model: null
+      },
       ...chatCapableMembers(agents)
     ],
     [agents, mainTitle, mainAvatar]

@@ -14,12 +14,12 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.chat.group_limits import MAIN_AGENT_MEMBER_ID
+from src.chat.group_limits import MAIN_AGENT_MEMBER_ID, MATTER_FOLLOWUP_MEMBER_ID
 from src.reports.models import REPORT_CADENCES
 
 
 class ReservedAgentIdError(ValueError):
-    """agent id 撞上保留字（主 agent 的群成员 id）。
+    """agent id 撞上保留字（主 agent / 事项跟进的群成员 id）。
 
     ``ValueError`` 子类是为了让既有的 ``except ValueError`` 调用点（CLI agent-create、
     ``POST /report-agents/import``）不改一行就已经拒收；``POST /report-agents`` 单独接住它折
@@ -39,6 +39,10 @@ def reject_reserved_agent_id(agent_id: str) -> None:
     if agent_id == MAIN_AGENT_MEMBER_ID:
         raise ReservedAgentIdError(
             f"agent id {agent_id!r} is reserved for the main assistant"
+        )
+    if agent_id == MATTER_FOLLOWUP_MEMBER_ID:
+        raise ReservedAgentIdError(
+            f"agent id {agent_id!r} is reserved for the matter follow-up member"
         )
 
 

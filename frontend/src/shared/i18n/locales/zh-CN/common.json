@@ -6270,6 +6270,9 @@
       "later": "稍后",
       "acceptAll": "全部接受",
       "acceptSelected": "接受所选 {count} 项",
+      "acceptSummary": "接受状态更新",
+      "acceptSummaryOnly": "仅接受状态更新",
+      "noChanges": "本次没有逐项变化，接受后只更新当前状态。",
       "attention": "跟进 Agent 提出了 {count} 项变化，等待你审阅"
     },
     "trigger": {
@@ -7269,8 +7272,7 @@
     "matterFollowup": {
       "title": "事项跟进",
       "badge": "按事项规则",
-      "settingsIntro": "跟进的配置在事项域：全局默认（任务契约、模型、工具面）在下面这个面板里改，每件事自己的跟进规则在那件事的页面里改。",
-      "openGlobalConfig": "打开全局跟进配置",
+      "settingsIntro": "这里是所有事项共用的跟进默认：任务契约改完点「保存」，模型和网页档改完即生效。单件事的跟进规则在那件事的页面里改。",
       "perMatterTitle": "逐事项的跟进规则",
       "perMatterNote": "多久跟一次、跟进时看什么，由每件事自己的跟进规则决定——在事项页里那件事的跟进设置中修改。"
     },

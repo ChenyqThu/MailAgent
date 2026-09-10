@@ -76,6 +76,12 @@ _ATTACHMENT_TEXT_HINTS = {
     "failed": "附件文本抽取失败（可能是扫描版 / 加密 / 损坏的 PDF 等）",
     "unsupported": "该附件类型不支持文本抽取（支持 PDF / docx / pptx / xlsx / txt / md / csv）",
 }
+# 已读到抽取结果末尾、但抽取层本身截断过：后面的内容本端点给不出来，必须说清楚，
+# 否则调用方会以为读完了全文。
+_ATTACHMENT_TEXT_EXTRACT_CAPPED_HINT = (
+    "已读到抽取文本末尾，但抽取时文档超过 256KB 上限被截断，之后的内容无法通过本接口读取；"
+    "需要完整数据请打开原文件"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -702,15 +708,22 @@ def attachment_text(
     max_chars: Optional[int] = Query(
         None,
         ge=1,
-        description="截断文本上限字符数; 缺省=全文 (抽取层 256KB 上限内)",
+        description="本页最多返回的字符数; 缺省=从 offset 到末尾 (抽取层 256KB 上限内)",
+    ),
+    offset: int = Query(
+        0,
+        ge=0,
+        description="从全文第几个字符开始返回; 续读时传上一页的 next_offset",
     ),
 ):
     """GET /api/attachment/{attachment_id}/text — 按需读附件抽取文本。
 
     分层附件访问的「内容」层：agent 先看元数据 (list / thread)，需要正文时才拉这个。
     data = AttachmentTextResponse。status ∈ {extracted, pending, failed, unsupported}；
-    非 extracted 时 text_content=null + hint 给可执行提示。max_chars 截断时 truncated=true
-    (与抽取层 256KB 截断合并，任一为真即真)。**响应绝不含 local_path** (本模块安全不变式)。
+    非 extracted 时 text_content=null + hint 给可执行提示。extracted 文本按页返回：
+    text_content = 全文 [offset, offset+max_chars)，附 total_chars 与 next_offset（null = 本页已到
+    末尾）；本页没到末尾时 truncated=true (与抽取层 256KB 截断合并，任一为真即真)。
+    **响应绝不含 local_path** (本模块安全不变式)。
 
     pending 同步兜底 (task 0)：附件抽取无自动 worker，commit 时只登记 pending。故 pending
     (或无 text 行) 且文件 ≤5MB 时现场 extract_text + 落库；>5MB / 无文件 → pending + hint。
@@ -733,19 +746,26 @@ def attachment_text(
     status = rec.status if rec is not None else "pending"
     extractor = rec.extractor if rec is not None else None
     text_content: Optional[str] = None
+    total_chars: Optional[int] = None
+    next_offset: Optional[int] = None
     truncated = False
     hint: Optional[str] = None
 
     if status == "extracted" and rec is not None:
-        text_content = rec.text_content
         truncated = rec.truncated
-        if (
-            max_chars is not None
-            and text_content is not None
-            and len(text_content) > max_chars
-        ):
-            text_content = text_content[:max_chars]
-            truncated = True  # 与抽取层 256KB 截断合并 (任一为真即真)
+        if rec.text_content is not None:
+            total_chars = len(rec.text_content)
+            end = (
+                total_chars
+                if max_chars is None
+                else min(total_chars, offset + max_chars)
+            )
+            text_content = rec.text_content[offset:end]
+            if end < total_chars:
+                next_offset = end
+                truncated = True  # 与抽取层 256KB 截断合并 (任一为真即真)
+            elif rec.truncated:
+                hint = _ATTACHMENT_TEXT_EXTRACT_CAPPED_HINT
     else:
         # pending / failed / unsupported → text=null + 通用 hint (不回显 error_message,
         # 它可能含 host 路径, 违反本模块安全不变式)。
@@ -757,6 +777,9 @@ def attachment_text(
         filename=ctx["filename"],
         status=status,
         text_content=text_content,
+        offset=offset,
+        total_chars=total_chars,
+        next_offset=next_offset,
         truncated=truncated,
         extractor=extractor,
         email_subject=ctx["email_subject"],

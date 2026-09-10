@@ -17,6 +17,14 @@ export const MAX_GROUP_MEMBERS = 8
  *  serve-api 的成员校验对它短路放行。 */
 export const MAIN_AGENT_MEMBER_ID = 'main'
 
+/** 「事项跟进」作为群成员时的保留 id。与主 agent 同理没有 report_agent 行：成员事实（名字 /
+ *  职责 / 模型）由 resolveGroupSession 合成，模型取事项域的全局跟进默认；serve-api 同样短路放行。 */
+export const MATTER_FOLLOWUP_MEMBER_ID = 'matter_followup'
+
+/** 事项跟进在群里的显示名。🔴 不走 i18n：@ 解析按显示名匹配，renderer 插进输入框的名字必须与
+ *  gateway 合成的成员名逐字相同（主 agent 的名字同样来自 assistant identity，不随界面语言变）。 */
+export const MATTER_FOLLOWUP_MEMBER_TITLE = '事项跟进'
+
 // ── 链 / run 级地板（「run」= 一个链根引发的连续处理，chain_id 是它的键）──────────────────
 
 /** 一条链最多几次唤醒（spoke / silent / held_dup 计入；skipped 不计）。owner 可在群设置里改。 */

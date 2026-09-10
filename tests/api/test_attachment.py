@@ -383,6 +383,34 @@ def test_attachment_text_max_chars_truncates(client, temp_db):
     d = r.json()["data"]
     assert d["text_content"] == "ABCD"
     assert d["truncated"] is True
+    assert d["total_chars"] == 10
+    assert d["next_offset"] == 4
+
+
+def test_attachment_text_offset_pages_to_the_end(client, temp_db):
+    """按 next_offset 续读能读完全文；最后一页 next_offset=null、truncated=false。"""
+    att_id = 5004
+    _insert_attachment(temp_db, att_id, "paged.txt",
+                       local_path="data/attachments/1001/paged.txt")
+    _insert_text_row(temp_db, att_id, status="extracted",
+                     text="ABCDEFGHIJ", extractor="plaintext")
+
+    pages = []
+    offset = 0
+    while offset is not None:
+        d = client.get(
+            f"/api/attachment/{att_id}/text?max_chars=4&offset={offset}"
+        ).json()["data"]
+        assert d["offset"] == offset
+        pages.append(d["text_content"])
+        offset = d["next_offset"]
+    assert pages == ["ABCD", "EFGH", "IJ"]
+    assert d["truncated"] is False
+    assert d["hint"] is None
+
+    beyond = client.get(f"/api/attachment/{att_id}/text?offset=99").json()["data"]
+    assert beyond["text_content"] == ""
+    assert beyond["next_offset"] is None
 
 
 def test_attachment_text_pending_when_no_file(client):

@@ -356,13 +356,21 @@ describe('事项跟进成员', () => {
     expect(row.textContent).not.toContain('已启用')
   })
 
-  test('设置档 = 事项域深链（不复制第二套配置表单）', async () => {
+  test('设置档 = 全局跟进默认直接铺开（指令 / 模型 / 能力三区，不再是弹窗入口）', async () => {
+    mockChatConfigFlags(true)
     setInteractiveSessions([])
     const container = await renderWorkspace()
     fireEvent.click(container.querySelector('[data-team-member="member:matter_followup"]')!)
     fireEvent.click(screen.getByRole('tab', { name: '设置' }))
     expect(container.querySelector('[data-matter-followup-settings]')).toBeTruthy()
-    expect(screen.getByText('打开全局跟进配置')).toBeTruthy()
+    expect(screen.queryByText('打开全局跟进配置')).toBeNull()
+    for (const label of ['指令', '模型', '能碰什么', '它自己的设置']) {
+      expect(container.querySelector(`section[aria-label="${label}"]`), label).toBeTruthy()
+    }
+    // 任务契约编辑框就在指令区里；模型区是嵌入形态（分区卡已有标题，面板自己的标题不再重复）。
+    const instructions = container.querySelector('section[aria-label="指令"]')!
+    await waitFor(() => expect(instructions.querySelector('#matter-global-prompt')).toBeTruthy())
+    expect(screen.queryByText('工具面：只读全库 + 一个提案通道')).toBeNull()
   })
 })
 

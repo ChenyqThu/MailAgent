@@ -1,40 +1,62 @@
 // 09-02 misc05 —「事项跟进」成员的设置档。
 //
-// 🔴 这里只做**深链**，不复制配置面（判据与「设置 → 事项」那一页逐字相同）：跟进的可写面
-// 全在事项域 —— 全局默认在 `MatterGlobalAgentModal`（任务契约 prompt / 模型三档 / 工具面），
-// 逐事项的跟进规则在那件事自己的页面里。同一份数据再画一遍表单就是第二处真相。
+// 跟进的全局默认（任务契约 / 模型三档 / 工具面）直接铺在这里，与其它成员同一副设置骨架。
+// 🔴 数据仍只有一份：三块与「设置 → 事项」里的全局配置弹窗共用同一组 hook 与组件
+// （`useMatterTaskContract` / `MatterModelDefaultsPanel` / `MatterToolFacePanel`），不是第二套表单。
+// 逐事项的跟进规则仍在那件事自己的页面里。
+// 页头「保存」只管任务契约；模型与网页档是改一下存一次（两个面板的既有交互，见各自头注）。
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Settings2 } from 'lucide-react'
 
-import { MatterGlobalAgentModal } from '@shared/components/matters/MatterGlobalAgentModal'
-import { Button } from '@shared/components/ui/button'
+import { MatterModelDefaultsPanel } from '@shared/components/matters/MatterModelDefaultsPanel'
+import { MatterPromptAssembly } from '@shared/components/matters/MatterPromptAssembly'
+import { MatterTaskContractField } from '@shared/components/matters/MatterTaskContractField'
+import { MatterToolFacePanel } from '@shared/components/matters/MatterToolFacePanel'
+import { useMatterTaskContract } from '@shared/components/matters/useMatterGlobalAgentDoc'
+import type { StatefulButtonState } from '@shared/components/ui/stateful-button'
 
-import { ReadonlyCard } from './sections'
+import { ReadonlyCard, SettingsScaffold } from './sections'
 
 export function MatterFollowupSettings(): React.ReactElement {
   const { t } = useTranslation()
-  const [globalAgentOpen, setGlobalAgentOpen] = useState(false)
+  const [saveDone, setSaveDone] = useState(false)
+  const contract = useMatterTaskContract(() => {
+    setSaveDone(true)
+    window.setTimeout(() => setSaveDone(false), 1600)
+  })
+  const saveState: StatefulButtonState = contract.isSaving
+    ? 'loading'
+    : contract.isSaveError
+      ? 'error'
+      : saveDone
+        ? 'success'
+        : 'idle'
 
   return (
-    <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto" data-matter-followup-settings>
-      <div className="mx-auto flex w-full max-w-[720px] flex-col gap-3 p-[18px]">
-        <p className="text-meta leading-relaxed text-ink-fg-2">
+    <SettingsScaffold
+      title={t('team.matterFollowup.title')}
+      subtitle={t('agentSettings.role.builtin')}
+      banner={
+        <p data-matter-followup-settings className="text-meta leading-relaxed text-ink-fg-2">
           {t('team.matterFollowup.settingsIntro')}
         </p>
-        <div>
-          <Button variant="outline" size="sm" onClick={() => setGlobalAgentOpen(true)}>
-            <Settings2 size={13} />
-            {t('team.matterFollowup.openGlobalConfig')}
-          </Button>
-        </div>
-        <ReadonlyCard title={t('team.matterFollowup.perMatterTitle')}>
-          {t('team.matterFollowup.perMatterNote')}
-        </ReadonlyCard>
-      </div>
-      {globalAgentOpen ? (
-        <MatterGlobalAgentModal onClose={() => setGlobalAgentOpen(false)} />
-      ) : null}
-    </div>
+      }
+      save={{ state: saveState, onSave: contract.save, disabled: !contract.canSave }}
+      sections={{
+        instructions: (
+          <>
+            <MatterPromptAssembly />
+            <MatterTaskContractField contract={contract} />
+          </>
+        ),
+        model: <MatterModelDefaultsPanel embedded />,
+        capabilities: <MatterToolFacePanel embedded />,
+        specific: (
+          <ReadonlyCard title={t('team.matterFollowup.perMatterTitle')}>
+            {t('team.matterFollowup.perMatterNote')}
+          </ReadonlyCard>
+        )
+      }}
+    />
   )
 }

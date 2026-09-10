@@ -262,8 +262,39 @@ def test_list_updates_page_summary_projection(env):
     item = page["items"][0]
     assert item["id"] == update_id
     assert item["review_status"] == "pending"
-    assert item["change_count"] == len(CHANGES)
+    # 逐项变化 + 摘要（当前状态的新版本）算一项。
+    assert item["change_count"] == len(CHANGES) + 1
     assert item["is_stale"] is False
     assert item["agent_run_id"] is not None
     detail = service.get_update_detail(pid, update_id)["update"]
     assert [c["id"] for c in detail["changes"]] == ["chg_01", "chg_02", "chg_03"]
+
+
+def test_summary_only_proposal_counts_one_and_accepts_with_no_selection(env):
+    """只更新当前状态的提案：计为 1 项变化，零勾选接受照样写入 current_summary。"""
+    service, pid, _, _ = env
+    version = service.get_matter(pid)["matter"]["version"]
+    run = service.enqueue_run(
+        pid, expected_version=version, idempotency_key="run-summary-only",
+        source="desktop_ui",
+    )["run"]
+    assert service.mark_started(run["id"])
+    update_id = service.propose_update(
+        pid, run["id"], {"summary": "只更新状态", "changes": []}
+    )["update_id"]
+    assert update_id is not None
+
+    item = service.list_updates_page(pid, review_status="pending")["items"][0]
+    assert item["change_count"] == 1
+
+    before = service.get_matter(pid)["matter"]
+    result = service.accept_update(
+        pid,
+        update_id,
+        selected_change_ids=[],
+        expected_version=before["version"],
+        idempotency_key="acc-summary-only",
+        source="desktop_ui",
+    )
+    assert result["matter"]["current_summary"] == "只更新状态"
+    assert result["update"]["review_status"] == "accepted"

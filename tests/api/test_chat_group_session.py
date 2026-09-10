@@ -22,7 +22,11 @@ from fastapi.testclient import TestClient
 
 from src.api.app import app
 from src.chat.db import ChatDb
-from src.chat.group_limits import MAIN_AGENT_MEMBER_ID, MAX_GROUP_MEMBERS
+from src.chat.group_limits import (
+    MAIN_AGENT_MEMBER_ID,
+    MATTER_FOLLOWUP_MEMBER_ID,
+    MAX_GROUP_MEMBERS,
+)
 
 # v7 anchor CHECK + v19 origin + v20 last_read_at + v25 父子两列 + v30 members_json +
 # v31 group_config_json / ai_chat_group_member + v32 thread_root_message_id 与唯一部分索引
@@ -231,6 +235,18 @@ def test_group_route_accepts_main_agent_reserved_id(chat_client: TestClient) -> 
     res = _new_group(chat_client, [MAIN_AGENT_MEMBER_ID, "dms_helper"], title="带主 agent 的群")
     assert res.status_code == 200
     assert json.loads(res.json()["data"]["members_json"]) == [MAIN_AGENT_MEMBER_ID, "dms_helper"]
+
+
+def test_group_route_accepts_matter_followup_reserved_id(chat_client: TestClient) -> None:
+    """事项跟进同样用保留 id 入群（fake store 里没有这一行），能建成群就证明短路生效。"""
+    res = _new_group(
+        chat_client, [MATTER_FOLLOWUP_MEMBER_ID, "dms_helper"], title="带事项跟进的群"
+    )
+    assert res.status_code == 200
+    assert json.loads(res.json()["data"]["members_json"]) == [
+        MATTER_FOLLOWUP_MEMBER_ID,
+        "dms_helper",
+    ]
 
 
 def test_group_route_main_short_circuit_is_exact_match_only(chat_client: TestClient) -> None:

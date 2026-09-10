@@ -109,7 +109,7 @@ def test_returns_every_live_matter_with_full_changes(env):
     # 看板待审阅卡直接读 `changes`（数引用条数 / 判有没有字段级变化）——摘要不够用。
     update = by_matter[second][0]
     assert [change["id"] for change in update["changes"]] == ["chg_01", "chg_02"]
-    assert update["change_count"] == 2
+    assert update["change_count"] == 3  # 两项逐项变化 + 摘要（当前状态）算一项
     assert update["review_status"] == "pending"
     assert update["is_stale"] is False
     assert "matter_public_id" not in update

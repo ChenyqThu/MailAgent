@@ -79,7 +79,12 @@ import { parseAttachmentsMetadata } from '../../ai-gateway/groupAttachments'
 import { parseLibraryRefsMetadata } from '../../ai-gateway/groupLibraryRefs'
 // g1 群编排（CHAT_DB v31）— 成员设置 / seen 游标 / turn 台账的读写面。直接从子模块引（chat_db.ts
 // 兼容 barrel 只为保住既有 importer 的路径，新模块无历史包袱）。
-import { MAIN_AGENT_MEMBER_ID, type GroupResponseMode } from '../../ai-gateway/groupFloors'
+import {
+  MAIN_AGENT_MEMBER_ID,
+  MATTER_FOLLOWUP_MEMBER_ID,
+  MATTER_FOLLOWUP_MEMBER_TITLE,
+  type GroupResponseMode
+} from '../../ai-gateway/groupFloors'
 import {
   advanceSeenCursor,
   familyOf,
@@ -325,11 +330,18 @@ export function computeJudgeScopeStale(
   return digest !== config.judgeScopeHash
 }
 
+/** 事项跟进在群里的职责参考（<duty>）。🔴 不用事项域的任务契约：那份写给「跟进一件事、调提案
+ *  工具」的 run，群里的发言 turn 既没有事项锚点也没有提案工具，照搬会让它在群里假装在提案。 */
+const MATTER_FOLLOWUP_GROUP_DUTY =
+  '从事项推进的角度参与讨论：关注各件事的进展、卡点、风险和下一步，指出需要谁在什么时候做什么。' +
+  '事项的状态只在事项页里经跟进提案审阅后变更，群里不直接改。'
+
 /** T4 主 agent 入群 — 一个 members_json 成员 id → GroupSessionMember（导出供测试）。保留字
  *  `main` 没有 report_agent 行：title 取 owner_settings 的 assistant-identity.name（缺省 'AI'），
  *  duty 恒 null（SOUL/AGENT 已作 standingContext 恒注入，再塞进 <duty> 是重复注入 + 破坏可缓存
- *  前缀），model 恒 null（落到主 agent 默认模型，群级 modelOverride 仍优先）。其余 id 走
- *  report_agent 行。
+ *  前缀），model 恒 null（落到主 agent 默认模型，群级 modelOverride 仍优先）。保留字
+ *  `matter_followup`（事项跟进）同样没有行：名字固定、职责用群专用的一段、模型取事项域的全局
+ *  跟进默认。其余 id 走 report_agent 行。
  *  🔴 永不 throw、永不丢成员：读失败只降级 title / duty / model —— 成员资格是 handleGroupChat
  *  校验 speakAsAgentId 的安全事实，不能依赖 serve-api 可用性（resolveSessionAgent 同一契约）。 */
 export async function resolveGroupMember(
@@ -337,6 +349,7 @@ export async function resolveGroupMember(
   read: {
     reportAgent: (agentId: string) => Promise<ReportAgentConfig | null>
     assistantIdentity: () => Promise<AssistantIdentity | null>
+    matterAgentDefaults: () => Promise<{ model?: string } | null>
   }
 ): Promise<GroupSessionMember> {
   if (agentId === MAIN_AGENT_MEMBER_ID) {
@@ -347,6 +360,23 @@ export async function resolveGroupMember(
       console.warn('[ai-gateway] assistant identity fetch failed (main agent member degrades)', err)
     }
     return { agentId, title: name?.trim() || 'AI', duty: null, model: null }
+  }
+  if (agentId === MATTER_FOLLOWUP_MEMBER_ID) {
+    let model: string | null = null
+    try {
+      model = (await read.matterAgentDefaults())?.model?.trim() || null
+    } catch (err) {
+      console.warn(
+        '[ai-gateway] matter agent defaults fetch failed (follow-up member degrades)',
+        err
+      )
+    }
+    return {
+      agentId,
+      title: MATTER_FOLLOWUP_MEMBER_TITLE,
+      duty: MATTER_FOLLOWUP_GROUP_DUTY,
+      model
+    }
   }
   try {
     const agent = await read.reportAgent(agentId)
@@ -974,7 +1004,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   }
   const groupMemberReads = {
     reportAgent: (agentId: string) => domain.getReportAgent(agentId),
-    assistantIdentity: resolveAssistantIdentity
+    assistantIdentity: resolveAssistantIdentity,
+    matterAgentDefaults: () => domain.getMatterAgentDefaults()
   }
 
   const AUTO_COMPACT_SETTING_TTL_MS = 3_000
@@ -1847,7 +1878,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     mirrorGroupRunLog: async (input: GroupRunLogMirror) => {
       // T4 — 主 agent 成员的 spoke turn 不镜像：团队页的主 Agent 没有记录档（teamMembers.ts
       // recordSource:'none'），写了也是一行没有入口的孤儿台账；ai_chat_group_turn 仍是权威源。
-      if (input.agentId === MAIN_AGENT_MEMBER_ID) return
+      // 事项跟进同理：它的记录档只列事项会话（recordSource:'matter'），不读 agent_run_log。
+      if (input.agentId === MAIN_AGENT_MEMBER_ID || input.agentId === MATTER_FOLLOWUP_MEMBER_ID) {
+        return
+      }
       try {
         await domain.postRunLog({
           agentId: input.agentId,

@@ -3,8 +3,8 @@
 // TeamMemberRef 的三支（agents/shared.ts 末尾的接缝契约）：
 //   • {kind:'main'} → 主 Agent：走 chat.setAssistantIdentity + agent_config profile docs，
 //     🔴 不进 PUT /api/report-agents 的 patch 通道（r8 §B.1 唯一例外）。
-//   • {kind:'matterFollowup'} → 事项跟进：同样不是 report_agent 行，可写面全在事项域，
-//     这一档只做深链（09-02 misc05）。
+//   • {kind:'matterFollowup'} → 事项跟进：同样不是 report_agent 行，可写面全在事项域；
+//     这一档直接铺开全局跟进默认（与事项域的全局配置弹窗共用同一组组件与数据）。
 //   • {kind:'agent', agentId} → report_agent 行：useReportConfig 找行，按 type 分发到
 //     对应的配置表单。内部表单以 cfg.id 作 key —— 换成员必重挂载，表单 state 不串。
 import { useTranslation } from 'react-i18next'

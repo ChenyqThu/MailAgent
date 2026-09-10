@@ -566,7 +566,7 @@ gateway harness `4/4 PASS`（含 `[4]` 经 CRS 真实 `streamText` → UIMessage
 沿用 Phase 02 的「纯核 + 注入」范式（与 persistTurn/createModel 同纪律）：
 
 - **`frontend/src/ai-gateway/python/domainClient.ts`** — `MailAgentDomainClient`，纯 Node typed HTTP client（global fetch，零 electron/chat_db）。每方法映一个 serve-api read 端点，注入 `X-MailAgent-Local-Token` header（main-only token，renderer 永不接触），unwrap envelope（success→data / error→`DomainError{code}` / E_NOT_FOUND→null）。**不直接读 SQLite**。
-- **`frontend/src/ai-gateway/tools/`** — `tool({inputSchema:zod, execute})` ×11（email_list_filter / email_search_fulltext / email_get / email_body / email_list_thread / email_search_attachments / **email_thread_attachments / email_attachment_text**（2026-07-22 附件分层批）/ kos_query / report_list / report_get）。zod schema + 描述 + output massage 镜像 legacy（parity；新增两工具无 legacy 对应）。`auditedReadTool(opts, collector)` 统一：execute → domain → 把一条 audit 条目（input/output/status/duration）push 进**闭包持有的 `collector`** → 抛错归一为 typed tool-error。**read 工具绝不 needsApproval**。附件分层（owner 拍板 2026-07-22）：contextSnapshot 自动注入**当前邮件附件元数据**（metadata-only 无 textExcerpt，内联图过滤，`useAgentContextSnapshot` 接线）；`email_thread_attachments(thread_id)` 给线程全部附件**元数据+归属**（sender/date/subject，响应白名单永不含 local_path）；`email_attachment_text(attachment_id)` 按需读抽取全文（恒 `UNTRUSTED_ATTACHMENT_TEXT` 围栏；后端 `GET /api/attachment/{id}/text`，pending ≤5MB 同步抽取兜底——生产抽取无自动 worker，唯一批量入口是 CLI `attachment extract`）。两工具入 catalog + `HEADLESS_TOOL_OPTIONS`，**不进** `DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS`（headless 默认拿不到，opt-in）。
+- **`frontend/src/ai-gateway/tools/`** — `tool({inputSchema:zod, execute})` ×11（email_list_filter / email_search_fulltext / email_get / email_body / email_list_thread / email_search_attachments / **email_thread_attachments / email_attachment_text**（2026-07-22 附件分层批）/ kos_query / report_list / report_get）。zod schema + 描述 + output massage 镜像 legacy（parity；新增两工具无 legacy 对应）。`auditedReadTool(opts, collector)` 统一：execute → domain → 把一条 audit 条目（input/output/status/duration）push 进**闭包持有的 `collector`** → 抛错归一为 typed tool-error。**read 工具绝不 needsApproval**。附件分层（owner 拍板 2026-07-22）：contextSnapshot 自动注入**当前邮件附件元数据**（metadata-only 无 textExcerpt，内联图过滤，`useAgentContextSnapshot` 接线）；`email_thread_attachments(thread_id)` 给线程全部附件**元数据+归属**（sender/date/subject，响应白名单永不含 local_path）；`email_attachment_text(attachment_id, max_chars, offset)` 按页读抽取文本（返回 `total_chars` / `next_offset`，按 `next_offset` 续读能读完长表格；已读到末尾但抽取层按 256KB 截断过时 `hint` 明说；恒 `UNTRUSTED_ATTACHMENT_TEXT` 围栏；后端 `GET /api/attachment/{id}/text`，pending ≤5MB 同步抽取兜底——生产抽取无自动 worker，唯一批量入口是 CLI `attachment extract`）。两工具入 catalog + `HEADLESS_TOOL_OPTIONS`，**不进** `DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS`（headless 默认拿不到，opt-in）。
 - **`server.ts`** — `cfg.buildTools(auditEntries)` 用一个 per-request `auditEntries` 数组构建工具（闭包绑定）；非空时 `streamText({ tools, stopWhen: stepCountIs(10000) })` 跑多步「调读工具→回答」（10k 只是 AI SDK 必需的内部终止哨兵，用户面的 `max_steps` 已于 2026-07-31 退出）；`auditEntries` 随 turn 进 `persistTurn`。无 tools → text-only（Phase 02 字节级行为）。
 - **`ai_gateway_lifecycle.ts`**（impure wrapper）— 构造 DomainClient（`baseUrl=127.0.0.1:{resolveApiPort()}/api` + `getLocalApiToken()`）+ `cfg.buildTools = (collector) => buildGatewayTools({domain, kosTimeDecayEnabled, writeToolsEnabled}, collector)`；persistTurn 捕获 assistant message id，对每条 `turn.toolCalls` 写 `appendToolCall`(silent)+`updateToolCall`(output/duration) → chat_tool_call（字段 ≥ legacy dispatch）。
 
@@ -1532,7 +1532,11 @@ item-dispatch 锚下注册，belt 测试钉互不渗透。要点：
 一个群 = 一条 `ai_chat_sessions` 行（`origin='group'` + `members_json`），成员是 custom
 agents，外加保留 id `main`（`MAIN_AGENT_MEMBER_ID`，TS 单源 `groupFloors.ts` / Python 单源
 `src/chat/group_limits.py`，闸 `test_group_constants_parity.py`）：**主 agent 也能入群当成员或
-坐主持人位**。它没有 `report_agent` 行 —— serve-api 的成员校验对这个 id 短路放行，成员事实由
+坐主持人位**。「事项跟进」同样有保留 id `matter_followup`（`MATTER_FOLLOWUP_MEMBER_ID`，同两处单源
+同一道闸）：名字固定为「事项跟进」（`MATTER_FOLLOWUP_MEMBER_TITLE`，不走 i18n，因为 @ 解析按显示名
+匹配），职责是群专用的一段（**不**用事项任务契约——群 turn 没有事项锚点和提案工具），模型取
+`/matters/agent-defaults` 的全局跟进默认，读失败只降级模型；它的 spoke turn 与主 agent 一样不镜像
+`agent_run_log`。它没有 `report_agent` 行 —— serve-api 的成员校验对这个 id 短路放行，成员事实由
 `resolveGroupSession` 读 `assistant_identity` 合成（60s TTL；读失败降级成 `AI`，🔴 绝不丢成员，
 成员资格是 `speakAsAgentId` 的安全判据）。入群后它走的是与别人一样的群 speaker run（两件读工具 /
 减重 prompt），**不带**单聊那套工具，且群 speaker run 一律不捕获 memory（群里是其他 agent 的

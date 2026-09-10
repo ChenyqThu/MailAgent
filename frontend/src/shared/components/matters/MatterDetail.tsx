@@ -704,7 +704,15 @@ export function MatterDetail({
       toastSuccess(
         variables.kind === 'accept'
           ? t('matters.toast.reviewAccepted', {
-              count: variables.payload.selectedIds.length
+              // 与提案计数同一口径（Python proposal_change_count）：摘要即当前状态，也算一项。
+              count:
+                variables.payload.selectedIds.length +
+                ((
+                  variables.payload.editedSummary ??
+                  updates.find((item) => item.id === reviewId)?.summary
+                )?.trim()
+                  ? 1
+                  : 0)
             })
           : t('matters.toast.reviewRejected')
       )

@@ -45,7 +45,7 @@ from .resource_proposal import (
     normalize_new_resource,
     propose_allowed_providers,
 )
-from .service import Actor, MatterError, MatterService
+from .service import Actor, MatterError, MatterService, proposal_change_count
 
 # gateway loopback 端口解析 —— 同形抄 ai_gateway_proxy._resolve_gateway_port /
 # run_worker._gateway_port（两处已注记「同源同形抄写」纪律；此处第三处，同注记）。
@@ -825,7 +825,7 @@ class MatterRunService(MatterService):
                 payload={
                     "update_id": update_id,
                     "run_id": run_id,
-                    "change_count": len(validated),
+                    "change_count": proposal_change_count(validated, summary),
                 },
                 happened_at=now,
             )
@@ -988,7 +988,7 @@ class MatterRunService(MatterService):
                 payload={
                     "update_id": update_id,
                     "dispatch_id": dispatch_id,
-                    "change_count": len(validated),
+                    "change_count": proposal_change_count(validated, summary),
                 },
                 happened_at=now,
             )

@@ -5283,7 +5283,14 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
 .folder-draft-editor .ProseMirror pre code { background: transparent; padding: 0; }
 .folder-draft-editor .ProseMirror ul,
 .folder-draft-editor .ProseMirror ol { padding-left: 22px; margin: 0 0 12px; }
+/* Tailwind preflight 把 ul/ol 的 list-style 清成 none，编辑器里要显式补回圆点和序号。 */
+.folder-draft-editor .ProseMirror ul { list-style-type: disc; }
+.folder-draft-editor .ProseMirror ol { list-style-type: decimal; }
+.folder-draft-editor .ProseMirror ul ul { list-style-type: circle; }
+.folder-draft-editor .ProseMirror ul ul ul { list-style-type: square; }
+.folder-draft-editor .ProseMirror ol ol { list-style-type: lower-alpha; }
 .folder-draft-editor .ProseMirror li { margin-bottom: 4px; }
+.folder-draft-editor .ProseMirror li > p { margin: 0; }
 .folder-draft-editor .ProseMirror blockquote {
   border-left: 2px solid rgb(var(--ink-border));
   padding-left: 14px;

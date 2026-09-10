@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from src.chat.group_limits import MAIN_AGENT_MEMBER_ID
+from src.chat.group_limits import MAIN_AGENT_MEMBER_ID, MATTER_FOLLOWUP_MEMBER_ID
 from src.llm_agent.client import LLMResult
 from src.llm_agent.store import LLMProcessingStore
 from src.mail.sync_store import SyncStore
@@ -367,6 +367,13 @@ class TestStore:
         with pytest.raises(ReservedAgentIdError):
             store.create_agent(MAIN_AGENT_MEMBER_ID, type="custom", title="冒名的")
         assert store.get_agent(MAIN_AGENT_MEMBER_ID) is None
+
+    def test_create_agent_rejects_matter_followup_reserved_id(self, db: Path):
+        """事项跟进的保留成员 id 同样由唯一写点拒收（碰撞会让群里的事项跟进被这行顶替）。"""
+        store = ReportStore(str(db))
+        with pytest.raises(ReservedAgentIdError):
+            store.create_agent(MATTER_FOLLOWUP_MEMBER_ID, type="custom", title="冒名的")
+        assert store.get_agent(MATTER_FOLLOWUP_MEMBER_ID) is None
 
     def test_delete_agent(self, db: Path):
         store = ReportStore(str(db))

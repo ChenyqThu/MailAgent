@@ -72,9 +72,12 @@ class AttachmentTextResponse(BaseModel):
     On-demand extracted plaintext of one attachment (PDF/docx/pptx/xlsx/txt…).
     `status` ∈ {extracted, pending, failed, unsupported}; `text_content` is only
     populated when `status == 'extracted'`, otherwise null with a one-line
-    actionable `hint`. `truncated` merges the extractor's own 256 KB cap with any
-    caller-supplied `max_chars` clip (either → true). `local_path` is NEVER on the
-    wire (see module docstring); this response carries no host path.
+    actionable `hint`. Extracted text is paged: `text_content` is the slice
+    `[offset, offset + max_chars)` of the full text, `total_chars` its length and
+    `next_offset` where the next page starts (null = this page reaches the end).
+    `truncated` merges the extractor's own 256 KB cap with "this page stops before
+    the end" (either → true). `local_path` is NEVER on the wire (see module
+    docstring); this response carries no host path.
     """
 
     attachment_id: int = Field(..., ge=0)
@@ -82,6 +85,9 @@ class AttachmentTextResponse(BaseModel):
     filename: str
     status: str
     text_content: Optional[str] = None
+    offset: int = Field(0, ge=0)
+    total_chars: Optional[int] = None
+    next_offset: Optional[int] = None
     truncated: bool = False
     extractor: Optional[str] = None
     email_subject: str

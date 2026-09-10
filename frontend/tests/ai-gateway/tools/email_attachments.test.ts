@@ -237,6 +237,7 @@ describe('email_attachment_text tool', () => {
     )
     expect(seenUrl).toContain('/attachment/11/text')
     expect(seenUrl).toContain('max_chars=12000')
+    expect(seenUrl).toContain('offset=0')
 
     let seenUrl2 = ''
     const domain2 = mockDomain((url) => {
@@ -248,6 +249,26 @@ describe('email_attachment_text tool', () => {
       emailAttachmentTextSchema.parse({ attachment_id: 11, max_chars: 500 })
     )
     expect(seenUrl2).toContain('max_chars=500')
+  })
+
+  test('续读：offset 上线，服务端的 total_chars / next_offset 原样透出', async () => {
+    let seenUrl = ''
+    const domain = mockDomain((url) => {
+      seenUrl = url
+      return okEnvelope({
+        ...extractedRow('second page'),
+        offset: 12000,
+        total_chars: 30000,
+        next_offset: 24000,
+        truncated: true
+      })
+    })
+    const out = (await runTool(
+      createEmailReadTools(domain).email_attachment_text,
+      emailAttachmentTextSchema.parse({ attachment_id: 11, offset: 12000 })
+    )) as { offset: number; total_chars: number; next_offset: number | null }
+    expect(seenUrl).toContain('offset=12000')
+    expect(out).toMatchObject({ offset: 12000, total_chars: 30000, next_offset: 24000 })
   })
 
   test('server-side truncation is surfaced (truncated=true)', async () => {
@@ -319,5 +340,9 @@ describe('email_attachment_text tool', () => {
     expect(
       emailAttachmentTextSchema.safeParse({ attachment_id: 11, max_chars: 99999 }).success
     ).toBe(false)
+    expect(emailAttachmentTextSchema.safeParse({ attachment_id: 11 }).data?.offset).toBe(0)
+    expect(emailAttachmentTextSchema.safeParse({ attachment_id: 11, offset: -1 }).success).toBe(
+      false
+    )
   })
 })

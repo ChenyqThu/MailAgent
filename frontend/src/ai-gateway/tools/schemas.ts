@@ -1257,10 +1257,11 @@ export const emailThreadAttachmentsSchema = z.object({
 })
 export type EmailThreadAttachmentsInput = z.infer<typeof emailThreadAttachmentsSchema>
 
-/** email_attachment_text — extracted text of one attachment (capped, clip mode mirrors email_body). */
+/** email_attachment_text — one page of an attachment's extracted text (offset + max_chars). */
 export const emailAttachmentTextSchema = z.object({
   attachment_id: z.number().int(),
-  max_chars: z.number().int().min(200).max(12000).default(12000)
+  max_chars: z.number().int().min(200).max(12000).default(12000),
+  offset: z.number().int().min(0).default(0)
 })
 export type EmailAttachmentTextInput = z.infer<typeof emailAttachmentTextSchema>
 

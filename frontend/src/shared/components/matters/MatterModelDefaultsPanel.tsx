@@ -26,7 +26,12 @@ import { useMatterAgentDefaults } from './useMatterAgentDefaults'
  *   · 设计的「切换条件」（超时/限流/报错三个药丸）**不做** —— 真实重试判据是「这次尝试
  *     什么都没产出」，由 gateway 判定，没有可配的位；画出来就是假开关。
  */
-export function MatterModelDefaultsPanel(): React.ReactElement {
+export function MatterModelDefaultsPanel({
+  embedded = false
+}: {
+  /** 嵌在团队页设置档的「模型」分区卡里：外框和标题由分区卡给，这里只留内容。 */
+  embedded?: boolean
+}): React.ReactElement {
   const { t } = useTranslation()
   const store = useMatterAgentDefaults({
     onSaveError: (error) =>
@@ -38,13 +43,21 @@ export function MatterModelDefaultsPanel(): React.ReactElement {
   const { blockFor } = useMatterModelFields(draft)
 
   return (
-    <div className="mt-4 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2/50 p-3">
-      <p className="flex items-center gap-1.5 text-meta font-medium text-ink-fg-1">
-        <Cpu size={13} className="text-ai" />
-        {t('matters.globalAgent.modelDefaults.title')}
-        {store.isSaving ? <Loader2 size={11} className="animate-spin text-ink-fg-3" /> : null}
-      </p>
-      <p className="mt-1.5 text-meta leading-relaxed text-ink-fg-2">
+    <div
+      className={
+        embedded
+          ? undefined
+          : 'mt-4 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2/50 p-3'
+      }
+    >
+      {embedded ? null : (
+        <p className="mb-1.5 flex items-center gap-1.5 text-meta font-medium text-ink-fg-1">
+          <Cpu size={13} className="text-ai" />
+          {t('matters.globalAgent.modelDefaults.title')}
+          {store.isSaving ? <Loader2 size={11} className="animate-spin text-ink-fg-3" /> : null}
+        </p>
+      )}
+      <p className="text-meta leading-relaxed text-ink-fg-2">
         {t('matters.globalAgent.modelDefaults.intro')}
       </p>
       {/* 🔴 读失败必须说出来：静默显示成「没配过」会诱使 owner 在一份看不见的旧配置上重配。 */}

@@ -232,6 +232,16 @@ def test_main_agent_member_id_parity() -> None:
     )
 
 
+def test_matter_followup_member_id_parity() -> None:
+    """事项跟进的保留成员 id：同主 agent 那条，一侧短路放行、另一侧合成成员，必须同字。"""
+    ts = parse_ts_const_string("MATTER_FOLLOWUP_MEMBER_ID", _read(GROUP_FLOORS_TS))
+    py = parse_py_str_const("MATTER_FOLLOWUP_MEMBER_ID", GROUP_LIMITS_PY)
+    assert ts and py, "MATTER_FOLLOWUP_MEMBER_ID 解析成空串 —— 解析器坏了"
+    assert ts == py, (
+        f"MATTER_FOLLOWUP_MEMBER_ID 漂了：groupFloors.ts={ts!r}，group_limits.py={py!r}。"
+    )
+
+
 def test_chat_router_consumes_the_single_source() -> None:
     """第四处载体（chat.py 的校验点）**必须 import 单源，不许自己写字面量**。
 

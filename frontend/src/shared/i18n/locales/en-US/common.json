@@ -6270,6 +6270,9 @@
       "later": "Later",
       "acceptAll": "Accept all",
       "acceptSelected": "Accept {count} selected",
+      "acceptSummary": "Accept status update",
+      "acceptSummaryOnly": "Accept status update only",
+      "noChanges": "No itemized changes this time — accepting only updates the current status.",
       "attention": "The follow-up agent proposed {count} changes for review"
     },
     "trigger": {
@@ -7269,8 +7272,7 @@
     "matterFollowup": {
       "title": "Matter follow-up",
       "badge": "Per-matter rules",
-      "settingsIntro": "Its configuration lives in the matters domain: the global defaults (task contract, model, tool face) are in the panel below; each matter's own follow-up rule is edited on that matter's page.",
-      "openGlobalConfig": "Open global follow-up settings",
+      "settingsIntro": "These follow-up defaults are shared by every matter: save the task contract with Save; model and web settings apply as soon as you change them. A single matter's own follow-up rule is edited on that matter's page.",
       "perMatterTitle": "Per-matter follow-up rules",
       "perMatterNote": "How often it follows up and what it looks at is decided by each matter's own follow-up rule — edit it in that matter's follow-up settings on the matters page."
     },

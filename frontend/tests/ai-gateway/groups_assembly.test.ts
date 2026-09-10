@@ -708,7 +708,8 @@ describe('lifecycle resolveGroupMember — 保留字 main 走 assistant-identity
     )
     const named = {
       reportAgent,
-      assistantIdentity: async () => ({ name: ' 小助 ', avatar: null })
+      assistantIdentity: async () => ({ name: ' 小助 ', avatar: null }),
+      matterAgentDefaults: async () => ({ model: ' follow-m ' })
     }
     expect(await resolveGroupMember('main', named)).toEqual({
       agentId: 'main',
@@ -719,17 +720,17 @@ describe('lifecycle resolveGroupMember — 保留字 main 走 assistant-identity
     expect(reportAgent).not.toHaveBeenCalled()
     expect(
       await resolveGroupMember('main', {
-        reportAgent,
+        ...named,
         assistantIdentity: async () => ({ name: '  ', avatar: null })
       })
     ).toMatchObject({ title: 'AI' })
     expect(
-      await resolveGroupMember('main', { reportAgent, assistantIdentity: async () => null })
+      await resolveGroupMember('main', { ...named, assistantIdentity: async () => null })
     ).toMatchObject({ agentId: 'main', title: 'AI' })
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(
       await resolveGroupMember('main', {
-        reportAgent,
+        ...named,
         assistantIdentity: async () => {
           throw new Error('serve-api down')
         }
@@ -748,6 +749,24 @@ describe('lifecycle resolveGroupMember — 保留字 main 走 assistant-identity
       duty: null,
       model: null
     })
+    // 保留字 matter_followup：名字固定、职责是群专用的一段、模型取事项域全局跟进默认（trim）；
+    // 默认读失败只降级模型，成员照样在。
+    const followup = await resolveGroupMember('matter_followup', named)
+    expect(followup).toMatchObject({
+      agentId: 'matter_followup',
+      title: '事项跟进',
+      model: 'follow-m'
+    })
+    expect(followup.duty).toBeTruthy()
+    expect(reportAgent).not.toHaveBeenCalledWith('matter_followup')
+    expect(
+      await resolveGroupMember('matter_followup', {
+        ...named,
+        matterAgentDefaults: async () => {
+          throw new Error('serve-api down')
+        }
+      })
+    ).toMatchObject({ agentId: 'matter_followup', title: '事项跟进', model: null })
     expect(
       await resolveGroupMember('a', {
         ...named,
@@ -756,7 +775,7 @@ describe('lifecycle resolveGroupMember — 保留字 main 走 assistant-identity
         }
       })
     ).toEqual({ agentId: 'a', title: 'a', duty: null, model: null })
-    expect(warn).toHaveBeenCalledTimes(2)
+    expect(warn).toHaveBeenCalledTimes(3)
     warn.mockRestore()
   })
 })

@@ -116,7 +116,12 @@ function GroupRow({
   )
 }
 
-export function MatterToolFacePanel(): React.ReactElement {
+export function MatterToolFacePanel({
+  embedded = false
+}: {
+  /** 嵌在团队页设置档的「能力」分区卡里：外框和标题由分区卡给，这里只留内容。 */
+  embedded?: boolean
+}): React.ReactElement {
   const { t } = useTranslation()
   const connectors = useConnectorQuickRows()
   const flags = useMatterToolFaceFlags()
@@ -146,12 +151,20 @@ export function MatterToolFacePanel(): React.ReactElement {
   const webAvailable = flags.webToolsEnabled !== false
 
   return (
-    <div className="mt-4 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2/50 p-3">
-      <p className="flex items-center gap-1.5 text-meta font-medium text-ink-fg-1">
-        <Shield size={13} className="text-ok" />
-        {t('matters.globalAgent.toolFace.title')}
-      </p>
-      <p className="mt-1.5 text-meta leading-relaxed text-ink-fg-2">
+    <div
+      className={
+        embedded
+          ? undefined
+          : 'mt-4 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2/50 p-3'
+      }
+    >
+      {embedded ? null : (
+        <p className="mb-1.5 flex items-center gap-1.5 text-meta font-medium text-ink-fg-1">
+          <Shield size={13} className="text-ok" />
+          {t('matters.globalAgent.toolFace.title')}
+        </p>
+      )}
+      <p className="text-meta leading-relaxed text-ink-fg-2">
         {t('matters.globalAgent.toolFace.intro')}
       </p>
 

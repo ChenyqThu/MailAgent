@@ -30,6 +30,11 @@ MAX_GROUP_MEMBERS: int = 8
 #: ``ReportStore.create_agent``（agent 行的唯一写点）拒收本值。
 MAIN_AGENT_MEMBER_ID: str = "main"
 
+#: 「事项跟进」在群里的保留成员 id。与主 agent 同理没有 ``report_agent`` 行（配置在事项域的
+#: owner_settings.matter_agent_defaults），成员校验短路放行、成员事实由 gateway 合成；
+#: ``ReportStore.create_agent`` 同样拒收本值。
+MATTER_FOLLOWUP_MEMBER_ID: str = "matter_followup"
+
 #: 群设置里 chainCap 的允许区间（默认值 12 在 groupFloors.ts；这里只管「owner 能填多大」）。
 CHAIN_CAP_MIN: int = 1
 CHAIN_CAP_MAX: int = 60

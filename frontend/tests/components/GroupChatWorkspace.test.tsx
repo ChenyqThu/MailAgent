@@ -13,7 +13,8 @@
 //   W13 第二步失败 → 删掉第一步建出来的会话（不留半建群）；
 //   W14 labs off 建群：无模式无主持人，只 newSession；
 //   W16 主 Agent 进候选：以 assistant identity 的名字排在最前，勾上后 members 用保留 id `main`；
-//   W17 存量行占着保留 id 时候选里仍只有一条主 Agent。
+//   W17 存量行占着保留 id 时候选里仍只有一条主 Agent；
+//   W18 事项跟进进候选：保留 id `matter_followup`，排在主 Agent 之后。
 //
 // mock 面：useMailApi / groupSettings / useGroupTurnEvents（列表在场态的唯一订阅点）/
 // GroupChatView（lane C 的消息流，这里只需要它的 props 接线）/ AgentAvatar 探针桩。
@@ -330,11 +331,11 @@ describe('GroupChatWorkspace — 建群对话框（一次填齐）', () => {
     mockNewSession.mockResolvedValue(created)
     renderWorkspace([])
     fireEvent.click(await screen.findByText('新建群聊'))
-    // 候选 = 主 Agent + 邮件日报 + 调研员 + 跟进官（主 Agent 在最前）。
-    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(4))
+    // 候选 = 主 Agent + 事项跟进 + 邮件日报 + 调研员 + 跟进官（主 Agent 在最前）。
+    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(5))
     const boxes = screen.getAllByRole('checkbox')
-    fireEvent.click(boxes[2]) // 调研员
-    fireEvent.click(boxes[3]) // 跟进官
+    fireEvent.click(boxes[3]) // 调研员
+    fireEvent.click(boxes[4]) // 跟进官
     // 勾了人之后：占位仍是「新群聊」（W4 靠它），成员名走下方次级提示。
     expect((screen.getByPlaceholderText('新群聊') as HTMLInputElement).value).toBe('')
     expect(screen.getByText(/留空则用：调研员/)).toBeTruthy()
@@ -374,8 +375,8 @@ describe('GroupChatWorkspace — 建群对话框（一次填齐）', () => {
     mockSetGroupConfig.mockRejectedValue(new Error('boom'))
     renderWorkspace([])
     fireEvent.click(await screen.findByText('新建群聊'))
-    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(4))
-    fireEvent.click(screen.getAllByRole('checkbox')[2])
+    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(5))
+    fireEvent.click(screen.getAllByRole('checkbox')[3])
     fireEvent.change(screen.getByPlaceholderText('一句话说明这个群讨论什么'), {
       target: { value: '有用途就有第二步' }
     })
@@ -389,8 +390,8 @@ describe('GroupChatWorkspace — 建群对话框（一次填齐）', () => {
     mockNewSession.mockResolvedValue({ ...groupRow({ id: 557 }) } as unknown as ChatSession)
     renderWorkspace([])
     fireEvent.click(await screen.findByText('新建群聊'))
-    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(4))
-    fireEvent.click(screen.getAllByRole('checkbox')[2])
+    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(5))
+    fireEvent.click(screen.getAllByRole('checkbox')[3])
     expect(screen.queryByLabelText('调研员 的响应模式')).toBeNull()
     expect(screen.queryByRole('combobox', { name: '主持人（可选）' })).toBeNull()
     fireEvent.click(screen.getByText('创建'))
@@ -411,9 +412,9 @@ describe('GroupChatWorkspace — 建群对话框（一次填齐）', () => {
     expect(container.ownerDocument.querySelector('[data-avatar="main"][title="小欧"]')).toBeTruthy()
 
     const boxes = screen.getAllByRole('checkbox')
-    expect(boxes).toHaveLength(4)
+    expect(boxes).toHaveLength(5)
     fireEvent.click(boxes[0]) // 主 Agent 排在最前
-    fireEvent.click(boxes[2]) // 调研员
+    fireEvent.click(boxes[3]) // 调研员
     // 主持人位对主 Agent 开放。
     fireEvent.click(screen.getByRole('combobox', { name: '主持人（可选）' }))
     fireEvent.click(await screen.findByRole('option', { name: '小欧' }))
@@ -440,6 +441,28 @@ describe('GroupChatWorkspace — 建群对话框（一次填齐）', () => {
     await waitFor(() => expect(screen.getByText('小欧')).toBeTruthy())
     expect(container.ownerDocument.querySelectorAll('[data-avatar="main"]')).toHaveLength(1)
     expect(screen.queryByText('冒名顶替')).toBeNull()
-    expect(screen.getAllByRole('checkbox')).toHaveLength(4)
+    expect(screen.getAllByRole('checkbox')).toHaveLength(5)
+  })
+
+  test('W18 事项跟进进候选：保留 id matter_followup + 固定名「事项跟进」，排在主 Agent 之后', async () => {
+    mockNewSession.mockResolvedValue({ ...groupRow({ id: 559 }) } as unknown as ChatSession)
+    const { container } = renderWorkspace([])
+    fireEvent.click(await screen.findByText('新建群聊'))
+    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(5))
+    // 头像探针钉住 id：名字对但 id 错，建群 payload 会静默写错。
+    expect(
+      container.ownerDocument.querySelector('[data-avatar="matter_followup"][title="事项跟进"]')
+    ).toBeTruthy()
+    const boxes = screen.getAllByRole('checkbox')
+    fireEvent.click(boxes[1]) // 事项跟进
+    fireEvent.click(boxes[3]) // 调研员
+    fireEvent.click(screen.getByText('创建'))
+    await waitFor(() => expect(mockNewSession).toHaveBeenCalledTimes(1))
+    expect(mockNewSession).toHaveBeenCalledWith({
+      anchorType: 'general',
+      backendKind: 'ai-sdk',
+      groupMembers: ['matter_followup', 'a1'],
+      title: '事项跟进、调研员'
+    })
   })
 })

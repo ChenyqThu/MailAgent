@@ -287,12 +287,12 @@ describe('GroupChatWorkspace', () => {
     const extras = Array.from({ length: MAX_GROUP_MEMBERS }, (_, i) =>
       cfg(`x${i}`, 'custom', { title: `成员${i}` })
     )
-    // 候选：主 Agent + 邮件日报 + 调研员 + 跟进官 + extras = MAX + 4 个（> MAX，够勾满还剩）。
+    // 候选：主 Agent + 事项跟进 + 邮件日报 + 调研员 + 跟进官 + extras = MAX + 5 个（> MAX，够勾满还剩）。
     mockGetConfig.mockResolvedValue([...AGENTS, ...extras])
     renderWorkspace([])
     await waitFor(() => expect(screen.getByText('新建群聊')).toBeTruthy())
     fireEvent.click(screen.getByText('新建群聊'))
-    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(MAX_GROUP_MEMBERS + 4))
+    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(MAX_GROUP_MEMBERS + 5))
     const boxes = screen.getAllByRole('checkbox') as HTMLButtonElement[]
     for (let i = 0; i < MAX_GROUP_MEMBERS; i++) fireEvent.click(boxes[i])
     await waitFor(() => expect(boxes[MAX_GROUP_MEMBERS].disabled).toBe(true))
@@ -305,11 +305,11 @@ describe('GroupChatWorkspace', () => {
     renderWorkspace([])
     await waitFor(() => expect(screen.getByText('新建群聊')).toBeTruthy())
     fireEvent.click(screen.getByText('新建群聊'))
-    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(4))
+    await waitFor(() => expect(screen.getAllByRole('checkbox')).toHaveLength(5))
     // 反着点（先跟进官后调研员）—— 创建 payload 仍按候选序 [a1, a2]。
     const boxes = screen.getAllByRole('checkbox')
-    fireEvent.click(boxes[3]) // 跟进官
-    fireEvent.click(boxes[2]) // 调研员
+    fireEvent.click(boxes[4]) // 跟进官
+    fireEvent.click(boxes[3]) // 调研员
     fireEvent.change(screen.getByPlaceholderText('新群聊'), { target: { value: '攻坚群' } })
     fireEvent.click(screen.getByText('创建'))
     await waitFor(() => expect(mockNewSession).toHaveBeenCalledTimes(1))
@@ -1209,7 +1209,11 @@ describe('GroupChatView（T3 话题：主时间线侧）', () => {
   }
 
   test('H1 顶层群：hover「开话题」→ createGroupThread → onOpenThread(新话题 id)', async () => {
-    mockCreateGroupThread.mockResolvedValue({ sessionId: 900, rootMessageId: 2, title: '调研进展如下' })
+    mockCreateGroupThread.mockResolvedValue({
+      sessionId: 900,
+      rootMessageId: 2,
+      title: '调研进展如下'
+    })
     const { onOpenThread } = renderThreadView()
     const bubble = await screen.findByText('调研进展如下')
     const open = bubble.querySelector('[data-thread-open]') as HTMLButtonElement

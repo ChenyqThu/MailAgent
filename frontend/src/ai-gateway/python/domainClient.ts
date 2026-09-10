@@ -188,7 +188,8 @@ export interface DomainThreadAttachmentsResult {
 }
 
 /** email_attachment_text — GET /attachment/{id}/text data block. `status` gates content:
- *  'extracted' → text_content present (already server-clipped, `truncated` flags a cut);
+ *  'extracted' → text_content present (the page [offset, offset+max_chars) of the full text;
+ *  `next_offset` non-null = more text follows, `truncated` flags any cut);
  *  'pending' | 'failed' | 'unsupported' → text_content null + a human-readable `hint`. */
 export interface DomainAttachmentTextResult {
   attachment_id: number
@@ -196,6 +197,9 @@ export interface DomainAttachmentTextResult {
   filename: string
   status: 'extracted' | 'pending' | 'failed' | 'unsupported'
   text_content: string | null
+  offset: number
+  total_chars: number | null
+  next_offset: number | null
   truncated: boolean
   extractor: string | null
   email_subject: string | null
@@ -1291,16 +1295,18 @@ export class MailAgentDomainClient {
     )
   }
 
-  /** email_attachment_text — extracted text of one attachment (server clips to max_chars and
-   *  reports `truncated`). GET /attachment/{id}/text?max_chars=N. Non-extracted statuses
+  /** email_attachment_text — one page of an attachment's extracted text (server returns
+   *  [offset, offset+max_chars) plus total_chars / next_offset). GET
+   *  /attachment/{id}/text?max_chars=N&offset=M. Non-extracted statuses
    *  (pending/failed/unsupported) return text_content=null + a `hint`. */
   attachmentText(
     attachmentId: number,
     maxChars: number,
+    offset: number,
     signal?: AbortSignal
   ): Promise<DomainAttachmentTextResult> {
     return this._req<DomainAttachmentTextResult>('GET', `/attachment/${attachmentId}/text`, {
-      query: { max_chars: maxChars },
+      query: { max_chars: maxChars, offset },
       signal
     })
   }
@@ -2340,6 +2346,17 @@ export class MailAgentDomainClient {
       if (e instanceof DomainError && e.code === 'E_NOT_FOUND') return null
       throw e
     }
+  }
+
+  /** 事项域的全局跟进默认（model / effort / fallback_models）。GET /matters/agent-defaults。
+   *  群聊里「事项跟进」成员的模型取这里的 model；没配过 → `{}`。 */
+  async getMatterAgentDefaults(signal?: AbortSignal): Promise<{ model?: string } | null> {
+    const data = await this._req<{ defaults?: { model?: string } | null }>(
+      'GET',
+      '/matters/agent-defaults',
+      { signal }
+    )
+    return data.defaults ?? null
   }
 
   /** custom_agent_create — new agent row (type pinned to 'custom' by the tool). POST /report-agents.

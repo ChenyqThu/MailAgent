@@ -2,6 +2,7 @@
 //
 // 提案失效面：文案说的是"基线变了"而不是"到期"，且卡上直接给一颗重新跑的出口
 // （原来失效后只能拒绝，再自己回详情页点「立即跟进」）。
+// 另：没有逐项变化、只更新当前状态（摘要）的提案也必须能接受。
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -128,5 +129,63 @@ describe('MatterUpdateReview stale surface', () => {
     )
     expect(screen.queryByText('基线已变')).toBeNull()
     expect(screen.queryByText('重新跑一轮')).toBeNull()
+  })
+})
+
+describe('MatterUpdateReview 没有逐项变化的提案', () => {
+  const summaryOnly: MatterUpdate = {
+    ...staleUpdate,
+    is_stale: false,
+    stale_at: null,
+    stale_reason: null,
+    change_count: 1,
+    changes: []
+  }
+
+  test('只更新当前状态：接受可点，提交零勾选 + 原摘要', () => {
+    const accept = vi.fn()
+    render(
+      <MatterUpdateReview
+        matter={matter}
+        update={summaryOnly}
+        onClose={vi.fn()}
+        onAccept={accept}
+        onReject={vi.fn()}
+      />
+    )
+    expect(screen.getByText('本次没有逐项变化，接受后只更新当前状态。')).toBeTruthy()
+    const button = screen.getByRole('button', { name: '接受状态更新' }) as HTMLButtonElement
+    expect(button.disabled).toBe(false)
+    fireEvent.click(button)
+    expect(accept).toHaveBeenCalledWith({ selectedIds: [], editedSummary: null, editedChanges: [] })
+  })
+
+  test('有逐项变化但全部取消勾选：仍可「仅接受状态更新」', () => {
+    render(
+      <MatterUpdateReview
+        matter={matter}
+        update={{ ...summaryOnly, changes: staleUpdate.changes, change_count: 2 }}
+        onClose={vi.fn()}
+        onAccept={vi.fn()}
+        onReject={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('checkbox'))
+    const button = screen.getByRole('button', { name: '仅接受状态更新' }) as HTMLButtonElement
+    expect(button.disabled).toBe(false)
+  })
+
+  test('既没有摘要也没有逐项变化：接受不可点', () => {
+    render(
+      <MatterUpdateReview
+        matter={matter}
+        update={{ ...summaryOnly, summary: null }}
+        onClose={vi.fn()}
+        onAccept={vi.fn()}
+        onReject={vi.fn()}
+      />
+    )
+    const button = screen.getByRole('button', { name: '接受状态更新' }) as HTMLButtonElement
+    expect(button.disabled).toBe(true)
   })
 })

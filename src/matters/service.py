@@ -174,6 +174,16 @@ DEFAULT_LIVE_DISPATCH_STATES = (
 # 进展条目的可编辑字段（task 08-25）。撤销的前像只快照这些 —— `deleted_at` 有意不在内：
 # 删除 / 恢复的反向操作是另一颗按钮（operation restore / delete），不是 patch 回一个时间戳。
 PROGRESS_PATCH_FIELDS = {"kind", "title", "body", "happened_at", "refs"}
+
+
+def proposal_change_count(changes: Sequence[Any] | None, summary: str | None) -> int:
+    """提案「几项变化」的唯一口径：逐项变化条数 + 摘要算一项。
+
+    摘要是「当前状态」的新版本，接受时恒写进 ``current_summary``，所以只改了当前状态的提案
+    也是一项真实更新 —— 只数 ``changes`` 会把它显示成「0 项变化」，看上去像空提案。
+    """
+    return len(changes or []) + (1 if summary and summary.strip() else 0)
+
 # P4 绑定三键（D2）：走既有 PATCH 白名单 + 事件 agent_binding_changed；
 # schedule_json P5 才有写面（本相位零消费，不进白名单）。
 BINDING_PATCH_FIELDS = {
@@ -4213,7 +4223,9 @@ class MatterService:
                         "review_status": full["review_status"],
                         "summary": full["summary"],
                         "created_at": full["created_at"],
-                        "change_count": len(full["changes"] or []),
+                        "change_count": proposal_change_count(
+                            full["changes"], full["summary"]
+                        ),
                         "is_stale": bool(full["is_stale"]),
                         "agent_run_id": full["agent_run_id"],
                         "confidence": full["confidence"],
@@ -4253,7 +4265,9 @@ class MatterService:
                     "updates": [
                         {
                             **update,
-                            "change_count": len(update["changes"] or []),
+                            "change_count": proposal_change_count(
+                                update["changes"], update["summary"]
+                            ),
                             # 表列是 0/1；摘要投影与前端 `MatterUpdate.is_stale: boolean`
                             # 都按真布尔，这里跟着归一（新契约不留 0/1 与 true/false 两种真值）。
                             "is_stale": bool(update["is_stale"]),

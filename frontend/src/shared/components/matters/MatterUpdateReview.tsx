@@ -131,6 +131,17 @@ export function MatterUpdateReview({
   const editedSummary = summary !== (update.summary ?? '') ? summary : null
   const edited = editedSummary !== null || editedChanges.length > 0
   const allSelected = selected.size === changes.length
+  // 提案摘要就是「当前状态」的新版本，接受时恒写入（accept_update）。所以只要有摘要，哪怕没有
+  // 逐项变化、或一项都没勾，接受也是有效操作 —— 按钮不能因为「零勾选」灰掉。
+  const summaryUpdate = summary.trim().length > 0
+  const acceptLabel =
+    changes.length === 0
+      ? t('matters.review.acceptSummary')
+      : selected.size === 0
+        ? t('matters.review.acceptSummaryOnly')
+        : allSelected
+          ? t('matters.review.acceptAll')
+          : t('matters.review.acceptSelected', { count: selected.size })
 
   return (
     <div ref={animRef} className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4">
@@ -233,16 +244,21 @@ export function MatterUpdateReview({
                 total: changes.length
               })}
             </h3>
-            <button
-              type="button"
-              onClick={() =>
-                setSelected(allSelected ? new Set() : new Set(changes.map((change) => change.id)))
-              }
-              className="text-aux text-ai"
-            >
-              {allSelected ? t('matters.review.clearAll') : t('matters.review.selectAll')}
-            </button>
+            {changes.length > 0 ? (
+              <button
+                type="button"
+                onClick={() =>
+                  setSelected(allSelected ? new Set() : new Set(changes.map((change) => change.id)))
+                }
+                className="text-aux text-ai"
+              >
+                {allSelected ? t('matters.review.clearAll') : t('matters.review.selectAll')}
+              </button>
+            ) : null}
           </div>
+          {changes.length === 0 ? (
+            <p className="mt-2 text-aux text-ink-fg-3">{t('matters.review.noChanges')}</p>
+          ) : null}
           <div className="mt-2 space-y-2">
             {changes.map((change, index) => (
               <ChangeRow
@@ -344,13 +360,11 @@ export function MatterUpdateReview({
           </button>
           <button
             type="button"
-            disabled={busy || selected.size === 0 || update.is_stale}
+            disabled={busy || update.is_stale || (selected.size === 0 && !summaryUpdate)}
             onClick={() => onAccept({ selectedIds: [...selected], editedSummary, editedChanges })}
             className="rounded-lg bg-ai px-3 py-2 text-aux font-medium text-white disabled:opacity-50"
           >
-            {allSelected
-              ? t('matters.review.acceptAll')
-              : t('matters.review.acceptSelected', { count: selected.size })}
+            {acceptLabel}
           </button>
         </footer>
       </section>

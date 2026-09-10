@@ -72,8 +72,10 @@ export const EMAIL_PREPROCESS_AGENT_ID = 'email_preprocess_agent'
 
 // 「事项跟进」合成成员的 id（09-02 misc05）。它**不是** report_agent 行：跟进跑的是
 // `matter_followup` job_type，配置在事项域（owner_settings.matter_agent_defaults + 逐事项
-// 的跟进规则）。这个字面量只作头像种子 / 选中态 key 用，不拿去查任何一张表。
-export const MATTER_FOLLOWUP_MEMBER_ID = 'matter_followup'
+// 的跟进规则）。这个字面量作头像种子 / 选中态 key，也是它在群聊 members_json 里的保留 id，
+// 不拿去查任何一张表。单源在 groupFloors.ts（serve-api 群成员校验与 gateway 成员合成共读）。
+import { MATTER_FOLLOWUP_MEMBER_ID } from '../../../ai-gateway/groupFloors'
+export { MATTER_FOLLOWUP_MEMBER_ID }
 
 // 团队页成员引用：除主 Agent 与事项跟进外，内置专型 / 报告 / 自定义全部是 report_agent 行，
 // 用行 id 即可寻址（分组与视图档由行的 type 派生，不进 ref）。
