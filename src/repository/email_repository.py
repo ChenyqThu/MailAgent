@@ -1820,20 +1820,24 @@ class EmailRepository:
                 return {"scope": "unknown", "candidate_count": 0, "body_missing": 0,
                         "body_unsearchable": 0, "channels": channels,
                         "complete": False, "samples": []}
-            index_checks = [f"EXISTS (SELECT 1 FROM {table} f WHERE f.rowid=m.internal_id)"
-                            if table in available else "0" for table in channels]
-            searchable = " AND ".join(index_checks)
-            base = (" FROM email_metadata m LEFT JOIN email_body b "
-                    "ON b.internal_id=m.internal_id" + where)
+            # 不读正文列，也尽量不碰 email_body：`body_markdown IS NULL` 会把整列正文读出来
+            # （1.4 万封的真实库要 9 秒），email_body 逐行点查在冷缓存下是上万次随机读大表页。
+            # 先查很小的 FTS5 docsize（行在 = 该通道已索引这封），只对没索引的那些再问
+            # email_body 在不在 —— CASE 保证按顺序短路。
+            indexed = " AND ".join(
+                f"EXISTS (SELECT 1 FROM {table}_docsize d WHERE d.id=m.internal_id)"
+                if f"{table}_docsize" in available else "0" for table in channels)
+            has_body = "EXISTS (SELECT 1 FROM email_body b WHERE b.internal_id=m.internal_id)"
+            base = " FROM email_metadata m" + where
             row = conn.execute(
-                "SELECT COUNT(*), COALESCE(SUM(b.internal_id IS NULL),0), "
-                "COALESCE(SUM(b.internal_id IS NOT NULL AND "
-                "(b.body_markdown IS NULL OR NOT (" + searchable + "))),0)" + base,
-                params).fetchone()
+                f"SELECT COUNT(*), "
+                f"COALESCE(SUM(CASE WHEN {indexed} THEN 0 WHEN {has_body} THEN 0 ELSE 1 END),0), "
+                f"COALESCE(SUM(CASE WHEN {indexed} THEN 0 WHEN {has_body} THEN 1 ELSE 0 END),0)"
+                + base, params).fetchone()
             samples = conn.execute(
                 "SELECT m.internal_id, m.subject" + base +
-                " AND (b.internal_id IS NULL OR b.body_markdown IS NULL OR NOT (" +
-                searchable + ")) ORDER BY m.date_received DESC LIMIT 5", params).fetchall()
+                f" AND NOT ({indexed}) ORDER BY m.date_received DESC LIMIT 5",
+                params).fetchall()
             return {"scope": scope, "candidate_count": row[0], "body_missing": row[1],
                     "body_unsearchable": row[2], "channels": channels,
                     "complete": not unknown and row[1] == 0 and row[2] == 0,

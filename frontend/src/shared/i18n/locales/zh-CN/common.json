@@ -530,9 +530,7 @@
   },
   "palette": {
     "coverage": {
-      "global": "全库概况：{count} 封邮件正文缺失或不可检索。这些邮件不代表搜索命中。",
-      "candidates": "元数据条件范围内，{count} 封邮件正文缺失或不可检索。这些邮件不代表搜索命中。",
-      "unknown": "此查询无法准确判断正文覆盖范围，结果可能不完整。"
+      "candidates": "元数据条件范围内，{count} 封邮件正文缺失或不可检索。这些邮件不代表搜索命中。"
     },
     "placeholder": "搜索邮件 · 跳转到信箱 · 运行 AI 动作…",
     "noResults": "无匹配项 · 试试其他关键词",
@@ -562,8 +560,6 @@
       "generalAgent": "通用 Agent",
       "generalAgentMeta": "Custom AI · ⌘O",
       "groupsMeta": "多 agent 群聊 · ⌘G",
-      "aiHistory": "AI 会话",
-      "aiHistoryMeta": "打开 AI 面板",
       "admin": "看板 Admin",
       "adminMeta": "dead-letter {n, plural, =0 {0} other {#}} · 队列健康",
       "contacts": "打开通讯录",
@@ -608,8 +604,14 @@
     "ai": {
       "understand": "AI 理解「{query}」",
       "understandHint": "让 AI 帮你检索并梳理相关邮件",
-      "searchingPhrases": ["正在理解你的问题…", "检索相关邮件…"],
-      "summarizingPhrases": ["筛选最相关的…", "整理结果…"],
+      "searchingPhrases": [
+        "正在理解你的问题…",
+        "检索相关邮件…"
+      ],
+      "summarizingPhrases": [
+        "筛选最相关的…",
+        "整理结果…"
+      ],
       "summary": "AI：{text}",
       "emptyTitle": "AI 没找到相关邮件",
       "emptyHint": "换个说法，或直接用搜索语法",

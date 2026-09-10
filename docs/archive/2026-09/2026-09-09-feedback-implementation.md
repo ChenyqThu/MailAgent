@@ -1,26 +1,30 @@
-# Feedback implementation and verification
+# Notion 反馈批：实现与验证
 
-## Delivered
+对应核查文档：[2026-09-09-notion-feedback-assessment.md](./2026-09-09-notion-feedback-assessment.md)。本文记录最终交付行为与验证结果。
 
-- Email browsing reuses an eligible tab by default. Double-click, the list context menu and Tab Pin retain the same target. The always-new preference is optional and defaults off; existing stored tabs migrate as retained.
-- Retention can be cancelled while editing. Dirty/composer protection remains; after send clears the snapshot and closes composer, that tab becomes reusable. Solid Pin and the unsaved dot share one compact status slot.
-- Today pending replies aggregate by real thread before limiting, remain collapsed initially, and support per-message or snapshot-group “no reply needed” with undo. Later incoming messages remain visible. Undo is operation-owned and cannot erase a later decision.
-- Independent clock and day query keys handle midnight, resume and focus; foreground refresh backs up events. Read failures surface instead of silently becoming empty data.
-- Search echoes effective filters; omitted/null booleans do not imply false. Missing body/index coverage is separate from search hits, with unknown scope for complex expressions and a bounded audit budget. Already fetched old mail is stored locally before Notion date filtering. Bulk recovery can explicitly include unmirrored messages; targeted ID recovery remains available.
+## 交付内容
 
-## Verification
+- **邮件标签**：单击默认复用一个可替换的浏览标签。右键「在新标签页打开」和标签上的 Pin 显式保留；目标已开着时只激活并保留，不重复创建。双击邮件行没有标签语义。设置「每封邮件在新标签页打开」默认关闭；打开后每次点击开一个未保留的新标签，满员按 LRU 挤掉最旧的。旧存档里的邮件标签按未保留处理，避免满员用户升级后点不开新邮件。
+- **保留与编辑保护相互独立**：编辑中可以取消保留，未保存圆点继续保护现场；发送后快照清理、composer 关闭，未保留的标签可以再被复用。Pin 与未保存圆点共用一个状态位：已保留时显示实心 Pin，取消保留后回到未保存圆点。
+- **今日待回**：按真实 `thread_id` 聚合后再限量，默认折叠。可按单封或按线程当前快照标记「无需回复」，撤销只作用于本次操作；同线程后来的新邮件照常出现。决定存 `today_reply_dismissal`，有意不挂 `email_metadata` 外键 —— 同一封邮件重新入库走 `INSERT OR REPLACE`，外键级联会把决定一起删掉。
+- **今日刷新**：独立的分钟时钟驱动日界；恢复可见、窗口聚焦和前台 90 秒刷新兜底；读取失败显示提示，不当作空列表。
+- **检索完整性**：`email_list_filter` 的布尔参数省略或 null 表示不过滤，显式 false 生效，并回显生效条件。全文搜索返回 `coverage`，与命中严格分开；只做主键与 FTS5 `_docsize` 点查，并用 `CASE` 短路，只对没入索引的邮件再查 `email_body`。⌘K 只在元数据条件范围内确有缺失时提示。已抓取的旧邮件正文在 Notion 日期过滤之前入库；`backfill body --include-unmirrored` 批量纳入未镜像邮件，`--internal-ids` 定向补取。
+- **⌘K 跳转**：只列内建邮箱，自定义同步文件夹不再出现。群聊、团队、LLM Dashboard 标为 `searchOnly`，空输入时不显示；有输入时一级入口只保留标题命中的。去掉与「AI Chat」重复的「AI 会话」行。
 
-- Frontend full suite: 714 files, 9,000 passed, 1 skipped, 5 failures on first valid-ABI pass. Four failures were old contract assertions (retention eviction and additive search fields), updated to the approved behavior. The remaining composer wait timed out under full-suite load. All affected files were rerun together: **6 files / 79 tests passed**, including the unchanged composer scenario and new send/cleanup protection test.
-- Python affected suite: 578 cases, initially one new test using attribute access for an existing dictionary result. Corrected the assertion; the affected file passed **3/3**. The other **577 passed**, covering repository/search, Today, HTTP actions, watcher, backfill, agent evaluation and undefined-name gates.
-- Frontend node/web type checking passed; test type ratchet passed with no new errors (204 existing baseline entries).
-- Repository lint completed with **0 errors / 457 warnings**. Existing ref warnings in TabStrip were reproduced against HEAD; this work does not attempt to clear the repository-wide warning backlog.
-- Mutation check: removing the locked-tab replacement guard makes the new unpin-during-edit regression fail; restoring it makes the test pass.
-- Browser interaction check used actual TabStrip and TodayReplyThreadRow with synthetic mail and isolated API stubs. Verified unpin, unsaved dot, collapsed/expanded thread rows, and light/dark rendering. No real email was sent or dismissed.
+## 验证
 
-![Expanded thread and unpinned draft](./feedback-0909/threads-and-unpinned-draft.png)
+- 前端：受影响的 65 个测试文件、1200 条通过；`pnpm typecheck` 通过（测试类型棘轮无新增，基线 204 条）；`pnpm exec eslint --quiet .` 无错误。
+- 后端：repository、today、agent_eval、今日 HTTP 动作、watcher 共 556 条通过；mail、sync、cli 分片 1794 条通过。
+- 先红后绿：「无需回复在重新入库后不丢」「旧存档标签满员时仍能浏览」两条回归测试，修复前失败、修复后通过。
+- coverage 在生产库的一致性备份上实测（只读，用完即删；14,213 封，其中 2,483 封没有正文）：热缓存 10–22ms；冷缓存首次 77–104ms，偶尔超过 250ms 预算时降级为 unknown，已拿到的命中不受影响。改前的写法读正文列，全局一次要 9–13 秒，每次搜索都会超时。
+- 界面检查用真实的 TabStrip 与 TodayReplyThreadRow 组件，配合合成邮件和隔离的 API 桩；没有发送或处理任何真实邮件。
 
-![Light theme, collapsed thread](./feedback-0909/threads-light.png)
+![展开的线程与取消保留的草稿](./feedback-0909/threads-and-unpinned-draft.png)
 
-## Limits and rollout
+![浅色主题下折叠的线程](./feedback-0909/threads-light.png)
 
-This is a local code implementation, not a release or production data backfill. DB v74 changes are additive and the Electron expected version matches. No Notion records were modified. The original reporter's historical mail was absent from this developer database, so its recovery is not claimed as revalidated here; see the separate assessment for evidence and confidence levels. The pre-existing untracked `frontend/tests/shared/__probe.test.ts` was excluded from the suite and left untouched.
+## 边界
+
+- 本地代码改动，未发版，未回填生产数据，未改动 Notion 记录。
+- 反馈人的历史邮件不在本机库里，补取效果没有在其环境复验。
+- 两个字的中文检索词（如「报价」）仍走 trigram 表的全表 `LIKE` 扫描：冷缓存 4–5 秒，热缓存约 0.65 秒。这是检索内核既有的限制，不在本批范围内。

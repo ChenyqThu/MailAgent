@@ -222,6 +222,33 @@ describe('CommandPalette — rendering', () => {
     expect(screen.queryByText('Email')).toBeNull()
     expect(screen.queryByText('AI Actions')).toBeNull()
   })
+
+  test('空输入的 jump 只列内建邮箱与常用入口', async () => {
+    mockListMailboxes.mockResolvedValue([
+      { mailbox: '收件箱', total: 100, unread: 5, flagged: 2, failed: 0 },
+      { mailbox: 'DMS 固件发布', total: 9, unread: 0, flagged: 0, failed: 0 }
+    ])
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByText('收件箱'))
+    expect(screen.getByText('AI Chat')).toBeTruthy()
+    for (const hidden of ['DMS 固件发布', '群聊', '团队', 'LLM Dashboard', 'AI 会话']) {
+      expect(screen.queryByText(hidden)).toBeNull()
+    }
+  })
+
+  test('有输入时 jump 只留标题命中的入口，searchOnly 入口能被搜到', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    openPalette()
+    renderPalette()
+    await waitFor(() => screen.getByRole('combobox'))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '群聊' } })
+    await vi.advanceTimersByTimeAsync(300)
+    await waitFor(() => screen.getByText('群聊'))
+    expect(screen.queryByText('AI Chat')).toBeNull()
+    expect(screen.queryByText('收件箱')).toBeNull()
+    vi.useRealTimers()
+  })
 })
 
 describe('CommandPalette — query normalisation', () => {

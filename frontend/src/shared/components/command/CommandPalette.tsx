@@ -53,7 +53,6 @@ import {
   Check,
   Clock,
   Folder,
-  History,
   Loader2,
   RotateCcw,
   AlertTriangle,
@@ -75,9 +74,8 @@ import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { useMailbox } from '@shared/state/mailbox'
 import { useActiveEmail } from '@shared/state/active-email'
-import { viewForMailbox } from '@shared/lib/mailboxSemantics'
+import { ARCHIVE_LABEL, viewForMailbox } from '@shared/lib/mailboxSemantics'
 import { useEmailFilter } from '@shared/state/email-filter'
-import { openChatModal } from '@shared/state/ai-chat-panel'
 import { runGatewaySearchAgent } from '@shared/assistant/searchAgentClient'
 import { closeCommandPalette, useCommandPalette } from '@shared/state/command-palette'
 import { useSearchHistory } from '@shared/state/search-history'
@@ -140,10 +138,6 @@ const IS_WEB = resolveBuildTarget() === 'web'
 // 展示的单一截断点 (searchEmails clamp 上限 200, 50 在范围内), 不设无界。
 const MAX_EMAIL_HITS = 50
 const MAX_JUMP_MAILBOXES = 3
-// 「AI 会话」行在 jump 静态段里的位次。它不是路由入口（开的是 chat 模态），所以不进
-// registry；给它一个 order 就能和 registry 投影排在同一条轴上 —— 落在通用 agent(10)
-// 与看板(20) 之间，与收敛前的位置一致。
-const AI_HISTORY_JUMP_ORDER = 15
 // 通讯录 WP4「人」组：面板展示 8 条；服务端 limit 取 16 留出客户端滤 hidden 的
 // 余量（total 仍是全量命中数，供「另有 n 人」提示）。
 const MAX_CONTACT_HITS = 8
@@ -743,10 +737,15 @@ export function CommandPalette(): React.ReactElement | null {
       })
     }
 
+    // 只列内建邮箱（收件箱 / 发件箱 / 草稿箱 / 存档）；自定义同步文件夹走列表头的文件夹
+    // 选择器，进 jump 会占掉一整屏。
+    const builtinMailboxes = mailboxes.filter(
+      (m) => viewForMailbox(m.mailbox) !== 'all' || m.mailbox === ARCHIVE_LABEL
+    )
     const baseList =
       q.length === 0
-        ? mailboxes.slice(0, MAX_JUMP_MAILBOXES)
-        : mailboxes
+        ? builtinMailboxes.slice(0, MAX_JUMP_MAILBOXES)
+        : builtinMailboxes
             .filter((m) => m.mailbox.toLowerCase().includes(q.toLowerCase()))
             .slice(0, MAX_JUMP_MAILBOXES)
 
@@ -780,52 +779,33 @@ export function CommandPalette(): React.ReactElement | null {
       })
     }
 
-    // 静态行（不随 query 变）：一级入口全量投影 + 一行非路由动作（AI 会话历史，
-    // 它开的是 chat 模态不是路由，所以不在 registry 里）。两者按同一条 order 轴合并，
-    // 用户 ⌘K → ⏎ 就能到任意一级入口，不用先记得它在侧栏哪一段。
-    const staticRows: { order: number; row: JumpRow }[] = paletteNavEntries
-      .map((entry) => ({
-        order: entry.palette?.order ?? 0,
-        row: {
-          id: `jump:${entry.id}`,
-          icon: entry.icon(),
-          label: (
-            <span className="text-body flex-1 truncate">
-              <span className="text-ink-fg font-medium">{navPaletteLabel(entry, t)}</span>
-              <span className="text-ink-fg-3 mx-1">·</span>
-              {/* `n` 只有看板那条 meta 用（ICU plural）；多传一个参数对其余键无害，
-                  少一条分支。 */}
-              <span className="text-ink-fg-2">{t(entry.palette?.metaI18nKey ?? '', { n: 0 })}</span>
-            </span>
-          ),
-          run: () => {
-            closeCommandPalette()
-            navigateToNavEntry(navigate, entry)
-          }
+    // 一级入口（registry 投影，已按 palette.order 排好）：空输入列常用入口，`searchOnly`
+    // 的低频入口不占位；有输入时只留标题命中的 —— 否则每次搜索都有十来行跳转压在邮件
+    // 结果上面。
+    const needle = q.toLowerCase()
+    for (const entry of paletteNavEntries) {
+      const label = navPaletteLabel(entry, t)
+      const hidden =
+        needle === '' ? entry.palette?.searchOnly === true : !label.toLowerCase().includes(needle)
+      if (hidden) continue
+      out.push({
+        id: `jump:${entry.id}`,
+        icon: entry.icon(),
+        label: (
+          <span className="text-body flex-1 truncate">
+            <span className="text-ink-fg font-medium">{label}</span>
+            <span className="text-ink-fg-3 mx-1">·</span>
+            {/* `n` 只有看板那条 meta 用（ICU plural）；多传一个参数对其余键无害，
+                少一条分支。 */}
+            <span className="text-ink-fg-2">{t(entry.palette?.metaI18nKey ?? '', { n: 0 })}</span>
+          </span>
+        ),
+        run: () => {
+          closeCommandPalette()
+          navigateToNavEntry(navigate, entry)
         }
-      }))
-      .concat([
-        {
-          order: AI_HISTORY_JUMP_ORDER,
-          row: {
-            id: 'jump:ai-history',
-            icon: <History size={14} strokeWidth={1.75} />,
-            label: (
-              <span className="text-body flex-1 truncate">
-                <span className="text-ink-fg font-medium">{t('palette.jump.aiHistory')}</span>
-                <span className="text-ink-fg-3 mx-1">·</span>
-                <span className="text-ink-fg-2">{t('palette.jump.aiHistoryMeta')}</span>
-              </span>
-            ),
-            run: () => {
-              closeCommandPalette()
-              openChatModal()
-            }
-          }
-        }
-      ])
-    staticRows.sort((a, b) => a.order - b.order)
-    for (const item of staticRows) out.push(item.row)
+      })
+    }
     return out
   }, [
     debouncedRaw,
@@ -1314,28 +1294,23 @@ export function CommandPalette(): React.ReactElement | null {
           </div>
         )}
 
-        {/* Parse warnings — 字段语法被忽略/降级时给可见反馈（T0） */}
+        {/* 正文覆盖只在「元数据条件范围内确有正文缺失」时提示 —— 用户能据此行动的只有这一种。
+            全库概况（真实库约 17% 邮件无正文）与 unknown 每次搜索都有，横幅只是噪音，留给
+            Agent 工具读。 */}
         {hasQuery &&
           !searchQ.isPlaceholderData &&
-          searchQ.data?.coverage &&
+          searchQ.data?.coverage?.scope === 'metadata_candidates' &&
           !searchQ.data.coverage.complete && (
             <div
               role="status"
               className="px-4 py-1.5 border-b border-ink-border-soft text-micro text-ink-fg-2"
             >
-              {t(
-                searchQ.data.coverage.scope === 'unknown'
-                  ? 'palette.coverage.unknown'
-                  : searchQ.data.coverage.scope === 'global'
-                    ? 'palette.coverage.global'
-                    : 'palette.coverage.candidates',
-                {
-                  count:
-                    searchQ.data.coverage.body_missing + searchQ.data.coverage.body_unsearchable
-                }
-              )}
+              {t('palette.coverage.candidates', {
+                count: searchQ.data.coverage.body_missing + searchQ.data.coverage.body_unsearchable
+              })}
             </div>
           )}
+        {/* Parse warnings — 字段语法被忽略/降级时给可见反馈（T0） */}
         {hasQuery && parseWarnings.length > 0 && (
           <div className="px-4 py-1.5 flex items-start gap-1.5 border-b border-ink-border-soft text-micro text-ink-fg-2 shrink-0">
             <AlertTriangle size={12} strokeWidth={2} className="mt-px shrink-0 text-warn" />

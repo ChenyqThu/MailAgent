@@ -198,6 +198,8 @@ export interface NavEntry {
     /** 缺省用 `label`；palette 里文案与侧栏不同的（「看板 Admin」→「打开通讯录」式）走这里。 */
     readonly labelI18nKey?: string
     readonly metaI18nKey: string
+    /** 只在搜索词命中标题时出现，空输入的 jump 列表里不占位（低频入口，侧栏 / 快捷键可达）。 */
+    readonly searchOnly?: boolean
   }
   /** 通知深链白名单成员（后端 `payload_json.link.to` 允许出现的目标）。 */
   readonly notificationRoute?: boolean
@@ -333,7 +335,7 @@ const ENTRIES = [
     // 原本挂在对话格上，口径一直是 origin='group'，拆域后回到它该在的那一格。
     badge: { kind: 'groupUnread', rail: true, shape: 'dot' },
     rail: { order: 8 },
-    palette: { order: 15, metaI18nKey: 'palette.jump.groupsMeta' },
+    palette: { order: 15, metaI18nKey: 'palette.jump.groupsMeta', searchOnly: true },
     shortcutId: 'groups'
   },
   // 团队域（NavDomain 值仍是 'agents'，见类型定义处注释）。
@@ -347,7 +349,7 @@ const ENTRIES = [
     match: { exact: ['/agents'] },
     badge: { kind: 'agentUnread', rail: true },
     rail: { order: 6 },
-    palette: { order: 40, metaI18nKey: 'palette.jump.customAiMeta' },
+    palette: { order: 40, metaI18nKey: 'palette.jump.customAiMeta', searchOnly: true },
     notificationRoute: true
   },
   // 报告域（08-27 批从 agents 域拆出，P3 拿到独立路由）：`/reports` 列表 +
@@ -392,7 +394,7 @@ const ENTRIES = [
     gate: 'always',
     match: { exact: ['/llm'], prefix: ['/admin/llm'] },
     panel: { order: 0 },
-    palette: { order: 50, metaI18nKey: 'palette.jump.llmMeta' },
+    palette: { order: 50, metaI18nKey: 'palette.jump.llmMeta', searchOnly: true },
     deeplinkKind: 'llm'
   },
   {

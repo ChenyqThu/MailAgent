@@ -530,9 +530,7 @@
   },
   "palette": {
     "coverage": {
-      "global": "Library overview: {count} email bodies are missing or unsearchable. These are not search hits.",
-      "candidates": "{count} emails matching metadata filters have missing or unsearchable bodies. These are not search hits.",
-      "unknown": "Body coverage cannot be determined for this query. Results may be incomplete."
+      "candidates": "{count} emails matching metadata filters have missing or unsearchable bodies. These are not search hits."
     },
     "placeholder": "Search mail · jump to mailbox · run AI action…",
     "noResults": "No matches · try a different query",
@@ -562,8 +560,6 @@
       "generalAgent": "General Agent",
       "generalAgentMeta": "Custom AI · ⌘O",
       "groupsMeta": "Multi-agent group chat · ⌘G",
-      "aiHistory": "AI conversations",
-      "aiHistoryMeta": "Open AI panel",
       "admin": "Admin kanban",
       "adminMeta": "{n, plural, =0 {no dead letters} other {# dead-letter}} · queue health",
       "contacts": "Open Contacts",
@@ -608,8 +604,14 @@
     "ai": {
       "understand": "AI understand “{query}”",
       "understandHint": "Let AI search and gather the relevant emails",
-      "searchingPhrases": ["Understanding your question…", "Searching relevant emails…"],
-      "summarizingPhrases": ["Filtering the most relevant…", "Organizing results…"],
+      "searchingPhrases": [
+        "Understanding your question…",
+        "Searching relevant emails…"
+      ],
+      "summarizingPhrases": [
+        "Filtering the most relevant…",
+        "Organizing results…"
+      ],
       "summary": "AI: {text}",
       "emptyTitle": "AI found no related emails",
       "emptyHint": "Try rephrasing, or use search syntax directly",

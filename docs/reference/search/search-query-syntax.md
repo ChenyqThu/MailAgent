@@ -396,10 +396,15 @@ trigram 路径早期把 hit 的 `snippet` 设成 `''`（前端只剩 subject 高
 `email_recipient_fts` 表并镜像 insert trigger 从 fixture email 的 to_addr / cc_addr / sender_name
 灌数据；前端 TS runner 须建同表 + 实现等价编译（`to~:`/`cc~:`/`from~:` + 表维度），读同一份 JSON 锁行为。
 前端镜像还需：`TextTerm` 加表维度（哪张表的哪列）、`EXPECTED_DB_VERSION` 抬到 25。
-## Coverage and missing content
 
-Full-text results include `coverage` and `effective_filters`. Coverage describes metadata candidates (or the whole local store without metadata filters), not additional content hits. `body_missing` and `body_unsearchable` distinguish absent bodies from bodies missing the required index/markdown. OR, negation, attachment-dependent predicates and raw expressions report unknown scope. Coverage computation has a 250 ms budget; unavailable or timed-out coverage reports unknown without discarding search hits. Index presence does not prove semantic completeness or absence of evidence.
+## 正文覆盖与缺失内容
 
-The agent metadata tool accepts omitted/null booleans as no filter, preserves explicit false, and echoes applied filters. Missing body reads distinguish missing metadata, missing body and missing requested format; they provide a targeted recovery command and must not be treated as evidence that content does not exist. Later messages in the same thread may contain quoted history.
+全文搜索结果带 `coverage` 与 `effective_filters`。`coverage` 描述的是元数据候选（没有元数据条件时是全库概况），**不是额外的正文命中**。`body_missing` 指没有正文行；`body_unsearchable` 指有正文行，但所用检索通道的 FTS5 `_docsize` 里没有这封（未入索引）。OR、否定、依赖附件的条件和 raw 表达式一律报 `scope: unknown`。
 
-Notion date filtering does not gate storage of a body already fetched locally. New skipped rows record `notion_date_filter`; historical NULL skip reasons remain unknown. Targeted recovery uses `mailagent backfill body --internal-ids ID`; bulk recovery may opt into `--include-unmirrored`, with existing date/mailbox/limit and dry-run controls. Neither option fetches history automatically during a search.
+计算只做主键与 `_docsize` 点查，不读正文列 —— `body_markdown IS NULL` 会把整列正文读出来，1.4 万封的真实库要 9 秒，改成点查后全库约 20ms。另有 250ms 预算兜底，超时报 unknown，不影响已经拿到的命中。索引在不代表语义完整，也不能当作「没有证据」的证明。
+
+⌘K 只在 `scope = metadata_candidates` 且不完整时显示覆盖提示；全库概况（真实库约 17% 邮件没有正文）与 unknown 每次搜索都会出现，只留给 Agent 工具读。
+
+Agent 元数据工具：布尔参数省略或传 null 表示不过滤，显式 false 原样生效，并回显实际生效的过滤条件。读取缺失正文时区分元数据缺失、正文缺失、所需格式缺失，给出定向补取命令，不能据此推断内容不存在；同线程后来的邮件可能引用了旧内容。
+
+Notion 日期过滤不再挡住已抓取正文的本地入库。新的 skipped 行记录 `sync_skip_reason = notion_date_filter`，历史行的 NULL 视为原因未知。定向补取用 `mailagent backfill body --internal-ids ID`；批量补取可加 `--include-unmirrored`，沿用日期、邮箱、数量上限与 dry-run。两者都不会在搜索时自动抓取历史邮件。
