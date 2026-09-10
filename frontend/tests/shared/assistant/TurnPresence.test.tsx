@@ -166,6 +166,25 @@ describe('TurnPresenceRow — 阶段纪律矩阵', () => {
     expect(screen.queryByTitle('本回合已运行')).toBeNull()
   })
 
+  test('error 带原因 → 「响应出错 · 首行」，全文进 title，过长截断', () => {
+    const reason = 'HTTP 400 Bad Request — MissingSessionID\n第二行不进行内'
+    const view = render(
+      <TurnPresenceRow stage="error" stallLevel={0} completed={false} errorReason={reason} />
+    )
+    const label = screen.getByText('响应出错')
+    expect(label.getAttribute('title')).toBe(reason)
+    expect(label.textContent).toBe('响应出错 · HTTP 400 Bad Request — MissingSessionID')
+    view.rerender(
+      <TurnPresenceRow
+        stage="error"
+        stallLevel={0}
+        completed={false}
+        errorReason={'x'.repeat(90)}
+      />
+    )
+    expect(screen.getByText('响应出错').textContent).toBe(`响应出错 · ${'x'.repeat(80)}…`)
+  })
+
   test('idle 挂载帧 → 整行不渲染（挂载不是下降沿，无幽灵 celebrate）', () => {
     render(<TurnPresenceRow stage="idle" stallLevel={0} completed={true} />)
     expect(screen.queryByTestId('turn-presence')).toBeNull()

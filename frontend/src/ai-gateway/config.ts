@@ -358,6 +358,9 @@ export interface AiGatewayConfig {
   providerRegistryEnabled?: boolean
   /** P1 snapshot-backed resolver injected by Electron main. Tests may inject a fake resolver. */
   providerModelResolver?: ProviderModelResolver
+  /** 写一行 JSON 到 ai-gateway.log（Electron main 注入；打包后 main 进程的 console 无处可看）。
+   *  用于流错误等排障记录。省略 → 不落盘。实现约定永不抛错。 */
+  logEvent?: (record: Record<string, unknown>) => void
   /** Persist a finished turn (Electron wrapper → chat_db). Omitted → no persistence. */
   persistTurn?: (turn: PersistTurnInput) => void | Promise<void>
   /** M1c — fire-and-forget auto-capture trigger. Called in onFinish AFTER persistTurn with the

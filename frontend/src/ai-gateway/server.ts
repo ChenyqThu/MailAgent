@@ -25,7 +25,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 // B1 (detached runs) — the exact header set ai@7's pipeUIMessageStreamToResponse sends, so the manual
 // server-side drain below stays wire-identical for the client (content-type text/event-stream +
 // x-vercel-ai-ui-message-stream: v1 + no-buffering hints).
-import { APICallError, UI_MESSAGE_STREAM_HEADERS } from 'ai'
+import { UI_MESSAGE_STREAM_HEADERS } from 'ai'
+
+import { formatStreamError, reportStreamError } from './streamError'
 
 import type { AiGatewayConfig, GroupSessionFacts, SessionAgentIdentity } from './config'
 // task 09-02 — the generate_image store's id → path mapper (shared with the tool, single source).
@@ -338,15 +340,17 @@ async function handleChat(
     // swallowed error and the rich card silently vanished ("卡执行中然后没了"); now the card renders a
     // real error and the cause is logged for forensics (mirrors the AG-UI route's RunError emit).
     onError: (error: unknown) => {
-      const msg = error instanceof Error ? error.message : String(error)
       console.error('[ai-gateway] /api/ai/chat stream error', error)
-      // task 09-02 — provider 拒绝的**判据**在 APICallError.responseBody 里，message 往往只有
-      // 一句「Bad Request」。不带上它，UI 那句「响应出错」就没有任何可查线索（DeepSeek 拒收一
-      // 份工具 JSON Schema 时，说清是哪个 schema 哪一条的整句都只在 responseBody 中）。压平换行
-      // 并截到 400 字符 —— 它进的是聊天气泡里的错误行，不是日志。
-      const responseBody = APICallError.isInstance(error) ? error.responseBody : undefined
-      const detail = responseBody?.replace(/\s+/g, ' ').trim().slice(0, 400)
-      return detail ? `${msg} — ${detail}` : msg
+      // HTTP 状态 + provider 返回体进气泡错误行，同一行落 ai-gateway.log（streamError.ts）。
+      const text = formatStreamError(error)
+      cfg.logEvent?.({
+        event: 'chat_stream_error',
+        mode: run.contextMode ?? null,
+        sessionId: run.sessionId,
+        model: run.modelId,
+        error: text
+      })
+      return text
     },
     onFinish: makePersistOnFinish(cfg, run, { isClientGone })
   }
@@ -432,9 +436,13 @@ async function handleChat(
           originalMessages: run.rawMessages,
           onError: (error: unknown) => {
             rawError = error
-            const message = error instanceof Error ? error.message : String(error)
             console.error('[ai-gateway] /api/ai/chat stream error', error)
-            return message
+            return reportStreamError(
+              cfg.logEvent,
+              'chat_stream_error',
+              { mode: run.contextMode ?? null, sessionId: run.sessionId, model: run.modelId },
+              error
+            )
           },
           onFinish: (event) => {
             finishEvent = event
@@ -507,8 +515,7 @@ async function handleChat(
               : [
                   {
                     type: 'error',
-                    errorText:
-                      outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
+                    errorText: formatStreamError(outcome.error)
                   }
                 ]
           )
@@ -550,8 +557,7 @@ async function handleChat(
               : [
                   {
                     type: 'error',
-                    errorText:
-                      outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
+                    errorText: formatStreamError(outcome.error)
                   }
                 ]
           )

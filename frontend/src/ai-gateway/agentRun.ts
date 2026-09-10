@@ -27,6 +27,7 @@
 import { APICallError, type ToolSet } from 'ai'
 
 import type { AiGatewayConfig } from './config'
+import { reportStreamError } from './streamError'
 import {
   makeIdGenerator,
   makePersistOnFinish,
@@ -693,7 +694,12 @@ async function runHeadlessAgentOnce(
       onError: (error: unknown) => {
         if (streamError == null) streamError = error
         console.error('[ai-gateway] agent-run stream error', error)
-        return error instanceof Error ? error.message : String(error)
+        return reportStreamError(
+          cfg2.logEvent,
+          'agent_run_stream_error',
+          { sessionId: run.sessionId, model: run.modelId },
+          error
+        )
       },
       onFinish: async (args) => {
         aborted = args.isAborted === true

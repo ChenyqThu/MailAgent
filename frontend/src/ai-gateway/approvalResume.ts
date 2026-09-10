@@ -28,6 +28,7 @@ import {
 } from './chatRun'
 import { wrapCfgForAgentRun } from './agentRun'
 import type { AiGatewayConfig, SessionAgentIdentity } from './config'
+import { reportStreamError } from './streamError'
 import {
   applyApprovalResponseToMessages,
   type ToolApprovalResponsePayload
@@ -237,9 +238,13 @@ export async function resumeApprovalRun(
       // write that fails after the user approves it lost its reason on both ends. Same handler as
       // the canonical /api/ai/chat route (server.ts).
       onError: (error: unknown) => {
-        const msg = error instanceof Error ? error.message : String(error)
         console.error('[ai-gateway] approval resume stream error', error)
-        return msg
+        return reportStreamError(
+          runCfg.logEvent,
+          'approval_resume_stream_error',
+          { sessionId: run.sessionId, model: run.modelId },
+          error
+        )
       },
       onFinish: async (args) => {
         if (!args.isAborted) {

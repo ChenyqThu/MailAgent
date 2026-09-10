@@ -1156,6 +1156,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     model: getLlmModel(),
     providerRegistryEnabled,
     providerModelResolver,
+    logEvent: gatewayLogLine,
     // L4 群聊 UX 批 — 调度器 turn 生命周期 → renderer（在场态 / 流式正文 / 沉默 / 停止原因）。
     onGroupTurnEvent: (event) => broadcastChatEvent('chat:group-turn', { ...event }),
     ...(queuedInputEnabled

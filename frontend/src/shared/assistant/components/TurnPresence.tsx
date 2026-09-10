@@ -67,6 +67,7 @@ import {
 } from '@shared/components/agents/agentAvatarIdentity'
 import { avatarShellClass } from '@shared/components/agents/avatarShell'
 import { useAssistantIdentity } from '@shared/assistant/assistantIdentity'
+import { turnErrorText } from '@shared/assistant/turnErrorText'
 
 /** 主 agent 身份（0813）→ 本行的头像/名字投影：owner 配置的 bot 头像直接用；上传图走
  *  imageSrc（静态 img —— 状态表情对图片无意义）；未配置/legacy = 官方形象 sphere/orange。 */
@@ -215,6 +216,8 @@ interface TurnPresenceRowProps {
   imageSrc?: string
   /** 主 agent 名字（0813）：进「{{name}} 思考中…」文案；缺省 'AI'（= 改动前文案逐字）。 */
   assistantName?: string
+  /** `error` 时的原因全文（消息 status.error 转成的文本）。行内只显示首行前段，全文进 title。 */
+  errorReason?: string
   className?: string
 }
 
@@ -228,6 +231,7 @@ export function TurnPresenceRow({
   config,
   imageSrc,
   assistantName,
+  errorReason,
   className
 }: TurnPresenceRowProps): React.JSX.Element | null {
   const { t } = useTranslation()
@@ -305,7 +309,15 @@ export function TurnPresenceRow({
       </span>
     )
   } else if (stage === 'error') {
-    text = <span className="text-aux text-fail">{t('chat.status.error')}</span>
+    // 原因首行前段跟在「响应出错」后面；全文进 title，完整明细在消息底部的错误区。
+    const firstLine = errorReason?.split('\n')[0]?.trim() ?? ''
+    const brief = firstLine.length > 80 ? `${firstLine.slice(0, 80)}…` : firstLine
+    text = (
+      <span className="text-aux text-fail" title={errorReason}>
+        {t('chat.status.error')}
+        {brief && <span className="opacity-80"> · {brief}</span>}
+      </span>
+    )
   }
 
   return (
@@ -347,6 +359,12 @@ export function TurnPresence({ config, className }: TurnPresenceProps): React.JS
   const readOnly = useThreadReadOnly()
   const { stage, stallLevel, toolName } = useTurnStage()
   const completed = useAuiState((s) => s.message.status?.type === 'complete')
+  // selector 只取原值（不在里面加工，否则 getSnapshot 每次新引用 → React #185）。
+  const errorValue = useAuiState((s) =>
+    s.message.status?.type === 'incomplete' && s.message.status.reason === 'error'
+      ? s.message.status.error
+      : undefined
+  )
   const identity = useAssistantPresenceIdentity()
   if (!isLast || readOnly) return null
   return (
@@ -358,6 +376,7 @@ export function TurnPresence({ config, className }: TurnPresenceProps): React.JS
       config={config ?? identity.config}
       imageSrc={config ? undefined : identity.imageSrc}
       assistantName={identity.name}
+      errorReason={turnErrorText(errorValue)}
       className={className}
     />
   )

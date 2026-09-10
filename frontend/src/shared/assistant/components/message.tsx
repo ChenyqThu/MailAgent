@@ -27,6 +27,7 @@ import { parseQueuedFollowups } from '@shared/assistant/queuedFollowups'
 
 import { getAssistantPartComponents } from '../tools/registerToolUIs'
 import { TurnPresence, TurnPresenceEmpty } from './TurnPresence'
+import { turnErrorText } from '@shared/assistant/turnErrorText'
 import { AssistantActionBar, UserActionBar } from './action-bar'
 import { FollowupSuggestions } from './FollowupSuggestions'
 import { CompactCard } from './CompactCard'
@@ -247,7 +248,7 @@ function AssistantMessageError(): React.JSX.Element | null {
     )
   )
   if (error === undefined) return null
-  const detail = typeof error === 'string' ? error : JSON.stringify(error)
+  const detail = turnErrorText(error) ?? ''
   return (
     <div className="rounded-md border border-fail/30 bg-fail/10 px-2.5 py-1.5 text-aux text-fail">
       <div className="flex items-center justify-between gap-2">
