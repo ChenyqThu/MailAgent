@@ -481,24 +481,24 @@ function ObjectTab({
       <span className="ttab-title">{title}</span>
       {tab.kind === 'email' ? (
         <span
-          className={`ttab-retention${dirty ? ' is-dirty' : ''}${tab.pinned !== false ? ' is-pinned' : ''}`}
+          className={`ttab-retention${dirty ? ' is-dirty' : ''}${tab.pinned === true ? ' is-pinned' : ''}`}
         >
-          {dirty && tab.pinned === false && <span className="ttab-dirty" title={t('tabs.dirty')} />}
+          {dirty && tab.pinned !== true && <span className="ttab-dirty" title={t('tabs.dirty')} />}
           <button
             type="button"
             className="ttab-pin"
-            aria-label={t(tab.pinned !== false ? 'tabs.unpin' : 'tabs.pin')}
-            title={t(tab.pinned !== false ? 'tabs.unpin' : 'tabs.pin')}
-            aria-pressed={tab.pinned !== false}
+            aria-label={t(tab.pinned === true ? 'tabs.unpin' : 'tabs.pin')}
+            title={t(tab.pinned === true ? 'tabs.unpin' : 'tabs.pin')}
+            aria-pressed={tab.pinned === true}
             tabIndex={closing ? -1 : 0}
             onPointerDown={(e) => e.stopPropagation()}
             onKeyDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation()
-              useTabWorkspace.getState().updateTab(tab.id, { pinned: tab.pinned === false })
+              useTabWorkspace.getState().updateTab(tab.id, { pinned: tab.pinned !== true })
             }}
           >
-            <Pin size={12} fill={tab.pinned !== false ? 'currentColor' : 'none'} />
+            <Pin size={12} fill={tab.pinned === true ? 'currentColor' : 'none'} />
           </button>
         </span>
       ) : dirty ? (

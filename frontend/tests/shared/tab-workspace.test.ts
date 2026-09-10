@@ -90,6 +90,21 @@ describe('邮件浏览与保留', () => {
     expect(s().browseEmail(5).outcome).toBe('rejected')
     expect(s().tabs.map((tab) => tab.targetId)).toEqual([1, 2, 3, 4])
   })
+
+  test('旧存档的邮件标签按未保留处理：满员时点新邮件复用标签，不拒绝', async () => {
+    const tabs = Array.from({ length: 10 }, (_, i) => ({
+      kind: 'email',
+      targetId: i + 1,
+      title: `邮件 ${i + 1}`,
+      lastActiveAt: i + 1
+    }))
+    const mod = await reboot(
+      JSON.stringify({ v: 1, tabs, active: 'email:10', mainPage: 'mail', maxTabs: 10 })
+    )
+    expect(mod.useTabWorkspace.getState().tabs.every((tab) => tab.pinned === false)).toBe(true)
+    expect(mod.useTabWorkspace.getState().browseEmail(99).outcome).toBe('replaced')
+    expect(mod.useTabWorkspace.getState().tabs).toHaveLength(10)
+  })
 })
 
 const s = (): ReturnType<typeof useTabWorkspace.getState> => useTabWorkspace.getState()

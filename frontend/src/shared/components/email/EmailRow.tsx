@@ -354,14 +354,6 @@ function EmailRowInner({
       role="button"
       tabIndex={0}
       onClick={handleRowClick}
-      onDoubleClick={(event) => {
-        if (
-          batchMode === 'on' ||
-          (event.target instanceof Element && event.target.closest('button'))
-        )
-          return
-        retainEmail()
-      }}
       onContextMenu={(event) => {
         if (batchMode === 'on') return
         event.preventDefault()

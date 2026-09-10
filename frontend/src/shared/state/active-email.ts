@@ -8,8 +8,9 @@
 //
 // task 08-27 P2 Lane W —— 降为「激活邮件标签 targetId 的投影」：
 //   - `setActive` 保留签名作为**唯一桥**（15+ 调用点不散改），内部转发标签 store：
-//     默认浏览复用（偏好可改为每封新开），`mode:'open'` 显式保留；`mode:'replace'`
-//     恒走浏览规则（J/K · 归档/删除后续选 · 冷启动选第一条）；
+//     默认复用浏览标签；偏好「每封新开」时开未保留的新标签（满额按 LRU 挤掉最旧的）；
+//     `mode:'open'` 显式保留（右键「在新标签页打开」）；`mode:'replace'` 恒走浏览规则
+//     （J/K · 归档/删除后续选 · 冷启动选第一条）；
 //   - 标签 store 侧的激活变化（标签条点击 / 关标签后继承 / 重启恢复）经下方订阅
 //     反向投影回来，并带 navTarget 语义（目标可能不在当前列表，豁免 active-reset
 //     抢选中 + 让列表滚动定位）；
@@ -69,10 +70,11 @@ export const useActiveEmail = create<ActiveEmailStore>((set, get) => {
       set({ activeInternalId: id, navTargetId: opts?.navTarget && id !== null ? id : null })
       if (id === null || usePopoutMode.getState().isPopout) return
       const accepted =
-        opts?.mode === 'replace' ||
-        (opts?.mode !== 'open' && !useTabWorkspace.getState().emailOpenInNewTab)
-          ? replaceObjectTab('email', id, opts?.title)
-          : openObjectTab('email', id, opts?.title)
+        opts?.mode === 'open'
+          ? openObjectTab('email', id, opts?.title)
+          : opts?.mode === 'replace' || !useTabWorkspace.getState().emailOpenInNewTab
+            ? replaceObjectTab('email', id, opts?.title)
+            : openObjectTab('email', id, opts?.title, false)
       // 标签满且全 locked 被拒（toast「标签已满」已出）→ 回滚本地投影（check 波3 续改）。
       // 不回滚 = 详情区显示新邮件、标签条还高亮旧标签，且点那个高亮标签 activateTab
       // 因 active === id 早退，必须点别的标签才能恢复。

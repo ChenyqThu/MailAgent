@@ -120,7 +120,8 @@ export interface TabDescriptor {
   /** 有关掉就没了的未保存现场（写回复中 / 草稿写了一半）→ 不参与自动淘汰（标签上画琥珀点）。
    *  判据单源在 tab-workspace-bridge::recomputeObjectTabLock。 */
   readonly locked: boolean
-  /** Explicit retention, independent of composer/dirty protection. Missing legacy value means pinned. */
+  /** 用户主动保留（Pin），与 composer / dirty 的 `locked` 保护相互独立。缺省 = 未保留：旧存档里的
+   *  邮件标签是老版本每点一封自动开的，不是用户选的。 */
   readonly pinned?: boolean
   readonly draft?: DraftSnapshot
   readonly drawerOpen: boolean
@@ -200,7 +201,9 @@ export interface TabWorkspaceState {
    *  拿不到标题的入口先开着，详情加载完再 `updateTab` 补）。 */
   browseEmail(targetId: number, title?: string): ReplaceTabResult
   setEmailOpenInNewTab(value: boolean): void
-  openTab(kind: TabKind, targetId: number, title?: string): OpenTabResult
+  /** `pin` 只对邮件标签有意义：默认 true（显式打开 = 保留）；「每封新开」偏好的点击传 false，
+   *  开出来的标签可被浏览复用与 LRU 淘汰。 */
+  openTab(kind: TabKind, targetId: number, title?: string, pin?: boolean): OpenTabResult
   /** J/K 导航、归档后续选 —— 在**当前激活的对象标签里原位换目标**，不是每按一次开一个
    *  （连按十次 J 开十个标签会把 LRU 打爆）。三条分支：
    *  - 目标已经开在**别的**标签里 → 只激活它，当前标签原样保留（不关不改）；
@@ -313,7 +316,7 @@ function parseTab(raw: unknown): TabDescriptor | null {
     lastActiveAt,
     // 搜索标签永不 locked（词表注释）—— 存档里被写进 true 也在这里放平。
     locked: rec.locked === true && rec.kind !== 'search',
-    pinned: rec.kind === 'email' ? rec.pinned !== false : false,
+    pinned: rec.kind === 'email' && rec.pinned === true,
     drawerOpen: rec.drawerOpen === true,
     scrollTop,
     ...(draft === undefined ? {} : { draft }),
@@ -406,11 +409,11 @@ function write(slice: PersistedSlice): void {
 
 // ── 纯逻辑（可单独测，也让 store 方法读起来是一句话）──────────────────────────
 
-/** 淘汰候选：**非激活且非锁定**里 `lastActiveAt` 最小的那个。没有候选返回 null。 */
+/** 淘汰候选：**非激活、非锁定、未保留（Pin）**里 `lastActiveAt` 最小的那个。没有候选返回 null。 */
 function pickEvictable(tabs: readonly TabDescriptor[], active: ActiveSlot): TabDescriptor | null {
   let victim: TabDescriptor | null = null
   for (const tab of tabs) {
-    if (tab.id === active || tab.locked || (tab.kind === 'email' && tab.pinned !== false)) continue
+    if (tab.id === active || tab.locked || tab.pinned === true) continue
     if (victim === null || tab.lastActiveAt < victim.lastActiveAt) victim = tab
   }
   return victim
@@ -461,7 +464,7 @@ export const useTabWorkspace = create<TabWorkspaceState>((set, get) => {
         state.tabs.filter(
           (tab) =>
             tab.kind === 'email' &&
-            tab.pinned === false &&
+            tab.pinned !== true &&
             !tab.locked &&
             tab.chatSessionId === undefined
         )
@@ -484,12 +487,10 @@ export const useTabWorkspace = create<TabWorkspaceState>((set, get) => {
         })
         return { outcome: 'replaced', id, previousId: candidate.id }
       }
-      const result = state.openTab('email', targetId, title)
-      if (result.outcome !== 'rejected') get().updateTab(id, { pinned: false })
-      return result
+      return state.openTab('email', targetId, title, false)
     },
 
-    openTab(kind, targetId, title) {
+    openTab(kind, targetId, title, pin = true) {
       const state = get()
       const id = tabId(kind, targetId)
       const stamp = nextStamp()
@@ -501,7 +502,7 @@ export const useTabWorkspace = create<TabWorkspaceState>((set, get) => {
               ? {
                   ...t,
                   lastActiveAt: stamp,
-                  ...(kind === 'email' ? { pinned: true } : {}),
+                  ...(kind === 'email' && pin ? { pinned: true } : {}),
                   title: title !== undefined && title !== '' ? title : t.title
                 }
               : t
@@ -530,7 +531,7 @@ export const useTabWorkspace = create<TabWorkspaceState>((set, get) => {
         title: title ?? '',
         lastActiveAt: stamp,
         locked: false,
-        pinned: kind === 'email',
+        pinned: kind === 'email' && pin,
         drawerOpen: false,
         scrollTop: 0
       }

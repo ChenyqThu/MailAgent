@@ -142,15 +142,22 @@ describe('useActiveEmail — setActive 转发标签 store（08-27 标签工作�
 })
 
 describe('useActiveEmail — 标签 store 侧激活的反向投影', () => {
-  test('每封新开偏好保留邮件，显式 J/K 仍使用浏览标签', () => {
+  test('每封新开：每次点击开未保留的新标签，J/K 在当前标签里原位切换', () => {
     useTabWorkspace.getState().setEmailOpenInNewTab(true)
     useActiveEmail.getState().setActive(1)
     useActiveEmail.getState().setActive(2)
-    expect(useTabWorkspace.getState().tabs.every((tab) => tab.pinned)).toBe(true)
+    expect(useTabWorkspace.getState().tabs.map((tab) => tab.id)).toEqual(['email:1', 'email:2'])
+    expect(useTabWorkspace.getState().tabs.every((tab) => tab.pinned === false)).toBe(true)
     useActiveEmail.getState().setActive(3, { mode: 'replace' })
-    useActiveEmail.getState().setActive(4, { mode: 'replace' })
-    expect(useTabWorkspace.getState().tabs.map((tab) => tab.id)).toEqual(['email:1', 'email:2', 'email:4'])
-    expect(useTabWorkspace.getState().tabs[2].pinned).toBe(false)
+    expect(useTabWorkspace.getState().tabs.map((tab) => tab.id)).toEqual(['email:1', 'email:3'])
+  })
+  test('每封新开：满额按 LRU 挤掉最旧的标签，不拒绝', () => {
+    useTabWorkspace.getState().setEmailOpenInNewTab(true)
+    for (let i = 1; i <= 9; i++) useActiveEmail.getState().setActive(i)
+    const ids = useTabWorkspace.getState().tabs.map((tab) => tab.id)
+    expect(ids).toHaveLength(8)
+    expect(ids).not.toContain('email:1')
+    expect(useActiveEmail.getState().activeInternalId).toBe(9)
   })
   test('标签条激活另一封 → 投影更新且带 navTarget 豁免', () => {
     useActiveEmail.getState().setActive(1, { mode: 'open' })

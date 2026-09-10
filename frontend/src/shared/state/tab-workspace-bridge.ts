@@ -80,9 +80,14 @@ export function announceTabResult(result: OpenTabResult | ReplaceTabResult | nul
  *  （active-email.setActive / matters selectMatter）据此回滚本地选中 —— 不回滚就是
  *  「详情显示新对象、标签条还高亮旧标签」的劈叉。popout 走纯本地投影不写标签 store，
  *  视为接受（回滚反而会把 popout 的本地选中打掉）。 */
-export function openObjectTab(kind: TabKind, targetId: number, title?: string): boolean {
+export function openObjectTab(
+  kind: TabKind,
+  targetId: number,
+  title?: string,
+  pin?: boolean
+): boolean {
   if (inert()) return true
-  const result = useTabWorkspace.getState().openTab(kind, targetId, title)
+  const result = useTabWorkspace.getState().openTab(kind, targetId, title, pin)
   announceTabResult(result)
   return result.outcome !== 'rejected'
 }

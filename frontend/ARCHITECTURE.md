@@ -191,7 +191,7 @@ chrome；Web SPA 走 `prefers-color-scheme` MediaQuery listener；Island 通过 
 标签配额 `MAX_TABS_DEFAULT = 10`（设置页可调 4–12），满员按 LRU 静默驱逐非激活、非锁定、非手动保留的标签。
 ⌘W / ⌘⇧T / ⌃⇥ / ⌘1-9 三个对象域共用。
 
-邮件默认通过 `browseEmail` 复用最近使用的可替换邮件标签；不替换手动保留、composer 打开、dirty 快照或绑定会话的标签。双击邮件／右键新标签打开／Tab Pin 都显式保留，目标已存在时只激活并保留，不重复创建。设置 `emailOpenInNewTab` 可改为每封新开；J/K 的显式 replace 仍走浏览规则。旧存档缺少 pinned 字段时视作已保留。
+邮件默认通过 `browseEmail` 复用最近用过的一个可替换邮件标签；手动保留（Pin）、composer 打开、有 dirty 快照或绑定会话的标签不会被替换。右键「在新标签页打开」和标签上的 Pin 都显式保留，目标已开着时只激活并保留，不重复创建。双击邮件行没有标签语义。设置 `emailOpenInNewTab` 打开后，每次点击开一个**未保留**的新标签，满员按 LRU 挤掉最旧的；J/K 的显式 replace 在两种模式下都走浏览规则。旧存档里的邮件标签按未保留处理 —— 它们是老版本每点一封自动开的，不是用户选的，按保留处理会让满员的用户升级后点不开任何新邮件。
 
 `pinned` 与 `locked` 独立：编辑中允许取消保留，dirty 圆点继续保护现场；发送清理快照并关闭 composer 后，未保留标签可再次复用。邮件标签只占一个状态槽：保留显示实心 Pin，未保留的 dirty 显示圆点，hover/focus 暴露 Pin 操作，不加浏览中文字。
 

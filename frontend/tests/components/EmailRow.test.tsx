@@ -110,18 +110,17 @@ describe('EmailRow — 8 combo render snapshots (DESIGN.md §5.1)', () => {
 })
 
 describe('EmailRow — semantic behaviour', () => {
-  test('double-click retains the target without duplicates; context menu opens retained', async () => {
+  test('double-click does not retain; context menu retains the same tab without duplicates', async () => {
     useTabWorkspace.setState({ tabs: [], active: 'main', emailOpenInNewTab: false })
     useTabWorkspace.getState().browseEmail(101)
     const { container } = renderRow({ email: makeEmail(), selected: true })
     const row = container.querySelector('article')
     if (!row) throw new Error('Missing email row')
     fireEvent.doubleClick(row)
-    expect(useTabWorkspace.getState().tabs).toHaveLength(1)
-    expect(useTabWorkspace.getState().tabs[0].pinned).toBe(true)
-    useTabWorkspace.getState().updateTab('email:101', { pinned: false })
+    expect(useTabWorkspace.getState().tabs[0].pinned).toBe(false)
     fireEvent.contextMenu(row)
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Open in new tab' }))
+    expect(useTabWorkspace.getState().tabs).toHaveLength(1)
     expect(useTabWorkspace.getState().tabs[0].pinned).toBe(true)
   })
   test('ai-strip surfaces the Chinese action label (mockup-inbox.html row pattern)', () => {
