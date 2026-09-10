@@ -130,6 +130,7 @@ export interface TodaySectionItem {
   atMs: number
   /** true → accent 描边 + 右侧动作按钮（design §十「条目分两级」）。 */
   actionable: boolean
+  reply?: TodayReplyItem
   link: TodaySectionLink
 }
 
@@ -177,10 +178,11 @@ export function buildMeetItems(
 export function buildReplyItems(reply: readonly TodayReplyItem[]): TodaySectionItem[] {
   const items: TodaySectionItem[] = []
   for (const row of reply) {
-    const atMs = Date.parse(row.atIso)
+    const atMs = Date.parse(row.oldestAtIso ?? row.atIso)
     if (!Number.isFinite(atMs)) continue
     items.push({
       id: row.id,
+      reply: row,
       source: 'mail',
       title: row.title,
       why: row.why,

@@ -8,8 +8,13 @@ import type { AgendaEntry } from './calendar'
 
 /** 「待回邮件」的一条。`why` 是后端组装的一句话，空串 = 组装不出（按缺席渲染，不兜底）。 */
 export interface TodayReplyItem {
-  /** 跨源唯一：`mail:{internal_id}`。 */
+  /** 跨源唯一：`thread:{thread_id}`；无线程 ID 时为 `mail:{internal_id}`。 */
   id: string
+  threadId?: string | null
+  oldestAtIso?: string
+  pendingCount?: number
+  internalIds?: number[]
+  messages?: TodayReplyItem[]
   source: 'mail'
   title: string
   /** 「为什么是今天」——「需要回复 · 等了 26 小时」。**空串 = 缺席**。 */
@@ -33,12 +38,8 @@ export interface TodayData {
 }
 
 export interface TodayApi {
-  /** 今日聚合读。
-   *
-   *  🔴 **失败语义两侧不同，调用方必须两边都扛得住**：`HttpApi` 就地吞错返
-   *  `{ reply: [], nextHardPoint: null }`；Electron 侧（`today:get` → `daemonRead`）
-   *  **原样 reject**（handler 注释里写明「本层不吞错」）。两者最终都落在
-   *  `useTodaySections` 的 `today.data ?? EMPTY_TODAY` 上 —— 今日页另外四节自有数据源，
-   *  这一条挂了不该把整页打成错误态。别据此在 renderer 里省掉那个 `??` 兜底。 */
+  /** Errors reject on both transports; the page keeps stale data and shows a warning. */
   get(opts?: { tz?: string; replyLimit?: number }): Promise<TodayData>
+  dismiss(internalIds: number[]): Promise<{ operationId: string }>
+  undo(operationId: string): Promise<{ operationId: string }>
 }

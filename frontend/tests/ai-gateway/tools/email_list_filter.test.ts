@@ -18,7 +18,11 @@ describe('email_list_filter tool', () => {
     const tool = createEmailReadTools(domain).email_list_filter
     const input = emailSearchSchema.parse({ subject_contains: 'redis', limit: 10 })
     const out = await runTool(tool, input)
-    expect(out).toEqual({ count: 2, items: ITEMS })
+    expect(out).toMatchObject({
+      count: 2,
+      items: ITEMS,
+      effective_filters: { subject: 'redis', is_read: null, is_flagged: null }
+    })
   })
 
   test('records an ok audit entry (input/output/duration) into the bound collector', async () => {
@@ -31,7 +35,11 @@ describe('email_list_filter tool', () => {
     const e = auditEntries[0]
     expect(e).toMatchObject({ toolUseId: 'tc-1', toolName: 'email_list_filter', status: 'ok' })
     expect(typeof e.durationMs).toBe('number')
-    expect(JSON.parse(e.outputJson)).toEqual({ count: 2, items: ITEMS })
+    expect(JSON.parse(e.outputJson)).toMatchObject({
+      count: 2,
+      items: ITEMS,
+      effective_filters: { subject: 'redis' }
+    })
   })
 
   test('a serve-api error becomes a thrown ToolExecutionError + error audit entry', async () => {
@@ -68,6 +76,17 @@ describe('email_list_filter tool', () => {
     test('no mailbox → exclude_drafts=true rides the query', async () => {
       const q = await queryOf({ subject_contains: 'redis' })
       expect(q.get('exclude_drafts')).toBe('true')
+    })
+
+    test('null and omitted booleans do not filter; explicit false survives the wire', async () => {
+      for (const input of [{}, { is_read: null, is_flagged: null }]) {
+        const q = await queryOf(input)
+        expect(q.has('isRead')).toBe(false)
+        expect(q.has('isFlagged')).toBe(false)
+      }
+      const q = await queryOf({ is_read: false, is_flagged: false })
+      expect(q.get('isRead')).toBe('false')
+      expect(q.get('isFlagged')).toBe('false')
     })
 
     test('an explicit mailbox (incl. 草稿箱) → the param is absent entirely', async () => {

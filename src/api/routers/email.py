@@ -346,10 +346,11 @@ async def get_email_body(
 
     summary = repo.get_body_summary(internal_id)
     if summary is None:
+        reason = "body_missing" if repo.get_metadata(internal_id) else "metadata_missing"
         raise APIError(
             "E_NOT_FOUND",
-            f"No body in SQLite for internal_id={internal_id}",
-            hint="可能未经 v4 双写; 后台跑 backfill body 回填",
+            f"{reason}: internal_id={internal_id}",
+            hint=f"mailagent backfill body --internal-ids {internal_id}",
             source="sqlite",
         )
 
@@ -367,8 +368,8 @@ async def get_email_body(
     if body_record is None:
         raise APIError(
             "E_NOT_FOUND",
-            f"No body in SQLite for internal_id={internal_id}",
-            hint="可能未经 v4 双写; 后台跑 backfill body 回填",
+            f"format_missing: {fmt} for internal_id={internal_id}",
+            hint=f"mailagent backfill body --internal-ids {internal_id}",
             source="sqlite",
         )
     content = body_record.content
@@ -503,6 +504,8 @@ async def search_emails(
     # transformed_query? + mode)。
     data = {
         "items": items,
+        "coverage": search_result.coverage,
+        "effective_filters": search_result.effective_filters,
         "total_indexed": total_indexed,
         "total_matches": total_matches,
         "has_more": has_more,

@@ -149,15 +149,15 @@ describe('TabStrip — 对象标签', () => {
     expect(state.active).toBe('email:2')
   })
 
-  test('锁定标签带琥珀点（title 提示），未锁定没有', () => {
+  test('邮件保留态用 pin，不叠加独立锁定标记', () => {
     const { container } = render(<TabStrip />)
     act(() => {
       useTabWorkspace.getState().openTab('email', 1, '写一半的回复')
       useTabWorkspace.getState().openTab('email', 2, '只是看看')
       useTabWorkspace.getState().updateTab('email:1', { locked: true })
     })
-    expect(container.querySelectorAll('.ttab-lock').length).toBe(1)
-    expect(screen.getByTitle('有未完成的工作，不会被自动关闭')).toBeTruthy()
+    expect(container.querySelectorAll('.ttab-lock').length).toBe(0)
+    expect(container.querySelectorAll('.ttab-pin[aria-pressed="true"]').length).toBe(2)
   })
 
   test('空标题（deeplink 先开着）显示未命名兜底文案', () => {
@@ -263,12 +263,16 @@ describe('TabStrip — 改动点与关闭守卫（dogfood 波3）', () => {
       // dirty 快照在场（真实链路里 live 写快照 + recompute 会顺带 locked=true）
       useTabWorkspace
         .getState()
-        .updateTab('email:1', { draft: { kind: 'compose', dirty: true }, locked: true })
+        .updateTab('email:1', {
+          draft: { kind: 'compose', dirty: true },
+          locked: true,
+          pinned: false
+        })
       useTabWorkspace.getState().updateTab('email:2', { locked: true })
     })
     // email:1 dirty+locked → 只画 dirty 点；email:2 只 locked → 琥珀点
     expect(container.querySelectorAll('.ttab-dirty').length).toBe(1)
-    expect(container.querySelectorAll('.ttab-lock').length).toBe(1)
+    expect(container.querySelectorAll('.ttab-lock').length).toBe(0)
     expect(screen.getByTitle('有未保存的修改')).toBeTruthy()
   })
 
@@ -353,7 +357,10 @@ describe('TabStrip — 开合动效（dogfood 轮4：关闭收缩淡出 / 新开
     const { container } = render(<TabStrip />)
     act(() => {
       useTabWorkspace.getState().setMaxTabs(4)
-      for (let i = 1; i <= 4; i++) useTabWorkspace.getState().openTab('email', i, `邮件 ${i}`)
+      for (let i = 1; i <= 4; i++) {
+        useTabWorkspace.getState().openTab('email', i, `邮件 ${i}`)
+        useTabWorkspace.getState().updateTab(`email:${i}`, { pinned: false })
+      }
     })
     // 先让这一批的入场标记到点摘除，隔离出「第 5 个」这次开合
     act(() => {
@@ -373,7 +380,7 @@ describe('TabStrip — 开合动效（dogfood 轮4：关闭收缩淡出 / 新开
   test('原位换目标（J/K 的 replaceActiveTab）不播动画：无幽灵、无入场', () => {
     const { container } = render(<TabStrip />)
     act(() => {
-      useTabWorkspace.getState().openTab('email', 1, 'A')
+      useTabWorkspace.getState().browseEmail(1, 'A')
     })
     act(() => {
       useTabWorkspace.getState().replaceActiveTab('email', 2, 'B')

@@ -6375,3 +6375,13 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   margin-left: auto;
   font-size: 12.5px;
 }
+
+/* Email retention shares one compact slot with unsaved changes. */
+.ttab-retention { width: 18px; height: 18px; flex-shrink: 0; display: grid; place-items: center; }
+.ttab-retention > * { grid-area: 1 / 1; }
+.ttab-pin { width: 18px; height: 18px; display: grid; place-items: center; opacity: 0; border-radius: 5px; color: rgb(var(--ink-fg-3)); }
+.ttab-retention.is-pinned .ttab-pin,
+.ttab:hover .ttab-pin, .ttab:focus-within .ttab-pin { opacity: 1; }
+.ttab:hover .ttab-retention .ttab-dirty, .ttab:focus-within .ttab-retention .ttab-dirty { visibility: hidden; }
+.ttab-pin:hover { background: rgb(var(--ink-fg) / 0.14); color: rgb(var(--ink-fg)); }
+@media (hover: none) { .ttab-pin { opacity: 1; } .ttab-retention.is-dirty .ttab-dirty { transform: translate(6px, -6px); } }

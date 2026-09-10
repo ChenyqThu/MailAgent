@@ -58,6 +58,7 @@ function openEmails(n: number): string[] {
   const ids: string[] = []
   for (let i = 1; i <= n; i++) {
     store.openTab('email', i, `邮件${i}`)
+    store.updateTab(tabId('email', i), { pinned: false })
     ids.push(tabId('email', i))
   }
   return ids

@@ -29,7 +29,7 @@ describe('snapshot — email_list_filter', () => {
     const input = { subject_contains: 'redis', limit: 10 }
     const gatewayOut = await runTool(gateway.email_list_filter, emailSearchSchema.parse(input))
 
-    expect(gatewayOut).toEqual({ count: 2, items: EMAIL_ITEMS })
+    expect(gatewayOut).toMatchObject({ count: 2, items: EMAIL_ITEMS, effective_filters: { subject: 'redis', is_read: null, is_flagged: null } })
   })
 })
 

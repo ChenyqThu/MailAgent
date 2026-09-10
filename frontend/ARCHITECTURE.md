@@ -188,8 +188,14 @@ chrome；Web SPA 走 `prefers-color-scheme` MediaQuery listener；Island 通过 
 `NAV_OBJECT_DOMAINS` 由 `frontend/tests/shared/tab-workspace.test.ts` 锁死（两处是同一件事的
 两种写法，单复数都不同，编译期对不上）。`search` 是无域的「新标签页」单例。
 
-标签配额 `MAX_TABS_DEFAULT = 10`（设置页可调 4–12），满员按 LRU 静默驱逐最久未用的非锁定标签。
+标签配额 `MAX_TABS_DEFAULT = 10`（设置页可调 4–12），满员按 LRU 静默驱逐非激活、非锁定、非手动保留的标签。
 ⌘W / ⌘⇧T / ⌃⇥ / ⌘1-9 三个对象域共用。
+
+邮件默认通过 `browseEmail` 复用最近使用的可替换邮件标签；不替换手动保留、composer 打开、dirty 快照或绑定会话的标签。双击邮件／右键新标签打开／Tab Pin 都显式保留，目标已存在时只激活并保留，不重复创建。设置 `emailOpenInNewTab` 可改为每封新开；J/K 的显式 replace 仍走浏览规则。旧存档缺少 pinned 字段时视作已保留。
+
+`pinned` 与 `locked` 独立：编辑中允许取消保留，dirty 圆点继续保护现场；发送清理快照并关闭 composer 后，未保留标签可再次复用。邮件标签只占一个状态槽：保留显示实心 Pin，未保留的 dirty 显示圆点，hover/focus 暴露 Pin 操作，不加浏览中文字。
+
+今日待回邮件按真实 thread_id 聚合（无 ID 的邮件独立），先聚合后限量，默认折叠。无需回复写入本机 `today_reply_dismissal`，仅覆盖操作时的邮件 ID 快照；撤销按 operation_id 删除，不能撤销后续操作。同线程新邮件照常出现。独立分钟时钟驱动日界，后台暂停，恢复／聚焦及前台 90 秒刷新兜底；读错误保留旧数据并提示。
 
 **AI Chat 标签的临时负 id**：新会话在发出第一条之前没有 session id，先用递减负数
 （`state/active-chat.ts::nextTempChatId`）当 `targetId` 开标签，首发拿到真 id 后 `retargetTab`

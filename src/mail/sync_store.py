@@ -1973,7 +1973,7 @@ class SyncStore:
     #                回滚 (回退 v72): 旧代码读不到 contact_profile_run (已 DROP),
     #                画像记录列空态但不炸; agent_run_log 留着不碍事。**已迁移的画像
     #                台账行不会自动搬回去** —— 生产该表 2026-08-31 才建, 行数极少。
-    DB_VERSION = 73
+    DB_VERSION = 74
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
 
@@ -5015,6 +5015,22 @@ class SyncStore:
                 raise SyncStoreMigrationError(
                     f"v73 migration (agent_run_log tables): {e}"
                 ) from e
+        # v74: per-message manual reply dismissal (seconds, local-only), and
+        # explicit Notion skip provenance. NULL provenance stays unknown for old rows.
+        # Additive rollback: old binaries simply ignore both structures.
+        if current_version < 74:
+            try:
+                cursor.execute("""CREATE TABLE IF NOT EXISTS today_reply_dismissal (
+                    internal_id INTEGER PRIMARY KEY REFERENCES email_metadata(internal_id) ON DELETE CASCADE,
+                    operation_id TEXT NOT NULL,
+                    dismissed_at REAL NOT NULL
+                )""")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_today_reply_operation ON today_reply_dismissal(operation_id)")
+                cols = {row[1] for row in cursor.execute("PRAGMA table_info(email_metadata)")}
+                if "sync_skip_reason" not in cols:
+                    cursor.execute("ALTER TABLE email_metadata ADD COLUMN sync_skip_reason TEXT")
+            except sqlite3.Error as exc:
+                raise SyncStoreMigrationError(f"v74 migration (reply decisions): {exc}") from exc
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
         # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →
@@ -5613,7 +5629,7 @@ class SyncStore:
                 pass
         return ok
 
-    def mark_skipped(self, internal_id: int) -> bool:
+    def mark_skipped(self, internal_id: int, reason: Optional[str] = None) -> bool:
         """标记邮件为跳过状态（因日期过滤等原因不同步到 Notion）
 
         Args:
@@ -5631,11 +5647,12 @@ class SyncStore:
                 cursor.execute("""
                     UPDATE email_metadata
                     SET sync_status = 'skipped',
+                        sync_skip_reason = ?,
                         sync_error = NULL,
                         next_retry_at = NULL,
                         updated_at = ?
                     WHERE internal_id = ?
-                """, (now, internal_id))
+                """, (reason, now, internal_id))
 
                 conn.commit()
                 logger.debug(f"Marked skipped: internal_id={internal_id}")

@@ -29,6 +29,7 @@ import { cn } from '@shared/lib/cn'
 import { TodayItemRow, type TodayRowHandlers } from './TodayItemRow'
 import { TodayNextHardPoint } from './TodayNextHardPoint'
 import { TodaySectionRow } from './TodaySectionRow'
+import { TodayReplyThreadRow } from './TodayReplyThreadRow'
 import { TodayListSkeleton } from './TodaySkeleton'
 import { TodayTimeline } from './TodayTimeline'
 import { TODAY_GROUP_ICONS, TODAY_GROUP_TONE, TODAY_TONE_CLASS } from './todayVocab'
@@ -172,9 +173,13 @@ export function TodaySurface(): React.ReactElement {
                         selected={section === view.id}
                       />
                       {/* 简化行在前（会 / 待回的信 / 当天报告 —— 这一节的正题），读态组在后。 */}
-                      {view.rows.map((item) => (
-                        <TodaySectionRow key={item.id} item={item} onOpen={openSectionItem} />
-                      ))}
+                      {view.rows.map((item) =>
+                        item.reply ? (
+                          <TodayReplyThreadRow key={item.id} item={item} onOpen={openSectionItem} />
+                        ) : (
+                          <TodaySectionRow key={item.id} item={item} onOpen={openSectionItem} />
+                        )
+                      )}
                       {view.groups.map((group) => {
                         const Icon = TODAY_GROUP_ICONS[group.id]
                         const toneClass = TODAY_TONE_CLASS[TODAY_GROUP_TONE[group.id]]
@@ -254,7 +259,9 @@ function SectionHeader({
       )}
       <span className="text-meta font-medium text-ink-fg-2">{t(`today.nav.${id}`)}</span>
       <span aria-hidden className="h-px flex-1 bg-ink-border-soft" />
-      <span className="text-micro text-ink-fg-3">{t('today.groupCount', { count })}</span>
+      <span className="text-micro text-ink-fg-3">
+        {t(id === 'reply' ? 'today.replyThreadCount' : 'today.groupCount', { count })}
+      </span>
     </div>
   )
 }

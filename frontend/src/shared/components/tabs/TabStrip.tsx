@@ -49,6 +49,8 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 
+import { Pin } from 'lucide-react'
+
 import { PlusIcon, SearchIcon, XIcon } from '@shared/components/icons'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { NAV_DOMAINS } from '@shared/navigation/registry'
@@ -477,7 +479,29 @@ function ObjectTab({
           用放大镜（与页面 slogo / ⌘K 钮同一枚）。 */}
       {tab.kind === 'search' ? <SearchIcon /> : NAV_DOMAINS[TAB_KIND_DOMAIN[tab.kind]].icon()}
       <span className="ttab-title">{title}</span>
-      {dirty ? (
+      {tab.kind === 'email' ? (
+        <span
+          className={`ttab-retention${dirty ? ' is-dirty' : ''}${tab.pinned !== false ? ' is-pinned' : ''}`}
+        >
+          {dirty && tab.pinned === false && <span className="ttab-dirty" title={t('tabs.dirty')} />}
+          <button
+            type="button"
+            className="ttab-pin"
+            aria-label={t(tab.pinned !== false ? 'tabs.unpin' : 'tabs.pin')}
+            title={t(tab.pinned !== false ? 'tabs.unpin' : 'tabs.pin')}
+            aria-pressed={tab.pinned !== false}
+            tabIndex={closing ? -1 : 0}
+            onPointerDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation()
+              useTabWorkspace.getState().updateTab(tab.id, { pinned: tab.pinned === false })
+            }}
+          >
+            <Pin size={12} fill={tab.pinned !== false ? 'currentColor' : 'none'} />
+          </button>
+        </span>
+      ) : dirty ? (
         <span className="ttab-dirty" title={t('tabs.dirty')} />
       ) : tab.locked ? (
         <span className="ttab-lock" title={t('tabs.locked')} />

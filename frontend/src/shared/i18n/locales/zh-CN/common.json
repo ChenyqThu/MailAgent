@@ -529,6 +529,11 @@
     }
   },
   "palette": {
+    "coverage": {
+      "global": "全库概况：{count} 封邮件正文缺失或不可检索。这些邮件不代表搜索命中。",
+      "candidates": "元数据条件范围内，{count} 封邮件正文缺失或不可检索。这些邮件不代表搜索命中。",
+      "unknown": "此查询无法准确判断正文覆盖范围，结果可能不完整。"
+    },
     "placeholder": "搜索邮件 · 跳转到信箱 · 运行 AI 动作…",
     "noResults": "无匹配项 · 试试其他关键词",
     "searching": "搜索中…",
@@ -603,14 +608,8 @@
     "ai": {
       "understand": "AI 理解「{query}」",
       "understandHint": "让 AI 帮你检索并梳理相关邮件",
-      "searchingPhrases": [
-        "正在理解你的问题…",
-        "检索相关邮件…"
-      ],
-      "summarizingPhrases": [
-        "筛选最相关的…",
-        "整理结果…"
-      ],
+      "searchingPhrases": ["正在理解你的问题…", "检索相关邮件…"],
+      "summarizingPhrases": ["筛选最相关的…", "整理结果…"],
       "summary": "AI：{text}",
       "emptyTitle": "AI 没找到相关邮件",
       "emptyHint": "换个说法，或直接用搜索语法",
@@ -7055,6 +7054,14 @@
     }
   },
   "today": {
+    "replyThreadCount": "近 7 天 · {count} 个线程",
+    "replyMessageCount": "{count} 封待回邮件",
+    "replyActions": "待回邮件操作",
+    "replyDismiss": "这 {count} 封无需回复",
+    "replyDismissOne": "无需回复",
+    "replyDismissed": "已标记无需回复",
+    "replyUndo": "撤销",
+    "replyActionFailed": "操作失败，请重试",
     "kicker": "TODAY",
     "nav": {
       "groupNeedYou": "需要你",
@@ -7152,6 +7159,11 @@
     "openInWindow": "在新窗口打开"
   },
   "tabs": {
+    "pin": "保留标签",
+    "unpin": "取消保留标签",
+    "openInNewTab": "在新标签页打开",
+    "openEveryEmail": "每封邮件在新标签页打开",
+    "browseHint": "默认复用浏览标签；已保留和正在编辑的标签不会被替换。",
     "untitled": "未命名",
     "searchTitle": "新标签页",
     "newTab": "新标签页（⌘T）",
@@ -7160,7 +7172,7 @@
     "locked": "有未完成的工作，不会被自动关闭",
     "dirty": "有未保存的修改",
     "toast": {
-      "full": "标签已满，其它标签都还有没做完的事，先关一个再开新的",
+      "full": "标签已满，请先关闭一个标签或取消保留后继续浏览",
       "targetGone": "该邮件或草稿已不存在，已关闭它的标签"
     }
   },

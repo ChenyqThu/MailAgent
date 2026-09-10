@@ -10,11 +10,12 @@
 // QueryClientProvider in the tree.
 
 import { describe, expect, test, beforeEach } from 'vitest'
-import { render, cleanup } from '@testing-library/react'
+import { render, cleanup, fireEvent, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import i18n from '@shared/i18n'
 import { usePinned } from '@shared/state/pinned'
+import { useTabWorkspace } from '@shared/state/tab-workspace'
 import { EmailRow } from '../../src/shared/components/email/EmailRow'
 import type { EnrichedEmailMeta } from '../../src/shared/api/types'
 
@@ -109,6 +110,20 @@ describe('EmailRow — 8 combo render snapshots (DESIGN.md §5.1)', () => {
 })
 
 describe('EmailRow — semantic behaviour', () => {
+  test('double-click retains the target without duplicates; context menu opens retained', async () => {
+    useTabWorkspace.setState({ tabs: [], active: 'main', emailOpenInNewTab: false })
+    useTabWorkspace.getState().browseEmail(101)
+    const { container } = renderRow({ email: makeEmail(), selected: true })
+    const row = container.querySelector('article')
+    if (!row) throw new Error('Missing email row')
+    fireEvent.doubleClick(row)
+    expect(useTabWorkspace.getState().tabs).toHaveLength(1)
+    expect(useTabWorkspace.getState().tabs[0].pinned).toBe(true)
+    useTabWorkspace.getState().updateTab('email:101', { pinned: false })
+    fireEvent.contextMenu(row)
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Open in new tab' }))
+    expect(useTabWorkspace.getState().tabs[0].pinned).toBe(true)
+  })
   test('ai-strip surfaces the Chinese action label (mockup-inbox.html row pattern)', () => {
     // Sprint 12 — row's `ai-strip` is a mono single-line signal row that
     // shows the Chinese action label verbatim ("需要回复"), NOT an ASCII

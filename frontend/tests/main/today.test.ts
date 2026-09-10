@@ -7,13 +7,14 @@
 
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
-const { handleMock, daemonReadMock } = vi.hoisted(() => ({
+const { handleMock, daemonReadMock, daemonRequestMock } = vi.hoisted(() => ({
   handleMock: vi.fn(),
-  daemonReadMock: vi.fn()
+  daemonReadMock: vi.fn(),
+  daemonRequestMock: vi.fn()
 }))
 
 vi.mock('electron', () => ({ ipcMain: { handle: handleMock } }))
-vi.mock('../../src/electron/main/daemon_api', () => ({ daemonRead: daemonReadMock }))
+vi.mock('../../src/electron/main/daemon_api', () => ({ daemonRead: daemonReadMock, daemonRequest: daemonRequestMock }))
 
 import { registerTodayHandlers } from '../../src/electron/main/handlers/today'
 
@@ -33,6 +34,18 @@ beforeEach(() => {
 })
 
 describe('today:get', () => {
+  test('dismiss and undo preserve write envelopes and server payloads', async () => {
+    registerTodayHandlers()
+    daemonRequestMock.mockResolvedValue({ operationId: 'op' })
+    for (const [channel, arg, path, body] of [
+      ['today:dismiss', [1, 2], '/today/reply/dismiss', { internalIds: [1, 2] }],
+      ['today:undo', 'op', '/today/reply/undo', { operationId: 'op' }]
+    ] as const) {
+      const handler = handleMock.mock.calls.find((call) => call[0] === channel)?.[1] as Handler
+      await expect(handler(null, arg)).resolves.toEqual({ ok: true, data: { operationId: 'op' } })
+      expect(daemonRequestMock).toHaveBeenCalledWith('POST', path, { body })
+    }
+  })
   test('转发到 /today，query 与 HttpApi.today.get 同名同形', async () => {
     const handler = captureHandler()
     await handler(null, { tz: 'Asia/Shanghai', replyLimit: 5 })

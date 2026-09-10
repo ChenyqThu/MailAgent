@@ -120,6 +120,8 @@ export interface TabDescriptor {
   /** 有关掉就没了的未保存现场（写回复中 / 草稿写了一半）→ 不参与自动淘汰（标签上画琥珀点）。
    *  判据单源在 tab-workspace-bridge::recomputeObjectTabLock。 */
   readonly locked: boolean
+  /** Explicit retention, independent of composer/dirty protection. Missing legacy value means pinned. */
+  readonly pinned?: boolean
   readonly draft?: DraftSnapshot
   readonly drawerOpen: boolean
   readonly scrollTop: number
@@ -176,7 +178,10 @@ export const CLOSED_STACK_CAP = 10
 
 /** updateTab 可写的字段（id / kind / targetId 是身份，不可改；lastActiveAt 归激活语义管）。 */
 export type TabPatch = Partial<
-  Pick<TabDescriptor, 'title' | 'locked' | 'draft' | 'drawerOpen' | 'scrollTop' | 'chatSessionId'>
+  Pick<
+    TabDescriptor,
+    'title' | 'locked' | 'draft' | 'drawerOpen' | 'scrollTop' | 'chatSessionId' | 'pinned'
+  >
 >
 
 export interface TabWorkspaceState {
@@ -186,12 +191,15 @@ export interface TabWorkspaceState {
   /** 主标签面包屑的第二段（由当前承载页自己 set）。null = 单段，不显分隔符。 */
   readonly mainBreadcrumb: string | null
   readonly maxTabs: number
+  readonly emailOpenInNewTab: boolean
   /** 最近关闭栈，**末尾 = 最近关掉的**。不持久化。关闭与 LRU 自动淘汰都进栈
    *  （被挤掉的也能 ⌘⇧T 找回），原位变身不进（见 replaceActiveTab）。 */
   readonly closedStack: readonly ClosedTab[]
 
   /** 开 / 激活一个对象标签。`title` 省略或空串时不覆盖已有标题（deeplink 这类
    *  拿不到标题的入口先开着，详情加载完再 `updateTab` 补）。 */
+  browseEmail(targetId: number, title?: string): ReplaceTabResult
+  setEmailOpenInNewTab(value: boolean): void
   openTab(kind: TabKind, targetId: number, title?: string): OpenTabResult
   /** J/K 导航、归档后续选 —— 在**当前激活的对象标签里原位换目标**，不是每按一次开一个
    *  （连按十次 J 开十个标签会把 LRU 打爆）。三条分支：
@@ -251,7 +259,10 @@ function nextStamp(): number {
 
 // ── 持久化 ──────────────────────────────────────────────────────────────────
 
-type PersistedSlice = Pick<TabWorkspaceState, 'tabs' | 'active' | 'mainPage' | 'maxTabs'>
+type PersistedSlice = Pick<
+  TabWorkspaceState,
+  'tabs' | 'active' | 'mainPage' | 'maxTabs' | 'emailOpenInNewTab'
+>
 
 function clampMaxTabs(raw: unknown): number | null {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return null
@@ -302,6 +313,7 @@ function parseTab(raw: unknown): TabDescriptor | null {
     lastActiveAt,
     // 搜索标签永不 locked（词表注释）—— 存档里被写进 true 也在这里放平。
     locked: rec.locked === true && rec.kind !== 'search',
+    pinned: rec.kind === 'email' ? rec.pinned !== false : false,
     drawerOpen: rec.drawerOpen === true,
     scrollTop,
     ...(draft === undefined ? {} : { draft }),
@@ -310,7 +322,13 @@ function parseTab(raw: unknown): TabDescriptor | null {
 }
 
 function defaults(): PersistedSlice {
-  return { tabs: [], active: MAIN_SLOT, mainPage: DEFAULT_MAIN_PAGE, maxTabs: MAX_TABS_DEFAULT }
+  return {
+    tabs: [],
+    active: MAIN_SLOT,
+    mainPage: DEFAULT_MAIN_PAGE,
+    maxTabs: MAX_TABS_DEFAULT,
+    emailOpenInNewTab: false
+  }
 }
 
 function hydrate(): PersistedSlice {
@@ -362,6 +380,7 @@ function hydrate(): PersistedSlice {
         ? blob.active
         : MAIN_SLOT,
     mainPage: isMainPage(blob.mainPage) ? blob.mainPage : DEFAULT_MAIN_PAGE,
+    emailOpenInNewTab: blob.emailOpenInNewTab === true,
     maxTabs: clampMaxTabs(blob.maxTabs) ?? MAX_TABS_DEFAULT
   }
 }
@@ -376,7 +395,8 @@ function write(slice: PersistedSlice): void {
         tabs: slice.tabs,
         active: slice.active,
         mainPage: slice.mainPage,
-        maxTabs: slice.maxTabs
+        maxTabs: slice.maxTabs,
+        emailOpenInNewTab: slice.emailOpenInNewTab
       })
     )
   } catch {
@@ -390,7 +410,7 @@ function write(slice: PersistedSlice): void {
 function pickEvictable(tabs: readonly TabDescriptor[], active: ActiveSlot): TabDescriptor | null {
   let victim: TabDescriptor | null = null
   for (const tab of tabs) {
-    if (tab.id === active || tab.locked) continue
+    if (tab.id === active || tab.locked || (tab.kind === 'email' && tab.pinned !== false)) continue
     if (victim === null || tab.lastActiveAt < victim.lastActiveAt) victim = tab
   }
   return victim
@@ -424,6 +444,51 @@ export const useTabWorkspace = create<TabWorkspaceState>((set, get) => {
     mainBreadcrumb: null,
     closedStack: [],
 
+    setEmailOpenInNewTab(value) {
+      commit({ emailOpenInNewTab: value })
+    },
+
+    browseEmail(targetId, title) {
+      const state = get()
+      const id = tabId('email', targetId)
+      if (state.tabs.some((tab) => tab.id === id)) {
+        state.activateTab(id)
+        if (title) state.updateTab(id, { title })
+        return { outcome: 'activated', id }
+      }
+      // Prefer the current reusable tab, then the most recently used reusable slot.
+      const candidate = mostRecent(
+        state.tabs.filter(
+          (tab) =>
+            tab.kind === 'email' &&
+            tab.pinned === false &&
+            !tab.locked &&
+            tab.chatSessionId === undefined
+        )
+      )
+      if (candidate) {
+        const replacement: TabDescriptor = {
+          id,
+          kind: 'email',
+          targetId,
+          title: title ?? '',
+          lastActiveAt: nextStamp(),
+          pinned: false,
+          locked: false,
+          drawerOpen: false,
+          scrollTop: 0
+        }
+        commit({
+          tabs: state.tabs.map((tab) => (tab.id === candidate.id ? replacement : tab)),
+          active: id
+        })
+        return { outcome: 'replaced', id, previousId: candidate.id }
+      }
+      const result = state.openTab('email', targetId, title)
+      if (result.outcome !== 'rejected') get().updateTab(id, { pinned: false })
+      return result
+    },
+
     openTab(kind, targetId, title) {
       const state = get()
       const id = tabId(kind, targetId)
@@ -436,6 +501,7 @@ export const useTabWorkspace = create<TabWorkspaceState>((set, get) => {
               ? {
                   ...t,
                   lastActiveAt: stamp,
+                  ...(kind === 'email' ? { pinned: true } : {}),
                   title: title !== undefined && title !== '' ? title : t.title
                 }
               : t
@@ -464,6 +530,7 @@ export const useTabWorkspace = create<TabWorkspaceState>((set, get) => {
         title: title ?? '',
         lastActiveAt: stamp,
         locked: false,
+        pinned: kind === 'email',
         drawerOpen: false,
         scrollTop: 0
       }
@@ -479,6 +546,7 @@ export const useTabWorkspace = create<TabWorkspaceState>((set, get) => {
     },
 
     replaceActiveTab(kind, targetId, title) {
+      if (kind === 'email') return get().browseEmail(targetId, title)
       const state = get()
       const current = selectActiveTab(state)
       const id = tabId(kind, targetId)
@@ -506,6 +574,7 @@ export const useTabWorkspace = create<TabWorkspaceState>((set, get) => {
         title: title ?? '',
         lastActiveAt: stamp,
         locked: false,
+        pinned: false,
         drawerOpen: false,
         scrollTop: 0
       }

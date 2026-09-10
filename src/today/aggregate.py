@@ -139,6 +139,7 @@ def build_reply_section(
               FROM email_metadata m
              WHERE m.ai_action IN ({action_marks})
                AND {inbox_pred}
+               AND NOT EXISTS (SELECT 1 FROM today_reply_dismissal d WHERE d.internal_id = m.internal_id)
                AND m.date_received IS NOT NULL
                AND julianday(m.date_received) >= julianday(?)
                AND julianday(m.date_received) <  julianday(?)
@@ -147,9 +148,9 @@ def build_reply_section(
         ).fetchall()
         history = thread_history(conn, sorted({r["thread_id"] for r in rows if r["thread_id"]}))
     except sqlite3.OperationalError as exc:
-        # 读失败降级成空节（今日页其余四节照常渲染），不把整页打成错误态。
+        # Propagate failure so clients retain stale data and show the warning.
         logger.warning(f"[today] reply section query failed: {exc}")
-        return []
+        raise
     finally:
         conn.close()
 
@@ -169,6 +170,7 @@ def build_reply_section(
         items.append(
             {
                 "id": f"mail:{int(row['internal_id'])}",
+                "threadId": row["thread_id"] or None,
                 "source": "mail",
                 "title": row["subject"] or "",
                 # 「为什么是今天」= 它要我回 + 已经等了多久。组装不出（action 为空）时
@@ -184,7 +186,26 @@ def build_reply_section(
 
     # 等龄降序 = 收件时刻升序（等最久的在最前）；同刻按 id 稳定。
     items.sort(key=lambda it: (-it["waitedMs"], it["id"]))
-    return items[: max(0, limit)]
+    # Aggregate before the cap: one conversation must not crowd out others.
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for item in items:
+        key = f"thread:{item['threadId']}" if item["threadId"] else item["id"]
+        groups.setdefault(key, []).append(item)
+    result = []
+    for key, members in groups.items():
+        oldest, latest = members[0], members[-1]
+        result.append({
+            **latest,
+            "id": key,
+            "waitedMs": oldest["waitedMs"],
+            "oldestAtIso": oldest["atIso"],
+            "why": oldest["why"],
+            "pendingCount": len(members),
+            "internalIds": [m["link"]["internalId"] for m in members],
+            "messages": list(reversed(members)),
+        })
+    result.sort(key=lambda it: (-it["waitedMs"], it["id"]))
+    return result[: max(0, limit)]
 
 
 def _day_end(now: datetime, zone: tzinfo) -> datetime:

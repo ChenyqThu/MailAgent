@@ -18,7 +18,8 @@
 // 🔴 `state` 由后端 `derive_agent_run_state` 派生，前端恒不自行推导 —— 这一层只把三份响应
 // 铺成统一行模型（`todayGroups`），不解读 outcome / approvalState。
 
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
+import { useTodayClock } from './useTodayClock'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
@@ -73,6 +74,8 @@ export function useTodayData(): TodayData {
     queryKey: qk.agentRuns.list(null, TODAY_RUN_LIMIT),
     queryFn: () => api.report.listRuns({ limit: TODAY_RUN_LIMIT }),
     // 实时性靠 `agent.run.changed` SSE 失效（useEventBridge），短 staleTime 只是断线兜底。
+    refetchInterval: 90_000,
+    refetchOnWindowFocus: 'always',
     staleTime: 4_000
   })
   const proposals = usePendingMatterUpdates(mattersEnabled)
@@ -88,11 +91,8 @@ export function useTodayData(): TodayData {
     [agents]
   )
 
-  // 「此刻」基准：优先取本次数据的落地时刻（React Query 的纯值，随每次 refetch 前进），
-  // 首帧无数据时回落页面打开的时刻。🔴 不在 render 里直读 `Date.now()`（react-hooks/purity），
-  // 逐处各读一次也会让分组窗与相对时间用两个不同的 now。
-  const [openedAt] = useState(() => Date.now())
-  const nowMs = runs.dataUpdatedAt || openedAt
+  // 日界和相对时间随墙上时钟走，不依赖任何一次网络请求成功。
+  const nowMs = useTodayClock()
 
   const groups = useMemo(
     () =>

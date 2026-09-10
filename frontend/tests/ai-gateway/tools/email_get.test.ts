@@ -79,10 +79,14 @@ describe('email_body tool', () => {
     expect(out.content).toBe('short body')
   })
 
-  test('missing body → typed E_NOT_FOUND tool error', async () => {
+  test('missing body reports unavailable evidence and a targeted recovery command', async () => {
     const domain = mockDomain(() => errEnvelope('E_NOT_FOUND', 'no body', 404))
     await expect(
       runTool(createEmailReadTools(domain).email_body, emailBodySchema.parse({ internal_id: 5 }))
-    ).rejects.toMatchObject({ code: 'E_NOT_FOUND' })
+    ).resolves.toMatchObject({
+      content: null,
+      availability: 'body_or_format_missing',
+      recovery_command: 'mailagent backfill body --internal-ids 5'
+    })
   })
 })

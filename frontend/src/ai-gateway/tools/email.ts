@@ -89,8 +89,8 @@ export function createEmailReadTools(
           mailbox,
           sinceDate: input.since,
           untilDate: input.until,
-          isRead: input.is_read,
-          isFlagged: input.is_flagged,
+          isRead: input.is_read ?? undefined,
+          isFlagged: input.is_flagged ?? undefined,
           // prd 07-27 C-1 — no mailbox asked = cross-folder view → exclude the user's own unsent
           // drafts (aligns with the UI's /list-enriched default). An explicit mailbox is the
           // user's choice, drafts included: never send the flag then (server default false).
@@ -99,7 +99,20 @@ export function createEmailReadTools(
         },
         signal
       )
-      return { count: items.length, items }
+      return {
+        count: items.length,
+        items,
+        effective_filters: {
+          subject: input.subject_contains ?? null,
+          sender: input.sender_contains ?? null,
+          mailbox: mailbox ?? null,
+          since: input.since ?? null,
+          until: input.until ?? null,
+          is_read: input.is_read ?? null,
+          is_flagged: input.is_flagged ?? null,
+          exclude_drafts: mailbox === undefined
+        }
+      }
     }
   })
 
@@ -119,7 +132,10 @@ export function createEmailReadTools(
       'sender + date (bm25 rank, smaller = more relevant). `in:` selects a folder — ' +
       "in:inbox / in:sent / in:drafts / in:archive (in:drafts searches the user's own " +
       'unsent drafts, which no other filter reaches). For metadata-only list ' +
-      'filtering (sender/subject/mailbox/date/flag, no body text) use email_list_filter instead.',
+      'filtering (sender/subject/mailbox/date/flag, no body text) use email_list_filter instead. ' +
+      'Coverage candidates are NOT content hits. If coverage is incomplete/unknown, disclose that ' +
+      'limitation. For final prices or approvals, read later thread messages before concluding; ' +
+      'an old quoted price is not a verified final price.',
     inputSchema: emailSearchFulltextSchema,
     run: async (input, signal) => {
       const result = await domain.searchEmailsFulltext(
@@ -143,7 +159,10 @@ export function createEmailReadTools(
         hint: buildSearchHint(items.length, hasMore),
         transformed_query: result.transformed_query,
         parse_warnings: result.parse_warnings,
-        mode: result.mode
+        mode: result.mode,
+        coverage: result.coverage,
+        effective_filters: result.effective_filters,
+        total_indexed: result.total_indexed
       }
     }
   })
@@ -171,9 +190,38 @@ export function createEmailReadTools(
       'Use after email_list_filter / email_get when you need the actual content.',
     inputSchema: emailBodySchema,
     run: async (input, signal) => {
-      const data = await domain.getEmailBody(input.internal_id, signal)
-      if (!data)
-        throw new DomainError('E_NOT_FOUND', `body for email ${input.internal_id} not found`)
+      let data
+      try {
+        data = await domain.getEmailBody(input.internal_id, signal, 'markdown', true)
+      } catch (error) {
+        if (!(error instanceof DomainError) || error.code !== 'E_NOT_FOUND') throw error
+        const reason =
+          ['metadata_missing', 'body_missing', 'format_missing'].find((value) =>
+            error.message.startsWith(value + ':')
+          ) ?? 'body_or_format_missing'
+        return {
+          internal_id: input.internal_id,
+          availability: reason,
+          content: null,
+          recovery_command:
+            reason === 'metadata_missing'
+              ? null
+              : `mailagent backfill body --internal-ids ${input.internal_id}`,
+          hint: 'Content unavailable. Do not claim completeness; check later thread messages.'
+        }
+      }
+      if (!data) {
+        const metadata = await domain.getEmail(input.internal_id, signal)
+        return {
+          internal_id: input.internal_id,
+          availability: metadata ? 'body_or_format_missing' : 'metadata_missing',
+          content: null,
+          recovery_command: metadata
+            ? `mailagent backfill body --internal-ids ${input.internal_id}`
+            : null,
+          hint: 'Content unavailable; do not infer absence of evidence. Check later thread messages.'
+        }
+      }
       const cap = input.max_chars ?? BODY_MAX_CHARS
       const content = data.content ?? ''
       // Same truncation as legacy email_body: append the marker so the model sees it.

@@ -58,11 +58,19 @@ beforeEach(() => {
   __resetToastStore()
 })
 
+/** Existing LRU scenarios use tabs whose retention was explicitly cancelled. */
+function unpinEmails(): void {
+  for (const tab of useTabWorkspace.getState().tabs) {
+    if (tab.kind === 'email') useTabWorkspace.getState().updateTab(tab.id, { pinned: false })
+  }
+}
+
 describe('openObjectTab / replaceObjectTab', () => {
   test('open 去重激活；replace 原位换目标', () => {
     bridge.openObjectTab('email', 1, 'A')
     bridge.openObjectTab('email', 1, 'A')
     expect(useTabWorkspace.getState().tabs).toHaveLength(1)
+    unpinEmails()
     bridge.replaceObjectTab('email', 2, 'B')
     expect(useTabWorkspace.getState().tabs.map((t) => t.id)).toEqual(['email:2'])
   })
@@ -80,6 +88,7 @@ describe('openObjectTab / replaceObjectTab', () => {
     useTabWorkspace.setState({ maxTabs: 4 })
     for (let i = 1; i <= 4; i++) bridge.openObjectTab('email', i, `邮件${i}`)
     __resetToastStore()
+    unpinEmails()
     expect(bridge.openObjectTab('email', 5, '邮件5')).toBe(true)
     // 驱逐不再出声（此前每次满员都弹「顺带关掉了谁」，owner 判为噪音）
     expect(useToastStore.getState().items).toHaveLength(0)
@@ -104,7 +113,7 @@ describe('openObjectTab / replaceObjectTab', () => {
     expect(bridge.openObjectTab('email', 9, '邮件9')).toBe(false)
     const toasts = useToastStore.getState().items
     expect(toasts).toHaveLength(1)
-    expect(toasts[0].title).toContain('先关一个')
+    expect(toasts[0].title).toContain('先关闭一个')
     expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'email:9')).toBe(false)
   })
 
@@ -114,6 +123,7 @@ describe('openObjectTab / replaceObjectTab', () => {
     // 调低上限不追溯（store 契约），下一次开新标签时一次收敛到位 —— 6 → 3 要连关 4 个。
     useTabWorkspace.getState().setMaxTabs(4)
     __resetToastStore()
+    unpinEmails()
     bridge.openObjectTab('email', 7, '邮件7')
     expect(useToastStore.getState().items).toHaveLength(0)
     expect(useTabWorkspace.getState().tabs).toHaveLength(4)
@@ -125,6 +135,21 @@ describe('openObjectTab / replaceObjectTab', () => {
 })
 
 describe('locked 两来源', () => {
+  test('编辑中取消保留仍受保护；发送清理草稿并关闭 composer 后可复用', () => {
+    bridge.openObjectTab('email', 1)
+    useComposeStore.getState().openCompose(1, 'reply')
+    bridge.saveObjectTabDraft('email', 1, { kind: 'compose', dirty: true })
+    useTabWorkspace.getState().updateTab('email:1', { pinned: false })
+    expect(useTabWorkspace.getState().tabs[0].locked).toBe(true)
+    bridge.replaceObjectTab('email', 2)
+    expect(useTabWorkspace.getState().tabs.map((tab) => tab.id)).toEqual(['email:1', 'email:2'])
+    useTabWorkspace.getState().activateTab('email:1')
+    bridge.clearObjectTabDraft('email', 1)
+    useComposeStore.getState().closeCompose()
+    expect(useTabWorkspace.getState().tabs[0].locked).toBe(false)
+    bridge.replaceObjectTab('email', 3)
+    expect(useTabWorkspace.getState().tabs.map((tab) => tab.id)).toEqual(['email:3', 'email:2'])
+  })
   test('compose 打开指向标签 → locked；关闭且无其他来源 → 解锁', () => {
     bridge.openObjectTab('email', 1)
     useComposeStore.getState().openCompose(1, 'reply')
@@ -137,6 +162,7 @@ describe('locked 两来源', () => {
     useTabWorkspace.setState({ maxTabs: 4 })
     for (let i = 1; i <= 4; i++) bridge.openObjectTab('email', i, `邮件${i}`)
     useComposeStore.getState().openCompose(1, 'reply')
+    unpinEmails()
     bridge.openObjectTab('email', 5, '邮件5')
     const ids = useTabWorkspace.getState().tabs.map((t) => t.id)
     // email:1 最老但锁着 → 淘汰目标落到下一个未锁的
@@ -155,6 +181,7 @@ describe('locked 两来源', () => {
     bridge.notifyTabChatActivity('email', 1)
     expect(useTabWorkspace.getState().tabs[0].locked).toBe(false)
     for (let i = 2; i <= 4; i++) bridge.openObjectTab('email', i, `邮件${i}`)
+    unpinEmails()
     bridge.openObjectTab('email', 5, '邮件5')
     expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'email:1')).toBe(false)
   })
@@ -176,6 +203,7 @@ describe('locked 两来源', () => {
     expect(tab1?.locked).toBe(false)
     expect(tab1?.draft).toBeDefined()
     for (let i = 2; i <= 4; i++) bridge.openObjectTab('email', i, `邮件${i}`)
+    unpinEmails()
     bridge.openObjectTab('email', 5, '邮件5')
     // email:1 是最老且未锁 → 被 LRU 淘汰，快照随标签消亡（草稿在服务端，重开走 detail）
     expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'email:1')).toBe(false)
@@ -186,6 +214,7 @@ describe('locked 两来源', () => {
     bridge.openObjectTab('email', 1, '写一半的草稿')
     bridge.saveObjectTabDraft('email', 1, { kind: 'compose', dirty: true })
     for (let i = 2; i <= 4; i++) bridge.openObjectTab('email', i, `邮件${i}`)
+    unpinEmails()
     bridge.openObjectTab('email', 5, '邮件5')
     expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'email:1')).toBe(true)
     expect(useTabWorkspace.getState().tabs.some((t) => t.id === 'email:2')).toBe(false)

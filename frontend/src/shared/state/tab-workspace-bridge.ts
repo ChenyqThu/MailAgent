@@ -106,7 +106,7 @@ export function replaceObjectTab(kind: TabKind, targetId: number, title?: string
   const state = useTabWorkspace.getState()
   const active = selectActiveTab(state)
   const result =
-    active !== null && active.kind !== kind
+    kind !== 'email' && active !== null && active.kind !== kind
       ? state.openTab(kind, targetId, title)
       : state.replaceActiveTab(kind, targetId, title)
   announceTabResult(result)

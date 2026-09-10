@@ -133,6 +133,7 @@ def _pick_candidates(
     until_date: Optional[str],
     mailbox: Optional[str],
     limit: Optional[int],
+    include_unmirrored: bool = False,
 ) -> list[_BackfillRecord]:
     """Select synced Notion emails that still need an SQLite body row."""
     _ensure_dead_table(db_path)
@@ -144,10 +145,10 @@ def _pick_candidates(
               FROM email_metadata m
               LEFT JOIN email_body b ON m.internal_id = b.internal_id
               LEFT JOIN backfill_dead_ids d ON m.internal_id = d.internal_id
-             WHERE m.sync_status = 'synced'
-               AND m.notion_page_id IS NOT NULL
-               AND d.internal_id IS NULL
+             WHERE d.internal_id IS NULL
         """
+        if not include_unmirrored:
+            sql += " AND m.sync_status = 'synced' AND m.notion_page_id IS NOT NULL"
         params: list[Any] = []
         if not force:
             sql += " AND b.internal_id IS NULL"

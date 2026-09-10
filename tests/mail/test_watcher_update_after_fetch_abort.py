@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -84,6 +85,18 @@ def _build_watcher(email_obj, *, update_result=UpdateAfterFetchResult.OK):
 
 
 META = {"internal_id": 42, "mailbox": "收件箱", "subject": "hello"}
+
+
+@pytest.mark.asyncio
+async def test_old_email_keeps_fetched_local_body_without_creating_notion_page():
+    email = _fake_email_obj()
+    email.date = datetime(2025, 12, 20, tzinfo=timezone.utc)
+    watcher = _build_watcher(email)
+    watcher.sync_start_date = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    await watcher._sync_single_email_v3(dict(META))
+    watcher._maybe_dual_write_body.assert_called_once_with(email, 42, 'raw-mime')
+    watcher.sync_store.mark_skipped.assert_called_once_with(42, reason='notion_date_filter')
+    watcher.notion_sync.create_email_page_v2.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

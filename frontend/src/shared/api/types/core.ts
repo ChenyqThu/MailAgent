@@ -77,6 +77,16 @@ export type ResyncResult = MailagentEmailResync['data']
  * 可能与原 query 相同；raw mode 通常省略。
  */
 export interface SearchResult {
+  coverage?: {
+    scope: 'global' | 'metadata_candidates' | 'unknown'
+    candidate_count: number
+    body_missing: number
+    body_unsearchable: number
+    channels: string[]
+    complete: boolean
+    samples: { internal_id: number; subject: string | null }[]
+  }
+  effective_filters?: Record<string, unknown>
   items: SearchHit[]
   total_indexed: number
   /**

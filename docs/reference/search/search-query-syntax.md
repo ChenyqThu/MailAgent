@@ -396,3 +396,10 @@ trigram 路径早期把 hit 的 `snippet` 设成 `''`（前端只剩 subject 高
 `email_recipient_fts` 表并镜像 insert trigger 从 fixture email 的 to_addr / cc_addr / sender_name
 灌数据；前端 TS runner 须建同表 + 实现等价编译（`to~:`/`cc~:`/`from~:` + 表维度），读同一份 JSON 锁行为。
 前端镜像还需：`TextTerm` 加表维度（哪张表的哪列）、`EXPECTED_DB_VERSION` 抬到 25。
+## Coverage and missing content
+
+Full-text results include `coverage` and `effective_filters`. Coverage describes metadata candidates (or the whole local store without metadata filters), not additional content hits. `body_missing` and `body_unsearchable` distinguish absent bodies from bodies missing the required index/markdown. OR, negation, attachment-dependent predicates and raw expressions report unknown scope. Coverage computation has a 250 ms budget; unavailable or timed-out coverage reports unknown without discarding search hits. Index presence does not prove semantic completeness or absence of evidence.
+
+The agent metadata tool accepts omitted/null booleans as no filter, preserves explicit false, and echoes applied filters. Missing body reads distinguish missing metadata, missing body and missing requested format; they provide a targeted recovery command and must not be treated as evidence that content does not exist. Later messages in the same thread may contain quoted history.
+
+Notion date filtering does not gate storage of a body already fetched locally. New skipped rows record `notion_date_filter`; historical NULL skip reasons remain unknown. Targeted recovery uses `mailagent backfill body --internal-ids ID`; bulk recovery may opt into `--include-unmirrored`, with existing date/mailbox/limit and dry-run controls. Neither option fetches history automatically during a search.

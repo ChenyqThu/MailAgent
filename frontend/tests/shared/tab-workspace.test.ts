@@ -59,12 +59,38 @@ function reset(): void {
     mainPage: DEFAULT_MAIN_PAGE,
     mainBreadcrumb: null,
     maxTabs: MAX_TABS_DEFAULT,
+    emailOpenInNewTab: false,
     closedStack: []
   })
   window.localStorage.clear()
 }
 
 beforeEach(reset)
+
+describe('邮件浏览与保留', () => {
+  test('单击复用，显式打开保留同一标签，编辑中可取消保留', () => {
+    s().browseEmail(1)
+    s().browseEmail(2)
+    expect(s().tabs.map((tab) => tab.id)).toEqual(['email:2'])
+    s().openTab('email', 2)
+    expect(s().tabs).toHaveLength(1)
+    expect(s().tabs[0].pinned).toBe(true)
+    s().updateTab('email:2', { locked: true, draft: { dirty: true }, pinned: false })
+    s().browseEmail(3)
+    expect(s().tabs.map((tab) => tab.id)).toEqual(['email:2', 'email:3'])
+    s().activateTab('email:2')
+    s().updateTab('email:2', { locked: false, draft: undefined })
+    s().browseEmail(4)
+    expect(s().tabs.map((tab) => tab.id)).toEqual(['email:4', 'email:3'])
+  })
+
+  test('手动保留的标签不会被满额淘汰', () => {
+    s().setMaxTabs(4)
+    for (let id = 1; id <= 4; id++) s().openTab('email', id)
+    expect(s().browseEmail(5).outcome).toBe('rejected')
+    expect(s().tabs.map((tab) => tab.targetId)).toEqual([1, 2, 3, 4])
+  })
+})
 
 const s = (): ReturnType<typeof useTabWorkspace.getState> => useTabWorkspace.getState()
 
@@ -73,6 +99,7 @@ function openEmails(n: number): string[] {
   const ids: string[] = []
   for (let i = 1; i <= n; i++) {
     s().openTab('email', i, `邮件 ${i}`)
+    s().updateTab(tabId('email', i), { pinned: false })
     ids.push(tabId('email', i))
   }
   return ids

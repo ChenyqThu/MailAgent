@@ -73,7 +73,7 @@ describe('buildGatewayTools', () => {
     await runTool(tools.email_list_filter, emailSearchSchema.parse({ subject_contains: 'x' }))
     expect(collector).toHaveLength(1)
     expect(collector[0]).toMatchObject({ toolName: 'email_list_filter', status: 'ok' })
-    expect(JSON.parse(collector[0].outputJson)).toEqual({ count: 1, items: [{ internal_id: 1 }] })
+    expect(JSON.parse(collector[0].outputJson)).toMatchObject({ count: 1, items: [{ internal_id: 1 }], effective_filters: { subject: 'x', is_read: null, is_flagged: null } })
   })
 })
 

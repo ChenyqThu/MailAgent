@@ -72,8 +72,20 @@ export const emailSearchSchema = z.object({
   mailbox: z.string().optional(),
   since: z.string().optional(),
   until: z.string().optional(),
-  is_read: z.boolean().optional(),
-  is_flagged: z.boolean().optional(),
+  is_read: z
+    .boolean()
+    .nullable()
+    .optional()
+    .describe(
+      'Omit or null = all read states; false = unread only; true = read only. Filter only when the user requests it.'
+    ),
+  is_flagged: z
+    .boolean()
+    .nullable()
+    .optional()
+    .describe(
+      'Omit or null = all flag states; false = unflagged only; true = flagged only. Filter only when the user requests it.'
+    ),
   limit: z.number().int().min(1).max(100).default(20)
 })
 export type EmailSearchInput = z.infer<typeof emailSearchSchema>

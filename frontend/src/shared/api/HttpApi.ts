@@ -1063,16 +1063,11 @@ export class HttpApi implements MailApi {
   // task 08-27 P4c — 今日聚合读。🔴 path/query 与 Electron 侧 `today:get` handler
   // （daemon_api 转发）严格 mirror，改 wire 时两处同步。
   today: TodayApi = {
-    get: async (opts?: { tz?: string; replyLimit?: number }): Promise<TodayApiData> => {
-      try {
-        const data = await this.req<TodayApiData>('GET', '/today', {
-          query: { tz: opts?.tz, replyLimit: opts?.replyLimit }
-        })
-        return { reply: data?.reply ?? [], nextHardPoint: data?.nextHardPoint ?? null }
-      } catch {
-        // 守读优雅降级：今日页另外四节自有数据源，这一条挂了不该把整页打成错误态。
-        return { reply: [], nextHardPoint: null }
-      }
-    }
+    get: (opts) =>
+      this.req<TodayApiData>('GET', '/today', {
+        query: { tz: opts?.tz, replyLimit: opts?.replyLimit }
+      }),
+    dismiss: (internalIds) => this.req('POST', '/today/reply/dismiss', { body: { internalIds } }),
+    undo: (operationId) => this.req('POST', '/today/reply/undo', { body: { operationId } })
   }
 }

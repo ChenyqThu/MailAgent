@@ -46,7 +46,7 @@ mailagent --help                 # 列 15 个 group (email/admin/attachment/llm/
 |---|---|
 | `email resync <internal_id\|--range LO-HI\|--ids 1,2,3> [--dry-run/--replace-existing/--no-parent/--max-failures/--resume-from/--progress-every/--allow-concurrent]` | 重传到 Notion（PR-4 batch + 长任务契约：SIGINT 二次 / 熔断 / checkpoint resume / PM2 检测） |
 | `attachment cleanup-orphans [--no-dry-run --yes]` | 删 data/attachments 下孤儿目录 |
-| `backfill body [--since-date/--until-date/--mailbox/--internal-ids/--all/--limit/--force/--dry-run/--resume-from/--retry-dead]` | v4 历史邮件正文 backfill (PR-5 inline + LongTaskContext: 真 max-failures / checkpoint resume / SIGINT 二次 / dead-letter 表) |
+| `backfill body [--since-date/--until-date/--mailbox/--internal-ids/--include-unmirrored/--all/--limit/--force/--dry-run/--resume-from/--retry-dead]` | 历史正文回填；默认仅 Notion 已镜像邮件，`--include-unmirrored` 纳入 skipped / 无页邮件，显式 IDs 定向修复。保留 dry-run、checkpoint、SIGINT、dead-letter 机制 |
 | `project-progress sync [--internal-id/--all-history/--limit/--sheets/--dry-run/--force/--backfill-project-start/--first-migration-dry-run]` | 项目周报同步 (PR-5 inline 直调 ProjectProgressRunner) |
 | `init {fetch-cache,analyze,fix-properties,fix-critical,update-parents,sync-new,all} [...]` | 初始化同步 7 个 sub-action (PR-5 inline 直调 InitialSync) |
 | `llm run <internal_id> [--dry-run/--force/--no-overwrite]` | 单封 LLM 分类 + Notion 写 AI 字段 |

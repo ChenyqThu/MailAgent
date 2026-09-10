@@ -74,6 +74,34 @@ def _ids(items) -> list[str]:
     return [it["id"] for it in items]
 
 
+def test_thread_grouping_precedes_limit_and_never_uses_subject(db):
+    for iid in range(1, 36):
+        _insert(db, iid, date_received=_iso(40 - iid / 10), thread_id="busy")
+    _insert(db, 40, date_received=_iso(2), thread_id="other")
+    _insert(db, 41, date_received=_iso(1))
+    rows = build_reply_section(str(db), now=_NOW, limit=3)
+    assert _ids(rows) == ["thread:busy", "thread:other", "mail:41"]
+    assert rows[0]["pendingCount"] == 35
+    assert rows[0]["link"]["internalId"] == 35
+    assert rows[0]["messages"][0]["link"]["internalId"] == 35
+
+
+def test_dismiss_snapshot_persists_and_undo_does_not_erase_newer_decision(db):
+    from src.today.service import dismiss_replies, undo_dismissal
+    _insert(db, 1, date_received=_iso(3), thread_id="t")
+    _insert(db, 2, date_received=_iso(2), thread_id="t")
+    first = dismiss_replies(str(db), [1, 2])
+    assert build_reply_section(str(db), now=_NOW) == []
+    SyncStore(str(db))  # Reopening the store preserves the decision.
+    _insert(db, 3, date_received=_iso(1), thread_id="t")
+    assert build_reply_section(str(db), now=_NOW)[0]["internalIds"] == [3]
+    second = dismiss_replies(str(db), [2])
+    undo_dismissal(str(db), first["operationId"])
+    assert build_reply_section(str(db), now=_NOW)[0]["internalIds"] == [1, 3]
+    undo_dismissal(str(db), second["operationId"])
+    assert build_reply_section(str(db), now=_NOW)[0]["internalIds"] == [1, 2, 3]
+
+
 # ============================================================
 # 常量下沉（岛模块 → llm_agent.schema）
 # ============================================================
@@ -180,7 +208,7 @@ class TestReplySectionScope:
         _insert(db, 4, date_received=_iso(2), thread_id="t-B")
         # t-C：无发件 → 未回。
         _insert(db, 5, date_received=_iso(3), thread_id="t-C")
-        assert set(_ids(build_reply_section(str(db), now=_NOW))) == {"mail:4", "mail:5"}
+        assert set(_ids(build_reply_section(str(db), now=_NOW))) == {"thread:t-B", "thread:t-C"}
 
     def test_replied_judgement_uses_full_history_not_the_window(self, db: Path):
         """我方回复落在 7 天窗口**之外**（这封收件在窗内）—— 仍要算已回。

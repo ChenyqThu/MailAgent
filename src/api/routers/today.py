@@ -17,11 +17,13 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_settings
 from src.today.aggregate import REPLY_LIMIT, build_today
+from src.today.service import dismiss_replies, undo_dismissal
 
 if TYPE_CHECKING:  # pragma: no cover
     from src.config import Config
@@ -80,3 +82,30 @@ async def get_today(
         source="sqlite",
         meta_extra={"replyCount": len(data["reply"]), "tz": tz},
     )
+
+
+class DismissRepliesBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    internalIds: list[StrictInt] = Field(min_length=1, max_length=10000)
+
+
+class UndoDismissalBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operationId: str = Field(min_length=1, max_length=64)
+
+
+@router.post("/today/reply/dismiss", dependencies=[Depends(verify_cf_access)])
+async def dismiss_today_replies(request: Request, body: DismissRepliesBody,
+                                cfg: "Config" = Depends(get_settings)):
+    try:
+        data = await asyncio.to_thread(dismiss_replies, str(cfg.sync_store_db_path), body.internalIds)
+    except ValueError as exc:
+        raise APIError("E_INVALID_ARG", str(exc), source="sqlite") from exc
+    return success_envelope(data, request=request, source="sqlite")
+
+
+@router.post("/today/reply/undo", dependencies=[Depends(verify_cf_access)])
+async def undo_today_reply_dismissal(request: Request, body: UndoDismissalBody,
+                                    cfg: "Config" = Depends(get_settings)):
+    data = await asyncio.to_thread(undo_dismissal, str(cfg.sync_store_db_path), body.operationId)
+    return success_envelope(data, request=request, source="sqlite")

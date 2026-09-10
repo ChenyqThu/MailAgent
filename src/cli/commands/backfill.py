@@ -249,6 +249,9 @@ def _error_for_summary(
 @app.command("body")
 def backfill_body(
     ctx: typer.Context,
+    include_unmirrored: bool = typer.Option(
+        False, "--include-unmirrored", help="正文回填包含 skipped / 无 Notion 页邮件；默认仅已镜像邮件",
+    ),
     since_date: Optional[str] = typer.Option(
         None, "--since-date", help="YYYY-MM-DD",
     ),
@@ -310,6 +313,7 @@ def backfill_body(
     else:
         records = _pick_candidates(
             db_path,
+            include_unmirrored=include_unmirrored,
             force=force,
             since_date=since_date,
             until_date=until_date,

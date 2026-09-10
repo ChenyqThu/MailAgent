@@ -468,6 +468,8 @@ def email_search(
         meta_extra["transformed_query"] = transformed_query
     if search_result.parse_warnings:
         meta_extra["parse_warnings"] = search_result.parse_warnings
+    meta_extra["coverage"] = search_result.coverage
+    meta_extra["effective_filters"] = search_result.effective_filters
 
     if cli.output.lower() == "text":
         _render_search_text(data, meta_extra, no_snippet)

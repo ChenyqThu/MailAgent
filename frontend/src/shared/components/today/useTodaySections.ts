@@ -92,16 +92,19 @@ export function useTodaySections(): TodaySectionsData {
   const agenda = useCalendarAgenda({ fromIso, toIso }, MEET_SOURCES)
 
   const today = useQuery({
-    queryKey: qk.today.aggregate(tz),
+    queryKey: qk.today.aggregate(tz, window.startMs),
     queryFn: () => api.today.get({ tz }),
     // 实时性靠 useEventBridge 的 `llm.success` / `email.*` 定向失效；这里是断线兜底。
     staleTime: 90_000,
-    refetchOnWindowFocus: true
+    refetchInterval: 90_000,
+    refetchOnWindowFocus: 'always'
   })
 
   const reports = useQuery({
     queryKey: qk.report.list(),
     queryFn: () => api.report.list({ limit: TODAY_REPORT_LIMIT }),
+    refetchInterval: 90_000,
+    refetchOnWindowFocus: 'always',
     staleTime: 60_000
   })
 
@@ -154,7 +157,7 @@ export function useTodaySections(): TodaySectionsData {
     // 日历 / 报告 / 今日端点都是**补充**：它们还在路上时先把已有的四节铺出来，
     // 不整页转圈（首屏骨架仍由批次 2 的四条源决定）。
     isPending: base.isPending,
-    isError: base.isError,
+    isError: base.isError || today.isError || agenda.isError || reports.isError,
     nowMs,
     refreshRuns: base.refreshRuns
   }

@@ -38,6 +38,7 @@ function resetTabs(): void {
     mainPage: 'today',
     mainBreadcrumb: null,
     maxTabs: 8,
+    emailOpenInNewTab: false,
     closedStack: []
   })
 }
@@ -110,7 +111,7 @@ describe('useActiveEmail — setActive 转发标签 store（08-27 标签工作�
     useActiveEmail.getState().setActive(1)
     useActiveEmail.getState().setActive(2)
     useActiveEmail.getState().setActive(1)
-    expect(useTabWorkspace.getState().tabs.map((t) => t.id)).toEqual(['email:1', 'email:2'])
+    expect(useTabWorkspace.getState().tabs.map((t) => t.id)).toEqual(['email:1'])
     expect(useTabWorkspace.getState().active).toBe('email:1')
   })
 
@@ -141,8 +142,18 @@ describe('useActiveEmail — setActive 转发标签 store（08-27 标签工作�
 })
 
 describe('useActiveEmail — 标签 store 侧激活的反向投影', () => {
-  test('标签条激活另一封 → 投影更新且带 navTarget 豁免', () => {
+  test('每封新开偏好保留邮件，显式 J/K 仍使用浏览标签', () => {
+    useTabWorkspace.getState().setEmailOpenInNewTab(true)
     useActiveEmail.getState().setActive(1)
+    useActiveEmail.getState().setActive(2)
+    expect(useTabWorkspace.getState().tabs.every((tab) => tab.pinned)).toBe(true)
+    useActiveEmail.getState().setActive(3, { mode: 'replace' })
+    useActiveEmail.getState().setActive(4, { mode: 'replace' })
+    expect(useTabWorkspace.getState().tabs.map((tab) => tab.id)).toEqual(['email:1', 'email:2', 'email:4'])
+    expect(useTabWorkspace.getState().tabs[2].pinned).toBe(false)
+  })
+  test('标签条激活另一封 → 投影更新且带 navTarget 豁免', () => {
+    useActiveEmail.getState().setActive(1, { mode: 'open' })
     useActiveEmail.getState().setActive(2)
     // 模拟标签条点击（Lane U 直接调 store action）
     useTabWorkspace.getState().activateTab('email:1')
@@ -157,7 +168,7 @@ describe('useActiveEmail — 标签 store 侧激活的反向投影', () => {
   })
 
   test('关掉激活标签 → 最近用过的邮件标签接管并投影', () => {
-    useActiveEmail.getState().setActive(1)
+    useActiveEmail.getState().setActive(1, { mode: 'open' })
     useActiveEmail.getState().setActive(2)
     useTabWorkspace.getState().closeTab('email:2')
     expect(useActiveEmail.getState().activeInternalId).toBe(1)
@@ -200,7 +211,7 @@ describe('useActiveEmail — 冷启动恢复', () => {
 describe('setActive — 被拒回滚（check 波3 续改）', () => {
   test('标签满且全 locked → openTab 被拒：activeInternalId / navTargetId 不落新值', () => {
     useTabWorkspace.setState({ maxTabs: 4 })
-    for (let i = 1; i <= 4; i++) useActiveEmail.getState().setActive(i)
+    for (let i = 1; i <= 4; i++) useActiveEmail.getState().setActive(i, { mode: 'open' })
     for (const t of useTabWorkspace.getState().tabs) {
       useTabWorkspace.getState().updateTab(t.id, { locked: true })
     }
@@ -215,7 +226,7 @@ describe('setActive — 被拒回滚（check 波3 续改）', () => {
 
   test('replace 模式同样回滚（当前标签 locked → 退 openTab → 满拒）', () => {
     useTabWorkspace.setState({ maxTabs: 4 })
-    for (let i = 1; i <= 4; i++) useActiveEmail.getState().setActive(i)
+    for (let i = 1; i <= 4; i++) useActiveEmail.getState().setActive(i, { mode: 'open' })
     for (const t of useTabWorkspace.getState().tabs) {
       useTabWorkspace.getState().updateTab(t.id, { locked: true })
     }

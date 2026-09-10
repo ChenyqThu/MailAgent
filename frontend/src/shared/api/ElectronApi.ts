@@ -1033,6 +1033,16 @@ class ElectronTodayApi implements TodayApi {
   async get(opts?: { tz?: string; replyLimit?: number }): Promise<TodayApiData> {
     return (await invoker()('today:get', opts ?? {})) as TodayApiData
   }
+  async dismiss(internalIds: number[]): Promise<{ operationId: string }> {
+    return unwrap(
+      (await invoker()('today:dismiss', internalIds)) as WriteEnvelope<{ operationId: string }>
+    )
+  }
+  async undo(operationId: string): Promise<{ operationId: string }> {
+    return unwrap(
+      (await invoker()('today:undo', operationId)) as WriteEnvelope<{ operationId: string }>
+    )
+  }
 }
 
 export class ElectronApi implements MailApi {

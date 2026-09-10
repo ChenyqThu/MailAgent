@@ -10,7 +10,8 @@
 
 import { ipcMain } from 'electron'
 
-import { daemonRead } from '../daemon_api'
+import { envelopeFromCli } from '../lib/envelope'
+import { daemonRead, daemonRequest } from '../daemon_api'
 import type { TodayData } from '../../../shared/api/types'
 
 interface TodayGetOpts {
@@ -19,6 +20,12 @@ interface TodayGetOpts {
 }
 
 export function registerTodayHandlers(): void {
+  ipcMain.handle('today:dismiss', (_evt, internalIds: number[]) =>
+    envelopeFromCli(daemonRequest('POST', '/today/reply/dismiss', { body: { internalIds } }))
+  )
+  ipcMain.handle('today:undo', (_evt, operationId: string) =>
+    envelopeFromCli(daemonRequest('POST', '/today/reply/undo', { body: { operationId } }))
+  )
   ipcMain.handle('today:get', async (_evt, ...args): Promise<TodayData> => {
     const opts = (args[0] ?? {}) as TodayGetOpts
     return daemonRead<TodayData>('/today', {

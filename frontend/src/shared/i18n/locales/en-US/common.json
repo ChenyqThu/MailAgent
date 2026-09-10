@@ -529,6 +529,11 @@
     }
   },
   "palette": {
+    "coverage": {
+      "global": "Library overview: {count} email bodies are missing or unsearchable. These are not search hits.",
+      "candidates": "{count} emails matching metadata filters have missing or unsearchable bodies. These are not search hits.",
+      "unknown": "Body coverage cannot be determined for this query. Results may be incomplete."
+    },
     "placeholder": "Search mail · jump to mailbox · run AI action…",
     "noResults": "No matches · try a different query",
     "searching": "Searching…",
@@ -603,14 +608,8 @@
     "ai": {
       "understand": "AI understand “{query}”",
       "understandHint": "Let AI search and gather the relevant emails",
-      "searchingPhrases": [
-        "Understanding your question…",
-        "Searching relevant emails…"
-      ],
-      "summarizingPhrases": [
-        "Filtering the most relevant…",
-        "Organizing results…"
-      ],
+      "searchingPhrases": ["Understanding your question…", "Searching relevant emails…"],
+      "summarizingPhrases": ["Filtering the most relevant…", "Organizing results…"],
       "summary": "AI: {text}",
       "emptyTitle": "AI found no related emails",
       "emptyHint": "Try rephrasing, or use search syntax directly",
@@ -7055,6 +7054,14 @@
     }
   },
   "today": {
+    "replyThreadCount": "Last 7 days · {count, plural, one {# thread} other {# threads}}",
+    "replyMessageCount": "{count, plural, one {# message awaiting reply} other {# messages awaiting reply}}",
+    "replyActions": "Reply actions",
+    "replyDismiss": "No reply needed for {count, plural, one {this message} other {these # messages}}",
+    "replyDismissOne": "No reply needed",
+    "replyDismissed": "Marked as no reply needed",
+    "replyUndo": "Undo",
+    "replyActionFailed": "Action failed. Please try again.",
     "kicker": "TODAY",
     "nav": {
       "groupNeedYou": "Needs you",
@@ -7152,6 +7159,11 @@
     "openInWindow": "Open in New Window"
   },
   "tabs": {
+    "pin": "Keep tab",
+    "unpin": "Unpin tab",
+    "openInNewTab": "Open in new tab",
+    "openEveryEmail": "Open each email in a new tab",
+    "browseHint": "By default, reuse a browsing tab. Pinned tabs and editors are protected.",
     "untitled": "Untitled",
     "searchTitle": "New Tab",
     "newTab": "New tab (⌘T)",
@@ -7160,7 +7172,7 @@
     "locked": "Unfinished work here — won't be auto-closed",
     "dirty": "Unsaved changes here",
     "toast": {
-      "full": "The other tabs all still have unfinished work — close one first",
+      "full": "Tabs are full. Close a tab or unpin one to continue browsing.",
       "targetGone": "That email or draft no longer exists — its tab was closed"
     }
   },

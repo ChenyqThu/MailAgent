@@ -504,6 +504,8 @@ export function GeneralTab(): React.ReactElement {
   const setBodyLineHeight = useAppearance((s) => s.setBodyLineHeight)
   const composeLineHeight = useAppearance((s) => s.composeLineHeight)
   const setComposeLineHeight = useAppearance((s) => s.setComposeLineHeight)
+  const emailOpenInNewTab = useTabWorkspace((s) => s.emailOpenInNewTab)
+  const setEmailOpenInNewTab = useTabWorkspace((s) => s.setEmailOpenInNewTab)
   const maxTabs = useTabWorkspace((s) => s.maxTabs)
   const setMaxTabs = useTabWorkspace((s) => s.setMaxTabs)
 
@@ -883,6 +885,17 @@ export function GeneralTab(): React.ReactElement {
           })}
         />
         <div className="tile rounded-[var(--r-card)] border border-ink-border-soft">
+          <div className="flex items-center justify-between gap-4 p-4">
+            <div>
+              <div className="text-aux font-medium">{t('tabs.openEveryEmail')}</div>
+              <p className="text-meta text-ink-fg-2">{t('tabs.browseHint')}</p>
+            </div>
+            <Switch
+              checked={emailOpenInNewTab}
+              onCheckedChange={setEmailOpenInNewTab}
+              aria-label={t('tabs.openEveryEmail')}
+            />
+          </div>
           <Stepper
             label={t('settings.general.tabWorkspace.limit.label', { defaultValue: '标签上限' })}
             meta={t('settings.general.tabWorkspace.limit.meta', {

@@ -1847,6 +1847,10 @@ class NewWatcher:
                     internal_id, {'is_important': True}
                 )
 
+            # Local storage is independent of the Notion mirror's date window.
+            # Keep the existing dual-write flag/failure policy; do not fetch more history.
+            self._maybe_dual_write_body(email_obj, internal_id, full_email.get("source"))
+
             # 5. 日期过滤：早于 sync_start_date 的邮件不同步到 Notion
             if self.sync_start_date and email_obj.date:
                 email_date = email_obj.date
@@ -1855,14 +1859,9 @@ class NewWatcher:
 
                 if email_date < self.sync_start_date:
                     logger.info(f"Skipping old email: {email_date.strftime('%Y-%m-%d')} < {self.sync_start_date.strftime('%Y-%m-%d')}")
-                    self.sync_store.mark_skipped(internal_id)
+                    self.sync_store.mark_skipped(internal_id, reason="notion_date_filter")
                     self._stats["emails_skipped"] += 1
                     return
-
-            # 5.5 v4: 双写邮件正文 + 附件到 SQLite（SSoT 切换的关键一步）
-            # 详见 docs/reference/architecture/architecture_v4_sqlite_ssot.md
-            # 失败仅 warning，主流程继续走 Notion sync
-            self._maybe_dual_write_body(email_obj, internal_id, full_email.get("source"))
 
             # 5.7 Notion 可选化（task 07-12 P3b 方案 C）：未配置 NOTION_TOKEN/
             # EMAIL_DATABASE_ID 时跳过 Notion 页创建，邮件走 mark_synced_local

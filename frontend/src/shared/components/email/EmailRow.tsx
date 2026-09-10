@@ -20,7 +20,7 @@
 //
 // CSS class names are the contract — see index.css Sprint 12 block.
 
-import { memo, useCallback, useMemo } from 'react'
+import { memo, useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, Paperclip } from 'lucide-react'
@@ -36,6 +36,8 @@ import { useTogglePin } from '@shared/hooks/usePinnedSync'
 import { useBatch } from '@shared/state/batch'
 import { usePinned } from '@shared/state/pinned'
 import { toastError } from '@shared/state/toast'
+import { useActiveEmail } from '@shared/state/active-email'
+import { Popmenu } from '@shared/components/ui/Popmenu'
 import type { EnrichedEmailMeta, AIPriority } from '@shared/api/types'
 
 import type { ThreadHeadAgg } from './emailListRows'
@@ -186,6 +188,13 @@ function EmailRowInner({
   onSelect
 }: Props): React.ReactElement {
   const { t } = useTranslation()
+  const rowRef = useRef<HTMLElement>(null)
+  const [tabMenuOpen, setTabMenuOpen] = useState(false)
+  const retainEmail = (): void => {
+    useActiveEmail
+      .getState()
+      .setActive(email.internal_id, { mode: 'open', title: email.subject ?? '' })
+  }
   const mailApi = useMailApi()
   const queryClient = useQueryClient()
   const batchMode = useBatch((s) => s.mode)
@@ -341,9 +350,23 @@ function EmailRowInner({
 
   return (
     <article
+      ref={rowRef}
       role="button"
       tabIndex={0}
       onClick={handleRowClick}
+      onDoubleClick={(event) => {
+        if (
+          batchMode === 'on' ||
+          (event.target instanceof Element && event.target.closest('button'))
+        )
+          return
+        retainEmail()
+      }}
+      onContextMenu={(event) => {
+        if (batchMode === 'on') return
+        event.preventDefault()
+        setTabMenuOpen(true)
+      }}
       onKeyDown={handleRowKey}
       data-internal-id={email.internal_id}
       data-read={String(!unread)}
@@ -506,6 +529,21 @@ function EmailRowInner({
           </div>
         )}
       </div>
+      <Popmenu
+        open={tabMenuOpen}
+        onClose={() => setTabMenuOpen(false)}
+        ariaLabel={t('tabs.openInNewTab')}
+        triggerRef={rowRef}
+        portal
+        items={[
+          {
+            kind: 'action',
+            id: 'retain-email',
+            label: t('tabs.openInNewTab'),
+            onSelect: retainEmail
+          }
+        ]}
+      />
     </article>
   )
 }

@@ -1235,7 +1235,8 @@ export class MailAgentDomainClient {
   async getEmailBody(
     internalId: number,
     signal?: AbortSignal,
-    format: 'markdown' | 'html' = 'markdown'
+    format: 'markdown' | 'html' = 'markdown',
+    preserveMissingReason = false
   ): Promise<NonNullable<MailagentEmailBody['data']> | null> {
     try {
       return await this._req<NonNullable<MailagentEmailBody['data']>>(
@@ -1244,7 +1245,8 @@ export class MailAgentDomainClient {
         { query: { format }, signal }
       )
     } catch (e) {
-      if (e instanceof DomainError && e.code === 'E_NOT_FOUND') return null
+      if (!preserveMissingReason && e instanceof DomainError && e.code === 'E_NOT_FOUND')
+        return null
       throw e
     }
   }

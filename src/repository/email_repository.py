@@ -207,6 +207,8 @@ class EmailSearchResult:
     transformed_query: str
     parse_warnings: list[str] = field(default_factory=list)
     has_more: bool = False
+    coverage: Optional[dict] = None
+    effective_filters: Optional[dict] = None
 
 
 @dataclass
@@ -1759,6 +1761,91 @@ class EmailRepository:
         )
 
     def search_email_bodies_with_meta(
+        self, query: str, *, mode: str = "smart", limit: int = 50,
+        mailbox: Optional[str] = None, since_date: Optional[str] = None,
+        until_date: Optional[str] = None, now: Optional[str] = None,
+        tz_offset_minutes: Optional[int] = None, matter_id: Optional[int] = None,
+    ) -> EmailSearchResult:
+        kwargs = dict(mode=mode, limit=limit, mailbox=mailbox, since_date=since_date,
+                      until_date=until_date, now=now, tz_offset_minutes=tz_offset_minutes,
+                      matter_id=matter_id)
+        result = self._search_email_bodies_with_meta(query, **kwargs)
+        result.coverage = self.search_body_coverage(query, **kwargs)
+        result.effective_filters = {
+            "query": query, "mode": kwargs.get("mode", "smart"),
+            "mailbox": kwargs.get("mailbox"), "since": kwargs.get("since_date"),
+            "until": kwargs.get("until_date"), "matter_id": kwargs.get("matter_id"),
+            "exclude_drafts": False,
+        }
+        return result
+
+    def search_body_coverage(self, query: str, **kwargs) -> dict:
+        """Metadata candidates only, never evidence that a missing body matches query.
+
+        Complex expressions deliberately report unknown. Index presence is checked
+        against actual body channels, independently of Notion/sync status.
+        """
+        parsed = parse_search_query(query, now=kwargs.get("now"),
+                                    tz_offset_minutes=kwargs.get("tz_offset_minutes"))
+        unknown = (kwargs.get("mode") == "raw" or parsed.warnings
+                   or parsed.fts_or_groups or parsed.or_filter_groups
+                   or parsed.neg_filters or parsed.neg_fts_terms
+                   or parsed.attachment_terms or parsed.neg_attachment_terms)
+        filters, warnings = build_structured_filter_predicates(
+            mailbox=kwargs.get("mailbox"), since_date=kwargs.get("since_date"),
+            until_date=kwargs.get("until_date"), now=kwargs.get("now"),
+            tz_offset_minutes=kwargs.get("tz_offset_minutes"))
+        unknown = bool(unknown or warnings)
+        # Attachment predicates depend on fetched content and cannot bound missing bodies.
+        safe_filters = [p for p in parsed.filters if "email_attachment" not in p.sql]
+        unknown = unknown or len(safe_filters) != len(parsed.filters)
+        if not unknown:
+            filters = [*filters, *safe_filters]
+        self._append_matter_filter(filters, kwargs.get("matter_id"))
+        scope = "unknown" if unknown else ("metadata_candidates" if filters else "global")
+        params: list = []
+        where = self._append_metadata_predicates(" WHERE 1=1", params, filters)
+        channels = ["email_body_fts"]
+        if self.trigram_enabled and _count_cjk_chars(query) > 0:
+            channels.append("email_body_fts_trigram")
+        conn = self._connect()
+        # Coverage is supplementary. Bound its cost on large historical stores;
+        # an interrupted audit must not discard already successful search hits.
+        deadline = time.monotonic() + 0.25
+        conn.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+        try:
+            available = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            if "email_body" not in available:
+                return {"scope": "unknown", "candidate_count": 0, "body_missing": 0,
+                        "body_unsearchable": 0, "channels": channels,
+                        "complete": False, "samples": []}
+            index_checks = [f"EXISTS (SELECT 1 FROM {table} f WHERE f.rowid=m.internal_id)"
+                            if table in available else "0" for table in channels]
+            searchable = " AND ".join(index_checks)
+            base = (" FROM email_metadata m LEFT JOIN email_body b "
+                    "ON b.internal_id=m.internal_id" + where)
+            row = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(b.internal_id IS NULL),0), "
+                "COALESCE(SUM(b.internal_id IS NOT NULL AND "
+                "(b.body_markdown IS NULL OR NOT (" + searchable + "))),0)" + base,
+                params).fetchone()
+            samples = conn.execute(
+                "SELECT m.internal_id, m.subject" + base +
+                " AND (b.internal_id IS NULL OR b.body_markdown IS NULL OR NOT (" +
+                searchable + ")) ORDER BY m.date_received DESC LIMIT 5", params).fetchall()
+            return {"scope": scope, "candidate_count": row[0], "body_missing": row[1],
+                    "body_unsearchable": row[2], "channels": channels,
+                    "complete": not unknown and row[1] == 0 and row[2] == 0,
+                    "samples": [{"internal_id": r[0], "subject": r[1]} for r in samples]}
+        except sqlite3.OperationalError:
+            return {"scope": "unknown", "candidate_count": 0, "body_missing": 0,
+                    "body_unsearchable": 0, "channels": channels,
+                    "complete": False, "samples": []}
+        finally:
+            conn.close()
+
+    def _search_email_bodies_with_meta(
         self,
         query: str,
         *,

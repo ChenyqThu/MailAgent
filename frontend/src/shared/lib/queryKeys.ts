@@ -246,7 +246,8 @@ export const qk = {
   // 它们自带 SSE 定向失效，本 key 只管这一条。
   today: {
     all: () => ['today'] as const,
-    aggregate: (tz: string) => ['today', 'aggregate', tz] as const
+    aggregate: (tz: string, day?: number) =>
+      ['today', 'aggregate', tz, ...(day === undefined ? [] : [day])] as const
   },
 
   projectProgressRuns: (limit: number) => ['project-progress-runs', limit] as const,
