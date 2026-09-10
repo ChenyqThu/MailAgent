@@ -29,6 +29,7 @@ seed + 同一份「在册模型全集」，而它 import 不起本模块（本�
 from __future__ import annotations
 
 import time
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -50,6 +51,7 @@ from src.api.auth import verify_cf_access, verify_local_token
 from src.llm_agent.provider_routing import (
     normalize_anthropic_base,
     normalize_openai_base,
+    opencode_session_headers,
     redact_secrets,
 )
 
@@ -285,14 +287,17 @@ def _completion_request(
     """max_tokens=1 的最小补全请求（连通性测试兜底，/models 不透传时用）。URL 归一与
     runtime 同源（HIGH-2）、header 合并同 ``_models_request``（MEDIUM-5）。"""
     body = {"model": model_id, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
+    # OpenCode 拒收不带会话头的补全请求；一次探测自成一段对话。
+    session = opencode_session_headers(base, str(uuid.uuid4()), headers)
     if protocol == "anthropic":
         root = normalize_anthropic_base(base) or ""
         auth = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
-        return f"{root}/v1/messages", _merge_headers(headers, auth), body
+        return f"{root}/v1/messages", _merge_headers(headers, {**auth, **session}), body
     auth = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     if protocol == "google":
         return f"{base.rstrip('/')}/chat/completions", _merge_headers(headers, auth), body
-    return f"{normalize_openai_base(base)}/chat/completions", _merge_headers(headers, auth), body
+    url = f"{normalize_openai_base(base)}/chat/completions"
+    return url, _merge_headers(headers, {**auth, **session}), body
 
 
 def _upstream_error_detail(

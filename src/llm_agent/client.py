@@ -24,6 +24,7 @@ from __future__ import annotations
 import inspect
 import json as _json
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
@@ -291,7 +292,14 @@ class LLMClient:
             api_key=route.api_key,
             base_url=provider_routing.normalize_anthropic_base(route.base_url),
             timeout=float(cfg.llm_timeout_sec),
-            default_headers={"User-Agent": _UA, **route.headers},
+            default_headers={
+                "User-Agent": _UA,
+                **route.headers,
+                # anthropic 腿不按请求区分会话：同一客户端实例（按 provider 缓存）共用一个 ID。
+                **provider_routing.opencode_session_headers(
+                    route.base_url, str(uuid.uuid4()), route.headers
+                ),
+            },
         )
         self._anthropic_by_provider[route.provider_id] = (sig, inst)
         if cached is not None:
@@ -520,7 +528,13 @@ class LLMClient:
                 "POST",
                 path,
                 json=body,
-                headers={"Content-Type": "application/json"},
+                headers={
+                    "Content-Type": "application/json",
+                    # 单次分类 = 一段独立对话，每次一个新 ID。
+                    **provider_routing.opencode_session_headers(
+                        route.base_url if route else None, str(uuid.uuid4())
+                    ),
+                },
             ) as resp:
                 if resp.status_code >= 400:
                     err_body = (await resp.aread()).decode("utf-8", errors="replace")
@@ -830,6 +844,7 @@ class LLMClient:
         model: str,
         ctx: str,
         route: Optional[provider_routing.ProviderRoute] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """单轮 OpenAI Chat Completions 流式请求 → 聚合 {text, tool_calls, finish_reason, tokens}。
 
@@ -843,7 +858,10 @@ class LLMClient:
         completion_tokens = 0
         try:
             async with http.stream(
-                "POST", path, json=body, headers={"Content-Type": "application/json"}
+                "POST",
+                path,
+                json=body,
+                headers={"Content-Type": "application/json", **(extra_headers or {})},
             ) as resp:
                 if resp.status_code >= 400:
                     err_body = (await resp.aread()).decode("utf-8", errors="replace")
@@ -927,6 +945,12 @@ class LLMClient:
         http = self._http_for(route) if route else self._lazy_http()
         path = "/chat/completions" if route else "/v1/chat/completions"
         wire_model = route.model_id if route else model
+        # 一次 tool loop = 一段对话：各轮共用同一个会话 ID（OpenCode 按它路由与缓存）。
+        session_headers = provider_routing.opencode_session_headers(
+            route.base_url if route else None,
+            str(uuid.uuid4()),
+            route.headers if route else None,
+        )
         sys_text = _flatten_system_to_text(system_blocks)
         tools_payload = [_to_openai_tool(t) for t in tools]
         messages: List[Dict[str, Any]] = [
@@ -962,7 +986,13 @@ class LLMClient:
                     )
                 )
             turn = await self._openai_stream_turn(
-                http=http, path=path, body=body, model=model, ctx=f"iter={it}", route=route
+                http=http,
+                path=path,
+                body=body,
+                model=model,
+                ctx=f"iter={it}",
+                route=route,
+                extra_headers=session_headers,
             )
             total_in += turn["prompt_tokens"]
             total_out += turn["completion_tokens"]

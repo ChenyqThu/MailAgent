@@ -2884,6 +2884,7 @@
       },
       "headers": {
         "label": "Custom headers",
+        "opencodeSessionHint": "OpenCode requires an x-opencode-session header. MailAgent attaches a random ID per conversation automatically (used only for OpenCode routing and caching; it contains no conversation content), so there is no need to add it here. If you add one, your value is used instead.",
         "keyPlaceholder": "Header name",
         "valuePlaceholder": "Value",
         "add": "Add",

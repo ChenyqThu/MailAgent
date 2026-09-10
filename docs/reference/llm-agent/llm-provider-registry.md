@@ -176,6 +176,15 @@ flag off 的现状路径。
   模型管理里填该模型的 `maxOutput`（tool loop 默认按 64k 请求，DeepSeek/Qwen/GLM 等多家
   上限 8k-32k，行值 NULL 不 clamp → 上游 400 拒）。
 
+### 7.1 OpenCode 会话头（`x-opencode-session`，2026-09-10）
+
+OpenCode Go（`opencode.ai/zen/go`）自 2026-09-06 起拒收不带 `x-opencode-session` 的请求（400 `MissingSessionID`）。值是每段对话一个稳定 ID，按官方文档只用于路由与提示缓存，不承载对话内容，也不会让不同请求共享上下文。
+
+- **判据**：base URL 的 host 是 `opencode.ai` 或其子域。TS `frontend/src/shared/lib/opencodeSession.ts` 与 Python `provider_routing.is_opencode_base` 各一份，用同一组用例（`frontend/tests/shared/lib/opencodeSession.test.ts` / `tests/llm_agent/test_opencode_session.py`）。
+- **取值**：网关对话按会话生成（`frontend/src/ai-gateway/opencodeSessionId.ts`：会话 id + 进程随机盐 → UUID 形状，同一会话在本次运行内恒定）；标题、压缩、记忆等没有会话归属的辅助调用用 provider 级的进程兜底值。Python 分类每次一个新 ID，tool loop 各轮共用一个，anthropic 腿按客户端实例一个，连通性测试每次一个。
+- **显式配置优先**：用户在 provider 自定义 header 里配了同名头（大小写不敏感）时，两端都不再自动附加，原样使用用户的值（所有请求共用该值，功能正确，但路由与缓存无法按对话区分）。
+- 设置页 OpenCode provider 的「自定义 Header」下有一行说明，告知已自动附加。
+
 ## 8. URL canonical 规则表（HIGH-2 双端契约）
 
 DB 行存**用户原始输入**（写入仅 trim + 去尾 `/`）；归一化由消费端按协议做，**单源** = Python
@@ -226,6 +235,14 @@ DB 行存**用户原始输入**（写入仅 trim + 去尾 `/`）；归一化由�
   （空 = 本地-only，`notion_enabled()` 四面守卫，见 `.env.example` 头部注释）。
 
 ## 11. 运维
+
+### 对话报「响应出错」时查什么
+
+网关的流错误（对话 / headless agent run / 审批续跑）统一经 `frontend/src/ai-gateway/streamError.ts` 格式化成「HTTP 状态 + message + provider 返回体（截 400 字）」：同一行既显示在聊天气泡里，也落到 `~/Library/Logs/MailAgent/ai-gateway.log`（`event` = `chat_stream_error` / `agent_run_stream_error` / `approval_resume_stream_error`）。后台分类与报告的失败在 `~/Library/Application Support/mailagent-frontend/logs/` 下的 Python 日志里（`[llm] ... failed, falling back to ...`）。
+
+```bash
+grep -h '_stream_error' ~/Library/Logs/MailAgent/ai-gateway.log | tail -5
+```
 
 ### 常用 SQL（`agent_config.db`，默认在 sync_store 同目录）
 

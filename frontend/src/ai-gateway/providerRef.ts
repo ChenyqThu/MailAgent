@@ -69,6 +69,9 @@ export interface ResolvedProviderModel extends ParsedProviderRef {
    *  existing ResolvedProviderModel producer stays source-compatible. */
   maxOutputTokens?: number
   contextWindow?: number | null
+  /** provider 是 OpenCode（见 shared/lib/opencodeSession.ts）：对话请求须带按会话稳定的
+   *  `x-opencode-session`。只有 registry 解析路径会置 true。 */
+  opencodeSession?: boolean
 }
 
 export interface ProviderModelResolver {

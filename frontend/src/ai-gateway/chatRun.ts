@@ -57,6 +57,8 @@ import { SUGGEST_FOLLOWUPS_TOOL_NAME } from '@shared/assistant/followups'
 // WP-16a — effort 档位与 Brain 布尔并存：body.effort 显式合法时走 effortCallOptions（跨协议
 // wire 映射），否则旧布尔路径字节级不变。
 import { effortCallOptions, effortTierFromBody, thinkingProviderOptions } from './thinking'
+import { opencodeSessionId } from './opencodeSessionId'
+import { OPENCODE_SESSION_HEADER } from '@shared/lib/opencodeSession'
 import { appendCompactSummaryToSystem } from './compactSelect'
 // Phase 06 (context injection) — system prompt assembly + snapshot schema guard.
 import {
@@ -648,6 +650,10 @@ export async function prepareChatRun(
     messages: modelMessages,
     abortSignal,
     maxOutputTokens,
+    // OpenCode Go 要求每段对话带稳定的 x-opencode-session（shared/lib/opencodeSession.ts）。
+    ...(resolvedModel.opencodeSession
+      ? { headers: { [OPENCODE_SESSION_HEADER]: opencodeSessionId(sessionId) } }
+      : {}),
     experimental_transform: smoothStream({
       chunking: STREAM_CHUNKING_REGEX,
       delayInMs: STREAM_CHUNKING_DELAY_MS

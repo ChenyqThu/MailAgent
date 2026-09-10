@@ -22,6 +22,7 @@ import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { toastError, toastSuccess } from '@shared/state/toast'
+import { isOpencodeBaseUrl } from '@shared/lib/opencodeSession'
 import { Button } from '@shared/components/ui/button'
 import { Input } from '@shared/components/ui/input'
 import { Switch } from '@shared/components/ui/switch'
@@ -386,6 +387,11 @@ export function ProviderCard({
                 readOnly={readOnly || busy}
                 onCommit={(next) => patch({ headers: next })}
               />
+              {isOpencodeBaseUrl(provider.baseUrl) && (
+                <p className="mt-1.5 text-micro text-ink-fg-3">
+                  {t('settings.providers.headers.opencodeSessionHint')}
+                </p>
+              )}
             </div>
           </FieldRow>
           <FieldRow label={t('settings.providers.test.label')}>

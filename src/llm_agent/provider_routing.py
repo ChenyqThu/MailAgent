@@ -31,6 +31,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from loguru import logger
 
@@ -182,6 +183,29 @@ def forced_tool_choice_extra_body(
     is_deepseek_model = (model_id or "").lower().startswith("deepseek")
     quirk_protocol = "deepseek" if is_deepseek_model else (protocol or "")
     return dict(_FORCED_TOOL_CHOICE_EXTRA_BODY.get(quirk_protocol, {}))
+
+
+#: OpenCode Go（opencode.ai/zen/go）自 2026-09-06 起拒收不带该头的请求（400 MissingSessionID）。
+#: 值 = 每段对话一个稳定 ID，按官方文档只用于路由与提示缓存，不承载对话内容。
+#: TS 侧同一判据：frontend/src/shared/lib/opencodeSession.ts —— 改一处要同步。
+OPENCODE_SESSION_HEADER = "x-opencode-session"
+
+
+def is_opencode_base(base_url: Optional[str]) -> bool:
+    host = urlparse((base_url or "").strip()).hostname or ""
+    return host == "opencode.ai" or host.endswith(".opencode.ai")
+
+
+def opencode_session_headers(
+    base_url: Optional[str], session_id: str, existing: Optional[Dict[str, str]] = None
+) -> Dict[str, str]:
+    """OpenCode 端点返回 ``{x-opencode-session: session_id}``；其余 provider、或用户已在
+    provider 自定义 header 里配了同名头（尊重显式配置）时返回空 dict。"""
+    if not is_opencode_base(base_url):
+        return {}
+    if any(k.lower() == OPENCODE_SESSION_HEADER for k in (existing or {})):
+        return {}
+    return {OPENCODE_SESSION_HEADER: session_id}
 
 
 # ---------------------------------------------------------------------------

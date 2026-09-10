@@ -20,7 +20,14 @@ import {
   type ImageModel
 } from 'ai'
 
+import {
+  hasOpencodeSessionHeader,
+  isOpencodeBaseUrl,
+  OPENCODE_SESSION_HEADER
+} from '@shared/lib/opencodeSession'
+
 import { anthropicBaseUrl } from './config'
+import { OPENCODE_PROCESS_SESSION } from './opencodeSessionId'
 import {
   canonicalApiBase,
   canonicalRoot,
@@ -96,6 +103,11 @@ function sanitizeProviderHeaders(provider: ProviderSnapshotProvider): Record<str
   return out
 }
 
+/** OpenCode provider 且用户没自己配会话头 → 走自动会话头（见 shared/lib/opencodeSession.ts）。 */
+function autoOpencodeSession(provider: ProviderSnapshotProvider): boolean {
+  return isOpencodeBaseUrl(provider.baseUrl) && !hasOpencodeSessionHeader(provider.headers)
+}
+
 function createProvider(
   provider: ProviderSnapshotProvider,
   logger: ProviderRegistryLogger
@@ -103,7 +115,14 @@ function createProvider(
   const rawBaseUrl = provider.baseUrl.trim()
   const options = {
     apiKey: provider.apiKey,
-    headers: sanitizeProviderHeaders(provider)
+    // 进程级兜底会话头：标题、压缩、记忆等辅助调用没有会话归属，靠它不被拒；对话主路径在
+    // chatRun.ts 按会话覆盖（调用级 headers 盖过 provider 级）。
+    headers: {
+      ...sanitizeProviderHeaders(provider),
+      ...(autoOpencodeSession(provider)
+        ? { [OPENCODE_SESSION_HEADER]: OPENCODE_PROCESS_SESSION }
+        : {})
+    }
   }
 
   // HIGH-2 — per-protocol baseURL canonicalization (双端契约, mirrored by Python provider_routing):
@@ -214,7 +233,8 @@ function resolveFromRegistry(built: BuiltProviderRegistry, ref: string): Resolve
   return {
     ...parsed,
     model,
-    protocol: provider.protocol as ProviderProtocol
+    protocol: provider.protocol as ProviderProtocol,
+    ...(autoOpencodeSession(provider) ? { opencodeSession: true } : {})
   }
 }
 

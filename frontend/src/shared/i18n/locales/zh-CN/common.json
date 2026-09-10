@@ -2884,6 +2884,7 @@
       },
       "headers": {
         "label": "自定义 Header",
+        "opencodeSessionHint": "OpenCode 要求请求带 x-opencode-session。MailAgent 已自动为每段对话生成一个随机 ID 附上（只用于 OpenCode 的路由与缓存，不含对话内容），这里无需手动添加；手动添加后会改用你填的值。",
         "keyPlaceholder": "Header 名",
         "valuePlaceholder": "值",
         "add": "添加",
