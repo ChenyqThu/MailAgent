@@ -522,8 +522,24 @@ class NewWatcher:
         # get_last_max_row_id() 对「键缺失」和「合法持久化的 '0'」都返回 0，applescript
         # 空邮箱 baseline 0 会被误判首次 → 重定基线 → 停机期间到达的首封邮件被静默跳过。
         # 键存在即恢复（哪怕值是 0）；#34 reset 走删键 → 键缺失 → 落 first-run baseline。
+        # 水位格式版本（目前只有 outlook_com 声明）：库里记的版本与 backend 不一致 = 旧代码写的
+        # 水位，按 backend 的规则换算一次再用；首次运行定基线时直接盖上当前版本。
+        marker_format = getattr(self.backend, "MARKER_FORMAT", None)
         if self.sync_store.has_last_max_row_id():
             last_max_row_id = self.sync_store.get_last_max_row_id()
+            if (
+                marker_format
+                and last_max_row_id > 0
+                and self.sync_store.get_state('marker_format') != marker_format
+            ):
+                upgraded = self.backend.upgrade_marker(last_max_row_id)
+                logger.warning(
+                    f"[marker-format] 旧格式水位 {last_max_row_id} → {upgraded} "
+                    f"(backend={current_backend!r}, format={marker_format})"
+                )
+                last_max_row_id = upgraded
+                self.sync_store.set_last_max_row_id(upgraded)
+                self.sync_store.set_state('marker_format', marker_format)
             self.backend.set_last_max_row_id(last_max_row_id)
             logger.info(f"Restored last_max_row_id from SyncStore: {last_max_row_id}")
         else:
@@ -549,6 +565,8 @@ class NewWatcher:
             self.sync_store.set_last_max_row_id(current_max)
             # issue #34: 盖上 marker 归属，供下次启动的 guard 比对（reset 后重定基线也走这里）
             self.sync_store.set_state('marker_backend', current_backend)
+            if marker_format:
+                self.sync_store.set_state('marker_format', marker_format)
             logger.info(f"First run, set baseline max_row_id: {current_max}")
 
         # PR-4 US-008: 启动 v4_rollout flush loop (RFC §8 选项 A)

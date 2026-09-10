@@ -30,7 +30,7 @@ import { TurnPresence, TurnPresenceEmpty } from './TurnPresence'
 import { turnErrorText } from '@shared/assistant/turnErrorText'
 import { AssistantActionBar, UserActionBar } from './action-bar'
 import { FollowupSuggestions } from './FollowupSuggestions'
-import { CompactCard } from './CompactCard'
+import { CompactCard, type CompactCardData } from './CompactCard'
 
 /** Displayable image bytes of a sent attachment, or null for a non-image one. The AI SDK converter
  *  turns a user `file` part with an image/* mediaType into `{type:'image', image:<data URL>}` inside
@@ -325,10 +325,15 @@ export function AssistantMessage(): React.JSX.Element {
 }
 
 export function SystemMessage(): React.JSX.Element {
+  // 压缩标记回放后是「一段摘要文本 + metadata.custom.compact」（uiMessage.ts normalizeCompactMarker）。
+  // 🔴 selector 只取引用稳定的对象本身，不在里面加工（React #185 前科，见上方 content 的注释）。
+  const compact = useAuiState(
+    (s) => (s.message.metadata.custom as { compact?: CompactCardData }).compact
+  )
   return (
     <MessagePrimitive.Root className="mb-3 flex w-full items-center justify-center px-3">
       <div className="w-full max-w-[92%] text-micro font-mono uppercase tracking-wider text-ink-fg-3">
-        <MessagePrimitive.Parts components={{ data: { by_name: { compact: CompactCard } } }} />
+        {compact ? <CompactCard data={compact} /> : <MessagePrimitive.Parts />}
       </div>
     </MessagePrimitive.Root>
   )

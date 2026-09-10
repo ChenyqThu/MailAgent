@@ -293,7 +293,8 @@ class QueryOps:
             return pages
 
         except Exception as e:
-            logger.error(f"Failed to query pages for reverse sync: {e}")
+            # 带异常类型：超时一类异常的 str() 是空串，只打 {e} 日志里就只剩一个冒号。
+            logger.error(f"Failed to query pages for reverse sync: {type(e).__name__}: {e}")
             return pages
 
     async def update_page_mail_sync_status(

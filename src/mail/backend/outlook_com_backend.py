@@ -125,12 +125,19 @@ def _prop(obj: Any, dasl_or_proptag: str, default: Any = None) -> Any:
 
 
 def _to_epoch(dt: Any) -> Optional[int]:
-    """pywintypes/py datetime → epoch 秒 int. 解析不了返 None (由调用方决定语义)."""
+    """pywintypes/py datetime → epoch 秒 int. 解析不了返 None (由调用方决定语义).
+
+    🔴 Outlook 的 VT_DATE 是**本地墙钟时间**, 而 pywin32 (>= 300) 把它包成 tzinfo=UTC 的
+    aware datetime —— 数值没换算, 只是贴了 UTC 标签。直接 ``timestamp()`` 会把本地时间当
+    UTC, 东八区的水位整整超前 8 小时: Restrict 永远查「8 小时后」的邮件, 新邮件全部漏掉
+    (2026-09-10 Windows 反馈实证, 水位比诊断时刻还晚 6.5 小时)。所以一律丢掉 tzinfo、
+    按本地墙钟换算; naive 值本来就是本地时间, 同一条路径。
+    """
     if dt is None:
         return None
     try:
-        # pywintypes datetime 兼容 datetime 接口; naive 视为本地时间
-        return int(dt.timestamp())
+        wall = datetime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
+        return int(wall.timestamp())
     except Exception:  # noqa: BLE001
         return None
 
@@ -344,6 +351,17 @@ class OutlookComBackend:
             "@SQL=\"urn:schemas:httpmail:datereceived\" >= "
             f"'{epoch_to_dasl_local(epoch)}'"
         )
+
+    #: 水位格式版本 —— new_watcher 启动时与 sync_state['marker_format'] 比对, 不一致就用
+    #: :meth:`upgrade_marker` 换算一次。'local_epoch_v2' = 按本地墙钟换算的真 epoch (见
+    #: _to_epoch 头注); 此前写下的水位是「本地墙钟当 UTC」算出来的。
+    MARKER_FORMAT = "local_epoch_v2"
+
+    @staticmethod
+    def upgrade_marker(marker: int) -> int:
+        """旧格式水位 (本地墙钟当 UTC 算出的 epoch) → 真 epoch —— _to_epoch 修复前那一步的逆运算."""
+        wall = datetime.fromtimestamp(int(marker), tz=timezone.utc).replace(tzinfo=None)
+        return int(wall.timestamp())
 
     def set_last_max_row_id(self, row_id: int) -> None:
         """写 marker 内存缓存 (持久化由调用方走 sync_store) — 镜像 davmail."""

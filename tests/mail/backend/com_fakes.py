@@ -16,7 +16,7 @@ DASL filter 只解析 backend 真实产出的两种形状 (`_since_filter` / `_m
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Optional
 
@@ -30,8 +30,17 @@ _MSGID_RE = re.compile(r'"urn:schemas:mailheader:message-id"\s*=\s*\'((?:[^\']|\
 
 
 def local_dt(epoch: int) -> datetime:
-    """epoch 秒 → 本机时区 naive datetime (镜像 COM ReceivedTime 的 pywintypes 语义)."""
-    return datetime.fromtimestamp(int(epoch))
+    """epoch 秒 → COM ReceivedTime 的 pywin32 形态: **本地墙钟数值 + tzinfo=UTC 标签**.
+
+    🔴 pywin32 (>= 300) 把 Outlook 的本地时间 VT_DATE 包成 UTC-aware datetime 却不换算数值。
+    fake 若给 naive 本地时间, 「把它当 UTC 算」这类 bug 在测试里永远看不见 (2026-09 实际漏过)。
+    """
+    return datetime.fromtimestamp(int(epoch)).replace(tzinfo=timezone.utc)
+
+
+def _wall(dt: datetime) -> datetime:
+    """比较用: 去掉 pywin32 贴的 UTC 标签, 还原成本地墙钟 naive (Outlook 自己就是按这个比的)."""
+    return dt.replace(tzinfo=None)
 
 
 class FakePropertyAccessor:
@@ -214,7 +223,7 @@ class FakeItems:
         epoch_min = datetime.fromtimestamp(0)
         self._sorted = sorted(
             self._source,
-            key=lambda it: it.ReceivedTime or epoch_min,
+            key=lambda it: _wall(it.ReceivedTime) if it.ReceivedTime else epoch_min,
             reverse=bool(descending),
         )
 
@@ -225,7 +234,7 @@ class FakeItems:
         threshold = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
         subset = [
             it for it in self._sorted
-            if it.ReceivedTime is not None and it.ReceivedTime >= threshold
+            if it.ReceivedTime is not None and _wall(it.ReceivedTime) >= threshold
         ]
         result = FakeItems(subset)
         result._sorted = subset

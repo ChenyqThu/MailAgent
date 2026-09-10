@@ -5,7 +5,12 @@ import { join } from 'node:path'
 import { convertToModelMessages, type UIMessage } from 'ai'
 import { AssistantChatTransport } from '@assistant-ui/react-ai-sdk'
 
-import { appendMessage, closeChatDb, createNewSession, listMessages } from '../../src/electron/main/chat_db'
+import {
+  appendMessage,
+  closeChatDb,
+  createNewSession,
+  listMessages
+} from '../../src/electron/main/chat_db'
 import { chatMessageToUIMessage } from '../../src/shared/assistant/uiMessage'
 import {
   appendCompactSummaryToSystem,
@@ -57,7 +62,7 @@ afterEach(() => {
 })
 
 describe('manual compact spike', () => {
-  test('S1: system row metadata and canonical UIMessage round-trip verbatim', () => {
+  test('S1: system row metadata and canonical round-trip verbatim; reload normalizes for assistant-ui', () => {
     const session = createNewSession({ anchorType: 'general', backendKind: 'ai-sdk' })
     const uiMessage = compactMessage()
     const metadata = uiMessage.metadata as CompactMessageMetadata
@@ -72,8 +77,17 @@ describe('manual compact spike', () => {
 
     const [row] = listMessages(session.id)
     expect(JSON.parse(row.metadata ?? '{}')).toEqual(metadata)
-    expect(chatMessageToUIMessage(row)).toEqual({ ...uiMessage, id: String(row.id) })
-    expect(chatMessageToUIMessage(row).role).toBe('system')
+    // 库里的 canonical 逐字不动；回放层才规整（assistant-ui 的 system 消息必须恰好一段文本）。
+    expect(JSON.parse(row.ui_message_json ?? '{}')).toEqual(uiMessage)
+    const reloaded = chatMessageToUIMessage(row)
+    expect(reloaded.role).toBe('system')
+    expect(reloaded.parts).toEqual([
+      { type: 'text', text: '## User goal\nKeep the critical facts.' }
+    ])
+    expect(reloaded.metadata).toMatchObject({
+      ...metadata,
+      custom: { compact: { metadata, summary: '## User goal\nKeep the critical facts.' } }
+    })
   })
 
   test('S2: AssistantChatTransport preserves metadata and custom parts in body.messages', async () => {

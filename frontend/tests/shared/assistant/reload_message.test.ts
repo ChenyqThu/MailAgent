@@ -8,6 +8,7 @@
 import { describe, expect, test } from 'vitest'
 
 import { chatMessageToUIMessage } from '@shared/assistant/uiMessage'
+import { selectMessagesForModelContext } from '../../../src/ai-gateway/compactSelect'
 
 describe('chatMessageToUIMessage — renderer reload row (no ui_message_json field)', () => {
   test('synthesizes a text UIMessage from content when ui_message_json is omitted', () => {
@@ -51,5 +52,62 @@ describe('chatMessageToUIMessage — renderer reload row (no ui_message_json fie
     })
     expect(ui.role).toBe('user')
     expect(ui.parts).toEqual([{ type: 'text', text: 'what changed?' }])
+  })
+})
+
+describe('chatMessageToUIMessage — 压缩标记回放', () => {
+  const metadata = {
+    kind: 'compact',
+    version: 1,
+    compactedThroughMessageId: 4,
+    firstKeptMessageId: 5,
+    tokensBefore: 1000,
+    estimatedTokensAfter: 100,
+    model: 'm',
+    reason: 'threshold',
+    valid: true,
+    createdAt: 1
+  }
+  const compactRow = {
+    id: 9,
+    role: 'system' as const,
+    content: '十节摘要',
+    thinking: null,
+    model: 'm',
+    tokens_input: null,
+    tokens_output: null,
+    ui_message_json: JSON.stringify({
+      id: 'compact-1',
+      role: 'system',
+      metadata,
+      parts: [{ type: 'data-compact', data: { metadata, summary: '十节摘要' } }]
+    })
+  }
+
+  test('规整成 system + 恰好一段文本；顶层 metadata 保留，custom.compact 带卡片数据', () => {
+    const ui = chatMessageToUIMessage(compactRow)
+    expect(ui.role).toBe('system')
+    expect(ui.parts).toEqual([{ type: 'text', text: '十节摘要' }])
+    expect(ui.metadata).toMatchObject({
+      kind: 'compact',
+      valid: true,
+      custom: { compact: { metadata, summary: '十节摘要' } }
+    })
+  })
+
+  test('网关的压缩选择照样认得规整后的标记', () => {
+    const follow = chatMessageToUIMessage({
+      id: 10,
+      role: 'user',
+      content: '继续',
+      thinking: null,
+      model: null,
+      tokens_input: null,
+      tokens_output: null
+    })
+    const selected = selectMessagesForModelContext([chatMessageToUIMessage(compactRow), follow])
+    expect(selected.summary).toBe('十节摘要')
+    expect(selected.metadata?.compactedThroughMessageId).toBe(4)
+    expect(selected.messages.map((m) => m.id)).toEqual(['10'])
   })
 })

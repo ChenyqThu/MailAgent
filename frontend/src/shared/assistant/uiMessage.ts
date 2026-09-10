@@ -86,6 +86,33 @@ export function parseUiMessageJson(raw: string | null): MailAgentUIMessage | nul
   return null
 }
 
+/** 压缩标记（compact.ts 写入的 canonical）是 role='system' + 一个 `data-compact` 数据块。
+ *  🔴 assistant-ui 要求 system 消息**恰好一段文本**，原样交给运行时会在渲染前抛
+ *  「System messages must have exactly one text message part」，整个对话面板崩掉（09-10 自动压缩
+ *  后实测）。回放时规整成「一段摘要文本」：顶层 metadata 原样保留（网关 compactSelect 靠它认标记、
+ *  取 valid），另复制一份到 `metadata.custom.compact` —— assistant-ui 的 system 消息只留 custom，
+ *  压缩卡片从那里读。库里的 canonical 不改写，markCompactInvalid 等写侧照旧。 */
+function normalizeCompactMarker(message: MailAgentUIMessage): MailAgentUIMessage {
+  if (message.role !== 'system') return message
+  const part = message.parts.find((p) => p.type === 'data-compact') as
+    | { data?: { summary?: unknown } }
+    | undefined
+  if (!part) return message
+  // 与网关 compactSelect.messageText 同一口径：文本段优先，没有才取数据块里的 summary。
+  const summary =
+    extractTextFromUIMessage(message) ||
+    (typeof part.data?.summary === 'string' ? part.data.summary : '')
+  const metadata = (message.metadata ?? {}) as Record<string, unknown>
+  return {
+    ...message,
+    parts: [{ type: 'text', text: summary }],
+    metadata: {
+      ...metadata,
+      custom: { compact: { metadata, summary } }
+    } as MailAgentUIMessageMetadata
+  }
+}
+
 /** Convert a persisted ChatMessage row to a UIMessage. The reload primitive used
  *  when re-hydrating a prior session into the AI SDK runtime. NOTE (Phase 02): the
  *  WRITE side (dual-write in the Gateway onFinish) is wired + tested; feeding these
@@ -101,7 +128,7 @@ export function parseUiMessageJson(raw: string | null): MailAgentUIMessage | nul
 export function chatMessageToUIMessage(row: ReloadableChatMessageRow): MailAgentUIMessage {
   const id = String(row.id)
   const canonical = parseUiMessageJson(row.ui_message_json ?? null)
-  if (canonical) return { ...canonical, id }
+  if (canonical) return normalizeCompactMarker({ ...canonical, id })
 
   const role: MailAgentUIMessage['role'] = row.role === 'user' ? 'user' : 'assistant'
   const parts: MailAgentUIMessage['parts'] = []

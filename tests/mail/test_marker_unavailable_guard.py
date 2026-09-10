@@ -228,3 +228,45 @@ def test_missing_marker_key_goes_first_run_baseline(tmp_path):
     assert backend.get_current_max_calls == 1     # 首次 → baseline
     assert backend.set_marker_calls == [777]
     assert w.sync_store.get_last_max_row_id() == 777
+
+
+# =========================================================================
+# 水位格式版本 (outlook_com 09-10): 旧代码把「本地墙钟当 UTC」写进了水位, 升级后换算一次。
+# =========================================================================
+
+
+class _FormattedMarkerBackend(_MarkerBackend):
+    MARKER_FORMAT = "v2"
+
+    @staticmethod
+    def upgrade_marker(marker):
+        return marker - 100
+
+
+def test_legacy_marker_format_upgraded_once(tmp_path):
+    """库里没有格式版本 = 旧代码写的水位 → 换算一次并持久化; 再启动不重复换算."""
+    from src.config import config
+    current = getattr(config, "mailagent_backend", "applescript")
+    backend = _FormattedMarkerBackend([9999])  # 探针: 不该重定基线
+    w = _baseline_watcher(tmp_path, backend)
+    w.sync_store.set_last_max_row_id(5_000)
+    w.sync_store.set_state("marker_backend", current)
+    asyncio.run(w.start())
+    assert backend.get_current_max_calls == 0
+    assert backend.set_marker_calls == [4_900]
+    assert w.sync_store.get_last_max_row_id() == 4_900
+    assert w.sync_store.get_state("marker_format") == "v2"
+
+    again = _FormattedMarkerBackend([9999])
+    w2 = _baseline_watcher(tmp_path, again)
+    asyncio.run(w2.start())
+    assert again.set_marker_calls == [4_900]  # 不会再减一次
+
+
+def test_first_run_baseline_stamps_marker_format(tmp_path):
+    """新代码首次定基线就是新格式 → 直接盖版本, 下次启动绝不能被当旧水位「纠正」."""
+    backend = _FormattedMarkerBackend([777])
+    w = _baseline_watcher(tmp_path, backend)
+    asyncio.run(w.start())
+    assert w.sync_store.get_last_max_row_id() == 777
+    assert w.sync_store.get_state("marker_format") == "v2"

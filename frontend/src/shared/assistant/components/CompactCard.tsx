@@ -1,11 +1,10 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { DataMessagePartProps } from '@assistant-ui/react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 
 import type { CompactMessageMetadata } from '../../../ai-gateway/compactSelect'
 
-interface CompactCardData {
+export interface CompactCardData {
   metadata: CompactMessageMetadata
   summary: string
 }
@@ -14,7 +13,7 @@ function formatTokens(tokens: number): string {
   return tokens >= 1_000 ? `${Math.round(tokens / 100) / 10}K` : String(tokens)
 }
 
-export function CompactCard({ data }: DataMessagePartProps<CompactCardData>): React.JSX.Element {
+export function CompactCard({ data }: { data: CompactCardData }): React.JSX.Element {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const metadata = data.metadata

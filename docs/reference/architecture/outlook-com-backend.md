@@ -28,6 +28,8 @@ OutlookComBackend (outlook_com_backend.py)  — IMailBackend 17 方法 + backend
 ```
 
 - **marker = 收件箱 ReceivedTime 水位**（epoch 秒 int，单调）。🔴 三态契约：取不到 raise `MarkerUnavailableError`（绝不回 0——task 07-14 L3：0 会被持久化成 baseline 触发全量重刷）；枚举/快照/internal_id 分配失败 raise `FolderFetchError`（绝不 `return []` 吞错——2026-08-11 丢邮件事故契约，游标不得推进）；OK+空结果才返 `[]`。watcher 保 poll 形状零改动（案 A；`OnNewMailEx` 事件推送留 v2）。
+  - 🔴 **时区坑（2026-09-10 Windows 反馈实证）**：pywin32（>= 300）把 Outlook 的本地时间 VT_DATE 包成 `tzinfo=UTC` 的 aware datetime，**数值不换算**。直接 `timestamp()` 会把本地墙钟当 UTC，东八区水位超前 8 小时 → Restrict 永远查「8 小时后」→ 新邮件全部漏掉且游标照常推进。`_to_epoch` 一律去掉 tzinfo、按本地墙钟换算；测试替身 `com_fakes.local_dt` 照 pywin32 真实形态造值（给 naive 值会让这类 bug 永远测不出来）。
+  - 旧版本写下的水位用 `MARKER_FORMAT='local_epoch_v2'` + `upgrade_marker` 在 watcher 启动时换算一次（`sync_state['marker_format']` 记版本；首次定基线直接盖版本）。修复前已经漏掉的邮件不会自动补回，需要回填。
 - **internal_id 照抄 davmail 模式**：`sync_store.allocate_davmail_internal_id()` KV 原子自增（≥10^9，与 Mail.app ROWID 空间隔离），两 backend 共用同一序列。
 - **EntryID 只当缓存不当锚**（v53 `email_metadata.entry_id` 列）：EntryID 在邮件移动后会变（MAPI 语义），稳定锚是 `message_id UNIQUE`；entry_id miss/失效时 Table API 按 `PR_INTERNET_MESSAGE_ID`（DASL 0x1035001F）反查 + 回写自愈——与 davmail imap_uid 双路设计同构（imap_uid 实测 32% 漂移，该模式已验证）。
 - **MIME 重组**（P0 风险核心）：COM 没有可靠的「给我原始 MIME」API，而整条解析链（`EmailReader.parse_email_source` → 附件/.ics/线程/v4 SSoT）吃 RFC822 原文 → 本地重组。头策略 = 优先 `PR_TRANSPORT_MESSAGE_HEADERS` 原文（References/In-Reply-To 链全保留，thread_id 推导靠它）、剥结构性头、transport 头缺失（草稿/已发送常见）时从 item 属性合成；结构策略 = alternative/related(内联图 cid)/mixed 镜像常见 MUA 产物，.ics 附件恒 `text/calendar`（会议解析链依赖）。保真度由 mock 单测（`tests/mail/backend/test_outlook_mime.py`）+ 真机 PoC 双层闸。

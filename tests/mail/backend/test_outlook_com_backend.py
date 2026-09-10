@@ -21,7 +21,7 @@ os.environ.setdefault("USER_EMAIL", "ci@example.test")
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -153,6 +153,45 @@ def test_marker_unreadable_received_time_raises(env):
     item.ReceivedTime = object()  # timestamp() 不存在 → _to_epoch None
     with pytest.raises(MarkerUnavailableError):
         env.backend.get_current_max_row_id()
+
+
+@pytest.fixture()
+def shanghai_tz(monkeypatch):
+    """东八区跑 (反馈人现场): UTC 时区的 CI 上这组断言会平凡成立, 必须显式切时区."""
+    monkeypatch.setenv("TZ", "Asia/Shanghai")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+def test_to_epoch_reads_pywin32_utc_label_as_local_wall_time(shanghai_tz):
+    from src.mail.backend.outlook_com_backend import _to_epoch
+
+    # 本地 22:00:22 收的信 → pywin32 给「22:00:22 + tzinfo=UTC」; 真 epoch 是 14:00:22Z
+    received = datetime(2026, 9, 10, 22, 0, 22, tzinfo=timezone.utc)
+    expected = datetime(2026, 9, 10, 14, 0, 22, tzinfo=timezone.utc).timestamp()
+    assert _to_epoch(received) == int(expected)
+
+
+def test_upgrade_marker_undoes_legacy_utc_label_offset(shanghai_tz):
+    from src.mail.backend.outlook_com_backend import OutlookComBackend
+
+    # 反馈人诊断包里的水位: 本地 22:00:22 被当成 UTC 算出的 1789077622
+    assert OutlookComBackend.upgrade_marker(1_789_077_622) == 1_789_048_822
+
+
+def test_new_mail_after_marker_is_found_in_utc_plus_zone(env, shanghai_tz):
+    """修复前: 水位超前 8 小时 → Restrict 查「8 小时后」→ 这封新信永久漏掉."""
+    _inbox_item(env.store, epoch=BASE)
+    marker = env.backend.get_current_max_row_id()
+    assert marker == BASE
+    _inbox_item(env.store, epoch=BASE + 60)
+    has_new, current, _ = env.backend.check_for_changes(marker)
+    assert has_new is True
+    assert current == BASE + 60
+    rows = env.backend.get_new_emails(marker)
+    assert any(str(BASE + 60) in str(r.get("message_id")) for r in rows)
 
 
 def test_marker_memory_cache_roundtrip(env):
