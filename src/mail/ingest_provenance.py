@@ -31,6 +31,34 @@ from loguru import logger
 INGEST_REALTIME = "realtime"
 INGEST_STARTUP_CATCHUP = "startup_catchup"
 INGEST_RECONCILE = "inbox_reconcile"
+#: 用户手动发起的「同步历史邮件」补回来的行 (task 09-11)。
+INGEST_HISTORY = "history_sync"
+
+
+def is_history_ingest(sync_store: Any, internal_id: Optional[int]) -> bool:
+    """这封邮件是不是「同步历史邮件」补回来的 (task 09-11)。
+
+    ``new_watcher._sync_single_email_v3`` 用它门掉三个**实时性语义**的钩子:
+    灵动岛推送、Custom Agent 的 email_filter 触发、项目周报钩子。用户补 2024 年的
+    邮件时, 这三个钩子会把几百封老邮件当"刚到的新邮件"处理 —— 弹通知、起 agent run、
+    跑周报同步, 全是噪音且可能有真实副作用。
+
+    AI 分类 / KOS / 事项线程关联**照常跑**: 它们是对邮件内容的加工, 与"什么时候到的"
+    无关, 补回来的邮件同样需要。
+
+    读取失败一律返回 ``False`` (按普通邮件处理): 判不出来时宁可多跑一次钩子,
+    也不因为读不到 provenance 就把真正的新邮件静默降级。
+    """
+    if not internal_id or sync_store is None:
+        return False
+    try:
+        row = sync_store.get(internal_id)
+    except Exception as e:
+        logger.debug(f"[provenance] read failed for internal_id={internal_id}: {e}")
+        return False
+    if not row:
+        return False
+    return (row.get("ingest_reason") if hasattr(row, "get") else None) == INGEST_HISTORY
 
 
 def _parse_iso(value: Any) -> Optional[datetime]:
@@ -65,9 +93,6 @@ def should_suppress_reconcile_notify(
     """
     if not internal_id or sync_store is None:
         return False
-    max_age = int(max_age_sec or 0)
-    if max_age <= 0:
-        return False
     try:
         row = sync_store.get(internal_id)
     except Exception as e:
@@ -75,8 +100,21 @@ def should_suppress_reconcile_notify(
         return False
     if not row:
         return False
-    if (row.get("ingest_reason") if hasattr(row, "get") else None) != INGEST_RECONCILE:
+    reason = row.get("ingest_reason") if hasattr(row, "get") else None
+    if reason == INGEST_HISTORY:
+        # 「同步历史邮件」是用户主动发起的一次性补录, **不看年龄一律抑制**: 补录的
+        # 范围可以是今天 (年龄阈值拦不住), 一次几百封全推飞书就是刷屏。用户正看着
+        # 设置页的进度条, 不需要另一条通知告诉他"你刚要求补的邮件到了"。
+        logger.info(
+            f"[feishu] skip internal_id={internal_id}: 同步历史邮件补录的行 —— "
+            f"通知是实时性语义, 用户主动补录的邮件不推送; 邮件本身已正常入库"
+        )
+        return True
+    if reason != INGEST_RECONCILE:
         return False        # 非对账补抓 (含 NULL 存量) → 一律照常通知
+    max_age = int(max_age_sec or 0)
+    if max_age <= 0:
+        return False
     received = _parse_iso(row.get("date_received"))
     if received is None:
         return False        # 日期不可用 → 保守通知

@@ -419,6 +419,7 @@ from src.api.routers import (  # noqa: E402
     email_views,
     exec as exec_router,  # 'exec' 是内建名，别名避免遮蔽
     folder,
+    history_sync,
     im,
     island,
     jobs,
@@ -456,6 +457,9 @@ app.include_router(email_views.router)
 # 路由不撞：email.py 的动态段是 `{internal_id:int}`，'remote-image' 匹配不到 int 转换器。
 app.include_router(email_remote_image.router)
 app.include_router(jobs.router)
+# 同步历史邮件 (task 09-11): 一次性补回某个日期范围内本地缺的邮件。任务本体是
+# async_jobs 的 history_sync 维护任务 (JobWorker 执行), 本 router 只管发起/取消/读进度。
+app.include_router(history_sync.router)
 app.include_router(reports.router)
 app.include_router(matters.router)
 # 统一通知中心 (task 08-20-notification-center) — /api/notifications* 列表/未读数/

@@ -15,6 +15,7 @@
 | [`llm-agent/`](./llm-agent/index.md) | LLM Agent / Harness / KOS —— 本地 LLM 邮件分类、前端 chat 多轮 agent、跨域知识图 KOS。 |
 | [`calendar/`](./calendar/index.md) | Calendar 模块 —— CalDAV → SQLite SSoT 的日历同步。 |
 | [`folder-sync/`](./folder-sync/index.md) | 存档/草稿箱 + 多文件夹同步 —— folder_sync：自定义 Exchange 文件夹并入主链路。 |
+| [`sync/`](./sync/index.md) | 同步任务 —— 主链路之外的一次性 / 补偿性同步（同步历史邮件）。 |
 | [`remote-chat-report/`](./remote-chat-report/index.md) | 远程 chat + 报告 Agent —— V2.1 远程 web chat/report，与日/周/月报告 Agent 系统。 |
 | [`project-progress/`](./project-progress/index.md) | 项目周报同步 —— 外挂模块：xlsx → Notion 项目周报。 |
 | [`packaging/`](./packaging/index.md) | 打包 / 发布 / Onboarding —— 前后端一体化 .app 打包、发布、新老用户 onboarding。 |

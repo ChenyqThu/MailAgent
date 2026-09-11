@@ -6,6 +6,7 @@ handlers / fanout) 切 backend 无感知. 详见 plan §"切换边界 — 命令
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Literal, Optional
 
 BackendOrigin = Literal["applescript", "davmail", "outlook_com"]
@@ -181,6 +182,30 @@ class SendResult:
     archived_to_sent: bool = False  # 是否做了手动 Sent 归档 (davmail_archive_sent 兜底命中)
     method: Optional[str] = None  # "smtp_davmail" / "smtp_applescript" / etc
     error: Optional[str] = None
+
+
+@dataclass
+class HistoryScanResult:
+    """历史邮件窗口扫描 (``scan_history_window``) 的一次结果。
+
+    语义与 ``InboxReconcileResult`` 刻意不同, 别照抄:
+
+    - ``items``: 窗口内远端**全部**邮件的元数据 dict (收件箱 + 已发送), 形状对齐
+      ``get_new_emails`` 的行, 但 **不含 ``internal_id``** —— 是否入库、分配哪个 id
+      由调用方 (``src/sync/history_sync.py``) 按 Message-ID 与本地比对后决定。
+      backend 不读本地库, 因此也不承担"缺什么"的判断。
+    - ``complete``: 窗口是否被真正覆盖。davmail 的 IMAP 视图被
+      ``davmail.folderSizeLimit`` 截断成"最近 N 封", ``SEARCH SINCE`` 打不穿它 ——
+      窗口更老的那段根本不可见, 此时 ``False`` + ``covered_from`` 给出实际覆盖到的
+      时刻。🔴 不能谎称成功: 用户看到"完成"却少了一半邮件, 比明说"只覆盖到 X 日"危险。
+    - ``empty_msgid``: 窗口内无 Message-ID 的邮件数。它们无稳定标识可比对, 调用方
+      一律跳过 —— 计数留痕而不是静默丢弃 (同对账路径的异常通道纪律)。
+    """
+
+    items: list = field(default_factory=list)
+    complete: bool = True
+    covered_from: Optional["datetime"] = None
+    empty_msgid: int = 0
 
 
 @dataclass

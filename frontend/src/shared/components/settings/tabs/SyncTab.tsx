@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
 import { EnvField } from '../parts/EnvField'
+import { HistorySyncSection } from '../parts/HistorySyncSection'
 
 export function SyncTab(): React.ReactElement {
   const { t } = useTranslation()
@@ -47,6 +48,8 @@ export function SyncTab(): React.ReactElement {
           max={365}
         />
       </Section>
+
+      <HistorySyncSection />
 
       <Section title={t('settings.sync.cadence.title')}>
         <EnvField

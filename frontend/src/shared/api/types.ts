@@ -53,6 +53,15 @@ export type {
 } from './types/translate'
 export type { JobType, JobStatus, JobEnqueueResult, JobRecord, JobsApi } from './types/jobs'
 export type {
+  HistorySyncPhase,
+  HistorySyncCounts,
+  HistorySyncJob,
+  HistorySyncState,
+  HistorySyncStartResult,
+  HistorySyncCancelResult,
+  HistorySyncApi
+} from './types/historySync'
+export type {
   FolderInfo,
   FolderTreeNode,
   FolderDiscoverResult,

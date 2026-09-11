@@ -57,7 +57,10 @@ from src.repository import (
 from src.mail.backend.base import MarkerUnavailableError
 from src.mail.backend.imap_client import parse_folder_csv_or_json
 from src.mail.backend.serial_executor import run_backend_io
-from src.mail.ingest_provenance import should_suppress_reconcile_notify
+from src.mail.ingest_provenance import (
+    is_history_ingest,
+    should_suppress_reconcile_notify,
+)
 from src.mail.throttle_pause import is_uid_backfill_paused
 
 
@@ -224,20 +227,16 @@ def _parse_sync_start_date() -> Optional[datetime]:
 
     如果未配置或配置为空，则不过滤日期（正常启动后只同步新邮件）。
 
+    ⚠️ 实现下沉到 ``src.config.parse_sync_start_date`` —— 设置页「同步历史邮件」要把
+    这个 Notion 日期地板显示给用户，两处各解析一份迟早对不上（界面承诺的日期与实际
+    入库行为分裂）。本函数保留为 watcher 侧的既有名字。
+
     Returns:
         同步起始日期（带时区），早于此日期的邮件不同步到 Notion
     """
-    if not settings.sync_start_date:
-        return None
+    from src.config import parse_sync_start_date
 
-    tz = timezone(timedelta(hours=8))  # 北京时区
-
-    try:
-        dt = datetime.strptime(settings.sync_start_date, "%Y-%m-%d")
-        return dt.replace(tzinfo=tz)
-    except ValueError:
-        logger.warning(f"Invalid SYNC_START_DATE format: {settings.sync_start_date}, expected YYYY-MM-DD")
-        return None
+    return parse_sync_start_date(settings)
 
 
 class NewWatcher:
@@ -1898,16 +1897,24 @@ class NewWatcher:
             # _progress_hook_active 里被 notion_enabled 再门掉——它本身写 Notion 库）。
             # enabled 路径（下方 步骤6-12）一字不动 —— 本分支是纯新增，存量
             # （三键非空）行为零漂移。
+            # 「同步历史邮件」(task 09-11) 补录的行不走三个**实时性语义**的钩子:
+            # 灵动岛推送 / Custom Agent 的 email_filter 触发 / 项目周报钩子。补一年前的
+            # 邮件不该弹通知、起 agent run、跑周报同步。LLM 分类 / KOS / 事项线程关联
+            # 照常 —— 那是对邮件内容的加工, 与"什么时候到的"无关。
+            history_ingest = is_history_ingest(self.sync_store, internal_id)
+
             if not notion_enabled():
                 self.sync_store.mark_synced_local(internal_id)
                 self._stats["emails_synced"] += 1
                 logger.info(f"Email synced (local-only, Notion disabled): {internal_id}")
                 await self._maybe_link_matter_thread_subscriptions(email_obj, internal_id)
-                self._maybe_trigger_project_progress_hook(email_obj, internal_id, "")
+                if not history_ingest:
+                    self._maybe_trigger_project_progress_hook(email_obj, internal_id, "")
                 self._maybe_trigger_llm_hook(email_obj, internal_id, "")
                 self._maybe_trigger_kos_hook(email_obj, internal_id, "")
-                self._maybe_dispatch_island_received(email_obj, internal_id, "")
-                self._maybe_trigger_custom_agents(email_obj, internal_id)
+                if not history_ingest:
+                    self._maybe_dispatch_island_received(email_obj, internal_id, "")
+                    self._maybe_trigger_custom_agents(email_obj, internal_id)
                 return
 
             # 6. 同步到 Notion
@@ -1926,7 +1933,8 @@ class NewWatcher:
                 await self._maybe_link_matter_thread_subscriptions(email_obj, internal_id)
 
                 # 8. 项目周报外挂钩子（非阻塞、异常不影响主流程）
-                self._maybe_trigger_project_progress_hook(email_obj, internal_id, page_id)
+                if not history_ingest:
+                    self._maybe_trigger_project_progress_hook(email_obj, internal_id, page_id)
 
                 # 9. 本地 LLM Agent 钩子（非阻塞、异常不影响主流程）
                 self._maybe_trigger_llm_hook(email_obj, internal_id, page_id)
@@ -1935,11 +1943,12 @@ class NewWatcher:
                 # — 非阻塞推 Jarvis KOS v2 让图谱跨域 entity 合并丰富
                 self._maybe_trigger_kos_hook(email_obj, internal_id, page_id)
 
-                # 11. ping-island MailReceived（非阻塞，默认关；启用前提见 .env.example）
-                self._maybe_dispatch_island_received(email_obj, internal_id, page_id)
+                if not history_ingest:
+                    # 11. ping-island MailReceived（非阻塞，默认关；启用前提见 .env.example）
+                    self._maybe_dispatch_island_received(email_obj, internal_id, page_id)
 
-                # 12. Custom Agent email_filter 触发钩子（S4，非阻塞，默认关）
-                self._maybe_trigger_custom_agents(email_obj, internal_id)
+                    # 12. Custom Agent email_filter 触发钩子（S4，非阻塞，默认关）
+                    self._maybe_trigger_custom_agents(email_obj, internal_id)
             else:
                 self.sync_store.mark_failed_v3(internal_id, "Notion sync returned None")
 

@@ -95,6 +95,10 @@ import type {
   EnvSnapshot,
   EventsApi,
   EventsStatus,
+  HistorySyncApi,
+  HistorySyncCancelResult,
+  HistorySyncStartResult,
+  HistorySyncState,
   ServiceRestartResult,
   ServiceStatus,
   ServiceTarget,
@@ -864,6 +868,22 @@ class ElectronJobsApi implements JobsApi {
   }
 }
 
+// 同步历史邮件 (task 09-11)。三个 channel 经 daemonRequest 转发 /api/history-sync*;
+// 与 jobs:get 同款 envelope → unwrap (E_NOT_FOUND 等抛 Error & {code})。
+class ElectronHistorySyncApi implements HistorySyncApi {
+  async get(): Promise<HistorySyncState> {
+    return unwrap((await invoker()('historySync:get')) as WriteEnvelope<HistorySyncState>)
+  }
+  async start(range: { since: string; until: string }): Promise<HistorySyncStartResult> {
+    return unwrap(
+      (await invoker()('historySync:start', range)) as WriteEnvelope<HistorySyncStartResult>
+    )
+  }
+  async cancel(): Promise<HistorySyncCancelResult> {
+    return unwrap((await invoker()('historySync:cancel')) as WriteEnvelope<HistorySyncCancelResult>)
+  }
+}
+
 // Sprint 18 §PR B — repo-root .env + pm2 services. Both APIs are pure
 // thin IPC bridges; no caching here (cache lives in useEnvStore on the
 // renderer side, refreshed on demand).
@@ -1048,6 +1068,7 @@ class ElectronTodayApi implements TodayApi {
 export class ElectronApi implements MailApi {
   email: EmailApi = new ElectronEmailApi()
   jobs: JobsApi = new ElectronJobsApi()
+  historySync: HistorySyncApi = new ElectronHistorySyncApi()
   folder: FolderApi = new ElectronFolderApi()
   attachment: AttachmentApi = new ElectronAttachmentApi()
   ai: AiApi = new ElectronAiApi()

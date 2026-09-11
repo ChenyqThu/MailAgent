@@ -85,6 +85,9 @@ import type {
   FolderPrefsResult,
   FolderSetWhitelistResult,
   FolderWhitelistResult,
+  HistorySyncCancelResult,
+  HistorySyncStartResult,
+  HistorySyncState,
   JobEnqueueResult,
   JobRecord,
   KosStatsData,
@@ -445,6 +448,19 @@ export class HttpApi implements MailApi {
   // watchResyncJob 纯靠此轮询拿终态。GET /api/jobs/{id}。
   jobs = {
     get: (jobId: number): Promise<JobRecord> => this.req<JobRecord>('GET', `/jobs/${jobId}`)
+  }
+
+  // 同步历史邮件 (task 09-11)。web 无 SSE, 进度靠 HistorySyncSection 的轮询。
+  historySync = {
+    get: (): Promise<HistorySyncState> => this.req<HistorySyncState>('GET', '/history-sync'),
+
+    start: (range: { since: string; until: string }): Promise<HistorySyncStartResult> =>
+      this.req<HistorySyncStartResult>('POST', '/history-sync', {
+        body: { since: range.since, until: range.until }
+      }),
+
+    cancel: (): Promise<HistorySyncCancelResult> =>
+      this.req<HistorySyncCancelResult>('POST', '/history-sync/cancel', { body: {} })
   }
 
   // 多文件夹同步 (P3/P4/P5) — discover/whitelist/manage/cleanup。davmail-only

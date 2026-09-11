@@ -127,6 +127,7 @@ describe('qk — settings / skill / notionAgent / policy / llm / admin', () => {
   test('settings + skill config/secrets', () => {
     expect(qk.settings.all()).toEqual(['settings'])
     expect(qk.settings.secretsStatus()).toEqual(['settings', 'secrets-status'])
+    expect(qk.historySync()).toEqual(['history-sync'])
     expect(qk.skillSecrets('s')).toEqual(['skillSecrets', 's'])
     expect(qk.skillConfig('s')).toEqual(['skillConfig', 's'])
   })

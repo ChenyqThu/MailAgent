@@ -77,6 +77,7 @@ class AsyncJobRepository:
         "resync",
         "backfill_body",
         "backfill_metadata",
+        "history_sync",
     })
     AGENT_JOB_TYPES = frozenset({
         "agent_run",

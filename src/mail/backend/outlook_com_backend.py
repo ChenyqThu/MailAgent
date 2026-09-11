@@ -87,6 +87,7 @@ from src.mail.backend.types import (
     DraftAppendResult,
     DraftRequest,
     EmailContent,
+    HistoryScanResult,
     SendResult,
 )
 
@@ -498,6 +499,112 @@ class OutlookComBackend:
                 else min(self._resume_at, resume_at)
             )
         return out
+
+    # ------------------------------------------------------------------
+    # 历史邮件窗口扫描 (task 09-11, 可选能力)
+    # ------------------------------------------------------------------
+
+    def scan_history_window(
+        self, since_utc: datetime, until_utc: datetime
+    ) -> HistoryScanResult:
+        """历史邮件窗口扫描 — 列出窗口内远端**全部**邮件 (收件箱 + 已发送), 不比对本地。
+
+        调用方 ``src/sync/history_sync.py`` 按天切片调用, 拿 Message-ID 与本地比对后
+        决定补哪些。可选能力 (``hasattr`` 门)。
+
+        ## 两层筛选
+
+        DASL 日期字面量只精确到分钟 (见 ``epoch_to_dasl_utc``), 所以服务端窗口下界
+        向下取整、上界**向上取整** —— 上界若跟着向下取整, 最后那不足一分钟里的邮件
+        会被服务端直接筛掉, 本地再怎么过滤也补不回来。精确边界在本地按
+        ``ReceivedTime`` 判, 粗筛只负责少枚举。
+
+        ## MAX_BATCH 不适用
+
+        增量路径的 ``MAX_BATCH`` 是防首拉灌爆 STA 线程; 这里窗口已由调用方切成一天,
+        再截断反而会静默漏掉当天较晚的邮件 (本方法没有 marker 可以"下轮继续")。
+
+        ``complete`` 恒 ``True``: COM 直连本机 Outlook, 没有 davmail 那种截断视图。
+        收件箱失败 raise ``FolderFetchError``; 已发送失败只降级 ``complete=False``。
+        """
+        since_epoch = int(since_utc.timestamp())
+        # 上界向上取整到分钟 (见 docstring): 宁可服务端多给几封, 本地精确过滤再切齐。
+        until_epoch = ((int(until_utc.timestamp()) + 59) // 60) * 60
+
+        items: list[dict] = []
+        empty_msgid = 0
+        complete = True
+        seen_msgids: set[str] = set()
+
+        def _scan(mailbox_label: str) -> None:
+            nonlocal empty_msgid
+
+            def _collect(session: OutlookSession) -> list[ItemSnapshot]:
+                folder = self._folder_for_label(session, mailbox_label)
+                items_col = folder.Items
+                items_col.Sort("[ReceivedTime]", False)
+                restricted = items_col.Restrict(
+                    self._window_filter(since_epoch, until_epoch)
+                )
+                snaps: list[ItemSnapshot] = []
+                item = restricted.GetFirst()
+                while item is not None:
+                    # 非邮件 item (会议回执/任务) 没有 MailItem 属性面 — Class 43 = olMail
+                    if int(_com_get(item, "Class", 43)) == 43:
+                        snaps.append(
+                            self._snapshot_item(
+                                item, want_attachments=False, want_headers=True
+                            )
+                        )
+                    item = restricted.GetNext()
+                return snaps
+
+            try:
+                snaps = self._com(_collect, op=f"history-scan-{mailbox_label}")
+            except Exception as e:  # noqa: BLE001 — 统一翻译成三态契约异常
+                raise FolderFetchError(
+                    f"outlook_com history scan {mailbox_label!r} "
+                    f"[{since_utc.isoformat()}, {until_utc.isoformat()}) failed: {e}"
+                ) from e
+
+            for snap in snaps:
+                received = snap.received_time
+                if received is not None and not (since_utc <= received < until_utc):
+                    continue                    # 粗筛取整带进来的窗口外邮件
+                row = self._meta_row_from_snapshot(snap, mailbox_label)
+                mid = (row.get("message_id") or "").strip()
+                if not mid:
+                    # 无 Message-ID = 无稳定标识, 调用方无法可靠去重 → 计数留痕后跳过。
+                    empty_msgid += 1
+                    continue
+                if mid in seen_msgids:
+                    continue                    # 同一封同时在两个 folder / 切片重叠
+                seen_msgids.add(mid)
+                items.append(row)
+
+        _scan(INBOX_LABEL)                      # 主路径: 失败冒泡
+        try:
+            _scan(SENT_LABEL)
+        except Exception as e:  # noqa: BLE001 — 已发送失败不牵连收件箱
+            logger.warning(
+                f"[outlook-com] history scan sent folder failed "
+                f"(inbox unaffected, 本轮不完整): {e}"
+            )
+            complete = False
+
+        return HistoryScanResult(
+            items=items, complete=complete, covered_from=None, empty_msgid=empty_msgid,
+        )
+
+    @staticmethod
+    def _window_filter(since_epoch: int, until_epoch: int) -> str:
+        """[since, until) 窗口 → DASL Restrict filter (UTC 字面量, 见 epoch_to_dasl_utc)."""
+        return (
+            "@SQL=\"urn:schemas:httpmail:datereceived\" >= "
+            f"'{epoch_to_dasl_utc(since_epoch)}'"
+            " AND \"urn:schemas:httpmail:datereceived\" < "
+            f"'{epoch_to_dasl_utc(until_epoch)}'"
+        )
 
     def _meta_row_from_snapshot(self, snap: ItemSnapshot, mailbox_label: str) -> dict:
         """ItemSnapshot → save_email 行 dict (形状对齐 davmail _parse_batch_headers)."""

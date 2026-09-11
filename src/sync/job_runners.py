@@ -37,6 +37,7 @@ JOB_TYPES = frozenset({
     "resync",
     "backfill_body",
     "backfill_metadata",
+    "history_sync",
 })
 
 # on_unit_done hook 类型: (UnitResult, LongTaskSummary) → Optional[bool]
@@ -129,6 +130,16 @@ def run_job(
         return run_backfill_job(
             deps, job.job_type, target_kind=job.target_kind, target_key=job.target_key,
             params=job.params, on_unit_done=on_unit_done, resume_from=resume_from,
+        )
+    if job.job_type == "history_sync":
+        # lazy import: 同步历史邮件要拉 backend + provenance 一整条链, 不该让只跑
+        # resync/backfill 的路径也付这份 import 成本 (同 backfill runner 的惯例)。
+        from src.sync.history_sync import run_history_sync_job
+
+        # 🔴 resume_from 有意不透传: 本任务每轮**新分配** internal_id, 拿上一轮的 id
+        # 当水位会把这一轮的行整片跳掉 (见 run_history_sync_job docstring)。
+        return run_history_sync_job(
+            deps, job_id=job.job_id, params=job.params, on_unit_done=on_unit_done,
         )
     raise ServiceInvalidArgError(f"unknown job_type={job.job_type!r}")
 

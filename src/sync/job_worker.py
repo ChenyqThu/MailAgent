@@ -41,7 +41,19 @@ _JOB_TYPE_LABELS = {
     "resync": "重传 Notion",
     "backfill_body": "回填正文",
     "backfill_metadata": "回填元数据",
+    "history_sync": "同步历史邮件",
 }
+
+
+def _terminal_link(job_type: str) -> dict:
+    """终态通知点进去落在哪。
+
+    维护族默认落运维看板; ``history_sync`` 是用户在设置里亲手发起的, 落回设置-同步页
+    才是他离开的地方 —— 看板上没有这个任务的任何展示面, 跳过去只会是死路。
+    """
+    if job_type == "history_sync":
+        return {"type": "route", "to": "/settings", "search": {"tab": "sync"}}
+    return {"type": "route", "to": "/admin/kanban"}
 _JOB_STATUS_LABELS = {
     "succeeded": "已完成",
     "partial_failure": "部分失败",
@@ -223,7 +235,7 @@ class JobWorker:
                 severity=_JOB_STATUS_SEVERITY.get(status, "warn"),
                 dedupe_key=f"job:{job.job_type}:{job.job_id}",
                 payload={
-                    "link": {"type": "route", "to": "/admin/kanban"},
+                    "link": _terminal_link(job.job_type),
                     "job_id": job.job_id,
                     "job_type": job.job_type,
                     "status": status,

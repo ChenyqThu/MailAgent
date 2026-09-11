@@ -148,6 +148,21 @@ export async function runGetJob(jobId: number): Promise<unknown> {
   return daemonRequest('GET', `/jobs/${jobId}`)
 }
 
+/** 同步历史邮件 (task 09-11) — mirror HttpApi.historySync.get: GET /history-sync. */
+export async function runHistorySyncGet(): Promise<unknown> {
+  return daemonRequest('GET', '/history-sync')
+}
+
+/** mirror HttpApi.historySync.start: POST /history-sync {since, until}. */
+export async function runHistorySyncStart(since: string, until: string): Promise<unknown> {
+  return daemonRequest('POST', '/history-sync', { body: { since, until } })
+}
+
+/** mirror HttpApi.historySync.cancel: POST /history-sync/cancel {}. */
+export async function runHistorySyncCancel(): Promise<unknown> {
+  return daemonRequest('POST', '/history-sync/cancel', { body: {} })
+}
+
 // ---- IPC wiring ------------------------------------------------------------
 
 export function registerWriteOpsHandlers(): void {
@@ -344,6 +359,31 @@ export function registerWriteOpsHandlers(): void {
     if (typeof idOrErr !== 'number') return idOrErr
     return envelopeFromCli(runGetJob(idOrErr))
   })
+
+  // 同步历史邮件 (task 09-11)。日期范围的业务校验 (先后 / 不晚于今天 / 跨度) 在
+  // serve-api; 这里只挡形状错误, 省一次 daemon RTT。
+  ipcMain.handle(
+    'historySync:get',
+    async (): Promise<WriteEnvelope<unknown>> => envelopeFromCli(runHistorySyncGet())
+  )
+  ipcMain.handle(
+    'historySync:start',
+    async (_evt, range: unknown): Promise<WriteEnvelope<unknown>> => {
+      const r = (range ?? {}) as { since?: unknown; until?: unknown }
+      if (typeof r.since !== 'string' || typeof r.until !== 'string') {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'historySync:start requires { since, until } date strings'
+        }
+      }
+      return envelopeFromCli(runHistorySyncStart(r.since, r.until))
+    }
+  )
+  ipcMain.handle(
+    'historySync:cancel',
+    async (): Promise<WriteEnvelope<unknown>> => envelopeFromCli(runHistorySyncCancel())
+  )
 }
 
 // ---- test escape hatch -----------------------------------------------------

@@ -46,6 +46,7 @@
 | **Agent 体验大版本专项**（换引擎 + mem0 记忆重构史） | 理解 mem0 记忆演进史 / 跑 agent 回归网前 | 引擎架构 [`llm-agent/ai-sdk-gateway-architecture.md`](./docs/reference/llm-agent/ai-sdk-gateway-architecture.md) §13.18 + M1-M5 计划（已归档）[`memory-skill-core-refactor.md`](./docs/archive/2026-07/agent-experience-epic/memory-skill-core-refactor.md) + 回归网 `tests/agent_eval/` |
 | CLI 完整命令表 + 退出码 + schema 契约 | 查命令明细 / 加 CLI 命令前 | [`cli/cli-reference.md`](./docs/reference/cli/cli-reference.md) + [`cli/agent-cli-rfc.md`](./docs/reference/cli/agent-cli-rfc.md) |
 | 存档/草稿箱 + 多文件夹同步（folder_sync） | 动 folder 同步前 | [`folder-sync/multi-folder-sync-design.md`](./docs/reference/folder-sync/multi-folder-sync-design.md) + [`folder-sync/folder-ui-prd.md`](./docs/reference/folder-sync/folder-ui-prd.md) |
+| **同步历史邮件**（一次性补回某段时间本地缺的邮件） | 动 `src/sync/history_sync.py` / backend 的 `scan_history_window` / `/api/history-sync` / 设置-同步「历史邮件」前 | [`sync/history-sync.md`](./docs/reference/sync/history-sync.md) |
 | Webhook / SSE / Openclaw / Notion API（集成面） | 动 webhook-server / 事件流 / 飞书回调前 | [`integrations/`](./docs/reference/integrations/) |
 | 邮件搜索（**单核 CORE#1** + Query DSL + FTS5 + agentic） | 改搜索语法 / 检索引擎 / agentic 前 | [`search/search-query-syntax.md`](./docs/reference/search/search-query-syntax.md) |
 | 灵动岛 Ping Island 集成（**移除评估已完成，暂缓执行**） | 动岛相关代码前 / 启动删岛前必读 | [`remove-ping-island/README.md`](./docs/plans/remove-ping-island/README.md)（docs/plans，含 4 批次清单 + 预拍板项） |

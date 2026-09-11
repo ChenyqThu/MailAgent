@@ -252,6 +252,9 @@ export const qk = {
 
   projectProgressRuns: (limit: number) => ['project-progress-runs', limit] as const,
 
+  // 设置 → 同步「历史邮件」— `GET /api/history-sync`（能力 + 进行中/最近一次任务）。
+  historySync: () => ['history-sync'] as const,
+
   // P4a 团队页 — AI 邮件预处理的「最近被分类的邮件」清单（listEnriched 投影，
   // llm_processing 无 per-run 概念，执行面按邮件逐封列）。
   team: {

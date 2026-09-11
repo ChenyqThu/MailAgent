@@ -6,6 +6,7 @@ import type { EmailApi } from './email'
 import type { EventsApi } from './events'
 import type { FeedbackApi } from './feedback'
 import type { FolderApi } from './folder'
+import type { HistorySyncApi } from './historySync'
 import type { IslandApi } from './island'
 import type { JobsApi } from './jobs'
 import type { KosApi } from './kos'
@@ -28,6 +29,8 @@ export interface MailApi {
   email: EmailApi
   /** D2b — async_jobs 长任务查询 (batch resync 进度轮询; backfill UI 未来复用)。 */
   jobs: JobsApi
+  /** 设置 → 同步「历史邮件」：查状态 / 开始 / 取消（task 09-11）。 */
+  historySync: HistorySyncApi
   /** 多文件夹同步管理: folder discover / whitelist / 文件夹 CRUD / cleanup (davmail-only)。 */
   folder: FolderApi
   attachment: AttachmentApi

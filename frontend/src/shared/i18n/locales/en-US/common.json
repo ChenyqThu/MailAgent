@@ -3489,6 +3489,54 @@
         "eyebrow": "SYNC",
         "title": "Sync",
         "intro": "Incremental-sync time window and polling cadence."
+      },
+      "history": {
+        "title": "Past mail",
+        "helper": "Recover mail from before installation or missed during an outage. Covers Inbox and Sent. Mail already stored locally is skipped, and new mail keeps arriving as usual.",
+        "notionFloor": "Mail older than {date} is stored locally only and not pushed to Notion.",
+        "since": "From",
+        "until": "To",
+        "start": "Start sync",
+        "cancel": "Cancel",
+        "cancelling": "Cancelling…",
+        "range": "{since} to {until}",
+        "status": {
+          "idle": "Not run yet",
+          "queued": "Waiting to start",
+          "scanning": "Scanning mailbox",
+          "syncing": "Syncing",
+          "done": "Sync complete",
+          "partial": "Some messages failed",
+          "failed": "Sync failed",
+          "incomplete": "Only covered back to {date}",
+          "cancelled": "Cancelled"
+        },
+        "progress": "Processed {done} / {total}",
+        "eta": "About {minutes, plural, one {# minute} other {# minutes}} left",
+        "etaUnderMinute": "Less than a minute left",
+        "summary": {
+          "scanned": "Found",
+          "existing": "Already stored",
+          "added": "Added",
+          "notionSynced": "Pushed to Notion",
+          "localOnly": "Local only",
+          "failed": "Failed"
+        },
+        "incompleteHint": "The mailbox view only reaches back to {date}; older mail was not scanned.",
+        "error": "Reason: {message}",
+        "startError": "Could not start sync",
+        "cancelError": "Could not cancel sync",
+        "loadError": "Could not load past-mail sync status",
+        "validation": {
+          "required": "Pick both a start and an end date",
+          "order": "The start date must not be after the end date",
+          "future": "The end date must not be later than today",
+          "span": "The range can be at most {days} days"
+        },
+        "unsupported": {
+          "backend_applescript": "Not available with the AppleScript backend. Use \"mailagent init\" to import past mail.",
+          "generic": "The current mail backend does not support past-mail sync."
+        }
       }
     },
     "ai": {

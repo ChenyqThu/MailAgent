@@ -21,6 +21,9 @@ import {
   runBatchResync,
   runEmailFlag,
   runGetJob,
+  runHistorySyncCancel,
+  runHistorySyncGet,
+  runHistorySyncStart,
   runLlmRun,
   runPin,
   runResync,
@@ -197,6 +200,23 @@ describe('write_ops — daemon forwarders (mock daemonRequest)', () => {
   test('getJob → GET /jobs/{id}', async () => {
     await runGetJob(42)
     expect(mockDaemonRequest).toHaveBeenCalledWith('GET', '/jobs/42')
+  })
+
+  test('historySync get → GET /history-sync', async () => {
+    await runHistorySyncGet()
+    expect(mockDaemonRequest).toHaveBeenCalledWith('GET', '/history-sync')
+  })
+
+  test('historySync start → POST /history-sync {since, until}', async () => {
+    await runHistorySyncStart('2026-08-01', '2026-08-31')
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/history-sync', {
+      body: { since: '2026-08-01', until: '2026-08-31' }
+    })
+  })
+
+  test('historySync cancel → POST /history-sync/cancel', async () => {
+    await runHistorySyncCancel()
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/history-sync/cancel', { body: {} })
   })
 })
 

@@ -66,7 +66,7 @@ from src.mail.backend.types import (
 
 if TYPE_CHECKING:
     from src.config import Config
-    from src.mail.backend.types import InboxReconcileResult
+    from src.mail.backend.types import HistoryScanResult, InboxReconcileResult
     from src.mail.sync_store import SyncStore
 
 # RFC 4315 APPENDUID response: [APPENDUID uidvalidity uid]
@@ -147,6 +147,21 @@ def _normalize_date_iso(date_str: str) -> str:
 # RFC 5322 §2.2.3 folding: CRLF + 续行空白. Message-ID 内部不允许任何 WSP,
 # 所以折行处整段删除 (不像普通 header 那样 unfold 成一个空格) 才是无损还原.
 _HEADER_FOLD_RE = re.compile(r"[\r\n]+[ \t]*")
+
+
+def _parse_iso_or_none(value: Optional[str]) -> Optional[datetime]:
+    """ISO 8601 字符串 → aware datetime; 空值 / 解析不了 → None.
+
+    ``scan_history_window`` 的精确边界判定用: 读不出日期的邮件由调用方保留
+    (只补不删的语义下宁可多带一封, 由 Message-ID 去重)。
+    """
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def _normalize_message_id(value: Optional[str]) -> str:
@@ -1980,6 +1995,144 @@ class DavMailBackend(IMailBackend):
                 empty_msgid=empty_msgid,
                 duplicate_msgid=duplicate_msgid,
             )
+
+    def scan_history_window(
+        self, since_utc: datetime, until_utc: datetime
+    ) -> "HistoryScanResult":
+        """历史邮件窗口扫描 (task 09-11) — 列出窗口内远端**全部**邮件, 不比对本地。
+
+        调用方 ``src/sync/history_sync.py`` 按天切片调用, 拿 Message-ID 与本地比对后
+        决定补哪些。可选能力 (``hasattr`` 门), AppleScript fallback 没有它整个功能就
+        不激活。
+
+        ## 两层筛选, 各自管什么
+
+        服务端 ``UID SEARCH SINCE/BEFORE`` 只能按**日期**粗筛 (IMAP 没有到分钟的时间
+        比较), 且判据是 INTERNALDATE; 而用户在界面上框的是**列表里显示的那个日期**
+        (``date_received``, 来自 Date 头)。两者不同源, 所以:
+
+        - 服务端窗口**两头各放宽一天**, 保证边界那天的邮件不会被日期粒度截掉;
+        - 精确边界在本地按 ``date_received`` 判 —— 与用户所见一致。
+
+        解析不出 ``date_received`` 的邮件保留 (只补不删的语义下, 宁可多带一封由
+        Message-ID 去重, 不可因为日期读不出来就把它判在范围外)。
+
+        ## 🔴 完整性闸 (同 ``reconcile_inbox``)
+
+        ``folderSizeLimit`` 把 IMAP 视图截断成最近 N 封, ``SEARCH SINCE`` 打不穿它。
+        取视图内最老一封的 INTERNALDATE 自证覆盖: 覆盖到窗口起点才 ``complete``,
+        否则 ``complete=False`` + ``covered_from`` 给出实际覆盖到的时刻, 让界面明说
+        "只覆盖到 X 日"而不是假装完整成功。
+
+        ## 失败语义
+
+        收件箱 SELECT/SEARCH/FETCH 失败 → raise ``FolderFetchError`` (整轮失败可见,
+        任务标失败); 已发送失败只降级 ``complete=False`` + warning, 不牵连收件箱
+        (镜像 ``get_new_emails`` 的多 folder 纪律)。
+        """
+        from src.mail.backend.types import HistoryScanResult
+
+        # 服务端粗筛窗口: 两头各放宽一天 (见 docstring), 精确边界在下面按 date_received 判。
+        since_arg = (since_utc - timedelta(days=1)).strftime("%d-%b-%Y")
+        before_arg = (until_utc + timedelta(days=1)).strftime("%d-%b-%Y")
+
+        items: list[dict] = []
+        complete = True
+        covered_from: Optional[datetime] = None
+        empty_msgid = 0
+        seen_msgids: set[str] = set()
+
+        def _absorb(rows: list[dict], label: str) -> None:
+            nonlocal empty_msgid
+            for row in rows:
+                received = _parse_iso_or_none(row.get("date_received"))
+                if received is not None and not (since_utc <= received < until_utc):
+                    continue                    # 粗筛放宽带进来的窗口外邮件
+                mid = (row.get("message_id") or "").strip()
+                if not mid:
+                    # 无 Message-ID = 无稳定标识, 调用方无法可靠去重 → 计数留痕后跳过。
+                    empty_msgid += 1
+                    continue
+                if mid in seen_msgids:
+                    continue                    # 同一封同时在两个 folder / 切片重叠
+                seen_msgids.add(mid)
+                row["backend_origin"] = "davmail"
+                row["mailbox"] = label
+                items.append(row)
+
+        with imap_session(self.cfg, timeout=120) as imap:
+            def _scan_folder(imap_box: str, label: str) -> None:
+                nonlocal complete, covered_from
+                typ, _ = imap.select(quote_mailbox(imap_box), readonly=True)
+                if typ != "OK":
+                    raise FolderFetchError(
+                        f"SELECT {imap_box!r} failed: typ={typ!r}"
+                    )
+                uv = _read_uidvalidity_from_select(imap)
+                oldest_visible = _oldest_visible_internaldate(imap)
+
+                typ, data = imap.uid(
+                    "search", None, "SINCE", since_arg, "BEFORE", before_arg
+                )
+                if typ != "OK":
+                    raise FolderFetchError(
+                        f"UID SEARCH SINCE {since_arg} BEFORE {before_arg} in "
+                        f"{imap_box!r} failed: typ={typ!r}"
+                    )
+                uids = data[0].split() if (data and data[0]) else []
+
+                # 完整性闸: 视图最老一封晚于窗口起点 = 更老的那段根本看不见。
+                # 读不到最老时间且视图非空 → 保守按不完整 (宁可报不确定, 不谎称查全)。
+                if oldest_visible is None:
+                    if uids:
+                        complete = False
+                elif oldest_visible > since_utc:
+                    complete = False
+                    if covered_from is None or oldest_visible > covered_from:
+                        # 多 folder 取最晚的那个下界: 覆盖完整性由最差的 folder 决定。
+                        covered_from = oldest_visible
+
+                for i in range(0, len(uids), 50):
+                    chunk_uids = uids[i:i + 50]
+                    chunk = b",".join(chunk_uids).decode()
+                    typ, data = imap.uid(
+                        "fetch", chunk,
+                        "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS "
+                        "(MESSAGE-ID SUBJECT FROM DATE REFERENCES IN-REPLY-TO)])",
+                    )
+                    if typ != "OK" or not data:
+                        raise FolderFetchError(
+                            f"UID FETCH ({len(chunk_uids)} uids) in {imap_box!r} "
+                            f"failed: typ={typ!r} data_empty={not data}"
+                        )
+                    parsed = self._parse_batch_headers(data, uidvalidity=uv)
+                    if len(parsed) != len(chunk_uids):
+                        # 部分解析同样不算"查全": 恰好是要补的那封被丢掉时, 本轮若
+                        # 自称完整, 用户就再也不会知道它缺了 (同 reconcile 的判据)。
+                        logger.warning(
+                            f"[history-scan] {label}: chunk parsed {len(parsed)} "
+                            f"from {len(chunk_uids)} UIDs — 本轮不完整"
+                        )
+                        complete = False
+                    _absorb(parsed, label)
+
+            _scan_folder("INBOX", INBOX_LABEL)          # 主路径: 失败冒泡
+            if self._sync_sent and self.sent_folder:
+                try:
+                    _scan_folder(self.sent_folder, SENT_LABEL)
+                except Exception as e:  # noqa: BLE001 — 已发送失败不牵连收件箱
+                    logger.warning(
+                        f"[history-scan] sent folder scan failed "
+                        f"(inbox unaffected, 本轮不完整): {e}"
+                    )
+                    complete = False
+
+        return HistoryScanResult(
+            items=items,
+            complete=complete,
+            covered_from=covered_from,
+            empty_msgid=empty_msgid,
+        )
 
     def reconcile_drafts(self) -> tuple[list[dict], list[int]]:
         """草稿箱对账 — 返回 (新草稿 email dicts, 已消失草稿的 internal_ids)。

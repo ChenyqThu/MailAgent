@@ -3489,6 +3489,54 @@
         "eyebrow": "SYNC",
         "title": "同步",
         "intro": "增量同步的时间窗口与轮询节拍。"
+      },
+      "history": {
+        "title": "历史邮件",
+        "helper": "补回安装前或故障期间漏掉的邮件，覆盖收件箱和已发送。本地已有的邮件会跳过，新邮件照常接收。",
+        "notionFloor": "早于 {date} 的邮件只存本地，不推到 Notion。",
+        "since": "起始日期",
+        "until": "结束日期",
+        "start": "开始同步",
+        "cancel": "取消",
+        "cancelling": "正在取消…",
+        "range": "{since} 至 {until}",
+        "status": {
+          "idle": "还没有同步过",
+          "queued": "排队等待",
+          "scanning": "正在扫描邮箱",
+          "syncing": "正在同步",
+          "done": "同步完成",
+          "partial": "部分邮件同步失败",
+          "failed": "同步失败",
+          "incomplete": "只覆盖到 {date}",
+          "cancelled": "已取消"
+        },
+        "progress": "已处理 {done} / {total}",
+        "eta": "预计还需约 {minutes} 分钟",
+        "etaUnderMinute": "预计不到 1 分钟",
+        "summary": {
+          "scanned": "扫描到",
+          "existing": "已有，跳过",
+          "added": "新增",
+          "notionSynced": "推到 Notion",
+          "localOnly": "只存本地",
+          "failed": "失败"
+        },
+        "incompleteHint": "邮箱视图只保留到 {date}，更早的邮件没有扫描到。",
+        "error": "原因：{message}",
+        "startError": "无法开始同步",
+        "cancelError": "无法取消同步",
+        "loadError": "读取历史邮件同步状态失败",
+        "validation": {
+          "required": "请选择起始日期和结束日期",
+          "order": "起始日期不能晚于结束日期",
+          "future": "结束日期不能晚于今天",
+          "span": "范围最长 {days} 天"
+        },
+        "unsupported": {
+          "backend_applescript": "当前使用 AppleScript 后端，这里不能同步历史邮件。请用「mailagent init」导入。",
+          "generic": "当前邮件后端不支持同步历史邮件。"
+        }
       }
     },
     "ai": {

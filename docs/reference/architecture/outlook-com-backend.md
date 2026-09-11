@@ -74,3 +74,12 @@ new_watcher 的 hasattr 门（既有纪律：「没判据就不许猜」）对�
 - **EntryID 漂移语义**：移动文件夹即变——所以它是缓存不是锚（§2）；`Send()` 后草稿 EntryID 也会变（移入已发送）。
 - **同一分钟的邮件恒整分钟取完**：单轮到 `MAX_BATCH` 后仍会把当前这一分钟取完（水位要落在分钟边界上才能前进），所以批量导入把上万封塞进同一分钟时，这一分钟会在一轮里全部取回、STA 线程被占住一段时间。正常收信下不会出现。
 - 位数：out-of-process COM 跨位数可通（64 位 Python + 32 位 Outlook），poc_3 报告留档；大邮箱性能（OST 本地缓存 vs 在线模式）无实测数据，PoC/dogfood 观察项。
+
+## 7. 历史邮件窗口扫描（`scan_history_window`）
+
+「同步历史邮件」（task 09-11）要求的可选能力，`outlook_com` 与 `davmail` 都实现，`applescript` 不实现（`hasattr` 门 → 该模式整个功能不激活）。语义、并行规则与状态存放见 [`sync/history-sync.md`](../sync/history-sync.md)，这里只记 COM 侧的两个实现要点：
+
+- **上界必须向上取整到分钟**。`epoch_to_dasl_utc` 只精确到分钟（见 §2 与该函数 docstring）：下界向下取整只是把窗口撑大、本地再切齐即可，而上界若跟着**向下**取整，最后不足一分钟里的邮件在服务端就被筛掉了，本地再怎么过滤也补不回来。所以 `_window_filter` 下界 floor、上界 ceil，精确边界由本地按 `ReceivedTime` 判。
+- **`MAX_BATCH` 有意不适用**。增量路径的 200 封上限是防首拉灌爆 STA 线程，靠「marker 只推进到已取完的那一分钟」保证剩余部分下轮继续；而窗口扫描已由调用方切成一天、且**没有 marker 可以续**，再截断就是静默漏掉当天较晚的邮件。
+
+`complete` 恒 `True`（COM 直连本机 Outlook，没有 davmail 那种 `folderSizeLimit` 截断视图）；收件箱枚举失败 raise `FolderFetchError` 让整轮可见失败，已发送失败只降级 `complete=False`，不牵连收件箱。

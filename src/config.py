@@ -1,4 +1,6 @@
 import os
+from datetime import datetime
+from typing import Optional
 
 from pydantic_settings import BaseSettings
 from pydantic import AliasChoices, Field, ConfigDict
@@ -1319,6 +1321,38 @@ def notion_enabled(cfg: "Config | None" = None) -> bool:
     return bool(
         (c.notion_token or "").strip() and (c.email_database_id or "").strip()
     )
+
+
+def parse_sync_start_date(cfg: "Config | None" = None) -> Optional[datetime]:
+    """SYNC_START_DATE → 带时区的 datetime；未配置 / 格式非法 → None（不过滤日期）。
+
+    **Notion 镜像面的日期地板单源**：早于它的邮件只存本地、不建 Notion 页
+    （``new_watcher._sync_single_email_v3`` 第 5 步的判据）。设置页「同步历史邮件」
+    要把这个地板显示给用户（"早于 X 日的只存本地"），必须与 watcher 判定用**同一个**
+    函数 —— 各写一份的话，界面上承诺的日期和实际入库行为迟早对不上。
+
+    时区固定北京：判据是"这封邮件的日期在不在起始日之后"，起始日是用户按本地日历
+    填的，没有跨时区语义。
+
+    lazy import（与本模块其余部分一致）：config.py 被 CLI / 打包链在各种裸环境里
+    import，顶层不拉 loguru。
+    """
+    from datetime import timedelta, timezone
+
+    from loguru import logger
+
+    c = cfg if cfg is not None else config
+    if not c.sync_start_date:
+        return None
+    tz = timezone(timedelta(hours=8))  # 北京时区
+    try:
+        dt = datetime.strptime(c.sync_start_date, "%Y-%m-%d")
+        return dt.replace(tzinfo=tz)
+    except ValueError:
+        logger.warning(
+            f"Invalid SYNC_START_DATE format: {c.sync_start_date}, expected YYYY-MM-DD"
+        )
+        return None
 
 
 def calendar_notion_enabled(cfg: "Config | None" = None) -> bool:
