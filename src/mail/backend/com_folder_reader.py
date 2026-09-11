@@ -153,21 +153,26 @@ class FolderComReader:
         return node
 
     def _find_item_in_folder(self, folder: Any, message_id: str) -> Any:
-        """在指定文件夹里按 PR_INTERNET_MESSAGE_ID (DASL) Items.Find 单封."""
-        from src.mail.backend.com_client import DASL_MESSAGE_ID
+        """在指定文件夹里按 message_id Items.Find 单封.
+
+        属性名顺序与 backend._find_by_message_id 同源 (MESSAGE_ID_FIND_PROPS), 每个属性名
+        再试带 / 不带尖括号两种字面量。
+        """
+        from src.mail.backend.com_client import MESSAGE_ID_FIND_PROPS
         from src.mail.backend.outlook_com_backend import _dasl_quote
 
         mid = (message_id or "").strip().strip("<>")
         if not mid or folder is None:
             return None
-        for literal in (f"<{mid}>", mid):
-            flt = f"@SQL=\"{DASL_MESSAGE_ID}\" = '{_dasl_quote(literal)}'"
-            try:
-                item = folder.Items.Find(flt)
-            except Exception:  # noqa: BLE001 — filter 被 store 拒绝, 试下一形态
-                continue
-            if item is not None:
-                return item
+        for prop in MESSAGE_ID_FIND_PROPS:
+            for literal in (f"<{mid}>", mid):
+                flt = f"@SQL=\"{prop}\" = '{_dasl_quote(literal)}'"
+                try:
+                    item = folder.Items.Find(flt)
+                except Exception:  # noqa: BLE001 — filter 被 store 拒绝, 试下一形态
+                    continue
+                if item is not None:
+                    return item
         return None
 
     def _locate_item(self, session: Any, src_imap: str, message_id: Optional[str]) -> Any:

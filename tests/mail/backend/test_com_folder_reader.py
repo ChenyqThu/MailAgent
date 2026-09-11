@@ -169,6 +169,17 @@ def test_move_message_nowhere_false():
     assert reader.move_by_message_id("INBOX", "ghost@example.test", "INBOX") is False
 
 
+def test_find_item_in_folder_falls_back_to_proptag(monkeypatch):
+    """只认 proptag 的 store (2026-09-11 反馈): mailheader 形态查不到, proptag 仍命中."""
+    from tests.mail.backend.com_fakes import PR_INTERNET_MESSAGE_ID, FakeItems
+
+    monkeypatch.setattr(FakeItems, "find_props", frozenset({PR_INTERNET_MESSAGE_ID}))
+    store = FakeOutlookStore()
+    item = _inbox_mail(store, "<pt1@example.test>")
+    reader, _ = make_reader(store)
+    assert reader._find_item_in_folder(store.inbox, "pt1@example.test") is item
+
+
 # ---------------------------------------------------------------------------
 # build_child_imap_name / folder CRUD
 # ---------------------------------------------------------------------------

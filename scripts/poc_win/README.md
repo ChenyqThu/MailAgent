@@ -15,6 +15,8 @@
 | ③ | `poc_2_sta_executor.py` | STA executor 冒烟：probe_readiness / 线程唯一性 / marker 水位合法性 / Restrict 窗口计数与延迟；`--reconnect` 交互演练手动重启 Outlook 后 `_reconnect` 自愈 | 步骤 1-4 全过 = GO（自愈是交互项只入报告） |
 
 先跑 ③ 环境（没 classic Outlook 后面全免谈）→ ① 保真度（真闸门）→ ② executor。
+
+另有只读诊断 `poc_4_dasl_probe.py`（不属于闸门，不写报告）：确认 DASL 日期字面量按 UTC 比较、message-id 反查两种属性名的命中情况，输出直接贴回 `docs/reference/architecture/outlook-com-backend.md` §5。
 每个脚本产 `scripts/poc_win/reports/<脚本名>_<时间戳>.json`；exit code：`0`=GO / `1`=NO-GO / `2`=非 win32 不适用。
 
 ## 前置

@@ -21,7 +21,13 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 POC_DIR = REPO_ROOT / "scripts" / "poc_win"
 
-SCRIPTS = ["poc_common", "poc_1_mime_fidelity", "poc_2_sta_executor", "poc_3_environment"]
+SCRIPTS = [
+    "poc_common",
+    "poc_1_mime_fidelity",
+    "poc_2_sta_executor",
+    "poc_3_environment",
+    "poc_4_dasl_probe",
+]
 
 
 def _load(name: str):
@@ -49,7 +55,8 @@ def test_poc_script_importable_without_pywin32(name):
 
 
 @pytest.mark.parametrize(
-    "name", ["poc_1_mime_fidelity", "poc_2_sta_executor", "poc_3_environment"]
+    "name",
+    ["poc_1_mime_fidelity", "poc_2_sta_executor", "poc_3_environment", "poc_4_dasl_probe"],
 )
 @pytest.mark.skipif(sys.platform == "win32", reason="非 win32 退出语义仅在 mac/linux 可测")
 def test_poc_main_exits_not_applicable_on_non_win32(name, capsys):

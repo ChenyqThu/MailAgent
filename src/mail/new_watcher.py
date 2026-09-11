@@ -765,6 +765,10 @@ class NewWatcher:
                             payload['imap_uid'] = email_meta.get('imap_uid')
                         if email_meta.get('imap_uidvalidity') is not None:
                             payload['imap_uidvalidity'] = email_meta.get('imap_uidvalidity')
+                        # outlook_com: EntryID 是取正文的快路径 (GetItemFromID); 不透传就只能
+                        # 按 message_id 反查, 反查落空时这封永远取不到正文。
+                        if email_meta.get('entry_id'):
+                            payload['entry_id'] = email_meta['entry_id']
 
                         if not self.sync_store.save_email(payload):
                             # 写库失败若被忽略, 这封会随下面的游标推进永久出窗
@@ -791,7 +795,13 @@ class NewWatcher:
                 # None = get_new_emails 失败 (含 FolderFetchError), save_failed = 有邮件
                 # 没写进库 —— 两者都把游标留在原位等下轮重试。
                 if new_emails is not None and not save_failed:
-                    self.sync_store.set_last_max_row_id(current_max)
+                    # outlook_com 单轮被 MAX_BATCH 截断时只推进到已取到的最后一封, 剩余下轮取
+                    advance_to = (
+                        self.backend.marker_after_fetch(current_max)
+                        if hasattr(self.backend, "marker_after_fetch")
+                        else current_max
+                    )
+                    self.sync_store.set_last_max_row_id(advance_to)
                     self.sync_store.set_last_sync_time(datetime.now().isoformat())
         else:
             logger.debug("Radar unavailable, skipping new email detection")

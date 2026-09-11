@@ -10,8 +10,9 @@
                              Delete/Save/Send + Attachments
 - ``FakeSyncStore``        → get / get_by_message_id / allocate_davmail_internal_id
 
-DASL filter 只解析 backend 真实产出的两种形状 (`_since_filter` / `_msgid_filter`),
-不做通用 SQL——测试断言的是"backend 发出了什么查询", 不是重写 Outlook.
+DASL filter 只解析 backend 真实产出的两种形状 (日期窗口 `_since_filter`, 可带 `<` 上界;
+message-id 反查), 不做通用 SQL——测试断言的是"backend 发出了什么查询", 不是重写 Outlook.
+日期字面量按 Outlook 的真实语义解释: DASL 比较一律按 UTC.
 """
 from __future__ import annotations
 
@@ -24,9 +25,11 @@ from typing import Optional
 # fake 若 import 实现侧常量, "常量写错"这类 bug 就测不出来.
 PR_INTERNET_MESSAGE_ID = "http://schemas.microsoft.com/mapi/proptag/0x1035001F"
 PR_TRANSPORT_MESSAGE_HEADERS = "http://schemas.microsoft.com/mapi/proptag/0x007D001F"
+DASL_MESSAGE_ID = "urn:schemas:mailheader:message-id"
 
 _SINCE_RE = re.compile(r'"urn:schemas:httpmail:datereceived"\s*>=\s*\'([^\']+)\'')
-_MSGID_RE = re.compile(r'"urn:schemas:mailheader:message-id"\s*=\s*\'((?:[^\']|\'\')*)\'')
+_UNTIL_RE = re.compile(r'"urn:schemas:httpmail:datereceived"\s*<\s*\'([^\']+)\'')
+_MSGID_RE = re.compile(r'"([^"]+)"\s*=\s*\'((?:[^\']|\'\')*)\'')
 
 
 def local_dt(epoch: int) -> datetime:
@@ -39,8 +42,23 @@ def local_dt(epoch: int) -> datetime:
 
 
 def _wall(dt: datetime) -> datetime:
-    """比较用: 去掉 pywin32 贴的 UTC 标签, 还原成本地墙钟 naive (Outlook 自己就是按这个比的)."""
+    """去掉 pywin32 贴的 UTC 标签, 还原成本地墙钟 naive (排序用; 同一时区内序不变)."""
     return dt.replace(tzinfo=None)
+
+
+def _utc_instant(dt: datetime) -> datetime:
+    """pywin32 形态的 ReceivedTime → 真实 UTC 时刻 (本地墙钟按本机时区换算)."""
+    return _wall(dt).astimezone(timezone.utc)
+
+
+def _parse_dasl_utc(literal: str) -> datetime:
+    """DASL 日期字面量 → UTC aware datetime. Outlook 把 DASL 字面量一律当 UTC 解释."""
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(literal, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    raise ValueError(f"unsupported DASL date literal: {literal!r}")
 
 
 class FakePropertyAccessor:
@@ -231,20 +249,30 @@ class FakeItems:
         m = _SINCE_RE.search(flt)
         if not m:
             raise ValueError(f"unsupported Restrict filter: {flt}")
-        threshold = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+        threshold = _parse_dasl_utc(m.group(1))
+        upper_m = _UNTIL_RE.search(flt)
+        upper = _parse_dasl_utc(upper_m.group(1)) if upper_m else None
         subset = [
             it for it in self._sorted
-            if it.ReceivedTime is not None and _wall(it.ReceivedTime) >= threshold
+            if it.ReceivedTime is not None
+            and _utc_instant(it.ReceivedTime) >= threshold
+            and (upper is None or _utc_instant(it.ReceivedTime) < upper)
         ]
         result = FakeItems(subset)
         result._sorted = subset
         return result
 
+    #: 这个 store 的 Items.Find 认哪些 message-id 属性名; 不认的查不到 (返回 None)。
+    #: 用例可改成只认 proptag, 模拟 mailheader 形态在真机上落空 (2026-09-11 反馈)。
+    find_props = frozenset({PR_INTERNET_MESSAGE_ID, DASL_MESSAGE_ID})
+
     def Find(self, flt: str):
         m = _MSGID_RE.search(flt)
-        if not m:
+        if not m or m.group(1) not in (PR_INTERNET_MESSAGE_ID, DASL_MESSAGE_ID):
             raise ValueError(f"unsupported Find filter: {flt}")
-        literal = m.group(1).replace("''", "'")
+        if m.group(1) not in self.find_props:
+            return None
+        literal = m.group(2).replace("''", "'")
         for it in self._sorted:
             if it._props.get(PR_INTERNET_MESSAGE_ID) == literal:
                 return it

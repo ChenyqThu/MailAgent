@@ -194,6 +194,33 @@ def test_new_mail_after_marker_is_found_in_utc_plus_zone(env, shanghai_tz):
     assert any(str(BASE + 60) in str(r.get("message_id")) for r in rows)
 
 
+@pytest.fixture(params=["Asia/Shanghai", "America/Los_Angeles"])
+def east_west_tz(request, monkeypatch):
+    """UTC 以东与以西各跑一遍. 字面量若写成本地时间: 东八区查「水位 + 8h」之后 (漏信);
+    洛杉矶 (BASE 落在 PDT = UTC-7) 查「水位 − 7h」之后 (多取)."""
+    monkeypatch.setenv("TZ", request.param)
+    time.tzset()
+    yield request.param
+    monkeypatch.undo()
+    time.tzset()
+
+
+def test_dasl_window_is_utc_in_east_and_west_zones(env, east_west_tz):
+    """DASL 日期比较按 UTC: 窗口恰好从水位所在分钟开始, 与本机时区无关."""
+    _inbox_item(env.store, epoch=BASE - 3600, mid="<old@example.test>")
+    _inbox_item(env.store, epoch=BASE, mid="<boundary@example.test>")
+    marker = env.backend.get_current_max_row_id()
+    assert marker == BASE
+    _inbox_item(env.store, epoch=BASE + 60, mid="<new@example.test>")
+
+    has_new, current, est = env.backend.check_for_changes(marker)
+    assert (has_new, current, est) == (True, BASE + 60, 2)  # 边界封 + 新信
+    rows = env.backend.get_new_emails(marker)
+    assert sorted(r["message_id"] for r in rows) == [
+        "boundary@example.test", "new@example.test",
+    ]
+
+
 def test_marker_memory_cache_roundtrip(env):
     assert env.backend.get_last_max_row_id() == 0
     env.backend.set_last_max_row_id(BASE + 7)
@@ -216,14 +243,17 @@ def test_check_for_changes_no_baseline_reports_no_new(env):
 
 
 def test_check_for_changes_counts_since_watermark(env):
-    _inbox_item(env.store, epoch=BASE + 10)
-    _inbox_item(env.store, epoch=BASE + 20)
+    # 字面量精度到分钟 (向下取整) + >=: 水位所在分钟里更早的封也进窗口 (多取不漏,
+    # 靠 message_id 去重), 上一分钟的不进。
+    assert BASE % 60 == 20  # BASE 落在某分钟的第 20 秒
+    _inbox_item(env.store, epoch=BASE - 25)  # 上一分钟 → 窗口外
+    _inbox_item(env.store, epoch=BASE - 15)  # 同一分钟、早于水位 → 窗口内
+    _inbox_item(env.store, epoch=BASE)  # 水位本身
     _inbox_item(env.store, epoch=BASE + 30)
-    has_new, current, est = env.backend.check_for_changes(BASE + 15)
+    has_new, current, est = env.backend.check_for_changes(BASE)
     assert has_new is True
     assert current == BASE + 30
-    # >= 语义 (同秒多封不丢): BASE+20 / BASE+30 两封在窗口内
-    assert est == 2
+    assert est == 3
 
 
 def test_check_for_changes_failure_raises_marker_unavailable(env):
@@ -315,13 +345,67 @@ def test_get_new_emails_allocate_failure_raises_folder_fetch_error(env):
 
 
 def test_get_new_emails_max_batch_caps_oldest_first(env):
-    # ascending 扫描: 截断留最新的下轮 (marker 只推进到已抓最后一封, 不跳过)
+    # ascending 扫描: 截断留最新的下轮 (marker 只推进到已抓完那一分钟的末尾, 不跳过)
     _inbox_item(env.store, epoch=BASE + 10, subject="older")
-    _inbox_item(env.store, epoch=BASE + 20, subject="newer")
+    _inbox_item(env.store, epoch=BASE + 90, subject="newer")  # 下一分钟: 不被整分钟补取
     env.backend.MAX_BATCH = 1
     rows = env.backend.get_new_emails(BASE)
     assert len(rows) == 1
     assert rows[0]["subject"] == "older"
+
+
+def test_marker_after_fetch_resumes_at_minute_boundary_when_truncated(env):
+    _inbox_item(env.store, epoch=BASE + 60)
+    _inbox_item(env.store, epoch=BASE + 180)
+    env.backend.MAX_BATCH = 1
+    env.backend.get_new_emails(BASE)
+    # 只取到 BASE+60 那封 → 水位停在它所在分钟的末尾 (BASE 落在第 20 秒, 故 BASE+100)
+    assert env.backend.marker_after_fetch(BASE + 180) == BASE + 100
+    env.backend.MAX_BATCH = 200
+    env.backend.get_new_emails(BASE + 100)
+    assert env.backend.marker_after_fetch(BASE + 180) == BASE + 180  # 未截断: 上轮记录已清
+
+
+def test_marker_after_fetch_takes_min_of_inbox_and_sent(env):
+    _inbox_item(env.store, epoch=BASE + 60)
+    _inbox_item(env.store, epoch=BASE + 180)
+    for epoch in (BASE + 30, BASE + 240):
+        env.store.sent.add_item(
+            FakeItem(received_epoch=epoch, message_id=f"<s-{epoch}@example.test>")
+        )
+    env.backend.MAX_BATCH = 1
+    env.backend.get_new_emails(BASE)
+    # inbox 停在 BASE+100, sent 停在 BASE+40 (各自最后一封所在分钟的末尾) → 取较小者
+    assert env.backend.marker_after_fetch(BASE + 180) == BASE + 40
+
+
+def test_crowded_minute_beyond_max_batch_still_advances_marker(env):
+    """同一分钟超过 MAX_BATCH 封: 本轮把这一分钟取完再停, 水位越过它.
+
+    停在分钟中间的话下一轮 >= 会从这一分钟开头重扫、取到的还是同一批 200 封, 水位
+    原地打转 —— 之后的新邮件永远取不到。
+    """
+    minute = BASE - BASE % 60 + 60  # BASE 之后的第一个整分钟
+    epochs = [minute + i % 60 for i in range(250)]  # 250 封挤在这一分钟
+    epochs += [minute + 60 * k for k in range(1, 301)]  # 之后每分钟一封
+    for idx, epoch in enumerate(epochs):
+        _inbox_item(env.store, epoch=epoch, mid=f"<c{idx}@example.test>")
+    expected = sorted(f"c{idx}@example.test" for idx in range(len(epochs)))
+
+    marker = BASE
+    seen: list[str] = []
+    for _ in range(10):
+        current_max = env.backend.get_current_max_row_id()
+        seen.extend(r["message_id"] for r in env.backend.get_new_emails(marker))
+        advance = env.backend.marker_after_fetch(current_max)
+        assert advance >= marker  # 水位永不回退
+        if advance == current_max:
+            break
+        assert advance > marker  # 截断轮必须前进
+        marker = advance
+    else:
+        pytest.fail("水位原地打转: 轮次没有收敛")
+    assert sorted(seen) == expected  # 每封恰好取到一次 (无遗漏、无重复)
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +447,19 @@ def test_fetch_content_by_id_message_id_heal_writes_back(env):
     result = env.backend.fetch_email_content_by_id(row["internal_id"])
     assert result is not None
     assert heals == [(1_000_000_002, item.EntryID)]  # 反查命中 → entry_id 自愈回写
+
+
+def test_fetch_heal_hits_when_store_only_supports_proptag(env, monkeypatch):
+    """mailheader 形态查不到的 store (2026-09-11 反馈): proptag 形态仍能反查命中并回写."""
+    from tests.mail.backend.com_fakes import PR_INTERNET_MESSAGE_ID, FakeItems
+
+    monkeypatch.setattr(FakeItems, "find_props", frozenset({PR_INTERNET_MESSAGE_ID}))
+    item = _inbox_item(env.store, epoch=BASE + 10, mid="<pt@example.test>")
+    row = env.sync_store.add_row(1_000_000_006, message_id="pt@example.test")
+    heals = _record_heals(env.backend)
+    result = env.backend.fetch_email_content_by_id(row["internal_id"])
+    assert result is not None
+    assert heals == [(1_000_000_006, item.EntryID)]
 
 
 def test_fetch_content_by_id_update_uid_false_skips_heal(env):
@@ -800,13 +897,11 @@ def test_sta_executor_pins_single_thread_and_reentrant():
         sta.shutdown()
 
 
-def test_epoch_to_dasl_local_roundtrip():
-    from src.mail.backend.com_client import epoch_to_dasl_local
+def test_epoch_to_dasl_utc_is_utc_minute_floor(shanghai_tz):
+    from src.mail.backend.com_client import epoch_to_dasl_utc
 
-    epoch = 1_760_012_345
-    literal = epoch_to_dasl_local(epoch)
-    parsed = datetime.strptime(literal, "%Y-%m-%d %H:%M:%S")
-    assert int(parsed.timestamp()) == epoch  # 本地时区往返无损
+    # 1_760_012_345 = 2025-10-09 12:19:05Z (东八区本地 20:19:05): 字面量是 UTC, 秒截掉
+    assert epoch_to_dasl_utc(1_760_012_345) == "2025-10-09 12:19"
 
 
 def test_start_progress_window_hider_noop_on_mac():

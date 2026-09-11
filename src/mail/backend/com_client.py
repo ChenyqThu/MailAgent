@@ -50,6 +50,11 @@ PR_SMTP_ADDRESS = "http://schemas.microsoft.com/mapi/proptag/0x39FE001F"
 DASL_MESSAGE_ID = "urn:schemas:mailheader:message-id"
 DASL_DATE_RECEIVED = "urn:schemas:httpmail:datereceived"
 
+#: message_id 反查 (Items.Find) 依次尝试的属性名 —— mailheader 形态在部分 store 上查不到
+#: (2026-09-11 Windows 反馈), proptag 形态命中。两处反查共用这一份顺序:
+#: OutlookComBackend._find_by_message_id / FolderComReader._find_item_in_folder。
+MESSAGE_ID_FIND_PROPS = (PR_INTERNET_MESSAGE_ID, DASL_MESSAGE_ID)
+
 # OlDefaultFolders 枚举 (Outlook 对象模型常量; pywin32 constants 需 makepy, 用字面量稳)
 OL_FOLDER_DELETED_ITEMS = 3
 OL_FOLDER_SENT_MAIL = 5
@@ -349,13 +354,19 @@ def start_progress_window_hider(duration_sec: float = 15.0) -> None:
     threading.Thread(target=_hide_loop, name="outlook-progress-hider", daemon=True).start()
 
 
-def epoch_to_dasl_local(epoch: float) -> str:
-    """epoch 秒 → DASL 日期字面量 (本地时区 'YYYY-MM-DD HH:MM:SS').
+def epoch_to_dasl_utc(epoch: float) -> str:
+    """epoch 秒 → DASL 日期字面量 ('YYYY-MM-DD HH:MM', **UTC**, 向下取整到分钟).
 
-    Items.Restrict 的 ``[ReceivedTime] >= '02/13/26 ...'`` 写法 locale 敏感 (已知坑);
-    DASL ``@SQL=urn:schemas:httpmail:datereceived`` 接受 ISO 形状字面量且按**本地时区**
-    解释, 与 locale 解耦。
+    DASL (``@SQL=`` + 命名空间属性, 如 ``urn:schemas:httpmail:datereceived``) 的日期比较
+    一律按 UTC, 字面量必须先转成 UTC (微软文档 "Filtering Items Using a Date-time
+    Comparison", Time Zones Used in Comparison 一节)。写成本地墙钟时, 东八区实际查的是
+    「水位 + 8 小时」之后的邮件 (2026-09-11 Windows 反馈实证)。Jet 写法
+    (``[ReceivedTime] >= '...'``) 才按本地时间比较, 但它对 locale 敏感, 所以仍用 DASL。
+
+    只精确到分钟: 文档提示带秒的比较可能不按预期工作 (真机结果见
+    ``scripts/poc_win/poc_4_dasl_probe.py``)。向下取整配合 ``>=`` 只会多取同一分钟里
+    更早的几封 (由 message_id 去重), 不会漏。
     """
-    from datetime import datetime
+    from datetime import datetime, timezone
 
-    return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%d %H:%M")

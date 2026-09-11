@@ -55,7 +55,7 @@ from src.mail.backend.base import (
     MarkerUnavailableError,
 )
 from src.mail.backend.com_client import (
-    DASL_MESSAGE_ID,
+    MESSAGE_ID_FIND_PROPS,
     OL_FOLDER_DRAFTS,
     OL_FOLDER_INBOX,
     OL_FOLDER_SENT_MAIL,
@@ -68,7 +68,7 @@ from src.mail.backend.com_client import (
     OutlookSession,
     StaComExecutor,
     call_with_timeout,
-    epoch_to_dasl_local,
+    epoch_to_dasl_utc,
     start_progress_window_hider,
 )
 # 纯函数复用 (单源, 不复制): davmail_backend 的头解码/地址提取/线程推导与
@@ -172,8 +172,8 @@ class OutlookComBackend:
     #: 之外的第二分支; applescript 无此标 → 维持原 ServiceInvalidArgError)。
     supports_folder_ops = True
 
-    #: get_new_emails 单轮抓取上限 (追赶/首拉防灌爆; 超出部分下轮继续 —— marker
-    #: 只推进到已抓最后一封, 不会跳过)
+    #: get_new_emails 单轮抓取上限 (追赶/首拉防灌爆; 超出部分下轮继续 —— marker 只推进
+    #: 到已抓完的那一分钟末尾, 不会跳过)。同一分钟里的邮件恒整分钟取完, 实际封数可超上限。
     MAX_BATCH = 200
 
     def __init__(
@@ -189,6 +189,9 @@ class OutlookComBackend:
         self._sta = StaComExecutor()
         self._session = OutlookSession(dispatch_factory)
         self._cached_marker: Optional[int] = None
+        # 本轮 get_new_emails 被 MAX_BATCH 截断时, 下一轮重扫的起点 (本轮已取完这一刻
+        # 之前的全部邮件; inbox/sent 都截断取较小者; marker_after_fetch 消费)
+        self._resume_at: Optional[int] = None
         # 观测: 最近一次 COM 操作耗时 (镜像 davmail last_op_latency_ms 观测面)
         self.last_op_latency_ms: Optional[int] = None
         # 协议外属性 (mail_write getattr 消费, 镜像 davmail probe 探测结果语义)
@@ -346,10 +349,10 @@ class OutlookComBackend:
 
     @staticmethod
     def _since_filter(epoch: int) -> str:
-        """epoch 水位 → DASL Restrict filter (>=, 本地时区字面量, locale 解耦)."""
+        """epoch 水位 → DASL Restrict filter (>=, UTC 字面量精确到分钟, 见 epoch_to_dasl_utc)."""
         return (
             "@SQL=\"urn:schemas:httpmail:datereceived\" >= "
-            f"'{epoch_to_dasl_local(epoch)}'"
+            f"'{epoch_to_dasl_utc(epoch)}'"
         )
 
     #: 水位格式版本 —— new_watcher 启动时与 sync_state['marker_format'] 比对, 不一致就用
@@ -388,6 +391,7 @@ class OutlookComBackend:
         ``backend_origin='outlook_com'`` / ``mailbox`` / ``entry_id``, 上层
         new_watcher 直接透传 save_email。
         """
+        self._resume_at = None
         if since_row_id <= 0:
             # 无合法水位时拒绝全量扫描 (10 万封邮箱 Restrict 无下界会卡死 STA 线程);
             # 调用方 (watcher baseline 流程) 会先 get_current_max_row_id 建水位。
@@ -407,10 +411,23 @@ class OutlookComBackend:
 
         return rows
 
+    def marker_after_fetch(self, current_max: int) -> int:
+        """本轮 get_new_emails 之后水位推进到哪 (new_watcher 按 hasattr 调用).
+
+        单轮被 MAX_BATCH 截断时推进到「本轮取完的最后一分钟的末尾」—— 这一刻之前的邮件
+        本轮全部取到了, 剩余部分下一轮从这里 >= 重扫; 没截断就是 current_max。
+
+        🔴 不能停在已取到的最后一封上: 筛选字面量只到分钟, 下一轮 >= 会从那一分钟的开头
+        重扫, 同一分钟里超过 MAX_BATCH 封时水位原地打转, 之后的新邮件永远取不到。
+        """
+        if self._resume_at is None:
+            return current_max
+        return min(current_max, self._resume_at)
+
     def _scan_folder_since(self, mailbox_label: str, since_epoch: int) -> list[dict]:
         """单文件夹按 ReceivedTime 水位增量扫描 → 行 dict 列表 (含 internal_id 分配)."""
 
-        def _scan(session: OutlookSession) -> list[ItemSnapshot]:
+        def _scan(session: OutlookSession) -> tuple[list[ItemSnapshot], Optional[int]]:
             folder = self._folder_for_label(session, mailbox_label)
             items = folder.Items
             items.Sort("[ReceivedTime]", False)  # ascending: 老→新, 截断留最老的下轮
@@ -419,8 +436,22 @@ class OutlookComBackend:
             snaps: list[ItemSnapshot] = []
             item = restricted.GetFirst()
             scanned = 0
-            while item is not None and scanned < self.MAX_BATCH:
+            last_epoch: Optional[int] = None
+            while item is not None:
+                epoch = _to_epoch(_com_get(item, "ReceivedTime"))
+                same_minute = (
+                    epoch is not None
+                    and last_epoch is not None
+                    and epoch // 60 == last_epoch // 60
+                )
+                # 到上限后把同一分钟剩下的取完再停 —— 停在分钟中间的话, 下一轮的 >=
+                # (字面量只到分钟) 会从这一分钟开头重扫, 同一分钟超过 MAX_BATCH 封时
+                # 水位就永远前进不了。
+                if scanned >= self.MAX_BATCH and not same_minute:
+                    break
                 scanned += 1
+                if epoch is not None:
+                    last_epoch = epoch
                 # 非邮件 item (会议回执/任务) 没有 MailItem 属性面 — Class 43 = olMail
                 if int(_com_get(item, "Class", 43)) == 43:
                     snaps.append(
@@ -429,15 +460,20 @@ class OutlookComBackend:
                         )
                     )
                 item = restricted.GetNext()
-            if total > scanned:
-                logger.info(
-                    f"[outlook-com] {mailbox_label}: {total} matched, capped to "
-                    f"{scanned} (MAX_BATCH) — remainder next cycle"
-                )
-            return snaps
+            if item is None:
+                return snaps, None
+            logger.info(
+                f"[outlook-com] {mailbox_label}: {total} matched, took {scanned} "
+                f"(MAX_BATCH={self.MAX_BATCH}, 补到分钟边界) — remainder next cycle"
+            )
+            # 下一轮的重扫起点 = 最后一封所在分钟的下一分钟 (它之前的全部已入库)
+            resume_at = (
+                (last_epoch // 60 + 1) * 60 if last_epoch is not None else since_epoch
+            )
+            return snaps, resume_at
 
         try:
-            snaps = self._com(_scan, op=f"scan-{mailbox_label}")
+            snaps, resume_at = self._com(_scan, op=f"scan-{mailbox_label}")
         except Exception as e:  # noqa: BLE001 — 统一翻译成三态契约异常
             raise FolderFetchError(
                 f"outlook_com scan {mailbox_label!r} since={since_epoch} failed: {e}"
@@ -455,6 +491,12 @@ class OutlookComBackend:
                     f"entry_id={snap.entry_id!r} folder={mailbox_label!r}: {e}"
                 ) from e
             out.append(row)
+        if resume_at is not None:
+            self._resume_at = (
+                resume_at
+                if self._resume_at is None
+                else min(self._resume_at, resume_at)
+            )
         return out
 
     def _meta_row_from_snapshot(self, snap: ItemSnapshot, mailbox_label: str) -> dict:
@@ -636,9 +678,11 @@ class OutlookComBackend:
         message_id: str,
         mailbox_label: Optional[str],
     ) -> Any:
-        """按 PR_INTERNET_MESSAGE_ID (DASL) 在候选文件夹里 Items.Find.
+        """按 message_id 在候选文件夹里 Items.Find.
 
-        候选顺序: 记录所属文件夹 → 收件箱 → 已发送 → 草稿箱 (去重)。
+        候选顺序: 记录所属文件夹 → 收件箱 → 已发送 → 草稿箱 (去重)。属性名按
+        MESSAGE_ID_FIND_PROPS (proptag 在前, mailheader 兜底 —— 2026-09-11 Windows 反馈里
+        mailheader 形态在用户机器上落空), 每个属性名再试带 / 不带尖括号两种字面量。
         """
         mid = (message_id or "").strip().strip("<>")
         if not mid:
@@ -658,14 +702,15 @@ class OutlookComBackend:
             seen_ids.add(fid)
             candidates.append(folder)
         for folder in candidates:
-            for literal in (f"<{mid}>", mid):
-                flt = f"@SQL=\"{DASL_MESSAGE_ID}\" = '{_dasl_quote(literal)}'"
-                try:
-                    item = folder.Items.Find(flt)
-                except Exception:  # noqa: BLE001 — filter 语法被具体 store 拒绝
-                    continue
-                if item is not None:
-                    return item
+            for prop in MESSAGE_ID_FIND_PROPS:
+                for literal in (f"<{mid}>", mid):
+                    flt = f"@SQL=\"{prop}\" = '{_dasl_quote(literal)}'"
+                    try:
+                        item = folder.Items.Find(flt)
+                    except Exception:  # noqa: BLE001 — filter 语法被具体 store 拒绝
+                        continue
+                    if item is not None:
+                        return item
         return None
 
     def _resolve_item_for_record(
