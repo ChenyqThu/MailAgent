@@ -3460,17 +3460,17 @@
       },
       "dateMode": {
         "label": "Mode",
-        "helper": "fixed — pin a start date; relative — N days back from today",
+        "helper": "Relative — the floor rolls daily with today − lookback days; Fixed — the floor stays on the start date. Mail older than the floor is stored locally only, never pushed to Notion",
         "fixed": "Fixed date",
         "relative": "Relative days"
       },
       "startDate": {
         "label": "Start date",
-        "helper": "Fixed mode — emails before this are skipped"
+        "helper": "Fixed mode only — mail before this date is stored locally only, never pushed to Notion"
       },
       "lookbackDays": {
         "label": "Lookback days",
-        "helper": "Relative mode — N days back from today"
+        "helper": "Relative mode only — floor = N days back from today, rolling forward daily; mail older than the floor is stored locally only, never pushed to Notion"
       },
       "mailboxes": {
         "label": "Mailboxes to watch",

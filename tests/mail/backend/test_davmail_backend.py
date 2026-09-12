@@ -598,6 +598,7 @@ def test_resolve_imap_box_pure_ascii_custom_folder_unchanged():
 def test_sent_search_criteria_date_floor_then_uid(monkeypatch):
     """首次 (无 davmail 发件箱行) 走 SENTSINCE 日期下限; 有 marker 后走 UID 增量."""
     backend = _make_backend()
+    backend.cfg.sync_date_mode = "fixed"
     backend.cfg.sync_start_date = "2026-03-15"
     backend.sent_folder = "Sent"
     backend._folder_uidnext = MagicMock(return_value=99999)  # uidnext 正常 → 走钳制增量
@@ -617,6 +618,7 @@ def test_sent_search_criteria_falls_back_to_date_floor_when_uidnext_probe_fails(
     """review LOW#1: UIDNEXT 探测失败 (返回 0) 时不信任 DB 裸 marker (可能是幽灵高 UID),
     退化日期下限重拉, 而非走 UID marker+1:* 复现冻结。"""
     backend = _make_backend()
+    backend.cfg.sync_date_mode = "fixed"
     backend.cfg.sync_start_date = "2026-03-15"
     backend.sent_folder = "Sent"
     backend._folder_uidnext = MagicMock(return_value=0)  # STATUS 失败 / 会话降级

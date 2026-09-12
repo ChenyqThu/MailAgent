@@ -3460,17 +3460,17 @@
       },
       "dateMode": {
         "label": "起始模式",
-        "helper": "fixed 固定日期; relative 从今天向前回溯 N 天",
+        "helper": "相对 — 地板按「今天 − 回溯天数」逐日滚动；固定 — 地板钉在起始日期。早于地板的邮件只存本地，不推 Notion",
         "fixed": "固定日期",
         "relative": "相对天数"
       },
       "startDate": {
         "label": "起始日期",
-        "helper": "fixed 模式 — 早于此日期的邮件跳过"
+        "helper": "仅固定模式 — 早于这天的邮件只存本地，不推 Notion"
       },
       "lookbackDays": {
         "label": "回溯天数",
-        "helper": "relative 模式 — 从今天向前 N 天"
+        "helper": "仅相对模式 — 地板 = 今天向前 N 天，每天滚动前移；早于地板的邮件只存本地，不推 Notion"
       },
       "mailboxes": {
         "label": "监听邮箱",

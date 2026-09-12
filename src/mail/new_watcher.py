@@ -242,6 +242,14 @@ def _parse_sync_start_date() -> Optional[datetime]:
 class NewWatcher:
     """新架构邮件同步监听器"""
 
+    def _notion_date_floor(self) -> Optional[datetime]:
+        """Notion 日期地板，**每次判定都重算**。
+
+        relative 模式下它是滚动日期（今天 − SYNC_LOOKBACK_DAYS）：快照到 __init__ 的话，
+        长跑进程会一直用启动那天的地板，跨天后越判越松。
+        """
+        return _parse_sync_start_date()
+
     def __init__(
         self,
         mailboxes: List[str] = None,
@@ -265,10 +273,11 @@ class NewWatcher:
         self.mailboxes = mailboxes or ["收件箱", "发件箱"]
         self.poll_interval = poll_interval
 
-        # 解析同步起始日期
-        self.sync_start_date = _parse_sync_start_date()
-        if self.sync_start_date:
-            logger.info(f"Sync start date: {self.sync_start_date.strftime('%Y-%m-%d')} (emails before this date will be cached but not synced to Notion)")
+        # Notion 日期地板：这里只打一行启动日志，判定一律走 self._notion_date_floor()
+        # —— relative 模式是滚动日期，快照到 __init__ 会让长跑进程一直用启动那天的地板。
+        _floor = _parse_sync_start_date()
+        if _floor:
+            logger.info(f"Notion date floor: {_floor.strftime('%Y-%m-%d')} (mode={settings.sync_date_mode}, emails before it are cached but not synced to Notion)")
 
         # E1 契约收口: watcher 直接持 IMailBackend 调方法 (雷达面 + 抓取面),
         # 无 arm/radar 影子层. backend=None (老手动入口兼容) → 构造
@@ -1878,14 +1887,15 @@ class NewWatcher:
             # Keep the existing dual-write flag/failure policy; do not fetch more history.
             self._maybe_dual_write_body(email_obj, internal_id, full_email.get("source"))
 
-            # 5. 日期过滤：早于 sync_start_date 的邮件不同步到 Notion
-            if self.sync_start_date and email_obj.date:
+            # 5. 日期过滤：早于 Notion 日期地板的邮件不同步到 Notion
+            date_floor = self._notion_date_floor()
+            if date_floor and email_obj.date:
                 email_date = email_obj.date
                 if email_date.tzinfo is None:
                     email_date = email_date.replace(tzinfo=timezone(timedelta(hours=8)))
 
-                if email_date < self.sync_start_date:
-                    logger.info(f"Skipping old email: {email_date.strftime('%Y-%m-%d')} < {self.sync_start_date.strftime('%Y-%m-%d')}")
+                if email_date < date_floor:
+                    logger.info(f"Skipping old email: {email_date.strftime('%Y-%m-%d')} < {date_floor.strftime('%Y-%m-%d')}")
                     self.sync_store.mark_skipped(internal_id, reason="notion_date_filter")
                     self._stats["emails_skipped"] += 1
                     return

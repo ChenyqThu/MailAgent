@@ -29,9 +29,10 @@ from src.sync.async_jobs import AsyncJobRepository
 TODAY = date.today()
 
 
-def _stub_cfg(db_path: Path, *, backend: str = "davmail"):
+def _stub_cfg(db_path: Path, *, backend: str = "davmail", mode: str = "relative"):
     return SimpleNamespace(
         mailagent_backend=backend,
+        sync_date_mode=mode,
         sync_lookback_days=14,
         sync_start_date="2026-01-01",
         notion_token="ntn_x",
@@ -86,7 +87,11 @@ def test_get_reports_capability_and_defaults(hs_env):
 
 
 def test_get_notion_floor_matches_the_watcher_gate(hs_env):
-    """界面上承诺的"早于 X 日只存本地"必须与 watcher 实际判据同源。"""
+    """界面上承诺的"早于 X 日只存本地"必须与 watcher 实际判据同源。
+
+    默认 relative 模式下地板是**滚动**日期 (今天 − SYNC_LOOKBACK_DAYS), 恰好与默认
+    起始日同一天 —— 地板停在固定的 SYNC_START_DATE 会当场红。
+    """
     from src.config import parse_sync_start_date
 
     data = _data(hs_env.client.get("/api/history-sync"))
@@ -94,6 +99,16 @@ def test_get_notion_floor_matches_the_watcher_gate(hs_env):
 
     assert data["notion_enabled"] is True
     assert data["notion_floor"] == expected.strftime("%Y-%m-%d")
+    assert data["notion_floor"] == (TODAY - timedelta(days=14)).isoformat()
+
+
+def test_get_notion_floor_in_fixed_mode_is_the_configured_start_date(hs_env):
+    """fixed 模式下地板是 SYNC_START_DATE 本身, 不随今天滚动。"""
+    app.dependency_overrides[get_settings] = lambda: _stub_cfg(hs_env.db, mode="fixed")
+
+    data = _data(hs_env.client.get("/api/history-sync"))
+
+    assert data["notion_floor"] == "2026-01-01"
 
 
 def test_applescript_backend_is_unsupported(hs_env, tmp_path):

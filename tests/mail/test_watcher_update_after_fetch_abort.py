@@ -59,7 +59,7 @@ def _build_watcher(email_obj, *, update_result=UpdateAfterFetchResult.OK):
     w.notion_sync = SimpleNamespace(
         create_email_page_v2=AsyncMock(return_value="page123")
     )
-    w.sync_start_date = None
+    w._notion_date_floor = Mock(return_value=None)
     w._stats = {
         "emails_synced": 0,
         "emails_skipped": 0,
@@ -92,7 +92,9 @@ async def test_old_email_keeps_fetched_local_body_without_creating_notion_page()
     email = _fake_email_obj()
     email.date = datetime(2025, 12, 20, tzinfo=timezone.utc)
     watcher = _build_watcher(email)
-    watcher.sync_start_date = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    watcher._notion_date_floor = Mock(
+        return_value=datetime(2026, 1, 1, tzinfo=timezone.utc)
+    )
     await watcher._sync_single_email_v3(dict(META))
     watcher._maybe_dual_write_body.assert_called_once_with(email, 42, 'raw-mime')
     watcher.sync_store.mark_skipped.assert_called_once_with(42, reason='notion_date_filter')

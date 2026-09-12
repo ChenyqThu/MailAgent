@@ -119,7 +119,7 @@ def _build_watcher(email_obj):
     w.notion_sync = SimpleNamespace(
         create_email_page_v2=AsyncMock(return_value="page123")
     )
-    w.sync_start_date = None
+    w._notion_date_floor = Mock(return_value=None)
     w._stats = {
         "emails_synced": 0,
         "emails_skipped": 0,

@@ -2481,12 +2481,18 @@ class DavMailBackend(IMailBackend):
             return 0
 
     def _imap_date_floor(self) -> str:
-        """SYNC_START_DATE ("2026-01-01") → IMAP SEARCH 日期格式 ("01-Jan-2026")."""
-        raw = (getattr(self.cfg, "sync_start_date", "") or "2026-01-01")[:10]
-        try:
-            return datetime.strptime(raw, "%Y-%m-%d").strftime("%d-%b-%Y")
-        except Exception:
+        """Notion 日期地板 → IMAP SEARCH 日期格式 ("01-Jan-2026")。
+
+        与 watcher 的日期门同源 (``src.config.parse_sync_start_date``): relative 模式下是
+        滚动日期 (今天 − SYNC_LOOKBACK_DAYS), fixed 模式下是 SYNC_START_DATE。地板无效
+        (= 不按日期过滤) 时 SEARCH 仍需要一个下限, 沿用历史默认值。
+        """
+        from src.config import parse_sync_start_date
+
+        floor = parse_sync_start_date(self.cfg)
+        if floor is None:
             return "01-Jan-2026"
+        return floor.strftime("%d-%b-%Y")
 
     def _sent_search_criteria(self) -> tuple[str, str]:
         """发件箱增量 search criteria: 有 marker 走 UID 增量, 否则日期下限回填。

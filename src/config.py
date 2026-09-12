@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic_settings import BaseSettings
@@ -1323,36 +1323,69 @@ def notion_enabled(cfg: "Config | None" = None) -> bool:
     )
 
 
-def parse_sync_start_date(cfg: "Config | None" = None) -> Optional[datetime]:
-    """SYNC_START_DATE → 带时区的 datetime；未配置 / 格式非法 → None（不过滤日期）。
+def parse_sync_start_date(
+    cfg: "Config | None" = None, *, today: Optional[date] = None
+) -> Optional[datetime]:
+    """Notion 镜像面的**日期地板**：早于它的邮件只存本地、不建 Notion 页。
 
-    **Notion 镜像面的日期地板单源**：早于它的邮件只存本地、不建 Notion 页
-    （``new_watcher._sync_single_email_v3`` 第 5 步的判据）。设置页「同步历史邮件」
-    要把这个地板显示给用户（"早于 X 日的只存本地"），必须与 watcher 判定用**同一个**
-    函数 —— 各写一份的话，界面上承诺的日期和实际入库行为迟早对不上。
+    按 SYNC_DATE_MODE 分两种：
 
-    时区固定北京：判据是"这封邮件的日期在不在起始日之后"，起始日是用户按本地日历
-    填的，没有跨时区语义。
+    - ``relative``：地板 = 本地「今天 00:00」− SYNC_LOOKBACK_DAYS 天。这是**滚动**日期，
+      每天前移一天；只影响此后入库的邮件的推送判定，**不**回收已经建好的 Notion 页。
+    - ``fixed``：地板 = SYNC_START_DATE 当天 00:00。
+
+    模式值非法 / 起始日格式错 / 回看天数非法 → 记 warning 并返回 None（= 不按日期过滤）。
+
+    **单源**：watcher 的日期门（``new_watcher._sync_single_email_v3`` 第 5 步）、davmail
+    IMAP SEARCH 的日期下界、设置页「同步历史邮件」显示的地板都调它。各写一份的话，界面
+    上承诺的日期和实际入库行为迟早对不上。
+
+    时区取本机本地时区：判据是"这封邮件的日期在不在地板之后"，地板是用户按本地日历读
+    的。``today`` 供测试注入 —— 滚动地板不能依赖真实时钟。
 
     lazy import（与本模块其余部分一致）：config.py 被 CLI / 打包链在各种裸环境里
     import，顶层不拉 loguru。
     """
-    from datetime import timedelta, timezone
+    from datetime import time as _time, timedelta
 
     from loguru import logger
 
     c = cfg if cfg is not None else config
-    if not c.sync_start_date:
-        return None
-    tz = timezone(timedelta(hours=8))  # 北京时区
-    try:
-        dt = datetime.strptime(c.sync_start_date, "%Y-%m-%d")
-        return dt.replace(tzinfo=tz)
-    except ValueError:
-        logger.warning(
-            f"Invalid SYNC_START_DATE format: {c.sync_start_date}, expected YYYY-MM-DD"
-        )
-        return None
+    mode = str(getattr(c, "sync_date_mode", "") or "").strip().lower()
+
+    if mode == "relative":
+        raw_days = getattr(c, "sync_lookback_days", None)
+        try:
+            days = int(raw_days)
+        except (TypeError, ValueError):
+            days = None
+        if days is None or days < 0:
+            logger.warning(
+                f"Invalid SYNC_LOOKBACK_DAYS: {raw_days!r}, expected a non-negative "
+                "integer; Notion date filter disabled"
+            )
+            return None
+        day = (today or datetime.now().date()) - timedelta(days=days)
+        # 先拼本地 naive 午夜再 astimezone()：按**那一天**的本地偏移定位（夏令时正确）。
+        return datetime.combine(day, _time()).astimezone()
+
+    if mode == "fixed":
+        if not c.sync_start_date:
+            return None
+        try:
+            dt = datetime.strptime(c.sync_start_date, "%Y-%m-%d")
+        except ValueError:
+            logger.warning(
+                f"Invalid SYNC_START_DATE format: {c.sync_start_date}, expected YYYY-MM-DD"
+            )
+            return None
+        return dt.astimezone()
+
+    logger.warning(
+        f"Invalid SYNC_DATE_MODE: {getattr(c, 'sync_date_mode', None)!r}, expected "
+        "'relative' or 'fixed'; Notion date filter disabled"
+    )
+    return None
 
 
 def calendar_notion_enabled(cfg: "Config | None" = None) -> bool:

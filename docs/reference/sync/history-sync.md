@@ -128,6 +128,9 @@ unit」，而本任务每轮**新分配** internal_id，拿上一轮的 id 当�
   再往前一天不合法。前后端共用 `src/sync/history_sync.py::validate_range`。
 - `notion_floor` 必须与 watcher 判 Notion 日期地板**同一个函数**
   （`src.config.parse_sync_start_date`），否则界面承诺的日期与实际入库行为会分裂。
+- `SYNC_DATE_MODE=relative`（默认）下 `notion_floor` 是**滚动**日期（今天 −
+  `SYNC_LOOKBACK_DAYS`），每天前移一天，界面上「早于 X 日只存本地」的 X 会跟着变；
+  滚动只影响此后入库的邮件，已建好的 Notion 页不会被回收。`fixed` 下它是 `SYNC_START_DATE`。
 
 ---
 

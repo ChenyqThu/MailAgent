@@ -124,7 +124,7 @@ def _watcher(ingest_reason):
     w.sync_store.get.return_value = {"ingest_reason": ingest_reason}
     w.meeting_sync = SimpleNamespace(has_meeting_invite=Mock(return_value=False))
     w.notion_sync = SimpleNamespace(create_email_page_v2=AsyncMock(return_value="page123"))
-    w.sync_start_date = None
+    w._notion_date_floor = Mock(return_value=None)
     w._stats = {"emails_synced": 0, "emails_skipped": 0, "meeting_invites": 0,
                 "errors": 0, "retries_attempted": 0, "retries_succeeded": 0}
     w._bg_tasks = set()

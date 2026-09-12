@@ -760,7 +760,12 @@ class InitialSync:
         comparison['store_only_before_date'] = []
         comparison['notion_only'] = []
 
-        sync_start_date = settings.sync_start_date
+        # Notion 日期地板与 watcher 判定同源 —— relative 模式下它是滚动日期，
+        # 不是 SYNC_START_DATE 字面值。
+        from src.config import parse_sync_start_date
+
+        floor = parse_sync_start_date(settings)
+        sync_start_date = floor.strftime("%Y-%m-%d") if floor else ""
 
         # 仅在 SyncStore
         for msg_id in (store_ids - notion_ids):
