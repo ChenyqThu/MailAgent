@@ -125,7 +125,10 @@ unit」，而本任务每轮**新分配** internal_id，拿上一轮的 id 当�
 | `POST /api/history-sync/cancel` | 置取消标记；没有进行中的任务 → 404 `E_NOT_FOUND` |
 
 - **跨度校验是日期差**：`until − since ≤ max_days`。`2025-09-11 → 2026-09-11` 合法，
-  再往前一天不合法。前后端共用 `src/sync/history_sync.py::validate_range`。
+  再往前一天不合法。后端唯一实现是 `src/sync/history_sync.py::validate_range`（router 直接
+  调它）；前端 `HistorySyncSection.validateRange` 是同一条式子的**镜像**，只有 `max_days`
+  由 GET 下发（常量不手抄）。两侧各有闸：`tests/api/test_history_sync_api.py::
+  test_span_rule_matches_the_frontend` 与 `frontend/tests/shared/HistorySyncSection.test.tsx`。
 - `notion_floor` 必须与 watcher 判 Notion 日期地板**同一个函数**
   （`src.config.parse_sync_start_date`），否则界面承诺的日期与实际入库行为会分裂。
 - `SYNC_DATE_MODE=relative`（默认）下 `notion_floor` 是**滚动**日期（今天 −

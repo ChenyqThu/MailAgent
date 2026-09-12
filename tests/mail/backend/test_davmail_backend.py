@@ -595,10 +595,30 @@ def test_resolve_imap_box_pure_ascii_custom_folder_unchanged():
     assert backend._resolve_imap_box("Jira") == "Jira"
 
 
+def test_imap_fetch_floor_does_not_roll_with_relative_mode():
+    """🔴 取信下界与 Notion 推送地板是两个概念 —— 前者不随 relative 模式滚动。
+
+    合并成一个的话, 默认 (relative / 14 天) 会把发件箱首次回填的窗口从 SYNC_START_DATE
+    缩到最近两周: 更老的发件邮件根本不进本地库, 而 marker 一旦建立就再也不回头取。
+    """
+    backend = _make_backend()
+    backend.cfg.sync_date_mode = "relative"
+    backend.cfg.sync_lookback_days = 14
+    backend.cfg.sync_start_date = "2026-01-01"
+    backend.sent_folder = "Sent"
+    backend._folder_uidnext = MagicMock(return_value=0)   # → SENTSINCE 日期下限回填分支
+
+    assert backend._imap_date_floor() == "01-Jan-2026"
+    assert backend._sent_search_criteria() == ("SENTSINCE", "01-Jan-2026")
+
+    # 回看天数是 Notion 推送地板的参数, 动它不该动取信窗口
+    backend.cfg.sync_lookback_days = 300
+    assert backend._imap_date_floor() == "01-Jan-2026"
+
+
 def test_sent_search_criteria_date_floor_then_uid(monkeypatch):
     """首次 (无 davmail 发件箱行) 走 SENTSINCE 日期下限; 有 marker 后走 UID 增量."""
     backend = _make_backend()
-    backend.cfg.sync_date_mode = "fixed"
     backend.cfg.sync_start_date = "2026-03-15"
     backend.sent_folder = "Sent"
     backend._folder_uidnext = MagicMock(return_value=99999)  # uidnext 正常 → 走钳制增量
@@ -618,7 +638,6 @@ def test_sent_search_criteria_falls_back_to_date_floor_when_uidnext_probe_fails(
     """review LOW#1: UIDNEXT 探测失败 (返回 0) 时不信任 DB 裸 marker (可能是幽灵高 UID),
     退化日期下限重拉, 而非走 UID marker+1:* 复现冻结。"""
     backend = _make_backend()
-    backend.cfg.sync_date_mode = "fixed"
     backend.cfg.sync_start_date = "2026-03-15"
     backend.sent_folder = "Sent"
     backend._folder_uidnext = MagicMock(return_value=0)  # STATUS 失败 / 会话降级

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -256,6 +257,45 @@ def test_job_payload_merges_live_state(hs_env):
     assert job["covered_from"] == "2026-09-05"
     assert job["counts"]["notion_synced"] == 2
     assert job["counts"]["empty_msgid"] == 1
+
+
+TS_TYPES = Path(__file__).resolve().parents[2] / "frontend/src/shared/api/types/historySync.ts"
+
+
+def _ts_interface_fields(name: str) -> list[str]:
+    """TS 接口的字段名。🔴 抽不到就断言失败, 绝不返回空集合与空集合比较装绿。"""
+    source = TS_TYPES.read_text(encoding="utf-8")
+    match = re.search(rf"export interface {name}\s*\{{(.*?)\n\}}", source, re.S)
+    assert match is not None, (
+        f"{TS_TYPES.name}: 没找到 `export interface {name}` —— 接口被改名/改写了, "
+        "更新这道闸的解析器"
+    )
+    body = re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", match.group(1), flags=re.S))
+    fields = re.findall(r"^\s*(\w+)\??:", body, re.M)
+    assert fields, f"{TS_TYPES.name}: {name} 字段抽取结果为空 —— 解析器坏了"
+    return fields
+
+
+def test_job_payload_keys_match_the_ts_interface(hs_env):
+    """闸: 线上 ``job`` 的字段集 == 前端 ``HistorySyncJob`` (跨语言手抄的两处之一)。
+
+    漏一个字段是**静默**的 —— TS 里声明了后端根本不发的字段, 前端读到 undefined 照样
+    渲染, typecheck 与后端测试两边都不会红。
+    """
+    fields = _ts_interface_fields("HistorySyncJob")
+    # canary: 抓到的若是别的接口, 立刻暴露
+    assert "job_id" in fields, "抽取 canary 失败 (没抓到 'job_id')"
+
+    started = _data(_start(hs_env.client, TODAY.isoformat(), TODAY.isoformat()))
+    hs_env.store.set_state(
+        f"history_sync.live.{started['job_id']}",
+        json.dumps({"phase": "syncing", "complete": False, "covered_from": "2026-09-05"}),
+    )
+    hs_env.repo.claim_next()
+
+    job = _data(hs_env.client.get("/api/history-sync"))["job"]
+
+    assert set(job) == set(fields)
 
 
 def test_stall_reason_surfaces_even_though_the_job_row_has_no_error(hs_env):

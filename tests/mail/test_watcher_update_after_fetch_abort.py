@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+import os
+import time
 from types import SimpleNamespace
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, Mock
@@ -99,6 +101,37 @@ async def test_old_email_keeps_fetched_local_body_without_creating_notion_page()
     watcher._maybe_dual_write_body.assert_called_once_with(email, 42, 'raw-mime')
     watcher.sync_store.mark_skipped.assert_called_once_with(42, reason='notion_date_filter')
     watcher.notion_sync.create_email_page_v2.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_naive_email_date_is_read_in_local_time_not_beijing(monkeypatch):
+    """裸日期（Date 头 -0000 = 无时区）按**本机本地时区**读, 不是写死的北京。
+
+    地板是本地午夜, 判据两边必须同一个时间系。写死 +08:00 时, 洛杉矶机器上"地板当天
+    00:30"的邮件会被算成地板前一天 16:30 → 当成旧邮件只存本地, 永远不上 Notion。
+    """
+    monkeypatch.setattr("src.mail.new_watcher.notion_enabled", lambda: True)
+    old_tz = os.environ.get("TZ")
+    os.environ["TZ"] = "America/Los_Angeles"
+    time.tzset()
+    try:
+        email = _fake_email_obj()
+        email.date = datetime(2026, 8, 28, 0, 30)          # naive
+        w = _build_watcher(email)
+        w._notion_date_floor = Mock(
+            return_value=datetime(2026, 8, 28).astimezone()  # 本地午夜
+        )
+
+        await w._sync_single_email_v3(dict(META))
+    finally:
+        if old_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old_tz
+        time.tzset()
+
+    w.sync_store.mark_skipped.assert_not_called()
+    w.notion_sync.create_email_page_v2.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

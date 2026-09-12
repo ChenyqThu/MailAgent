@@ -1,12 +1,15 @@
 """Notion 日期地板 —— SYNC_DATE_MODE 的 relative / fixed / 非法值行为闸（task 09-11）。
 
-地板是**三处调用点共用**的单源（`src.config.parse_sync_start_date`）：
+地板是**两处 Notion 判定共用**的单源（`src.config.parse_sync_start_date`）：
 
   - watcher 的 Notion 日期门（`NewWatcher._notion_date_floor`）
-  - davmail IMAP SEARCH 的日期下界（`DavMailBackend._imap_date_floor`）
   - init 对账的 `store_only_before_date` 分桶（`InitialSync._build_comparison`）
 
-各写一份 = 界面承诺的日期与实际入库行为分裂，所以这里把三个调用点一起钉。
+各写一份 = 界面承诺的日期与实际入库行为分裂，所以这里把两个调用点一起钉。
+
+🔴 davmail 的 IMAP 取信下界（`DavMailBackend._imap_date_floor`）**不在**这个单源里：
+那是取信闸（窗口外的邮件根本不进本地库），不能跟着 relative 模式滚动。它的闸在
+`tests/mail/backend/test_davmail_backend.py::test_imap_fetch_floor_does_not_roll_with_relative_mode`。
 
 "今天"一律注入：滚动地板的判据不能依赖真实时钟（也不能等跨天）。
 """
@@ -202,10 +205,9 @@ def test_floor_is_local_midnight_outside_beijing(la_timezone):
 
 
 @pytest.mark.parametrize("mode", ["relative", "fixed"])
-def test_three_call_sites_resolve_to_the_same_floor(mode, monkeypatch):
+def test_both_notion_call_sites_resolve_to_the_same_floor(mode, monkeypatch):
     from src.config import config as singleton
     from src.init.initial_sync import InitialSync
-    from src.mail.backend.davmail_backend import DavMailBackend
     from src.mail.new_watcher import NewWatcher
 
     monkeypatch.setattr(singleton, "sync_date_mode", mode)
@@ -218,12 +220,7 @@ def test_three_call_sites_resolve_to_the_same_floor(mode, monkeypatch):
     watcher = NewWatcher.__new__(NewWatcher)
     assert watcher._notion_date_floor() == expected
 
-    # ② davmail IMAP SEARCH 下界（同一个地板，换成 IMAP 的日期写法）
-    backend = DavMailBackend.__new__(DavMailBackend)
-    backend.cfg = singleton
-    assert backend._imap_date_floor() == expected.strftime("%d-%b-%Y")
-
-    # ③ init 对账的 store_only_before_date 分桶
+    # ② init 对账的 store_only_before_date 分桶
     init = InitialSync.__new__(InitialSync)
     init.report = SimpleNamespace(comparison={})
     older = (expected - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")

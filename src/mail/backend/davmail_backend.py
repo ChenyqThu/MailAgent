@@ -2481,18 +2481,20 @@ class DavMailBackend(IMailBackend):
             return 0
 
     def _imap_date_floor(self) -> str:
-        """Notion 日期地板 → IMAP SEARCH 日期格式 ("01-Jan-2026")。
+        """IMAP SEARCH 的**取信**下界 = SYNC_START_DATE → ("01-Jan-2026")。
 
-        与 watcher 的日期门同源 (``src.config.parse_sync_start_date``): relative 模式下是
-        滚动日期 (今天 − SYNC_LOOKBACK_DAYS), fixed 模式下是 SYNC_START_DATE。地板无效
-        (= 不按日期过滤) 时 SEARCH 仍需要一个下限, 沿用历史默认值。
+        🔴 与 Notion 日期地板 (``src.config.parse_sync_start_date``) 是两个概念, 不要合并:
+        那个是**推送**闸 (早于它的邮件照常入库, 只是不建 Notion 页), 所以 relative 模式下
+        逐日滚动无妨; 这里是**取信**闸, 窗口外的邮件根本不进本地库 (v4 起 SQLite 是正文
+        SSoT)。拿滚动地板当取信下界的话, 默认 (relative / 14 天) 会把发件箱首次回填缩到
+        最近两周, 而 marker 一旦建立就再也不回头取 —— 更老的发件邮件永久不可达, 且与设置页
+        "早于地板的邮件只存本地"的承诺直接矛盾。故恒取 SYNC_START_DATE, 不随模式滚动。
         """
-        from src.config import parse_sync_start_date
-
-        floor = parse_sync_start_date(self.cfg)
-        if floor is None:
+        raw = (getattr(self.cfg, "sync_start_date", "") or "2026-01-01")[:10]
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d").strftime("%d-%b-%Y")
+        except Exception:
             return "01-Jan-2026"
-        return floor.strftime("%d-%b-%Y")
 
     def _sent_search_criteria(self) -> tuple[str, str]:
         """发件箱增量 search criteria: 有 marker 走 UID 增量, 否则日期下限回填。

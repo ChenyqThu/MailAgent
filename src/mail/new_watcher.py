@@ -29,7 +29,7 @@ import asyncio
 import json
 import sqlite3
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import List, Dict, Optional, Any
 from loguru import logger
 
@@ -1892,7 +1892,9 @@ class NewWatcher:
             if date_floor and email_obj.date:
                 email_date = email_obj.date
                 if email_date.tzinfo is None:
-                    email_date = email_date.replace(tzinfo=timezone(timedelta(hours=8)))
+                    # 裸日期 (Date 头写 -0000 = 无时区信息) 按本机本地时区读 —— 地板也是
+                    # 本地午夜, 两边同一个时间系才不会在边界上互相错开。
+                    email_date = email_date.astimezone()
 
                 if email_date < date_floor:
                     logger.info(f"Skipping old email: {email_date.strftime('%Y-%m-%d')} < {date_floor.strftime('%Y-%m-%d')}")

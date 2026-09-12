@@ -109,6 +109,7 @@
 | `MAILAGENT_LLM_PROVIDER_REGISTRY` | `true` | 多 Provider 体系（2026-07-13 cutover）：配置权威在 `agent_config.db` 双表，引用格式 `providerId:modelId` |
 | `CALENDAR_CALDAV_SYNC_ENABLED` | `false` | ★生产=`true`。CalendarSyncWorker 总开关 |
 | `SYNC_FOLDERS` | `[]`（空） | 多文件夹同步白名单（davmail-only）。🔴 **数组序 = 用户自定义显示顺序**，读侧不得 `sorted()` |
+| `SYNC_DATE_MODE` | `relative` | Notion **推送**地板的模式（单源 `config.parse_sync_start_date`）：relative = 今天 − SYNC_LOOKBACK_DAYS（默认 14）、**逐日滚动**；fixed = SYNC_START_DATE（默认 2026-01-01）。早于地板的邮件照常入库、只是不建 Notion 页；补历史走设置页「同步历史邮件」。🔴 davmail 的 IMAP **取信**下界是另一个概念（恒按 SYNC_START_DATE，不滚动）——合并会让窗口外的邮件根本不进本地库 |
 | `PROJECT_PROGRESS_SYNC_ENABLED` | `false` | 项目周报 CLI + 钩子总闸。trigger 配置已迁 DB 行内热读，env 仅作首次 seed |
 | `MAILAGENT_STANDING_CONTEXT_ENABLED` | `true` | Standing Context 分层 prompt（SOUL / AGENT / RULES / USER 由 `agent_config.db` 组装） |
 | `MAILAGENT_AGENT_CONFIG_DB_PATH` | —（空） | `agent_config.db` 路径覆盖（默认 sync_store 同目录）；不进 `DB_VERSION` |
