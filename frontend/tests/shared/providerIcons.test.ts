@@ -33,6 +33,7 @@ import {
 import catalog from '@shared/modelCatalog/catalog.json'
 import { lookupModelMeta } from '@shared/modelCatalog/lookup'
 import type { LlmProviderProtocol } from '@shared/hooks/useLlmProviders'
+import { composeComposerModelOption } from '@shared/hooks/useComposerModels'
 
 describe('resolveProviderIcon — variant 逐级回退', () => {
   test('有 color 资产的家：color 语境拿 color，mono 语境仍拿 mono', () => {
@@ -89,6 +90,33 @@ function iconForRow(
 const RELAY_ANTHROPIC = { id: 'default', protocol: 'anthropic' as LlmProviderProtocol }
 const RELAY_OPENAI = { id: 'gpt', protocol: 'openai-compatible' as LlmProviderProtocol }
 const DEEPSEEK = { id: 'deepseek', protocol: 'deepseek' as LlmProviderProtocol }
+
+test('DeepSeek V4.1 Flash has complete picker metadata and its own icon through a relay', () => {
+  for (const provider of [DEEPSEEK, RELAY_OPENAI]) {
+    const option = composeComposerModelOption({
+      ref: `${provider.id}:deepseek-flash`,
+      providerId: provider.id,
+      providerLabel: null,
+      protocol: provider.protocol,
+      modelId: 'deepseek-flash',
+      rowDisplayName: null,
+      rowCapabilities: null,
+      rowMaxOutput: null,
+      rowContextWindow: null
+    })
+    // The stable API alias can move to a newer release; daily publishing must keep working.
+    expect(option.displayName).toMatch(/^DeepSeek /)
+    expect(option.catalogMeta?.description).toBeTruthy()
+    expect(option.capabilities).toMatchObject({ tools: true, reasoning: true, vision: true })
+    expect(option.contextWindow).toBeGreaterThan(0)
+    expect(option.maxOutput).toBeGreaterThan(0)
+    expect(option.catalogMeta?.cost).toMatchObject({
+      input: expect.any(Number),
+      output: expect.any(Number)
+    })
+    expect(iconForRow(provider, option.modelId)).toBe(DeepSeekColorIcon)
+  }
+})
 
 describe('resolveProviderIcon — 🔴 目录厂商优先于 providerId/protocol（中转场景）', () => {
   test('protocol=anthropic 的中转下挂 gpt-5.5 → OpenAI，**不是** Anthropic', () => {

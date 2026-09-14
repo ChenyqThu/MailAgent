@@ -102,19 +102,19 @@ flag off 的现状路径。
 
 ### 5.1 模型元数据两条来源（2026-09-02）
 
-模型的 displayName / 上下文窗口 / 最大输出 / 能力位有**两条**来源，优先级恒
+模型的 displayName / 上下文窗口 / 最大输出 / 能力位有**两条**来源（目录同时含内置快照和云端更新），优先级恒
 **DB 行 > 目录 > 裸 id**（用户手填的必须赢，否则「改了没用」）：
 
 | 来源 | 何时进来 | 覆盖面 |
 |---|---|---|
 | 上游 `/models` 响应 | 用户在设置-AI 点「拉取模型列表」（`POST /{id}/models/refresh`） | 只有两家给：anthropic 给 `display_name`；openrouter 给 `context_length` / `top_provider.max_completion_tokens` / `architecture.input_modalities`(→vision) / `supported_parameters`(∋tools、reasoning)。openai / openai-compatible / deepseek / google 的响应行里只有 id，meta 恒空 |
-| models.dev 快照 | 前端入库生成物 `frontend/src/shared/modelCatalog/catalog.json`，`.github/workflows/sync-model-catalog.yml` 每周一开同步 PR | 18 provider / ~480 模型，含价格；查表 `modelCatalog/lookup.ts`（protocol → 首选 provider 有序链） |
+| models.dev 快照 | 前端入库生成物 `frontend/src/shared/modelCatalog/catalog.json`，`.github/workflows/sync-model-catalog.yml` 每日自动校验并发布云端目录，App 每 6 小时检查，缓存/内置快照兜底 | 18 provider / ~480 模型，含价格；查表 `modelCatalog/lookup.ts`（protocol → 首选 provider 有序链） |
 
 - 解析在 `src/api/routers/llm_providers.py::_parse_models_payload(body, protocol)`，落库在
   `merge_fetched_models`（只填 NULL 列）。🔴 **有意不解析 openrouter 的 `pricing`**：
   `llm_model` 没有价格列，成本估算走前端目录快照。
-- 🔴 运行时**不拉 models.dev**：桌面可能离线、远程 web 在 CF Access 后面。refresh 打的是
-  用户自己配的那个上游，且只在用户手动点击时发生（依据见 `modelCatalog/NOTICE.md`）。
+- 运行时不直接拉 models.dev；App 后台拉取项目发布的经过校验的云端目录，网络失败继续使用缓存。
+  provider refresh 仍只在用户手动点击时请求自己的上游。云端协议、缓存及回退见 `modelCatalog/NOTICE.md`。
 - 前端合并单源 = `useComposerModels.ts::composeComposerModelOption`；composer 选择器与
   设置-AI 的 `ProviderModelsPanel` 走**同一个**函数（面板里目录值只进只读位 —— chip 与
   输入框 placeholder，绝不进 value，否则 blur 会把目录猜测当手填值写回 DB）。

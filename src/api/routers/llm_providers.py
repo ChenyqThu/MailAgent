@@ -606,8 +606,8 @@ async def refresh_provider_models(
 
     响应里带的元数据（display_name / context_window / max_output / capabilities）只来自
     **该 provider 自己的 ``/models``**（anthropic 与 openrouter 会给，见
-    ``_parse_models_payload``），且只填 NULL 列 —— 用户手填过的值恒赢。这是运行时唯一的
-    元数据出网点，挂在用户手动点「刷新」上；不拉 models.dev（前端目录是入库的离线快照，
+    ``_parse_models_payload``），且只填 NULL 列 —— 用户手填过的值恒赢。此端点只在用户
+    手动点「刷新」时出网；App 另有独立的云端目录更新通道，缓存/内置快照兜底，
     见 ``frontend/src/shared/modelCatalog/NOTICE.md``）。"""
     store = ensure_seeded_store()
     prov = _require_provider(store, provider_id)

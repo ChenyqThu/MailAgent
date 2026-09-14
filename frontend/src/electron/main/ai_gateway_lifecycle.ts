@@ -24,6 +24,7 @@ import { createHash } from 'node:crypto'
 import { join } from 'path'
 
 import { startAiGatewayServer, type AiGatewayHandle } from '../../ai-gateway/server'
+import { startMainModelCatalogUpdates } from './model_catalog_updates'
 import {
   resolveAiGatewayPort,
   type AiGatewayConfig,
@@ -191,6 +192,7 @@ interface ChatConfigResponse {
 }
 
 let _handle: AiGatewayHandle | null = null
+let stopModelCatalogUpdates: (() => void) | null = null
 
 // WP7 dogfood 修复 — before-quit 钩子只挂一次。startEmbeddedAiGateway 现在会被
 // restartEmbeddedAiGateway 二次调用（Labs「重启后端」连带重建 gateway），每启一次就
@@ -2220,6 +2222,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   }
 
   const handle = await startAiGatewayServer(gatewayConfig)
+  stopModelCatalogUpdates ??= startMainModelCatalogUpdates(app.getPath('userData'))
   _handle = handle
   gatewayPort = handle.port // Part B — now the announce closure can stamp our port on /decide callbacks
   const healthy = await pollHealth(handle.port)
@@ -2248,6 +2251,8 @@ const GATEWAY_CLOSE_TIMEOUT_MS = 3_000
  *  断连的话 close() 可能永远不回调。Labs「重启后端」本就是破坏性动作（有确认弹窗），
  *  与 Python 两进程被 kill 的语义一致：在途 chat run 一并断掉。 */
 export async function stopEmbeddedAiGateway(): Promise<void> {
+  stopModelCatalogUpdates?.()
+  stopModelCatalogUpdates = null
   const handle = _handle
   _handle = null
   if (!handle) return

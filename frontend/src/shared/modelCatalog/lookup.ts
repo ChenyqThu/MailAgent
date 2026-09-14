@@ -90,6 +90,36 @@ export interface CatalogModelMeta {
 }
 
 const CATALOG = catalogJson as unknown as ModelCatalogSnapshot
+let remoteCatalog: ModelCatalogSnapshot | null = null
+let remotePublishedAt = ''
+let catalogRevision = 0
+const catalogListeners = new Set<() => void>()
+
+export function subscribeModelCatalog(listener: () => void): () => void {
+  catalogListeners.add(listener)
+  return () => {
+    catalogListeners.delete(listener)
+  }
+}
+
+export function getModelCatalogRevision(): number {
+  return catalogRevision
+}
+
+/** Called only after remote schema validation. Older data cannot replace a newer snapshot. */
+export function installModelCatalog(
+  snapshot: ModelCatalogSnapshot & { publishedAt: string }
+): boolean {
+  if (snapshot.generatedAt < CATALOG.generatedAt || snapshot.publishedAt < remotePublishedAt)
+    return false
+  if (snapshot.publishedAt === remotePublishedAt) return true
+  remoteCatalog = snapshot
+  remotePublishedAt = snapshot.publishedAt
+  resetModelCatalogCaches()
+  catalogRevision += 1
+  for (const listener of catalogListeners) listener()
+  return true
+}
 
 export const MODEL_CATALOG_SOURCE = CATALOG.source
 export const MODEL_CATALOG_GENERATED_AT = CATALOG.generatedAt
@@ -165,16 +195,21 @@ function providerIndex(providerId: string): ProviderIndex | null {
   const cached = providerIndexCache.get(providerId)
   if (cached !== undefined) return cached
   const base = CATALOG.providers[providerId]
+  const remote = remoteCatalog?.providers[providerId]
   const override = LOCAL_CATALOG_OVERRIDES[providerId]
-  if (!base && !override) {
+  if (!base && !remote && !override) {
     providerIndexCache.set(providerId, null)
     return null
   }
   const byId = new Map<string, RawCatalogModel>()
   for (const [id, m] of Object.entries(base?.models ?? {})) byId.set(id.toLowerCase(), m)
+  for (const [id, m] of Object.entries(remote?.models ?? {})) byId.set(id.toLowerCase(), m)
   // 覆盖表后写 → 同 id 时它赢。
   for (const [id, m] of Object.entries(override?.models ?? {})) byId.set(id.toLowerCase(), m)
-  const index: ProviderIndex = { name: override?.name ?? base?.name ?? providerId, byId }
+  const index: ProviderIndex = {
+    name: override?.name ?? remote?.name ?? base?.name ?? providerId,
+    byId
+  }
   providerIndexCache.set(providerId, index)
   return index
 }
@@ -187,6 +222,7 @@ function ensureGlobalIndex(): Map<string, string | null> {
   const idx = new Map<string, string | null>()
   const allIds = new Set([
     ...Object.keys(CATALOG.providers),
+    ...Object.keys(remoteCatalog?.providers ?? {}),
     ...Object.keys(LOCAL_CATALOG_OVERRIDES)
   ])
   for (const pid of allIds) {
@@ -198,7 +234,7 @@ function ensureGlobalIndex(): Map<string, string | null> {
   return idx
 }
 
-/** 仅测试用：改过 LOCAL_CATALOG_OVERRIDES 后清缓存。生产代码不需要调（覆盖表是编译期常量）。 */
+/** Cloud installation and tests both invalidate the indexes through this single entry point. */
 export function resetModelCatalogCaches(): void {
   providerIndexCache.clear()
   globalIndex = null

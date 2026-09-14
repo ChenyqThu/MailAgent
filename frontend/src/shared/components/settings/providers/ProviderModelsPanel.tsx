@@ -19,6 +19,7 @@ import { Loader2, Plus, RefreshCw, X } from 'lucide-react'
 
 import { formatTokens } from '@shared/assistant/components/modelDetailCard.lib'
 import { composeComposerModelOption } from '@shared/hooks/useComposerModels'
+import { useModelCatalogRevision } from '@shared/modelCatalog/useModelCatalog'
 import {
   deleteLlmProviderModel,
   refreshLlmProviderModels,
@@ -94,6 +95,7 @@ export function ProviderModelsPanel({
   const { t } = useTranslation()
   const qc = useQueryClient()
   const { models, isLoading } = useLlmProviderModels(providerId, true)
+  useModelCatalogRevision()
   const [refreshing, setRefreshing] = React.useState(false)
   const [fetchError, setFetchError] = React.useState<string | null>(null)
   const [manualId, setManualId] = React.useState('')

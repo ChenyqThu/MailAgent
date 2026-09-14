@@ -25,6 +25,7 @@ import { useEventBridge } from '@shared/hooks/useEventBridge'
 import { useStartupPrefetch } from '@shared/hooks/useStartupPrefetch'
 import { usePopoutMode } from '@shared/state/popout-mode'
 import { useDetachedMode } from '@shared/state/detached-mode'
+import { useModelCatalogUpdates } from '@shared/modelCatalog/useModelCatalog'
 
 const PopoutShell = lazy(() =>
   import('@shared/components/chat/PopoutShell').then((module) => ({
@@ -65,6 +66,7 @@ function StartupPrefetchMount(): null {
 }
 
 export default function App(): React.ReactElement {
+  useModelCatalogUpdates()
   // The client lives in a useState so HMR doesn't recreate it on every
   // edit (would lose the in-flight cache). One QueryClient per renderer
   // lifetime is the documented pattern.

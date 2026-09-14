@@ -26,6 +26,7 @@ vi.mock('@shared/lib/fileDropGuard', () => ({ installFileDropGuard: () => (): vo
 vi.mock('@shared/hooks/useEventBridge', () => ({ useEventBridge: (): void => {} }))
 vi.mock('@shared/hooks/useApiReadyRefresh', () => ({ useApiReadyRefresh: (): void => {} }))
 vi.mock('@shared/hooks/useStartupPrefetch', () => ({ useStartupPrefetch: (): void => {} }))
+vi.mock('@shared/modelCatalog/useModelCatalog', () => ({ useModelCatalogUpdates: (): void => {} }))
 vi.mock('@shared/api/factory', () => ({
   makeMailApi: () => ({
     updater: { status: async () => ({}), onEvent: () => (): void => {} },

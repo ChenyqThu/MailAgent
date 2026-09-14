@@ -30,23 +30,43 @@
 cd frontend && node scripts/sync-model-catalog.mjs
 ```
 
-**产物入库**（与 `requirements.lock.txt` 同一条纪律：生成物入库，保打包再现性）。
-`.github/workflows/sync-model-catalog.yml` 每周一自动跑同一个脚本，有 diff 就往固定分支
-`chore/sync-model-catalog` 开（覆盖）一个 PR —— 出网只发生在 CI runner 上。**不自动合**：
-价格 / context 的漂移值得人扫一眼。手动跑仍然随时可以（发版前顺手跑一次最省事）。
+**内置快照仍入库**，用于首次启动、离线和更新失败时兜底。2026-09-14 起，
+模型元数据同时支持独立于 App 发版的云端更新，替代此前“运行时零联网”的策略。
 
-🔴 **不要**运行时联网拉：桌面 App 可能离线、远程 web 在 CF Access 后面，运行时拉取会把
-「模型名显示不出来」变成一个网络故障面。快照过期的后果只是**降级**（新模型查不到 → 只显示
-裸 id，和引入目录之前一模一样），不是崩。
+### 发布与客户端更新
 
-这条 2026-09-02 有一次**边界澄清**（不是放宽）：用户在设置-AI 点「拉取模型列表」时，后端
-`POST /api/llm/providers/{id}/models/refresh` 会解析**该 provider 自己 `/models` 响应里带的**
-元数据（anthropic 的 `display_name`；openrouter 的 `context_length` / `supported_parameters`
-/ `top_provider.max_completion_tokens`），只填 `llm_model` 的 NULL 列。那是用户手动触发的、
-打向用户自己配的上游的一次请求，**不是**拉 models.dev —— 本快照仍然是运行时零出网的离线件。
+- `.github/workflows/sync-model-catalog.yml` 每天 04:17 UTC 运行，也支持手动触发及相关代码推送。
+  从 models.dev 生成快照，通过目录测试和同一份运行时 schema 校验后，原子发布到
+  `codex/model-catalog` 数据分支。失败不改现有云端版本，不需要人工合并每日数据 PR。
+- 公开地址：`https://raw.githubusercontent.com/ChenyqThu/MailAgent/codex/model-catalog/catalog.json`。
+  仅包含公开模型元数据，不上传用户信息，不携带服务商凭据。
+- 桌面 renderer 与远程 web 在 App 挂载后读取本地缓存，后台启动检查；成功检查间隔为
+  6 小时，失败每小时重试，浏览器恢复联网时额外检查。不等待网络完成再显示界面。
+- Electron main 同时加载同一更新器（缓存为 userData 的 `model-catalog-cache-v1.json`，
+  原子替换），供内嵌 gateway 的上下文及价格计算使用；renderer/web 使用 localStorage。
+- HTTP 超时 10 秒，响应流上限 2 MiB。schemaVersion 必须为 1；字段类型、能力、非负价格
+  及正整数上下文经过校验。不安装早于内置快照或当前缓存发布时间的数据。
+- 优先级：用户/上游 DB 行 > 本地人工覆盖 > 云端目录 > 内置目录 > 裸 ID。
+  更新清查表缓存并通知 React 订阅者，已打开的模型选择器与设置面板即时刷新。
+  云端缺失的旧模型保留内置兜底，不自动增删用户配置或启用模型。
+- 模型所属厂商随目录更新，复用 App 内置的厂商图标；这条通道只交付数据，不交付代码或 SDK。
+  新协议或尚未内置的图标资源仍需 App 支持。
+- 用户点“拉取模型列表”仍向自己配置的 provider 请求 `/models`，与此元数据通道分工不变。
 
-🔴 **不要**手改 `catalog.json`：它是生成物，下次 sync 会被整份覆写。要补上游没有的模型
-（已知缺口：豆包 / 火山）请写 `lookup.ts` 的 `LOCAL_CATALOG_OVERRIDES`。
+### 回退与验证
+
+发布错误数据时，使用当前时间重新发布已知正确内容；不要倒退 publishedAt。
+客户端拒绝坏数据或过旧数据，继续使用上次有效缓存。暂停 workflow 可停止后续发布。
+安装首次支持此通道的 App 版本后，后续模型介绍/价格/能力更新不再需要发版。
+
+```bash
+cd frontend
+pnpm exec vitest run tests/shared/modelCatalog tests/shared/providerIcons.test.ts
+pnpm exec tsx scripts/prepare-model-catalog.ts
+```
+
+`catalog.json` 是生成物，不能手改。补上游没有的模型应写 `lookup.ts` 的
+`LOCAL_CATALOG_OVERRIDES`；需要云端覆盖的新条目则应在生成流程中添加有出处的数据源。
 
 ## 为什么不是 lobehub 的 `model-bank`
 

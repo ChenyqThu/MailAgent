@@ -30,6 +30,7 @@ import { useQueries, useQuery } from '@tanstack/react-query'
 
 import { qk } from '@shared/lib/queryKeys'
 import { lookupModelMeta, type CatalogModelMeta } from '@shared/modelCatalog/lookup'
+import { useModelCatalogRevision } from '@shared/modelCatalog/useModelCatalog'
 
 import { useEnabledModels } from './useLlmModels'
 import {
@@ -183,6 +184,7 @@ export function buildComposerModelOption(
 
 /** composer 模型选择器的数据源：可选模型（enabledModels 单源）× 富元数据（provider 表）。 */
 export function useComposerModels(): ComposerModelOption[] {
+  const catalogRevision = useModelCatalogRevision()
   const { models: refs } = useEnabledModels()
 
   const providersQ = useQuery({
@@ -245,5 +247,5 @@ export function useComposerModels(): ComposerModelOption[] {
     // modelRows 每帧都是新数组，故有意不入依赖；modelsKey（provider@dataUpdatedAt）才是
     // 它的内容指纹。providerRows 是 query 的稳定 data 引用，可以直接入依赖。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refs, providerRows, modelsKey])
+  }, [refs, providerRows, modelsKey, catalogRevision])
 }
