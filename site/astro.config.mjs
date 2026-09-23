@@ -76,10 +76,10 @@ export default defineConfig({
       // Group labels are per-locale keyed by the BCP-47 `lang` Astro resolves
       // (zh-CN root / en-US), matching the `locales` lang values above; en pages
       // missing a translation fall back to zh via Starlight's built-in fallback.
-      // `slug` items pull their title from each page's frontmatter. The former
-      // agent/* CLI reference (15 pages) + the developer-only initial-sync /
-      // install-backend live under the nested 「CLI 与自动化」 subgroup so the
-      // everyday-user path (开始使用 → 日常邮件 → AI 能力) stays clean.
+      // `slug` items pull their title from each page's frontmatter. Order follows
+      // the product (v3): 开始使用 → 每天的工作 → 工作对象 → AI 与 Agent →
+      // 连接与远程; the CLI / automation reference is its own group for
+      // developers, so the everyday path stays clean.
       sidebar: [
         {
           label: '开始使用',
@@ -87,58 +87,76 @@ export default defineConfig({
           items: [
             { slug: '101/overview' },
             { slug: '101/install-app' },
-            { slug: '101/davmail-setup' },
             { slug: '101/onboarding' },
+            { slug: '101/davmail-setup' },
           ],
         },
         {
-          label: '日常邮件',
-          translations: { 'en-US': 'Daily Email' },
+          label: '每天的工作',
+          translations: { 'en-US': 'Everyday Work' },
           items: [
+            { slug: '101/today' },
             { slug: '101/daily-inbox' },
-            { slug: '101/search' },
             { slug: '101/compose-reply' },
+            { slug: '101/search' },
             { slug: '101/calendar' },
+            { slug: '101/notifications' },
           ],
         },
         {
-          label: 'AI 能力',
-          translations: { 'en-US': 'AI Features' },
+          label: '工作对象',
+          translations: { 'en-US': 'Work Objects' },
+          items: [
+            { slug: '101/matters' },
+            { slug: '101/contacts' },
+            { slug: '101/library' },
+          ],
+        },
+        {
+          label: 'AI 与 Agent',
+          translations: { 'en-US': 'AI & Agents' },
           items: [
             { slug: '101/ai-chat' },
+            { slug: '101/models' },
+            { slug: '101/approvals' },
+            { slug: '101/team-agents' },
+            { slug: '101/skills' },
+            { slug: '101/group-chat' },
             { slug: '101/reports' },
           ],
         },
         {
-          label: '自动化与集成',
-          translations: { 'en-US': 'Automation & Integrations' },
+          label: '连接与远程',
+          translations: { 'en-US': 'Connect & Remote' },
           items: [
-            { slug: '101/ping-island' },
+            { slug: '101/connectors' },
             { slug: '101/feishu' },
             { slug: '101/remote-web' },
-            {
-              label: 'CLI 与自动化',
-              translations: { 'en-US': 'CLI & Automation' },
-              items: [
-                { slug: 'agent/overview' },
-                { slug: 'agent/setup' },
-                { slug: 'agent/output-formats' },
-                { slug: 'agent/exit-codes' },
-                { slug: 'agent/auth' },
-                { slug: 'agent/commands' },
-                { slug: 'agent/long-tasks' },
-                { slug: 'agent/json-schema' },
-                { slug: 'agent/sse' },
-                { slug: 'agent/webhook-redis' },
-                { slug: 'agent/search-dsl' },
-                { slug: 'agent/mcp-harness' },
-                { slug: 'agent/mcp-setup' },
-                { slug: 'agent/skill-delivery' },
-                { slug: 'agent/ops' },
-                { slug: '101/initial-sync' },
-                { slug: '101/install-backend' },
-              ],
-            },
+            { slug: '101/ping-island' },
+          ],
+        },
+        {
+          label: '开发者：CLI 与自动化',
+          translations: { 'en-US': 'Developers: CLI & Automation' },
+          collapsed: true,
+          items: [
+            { slug: '101/install-backend' },
+            { slug: '101/initial-sync' },
+            { slug: 'agent/overview' },
+            { slug: 'agent/setup' },
+            { slug: 'agent/output-formats' },
+            { slug: 'agent/exit-codes' },
+            { slug: 'agent/auth' },
+            { slug: 'agent/commands' },
+            { slug: 'agent/long-tasks' },
+            { slug: 'agent/json-schema' },
+            { slug: 'agent/sse' },
+            { slug: 'agent/webhook-redis' },
+            { slug: 'agent/search-dsl' },
+            { slug: 'agent/mcp-harness' },
+            { slug: 'agent/mcp-setup' },
+            { slug: 'agent/skill-delivery' },
+            { slug: 'agent/ops' },
           ],
         },
         {
