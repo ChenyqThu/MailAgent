@@ -182,7 +182,7 @@ describe('ai-gateway — /api/ai/chat effort seam (WP-16a)', () => {
     const h = await start({ ...CHAT_CFG, createModel: () => mockCaptureModel(captured) })
     await postChat(h.port, { effort: 'high' })
     expect(captured[0]).toEqual({
-      anthropic: { thinking: { type: 'enabled', budgetTokens: 32_000 } }
+      anthropic: { thinking: { type: 'enabled', budgetTokens: 32_000 }, cacheControl: { type: 'ephemeral' } }
     })
   })
 
@@ -191,22 +191,22 @@ describe('ai-gateway — /api/ai/chat effort seam (WP-16a)', () => {
     const h = await start({ ...CHAT_CFG, createModel: () => mockCaptureModel(captured) })
     await postChat(h.port, { thinking: true })
     expect(captured[0]).toEqual({
-      anthropic: { thinking: { type: 'enabled', budgetTokens: 16_000 } }
+      anthropic: { thinking: { type: 'enabled', budgetTokens: 16_000 }, cacheControl: { type: 'ephemeral' } }
     })
   })
 
-  test('effort 垃圾值 → 忽略（= 旧路径 thinking 缺席：无 providerOptions）', async () => {
+  test('effort 垃圾值 → 忽略（= 旧路径 thinking 缺席：只剩请求级缓存）', async () => {
     const captured: Array<Record<string, unknown> | undefined> = []
     const h = await start({ ...CHAT_CFG, createModel: () => mockCaptureModel(captured) })
     await postChat(h.port, { effort: 'EXTRA' })
-    expect(captured[0]).toBeUndefined()
+    expect(captured[0]).toEqual({ anthropic: { cacheControl: { type: 'ephemeral' } } })
   })
 
   test('effort 显式 none 压过 thinking:true（新路径优先，关断思考）', async () => {
     const captured: Array<Record<string, unknown> | undefined> = []
     const h = await start({ ...CHAT_CFG, createModel: () => mockCaptureModel(captured) })
     await postChat(h.port, { effort: 'none', thinking: true })
-    expect(captured[0]).toBeUndefined()
+    expect(captured[0]).toEqual({ anthropic: { cacheControl: { type: 'ephemeral' } } })
   })
 })
 

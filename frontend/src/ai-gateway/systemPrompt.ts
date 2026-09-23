@@ -132,12 +132,7 @@ export function appendExecutionDiscipline(
     .join('\n\n')
 }
 
-/** Build the streamText `system` string for an AI SDK gateway run. Always returns a non-empty
- *  string: the stable prefix is never empty (it falls back to SOUL_MARKDOWN when nothing is
- *  configured), and the typed context block (with untrusted fences) is appended when a snapshot
- *  carries usable context. Only backend-selected, code-owned skill fragments are injected; generic
- *  installed-skill fragments remain excluded from the gateway prompt. */
-export function buildGatewaySystemPrompt(args: {
+export interface GatewaySystemPromptArgs {
   promptConfig: GatewaySystemPromptConfig | null
   contextSnapshot: AgentContextSnapshot | null
   /** Trusted runtime provenance, set only by prepareChatRun for a server-derived headless agent. */
@@ -175,7 +170,17 @@ export function buildGatewaySystemPrompt(args: {
    *  sentence to the group block. Absent/false on every other path (main agent / headless /
    *  team) → byte-identical. */
   groupSpeakerRun?: boolean
-}): string {
+}
+
+/** The gateway system prompt as its cacheable and volatile parts. `cacheable` is never empty: the
+ *  stable prefix falls back to SOUL_MARKDOWN when nothing is configured. The typed context block
+ *  (with untrusted fences) lands in `volatile` when a snapshot carries usable context. Only
+ *  backend-selected, code-owned skill fragments are injected; generic installed-skill fragments
+ *  remain excluded from the gateway prompt. */
+export function buildGatewaySystemPromptParts(args: GatewaySystemPromptArgs): {
+  cacheable: string
+  volatile: string
+} {
   const pc = args.promptConfig
   const groupSpeakerRun = args.groupSpeakerRun === true
   const cfg: ChatModelConfig = {
@@ -254,22 +259,23 @@ export function buildGatewaySystemPrompt(args: {
   // W6 — follow-up guidance only when the run's ToolSet holds the tool (manual chat). A constant
   // block per run shape, so the cacheable prefix stays stable across a manual session's turns.
   const followupGuidance = args.followupToolAvailable === true ? FOLLOWUP_SUGGESTIONS_GUIDANCE : ''
-  // Order: stable (cacheable, incl. memory.md) → context (current view) → trusted runtime discipline
-  // (always) → follow-up guidance (manual, constant) → current-date (always). Each segment is joined
-  // only when non-empty; the date block is ALWAYS non-empty and remains LAST so the preceding prompt
-  // stays a stable cache prefix and the date changes at most once per day.
+  // Two parts, split at the cache breakpoint chatRun places (anthropic protocol):
+  //   cacheable = stable prefix (incl. memory.md) → runtime discipline → follow-up guidance; these
+  //               only change with config, so tools + this part stay a cache hit across turns;
+  //   volatile  = current view → agent identity (per run/session) → current date (LAST, changes
+  //               at most once per day).
   const dateBlock = buildCurrentDateBlock(args.contextSnapshot)
-  return [
-    stable,
-    contextBlock,
-    identity,
-    teamIdentity,
-    executionDiscipline,
-    followupGuidance,
-    dateBlock
-  ]
-    .filter((s) => s.length > 0)
-    .join('\n\n')
+  const join = (segments: string[]): string => segments.filter((s) => s.length > 0).join('\n\n')
+  return {
+    cacheable: join([stable, executionDiscipline, followupGuidance]),
+    volatile: join([contextBlock, identity, teamIdentity, dateBlock])
+  }
+}
+
+/** Build the streamText `system` string for an AI SDK gateway run (the two parts joined). */
+export function buildGatewaySystemPrompt(args: GatewaySystemPromptArgs): string {
+  const { cacheable, volatile } = buildGatewaySystemPromptParts(args)
+  return [cacheable, volatile].filter((s) => s.length > 0).join('\n\n')
 }
 
 /** P4b — render the <current_team_agent> identity block. Exported for tests. */

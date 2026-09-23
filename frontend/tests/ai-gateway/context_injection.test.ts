@@ -11,7 +11,7 @@ import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV3 } from 'ai/test'
 
 /** Minimal shape of the prompt the model is called with — enough to read the system message. */
-type PromptMessage = { role: string; content: unknown }
+type PromptMessage = { role: string; content: unknown; providerOptions?: unknown }
 
 import { startAiGatewayServer, type AiGatewayHandle } from '../../src/ai-gateway/server'
 import type { AiGatewayConfig } from '../../src/ai-gateway/config'
@@ -33,11 +33,18 @@ afterEach(async () => {
 })
 
 /** A mock model that records the `system` part of the prompt it was called with, then finishes. */
-function capturingModel(captured: { system: string | null }): MockLanguageModelV3 {
+function capturingModel(
+  captured: { system: string | null },
+  onPrompt?: (prompt: PromptMessage[]) => void
+): MockLanguageModelV3 {
   return new MockLanguageModelV3({
     doStream: async (options: { prompt: PromptMessage[] }) => {
-      const sys = options.prompt.find((m) => m.role === 'system')
-      captured.system = sys && typeof sys.content === 'string' ? sys.content : null
+      onPrompt?.(options.prompt)
+      // anthropic 协议下 system 拆成「可缓存段 + 变动段」两条 system 消息，拼回完整文本比对。
+      const sys = options.prompt
+        .filter((m) => m.role === 'system' && typeof m.content === 'string')
+        .map((m) => m.content as string)
+      captured.system = sys.length > 0 ? sys.join('\n\n') : null
       return {
         stream: simulateReadableStream({
           chunks: [
@@ -141,6 +148,35 @@ describe('context injection — gateway system prompt', () => {
     expect(captured.system).toContain('focused email agent')
     expect(captured.system).toContain('UNTRUSTED_EMAIL_BODY_START id=53675')
     expect(captured.system).toContain('The quarterly numbers are attached.')
+  })
+
+  test('anthropic 协议：system 拆成两条，只有配置段带缓存断点，当前视图在变动段', async () => {
+    let systemParts: PromptMessage[] = []
+    const model = capturingModel({ system: null }, (prompt) => {
+      systemParts = prompt.filter((m) => m.role === 'system')
+    })
+    const h = await start(
+      baseCfg(model, {
+        systemPromptProvider: () => ({ standingContext: '# AGENT\nfocused email agent' })
+      })
+    )
+    const res = await postChat(h.port, {
+      sessionId: null,
+      messages: [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }],
+      anchor: { type: 'email', id: 53675 },
+      contextSnapshot: snapshot()
+    })
+    await res.text()
+    expect(systemParts).toHaveLength(2)
+    expect(systemParts[0].providerOptions).toEqual({
+      anthropic: { cacheControl: { type: 'ephemeral' } }
+    })
+    expect(systemParts[0].content).toContain('focused email agent')
+    expect(systemParts[0].content).toContain('# Tool failure discipline')
+    expect(systemParts[0].content).not.toContain('UNTRUSTED_EMAIL_BODY_START')
+    expect(systemParts[1].providerOptions ?? {}).toEqual({})
+    expect(systemParts[1].content).toContain('UNTRUSTED_EMAIL_BODY_START id=53675')
+    expect(systemParts[1].content).toContain('当前日期：')
   })
 
   test('malformed contextSnapshot → 400 E_INVALID_ARG (pre-stream)', async () => {

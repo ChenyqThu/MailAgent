@@ -2585,7 +2585,7 @@ describe('runHeadlessAgent — model / effort / fallback overrides', () => {
       },
       new AbortController().signal
     )
-    expect(chain.providerOptions[0]?.anthropic).toBeUndefined()
+    expect(chain.providerOptions[0]?.anthropic).toEqual({ cacheControl: { type: 'ephemeral' } })
   })
 
   test('no effort in the spec → provider options untouched (byte-identical to pre-override)', async () => {
@@ -2595,7 +2595,7 @@ describe('runHeadlessAgent — model / effort / fallback overrides', () => {
       { jobId: 7, spec: makeSpec({ model: 'claude-sonnet-4-6' }), sessionId: null },
       new AbortController().signal
     )
-    expect(chain.providerOptions[0]?.anthropic).toBeUndefined()
+    expect(chain.providerOptions[0]?.anthropic).toEqual({ cacheControl: { type: 'ephemeral' } })
   })
 
   test('a primary that fails before producing anything falls back to the next model', async () => {

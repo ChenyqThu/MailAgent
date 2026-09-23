@@ -63,7 +63,7 @@ import { appendCompactSummaryToSystem } from './compactSelect'
 // Phase 06 (context injection) — system prompt assembly + snapshot schema guard.
 import {
   appendExecutionDiscipline,
-  buildGatewaySystemPrompt,
+  buildGatewaySystemPromptParts,
   type GatewaySystemPromptConfig
 } from './systemPrompt'
 // D1 (connector dogfood batch) — per-run scoping of the connector catalog reuses the connector
@@ -571,6 +571,9 @@ export async function prepareChatRun(
   // (buildGatewaySystemPrompt). Without it (default) pass body.system through unchanged AND ignore the
   // contextSnapshot field entirely — Phase 02/05 behaviour, byte-identical (no validation, no 400).
   let system: string | undefined
+  // The config-derived head of `system` (tools + this part stay a cache hit across turns);
+  // null on the body.system passthrough path.
+  let systemCacheablePrefix: string | null = null
   if (cfg.systemPromptProvider) {
     // Resolve the typed context snapshot ONLY on the injection path: a valid v1 snapshot is used; a
     // snapshot that CLAIMS to be typed (carries a `version`) but fails validation → 400 (no off-spec
@@ -589,7 +592,7 @@ export async function prepareChatRun(
     // rendered by buildStableSystemPrompt as an untrusted MEMORY fence). The M2 per-query recall path
     // (retrieveMemory callback → /chat/memory/search) is retired: memory.md is injected whenever
     // Python's /chat/config sends a non-empty memorySummary, so there is nothing to recall per turn.
-    system = buildGatewaySystemPrompt({
+    const systemParts = buildGatewaySystemPromptParts({
       promptConfig,
       contextSnapshot,
       headlessAgentRun: isHeadlessAgentRun,
@@ -603,6 +606,8 @@ export async function prepareChatRun(
       // renderer-driven speaker branch (both in server.ts): every group speaker turn is the 减重态.
       groupSpeakerRun: sessionAgent?.group?.groupSpeakerRun === true
     })
+    systemCacheablePrefix = systemParts.cacheable
+    system = [systemParts.cacheable, systemParts.volatile].filter((s) => s.length > 0).join('\n\n')
   } else {
     const bodySystem =
       typeof body.system === 'string' && body.system.length > 0 ? body.system : undefined
@@ -644,9 +649,40 @@ export async function prepareChatRun(
   // 代价（已接受）：逐字进 Streamdown 时未闭合的 markdown 记号会短暂以字面量出现（`**` 等，
   // 实测只在「标签含空格」的链接/行内 code 上出现 2-3 拍），Streamdown 设计上会补全未终止
   // token。两个端点（/api/ai/chat + AG-UI 镜像）共用此 streamText，一致生效。
+  // Prompt caching (anthropic protocol only; the relay does not add breakpoints on its own):
+  // one breakpoint after the config-derived system head, plus request-level automatic caching so
+  // the conversation history is reused across tool steps and turns.
+  const anthropicCaching = resolvedModel.protocol === 'anthropic'
+  const systemForModel =
+    anthropicCaching &&
+    system !== undefined &&
+    systemCacheablePrefix &&
+    system.startsWith(systemCacheablePrefix)
+      ? [
+          {
+            role: 'system' as const,
+            content: systemCacheablePrefix,
+            providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' as const } } }
+          },
+          ...(system.length > systemCacheablePrefix.length
+            ? [
+                {
+                  role: 'system' as const,
+                  content: system.slice(systemCacheablePrefix.length).replace(/^\n\n/, '')
+                }
+              ]
+            : [])
+        ]
+      : system
+  const providerOptions = anthropicCaching
+    ? {
+        ...thinkingProviderOpts,
+        anthropic: { ...thinkingProviderOpts?.anthropic, cacheControl: { type: 'ephemeral' } }
+      }
+    : thinkingProviderOpts
   const result = streamText({
     model: resolvedModel.model,
-    system,
+    system: systemForModel,
     messages: modelMessages,
     abortSignal,
     maxOutputTokens,
@@ -658,7 +694,7 @@ export async function prepareChatRun(
       chunking: STREAM_CHUNKING_REGEX,
       delayInMs: STREAM_CHUNKING_DELAY_MS
     }),
-    ...(thinkingProviderOpts ? { providerOptions: thinkingProviderOpts } : {}),
+    ...(providerOptions ? { providerOptions } : {}),
     // WP-16a — google 协议的 effort 走 ai@7 统一 reasoning 参数（SDK 按模型代分流 thinkingLevel/
     // thinkingBudget）；其余协议恒 undefined → 展开为空，字节级不变。
     ...(effortCall?.reasoning ? { reasoning: effortCall.reasoning } : {}),

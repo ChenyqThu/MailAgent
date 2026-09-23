@@ -738,8 +738,8 @@ describe('g1 groupSpeakerRun 减重门', () => {
         },
         expected: [
           stableFor({ skillFragments: null, skillCatalog: null }),
-          `<current_custom_agent>\n  <id>h</id>\n  <title>H</title>\n  <job_id>1</job_id>\n  <session_id>2</session_id>\n</current_custom_agent>`,
           executionDisciplineFor(true),
+          `<current_custom_agent>\n  <id>h</id>\n  <title>H</title>\n  <job_id>1</job_id>\n  <session_id>2</session_id>\n</current_custom_agent>`,
           date
         ].join('\n\n'),
         keeps: ['MEMORY-LINE', 'CONN-X']
@@ -752,8 +752,8 @@ describe('g1 groupSpeakerRun 减重门', () => {
         },
         expected: [
           stableFor({}),
-          buildTeamAgentIdentityBlock(TEAM_IDENTITY),
           executionDisciplineFor(false),
+          buildTeamAgentIdentityBlock(TEAM_IDENTITY),
           date
         ].join('\n\n'),
         keeps: WEIGHT_MARKERS
@@ -784,12 +784,12 @@ describe('g1 groupSpeakerRun 减重门', () => {
           skillCatalog: null,
           connectorCatalog: null
         }),
+        executionDisciplineFor(false),
         buildGroupChatIdentityBlock({
           ...GROUP_IDENTITY,
           group: GROUP_IDENTITY.group!,
           silenceContract: true
         }),
-        executionDisciplineFor(false),
         date
       ].join('\n\n')
     )
@@ -806,8 +806,8 @@ describe('g1 groupSpeakerRun 减重门', () => {
     expect(v30).toBe(
       [
         stableFor({}),
-        buildGroupChatIdentityBlock({ ...GROUP_IDENTITY, group: GROUP_IDENTITY.group! }),
         executionDisciplineFor(false),
+        buildGroupChatIdentityBlock({ ...GROUP_IDENTITY, group: GROUP_IDENTITY.group! }),
         date
       ].join('\n\n')
     )
@@ -1021,7 +1021,10 @@ describe('g1 — labs on：append 即应答、链 detached、/run/active、/run/
       // 调度器 turn 走减重门：chatRun 把 identity.group.groupSpeakerRun 送进了 prompt 装配。
       const prompt = (captured.options as { prompt: Array<{ role: string; content: unknown }> })
         .prompt
-      const system = prompt.find((m) => m.role === 'system')?.content
+      const system = prompt
+        .filter((m) => m.role === 'system')
+        .map((m) => m.content)
+        .join('\n\n')
       expect(system).toContain(`只回复 ${SILENCE_SENTINEL}`)
       for (const marker of WEIGHT_MARKERS) expect(system).not.toContain(marker)
       expect(system).toContain('STAND-CTX')

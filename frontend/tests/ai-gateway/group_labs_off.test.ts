@@ -154,8 +154,11 @@ async function readSseFrames(res: Response): Promise<Array<Record<string, unknow
 
 function systemPromptOf(captured: { options?: unknown }): string {
   const prompt = (captured.options as { prompt: Array<{ role: string; content: unknown }> }).prompt
-  const system = prompt.find((m) => m.role === 'system')
-  return typeof system?.content === 'string' ? system.content : ''
+  // anthropic 协议下 system 拆成「可缓存段 + 变动段」两条 system 消息，拼回完整文本比对。
+  return prompt
+    .filter((m) => m.role === 'system' && typeof m.content === 'string')
+    .map((m) => m.content as string)
+    .join('\n\n')
 }
 
 const handles: AiGatewayHandle[] = []
