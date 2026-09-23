@@ -5,7 +5,7 @@ description: What to know before using the MailAgent desktop App and accompanyin
 
 ## About this project
 
-MailAgent is an open-source personal project ([MIT License](https://github.com/ChenyqThu/MailAgent/blob/main/LICENSE)), maintained by an individual developer, not operated on behalf of any company or commercial entity. By using this software you acknowledge and accept this.
+MailAgent is an open-source personal project ([GNU GPL v3.0](https://github.com/ChenyqThu/MailAgent/blob/main/LICENSE)), maintained by an individual developer, not operated on behalf of any company or commercial entity. By using this software you acknowledge and accept this.
 
 ## Provided as is
 
@@ -23,7 +23,7 @@ MailAgent's "Connect Notion" one-click authorization feature relies on a token-e
 
 ## Intellectual property
 
-MailAgent's source code is open-sourced under the [MIT License](https://github.com/ChenyqThu/MailAgent/blob/main/LICENSE); the license text governs the specific rights and limitations.
+MailAgent's source code is released under the [GNU General Public License v3.0](https://github.com/ChenyqThu/MailAgent/blob/main/LICENSE). You may use, modify, and redistribute it; if you distribute a modified version, you must make its source available under the same license. The license text governs the specific rights and limitations.
 
 ## Changes to these terms
 

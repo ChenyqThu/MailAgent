@@ -1,8 +1,8 @@
 ---
 /**
- * Trust strip — "one email · five things, automatically" + five labelled
- * actions (categorize / prioritize / summarize / draft / suggest). Bordered
- * band between hero and features. Icons map 1:1 to the reference order.
+ * Strip — "what happens once an email lands": six labelled steps (triage,
+ * summary, reply draft, matter link, contact filing, search index). Bordered
+ * band between the hero and the first section. Icons map 1:1 to the YAML order.
  */
 import Icon from './Icon.astro'
 import type { IconName } from './icons'
@@ -14,8 +14,7 @@ interface Props {
 
 const { label, items = [] } = Astro.props
 
-// Fixed icon order mirrors the reference strip (5 actions).
-const iconKeys: IconName[] = ['categorize', 'prioritize', 'summarize', 'draft', 'suggest']
+const iconKeys: IconName[] = ['prioritize', 'summarize', 'draft', 'target', 'userPlus', 'search']
 ---
 
 <section class="strip">

@@ -1,242 +1,267 @@
 # ═══════════════════════════════════════════════════════════════════════
-# Landing copy — 简体中文 (root locale). Transcribed from the reference
-# frontend/docs/landing/MailAgent.html (.zh spans). Lane A consumes this via
-# getEntry('landing','zh-CN'); the schema (src/content.config.ts) is tolerant
-# so Lane A can add/restructure keys freely. All top-level keys are present.
+# Landing copy — 简体中文 (root locale). Read by components/landing/
+# LandingPage.astro via getEntry('landing','zh-CN'). Shape: content.config.ts.
+# Every capability, number and platform limit here must be checkable against
+# the code, release notes or docs/reference — if it can't be checked, cut it.
 # ═══════════════════════════════════════════════════════════════════════
 
 seo:
-  title: MailAgent — 让 AI 替你看完每一封邮件
+  title: MailAgent — 以邮件为起点的个人 AI 工作台
   description: >-
-    MailAgent · 一个把 AI 装进收件箱的桌面邮件助手。自动分类、定级、摘要、起草回复，
-    灵动岛实时提醒，每日报告 Agent，全程可溯源。
+    MailAgent 是一台本地优先的桌面工作台：邮件、日历、事项、联系人与资料汇于一处，
+    一组有名字、有边界的 AI Agent 替你处理日常，每一步都能追溯到原文。支持 macOS 与 Windows。
 
 nav:
   links:
-    - { label: 能力, href: '#features' }
-    - { label: 灵动岛, href: '#island' }
-    - { label: 报告 Agent, href: '#agent' }
-    - { label: 可溯源, href: '#trust' }
-    - { label: Agent 交付, href: '#agent-delivery' }
+    - { label: 今日, href: '#today' }
+    - { label: 事项, href: '#matters' }
+    - { label: 团队, href: '#team' }
+    - { label: 信任, href: '#trust' }
+    - { label: 连接, href: '#connect' }
     - { label: FAQ, href: '#faq' }
   download: 下载
 
 hero:
-  pill: 把 AI 装进你的收件箱
-  pillTag: v1 · macOS
-  title: 你的收件箱，有人盯着了。
-  titleEm: 有人盯着了
+  pill: 以邮件为起点的个人 AI 工作台
+  pillTag: v3
+  title: 把日常交给 agent，把判断留给自己。
+  titleEm: 把判断留给自己
   sub: >-
-    MailAgent 在邮件落地的那一刻就替你读完它——自动分类、定优先级、写摘要、起草回复。
-    重要的浮上来，杂讯沉下去，全程可点回原文。
-  ctaPrimary: 下载 macOS 版
-  ctaGhost: 看看它怎么干活
+    邮件、日历、事项、联系人与资料，收进同一台本机工作台。一组有名字、有边界的 agent
+    替你读信、跟进、起草、整理；只有需要你拍板的事，才会来到面前。每一步，都能追溯到原文。
+  ctaPrimary: 下载 MailAgent
+  ctaGhost: 看看它怎么工作
   meta:
-    - { text: 本地优先 · 数据存本机 }
-    - { text: claude-sonnet-4-6 }
-    - { text: 开源 · MIT }
+    - { text: 本地优先 · 数据留在本机 }
+    - { text: macOS · Windows }
+    - { text: 18 家模型服务商 }
+    - { text: 开源 · GPL-3.0 }
 
 strip:
-  label: 一封邮件 · 五件事自动发生
+  label: 一封邮件落地之后
   items:
-    - 归类
-    - 定级
-    - 摘要
-    - 起草
-    - 建议动作
+    - 分类定级
+    - 一句摘要
+    - 回复草稿
+    - 关联事项
+    - 联系人入档
+    - 全文可检索
 
-features:
-  eyebrow: AI Triage
-  title: 每封邮件落地，AI 已经读完了。
-  titleEm: AI 已经读完了
+today:
+  eyebrow: 今日 · Today
+  title: 每一天，从一页开始。
+  titleEm: 一页
   lede: >-
-    不是事后批量处理，而是入库即处理。分类、优先级、一句话摘要、动作建议——
-    结构化写进每封邮件，列表里一眼就能看出哪封该先看。
-  cards:
-    - kicker: Category · Priority
-      title: 分类 + 优先级，一眼分流
-      body: >-
-        每封邮件被打上类别（产品管理 / 需要决策 / 仅供参考…）和优先级。
-        紧急的标红冒头，FYI 的自动沉底——你不再从 674 封里大海捞针。
-    - kicker: Summary
-      title: 一句话摘要
-      body: 长邮件串、几十层引用，压成你能在两秒里读完的要点。打开前就知道里面在说什么。
-    - kicker: Reply Suggestion
-      title: 回复，已经起好草
-      body: 该回的邮件，AI 顺着上下文先拟一版草稿。你改两句、或直接发——决定权永远在你手里。
-    - kicker: Action
-      title: 下一步动作建议
-      body: 「需要决策」「等待拍板」「可归档」——AI 不只告诉你这封讲什么，还告诉你该拿它怎么办。
-    - kicker: Full-text · AI 搜索
-      title: 搜得到，也搜得准
-      body: 本地 FTS5 索引正文与附件文字，⌘K 起手毫秒级返回；Gmail 风格字段过滤、中文子串命中，搜不到就一句话交给 AI 智能搜索——人工与 AI 同一引擎，结果一致。
-
-aiFields:
-  eyebrow: AI Fields
-  title: AI 的判断，明明白白摆在邮件里
-  body: >-
-    每封邮件顶部一块 AI FIELDS 面板：摘要、优先级、动作、类别、回复建议——
-    全部结构化、可复核、可标记「已 Review」。不是一个黑盒，是一个透明的助手。
+    今日把当天需要你过问的事收在一处：等你拍板的审批、今天的会、待回的邮件、临期的事项，
+    以及 agent 刚交出的成果。读完这一页，一天的轮廓便清楚了。
   points:
-    - title: 结构化字段，不是散文
-      body: LLM 输出 JSON 块，前端原生渲染——稳定、可校验、可回填。
-    - title: 中英双语，正文不翻译
-      body: 界面、字段、动作可切中英；邮件正文永远保持原文。
-    - title: 你来定调
-      body: 6 个强调色、深浅主题、界面材质，一次切换全局生效。
+    - title: 拍板，不止是与否
+      body: 审批可以直接执行，可以改了参数再执行，也可以回一句话——拒绝的理由会交还给 agent，它知道你为什么说不。
+    - title: 待回邮件，按线程归拢
+      body: 同一线程只占一行，默认折叠。标为「无需回复」的不再打扰你，线程里来了新信，照常提醒。
+    - title: 一个铃铛，收拢所有提醒
+      body: 通知中心汇总 agent 的结果、待办审批、事项提醒与系统告警；可以稍后提醒、标记已处理，点一下直达现场。
 
-island:
-  eyebrow: Ping Island · Live
-  title: 重要邮件，不必你去找它
-  body: >-
-    MailAgent 把最关键的提醒送上灵动岛。一封紧急邮件进来，AI 判完级，
-    要点和建议动作直接浮在屏幕顶端——不用打开 App，不用翻收件箱。
+triage:
+  eyebrow: 邮件分拣 · Triage
+  title: 信到的那一刻，已经读完了。
+  titleEm: 已经读完了
+  lede: >-
+    不是事后批量整理，而是入库即处理。类别、优先级、一句话摘要、下一步动作，
+    结构化地写进每一封邮件；列表里一眼就能分辨，哪一封该先看。
   points:
-    - title: 实时提醒
-      body: 只有真正紧急的才打扰你，其余静默归档。
-    - title: 岛上直接动作
-      body: 归档、稍后、打开——常用动作一步到位。
-    - title: 每日两次汇总
-      body: 9 点与 18 点，灵动岛汇总过去 24 小时的邮件动态。
+    - title: 判断写成字段，而不是散文
+      body: 模型输出结构化字段，界面原生呈现，可复核，可标记已审阅。你定义的分类法，它照着用。
+    - title: 回复，先备一稿
+      body: 该回的邮件，AI 顺着上下文拟好草稿。你改两句，或者原样发出——发送永远由你确认。
+    - title: 搜得到，也搜得准
+      body: 本地全文索引覆盖正文与附件，支持中文子串与字段语法。说不清要找什么时，交给 AI 智能搜索——两者用的是同一个检索内核。
 
-report:
-  eyebrow: Report Agent
-  title: 每天早上，一份读得完的邮件日报
+matters:
+  eyebrow: 事项 · Matters
+  title: 一件事，从头到尾都在一处。
+  titleEm: 都在一处
+  lede: >-
+    邮件只是线索，事情才是你真正要推进的东西。事项把背景与目标、行动项、干系人、
+    往来邮件、会议和文件收拢在同一页。跟进 Agent 替你盯着进展，但它只提建议，落笔由你。
+  points:
+    - title: 行动项，可以派给 agent
+      body: 每一条都有自己的执行状态与报告。遇到需要你回答的问题，agent 会停下来问，而不是空转。
+    - title: 跟进，只提案
+      body: 跟进 Agent 按定时、新邮件、会议结束等规则醒来，检索证据，提出更新；接受与否，逐条由你决定。
+    - title: 进展与日志，各归其位
+      body: 进展记录事情的脉络，操作日志记录谁动了什么。你读到的是一条故事线，而不是流水账。
+
+people:
+  eyebrow: 通讯录与日历 · People & Time
+  title: 人与时间，也是上下文。
+  titleEm: 也是上下文
+  lede: >-
+    通讯录从往来邮件与会议里为每个人建档，按邮箱归并成人；日历把邮箱日程、事项截止与
+    agent 排程叠在同一张表上。agent 知道你在和谁共事，也知道你什么时候有空。
+  points:
+    - title: 画像，句句有出处
+      body: AI 画像写下你们常聊什么、共同推进过什么，句末角标直达原邮件。身份字段的改动以建议提出，采纳后才写入。
+    - title: 汇报线一目了然
+      body: 设好上级，档案里自然看到下级与同事；写信时，一步抄送上级。
+    - title: 三个来源，一张日历
+      body: 邮箱日程、事项截止、agent 排程可分别开关。拖动即可改期，五秒内可撤销；时间冲突会被标出。
+
+library:
+  eyebrow: 资料库 · Library
+  title: 你的文件，agent 也读得懂。
+  titleEm: agent 也读得懂
+  lede: >-
+    邮件附件、对话附件、agent 写下的文档，以及你挂载进来的本机文件夹，汇成一棵文件树。
+    文件留在原处，索引只存元数据；语义模型下载一次，此后检索全在本机完成。
+  points:
+    - title: 挂载，不搬家
+      body: 本机任意目录都可以挂进来，设为只读或可写；卸载时，磁盘上的文件一个不动。
+    - title: 每次写入都留快照
+      body: 文本文件保留历史版本，随时比对，随时回滚。
+    - title: 写入的边界，由服务端守着
+      body: 自定义 Agent 只能写「Agents 文档」；无人值守时只允许追加，覆写、移动、删除都要经过审批。资料库目前仅在 macOS 版提供。
+
+team:
+  eyebrow: 团队 · Team
+  title: 一支有名字的团队。
+  titleEm: 有名字的
+  lede: >-
+    主 Agent 有自己的名字与头像，身边是一组各司其职的成员：写日报的、做会前准备的、
+    跟进事项的。它们按你设的规则醒来，按你给的能力做事；每一次执行，都留下一份完整的记录。
+  points:
+    - title: 何时醒来，由你定
+      body: 定时、新邮件、某个线程、日程变化、会前若干小时——多个触发器可以并存，各自启停。
+    - title: 能做什么，按卡片授予
+      body: 邮件、日历、资料库、联网、外部服务，逐张能力卡勾选；需要时，还能细到单个工具。
+    - title: 每次执行，都是一段完整对话
+      body: 触发、思考、调用工具、交出成果，按时间展开；产出报告的执行，可以直接读全文。
+    - title: 群聊（Labs）
+      body: 把几位成员拉进一个群，让它们接力完成一件事；每个群都有自己的预算与用量账本。
+
+reports:
+  eyebrow: 报告 · Reports
+  title: 每天早上，一份读得完的日报。
   titleEm: 读得完
   lede: >-
-    Jarvis 每天回顾过去 24 小时的邮件，策展成一份结构化富报告：已处理了什么、
-    还需你亲自关注、你必须知道的关键信息、以及一般汇总。周报、月报同一引擎。
-  points:
-    - title: 日 / 周 / 月，自动排程
-      body: 日报看明细、周报看趋势、月报看高层回顾——开机补推，绝不漏发。
-    - title: 每封都能点回原文
-      body: 报告里的每封邮件可点击溯源——直达 App 内邮件或 Notion 页面。
-    - title: 趋势，用真实数据画
-      body: 周报 / 月报的统计与趋势全部由代码确定性计算，不是 LLM 编出来的。
-    - title: Run now · 改 prompt · 选模型
-      body: 在 /agents 页随时即时生成、调整排程窗口、编辑报告 prompt。
-
-customAI:
-  eyebrow: Custom AI · KOS
-  title: 对着一封邮件提问，它会自己去查资料
-  body: >-
-    Custom AI 通过 MCP 工具桥接到 KOS 知识库：邮件源、实体图谱、历史轨迹。
-    LLM 按上下文自判断该查什么，回答带来源。我们不替它注入，把工具和 skill 给它自驱。
-  points:
-    - title: 只读护栏
-      body: 只暴露 query / search / traverse 等只读工具，写操作一律拦在桥外，杜绝图谱污染。
-    - title: 不可达就降级
-      body: KOS 不可达时，自然回落到本地 FTS5 全文检索，对话不中断。
-
-agentDelivery:
-  eyebrow: Agent 交付
-  title: 把收件箱能力，交给你自己的 agent
-  body: >-
-    MailAgent 对外只交付一层 Skill：申请一把按权限收敛的 Bearer key，
-    你的 agent 就能经 REST 或 MCP 调邮件读取、全文搜索、报告与日历。
-    所有能力来自 Python 权威 manifest 单一真源，写/发类工具强制确认。
-  points:
-    - title: Scoped Bearer key
-      body: mailagent api-key create 按 preset / scope 发 key（前缀 mak_），坏/撤销/过期一律 403 fail-closed。
-    - title: Python 权威 Skill manifest
-      body: src/skills 是单一真源，REST / MCP / skill pack 三面都从同一份 manifest 派生，不会漂移。
-    - title: REST /api/skills + invoke
-      body: GET 取按 scope 过滤的 manifest，POST /invoke 调用；写/发类工具须带 confirm:true。
-    - title: MCP stdio + skill pack
-      body: mailagent-mcp 直接接 Claude Desktop / Code；export_skill_pack.py 出现成配置 + 自检脚本。
-
-provenance:
-  eyebrow: Provenance
-  title: AI 写文案，代码守数字
-  titleEm: 代码守数字
-  lede: >-
-    一个邮件助手最怕编。MailAgent 的纪律：统计、链接、邮件 ID 全由代码确定性回填，
-    LLM 只负责措辞和分组。出错的爆炸半径，被牢牢限制在文案里。
+    报告 Agent 回顾过去一段时间的邮件与事项，整理成一份结构化的报告：处理了什么、
+    还需你关注什么、哪些事有了进展。日报、周报、月报，同一套引擎。
   points:
     - title: 数字由代码算
-      body: 总数 / 未读 / 紧急 / 已处理 / 待处理——全部确定性计算，与数据库一致。
-    - title: 幻觉 ID 被丢弃
-      body: LLM 分配邮件时给的 internal_id 会被校验回真实候选集，编造的直接扔掉。
-    - title: 链接是权威回填
-      body: 每条溯源链接由后端用真实 page_id 生成，点过去一定是对的那一封。
-    - title: 本地优先
-      body: 邮件存本机 SQLite，Electron 直读，正文从不自动外发翻译。
+      body: 总数、未读、紧急、已处理——统计与趋势全部确定性计算，与数据库一致，不由模型估算。
+    - title: 每一封都能点回原文
+      body: 报告里提到的每封邮件都链回它本身；日报、周报、月报还会汇总你的事项进展。
+    - title: 排程，点选即可
+      body: 每天几点、每周哪天，点选即成；当天错过的时段，开机后会补上一次。
 
-observability:
-  eyebrow: Observability
-  title: 每一次调用，都有账可查
-  titleEm: 有账可查
+chat:
+  eyebrow: AI 对话 · Chat
+  title: 对着一封信、一件事，直接问。
+  titleEm: 直接问
   lede: >-
-    LLM 看板和系统看板把真实数据摊开：处理量、token、耗时、缓存命中、同步健康、死信队列。
-    这不是装饰图表——是跑了 5,904 次的真实账本。
-  stats:
-    - { value: '5,904', key: Processed · 7d, sub: 近 7 天处理量 }
-    - { value: '1.11M', key: Input tokens, sub: 输入 token }
-    - { value: '42.5s', key: Avg latency, sub: 平均耗时 / 封 }
-    - { value: '9,311', key: Synced mail, sub: 同步邮件总数 }
+    在任何页面唤起主 Agent，它会带着你眼前的邮件、事项或文件进入对话，自己检索、读取、比对，
+    回答附带出处。
+  points:
+    - title: 模型由你选
+      body: 内置 18 家服务商、480 个模型的资料，目录每天在云端更新；每个会话记住自己的模型与思考强度。
+    - title: 用 @ 指名
+      body: 邮件、事项、资料、自定义 Agent 都可以 @ 进对话；被点名的 Agent 接过任务，在自己的子会话里完成。
+    - title: 长对话，不失忆
+      body: 上下文占用随时可见；接近上限时自动压缩成摘要，完整历史一条不删。回答途中还能继续输入，消息会排队等候。
 
-mobile:
-  eyebrow: Anywhere
-  title: 桌面是主场，手机里也跟得上
-  body: >-
-    同一套设计系统、同一份 AI 判断，响应式适配到手机。重点 / 其他分流、优先级标记、
-    灵动岛提醒——窄屏上一样清爽。
-  chips:
-    - 响应式 / Responsive
-    - 深浅主题 / Light · Dark
-    - 6 Accents
+trust:
+  eyebrow: 边界与信任 · Trust
+  title: 能做什么，由你划定。
+  titleEm: 由你划定
+  lede: >-
+    让 agent 替你做事，前提是知道它不会越界。MailAgent 把边界写进结构里，而不是写进提示词里。
+  points:
+    - title: 每个工具，各有档位
+      body: 直接执行、先确认、禁用，三档逐个设置。草稿、标记、归档这类可逆的高频操作默认直接执行，其余默认先确认。
+    - title: 对外发信，总要问你
+      body: 发送邮件、执行命令、安装技能、修改 Agent 恒需确认，档位不能调低。发信唯一的例外，是你亲手设定的收件人白名单。
+    - title: 卡片上写的，就是将要发生的
+      body: 审批卡上的收件人、主题与改动，由服务端按真实载荷生成，而不是转述模型的说法。
+    - title: 写入范围，由服务端强制
+      body: agent 能写哪些目录、哪些文件，由后端判定，而不是由它自己决定；无人值守时只允许追加写入。
+    - title: 数字由代码回填
+      body: 报告里的统计、链接与邮件编号由代码确定性回填；模型给出的编号会被校验，编造的直接丢弃。
+    - title: 数据留在本机
+      body: 邮件、索引与文件都在你的电脑上。只有你配置的模型服务，会收到它处理的那一部分内容。
+
+connect:
+  eyebrow: 连接 · Beyond the desktop
+  title: 走出这台电脑，边界依然作数。
+  titleEm: 边界依然作数
+  lede: >-
+    在飞书里和它对话，在手机浏览器里看今日，让它去 Notion、Jira、GitHub 查资料，
+    或者把收件箱的能力交给你自己的 agent。换了地方，审批与权限一样生效。
+  cards:
+    - title: 外部服务（Labs）
+      body: 通过 MCP 连接 Notion、Jira、Confluence、Slack、GitHub、Linear、Figma 等 16 家服务。授权在浏览器里完成，凭证加密存在本机。
+    - title: 飞书对话
+      body: 在飞书私聊里继续同一个助手、同一份记忆；需要审批的操作以按钮卡片发来，点一下即放行。走长连接，无需公网地址。
+    - title: 远程网页
+      body: 自建一个网页入口，出门在外也能看邮件、今日与报告。资料库、群聊这类依赖本机服务的功能，留在桌面端。
+    - title: 交给你自己的 agent
+      body: 按权限签发访问密钥，经 REST 或 MCP 调用邮件读取、检索、报告与日历；写与发类操作，须显式确认。
 
 download:
-  eyebrow: Get MailAgent
-  title: 把收件箱交给它
-  body: macOS 桌面应用，本地优先，开源。下载、连上你的邮箱，AI 从下一封邮件开始接管。
-  ctaPrimary: 下载 macOS 版 · GitHub Release
-  ctaGhost: 在 GitHub 上看源码
+  eyebrow: 开始使用 · Get MailAgent
+  title: 把日常交给它。
+  body: 桌面应用，本地优先，源码公开。下载、连上邮箱、选好模型，从下一封邮件开始。
+  ctaPrimary: 下载 macOS 版
+  ctaWin: 下载 Windows 版
+  ctaGhost: 在 GitHub 查看源码
   steps:
-    - { kicker: STEP 01, title: 下载并安装, body: 从 GitHub Release 取最新 .dmg，拖进应用程序。 }
-    - { kicker: STEP 02, title: 连接邮箱, body: 通过 DavMail / IMAP 接入，邮件同步到本地 SQLite。 }
-    - { kicker: STEP 03, title: 让 AI 接管, body: 填入模型密钥，开启 Agent，下一封邮件起自动处理。 }
-  note: 需要 macOS 13+ · 自带模型密钥 · 你的邮件不离开这台设备
+    - { kicker: STEP 01, title: 下载安装, body: 从 GitHub Releases 取最新安装包：macOS 为 .dmg，Windows 为 .exe。 }
+    - { kicker: STEP 02, title: 连接邮箱, body: 首启向导里选择邮件后端：DavMail，或 Windows 上的本机 Outlook。Notion 可选，一键授权。 }
+    - { kicker: STEP 03, title: 选好模型, body: 填入你自己的模型服务密钥，打开需要的 Agent，下一封邮件起开始工作。 }
+  note: macOS 12 及以上（Apple 芯片）· Windows x64 · 自带模型密钥 · 邮件与文件留在你的电脑上
 
 faq:
   eyebrow: FAQ
   title: 还有些问题
   items:
-    - q: 我的邮件会被发去哪吗？
+    - q: 我的邮件会被送到哪里？
       a: >-
-        邮件同步并存储在你这台机器的本地 SQLite 数据库里，Electron 直接读取。
-        只有做 AI 处理时，相关内容才会发给你自己配置的模型。邮件正文从不为了翻译而外发。
-    - q: 它会自己替我发邮件或归档吗？
+        邮件、正文索引与文件都存放在你电脑上的本地数据库里，应用直接读写。只有在 AI 处理时，
+        相关内容才会发给你自己配置的模型服务。Notion 镜像、飞书、外部服务都是可选项，不开启就不会有数据流向它们。
+    - q: 它会自作主张，替我发信或删东西吗？
       a: >-
-        不会。v1 里 AI 的动作建议只是展示，执行权永远在你手上——回复是草稿，归档要你点。
-        批量执行是后续版本的事，且始终需要你确认。
-    - q: 报告里的数字可信吗？
+        不会。每个工具都有审批档位：发送邮件、执行命令、安装技能、修改 Agent 恒需确认，
+        发信只对你亲手设定的收件人白名单放行；起草、标记、归档这类可逆操作默认直接执行，
+        你可以在设置里逐个改为「先确认」。
+    - q: 支持哪些模型？
       a: >-
-        可信。所有统计、链接和邮件 ID 都由代码确定性计算与回填，与数据库一致。
-        LLM 只负责措辞、分组和挑重点；它给出的任何 ID 都会被校验，编造的会被丢弃。
-    - q: 支持哪些语言和模型？
+        内置 Anthropic、OpenAI、Google、DeepSeek、Mistral、xAI、通义、Kimi、智谱等 18 家服务商的模型资料，
+        也可以接入 OpenRouter 或任何兼容 OpenAI 协议的服务。使用你自己的密钥，费用在服务商那里直接结算。
+    - q: 一定要用 Notion 吗？
       a: >-
-        界面、字段、AI 快捷动作支持简体中文与 English 一键切换；邮件正文保持原文不翻译。
-        模型默认 claude-sonnet-4-6，可在设置中更换。
+        不需要。邮件正文与附件以本地数据库为准，Notion 只是可选的镜像。需要时，在设置里一键授权即可。
+    - q: Windows 版和 macOS 版有什么不同？
+      a: >-
+        Windows 版可以直接使用本机安装的 Outlook 收发与同步邮件，不需要 DavMail；这种模式下暂不提供日历。
+        资料库目前仅在 macOS 版提供。
     - q: 这是个什么项目？
       a: >-
-        MailAgent 是一个开源的个人项目——为重度邮件用户打造的 AI 邮件助手。
-        设计系统、灵动岛、报告 Agent、KOS 桥接都在公开仓库里。欢迎在 GitHub 上围观、提 issue 或自己跑一份。
+        MailAgent 是一个个人开源项目，为每天与大量邮件打交道的人而做。源码以 GPL-3.0 协议公开在 GitHub，
+        欢迎阅读、提 issue，或者自己运行一份。
 
 footer:
-  tagline: 把 AI 装进收件箱的桌面邮件助手。本地优先、可溯源、开源。一个为重度邮件用户打造的个人项目。
+  tagline: 以邮件为起点的个人 AI 工作台。本地优先，有边界，可追溯。
   cols:
-    - heading: Product
+    - heading: 产品
       links:
-        - { label: 核心能力, href: '#features' }
-        - { label: 灵动岛, href: '#island' }
-        - { label: 报告 Agent, href: '#agent' }
-        - { label: 可溯源, href: '#trust' }
-    - heading: Get it
+        - { label: 今日, href: '#today' }
+        - { label: 事项, href: '#matters' }
+        - { label: 团队, href: '#team' }
+        - { label: 边界与信任, href: '#trust' }
+    - heading: 资源
       links:
-        - { label: 下载 macOS, href: '#download' }
+        - { label: 使用指南, href: '/101/overview/' }
+        - { label: 下载, href: '#download' }
         - { label: GitHub, href: 'https://github.com/ChenyqThu/MailAgent/' }
         - { label: Releases, href: 'https://github.com/ChenyqThu/MailAgent/releases' }
-        - { label: FAQ, href: '#faq' }
-  copyright: © 2026 MailAgent · MIT License
-  built: Built with claude-sonnet-4-6 · Local-first
+  copyright: © 2026 MailAgent · GPL-3.0
+  built: 本地优先 · Local-first

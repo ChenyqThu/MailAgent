@@ -1,15 +1,15 @@
 /**
- * ChatMock — the Custom AI / KOS chat transcript (user bubble + AI tool-call
- * line + cited answer). Faithful recreation of the reference .chat block
- * (MailAgent.html + global.css .chat-*). Tier-2 mock. Drives off fixtures.chat.
+ * ChatMock — an AI chat transcript (user bubble with an @-mention, tool-call
+ * line, cited answer), styled by global.css .chat-*. Tier-2 mock. Drives off
+ * fixtures.chat / fixtures.chatEn by locale.
  *
  * Presentational only — pure props → JSX, no product imports, no window.electron.
  */
 import type { MockChatTurn } from './fixtures/fixtures'
-import { chat as defaultChat } from './fixtures/fixtures'
+import { chat as chatZh, chatEn } from './fixtures/fixtures'
 
 export interface ChatMockProps {
-  /** Conversation turns. Defaults to fixtures.chat. */
+  /** Conversation turns. Defaults to the locale's fixture transcript. */
   turns?: MockChatTurn[]
   /** Caption shown in the chat header strip. */
   title?: string
@@ -25,8 +25,9 @@ function Star({ size = 13 }: { size?: number }) {
   )
 }
 
-export default function ChatMock({ turns = defaultChat, title, locale = 'zh-CN' }: ChatMockProps) {
-  const heading = title ?? (locale === 'en' ? 'Custom AI · chat with an email' : 'Custom AI · 对话一封邮件')
+export default function ChatMock({ turns, title, locale = 'zh-CN' }: ChatMockProps) {
+  const rows = turns ?? (locale === 'en' ? chatEn : chatZh)
+  const heading = title ?? (locale === 'en' ? 'AI chat · Matter M-042' : 'AI 对话 · 事项 M-042')
 
   return (
     <div className="chat" data-mock="ChatMock">
@@ -36,7 +37,7 @@ export default function ChatMock({ turns = defaultChat, title, locale = 'zh-CN' 
         </span>
         {heading}
       </div>
-      {turns.map((turn, i) =>
+      {rows.map((turn, i) =>
         turn.role === 'you' ? (
           <div className="chat-row" key={i}>
             <div className="chat-av you">{locale === 'en' ? 'U' : '你'}</div>

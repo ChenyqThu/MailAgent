@@ -1,0 +1,75 @@
+---
+/**
+ * Showcase — the two-column feature block: the product visual in window chrome
+ * on one side, copy (numbered eyebrow · title · lede · feature list) on the
+ * other. Shared by 今日 / 分拣 / 人与时间 / 资料库 / 团队 / 报告 / 对话; the
+ * mock island goes in the default slot. `reverse` puts the visual on the right.
+ */
+import Icon from './Icon.astro'
+import type { IconName } from './icons'
+import { splitTitle } from './splitTitle'
+
+interface Point {
+  title?: string
+  body?: string
+}
+interface Props {
+  id?: string
+  num?: string
+  eyebrow?: string
+  title?: string
+  titleEm?: string
+  lede?: string
+  points?: Point[]
+  icons?: IconName[]
+  address?: string
+  reverse?: boolean
+}
+
+const { id, num, eyebrow, title, titleEm, lede, points = [], icons = [], address, reverse = false } =
+  Astro.props
+const t = splitTitle(title, titleEm)
+---
+
+<section class="section section--tight" id={id}>
+  <div class="wrap">
+    <div class:list={['showcase', { 'showcase--rev': reverse }]}>
+      <div class="showcase-media reveal">
+        <div class="window">
+          <div class="window-bar">
+            <div class="dots"><i></i><i></i><i></i></div>
+            {address && <div class="addr">{address}</div>}
+          </div>
+          <slot />
+        </div>
+      </div>
+
+      <div class="showcase-copy split-copy reveal" data-d="1">
+        {
+          eyebrow && (
+            <span class="eyebrow">
+              {num && <span class="num">{num}</span>} {eyebrow}
+            </span>
+          )
+        }
+        {title && <h3>{t.before}{t.em && <em>{t.em}</em>}{t.after}</h3>}
+        {lede && <p>{lede}</p>}
+        {
+          points.length > 0 && (
+            <ul class="flist">
+              {points.map((p, i) => (
+                <li>
+                  <span class="fi"><Icon name={icons[i] ?? 'check'} size={14} /></span>
+                  <span>
+                    {p.title && <b>{p.title}</b>}
+                    {p.body && <span>{p.body}</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+      </div>
+    </div>
+  </div>
+</section>

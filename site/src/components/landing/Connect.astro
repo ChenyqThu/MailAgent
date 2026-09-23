@@ -1,0 +1,67 @@
+---
+/**
+ * 连接 — copy beside the phone (remote web on a small screen), then the
+ * integrations as a 2×2 set of tiles: external services, Feishu, remote web,
+ * and handing the inbox to your own agent.
+ */
+import Icon from './Icon.astro'
+import PhoneMock from '../mock/PhoneMock.tsx'
+import type { IconName } from './icons'
+import type { Locale } from '../../lib/i18n'
+import { splitTitle } from './splitTitle'
+
+interface Item {
+  title?: string
+  body?: string
+}
+interface Props {
+  num?: string
+  eyebrow?: string
+  title?: string
+  titleEm?: string
+  lede?: string
+  cards?: Item[]
+  locale: Locale
+}
+
+const { num, eyebrow, title, titleEm, lede, cards = [], locale } = Astro.props
+const t = splitTitle(title, titleEm)
+const icons: IconName[] = ['plug', 'message', 'globe', 'key']
+---
+
+<section class="section" id="connect">
+  <div class="wrap">
+    <div class="split">
+      <div class="split-copy reveal">
+        {
+          eyebrow && (
+            <span class="eyebrow">
+              {num && <span class="num">{num}</span>} {eyebrow}
+            </span>
+          )
+        }
+        {title && <h3>{t.before}{t.em && <em>{t.em}</em>}{t.after}</h3>}
+        {lede && <p>{lede}</p>}
+      </div>
+      <div class="split-media reveal" data-d="1" style="display:flex;justify-content:center">
+        <PhoneMock client:visible clock="9:41" locale={locale} />
+      </div>
+    </div>
+
+    {
+      cards.length > 0 && (
+        <div class="fgrid connect-grid">
+          {cards.map((c, i) => (
+            <div class="card col-6 reveal" data-d={i % 2 === 1 ? '1' : undefined}>
+              <div class="kicker">
+                <span class="ic"><Icon name={icons[i] ?? 'cube'} size={16} /></span>
+                {c.title}
+              </div>
+              {c.body && <p>{c.body}</p>}
+            </div>
+          ))}
+        </div>
+      )
+    }
+  </div>
+</section>

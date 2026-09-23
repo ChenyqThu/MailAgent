@@ -1,287 +1,283 @@
 # ═══════════════════════════════════════════════════════════════════════
-# Landing copy — English. Transcribed from the reference
-# frontend/docs/landing/MailAgent.html (.en spans). Lane A consumes this via
-# getEntry('landing','en'). Schema is tolerant — see src/content.config.ts.
+# Landing copy — English. Read by components/landing/LandingPage.astro via
+# getEntry('landing','en'). Shape: content.config.ts. Mirrors zh-CN.yaml
+# section by section; every claim must be checkable against the code,
+# release notes or docs/reference.
 # ═══════════════════════════════════════════════════════════════════════
 
 seo:
-  title: MailAgent — AI, native to your inbox
+  title: MailAgent — A personal AI workspace that starts with your email
   description: >-
-    MailAgent · a desktop email assistant with AI built into the inbox.
-    Auto-classify, prioritize, summarize and draft replies, with live Dynamic
-    Island pings, a daily report agent, and full provenance.
+    MailAgent is a local-first desktop workspace. Email, calendar, matters, people and files
+    in one place, with a team of named, bounded AI agents handling the routine — every step
+    traceable to its source. For macOS and Windows.
 
 nav:
   links:
-    - { label: Features, href: '#features' }
-    - { label: Live, href: '#island' }
-    - { label: Reports, href: '#agent' }
-    - { label: Provenance, href: '#trust' }
-    - { label: Agent Delivery, href: '#agent-delivery' }
+    - { label: Today, href: '#today' }
+    - { label: Matters, href: '#matters' }
+    - { label: Team, href: '#team' }
+    - { label: Trust, href: '#trust' }
+    - { label: Connect, href: '#connect' }
     - { label: FAQ, href: '#faq' }
   download: Download
 
 hero:
-  pill: AI, native to your inbox
-  pillTag: v1 · macOS
-  title: Your inbox, finally handled.
-  titleEm: finally handled
+  pill: A personal AI workspace
+  pillTag: v3
+  title: Hand off the routine. Keep the judgment.
+  titleEm: Keep the judgment.
   sub: >-
-    MailAgent reads every email the moment it lands — classifying, prioritizing,
-    summarizing and drafting replies. What matters rises; noise settles. Every
-    claim links back to the source.
-  ctaPrimary: Download for macOS
+    Email, calendar, matters, people and files, gathered into one workspace on your own machine.
+    A team of named agents, each with clear limits, reads, follows up, drafts and files — and
+    only what needs your decision reaches you. Every step traces back to its source.
+  ctaPrimary: Download MailAgent
   ctaGhost: See how it works
   meta:
-    - { text: Local-first · stays on device }
-    - { text: claude-sonnet-4-6 }
-    - { text: Open source · MIT }
+    - { text: Local-first · your data stays on device }
+    - { text: macOS · Windows }
+    - { text: 18 model providers }
+    - { text: Open source · GPL-3.0 }
 
 strip:
-  label: One email · five things, automatically
+  label: Once an email lands
   items:
-    - Categorize
-    - Prioritize
-    - Summarize
-    - Draft reply
-    - Suggest action
+    - Triaged
+    - Summarized
+    - Reply drafted
+    - Linked to a matter
+    - Sender on file
+    - Searchable
 
-features:
-  eyebrow: AI Triage
-  title: Every email arrives already read.
-  titleEm: already read
+today:
+  eyebrow: Today
+  title: Every day begins on one page.
+  titleEm: one page
   lede: >-
-    Not a batch job after the fact — processed on arrival. Category, priority,
-    a one-line summary and a suggested action, written structurally into every
-    message so the list tells you what to open first.
-  cards:
-    - kicker: Category · Priority
-      title: Category & priority, at a glance
-      body: >-
-        Each email is tagged with a category (product, decision-needed, FYI…)
-        and a priority. Critical mail surfaces in red; FYI settles to the
-        bottom — no more digging through 674 messages.
-    - kicker: Summary
-      title: One-line summaries
-      body: >-
-        Long threads and deep quote chains, compressed into a point you read in
-        two seconds — before you ever open it.
-    - kicker: Reply Suggestion
-      title: Replies, pre-drafted
-      body: >-
-        For mail that needs a reply, a context-aware draft is waiting. Tweak a
-        line or send as-is — you stay in control.
-    - kicker: Action
-      title: A suggested next step
-      body: >-
-        "Needs a decision," "awaiting sign-off," "archive" — it tells you not
-        just what an email says, but what to do with it.
-    - kicker: Full-text · AI search
-      title: Find it — and find it precisely
-      body: >-
-        A local FTS5 index over email bodies and attachment text. Hit ⌘K for
-        millisecond results, Gmail-style field filters and Chinese substring
-        matching — and when keywords fall short, hand it to AI search in plain
-        language. Manual and AI share one engine, so the results match.
-
-aiFields:
-  eyebrow: AI Fields
-  title: The AI's reasoning, right there in the email
-  body: >-
-    Every email carries an AI FIELDS panel up top: summary, priority, action,
-    category, reply suggestion — all structured, reviewable, and markable as
-    "reviewed." Not a black box; a transparent assistant.
+    Today gathers what needs you: approvals waiting on a decision, the day's meetings, replies
+    you owe, matters coming due, and whatever your agents just finished. One read, and the
+    shape of the day is clear.
   points:
-    - title: Structured fields, not prose
-      body: The LLM emits JSON blocks rendered natively — stable, checkable, back-fillable.
-    - title: Bilingual UI, body untouched
-      body: UI, fields and actions switch CN/EN; the email body always stays in its original language.
-    - title: You set the tone
-      body: Six accent colors, light/dark, interface materials — one switch re-skins everything.
+    - title: More than yes or no
+      body: Run it as proposed, edit the parameters first, or answer in a sentence — a refusal goes back to the agent with your reason attached.
+    - title: Replies, grouped by thread
+      body: One row per thread, collapsed by default. Mark a thread as needing no reply and it stays quiet — until someone writes again.
+    - title: One bell for everything
+      body: The notification center collects agent results, pending approvals, matter alerts and system warnings. Snooze, mark handled, or jump straight to the source.
 
-island:
-  eyebrow: Ping Island · Live
-  title: The mail that matters comes to you
-  body: >-
-    MailAgent pushes what's critical to the Dynamic Island. A high-priority
-    email lands, gets triaged, and its gist and suggested action float at the
-    top of your screen — no app, no inbox dive.
+triage:
+  eyebrow: Triage
+  title: Read the moment it arrives.
+  titleEm: the moment it arrives
+  lede: >-
+    Not batch clean-up after the fact — every email is processed as it lands. Category, priority,
+    a one-line summary and the next step are written into each message as structured fields,
+    so the list tells you what to open first.
   points:
-    - title: Real-time pings
-      body: Only the genuinely urgent interrupts you; the rest is archived in silence.
-    - title: Act from the island
-      body: Archive, snooze, open — common actions in a single tap.
-    - title: Twice-daily digest
-      body: At 9am and 6pm, the island sums up the last 24 hours.
+    - title: Judgments as fields, not prose
+      body: The model returns structured fields, rendered natively — checkable, and markable as reviewed. Define your own categories and it follows them.
+    - title: A reply, already drafted
+      body: For mail that needs an answer, a draft is waiting in context. Change a line or send it as is — sending always waits for you.
+    - title: Search that finds it
+      body: A local full-text index covers bodies and attachments, with CJK substring matching and field syntax. When you can't name what you're after, hand it to AI search — both run on the same engine.
 
-report:
-  eyebrow: Report Agent
-  title: A daily briefing you'll actually finish
+matters:
+  eyebrow: Matters
+  title: One piece of work, start to finish, in one place.
+  titleEm: in one place
+  lede: >-
+    Emails are clues; the work is what you're actually moving forward. A matter keeps the
+    background and goal, action items, stakeholders, threads, meetings and files on one page.
+    A follow-up agent keeps watch — but it only proposes. You decide what's written.
+  points:
+    - title: Action items an agent can take
+      body: Each item has its own run state and report. When the agent needs an answer from you, it stops and asks instead of spinning.
+    - title: Follow-up that only proposes
+      body: The follow-up agent wakes on a schedule, a new email or a meeting's end, gathers evidence and suggests updates. You accept or decline each one.
+    - title: Progress, kept apart from the log
+      body: Progress tells the story of the work; the activity log records who changed what. You read a narrative, not a ledger.
+
+people:
+  eyebrow: People & Time
+  title: People and time are context, too.
+  titleEm: context, too
+  lede: >-
+    Contacts builds a profile for everyone you correspond or meet with, merging addresses into
+    people. The calendar layers mailbox events, matter deadlines and agent schedules into one
+    view. Your agents know who you work with, and when you're free.
+  points:
+    - title: Profiles with sources
+      body: An AI profile notes what you discuss and what you've built together, each sentence footnoted back to the email. Identity changes arrive as suggestions and apply only once accepted.
+    - title: Reporting lines at a glance
+      body: Set a manager and the profile shows reports and peers; compose with their manager on cc in one step.
+    - title: Three sources, one calendar
+      body: Mailbox events, matter deadlines and agent schedules, each toggleable. Drag to reschedule with five seconds to undo; conflicts are flagged.
+
+library:
+  eyebrow: Library
+  title: Your files, legible to your agents.
+  titleEm: legible to your agents
+  lede: >-
+    Email attachments, chat attachments, documents your agents write, and folders you mount
+    from disk form one file tree. Files stay where they are; the index holds only metadata.
+    Download the semantic model once, and search runs entirely on your machine.
+  points:
+    - title: Mount without moving
+      body: Mount any folder as read-only or writable. Unmount it, and not a single file on disk is touched.
+    - title: A snapshot with every write
+      body: Text files keep their history — compare or roll back at any time.
+    - title: Write limits, enforced by the server
+      body: Custom agents write only to Agent docs; unattended runs may only append. Overwrite, move and delete all go through approval. Library is available on macOS.
+
+team:
+  eyebrow: Team
+  title: A team, each member with a name.
+  titleEm: with a name
+  lede: >-
+    Your main agent has its own name and face, alongside members with distinct jobs — the daily
+    report, meeting prep, matter follow-up. They wake on the rules you set and act within the
+    capabilities you grant; every run leaves a complete record.
+  points:
+    - title: You decide when they wake
+      body: On a schedule, a new email, a specific thread, a calendar change, or hours before a meeting — triggers stack, and each can be switched on or off.
+    - title: Capabilities, granted by card
+      body: Mail, calendar, library, web, external services — grant them card by card, and narrow down to single tools when you need to.
+    - title: Every run reads as a conversation
+      body: Trigger, reasoning, tool calls and output, laid out in order. Runs that produce a report open straight to the full text.
+    - title: Group chat (Labs)
+      body: Put several members in one group and let them pick up where the others leave off. Each group keeps its own budget and usage ledger.
+
+reports:
+  eyebrow: Reports
+  title: A morning report you can actually finish.
   titleEm: actually finish
   lede: >-
-    Jarvis reviews the last 24 hours and curates a structured report: what's
-    been handled, what still needs you, the key facts you must know, and the
-    rest summarized. Weekly and monthly run on the same engine.
+    The report agent looks back over your mail and matters and writes a structured report: what
+    was handled, what still needs you, what moved forward. Daily, weekly and monthly, from one engine.
   points:
-    - title: Daily / weekly / monthly, scheduled
-      body: >-
-        Detail by day, trends by week, a high-level recap by month — with
-        catch-up on launch so nothing is missed.
-    - title: Every line links to source
-      body: Every email in the report is clickable — straight to the message in-app or its Notion page.
-    - title: Trends from real counts
-      body: Weekly and monthly stats are computed deterministically in code — never hallucinated by the model.
-    - title: Run now · edit prompt · pick model
-      body: Generate on demand, adjust the schedule, and edit the report prompt right in /agents.
+    - title: Numbers computed by code
+      body: Totals, unread, urgent, handled — every statistic and trend is computed deterministically and matches the database. None of it is estimated by a model.
+    - title: Every email links back
+      body: Each email a report mentions links to the message itself; daily, weekly and monthly reports also summarize your matters.
+    - title: Scheduling by picking
+      body: Pick the hour, pick the weekday. If a slot is missed, it runs once when the app starts that day.
 
-customAI:
-  eyebrow: Custom AI · KOS
-  title: Ask about an email — it goes and looks things up
-  body: >-
-    Custom AI bridges to the KOS knowledge base over MCP — email sources, an
-    entity graph, historical trajectories. The model decides what to query from
-    context and answers with citations. We don't spoon-feed it; we hand it the
-    tools and let it drive.
-  points:
-    - title: Read-only guardrails
-      body: >-
-        Only read tools (query, search, traverse) are exposed; writes are
-        blocked at the bridge to keep the graph clean.
-    - title: Graceful degradation
-      body: If KOS is offline, it falls back to local FTS5 search — the conversation never breaks.
-
-agentDelivery:
-  eyebrow: Agent Delivery
-  title: Hand your inbox capabilities to your own agent
-  body: >-
-    MailAgent exposes one thing outward: a Skill layer. Mint a scope-narrowed
-    Bearer key and your agent can read email, run full-text search, and pull
-    reports or calendar over REST or MCP. Every capability flows from one
-    authoritative Python manifest; write/send tools require explicit confirm.
-  points:
-    - title: Scoped Bearer key
-      body: >-
-        mailagent api-key create issues keys by preset / scope (prefix mak_);
-        bad, revoked, or expired keys fail closed with 403.
-    - title: Authoritative Python manifest
-      body: >-
-        src/skills is the single source of truth — REST, MCP, and the skill
-        pack all derive from one manifest, so nothing drifts.
-    - title: REST /api/skills + invoke
-      body: >-
-        GET returns a scope-filtered manifest; POST /invoke calls a tool.
-        Write/send tools must carry confirm:true.
-    - title: MCP stdio + skill pack
-      body: >-
-        mailagent-mcp plugs straight into Claude Desktop / Code;
-        export_skill_pack.py emits a ready client config plus a selftest script.
-
-provenance:
-  eyebrow: Provenance
-  title: The AI writes the prose. Code guards the numbers.
-  titleEm: Code guards the numbers.
+chat:
+  eyebrow: AI chat
+  title: Ask about the email, or the whole matter.
+  titleEm: the whole matter
   lede: >-
-    The one thing an email assistant must never do is make things up.
-    MailAgent's discipline: counts, links and email IDs are back-filled
-    deterministically by code; the LLM only handles wording and grouping. The
-    blast radius of a mistake is confined to phrasing.
+    Summon the main agent from anywhere. It brings the email, matter or file in front of you
+    into the conversation, searches, reads and compares on its own, and cites what it found.
   points:
-    - title: Numbers computed in code
-      body: Totals, unread, urgent, processed, pending — all deterministic and consistent with the database.
-    - title: Hallucinated IDs discarded
-      body: Any email ID the model emits is validated against the real candidate set; invented ones are dropped.
-    - title: Links are authoritative
-      body: Every source link is generated from a real page_id — it always lands on the right message.
-    - title: Local-first
-      body: Mail lives in local SQLite read directly by Electron; the body is never sent out for translation.
+    - title: Your choice of model
+      body: Metadata for 480 models across 18 providers, refreshed daily from the cloud. Each conversation remembers its own model and reasoning effort.
+    - title: Call on it with @
+      body: Mention an email, a matter, a file or a custom agent. A mentioned agent takes the task and finishes it in its own sub-conversation.
+    - title: Long conversations, remembered
+      body: Context usage is always visible; near the limit it compacts into a summary, and the full history stays. Keep typing mid-answer — your messages queue.
 
-observability:
-  eyebrow: Observability
-  title: Every call, fully accounted for
-  titleEm: fully accounted for
+trust:
+  eyebrow: Limits & trust
+  title: You draw the lines.
+  titleEm: draw the lines
   lede: >-
-    The LLM and system dashboards lay the real numbers bare: throughput, tokens,
-    latency, cache hits, sync health, dead-letter queue. Not decorative charts —
-    the actual ledger of 5,904 runs.
-  stats:
-    - { value: '5,904', key: Processed · 7d, sub: over the last week }
-    - { value: '1.11M', key: Input tokens, sub: input tokens }
-    - { value: '42.5s', key: Avg latency, sub: average per email }
-    - { value: '9,311', key: Synced mail, sub: emails synced }
+    Letting an agent act for you starts with knowing it won't overstep. MailAgent builds its
+    limits into the structure, not into a prompt.
+  points:
+    - title: A setting for every tool
+      body: Run directly, ask first, or disabled — set per tool. Frequent, reversible actions like drafting, flagging and archiving run directly by default; the rest ask first.
+    - title: Sending mail always asks
+      body: Sending email, running commands, installing skills and changing agents always ask, and that can't be lowered. The only exception for sending is a recipient allowlist you set yourself.
+    - title: The card shows what will happen
+      body: Recipients, subject and changes on an approval card are generated by the server from the real payload, not paraphrased from the model.
+    - title: Write scope, enforced by the server
+      body: Which folders and files an agent may write is decided by the backend, not by the agent. Unattended runs may only append.
+    - title: Numbers filled in by code
+      body: Statistics, links and email IDs in a report are filled in deterministically. IDs the model supplies are checked, and invented ones are dropped.
+    - title: Your data stays on your machine
+      body: Mail, indexes and files live on your computer. Only the model provider you configure sees the portion it's asked to process.
 
-mobile:
-  eyebrow: Anywhere
-  title: At home on the desktop, with you on mobile
-  body: >-
-    The same design system and the same AI judgments, responsive down to the
-    phone. Focused/Other split, priority flags, island pings — just as clean on
-    a narrow screen.
-  chips:
-    - 响应式 / Responsive
-    - 深浅主题 / Light · Dark
-    - 6 Accents
+connect:
+  eyebrow: Beyond the desktop
+  title: Away from the desk, the same limits hold.
+  titleEm: the same limits hold
+  lede: >-
+    Chat with it in Feishu, check Today from a phone browser, let it look things up in Notion,
+    Jira or GitHub, or hand your inbox to an agent of your own. Wherever it runs, approvals and
+    permissions still apply.
+  cards:
+    - title: External services (Labs)
+      body: Connect 16 services over MCP, including Notion, Jira, Confluence, Slack, GitHub, Linear and Figma. Authorize in the browser; credentials are encrypted on your machine.
+    - title: Feishu chat
+      body: The same assistant and memory in a Feishu direct message. Actions that need approval arrive as button cards — one tap to allow. Uses a persistent connection; no public address needed.
+    - title: Remote web
+      body: Host your own web entry point to read mail, Today and reports on the go. Features that depend on local services, such as Library and group chat, stay on the desktop.
+    - title: Your own agent
+      body: Issue scoped access keys and call mail reading, search, reports and calendar over REST or MCP. Write and send actions require explicit confirmation.
 
 download:
   eyebrow: Get MailAgent
-  title: Hand over your inbox
-  body: >-
-    A local-first macOS desktop app, open source. Download, connect your
-    mailbox, and the AI takes over from the next email.
-  ctaPrimary: Download for macOS · GitHub Release
+  title: Hand it the routine.
+  body: A local-first desktop app with public source. Download, connect your mailbox, choose a model — and it starts with the next email.
+  ctaPrimary: Download for macOS
+  ctaWin: Download for Windows
   ctaGhost: View source on GitHub
   steps:
-    - { kicker: STEP 01, title: Download & install, body: Grab the latest .dmg from Releases and drop it in Applications. }
-    - { kicker: STEP 02, title: Connect mail, body: Connect over DavMail / IMAP; mail syncs to local SQLite. }
-    - { kicker: STEP 03, title: Let the AI run, body: Add your model key, enable the agent — triage starts on the next email. }
-  note: Requires macOS 13+ · bring your own model key · your mail never leaves this device
+    - { kicker: STEP 01, title: Install, body: 'Get the latest installer from GitHub Releases: .dmg for macOS, .exe for Windows.' }
+    - { kicker: STEP 02, title: Connect your mailbox, body: 'Pick a mail backend in the first-run wizard: DavMail, or local Outlook on Windows. Notion is optional, with one-click authorization.' }
+    - { kicker: STEP 03, title: Choose a model, body: 'Add your own model provider key, switch on the agents you want, and it starts with the next email.' }
+  note: macOS 12+ (Apple silicon) · Windows x64 · Bring your own model key · Your mail and files stay on your machine
 
 faq:
   eyebrow: FAQ
-  title: A few more things
+  title: A few more questions
   items:
-    - q: Where does my mail go?
+    - q: Where does my email go?
       a: >-
-        Mail is synced and stored in a local SQLite database on your machine,
-        read directly by Electron. Only AI processing sends relevant content to
-        the model you configure. The email body is never sent out for translation.
-    - q: Will it send or archive on its own?
+        Mail, the search index and your files live in a local database on your computer, read and
+        written directly by the app. Content is sent only to the model provider you configure, and
+        only when AI processing needs it. The Notion mirror, Feishu and external services are all
+        optional — switched off, nothing flows to them.
+    - q: Will it send mail or delete things on its own?
       a: >-
-        No. In v1, suggested actions are display-only — you stay in control.
-        Replies are drafts; archiving is your click. Bulk execution is for a
-        later version and always behind your confirmation.
-    - q: Can I trust the numbers in reports?
+        No. Every tool has an approval setting. Sending mail, running commands, installing skills and
+        changing agents always ask, and sending is only exempt for a recipient allowlist you set
+        yourself. Reversible actions like drafting, flagging and archiving run directly by default;
+        you can switch any of them to ask first.
+    - q: Which models does it support?
       a: >-
-        Yes. All counts, links and email IDs are computed and back-filled by
-        code, consistent with the database. The LLM only handles wording,
-        grouping and highlights; any ID it emits is validated, and invented ones
-        are discarded.
-    - q: Which languages and models?
+        It ships model metadata for 18 providers, including Anthropic, OpenAI, Google, DeepSeek,
+        Mistral, xAI, Qwen, Kimi and Zhipu, and connects to OpenRouter or any OpenAI-compatible
+        service. You use your own keys and pay the provider directly.
+    - q: Do I need Notion?
       a: >-
-        The UI, fields and AI quick-actions toggle between 简体中文 and English;
-        the email body stays in its original language. The default model is
-        claude-sonnet-4-6, swappable in settings.
+        No. The local database is the source of truth for email bodies and attachments; Notion is an
+        optional mirror. If you want it, authorize it in one click from Settings.
+    - q: How does the Windows version differ from macOS?
+      a: >-
+        On Windows, MailAgent can send, receive and sync through your locally installed Outlook, with
+        no DavMail required; the calendar isn't available in that mode yet. Library is currently
+        macOS-only.
     - q: What kind of project is this?
       a: >-
-        MailAgent is an open-source personal project — an AI email assistant for
-        heavy mail users. The design system, Ping Island, report agent and KOS
-        bridge all live in a public repo. Star it, file issues, or run your own.
+        MailAgent is a personal open-source project, built for people who spend their days in email.
+        The source is public on GitHub under GPL-3.0 — read it, file an issue, or run your own copy.
 
 footer:
-  tagline: >-
-    A desktop email assistant with AI native to the inbox. Local-first,
-    traceable, open source. A personal project for people who live in their mail.
+  tagline: A personal AI workspace that starts with your email. Local-first, bounded, traceable.
   cols:
     - heading: Product
       links:
-        - { label: Features, href: '#features' }
-        - { label: Ping Island, href: '#island' }
-        - { label: Report Agent, href: '#agent' }
-        - { label: Provenance, href: '#trust' }
-    - heading: Get it
+        - { label: Today, href: '#today' }
+        - { label: Matters, href: '#matters' }
+        - { label: Team, href: '#team' }
+        - { label: Limits & trust, href: '#trust' }
+    - heading: Resources
       links:
-        - { label: Download macOS, href: '#download' }
+        - { label: Guide, href: '/en/101/overview/' }
+        - { label: Download, href: '#download' }
         - { label: GitHub, href: 'https://github.com/ChenyqThu/MailAgent/' }
         - { label: Releases, href: 'https://github.com/ChenyqThu/MailAgent/releases' }
-        - { label: FAQ, href: '#faq' }
-  copyright: © 2026 MailAgent · MIT License
-  built: Built with claude-sonnet-4-6 · Local-first
+  copyright: © 2026 MailAgent · GPL-3.0
+  built: Local-first

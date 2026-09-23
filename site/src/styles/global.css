@@ -476,6 +476,11 @@ html {
   letter-spacing: -0.03em;
   line-height: 1.04;
   font-size: clamp(40px, 7vw, 88px);
+  /* Break Chinese only at spaces and punctuation, so a narrow screen splits
+     「把日常交给 / agent，」 rather than 「把日常交 / 给」. anywhere is the
+     fallback for a phrase wider than the line. */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 .hero-title em {
   font-style: italic;
@@ -775,6 +780,7 @@ html {
   line-height: 1.08;
   letter-spacing: -0.01em;
   margin: 16px 0 0;
+  text-wrap: balance;
 }
 :root[lang='zh-CN'] .split-copy h3,
 .lang-zh .split-copy h3 {
@@ -787,6 +793,42 @@ html {
   color: rgb(var(--ink-fg-1));
   line-height: 1.65;
   margin-top: 18px;
+}
+.split-copy h3 em {
+  font-style: italic;
+  color: rgb(var(--c-accent));
+}
+
+/* ─── Trio (three short points under a wide window) ─────────────────── */
+.trio {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 36px;
+  margin-top: 40px;
+}
+.trio-item .fi {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: rgb(var(--c-accent) / 0.12);
+  color: rgb(var(--c-accent));
+  display: grid;
+  place-items: center;
+}
+.trio-item b {
+  display: block;
+  font-weight: 600;
+  font-size: 15px;
+  margin-top: 14px;
+}
+.trio-item p {
+  font-size: 14px;
+  color: rgb(var(--ink-fg-1));
+  line-height: 1.6;
+  margin-top: 6px;
+}
+.connect-grid {
+  margin-top: 56px;
 }
 .flist {
   list-style: none;
@@ -828,150 +870,7 @@ html {
   line-height: 1.55;
 }
 
-/* ─── Ping Island (built from product DS spec) ───────────────────────── */
-.pi-stage {
-  background:
-    radial-gradient(120% 120% at 50% 0%, rgb(var(--c-accent) / 0.1), transparent 60%),
-    rgb(var(--ink-1));
-  border: 1px solid rgb(var(--ink-border));
-  border-radius: 18px;
-  padding: 30px;
-  display: grid;
-  place-items: center;
-  min-height: 320px;
-  position: relative;
-  overflow: hidden;
-}
-.island {
-  background: #000;
-  color: #fff;
-  border-radius: 26px;
-  width: 360px;
-  max-width: 100%;
-  box-shadow:
-    0 0 0 1px rgb(255 255 255 / 0.06),
-    0 30px 60px -20px rgb(0 0 0 / 0.7);
-  padding: 14px 16px;
-  font-family: var(--font-sans);
-}
-.island-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-.island-head .lab {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  color: #7a7f8a;
-  text-transform: uppercase;
-}
-.island-head .live {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: rgb(var(--c-accent));
-}
-.island-head .live .d {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: rgb(var(--c-accent));
-  animation: ma-pulse 1.4s infinite;
-}
-@keyframes ma-pulse {
-  0%,
-  100% {
-    opacity: 0.4;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-.pi-mail {
-  display: flex;
-  align-items: flex-start;
-  gap: 11px;
-  padding: 9px 8px;
-  border-radius: 11px;
-}
-.pi-mail + .pi-mail {
-  border-top: 1px solid #15181d;
-  border-radius: 0;
-}
-.pi-av {
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: #fff;
-}
-.pi-body {
-  flex: 1;
-  min-width: 0;
-}
-.pi-eb {
-  font-size: 11px;
-  color: #7a7f8a;
-  line-height: 1;
-  margin-bottom: 4px;
-  display: flex;
-  gap: 7px;
-  align-items: center;
-}
-.pi-eb .pri {
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  padding: 1px 5px;
-  border-radius: 4px;
-  letter-spacing: 0.03em;
-}
-.pi-tt {
-  font-size: 14px;
-  font-weight: 600;
-  color: #fff;
-  line-height: 1.25;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.pi-ss {
-  font-size: 12px;
-  color: #a4a9b3;
-  line-height: 1.35;
-  margin-top: 3px;
-}
-.pi-actions {
-  display: flex;
-  gap: 7px;
-  margin-top: 11px;
-  padding-top: 11px;
-  border-top: 1px solid #15181d;
-}
-.pi-btn {
-  flex: 1;
-  text-align: center;
-  padding: 7px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 500;
-  background: #1a1e24;
-  color: #d6d9df;
-}
-.pi-btn.acc {
-  background: rgb(var(--c-accent));
-  color: #fff;
-}
-
-/* ─── Report agent / Custom AI: showcase frame ───────────────────────── */
+/* ─── Showcase frame (copy + product visual) ─────────────────────────── */
 .showcase {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1098,45 +997,6 @@ html {
   font-size: 14px;
   color: rgb(var(--ink-fg-1));
   line-height: 1.6;
-}
-
-/* ─── Stats band ─────────────────────────────────────────────────────── */
-.stats {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 1px;
-  background: rgb(var(--ink-border));
-  border: 1px solid rgb(var(--ink-border));
-  border-radius: 14px;
-  overflow: hidden;
-}
-.stat {
-  background: rgb(var(--ink-1));
-  padding: 28px 24px;
-}
-.stat .v {
-  font-family: var(--font-display);
-  font-size: clamp(34px, 4vw, 46px);
-  line-height: 1;
-  letter-spacing: -0.01em;
-  color: rgb(var(--ink-fg));
-}
-.stat .v em {
-  color: rgb(var(--c-accent));
-  font-style: normal;
-}
-.stat .k {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: rgb(var(--ink-fg-2));
-  margin-top: 12px;
-}
-.stat .sub {
-  font-size: 13px;
-  color: rgb(var(--ink-fg-1));
-  margin-top: 5px;
 }
 
 /* ─── Download / install ─────────────────────────────────────────────── */
@@ -1900,7 +1760,6 @@ html.js-anim .reveal[data-d='3'] {
 }
 @media (prefers-reduced-motion: reduce) {
   .draftcard .caret,
-  .island-head .live .d,
   .phone-island .live .d {
     animation: none;
   }
@@ -2142,203 +2001,7 @@ html.js-anim .reveal[data-d='3'] {
   margin-top: 4px;
 }
 
-/* ─── Dashboard (LLM) ────────────────────────────────────────────────── */
-.dash {
-  background: rgb(var(--ink-0));
-  padding: 22px;
-  height: 520px;
-  overflow: hidden;
-}
-.dash-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 18px;
-}
-.dash-head .star {
-  color: rgb(var(--c-accent));
-}
-.dash-head h4 {
-  font-size: 18px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.dash-head .seg {
-  margin-left: auto;
-  display: inline-flex;
-  background: rgb(var(--ink-fg) / 0.05);
-  border: 1px solid rgb(var(--ink-border));
-  border-radius: 7px;
-  padding: 2px;
-  gap: 1px;
-}
-.dash-head .seg button {
-  padding: 4px 10px;
-  border-radius: 5px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: rgb(var(--ink-fg-2));
-}
-.dash-head .seg button.on {
-  background: rgb(var(--ink-4));
-  color: rgb(var(--ink-fg));
-}
-.dash-cards {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.dcard {
-  background: rgb(var(--ink-1));
-  border: 1px solid rgb(var(--ink-border));
-  border-radius: 10px;
-  padding: 14px 16px;
-}
-.dcard.acc {
-  background: rgb(var(--c-accent) / 0.05);
-  border-color: rgb(var(--c-accent) / 0.25);
-}
-.dcard .dk {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: rgb(var(--ink-fg-2));
-}
-.dcard .dv {
-  font-size: 26px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  margin-top: 8px;
-  color: rgb(var(--ink-fg));
-}
-.dcard.acc .dv {
-  color: rgb(var(--c-accent));
-}
-.dcard .ds {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: rgb(var(--ink-fg-2));
-  margin-top: 4px;
-}
-.dash-low {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-.dpanel {
-  background: rgb(var(--ink-1));
-  border: 1px solid rgb(var(--ink-border));
-  border-radius: 10px;
-  padding: 16px;
-}
-.dpanel .dk {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: rgb(var(--ink-fg-2));
-  margin-bottom: 14px;
-}
-.donut-wrap {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-}
-/* Tier-3 note: reference used conic-gradient + --p hack; Lane D should
-   render an SVG arc instead (more reliable). Class kept as fallback. */
-.donut {
-  width: 96px;
-  height: 96px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  display: grid;
-  place-items: center;
-  background: conic-gradient(rgb(var(--c-ok)) 0 calc(var(--p, 99.8) * 1%), rgb(var(--ink-4)) 0);
-  position: relative;
-}
-.donut::after {
-  content: '';
-  position: absolute;
-  inset: 13px;
-  border-radius: 50%;
-  background: rgb(var(--ink-1));
-}
-.donut .dc {
-  position: relative;
-  text-align: center;
-  z-index: 1;
-}
-.donut .dc .n {
-  font-size: 20px;
-  font-weight: 600;
-  color: rgb(var(--ink-fg));
-}
-.donut .dc .l {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  text-transform: uppercase;
-  color: rgb(var(--ink-fg-2));
-}
-.dleg {
-  flex: 1;
-}
-.dleg .lr {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  padding: 5px 0;
-}
-.dleg .lr .sw {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-}
-.dleg .lr .v {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  color: rgb(var(--ink-fg-1));
-}
-.dbar-lab {
-  display: flex;
-  justify-content: space-between;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: rgb(var(--ink-fg-2));
-  margin-bottom: 8px;
-}
-.dbar {
-  height: 8px;
-  border-radius: 999px;
-  background: rgb(var(--ink-4));
-  overflow: hidden;
-  margin-bottom: 16px;
-}
-.dbar i {
-  display: block;
-  height: 100%;
-  background: rgb(var(--c-accent));
-  border-radius: 999px;
-}
-.dkv {
-  display: flex;
-  gap: 28px;
-}
-.dkv .k {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: rgb(var(--ink-fg-2));
-}
-.dkv .v {
-  font-size: 15px;
-  font-weight: 600;
-  color: rgb(var(--ink-fg));
-  margin-top: 3px;
-}
-
-/* ─── Chat (Custom AI) ───────────────────────────────────────────────── */
+/* ─── Chat ───────────────────────────────────────────────────────────── */
 .chat {
   background: rgb(var(--ink-1));
   padding: 18px;
@@ -2590,8 +2253,9 @@ html.js-anim .reveal[data-d='3'] {
   .showcase--rev .window {
     transform: none;
   }
-  .stats {
-    grid-template-columns: repeat(2, 1fr);
+  .trio {
+    grid-template-columns: 1fr;
+    gap: 24px;
   }
   .col-4,
   .col-6,
@@ -2611,12 +2275,6 @@ html.js-anim .reveal[data-d='3'] {
   }
   .rep-list {
     width: 240px;
-  }
-  .dash-low {
-    grid-template-columns: 1fr;
-  }
-  .dash-cards {
-    grid-template-columns: repeat(2, 1fr);
   }
 }
 @media (max-width: 680px) {
@@ -2667,17 +2325,11 @@ html.js-anim .reveal[data-d='3'] {
     width: 100%;
     border-right: 0;
   }
-  .dash-cards {
-    grid-template-columns: 1fr 1fr;
-  }
   .rep-statrow {
     grid-template-columns: 1fr 1fr;
   }
 }
 @media (max-width: 460px) {
-  .stats {
-    grid-template-columns: 1fr;
-  }
   .nav-cta .btn-label {
     display: none;
   }

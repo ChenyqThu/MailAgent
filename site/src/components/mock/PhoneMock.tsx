@@ -1,20 +1,17 @@
 /**
- * PhoneMock — the mobile-inbox phone frame (status bar + island ping banner +
- * app header + Focused/Other tabs + compact mail list + home indicator).
- * Faithful recreation of the reference .phone block (MailAgent.html +
- * global.css .phone-*). Tier-2 mock. Drives off fixtures.phoneEmails +
- * fixtures.island.
+ * PhoneMock — the remote web app on a phone: status bar, a pending-approvals
+ * notification banner, app header, Focused/Other tabs, compact mail list and
+ * home indicator (global.css .phone-*). Tier-2 mock. Drives off
+ * fixtures.phoneEmails.
  *
  * Presentational only — pure props → JSX, no product imports, no window.electron.
  */
-import type { MockEmail, MockIslandItem, Priority } from './fixtures/fixtures'
-import { phoneEmails as defaultEmails, island as defaultIsland } from './fixtures/fixtures'
+import type { MockEmail, Priority } from './fixtures/fixtures'
+import { phoneEmails as defaultEmails } from './fixtures/fixtures'
 
 export interface PhoneMockProps {
   /** Compact mail rows. Defaults to fixtures.phoneEmails. */
   emails?: MockEmail[]
-  /** Island ping shown at the top. Defaults to fixtures.island. */
-  islandItem?: MockIslandItem
   /** Status-bar clock text (e.g. "9:41"). */
   clock?: string
   locale?: 'zh-CN' | 'en'
@@ -23,12 +20,13 @@ export interface PhoneMockProps {
 interface Chrome {
   focused: string
   other: string
-  digest: string
+  pending: string
+  count: string
 }
 
 const CHROME: Record<'zh-CN' | 'en', Chrome> = {
-  'zh-CN': { focused: '重点', other: '其他', digest: '1 封紧急 · 需要决策' },
-  en: { focused: 'Focused', other: 'Other', digest: '1 urgent · decision' },
+  'zh-CN': { focused: '重点', other: '其他', pending: '等你拍板 · 发送会议材料给 Maya', count: '2 项' },
+  en: { focused: 'Focused', other: 'Other', pending: 'Needs you · send the meeting pack to Maya', count: '2' },
 }
 
 /** Map fixture priority → the .ppip modifier class (low → norm styling). */
@@ -69,7 +67,6 @@ function PhoneRow({ email }: { email: MockEmail }) {
 
 export default function PhoneMock({
   emails = defaultEmails,
-  islandItem = defaultIsland,
   clock = '9:41',
   locale = 'zh-CN',
 }: PhoneMockProps) {
@@ -81,18 +78,18 @@ export default function PhoneMock({
         <span>{clock}</span>
         <span className="r">5G ▪ ▪▪</span>
       </div>
-      {/* Live-activity banner — backed by the critical islandItem ping. */}
-      <div className="phone-island" title={islandItem.title}>
+      {/* Notification banner — approvals waiting on the owner. */}
+      <div className="phone-island">
         <div className="pa">
           <Star size={14} />
         </div>
         <div className="pb">
           <div className="pe">MailAgent</div>
-          <div className="pt">{t.digest}</div>
+          <div className="pt">{t.pending}</div>
         </div>
         <span className="live">
           <span className="d" />
-          LIVE
+          {t.count}
         </span>
       </div>
       <div className="phone-head">

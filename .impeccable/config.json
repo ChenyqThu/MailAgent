@@ -20,6 +20,15 @@
         ],
         "createdAt": "2026-08-20T01:12:00.612Z",
         "reason": "既有生产样式（动效批产物，项目自有 motion 纪律管辖）；本 session 未编辑该文件，finding 由 mockup 只读 import 引出"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "site/src/styles/global.css"
+        ],
+        "createdAt": "2026-09-23T05:09:59.646Z",
+        "reason": "Claude: frontend/DESIGN.md specifies a 3px left edge for selected list/nav rows; .mrow.sel and .rep-card.sel in the landing mocks mirror that product selection marker"
       }
     ]
   }

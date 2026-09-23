@@ -128,7 +128,7 @@ export const aiFields: MockAIFields = {
   fromName: 'Sentry',
   fromDomain: 'sentry.io',
   date: '2026/05/29 · 14:08',
-  model: 'claude-sonnet-4-6',
+  model: 'claude-sonnet-5',
   reviewed: true,
   summary:
     'webhook 进程掉线导致上游 502，你是本次 oncall。建议给 update 调用加指数退避（3→9→27s）并重启进程。',
@@ -137,29 +137,6 @@ export const aiFields: MockAIFields = {
   priorityLabel: 'Critical',
   action: 'Reply Needed',
   category: '系统告警',
-}
-
-/** Ping Island live-activity payload. */
-export interface MockIslandItem {
-  avatarInitials: string
-  avatarColor: string
-  priority: Priority
-  priorityLabel: string
-  sender: string
-  title: string
-  subtitle: string
-  actions: string[]
-}
-
-export const island: MockIslandItem = {
-  avatarInitials: 'AR',
-  avatarColor: 'rgb(248 138 125)',
-  priority: 'crit',
-  priorityLabel: 'CRITICAL',
-  sender: 'Alex Rivera · northwind.io',
-  title: 'Re: 多区域部署 — 关于 rate limit',
-  subtitle: '需要决策 · 建议给 webhook 加指数退避，并三端统一新用户引导。',
-  actions: ['打开', '稍后', '归档'],
 }
 
 /** Report list + selected report detail (/agents · daily digest). */
@@ -220,7 +197,7 @@ export const reportCards: MockReportCard[] = [
 
 export const reportDetail: MockReportDetail = {
   cadenceLabel: '日报',
-  model: 'claude-sonnet-4-6',
+  model: 'claude-sonnet-5',
   title: '邮件日报',
   dateRange: '2026年6月1日 · 过去 24 小时',
   overview:
@@ -234,7 +211,7 @@ export const reportDetail: MockReportDetail = {
   ],
 }
 
-/** Custom AI / KOS chat transcript. */
+/** AI chat transcript: a matter-scoped question, two tool calls, a cited answer. */
 export interface MockChatTurn {
   role: 'you' | 'ai'
   text?: string
@@ -245,48 +222,24 @@ export interface MockChatTurn {
 }
 
 export const chat: MockChatTurn[] = [
-  { role: 'you', text: '这个供应商以前的合同条款是什么？' },
+  { role: 'you', text: '@M-042 这次 Northwind 的报价，和上一版差在哪？' },
   {
     role: 'ai',
-    tool: 'KOS → query · find_trajectory · sources/email/*',
-    answer: '上一版合同（2025-11）约定 24 个月、按年付，附 SLA 99.5%。',
-    source: '来源：3 封邮件 ↗',
+    tool: '邮件搜索 · 12 封 → 读取资料库 · 报价对比.md',
+    answer: '年付折扣从 12% 降到 8%，SLA 从 99.5% 提到 99.9%；差异集中在第 3 节服务条款，其余条款未变。',
+    source: '来源：2 封邮件 · 1 份资料 ↗',
   },
 ]
 
-/** LLM dashboard stats. */
-export interface MockDashboard {
-  range: '7d' | '30d' | '90d'
-  cards: { key: string; value: string; sub: string; accent?: boolean }[]
-  status: { total: number; success: number; pending: number }
-  cacheHitRate: number
-  cacheTarget: number
-  cacheWrite: string
-  cacheRead: string
-}
-
-export const dashboard: MockDashboard = {
-  range: '7d',
-  cards: [
-    { key: 'Processed · 7d', value: '5,904', sub: '5,894 success', accent: true },
-    { key: 'Input tokens', value: '1.11M', sub: '1,110,396' },
-    { key: 'Output tokens', value: '415.8K', sub: '415,819' },
-    { key: 'Avg latency', value: '42.5s', sub: 'over 5,894 ok' },
-  ],
-  status: { total: 5904, success: 5894, pending: 10 },
-  cacheHitRate: 5.0,
-  cacheTarget: 70,
-  cacheWrite: '856.1K',
-  cacheRead: '3.16M',
-}
-
-/** Top-line stats band (Observability). */
-export const observabilityStats = [
-  { value: '5,904', key: 'Processed · 7d', sub: '近 7 天处理量' },
-  { value: '1.11M', key: 'Input tokens', sub: '输入 token' },
-  { value: '42.5s', key: 'Avg latency', sub: '平均耗时 / 封' },
-  { value: '9,311', key: 'Synced mail', sub: '同步邮件总数' },
+export const chatEn: MockChatTurn[] = [
+  { role: 'you', text: '@M-042 How does the new Northwind quote differ from the last one?' },
+  {
+    role: 'ai',
+    tool: 'Mail search · 12 emails → Library read · quote-comparison.md',
+    answer: 'The annual discount drops from 12% to 8%, and the SLA rises from 99.5% to 99.9%. The changes sit in section 3; the other terms are unchanged.',
+    source: 'Sources: 2 emails · 1 file ↗',
+  },
 ]
 
-/** Mobile phone inbox (subset of emails + island ping). */
+/** Mobile phone inbox (subset of emails). */
 export const phoneEmails: MockEmail[] = emails.slice(0, 3)

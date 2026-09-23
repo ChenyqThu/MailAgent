@@ -23,7 +23,7 @@ import { glob } from 'astro/loaders'
 // A landing-section meta item: an icon-less label/value used in hero meta etc.
 const metaItem = z.object({ text: z.string() }).loose()
 
-// A generic "card" used by features/strip/proof-points/etc.
+// A kicker/title/body card — the download block's install steps.
 const card = z
   .object({
     kicker: z.string().optional(),
@@ -39,6 +39,20 @@ const fItem = z
     body: z.string().optional(),
   })
   .loose()
+
+// A numbered feature block: eyebrow · title (+ highlighted phrase) · lede ·
+// feature points · optional cards (the 连接 block's integration tiles).
+const section = z
+  .object({
+    eyebrow: z.string().optional(),
+    title: z.string().optional(),
+    titleEm: z.string().optional(),
+    lede: z.string().optional(),
+    points: z.array(fItem).optional(),
+    cards: z.array(fItem).optional(),
+  })
+  .loose()
+  .optional()
 
 const landingSchema = z
   .object({
@@ -84,109 +98,19 @@ const landingSchema = z
       .loose()
       .optional(),
 
-    // FEATURES (AI Triage grid)
-    features: z
-      .object({
-        eyebrow: z.string().optional(),
-        title: z.string().optional(),
-        lede: z.string().optional(),
-        cards: z.array(card).optional(),
-      })
-      .loose()
-      .optional(),
-
-    // AI FIELDS (split)
-    aiFields: z
-      .object({
-        eyebrow: z.string().optional(),
-        title: z.string().optional(),
-        body: z.string().optional(),
-        points: z.array(fItem).optional(),
-      })
-      .loose()
-      .optional(),
-
-    // PING ISLAND
-    island: z
-      .object({
-        eyebrow: z.string().optional(),
-        title: z.string().optional(),
-        body: z.string().optional(),
-        points: z.array(fItem).optional(),
-      })
-      .loose()
-      .optional(),
-
-    // REPORT AGENT
-    report: z
-      .object({
-        eyebrow: z.string().optional(),
-        title: z.string().optional(),
-        titleEm: z.string().optional(),
-        lede: z.string().optional(),
-        points: z.array(fItem).optional(),
-      })
-      .loose()
-      .optional(),
-
-    // CUSTOM AI / KOS
-    customAI: z
-      .object({
-        eyebrow: z.string().optional(),
-        title: z.string().optional(),
-        body: z.string().optional(),
-        points: z.array(fItem).optional(),
-      })
-      .loose()
-      .optional(),
-
-    // AGENT DELIVERY (Skill Delivery API / MCP / CLI)
-    agentDelivery: z
-      .object({
-        eyebrow: z.string().optional(),
-        title: z.string().optional(),
-        body: z.string().optional(),
-        points: z.array(fItem).optional(),
-      })
-      .loose()
-      .optional(),
-
-    // PROVENANCE (anti-hallucination)
-    provenance: z
-      .object({
-        eyebrow: z.string().optional(),
-        title: z.string().optional(),
-        titleEm: z.string().optional(),
-        lede: z.string().optional(),
-        points: z.array(fItem).optional(),
-      })
-      .loose()
-      .optional(),
-
-    // OBSERVABILITY (LLM dashboard)
-    observability: z
-      .object({
-        eyebrow: z.string().optional(),
-        title: z.string().optional(),
-        titleEm: z.string().optional(),
-        lede: z.string().optional(),
-        stats: z
-          .array(z.object({ value: z.string(), key: z.string(), sub: z.string().optional() }).loose())
-          .optional(),
-      })
-      .loose()
-      .optional(),
-
-    // MOBILE
-    mobile: z
-      .object({
-        eyebrow: z.string().optional(),
-        title: z.string().optional(),
-        body: z.string().optional(),
-        chips: z.array(z.string()).optional(),
-      })
-      .loose()
-      .optional(),
+    // FEATURE SECTIONS — every numbered block (今日 / 分拣 / 事项 / 人与时间 /
+    // 资料库 / 团队 / 报告 / 对话 / 信任 / 连接) shares one shape; the page
+    // picks the layout, the YAML only carries copy.
+    today: section,
+    triage: section,
+    matters: section,
+    people: section,
+    library: section,
+    team: section,
+    reports: section,
+    chat: section,
+    trust: section,
+    connect: section,
 
     // DOWNLOAD
     download: z
@@ -195,6 +119,7 @@ const landingSchema = z
         title: z.string().optional(),
         body: z.string().optional(),
         ctaPrimary: z.string().optional(),
+        ctaWin: z.string().optional(),
         ctaGhost: z.string().optional(),
         steps: z.array(card).optional(),
         note: z.string().optional(),

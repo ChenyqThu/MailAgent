@@ -61,6 +61,18 @@
         "/private/tmp/claude-501/-Users-chenyuanquan-Documents-MailAgent/7b86b4a7-b304-419c-b7c7-98c8536112ab/scratchpad/tabws"
       ],
       "port": 8199
+    },
+    {
+      "name": "site-dev",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "-C",
+        "site",
+        "dev",
+        "--port",
+        "4321"
+      ],
+      "port": 4321
     }
   ]
 }

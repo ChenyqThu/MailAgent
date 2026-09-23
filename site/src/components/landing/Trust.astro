@@ -1,0 +1,60 @@
+---
+/**
+ * 边界与信任 — section head, then the proof layout: an approval card
+ * (ApprovalMock) on the left, numbered guarantees on the right.
+ */
+import ApprovalMock from '../mock/ApprovalMock.tsx'
+import type { Locale } from '../../lib/i18n'
+import { splitTitle } from './splitTitle'
+
+interface Point {
+  title?: string
+  body?: string
+}
+interface Props {
+  num?: string
+  eyebrow?: string
+  title?: string
+  titleEm?: string
+  lede?: string
+  points?: Point[]
+  locale: Locale
+}
+
+const { num, eyebrow, title, titleEm, lede, points = [], locale } = Astro.props
+const t = splitTitle(title, titleEm)
+---
+
+<section class="section" id="trust">
+  <div class="wrap">
+    <div class="s-head reveal">
+      {
+        eyebrow && (
+          <span class="eyebrow">
+            {num && <span class="num">{num}</span>} {eyebrow}
+          </span>
+        )
+      }
+      {title && <h2 class="s-title">{t.before}{t.em && <em>{t.em}</em>}{t.after}</h2>}
+      {lede && <p class="s-lede">{lede}</p>}
+    </div>
+    <div class="proof">
+      <div class="reveal">
+        <ApprovalMock client:visible locale={locale} />
+      </div>
+      <div class="proof-points reveal" data-d="1">
+        {
+          points.map((p, i) => (
+            <div class="pp">
+              <span class="n">{String(i + 1).padStart(2, '0')}</span>
+              <div>
+                {p.title && <b>{p.title}</b>}
+                {p.body && <p>{p.body}</p>}
+              </div>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </div>
+</section>

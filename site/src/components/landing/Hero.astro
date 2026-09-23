@@ -31,7 +31,7 @@ interface Props {
 
 const {
   pill,
-  pillTag = 'v1 · macOS',
+  pillTag,
   title = 'MailAgent',
   titleEm,
   sub,
@@ -93,7 +93,7 @@ const inboxAddress = locale === 'en' ? 'MailAgent — Inbox' : 'MailAgent — �
       }
       {
         ctaGhost && (
-          <a class="btn btn--ghost btn--lg" href="#features">
+          <a class="btn btn--ghost btn--lg" href="#today">
             <Icon name="arrowRight" />
             <span>{ctaGhost}</span>
           </a>

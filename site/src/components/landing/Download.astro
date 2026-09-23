@@ -1,8 +1,9 @@
 ---
 /**
- * Download — centered .dl block: eyebrow 09 · h2 · lede · two CTAs (real GitHub
- * Release + source) · 3-step install grid · note. Buttons link to the actual
- * MailAgent GitHub Releases / repo (the reference's real URLs).
+ * Download — centered .dl block: eyebrow · h2 · lede · CTAs (macOS and Windows
+ * installers on the latest GitHub Release, plus the source) · 3-step install
+ * grid · note. Installer names carry the version, so both platform buttons
+ * land on the latest release page rather than a fixed asset URL.
  */
 import Icon from './Icon.astro'
 
@@ -16,21 +17,22 @@ interface Props {
   title?: string
   body?: string
   ctaPrimary?: string
+  ctaWin?: string
   ctaGhost?: string
   steps?: Step[]
   note?: string
 }
 
-const { eyebrow, title, body, ctaPrimary, ctaGhost, steps = [], note } = Astro.props
+const { eyebrow, title, body, ctaPrimary, ctaWin, ctaGhost, steps = [], note } = Astro.props
 
-const RELEASES = 'https://github.com/ChenyqThu/MailAgent/releases'
+const RELEASES = 'https://github.com/ChenyqThu/MailAgent/releases/latest'
 const REPO = 'https://github.com/ChenyqThu/MailAgent/'
 ---
 
 <section class="section" id="download">
   <div class="wrap">
     <div class="dl reveal">
-      {eyebrow && <span class="eyebrow" style="justify-content:center"><span class="num">09</span> {eyebrow}</span>}
+      {eyebrow && <span class="eyebrow" style="justify-content:center">{eyebrow}</span>}
       {title && <h2 style="margin-top:18px">{title}</h2>}
       {body && <p>{body}</p>}
 
@@ -40,6 +42,14 @@ const REPO = 'https://github.com/ChenyqThu/MailAgent/'
             <a class="btn btn--primary btn--lg" href={RELEASES} target="_blank" rel="noopener">
               <Icon name="apple" />
               <span>{ctaPrimary}</span>
+            </a>
+          )
+        }
+        {
+          ctaWin && (
+            <a class="btn btn--primary btn--lg" href={RELEASES} target="_blank" rel="noopener">
+              <Icon name="windows" />
+              <span>{ctaWin}</span>
             </a>
           )
         }

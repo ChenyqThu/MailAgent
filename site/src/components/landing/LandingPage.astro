@@ -1,0 +1,147 @@
+---
+/**
+ * The marketing landing, composed once for both locales: `/` (zh-CN) and
+ * `/en/` each render this with their locale. Copy comes from the per-locale
+ * landing YAML (src/content/landing/<locale>.yaml); product visuals are React
+ * mock islands (client:visible). Section numbers live here, not in the
+ * components, so reordering the page is a one-file change.
+ */
+import { getEntry } from 'astro:content'
+import Landing from '../../layouts/Landing.astro'
+import Nav from './Nav.astro'
+import Hero from './Hero.astro'
+import Strip from './Strip.astro'
+import Showcase from './Showcase.astro'
+import Matters from './Matters.astro'
+import Trust from './Trust.astro'
+import Connect from './Connect.astro'
+import Download from './Download.astro'
+import Faq from './Faq.astro'
+import Footer from './Footer.astro'
+import RevealScript from './RevealScript.astro'
+import TodayMock from '../mock/TodayMock.tsx'
+import AIFieldsMock from '../mock/AIFieldsMock.tsx'
+import ContactMock from '../mock/ContactMock.tsx'
+import LibraryMock from '../mock/LibraryMock.tsx'
+import TeamMock from '../mock/TeamMock.tsx'
+import ReportMock from '../mock/ReportMock.tsx'
+import ChatMock from '../mock/ChatMock.tsx'
+import type { Locale } from '../../lib/i18n'
+
+interface Props {
+  locale: Locale
+}
+
+const { locale } = Astro.props
+const entry = await getEntry('landing', locale)
+const d = entry?.data ?? {}
+const en = locale === 'en'
+
+// Window address-bar labels — product chrome, so kept beside the layout
+// rather than in the marketing copy.
+const addr = {
+  today: en ? 'MailAgent — Today · Sep 22' : 'MailAgent — 今天 · 9月22日',
+  triage: en ? 'AI fields · reviewed' : 'AI 字段 · 已审阅',
+  people: en ? 'MailAgent — Contacts · Maya Lin' : 'MailAgent — 通讯录 · Maya Lin',
+  library: en ? 'MailAgent — Library' : 'MailAgent — 资料库 · Library',
+  team: en ? 'MailAgent — Team · Meeting prep' : 'MailAgent — 团队 · 会前准备',
+  reports: en ? 'MailAgent — Reports' : 'MailAgent — 报告 · Reports',
+  chat: en ? 'MailAgent — AI Chat' : 'MailAgent — AI 对话',
+}
+---
+
+<Landing title={d.seo?.title ?? 'MailAgent'} description={d.seo?.description ?? ''}>
+  <Nav links={d.nav?.links ?? []} download={d.nav?.download} />
+
+  <Hero
+    pill={d.hero?.pill}
+    pillTag={d.hero?.pillTag}
+    title={d.hero?.title}
+    titleEm={d.hero?.titleEm}
+    sub={d.hero?.sub}
+    ctaPrimary={d.hero?.ctaPrimary}
+    ctaGhost={d.hero?.ctaGhost}
+    meta={d.hero?.meta ?? []}
+    locale={locale}
+  />
+
+  <Strip label={d.strip?.label} items={d.strip?.items ?? []} />
+
+  <Showcase id="today" num="01" {...d.today} icons={['shieldCheck', 'inbox', 'bell']} address={addr.today}>
+    <TodayMock client:visible locale={locale} />
+  </Showcase>
+
+  <Showcase
+    id="triage"
+    num="02"
+    {...d.triage}
+    icons={['categorize', 'draft', 'search']}
+    address={addr.triage}
+    reverse
+  >
+    <AIFieldsMock client:visible variant="panel" animateCaret locale={locale} />
+  </Showcase>
+
+  <Matters num="03" {...d.matters} locale={locale} />
+
+  <Showcase id="people" num="04" {...d.people} icons={['quote', 'org', 'calendar']} address={addr.people}>
+    <ContactMock client:visible locale={locale} />
+  </Showcase>
+
+  <Showcase
+    id="library"
+    num="05"
+    {...d.library}
+    icons={['folder', 'history', 'lock']}
+    address={addr.library}
+    reverse
+  >
+    <LibraryMock client:visible locale={locale} />
+  </Showcase>
+
+  <Showcase id="team" num="06" {...d.team} icons={['bolt', 'cube', 'record', 'users']} address={addr.team}>
+    <TeamMock client:visible locale={locale} />
+  </Showcase>
+
+  <Showcase
+    id="reports"
+    num="07"
+    {...d.reports}
+    icons={['bars', 'suggest', 'calendar']}
+    address={addr.reports}
+    reverse
+  >
+    <ReportMock client:visible selectedId="r1" locale={locale} />
+  </Showcase>
+
+  <Showcase id="chat" num="08" {...d.chat} icons={['cpu', 'at', 'layers']} address={addr.chat}>
+    <ChatMock client:visible locale={locale} />
+  </Showcase>
+
+  <Trust num="09" {...d.trust} locale={locale} />
+
+  <Connect num="10" {...d.connect} locale={locale} />
+
+  <Download
+    eyebrow={d.download?.eyebrow}
+    title={d.download?.title}
+    body={d.download?.body}
+    ctaPrimary={d.download?.ctaPrimary}
+    ctaWin={d.download?.ctaWin}
+    ctaGhost={d.download?.ctaGhost}
+    steps={d.download?.steps ?? []}
+    note={d.download?.note}
+  />
+
+  <Faq eyebrow={d.faq?.eyebrow} title={d.faq?.title} items={d.faq?.items ?? []} />
+
+  <Footer
+    tagline={d.footer?.tagline}
+    cols={d.footer?.cols ?? []}
+    copyright={d.footer?.copyright}
+    built={d.footer?.built}
+    homeHref="#top"
+  />
+
+  <RevealScript />
+</Landing>

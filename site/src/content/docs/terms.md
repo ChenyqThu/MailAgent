@@ -5,7 +5,7 @@ description: 使用 MailAgent 桌面 App 与配套服务前需要了解的条款
 
 ## 关于本项目
 
-MailAgent 是一个开源个人项目（[MIT License](https://github.com/ChenyqThu/MailAgent/blob/main/LICENSE)），由个人开发者维护，不代表任何公司或商业实体运营。使用本软件即表示你了解并接受这一点。
+MailAgent 是一个开源个人项目（[GNU GPL v3.0](https://github.com/ChenyqThu/MailAgent/blob/main/LICENSE)），由个人开发者维护，不代表任何公司或商业实体运营。使用本软件即表示你了解并接受这一点。
 
 ## 软件按现状提供
 
@@ -23,7 +23,7 @@ MailAgent 提供的「连接 Notion」一键授权功能依赖一个部署在 Ma
 
 ## 知识产权
 
-MailAgent 的源代码以 [MIT License](https://github.com/ChenyqThu/MailAgent/blob/main/LICENSE) 开源，具体权利与限制以该协议原文为准。
+MailAgent 的源代码以 [GNU General Public License v3.0](https://github.com/ChenyqThu/MailAgent/blob/main/LICENSE) 开源。你可以自由使用、修改和再分发；分发修改后的版本时，须以同一协议公开源代码。具体权利与限制以协议原文为准。
 
 ## 条款变更
 

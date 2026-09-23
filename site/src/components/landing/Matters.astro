@@ -1,0 +1,71 @@
+---
+/**
+ * 事项 — the widest block on the page: section head, then the matter detail
+ * (MatterMock) in a full-width window, then three short points in a row. The
+ * matter is the product's first-class work object, so it gets the room.
+ */
+import Icon from './Icon.astro'
+import MatterMock from '../mock/MatterMock.tsx'
+import type { IconName } from './icons'
+import type { Locale } from '../../lib/i18n'
+import { splitTitle } from './splitTitle'
+
+interface Point {
+  title?: string
+  body?: string
+}
+interface Props {
+  num?: string
+  eyebrow?: string
+  title?: string
+  titleEm?: string
+  lede?: string
+  points?: Point[]
+  locale: Locale
+}
+
+const { num, eyebrow, title, titleEm, lede, points = [], locale } = Astro.props
+const t = splitTitle(title, titleEm)
+const icons: IconName[] = ['listCheck', 'target', 'timeline']
+const address = locale === 'en' ? 'MailAgent — Matters · M-042' : 'MailAgent — 事项 · M-042'
+---
+
+<section class="section" id="matters">
+  <div class="wrap">
+    <div class="s-head reveal">
+      {
+        eyebrow && (
+          <span class="eyebrow">
+            {num && <span class="num">{num}</span>} {eyebrow}
+          </span>
+        )
+      }
+      {title && <h2 class="s-title">{t.before}{t.em && <em>{t.em}</em>}{t.after}</h2>}
+      {lede && <p class="s-lede">{lede}</p>}
+    </div>
+
+    <div class="reveal" data-d="1">
+      <div class="window">
+        <div class="window-bar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="addr">{address}</div>
+        </div>
+        <MatterMock client:visible locale={locale} />
+      </div>
+    </div>
+
+    {
+      points.length > 0 && (
+        <div class="trio reveal" data-d="2">
+          {points.map((p, i) => (
+            <div class="trio-item">
+              <span class="fi"><Icon name={icons[i] ?? 'check'} size={14} /></span>
+              {p.title && <b>{p.title}</b>}
+              {p.body && <p>{p.body}</p>}
+            </div>
+          ))}
+        </div>
+      )
+    }
+  </div>
+</section>

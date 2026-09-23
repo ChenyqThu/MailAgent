@@ -1,0 +1,325 @@
+/* ApprovalMock — in-chat approval card + per-tool tiers. Colors: tokens.css only.
+   Layout keys off the mock's own width (container `apm`), not the viewport. */
+
+.apm {
+  container: apm / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  color: rgb(var(--ink-fg));
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+}
+.apm * {
+  box-sizing: border-box;
+}
+.apm p,
+.apm ul {
+  margin: 0;
+  padding: 0;
+}
+.apm ul {
+  list-style: none;
+}
+
+/* ── approval card ──────────────────────────────────────────────────── */
+.apm-card {
+  padding: 14px 16px 15px;
+  border-radius: 12px;
+  border: 1px solid rgb(var(--c-ai) / 0.32);
+  background: rgb(var(--ink-2));
+  box-shadow: var(--card-shadow);
+}
+.apm-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgb(var(--c-ai));
+}
+.apm-status-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgb(var(--ink-fg));
+}
+.apm-status-ago {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: rgb(var(--ink-fg-3));
+}
+
+.apm-tool {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 11px;
+}
+.apm-tool-ic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: rgb(var(--c-accent));
+  background: rgb(var(--c-accent) / 0.1);
+  box-shadow: inset 0 0 0 1px rgb(var(--c-accent) / 0.28);
+}
+.apm-tool-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.apm-tool-name {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+.apm-tool-id {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: rgb(var(--ink-fg-3));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.apm-pip {
+  flex-shrink: 0;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgb(var(--c-accent) / 0.32);
+  background: rgb(var(--c-accent) / 0.08);
+  font-size: 11px;
+  line-height: 19px;
+  color: rgb(var(--c-accent));
+  white-space: nowrap;
+}
+
+.apm-lead {
+  margin-top: 10px;
+  font-size: 12px;
+  color: rgb(var(--ink-fg-2));
+}
+
+.apm-facts {
+  margin-top: 8px;
+  padding: 8px 11px;
+  border-radius: 9px;
+  border: 1px solid rgb(var(--ink-border-soft));
+  background: rgb(var(--ink-0) / 0.55);
+}
+.apm-fact {
+  display: grid;
+  grid-template-columns: 5.2em minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+.apm-fact.body {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid rgb(var(--ink-border-soft));
+}
+.apm-fact-k {
+  font-size: 11px;
+  color: rgb(var(--ink-fg-3));
+  white-space: nowrap;
+}
+.apm-fact-v {
+  min-width: 0;
+  font-size: 12px;
+  color: rgb(var(--ink-fg));
+  overflow-wrap: anywhere;
+}
+.apm-fact:first-child .apm-fact-v {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.apm-body-line {
+  display: block;
+  color: rgb(var(--ink-fg-1));
+  line-height: 1.6;
+}
+
+.apm-hint {
+  margin-top: 7px;
+  font-size: 11px;
+  color: rgb(var(--ink-fg-3));
+}
+
+.apm-remember {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--ink-border-soft));
+  background: rgb(var(--ink-1) / 0.6);
+  font-size: 12px;
+  color: rgb(var(--ink-fg-2));
+}
+.apm-check {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  margin-top: 3px;
+  border-radius: 4px;
+  border: 1.5px solid rgb(var(--ink-fg-3));
+}
+
+.apm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+}
+.apm-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 13px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--ink-border));
+  background: rgb(var(--ink-3));
+  font-size: 12px;
+  font-weight: 500;
+  color: rgb(var(--ink-fg-1));
+  white-space: nowrap;
+}
+.apm-btn.primary {
+  border-color: rgb(var(--c-accent));
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
+}
+.apm-btn.ghost {
+  margin-left: auto;
+  border-color: transparent;
+  background: transparent;
+  color: rgb(var(--ink-fg-2));
+}
+
+/* ── per-tool tiers ─────────────────────────────────────────────────── */
+.apm-tiers {
+  padding: 12px 14px 8px;
+  border-radius: 12px;
+  border: 1px solid rgb(var(--ink-border));
+  background: rgb(var(--ink-1));
+}
+.apm-tiers-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgb(var(--ink-border-soft));
+  font-size: 12px;
+  font-weight: 600;
+  color: rgb(var(--ink-fg));
+}
+.apm-tiers-head svg {
+  color: rgb(var(--ink-fg-2));
+}
+.apm-tier-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+}
+.apm-tier-row + .apm-tier-row {
+  border-top: 1px solid rgb(var(--ink-border-soft) / 0.6);
+}
+.apm-tier-tool {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.apm-tier-name {
+  font-size: 12.5px;
+  color: rgb(var(--ink-fg));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.apm-tier-id {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: rgb(var(--ink-fg-3));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.apm-seg {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--ink-border));
+  background: rgb(var(--ink-0) / 0.5);
+}
+.apm-seg-opt {
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 18px;
+  color: rgb(var(--ink-fg-3));
+  white-space: nowrap;
+}
+.apm-seg-opt.on {
+  background: rgb(var(--ink-4));
+  box-shadow: inset 0 0 0 1px rgb(var(--ink-border));
+  font-weight: 500;
+}
+.apm-seg-opt.on.auto {
+  color: rgb(var(--c-ok));
+}
+.apm-seg-opt.on.ask {
+  color: rgb(var(--c-accent));
+}
+.apm-seg-opt.on.deny {
+  color: rgb(var(--c-fail));
+}
+.apm-fixed {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 2px 10px;
+  border-radius: 8px;
+  border: 1px dashed rgb(var(--ink-border));
+  font-size: 11px;
+  line-height: 18px;
+  color: rgb(var(--ink-fg-1));
+  white-space: nowrap;
+}
+.apm-fixed svg {
+  color: rgb(var(--c-accent));
+}
+
+/* ── container breakpoints ──────────────────────────────────────────── */
+@container apm (max-width: 419px) {
+  .apm-card {
+    padding: 12px 13px 13px;
+  }
+  .apm-tiers {
+    padding: 11px 12px 7px;
+  }
+  .apm-seg {
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .apm-seg-opt:not(.on) {
+    display: none;
+  }
+  .apm-fact {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
