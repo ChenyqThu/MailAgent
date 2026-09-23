@@ -35,7 +35,12 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Iterable, Iterator, Optional
 
-from src.agent_config.templates import AGENT_TEMPLATE, LEGACY_AGENT_TEMPLATE_P0, SEED_TEMPLATES
+from src.agent_config.templates import (
+    AGENT_TEMPLATE,
+    LEGACY_AGENT_TEMPLATE_P0,
+    LEGACY_AGENT_TEMPLATE_P1,
+    SEED_TEMPLATES,
+)
 
 # ---------------------------------------------------------------------------
 # 概念常量
@@ -701,39 +706,27 @@ class AgentConfigStore:
                 (now_iso,),
             )
 
-        # P0 plan tool — templates are otherwise seed-once. Upgrade only an untouched AGENT doc:
-        # exact old-default equality is the guard, so any user-edited content remains authoritative.
+        # Templates are otherwise seed-once. Upgrade only an untouched AGENT doc: exact
+        # old-default equality is the guard, so any user-edited content remains authoritative.
         # The UPDATE condition also makes this idempotent across every subsequent store open.
-        old_hash = _hash(LEGACY_AGENT_TEMPLATE_P0)
         new_hash = _hash(AGENT_TEMPLATE)
-        now = _now()
-        cur = conn.execute(
-            "UPDATE agent_profile_docs SET content=?, content_hash=?, updated_by=?, updated_at=? "
-            "WHERE doc_name='agent' AND content=?",
-            (
-                AGENT_TEMPLATE,
-                new_hash,
-                "migration:p0-plan-tool",
-                now,
-                LEGACY_AGENT_TEMPLATE_P0,
-            ),
-        )
-        if cur.rowcount > 0:
-            conn.execute(
-                "INSERT INTO agent_profile_history "
-                "(doc_name, old_hash, new_hash, content_snapshot, changed_by, "
-                " session_id, message_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
-                (
-                    "agent",
-                    old_hash,
-                    new_hash,
-                    AGENT_TEMPLATE,
-                    "migration:p0-plan-tool",
-                    None,
-                    None,
-                    now,
-                ),
+        for legacy, changed_by in (
+            (LEGACY_AGENT_TEMPLATE_P0, "migration:p0-plan-tool"),
+            (LEGACY_AGENT_TEMPLATE_P1, "migration:p1-agent-trim"),
+        ):
+            now = _now()
+            cur = conn.execute(
+                "UPDATE agent_profile_docs SET content=?, content_hash=?, updated_by=?, updated_at=? "
+                "WHERE doc_name='agent' AND content=?",
+                (AGENT_TEMPLATE, new_hash, changed_by, now, legacy),
             )
+            if cur.rowcount > 0:
+                conn.execute(
+                    "INSERT INTO agent_profile_history "
+                    "(doc_name, old_hash, new_hash, content_snapshot, changed_by, "
+                    " session_id, message_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                    ("agent", _hash(legacy), new_hash, AGENT_TEMPLATE, changed_by, None, None, now),
+                )
 
     # ======================================================================
     # Standing Context 文档（4 个可编辑：soul/agent/rules/user）

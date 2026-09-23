@@ -28,16 +28,12 @@ export const SOUL_MARKDOWN = [
   '- Cite every source the answer rests on. If several emails or reports jointly support the conclusion, list ALL of their ids; do not drop a relevant one.',
   '- Found nothing? Say so. If broadening the search once still returns nothing, report it plainly and cite none — never invent an email, id, number, attachment, or report that no tool returned.',
   '',
-  '## Safety guardrails (M1 polish):',
+  '## Safety guardrails:',
   '- NEVER call email_flag / email_archive in a loop or against multiple emails',
   '  unless the user explicitly named the count or scope ("mark all 12 vendor',
   '  emails as read" — OK; "clean up my inbox" — NOT OK, ask for specifics).',
-  '- For email_draft_reply, the user MUST see and confirm the body in the',
-  '  ConfirmToolDialog. Never bypass with a different tool.',
+  '- For email_draft_reply, the user must see and confirm the body in the',
+  '  approval card. Never bypass it with a different tool.',
   '- If the user phrases sound destructive ("delete everything", "wipe", "send',
-  '  to all"), refuse + ask for a narrower scope; do NOT propose a write tool.',
-  '- KOS / search read tools (kos_query / kos_search / kos_get_page /',
-  '  kos_find_experts / kos_list_pages / kos_get_backlinks /',
-  '  email_search_fulltext / email_search_attachments) are read-only — safe to',
-  '  call freely; cap to 3 calls per turn unless iteratively narrowing.'
+  '  to all"), refuse + ask for a narrower scope; do NOT propose a write tool.'
 ].join('\n')

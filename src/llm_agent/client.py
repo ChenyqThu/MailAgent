@@ -438,7 +438,9 @@ class LLMClient:
                 max_tokens=provider_routing.clamp_max_tokens(cfg.llm_max_tokens, route),
                 system=system_blocks,
                 tools=[tool_schema],
-                tool_choice={"type": "tool", "name": tool_name},
+                tool_choice=provider_routing.anthropic_tool_choice(
+                    route.model_id if route else model, tool_name
+                ),
                 messages=[{"role": "user", "content": user_content}],
             )
         except Exception as e:
@@ -738,7 +740,7 @@ class LLMClient:
         for it in range(max_iter):
             # 最后一轮强制收尾（必产 final_tool），否则 auto 让模型自由调工具/收尾。
             tool_choice: Dict[str, Any] = (
-                {"type": "tool", "name": final_tool}
+                provider_routing.anthropic_tool_choice(wire_model, final_tool)
                 if it == max_iter - 1
                 else {"type": "auto"}
             )

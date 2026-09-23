@@ -80,6 +80,18 @@ def test_build_user_derives_utc8_date():
     assert "2026-04-24" in msg
 
 
+def test_build_user_includes_age_hours():
+    import json
+
+    p = _bare_processor()
+    sent = datetime.now(timezone.utc) - timedelta(hours=50, minutes=10)
+    payload = json.loads(p._build_user(_fake_email(date=sent)).split("\n\n", 1)[1])
+    assert payload["age_hours"] == 50
+
+    payload = json.loads(p._build_user(_fake_email(date=None)).split("\n\n", 1)[1])
+    assert payload["age_hours"] is None
+
+
 def test_build_user_truncates_body(monkeypatch):
     from src.llm_agent import processor as mod
     monkeypatch.setattr(mod.cfg, "llm_body_max_chars", 50)
@@ -987,3 +999,53 @@ def test_parse_strips_drift_markers_from_ai_summary():
     )
     labels = p._parse(result, "收件箱")
     assert labels.ai_summary == "摘要正文。"
+
+
+def test_process_email_fills_daily_digest_date_from_email_date(monkeypatch):
+    """daily_digest_date 由代码按邮件日期换算，不采信模型给的值。"""
+    import src.llm_agent.processor as proc_mod
+    from src.llm_agent.preprocess_config import PreprocessConfig
+
+    class _FakeClient:
+        async def classify(self, **kwargs):
+            return LLMResult(
+                tool_input={
+                    "ai_summary": "s", "category": "💼 产品管理",
+                    "language": "中文", "sender_priority": "核心团队",
+                    "action_required": False, "action_type": "仅供参考",
+                    "priority": "🟢 一般", "daily_digest_date": "2099-01-01",
+                },
+                input_tokens=1, output_tokens=1,
+                cache_creation_input_tokens=0, cache_read_input_tokens=0,
+                model="test-model", latency_ms=1,
+            )
+
+    class _FakePrompts:
+        def get_for_mailbox(self, mailbox):
+            return ""
+
+    class _FakeContext:
+        async def get_markdown(self):
+            return ""
+
+    p = _bare_processor()
+    p._client = _FakeClient()
+    p._prompts = _FakePrompts()
+    p._context = _FakeContext()
+    monkeypatch.setattr(
+        "src.agent_config.task_context.build_task_identity_context",
+        lambda **kw: "",
+    )
+    monkeypatch.setattr(
+        proc_mod, "get_preprocess_config",
+        lambda _path: PreprocessConfig(model="", context_docs=None),
+    )
+
+    # PDT 2026-04-23 22:30 → 东八区 2026-04-24
+    labels = asyncio.run(p.process_email(_fake_email()))
+    assert labels.daily_digest_date == "2026-04-24"
+
+    # 没有邮件日期时留空：模型给的日期只能是猜的
+    labels = asyncio.run(p.process_email(_fake_email(date=None)))
+    assert labels.daily_digest_date == ""
+

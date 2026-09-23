@@ -143,7 +143,7 @@ EMAIL_TOOL_SCHEMA = {
             "ai_summary": {
                 "type": "string",
                 "description": (
-                    "**必须用简体中文（mainland 用法）写 2-4 句摘要**，即使原邮件是英文也要总结成中文。"
+                    "**必须用简体中文（mainland 用法）写摘要**（句数按 mailbox 规则），即使原邮件是英文也要总结成中文。"
                     "收件箱：这封邮件说了什么 / 我需要做什么；"
                     "发件箱：我请求了什么 / 期望的响应是什么。"
                     "URL / 邮件地址 / 代码标识符 / 产品名 / 人名保留 verbatim 不音译。最多 2000 字。"
@@ -234,9 +234,7 @@ EMAIL_TOOL_SCHEMA = {
             "daily_digest_date": {
                 "type": "string",
                 "description": (
-                    "邮件所属 Daily Digest 日期（YYYY-MM-DD，固定 UTC+8 切割线）。"
-                    "脚本将按此日期查 Daily Digest 页面建立 relation。"
-                    "不确定则留空字符串。"
+                    "由程序按邮件日期填写，留空字符串即可。"
                 ),
             },
             "related_project": {
@@ -277,10 +275,8 @@ EMAIL_TOOL_SCHEMA = {
                 "type": "array",
                 "maxItems": 3,
                 "description": (
-                    "灵动岛 Ping Island 动态建议按钮（Phase 2）— 根据邮件内容给 1-3 个最针对性的处理"
-                    "建议替代默认 5 按钮 fallback。LLM 不确定时（每个候选 confidence < 0.5 或没有合"
-                    "适候选）留空数组 []，plugin 端会退回默认 5 按钮（open_notion / create_draft "
-                    "/ mark_done / snooze_1h / open_mail）。\n\n"
+                    "灵动岛 Ping Island 动态建议按钮 — 根据邮件内容给 1-3 个最针对性的处理建议。"
+                    "没有合适候选、或每个候选 confidence < 0.5 时留空数组 []，灵动岛显示默认按钮。\n\n"
                     "id 必须从 mailbox-specific whitelist 选择（schema enum 强制；不在 enum 的会被 "
                     "JSON schema 校验拒），见 mailbox prompt 内『Recommended Actions』段说明。"
                 ),

@@ -20,6 +20,7 @@ from src.agent_config.store import (
 from src.agent_config.templates import (
     AGENT_TEMPLATE,
     LEGACY_AGENT_TEMPLATE_P0,
+    LEGACY_AGENT_TEMPLATE_P1,
     SEED_TEMPLATES,
 )
 
@@ -94,6 +95,18 @@ def test_agent_default_template_migrates_only_when_untouched(tmp_path):
     reopened = AgentConfigStore(db_path).get_profile_doc("agent")
     assert reopened.content == custom
     assert reopened.updated_by == "user"
+
+
+def test_agent_p1_template_migrates_to_trimmed_default(tmp_path):
+    db_path = str(tmp_path / "agent_config.db")
+    st = AgentConfigStore(db_path)
+    st.get_profile_doc("agent")
+    st.set_profile_doc("agent", LEGACY_AGENT_TEMPLATE_P1)
+
+    migrated = AgentConfigStore(db_path).get_profile_doc("agent")
+    assert migrated.content == AGENT_TEMPLATE
+    assert migrated.updated_by == "migration:p1-agent-trim"
+    assert "Don't call a tool just to call it" not in migrated.content
 
 
 def test_profile_doc_set_records_history(tmp_path):

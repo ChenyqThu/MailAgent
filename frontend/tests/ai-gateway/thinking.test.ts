@@ -26,14 +26,12 @@ describe('thinkingProviderOptions', () => {
   })
 
   test('sonnet / haiku / older Claude → manual { type: enabled, budgetTokens }', () => {
-    // 🔴 S2 复核：`opus-5` 是 includes 子串判据，本用例钉住它**只**改判 opus-5 —— 下面这几个
-    // id 的 legacy 行为必须逐字节留在 manual 16k。`claude-sonnet-5` 是 S2 拍板明确留在 manual
-    // 族的型号（crs 实测 manual budget 不 400 且无自发 thinking）；`claude-opus-4-5` 是与
-    // 'opus-5' 最容易误撞的相邻 id（'opus-4-5' 不含 'opus-5'，误加通配就会在这里红）。
+    // 🔴 `opus-5` / `sonnet-5` 是 includes 子串判据，本用例钉住相邻 id 不被误判：
+    // `claude-opus-4-5` 不含 'opus-5'、`claude-sonnet-4-5` / `-4-6` 不含 'sonnet-5'，
+    // 误加通配就会在这里红。
     for (const model of [
       'claude-sonnet-4-6',
-      'claude-sonnet-5',
-      'claude-sonnet-5[1m]',
+      'claude-sonnet-4-5',
       'claude-opus-4-5',
       'claude-opus-4-6',
       'claude-haiku-4-5',
@@ -45,12 +43,14 @@ describe('thinkingProviderOptions', () => {
     }
   })
 
-  test('opus-4-7 / opus-4-8 / opus-5 / fable → adaptive + effort（4-7/4-8/fable manual 会 400；opus-5 是 S2 拍板归入 adaptive 族——legacy 布尔路径对它从 manual 16k 翻成 adaptive+high，有意变更）', () => {
+  test('opus-4-7 / opus-4-8 / opus-5 / sonnet-5 / fable → adaptive + effort（4-7/4-8/fable 与官方直连的 sonnet-5 发 manual 会 400；opus-5 是 S2 拍板归入 adaptive 族）', () => {
     for (const model of [
       'claude-opus-4-7',
       'claude-opus-4-8',
       'claude-opus-5',
       'claude-opus-5[1m]',
+      'claude-sonnet-5',
+      'claude-sonnet-5[1m]',
       'claude-fable-5'
     ]) {
       expect(thinkingProviderOptions(model, true)).toEqual({
@@ -111,8 +111,14 @@ describe('effortCallOptions — anthropic（沿现有二分）', () => {
     )
   })
 
-  test('adaptive 族（opus-4-7 / opus-4-8 / opus-5 / fable）→ adaptive + effort 档位逐字', () => {
-    for (const model of ['claude-opus-4-7', 'claude-opus-4-8', 'claude-opus-5', 'claude-fable-5']) {
+  test('adaptive 族（opus-4-7 / opus-4-8 / opus-5 / sonnet-5 / fable）→ adaptive + effort 档位逐字', () => {
+    for (const model of [
+      'claude-opus-4-7',
+      'claude-opus-4-8',
+      'claude-opus-5',
+      'claude-sonnet-5',
+      'claude-fable-5'
+    ]) {
       for (const tier of ['low', 'medium', 'high', 'xhigh', 'max'] as const) {
         expect(effortCallOptions(model, tier, 'anthropic')).toEqual({
           providerOptions: { anthropic: { thinking: { type: 'adaptive' }, effort: tier } }

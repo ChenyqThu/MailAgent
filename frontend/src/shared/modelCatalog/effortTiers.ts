@@ -57,20 +57,24 @@ export const PROTOCOL_EFFORT_TIERS: Record<LlmProviderProtocol, readonly EffortT
  *  判据，故从 thinking.ts 下沉到本词表叶子，两侧 import 同一函数，不许在任何一处再手抄
  *  模型 id 清单。
  *
- *  adaptive 族 = opus-4-7 / opus-4-8 / **opus-5** / fable：
+ *  adaptive 族 = opus-4-7 / opus-4-8 / **opus-5** / **sonnet-5** / fable：
  *    - opus-4-7 / opus-4-8 / fable：manual budget 会被 API 以 400 拒绝（legacy custom_api
  *      时代的生产实证，原注释随矩阵迁到这里）。
  *    - opus-5：S2 拍板归入 adaptive 族（「服务端自适应」）。crs 实测（2026-08-05）：manual
  *      budget **不 400**（两种形状都 200），但**不带任何 thinking 参数也会自发思考**——服务端
  *      自适应的行为签名，与拍板一致；注意这会让旧 Brain 布尔路径对 opus-5 从 manual 16k 翻成
  *      adaptive+high（有意的行为变更，见 S2 终报）。
- *  其余（sonnet / haiku / 老 Claude 4）→ manual。 */
+ *    - sonnet-5：官方文档写明 budget_tokens 在 Sonnet 5 上返回 400、不带 thinking 参数即自适应。
+ *      经 crs 发 manual budget 不报错（2026-09-23 复测），但官方直连会 400；adaptive + effort
+ *      经 crs 实测可用，所以按官方语义归入本族。
+ *  其余（sonnet-4-x / haiku / 老 Claude 4）→ manual。 */
 export function modelSupportsManualThinking(model: string): boolean {
   const lower = model.toLowerCase()
   if (
     lower.includes('opus-4-7') ||
     lower.includes('opus-4-8') ||
     lower.includes('opus-5') ||
+    lower.includes('sonnet-5') ||
     lower.includes('fable')
   ) {
     return false

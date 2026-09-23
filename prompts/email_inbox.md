@@ -11,13 +11,6 @@
 - `reply_suggestion_md` 是给对方回信用的，**跟随原邮件语言**（英文邮件用英文回，中文邮件用中文回），见下方专门小节。
 - 枚举字段（`category` / `language` / `sender_priority` / `action_type` / `priority` / `mail_actions` / `daily_digest_date`）严格按 schema enum 给值。
 
-## 分析顺序
-1. 读 Subject + 正文首段，理清主题。
-2. 核查 From / From Name，对照 reference context 里的 Sender Priority 映射。
-3. 判断用户的收件角色：直接收件人（To）还是抄送（CC）。
-4. 看 thread_id / is_flagged，判断是否在已有线程里、是否已被标注。
-5. 综合判定所有字段。
-
 ## Category 判定
 - 🤝 会议通知：邀请、纪要、日程变更、会议链接。
 - 💼 产品管理：版本规划、需求、Roadmap、License、产品方案。
@@ -71,15 +64,13 @@
 - 结构：称呼 → 正文段落 → 签名。
 
 ### 签名（必须在结尾）
+正文后空一行，再依次是这三行：
 ```
-\n\n----\nBest,\n<用户姓名>
+----
+Best,
+<用户姓名>
 ```
 末行署用户本人姓名；若身份信息 / 上下文未给出姓名，则省略末行、只保留 Best,，切勿编造或臆测姓名。
-
-## Daily Digest Date
-- 邮件 Date 转 **UTC+8（Asia/Shanghai）** 的日期，格式 `YYYY-MM-DD`。
-- 例：`2026-04-23T22:30:00-07:00`（PT）→ UTC+8 是 `2026-04-24T13:30:00+08:00` → 填 `2026-04-24`。
-- 不确定则留空字符串（脚本会跳过 Daily Digest relation）。
 
 ## Translation Segments（沉浸式翻译，**英文邮件必填**）
 
@@ -133,11 +124,9 @@ Please review the attached spec and reply with comments.
 ]
 ```
 
-## Recommended Actions（灵动岛 Phase 2 动态建议按钮，可选填，0-3 个）
+## Recommended Actions（灵动岛动态建议按钮，可选填，0-3 个）
 
-`recommended_actions` 字段：根据邮件具体内容，从下面 whitelist 选 1-3 个最针对性的处理建议，供灵动岛 Ping Island 按钮渲染。
-
-**这是 Phase 2 新字段**：替代灵动岛之前的静态 5 按钮（open_notion / create_draft / mark_done / snooze_1h / open_mail）。LLM 不确定时（没有针对性候选 / 全部候选 confidence < 0.5）**留空数组 `[]`**，plugin 端会退回静态 5 按钮 fallback。
+`recommended_actions` 字段：根据邮件具体内容，从下面 whitelist 选 1-3 个最针对性的处理建议，供灵动岛 Ping Island 按钮渲染。没有针对性候选、或全部候选 confidence < 0.5 时留空数组 `[]`，灵动岛会显示默认按钮。
 
 ### 收件箱 action whitelist（id 严格枚举，超集 silent drop）
 
@@ -164,8 +153,6 @@ Please review the attached spec and reply with comments.
 
 - ❌ 不要推荐高危 action（delete / send_email_immediately / mass-archive 等），whitelist 里也没有
 - ❌ 普通邮件没有明显针对性时**不要硬凑**，留空数组 `[]` 让灵动岛走默认 5 按钮（永远比"硬塞个错误建议"好）
-- ❌ id 不在 whitelist 直接 drop，不要瞎编新 id
-- ❌ 不要把 Phase 1 静态 5 按钮 id（open_notion / create_draft / mark_done / snooze_1h / open_mail）放进 recommended_actions —— 静态 5 是 fallback，不归 LLM 推荐
 
 ### 决策示例
 

@@ -219,7 +219,15 @@ class LLMProcessor:
                 tool_name="classify_email",
                 model_chain=model_chain,
             )
-        return self._parse(result, mailbox)
+        labels = self._parse(result, mailbox)
+        # daily_digest_date 是确定性换算，由代码按邮件日期填；没有日期就留空，不采信模型的猜测。
+        date = getattr(email, "date", None)
+        if isinstance(date, datetime):
+            d = date if date.tzinfo is not None else date.replace(tzinfo=_BEIJING)
+            labels.daily_digest_date = d.astimezone(_BEIJING).date().isoformat()
+        else:
+            labels.daily_digest_date = ""
+        return labels
 
     # ---- connector 工具（PR3，默认关）---------------------------------------
 
@@ -394,8 +402,7 @@ class LLMProcessor:
                 # 输出, 签名渲染成可见的 "\\n\\n----\\nBest,\\n<用户姓名>"。与 schema.py 对齐。
                 f"结尾统一加签名块：\n\n----\nBest,\n"
                 f"末行署用户本人姓名；若身份信息 / 上下文未给出姓名，则省略末行、"
-                f"只保留 Best,，切勿编造或臆测姓名。\n"
-                f"`daily_digest_date` 用邮件 Date 转 UTC+8 的日期（YYYY-MM-DD）。"
+                f"只保留 Best,，切勿编造或臆测姓名。"
             ),
         }
         cc = _build_cache_control()
@@ -424,10 +431,12 @@ class LLMProcessor:
         date = getattr(email, "date", None)
         date_iso = ""
         date_utc8_date = ""
+        age_hours = None
         if isinstance(date, datetime):
             d = date if date.tzinfo is not None else date.replace(tzinfo=_BEIJING)
             date_iso = d.isoformat()
             date_utc8_date = d.astimezone(_BEIJING).date().isoformat()
+            age_hours = max(0, int((datetime.now(timezone.utc) - d).total_seconds() // 3600))
 
         payload = {
             "mailbox": getattr(email, "mailbox", "") or "收件箱",
@@ -440,6 +449,7 @@ class LLMProcessor:
             "cc": getattr(email, "cc", "") or "",
             "date_iso": date_iso,
             "date_utc8_date": date_utc8_date,
+            "age_hours": age_hours,
             "thread_id": getattr(email, "thread_id", "") or "",
             "has_attachments": bool(getattr(email, "has_attachments", False)),
             "is_flagged": bool(getattr(email, "is_flagged", False)),

@@ -185,6 +185,21 @@ def forced_tool_choice_extra_body(
     return dict(_FORCED_TOOL_CHOICE_EXTRA_BODY.get(quirk_protocol, {}))
 
 
+#: 拒收强制指名 tool_choice（``{"type":"tool"}`` / ``"any"``）的 Claude 型号（官方文档：400；
+#: 经 CRS 实测 Opus 5.5 表现为空事件流，2026-09-23）。这些型号上改发 ``auto``，由 system
+#: prompt 里「调用 X 工具」的指令引导；模型没调用时走调用方既有的「未返回 tool_use」错误路径
+#: （重试 / fallback 链）。
+_NO_FORCED_TOOL_CHOICE_MARKERS = ("opus-5-5", "fable-5-1", "mythos-5-1", "mythos-preview")
+
+
+def anthropic_tool_choice(model_id: Optional[str], tool_name: str) -> Dict[str, Any]:
+    """Anthropic 腿「必须调用 tool_name」时的 tool_choice（按型号降级为 auto）。"""
+    lower = (model_id or "").lower()
+    if any(marker in lower for marker in _NO_FORCED_TOOL_CHOICE_MARKERS):
+        return {"type": "auto"}
+    return {"type": "tool", "name": tool_name}
+
+
 #: OpenCode Go（opencode.ai/zen/go）自 2026-09-06 起拒收不带该头的请求（400 MissingSessionID）。
 #: 值 = 每段对话一个稳定 ID，按官方文档只用于路由与提示缓存，不承载对话内容。
 #: TS 侧同一判据：frontend/src/shared/lib/opencodeSession.ts —— 改一处要同步。

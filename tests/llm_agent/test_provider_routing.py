@@ -336,3 +336,22 @@ def test_forced_tool_choice_extra_body_matrix():
     assert pr.forced_tool_choice_extra_body("deepseek", "deepseek-v4-pro") == {
         "thinking": {"type": "disabled"}
     }
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    ["claude-opus-5-5", "claude-opus-5-5[1m]", "claude-fable-5-1", "CLAUDE-MYTHOS-5-1"],
+)
+def test_anthropic_tool_choice_auto_on_models_rejecting_forced(model_id):
+    assert pr.anthropic_tool_choice(model_id, "classify_email") == {"type": "auto"}
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    ["claude-sonnet-4-6", "claude-opus-4-8", "claude-opus-5", "claude-fable-5", "claude-haiku-4-5", None],
+)
+def test_anthropic_tool_choice_forced_elsewhere(model_id):
+    assert pr.anthropic_tool_choice(model_id, "classify_email") == {
+        "type": "tool",
+        "name": "classify_email",
+    }

@@ -80,6 +80,34 @@ def test_classify_anthropic_uses_streaming_messages():
     assert calls[0]["tool_choice"] == {"type": "tool", "name": "classify_email"}
 
 
+def test_classify_anthropic_downgrades_forced_tool_choice_on_opus_5_5():
+    # Opus 5.5 / Fable 5.1 拒收强制指名 tool_choice（经 CRS 表现为空事件流）→ 改发 auto。
+    calls: list[dict] = []
+
+    class FakeMessages:
+        def stream(self, **kwargs):
+            calls.append(kwargs)
+            return _FakeStream(_message([_tool_use("classify_email", {"ok": True})]))
+
+    client = LLMClient()
+    client._client = NS(messages=FakeMessages())
+
+    result = asyncio.run(client.classify(
+        system_blocks=[{"type": "text", "text": "s"}],
+        user_content="u",
+        tool_schema={
+            "name": "classify_email",
+            "description": "test",
+            "input_schema": {"type": "object", "properties": {}},
+        },
+        tool_name="classify_email",
+        model_chain=["claude-opus-5-5[1m]"],
+    ))
+
+    assert result.tool_input == {"ok": True}
+    assert calls[0]["tool_choice"] == {"type": "auto"}
+
+
 
 # --- schema drift（tool-call 格式漂移）------------------------------------
 #

@@ -81,8 +81,14 @@ describe('effortOptionsForModel — 家族阶梯 ∩ 协议子集', () => {
     })
   })
 
-  test('Claude adaptive 族（opus-4-7/4-8/opus-5/fable）@ anthropic → low..max，默认 medium，无 none（服务端自适应）', () => {
-    for (const id of ['claude-opus-4-7', 'claude-opus-4-8', 'claude-opus-5', 'claude-fable-5']) {
+  test('Claude adaptive 族（opus-4-7/4-8/opus-5/sonnet-5/fable）@ anthropic → low..max，默认 medium，无 none（服务端自适应）', () => {
+    for (const id of [
+      'claude-opus-4-7',
+      'claude-opus-4-8',
+      'claude-opus-5',
+      'claude-sonnet-5',
+      'claude-fable-5'
+    ]) {
       const r = effortOptionsForModel(id, 'anthropic')
       expect(r.options, id).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
       expect(r.defaultTier, id).toBe('medium')

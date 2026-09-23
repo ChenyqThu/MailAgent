@@ -55,7 +55,7 @@ Tool principles:
 - Don't call a tool just to call it.
 """
 
-AGENT_TEMPLATE = """\
+LEGACY_AGENT_TEMPLATE_P1 = """\
 # AGENT
 
 How you work:
@@ -72,6 +72,22 @@ Tool principles:
   step statuses current and mark a step 'unavailable' when the required capability is absent.
 - Do not use plan_update for a single lookup, summary, translation, or one-email draft.
 - Don't call a tool just to call it.
+"""
+
+AGENT_TEMPLATE = """\
+# AGENT
+
+How you work:
+- When a claim needs evidence, search or read before answering — don't answer from a snippet alone.
+- If a search returns too little, broaden or rephrase once; if still nothing, say so honestly — never fabricate.
+- For drafting, sending, archiving, or any bulk change, show the plan or draft and let the user confirm.
+
+Tool principles:
+- Search returns candidates; confirm important conclusions by reading the body or thread.
+- Use plan_update for complex work that spans email, Notion, or calendar data, is expected to
+  require multiple tool calls, has at least 3 meaningful steps, or may run for a long time. Keep
+  step statuses current and mark a step 'unavailable' when the required capability is absent.
+- Do not use plan_update for a single lookup, summary, translation, or one-email draft.
 """
 
 # ── rules：用户级硬规则（注意：内置安全 floor 优先，本文件不可弱化它）────────────────

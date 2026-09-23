@@ -11,12 +11,6 @@
 - `reply_suggestion_md`（reminder 草稿）跟随原邮件语言。
 - 枚举字段严格按 schema enum 给值。
 
-## 分析顺序
-1. 读 Subject + 正文首段，理清我的请求 / 问题 / 通知。
-2. 看 To / CC，识别收件人身份（对照 reference context 里的 Sender Priority 映射，此时语义变为「收件人重要性」）。
-3. 看 Date（发送时间）推算等待天数。
-4. 综合判定所有字段。
-
 ## Category 判定
 跟收件箱相同（按邮件主题和内容选类别）。
 
@@ -31,6 +25,8 @@
 > 判定 reminder 的阈值参考：重要事项 > 1 天未回复，紧急事项 > 6 小时未回复。
 
 ## Priority（等待时间 × 事项重要性 × 收件人角色）
+
+等待时间看输入里的 `age_hours`（程序算好的发出至今小时数）。
 
 - 🔴 **紧急**：等待 > 3 天 + 事项重要 / 阻塞 + 未收到回复。
 - 🟡 **重要**：等待 > 1 天 + 需要对方决策 / 行动 且收件人是关键角色。
@@ -63,13 +59,13 @@
 同收件箱：仅限 inline 元素 + 换行；列表用 `- ` 前缀纯文本；禁止 block-level 语法。
 
 ### 签名（必须在结尾）
+正文后空一行，再依次是这三行：
 ```
-\n\n----\nBest,\n<用户姓名>
+----
+Best,
+<用户姓名>
 ```
 末行署用户本人姓名；若身份信息 / 上下文未给出姓名，则省略末行、只保留 Best,，切勿编造或臆测姓名。
-
-## Daily Digest Date
-跟收件箱规则一样：邮件 Date 转 **UTC+8（Asia/Shanghai）** 的日期，格式 `YYYY-MM-DD`。不确定留空。
 
 ## Translation Segments（沉浸式翻译，**英文/非中文邮件必填**）
 
@@ -87,9 +83,9 @@
 
 发件箱的 LLM 调用频率比收件箱低（每天通常只有几封发件），写入 `translation_segments` 对 token 成本影响很小。
 
-## Recommended Actions（灵动岛 Phase 2 动态建议按钮，可选填，0-2 个）
+## Recommended Actions（灵动岛动态建议按钮，可选填，0-2 个）
 
-`recommended_actions` 字段：根据发件箱场景给灵动岛 Ping Island 1-2 个针对性按钮替代静态 5 fallback。
+`recommended_actions` 字段：根据发件箱场景给灵动岛 Ping Island 1-2 个针对性按钮。
 
 **发件箱专属语义**：跟收件箱不同，发件箱通常只关心两件事——"等够久还没回，标完成不追"或"该催了，起个 reminder 草稿"。所以数量通常 0-2 即可。
 
@@ -114,7 +110,6 @@
 - ❌ 不要推荐 "重发" / "delete email" / "撤回" 等高危操作
 - ❌ 当 `action_type='已完结'` 时通常不需要任何建议，留空数组 `[]`
 - ❌ 当 `action_type='等待响应'` 且未超期时也通常留空数组（耐心等就行）
-- ❌ 不要把 Phase 1 静态 5 按钮 id 放进 recommended_actions
 
 ### 决策示例
 
