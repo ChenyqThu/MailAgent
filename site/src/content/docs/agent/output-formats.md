@@ -32,7 +32,7 @@ mailagent email get 53675 -o json        # ⚠️ 也能用（每个 leaf 也暴
 
 ## JSON wrapper 契约
 
-`-o json` **始终**返回一个 wrapper object（不再像早期设计那样默认 NDJSON），与 `aws-cli` / `kubectl` / `gh` 的 `-o json` 行为对齐。三种顶层形态：
+`-o json` **始终**返回一个 wrapper object（不再像早期设计那样默认 NDJSON），与 `aws-cli` / `kubectl` / `gh` 的 `-o json` 行为一致。三种顶层形态：
 
 ### success（成功）
 
@@ -170,7 +170,7 @@ CLI 的 JSON 字段刻意为机器消费而设计，下面三条约定贯穿所�
 
 ### 3. 时间统一 ISO 8601（含时区优先）
 
-时间字段尽量是 ISO 8601 含时区（`"2026-05-15T10:23:45+08:00"`）；存量数据可能退化为 `YYYY-MM-DD HH:MM:SS` 或 `null`（schema 标注为 `iso_datetime_or_date`，可空）。解析时按"可空 + 两种格式"兜底。
+时间字段尽量是 ISO 8601 含时区（`"2026-05-15T10:23:45+08:00"`）；存量数据可能退化为 `YYYY-MM-DD HH:MM:SS` 或 `null`（schema 标注为 `iso_datetime_or_date`，可空）。解析时按「可空 + 两种格式」兜底。
 
 ## JSON Schema 契约文件
 

@@ -12,7 +12,7 @@ batch 命令（处理一批邮件而非单封）受一套**长任务契约**约�
 ```
 email resync --range / --ids
 backfill body
-backfill derivatives
+backfill metadata
 init fetch-cache / analyze / fix-* / update-parents / sync-new / all
 ```
 
@@ -40,7 +40,7 @@ mailagent email resync --range 53000-53100 --replace-existing --allow-concurrent
 ```
 
 :::caution
-`--allow-concurrent` 关掉的是安全闸，不是冲突本身。除非你清楚这批 id 不会被服务端同时触碰，否则优先"停 pm2"。
+`--allow-concurrent` 关掉的是安全闸，不是冲突本身。除非你清楚这批 id 不会被服务端同时触碰，否则优先「停 pm2」。
 :::
 
 ## SIGINT / SIGTERM（exit 7，二次 exit 130）
@@ -68,7 +68,7 @@ mailagent -o json email resync --range 53000-54000 --max-failures 5
 # 连续 5 次失败 → exit 8，summary.aborted_by = "max_failures"
 ```
 
-熔断与 partial_failure（`6`）的区别：`6` 是"有成功也有失败、跑完了"；`8` 是"连续失败到阈值、提前中止"。
+熔断与 partial_failure（`6`）的区别：`6` 是「有成功也有失败、跑完了」；`8` 是「连续失败到阈值、提前中止」。
 
 ## checkpoint resume（`cli_checkpoints` + `--resume-from`）
 

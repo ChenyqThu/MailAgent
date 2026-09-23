@@ -21,7 +21,7 @@ Verify:
 ```bash
 which mailagent        # should be <project>/venv/bin/mailagent
 mailagent --version    # prints the version number
-mailagent --help       # lists the 10 groups + global flags
+mailagent --help       # lists all 16 command groups + global flags
 ```
 
 :::caution[venv and PATH]

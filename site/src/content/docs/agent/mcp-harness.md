@@ -47,16 +47,16 @@ MailAgent 接入用户已有的 **Jarvis KOS v2**（gbrain fork，`kos.chenge.in
 
 | 工具 | 调谁 | 用途 |
 |---|---|---|
-| `kos_query` | KOS `tools/call` query | 跨域检索：人物 / 公司 / 邮件 / 会议 / 手记。"Bob 上次提的 X / Acme 项目最近怎么样 / 我跟这供应商的历史" |
+| `kos_query` | KOS `tools/call` query | 跨域检索：人物 / 公司 / 邮件 / 会议 / 手记。「Bob 上次提的 X / Acme 项目最近怎么样 / 我跟这供应商的历史」 |
 
-**降级**：KOS 不可达时工具返 `ok:false` + stable error code（`E_KOS_NOT_CONFIGURED` / `E_KOS_NETWORK` / `E_KOS_RATE_LIMIT` 等），LLM 自然 fallback 到本地 FTS5（`email_search_fulltext` / `email_search_attachments`）。**LLM 不调 ingest** —— 写入路径由 mail-sync 后端独占，防 chat 路径把幻觉"事实"塞进图谱。
+**降级**：KOS 不可达时工具返 `ok:false` + stable error code（`E_KOS_NOT_CONFIGURED` / `E_KOS_NETWORK` / `E_KOS_RATE_LIMIT` 等），LLM 自然 fallback 到本地 FTS5（`email_search_fulltext` / `email_search_attachments`）。**LLM 不调 ingest** —— 写入路径由 mail-sync 后端独占，防 chat 路径把幻觉「事实」塞进图谱。
 
 ## 引擎架构（一份 embedded gateway，本地+远程共用）
 
 chat 引擎唯一实现 = **embedded AI SDK Gateway**：一个 Node HTTP server（`frontend/src/ai-gateway/server.ts`），随桌面 Electron main 进程常驻启动，监听 loopback（默认端口 8300）。V2.1（B-pure-unified）阶段设想的 `frontend/src/shared/chat/`（`HttpChatPlatform` / `custom_api` / `notion_agent_http` 多后端抽象）已随 2026-07 S3（引擎归一）整体删除——不再有第二套引擎实现。
 
 - **桌面**：Electron main 进程直接启动并持有这个 gateway，renderer 走 loopback fetch。
-- **远程 web**（`mail.chenge.ink/app`）：serve-api（FastAPI 8200）的 `ai_gateway_proxy.py` 用 httpx 做流式反向代理，把请求转发到同一个 loopback gateway —— 远程侧**没有**独立的第二套引擎逻辑，只是一层反代。
+- **远程 web**（`<your-domain>/app`）：serve-api（FastAPI 8200）的 `ai_gateway_proxy.py` 用 httpx 做流式反向代理，把请求转发到同一个 loopback gateway —— 远程侧**没有**独立的第二套引擎逻辑，只是一层反代。
 - **后端服务**：serve-api 仍承担鉴权、chat 持久化端点、`GET /api/chat/config`（运行配置快照，供 gateway 启动前 TTL 缓存预取）等非引擎职责；`POST /api/chat/notion-agent`（asyncio spawn CLI）端点代码仍在，但当前无前端调用方（见下）。
 
 **鉴权两条腿**：本地 electron renderer 由 main 进程 `webRequest` 拦截 loopback 注入本地 token（token 留 main 不进 renderer）；远程 browser 走 CF Access cookie。
@@ -153,4 +153,4 @@ mailagent email flag "$ID" --is-flagged --api-key "$KEY" -o json
 - [`docs/reference/llm-agent/agent-harness-kos.md`](https://github.com/)（harness ship 状态 + KOS 三层 PR 拆分）
 - [`docs/reference/llm-agent/kos-integration-design.md`](https://github.com/)（KOS client / producer / consumer / error 矩阵）
 - [`docs/reference/remote-chat-report/remote-chat-report-architecture.md`](https://github.com/)（B-pure-unified：ChatPlatform / serve-api / 鉴权两条腿）
-- 同站：[写命令鉴权契约](/agent/auth/) · [JSON Schema 契约](/agent/json-schema/) · [10 大命令组参考](/agent/commands/)
+- 同站：[写命令鉴权契约](/agent/auth/) · [JSON Schema 契约](/agent/json-schema/) · [命令组参考](/agent/commands/)

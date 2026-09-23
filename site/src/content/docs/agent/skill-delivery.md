@@ -22,7 +22,7 @@ description: "把 MailAgent 能力交给第三方 agent：scoped Bearer key（se
 `$BASE` 取决于你打哪个 serve-api：
 
 - 本机：`http://127.0.0.1:8200`
-- 远程：`https://mail.chenge.ink`（CF Access 后）
+- 远程：`https://<your-domain>`（CF Access 后）
 
 ## 鉴权：scoped Bearer key
 

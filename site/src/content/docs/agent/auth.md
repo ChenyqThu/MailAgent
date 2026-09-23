@@ -1,6 +1,6 @@
 ---
 title: "写命令鉴权契约"
-description: "mailagent 的读/写命令分权：读命令免鉴权，写命令需 MAILAGENT_CLI_API_KEY；--api-key vs 环境变量；--yes/--confirm；--dry-run 跳过鉴权；ALLOW_UNAUTH_WRITES 的 dev-only 风险与 agent 安全须知。"
+description: "mailagent 的读/写命令分权：读命令免鉴权，写命令需 MAILAGENT_CLI_API_KEY；--api-key vs 环境变量；破坏性命令的 --yes 二次确认；--dry-run 跳过鉴权；ALLOW_UNAUTH_WRITES 的 dev-only 风险与 agent 安全须知。"
 ---
 
 `mailagent` 用一条简单规则保护写操作：**读命令免鉴权，写命令需 API key**。本页是这条规则的完整契约与 agent 安全须知。
@@ -12,34 +12,46 @@ description: "mailagent 的读/写命令分权：读命令免鉴权，写命令�
 本机访问 SQLite，无需 token：
 
 ```
-email get / list / body / search
-attachment list / download
-admin stats / health / db-version / dead-letter list
+email get / list / body / search / list-pinned
+attachment list / download / search
+admin stats / health / db-version / fts-health / pm2-status / queue-depth /
+      export-diagnostics / dead-letter list / config show / config get
 llm selftest / stats
-calendar recurring discover
+kos stats
+calendar events / today / week / event-get / sync-status / recurring discover
+folder discover
+report list / get / config-get
+api-key list
+im status
 debug *   (email-source / mail-structure / inline-images / applescript-fetch / notion-page)
 notion page-orphans (--dry-run) / file-link-audit (--dry-run)
 ```
 
 ### 写命令（需鉴权）
 
-会改 SQLite / Notion / Mail.app 的命令，必须提供 `MAILAGENT_CLI_API_KEY`：
+会改 SQLite / Notion / Mail.app / Exchange 的命令，必须提供 `MAILAGENT_CLI_API_KEY`：
 
 ```
-email resync / delete / flag / draft
-attachment derive / cleanup-orphans
+email resync / delete / flag / pin / unpin / archive / draft / send / unsubscribe
+attachment extract / cleanup-orphans
 llm run / retry-failed / compare-paths (--no-dry-run)
-backfill body / derivatives
+backfill body / metadata
 notion resync / update-flag / create-task / archive
         file-link-audit (--no-dry-run) / page-orphans (--archive-... / --insert-...)
-admin dead-letter retry / cleanup-* / repair-parents
+admin dead-letter retry / delete / cleanup-* / repair-parents / repair-date-tz /
+      config set / config show|get (仅加 --show-secrets 时)
 init *   (fetch-cache / analyze / fix-* / update-parents / sync-new / all)
-calendar expand (--no-dry-run) / recurring replay
+calendar create / update / delete / rsvp (真跑) / sync-now / expand (--no-dry-run) / replay / recurring replay
+folder enable / disable / create / rename / delete-folder / cleanup
+report run / delete / config-set / agent-create / agent-delete
+api-key create / revoke / rotate
+im pair
+contact backfill (--rescan / --calibrate-only 真跑)
 project-progress sync
 ```
 
 :::note
-`dead-letter list` 是读命令（免鉴权）；`dead-letter retry` 是写命令（需鉴权）。`page-orphans` / `file-link-audit` / `calendar expand` / `llm compare-paths` 默认 `--dry-run`（只读、免鉴权），加 `--no-dry-run`（或真修复 flag）后变写命令、需鉴权。
+`dead-letter list` 是读命令（免鉴权）；`dead-letter retry`/`delete` 是写命令（需鉴权）。两种 `--dry-run` 语义要分清：`page-orphans` / `file-link-audit` / `calendar expand` / `llm compare-paths` / `admin cleanup-*` / `admin repair-*` **默认就是 `--dry-run`**（不带任何 flag 就是只读免鉴权，要加 `--no-dry-run`（或真修复 flag）才变写命令）；而 `email pin` / `unpin` / `archive` / `unsubscribe` / `calendar rsvp` / `contact backfill` 恰相反——**默认真执行**，`--dry-run` 是需要显式传的可选 flag，传了才跳过鉴权只打 plan。`admin config show`/`get` 只有加 `--show-secrets` 才需鉴权（默认脱敏读取免鉴权）。
 :::
 
 ## 校验机制
@@ -71,21 +83,21 @@ mailagent --api-key xxx email flag 53675 --is-read
 `--api-key xxx` 写在命令行会落进 `~/.zsh_history` / `~/.bash_history`，也会出现在 `ps aux` 的进程参数里。CI / cron / agent runner 一律用 `MAILAGENT_CLI_API_KEY` 环境变量从 secret store 注入，不要 inline。
 :::
 
-## `--yes` / `--confirm` —— 破坏性命令
+## `--yes` —— 破坏性命令
 
-破坏性命令（`email delete` / `admin cleanup-*` / `notion archive`）默认要交互确认。agent 调用必须显式传 `--yes` 跳过 prompt：
+破坏性命令（`notion archive` / `admin cleanup-*` / `admin dead-letter delete` / `folder delete-folder` / `calendar delete`）默认要交互确认。agent 调用必须显式传 `--yes` 跳过 prompt：
 
 ```bash
-mailagent email delete 53675 --yes
 mailagent notion archive 36215375-830d-... --yes
 mailagent admin cleanup-deadletter --older-than 30 --no-dry-run --yes
+mailagent calendar delete <ical-uid> --yes
 ```
 
-部分高危场景还可叠加 `--confirm <internal_id>` 二次确认，防 wrong target。**`--yes` 不替代鉴权**——破坏性写命令既要 `--yes` 又要 API key。
+**`--yes` 不替代鉴权**——破坏性写命令既要 `--yes` 又要 API key。
 
 ## `--dry-run` 跳过鉴权
 
-`--dry-run` 只打 plan、不写任何东西，因此**不需要 API key**。这让 agent 能在没有 token 的环境里先验证一条写命令"会做什么"：
+`--dry-run` 只打 plan、不写任何东西，因此**不需要 API key**。这让 agent 能在没有 token 的环境里先验证一条写命令「会做什么」：
 
 ```bash
 # 无需 API key：dry-run 只输出计划
@@ -97,7 +109,7 @@ mailagent -o json llm run 53675 --dry-run | jq '.data.labels'
 
 ## dev bypass 风险（`ALLOW_UNAUTH_WRITES`）
 
-服务端**没配** `MAILAGENT_CLI_API_KEY` 时，写命令**默认拒绝**（退 `4`）——这是有意的"默认安全"。唯一逃生口是显式设环境变量：
+服务端**没配** `MAILAGENT_CLI_API_KEY` 时，写命令**默认拒绝**（退 `4`）——这是有意的「默认安全」。唯一逃生口是显式设环境变量：
 
 ```bash
 # 仅限本地 dev：服务端没配 token 时放行写命令
@@ -105,7 +117,7 @@ MAILAGENT_CLI_ALLOW_UNAUTH_WRITES=true mailagent email flag 53675 --is-read
 ```
 
 :::danger[ALLOW_UNAUTH_WRITES 绝不进 .env / CI]
-`MAILAGENT_CLI_ALLOW_UNAUTH_WRITES=true` 把"忘配 token"变成"无防护"。它**只能**在本地交互式 dev shell 里临时 `export`，**绝不能**写进 `.env`、Dockerfile、CI secret、systemd unit。一旦它常驻，任何能跑 CLI 的进程都能无鉴权写 Notion / Mail.app。
+`MAILAGENT_CLI_ALLOW_UNAUTH_WRITES=true` 把「忘配 token」变成「无防护」。它**只能**在本地交互式 dev shell 里临时 `export`，**绝不能**写进 `.env`、Dockerfile、CI secret、systemd unit。一旦它常驻，任何能跑 CLI 的进程都能无鉴权写 Notion / Mail.app。
 :::
 
 ## Agent 安全须知
@@ -115,12 +127,12 @@ MAILAGENT_CLI_ALLOW_UNAUTH_WRITES=true mailagent email flag 53675 --is-read
 1. **token 从 secret store 注入环境变量**，不 hardcode、不 inline `--api-key`、不进 repo。
 2. **CI / CD 用 `CLI_API_KEY` 环境变量**，并确保 `MAILAGENT_CLI_ALLOW_UNAUTH_WRITES` **未设**。
 3. **agent 默认只给读命令**；要执行写命令时，先 `--dry-run` 让 agent 输出 plan、人工 / 上层 gate 审核，再真跑。
-4. **破坏性命令（delete / cleanup / archive）要双闸**：`--yes` + 有效 API key，必要时 `--confirm <id>`。
+4. **破坏性命令（delete / cleanup / archive）要双闸**：`--yes` + 有效 API key。
 5. **退出码 `4` 当作硬失败**，不自动重试——重试一个鉴权失败的命令只会刷日志，不会成功。
 
 ## 深入了解
 
 - [自动化环境安装与配置](/agent/setup/) — `MAILAGENT_CLI_API_KEY` 注入
 - [退出码契约](/agent/exit-codes/) — `4` / `E_AUTH_FAILED`
-- [10 大命令组参考](/agent/commands/) — 各写命令的 flag
+- [命令组参考](/agent/commands/) — 各写命令的 flag
 - 鉴权 spec：[`agent-cli-rfc.md` §5.3](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/cli/agent-cli-rfc.md) · [`cli-reference.md`](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/cli/cli-reference.md)

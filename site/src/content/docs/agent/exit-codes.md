@@ -62,7 +62,7 @@ esac
 这是 agent 最常踩的坑：
 
 - **`exit 1`（`E_NOT_FOUND` 等）= 非 batch 模式的业务失败。** 例如 `email get 99999`（单封、不存在）退 `1`，输出是 `status: "error"` 的 wrapper，**没有** `data`。
-- **`exit 6`（`E_PARTIAL_FAILURE`）= batch 模式下"有成功也有失败"。** 例如 `email resync --range 53000-53100` 里 87 封成功 13 封失败，退 `6`，输出是 `status: "partial_failure"` 的 wrapper，`data.succeeded` / `data.failed` / `data.summary` **都在**。
+- **`exit 6`（`E_PARTIAL_FAILURE`）= batch 模式下「有成功也有失败」。** 例如 `email resync --range 53000-53100` 里 87 封成功 13 封失败，退 `6`，输出是 `status: "partial_failure"` 的 wrapper，`data.succeeded` / `data.failed` / `data.summary` **都在**。
 
 换句话说：
 
@@ -84,7 +84,7 @@ fi
 ```
 
 :::tip[别用 set -e]
-batch 命令的 `6` / `7` / `9` 是你想自己处理的结果，不是脚本该直接死掉的"错误"。用 `set -uo pipefail` 而非 `set -e`，自己 `case "$rc"`。
+batch 命令的 `6` / `7` / `9` 是你想自己处理的结果，不是脚本该直接死掉的「错误」。用 `set -uo pipefail` 而非 `set -e`，自己 `case "$rc"`。
 :::
 
 ## 深入了解

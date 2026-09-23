@@ -36,7 +36,7 @@ Verify the install:
 
 ```bash
 which mailagent      # should point to venv/bin/mailagent
-mailagent --version  # expected output 3.0.0
+mailagent --version  # expected output: mailagent 3.0.0
 ```
 
 :::caution[Activate the venv every time you open a terminal]
@@ -59,7 +59,7 @@ This page covers **manually filling in the Token + Database IDs**, for the scena
 2. Click **New integration**, give it a name (e.g. `MailAgent`), and associate it with your workspace.
 3. After creating it, copy the **Internal Integration Token** (starts with `ntn_`)—this is the `NOTION_TOKEN` in `.env`.
 
-### 2b. Create the email database (13 fields)
+### 2b. Create the email database (17 required fields)
 
 Create a new Notion database (type `/database` on a page → Table - Full page) and add the fields per the table below. **Field names must correspond exactly:**
 
@@ -74,15 +74,18 @@ Create a new Notion database (type `/database` on a page → Table - Full page) 
 | `CC` | Text | Carbon copy |
 | `Date` | Date | Email date |
 | `Parent Item` | Relation (pointing to this database itself) | Thread-head relation, stringing one topic together |
+| `Sub-item` | Relation (pointing to this database itself) | Reverse of `Parent Item`; Notion offers to auto-generate it once the forward relation exists |
 | `Mailbox` | Select | Inbox / Sent / Archive, etc. |
 | `Is Read` | Checkbox | Whether read |
 | `Is Flagged` | Checkbox | Whether flagged |
 | `Has Attachments` | Checkbox | Whether it has attachments |
-| `AI Action` | Select | AI-suggested action (Reply needed / For reference only / …) |
-| `AI Priority` | Select | Options: `Critical` / `Urgent` / `Important` / `Normal` / `Low` |
-| `AI Review Status` | Select | Options: `Pending` / `Reviewed` |
+| `Processing Status` | Select | 未处理 (Unprocessed) / AI Reviewed / 已同步 (Synced) / 草稿已创建 (Draft created) / 已完成 (Done) |
+| `ID` | Number | Internal email sequence number |
+| `Original EML` | Files | Raw EML attachment, for tracing back the full source message |
 
-> `Parent Item` is a Relation that **points to itself**: when creating the field, choose this database itself as the data source. It lets replies on the same topic hang under the thread head.
+> `Parent Item` is a Relation that **points to itself**: when creating the field, choose this database itself as the data source. It lets replies on the same topic hang under the thread head. `Sub-item` is Notion's auto-generated reverse relation — keep it.
+
+If you've enabled AI classification, you can add an **optional** field group as well (missing fields degrade gracefully and never block sync): `Priority` (Select: 🔴 紧急 / 🟡 重要 / 🟢 一般 / ⚪ 低) · `Action Type` (Select) · `AI Summary` / `Key Points` / `Urgency Reason` (Text) · `Category` / `Language` (Select), and more — full list in [`notionDbSchema.contract.json`](https://github.com/ChenyqThu/MailAgent/blob/main/frontend/src/shared/lib/notionDbSchema.contract.json).
 
 Once it is set up, open the database's top-right **⋯ → Connections →** and add the `MailAgent` Integration you just created, otherwise it has no write permission. The 32-character hexadecimal segment in the database URL is the `EMAIL_DATABASE_ID`:
 
@@ -90,7 +93,7 @@ Once it is set up, open the database's top-right **⋯ → Connections →** and
 https://www.notion.so/<workspace>/<this segment is the DATABASE_ID>?v=...
 ```
 
-### 2c. Create the calendar database (6 fields)
+### 2c. Create the calendar database (18 fields)
 
 Likewise create a new database and set up:
 
@@ -98,12 +101,24 @@ Likewise create a new database and set up:
 |---|---|---|
 | `Title` | Title | Event title |
 | `Event ID` | Text | Unique event identifier, used for deduplication |
+| `Calendar` | Select | Which calendar the event belongs to |
 | `Time` | Date (with start/end) | Event start and end time |
-| `URL` | URL | Teams / meeting link |
+| `Is All Day` | Checkbox | Whether it's an all-day event |
+| `会议状态` | Select | `None` / `Confirmed` / `Tentative` / `Cancelled` (the field name is fixed Chinese, not `Status`) |
+| `日程类型` | Select | Event category (the field name is fixed Chinese) |
+| `Is Recurring` | Checkbox | Whether it recurs |
+| `Attendee Count` | Number | Number of attendees |
+| `Sync Status` | Select | Sync status |
+| `Last Synced` | Date | Last sync time |
 | `Location` | Text | Location |
-| `Organizer` | Text | Organizer |
+| `URL` | URL | Teams / meeting link |
+| `Organizer` | Text | Organizer's name |
+| `Organizer Email` | Email | Organizer's email |
+| `Attendees` | Text | List of attendees |
+| `Recurrence Rule` | Text | RRULE (recurrence rule) |
+| `Last Modified` | Date | Last modified time |
 
-Remember to add the Integration connection here too; the ID in the URL is the `CALENDAR_DATABASE_ID`.
+Remember to add the Integration connection here too; the ID in the URL is the `CALENDAR_DATABASE_ID`. Full machine-readable field contract: [`notionDbSchema.contract.json`](https://github.com/ChenyqThu/MailAgent/blob/main/frontend/src/shared/lib/notionDbSchema.contract.json).
 
 :::tip
 Don't want to hand-craft the fields? You can create the Integration and the two empty databases first, then add the fields one by one—it's less hassle than editing a template. The field names' case and spacing must match the tables above exactly.

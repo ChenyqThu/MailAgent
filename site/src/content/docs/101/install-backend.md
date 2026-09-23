@@ -36,7 +36,7 @@ cp .env.example .env
 
 ```bash
 which mailagent      # 应指向 venv/bin/mailagent
-mailagent --version  # 期望输出 3.0.0
+mailagent --version  # 期望输出 mailagent 3.0.0
 ```
 
 :::caution[每次开终端都要先激活 venv]
@@ -59,7 +59,7 @@ Notion 是**可选的**：MailAgent 的邮件正文和附件以本地 SQLite 为
 2. 点 **New integration**，起个名字（如 `MailAgent`），关联到你的工作区。
 3. 创建后复制 **Internal Integration Token**（以 `ntn_` 开头）——这就是 `.env` 里的 `NOTION_TOKEN`。
 
-### 2b. 建邮件数据库（13 个字段）
+### 2b. 建邮件数据库（17 个必填字段）
 
 新建一个 Notion 数据库（页面里输入 `/database` → Table - Full page），按下表加好字段。**字段名严格对应**：
 
@@ -74,15 +74,18 @@ Notion 是**可选的**：MailAgent 的邮件正文和附件以本地 SQLite 为
 | `CC` | Text | 抄送 |
 | `Date` | Date | 邮件日期 |
 | `Parent Item` | Relation（指向本数据库自身） | 线程头关联，串起一个话题 |
+| `Sub-item` | Relation（指向本数据库自身） | `Parent Item` 的反向关联，Notion 建好正向关联后会提示自动生成 |
 | `Mailbox` | Select | 收件箱 / 发件箱 / 存档 等 |
 | `Is Read` | Checkbox | 是否已读 |
 | `Is Flagged` | Checkbox | 是否已标旗 |
 | `Has Attachments` | Checkbox | 是否有附件 |
-| `AI Action` | Select | AI 建议动作（需要回复 / 仅供参考 / …） |
-| `AI Priority` | Select | 选项：`Critical` / `Urgent` / `Important` / `Normal` / `Low` |
-| `AI Review Status` | Select | 选项：`Pending` / `Reviewed` |
+| `Processing Status` | Select | 未处理 / AI Reviewed / 已同步 / 草稿已创建 / 已完成 |
+| `ID` | Number | 邮件内部序号 |
+| `Original EML` | Files | 原始 EML 附件（按需回溯完整邮件源） |
 
-> `Parent Item` 是一个**指向自身**的 Relation：建字段时数据源选这个数据库本身。它让同一话题的回复挂到线程头下面。
+> `Parent Item` 是一个**指向自身**的 Relation：建字段时数据源选这个数据库本身。它让同一话题的回复挂到线程头下面。`Sub-item` 是 Notion 自动生成的反向关联字段，同样保留。
+
+启用了 AI 分类的用户可以再加一组**可选**字段（缺失只降级、不会阻断同步）：`Priority`（Select，🔴 紧急 / 🟡 重要 / 🟢 一般 / ⚪ 低）· `Action Type`（Select）· `AI Summary` / `Key Points` / `Urgency Reason`（Text）· `Category` / `Language`（Select）等，完整列表见 [`notionDbSchema.contract.json`](https://github.com/ChenyqThu/MailAgent/blob/main/frontend/src/shared/lib/notionDbSchema.contract.json)。
 
 建好后，打开数据库右上角 **⋯ → Connections（连接）→** 添加你刚建的 `MailAgent` Integration，否则它没有写入权限。数据库 URL 里那段 32 位十六进制就是 `EMAIL_DATABASE_ID`：
 
@@ -90,7 +93,7 @@ Notion 是**可选的**：MailAgent 的邮件正文和附件以本地 SQLite 为
 https://www.notion.so/<workspace>/<这一段是 DATABASE_ID>?v=...
 ```
 
-### 2c. 建日历数据库（6 个字段）
+### 2c. 建日历数据库（18 个字段）
 
 同样新建一个数据库，配齐：
 
@@ -98,12 +101,24 @@ https://www.notion.so/<workspace>/<这一段是 DATABASE_ID>?v=...
 |---|---|---|
 | `Title` | Title | 事件标题 |
 | `Event ID` | Text | 事件唯一标识，用于去重 |
+| `Calendar` | Select | 事件所属日历 |
 | `Time` | Date（含起止） | 事件起止时间 |
-| `URL` | URL | Teams / 会议链接 |
+| `Is All Day` | Checkbox | 是否全天事件 |
+| `会议状态` | Select | `None` / `Confirmed` / `Tentative` / `Cancelled`（字段名固定为中文，不是 `Status`） |
+| `日程类型` | Select | 事件分类（字段名固定为中文） |
+| `Is Recurring` | Checkbox | 是否周期性事件 |
+| `Attendee Count` | Number | 与会人数 |
+| `Sync Status` | Select | 同步状态 |
+| `Last Synced` | Date | 最近一次同步时间 |
 | `Location` | Text | 地点 |
-| `Organizer` | Text | 组织者 |
+| `URL` | URL | Teams / 会议链接 |
+| `Organizer` | Text | 组织者姓名 |
+| `Organizer Email` | Email | 组织者邮箱 |
+| `Attendees` | Text | 与会人列表 |
+| `Recurrence Rule` | Text | RRULE（周期规则） |
+| `Last Modified` | Date | 最近修改时间 |
 
-同样记得加上 Integration 连接，URL 里的 ID 就是 `CALENDAR_DATABASE_ID`。
+同样记得加上 Integration 连接，URL 里的 ID 就是 `CALENDAR_DATABASE_ID`。完整机器可读字段契约见 [`notionDbSchema.contract.json`](https://github.com/ChenyqThu/MailAgent/blob/main/frontend/src/shared/lib/notionDbSchema.contract.json)。
 
 :::tip
 不想手搓字段？可以先建好 Integration 和两个空数据库，把字段一项项加齐——比从模板改省心。字段名大小写、空格要和上表完全一致。
@@ -144,7 +159,7 @@ MAILAGENT_BACKEND=applescript   # 代码默认；企业 Exchange 用户建议改
 | **davmail**（推荐） | 通过 DavMail 桥接企业 Exchange（IMAP / SMTP / CalDAV） | 企业 Exchange / Microsoft 365 用户，要更快更稳、富文本回复 + 多文件夹 + 日历直读 | 单封约 236 毫秒 |
 | **applescript** | 直接驱动 macOS 自带 Mail.app | 想零额外组件、随装随用的兜底 | 单封约 1 秒 |
 
-**企业 Exchange / Microsoft 365 用户推荐用 DavMail**——更快更稳，且把富文本回复全部、多文件夹同步、CalDAV 日历直读这些能力真正打通。安装、认证（含伪装 Outlook client_id）、确认运行与守护进程的完整步骤见专页 **[用 DavMail 接入企业邮箱](/101/davmail-setup/)**。
+**企业 Exchange / Microsoft 365 用户推荐用 DavMail**——更快更稳，且富文本回复、多文件夹同步、CalDAV 日历直读这些能力都能真正用起来。安装、认证（含伪装 Outlook client_id）、确认运行与守护进程的完整步骤见专页 **[用 DavMail 接入企业邮箱](/101/davmail-setup/)**。
 
 只想最快跑起来、邮箱又已在 Mail.app 里登录好？保持 `applescript` 默认即可，无需任何额外组件，且随时可作兜底。
 

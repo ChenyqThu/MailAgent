@@ -19,7 +19,7 @@ webhook-server 触发的所有 Mail.app 写操作（建草稿 / 改 flag / 归�
 
 | 项 | 值 |
 |---|---|
-| 部署位置 | 远程 VPS `170.106.181.89`（`ubuntu@`，SSH 公钥 `~/.ssh/id_ed25519`）|
+| 部署位置 | 远程 VPS `<your-server>`（`<ssh-user>@`，SSH 公钥认证）|
 | 项目路径 | `/opt/MailAgent/webhook-server` |
 | 内部端口 | `8100`（FastAPI）|
 | PM2 进程名 | `mailagent-webhook` |
@@ -27,7 +27,7 @@ webhook-server 触发的所有 Mail.app 写操作（建草稿 / 改 flag / 归�
 | 鉴权 | `X-Webhook-Token: <WEBHOOK_SECRET>` 或 `Authorization: Bearer <WEBHOOK_SECRET>` |
 
 :::note[域名]
-本文档示例里的 `https://<webhook-host>` 指 webhook-server 的对外域名（运维侧配置项）。这与终端用户访问的远程 web 界面 `mail.chenge.ink/app`（serve-api + CF Access）是**两个不同的服务**，别混。
+本文档示例里的 `https://<webhook-host>` 指 webhook-server 的对外域名（运维侧配置项）。这与终端用户访问的远程 web 界面 `<your-domain>/app`（serve-api + CF Access）是**两个不同的服务**，别混。
 :::
 
 ## 架构流程
@@ -192,7 +192,7 @@ webhook-server 一键部署脚本（本机执行，推送到远程 VPS）：
 
 ```bash
 git push                                    # 本机推代码
-ssh ubuntu@170.106.181.89 \
+ssh <ssh-user>@<your-server> \
   'cd /opt/MailAgent/webhook-server && git pull && pm2 restart mailagent-webhook'
 ```
 
@@ -201,9 +201,9 @@ ssh ubuntu@170.106.181.89 \
 不要假设部署成功 —— Pydantic schema 变更、handler 未注册、依赖缺失都可能静默失败。
 
 ```bash
-ssh ubuntu@170.106.181.89 'pm2 status mailagent-webhook'        # online?
+ssh <ssh-user>@<your-server> 'pm2 status mailagent-webhook'        # online?
 curl -s https://<webhook-host>/health | jq .                    # {"status":"ok","redis":"connected"}
-ssh ubuntu@170.106.181.89 'pm2 logs mailagent-webhook --lines 30 --nostream'  # 无 error
+ssh <ssh-user>@<your-server> 'pm2 logs mailagent-webhook --lines 30 --nostream'  # 无 error
 curl -s https://<webhook-host>/admin/stats -H "X-Webhook-Token: $WEBHOOK_SECRET" | jq .  # 队列 pending 正常
 ```
 

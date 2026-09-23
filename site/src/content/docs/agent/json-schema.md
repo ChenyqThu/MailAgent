@@ -3,7 +3,7 @@ title: "JSON Schema 契约"
 description: "mailagent CLI 的 docs/cli-schema 目录、schema_version、wrapper/error/partial-failure 通用结构，以及用 jsonschema 做 CI 校验。"
 ---
 
-每个 agent-facing 的 `mailagent` 命令都有一份机器可读的 JSON Schema 契约。schema 是 agent 调用 CLI 的**稳定接口**：先读 schema 知道字段形状，再写解析代码，而不是靠"看一眼输出猜结构"。
+每个 agent-facing 的 `mailagent` 命令都有一份机器可读的 JSON Schema 契约。schema 是 agent 调用 CLI 的**稳定接口**：先读 schema 知道字段形状，再写解析代码，而不是靠「看一眼输出猜结构」。
 
 :::tip[一句话]
 所有 `-o json` 输出都是同一个 wrapper：`{ status, schema_version, data | error, meta }`。`schema_version` 当前恒为 `1`，破坏性变更才 major bump。
@@ -113,7 +113,7 @@ docs/cli-schema/
 }
 ```
 
-退出码为 `6`（`E_PARTIAL_FAILURE`），脚本据此分流"全成功 / 部分成功 / 全失败"。
+退出码为 `6`（`E_PARTIAL_FAILURE`），脚本据此分流「全成功 / 部分成功 / 全失败」。
 
 ## 关键设计约定（写解析器前必读）
 
@@ -151,7 +151,7 @@ docs/cli-schema/
 | `debug-*.schema.json`（5 个）| `debug {email-source,mail-structure,inline-images,applescript-fetch,notion-page}` | object |
 | `project-progress-sync.schema.json` | `project-progress sync` | object |
 
-（完整命令明细见 [10 大命令组参考](/agent/commands/)。）
+（完整命令明细见 [命令组参考](/agent/commands/)。）
 
 ## CI 校验：用 jsonschema 把输出钉在契约上
 
@@ -213,4 +213,4 @@ CI 校验应指向一个 `--db-path` 临时 seed 库（带几封测试邮件）�
 
 - [`docs/reference/cli/agent-cli-rfc.md`](https://github.com/) §7（JSON Schema 标准 + `docs/cli-schema/` placeholder 清单）
 - [`docs/reference/cli/cli-reference.md`](https://github.com/) §JSON Schema 契约
-- 同站：[全局 flag 与输出格式](/agent/output-formats/) · [退出码契约](/agent/exit-codes/) · [10 大命令组参考](/agent/commands/)
+- 同站：[全局 flag 与输出格式](/agent/output-formats/) · [退出码契约](/agent/exit-codes/) · [命令组参考](/agent/commands/)

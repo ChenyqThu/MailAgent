@@ -13,7 +13,7 @@ Your scripts / agents only ever talk to a single binary: `mailagent`. Every comm
 
 - **Entry point**: after `pip install -e ".[cli,dev]"`, the global `mailagent` command is available.
 - **Resource-action model**: `mailagent email get 53675`, `mailagent admin health`, `mailagent llm run 53675 --dry-run`.
-- **10 command groups**: `email` / `attachment` / `llm` / `backfill` / `notion` / `admin` / `init` / `calendar` / `debug` / `project-progress`.
+- **16 command groups**: `email` / `attachment` / `llm` / `kos` / `notion` / `calendar` / `debug` / `backfill` / `project-progress` / `init` / `folder` / `report` / `api-key` / `im` / `contact` / `admin`. Plus two long-running daemon commands with no subcommands, `serve` / `serve-api`.
 - **Stable JSON contract**: `-o json` always returns the wrapper object `{status, schema_version, data|error, meta}` (see [Output Formats](/en/agent/output-formats/)).
 - **Exit-code system**: `0 / 1 / 2 / 4 / 5 / 6 / 7 / 8 / 9 / 130`, so every kind of outcome can be decided programmatically (see [Exit-Code Contract](/agent/exit-codes/)).
 - **Read/write privilege separation**: read commands require no auth; write commands require `MAILAGENT_CLI_API_KEY` (see [Authentication Contract](/agent/auth/)).
@@ -31,29 +31,35 @@ Ordered by importance. Understanding these principles helps you predict the CLI'
 6. **Configuration consistency**: by default it reads `.env` (same as the service); `--db-path` / `--api-key` / `--config` override it; `MAILAGENT_*` environment variables take precedence. Configuration goes through an explicit factory (`load_cli_config`) and does not depend on an import-time singleton.
 7. **Non-breaking coexistence**: during the transition where the CLI and `scripts/*` coexist, the old paths do not become unavailable immediately (the shipped PR-5 / PR-6 completed the migration cutover, and the old `python scripts/<wrapper>.py` usage is now deprecated, unified under `mailagent <group> <action>`).
 
-## How the 10 Command Groups Relate
+## How the 16 Command Groups Relate
 
 | Group | Responsibility | Mostly Read/Write |
 |---|---|---|
-| `email` | Email CRUD + search + re-push + flag + drafts | Read + Write |
-| `attachment` | Attachment list / download / derive / cleanup | Read + Write |
+| `email` | Email CRUD + search + re-push + flag + pin + archive + drafts + send + unsubscribe | Read + Write |
+| `attachment` | Attachment list / download / search / extract (text extraction) / cleanup-orphans | Read + Write |
 | `llm` | LLM classification to fill AI fields + selftest + stats + path comparison | Read + Write |
-| `backfill` | Historical body / derived-attachment backfill | Write (long task) |
+| `kos` | KOS ingest ledger stats (status distribution / error codes / retry backlog / health) | Read |
 | `notion` | Direct Notion operations (update-flag / orphan / archive / create-task) | Write |
-| `admin` | Stats / health / db-version / dead letters / cleanup / repair | Read + Write |
-| `init` | 7 sub-actions to initialize sync | Write (long task) |
-| `calendar` | Recurring-meeting expansion / discover / replay | Read + Write |
+| `calendar` | Meeting expansion / occurrence queries / RSVP / CalDAV event CRUD / recurring discover-replay | Read + Write |
 | `debug` | raw MIME / mail-structure / inline-images / notion-page | Read |
+| `backfill` | Historical body backfill + metadata backfill | Write (long task) |
 | `project-progress` | Project weekly-report sync add-on (xlsx → Notion) | Write |
+| `init` | 7 sub-actions to initialize sync | Write (long task) |
+| `folder` | Archive/drafts folder discover / enable / disable / create / rename / delete / cleanup (davmail-only) | Read + Write |
+| `report` | Report Agent run / list / get / delete / config-get / config-set / agent-create / agent-delete | Read + Write |
+| `api-key` | Scoped Bearer agent key: create / list / revoke / rotate | Read + Write |
+| `im` | Feishu chat pairing: pair a one-time bind code / status | Read + Write |
+| `contact` | Contacts backfill scan + aggregate recalibration | Write |
+| `admin` | Stats / health / db-version / dead letters / cleanup / repair / config read-write | Read + Write |
 
-For the full list of actions + flags + `jq` examples, see [Reference for the 10 Command Groups](/agent/commands/).
+For the full list of actions + flags + `jq` examples, see [Command Group Reference](/agent/commands/).
 
 ## Version and Installation Check
 
 ```bash
 which mailagent        # should be <project>/venv/bin/mailagent
 mailagent --version    # prints the version number and exits
-mailagent --help       # lists the 10 groups + global flags
+mailagent --help       # lists all 16 command groups + global flags
 ```
 
 :::caution[PATH note]
@@ -118,5 +124,5 @@ If your automation touches the email **fetch / send / calendar** path: the MailA
 - [Automation Environment Install and Configuration](/en/agent/setup/) — venv / config precedence chain / API key
 - [Global Flags and Output Formats](/en/agent/output-formats/) — JSON wrapper / NDJSON / field conventions
 - [Exit-Code Contract](/agent/exit-codes/) — full 0–130 table + programmatic decisions
-- [Reference for the 10 Command Groups](/agent/commands/) — per-group synopsis + jq examples
+- [Command Group Reference](/agent/commands/) — per-group synopsis + jq examples
 - Full design RFC: [`docs/reference/cli/agent-cli-rfc.md`](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/cli/agent-cli-rfc.md)

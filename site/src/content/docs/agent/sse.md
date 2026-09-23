@@ -168,7 +168,7 @@ es.addEventListener('mailagent', (e) => {
 
 ## 故障注意
 
-- mail-sync publish 是同步 fire-and-forget，**Redis 不可达不阻塞主链路**（silent fail，见 `src/events/publisher.py:safe_publish`）。所以"事件流空了"不代表同步停了——可能只是 Redis 断了，邮件仍在落 SQLite。
+- mail-sync publish 是同步 fire-and-forget，**Redis 不可达不阻塞主链路**（silent fail，见 `src/events/publisher.py:safe_publish`）。所以「事件流空了」不代表同步停了——可能只是 Redis 断了，邮件仍在落 SQLite。
 - SSE endpoint 在 Redis 不可达时订阅失败，客户端会一直收 `ping` 心跳直到 timeout —— **收到 ping ≠ 收到业务事件**，别把心跳当存活证明。
 - 要确认事件是否真发出，用 `mailagent admin stats` 的 watcher section（`emails_synced` 计数）交叉验证。
 

@@ -95,7 +95,7 @@ CJK smart transform 在零语法 fast-path 下自动为纯 CJK token 加通配�
 
 - **有正向文本词**：`FROM email_body_fts JOIN email_metadata ... WHERE … MATCH :fts_expr [AND filters] [AND NOT IN neg]`，`ORDER BY bm25 ASC`（相关性）。
 - **纯过滤（无正向文本词）**：`FROM email_metadata WHERE filters`，snippet 空串 / rank 0，`ORDER BY datetime(date_received) DESC`（最新优先）。
-- **日期归一（修了存量 bug）**：`date_received` 存量数据时区偏移混存（`+00:00`/`-06:00`/`-07:00`），裸字典序比较边界错位最多 ~15h。一律 `datetime(m.date_received) >= datetime(:v)` 让 SQLite 解析时区归一 UTC；date-only 值按**本地时区**解释，`before:` 取次日 0 点实现"当天含"。`newer_than/older_than` 相对注入的 `now`（生产取系统值，测试由夹具注入）。
+- **日期归一（修了存量 bug）**：`date_received` 存量数据时区偏移混存（`+00:00`/`-06:00`/`-07:00`），裸字典序比较边界错位最多 ~15h。一律 `datetime(m.date_received) >= datetime(:v)` 让 SQLite 解析时区归一 UTC；date-only 值按**本地时区**解释，`before:` 取次日 0 点实现「当天含」。`newer_than/older_than` 相对注入的 `now`（生产取系统值，测试由夹具注入）。
 
 ## 返回与警告
 
@@ -144,10 +144,10 @@ DSL 是双端契约。只改 Python 不改 TS（反之亦然）会导致 CLI/ser
 
 | Query | 语义 |
 |---|---|
-| `from:alice 报告` | 发件人含 alice 且全文匹配"报告" |
+| `from:alice 报告` | 发件人含 alice 且全文匹配「报告」 |
 | `from:alice OR from:bob is:unread` | (alice 或 bob 发的) 且未读 |
 | `subject:"weekly report" -from:noreply` | 主题含短语且发件人不含 noreply |
-| `产品评审 has:attachment newer_than:7d` | 近 7 天带附件的"产品评审"相关邮件 |
+| `产品评审 has:attachment newer_than:7d` | 近 7 天带附件的「产品评审」相关邮件 |
 | `in:收件箱 is:flagged priority:urgent` | 收件箱中旗标且 AI 判定紧急（纯过滤，按日期倒序）|
 | `redis OR timeout -is:read` | 全文 redis 或 timeout，且未读 |
 | `date:2026-06-01 from:tp-link.com` | 本地时区 6 月 1 日当天、发件域含 tp-link.com |
@@ -161,5 +161,5 @@ DSL 是双端契约。只改 Python 不改 TS（反之亦然）会导致 CLI/ser
 ## 深入了解
 
 - [`docs/reference/search/search-query-syntax.md`](https://github.com/)（Python+TS 双端完整契约）
-- [10 大命令组参考](/agent/commands/) §`email search`
+- [命令组参考](/agent/commands/) §`email search`
 - [JSON Schema 契约](/agent/json-schema/)（`email-search.schema.json`：hit 含 `snippet` / `rank`）

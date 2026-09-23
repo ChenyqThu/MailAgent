@@ -22,7 +22,7 @@ description: "把 MailAgent Skill 层接进 MCP 客户端：mailagent-mcp consol
 | `MAILAGENT_API_BASE` | serve-api 地址 | 本机 `http://127.0.0.1:8200` |
 | `MAILAGENT_AGENT_KEY` | scoped Bearer key（`mak_…`）| 无（必填）|
 
-远程打 `https://mail.chenge.ink`。手动起一次验证：
+远程打 `https://<your-domain>`。手动起一次验证：
 
 ```bash
 MAILAGENT_API_BASE=http://127.0.0.1:8200 \

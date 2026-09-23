@@ -3,7 +3,7 @@ title: "自动化环境安装与配置"
 description: "在自动化环境里装好 mailagent CLI：venv 安装、配置优先级链、load_cli_config 工厂、MAILAGENT_CLI_API_KEY、shell 补全。"
 ---
 
-本页讲清如何在 CI / cron / agent runner 里把 `mailagent` CLI 跑起来，并理解它的配置加载顺序——后者直接决定"我设的值到底有没有生效"。
+本页讲清如何在 CI / cron / agent runner 里把 `mailagent` CLI 跑起来，并理解它的配置加载顺序——后者直接决定「我设的值到底有没有生效」。
 
 ## 安装
 
@@ -21,7 +21,7 @@ pip install -e ".[cli,dev]"
 ```bash
 which mailagent        # 应是 <project>/venv/bin/mailagent
 mailagent --version    # 打印版本号
-mailagent --help       # 列 10 个 group + 全局 flags
+mailagent --help       # 列全部 16 个命令组 + 全局 flags
 ```
 
 :::caution[venv 与 PATH]
@@ -82,7 +82,7 @@ mailagent email flag 53675 --is-read       # 自动用 env 里的 key
 服务端 `.env` 里也配同名 `MAILAGENT_CLI_API_KEY`，CLI 用 `hmac.compare_digest` 比对。完整规则（读/写命令清单、`--dry-run` 跳过鉴权、dev bypass 风险）见 [写命令鉴权契约](/agent/auth/)。
 
 :::danger[绝不进 .env]
-`MAILAGENT_CLI_ALLOW_UNAUTH_WRITES=true` 是开发模式逃生口（服务端没配 token 时放行写命令）。它**绝不能进 `.env` 或 CI 环境**——一旦它在，"忘配 token"就等同于"无防护"。详见 [鉴权契约](/agent/auth/)。
+`MAILAGENT_CLI_ALLOW_UNAUTH_WRITES=true` 是开发模式逃生口（服务端没配 token 时放行写命令）。它**绝不能进 `.env` 或 CI 环境**——一旦它在，「忘配 token」就等同于「无防护」。详见 [鉴权契约](/agent/auth/)。
 :::
 
 ## shell 补全
