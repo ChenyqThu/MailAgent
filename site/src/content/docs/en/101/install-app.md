@@ -1,72 +1,72 @@
 ---
 title: Install the Desktop App
-description: Download the .dmg for your architecture from GitHub Releases, drag it into Applications, get past Gatekeeper on first launch, grant permissions, and set up the MailAgent desktop App.
+description: Download the .dmg for Apple Silicon on macOS or the .exe for x64 on Windows, what the system prompts on first launch mean, and how in-app auto-update works.
 ---
 
-The desktop App is the heart of MailAgent: the three-column inbox, the AI panel, full-text search, one-click translation, and reply composing all live here. **It ships with a complete backend already embedded (a self-contained runtime—no separate Python or CLI install needed)**—just download, open, and you're ready to go. Your email data is stored in a local database on your own Mac.
+MailAgent is a single desktop App: email sync, AI classification, matters, contacts, the library, and chat are all built into one installer—no separate Python or CLI install needed. macOS and Windows install differently; pick the path for your system.
 
-:::note[Just this one App—nothing else to install first]
-You do not need to "install the backend" first. The old `git clone` + virtual environment + `mailagent` CLI flow is an advanced path for developers running from source (see [(Developer) Run the Backend from Source](/en/101/install-backend/)). Regular users **just download the App below**—the backend is bundled inside and starts automatically with the App. The only additional step is: corporate Exchange / Microsoft 365 users need to run a separate DavMail mail-source bridge (covered in [the next section](/en/101/davmail-setup/)).
+## macOS (Apple Silicon)
+
+### Step 1: Download the .dmg
+
+Go to [GitHub Releases](https://github.com/ChenyqThu/MailAgent/releases) and download the latest `MailAgent-x.y.z-arm64.dmg`.
+
+:::note[Apple Silicon only, for now]
+The current build only ships for Apple Silicon (M-series). An Intel Mac build is not available yet.
 :::
 
-## Step 1: Download the .dmg for your architecture
+### Step 2: Install into "Applications"
 
-Go to [GitHub Releases](https://github.com/ChenyqThu/MailAgent/releases), find the latest version, and download per your Mac's processor:
+Double-click the downloaded `.dmg`, drag the `MailAgent` icon into the `Applications` folder, then eject the disk image.
 
-- **Apple Silicon** (M1 / M2 / M3 / M4 Mac): `MailAgent-x.y.z-arm64.dmg`
-- **Intel Mac**: `MailAgent-x.y.z-x64.dmg`
+### Step 3: First launch
 
-Not sure which you have? Click the **Apple menu  → About This Mac** and look at "Chip / Processor": if it says `Apple M*` it's Apple Silicon (choose arm64); if it says `Intel Core`, choose x64.
+MailAgent is signed with an Apple Developer ID and notarized. On first launch, macOS will typically just ask "this app was downloaded from the internet, are you sure you want to open it?"—click **Open**. No extra steps in System Settings are needed.
 
-## Step 2: Install into "Applications"
+After that, launch it from Launchpad, Spotlight (`⌘ Space`, type "MailAgent"), or the Dock.
 
-1. Double-click the downloaded `.dmg` file.
-2. Drag the `MailAgent` icon into the `Applications` folder.
-3. After dragging, you can eject (unmount) that .dmg disk image.
+### Step 4: Walk through first-time setup
 
-## Step 3: First launch, getting past Gatekeeper
+The first launch opens a setup wizard: checking system permissions, choosing a mailbox backend, connecting Notion (optional), the first sync, and turning on optional features. See **[In-App First-Time Setup](/en/101/onboarding/)** for the full walkthrough.
 
-MailAgent is currently **ad-hoc signed** (it does not have a paid Apple Developer ID), so the first time you open it, macOS's Gatekeeper will block it. This is expected behavior; just do the following:
+## Windows (x64)
 
-1. Find `MailAgent` in "Applications," then **right-click → Open**.
-2. In the dialog, click **Open / Open Anyway** again.
+### Step 1: Download the .exe
 
-:::tip
-Only the **first time** requires opening via right-click. Once trusted, you can launch it directly from Launchpad, Spotlight (`⌘ Space`, type "MailAgent"), or the Dock from then on. If right-click is also blocked, go to **System Settings → Privacy & Security**; near the bottom of the page an "Open Anyway" button for MailAgent will appear—click it.
+Go to [GitHub Releases](https://github.com/ChenyqThu/MailAgent/releases) and download the latest `MailAgent-x.y.z-win-x64.exe`.
+
+### Step 2: Run the installer
+
+Double-click the `.exe`, choose an install location, and finish the install. The Windows installer is not currently code-signed, so you may see a **Windows protected your PC** (SmartScreen) prompt on install or first run—click **More info**, then **Run anyway**.
+
+### Step 3: Have Outlook ready (if using the native Outlook backend)
+
+The recommended mailbox backend on Windows is the local **classic Outlook** (not the new "New Outlook," which has no automation interface). Before installing, make sure:
+
+- Classic Outlook is installed and signed in;
+- Outlook stays running while syncing;
+- On first run, Outlook will show a "a program is trying to access" prompt—choose **Allow access** and pick the longest duration.
+
+For a corporate Exchange / Microsoft 365 mailbox, you can also use DavMail instead—see [Connect Your Corporate Mailbox via DavMail](/en/101/davmail-setup/).
+
+:::caution[No calendar on Windows yet]
+The native Outlook backend does not sync the calendar. If you need calendar sync, use the DavMail backend instead.
 :::
 
-## Step 4: Grant permissions
+### Step 4: Walk through first-time setup
 
-On first launch, macOS will pop up several permission requests; click **Allow**:
+Same as macOS—see **[In-App First-Time Setup](/en/101/onboarding/)**.
 
-- **Documents folder access**: by default the App reads and writes the database at `~/Documents/MailAgent/data/`.
-- **Automation permission**: used when performing operations such as mark-as-read / flag / create draft.
+## In-app auto-update
 
-If you didn't grant a permission at the time and later need to add it, go to **System Settings → Privacy & Security → Automation** and check the `Mail` sub-item under `MailAgent`.
-
-### Full Disk Access (optional but recommended)
-
-The database is by default at `~/Documents/MailAgent/data/`, and the "Documents folder access" above is usually enough. But if you've moved the database path to a protected directory such as `~/Library/...`, you need to add Full Disk Access manually:
-
-**System Settings → Privacy & Security → Full Disk Access → +**, and add `MailAgent.app`.
-
-## What you'll see after launching
-
-The first time you open the App, it guides you through the in-app first-time setup (appearance, inbox polling, AI backend, keys, etc.). This part is walked through in detail in the next section.
-
-Once setup is complete, the main interface is the three-column inbox: folders and AI Agents on the left, the email list in the middle, and details plus the AI fields panel on the right.
-
-:::note[The App's built-in backend · DavMail stays separate]
-The backend embedded in the App starts automatically with the App—you don't need to run any `mail-sync` process separately. **The only thing that stays separate is DavMail** (the corporate Exchange mail-source bridge; it isn't bundled into the App)—the next section explains how to run it as a background daemon. If you previously ran the CLI backend from source (PM2 `mail-sync`), stop it before using the App (`pm2 stop mail-sync`) to avoid two backends writing to the same database at once.
-:::
+On both platforms, the App checks for updates about 10 seconds after launch, then periodically thereafter. When a new version is available, the App prompts you to download it in-app; once downloaded, one click restarts and finishes the install. If the database needs a structural upgrade, it happens automatically on launch—**and cannot be rolled back to an older version afterward**; see [Updates, Upgrades, and Uninstalling](/en/101/updates/) for details.
 
 ## Next up
 
-- Corporate Exchange / Microsoft 365 mailbox? Set up the mail source first: **[Connect Your Corporate Mailbox via DavMail](/en/101/davmail-setup/)**.
-- Configure the App: **[In-App First-Time Setup](/en/101/onboarding/)**.
-- Get started: **[Daily Workflow: Inbox](/en/101/daily-inbox/)**.
+- Walk through the wizard: **[In-App First-Time Setup](/en/101/onboarding/)**.
+- Corporate mailbox via DavMail: **[Connect Your Corporate Mailbox via DavMail](/en/101/davmail-setup/)**.
 - Can't install / crashes on open? See the **[Troubleshooting FAQ](/en/101/troubleshooting/)**.
 
 ---
 
-> Learn more: [Frontend Install Guide INSTALL.md](https://github.com/ChenyqThu/MailAgent/blob/main/frontend/INSTALL.md) · [Packaging and Release](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/packaging/packaging-release.md)
+> Learn more: [Packaging and Release](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/packaging/packaging-release.md)

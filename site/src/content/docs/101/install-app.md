@@ -1,72 +1,72 @@
 ---
 title: 安装桌面 App
-description: 从 GitHub Releases 下载对应架构的 .dmg、拖进应用程序、首次启动绕过 Gatekeeper、授予权限，把 MailAgent 桌面 App 装好。
+description: macOS 下载 .dmg（Apple 芯片）、Windows 下载 .exe（x64）；首次打开时系统会提示什么，以及应用内自动更新怎么运作。
 ---
 
-桌面 App 是 MailAgent 的主体：三栏收件箱、AI 面板、全文搜索、一键翻译、回复撰写都在这里。**它内嵌了完整的同步后端（自带运行环境，无需另装 Python 或 CLI）**——装好打开就能用，邮件数据存在你自己 Mac 的本地数据库里。
+MailAgent 是一体化的桌面 App：邮件同步、AI 分类、事项、通讯录、资料库、对话全部内置在一个安装包里，不需要另外安装 Python 或命令行。macOS 与 Windows 的安装方式不同，按你的系统选一条路径。
 
-:::note[只需要装这一个 App]
-不用先装"后端"。旧版那套 `git clone` + 虚拟环境 + `mailagent` CLI 是给开发者从源码跑的进阶玩法（见 [（开发者）从源码运行后端](/101/install-backend/)）。普通用户**直接下载下面的 App 即可**，后端已经打包在里面、随 App 自动启动。唯一的额外一步是：企业 Exchange / Microsoft 365 邮箱需要单独跑一个 DavMail 邮件源（[下一节](/101/davmail-setup/)讲）。
+## macOS（Apple 芯片）
+
+### 第 1 步：下载 .dmg
+
+到 [GitHub Releases](https://github.com/ChenyqThu/MailAgent/releases) 下载最新版本的 `MailAgent-x.y.z-arm64.dmg`。
+
+:::note[目前只支持 Apple 芯片]
+当前版本只发布 Apple 芯片（M 系列）构建，Intel Mac 暂不提供安装包。
 :::
 
-## 第 1 步：下载对应架构的 .dmg
+### 第 2 步：装到「应用程序」
 
-到 [GitHub Releases](https://github.com/ChenyqThu/MailAgent/releases) 找最新版本，按你的 Mac 处理器下载：
+双击下载的 `.dmg` 文件，把 `MailAgent` 图标拖进 `Applications` 文件夹，然后推出这个磁盘映像。
 
-- **Apple Silicon**（M1 / M2 / M3 / M4 Mac）：`MailAgent-x.y.z-arm64.dmg`
-- **Intel Mac**：`MailAgent-x.y.z-x64.dmg`
+### 第 3 步：首次打开
 
-不确定自己是哪种？点 **苹果菜单  → 关于本机**，看"芯片 / 处理器"：写 `Apple M*` 的是 Apple Silicon（选 arm64），写 `Intel Core` 的选 x64。
+MailAgent 使用 Apple Developer ID 签名并经过公证。首次打开时，macOS 通常只会提示「这是从互联网下载的应用，是否要打开」，点 **打开** 即可，不需要额外去系统设置里操作。
 
-## 第 2 步：装到"应用程序"
+之后可以从 Launchpad、Spotlight（`⌘ Space` 输入 "MailAgent"）或 Dock 直接启动。
 
-1. 双击下载的 `.dmg` 文件。
-2. 把 `MailAgent` 图标拖到 `Applications`（应用程序）文件夹。
-3. 拖完可以推出（弹出）那个 .dmg 磁盘映像。
+### 第 4 步：走完首次配置向导
 
-## 第 3 步：首次启动，绕过 Gatekeeper
+第一次启动会进入配置向导：检测系统权限、选择邮件后端、连接 Notion（可选）、首次同步、按需开启功能。完整走查见 **[应用内首次配置](/101/onboarding/)**。
 
-MailAgent 目前是 **ad-hoc 签名**（没有 Apple 付费的 Developer ID），所以第一次打开会被 macOS 的 Gatekeeper 拦下。这是预期行为，按下面做即可：
+## Windows（x64）
 
-1. 在"应用程序"里找到 `MailAgent`，**右键点击 → 打开**。
-2. 弹窗里再点 **打开 / 仍然打开**。
+### 第 1 步：下载 .exe
 
-:::tip
-只有**第一次**需要右键打开。信任之后，以后从 Launchpad、Spotlight（`⌘ Space` 输入 "MailAgent"）或 Dock 直接启动即可。如果右键也被拦，去 **系统设置 → 隐私与安全性**，页面下方会出现"仍要打开 MailAgent"的按钮，点它。
+到 [GitHub Releases](https://github.com/ChenyqThu/MailAgent/releases) 下载最新版本的 `MailAgent-x.y.z-win-x64.exe`。
+
+### 第 2 步：运行安装程序
+
+双击 `.exe`，按提示选择安装目录并完成安装。Windows 安装包目前没有代码签名，安装或首次运行时可能出现 **Windows 已保护你的电脑**（SmartScreen）提示——点 **更多信息**，再点 **仍要运行**。
+
+### 第 3 步：准备好 Outlook（若使用本机 Outlook 后端）
+
+Windows 上推荐的邮件后端是本机**经典版 Outlook**（不是新版「New Outlook」，新版没有自动化接口）。安装前确认：
+
+- 已安装并登录经典版 Outlook；
+- 同步期间保持 Outlook 处于运行状态；
+- 首次运行 MailAgent 时，Outlook 会弹出「有程序正尝试访问」的授权提示，选 **允许访问** 并选最长时长。
+
+企业 Exchange / Microsoft 365 邮箱也可以改用 DavMail，见 [用 DavMail 接入企业邮箱](/101/davmail-setup/)。
+
+:::caution[Windows 暂不提供日历]
+本机 Outlook 后端目前不同步日历。需要日历功能的话，改用 DavMail 后端。
 :::
 
-## 第 4 步：授予权限
+### 第 4 步：走完首次配置向导
 
-首次启动时，macOS 会弹出几个权限请求，点 **允许**：
+同 macOS，见 **[应用内首次配置](/101/onboarding/)**。
 
-- **文稿（Documents）文件夹访问**：App 默认从 `~/Documents/MailAgent/data/` 读数据库。
-- **自动化权限**：执行标已读 / 旗标 / 起草草稿等操作时用到。
+## 应用内自动更新
 
-如果某个权限当时没给、后来需要补，去 **系统设置 → 隐私与安全性 → 自动化**，勾上 `MailAgent` 下的 `Mail` 子项。
-
-### 完全磁盘访问（可选但推荐）
-
-数据库默认在 `~/Documents/MailAgent/data/`，上面的"文稿文件夹访问"通常就够了。但如果你把数据库路径改到了 `~/Library/...` 等受保护目录，需要手动加完全磁盘访问：
-
-**系统设置 → 隐私与安全性 → 完全磁盘访问权限 → +**，添加 `MailAgent.app`。
-
-## 启动后你会看到什么
-
-第一次打开 App，它会引导你完成应用内的首次配置（外观、收件箱轮询、AI 后端、密钥等）。这一段在下一节详细走查。
-
-配置完成后，主界面就是三栏收件箱：左侧文件夹与 AI Agents、中间邮件列表、右侧详情与 AI 字段面板。
-
-:::note[App 自带后端 · DavMail 要单独留着]
-App 内嵌的后端会随 App 自动启动，你不需要再跑任何 `mail-sync` 进程。**唯一需要单独运行的是 DavMail**（企业 Exchange 邮件源桥接，不打进 App）——下一节讲怎么把它跑成后台守护。如果你之前从源码跑过 CLI 后端（PM2 `mail-sync`），用 App 时请先把它停掉（`pm2 stop mail-sync`），避免两个后端同时往同一个数据库写。
-:::
+两个平台都会在启动约 10 秒后自动检查一次更新，此后定期复查。有新版本时会在应用内提示下载；下载完成后点一下即可重启并完成安装。数据库如果需要升级，会在启动时自动完成——**升级后无法回退到更早的版本**，细节见 [更新、升级与卸载](/101/updates/)。
 
 ## 接下来
 
-- 企业 Exchange / Microsoft 365 邮箱？先配邮件源：**[用 DavMail 接入企业邮箱](/101/davmail-setup/)**。
-- 配置 App：**[应用内首次配置](/101/onboarding/)**。
-- 开始用：**[日常工作流：收件箱](/101/daily-inbox/)**。
-- 装不上 / 打开闪退？看 **[故障排查 FAQ](/101/troubleshooting/)**。
+- 配置向导详解：**[应用内首次配置](/101/onboarding/)**。
+- 企业邮箱用 DavMail：**[用 DavMail 接入企业邮箱](/101/davmail-setup/)**。
+- 装不上 / 打开报错？看 **[故障排查 FAQ](/101/troubleshooting/)**。
 
 ---
 
-> 深入了解：[前端安装手册 INSTALL.md](https://github.com/ChenyqThu/MailAgent/blob/main/frontend/INSTALL.md) · [打包与发布](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/packaging/packaging-release.md)
+> 深入了解：[打包与发布流程](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/packaging/packaging-release.md)

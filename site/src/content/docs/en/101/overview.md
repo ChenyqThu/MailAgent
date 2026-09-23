@@ -1,80 +1,67 @@
 ---
 title: What Is MailAgent
-description: A macOS email assistant that puts AI inside your inbox—the moment a message lands it gets read, classified, prioritized, summarized, and drafted for reply. The important rises, the noise sinks, and every conclusion links back to the original.
+description: A local-first personal AI workspace that starts from email—mail, matters, calendar, contacts, and a library live in one place, and a team of named, bounded agents handles the routine work while you weigh in on exceptions and decisions.
 ---
 
 ## In one sentence
 
-**MailAgent reads each email for you the instant it lands.** It automatically classifies every message, sets its priority, writes a one-line summary, and drafts a reply—so the important rises and the noise sinks, and every conclusion can be clicked back to the original email to verify.
+**MailAgent is a local-first personal AI workspace built around email.** Mail is read, classified, summarized, and drafted the moment it lands. Matters, calendar, contacts, and files are the things you work on. A team of named, bounded agents handles the routine, and you only step in for exceptions and decisions that matter—every conclusion can be traced back to the source.
 
-It runs on your own Mac and keeps your email data on the machine. It is a "local-first" tool, not yet another cloud service that hauls your inbox onto someone else's servers.
+It runs on your own machine, and the email body, attachments, and search index all live in a local database. That is what "local-first" means here: your data belongs to your machine first, and Notion is only an optional mirror.
 
-:::tip[Is reading this one page enough?]
-No, but it is the starting point. By the end of this page you will know what MailAgent can do for you and what you need to prepare. Then follow the left-hand table of contents from **[Install the Desktop App](/en/101/install-app/)** step by step—download, connect your mailbox, let the AI take over, and in a few minutes you can be looking at your first AI-processed email.
+:::tip[Where to start]
+Follow the sidebar: install the [desktop App](/en/101/install-app/), walk through [first-time setup](/en/101/onboarding/), and within a few minutes you will see your first AI-processed email.
 :::
 
-## What it does for you
+## Capability map
 
-MailAgent is a desktop App—it **ships with a complete backend that syncs and classifies email in the background** (a self-contained runtime, no separate Python or CLI install needed), and you open it every day to read mail, chat, and reply. Everything below is available right out of the box.
+MailAgent is a single desktop App with sync and AI built in—no separate Python or CLI install. Everything below is available out of the box or one toggle away.
 
-| Capability | What it means | Default |
+| Domain | In one line | Learn more |
 |---|---|---|
-| **Real-time email sync** | Sent/received mail, attachments, and the back-and-forth of a single topic (threads) are automatically mirrored into a Notion database as a searchable archive. | Always on |
-| **AI auto-classification** | As soon as an email is stored, it is tagged with a category, a priority (Urgent / Important / Normal / Low), a one-line summary, and a suggested action, all written into the email itself. | Optional |
-| **Full-text search** | The body plus attachment text (PDF / Word / PPT / Excel) all enter the full-text index; Chinese is searchable too, with matches highlighted. | Enabled with sync |
-| **AI Chat panel** | Inside the desktop App, ask the AI about the current email, have it search across emails, and stream a drafted reply. | In the App |
-| **One-click translation** | Translate English emails with one click—available in the detail view, the toolbar, and in bulk. | In the App |
-| **Meeting-invite detection** | Meeting invites (.ics) embedded in an email are automatically parsed into calendar events. | Always on |
-| **Calendar sync** | Incrementally sync your Exchange calendar to the machine, viewed together with the meeting invites in your email. | Off (can enable) |
-| **Dynamic Island notifications** (requires a separate plugin) | Important emails pop up as Dynamic Island cards, with one-click mark-as-read / flag / draft. | Off |
-| **Feishu notifications** | Urgent / important emails are pushed to Feishu, with interactive reply buttons. | Off |
-| **Remote web access** | While traveling, view your mail from an iPad / iPhone / someone else's computer through a browser. | Off |
-| **Daily / weekly / monthly reports** | Each day the AI reviews the past 24 hours of email and curates it into a structured report you can actually finish reading. | Off |
+| **Today** | Everything that needs your attention today, in one page: pending approvals, today's meetings, mail waiting on a reply, matters coming due, and what agents produced overnight. | [Today](/en/101/today/) |
+| **Mail** | Processed on arrival: category, priority, summary, and a suggested action are written into the email itself; body and attachments are fully indexed for search. | [Daily Workflow: Inbox](/en/101/daily-inbox/) |
+| **Calendar** | Mailbox events, matter deadlines, and agent schedules aggregate onto one view, with drag-to-reschedule. | [Calendar](/en/101/calendar/) |
+| **Matters** | Turn something you need to move forward into an object: background and goal, action items, stakeholders, linked resources, and a progress timeline. A follow-up agent only proposes updates—you accept them one by one. | [Matters](/en/101/matters/) |
+| **Contacts** | Profiles are built automatically from mail and meetings and merged by email address; AI-generated profiles cite their evidence. | [Contacts](/en/101/contacts/) |
+| **Library** (macOS) | Mount local folders and gather email and chat attachments into one file tree. Files stay where they are; what an agent can write is enforced by the server. | [Library](/en/101/library/) |
+| **AI Chat** | Summon the main agent from anywhere, `@`-mention an email, matter, file, or another agent; choose from many model providers. | [AI Chat panel](/en/101/ai-chat/) |
+| **Team & custom agents** | The main agent has a name and an avatar; custom agents wake on schedules, new mail, calendar changes, or before meetings, and every run leaves a complete record. | [Team & custom agents](/en/101/team-agents/) |
+| **Group chat** (Labs) | Several agents take turns in the same group, with sub-threads for side discussions. | [Group chat](/en/101/group-chat/) |
+| **Reports** | Daily, weekly, and monthly reports with statistics computed by code; every number and citation links back to the source. | [Reports](/en/101/reports/) |
+| **Notification center** | A persistent panel for pending approvals, agent results, and system alerts, with a badge on the bell icon. | [Notification center](/en/101/notifications/) |
+| **Connectors** (MCP) | Bring external services such as Notion, Jira, or GitHub into the conversation, or hand inbox capabilities to your own agent. | [Connectors](/en/101/connectors/) |
+| **Feishu chat** | Talk to the main agent in a Feishu direct message and approve actions with a button. | [Feishu chat](/en/101/feishu/) |
 
-> The capabilities marked "Off / Optional" above are not enabled by default; turn them on one by one as you need them—when you are just getting started, the first few rows alone are already plenty.
+> Most capabilities work out of the box or are one toggle away. Model access, Notion, and Feishu need your own key or authorization before they turn on.
 
 ## Three things that set it apart
 
-**1. Processed on arrival, not in after-the-fact batches.** Category, priority, summary, and suggested action are written the moment the email arrives. Open the list and you immediately see which one to read first, without scanning through everything again yourself.
+**1. Processed on arrival, not in after-the-fact batches.** Category, priority, summary, and suggested action are written the moment an email arrives. Today gathers what needs your attention so you don't have to re-scan the inbox yourself.
 
-**2. The AI writes the prose; the code guards the numbers.** The thing an email assistant fears most is "making things up." MailAgent's discipline: statistics, links, and email IDs are all deterministically backfilled by code; the AI is only responsible for wording and grouping. If the AI gets something wrong, only the phrasing is wrong, never the facts. Every number and every citation in a report can be clicked back to the real email to verify.
+**2. The AI writes the prose; the code guards the numbers.** Statistics, links, and email IDs in reports and profiles are deterministically generated by code; the AI is only responsible for wording and grouping. If something is wrong, it is at most a phrasing issue, never a fact—and every citation can be clicked back to the original email.
 
-**3. Local-first, with transparent books.** Your email data lives on your Mac. Every AI call is accounted for—volume processed, spend, latency, cache hits, and sync health are all laid out on a dashboard, not decorative charts.
+**3. Local-first, with bounded writes.** Mail, the index, and files live on your own machine. Every tool has an approval tier—sending mail, running commands, and changing agent configuration default to requiring your confirmation. What an agent can write to is decided by the server, not by the agent itself.
 
 ## System requirements
 
-Before installing, confirm your environment meets these conditions.
-
 | Item | Requirement |
 |---|---|
-| Operating system | macOS 12 (Monterey) or later; either Apple Silicon (M series) or Intel x64 works. |
-| Mailbox | A corporate Exchange / Microsoft 365 mailbox (bridged via DavMail), or an account already added in the built-in macOS **Mail.app** (the AppleScript path). |
-| Notion (optional) | Not needed by default—email bodies and attachments are stored in a local SQLite database on your Mac, which the App reads and writes directly. You only need a Notion workspace if you want email **additionally mirrored to Notion** as an extra archive (setup steps are in [(Developer) Run the Backend from Source](/en/101/install-backend/) under "Optional — build a Notion mirror"). |
-| Runtime | No separate Python install needed—the desktop App ships with a self-contained runtime. (Only developers running the backend from source need Python 3.11+.) |
-| Network | The first launch requires internet access to verify the Notion API, and (if AI is enabled) to verify the LLM gateway. |
-| AI (optional) | An Anthropic-compatible LLM gateway key, or a Notion Custom Agent. You can use sync and search without filling this in—you just won't have AI classification or Chat. |
+| macOS | 12 (Monterey) or later, **Apple Silicon** (M-series). |
+| Windows | Windows 10 / 11, x64. |
+| Mailbox | A corporate Exchange / Microsoft 365 mailbox (bridged via DavMail), or a signed-in classic Outlook on Windows; macOS can also use a local Mail.app account. |
+| Model access | Bring your own API key for a model provider (pick from several built-in official templates), or point at a self-hosted OpenAI/Anthropic-compatible relay. |
+| Notion (optional) | Not required—sync, search, AI classification, matters, contacts, and the library all run locally. A Notion workspace is only needed if you want an additional mirror there, and one-click authorization sets it up. |
 
-:::caution[About the mailbox backend]
-MailAgent supports two mailbox-access paths: **DavMail** (bridging corporate Exchange, fast, the currently recommended primary path) and **AppleScript** (driving macOS Mail.app directly, as an always-available fallback). You can switch between them with a single line of config. Note: the EWS protocol that DavMail currently relies on will be **shut down by Microsoft on 2026-10-01**; the migration plan is covered in later chapters and in the [migration roadmap](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/architecture/roadmap-post-cutover.md). The AppleScript path is unaffected.
+:::caution[Two mailbox-access paths]
+DavMail currently accesses Exchange Online via Exchange Web Services (EWS). Microsoft plans to **block EWS by default starting 2026-10-01** and **retire it completely on 2027-04-01**. See [Connect Your Corporate Mailbox via DavMail](/en/101/davmail-setup/) for migration status. The Windows native-Outlook path and the macOS Mail.app path are unaffected by these dates.
 :::
-
-## A few words you'll see again and again
-
-When you are getting started, the terms below will recur in the interface, the logs, and the docs. Just get a rough impression for now—no need to memorize them.
-
-- **Backend / mail-sync**: the main sync service running in the background, responsible for moving email into the local database and then mirroring it to Notion.
-- **Desktop App**: the graphical interface you open day to day—reading mail, searching, chatting, and replying all happen here.
-- **SQLite**: the local database file on your Mac (`data/sync_store.db`), the "authoritative copy" of email bodies and attachments; Notion is its mirror.
-- **DavMail**: a bridge program that translates a corporate Exchange mailbox into standard protocols, letting MailAgent read and write email at high speed.
-- **Notion Integration / Token**: the "bot" you create in Notion; MailAgent uses its Token to write emails into your database.
-
-A more complete glossary is in the [Troubleshooting FAQ](/en/101/troubleshooting/).
 
 ## Next up
 
-- Not installed yet? Start from **[Install the Desktop App](/en/101/install-app/)** and follow the full onboarding flow.
-- Want to jump straight to daily use? Skip to **[Daily Workflow: Inbox](/en/101/daily-inbox/)**.
-- Running into problems? Flip to the **[Troubleshooting FAQ](/en/101/troubleshooting/)**.
+- Not installed yet? Start from **[Install the Desktop App](/en/101/install-app/)**.
+- Want to see daily use first? Skip to **[Daily Workflow: Inbox](/en/101/daily-inbox/)**.
+- Running into problems? See the **[Troubleshooting FAQ](/en/101/troubleshooting/)**.
 
 ---
 

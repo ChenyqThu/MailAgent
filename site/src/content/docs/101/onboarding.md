@@ -1,90 +1,69 @@
 ---
 title: 应用内首次配置
-description: 桌面 App 设置面板逐项走查——外观与强调色、收件箱轮询频率、AI 后端、密钥（存进钥匙串）、存储路径、应用更新，以及如何测试 LLM 网关。
+description: 首启向导逐步走查——环境检测、选择邮件后端（DavMail / Windows 本机 Outlook）、邮件同步配置与 Notion 一键授权、首次同步、按需开启功能、接入模型服务；以及配置完成后还能在设置里调整的同步日期模式与历史邮件补录。
 ---
 
-第一次打开桌面 App，花两分钟把设置过一遍，后面用起来会顺很多。随时可以从侧边栏点 **设置**，或按 `⌘,` 打开设置面板。
+第一次打开桌面 App，会进入一个分步向导。多数步骤给了默认推荐项，跟着走一遍即可；每一步都可以先跳过、之后再回到设置里补。
 
-下面按设置面板的分区逐项说明。**多数项保持默认就好**，需要你动手的主要是 AI 后端和密钥两块。
+## 第 1 步：环境与权限
 
-## 外观（Appearance）
+向导会检测系统版本、内嵌运行环境、数据目录是否可写，以及两项 macOS 权限：
 
-- **主题模式**：浅色 / 深色 / 跟随系统。默认跟随系统。
-- **强调色**：6 种可选——coral（默认）/ cobalt / teal / rose / slate / olive。换一个试试，整个界面的高亮色会随之改变。
+- **完全磁盘访问**：读取 Mail.app 自身的邮件数据；
+- **自动化权限**：让 MailAgent 能控制 Mail.app 完成标已读、标旗、起草回复等操作。
 
-主题和强调色的选择会记住，下次打开仍是你选的。
+这两项权限只有选择**AppleScript** 后端（macOS 默认路径）时才用得上；如果你打算用 DavMail 或 Windows 上的本机 Outlook，可以先跳过继续，不会卡住流程。没有当场授权也没关系，向导会给出「稍后设置」或「仍要继续」的退出选项。
 
-## 收件箱（Inbox）
+## 第 2 步：选择邮件后端
 
-- **轮询频率**：App 多久检查一次新邮件。可选 5 秒（默认）/ 10 秒 / 30 秒 / 关闭。
-- 把轮询关掉也没关系——你仍然可以手动刷新列表。
+- **macOS**：默认是 **AppleScript**——用你 Mail.app 里已登录的账户读写邮件，零配置，需要上一步的完全磁盘访问。企业 Exchange / Microsoft 365 邮箱可以改选 **DavMail**（标注 Beta），需要系统装有 Java，并勾选一条合规确认（DavMail 目前用 Outlook 桌面端的公开身份登录做概念验证，且依赖的 EWS 协议将于 2026-10-01 起被微软默认阻断）。
+- **Windows**：默认是 **Outlook（本机）**——直接用本机已登录的经典版 Outlook 读写邮件，零外部依赖，但暂不提供日历同步；进阶选项同样是 DavMail。
 
-## AI 后端（AI Backends）
+选好 DavMail 之后，向导本身不会自动完成认证，需要按照 [用 DavMail 接入企业邮箱](/101/davmail-setup/) 单独跑一遍。
 
-这一块决定 AI 分类和 AI Chat 用哪个"大脑"。MailAgent 支持两种后端，可以只配一个，也可以两个都配后随时切换。
+## 第 3 步：邮件同步配置
 
-| 字段 | 怎么填 |
-|---|---|
-| **Notion Agent page_id** | 一个 Notion Custom Agent 的 UUID。留空也行，会用 Custom API 兜底。 |
-| **Notion Agent 显示名** | 自定义一个名字（比如 `Jarvis`），只影响界面显示。 |
-| **Custom API 端点** | 一个 OpenAI / Anthropic 兼容网关的 base URL，例如 `https://crs.chenge.ink`。 |
+填写邮箱账户（DavMail 模式下还包括认证方式与网关地址等字段）后，这一步还提供一个可选项：
 
-### 想用 Notion Agent？先装它的 CLI
-
-Notion Agent 后端依赖一个单独的命令行工具，按下面装好并拿到 page_id：
-
-```bash
-pipx install notion-agent-cli
-notion-agent init          # 首次会走 Notion OAuth 登录
-notion-agent agents list   # 列出你的 agent，复制对应的 UUID
-```
-
-把列出来的 UUID 填进 **Notion Agent page_id**。
-
-:::note[两种后端的差别]
-**Custom API**（自托管的 OpenAI / Anthropic 兼容网关）支持完整的工具调用，AI Chat 里的跨邮件检索、流式起草都靠它。**Notion Agent** 适合已有 Notion Custom Agent 的用户，但不支持工具调用协议，AI Chat 会自动退回到单轮模式。想体验完整 Chat 能力，建议配 Custom API。详见 [AI Chat 面板](/101/ai-chat/)。
+:::note[连接 Notion（推荐但非必需）]
+点 **连接 Notion**，在系统浏览器里完成一次性授权，可以顺带复制官方模板；Token 与两个数据库 ID 会自动写入配置，不需要手填。也可以跳过这一步——不接 Notion 时，邮件同步、搜索、AI 分类、事项、通讯录、资料库都照常在本地运行，只是不会有一份镜像同步到 Notion。
 :::
 
-## 密钥（Secrets）
+如果之前用过 Notion 的手动配置方式，这一步也保留了直接填 Token 和两个数据库 ID 的手填入口。
 
-三个密钥槽位。**填进去的值经 keytar 写入 macOS 钥匙串，不会落进任何文件**，安全。
+## 第 4 步：首次同步
 
-| 槽位 | 用途 | 从哪拿 |
-|---|---|---|
-| **CLI API Key** | 给写操作（重传 Notion / AI 重跑 / 标记）做鉴权 | 桌面 App 自带后端时通常已自动配好，一般**留空即可**；仅当你连的是外部 / 源码运行的后端时才需要手填（取自后端 `.env` 的 `MAILAGENT_CLI_API_KEY`） |
-| **LLM API Key** | 一键翻译 + Custom API chat 后端 | 你的 LLM 网关 Key（如 `cr_xxx`） |
-| **Custom API Key** | 自托管 OpenAI 兼容端点（和 LLM 同 Key 时可复用） | 网关 Key |
+向导会实时显示建表、拉取邮件、（如果连了 Notion）写入 Notion 三个阶段的进度。同步大邮箱可能需要一段时间，可以点 **放到后台继续**，先进入应用主界面，同步会在后台接着跑完。
 
-填好 LLM 密钥后，点 **测试网关 / Test Gateway** 验证联通。返回成功就说明翻译和 Chat 能用了；失败的话检查 Key 是否正确或过期。
+## 按需开启功能
 
-## 存储（Storage）
+这一步列出几个可选功能，缺凭证不会阻断流程，标黄「未配置」的项可以先开着、之后在设置里补凭证：
 
-- **数据库路径**：默认 `~/Documents/MailAgent/data/sync_store.db`。改路径会重启读取链；只接受绝对路径，含 `..` 的路径会被拒。
-- **附件根目录**：默认 `~/Documents/MailAgent/data/attachments`。
+- **Notion 同步**：如果上一步连了 Notion，这里默认开启。
+- **AI 智能**：邮件自动分类、起草回复建议，需要下一步配置模型服务。
+- **灵动岛通知**（可选增强）：新邮件与 AI 结果推送到系统灵动岛，需要另外安装 Ping Island App。
+- **每日巡检**：定时汇总未读与待办，依赖灵动岛通知。
+- **日历同步**：仅 DavMail 模式可用。
 
-一般不用动。除非你想把数据放到别的盘。
+## 接入模型服务（可选）
 
-:::caution
-数据库文件是后端 mail-sync 的"家当"——里面是你几万封邮件的归档。改路径前想清楚，别把后端和 App 指到不同的库。
-:::
+为 AI 分类与对话选一个模型服务商：从内置模板里选官方 API（如 Anthropic、OpenAI、DeepSeek 等）或自建的 OpenAI / Anthropic 兼容中转，填入对应的 API 地址与 Key。这一步可以整体跳过，之后随时在 **设置 → AI → 模型服务** 里添加、测试、切换——那里可以同时管理多个服务商与上百个模型，按需启停。
 
-## 应用更新
+密钥只保存在本机（加密落盘），不会上传到除你所选模型服务商之外的任何地方。
 
-在 About 旁边的"应用更新"区，可以看到：
+## 配置完成后，还有两处值得看一眼
 
-- **当前版本**：实时读取，例如 `v0.7.2`。
-- **渠道**：GitHub Releases · ad-hoc 签名。
-- **检查更新**：手动触发；有新版本时按 **下载更新 → 重启并安装**。
+向导结束后就是主界面。以下两项不在向导里，但值得在设置里留意：
 
-App 启动 10 秒后会自动检查一次更新。开发模式下自动更新禁用，会显示灰色提示。手动升级的完整步骤见 [更新 / 升级 / 卸载](/101/updates/)（本节由其他 Lane 撰写）。
+**同步日期模式**（设置 → 同步）：决定「多早以前的邮件只存本地、不额外镜像到 Notion」这条地板线怎么算——**相对**模式按「今天减去回溯天数」逐日滚动；**固定**模式钉在一个具体日期。这条地板线**不影响本地同步**，早于地板的邮件照常收进本机数据库，只是不建 Notion 页。
 
-## 配置完成
+**历史邮件**（设置 → 同步 → 历史邮件）：选一个起止日期区间（最长 365 天），一次性把本地缺失的收件箱与已发送邮件补回来（仅 DavMail 与 Windows 本机 Outlook 支持）。本地已有的邮件会自动跳过，历史邮件照常参与 AI 分类，但不会补发飞书通知或灵动岛提醒。
 
-设置过完，主界面就是你的工作台了。
+## 接下来
 
 - 上手日常操作：**[日常工作流：收件箱](/101/daily-inbox/)**。
-- 配置遇到问题（比如网关测试失败）：**[故障排查 FAQ](/101/troubleshooting/)**。
+- 配置遇到问题（比如模型连接测试失败）：**[故障排查 FAQ](/101/troubleshooting/)**。
 
 ---
 
-> 深入了解：[前端安装与首次配置 INSTALL.md §3](https://github.com/ChenyqThu/MailAgent/blob/main/frontend/INSTALL.md)
+> 深入了解：[模型服务商体系](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/llm-agent/llm-provider-registry.md) · [同步历史邮件](https://github.com/ChenyqThu/MailAgent/blob/main/docs/reference/sync/history-sync.md)

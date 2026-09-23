@@ -3,12 +3,12 @@ title: 用 DavMail 接入企业邮箱（推荐）
 description: DavMail 是什么、为什么把它作为推荐的邮箱源、怎么装与认证（含伪装 Outlook 桌面 client_id 的 OAuth 流程与卡顿 workaround）、怎么确认服务在跑、怎么用 PM2 做成守护进程。
 ---
 
-如果你的邮箱是**企业 Exchange / Microsoft 365**，我们推荐用 **DavMail** 作为 MailAgent 的邮箱源，而不是默认的 AppleScript。它更快、更稳，且把"富文本回复全部 + 线程折叠 + 多文件夹 + 日历直读"这些能力真正打通。
+如果你的邮箱是**企业 Exchange / Microsoft 365**，我们推荐用 **DavMail** 作为 MailAgent 的邮箱源，而不是默认的 AppleScript。它更快、更稳，且让「富文本回复全部、线程折叠、多文件夹、日历直读」这些能力真正可用。
 
 本页从零讲清 DavMail：是什么、为什么、怎么装、怎么认证、怎么确认、怎么守护。
 
 :::note[企业 Exchange 用户的额外一步]
-装好[桌面 App](/101/install-app/) 后，如果你的邮箱是企业 Exchange / Microsoft 365，需要单独把 DavMail 跑起来作为邮件源。本页讲怎么装、认证、守护。App 内嵌的后端会自动识别并连上本机运行的 DavMail；普通 Mail.app 邮箱用户不需要这一页，直接去[应用内首次配置](/101/onboarding/)即可。
+装好[桌面 App](/101/install-app/) 后，如果你的邮箱是企业 Exchange / Microsoft 365，需要单独把 DavMail 跑起来作为邮件源。本页讲怎么装、认证、守护。App 内嵌的后端会自动识别并连上本机运行的 DavMail；普通 Mail.app（macOS）或经典版 Outlook（Windows）邮箱用户不需要这一页，直接去[应用内首次配置](/101/onboarding/)即可。DavMail 在 macOS 与 Windows 上的配置方式一致。
 :::
 
 ## DavMail 是什么
@@ -102,7 +102,7 @@ java -jar davmail.jar ../config/davmail.properties
 1. 控制台打印一条 **OAuth URL**（里面能看到 `client_id=d3590ed6-...` 和你的 `login_hint`）。
 2. 复制 URL → 浏览器打开 → 输入**公司账号 + MFA**。
 3. 微软可能弹一个 **broker check**："正在尝试登录到 Microsoft Office 吗？仅在从信任的应用商店或网站下载应用时才继续。"——点**继续**即可。
-   > 这是因为 client_id 对应 Outlook for Windows，但当前进程不是真 Outlook（没有微软设备签名），触发了应用真实性二次确认。能点"继续"过去，恰恰说明你的租户**没有对这个 client_id 做设备绑定的严校验**。
+   > 这是因为 client_id 对应 Outlook for Windows，但当前进程不是真 Outlook（没有微软设备签名），触发了应用真实性二次确认。能点「继续」过去，恰恰说明你的租户**没有对这个 client_id 做设备绑定的严校验**。
 4. 点继续后会跳到一个**一直 loading 的空白页**（`urn:ietf:wg:oauth:2.0:oob` 这种回调方式现代浏览器已不原生支持，所以页面卡住——这是正常现象）。
 5. **从卡住的页面里抠出授权码**：打开浏览器**开发者工具 → Network（网络）标签** → 找最后一个**失败/pending 的请求** → 从它的 Request URL 里复制 `code=...` 这一段参数。
 6. 把完整的 `code=...` **粘回 DavMail 控制台的 stdin**，回车。
@@ -111,7 +111,7 @@ java -jar davmail.jar ../config/davmail.properties
 看到控制台不再要求授权、`token.dat` 生成，认证就成了。可以 `Ctrl-C` 停掉这次前台运行，第 5 步再用 PM2 把它做成守护进程。
 
 :::note
-DavMail 当前用 Outlook 桌面端 well-known client_id 伪装登录属评估用途，企业生产前建议走公司 IT 审批或直接申请 Graph API 应用；另微软已宣布 O365 的 EWS 协议将于 **2026-10-01 关停**，届时需切换到 Graph 路线。AppleScript 路径不受这两条影响，始终可作兜底。
+DavMail 当前用 Outlook 桌面端 well-known client_id 伪装登录属评估用途，企业生产前建议走公司 IT 审批或直接申请 Graph API 应用；另微软已宣布 O365 的 EWS 协议将**自 2026-10-01 起默认阻断、2027-04-01 完全退役**，届时需切换到 Graph 路线。macOS 的 AppleScript 路径与 Windows 的本机 Outlook 路径都不受这两个日期影响，始终可作兜底。
 :::
 
 ## 第 3 步：让 MailAgent 用 DavMail

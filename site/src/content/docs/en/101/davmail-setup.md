@@ -8,7 +8,7 @@ If your mailbox is **corporate Exchange / Microsoft 365**, we recommend using **
 This page covers DavMail from scratch: what it is, why, how to install it, how to authenticate, how to confirm it, and how to daemonize it.
 
 :::note[An extra step for corporate Exchange users]
-After installing the [desktop App](/en/101/install-app/), if your mailbox is corporate Exchange / Microsoft 365, you need to run DavMail separately as a mail source. This page explains how to install, authenticate, and daemonize it. The backend embedded in the App automatically detects and connects to a locally running DavMail. If you use a regular Mail.app mailbox, skip this page and go straight to [In-App First-Time Setup](/en/101/onboarding/).
+After installing the [desktop App](/en/101/install-app/), if your mailbox is corporate Exchange / Microsoft 365, you need to run DavMail separately as a mail source. This page explains how to install, authenticate, and daemonize it. The backend embedded in the App automatically detects and connects to a locally running DavMail. If you use a regular Mail.app mailbox (macOS) or a signed-in classic Outlook (Windows), skip this page and go straight to [In-App First-Time Setup](/en/101/onboarding/). DavMail is configured the same way on macOS and Windows.
 :::
 
 ## What is DavMail
@@ -113,7 +113,7 @@ java -jar davmail.jar ../config/davmail.properties
 When the console stops asking for authorization and `token.dat` is created, authentication succeeded. You can `Ctrl-C` to stop this foreground run; Step 5 turns it into a daemon with PM2.
 
 :::note
-DavMail's current sign-in via the Outlook desktop well-known client_id is for evaluation use; for corporate production, go through your company's IT approval or apply for a Graph API app. Also, Microsoft has announced that EWS for O365 will be **shut down on 2026-10-01**, at which point you'll need to move to the Graph route. The AppleScript path is unaffected by either and is always available as a fallback.
+DavMail's current sign-in via the Outlook desktop well-known client_id is for evaluation use; for corporate production, go through your company's IT approval or apply for a Graph API app. Also, Microsoft has announced that EWS for O365 will be **blocked by default starting 2026-10-01 and fully retired on 2027-04-01**, at which point you'll need to move to the Graph route. Neither the macOS AppleScript path nor the Windows native-Outlook path is affected by these dates, and both remain available as fallbacks.
 :::
 
 ## Step 3: Point MailAgent at DavMail
