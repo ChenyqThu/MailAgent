@@ -649,10 +649,12 @@ export async function prepareChatRun(
   // 代价（已接受）：逐字进 Streamdown 时未闭合的 markdown 记号会短暂以字面量出现（`**` 等，
   // 实测只在「标签含空格」的链接/行内 code 上出现 2-3 拍），Streamdown 设计上会补全未终止
   // token。两个端点（/api/ai/chat + AG-UI 镜像）共用此 streamText，一致生效。
-  // Prompt caching (anthropic protocol only; the relay does not add breakpoints on its own):
-  // one breakpoint after the config-derived system head, plus request-level automatic caching so
-  // the conversation history is reused across tool steps and turns.
-  const anthropicCaching = resolvedModel.protocol === 'anthropic'
+  // Prompt caching for Claude on the anthropic protocol (the relay does not add breakpoints on its
+  // own): one breakpoint after the config-derived system head, plus request-level automatic
+  // caching so the conversation history is reused across tool steps and turns. Other models behind
+  // an anthropic-compatible endpoint may reject the request-level field, so they are left alone.
+  const anthropicCaching =
+    resolvedModel.protocol === 'anthropic' && /claude/i.test(resolvedModel.modelId)
   const systemForModel =
     anthropicCaching &&
     system !== undefined &&

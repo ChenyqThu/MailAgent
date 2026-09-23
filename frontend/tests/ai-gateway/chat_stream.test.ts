@@ -202,6 +202,13 @@ describe('ai-gateway — /api/ai/chat effort seam (WP-16a)', () => {
     expect(captured[0]).toEqual({ anthropic: { cacheControl: { type: 'ephemeral' } } })
   })
 
+  test('anthropic 协议上的非 Claude 型号 → 不带缓存字段（兼容端点可能拒收请求级 cache_control）', async () => {
+    const captured: Array<Record<string, unknown> | undefined> = []
+    const h = await start({ ...CHAT_CFG, createModel: () => mockCaptureModel(captured) })
+    await postChat(h.port, { model: 'deepseek-v4-flash' })
+    expect(captured[0]).toBeUndefined()
+  })
+
   test('effort 显式 none 压过 thinking:true（新路径优先，关断思考）', async () => {
     const captured: Array<Record<string, unknown> | undefined> = []
     const h = await start({ ...CHAT_CFG, createModel: () => mockCaptureModel(captured) })
