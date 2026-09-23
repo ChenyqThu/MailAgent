@@ -3118,7 +3118,7 @@ class SyncStore:
         ):
             cursor.execute(
                 f"INSERT OR IGNORE INTO report_agent {_seed_cols} "
-                "VALUES (?, 'report', 0, ?, ?, ?, NULL, 'claude-opus-4-8', NULL, 0, ?, NULL, ?, ?)",
+                "VALUES (?, 'report', 0, ?, ?, ?, NULL, 'claude-opus-5', NULL, 0, ?, NULL, ?, ?)",
                 (_id, _title, _sched, _win, _trig, _bpri, _seed_now),
             )
 

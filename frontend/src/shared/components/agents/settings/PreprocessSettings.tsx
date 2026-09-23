@@ -457,7 +457,7 @@ export function PreprocessSettings({ cfg }: { cfg: ReportAgentConfig }): React.R
                 <SelectContent className="z-[70]">
                   <SelectItem value={FOLLOW_GLOBAL_MODEL}>
                     {t('agents.preprocess.modelFollowGlobal', {
-                      model: envModelRaw || 'claude-sonnet-4-6'
+                      model: envModelRaw || 'claude-sonnet-5'
                     })}
                   </SelectItem>
                   <ModelSelectItems models={enabledModels} current={model || null} />

@@ -10,8 +10,8 @@ import { qk } from '@shared/lib/queryKeys'
 import { useMailApi } from './useMailApi'
 
 export const FALLBACK_MODELS: string[] = [
-  'claude-sonnet-4-6',
-  'claude-opus-4-8',
+  'claude-sonnet-5',
+  'claude-opus-5',
   'claude-fable-5',
   'gpt-5.5'
 ]

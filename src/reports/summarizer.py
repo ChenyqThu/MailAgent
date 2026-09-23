@@ -32,7 +32,7 @@ _BEIJING = timezone(timedelta(hours=8))
 
 # 报告默认模型：opus 4.8（比全局 llm_model 的 sonnet 更强，用户指定）。agent.model
 # 为空时兜底用它；后面接全局 llm_fallback_models 作降级链。1M+64k 由 client 统一加。
-DEFAULT_REPORT_MODEL = "claude-opus-4-8"
+DEFAULT_REPORT_MODEL = "claude-opus-5"
 
 _TOOL_NAME = "build_report"
 
@@ -539,7 +539,7 @@ async def summarize_report(
     """LLM 单次 tool_use：邮件 → ReportDraft。raises LLMCallError on failure（caller 降级）。
 
     persona_prompt 为 None → 用 cadence 对应的内置默认 persona。
-    model 为 agent 选定模型（空 → DEFAULT_REPORT_MODEL=opus 4.8），接全局 fallback 链。
+    model 为 agent 选定模型（空 → DEFAULT_REPORT_MODEL=opus 5），接全局 fallback 链。
     context_docs 为行级身份文档勾选（None=默认 soul+user；[]=不注入）。
     """
     now = now or datetime.now(_BEIJING)

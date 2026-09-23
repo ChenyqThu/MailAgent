@@ -1043,7 +1043,7 @@ def test_chat_config_normalizes_malformed_env(monkeypatch: pytest.MonkeyPatch) -
         data = c.get("/api/chat/config").json()["data"]
     assert data["maxIter"] == 1
     assert data["maxCostUsd"] == 0.5
-    assert data["defaultModel"] == "claude-sonnet-4-6"
+    assert data["defaultModel"] == "claude-sonnet-5"
 
 
 # ── graceful（库不存在）─────────────────────────────────────────────────────

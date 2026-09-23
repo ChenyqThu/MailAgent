@@ -457,11 +457,11 @@ class Config(BaseSettings):
         description="Anthropic 网关 API Key（Bearer 或 x-api-key 都支持）",
     )
     llm_model: str = Field(
-        default="claude-sonnet-4-6", env="LLM_MODEL",
+        default="claude-sonnet-5", env="LLM_MODEL",
         description="主模型名（需网关支持）。失败时按 LLM_FALLBACK_MODELS 顺序兜底。",
     )
     llm_fallback_models: str = Field(
-        default="gpt-5.4,claude-opus-4-7", env="LLM_FALLBACK_MODELS",
+        default="gpt-5.4,claude-opus-5", env="LLM_FALLBACK_MODELS",
         description=(
             "主模型不可用时按顺序 fallback 的模型名（逗号分隔；留空禁用）。"
             "Anthropic 协议（claude-*）走 /v1/messages + tool_use；"

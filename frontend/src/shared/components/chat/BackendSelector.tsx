@@ -27,7 +27,7 @@ interface Props {
   agentName?: string | null
 }
 
-const DEFAULT_CUSTOM_MODEL = 'claude-sonnet-4-6'
+const DEFAULT_CUSTOM_MODEL = 'claude-sonnet-5'
 
 export function BackendSelector({ value, agentName }: Props): React.ReactElement {
   const { t } = useTranslation()

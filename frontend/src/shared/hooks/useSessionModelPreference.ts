@@ -18,7 +18,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 /** 全局模型偏好（跨会话共享的**默认值**，不再是「当前模型」的权威）。两个面共用同一 key。 */
 export const CUSTOM_MODEL_PREF = 'mailagent.chat.customModel'
-export const DEFAULT_CUSTOM_MODEL = 'claude-sonnet-4-6'
+export const DEFAULT_CUSTOM_MODEL = 'claude-sonnet-5'
 
 export function readGlobalModelPref(): string {
   try {

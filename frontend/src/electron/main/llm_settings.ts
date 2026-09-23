@@ -65,21 +65,21 @@ export function getLlmBaseUrl(): string {
 export function getLlmModel(): string {
   const fromEnv = process.env['LLM_MODEL']
   if (fromEnv && fromEnv.length > 0) return fromEnv
-  return 'claude-sonnet-4-6'
+  return 'claude-sonnet-5'
 }
 
 /**
- * Translate-specific model override. Empty/unset → Sonnet 4.6 — 翻译质量优先,
- * 且 64K max output 能承接长文批翻。用户仍可在 Settings 下拉切回更快模型。
+ * Translate-specific model override. Empty/unset → Sonnet 5 — 翻译质量优先,
+ * 且 128K max output 能承接长文批翻。用户仍可在 Settings 下拉切回更快模型。
  * Model name follows CRS's "no date stamp" convention (matches .env.example's
- * `claude-sonnet-4-6` style); Anthropic's official date-stamped names like
+ * `claude-sonnet-5` style); Anthropic's official date-stamped names like
  * `claude-haiku-4-5-20251001` fail CRS account lookup and surface as a
  * Cloudflare 502.
  */
 export function getLlmTranslateModel(): string {
   const fromEnv = process.env['LLM_TRANSLATE_MODEL']
   if (fromEnv && fromEnv.length > 0) return fromEnv
-  return 'claude-sonnet-4-6'
+  return 'claude-sonnet-5'
 }
 
 /**

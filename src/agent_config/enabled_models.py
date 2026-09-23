@@ -44,7 +44,7 @@ from src.agent_config.llm_providers import (
 )
 
 #: ``cfg.llm_model`` 为空串时的兜底（与 ``src/config.py`` 的 pydantic default 同值）。
-FALLBACK_DEFAULT_MODEL = "claude-sonnet-4-6"
+FALLBACK_DEFAULT_MODEL = "claude-sonnet-5"
 
 #: ``EnabledModelCatalog.source`` 值域 —— 清单是从 provider 表聚合的还是 env 回退来的。
 SOURCE_REGISTRY = "registry"

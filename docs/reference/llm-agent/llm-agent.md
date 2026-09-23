@@ -32,7 +32,18 @@
 
 `AnthropicClient.classify` 按 `[LLM_MODEL] + LLM_FALLBACK_MODELS` 顺序调用，第一个成功即返回；任一抛 `LLMCallError`（含 HTTP 5xx / "No available accounts in group" / 协议错 / 超时）就 warning 切下一个。最后一个还失败才上抛由 store 走重试队列。
 
-默认链：`claude-sonnet-4-6 → gpt-5.4 → claude-opus-4-7`。
+默认链：`claude-sonnet-5 → gpt-5.4 → claude-opus-5`。
+
+各任务的出厂默认模型（2026-09-23 经 CRS 实测可用）：
+
+| 任务 | 默认模型 | 配置入口 |
+|---|---|---|
+| 对话 / 邮件分类 / 通讯录画像等 | `claude-sonnet-5` | `LLM_MODEL` |
+| 沉浸式翻译 | `claude-sonnet-5` | `LLM_TRANSLATE_MODEL` |
+| 日报 / 周报 | `claude-opus-5` | 报告 Agent 行 `model` 列 |
+| 记忆抽取 / 会话标题 | `claude-haiku-4-5` | `MEMORY_CAPTURE_MODEL` / 设置页 |
+
+Claude Opus 5.5 / Fable 5.1 / Mythos 5.1 拒收强制指名的 `tool_choice`（官方文档为 400，经 CRS 实测 Opus 5.5 表现为空事件流）。Anthropic 腿在这些型号上改发 `auto`，判据单源是 `provider_routing.anthropic_tool_choice`。
 
 | 模型 | 协议 | 端点 | 备注 |
 |---|---|---|---|

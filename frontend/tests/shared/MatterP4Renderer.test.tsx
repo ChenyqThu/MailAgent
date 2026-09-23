@@ -335,10 +335,10 @@ describe('P4 renderer surfaces', () => {
     // 模型清单来自 /chat/config（这里 stub 成没有 enabledModels ⇒ 回落到 FALLBACK_MODELS）。
     await waitFor(() => expect(screen.getByText('跟随默认（执行的 Agent → 全局配置 → 系统模型）')).toBeTruthy())
     fireEvent.click(document.getElementById('matter-agent-model') as HTMLElement)
-    fireEvent.click(screen.getByRole('option', { name: 'claude-sonnet-4-6' }))
+    fireEvent.click(screen.getByRole('option', { name: 'claude-sonnet-5' }))
     fireEvent.click(screen.getByText('保存规则'))
     expect(patch.mock.calls[0]?.[0].schedule_json.agent).toEqual({
-      model: 'claude-sonnet-4-6'
+      model: 'claude-sonnet-5'
     })
   })
 
@@ -360,7 +360,7 @@ describe('P4 renderer surfaces', () => {
 
     await waitFor(() => expect(screen.getByText('跟随默认（执行的 Agent → 全局配置 → 系统模型）')).toBeTruthy())
     fireEvent.click(document.getElementById('matter-agent-model') as HTMLElement)
-    fireEvent.click(screen.getByRole('option', { name: 'claude-sonnet-4-6' }))
+    fireEvent.click(screen.getByRole('option', { name: 'claude-sonnet-5' }))
     await waitFor(() =>
       expect((document.getElementById('matter-agent-effort') as HTMLButtonElement).disabled).toBe(
         false

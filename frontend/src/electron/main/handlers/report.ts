@@ -72,7 +72,7 @@ function _toListItem(row: ReportRow): ReportListItem {
 }
 
 // 与 src/cli/commands/report.py:DEFAULT_REPORT_MODEL 对齐。
-const _DEFAULT_REPORT_MODEL = 'claude-opus-4-8'
+const _DEFAULT_REPORT_MODEL = 'claude-opus-5'
 
 interface AgentRow {
   id: string
