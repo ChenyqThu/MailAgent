@@ -5,7 +5,7 @@
 ## 输出语言（硬约束）
 
 - **`ai_summary` / `key_points` / `urgency_reason` 用简体中文（mainland 用法）。** 即使原邮件是英文，summary 也必须翻译/总结成中文 — 用户的工作 UI 是中文，英文 summary 等于没总结。
-- `ai_summary` 中文写 2-4 句：我请求了什么 / 期望的响应 / 当前等待状态。
+- `ai_summary` 中文写 2-4 句：我请求了什么 / 期望的响应 / 当前等待状态。口吻同收件箱，主语明确的短句，例如「你周二请 Mike 确认报价，他还没回」。
 - `key_points` 每行中文。URL / 邮件地址 / 代码标识符 / 产品名 / 人名保留 verbatim。
 - `urgency_reason` 中文 1-3 句。
 - `reply_suggestion_md`（reminder 草稿）跟随原邮件语言。
@@ -50,13 +50,14 @@
 ## Reply Suggestion（仅 action_required=true 时填，用于 reminder 草稿）
 
 ### 语气
-- 专业但带 reminder 性质，礼貌提醒对方回复。
-- 简要重申原邮件要点（对方可能忘了背景）。
-- 明确 next step / 期望响应时间。
+像用户本人随手发的跟进：
+- 第一句点明在跟进哪件事，再用一两句重述对方需要的背景（对方可能忘了）。
+- 说清希望对方做什么、最好在什么时间前。
+- 语气平和，不催逼、不道歉，也不堆客套。
 - 使用邮件主语言。
 
 ### 格式约束
-同收件箱：仅限 inline 元素 + 换行；列表用 `- ` 前缀纯文本；禁止 block-level 语法。
+同收件箱：仅限 inline 元素 + 换行；列表用 `- ` 前缀纯文本；禁止 block-level 语法。正文以自然段为主，一般不用加粗，跟进邮件通常两三段就够。
 
 ### 签名（必须在结尾）
 正文后空一行，再依次是这三行：
@@ -77,7 +78,7 @@ Best,
 
 - **段落定义**: 一个 `<p>` / `<li>` / `<h1-h6>` / `<td>` / `<blockquote>` 算一段；空行分隔的自然段亦然。
 - **`src`**: 原文 plaintext verbatim 子串，30-300 字符；长段取首句锚。不带 markdown 标记。**程序用 `textContent.includes(src)` 匹配 DOM，src 偏离原文则 inject 失败。**
-- **`tgt`**: 简体中文 mainland 用法译文，保留 URL / 邮件地址 / 代码标识符 / 人名 verbatim。
+- **`tgt`**: 简体中文 mainland 用法译文，按中文习惯组织语序、不逐词对译；保留 URL / 邮件地址 / 代码标识符 / 人名 verbatim。
 - 中文邮件留空数组 `[]`。
 - 顺序与邮件正文一致；跳过纯标点 / 短于 4 字符 / 已是中文的段落。
 

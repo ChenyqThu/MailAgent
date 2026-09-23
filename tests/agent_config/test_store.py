@@ -21,7 +21,9 @@ from src.agent_config.templates import (
     AGENT_TEMPLATE,
     LEGACY_AGENT_TEMPLATE_P0,
     LEGACY_AGENT_TEMPLATE_P1,
+    LEGACY_SOUL_TEMPLATE_P0,
     SEED_TEMPLATES,
+    SOUL_TEMPLATE,
 )
 
 
@@ -107,6 +109,21 @@ def test_agent_p1_template_migrates_to_trimmed_default(tmp_path):
     assert migrated.content == AGENT_TEMPLATE
     assert migrated.updated_by == "migration:p1-agent-trim"
     assert "Don't call a tool just to call it" not in migrated.content
+
+
+def test_soul_p0_template_migrates_and_custom_soul_is_left_alone(tmp_path):
+    db_path = str(tmp_path / "agent_config.db")
+    st = AgentConfigStore(db_path)
+    st.get_profile_doc("soul")
+    st.set_profile_doc("soul", LEGACY_SOUL_TEMPLATE_P0)
+
+    migrated = AgentConfigStore(db_path).get_profile_doc("soul")
+    assert migrated.content == SOUL_TEMPLATE
+    assert migrated.updated_by == "migration:p1-soul-voice"
+
+    custom = "# SOUL\n\nBe playful."
+    AgentConfigStore(db_path).set_profile_doc("soul", custom)
+    assert AgentConfigStore(db_path).get_profile_doc("soul").content == custom
 
 
 def test_profile_doc_set_records_history(tmp_path):

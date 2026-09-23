@@ -39,7 +39,9 @@ from src.agent_config.templates import (
     AGENT_TEMPLATE,
     LEGACY_AGENT_TEMPLATE_P0,
     LEGACY_AGENT_TEMPLATE_P1,
+    LEGACY_SOUL_TEMPLATE_P0,
     SEED_TEMPLATES,
+    SOUL_TEMPLATE,
 )
 
 # ---------------------------------------------------------------------------
@@ -706,26 +708,27 @@ class AgentConfigStore:
                 (now_iso,),
             )
 
-        # Templates are otherwise seed-once. Upgrade only an untouched AGENT doc: exact
-        # old-default equality is the guard, so any user-edited content remains authoritative.
-        # The UPDATE condition also makes this idempotent across every subsequent store open.
-        new_hash = _hash(AGENT_TEMPLATE)
-        for legacy, changed_by in (
-            (LEGACY_AGENT_TEMPLATE_P0, "migration:p0-plan-tool"),
-            (LEGACY_AGENT_TEMPLATE_P1, "migration:p1-agent-trim"),
+        # Templates are otherwise seed-once. Upgrade only an untouched doc: exact old-default
+        # equality is the guard, so any user-edited content remains authoritative. The UPDATE
+        # condition also makes this idempotent across every subsequent store open.
+        for doc_name, legacy, current, changed_by in (
+            ("agent", LEGACY_AGENT_TEMPLATE_P0, AGENT_TEMPLATE, "migration:p0-plan-tool"),
+            ("agent", LEGACY_AGENT_TEMPLATE_P1, AGENT_TEMPLATE, "migration:p1-agent-trim"),
+            ("soul", LEGACY_SOUL_TEMPLATE_P0, SOUL_TEMPLATE, "migration:p1-soul-voice"),
         ):
             now = _now()
+            new_hash = _hash(current)
             cur = conn.execute(
                 "UPDATE agent_profile_docs SET content=?, content_hash=?, updated_by=?, updated_at=? "
-                "WHERE doc_name='agent' AND content=?",
-                (AGENT_TEMPLATE, new_hash, changed_by, now, legacy),
+                "WHERE doc_name=? AND content=?",
+                (current, new_hash, changed_by, now, doc_name, legacy),
             )
             if cur.rowcount > 0:
                 conn.execute(
                     "INSERT INTO agent_profile_history "
                     "(doc_name, old_hash, new_hash, content_snapshot, changed_by, "
                     " session_id, message_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
-                    ("agent", _hash(legacy), new_hash, AGENT_TEMPLATE, changed_by, None, None, now),
+                    (doc_name, _hash(legacy), new_hash, current, changed_by, None, None, now),
                 )
 
     # ======================================================================
