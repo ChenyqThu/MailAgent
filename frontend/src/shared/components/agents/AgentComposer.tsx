@@ -351,10 +351,10 @@ function enqueueComposerText(
   aui: ReturnType<typeof useAui>,
   controls: ChatComposerControls | null
 ): void {
-  const text = aui.composer().getState().text.trim()
+  const text = aui.composer.getState().text.trim()
   if (text === '') return
   controls?.onEnqueueQueuedInput?.(text)
-  aui.composer().setText('')
+  aui.composer.setText('')
 }
 
 /** Lexical 输入 + 排队模式下的 Enter 拦截。
@@ -392,7 +392,7 @@ function AgentComposerInput(): React.JSX.Element {
     <LexicalComposerInput
       directiveChip={AgentDirectiveChip}
       placeholder={isEmptyThread ? t('agentView.composer.placeholder') : ''}
-      // codex r2 [D] — the Lexical Enter path calls aui.composer().send() DIRECTLY (no form
+      // codex r2 [D] — the Lexical Enter path calls aui.composer.send() DIRECTLY (no form
       // submit to gate), so busy turns Enter-submit off entirely.
       submitMode={sendDisabled ? 'none' : 'enter'}
       onKeyDownCapture={onKeyDownCapture}
@@ -418,7 +418,7 @@ export function AgentComposer({
   const toolbarRef = useRef<HTMLDivElement>(null)
   const narrowTier = useNarrowTier(toolbarRef)
   // codex r2 [D] — sendDisabled gates EVERY send path, not just the Send button: the Lexical
-  // input's Enter calls aui.composer().send() directly (submitMode 'none' turns it off), slash
+  // input's Enter calls aui.composer.send() directly (submitMode 'none' turns it off), slash
   // commands append through the thread (guarded in execute below), and the Root form gate covers
   // any residual requestSubmit.
   const sendDisabled = controls?.sendDisabled === true
@@ -476,11 +476,11 @@ export function AgentComposer({
         icon: d.icon,
         execute: () => {
           if (sendDisabled) return
-          const thread = aui.thread()
+          const thread = aui.thread
           if (thread.getState().isRunning) return
           thread.append({
             content: [{ type: 'text', text: t(d.promptKey) }],
-            runConfig: aui.composer().getState().runConfig
+            runConfig: aui.composer.getState().runConfig
           })
         }
       })),
@@ -505,7 +505,7 @@ export function AgentComposer({
     (e: React.ClipboardEvent): void => {
       const files = Array.from(e.clipboardData?.files ?? [])
       if (files.length === 0) return
-      if (!aui.thread().getState().capabilities.attachments) return
+      if (!aui.thread.getState().capabilities.attachments) return
       e.preventDefault()
       for (const file of files) {
         void aui

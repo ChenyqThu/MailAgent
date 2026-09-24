@@ -16,7 +16,7 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   useAuiState,
-  type CompleteAttachment
+  type Attachment
 } from '@assistant-ui/react'
 
 import { cn } from '@shared/lib/cn'
@@ -36,7 +36,7 @@ import { CompactCard, type CompactCardData } from './CompactCard'
  *  turns a user `file` part with an image/* mediaType into `{type:'image', image:<data URL>}` inside
  *  attachment.content (react-ai-sdk convertMessage.ts) — the only producer of these, so "no image
  *  part" means a genuinely non-image attachment and the caller falls back to the name pill. */
-function attachmentImageSrc(attachment: CompleteAttachment): string | null {
+function attachmentImageSrc(attachment: Attachment): string | null {
   for (const part of attachment.content ?? []) {
     if (part.type === 'image' && typeof part.image === 'string') return part.image
   }

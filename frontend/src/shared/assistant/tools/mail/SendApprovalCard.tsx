@@ -125,9 +125,10 @@ export function SendApprovalCard(props: ToolCallMessagePartProps): React.JSX.Ele
         body_markdown: body
       })
     }
-    respondToApproval({ approved: true })
+    await respondToApproval({ approved: true })
   }
-  const onReject = (reason?: string): void => respondToApproval({ approved: false, reason })
+  const onReject = (reason?: string): Promise<void> =>
+    respondToApproval({ approved: false, reason })
 
   return (
     <CardFrame

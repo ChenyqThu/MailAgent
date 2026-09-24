@@ -24,7 +24,7 @@ const { composerState, setText, listeners } = vi.hoisted(() => ({
 // 以最小实现镜像 assistant-ui 的两个消费面（selector(state) + 订阅），让测试能显式驱动
 // 「用户打了一个字」这一刻。体例同 `tests/shared/chatPromptDispatch.test.tsx`。
 vi.mock('@assistant-ui/react', () => ({
-  useAui: () => ({ composer: () => ({ setText }) }),
+  useAui: () => ({ composer: { setText } }),
   useAuiState: (selector: (state: { composer: typeof composerState }) => unknown) => {
     const { useSyncExternalStore } = require('react') as typeof import('react')
     return useSyncExternalStore(

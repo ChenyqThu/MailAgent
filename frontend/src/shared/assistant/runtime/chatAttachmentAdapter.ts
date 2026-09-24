@@ -24,8 +24,9 @@
 //     JPEG, with a final payload belt on the resulting data URL length.
 //
 // add() owns its failure surface (toast + rethrow): the built-in paste handler and
-// the Dropzone primitive only console.error a rejected addAttachment, so without a
-// toast here a failed read would be silent (regression face #8).
+// the Dropzone primitive swallow a rejected addAttachment (surfacing it only as a
+// composer.attachmentAddError event nothing here listens to), so without a toast
+// here a failed read would be silent (regression face #8).
 //
 // P2-L5（design §1.4）—— send() 现在还多做一件事：**发送即入库**。两条分支都先把原字节写进
 // 资料库的 `chat-attachments/{YYYY-MM}/`，再在 content 里并列挂一个 `data-library` part

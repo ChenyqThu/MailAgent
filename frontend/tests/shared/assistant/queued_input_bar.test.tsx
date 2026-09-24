@@ -9,7 +9,7 @@ import i18n from '@shared/i18n'
 
 const setText = vi.fn()
 vi.mock('@assistant-ui/react', () => ({
-  useAui: () => ({ composer: () => ({ setText }) })
+  useAui: () => ({ composer: { setText } })
 }))
 
 let queuedHandler: ((payload: { sessionId: number }) => void) | undefined

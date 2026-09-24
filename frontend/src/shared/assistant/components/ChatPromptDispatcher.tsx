@@ -94,12 +94,12 @@ export function ChatPromptDispatcher({
     if (request === null) return
     if (dispatchedRef.current === request.nonce) return
     dispatchedRef.current = request.nonce
-    const thread = aui.thread()
+    const thread = aui.thread
     const busy = sendDisabled || thread.getState().isRunning
     if (busy || request.prefillOnly === true) {
       // 预填：用户自己按回车。这里不清空已有草稿之外的东西 —— setText 覆盖的是 composer 内容，
       // 与用户点「创建事项」的意图一致。
-      aui.composer().setText(request.text)
+      aui.composer.setText(request.text)
       if (request.library) {
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setPendingMention({ text: request.text, ref: request.library })
@@ -111,11 +111,11 @@ export function ChatPromptDispatcher({
     try {
       thread.append({
         content: [{ type: 'text', text: request.text }],
-        runConfig: aui.composer().getState().runConfig
+        runConfig: aui.composer.getState().runConfig
       })
     } catch {
       // 同步就炸了（transport 构造失败等）—— 文本交还 composer，别让这次点击凭空消失。
-      aui.composer().setText(request.text)
+      aui.composer.setText(request.text)
       onDispatched(request.nonce, false)
       return
     }
@@ -136,7 +136,7 @@ export function ChatPromptDispatcher({
   // 确认（或超时回退）。messageCount 入 deps = 每次 thread 变动都重判一次。
   useEffect(() => {
     if (awaiting === null) return undefined
-    if (threadHasUserText(aui.thread().getState().messages, awaiting.fromIndex, awaiting.text)) {
+    if (threadHasUserText(aui.thread.getState().messages, awaiting.fromIndex, awaiting.text)) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAwaiting(null)
       onDispatched(awaiting.nonce, true)
@@ -144,7 +144,7 @@ export function ChatPromptDispatcher({
     }
     const timer = setTimeout(() => {
       setAwaiting(null)
-      aui.composer().setText(awaiting.text)
+      aui.composer.setText(awaiting.text)
       onDispatched(awaiting.nonce, false)
     }, PROMPT_ACCEPT_TIMEOUT_MS)
     return () => clearTimeout(timer)

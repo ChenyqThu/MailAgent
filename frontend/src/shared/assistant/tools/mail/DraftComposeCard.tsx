@@ -191,9 +191,10 @@ export function DraftComposeCard(props: ToolCallMessagePartProps): React.JSX.Ele
     if (Object.keys(editedInput).length > 0) {
       await postApprovalEdit(toolCallId, editedInput)
     }
-    respondToApproval({ approved: true })
+    await respondToApproval({ approved: true })
   }
-  const onReject = (reason?: string): void => respondToApproval({ approved: false, reason })
+  const onReject = (reason?: string): Promise<void> =>
+    respondToApproval({ approved: false, reason })
 
   const title = t(
     isUpdate

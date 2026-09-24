@@ -35,7 +35,7 @@ function ComposerRecoveryBridge({ sessionId }: { sessionId: number | null }): nu
   )
   useEffect(() => {
     if (sessionId == null || recovery == null) return
-    aui.composer().setText(recovery.text)
+    aui.composer.setText(recovery.text)
     clearComposerRecovery(sessionId, recovery.nonce)
   }, [aui, recovery, sessionId])
   return null

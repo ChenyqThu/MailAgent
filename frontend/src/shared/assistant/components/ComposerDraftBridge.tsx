@@ -30,7 +30,7 @@ export function ComposerDraftBridge({ restore, onChange }: ComposerDraftBridgePr
   // 非空说明用户已经在打字，不覆盖）。
   useEffect(() => {
     const initial = restore()
-    if (initial !== '' && text === '') aui.composer().setText(initial)
+    if (initial !== '' && text === '') aui.composer.setText(initial)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

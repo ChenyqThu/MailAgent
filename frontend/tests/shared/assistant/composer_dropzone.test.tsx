@@ -158,7 +158,7 @@ function lastChatBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unkno
 
 /** 在元素上派发 drop（dataTransfer.files 挂真实 File）。 */
 function fireDrop(el: Element, files: File[]): void {
-  fireEvent.drop(el, { dataTransfer: { files } })
+  fireEvent.drop(el, { dataTransfer: { files, types: ['Files'] } })
 }
 
 describe('AttachmentDropzone — 拖拽落进 adapter 通路', () => {

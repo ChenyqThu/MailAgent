@@ -86,9 +86,10 @@ export function DraftReplyCard(props: ToolCallMessagePartProps): React.JSX.Eleme
         bcc: curBcc
       })
     }
-    respondToApproval({ approved: true })
+    await respondToApproval({ approved: true })
   }
-  const onReject = (reason?: string): void => respondToApproval({ approved: false, reason })
+  const onReject = (reason?: string): Promise<void> =>
+    respondToApproval({ approved: false, reason })
 
   const modeLabel = data.mode === 'reply' ? '仅答复发件人' : '答复全部'
 

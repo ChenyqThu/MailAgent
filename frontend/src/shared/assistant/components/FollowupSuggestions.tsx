@@ -2,7 +2,7 @@
 // chat-ui W4 (0804 dogfood 1d) — relocated from a THREAD-level row (above the composer) into a
 // PER-MESSAGE component mounted inside AssistantMessage / AgentAssistantMessage, right after
 // AssistantActionBar. Mounting inside the message (instead of reading the thread's last message
-// from the top) means "isLast" now comes from THIS message's own `useMessage().isLast` — the row
+// from the top) means "isLast" now comes from THIS message's own `s.message.isLast` — the row
 // naturally disappears the instant a new message becomes last (next turn / new user send), with
 // no separate teardown logic needed.
 //
@@ -24,7 +24,7 @@
 // is the tool's one visual manifestation.
 
 import { useMemo } from 'react'
-import { ThreadPrimitive, useAuiState, useMessage } from '@assistant-ui/react'
+import { ThreadPrimitive, useAuiState } from '@assistant-ui/react'
 import { CornerDownRight } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
@@ -55,9 +55,11 @@ export function FollowupSuggestions({
   const readOnly = useThreadReadOnly()
   const isRunning = useAuiState((s) => s.thread.isRunning)
   const revealed = useCompletionReveal()
-  const message = useMessage()
-  const prompts = useMemo(() => extractFollowupPrompts(message), [message])
-  if (readOnly || !message.isLast || isRunning || prompts.length === 0) return null
+  const role = useAuiState((s) => s.message.role)
+  const content = useAuiState((s) => s.message.content)
+  const isLast = useAuiState((s) => s.message.isLast)
+  const prompts = useMemo(() => extractFollowupPrompts({ role, content }), [role, content])
+  if (readOnly || !isLast || isRunning || prompts.length === 0) return null
   return (
     <div
       data-testid="followup-suggestions"

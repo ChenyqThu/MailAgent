@@ -11,7 +11,7 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { BookmarkPlus, Check, Copy, Pencil, RotateCcw } from 'lucide-react'
-import { ActionBarPrimitive, MessagePrimitive, useMessage } from '@assistant-ui/react'
+import { ActionBarPrimitive, MessagePrimitive, useAuiState } from '@assistant-ui/react'
 
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -71,7 +71,7 @@ export function AssistantActionBar({
   const { t } = useTranslation()
   // isLast drives the always-visible-vs-hover-reveal split (inlineOnHover path only). Called
   // unconditionally to satisfy the hooks rule; the legacy path simply ignores it.
-  const isLast = useMessage().isLast
+  const isLast = useAuiState((s) => s.message.isLast)
   const revealed = useCompletionReveal()
   // W5 —— 两条路径共用这一段：完成前不可见且 pointer-events-none，完成后一次 380ms 淡入；
   // 之后 hover 行为各自维持现状（agent 面非最新仍是 duration-fast 的 hover-reveal）。
@@ -147,10 +147,11 @@ export function AssistantActionBar({
 function KosSaveButton(): React.JSX.Element | null {
   const { t } = useTranslation()
   const mailApi = useMailApi()
-  const message = useMessage()
+  const messageId = useAuiState((s) => s.message.id)
+  const role = useAuiState((s) => s.message.role)
   const kosAvailable = useKosAvailable(mailApi)
-  const numericId = /^\d+$/.test(message.id) ? Number.parseInt(message.id, 10) : null
-  if (message.role !== 'assistant' || numericId === null || !kosAvailable) return null
+  const numericId = /^\d+$/.test(messageId) ? Number.parseInt(messageId, 10) : null
+  if (role !== 'assistant' || numericId === null || !kosAvailable) return null
   const onSave = async (): Promise<void> => {
     try {
       await mailApi.chat.saveToKos({ messageId: numericId })

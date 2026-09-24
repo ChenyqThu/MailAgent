@@ -63,7 +63,8 @@ function stubChatHelpers(
     stop: () => {},
     addToolResult: () => {},
     addToolOutput: () => {},
-    addToolApprovalResponse: () => {}
+    addToolApprovalResponse: () => {},
+    id: 'test-chat'
   } as unknown as Parameters<typeof useAISDKRuntime>[0]
 }
 

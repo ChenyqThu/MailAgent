@@ -65,8 +65,9 @@ export function LibraryWriteCard(props: ToolCallMessagePartProps): React.JSX.Ele
   const copy = LIBRARY_WRITE_COPY_KEY[input.shape]
   const markdown = rendersAsMarkdown(input.path ?? detail.data?.path ?? null)
 
-  const onApprove = (): void => respondToApproval({ approved: true })
-  const onReject = (reason?: string): void => respondToApproval({ approved: false, reason })
+  const onApprove = (): Promise<void> => respondToApproval({ approved: true })
+  const onReject = (reason?: string): Promise<void> =>
+    respondToApproval({ approved: false, reason })
 
   return (
     <CardFrame

@@ -124,8 +124,9 @@ export function SimpleApprovalCard(props: ToolCallMessagePartProps): React.JSX.E
   const value = identityValue(spec, args, argsText) || t('chat.simpleApprovalCard.noArgs')
   const continuation = continuationValue(spec, args, argsText)
 
-  const onApprove = (): void => respondToApproval({ approved: true })
-  const onReject = (reason?: string): void => respondToApproval({ approved: false, reason })
+  const onApprove = (): Promise<void> => respondToApproval({ approved: true })
+  const onReject = (reason?: string): Promise<void> =>
+    respondToApproval({ approved: false, reason })
 
   return (
     <CardFrame icon={iconFor(toolName)} title={title} phase={phase}>

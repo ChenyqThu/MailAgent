@@ -328,7 +328,7 @@ export function ThreadComposer(): React.JSX.Element {
     const text = composerText.trim()
     if (!text) return
     controls?.onEnqueueQueuedInput?.(text)
-    aui.composer().setText('')
+    aui.composer.setText('')
   }
   return (
     <ComposerPrimitive.Root
@@ -339,7 +339,7 @@ export function ThreadComposer(): React.JSX.Element {
         }
         if (composerText.trim() === '/compact' && controls?.compactEnabled === true) {
           e.preventDefault()
-          aui.composer().setText('')
+          aui.composer.setText('')
           controls.onCompact?.()
           return
         }

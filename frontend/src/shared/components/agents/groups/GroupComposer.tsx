@@ -4,7 +4,7 @@
 // 三个附件入口与 AI Chat 逐字同源。**不挂** `ChatComposerControlsProvider` —— 模型 / skill / 授权 /
 // effort / 上下文环整组随 `controls === null` 消失（composer.tsx 文件头写明的「裸 composer」契约）。
 //
-// 群独有三件保留：@ 弹层（`detectMentionDraft` 在 Input 的 value 上跑，采纳时 `aui.composer().setText()`
+// 群独有三件保留：@ 弹层（`detectMentionDraft` 在 Input 的 value 上跑，采纳时 `aui.composer.setText()`
 // 写回；🔴 弹层开着时 Enter 是「采纳」不是「发送」——靠 onKeyDown 里 preventDefault 让 radix
 // composeEventHandlers 跳过 primitive 的提交）、「将唤醒 N 位」、「排队在后」。@ 判据仍是裸文本显示名。
 //
@@ -310,7 +310,7 @@ function GroupComposerBody({
           ? `@${item.ref.name}`
           : `@${item.member.title}`
     const caret = inputRef.current?.selectionStart ?? text.length
-    aui.composer().setText(`${text.slice(0, mention.start)}${label} ${text.slice(caret)}`)
+    aui.composer.setText(`${text.slice(0, mention.start)}${label} ${text.slice(caret)}`)
     setMention(null)
     inputRef.current?.focus()
   }

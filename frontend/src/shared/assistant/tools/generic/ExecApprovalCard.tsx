@@ -95,9 +95,10 @@ export function ExecApprovalCard(props: ToolCallMessagePartProps): React.JSX.Ele
         /* rule not created (e.g. gateway hiccup) → next time it asks again; proceed with the run */
       }
     }
-    respondToApproval({ approved: true })
+    await respondToApproval({ approved: true })
   }
-  const onReject = (reason?: string): void => respondToApproval({ approved: false, reason })
+  const onReject = (reason?: string): Promise<void> =>
+    respondToApproval({ approved: false, reason })
 
   return (
     <CardFrame icon={iconFor(data.kind)} title={title} phase={phase}>

@@ -113,9 +113,10 @@ export function FeedbackApprovalCard(props: ToolCallMessagePartProps): React.JSX
         freq: isProblem ? freq : undefined
       })
     }
-    respondToApproval({ approved: true })
+    await respondToApproval({ approved: true })
   }
-  const onReject = (reason?: string): void => respondToApproval({ approved: false, reason })
+  const onReject = (reason?: string): Promise<void> =>
+    respondToApproval({ approved: false, reason })
 
   const params = [
     { id: 'kind', label: t('chat.feedbackApprovalCard.kind'), value: kind || '—' },

@@ -135,8 +135,9 @@ export function McpApprovalCard(props: ToolCallMessagePartProps): React.JSX.Elem
   const preview = argsPreview(args, argsText) || t('chat.mcpApprovalCard.noArgs')
   const toolLabel = facts?.remoteName ?? parsed?.toolSlug ?? toolName
 
-  const onApprove = (): void => respondToApproval({ approved: true })
-  const onReject = (reason?: string): void => respondToApproval({ approved: false, reason })
+  const onApprove = (): Promise<void> => respondToApproval({ approved: true })
+  const onReject = (reason?: string): Promise<void> =>
+    respondToApproval({ approved: false, reason })
 
   return (
     <CardFrame

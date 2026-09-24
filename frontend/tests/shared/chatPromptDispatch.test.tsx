@@ -31,8 +31,8 @@ const { threadState, append, setText, composerState, listeners } = vi.hoisted(()
 // 镜像它（selector(state) + 订阅），让测试能显式驱动"消息落地"这一刻。
 vi.mock('@assistant-ui/react', () => ({
   useAui: () => ({
-    thread: () => ({ getState: () => threadState, append }),
-    composer: () => ({ getState: () => composerState, setText })
+    thread: { getState: () => threadState, append },
+    composer: { getState: () => composerState, setText }
   }),
   useAuiState: (
     selector: (state: { thread: typeof threadState; composer: typeof composerState }) => unknown

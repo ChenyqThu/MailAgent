@@ -1,6 +1,6 @@
 // Part B (island live-refresh) — mirror the thread's MID-STREAM state into a caller-held ref.
 //
-// AiChatPanel's onSessionUpdated handler lives OUTSIDE the runtime provider (useThread is
+// AiChatPanel's onSessionUpdated handler lives OUTSIDE the runtime provider (useAuiState is
 // unusable there), so this null-rendering bridge sits inside it and feeds the panel's mid-stream
 // guard: a settle broadcast arriving while the renderer is MID-STREAM (e.g. the user approved
 // in-app and that resume is still streaming when the island's /decide short-circuits to completed)
@@ -8,7 +8,7 @@
 // isAborted and skips persistTurn, and the turn is lost. Cleanup resets the ref so a remount gap
 // never leaves a stale true.
 //
-// 🔴 Why not bare `useThread(t => t.isRunning)` (the original sensor, real-device regression): in
+// 🔴 Why not bare `s.thread.isRunning` (the original sensor, real-device regression): in
 // the APPROVAL-PAUSED state (the run ended at `tool-approval-request`; the gateway already closed
 // the stream — useChat.status is back to 'ready' — and persisted the redacted copy) assistant-ui's
 // isRunning still reads TRUE (its derivation adds trailing unfinished-tool-call bookkeeping on top
@@ -24,7 +24,7 @@
 // (this file exports only the component, per react-refresh/only-export-components).
 
 import { useEffect } from 'react'
-import { useThread } from '@assistant-ui/react'
+import { useAuiState } from '@assistant-ui/react'
 
 import { threadMessagesAwaitApproval } from './threadRunningGuard'
 
@@ -40,7 +40,9 @@ export function ThreadRunningBridge({
   onRunningChange?: (running: boolean) => void
 }): null {
   // Single boolean selector: re-renders only when the mid-stream verdict flips, not per delta.
-  const isMidStream = useThread((t) => t.isRunning && !threadMessagesAwaitApproval(t.messages))
+  const isMidStream = useAuiState(
+    (s) => s.thread.isRunning && !threadMessagesAwaitApproval(s.thread.messages)
+  )
   useEffect(() => {
     runningRef.current = isMidStream
     onRunningChange?.(isMidStream)

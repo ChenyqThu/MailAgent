@@ -97,7 +97,7 @@ export function QueuedInputBar({
                   aria-label={t('chat.queuedInput.edit')}
                   onClick={() => {
                     mutate.mutate({ path: 'cancel', id: item.id })
-                    aui.composer().setText(item.content)
+                    aui.composer.setText(item.content)
                   }}
                   className="rounded p-1 text-ink-fg-2 hover:bg-ink-3"
                 >
