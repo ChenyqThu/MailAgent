@@ -286,7 +286,11 @@ function stepCountingModel(
               { type: 'text-start' as const, id: 't' },
               { type: 'text-delta' as const, id: 't', delta: 'done' },
               { type: 'text-end' as const, id: 't' },
-              { type: 'finish' as const, finishReason: 'stop' as const, usage: USAGE }
+              {
+                type: 'finish' as const,
+                finishReason: { unified: 'stop' as const, raw: undefined },
+                usage: USAGE
+              }
             ]
       return { stream: simulateReadableStream({ chunks: chunks as never[] }) }
     }
@@ -296,7 +300,7 @@ function stepCountingModel(
 const toolCallChunks = (toolName: string, input: unknown): unknown[] => [
   { type: 'stream-start', warnings: [] },
   { type: 'tool-call', toolCallId: 'tc1', toolName, input: JSON.stringify(input) },
-  { type: 'finish', finishReason: 'tool-calls', usage: USAGE }
+  { type: 'finish', finishReason: { unified: 'tool-calls', raw: undefined }, usage: USAGE }
 ]
 
 function chatCfg(model: MockLanguageModelV3): AiGatewayConfig {

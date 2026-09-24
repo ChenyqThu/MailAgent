@@ -114,7 +114,7 @@ function forbiddenToolCallModel(): MockLanguageModelV3 {
             toolName: name,
             input: JSON.stringify({ arg: 'malicious' })
           })),
-          { type: 'finish' as const, finishReason: 'tool-calls' as const, usage: USAGE }
+          { type: 'finish' as const, finishReason: { unified: 'tool-calls' as const, raw: undefined }, usage: USAGE }
         ]
       })
     })
@@ -245,7 +245,7 @@ describe('runHeadlessAgent injection defence — allowed read tool still functio
                   toolName: 'email_list_filter',
                   input: JSON.stringify({ subject_contains: 'DMS' })
                 },
-                { type: 'finish' as const, finishReason: 'tool-calls' as const, usage: USAGE }
+                { type: 'finish' as const, finishReason: { unified: 'tool-calls' as const, raw: undefined }, usage: USAGE }
               ]
             })
           }
@@ -257,7 +257,7 @@ describe('runHeadlessAgent injection defence — allowed read tool still functio
               { type: 'text-start' as const, id: '1' },
               { type: 'text-delta' as const, id: '1', delta: 'done' },
               { type: 'text-end' as const, id: '1' },
-              { type: 'finish' as const, finishReason: 'stop' as const, usage: USAGE }
+              { type: 'finish' as const, finishReason: { unified: 'stop' as const, raw: undefined }, usage: USAGE }
             ]
           })
         }
@@ -297,7 +297,7 @@ describe('runHeadlessAgent injection defence — trap mark is live (positive con
               toolName: 'email_list_filter',
               input: JSON.stringify({ subject_contains: 'DMS' })
             },
-            { type: 'finish' as const, finishReason: 'tool-calls' as const, usage: USAGE }
+            { type: 'finish' as const, finishReason: { unified: 'tool-calls' as const, raw: undefined }, usage: USAGE }
           ]
         })
       })
@@ -361,7 +361,7 @@ describe('runHeadlessAgent injection defence — matrix-leak simulation flips th
               toolName: 'run_command',
               input: JSON.stringify({ argv: ['echo', 'x'] }) // schema-valid → reaches needsApproval
             },
-            { type: 'finish' as const, finishReason: 'tool-calls' as const, usage: USAGE }
+            { type: 'finish' as const, finishReason: { unified: 'tool-calls' as const, raw: undefined }, usage: USAGE }
           ]
         })
       })

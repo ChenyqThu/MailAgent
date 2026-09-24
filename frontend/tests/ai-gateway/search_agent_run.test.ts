@@ -60,7 +60,7 @@ function mockStepModel(steps: GenStep[], seenToolNames?: string[][]): MockLangua
       call++
       return {
         content: step.content as never,
-        finishReason: step.finishReason,
+        finishReason: { unified: step.finishReason, raw: undefined },
         usage: USAGE,
         warnings: []
       }
@@ -342,7 +342,7 @@ describe('/api/ai/search-agent — non-compliant / empty / error paths', () => {
         if (call === 1) {
           return {
             content: [toolCall('t1', 'email_search_fulltext', { query: 'q' })] as never,
-            finishReason: 'tool-calls' as const,
+            finishReason: { unified: 'tool-calls' as const, raw: undefined },
             usage: USAGE,
             warnings: []
           }
@@ -400,7 +400,7 @@ describe('maxOutputTokens wiring (harness-chat lane C, owner 64k discipline)', (
           content: [
             toolCall('t1', 'present_results', { matched_internal_ids: [], summary: 's' })
           ] as never,
-          finishReason: 'tool-calls' as const,
+          finishReason: { unified: 'tool-calls' as const, raw: undefined },
           usage: USAGE,
           warnings: []
         }

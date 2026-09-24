@@ -74,7 +74,7 @@ async function startGateway(opts: {
       if (!opts.present) {
         return {
           content: [{ type: 'text', text: 'nothing found' }] as never,
-          finishReason: 'stop' as const,
+          finishReason: { unified: 'stop' as const, raw: undefined },
           usage: USAGE,
           warnings: []
         }
@@ -89,7 +89,7 @@ async function startGateway(opts: {
               input: JSON.stringify({ query: 'q' })
             }
           ] as never,
-          finishReason: 'tool-calls' as const,
+          finishReason: { unified: 'tool-calls' as const, raw: undefined },
           usage: USAGE,
           warnings: []
         }
@@ -103,7 +103,7 @@ async function startGateway(opts: {
             input: JSON.stringify({ matched_internal_ids: [7], summary: 'one hit' })
           }
         ] as never,
-        finishReason: 'tool-calls' as const,
+        finishReason: { unified: 'tool-calls' as const, raw: undefined },
         usage: USAGE,
         warnings: []
       }
