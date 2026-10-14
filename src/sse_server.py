@@ -86,6 +86,20 @@ _state: Dict[str, Any] = {
 }
 
 
+def _pubsub_stream_error(pubsub: Any) -> Optional[BaseException]:
+    """pubsub 连接底层 StreamReader 已存下的 socket 错误; 连接正常返回 None。
+
+    🔴 redis-py 8.x 的盲区: keepalive 探测失败时 recv() 报 ETIMEDOUT, 存进 StreamReader 的是内置
+    TimeoutError (3.11 起即 asyncio.TimeoutError)。read_response 把它当成调用方要求的读超时,
+    返回 None 且不断开 ⇒ get_message(timeout=X) 从此每次立即返回 None。同一个异常对象每次被
+    重新 raise, traceback 越挂越长, 连带持有每轮的协程帧和 TimerHandle, serve 几小时涨到 4GB。
+    用 getattr 而非直接访问: redis-py 改名时这里退化为「不检测」而不是抛错断流,
+    tests/events/test_sse_redis_stream_failed.py 会红。
+    """
+    reader = getattr(pubsub.connection, "_reader", None)
+    return reader.exception() if reader is not None else None
+
+
 def _get_redis_url() -> Optional[str]:
     """从 config 取 redis url + db.  redis_url 空时返 None (SSE noop)."""
     url = (config.redis_url or "").strip()
@@ -155,6 +169,16 @@ async def _stream_events(request: web.Request) -> web.StreamResponse:
                 # 短暂等待避免热循环
                 await asyncio.sleep(1.0)
                 continue
+
+            if msg is None:
+                stream_err = _pubsub_stream_error(pubsub)
+                if stream_err is not None:
+                    # 断开后下一轮 get_message 会重连并经 on_connect 回调自动重新订阅;
+                    # 重连失败走上面的 warning + sleep 退避
+                    logger.warning(f"[sse] redis pubsub connection lost: {stream_err!r}, reconnecting")
+                    _state["last_error"] = repr(stream_err)[:200]
+                    await pubsub.connection.disconnect(nowait=True)
+                    continue
 
             if msg and msg.get("type") == "message":
                 data = msg.get("data")
