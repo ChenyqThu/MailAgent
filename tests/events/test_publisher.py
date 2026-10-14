@@ -38,7 +38,8 @@ class TestNoopAndFailure:
         assert p.publish("email.new") is False
 
     def test_init_exception_silent(self):
-        p = EventPublisher(redis_url="redis://invalid-host-noresolve:9999", redis_db=2)
+        # 本机 1 号端口必然拒连；不用不可解析域名，免得测试去查真实 DNS
+        p = EventPublisher(redis_url="redis://127.0.0.1:1", redis_db=2)
         # 不抛异常，返 False
         assert p.publish("email.new") is False
 

@@ -21,6 +21,8 @@ from aiohttp.test_utils import make_mocked_request
 import src.events.loopback as lb
 import src.sse_server as sse
 
+pytestmark = pytest.mark.real_event_loopback
+
 
 @pytest.fixture(autouse=True)
 def _clean_executor():
