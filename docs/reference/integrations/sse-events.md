@@ -197,3 +197,7 @@ outbox enabled）。每天 ~500 邮件 → ~2000 events/day → Redis pub/sub �
 - mail-sync 进程 publish 是同步 fire-and-forget，redis 不可达不阻塞主链路（silent fail，详 `src/events/publisher.py:safe_publish`）
 - webhook-server SSE endpoint redis 不可达 → 401 不返回（rely on `_check_auth`），订阅失败客户端会一直收 ping 心跳直到 timeout
 - 没有事件序号 / 幂等 key，客户端不能 dedup
+- serve 进程 SSE（9200）与 Redis 之间断线时，服务端自己重连并重新订阅，客户端的 SSE 流不断；断线期间发布的事件丢失。
+  🔴 redis-py 8.x 对 socket 层 `ETIMEDOUT`（keepalive 探测失败）有盲区：`get_message(timeout=X)` 会从此每次立即返回 None 且不断开。
+  `_stream_events` 因此在收到 None 时检查连接底层是否已存下错误，有则主动断开重连（日志 `[sse] redis pubsub connection lost`）。
+  去掉这道检查 = 静默热循环 + traceback 无限增长，serve 进程几小时涨到 4GB 被 mem_guard 自愈退出。回归闸 `tests/events/test_sse_redis_stream_failed.py`
