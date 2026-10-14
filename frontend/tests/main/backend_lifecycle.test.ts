@@ -1043,7 +1043,7 @@ describe('serve-api 崩溃自拉起 — 退避 re-spawn + 断路器', () => {
     await vi.waitFor(() => expect(apiCount()).toBe(2), { timeout: 500 })
   })
 
-  test('断路器: 连续崩溃达上限 (maxCrashRestarts) 后停止自拉起 (不无限重启)', async () => {
+  test('断路器: 连续崩溃达上限 (maxCrashRestarts) 后不再按退避快速拉起, 改为慢速间隔后重试', async () => {
     appMock.isPackaged = true
     enableGate()
     vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -1052,7 +1052,8 @@ describe('serve-api 崩溃自拉起 — 退避 re-spawn + 断路器', () => {
       apiReadyTimeoutMs: 5,
       apiProbe: neverReadyApiProbe(),
       crashBackoffMs: [5],
-      maxCrashRestarts: 2
+      maxCrashRestarts: 2,
+      crashSlowRetryMs: 150
     })
     mgr.start() // spawn #1
     // crash #1 → re-spawn #2
@@ -1061,10 +1062,13 @@ describe('serve-api 崩溃自拉起 — 退避 re-spawn + 断路器', () => {
     // crash #2 → re-spawn #3
     childFor('serve-api').emit('exit', 1, null)
     await vi.waitFor(() => expect(apiCount()).toBe(3), { timeout: 500 })
-    // crash #3 → 断路器打开, 不再 re-spawn
+    // crash #3 → 断路器打开: 正常退避窗口 (5ms) 内不拉起
     childFor('serve-api').emit('exit', 1, null)
     await sleep(40)
-    expect(apiCount()).toBe(3) // 无 #4
+    expect(apiCount()).toBe(3)
+    expect(mgr.getServiceState('serve-api')).toBe('failed')
+    // 慢速间隔 (150ms) 到 → 拉起 #4
+    await vi.waitFor(() => expect(apiCount()).toBe(4), { timeout: 1000 })
   })
 
   test('崩溃后 ready → 计数清零 (再崩仍有完整退避额度, 不被旧计数提前断路)', async () => {
@@ -1141,7 +1145,7 @@ describe('serve 崩溃自拉起 — 与 serve-api 同一退避 + 断路器 (meml
     expect(mgr.getState()).toBe('starting')
   })
 
-  test('断路器: serve 连续崩溃达上限 (maxCrashRestarts) 后停止自拉起, 停在 failed', async () => {
+  test('断路器: serve 连续崩溃达上限后慢速等待期停在 failed, 慢速间隔后拉起, 再快崩仍走慢速', async () => {
     appMock.isPackaged = true
     process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
     vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -1150,18 +1154,73 @@ describe('serve 崩溃自拉起 — 与 serve-api 同一退避 + 断路器 (meml
       apiReadyTimeoutMs: 5,
       apiProbe: neverReadyApiProbe(),
       crashBackoffMs: [5],
-      maxCrashRestarts: 2
+      maxCrashRestarts: 2,
+      crashSlowRetryMs: 150
     })
     mgr.start() // spawn #1
     childFor('serve').emit('exit', 1, null) // crash#1 → re-spawn #2
     await vi.waitFor(() => expect(serveCount()).toBe(2), { timeout: 500 })
     childFor('serve').emit('exit', 1, null) // crash#2 → re-spawn #3
     await vi.waitFor(() => expect(serveCount()).toBe(3), { timeout: 500 })
-    childFor('serve').emit('exit', 1, null) // crash#3 → 断路器打开, 不再 re-spawn
+    childFor('serve').emit('exit', 1, null) // crash#3 → 断路器打开, 正常退避窗口内不拉起
     await sleep(40)
-    expect(serveCount()).toBe(3) // 无 #4
+    expect(serveCount()).toBe(3)
     expect(mgr.getServiceState('serve')).toBe('failed')
-    expect(mgr.getState()).toBe('failed') // 断路器打开后正确停在 failed (onboarding 可见真崩)
+    expect(mgr.getState()).toBe('failed') // 慢速等待期聚合显示 failed (onboarding 可见真崩)
+    await vi.waitFor(() => expect(serveCount()).toBe(4), { timeout: 1000 }) // 慢速重试拉起 #4
+    expect(mgr.getState()).toBe('starting') // re-spawn 回到 starting
+    // 慢速重试不递增也不清零计数: 再快速崩 → 仍走慢速, 正常退避窗口内无 #5
+    childFor('serve').emit('exit', 1, null)
+    await sleep(40)
+    expect(serveCount()).toBe(4)
+    await mgr.stop() // 取消待定的慢速重试, 防定时器漏到后续用例
+  })
+
+  test('稳定运行达 crashStableRunMs 后退出: 即使已累计到上限, 仍清零计数并按正常退避拉起', async () => {
+    appMock.isPackaged = true
+    process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const mgr = new BackendLifecycleManager({
+      pollIntervalMs: 1,
+      apiReadyTimeoutMs: 5,
+      apiProbe: neverReadyApiProbe(),
+      crashBackoffMs: [5],
+      maxCrashRestarts: 1,
+      crashStableRunMs: 200, // 须远大于 vi.waitFor 默认 50ms 轮询, 否则「快崩」也会被算成稳定运行
+      crashSlowRetryMs: 10_000 // 若走慢速, 下面 500ms 内必等不到 re-spawn
+    })
+    mgr.start() // #1
+    childFor('serve').emit('exit', 1, null) // 快崩 crash#1 (attempts 0→1, 已达上限) → re-spawn #2
+    await vi.waitFor(() => expect(serveCount()).toBe(2), { timeout: 500 })
+    await sleep(250) // #2 存活超过 crashStableRunMs
+    childFor('serve').emit('exit', 1, null) // 稳定后退出 → 清零 → 正常退避 re-spawn #3
+    await vi.waitFor(() => expect(serveCount()).toBe(3), { timeout: 500 })
+    // 清零后 #3 立刻快崩 → 计数重新累计到上限 → 走慢速, 正常退避窗口内无 #4
+    childFor('serve').emit('exit', 1, null)
+    await sleep(40)
+    expect(serveCount()).toBe(3)
+    await mgr.stop() // 取消待定的慢速重试
+  })
+
+  test('stop() 取消断路器打开后待定的慢速重试 (停掉后不再拉起)', async () => {
+    appMock.isPackaged = true
+    process.env.MAILAGENT_REMOTE_ACCESS_ENABLED = 'false'
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const mgr = new BackendLifecycleManager({
+      pollIntervalMs: 1,
+      apiReadyTimeoutMs: 5,
+      apiProbe: neverReadyApiProbe(),
+      crashBackoffMs: [5],
+      maxCrashRestarts: 1,
+      crashSlowRetryMs: 60
+    })
+    mgr.start() // #1
+    childFor('serve').emit('exit', 1, null) // crash#1 → re-spawn #2
+    await vi.waitFor(() => expect(serveCount()).toBe(2), { timeout: 500 })
+    childFor('serve').emit('exit', 1, null) // crash#2 → 断路器打开, 排 60ms 后慢速重试
+    await mgr.stop() // serve child 已 null → stop 立即收敛, 同时清 restartTimer
+    await sleep(100) // 越过慢速间隔
+    expect(serveCount()).toBe(2) // 无 #3
   })
 
   test('waitReady 标 ready → serve 崩溃计数清零 (再崩仍有完整退避额度, 不被旧计数提前断路)', async () => {

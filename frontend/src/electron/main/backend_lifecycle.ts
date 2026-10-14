@@ -339,8 +339,12 @@ export interface LifecycleOptions {
   apiProbe?: (port: number) => Promise<boolean>
   /** 崩溃自拉起退避梯度 (serve + serve-api 共用; ms, 可注入便于单测; 默认 CRASH_RESTART_BACKOFF_MS)。 */
   crashBackoffMs?: number[]
-  /** crash-loop 断路器上限: 连续崩溃达此数 (中间无一次 ready) → 放弃自拉起 (可注入; 默认 MAX_CRASH_RESTARTS)。 */
+  /** crash-loop 断路器上限: 连续崩溃达此数 (中间无一次 ready) → 改走慢速重试 (可注入; 默认 MAX_CRASH_RESTARTS)。 */
   maxCrashRestarts?: number
+  /** 进程存活达此时长 (ms) 后退出不算连续崩溃, 先清零计数再自拉起 (可注入; 默认 CRASH_STABLE_RUN_MS)。 */
+  crashStableRunMs?: number
+  /** 断路器打开后的慢速重试间隔 (ms, 可注入; 默认 CRASH_SLOW_RETRY_MS)。 */
+  crashSlowRetryMs?: number
   /** 启动自愈扫描 (可注入便于单测; 默认 killStaleBackendListeners → 真实 lsof/ps/kill)。
    *  第二参 = 排除名单 (本 manager 自家活子进程 pid, F2 防御, 见 killStaleBackendListeners)。 */
   staleSweep?: (ports: number[], excludePids?: ReadonlySet<number>) => number[]
@@ -363,8 +367,11 @@ interface ManagedService {
   /** 每 service 独立状态 (getState() 聚合成单个 BackendState 不破坏调用方)。 */
   state: BackendState
   /** 崩溃自拉起 — 连续 crash 计数 (就绪后清零: serve-api 由 waitApiReady / serve 由
-   *  waitReady; 达 maxCrashRestarts 触发断路器停止重启)。serve + serve-api 都用。 */
+   *  waitReady; 存活达 crashStableRunMs 后退出也清零; 达 maxCrashRestarts 触发断路器改走
+   *  慢速重试)。serve + serve-api 都用。 */
   restartAttempts: number
+  /** 最近一次 spawn 的时间戳 (ms), exit 时据此判断是否「稳定运行后退出」。 */
+  spawnedAt: number | null
   /** C2 崩溃自拉起 — 退避中的 re-spawn 定时器 (stop/restartService 时清, 防多余重启)。 */
   restartTimer: NodeJS.Timeout | null
   /** 该 service 是否 spawn (serve 恒 true; serve-api 由 env gate)。 */
@@ -637,6 +644,7 @@ export class BackendLifecycleManager {
       child: null,
       state: 'idle',
       restartAttempts: 0,
+      spawnedAt: null,
       restartTimer: null,
       enabled: () => true,
       logStream: null,
@@ -648,6 +656,7 @@ export class BackendLifecycleManager {
       child: null,
       state: 'idle',
       restartAttempts: 0,
+      spawnedAt: null,
       restartTimer: null,
       enabled: serveApiEnabled,
       logStream: null,
@@ -661,6 +670,8 @@ export class BackendLifecycleManager {
   private readonly apiProbe: (port: number) => Promise<boolean>
   private readonly crashBackoffMs: number[]
   private readonly maxCrashRestarts: number
+  private readonly crashStableRunMs: number
+  private readonly crashSlowRetryMs: number
   private readonly staleSweep: (ports: number[], excludePids?: ReadonlySet<number>) => number[]
 
   constructor(opts: LifecycleOptions = {}) {
@@ -672,6 +683,8 @@ export class BackendLifecycleManager {
     this.apiProbe = opts.apiProbe ?? probeApiHealth
     this.crashBackoffMs = opts.crashBackoffMs ?? CRASH_RESTART_BACKOFF_MS
     this.maxCrashRestarts = opts.maxCrashRestarts ?? MAX_CRASH_RESTARTS
+    this.crashStableRunMs = opts.crashStableRunMs ?? CRASH_STABLE_RUN_MS
+    this.crashSlowRetryMs = opts.crashSlowRetryMs ?? CRASH_SLOW_RETRY_MS
     this.staleSweep =
       opts.staleSweep ??
       ((ports: number[], excludePids?: ReadonlySet<number>) =>
@@ -811,6 +824,7 @@ export class BackendLifecycleManager {
       windowsHide: true
     })
     svc.child = child
+    svc.spawnedAt = Date.now()
     // 🔴 spawn 后**立刻** (任何 await 之前) 抽干 stdout/stderr —— 不消费 pipe 会背压
     // 死锁把进程整个拖死 (详见 attachLogDrain)。serve 与 serve-api 各落独立文件。
     this.attachLogDrain(svc, dataRoot)
@@ -820,6 +834,10 @@ export class BackendLifecycleManager {
         svc.state = 'failed'
         console.error(`[backend_lifecycle] ${svc.name} exited code=${code} signal=${signal}`)
         svc.child = null
+        // 稳定运行后才退出 (如 mem_guard 定期超水位退出) 不算连续崩溃 → 先复位断路器计数。
+        if (svc.spawnedAt != null && Date.now() - svc.spawnedAt >= this.crashStableRunMs) {
+          svc.restartAttempts = 0
+        }
         // 崩溃自拉起 (指数退避 + crash-loop 断路器): serve + serve-api 都纳入。主动 stop 不触发。
         this.maybeRestartAfterCrash(svc)
         return
@@ -844,33 +862,37 @@ export class BackendLifecycleManager {
    *     重启回收内存」自愈闭环也依赖这里 re-spawn。主动 stop() 不触发 (exit handler 只在
    *     state!=='stopped' 时进来)。dev 模式不接管。
    *
-   * 断路器: 连续崩溃 (中间无一次就绪) 达 maxCrashRestarts → 放弃自拉起, 停在 failed —
-   * 防 import 期必崩的配置错误 (坏依赖等) 把 CPU 烧穿。计数清零时机: serve-api 由
-   * waitApiReady 标 ready 时清零 (持续探测, 「崩→恢复→再崩」每次都有完整退避额度);
-   * serve 由 waitReady 标 ready 时清零 — 但 waitReady 仅启动期调用, 启动后的崩溃自拉起
-   * 无再就绪探测, 计数在 app 会话内**累计**, 达上限即停 (有意取舍: 一个会话内崩 5 次
-   * 说明后端有系统性问题, 停在 failed + 日志比无限重启循环更安全; 重启 App 即复位)。
-   * gate 关 (enabled()=false, 如远程访问开关被关) 也不重启 (留在 failed)。
+   * 断路器: 连续崩溃 (中间无一次就绪) 达 maxCrashRestarts → 不再按退避梯度快速拉起, 改为
+   * 每隔 crashSlowRetryMs 慢速重试一次 (计数不再递增, 再快速崩仍走慢速) — 既防 import 期
+   * 必崩的配置错误把 CPU 烧穿, 又让断网等暂时性故障恢复后无人值守自愈。慢速等待期间
+   * service 停在 'failed', re-spawn 时回到 'starting'。
+   * 计数清零时机: serve-api 由 waitApiReady 标 ready 时清零; serve 由 waitReady 标 ready
+   * 时清零 (仅启动期); 另外任一 service 存活达 crashStableRunMs 后才退出 (如 mem_guard
+   * 定期超水位退出), exit handler 先清零再进本函数 —— 只有短时间内的连续崩溃才累计。
+   * 手动 restartService() 也清零。gate 关 (enabled()=false, 如远程访问开关被关) 不重启
+   * (留在 failed)。退避与慢速重试共用 restartTimer, stop()/restartService() 均可取消。
    *
    * 🔴 与 getState() 聚合的硬约束兼容 (onboarding 靠 `getState()==='failed'` 区分真崩 vs
    * 慢迁移): 自拉起的 spawnService 会把 serve.state 置回 'starting' → 聚合恒 'starting',
-   * 不误报 failed; 断路器打开后停在 'failed' → 聚合正确显示 failed。waitReady 轮询若恰在
-   * 「崩溃后、退避 re-spawn 前」的 failed 窗口命中 → 快速 return false 是接受的现状取舍:
-   * 拉起在后台继续, 开窗降级后下次 IPC 兜底。
+   * 不误报 failed; 断路器打开后的慢速等待期停在 'failed' → 聚合正确显示 failed。waitReady
+   * 轮询若恰在「崩溃后、re-spawn 前」的 failed 窗口命中 → 快速 return false 是接受的现状
+   * 取舍: 拉起在后台继续, 开窗降级后下次 IPC 兜底。
    */
   private maybeRestartAfterCrash(svc: ManagedService): void {
     if (!this.safeIsPackaged()) return
     if (!svc.enabled()) return // gate 关 → 不自拉起
+    let delayMs: number
     if (svc.restartAttempts >= this.maxCrashRestarts) {
+      delayMs = this.crashSlowRetryMs
       console.error(
-        `[backend_lifecycle] ${svc.name} 连续崩溃 ${svc.restartAttempts} 次 (断路器打开), 停止自拉起。` +
-          ' 检查 .env / 依赖后手动 restart 或重启 App。'
+        `[backend_lifecycle] ${svc.name} 连续崩溃 ${svc.restartAttempts} 次 (断路器打开), ` +
+          `${Math.round(delayMs / 1000)}s 后慢速重试。持续失败请检查 .env / 依赖。`
       )
-      return
+    } else {
+      const idx = Math.min(svc.restartAttempts, this.crashBackoffMs.length - 1)
+      delayMs = this.crashBackoffMs[idx]
+      svc.restartAttempts += 1
     }
-    const idx = Math.min(svc.restartAttempts, this.crashBackoffMs.length - 1)
-    const delayMs = this.crashBackoffMs[idx]
-    svc.restartAttempts += 1
     if (svc.restartTimer) clearTimeout(svc.restartTimer)
     svc.restartTimer = setTimeout(() => {
       svc.restartTimer = null
@@ -1148,8 +1170,12 @@ const SIGKILL_WAIT_MS = 2000
 
 /** 崩溃自拉起退避梯度 (serve + serve-api 共用; ms, 仿 events_bridge BACKOFF_MS): 1s→2s→5s→10s→30s 封顶。 */
 const CRASH_RESTART_BACKOFF_MS = [1000, 2000, 5000, 10_000, 30_000]
-/** crash-loop 断路器上限: 连续崩溃 (中间无一次 ready) 达此数 → 放弃自拉起 (防必崩配置烧 CPU)。 */
+/** crash-loop 断路器上限: 连续崩溃 (中间无一次 ready) 达此数 → 改走慢速重试 (防必崩配置烧 CPU)。 */
 const MAX_CRASH_RESTARTS = 5
+/** 存活达此时长 (10 分钟) 后才退出 → 不算连续崩溃, 断路器计数清零。 */
+const CRASH_STABLE_RUN_MS = 10 * 60_000
+/** 断路器打开后的慢速重试间隔 (5 分钟)。 */
+const CRASH_SLOW_RETRY_MS = 5 * 60_000
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))

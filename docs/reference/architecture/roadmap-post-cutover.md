@@ -238,6 +238,25 @@ cutover 当天暴露的稳定性问题已 §3.4 修完, 但 davmail 模式作为
 - `main.py` 主循环加每 60s `probe_tcp(127.0.0.1, 1143)` 探测, 失败 ≥3 次 → 飞书 critical
 - 或 PM2 ecosystem 加 `post_stop_script` 直接 curl 飞书 webhook (更轻量)
 
+#### 4.5.2a davmail-poc 必须以空 stdin 启动（2026-10-14 起）
+
+pm2 进程名仍是 `davmail-poc`（`src/mail/davmail_restart.py` 按此名 `pm2 restart`），但入口改为 `davmail-poc/start-davmail.sh`：JVM 参数、jar、properties 不变，只把 stdin 接到 `/dev/null`（`exec java ... < /dev/null`）。
+
+**原因**：pm2 给子进程的 stdin 是一个一直打开的 socket。DavMail headless 模式下有两处会在 stdin 上 `readLine`：
+- TLS 握手遇到不受信任的证书（断网、热点认证页、SSL 拦截时出现）→ 控制台询问是否信任；
+- refresh token 刷新失败且不是 `UnknownHostException`（例如 `Network is unreachable`）→ 退回 O365Manual 控制台要登录码。
+
+读不到输入就永久挂住该连接线程，客户端只看到 LOGIN / 问候语超时（2026-10-14 实测已累计 3 个卡死线程）。接 `/dev/null` 后两处都读到 EOF：证书按不信任处理，登录按认证失败处理，连接正常结束；token 文件不会被清掉，下一次连接会重新读文件刷新（DavMail 6.7.0 `O365Token.load` / `DavGatewayX509TrustManager` / `O365ManualAuthenticator` 源码已核）。
+
+**重认证**不经过主实例：照旧另起独立端口的临时实例读 stdin 拿 code，写同一个 token 文件后 `pm2 restart davmail-poc`。
+
+```bash
+pm2 delete davmail-poc
+pm2 start davmail-poc/start-davmail.sh --name davmail-poc --interpreter bash --cwd davmail-poc/jar
+pm2 save
+lsof -p "$(pm2 pid davmail-poc)" -a -d 0   # 应显示 /dev/null
+```
+
 #### 4.5.3 EWS throttling burst 监控 (中优)
 
 cutover 时发现的死锁场景: davmail logs 出 `EWSThrottlingException: The server cannot service this request right now`, 跟我们的 `davmail_fetch_burst` 告警 (最近 10min `fetch_failed≥3`) 间接相关, 但**没直接抓 EWS throttling stack trace**.
