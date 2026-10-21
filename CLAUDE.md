@@ -25,6 +25,7 @@
 | DavMail 写路径 trace + Notion 反向链路退役依据 | 退役 Notion 反向链路 / 清 outbox 死分支 / 动 reverse_sync·handlers 前 | [`architecture/davmail-write-path-trace.md`](./docs/reference/architecture/davmail-write-path-trace.md) |
 | **排程规则跨端契约**（`kind:'schedule'` 结构化排程） | 动 custom agent 定时触发 / 报告 Agent 排程 / schedule-builder 预览 / `src/agents/schedule_rule.py` 前 | [`architecture/schedule-rule-contract.md`](./docs/reference/architecture/schedule-rule-contract.md) |
 | **L4 个人 Agent 节点规划 2026-08**（战略定位 + 五 workstream） | 启动本 epic 任一批次 / 排 matters·日历·agent 融合优先级前 / 评估团队协作方向前 | [`l4-personal-agent-node/README.md`](./docs/plans/l4-personal-agent-node/README.md)（docs/plans，epic task `08-17-l4-agent-epic-agent-notion`） |
+| **Comma 设计评审 → 借鉴清单 2026-10**（主动关注管线 / Loop 终止条件 / 领域概念台账） | 动飞书重要邮件推送·频控 / `/today` 分组 / 触发器生命周期上限 / 新增实体前 | [`comma-borrowing-2026-10/README.md`](./docs/plans/comma-borrowing-2026-10/README.md)（docs/plans，L4 外部输入，待 owner 拍板） |
 | **架构整体 Review 2026-07 + E0-E4 收敛路线** | 启动 E0-E4 任一收敛 epic / 排架构债优先级前 | [`architecture-review-2026-07/README.md`](./docs/plans/architecture-review-2026-07/README.md)（docs/plans，含 e0-e4 五份实施方案） |
 | LLM Agent（本地 LLM 分类，fallback / cache / 监控） | 改邮件分类、prompt、cache 前 | [`llm-agent/llm-agent.md`](./docs/reference/llm-agent/llm-agent.md) + [`llm-agent/LLM_AGENT_SETUP.md`](./docs/reference/llm-agent/LLM_AGENT_SETUP.md) |
 | LLM Provider Registry（上游多 provider） | 动 provider 配置 / gateway 模型层 / 协议路由 / 模型选择链 / `MAILAGENT_LLM_PROVIDER_REGISTRY` 前 | [`llm-agent/llm-provider-registry.md`](./docs/reference/llm-agent/llm-provider-registry.md) |
