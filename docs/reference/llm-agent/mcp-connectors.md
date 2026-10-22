@@ -123,6 +123,22 @@ OAuthClientProvider（httpx2.Auth 子类；PKCE + DCR + 刷新全内建）
   `provider.context.token_expiry_time`（提前量 `TOKEN_REFRESH_EARLY_SECONDS=60s`）。
   只碰 `OAuthContext` 的公开 dataclass 字段，有 canary 单测钉 SDK 内部形状漂移。
   **不建后台刷新 worker**（PRD 懒刷新决策）。
+- **401 先强刷一次**（`client._RefreshOn401Provider`，2026-10 Atlassian「每天要重授权」排查）：
+  SDK（2.0 / 2.3 同）只在**它自己认为** access token 过期时刷新；服务器直接回 401 时跳过刷新、
+  直奔完整授权流 → 非交互会话即 `needs_reauth`，而库里的 refresh token 可能还好好的。两种情形
+  会这样：服务端早于 `expires_in` 作废 access token；token 响应不带 `expires_in`（SDK 当它永不
+  过期，`_prime` 也无从预置）。修法 = 包住父类 auth 生成器：原请求**第一次发出**就 401 且有
+  refresh token → 丢弃父流、把 `token_expiry_time` 置为已过期哨兵 `_FORCED_EXPIRY=1.0`
+  （🔴 不能用 0 —— SDK 把 0 当「无到期 = 永远有效」）、重开父流走它自己的刷新分支后重发。
+  每次 auth flow 至多强刷一次；本轮已主动刷过则不再强刷（不多烧轮换 refresh token）。刷新被拒 /
+  新 token 仍 401 → 照旧回落完整授权流，落态语义不变。单测 `tests/connectors/test_refresh_on_401.py`
+  在 2.0.0（打包锁定）与 2.3.0 上都跑过。
+- **SDK auth 日志桥进 loguru**（`client._bridge_sdk_auth_logging`）：`mcp.client.auth` 走 stdlib
+  logging，serve-api 无 root handler → 以前「Token refresh failed」只落 stderr。现在每次刷新
+  （主动 / 401 强刷）结果都进 loguru：成功记 `expires_in` + refresh token 是否轮换，被拒记状态码
+  + 错误体（如 `invalid_grant` / `Grant not found`），401 强刷记 SDK 侧到期判断（`none` = 服务端
+  没给 `expires_in`）。🔴 **从不记 token 值**；SDK 的 `logger.exception` 只落一行摘要，不交
+  exc_info 给 loguru（diagnose 回溯会打印帧变量 = token）。排查授权掉线：`grep "token refresh\|forcing one refresh" logs/`。
 - 🔴 **ExceptionGroup 拆包**（`client._sole_leaf`，PR5 新增，**看着多余但绝不能删**）：
   会话内部是 anyio `TaskGroup`（streamable_http），它把**单个**异常也裹成 `ExceptionGroup`
   → `except ConnectorError / httpx / MCPError` 一条都匹配不上，异常以 ExceptionGroup 形态
