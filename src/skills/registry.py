@@ -69,9 +69,13 @@ def _server_version() -> str:
 def code_builtin_skills() -> tuple[BoundSkill, ...]:
     """代码内置 builtin skills（进程内缓存 —— 不随运行时变化）。新增 builtin 在此登记 builder。"""
     from src.skills.builtin import (
+        agents,
         calendar,
+        contacts,
         custom_agent,
         email,
+        library,
+        matter_lookup,
         matters,
         notion_agent,
         report,
@@ -88,6 +92,10 @@ def code_builtin_skills() -> tuple[BoundSkill, ...]:
         custom_agent.build_skill(),
         skill_creator.build_skill(),
         matters.build_skill(),
+        contacts.build_skill(),
+        library.build_skill(),
+        matter_lookup.build_skill(),
+        agents.build_skill(),
     )
 
 

@@ -60,6 +60,11 @@ KNOWN_SCOPES: frozenset[str] = frozenset(
         "email:draft",
         "email:write",
         "notion_agent:invoke",
+        "contacts:read",
+        "library:read",
+        "matters:read",
+        "agents:read",
+        "agents:run",
     }
 )
 
@@ -69,15 +74,18 @@ READ_ONLY_SCOPES: tuple[str, ...] = (
     "attachment:read",
     "report:read",
     "calendar:read",
+    "contacts:read",
+    "library:read",
+    "matters:read",
+    "agents:read",
 )
 
-# P1 handoff 推荐 key（只读 + 报告执行）。CLI ``api-key create --preset handoff`` 用。
-# **不含** email:write / notion_agent:invoke（发信 / notion-agent 默认不授外部 key）。
-HANDOFF_SCOPES: tuple[str, ...] = (
-    "email:read",
-    "attachment:read",
-    "report:read",
+# 交接 key（全部只读 + 两个触发型执行能力：报告生成 / 手动跑一次自定义 agent）。
+# CLI ``api-key create --preset handoff`` 用。**不含** email:draft / email:write /
+# notion_agent:invoke（起草 / 发信 / notion-agent 默认不授外部 key）。
+HANDOFF_SCOPES: tuple[str, ...] = READ_ONLY_SCOPES + (
     "report:run",
+    "agents:run",
 )
 
 # 起草专用 key（issue #50）：能读 + 能建草稿，**不能发信**（无 email:write → email_send 在

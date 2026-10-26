@@ -173,7 +173,7 @@ def test_draft_tool_contract():
     assert tool.side_effect == "write"
     assert tool.mcp_exposed is True
     assert tool.handler.target == "MailWriteService.compose_draft"
-    # 配额闸只声明在 email_draft 上（其余 tool 行为零变化）。
+    # 配额闸只声明在两个写工具上：email_draft 与 custom_agent_run_now（其余 tool 行为零变化）。
     assert tool.rate_limit == {"limit": 20, "per_seconds": 3600, "scope": "principal"}
     others = [
         t.name
@@ -181,7 +181,7 @@ def test_draft_tool_contract():
         for t in s.tools
         if t.rate_limit is not None
     ]
-    assert others == ["email_draft"]
+    assert others == ["email_draft", "custom_agent_run_now"]
 
 
 def test_send_tool_unchanged():

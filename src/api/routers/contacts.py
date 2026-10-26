@@ -631,6 +631,23 @@ async def list_contacts(
     repo: ContactRepository = Depends(get_contact_repository),
     settings=Depends(get_settings),
 ):
+    page = await asyncio.to_thread(
+        query_contact_list, repo, view=view, q=q, sort=sort, limit=limit, cursor=cursor
+    )
+    return success_envelope(page, request=request)
+
+
+def query_contact_list(
+    repo: ContactRepository,
+    *,
+    view: str,
+    q: Optional[str],
+    sort: str,
+    limit: Optional[int],
+    cursor: Optional[str],
+) -> dict:
+    """通讯录列表的取数 + 行投影 (同步, 阻塞)。路由在线程池里调它; 对外 contacts skill
+    (``src/skills/builtin/contacts.py``) 直接调它 —— 两边同一条 SQL, 不另抄一份。"""
     if view not in VIEW_VALUES:
         raise APIError(
             "E_INVALID_ARG", f"view must be one of {VIEW_VALUES}", source="sqlite"
@@ -731,7 +748,7 @@ async def list_contacts(
             conn.close()
         return page, matched
 
-    rows, total = await asyncio.to_thread(_query)
+    rows, total = _query()
     has_more = limit is not None and len(rows) > limit
     if has_more:
         rows = rows[:limit]
@@ -764,9 +781,7 @@ async def list_contacts(
         }
         for row in rows
     ]
-    return success_envelope(
-        {"items": items, "total": total, "next_cursor": next_cursor}, request=request
-    )
+    return {"items": items, "total": total, "next_cursor": next_cursor}
 
 
 # ---- 详情 ----

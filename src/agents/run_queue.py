@@ -12,12 +12,13 @@ W1 只入队（外壳）；执行走 AgentRunWorker（W2）+ gateway drain（W3�
 from __future__ import annotations
 
 import time
+import uuid
 from datetime import datetime, time as _dtime
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from loguru import logger
 
-from src.agents.trigger import Budget
+from src.agents.trigger import Budget, parse_budget
 from src.sync.async_jobs import AsyncJobRepository
 
 
@@ -122,3 +123,27 @@ def enqueue_agent_run(
         except Exception:
             pass
     return job_id, was_created
+
+
+def enqueue_manual_agent_run(
+    repo: AsyncJobRepository, *, agent_id: str, budget_json: Optional[str]
+) -> Dict[str, Any]:
+    """手动「立即跑一次」custom agent：``POST /api/report-agents/{id}/run`` 的 custom 分支与对外
+    ``agents`` skill 的 ``custom_agent_run_now`` 共用这一份。
+
+    trigger_kind='manual'（gateway 侧 contextMode 从 'manual' 派生成 fail-closed untrusted_trigger；
+    无 email envelope）。幂等键随机 uuid → 每次手动都新起一 run（不与 cron/email 的 fire_key 撞）；
+    仍过 runs/day 门（``enqueue_agent_run`` 内）。调用方负责 agent 存在 / 类型 / 功能开关等前置判断。
+
+    Returns: ``{job_id, was_created, skipped}``（skipped = 当日次数已满，写成了可见的 skipped 行）。
+    """
+    job_id, was_created = enqueue_agent_run(
+        repo,
+        agent_id=agent_id,
+        trigger_kind="manual",
+        fire_key=f"manual:{uuid.uuid4().hex}",
+        budget=parse_budget(budget_json),
+    )
+    job = repo.get(job_id)
+    skipped = bool(job and isinstance(job.result, dict) and job.result.get("outcome") == "skipped")
+    return {"job_id": job_id, "was_created": was_created, "skipped": skipped}

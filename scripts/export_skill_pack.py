@@ -3,7 +3,7 @@
 
 产物（默认 ``dist/mailagent-skill-pack/``，gitignore 友好）：
     README.md · mcp-config.example.json · manifest.json · openapi.json · selftest.sh
-    skills/<skill>/SKILL.md ×5
+    skills/<skill>/SKILL.md（manifest 里每个 skill 一份）
 
 manifest / openapi 从 Python 权威 registry 生成（单一真源，不手抄）。SKILL.md 从
 ``src/skills/docs/`` 拷贝。
@@ -36,8 +36,11 @@ On the MailAgent host:
 mailagent --api-key <CLI_TOKEN> api-key create --label my-agent --preset handoff
 ```
 
-`--preset handoff` grants `email:read, attachment:read, report:read, report:run` (read +
-report execution; **no** send / notion-agent). The plaintext key (`mak_...`) is shown **once**.
+`--preset handoff` grants every read scope (`email:read, attachment:read, report:read,
+calendar:read, contacts:read, library:read, matters:read, agents:read`) plus `report:run` and
+`agents:run` (generate a report / start one custom-agent run; **no** draft / send /
+notion-agent). `--preset readonly` is the read scopes alone. The plaintext key (`mak_...`) is
+shown **once**.
 
 ## 2a. MCP (recommended)
 
@@ -82,8 +85,11 @@ MAILAGENT_API_BASE=https://mail.chenge.ink MAILAGENT_AGENT_KEY=mak_xxx bash self
 
 ## Safety
 
-- Keys are scoped; read-only by default. `report:run` / `email:draft` / `email:write` /
-  `notion_agent:invoke` are separate grants.
+- Keys are scoped; read-only by default. `report:run` / `agents:run` / `email:draft` /
+  `email:write` / `notion_agent:invoke` are separate grants.
+- `custom_agent_run_now` (`agents:run`) only starts a run of an enabled agent with that agent's
+  own configuration — it takes no instructions — needs `confirm: true`, and is limited to 10
+  calls per key per hour.
 - Drafting (`email:draft`, reversible) and sending (`email:write`, irreversible) are
   **separate capabilities** — neither implies the other. `--preset drafter` = read + draft
   only: `email_send` is not even visible in that key's manifest / MCP tool list.

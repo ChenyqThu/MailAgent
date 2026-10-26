@@ -1,7 +1,8 @@
 """SkillContext —— handler 拿领域依赖的注入点（lazy，与 deps.py 同纪律）。
 
-skills 层 transport-neutral：不 import fastapi / cli。依赖（EmailRepository /
-ReportStore / ServiceContext / Config / CalendarService）经本 context 懒构造，REST 路由与
+skills 层 transport-neutral：模块顶层不 import fastapi / cli（个别依赖只能从路由模块拿，
+如资料库单例，就在方法内 lazy import）。依赖（EmailRepository / ReportStore / ServiceContext /
+Config / CalendarService / LibraryService）经本 context 懒构造，REST 路由与
 MCP in-process client 共用一份。lazy import config → 裸 worktree（无 .env）import skills
 不崩，只在真实调用时构造。
 """
@@ -67,3 +68,10 @@ class SkillContext:
 
         cfg = self.config()
         return CalendarService(db_path=cfg.sync_store_db_path, cfg=cfg)
+
+    def library_service(self) -> Any:
+        # 🔴 复用路由模块的进程级单例，不新建 LibraryService：它持进程内状态（语义模型懒加载、
+        # 向量缓存、单实例后台作业锁），同进程两份 = 两次加载约 614 MB 权重、可能两个索引作业并跑。
+        from src.skills.builtin._common import api_router
+
+        return api_router("library").get_library_service()

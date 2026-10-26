@@ -31,8 +31,12 @@ manifest 是 **Python 权威单一真源**（`src/skills/`），REST / MCP / pac
   （`CREATE TABLE IF NOT EXISTS` 幂等，不进 sync_store `DB_VERSION` 体系）。
 - 只存 sha256 hash，明文仅 create/rotate 返回一次；支持 revoke/rotate/expire/audit；
   present-but-invalid（坏/撤销/过期）→ **403 fail-closed**，不回落 CF。
-- scope 默认最小（`READ_ONLY_SCOPES`）；`report:run` / `email:draft` / `email:write` /
-  `notion_agent:invoke` 单独授权。CLI：`mailagent api-key create|list|revoke|rotate`（写需 CLI auth）。
+- scope 默认最小（`READ_ONLY_SCOPES` = `email:read` / `attachment:read` / `report:read` /
+  `calendar:read` / `contacts:read` / `library:read` / `matters:read` / `agents:read`）；
+  `report:run` / `agents:run` / `email:draft` / `email:write` / `notion_agent:invoke` 单独授权。
+  CLI：`mailagent api-key create|list|revoke|rotate`（写需 CLI auth）。
+- 🔴 存量 key 的 scope 是**建 key 时展开存进 `scopes_json` 的字面列表**：往 `READ_ONLY_SCOPES`
+  加新 scope 不会让已发出的 key 获得新能力。要用后加的工具，须新建 key。
 - 🔴 **可发放 ⟺ 有消费者**（2026-07-28 审计）：`KNOWN_SCOPES` 与 builtin ToolDef 的
   `auth_scopes` 并集**逐字相等**，闸 = `tests/skills/test_tooldef_contract.py`。悬空 scope
   （在册、零消费者）不是无害占位 —— 它当场就能 `--scopes <它>` 发出去并存进 `agent_api_keys`，
@@ -42,8 +46,9 @@ manifest 是 **Python 权威单一真源**（`src/skills/`），REST / MCP / pac
 - **起草 ≠ 发信**（issue #50）：`email:draft`（可逆，存草稿）与 `email:write`（不可逆，SMTP 发出）
   是两个独立能力，`has_scopes` 是**精确 AND 判定，不做层级/OR** —— 授了 `email:write`
   **不隐含** `email:draft`。「能发信也该能起草」在 preset 层显式兜住（`--preset writer`），
-  手工 `--scopes` 按字面来，不做隐式扩权。preset：`readonly` / `handoff` /
-  `drafter`（read + attachment:read + email:draft）/ `writer`（drafter + email:write）。
+  手工 `--scopes` 按字面来，不做隐式扩权。preset：`readonly`（全部八个读 scope）/
+  `handoff`（readonly + `report:run` + `agents:run`）/
+  `drafter`（email:read + attachment:read + email:draft）/ `writer`（drafter + email:write）。
 
 ## 3. Skill manifest + invoke
 
@@ -58,8 +63,8 @@ manifest tool 字段：`name / input_schema / output_schema / confirmation_tier 
 (read|write|external_call|send) / auth_scopes / mcp_exposed / handler{kind,target} / timeout_ms
 / rate_limit`。
 
-**配额闸**（`src/skills/rate_limit.py`）：只对**显式声明** `rate_limit` 的 tool 生效（当前唯一
-= `email_draft`，20 次/小时/key），超限 → `E_RATE_LIMITED` / HTTP 429。计数是 invoke chokepoint
+**配额闸**（`src/skills/rate_limit.py`）：只对**显式声明** `rate_limit` 的 tool 生效（当前两个：
+`email_draft` 20 次/小时/key、`custom_agent_run_now` 10 次/小时/key），超限 → `E_RATE_LIMITED` / HTTP 429。计数是 invoke chokepoint
 上的**进程内内存滑窗**（serve-api 单 worker → 对外调用同进程计数；重启清零），目的是挡「跑飞的
 agent 刷屏草稿箱」，**不是**安全边界 —— 安全边界是 scope。未声明的 tool 零行为变化。
 
@@ -67,7 +72,7 @@ agent 刷屏草稿箱」，**不是**安全边界 —— 安全边界是 scope�
 （如 `mode` 拼错）/ 后端异常这类**没有草稿落库**的调用不吃额度 —— 否则 20 次拼错的 `mode` 就能把
 一把合法 key 锁死一小时。代价是并发下可能轻微超发（两个并发请求同时通过 `check`），可接受。
 
-### 首批 skills / tools（`src/skills/builtin/`）
+### skills / tools（`src/skills/builtin/`）
 
 | skill | tools | scope |
 |---|---|---|
@@ -76,6 +81,49 @@ agent 刷屏草稿箱」，**不是**安全边界 —— 安全边界是 scope�
 | report | report_list / report_get / report_run | report:read / report:run |
 | calendar | calendar_events / calendar_event_get（**只读**；写留 P1，故无 `calendar:write` scope） | calendar:read |
 | notion_agent | notion_agent_chat（subprocess, mcp_exposed=false, 默认关） | notion_agent:invoke |
+| contacts | contact_search / contact_get / contact_list_mails（只读） | contacts:read |
+| library | library_list / library_search / library_read（只读） | library:read |
+| matter_lookup | matter_find / matter_get / matter_attention_list（只读） | matters:read |
+| agents | custom_agent_list / custom_agent_get（读）· custom_agent_run_now（write, edit, 10 次/小时/key） | agents:read / agents:run |
+
+另有三个零工具 skill（`custom_agent` / `skill_creator` / `matters`）只带方法论 prompt 片段与
+SKILL.md。`matter_lookup` / `agents` 不叫 `matters` / `custom_agent`，正是因为这两个名字已被零工具
+skill 占用（其测试与 SKILL.md 都把「零工具」当契约）。
+
+**四块域读面（2026-10-26）的共同规则**：
+
+- **返回字段对照应用内助手的同名 gateway 工具**（`frontend/src/ai-gateway/tools/{contacts,library,
+  matters,agents}.ts`），每个 handler 末尾是显式白名单投影，不透出 REST 原始返回。两边字段语义
+  不同源，不建跨语言闸 —— 改 gateway 投影时回来对一遍 Python 那份。对外比 gateway **更严**的地方：
+  - `contact_get` 不出 `notes` / `contact_info` 整块 / `gender`（与 gateway 一致）；
+  - `matter_get` 的 `matter` 去掉跟进 agent 的配置与指令（`matter_instructions` / `schedule_json` /
+    `agent_profile_id` / `agent_enabled`）和操作者列，`include` 不开放 `followup`，`timeline` 去掉
+    `agent_binding_changed` 事件（它的 payload 带跟进指令的前后值）；gateway 原样透传；
+  - `custom_agent_list` / `custom_agent_get` 不出 `prompt` / `model` / 六档能力 / `allowed_tools` /
+    `grant_*` / `skills` / `grant_connectors`；gateway 的 `trigger_summary`（TS 派生的一行字）换成结构化
+    `trigger`；
+  - `library_read` 对回收站里的文件返回 `E_NOT_FOUND`（gateway 回元数据 + 提示）。
+- **不可信文本围栏**：联系人 AI 画像包 `UNTRUSTED_CONTACT_PROFILE`，资料库正文 / 命中片段包
+  `UNTRUSTED_LIBRARY_FILE`（`src/agents/fence.py`，与 TS 同格式、有 parity 闸）。
+- **子列表也封顶**：`contact_get` 的 emails / reports / name_variants 与 `matter_get` 的每个子列表各 50 条，
+  `truncated` 标出被裁的；`matter_attention_list` / `custom_agent_list` 按 `limit` 截并回 `truncated`。
+- **资料库**：复用 `routers/library.get_library_service` 进程级单例（`SkillContext.library_service()`），
+  不新建 `LibraryService`；`.trash` 不可列（根目录清单也去掉它）、不可搜、不可读；挂载目录照常可读，
+  `.env/.pem/.key/.db` 与 `.git` 拦截不变。读会顺带填派生索引（就地抽取 / 踢后台索引），不改文件正文。
+  注意 REST `/api/library/*` 只认本机 token（远程 CF 网页读不到资料库），持 `library:read` 的外部 key
+  经本 skill 反而读得到 —— 这是 owner 2026-10-26 的有意开放，发 key 时按此权衡。
+- **取数复用**：通讯录列表 SQL 下沉为 `routers/contacts.query_contact_list`（路由与 skill 共用），详情用
+  同模块 `_load_detail`；手动触发下沉为 `src/agents/run_queue.enqueue_manual_agent_run`（路由的 custom
+  分支与 skill 共用）。skill handler 经 `builtin/_common.api_router` lazy 取路由模块（先加载 app，
+  避开路由 ↔ app 的循环 import）。
+
+**`custom_agent_run_now` 的门**（顺序即判定顺序）：scope `agents:run` → `confirm:true`（tier=edit）→
+配额 10 次/小时/key → `MAILAGENT_CUSTOM_AGENTS_ENABLED`（关 → 三个 agent 工具都 `E_SKILL_DISABLED` 409）→
+agent 存在且 `type='custom'`（否则 404）→ `enabled`（停用 → `E_CONFLICT` 409，**不入队、不占当日次数**）→
+入队（`trigger_kind='manual'`，每日次数上限照旧，满了返回 `status:'skipped'`）。入参只有 `agent_id`
+（多带任何字段 `E_INVALID_ARG`）：外部 key 只能决定跑哪个、何时跑，run 用 agent 自己配置的权限，run 内
+写工具仍按 owner 的审批规则走。这是应用内（设置页按钮 / manual chat 的同名 gateway 工具）之外的
+第一个外部触发入口；REST 端点 `POST /api/report-agents/{id}/run` 的行为不变（它不判 `enabled`）。
 
 **读面的两条硬边界**（2026-07-28 审计后）：
 
@@ -85,9 +133,11 @@ agent 刷屏草稿箱」，**不是**安全边界 —— 安全边界是 scope�
   `body.raw_mime_sha256`（如实命名的字段）。
 - 所有带 `limit` 的读都封顶且**越界拒**（`E_INVALID_ARG`，不静默 clamp）：`email_search` ≤200 /
   `attachment_search` ≤50 / `calendar_events` ≤5000 / `report_list` ≤200（本批补，此前唯一未封顶；
-  且 SQLite 的 `LIMIT -1` 意为不限 → 负数还能一次拉全表）。
+  且 SQLite 的 `LIMIT -1` 意为不限 → 负数还能一次拉全表）/ `contact_search` ≤50 /
+  `contact_list_mails` ≤100 / `library_list` ≤200 / `library_search` ≤50 / `matter_find` ≤50 /
+  `matter_attention_list` ≤100 / `custom_agent_list` ≤100（上界取 gateway 同名工具的 schema）。
 
-handoff 推荐 key（`--preset handoff`）= `email:read, attachment:read, report:read, report:run`。
+handoff 推荐 key（`--preset handoff`）= 全部八个读 scope + `report:run` + `agents:run`。
 起草 agent（`--preset drafter`）= `email:read, attachment:read, email:draft` —— 能建草稿、
 **看不到** `email_send`（manifest 与 MCP 投影都被 scope 过滤掉），直调得 `403 E_AUTH_FAILED`。
 
@@ -149,7 +199,7 @@ handoff 推荐 key（`--preset handoff`）= `email:read, attachment:read, report
 
 1. **申请 scoped key**（本机，需 CLI auth）：
    ```bash
-   mailagent api-key create --preset handoff   # email:read+attachment:read+report:read+report:run
+   mailagent api-key create --preset handoff   # 全部读 scope + report:run + agents:run
    # 明文 key（mak_…）仅此一次显示, 存好。纯读用 --preset readonly;
    # 只起草不发信用 --preset drafter; 起草+发信用 --preset writer; 细粒度用 --scopes
    ```
@@ -190,8 +240,8 @@ App 退出时 Notion 那边的工具调用会失败。
    ```bash
    MAILAGENT_CLI_API_KEY="$(grep '^MAILAGENT_CLI_API_KEY=' .env | cut -d= -f2- | tr -d '"'\'' ')" \
    MAILAGENT_API_AUTH_DB_PATH="$HOME/Library/Application Support/mailagent-frontend/data/api_auth.db" \
-   venv/bin/mailagent api-key create --label notion-agent --preset readonly   # 只读：邮件 / 附件 / 报告 / 日历
-   # 需要让 Notion 起草回复时改用 --preset drafter（多一个 email_draft，仍发不出信）
+   venv/bin/mailagent api-key create --label notion-agent --preset handoff   # 全部只读 + 生成报告 + 手动跑自定义 agent
+   # 只要读：--preset readonly；需要让 Notion 起草回复：--preset drafter（只有邮件读 + email_draft，仍发不出信）
    ```
    - 🔴 `MAILAGENT_API_AUTH_DB_PATH` 必须指向 App 的 userData：仓库 venv 的 CLI 默认写仓库 `data/api_auth.db`，
      打包 App 的 serve-api 读不到那份，key 建了也是 403。
@@ -200,8 +250,9 @@ App 退出时 Notion 那边的工具调用会失败。
 3. **Notion 配置**：Custom Agent → Tools & Access → Add connection → Custom MCP server：
    - URL `https://mcp.chenge.ink/mcp`
    - Header `Authorization: Bearer mak_…`
-4. **写工具设成需确认**：在 Notion 的工具列表里把 `mailagent_email_email_draft` 设为调用前需确认。
-   `confirm:true` 是模型自己填的意图标记（见 §3），人审只能靠 Notion 这一侧的确认设置。
+4. **写 / 触发类工具设成需确认**：在 Notion 的工具列表里把 `mailagent_agents_custom_agent_run_now`
+   （handoff key）、`mailagent_email_email_draft`（drafter key）设为调用前需确认。`confirm:true` 是模型
+   自己填的意图标记（见 §3），人审只能靠 Notion 这一侧的确认设置。
 
 自检（在任何机器上）：
 ```bash

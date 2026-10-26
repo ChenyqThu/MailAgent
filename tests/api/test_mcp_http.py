@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 import src.api.auth as auth_mod
-from src.security.api_keys import DRAFTER_SCOPES, READ_ONLY_SCOPES
+from src.security.api_keys import DRAFTER_SCOPES, HANDOFF_SCOPES, READ_ONLY_SCOPES
 from tests.api.conftest import EMAIL_ID
 
 
@@ -188,3 +188,80 @@ def test_invalid_json_parse_error(skill_client, api_key_store, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["id"] is None and body["error"]["code"] == -32700
+
+
+# ── 10-26 四块对外工具：readonly 看得到 11 个读工具、看不到 run_now；handoff 看得到并能调 ──
+
+_NEW_READ_TOOLS = {
+    "mailagent_contacts_contact_search",
+    "mailagent_contacts_contact_get",
+    "mailagent_contacts_contact_list_mails",
+    "mailagent_library_library_list",
+    "mailagent_library_library_search",
+    "mailagent_library_library_read",
+    "mailagent_matter_lookup_matter_find",
+    "mailagent_matter_lookup_matter_get",
+    "mailagent_matter_lookup_matter_attention_list",
+    "mailagent_agents_custom_agent_list",
+    "mailagent_agents_custom_agent_get",
+}
+_RUN_NOW = "mailagent_agents_custom_agent_run_now"
+
+
+def test_new_domain_tools_visibility_by_preset(skill_client, api_key_store, monkeypatch):
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+
+    ro_headers, _ = _bearer(api_key_store, READ_ONLY_SCOPES)
+    ro = _tool_names(skill_client.post("/mcp", json=_rpc("tools/list"), headers=ro_headers))
+    assert _NEW_READ_TOOLS <= ro
+    assert _RUN_NOW not in ro
+
+    ho_headers, _ = _bearer(api_key_store, HANDOFF_SCOPES)
+    ho = _tool_names(skill_client.post("/mcp", json=_rpc("tools/list"), headers=ho_headers))
+    assert _NEW_READ_TOOLS | {_RUN_NOW} <= ho
+
+
+def test_run_now_over_mcp_refuses_disabled_agent(
+    skill_client, api_key_store, skill_report_db, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from src.api.app import app
+    from src.api.deps import get_settings
+    from src.reports.store import ReportStore
+    from src.sync.async_jobs import AsyncJobRepository
+
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    ReportStore(db_path=skill_report_db).create_agent("sleeper", type="custom", enabled=False)
+    cfg = SimpleNamespace(sync_store_db_path=skill_report_db, custom_agents_enabled=True)
+    monkeypatch.setitem(app.dependency_overrides, get_settings, lambda: cfg)
+
+    ro_headers, _ = _bearer(api_key_store, READ_ONLY_SCOPES)
+    call = _rpc("tools/call", {"name": _RUN_NOW, "arguments": {"agent_id": "sleeper", "confirm": True}})
+    assert skill_client.post("/mcp", json=call, headers=ro_headers).json()["error"]["code"] == -32602
+
+    headers, rec = _bearer(api_key_store, HANDOFF_SCOPES)
+    result = skill_client.post("/mcp", json=call, headers=headers).json()["result"]
+    assert result["isError"] is True
+    assert result["content"][0]["text"].startswith("[E_CONFLICT]")
+    assert AsyncJobRepository(db_path=skill_report_db).list_agent_runs(agent_id="sleeper") == []
+    assert api_key_store.list_audit(key_id=rec.id)[0]["error_code"] == "E_CONFLICT"
+
+
+def test_new_read_tool_over_rest_invoke(skill_client, api_key_store, monkeypatch):
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    headers, _ = _bearer(api_key_store, READ_ONLY_SCOPES)
+    r = skill_client.post(
+        "/api/skills/invoke",
+        json={"skill": "matter_lookup", "tool": "matter_find", "input": {"limit": 5}},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["data"] == {"count": 0, "items": []}
+
+    r = skill_client.post(
+        "/api/skills/invoke",
+        json={"skill": "matter_lookup", "tool": "matter_find", "input": {"limit": 500}},
+        headers=headers,
+    )
+    assert r.status_code == 400 and r.json()["error"]["code"] == "E_INVALID_ARG"

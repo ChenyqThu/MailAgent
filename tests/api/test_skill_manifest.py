@@ -44,6 +44,27 @@ EXPECTED_TOOLS = {
     # gateway and are CORE_UNGATED there (with approval guarding the mixed family),
     # so this skill teaches the method rather than unlocking a capability.
     "matters": {},
+    # 10-26 —— 四块对外读面 + 唯一一个触发型写（custom_agent_run_now）。
+    "contacts": {
+        "contact_search": ("read", "none", ["contacts:read"], True),
+        "contact_get": ("read", "none", ["contacts:read"], True),
+        "contact_list_mails": ("read", "none", ["contacts:read"], True),
+    },
+    "library": {
+        "library_list": ("read", "none", ["library:read"], True),
+        "library_search": ("read", "none", ["library:read"], True),
+        "library_read": ("read", "none", ["library:read"], True),
+    },
+    "matter_lookup": {
+        "matter_find": ("read", "none", ["matters:read"], True),
+        "matter_get": ("read", "none", ["matters:read"], True),
+        "matter_attention_list": ("read", "none", ["matters:read"], True),
+    },
+    "agents": {
+        "custom_agent_list": ("read", "none", ["agents:read"], True),
+        "custom_agent_get": ("read", "none", ["agents:read"], True),
+        "custom_agent_run_now": ("write", "edit", ["agents:run"], True),
+    },
 }
 
 

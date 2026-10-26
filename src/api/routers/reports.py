@@ -361,33 +361,19 @@ async def run_now(request: Request, agent_id: str, body: Optional[dict[str, Any]
             raise APIError(
                 "E_INVALID_ARG", "custom agents feature is disabled", source="sqlite"
             )
-        import uuid
-
-        from src.agents.run_queue import enqueue_agent_run
-        from src.agents.trigger import parse_budget
+        from src.agents.run_queue import enqueue_manual_agent_run
         from src.api.deps import get_job_repo
 
-        # 手动触发 → trigger_kind='manual'（gateway 侧 contextMode 从 'manual' 派生成 fail-closed
-        # untrusted_trigger；无 email envelope）。幂等键随机 uuid → 每次手动都新起一 run（不与
-        # cron/email 的 fire_key 撞）；仍过 runs/day 门（enqueue_agent_run 内）。
-        budget = parse_budget(agent.get("budget_json"))
-        repo = get_job_repo()
-        outcome = enqueue_agent_run(
-            repo,
-            agent_id=agent_id,
-            trigger_kind="manual",
-            fire_key=f"manual:{uuid.uuid4().hex}",
-            budget=budget,
+        # 手动触发的入队语义（trigger_kind / 随机幂等键 / runs/day 门）见 enqueue_manual_agent_run。
+        queued = enqueue_manual_agent_run(
+            get_job_repo(), agent_id=agent_id, budget_json=agent.get("budget_json")
         )
-        job_id, was_created = outcome
-        job = repo.get(job_id)
-        skipped = bool(job and isinstance(job.result, dict) and job.result.get("outcome") == "skipped")
         return success_envelope(
             {
-                "jobId": job_id,
+                "jobId": queued["job_id"],
                 "agentId": agent_id,
-                "wasCreated": was_created,
-                "skipped": skipped,
+                "wasCreated": queued["was_created"],
+                "skipped": queued["skipped"],
             },
             request=request,
             source="sqlite",
