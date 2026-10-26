@@ -1,4 +1,4 @@
-"""skills 路由 —— /api/skills (manifest) + /api/skills/invoke (统一调用面)。
+"""skills 路由 —— /api/skills (manifest) + /api/skills/invoke (统一调用面) + /mcp (MCP over HTTP)。
 
 对外 agent（OpenClaw / Claude Code / MCP client）经 scoped Bearer key 调 MailAgent 能力的
 唯一表面。鉴权用 ``authenticate_principal``（四腿 dev→local→bearer→CF）；**只有本路由认
@@ -7,19 +7,26 @@ Bearer key** —— 其余写端点对 agent key 天然 401，越权 by construc
 invoke 主路径 **不 fork 子进程调 CLI**（BASE-1；E2-C 起 serve-api 全线退役该模式，
 不止本路由）：``invoke_skill`` 走 ``src/skills`` registry → handler 调 services /
 repository / ReportStore / run_report_once / notion_agent。
+
+``/mcp`` 是同一能力面的 MCP Streamable HTTP 传输（无状态：不发 ``Mcp-Session-Id``、不推 SSE），
+给只能填「URL + 请求头」的远程 MCP 客户端（Notion Custom Agent 等）用。JSON-RPC 分派复用
+``mailagent_mcp.handle_request``，鉴权同 ``/api/skills``。
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse, Response
 
 from src.api.agent_auth import Principal, authenticate_principal
 from src.api.app import APIError, success_envelope
 from src.api.deps import get_report_store, get_repository, get_settings
+from src.mcp.mailagent_mcp import PrincipalSkillClient, handle_request
 from src.security import api_keys as _api_keys
 from src.skills.context import SkillContext
 from src.skills.errors import SkillError
@@ -32,6 +39,7 @@ if TYPE_CHECKING:
     from src.repository import EmailRepository
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
+mcp_router = APIRouter(tags=["mcp"])
 _log = logging.getLogger("mailagent.api.skills")
 
 
@@ -43,13 +51,14 @@ def _audit(
     status: str,
     error_code: Optional[str],
     t0: float,
+    route: str = "/api/skills/invoke",
 ) -> None:
     """agent principal 调用记一行 audit + last_used（human owner 不记）。失败吞掉不阻断响应。"""
     if not getattr(principal, "is_agent", False) or not principal.key_id:
         return
     try:
         _api_keys.get_api_key_store().write_audit(
-            route="/api/skills/invoke",
+            route=route,
             status=status,
             key_id=principal.key_id,
             skill=skill,
@@ -119,3 +128,55 @@ async def invoke(
     return success_envelope(
         result, request=request, source="cli", meta_extra={"skill": skill, "tool": tool}
     )
+
+
+def _jsonrpc_error(code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": None, "error": {"code": code, "message": message}}
+
+
+@mcp_router.post("/mcp")
+async def mcp_post(
+    request: Request,
+    principal: Principal = Depends(authenticate_principal),
+    repo: "EmailRepository" = Depends(get_repository),
+    report_store: "ReportStore" = Depends(get_report_store),
+    cfg: "Config" = Depends(get_settings),
+):
+    """一个 JSON-RPC 消息（或批量数组）→ 含 request 时 200 JSON；只有 notification / response 时 202。"""
+    try:
+        payload = json.loads(await request.body())
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return JSONResponse(_jsonrpc_error(-32700, "parse error"))
+
+    def _on_call(skill: str, tool: str, error_code: Optional[str], t0: float) -> None:
+        _audit(
+            principal,
+            skill=skill,
+            tool=tool,
+            status="error" if error_code else "ok",
+            error_code=error_code,
+            t0=t0,
+            route="/mcp",
+        )
+
+    ctx = SkillContext(repository=repo, report_store=report_store, config=cfg)
+    client = PrincipalSkillClient(principal, ctx, on_call=_on_call)
+
+    async def _one(msg: Any) -> Optional[dict[str, Any]]:
+        if not isinstance(msg, dict):
+            return _jsonrpc_error(-32600, "invalid request")
+        if "method" not in msg:
+            return None  # 客户端发来的 JSON-RPC response，本 server 不发请求，直接接收
+        return await handle_request(msg, client)
+
+    if isinstance(payload, list):
+        responses = [r for r in [await _one(m) for m in payload] if r is not None]
+        return JSONResponse(responses) if responses else Response(status_code=202)
+    response = await _one(payload)
+    return JSONResponse(response) if response is not None else Response(status_code=202)
+
+
+@mcp_router.api_route("/mcp", methods=["GET", "DELETE"])
+async def mcp_not_allowed() -> Response:
+    """无状态实现：不提供 GET SSE 流，也没有会话可删。"""
+    return Response(status_code=405, headers={"Allow": "POST"})

@@ -481,6 +481,9 @@ app.include_router(matter_agent.router)
 app.include_router(chat.router)
 app.include_router(settings.router)
 app.include_router(skills.router)
+# task 10-26 — /mcp: 同一 Skill 能力面的 MCP Streamable HTTP 传输（无状态），给远程 MCP 客户端
+# （Notion Custom Agent）用。鉴权同 /api/skills（authenticate_principal，认 scoped Bearer key）。
+app.include_router(skills.mcp_router)
 app.include_router(agent.router)
 # S1 R3 (agent openness wave1) — web 联网工具执行端点 /api/web/{fetch,search}。TS 薄壳→
 # Python 执行（业务权威 + 远程 parity）；SSRF 防护 + 钉 IP 在 routers/web.py。gateway 侧

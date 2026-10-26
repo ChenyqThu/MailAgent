@@ -9,6 +9,7 @@
 ```
 外部 agent（自带 loop）
   → MCP stdio (mailagent-mcp)  ─┐
+  → MCP HTTP  POST /mcp        ─┤
   → REST  /api/skills(+invoke) ─┼─ scoped Bearer key → src/skills registry
                                 │     → handler 调 services / EmailRepository /
                                 │       ReportStore / run_report_once / notion_agent
@@ -24,7 +25,7 @@ manifest 是 **Python 权威单一真源**（`src/skills/`），REST / MCP / pac
 **Skill 路由**（`src/api/routers/skills.py`）加第四腿 `authenticate_principal`
 （`src/api/agent_auth.py`），顺序 **dev → local → bearer → CF**：
 
-- Bearer 只在 `/api/skills*` 认；其余写端点对 agent key 天然 401 → 越权 by construction 不可达。
+- Bearer 只在 `/api/skills*` 与 `/mcp` 认；其余写端点对 agent key 天然 401 → 越权 by construction 不可达。
 - key 存 `api_auth.db`（backend-owned，**非** `ai_chat.db`；默认 sync_store 同目录，env
   `MAILAGENT_API_AUTH_DB_PATH` 覆盖）。表：`agent_api_keys` + `agent_api_key_audit`
   （`CREATE TABLE IF NOT EXISTS` 幂等，不进 sync_store `DB_VERSION` 体系）。
@@ -118,13 +119,33 @@ handoff 推荐 key（`--preset handoff`）= `email:read, attachment:read, report
 - `mailagent-mcp`（`src/mcp/mailagent_mcp.py`）：MCP stdio JSON-RPC（initialize / tools/list /
   tools/call）。tools 从 manifest 的 `mcp_exposed` 生成，名 `mailagent_<skill>_<tool>`；经
   Bearer key 打 serve-api。`MAILAGENT_API_BASE` + `MAILAGENT_AGENT_KEY`。
+- **MCP over HTTP**：serve-api 的 `POST /mcp`（`src/api/routers/skills.py::mcp_router`），给只能填
+  「URL + 请求头」的远程 MCP 客户端（Notion Custom Agent 等）用。无状态 Streamable HTTP：
+  - 一个 JSON-RPC 消息（或批量数组）一次请求；含 request → `200 application/json`，只有
+    notification / response → `202` 无 body；body 不是合法 JSON → JSON-RPC `-32700`。
+  - 不发 `Mcp-Session-Id`、不提供 SSE 流：`GET /mcp` / `DELETE /mcp` → `405`。
+  - 分派复用 `mailagent_mcp.handle_request`（与 stdio 同一份），client 是 in-process 的
+    `PrincipalSkillClient`：按已鉴权的 principal 调 `build_manifest` / `invoke_skill`，
+    scope / confirm / 配额 / 输入校验与 REST 完全同一条 chokepoint。
+  - 鉴权同 `/api/skills`（`authenticate_principal`）：无凭据 401，坏 / 撤销 / 过期 key 403。
+    key scope 外的工具在 `tools/list` 里看不到，`tools/call` 返回 JSON-RPC `-32602 unknown tool`；
+    scope 内但被 confirm 闸等拒绝的调用返回 `isError` 文本 `[<code>] <message>`。
+  - 每次 `tools/call` 落到 invoke 的调用写一行 `agent_api_key_audit`，`route='/mcp'`。
+  - `initialize` 做版本协商（stdio 同）：请求的 `protocolVersion` 在
+    `2024-11-05` / `2025-03-26` / `2025-06-18` 内则回显，否则回 `2025-06-18`；不带版本回
+    `2024-11-05`。
+  - 测试：`tests/api/test_mcp_http.py`。
 - `scripts/export_skill_pack.py` → `dist/mailagent-skill-pack/`（gitignored）：README /
   mcp-config.example.json / manifest.json / openapi.json / selftest.sh / skills/<skill>/SKILL.md。
   `selftest.sh` 只跑安全动作（health / manifest / search / report_list；report.run 为 opt-in）。
 
 ## 5. 快速接入（外部 agent）
 
-三步把 MailAgent 能力接进外部 agent（Claude Code / OpenClaw / 任意 MCP client）。`$BASE` 本机 = `http://127.0.0.1:8200`，远程 = `https://mail.chenge.ink`。
+三步把 MailAgent 能力接进外部 agent（Claude Code / OpenClaw / 任意 MCP client）。`$BASE` 本机 = `http://127.0.0.1:8200`。
+
+> 🔴 **`https://mail.chenge.ink` 不能用于 Bearer key**：整站在 Cloudflare Access 后，带 Bearer key
+> 的请求在到达 serve-api 之前就被 302 到 Access 登录页（2026-10-26 实测）。远程的外部 agent 走一个
+> **不挂 Access** 的独立主机名，且隧道只放行 `/mcp`（见下方「Notion Custom Agent 接入」）。
 
 1. **申请 scoped key**（本机，需 CLI auth）：
    ```bash
@@ -151,6 +172,36 @@ handoff 推荐 key（`--preset handoff`）= `email:read, attachment:read, report
    ```
 
 key 管理 `mailagent api-key list|revoke|rotate`；坏/撤销/过期 key → 403 fail-closed。
+
+### Notion Custom Agent 接入
+
+Notion Custom Agent 的「Custom MCP server」只接受公网 HTTPS URL + 请求头鉴权，所以走 `POST /mcp`。
+前提：**这台 Mac 开着、MailAgent 在运行**（serve-api 与 cloudflared 隧道都在本机）；Mac 合盖或
+App 退出时 Notion 那边的工具调用会失败。
+
+1. **Cloudflare 公网主机名**（owner 在后台操作，一次性）：Cloudflare Zero Trust → Networks →
+   Tunnels → 选跑 `mail.chenge.ink` 的那条隧道 → Public Hostname → 新增：
+   - Subdomain `mcp`，Domain `chenge.ink`（即 `mcp.chenge.ink`）
+   - Path `^/mcp$`（只放行这一个路径，其余 serve-api 路由不经这个主机名暴露）
+   - Service `http://localhost:8200`
+   - 🔴 **不要**给 `mcp.chenge.ink` 建 Access 应用 —— 鉴权由 Bearer key 承担，挂了 Access
+     就会像 `mail.chenge.ink` 一样把请求 302 掉。
+2. **申请 key**（本机）：
+   ```bash
+   mailagent api-key create --preset readonly   # 只读：邮件 / 附件 / 报告 / 日历
+   # 需要让 Notion 起草回复时改用 --preset drafter（多一个 email_draft，仍发不出信）
+   ```
+3. **Notion 配置**：Custom Agent → Tools & Access → Add connection → Custom MCP server：
+   - URL `https://mcp.chenge.ink/mcp`
+   - Header `Authorization: Bearer mak_…`
+4. **写工具设成需确认**：在 Notion 的工具列表里把 `mailagent_email_email_draft` 设为调用前需确认。
+   `confirm:true` 是模型自己填的意图标记（见 §3），人审只能靠 Notion 这一侧的确认设置。
+
+自检（在任何机器上）：
+```bash
+curl -s -X POST https://mcp.chenge.ink/mcp -H "Authorization: Bearer mak_…" \
+  -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
 
 ## 6. 不变式（每次动本面复跑）
 

@@ -4,10 +4,13 @@
   - **tools 从 manifest 生成**（``mcp_exposed`` 的 tool），不手写第二套工具定义 → 无第二真源。
   - 工具名加前缀 ``mailagent_<skill>_<tool>``，避免与其他 MCP server 冲突。
   - 生产经 ``HttpSkillClient`` 打 serve-api（Bearer key）；测试/本地 selftest 用
-    ``LocalSkillClient`` in-process 跑 registry（无需起服务）。
-  - 协议核心 ``handle_request(req, client)`` 是纯函数（给定 client）→ 易单测。
+    ``LocalSkillClient`` in-process 跑 registry（无需起服务）；serve-api 的 HTTP 端点
+    ``/mcp``（``src/api/routers/skills.py``）用 ``PrincipalSkillClient`` 按已鉴权的
+    principal in-process 调用。
+  - 协议核心 ``handle_request(req, client)`` 是纯函数（给定 client）→ 易单测，stdio 与
+    HTTP 两种传输共用。
 
-MCP 协议（2024-11-05）最小实现：initialize / tools/list / tools/call + notifications。
+MCP 协议最小实现：initialize（版本协商）/ tools/list / tools/call + notifications。
 JSON-RPC over stdio：每行一个 JSON 对象（newline-delimited）。
 """
 
@@ -17,9 +20,13 @@ import asyncio
 import json
 import os
 import sys
+import time
 from typing import Any, Optional
 
 PROTOCOL_VERSION = "2024-11-05"
+# initialize 版本协商：客户端请求的版本在集内则回显，否则回最新（MCP lifecycle 规范）。
+# 本实现只用到三版共有的 tools 子集，无版本差异分支。
+SUPPORTED_PROTOCOL_VERSIONS = ("2024-11-05", "2025-03-26", "2025-06-18")
 TOOL_PREFIX = "mailagent_"
 
 
@@ -79,6 +86,44 @@ class LocalSkillClient:
         # 🔴 严格布尔，不做 truthiness（codex blocker）：仅 JSON true 算确认。
         confirm = (args.pop("confirm", False) is True) if isinstance(args, dict) else False
         return await invoke_skill(None, skill, tool, args, confirm=confirm, ctx=self._ctx)
+
+
+class PrincipalSkillClient:
+    """in-process client，按已鉴权的 principal 过滤与调用（serve-api ``/mcp`` 端点用）。
+
+    与 ``/api/skills`` 走同一套 ``build_manifest`` / ``invoke_skill``：scope、confirm、配额、
+    输入校验全部原样生效。``on_call(skill, tool, error_code, t0)`` 在每次 invoke 结束后
+    回调（审计用，``error_code`` 为 None 表示成功）。
+    """
+
+    def __init__(self, principal: Any, ctx: Any, on_call: Any = None) -> None:
+        self._principal = principal
+        self._ctx = ctx
+        self._on_call = on_call
+
+    async def list_tools(self) -> list[dict[str, Any]]:
+        from src.skills.registry import build_manifest
+
+        return manifest_to_mcp_tools(build_manifest(self._principal))
+
+    async def call_tool(self, skill: str, tool: str, args: dict[str, Any]) -> dict[str, Any]:
+        from src.skills.errors import SkillError
+        from src.skills.invoke import invoke_skill
+
+        # 🔴 严格布尔，不做 truthiness（codex blocker）：仅 JSON true 算确认。
+        confirm = (args.pop("confirm", False) is True) if isinstance(args, dict) else False
+        t0 = time.perf_counter()
+        try:
+            result = await invoke_skill(
+                self._principal, skill, tool, args, confirm=confirm, ctx=self._ctx
+            )
+        except SkillError as exc:
+            if self._on_call is not None:
+                self._on_call(skill, tool, exc.code, t0)
+            raise _ToolError(exc.code, exc.message) from exc
+        if self._on_call is not None:
+            self._on_call(skill, tool, None, t0)
+        return result
 
 
 class HttpSkillClient:
@@ -141,10 +186,17 @@ async def handle_request(req: dict[str, Any], client: Any) -> Optional[dict[str,
     is_notification = "id" not in req
 
     if method == "initialize":
+        requested = (req.get("params") or {}).get("protocolVersion")
+        if requested in SUPPORTED_PROTOCOL_VERSIONS:
+            version = requested
+        elif requested is None:
+            version = PROTOCOL_VERSION
+        else:
+            version = SUPPORTED_PROTOCOL_VERSIONS[-1]
         return _ok(
             req_id,
             {
-                "protocolVersion": PROTOCOL_VERSION,
+                "protocolVersion": version,
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "mailagent", "version": "1.0.0"},
             },
