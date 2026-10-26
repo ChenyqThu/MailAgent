@@ -186,11 +186,17 @@ App 退出时 Notion 那边的工具调用会失败。
    - Service `http://localhost:8200`
    - 🔴 **不要**给 `mcp.chenge.ink` 建 Access 应用 —— 鉴权由 Bearer key 承担，挂了 Access
      就会像 `mail.chenge.ink` 一样把请求 302 掉。
-2. **申请 key**（本机）：
+2. **申请 key**（本机，在仓库目录下跑）：
    ```bash
-   mailagent api-key create --preset readonly   # 只读：邮件 / 附件 / 报告 / 日历
+   MAILAGENT_CLI_API_KEY="$(grep '^MAILAGENT_CLI_API_KEY=' .env | cut -d= -f2- | tr -d '"'\'' ')" \
+   MAILAGENT_API_AUTH_DB_PATH="$HOME/Library/Application Support/mailagent-frontend/data/api_auth.db" \
+   venv/bin/mailagent api-key create --label notion-agent --preset readonly   # 只读：邮件 / 附件 / 报告 / 日历
    # 需要让 Notion 起草回复时改用 --preset drafter（多一个 email_draft，仍发不出信）
    ```
+   - 🔴 `MAILAGENT_API_AUTH_DB_PATH` 必须指向 App 的 userData：仓库 venv 的 CLI 默认写仓库 `data/api_auth.db`，
+     打包 App 的 serve-api 读不到那份，key 建了也是 403。
+   - CLI 写命令的 token 只从 `.env` 读**期望值**，**提供值**要来自 `--api-key` 或 shell 环境变量，
+     不 export 会报 `E_AUTH_FAILED: Invalid or missing API key`。
 3. **Notion 配置**：Custom Agent → Tools & Access → Add connection → Custom MCP server：
    - URL `https://mcp.chenge.ink/mcp`
    - Header `Authorization: Bearer mak_…`
