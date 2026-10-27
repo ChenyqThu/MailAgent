@@ -54,15 +54,15 @@ def test_tools_list_filtered_by_key_scope(skill_client, api_key_store, monkeypat
 
     ro_headers, _ = _bearer(api_key_store, READ_ONLY_SCOPES)
     ro = _tool_names(skill_client.post("/mcp", json=_rpc("tools/list"), headers=ro_headers))
-    assert "mailagent_search_email_search" in ro
-    assert "mailagent_email_email_draft" not in ro
-    assert "mailagent_report_report_run" not in ro
+    assert "mailagent_email_search" in ro
+    assert "mailagent_email_draft" not in ro
+    assert "mailagent_report_run" not in ro
 
     dr_headers, _ = _bearer(api_key_store, DRAFTER_SCOPES)
     dr = _tool_names(skill_client.post("/mcp", json=_rpc("tools/list"), headers=dr_headers))
-    assert "mailagent_email_email_draft" in dr
+    assert "mailagent_email_draft" in dr
     # mcp_exposed=False 的发信工具对任何 key 都不投影
-    assert "mailagent_email_email_send" not in dr
+    assert "mailagent_email_send" not in dr
 
 
 def test_tools_call_success_and_audit(skill_client, api_key_store, monkeypatch):
@@ -72,7 +72,7 @@ def test_tools_call_success_and_audit(skill_client, api_key_store, monkeypatch):
         "/mcp",
         json=_rpc(
             "tools/call",
-            {"name": "mailagent_search_email_search", "arguments": {"q": "redis"}},
+            {"name": "mailagent_email_search", "arguments": {"q": "redis"}},
         ),
         headers=headers,
     )
@@ -97,7 +97,7 @@ def test_out_of_scope_tool_is_not_callable(skill_client, api_key_store, monkeypa
         "/mcp",
         json=_rpc(
             "tools/call",
-            {"name": "mailagent_email_email_draft", "arguments": {"mode": "new", "confirm": True}},
+            {"name": "mailagent_email_draft", "arguments": {"mode": "new", "confirm": True}},
         ),
         headers=headers,
     )
@@ -112,7 +112,7 @@ def test_invoke_gate_denial_surfaces_as_iserror(skill_client, api_key_store, mon
     headers, rec = _bearer(api_key_store, DRAFTER_SCOPES)
     r = skill_client.post(
         "/mcp",
-        json=_rpc("tools/call", {"name": "mailagent_email_email_draft", "arguments": {"mode": "new"}}),
+        json=_rpc("tools/call", {"name": "mailagent_email_draft", "arguments": {"mode": "new"}}),
         headers=headers,
     )
     assert r.status_code == 200
@@ -193,19 +193,19 @@ def test_invalid_json_parse_error(skill_client, api_key_store, monkeypatch):
 # ── 10-26 四块对外工具：readonly 看得到 11 个读工具、看不到 run_now；handoff 看得到并能调 ──
 
 _NEW_READ_TOOLS = {
-    "mailagent_contacts_contact_search",
-    "mailagent_contacts_contact_get",
-    "mailagent_contacts_contact_list_mails",
-    "mailagent_library_library_list",
-    "mailagent_library_library_search",
-    "mailagent_library_library_read",
-    "mailagent_matter_lookup_matter_find",
-    "mailagent_matter_lookup_matter_get",
-    "mailagent_matter_lookup_matter_attention_list",
-    "mailagent_agents_custom_agent_list",
-    "mailagent_agents_custom_agent_get",
+    "mailagent_contact_search",
+    "mailagent_contact_get",
+    "mailagent_contact_list_mails",
+    "mailagent_library_list",
+    "mailagent_library_search",
+    "mailagent_library_read",
+    "mailagent_matter_find",
+    "mailagent_matter_get",
+    "mailagent_matter_attention_list",
+    "mailagent_custom_agent_list",
+    "mailagent_custom_agent_get",
 }
-_RUN_NOW = "mailagent_agents_custom_agent_run_now"
+_RUN_NOW = "mailagent_custom_agent_run_now"
 
 
 def test_new_domain_tools_visibility_by_preset(skill_client, api_key_store, monkeypatch):

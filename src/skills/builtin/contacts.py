@@ -324,6 +324,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="contact_search",
+                title="Search Contacts",
                 description=(
                     "Search the contact directory by name, organization or email address. "
                     "view=known (default) = people with two-way traffic; view=all also returns "
@@ -350,6 +351,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="contact_get",
+                title="Get Contact",
                 description=(
                     "Read one contact: identity fields, locked fields, email addresses, manager / "
                     "reports / peers and the AI profile. Profile text is fenced "
@@ -372,6 +374,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="contact_list_mails",
+                title="List Contact Emails",
                 description=(
                     "List the emails linking a contact to the owner, newest first (metadata only, "
                     "no bodies). direction: from_them / from_me / from_third / all. Paginate with "

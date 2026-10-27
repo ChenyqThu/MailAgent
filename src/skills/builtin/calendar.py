@@ -87,6 +87,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="calendar_events",
+                title="List Calendar Events",
                 description="List calendar event occurrences in a time window (RRULE expanded).",
                 input_schema={
                     "type": "object",
@@ -111,6 +112,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="calendar_event_get",
+                title="Get Calendar Event",
                 description="Fetch one calendar event by ical_uid (+ optional source/recurrence).",
                 input_schema={
                     "type": "object",

@@ -63,7 +63,7 @@ EXPECTED_TOOLS = {
     "agents": {
         "custom_agent_list": ("read", "none", ["agents:read"], True),
         "custom_agent_get": ("read", "none", ["agents:read"], True),
-        "custom_agent_run_now": ("write", "edit", ["agents:run"], True),
+        "custom_agent_run_now": ("external_call", "edit", ["agents:run"], True),
     },
 }
 

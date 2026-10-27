@@ -121,6 +121,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="email_search",
+                title="Search Emails",
                 description="Full-text search email bodies + subject + sender (FTS5 bm25).",
                 input_schema={"type": "object", "properties": common_q, "required": ["q"]},
                 output_schema={
@@ -140,6 +141,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="attachment_search",
+                title="Search Attachments",
                 description="Full-text search extracted attachment text and filenames (PDF/docx/pptx/xlsx; CJK-aware substrings).",
                 input_schema={"type": "object", "properties": common_q, "required": ["q"]},
                 output_schema={"type": "object", "description": "{items, total_indexed, mode}"},

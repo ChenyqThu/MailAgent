@@ -241,6 +241,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="library_list",
+                title="List Library Files",
                 description=(
                     "Browse one folder of the document library (metadata only). Omit path for the "
                     "root: my-docs, agent-docs, chat-attachments, mail-attachments (a read-only "
@@ -272,6 +273,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="library_search",
+                title="Search Library",
                 description=(
                     "Keyword search across library file text and filenames (plain keywords, no field "
                     "syntax; Chinese needs at least two characters). Snippets are fenced "
@@ -298,6 +300,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="library_read",
+                title="Read Library File",
                 description=(
                     "Read one library file's text by file_id, or a mail-attachments row by "
                     "attachment_id (pass exactly one). PDF / Office / images return the extracted "

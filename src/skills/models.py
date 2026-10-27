@@ -56,6 +56,9 @@ class ToolDef(BaseModel):
     handler: ToolHandler
     timeout_ms: Optional[int] = None
     rate_limit: Optional[dict[str, Any]] = None
+    # 英文展示名，投到 MCP 的 ``title`` / ``annotations.title``。builtin 必填（闸在
+    # tests/skills/test_tooldef_contract.py）；installed skill 可省，MCP 投影回落到 ``name``。
+    title: Optional[str] = None
 
 
 class SkillAvailability(BaseModel):

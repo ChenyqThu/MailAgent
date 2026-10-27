@@ -144,10 +144,10 @@ def test_drafter_preset_excludes_send_scope():
 
 
 def test_cli_presets_all_valid():
-    from src.cli.commands.api_key import _PRESETS
+    from src.security.api_keys import KEY_PRESETS
 
-    assert set(_PRESETS) == {"readonly", "handoff", "drafter", "writer"}
-    for name, scopes in _PRESETS.items():
+    assert set(KEY_PRESETS) == {"readonly", "handoff", "drafter", "writer"}
+    for name, scopes in KEY_PRESETS.items():
         validate_scopes(scopes)  # 非法 scope 会 ValueError
 
 
@@ -197,9 +197,9 @@ def test_send_tool_unchanged():
 def test_mcp_projection_exposes_draft_with_confirm_field():
     """🔴 回归：MCP 桥是 args.pop("confirm") —— schema 里没有 confirm，客户端永远填不上 → 恒 403。"""
     tools = {t["name"]: t for t in manifest_to_mcp_tools(build_manifest(DRAFTER, generated_at="x"))}
-    assert "mailagent_email_email_draft" in tools
-    assert "mailagent_email_email_send" not in tools
-    schema = tools["mailagent_email_email_draft"]["inputSchema"]
+    assert "mailagent_email_draft" in tools
+    assert "mailagent_email_send" not in tools
+    schema = tools["mailagent_email_draft"]["inputSchema"]
     assert schema["properties"]["confirm"]["type"] == "boolean"
     # confirm 不能进 required：REST 走 body 顶层、MCP 已被 pop 走 → 两条路 params 里都没有它。
     assert "confirm" not in schema.get("required", [])
@@ -208,7 +208,7 @@ def test_mcp_projection_exposes_draft_with_confirm_field():
 
 def test_mcp_projection_never_exposes_send_even_for_owner():
     names = {t["name"] for t in manifest_to_mcp_tools(build_manifest(None, generated_at="x"))}
-    assert "mailagent_email_email_send" not in names
+    assert "mailagent_email_send" not in names
 
 
 @pytest.mark.asyncio

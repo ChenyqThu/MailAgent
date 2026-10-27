@@ -12,7 +12,7 @@ app with the owner's approval, never through these tools.
 |---|---|---|---|
 | `custom_agent_list` | `agents:read` | read | none |
 | `custom_agent_get` | `agents:read` | read | none |
-| `custom_agent_run_now` | `agents:run` | write | **edit (confirm required)** |
+| `custom_agent_run_now` | `agents:run` | external_call | **edit (confirm required)** |
 
 ## Usage
 

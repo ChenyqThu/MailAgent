@@ -173,6 +173,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="matter_find",
+                title="Find Matters",
                 description=(
                     "Find Matters (tracked pieces of work) by text and structured filters. Returns "
                     "compact summaries; use matter_get for detail."
@@ -204,6 +205,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="matter_get",
+                title="Get Matter",
                 description=(
                     "Read one Matter plus a bounded subset of its items, resources, stakeholders, "
                     "timeline, relations, updates (pending proposals) and progress. Each sub-list "
@@ -233,6 +235,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="matter_attention_list",
+                title="List Matters Needing Attention",
                 description=(
                     "List attention signals Matters are raising (overdue waits / actions, approaching "
                     "deadlines, health drops, proposals awaiting review, failed follow-up runs). "

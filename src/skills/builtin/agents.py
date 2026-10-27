@@ -154,6 +154,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="custom_agent_list",
+                title="List Custom Agents",
                 description="List the owner's custom agents: id, title, enabled and trigger.",
                 input_schema={
                     "type": "object",
@@ -173,6 +174,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="custom_agent_get",
+                title="Get Custom Agent",
                 description=(
                     "Read one custom agent: title, description, enabled, trigger, run budget and its "
                     "most recent runs (state: queued / running / completed / skipped / paused_* / "
@@ -198,6 +200,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="custom_agent_run_now",
+                title="Run Custom Agent Now",
                 description=(
                     "Run an enabled custom agent once, now. The run is queued and executes in the "
                     "background with the agent's own configured permissions; check custom_agent_get "
@@ -217,7 +220,8 @@ def build_skill() -> BoundSkill:
                 },
                 output_schema={"type": "object", "description": "{job_id, agent_id, status, was_created}"},
                 confirmation_tier="edit",
-                side_effect="write",
+                # 入队一次完整的 agent run：消耗模型额度，run 内可能调用联网工具。
+                side_effect="external_call",
                 auth_scopes=["agents:run"],
                 mcp_exposed=True,
                 # 配额闸（src/skills/rate_limit.py）：每次触发都是一次真实的 LLM run，挡跑飞的外部 agent。

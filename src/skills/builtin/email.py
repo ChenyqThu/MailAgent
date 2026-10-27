@@ -234,6 +234,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="email_get",
+                title="Get Email",
                 description="Fetch one email's metadata (+ optional body summary / attachments).",
                 input_schema={
                     "type": "object",
@@ -255,6 +256,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="email_body",
+                title="Get Email Body",
                 description=(
                     "Fetch one email's body as markdown (default) or html. Raw MIME is not "
                     "stored, so it cannot be served here; email_get(include=body) carries "
@@ -280,6 +282,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="email_thread",
+                title="Get Email Thread",
                 description="List sibling emails in the same thread as the given email.",
                 input_schema={
                     "type": "object",
@@ -298,6 +301,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="email_draft",
+                title="Create Email Draft",
                 description=(
                     "Create a draft in the mailbox (reversible; NOT sent). Supports "
                     "new / reply / reply-all / forward. Requires email:draft + confirm=true."
@@ -357,6 +361,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="email_send",
+                title="Send Email",
                 description=(
                     "Send an email via SMTP (irreversible). Supports new / reply / reply-all "
                     "/ forward. Requires email:write + confirm=true."

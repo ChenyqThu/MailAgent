@@ -83,6 +83,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="notion_agent_chat",
+                title="Ask Notion Agent",
                 description=_TOOL_DESCRIPTION,
                 input_schema={
                     "type": "object",

@@ -289,4 +289,7 @@ def test_existing_tool_flows_to_mcp(installed_store):
         },
     )
     mcp_names = [t["name"] for t in manifest_to_mcp_tools(build_manifest(None))]
+    # 与 builtin email_get 撞名 → 两边都退回 mailagent_<skill>_<tool>
     assert "mailagent_email-helper_email_get" in mcp_names
+    assert "mailagent_email_email_get" in mcp_names
+    assert "mailagent_email_get" not in mcp_names

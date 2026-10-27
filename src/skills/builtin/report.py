@@ -97,6 +97,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="report_list",
+                title="List Reports",
                 description="List generated reports (newest first; no block bodies).",
                 input_schema={
                     "type": "object",
@@ -120,6 +121,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="report_get",
+                title="Get Report",
                 description="Fetch one report's full detail (blocks doc + counts).",
                 input_schema={
                     "type": "object",
@@ -138,6 +140,7 @@ def build_skill() -> BoundSkill:
         BoundTool(
             ToolDef(
                 name="report_run",
+                title="Generate Report",
                 description="Run a report agent now (calls the LLM); returns the new report_id.",
                 input_schema={
                     "type": "object",

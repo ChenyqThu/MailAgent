@@ -13,7 +13,11 @@ description: "把 MailAgent Skill 层接进 MCP 客户端：mailagent-mcp consol
 
 `mailagent-mcp` 是个 console script（`pip install -e ".[cli,dev]"` 后可用），跑 MCP stdio JSON-RPC（`initialize` / `tools/list` / `tools/call`）。它不自己实现业务，只把请求经 Bearer key 转发给 serve-api 的 `/api/skills/invoke`。
 
-工具从 manifest 的 `mcp_exposed` 字段生成，命名 `mailagent_<skill>_<tool>`（如 `mailagent_search_email_search`）。
+工具从 manifest 的 `mcp_exposed` 字段生成，命名 `mailagent_<tool>`（如 `mailagent_email_search`）。每个工具都带 `title` 和 `annotations`（只读、破坏性、幂等、是否接触外部），客户端据此把读工具设为自动执行、写工具设为先确认。
+
+:::tip[不用命令行]
+桌面 App 的「设置 → MCP 服务」可以直接新建密钥、复制客户端配置、查看最近调用。Notion 等云端 Agent 走 HTTP 端点 `/mcp`，需要公网 HTTPS 地址，页面里有配置引导。
+:::
 
 ### 两个环境变量
 

@@ -313,6 +313,31 @@ def test_side_effecting_tools_require_confirmation(tool_id: str):
         )
 
 
+# ── §D2 展示名 ──────────────────────────────────────────────────────────────
+# MCP 投影在 title 缺省时回落到工具名（``email_search``），客户端界面就只剩下划线名。
+# builtin 一律要求英文 title（含 mcp_exposed=False 的，设置页的工具清单也读它）；
+# installed skill 不受此约束。
+
+
+def _assert_has_title(tool_id: str, tool: BoundTool) -> None:
+    title = tool.definition.title
+    assert isinstance(title, str) and title.strip(), (
+        f"{tool_id}: 缺 title —— 在 ToolDef 里补一个英文展示名（MCP tools/list 的 title / annotations.title）"
+    )
+
+
+@pytest.mark.parametrize("tool_id", _TOOL_IDS)
+def test_every_builtin_tool_has_title(tool_id: str):
+    _assert_has_title(tool_id, _tool(tool_id))
+
+
+def test_gate_missing_title_would_go_red():
+    with pytest.raises(AssertionError):
+        _assert_has_title("synthetic.untitled", _fake_tool({"type": "object", "properties": {}}))
+    with pytest.raises(AssertionError):
+        _assert_has_title("synthetic.blank", _fake_tool({"type": "object", "properties": {}}, title="  "))
+
+
 # ── §E 配额声明必须真的生效 ─────────────────────────────────────────────────
 # 病根近亲 = issue #66 第 5 条那类「声明了却没兑现」。``rate_limit._parse`` 对形状不合法的
 # spec **静默返回 None = 直接放行**（有意，为了让未声明配额的 tool 零开销），代价是一个写错的

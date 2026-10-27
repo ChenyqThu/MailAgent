@@ -60,7 +60,9 @@ Add `mcp-config.example.json` to your MCP client (fill in base URL + key):
 }
 ```
 
-Tools appear as `mailagent_<skill>_<tool>` (e.g. `mailagent_search_email_search`).
+Tools appear as `mailagent_<tool>` (e.g. `mailagent_email_search`); only when two exposed tools
+share a name does the server fall back to `mailagent_<skill>_<tool>`. Each tool carries a `title`
+and `annotations` (`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`).
 
 ## 2b. Raw REST
 

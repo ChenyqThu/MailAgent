@@ -2,7 +2,10 @@
 
 设计：
   - **tools 从 manifest 生成**（``mcp_exposed`` 的 tool），不手写第二套工具定义 → 无第二真源。
-  - 工具名加前缀 ``mailagent_<skill>_<tool>``，避免与其他 MCP server 冲突。
+  - 工具名 ``mailagent_<tool>``（前缀避免与其他 MCP server 冲突）；同一次投影里 tool 名撞了
+    （owner 视角下 installed skill 复用 builtin 工具）才退回 ``mailagent_<skill>_<tool>``。
+  - 每个工具带 ``title`` 与 ``annotations``，四个 hint 由 ``side_effect`` 一处推导、一律显式输出
+    （规范默认值是 destructive / open-world，不输出 = 客户端把读工具也当危险写工具）。
   - 生产经 ``HttpSkillClient`` 打 serve-api（Bearer key）；测试/本地 selftest 用
     ``LocalSkillClient`` in-process 跑 registry（无需起服务）；serve-api 的 HTTP 端点
     ``/mcp``（``src/api/routers/skills.py``）用 ``PrincipalSkillClient`` 按已鉴权的
@@ -10,7 +13,7 @@
   - 协议核心 ``handle_request(req, client)`` 是纯函数（给定 client）→ 易单测，stdio 与
     HTTP 两种传输共用。
 
-MCP 协议最小实现：initialize（版本协商）/ tools/list / tools/call + notifications。
+MCP 协议最小实现：initialize（版本协商）/ ping / tools/list / tools/call + notifications。
 JSON-RPC over stdio：每行一个 JSON 对象（newline-delimited）。
 """
 
@@ -21,6 +24,7 @@ import json
 import os
 import sys
 import time
+from collections import Counter
 from typing import Any, Optional
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -33,29 +37,62 @@ TOOL_PREFIX = "mailagent_"
 # ---------------------------------------------------------------------------
 # manifest → MCP tools
 # ---------------------------------------------------------------------------
+# side_effect → MCP ToolAnnotations 的四个 hint（readOnly, destructive, idempotent, openWorld）。
+# annotations 只是给客户端的提示；真正的权限仍由 scope 与 confirm 闸负责。
+_HINTS_BY_SIDE_EFFECT: dict[str, tuple[bool, bool, bool, bool]] = {
+    "read": (True, False, True, False),
+    "write": (False, False, False, False),
+    "external_call": (False, False, False, True),
+    "send": (False, True, False, True),
+}
+
+
+def tool_annotations(title: str, side_effect: str) -> dict[str, Any]:
+    """按 ``side_effect`` 推导 MCP annotations。未知值 → KeyError（新增 SideEffect 必须来这里补一行）。"""
+    read_only, destructive, idempotent, open_world = _HINTS_BY_SIDE_EFFECT[side_effect]
+    return {
+        "title": title,
+        "readOnlyHint": read_only,
+        "destructiveHint": destructive,
+        "idempotentHint": idempotent,
+        "openWorldHint": open_world,
+    }
+
+
+def _field(obj: Any, key: str, default: Any = None) -> Any:
+    """pydantic 模型与 HTTP manifest dict 两种形态统一取字段。"""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 def manifest_to_mcp_tools(manifest: Any) -> list[dict[str, Any]]:
     """SkillManifest（pydantic 或 dict）→ MCP tool 定义列表（仅 mcp_exposed）。"""
-    skills = manifest.skills if hasattr(manifest, "skills") else manifest["skills"]
+    exposed: list[tuple[str, Any]] = []
+    for skill in _field(manifest, "skills"):
+        sname = _field(skill, "name")
+        for t in _field(skill, "tools"):
+            if _field(t, "mcp_exposed"):
+                exposed.append((sname, t))
+
+    name_counts = Counter(_field(t, "name") for _sname, t in exposed)
+
     tools: list[dict[str, Any]] = []
-    for skill in skills:
-        sname = skill.name if hasattr(skill, "name") else skill["name"]
-        stools = skill.tools if hasattr(skill, "tools") else skill["tools"]
-        for t in stools:
-            name = t.name if hasattr(t, "name") else t["name"]
-            mcp_exposed = t.mcp_exposed if hasattr(t, "mcp_exposed") else t["mcp_exposed"]
-            if not mcp_exposed:
-                continue
-            desc = t.description if hasattr(t, "description") else t["description"]
-            schema = t.input_schema if hasattr(t, "input_schema") else t["input_schema"]
-            tools.append(
-                {
-                    "name": f"{TOOL_PREFIX}{sname}_{name}",
-                    "description": desc,
-                    "inputSchema": schema,
-                    "_skill": sname,
-                    "_tool": name,
-                }
-            )
+    for sname, t in exposed:
+        name = _field(t, "name")
+        mcp_name = f"{TOOL_PREFIX}{name}" if name_counts[name] == 1 else f"{TOOL_PREFIX}{sname}_{name}"
+        title = _field(t, "title") or name
+        tools.append(
+            {
+                "name": mcp_name,
+                "title": title,
+                "description": _field(t, "description"),
+                "inputSchema": _field(t, "input_schema"),
+                "annotations": tool_annotations(title, _field(t, "side_effect")),
+                "_skill": sname,
+                "_tool": name,
+            }
+        )
     return tools
 
 
@@ -186,6 +223,8 @@ async def handle_request(req: dict[str, Any], client: Any) -> Optional[dict[str,
     is_notification = "id" not in req
 
     if method == "initialize":
+        from src.skills.registry import _server_version
+
         requested = (req.get("params") or {}).get("protocolVersion")
         if requested in SUPPORTED_PROTOCOL_VERSIONS:
             version = requested
@@ -197,18 +236,17 @@ async def handle_request(req: dict[str, Any], client: Any) -> Optional[dict[str,
             req_id,
             {
                 "protocolVersion": version,
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "mailagent", "version": "1.0.0"},
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": "mailagent", "version": _server_version()},
             },
         )
+    if method == "ping":
+        return _ok(req_id, {})
     if method in ("notifications/initialized", "initialized"):
         return None  # notification，无响应
     if method == "tools/list":
         tools = await client.list_tools()
-        public = [
-            {"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
-            for t in tools
-        ]
+        public = [{k: v for k, v in t.items() if not k.startswith("_")} for t in tools]
         return _ok(req_id, {"tools": public})
     if method == "tools/call":
         params = req.get("params") or {}
