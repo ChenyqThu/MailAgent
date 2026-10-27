@@ -209,6 +209,19 @@ export type {
   ConnectorPurgeOrphansResult,
   ConnectorApi
 } from './types/connector'
+export type {
+  McpKeyPresetName,
+  McpUiKeyPreset,
+  McpServiceStatus,
+  McpApiKey,
+  McpKeyWithPlaintext,
+  McpToolAnnotations,
+  McpExposedTool,
+  McpAuditEntry,
+  McpProbeResultValue,
+  McpProbeResult,
+  McpServiceApi
+} from './types/mcpService'
 export type { SearchAgentPhase, SearchAgentInput, SearchAgentResult } from './types/search-agent'
 export type {
   IslandConnectionState,

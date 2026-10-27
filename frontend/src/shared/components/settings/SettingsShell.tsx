@@ -41,6 +41,7 @@ import { IntegrationsTab } from './tabs/IntegrationsTab'
 import { IslandUpdatesTab } from './tabs/IslandUpdatesTab'
 import { LabsTab } from './tabs/LabsTab'
 import { MattersTab } from './tabs/MattersTab'
+import { McpServiceTab } from './tabs/McpServiceTab'
 import { NotificationsTab } from './tabs/NotificationsTab'
 import { RealtimeStorageTab } from './tabs/RealtimeStorageTab'
 import { RemoteAccessTab } from './tabs/RemoteAccessTab'
@@ -162,6 +163,9 @@ export function SettingsShell(): React.ReactElement {
             </TabsContent>
             <TabsContent value="remote">
               <RemoteAccessTab />
+            </TabsContent>
+            <TabsContent value="mcp">
+              <McpServiceTab />
             </TabsContent>
             <TabsContent value="island">
               <IslandUpdatesTab />

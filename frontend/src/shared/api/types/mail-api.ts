@@ -11,6 +11,7 @@ import type { IslandApi } from './island'
 import type { JobsApi } from './jobs'
 import type { KosApi } from './kos'
 import type { LlmApi } from './llm'
+import type { McpServiceApi } from './mcpService'
 import type { ReportApi } from './report'
 import type {
   AttachmentApi,
@@ -38,6 +39,8 @@ export interface MailApi {
   chat: ChatApi
   /** 08-01 阶段 1 PR4 — MCP connector 设置面 (连接 / 授权 / 工具清单与开关)。 */
   connector: ConnectorApi
+  /** 设置 →「MCP 服务」：对外 MCP 的访问密钥 / 工具清单 / 调用记录 / 公网地址检测。 */
+  mcpService: McpServiceApi
   llm: LlmApi
   /** issue #59 — KOS 入库台账统计 (LLM Dashboard「知识库入库」区)。 */
   kos: KosApi

@@ -18,10 +18,8 @@ from src.cli.exceptions import CliError, CliInvalidArgError, CliNotFoundError
 from src.cli.output import apply_local_output as _apply_local_output
 from src.cli.output import emit, emit_cli_error
 from src.security.api_keys import (
-    DRAFTER_SCOPES,
-    HANDOFF_SCOPES,
+    KEY_PRESETS,
     READ_ONLY_SCOPES,
-    WRITER_SCOPES,
     ApiKeyStore,
     resolve_api_auth_db_path,
     validate_scopes,
@@ -35,14 +33,6 @@ app = typer.Typer(
     help="scoped Bearer agent key: create / list / revoke / rotate",
     no_args_is_help=True,
 )
-
-# --preset 名 → scope 组（scope 组的单一真源在 api_keys.py，这里只做映射）。
-_PRESETS: dict[str, tuple[str, ...]] = {
-    "readonly": READ_ONLY_SCOPES,
-    "handoff": HANDOFF_SCOPES,
-    "drafter": DRAFTER_SCOPES,  # 读 + 起草，**不能发信**（issue #50）
-    "writer": WRITER_SCOPES,  # 发信 + 起草（write 预设显式带上 email:draft）
-}
 
 
 def _store(cli: "CliContext") -> ApiKeyStore:
@@ -95,14 +85,14 @@ def create_key(
 
     resolved: tuple[str, ...]
     if preset:
-        if preset not in _PRESETS:
+        if preset not in KEY_PRESETS:
             raise emit_cli_error(
                 cli,
                 CliInvalidArgError(
-                    f"--preset must be one of {' | '.join(_PRESETS)}"
+                    f"--preset must be one of {' | '.join(KEY_PRESETS)}"
                 ),
             )
-        resolved = _PRESETS[preset]
+        resolved = KEY_PRESETS[preset]
     elif scopes:
         try:
             resolved = validate_scopes(scopes.split(","))

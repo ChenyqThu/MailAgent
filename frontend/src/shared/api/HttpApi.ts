@@ -50,6 +50,7 @@ import type {
   CalendarSyncStateItem,
   ChatApi,
   ConnectorApi,
+  McpServiceApi,
   EmailCalendarLink,
   EventCreateOpts,
   EventDeleteOpts,
@@ -130,6 +131,7 @@ import {
 } from './http_client'
 import { createChatRuntime } from './chat_api'
 import { createConnectorApi } from './connector_api'
+import { createMcpServiceApi } from './mcp_service_api'
 
 function notImplemented(method: string): Promise<never> {
   // V2-Sprint 3 stub. MUST reject, never throw synchronously: every stubbed
@@ -597,6 +599,15 @@ export class HttpApi implements MailApi {
       this._connector = createConnectorApi(this.baseUrl)
     }
     return this._connector
+  }
+
+  // 设置 →「MCP 服务」（serve-api `/api/mcp-service/*`）。lazy getter 理由同 connector。
+  private _mcpService?: McpServiceApi
+  get mcpService(): McpServiceApi {
+    if (!this._mcpService) {
+      this._mcpService = createMcpServiceApi(this.baseUrl)
+    }
+    return this._mcpService
   }
 
   llm = {

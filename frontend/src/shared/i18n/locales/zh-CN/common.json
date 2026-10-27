@@ -3165,6 +3165,7 @@
       "integrations": "集成",
       "realtime": "实时与存储",
       "remote": "远程访问",
+      "mcp": "MCP 服务",
       "island": "灵动岛与更新",
       "labs": "实验室"
     },
@@ -4056,6 +4057,154 @@
         "hint": "公网 URL 形如 https://你的域名/app，由你自管的 cloudflared 隧道把 hostname 指向上面的本地端口。cloudflared 需你自行用 pm2 / launchd 托管，不在本应用生命周期内。",
         "tag": "自管"
       }
+    },
+    "mcp": {
+      "page": {
+        "eyebrow": "MCP SERVER",
+        "title": "MCP 服务",
+        "intro": "让外部 Agent（如 Notion Custom Agent、Claude Code）通过 MCP 协议读取邮件、日历、报告等内容。每个外部 Agent 用一个单独的访问密钥，权限按密钥分配。"
+      },
+      "connection": {
+        "title": "连接地址",
+        "helper": "外部 Agent 连接的地址。Notion 等云端服务只能连公网 HTTPS 地址。"
+      },
+      "status": {
+        "label": "状态",
+        "running": "运行中 · {count} 个可用密钥"
+      },
+      "localUrl": {
+        "label": "本机地址",
+        "hint": "本机上的客户端（如 Claude Code）直接使用"
+      },
+      "publicUrl": {
+        "label": "公网地址",
+        "hint": "填写经 Cloudflare 隧道转发到本机的地址，例如 https://mcp.example.com/mcp。这个主机名不能挂 Cloudflare Access。",
+        "save": "保存",
+        "probe": "检测",
+        "saved": "已保存公网地址",
+        "saveFailed": "保存公网地址失败",
+        "errors": {
+          "invalid": "不是有效的网址",
+          "notHttps": "必须以 https:// 开头",
+          "loopback": "不能用 localhost、127.0.0.1 这类本机地址，请填公网主机名",
+          "path": "路径必须以 /mcp 结尾，例如 https://mcp.example.com/mcp"
+        }
+      },
+      "probe": {
+        "reachable": "可以访问",
+        "access_blocked": "被 Cloudflare Access 拦截，请去掉该主机名的 Access 应用",
+        "unreachable": "无法访问（{detail}）"
+      },
+      "guide": {
+        "toggle": "如何获得公网地址",
+        "intro": "Notion 等云端 Agent 只能访问公网 HTTPS 地址，必须配置公网地址；Claude Code、Cursor 等本机客户端可以直接用本机地址。",
+        "recommend": "推荐用 Cloudflare Zero Trust Tunnel 把本机地址转发到公网。",
+        "docsLink": "查看 Cloudflare 文档",
+        "step1": "在 Cloudflare Zero Trust → Networks → Tunnels 新建或选一条隧道，在本机安装并运行 cloudflared。",
+        "step2": "给隧道加 Public Hostname：子域名自定（例如 mcp），Path 填 ^/mcp$，Service 填 http://localhost:{port}。",
+        "step3": "不要给这个主机名建 Cloudflare Access 应用，否则请求会被拦到登录页。",
+        "step4": "把 https://{host}/mcp 填到上面的公网地址，点「检测」。",
+        "hostPlaceholder": "你的主机名",
+        "copyForAgent": "复制给 Agent",
+        "agentTask": "请帮我用 Cloudflare Tunnel 把这台 Mac 上的 MailAgent MCP 服务暴露到公网。\n\n目标：把 http://localhost:{port}/mcp 通过 Cloudflare Tunnel 暴露成 https://{host}/mcp。\n\n步骤：\n1. 在 Cloudflare Zero Trust → Networks → Tunnels 新建或选一条隧道，在这台 Mac 上安装并运行 cloudflared。\n2. 给隧道加 Public Hostname：子域名自定（例如 mcp），Path 填 ^/mcp$，Service 填 http://localhost:{port}。\n3. 不要给这个主机名建 Cloudflare Access 应用，否则请求会被拦到登录页。\n4. 完成后告诉我最终地址 https://{host}/mcp，我会把它填到 MailAgent 设置 → MCP 服务的「公网地址」，再点「检测」。\n\n约束：\n- 只放行 /mcp 这一个路径，本机 API 的其他路径不要暴露。\n- 不要给这个主机名加 Cloudflare Access。\n- cloudflared 需要常驻运行，可以用 launchd 或 pm2 托管。\n\n验收：\n- curl -i https://{host}/mcp 应返回 405，并带响应头 Allow: POST。\n- 如果返回 302 并跳到 cloudflareaccess.com，说明被 Access 拦了，需要去掉这个主机名的 Access 应用。"
+      },
+      "offline": {
+        "label": "MCP 服务未运行",
+        "hint": "MCP 服务由本机 API 服务提供。请在「远程访问」里开启它，并确认后端在运行。",
+        "cta": "去远程访问"
+      },
+      "keys": {
+        "title": "访问密钥",
+        "helper": "外部 Agent 用密钥访问 MailAgent。建议每个 Agent 单独建一个，不用时撤销。",
+        "create": "新建密钥",
+        "empty": "还没有密钥",
+        "emptyHint": "新建一个密钥后，就能把它填进外部 Agent 的配置里。",
+        "createdAt": "创建于 {time}",
+        "lastUsedAt": "最近使用 {time}",
+        "neverUsed": "从未使用",
+        "rotate": "轮换",
+        "revoke": "撤销",
+        "revoked": "已撤销「{label}」",
+        "rotateFailed": "轮换密钥失败",
+        "revokeFailed": "撤销密钥失败",
+        "createFailed": "新建密钥失败",
+        "state": {
+          "revoked": "已撤销",
+          "expired": "已过期"
+        }
+      },
+      "presets": {
+        "readonly": {
+          "label": "只读",
+          "desc": "可以查看邮件、附件、日历、报告、通讯录、资料库、事项和自定义 Agent，不能修改任何内容。"
+        },
+        "handoff": {
+          "label": "只读 + 运行",
+          "desc": "在只读基础上，还可以生成报告、手动运行自定义 Agent。运行会消耗模型额度。"
+        },
+        "drafter": {
+          "label": "起草回复",
+          "desc": "只能查看邮件和附件，并把回复存成草稿。不能发信。"
+        },
+        "writer": {
+          "label": "起草并发信"
+        },
+        "custom": "自定义"
+      },
+      "create": {
+        "title": "新建访问密钥",
+        "desc": "给密钥起个名字，方便以后认出是哪个 Agent 在用。",
+        "nameLabel": "名称",
+        "namePlaceholder": "例如 Notion Agent",
+        "presetLabel": "权限",
+        "submit": "新建"
+      },
+      "revealed": {
+        "title": "密钥已生成",
+        "desc": "「{label}」的密钥如下。",
+        "warning": "关闭后无法再次查看这个密钥，请现在复制保存。",
+        "notionNeedsPublicUrl": "Notion 需要公网地址，先配置公网地址。配置方法见页面上的「如何获得公网地址」；关闭这个窗口前请先复制密钥。",
+        "publicUrlUnverified": "公网地址最近一次检测未通过，Notion 可能连不上。",
+        "copyKey": "复制密钥",
+        "copyNotion": "复制 Notion 配置",
+        "copyHttp": "复制 HTTP 客户端配置",
+        "done": "完成"
+      },
+      "revoke": {
+        "title": "撤销「{label}」？",
+        "desc": "撤销后，使用这个密钥的 Agent 会立即无法访问。撤销不能恢复。",
+        "confirm": "撤销"
+      },
+      "rotate": {
+        "title": "轮换「{label}」？",
+        "desc": "轮换会生成新密钥，旧密钥立即失效。已经配置了旧密钥的客户端（例如 Notion）需要换成新密钥才能继续使用。",
+        "confirm": "轮换"
+      },
+      "tools": {
+        "title": "对外工具",
+        "helper": "外部 Agent 能看到的工具。每个密钥只能看到自己权限内的那部分。",
+        "group": {
+          "read": "读取 · {count}",
+          "write": "写入 · {count}"
+        },
+        "scopes": "需要 {scopes}",
+        "presets": "可用于：{presets}",
+        "suggestAuto": "建议：直接执行",
+        "suggestAsk": "建议：先确认"
+      },
+      "audit": {
+        "title": "最近调用",
+        "refresh": "刷新",
+        "empty": "还没有调用记录",
+        "ok": "成功",
+        "failed": "失败",
+        "unknownKey": "未知密钥"
+      },
+      "copy": "复制",
+      "cancel": "取消",
+      "retry": "重试",
+      "loading": "加载中…",
+      "loadFailed": "加载失败"
     },
     "advanced": {
       "title": "高级",

@@ -311,6 +311,9 @@ export const MANAGED_ENV_KEYS = [
   'CF_TEAM_DOMAIN',
   'MAILAGENT_API_PORT',
   'MAILAGENT_API_ALLOWED_EMAIL',
+  // — MCP 服务 (McpServiceTab)。外部 agent 访问 `/mcp` 的公网地址 (含 `/mcp`), 只用于
+  // 页面展示与生成客户端配置, 后端不据此改变行为。非 secret。
+  'MAILAGENT_MCP_PUBLIC_URL',
 
   // feat/auto-update re-review (codex, trust boundary) — AUTO_UPDATE_ENABLED is
   // intentionally NOT a managed key: it's the master safety gate for proactive

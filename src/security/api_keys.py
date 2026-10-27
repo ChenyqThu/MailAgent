@@ -106,6 +106,24 @@ WRITER_SCOPES: tuple[str, ...] = (
     "email:write",
 )
 
+# 预设名 → scope 组（CLI ``api-key create --preset`` 与设置页「MCP 服务」共用这一份）。
+KEY_PRESETS: dict[str, tuple[str, ...]] = {
+    "readonly": READ_ONLY_SCOPES,
+    "handoff": HANDOFF_SCOPES,
+    "drafter": DRAFTER_SCOPES,  # 读 + 起草，**不能发信**（issue #50）
+    "writer": WRITER_SCOPES,  # 发信 + 起草（write 预设显式带上 email:draft）
+}
+
+
+def preset_for_scopes(scopes: Iterable[str]) -> Optional[str]:
+    """scope 集合与某个预设逐字相等 → 预设名，否则 None（手工 ``--scopes`` 建的 key）。"""
+    wanted = set(scopes)
+    for name, preset_scopes in KEY_PRESETS.items():
+        if set(preset_scopes) == wanted:
+            return name
+    return None
+
+
 _DDL = """
 CREATE TABLE IF NOT EXISTS agent_api_keys (
     id          TEXT PRIMARY KEY,

@@ -272,6 +272,16 @@ export const qk = {
   // 之后 invalidate 一处，目录里的「已配置 / 已被取代」跟着刷。
   connectorCatalog: () => ['connectors', 'catalog'] as const,
 
+  // 设置 →「MCP 服务」（`/api/mcp-service/*`）。新建 / 轮换 / 撤销密钥后 invalidate
+  // `all()` 一处，状态里的可用密钥数与列表一起刷。
+  mcpService: {
+    all: () => ['mcp-service'] as const,
+    status: () => ['mcp-service', 'status'] as const,
+    keys: () => ['mcp-service', 'keys'] as const,
+    tools: () => ['mcp-service', 'tools'] as const,
+    audit: (limit: number) => ['mcp-service', 'audit', limit] as const
+  },
+
   palette: {
     search: (normalised: string) => ['palette', 'search', normalised] as const
   },

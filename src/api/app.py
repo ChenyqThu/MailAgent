@@ -429,6 +429,7 @@ from src.api.routers import (  # noqa: E402
     llm_providers,
     matter_agent,
     matters,
+    mcp_service,
     notifications,
     reports,
     settings,
@@ -484,6 +485,9 @@ app.include_router(skills.router)
 # task 10-26 — /mcp: 同一 Skill 能力面的 MCP Streamable HTTP 传输（无状态），给远程 MCP 客户端
 # （Notion Custom Agent）用。鉴权同 /api/skills（authenticate_principal，认 scoped Bearer key）。
 app.include_router(skills.mcp_router)
+# task 10-27 — /api/mcp-service/*: 设置页「MCP 服务」的数据面（访问密钥增删轮换 / 对外工具清单 /
+# 最近调用 / 公网地址检测）。owner-only（verify_cf_access），agent Bearer key 天然 401。
+app.include_router(mcp_service.router)
 app.include_router(agent.router)
 # S1 R3 (agent openness wave1) — web 联网工具执行端点 /api/web/{fetch,search}。TS 薄壳→
 # Python 执行（业务权威 + 远程 parity）；SSRF 防护 + 钉 IP 在 routers/web.py。gateway 侧

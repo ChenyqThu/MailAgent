@@ -616,7 +616,7 @@ describe('DomainPanel ↔ nav registry 投影', () => {
     ])
   })
 
-  test('设置域：面板行 = 12 个 tab 直达行（词表单源 SETTINGS_TABS）+ 版本 footer', async () => {
+  test('设置域：面板行 = 13 个 tab 直达行（词表单源 SETTINGS_TABS）+ 版本 footer', async () => {
     const { container } = await renderShell('/settings')
     expect(panelRowLabels(container)).toEqual(
       SETTINGS_TABS.map((tab) => i18n.t(`settings.tabs.${tab}`))

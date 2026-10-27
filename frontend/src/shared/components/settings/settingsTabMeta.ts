@@ -17,6 +17,7 @@ import {
   RadioIcon,
   RefreshCwIcon,
   RouteIcon,
+  ServerIcon,
   SlidersHorizontalIcon,
   UserIcon,
   WifiIcon
@@ -40,6 +41,7 @@ export const SETTINGS_TAB_ICON: Record<SettingsTab, SettingsTabIcon> = {
   integrations: ConnectIcon,
   realtime: WifiIcon,
   remote: RouteIcon,
+  mcp: ServerIcon,
   island: RadioIcon,
   labs: FlaskConicalIcon
 }

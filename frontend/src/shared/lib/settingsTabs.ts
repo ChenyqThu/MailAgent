@@ -19,6 +19,7 @@ export const SETTINGS_TABS = [
   'integrations',
   'realtime',
   'remote',
+  'mcp',
   'island',
   'labs'
 ] as const

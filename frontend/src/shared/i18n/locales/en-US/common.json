@@ -3165,6 +3165,7 @@
       "integrations": "Integrations",
       "realtime": "Realtime & Storage",
       "remote": "Remote Access",
+      "mcp": "MCP Server",
       "island": "Island & Updates",
       "labs": "Labs"
     },
@@ -4056,6 +4057,154 @@
         "hint": "The public URL looks like https://your-domain/app, served by your self-managed cloudflared tunnel pointing the hostname at the local port above. cloudflared must be supervised by you (pm2 / launchd); it is not part of this app's lifecycle.",
         "tag": "self-managed"
       }
+    },
+    "mcp": {
+      "page": {
+        "eyebrow": "MCP SERVER",
+        "title": "MCP Server",
+        "intro": "Let external agents (such as Notion Custom Agent or Claude Code) read your mail, calendar, reports and more over MCP. Give each external agent its own access key; permissions are set per key."
+      },
+      "connection": {
+        "title": "Endpoint",
+        "helper": "The address external agents connect to. Cloud services such as Notion can only reach a public HTTPS address."
+      },
+      "status": {
+        "label": "Status",
+        "running": "Running · {count, plural, one {# active key} other {# active keys}}"
+      },
+      "localUrl": {
+        "label": "Local address",
+        "hint": "For clients on this Mac (such as Claude Code)"
+      },
+      "publicUrl": {
+        "label": "Public address",
+        "hint": "The address your Cloudflare tunnel forwards to this Mac, e.g. https://mcp.example.com/mcp. This hostname must not be behind Cloudflare Access.",
+        "save": "Save",
+        "probe": "Check",
+        "saved": "Public address saved",
+        "saveFailed": "Failed to save public address",
+        "errors": {
+          "invalid": "Not a valid URL",
+          "notHttps": "Must start with https://",
+          "loopback": "Local addresses such as localhost or 127.0.0.1 are not allowed. Use a public hostname.",
+          "path": "The path must end with /mcp, e.g. https://mcp.example.com/mcp"
+        }
+      },
+      "probe": {
+        "reachable": "Reachable",
+        "access_blocked": "Blocked by Cloudflare Access. Remove the Access application for this hostname.",
+        "unreachable": "Unreachable ({detail})"
+      },
+      "guide": {
+        "toggle": "How to get a public address",
+        "intro": "Cloud agents such as Notion can only reach a public HTTPS address, so a public address is required for them. Local clients such as Claude Code or Cursor can use the local address directly.",
+        "recommend": "We recommend a Cloudflare Zero Trust Tunnel to forward the local address to the internet.",
+        "docsLink": "Cloudflare docs",
+        "step1": "In Cloudflare Zero Trust → Networks → Tunnels, create or pick a tunnel, then install and run cloudflared on this Mac.",
+        "step2": "Add a Public Hostname to the tunnel: any subdomain (e.g. mcp), Path ^/mcp$, Service http://localhost:{port}.",
+        "step3": "Do not create a Cloudflare Access application for this hostname, or requests will be sent to a login page.",
+        "step4": "Enter https://{host}/mcp as the public address above and click Check.",
+        "hostPlaceholder": "your-hostname",
+        "copyForAgent": "Copy for an agent",
+        "agentTask": "Please expose the MailAgent MCP server on this Mac to the internet with a Cloudflare Tunnel.\n\nGoal: expose http://localhost:{port}/mcp as https://{host}/mcp through a Cloudflare Tunnel.\n\nSteps:\n1. In Cloudflare Zero Trust → Networks → Tunnels, create or pick a tunnel, then install and run cloudflared on this Mac.\n2. Add a Public Hostname to the tunnel: any subdomain (e.g. mcp), Path ^/mcp$, Service http://localhost:{port}.\n3. Do not create a Cloudflare Access application for this hostname, or requests will be sent to a login page.\n4. When done, tell me the final address https://{host}/mcp. I will enter it as the public address under MailAgent Settings → MCP Server and click Check.\n\nConstraints:\n- Only expose the /mcp path. Do not expose any other path of the local API.\n- Do not put Cloudflare Access in front of this hostname.\n- cloudflared must keep running; supervise it with launchd or pm2.\n\nAcceptance:\n- curl -i https://{host}/mcp should return 405 with the response header Allow: POST.\n- A 302 redirect to cloudflareaccess.com means Access is blocking it; remove the Access application for this hostname."
+      },
+      "offline": {
+        "label": "MCP server is not running",
+        "hint": "The MCP server is provided by the local API service. Turn it on under Remote Access and make sure the backend is running.",
+        "cta": "Go to Remote Access"
+      },
+      "keys": {
+        "title": "Access keys",
+        "helper": "External agents use a key to access MailAgent. Create one key per agent and revoke it when no longer needed.",
+        "create": "New key",
+        "empty": "No keys yet",
+        "emptyHint": "Create a key, then paste it into the external agent's configuration.",
+        "createdAt": "Created {time}",
+        "lastUsedAt": "Last used {time}",
+        "neverUsed": "Never used",
+        "rotate": "Rotate",
+        "revoke": "Revoke",
+        "revoked": "Revoked “{label}”",
+        "rotateFailed": "Failed to rotate key",
+        "revokeFailed": "Failed to revoke key",
+        "createFailed": "Failed to create key",
+        "state": {
+          "revoked": "revoked",
+          "expired": "expired"
+        }
+      },
+      "presets": {
+        "readonly": {
+          "label": "Read only",
+          "desc": "Can view mail, attachments, calendar, reports, contacts, library, matters and custom agents. Cannot change anything."
+        },
+        "handoff": {
+          "label": "Read + run",
+          "desc": "Everything in Read only, plus generating reports and running custom agents manually. Runs use model quota."
+        },
+        "drafter": {
+          "label": "Draft replies",
+          "desc": "Can view mail and attachments and save replies as drafts. Cannot send mail."
+        },
+        "writer": {
+          "label": "Draft and send"
+        },
+        "custom": "Custom"
+      },
+      "create": {
+        "title": "New access key",
+        "desc": "Name the key so you can tell which agent is using it.",
+        "nameLabel": "Name",
+        "namePlaceholder": "e.g. Notion Agent",
+        "presetLabel": "Permissions",
+        "submit": "Create"
+      },
+      "revealed": {
+        "title": "Key created",
+        "desc": "Here is the key for “{label}”.",
+        "warning": "You will not be able to see this key again after closing. Copy it now.",
+        "notionNeedsPublicUrl": "Notion needs a public address. Set one up first — see \"How to get a public address\" on the page. Copy the key before closing this window.",
+        "publicUrlUnverified": "The last check of the public address did not pass. Notion may not be able to connect.",
+        "copyKey": "Copy key",
+        "copyNotion": "Copy Notion config",
+        "copyHttp": "Copy HTTP client config",
+        "done": "Done"
+      },
+      "revoke": {
+        "title": "Revoke “{label}”?",
+        "desc": "Agents using this key will lose access immediately. This cannot be undone.",
+        "confirm": "Revoke"
+      },
+      "rotate": {
+        "title": "Rotate “{label}”?",
+        "desc": "Rotating issues a new key and the old one stops working right away. Clients configured with the old key (such as Notion) need the new key to keep working.",
+        "confirm": "Rotate"
+      },
+      "tools": {
+        "title": "Exposed tools",
+        "helper": "Tools external agents can see. Each key only sees the tools within its permissions.",
+        "group": {
+          "read": "Read · {count}",
+          "write": "Write · {count}"
+        },
+        "scopes": "Requires {scopes}",
+        "presets": "Available to: {presets}",
+        "suggestAuto": "Suggested: run directly",
+        "suggestAsk": "Suggested: ask first"
+      },
+      "audit": {
+        "title": "Recent calls",
+        "refresh": "Refresh",
+        "empty": "No calls yet",
+        "ok": "OK",
+        "failed": "Failed",
+        "unknownKey": "Unknown key"
+      },
+      "copy": "Copy",
+      "cancel": "Cancel",
+      "retry": "Retry",
+      "loading": "Loading…",
+      "loadFailed": "Failed to load"
     },
     "advanced": {
       "title": "Advanced",

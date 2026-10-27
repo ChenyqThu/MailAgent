@@ -84,7 +84,7 @@ agent 刷屏草稿箱」，**不是**安全边界 —— 安全边界是 scope�
 | contacts | contact_search / contact_get / contact_list_mails（只读） | contacts:read |
 | library | library_list / library_search / library_read（只读） | library:read |
 | matter_lookup | matter_find / matter_get / matter_attention_list（只读） | matters:read |
-| agents | custom_agent_list / custom_agent_get（读）· custom_agent_run_now（write, edit, 10 次/小时/key） | agents:read / agents:run |
+| agents | custom_agent_list / custom_agent_get（读）· custom_agent_run_now（external_call, edit, 10 次/小时/key） | agents:read / agents:run |
 
 另有三个零工具 skill（`custom_agent` / `skill_creator` / `matters`）只带方法论 prompt 片段与
 SKILL.md。`matter_lookup` / `agents` 不叫 `matters` / `custom_agent`，正是因为这两个名字已被零工具
@@ -166,9 +166,26 @@ handoff 推荐 key（`--preset handoff`）= 全部八个读 scope + `report:run`
 
 ## 4. MCP + skill pack
 
-- `mailagent-mcp`（`src/mcp/mailagent_mcp.py`）：MCP stdio JSON-RPC（initialize / tools/list /
-  tools/call）。tools 从 manifest 的 `mcp_exposed` 生成，名 `mailagent_<skill>_<tool>`；经
-  Bearer key 打 serve-api。`MAILAGENT_API_BASE` + `MAILAGENT_AGENT_KEY`。
+- `mailagent-mcp`（`src/mcp/mailagent_mcp.py`）：MCP stdio JSON-RPC（initialize / ping /
+  tools/list / tools/call）。tools 从 manifest 的 `mcp_exposed` 生成；经 Bearer key 打
+  serve-api。`MAILAGENT_API_BASE` + `MAILAGENT_AGENT_KEY`。
+- **工具名**：`mailagent_<tool>`（如 `mailagent_email_draft`、`mailagent_email_search`）。同一次投影里
+  工具名重复时，重复的那几个退回 `mailagent_<skill>_<tool>`。2026-10 之前是一律
+  `mailagent_<skill>_<tool>`，改名后客户端里按工具名记的开关要重新设置。
+- **title 与 annotations**：每个工具都返回顶层 `title` 和 `annotations`（`annotations.title` 同值），
+  四个 hint 一律显式输出，不依赖客户端默认值（规范默认 `destructiveHint` 和 `openWorldHint` 为 true）。
+  annotations 由 `ToolDef.side_effect` 在 `tool_annotations()` 一处推导：
+
+  | side_effect | readOnlyHint | destructiveHint | idempotentHint | openWorldHint |
+  |---|---|---|---|---|
+  | read | true | false | true | false |
+  | write | false | false | false | false |
+  | external_call | false | false | false | true |
+  | send | false | true | false | true |
+
+  Notion 等客户端据此把读工具归入「自动执行」，写工具默认「先确认」。🔴 annotations 只是提示，
+  不是安全边界：真正的权限仍是 scope + confirm 闸 + 配额。builtin ToolDef 缺 `title` 会让
+  `tests/skills/test_tooldef_contract.py` 变红。
 - **MCP over HTTP**：serve-api 的 `POST /mcp`（`src/api/routers/skills.py::mcp_router`），给只能填
   「URL + 请求头」的远程 MCP 客户端（Notion Custom Agent 等）用。无状态 Streamable HTTP：
   - 一个 JSON-RPC 消息（或批量数组）一次请求；含 request → `200 application/json`，只有
@@ -197,7 +214,11 @@ handoff 推荐 key（`--preset handoff`）= 全部八个读 scope + `report:run`
 > 的请求在到达 serve-api 之前就被 302 到 Access 登录页（2026-10-26 实测）。远程的外部 agent 走一个
 > **不挂 Access** 的独立主机名，且隧道只放行 `/mcp`（见下方「Notion Custom Agent 接入」）。
 
-1. **申请 scoped key**（本机，需 CLI auth）：
+1. **申请 scoped key**：主路径是 App 的「设置 → MCP 服务 → 访问密钥 → 新建密钥」（三档预设：只读 /
+   只读 + 运行 / 起草回复），生成后的弹窗里可以直接复制 Notion 配置和 HTTP 客户端配置。
+   同一页还能轮换、撤销、看最近调用、检测公网地址。管理接口是 `/api/mcp-service/*`
+   （`src/api/routers/mcp_service.py`，owner 鉴权，agent key 调用 401）。
+   CLI 作为备用（本机，需 CLI auth；打包 App 场景注意下方 `MAILAGENT_API_AUTH_DB_PATH`）：
    ```bash
    mailagent api-key create --preset handoff   # 全部读 scope + report:run + agents:run
    # 明文 key（mak_…）仅此一次显示, 存好。纯读用 --preset readonly;
@@ -236,7 +257,10 @@ App 退出时 Notion 那边的工具调用会失败。
    - Service `http://localhost:8200`
    - 🔴 **不要**给 `mcp.chenge.ink` 建 Access 应用 —— 鉴权由 Bearer key 承担，挂了 Access
      就会像 `mail.chenge.ink` 一样把请求 302 掉。
-2. **申请 key**（本机，在仓库目录下跑）：
+2. **申请 key**：在 App「设置 → MCP 服务」新建密钥（Notion 一般选「只读 + 运行」，要让它起草回复选
+   「起草回复」），生成弹窗里点「复制 Notion 配置」。公网地址填 `https://mcp.chenge.ink/mcp` 后可点
+   「检测」：可达 = `/mcp` 返回 405；被 Access 拦截 = 302 到 `cloudflareaccess.com`。
+   不用 App 时的 CLI 备用写法（本机，在仓库目录下跑）：
    ```bash
    MAILAGENT_CLI_API_KEY="$(grep '^MAILAGENT_CLI_API_KEY=' .env | cut -d= -f2- | tr -d '"'\'' ')" \
    MAILAGENT_API_AUTH_DB_PATH="$HOME/Library/Application Support/mailagent-frontend/data/api_auth.db" \
@@ -250,9 +274,10 @@ App 退出时 Notion 那边的工具调用会失败。
 3. **Notion 配置**：Custom Agent → Tools & Access → Add connection → Custom MCP server：
    - URL `https://mcp.chenge.ink/mcp`
    - Header `Authorization: Bearer mak_…`
-4. **写 / 触发类工具设成需确认**：在 Notion 的工具列表里把 `mailagent_agents_custom_agent_run_now`
-   （handoff key）、`mailagent_email_email_draft`（drafter key）设为调用前需确认。`confirm:true` 是模型
-   自己填的意图标记（见 §3），人审只能靠 Notion 这一侧的确认设置。
+4. **确认读写分组**：工具带 annotations（§4），Notion 默认把读工具设为自动执行，把
+   `mailagent_custom_agent_run_now`、`mailagent_report_run`、`mailagent_email_draft` 等写工具设为
+   调用前需确认，一般不用手动调整。🔴 不要把写工具改成自动执行：`confirm:true` 是模型自己填的意图标记
+   （见 §3），人审只能靠 Notion 这一侧的确认设置。
 
 自检（在任何机器上）：
 ```bash

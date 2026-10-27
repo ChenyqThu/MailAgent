@@ -236,6 +236,8 @@ _MANAGED_ENV_KEYS: List[str] = [
     "CF_TEAM_DOMAIN",
     "MAILAGENT_API_PORT",
     "MAILAGENT_API_ALLOWED_EMAIL",
+    # — MCP 服务：外部 agent 访问 /mcp 的公网地址（含 /mcp），只用于展示与生成客户端配置。
+    "MAILAGENT_MCP_PUBLIC_URL",
     # — Advanced / readonly display
     "SSE_LOCAL_HOST",
     "SSE_LOCAL_PORT",

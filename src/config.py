@@ -694,6 +694,13 @@ class Config(BaseSettings):
         ),
     )
 
+    # MCP 服务（对外 /mcp）的公网地址，设置页「MCP 服务」写入。只用于展示与生成客户端配置，
+    # 后端不据此改变任何行为；GET /api/mcp-service/status 热读 .env（保存即生效）。
+    mailagent_mcp_public_url: str = Field(
+        default="",
+        description="外部 agent 访问 /mcp 的公网地址（含 /mcp），仅用于展示与生成客户端配置。",
+    )
+
     # =========================================================================
     # MCP Connector (08-01 阶段 1 PR1) — serve-api 持 MCP client 连外部服务
     # (Notion / Atlassian)。凭证走 agent_config.db external_credential (Fernet)。
