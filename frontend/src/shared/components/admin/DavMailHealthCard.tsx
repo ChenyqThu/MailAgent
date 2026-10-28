@@ -8,6 +8,7 @@
 // still on applescript backend don't see an empty card.
 
 import { useQuery } from '@tanstack/react-query'
+import { useTranslation } from 'react-i18next'
 import { qk } from '@shared/lib/queryKeys'
 import {
   AlertCircle,
@@ -21,8 +22,12 @@ import {
 } from 'lucide-react'
 
 import type { DavMailHealthData } from '@shared/api/types'
+import { authExpiryLabel } from '@shared/components/davmail/reauthUi'
+import { Button } from '@shared/components/ui/button'
 import { cn } from '@shared/lib/cn'
+import { authExpiryLevel } from '@shared/lib/davmailThresholds'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useDavMailReauthStore } from '@shared/state/davmail-reauth'
 
 function levelStyles(level: DavMailHealthData['level']): {
   pill: string
@@ -57,10 +62,11 @@ function levelStyles(level: DavMailHealthData['level']): {
   }
 }
 
-function tokenAgeColor(age: number | null): string {
-  if (age === null) return 'text-ink-fg-3'
-  if (age >= 87) return 'text-fail'
-  if (age >= 80) return 'text-warn'
+function authExpiryColor(daysLeft: number | null): string {
+  if (daysLeft === null) return 'text-ink-fg-3'
+  const level = authExpiryLevel(daysLeft)
+  if (level === 'critical') return 'text-fail'
+  if (level === 'warning') return 'text-warn'
   return 'text-ok'
 }
 
@@ -76,7 +82,9 @@ function formatRelativeShort(iso: string | null): string {
 }
 
 export function DavMailHealthCard(): React.ReactElement | null {
+  const { t } = useTranslation()
   const mailApi = useMailApi()
+  const openReauth = useDavMailReauthStore((s) => s.openDialog)
   const q = useQuery({
     queryKey: qk.admin.davmailHealth(),
     queryFn: () => mailApi.admin.davmailHealth(),
@@ -90,8 +98,15 @@ export function DavMailHealthCard(): React.ReactElement | null {
   if (!h.enabled) return null
 
   const lvl = levelStyles(h.level)
-  const tokenColor = tokenAgeColor(h.token_age_days)
-  const daysLeft = h.token_age_days !== null ? Math.max(0, 90 - h.token_age_days) : null
+  // 老后端不发 auth_days_left（undefined）→ 与「未记录」同样处理。
+  const authDaysLeft = h.auth_days_left ?? null
+  const authColor = authExpiryColor(authDaysLeft)
+  // 认证类异常才把按钮提成主色：即将 / 已经过期、LOGIN 失败、或 critical 且有 OAuth 错误。
+  // IMAP/SMTP 端口不通这类 critical 不算 —— 重新认证救不了进程挂掉。
+  const authProblem =
+    authExpiryLevel(authDaysLeft) !== null ||
+    h.imap_login_ok === false ||
+    (h.level === 'critical' && !!h.last_oauth_error)
 
   return (
     <section className="space-y-3">
@@ -167,18 +182,34 @@ export function DavMailHealthCard(): React.ReactElement | null {
           )}
         </div>
 
-        {/* OAuth token age */}
+        {/* 登录到期（最近一次交互认证 + 租户登录有效期）。token.dat 每小时随 refresh 重写，
+            它的修改时间只作信息展示，不参与分级。 */}
         <div className="rounded-md border border-coral/30 bg-coral/5 p-3">
           <div className="text-micro font-mono uppercase text-ink-fg-2 mb-1 flex items-center gap-1.5">
-            <KeyRound size={11} strokeWidth={2} className={tokenColor} />
-            OAuth Token
+            <KeyRound size={11} strokeWidth={2} className={authColor} />
+            {t('davmailReauth.card.authTitle')}
           </div>
-          <div className={cn('text-lead tabular-nums', tokenColor)}>
-            {h.token_age_days !== null ? `${h.token_age_days.toFixed(1)} 天` : '未知'}
+          <div
+            className={cn('text-aux font-medium', authColor)}
+            title={h.auth_expires_at ?? undefined}
+            data-testid="davmail-auth-expiry"
+          >
+            {authExpiryLabel(t, authDaysLeft)}
           </div>
           <div className="text-meta text-ink-fg-3 mt-1">
-            {daysLeft !== null ? `估剩余 ${daysLeft.toFixed(0)} / 90 天` : '—'}
+            {t('davmailReauth.card.lastRefresh', {
+              time: formatRelativeShort(h.token_mtime_iso)
+            })}
           </div>
+          <Button
+            variant={authProblem ? 'default' : 'ghost'}
+            size="sm"
+            className="mt-2 -ml-1"
+            data-emphasis={authProblem ? 'primary' : undefined}
+            onClick={openReauth}
+          >
+            {t('davmailReauth.entry.button')}
+          </Button>
         </div>
 
         {/* EWS throttling + backfill state */}
@@ -232,10 +263,12 @@ export function DavMailHealthCard(): React.ReactElement | null {
               >
                 {h.last_oauth_error}
               </pre>
-              <div className="text-aux text-ink-fg-2 mt-2">
-                可能 refresh_token 失效 — 重走 O365Manual OAuth flow 或回切
-                <code className="font-mono text-ink-fg-1 mx-1">applescript</code>
-                backend。
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-aux text-ink-fg-2">
+                <span>{t('davmailReauth.card.oauthErrorHint')}</span>
+                {/* 次要样式：此时登录到期格里的按钮已是主色，一屏不放两个主色按钮。 */}
+                <Button variant="secondary" size="sm" onClick={openReauth}>
+                  {t('davmailReauth.entry.button')}
+                </Button>
               </div>
             </div>
           </div>

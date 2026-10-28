@@ -221,14 +221,28 @@ frontend flag 延迟  : ~5ms (IPC 直写 SQLite, 之前 ~500-1000ms CLI fork)
 
 cutover 当天暴露的稳定性问题已 §3.4 修完, 但 davmail 模式作为新主路径还有几个跟进项, 优先级 P1 (影响生产可用性):
 
-#### 4.5.1 DavMail OAuth refresh token 监控告警 (高优)
+#### 4.5.1 DavMail 登录到期与重认证（2026-10-28 起）
 
-**风险**: refresh_token 90 天有效, 期间每次成功续期会被 Microsoft rotate; 但如果 davmail-poc 长时间 idle 或 OAuth 续期失败连续 N 次, refresh_token 可能过期 → 必须重走 OAuth manual flow.
+**实际期限**：公司租户的条件访问策略规定，交互登录后最长 30 天必须重新登录（`AADSTS70043`，错误信息带 `maximum allowed lifetime ... 2592000`）。`token.dat` 每小时随 refresh 刷新一次，它的修改时间看不出离到期还有多久；按 mtime 天数判断过期的旧做法（80/87 天）已删除。
 
-**实施**:
-- `src/notify/alert.py` 加 `alert_davmail_token_expiring(days_left)` — token.dat mtime > 80 天接近过期时 warning
-- `src/notify/alert.py` 加 `alert_davmail_oauth_failure(error)` — davmail-poc logs 出 BadPaddingException / refresh_token expired 时 critical
-- watchdog: `mailagent admin health` 加 `davmail.token.mtime` + `davmail.token.age_days` 指标
+**到期判断**：watchdog 读 sync_state `davmail.auth.last_interactive_at`（最近一次交互认证）加 `davmail.auth.lifetime_secs`（默认 30 天，遇到 70043 时从错误信息解析更新），算出 `davmail.auth.expires_at`。剩余 ≤3 天发 warning 提醒，≤0 天或出现 70043 升级为 critical「DavMail 登录已过期」。没有 `last_interactive_at` 记录时不判断到期，看板显示「未记录」。
+
+**重认证（主路径）**：App 内自助完成，入口有三处：设置 → 账户 → DavMail「重新认证」、看板 DavMail 卡片、认证类通知。弹窗流程：打开系统浏览器登录，把回调 URL 贴回，后端按以下步骤处理：
+1. 直接调微软 token 接口换 refresh token（`src/mail/davmail_reauth.py`），按 DavMail 的格式加密写入 `token.dat`。
+   - 格式：`{AES}` + PBKDF2-SHA256(cipher key, 盐 `davmail.oauth.fingerprint`, 10000 次) + AES-128-CBC。
+   - 格式由 `tests/mail/davmail_golden/` 的真实 DavMail 样本锁住。
+2. 写入前备份为 `token.dat.pre-reauth-<时间戳>`。
+3. 用正式端口 IMAP LOGIN 验证。失败时 `pm2 restart davmail-poc` 再试，仍失败就恢复备份。
+4. 成功后写入 `last_interactive_at`。
+
+**重认证（命令行兜底）**：App 不可用时，照旧另起独立端口的临时实例读 stdin 拿 code（见 §4.5.2a）。🔴 走命令行认证不会更新 `last_interactive_at`，认证后要手动写一次，否则到期倒计时仍按上次的时间算：
+
+```bash
+sqlite3 ~/Library/Application\ Support/mailagent-frontend/data/sync_store.db \
+  "INSERT OR REPLACE INTO sync_state(key, value, updated_at) VALUES ('davmail.auth.last_interactive_at', strftime('%s','now'), strftime('%s','now'))"
+```
+
+**OAuth 失败告警**：按 episode 处理。进入时告一次；持续期间不重发；恢复（5 分钟内无新错误，且 IMAP LOGIN 成功或 `token.dat` 晚于最后一条错误）时关闭通知，飞书发恢复消息。70043 只走「登录已过期」这一条，不另发「OAuth 失败」。
 
 #### 4.5.2 davmail-poc 进程死亡 watchdog (高优)
 
@@ -248,7 +262,7 @@ pm2 进程名仍是 `davmail-poc`（`src/mail/davmail_restart.py` 按此名 `pm2
 
 读不到输入就永久挂住该连接线程，客户端只看到 LOGIN / 问候语超时（2026-10-14 实测已累计 3 个卡死线程）。接 `/dev/null` 后两处都读到 EOF：证书按不信任处理，登录按认证失败处理，连接正常结束；token 文件不会被清掉，下一次连接会重新读文件刷新（DavMail 6.7.0 `O365Token.load` / `DavGatewayX509TrustManager` / `O365ManualAuthenticator` 源码已核）。
 
-**重认证**不经过主实例：照旧另起独立端口的临时实例读 stdin 拿 code，写同一个 token 文件后 `pm2 restart davmail-poc`。
+**重认证**默认在 App 内自助完成（§4.5.1），不经过 DavMail 的 stdin。命令行兜底时也不经过主实例：另起独立端口的临时实例读 stdin 拿 code，写同一个 token 文件后 `pm2 restart davmail-poc`。
 
 ```bash
 pm2 delete davmail-poc

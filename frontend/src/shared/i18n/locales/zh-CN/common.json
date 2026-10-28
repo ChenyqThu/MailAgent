@@ -8132,5 +8132,44 @@
     "chat": {
       "prompt": "关于 {mention}，我想问："
     }
+  },
+  "davmailReauth": {
+    "dialog": {
+      "title": "重新认证 DavMail",
+      "description": "公司策略要求每 30 天重新登录一次。在浏览器里登录后，把回调地址贴回这里即可恢复邮件收发。",
+      "openLogin": "在浏览器中打开登录页",
+      "reopenLogin": "再次打开登录页",
+      "copyLink": "复制链接",
+      "copied": "已复制",
+      "refreshLink": "重新获取链接",
+      "remaining": "链接剩余有效期 {time}",
+      "expired": "链接已过期，请重新获取",
+      "hintBlank": "登录完成后，浏览器停在空白页或显示「无法打开」是正常的，复制地址栏里的完整地址。",
+      "hintNoCode": "地址栏里看不到 code= 时：先按 F12 打开 Network 面板，再重新登录，复制最后一个红色（失败）请求的完整 Request URL。",
+      "hintTimeout": "授权码大约 10 分钟内有效，请及时贴回；过期了点「重新获取链接」。",
+      "callbackLabel": "回调地址",
+      "callbackPlaceholder": "粘贴含 code= 的完整地址，或只贴授权码",
+      "submit": "完成认证",
+      "cancel": "取消",
+      "close": "关闭",
+      "success": "已恢复，邮件同步会自动继续。",
+      "startFailed": "无法生成登录链接：{error}",
+      "requestFailed": "提交失败：{error}"
+    },
+    "expiry": {
+      "daysLeft": "登录约 {days} 天后过期",
+      "lessThanDay": "登录不到 1 天后过期",
+      "expired": "登录已过期",
+      "unrecorded": "未记录（在 App 内重新认证一次后开始计时）"
+    },
+    "entry": {
+      "button": "重新认证",
+      "accountsLabel": "DavMail 登录"
+    },
+    "card": {
+      "authTitle": "登录到期",
+      "lastRefresh": "最近刷新：{time}",
+      "oauthErrorHint": "可能登录已失效：重新认证即可恢复，也可以回切 applescript 后端。"
+    }
   }
 }

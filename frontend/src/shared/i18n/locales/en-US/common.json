@@ -8132,5 +8132,44 @@
     "chat": {
       "prompt": "About {mention}, I'd like to ask:"
     }
+  },
+  "davmailReauth": {
+    "dialog": {
+      "title": "Re-authenticate DavMail",
+      "description": "Your organization requires signing in again every 30 days. Sign in in your browser, then paste the callback address here to restore mail sync.",
+      "openLogin": "Open sign-in page in browser",
+      "reopenLogin": "Open sign-in page again",
+      "copyLink": "Copy link",
+      "copied": "Copied",
+      "refreshLink": "Get a new link",
+      "remaining": "Link expires in {time}",
+      "expired": "Link expired. Get a new one.",
+      "hintBlank": "After signing in, a blank page or a \"can't open\" message is expected. Copy the full address from the address bar.",
+      "hintNoCode": "If the address bar has no code=: press F12 to open the Network panel first, sign in again, then copy the full Request URL of the last red (failed) request.",
+      "hintTimeout": "The authorization code is valid for about 10 minutes. Paste it back promptly; if it expires, click \"Get a new link\".",
+      "callbackLabel": "Callback address",
+      "callbackPlaceholder": "Paste the full address containing code=, or just the code",
+      "submit": "Complete sign-in",
+      "cancel": "Cancel",
+      "close": "Close",
+      "success": "Restored. Mail sync will resume automatically.",
+      "startFailed": "Could not create a sign-in link: {error}",
+      "requestFailed": "Request failed: {error}"
+    },
+    "expiry": {
+      "daysLeft": "Sign-in expires in about {days, plural, one {# day} other {# days}}",
+      "lessThanDay": "Sign-in expires in less than a day",
+      "expired": "Sign-in expired",
+      "unrecorded": "Not recorded (tracking starts after you re-authenticate once in the app)"
+    },
+    "entry": {
+      "button": "Re-authenticate",
+      "accountsLabel": "DavMail sign-in"
+    },
+    "card": {
+      "authTitle": "Sign-in expiry",
+      "lastRefresh": "Last refreshed: {time}",
+      "oauthErrorHint": "Sign-in may have expired. Re-authenticate to restore it, or switch back to the applescript backend."
+    }
   }
 }

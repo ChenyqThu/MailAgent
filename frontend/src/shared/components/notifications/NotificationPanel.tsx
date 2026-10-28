@@ -40,6 +40,7 @@ import {
 import { useContactNavigation } from '@shared/components/contacts/navigation'
 import { navigateToLibraryFile } from '@shared/components/library/deeplink'
 import { useMatterNavigation } from '@shared/components/matters/navigation'
+import { useDavMailReauthStore } from '@shared/state/davmail-reauth'
 
 import {
   useMarkAllNotificationsRead,
@@ -330,6 +331,7 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
   const resolve = useResolveNotification()
   const openContactQueue = useContactNavigation((state) => state.openQueue)
   const openMatter = useMatterNavigation((state) => state.open)
+  const openDavMailReauth = useDavMailReauthStore((state) => state.openDialog)
 
   const allItems = list.data?.items
   // tab 过滤在前端做；未读计数不走这里（读服务端 `byCategory`，见下面的 tabOptions）——
@@ -391,6 +393,9 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
       case 'updater_restart':
         // 现成守卫：`updater.ts` 在 state !== 'downloaded' 时直接 no-op，不会误退出。
         void api.updater.quitAndInstall()
+        return
+      case 'davmail_reauth':
+        openDavMailReauth()
         return
       case 'library':
         // `/library` 页读 URL 的 `file` 参数后自行展开所在文件夹 + 选中 + missing/trashed

@@ -26,6 +26,10 @@ import { AlertTriangle, Info } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
+import { authExpiryLevel } from '@shared/lib/davmailThresholds'
+import { authExpiryLabel } from '@shared/components/davmail/reauthUi'
+import { Button } from '@shared/components/ui/button'
+import { useDavMailReauthStore } from '@shared/state/davmail-reauth'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
 import { errorMessage } from '@shared/lib/ipcErrors'
@@ -48,6 +52,7 @@ import { Section } from '../parts/Section'
 import { EnvField } from '../parts/EnvField'
 import { AdvancedDisclosure } from '../parts/AdvancedDisclosure'
 import { FolderPicker } from '../parts/FolderPicker'
+import { Row } from '../parts/Row'
 import { NotionConnection } from '../parts/NotionConnection'
 
 /** backend 值域/平台过滤单源 = @shared/lib/mailBackend (禁止此处再写字面量表)。 */
@@ -174,6 +179,46 @@ function FolderSizeLimitStatus(): React.ReactElement | null {
         </p>
       </div>
     </div>
+  )
+}
+
+/** DavMail 登录状态 + 重新认证入口（task 10-28-davmail-self-reauth 主入口）。登录有效期
+ *  由租户策略决定（默认 30 天），快到期时也可以在这里提前续。数据与 FolderSizeLimitStatus
+ *  同一条 davmailHealth 查询。 */
+function DavMailAuthRow(): React.ReactElement {
+  const { t } = useTranslation()
+  const api = useMailApi()
+  const openReauth = useDavMailReauthStore((s) => s.openDialog)
+  const { data } = useQuery({
+    queryKey: qk.admin.davmailHealth(),
+    queryFn: () => api.admin.davmailHealth(),
+    staleTime: 30_000,
+    retry: false
+  })
+  const daysLeft = data?.auth_days_left ?? null
+  const level = authExpiryLevel(daysLeft)
+
+  return (
+    <Row
+      label={t('davmailReauth.entry.accountsLabel')}
+      helper={
+        // 数据没到之前不出到期行：先闪一句「未记录」再变成天数会让人误以为没记录。
+        data ? (
+          <span
+            className={cn(
+              level === 'critical' ? 'text-fail' : level === 'warning' ? 'text-warn' : undefined
+            )}
+            title={data.auth_expires_at ?? undefined}
+          >
+            {authExpiryLabel(t, daysLeft)}
+          </span>
+        ) : undefined
+      }
+    >
+      <Button variant={level !== null ? 'default' : 'secondary'} size="sm" onClick={openReauth}>
+        {t('davmailReauth.entry.button')}
+      </Button>
+    </Row>
   )
 }
 
@@ -349,6 +394,7 @@ function MailSourceSection(): React.ReactElement {
               })}
             />
           )}
+          <DavMailAuthRow />
           <EnvField
             envKey="SYNC_MAILBOXES"
             control="tag-list"

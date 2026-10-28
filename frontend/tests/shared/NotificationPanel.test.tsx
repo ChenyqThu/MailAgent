@@ -383,4 +383,30 @@ describe('NotificationPanel — 条目点击', () => {
     expect(hoisted.navigate).not.toHaveBeenCalled()
     expect(onClose).toHaveBeenCalled()
   })
+
+  // 10-28（davmail-self-reauth）：认证类告警点了直接打开全局重认证弹窗，不跳页。
+  test('davmail_reauth 型：标已读 + 打开重认证弹窗，不跳转', async () => {
+    const { useDavMailReauthStore } = await import('../../src/shared/state/davmail-reauth')
+    useDavMailReauthStore.setState({ open: false })
+    hoisted.listState.items = [
+      item({
+        id: 6,
+        category: 'system',
+        source: 'davmail',
+        severity: 'critical',
+        title: 'DavMail 登录已过期',
+        body: '请重新认证',
+        payload: { link: { type: 'davmail_reauth' } }
+      })
+    ]
+    const onClose = vi.fn()
+    render(<NotificationPanel onClose={onClose} />)
+
+    fireEvent.click(screen.getByText('DavMail 登录已过期'))
+
+    expect(hoisted.markRead).toHaveBeenCalledWith(6)
+    expect(useDavMailReauthStore.getState().open).toBe(true)
+    expect(hoisted.navigate).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalled()
+  })
 })

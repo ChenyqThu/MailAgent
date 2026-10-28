@@ -103,6 +103,17 @@ describe('resolveNotificationLink — 真实信源形状', () => {
     })
   })
 
+  // 10-28（davmail-self-reauth）：`davmail_watchdog.py` 认证类告警（OAuth 失败 / LOGIN 失败 /
+  // 到期提醒）发的 link，点击打开重认证弹窗。无参数型，多余字段不影响。
+  it('DavMail 认证失效：davmail_reauth 无参数型', () => {
+    expect(resolveNotificationLink({ link: { type: 'davmail_reauth' } })).toEqual({
+      type: 'davmail_reauth'
+    })
+    expect(resolveNotificationLink({ link: { type: 'davmail_reauth', daysLeft: 2 } })).toEqual({
+      type: 'davmail_reauth'
+    })
+  })
+
   // 09-03（library-p2-write-and-links）：agent 无人值守写完 `agent-docs/` 后
   // `notify_library_file_written` 发的 link（`src/notify/library_signals.py`）。
   it('资料库文件写入：library 型带 fileId', () => {

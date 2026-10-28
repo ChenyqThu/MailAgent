@@ -10,7 +10,7 @@
 // router-instance 里的落地分支。重量级布局组件全部 mock 成空壳 —— 测的是接线，不是渲染。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, render, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider } from '@tanstack/react-router'
 import * as React from 'react'
@@ -68,5 +68,26 @@ describe('useNotificationClickNavigation — matter 型', () => {
 
     expect(useMatterNavigation.getState().targetPublicId).toBe('m_7fa3')
     await waitFor(() => expect(router.state.location.pathname).toBe('/matters'))
+  })
+
+  // 10-28（davmail-self-reauth）：登录失效是 critical，会弹 macOS 系统通知 —— 用户多半从这里
+  // 发现问题，点了要直接打开重认证弹窗（全局单实例挂在 RootLayout）。
+  test('davmail_reauth link → 打开重认证弹窗', async () => {
+    const { router } = await import('../../src/shared/router-instance')
+    const { useDavMailReauthStore } = await import('../../src/shared/state/davmail-reauth')
+    useDavMailReauthStore.setState({ open: false })
+
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    )
+    await waitFor(() => expect(handler).toBeTruthy())
+
+    handler!({ id: 8, payload: { link: { type: 'davmail_reauth' } } })
+
+    expect(useDavMailReauthStore.getState().open).toBe(true)
+    expect(await screen.findByRole('dialog')).toBeTruthy()
   })
 })

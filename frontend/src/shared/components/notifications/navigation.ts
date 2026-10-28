@@ -65,6 +65,9 @@ export type NotificationLink =
    *  消费）——借道 `router.history.push` 而不是 `navigate({ to: '/library' })`，因为
    *  `/library` 由另一批单独注册，注册前 `to` 字面量过不了 typecheck。 */
   | { type: 'library'; fileId: number }
+  /** DavMail 登录失效 / 即将过期（`davmail_watchdog.py` 的认证类告警）→ 打开全局重认证弹窗
+   *  （`state/davmail-reauth.ts`）。 */
+  | { type: 'davmail_reauth' }
 
 /** 非空字符串字段的统一取法（reportId / publicId 都是不透明 id，只校验形状）。 */
 function nonEmptyString(value: unknown): string | null {
@@ -133,6 +136,7 @@ export function resolveNotificationLink(
   // 无参数型：判 type 就够，不校验别的字段（后端往载荷里多塞字段不该让链接失效）。
   if (link.type === 'contact_queue') return { type: 'contact_queue' }
   if (link.type === 'updater_restart') return { type: 'updater_restart' }
+  if (link.type === 'davmail_reauth') return { type: 'davmail_reauth' }
 
   if (link.type === 'matter') {
     const publicId = nonEmptyString(link.publicId)

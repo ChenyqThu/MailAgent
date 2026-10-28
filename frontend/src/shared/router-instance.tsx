@@ -48,6 +48,8 @@ import { GlobalShortcuts } from './components/keyboard/GlobalShortcuts'
 import { KeyboardHelpModal } from './components/keyboard/KeyboardHelpModal'
 import { ComposeNewModal } from './components/email/compose/ComposeNewModal'
 import { FeedbackDialog } from './components/feedback/FeedbackDialog'
+import { DavMailReauthDialog } from './components/davmail/DavMailReauthDialog'
+import { useDavMailReauthStore } from './state/davmail-reauth'
 import { useMatterNavigation } from './components/matters/navigation'
 // task 08-20-notification-center M2 批 B4 — 系统通知点击深跳：main 的通知 fanout 经
 // 'notifications:navigate' 送来通知行 payload，这里用**单源解析器**收窄（不另抄判据）。
@@ -186,7 +188,8 @@ function useGeneralAgentMenu(): void {
  * main 的 notification_fanout 聚焦主窗口后经 'notifications:navigate' 送来
  * `{ id, payload }`（payload = 通知行 payload_json）；这里落地 session / route /
  * matter 三型（与 NotificationPanel.activate 同口径；matter 型是 M3 批 C1 老
- * `matters:navigate` 链退役后 macOS 通知进事项的唯一入口），其余型（report /
+ * `matters:navigate` 链退役后 macOS 通知进事项的唯一入口）以及 davmail_reauth（打开
+ * 全局重认证弹窗；登录失效是 critical，用户多半是从系统通知发现的），其余型（report /
  * contact_queue / updater_restart）的系统通知点击退化为「仅聚焦主窗口」（main 侧
  * 已做），不在此处抄第二份落地逻辑。
  */
@@ -235,6 +238,10 @@ function useNotificationClickNavigation(): void {
         void navigate({ to: '/matters' })
         return
       }
+      if (link.type === 'davmail_reauth') {
+        useDavMailReauthStore.getState().openDialog()
+        return
+      }
       if (link.type === 'route') {
         // 落地 switch 单源在 notifications/navigation.ts（与 NotificationPanel 共用，
         // Step R check ① 的两份手抄 switch 收敛 + `/settings` case 补齐在那边）。
@@ -270,6 +277,8 @@ function RootLayout(): React.ReactElement {
       <ComposeNewModal />
       {/* 快捷反馈弹窗 — 全局单实例, 入口在设置域二级栏底部 (task 08-27 P4a)。 */}
       <FeedbackDialog />
+      {/* DavMail 重新认证弹窗 — 全局单实例, 入口在设置-账户 / 看板卡片 / 认证类通知。 */}
+      <DavMailReauthDialog />
       {PopmenuShowcaseMount !== null && (
         <Suspense fallback={null}>
           <PopmenuShowcaseMount />
