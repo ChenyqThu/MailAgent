@@ -61,7 +61,7 @@ def test_tools_list_filtered_by_key_scope(skill_client, api_key_store, monkeypat
     dr_headers, _ = _bearer(api_key_store, DRAFTER_SCOPES)
     dr = _tool_names(skill_client.post("/mcp", json=_rpc("tools/list"), headers=dr_headers))
     assert "mailagent_email_draft" in dr
-    # mcp_exposed=False 的发信工具对任何 key 都不投影
+    # 发信要 email:write，起草 key 看不到
     assert "mailagent_email_send" not in dr
 
 

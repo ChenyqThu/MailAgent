@@ -47,9 +47,23 @@ _HINTS_BY_SIDE_EFFECT: dict[str, tuple[bool, bool, bool, bool]] = {
 }
 
 
-def tool_annotations(title: str, side_effect: str) -> dict[str, Any]:
-    """按 ``side_effect`` 推导 MCP annotations。未知值 → KeyError（新增 SideEffect 必须来这里补一行）。"""
-    read_only, destructive, idempotent, open_world = _HINTS_BY_SIDE_EFFECT[side_effect]
+def tool_annotations(
+    title: str,
+    side_effect: str,
+    *,
+    destructive: Optional[bool] = None,
+    idempotent: Optional[bool] = None,
+) -> dict[str, Any]:
+    """按 ``side_effect`` 推导 MCP annotations。未知值 → KeyError（新增 SideEffect 必须来这里补一行）。
+
+    ``destructive`` / ``idempotent`` 非 None 时覆盖推导值（``ToolDef`` 的同名字段）；
+    readOnly / openWorld 恒取推导值。
+    """
+    read_only, derived_destructive, derived_idempotent, open_world = _HINTS_BY_SIDE_EFFECT[side_effect]
+    if destructive is None:
+        destructive = derived_destructive
+    if idempotent is None:
+        idempotent = derived_idempotent
     return {
         "title": title,
         "readOnlyHint": read_only,
@@ -88,7 +102,12 @@ def manifest_to_mcp_tools(manifest: Any) -> list[dict[str, Any]]:
                 "title": title,
                 "description": _field(t, "description"),
                 "inputSchema": _field(t, "input_schema"),
-                "annotations": tool_annotations(title, _field(t, "side_effect")),
+                "annotations": tool_annotations(
+                    title,
+                    _field(t, "side_effect"),
+                    destructive=_field(t, "destructive"),
+                    idempotent=_field(t, "idempotent"),
+                ),
                 "_skill": sname,
                 "_tool": name,
             }

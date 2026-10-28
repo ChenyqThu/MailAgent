@@ -15,7 +15,7 @@ EXPECTED_TOOLS = {
         "email_body": ("read", "none", ["email:read"], True),
         "email_thread": ("read", "none", ["email:read"], True),
         "email_draft": ("write", "edit", ["email:draft"], True),
-        "email_send": ("send", "edit", ["email:write"], False),
+        "email_send": ("send", "edit", ["email:write"], True),
     },
     "search": {
         "email_search": ("read", "none", ["email:read"], True),
@@ -29,6 +29,9 @@ EXPECTED_TOOLS = {
     "calendar": {
         "calendar_events": ("read", "none", ["calendar:read"], True),
         "calendar_event_get": ("read", "none", ["calendar:read"], True),
+        "calendar_event_rsvp": ("send", "edit", ["calendar:write"], True),
+        "calendar_event_reschedule": ("external_call", "edit", ["calendar:write"], True),
+        "calendar_event_delete": ("external_call", "edit", ["calendar:write"], True),
     },
     "notion_agent": {
         # 07-21 (codex HIGH-2) — edit tier (was preview): the invoke chokepoint now requires an
@@ -64,6 +67,18 @@ EXPECTED_TOOLS = {
         "custom_agent_list": ("read", "none", ["agents:read"], True),
         "custom_agent_get": ("read", "none", ["agents:read"], True),
         "custom_agent_run_now": ("external_call", "edit", ["agents:run"], True),
+    },
+    # 10-27 —— 对外写工具（scope 默认不授）。
+    "email_organize": {
+        "email_flag": ("write", "preview", ["email:organize"], True),
+        "email_pin": ("write", "preview", ["email:organize"], True),
+        "email_archive": ("write", "preview", ["email:organize"], True),
+    },
+    "matter_write": {
+        "matter_create": ("write", "preview", ["matters:write"], True),
+        "matter_add_note": ("write", "preview", ["matters:write"], True),
+        "matter_item_add": ("write", "preview", ["matters:write"], True),
+        "matter_item_update": ("write", "preview", ["matters:write"], True),
     },
 }
 
@@ -131,4 +146,3 @@ def test_send_tool_always_edit_confirmation():
     send = next(t for s in m.skills for t in s.tools if t.name == "email_send")
     assert send.confirmation_tier == "edit"
     assert send.side_effect == "send"
-    assert send.mcp_exposed is False

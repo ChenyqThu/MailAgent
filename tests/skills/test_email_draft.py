@@ -173,22 +173,27 @@ def test_draft_tool_contract():
     assert tool.side_effect == "write"
     assert tool.mcp_exposed is True
     assert tool.handler.target == "MailWriteService.compose_draft"
-    # 配额闸只声明在两个写工具上：email_draft 与 custom_agent_run_now（其余 tool 行为零变化）。
     assert tool.rate_limit == {"limit": 20, "per_seconds": 3600, "scope": "principal"}
-    others = [
+    # 读工具一律不挂配额（配额只给有副作用的工具）。
+    read_with_quota = [
         t.name
         for s in build_manifest(None, generated_at="x").skills
         for t in s.tools
-        if t.rate_limit is not None
+        if t.rate_limit is not None and t.side_effect == "read"
     ]
-    assert others == ["email_draft", "custom_agent_run_now"]
+    assert read_with_quota == []
 
 
-def test_send_tool_unchanged():
+def test_send_tool_contract():
     send = _email_tools(None)["email_send"]
     assert send.auth_scopes == ["email:write"]
-    assert send.mcp_exposed is False
+    assert send.mcp_exposed is True
     assert send.side_effect == "send"
+    assert send.confirmation_tier == "edit"
+    assert send.rate_limit == {"limit": 10, "per_seconds": 3600, "scope": "principal"}
+    # MCP 桥 pop confirm → schema 必须有它，且不进 required。
+    assert send.input_schema["properties"]["confirm"]["type"] == "boolean"
+    assert "confirm" not in send.input_schema.get("required", [])
 
 
 # --- MCP 投影 ---------------------------------------------------------------
@@ -206,9 +211,11 @@ def test_mcp_projection_exposes_draft_with_confirm_field():
     assert "internalId" not in schema.get("required", [])  # mode=new 可省略
 
 
-def test_mcp_projection_never_exposes_send_even_for_owner():
-    names = {t["name"] for t in manifest_to_mcp_tools(build_manifest(None, generated_at="x"))}
-    assert "mailagent_email_send" not in names
+def test_mcp_projection_exposes_send_only_with_write_scope():
+    owner = {t["name"] for t in manifest_to_mcp_tools(build_manifest(None, generated_at="x"))}
+    assert "mailagent_email_send" in owner
+    drafter = {t["name"] for t in manifest_to_mcp_tools(build_manifest(DRAFTER, generated_at="x"))}
+    assert "mailagent_email_send" not in drafter
 
 
 @pytest.mark.asyncio

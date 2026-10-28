@@ -511,7 +511,7 @@ def test_gate_untyped_property_would_go_red():
 
 def test_gate_dangling_scope_would_go_red():
     """把一个无人消费的名字塞进目录副本，等式必须不成立。"""
-    polluted = set(KNOWN_SCOPES) | {"calendar:write"}
+    polluted = set(KNOWN_SCOPES) | {"calendar:admin"}
     assert polluted != _consumed_scopes(), "合成的悬空 scope 竟与消费集相等 —— 本闸对漂移无感"
 
 

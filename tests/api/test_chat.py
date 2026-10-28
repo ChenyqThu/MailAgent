@@ -705,6 +705,8 @@ def test_chat_config_skill_catalog_lists_every_builtin(
         "library",
         "matter_lookup",
         "agents",
+        "email_organize",
+        "matter_write",
     }
     assert set(catalog[0]) == {
         "name",

@@ -43,12 +43,12 @@ KEY_PREFIX = "mak_"  # MailAgent (agent) Key
 # 消费者）不是无害的占位 —— ``mailagent api-key create --scopes <它>`` 立刻可发放并存进
 # ``agent_api_keys``，而 ``verify()`` 读回时**不**校验 scope 值域，于是未来第一个消费它的
 # ToolDef 一上线就**静默武装所有历史 key**，没有任何一次显式授权动作。
-# ``calendar:write`` 就是这样一个（为 calendar skill 的 P1 写能力预留，见
-# ``src/skills/builtin/calendar.py`` 头注释），已删 —— 实测生产 ``api_auth.db`` 零 key 持有它，
-# 删除无爆炸半径；存量 key 也不受影响（``_row_to_record`` 不做值域校验，删掉的名字只是
-# 从此再也匹配不上任何 tool）。
-# 将来真要加日历写能力：**同一个 commit 里**加 ToolDef 与本行，让「发一把带写 scope 的 key」
-# 重新变成一次有意识的操作。不要为了「先占个名字」而单独加回来。
+# ``calendar:write`` 曾经就是这样一个（2026-07-28 删，当时生产 ``api_auth.db`` 零 key 持有它）；
+# 2026-10 与消费它的三个日历写工具在同一个提交里加回。以后新增 scope 同样：ToolDef 与本行同一
+# 个提交，不为「先占个名字」单独加。
+#
+# 写 scope（``email:draft`` / ``email:organize`` / ``matters:write`` / ``calendar:write`` /
+# ``email:write``）都**不**进任何既有预设，必须显式授予。
 # ---------------------------------------------------------------------------
 KNOWN_SCOPES: frozenset[str] = frozenset(
     {
@@ -59,6 +59,9 @@ KNOWN_SCOPES: frozenset[str] = frozenset(
         "calendar:read",
         "email:draft",
         "email:write",
+        "email:organize",
+        "calendar:write",
+        "matters:write",
         "notion_agent:invoke",
         "contacts:read",
         "library:read",
@@ -113,6 +116,53 @@ KEY_PRESETS: dict[str, tuple[str, ...]] = {
     "drafter": DRAFTER_SCOPES,  # 读 + 起草，**不能发信**（issue #50）
     "writer": WRITER_SCOPES,  # 发信 + 起草（write 预设显式带上 email:draft）
 }
+
+
+# 设置页「MCP 服务」的密钥权限 = 基础档（二选一）+ 额外写权限（多选）。
+KEY_BASES: dict[str, tuple[str, ...]] = {
+    "readonly": READ_ONLY_SCOPES,
+    "handoff": HANDOFF_SCOPES,
+}
+
+# 额外写权限白名单。顺序固定（设置页按此顺序展示，``decompose_scopes`` 的 extra 也按此排序）。
+EXTRA_WRITE_SCOPES: tuple[str, ...] = (
+    "email:draft",
+    "email:organize",
+    "matters:write",
+    "calendar:write",
+    "email:write",
+)
+
+
+def compose_scopes(base: str, extra: Iterable[str]) -> tuple[str, ...]:
+    """基础档 + 额外写权限 → scope 集合。base 不在两档里 / extra 有白名单外的值或重复 → ValueError。"""
+    if base not in KEY_BASES:
+        raise ValueError(f"base must be one of {' | '.join(KEY_BASES)}")
+    extra_list = list(extra)
+    unknown = [s for s in extra_list if s not in EXTRA_WRITE_SCOPES]
+    if unknown:
+        raise ValueError(f"extra scope(s) not allowed: {unknown}; allowed: {list(EXTRA_WRITE_SCOPES)}")
+    if len(set(extra_list)) != len(extra_list):
+        raise ValueError("extra contains duplicate scopes")
+    return validate_scopes([*KEY_BASES[base], *extra_list])
+
+
+def decompose_scopes(scopes: Iterable[str]) -> tuple[Optional[str], list[str], bool]:
+    """scope 集合 → ``(base, extra, custom)``。
+
+    base 取 ``KEY_BASES`` 里**最大的、是 scopes 子集的**那一档；剩余部分必须全在
+    ``EXTRA_WRITE_SCOPES`` 里，否则视为自定义组合（CLI ``--scopes`` / drafter 等），返回
+    ``(None, [], True)``。
+    """
+    have = set(scopes)
+    for name in sorted(KEY_BASES, key=lambda n: len(KEY_BASES[n]), reverse=True):
+        base_scopes = set(KEY_BASES[name])
+        if base_scopes <= have:
+            rest = have - base_scopes
+            if rest <= set(EXTRA_WRITE_SCOPES):
+                return name, [s for s in EXTRA_WRITE_SCOPES if s in rest], False
+            return None, [], True
+    return None, [], True
 
 
 def preset_for_scopes(scopes: Iterable[str]) -> Optional[str]:
@@ -358,6 +408,30 @@ class ApiKeyStore:
             if cur.rowcount == 0:
                 return None
         return plaintext
+
+    def update_scopes(
+        self, key_id: str, scopes: Iterable[str], *, route: Optional[str] = None
+    ) -> Optional[ApiKeyRecord]:
+        """改一把未撤销 key 的权限（明文不变，下一次请求即按新权限鉴权）。写一行审计。
+
+        key 不存在或已撤销 → None。非法 scope → ValueError。
+        """
+        resolved = validate_scopes(scopes)
+        with self._connection() as conn:
+            cur = conn.execute(
+                "UPDATE agent_api_keys SET scopes_json = ? WHERE id = ? AND revoked_at IS NULL",
+                (json.dumps(list(resolved), ensure_ascii=False), key_id),
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                return None
+        self.write_audit(
+            route=route or f"/api/mcp-service/keys/{key_id}/scopes",
+            status="ok",
+            key_id=key_id,
+            scopes=resolved,
+        )
+        return self.get_key(key_id)
 
     # -- usage + audit -----------------------------------------------------
     def record_use(self, key_id: str) -> None:

@@ -13,14 +13,19 @@ import pytest
 
 import src.api.auth as auth_mod
 from src.agent_config import store as acstore
-from src.security.api_keys import DRAFTER_SCOPES, HANDOFF_SCOPES, READ_ONLY_SCOPES
+from src.security.api_keys import (
+    DRAFTER_SCOPES,
+    EXTRA_WRITE_SCOPES,
+    HANDOFF_SCOPES,
+    READ_ONLY_SCOPES,
+)
 from src.skills.registry import reset_registry_cache
 
 _BASE = "/api/mcp-service"
 
 
-def _create(client, label="notion", preset="readonly"):
-    r = client.post(f"{_BASE}/keys", json={"label": label, "preset": preset})
+def _create(client, label="notion", base="readonly", extra=()):
+    r = client.post(f"{_BASE}/keys", json={"label": label, "base": base, "extra": list(extra)})
     assert r.status_code == 200, r.text
     return r.json()["data"]
 
@@ -43,10 +48,11 @@ def test_create_returns_plaintext_once_and_list_never_leaks(skill_client, api_ke
     assert plaintext.startswith("mak_")
     key = data["key"]
     assert set(key) == {
-        "id", "label", "key_prefix", "scopes", "preset", "created_at", "last_used_at",
-        "expires_at", "revoked_at", "active",
+        "id", "label", "key_prefix", "scopes", "preset", "base", "extra", "custom",
+        "created_at", "last_used_at", "expires_at", "revoked_at", "active",
     }
     assert key["preset"] == "readonly" and key["active"] is True
+    assert (key["base"], key["extra"], key["custom"]) == ("readonly", [], False)
     assert plaintext.startswith(key["key_prefix"])
 
     r = skill_client.get(f"{_BASE}/keys")
@@ -60,30 +66,77 @@ def test_create_returns_plaintext_once_and_list_never_leaks(skill_client, api_ke
 
 
 @pytest.mark.parametrize(
-    "preset, scopes",
-    [("readonly", READ_ONLY_SCOPES), ("handoff", HANDOFF_SCOPES), ("drafter", DRAFTER_SCOPES)],
+    "base, extra, scopes",
+    [
+        ("readonly", [], READ_ONLY_SCOPES),
+        ("handoff", [], HANDOFF_SCOPES),
+        ("handoff", ["email:draft"], HANDOFF_SCOPES + ("email:draft",)),
+        ("readonly", list(EXTRA_WRITE_SCOPES), READ_ONLY_SCOPES + EXTRA_WRITE_SCOPES),
+    ],
 )
-def test_ui_presets_map_to_scopes(skill_client, api_key_store, preset, scopes):
-    key = _create(skill_client, preset=preset)["key"]
+def test_create_base_plus_extra(skill_client, api_key_store, base, extra, scopes):
+    key = _create(skill_client, base=base, extra=extra)["key"]
     assert set(key["scopes"]) == set(scopes)
-    assert key["preset"] == preset
+    assert (key["base"], key["extra"], key["custom"]) == (base, extra, False)
     assert set(api_key_store.get_key(key["id"]).scopes) == set(scopes)
+
+
+@pytest.mark.parametrize(
+    "scopes, expected",
+    [
+        (HANDOFF_SCOPES + ("email:draft",), ("handoff", ["email:draft"], False)),
+        (READ_ONLY_SCOPES, ("readonly", [], False)),
+        # extra 按白名单固定顺序返回，与存储顺序无关
+        (
+            READ_ONLY_SCOPES + tuple(reversed(EXTRA_WRITE_SCOPES)),
+            ("readonly", list(EXTRA_WRITE_SCOPES), False),
+        ),
+        (DRAFTER_SCOPES, (None, [], True)),  # 不含完整只读档
+        (READ_ONLY_SCOPES + ("notion_agent:invoke",), (None, [], True)),  # 白名单外
+        (READ_ONLY_SCOPES + ("report:run",), (None, [], True)),  # 半个 handoff
+    ],
+)
+def test_key_decomposition(skill_client, api_key_store, scopes, expected):
+    api_key_store.create_key("cli", scopes=list(scopes))
+    key = skill_client.get(f"{_BASE}/keys").json()["data"]["keys"][0]
+    assert (key["base"], key["extra"], key["custom"]) == expected
 
 
 def test_custom_scope_key_lists_preset_null(skill_client, api_key_store):
     api_key_store.create_key("cli", scopes=["email:read"])
     keys = skill_client.get(f"{_BASE}/keys").json()["data"]["keys"]
     assert keys[0]["preset"] is None
+    assert keys[0]["custom"] is True and keys[0]["base"] is None and keys[0]["extra"] == []
+
+
+def test_scope_options(skill_client):
+    data = skill_client.get(f"{_BASE}/scope-options").json()["data"]
+    assert data["bases"] == [
+        {"id": "readonly", "scopes": list(READ_ONLY_SCOPES)},
+        {"id": "handoff", "scopes": list(HANDOFF_SCOPES)},
+    ]
+    assert data["extras"] == [
+        {"scope": "email:draft", "risk": "low"},
+        {"scope": "email:organize", "risk": "low"},
+        {"scope": "matters:write", "risk": "low"},
+        {"scope": "calendar:write", "risk": "high"},
+        {"scope": "email:write", "risk": "high"},
+    ]
 
 
 @pytest.mark.parametrize(
     "body",
     [
-        {"label": "x", "preset": "writer"},  # 存在于 KEY_PRESETS，但设置页不提供
-        {"label": "x", "preset": "bogus"},
+        {"label": "x", "preset": "readonly"},  # 旧形状不再接受
+        {"label": "x", "base": "drafter"},
+        {"label": "x", "base": "bogus"},
+        {"label": "x", "base": "readonly", "extra": ["notion_agent:invoke"]},  # 白名单外
+        {"label": "x", "base": "readonly", "extra": ["report:run"]},
+        {"label": "x", "base": "readonly", "extra": ["email:draft", "email:draft"]},  # 重复
+        {"label": "x", "base": "readonly", "extra": "email:draft"},
         {"label": "x"},
-        {"label": "  ", "preset": "readonly"},
-        {"preset": "readonly"},
+        {"label": "  ", "base": "readonly"},
+        {"base": "readonly"},
     ],
 )
 def test_create_rejects_bad_input(skill_client, api_key_store, body):
@@ -126,6 +179,82 @@ def test_revoke_then_mcp_403_and_rotate_404(skill_client, api_key_store, monkeyp
     assert _mcp_status(skill_client, data["plaintext"]) == 403
 
 
+# ── 修改权限 ─────────────────────────────────────────────────────────────────
+
+
+def _patch_scopes(client, key_id, base, extra=()):
+    return client.patch(f"{_BASE}/keys/{key_id}/scopes", json={"base": base, "extra": list(extra)})
+
+
+def _mcp_tool_names(client, plaintext):
+    r = client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        headers={"Authorization": f"Bearer {plaintext}"},
+    )
+    assert r.status_code == 200, r.text
+    return {t["name"] for t in r.json()["result"]["tools"]}
+
+
+def test_patch_scopes_takes_effect_on_next_request_and_is_audited(
+    skill_client, api_key_store, monkeypatch
+):
+    data = _create(skill_client, label="notion")
+    key_id, plaintext = data["key"]["id"], data["plaintext"]
+
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    assert "mailagent_matter_create" not in _mcp_tool_names(skill_client, plaintext)
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", True)
+
+    r = _patch_scopes(skill_client, key_id, "handoff", ["matters:write", "email:organize"])
+    assert r.status_code == 200, r.text
+    key = r.json()["data"]["key"]
+    assert (key["base"], key["extra"], key["custom"]) == (
+        "handoff", ["email:organize", "matters:write"], False,
+    )
+    assert "plaintext" not in r.json()["data"]
+
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    names = _mcp_tool_names(skill_client, plaintext)  # 同一个明文
+    assert {"mailagent_matter_create", "mailagent_email_flag", "mailagent_report_run"} <= names
+    assert "mailagent_email_send" not in names
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", True)
+
+    audit = [e for e in api_key_store.list_audit(key_id=key_id) if e["route"].endswith("/scopes")]
+    assert len(audit) == 1
+    assert audit[0]["route"] == f"/api/mcp-service/keys/{key_id}/scopes"
+    assert audit[0]["status"] == "ok"
+    assert "matters:write" in audit[0]["scopes_json"]
+
+
+def test_patch_scopes_can_redefine_custom_key(skill_client, api_key_store):
+    rec, _ = api_key_store.create_key("cli", scopes=list(DRAFTER_SCOPES))
+    r = _patch_scopes(skill_client, rec.id, "readonly", ["email:draft"])
+    assert r.status_code == 200, r.text
+    assert set(api_key_store.get_key(rec.id).scopes) == set(READ_ONLY_SCOPES) | {"email:draft"}
+
+
+def test_patch_scopes_rejects_bad_body_and_keeps_scopes(skill_client, api_key_store):
+    key_id = _create(skill_client)["key"]["id"]
+    for body in (
+        {"base": "readonly", "extra": ["notion_agent:invoke"]},
+        {"base": "writer"},
+        {"extra": []},
+    ):
+        r = skill_client.patch(f"{_BASE}/keys/{key_id}/scopes", json=body)
+        assert r.status_code == 400, (body, r.text)
+        assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    assert set(api_key_store.get_key(key_id).scopes) == set(READ_ONLY_SCOPES)
+
+
+def test_patch_scopes_revoked_or_unknown_404(skill_client, api_key_store):
+    key_id = _create(skill_client)["key"]["id"]
+    skill_client.post(f"{_BASE}/keys/{key_id}/revoke")
+    assert _patch_scopes(skill_client, key_id, "handoff").status_code == 404
+    assert set(api_key_store.get_key(key_id).scopes) == set(READ_ONLY_SCOPES)
+    assert _patch_scopes(skill_client, "nope", "handoff").status_code == 404
+
+
 def test_unknown_key_404(skill_client, api_key_store):
     assert skill_client.post(f"{_BASE}/keys/nope/rotate").status_code == 404
     assert skill_client.post(f"{_BASE}/keys/nope/revoke").status_code == 404
@@ -136,12 +265,14 @@ def test_unknown_key_404(skill_client, api_key_store):
 
 def test_bearer_key_cannot_use_management_api(skill_client, api_key_store, monkeypatch):
     monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
-    _rec, plaintext = api_key_store.create_key("agent", scopes=list(HANDOFF_SCOPES))
+    rec, plaintext = api_key_store.create_key("agent", scopes=list(HANDOFF_SCOPES))
     hdr = {"Authorization": f"Bearer {plaintext}"}
     for method, path, body in [
+        ("PATCH", f"/keys/{rec.id}/scopes", {"base": "handoff", "extra": ["email:write"]}),
         ("GET", "/status", None),
         ("GET", "/keys", None),
-        ("POST", "/keys", {"label": "evil", "preset": "handoff"}),
+        ("POST", "/keys", {"label": "evil", "base": "handoff"}),
+        ("GET", "/scope-options", None),
         ("GET", "/tools", None),
         ("GET", "/audit", None),
         ("POST", "/probe", {"url": "https://example.com/mcp"}),
@@ -149,6 +280,7 @@ def test_bearer_key_cannot_use_management_api(skill_client, api_key_store, monke
         r = skill_client.request(method, f"{_BASE}{path}", json=body, headers=hdr)
         assert r.status_code == 401, (method, path, r.text)
     assert len(api_key_store.list_keys()) == 1
+    assert set(api_key_store.get_key(rec.id).scopes) == set(HANDOFF_SCOPES)
 
 
 def test_local_token_owner_allowed(skill_client, api_key_store, monkeypatch):
@@ -224,8 +356,11 @@ def test_tools_match_external_agent_view(skill_client, installed_collision):
     assert "mailagent_email_get" in tools
     assert not any("email-helper" in n for n in tools)
     # mcp_exposed=False 的不出现
-    assert "mailagent_email_send" not in tools
     assert "mailagent_notion_agent_chat" not in tools
+    # 写工具出现，且不属于任何预设
+    send = tools["mailagent_email_send"]
+    assert send["auth_scopes"] == ["email:write"] and send["presets"] == []
+    assert send["annotations"]["destructiveHint"] is True
 
     search = tools["mailagent_email_search"]
     assert set(search) == {"name", "title", "description", "annotations", "auth_scopes", "presets"}

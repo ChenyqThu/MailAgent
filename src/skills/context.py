@@ -35,6 +35,9 @@ class SkillContext:
         # invoke_skill 在 dispatch 前写入本次调用的 confirm 标志（发信/草稿 handler 据此把
         # 真实 confirm 透传给 service 二次校验，而非硬编码 True —— 防御纵深，见 invoke.py）。
         self.confirm: bool = False
+        # invoke_skill 同时写入本次调用的 principal（写 handler 据此给服务层的 actor 记
+        # 「mcp:<密钥名>」，见 builtin/_common.mcp_actor_label）。
+        self.principal: Any = None
 
     def config(self) -> "Config":
         if self._config is None:

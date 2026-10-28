@@ -31,8 +31,8 @@ async def test_tools_list_only_exposes_mcp_tools():
     assert "mailagent_report_run" in names
     assert "mailagent_report_get" in names
     assert "mailagent_email_get" in names
+    assert "mailagent_email_send" in names
     # mcp_exposed=False → 不暴露
-    assert "mailagent_email_send" not in names
     assert "mailagent_notion_agent_chat" not in names
     # 每个 tool 有 inputSchema
     for t in r["result"]["tools"]:

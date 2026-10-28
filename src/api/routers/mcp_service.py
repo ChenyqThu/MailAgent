@@ -2,7 +2,8 @@
 
 owner 在设置页里管理对外 ``/mcp`` 的访问密钥、查看外部 agent 能看到的工具与最近调用、检测
 公网地址。密钥存储复用 ``src/security/api_keys.py``（与 ``mailagent api-key`` CLI 同一个
-``api_auth.db``、同一套预设 ``KEY_PRESETS``）。
+``api_auth.db``）。设置页按「基础档 + 额外写权限」组合 scope（``compose_scopes`` / ``decompose_scopes``），
+CLI 仍用 ``KEY_PRESETS``。
 
 鉴权：整组 ``Depends(verify_cf_access)``（本机 token / CF Access）。agent Bearer key 不走这条
 依赖 → 天然 401，外部 agent 不能用自己的 key 给自己签发新 key。
@@ -32,9 +33,13 @@ router = APIRouter(
     dependencies=[Depends(verify_cf_access)],
 )
 
-# 设置页可新建的预设（``KEY_PRESETS`` 的子集）。不提供 ``writer``：``email_send`` 不投到 MCP，
-# 给 MCP 客户端发信权限没有意义。
+# 工具清单（``GET /tools``）里每个工具标注的「哪些预设包含它」所用的预设集合（``KEY_PRESETS`` 的
+# 子集）。新建 / 修改密钥不再按预设，而是「基础档 + 额外写权限」（``KEY_BASES`` /
+# ``EXTRA_WRITE_SCOPES``）。
 UI_KEY_PRESETS: tuple[str, ...] = ("readonly", "handoff", "drafter")
+
+# 额外写权限的风险档（设置页据此给警示色）：会通知其他人或不可撤回的为 high。
+_HIGH_RISK_EXTRAS = frozenset({"calendar:write", "email:write"})
 
 _AUDIT_LIMIT_MAX = 100
 _PROBE_TIMEOUT_SECONDS = 5.0
@@ -47,12 +52,16 @@ def _store() -> _api_keys.ApiKeyStore:
 
 
 def _key_to_dict(rec: _api_keys.ApiKeyRecord) -> dict[str, Any]:
+    base, extra, custom = _api_keys.decompose_scopes(rec.scopes)
     return {
         "id": rec.id,
         "label": rec.label,
         "key_prefix": rec.key_prefix,
         "scopes": list(rec.scopes),
         "preset": _api_keys.preset_for_scopes(rec.scopes),
+        "base": base,
+        "extra": extra,
+        "custom": custom,
         "created_at": rec.created_at,
         "last_used_at": rec.last_used_at,
         "expires_at": rec.expires_at,
@@ -98,17 +107,56 @@ def list_keys(request: Request):
     return success_envelope({"keys": keys}, request=request, meta_extra={"count": len(keys)})
 
 
+@router.get("/scope-options")
+def scope_options(request: Request):
+    """新建 / 修改密钥弹窗的选项：两档基础权限 + 额外写权限（固定顺序，附风险档）。"""
+    return success_envelope(
+        {
+            "bases": [
+                {"id": name, "scopes": list(scopes)} for name, scopes in _api_keys.KEY_BASES.items()
+            ],
+            "extras": [
+                {"scope": scope, "risk": "high" if scope in _HIGH_RISK_EXTRAS else "low"}
+                for scope in _api_keys.EXTRA_WRITE_SCOPES
+            ],
+        },
+        request=request,
+    )
+
+
+def _scopes_from_body(raw: dict[str, Any]) -> tuple[str, ...]:
+    """body 的 ``{base, extra}`` → scope 集合；不合法 → 400 E_INVALID_ARG。"""
+    base = raw.get("base")
+    extra = raw.get("extra", [])
+    if not isinstance(base, str):
+        raise APIError("E_INVALID_ARG", f"base must be one of {' | '.join(_api_keys.KEY_BASES)}")
+    if not isinstance(extra, list) or not all(isinstance(s, str) for s in extra):
+        raise APIError("E_INVALID_ARG", "extra must be an array of scope strings")
+    try:
+        return _api_keys.compose_scopes(base, extra)
+    except ValueError as exc:
+        raise APIError("E_INVALID_ARG", str(exc)) from exc
+
+
 @router.post("/keys")
 def create_key(request: Request, body: Optional[dict[str, Any]] = Body(default=None)):
     raw = body or {}
     label = raw.get("label")
-    preset = raw.get("preset")
     if not isinstance(label, str) or not label.strip():
         raise APIError("E_INVALID_ARG", "label is required")
-    if preset not in UI_KEY_PRESETS:
-        raise APIError("E_INVALID_ARG", f"preset must be one of {' | '.join(UI_KEY_PRESETS)}")
-    record, plaintext = _store().create_key(label.strip(), scopes=_api_keys.KEY_PRESETS[preset])
+    scopes = _scopes_from_body(raw)
+    record, plaintext = _store().create_key(label.strip(), scopes=scopes)
     return success_envelope({"key": _key_to_dict(record), "plaintext": plaintext}, request=request)
+
+
+@router.patch("/keys/{key_id}/scopes")
+def update_key_scopes(key_id: str, request: Request, body: Optional[dict[str, Any]] = Body(default=None)):
+    """改权限（明文不变，外部客户端不用换请求头）。已撤销 / 不存在 → 404。写一行审计。"""
+    scopes = _scopes_from_body(body or {})
+    record = _store().update_scopes(key_id, scopes, route=f"/api/mcp-service/keys/{key_id}/scopes")
+    if record is None:
+        raise APIError("E_NOT_FOUND", f"api key {key_id!r} not found or revoked")
+    return success_envelope({"key": _key_to_dict(record)}, request=request)
 
 
 @router.post("/keys/{key_id}/rotate")

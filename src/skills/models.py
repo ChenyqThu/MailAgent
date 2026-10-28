@@ -59,6 +59,12 @@ class ToolDef(BaseModel):
     # 英文展示名，投到 MCP 的 ``title`` / ``annotations.title``。builtin 必填（闸在
     # tests/skills/test_tooldef_contract.py）；installed skill 可省，MCP 投影回落到 ``name``。
     title: Optional[str] = None
+    # MCP annotations 的两个可选覆盖（None = 沿用 ``side_effect`` 的推导值）。推导表表达不了的
+    # 例外才填：旗标 / 置顶 / 改期这类同参数重复调用结果不变的写（idempotent=True）；回复会议
+    # 邀请走 SMTP 但能再回复一次改掉（destructive=False）。readOnly / openWorld 只由
+    # ``side_effect`` 决定，不提供覆盖。
+    destructive: Optional[bool] = None
+    idempotent: Optional[bool] = None
 
 
 class SkillAvailability(BaseModel):

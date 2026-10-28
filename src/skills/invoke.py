@@ -212,6 +212,7 @@ async def invoke_skill(
     # 把本次 confirm 透传给 handler（发信/草稿 handler 据此让 service 二次校验，防御纵深）。
     # 归一成严格布尔，下游 handler 看到的恒是 True/False。
     ctx.confirm = confirm is True
+    ctx.principal = principal
 
     if tool.blocking:
         # 同步阻塞 handler（如 report_run 跑 LLM）：放线程池，别堵 event loop。

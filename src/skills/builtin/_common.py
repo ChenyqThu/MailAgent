@@ -24,6 +24,22 @@ def api_router(name: str) -> Any:
     return importlib.import_module(f"src.api.routers.{name}")
 
 
+# 前端 `matterTimelineModel.ts` 的 `MCP_ACTOR_PREFIX` 按这个前缀识别操作人，两边由
+# `frontend/tests/shared/matterTimelineModel.test.ts` 比对。
+MCP_ACTOR_PREFIX = "mcp:"
+
+
+def mcp_actor_label(ctx: Any) -> str:
+    """对外写工具记给服务层的操作人：``mcp:<密钥名>``（前端时间线渲染成「MCP · 密钥名」）。
+
+    principal 由 ``invoke_skill`` 写进 ctx。owner 自己经 ``/api/skills/invoke`` 调（本机 token /
+    CF，无密钥名）或进程内无鉴权调用时记 ``mcp:owner``。
+    """
+    principal = getattr(ctx, "principal", None)
+    label = getattr(principal, "label", None) if getattr(principal, "is_agent", False) else None
+    return f"{MCP_ACTOR_PREFIX}{label or 'owner'}"
+
+
 def _invalid(message: str) -> SkillError:
     return SkillError("E_INVALID_ARG", message, http_status=400)
 

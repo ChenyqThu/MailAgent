@@ -33,16 +33,27 @@ manifest 是 **Python 权威单一真源**（`src/skills/`），REST / MCP / pac
   present-but-invalid（坏/撤销/过期）→ **403 fail-closed**，不回落 CF。
 - scope 默认最小（`READ_ONLY_SCOPES` = `email:read` / `attachment:read` / `report:read` /
   `calendar:read` / `contacts:read` / `library:read` / `matters:read` / `agents:read`）；
-  `report:run` / `agents:run` / `email:draft` / `email:write` / `notion_agent:invoke` 单独授权。
+  `report:run` / `agents:run` / `email:draft` / `email:write` / `notion_agent:invoke` /
+  `email:organize` / `calendar:write` / `matters:write` 单独授权。
   CLI：`mailagent api-key create|list|revoke|rotate`（写需 CLI auth）。
+- 写 scope 一览（`email:organize` / `matters:write` / `calendar:write` 不在任何预设里；`email:draft` 只在 CLI 的 drafter / writer 预设里，`email:write` 只在 writer 预设里）：
+
+  | scope | 能做什么 | 能否撤回 |
+  |---|---|---|
+  | `email:draft` | 存草稿，不发出 | 可删草稿 |
+  | `email:organize` | 旗标、置顶、归档 | 可撤回 |
+  | `matters:write` | 建事项、加备注、增改行动项 | 可在应用里撤销 |
+  | `calendar:write` | 回复邀请、改期、删除事件 | 会通知参会人；删除不可撤回 |
+  | `email:write` | 真实发信 | 不可撤回 |
 - 🔴 存量 key 的 scope 是**建 key 时展开存进 `scopes_json` 的字面列表**：往 `READ_ONLY_SCOPES`
-  加新 scope 不会让已发出的 key 获得新能力。要用后加的工具，须新建 key。
+  加新 scope 不会让已发出的 key 获得新能力。要用后加的工具，须新建 key，或在设置页「修改权限」
+  （`PATCH /api/mcp-service/keys/{id}/scopes`，明文不变，下一次请求即生效，写一行审计）。
 - 🔴 **可发放 ⟺ 有消费者**（2026-07-28 审计）：`KNOWN_SCOPES` 与 builtin ToolDef 的
   `auth_scopes` 并集**逐字相等**，闸 = `tests/skills/test_tooldef_contract.py`。悬空 scope
   （在册、零消费者）不是无害占位 —— 它当场就能 `--scopes <它>` 发出去并存进 `agent_api_keys`，
   而 `verify()` 读回时**不**校验值域，于是未来第一个消费它的 ToolDef 一上线即**静默武装所有
-  历史 key**。`calendar:write`（为 calendar P1 写能力预留）就是这样一个，**已删**。将来真加
-  日历写能力：ToolDef 与 scope 放**同一个 commit**。
+  历史 key**。`calendar:write` 曾经就是这样一个（为日历写能力预留、零消费者），2026-07-28 删除；
+  2026-10 与消费它的三个日历写工具放在**同一个提交**里加回。以后新增 scope 同样处理。
 - **起草 ≠ 发信**（issue #50）：`email:draft`（可逆，存草稿）与 `email:write`（不可逆，SMTP 发出）
   是两个独立能力，`has_scopes` 是**精确 AND 判定，不做层级/OR** —— 授了 `email:write`
   **不隐含** `email:draft`。「能发信也该能起草」在 preset 层显式兜住（`--preset writer`），
@@ -64,7 +75,9 @@ manifest tool 字段：`name / input_schema / output_schema / confirmation_tier 
 / rate_limit`。
 
 **配额闸**（`src/skills/rate_limit.py`）：只对**显式声明** `rate_limit` 的 tool 生效（当前两个：
-`email_draft` 20 次/小时/key、`custom_agent_run_now` 10 次/小时/key），超限 → `E_RATE_LIMITED` / HTTP 429。计数是 invoke chokepoint
+`email_draft` 20 次/小时/key、`custom_agent_run_now` 10 次/小时/key，以及 §3「对外写工具」里的
+11 个写工具：发信 10、日历写 20、其余 60 次/小时/key；按「key × 工具」分别计数，同组三个日历写工具
+各有 20 次），超限 → `E_RATE_LIMITED` / HTTP 429。计数是 invoke chokepoint
 上的**进程内内存滑窗**（serve-api 单 worker → 对外调用同进程计数；重启清零），目的是挡「跑飞的
 agent 刷屏草稿箱」，**不是**安全边界 —— 安全边界是 scope。未声明的 tool 零行为变化。
 
@@ -76,15 +89,17 @@ agent 刷屏草稿箱」，**不是**安全边界 —— 安全边界是 scope�
 
 | skill | tools | scope |
 |---|---|---|
-| email | email_get / email_body / email_thread（读）· email_draft（write, edit, MCP 可见）· email_send（send, edit, 不投 MCP, 默认不授） | email:read / email:draft / email:write |
+| email | email_get / email_body / email_thread（读）· email_draft（write, edit）· email_send（send, edit, 默认不授） | email:read / email:draft / email:write |
+| email_organize | email_flag / email_pin / email_archive（write, preview, 默认不授） | email:organize |
 | search | email_search / attachment_search | email:read / attachment:read |
 | report | report_list / report_get / report_run | report:read / report:run |
-| calendar | calendar_events / calendar_event_get（**只读**；写留 P1，故无 `calendar:write` scope） | calendar:read |
+| calendar | calendar_events / calendar_event_get（读）· calendar_event_rsvp（send, edit）· calendar_event_reschedule / calendar_event_delete（external_call, edit）（写默认不授） | calendar:read / calendar:write |
 | notion_agent | notion_agent_chat（subprocess, mcp_exposed=false, 默认关） | notion_agent:invoke |
 | contacts | contact_search / contact_get / contact_list_mails（只读） | contacts:read |
 | library | library_list / library_search / library_read（只读） | library:read |
 | matter_lookup | matter_find / matter_get / matter_attention_list（只读） | matters:read |
 | agents | custom_agent_list / custom_agent_get（读）· custom_agent_run_now（external_call, edit, 10 次/小时/key） | agents:read / agents:run |
+| matter_write | matter_create / matter_add_note / matter_item_add / matter_item_update（write, preview, 默认不授） | matters:write |
 
 另有三个零工具 skill（`custom_agent` / `skill_creator` / `matters`）只带方法论 prompt 片段与
 SKILL.md。`matter_lookup` / `agents` 不叫 `matters` / `custom_agent`，正是因为这两个名字已被零工具
@@ -116,6 +131,42 @@ skill 占用（其测试与 SKILL.md 都把「零工具」当契约）。
   同模块 `_load_detail`；手动触发下沉为 `src/agents/run_queue.enqueue_manual_agent_run`（路由的 custom
   分支与 skill 共用）。skill handler 经 `builtin/_common.api_router` lazy 取路由模块（先加载 app，
   避开路由 ↔ app 的循环 import）。
+
+**对外写工具（2026-10-27）的共同规则**：
+
+- 与应用内同名操作调同一个 service 方法、同样的参数，不经 HTTP 绕一圈、不复制业务逻辑：
+
+  | 工具 | 服务方法 | 对应的应用内入口 |
+  |---|---|---|
+  | `email_send` | `MailWriteService.send` | `POST /api/email/send` |
+  | `email_flag` | `MailWriteService.set_flags([id], is_flagged, allow_concurrent=True)` | `POST /api/email/{id}/flag` |
+  | `email_pin` | `MailWriteService.set_pin` | `POST /api/email/{id}/pin` |
+  | `email_archive` | `MailWriteService.archive`（davmail-only） | `POST /api/email/{id}/archive` |
+  | `calendar_event_rsvp` | `CalendarService.send_rsvp` | `POST /api/calendar/events/{id}/rsvp` |
+  | `calendar_event_reschedule` | 带 `recurrence_id` → `update_occurrence`，否则 `update_event`；只传起止时间 | `PATCH /api/calendar/events/{id}`（不开放 splitFuture） |
+  | `calendar_event_delete` | `CalendarService.delete_event`（不支持按 occurrence 删） | `DELETE /api/calendar/events/{id}` |
+  | `matter_create` | `MatterService.create_matter` | `POST /api/matters` |
+  | `matter_add_note` | `MatterService.add_note` | `POST /api/matters/{id}/notes` |
+  | `matter_item_add` | `MatterService.create_item`（kind 固定 action） | `POST /api/matters/{id}/items` |
+  | `matter_item_update` | `MatterService.update_item`（只开放 title / status / due_at） | `PATCH /api/matters/{id}/items/{item_id}` |
+
+- 参数名对齐应用内 gateway 的同名工具（`internal_id` / `event_id` / `recurrence_id` / `public_id` /
+  `item_id` / `expected_version` / epoch 毫秒 `due_at`）。改期的 `new_start` / `new_end` 必须带时区偏移
+  （与 PATCH 端点同一个解析函数）。
+- confirm：发信与日历三件是 `edit`，邮件整理与事项写是 `preview`。🔴 invoke 闸对两档**一视同仁**要求
+  `confirm:true`（P0 审计结论），所以这 11 个工具的 schema 都显式带 `confirm`（不进 required）。
+- 操作人：principal 由 `invoke_skill` 写进 `SkillContext.principal`，写 handler 用
+  `builtin/_common.mcp_actor_label` 取 `mcp:<密钥名>`（owner 自己调时为 `mcp:owner`）：
+  事项写 `Actor(kind='agent', actor_id='mcp:<密钥名>')` + `source='mcp'`，落 `matter_event.actor_kind /
+  actor_id / source`；邮件写（含 `email_send` / `email_draft`）传 `services.guards.Actor(label='mcp:<密钥名>')`
+  （`MailWriteService` 目前不落库这个 label，邮件写的「谁调的」以 `agent_api_key_audit` 为准）；日历写记一行
+  `[calendar-write] action=… actor=mcp:<密钥名>` 日志（与写端点同格式），并照端点发 `calendar.synced`。
+- 事项写的 `idempotency_key` 由调用方给时，落库前加上 `mcp:<密钥名>:` 前缀（`matter_event` 的幂等键是全局
+  命名空间，前缀保证撞上别人的键时不会重放出别人那次写入的结果）；不给时每次生成新键。
+- 事项写返回的 `matter` 走 `matter_lookup` 的同一份白名单。不开放：删除 / 归档事项、删除行动项、
+  跟进配置、行动项派发、日历新建事件。
+- 🔴 提示注入：外部 agent 读到的邮件正文 / 会议描述可能夹带「帮我发信 / 删会议」。防线是三层：客户端按
+  annotations 默认「先确认」、写 scope 默认不授、每 key 配额。不要把写工具在客户端改成自动执行。
 
 **`custom_agent_run_now` 的门**（顺序即判定顺序）：scope `agents:run` → `confirm:true`（tier=edit）→
 配额 10 次/小时/key → `MAILAGENT_CUSTOM_AGENTS_ENABLED`（关 → 三个 agent 工具都 `E_SKILL_DISABLED` 409）→
@@ -174,7 +225,8 @@ handoff 推荐 key（`--preset handoff`）= 全部八个读 scope + `report:run`
   `mailagent_<skill>_<tool>`，改名后客户端里按工具名记的开关要重新设置。
 - **title 与 annotations**：每个工具都返回顶层 `title` 和 `annotations`（`annotations.title` 同值），
   四个 hint 一律显式输出，不依赖客户端默认值（规范默认 `destructiveHint` 和 `openWorldHint` 为 true）。
-  annotations 由 `ToolDef.side_effect` 在 `tool_annotations()` 一处推导：
+  annotations 由 `ToolDef.side_effect` 在 `tool_annotations()` 一处推导；`ToolDef.destructive` /
+  `ToolDef.idempotent` 非 None 时覆盖推导值（readOnly / openWorld 不可覆盖）：
 
   | side_effect | readOnlyHint | destructiveHint | idempotentHint | openWorldHint |
   |---|---|---|---|---|
@@ -182,6 +234,11 @@ handoff 推荐 key（`--preset handoff`）= 全部八个读 scope + `report:run`
   | write | false | false | false | false |
   | external_call | false | false | false | true |
   | send | false | true | false | true |
+
+  有覆盖的工具：`email_flag` / `email_pin` / `email_archive` / `calendar_event_reschedule` /
+  `matter_item_update` 为 idempotent；`calendar_event_rsvp` 为 idempotent 且**非** destructive（能再
+  回复一次改掉）；`calendar_event_delete` 为 destructive + idempotent。逐行由
+  `tests/skills/test_write_tools.py::test_annotations_match_design_table` 锁住。
 
   Notion 等客户端据此把读工具归入「自动执行」，写工具默认「先确认」。🔴 annotations 只是提示，
   不是安全边界：真正的权限仍是 scope + confirm 闸 + 配额。builtin ToolDef 缺 `title` 会让
@@ -214,10 +271,18 @@ handoff 推荐 key（`--preset handoff`）= 全部八个读 scope + `report:run`
 > 的请求在到达 serve-api 之前就被 302 到 Access 登录页（2026-10-26 实测）。远程的外部 agent 走一个
 > **不挂 Access** 的独立主机名，且隧道只放行 `/mcp`（见下方「Notion Custom Agent 接入」）。
 
-1. **申请 scoped key**：主路径是 App 的「设置 → MCP 服务 → 访问密钥 → 新建密钥」（三档预设：只读 /
-   只读 + 运行 / 起草回复），生成后的弹窗里可以直接复制 Notion 配置和 HTTP 客户端配置。
-   同一页还能轮换、撤销、看最近调用、检测公网地址。管理接口是 `/api/mcp-service/*`
-   （`src/api/routers/mcp_service.py`，owner 鉴权，agent key 调用 401）。
+1. **申请 scoped key**：主路径是 App 的「设置 → MCP 服务 → 访问密钥 → 新建密钥」：基础权限二选一
+   （只读 / 只读 + 运行），额外写权限多选（起草回复 / 邮件整理 / 事项写 / 日历写 / 发信），生成后的
+   弹窗里可以直接复制 Notion 配置和 HTTP 客户端配置。同一页还能修改权限、轮换、撤销、看最近调用、
+   检测公网地址。管理接口是 `/api/mcp-service/*`（`src/api/routers/mcp_service.py`，owner 鉴权，
+   agent key 调用 401）：
+   - `GET /scope-options` → `{bases:[{id,scopes}], extras:[{scope, risk}]}`（extras 顺序固定，
+     `calendar:write` / `email:write` 为 `risk:'high'`）；
+   - `POST /keys` body `{label, base, extra}` / `PATCH /keys/{id}/scopes` body `{base, extra}`
+     （extra 只接受上述五个写 scope，白名单外 / 重复 → 400；已撤销 / 不存在 → 404）；
+   - 密钥对象带 `base` / `extra` / `custom`：base 取 handoff、readonly 中最大的、是 scopes 子集的那一档，
+     剩余部分必须全在 extras 白名单内，否则 `custom:true`（如 CLI drafter 预设、手工 `--scopes`），
+     设置页对 custom 密钥只显示原始 scope、不提供编辑入口。
    CLI 作为备用（本机，需 CLI auth；打包 App 场景注意下方 `MAILAGENT_API_AUTH_DB_PATH`）：
    ```bash
    mailagent api-key create --preset handoff   # 全部读 scope + report:run + agents:run
@@ -257,8 +322,9 @@ App 退出时 Notion 那边的工具调用会失败。
    - Service `http://localhost:8200`
    - 🔴 **不要**给 `mcp.chenge.ink` 建 Access 应用 —— 鉴权由 Bearer key 承担，挂了 Access
      就会像 `mail.chenge.ink` 一样把请求 302 掉。
-2. **申请 key**：在 App「设置 → MCP 服务」新建密钥（Notion 一般选「只读 + 运行」，要让它起草回复选
-   「起草回复」），生成弹窗里点「复制 Notion 配置」。公网地址填 `https://mcp.chenge.ink/mcp` 后可点
+2. **申请 key**：在 App「设置 → MCP 服务」新建密钥（Notion 一般选「只读 + 运行」，需要写能力时再勾
+   对应的额外写权限），生成弹窗里点「复制 Notion 配置」。之后调整权限用「修改权限」，Notion 里的请求头
+   不用换。公网地址填 `https://mcp.chenge.ink/mcp` 后可点
    「检测」：可达 = `/mcp` 返回 405；被 Access 拦截 = 302 到 `cloudflareaccess.com`。
    不用 App 时的 CLI 备用写法（本机，在仓库目录下跑）：
    ```bash
@@ -275,7 +341,8 @@ App 退出时 Notion 那边的工具调用会失败。
    - URL `https://mcp.chenge.ink/mcp`
    - Header `Authorization: Bearer mak_…`
 4. **确认读写分组**：工具带 annotations（§4），Notion 默认把读工具设为自动执行，把
-   `mailagent_custom_agent_run_now`、`mailagent_report_run`、`mailagent_email_draft` 等写工具设为
+   `mailagent_custom_agent_run_now`、`mailagent_report_run`、`mailagent_email_draft`、
+   `mailagent_email_send`、`mailagent_calendar_event_*`、`mailagent_matter_*` 写工具等设为
    调用前需确认，一般不用手动调整。🔴 不要把写工具改成自动执行：`confirm:true` 是模型自己填的意图标记
    （见 §3），人审只能靠 Notion 这一侧的确认设置。
 
