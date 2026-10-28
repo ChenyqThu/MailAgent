@@ -212,6 +212,9 @@ export type {
 export type {
   McpKeyPresetName,
   McpUiKeyPreset,
+  McpKeyBase,
+  McpScopeRisk,
+  McpScopeOptions,
   McpServiceStatus,
   McpApiKey,
   McpKeyWithPlaintext,

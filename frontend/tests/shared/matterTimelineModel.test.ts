@@ -13,6 +13,7 @@ import {
   GROUPED_TEMPLATE_KINDS,
   groupTimelineEvents,
   matterEventTier,
+  MCP_ACTOR_PREFIX,
   narrateEvent,
   narrateGroupEntries,
   narrateTimelineGroup,
@@ -1067,19 +1068,25 @@ describe('locale 覆盖', () => {
     // 实测到的坑：`agent_run` / `matter_followup` 从来没进过 locale，Agent 跑出来的
     // 每条事件底下都在显示 "matters.eventSource.agent_run"。判据必须从 Python 抽，
     // 不能照抄一份清单 —— 抄的那份不会跟着后端新增的 source 走。
-    const dir = resolve(__dirname, '../../../src/matters')
+    // src/skills/builtin 也要扫：对外 MCP 写工具（matter_write.py）记 source="mcp"。
     const sources = new Set<string>()
-    for (const name of readdirSync(dir)) {
-      if (!name.endsWith('.py')) continue
-      for (const [, value] of readFileSync(resolve(dir, name), 'utf-8').matchAll(
-        /\bsource=["']([a-z][a-z0-9_]*)["']/g
-      )) {
-        sources.add(value)
+    for (const dir of [
+      resolve(__dirname, '../../../src/matters'),
+      resolve(__dirname, '../../../src/skills/builtin')
+    ]) {
+      for (const name of readdirSync(dir)) {
+        if (!name.endsWith('.py')) continue
+        for (const [, value] of readFileSync(resolve(dir, name), 'utf-8').matchAll(
+          /\bsource=["']([a-z][a-z0-9_]*)["']/g
+        )) {
+          sources.add(value)
+        }
       }
     }
     // 🔴 抽取器抽空时下面的循环会零轮通过 —— 那是最坏的失效形态。
     expect(sources.size).toBeGreaterThanOrEqual(4)
     expect(sources).toContain('agent_run')
+    expect(sources).toContain('mcp')
     for (const source of sources) {
       for (const [locale, bundle] of [
         ['zh-CN', zh],
@@ -1089,6 +1096,14 @@ describe('locale 覆盖', () => {
         expect(labels[source]?.trim(), `${locale} 缺 eventSource.${source}`).toBeTruthy()
       }
     }
+  })
+
+  it('MCP 操作人前缀与后端 MCP_ACTOR_PREFIX 一致', () => {
+    const py = readFileSync(resolve(__dirname, '../../../src/skills/builtin/_common.py'), 'utf-8')
+    const match = py.match(/^MCP_ACTOR_PREFIX\s*=\s*["']([^"']+)["']/m)
+    // 🔴 抽不到必须红：抽空时比较会退化成 undefined !== 'mcp:' 之外的任何假绿。
+    expect(match, '_common.py 里找不到 MCP_ACTOR_PREFIX').not.toBeNull()
+    expect(match?.[1]).toBe(MCP_ACTOR_PREFIX)
   })
 })
 

@@ -128,6 +128,17 @@ describe('MatterProgressLane', () => {
     expect(within(rows()[0]).getByText('Agent')).toBeTruthy()
   })
 
+  it('外部 Agent 经 MCP 写的条目，操作人显示「MCP · 密钥名」，不挂跟进 Agent 的 pill', () => {
+    renderLane([
+      entry({ title: 'MCP 写的', actor_kind: 'agent', actor_id: 'mcp:Notion Agent' }),
+      entry({ title: '用户写的', actor_kind: 'user', actor_id: 'user-1' })
+    ])
+    const [mcpRow, userRow] = rows()
+    expect(within(mcpRow).getByText('· MCP · Notion Agent')).toBeTruthy()
+    expect(within(mcpRow).queryByText('Agent')).toBeNull()
+    expect(within(userRow).getByText('· 你')).toBeTruthy()
+  })
+
   it('🔴 操作事件不进这一屏 —— 进展不再是事件的降级映射', () => {
     renderLane(
       [entry({ title: '把合同发给对方法务' })],

@@ -40,6 +40,7 @@ import { dayLabelOf, groupByDay, type Translate } from './matterDayGroups'
 import { MatterNarrativeBody } from './MatterNarrativeBody'
 import {
   groupTimelineEvents,
+  mcpActorName,
   narrateEvent,
   narrateTimelineGroup,
   readChanges,
@@ -300,6 +301,7 @@ function AuditRow({
   const icon = createElement(visual.icon, { size: 12 })
   const sentence = narrateTimelineGroup(group, t)
   const mergedCount = group.events.length
+  const mcpActor = mcpActorName(head.actor_id)
 
   return (
     <div className="relative flex gap-3 py-2" data-testid="matter-audit-entry">
@@ -325,7 +327,11 @@ function AuditRow({
           <time className="font-mono text-micro text-ink-fg-3">
             {new Date(head.happened_at).toLocaleString()}
           </time>
-          {head.actor_kind === 'agent' ? (
+          {mcpActor != null ? (
+            <span className="text-micro text-ink-fg-3">
+              · {t('matters.eventActor.mcp', { name: mcpActor })}
+            </span>
+          ) : head.actor_kind === 'agent' ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-ai/10 px-1.5 py-0.5 text-micro text-ai">
               <Sparkles size={9} />
               {t('matters.timeline.agent')}

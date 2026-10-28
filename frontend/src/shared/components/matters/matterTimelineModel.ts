@@ -30,6 +30,17 @@ import type { MatterEvent } from '@shared/api/types/matter'
 /** 只要 key + 插值，故不引 i18next 的 TFunction 类型（那会把纯模块拽上 react-i18next）。 */
 export type Translate = (key: string, options?: Record<string, unknown>) => string
 
+/** 外部 Agent 经 MCP 写事项时，后端把操作人记成 `mcp:<密钥名>`（`src/skills/builtin/_common.py`
+ *  的 `MCP_ACTOR_PREFIX`，两边由 matterTimelineModel.test.ts 比对）。 */
+export const MCP_ACTOR_PREFIX = 'mcp:'
+
+/** 是 MCP 操作人时返回密钥名，否则 null。 */
+export function mcpActorName(actorId: string | null): string | null {
+  return actorId != null && actorId.startsWith(MCP_ACTOR_PREFIX)
+    ? actorId.slice(MCP_ACTOR_PREFIX.length)
+    : null
+}
+
 /** 业务级默认显示，审计级默认收起 —— 混在一起正是 owner 说的「像 audit log」的根源。 */
 export type MatterEventTier = 'business' | 'audit'
 

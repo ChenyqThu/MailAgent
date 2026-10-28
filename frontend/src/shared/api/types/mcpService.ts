@@ -8,8 +8,19 @@
  *  列表里仍可能出现。 */
 export type McpKeyPresetName = 'readonly' | 'handoff' | 'drafter' | 'writer'
 
-/** 设置页可新建的三档（`writer` 不提供：`email_send` 不投 MCP）。 */
+/** `GET /tools` 里每个工具的 `presets` 取值（后端 `UI_KEY_PRESETS`）。 */
 export type McpUiKeyPreset = 'readonly' | 'handoff' | 'drafter'
+
+/** 设置页新建 / 修改权限时的基础档。 */
+export type McpKeyBase = 'readonly' | 'handoff'
+
+export type McpScopeRisk = 'low' | 'high'
+
+/** `GET /scope-options`：基础档两项 + 可额外勾选的写权限（顺序即展示顺序）。 */
+export interface McpScopeOptions {
+  bases: { id: McpKeyBase; scopes: string[] }[]
+  extras: { scope: string; risk: McpScopeRisk }[]
+}
 
 export interface McpServiceStatus {
   /** 本机 MCP 端点完整地址（含 `/mcp`）。 */
@@ -25,8 +36,13 @@ export interface McpApiKey {
   label: string
   key_prefix: string
   scopes: string[]
-  /** scopes 与某个预设逐字相等时为该名，否则 null（显示「自定义」）。 */
+  /** scopes 与某个预设逐字相等时为该名，否则 null。 */
   preset: McpKeyPresetName | null
+  /** scopes 拆成「基础档 + 额外写权限」；拆不开时 `custom=true`、`base=null`、`extra=[]`。 */
+  base: McpKeyBase | null
+  extra: string[]
+  /** 由 CLI `--scopes` 等建出、拆不成基础档 + 额外权限的组合：设置页不提供修改权限。 */
+  custom: boolean
   created_at: number
   last_used_at: number | null
   expires_at: number | null
@@ -82,8 +98,11 @@ export interface McpProbeResult {
 
 export interface McpServiceApi {
   status(): Promise<McpServiceStatus>
+  getScopeOptions(): Promise<McpScopeOptions>
   listKeys(): Promise<McpApiKey[]>
-  createKey(label: string, preset: McpUiKeyPreset): Promise<McpKeyWithPlaintext>
+  createKey(label: string, base: McpKeyBase, extra: string[]): Promise<McpKeyWithPlaintext>
+  /** 改已有密钥的权限：明文不变，下一次请求即按新权限生效。 */
+  updateKeyScopes(id: string, base: McpKeyBase, extra: string[]): Promise<McpApiKey>
   rotateKey(id: string): Promise<McpKeyWithPlaintext>
   revokeKey(id: string): Promise<McpApiKey>
   tools(): Promise<McpExposedTool[]>

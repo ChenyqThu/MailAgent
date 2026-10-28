@@ -4128,6 +4128,10 @@
         "rotateFailed": "轮换密钥失败",
         "revokeFailed": "撤销密钥失败",
         "createFailed": "新建密钥失败",
+        "editScopes": "修改权限",
+        "scopesUpdated": "已更新「{label}」的权限",
+        "updateScopesFailed": "修改权限失败",
+        "customScopes": "权限：{scopes}。这个密钥由命令行创建，权限组合无法在这里修改。",
         "state": {
           "revoked": "已撤销",
           "expired": "已过期"
@@ -4142,13 +4146,6 @@
           "label": "只读 + 运行",
           "desc": "在只读基础上，还可以生成报告、手动运行自定义 Agent。运行会消耗模型额度。"
         },
-        "drafter": {
-          "label": "起草回复",
-          "desc": "只能查看邮件和附件，并把回复存成草稿。不能发信。"
-        },
-        "writer": {
-          "label": "起草并发信"
-        },
         "custom": "自定义"
       },
       "create": {
@@ -4156,8 +4153,69 @@
         "desc": "给密钥起个名字，方便以后认出是哪个 Agent 在用。",
         "nameLabel": "名称",
         "namePlaceholder": "例如 Notion Agent",
-        "presetLabel": "权限",
+        "baseLabel": "基础权限",
+        "extraLabel": "额外写权限",
         "submit": "新建"
+      },
+      "editScopes": {
+        "title": "修改「{label}」的权限",
+        "desc": "保存后立即生效。密钥本身不变，已配置的客户端不用更换。",
+        "submit": "保存"
+      },
+      "scopes": {
+        "email_read": {
+          "label": "读邮件"
+        },
+        "attachment_read": {
+          "label": "读附件"
+        },
+        "report_read": {
+          "label": "查看报告"
+        },
+        "report_run": {
+          "label": "生成报告"
+        },
+        "calendar_read": {
+          "label": "读日历"
+        },
+        "contacts_read": {
+          "label": "读通讯录"
+        },
+        "library_read": {
+          "label": "读资料库"
+        },
+        "matters_read": {
+          "label": "读事项"
+        },
+        "agents_read": {
+          "label": "查看自定义 Agent"
+        },
+        "agents_run": {
+          "label": "运行自定义 Agent"
+        },
+        "notion_agent_invoke": {
+          "label": "调用 Notion Agent"
+        },
+        "email_draft": {
+          "label": "起草回复",
+          "desc": "存成草稿，不会发出。"
+        },
+        "email_organize": {
+          "label": "邮件整理",
+          "desc": "设旗标、置顶、归档，可以撤回。"
+        },
+        "matters_write": {
+          "label": "事项写",
+          "desc": "建事项、加备注、新增和修改行动项。"
+        },
+        "calendar_write": {
+          "label": "日历写",
+          "desc": "回复邀请、改期、删除事件，会通知参会人。"
+        },
+        "email_write": {
+          "label": "发信",
+          "desc": "真实发出邮件，无法撤回。外部 Agent 读到的邮件可能夹带指令，建议在客户端保持「先确认」。"
+        }
       },
       "revealed": {
         "title": "密钥已生成",
@@ -4182,13 +4240,10 @@
       },
       "tools": {
         "title": "对外工具",
-        "helper": "外部 Agent 能看到的工具。每个密钥只能看到自己权限内的那部分。",
-        "group": {
-          "read": "读取 · {count}",
-          "write": "写入 · {count}"
-        },
-        "scopes": "需要 {scopes}",
-        "presets": "可用于：{presets}",
+        "helper": "外部 Agent 能看到的工具，按所需权限分组。每个密钥只能看到自己权限内的那部分；写入类工具建议在客户端设为「先确认」。",
+        "groupTitle": "{name} · {count}",
+        "groupKeys": "{count, plural, =0 {没有有效密钥拥有此权限} other {# 个有效密钥拥有此权限}}",
+        "noScope": "无需权限",
         "suggestAuto": "建议：直接执行",
         "suggestAsk": "建议：先确认"
       },
@@ -6745,7 +6800,8 @@
     "eventActor": {
       "user": "你",
       "agent": "跟进 Agent",
-      "system": "系统"
+      "system": "系统",
+      "mcp": "MCP · {name}"
     },
     "eventSource": {
       "desktop_ui": "桌面端",
@@ -6759,7 +6815,8 @@
       "matter_followup": "跟进发现",
       "matter_review": "提案评审",
       "matter_agenda": "关注巡检",
-      "matter_retry": "失败重试"
+      "matter_retry": "失败重试",
+      "mcp": "外部 Agent（MCP）"
     },
     "toast": {
       "saveFailed": "事项更新失败",

@@ -35,6 +35,7 @@ import { useMattersApi } from './hooks'
 import { dayLabelOf, groupByDay, type Translate } from './matterDayGroups'
 import { MatterAuditLogModal } from './MatterAuditLogModal'
 import { MatterNarrativeBody } from './MatterNarrativeBody'
+import { mcpActorName } from './matterTimelineModel'
 import { refreshMatter, useMatterMutation } from './matterMutation'
 import { MATTER_PROGRESS_KIND_ICONS, MATTER_PROGRESS_KIND_TONE_CLASS } from './matterProgressVocab'
 import { useMatterUndoToast } from './useMatterUndoToast'
@@ -264,6 +265,7 @@ function ProgressRow({
   // 🔴 成员索引而不是查表函数：eslint `react-hooks/static-components` 不接受
   // `const Icon = someFn(...)`（同 matterVocab.ts 的先例）；`createElement` 绕开的是写法。
   const icon = createElement(MATTER_PROGRESS_KIND_ICONS[entry.kind], { size: 12 })
+  const mcpActor = mcpActorName(entry.actor_id)
   return (
     <div
       className="group/progress relative flex gap-[11px] py-[7px]"
@@ -314,7 +316,11 @@ function ProgressRow({
           <time className="font-mono text-micro text-ink-fg-3">
             {new Date(entry.happened_at).toLocaleString(locale)}
           </time>
-          {entry.actor_kind === 'agent' ? (
+          {mcpActor != null ? (
+            <span className="text-micro text-ink-fg-3">
+              · {t('matters.eventActor.mcp', { name: mcpActor })}
+            </span>
+          ) : entry.actor_kind === 'agent' ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-ai/10 px-1.5 py-0.5 text-micro text-ai">
               <Sparkles size={9} />
               {t('matters.timeline.agent')}

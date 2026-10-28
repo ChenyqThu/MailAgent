@@ -14,11 +14,12 @@ import type {
   McpApiKey,
   McpAuditEntry,
   McpExposedTool,
+  McpKeyBase,
   McpKeyWithPlaintext,
   McpProbeResult,
+  McpScopeOptions,
   McpServiceApi,
-  McpServiceStatus,
-  McpUiKeyPreset
+  McpServiceStatus
 } from './types/mcpService'
 
 const PREFIX = '/mcp-service'
@@ -29,14 +30,27 @@ export function createMcpServiceApi(baseUrl: string): McpServiceApi {
       return request<McpServiceStatus>(baseUrl, 'GET', `${PREFIX}/status`)
     },
 
+    getScopeOptions(): Promise<McpScopeOptions> {
+      return request<McpScopeOptions>(baseUrl, 'GET', `${PREFIX}/scope-options`)
+    },
+
     listKeys(): Promise<McpApiKey[]> {
       return request<{ keys: McpApiKey[] }>(baseUrl, 'GET', `${PREFIX}/keys`).then((d) => d.keys)
     },
 
-    createKey(label: string, preset: McpUiKeyPreset): Promise<McpKeyWithPlaintext> {
+    createKey(label: string, base: McpKeyBase, extra: string[]): Promise<McpKeyWithPlaintext> {
       return request<McpKeyWithPlaintext>(baseUrl, 'POST', `${PREFIX}/keys`, {
-        body: { label, preset }
+        body: { label, base, extra }
       })
+    },
+
+    updateKeyScopes(id: string, base: McpKeyBase, extra: string[]): Promise<McpApiKey> {
+      return request<{ key: McpApiKey }>(
+        baseUrl,
+        'PATCH',
+        `${PREFIX}/keys/${encodeURIComponent(id)}/scopes`,
+        { body: { base, extra } }
+      ).then((d) => d.key)
     },
 
     rotateKey(id: string): Promise<McpKeyWithPlaintext> {

@@ -197,6 +197,27 @@ describe('MatterAuditLogModal', () => {
     expect(screen.getAllByTestId('matter-audit-day')).toHaveLength(1)
   })
 
+  it('外部 Agent 经 MCP 的操作显示「MCP · 密钥名」；其他 actor 不受影响', () => {
+    open([
+      ev({
+        kind: 'matter_created',
+        actor_kind: 'agent',
+        actor_id: 'mcp:Notion Agent',
+        happened_at: T0
+      }),
+      ev({
+        kind: 'matter_created',
+        actor_kind: 'system',
+        actor_id: null,
+        happened_at: T0 - 600_000
+      })
+    ])
+    const [mcpRow, systemRow] = rows()
+    expect(within(mcpRow).getByText('· MCP · Notion Agent')).toBeTruthy()
+    expect(within(mcpRow).queryByText('Agent')).toBeNull()
+    expect(within(systemRow).getByText('· 系统')).toBeTruthy()
+  })
+
   it('actor 四档筛选', () => {
     open([
       ev({ kind: 'matter_created', actor_kind: 'user' }),

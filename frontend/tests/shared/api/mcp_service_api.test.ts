@@ -61,10 +61,33 @@ test('listKeys 解 {keys}；tools 解 {tools}；audit 解 {entries} 并带 limit
   expect(call(2).url).toBe('/api/mcp-service/audit?limit=20')
 })
 
+test('getScopeOptions → GET /api/mcp-service/scope-options（不解包）', async () => {
+  const data = {
+    bases: [{ id: 'readonly', scopes: ['email:read'] }],
+    extras: [{ scope: 'email:draft', risk: 'low' }]
+  }
+  fetchMock.mockResolvedValue(envelopeResponse(data))
+  await expect(api.getScopeOptions()).resolves.toEqual(data)
+  expect(call()).toMatchObject({ url: '/api/mcp-service/scope-options', method: 'GET' })
+})
+
+test('updateKeyScopes → PATCH /keys/{id}/scopes，body {base, extra}，解 {key}', async () => {
+  fetchMock.mockResolvedValue(envelopeResponse({ key: { id: 'a/b', base: 'handoff' } }))
+  await expect(api.updateKeyScopes('a/b', 'handoff', ['email:draft'])).resolves.toEqual({
+    id: 'a/b',
+    base: 'handoff'
+  })
+  expect(call()).toEqual({
+    url: '/api/mcp-service/keys/a%2Fb/scopes',
+    method: 'PATCH',
+    body: { base: 'handoff', extra: ['email:draft'] }
+  })
+})
+
 test('createKey / rotateKey / revokeKey / probe 的 wire 形状', async () => {
   const withPlain = { key: { id: 'a/b' }, plaintext: 'mak_x' }
   fetchMock.mockResolvedValueOnce(envelopeResponse(withPlain))
-  await expect(api.createKey('Notion', 'drafter')).resolves.toEqual(withPlain)
+  await expect(api.createKey('Notion', 'handoff', ['email:draft'])).resolves.toEqual(withPlain)
   fetchMock.mockResolvedValueOnce(envelopeResponse(withPlain))
   await api.rotateKey('a/b')
   fetchMock.mockResolvedValueOnce(envelopeResponse({ key: { id: 'a/b', active: false } }))
@@ -75,7 +98,7 @@ test('createKey / rotateKey / revokeKey / probe 的 wire 形状', async () => {
   expect(call(0)).toEqual({
     url: '/api/mcp-service/keys',
     method: 'POST',
-    body: { label: 'Notion', preset: 'drafter' }
+    body: { label: 'Notion', base: 'handoff', extra: ['email:draft'] }
   })
   expect(call(1)).toMatchObject({ url: '/api/mcp-service/keys/a%2Fb/rotate', method: 'POST' })
   expect(call(2)).toMatchObject({ url: '/api/mcp-service/keys/a%2Fb/revoke', method: 'POST' })

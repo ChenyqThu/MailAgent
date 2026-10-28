@@ -4128,6 +4128,10 @@
         "rotateFailed": "Failed to rotate key",
         "revokeFailed": "Failed to revoke key",
         "createFailed": "Failed to create key",
+        "editScopes": "Edit permissions",
+        "scopesUpdated": "Updated permissions for “{label}”",
+        "updateScopesFailed": "Failed to update permissions",
+        "customScopes": "Permissions: {scopes}. This key was created from the command line; its permission set cannot be changed here.",
         "state": {
           "revoked": "revoked",
           "expired": "expired"
@@ -4142,13 +4146,6 @@
           "label": "Read + run",
           "desc": "Everything in Read only, plus generating reports and running custom agents manually. Runs use model quota."
         },
-        "drafter": {
-          "label": "Draft replies",
-          "desc": "Can view mail and attachments and save replies as drafts. Cannot send mail."
-        },
-        "writer": {
-          "label": "Draft and send"
-        },
         "custom": "Custom"
       },
       "create": {
@@ -4156,8 +4153,69 @@
         "desc": "Name the key so you can tell which agent is using it.",
         "nameLabel": "Name",
         "namePlaceholder": "e.g. Notion Agent",
-        "presetLabel": "Permissions",
+        "baseLabel": "Base permissions",
+        "extraLabel": "Additional write permissions",
         "submit": "Create"
+      },
+      "editScopes": {
+        "title": "Edit permissions for “{label}”",
+        "desc": "Changes take effect immediately. The key itself stays the same, so configured clients do not need updating.",
+        "submit": "Save"
+      },
+      "scopes": {
+        "email_read": {
+          "label": "Read mail"
+        },
+        "attachment_read": {
+          "label": "Read attachments"
+        },
+        "report_read": {
+          "label": "View reports"
+        },
+        "report_run": {
+          "label": "Generate reports"
+        },
+        "calendar_read": {
+          "label": "Read calendar"
+        },
+        "contacts_read": {
+          "label": "Read contacts"
+        },
+        "library_read": {
+          "label": "Read library"
+        },
+        "matters_read": {
+          "label": "Read matters"
+        },
+        "agents_read": {
+          "label": "View custom agents"
+        },
+        "agents_run": {
+          "label": "Run custom agents"
+        },
+        "notion_agent_invoke": {
+          "label": "Call Notion Agent"
+        },
+        "email_draft": {
+          "label": "Draft replies",
+          "desc": "Saves drafts. Nothing is sent."
+        },
+        "email_organize": {
+          "label": "Organize mail",
+          "desc": "Flag, pin and archive. Can be undone."
+        },
+        "matters_write": {
+          "label": "Edit matters",
+          "desc": "Create matters, add notes, add and update action items."
+        },
+        "calendar_write": {
+          "label": "Edit calendar",
+          "desc": "Reply to invites, reschedule and delete events. Attendees are notified."
+        },
+        "email_write": {
+          "label": "Send mail",
+          "desc": "Sends real email and cannot be undone. Mail an external agent reads may carry injected instructions, so keep \"ask first\" on in the client."
+        }
       },
       "revealed": {
         "title": "Key created",
@@ -4182,13 +4240,10 @@
       },
       "tools": {
         "title": "Exposed tools",
-        "helper": "Tools external agents can see. Each key only sees the tools within its permissions.",
-        "group": {
-          "read": "Read · {count}",
-          "write": "Write · {count}"
-        },
-        "scopes": "Requires {scopes}",
-        "presets": "Available to: {presets}",
+        "helper": "Tools external agents can see, grouped by the permission they need. Each key only sees the tools within its permissions; set write tools to \"ask first\" in the client.",
+        "groupTitle": "{name} · {count}",
+        "groupKeys": "{count, plural, =0 {No active key has this permission} one {# active key has this permission} other {# active keys have this permission}}",
+        "noScope": "No permission required",
         "suggestAuto": "Suggested: run directly",
         "suggestAsk": "Suggested: ask first"
       },
@@ -6745,7 +6800,8 @@
     "eventActor": {
       "user": "You",
       "agent": "Follow-up agent",
-      "system": "System"
+      "system": "System",
+      "mcp": "MCP · {name}"
     },
     "eventSource": {
       "desktop_ui": "Desktop",
@@ -6759,7 +6815,8 @@
       "matter_followup": "Follow-up discovery",
       "matter_review": "Proposal review",
       "matter_agenda": "Attention sweep",
-      "matter_retry": "Retry"
+      "matter_retry": "Retry",
+      "mcp": "External agent (MCP)"
     },
     "toast": {
       "saveFailed": "Could not update matter",

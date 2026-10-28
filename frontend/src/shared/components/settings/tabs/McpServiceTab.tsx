@@ -21,13 +21,13 @@ import type {
   McpApiKey,
   McpAuditEntry,
   McpExposedTool,
-  McpKeyPresetName,
+  McpKeyBase,
   McpKeyWithPlaintext,
-  McpProbeResult,
-  McpUiKeyPreset
+  McpProbeResult
 } from '@shared/api/types'
 import { openExternal } from '@shared/components/connectors/consoleShared'
 import { Button } from '@shared/components/ui/button'
+import { Checkbox } from '@shared/components/ui/checkbox'
 import { CollapseChevron, CollapsibleRegion } from '@shared/components/ui/collapsible'
 import {
   Dialog,
@@ -53,7 +53,6 @@ import { Section } from '../parts/Section'
 
 const PUBLIC_URL_ENV_KEY = 'MAILAGENT_MCP_PUBLIC_URL'
 const AUDIT_LIMIT = 20
-const UI_PRESETS: readonly McpUiKeyPreset[] = ['readonly', 'handoff', 'drafter']
 
 function useEnvValue(key: string): string {
   return useEnvStore((s) =>
@@ -141,10 +140,6 @@ function CopyIconButton({
       </span>
     </button>
   )
-}
-
-function presetLabelKey(preset: McpKeyPresetName | null): string {
-  return preset ? `settings.mcp.presets.${preset}.label` : 'settings.mcp.presets.custom'
 }
 
 export function McpServiceTab(): React.ReactElement {
@@ -524,6 +519,9 @@ function ConnectionSection({
 
 // ── 访问密钥 ────────────────────────────────────────────────────────────────
 
+/** 新建 / 修改权限共用一个弹窗；`target` 在关闭后保留，退场动画期间文案不跳。 */
+type ScopesDialogTarget = { mode: 'create' } | { mode: 'edit'; key: McpApiKey }
+
 function KeysSection({
   onRevealed
 }: {
@@ -538,7 +536,12 @@ function KeysSection({
     queryFn: () => api.mcpService.listKeys()
   })
 
-  const [createOpen, setCreateOpen] = React.useState(false)
+  const [scopesDialog, setScopesDialog] = React.useState<{
+    target: ScopesDialogTarget
+    open: boolean
+    // 每次打开 +1 作 React key：弹窗按打开时的密钥重新取初值，不需要 effect 同步。
+    seq: number
+  } | null>(null)
   const [confirmTarget, setConfirmTarget] = React.useState<{
     key: McpApiKey
     action: KeyAction
@@ -547,6 +550,14 @@ function KeysSection({
 
   const invalidate = (): void => {
     void queryClient.invalidateQueries({ queryKey: qk.mcpService.all() })
+  }
+
+  function openScopesDialog(target: ScopesDialogTarget): void {
+    setScopesDialog((prev) => ({ target, open: true, seq: (prev?.seq ?? 0) + 1 }))
+  }
+
+  function closeScopesDialog(): void {
+    setScopesDialog((prev) => (prev ? { ...prev, open: false } : prev))
   }
 
   async function handleRotate(key: McpApiKey): Promise<void> {
@@ -584,7 +595,7 @@ function KeysSection({
       title={t('settings.mcp.keys.title')}
       helper={t('settings.mcp.keys.helper')}
       meta={
-        <Button size="sm" variant="outline" onClick={() => setCreateOpen(true)}>
+        <Button size="sm" variant="outline" onClick={() => openScopesDialog({ mode: 'create' })}>
           {t('settings.mcp.keys.create')}
         </Button>
       }
@@ -612,21 +623,31 @@ function KeysSection({
             key={key.id}
             apiKey={key}
             busy={busyId === key.id}
+            onEditScopes={() => openScopesDialog({ mode: 'edit', key })}
             onRotate={() => setConfirmTarget({ key, action: 'rotate' })}
             onRevoke={() => setConfirmTarget({ key, action: 'revoke' })}
           />
         ))
       )}
 
-      <CreateKeyDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        onCreated={(r) => {
-          invalidate()
-          setCreateOpen(false)
-          onRevealed(r)
-        }}
-      />
+      {scopesDialog ? (
+        <KeyScopesDialog
+          key={scopesDialog.seq}
+          target={scopesDialog.target}
+          open={scopesDialog.open}
+          onClose={closeScopesDialog}
+          onCreated={(r) => {
+            invalidate()
+            closeScopesDialog()
+            onRevealed(r)
+          }}
+          onUpdated={(key) => {
+            invalidate()
+            closeScopesDialog()
+            toastSuccess(t('settings.mcp.keys.scopesUpdated', { label: key.label }))
+          }}
+        />
+      ) : null}
       <ConfirmKeyActionDialog
         target={confirmTarget}
         busy={confirmTarget != null && busyId === confirmTarget.key.id}
@@ -639,18 +660,53 @@ function KeysSection({
   )
 }
 
+/** 本地化连接（zh「A、B」/ en "A, B"）。 */
+function joinLabels(locale: string, labels: string[]): string {
+  try {
+    return new Intl.ListFormat(locale, { style: 'narrow', type: 'conjunction' }).format(labels)
+  } catch {
+    return labels.join(', ')
+  }
+}
+
+/** scope（如 `email:draft`）→ i18n key 段。`:` 是 i18next 的命名空间分隔符，不能原样进 key。 */
+function scopeI18nKey(scope: string, field: 'label' | 'desc'): string {
+  return `settings.mcp.scopes.${scope.replace(/[^a-zA-Z0-9]/g, '_')}.${field}`
+}
+
+/** scope 的显示名与说明。没有文案的 scope（后端新加、前端还没翻译）显示原始 scope、不出说明。 */
+function useScopeText(): {
+  label: (scope: string) => string
+  desc: (scope: string) => string | null
+} {
+  const { t, i18n } = useTranslation()
+  return {
+    label: (scope) => {
+      const key = scopeI18nKey(scope, 'label')
+      return i18n.exists(key) ? t(key) : scope
+    },
+    desc: (scope) => {
+      const key = scopeI18nKey(scope, 'desc')
+      return i18n.exists(key) ? t(key) : null
+    }
+  }
+}
+
 function KeyRow({
   apiKey,
   busy,
+  onEditScopes,
   onRotate,
   onRevoke
 }: {
   apiKey: McpApiKey
   busy: boolean
+  onEditScopes: () => void
   onRotate: () => void
   onRevoke: () => void
 }): React.ReactElement {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const scopeText = useScopeText()
   const created = formatEpoch(apiKey.created_at)
   const lastUsed = formatEpoch(apiKey.last_used_at)
   const stateLabel = apiKey.revoked_at
@@ -659,9 +715,22 @@ function KeyRow({
       ? null
       : t('settings.mcp.keys.state.expired')
 
+  const base = apiKey.custom ? null : apiKey.base
+  const permissions =
+    base == null
+      ? t('settings.mcp.presets.custom')
+      : [
+          t(`settings.mcp.presets.${base}.label`),
+          apiKey.extra.length > 0
+            ? joinLabels(i18n.language, apiKey.extra.map(scopeText.label))
+            : null
+        ]
+          .filter((x): x is string => Boolean(x))
+          .join(' · ')
+
   const helper = [
     `${apiKey.key_prefix}…`,
-    t(presetLabelKey(apiKey.preset)),
+    permissions,
     created ? t('settings.mcp.keys.createdAt', { time: created }) : null,
     lastUsed
       ? t('settings.mcp.keys.lastUsedAt', { time: lastUsed })
@@ -680,10 +749,24 @@ function KeyRow({
           ) : null}
         </span>
       }
-      helper={<span title={apiKey.scopes.join(', ')}>{helper}</span>}
+      helper={
+        <span title={apiKey.scopes.join(', ')}>
+          {helper}
+          {base == null ? (
+            <span className="block mt-0.5" data-testid="mcp-key-custom-scopes">
+              {t('settings.mcp.keys.customScopes', { scopes: apiKey.scopes.join(', ') })}
+            </span>
+          ) : null}
+        </span>
+      }
     >
       {apiKey.active ? (
         <div className="flex items-center gap-1.5">
+          {base != null ? (
+            <Button size="sm" variant="ghost" onClick={onEditScopes} disabled={busy}>
+              {t('settings.mcp.keys.editScopes')}
+            </Button>
+          ) : null}
           <Button size="sm" variant="ghost" onClick={onRotate} disabled={busy}>
             {t('settings.mcp.keys.rotate')}
           </Button>
@@ -698,105 +781,201 @@ function KeyRow({
   )
 }
 
-function CreateKeyDialog({
+function KeyScopesDialog({
+  target,
   open,
-  onOpenChange,
-  onCreated
+  onClose,
+  onCreated,
+  onUpdated
 }: {
+  target: ScopesDialogTarget
   open: boolean
-  onOpenChange: (open: boolean) => void
+  onClose: () => void
   onCreated: (r: McpKeyWithPlaintext) => void
+  onUpdated: (key: McpApiKey) => void
 }): React.ReactElement {
   const { t } = useTranslation()
   const api = useMailApi()
+  const scopeText = useScopeText()
+  const editing = target.mode === 'edit' ? target.key : null
+
+  const optionsQuery = useQuery({
+    queryKey: qk.mcpService.scopeOptions(),
+    queryFn: () => api.mcpService.getScopeOptions()
+  })
+
   const [label, setLabel] = React.useState('')
-  const [preset, setPreset] = React.useState<McpUiKeyPreset>('readonly')
+  const [base, setBase] = React.useState<McpKeyBase>(editing?.base ?? 'readonly')
+  const [extra, setExtra] = React.useState<readonly string[]>(editing?.extra ?? [])
   const [submitting, setSubmitting] = React.useState(false)
 
-  function handleOpenChange(next: boolean): void {
-    if (!next) {
-      setLabel('')
-      setPreset('readonly')
-    }
-    onOpenChange(next)
+  const options = optionsQuery.data
+  // 按接口给的顺序提交，与勾选先后无关。
+  const selectedExtra = options
+    ? options.extras.map((e) => e.scope).filter((scope) => extra.includes(scope))
+    : []
+
+  function toggleExtra(scope: string, checked: boolean): void {
+    setExtra((prev) => (checked ? [...prev, scope] : prev.filter((s) => s !== scope)))
   }
 
   async function handleSubmit(): Promise<void> {
     setSubmitting(true)
     try {
-      const result = await api.mcpService.createKey(label.trim(), preset)
-      setLabel('')
-      setPreset('readonly')
-      onCreated(result)
+      if (editing) {
+        onUpdated(await api.mcpService.updateKeyScopes(editing.id, base, selectedExtra))
+      } else {
+        onCreated(await api.mcpService.createKey(label.trim(), base, selectedExtra))
+      }
     } catch (err) {
-      toastError(t('settings.mcp.keys.createFailed'), errorMessage(err))
+      toastError(
+        t(editing ? 'settings.mcp.keys.updateScopesFailed' : 'settings.mcp.keys.createFailed'),
+        errorMessage(err)
+      )
     } finally {
       setSubmitting(false)
     }
   }
 
+  const canSubmit = options != null && !submitting && (editing != null || label.trim() !== '')
+
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-md">
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose()
+      }}
+    >
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{t('settings.mcp.create.title')}</DialogTitle>
-          <DialogDescription>{t('settings.mcp.create.desc')}</DialogDescription>
+          <DialogTitle>
+            {editing
+              ? t('settings.mcp.editScopes.title', { label: editing.label })
+              : t('settings.mcp.create.title')}
+          </DialogTitle>
+          <DialogDescription>
+            {editing ? t('settings.mcp.editScopes.desc') : t('settings.mcp.create.desc')}
+          </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor="mcp-key-label" className="text-aux font-medium text-ink-fg">
-            {t('settings.mcp.create.nameLabel')}
-          </label>
-          <Input
-            id="mcp-key-label"
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            placeholder={t('settings.mcp.create.namePlaceholder')}
-          />
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <div className="text-aux font-medium text-ink-fg">
-            {t('settings.mcp.create.presetLabel')}
+        {editing ? null : (
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="mcp-key-label" className="text-aux font-medium text-ink-fg">
+              {t('settings.mcp.create.nameLabel')}
+            </label>
+            <Input
+              id="mcp-key-label"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder={t('settings.mcp.create.namePlaceholder')}
+            />
           </div>
-          <RadioGroup
-            value={preset}
-            onValueChange={(v) => setPreset(v as McpUiKeyPreset)}
-            aria-label={t('settings.mcp.create.presetLabel')}
-          >
-            {UI_PRESETS.map((p) => {
-              const id = `mcp-preset-${p}`
-              return (
-                <div
-                  key={p}
-                  className={cn(
-                    'flex items-start gap-2.5 rounded-md border px-3 py-2.5',
-                    'transition-colors duration-fast ease-standard',
-                    preset === p ? 'border-coral/60' : 'border-ink-border-soft'
-                  )}
-                >
-                  <RadioGroupItem value={p} id={id} className="mt-1" />
-                  <div className="min-w-0 flex-1">
-                    <label htmlFor={id} className="block text-aux text-ink-fg cursor-pointer">
-                      {t(`settings.mcp.presets.${p}.label`)}
-                    </label>
-                    <div className="text-meta text-ink-fg-2 mt-0.5 leading-relaxed">
-                      {t(`settings.mcp.presets.${p}.desc`)}
+        )}
+
+        {optionsQuery.isError ? (
+          <div className="flex items-center justify-between gap-2 text-aux">
+            <span className="text-fail">{errorMessage(optionsQuery.error)}</span>
+            <Button size="sm" variant="outline" onClick={() => void optionsQuery.refetch()}>
+              {t('settings.mcp.retry')}
+            </Button>
+          </div>
+        ) : !options ? (
+          <div className="flex justify-center py-4">
+            <Loader2 className="size-4 animate-spin text-ink-fg-3" aria-label="loading" />
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-col gap-1.5">
+              <div className="text-aux font-medium text-ink-fg">
+                {t('settings.mcp.create.baseLabel')}
+              </div>
+              <RadioGroup
+                value={base}
+                onValueChange={(v) => setBase(v as McpKeyBase)}
+                aria-label={t('settings.mcp.create.baseLabel')}
+              >
+                {options.bases.map(({ id: b }) => {
+                  const id = `mcp-base-${b}`
+                  return (
+                    <div
+                      key={b}
+                      className={cn(
+                        'flex items-start gap-2.5 rounded-md border px-3 py-2.5',
+                        'transition-colors duration-fast ease-standard',
+                        base === b ? 'border-coral/60' : 'border-ink-border-soft'
+                      )}
+                    >
+                      <RadioGroupItem value={b} id={id} className="mt-1" />
+                      <div className="min-w-0 flex-1">
+                        <label htmlFor={id} className="block text-aux text-ink-fg cursor-pointer">
+                          {t(`settings.mcp.presets.${b}.label`)}
+                        </label>
+                        <div className="text-meta text-ink-fg-2 mt-0.5 leading-relaxed">
+                          {t(`settings.mcp.presets.${b}.desc`)}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
-              )
-            })}
-          </RadioGroup>
-        </div>
+                  )
+                })}
+              </RadioGroup>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <div className="text-aux font-medium text-ink-fg">
+                {t('settings.mcp.create.extraLabel')}
+              </div>
+              {options.extras.map(({ scope, risk }) => {
+                const high = risk === 'high'
+                const checked = extra.includes(scope)
+                const descId = `mcp-extra-${scope.replace(/[^a-zA-Z0-9]/g, '-')}-desc`
+                const desc = scopeText.desc(scope)
+                return (
+                  <label
+                    key={scope}
+                    data-risk={risk}
+                    className={cn(
+                      'flex items-start gap-2.5 rounded-md border px-3 py-2.5 cursor-pointer',
+                      'transition-colors duration-fast ease-standard',
+                      checked ? 'border-coral/60' : 'border-ink-border-soft'
+                    )}
+                  >
+                    <Checkbox
+                      className="mt-0.5"
+                      checked={checked}
+                      onCheckedChange={(next) => toggleExtra(scope, next)}
+                      aria-label={scopeText.label(scope)}
+                      aria-describedby={desc ? descId : undefined}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className={cn('text-aux', high ? 'text-warn' : 'text-ink-fg')}>
+                        {scopeText.label(scope)}
+                      </div>
+                      {desc ? (
+                        <div
+                          id={descId}
+                          className={cn(
+                            'text-meta mt-0.5 leading-relaxed',
+                            high ? 'text-warn' : 'text-ink-fg-2'
+                          )}
+                        >
+                          {desc}
+                        </div>
+                      ) : null}
+                    </div>
+                  </label>
+                )
+              })}
+            </div>
+          </>
+        )}
 
         <DialogFooter>
-          <Button variant="secondary" onClick={() => handleOpenChange(false)}>
+          <Button variant="secondary" onClick={onClose}>
             {t('settings.mcp.cancel')}
           </Button>
-          <Button onClick={() => void handleSubmit()} disabled={submitting || label.trim() === ''}>
+          <Button onClick={() => void handleSubmit()} disabled={!canSubmit}>
             {submitting ? <Loader2 className="size-3.5 animate-spin" /> : null}
-            {t('settings.mcp.create.submit')}
+            {editing ? t('settings.mcp.editScopes.submit') : t('settings.mcp.create.submit')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -949,6 +1128,33 @@ function ConfirmKeyActionDialog({
 
 // ── 对外工具 ────────────────────────────────────────────────────────────────
 
+interface ToolGroup {
+  /** 排序后的 `auth_scopes` 连接串。 */
+  id: string
+  scopes: string[]
+  /** 组里有任一写工具（非 readOnlyHint）。 */
+  write: boolean
+  items: McpExposedTool[]
+}
+
+/** 按所需权限分组：读组在前、写组在后，组内与组间都保持接口给的顺序。 */
+function groupToolsByScope(tools: readonly McpExposedTool[]): ToolGroup[] {
+  const groups = new Map<string, ToolGroup>()
+  for (const tool of tools) {
+    const scopes = [...tool.auth_scopes].sort()
+    const id = scopes.join(',')
+    let group = groups.get(id)
+    if (!group) {
+      group = { id, scopes, write: false, items: [] }
+      groups.set(id, group)
+    }
+    group.items.push(tool)
+    if (!tool.annotations.readOnlyHint) group.write = true
+  }
+  const all = [...groups.values()]
+  return [...all.filter((g) => !g.write), ...all.filter((g) => g.write)]
+}
+
 function ToolsSection(): React.ReactElement {
   const { t } = useTranslation()
   const api = useMailApi()
@@ -956,12 +1162,14 @@ function ToolsSection(): React.ReactElement {
     queryKey: qk.mcpService.tools(),
     queryFn: () => api.mcpService.tools()
   })
+  // 与访问密钥一节同一个 query key，共用缓存，不多发请求。
+  const keysQuery = useQuery({
+    queryKey: qk.mcpService.keys(),
+    queryFn: () => api.mcpService.listKeys()
+  })
 
-  const tools = toolsQuery.data ?? []
-  const groups: { key: 'read' | 'write'; items: McpExposedTool[] }[] = [
-    { key: 'read', items: tools.filter((tool) => tool.annotations.readOnlyHint) },
-    { key: 'write', items: tools.filter((tool) => !tool.annotations.readOnlyHint) }
-  ]
+  const groups = groupToolsByScope(toolsQuery.data ?? [])
+  const activeKeys = (keysQuery.data ?? []).filter((k) => k.active)
 
   return (
     <Section title={t('settings.mcp.tools.title')} helper={t('settings.mcp.tools.helper')}>
@@ -979,50 +1187,79 @@ function ToolsSection(): React.ReactElement {
           <Loader2 className="size-4 animate-spin text-ink-fg-3" aria-label="loading" />
         </Row>
       ) : (
-        groups
-          .filter((g) => g.items.length > 0)
-          .map((g) => (
-            <React.Fragment key={g.key}>
-              <div className="px-[var(--settings-tile-px,1rem)] py-2 text-meta font-medium text-ink-fg-2">
-                {t(`settings.mcp.tools.group.${g.key}`, { count: g.items.length })}
-              </div>
-              {g.items.map((tool) => (
-                <ToolRow key={tool.name} tool={tool} />
-              ))}
-            </React.Fragment>
-          ))
+        groups.map((g) => (
+          <ToolGroupBlock
+            key={g.id}
+            group={g}
+            keyCount={activeKeys.filter((k) => g.scopes.every((s) => k.scopes.includes(s))).length}
+          />
+        ))
       )}
     </Section>
   )
 }
 
-/** 预设名的本地化连接（zh「A、B」/ en "A, B"）。 */
-function joinLabels(locale: string, labels: string[]): string {
-  try {
-    return new Intl.ListFormat(locale, { style: 'narrow', type: 'conjunction' }).format(labels)
-  } catch {
-    return labels.join(', ')
-  }
+function ToolGroupBlock({
+  group,
+  keyCount
+}: {
+  group: ToolGroup
+  keyCount: number
+}): React.ReactElement {
+  const { t, i18n } = useTranslation()
+  const scopeText = useScopeText()
+  // 写入组默认折叠：工具多，且读者通常先关心「有什么能读」。
+  const [expanded, setExpanded] = React.useState(!group.write)
+  const regionId = `mcp-tools-${group.id.replace(/[^a-zA-Z0-9]/g, '-') || 'none'}`
+  const name =
+    group.scopes.length > 0
+      ? joinLabels(i18n.language, group.scopes.map(scopeText.label))
+      : t('settings.mcp.tools.noScope')
+
+  return (
+    <div data-testid="mcp-tool-group">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        aria-controls={regionId}
+        className={cn(
+          'flex w-full items-center gap-1.5 px-[var(--settings-tile-px,1rem)] py-2 text-left',
+          'text-meta text-ink-fg-2 hover:bg-ink-3',
+          'transition-colors duration-fast ease-standard'
+        )}
+      >
+        <CollapseChevron expanded={expanded} />
+        <span className="font-medium">
+          {t('settings.mcp.tools.groupTitle', { name, count: group.items.length })}
+        </span>
+        <span className="ml-auto text-ink-fg-3">
+          {t('settings.mcp.tools.groupKeys', { count: keyCount })}
+        </span>
+      </button>
+      <CollapsibleRegion
+        expanded={expanded}
+        id={regionId}
+        bodyClassName="border-t border-ink-border-soft divide-y divide-ink-border-soft"
+      >
+        {group.items.map((tool) => (
+          <ToolRow key={tool.name} tool={tool} />
+        ))}
+      </CollapsibleRegion>
+    </div>
+  )
 }
 
 function ToolRow({ tool }: { tool: McpExposedTool }): React.ReactElement {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const readOnly = tool.annotations.readOnlyHint
-  const presets = joinLabels(
-    i18n.language,
-    tool.presets.map((p) => t(`settings.mcp.presets.${p}.label`))
-  )
   return (
     <Row
       compact
       label={tool.title || tool.name}
       helper={
-        <span title={tool.description}>
-          <span className="font-mono">{tool.name}</span>
-          {tool.auth_scopes.length > 0 ? (
-            <> · {t('settings.mcp.tools.scopes', { scopes: tool.auth_scopes.join(', ') })}</>
-          ) : null}
-          {presets ? <> · {t('settings.mcp.tools.presets', { presets })}</> : null}
+        <span title={tool.description} className="font-mono">
+          {tool.name}
         </span>
       }
     >

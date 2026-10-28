@@ -3,13 +3,16 @@
 // 设置 →「MCP 服务」tab。钉住的契约（每条都是"改错了用户会中招"的）：
 //   1. serve-api 没在跑（远程访问开关关 / status 以 E_NETWORK 失败）→ 只出提示 + 去远程访问，
 //      密钥 / 工具 / 调用记录三块**不发请求**。
-//   2. 新建弹窗的权限预设默认选中「只读」。
+//   2. 新建 / 修改权限共用一个弹窗：基础档默认「只读」、额外写权限默认不勾；额外写权限的
+//      列表来自 `/scope-options`（前端不手抄 scope），高风险项用警示色；修改模式预填并走 PATCH；
+//      命令行建的 custom 密钥没有修改入口。
 //   3. 明文只在「密钥已生成」弹窗里出现；关闭后 DOM 里不再有，列表接口也不带明文 ⇒ 取不回。
 //   4. 三个复制按钮写进剪贴板的都是真实明文；Notion 配置用公网地址，HTTP 客户端配置用本机地址。
 //   5. 轮换复用同一个弹窗；撤销必须先过确认。
 //   6. 公网地址保存前校验（https / 非本机地址 / 以 /mcp 结尾），不合法不保存；
 //      没填公网地址时「复制 Notion 配置」不写剪贴板（不拿本机地址兜底）并展开引导；
 //      「复制给 Agent」的任务说明用本机地址里的真实端口。
+//   7. 对外工具按所需权限分组，组头标出拥有该权限的有效密钥数；写入组默认折叠。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -19,14 +22,17 @@ import type {
   McpApiKey,
   McpExposedTool,
   McpKeyWithPlaintext,
+  McpScopeOptions,
   McpServiceStatus
 } from '../../src/shared/api/types'
 
 const { mcpApi, navigateMock } = vi.hoisted(() => ({
   mcpApi: {
     status: vi.fn(),
+    getScopeOptions: vi.fn(),
     listKeys: vi.fn(),
     createKey: vi.fn(),
+    updateKeyScopes: vi.fn(),
     rotateKey: vi.fn(),
     revokeKey: vi.fn(),
     tools: vi.fn(),
@@ -50,6 +56,7 @@ vi.mock('@shared/state/env', async (importOriginal) => ({
 }))
 
 import i18n from '@shared/i18n'
+import { toastSuccess } from '@shared/state/toast'
 import { McpServiceTab } from '../../src/shared/components/settings/tabs/McpServiceTab'
 import { useEnvStore } from '@shared/state/env'
 
@@ -68,6 +75,9 @@ function makeKey(over: Partial<McpApiKey> = {}): McpApiKey {
     key_prefix: 'mak_TEST',
     scopes: ['email:read'],
     preset: 'readonly',
+    base: 'readonly',
+    extra: [],
+    custom: false,
     created_at: 1_700_000_000,
     last_used_at: null,
     expires_at: null,
@@ -75,6 +85,20 @@ function makeKey(over: Partial<McpApiKey> = {}): McpApiKey {
     active: true,
     ...over
   }
+}
+
+const SCOPE_OPTIONS: McpScopeOptions = {
+  bases: [
+    { id: 'readonly', scopes: ['email:read'] },
+    { id: 'handoff', scopes: ['email:read', 'report:run'] }
+  ],
+  extras: [
+    { scope: 'email:draft', risk: 'low' },
+    { scope: 'email:organize', risk: 'low' },
+    { scope: 'matters:write', risk: 'low' },
+    { scope: 'calendar:write', risk: 'high' },
+    { scope: 'email:write', risk: 'high' }
+  ]
 }
 
 const TOOLS: McpExposedTool[] = [
@@ -139,6 +163,7 @@ beforeEach(() => {
     value: { writeText: clipboardWrite }
   })
   mcpApi.status.mockResolvedValue(status())
+  mcpApi.getScopeOptions.mockResolvedValue(SCOPE_OPTIONS)
   mcpApi.listKeys.mockResolvedValue([makeKey()])
   mcpApi.tools.mockResolvedValue(TOOLS)
   mcpApi.audit.mockResolvedValue([])
@@ -180,33 +205,70 @@ describe('serve-api 未运行', () => {
     expect(screen.queryByText('访问密钥')).toBeNull()
   })
 
-  test('运行中：四块都渲染，工具按读取 / 写入分组', async () => {
+  test('运行中：四块都渲染', async () => {
     setEnv({})
     renderTab()
     expect(await screen.findByText(LOCAL_URL)).toBeTruthy()
     expect(await screen.findByText('Notion Agent')).toBeTruthy()
-    expect(await screen.findByText('读取 · 1')).toBeTruthy()
-    expect(screen.getByText('写入 · 1')).toBeTruthy()
-    expect(screen.getByText('建议：先确认')).toBeTruthy()
+    expect(await screen.findByText('读邮件 · 1')).toBeTruthy()
     expect(await screen.findByText('还没有调用记录')).toBeTruthy()
-  })
-
-  test('工具可用预设按界面语言连接（en 不出现中文顿号）', async () => {
-    setEnv({})
-    await i18n.changeLanguage('en-US')
-    try {
-      renderTab()
-      expect(
-        await screen.findByText(/Available to: Read only, Read \+ run, Draft replies/)
-      ).toBeTruthy()
-    } finally {
-      await i18n.changeLanguage('zh-CN')
-    }
   })
 })
 
+describe('对外工具', () => {
+  test('按所需权限分组，组头标出拥有该权限的有效密钥数；写入组默认折叠', async () => {
+    setEnv({})
+    mcpApi.listKeys.mockResolvedValue([
+      makeKey({ id: 'a', scopes: ['email:read'] }),
+      makeKey({
+        id: 'b',
+        scopes: ['email:read', 'email:draft'],
+        base: 'readonly',
+        extra: ['email:draft']
+      }),
+      // 已撤销的不算
+      makeKey({ id: 'c', scopes: ['email:read', 'email:draft'], active: false, revoked_at: 1 })
+    ])
+    renderTab()
+    const readHeader = await screen.findByRole('button', { name: /读邮件 · 1/ })
+    const writeHeader = screen.getByRole('button', { name: /起草回复 · 1/ })
+    expect(await within(readHeader).findByText('2 个有效密钥拥有此权限')).toBeTruthy()
+    expect(within(writeHeader).getByText('1 个有效密钥拥有此权限')).toBeTruthy()
+    expect(readHeader.getAttribute('aria-expanded')).toBe('true')
+    expect(writeHeader.getAttribute('aria-expanded')).toBe('false')
+    // 读组排在写组前面
+    const groups = screen.getAllByTestId('mcp-tool-group')
+    expect(groups.map((g) => g.querySelector('button')?.textContent)).toEqual([
+      expect.stringContaining('读邮件'),
+      expect.stringContaining('起草回复')
+    ])
+    fireEvent.click(writeHeader)
+    expect(writeHeader.getAttribute('aria-expanded')).toBe('true')
+    expect(within(groups[1]).getByText('建议：先确认')).toBeTruthy()
+  })
+
+  test('没有任何有效密钥拥有的权限，组头如实写「没有」', async () => {
+    setEnv({})
+    renderTab()
+    const writeHeader = await screen.findByRole('button', { name: /起草回复 · 1/ })
+    expect(await within(writeHeader).findByText('没有有效密钥拥有此权限')).toBeTruthy()
+  })
+})
+
+async function openCreateDialog(): Promise<HTMLElement> {
+  fireEvent.click(await screen.findByRole('button', { name: '新建密钥' }))
+  const dialog = await screen.findByRole('dialog')
+  // 选项来自 /scope-options：加载完才出现基础档与额外权限。
+  await within(dialog).findByRole('radio', { name: '只读' })
+  return dialog
+}
+
+function extraCheckbox(dialog: HTMLElement, name: string): HTMLInputElement {
+  return within(dialog).getByRole('checkbox', { name }) as HTMLInputElement
+}
+
 describe('新建密钥', () => {
-  test('预设默认选中「只读」，提交带名称与预设', async () => {
+  test('默认只读、不带额外写权限；不勾选时提交 extra 为空', async () => {
     setEnv({})
     const created: McpKeyWithPlaintext = {
       key: makeKey({ id: 'k2', label: 'My Agent' }),
@@ -214,25 +276,151 @@ describe('新建密钥', () => {
     }
     mcpApi.createKey.mockResolvedValue(created)
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: '新建密钥' }))
+    const dialog = await openCreateDialog()
 
-    const dialog = await screen.findByRole('dialog')
-    const readonly = within(dialog).getByRole('radio', { name: '只读' })
-    expect(readonly.getAttribute('aria-checked')).toBe('true')
+    expect(within(dialog).getByRole('radio', { name: '只读' }).getAttribute('aria-checked')).toBe(
+      'true'
+    )
     expect(
       within(dialog).getByRole('radio', { name: '只读 + 运行' }).getAttribute('aria-checked')
     ).toBe('false')
     expect(
-      within(dialog).getByRole('radio', { name: '起草回复' }).getAttribute('aria-checked')
-    ).toBe('false')
+      within(dialog)
+        .getAllByRole('checkbox')
+        .every((c) => !(c as HTMLInputElement).checked)
+    ).toBe(true)
 
     const submit = within(dialog).getByRole('button', { name: '新建' })
     expect((submit as HTMLButtonElement).disabled).toBe(true)
     fireEvent.change(within(dialog).getByLabelText('名称'), { target: { value: '  My Agent ' } })
     fireEvent.click(submit)
 
-    await waitFor(() => expect(mcpApi.createKey).toHaveBeenCalledWith('My Agent', 'readonly'))
+    await waitFor(() => expect(mcpApi.createKey).toHaveBeenCalledWith('My Agent', 'readonly', []))
     expect(await screen.findByText('密钥已生成')).toBeTruthy()
+  })
+
+  test('勾选额外写权限后 POST 带上它们，按接口给的顺序而不是勾选顺序', async () => {
+    setEnv({})
+    mcpApi.createKey.mockResolvedValue({ key: makeKey({ id: 'k2' }), plaintext: PLAINTEXT })
+    renderTab()
+    const dialog = await openCreateDialog()
+    fireEvent.click(within(dialog).getByRole('radio', { name: '只读 + 运行' }))
+    fireEvent.click(extraCheckbox(dialog, '日历写'))
+    fireEvent.click(extraCheckbox(dialog, '起草回复'))
+    fireEvent.click(extraCheckbox(dialog, '邮件整理'))
+    fireEvent.click(extraCheckbox(dialog, '邮件整理')) // 勾了又取消
+    fireEvent.change(within(dialog).getByLabelText('名称'), { target: { value: 'A' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '新建' }))
+    await waitFor(() =>
+      expect(mcpApi.createKey).toHaveBeenCalledWith('A', 'handoff', [
+        'email:draft',
+        'calendar:write'
+      ])
+    )
+  })
+
+  test('额外写权限的列表来自接口：多一个 scope 界面就多一项，没有文案时显示原始 scope', async () => {
+    setEnv({})
+    mcpApi.getScopeOptions.mockResolvedValue({
+      ...SCOPE_OPTIONS,
+      extras: [...SCOPE_OPTIONS.extras, { scope: 'future:write', risk: 'low' }]
+    })
+    renderTab()
+    const dialog = await openCreateDialog()
+    expect(within(dialog).getAllByRole('checkbox')).toHaveLength(6)
+    expect(extraCheckbox(dialog, 'future:write')).toBeTruthy()
+  })
+
+  test('高风险项（日历写、发信）用警示色，发信说明提示邮件可能夹带指令', async () => {
+    setEnv({})
+    renderTab()
+    const dialog = await openCreateDialog()
+    const riskOf = (name: string): HTMLElement =>
+      extraCheckbox(dialog, name).closest('[data-risk]') as HTMLElement
+    for (const name of ['日历写', '发信']) {
+      const row = riskOf(name)
+      expect(row.getAttribute('data-risk')).toBe('high')
+      expect(within(row).getByText(name).className).toContain('text-warn')
+    }
+    for (const name of ['起草回复', '邮件整理', '事项写']) {
+      const row = riskOf(name)
+      expect(row.getAttribute('data-risk')).toBe('low')
+      expect(within(row).getByText(name).className).not.toContain('text-warn')
+    }
+    expect(within(riskOf('发信')).getByText(/邮件可能夹带指令.*先确认/)).toBeTruthy()
+  })
+})
+
+describe('修改权限', () => {
+  test('预填当前基础档与额外权限，提交走 PATCH，不弹明文窗', async () => {
+    setEnv({})
+    const key = makeKey({
+      scopes: ['email:read', 'report:run', 'email:draft'],
+      preset: null,
+      base: 'handoff',
+      extra: ['email:draft']
+    })
+    mcpApi.listKeys.mockResolvedValue([key])
+    mcpApi.updateKeyScopes.mockResolvedValue({ ...key, extra: ['email:draft', 'email:organize'] })
+    renderTab()
+    // 列表行的权限是「基础档 · 额外权限」的组合描述
+    expect(await screen.findByText(/只读 \+ 运行 · 起草回复/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '修改权限' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('修改「Notion Agent」的权限')).toBeTruthy()
+    await within(dialog).findByRole('radio', { name: '只读 + 运行' })
+    expect(
+      within(dialog).getByRole('radio', { name: '只读 + 运行' }).getAttribute('aria-checked')
+    ).toBe('true')
+    expect(extraCheckbox(dialog, '起草回复').checked).toBe(true)
+    expect(extraCheckbox(dialog, '邮件整理').checked).toBe(false)
+    expect(within(dialog).queryByLabelText('名称')).toBeNull()
+
+    const listCalls = mcpApi.listKeys.mock.calls.length
+    fireEvent.click(extraCheckbox(dialog, '邮件整理'))
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }))
+    await waitFor(() =>
+      expect(mcpApi.updateKeyScopes).toHaveBeenCalledWith('k1', 'handoff', [
+        'email:draft',
+        'email:organize'
+      ])
+    )
+    expect(mcpApi.createKey).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(screen.queryByText('密钥已生成')).toBeNull()
+    expect(toastSuccess).toHaveBeenCalledWith('已更新「Notion Agent」的权限')
+    await waitFor(() => expect(mcpApi.listKeys.mock.calls.length).toBeGreaterThan(listCalls))
+  })
+
+  test('命令行建的 custom 密钥没有修改入口，显示原始 scope 与说明', async () => {
+    setEnv({})
+    mcpApi.listKeys.mockResolvedValue([
+      makeKey({
+        scopes: ['email:read', 'attachment:read', 'email:draft'],
+        preset: 'drafter',
+        base: null,
+        extra: [],
+        custom: true
+      })
+    ])
+    renderTab()
+    const note = await screen.findByTestId('mcp-key-custom-scopes')
+    expect(note.textContent).toBe(
+      '权限：email:read, attachment:read, email:draft。这个密钥由命令行创建，权限组合无法在这里修改。'
+    )
+    expect(screen.getByText(/mak_TEST… · 自定义/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '修改权限' })).toBeNull()
+    // 其余操作照旧
+    expect(screen.getByRole('button', { name: '轮换' })).toBeTruthy()
+  })
+
+  test('已撤销的密钥没有修改入口', async () => {
+    setEnv({})
+    mcpApi.listKeys.mockResolvedValue([makeKey({ active: false, revoked_at: 1_700_000_100 })])
+    renderTab()
+    await screen.findByText('已撤销')
+    expect(screen.queryByRole('button', { name: '修改权限' })).toBeNull()
   })
 })
 
@@ -242,8 +430,7 @@ async function openRevealedViaCreate(): Promise<HTMLElement> {
     plaintext: PLAINTEXT
   })
   renderTab()
-  fireEvent.click(await screen.findByRole('button', { name: '新建密钥' }))
-  const createDialog = await screen.findByRole('dialog')
+  const createDialog = await openCreateDialog()
   fireEvent.change(within(createDialog).getByLabelText('名称'), { target: { value: 'My Agent' } })
   fireEvent.click(within(createDialog).getByRole('button', { name: '新建' }))
   await screen.findByText('密钥已生成')
@@ -302,8 +489,7 @@ describe('密钥已生成弹窗', () => {
     expect(mcpApi.probe).toHaveBeenCalledWith(PUBLIC_URL)
 
     mcpApi.createKey.mockResolvedValue({ key: makeKey({ id: 'k2' }), plaintext: PLAINTEXT })
-    fireEvent.click(screen.getByRole('button', { name: '新建密钥' }))
-    const createDialog = await screen.findByRole('dialog')
+    const createDialog = await openCreateDialog()
     fireEvent.change(within(createDialog).getByLabelText('名称'), { target: { value: 'A' } })
     fireEvent.click(within(createDialog).getByRole('button', { name: '新建' }))
     await screen.findByText('密钥已生成')

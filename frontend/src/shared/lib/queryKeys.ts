@@ -278,6 +278,7 @@ export const qk = {
     all: () => ['mcp-service'] as const,
     status: () => ['mcp-service', 'status'] as const,
     keys: () => ['mcp-service', 'keys'] as const,
+    scopeOptions: () => ['mcp-service', 'scope-options'] as const,
     tools: () => ['mcp-service', 'tools'] as const,
     audit: (limit: number) => ['mcp-service', 'audit', limit] as const
   },
