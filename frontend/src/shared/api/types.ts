@@ -225,6 +225,12 @@ export type {
   McpProbeResult,
   McpServiceApi
 } from './types/mcpService'
+export type {
+  DavMailReauthStart,
+  DavMailReauthStage,
+  DavMailReauthResult,
+  DavMailApi
+} from './types/davmail'
 export type { SearchAgentPhase, SearchAgentInput, SearchAgentResult } from './types/search-agent'
 export type {
   IslandConnectionState,

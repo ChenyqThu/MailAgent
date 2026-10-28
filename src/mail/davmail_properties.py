@@ -55,6 +55,17 @@ class PropertySyncResult:
     detail: str = ""
 
 
+def resolve_davmail_root(cfg) -> Path:
+    """davmail-poc 部署目录：显式 ``DAVMAIL_ROOT`` 优先，否则仓库根/davmail-poc。
+
+    打包 .app 里仓库根会解析进 site-packages，token.dat / davmail.log 都找不到，
+    所以打包态必须在 userData .env 配 ``DAVMAIL_ROOT``。
+    """
+    if cfg.davmail_root:
+        return Path(cfg.davmail_root)
+    return Path(__file__).resolve().parent.parent.parent / "davmail-poc"
+
+
 def properties_path(davmail_root: Path) -> Path:
     """``<davmail_root>/config/davmail.properties``（davmail-poc 部署约定）。"""
     return Path(davmail_root) / _CONFIG_RELPATH
@@ -68,19 +79,19 @@ def _decode(raw: bytes) -> tuple[str, str]:
         return raw.decode("latin-1"), "latin-1"
 
 
-def _is_key_line(line: str) -> bool:
-    """该行是否是 ``davmail.folderSizeLimit`` 的赋值行（非注释、非前缀相似的别的 key）。"""
+def _is_key_line(line: str, key: str = PROPERTY_KEY) -> bool:
+    """该行是否是 ``key`` 的赋值行（非注释、非前缀相似的别的 key）。"""
     stripped = line.lstrip()
     if not stripped or stripped[0] in "#!":
         return False
-    if not stripped.startswith(PROPERTY_KEY):
+    if not stripped.startswith(key):
         return False
-    rest = stripped[len(PROPERTY_KEY):].lstrip()
+    rest = stripped[len(key):].lstrip()
     return rest[:1] in ("=", ":")
 
 
-def _line_value(line: str) -> str:
-    rest = line.lstrip()[len(PROPERTY_KEY):].lstrip()
+def _line_value(line: str, key: str = PROPERTY_KEY) -> str:
+    rest = line.lstrip()[len(key):].lstrip()
     return rest[1:].strip()  # 去掉分隔符本身
 
 
@@ -97,12 +108,18 @@ def read_current_value(path: Path) -> Optional[str]:
     return _value_from_text(text)
 
 
-def _value_from_text(text: str) -> Optional[str]:
+def _value_from_text(text: str, key: str = PROPERTY_KEY) -> Optional[str]:
     found: Optional[str] = None
     for line in text.splitlines():
-        if _is_key_line(line):
-            found = _line_value(line)  # 重复 key: 后者生效
+        if _is_key_line(line, key):
+            found = _line_value(line, key)  # 重复 key: 后者生效
     return found
+
+
+def read_values(path: Path, keys: tuple[str, ...]) -> dict[str, Optional[str]]:
+    """一次读盘取多个 key 的原始值（不做 Java 反转义）。读不到文件 → 抛 OSError，由调用方决定怎么报。"""
+    text, _ = _decode(Path(path).read_bytes())
+    return {key: _value_from_text(text, key) for key in keys}
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
@@ -113,7 +130,8 @@ def _atomic_write(path: Path, data: bytes) -> None:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        shutil.copymode(path, tmp)  # 保持原权限位（mkstemp 是 0600）
+        if path.exists():
+            shutil.copymode(path, tmp)  # 保持原权限位（新建文件沿用 mkstemp 的 0600）
         os.replace(tmp, path)
     except BaseException:
         try:

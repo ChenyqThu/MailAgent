@@ -2,6 +2,7 @@ import type { AdminApi } from './admin'
 import type { CalendarApi } from './calendar'
 import type { ChatApi } from './chat'
 import type { ConnectorApi } from './connector'
+import type { DavMailApi } from './davmail'
 import type { EmailApi } from './email'
 import type { EventsApi } from './events'
 import type { FeedbackApi } from './feedback'
@@ -41,6 +42,8 @@ export interface MailApi {
   connector: ConnectorApi
   /** 设置 →「MCP 服务」：对外 MCP 的访问密钥 / 工具清单 / 调用记录 / 公网地址检测。 */
   mcpService: McpServiceApi
+  /** DavMail 认证失效自助重连：生成登录链接 / 贴回回调换 token（task 10-28，davmail 后端专属）。 */
+  davmail: DavMailApi
   llm: LlmApi
   /** issue #59 — KOS 入库台账统计 (LLM Dashboard「知识库入库」区)。 */
   kos: KosApi

@@ -414,6 +414,7 @@ from src.api.routers import (  # noqa: E402
     connector,
     contact_agent,
     contacts,
+    davmail,
     email,
     email_remote_image,
     email_views,
@@ -488,6 +489,9 @@ app.include_router(skills.mcp_router)
 # task 10-27 — /api/mcp-service/*: 设置页「MCP 服务」的数据面（访问密钥增删轮换 / 对外工具清单 /
 # 最近调用 / 公网地址检测）。owner-only（verify_cf_access），agent Bearer key 天然 401。
 app.include_router(mcp_service.router)
+# task 10-28 — /api/davmail/reauth/*: DavMail 认证失效后在 App 弹窗里自助重新认证（换 token 写
+# token.dat + LOGIN 验证）。owner-only（verify_cf_access），非 davmail 后端 409。
+app.include_router(davmail.router)
 app.include_router(agent.router)
 # S1 R3 (agent openness wave1) — web 联网工具执行端点 /api/web/{fetch,search}。TS 薄壳→
 # Python 执行（业务权威 + 远程 parity）；SSRF 防护 + 钉 IP 在 routers/web.py。gateway 侧

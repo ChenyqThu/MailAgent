@@ -50,6 +50,7 @@ import type {
   CalendarSyncStateItem,
   ChatApi,
   ConnectorApi,
+  DavMailApi,
   McpServiceApi,
   EmailCalendarLink,
   EventCreateOpts,
@@ -131,6 +132,7 @@ import {
 } from './http_client'
 import { createChatRuntime } from './chat_api'
 import { createConnectorApi } from './connector_api'
+import { createDavMailApi } from './davmail_api'
 import { createMcpServiceApi } from './mcp_service_api'
 
 function notImplemented(method: string): Promise<never> {
@@ -608,6 +610,15 @@ export class HttpApi implements MailApi {
       this._mcpService = createMcpServiceApi(this.baseUrl)
     }
     return this._mcpService
+  }
+
+  // DavMail 自助重新认证（serve-api `/api/davmail/reauth/*`）。lazy getter 理由同 connector。
+  private _davmail?: DavMailApi
+  get davmail(): DavMailApi {
+    if (!this._davmail) {
+      this._davmail = createDavMailApi(this.baseUrl)
+    }
+    return this._davmail
   }
 
   llm = {

@@ -288,13 +288,8 @@ class EmailNotionSyncApp:
         if self.backend.backend_origin == "davmail":
             from src.mail.davmail_restart import build_restart_callback
             from src.mail.davmail_watchdog import DavMailWatchdog
-            # DAVMAIL_ROOT 显式配置优先 — 打包 .app 里 _REPO_ROOT 解析进
-            # site-packages, token.dat/davmail.log 都找不到 (看板 token 恒'未知')。
-            _davmail_root = (
-                Path(config.davmail_root)
-                if config.davmail_root
-                else _REPO_ROOT / "davmail-poc"
-            )
+            from src.mail.davmail_properties import resolve_davmail_root
+            _davmail_root = resolve_davmail_root(config)
             # davmail.folderSizeLimit 同步 (2026-07-24 大邮箱停摆事故): 把
             # DAVMAIL_FOLDER_SIZE_LIMIT 写进 davmail.properties, 状态落 sync_state
             # 供 Settings 面如实显示。写文件 ≠ 生效 —— DavMail 只在启动时读配置。
