@@ -334,6 +334,18 @@ type ToolResultWithA2UI<T> = T & {
 };
 ```
 
+### 7.4 与对外 MCP 工具同步
+
+Gateway 工具（`frontend/src/ai-gateway/tools/`）只给应用内对话用。外部 Agent（Notion 等）经 `/mcp`
+拿到的是另一套实现：`src/skills/builtin/*.py` 的 `ToolDef`，两边不会自动同步。
+
+新增、调整或修复一个 gateway 工具时，同一批改动里要判断它对应的对外工具是否也要改：
+
+- 已有对外工具：参数、返回字段、行为修复两边一起改。
+- 没有对外工具：评估是否开放。开放时按 [`skill-delivery-api.md`](./skill-delivery-api.md) 的约定挂精确
+  scope、填 `title` 和 `side_effect`，写工具带 `confirm` 和 `rate_limit`；有意不开放的，在 PR 说明里写原因。
+- 改完跑 `pytest tests/skills tests/mcp tests/api/test_mcp_http.py tests/api/test_skill_manifest.py`。
+
 ## 8. assistant-ui 接入
 
 目标使用：
