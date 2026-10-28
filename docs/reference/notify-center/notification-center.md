@@ -148,7 +148,7 @@ core 的 CAS 兜底（同 `until` 的 snooze 重放落到同一终态；已关�
 | agent run 终态 completed/failed | `src/agents/run_worker.py::_announce_terminal`（判定后经 `_publish_notification` 双写，与灵动岛卡片并存不替代） | results（`contact_governance` job → reviews：那是「待审阅的建议」不是运行结果） | completed=info；failed=warn | 成功 `agent_run:{job_id}`；失败 `agent_run_failed:{agent_id}`（同 agent 连败合并计次） |
 | 维护族 job 终态（resync/backfill 等） | `src/sync/job_worker.py::_notify_terminal`（`_execute` 正常终态与 runner crash 两条路径各一处挂点） | results | succeeded/aborted=info；failed/partial_failure=warn | `job:{job_type}:{job_id}` |
 | 系统告警 episode（4 key） | `src/service.py::_check_and_alert` 各 ENTER/ESCALATE/RECOVER 分支旁调用 `_notify_alert_episode` | system | `service_unhealthy`=critical；`dead_letters`/`radar_unavailable`/`outbox_backlog`=warn | `alert:{episode_key}` |
-| DavMail watchdog critical | `src/mail/davmail_watchdog.py::_evaluate_alerts` 经 `_notify_davmail_alert` / `_notify_davmail_resolve` | system | critical | `alert:davmail:{sub}`，sub ∈ imap_down/smtp_down/login_degraded/token/oauth_failure |
+| DavMail watchdog critical | `src/mail/davmail_watchdog.py::_evaluate_alerts` 经 `_notify_davmail_alert` / `_notify_davmail_resolve` | system | critical | `alert:davmail:{sub}`，sub ∈ imap_down/smtp_down/login_degraded/auth_expiry/oauth_failure。认证类（login_degraded / oauth_failure / auth_expiry）的 `payload.link` 是 `{"type":"davmail_reauth"}`（点击打开重认证弹窗），其余跳 `/admin/kanban` |
 
 **读态纪律**：agent run 的完成/失败文案经 `derive_agent_run_state`（`src/agents/run_state.py`）
 单源判定；job 侧文案读 `status` 字段而不是 SSE 事件名——`partial_failure` / `aborted` 都走
@@ -177,7 +177,8 @@ core 的 CAS 兜底（同 `until` 的 snooze 重放落到同一终态；已关�
 
 | 信源 / 归档 | 挂点 | 说明 |
 |---|---|---|
-| DavMail token warning 档（80-87d） | `davmail_watchdog.py::_evaluate_alerts` token 段 | 与 critical 档**共用一条** `alert:davmail:token`：`nc.davmail_token`（80d）是 episode 本体管条目生死，`nc.davmail_token_critical`（87d）只是严重度升级标记。跨 87d → 同一条 severity 升 critical + 未读化（`_bump`）；降回 [80,87) 不收条目（warning 判据仍成立），age<80 才 resolve。对齐 `/admin/system-alerts` 合成的 token aging 档 |
+| DavMail 登录到期（2026-10-28 起取代 token.dat 80/87 天两档） | `davmail_watchdog.py::_evaluate_alerts` 第 2 段 | 剩 ≤3 天（`AUTH_REMIND_DAYS`）warn「DavMail 登录将在 N 天后过期」，已过期或日志出现 AADSTS70043 → **同一条** `alert:davmail:auth_expiry` 升 critical「DavMail 登录已过期」+ 未读化。`nc.davmail_auth_expiry` 是 episode 本体管条目生死，`nc.davmail_auth_expired` 只是严重度升级标记；重新认证后剩余天数回到提醒线以上才 resolve。到期 = `davmail.auth.last_interactive_at` + 登录有效期（默认 30 天，70043 行里的 maximum allowed lifetime 会覆盖）；没有交互认证记录不判断。旧判据按 token.dat mtime 算天数，而 token.dat 每小时随 refresh 重写，永远不触发 |
+| DavMail OAuth 失败（2026-10-28 起 episode 化） | `davmail_watchdog.py::_evaluate_alerts` 第 3 段，判据单源 `_resolve_oauth_state` | `alert:davmail:oauth_failure` 进入时发一次，持续期间不计次也不未读化；恢复（5 分钟窗口内无新错误，且 IMAP LOGIN 探测成功或 token.dat 晚于最后一条错误）时 resolve，飞书发恢复消息。🔴 旧判据「错误行与上一轮不同」被每行不同的 Trace ID 击穿，失效期间每轮都算新错误（活库一条通知计次到 818）。失效状态落 `davmail.last_oauth_error`（非空 = 失效中，恢复时清空），水位 `nc.davmail_oauth_failure`。错误是 AADSTS70043 时不进本条，只由上一行升级成「DavMail 登录已过期」（唯一处理办法是重新认证，两条 critical 讲的是同一件事）；已因别的错误打开的本条不特意关，恢复时一起收。登录已过期期间 `login_degraded` 同样不进入（LOGIN 必然失败，讲的是同一件事），过期前已打开的照常在 LOGIN 恢复时收 |
 | EWS throttling（进入 / 解除） | `davmail_watchdog.py::_update_throttle_pause`，与飞书 `alert_davmail_ews_throttling` 并列 | `alert:davmail:ews_throttle`，system/warn。announce-once 与 uid-backfill pause flag **同判据**（进入 burst 置位时 publish、完全干净一轮复位时 resolve），不另立水位 |
 | worker crash 自动归档 | `src/utils/supervise.py::supervise` 每轮（重）启动起一个健康计时 task | 连续存活满 `healthy_after_sec`（默认 300s）→ `resolve_by_dedupe('alert:worker_crash:{name}')`。🔴 归档**不能**挂「crash 计数重置」那处——执行到那里意味着 worker 刚又死了一次。计时 task 在 worker 返回 / 抛异常 / supervise 被 cancel 三条路径都被 cancel 并 await 回收（不留 pending task） |
 | worker crash-loop 自动归档 | `src/service.py::_spawn_supervised`（spawn 前） | crash-loop 后 supervise 直接 return，该 worker 到进程重启为止不再跑 → **服务启动是唯一自然恢复信号**。20 个 worker 逐个 spawn 不会刷事件：`resolve_by_dedupe` 只在真有活跃行时才 emit |
@@ -205,8 +206,9 @@ evaluate/commit 代码一行未动。两处入口 guard 从「无 alerter 直接
 `payload.link` 形状 `{"type": "library", "fileId": file_id}` → deep-link `library` 型（§7）。
 `link.type` 的 Python 构造子集单独建了一道跨语言闸：`center_models.py::NOTIFICATION_LINK_TYPE_VALUES`
 ↔ `notifications.ts` 同名常量（`tests/config/test_notification_enum_parity.py` 的 `PAIRS`），
-只收 Python 会构造的六型（`group`/`thread`/`updater_restart` 三型恒在 Electron main 单侧构造+
-解析，不跨语言边界，两侧头注写明为何不进这张表）。
+只收 Python 会构造的七型（`group`/`thread`/`updater_restart` 三型恒在 Electron main 单侧构造+
+解析，不跨语言边界，两侧头注写明为何不进这张表）。第七型 `davmail_reauth`（无参数）由
+`davmail_watchdog.py` 的认证类告警构造，点击打开 DavMail 重认证弹窗（2026-10-28）。
 
 ## 7. 前端（`frontend/src/shared/components/notifications/`）
 
@@ -333,11 +335,9 @@ evaluate/commit 代码一行未动。两处入口 guard 从「无 alerter 直接
 
 ## 10. 已知遗留
 
-- **OAuth 失败条目只发不收**：日志里不会出现「OAuth 又好了」，无恢复信号可挂——用户读掉即清
-  徽标，要清条目走面板「标记已处理」。
-- **升级过 M3-C2 的库里可能留一条孤儿 `alert:davmail:token_critical`**：token 通知的 dedupe_key
-  由 `token_critical` 归并成 `token`，旧 key 的活跃行不会再被 resolve（只可能出现在 M1-M2 期间
-  真的报过 ≥87d token 的库上）。面板手动「标记已处理」即可。
+- **可能留孤儿的旧 token 条目**：`alert:davmail:token_critical`（M1-M2）与 `alert:davmail:token`
+  （M3-C2 至 2026-10-28）两个 key 已无信源，活跃行不会再被 resolve（只出现在真报过 ≥80d token
+  的库上）。面板手动「标记已处理」即可。
 
 > 以下项目已随 M3 修复，不再是遗留：`ContactAgentDrawer` 深链 tab 不复位（M3-C4，
 > `queueNonce` 自增让抽屉响应重复点击）；`chat_run` 信源现状 dormant（M3-C3，见 §9

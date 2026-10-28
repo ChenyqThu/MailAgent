@@ -43,9 +43,10 @@ NOTIFICATION_SEVERITY_VALUES: Tuple[str, ...] = ("info", "warn", "critical")
 #: **Python 侧会构造**的判别值。只收这个子集 —— `group` / `thread` / `updater_restart`
 #: 三型恒在 Electron main（`frontend/src/electron/main/notification_fanout.ts` /
 #: `handlers/updater.ts`）单侧构造 + 同进程解析, 不跨 Python/TS 边界, 没有可漂移的手抄
-#: 副本, 不进本表（TS 镜像因此也只手抄这六个, 见 notifications.ts 同名常量头注）。
+#: 副本, 不进本表（TS 镜像因此也只手抄这七个, 见 notifications.ts 同名常量头注）。
 #: 09-03（library-p2-write-and-links）新增 `library`——`src/notify/library_signals.py`
-#: 是目前唯一的构造点。
+#: 是目前唯一的构造点。`davmail_reauth`（无参数，点击打开 DavMail 重认证弹窗）由
+#: `src/mail/davmail_watchdog.py` 的认证类告警构造。
 NOTIFICATION_LINK_TYPE_VALUES: Tuple[str, ...] = (
     "session",
     "route",
@@ -53,6 +54,7 @@ NOTIFICATION_LINK_TYPE_VALUES: Tuple[str, ...] = (
     "contact_queue",
     "matter",
     "library",
+    "davmail_reauth",
 )
 
 #: 计次更新时 severity **只升不降** 的比较基准 (design §3.2 规则 2;

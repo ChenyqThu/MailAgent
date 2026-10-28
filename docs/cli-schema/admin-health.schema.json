@@ -47,6 +47,10 @@
           "type": ["object", "null"],
           "properties": {
             "token_age_days": {"type": ["number", "null"]},
+            "auth_days_left": {
+              "description": "距 DavMail 登录到期的天数 (可为负 = 已过期); 无交互认证记录为 null",
+              "type": ["number", "null"]
+            },
             "imap_reachable": {"type": "boolean"},
             "last_probe_at": {"type": ["string", "null"]}
           }

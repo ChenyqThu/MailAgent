@@ -332,3 +332,83 @@ describe('admin handlers — davmail health (L2a IMAP LOGIN probe)', () => {
     expect(login).toBeUndefined()
   })
 })
+
+describe('admin handlers — davmail 登录到期 (davmail.auth.expires_at)', () => {
+  function seedSyncState(rows: Record<string, string>): void {
+    fixtureDb = new Database(':memory:')
+    fixtureDb.exec('CREATE TABLE sync_state (key TEXT PRIMARY KEY, value TEXT)')
+    const insert = fixtureDb.prepare('INSERT INTO sync_state (key, value) VALUES (?, ?)')
+    for (const [k, v] of Object.entries(rows)) insert.run(k, v)
+  }
+
+  afterEach(() => {
+    fixtureDb?.close()
+    fixtureDb = null
+  })
+
+  const base = {
+    'davmail.last_probe_at': '2026-10-28T10:00:00',
+    'davmail.imap_reachable': '1',
+    'davmail.smtp_reachable': '1',
+    'davmail.token_age_days': '0.04'
+  }
+  const expiresInDays = (d: number): string => String(Math.floor(Date.now() / 1000 + d * 86400))
+
+  test('剩余 10 天 → ok, 字段带出到期时间与剩余天数', () => {
+    seedSyncState({ ...base, 'davmail.auth.expires_at': expiresInDays(10) })
+    const h = runDavmailHealth()
+    expect(h.level).toBe('ok')
+    expect(h.auth_days_left).toBeCloseTo(10, 1)
+    expect(h.auth_expires_at).not.toBeNull()
+    expect(runSystemAlerts().alerts).toEqual([])
+  })
+
+  test('剩余 2 天 → warning + 一条即将过期提示', () => {
+    seedSyncState({ ...base, 'davmail.auth.expires_at': expiresInDays(2) })
+    expect(runDavmailHealth().level).toBe('warning')
+    const alert = runSystemAlerts().alerts.find((a) => a.title === 'DavMail 登录即将过期')
+    expect(alert?.level).toBe('warning')
+  })
+
+  test('已过期 → critical', () => {
+    seedSyncState({ ...base, 'davmail.auth.expires_at': expiresInDays(-1) })
+    expect(runDavmailHealth().level).toBe('critical')
+    const alert = runSystemAlerts().alerts.find((a) => a.title === 'DavMail 登录已过期')
+    expect(alert?.level).toBe('critical')
+  })
+
+  test("没有交互认证记录 ('') → 不判断到期, 字段为 null", () => {
+    seedSyncState({ ...base, 'davmail.auth.expires_at': '' })
+    const h = runDavmailHealth()
+    expect(h.level).toBe('ok')
+    expect(h.auth_days_left).toBeNull()
+    expect(h.auth_expires_at).toBeNull()
+  })
+
+  test('token.dat 天数不再参与分级 (100 天也是 ok)', () => {
+    seedSyncState({ ...base, 'davmail.token_age_days': '100.00' })
+    expect(runDavmailHealth().level).toBe('ok')
+    expect(runSystemAlerts().alerts).toEqual([])
+  })
+
+  test('OAuth 错误行已清空 (恢复) → ok, 即使 last_oauth_error_at 还在 1 小时内', () => {
+    seedSyncState({
+      ...base,
+      'davmail.last_oauth_error': '',
+      'davmail.last_oauth_error_at': new Date().toISOString()
+    })
+    expect(runDavmailHealth().level).toBe('ok')
+    expect(runSystemAlerts().alerts).toEqual([])
+  })
+
+  test('OAuth 错误行非空 (失效中) → critical, 不论时间戳多旧', () => {
+    seedSyncState({
+      ...base,
+      'davmail.last_oauth_error': 'ERROR invalid_grant',
+      'davmail.last_oauth_error_at': '2026-10-01T00:00:00'
+    })
+    expect(runDavmailHealth().level).toBe('critical')
+    const alert = runSystemAlerts().alerts.find((a) => a.title === 'DavMail OAuth 续期失败')
+    expect(alert?.level).toBe('critical')
+  })
+})

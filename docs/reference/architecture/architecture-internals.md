@@ -163,13 +163,15 @@ pending → fetch_failed → (重试) → synced
 - 失败一律 **fail-open**（读写 sync_state 出错 / 状态损坏 / 多键部分写入 → 倾向发告警）：误判 silent = 漏告警，比刷屏危险。唯一例外是非有限观测值（`NaN`/`inf` → 一律 SILENT 保持 active 原样，因为 `nan >= threshold` 恒 `False` 会把活动 episode 误判成 RECOVER = 假恢复）。
 - 状态落 `sync_state` 表，键 `alert.<key>.{active,last_alerted_value,entered_at}`（镜像 `davmail.*` 键先例 → **非 schema 变更，不 bump `DB_VERSION`**）→ 跨进程（serve / serve-api）共享 + 跨重启存活。多键**部分写入是安全的**：所有残缺组合下一轮都 fail-open 落到「发告警」并在下次 commit 时自愈 —— 故未引入单事务/单 JSON 值（那会牺牲逐字段可观测性，而这正是 `davmail.*` 键先例的价值）。
 
-**接入面**：`service.py:_check_and_alert` 的 `dead_letters` / `service_unhealthy` / `radar_unavailable` / `outbox_backlog`，+ `davmail_watchdog._evaluate_alerts` 的 token 门槛告警（tracker 由 service.py 注入，未注入 = disabled = 老行为）。灵动岛 `dispatch_dead_letter_accum` 与告警**同源同生命周期**（在同一个「投递成功 → commit」分支内），不独立刷屏。
+**接入面**：`service.py:_check_and_alert` 的 `dead_letters` / `service_unhealthy` / `radar_unavailable` / `outbox_backlog`，+ `davmail_watchdog._evaluate_alerts` 的登录到期与 OAuth 失败两项（tracker 由 service.py 注入，未注入 = disabled = 判据成立就告、从不恢复）。灵动岛 `dispatch_dead_letter_accum` 与告警**同源同生命周期**（在同一个「投递成功 → commit」分支内），不独立刷屏。
 
-**davmail token 是「一个 episode + 一个 severity marker」，不是两个平级 episode**：
-- `alert.davmail_token.*`（门槛 80d）= episode 本体，负责「告知一次」与「恢复一次」的生命周期。
-- `alert.davmail_token_critical.*`（门槛 87d）= 严重度升级标记，只决定消息用 critical 还是 warning 措辞。
+**davmail 登录到期是「一个 episode + 一个 severity marker」，不是两个平级 episode**（2026-10-28 起取代 token.dat 80/87 天两档——token.dat 每小时随 refresh 重写，按它的天数永远不触发）：
+- `alert.davmail_auth_expiry.*`（剩 ≤`AUTH_REMIND_DAYS`=3 天，或已过期）= episode 本体，负责「告知一次」与「恢复一次」的生命周期。
+- `alert.davmail_auth_expired.*`（剩 ≤0 天，或日志出现 AADSTS70043）= 严重度升级标记，只决定消息用 critical 还是 warning 措辞。
 
-两个平级 episode 会打架：age 首次 89 时两边都 active，之后 age 降到 82（**仍在 warning 区间**）→ critical episode 判 RECOVER → **误报「token 已恢复」**。现在 82 只让 severity marker 复位（不发消息 —— 情况变好且 episode 本体仍 active，用户早已知情），恢复通知**只在 age < 80 时**发。critical 消息同时充当 episode 本体的告知（投递成功时一并 commit 本体），否则本体永远 inactive → 将来 age 归零发不出恢复通知。
+两个平级 episode 会打架：已过期时两边都 active，之后若回到「还剩 1-3 天」（**仍在提醒区间**）→ 过期 episode 判 RECOVER → **误报「已恢复」**。现在这种回落只让 marker 复位（不发消息），恢复通知**只在重新认证、剩余天数回到提醒线以上时**发。critical 消息同时充当 episode 本体的告知（投递成功时一并 commit 本体），否则本体永远 inactive → 将来发不出恢复通知。到期 = `davmail.auth.last_interactive_at`（重认证流程写）+ `davmail.auth.lifetime_secs`（默认 30 天，70043 行里的 maximum allowed lifetime 覆盖）；watchdog 落盘 `davmail.auth.expires_at` 给各读面，读面按调用时刻现算剩余天数，分档函数 `auth_expiry_level` 单源。
+
+**davmail OAuth 失败是布尔 episode**（`alert.davmail_oauth_failure.*`）：判据单源 `_resolve_oauth_state`，失效状态落 `davmail.last_oauth_error`（非空 = 失效中）。窗口内有新错误 → active；窗口内没有新错误**不等于**恢复，还要 IMAP LOGIN 探测成功或 token.dat 晚于最后一条错误。🔴 不能按「错误行与上一轮不同」判新错误：davmail 每行都带不同的 Trace ID，失效期间每轮都算新错误（活库一条通知计次 818 次）。错误是 AADSTS70043 时不进本 episode，交给登录到期那条升 critical，避免同一件事两条 critical；同理，登录已过期期间 `login_degraded` 也不进入（过期前已 announce 的保持，恢复时照常收）。登录已过期期间也不自动重启 davmail（重启救不回来，也不计入 24h 重启次数）。
 
 **不接**（行为字节级不变）：
 - 非状态型告警 `sync_error:{id}` / `notion_error:{op}` / `worker_crashed:{name}` / `davmail_fetch_burst` / `service_started` 等；`consecutive_errors` 为半状态型（成功即归零），保持每轮告。
@@ -552,7 +554,7 @@ log4j.logger.davmail=INFO
    闸失效等于没有闸，而且没人会发现。所以抽取器只认当前的单行习语，重构者被迫回来同步更新抽取器，
    顺手核对镜像仍一致。
 
-**现存二十六闸**（前四条是原有的，中间八条随 issue #68 补齐，再四条随 08-02 custom-agent review 补齐，
+**现存二十七闸**（前四条是原有的，中间九条随 issue #68 补齐（davmail 到期那条 10-28 换了内容），再四条随 08-02 custom-agent review 补齐，
 再两条随 08-01 MCP connector PR3 补齐，再一条随 08-05 列表筛选/排序菜单重做补齐，
 一条随 08-06 connector 双轨目录补齐，再两条随 08-20 perf epic 补齐，
 再两条随 08-24 通讯录收尾批补齐，末两条随 09-03 资料库 epic 补齐）：
@@ -569,6 +571,7 @@ log4j.logger.davmail=INFO
 | `calendar_event.source` 三元组 | canonical `src/calendar_sync/_common.SOURCES_TRY_ORDER`（三处 Python 已改 import） · `sync_store.py` 的 **SQL `CHECK`** · `api/schemas/calendar.py` 的 `Literal` · `src/skills/builtin/calendar.py` · TS 联合 + `shared/lib/calendarSource.ts` + gateway `z.enum` | `tests/calendar_sync/test_event_source_parity.py` | 收窄侧漏加 → 写入/调用被拒但报「非法参数」（排查往调用方去）；放宽侧漏加 → 存得进读得出，却过不了 ajv、前端 fallback 掉（只 `console.warn`） |
 | `FIXED_EXEC_PATH`（exec 子进程固定 PATH） | `src/skills/secret_names.py`（冒号串） · `frontend/src/electron/main/exec_policy_matcher.ts`（数组） | `frontend/tests/main/py_ts_constants_parity.test.ts` | owner 派生的 exec 免卡规则钉在子进程**不会去查的目录** → 规则永不命中、次次弹审批（或 UI 承诺免卡而真实执行仍拦） |
 | `INTEGRITY_MARKER_FILENAME` | `src/mail/db_safety.py` · `frontend/src/electron/main/backend_lifecycle.ts::DB_INTEGRITY_MARKER_FILENAME` | 同上文件（此前只有 `backend_lifecycle.test.ts` 的**自指**断言：TS 常量 vs 测试里再抄一遍的字面量，Python 改名照样绿） | Python fail-fast 写的 marker 前端永远读不到 → 用户只看到「后端起不来」，quick_check 的损坏详情丢失 |
+| davmail 登录到期提醒线 `AUTH_REMIND_DAYS` + 分档比较（10-28 取代 issue #68 的 `TOKEN_WARN_DAYS`/`TOKEN_CRITICAL_DAYS` 对撞） | `src/mail/davmail_watchdog.py::AUTH_REMIND_DAYS` / `auth_expiry_level`（Python 侧 CLI / serve-api 直接 import，零手抄）· `frontend/src/shared/lib/davmailThresholds.ts::AUTH_REMIND_DAYS` / `authExpiryLevel`（`handlers/admin.ts` 桌面读面） | `frontend/tests/main/py_ts_constants_parity.test.ts`（常量值对撞 + 两侧 `<= 0` / `<= AUTH_REMIND_DAYS` 比较符逐条抽取 + `handlers/admin.ts` 禁裸阈值） | 同一次到期在桌面看板、web 面与 CLI 报不同严重度（issue #68 病根的同一形态） |
 | `REQUIRED_TABLES`（**子集**关系） | `src/services/admin_health.py`（全量 9 张，CLI/serve-api 共用） · `frontend/src/electron/main/backend_lifecycle.ts`（开窗门控的 4 张关键子集） | 同上文件（钉子集关系，不是相等 —— 子集是有意的） | TS 侧拼错表名 = `probeDbReady` 永远等不到就绪，开窗卡满 120s 超时降级（v0.2.2 同款事故） |
 | 日历 IPC(17) + onboarding(16) 类型族（**跨进程，结构性**） | `electron/main/handlers/calendar-{read,sync,write}.ts` ↔ `shared/api/types/calendar.ts`；`handlers/onboarding.ts` ↔ `renderer/onboarding/ipc.ts`（含 4 对**改名**镜像） | `frontend/tests/main/type_family_parity.test.ts`（带花括号深度的小解析器抽**顶层字段键集**；只比键集不逐字段钉值 —— 否则一份手抄变两份） | 生产者多的键 = 前端读不到（TS 说它不存在）；声明多的键 = 恒 `undefined` 且**编译期完全不报**（#67 一整批就是这个形态） |
 | 六能力卡工具词表 ↔ headless 可选工具集 | `src/api/routers/agent_runs.py::HEADLESS_TOOL_OPTIONS`（后端权威清单） · `frontend/src/shared/lib/customAgentCapabilities.ts::CUSTOM_AGENT_CAPABILITY_TOOL_SETS`（六档分组） | `tests/config/test_agent_capability_parity.py`（**精确相等**，不是包含；带 spread 闭包解析 + 未解析常量必抛） | 左缺 = 该工具不归任何档管，用户动一次能力卡它就成永久孤儿；右缺 = 写进 `allowed_tools` 后被 gateway 交集丢掉，**UI 显示该档已开而工具根本不存在**（本项目真发生过 `email_search`→`email_list_filter` 改名） |

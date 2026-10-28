@@ -127,9 +127,17 @@ export interface DavMailHealthData {
    *  Render the ratio only when present; substituting a default here would just be a
    *  different wrong number on screen. */
   login_fail_threshold?: number
-  /** Days since token.dat mtime. Null when token.dat missing. */
+  /** Days since token.dat mtime. Null when token.dat missing. Informational only:
+   *  token.dat is rewritten on every hourly refresh, so it never drives `level`. */
   token_age_days: number | null
   token_mtime_iso: string | null
+  /** When the DavMail sign-in expires (last interactive auth + tenant sign-in lifetime,
+   *  default 30 days). Null when no in-app re-auth has been recorded yet — the UI should
+   *  say "not recorded" rather than guess. Optional because older backends don't send it. */
+  auth_expires_at?: string | null
+  /** Days until `auth_expires_at`, computed at read time (negative = already expired).
+   *  ≤ 0 drives level critical, ≤ AUTH_REMIND_DAYS (3) drives warning. */
+  auth_days_left?: number | null
   /** Count of EWSThrottlingException headers in last 5 min log tail. */
   throttle_events_5min: number
   last_oauth_error: string | null

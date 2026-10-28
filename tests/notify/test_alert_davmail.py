@@ -31,21 +31,36 @@ def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro) if False else asyncio.run(coro)
 
 
-def test_alert_davmail_token_expiring_is_warning(monkeypatch):
+def test_alert_davmail_auth_expiring_is_warning(monkeypatch):
     n, sent = _make_notifier(monkeypatch)
-    _run(n.alert_davmail_token_expiring(82.5))
+    assert _run(n.alert_davmail_auth_expiring(2.5, "2026-11-27T14:54:00")) is True
     assert len(sent) == 1
     card = sent[0]
     assert card["header"]["template"] == "yellow"  # warning
-    assert "82.5" in card["elements"][0]["content"]
-    assert "OAuth token 即将过期" in card["header"]["title"]["content"]
+    assert "2.5" in card["elements"][0]["content"]
+    assert "重新认证" in card["elements"][0]["content"]
+    assert "登录即将过期" in card["header"]["title"]["content"]
 
 
-def test_alert_davmail_token_critical_is_critical(monkeypatch):
+def test_alert_davmail_auth_expired_is_critical(monkeypatch):
     n, sent = _make_notifier(monkeypatch)
-    _run(n.alert_davmail_token_critical(89.0))
+    assert _run(n.alert_davmail_auth_expired(None)) is True
     assert len(sent) == 1
     assert sent[0]["header"]["template"] == "red"
+    assert "登录已过期" in sent[0]["header"]["title"]["content"]
+
+
+def test_davmail_alerts_point_to_in_app_reauth(monkeypatch):
+    """处理办法统一是 App 里的「重新认证」，不再让人去命令行重走 O365Manual OAuth flow。"""
+    n, sent = _make_notifier(monkeypatch)
+    _run(n.alert_davmail_oauth_failure("AADSTS70043 refresh token expired"))
+    _run(n.alert_davmail_login_degraded(3, 3))
+    _run(n.alert_davmail_restart_storm(6, 6))
+    assert len(sent) == 3
+    for card in sent:
+        content = card["elements"][0]["content"]
+        assert "重新认证" in content
+        assert "O365Manual" not in content
 
 
 def test_alert_davmail_oauth_failure_truncates_long_excerpt(monkeypatch):
@@ -140,8 +155,8 @@ def test_cooldown_dedupes_repeat_same_key(monkeypatch):
         return True
     monkeypatch.setattr(n, "_send", fake_send)
 
-    _run(n.alert_davmail_token_expiring(82.0))
-    _run(n.alert_davmail_token_expiring(82.5))
+    _run(n.alert_davmail_auth_expiring(2.0, None))
+    _run(n.alert_davmail_auth_expiring(1.5, None))
     assert len(sent) == 1, "second call within cooldown should be suppressed"
 
 
@@ -159,7 +174,7 @@ def test_disabled_level_skipped(monkeypatch):
         return True
     monkeypatch.setattr(n, "_send", fake_send)
 
-    _run(n.alert_davmail_token_expiring(82.0))  # warning → skipped
+    _run(n.alert_davmail_auth_expiring(2.0, None))  # warning → skipped
     _run(n.alert_davmail_process_recovered("IMAP"))  # info → skipped
     _run(n.alert_davmail_oauth_failure("bad token"))  # critical → sent
     assert len(sent) == 1

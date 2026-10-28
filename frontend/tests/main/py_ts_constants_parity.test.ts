@@ -114,46 +114,61 @@ describe('FIXED_EXEC_PATH — exec 子进程固定 PATH', () => {
   })
 })
 
-// ── 1b. DavMail token 老化门槛（本 issue 的原始病根）────────────────────────────
+// ── 1b. DavMail 登录到期提醒线（本 issue 的原始病根：门槛手抄后漂移）──────────────
 
-describe('TOKEN_WARN_DAYS / TOKEN_CRITICAL_DAYS — davmail token 老化分档', () => {
-  test.each([['TOKEN_WARN_DAYS'], ['TOKEN_CRITICAL_DAYS']])(
-    'TS %s === Python davmail_watchdog 的同名常量',
-    (name) => {
-      const pySrc = read('src/mail/davmail_watchdog.py')
-      const pm = pySrc.match(new RegExp(`^${name}\\s*=\\s*([\\d.]+)`, 'm'))
-      expect(
-        pm,
-        `davmail_watchdog.py 里没抽到 \`${name} = <number>\` —— 改名了？更新本闸`
-      ).not.toBeNull()
+describe('AUTH_REMIND_DAYS — davmail 登录到期分档', () => {
+  test('TS AUTH_REMIND_DAYS === Python davmail_watchdog 的同名常量', () => {
+    const name = 'AUTH_REMIND_DAYS'
+    const pySrc = read('src/mail/davmail_watchdog.py')
+    const pm = pySrc.match(new RegExp(`^${name}\\s*=\\s*([\\d.]+)`, 'm'))
+    expect(
+      pm,
+      `davmail_watchdog.py 里没抽到 \`${name} = <number>\` —— 改名了？更新本闸`
+    ).not.toBeNull()
 
-      const tsSrc = read('frontend/src/shared/lib/davmailThresholds.ts')
-      const tm = tsSrc.match(new RegExp(`export const ${name}\\s*=\\s*([\\d.]+)`))
-      expect(
-        tm,
-        `davmailThresholds.ts 里没抽到 \`export const ${name}\` —— 改名了？更新本闸`
-      ).not.toBeNull()
+    const tsSrc = read('frontend/src/shared/lib/davmailThresholds.ts')
+    const tm = tsSrc.match(new RegExp(`export const ${name}\\s*=\\s*([\\d.]+)`))
+    expect(
+      tm,
+      `davmailThresholds.ts 里没抽到 \`export const ${name}\` —— 改名了？更新本闸`
+    ).not.toBeNull()
 
-      expect(
-        Number.parseFloat(tm![1]),
-        `TS ${name}=${tm![1]} 与 Python ${pm![1]} 漂移 —— level 由 watchdog live 计算不落盘，` +
-          ' 每个读面都自己重算：漂了就是同一个 token 在桌面/web/CLI 报不同严重度（本 issue 病根）。'
-      ).toBe(Number.parseFloat(pm![1]))
-    }
-  )
+    expect(
+      Number.parseFloat(tm![1]),
+      `TS ${name}=${tm![1]} 与 Python ${pm![1]} 漂移 —— level 由 watchdog live 计算不落盘，` +
+        ' 每个读面都自己重算：漂了就是同一次到期在桌面/web/CLI 报不同严重度。'
+    ).toBe(Number.parseFloat(pm![1]))
+  })
+
+  test('Python auth_expiry_level 的分档比较仍是 `<= 0` / `<= AUTH_REMIND_DAYS`', () => {
+    // TS authExpiryLevel 按这两条比较手抄；Python 侧若改成 `<` 或换了判据，这里必须红，
+    // 逼改的人回来同步 TS（只比常量抓不到「同一个数、不同的比较符」）。
+    const pySrc = read('src/mail/davmail_watchdog.py')
+    const fn = pySrc.match(/^def auth_expiry_level\([\s\S]*?(?=^def |^class |^\S)/m)
+    expect(
+      fn,
+      'davmail_watchdog.py 里没抽到 `def auth_expiry_level` —— 改名了？更新本闸'
+    ).not.toBeNull()
+    expect(fn![0]).toMatch(/if days_left <= 0:\s*\n\s*return "critical"/)
+    expect(fn![0]).toMatch(/if days_left <= AUTH_REMIND_DAYS:\s*\n\s*return "warning"/)
+
+    const tsSrc = read('frontend/src/shared/lib/davmailThresholds.ts')
+    expect(tsSrc).toMatch(/if \(daysLeft <= 0\) return 'critical'/)
+    expect(tsSrc).toMatch(/if \(daysLeft <= AUTH_REMIND_DAYS\) return 'warning'/)
+  })
 
   test('handlers/admin.ts 不再出现裸阈值魔数', () => {
-    // 修复前这里是 `tokenAge >= 87` / `>= 80` 两处裸数字（连常量名都没有，grep 都难找）。
-    // 只抓**两位以上**的比较数：同文件里 `tokenAge >= 0` 是 watchdog 的 "-1 表示 token 文件
-    // 不可读" 哨兵判定，不是阈值，不该被这条误伤。
+    // issue #68 修复前这里是 `tokenAge >= 87` / `>= 80` 两处裸数字（连常量名都没有，grep
+    // 都难找）。分档一律走 @shared/lib/davmailThresholds 的 authExpiryLevel。只抓非零的比较数：
+    // 同文件里 `tokenAge >= 0` 是 watchdog 的 "-1 表示 token 文件不可读" 哨兵判定，不是阈值。
     const src = read('frontend/src/electron/main/handlers/admin.ts')
     const body = src
       .split('\n')
       .filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*'))
       .join('\n')
     expect(
-      body.match(/token_?[Aa]ge\w*\s*>=\s*\d{2}/g),
-      'handlers/admin.ts 又把 token 阈值写成裸数字了 —— 必须用 @shared/lib/davmailThresholds'
+      body.match(/(token_?[Aa]ge|[Dd]ays_?[Ll]eft)\w*\s*(>=|<=|<|>)\s*[1-9]/g),
+      'handlers/admin.ts 又把到期阈值写成裸数字了 —— 必须用 @shared/lib/davmailThresholds'
     ).toBeNull()
   })
 })

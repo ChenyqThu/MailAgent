@@ -33,7 +33,11 @@ from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_repository, get_service_ctx
 from src.mail.davmail_watchdog import (
+    AUTH_EXPIRES_AT_KEY as _AUTH_EXPIRES_AT_KEY,
     LOGIN_FAIL_THRESHOLD as _watchdog_login_fail_threshold,
+    auth_days_left as _auth_days_left,
+    auth_expiry_level as _auth_expiry_level,
+    parse_auth_expires_at as _parse_auth_expires_at,
 )
 from src.services import admin_health as _health
 from src.services import admin_stats as _admin_stats
@@ -147,7 +151,7 @@ async def admin_health(
                 davmail_rows = conn.execute(
                     "SELECT key, value FROM sync_state WHERE key IN "
                     "('davmail.last_probe_at', 'davmail.token_age_days', "
-                    "'davmail.imap_reachable')"
+                    "'davmail.imap_reachable', 'davmail.auth.expires_at')"
                 ).fetchall()
                 davmail_summary = _build_davmail_summary(dict(davmail_rows))
             except sqlite3.Error:
@@ -457,12 +461,9 @@ async def admin_cleanup_dead_letter(
 # ============================================================
 # davmail-health / system-alerts 共享: sync_state davmail.* 直读 + level 重算
 # ============================================================
-# DavMailWatchdog 的阈值。level 在 watchdog 内 live 计算不落盘, 故这里复刻
-# _compute_overall_level 的**规则**, 用落盘的 davmail.* 值重算 —— 但**阈值本身
-# 直接 import 真源** (issue #68: 旧注释「watchdog import 期会拉 SyncStore/alert
-# 重依赖」已证伪, 那些 import 全在 TYPE_CHECKING 下)。
-_TOKEN_WARN_DAYS = _health.TOKEN_WARN_DAYS
-_TOKEN_CRITICAL_DAYS = _health.TOKEN_CRITICAL_DAYS
+# level 在 watchdog 内 live 计算不落盘, 故这里复刻 _compute_overall_level 的**规则**,
+# 用落盘的 davmail.* 值重算 —— 但登录到期的分档 (auth_expiry_level) 与阈值**直接
+# import 真源** (issue #68: 复刻阈值正是 CLI 漏档的病根)。
 # F5: login 失败阈值改由 watchdog 每轮经 sync_state davmail.login_fail_threshold
 # 传播 (生效值单源), 根治「四个健康读面各自硬编码 3, 设 DAVMAIL_LOGIN_FAIL_THRESHOLD
 # 非默认值时判定漂移」。键缺失 (老数据 / watchdog 未升级) fallback 默认 3 (同样 import
@@ -506,7 +507,7 @@ def _compute_level(
     *,
     imap_ok: bool,
     smtp_ok: bool,
-    token_age_days: Optional[float],
+    auth_days_left: Optional[float],
     oauth_error_active: bool,
     throttle_burst: bool,
     login_degraded: bool = False,
@@ -519,10 +520,9 @@ def _compute_level(
     if login_degraded:
         # TCP 可达但 IMAP LOGIN 连续失败 = token 劣化 (能发不能收)
         return "critical"
-    if token_age_days is not None and token_age_days >= _TOKEN_CRITICAL_DAYS:
-        return "critical"
-    if token_age_days is not None and token_age_days >= _TOKEN_WARN_DAYS:
-        return "warning"
+    auth_level = _auth_expiry_level(auth_days_left)
+    if auth_level is not None:
+        return auth_level
     if throttle_burst:
         return "warning"
     return "ok"
@@ -556,6 +556,8 @@ def _build_davmail_health(state: dict[str, str]) -> dict:
             token_age_days = None
 
     token_mtime_iso = state.get("davmail.token_mtime_iso") or None
+    auth_expires_epoch = _parse_auth_expires_at(state.get(_AUTH_EXPIRES_AT_KEY))
+    auth_days_left = _auth_days_left(auth_expires_epoch)
     last_oauth_error = state.get("davmail.last_oauth_error") or None
     last_oauth_error_at = state.get("davmail.last_oauth_error_at") or None
     throttle_5min = _as_int("davmail.throttle_events_5min")
@@ -574,7 +576,7 @@ def _build_davmail_health(state: dict[str, str]) -> dict:
         level = _compute_level(
             imap_ok=imap_ok,
             smtp_ok=smtp_ok,
-            token_age_days=token_age_days,
+            auth_days_left=auth_days_left,
             oauth_error_active=bool(last_oauth_error),
             throttle_burst=throttle_5min >= 3,
             login_degraded=login_degraded,
@@ -612,6 +614,13 @@ def _build_davmail_health(state: dict[str, str]) -> dict:
         "login_fail_threshold": login_fail_threshold,
         "token_age_days": token_age_days,
         "token_mtime_iso": token_mtime_iso,
+        # 登录到期 (租户登录频率上限, 从最近一次交互认证起算)。无记录 → 两者 None。
+        "auth_expires_at": (
+            datetime.fromtimestamp(auth_expires_epoch).isoformat(timespec="seconds")
+            if auth_expires_epoch is not None
+            else None
+        ),
+        "auth_days_left": auth_days_left,
         "throttle_events_5min": throttle_5min,
         "last_oauth_error": last_oauth_error,
         "last_oauth_error_at": last_oauth_error_at,
@@ -632,7 +641,7 @@ async def admin_davmail_health(
 
     DavMailWatchdog 每 60s 把 IMAP/SMTP 可达性 / token age / OAuth 错误 / throttle 落盘。
     ``enabled=false`` 时 (非 davmail 模式, watchdog 无 tick) level='unknown', 其余字段取
-    默认。level 重算见 _compute_level (watchdog 阈值 80d warn / 87d critical)。
+    默认。level 重算见 _compute_level (登录到期分档与 watchdog 同一函数)。
 
     返回 DavMailHealthData。meta.source='sqlite'。
     """
@@ -654,7 +663,7 @@ async def admin_system_alerts(
 
     本地后端唯一的持久化健康源是 DavMailWatchdog 落盘的 ``davmail.*`` 键; 无独立 alerts
     表。故从 davmail health 快照合成活跃告警: IMAP/SMTP 不可达 / OAuth 错误 → critical;
-    token 临期 / throttle burst → warning。watchdog 未运行 (enabled=false) → 空列表
+    登录临期 / throttle burst → warning; 登录已过期 → critical。watchdog 未运行 (enabled=false) → 空列表
     (没有可信号源, 不臆造告警)。
 
     返回 SystemAlertsData {alerts, critical_count, warning_count, generated_at}。
@@ -704,19 +713,20 @@ async def admin_system_alerts(
                 "message": str(health["last_oauth_error"]),
                 "ts": health["last_oauth_error_at"] or probe_at,
             })
-        tad = health["token_age_days"]
-        if tad is not None and tad >= _TOKEN_CRITICAL_DAYS:
+        days_left = health["auth_days_left"]
+        auth_level = _auth_expiry_level(days_left)
+        if auth_level == "critical":
             alerts.append({
                 "level": "critical", "source": "davmail",
-                "title": "DavMail token expiring",
-                "message": f"OAuth token is {tad:.1f} days old (>= {_TOKEN_CRITICAL_DAYS:.0f}d critical).",
+                "title": "DavMail login expired",
+                "message": "DavMail sign-in has expired; re-authenticate in Settings → Accounts → DavMail.",
                 "ts": probe_at,
             })
-        elif tad is not None and tad >= _TOKEN_WARN_DAYS:
+        elif auth_level == "warning":
             alerts.append({
                 "level": "warning", "source": "davmail",
-                "title": "DavMail token aging",
-                "message": f"OAuth token is {tad:.1f} days old (>= {_TOKEN_WARN_DAYS:.0f}d warning).",
+                "title": "DavMail login expiring",
+                "message": f"DavMail sign-in expires in {days_left:.1f} days; re-authenticate in Settings → Accounts → DavMail.",
                 "ts": probe_at,
             })
         if health["throttle_events_5min"] >= 3:

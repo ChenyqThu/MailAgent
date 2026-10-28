@@ -82,6 +82,7 @@ def test_admin_health_workers_and_davmail_fields(client, tmp_path):
         ("davmail.last_probe_at", "2026-07-11T00:00:00+00:00"),
         ("davmail.token_age_days", "85.3"),
         ("davmail.imap_reachable", "1"),
+        ("davmail.auth.expires_at", str(int(now + 2 * 86400))),
     ):
         conn.execute(
             "INSERT INTO sync_state (key, value, updated_at) VALUES (?,?,?)",
@@ -112,11 +113,13 @@ def test_admin_health_workers_and_davmail_fields(client, tmp_path):
 
     davmail = data["davmail"]
     assert davmail["token_age_days"] == 85.3
+    assert 1.9 < davmail["auth_days_left"] <= 2.0
     assert davmail["imap_reachable"] is True
 
     combined = " ".join(data["notes"])
     assert "crash-loop 停摆" in combined
-    assert "85.3" in combined  # token 老化提示 (≥80d)
+    assert "后过期" in combined  # 登录到期提示 (≤3 天); token.dat 天数不再出提示
+    assert "85.3" not in combined
 
 
 def test_admin_health_worker_staleness(client, tmp_path):

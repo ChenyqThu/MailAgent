@@ -31,7 +31,7 @@ export const NOTIFICATION_LIST_STATE_VALUES = ['open', 'snoozed', 'resolved', 'a
 export type NotificationListState = (typeof NOTIFICATION_LIST_STATE_VALUES)[number]
 
 /** `payload.link.type` 里 **Python 侧会构造**的判别值 —— canonical 在
- *  `src/notify/center_models.py` 同名常量（跨语言闸同上）。只镜像这六个：`group` /
+ *  `src/notify/center_models.py` 同名常量（跨语言闸同上）。只镜像这七个：`group` /
  *  `thread` / `updater_restart` 三型恒由 Electron main 构造（`notification_fanout.ts` /
  *  `handlers/updater.ts`）、renderer 侧解析——全程 TS，不跨 Python/TS 语言边界，没有
  *  手抄副本可漂移，故不进本表（`components/notifications/navigation.ts` 的
@@ -43,7 +43,8 @@ export const NOTIFICATION_LINK_TYPE_VALUES = [
   'report',
   'contact_queue',
   'matter',
-  'library'
+  'library',
+  'davmail_reauth'
 ] as const
 
 /** 单条投影（design §5 wire，camelCase）。`payload` 是自由结构化载荷，deep-link 在

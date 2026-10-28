@@ -24,9 +24,15 @@ from pathlib import Path
 import pytest
 
 from src.mail.davmail_watchdog import (
+    AUTH_EXPIRES_AT_KEY,
+    AUTH_LAST_INTERACTIVE_AT_KEY,
+    AUTH_LIFETIME_SECS_KEY,
+    AUTH_REMIND_DAYS,
+    DEFAULT_AUTH_LIFETIME_SECS,
     DavMailWatchdog,
     _EWS_THROTTLE_RE,
     _OAUTH_FAIL_RE,
+    auth_expiry_level,
 )
 from src.mail.sync_store import SyncStore
 from src.notify.center import NotifyCenter
@@ -164,31 +170,6 @@ def test_token_age_recent_file(
     age, _ = wd._compute_token_age()
     assert age is not None
     assert 4.9 < age < 5.1, f"expected ~5d, got {age}"
-
-
-def test_token_age_thresholds_drive_level(
-    sync_store: SyncStore, davmail_root: Path, write_token
-):
-    # 关键阈值: warning ≥80, critical ≥87
-    for age_days, expected_level in [
-        (50, "ok"),
-        (80, "warning"),
-        (86, "warning"),
-        (87, "critical"),
-        (95, "critical"),
-    ]:
-        write_token(age_seconds=86400 * age_days)
-        wd = DavMailWatchdog(
-            sync_store=sync_store, alerter=None, davmail_root=davmail_root
-        )
-        level = wd._compute_overall_level(
-            imap_ok=True,
-            smtp_ok=True,
-            token_age_days=age_days,
-            oauth_error_active=False,
-            throttle_burst=False,
-        )
-        assert level == expected_level, f"age={age_days} → expected {expected_level}, got {level}"
 
 
 # ────────────────────────────────────────────────────────────────
@@ -464,162 +445,6 @@ async def test_process_recovery_alert(
     await wd._tick()
     recovery_calls = [c for c in alerter.calls if c[0] == "alert_davmail_process_recovered"]
     assert len(recovery_calls) == 1
-
-
-async def test_token_alert_repeats_every_tick_without_episode_tracker(
-    sync_store: SyncStore, davmail_root: Path, write_token
-):
-    """task 07-14: 未注入 episodes (老调用方 / flag off) → 逐字老行为 = 每轮都告."""
-    write_token(age_seconds=82 * 86400)
-    alerter = _FakeAlerter()
-    wd = DavMailWatchdog(
-        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root  # type: ignore[arg-type]
-    )
-    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
-    for _ in range(3):
-        await wd._tick()
-    calls = [c for c in alerter.calls if c[0] == "alert_davmail_token_expiring"]
-    assert len(calls) == 3
-
-
-async def test_token_alert_episode_fires_once_then_silent(
-    sync_store: SyncStore, davmail_root: Path, write_token
-):
-    """task 07-14: 注入 tracker → 进门槛告一次, 后续静默 (老实现每 5min 一条)."""
-    write_token(age_seconds=82 * 86400)
-    alerter = _FakeAlerter()
-    wd = DavMailWatchdog(
-        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
-        episodes=AlertEpisodeTracker(sync_store),
-    )
-    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
-    for _ in range(4):
-        await wd._tick()
-    calls = [c for c in alerter.calls if c[0] == "alert_davmail_token_expiring"]
-    assert len(calls) == 1
-
-
-async def test_token_episode_critical_supersedes_expiring_and_recovers(
-    sync_store: SyncStore, davmail_root: Path, write_token
-):
-    """critical 活跃期间不发 warning 级; 重新 OAuth (age 归零) → 恢复通知 + 复位."""
-    write_token(age_seconds=89 * 86400)
-    alerter = _FakeAlerter()
-    wd = DavMailWatchdog(
-        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
-        episodes=AlertEpisodeTracker(sync_store),
-    )
-    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
-    await wd._tick()
-    await wd._tick()
-    assert len([c for c in alerter.calls if c[0] == "alert_davmail_token_critical"]) == 1
-    assert [c for c in alerter.calls if c[0] == "alert_davmail_token_expiring"] == []
-
-    # 重新走 O365Manual OAuth → token.dat 刷新, age 归零
-    write_token(age_seconds=0)
-    await wd._tick()
-    assert len([c for c in alerter.calls if c[0] == "alert_recovery"]) == 1
-    assert sync_store.get_state("alert.davmail_token_critical.active") == "0"
-    assert sync_store.get_state("alert.davmail_token.active") == "0"
-
-    # 复位后再次劣化 → 新 episode 能重新告警 (episode 没卡在 active)
-    write_token(age_seconds=82 * 86400)
-    await wd._tick()
-    assert len([c for c in alerter.calls if c[0] == "alert_davmail_token_expiring"]) == 1
-
-
-async def test_token_critical_downgrade_to_warning_zone_is_not_a_recovery(
-    sync_store: SyncStore, davmail_root: Path, write_token
-):
-    """🔴 HIGH-3: 89 → 82 (仍在 ≥80 warning 区间) 绝不能报「token 已恢复」.
-
-    两个平级 episode 的写法下, 89 时 critical/expiring 都被标 active, 82 时
-    critical 判 RECOVER → 误发恢复通知, 而 token 其实还在告警区间。
-    """
-    write_token(age_seconds=89 * 86400)
-    alerter = _FakeAlerter()
-    wd = DavMailWatchdog(
-        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
-        episodes=AlertEpisodeTracker(sync_store),
-    )
-    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
-    await wd._tick()
-    assert len([c for c in alerter.calls if c[0] == "alert_davmail_token_critical"]) == 1
-
-    # age 降到 82: 严重度回落但仍在 warning 区间 → 不是恢复
-    write_token(age_seconds=82 * 86400)
-    await wd._tick()
-    assert [c for c in alerter.calls if c[0] == "alert_recovery"] == [], (
-        "token 仍 ≥80 天, 不得报恢复"
-    )
-    # episode 本体仍 active (用户已知情), 只有 severity marker 复位
-    assert sync_store.get_state("alert.davmail_token.active") == "1"
-    assert sync_store.get_state("alert.davmail_token_critical.active") == "0"
-
-    # 真正重走 OAuth (age→0) 才发恢复, 且只发一条
-    write_token(age_seconds=0)
-    await wd._tick()
-    assert len([c for c in alerter.calls if c[0] == "alert_recovery"]) == 1
-
-
-async def test_token_warning_then_critical_then_downgrade_then_recover(
-    sync_store: SyncStore, davmail_root: Path, write_token
-):
-    """HIGH-3 全序列 82 → 89 → 82 → 0: 各阶段恰好一条消息, 无重复无假恢复."""
-    alerter = _FakeAlerter()
-    wd = DavMailWatchdog(
-        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
-        episodes=AlertEpisodeTracker(sync_store),
-    )
-    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
-
-    def _names():
-        return [c[0] for c in alerter.calls if c[0].startswith(("alert_davmail_token", "alert_recovery"))]
-
-    write_token(age_seconds=82 * 86400)
-    await wd._tick()
-    await wd._tick()  # 第二轮静默
-    assert _names() == ["alert_davmail_token_expiring"]
-
-    write_token(age_seconds=89 * 86400)  # 升级到 critical
-    await wd._tick()
-    await wd._tick()
-    assert _names() == ["alert_davmail_token_expiring", "alert_davmail_token_critical"]
-
-    write_token(age_seconds=82 * 86400)  # 降级回 warning 区间 → 静默, 无假恢复
-    await wd._tick()
-    assert _names() == ["alert_davmail_token_expiring", "alert_davmail_token_critical"]
-
-    write_token(age_seconds=0)  # 重走 OAuth → 真恢复
-    await wd._tick()
-    await wd._tick()
-    assert _names() == [
-        "alert_davmail_token_expiring",
-        "alert_davmail_token_critical",
-        "alert_recovery",
-    ]
-
-
-async def test_token_alert_undelivered_is_retried_not_silenced(
-    sync_store: SyncStore, davmail_root: Path, write_token
-):
-    """HIGH-1 (watchdog 侧): token 告警投递失败 → 不提交 → 下轮重发."""
-    write_token(age_seconds=82 * 86400)
-    alerter = _FakeAlerter(delivered=False)
-    wd = DavMailWatchdog(
-        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
-        episodes=AlertEpisodeTracker(sync_store),
-    )
-    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
-    for _ in range(3):
-        await wd._tick()
-    assert len([c for c in alerter.calls if c[0] == "alert_davmail_token_expiring"]) == 3
-    assert sync_store.get_state("alert.davmail_token.active") in (None, "")
-
-    alerter.delivered = True
-    await wd._tick()
-    await wd._tick()  # 投递成功后才静默
-    assert len([c for c in alerter.calls if c[0] == "alert_davmail_token_expiring"]) == 4
 
 
 async def test_ews_throttle_burst_pauses_uid_backfill(
@@ -922,7 +747,8 @@ async def test_oauth_alert_dedupes_repeat_same_error(
     write_log(f"{_log_ts(60)},000 ERROR refresh_token expired")
     alerter = _FakeAlerter()
     wd = DavMailWatchdog(
-        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root  # type: ignore[arg-type]
+        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
+        episodes=AlertEpisodeTracker(sync_store),
     )
     await _patch_probe(wd, imap_ok=True, smtp_ok=True)
     await wd._tick()
@@ -1073,7 +899,7 @@ def test_login_degraded_drives_level_critical(
     level = wd._compute_overall_level(
         imap_ok=True,
         smtp_ok=True,
-        token_age_days=5.0,
+        auth_days_left=20.0,
         oauth_error_active=False,
         throttle_burst=False,
         login_degraded=True,
@@ -1493,102 +1319,6 @@ async def test_process_down_publishes_critical_notification_without_alerter(
     assert all(r["state"] == "resolved" for r in _notifications(sync_store))
 
 
-async def test_token_critical_notification_keeps_own_watermark(
-    sync_store: SyncStore, davmail_root: Path, write_token
-):
-    """🔴 §8.b: token 是唯一 episode 化的一项 —— 飞书不在场时 self.episodes 永不
-    commit (每轮重判 ENTER), 通知中心必须用自己的 `nc.` 水位, 否则每 60s 计次一次。"""
-    write_token(age_seconds=89 * 86400)
-    wd = DavMailWatchdog(
-        sync_store=sync_store, alerter=None, davmail_root=davmail_root,
-        episodes=AlertEpisodeTracker(sync_store),
-        notify_center=_center(sync_store),
-    )
-    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
-    for _ in range(4):
-        await wd._tick()
-
-    rows = _notifications(sync_store, "alert:davmail:token")
-    assert len(rows) == 1 and rows[0]["recurrence_no"] == 1
-    assert rows[0]["severity"] == "critical"
-    # 飞书那份水位没被碰 (没投递过 = 下次配上飞书仍会告)
-    assert sync_store.get_state("alert.nc.davmail_token_critical.active") == "1"
-    assert sync_store.get_state("alert.davmail_token_critical.active") is None
-
-    # 重走 OAuth → age 归零 → 条目收掉 + nc 水位复位
-    write_token(age_seconds=0)
-    await wd._tick()
-    rows = _notifications(sync_store, "alert:davmail:token")
-    assert rows[0]["state"] == "resolved"
-    assert sync_store.get_state("alert.nc.davmail_token.active") == "0"
-
-
-async def test_token_warning_tier_publishes_warn_then_upgrades_to_critical(
-    sync_store: SyncStore, davmail_root: Path, write_token
-):
-    """M3-C2 ③: [80,87) 也要有条目 (摘掉 SystemAlertBadge 后这档只剩铃铛)。
-
-    两档共用一条 dedupe_key → 跨 87 天时**同一条**升 critical 且重新未读化
-    (severity 只升不降 + _bump), 不是并排两条讲同一个 token。
-    """
-    write_token(age_seconds=int(81 * 86400))
-    wd = DavMailWatchdog(
-        sync_store=sync_store, alerter=None, davmail_root=davmail_root,
-        episodes=AlertEpisodeTracker(sync_store),
-        notify_center=_center(sync_store),
-    )
-    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
-    for _ in range(3):
-        await wd._tick()
-
-    rows = _notifications(sync_store, "alert:davmail:token")
-    assert len(rows) == 1, "warning 档 announce-once (nc 水位), 不每轮刷"
-    assert rows[0]["severity"] == "warn"
-    assert rows[0]["category"] == "system" and rows[0]["source"] == "davmail"
-    assert "80" in rows[0]["body"]
-    assert sync_store.get_state("alert.nc.davmail_token.active") == "1"
-
-    # 用户已读了这条 warning, 然后 token 熬过 87d 门槛
-    _mark_read(sync_store, rows[0]["id"])
-    write_token(age_seconds=int(88 * 86400))
-    await wd._tick()
-
-    rows = _notifications(sync_store, "alert:davmail:token")
-    assert len(rows) == 1, "升档走同一条 (共用 dedupe_key)"
-    assert rows[0]["severity"] == "critical"
-    assert rows[0]["recurrence_no"] == 2
-    assert rows[0]["read_at"] is None, "🔴 升档必须重新未读化 (用户要再看见一次)"
-    assert "到期后收发信全停" in rows[0]["body"]
-
-
-async def test_token_downgrade_keeps_entry_and_recovers_only_below_warn(
-    sync_store: SyncStore, davmail_root: Path, write_token
-):
-    """≥87 → [80,87) 不是恢复 (warning 判据仍成立) → 条目留着, 只复位 marker;
-    真恢复 (age<80) 才收条目。"""
-    write_token(age_seconds=int(89 * 86400))
-    wd = DavMailWatchdog(
-        sync_store=sync_store, alerter=None, davmail_root=davmail_root,
-        episodes=AlertEpisodeTracker(sync_store),
-        notify_center=_center(sync_store),
-    )
-    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
-    await wd._tick()
-    assert _notifications(sync_store, "alert:davmail:token")[0]["severity"] == "critical"
-
-    write_token(age_seconds=int(82 * 86400))  # 降档 (只可能是换了 token 又没换全)
-    await wd._tick()
-    row = _notifications(sync_store, "alert:davmail:token")[0]
-    assert row["state"] == "open", "降档不收条目"
-    assert sync_store.get_state("alert.nc.davmail_token_critical.active") == "0"
-    assert sync_store.get_state("alert.nc.davmail_token.active") == "1"
-
-    write_token(age_seconds=0)  # 重走 OAuth
-    await wd._tick()
-    assert _notifications(sync_store, "alert:davmail:token")[0]["state"] == "resolved"
-    assert sync_store.get_state("alert.nc.davmail_token.active") == "0"
-
-
 async def test_ews_throttle_publishes_warn_and_resolves_on_clear(
     sync_store: SyncStore, davmail_root: Path, write_log
 ):
@@ -1623,13 +1353,14 @@ async def test_ews_throttle_publishes_warn_and_resolves_on_clear(
 async def test_oauth_failure_publishes_notification(
     sync_store: SyncStore, davmail_root: Path, write_log
 ):
-    """OAuth 失败 (无恢复信号 → 只发不收); 同一行不重复 = 不计次."""
+    """OAuth 失败进铃铛 (默认安装 alerter=None 也发); 持续期间不计次."""
     write_log(
         f"{_log_ts(60)},000 ERROR davmail "
         "AADSTS700003 refresh token invalid\n"
     )
     wd = DavMailWatchdog(
         sync_store=sync_store, alerter=None, davmail_root=davmail_root,
+        episodes=AlertEpisodeTracker(sync_store),
         notify_center=_center(sync_store),
     )
     await _patch_probe(wd, imap_ok=True, smtp_ok=True)
@@ -1744,3 +1475,555 @@ async def test_notify_center_failure_does_not_break_watchdog(
         await wd._tick()
     assert len([c for c in alerter.calls if c[0] == "alert_davmail_process_down"]) == 1
     assert wd._announced_process_down_imap is True
+
+
+# ────────────────────────────────────────────────────────────────
+# 登录到期 (davmail.auth.*) + OAuth 失败 episode (task 10-28-davmail-self-reauth 批次 3)
+# ────────────────────────────────────────────────────────────────
+
+_DAY = 86400.0
+
+
+def _set_interactive(sync_store: SyncStore, days_ago: float) -> float:
+    """写最近一次交互认证时间 (重认证流程的写法: epoch 秒字符串)。"""
+    ts = time.time() - days_ago * _DAY
+    sync_store.set_state(AUTH_LAST_INTERACTIVE_AT_KEY, str(int(ts)))
+    return float(int(ts))
+
+
+def _aadsts70043_line(ago_secs: float, trace: str, lifetime: int = 2592000) -> str:
+    """真实 davmail 70043 错误行的形状 (~480 字符; lifetime 数字在 240 字符截断之后)。"""
+    return (
+        f"{_log_ts(ago_secs)},001 ERROR [ImapConnection-62217] "
+        "davmail.exchange.auth.O365Token  - refresh token failed interaction_required "
+        "AADSTS70043: The refresh token has expired or is invalid due to sign-in "
+        "frequency checks by conditional access. The token was issued on "
+        "2026-09-28T01:27:14.1059902Z and the maximum allowed lifetime for this "
+        f"request is {lifetime}. Trace ID: {trace} Correlation ID: "
+        "79d2a1e4-a866-4bf1-8c20-c55f2426b5ac Timestamp: 2026-10-28 05:20:57Z"
+    )
+
+
+def _oauth_error_line(ago_secs: float, trace: str) -> str:
+    """非 70043 的 OAuth 错误 (走 oauth_failure episode); 同样每行带不同 Trace ID。"""
+    return (
+        f"{_log_ts(ago_secs)},001 ERROR [ImapConnection-1] "
+        "davmail.exchange.auth.O365Token  - refresh token failed invalid_grant "
+        "AADSTS700082: The refresh token has expired due to inactivity. "
+        f"Trace ID: {trace} Correlation ID: c Timestamp: 2026-10-28 05:20:57Z"
+    )
+
+
+def _calls(alerter: _FakeAlerter, name: str) -> list:
+    return [c for c in alerter.calls if c[0] == name]
+
+
+@pytest.mark.parametrize(
+    "days_left, expected",
+    [
+        (None, "ok"),
+        (20.0, "ok"),
+        (AUTH_REMIND_DAYS + 0.01, "ok"),
+        (AUTH_REMIND_DAYS, "warning"),
+        (0.5, "warning"),
+        (0.0, "critical"),
+        (-2.0, "critical"),
+    ],
+)
+def test_auth_days_left_drives_level(
+    sync_store: SyncStore, davmail_root: Path, days_left, expected
+):
+    wd = DavMailWatchdog(sync_store=sync_store, alerter=None, davmail_root=davmail_root)
+    level = wd._compute_overall_level(
+        imap_ok=True,
+        smtp_ok=True,
+        auth_days_left=days_left,
+        oauth_error_active=False,
+        throttle_burst=False,
+    )
+    assert level == expected
+    assert auth_expiry_level(days_left) == (None if expected == "ok" else expected)
+
+
+async def test_old_token_dat_no_longer_drives_level_or_alerts(
+    sync_store: SyncStore, davmail_root: Path, write_token
+):
+    """token.dat 每小时随 refresh 重写 → 按它的天数永远不触发; 现在它只是信息。"""
+    write_token(age_seconds=100 * _DAY)
+    alerter = _FakeAlerter()
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
+        episodes=AlertEpisodeTracker(sync_store),
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+    assert wd.get_snapshot()["level"] == "ok"
+    assert alerter.calls == []
+    assert _notifications(sync_store) == []
+    assert sync_store.get_state(AUTH_EXPIRES_AT_KEY) == "", "无交互认证记录 → 不判断到期"
+
+
+async def test_auth_expires_at_written_from_last_interactive(
+    sync_store: SyncStore, davmail_root: Path
+):
+    last = _set_interactive(sync_store, days_ago=10)
+    wd = DavMailWatchdog(sync_store=sync_store, alerter=None, davmail_root=davmail_root)
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+    assert sync_store.get_state(AUTH_EXPIRES_AT_KEY) == str(
+        int(last + DEFAULT_AUTH_LIFETIME_SECS)
+    )
+    snap = wd.get_snapshot()
+    assert 19.9 < snap["auth_days_left"] < 20.1
+    assert snap["level"] == "ok"
+
+
+async def test_aadsts70043_lifetime_is_parsed_from_full_line(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """租户把有效期改成 14 天 → 从 70043 行里读出来, 到期按新值算。"""
+    last = _set_interactive(sync_store, days_ago=1)
+    write_log(_aadsts70043_line(30, "trace-a", lifetime=1209600))
+    wd = DavMailWatchdog(sync_store=sync_store, alerter=None, davmail_root=davmail_root)
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+    assert sync_store.get_state(AUTH_LIFETIME_SECS_KEY) == "1209600"
+    assert sync_store.get_state(AUTH_EXPIRES_AT_KEY) == str(int(last + 1209600))
+    # 存下来的错误行被截到 240 字符, 数字只能在扫描时从整行取
+    assert "1209600" not in (sync_store.get_state("davmail.last_oauth_error") or "")
+
+
+async def test_auth_expiry_warns_once_then_recovers_after_reauth(
+    sync_store: SyncStore, davmail_root: Path
+):
+    _set_interactive(sync_store, days_ago=27.5)  # 剩 2.5 天
+    alerter = _FakeAlerter()
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
+        episodes=AlertEpisodeTracker(sync_store),
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(3):
+        await wd._tick()
+
+    assert len(_calls(alerter, "alert_davmail_auth_expiring")) == 1
+    assert _calls(alerter, "alert_davmail_auth_expired") == []
+    rows = _notifications(sync_store, "alert:davmail:auth_expiry")
+    assert len(rows) == 1 and rows[0]["recurrence_no"] == 1
+    assert rows[0]["severity"] == "warn"
+    assert rows[0]["title"] == "DavMail 登录将在 2 天后过期"
+    assert json.loads(rows[0]["payload_json"]) == {"link": {"type": "davmail_reauth"}}
+    assert wd.get_snapshot()["level"] == "warning"
+
+    # 在 App 里重新认证 → 剩余天数回到 ~30
+    _set_interactive(sync_store, days_ago=0)
+    await wd._tick()
+    await wd._tick()
+    assert [c[1] for c in _calls(alerter, "alert_recovery")] == [("DavMail 登录",)]
+    assert _notifications(sync_store, "alert:davmail:auth_expiry")[0]["state"] == "resolved"
+    assert wd.get_snapshot()["level"] == "ok"
+
+
+async def test_auth_expiry_escalates_warn_to_critical_on_same_entry(
+    sync_store: SyncStore, davmail_root: Path
+):
+    _set_interactive(sync_store, days_ago=27.5)
+    alerter = _FakeAlerter()
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
+        episodes=AlertEpisodeTracker(sync_store),
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+    row = _notifications(sync_store, "alert:davmail:auth_expiry")[0]
+    _mark_read(sync_store, row["id"])
+
+    _set_interactive(sync_store, days_ago=31)  # 已过期
+    await wd._tick()
+    await wd._tick()
+    rows = _notifications(sync_store, "alert:davmail:auth_expiry")
+    assert len(rows) == 1, "升档走同一条 (共用 dedupe_key)"
+    assert rows[0]["severity"] == "critical"
+    assert rows[0]["title"] == "DavMail 登录已过期"
+    assert rows[0]["recurrence_no"] == 2
+    assert rows[0]["read_at"] is None, "升档必须重新未读"
+    assert [c[0] for c in alerter.calls if c[0].startswith("alert_davmail_auth")] == [
+        "alert_davmail_auth_expiring",
+        "alert_davmail_auth_expired",
+    ]
+    assert wd.get_snapshot()["level"] == "critical"
+
+    _set_interactive(sync_store, days_ago=0)
+    await wd._tick()
+    assert len(_calls(alerter, "alert_recovery")) == 1
+    assert sync_store.get_state("alert.davmail_auth_expiry.active") == "0"
+    assert sync_store.get_state("alert.davmail_auth_expired.active") == "0"
+    assert _notifications(sync_store, "alert:davmail:auth_expiry")[0]["state"] == "resolved"
+
+
+async def test_aadsts70043_escalates_expiry_to_critical(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """日志出现 70043 = 已经过期, 即使按记录算还剩几天 (记录可能早于真实登录)。"""
+    _set_interactive(sync_store, days_ago=27.5)
+    write_log(_aadsts70043_line(30, "trace-a"))
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root,
+        episodes=AlertEpisodeTracker(sync_store),
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+    row = _notifications(sync_store, "alert:davmail:auth_expiry")[0]
+    assert row["severity"] == "critical"
+    assert row["title"] == "DavMail 登录已过期"
+
+
+async def test_oauth_failure_alerts_once_across_changing_trace_ids(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """🔴 每行错误带不同 Trace ID: 失效期间每轮都是「新错误行」, 但只能告一次。
+
+    逐行比较的老判据在这里每轮都告, 通知被顶到第 818 次 (活库实证)。
+    """
+    alerter = _FakeAlerter()
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
+        episodes=AlertEpisodeTracker(sync_store),
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    write_log(_oauth_error_line(30, "trace-0"))
+    await wd._tick()
+    row = _notifications(sync_store, "alert:davmail:oauth_failure")[0]
+    _mark_read(sync_store, row["id"])
+    for i in range(1, 5):
+        write_log(_oauth_error_line(10, f"trace-{i}"))
+        await wd._tick()
+
+    assert len(_calls(alerter, "alert_davmail_oauth_failure")) == 1
+    rows = _notifications(sync_store, "alert:davmail:oauth_failure")
+    assert len(rows) == 1
+    assert rows[0]["recurrence_no"] == 1, "持续期间不计次"
+    assert rows[0]["read_at"] is not None, "持续期间不顶成未读"
+    assert rows[0]["state"] == "open"
+    assert json.loads(rows[0]["payload_json"]) == {"link": {"type": "davmail_reauth"}}
+    assert wd.get_snapshot()["level"] == "critical"
+
+
+async def test_oauth_failure_not_realerted_after_app_restart(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """新 watchdog 实例 + 同一 sync_state (App 重启) → 同一 episode 不再告一遍。"""
+    center = _center(sync_store)
+    alerter = _FakeAlerter()
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
+        episodes=AlertEpisodeTracker(sync_store), notify_center=center,
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    write_log(_oauth_error_line(30, "trace-a"))
+    await wd._tick()
+
+    alerter2 = _FakeAlerter()
+    wd2 = DavMailWatchdog(
+        sync_store=sync_store, alerter=alerter2, davmail_root=davmail_root,  # type: ignore[arg-type]
+        episodes=AlertEpisodeTracker(sync_store), notify_center=center,
+    )
+    await _patch_probe(wd2, imap_ok=True, smtp_ok=True)
+    write_log(_oauth_error_line(10, "trace-b"))
+    await wd2._tick()
+    await wd2._tick()
+
+    assert _calls(alerter2, "alert_davmail_oauth_failure") == []
+    assert _calls(alerter2, "alert_davmail_auth_expired") == []
+    rows = _notifications(sync_store, "alert:davmail:oauth_failure")
+    assert len(rows) == 1 and rows[0]["recurrence_no"] == 1
+
+
+async def test_oauth_failure_recovers_on_login_success(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    alerter = _FakeAlerter()
+    wd = _make_login_wd(
+        sync_store, davmail_root, alerter, login_ok=False,
+        episodes=AlertEpisodeTracker(sync_store),
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    write_log(_oauth_error_line(30, "trace-a"))
+    await wd._tick()
+    assert sync_store.get_state("davmail.last_oauth_error")
+
+    # 窗口内已没有新错误, 且 LOGIN 探测成功 → 恢复
+    write_log("")
+    wd._probe_imap_login = lambda: True  # type: ignore[method-assign]
+    await wd._tick()
+    await wd._tick()
+    assert [c[1] for c in _calls(alerter, "alert_recovery")] == [("DavMail OAuth",)]
+    assert _notifications(sync_store, "alert:davmail:oauth_failure")[0]["state"] == "resolved"
+    assert sync_store.get_state("davmail.last_oauth_error") == "", "读面据此不再报 critical"
+    assert wd.get_snapshot()["level"] == "ok"
+
+
+async def test_oauth_failure_needs_positive_recovery_evidence(
+    sync_store: SyncStore, davmail_root: Path, write_log, write_token
+):
+    """窗口内没新错误 ≠ 恢复 (davmail 日志安静时不会写「好了」)。要 LOGIN 成功或
+    token.dat 在最后一条错误之后被重写过。"""
+    write_token(age_seconds=_DAY)
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root,
+        episodes=AlertEpisodeTracker(sync_store),
+        notify_center=_center(sync_store),
+    )  # 未注入 cfg → LOGIN 探测跳过 (login_ok=None)
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    write_log(_oauth_error_line(30, "trace-a"))
+    await wd._tick()
+    write_log("")
+    await wd._tick()
+    await wd._tick()
+    assert _notifications(sync_store, "alert:davmail:oauth_failure")[0]["state"] == "open"
+    assert wd.get_snapshot()["level"] == "critical"
+
+    # 重认证写了 token.dat → mtime 晚于最后一条错误
+    token = davmail_root / "token" / "token.dat"
+    later = time.time() + 5
+    os.utime(token, (later, later))
+    await wd._tick()
+    assert _notifications(sync_store, "alert:davmail:oauth_failure")[0]["state"] == "resolved"
+
+
+async def test_legacy_open_oauth_row_is_resolved_on_recovery(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """episode 化之前留下的 open 行 (活库 recurrence 818, 没有 nc 水位) 也要收掉。"""
+    center = _center(sync_store)
+    center.publish(
+        category="system", source="davmail", title="DavMail OAuth 失败",
+        body="old", severity="critical", dedupe_key="alert:davmail:oauth_failure",
+    )
+    sync_store.set_state("davmail.last_oauth_error", "AADSTS70043 old line")
+    sync_store.set_state(
+        "davmail.last_oauth_error_at",
+        datetime.fromtimestamp(time.time() - 3600).isoformat(timespec="seconds"),
+    )
+    wd = _make_login_wd(
+        sync_store, davmail_root, None, login_ok=True,
+        episodes=AlertEpisodeTracker(sync_store), notify_center=center,
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+    assert _notifications(sync_store, "alert:davmail:oauth_failure")[0]["state"] == "resolved"
+    assert sync_store.get_state("davmail.last_oauth_error") == ""
+
+
+async def test_oauth_failure_undelivered_is_retried_not_silenced(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """两阶段提交: 飞书没送达 → 不 commit → 下轮重发; 送达后才静默。"""
+    alerter = _FakeAlerter(delivered=False)
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
+        episodes=AlertEpisodeTracker(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    write_log(_oauth_error_line(30, "trace-a"))
+    await wd._tick()
+    await wd._tick()
+    assert len(_calls(alerter, "alert_davmail_oauth_failure")) == 2
+    alerter.delivered = True
+    await wd._tick()
+    await wd._tick()
+    assert len(_calls(alerter, "alert_davmail_oauth_failure")) == 3
+
+
+async def test_login_degraded_notification_opens_reauth(
+    sync_store: SyncStore, davmail_root: Path
+):
+    wd = _make_login_wd(
+        sync_store, davmail_root, None, login_ok=False,
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(3):
+        await wd._tick()
+    row = _notifications(sync_store, "alert:davmail:login_degraded")[0]
+    assert json.loads(row["payload_json"]) == {"link": {"type": "davmail_reauth"}}
+    # 非认证类条目仍跳看板
+    await _patch_probe(wd, imap_ok=False, smtp_ok=True)
+    for _ in range(3):
+        await wd._tick()
+    imap_row = _notifications(sync_store, "alert:davmail:imap_down")[0]
+    assert json.loads(imap_row["payload_json"])["link"]["type"] == "route"
+
+
+async def test_aadsts70043_yields_single_critical_via_auth_expiry(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """70043 只能靠重新认证解决, 「登录已过期」一条就讲清了 → oauth_failure 不进入,
+    不发第二条 critical, 飞书也只发一条。"""
+    alerter = _FakeAlerter()
+    wd = _make_login_wd(
+        sync_store, davmail_root, alerter, login_ok=False,
+        episodes=AlertEpisodeTracker(sync_store),
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for i in range(3):
+        write_log(_aadsts70043_line(10, f"trace-{i}"))
+        await wd._tick()
+
+    assert _notifications(sync_store, "alert:davmail:oauth_failure") == []
+    assert sync_store.get_state("alert.davmail_oauth_failure.active") is None
+    assert sync_store.get_state("alert.nc.davmail_oauth_failure.active") is None
+    assert _calls(alerter, "alert_davmail_oauth_failure") == []
+    rows = _notifications(sync_store, "alert:davmail:auth_expiry")
+    assert len(rows) == 1 and rows[0]["recurrence_no"] == 1
+    assert rows[0]["severity"] == "critical"
+    assert rows[0]["title"] == "DavMail 登录已过期"
+    assert len(_calls(alerter, "alert_davmail_auth_expired")) == 1
+    assert wd.get_snapshot()["level"] == "critical", "读面照样按 OAuth 失效判 critical"
+
+    # 重新认证 → 只有「登录」那条恢复
+    _set_interactive(sync_store, days_ago=0)
+    write_log("")
+    wd._probe_imap_login = lambda: True  # type: ignore[method-assign]
+    await wd._tick()
+    assert [c[1] for c in _calls(alerter, "alert_recovery")] == [("DavMail 登录",)]
+    assert _notifications(sync_store, "alert:davmail:auth_expiry")[0]["state"] == "resolved"
+    assert sync_store.get_state("davmail.last_oauth_error") == ""
+
+
+async def test_non_70043_oauth_error_still_uses_oauth_failure(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    alerter = _FakeAlerter()
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
+        episodes=AlertEpisodeTracker(sync_store),
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    write_log(_oauth_error_line(10, "trace-a"))
+    await wd._tick()
+
+    rows = _notifications(sync_store, "alert:davmail:oauth_failure")
+    assert len(rows) == 1 and rows[0]["severity"] == "critical"
+    assert len(_calls(alerter, "alert_davmail_oauth_failure")) == 1
+    assert _notifications(sync_store, "alert:davmail:auth_expiry") == []
+    assert _calls(alerter, "alert_davmail_auth_expired") == []
+
+
+async def test_active_oauth_failure_kept_when_error_turns_into_70043(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """已因别的错误 active, 后来变成 70043: 不特意关, 恢复时与到期那条一起收。"""
+    alerter = _FakeAlerter()
+    wd = _make_login_wd(
+        sync_store, davmail_root, alerter, login_ok=False,
+        episodes=AlertEpisodeTracker(sync_store),
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    write_log(_oauth_error_line(10, "trace-a"))
+    await wd._tick()
+    write_log(_aadsts70043_line(10, "trace-b"))
+    await wd._tick()
+    await wd._tick()
+
+    oauth_rows = _notifications(sync_store, "alert:davmail:oauth_failure")
+    assert len(oauth_rows) == 1
+    assert oauth_rows[0]["state"] == "open" and oauth_rows[0]["recurrence_no"] == 1
+    assert len(_calls(alerter, "alert_davmail_oauth_failure")) == 1
+    assert _notifications(sync_store, "alert:davmail:auth_expiry")[0]["severity"] == "critical"
+
+    _set_interactive(sync_store, days_ago=0)
+    write_log("")
+    wd._probe_imap_login = lambda: True  # type: ignore[method-assign]
+    await wd._tick()
+    assert _notifications(sync_store, "alert:davmail:oauth_failure")[0]["state"] == "resolved"
+    assert _notifications(sync_store, "alert:davmail:auth_expiry")[0]["state"] == "resolved"
+    assert sorted(c[1] for c in _calls(alerter, "alert_recovery")) == [
+        ("DavMail OAuth",),
+        ("DavMail 登录",),
+    ]
+
+
+async def test_aadsts70043_with_login_failures_yields_only_auth_expiry(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """70043 期间 LOGIN 必然连续失败 → login_degraded 不进入; 全部 critical 只有一条。"""
+    alerter = _FakeAlerter()
+    wd = _make_login_wd(
+        sync_store, davmail_root, alerter, login_ok=False,
+        episodes=AlertEpisodeTracker(sync_store),
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for i in range(5):  # 越过默认 LOGIN 失败阈值 3
+        write_log(_aadsts70043_line(10, f"trace-{i}"))
+        await wd._tick()
+
+    assert wd._consecutive_login_fails >= wd.login_fail_threshold
+    critical = [r for r in _notifications(sync_store) if r["severity"] == "critical"]
+    assert [r["dedupe_key"] for r in critical] == ["alert:davmail:auth_expiry"]
+    assert critical[0]["recurrence_no"] == 1
+    assert _calls(alerter, "alert_davmail_login_degraded") == []
+    assert _calls(alerter, "alert_davmail_oauth_failure") == []
+    assert len(_calls(alerter, "alert_davmail_auth_expired")) == 1
+    assert wd.get_snapshot()["level"] == "critical"
+
+
+async def test_login_degraded_announced_before_expiry_is_kept_then_resolved(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """过期前已因别的原因 announce 的 login_degraded: 过期期间保持, 恢复时照常收。"""
+    alerter = _FakeAlerter()
+    wd = _make_login_wd(
+        sync_store, davmail_root, alerter, login_ok=False,
+        episodes=AlertEpisodeTracker(sync_store),
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(3):
+        await wd._tick()
+    assert len(_calls(alerter, "alert_davmail_login_degraded")) == 1
+
+    write_log(_aadsts70043_line(10, "trace-a"))
+    await wd._tick()
+    row = _notifications(sync_store, "alert:davmail:login_degraded")[0]
+    assert row["state"] == "open" and row["recurrence_no"] == 1
+
+    _set_interactive(sync_store, days_ago=0)
+    write_log("")
+    wd._probe_imap_login = lambda: True  # type: ignore[method-assign]
+    await wd._tick()
+    assert _notifications(sync_store, "alert:davmail:login_degraded")[0]["state"] == "resolved"
+    assert len(_calls(alerter, "alert_davmail_login_recovered")) == 1
+
+
+async def test_auto_restart_skipped_while_login_expired(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """登录过期时重启救不回来 → 不调 restart_callback, 不计入 24h 重启次数。"""
+    alerter = _FakeAlerter()
+    wd, restart_calls = _make_restart_wd(
+        sync_store, davmail_root, alerter,
+        auto_restart_cooldown=0,
+        episodes=AlertEpisodeTracker(sync_store),
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for i in range(5):
+        write_log(_aadsts70043_line(10, f"trace-{i}"))
+        await wd._tick()
+
+    assert wd._consecutive_login_fails >= wd.login_fail_threshold
+    assert restart_calls == []
+    assert wd._restart_times == []
+    assert sync_store.get_state("davmail.auto_restart_times") is None
+    assert _calls(alerter, "alert_davmail_auto_restart") == []

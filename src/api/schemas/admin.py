@@ -143,8 +143,12 @@ class DavMailHealthData(BaseModel):
     # 老后端未写键)。
     imap_login_ok: Optional[bool] = None
     consecutive_login_failures: int = 0
+    # token.dat 距今天数, 纯信息 (每小时随 refresh 重写, 不参与分级)。
     token_age_days: Optional[float] = None
     token_mtime_iso: Optional[str] = None
+    # 登录到期 (最近一次交互认证 + 登录有效期)。无交互认证记录 → None。
+    auth_expires_at: Optional[str] = None
+    auth_days_left: Optional[float] = None
     throttle_events_5min: int
     last_oauth_error: Optional[str] = None
     last_oauth_error_at: Optional[str] = None

@@ -25,6 +25,8 @@ from typing import Dict, Optional
 import aiohttp
 from loguru import logger
 
+from src.mail.davmail_watchdog import REAUTH_HINT as _DAVMAIL_REAUTH_HINT
+
 
 # 告警级别配置：颜色模板 + 图标
 LEVEL_CONFIG = {
@@ -436,57 +438,49 @@ class FeishuAlertNotifier:
 
     # ── DavMail backend 健康告警 (roadmap §4.5.1 + §4.5.2 + §4.5.3) ─────
 
-    async def alert_davmail_token_expiring(self, age_days: float):
-        """DavMail OAuth refresh_token 接近过期 (≥80 天没 refresh)"""
-        days_left = max(0.0, 90.0 - age_days)
+    async def alert_davmail_auth_expiring(
+        self, days_left: float, expires_at_iso: Optional[str]
+    ):
+        """DavMail 登录快到期 (租户登录频率上限, 剩 ≤AUTH_REMIND_DAYS 天)"""
         return await self.send_alert(
             level="warning",
-            title="DavMail OAuth token 即将过期",
+            title="DavMail 登录即将过期",
             content=(
-                f"davmail-poc/token/token.dat 已 **{age_days:.1f} 天**没刷新。"
-                f"refresh_token 90 天有效期，预计剩余 **~{days_left:.0f} 天**。\n"
-                "**建议**: 检查 davmail-poc 是否正常 refresh；接近 90 天需手动"
-                "重走 O365Manual OAuth flow。"
+                f"公司策略要求定期重新登录，DavMail 登录还剩 **{days_left:.1f} 天**"
+                "，到期后邮件收发会停止。\n"
+                f"**操作**: {_DAVMAIL_REAUTH_HINT}"
             ),
             source="davmail_watchdog",
             details={
-                "Token age": f"{age_days:.1f} 天",
-                "估剩余": f"{days_left:.0f} 天",
-                "排查命令": "`pm2 logs davmail-poc --lines 50`",
+                "剩余": f"{days_left:.1f} 天",
+                "预计过期": expires_at_iso or "未知",
             },
-            alert_key="davmail_token_expiring",
+            alert_key="davmail_auth_expiring",
         )
 
-    async def alert_davmail_token_critical(self, age_days: float):
-        """DavMail OAuth refresh_token 极接近过期 (≥87 天)"""
-        days_left = max(0.0, 90.0 - age_days)
+    async def alert_davmail_auth_expired(self, expires_at_iso: Optional[str]):
+        """DavMail 登录已过期 (到期时间已过, 或日志出现 AADSTS70043)"""
         return await self.send_alert(
             level="critical",
-            title="DavMail OAuth token 即将失效（紧急）",
+            title="DavMail 登录已过期",
             content=(
-                f"token.dat 已 **{age_days:.1f} 天**没刷新，预计剩余 "
-                f"**~{days_left:.0f} 天**就要失效。\n"
-                "**立即操作**: 重走 O365Manual OAuth flow，否则 IMAP/SMTP "
-                "将停止工作，必须回切 applescript backend。"
+                "DavMail 登录已超过公司策略允许的有效期，IMAP/SMTP 已停止工作。\n"
+                f"**立即操作**: {_DAVMAIL_REAUTH_HINT}"
             ),
             source="davmail_watchdog",
-            details={
-                "Token age": f"{age_days:.1f} 天",
-                "估剩余": f"{days_left:.0f} 天",
-                "回切命令": '`echo "MAILAGENT_BACKEND=applescript" >> .env && pm2 restart mail-sync`',
-            },
-            alert_key="davmail_token_critical",
+            details={"到期时间": expires_at_iso or "未记录"},
+            alert_key="davmail_auth_expired",
         )
 
     async def alert_davmail_oauth_failure(self, log_excerpt: str):
         """davmail.log 出现 BadPaddingException / refresh_token expired 类错误"""
-        await self.send_alert(
+        return await self.send_alert(
             level="critical",
             title="DavMail OAuth 续期失败",
             content=(
                 "davmail-poc 日志检测到 OAuth 错误，refresh_token 可能已失效。\n"
                 f"**日志行**: `{log_excerpt[:200]}`\n"
-                "**立即操作**: 重走 O365Manual OAuth flow 或回切 applescript backend。"
+                f"**立即操作**: {_DAVMAIL_REAUTH_HINT}"
             ),
             source="davmail_watchdog",
             details={
@@ -539,8 +533,8 @@ class FeishuAlertNotifier:
                 f"IMAP 端口 TCP 可达但 LOGIN 已连续 **{consecutive_fails}** 次失败"
                 f"（阈值 {threshold}）。SMTP 可能仍正常 ——「能发不能收」，疑似 "
                 "DavMail 内部 token 状态劣化（如 AADSTS700003 / JVM 长跑劣化）。\n"
-                "**建议操作**: `pm2 restart davmail-poc`；重启后仍失败则重走 "
-                "O365Manual OAuth flow。"
+                "**建议操作**: `pm2 restart davmail-poc`；重启后仍失败则"
+                f"{_DAVMAIL_REAUTH_HINT}"
             ),
             source="davmail_watchdog",
             details={
@@ -590,8 +584,8 @@ class FeishuAlertNotifier:
             content=(
                 f"watchdog 24h 滚动窗口内已自动重启 davmail **{count_24h}** 次"
                 f"（上限 {max_per_day}），自动重启已暂停 —— 反复重启说明 token "
-                "劣化根因未解, 需人工排查 (重走 O365Manual OAuth flow / 查 "
-                "davmail 日志)。窗口滚出后自动恢复。"
+                "劣化根因未解, 需人工排查 (查 davmail 日志; 登录失效时"
+                f"{_DAVMAIL_REAUTH_HINT})。窗口滚出后自动恢复。"
             ),
             source="davmail_watchdog",
             details={

@@ -6,10 +6,13 @@
 
 探测项：
   1. TCP probe 127.0.0.1:1143 (IMAP) + 1025 (SMTP) — 连续 ≥3 次失败 critical
-  2. davmail-poc/token/token.dat mtime — age ≥80d warning / ≥87d critical
+  2. 登录到期 — 最近一次交互认证时间 + 登录有效期 (租户条件访问, 默认 30 天):
+     剩 ≤AUTH_REMIND_DAYS 天 warning / 已过期或日志出现 AADSTS70043 critical。
+     token.dat mtime 只作信息展示 (每小时随 refresh 重写, 不能用来判断到期)
   3. davmail-poc/logs/davmail.log 末尾 50KB regex 扫:
      - BadPaddingException / refresh_token expired/invalid / InvalidGrant
-       / AADSTS5017x / AADSTS7000x → OAuth failure critical
+       / AADSTS5017x / AADSTS7000x → OAuth failure critical (episode: 进入告一次,
+       恢复 = 窗口内无新错误 且 LOGIN 探测成功或 token.dat 晚于最后一条错误)
      - EWSThrottlingException 5min 内 ≥3 → warning + 自动暂停
        uid-mapper backfill (写 sync_state['davmail_uid_backfill_paused']='true')
   4. IMAP LOGIN 探测 (L2a, fork 31a50011 上游化) — TCP 可达时真实 LOGIN 一次,
@@ -28,13 +31,18 @@ sync_state key 约定 (frontend 通过 better-sqlite3 直读)：
   davmail.login_fail_threshold    生效的 login 失败阈值 (F5, 传播到 admin/electron 防漂移)
   davmail.last_auto_restart_at    最近一次自动重启 ISO 时间戳 (L2b, 从未重启则无此键)
   davmail.auto_restart_times      JSON epoch 数组: 24h 窗口内重启时间戳 (F4, 跨进程重启存活)
-  davmail.token_age_days          浮点字符串，token.dat 不存在为 '-1'
+  davmail.token_age_days          浮点字符串，token.dat 不存在为 '-1' (纯信息, 不参与分级)
   davmail.token_mtime_iso         ISO 时间戳
   davmail.consecutive_imap_failures   连续失败计数
   davmail.consecutive_smtp_failures   连续失败计数
   davmail.throttle_events_5min    最近 5min EWS throttle 计数
-  davmail.last_oauth_error        最近一次 OAuth 错误日志行（最多 240 字符）
+  davmail.last_oauth_error        最近一次 OAuth 错误日志行（最多 240 字符）;
+                                  非空 = OAuth 失效中, 恢复后清空 (各读面据此判 critical)
   davmail.last_oauth_error_at     首次检测到时间
+  davmail.auth.last_interactive_at  最近一次交互认证 (epoch 秒; 重认证流程写, 本模块只读)
+  davmail.auth.lifetime_secs      登录有效期 (秒); 日志出现 AADSTS70043 时按其中的
+                                  maximum allowed lifetime 更新, 缺失按默认 30 天
+  davmail.auth.expires_at         登录到期 (epoch 秒); 无交互认证记录时为 ''
   davmail_uid_backfill_paused     'true' / 'false'  (跟 uid-mapper 共享)
 """
 
@@ -86,16 +94,26 @@ _THROTTLE_WINDOW_SECS = 5 * 60
 # 真失效时 davmail 每次连接都会写新行, 窗口内必有新证据, 不会漏报。
 _OAUTH_ERROR_WINDOW_SECS = 5 * 60
 _PROCESS_DOWN_THRESHOLD = 3  # 连续失败次数
-# 🔴 token 老化门槛的**唯一真源** (issue #68)。level 在本 watchdog 内 live 计算不落盘,
-# 故 admin router (web 面重算) 与 CLI (`mailagent admin health` 提示行) 都要这两个值 ——
-# 二者一律 `from src.mail.davmail_watchdog import TOKEN_WARN_DAYS, TOKEN_CRITICAL_DAYS`,
-# **不许再就地复刻**。历史上三处各写一份, CLI 那份漏了 critical 档, 于是同一个 87 天
-# token 在 web 面报 critical、`mailagent admin health` 只报 warning (issue #68 病根)。
-# 旧注释称「不共享 import 因为 watchdog import 期会拉 SyncStore/alert 重依赖」——
-# 已证伪: 本模块的 SyncStore/Config/FeishuAlertNotifier 全在 TYPE_CHECKING 下,
-# 运行期只拉 loguru + 两个轻量 src 模块。
-TOKEN_WARN_DAYS = 80.0
-TOKEN_CRITICAL_DAYS = 87.0
+# 🔴 登录到期判据的**唯一真源** (issue #68)。level 在本 watchdog 内 live 计算不落盘,
+# 故 admin router (web 面重算) 与 CLI (`mailagent admin health` 提示行) 都要这些值 ——
+# 二者一律从本模块 import (含下面的 auth_days_left / auth_expiry_level), **不许再就地
+# 复刻**。历史上 token 门槛三处各写一份, CLI 那份漏了 critical 档, 于是同一个 token 在
+# web 面报 critical、`mailagent admin health` 只报 warning (issue #68 病根)。TS 侧手抄
+# 在 frontend/src/shared/lib/davmailThresholds.ts, 由 py_ts_constants_parity.test.ts 对撞。
+# 本模块的 SyncStore/Config/FeishuAlertNotifier 全在 TYPE_CHECKING 下, 运行期只拉
+# loguru + 两个轻量 src 模块, import 无负担。
+#
+# 期限来自租户条件访问的登录频率上限 (AADSTS70043), 从最近一次交互登录起算。
+# token.dat 每小时随 refresh 重写, 它的 mtime 天数永远接近 0, 不能拿来判断到期。
+AUTH_REMIND_DAYS = 3.0
+DEFAULT_AUTH_LIFETIME_SECS = 2592000
+AUTH_LAST_INTERACTIVE_AT_KEY = "davmail.auth.last_interactive_at"
+AUTH_LIFETIME_SECS_KEY = "davmail.auth.lifetime_secs"
+AUTH_EXPIRES_AT_KEY = "davmail.auth.expires_at"
+_AUTH_LIFETIME_RE = re.compile(
+    r"maximum allowed lifetime[^0-9]{0,40}(\d+)", re.IGNORECASE
+)
+_AUTH_EXPIRED_MARKER = "AADSTS70043"
 # IMAP LOGIN 健康探测 (L2a) 默认值 — 可经 config 覆盖 (DAVMAIL_LOGIN_*)。
 # F5 起生效值经 sync_state davmail.login_fail_threshold 传播给各读面; 这里是
 # **键缺失时的 fallback 默认**, 同样单源 (admin router import 本名, 勿再复刻)。
@@ -106,6 +124,59 @@ _LOGIN_PROBE_TIMEOUT_SECS = 15
 _AUTO_RESTART_COOLDOWN_SECS = 600
 _AUTO_RESTART_MAX_PER_DAY = 6
 _RESTART_WINDOW_SECS = 24 * 3600
+
+# 通知中心条目的点击动作 (payload_json.link)。认证类条目直接打开重认证弹窗,
+# 其余仍跳看板。
+_KANBAN_LINK: Dict[str, Any] = {"type": "route", "to": "/admin/kanban"}
+_REAUTH_LINK: Dict[str, Any] = {"type": "davmail_reauth"}
+# 飞书告警 (src/notify/alert.py) 也 import 这一句, 两个出口给同一个处理办法。
+REAUTH_HINT = "请在 App 设置 → 账户 → DavMail 里点「重新认证」。"
+
+
+def _parse_epoch(raw: Optional[str]) -> Optional[float]:
+    """sync_state 里的 epoch 秒字符串 → float; 缺失 / 空 / 坏值 / 非正数 → None。"""
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def parse_auth_expires_at(raw: Optional[str]) -> Optional[float]:
+    """``davmail.auth.expires_at`` 的读侧解析 (各读面共用, 别各写一份)。"""
+    return _parse_epoch(raw)
+
+
+def auth_days_left(
+    expires_at: Optional[float], now: Optional[float] = None
+) -> Optional[float]:
+    """距登录到期的天数 (可为负 = 已过期); 无到期记录 → None。
+
+    读面按调用时刻现算, 不读 watchdog 落盘的快照 —— 看板与 CLI 不必等下一轮 tick。
+    """
+    if expires_at is None:
+        return None
+    return (expires_at - (time.time() if now is None else now)) / 86400.0
+
+
+def auth_expiry_level(days_left: Optional[float]) -> Optional[str]:
+    """登录到期分档: ≤0 天 critical, ≤AUTH_REMIND_DAYS warning, 其余 / 无记录 None。"""
+    if days_left is None:
+        return None
+    if days_left <= 0:
+        return "critical"
+    if days_left <= AUTH_REMIND_DAYS:
+        return "warning"
+    return None
+
+
+def _format_days_left(days_left: float) -> str:
+    # 向下取整: 提醒宁可说少一天, 不能让人以为还有余量。
+    if days_left < 1:
+        return "24 小时内"
+    return f"{int(days_left)} 天后"
 
 
 class DavMailWatchdog:
@@ -133,15 +204,15 @@ class DavMailWatchdog:
         notify_center: Optional[NotifyCenter] = None,
     ) -> None:
         self.sync_store = sync_store
-        # task 07-14: token 门槛告警的 episode 判定器 (由 service.py 注入, 带
+        # 登录到期 / OAuth 失败两项告警的 episode 判定器 (由 service.py 注入, 带
         # MAILAGENT_ALERT_EPISODE flag)。未注入 (老调用方 / 单测) → disabled
-        # tracker = 判据成立就告 = 老行为, 零行为变化。
+        # tracker = 判据成立就告、从不恢复。
         self.episodes = episodes or AlertEpisodeTracker(sync_store, enabled=False)
         # task 08-20-notification-center §7/§8.b: critical 组同时写通知中心 (由
         # service.py 注入; 未注入 = 老调用方 / 单测 → None = 只发飞书, 零行为变化)。
-        # token 门槛是**唯一 episode 化**的一项 → 通知中心侧要自己的水位 (`nc.`
+        # episode 化的两项 (登录到期 / OAuth 失败) 在通知中心侧要自己的水位 (`nc.`
         # 前缀), 否则飞书没配 / 投递失败时 self.episodes 永不 commit → 每轮 60s
-        # 重发一次 publish; 其余四项 (imap/smtp/login/oauth) 是 `_announced_*`
+        # 重发一次 publish; 其余几项 (imap/smtp/login) 是 `_announced_*`
         # 内存态 announce-once, 与投递结果无关, 并列写入即可。
         self.notify_center = notify_center
         self._nc_episodes = AlertEpisodeTracker(
@@ -193,6 +264,9 @@ class DavMailWatchdog:
         self._last_auto_restart_ts = last_ts
         self._restart_times: list[float] = restart_times  # 24h 滚动窗口内的重启时间戳
         self._announced_restart_storm = False
+        # _scan_log_tail 每轮顺带抓到的 AADSTS70043 登录有效期 (秒), 没看到为 None。
+        # 数字在错误行 240 字符截断之后, 只能在扫描时从整行里取。
+        self._observed_auth_lifetime: Optional[int] = None
         # 累计指标 (stats_reporter 用)
         self._counters = {
             "probe_cycles": 0,
@@ -274,12 +348,21 @@ class DavMailWatchdog:
             # 每轮 throttle 看到的事件数都计入 total（精度足够，不去重）
             self._counters["throttle_events_detected_total"] += throttle_count
 
+        oauth_active, oauth_cleared, oauth_line = self._resolve_oauth_state(
+            oauth_error, login_ok, token_mtime
+        )
+        auth_expires_at = self._refresh_auth_expiry()
+        days_left = auth_days_left(auth_expires_at, now)
+        auth_expired = (days_left is not None and days_left <= 0) or (
+            oauth_active and _AUTH_EXPIRED_MARKER in (oauth_line or "")
+        )
+
         # 计算等级（snapshot 用）
         level = self._compute_overall_level(
             imap_ok=imap_ok,
             smtp_ok=smtp_ok,
-            token_age_days=token_age_days,
-            oauth_error_active=bool(oauth_error),
+            auth_days_left=days_left,
+            oauth_error_active=oauth_active,
             throttle_burst=throttle_count >= 3,
             login_degraded=self._consecutive_login_fails >= self.login_fail_threshold,
         )
@@ -294,6 +377,8 @@ class DavMailWatchdog:
             token_age_days=token_age_days,
             token_mtime=token_mtime,
             oauth_error=oauth_error,
+            oauth_cleared=oauth_cleared,
+            auth_expires_at=auth_expires_at,
             throttle_count=throttle_count,
         )
 
@@ -320,6 +405,12 @@ class DavMailWatchdog:
                 if self._last_auto_restart_ts
                 else None
             ),
+            "auth_expires_at": (
+                datetime.fromtimestamp(auth_expires_at).isoformat(timespec="seconds")
+                if auth_expires_at
+                else None
+            ),
+            "auth_days_left": days_left,
             "throttle_events_5min": throttle_count,
             "last_oauth_error": oauth_error,
             "uid_backfill_paused": self._announced_throttle_burst,
@@ -341,12 +432,19 @@ class DavMailWatchdog:
             imap_ok=imap_ok,
             smtp_ok=smtp_ok,
             login_ok=login_ok,
-            token_age_days=token_age_days,
-            oauth_error=oauth_error,
+            oauth_active=oauth_active,
+            oauth_cleared=oauth_cleared,
+            oauth_line=oauth_line,
+            auth_days_left=days_left,
+            auth_expires_at=auth_expires_at,
+            auth_expired=auth_expired,
         )
 
         # ── L2b: token 劣化自动恢复 (degraded 告警之后跑, 保证告警先出) ──
-        await self._maybe_auto_restart(now)
+        # 登录已过期时重启救不回来 (只能重新认证), 不重启也不计入重启次数 ——
+        # 否则每个冷却期发一条「重启成功」, 满上限后再报一条「自动重启已停止」。
+        if not auth_expired:
+            await self._maybe_auto_restart(now)
 
         self._prev = {
             "imap_ok": imap_ok,
@@ -468,7 +566,7 @@ class DavMailWatchdog:
                     body=(
                         f"24h 内已自动重启 {len(self._restart_times)} 次 (上限 "
                         f"{self.auto_restart_max_per_day}), 停止自动重启, "
-                        "需人工排查 (多半是 token 失效要重走 OAuth)。"
+                        f"需人工排查。多半是登录失效, {REAUTH_HINT}"
                     ),
                 )
                 self._announced_restart_storm = True
@@ -536,8 +634,60 @@ class DavMailWatchdog:
         age_days = (time.time() - mtime) / 86400.0
         return age_days, mtime
 
+    def _resolve_oauth_state(
+        self,
+        oauth_error: Optional[str],
+        login_ok: Optional[bool],
+        token_mtime: Optional[float],
+    ) -> tuple[bool, bool, Optional[str]]:
+        """OAuth 失效 episode 的判据单源 → ``(active, cleared, line)``。
+
+        状态落在 ``davmail.last_oauth_error`` (非空 = 失效中), 跨重启存活, 各读面也按它
+        判 critical。窗口内有新错误 → active。窗口内没有新错误**不等于**恢复 (davmail
+        日志安静时不会写「好了」), 还要一条正面证据: LOGIN 探测成功, 或 token.dat 在
+        最后一条错误之后被重写过 (重认证 / refresh 成功都会写它)。两条都没有 → 维持
+        active。``cleared`` = 本轮从 active 转为恢复; ``line`` = 当前 episode 的错误行。
+        """
+        if oauth_error:
+            return True, False, oauth_error
+        stored = self.sync_store.get_state("davmail.last_oauth_error") or None
+        if stored is None:
+            return False, False, None
+        recovered = login_ok is True
+        if not recovered and token_mtime is not None:
+            raw_at = self.sync_store.get_state("davmail.last_oauth_error_at")
+            try:
+                last_error_ts = (
+                    datetime.fromisoformat(raw_at).timestamp() if raw_at else None
+                )
+            except (ValueError, OSError):
+                last_error_ts = None
+            recovered = last_error_ts is not None and token_mtime > last_error_ts
+        if recovered:
+            return False, True, None
+        return True, False, stored
+
+    def _refresh_auth_expiry(self) -> Optional[float]:
+        """登录到期时间 (epoch 秒); 没有交互认证记录 → None (不判断到期)。
+
+        本轮日志若带 AADSTS70043 的登录有效期, 先把它记下 (租户策略改了也能跟上)。
+        """
+        ss = self.sync_store
+        observed = self._observed_auth_lifetime
+        if observed and ss.get_state(AUTH_LIFETIME_SECS_KEY) != str(observed):
+            ss.set_state(AUTH_LIFETIME_SECS_KEY, str(observed))
+        last_interactive = _parse_epoch(ss.get_state(AUTH_LAST_INTERACTIVE_AT_KEY))
+        if last_interactive is None:
+            return None
+        lifetime = _parse_epoch(ss.get_state(AUTH_LIFETIME_SECS_KEY))
+        return last_interactive + (lifetime or DEFAULT_AUTH_LIFETIME_SECS)
+
     def _scan_log_tail(self) -> tuple[Optional[str], int]:
-        """扫 davmail.log 末尾 50KB 找 5min 内的 OAuth 失败 + EWS throttle 计数。"""
+        """扫 davmail.log 末尾 50KB 找 5min 内的 OAuth 失败 + EWS throttle 计数。
+
+        顺带把窗口内 AADSTS70043 行里的登录有效期记到 ``_observed_auth_lifetime``。
+        """
+        self._observed_auth_lifetime = None
         if not self.log_path.exists():
             return None, 0
         try:
@@ -569,6 +719,9 @@ class DavMailWatchdog:
                 # 时间戳，否则整类失败都会被时间窗吃掉。头行时间也拿不到才丢弃。
                 event_ts = ts if ts is not None else last_ts
                 if event_ts is not None and event_ts >= oauth_cutoff:
+                    lifetime = _AUTH_LIFETIME_RE.search(line)
+                    if lifetime:
+                        self._observed_auth_lifetime = int(lifetime.group(1))
                     trimmed = line.strip()
                     if len(trimmed) > 240:
                         trimmed = trimmed[:240] + "…"
@@ -596,7 +749,7 @@ class DavMailWatchdog:
         *,
         imap_ok: bool,
         smtp_ok: bool,
-        token_age_days: Optional[float],
+        auth_days_left: Optional[float],
         oauth_error_active: bool,
         throttle_burst: bool,
         login_degraded: bool = False,
@@ -608,10 +761,9 @@ class DavMailWatchdog:
         if login_degraded:
             # TCP 可达但 IMAP LOGIN 连续失败 = token 劣化 (能发不能收)
             return "critical"
-        if token_age_days is not None and token_age_days >= TOKEN_CRITICAL_DAYS:
-            return "critical"
-        if token_age_days is not None and token_age_days >= TOKEN_WARN_DAYS:
-            return "warning"
+        auth_level = auth_expiry_level(auth_days_left)
+        if auth_level is not None:
+            return auth_level
         if throttle_burst:
             return "warning"
         return "ok"
@@ -626,6 +778,8 @@ class DavMailWatchdog:
         token_age_days: Optional[float],
         token_mtime: Optional[float],
         oauth_error: Optional[str],
+        oauth_cleared: bool,
+        auth_expires_at: Optional[float],
         throttle_count: int,
     ) -> None:
         ss = self.sync_store
@@ -664,6 +818,11 @@ class DavMailWatchdog:
             # 仅首次见到这条错误才更新时间戳
             if oauth_error != self._prev.get("oauth_error"):
                 ss.set_state("davmail.last_oauth_error_at", now_iso)
+        elif oauth_cleared:
+            ss.set_state("davmail.last_oauth_error", "")
+        ss.set_state(
+            AUTH_EXPIRES_AT_KEY, str(int(auth_expires_at)) if auth_expires_at else ""
+        )
         ss.set_state("davmail.throttle_events_5min", str(throttle_count))
 
     async def _evaluate_alerts(
@@ -672,8 +831,12 @@ class DavMailWatchdog:
         imap_ok: bool,
         smtp_ok: bool,
         login_ok: Optional[bool],
-        token_age_days: Optional[float],
-        oauth_error: Optional[str],
+        oauth_active: bool,
+        oauth_cleared: bool,
+        oauth_line: Optional[str],
+        auth_days_left: Optional[float],
+        auth_expires_at: Optional[float],
+        auth_expired: bool,
     ) -> None:
         # task 08-20-notification-center §8.b: 出口有两个 —— 飞书 alerter (默认
         # 安装是 None) 与通知中心。老 guard 会让默认安装连判定都不跑 (critical 组
@@ -727,8 +890,10 @@ class DavMailWatchdog:
 
         # 1b. IMAP LOGIN 劣化 (L2a): 连续 ≥阈值失败一次性告警, 恢复后通知
         #     (announce-once-until-cleared, 镜像进程 down/recovered 模式)
+        #     登录已过期时 LOGIN 必然失败, 第 2 段的「登录已过期」已经讲清 → 不进入
+        #     (否则同一件事两条 critical); 过期前已 announce 的保持原样, 恢复时照常收。
         if self._consecutive_login_fails >= self.login_fail_threshold:
-            if not self._announced_login_degraded:
+            if not self._announced_login_degraded and not auth_expired:
                 if self.alerter is not None:
                     await self.alerter.alert_davmail_login_degraded(
                         self._consecutive_login_fails, self.login_fail_threshold
@@ -739,7 +904,9 @@ class DavMailWatchdog:
                     body=(
                         f"端口可达但 LOGIN 连续失败 {self._consecutive_login_fails} "
                         f"次 (阈值 {self.login_fail_threshold}), token 可能已失效。"
+                        f"重启 davmail 后仍失败时, {REAUTH_HINT}"
                     ),
+                    link=_REAUTH_LINK,
                 )
                 self._announced_login_degraded = True
         elif login_ok and self._announced_login_degraded:
@@ -748,136 +915,140 @@ class DavMailWatchdog:
             await self._notify_davmail_resolve("login_degraded")
             self._announced_login_degraded = False
 
-        # 2. Token 过期门槛 — episode 化 (task 07-14): 原来每轮 (60s) 都告, 只靠
-        #    alerter 的 300s 内存冷却 → age 一旦越 80d 就每 5min 一条刷到重新
-        #    OAuth 为止 (且进程重启即复发)。
-        #
-        #    🔴 建模成**一个 episode + 一个 severity marker**, 不是两个平级 episode:
-        #      - `davmail_token`          (门槛 80d) = episode 本体, 负责「告知一次」
-        #                                  与「恢复一次」的生命周期。
-        #      - `davmail_token_critical` (门槛 87d) = 严重度升级标记, 只决定这条
-        #                                  消息用 critical 还是 warning 措辞。
-        #    两个平级 episode 会打架: age 首次 89 时两边都 active, 之后 age 降到 82
-        #    (仍在 warning 区间!) → critical episode 判 RECOVER → 误报「token 已恢复」。
-        #    现在 82 只让 severity marker 复位 (无消息, 因为情况是变好且 token
-        #    episode 仍 active 用户早已知情), 恢复通知**只在 age < 80 时**发。
+        # 2. 登录到期 — episode 化, 建模成**一个 episode + 一个 severity marker**:
+        #      - `davmail_auth_expiry`  (剩 ≤AUTH_REMIND_DAYS 天或已过期) = episode 本体,
+        #                               负责「告知一次」与「恢复一次」的生命周期。
+        #      - `davmail_auth_expired` (≤0 天或日志出现 AADSTS70043) = 严重度升级标记,
+        #                               只决定这条消息用 critical 还是 warning 措辞。
+        #    两个平级 episode 会打架: 已过期时两边都 active, 若之后回到「还剩 1-3 天」
+        #    (仍在提醒区间) → 过期 episode 判 RECOVER → 误报「已恢复」。现在这种回落只
+        #    复位 marker (无消息), 恢复通知**只在重新认证、剩余天数回到提醒线以上时**发。
         #
         #    投递成功才 commit (两阶段提交, 理由见 episode.py 模块 docstring)。
-        if token_age_days is not None:
-            crit = self.episodes.evaluate(
-                "davmail_token_critical", token_age_days, TOKEN_CRITICAL_DAYS
-            )
-            warn = self.episodes.evaluate(
-                "davmail_token", token_age_days, TOKEN_WARN_DAYS
-            )
-            if crit in (episode.ENTER, episode.ESCALATE):
-                if self.alerter is not None and await self.alerter.alert_davmail_token_critical(
-                    token_age_days
-                ):
-                    self.episodes.commit(
-                        "davmail_token_critical", crit, token_age_days
+        remind = auth_expired or (
+            auth_days_left is not None and auth_days_left <= AUTH_REMIND_DAYS
+        )
+        expires_iso = (
+            datetime.fromtimestamp(auth_expires_at).isoformat(timespec="seconds")
+            if auth_expires_at
+            else None
+        )
+        crit = self.episodes.evaluate_flag("davmail_auth_expired", auth_expired)
+        warn = self.episodes.evaluate_flag("davmail_auth_expiry", remind)
+        if self.alerter is not None:
+            if crit == episode.ENTER:
+                if await self.alerter.alert_davmail_auth_expired(expires_iso):
+                    self.episodes.commit("davmail_auth_expired", crit, 1.0)
+                    # 这条 critical 消息**同时就是** episode 本体的告知 → 一并标记,
+                    # 否则本体永远 inactive, 将来重新认证后发不出恢复通知。
+                    if warn == episode.ENTER:
+                        self.episodes.commit("davmail_auth_expiry", warn, 1.0)
+            elif warn == episode.ENTER:
+                if auth_expired:
+                    delivered = await self.alerter.alert_davmail_auth_expired(
+                        expires_iso
                     )
-                    # 这条 critical 消息**同时就是** token episode 的告知 (严重度
-                    # 更高, 不再另发 expiring) → 一并标记 episode 已告知; 否则它
-                    # 永远 inactive, 将来 age 归零就发不出恢复通知。
-                    if warn in (episode.ENTER, episode.ESCALATE):
-                        self.episodes.commit("davmail_token", warn, token_age_days)
-            elif warn in (episode.ENTER, episode.ESCALATE):
-                if self.alerter is not None and await self.alerter.alert_davmail_token_expiring(
-                    token_age_days
-                ):
-                    self.episodes.commit("davmail_token", warn, token_age_days)
-
-            # 严重度回落 (≥87 → [80,87)): 不是恢复, 不发消息, 只复位 marker 让它
-            # 将来能重新升级告警。无投递 → 无需 gate。
+                else:
+                    delivered = await self.alerter.alert_davmail_auth_expiring(
+                        auth_days_left, expires_iso
+                    )
+                if delivered:
+                    self.episodes.commit("davmail_auth_expiry", warn, 1.0)
+            # 严重度回落 (已过期 → 还剩几天): 不是恢复, 不发消息, 只复位 marker。
             if crit == episode.RECOVER:
-                self.episodes.commit("davmail_token_critical", crit, token_age_days)
-            # 真·恢复: age < 80 (重走 OAuth 后 token.dat 刷新 → age 归零) 才发。
+                self.episodes.commit("davmail_auth_expired", crit, 0.0)
             if warn == episode.RECOVER:
-                if self.alerter is not None and await self.alerter.alert_recovery(
-                    "DavMail OAuth token"
-                ):
-                    self.episodes.commit("davmail_token", warn, token_age_days)
+                if await self.alerter.alert_recovery("DavMail 登录"):
+                    self.episodes.commit("davmail_auth_expiry", warn, 0.0)
 
-            # 通知中心: 两档 (80d warning / 87d critical) 共用**一条**条目
-            # (dedupe_key `alert:davmail:token`), 结构与上面飞书那份 1:1 ——
-            #   nc.davmail_token          (80d) = episode 本体, 决定条目的生死
-            #                                     (ENTER 开条目, RECOVER 收条目)
-            #   nc.davmail_token_critical (87d) = 严重度升级标记, 只决定这次 publish
-            #                                     用 critical 还是 warn
-            # 共用 key 让升档天然表达成「同一条目 severity 只升不降 + 未读化」
-            # (NotifyCenter._bump), 而不是在铃铛里堆两条讲同一个 token 的条目。
-            # 降档 (≥87 → [80,87)) 不收条目 —— warning 档判据仍成立, 只复位 marker,
-            # 与飞书侧「不是恢复, 不发消息」同判据; 真恢复 (age<80, 重走 OAuth 后
-            # token.dat 刷新) 才 resolve。水位独立 (`nc.` 前缀), 落库成功即 commit。
-            nc_crit = self._nc_episodes.evaluate(
-                "nc.davmail_token_critical", token_age_days, TOKEN_CRITICAL_DAYS
-            )
-            nc_warn = self._nc_episodes.evaluate(
-                "nc.davmail_token", token_age_days, TOKEN_WARN_DAYS
-            )
-            nc_title = f"DavMail token 已 {token_age_days:.0f} 天未刷新"
-            if nc_crit in (episode.ENTER, episode.ESCALATE):
-                if await self._notify_davmail_alert(
-                    "token",
-                    title=nc_title,
-                    body=(
-                        f"token.dat age={token_age_days:.1f}d "
-                        f"(critical 门槛 {TOKEN_CRITICAL_DAYS:.0f}d), 到期后收发信全停, "
-                        "需重走 OAuth。"
-                    ),
-                ):
-                    self._nc_episodes.commit(
-                        "nc.davmail_token_critical", nc_crit, token_age_days
-                    )
-                    # 这条 critical 就是 token episode 的告知 → 一并标记, 否则
-                    # warning 档永远 inactive, 将来 age 归零就发不出 resolve。
-                    if nc_warn in (episode.ENTER, episode.ESCALATE):
-                        self._nc_episodes.commit(
-                            "nc.davmail_token", nc_warn, token_age_days
-                        )
-            elif nc_warn in (episode.ENTER, episode.ESCALATE):
-                if await self._notify_davmail_alert(
-                    "token",
-                    title=nc_title,
-                    body=(
-                        f"token.dat age={token_age_days:.1f}d "
-                        f"(warning 门槛 {TOKEN_WARN_DAYS:.0f}d), 建议尽快重走 OAuth; "
-                        f"到 {TOKEN_CRITICAL_DAYS:.0f}d 后收发信将全停。"
-                    ),
-                    severity="warn",
-                ):
-                    self._nc_episodes.commit(
-                        "nc.davmail_token", nc_warn, token_age_days
-                    )
-            if nc_crit == episode.RECOVER:
-                self._nc_episodes.commit(
-                    "nc.davmail_token_critical", nc_crit, token_age_days
-                )
-            if nc_warn == episode.RECOVER:
-                if await self._notify_davmail_resolve("token"):
-                    self._nc_episodes.commit(
-                        "nc.davmail_token", nc_warn, token_age_days
-                    )
+        # 通知中心: 两档共用**一条**条目 (dedupe_key `alert:davmail:auth_expiry`),
+        # 结构与上面飞书那份 1:1。共用 key 让升档表达成「同一条目 severity 只升不降 +
+        # 重新未读」(NotifyCenter._bump), 而不是铃铛里两条讲同一件事。水位独立
+        # (`nc.` 前缀), 落库成功即 commit。
+        nc_crit = self._nc_episodes.evaluate_flag("nc.davmail_auth_expired", auth_expired)
+        nc_warn = self._nc_episodes.evaluate_flag("nc.davmail_auth_expiry", remind)
+        expires_text = f"预计 {expires_iso.replace('T', ' ')} 过期。" if expires_iso else ""
+        expired_body = (
+            "登录已超过公司策略允许的有效期, 邮件收发已停止。" + REAUTH_HINT
+        )
+        if nc_crit == episode.ENTER or (nc_warn == episode.ENTER and auth_expired):
+            if await self._notify_davmail_alert(
+                "auth_expiry",
+                title="DavMail 登录已过期",
+                body=expired_body,
+                link=_REAUTH_LINK,
+            ):
+                if nc_crit == episode.ENTER:
+                    self._nc_episodes.commit("nc.davmail_auth_expired", nc_crit, 1.0)
+                if nc_warn == episode.ENTER:
+                    self._nc_episodes.commit("nc.davmail_auth_expiry", nc_warn, 1.0)
+        elif nc_warn == episode.ENTER and auth_days_left is not None:
+            if await self._notify_davmail_alert(
+                "auth_expiry",
+                title=f"DavMail 登录将在 {_format_days_left(auth_days_left)}过期",
+                body=(
+                    "公司策略要求定期重新登录, 到期后邮件收发会停止。"
+                    f"{expires_text}{REAUTH_HINT}"
+                ),
+                severity="warn",
+                link=_REAUTH_LINK,
+            ):
+                self._nc_episodes.commit("nc.davmail_auth_expiry", nc_warn, 1.0)
+        if nc_crit == episode.RECOVER:
+            self._nc_episodes.commit("nc.davmail_auth_expired", nc_crit, 0.0)
+        if nc_warn == episode.RECOVER:
+            if await self._notify_davmail_resolve("auth_expiry"):
+                self._nc_episodes.commit("nc.davmail_auth_expiry", nc_warn, 0.0)
 
-        # 3. OAuth 失败：只在出现新错误时报（同一行不重复）
-        if oauth_error and oauth_error != self._prev.get("oauth_error"):
-            if self.alerter is not None:
-                await self.alerter.alert_davmail_oauth_failure(oauth_error)
-            # 无恢复信号 (日志里不会出现「OAuth 又好了」) → 只发不收; 用户读掉即
-            # 清徽标, resolve 留给 M2 的单条动作。
-            await self._notify_davmail_alert(
+        # 3. OAuth 失败 — episode: 进入告一次, 持续期间不重发也不计次, 恢复时收条目并
+        #    发恢复消息。🔴 不能按「错误行和上一轮不同」判新错误: davmail 每行错误都带
+        #    不同的 Trace ID, 那样失效期间每轮都算新错误 (曾把一条通知顶到第 818 次)。
+        #    active / 恢复的判据单源在 `_resolve_oauth_state`, 这里只管两个出口。
+        #
+        #    AADSTS70043 = 登录频率上限到期, 唯一处理办法是重新认证, 第 2 段的「登录已
+        #    过期」已经讲清 → 不进本 episode (否则两条 critical 讲同一件事)。此时整段
+        #    不评估: 未 active 就不会进入; 已因别的错误 active 的保持原样, 恢复时一起收。
+        if oauth_active and _AUTH_EXPIRED_MARKER in (oauth_line or ""):
+            return
+        fs = self.episodes.evaluate_flag("davmail_oauth_failure", oauth_active)
+        if self.alerter is not None:
+            if fs == episode.ENTER:
+                if await self.alerter.alert_davmail_oauth_failure(oauth_line or ""):
+                    self.episodes.commit("davmail_oauth_failure", fs, 1.0)
+            elif fs == episode.RECOVER:
+                if await self.alerter.alert_recovery("DavMail OAuth"):
+                    self.episodes.commit("davmail_oauth_failure", fs, 0.0)
+
+        nc = self._nc_episodes.evaluate_flag("nc.davmail_oauth_failure", oauth_active)
+        if nc == episode.ENTER:
+            if await self._notify_davmail_alert(
                 "oauth_failure",
                 title="DavMail OAuth 失败",
-                body=oauth_error[:240],
-            )
+                body=f"{(oauth_line or '')[:240]}\n{REAUTH_HINT}",
+                link=_REAUTH_LINK,
+            ):
+                self._nc_episodes.commit("nc.davmail_oauth_failure", nc, 1.0)
+        elif nc == episode.RECOVER or oauth_cleared:
+            # oauth_cleared 兜住没有水位的活跃条目 (episode 化之前留下的 open 行,
+            # 或 flag 关时 tracker 永不 RECOVER); 无活跃行时 resolve 是 no-op。
+            if (
+                await self._notify_davmail_resolve("oauth_failure")
+                and nc == episode.RECOVER
+            ):
+                self._nc_episodes.commit("nc.davmail_oauth_failure", nc, 0.0)
 
     async def _notify_davmail_alert(
-        self, sub: str, *, title: str, body: str, severity: str = "critical"
+        self,
+        sub: str,
+        *,
+        title: str,
+        body: str,
+        severity: str = "critical",
+        link: Dict[str, Any] = _KANBAN_LINK,
     ) -> bool:
         """DavMail 告警 → 通知中心 (task 08-20-notification-center §7)。
 
-        返回**是否落库成功** —— episode 化的挂点 (token 两档) 据此决定要不要
+        返回**是否落库成功** —— episode 化的挂点 (登录到期 / OAuth) 据此决定要不要
         commit 水位 (episode.py 的两阶段提交纪律: 没送达就别标已告警);
         `_announced_*` 内存态挂点忽略返回值 (与飞书调用同款 announce-once)。
 
@@ -895,7 +1066,7 @@ class DavMailWatchdog:
                 body=body,
                 severity=severity,
                 dedupe_key=f"alert:davmail:{sub}",
-                payload={"link": {"type": "route", "to": "/admin/kanban"}},
+                payload={"link": dict(link)},
             )
             return True
         except Exception as e:  # noqa: BLE001 — 通知落库失败不影响巡检

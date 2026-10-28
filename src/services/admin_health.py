@@ -8,7 +8,7 @@
 critical、CLI 只报 warning，且两侧测试各自恒绿。
 
 同语言、同进程、无循环依赖 → **零借口，直接单源**（CLAUDE.md「能单源化就单源化，
-闸是妥协不是首选」）。token 门槛的真源在 ``src.mail.davmail_watchdog``（level 由它
+闸是妥协不是首选」）。登录到期判据的真源在 ``src.mail.davmail_watchdog``（level 由它
 live 计算不落盘），本模块只转发，不再持第二份数字。
 
 两端**有意保留的差异**（不是漂移，勿收敛）：
@@ -25,18 +25,24 @@ import json
 from datetime import datetime
 from typing import Optional
 
-# token 老化门槛的唯一真源（watchdog 里 live 计算 level 用的就是这两个值）。
-from src.mail.davmail_watchdog import TOKEN_CRITICAL_DAYS, TOKEN_WARN_DAYS
+# 登录到期判据的唯一真源（watchdog 里 live 计算 level 用的就是这些）。
+from src.mail.davmail_watchdog import (
+    AUTH_EXPIRES_AT_KEY,
+    AUTH_REMIND_DAYS,
+    REAUTH_HINT,
+    auth_days_left,
+    auth_expiry_level,
+    parse_auth_expires_at,
+)
 
 __all__ = [
     "REQUIRED_TABLES",
-    "TOKEN_WARN_DAYS",
-    "TOKEN_CRITICAL_DAYS",
+    "AUTH_REMIND_DAYS",
     "parse_worker_rows",
     "mark_stale_workers",
     "build_davmail_summary",
     "compose_dynamic_health_notes",
-    "token_age_note",
+    "auth_expiry_note",
 ]
 
 
@@ -112,10 +118,13 @@ def mark_stale_workers(workers: dict, start_history_raw: Optional[str]) -> None:
 
 
 def build_davmail_summary(state: dict) -> Optional[dict]:
-    """``davmail.*`` 键 → ``{token_age_days, imap_reachable, last_probe_at}`` 摘要 (E4 WP2).
+    """``davmail.*`` 键 → ``{token_age_days, auth_days_left, imap_reachable, last_probe_at}``
+    摘要 (E4 WP2)。
 
     DavMailWatchdog 每 60s 落盘这些键; watchdog 从未 tick (非 davmail 模式) →
-    None。token_age_days 的 "-1" 哨兵 (token 文件不可读) → None。
+    None。token_age_days 的 "-1" 哨兵 (token 文件不可读) → None; 它只是信息, 不参与
+    分级。auth_days_left 按调用时刻从 ``davmail.auth.expires_at`` 现算, 无交互认证
+    记录 → None。
     """
     if not state.get("davmail.last_probe_at"):
         return None
@@ -127,42 +136,38 @@ def build_davmail_summary(state: dict) -> Optional[dict]:
             token_age_days = None if parsed < 0 else parsed
         except (TypeError, ValueError):
             token_age_days = None
+    days_left = auth_days_left(parse_auth_expires_at(state.get(AUTH_EXPIRES_AT_KEY)))
     return {
         "token_age_days": token_age_days,
+        "auth_days_left": None if days_left is None else round(days_left, 2),
         "imap_reachable": state.get("davmail.imap_reachable") == "1",
         "last_probe_at": state.get("davmail.last_probe_at"),
     }
 
 
-def token_age_note(token_age_days: Optional[float]) -> Optional[str]:
-    """token 老化提示行；未达 warning 门槛 → None。
+def auth_expiry_note(days_left: Optional[float]) -> Optional[str]:
+    """登录到期提示行; 未进提醒区间 / 无记录 → None。
 
-    🔴 issue #68: 此前 CLI 侧只判 warning 一档，于是 87 天 token 在 web 面重算成
-    ``level=critical``、CLI 却只提示 "≥80d" 的 warning 措辞 —— 同一事实两个严重度。
-    现在两档都在这里判，两端同一句话。措辞与 ``_compute_level`` 的分档同源
-    (``TOKEN_CRITICAL_DAYS`` 优先，与 watchdog 的判定顺序一致)。
+    🔴 issue #68: 此前 CLI 侧只判 warning 一档, 同一事实在 web 面与 CLI 报不同严重度。
+    两档都在这里判, 分档同源 ``auth_expiry_level`` (与 watchdog / router 同一函数)。
     """
-    if token_age_days is None:
+    level = auth_expiry_level(days_left)
+    if level is None:
         return None
-    if token_age_days >= TOKEN_CRITICAL_DAYS:
+    if level == "critical":
         return (
-            f"DavMail OAuth token 已 {token_age_days:.1f} 天未刷新 "
-            f"(≥{TOKEN_CRITICAL_DAYS:.0f}d critical)；"
-            "refresh_token 90 天有效期已迫近，需立即重走 OAuth flow。"
+            f"DavMail 登录已过期 (critical), 邮件收发已停止；{REAUTH_HINT}"
         )
-    if token_age_days >= TOKEN_WARN_DAYS:
-        return (
-            f"DavMail OAuth token 已 {token_age_days:.1f} 天未刷新 "
-            f"(≥{TOKEN_WARN_DAYS:.0f}d)；"
-            "refresh_token 90 天有效期，接近时需重走 OAuth flow。"
-        )
-    return None
+    return (
+        f"DavMail 登录约 {days_left:.1f} 天后过期 (≤{AUTH_REMIND_DAYS:.0f} 天提醒)；"
+        f"{REAUTH_HINT}"
+    )
 
 
 def compose_dynamic_health_notes(
     workers: dict, davmail_summary: Optional[dict]
 ) -> list:
-    """crashloop 停摆 / token 老化 → 提示行 (E4 WP1/WP2, 不影响 healthy 语义).
+    """crashloop 停摆 / 登录到期 → 提示行 (E4 WP1/WP2, 不影响 healthy 语义).
 
     只出**动态**行。CLI 面把 E1 的静态 watch note 拼在返回值前面（那是 CLI-only
     设计，web 面历史上无该行）。
@@ -177,7 +182,7 @@ def compose_dynamic_health_notes(
                 f"该功能不可用直到服务重启 — last_error: {last_error}"
             )
     if davmail_summary is not None:
-        note = token_age_note(davmail_summary.get("token_age_days"))
+        note = auth_expiry_note(davmail_summary.get("auth_days_left"))
         if note:
             notes.append(note)
     return notes

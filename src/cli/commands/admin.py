@@ -59,7 +59,7 @@ HEALTH_WATCH_NOTES: tuple[str, ...] = (
 # 动态 note) 全部单源到 src/services/admin_health —— 此前与 src/api/routers/admin.py
 # 逐字重复, 且**该批的 token 老化阈值就是照这个惯例复刻的, CLI 这份漏了 critical 档**
 # (同一个 87 天 token: web 面 level=critical, 这里只提示 warning 措辞)。
-# 现在 note 文案两档都由 admin_health.token_age_note 出, 两端同一句话。
+# 现在 note 文案两档都由 admin_health.auth_expiry_note 出, 两端同一句话。
 _parse_worker_rows = _health.parse_worker_rows
 _build_davmail_summary = _health.build_davmail_summary
 _mark_stale_workers = _health.mark_stale_workers
@@ -221,7 +221,7 @@ def _build_health_data(cli: "CliContext") -> dict:
                 davmail_rows = conn.execute(
                     "SELECT key, value FROM sync_state WHERE key IN "
                     "('davmail.last_probe_at', 'davmail.token_age_days', "
-                    "'davmail.imap_reachable')"
+                    "'davmail.imap_reachable', 'davmail.auth.expires_at')"
                 ).fetchall()
                 davmail_summary = _build_davmail_summary(dict(davmail_rows))
             except sqlite3.Error:
@@ -289,7 +289,8 @@ def admin_health(
             )
         if davmail_summary is not None:
             print(
-                f"davmail        token_age_days={davmail_summary['token_age_days']} "
+                f"davmail        auth_days_left={davmail_summary['auth_days_left']} "
+                f"token_age_days={davmail_summary['token_age_days']} "
                 f"imap_reachable={davmail_summary['imap_reachable']}"
             )
         for note in data["notes"]:

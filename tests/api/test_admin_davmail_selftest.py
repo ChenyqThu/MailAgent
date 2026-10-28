@@ -131,17 +131,48 @@ def test_davmail_health_critical_on_imap_down(davmail_client_factory):
     assert data["consecutive_imap_failures"] == 4
 
 
-def test_davmail_health_warning_on_token_aging(davmail_client_factory):
-    # token_age_days >= 80 (warn) but < 87 (critical) → warning.
+def test_davmail_health_warning_when_login_expires_soon(davmail_client_factory):
+    # 登录剩 ≤3 天 → warning; token.dat 天数只是信息, 不参与分级。
+    c = davmail_client_factory({
+        "davmail.last_probe_at": "2026-05-31T10:00:00+00:00",
+        "davmail.imap_reachable": "1",
+        "davmail.smtp_reachable": "1",
+        "davmail.token_age_days": "0.04",
+        "davmail.auth.expires_at": str(int(time.time() + 2 * 86400)),
+    })
+    data = c.get("/api/admin/davmail-health").json()["data"]
+    assert data["level"] == "warning"
+    assert 1.9 < data["auth_days_left"] <= 2.0
+    assert data["auth_expires_at"]
+
+
+def test_davmail_health_critical_when_login_expired(davmail_client_factory):
+    c = davmail_client_factory({
+        "davmail.last_probe_at": "2026-05-31T10:00:00+00:00",
+        "davmail.imap_reachable": "1",
+        "davmail.smtp_reachable": "1",
+        "davmail.token_age_days": "0.04",
+        "davmail.auth.expires_at": str(int(time.time() - 3600)),
+    })
+    data = c.get("/api/admin/davmail-health").json()["data"]
+    assert data["level"] == "critical"
+    assert data["auth_days_left"] < 0
+
+
+def test_davmail_health_old_token_age_and_no_auth_record_is_ok(davmail_client_factory):
+    # 没有交互认证记录 → 不判断到期; 旧判据 (token.dat 82 天) 不再触发 warning。
     c = davmail_client_factory({
         "davmail.last_probe_at": "2026-05-31T10:00:00+00:00",
         "davmail.imap_reachable": "1",
         "davmail.smtp_reachable": "1",
         "davmail.token_age_days": "82.5",
+        "davmail.auth.expires_at": "",
     })
     data = c.get("/api/admin/davmail-health").json()["data"]
-    assert data["level"] == "warning"
+    assert data["level"] == "ok"
     assert data["token_age_days"] == 82.5
+    assert data["auth_days_left"] is None
+    assert data["auth_expires_at"] is None
 
 
 def test_davmail_health_token_age_sentinel_minus1_is_null(davmail_client_factory):
@@ -269,19 +300,32 @@ def test_system_alerts_critical_imap_and_smtp(davmail_client_factory):
     assert all(a["source"] == "davmail" for a in data["alerts"])
 
 
-def test_system_alerts_warning_token_and_throttle(davmail_client_factory):
+def test_system_alerts_warning_login_expiring_and_throttle(davmail_client_factory):
     c = davmail_client_factory({
         "davmail.last_probe_at": "2026-05-31T10:00:00+00:00",
         "davmail.imap_reachable": "1",
         "davmail.smtp_reachable": "1",
-        "davmail.token_age_days": "83",
+        "davmail.token_age_days": "0.04",
+        "davmail.auth.expires_at": str(int(time.time() + 2 * 86400)),
         "davmail.throttle_events_5min": "4",
     })
     data = c.get("/api/admin/system-alerts").json()["data"]
-    levels = [a["level"] for a in data["alerts"]]
-    assert "warning" in levels
-    assert data["warning_count"] >= 2  # token aging + throttling.
+    titles = {a["title"]: a["level"] for a in data["alerts"]}
+    assert titles.get("DavMail login expiring") == "warning"
+    assert data["warning_count"] == 2  # login expiring + throttling.
     assert data["critical_count"] == 0
+
+
+def test_system_alerts_critical_when_login_expired(davmail_client_factory):
+    c = davmail_client_factory({
+        "davmail.last_probe_at": "2026-05-31T10:00:00+00:00",
+        "davmail.imap_reachable": "1",
+        "davmail.smtp_reachable": "1",
+        "davmail.auth.expires_at": str(int(time.time() - 60)),
+    })
+    data = c.get("/api/admin/system-alerts").json()["data"]
+    titles = {a["title"]: a["level"] for a in data["alerts"]}
+    assert titles == {"DavMail login expired": "critical"}
 
 
 def test_system_alerts_critical_on_login_degraded(davmail_client_factory):

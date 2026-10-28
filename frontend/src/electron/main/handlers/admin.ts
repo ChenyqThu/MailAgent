@@ -24,7 +24,7 @@ import { app, dialog, ipcMain } from 'electron'
 import { copyFileSync, rmSync } from 'fs'
 import { basename, dirname } from 'path'
 
-import { TOKEN_CRITICAL_DAYS, TOKEN_WARN_DAYS } from '@shared/lib/davmailThresholds'
+import { authExpiryLevel } from '@shared/lib/davmailThresholds'
 import { callCli } from '../cli_runner'
 import type { AdminHealthData } from '@shared/api/types'
 import { daemonRead } from '../daemon_api'
@@ -168,8 +168,14 @@ export interface DavMailHealthData {
   consecutive_login_failures?: number
   /** F5 — effective login-fail threshold, propagated via sync_state (fallback 3). */
   login_fail_threshold?: number
+  /** token.dat 距今天数，纯信息（每小时随 refresh 重写，不参与分级）。 */
   token_age_days: number | null
   token_mtime_iso: string | null
+  /** 登录到期（最近一次交互认证 + 登录有效期，watchdog 落盘 `davmail.auth.expires_at`）。
+   *  无交互认证记录 → null。 */
+  auth_expires_at?: string | null
+  /** 距登录到期的天数，读取时现算（可为负 = 已过期）。无记录 → null。 */
+  auth_days_left?: number | null
   throttle_events_5min: number
   last_oauth_error: string | null
   last_oauth_error_at: string | null
@@ -252,6 +258,8 @@ export function runDavmailHealth(): DavMailHealthData {
       consecutive_login_failures: 0,
       token_age_days: null,
       token_mtime_iso: null,
+      auth_expires_at: null,
+      auth_days_left: null,
       throttle_events_5min: 0,
       last_oauth_error: null,
       last_oauth_error_at: null,
@@ -277,6 +285,8 @@ export function runDavmailHealth(): DavMailHealthData {
       consecutive_login_failures: 0,
       token_age_days: null,
       token_mtime_iso: null,
+      auth_expires_at: null,
+      auth_days_left: null,
       throttle_events_5min: 0,
       last_oauth_error: null,
       last_oauth_error_at: null,
@@ -298,16 +308,23 @@ export function runDavmailHealth(): DavMailHealthData {
   const throttleCount = parseInt(state['davmail.throttle_events_5min'] || '0', 10)
   const lastOAuthErr = state['davmail.last_oauth_error'] || null
   const lastOAuthAt = state['davmail.last_oauth_error_at'] || null
-  const oauthRecent = !!lastOAuthAt && Date.now() - Date.parse(lastOAuthAt) < 3600 * 1000
+  // watchdog 在 OAuth 失效期间保留错误行、恢复后清空（同 Python 读面的 bool(last_oauth_error)）。
+  // 不能按 last_oauth_error_at 的新旧判：恢复后它不清，会让看板在重认证成功后继续报 critical。
+  const oauthActive = !!lastOAuthErr
+  // `davmail.auth.expires_at` = epoch 秒字符串，'' = 没有交互认证记录（不判断到期）。
+  const authExpiresSec = parseFloat(state['davmail.auth.expires_at'] || '')
+  const authExpiresMs =
+    Number.isFinite(authExpiresSec) && authExpiresSec > 0 ? authExpiresSec * 1000 : null
+  const authDaysLeft = authExpiresMs === null ? null : (authExpiresMs - Date.now()) / 86_400_000
+  const authLevel = authExpiryLevel(authDaysLeft)
 
   let level: DavMailHealthData['level'] = 'ok'
-  if (oauthRecent) level = 'critical'
+  if (oauthActive) level = 'critical'
   else if (!imapOk && imapFails >= 3) level = 'critical'
   else if (!smtpOk && smtpFails >= 3) level = 'critical'
   // L2a: TCP 可达但 LOGIN 连续失败 = token 劣化 (F5: 阈值随 watchdog 生效值)
   else if (loginFails >= loginThreshold) level = 'critical'
-  else if (tokenAge >= TOKEN_CRITICAL_DAYS) level = 'critical'
-  else if (tokenAge >= TOKEN_WARN_DAYS) level = 'warning'
+  else if (authLevel !== null) level = authLevel
   else if (throttleCount >= 3) level = 'warning'
   else if (!imapOk || !smtpOk) level = 'warning'
 
@@ -325,6 +342,8 @@ export function runDavmailHealth(): DavMailHealthData {
     login_fail_threshold: loginThreshold,
     token_age_days: tokenAge >= 0 ? tokenAge : null,
     token_mtime_iso: state['davmail.token_mtime_iso'] || null,
+    auth_expires_at: authExpiresMs === null ? null : new Date(authExpiresMs).toISOString(),
+    auth_days_left: authDaysLeft,
     throttle_events_5min: throttleCount,
     last_oauth_error: lastOAuthErr,
     last_oauth_error_at: lastOAuthAt,
@@ -335,36 +354,33 @@ export function runDavmailHealth(): DavMailHealthData {
 export function runSystemAlerts(): SystemAlertsData {
   const h = runDavmailHealth()
   const alerts: SystemAlertItem[] = []
-  if (h.enabled && h.last_oauth_error && h.last_oauth_error_at) {
-    const ageMs = Date.now() - Date.parse(h.last_oauth_error_at)
-    if (ageMs < 3600 * 1000) {
-      alerts.push({
-        level: 'critical',
-        source: 'davmail',
-        title: 'DavMail OAuth 续期失败',
-        message: h.last_oauth_error,
-        ts: h.last_oauth_error_at
-      })
-    }
+  if (h.enabled && h.last_oauth_error) {
+    alerts.push({
+      level: 'critical',
+      source: 'davmail',
+      title: 'DavMail OAuth 续期失败',
+      message: h.last_oauth_error,
+      ts: h.last_oauth_error_at ?? h.last_probe_at
+    })
   }
-  if (h.enabled && h.token_age_days !== null) {
-    if (h.token_age_days >= TOKEN_CRITICAL_DAYS) {
-      alerts.push({
-        level: 'critical',
-        source: 'davmail',
-        title: 'DavMail OAuth token 紧急过期',
-        message: `token.dat ${h.token_age_days.toFixed(1)} 天未刷新, 估剩余 ${Math.max(0, 90 - h.token_age_days).toFixed(0)} 天`,
-        ts: h.last_probe_at
-      })
-    } else if (h.token_age_days >= TOKEN_WARN_DAYS) {
-      alerts.push({
-        level: 'warning',
-        source: 'davmail',
-        title: 'DavMail OAuth token 即将过期',
-        message: `token.dat ${h.token_age_days.toFixed(1)} 天未刷新, 估剩余 ${Math.max(0, 90 - h.token_age_days).toFixed(0)} 天`,
-        ts: h.last_probe_at
-      })
-    }
+  const authDays = h.auth_days_left ?? null
+  const authAlertLevel = h.enabled ? authExpiryLevel(authDays) : null
+  if (authAlertLevel === 'critical') {
+    alerts.push({
+      level: 'critical',
+      source: 'davmail',
+      title: 'DavMail 登录已过期',
+      message: '邮件收发已停止，请在设置 → 账户 → DavMail 里点「重新认证」',
+      ts: h.last_probe_at
+    })
+  } else if (authAlertLevel === 'warning' && authDays !== null) {
+    alerts.push({
+      level: 'warning',
+      source: 'davmail',
+      title: 'DavMail 登录即将过期',
+      message: `约 ${authDays.toFixed(1)} 天后过期，请在设置 → 账户 → DavMail 里点「重新认证」`,
+      ts: h.last_probe_at
+    })
   }
   if (h.enabled && !h.imap_reachable) {
     if (h.consecutive_imap_failures >= 3) {
