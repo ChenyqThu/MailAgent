@@ -224,16 +224,10 @@ def test_accept_supersedes_other_pendings(env):
     assert "update_superseded" in kinds
 
 
-def test_reject_requires_reason_and_bumps_version(env):
+def test_reject_keeps_reason_and_bumps_version(env):
     service, pid, version, path = env
     update_id, _ = _insert_pending(service, pid)
     before = service.get_matter(pid)["matter"]
-    with pytest.raises(MatterError) as excinfo:
-        service.reject_update(
-            pid, update_id, reason="  ", expected_version=before["version"],
-            idempotency_key="r0", source="desktop_ui",
-        )
-    assert excinfo.value.code == "E_INVALID_ARG"
     result = service.reject_update(
         pid, update_id, reason="信息不足", expected_version=before["version"],
         idempotency_key="r1", source="desktop_ui",

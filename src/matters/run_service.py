@@ -1235,6 +1235,12 @@ class MatterRunService(MatterService):
                             field="due_at", value=change.get("after"),
                         )
                         continue
+                # 其余字段的值（状态枚举 / 完成标志形状）用 accept 落库的同一份判据预检。
+                try:
+                    self._field_change_columns(change_id, field, change.get("after"))
+                except MatterError as exc:
+                    drop(change, "field_value_invalid", field=field, detail=exc.message)
+                    continue
             if kind == "inference":
                 change["is_inference"] = True
             if kind == "progress":
@@ -1293,6 +1299,12 @@ class MatterRunService(MatterService):
                             change, "timestamp_not_epoch_ms",
                             field=bad_ts, value=after.get(bad_ts),
                         )
+                        continue
+                if target is not None:
+                    try:
+                        self._action_item_patch(change_id, change)
+                    except MatterError as exc:
+                        drop(change, "action_value_invalid", detail=exc.message)
                         continue
             validated.append(change)
         return validated, dropped

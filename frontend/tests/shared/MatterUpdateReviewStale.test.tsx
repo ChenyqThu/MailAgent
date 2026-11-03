@@ -189,3 +189,25 @@ describe('MatterUpdateReview 没有逐项变化的提案', () => {
     expect(button.disabled).toBe(true)
   })
 })
+
+describe('MatterUpdateReview 拒绝', () => {
+  test('不填原因也能确认拒绝，原因框在滚动区之外', () => {
+    const onReject = vi.fn()
+    const { container } = render(
+      <MatterUpdateReview
+        matter={matter}
+        update={{ ...staleUpdate, is_stale: false, stale_at: null, stale_reason: null }}
+        onClose={vi.fn()}
+        onAccept={vi.fn()}
+        onReject={onReject}
+      />
+    )
+    fireEvent.click(screen.getByText('拒绝'))
+    const box = container.querySelector('#matter-update-reject-reason')
+    expect(box).toBeTruthy()
+    // 滚动区（overflow-y-auto）里看不到底部的框 —— 原来的位置正是用户「找不到原因框」的根因。
+    expect(box!.closest('.overflow-y-auto')).toBeNull()
+    fireEvent.click(screen.getByText('确认拒绝'))
+    expect(onReject).toHaveBeenCalledWith('')
+  })
+})

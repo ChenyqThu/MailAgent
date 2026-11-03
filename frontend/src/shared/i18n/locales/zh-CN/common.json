@@ -6514,7 +6514,7 @@
         "happenedAt": "发生于 {time}",
         "happenedNow": "未注明发生时间 · 按接受的时刻记"
       },
-      "rejectReason": "拒绝原因",
+      "rejectReason": "拒绝原因（可选）",
       "confirmReject": "确认拒绝",
       "editedArchive": "Agent 原始提案与你编辑后的版本都会留档",
       "rejectArchive": "拒绝也会留档，并成为 Agent 后续的上下文",

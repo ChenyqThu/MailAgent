@@ -411,7 +411,11 @@ def normalize_goal_checks(entries: Iterable[object] | None) -> tuple[dict[str, o
 
     空文本行直接丢弃（前端加一行再删文字的中间态不该落库）；其余非法形状一律
     ``ValueError`` —— 这个字段会渲染成可勾选清单，静默吞掉坏数据会让用户以为存上了。
+
+    Agent 提案常把清单写成 ``{"goal_checks": [...]}``（多包一层）：只有这一个键时解开。
     """
+    if isinstance(entries, dict) and set(entries) == {"goal_checks"}:
+        entries = entries["goal_checks"]
     normalized: list[dict[str, object]] = []
     for raw in entries or ():
         if not isinstance(raw, dict):

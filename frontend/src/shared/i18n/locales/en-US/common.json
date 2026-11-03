@@ -6514,7 +6514,7 @@
         "happenedAt": "Happened {time}",
         "happenedNow": "No time given · recorded as of acceptance"
       },
-      "rejectReason": "Rejection reason",
+      "rejectReason": "Rejection reason (optional)",
       "confirmReject": "Reject proposal",
       "editedArchive": "The original and edited proposal will both be retained",
       "rejectArchive": "Rejections are retained as future agent context",

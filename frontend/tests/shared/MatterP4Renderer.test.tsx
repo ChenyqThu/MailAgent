@@ -195,7 +195,7 @@ describe('P4 renderer surfaces', () => {
     expect(screen.getByText('审阅')).toBeTruthy()
   })
 
-  test('ReviewModal disables stale acceptance and requires reject reason', () => {
+  test('ReviewModal disables stale acceptance; reject passes the typed reason', () => {
     const reject = vi.fn()
     const view = render(
       <MatterUpdateReview
@@ -208,12 +208,11 @@ describe('P4 renderer surfaces', () => {
     )
     expect((screen.getByText('全部接受') as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByText('拒绝'))
-    const confirm = screen.getByText('确认拒绝') as HTMLButtonElement
-    expect(confirm.disabled).toBe(true)
-    fireEvent.change(view.container.querySelector('textarea:last-of-type') as HTMLTextAreaElement, {
-      target: { value: 'Not accurate' }
+    fireEvent.change(view.container.querySelector('#matter-update-reject-reason') as HTMLTextAreaElement, {
+      target: { value: ' Not accurate ' }
     })
-    expect(confirm.disabled).toBe(false)
+    fireEvent.click(screen.getByText('确认拒绝'))
+    expect(reject).toHaveBeenCalledWith('Not accurate')
   })
 
   // 0812 D-B：跟进配置从右栏绑定卡搬进 `MatterAgentConfigModal`（右栏 ≥1400px 才渲染，

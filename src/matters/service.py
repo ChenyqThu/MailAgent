@@ -4546,10 +4546,8 @@ class MatterService:
         actor: Actor = Actor(),
         reverses_event_id: int | None = None,
     ) -> dict[str, Any]:
-        """拒绝提案：不应用、留档 reason、version 照 bump（REST #3）、无 undo。stale 行可拒。"""
+        """拒绝提案：不应用、留档 reason（可空）、version 照 bump（REST #3）、无 undo。stale 行可拒。"""
         reason_text = self._optional_text(reason)
-        if not reason_text:
-            raise MatterError("E_INVALID_ARG", "reject reason is required")
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
         with self._transaction() as conn:
@@ -4615,6 +4613,98 @@ class MatterService:
                 after, [event_id], update=self._get_update_row(conn, update_id)
             )
 
+    def _field_change_columns(
+        self, change_id: str, field: object, value: Any
+    ) -> dict[str, Any]:
+        """一条 ``kind=field`` 变更 → 要写进 matter 的列。值非法抛 MatterError。
+
+        accept 落库与 propose 入库预检共用这一份判据：坏值在提案入库时就剔掉并回给
+        Agent，不留到 owner 点「接受」时才让整份提案失败。"""
+        if field == "status":
+            self._require_value("status", str(value), MATTER_STATUSES)
+            return {"status": str(value)}
+        if field == "health":
+            self._require_value("health", str(value), MATTER_HEALTH_VALUES)
+            return {"health": str(value)}
+        if field == "priority":
+            self._require_value("priority", str(value), MATTER_PRIORITIES)
+            return {"priority": str(value)}
+        if field == "due_at":
+            if value is not None and not isinstance(value, int):
+                raise MatterError(
+                    "E_INVALID_ARG", f"change {change_id}: due_at must be int|null"
+                )
+            # A3 backstop：提案里的 due_at 同样可能是 agent 写的 epoch 秒
+            #（propose 侧已 fail-closed 剔除，这里防旧存量/直连 REST）。
+            return {"due_at": self._require_epoch_ms("due_at", value)}
+        if field == "waiting_context":
+            return {"waiting_context_json": self._dump(value) if value is not None else None}
+        if field in ("background", "goal"):
+            # S3：背景与目标（v61 起两个独立字段）。owner 在评审界面看到全文 diff 后
+            # 才会 accept ——「Agent 只能提案、owner 拍板」这条约束在**评审**这一步
+            # 兑现，而不是靠让字段不可写。
+            return {field: str(value or "")}
+        if field == "goal_checks":
+            # S3：完成标志。归一走与 patch 路径**同一个**函数 —— 提案里带非法形状
+            # （超 20 条 / 超 200 字 / 非对象）时在这里也必须炸，不能因为「是提案
+            # 来的」就绕过护栏。
+            # 🔴 ValueError → MatterError 与 patch 路径同款包装：不包的话 REST 的
+            # `_call` 只认 MatterError，护栏会以 500 而不是 400 的形态漏出去。
+            try:
+                return {"goal_checks_json": self._dump(list(normalize_goal_checks(value)))}
+            except ValueError as exc:
+                raise MatterError("E_INVALID_ARG", f"change {change_id}: {exc}") from exc
+        raise MatterError(
+            "E_INVALID_ARG", f"change {change_id}: field not allowed: {field}"
+        )
+
+    def _action_item_patch(
+        self, change_id: str, change: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """一条改既有行动项的 ``kind=action`` 变更 → item 补丁。值非法抛 MatterError。
+
+        ``after`` 是对象时按键取；是标量时落到 ``target.field`` 指的那一列（没写
+        field 才按老约定当 status）—— Agent 写 ``{field: "title", after: "新标题"}``
+        时，把新标题当状态去校验会让整份提案接受失败。accept 与 propose 预检共用。"""
+        allowed_keys = {
+            "title", "description", "status", "priority", "due_at", "completed_at",
+        }
+        target = change.get("target")
+        target_field = target.get("field") if isinstance(target, Mapping) else None
+        after = change.get("after")
+        item_patch: dict[str, Any] = {}
+        if isinstance(after, Mapping):
+            item_patch = {key: after[key] for key in after if key in allowed_keys}
+        elif isinstance(after, (str, int)):
+            if target_field is None:
+                item_patch = {"status": after}
+            elif target_field in allowed_keys:
+                item_patch = {str(target_field): after}
+            else:
+                raise MatterError(
+                    "E_INVALID_ARG",
+                    f"action change {change_id}: field not allowed: {target_field}",
+                )
+        elif after is not None:
+            raise MatterError(
+                "E_INVALID_ARG",
+                f"action change {change_id}: unsupported after shape",
+            )
+        if change.get("text") is not None and "title" not in item_patch:
+            item_patch["title"] = str(change["text"])
+        if "status" in item_patch:
+            self._require_value("status", str(item_patch["status"]), MATTER_ITEM_STATUSES)
+        if "priority" in item_patch and item_patch["priority"] is not None:
+            self._require_value(
+                "priority", str(item_patch["priority"]), MATTER_PRIORITIES
+            )
+        for ts_field in ("due_at", "completed_at"):
+            if ts_field in item_patch:
+                item_patch[ts_field] = self._require_epoch_ms(
+                    ts_field, item_patch[ts_field]
+                )
+        return item_patch
+
     def _apply_accepted_change(
         self,
         conn: sqlite3.Connection,
@@ -4678,51 +4768,9 @@ class MatterService:
         if kind == "field":
             target = change.get("target")
             field = target.get("field") if isinstance(target, Mapping) else None
-            value = change.get("after")
-            if field == "status":
-                self._require_value("status", str(value), MATTER_STATUSES)
-                direct_changes["status"] = str(value)
-            elif field == "health":
-                self._require_value("health", str(value), MATTER_HEALTH_VALUES)
-                direct_changes["health"] = str(value)
-            elif field == "priority":
-                self._require_value("priority", str(value), MATTER_PRIORITIES)
-                direct_changes["priority"] = str(value)
-            elif field == "due_at":
-                if value is not None and not isinstance(value, int):
-                    raise MatterError(
-                        "E_INVALID_ARG", f"change {change_id}: due_at must be int|null"
-                    )
-                # A3 backstop：提案里的 due_at 同样可能是 agent 写的 epoch 秒
-                #（propose 侧已 fail-closed 剔除，这里防旧存量/直连 REST）。
-                direct_changes["due_at"] = self._require_epoch_ms("due_at", value)
-            elif field == "waiting_context":
-                direct_changes["waiting_context_json"] = (
-                    self._dump(value) if value is not None else None
-                )
-            elif field in ("background", "goal"):
-                # S3：背景与目标（v61 起两个独立字段）。owner 在评审界面看到全文 diff 后
-                # 才会 accept ——「Agent 只能提案、owner 拍板」这条约束在**评审**这一步
-                # 兑现，而不是靠让字段不可写。
-                direct_changes[field] = str(value or "")
-            elif field == "goal_checks":
-                # S3：完成标志。归一走与 patch 路径**同一个**函数 —— 提案里带非法形状
-                # （超 20 条 / 超 200 字 / 非对象）时在这里也必须炸，不能因为「是提案
-                # 来的」就绕过护栏。propose 侧已先 drop 一轮，这里是 backstop。
-                # 🔴 ValueError → MatterError 与 patch 路径同款包装：不包的话 REST 的
-                # `_call` 只认 MatterError，护栏会以 500 而不是 400 的形态漏出去。
-                try:
-                    direct_changes["goal_checks_json"] = self._dump(
-                        list(normalize_goal_checks(value))
-                    )
-                except ValueError as exc:
-                    raise MatterError(
-                        "E_INVALID_ARG", f"change {change_id}: {exc}"
-                    ) from exc
-            else:
-                raise MatterError(
-                    "E_INVALID_ARG", f"change {change_id}: field not allowed: {field}"
-                )
+            direct_changes.update(
+                self._field_change_columns(change_id, field, change.get("after"))
+            )
             # 接受提案落下来的字段变更也要能写成句子（"状态 进行中 → 等待中"）。
             # 前像取 `matter`（进 accept 事务时的快照）—— 同一次 accept 里两条 change 撞同
             # 一个字段是罕见的边角，那时两条事件的 from 都指向接受前的状态，语义仍然自洽。
@@ -4793,38 +4841,7 @@ class MatterService:
                     "E_INVALID_STATE",
                     f"action change {change_id}: target item {item_id} not found",
                 )
-            after = change.get("after")
-            item_patch: dict[str, Any] = {}
-            if isinstance(after, Mapping):
-                allowed_keys = {
-                    "title", "description", "status", "priority", "due_at",
-                    "completed_at",
-                }
-                item_patch = {
-                    key: after[key] for key in after if key in allowed_keys
-                }
-            elif isinstance(after, str):
-                item_patch = {"status": after}
-            elif after is not None:
-                raise MatterError(
-                    "E_INVALID_ARG",
-                    f"action change {change_id}: unsupported after shape",
-                )
-            if change.get("text") is not None and "title" not in item_patch:
-                item_patch["title"] = str(change["text"])
-            if "status" in item_patch:
-                self._require_value(
-                    "status", str(item_patch["status"]), MATTER_ITEM_STATUSES
-                )
-            if "priority" in item_patch and item_patch["priority"] is not None:
-                self._require_value(
-                    "priority", str(item_patch["priority"]), MATTER_PRIORITIES
-                )
-            for ts_field in ("due_at", "completed_at"):
-                if ts_field in item_patch:
-                    item_patch[ts_field] = self._require_epoch_ms(
-                        ts_field, item_patch[ts_field]
-                    )
+            item_patch = self._action_item_patch(change_id, change)
             if not item_patch:
                 warnings.append(f"action_change_noop:{change_id}")
                 return

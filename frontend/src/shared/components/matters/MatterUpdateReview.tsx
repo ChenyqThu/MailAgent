@@ -185,16 +185,6 @@ export function MatterUpdateReview({
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5 scrollbar-thin">
-          {error ? (
-            <div
-              role="alert"
-              className="mb-4 flex items-start gap-2 rounded-lg border border-fail/30 bg-fail/[0.07] p-3 text-aux text-fail"
-            >
-              <RefreshCcw size={14} className="mt-0.5 shrink-0" />
-              <span>{error}</span>
-            </div>
-          ) : null}
-
           <div className="mb-4 flex items-center gap-2 rounded-lg border border-ink-border bg-ink-2 px-3 py-2 font-mono text-meta text-ink-fg-2">
             <Layers size={12} />
             {t('matters.review.watermark', {
@@ -315,29 +305,49 @@ export function MatterUpdateReview({
               ) : null}
             </div>
           ) : null}
+        </div>
 
-          {rejecting ? (
-            <div className="mt-4 rounded-lg border border-fail/25 p-3">
-              <label htmlFor="matter-update-reject-reason" className="text-aux font-medium">
-                {t('matters.review.rejectReason')}
-              </label>
-              <textarea
-                id="matter-update-reject-reason"
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-                className="mt-2 w-full rounded-lg border border-ink-border bg-ink-2 p-2"
-              />
+        {/* 报错与拒绝原因放在滚动区之外、紧贴底栏：滚到哪里都看得见。 */}
+        {error ? (
+          <div
+            role="alert"
+            className="mx-5 mt-3 flex items-start gap-2 rounded-lg border border-fail/30 bg-fail/[0.07] p-3 text-aux text-fail"
+          >
+            <RefreshCcw size={14} className="mt-0.5 shrink-0" />
+            <span>{error}</span>
+          </div>
+        ) : null}
+        {rejecting ? (
+          <div className="mx-5 mt-3 rounded-lg border border-fail/25 p-3">
+            <label htmlFor="matter-update-reject-reason" className="text-aux font-medium">
+              {t('matters.review.rejectReason')}
+            </label>
+            <textarea
+              id="matter-update-reject-reason"
+              autoFocus
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              className="mt-2 w-full rounded-lg border border-ink-border bg-ink-2 p-2"
+            />
+            <div className="mt-2 flex gap-2">
               <button
                 type="button"
-                disabled={!reason.trim()}
+                disabled={busy}
                 onClick={() => onReject(reason.trim())}
-                className="mt-2 rounded-lg bg-fail px-3 py-2 text-aux text-white disabled:opacity-50"
+                className="rounded-lg bg-fail px-3 py-2 text-aux text-white disabled:opacity-50"
               >
                 {t('matters.review.confirmReject')}
               </button>
+              <button
+                type="button"
+                onClick={() => setRejecting(false)}
+                className="rounded-lg border border-ink-border px-3 py-2 text-aux"
+              >
+                {t('common.cancel')}
+              </button>
             </div>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
 
         <footer className="flex items-center gap-2 border-t border-ink-border bg-ink-2 px-5 py-3">
           <Shield size={13} className="text-ink-fg-3" />
