@@ -8171,5 +8171,19 @@
       "lastRefresh": "Last refreshed: {time}",
       "oauthErrorHint": "Sign-in may have expired. Re-authenticate to restore it, or switch back to the applescript backend."
     }
+  },
+  "runErrors": {
+    "E_RUN_TIMEOUT": "Timed out before the AI finished",
+    "E_GATEWAY_DOWN": "AI service is not running or unreachable",
+    "E_GATEWAY_BAD_RESPONSE": "AI service returned an unreadable result",
+    "E_GATEWAY_HTTP": "AI service request failed",
+    "E_AGENT": "AI call failed",
+    "E_BUDGET_TIME": "Run exceeded its time budget",
+    "E_QUOTA": "AI quota exhausted",
+    "E_UPSTREAM": "Upstream AI service error",
+    "E_RUN_STOPPED": "Run was stopped manually",
+    "E_RUN_ERROR": "Run failed",
+    "E_WORKER_CRASH": "Background worker exited unexpectedly",
+    "E_RUN_ACTIVE": "Another run is already active in this session"
   }
 }

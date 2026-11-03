@@ -8171,5 +8171,19 @@
       "lastRefresh": "最近刷新：{time}",
       "oauthErrorHint": "可能登录已失效：重新认证即可恢复，也可以回切 applescript 后端。"
     }
+  },
+  "runErrors": {
+    "E_RUN_TIMEOUT": "运行超时，AI 在时限内没有完成",
+    "E_GATEWAY_DOWN": "AI 服务未启动或连接不上",
+    "E_GATEWAY_BAD_RESPONSE": "AI 服务返回了无法识别的结果",
+    "E_GATEWAY_HTTP": "AI 服务请求失败",
+    "E_AGENT": "AI 调用出错",
+    "E_BUDGET_TIME": "运行超出时间预算",
+    "E_QUOTA": "AI 额度不足",
+    "E_UPSTREAM": "AI 上游服务出错",
+    "E_RUN_STOPPED": "运行被手动停止",
+    "E_RUN_ERROR": "运行出错",
+    "E_WORKER_CRASH": "后台执行进程异常退出",
+    "E_RUN_ACTIVE": "同一会话已有运行在进行"
   }
 }

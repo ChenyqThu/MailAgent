@@ -30,6 +30,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
 import { formatMatterAgo } from '@shared/lib/matterDerive'
 import { qk } from '@shared/lib/queryKeys'
+import { runErrorText } from '@shared/lib/runErrorText'
 import { requestOpenAgentSession } from '@shared/state/ai-chat-panel'
 
 import { useItemDispatchAction } from './hooks'
@@ -129,7 +130,7 @@ export function MatterItemDispatchBlock({
             {typeof headline.error?.message === 'string'
               ? headline.error.message
               : typeof headline.error?.code === 'string'
-                ? headline.error.code
+                ? runErrorText(headline.error.code, t)
                 : ''}
           </span>
         )}
@@ -272,7 +273,9 @@ export function MatterItemDispatchBlock({
                     <span className="text-micro text-ink-fg-3">{dispatch.executor_id}</span>
                     {/* 失败原因原样写在行上 —— 「挂了但不说为什么」是这一批要修的东西。 */}
                     {typeof dispatch.error?.code === 'string' && (
-                      <span className="text-micro text-fail">{String(dispatch.error.code)}</span>
+                      <span title={String(dispatch.error.code)} className="text-micro text-fail">
+                        {runErrorText(String(dispatch.error.code), t)}
+                      </span>
                     )}
                     {/* 🔴 配不到会话的轮次**不画**这颗钮（还没建会话 / 老库没有 item_id / 会话已删）：
                         点了什么都不发生的入口比没有入口更糟。 */}

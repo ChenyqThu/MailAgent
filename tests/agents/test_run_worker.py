@@ -758,3 +758,12 @@ def test_notify_publish_failure_does_not_block_terminal_or_island(env, monkeypat
     assert repo.get(job_id).status == "succeeded"
     assert len(_announce_calls(calls)) == 1
     assert _notifications(repo) == []
+
+
+def test_describe_error_code_reads_as_text_and_keeps_the_code():
+    from src.agents.run_worker import describe_error_code
+
+    assert describe_error_code("E_RUN_TIMEOUT") == "运行超时，AI 在时限内没有完成（E_RUN_TIMEOUT）"
+    assert describe_error_code("E_GATEWAY_HTTP_502") == "AI 服务请求失败（E_GATEWAY_HTTP_502）"
+    assert describe_error_code("E_SOMETHING_NEW") == "E_SOMETHING_NEW"
+    assert describe_error_code(None) == ""

@@ -63,6 +63,7 @@ import { useContactNavigation } from '@shared/components/contacts/navigation'
 import { CONTACT_GOVERNANCE_AGENT_ID } from '@shared/components/agents/shared'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
+import { runErrorText } from '@shared/lib/runErrorText'
 import { formatMatterAgo } from '@shared/lib/matterDerive'
 import { toastError, toastInfo, toastSuccess } from '@shared/state/toast'
 
@@ -176,7 +177,9 @@ function LastScanRow({
         </span>
         <ScanStatusPip status={status} />
         {error !== null && error !== '' ? (
-          <code className="shrink-0 font-mono text-micro text-fail">{error}</code>
+          <span title={error} className="shrink-0 text-micro text-fail">
+            {runErrorText(error, t)}
+          </span>
         ) : null}
         <span aria-hidden className="flex-1" />
         {at !== null ? (
@@ -214,7 +217,9 @@ function ScanHistoryRow({
       ) : null}
       <span className="min-w-0 flex-1 truncate text-micro text-ink-fg-2">
         {run.last_error !== null && run.last_error !== '' ? (
-          <code className="font-mono text-micro text-fail">{run.last_error}</code>
+          <span title={run.last_error} className="text-micro text-fail">
+            {runErrorText(run.last_error, t)}
+          </span>
         ) : run.status === 'succeeded' && run.suggestions_created !== null ? (
           t('contacts.agent.runs.produced', { count: run.suggestions_created })
         ) : (
@@ -690,7 +695,9 @@ export function ContactAgentDrawer({
                 同一件事在「运行」tab 有整行的详版，这里只留一句短警示，口径一致。 */}
             {lastScanStatus === 'failed' ? (
               <p className="mb-2 text-micro leading-[1.6] text-warn">
-                {t('contacts.agent.scanFailed', { error: lastScanError ?? '—' })}
+                {t('contacts.agent.scanFailed', {
+                  error: lastScanError ? runErrorText(lastScanError, t) : '—'
+                })}
               </p>
             ) : null}
             {queueEmpty ? (

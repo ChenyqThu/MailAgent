@@ -427,6 +427,7 @@ def test_transport_failure_without_proposal_publishes_warn_notification(env, mon
     assert service.get_run(run["id"])["status"] == "fail"
     rows = _notifications(service)
     assert len(rows) == 1 and "E_RUN_TIMEOUT" in rows[0]["body"]
+    assert "运行超时" in rows[0]["body"]  # 给人看的说明，原码只作括注
     assert rows[0]["dedupe_key"] == f"matter_followup_failed:{run['matter_id']}"
 
 

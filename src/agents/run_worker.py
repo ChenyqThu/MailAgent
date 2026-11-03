@@ -56,6 +56,33 @@ _PAUSED_SWEEP_SCAN_LIMIT = 100
 _ERROR_MESSAGE_MAX_CHARS = 500
 _ERROR_DETAIL_MAX_CHARS = 1500
 
+# 通知正文里的错误码说明。last_error 仍存错误码（契约不变），只有给人看的文案换成说明，
+# 并在括号里保留原码便于排查。未收录的码原样显示。
+_ERROR_CODE_TEXT = {
+    "E_RUN_TIMEOUT": "运行超时，AI 在时限内没有完成",
+    "E_GATEWAY_DOWN": "AI 服务未启动或连接不上",
+    "E_GATEWAY_BAD_RESPONSE": "AI 服务返回了无法识别的结果",
+    "E_AGENT": "AI 调用出错",
+    "E_BUDGET_TIME": "运行超出时间预算",
+    "E_QUOTA": "AI 额度不足",
+    "E_UPSTREAM": "AI 上游服务出错",
+    "E_RUN_STOPPED": "运行被手动停止",
+    "E_RUN_ERROR": "运行出错",
+    "E_WORKER_CRASH": "后台执行进程异常退出",
+    "E_RUN_ACTIVE": "同一会话已有运行在进行",
+}
+
+
+def describe_error_code(code: Optional[str]) -> str:
+    """错误码 → 「说明（原码）」。空 → 空串；未收录 → 原码。"""
+    code = (code or "").strip()
+    if not code:
+        return ""
+    if code.startswith("E_GATEWAY_HTTP_"):
+        return f"AI 服务请求失败（{code}）"
+    text = _ERROR_CODE_TEXT.get(code)
+    return f"{text}（{code}）" if text else code
+
 
 class _GatewayPokeError(Exception):
     """poke gateway 失败的结构化载体（code → async_jobs.last_error）。"""
@@ -446,7 +473,7 @@ class AgentRunWorker:
                 category="results",
                 source="matter",
                 title=f"{matter['title']} · 跟进失败",
-                body=f"本轮跟进没有产出提案：{code}",
+                body=f"本轮跟进没有产出提案：{describe_error_code(code)}",
                 severity="warn",
                 dedupe_key=f"matter_followup_failed:{matter_id}",
                 payload={
@@ -900,7 +927,7 @@ class AgentRunWorker:
         if kind == "completed":
             summary = str((result or {}).get("summary") or "").strip() or "运行已完成"
         else:
-            summary = (last_error or "").strip() or "运行失败"
+            summary = describe_error_code(last_error) or "运行失败"
         return title, summary
 
     def _default_title_resolver(self, job: "AsyncJob") -> Optional[str]:
