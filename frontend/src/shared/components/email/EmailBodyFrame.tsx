@@ -101,6 +101,10 @@ const BODY_CSS = `
     font-size: var(--ma-body-size, 14px);
     line-height: var(--ma-body-lh, 1.15);
     font-feature-settings: 'ss01', 'cv11';
+    /* 左侧伸出的字形 (斜体 / 负 side bearing / 邮件自带的负 text-indent) 会被
+       iframe 视口边界裁掉 1-2px。留 3px 内边距, iframe 外层用等量负 margin 抵消,
+       正文视觉位置不变。 */
+    padding: 0 3px;
   }
   /* Defensive: every direct block should respect parent width so a
      newsletter <div style="width: 800px"> doesn't blow out the iframe. */
@@ -923,8 +927,8 @@ function BodyIframe({ srcDoc, translations, onImageClick }: BodyIframeProps): Re
       // reads it and matches our overflow:hidden inside the document.
       scrolling="no"
       srcDoc={srcDoc}
-      style={{ height: `${height}px` }}
-      className="w-full border-0 bg-transparent block"
+      style={{ height: `${height}px`, width: 'calc(100% + 6px)', margin: '0 -3px' }}
+      className="border-0 bg-transparent block"
     />
   )
 }
