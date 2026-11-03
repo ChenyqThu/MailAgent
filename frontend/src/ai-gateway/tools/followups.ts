@@ -54,8 +54,9 @@ export function createFollowupTools(
         'once per reply: every reply you finish ends with one call. Having called it on an ' +
         'earlier turn of this conversation does not excuse this reply, and neither does the user ' +
         'having started this turn by tapping one of your earlier suggestions — an adopted ' +
-        'suggestion is a new question, not a closed loop. Call it only AFTER your answer is ' +
-        'fully complete (never mid-task, never before a pending approval is resolved). The ' +
+        'suggestion is a new question, not a closed loop. Call it after all other tool work is ' +
+        'done (never mid-task, never before a pending approval is resolved) and BEFORE writing ' +
+        'your final answer; then write the complete answer, with no tool calls after it. The ' +
         'suggestions render as tappable chips in the UI — do not repeat them in your reply ' +
         'text. This tool has no side effects and returns no data.',
       inputSchema: suggestFollowupsSchema,

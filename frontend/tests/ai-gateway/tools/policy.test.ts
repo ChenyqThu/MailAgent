@@ -1032,7 +1032,7 @@ describe('buildGatewayTools × contextMode (registration-time filter wiring)', (
   })
 
   // W6 — the ONE read-class tool with a registration-time VENUE gate: suggest_followups is
-  // interactive UI supply (composer-top chips + the hasToolCall stop condition), registered only
+  // interactive UI supply (end-of-message chips), registered only
   // in manual_chat. The class matrix's "reads register everywhere" deliberately does not apply to
   // it — see the registration comment in tools/index.ts.
   const VENUE_GATED_READ_TOOLS = new Set(['suggest_followups', ...CONDITIONAL_HEADLESS_READ_TOOLS])

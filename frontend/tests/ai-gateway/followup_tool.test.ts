@@ -1,5 +1,5 @@
 // chat UI 优化 W6 — the in-turn suggest_followups tool: cleaning single source, tool execute,
-// manual-only registration, the hasToolCall stop condition, and the prompt guidance wiring.
+// manual-only registration, the no-stop-on-call loop, and the prompt guidance wiring.
 //
 // Replaces the deleted auto_followups.test.ts (the out-of-turn POST /api/ai/followups second
 // generation is gone — parseFollowups / buildFollowupsPrompt / generateFollowups removed).
@@ -251,6 +251,15 @@ describe('follow-up wording — per-reply scope stated on both surfaces', () => 
     }
   })
 
+  test('both surfaces put the call BEFORE the final answer (pre-fix order rejected)', () => {
+    const CALL_BEFORE_ANSWER = /before (you write |writing )?your final answer/i
+    expect(LEGACY).not.toMatch(CALL_BEFORE_ANSWER)
+    for (const [label, text] of surfaces()) {
+      expect(text, label).toMatch(CALL_BEFORE_ANSWER)
+      expect(text, label).not.toMatch(/AFTER your answer is fully complete/i)
+    }
+  })
+
   test('both surfaces state the two carve-outs (earlier call / chip-initiated turn)', () => {
     for (const [label, text] of surfaces()) {
       expect(text, `${label} must say an earlier call does not excuse this reply`).toMatch(
@@ -329,15 +338,17 @@ async function postChat(cfg: AiGatewayConfig): Promise<number> {
   return res.status
 }
 
-describe('stopWhen — hasToolCall(suggest_followups) ends the manual turn', () => {
-  test('a suggest_followups call stops the loop (no further model step)', async () => {
+// Opus 5.5 / Sonnet 5.5 return long text written AHEAD of a tool call as a progress-type thinking
+// block (empty by default), so the final answer must come in a step AFTER suggest_followups.
+describe('stopWhen — suggest_followups does not end the manual turn', () => {
+  test('a suggest_followups call is followed by a final-answer step', async () => {
     const counter = { steps: 0 }
     const model = stepCountingModel(
       toolCallChunks(SUGGEST_FOLLOWUPS_TOOL_NAME, { prompts: ['A?', 'B?'] }),
       counter
     )
     expect(await postChat(chatCfg(model))).toBe(200)
-    expect(counter.steps).toBe(1)
+    expect(counter.steps).toBe(2)
   })
 
   test('another tool call does NOT stop the loop (a second step still runs)', async () => {

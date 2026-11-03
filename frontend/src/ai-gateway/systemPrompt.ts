@@ -112,14 +112,16 @@ export const HEADLESS_AGENT_EXECUTION_DISCIPLINE = executionDisciplineFor(true)
 export const FOLLOWUP_SUGGESTIONS_GUIDANCE = [
   '# Follow-up suggestions',
   'Call the suggest_followups tool once per reply — the obligation is per reply, never per',
-  'conversation. When your answer is fully complete (never mid-task, never while a tool approval',
-  'is pending), call it with 2-3 short follow-up questions the user is likely to ask next.',
+  'conversation. Make the call after all other tool work for this reply is done (never mid-task,',
+  'never while a tool approval is pending) and BEFORE you write your final answer: call it with',
+  '2-3 short follow-up questions the user is likely to ask next, then write the complete answer',
+  'as the last thing in the reply, with no tool calls after it. Text written ahead of a tool call',
+  'may be hidden from the user, so never put the answer itself before this call.',
   'Having already called it on an earlier turn does NOT excuse this reply, and neither does the',
   'user having started this turn by tapping one of your earlier suggestions — an adopted',
   'suggestion is a new question, not a closed loop.',
   'Phrase each as the USER would ask it (first person), in the same language the user is writing',
-  'in. The suggestions render as tappable chips — do not repeat them in your reply text, and do',
-  'not write anything after the call.'
+  'in. The suggestions render as tappable chips — do not repeat them in your reply text.'
 ].join('\n')
 
 /** Add the code-owned discipline to the legacy body.system path used by pure harnesses. */

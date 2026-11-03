@@ -11,7 +11,6 @@
 import {
   convertToModelMessages,
   generateText,
-  hasToolCall,
   smoothStream,
   stepCountIs,
   streamText,
@@ -562,8 +561,8 @@ export async function prepareChatRun(
         )
   const hasTools = tools != null && Object.keys(tools).length > 0
   // W6 — the run holds the suggest_followups tool (manual chat with a real gateway ToolSet). Drives
-  // (a) the follow-up guidance block in the system prompt below and (b) the hasToolCall stop
-  // condition at streamText — both keyed off the BUILT set, never off the mode alone.
+  // the follow-up guidance block in the system prompt below — keyed off the BUILT set, never off
+  // the mode alone.
   const followupToolAvailable = hasTools && SUGGEST_FOLLOWUPS_TOOL_NAME in (tools as ToolSet)
 
   // System prompt. With the injection provider set (always injected since S3) assemble
@@ -703,16 +702,10 @@ export async function prepareChatRun(
     ...(hasTools
       ? {
           tools,
-          // W6 — when the manual-chat suggest_followups tool is registered, its call is the turn's
-          // stop signal (调完即停 — the answer is complete, no trailing text after the chips).
-          // Runs without the tool (headless / im / harness) keep the bare sentinel byte-identical;
-          // hasToolCall can never fire for a tool the ToolSet does not hold.
-          stopWhen: followupToolAvailable
-            ? [
-                stepCountIs(cfg.internalMaxSteps ?? INTERNAL_TOOL_STEP_SENTINEL),
-                hasToolCall(SUGGEST_FOLLOWUPS_TOOL_NAME)
-              ]
-            : stepCountIs(cfg.internalMaxSteps ?? INTERNAL_TOOL_STEP_SENTINEL)
+          // suggest_followups 不是停止信号：模型先调它、再写最终回答。Opus 5.5 / Sonnet 5.5 把
+          // 「工具调用之前」的长文本改成进度型 thinking 块返回（默认不带文字），回答若写在这次
+          // 调用之前就会整段消失；回答必须落在最后一次工具调用之后才是普通 text 块。
+          stopWhen: stepCountIs(cfg.internalMaxSteps ?? INTERNAL_TOOL_STEP_SENTINEL)
         }
       : {})
   }) as StreamTextResult<ToolSet, never, never>
