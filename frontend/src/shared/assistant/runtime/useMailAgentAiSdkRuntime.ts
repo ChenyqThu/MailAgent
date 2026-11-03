@@ -232,6 +232,17 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
   const [ownRunOwner] = useState<OwnRunOwner>(() => ({}))
   useEffect(() => registerOwnRunOwner(ownRunOwner), [ownRunOwner])
 
+  // 卸载（切标签 / 切会话）时 assistant-ui 也会 chat.stop() 中止在途请求（useChatRuntime 把
+  // stopOnClientDestroy 写死为 true）。那不是用户要停：run 应留在后台继续，由新挂载的
+  // useBackgroundChatRun 接上。transport 的中止监听据此标记跳过 /run/stop。
+  const mountedRef = useRef(false)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
   // Phase 06a — per-thread session-id latch. Seeded from the sessionId prop (reload → an existing id;
   // a new conversation → null, created lazily on the first send). The panel remounts this provider
   // keyed by (email, session), so within a mount the prop is stable and the latch owns the
@@ -321,8 +332,10 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
       // gateway no longer aborts the upstream call on client disconnect, so the composer stop button
       // (assistant-ui cancel → useChat.stop() → fetch abort) needs a server-visible signal: hook the
       // request's abort and best-effort POST /api/ai/run/stop for this session. Fires ONLY on an
-      // explicit stop — a keyed remount does NOT abort the in-flight fetch (library-verified, research
-      // §3.1), so a session switch keeps the run alive. Flag-off gateway answers 404 → harmless.
+      // explicit stop: a keyed remount (session / tab switch) aborts the fetch too, but the runtime
+      // is no longer mounted by then, so the run keeps going in the background. The destroy signal
+      // and our effect cleanup have no guaranteed order, so the mounted check is deferred one tick.
+      // Flag-off gateway answers 404 → harmless.
       fetch: (input: RequestInfo | URL, init?: RequestInit) => {
         const signal = init?.signal
         if (signal && !signal.aborted) {
@@ -331,13 +344,16 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
             () => {
               const sid = latchRef.current.id
               if (sid == null) return
-              void fetch(`${gatewayBaseUrl}/api/ai/run/stop`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sessionId: sid })
-              }).catch(() => {
-                /* best-effort — flag off / gateway gone */
-              })
+              setTimeout(() => {
+                if (!mountedRef.current) return
+                void fetch(`${gatewayBaseUrl}/api/ai/run/stop`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ sessionId: sid })
+                }).catch(() => {
+                  /* best-effort — flag off / gateway gone */
+                })
+              }, 0)
             },
             { once: true }
           )

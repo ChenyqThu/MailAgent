@@ -237,3 +237,70 @@ describe('own-run ownership survives a REAL keyed AiSdkRuntimeProvider remount (
     expect(onSettled).toHaveBeenCalledTimes(1)
   })
 })
+
+// 11-03 反馈「切 tab 就中断」：切标签 = keyed 重挂载。assistant-ui 卸载时会 chat.stop() 中止
+// 客户端请求（网关 detached 模式下不受影响），但**不能**因此发 /api/ai/run/stop —— 那会让网关
+// 掐掉 run 且什么都不落库。用一条一直不结束的流把它钉住。
+describe('keyed remount while the chat stream is still open', () => {
+  test('does not POST /api/ai/run/stop', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/ai/chat')) {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('data: {"type":"start"}\n\n'))
+          }
+        })
+        return new Response(body, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream', 'x-mailagent-run-id': RUN_ID }
+        })
+      }
+      return new Response(JSON.stringify({ active: false }), { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { rerender, container } = render(<RemountHarness sessionKey="s1" />)
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'hello' } })
+    fireEvent.submit(container.querySelector('form')!)
+    await waitFor(() => expect(chatSendCount(fetchMock)).toBe(1))
+
+    rerender(<RemountHarness sessionKey="s2" />)
+    await new Promise((r) => setTimeout(r, 30))
+
+    const stopCalls = fetchMock.mock.calls.filter((c) => String(c[0]).includes('/api/ai/run/stop'))
+    expect(stopCalls).toHaveLength(0)
+  })
+
+  test('an explicit stop while mounted still POSTs /api/ai/run/stop', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/ai/chat')) {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('data: {"type":"start"}\n\n'))
+          }
+        })
+        return new Response(body, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream', 'x-mailagent-run-id': RUN_ID }
+        })
+      }
+      return new Response(JSON.stringify({ active: false }), { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { container } = render(<RemountHarness sessionKey="s1" />)
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'hello' } })
+    fireEvent.submit(container.querySelector('form')!)
+    await waitFor(() => expect(chatSendCount(fetchMock)).toBe(1))
+
+    // 测试环境未加载 i18n 资源，停止键的 aria-label 是 chat.composer.cancel 的英文值。
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter((c) => String(c[0]).includes('/api/ai/run/stop'))
+      ).toHaveLength(1)
+    )
+  })
+})
