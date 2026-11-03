@@ -37,15 +37,16 @@ ExceptionGroup 拆包 / per-namespace 串行闸 **全部共用**）：
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import time
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Awaitable, Callable, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
 import httpx2
 from loguru import logger
-
-from mcp import Client
 from mcp.client.auth import (
     OAuthClientProvider,
     OAuthFlowError,
@@ -56,6 +57,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.auth import AuthorizationCodeResult, OAuthClientMetadata
 from mcp.shared.exceptions import MCPError
 
+from mcp import Client
 from src.connectors.composio_catalog import is_meta_tool
 from src.connectors.gate import ConnectorBusy, connector_gate
 from src.connectors.oauth_flow import (
@@ -251,6 +253,159 @@ async def _no_interactive_callback() -> AuthorizationCodeResult:
     )
 
 
+# ── SDK auth 日志 → loguru ───────────────────────────────────────────────────
+#
+# SDK 的 auth 日志走 stdlib ``logging``（``mcp.client.auth.oauth2``），而 serve-api 没有 stdlib
+# root handler（uvicorn ``log_config=None``，见 notify/island_agent.py 同款注记）—— INFO 全丢、
+# WARNING+ 只落 stderr 的 lastResort，``logs/`` 里看不到「刷新被拒」这类关键线索。
+# 只桥 ``mcp.client.auth`` 这一支（不动 root，不改别的库的日志去向）；``propagate=False``
+# 防 main.py 等装了 root handler 的进程双写。
+# 🔴 异常只记一行「类型: 消息」，**不**把 exc_info 交给 loguru：loguru 的 diagnose 回溯会打印
+# 帧内变量值，SDK auth flow 的帧里就躺着 token；且非交互「未授权」是预期路径（每次调用一份
+# 整页回溯只是噪音）。
+
+
+class _LoguruBridge(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            level: Any = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+        message = record.getMessage()
+        exc = record.exc_info[1] if record.exc_info else None
+        if exc is not None:
+            message = f"{message} ({type(exc).__name__}: {exc})"
+        logger.log(level, "[{}] {}", record.name, message)
+
+
+def _bridge_sdk_auth_logging() -> None:
+    sdk_logger = logging.getLogger("mcp.client.auth")
+    if any(isinstance(h, _LoguruBridge) for h in sdk_logger.handlers):
+        return  # 幂等：模块重载 / 单测重复 import 不叠 handler
+    sdk_logger.addHandler(_LoguruBridge())
+    sdk_logger.setLevel(logging.INFO)
+    sdk_logger.propagate = False
+
+
+_bridge_sdk_auth_logging()
+
+
+# ── 401 → 先强刷一次 ─────────────────────────────────────────────────────────
+
+#: 「强制视为已过期」写进 ``token_expiry_time`` 的值。🔴 不能用 0：SDK ``is_token_valid`` 是
+#: ``not token_expiry_time or now <= token_expiry_time`` —— 0 是假值 = 「无到期时间 = 永远有效」。
+_FORCED_EXPIRY = 1.0
+
+#: 刷新被拒时日志里带的响应体上限（错误体只有 error / error_description，不含 token）。
+_REFRESH_ERROR_BODY_LOG_CHARS = 300
+
+
+def _is_refresh_request(request: httpx2.Request) -> bool:
+    if request.method != "POST":
+        return False
+    try:
+        return b"grant_type=refresh_token" in request.content
+    except Exception:  # noqa: BLE001 — 流式 body 读不到就当不是（SDK 的 token 请求恒为表单 bytes）
+        return False
+
+
+class _RefreshOn401Provider(OAuthClientProvider):
+    """撞 401 时先用 refresh token 强刷一次、用新 token 重发原请求；仍 401 才回落 SDK 的完整授权流。
+
+    SDK（2.0 / 2.3 同）只在**它自己认为** access token 过期时刷新；服务器直接回 401 时跳过刷新、
+    直奔完整授权流 → 非交互会话里就是 ``_no_interactive_redirect`` → 连接落 ``needs_reauth``，
+    而库里的 refresh token 可能还好好的。两种情形会这样：服务端早于 ``expires_in`` 作废 access
+    token；token 响应根本不带 ``expires_in``（SDK 当它永不过期，从不主动刷新，只能撞 401）。
+
+    做法 = 包住父类的 auth 生成器：被认证的那个请求**第一次发出**就拿到 401、且手里有 refresh
+    token 时，丢弃父流（``aclose`` 走父流 ``async with context.lock`` 的出口释放锁），把到期时间
+    改成已过期，再开一条父流 —— 它走自己的「过期且可刷新 → 先刷新」分支，再用新 token 重发原请求。
+    刷新被拒 / 新 token 仍 401 → 父流照旧回落完整授权流（落态行为不变）。每次 auth flow 至多强刷
+    一次；父流本轮已经主动刷过（第一个发出的不是原请求）就不再强刷 —— 刚刷的 token 仍被拒，再刷
+    一次只是多烧一个轮换 refresh token。
+
+    顺带：每次刷新（主动 / 强刷）的结果都落 loguru —— 成功记 ``expires_in`` 与 refresh token
+    是否轮换，被拒记状态码 + 错误体。**从不记 token 值**。
+    只碰 ``OAuthContext`` 公开字段 + 公开 ``async_auth_flow``：2.0（直接实现）与 2.3
+    （``RedirectAwareAuth`` 包 ``_auth_flow``）两种形状都成立，canary 单测钉住。
+    """
+
+    def __init__(self, *args: Any, label: str, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._label = label
+
+    async def async_auth_flow(
+        self, request: httpx2.Request
+    ) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
+        flow = super().async_auth_flow(request)
+        forced = False
+        try:
+            outgoing = await flow.__anext__()
+            may_force = outgoing is request
+            while True:
+                response = yield outgoing
+                if _is_refresh_request(outgoing):
+                    await self._log_refresh_result(response, forced=forced)
+                if (
+                    may_force
+                    and outgoing is request
+                    and response.status_code == 401
+                    and self.context.can_refresh_token()
+                ):
+                    may_force = False
+                    forced = True
+                    expiry = self.context.token_expiry_time
+                    logger.info(
+                        "connector {}: 401 on {} while holding a refresh token "
+                        "(sdk-side access token expiry: {}) — forcing one refresh before "
+                        "falling back to re-authorization",
+                        self._label,
+                        request.url.path,
+                        "none (no expires_in)"
+                        if expiry is None
+                        else f"{expiry - time.time():+.0f}s from now",
+                    )
+                    await flow.aclose()
+                    self.context.token_expiry_time = _FORCED_EXPIRY
+                    flow = super().async_auth_flow(request)
+                    outgoing = await flow.__anext__()
+                    continue
+                outgoing = await flow.asend(response)
+        except StopAsyncIteration:
+            return
+        finally:
+            await flow.aclose()
+
+    async def _log_refresh_result(self, response: httpx2.Response, *, forced: bool) -> None:
+        mode = "forced after 401" if forced else "proactive"
+        try:
+            body = await response.aread()
+        except Exception:  # noqa: BLE001 — 只是诊断日志，读不到不影响 SDK 自己的处理
+            body = b""
+        if response.status_code != 200:
+            logger.warning(
+                "connector {}: token refresh ({}) rejected: HTTP {} {}",
+                self._label,
+                mode,
+                response.status_code,
+                body[:_REFRESH_ERROR_BODY_LOG_CHARS].decode("utf-8", "replace"),
+            )
+            return
+        try:
+            data = json.loads(body)
+        except ValueError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        logger.info(
+            "connector {}: token refresh ({}) ok — expires_in={}, refresh_token {}",
+            self._label,
+            mode,
+            data.get("expires_in"),
+            "rotated" if data.get("refresh_token") else "not returned (kept previous)",
+        )
+
+
 class ConnectorClient:
     """一个 connector 的会话工厂（每次操作新开会话；跨调用无长命连接）。
 
@@ -312,12 +467,13 @@ class ConnectorClient:
                 )
         else:
             redirect, callback = _no_interactive_redirect, _no_interactive_callback
-        return OAuthClientProvider(
+        return _RefreshOn401Provider(
             server_url=self.definition.server_url,
             client_metadata=self._client_metadata(),
             storage=self.storage,
             redirect_handler=redirect,
             callback_handler=callback,
+            label=self.connector_id,
         )
 
     async def _prime(self, provider: OAuthClientProvider) -> None:
@@ -644,10 +800,10 @@ async def run_connect_flow(flow: ConnectorFlowState, *, client: Optional[Connect
 async def _granted_scopes(cc: ConnectorClient) -> Optional[list[str]]:
     """连接后从 tokens 行的明文 metadata 读授权 scope（坑 1.5：授权范围透明展示）。"""
     try:
+        from starlette.concurrency import run_in_threadpool
+
         from src.agent_config.credentials import peek_credential
         from src.connectors.token_storage import KEY_TOKENS
-
-        from starlette.concurrency import run_in_threadpool
 
         meta = await run_in_threadpool(peek_credential, cc.namespace, KEY_TOKENS)
         if meta is None:
