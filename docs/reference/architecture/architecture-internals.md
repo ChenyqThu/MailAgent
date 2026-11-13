@@ -128,7 +128,10 @@ async def _process_retry_queue():
         # 统一用 internal_id 获取 MIME（无论哪种失败）
         full_email = arm.fetch_email_content_by_id(internal_id, mailbox)
         # 后续流程与正常同步相同...
+        # 落库成功后调 _dispatch_post_sync_hooks（与主路径共用：事项关联 / 周报 / LLM / KOS / 岛 / Custom Agent）
 ```
+
+> 🔴 主路径与重试路径的后续钩子**只能走 `_dispatch_post_sync_hooks` 一处**。2026-11 之前两份手抄漂移，重试补同步的邮件从不做 LLM 分类、不推 KOS（8 月起漏 85 封）。
 
 **状态流转：**
 ```

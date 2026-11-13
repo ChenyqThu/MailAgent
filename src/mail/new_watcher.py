@@ -1909,24 +1909,11 @@ class NewWatcher:
             # _progress_hook_active 里被 notion_enabled 再门掉——它本身写 Notion 库）。
             # enabled 路径（下方 步骤6-12）一字不动 —— 本分支是纯新增，存量
             # （三键非空）行为零漂移。
-            # 「同步历史邮件」(task 09-11) 补录的行不走三个**实时性语义**的钩子:
-            # 灵动岛推送 / Custom Agent 的 email_filter 触发 / 项目周报钩子。补一年前的
-            # 邮件不该弹通知、起 agent run、跑周报同步。LLM 分类 / KOS / 事项线程关联
-            # 照常 —— 那是对邮件内容的加工, 与"什么时候到的"无关。
-            history_ingest = is_history_ingest(self.sync_store, internal_id)
-
             if not notion_enabled():
                 self.sync_store.mark_synced_local(internal_id)
                 self._stats["emails_synced"] += 1
                 logger.info(f"Email synced (local-only, Notion disabled): {internal_id}")
-                await self._maybe_link_matter_thread_subscriptions(email_obj, internal_id)
-                if not history_ingest:
-                    self._maybe_trigger_project_progress_hook(email_obj, internal_id, "")
-                self._maybe_trigger_llm_hook(email_obj, internal_id, "")
-                self._maybe_trigger_kos_hook(email_obj, internal_id, "")
-                if not history_ingest:
-                    self._maybe_dispatch_island_received(email_obj, internal_id, "")
-                    self._maybe_trigger_custom_agents(email_obj, internal_id)
+                await self._dispatch_post_sync_hooks(email_obj, internal_id, "")
                 return
 
             # 6. 同步到 Notion
@@ -1942,25 +1929,8 @@ class NewWatcher:
                 self._stats["emails_synced"] += 1
                 logger.info(f"Email synced successfully: {internal_id} -> {page_id}")
 
-                await self._maybe_link_matter_thread_subscriptions(email_obj, internal_id)
-
-                # 8. 项目周报外挂钩子（非阻塞、异常不影响主流程）
-                if not history_ingest:
-                    self._maybe_trigger_project_progress_hook(email_obj, internal_id, page_id)
-
-                # 9. 本地 LLM Agent 钩子（非阻塞、异常不影响主流程）
-                self._maybe_trigger_llm_hook(email_obj, internal_id, page_id)
-
-                # 10. KOS producer 钩子 (PR-2d, Sprint 19 M2)
-                # — 非阻塞推 Jarvis KOS v2 让图谱跨域 entity 合并丰富
-                self._maybe_trigger_kos_hook(email_obj, internal_id, page_id)
-
-                if not history_ingest:
-                    # 11. ping-island MailReceived（非阻塞，默认关；启用前提见 .env.example）
-                    self._maybe_dispatch_island_received(email_obj, internal_id, page_id)
-
-                    # 12. Custom Agent email_filter 触发钩子（S4，非阻塞，默认关）
-                    self._maybe_trigger_custom_agents(email_obj, internal_id)
+                # 8-12. 后续钩子
+                await self._dispatch_post_sync_hooks(email_obj, internal_id, page_id)
             else:
                 self.sync_store.mark_failed_v3(internal_id, "Notion sync returned None")
 
@@ -1968,6 +1938,42 @@ class NewWatcher:
             logger.error(f"Failed to sync email {internal_id}: {e}")
             self.sync_store.mark_failed_v3(internal_id, str(e))
             self._stats["errors"] += 1
+
+    async def _dispatch_post_sync_hooks(
+        self, email_obj: Email, internal_id: int, page_id: str
+    ) -> None:
+        """邮件落库（Notion 建页成功或 local-only）后的钩子派发。
+
+        主路径 ``_sync_single_email_v3`` 与重试路径 ``_process_retry_queue`` 共用这一份,
+        两条路径分别手抄时曾漂移：重试补同步的邮件从不做 LLM 分类、不推 KOS。
+        草稿箱不进这里（只落本地）。``page_id`` 为空串 = Notion 关闭，各钩子自行容忍。
+
+        「同步历史邮件」(task 09-11) 补录的行不走三个**实时性语义**的钩子:
+        灵动岛推送 / Custom Agent 的 email_filter 触发 / 项目周报钩子。补一年前的
+        邮件不该弹通知、起 agent run、跑周报同步。LLM 分类 / KOS / 事项线程关联
+        照常 —— 那是对邮件内容的加工, 与"什么时候到的"无关。
+        """
+        history_ingest = is_history_ingest(self.sync_store, internal_id)
+
+        await self._maybe_link_matter_thread_subscriptions(email_obj, internal_id)
+
+        # 项目周报外挂钩子（非阻塞、异常不影响主流程）
+        if not history_ingest:
+            self._maybe_trigger_project_progress_hook(email_obj, internal_id, page_id)
+
+        # 本地 LLM Agent 钩子（非阻塞、异常不影响主流程）
+        self._maybe_trigger_llm_hook(email_obj, internal_id, page_id)
+
+        # KOS producer 钩子 (PR-2d, Sprint 19 M2)
+        # — 非阻塞推 Jarvis KOS v2 让图谱跨域 entity 合并丰富
+        self._maybe_trigger_kos_hook(email_obj, internal_id, page_id)
+
+        if not history_ingest:
+            # ping-island MailReceived（非阻塞，默认关；启用前提见 .env.example）
+            self._maybe_dispatch_island_received(email_obj, internal_id, page_id)
+
+            # Custom Agent email_filter 触发钩子（S4，非阻塞，默认关）
+            self._maybe_trigger_custom_agents(email_obj, internal_id)
 
     def _maybe_dual_write_body(
         self,
@@ -2918,13 +2924,13 @@ class NewWatcher:
                 )
 
                 # Notion 可选化（与 _sync_single_email_v3 5.7 一致）: disabled 时
-                # 本地-only synced, 不再产生 failed/dead_letter。retry 路径与
-                # enabled 主路径同样不派发事件钩子（现状 parity）。
+                # 本地-only synced, 不再产生 failed/dead_letter。
                 if not notion_enabled():
                     self.sync_store.mark_synced_local(internal_id)
                     self._stats["retries_succeeded"] += 1
                     self._stats["emails_synced"] += 1
                     logger.info(f"Retry succeeded (local-only, Notion disabled): {internal_id}")
+                    await self._dispatch_post_sync_hooks(email_obj, internal_id, "")
                     continue
 
                 # 同步到 Notion
@@ -2935,6 +2941,7 @@ class NewWatcher:
                     self._stats["retries_succeeded"] += 1
                     self._stats["emails_synced"] += 1
                     logger.info(f"Retry succeeded: {internal_id} -> {page_id}")
+                    await self._dispatch_post_sync_hooks(email_obj, internal_id, page_id)
                 else:
                     self.sync_store.mark_failed_v3(internal_id, "Notion sync returned None on retry")
 
