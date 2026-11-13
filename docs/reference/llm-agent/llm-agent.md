@@ -83,7 +83,7 @@ src/llm_agent/
   notion_writer.py   AILabels → pages.update 多字段写入
   processor.py       核心入口：拼 system+user → LLM tool_use → AILabels
   store.py           llm_processing SQLite 表（retry 队列 + cost/latency 记录）
-  runner.py          端到端封装（sync_store → arm fetch → parse → LLM → Notion write）
+  runner.py          端到端封装（sync_store → SQLite 正文构造 Email，无正文才 backend fetch + parse → LLM → Notion write；`LLM_PREFER_SQLITE_BODY=false` 时恒走 fetch）
   task_extractor.py  灵动岛 F3/F5: 邮件 → 日程库 task fields（LLM 单次 tool_use 决策 title/time/日程类型/优先级；as_meeting 模式抽会议时间）。`mailagent notion create-task` CLI 调
 src/cli/commands/llm.py       CLI（`mailagent llm {selftest,run,retry-failed,stats,compare-paths}`；PR-6 起取代旧 scripts/run_llm_on_email.py）
 prompts/

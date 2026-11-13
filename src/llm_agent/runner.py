@@ -4,8 +4,8 @@ This is what both the main watcher hook and the CLI call.
 
 Steps:
   1. SQLite lookup: get notion_page_id + mailbox + message_id for the email
-  2. AppleScript: fetch MIME source via internal_id (~1s)
-  3. reader.parse_email_source → Email obj
+  2. SQLite 本地正文构造 Email; 本地没有正文才经 backend fetch MIME (~1s)
+  3. (回落路径) reader.parse_email_source → Email obj
   4. LLMProcessor.process_email → AILabels
   5. AIFieldsWriter.write → pages.update (unless dry_run)
   6. LLMProcessingStore.mark_success / mark_failed
@@ -13,7 +13,9 @@ Steps:
 
 from __future__ import annotations
 
+import re
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from loguru import logger
@@ -22,12 +24,15 @@ from src.config import config as cfg
 from src.config import notion_enabled
 from src.mail.applescript_arm import AppleScriptArm
 from src.mail.reader import EmailReader
+from src.models import Attachment, Email
 from src.repository import AttachmentStore, EmailRepository, TranslationRepository
 
 from .client import LLMCallError
 from .notion_writer import AIFieldsWriter
 from .processor import LLMProcessor
 from .store import LLMProcessingStore
+
+_BEIJING = timezone(timedelta(hours=8))
 
 
 def _lookup_by_internal_id(
@@ -39,7 +44,8 @@ def _lookup_by_internal_id(
         row = c.execute(
             """
             SELECT internal_id, message_id, notion_page_id, mailbox, subject,
-                   is_read, is_flagged
+                   is_read, is_flagged, sender, sender_name, to_addr, cc_addr,
+                   date_received, thread_id
               FROM email_metadata
              WHERE internal_id = ?
             """,
@@ -72,6 +78,8 @@ class LLMRunner:
         self._db_path_override = db_path  # None = 用 cfg 全局, 否则 CLI 注入
         effective_db_path = db_path or cfg.sync_store_db_path
         effective_attachment_dir = attachment_storage_dir or cfg.attachment_storage_dir
+        self._effective_db_path = effective_db_path
+        self._effective_attachment_dir = effective_attachment_dir
 
         if processor is None:
             if repo is None and cfg.llm_prefer_sqlite_body:
@@ -86,6 +94,8 @@ class LLMRunner:
             self._processor = LLMProcessor(repo=repo)
         else:
             self._processor = processor
+        # 本地正文构造 Email 用（_build_email_from_store）; None 时首次使用再懒建。
+        self._repo = repo
         self._writer = writer or AIFieldsWriter()
         self._store = store or LLMProcessingStore(db_path=effective_db_path)
         self._arm: Optional[Any] = None
@@ -134,6 +144,81 @@ class LLMRunner:
         if self._reader is None:
             self._reader = EmailReader()
         return self._reader
+
+    def _build_email_from_store(
+        self, internal_id: int, meta: Dict[str, Any]
+    ) -> Optional[Email]:
+        """用 SQLite 已落库的正文 + 元数据构造 Email; 本地没有正文或出错返回 None 回落 backend。
+
+        不复用 ``PageOps._build_email_from_sqlite``: 它会把附件字节写到临时目录、还原
+        cid, 而 processor 只读附件文件名和 has_attachments, 对 LLM 是纯开销。
+        """
+        if not cfg.llm_prefer_sqlite_body:
+            return None
+        try:
+            if self._repo is None:
+                self._repo = EmailRepository(
+                    db_path=self._effective_db_path,
+                    attachment_store=AttachmentStore(self._effective_attachment_dir),
+                )
+            body = self._repo.get_body(internal_id)
+            if body is None:
+                return None
+            message_id = meta.get("message_id") or body.message_id
+            if not message_id:
+                return None
+
+            # 选择规则同 PageOps._build_email_from_sqlite
+            if body.body_format == "html" and body.html:
+                content, content_type = body.html, "text/html"
+            else:
+                content, content_type = body.markdown or body.html or "", "text/plain"
+
+            # 只带文件名, path 留空: 不物化附件字节。含内联图片, 与 MIME 解析路径一致。
+            attachments = [
+                Attachment(
+                    filename=a.filename,
+                    content_type=a.content_type or "application/octet-stream",
+                    size=a.size_bytes or 0,
+                    path="",
+                    content_id=a.content_id,
+                    is_inline=a.is_inline,
+                )
+                for a in self._repo.get_attachments(internal_id)
+            ]
+
+            # 日期处理同 PageOps._parse_iso_to_beijing (无时区按北京时间)
+            date_str = meta.get("date_received")
+            if date_str:
+                date = datetime.fromisoformat(re.sub(r"\.\d+", "", date_str))
+                if date.tzinfo is None:
+                    date = date.replace(tzinfo=_BEIJING)
+            else:
+                date = datetime.now(_BEIJING)
+
+            return Email(
+                message_id=message_id,
+                subject=meta.get("subject") or "(No Subject)",
+                sender=meta.get("sender") or "",
+                sender_name=meta.get("sender_name") or None,
+                to=meta.get("to_addr") or "",
+                cc=meta.get("cc_addr") or "",
+                date=date,
+                content=content,
+                content_type=content_type,
+                is_read=bool(meta.get("is_read")),
+                is_flagged=bool(meta.get("is_flagged")),
+                attachments=attachments,
+                thread_id=meta.get("thread_id") or None,
+                mailbox=meta.get("mailbox") or "收件箱",
+                internal_id=internal_id,
+            )
+        except Exception as e:
+            logger.warning(
+                f"[llm-runner] local body build failed for internal_id={internal_id}, "
+                f"falling back to backend fetch: {e!r}"
+            )
+            return None
 
     async def run_for_internal_id(
         self,
@@ -203,47 +288,49 @@ class LLMRunner:
                     "stored_at": existing.get("updated_at"),
                 }
 
-        # --- 1. fetch MIME ---
-        arm = self._lazy_arm()
-        full = arm.fetch_email_content_by_id(internal_id, mailbox)
-        if not full:
-            err = f"AppleScript fetch failed for internal_id={internal_id}"
-            # Issue #44: fetch 失败也要走 mark_failed 记账 (同 LLM 调用失败路径),
-            # 否则已在 retry 队列的坏邮件 retry_count 永不增长 + next_retry_at 不后移
-            # → get_ready_for_retry 每轮选中 → 无限重试 (生产实测 8911 次)。
-            info = self._store.mark_failed(
-                internal_id, err, max_retries=cfg.llm_max_retries
-            )
-            logger.warning(f"[llm-runner] {err}: {info}")
-            return {"ok": False, "internal_id": internal_id, "error": err, **info}
-
-        # --- 2. parse Email ---
-        reader = self._lazy_reader()
-        email_obj = reader.parse_email_source(
-            full.get("source", ""),
-            message_id or full.get("message_id") or "",
-            is_read=is_read,
-            is_flagged=is_flagged,
-        )
+        # --- 1. 本地正文优先; 本地没有才 fetch MIME + parse ---
+        email_obj = self._build_email_from_store(internal_id, meta)
         if email_obj is None:
-            err = f"parse_email_source returned None for internal_id={internal_id}"
-            # Issue #44: parse 失败同 fetch 失败, 走 mark_failed 记账避免无限重试。
-            info = self._store.mark_failed(
-                internal_id, err, max_retries=cfg.llm_max_retries
-            )
-            logger.warning(f"[llm-runner] {err}: {info}")
-            return {"ok": False, "internal_id": internal_id, "error": err, **info}
+            arm = self._lazy_arm()
+            full = arm.fetch_email_content_by_id(internal_id, mailbox)
+            if not full:
+                err = f"AppleScript fetch failed for internal_id={internal_id}"
+                # Issue #44: fetch 失败也要走 mark_failed 记账 (同 LLM 调用失败路径),
+                # 否则已在 retry 队列的坏邮件 retry_count 永不增长 + next_retry_at 不后移
+                # → get_ready_for_retry 每轮选中 → 无限重试 (生产实测 8911 次)。
+                info = self._store.mark_failed(
+                    internal_id, err, max_retries=cfg.llm_max_retries
+                )
+                logger.warning(f"[llm-runner] {err}: {info}")
+                return {"ok": False, "internal_id": internal_id, "error": err, **info}
 
-        # Populate mailbox + internal_id on the parsed obj (parser may not set)
-        if not getattr(email_obj, "mailbox", None):
+            # --- 2. parse Email ---
+            reader = self._lazy_reader()
+            email_obj = reader.parse_email_source(
+                full.get("source", ""),
+                message_id or full.get("message_id") or "",
+                is_read=is_read,
+                is_flagged=is_flagged,
+            )
+            if email_obj is None:
+                err = f"parse_email_source returned None for internal_id={internal_id}"
+                # Issue #44: parse 失败同 fetch 失败, 走 mark_failed 记账避免无限重试。
+                info = self._store.mark_failed(
+                    internal_id, err, max_retries=cfg.llm_max_retries
+                )
+                logger.warning(f"[llm-runner] {err}: {info}")
+                return {"ok": False, "internal_id": internal_id, "error": err, **info}
+
+            # Populate mailbox + internal_id on the parsed obj (parser may not set)
+            if not getattr(email_obj, "mailbox", None):
+                try:
+                    email_obj.mailbox = mailbox
+                except Exception:
+                    pass
             try:
-                email_obj.mailbox = mailbox
+                email_obj.internal_id = internal_id
             except Exception:
                 pass
-        try:
-            email_obj.internal_id = internal_id
-        except Exception:
-            pass
 
         # --- 3. LLM ---
         self._store.mark_pending(internal_id, notion_page_id, mailbox)
