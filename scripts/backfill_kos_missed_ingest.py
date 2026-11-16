@@ -14,6 +14,10 @@
   ``next_retry_at=now`` ⇒ LLM 重试队列 (``get_ready_for_retry``) 接手。已 ``success`` 的不动。
 - KOS: ``ingest_log.record_deferred(source='backfill')`` ⇒ 6c 扫描在 LLM 终态后推送
   (低于优先级下限的照常 ``skipped``)。
+- 飞书: ``email_metadata.ingest_reason`` 改成 ``history_sync`` ⇒ 三个飞书通知入口
+  (``should_suppress_reconcile_notify``) 一律不推。这批邮件晚到了几天到几个月,
+  补发通知只是噪音。它们都已同步完成, 该列的另一个读者 ``is_history_ingest``
+  (同步后跳过实时类钩子) 不会再被触发。
 
 用法 (默认 dry-run, 只读打开数据库)::
 
@@ -36,6 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.kos import ingest_log  # noqa: E402
+from src.mail.ingest_provenance import INGEST_HISTORY  # noqa: E402
 
 INBOX = "收件箱"
 
@@ -95,6 +100,11 @@ def main() -> int:
             return 0
 
         now = time.time()
+        for r in rows:
+            conn.execute(
+                "UPDATE email_metadata SET ingest_reason = ? WHERE internal_id = ?",
+                (INGEST_HISTORY, r["internal_id"]),
+            )
         for r in need_llm:
             conn.execute(
                 """
@@ -118,7 +128,8 @@ def main() -> int:
         iid = r["internal_id"]
         ingest_log.record_deferred(db_path, iid, f"sources/email/{iid}", "backfill")
 
-    print(f"\n已写入: LLM 重新排队 {len(need_llm)} 封, KOS 等标签排队 {len(rows)} 封。")
+    print(f"\n已写入: 标记补录来源(不发飞书) {len(rows)} 封, LLM 重新排队 {len(need_llm)} 封, "
+          f"KOS 等标签排队 {len(rows)} 封。")
     return 0
 
 
