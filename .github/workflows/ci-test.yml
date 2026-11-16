@@ -53,7 +53,7 @@ concurrency:
 
 jobs:
   python-tests:
-    runs-on: macos-14 # 与 build-mac 同 runner 族 (arm64), 测试环境贴近发布环境
+    runs-on: macos-15 # 与 build-mac 同 runner 族 (arm64), 测试环境贴近发布环境
     timeout-minutes: 30
     env:
       # dummy env (CI 无 .env; 其余字段全走代码默认值)。前 3 个 = config.py 必填字段
@@ -94,7 +94,7 @@ jobs:
             echo "::error::从 $SCRIPT 抽取 PBS_TAG/PYVER 失败（脚本改写法了？）"; exit 1; }
           echo "pbs_tag=$PBS_TAG" >> "$GITHUB_OUTPUT"
           echo "pyver=$PYVER" >> "$GITHUB_OUTPUT"
-          # ci-test.yml 固定 runs-on: macos-14 ⇒ triple 恒 aarch64-apple-darwin。
+          # ci-test.yml 固定 runs-on: macos-15 ⇒ triple 恒 aarch64-apple-darwin。
           TARBALL="cpython-${PYVER}+${PBS_TAG}-aarch64-apple-darwin-install_only.tar.gz"
           URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/${TARBALL}"
           echo "downloading $TARBALL"
@@ -168,7 +168,7 @@ jobs:
             --out "$RUNNER_TEMP/ci-compare"
 
   frontend-tests:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 30
     defaults:
       run:
@@ -202,7 +202,7 @@ jobs:
         run: pnpm exec eslint --quiet .
 
       - name: vitest (pnpm test = rebuild:node + vitest run)
-        # rebuild:node 把 better-sqlite3 prebuild 切到 Node ABI (--arch=arm64, macos-14
+        # rebuild:node 把 better-sqlite3 prebuild 切到 Node ABI (--arch=arm64, macos-15
         # 即 arm64) 后跑 vitest (pool: forks, node 环境)。本 job 不打包, 测完即弃 —
         # Electron ABI 切回纪律由「build job 独立 runner 不跑测试」保证 (见文件头)。
         # 零排除 — 建闸时预存失败的 assistant-modal-state (node 26 下 localStorage 全局为

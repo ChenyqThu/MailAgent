@@ -39,7 +39,7 @@ concurrency:
 
 jobs:
   test:
-    # 与 build-mac.yml 同一道测试闸 (workflow_call 复用 ci-test.yml; 测试跑在 macos-14,
+    # 与 build-mac.yml 同一道测试闸 (workflow_call 复用 ci-test.yml; 测试跑在 macos-15,
     # 闸的是代码质量不是平台行为 —— win 平台行为靠真机 dogfood checklist)。
     uses: ./.github/workflows/ci-test.yml
 

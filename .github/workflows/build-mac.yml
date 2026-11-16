@@ -4,7 +4,7 @@
 # (electron-updater 自动更新读它); workflow_dispatch → 手动构建 (产物走 artifact, 不发布)。
 #
 # 当前状态 (与本地实测一致):
-#   - arm64 (macos-14) = 已验证主 lane: 嵌入式可重定位 CPython + ad-hoc 签名 (afterPack)。
+#   - arm64 (macos-15) = 已验证主 lane: 嵌入式可重定位 CPython + ad-hoc 签名 (afterPack)。
 #   - x64 (macos-13)   = 未验证, 默认注释掉; build-python-venv.sh 支持 x64, 理论上在 Intel
 #                        runner 可跑, 启用前需先 dogfood 一次。
 #   - 签名/公证         = P6 (1.0.0) 已接 Developer ID Application + notarytool 公证:
@@ -49,7 +49,7 @@ jobs:
       matrix:
         include:
           - arch: arm64
-            runner: macos-14
+            runner: macos-15
           # TODO(P6): x64 lane 未验证。Intel runner; build-python-venv.sh x64 下载 x86_64
           # standalone python, install-app-deps 按 runner arch 重建 native。启用前先 dogfood。
           # - arch: x64
