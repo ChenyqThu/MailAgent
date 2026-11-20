@@ -13,13 +13,17 @@ import { request } from './http_client'
 import type {
   McpApiKey,
   McpAuditEntry,
+  McpCreateKeyPolicyInput,
   McpExposedTool,
   McpKeyBase,
   McpKeyWithPlaintext,
   McpProbeResult,
   McpScopeOptions,
   McpServiceApi,
-  McpServiceStatus
+  McpServiceStatus,
+  McpUpdateKeyPolicyInput,
+  McpWriteClientConfigInput,
+  McpWriteClientConfigResult
 } from './types/mcpService'
 
 const PREFIX = '/mcp-service'
@@ -83,6 +87,27 @@ export function createMcpServiceApi(baseUrl: string): McpServiceApi {
 
     probe(url: string): Promise<McpProbeResult> {
       return request<McpProbeResult>(baseUrl, 'POST', `${PREFIX}/probe`, { body: { url } })
+    },
+
+    createKeyWithPolicy(input: McpCreateKeyPolicyInput): Promise<McpKeyWithPlaintext> {
+      return request<McpKeyWithPlaintext>(baseUrl, 'POST', `${PREFIX}/keys`, {
+        body: input
+      })
+    },
+
+    updateKeyPolicy(id: string, patch: McpUpdateKeyPolicyInput): Promise<McpApiKey> {
+      return request<{ key: McpApiKey }>(
+        baseUrl,
+        'PATCH',
+        `${PREFIX}/keys/${encodeURIComponent(id)}`,
+        { body: patch }
+      ).then((d) => d.key)
+    },
+
+    writeClientConfig(input: McpWriteClientConfigInput): Promise<McpWriteClientConfigResult> {
+      return request<McpWriteClientConfigResult>(baseUrl, 'POST', `${PREFIX}/client-config`, {
+        body: input
+      })
     }
   }
 }

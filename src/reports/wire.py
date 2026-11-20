@@ -132,6 +132,16 @@ def connector_grants_of(agent: Dict[str, Any]) -> Tuple[Tuple[str, str], ...]:
         return ()
 
 
+def connector_tool_allowlist_of(agent: Dict[str, Any]) -> Dict[str, Tuple[str, ...]]:
+    """report_agent 行 → ``{connector_id: (tool_name, ...)}``（per-tool 二次收窄）。"""
+    from src.agents.trigger import parse_tool_policy
+
+    try:
+        return dict(parse_tool_policy(agent.get("tool_policy_json")).grant_connector_tools)
+    except ValueError:
+        return {}
+
+
 def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
     """report_agent DB 行 → 前端友好配置（``ReportAgentConfig``）。
 
@@ -253,7 +263,13 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
         # 矩阵），维持 custom-only 现状不动。
         _raw_tp = _parse_obj(agent.get("tool_policy_json")) if agent_type == "report" else None
         _gc = _raw_tp.get("grant_connectors") if isinstance(_raw_tp, dict) else None
-        tool_policy = {"v": 1, "grant_connectors": _gc} if isinstance(_gc, dict) and _gc else None
+        _gct = _raw_tp.get("grant_connector_tools") if isinstance(_raw_tp, dict) else None
+        if isinstance(_gc, dict) and _gc:
+            tool_policy = {"v": 1, "grant_connectors": _gc}
+            if isinstance(_gct, dict) and _gct:
+                tool_policy["grant_connector_tools"] = _gct
+        else:
+            tool_policy = None
     raw_budget = _parse_obj(agent.get("budget_json")) if _is_custom else None
     # 07-28 W1: max_steps 已退出用户契约。旧行可继续带该键，但 wire 永不再投影；保存路径同样
     # 只接受/持久化频率与 wall-clock 两门，做到无需 DB 迁移即可收敛公开形状。

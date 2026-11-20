@@ -29,6 +29,7 @@ import { type ApprovalGuard, type ApprovalRecord, type ApprovalRisk } from '../s
 // session (runtime double-insurance behind the registration-time filter in tools/index.ts).
 import {
   classOfTool,
+  isToolAllowedInContext,
   isToolClassAllowedInMode,
   mayAutoApprove,
   normalizeContextMode,
@@ -103,6 +104,7 @@ export interface GatewayToolAuditEntry {
     | 'auto_delegation_readonly'
     | 'auto_judge_scope'
     | 'auto_user_requested_verified'
+    | 'auto_scope_grant'
     | 'approval_expired'
   /** S2 W1 — exec-tool whitelist audit (chat_tool_call.whitelist_rule_id): the PolicyRule id that
    *  auto-allowed this run without a card (approvalStatus='auto_whitelist'). null/omitted otherwise. */
@@ -250,6 +252,49 @@ function safeJson(value: unknown): string {
   }
 }
 
+export interface RedactedAuditImage {
+  media_type: string
+  byte_length: number
+  omitted: true
+}
+
+function isPlainRecord(v: unknown): v is Record<string, unknown> {
+  return v != null && typeof v === 'object' && !Array.isArray(v)
+}
+
+/**
+ * Strip raw base64 `images[i].data` blobs before persisting tool outputs to
+ * `ai_chat.db::chat_tool_call.output_json` or `ui_message_json` (preventing multi-MB
+ * screenshots from bloating SQLite). Leaves entries without a string `.data`
+ * (e.g. `generate_image`'s `{ file_id, mime, url }` refs) untouched, and never
+ * mutates the live `output` returned to AI SDK `toModelOutput`.
+ */
+export function redactAuditImages(output: unknown): unknown {
+  if (!isPlainRecord(output) || !Array.isArray(output.images) || output.images.length === 0) {
+    return output
+  }
+  let changed = false
+  const redacted = output.images.map((item) => {
+    if (!isPlainRecord(item) || typeof item.data !== 'string') return item
+    changed = true
+    const { data, ...rest } = item
+    const mediaType =
+      typeof item.media_type === 'string' && item.media_type.length > 0
+        ? item.media_type
+        : typeof item.mediaType === 'string' && item.mediaType.length > 0
+          ? item.mediaType
+          : 'application/octet-stream'
+    return {
+      ...rest,
+      media_type: mediaType,
+      byte_length: Buffer.byteLength(data, 'base64'),
+      omitted: true as const
+    } satisfies RedactedAuditImage
+  })
+  if (!changed) return output
+  return { ...output, images: redacted }
+}
+
 /**
  * Build a silent-tier AI SDK read tool with built-in audit, bound to one `collector`
  * (closure). `run` does the domain call + parity massage and returns the model-facing
@@ -265,6 +310,7 @@ export function auditedReadTool<I>(
     name: string
     description: string
     inputSchema: FlexibleSchema<I>
+    toModelOutput?: Tool['toModelOutput']
     run: (input: I, signal: AbortSignal | undefined) => Promise<unknown>
   },
   collector: GatewayToolAuditCollector
@@ -272,6 +318,7 @@ export function auditedReadTool<I>(
   return makeTool({
     description: opts.description,
     inputSchema: opts.inputSchema,
+    ...(opts.toModelOutput ? { toModelOutput: opts.toModelOutput } : {}),
     execute: async (input: I, { toolCallId, abortSignal }) => {
       const start = Date.now()
       try {
@@ -280,7 +327,7 @@ export function auditedReadTool<I>(
           toolUseId: toolCallId,
           toolName: opts.name,
           inputJson: safeJson(input),
-          outputJson: safeJson(output),
+          outputJson: safeJson(redactAuditImages(output)),
           status: 'ok',
           durationMs: Date.now() - start
         })
@@ -405,6 +452,7 @@ export function auditedWriteTool<I>(
     policyAuditStatus?: 'auto_whitelist' | 'auto_tool_mode'
     /** Per-call safety escalation that outranks approval preferences and global bypass. */
     forceApproval?: (input: I) => boolean
+    toModelOutput?: Tool['toModelOutput']
     run: (
       input: I,
       ctx: {
@@ -436,7 +484,8 @@ export function auditedWriteTool<I>(
   // runtime double-insurance for an entrypoint that missed the mode.
   const toolClass = opts.testOnlyToolClass ?? classOfTool(opts.name)
   const contextMode = normalizeContextMode(opts.contextMode)
-  const modeDenied = !isToolClassAllowedInMode(
+  const modeDenied = !isToolAllowedInContext(
+    opts.name,
     toolClass,
     contextMode,
     opts.modeGrants,
@@ -464,6 +513,7 @@ export function auditedWriteTool<I>(
     | 'auto_delegation_readonly'
     | 'auto_judge_scope'
     | 'auto_user_requested_verified'
+    | 'auto_scope_grant'
   >()
 
   // 07-16 (codex r1 P2-4) — same idiom for the card-skip paths of needsApproval: stash WHY the
@@ -475,6 +525,7 @@ export function auditedWriteTool<I>(
   return makeTool({
     description: opts.description,
     inputSchema: opts.inputSchema,
+    ...(opts.toModelOutput ? { toModelOutput: opts.toModelOutput } : {}),
     // First run: register the approval record (keep-first) ALWAYS — execute's guard.verify +
     // the audit need it whether or not a card is shown. Then decide if a card is required:
     //   - 'auto-reversible' + preview-tier (reversible) + class domain_write + mode manual_chat →
@@ -647,7 +698,7 @@ export function auditedWriteTool<I>(
           toolUseId: toolCallId,
           toolName: opts.name,
           inputJson: safeJson(input),
-          outputJson: safeJson(output),
+          outputJson: safeJson(redactAuditImages(output)),
           status: 'ok',
           durationMs: Date.now() - start,
           confirmationTier: opts.risk,

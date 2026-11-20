@@ -34,6 +34,7 @@ import { qk } from '@shared/lib/queryKeys'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { Switch } from '@shared/components/ui/switch'
+import { useSessionDisabledConnectors } from '../sessionConnectors'
 import type {
   ConnectorStatusValue,
   ConnectorSummary,
@@ -63,9 +64,13 @@ const STATUS_LABEL_KEYS: Record<ConnectorStatusValue, string> = {
  *  为了一个数字打 N 个请求。 */
 function ConnectorQuickRow({
   connector,
+  sessionMuted,
+  onToggleSessionMute,
   onManage
 }: {
   connector: ConnectorSummary
+  sessionMuted: boolean
+  onToggleSessionMute?: () => void
   onManage(): void
 }): React.ReactElement {
   const { t } = useTranslation()
@@ -115,16 +120,39 @@ function ConnectorQuickRow({
     <div className="flex items-center gap-2 px-3 py-1.5">
       <span
         aria-hidden="true"
-        className={cn('h-1.5 w-1.5 shrink-0 rounded-full', STATUS_DOT_CLASS[connector.status])}
+        className={cn(
+          'h-1.5 w-1.5 shrink-0 rounded-full',
+          sessionMuted ? 'bg-ink-fg-3' : STATUS_DOT_CLASS[connector.status]
+        )}
       />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-meta font-medium text-ink-fg-1">
+        <span
+          className={cn(
+            'block truncate text-meta font-medium',
+            sessionMuted ? 'text-ink-fg-3 line-through' : 'text-ink-fg-1'
+          )}
+        >
           {connector.display_name}
         </span>
         {toolLine !== null ? (
           <span className="block truncate text-micro text-ink-fg-3">{toolLine}</span>
         ) : null}
       </span>
+      {connected && connector.enabled && onToggleSessionMute && (
+        <button
+          type="button"
+          aria-pressed={sessionMuted}
+          onClick={onToggleSessionMute}
+          className={cn(
+            'shrink-0 rounded-[var(--r-ctl)] border px-2 py-0.5 text-aux transition-colors duration-fast',
+            sessionMuted
+              ? 'border-coral/50 bg-coral/12 text-coral'
+              : 'border-ink-border-soft text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg'
+          )}
+        >
+          {sessionMuted ? t('chat.connectors.sessionPaused') : t('chat.connectors.sessionPause')}
+        </button>
+      )}
       <button
         type="button"
         onClick={onManage}
@@ -145,18 +173,22 @@ function ConnectorQuickRow({
   )
 }
 
-/** 面板内容：connector 行 + 审批提示。定位/材质由宿主（`ComposerPlusMenu` 的二级弹层）提供，
+/** 面板内容：connector 行 + 会话级临时屏蔽 + 审批提示。定位/材质由宿主（`ComposerPlusMenu` 的二级弹层）提供，
  *  本组件只画内容 —— 挂载即代表「用户点开了」，`useNavigate` 就关在这一层（见文件头）。
  *  `onClose` = 收起整个弹层（点「管理」跳走时用）。 */
 export function ConnectorQuickContent({
   rows,
+  sessionKey = 'draft',
   onClose
 }: {
   rows: ConnectorSummary[]
+  sessionKey?: string
   onClose(): void
 }): React.JSX.Element {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const { disabledIds, toggleConnector, clearAll } = useSessionDisabledConnectors(sessionKey)
+  const mutedSet = new Set(disabledIds)
 
   function handleManage(): void {
     onClose()
@@ -167,9 +199,29 @@ export function ConnectorQuickContent({
     <>
       <div className="max-h-[280px] overflow-y-auto scrollbar-thin">
         {rows.map((c) => (
-          <ConnectorQuickRow key={c.connector_id} connector={c} onManage={handleManage} />
+          <ConnectorQuickRow
+            key={c.connector_id}
+            connector={c}
+            sessionMuted={mutedSet.has(c.connector_id)}
+            onToggleSessionMute={() => toggleConnector(c.connector_id)}
+            onManage={handleManage}
+          />
         ))}
       </div>
+      {disabledIds.length > 0 && (
+        <div className="mt-1 flex items-center justify-between gap-2 border-t border-ink-border-soft px-3 pt-1.5">
+          <span className="text-aux text-ink-fg-2">
+            {t('chat.connectors.sessionMutedBadge', { count: disabledIds.length })}
+          </span>
+          <button
+            type="button"
+            onClick={clearAll}
+            className="text-aux text-coral transition-opacity duration-fast hover:opacity-80"
+          >
+            {t('chat.connectors.sessionReset')}
+          </button>
+        </div>
+      )}
       {/* 审批纪律摆在面板底部：开一个 connector ≠ 放行它的写操作。 */}
       <p className="mt-1 border-t border-ink-border-soft px-3 pb-0.5 pt-1.5 text-micro leading-snug text-ink-fg-3">
         {t('chat.connectors.approvalHint')}

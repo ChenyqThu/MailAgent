@@ -117,7 +117,7 @@ const NOTION: ConnectorSummary = {
   credential: null,
   flow: null,
   server_url: 'https://mcp.notion.test/mcp',
-  transport: 'http',
+  transport: 'streamable_http',
   // Notion 是**直连轨**（自建 MCP 打官方端点）→ 行侧既成事实 source='custom_mcp'；
   // 它与目录 track='direct' 相符，所以没有「已被取代」（superseded 只在行=composio/目录=direct 时为真）。
   source: 'custom_mcp',

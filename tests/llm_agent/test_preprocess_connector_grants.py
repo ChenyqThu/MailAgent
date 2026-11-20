@@ -86,12 +86,15 @@ def test_ask_tier_is_not_registered_for_preprocess(store, monkeypatch):
         [
             {"name": "auto_tool", "description": "", "input_schema": None,
              "output_schema": None, "crud_type": "write"},
+            {"name": "default_write_tool", "description": "", "input_schema": None,
+             "output_schema": None, "crud_type": "write"},
             {"name": "ask_tool", "description": "", "input_schema": None,
              "output_schema": None, "crud_type": "read"},
             {"name": "off_tool", "description": "", "input_schema": None,
              "output_schema": None, "crud_type": "read"},
         ],
     )
+    store.set_connector_tool_mode(CID, "auto_tool", "auto")
     store.set_connector_tool_mode(CID, "ask_tool", "ask")
     store.set_connector_tool_mode(CID, "off_tool", "off")
     monkeypatch.setattr(lt, "_connectors_enabled", lambda: True)
@@ -99,6 +102,7 @@ def test_ask_tier_is_not_registered_for_preprocess(store, monkeypatch):
     schemas, handlers = lt.build_connector_llm_tools(
         get_preprocess_connector_grants(), caller="email_preprocess", only_auto_tools=True
     )
-    # auto_tool 是 write 类且 mode=NULL→auto：08-05 放开后照常注册（无 read 天花板）。
+    # 显式设 auto 的 write 工具仍照常注册（无 read 天花板）；未覆盖的 write 工具（Phase 5 起默认 ask）
+    # 与显式 ask / off 均不注册。
     assert sorted(handlers) == ["mcp__notion__auto_tool"]
     assert [s["name"] for s in schemas] == ["mcp__notion__auto_tool"]

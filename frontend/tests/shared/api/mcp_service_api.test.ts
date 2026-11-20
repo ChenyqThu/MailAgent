@@ -42,11 +42,41 @@ function call(i = 0): { url: string; method: string; body: unknown } {
   }
 }
 
-test('status → GET /api/mcp-service/status', async () => {
-  const data = { local_url: 'http://127.0.0.1:8200/mcp', public_url: null, active_key_count: 0 }
+test('status → GET /api/mcp-service/status（含可选 streamable_http_url 与 sse_url）', async () => {
+  const data = {
+    local_url: 'http://127.0.0.1:8200/mcp',
+    streamable_http_url: 'http://127.0.0.1:8200/mcp',
+    sse_url: 'http://127.0.0.1:8200/mcp/sse',
+    public_url: null,
+    active_key_count: 0
+  }
   fetchMock.mockResolvedValue(envelopeResponse(data))
   await expect(api.status()).resolves.toEqual(data)
   expect(call()).toMatchObject({ url: '/api/mcp-service/status', method: 'GET' })
+})
+
+test('writeClientConfig → POST /api/mcp-service/client-config（支持 sse 模式）', async () => {
+  const result = {
+    target: 'cursor',
+    mode: 'sse',
+    server_name: 'mailagent',
+    path: '/tmp/.cursor/mcp.json',
+    exists: false,
+    dry_run: true,
+    wrote: false,
+    backup_path: null,
+    snippet: { type: 'sse', url: 'http://127.0.0.1:8200/mcp/sse' },
+    preview: '{}'
+  }
+  fetchMock.mockResolvedValue(envelopeResponse(result))
+  await expect(
+    api.writeClientConfig!({ target: 'cursor', mode: 'sse', dry_run: true })
+  ).resolves.toEqual(result)
+  expect(call()).toEqual({
+    url: '/api/mcp-service/client-config',
+    method: 'POST',
+    body: { target: 'cursor', mode: 'sse', dry_run: true }
+  })
 })
 
 test('listKeys 解 {keys}；tools 解 {tools}；audit 解 {entries} 并带 limit', async () => {

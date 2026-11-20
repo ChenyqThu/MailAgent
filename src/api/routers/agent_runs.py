@@ -487,6 +487,10 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
         # connector 工具不进 HEADLESS_TOOL_OPTIONS（镜像 exec/web 的结构性缺席）：授权走这把
         # per-connector 天花板，缺省 = 该 connector 整族不注册。
         tool_policy_out["grantConnectors"] = dict(tool_policy.grant_connectors)
+    if tool_policy.grant_connector_tools:
+        tool_policy_out["grantConnectorTools"] = {
+            cid: list(tools) for cid, tools in tool_policy.grant_connector_tools
+        }
     if tool_policy.grant_sessions == "all":
         # 镜像 grantWeb：仅非默认值（own）才投影；gateway 侧 parseSessionsGrant 再判别一次。
         tool_policy_out["grantSessions"] = "all"

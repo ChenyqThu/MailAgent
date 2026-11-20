@@ -50,6 +50,7 @@ def test_create_returns_plaintext_once_and_list_never_leaks(skill_client, api_ke
     assert set(key) == {
         "id", "label", "key_prefix", "scopes", "preset", "base", "extra", "custom",
         "created_at", "last_used_at", "expires_at", "revoked_at", "active",
+        "disabled_tools", "write_rpm_limit",
     }
     assert key["preset"] == "readonly" and key["active"] is True
     assert (key["base"], key["extra"], key["custom"]) == ("readonly", [], False)
@@ -310,6 +311,8 @@ def test_status_counts_active_and_hot_reads_public_url(
     data = skill_client.get(f"{_BASE}/status").json()["data"]
     assert data == {
         "local_url": "http://127.0.0.1:8311/mcp",
+        "streamable_http_url": "http://127.0.0.1:8311/mcp",
+        "sse_url": "http://127.0.0.1:8311/mcp/sse",
         "public_url": "https://mcp.example.com/mcp",
         "active_key_count": 1,
     }
@@ -438,9 +441,34 @@ def _probe(client, url="https://mcp.example.com/mcp"):
     return r.json()["data"]
 
 
-def test_probe_reachable(skill_client, monkeypatch):
-    _mock_httpx(monkeypatch, lambda req: httpx.Response(405, headers={"Allow": "POST"}))
-    assert _probe(skill_client)["result"] == "reachable"
+@pytest.mark.parametrize(
+    "handler, expected_detail",
+    [
+        (lambda req: httpx.Response(405, headers={"Allow": "POST"}), "HTTP 405"),
+        (
+            lambda req: httpx.Response(
+                401,
+                headers={"Content-Type": "application/json"},
+                json={"status": "error", "error": {"code": "E_AUTH_FAILED"}},
+            ),
+            "HTTP 401",
+        ),
+        (lambda req: httpx.Response(401), "HTTP 401"),
+        (
+            lambda req: httpx.Response(
+                400,
+                headers={"Content-Type": "application/json"},
+                json={"status": "error", "error": {"code": "E_INVALID_ARG"}},
+            ),
+            "HTTP 400",
+        ),
+        (lambda req: httpx.Response(400), "HTTP 400"),
+    ],
+)
+def test_probe_reachable(skill_client, monkeypatch, handler, expected_detail):
+    _mock_httpx(monkeypatch, handler)
+    data = _probe(skill_client)
+    assert data == {"result": "reachable", "detail": expected_detail}
 
 
 def test_probe_access_blocked_redirect(skill_client, monkeypatch):
@@ -468,6 +496,8 @@ def test_probe_access_blocked_html_page(skill_client, monkeypatch):
     [
         (lambda req: httpx.Response(404), "HTTP 404"),
         (lambda req: httpx.Response(405), "HTTP 405"),  # 没有 Allow: POST，不是我们的 /mcp
+        (lambda req: httpx.Response(401, headers={"Content-Type": "text/html"}, text="<html>login</html>"), "HTTP 401"),
+        (lambda req: httpx.Response(400, headers={"Content-Type": "text/html"}, text="<html>bad</html>"), "HTTP 400"),
         (lambda req: httpx.Response(302, headers={"Location": "https://elsewhere.test/"}), "HTTP 302"),
     ],
 )
@@ -525,3 +555,52 @@ def test_probe_rejects_bad_urls(skill_client, monkeypatch, url):
 def test_probe_allows_loopback_http(skill_client, monkeypatch, url):
     _mock_httpx(monkeypatch, lambda req: httpx.Response(405, headers={"Allow": "POST"}))
     assert _probe(skill_client, url)["result"] == "reachable"
+
+
+# ── 客户端配置写入（WS-1B: streamable_http + sse 模式）────────────────────────
+
+
+def test_client_config_writer_supports_streamable_http_and_sse_modes(
+    skill_client, tmp_path, monkeypatch
+):
+    from src.mcp import client_config_writer
+
+    monkeypatch.setattr(client_config_writer, "_CONFIG_ROOT_OVERRIDE", tmp_path)
+
+    for target in client_config_writer.CLIENT_TARGETS:
+        # "http" alias and explicit "streamable_http" emit identical entries.
+        entry_http = client_config_writer.build_mcp_server_entry(
+            target, mode="http", api_base="http://127.0.0.1:8311", api_key="mak_tok"
+        )
+        entry_stream = client_config_writer.build_mcp_server_entry(
+            target, mode="streamable_http", api_base="http://127.0.0.1:8311", api_key="mak_tok"
+        )
+        assert entry_http == entry_stream
+        assert entry_stream["url"] == "http://127.0.0.1:8311/mcp"
+        assert entry_stream["headers"] == {"Authorization": "Bearer mak_tok"}
+
+        # "sse" mode points at /mcp/sse with Authorization header and explicit type="sse".
+        r_sse = skill_client.post(
+            f"{_BASE}/client-config",
+            json={
+                "target": target,
+                "mode": "sse",
+                "api_base": "https://mcp.example.com",
+                "api_key": "mak_sse_1",
+                "dry_run": False,
+            },
+        )
+        assert r_sse.status_code == 200, r_sse.text
+        data = r_sse.json()["data"]
+        assert data["mode"] == "sse"
+        assert data["snippet"] == {
+            "type": "sse",
+            "url": "https://mcp.example.com/mcp/sse",
+            "headers": {"Authorization": "Bearer mak_sse_1"},
+        }
+
+    bad = skill_client.post(
+        f"{_BASE}/client-config",
+        json={"target": "claude_code", "mode": "bogus", "dry_run": True},
+    )
+    assert bad.status_code == 400 and bad.json()["error"]["code"] == "E_INVALID_ARG"

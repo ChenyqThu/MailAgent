@@ -36,6 +36,11 @@ import {
   type AttachmentPanelBridge
 } from './chatAttachmentAdapter'
 import { recordOwnRun, registerOwnRunOwner, type OwnRunOwner } from './ownRuns'
+import {
+  getSessionDisabledConnectors,
+  promoteDraftDisabledConnectors,
+  sessionKeyForId
+} from '../sessionConnectors'
 import { publishComposerRecovery } from './composerRecovery'
 import { notifyQueuedInputChanged } from './useQueuedInputRows'
 
@@ -380,7 +385,12 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
         })
       },
       body: async () => {
+        const muteKeyBefore = sessionKeyForId(sessionId ?? latchRef.current.id)
         const sid = await resolveAiSdkSessionId(latchRef.current, sessionId, onEnsureSession)
+        if (sessionId == null && muteKeyBefore === 'draft' && sid != null) {
+          promoteDraftDisabledConnectors(sid)
+        }
+        const disabledConnectors = getSessionDisabledConnectors(sessionKeyForId(sid ?? sessionId))
         // composer-parity C2 — resolve the mention/attachment prefix at send time (async: mention
         // excerpts are fetched), send it as body.injectedContext (the gateway prepends it to the
         // model's last user message; persistence keeps the original text), then clear the chips.
@@ -405,7 +415,8 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
           ...(injectedContext.length > 0 ? { injectedContext } : {}),
           ...(contextSnapshot ? { contextSnapshot } : {}),
           ...(anchor ? { anchor } : {}),
-          ...(enabledSkills.length > 0 ? { options: { enabledSkills } } : {})
+          ...(enabledSkills.length > 0 ? { options: { enabledSkills } } : {}),
+          ...(disabledConnectors.length > 0 ? { disabledConnectors: [...disabledConnectors] } : {})
         }
       }
     })

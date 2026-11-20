@@ -147,6 +147,15 @@ async def invoke_skill(
             hint="this API key is not authorized for that scope",
         )
 
+    disabled_tools = getattr(principal, "disabled_tools", None) or frozenset()
+    if tool_name in disabled_tools or f"mailagent_{tool_name}" in disabled_tools:
+        raise SkillError(
+            "E_TOOL_DISABLED_FOR_KEY",
+            f"tool {tool_name!r} is disabled for this API key",
+            http_status=403,
+            hint="enable this tool on the key in Settings → MCP Service",
+        )
+
     # 07-21 (codex HIGH-2 ④) — enabled gate，**仅对 notion_agent**：直调面须尊重 Settings→Custom
     # AI→Skills 的启用开关，否则一个持 notion_agent:invoke scope 的外部 key 能在 owner 关掉该
     # skill 后仍直调这个外呼第三方 AI、副作用落 Notion 侧不可撤回的工具（gateway 侧靠
@@ -206,6 +215,7 @@ async def invoke_skill(
     # 额度够不够，计数放到 handler 成功返回之后 —— _validate_input 只查 required，形状错
     # （如 mode='bogus'）或 service 连不上等**没有副作用**的调用，都不该吃掉草稿额度。
     rate_limit.check(principal, skill_name, tool_name, tdef.rate_limit)
+    rate_limit.check_write_rpm(principal, tdef.auth_scopes)
 
     if ctx is None:
         ctx = SkillContext()
@@ -225,6 +235,7 @@ async def invoke_skill(
     # 副作用已经发生（草稿已 APPEND）→ 此刻计数。返回值形状不对（下面的 E_INTERNAL）也照记，
     # 因为写已经落地了。
     rate_limit.record(principal, skill_name, tool_name, tdef.rate_limit)
+    rate_limit.record_write_rpm(principal, tdef.auth_scopes)
 
     if not isinstance(result, dict):
         raise SkillError(

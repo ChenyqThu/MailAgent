@@ -20,10 +20,13 @@ import { CheckCircle2, Copy, Loader2, RefreshCw } from 'lucide-react'
 import type {
   McpApiKey,
   McpAuditEntry,
+  McpClientMode,
+  McpClientTarget,
   McpExposedTool,
   McpKeyBase,
   McpKeyWithPlaintext,
-  McpProbeResult
+  McpProbeResult,
+  McpWriteClientConfigResult
 } from '@shared/api/types'
 import { openExternal } from '@shared/components/connectors/consoleShared'
 import { Button } from '@shared/components/ui/button'
@@ -81,12 +84,40 @@ function buildNotionConfigText(url: string, plaintext: string): string {
   return `URL: ${url}\nAuthorization: Bearer ${plaintext}`
 }
 
+/** 从本机 `/mcp` 地址派生兼容的 `/mcp/sse` 地址（优先使用服务端下发的 `sse_url`）。 */
+function deriveSseUrl(localUrl: string, explicitSseUrl?: string | null): string {
+  const trimmed = explicitSseUrl?.trim()
+  if (trimmed) return trimmed
+  try {
+    const url = new URL(localUrl)
+    const cleanPath = url.pathname.replace(/\/+$/, '')
+    url.pathname = cleanPath.endsWith('/mcp') ? `${cleanPath}/sse` : `${cleanPath}/mcp/sse`
+    return url.toString()
+  } catch {
+    const clean = localUrl.trim().replace(/\/+$/, '')
+    return clean.endsWith('/mcp') ? `${clean}/sse` : `${clean}/mcp/sse`
+  }
+}
+
 /** Claude Code / Cursor 等通用的 HTTP MCP 客户端配置。 */
 function buildHttpClientConfigText(url: string, plaintext: string): string {
   return JSON.stringify(
     {
       mcpServers: {
         mailagent: { type: 'http', url, headers: { Authorization: `Bearer ${plaintext}` } }
+      }
+    },
+    null,
+    2
+  )
+}
+
+/** Legacy HTTP+SSE MCP 客户端配置。 */
+function buildSseClientConfigText(url: string, plaintext: string): string {
+  return JSON.stringify(
+    {
+      mcpServers: {
+        mailagent: { type: 'sse', url, headers: { Authorization: `Bearer ${plaintext}` } }
       }
     },
     null,
@@ -196,6 +227,10 @@ export function McpServiceTab(): React.ReactElement {
       ) : (
         <RunningSections
           localUrl={statusQuery.data.local_url}
+          streamableHttpUrl={
+            statusQuery.data.streamable_http_url?.trim() || statusQuery.data.local_url
+          }
+          sseUrl={deriveSseUrl(statusQuery.data.local_url, statusQuery.data.sse_url)}
           statusPublicUrl={statusQuery.data.public_url ?? ''}
           activeKeyCount={statusQuery.data.active_key_count}
         />
@@ -258,10 +293,14 @@ function hostOf(publicUrl: string): string | null {
 
 function RunningSections({
   localUrl,
+  streamableHttpUrl,
+  sseUrl,
   statusPublicUrl,
   activeKeyCount
 }: {
   localUrl: string
+  streamableHttpUrl: string
+  sseUrl: string
   statusPublicUrl: string
   activeKeyCount: number
 }): React.ReactElement {
@@ -272,30 +311,48 @@ function RunningSections({
   const [revealed, setRevealed] = React.useState<McpKeyWithPlaintext | null>(null)
   const [probe, setProbe] = React.useState<ProbeState | null>(null)
   const [guideOpen, setGuideOpen] = React.useState(false)
+  const [clientConfigKey, setClientConfigKey] = React.useState<string | null>(null)
+  const [clientConfigOpen, setClientConfigOpen] = React.useState(false)
 
   return (
     <>
       <ConnectionSection
         localUrl={localUrl}
+        streamableHttpUrl={streamableHttpUrl}
+        sseUrl={sseUrl}
         savedPublicUrl={savedPublicUrl}
         activeKeyCount={activeKeyCount}
         probe={probe}
         onProbe={setProbe}
         guideOpen={guideOpen}
         onGuideOpenChange={setGuideOpen}
+        onOpenClientInstaller={() => {
+          setClientConfigKey(null)
+          setClientConfigOpen(true)
+        }}
       />
       <KeysSection onRevealed={setRevealed} />
       <ToolsSection />
       <AuditSection />
       <KeyRevealedDialog
         revealed={revealed}
-        localUrl={localUrl}
+        localUrl={streamableHttpUrl}
+        sseUrl={sseUrl}
         publicUrl={savedPublicUrl}
         publicUrlUnverified={
           savedPublicUrl !== '' && probe?.url === savedPublicUrl && !isReachable(probe)
         }
         onNeedPublicUrl={() => setGuideOpen(true)}
+        onOpenClientInstaller={(plaintext) => {
+          setClientConfigKey(plaintext)
+          setClientConfigOpen(true)
+        }}
         onClose={() => setRevealed(null)}
+      />
+      <ClientConfigDialog
+        open={clientConfigOpen}
+        initialApiKey={clientConfigKey ?? undefined}
+        onClose={() => setClientConfigOpen(false)}
       />
     </>
   )
@@ -305,20 +362,26 @@ function RunningSections({
 
 function ConnectionSection({
   localUrl,
+  streamableHttpUrl,
+  sseUrl,
   savedPublicUrl,
   activeKeyCount,
   probe,
   onProbe,
   guideOpen,
-  onGuideOpenChange
+  onGuideOpenChange,
+  onOpenClientInstaller
 }: {
   localUrl: string
+  streamableHttpUrl: string
+  sseUrl: string
   savedPublicUrl: string
   activeKeyCount: number
   probe: ProbeState | null
   onProbe: (p: ProbeState | null) => void
   guideOpen: boolean
   onGuideOpenChange: (open: boolean) => void
+  onOpenClientInstaller: () => void
 }): React.ReactElement {
   const { t } = useTranslation()
   const api = useMailApi()
@@ -408,15 +471,34 @@ function ConnectionSection({
         </span>
       </Row>
 
-      <Row label={t('settings.mcp.localUrl.label')} helper={t('settings.mcp.localUrl.hint')}>
+      <Row
+        label={t('settings.mcp.localUrl.label')}
+        helper={<span className="text-aux">{t('settings.mcp.localUrl.hint')}</span>}
+      >
         <div className="inline-flex items-center gap-1.5 max-w-[300px]">
-          <span className="text-aux font-mono text-ink-fg-1 truncate" title={localUrl}>
-            {localUrl}
+          <span className="text-meta font-mono text-ink-fg-1 truncate" title={streamableHttpUrl}>
+            {streamableHttpUrl}
           </span>
           <CopyIconButton
             copied={copied === 'local'}
-            onCopy={() => copy(localUrl, 'local')}
-            label={t('settings.mcp.copy')}
+            onCopy={() => copy(streamableHttpUrl, 'local')}
+            label={t('settings.mcp.localUrl.copy')}
+          />
+        </div>
+      </Row>
+
+      <Row
+        label={t('settings.mcp.sseUrl.label')}
+        helper={<span className="text-aux">{t('settings.mcp.sseUrl.hint')}</span>}
+      >
+        <div className="inline-flex items-center gap-1.5 max-w-[300px]">
+          <span className="text-meta font-mono text-ink-fg-1 truncate" title={sseUrl}>
+            {sseUrl}
+          </span>
+          <CopyIconButton
+            copied={copied === 'sse'}
+            onCopy={() => copy(sseUrl, 'sse')}
+            label={t('settings.mcp.sseUrl.copy')}
           />
         </div>
       </Row>
@@ -512,6 +594,17 @@ function ConnectionSection({
             </div>
           </CollapsibleRegion>
         </div>
+      ) : null}
+
+      {!isWeb && api.mcpService.writeClientConfig != null ? (
+        <Row
+          label={t('settings.mcp.clientConfig.rowTitle')}
+          helper={t('settings.mcp.clientConfig.rowHelper')}
+        >
+          <Button size="sm" variant="outline" onClick={onOpenClientInstaller}>
+            {t('settings.mcp.clientConfig.openButton')}
+          </Button>
+        </Row>
       ) : null}
     </Section>
   )
@@ -728,6 +821,18 @@ function KeyRow({
           .filter((x): x is string => Boolean(x))
           .join(' · ')
 
+  const expires = formatEpoch(apiKey.expires_at)
+  const policyNotes: string[] = []
+  if (expires) policyNotes.push(t('settings.mcp.keys.expiresAt', { time: expires }))
+  if (apiKey.write_rpm_limit != null) {
+    policyNotes.push(t('settings.mcp.keys.writeRpmBadge', { limit: apiKey.write_rpm_limit }))
+  }
+  if ((apiKey.disabled_tools?.length ?? 0) > 0) {
+    policyNotes.push(
+      t('settings.mcp.keys.disabledToolsBadge', { count: apiKey.disabled_tools?.length ?? 0 })
+    )
+  }
+
   const helper = [
     `${apiKey.key_prefix}…`,
     permissions,
@@ -752,6 +857,9 @@ function KeyRow({
       helper={
         <span title={apiKey.scopes.join(', ')}>
           {helper}
+          {policyNotes.length > 0 ? (
+            <span className="mt-0.5 block text-aux text-ink-fg-2">{policyNotes.join(' · ')}</span>
+          ) : null}
           {base == null ? (
             <span className="block mt-0.5" data-testid="mcp-key-custom-scopes">
               {t('settings.mcp.keys.customScopes', { scopes: apiKey.scopes.join(', ') })}
@@ -807,6 +915,21 @@ function KeyScopesDialog({
   const [label, setLabel] = React.useState('')
   const [base, setBase] = React.useState<McpKeyBase>(editing?.base ?? 'readonly')
   const [extra, setExtra] = React.useState<readonly string[]>(editing?.extra ?? [])
+  const [advancedOpen, setAdvancedOpen] = React.useState(false)
+  const [granularMode, setGranularMode] = React.useState(false)
+  const [granularScopes, setGranularScopes] = React.useState<string[]>(
+    editing ? [...editing.scopes] : []
+  )
+  const [ttlDays, setTtlDays] = React.useState<number | null>(null)
+  const [ttlDirty, setTtlDirty] = React.useState(false)
+  const [writeRpmText, setWriteRpmText] = React.useState(
+    editing?.write_rpm_limit != null ? String(editing.write_rpm_limit) : ''
+  )
+  const [rpmDirty, setRpmDirty] = React.useState(false)
+  const [disabledTools, setDisabledTools] = React.useState<string[]>(
+    editing?.disabled_tools ? [...editing.disabled_tools] : []
+  )
+  const [toolsDirty, setToolsDirty] = React.useState(false)
   const [submitting, setSubmitting] = React.useState(false)
 
   const options = optionsQuery.data
@@ -819,11 +942,54 @@ function KeyScopesDialog({
     setExtra((prev) => (checked ? [...prev, scope] : prev.filter((s) => s !== scope)))
   }
 
+  function enableGranularMode(): void {
+    const baseScopes = options?.bases.find((b) => b.id === base)?.scopes ?? []
+    setGranularScopes(Array.from(new Set([...baseScopes, ...selectedExtra])))
+    setGranularMode(true)
+  }
+
+  function toggleGranularScope(scope: string, checked: boolean): void {
+    setGranularScopes((prev) =>
+      checked ? Array.from(new Set([...prev, scope])) : prev.filter((s) => s !== scope)
+    )
+  }
+
+  function toggleDisabledTool(toolName: string, disabled: boolean): void {
+    setToolsDirty(true)
+    setDisabledTools((prev) =>
+      disabled ? Array.from(new Set([...prev, toolName])) : prev.filter((n) => n !== toolName)
+    )
+  }
+
   async function handleSubmit(): Promise<void> {
     setSubmitting(true)
+    const rpmTrim = writeRpmText.trim()
+    const parsedRpm = rpmTrim === '' ? null : Math.max(1, Math.trunc(Number(rpmTrim)))
+    const usePolicy = granularMode || ttlDirty || rpmDirty || toolsDirty
     try {
       if (editing) {
-        onUpdated(await api.mcpService.updateKeyScopes(editing.id, base, selectedExtra))
+        if (usePolicy && api.mcpService.updateKeyPolicy) {
+          const updated = await api.mcpService.updateKeyPolicy(editing.id, {
+            ...(granularMode ? { scopes: granularScopes } : { base, extra: [...selectedExtra] }),
+            ...(ttlDirty ? { ttl_days: ttlDays, ...(ttlDays === null ? { expires_at: null } : {}) } : {}),
+            ...(rpmDirty ? { write_rpm_limit: Number.isFinite(parsedRpm) ? parsedRpm : null } : {}),
+            ...(toolsDirty ? { disabled_tools: disabledTools } : {})
+          })
+          onUpdated(updated)
+        } else {
+          onUpdated(await api.mcpService.updateKeyScopes(editing.id, base, selectedExtra))
+        }
+      } else if (usePolicy && api.mcpService.createKeyWithPolicy) {
+        const created = await api.mcpService.createKeyWithPolicy({
+          label: label.trim(),
+          ...(granularMode ? { scopes: granularScopes } : { base, extra: [...selectedExtra] }),
+          ...(ttlDirty && ttlDays != null ? { ttl_days: ttlDays } : {}),
+          ...(disabledTools.length > 0 ? { disabled_tools: disabledTools } : {}),
+          ...(parsedRpm != null && Number.isFinite(parsedRpm)
+            ? { write_rpm_limit: parsedRpm }
+            : {})
+        })
+        onCreated(created)
       } else {
         onCreated(await api.mcpService.createKey(label.trim(), base, selectedExtra))
       }
@@ -837,7 +1003,17 @@ function KeyScopesDialog({
     }
   }
 
-  const canSubmit = options != null && !submitting && (editing != null || label.trim() !== '')
+  const hasGranularCapabilities =
+    options != null &&
+    ((options.read_scopes?.length ?? 0) > 0 ||
+      (options.available_tools?.length ?? 0) > 0 ||
+      (options.ttl_presets_days?.length ?? 0) > 0)
+
+  const canSubmit =
+    options != null &&
+    !submitting &&
+    (editing != null || label.trim() !== '') &&
+    (!granularMode || granularScopes.length > 0)
 
   return (
     <Dialog
@@ -885,87 +1061,290 @@ function KeyScopesDialog({
           </div>
         ) : (
           <>
-            <div className="flex flex-col gap-1.5">
-              <div className="text-aux font-medium text-ink-fg">
-                {t('settings.mcp.create.baseLabel')}
-              </div>
-              <RadioGroup
-                value={base}
-                onValueChange={(v) => setBase(v as McpKeyBase)}
-                aria-label={t('settings.mcp.create.baseLabel')}
-              >
-                {options.bases.map(({ id: b }) => {
-                  const id = `mcp-base-${b}`
-                  return (
-                    <div
-                      key={b}
-                      className={cn(
-                        'flex items-start gap-2.5 rounded-md border px-3 py-2.5',
-                        'transition-colors duration-fast ease-standard',
-                        base === b ? 'border-coral/60' : 'border-ink-border-soft'
-                      )}
-                    >
-                      <RadioGroupItem value={b} id={id} className="mt-1" />
-                      <div className="min-w-0 flex-1">
-                        <label htmlFor={id} className="block text-aux text-ink-fg cursor-pointer">
-                          {t(`settings.mcp.presets.${b}.label`)}
-                        </label>
-                        <div className="text-meta text-ink-fg-2 mt-0.5 leading-relaxed">
-                          {t(`settings.mcp.presets.${b}.desc`)}
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
-              </RadioGroup>
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <div className="text-aux font-medium text-ink-fg">
-                {t('settings.mcp.create.extraLabel')}
-              </div>
-              {options.extras.map(({ scope, risk }) => {
-                const high = risk === 'high'
-                const checked = extra.includes(scope)
-                const descId = `mcp-extra-${scope.replace(/[^a-zA-Z0-9]/g, '-')}-desc`
-                const desc = scopeText.desc(scope)
-                return (
-                  <label
-                    key={scope}
-                    data-risk={risk}
-                    className={cn(
-                      'flex items-start gap-2.5 rounded-md border px-3 py-2.5 cursor-pointer',
-                      'transition-colors duration-fast ease-standard',
-                      checked ? 'border-coral/60' : 'border-ink-border-soft'
-                    )}
+            {!granularMode ? (
+              <>
+                <div className="flex flex-col gap-1.5">
+                  <div className="text-aux font-medium text-ink-fg">
+                    {t('settings.mcp.create.baseLabel')}
+                  </div>
+                  <RadioGroup
+                    value={base}
+                    onValueChange={(v) => setBase(v as McpKeyBase)}
+                    aria-label={t('settings.mcp.create.baseLabel')}
                   >
-                    <Checkbox
-                      className="mt-0.5"
-                      checked={checked}
-                      onCheckedChange={(next) => toggleExtra(scope, next)}
-                      aria-label={scopeText.label(scope)}
-                      aria-describedby={desc ? descId : undefined}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className={cn('text-aux', high ? 'text-warn' : 'text-ink-fg')}>
-                        {scopeText.label(scope)}
-                      </div>
-                      {desc ? (
+                    {options.bases.map(({ id: b }) => {
+                      const id = `mcp-base-${b}`
+                      return (
                         <div
-                          id={descId}
+                          key={b}
                           className={cn(
-                            'text-meta mt-0.5 leading-relaxed',
-                            high ? 'text-warn' : 'text-ink-fg-2'
+                            'flex items-start gap-2.5 rounded-md border px-3 py-2.5',
+                            'transition-colors duration-fast ease-standard',
+                            base === b ? 'border-coral/60' : 'border-ink-border-soft'
                           )}
                         >
-                          {desc}
+                          <RadioGroupItem value={b} id={id} className="mt-1" />
+                          <div className="min-w-0 flex-1">
+                            <label htmlFor={id} className="block text-aux text-ink-fg cursor-pointer">
+                              {t(`settings.mcp.presets.${b}.label`)}
+                            </label>
+                            <div className="text-meta text-ink-fg-2 mt-0.5 leading-relaxed">
+                              {t(`settings.mcp.presets.${b}.desc`)}
+                            </div>
+                          </div>
                         </div>
-                      ) : null}
+                      )
+                    })}
+                  </RadioGroup>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <div className="text-aux font-medium text-ink-fg">
+                    {t('settings.mcp.create.extraLabel')}
+                  </div>
+                  {options.extras.map(({ scope, risk }) => {
+                    const high = risk === 'high'
+                    const checked = extra.includes(scope)
+                    const descId = `mcp-extra-${scope.replace(/[^a-zA-Z0-9]/g, '-')}-desc`
+                    const desc = scopeText.desc(scope)
+                    return (
+                      <label
+                        key={scope}
+                        data-risk={risk}
+                        className={cn(
+                          'flex items-start gap-2.5 rounded-md border px-3 py-2.5 cursor-pointer',
+                          'transition-colors duration-fast ease-standard',
+                          checked ? 'border-coral/60' : 'border-ink-border-soft'
+                        )}
+                      >
+                        <Checkbox
+                          className="mt-0.5"
+                          checked={checked}
+                          onCheckedChange={(next) => toggleExtra(scope, next)}
+                          aria-label={scopeText.label(scope)}
+                          aria-describedby={desc ? descId : undefined}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className={cn('text-aux', high ? 'text-warn' : 'text-ink-fg')}>
+                            {scopeText.label(scope)}
+                          </div>
+                          {desc ? (
+                            <div
+                              id={descId}
+                              className={cn(
+                                'text-meta mt-0.5 leading-relaxed',
+                                high ? 'text-warn' : 'text-ink-fg-2'
+                              )}
+                            >
+                              {desc}
+                            </div>
+                          ) : null}
+                        </div>
+                      </label>
+                    )
+                  })}
+                </div>
+              </>
+            ) : null}
+
+            {hasGranularCapabilities ? (
+              <div className="border-t border-ink-border-soft pt-2.5">
+                <button
+                  type="button"
+                  aria-expanded={advancedOpen}
+                  onClick={() => setAdvancedOpen((prev) => !prev)}
+                  className="inline-flex items-center gap-1.5 text-aux text-coral hover:underline"
+                >
+                  <CollapseChevron expanded={advancedOpen} />
+                  <span>{t('settings.mcp.policy.advancedToggle')}</span>
+                </button>
+                {advancedOpen ? (
+                  <div className="mt-2.5 space-y-3 rounded-md border border-ink-border-soft bg-ink-1/40 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-aux font-medium text-ink-fg">
+                        {t('settings.mcp.policy.scopeModeLabel')}
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          if (granularMode) setGranularMode(false)
+                          else enableGranularMode()
+                        }}
+                      >
+                        {granularMode
+                          ? t('settings.mcp.policy.usePresetMode')
+                          : t('settings.mcp.policy.useGranularMode')}
+                      </Button>
                     </div>
-                  </label>
-                )
-              })}
-            </div>
+
+                    {granularMode ? (
+                      <div className="space-y-2">
+                        {(options.read_scopes?.length ?? 0) > 0 && (
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-aux text-ink-fg-2">
+                                {t('settings.mcp.policy.readScopesLabel')}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setGranularScopes((cur) =>
+                                    Array.from(
+                                      new Set([...cur, ...(options.read_scopes ?? [])])
+                                    )
+                                  )
+                                }
+                                className="text-aux text-coral hover:underline"
+                              >
+                                {t('settings.mcp.policy.selectAllRead')}
+                              </button>
+                            </div>
+                            <div className="grid grid-cols-2 gap-1.5">
+                              {(options.read_scopes ?? []).map((scope) => (
+                                <label
+                                  key={scope}
+                                  className="flex items-center gap-2 rounded border border-ink-border-soft px-2 py-1.5 text-aux text-ink-fg cursor-pointer"
+                                >
+                                  <Checkbox
+                                    checked={granularScopes.includes(scope)}
+                                    onCheckedChange={(checked) =>
+                                      toggleGranularScope(scope, checked)
+                                    }
+                                    aria-label={scopeText.label(scope)}
+                                  />
+                                  <span className="truncate">{scopeText.label(scope)}</span>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {(options.write_scopes?.length ?? 0) > 0 && (
+                          <div className="space-y-1">
+                            <div className="text-aux text-ink-fg-2">
+                              {t('settings.mcp.policy.writeScopesLabel')}
+                            </div>
+                            <div className="grid grid-cols-2 gap-1.5">
+                              {(options.write_scopes ?? []).map(({ scope, risk }) => (
+                                <label
+                                  key={scope}
+                                  className="flex items-center gap-2 rounded border border-ink-border-soft px-2 py-1.5 text-aux cursor-pointer"
+                                >
+                                  <Checkbox
+                                    checked={granularScopes.includes(scope)}
+                                    onCheckedChange={(checked) =>
+                                      toggleGranularScope(scope, checked)
+                                    }
+                                    aria-label={scopeText.label(scope)}
+                                  />
+                                  <span
+                                    className={cn(
+                                      'truncate',
+                                      risk === 'high' ? 'text-warn' : 'text-ink-fg'
+                                    )}
+                                  >
+                                    {scopeText.label(scope)}
+                                  </span>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div>
+                        <label
+                          htmlFor="mcp-key-ttl"
+                          className="mb-1 block text-aux text-ink-fg-2"
+                        >
+                          {t('settings.mcp.policy.ttlLabel')}
+                        </label>
+                        <select
+                          id="mcp-key-ttl"
+                          value={ttlDays == null ? 'never' : String(ttlDays)}
+                          onChange={(e) => {
+                            const val = e.target.value
+                            setTtlDirty(true)
+                            setTtlDays(val === 'never' ? null : Number(val))
+                          }}
+                          className="h-8 w-full rounded-[var(--r-ctl)] border border-ink-border bg-ink-1 px-2 text-aux text-ink-fg outline-none focus:border-coral"
+                        >
+                          <option value="never">{t('settings.mcp.policy.ttlNever')}</option>
+                          <option value="7">{t('settings.mcp.policy.ttlDays', { days: 7 })}</option>
+                          <option value="30">
+                            {t('settings.mcp.policy.ttlDays', { days: 30 })}
+                          </option>
+                          <option value="90">
+                            {t('settings.mcp.policy.ttlDays', { days: 90 })}
+                          </option>
+                        </select>
+                      </div>
+                      <div>
+                        <label
+                          htmlFor="mcp-key-rpm"
+                          className="mb-1 block text-aux text-ink-fg-2"
+                        >
+                          {t('settings.mcp.policy.writeRpmLabel')}
+                        </label>
+                        <Input
+                          id="mcp-key-rpm"
+                          type="number"
+                          min={1}
+                          max={10000}
+                          value={writeRpmText}
+                          onChange={(e) => {
+                            setRpmDirty(true)
+                            setWriteRpmText(e.target.value)
+                          }}
+                          placeholder={t('settings.mcp.policy.writeRpmUnlimited')}
+                        />
+                      </div>
+                    </div>
+
+                    {(options.available_tools?.length ?? 0) > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="text-aux text-ink-fg-2">
+                          {t('settings.mcp.policy.disabledToolsLabel')}
+                        </div>
+                        <div className="max-h-36 space-y-1 overflow-y-auto rounded border border-ink-border-soft p-2 scrollbar-thin">
+                          {(options.available_tools ?? []).map((tool) => {
+                            const rawToolName = tool.tool || tool.name.replace(/^mailagent_/, '')
+                            const isOff = disabledTools.includes(rawToolName)
+                            return (
+                              <label
+                                key={tool.name}
+                                className="flex items-center justify-between gap-2 text-aux cursor-pointer"
+                              >
+                                <span className="truncate font-mono text-meta text-ink-fg">
+                                  {tool.name}
+                                </span>
+                                <span className="inline-flex shrink-0 items-center gap-1.5 text-aux text-ink-fg-2">
+                                  <Checkbox
+                                    checked={!isOff}
+                                    onCheckedChange={(enabled) =>
+                                      toggleDisabledTool(rawToolName, !enabled)
+                                    }
+                                    aria-label={tool.name}
+                                  />
+                                  <span>
+                                    {isOff
+                                      ? t('settings.mcp.policy.toolDisabled')
+                                      : t('settings.mcp.policy.toolEnabled')}
+                                  </span>
+                                </span>
+                              </label>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </>
         )}
 
@@ -986,22 +1365,30 @@ function KeyScopesDialog({
 function KeyRevealedDialog({
   revealed,
   localUrl,
+  sseUrl,
   publicUrl,
   publicUrlUnverified,
   onNeedPublicUrl,
+  onOpenClientInstaller,
   onClose
 }: {
   revealed: McpKeyWithPlaintext | null
   localUrl: string
+  sseUrl: string
   publicUrl: string
   /** 已填公网地址、但最近一次检测结果不是 reachable。 */
   publicUrlUnverified: boolean
   /** 没填公网地址时点「复制 Notion 配置」：展开页面上的公网地址引导。 */
   onNeedPublicUrl: () => void
+  onOpenClientInstaller: (plaintext: string) => void
   onClose: () => void
 }): React.ReactElement {
   const { t } = useTranslation()
+  const api = useMailApi()
   const { copied, copy } = useCopy()
+  const isWeb =
+    (import.meta as unknown as { env?: { VITE_BUILD_TARGET?: string } }).env?.VITE_BUILD_TARGET ===
+    'web'
   // 记「哪一把明文」触发过提示，换一把（新建 / 轮换）自然复位，不需要 effect。
   const [needPublicFor, setNeedPublicFor] = React.useState<string | null>(null)
 
@@ -1068,8 +1455,189 @@ function KeyRevealedDialog({
             {copied === 'http' ? <CheckCircle2 className="text-ok" /> : <Copy />}
             {t('settings.mcp.revealed.copyHttp')}
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => copy(buildSseClientConfigText(sseUrl, plaintext), 'sse')}
+          >
+            {copied === 'sse' ? <CheckCircle2 className="text-ok" /> : <Copy />}
+            {t('settings.mcp.revealed.copySse')}
+          </Button>
+          {!isWeb && api.mcpService.writeClientConfig != null ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onOpenClientInstaller(plaintext)}
+            >
+              {t('settings.mcp.clientConfig.openButton')}
+            </Button>
+          ) : null}
           <Button size="sm" onClick={onClose}>
             {t('settings.mcp.revealed.done')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ClientConfigDialog({
+  open,
+  initialApiKey,
+  onClose
+}: {
+  open: boolean
+  initialApiKey?: string
+  onClose: () => void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const api = useMailApi()
+  const [target, setTarget] = React.useState<McpClientTarget>('claude_code')
+  const [mode, setMode] = React.useState<McpClientMode>('streamable_http')
+  const [apiKey, setApiKey] = React.useState(initialApiKey ?? '')
+  const [preview, setPreview] = React.useState<McpWriteClientConfigResult | null>(null)
+  const [busy, setBusy] = React.useState(false)
+
+  React.useEffect(() => {
+    if (!open) return
+    setApiKey(initialApiKey ?? '')
+    setPreview(null)
+  }, [open, initialApiKey])
+
+  async function runConfigAction(dryRun: boolean): Promise<void> {
+    if (!api.mcpService.writeClientConfig) return
+    setBusy(true)
+    try {
+      const res = await api.mcpService.writeClientConfig({
+        target,
+        mode,
+        ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+        dry_run: dryRun
+      })
+      setPreview(res)
+      if (!dryRun && res.wrote) {
+        toastSuccess(t('settings.mcp.clientConfig.wroteSuccess', { path: res.path }))
+      }
+    } catch (err) {
+      toastError(t('settings.mcp.clientConfig.failed'), errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose()
+      }}
+    >
+      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto scrollbar-thin">
+        <DialogHeader>
+          <DialogTitle>{t('settings.mcp.clientConfig.dialogTitle')}</DialogTitle>
+          <DialogDescription>{t('settings.mcp.clientConfig.dialogDesc')}</DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          <div>
+            <label htmlFor="mcp-client-target" className="mb-1 block text-aux text-ink-fg">
+              {t('settings.mcp.clientConfig.targetLabel')}
+            </label>
+            <select
+              id="mcp-client-target"
+              value={target}
+              onChange={(e) => {
+                setTarget(e.target.value as McpClientTarget)
+                setPreview(null)
+              }}
+              className="h-9 w-full rounded-[var(--r-ctl)] border border-ink-border bg-ink-1 px-2.5 text-aux text-ink-fg outline-none focus:border-coral"
+            >
+              <option value="claude_desktop">Claude Desktop</option>
+              <option value="claude_code">Claude Code</option>
+              <option value="cursor">Cursor</option>
+              <option value="antigravity">Antigravity</option>
+            </select>
+          </div>
+
+          <div>
+            <div className="mb-1 text-aux text-ink-fg">
+              {t('settings.mcp.clientConfig.modeLabel')}
+            </div>
+            <div className="grid grid-cols-3 gap-1 rounded-[var(--r-ctl)] bg-ink-1/70 p-1">
+              {(['streamable_http', 'sse', 'stdio'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => {
+                    setMode(m)
+                    setPreview(null)
+                  }}
+                  className={cn(
+                    'rounded-md border px-2.5 py-1 text-aux font-medium transition-colors duration-fast',
+                    mode === m
+                      ? 'border-coral/50 bg-coral/12 text-coral'
+                      : 'border-transparent text-ink-fg-2 hover:text-ink-fg'
+                  )}
+                >
+                  {m === 'streamable_http'
+                    ? t('settings.mcp.clientConfig.modeHttp')
+                    : m === 'sse'
+                      ? t('settings.mcp.clientConfig.modeSse')
+                      : t('settings.mcp.clientConfig.modeStdio')}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label htmlFor="mcp-client-key" className="mb-1 block text-aux text-ink-fg">
+              {t('settings.mcp.clientConfig.apiKeyLabel')}
+            </label>
+            <Input
+              id="mcp-client-key"
+              type="password"
+              value={apiKey}
+              onChange={(e) => {
+                setApiKey(e.target.value)
+                setPreview(null)
+              }}
+              placeholder="mak_..."
+            />
+            <p className="mt-1 text-aux text-ink-fg-3">
+              {t('settings.mcp.clientConfig.apiKeyHint')}
+            </p>
+          </div>
+
+          {preview ? (
+            <div className="space-y-1.5 rounded-md border border-ink-border-soft bg-ink-1/60 p-2.5">
+              <div className="break-all font-mono text-meta text-ink-fg-2">{preview.path}</div>
+              {preview.backup_path ? (
+                <div className="text-aux text-ok">
+                  {t('settings.mcp.clientConfig.backupCreated', { path: preview.backup_path })}
+                </div>
+              ) : null}
+              <pre className="max-h-44 overflow-auto rounded bg-ink-1 p-2 font-mono text-meta text-ink-fg">
+                {preview.preview}
+              </pre>
+            </div>
+          ) : null}
+        </div>
+
+        <DialogFooter className="flex-wrap">
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
+            {t('settings.mcp.cancel')}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => void runConfigAction(true)}
+          >
+            {t('settings.mcp.clientConfig.previewButton')}
+          </Button>
+          <Button size="sm" disabled={busy} onClick={() => void runConfigAction(false)}>
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : null}
+            {t('settings.mcp.clientConfig.writeButton')}
           </Button>
         </DialogFooter>
       </DialogContent>

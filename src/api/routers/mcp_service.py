@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -23,7 +24,7 @@ from fastapi import APIRouter, Body, Depends, Query, Request
 
 from src.api.agent_auth import Principal
 from src.api.app import APIError, success_envelope
-from src.api.auth import verify_cf_access
+from src.api.auth import verify_cf_access, verify_local_token
 from src.api.deps import get_settings
 from src.security import api_keys as _api_keys
 
@@ -67,6 +68,8 @@ def _key_to_dict(rec: _api_keys.ApiKeyRecord) -> dict[str, Any]:
         "expires_at": rec.expires_at,
         "revoked_at": rec.revoked_at,
         "active": rec.is_active,
+        "disabled_tools": list(getattr(rec, "disabled_tools", ()) or ()),
+        "write_rpm_limit": getattr(rec, "write_rpm_limit", None),
     }
 
 
@@ -90,10 +93,13 @@ def _public_url() -> str:
 @router.get("/status")
 def get_status(request: Request):
     port = os.environ.get("MAILAGENT_API_PORT", "8200")
+    base = f"http://127.0.0.1:{port}"
     active = sum(1 for rec in _store().list_keys(include_revoked=False) if rec.is_active)
     return success_envelope(
         {
-            "local_url": f"http://127.0.0.1:{port}/mcp",
+            "local_url": f"{base}/mcp",
+            "streamable_http_url": f"{base}/mcp",
+            "sse_url": f"{base}/mcp/sse",
             "public_url": _public_url(),
             "active_key_count": active,
         },
@@ -109,7 +115,27 @@ def list_keys(request: Request):
 
 @router.get("/scope-options")
 def scope_options(request: Request):
-    """新建 / 修改密钥弹窗的选项：两档基础权限 + 额外写权限（固定顺序，附风险档）。"""
+    """新建 / 修改密钥选项：兼容旧 bases+extras 的同时提供细粒度 read_scopes / write_scopes / available_tools。"""
+    from src.mcp.client_config_writer import CLIENT_TARGETS
+    from src.mcp.mailagent_mcp import manifest_to_mcp_tools
+    from src.skills.registry import build_manifest
+
+    all_principal = Principal(
+        kind="agent", auth_method="bearer", scopes=frozenset(_api_keys.KNOWN_SCOPES)
+    )
+    manifest = build_manifest(all_principal)
+    scopes_by_tool = {
+        (s.name, t.name): list(t.auth_scopes) for s in manifest.skills for t in s.tools
+    }
+    available_tools = [
+        {
+            "name": t["name"],
+            "tool": t["_tool"],
+            "title": t["title"],
+            "auth_scopes": scopes_by_tool[(t["_skill"], t["_tool"])],
+        }
+        for t in manifest_to_mcp_tools(manifest)
+    ]
     return success_envelope(
         {
             "bases": [
@@ -119,13 +145,37 @@ def scope_options(request: Request):
                 {"scope": scope, "risk": "high" if scope in _HIGH_RISK_EXTRAS else "low"}
                 for scope in _api_keys.EXTRA_WRITE_SCOPES
             ],
+            "read_scopes": list(_api_keys.READ_ONLY_SCOPES),
+            "write_scopes": [
+                {
+                    "scope": scope,
+                    "risk": "high" if scope in _HIGH_RISK_EXTRAS else "low",
+                    "kind": "run" if scope in _api_keys.TRIGGER_RUN_SCOPES else "write",
+                }
+                for scope in _api_keys.ALL_WRITE_AND_RUN_SCOPES
+            ],
+            "available_tools": available_tools,
+            "ttl_presets_days": [7, 30, 90, None],
+            "client_targets": list(CLIENT_TARGETS),
         },
         request=request,
     )
 
 
 def _scopes_from_body(raw: dict[str, Any]) -> tuple[str, ...]:
-    """body 的 ``{base, extra}`` → scope 集合；不合法 → 400 E_INVALID_ARG。"""
+    """body 支持 ``{scopes: [...]}`` 直选细粒度 scope，或向后兼容 ``{base, extra}``。"""
+    if "scopes" in raw and raw["scopes"] is not None:
+        raw_scopes = raw["scopes"]
+        if not isinstance(raw_scopes, list) or not all(isinstance(s, str) for s in raw_scopes):
+            raise APIError("E_INVALID_ARG", "scopes must be an array of scope strings")
+        try:
+            validated = _api_keys.validate_scopes(raw_scopes)
+        except ValueError as exc:
+            raise APIError("E_INVALID_ARG", str(exc)) from exc
+        if not validated:
+            raise APIError("E_INVALID_ARG", "at least one scope must be selected")
+        return validated
+
     base = raw.get("base")
     extra = raw.get("extra", [])
     if not isinstance(base, str):
@@ -138,6 +188,39 @@ def _scopes_from_body(raw: dict[str, Any]) -> tuple[str, ...]:
         raise APIError("E_INVALID_ARG", str(exc)) from exc
 
 
+def _parse_expires_at(raw: dict[str, Any]) -> Optional[int]:
+    if "ttl_days" in raw and raw["ttl_days"] is not None:
+        ttl_days = raw["ttl_days"]
+        if isinstance(ttl_days, bool) or not isinstance(ttl_days, int) or ttl_days <= 0:
+            raise APIError("E_INVALID_ARG", "ttl_days must be a positive integer")
+        return int(time.time()) + ttl_days * 86400
+    if "expires_at" in raw:
+        exp = raw["expires_at"]
+        if exp is None:
+            return None
+        if isinstance(exp, bool) or not isinstance(exp, int) or exp <= int(time.time()):
+            raise APIError("E_INVALID_ARG", "expires_at must be a future unix epoch timestamp or null")
+        return exp
+    return None
+
+
+def _parse_disabled_tools(raw: Any) -> list[str]:
+    if not isinstance(raw, list) or not all(isinstance(s, str) for s in raw):
+        raise APIError("E_INVALID_ARG", "disabled_tools must be an array of tool name strings")
+    try:
+        return list(_api_keys.normalize_disabled_tools(raw))
+    except ValueError as exc:
+        raise APIError("E_INVALID_ARG", str(exc)) from exc
+
+
+def _parse_write_rpm_limit(raw: Any) -> Optional[int]:
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0 or raw > 10000:
+        raise APIError("E_INVALID_ARG", "write_rpm_limit must be an integer in 1..10000 or null")
+    return raw
+
+
 @router.post("/keys")
 def create_key(request: Request, body: Optional[dict[str, Any]] = Body(default=None)):
     raw = body or {}
@@ -145,15 +228,70 @@ def create_key(request: Request, body: Optional[dict[str, Any]] = Body(default=N
     if not isinstance(label, str) or not label.strip():
         raise APIError("E_INVALID_ARG", "label is required")
     scopes = _scopes_from_body(raw)
-    record, plaintext = _store().create_key(label.strip(), scopes=scopes)
+    expires_at = _parse_expires_at(raw) if ("ttl_days" in raw or "expires_at" in raw) else None
+    disabled_tools = (
+        _parse_disabled_tools(raw["disabled_tools"])
+        if raw.get("disabled_tools") is not None
+        else None
+    )
+    write_rpm_limit = (
+        _parse_write_rpm_limit(raw["write_rpm_limit"])
+        if "write_rpm_limit" in raw
+        else None
+    )
+    record, plaintext = _store().create_key(
+        label.strip(),
+        scopes=scopes,
+        expires_at=expires_at,
+        disabled_tools=disabled_tools,
+        write_rpm_limit=write_rpm_limit,
+    )
     return success_envelope({"key": _key_to_dict(record), "plaintext": plaintext}, request=request)
 
 
 @router.patch("/keys/{key_id}/scopes")
 def update_key_scopes(key_id: str, request: Request, body: Optional[dict[str, Any]] = Body(default=None)):
     """改权限（明文不变，外部客户端不用换请求头）。已撤销 / 不存在 → 404。写一行审计。"""
-    scopes = _scopes_from_body(body or {})
-    record = _store().update_scopes(key_id, scopes, route=f"/api/mcp-service/keys/{key_id}/scopes")
+    raw = body or {}
+    scopes = _scopes_from_body(raw)
+    kwargs: dict[str, Any] = {
+        "scopes": scopes,
+        "route": f"/api/mcp-service/keys/{key_id}/scopes",
+    }
+    if "disabled_tools" in raw and raw["disabled_tools"] is not None:
+        kwargs["disabled_tools"] = _parse_disabled_tools(raw["disabled_tools"])
+    if "write_rpm_limit" in raw:
+        kwargs["write_rpm_limit"] = _parse_write_rpm_limit(raw["write_rpm_limit"])
+    if "ttl_days" in raw or "expires_at" in raw:
+        kwargs["expires_at"] = _parse_expires_at(raw)
+    record = _store().update_key_policy(key_id, **kwargs)
+    if record is None:
+        raise APIError("E_NOT_FOUND", f"api key {key_id!r} not found or revoked")
+    return success_envelope({"key": _key_to_dict(record)}, request=request)
+
+
+@router.patch("/keys/{key_id}")
+def update_key_policy_endpoint(
+    key_id: str,
+    request: Request,
+    body: Optional[dict[str, Any]] = Body(default=None),
+):
+    """部分更新密钥策略（scopes / disabled_tools / write_rpm_limit / ttl_days|expires_at）。"""
+    raw = body or {}
+    kwargs: dict[str, Any] = {"route": f"/api/mcp-service/keys/{key_id}"}
+    if "scopes" in raw or "base" in raw:
+        kwargs["scopes"] = _scopes_from_body(raw)
+    if "disabled_tools" in raw:
+        kwargs["disabled_tools"] = (
+            _parse_disabled_tools(raw["disabled_tools"])
+            if raw["disabled_tools"] is not None
+            else ()
+        )
+    if "write_rpm_limit" in raw:
+        kwargs["write_rpm_limit"] = _parse_write_rpm_limit(raw["write_rpm_limit"])
+    if "ttl_days" in raw or "expires_at" in raw:
+        kwargs["expires_at"] = _parse_expires_at(raw)
+    record = _store().update_key_policy(key_id, **kwargs)
     if record is None:
         raise APIError("E_NOT_FOUND", f"api key {key_id!r} not found or revoked")
     return success_envelope({"key": _key_to_dict(record)}, request=request)
@@ -260,14 +398,22 @@ def _validate_probe_url(url: Any) -> str:
 
 
 def _classify_probe(status: int, headers: Any) -> tuple[str, str]:
-    """``/mcp`` 对 GET 固定回 405 + ``Allow: POST``；被 Cloudflare Access 拦截时是跳登录页或直接回 HTML。"""
-    if status == 405 and "POST" in (headers.get("allow") or "").upper():
-        return "reachable", "HTTP 405"
+    """判断 ``/mcp`` 探测响应：
+    - Stateful 下无鉴权/无 Session 探测 ``GET /mcp`` 会回 401/400 JSON，无状态模式回 405 + ``Allow: POST``；
+    - 被 Cloudflare Access 拦截时跳登录页（3xx → ``cloudflareaccess.com``）或直接回 HTML。
+    """
     location = headers.get("location") or ""
     if 300 <= status < 400 and "cloudflareaccess.com" in location:
         return "access_blocked", f"HTTP {status} → {urlparse(location).hostname or location}"
-    if status == 200 and "text/html" in (headers.get("content-type") or ""):
-        return "access_blocked", "HTTP 200 text/html"
+    content_type = (headers.get("content-type") or "").lower()
+    if "text/html" in content_type:
+        if status == 200:
+            return "access_blocked", "HTTP 200 text/html"
+        return "unreachable", f"HTTP {status}"
+    if status == 405 and "POST" in (headers.get("allow") or "").upper():
+        return "reachable", "HTTP 405"
+    if status in (400, 401):
+        return "reachable", f"HTTP {status}"
     return "unreachable", f"HTTP {status}"
 
 
@@ -288,3 +434,45 @@ async def probe(request: Request, body: Optional[dict[str, Any]] = Body(default=
     except httpx.HTTPError as exc:
         result, detail = "unreachable", type(exc).__name__
     return success_envelope({"result": result, "detail": detail}, request=request)
+
+
+@router.post("/client-config", dependencies=[Depends(verify_local_token)])
+def write_client_config(
+    request: Request,
+    body: Optional[dict[str, Any]] = Body(default=None),
+):
+    """一键写入或预览本机 MCP 客户端配置文件（claude_desktop / claude_code / cursor / antigravity）。
+
+    🔴 鉴权 = ``Depends(verify_local_token)``（覆盖/备份本机文件系统，严禁远程 CF JWT 调用）。
+    """
+    from src.mcp.client_config_writer import CLIENT_MODES, ClientConfigError, write_client_mcp_config
+
+    raw = body or {}
+    target = raw.get("target")
+    if not isinstance(target, str):
+        raise APIError("E_INVALID_ARG", "target is required")
+    mode = raw.get("mode", "http")
+    if not isinstance(mode, str):
+        raise APIError("E_INVALID_ARG", f"mode must be one of {list(CLIENT_MODES)}")
+    server_name = raw.get("server_name", "mailagent")
+    if not isinstance(server_name, str):
+        raise APIError("E_INVALID_ARG", "server_name must be a string")
+    dry_run = bool(raw.get("dry_run", False))
+    api_key = raw.get("api_key")
+    if api_key is not None and not isinstance(api_key, str):
+        raise APIError("E_INVALID_ARG", "api_key must be a string or null")
+    api_base = raw.get("api_base")
+    if api_base is not None and not isinstance(api_base, str):
+        raise APIError("E_INVALID_ARG", "api_base must be a string or null")
+    try:
+        res = write_client_mcp_config(
+            target,
+            mode=mode,
+            server_name=server_name,
+            api_base=api_base,
+            api_key=api_key,
+            dry_run=dry_run,
+        )
+    except ClientConfigError as exc:
+        raise APIError(exc.code, str(exc), http_status=exc.http_status) from exc
+    return success_envelope(res, request=request)

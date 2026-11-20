@@ -27,7 +27,10 @@
 //      invoke wire carries the caller annotation (mode + agent_id).
 
 import { afterEach, describe, expect, test } from 'vitest'
+import { convertToModelMessages, simulateReadableStream, stepCountIs, streamText, type UIMessage } from 'ai'
+import { MockLanguageModelV3 } from 'ai/test'
 
+import { makePersistOnFinish, prepareChatRun, prunePersistedToolImages } from '../../../src/ai-gateway/chatRun'
 import { buildGatewayTools } from '../../../src/ai-gateway/tools'
 import {
   classOfTool,
@@ -55,7 +58,7 @@ import {
   parseMcpToolName
 } from '../../../src/shared/assistant/tools/mcpToolName'
 import { ApprovalGuard } from '../../../src/ai-gateway/security/approval'
-import type { GatewayToolAuditCollector } from '../../../src/ai-gateway/tools/types'
+import { redactAuditImages, type GatewayToolAuditCollector } from '../../../src/ai-gateway/tools/types'
 import { mockDomain, okEnvelope, errEnvelope, runTool } from './_helpers'
 
 afterEach(() => resetRuntimeToolClasses())
@@ -1338,5 +1341,456 @@ describe('connectorCatalogForRun — the prompt can never advertise wider than t
         ).toBe(true)
       }
     }
+  })
+})
+
+// ── 10. (WS-1A) multimodal ImageContent → toModelOutput + audit redaction + replay ──────────────
+
+const PNG_1X1_B64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+describe('WS-1A — multimodal ImageContent → toModelOutput + audit redaction + replay', () => {
+  test('text-only invoke output omits empty images field and toModelOutput emits json', async () => {
+    const collector: GatewayToolAuditCollector = []
+    const domain = mockDomain((url) =>
+      /\/invoke$/.test(url)
+        ? okEnvelope({
+            connector_id: 'notion',
+            tool_name: 'notion-fetch',
+            content: 'PLAIN TEXT',
+            images: [],
+            is_error: false,
+            truncated: false,
+            elapsed_ms: 4
+          })
+        : okEnvelope({})
+    )
+    const tools = createConnectorTools(domain, collector, new ApprovalGuard(), [entry()], {
+      contextMode: 'manual_chat'
+    })
+    const tool = tools.mcp__notion__notion_fetch
+    const out = (await runTool(tool, { id: 'p1' })) as Record<string, unknown>
+    expect(out.images).toBeUndefined()
+    expect(collector[0]?.outputJson).not.toContain('"images"')
+
+    const modelOut = await tool.toModelOutput!({ toolCallId: 'tc-1', input: { id: 'p1' }, output: out })
+    expect(modelOut).toEqual({
+      type: 'json',
+      value: {
+        connector: 'notion',
+        tool: 'notion-fetch',
+        content: out.content,
+        is_error: false,
+        truncated: false
+      }
+    })
+  })
+
+  test('image-bearing read + write tools emit AI SDK v7 content+file parts while redacting audit collector', async () => {
+    const expectedBytes = Buffer.byteLength(PNG_1X1_B64, 'base64')
+    const collector: GatewayToolAuditCollector = []
+    const guard = new ApprovalGuard()
+    const domain = mockDomain((url) =>
+      /\/invoke$/.test(url)
+        ? okEnvelope({
+            connector_id: 'browser_use',
+            tool_name: 'browser_take_screenshot',
+            content: 'Captured viewport',
+            images: [{ media_type: 'image/png', data: PNG_1X1_B64 }],
+            is_error: false,
+            truncated: false,
+            elapsed_ms: 12
+          })
+        : okEnvelope({})
+    )
+    const tools = createConnectorTools(
+      domain,
+      collector,
+      guard,
+      [
+        entry({
+          connectorId: 'browser_use',
+          connectorName: 'Browser Use',
+          toolName: 'browser_take_screenshot',
+          crudType: 'read',
+          mode: 'auto'
+        }),
+        entry({
+          connectorId: 'browser_use',
+          connectorName: 'Browser Use',
+          toolName: 'browser_click',
+          crudType: 'write',
+          mode: 'auto'
+        })
+      ],
+      { contextMode: 'manual_chat' }
+    )
+
+    // 1. Read tool
+    const readTool = tools.mcp__browser_use__browser_take_screenshot
+    const readOut = (await runTool(readTool, {})) as {
+      content: string
+      images?: Array<{ media_type: string; data: string }>
+    }
+    // Live execute output retains full base64 for same-turn toModelOutput
+    expect(readOut.images).toEqual([{ media_type: 'image/png', data: PNG_1X1_B64 }])
+    // Audit collector redacts base64 blob into compact metadata
+    expect(collector[0]?.outputJson).not.toContain(PNG_1X1_B64)
+    expect(JSON.parse(collector[0]!.outputJson)).toMatchObject({
+      connector: 'browser_use',
+      tool: 'browser_take_screenshot',
+      images: [{ media_type: 'image/png', byte_length: expectedBytes, omitted: true }]
+    })
+
+    const readModelOut = await readTool.toModelOutput!({
+      toolCallId: 'tc-r',
+      input: {},
+      output: readOut
+    })
+    expect(readModelOut).toEqual({
+      type: 'content',
+      value: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            connector: 'browser_use',
+            tool: 'browser_take_screenshot',
+            content: readOut.content,
+            is_error: false,
+            truncated: false
+          })
+        },
+        {
+          type: 'file',
+          mediaType: 'image/png',
+          data: { type: 'data', data: PNG_1X1_B64 }
+        }
+      ]
+    })
+
+    // 2. Write tool (auto-tier)
+    const writeTool = tools.mcp__browser_use__browser_click
+    const needs = writeTool.needsApproval as (i: unknown, o: unknown) => Promise<boolean> | boolean
+    await expect(Promise.resolve(needs({ ref: 'b1' }, { toolCallId: 'tc-w', messages: [] }))).resolves.toBe(
+      false
+    )
+    const writeOut = (await (writeTool.execute as (i: unknown, o: unknown) => Promise<unknown>)(
+      { ref: 'b1' },
+      { toolCallId: 'tc-w', messages: [] }
+    )) as { images?: Array<{ media_type: string; data: string }> }
+    expect(writeOut.images).toEqual([{ media_type: 'image/png', data: PNG_1X1_B64 }])
+    expect(collector[1]?.outputJson).not.toContain(PNG_1X1_B64)
+    expect(JSON.parse(collector[1]!.outputJson)).toMatchObject({
+      images: [{ media_type: 'image/png', byte_length: expectedBytes, omitted: true }]
+    })
+    const writeModelOut = await writeTool.toModelOutput!({
+      toolCallId: 'tc-w',
+      input: { ref: 'b1' },
+      output: writeOut
+    })
+    expect(writeModelOut.type).toBe('content')
+    if (writeModelOut.type === 'content') {
+      expect(writeModelOut.value[1]).toEqual({
+        type: 'file',
+        mediaType: 'image/png',
+        data: { type: 'data', data: PNG_1X1_B64 }
+      })
+    }
+  })
+
+  test('redactAuditImages leaves generate_image refs (no .data) untouched', () => {
+    const genOut = {
+      mode: 'generate',
+      model: 'openai:gpt-image-1',
+      images: [{ file_id: '1-uuid.png', mime: 'image/png', width: 1024, height: 1024, url: '/x.png' }]
+    }
+    expect(redactAuditImages(genOut)).toBe(genOut)
+  })
+
+  test('convertToModelMessages(msgs, { tools }) and prepareChatRun replay multimodal file parts to LanguageModelV3', async () => {
+    const domain = mockDomain(() => okEnvelope({}))
+    const tools = createConnectorTools(
+      domain,
+      [],
+      new ApprovalGuard(),
+      [
+        entry({
+          connectorId: 'browser_use',
+          connectorName: 'Browser Use',
+          toolName: 'browser_take_screenshot',
+          crudType: 'read',
+          mode: 'auto'
+        })
+      ],
+      { contextMode: 'manual_chat' }
+    )
+
+    const history = [
+      {
+        id: 'u1',
+        role: 'user',
+        parts: [{ type: 'text', text: 'Screenshot the login page' }]
+      },
+      {
+        id: 'a1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-mcp__browser_use__browser_take_screenshot',
+            toolCallId: 'tc-shot-1',
+            state: 'output-available',
+            input: {},
+            output: {
+              connector: 'browser_use',
+              tool: 'browser_take_screenshot',
+              content: 'Captured',
+              images: [{ media_type: 'image/png', data: PNG_1X1_B64 }],
+              is_error: false,
+              truncated: false
+            }
+          },
+          { type: 'text', text: 'Here is the page.' }
+        ]
+      },
+      {
+        id: 'u2',
+        role: 'user',
+        parts: [{ type: 'text', text: 'What color is the button?' }]
+      }
+    ] as unknown as UIMessage[]
+
+    // Without { tools }, convertToModelMessages falls back to raw json (regression baseline)
+    const withoutTools = await convertToModelMessages(history)
+    const rawToolMsg = withoutTools.find((m) => m.role === 'tool')
+    expect((rawToolMsg?.content[0] as { output: { type: string } }).output.type).toBe('json')
+
+    // With { tools }, convertToModelMessages executes toModelOutput → content + file part
+    const withTools = await convertToModelMessages(history, { tools })
+    const multimodalToolMsg = withTools.find((m) => m.role === 'tool')
+    expect(multimodalToolMsg?.content[0]).toMatchObject({
+      type: 'tool-result',
+      toolCallId: 'tc-shot-1',
+      toolName: 'mcp__browser_use__browser_take_screenshot',
+      output: {
+        type: 'content',
+        value: [
+          { type: 'text', text: expect.stringContaining('"content":"Captured"') },
+          {
+            type: 'file',
+            mediaType: 'image/png',
+            data: { type: 'data', data: PNG_1X1_B64 }
+          }
+        ]
+      }
+    })
+
+    // End-to-end prepareChatRun: passes the SAME tools to convertToModelMessages and streamText
+    let seenPrompt: unknown = null
+    const model = new MockLanguageModelV3({
+      doStream: async ({ prompt }) => {
+        seenPrompt = prompt
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start' as const, warnings: [] },
+              { type: 'text-start' as const, id: '0' },
+              { type: 'text-delta' as const, id: '0', delta: 'Blue button.' },
+              { type: 'text-end' as const, id: '0' },
+              {
+                type: 'finish' as const,
+                finishReason: { unified: 'stop' as const, raw: undefined },
+                usage: {
+                  inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
+                  outputTokens: { total: 3, text: 3, reasoning: 0 }
+                }
+              }
+            ]
+          })
+        }
+      }
+    })
+
+    const prepared = await prepareChatRun(
+      { messages: history },
+      {
+        port: 0,
+        baseUrl: 'https://crs.example/api',
+        apiKey: 'sk-test',
+        model: 'claude-sonnet-4-6',
+        createModel: () => model,
+        buildTools: () => tools
+      },
+      new AbortController().signal,
+      'manual_chat'
+    )
+    expect(prepared.ok).toBe(true)
+    if (!prepared.ok) throw new Error('expected ok')
+    await prepared.run.result.consumeStream()
+
+    const promptJson = JSON.stringify(seenPrompt)
+    expect(promptJson).toContain('"type":"content"')
+    expect(promptJson).toContain('"mediaType":"image/png"')
+    expect(promptJson).toContain(PNG_1X1_B64)
+  })
+
+  test('same-turn streamText multi-step loop delivers multimodal file part from tool.execute → toModelOutput to step 2 model prompt', async () => {
+    const collector: GatewayToolAuditCollector = []
+    const domain = mockDomain((url) =>
+      /\/invoke$/.test(url)
+        ? okEnvelope({
+            connector_id: 'browser_use',
+            tool_name: 'browser_take_screenshot',
+            content: 'Viewport captured',
+            images: [{ media_type: 'image/png', data: PNG_1X1_B64 }],
+            is_error: false,
+            truncated: false,
+            elapsed_ms: 8
+          })
+        : okEnvelope({})
+    )
+    const tools = createConnectorTools(
+      domain,
+      collector,
+      new ApprovalGuard(),
+      [
+        entry({
+          connectorId: 'browser_use',
+          connectorName: 'Browser Use',
+          toolName: 'browser_take_screenshot',
+          crudType: 'read',
+          mode: 'auto'
+        })
+      ],
+      { contextMode: 'manual_chat' }
+    )
+    const prompts: unknown[] = []
+    let call = 0
+    const model = new MockLanguageModelV3({
+      doStream: async ({ prompt }) => {
+        prompts.push(prompt)
+        call += 1
+        if (call === 1) {
+          return {
+            stream: simulateReadableStream({
+              chunks: [
+                { type: 'stream-start' as const, warnings: [] },
+                {
+                  type: 'tool-call' as const,
+                  toolCallId: 'tc-live-1',
+                  toolName: 'mcp__browser_use__browser_take_screenshot',
+                  input: '{}'
+                },
+                {
+                  type: 'finish' as const,
+                  finishReason: { unified: 'tool-calls' as const, raw: undefined },
+                  usage: {
+                    inputTokens: { total: 5, noCache: 5, cacheRead: 0, cacheWrite: 0 },
+                    outputTokens: { total: 5, text: 5, reasoning: 0 }
+                  }
+                }
+              ]
+            })
+          }
+        }
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start' as const, warnings: [] },
+              { type: 'text-start' as const, id: 't1' },
+              { type: 'text-delta' as const, id: 't1', delta: 'Saw screenshot.' },
+              { type: 'text-end' as const, id: 't1' },
+              {
+                type: 'finish' as const,
+                finishReason: { unified: 'stop' as const, raw: undefined },
+                usage: {
+                  inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
+                  outputTokens: { total: 4, text: 4, reasoning: 0 }
+                }
+              }
+            ]
+          })
+        }
+      }
+    })
+
+    const result = streamText({
+      model,
+      messages: [{ role: 'user', content: 'Take a screenshot and describe it' }],
+      tools,
+      stopWhen: stepCountIs(3)
+    })
+    await result.consumeStream()
+
+    expect(prompts).toHaveLength(2)
+    const step2Prompt = JSON.stringify(prompts[1])
+    expect(step2Prompt).toContain('"type":"content"')
+    expect(step2Prompt).toContain('"mediaType":"image/png"')
+    expect(step2Prompt).toContain(PNG_1X1_B64)
+    expect(collector[0]?.outputJson).not.toContain(PNG_1X1_B64)
+  })
+
+  test('prunePersistedToolImages & makePersistOnFinish cap retained tool screenshots in ui_message_json', async () => {
+    const makeShotPart = (id: string) => ({
+      type: 'tool-mcp__browser_use__browser_take_screenshot',
+      toolCallId: id,
+      state: 'output-available',
+      input: {},
+      output: {
+        connector: 'browser_use',
+        tool: 'browser_take_screenshot',
+        content: `shot ${id}`,
+        images: [{ media_type: 'image/png', data: PNG_1X1_B64 }],
+        is_error: false,
+        truncated: false
+      }
+    })
+    const twoShots = {
+      id: 'a-two',
+      role: 'assistant',
+      parts: [makeShotPart('s1'), makeShotPart('s2')]
+    } as never
+    expect(prunePersistedToolImages(twoShots)).toBe(twoShots)
+
+    const threeShots = {
+      id: 'a-three',
+      role: 'assistant',
+      parts: [makeShotPart('s1'), makeShotPart('s2'), makeShotPart('s3'), { type: 'text', text: 'done' }]
+    } as never
+
+    const persisted: Array<{ responseMessage: { parts: Array<{ output?: unknown }> } }> = []
+    const onFinish = makePersistOnFinish(
+      {
+        persistTurn: (t) => {
+          persisted.push(t as never)
+        }
+      } as never,
+      {
+        sessionId: 9,
+        modelId: 'claude-sonnet-4-6',
+        protocol: 'anthropic',
+        rawMessages: [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: 'go' }] }],
+        result: { usage: Promise.resolve(undefined), steps: Promise.resolve([]) },
+        auditEntries: []
+      } as never
+    )
+
+    await onFinish({ responseMessage: threeShots, isAborted: false, finishReason: 'stop' } as never)
+    expect(persisted).toHaveLength(1)
+    const savedParts = persisted[0]!.responseMessage.parts
+    // Oldest shot redacted, latest 2 retained
+    expect(savedParts[0]!.output).toMatchObject({
+      images: [{ media_type: 'image/png', omitted: true }]
+    })
+    expect((savedParts[1]!.output as { images: Array<{ data?: string }> }).images[0]!.data).toBe(
+      PNG_1X1_B64
+    )
+    expect((savedParts[2]!.output as { images: Array<{ data?: string }> }).images[0]!.data).toBe(
+      PNG_1X1_B64
+    )
+    // Original live message unmutated
+    expect(
+      ((threeShots as { parts: Array<{ output?: { images: Array<{ data?: string }> } }> }).parts[0]!
+        .output!.images[0]!.data)
+    ).toBe(PNG_1X1_B64)
   })
 })

@@ -445,17 +445,56 @@ export function projectConnectorCatalog(
  * `flagEnabled` is passed as true because a catalog only EXISTS when MAILAGENT_MCP_CONNECTORS is
  * on (the lifecycle never projects one otherwise) — the seam re-check covers the run-shape half.
  */
+export interface ConnectorCatalogRunOpts {
+  connectorToolGrants?: unknown
+  disabledConnectors?: readonly string[]
+}
+
+/** Fail-closed parse of per-connector tool allowlists (`{connectorId: string[]}`).
+ *  Preserves explicit empty arrays `{ [connectorId]: [] }` so an explicit zero-tool allowlist
+ *  keeps that connector blocked (never widening back to "all tools"). */
+export function parseConnectorToolGrants(raw: unknown): Record<string, string[]> | undefined {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const out: Record<string, string[]> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    if (!key || !Array.isArray(value)) continue
+    const cleaned = Array.from(
+      new Set(
+        value
+          .filter((item): item is string => typeof item === 'string')
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0)
+      )
+    )
+    out[key] = cleaned
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 export function connectorCatalogForRun(
   catalog: readonly ConnectorCatalogEntry[] | null | undefined,
   contextMode: AgentContextMode | undefined,
   hasAgentRunContext: boolean,
-  connectorGrants?: unknown
+  connectorGrants?: unknown,
+  opts?: ConnectorCatalogRunOpts
 ): ConnectorCatalogEntry[] | null {
   if (!catalog || catalog.length === 0) return null
   if (!shouldLoadConnectorTools(true, contextMode, hasAgentRunContext, connectorGrants)) return null
-  if (contextMode === 'manual_chat' || contextMode === 'im_chat') return [...catalog]
+  const disabledSet =
+    contextMode === 'manual_chat' && opts?.disabledConnectors?.length
+      ? new Set(opts.disabledConnectors.filter((id) => typeof id === 'string' && id.length > 0))
+      : null
+  if (contextMode === 'manual_chat' || contextMode === 'im_chat') {
+    const filtered = disabledSet ? catalog.filter((row) => !disabledSet.has(row.connectorId)) : [...catalog]
+    return filtered.length > 0 ? filtered : null
+  }
   const grants = parseConnectorGrants(connectorGrants)
   if (grants === undefined) return null // unreachable after the seam — belt only
+  const toolGrants = parseConnectorToolGrants(opts?.connectorToolGrants)
+  const allowedByToolList = (connectorId: string): boolean => {
+    if (!toolGrants || !Object.prototype.hasOwnProperty.call(toolGrants, connectorId)) return true
+    return toolGrants[connectorId].length > 0
+  }
   // 0813 batch P — matter venue: the advertised read count is the NARROWER matterReadToolCount
   // (auto-tier, non-destructive — what createConnectorTools actually registers there), and the
   // write/update counts are zeroed unconditionally (the venue never registers a write regardless
@@ -466,6 +505,7 @@ export function connectorCatalogForRun(
     const matterOut: ConnectorCatalogEntry[] = []
     for (const row of catalog) {
       if (grants[row.connectorId] === undefined) continue
+      if (!allowedByToolList(row.connectorId)) continue
       const reads = row.matterReadToolCount ?? 0
       if (reads <= 0) continue
       matterOut.push({ ...row, readToolCount: reads, writeToolCount: 0, updateToolCount: 0 })
@@ -476,6 +516,7 @@ export function connectorCatalogForRun(
   for (const row of catalog) {
     const ceiling = grants[row.connectorId]
     if (ceiling === undefined) continue // connector absent from the grants → whole family absent
+    if (!allowedByToolList(row.connectorId)) continue
     const rank = CONNECTOR_CRUD_RANK[ceiling]
     const narrowed: ConnectorCatalogEntry = {
       ...row,
@@ -598,6 +639,179 @@ function connectorInvokeError(err: unknown, connectorName: string): unknown {
   return new DomainError(err.code, message, { hint: err.hint, httpStatus: err.httpStatus })
 }
 
+type ToolModelOutput = Awaited<ReturnType<NonNullable<Tool['toModelOutput']>>>
+type JsonToolModelOutputValue = Extract<ToolModelOutput, { type: 'json' }>['value']
+
+const DATA_URL_BASE64_RE = /^data:([^;,]+);base64,(.+)$/s
+
+function extractConnectorImages(raw: unknown): Array<{ media_type: string; data: string }> {
+  if (!Array.isArray(raw)) return []
+  const out: Array<{ media_type: string; data: string }> = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const rec = item as { media_type?: unknown; data?: unknown }
+    if (typeof rec.data !== 'string' || rec.data.length === 0) continue
+    let mediaType = typeof rec.media_type === 'string' ? rec.media_type.trim() : ''
+    let data = rec.data
+    if (data.startsWith('data:')) {
+      const m = DATA_URL_BASE64_RE.exec(data)
+      if (!m) continue
+      if (!mediaType) mediaType = m[1]
+      data = m[2]
+    }
+    if (!mediaType || data.length === 0) continue
+    out.push({ media_type: mediaType, data })
+  }
+  return out
+}
+
+function toJsonValue(value: unknown): JsonToolModelOutputValue {
+  if (value === undefined) return null
+  const serialized = JSON.stringify(value)
+  return serialized === undefined ? null : (JSON.parse(serialized) as JsonToolModelOutputValue)
+}
+
+/**
+ * WS-1A — AI SDK v7 (`ai@7.0.113`) multimodal `toModelOutput` for connector tools.
+ * Converts `{ connector, tool, content, images?, is_error, truncated }` into:
+ *   - `{ type: 'content', value: [{ type: 'text', text: JSON(textOnlyPayload) }, { type: 'file', mediaType, data: { type: 'data', data } }, ...] }` when images are present;
+ *   - `{ type: 'json', value: textOnlyPayload }` (stripping `images`) when text-only.
+ */
+export function connectorToolToModelOutput({ output }: { output: unknown }): ToolModelOutput {
+  if (typeof output === 'string') {
+    return { type: 'text', value: output }
+  }
+  if (!output || typeof output !== 'object' || Array.isArray(output)) {
+    return { type: 'json', value: toJsonValue(output) }
+  }
+  const rec = output as Record<string, unknown>
+  const images = extractConnectorImages(rec.images)
+  const { images: _omittedImages, ...rest } = rec
+  const textOnlyPayload = toJsonValue(rest)
+  if (images.length > 0) {
+    return {
+      type: 'content',
+      value: [
+        { type: 'text', text: JSON.stringify(textOnlyPayload) },
+        ...images.map((img) => ({
+          type: 'file' as const,
+          mediaType: img.media_type,
+          data: { type: 'data' as const, data: img.data }
+        }))
+      ]
+    }
+  }
+  return { type: 'json', value: textOnlyPayload }
+}
+
+function buildConnectorToolExecution(
+  domain: MailAgentDomainClient,
+  entry: ConnectorToolManifestEntry,
+  caller: {
+    contextMode: string
+    agentId?: string
+    jobId?: number
+    dispatchId?: number
+    childTool?: string
+  }
+) {
+  return async (
+    input: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+    userEdited?: boolean
+  ): Promise<unknown> => {
+    let r
+    try {
+      r = await domain.invokeConnectorTool(
+        entry.connectorId,
+        entry.toolName,
+        input,
+        signal,
+        caller
+      )
+    } catch (err) {
+      throw connectorInvokeError(err, entry.connectorName)
+    }
+    const images = extractConnectorImages(r.images)
+    return {
+      connector: entry.connectorId,
+      tool: sanitizeProse(entry.toolName),
+      // Externally-authored content → UNTRUSTED_MCP_TOOL fence (attrs sanitized inside).
+      content: fenceUntrusted('MCP_TOOL', r.content, {
+        connector: entry.connectorId,
+        tool: entry.toolName
+      }),
+      ...(images.length > 0 ? { images } : {}),
+      is_error: r.is_error,
+      truncated: r.truncated,
+      ...(userEdited !== undefined ? { user_edited: userEdited } : {})
+    }
+  }
+}
+
+/**
+ * WS-5 (`matter_followup` `propose_only`) — assemble private internal child connector tools ONLY
+ * for `computer_use_run` (`browser_use` / `desktop_use`), never exposed to the outer `ToolSet`.
+ * Skips destructive tools and attaches Belt 3 DB-verified caller provenance (`job_id`,
+ * `dispatch_id`, `child_tool: 'computer_use_run'`).
+ */
+export function createComputerUseChildConnectorTools(
+  domain: MailAgentDomainClient,
+  collector: GatewayToolAuditCollector,
+  manifest: readonly ConnectorToolManifestEntry[],
+  opts: {
+    connectors: readonly ('browser_use' | 'desktop_use')[]
+    agentId?: string
+    jobId?: number
+    dispatchId: number
+  }
+): ToolSet {
+  const allowedConnectorSet = new Set(
+    opts.connectors.filter((c) => c === 'browser_use' || c === 'desktop_use')
+  )
+  if (allowedConnectorSet.size === 0 || !Number.isInteger(opts.dispatchId) || opts.dispatchId <= 0) {
+    return {}
+  }
+  const caller = {
+    contextMode: 'matter_followup',
+    ...(typeof opts.agentId === 'string' && opts.agentId.length > 0 ? { agentId: opts.agentId } : {}),
+    ...(typeof opts.jobId === 'number' && Number.isInteger(opts.jobId) && opts.jobId > 0
+      ? { jobId: opts.jobId }
+      : {}),
+    dispatchId: opts.dispatchId,
+    childTool: 'computer_use_run'
+  }
+  const out: ToolSet = {}
+  for (const entry of manifest) {
+    if (!allowedConnectorSet.has(entry.connectorId as 'browser_use' | 'desktop_use')) continue
+    const crud = admissibleConnectorCrud(entry)
+    if (crud === null || entry.destructive === true) continue
+    const write = crud !== 'read'
+    const name = mcpGatewayToolName(entry.connectorId, entry.toolName)
+    if (!name || out[name] !== undefined) continue
+    try {
+      registerRuntimeToolClass(name, write ? 'connector_write' : 'read', false)
+    } catch {
+      continue
+    }
+    if (!hasRuntimeToolClass(name)) continue
+    const description = toolDescription(entry, write, 'pre_granted')
+    const inputSchema = toolInputSchema(entry.inputSchemaJson)
+    const run = buildConnectorToolExecution(domain, entry, caller)
+    out[name] = auditedReadTool<Record<string, unknown>>(
+      {
+        name,
+        description,
+        inputSchema,
+        toModelOutput: connectorToolToModelOutput,
+        run: (input, signal) => run(input, signal)
+      },
+      collector
+    )
+  }
+  return out
+}
+
 /**
  * Build the connector ToolSet from a fetched manifest, registering each tool's runtime policy
  * class first (the stage-0b gate refuses unregistered dynamic tools). Pure + synchronous — the
@@ -618,6 +832,10 @@ export function createConnectorTools(
      *  (web.ts先例: a hand-built caller may pass junk). Only consulted under a headless mode;
      *  manual callers pass undefined → PR2 behaviour byte-identical. */
     connectorGrants?: Record<string, ConnectorGrant>
+    /** Phase 5 — headless per-connector per-tool allowlist ({connectorId: [toolName, ...]}). */
+    connectorToolGrants?: Record<string, string[]>
+    /** Phase 5 — manual_chat session-scoped muted connector IDs. */
+    disabledConnectors?: readonly string[]
     /** PR3 — the headless run's agent id, forwarded (with the context mode) as the invoke
      *  `caller` so Python's SECOND gate can re-read that agent's grant_connectors. Not a gate on
      *  THIS side (registration above already filtered), but omitting it makes every headless
@@ -641,6 +859,13 @@ export function createConnectorTools(
   // headless mode with NO usable grants every entry below is skipped (grant 外根本不注册) — the
   // seam should never feed that shape, this is the belt behind it.
   const headlessGrants = headlessAgent ? parseConnectorGrants(opts.connectorGrants) : undefined
+  const headlessToolGrants = headlessAgent
+    ? parseConnectorToolGrants(opts.connectorToolGrants)
+    : undefined
+  const manualDisabledConnectors =
+    contextMode === 'manual_chat' && opts.disabledConnectors?.length
+      ? new Set(opts.disabledConnectors.filter((id) => typeof id === 'string' && id.length > 0))
+      : undefined
   // PR3 — grant-level local verdict for the headless 免卡 path (mirror of web.ts grantVerdict /
   // grant_web 'open'): there is no owner rule to match, the grant itself is the owner's opt-in.
   // Riding needsApproval's whitelist branch keeps the audit pipeline single-path:
@@ -684,6 +909,7 @@ export function createConnectorTools(
     // per-connector / per-tool precision the coarse connector_write matrix row depends on
     // (policy.ts) — the ToolSet a headless run assembles can only ever contain grant-covered
     // connector tools.
+    if (manualDisabledConnectors?.has(entry.connectorId)) continue
     if (headlessAgent) {
       // 0813 batch P — matter venue narrowing (matterVenueAdmitsEntry): read-only + per-tool
       // 'auto' only + never destructive. Sits BEFORE the ceiling filter on purpose: the venue's
@@ -692,6 +918,13 @@ export function createConnectorTools(
       const ceiling = headlessGrants?.[entry.connectorId]
       if (ceiling === undefined) continue
       if (CONNECTOR_CRUD_RANK[crud] > CONNECTOR_CRUD_RANK[ceiling]) {
+        continue
+      }
+      if (
+        headlessToolGrants &&
+        Object.prototype.hasOwnProperty.call(headlessToolGrants, entry.connectorId) &&
+        !headlessToolGrants[entry.connectorId].includes(entry.toolName)
+      ) {
         continue
       }
     }
@@ -735,36 +968,7 @@ export function createConnectorTools(
         : 'silent'
     const description = toolDescription(entry, write, approvalWording)
     const inputSchema = toolInputSchema(entry.inputSchemaJson)
-    const run = async (
-      input: Record<string, unknown>,
-      signal: AbortSignal | undefined,
-      userEdited?: boolean
-    ): Promise<unknown> => {
-      let r
-      try {
-        r = await domain.invokeConnectorTool(
-          entry.connectorId,
-          entry.toolName,
-          input,
-          signal,
-          caller
-        )
-      } catch (err) {
-        throw connectorInvokeError(err, entry.connectorName)
-      }
-      return {
-        connector: entry.connectorId,
-        tool: sanitizeProse(entry.toolName),
-        // Externally-authored content → UNTRUSTED_MCP_TOOL fence (attrs sanitized inside).
-        content: fenceUntrusted('MCP_TOOL', r.content, {
-          connector: entry.connectorId,
-          tool: entry.toolName
-        }),
-        is_error: r.is_error,
-        truncated: r.truncated,
-        ...(userEdited !== undefined ? { user_edited: userEdited } : {})
-      }
-    }
+    const run = buildConnectorToolExecution(domain, entry, caller)
 
     const tool: Tool =
       write || askTier
@@ -797,6 +1001,7 @@ export function createConnectorTools(
               // gated registration (isToolClassAllowedInMode('connector_write', mode,
               // {connectors})); absent on manual → pre-PR3 matrix, byte-identical.
               ...(headlessGrants ? { modeGrants: { connectors: headlessGrants } } : {}),
+              toModelOutput: connectorToolToModelOutput,
               run: (input, ctx) => run(input, ctx.signal, ctx.userEdited)
             },
             collector,
@@ -807,6 +1012,7 @@ export function createConnectorTools(
               name,
               description,
               inputSchema,
+              toModelOutput: connectorToolToModelOutput,
               run: (input, signal) => run(input, signal)
             },
             collector

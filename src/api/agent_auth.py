@@ -46,6 +46,8 @@ class Principal:
     key_id: Optional[str] = None
     label: Optional[str] = None
     scopes: Optional[frozenset[str]] = None
+    disabled_tools: frozenset[str] = frozenset()
+    write_rpm_limit: Optional[int] = None
 
     @property
     def is_agent(self) -> bool:
@@ -101,6 +103,8 @@ async def authenticate_principal(request: Request) -> Principal:
                 key_id=record.id,
                 label=record.label,
                 scopes=frozenset(record.scopes),
+                disabled_tools=frozenset(record.disabled_tools),
+                write_rpm_limit=record.write_rpm_limit,
             ),
         )
 

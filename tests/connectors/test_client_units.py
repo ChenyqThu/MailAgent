@@ -184,7 +184,7 @@ def test_call_tool_joins_text_blocks_and_passes_args():
     result = _FakeCallResult(content=[_FakeBlock("part1"), _FakeBlock("part2")])
     cc, fake = _client_with_fake_session(result)
     out = asyncio.run(cc.call_tool("search", {"q": "x"}))
-    assert out == {"content": "part1\npart2", "is_error": False, "truncated": False}
+    assert out == {"content": "part1\npart2", "images": [], "is_error": False, "truncated": False}
     assert fake.called_with == ("search", {"q": "x"})
 
 
@@ -321,7 +321,7 @@ class _RevokedRefreshStorage(_StubStorage):
         return self._client_info
 
 
-def _oauth_mock_transport(seen: list[str]):
+def _oauth_mock_transport(seen: list[str], *, resource_path: str = "/mcp"):
     """按 URL 分派的假上游：refresh 一律 400（被撤销），MCP 请求一律 401。"""
     import httpx2
 
@@ -332,7 +332,7 @@ def _oauth_mock_transport(seen: list[str]):
             return httpx2.Response(400, json={"error": "invalid_grant"})
         if "oauth-protected-resource" in path:
             return httpx2.Response(
-                200, json={"resource": f"{_AS}/mcp", "authorization_servers": [_AS]}
+                200, json={"resource": f"{_AS}{resource_path}", "authorization_servers": [_AS]}
             )
         if "oauth-authorization-server" in path or "openid-configuration" in path:
             return httpx2.Response(
@@ -352,7 +352,7 @@ def _oauth_mock_transport(seen: list[str]):
             headers={
                 "WWW-Authenticate": (
                     "Bearer resource_metadata="
-                    f'"{_AS}/.well-known/oauth-protected-resource/mcp"'
+                    f'"{_AS}/.well-known/oauth-protected-resource{resource_path}"'
                 )
             },
             json={"error": "unauthorized"},
@@ -403,3 +403,394 @@ def test_sole_leaf_unwraps_only_single_child_groups():
     # 嵌套单子 → 一路拆到叶子（anyio 嵌套 TaskGroup 的形态）。
     assert _sole_leaf(group("outer", [group("inner", [boom])])) is boom
     assert _sole_leaf(group("g", [boom, KeyError("k")])) is None
+
+
+# ── WS-1A：Legacy HTTP+SSE 传输 + ImageContent Pillow 归一化 ──────────────────
+
+
+def _encode_pil(image, fmt: str = "PNG", **save_kwargs) -> str:
+    import base64
+    import io
+
+    buf = io.BytesIO()
+    image.save(buf, format=fmt, **save_kwargs)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _png_b64(width: int = 16, height: int = 16, color=(12, 120, 220)) -> str:
+    from PIL import Image
+
+    return _encode_pil(Image.new("RGB", (width, height), color), fmt="PNG")
+
+
+class _FakeCamelImageBlock:
+    """Fake JS/dict-style image block with camelCase mimeType (without type attribute)."""
+
+    def __init__(self, data: str, mime_type: str = "image/jpeg"):
+        self.data = data
+        self.mimeType = mime_type
+
+
+def _sse_mock_transport(captured_headers: list[dict[str, str]], shot_b64: str):
+    import json
+
+    import httpx2
+
+    queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+    class _SseStream(httpx2.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"event: endpoint\ndata: /messages?session_id=sse-test-1\n\n"
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                yield chunk
+
+        async def aclose(self):
+            await queue.put(None)
+
+    def _handler(request: httpx2.Request) -> httpx2.Response:
+        captured_headers.append({k.lower(): v for k, v in request.headers.items()})
+        if request.method == "GET" and request.url.path == "/sse":
+            return httpx2.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=_SseStream(),
+            )
+        if request.method == "POST" and request.url.path == "/messages":
+            body = json.loads(request.content)
+            method = body.get("method")
+            req_id = body.get("id")
+            if method == "notifications/initialized":
+                return httpx2.Response(202, json={"status": "accepted"})
+            if method == "server/discover":
+                resp = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {"code": -32601, "message": "Method not found"},
+                }
+            elif method == "initialize":
+                resp = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "mock-sse", "version": "1.0.0"},
+                    },
+                }
+            elif method == "tools/list":
+                resp = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "tools": [
+                            {
+                                "name": "screenshot",
+                                "description": "Take a screenshot",
+                                "inputSchema": {"type": "object", "properties": {}},
+                                "annotations": {"readOnlyHint": True},
+                            }
+                        ]
+                    },
+                }
+            elif method == "tools/call":
+                resp = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "result": {
+                        "content": [
+                            {"type": "text", "text": "captured window"},
+                            {"type": "image", "data": shot_b64, "mimeType": "image/png"},
+                        ]
+                    },
+                }
+            else:
+                resp = {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {"code": -32601, "message": "unknown"},
+                }
+            queue.put_nowait(f"event: message\ndata: {json.dumps(resp)}\n\n".encode("utf-8"))
+            return httpx2.Response(202, json={"status": "accepted"})
+        return httpx2.Response(404)
+
+    return httpx2.MockTransport(_handler)
+
+
+def test_sse_transport_custom_headers_list_and_call_tool(fresh_agent_cfg):
+    fresh_agent_cfg.upsert_custom_connector(
+        "sse_demo",
+        display_name="SSE Demo",
+        transport="sse",
+        server_url="https://mcp.sse.test/sse",
+        custom_headers={"Authorization": "Bearer sse-secret-token"},
+    )
+    seen_headers: list[dict[str, str]] = []
+    shot_b64 = _png_b64(32, 24)
+    transport = _sse_mock_transport(seen_headers, shot_b64)
+    cc = ConnectorClient("sse_demo", interactive=False, timeout_seconds=5.0)
+
+    tools = asyncio.run(cc.list_tools_manifest(http_transport=transport))
+    assert len(tools) == 1
+    assert tools[0]["name"] == "screenshot"
+    assert tools[0]["crud_type"] == "read"
+
+    # Second session with a fresh stream transport for call_tool
+    seen_headers_call: list[dict[str, str]] = []
+    call_transport = _sse_mock_transport(seen_headers_call, shot_b64)
+    res = asyncio.run(cc.call_tool("screenshot", {"window": "main"}, http_transport=call_transport))
+    assert res["content"] == "captured window"
+    assert res["is_error"] is False
+    assert res["truncated"] is False
+    assert len(res["images"]) == 1
+    assert res["images"][0]["media_type"] == "image/png"
+
+    assert seen_headers and all(
+        h.get("authorization") == "Bearer sse-secret-token" for h in seen_headers
+    )
+    assert seen_headers_call and all(
+        h.get("authorization") == "Bearer sse-secret-token" for h in seen_headers_call
+    )
+
+
+def test_sse_transport_revoked_refresh_token_surfaces_not_connected(fresh_agent_cfg):
+    import httpx2
+
+    fresh_agent_cfg.upsert_connector(
+        "notion",
+        server_url=f"{_AS}/sse",
+        display_name="Notion SSE",
+        transport="sse",
+        source="custom_mcp",
+    )
+    seen: list[str] = []
+    cc = ConnectorClient(
+        "notion",
+        interactive=False,
+        timeout_seconds=5.0,
+        storage=_RevokedRefreshStorage(),
+    )
+
+    async def _run():
+        async with cc.session(http_transport=_oauth_mock_transport(seen, resource_path="/sse")):
+            pass  # pragma: no cover
+
+    with pytest.raises(ConnectorError) as ei:
+        asyncio.run(_run())
+    assert ei.value.code == "E_CONNECTOR_NOT_CONNECTED"
+    assert not isinstance(ei.value, httpx2.HTTPError)
+    assert any(s.endswith("/token") for s in seen), seen
+    assert any("oauth-protected-resource" in s for s in seen), seen
+
+
+def test_unsupported_transport_raises_protocol_error(fresh_agent_cfg):
+    from src.connectors.registry import ConnectorDef
+
+    defn = ConnectorDef(
+        connector_id="weird",
+        server_url="https://example.test/mcp",
+        display_name="Weird",
+        transport="grpc",
+        source="custom_mcp",
+        is_custom=True,
+    )
+    cc = ConnectorClient("weird", interactive=False, timeout_seconds=1.0, definition=defn)
+
+    async def _run():
+        async with cc.session():
+            pass  # pragma: no cover
+
+    with pytest.raises(ConnectorError) as ei:
+        asyncio.run(_run())
+    assert ei.value.code == "E_CONNECTOR_PROTOCOL"
+
+
+def test_call_tool_normalizes_image_content_camel_and_snake_case():
+    import base64
+    import io
+
+    from mcp.types import ImageContent
+    from PIL import Image
+
+    png_b64 = _png_b64(40, 20)
+    jpg_b64 = _encode_pil(Image.new("RGB", (30, 15), (200, 10, 10)), fmt="JPEG")
+    result = _FakeCallResult(
+        content=[
+            _FakeBlock("ok"),
+            ImageContent(type="image", data=png_b64, mime_type="image/png"),
+            _FakeCamelImageBlock(data=jpg_b64, mime_type="image/jpeg"),
+        ]
+    )
+    cc, _ = _client_with_fake_session(result)
+    out = asyncio.run(cc.call_tool("shot", {}))
+    assert out["content"] == "ok"
+    assert out["truncated"] is False
+    assert [img["media_type"] for img in out["images"]] == ["image/png", "image/jpeg"]
+    for img, expected_size in zip(out["images"], [(40, 20), (30, 15)]):
+        with Image.open(io.BytesIO(base64.b64decode(img["data"]))) as decoded:
+            assert decoded.size == expected_size
+
+
+def test_call_tool_transposes_exif_and_downscales_retina_image():
+    import base64
+    import io
+
+    from mcp.types import ImageContent
+    from PIL import Image
+
+    # 2560x1600 Retina PNG -> downscaled proportionally to 1280x800
+    retina_b64 = _png_b64(2560, 1600)
+    # 100x50 JPEG with EXIF Orientation=6 -> transposed to 50x100
+    exif_img = Image.new("RGB", (100, 50), (0, 255, 0))
+    exif = exif_img.getexif()
+    exif[274] = 6
+    exif_b64 = _encode_pil(exif_img, fmt="JPEG", exif=exif)
+
+    result = _FakeCallResult(
+        content=[
+            ImageContent(type="image", data=retina_b64, mime_type="image/png"),
+            ImageContent(type="image", data=exif_b64, mime_type="image/jpeg"),
+        ]
+    )
+    cc, _ = _client_with_fake_session(result)
+    out = asyncio.run(cc.call_tool("shot", {}))
+    assert len(out["images"]) == 2
+    with Image.open(io.BytesIO(base64.b64decode(out["images"][0]["data"]))) as im0:
+        assert im0.size == (1280, 800)
+    with Image.open(io.BytesIO(base64.b64decode(out["images"][1]["data"]))) as im1:
+        assert im1.size == (50, 100)
+
+
+def test_call_tool_animated_gif_extracts_first_frame():
+    import base64
+    import io
+
+    from mcp.types import ImageContent
+    from PIL import Image
+
+    f0 = Image.new("RGB", (20, 20), (255, 0, 0))
+    f1 = Image.new("RGB", (20, 20), (0, 255, 0))
+    buf = io.BytesIO()
+    f0.save(buf, format="GIF", save_all=True, append_images=[f1])
+    gif_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+    result = _FakeCallResult(
+        content=[ImageContent(type="image", data=gif_b64, mime_type="image/gif")]
+    )
+    cc, _ = _client_with_fake_session(result)
+    out = asyncio.run(cc.call_tool("shot", {}))
+    assert len(out["images"]) == 1
+    assert out["images"][0]["media_type"] == "image/png"
+    with Image.open(io.BytesIO(base64.b64decode(out["images"][0]["data"]))) as im:
+        assert not getattr(im, "is_animated", False)
+        assert im.convert("RGB").getpixel((0, 0)) == (255, 0, 0)
+
+
+def test_call_tool_compresses_oversized_rgba_png_to_jpeg_q85():
+    import base64
+    import io
+    import os
+
+    from mcp.types import ImageContent
+    from PIL import Image
+
+    # Deterministic noisy RGBA image (>512 KiB as PNG) triggers JPEG q=85 fallback + white bg flatten.
+    raw = os.urandom(1280 * 1280 * 4)
+    im = Image.frombytes("RGBA", (1280, 1280), raw)
+    png_b64 = _encode_pil(im, fmt="PNG")
+
+    result = _FakeCallResult(
+        content=[ImageContent(type="image", data=png_b64, mime_type="image/png")]
+    )
+    cc, _ = _client_with_fake_session(result)
+    out = asyncio.run(cc.call_tool("shot", {}))
+    assert len(out["images"]) == 1
+    assert out["images"][0]["media_type"] == "image/jpeg"
+    decoded_bytes = base64.b64decode(out["images"][0]["data"])
+    assert len(decoded_bytes) < 2 * 1024 * 1024
+    with Image.open(io.BytesIO(decoded_bytes)) as out_im:
+        assert out_im.format == "JPEG"
+        assert out_im.mode == "RGB"
+        assert out_im.size == (1280, 1280)
+
+
+def test_call_tool_enforces_max_4_images_cap():
+    from mcp.types import ImageContent
+
+    blocks = [
+        ImageContent(type="image", data=_png_b64(16, 16, (i * 30, 0, 0)), mime_type="image/png")
+        for i in range(6)
+    ]
+    cc, _ = _client_with_fake_session(_FakeCallResult(content=[_FakeBlock("shots"), *blocks]))
+    out = asyncio.run(cc.call_tool("shot", {}))
+    assert len(out["images"]) == 4
+    assert out["truncated"] is True
+    assert "[omitted 2 extra images: payload cap reached]" in out["content"]
+    assert out["content"].startswith("shots\n")
+
+
+def test_call_tool_enforces_2mb_total_payload_cap():
+    import base64
+    import os
+
+    from mcp.types import ImageContent
+    from PIL import Image
+
+    # Each noisy 1280x1280 JPEG q=85 is ~1.2 MB -> 1st fits, 2nd exceeds 2 MiB -> stops appending.
+    noisy = []
+    for _ in range(3):
+        im = Image.frombytes("RGB", (1280, 1280), os.urandom(1280 * 1280 * 3))
+        noisy.append(ImageContent(type="image", data=_encode_pil(im, fmt="JPEG", quality=85), mime_type="image/jpeg"))
+
+    cc, _ = _client_with_fake_session(_FakeCallResult(content=noisy))
+    out = asyncio.run(cc.call_tool("shot", {}))
+    assert len(out["images"]) == 1
+    assert out["truncated"] is True
+    assert "[omitted 2 extra images: payload cap reached]" in out["content"]
+    total_bytes = sum(len(base64.b64decode(img["data"])) for img in out["images"])
+    assert total_bytes <= 2 * 1024 * 1024
+
+
+def test_call_tool_corrupt_and_svg_images_degrade_gracefully():
+    import base64
+
+    from mcp.types import ImageContent
+
+    svg_b64 = base64.b64encode(b'<svg xmlns="http://www.w3.org/2000/svg"></svg>').decode("ascii")
+    corrupt_b64 = base64.b64encode(b"\x89PNG\r\n\x1a\ncorrupt").decode("ascii")
+    result = _FakeCallResult(
+        content=[
+            _FakeBlock("ok"),
+            ImageContent(type="image", data="not-base64!!!", mime_type="image/png"),
+            ImageContent(type="image", data=svg_b64, mime_type="image/svg+xml"),
+            ImageContent(type="image", data=corrupt_b64, mime_type="image/png"),
+            ImageContent(type="image", data=_png_b64(10, 10), mime_type="image/png"),
+        ]
+    )
+    cc, _ = _client_with_fake_session(result)
+    out = asyncio.run(cc.call_tool("shot", {}))
+    assert out["truncated"] is False
+    assert len(out["images"]) == 1
+    assert out["content"].count("[invalid image omitted]") == 3
+    assert out["content"].startswith("ok\n")
+
+
+def test_call_tool_image_cap_note_respects_max_chars_cap():
+    from mcp.types import ImageContent
+    from src.connectors.client import CALL_RESULT_MAX_CHARS
+
+    blocks = [
+        ImageContent(type="image", data=_png_b64(12, 12), mime_type="image/png")
+        for _ in range(5)
+    ]
+    result = _FakeCallResult(
+        content=[_FakeBlock("a" * (CALL_RESULT_MAX_CHARS + 50)), *blocks]
+    )
+    cc, _ = _client_with_fake_session(result)
+    out = asyncio.run(cc.call_tool("shot", {}))
+    assert out["truncated"] is True
+    assert len(out["images"]) == 4
+    assert len(out["content"]) <= CALL_RESULT_MAX_CHARS
+    assert out["content"].endswith("[omitted 1 extra images: payload cap reached]")

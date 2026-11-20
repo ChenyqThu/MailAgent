@@ -98,7 +98,7 @@ function connector(
     credential: partial.credential ?? null,
     flow: partial.flow ?? null,
     server_url: partial.server_url ?? 'https://mcp.notion.test/mcp',
-    transport: partial.transport ?? 'http',
+    transport: partial.transport ?? 'streamable_http',
     // 默认造的是直连轨的行（默认 server_url 打的是官方 MCP 端点）：source='custom_mcp'
     // 渲染成「直连」，且与目录 track='direct' 相符 → 不是「已被取代」。
     source: partial.source ?? 'custom_mcp',

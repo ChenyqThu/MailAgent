@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Collection, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from loguru import logger
 
@@ -148,6 +148,7 @@ def build_connector_llm_tools(
     *,
     caller: str = "llm",
     only_auto_tools: bool = False,
+    connector_tool_allowlist: Optional[Mapping[str, Collection[str]]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, ToolHandler]]:
     """``[(connector_id, 天花板)]`` → ``(tool schemas, handlers)``（不含终止工具）。
 
@@ -189,15 +190,24 @@ def build_connector_llm_tools(
         except Exception as exc:  # noqa: BLE001 — 单个 connector 读失败只跳过它
             logger.warning(f"[connector-llm] {connector_id} manifest read failed: {exc}")
             continue
+        allow_for_cid = (
+            frozenset(connector_tool_allowlist[connector_id])
+            if connector_tool_allowlist is not None and connector_id in connector_tool_allowlist
+            else None
+        )
         for t in tool_rows:
             if t.orphan:
                 continue
-            effective_mode = connector_tool_effective_mode(t.mode)
+            effective_mode = connector_tool_effective_mode(
+                t.mode, crud_type=t.crud_type, destructive=t.destructive
+            )
             if effective_mode == "off":
                 continue
             if only_auto_tools and effective_mode != "auto":
                 continue
             if not ceiling_allows(t.crud_type, ceiling):
+                continue
+            if allow_for_cid is not None and t.tool_name not in allow_for_cid:
                 continue
             name = llm_tool_name(connector_id, t.tool_name)
             if name is None:
@@ -219,7 +229,11 @@ def build_connector_llm_tools(
                 }
             )
             handlers[name] = _make_handler(
-                connector_id, t.tool_name, ceiling, deny_ask_mode=only_auto_tools
+                connector_id,
+                t.tool_name,
+                ceiling,
+                deny_ask_mode=only_auto_tools,
+                allowed_tools=allow_for_cid,
             )
     if schemas:
         logger.info(
@@ -250,16 +264,21 @@ def _make_handler(
     ceiling: Optional[str],
     *,
     deny_ask_mode: bool = False,
+    allowed_tools: Optional[frozenset[str]] = None,
 ) -> ToolHandler:
-    """一个远端工具的 handler（闭包钉死 connector / tool / 天花板 / ask 拒否 —— 模型只能
+    """一个远端工具的 handler（闭包钉死 connector / tool / 天花板 / ask 拒否 / allowlist —— 模型只能
     传参数）。"""
 
     async def _call(inp: Dict[str, Any]) -> str:
         args = inp if isinstance(inp, dict) else {}
         try:
-            result = await invoke_connector_tool(
-                connector_id, tool_name, args, ceiling=ceiling, deny_ask_mode=deny_ask_mode
-            )
+            kwargs: Dict[str, Any] = {
+                "ceiling": ceiling,
+                "deny_ask_mode": deny_ask_mode,
+            }
+            if allowed_tools is not None:
+                kwargs["allowed_tools"] = allowed_tools
+            result = await invoke_connector_tool(connector_id, tool_name, args, **kwargs)
         except ConnectorInvokeDenied as e:
             # 闸拒是**可行动**信息（模型可改用别的工具 / 告诉用户去设置里开）。
             return f"error: {e.code}: {e}"

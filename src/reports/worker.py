@@ -19,13 +19,14 @@ from loguru import logger
 from src.agents import schedule_rule
 from src.agents.run_log import record_agent_run
 from src.config import config
+from src.llm_agent.model_cost import estimate_cost_usd
 from src.notify.center import NotifyCenter
 from src.reports import data as rdata
 from src.reports.assembler import assemble_fallback_doc, assemble_report_doc
 from src.reports.agent_tools import kos_is_available
 from src.reports.matter_data import fetch_matter_briefs
 from src.reports.store import ReportStore, cadence_of, schedule_of
-from src.reports.wire import connector_grants_of
+from src.reports.wire import connector_grants_of, connector_tool_allowlist_of
 from src.reports.summarizer import (
     ReportDraft,
     summarize_aggregate,
@@ -396,27 +397,47 @@ async def run_report_once(
         # 事项取数放在 empty 早退之后：没邮件的那天报告整份都不生成，事项也无处可放。
         matter_briefs = _safe_matter_briefs(db_path, win_start_dt, win_end_dt, rid)
         try:
-            draft = await agentic_fn(
-                briefs=briefs, counts=counts, db_path=db_path,
-                matter_briefs=matter_briefs,
-                kos_enabled=kos_is_available(), cadence=cadence, now=n,
-                persona_prompt=agent.get("prompt"), model=agent.get("model"),
-                context_docs=_parse_context_docs(agent.get("context_docs_json")),
+            allowlist = connector_tool_allowlist_of(agent)
+            agentic_kwargs: Dict[str, Any] = {
+                "briefs": briefs,
+                "counts": counts,
+                "db_path": db_path,
+                "matter_briefs": matter_briefs,
+                "kos_enabled": kos_is_available(),
+                "cadence": cadence,
+                "now": n,
+                "persona_prompt": agent.get("prompt"),
+                "model": agent.get("model"),
+                "context_docs": _parse_context_docs(agent.get("context_docs_json")),
                 # MCP connector PR3：报告 Agent 的 per-connector 天花板（行的
                 # tool_policy.grant_connectors；未配 → () → 不挂任何 connector 工具）。
-                connector_grants=connector_grants_of(agent),
-                client=client,
-            )
+                "connector_grants": connector_grants_of(agent),
+                "client": client,
+            }
+            if allowlist:
+                agentic_kwargs["connector_tool_allowlist"] = allowlist
+            draft = await agentic_fn(**agentic_kwargs)
             doc = assemble_report_doc(
                 draft=draft, briefs=briefs, counts=counts, agent_id=agent["id"],
                 cadence=cadence, report_date=report_date, window_start=win_start,
                 window_end=win_end, generated_at=n.isoformat(), model=draft.model, now=n,
                 matter_briefs=matter_briefs,
             )
+            cost_usd = (
+                estimate_cost_usd(
+                    draft.model,
+                    input_tokens=draft.input_tokens,
+                    output_tokens=draft.output_tokens,
+                    cache_read_tokens=getattr(draft, "cache_read_input_tokens", 0),
+                    cache_write_tokens=getattr(draft, "cache_creation_input_tokens", 0),
+                )
+                or 0.0
+            )
             store.finish_report(
                 rid, status="ready", blocks_json=doc.to_json(), counts_json=counts_json,
                 headline=doc.derive_headline(), model=draft.model,
                 input_tokens=draft.input_tokens, output_tokens=draft.output_tokens,
+                cost_usd=cost_usd,
             )
             _notify_report_terminal(
                 db_path, rid=rid, cadence=cadence, status="ready",
@@ -919,10 +940,21 @@ async def _run_aggregate(
             window_end=end_date, generated_at=gen_now.isoformat(), model=model_used, now=gen_now,
             matter_briefs=matter_briefs,
         )
+        agg_cost_usd = (
+            estimate_cost_usd(
+                model_used,
+                input_tokens=draft.input_tokens,
+                output_tokens=draft.output_tokens,
+                cache_read_tokens=getattr(draft, "cache_read_input_tokens", 0),
+                cache_write_tokens=getattr(draft, "cache_creation_input_tokens", 0),
+            )
+            or 0.0
+        )
         store.finish_report(
             rid, status="ready", blocks_json=doc.to_json(), counts_json=counts_json,
             headline=doc.derive_headline(), model=model_used,
             input_tokens=draft.input_tokens, output_tokens=draft.output_tokens,
+            cost_usd=agg_cost_usd,
             error=("" if model_used else "aggregate_fallback"),
         )
         _notify_report_terminal(

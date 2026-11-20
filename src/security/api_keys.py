@@ -133,6 +133,17 @@ EXTRA_WRITE_SCOPES: tuple[str, ...] = (
     "email:write",
 )
 
+# 触发型执行能力（非单纯 read，用于设置页细粒度勾选项分类）。
+TRIGGER_RUN_SCOPES: tuple[str, ...] = (
+    "report:run",
+    "agents:run",
+    "notion_agent:invoke",
+)
+
+ALL_WRITE_AND_RUN_SCOPES: tuple[str, ...] = EXTRA_WRITE_SCOPES + TRIGGER_RUN_SCOPES
+
+_UNSET = object()
+
 
 def compose_scopes(base: str, extra: Iterable[str]) -> tuple[str, ...]:
     """基础档 + 额外写权限 → scope 集合。base 不在两档里 / extra 有白名单外的值或重复 → ValueError。"""
@@ -176,15 +187,17 @@ def preset_for_scopes(scopes: Iterable[str]) -> Optional[str]:
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS agent_api_keys (
-    id          TEXT PRIMARY KEY,
-    label       TEXT NOT NULL,
-    key_prefix  TEXT NOT NULL,
-    key_hash    TEXT NOT NULL UNIQUE,
-    scopes_json TEXT NOT NULL,
-    created_at  INTEGER NOT NULL,
-    last_used_at INTEGER,
-    expires_at  INTEGER,
-    revoked_at  INTEGER
+    id                  TEXT PRIMARY KEY,
+    label               TEXT NOT NULL,
+    key_prefix          TEXT NOT NULL,
+    key_hash            TEXT NOT NULL UNIQUE,
+    scopes_json         TEXT NOT NULL,
+    created_at          INTEGER NOT NULL,
+    last_used_at        INTEGER,
+    expires_at          INTEGER,
+    revoked_at          INTEGER,
+    disabled_tools_json TEXT NOT NULL DEFAULT '[]',
+    write_rpm_limit     INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS agent_api_key_audit (
@@ -224,6 +237,22 @@ def validate_scopes(scopes: Iterable[str]) -> tuple[str, ...]:
     return tuple(cleaned)
 
 
+def normalize_disabled_tools(tools: Iterable[str]) -> tuple[str, ...]:
+    """规范化 per-key 禁用工具名（剥离可选 ``mailagent_`` 前缀，去重排序）。"""
+    out: set[str] = set()
+    for raw in tools:
+        if not isinstance(raw, str):
+            raise ValueError("disabled_tools entries must be strings")
+        name = raw.strip()
+        if not name:
+            continue
+        if name.startswith("mailagent_"):
+            name = name[len("mailagent_") :]
+        if name:
+            out.add(name)
+    return tuple(sorted(out))
+
+
 @dataclass(frozen=True)
 class ApiKeyRecord:
     """agent_api_keys 行投影（**不含** key_hash —— 永不出库）。"""
@@ -236,6 +265,8 @@ class ApiKeyRecord:
     last_used_at: Optional[int]
     expires_at: Optional[int]
     revoked_at: Optional[int]
+    disabled_tools: tuple[str, ...] = ()
+    write_rpm_limit: Optional[int] = None
 
     @property
     def is_active(self) -> bool:
@@ -251,6 +282,19 @@ def _row_to_record(row: sqlite3.Row) -> ApiKeyRecord:
         scopes = tuple(json.loads(row["scopes_json"]) or [])
     except (json.JSONDecodeError, TypeError):
         scopes = ()
+    disabled_tools: tuple[str, ...] = ()
+    row_keys = row.keys()
+    if "disabled_tools_json" in row_keys and row["disabled_tools_json"]:
+        try:
+            raw_dt = json.loads(row["disabled_tools_json"])
+            if isinstance(raw_dt, list):
+                disabled_tools = normalize_disabled_tools(
+                    [t for t in raw_dt if isinstance(t, str)]
+                )
+        except (json.JSONDecodeError, TypeError, ValueError):
+            disabled_tools = ()
+    raw_rpm = row["write_rpm_limit"] if "write_rpm_limit" in row_keys else None
+    write_rpm_limit = int(raw_rpm) if isinstance(raw_rpm, int) and raw_rpm > 0 else None
     return ApiKeyRecord(
         id=row["id"],
         label=row["label"],
@@ -260,6 +304,8 @@ def _row_to_record(row: sqlite3.Row) -> ApiKeyRecord:
         last_used_at=row["last_used_at"],
         expires_at=row["expires_at"],
         revoked_at=row["revoked_at"],
+        disabled_tools=disabled_tools,
+        write_rpm_limit=write_rpm_limit,
     )
 
 
@@ -289,6 +335,18 @@ class ApiKeyStore:
     def _ensure_schema(self) -> None:
         with self._connection() as conn:
             conn.executescript(_DDL)
+            cols = {
+                r["name"]
+                for r in conn.execute("PRAGMA table_info(agent_api_keys)").fetchall()
+            }
+            if cols and "disabled_tools_json" not in cols:
+                conn.execute(
+                    "ALTER TABLE agent_api_keys ADD COLUMN disabled_tools_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            if cols and "write_rpm_limit" not in cols:
+                conn.execute(
+                    "ALTER TABLE agent_api_keys ADD COLUMN write_rpm_limit INTEGER"
+                )
             conn.commit()
 
     # -- create / verify ---------------------------------------------------
@@ -298,6 +356,8 @@ class ApiKeyStore:
         *,
         scopes: Optional[Iterable[str]] = None,
         expires_at: Optional[int] = None,
+        disabled_tools: Optional[Iterable[str]] = None,
+        write_rpm_limit: Optional[int] = None,
     ) -> tuple[ApiKeyRecord, str]:
         """新建一个 scoped key。返回 (record, plaintext)。明文仅此一次可见。
 
@@ -309,6 +369,17 @@ class ApiKeyStore:
         resolved_scopes = validate_scopes(
             scopes if scopes is not None else READ_ONLY_SCOPES
         )
+        resolved_disabled = (
+            normalize_disabled_tools(disabled_tools)
+            if disabled_tools is not None
+            else ()
+        )
+        if write_rpm_limit is not None and (
+            isinstance(write_rpm_limit, bool)
+            or not isinstance(write_rpm_limit, int)
+            or write_rpm_limit <= 0
+        ):
+            raise ValueError("write_rpm_limit must be a positive integer or None")
         plaintext = KEY_PREFIX + secrets.token_urlsafe(32)
         key_id = uuid.uuid4().hex
         key_prefix = plaintext[: len(KEY_PREFIX) + 8]  # mak_ + 8 chars（非密，仅展示）
@@ -317,8 +388,8 @@ class ApiKeyStore:
             conn.execute(
                 "INSERT INTO agent_api_keys "
                 "(id, label, key_prefix, key_hash, scopes_json, created_at, "
-                " last_used_at, expires_at, revoked_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
+                " last_used_at, expires_at, revoked_at, disabled_tools_json, write_rpm_limit) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     key_id,
                     label,
@@ -329,6 +400,8 @@ class ApiKeyStore:
                     None,
                     expires_at,
                     None,
+                    json.dumps(list(resolved_disabled), ensure_ascii=False),
+                    write_rpm_limit,
                 ),
             )
             conn.commit()
@@ -341,6 +414,8 @@ class ApiKeyStore:
             last_used_at=None,
             expires_at=expires_at,
             revoked_at=None,
+            disabled_tools=resolved_disabled,
+            write_rpm_limit=write_rpm_limit,
         )
         return record, plaintext
 
@@ -409,6 +484,64 @@ class ApiKeyStore:
                 return None
         return plaintext
 
+    def update_key_policy(
+        self,
+        key_id: str,
+        *,
+        scopes: Optional[Iterable[str]] = None,
+        disabled_tools: Optional[Iterable[str]] = None,
+        write_rpm_limit: Any = _UNSET,
+        expires_at: Any = _UNSET,
+        route: Optional[str] = None,
+    ) -> Optional[ApiKeyRecord]:
+        """更新未撤销 key 的权限 / 工具禁用名单 / 写限流 / 过期时间（明文不变）。"""
+        sets: list[str] = []
+        params: list[Any] = []
+        resolved_scopes: Optional[tuple[str, ...]] = None
+        if scopes is not None:
+            resolved_scopes = validate_scopes(scopes)
+            sets.append("scopes_json = ?")
+            params.append(json.dumps(list(resolved_scopes), ensure_ascii=False))
+        if disabled_tools is not None:
+            resolved_disabled = normalize_disabled_tools(disabled_tools)
+            sets.append("disabled_tools_json = ?")
+            params.append(json.dumps(list(resolved_disabled), ensure_ascii=False))
+        if write_rpm_limit is not _UNSET:
+            if write_rpm_limit is not None and (
+                isinstance(write_rpm_limit, bool)
+                or not isinstance(write_rpm_limit, int)
+                or write_rpm_limit <= 0
+            ):
+                raise ValueError("write_rpm_limit must be a positive integer or None")
+            sets.append("write_rpm_limit = ?")
+            params.append(write_rpm_limit)
+        if expires_at is not _UNSET:
+            if expires_at is not None and (
+                isinstance(expires_at, bool) or not isinstance(expires_at, int)
+            ):
+                raise ValueError("expires_at must be an integer epoch timestamp or None")
+            sets.append("expires_at = ?")
+            params.append(expires_at)
+        if not sets:
+            rec = self.get_key(key_id)
+            return rec if rec is not None and rec.revoked_at is None else None
+        params.append(key_id)
+        with self._connection() as conn:
+            cur = conn.execute(
+                f"UPDATE agent_api_keys SET {', '.join(sets)} WHERE id = ? AND revoked_at IS NULL",
+                params,
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                return None
+        self.write_audit(
+            route=route or f"/api/mcp-service/keys/{key_id}",
+            status="ok",
+            key_id=key_id,
+            scopes=resolved_scopes,
+        )
+        return self.get_key(key_id)
+
     def update_scopes(
         self, key_id: str, scopes: Iterable[str], *, route: Optional[str] = None
     ) -> Optional[ApiKeyRecord]:
@@ -416,22 +549,11 @@ class ApiKeyStore:
 
         key 不存在或已撤销 → None。非法 scope → ValueError。
         """
-        resolved = validate_scopes(scopes)
-        with self._connection() as conn:
-            cur = conn.execute(
-                "UPDATE agent_api_keys SET scopes_json = ? WHERE id = ? AND revoked_at IS NULL",
-                (json.dumps(list(resolved), ensure_ascii=False), key_id),
-            )
-            conn.commit()
-            if cur.rowcount == 0:
-                return None
-        self.write_audit(
+        return self.update_key_policy(
+            key_id,
+            scopes=scopes,
             route=route or f"/api/mcp-service/keys/{key_id}/scopes",
-            status="ok",
-            key_id=key_id,
-            scopes=resolved,
         )
-        return self.get_key(key_id)
 
     # -- usage + audit -----------------------------------------------------
     def record_use(self, key_id: str) -> None:

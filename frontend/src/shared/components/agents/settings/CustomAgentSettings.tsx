@@ -58,6 +58,7 @@ import {
   leadParts,
   type CalendarLeadUnit,
   type ConnectorGrantMap,
+  type ConnectorToolGrantMap,
   type SessionsGrant,
   type WebGrant
 } from '../custom-agent/shared'
@@ -228,6 +229,9 @@ export function CustomAgentSettings({
   const [sessionsDirty, setSessionsDirty] = useState(false)
   const [grantConnectors, setGrantConnectors] = useState<ConnectorGrantMap>(
     !create && cfg ? { ...(cfg.tool_policy?.grant_connectors ?? {}) } : {}
+  )
+  const [grantConnectorTools, setGrantConnectorTools] = useState<ConnectorToolGrantMap>(
+    !create && cfg ? { ...(cfg.tool_policy?.grant_connector_tools ?? {}) } : {}
   )
   const [connectorsDirty, setConnectorsDirty] = useState(false)
   const explicitSkills = !create && Array.isArray(cfg?.tool_policy?.skills)
@@ -454,7 +458,13 @@ export function CustomAgentSettings({
     if (grantExec) toolPolicy.grant_exec = true
     if (grantWeb !== 'off') toolPolicy.grant_web = grantWeb
     toolPolicy.grant_sessions = grantSessions
-    if (Object.keys(grantConnectors).length > 0) toolPolicy.grant_connectors = grantConnectors
+    if (Object.keys(grantConnectors).length > 0) {
+      toolPolicy.grant_connectors = grantConnectors
+      const prunedTools = Object.fromEntries(
+        Object.entries(grantConnectorTools).filter(([cid]) => grantConnectors[cid] !== undefined)
+      )
+      if (Object.keys(prunedTools).length > 0) toolPolicy.grant_connector_tools = prunedTools
+    }
     if (create) {
       const id = createdId ?? slugifyTitle(title)
       const ensureCreated: Promise<unknown> =
@@ -513,6 +523,10 @@ export function CustomAgentSettings({
       if (skillsDirty || skillsMode === 'explicit') tp.skills = mountedSkills
       if (Object.keys(grantConnectors).length > 0) {
         tp.grant_connectors = grantConnectors
+        const prunedTools = Object.fromEntries(
+          Object.entries(grantConnectorTools).filter(([cid]) => grantConnectors[cid] !== undefined)
+        )
+        if (Object.keys(prunedTools).length > 0) tp.grant_connector_tools = prunedTools
       } else if (
         cfg.tool_policy?.grant_connectors &&
         Object.keys(cfg.tool_policy.grant_connectors).length > 0
@@ -1045,6 +1059,11 @@ export function CustomAgentSettings({
               grantConnectors={grantConnectors}
               onGrantConnectorsChange={(next) => {
                 setGrantConnectors(next)
+                setConnectorsDirty(true)
+              }}
+              grantConnectorTools={grantConnectorTools}
+              onGrantConnectorToolsChange={(next) => {
+                setGrantConnectorTools(next)
                 setConnectorsDirty(true)
               }}
             />

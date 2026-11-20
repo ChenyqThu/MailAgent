@@ -143,7 +143,7 @@ class Budget:
 _TOOL_POLICY_KEYS = frozenset(
     {
         "v", "allowed_tools", "grant_exec", "grant_web", "skills", "grant_connectors",
-        "grant_sessions",
+        "grant_connector_tools", "grant_sessions",
     }
 )
 
@@ -193,6 +193,7 @@ class ToolPolicy:
     grant_web: str = "off"
     skills: Optional[Tuple[str, ...]] = None
     grant_connectors: Tuple[Tuple[str, str], ...] = ()
+    grant_connector_tools: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
     grant_sessions: str = "own"
 
 
@@ -708,12 +709,34 @@ def parse_tool_policy(raw: Union[str, dict, None]) -> ToolPolicy:
         raise ToolPolicyValidationError(
             "grant_connectors must be a JSON object of {connector: read|write|update}"
         )
+    tool_grants_raw = data.get("grant_connector_tools")
+    if tool_grants_raw is None:
+        connector_tools: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
+    elif isinstance(tool_grants_raw, dict):
+        tpairs = []
+        for cid, tlist in tool_grants_raw.items():
+            if not isinstance(cid, str) or not cid.strip():
+                raise ToolPolicyValidationError(
+                    "grant_connector_tools keys must be non-empty connector ids"
+                )
+            if not isinstance(tlist, list) or not all(isinstance(t, str) for t in tlist):
+                raise ToolPolicyValidationError(
+                    f"grant_connector_tools[{cid!r}] must be a list of tool names"
+                )
+            cleaned_tools = tuple(sorted({t.strip() for t in tlist if t.strip()}))
+            tpairs.append((cid, cleaned_tools))
+        connector_tools = tuple(sorted(tpairs))
+    else:
+        raise ToolPolicyValidationError(
+            "grant_connector_tools must be a JSON object of {connector: [tool_name, ...]}"
+        )
     return ToolPolicy(
         allowed_tools=allowed,
         grant_exec=grant is True,
         grant_web=grant_web,
         skills=skills,
         grant_connectors=connectors,
+        grant_connector_tools=connector_tools,
         grant_sessions=grant_sessions,
     )
 

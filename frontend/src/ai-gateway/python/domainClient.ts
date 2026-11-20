@@ -504,6 +504,7 @@ export interface DomainConnectorInvokeResult {
   connector_id: string
   tool_name: string
   content: string
+  images?: Array<{ media_type: string; data: string }>
   is_error: boolean
   truncated: boolean
   elapsed_ms: number
@@ -565,6 +566,7 @@ export interface DomainPolicyVerdict {
     | 'auto_delegation_readonly'
     | 'auto_judge_scope'
     | 'auto_user_requested_verified'
+    | 'auto_scope_grant'
 }
 
 /** L4 群聊 g2 — POST /chat/sessions/new data block of a GROUP session (the subset group_create
@@ -1857,13 +1859,22 @@ export class MailAgentDomainClient {
     toolName: string,
     args: Record<string, unknown> | undefined,
     signal?: AbortSignal,
-    caller?: { contextMode: string; agentId?: string }
+    caller?: {
+      contextMode: string
+      agentId?: string
+      jobId?: number
+      dispatchId?: number
+      childTool?: string
+    }
   ): Promise<DomainConnectorInvokeResult> {
     const body: Record<string, unknown> = { arguments: args ?? {} }
     if (caller) {
       body.caller = {
         context_mode: caller.contextMode,
-        ...(caller.agentId !== undefined ? { agent_id: caller.agentId } : {})
+        ...(caller.agentId !== undefined ? { agent_id: caller.agentId } : {}),
+        ...(caller.jobId !== undefined ? { job_id: caller.jobId } : {}),
+        ...(caller.dispatchId !== undefined ? { dispatch_id: caller.dispatchId } : {}),
+        ...(caller.childTool !== undefined ? { child_tool: caller.childTool } : {})
       }
     }
     return this._req<DomainConnectorInvokeResult>(

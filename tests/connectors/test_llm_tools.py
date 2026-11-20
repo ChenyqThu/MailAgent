@@ -105,12 +105,17 @@ def test_off_tier_tool_not_registered(store):
 
 
 def test_ask_tier_registers_for_headless_but_not_for_only_auto_callers(store):
-    """08-05 三档语义：headless 报告/agent 面（grant 是授权本体）ask/auto 无差别都注册；
-    预处理场地（only_auto_tools=True）ask ≙ 不注册 —— 无人可点头，唯一不撒谎的实现。"""
+    """三档语义：headless 报告/agent 面（grant 是授权本体）ask/auto 无差别都注册；
+    预处理场地（only_auto_tools=True）ask ≙ 不注册 —— Phase 5 默认 write/update/destructive
+    为 ask，因此未显式设为 auto 的写/更新工具在 only_auto_tools 下同样被排除。"""
     store.set_connector_tool_mode(CID, "create_page", "ask")
     # 默认（报告/headless）：ask 照常注册。
     assert "mcp__notion__create_page" in _names([(CID, "update")])
-    # 预处理场地：仅 auto 档注册（search 是 NULL→auto，create_page 的 ask 被排除）。
+    # 预处理场地：仅 auto 档注册（search 为 read NULL→auto；create_page/update_page 为 ask 被排除）。
+    schemas, handlers = lt.build_connector_llm_tools([(CID, None)], only_auto_tools=True)
+    assert sorted(handlers) == ["mcp__notion__search"]
+    # 显式将 update_page 设为 auto 后，预处理场地即可注册。
+    store.set_connector_tool_mode(CID, "update_page", "auto")
     schemas, handlers = lt.build_connector_llm_tools([(CID, None)], only_auto_tools=True)
     assert sorted(handlers) == ["mcp__notion__search", "mcp__notion__update_page"]
     # off 在两个场地都不注册。

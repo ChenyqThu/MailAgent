@@ -27,7 +27,7 @@ from __future__ import annotations
 import threading
 import time
 from collections import defaultdict, deque
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from src.skills.errors import SkillError
 
@@ -116,6 +116,65 @@ def _prune(bucket: tuple[str, str, str], stamp: float, window: float) -> "deque[
     while hits and hits[0] <= cutoff:
         hits.popleft()
     return hits
+
+
+_WRITE_RPM_WINDOW_SECONDS = 60.0
+_WRITE_RPM_BUCKET_KEY = ("__mcp_write_rpm__", "*")
+
+
+def _is_write_or_run_tool(auth_scopes: Iterable[str]) -> bool:
+    return any(isinstance(s, str) and not s.endswith(":read") for s in auth_scopes)
+
+
+def check_write_rpm(
+    principal: Any,
+    auth_scopes: Iterable[str],
+    *,
+    now: Optional[float] = None,
+) -> None:
+    """per-key 全局写/执行类工具每分钟速率限制（仅对非 pure-read 工具生效）。"""
+    limit = getattr(principal, "write_rpm_limit", None)
+    if (
+        limit is None
+        or isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or limit <= 0
+        or not _is_write_or_run_tool(auth_scopes)
+    ):
+        return
+    stamp = time.monotonic() if now is None else now
+    bucket = (principal_key(principal), *_WRITE_RPM_BUCKET_KEY)
+    with _LOCK:
+        hits = _prune(bucket, stamp, _WRITE_RPM_WINDOW_SECONDS)
+        if len(hits) >= limit:
+            retry_after = max(1, int(hits[0] + _WRITE_RPM_WINDOW_SECONDS - stamp) + 1)
+            raise SkillError(
+                "E_RATE_LIMITED",
+                f"API key write rate limit exceeded ({limit} writes / 60s)",
+                http_status=429,
+                hint=f"retry in ~{retry_after}s",
+            )
+
+
+def record_write_rpm(
+    principal: Any,
+    auth_scopes: Iterable[str],
+    *,
+    now: Optional[float] = None,
+) -> None:
+    limit = getattr(principal, "write_rpm_limit", None)
+    if (
+        limit is None
+        or isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or limit <= 0
+        or not _is_write_or_run_tool(auth_scopes)
+    ):
+        return
+    stamp = time.monotonic() if now is None else now
+    bucket = (principal_key(principal), *_WRITE_RPM_BUCKET_KEY)
+    with _LOCK:
+        _prune(bucket, stamp, _WRITE_RPM_WINDOW_SECONDS).append(stamp)
 
 
 def reset() -> None:

@@ -384,6 +384,9 @@ export interface CustomAgentToolPolicy {
    *  缺失/{} = 该 agent 未授权任何 connector（headless 侧整族不注册）。`'delete'` 不在值域内，
    *  服务端 parse_tool_policy 校验拒绝（400）——不是读侧宽容。 */
   grant_connectors?: Record<string, 'read' | 'write' | 'update'>
+  /** Phase 5 — per-connector per-tool 细粒度白名单（{connector_id: [tool_name, ...]}）。
+   *  缺失该 connector_id = 不做工具级二次收窄（沿用 crud 天花板）；存在 = 仅允许清单内工具。 */
+  grant_connector_tools?: Record<string, string[]>
 }
 
 /** Custom Agent 预算两门（null/缺失 = 全默认；旧 max_steps 由后端忽略）。 */

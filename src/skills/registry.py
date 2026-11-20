@@ -221,10 +221,15 @@ def build_manifest(principal: Any = None, *, generated_at: Optional[str] = None)
             and not skill.external_exposed
         ):
             continue
+        disabled_tools: frozenset[str] = (
+            getattr(principal, "disabled_tools", None) or frozenset()
+        )
         visible = [
             t.definition
             for t in skill.tools
             if _principal_allows(principal, t.definition.auth_scopes)
+            and t.definition.name not in disabled_tools
+            and f"mailagent_{t.definition.name}" not in disabled_tools
         ]
         # PR3 — keep legitimately tool-less skills (document-only installed skills):
         # only hide a skill whose tools were ALL scope-filtered out (had tools, none

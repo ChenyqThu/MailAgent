@@ -65,6 +65,7 @@ import {
   leadParts,
   type CalendarLeadUnit,
   type ConnectorGrantMap,
+  type ConnectorToolGrantMap,
   type SessionsGrant,
   type WebGrant
 } from './custom-agent/shared'
@@ -225,6 +226,7 @@ export function CustomAgentDrawer({
   // **原始值**（含 UI 没有对应档的 'write'）——展示折叠在 CapabilityCards，这里必须无损往返；
   // 服务端语义 = whole-map replace（显式 {} = 清空），物化规则见 onSave。
   const [grantConnectors, setGrantConnectors] = useState<ConnectorGrantMap>({})
+  const [grantConnectorTools, setGrantConnectorTools] = useState<ConnectorToolGrantMap>({})
   const [connectorsDirty, setConnectorsDirty] = useState(false)
   const [mountedSkills, setMountedSkills] = useState<string[]>([])
   const [skillsMode, setSkillsMode] = useState<'defaults' | 'explicit'>('defaults')
@@ -302,6 +304,7 @@ export function CustomAgentDrawer({
       setGrantWeb('off')
       setWebDirty(false)
       setGrantConnectors({})
+      setGrantConnectorTools({})
       setConnectorsDirty(false)
       setMountedSkills(DEFAULT_MOUNTED_SKILLS)
       setSkillsMode('defaults')
@@ -393,6 +396,7 @@ export function CustomAgentDrawer({
     setSessionsDirty(false)
     // 服务端原始 grant 原样进 state（含 'write'）；浅拷贝防 setConnectorTier 的展开写触碰 cfg。
     setGrantConnectors({ ...(cfg.tool_policy?.grant_connectors ?? {}) })
+    setGrantConnectorTools({ ...(cfg.tool_policy?.grant_connector_tools ?? {}) })
     setConnectorsDirty(false)
     // skills=NULL（未配置）→ 展示默认挂载集（defaults 模式，保存时未触碰不写 skills 键）；
     // 显式列表（含 []）→ 展示行内集合（explicit）。镜像 allowed_tools 的 defaults/explicit 两态。
@@ -623,7 +627,13 @@ export function CustomAgentDrawer({
     toolPolicy.grant_sessions = grantSessions
     // grant_connectors 仅非空携带（镜像 grant_web 仅非 off 携带）——新建行缺省 = 未授权任何
     // connector（parse_tool_policy 默认），键不物化。
-    if (Object.keys(grantConnectors).length > 0) toolPolicy.grant_connectors = grantConnectors
+    if (Object.keys(grantConnectors).length > 0) {
+      toolPolicy.grant_connectors = grantConnectors
+      const prunedTools = Object.fromEntries(
+        Object.entries(grantConnectorTools).filter(([cid]) => grantConnectors[cid] !== undefined)
+      )
+      if (Object.keys(prunedTools).length > 0) toolPolicy.grant_connector_tools = prunedTools
+    }
     if (create) {
       const id = createdId ?? slugifyTitle(title)
       // 两段式：先建草稿行（type='custom'，无 trigger），再 setConfig 补 trigger/tool_policy/budget。
@@ -695,6 +705,10 @@ export function CustomAgentDrawer({
       // 语义下的「清空」）；两边都空 → 键不物化（与 PR3 前逐字节相同）。
       if (Object.keys(grantConnectors).length > 0) {
         tp.grant_connectors = grantConnectors
+        const prunedTools = Object.fromEntries(
+          Object.entries(grantConnectorTools).filter(([cid]) => grantConnectors[cid] !== undefined)
+        )
+        if (Object.keys(prunedTools).length > 0) tp.grant_connector_tools = prunedTools
       } else if (
         cfg.tool_policy?.grant_connectors &&
         Object.keys(cfg.tool_policy.grant_connectors).length > 0
@@ -1188,6 +1202,11 @@ export function CustomAgentDrawer({
             grantConnectors={grantConnectors}
             onGrantConnectorsChange={(next) => {
               setGrantConnectors(next)
+              setConnectorsDirty(true)
+            }}
+            grantConnectorTools={grantConnectorTools}
+            onGrantConnectorToolsChange={(next) => {
+              setGrantConnectorTools(next)
               setConnectorsDirty(true)
             }}
           />

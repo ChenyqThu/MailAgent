@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Collection, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from loguru import logger
 
@@ -200,6 +200,7 @@ class ReportDraft:
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
     model: str = ""
     # agentic 日报的工具轨迹（ToolLoopResult.tool_calls 原样透传，形状
     # [{name, input, output_preview, ms}]）——落 agent_run_log 步骤表用（task 08-27
@@ -581,6 +582,7 @@ async def summarize_report_agentic(
     context_docs: Optional[List[str]] = None,
     kos_enabled: bool = False,
     connector_grants: Sequence[Tuple[str, str]] = (),
+    connector_tool_allowlist: Optional[Mapping[str, Collection[str]]] = None,
     client: Optional[LLMClient] = None,
     max_iter: int = 8,
 ) -> ReportDraft:
@@ -601,7 +603,9 @@ async def summarize_report_agentic(
     thread_groups = build_thread_groups(db_path, briefs)
     aux_tools, handlers = build_report_tools(db_path, kos_enabled=kos_enabled)
     conn_tools, conn_handlers = build_connector_llm_tools(
-        connector_grants, caller="report_agent"
+        connector_grants,
+        caller="report_agent",
+        connector_tool_allowlist=connector_tool_allowlist,
     )
     aux_tools = [*aux_tools, *conn_tools]
     handlers = {**handlers, **conn_handlers}
@@ -640,6 +644,7 @@ async def summarize_report_agentic(
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
         cache_read_input_tokens=result.cache_read_input_tokens,
+        cache_creation_input_tokens=getattr(result, "cache_creation_input_tokens", 0),
         model=result.model,
         # 此前这份轨迹只被上面那行 logger.info 打一句就丢（r10 §3.2 的核心发现）；
         # 现在透传给 worker 落 agent_run_log 步骤表。
@@ -711,6 +716,7 @@ def _parse(result: LLMResult) -> ReportDraft:
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
         cache_read_input_tokens=result.cache_read_input_tokens,
+        cache_creation_input_tokens=result.cache_creation_input_tokens,
         model=result.model,
     )
 

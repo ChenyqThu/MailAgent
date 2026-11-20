@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import {
   CalendarDays,
@@ -14,7 +15,13 @@ import {
   TerminalSquare
 } from 'lucide-react'
 
-import type { AgentRunToolOptions, ChatOpennessFlags } from '@shared/api/types'
+import type {
+  AgentRunToolOptions,
+  ChatOpennessFlags,
+  ConnectorToolSummary
+} from '@shared/api/types'
+import { useMailApi } from '@shared/hooks/useMailApi'
+import { qk } from '@shared/lib/queryKeys'
 import {
   CUSTOM_AGENT_CAPABILITY_TOOL_SETS,
   CUSTOM_AGENT_CAPABILITY_TIERS,
@@ -28,6 +35,7 @@ import {
   deriveHeadlessMode,
   type ConnectorGrantMap,
   type ConnectorGrantValue,
+  type ConnectorToolGrantMap,
   type SessionsGrant,
   type WebGrant
 } from './shared'
@@ -188,6 +196,104 @@ function Guidance({
   )
 }
 
+function ConnectorToolAllowlistPanel({
+  connectorId,
+  ceiling,
+  selectedTools,
+  onSelectTools
+}: {
+  connectorId: string
+  ceiling: ConnectorGrantValue
+  selectedTools: string[] | undefined
+  onSelectTools: (next: string[] | undefined) => void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const api = useMailApi()
+  const q = useQuery({
+    queryKey: qk.connectorTools(connectorId),
+    queryFn: () => api.connector.tools(connectorId),
+    staleTime: 30_000,
+    retry: false
+  })
+  const rows: ConnectorToolSummary[] = (q.data ?? []).filter((row) => !row.orphan)
+  const ceilingAllows = (tool: ConnectorToolSummary): boolean =>
+    ceiling !== 'read' || tool.crud_type === 'read'
+  const withinCeilingNames = rows.filter(ceilingAllows).map((row) => row.name)
+
+  if (q.isLoading) {
+    return (
+      <div className="px-2 py-1.5 text-aux text-ink-fg-3">
+        {t('agents.custom.capabilityCards.connectors.toolsLoading')}
+      </div>
+    )
+  }
+  if (q.isError || rows.length === 0) {
+    return (
+      <div className="px-2 py-1.5 text-aux text-ink-fg-3">
+        {t('agents.custom.capabilityCards.connectors.toolsEmpty')}
+      </div>
+    )
+  }
+
+  const toggleTool = (toolName: string): void => {
+    const base = selectedTools ?? withinCeilingNames
+    const exists = base.includes(toolName)
+    const next = exists ? base.filter((n) => n !== toolName) : [...base, toolName]
+    onSelectTools(next)
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border border-ink-border-soft bg-ink-1/40 px-2.5 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-aux text-ink-fg-2">
+          {selectedTools === undefined
+            ? t('agents.custom.capabilityCards.connectors.allToolsActive')
+            : t('agents.custom.capabilityCards.connectors.selectedToolsCount', {
+                count: selectedTools.length,
+                total: withinCeilingNames.length
+              })}
+        </span>
+        {selectedTools !== undefined && (
+          <button
+            type="button"
+            onClick={() => onSelectTools(undefined)}
+            className="rounded-md border border-ink-border px-2 py-0.5 text-aux text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+          >
+            {t('agents.custom.capabilityCards.connectors.resetTools')}
+          </button>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {rows.map((tool) => {
+          const allowed = ceilingAllows(tool)
+          const active =
+            allowed && (selectedTools === undefined || selectedTools.includes(tool.name))
+          return (
+            <button
+              key={tool.name}
+              type="button"
+              disabled={!allowed}
+              aria-pressed={active}
+              onClick={() => toggleTool(tool.name)}
+              title={tool.description || tool.name}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-md border px-2 py-1 font-mono text-meta transition-colors duration-fast motion-reduce:transition-none',
+                !allowed
+                  ? 'cursor-not-allowed border-ink-border-soft bg-ink-1/30 text-ink-fg-3 opacity-55'
+                  : active
+                    ? 'border-coral/60 bg-coral/12 text-coral'
+                    : 'border-ink-border bg-ink-1/60 text-ink-fg-2 hover:bg-ink-3'
+              )}
+            >
+              <span>{tool.name}</span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function CapabilityCards({
   selectedTools,
   onSelectedToolsChange,
@@ -203,7 +309,9 @@ export function CapabilityCards({
   toolOptions,
   connectorOptions,
   grantConnectors,
-  onGrantConnectorsChange
+  onGrantConnectorsChange,
+  grantConnectorTools,
+  onGrantConnectorToolsChange
 }: {
   selectedTools: string[]
   onSelectedToolsChange: React.Dispatch<React.SetStateAction<string[]>>
@@ -222,9 +330,12 @@ export function CapabilityCards({
   /** 🔴 服务端原始值（含 'write'）——展示层折叠成三档，但这份 map 必须无损往返。 */
   grantConnectors: ConnectorGrantMap
   onGrantConnectorsChange: (next: ConnectorGrantMap) => void
+  grantConnectorTools?: ConnectorToolGrantMap
+  onGrantConnectorToolsChange?: (next: ConnectorToolGrantMap) => void
 }): React.ReactElement {
   const { t } = useTranslation()
   const [execConfirming, setExecConfirming] = useState(false)
+  const [expandedConnectorTools, setExpandedConnectorTools] = useState<Record<string, boolean>>({})
   const toolsDisabled = toolOptions.tools.length === 0
   const webDisabled = flags.webToolsEnabled === false
   const execDisabled = flags.execToolsEnabled === false
@@ -291,9 +402,28 @@ export function CapabilityCards({
     // 再点一下「可写」就会走 canonical 写入变成 'update' —— 静默升权。
     if (tier === displayConnectorTier(grantConnectors[id])) return
     const next: ConnectorGrantMap = { ...grantConnectors }
-    if (tier === 'off') delete next[id]
-    else next[id] = tier === 'read' ? 'read' : 'update'
+    if (tier === 'off') {
+      delete next[id]
+      if (grantConnectorTools && Object.prototype.hasOwnProperty.call(grantConnectorTools, id)) {
+        const nextTools: ConnectorToolGrantMap = { ...grantConnectorTools }
+        delete nextTools[id]
+        onGrantConnectorToolsChange?.(nextTools)
+      }
+    } else {
+      next[id] = tier === 'read' ? 'read' : 'update'
+    }
     onGrantConnectorsChange(next)
+  }
+
+  const updateConnectorToolList = (id: string, nextList: string[] | undefined): void => {
+    if (!onGrantConnectorToolsChange) return
+    const next: ConnectorToolGrantMap = { ...(grantConnectorTools ?? {}) }
+    if (nextList === undefined) {
+      delete next[id]
+    } else {
+      next[id] = nextList
+    }
+    onGrantConnectorToolsChange(next)
   }
 
   /** The displayed tier is rounded UP, so a `customized` capability means "enabled ⊊ this tier".
@@ -555,28 +685,76 @@ export function CapabilityCards({
             </p>
           ) : (
             <div className="space-y-2">
-              {connectorRows.map((row) => (
-                <div key={row.id} className="flex items-center gap-2.5">
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-meta font-medium text-ink-fg-1">{row.label}</div>
-                    {!row.connected && (
-                      <div className="text-micro text-warn">
-                        {t('agents.custom.capabilityCards.connectors.notConnected')}
+              {connectorRows.map((row) => {
+                const grantedCeiling = grantConnectors[row.id]
+                const toolsExpanded = Boolean(expandedConnectorTools[row.id])
+                const customList = grantConnectorTools?.[row.id]
+                return (
+                  <div key={row.id} className="space-y-1.5">
+                    <div className="flex items-center gap-2.5">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-meta font-medium text-ink-fg-1">
+                          {row.label}
+                        </div>
+                        {!row.connected && (
+                          <div className="text-micro text-warn">
+                            {t('agents.custom.capabilityCards.connectors.notConnected')}
+                          </div>
+                        )}
+                      </div>
+                      <div className="w-44 shrink-0">
+                        <TierButtons
+                          tiers={CONNECTOR_DISPLAY_TIERS}
+                          value={displayConnectorTier(grantedCeiling)}
+                          disabled={connectorsDisabled}
+                          groupLabel={row.label}
+                          label={(tier) => t(`agents.custom.capabilityCards.connectors.tier.${tier}`)}
+                          onChange={(tier) => setConnectorTier(row.id, tier)}
+                        />
+                      </div>
+                    </div>
+                    {grantedCeiling !== undefined && onGrantConnectorToolsChange && (
+                      <div className="pl-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedConnectorTools((cur) => ({
+                              ...cur,
+                              [row.id]: !cur[row.id]
+                            }))
+                          }
+                          className="inline-flex items-center gap-1 text-aux text-ink-fg-2 transition-colors duration-fast hover:text-ink-fg"
+                        >
+                          <ChevronDown
+                            size={13}
+                            className={cn(
+                              'transition-transform duration-fast',
+                              toolsExpanded ? 'rotate-180' : ''
+                            )}
+                          />
+                          <span>
+                            {customList !== undefined
+                              ? t('agents.custom.capabilityCards.connectors.allowlistCustom', {
+                                  count: customList.length
+                                })
+                              : t('agents.custom.capabilityCards.connectors.allowlistAll')}
+                          </span>
+                        </button>
+                        {toolsExpanded && (
+                          <div className="mt-1.5">
+                            <ConnectorToolAllowlistPanel
+                              connectorId={row.id}
+                              ceiling={grantedCeiling}
+                              selectedTools={customList}
+                              onSelectTools={(next) => updateConnectorToolList(row.id, next)}
+                            />
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
-                  <div className="w-44 shrink-0">
-                    <TierButtons
-                      tiers={CONNECTOR_DISPLAY_TIERS}
-                      value={displayConnectorTier(grantConnectors[row.id])}
-                      disabled={connectorsDisabled}
-                      groupLabel={row.label}
-                      label={(tier) => t(`agents.custom.capabilityCards.connectors.tier.${tier}`)}
-                      onChange={(tier) => setConnectorTier(row.id, tier)}
-                    />
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
           {connectorsDisabled && (

@@ -53,6 +53,8 @@ import {
   scrollToAnchorWhenReady
 } from '@shared/components/settings/aiTabAnchors'
 import type { SkillSummary } from '@shared/api/types'
+import { useChatComposerControls } from './composerControlsContext'
+import { sessionKeyForId } from '../sessionConnectors'
 
 import { ConnectorQuickContent } from './ConnectorQuickPanel'
 import { toolsFlyoutFits } from './composerToolsMenu.lib'
@@ -162,6 +164,8 @@ function useSkillSummary(open: boolean): { enabled: number; total: number } | nu
 
 export function ComposerToolsMenu({ variant }: { variant: 'icon' | 'chip' }): React.JSX.Element {
   const { t } = useTranslation()
+  const controls = useChatComposerControls()
+  const sessionKey = sessionKeyForId(controls?.sessionId)
   // 🔴 `useRouter({ warn: false })` 而不是 `useNavigate()`（抄 ModelPicker 的同款理由）：菜单
   // 的触发器一挂载就在树上，而两个 composer 的既有单测常常没有 RouterProvider —— useNavigate
   // 在无 router 时会 console.warn 三行并返回一个调用即炸的回调。拿不到 router 就把「AI 设置」
@@ -340,7 +344,7 @@ export function ComposerToolsMenu({ variant }: { variant: 'icon' | 'chip' }): Re
 
   const subContent =
     view === 'connectors' ? (
-      <ConnectorQuickContent rows={connectors.rows} onClose={close} />
+      <ConnectorQuickContent rows={connectors.rows} sessionKey={sessionKey} onClose={close} />
     ) : (
       <SkillsQuickContent />
     )
