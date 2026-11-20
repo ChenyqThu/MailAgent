@@ -355,3 +355,40 @@ def test_anthropic_tool_choice_forced_elsewhere(model_id):
         "type": "tool",
         "name": "classify_email",
     }
+
+
+def test_multi_key_cooldown_rotation_and_sticky_primary(monkeypatch):
+    _flag(monkeypatch, True)
+    pr.reset_key_cooldowns()
+    st = get_llm_provider_store()
+    st.create_provider(
+        "pool",
+        protocol="openai",
+        api_key="sk-primary",
+        extra_api_keys=["sk-spare-1", "sk-spare-2"],
+    )
+    pr.reset_provider_route_cache()
+
+    # 健康时粘滞主 key（保 Prompt Cache）
+    r1 = pr.resolve_route("pool:gpt-4o")
+    assert r1 is not None and r1.api_key == "sk-primary"
+
+    # 主 key 429 进冷却 → 自动切到备用 1
+    pr.mark_key_rate_limited("pool", "sk-primary", cooldown_sec=30.0)
+    r2 = pr.resolve_route("pool:gpt-4o")
+    assert r2 is not None and r2.api_key == "sk-spare-1"
+
+    # 备用 1 也 429（更晚解锁），备用 2 可用
+    pr.mark_key_rate_limited("pool", "sk-spare-1", cooldown_sec=60.0)
+    r3 = pr.resolve_route("pool:gpt-4o")
+    assert r3 is not None and r3.api_key == "sk-spare-2"
+
+    # 全部进入冷却 → 选最早解锁的 sk-primary（5s < 30s）
+    pr.mark_key_rate_limited("pool", "sk-primary", cooldown_sec=5.0)
+    pr.mark_key_rate_limited("pool", "sk-spare-2", cooldown_sec=90.0)
+    r4 = pr.resolve_route("pool:gpt-4o")
+    assert r4 is not None and r4.api_key == "sk-primary"
+
+    pr.reset_key_cooldowns()
+    assert pr.parse_retry_after_seconds("15") == 15.0
+    assert pr.parse_retry_after_seconds("invalid", default_sec=42.0) == 42.0

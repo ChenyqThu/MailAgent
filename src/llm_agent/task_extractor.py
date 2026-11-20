@@ -210,6 +210,7 @@ async def extract_task_fields(
             ),
             tool_schema=TASK_TOOL_SCHEMA,
             tool_name="extract_task",
+            usage_surface="task_extract",
         )
     finally:
         if own_client:

@@ -141,14 +141,14 @@ describe('CHAT_DB v31 migration', () => {
     expect(indexNames()).toEqual(
       expect.arrayContaining(['idx_group_turn_session_time', 'idx_group_turn_chain'])
     )
-    expect(schemaVersion()).toBe(32)
+    expect(schemaVersion()).toBe(33)
   })
 
   test('② v30-shaped old DB upgrades; a second run (meta rollback) is idempotent', () => {
     seedV30ChatDb()
     expect(columnNames('ai_chat_sessions')).toContain('group_config_json')
     expect(columnNames('ai_chat_messages')).toContain('chain_id')
-    expect(schemaVersion()).toBe(32)
+    expect(schemaVersion()).toBe(33)
     // Pre-existing group row survives untouched (additive migration).
     const row = getChatDb()
       .prepare('SELECT origin, members_json, group_config_json FROM ai_chat_sessions')
@@ -164,7 +164,7 @@ describe('CHAT_DB v31 migration', () => {
       .run()
     closeChatDb()
     expect(() => schemaVersion()).not.toThrow()
-    expect(schemaVersion()).toBe(32)
+    expect(schemaVersion()).toBe(33)
   })
 })
 

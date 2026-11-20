@@ -1120,3 +1120,112 @@ def test_chat_config_provider_registry_enabled_projection(monkeypatch):
     _stub_chat_config(monkeypatch, _FlagOnCfg())
     with TestClient(app, raise_server_exceptions=False) as c:
         assert c.get("/api/chat/config").json()["data"]["providerRegistryEnabled"] is True
+
+
+# ── Phase 1 新增端点与字段测试 ────────────────────────────────────────────────────────────
+
+
+def test_probe_draft_does_not_write_to_db(client: TestClient, monkeypatch):
+    captured: Dict[str, Any] = {}
+
+    async def _fake_probe(protocol, base, api_key, probe_model, headers=None):
+        captured.update(
+            {
+                "protocol": protocol,
+                "base": base,
+                "api_key": api_key,
+                "probe_model": probe_model,
+                "headers": headers,
+            }
+        )
+        return None
+
+    monkeypatch.setattr(lp_router, "_probe_provider", _fake_probe)
+    before = client.get("/api/llm/providers").json()["data"]["providers"]
+    r = client.post(
+        "/api/llm/providers/probe",
+        json={
+            "protocol": "openai-compatible",
+            "baseUrl": "https://api.example.com/v1",
+            "apiKey": "sk-probe-1234",
+            "modelId": "test-model",
+            "headers": {"X-Probe": "yes"},
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["ok"] is True
+    assert captured["api_key"] == "sk-probe-1234"
+    assert captured["probe_model"] == "test-model"
+    assert captured["headers"] == {"X-Probe": "yes"}
+    after = client.get("/api/llm/providers").json()["data"]["providers"]
+    assert [p["id"] for p in after] == [p["id"] for p in before]
+
+
+def test_reorder_and_batch_models_and_header_patch_and_extra_keys(client: TestClient, monkeypatch):
+    client.post(
+        "/api/llm/providers",
+        json={
+            "id": "p1",
+            "protocol": "openai",
+            "apiKey": "sk-main-1111",
+            "extraApiKeys": ["sk-bak-2222", "sk-bak-3333"],
+            "headers": {"X-A": "secret-a", "X-B": "secret-b"},
+            "customIcon": "ollama",
+        },
+    )
+    client.post("/api/llm/providers", json={"id": "p2", "protocol": "deepseek"})
+
+    listed = client.get("/api/llm/providers").json()["data"]["providers"]
+    p1 = next(p for p in listed if p["id"] == "p1")
+    assert p1["keyCount"] == 3
+    assert p1["extraKeyLast4s"] == ["2222", "3333"]
+    assert p1["customIcon"] == "ollama"
+    assert p1["enabledModelCount"] == 0
+    assert p1["totalModelCount"] == 0
+
+    # headerPatch 单键更新 + 删除，不动保留键的值
+    r_patch = client.patch(
+        "/api/llm/providers/p1",
+        json={"headerPatch": {"X-A": None, "X-C": "secret-c"}},
+    )
+    assert r_patch.status_code == 200
+    assert r_patch.json()["data"]["headerNames"] == ["X-B", "X-C"]
+    snap = client.get("/api/llm/providers/snapshot").json()["data"]
+    p1_snap = next(p for p in snap["providers"] if p["id"] == "p1")
+    assert p1_snap["headers"] == {"X-B": "secret-b", "X-C": "secret-c"}
+
+    # reorder
+    r_reord = client.put("/api/llm/providers/reorder", json={"ids": ["p2", "p1"]})
+    assert r_reord.status_code == 200
+    reord_ids = [p["id"] for p in r_reord.json()["data"]["providers"]]
+    assert reord_ids[:2] == ["p2", "p1"]
+
+    # models/batch + /{id}/test modelId
+    store = get_llm_provider_store()
+    store.merge_fetched_models("p1", [("m-fetch-1", {}), ("m-fetch-2", {})])
+    r_batch = client.post(
+        "/api/llm/providers/p1/models/batch",
+        json={"action": "enable", "modelIds": ["m-fetch-1"]},
+    )
+    assert r_batch.status_code == 200
+    assert r_batch.json()["data"]["affected"] == 1
+
+    r_clear = client.post(
+        "/api/llm/providers/p1/models/batch",
+        json={"action": "clear_unenabled_fetched"},
+    )
+    assert r_clear.status_code == 200
+    assert r_clear.json()["data"]["affected"] == 1
+    assert [m["id"] for m in r_clear.json()["data"]["models"]] == ["m-fetch-1"]
+
+    probed_models: list[Any] = []
+
+    async def _fake_probe2(protocol, base, api_key, probe_model, headers=None):
+        probed_models.append(probe_model)
+        return None
+
+    monkeypatch.setattr(lp_router, "_probe_provider", _fake_probe2)
+    r_test = client.post("/api/llm/providers/p1/test", json={"modelId": "explicit-m"})
+    assert r_test.status_code == 200
+    assert r_test.json()["data"]["ok"] is True
+    assert probed_models == ["explicit-m"]

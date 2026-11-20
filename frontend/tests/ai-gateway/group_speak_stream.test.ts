@@ -103,7 +103,13 @@ describe('speakAsGroupMember — 流式 onDelta', () => {
     expect(frames.length).toBeGreaterThan(0)
     for (const f of frames) expect('你好，世界'.startsWith(f)).toBe(true)
     expect(frames.at(-1)).toBe('你好，世界')
-    expect(result.usage).toEqual({ inputTokens: 5, outputTokens: 2 })
+    expect(result.usage).toEqual({
+      inputTokens: 5,
+      outputTokens: 2,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      noCacheTokens: 5
+    })
   })
 
   test('S2 100ms 内的多片合并为一帧（假时钟）：首片 + 尾帧恰两帧', async () => {

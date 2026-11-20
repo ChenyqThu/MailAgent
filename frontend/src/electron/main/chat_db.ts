@@ -112,3 +112,6 @@ export {
   listToolCallsForMessage,
   updateToolCall
 } from './chat_db/tool_calls'
+
+export type { LlmUsageLogInput } from './chat_db/usage'
+export { appendLlmUsageLog } from './chat_db/usage'

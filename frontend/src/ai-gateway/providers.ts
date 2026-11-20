@@ -26,8 +26,11 @@ import {
   OPENCODE_SESSION_HEADER
 } from '@shared/lib/opencodeSession'
 
+import { createKeyPoolFetch, normalizeProviderKeys } from './keyPool'
 import { anthropicBaseUrl } from './config'
 import { OPENCODE_PROCESS_SESSION } from './opencodeSessionId'
+import { createPrivacyMaskMiddleware } from './privacyMaskMiddleware'
+import { createToolCallFixMiddleware } from './toolCallFixMiddleware'
 import {
   canonicalApiBase,
   canonicalRoot,
@@ -36,6 +39,7 @@ import {
   ProviderCredentialsError,
   ProviderImageModelError,
   type LegacyProviderConfig,
+  type PrivacyMaskConfig,
   type ProviderModelResolver,
   type ProviderRegistryLogger,
   type ProviderSnapshot,
@@ -51,14 +55,19 @@ export {
   canonicalApiBase,
   canonicalRoot,
   IMAGE_MODEL_PROTOCOLS,
+  isPrivacyMaskError,
   isProviderCredentialsError,
   parseProviderRef,
+  PrivacyMaskError,
   ProviderCredentialsError,
   ProviderImageModelError
 } from './providerRef'
 export type {
   LegacyProviderConfig,
   ParsedProviderRef,
+  PrivacyMaskBuiltInConfig,
+  PrivacyMaskConfig,
+  PrivacyMaskCustomRule,
   ProviderModelResolver,
   ProviderProtocol,
   ProviderRegistryLogger,
@@ -75,6 +84,8 @@ type RegistryProvider = Parameters<typeof createProviderRegistry>[0][string]
 export interface BuiltProviderRegistry {
   registry: ReturnType<typeof createProviderRegistry>
   providers: Map<string, ProviderSnapshotProvider>
+  privacyMask?: PrivacyMaskConfig
+  onPrivacyHits?: (counts: Record<string, number>) => void
 }
 
 const SNAPSHOT_TTL_MS = 30_000
@@ -113,8 +124,10 @@ function createProvider(
   logger: ProviderRegistryLogger
 ): RegistryProvider | null {
   const rawBaseUrl = provider.baseUrl.trim()
+  const poolKeys = normalizeProviderKeys(provider.apiKey, provider.apiKeys)
+  const primaryKey = poolKeys[0] ?? provider.apiKey
   const options = {
-    apiKey: provider.apiKey,
+    apiKey: primaryKey,
     // 进程级兜底会话头：标题、压缩、记忆等辅助调用没有会话归属，靠它不被拒；对话主路径在
     // chatRun.ts 按会话覆盖（调用级 headers 盖过 provider 级）。
     headers: {
@@ -122,7 +135,8 @@ function createProvider(
       ...(autoOpencodeSession(provider)
         ? { [OPENCODE_SESSION_HEADER]: OPENCODE_PROCESS_SESSION }
         : {})
-    }
+    },
+    ...(poolKeys.length > 1 ? { fetch: createKeyPoolFetch(provider.id, poolKeys) } : {})
   }
 
   // HIGH-2 — per-protocol baseURL canonicalization (双端契约, mirrored by Python provider_routing):
@@ -183,7 +197,8 @@ function createProvider(
 
 export function buildProviderRegistry(
   snapshot: ProviderSnapshot,
-  logger: ProviderRegistryLogger = console
+  logger: ProviderRegistryLogger = console,
+  onPrivacyHits?: (counts: Record<string, number>) => void
 ): BuiltProviderRegistry {
   const providers: Record<string, RegistryProvider> = {}
   const enabledProviders = new Map<string, ProviderSnapshotProvider>()
@@ -199,7 +214,9 @@ export function buildProviderRegistry(
   return {
     // ai@7 DefaultProviderRegistry.splitId uses indexOf(separator), so model ids may contain ':'.
     registry: createProviderRegistry(providers),
-    providers: enabledProviders
+    providers: enabledProviders,
+    privacyMask: snapshot.privacyMask,
+    onPrivacyHits
   }
 }
 
@@ -211,7 +228,8 @@ function resolveFromRegistry(built: BuiltProviderRegistry, ref: string): Resolve
   // HIGH-1 — registry-only credentials: the selected row's key is the authority (the legacy
   // global-key pre-gate is skipped when the registry path is on). A key-requiring protocol with an
   // empty row key fails HERE with the typed E_NO_LLM_KEY the entrypoints already map to 503.
-  if (!provider.apiKey && !KEY_OPTIONAL_PROTOCOLS.has(provider.protocol)) {
+  const poolKeys = normalizeProviderKeys(provider.apiKey, provider.apiKeys)
+  if (poolKeys.length === 0 && !KEY_OPTIONAL_PROTOCOLS.has(provider.protocol)) {
     throw new ProviderCredentialsError(
       `LLM provider ${parsed.providerId} 缺少 API key（Settings → 模型服务中补全后重试）`
     )
@@ -221,14 +239,29 @@ function resolveFromRegistry(built: BuiltProviderRegistry, ref: string): Resolve
   const modelConfig = provider.models.find(
     (candidate) => candidate.enabled && candidate.id === parsed.modelId
   )
-  if (modelConfig?.maxOutput != null) {
-    model = wrapLanguageModel({
-      model,
-      middleware: defaultSettingsMiddleware({
-        settings: { maxOutputTokens: Math.min(MAX_OUTPUT_CEILING, modelConfig.maxOutput) }
-      })
-    })
-  }
+  const privacyMiddleware =
+    provider.privacyMaskEnabled === true
+      ? [
+          createPrivacyMaskMiddleware(built.privacyMask, {
+            onHits: built.onPrivacyHits
+          })
+        ]
+      : []
+  const middlewares = [
+    ...privacyMiddleware,
+    createToolCallFixMiddleware(),
+    ...(modelConfig?.maxOutput != null
+      ? [
+          defaultSettingsMiddleware({
+            settings: { maxOutputTokens: Math.min(MAX_OUTPUT_CEILING, modelConfig.maxOutput) }
+          })
+        ]
+      : [])
+  ]
+  model = wrapLanguageModel({
+    model,
+    middleware: middlewares
+  })
 
   return {
     ...parsed,
@@ -262,7 +295,8 @@ export function resolveImageModel(built: BuiltProviderRegistry, ref: string): Im
       `LLM provider ${parsed.providerId} (${provider.protocol}) has no image model — IMAGE_GEN_MODEL must point at an openai / openai-compatible provider`
     )
   }
-  if (!provider.apiKey && !KEY_OPTIONAL_PROTOCOLS.has(provider.protocol)) {
+  const poolKeys = normalizeProviderKeys(provider.apiKey, provider.apiKeys)
+  if (poolKeys.length === 0 && !KEY_OPTIONAL_PROTOCOLS.has(provider.protocol)) {
     throw new ProviderCredentialsError(
       `LLM provider ${parsed.providerId} 缺少 API key（Settings → 模型服务中补全后重试）`
     )
@@ -303,6 +337,7 @@ export function createProviderModelResolver(options: {
   legacy: LegacyProviderConfig
   logger?: ProviderRegistryLogger
   now?: () => number
+  onPrivacyHits?: (counts: Record<string, number>) => void
 }): ProviderModelResolver {
   const logger = options.logger ?? console
   const now = options.now ?? Date.now
@@ -323,7 +358,7 @@ export function createProviderModelResolver(options: {
         return cachedRegistry
       }
       cachedSnapshot = snapshot
-      cachedRegistry = buildProviderRegistry(snapshot, logger)
+      cachedRegistry = buildProviderRegistry(snapshot, logger, options.onPrivacyHits)
       return cachedRegistry
     } catch (error) {
       expiresAt = now() + SNAPSHOT_TTL_MS

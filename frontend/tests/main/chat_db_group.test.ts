@@ -116,7 +116,7 @@ describe('CHAT_DB v30 migration', () => {
   test('① fresh DB carries both v30 columns at the head schema_version', () => {
     expect(columnNames('ai_chat_sessions')).toContain('members_json')
     expect(columnNames('ai_chat_messages')).toContain('speaker_agent_id')
-    expect(schemaVersion()).toBe(32)
+    expect(schemaVersion()).toBe(33)
   })
 
   test('② v29-shaped old DB upgrades safely; meta-rollback re-entry is idempotent', () => {
@@ -124,7 +124,7 @@ describe('CHAT_DB v30 migration', () => {
     // Upgrade the old library.
     expect(columnNames('ai_chat_sessions')).toContain('members_json')
     expect(columnNames('ai_chat_messages')).toContain('speaker_agent_id')
-    expect(schemaVersion()).toBe(32)
+    expect(schemaVersion()).toBe(33)
     // Pre-existing row survives untouched.
     const row = getChatDb().prepare('SELECT origin, members_json FROM ai_chat_sessions').get() as {
       origin: string
@@ -138,7 +138,7 @@ describe('CHAT_DB v30 migration', () => {
       .prepare("INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '29')")
       .run()
     closeChatDb()
-    expect(schemaVersion()).toBe(32)
+    expect(schemaVersion()).toBe(33)
   })
 })
 

@@ -40,6 +40,8 @@ export interface GroupTurnInsertRow {
   model?: string | null
   tokensInput?: number | null
   tokensOutput?: number | null
+  cacheReadTokens?: number | null
+  cacheWriteTokens?: number | null
   costUsd?: number | null
   windowFromId?: number | null
   windowToId?: number | null
@@ -110,9 +112,9 @@ export function insertGroupTurn(row: GroupTurnInsertRow): number {
     .prepare(
       `INSERT INTO ai_chat_group_turn
         (session_id, run_id, chain_id, seq, agent_id, trigger_kind, outcome, message_id, model,
-         tokens_input, tokens_output, cost_usd, window_from_id, window_to_id, started_at,
-         finished_at, error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         tokens_input, tokens_output, cache_read_tokens, cache_write_tokens, cost_usd,
+         window_from_id, window_to_id, started_at, finished_at, error)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       row.sessionId,
@@ -126,6 +128,8 @@ export function insertGroupTurn(row: GroupTurnInsertRow): number {
       row.model ?? null,
       row.tokensInput ?? null,
       row.tokensOutput ?? null,
+      row.cacheReadTokens ?? null,
+      row.cacheWriteTokens ?? null,
       row.costUsd ?? null,
       row.windowFromId ?? null,
       row.windowToId ?? null,
@@ -218,6 +222,8 @@ export interface GroupTurnRow {
   model: string | null
   tokens_input: number | null
   tokens_output: number | null
+  cache_read_tokens?: number | null
+  cache_write_tokens?: number | null
   cost_usd: number | null
   window_from_id: number | null
   window_to_id: number | null

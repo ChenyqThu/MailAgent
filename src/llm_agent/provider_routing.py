@@ -70,6 +70,8 @@ class ProviderRoute:
     model_id: str = ""  # wire model id（providerRef 冒号后段；legacy 无冒号 = 整串）
     model_ref: str = ""  # 原始引用（日志/统计口径）
     max_output: Optional[int] = None  # llm_model.max_output（NULL = 不 clamp）
+    privacy_mask_enabled: bool = False
+    privacy_mask_config: Optional[Dict[str, Any]] = None
 
     @property
     def is_default(self) -> bool:
@@ -230,6 +232,66 @@ def opencode_session_headers(
 _cache_lock = threading.Lock()
 _cache: Dict[str, Any] = {"ts": 0.0, "snapshot": None}
 
+# ── 多 Key 429 冷却轮换池（主 key 优先粘滞以保 Prompt Cache）────────────────────────────
+
+_DEFAULT_COOLDOWN_SEC = 60.0
+_MIN_COOLDOWN_SEC = 1.0
+_MAX_COOLDOWN_SEC = 3600.0
+_cooldown_lock = threading.Lock()
+_key_cooldowns: Dict[tuple[str, str], float] = {}
+
+
+def reset_key_cooldowns() -> None:
+    """test-only：清多 Key 冷却表。"""
+    with _cooldown_lock:
+        _key_cooldowns.clear()
+
+
+def parse_retry_after_seconds(
+    header_value: Optional[str], default_sec: float = _DEFAULT_COOLDOWN_SEC
+) -> float:
+    if not header_value:
+        return default_sec
+    raw = str(header_value).strip()
+    if not raw:
+        return default_sec
+    try:
+        secs = float(raw)
+    except ValueError:
+        return default_sec
+    return max(_MIN_COOLDOWN_SEC, min(_MAX_COOLDOWN_SEC, secs))
+
+
+def mark_key_rate_limited(
+    provider_id: str, api_key: str, cooldown_sec: float = _DEFAULT_COOLDOWN_SEC
+) -> None:
+    if not provider_id or not api_key:
+        return
+    clamped = max(_MIN_COOLDOWN_SEC, min(_MAX_COOLDOWN_SEC, float(cooldown_sec)))
+    until = time.monotonic() + clamped
+    with _cooldown_lock:
+        _key_cooldowns[(provider_id, api_key)] = until
+
+
+def pick_active_api_key(provider_id: str, keys: list[str]) -> str:
+    valid = [k.strip() for k in keys if isinstance(k, str) and k.strip()]
+    if not valid:
+        return ""
+    now = time.monotonic()
+    best_fallback = valid[0]
+    earliest = float("inf")
+    with _cooldown_lock:
+        for k in valid:
+            entry = (provider_id, k)
+            until = _key_cooldowns.get(entry)
+            if until is None or now >= until:
+                _key_cooldowns.pop(entry, None)
+                return k
+            if until < earliest:
+                earliest = until
+                best_fallback = k
+    return best_fallback
+
 
 def _snapshot() -> Optional[Dict[str, Any]]:
     now = time.monotonic()
@@ -293,13 +355,20 @@ def resolve_route(model_ref: str) -> Optional[ProviderRoute]:
             mo = m.get("maxOutput")
             max_output = int(mo) if mo else None
             break
+    raw_keys = provider.get("apiKeys")
+    if isinstance(raw_keys, list) and raw_keys:
+        active_key = pick_active_api_key(provider_id, [str(k) for k in raw_keys if k])
+    else:
+        active_key = provider.get("apiKey") or ""
     return ProviderRoute(
         provider_id=provider_id,
         protocol=provider.get("protocol") or "anthropic",
         base_url=provider.get("baseUrl") or "",
-        api_key=provider.get("apiKey") or "",
+        api_key=active_key,
         headers=dict(provider.get("headers") or {}),
         model_id=model_id,
         model_ref=model_ref,
         max_output=max_output,
+        privacy_mask_enabled=bool(provider.get("privacyMaskEnabled")),
+        privacy_mask_config=snap.get("privacyMask") if isinstance(snap.get("privacyMask"), dict) else None,
     )

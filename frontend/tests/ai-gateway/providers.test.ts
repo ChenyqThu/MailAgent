@@ -311,7 +311,10 @@ describe('buildProviderRegistry', () => {
     resolveProviderModel(built, 'legacy-model')
 
     expect(mocks.defaultSettingsMiddleware).not.toHaveBeenCalled()
-    expect(mocks.wrapLanguageModel).not.toHaveBeenCalled()
+    // WP-4A wraps every resolved model in toolCallFixMiddleware even without defaultSettingsMiddleware
+    expect(mocks.wrapLanguageModel).toHaveBeenCalledOnce()
+    const wrapArg = mocks.wrapLanguageModel.mock.calls[0]?.[0] as { middleware?: unknown[] }
+    expect(wrapArg?.middleware).toHaveLength(1)
   })
 
   it('HIGH-1 — a key-requiring provider row with no key fails typed at resolve time', () => {

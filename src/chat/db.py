@@ -1,6 +1,10 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 32）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 33）。
+v33（Phase 4 — Usage 与 Prompt Cache 命中率监控）= ``ai_chat_messages`` 与
+``ai_chat_group_turn`` 新增 ``cache_read_tokens`` / ``cache_write_tokens``（NULL 默认），
+另建 ``ai_llm_usage_log`` 记录辅助 LLM 消耗（auto_title / compact / search_agent /
+translate / nl_search / paused_turn / py_loopback）；本文件只做读面 ``SELECT *`` 与统计聚合。
 v32（L4 群聊话题 thread，task 09-02 T3）= ``ai_chat_sessions.thread_root_message_id``（话题的
 根消息 id；NULL = 这行不是话题）+ 唯一部分索引 ``idx_chat_sessions_thread_root``
 （``UNIQUE(parent_session_id, thread_root_message_id) WHERE thread_root_message_id IS NOT NULL``

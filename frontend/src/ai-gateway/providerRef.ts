@@ -24,6 +24,27 @@ export interface ProviderSnapshotModelCapabilities {
   reasoning: boolean
 }
 
+export interface PrivacyMaskBuiltInConfig {
+  secret?: boolean
+  id_card?: boolean
+  phone?: boolean
+  email?: boolean
+  bank_card?: boolean
+}
+
+export interface PrivacyMaskCustomRule {
+  id: string
+  name: string
+  pattern: string
+  tag: string
+  enabled: boolean
+}
+
+export interface PrivacyMaskConfig {
+  builtIn?: PrivacyMaskBuiltInConfig
+  customRules?: PrivacyMaskCustomRule[]
+}
+
 export interface ProviderSnapshotModel {
   id: string
   displayName: string | null
@@ -42,6 +63,12 @@ export interface ProviderSnapshotProvider {
   displayName: string
   baseUrl: string
   apiKey: string
+  /** 多 Key 轮换池（主 key 在前，备用池在后；未传时消费端按 [apiKey] 处理）。 */
+  apiKeys?: string[]
+  /** 可选自定义图标覆盖（slug / 简短 emoji 或缩写徽章）。 */
+  customIcon?: string | null
+  /** Phase 5 WP-5A — 出站双向隐私占位符脱敏开关。 */
+  privacyMaskEnabled?: boolean
   headers: Record<string, string>
   enabled: boolean
   models: ProviderSnapshotModel[]
@@ -50,6 +77,7 @@ export interface ProviderSnapshotProvider {
 export interface ProviderSnapshot {
   version: number
   providers: ProviderSnapshotProvider[]
+  privacyMask?: PrivacyMaskConfig
 }
 
 export interface ParsedProviderRef {
@@ -159,4 +187,17 @@ export class ProviderCredentialsError extends Error {
 
 export function isProviderCredentialsError(e: unknown): e is ProviderCredentialsError {
   return e instanceof Error && (e as { code?: unknown }).code === 'E_NO_LLM_KEY'
+}
+
+export class PrivacyMaskError extends Error {
+  readonly code = 'E_PRIVACY_MASK_FAILED' as const
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'PrivacyMaskError'
+  }
+}
+
+export function isPrivacyMaskError(e: unknown): e is PrivacyMaskError {
+  return e instanceof Error && (e as { code?: unknown }).code === 'E_PRIVACY_MASK_FAILED'
 }

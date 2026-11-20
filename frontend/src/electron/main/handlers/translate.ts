@@ -29,8 +29,14 @@ import { appendFileSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { generateText } from 'ai'
 
-import { isProviderCredentialsError } from '../../../ai-gateway/providerRef'
+import {
+  isPrivacyMaskError,
+  isProviderCredentialsError,
+  parseProviderRef
+} from '../../../ai-gateway/providerRef'
+import { costUsdFor } from '../../../ai-gateway/modelCost'
 import { MAX_OUTPUT_TOKENS } from '@shared/lib/llm_limits'
+import { appendLlmUsageLog } from '../chat_db'
 import { getDb, resolveDbPath } from '../db'
 import { extractBlocks, type ExtractedBlock } from '../lib/html-extractor'
 import {
@@ -432,10 +438,66 @@ function parseLeniently(raw: string): Array<{ id: string; tgt: string }> | null 
   return out.length > 0 ? out : null
 }
 
+function recordTranslateUsage(input: {
+  model: string
+  protocol?: 'anthropic' | 'openai' | 'openai-compatible' | 'deepseek' | 'google' | 'openrouter' | null
+  tokensInput: number | null
+  tokensOutput: number | null
+  cacheReadTokens?: number | null
+  cacheWriteTokens?: number | null
+  noCacheTokens?: number | null
+  inputIsUncachedOnly?: boolean
+  latencyMs: number
+  status?: 'ok' | 'error'
+  errorCode?: string | null
+}): void {
+  try {
+    const parsed = parseProviderRef(input.model)
+    const costUsd = costUsdFor(
+      input.model,
+      {
+        inputTokens: input.tokensInput,
+        outputTokens: input.tokensOutput,
+        cacheReadTokens: input.cacheReadTokens ?? null,
+        cacheWriteTokens: input.cacheWriteTokens ?? null,
+        noCacheTokens: input.noCacheTokens ?? null,
+        inputIsUncachedOnly: input.inputIsUncachedOnly
+      },
+      input.protocol
+    )
+    const normalizedTotalInput =
+      input.inputIsUncachedOnly && input.tokensInput != null
+        ? input.tokensInput + (input.cacheReadTokens ?? 0) + (input.cacheWriteTokens ?? 0)
+        : input.tokensInput
+    appendLlmUsageLog({
+      surface: 'translate',
+      providerId: parsed.providerId,
+      model: input.model,
+      protocol: input.protocol ?? null,
+      tokensInput: normalizedTotalInput,
+      tokensOutput: input.tokensOutput,
+      cacheReadTokens: input.cacheReadTokens ?? null,
+      cacheWriteTokens: input.cacheWriteTokens ?? null,
+      costUsd,
+      latencyMs: input.latencyMs,
+      status: input.status ?? 'ok',
+      errorCode: input.errorCode ?? null
+    })
+  } catch {
+    /* best-effort — never block translate or fail unit tests without initialized chat_db */
+  }
+}
+
 interface MessagesResponse {
   content?: Array<{ type?: string; text?: string }>
   model?: string
   stop_reason?: string
+  usage?: {
+    input_tokens?: number
+    output_tokens?: number
+    cache_read_input_tokens?: number
+    cache_creation_input_tokens?: number
+  }
 }
 
 interface BatchOutcome {
@@ -466,6 +528,7 @@ async function runOneBatchWithProvider(
   parentAc.signal.addEventListener('abort', onParentAbort, { once: true })
   registerAbort(internalId, ac)
   const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS)
+  const t0 = Date.now()
   try {
     const resolver = await getLlmProviderModelResolver()
     const resolved = await resolver.resolve(model)
@@ -475,6 +538,16 @@ async function runOneBatchWithProvider(
       system: batchSystemPromptFor(targetLang),
       prompt: JSON.stringify(idText),
       abortSignal: ac.signal
+    })
+    recordTranslateUsage({
+      model,
+      protocol: resolved.protocol,
+      tokensInput: result.usage.inputTokens ?? null,
+      tokensOutput: result.usage.outputTokens ?? null,
+      cacheReadTokens: result.usage.inputTokenDetails?.cacheReadTokens ?? null,
+      cacheWriteTokens: result.usage.inputTokenDetails?.cacheWriteTokens ?? null,
+      noCacheTokens: result.usage.inputTokenDetails?.noCacheTokens ?? null,
+      latencyMs: Date.now() - t0
     })
     if (result.finishReason === 'length') {
       logLine({
@@ -505,6 +578,9 @@ async function runOneBatchWithProvider(
   } catch (err) {
     if (isProviderCredentialsError(err)) {
       throw new TranslateError('E_NO_LLM_KEY', err.message)
+    }
+    if (isPrivacyMaskError(err)) {
+      throw new TranslateError('E_PRIVACY_MASK_FAILED', err.message)
     }
     if (err instanceof Error && (err.name === 'AbortError' || ac.signal.aborted)) {
       logLine({ event: 'translate.batch_aborted', internalId })
@@ -543,6 +619,7 @@ async function runOneBatch(
   registerAbort(internalId, ac)
   const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS)
   const url = `${baseUrl}/v1/messages`
+  const t0 = Date.now()
   try {
     const response = await fetch(url, {
       method: 'POST',
@@ -576,6 +653,18 @@ async function runOneBatch(
       return { segments: [], modelReturned: model, ok: false }
     }
     const payload = (await response.json()) as MessagesResponse
+    if (payload.usage) {
+      recordTranslateUsage({
+        model: payload.model ?? model,
+        protocol: 'anthropic',
+        tokensInput: payload.usage.input_tokens ?? null,
+        tokensOutput: payload.usage.output_tokens ?? null,
+        cacheReadTokens: payload.usage.cache_read_input_tokens ?? null,
+        cacheWriteTokens: payload.usage.cache_creation_input_tokens ?? null,
+        inputIsUncachedOnly: true,
+        latencyMs: Date.now() - t0
+      })
+    }
     if (payload.stop_reason === 'max_tokens') {
       logLine({
         event: 'translate.batch_truncated',

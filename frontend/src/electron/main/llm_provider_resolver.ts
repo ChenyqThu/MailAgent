@@ -83,7 +83,14 @@ export async function getLlmProviderModelResolver(): Promise<MainProcessProvider
           latestSnapshot = snapshot
           return snapshot
         },
-        legacy: { apiKey, baseUrl }
+        legacy: { apiKey, baseUrl },
+        onPrivacyHits: (counts) => {
+          void daemonRequest('POST', '/llm/providers/privacy-hits', { body: { counts } }).catch(
+            () => {
+              /* hit counters are strictly best-effort */
+            }
+          )
+        }
       })
       return {
         async resolve(ref: string): Promise<MainProcessResolvedProviderModel> {

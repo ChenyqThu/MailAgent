@@ -247,7 +247,13 @@ import { resolveDataRoot } from '../db'
 //     SESSION_INVOKED_BY (serve-api 独占, 有意不进 test_group_constants_parity 的 VOCABULARIES)。
 // Plain additive ALTER + CREATE UNIQUE INDEX IF NOT EXISTS, hasColumn 幂等守卫 (v30/v31 样板)。
 // 🔴 bump 同步刷 src/chat/db.py 头注释; NOT backend_lifecycle.EXPECTED_DB_VERSION。
-const CHAT_DB_VERSION = 32
+// v33 (Phase 4 — Usage 与 Prompt Cache 命中率监控):
+//   • ai_chat_messages.cache_read_tokens / cache_write_tokens: ai@7 inputTokenDetails 缓存 token。
+//   • ai_chat_group_turn.cache_read_tokens / cache_write_tokens: 群聊 turn 缓存 token。
+//   • ai_llm_usage_log: 辅助 LLM 消耗台账（auto_title/compact/search_agent/translate/nl_search 等）。
+// Plain additive ALTER + CREATE TABLE IF NOT EXISTS, hasColumn 幂等守卫 (NOT EXPECTED_DB_VERSION)。
+// 🔴 bump 同步刷 src/chat/db.py 头注释 + ChatMessage (shared/chat_model.ts & api/types/chat.ts)。
+const CHAT_DB_VERSION = 33
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -293,6 +299,13 @@ function migrateLegacyChatDbIfNeeded(targetPath: string): void {
 function hasColumn(db: Database.Database, table: string, column: string): boolean {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
   return cols.some((c) => c.name === column)
+}
+
+function hasTable(db: Database.Database, table: string): boolean {
+  const row = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(table) as { name: string } | undefined
+  return row != null
 }
 
 /** P2c (codex review MEDIUM) — is ai_chat_sessions already the FULL v7 shape?
@@ -1546,6 +1559,54 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_queued_input_delivery
         WHERE thread_root_message_id IS NOT NULL`)
       db.prepare(
         "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '32')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  // v32 → v33 — Phase 4: cache_read_tokens / cache_write_tokens on ai_chat_messages &
+  // ai_chat_group_turn + ai_llm_usage_log auxiliary spend ledger. Idempotent hasColumn + IF NOT EXISTS.
+  if (current < 33) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'ai_chat_messages', 'cache_read_tokens')) {
+        db.exec('ALTER TABLE ai_chat_messages ADD COLUMN cache_read_tokens INTEGER')
+      }
+      if (!hasColumn(db, 'ai_chat_messages', 'cache_write_tokens')) {
+        db.exec('ALTER TABLE ai_chat_messages ADD COLUMN cache_write_tokens INTEGER')
+      }
+      if (hasTable(db, 'ai_chat_group_turn')) {
+        if (!hasColumn(db, 'ai_chat_group_turn', 'cache_read_tokens')) {
+          db.exec('ALTER TABLE ai_chat_group_turn ADD COLUMN cache_read_tokens INTEGER')
+        }
+        if (!hasColumn(db, 'ai_chat_group_turn', 'cache_write_tokens')) {
+          db.exec('ALTER TABLE ai_chat_group_turn ADD COLUMN cache_write_tokens INTEGER')
+        }
+      }
+      db.exec(`CREATE TABLE IF NOT EXISTS ai_llm_usage_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        surface TEXT NOT NULL,
+        provider_id TEXT,
+        model TEXT NOT NULL,
+        protocol TEXT,
+        tokens_input INTEGER,
+        tokens_output INTEGER,
+        cache_read_tokens INTEGER,
+        cache_write_tokens INTEGER,
+        cost_usd REAL,
+        latency_ms INTEGER,
+        status TEXT NOT NULL DEFAULT 'ok',
+        error_code TEXT,
+        created_at INTEGER NOT NULL
+      )`)
+      db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_ai_llm_usage_created ON ai_llm_usage_log(created_at DESC)'
+      )
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '33')"
       ).run()
       db.exec('COMMIT')
     } catch (err) {

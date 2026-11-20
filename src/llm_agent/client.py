@@ -23,17 +23,25 @@ from __future__ import annotations
 
 import inspect
 import json as _json
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
 import httpx
 from anthropic import AsyncAnthropic
 from loguru import logger
 
+from src.agent_config.llm_providers import (
+    best_effort_append_probe_log,
+    best_effort_append_py_usage,
+    get_llm_provider_store,
+)
 from src.config import config as cfg
 from src.llm_agent import provider_routing
+from src.llm_agent.model_cost import estimate_cost_usd
+from src.llm_agent.privacy_mask import PrivacyMaskError, PythonMaskVault
 
 
 # CRS/Cloudflare is picky about user agents; mirror the browser-like UA used by
@@ -93,10 +101,19 @@ class ToolLoopResult:
     model: str
     latency_ms: int
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)  # 审计：[{name,input,output_preview,ms}]
+    cache_creation_input_tokens: int = 0
+
+
+class _GatewayUnavailable(RuntimeError):
+    """Sentinel raised when loopback ai-gateway cannot be reached (triggers fail-open fallback)."""
 
 
 class LLMCallError(RuntimeError):
     """Raised on network/parse/validation failures; caller converts to retry."""
+
+
+class PrivacyMaskLLMError(LLMCallError):
+    """Fail-Closed privacy mask failure (never falls back to another unprotected model)."""
 
 
 class LLMSchemaDriftError(LLMCallError):
@@ -237,6 +254,7 @@ class LLMClient:
         # 即重建；旧实例进 _retired，由 close() 统一关（同步路径不能 await close）。
         self._anthropic_by_provider: Dict[str, Any] = {}
         self._http_by_provider: Dict[str, Any] = {}
+        self._gateway_http: Optional[httpx.AsyncClient] = None
         self._retired: List[Any] = []
 
     def _lazy(self) -> AsyncAnthropic:
@@ -331,6 +349,293 @@ class LLMClient:
             self._retired.append(cached[1])
         return inst
 
+    @staticmethod
+    def _gateway_loopback_endpoint() -> Optional[Tuple[str, str]]:
+        """Return (base_url, local_token) when loopback gateway routing is enabled and armed."""
+        if not getattr(cfg, "mailagent_ai_gateway_loopback", True):
+            return None
+        token = (os.environ.get("MAILAGENT_LOCAL_API_TOKEN") or "").strip()
+        if not token:
+            return None
+        port_raw = (os.environ.get("MAILAGENT_AI_GATEWAY_PORT") or "").strip() or "8300"
+        return (f"http://127.0.0.1:{port_raw}", token)
+
+    def _get_gateway_http(self) -> httpx.AsyncClient:
+        if self._gateway_http is None:
+            self._gateway_http = httpx.AsyncClient(timeout=float(cfg.llm_timeout_sec))
+        return self._gateway_http
+
+    @staticmethod
+    def _convert_system_blocks(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for b in blocks or []:
+            if not isinstance(b, dict):
+                continue
+            text = b.get("text")
+            if isinstance(text, str) and text:
+                out.append({"text": text, "cacheControl": bool(b.get("cache_control"))})
+        return out
+
+    @staticmethod
+    def _parse_gateway_usage(usage: Any) -> Tuple[int, int, int, int]:
+        """Convert AI SDK total inputTokens -> Python uncached-only convention."""
+        u = usage if isinstance(usage, dict) else {}
+        total_in = int(u.get("inputTokens") or 0)
+        out_tok = int(u.get("outputTokens") or 0)
+        cache_read = int(u.get("cacheReadTokens") or 0)
+        cache_write = int(u.get("cacheWriteTokens") or 0)
+        no_cache = u.get("noCacheTokens")
+        if isinstance(no_cache, (int, float)) and not isinstance(no_cache, bool) and no_cache >= 0:
+            uncached_in = int(no_cache)
+        else:
+            uncached_in = max(0, total_in - cache_read - cache_write)
+        return uncached_in, out_tok, cache_read, cache_write
+
+    async def _post_gateway_complete(
+        self, base_url: str, token: str, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        http = self._get_gateway_http()
+        try:
+            resp = await http.post(
+                f"{base_url}/api/ai/internal/complete",
+                json=payload,
+                headers={
+                    "X-MailAgent-Local-Token": token,
+                    "Content-Type": "application/json",
+                },
+            )
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.NetworkError) as exc:
+            raise _GatewayUnavailable(str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise LLMCallError(f"gateway HTTP error: {exc!r}") from exc
+
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise LLMCallError(
+                f"gateway returned non-JSON HTTP {resp.status_code}"
+            ) from exc
+
+        if resp.status_code >= 400 or not data.get("ok"):
+            err = data.get("error") if isinstance(data, dict) else {}
+            code = err.get("code", "E_UPSTREAM") if isinstance(err, dict) else "E_UPSTREAM"
+            msg = err.get("message", f"HTTP {resp.status_code}") if isinstance(err, dict) else f"HTTP {resp.status_code}"
+            raise LLMCallError(f"gateway {code} (HTTP {resp.status_code}): {msg}")
+        return data
+
+    async def _classify_via_gateway(
+        self,
+        *,
+        base_url: str,
+        token: str,
+        model: str,
+        system_blocks: List[Dict[str, Any]],
+        user_content: str,
+        tool_schema: Dict[str, Any],
+        tool_name: str,
+        usage_surface: Optional[str] = None,
+    ) -> LLMResult:
+        payload: Dict[str, Any] = {
+            "model": model,
+            "systemBlocks": self._convert_system_blocks(system_blocks),
+            "messages": [{"role": "user", "content": user_content}],
+            "tools": [
+                {
+                    "name": tool_schema.get("name", tool_name),
+                    "description": tool_schema.get("description", ""),
+                    "inputSchema": tool_schema.get("input_schema") or {"type": "object", "properties": {}},
+                }
+            ],
+            "toolChoice": {"type": "tool", "toolName": tool_name},
+            "maxTokens": int(cfg.llm_max_tokens),
+            "surface": usage_surface or "py_loopback",
+            "recordUsage": bool(usage_surface),
+        }
+        data = await self._post_gateway_complete(base_url, token, payload)
+        calls = data.get("toolCalls") or []
+        chosen = next((c for c in calls if isinstance(c, dict) and c.get("toolName") == tool_name), None)
+        if chosen is None and calls and isinstance(calls[0], dict):
+            chosen = calls[0]
+        if chosen is None:
+            raise LLMCallError(f"gateway did not return tool_use (model={model})")
+        if chosen.get("toolName") != tool_name:
+            raise LLMCallError(
+                f"gateway expected tool {tool_name!r} but got {chosen.get('toolName')!r} (model={model})"
+            )
+        tool_input = chosen.get("input")
+        if not isinstance(tool_input, dict):
+            raise LLMCallError(f"gateway tool input is not an object (model={model})")
+        uncached_in, out_tok, cache_read, cache_write = self._parse_gateway_usage(data.get("usage"))
+        return LLMResult(
+            tool_input=tool_input,
+            input_tokens=uncached_in,
+            output_tokens=out_tok,
+            cache_creation_input_tokens=cache_write,
+            cache_read_input_tokens=cache_read,
+            model=str(data.get("model") or model),
+            latency_ms=int(data.get("latencyMs") or 0),
+        )
+
+    async def _tool_loop_via_gateway(
+        self,
+        *,
+        base_url: str,
+        token: str,
+        model: str,
+        system_blocks: List[Dict[str, Any]],
+        user_content: str,
+        tools: List[Dict[str, Any]],
+        tool_handlers: Dict[str, ToolHandler],
+        final_tool: str,
+        max_iter: int,
+        max_tokens: int,
+        usage_surface: Optional[str] = None,
+    ) -> ToolLoopResult:
+        sys_converted = self._convert_system_blocks(system_blocks)
+        tools_converted = [
+            {
+                "name": t.get("name", ""),
+                "description": t.get("description", ""),
+                "inputSchema": t.get("input_schema") or {"type": "object", "properties": {}},
+            }
+            for t in tools
+        ]
+        messages: List[Dict[str, Any]] = [{"role": "user", "content": user_content}]
+        session_id = str(uuid.uuid4())
+        total_in = total_out = total_cache_read = total_cache_write = 0
+        tool_calls_audit: List[Dict[str, Any]] = []
+        t0 = time.monotonic()
+
+        for it in range(max_iter):
+            payload: Dict[str, Any] = {
+                "model": model,
+                "systemBlocks": sys_converted,
+                "messages": messages,
+                "tools": tools_converted,
+                "toolChoice": {"type": "tool", "toolName": final_tool} if it == max_iter - 1 else "auto",
+                "maxTokens": max_tokens,
+                "sessionId": session_id,
+                "surface": usage_surface or "py_loopback",
+                "recordUsage": bool(usage_surface),
+            }
+            try:
+                data = await self._post_gateway_complete(base_url, token, payload)
+            except _GatewayUnavailable:
+                if it == 0:
+                    raise
+                raise LLMCallError(f"gateway became unavailable mid-loop (model={model}, iter={it})")
+
+            u_in, u_out, c_read, c_write = self._parse_gateway_usage(data.get("usage"))
+            total_in += u_in
+            total_out += u_out
+            total_cache_read += c_read
+            total_cache_write += c_write
+
+            calls = [c for c in (data.get("toolCalls") or []) if isinstance(c, dict)]
+            final_call = next((c for c in calls if c.get("toolName") == final_tool), None)
+            if final_call is not None:
+                final_input = final_call.get("input")
+                if not isinstance(final_input, dict):
+                    final_input = {}
+                return ToolLoopResult(
+                    final_input=final_input,
+                    iterations=it + 1,
+                    input_tokens=total_in,
+                    output_tokens=total_out,
+                    cache_read_input_tokens=total_cache_read,
+                    model=str(data.get("model") or model),
+                    latency_ms=int((time.monotonic() - t0) * 1000),
+                    tool_calls=tool_calls_audit,
+                    cache_creation_input_tokens=total_cache_write,
+                )
+
+            if not calls:
+                messages.append({"role": "assistant", "content": str(data.get("text") or "")})
+                messages.append(
+                    {"role": "user", "content": f"请基于以上信息调用 {final_tool} 工具完成本次任务。"}
+                )
+                continue
+
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": str(data.get("text") or ""),
+                    "toolCalls": [
+                        {
+                            "toolCallId": str(c.get("toolCallId") or f"tc_{it}_{idx}"),
+                            "toolName": str(c.get("toolName") or ""),
+                            "input": c.get("input") if isinstance(c.get("input"), dict) else {},
+                        }
+                        for idx, c in enumerate(calls)
+                    ],
+                }
+            )
+            results: List[Dict[str, Any]] = []
+            for idx, c in enumerate(calls):
+                name = str(c.get("toolName") or "")
+                tinput = c.get("input") if isinstance(c.get("input"), dict) else {}
+                tc_id = str(c.get("toolCallId") or f"tc_{it}_{idx}")
+                handler = tool_handlers.get(name)
+                ts = time.monotonic()
+                if handler is None:
+                    out = f"error: unknown tool {name!r}"
+                else:
+                    try:
+                        res = handler(tinput)
+                        out = await res if inspect.isawaitable(res) else res
+                        out = out if isinstance(out, str) else _json.dumps(out, ensure_ascii=False)
+                    except Exception as e:  # noqa: BLE001
+                        out = f"error: {e!r}"
+                tool_calls_audit.append(
+                    {
+                        "name": name,
+                        "input": tinput,
+                        "output_preview": out[:200],
+                        "ms": int((time.monotonic() - ts) * 1000),
+                    }
+                )
+                results.append({"toolCallId": tc_id, "toolName": name, "output": out})
+            messages.append({"role": "tool", "results": results})
+
+        raise LLMCallError(
+            f"tool loop exhausted {max_iter} iters without calling {final_tool!r} (model={model})"
+        )
+
+    @staticmethod
+    def _record_direct_usage(
+        *,
+        usage_surface: Optional[str],
+        model: str,
+        protocol: Optional[str],
+        input_tokens: int,
+        output_tokens: int,
+        cache_read_tokens: int,
+        cache_write_tokens: int,
+        latency_ms: int,
+    ) -> None:
+        if not usage_surface:
+            return
+        cost_usd = estimate_cost_usd(
+            model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            protocol=protocol,
+        )
+        best_effort_append_py_usage(
+            surface=usage_surface,
+            model=model,
+            protocol=protocol,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            cost_usd=cost_usd,
+            latency_ms=latency_ms,
+            status="ok",
+        )
+
     async def classify(
         self,
         *,
@@ -339,6 +644,7 @@ class LLMClient:
         tool_schema: Dict[str, Any],
         tool_name: str,
         model_chain: Optional[List[str]] = None,
+        usage_surface: Optional[str] = None,
     ) -> LLMResult:
         """Call LLM forcing tool_use; walk fallback chain on LLMCallError.
 
@@ -354,6 +660,32 @@ class LLMClient:
             raise LLMCallError("model chain is empty (LLM_MODEL unset?)")
 
         async def _call(model: str) -> LLMResult:
+            endpoint = self._gateway_loopback_endpoint()
+            if endpoint is not None:
+                base_url, token = endpoint
+                try:
+                    result = await self._classify_via_gateway(
+                        base_url=base_url,
+                        token=token,
+                        model=model,
+                        system_blocks=system_blocks,
+                        user_content=user_content,
+                        tool_schema=tool_schema,
+                        tool_name=tool_name,
+                        usage_surface=usage_surface,
+                    )
+                    missing = _missing_required(result.tool_input, tool_schema)
+                    if missing:
+                        raise LLMSchemaDriftError(
+                            f"tool args missing required {missing} (model={model}, "
+                            f"tool={tool_name}); got_keys={sorted(result.tool_input)}"
+                        )
+                    return result
+                except _GatewayUnavailable as exc:
+                    logger.debug(
+                        f"[llm] gateway loopback unavailable for {model}, falling back to direct SDK: {exc}"
+                    )
+
             # flag off / fail-open → route=None → legacy 前缀路由（现状字节级）；
             # 显式 ref 路由失败 → LLMCallError → 调用方 except 走 fallback（MEDIUM-4）。
             route = _route_or_raise(model)
@@ -366,13 +698,44 @@ class LLMClient:
             classify_leg = (
                 self._classify_openai if leg == "openai" else self._classify_anthropic
             )
+            eff_system = system_blocks
+            eff_user = user_content
+            vault: Optional[PythonMaskVault] = None
+            if route is not None and route.privacy_mask_enabled:
+                try:
+                    vault = PythonMaskVault(route.privacy_mask_config)
+                    eff_system = vault.mask_system_blocks(system_blocks)
+                    eff_user = vault.mask_string(user_content)
+                except PrivacyMaskError as exc:
+                    raise PrivacyMaskLLMError(f"E_PRIVACY_MASK_FAILED: {exc}") from exc
+                except Exception as exc:  # noqa: BLE001
+                    raise PrivacyMaskLLMError(
+                        f"E_PRIVACY_MASK_FAILED: outbound privacy masking failed: {exc}"
+                    ) from exc
             result = await classify_leg(
                 model=model,
-                system_blocks=system_blocks,
-                user_content=user_content,
+                system_blocks=eff_system,
+                user_content=eff_user,
                 tool_schema=tool_schema,
                 tool_name=tool_name,
                 route=route,
+            )
+            if vault is not None:
+                if vault.hits:
+                    try:
+                        get_llm_provider_store().record_privacy_hits(vault.hits)
+                    except Exception:  # noqa: BLE001
+                        pass
+                result.tool_input = vault.unmask_value(result.tool_input)
+            self._record_direct_usage(
+                usage_surface=usage_surface,
+                model=result.model,
+                protocol=route.protocol if route else None,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+                cache_read_tokens=result.cache_read_input_tokens,
+                cache_write_tokens=result.cache_creation_input_tokens,
+                latency_ms=result.latency_ms,
             )
             missing = _missing_required(result.tool_input, tool_schema)
             if missing:
@@ -390,8 +753,17 @@ class LLMClient:
                 except LLMSchemaDriftError as e:
                     logger.warning(f"[llm] schema drift on {model}, retrying once: {e}")
                     return await _call(model)
+            except PrivacyMaskLLMError:
+                raise
             except LLMCallError as e:
                 last_err = e
+                best_effort_append_probe_log(
+                    kind="runtime_error",
+                    ok=False,
+                    model=model,
+                    error_code="E_LLM_CALL",
+                    message=str(e),
+                )
                 if i + 1 < len(chain):
                     nxt = chain[i + 1]
                     logger.warning(
@@ -444,7 +816,11 @@ class LLMClient:
                 messages=[{"role": "user", "content": user_content}],
             )
         except Exception as e:
-            raise LLMCallError(f"Anthropic call failed (model={model}): {e!r}") from e
+            if route is not None and getattr(e, "status_code", None) == 429:
+                provider_routing.mark_key_rate_limited(route.provider_id, route.api_key)
+            raise LLMCallError(
+                f"Anthropic call failed (model={model}): {_redact_upstream(repr(e), route)}"
+            ) from e
 
         latency_ms = int((time.monotonic() - t0) * 1000)
 
@@ -513,6 +889,7 @@ class LLMClient:
         # classify 恒强制 tool_choice → 恒 merge provider/model quirk（DeepSeek 须禁
         # thinking）。route=None（legacy 前缀路由）不注入，字节级不变。
         if route is not None:
+            body["stream_options"] = {"include_usage": True}
             body.update(
                 provider_routing.forced_tool_choice_extra_body(
                     route.protocol, route.model_id
@@ -524,6 +901,7 @@ class LLMClient:
         seen_tool_name = ""
         prompt_tokens = 0
         completion_tokens = 0
+        cached_prompt_tokens = 0
 
         try:
             async with http.stream(
@@ -539,6 +917,14 @@ class LLMClient:
                 },
             ) as resp:
                 if resp.status_code >= 400:
+                    if resp.status_code == 429 and route is not None:
+                        hdrs = getattr(resp, "headers", None) or {}
+                        ra = hdrs.get("retry-after") if hasattr(hdrs, "get") else None
+                        provider_routing.mark_key_rate_limited(
+                            route.provider_id,
+                            route.api_key,
+                            provider_routing.parse_retry_after_seconds(ra),
+                        )
                     err_body = (await resp.aread()).decode("utf-8", errors="replace")
                     raise LLMCallError(
                         f"OpenAI HTTP {resp.status_code} (model={model}): "
@@ -580,6 +966,9 @@ class LLMClient:
                         completion_tokens = (
                             int(usage.get("completion_tokens") or 0) or completion_tokens
                         )
+                        details = usage.get("prompt_tokens_details")
+                        if isinstance(details, dict) and details.get("cached_tokens"):
+                            cached_prompt_tokens = int(details["cached_tokens"] or 0)
         except LLMCallError:
             raise
         except Exception as e:
@@ -608,12 +997,13 @@ class LLMClient:
                 f"OpenAI tool args not an object (model={model}): {tool_input!r}"
             )
 
+        uncached_in = max(0, prompt_tokens - cached_prompt_tokens) if cached_prompt_tokens else prompt_tokens
         return LLMResult(
             tool_input=tool_input,
-            input_tokens=prompt_tokens,
+            input_tokens=uncached_in,
             output_tokens=completion_tokens,
             cache_creation_input_tokens=0,
-            cache_read_input_tokens=0,
+            cache_read_input_tokens=cached_prompt_tokens,
             model=model,
             latency_ms=latency_ms,
         )
@@ -631,33 +1021,26 @@ class LLMClient:
         model_chain: Optional[List[str]] = None,
         max_iter: int = 8,
         max_tokens: int = 64000,
+        usage_surface: Optional[str] = None,
     ) -> ToolLoopResult:
-        """多轮 tool_use loop（Anthropic + OpenAI 双协议腿，task 07-12 P2 决策 3）。
+        """多轮 tool_use loop（优先走 ai-gateway loopback，不可达回落 Anthropic/OpenAI 双腿）。
 
         模型按需调 ``tools`` 里的工具（``tool_handlers`` 执行 + 回灌 tool_result），
         直到它调用 ``final_tool`` —— 返回该工具的 input（**不执行 handler**，交给 caller
         消费，如 build_report → ReportDraft）。``tool_choice=auto``（最后一轮强制 final_tool
         保证收尾），与 classify 的单次强制调用不同。
-
-        走 fallback chain。flag off（显式 false 应急回退）：**只在 Anthropic 前缀模型上**
-        跑（现状字节级，OpenAI proto 从链里过滤）；flag on（默认，2026-07-13 cutover）：
-        按 provider 协议分发（openai 系走
-        ``_run_loop_openai`` 多轮 tool_calls 协议），仅 google 协议被过滤 + warning。
-        cache_control：anthropic 腿复用 caller 设的 breakpoints；openai 腿在 system 打平
-        时自然丢弃（现状语义）。
-
-        raises LLMCallError：链里无可用模型 / 全部失败 / 用尽 max_iter 仍未产出。
         """
+        endpoint = self._gateway_loopback_endpoint()
         if provider_routing.registry_enabled():
             chain = []
             for m in _resolve_model_chain(model_chain):
                 try:
                     r = provider_routing.resolve_route(m)
                 except provider_routing.ProviderRouteError:
-                    # 显式 ref 路由失败：留在链里，由主循环按模型失败处理（fallback + warning）。
                     chain.append(m)
                     continue
-                if r is not None and r.protocol == "google":
+                # 仅在走直连 Python 腿（gateway 不可达或关闭）时跳过 google 协议。
+                if endpoint is None and r is not None and r.protocol == "google":
                     logger.warning(
                         f"[llm] loop skipping model={m}: provider protocol 'google' "
                         "is not supported on the Python leg"
@@ -669,6 +1052,10 @@ class LLMClient:
                     "run_tool_loop has no usable model in the chain "
                     "(google-protocol models are skipped)"
                 )
+        elif endpoint is not None:
+            chain = _resolve_model_chain(model_chain)
+            if not chain:
+                raise LLMCallError("model chain is empty (LLM_MODEL unset?)")
         else:
             chain = [m for m in _resolve_model_chain(model_chain) if not _is_openai_proto(m)]
             if not chain:
@@ -678,38 +1065,120 @@ class LLMClient:
         for i, model in enumerate(chain):
             try:
                 route = _route_or_raise(model)
+                eff_max_tokens = provider_routing.clamp_max_tokens(max_tokens, route)
+                if endpoint is not None:
+                    base_url, token = endpoint
+                    try:
+                        return await self._tool_loop_via_gateway(
+                            base_url=base_url,
+                            token=token,
+                            model=model,
+                            system_blocks=system_blocks,
+                            user_content=user_content,
+                            tools=tools,
+                            tool_handlers=tool_handlers,
+                            final_tool=final_tool,
+                            max_iter=max_iter,
+                            max_tokens=eff_max_tokens,
+                            usage_surface=usage_surface,
+                        )
+                    except _GatewayUnavailable as exc:
+                        logger.debug(
+                            f"[llm] gateway loopback unavailable for loop {model}, falling back to direct SDK: {exc}"
+                        )
+
                 leg = _leg_for(model, route)
                 if leg == "unsupported":
-                    # TTL 快照在过滤后刷新把协议翻成 google 的窗口 → 防御性跳过（走 fallback）。
+                    # google 仅能走 gateway loopback，fallback 时跳过进 chain 下一位。
                     raise LLMCallError(
                         f"provider protocol 'google' is not supported (model={model})"
                     )
-                eff_max_tokens = provider_routing.clamp_max_tokens(max_tokens, route)
+                eff_system = system_blocks
+                eff_user = user_content
+                eff_handlers = tool_handlers
+                vault: Optional[PythonMaskVault] = None
+                if route is not None and route.privacy_mask_enabled:
+                    try:
+                        vault = PythonMaskVault(route.privacy_mask_config)
+                        eff_system = vault.mask_system_blocks(system_blocks)
+                        eff_user = vault.mask_string(user_content)
+                    except PrivacyMaskError as exc:
+                        raise PrivacyMaskLLMError(f"E_PRIVACY_MASK_FAILED: {exc}") from exc
+                    except Exception as exc:  # noqa: BLE001
+                        raise PrivacyMaskLLMError(
+                            f"E_PRIVACY_MASK_FAILED: outbound privacy masking failed: {exc}"
+                        ) from exc
+
+                    def _wrap_handler(orig: ToolHandler, v: PythonMaskVault) -> ToolHandler:
+                        async def _wrapped(inp: Dict[str, Any]) -> str:
+                            unmasked_inp = v.unmask_value(inp) if isinstance(inp, dict) else inp
+                            res = orig(unmasked_inp)
+                            out_val = await res if inspect.isawaitable(res) else res
+                            out_str = (
+                                out_val
+                                if isinstance(out_val, str)
+                                else _json.dumps(out_val, ensure_ascii=False)
+                            )
+                            return v.mask_string(out_str)
+
+                        return _wrapped
+
+                    eff_handlers = {
+                        name: _wrap_handler(fn, vault) for name, fn in tool_handlers.items()
+                    }
                 if leg == "openai":
-                    return await self._run_loop_openai(
+                    loop_res = await self._run_loop_openai(
                         model=model,
                         route=route,
-                        system_blocks=system_blocks,
-                        user_content=user_content,
+                        system_blocks=eff_system,
+                        user_content=eff_user,
                         tools=tools,
-                        tool_handlers=tool_handlers,
+                        tool_handlers=eff_handlers,
                         final_tool=final_tool,
                         max_iter=max_iter,
                         max_tokens=eff_max_tokens,
                     )
-                return await self._run_loop_anthropic(
-                    model=model,
-                    route=route,
-                    system_blocks=system_blocks,
-                    user_content=user_content,
-                    tools=tools,
-                    tool_handlers=tool_handlers,
-                    final_tool=final_tool,
-                    max_iter=max_iter,
-                    max_tokens=eff_max_tokens,
+                else:
+                    loop_res = await self._run_loop_anthropic(
+                        model=model,
+                        route=route,
+                        system_blocks=eff_system,
+                        user_content=eff_user,
+                        tools=tools,
+                        tool_handlers=eff_handlers,
+                        final_tool=final_tool,
+                        max_iter=max_iter,
+                        max_tokens=eff_max_tokens,
+                    )
+                if vault is not None:
+                    if vault.hits:
+                        try:
+                            get_llm_provider_store().record_privacy_hits(vault.hits)
+                        except Exception:  # noqa: BLE001
+                            pass
+                    loop_res.final_input = vault.unmask_value(loop_res.final_input)
+                self._record_direct_usage(
+                    usage_surface=usage_surface,
+                    model=loop_res.model,
+                    protocol=route.protocol if route else None,
+                    input_tokens=loop_res.input_tokens,
+                    output_tokens=loop_res.output_tokens,
+                    cache_read_tokens=loop_res.cache_read_input_tokens,
+                    cache_write_tokens=loop_res.cache_creation_input_tokens,
+                    latency_ms=loop_res.latency_ms,
                 )
+                return loop_res
+            except PrivacyMaskLLMError:
+                raise
             except LLMCallError as e:
                 last_err = e
+                best_effort_append_probe_log(
+                    kind="runtime_error",
+                    ok=False,
+                    model=model,
+                    error_code="E_LLM_CALL",
+                    message=str(e),
+                )
                 if i + 1 < len(chain):
                     logger.warning(f"[llm] loop model={model} failed, fallback to {chain[i+1]}: {e}")
                     continue
@@ -733,7 +1202,7 @@ class LLMClient:
         client = self._anthropic_for(route) if route else None
         wire_model = route.model_id if route else model
         messages: List[Dict[str, Any]] = [{"role": "user", "content": user_content}]
-        total_in = total_out = total_cache_read = 0
+        total_in = total_out = total_cache_read = total_cache_write = 0
         tool_calls: List[Dict[str, Any]] = []
         t0 = time.monotonic()
 
@@ -755,14 +1224,17 @@ class LLMClient:
                     messages=messages,
                 )
             except Exception as e:
+                if route is not None and getattr(e, "status_code", None) == 429:
+                    provider_routing.mark_key_rate_limited(route.provider_id, route.api_key)
                 raise LLMCallError(
-                    f"loop messages.stream failed (model={model}, iter={it}): {e!r}"
+                    f"loop messages.stream failed (model={model}, iter={it}): {_redact_upstream(repr(e), route)}"
                 ) from e
 
             usage = msg.usage
             total_in += int(getattr(usage, "input_tokens", 0) or 0)
             total_out += int(getattr(usage, "output_tokens", 0) or 0)
             total_cache_read += int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+            total_cache_write += int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
 
             blocks = msg.content or []
             tool_uses = [b for b in blocks if getattr(b, "type", None) == "tool_use"]
@@ -781,6 +1253,7 @@ class LLMClient:
                     model=getattr(msg, "model", model),
                     latency_ms=int((time.monotonic() - t0) * 1000),
                     tool_calls=tool_calls,
+                    cache_creation_input_tokens=total_cache_write,
                 )
 
             # 回灌上一轮 assistant turn（含 tool_use）。
@@ -858,6 +1331,7 @@ class LLMClient:
         finish_reason = ""
         prompt_tokens = 0
         completion_tokens = 0
+        cached_prompt_tokens = 0
         try:
             async with http.stream(
                 "POST",
@@ -866,6 +1340,14 @@ class LLMClient:
                 headers={"Content-Type": "application/json", **(extra_headers or {})},
             ) as resp:
                 if resp.status_code >= 400:
+                    if resp.status_code == 429 and route is not None:
+                        hdrs = getattr(resp, "headers", None) or {}
+                        ra = hdrs.get("retry-after") if hasattr(hdrs, "get") else None
+                        provider_routing.mark_key_rate_limited(
+                            route.provider_id,
+                            route.api_key,
+                            provider_routing.parse_retry_after_seconds(ra),
+                        )
                     err_body = (await resp.aread()).decode("utf-8", errors="replace")
                     raise LLMCallError(
                         f"OpenAI HTTP {resp.status_code} (model={model}, {ctx}): "
@@ -913,6 +1395,9 @@ class LLMClient:
                         completion_tokens = (
                             int(usage.get("completion_tokens") or 0) or completion_tokens
                         )
+                        details = usage.get("prompt_tokens_details")
+                        if isinstance(details, dict) and details.get("cached_tokens"):
+                            cached_prompt_tokens = int(details["cached_tokens"] or 0)
         except LLMCallError:
             raise
         except Exception as e:
@@ -923,6 +1408,7 @@ class LLMClient:
             "finish_reason": finish_reason,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
+            "cached_tokens": cached_prompt_tokens,
         }
 
     async def _run_loop_openai(
@@ -959,7 +1445,7 @@ class LLMClient:
             {"role": "system", "content": sys_text},
             {"role": "user", "content": user_content},
         ]
-        total_in = total_out = 0
+        total_in = total_out = total_cache_read = 0
         tool_calls_audit: List[Dict[str, Any]] = []
         t0 = time.monotonic()
 
@@ -979,6 +1465,8 @@ class LLMClient:
                 "tools": tools_payload,
                 "tool_choice": tool_choice,
             }
+            if route is not None:
+                body["stream_options"] = {"include_usage": True}
             # 仅强制轮 merge provider/model quirk（DeepSeek 禁 thinking）；auto 轮不注入
             # ——保留 thinking 给推理用。route=None（legacy）不注入。
             if forced_final and route is not None:
@@ -996,7 +1484,10 @@ class LLMClient:
                 route=route,
                 extra_headers=session_headers,
             )
-            total_in += turn["prompt_tokens"]
+            c_read = int(turn.get("cached_tokens") or 0)
+            p_tok = int(turn["prompt_tokens"] or 0)
+            total_in += max(0, p_tok - c_read) if c_read else p_tok
+            total_cache_read += c_read
             total_out += turn["completion_tokens"]
 
             calls = turn["tool_calls"]
@@ -1015,7 +1506,7 @@ class LLMClient:
                     iterations=it + 1,
                     input_tokens=total_in,
                     output_tokens=total_out,
-                    cache_read_input_tokens=0,
+                    cache_read_input_tokens=total_cache_read,
                     model=model,
                     latency_ms=int((time.monotonic() - t0) * 1000),
                     tool_calls=tool_calls_audit,
@@ -1096,6 +1587,12 @@ class LLMClient:
             except Exception as e:
                 logger.debug(f"[llm-client] httpx close ignored err: {e!r}")
             self._http = None
+        if self._gateway_http is not None:
+            try:
+                await self._gateway_http.aclose()
+            except Exception as e:
+                logger.debug(f"[llm-client] gateway httpx close ignored err: {e!r}")
+            self._gateway_http = None
         # per-provider 客户端 + 签名失配换下来的旧实例（flag on 路径）。
         for _sig, inst in self._anthropic_by_provider.values():
             try:

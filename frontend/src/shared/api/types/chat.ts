@@ -142,6 +142,7 @@ export interface AgentRunSpec {
     grantExec?: true
     grantWeb?: 'gated' | 'open'
     grantConnectors?: Record<string, 'read' | 'write' | 'update'>
+    grantConnectorTools?: Record<string, string[]>
     /** task 09-02 — projected ONLY when 'all' (same non-default-only shape as grantWeb); absent =
      *  'own'. Gateway re-derives it via parseSessionsGrant (fail-closed). */
     grantSessions?: 'all'
@@ -183,8 +184,16 @@ export interface HeadlessAgentResult {
   outcome: 'completed' | 'paused_handoff' | 'error'
   sessionId: number | null
   steps: number
+  model?: string
+  costUsd?: number | null
   summary?: string
-  usage?: { inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null }
+  usage?: {
+    inputTokens?: number | null
+    outputTokens?: number | null
+    cacheReadTokens?: number | null
+    cacheWriteTokens?: number | null
+    totalTokens?: number | null
+  }
   approvalTtlSec?: number
   /** Present only on outcome==='error'. The endpoint sends `error.code` (a STRING) to the worker,
    *  which stores it as async_jobs.last_error (AgentRunWorker._map_response str()s resp.error). */
@@ -215,6 +224,10 @@ export interface ChatMessage {
   content: string
   tokens_input: number | null
   tokens_output: number | null
+  /** v33 (Phase 4) — Prompt Cache 命中/写入 token（ai@7 inputTokenDetails）。
+   *  Optional for SELECT * compatibility against pre-v33 DBs. */
+  cache_read_tokens?: number | null
+  cache_write_tokens?: number | null
   cost_usd: number | null
   model: string | null
   status: ChatMessageStatus

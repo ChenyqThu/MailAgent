@@ -33,7 +33,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Body, Depends, Query, Request
 
 from src.agent_config.enabled_models import ensure_seeded_store
 from src.agent_config.llm_providers import (
@@ -42,9 +42,14 @@ from src.agent_config.llm_providers import (
     LlmModelRow,
     LlmProviderRow,
     LlmProviderStore,
+    best_effort_append_probe_log,
 )
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access, verify_local_token
+from src.services.llm_usage_analytics import (
+    VALID_USAGE_RANGES,
+    collect_llm_usage_analytics,
+)
 
 # URL 归一 + 脱敏单源 = provider_routing（review HIGH-2/HIGH-3：探测面与 runtime 面
 # 必须推导出同一 wire URL，禁止 router 里复制实现）。
@@ -74,8 +79,16 @@ _DEFAULT_BASES: Dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
-def _masked_provider_dict(store: LlmProviderStore, row: LlmProviderRow) -> Dict[str, Any]:
+def _masked_provider_dict(
+    store: LlmProviderStore,
+    row: LlmProviderRow,
+    counts: Optional[Tuple[int, int]] = None,
+) -> Dict[str, Any]:
     key = store.get_provider_api_key(row.id) if row.has_key else None
+    extra_keys = store.get_provider_extra_api_keys(row.id) if row.has_extra_keys else []
+    if counts is None:
+        counts = store.model_counts_by_provider().get(row.id, (0, 0))
+    total_count, enabled_count = counts
     return {
         "id": row.id,
         "protocol": row.protocol,
@@ -89,6 +102,12 @@ def _masked_provider_dict(store: LlmProviderStore, row: LlmProviderRow) -> Dict[
         "hasKey": row.has_key,
         # last4 供 UI 识别是哪把 key（掩码显示业界标配）；解密失败 → None（hasKey 仍 True）。
         "keyLast4": key[-4:] if key else None,
+        "keyCount": (1 if row.has_key else 0) + len(extra_keys),
+        "extraKeyLast4s": [k[-4:] if len(k) >= 4 else "····" for k in extra_keys],
+        "customIcon": row.custom_icon,
+        "privacyMaskEnabled": row.privacy_mask_enabled,
+        "enabledModelCount": enabled_count,
+        "totalModelCount": total_count,
         "isDefault": row.id == DEFAULT_PROVIDER_ID,
         "createdAt": row.created_at,
         "updatedAt": row.updated_at,
@@ -385,6 +404,100 @@ async def provider_snapshot(request: Request):
     return success_envelope(store.snapshot(), request=request, source="sqlite")
 
 
+@router.get("/usage")
+async def get_llm_usage_analytics(
+    request: Request,
+    range_key: str = Query("7d", alias="range"),
+    _: None = Depends(verify_cf_access),
+):
+    """Phase 4 WP-4D — 跨库统一 LLM 用量 / Prompt Cache 命中率 / 最近 50 条探测诊断日志。"""
+    if range_key not in VALID_USAGE_RANGES:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"'range' must be one of {VALID_USAGE_RANGES}",
+            source="sqlite",
+        )
+    ensure_seeded_store()
+    payload = collect_llm_usage_analytics(range_key=range_key)
+    return success_envelope(payload, request=request, source="sqlite")
+
+
+@router.delete("/probelog")
+async def clear_llm_probe_log(
+    request: Request,
+    _: None = Depends(verify_local_token),
+):
+    """Phase 4 WP-4D — 清空诊断探测日志（仅本地写面鉴权）。"""
+    store = ensure_seeded_store()
+    cleared = store.clear_probe_logs()
+    return success_envelope({"cleared": cleared}, request=request, source="sqlite")
+
+
+@router.get("/privacy-config")
+async def get_privacy_mask_config(
+    request: Request,
+    _: None = Depends(verify_cf_access),
+):
+    """Phase 5 WP-5A — 读全局隐私脱敏规则与本地命中计数（只含类别计数，零明文）。"""
+    store = ensure_seeded_store()
+    return success_envelope(
+        {
+            "config": store.get_privacy_mask_config(),
+            "hits": store.get_privacy_hits(),
+        },
+        request=request,
+        source="sqlite",
+    )
+
+
+@router.put("/privacy-config")
+async def put_privacy_mask_config(
+    request: Request,
+    body: Optional[Dict[str, Any]] = Body(default=None),
+    _: None = Depends(verify_local_token),
+):
+    """Phase 5 WP-5A — 保存全局隐私脱敏规则并刷新 gateway snapshot version（仅本地写入）。"""
+    store = ensure_seeded_store()
+    try:
+        saved = store.set_privacy_mask_config(body or {})
+    except ValueError as exc:
+        raise APIError("E_INVALID_ARG", str(exc), source="sqlite") from exc
+    return success_envelope(
+        {
+            "config": saved,
+            "hits": store.get_privacy_hits(),
+        },
+        request=request,
+        source="sqlite",
+    )
+
+
+@router.post("/privacy-hits")
+async def post_privacy_mask_hits(
+    request: Request,
+    body: Optional[Dict[str, Any]] = Body(default=None),
+    _: None = Depends(verify_local_token),
+):
+    """Phase 5 WP-5A — 记录本地脱敏命中次数（gateway loopback 内部写口）。"""
+    counts = (body or {}).get("counts")
+    if not isinstance(counts, dict):
+        raise APIError("E_INVALID_ARG", "'counts' must be an object", source="sqlite")
+    store = ensure_seeded_store()
+    store.record_privacy_hits(counts)
+    return success_envelope({"hits": store.get_privacy_hits()}, request=request, source="sqlite")
+
+
+@router.delete("/privacy-hits")
+async def clear_privacy_mask_hits(
+    request: Request,
+    _: None = Depends(verify_local_token),
+):
+    """Phase 5 WP-5A — 清零脱敏命中统计（仅本地写入）。"""
+    store = ensure_seeded_store()
+    cleared = store.clear_privacy_hits()
+    return success_envelope({"cleared": cleared}, request=request, source="sqlite")
+
+
 # ---------------------------------------------------------------------------
 # provider CRUD（owner 面，掩码）
 # ---------------------------------------------------------------------------
@@ -394,7 +507,11 @@ async def provider_snapshot(request: Request):
 async def list_providers(request: Request, _: None = Depends(verify_cf_access)):
     """provider 列表（含 disabled 行；key 掩码 hasKey + keyLast4，永不回明文）。"""
     store = ensure_seeded_store()
-    providers = [_masked_provider_dict(store, p) for p in store.list_providers()]
+    counts_map = store.model_counts_by_provider()
+    providers = [
+        _masked_provider_dict(store, p, counts_map.get(p.id, (0, 0)))
+        for p in store.list_providers()
+    ]
     return success_envelope(
         {"providers": providers, "version": store.get_snapshot_version()},
         request=request,
@@ -406,10 +523,23 @@ async def list_providers(request: Request, _: None = Depends(verify_cf_access)):
 # 拒未知字段与隐式类型转换——`enabled:"false"` 曾被 bool() 转成 True 写成相反状态、拼错的
 # 字段名被静默忽略、对象值曾被 str() 字符串化入库或在 SQLite 绑定阶段炸成未捕获 500）。
 _PROVIDER_CREATE_KEYS = frozenset(
-    {"id", "protocol", "displayName", "baseUrl", "apiKey", "headers", "enabled", "sortOrder"}
+    {
+        "id",
+        "protocol",
+        "displayName",
+        "baseUrl",
+        "apiKey",
+        "extraApiKeys",
+        "headers",
+        "customIcon",
+        "privacyMaskEnabled",
+        "enabled",
+        "sortOrder",
+    }
 )
-_PROVIDER_PATCH_KEYS = frozenset(_PROVIDER_CREATE_KEYS - {"id"})
+_PROVIDER_PATCH_KEYS = frozenset((_PROVIDER_CREATE_KEYS - {"id"}) | {"headerPatch"})
 _SORT_ORDER_CEILING = 10_000
+_PROBE_KEYS = frozenset({"protocol", "baseUrl", "apiKey", "providerId", "modelId", "headers"})
 
 
 def _validate_provider_body(body: Dict[str, Any], *, allowed: frozenset) -> None:
@@ -417,7 +547,9 @@ def _validate_provider_body(body: Dict[str, Any], *, allowed: frozenset) -> None
 
     - 未知顶层字段 400；`protocol` 枚举；`displayName`/`baseUrl` 严格 string（清空传 ''，
       不收 null）；`apiKey` string 或 null（null = 无 key / PATCH 清除，前端契约）；
-    - `headers` 平坦 string→string map 或 null（null/{} = 清空，全量替换语义不变）；
+    - `extraApiKeys` string[] 或 null；
+    - `headers` 平坦 string→string map 或 null；`headerPatch` 平坦 string→(string|null)；
+    - `customIcon` string（≤200）或 null；
     - `enabled` 严格 bool；`sortOrder` 0..10000 有界整数（bool 是 int 子类，显式拒）。
     """
     unknown = set(body) - allowed
@@ -443,6 +575,20 @@ def _validate_provider_body(body: Dict[str, Any], *, allowed: frozenset) -> None
         raise APIError(
             "E_INVALID_ARG", "'apiKey' must be a string (null clears the key)", source="sqlite"
         )
+    if "extraApiKeys" in body and body["extraApiKeys"] is not None:
+        extra = body["extraApiKeys"]
+        if not isinstance(extra, list) or not all(isinstance(x, str) for x in extra):
+            raise APIError(
+                "E_INVALID_ARG",
+                "'extraApiKeys' must be a string array or null",
+                source="sqlite",
+            )
+    if "headers" in body and "headerPatch" in body:
+        raise APIError(
+            "E_INVALID_ARG",
+            "cannot specify both 'headers' and 'headerPatch'",
+            source="sqlite",
+        )
     if "headers" in body and body["headers"] is not None:
         headers = body["headers"]
         if not isinstance(headers, dict) or not all(
@@ -453,8 +599,30 @@ def _validate_provider_body(body: Dict[str, Any], *, allowed: frozenset) -> None
                 "'headers' must be a flat string→string object (null/{} clears)",
                 source="sqlite",
             )
+    if "headerPatch" in body:
+        hp = body["headerPatch"]
+        if not isinstance(hp, dict) or not all(
+            isinstance(k, str) and (v is None or isinstance(v, str)) for k, v in hp.items()
+        ):
+            raise APIError(
+                "E_INVALID_ARG",
+                "'headerPatch' must map string keys to string or null",
+                source="sqlite",
+            )
+    if "customIcon" in body and body["customIcon"] is not None:
+        icon = body["customIcon"]
+        if not isinstance(icon, str) or len(icon.strip()) > 200:
+            raise APIError(
+                "E_INVALID_ARG",
+                "'customIcon' must be a string (<=200 chars) or null",
+                source="sqlite",
+            )
     if "enabled" in body and not isinstance(body["enabled"], bool):
         raise APIError("E_INVALID_ARG", "'enabled' must be a boolean", source="sqlite")
+    if "privacyMaskEnabled" in body and not isinstance(body["privacyMaskEnabled"], bool):
+        raise APIError(
+            "E_INVALID_ARG", "'privacyMaskEnabled' must be a boolean", source="sqlite"
+        )
     if "sortOrder" in body:
         sort_order = body["sortOrder"]
         if (
@@ -469,14 +637,147 @@ def _validate_provider_body(body: Dict[str, Any], *, allowed: frozenset) -> None
             )
 
 
+@router.post("/probe")
+async def probe_provider_draft(
+    request: Request,
+    body: Optional[Dict[str, Any]] = None,
+    _: None = Depends(verify_local_token),
+):
+    """免落库（或复用已存密钥+自定义模型）连通性探活。归写面 = verify_local_token。"""
+    body = body or {}
+    unknown = set(body) - _PROBE_KEYS
+    if unknown:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"unknown fields: {sorted(unknown)}",
+            hint=f"allowed: {sorted(_PROBE_KEYS)}",
+            source="sqlite",
+        )
+    store = ensure_seeded_store()
+    prov: Optional[LlmProviderRow] = None
+    if "providerId" in body and body["providerId"] is not None:
+        pid = body["providerId"]
+        if not isinstance(pid, str) or not pid.strip():
+            raise APIError("E_INVALID_ARG", "'providerId' must be a non-empty string", source="sqlite")
+        prov = _require_provider(store, pid.strip())
+
+    protocol = body.get("protocol") if "protocol" in body else (prov.protocol if prov else None)
+    if not isinstance(protocol, str) or protocol not in PROVIDER_PROTOCOLS:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"'protocol' must be one of {PROVIDER_PROTOCOLS}",
+            source="sqlite",
+        )
+    raw_base = body["baseUrl"] if "baseUrl" in body else (prov.base_url if prov else "")
+    if not isinstance(raw_base, str):
+        raise APIError("E_INVALID_ARG", "'baseUrl' must be a string", source="sqlite")
+    raw_key = body.get("apiKey")
+    if raw_key is not None and not isinstance(raw_key, str):
+        raise APIError("E_INVALID_ARG", "'apiKey' must be a string", source="sqlite")
+    if raw_key:
+        api_key = raw_key
+    elif prov is not None:
+        all_keys = store.get_provider_api_keys(prov.id)
+        api_key = all_keys[0] if all_keys else ""
+    else:
+        api_key = ""
+
+    headers = body.get("headers") if "headers" in body else (prov.headers if prov else None)
+    if headers is not None and (
+        not isinstance(headers, dict)
+        or not all(isinstance(k, str) and isinstance(v, str) for k, v in headers.items())
+    ):
+        raise APIError("E_INVALID_ARG", "'headers' must be a flat string→string map", source="sqlite")
+
+    model_id = body.get("modelId")
+    if model_id is not None and not isinstance(model_id, str):
+        raise APIError("E_INVALID_ARG", "'modelId' must be a string", source="sqlite")
+    probe_model = model_id.strip() if isinstance(model_id, str) and model_id.strip() else None
+    if probe_model is None and prov is not None:
+        models = store.list_models(prov.id)
+        probe_model = next((m.model_id for m in models if m.enabled), None) or (
+            models[0].model_id if models else None
+        )
+
+    base = _resolve_base(protocol, raw_base)
+    problem = (
+        "base_url not configured for this provider" if not base else _outbound_base_problem(base)
+    )
+    if problem:
+        best_effort_append_probe_log(
+            provider_id=prov.id if prov else None,
+            protocol=protocol,
+            model=probe_model,
+            kind="probe",
+            ok=False,
+            latency_ms=0,
+            message=problem,
+        )
+        return success_envelope(
+            {"ok": False, "latencyMs": 0, "error": problem},
+            request=request,
+            source="upstream",
+        )
+    t0 = time.monotonic()
+    try:
+        error = await _probe_provider(
+            protocol, base, api_key, probe_model, headers=headers
+        )
+    except Exception:  # noqa: BLE001 — 防御兜底；不 5xx
+        error = "unexpected error during connectivity test"
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    best_effort_append_probe_log(
+        provider_id=prov.id if prov else None,
+        protocol=protocol,
+        model=probe_model,
+        kind="probe",
+        ok=(error is None),
+        latency_ms=latency_ms,
+        message=error,
+    )
+    return success_envelope(
+        {"ok": error is None, "latencyMs": latency_ms, "error": error},
+        request=request,
+        source="upstream",
+    )
+
+
+@router.put("/reorder")
+async def reorder_providers(
+    request: Request,
+    body: Optional[Dict[str, Any]] = None,
+    _: None = Depends(verify_local_token),
+):
+    """按 ids 数组顺序批量更新 sortOrder（拖拽排序单次提交）。"""
+    body = body or {}
+    if set(body) - {"ids"}:
+        raise APIError("E_INVALID_ARG", "body only accepts 'ids'", source="sqlite")
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not all(isinstance(x, str) and x.strip() for x in ids):
+        raise APIError("E_INVALID_ARG", "'ids' must be a list of non-empty strings", source="sqlite")
+    store = ensure_seeded_store()
+    rows = store.reorder_providers([x.strip() for x in ids])
+    counts_map = store.model_counts_by_provider()
+    return success_envelope(
+        {
+            "providers": [
+                _masked_provider_dict(store, p, counts_map.get(p.id, (0, 0))) for p in rows
+            ],
+            "version": store.get_snapshot_version(),
+        },
+        request=request,
+        source="sqlite",
+    )
+
+
 @router.post("")
 async def create_provider(
     request: Request,
     body: Optional[Dict[str, Any]] = None,
     _: None = Depends(verify_local_token),
 ):
-    """新建 provider。body: {id, protocol, displayName?, baseUrl?, apiKey?, headers?,
-    enabled?, sortOrder?}。apiKey 明文入参 → 落库即 Fernet 密文；响应恒掩码。
+    """新建 provider。body: {id, protocol, displayName?, baseUrl?, apiKey?, extraApiKeys?,
+    headers?, customIcon?, enabled?, sortOrder?}。apiKey 明文入参 → 落库即 Fernet 密文；响应恒掩码。
     严格 schema 见 ``_validate_provider_body``（终审 MEDIUM-4）。"""
     body = body or {}
     _validate_provider_body(body, allowed=_PROVIDER_CREATE_KEYS)
@@ -497,13 +798,16 @@ async def create_provider(
             display_name=body.get("displayName") or "",
             base_url=body.get("baseUrl") or "",
             api_key=body.get("apiKey"),
+            extra_api_keys=body.get("extraApiKeys"),
             headers=body.get("headers"),
+            custom_icon=body.get("customIcon"),
+            privacy_mask_enabled=body.get("privacyMaskEnabled", False),
             enabled=body.get("enabled", True),
             sort_order=body.get("sortOrder", 0),
         )
     except ValueError as exc:
         raise APIError("E_INVALID_ARG", str(exc), source="sqlite") from exc
-    return success_envelope(_masked_provider_dict(store, row), request=request, source="sqlite")
+    return success_envelope(_masked_provider_dict(store, row, (0, 0)), request=request, source="sqlite")
 
 
 @router.patch("/{provider_id}")
@@ -514,9 +818,8 @@ async def update_provider(
     _: None = Depends(verify_local_token),
 ):
     """部分更新（body 里出现的键才动）。``apiKey``：非空 str = 轮换；空串/null = 清除。
-    ``headers``：write-only 明文 map（响应只回 headerNames，HIGH-1），**全量替换**语义
-    ——省略 = 不改；``{}``/null = 清空。严格 schema 见 ``_validate_provider_body``
-    （终审 MEDIUM-4）。"""
+    ``extraApiKeys``：备用池覆盖。``headers``：全量替换；``headerPatch``：单键增删改。
+    严格 schema 见 ``_validate_provider_body``（终审 MEDIUM-4）。"""
     body = body or {}
     _validate_provider_body(body, allowed=_PROVIDER_PATCH_KEYS)
     store = ensure_seeded_store()
@@ -530,8 +833,16 @@ async def update_provider(
         kwargs["base_url"] = body["baseUrl"]
     if "apiKey" in body:
         kwargs["api_key"] = body["apiKey"]
+    if "extraApiKeys" in body:
+        kwargs["extra_api_keys"] = body["extraApiKeys"]
     if "headers" in body:
         kwargs["headers"] = body["headers"]
+    if "headerPatch" in body:
+        kwargs["header_patch"] = body["headerPatch"]
+    if "customIcon" in body:
+        kwargs["custom_icon"] = body["customIcon"]
+    if "privacyMaskEnabled" in body:
+        kwargs["privacy_mask_enabled"] = body["privacyMaskEnabled"]
     if "enabled" in body:
         kwargs["enabled"] = body["enabled"]
     if "sortOrder" in body:
@@ -613,13 +924,15 @@ async def refresh_provider_models(
     prov = _require_provider(store, provider_id)
     error: Optional[str] = None
     fetched_new = 0
+    t0 = time.monotonic()
     base = _resolve_base(prov.protocol, prov.base_url)
     if not base:
         error = "base_url not configured for this provider"
     else:
         error = _outbound_base_problem(base)
     if error is None:
-        api_key = store.get_provider_api_key(provider_id) or ""
+        all_keys = store.get_provider_api_keys(provider_id)
+        api_key = all_keys[0] if all_keys else ""
         try:
             fetched = await _fetch_provider_models(
                 prov.protocol, base, api_key, headers=prov.headers
@@ -629,6 +942,15 @@ async def refresh_provider_models(
             error = str(exc)
         except Exception:  # noqa: BLE001 — 防御兜底；不 5xx
             error = "unexpected error while fetching upstream models"
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    best_effort_append_probe_log(
+        provider_id=provider_id,
+        protocol=prov.protocol,
+        kind="models_refresh",
+        ok=(error is None),
+        latency_ms=latency_ms,
+        message=error,
+    )
     models = [_model_dict(m) for m in store.list_models(provider_id)]
     return success_envelope(
         {"provider": provider_id, "models": models, "fetchedNew": fetched_new, "error": error},
@@ -645,10 +967,45 @@ async def refresh_provider_models(
 
 # model upsert 的入参约束（review 批2 MEDIUM-6：拒未知字段与隐式类型转换）。
 _MODEL_UPSERT_KEYS = frozenset(
-    {"id", "displayName", "enabled", "capabilities", "maxOutput", "contextWindow"}
+    {"id", "displayName", "groupName", "enabled", "capabilities", "maxOutput", "contextWindow"}
 )
 _CAPABILITY_KEYS = frozenset({"tools", "vision", "reasoning"})
 _MAX_OUTPUT_CEILING = 2_000_000
+
+
+@router.post("/{provider_id}/models/batch")
+async def batch_update_provider_models(
+    provider_id: str,
+    request: Request,
+    body: Optional[Dict[str, Any]] = None,
+    _: None = Depends(verify_local_token),
+):
+    """批量启停或清理未启用的拉取模型。body: {action, modelIds?}。"""
+    body = body or {}
+    unknown = set(body) - {"action", "modelIds"}
+    if unknown:
+        raise APIError("E_INVALID_ARG", f"unknown fields: {sorted(unknown)}", source="sqlite")
+    action = body.get("action")
+    if action not in ("enable", "disable", "clear_unenabled_fetched"):
+        raise APIError(
+            "E_INVALID_ARG",
+            "'action' must be one of enable / disable / clear_unenabled_fetched",
+            source="sqlite",
+        )
+    model_ids = body.get("modelIds")
+    if model_ids is not None and (
+        not isinstance(model_ids, list) or not all(isinstance(m, str) for m in model_ids)
+    ):
+        raise APIError("E_INVALID_ARG", "'modelIds' must be a list of strings", source="sqlite")
+    store = ensure_seeded_store()
+    _require_provider(store, provider_id)
+    affected = store.batch_update_models(provider_id, action=action, model_ids=model_ids)
+    models = [_model_dict(m) for m in store.list_models(provider_id)]
+    return success_envelope(
+        {"provider": provider_id, "models": models, "affected": affected},
+        request=request,
+        source="sqlite",
+    )
 
 
 @router.put("/{provider_id}/models")
@@ -658,7 +1015,7 @@ async def upsert_provider_model(
     body: Optional[Dict[str, Any]] = None,
     _: None = Depends(verify_local_token),
 ):
-    """model 行 upsert。body: {id, displayName?, enabled?, capabilities?, maxOutput?, contextWindow?}。
+    """model 行 upsert。body: {id, displayName?, groupName?, enabled?, capabilities?, maxOutput?, contextWindow?}。
 
     merge 语义：body 里出现的键才动，未出现的键保留现行值（store.upsert_model 是全字段
     覆盖 → 端点先读现行行回填，避免「勾启用」把 maxOutput/capabilities 清掉）。新行 =
@@ -693,6 +1050,9 @@ async def upsert_provider_model(
     display_name = _pick("displayName", existing.display_name if existing else None)
     if display_name is not None and not isinstance(display_name, str):
         raise APIError("E_INVALID_ARG", "'displayName' must be a string", source="sqlite")
+    group_name = _pick("groupName", existing.group_name if existing else None)
+    if group_name is not None and (not isinstance(group_name, str) or len(group_name) > 120):
+        raise APIError("E_INVALID_ARG", "'groupName' must be a string (<=120 chars) or null", source="sqlite")
     enabled = _pick("enabled", existing.enabled if existing else True)
     if not isinstance(enabled, bool):
         raise APIError("E_INVALID_ARG", "'enabled' must be a boolean", source="sqlite")
@@ -735,7 +1095,7 @@ async def upsert_provider_model(
             provider_id,
             model_id,
             display_name=display_name,
-            group_name=existing.group_name if existing else None,
+            group_name=group_name,
             enabled=enabled,
             capabilities=capabilities,
             max_output=max_output,
@@ -775,10 +1135,17 @@ async def delete_provider_model(
 async def test_provider(
     provider_id: str,
     request: Request,
+    body: Optional[Dict[str, Any]] = None,
     _: None = Depends(verify_local_token),
 ):
-    """连通性测试：先试 models 端点，404 再发 max_tokens=1 最小补全。恒 200，
+    """连通性测试：先试 models 端点，404 再发 max_tokens=1 最小补全。可选传 ``{modelId}`` 指定探测模型。恒 200，
     data = {ok, latencyMs, error?}（error 可读、不泄 key）。"""
+    if body:
+        unknown = set(body) - {"modelId"}
+        if unknown:
+            raise APIError("E_INVALID_ARG", f"unknown fields: {sorted(unknown)}", source="sqlite")
+        if "modelId" in body and body["modelId"] is not None and not isinstance(body["modelId"], str):
+            raise APIError("E_INVALID_ARG", "'modelId' must be a string", source="sqlite")
     store = ensure_seeded_store()
     prov = _require_provider(store, provider_id)
     base = _resolve_base(prov.protocol, prov.base_url)
@@ -786,14 +1153,28 @@ async def test_provider(
         "base_url not configured for this provider" if not base else _outbound_base_problem(base)
     )
     if problem:
+        best_effort_append_probe_log(
+            provider_id=provider_id,
+            protocol=prov.protocol,
+            kind="test",
+            ok=False,
+            latency_ms=0,
+            message=problem,
+        )
         return success_envelope(
             {"ok": False, "latencyMs": 0, "error": problem},
             request=request,
             source="upstream",
         )
-    api_key = store.get_provider_api_key(provider_id) or ""
+    all_keys = store.get_provider_api_keys(provider_id)
+    api_key = all_keys[0] if all_keys else ""
+    explicit_model = (
+        body.get("modelId").strip()
+        if body and isinstance(body.get("modelId"), str) and body.get("modelId").strip()
+        else None
+    )
     models = store.list_models(provider_id)
-    probe_model = next((m.model_id for m in models if m.enabled), None) or (
+    probe_model = explicit_model or next((m.model_id for m in models if m.enabled), None) or (
         models[0].model_id if models else None
     )
     t0 = time.monotonic()
@@ -804,6 +1185,15 @@ async def test_provider(
     except Exception:  # noqa: BLE001 — 防御兜底；不 5xx（error 恒可读）
         error = "unexpected error during connectivity test"
     latency_ms = int((time.monotonic() - t0) * 1000)
+    best_effort_append_probe_log(
+        provider_id=provider_id,
+        protocol=prov.protocol,
+        model=probe_model,
+        kind="test",
+        ok=(error is None),
+        latency_ms=latency_ms,
+        message=error,
+    )
     return success_envelope(
         {"ok": error is None, "latencyMs": latency_ms, "error": error},
         request=request,

@@ -559,6 +559,7 @@ async def generate_contact_profile(
                 tool_schema=PROFILE_TOOL_SCHEMA,
                 tool_name=PROFILE_TOOL_NAME,
                 model_chain=_model_chain(cfg),
+                usage_surface="contact_profile",
             )
         finally:
             if own_client:

@@ -196,6 +196,7 @@ def _zero_cost() -> dict:
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
         "cache_hit_rate_pct": 0.0,
+        "token_cache_hit_rate_pct": 0.0,
         "avg_latency_ms": 0,
         "success_rows": 0,
     }
@@ -287,12 +288,20 @@ async def llm_stats(
         rows_n = int(cost_row["rows_n"]) if cost_row else 0
         hit_count = int(cost_row["hit_count"]) if cost_row else 0
         cache_hit_rate_pct = round(100.0 * hit_count / rows_n, 1) if rows_n > 0 else 0.0
+        in_tok_sum = int(cost_row["in_tok"] or 0)
+        cache_write_sum = int(cost_row["cache_write"] or 0)
+        cache_read_sum = int(cost_row["cache_read"] or 0)
+        token_denom = in_tok_sum + cache_read_sum + cache_write_sum
+        token_cache_hit_rate_pct = (
+            round(100.0 * cache_read_sum / token_denom, 1) if token_denom > 0 else 0.0
+        )
         cost = {
-            "input_tokens": int(cost_row["in_tok"] or 0),
+            "input_tokens": in_tok_sum,
             "output_tokens": int(cost_row["out_tok"] or 0),
-            "cache_creation_input_tokens": int(cost_row["cache_write"] or 0),
-            "cache_read_input_tokens": int(cost_row["cache_read"] or 0),
+            "cache_creation_input_tokens": cache_write_sum,
+            "cache_read_input_tokens": cache_read_sum,
             "cache_hit_rate_pct": cache_hit_rate_pct,
+            "token_cache_hit_rate_pct": token_cache_hit_rate_pct,
             "avg_latency_ms": int(cost_row["avg_ms"] or 0),
             "success_rows": rows_n,
         }
@@ -307,6 +316,7 @@ async def llm_stats(
                        COALESCE(SUM(input_tokens), 0)             AS in_tok,
                        COALESCE(SUM(output_tokens), 0)            AS out_tok,
                        COALESCE(SUM(cache_read_input_tokens), 0)  AS cache_read,
+                       COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_write,
                        COALESCE(AVG(latency_ms), 0)               AS avg_ms
                   FROM llm_processing
                  {where} {'AND' if where else 'WHERE'} status='success'
@@ -321,6 +331,7 @@ async def llm_stats(
                 "input_tokens": int(r["in_tok"] or 0),
                 "output_tokens": int(r["out_tok"] or 0),
                 "cache_read_input_tokens": int(r["cache_read"] or 0),
+                "cache_creation_input_tokens": int(r["cache_write"] or 0),
                 "avg_latency_ms": int(r["avg_ms"] or 0),
             }
             for r in by_model_rows

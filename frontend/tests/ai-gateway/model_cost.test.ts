@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from 'vitest'
 
-import { costUsdFor } from '../../src/ai-gateway/modelCost'
+import { cacheSavedUsdFor, costUsdFor } from '../../src/ai-gateway/modelCost'
 import { lookupModelMeta } from '../../src/shared/modelCatalog/lookup'
 
 describe('costUsdFor', () => {
@@ -55,5 +55,56 @@ describe('costUsdFor', () => {
     ).toBeNull()
     expect(costUsdFor(null, { inputTokens: 10, outputTokens: 10 }, 'anthropic')).toBeNull()
     expect(costUsdFor('', { inputTokens: 10, outputTokens: 10 }, 'anthropic')).toBeNull()
+  })
+
+  test('四档缓存计价：AI SDK 总 inputTokens 口径不重复计费 cacheReadTokens，且与 inputIsUncachedOnly 对齐', () => {
+    const cost = lookupModelMeta('claude-sonnet-4-5', 'anthropic')?.cost
+    expect(cost?.input).toBeTypeOf('number')
+    expect(cost?.output).toBeTypeOf('number')
+    expect(cost?.cacheRead).toBeTypeOf('number')
+    expect(cost?.cacheWrite).toBeTypeOf('number')
+
+    // 1M uncached + 2M cacheRead + 0.5M cacheWrite + 0.2M output
+    // AI SDK reports total prompt tokens = 1M + 2M + 0.5M = 3.5M
+    const sdkCost = costUsdFor(
+      'claude-sonnet-4-5',
+      {
+        inputTokens: 3_500_000,
+        outputTokens: 200_000,
+        cacheReadTokens: 2_000_000,
+        cacheWriteTokens: 500_000,
+        noCacheTokens: 1_000_000
+      },
+      'anthropic'
+    )
+    const rawAnthropicCost = costUsdFor(
+      'claude-sonnet-4-5',
+      {
+        inputTokens: 1_000_000,
+        outputTokens: 200_000,
+        cacheReadTokens: 2_000_000,
+        cacheWriteTokens: 500_000,
+        inputIsUncachedOnly: true
+      },
+      'anthropic'
+    )
+    const expected =
+      1 * cost!.input! +
+      0.2 * cost!.output! +
+      2 * cost!.cacheRead! +
+      0.5 * cost!.cacheWrite!
+    expect(sdkCost).toBeCloseTo(expected, 9)
+    expect(rawAnthropicCost).toBeCloseTo(expected, 9)
+
+    const saved = cacheSavedUsdFor(
+      'claude-sonnet-4-5',
+      {
+        inputTokens: 3_500_000,
+        outputTokens: 200_000,
+        cacheReadTokens: 2_000_000
+      },
+      'anthropic'
+    )
+    expect(saved).toBeCloseTo(2 * (cost!.input! - cost!.cacheRead!), 9)
   })
 })

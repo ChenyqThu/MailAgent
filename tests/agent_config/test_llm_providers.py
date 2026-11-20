@@ -415,3 +415,64 @@ def test_snapshot_shape_matches_contract(tmp_path):
     assert dash_models["qwen-turbo"]["contextWindow"] is None
     # 无 key 的 provider → apiKey ""
     assert by_id["dash"]["apiKey"] == ""
+
+
+def test_extra_api_keys_custom_icon_and_header_patch(tmp_path):
+    st = _store(tmp_path)
+    st.create_provider(
+        "pool",
+        protocol="openai",
+        api_key="sk-main-0001",
+        extra_api_keys=["sk-spare-0002", "sk-main-0001", " sk-spare-0003 "],
+        headers={"X-One": "v1", "X-Two": "v2"},
+        custom_icon="ollama",
+    )
+    row = st.get_provider("pool")
+    assert row is not None
+    assert row.has_extra_keys is True
+    assert row.custom_icon == "ollama"
+    assert st.get_provider_extra_api_keys("pool") == ["sk-spare-0002", "sk-main-0001", "sk-spare-0003"]
+    assert st.get_provider_api_keys("pool") == ["sk-main-0001", "sk-spare-0002", "sk-spare-0003"]
+
+    snap = st.snapshot()["providers"][0]
+    assert snap["apiKeys"] == ["sk-main-0001", "sk-spare-0002", "sk-spare-0003"]
+    assert snap["customIcon"] == "ollama"
+
+    # header_patch: 修改 X-Two、删除 X-One、新增 X-Three，其余保留
+    updated = st.update_provider(
+        "pool",
+        header_patch={"X-One": None, "X-Two": "v2-updated", "X-Three": "v3"},
+    )
+    assert updated is not None
+    assert updated.headers == {"X-Two": "v2-updated", "X-Three": "v3"}
+
+    # 清空 extra_api_keys 与 custom_icon 后，snapshot 省略相应字段
+    st.update_provider("pool", extra_api_keys=[], custom_icon="")
+    snap2 = st.snapshot()["providers"][0]
+    assert "apiKeys" not in snap2
+    assert "customIcon" not in snap2
+
+
+def test_reorder_providers_and_batch_update_models(tmp_path):
+    st = _store(tmp_path)
+    st.create_provider("a", protocol="openai", sort_order=0)
+    st.create_provider("b", protocol="anthropic", sort_order=1)
+    st.create_provider("c", protocol="deepseek", sort_order=2)
+
+    reordered = st.reorder_providers(["c", "a"])
+    assert [p.id for p in reordered] == ["c", "a", "b"]
+
+    st.merge_fetched_models("a", [("f1", {}), ("f2", {})])
+    st.upsert_model("a", "m1", enabled=False, source="manual")
+    assert st.model_counts_by_provider()["a"] == (3, 0)
+
+    assert st.batch_update_models("a", action="enable", model_ids=["f1"]) == 1
+    assert st.model_counts_by_provider()["a"] == (3, 1)
+
+    # clear_unenabled_fetched 只删 fetched 且 enabled=0（manual 保留）
+    assert st.batch_update_models("a", action="clear_unenabled_fetched") == 1
+    remaining = {m.model_id for m in st.list_models("a")}
+    assert remaining == {"f1", "m1"}
+
+    assert st.batch_update_models("a", action="disable") == 1
+    assert st.model_counts_by_provider()["a"] == (2, 0)

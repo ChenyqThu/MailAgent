@@ -16,8 +16,14 @@
 import { ipcMain } from 'electron'
 import { generateText } from 'ai'
 
-import { isProviderCredentialsError } from '../../../ai-gateway/providerRef'
+import {
+  isPrivacyMaskError,
+  isProviderCredentialsError,
+  parseProviderRef
+} from '../../../ai-gateway/providerRef'
+import { costUsdFor } from '../../../ai-gateway/modelCost'
 import { MAX_OUTPUT_TOKENS } from '@shared/lib/llm_limits'
+import { appendLlmUsageLog } from '../chat_db'
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from '../llm_settings'
 import {
   getLlmProviderModelResolver,
@@ -117,6 +123,53 @@ function buildSystemPrompt(): string {
   return lines.join('\n')
 }
 
+function recordNlSearchUsage(input: {
+  model: string
+  protocol?: 'anthropic' | 'openai' | 'openai-compatible' | 'deepseek' | 'google' | 'openrouter' | null
+  tokensInput: number | null
+  tokensOutput: number | null
+  cacheReadTokens?: number | null
+  cacheWriteTokens?: number | null
+  noCacheTokens?: number | null
+  inputIsUncachedOnly?: boolean
+  latencyMs: number
+}): void {
+  try {
+    const parsed = parseProviderRef(input.model)
+    const costUsd = costUsdFor(
+      input.model,
+      {
+        inputTokens: input.tokensInput,
+        outputTokens: input.tokensOutput,
+        cacheReadTokens: input.cacheReadTokens ?? null,
+        cacheWriteTokens: input.cacheWriteTokens ?? null,
+        noCacheTokens: input.noCacheTokens ?? null,
+        inputIsUncachedOnly: input.inputIsUncachedOnly
+      },
+      input.protocol
+    )
+    const normalizedTotalInput =
+      input.inputIsUncachedOnly && input.tokensInput != null
+        ? input.tokensInput + (input.cacheReadTokens ?? 0) + (input.cacheWriteTokens ?? 0)
+        : input.tokensInput
+    appendLlmUsageLog({
+      surface: 'nl_search',
+      providerId: parsed.providerId,
+      model: input.model,
+      protocol: input.protocol ?? null,
+      tokensInput: normalizedTotalInput,
+      tokensOutput: input.tokensOutput,
+      cacheReadTokens: input.cacheReadTokens ?? null,
+      cacheWriteTokens: input.cacheWriteTokens ?? null,
+      costUsd,
+      latencyMs: input.latencyMs,
+      status: 'ok'
+    })
+  } catch {
+    /* best-effort — never break search or unit tests without chat_db */
+  }
+}
+
 interface MessagesResponse {
   content?: Array<{ type?: string; text?: string }>
   model?: string
@@ -124,6 +177,12 @@ interface MessagesResponse {
    *  **错数据而非空数据** —— `from:echo after:2026-0` 照样能跑出一批"结果"，用户
    *  以为那就是全部。故这里必须能读到它，见 nlToDsl 的 E_TRUNCATED 分支。 */
   stop_reason?: string
+  usage?: {
+    input_tokens?: number
+    output_tokens?: number
+    cache_read_input_tokens?: number
+    cache_creation_input_tokens?: number
+  }
 }
 
 /** 输出被 max_tokens 截断 —— 半截 DSL 一律当失败，绝不返回。
@@ -182,6 +241,7 @@ export async function nlToDsl(nl: string): Promise<NlToDslResult> {
 
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(), REQUEST_TIMEOUT_MS)
+  const t0 = Date.now()
   try {
     if (providerRegistryEnabled) {
       const resolver = await getLlmProviderModelResolver()
@@ -192,6 +252,16 @@ export async function nlToDsl(nl: string): Promise<NlToDslResult> {
         system: buildSystemPrompt(),
         prompt: input,
         abortSignal: ac.signal
+      })
+      recordNlSearchUsage({
+        model,
+        protocol: resolved.protocol,
+        tokensInput: result.usage.inputTokens ?? null,
+        tokensOutput: result.usage.outputTokens ?? null,
+        cacheReadTokens: result.usage.inputTokenDetails?.cacheReadTokens ?? null,
+        cacheWriteTokens: result.usage.inputTokenDetails?.cacheWriteTokens ?? null,
+        noCacheTokens: result.usage.inputTokenDetails?.noCacheTokens ?? null,
+        latencyMs: Date.now() - t0
       })
       if (result.finishReason === 'length') return TRUNCATED
       if (result.text.trim().length === 0) {
@@ -225,6 +295,18 @@ export async function nlToDsl(nl: string): Promise<NlToDslResult> {
       return { dsl: '', error: code, message: `LLM API ${response.status}` }
     }
     const payload = (await response.json()) as MessagesResponse
+    if (payload.usage) {
+      recordNlSearchUsage({
+        model: payload.model ?? model,
+        protocol: 'anthropic',
+        tokensInput: payload.usage.input_tokens ?? null,
+        tokensOutput: payload.usage.output_tokens ?? null,
+        cacheReadTokens: payload.usage.cache_read_input_tokens ?? null,
+        cacheWriteTokens: payload.usage.cache_creation_input_tokens ?? null,
+        inputIsUncachedOnly: true,
+        latencyMs: Date.now() - t0
+      })
+    }
     if (payload.stop_reason === 'max_tokens') return TRUNCATED
     const text = payload.content?.find((b) => b.type === 'text')?.text ?? payload.content?.[0]?.text
     if (typeof text !== 'string' || text.trim().length === 0) {
@@ -238,6 +320,9 @@ export async function nlToDsl(nl: string): Promise<NlToDslResult> {
   } catch (err) {
     if (isProviderCredentialsError(err)) {
       return { dsl: '', error: 'E_NO_LLM_KEY', message: err.message }
+    }
+    if (isPrivacyMaskError(err)) {
+      return { dsl: '', error: 'E_PRIVACY_MASK_FAILED', message: err.message }
     }
     if (err instanceof Error && (err.name === 'AbortError' || ac.signal.aborted)) {
       return { dsl: '', error: 'E_TIMEOUT', message: 'LLM request timed out' }

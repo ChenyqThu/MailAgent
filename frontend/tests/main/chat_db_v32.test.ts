@@ -115,7 +115,7 @@ describe('CHAT_DB v32 migration', () => {
   test('① fresh DB carries the v32 column + partial unique index at schema_version 32', () => {
     expect(columnNames('ai_chat_sessions')).toContain('thread_root_message_id')
     expect(indexNames()).toEqual(expect.arrayContaining(['idx_chat_sessions_thread_root']))
-    expect(schemaVersion()).toBe(32)
+    expect(schemaVersion()).toBe(33)
   })
 
   test('① the index is the PARTIAL unique one (WHERE thread_root_message_id IS NOT NULL)', () => {
@@ -134,7 +134,7 @@ describe('CHAT_DB v32 migration', () => {
     seedV31ChatDb()
     expect(columnNames('ai_chat_sessions')).toContain('thread_root_message_id')
     expect(indexNames()).toEqual(expect.arrayContaining(['idx_chat_sessions_thread_root']))
-    expect(schemaVersion()).toBe(32)
+    expect(schemaVersion()).toBe(33)
     // 既有群行原样存活；新列读回 NULL（additive migration，老行不是话题）。
     const row = getChatDb()
       .prepare(
@@ -158,7 +158,7 @@ describe('CHAT_DB v32 migration', () => {
       .run()
     closeChatDb()
     expect(() => schemaVersion()).not.toThrow()
-    expect(schemaVersion()).toBe(32)
+    expect(schemaVersion()).toBe(33)
   })
 })
 

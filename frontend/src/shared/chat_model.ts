@@ -277,6 +277,10 @@ export interface ChatMessage {
   content: string
   tokens_input: number | null
   tokens_output: number | null
+  // v33 (Phase 4) — Prompt Cache read/write tokens from ai@7 inputTokenDetails.
+  // NULL for legacy/pre-v33 rows; mirrors shared/api/types/chat.ts.
+  cache_read_tokens?: number | null
+  cache_write_tokens?: number | null
   cost_usd: number | null
   model: string | null
   status: MessageStatus
@@ -351,6 +355,8 @@ export interface AppendMessageInput {
   model?: string | null
   tokensInput?: number | null
   tokensOutput?: number | null
+  cacheReadTokens?: number | null
+  cacheWriteTokens?: number | null
   costUsd?: number | null
   errorMessage?: string | null
   metadata?: string | null
@@ -373,6 +379,8 @@ export interface UpdateMessagePatch {
   status?: MessageStatus
   tokensInput?: number | null
   tokensOutput?: number | null
+  cacheReadTokens?: number | null
+  cacheWriteTokens?: number | null
   costUsd?: number | null
   errorMessage?: string | null
   model?: string | null

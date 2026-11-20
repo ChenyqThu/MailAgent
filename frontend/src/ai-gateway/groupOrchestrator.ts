@@ -115,6 +115,8 @@ export interface GroupTurnRow {
   model: string | null
   tokensInput: number | null
   tokensOutput: number | null
+  cacheReadTokens?: number | null
+  cacheWriteTokens?: number | null
   costUsd: number | null
   windowFromId: number | null
   windowToId: number | null
@@ -130,6 +132,8 @@ export interface GroupAppendInput {
   model?: string | null
   tokensInput?: number | null
   tokensOutput?: number | null
+  cacheReadTokens?: number | null
+  cacheWriteTokens?: number | null
   costUsd?: number | null
   chainId?: number | null
   /** JSON string — system rows carry {kind:'group_stop', reason, runId}. */
@@ -776,10 +780,15 @@ export class GroupOrchestrator {
     }
     const usageOf = (
       r: GroupSpeakResult | null
-    ): Pick<GroupTurnRow, 'model' | 'tokensInput' | 'tokensOutput'> => ({
+    ): Pick<
+      GroupTurnRow,
+      'model' | 'tokensInput' | 'tokensOutput' | 'cacheReadTokens' | 'cacheWriteTokens'
+    > => ({
       model: r?.modelId ?? null,
       tokensInput: r?.usage?.inputTokens ?? null,
-      tokensOutput: r?.usage?.outputTokens ?? null
+      tokensOutput: r?.usage?.outputTokens ?? null,
+      cacheReadTokens: r?.usage?.cacheReadTokens ?? null,
+      cacheWriteTokens: r?.usage?.cacheWriteTokens ?? null
     })
     if (failure != null || result == null) {
       fail(failure ?? 'E_SPEAK_EMPTY', windowIds)

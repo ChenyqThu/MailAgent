@@ -6,11 +6,15 @@
 // 回合内 suggest_followups 工具；其 APICallError 形状覆盖搬到 title 入口，同一代码路径。）
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { APICallError } from 'ai'
+import { APICallError, RetryError } from 'ai'
+import { MockLanguageModelV3 } from 'ai/test'
 
 import { startAiGatewayServer, type AiGatewayHandle } from '../../src/ai-gateway/server'
 import { runHeadlessSearchAgent } from '../../src/ai-gateway/searchAgentRun'
+import { runHeadlessAgent } from '../../src/ai-gateway/agentRun'
+import { sanitizedUpstreamErrorMessage, unwrapUpstreamError } from '../../src/ai-gateway/upstreamError'
 import type { AiGatewayConfig } from '../../src/ai-gateway/config'
+import type { AgentRunSpec } from '../../src/shared/api/types'
 
 const LEAKY = 'upstream echoed Authorization: Bearer sk-live-LEAK and X-Gw-Sign: s3cr3t'
 
@@ -139,5 +143,56 @@ describe('search-agent loop error message', () => {
   test('flag OFF pins the legacy raw message (byte-identical discipline)', async () => {
     const result = await run({ ...baseCfg, ...throwingModel(leakyApiCallError()) })
     expect(result.error).toEqual({ code: 'E_UPSTREAM', message: LEAKY })
+  })
+
+  test('RetryError wrapping APICallError(429) unwraps to E_QUOTA and sanitized 429 hint', async () => {
+    const quotaErr = new APICallError({
+      message: `429 Too Many Requests ${LEAKY}`,
+      url: 'https://relay.example/v1/messages',
+      requestBodyValues: {},
+      statusCode: 429,
+      responseBody: LEAKY
+    })
+    const retryErr = new RetryError({
+      message: 'Failed after 3 attempts',
+      reason: 'maxRetriesExceeded',
+      errors: [quotaErr]
+    })
+    expect(unwrapUpstreamError(retryErr)).toBe(quotaErr)
+    expect(sanitizedUpstreamErrorMessage(retryErr)).toBe('HTTP 429 AI_APICallError')
+
+    const searchResult = await run({
+      ...baseCfg,
+      providerRegistryEnabled: true,
+      ...throwingModel(retryErr)
+    })
+    expect(searchResult.error).toEqual({ code: 'E_QUOTA', message: 'HTTP 429 AI_APICallError' })
+
+    const spec: AgentRunSpec = {
+      jobId: 1,
+      agentId: 'a1',
+      agentTitle: 'Test',
+      trigger: { kind: 'cron', firedAt: new Date().toISOString() },
+      prompt: { taskPrompt: 'hi' },
+      budget: { maxRunSeconds: 30 },
+      sessionTitle: 's1'
+    }
+    const agentResult = await runHeadlessAgent(
+      {
+        ...baseCfg,
+        providerRegistryEnabled: true,
+        createModel: () =>
+          new MockLanguageModelV3({
+            doStream: async () => {
+              throw retryErr
+            }
+          })
+      },
+      { jobId: 1, spec, sessionId: null },
+      new AbortController().signal
+    )
+    expect(agentResult.ok).toBe(false)
+    expect(agentResult.error?.code).toBe('E_QUOTA')
+    expect(agentResult.error?.message).toContain('429')
   })
 })

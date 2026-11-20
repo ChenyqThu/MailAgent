@@ -655,6 +655,7 @@ async def merge_turn(
             tool_name="update_memory",
             # 抽取每轮一调、成本敏感 → 只用 capture model（默认 haiku），不挂 fallback 链。
             model_chain=[cfg.memory_capture_model] if cfg.memory_capture_model else None,
+            usage_surface="memory_capture",
         )
     except Exception as exc:  # noqa: BLE001 — LLMCallError 等统一转 MemoryMdError
         raise MemoryMdError(f"memory.md merge LLM call failed: {exc}") from exc
@@ -724,6 +725,7 @@ async def _merge_turn_layered(
             tool_name="update_memory",
             # 同旧路径：抽取每轮一调、成本敏感 → 只用 capture model（默认 haiku），不挂 fallback 链。
             model_chain=[cfg.memory_capture_model] if cfg.memory_capture_model else None,
+            usage_surface="memory_capture",
         )
     except Exception as exc:  # noqa: BLE001 — LLMCallError 等统一转 MemoryMdError
         raise MemoryMdError(f"memory.md merge LLM call failed: {exc}") from exc

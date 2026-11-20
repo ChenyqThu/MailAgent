@@ -63,18 +63,6 @@ import type { CompactCoordinator } from './compact'
 import type { GroupOrchestrator } from './groupOrchestrator'
 import type { SelectedModelContext } from './compactSelect'
 
-/** Part B — what makePersistOnFinish tells the lifecycle when a turn pauses at an island-eligible
- *  approval gate (announce → serve-api). NO token/secret in here beyond the resumeToken, which is the
- *  gateway-minted capability the island round-trip must echo back on /decide. */
-export interface IslandApprovalAnnounce {
-  sessionId: number | null
-  toolCallId: string
-  toolName: string
-  risk: string
-  inputPreview: string
-  resumeToken: string
-}
-
 /** Phase 05 — what the AG-UI mirror passes the approval-request resolver: the accumulated tool call
  *  + the ai@6 approval id/signature. The Electron wrapper looks toolCallId up in the ApprovalGuard
  *  (risk / reason / expiry) + optional A2UI and returns the full request payload (or null). */
@@ -123,7 +111,13 @@ export interface PersistTurnInput {
   protocol?: ProviderProtocol
   userMessage: MailAgentUIMessage | null
   responseMessage: MailAgentUIMessage
-  usage?: { inputTokens?: number | null; outputTokens?: number | null }
+  usage?: {
+    inputTokens?: number | null
+    outputTokens?: number | null
+    cacheReadTokens?: number | null
+    cacheWriteTokens?: number | null
+    noCacheTokens?: number | null
+  }
   /** WP-15 (context 环, task 08-05) — 本回合最后一次 provider 调用的 prompt token 数 = 「上下文
    *  占用」。🔴 与 `usage.inputTokens` **语义不同**（那个是多 step 求和，工具循环里会把同一段
    *  prompt 计好几遍），故落在自己的列 `ai_chat_messages.context_tokens`，不复用 tokens_input。
@@ -289,6 +283,8 @@ export interface GroupTurnInsert {
   model?: string | null
   tokensInput?: number | null
   tokensOutput?: number | null
+  cacheReadTokens?: number | null
+  cacheWriteTokens?: number | null
   costUsd?: number | null
   /** 本轮窗口的首末行 id（可回放「模型当时看见了什么」）。 */
   windowFromId?: number | null
@@ -343,9 +339,39 @@ export interface GroupHistoryRow {
   libraryRefs?: GroupLibraryRef[] | null
 }
 
+/** Phase 4 WP-4B — non-chat auxiliary LLM usage event recorded by gateway/main callers. */
+export type GatewayUsageSurface =
+  | 'auto_title'
+  | 'compact'
+  | 'search_agent'
+  | 'paused_turn'
+  | 'translate'
+  | 'nl_search'
+  | 'memory_capture'
+  | 'user_md_compile'
+  | 'contact_profile'
+  | 'task_extract'
+  | 'py_loopback'
+
+export interface GatewayUsageEvent {
+  surface: GatewayUsageSurface
+  model: string
+  protocol?: ProviderProtocol | null
+  inputTokens?: number | null
+  outputTokens?: number | null
+  cacheReadTokens?: number | null
+  cacheWriteTokens?: number | null
+  noCacheTokens?: number | null
+  latencyMs?: number | null
+  status?: 'ok' | 'error'
+  errorCode?: string | null
+}
+
 export interface AiGatewayConfig {
   /** bind port. host is always 127.0.0.1 (loopback). 0 = kernel-assigned (tests). */
   port: number
+  /** Per-session local API token for authenticating internal loopback callers (/api/ai/internal/complete). */
+  localApiToken?: string | null
   /** LLM gateway base URL (e.g. https://crs.chenge.ink/api). Normalized via anthropicBaseUrl. */
   baseUrl: string
   /** LLM API key. null/empty → /api/ai/chat returns 503 E_NO_LLM_KEY (renderer never sees it).
@@ -432,7 +458,7 @@ export interface AiGatewayConfig {
      *  wrapper's shorter signature structurally never forwards this slot. */
     sessionAgentId?: string | null,
     /** g2 — 主 agent 版群工具的装配输入（一个对象；headless 三元包装器 agentRun.ts:427 结构性丢弃 = fail-closed）。 */
-    groupTools?: { isGroupSession: boolean; enabled: boolean }
+    groupTools?: { isGroupSession: boolean; enabled: boolean; disabledConnectors?: string[] }
   ) => ToolSet
   /** Test-harness-only override for deterministic single-step fixtures. Production never sets this;
    *  normal manual/headless runs use chatRun's 10k internal sentinel. */
@@ -509,6 +535,8 @@ export interface AiGatewayConfig {
       /** g1 — 本轮 usage（AC6 成本可见）。省略 → NULL（未知，不是 0）。 */
       tokensInput?: number | null
       tokensOutput?: number | null
+      cacheReadTokens?: number | null
+      cacheWriteTokens?: number | null
       /** g1 — modelCost 查表结果；查不到 NULL（UI 标「估」，绝不猜价）。 */
       costUsd?: number | null
       /** g1 — 链归属（v31 ai_chat_messages.chain_id）。链根行传自身 id 是不可能的（id 由
@@ -742,20 +770,12 @@ export interface AiGatewayConfig {
   /** P3 context selector. Omitted keeps prepareChatRun's pre-compact assembly path unchanged. */
   selectMessagesForModelContext?: (messages: MailAgentUIMessage[]) => SelectedModelContext
 
-  // ── Part B (harness agent 上岛) — full-offline island approval resume ────────────────────────────
-  /** MAILAGENT_ISLAND_AGENT_ENABLED. Since the 2026-07-15 owner拍板 (island-independent approvals)
-   *  this flag ONLY gates the island ANNOUNCE leg (the optional overlay notification face): the
-   *  approval stash / pending probe / decide / server-side resume chain runs under
-   *  serverResumeEnabled below and works with the island off. */
-  islandAgentEnabled?: boolean
-  /** 07-15 owner拍板 (无灵动岛方案优先) — cross-surface single-resolver semantics: gates the
+  /** Cross-surface single-resolver semantics: gates the
    *  renderer-reject guard tombstone + the E_APPROVAL_USED duplicate-persist skip in
-   *  makePersistOnFinish (they used to key off islandAgentEnabled). The lifecycle sets it TRUE
-   *  unconditionally (the in-panel decide card is a first-class second approval surface, so the
-   *  cross-surface protections must always be live); islandAgentEnabled is kept as a fallback gate
-   *  for hand-built test cfgs that predate this field. */
+   *  makePersistOnFinish. The lifecycle sets it TRUE unconditionally (the in-panel decide card
+   *  and Feishu card are first-class server-side approval surfaces). */
   serverResumeEnabled?: boolean
-  /** Part B — the per-gateway stash of paused approval runs (approvalStash.ts). Injected by the
+  /** Per-gateway stash of paused approval runs (approvalStash.ts). Injected by the
    *  lifecycle (constructed once, like the ApprovalGuard). makePersistOnFinish stashes into it when a
    *  turn pauses awaiting approval; POST /api/ai/approval/decide claims + resumes from it. Omitted →
    *  no server-side resume (renderer path only). */
@@ -768,11 +788,6 @@ export interface AiGatewayConfig {
   /** P2 custom_agent_call — emit per-entry approvalTtlSec on paused headless results. Main-process
    *  flag only; absent/false preserves the legacy result shape. */
   approvalTtlResponseEnabled?: boolean
-  /** Part B — fire-and-forget announce a paused approval to the island (lifecycle → serve-api
-   *  /api/island/agent/announce). Called by makePersistOnFinish AFTER stashing, with the resumeToken
-   *  the stash minted. 🔴 MUST be fire-and-forget (returns void, never awaited) so a slow/failed
-   *  announce can't block the already-streamed (paused) turn. Omitted → no island announce. */
-  announceApprovalToIsland?: (info: IslandApprovalAnnounce) => void
   /** L4 批次1 #6 — ask serve-api for the approval preview line built from the REAL payload
    *  (POST /api/approval/preview → src/services/approval_preview.py). The gateway's own
    *  `approvalInputPreview` can only re-tell the model's args, and part of a write's payload is
@@ -869,4 +884,6 @@ export interface AiGatewayConfig {
   }
   /** MAILAGENT_SESSION_PROVENANCE main-env-only emergency rollback switch. */
   sessionProvenanceEnabled?: boolean
+  /** Phase 4 WP-4B — record non-chat auxiliary LLM spend into ai_llm_usage_log. Best-effort, never throws. */
+  recordUsageEvent?: (event: GatewayUsageEvent) => void
 }

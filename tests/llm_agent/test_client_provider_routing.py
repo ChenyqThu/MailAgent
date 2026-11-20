@@ -425,3 +425,51 @@ def test_anthropic_for_requires_key_and_rebuilds_on_sig_change(monkeypatch):
     b = client._anthropic_for(r2)  # key 轮换（TTL 热读到新行值）→ 重建
     assert b is not a and len(ctors) == 2 and ctors[1]["api_key"] == "sk-2"
     assert client._retired == [a]  # 旧实例进 retired，close() 统一关
+
+
+def test_anthropic_errors_redact_api_key_and_custom_headers(monkeypatch):
+    route = _route(
+        pid="relay-ant",
+        protocol="anthropic",
+        base="https://relay.example",
+        key="sk-ant-secret-key-xyz",
+        model_id="claude-sonnet-4-6",
+        headers={"X-Relay-Secret": "relay-secret-9988"},
+    )
+    _patch_routes(monkeypatch, {"relay-ant:claude-sonnet-4-6": route})
+
+    class _ExplodingMessages:
+        def stream(self, **_kwargs):
+            raise RuntimeError(
+                "Auth rejected key=sk-ant-secret-key-xyz header=relay-secret-9988"
+            )
+
+    client = LLMClient()
+    client._anthropic_by_provider[route.provider_id] = (
+        client._route_sig(route),
+        NS(messages=_ExplodingMessages()),
+    )
+
+    with pytest.raises(LLMCallError) as ei:
+        _classify(client, ["relay-ant:claude-sonnet-4-6"])
+    msg = str(ei.value)
+    assert "sk-ant-secret-key-xyz" not in msg
+    assert "relay-secret-9988" not in msg
+    assert "***" in msg
+
+    with pytest.raises(LLMCallError) as ei2:
+        asyncio.run(
+            client.run_tool_loop(
+                system_blocks=[{"type": "text", "text": "s"}],
+                user_content="u",
+                tools=[TOOL_SCHEMA],
+                tool_handlers={},
+                final_tool="classify_email",
+                model_chain=["relay-ant:claude-sonnet-4-6"],
+            )
+        )
+    msg2 = str(ei2.value)
+    assert "sk-ant-secret-key-xyz" not in msg2
+    assert "relay-secret-9988" not in msg2
+    assert "***" in msg2
+

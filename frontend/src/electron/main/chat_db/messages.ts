@@ -10,10 +10,10 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
   const result = db
     .prepare(
       `INSERT INTO ai_chat_messages
-        (session_id, role, content, tokens_input, tokens_output, cost_usd,
-         model, status, error_message, metadata, ui_message_json, context_tokens,
-         speaker_agent_id, chain_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        (session_id, role, content, tokens_input, tokens_output, cache_read_tokens,
+         cache_write_tokens, cost_usd, model, status, error_message, metadata,
+         ui_message_json, context_tokens, speaker_agent_id, chain_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       input.sessionId,
@@ -21,6 +21,8 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
       input.content,
       input.tokensInput ?? null,
       input.tokensOutput ?? null,
+      input.cacheReadTokens ?? null,
+      input.cacheWriteTokens ?? null,
       input.costUsd ?? null,
       input.model ?? null,
       input.status,
@@ -50,6 +52,8 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
     content: input.content,
     tokens_input: input.tokensInput ?? null,
     tokens_output: input.tokensOutput ?? null,
+    cache_read_tokens: input.cacheReadTokens ?? null,
+    cache_write_tokens: input.cacheWriteTokens ?? null,
     cost_usd: input.costUsd ?? null,
     model: input.model ?? null,
     status: input.status,
@@ -128,6 +132,14 @@ export function updateMessage(messageId: number, patch: UpdateMessagePatch): voi
   if (patch.tokensOutput !== undefined) {
     fields.push('tokens_output = ?')
     params.push(patch.tokensOutput)
+  }
+  if (patch.cacheReadTokens !== undefined) {
+    fields.push('cache_read_tokens = ?')
+    params.push(patch.cacheReadTokens)
+  }
+  if (patch.cacheWriteTokens !== undefined) {
+    fields.push('cache_write_tokens = ?')
+    params.push(patch.cacheWriteTokens)
   }
   if (patch.costUsd !== undefined) {
     fields.push('cost_usd = ?')

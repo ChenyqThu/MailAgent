@@ -10,14 +10,19 @@
 // searchAgentRun.ts + electron main 的 llm_provider_resolver.ts（re-export 保兼容，
 // translate/nl_search 经它取用）。
 
-import { APICallError } from 'ai'
+import { APICallError, RetryError } from 'ai'
+
+export function unwrapUpstreamError(err: unknown): unknown {
+  return RetryError.isInstance(err) && err.lastError != null ? err.lastError : err
+}
 
 export function sanitizedUpstreamErrorMessage(err: unknown): string {
-  if (APICallError.isInstance(err)) {
-    return err.statusCode != null
-      ? `HTTP ${err.statusCode} ${err.name}`
-      : `${err.name}: upstream LLM call failed`
+  const cause = unwrapUpstreamError(err)
+  if (APICallError.isInstance(cause)) {
+    return cause.statusCode != null
+      ? `HTTP ${cause.statusCode} ${cause.name}`
+      : `${cause.name}: upstream LLM call failed`
   }
-  if (err instanceof Error) return `${err.name}: upstream LLM call failed`
+  if (cause instanceof Error) return `${cause.name}: upstream LLM call failed`
   return 'unknown upstream LLM error'
 }

@@ -252,6 +252,7 @@ async def compile_user_md(
             user_content=_build_user(base, mem),
             tool_schema=COMPILE_TOOL_SCHEMA,
             tool_name="compile_user_preferences",
+            usage_surface="user_md_compile",
         )
     except Exception as exc:  # noqa: BLE001 — LLMCallError 等统一转编译错误
         raise UserMdCompileError(f"LLM compile call failed: {exc}") from exc
