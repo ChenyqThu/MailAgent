@@ -549,7 +549,7 @@ export function AdminPage(): React.ReactElement {
   const outbox = statsQ.data?.outbox
 
   return (
-    <div className="px-6 py-5 space-y-6 min-h-full">
+    <div className="px-6 py-5 pb-16 space-y-6">
       {/* Header row — title + health pill */}
       <header className="flex items-center justify-between">
         <h1 className="text-subj text-ink-fg font-semibold flex items-center gap-2">

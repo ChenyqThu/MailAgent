@@ -32,6 +32,8 @@ describe('normalizeCatalogModelId', () => {
     ['claude-opus-5[200k]', 'claude-opus-5'],
     ['openai/gpt-4o', 'gpt-4o'],
     ['deepseek/deepseek-chat[1m]', 'deepseek-chat'],
+    ['openai/gpt-4o:free', 'gpt-4o'],
+    ['mistralai/mistral-large-latest', 'mistral-large'],
     ['  GPT-4O  ', 'gpt-4o'],
     ['plain-id', 'plain-id']
   ])('%s → %s', (input, expected) => {
@@ -130,7 +132,10 @@ describe('lookupModelMeta — 🔴 有序链，不是全局乱查', () => {
     // openrouter 是有意不收的聚合器，它的链里也就没有它自己。
     expect(referenced.has('openrouter')).toBe(false)
     for (const pid of referenced) {
-      expect(catalog.providers[pid], `链里引用了快照里没有的 provider: ${pid}`).toBeTruthy()
+      expect(
+        catalog.providers[pid] ?? LOCAL_CATALOG_OVERRIDES[pid],
+        `链里引用了快照或本地覆盖里没有的 provider: ${pid}`
+      ).toBeTruthy()
     }
   })
 })
@@ -186,7 +191,18 @@ describe('LOCAL_CATALOG_OVERRIDES — 覆盖表扩展位', () => {
     }
   })
 
-  test('覆盖表可以补快照里根本没有的家（已知缺口：豆包/火山）', () => {
+  test('覆盖表包含豆包/火山内置覆盖（补 models.dev 第一方缺口）', () => {
+    expect(Object.keys(LOCAL_CATALOG_OVERRIDES)).toEqual(['doubao'])
+    const m = lookupModelMeta('doubao-seed-1-6', 'openai-compatible')
+    expect(m?.catalogProviderId).toBe('doubao')
+    expect(m?.catalogProviderName).toBe('豆包方舟')
+    expect(m?.contextWindow).toBe(256_000)
+    expect(m?.capabilities?.reasoning).toBe(true)
+    expect(lookupModelMeta('doubao-1-5-pro-256k', null)?.catalogProviderId).toBe('doubao')
+  })
+
+  test('临时覆盖表可以叠在既有 doubao 条目上并恢复', () => {
+    const prev = LOCAL_CATALOG_OVERRIDES.doubao
     LOCAL_CATALOG_OVERRIDES.doubao = {
       name: '豆包',
       models: { 'doubao-pro-x': { name: 'Doubao Pro X', context: 256_000 } }
@@ -197,13 +213,9 @@ describe('LOCAL_CATALOG_OVERRIDES — 覆盖表扩展位', () => {
       expect(m?.catalogProviderName).toBe('豆包')
       expect(m?.contextWindow).toBe(256_000)
     } finally {
-      delete LOCAL_CATALOG_OVERRIDES.doubao
+      LOCAL_CATALOG_OVERRIDES.doubao = prev
       resetModelCatalogCaches()
     }
-  })
-
-  test('默认是空的（有东西了说明有人往生成物旁边塞了私货而没写清理由）', () => {
-    expect(Object.keys(LOCAL_CATALOG_OVERRIDES)).toEqual([])
   })
 })
 

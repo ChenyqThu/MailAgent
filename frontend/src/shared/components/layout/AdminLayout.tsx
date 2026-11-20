@@ -15,8 +15,10 @@ export function AdminLayout(): React.ReactElement {
   useMainBreadcrumb('ops', navLabel(navEntry('kanban'), t))
 
   return (
-    <PageFrame ariaLabel="admin">
-      <AdminPage />
+    <PageFrame ariaLabel="admin" mainClassName="flex flex-1 min-w-0 min-h-0 overflow-hidden">
+      <div className="flex-1 h-full min-h-0 min-w-0 overflow-y-auto scrollbar-thin">
+        <AdminPage />
+      </div>
     </PageFrame>
   )
 }

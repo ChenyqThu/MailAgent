@@ -27,6 +27,8 @@ import { SystemHealthRow } from '@shared/components/admin/SystemHealthRow'
 import { NumberTicker } from '@shared/components/ui/number-ticker'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
+import { UsageDashboardSection } from '@shared/components/settings/providers/UsageDashboardSection'
+
 import { KosIngestSection } from './KosIngestSection'
 import { StatCard } from './StatCard'
 
@@ -152,8 +154,8 @@ function ByModelTable({
 }): React.ReactElement {
   const { t } = useTranslation()
   return (
-    <div className="rounded-md border border-coral/30 bg-coral/5 p-3 space-y-2">
-      <div className="text-micro font-mono uppercase text-ink-fg-2">{t('llm.byModel')}</div>
+    <div className="rounded-lg border border-ink-border-soft bg-ink-2/50 p-3.5 space-y-2">
+      <div className="text-aux font-medium text-ink-fg">{t('llm.byModel')}</div>
       <table className="w-full text-aux" data-testid="llm-by-model">
         <thead>
           <tr className="text-micro font-mono uppercase text-ink-fg-3 text-left">
@@ -271,31 +273,16 @@ export function LlmDashboardPage(): React.ReactElement {
   const cost = data?.cost
 
   return (
-    <div className="px-6 py-5 space-y-6 min-h-full">
-      <header className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-subj text-ink-fg font-semibold flex items-center gap-2">
-          <Sparkles size={20} strokeWidth={1.75} className="text-coral" />
-          {t('llm.title')}
-        </h1>
+    <div className="mx-auto w-full max-w-[1160px] px-6 py-5 pb-16 space-y-6">
+      <header className="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-subj text-ink-fg font-semibold flex items-center gap-2">
+            <Sparkles size={20} strokeWidth={1.75} className="text-coral" />
+            {t('llm.title')}
+          </h1>
+          <p className="mt-1 text-aux text-ink-fg-2">{t('llm.subtitle')}</p>
+        </div>
         <div className="flex items-center gap-2">
-          {/* Range chips — segmented control */}
-          <div className="inline-flex rounded-md border border-ink-border p-0.5">
-            {RANGES.map((r) => (
-              <button
-                key={r.days}
-                type="button"
-                onClick={() => setDays(r.days)}
-                className={cn(
-                  'px-2 py-1 text-aux rounded transition-colors duration-fast',
-                  r.days === days
-                    ? 'bg-coral/15 text-coral font-medium'
-                    : 'text-ink-fg-1 hover:text-ink-fg'
-                )}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
           <button
             type="button"
             onClick={() => selftestMut.mutate()}
@@ -361,109 +348,133 @@ export function LlmDashboardPage(): React.ReactElement {
         </section>
       )}
 
-      {/* Cost summary */}
-      {data && cost && (
-        <>
-          <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <StatCard
-              label={t('llm.processed')}
-              value={<NumberTicker value={data.total} format={fmtNumber} />}
-              hint={t('llm.days', { n: data.days })}
-              accent
-            />
-            <StatCard
-              label={t('llm.inputTokens')}
-              value={<NumberTicker value={cost.input_tokens} format={fmtTokens} />}
-              hint={fmtNumber(cost.input_tokens)}
-            />
-            <StatCard
-              label={t('llm.outputTokens')}
-              value={<NumberTicker value={cost.output_tokens} format={fmtTokens} />}
-              hint={fmtNumber(cost.output_tokens)}
-            />
-            <StatCard
-              label={t('llm.success', { defaultValue: 'Success' })}
-              value={<NumberTicker value={cost.success_rows} format={fmtNumber} />}
-              hint={`${t('llm.avgLatency')}: ${fmtMs(cost.avg_latency_ms)}`}
-            />
-          </section>
+      {/* 统一 AI 网关用量、Token 缓存命中率趋势与最近 50 条探测诊断日志 */}
+      <UsageDashboardSection variant="dashboard" />
 
-          <section className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="rounded-md border border-coral/30 bg-coral/5 p-3">
-              <div className="text-micro font-mono uppercase text-ink-fg-2 mb-3">
-                {t('llm.statusDist')}
-              </div>
-              <StatusDonut counts={data.by_status} />
+      {/* 邮件 AI 预处理流水线 + KOS 入库（同用 days 时间窗口） */}
+      <section className="rounded-xl border border-ink-border-soft bg-ink-1 p-5 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-ink-border-soft pb-4">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-body font-semibold text-ink-fg">{t('llm.emailPipelineTitle')}</h2>
+            <p className="mt-1 text-aux text-ink-fg-2">{t('llm.emailPipelineSubtitle')}</p>
+          </div>
+          {/* Range chips — segmented control */}
+          <div className="inline-flex rounded-md border border-ink-border-soft bg-ink-2 p-0.5">
+            {RANGES.map((r) => (
+              <button
+                key={r.days}
+                type="button"
+                aria-pressed={r.days === days}
+                onClick={() => setDays(r.days)}
+                className={cn(
+                  'rounded px-2.5 py-0.5 font-mono text-meta transition-colors duration-fast',
+                  r.days === days
+                    ? 'bg-ink-4 text-ink-fg font-medium'
+                    : 'text-ink-fg-2 hover:text-ink-fg'
+                )}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Cost summary */}
+        {data && cost && (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <StatCard
+                label={t('llm.processed')}
+                value={<NumberTicker value={data.total} format={fmtNumber} />}
+                hint={t('llm.days', { n: data.days })}
+                accent
+              />
+              <StatCard
+                label={t('llm.inputTokens')}
+                value={<NumberTicker value={cost.input_tokens} format={fmtTokens} />}
+                hint={fmtNumber(cost.input_tokens)}
+              />
+              <StatCard
+                label={t('llm.outputTokens')}
+                value={<NumberTicker value={cost.output_tokens} format={fmtTokens} />}
+                hint={fmtNumber(cost.output_tokens)}
+              />
+              <StatCard
+                label={t('llm.success', { defaultValue: 'Success' })}
+                value={<NumberTicker value={cost.success_rows} format={fmtNumber} />}
+                hint={`${t('llm.avgLatency')}: ${fmtMs(cost.avg_latency_ms)}`}
+              />
             </div>
-            <div className="rounded-md border border-coral/30 bg-coral/5 p-3 space-y-3">
-              <div>
-                <div className="text-micro font-mono uppercase text-ink-fg-2 mb-2">
-                  {t('llm.cacheHit')}
-                </div>
-                <CacheGauge pct={cost.cache_hit_rate_pct} />
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="rounded-lg border border-ink-border-soft bg-ink-2/50 p-3.5">
+                <div className="text-aux font-medium text-ink-fg mb-3">{t('llm.statusDist')}</div>
+                <StatusDonut counts={data.by_status} />
               </div>
-              <div className="border-t border-ink-border-soft pt-3">
-                <div className="text-micro font-mono uppercase text-ink-fg-2 mb-2">
-                  {t('llm.cacheTokens')}
+              <div className="rounded-lg border border-ink-border-soft bg-ink-2/50 p-3.5 space-y-3">
+                <div>
+                  <div className="text-aux font-medium text-ink-fg mb-2">{t('llm.cacheHit')}</div>
+                  <CacheGauge pct={cost.cache_hit_rate_pct} />
                 </div>
-                <div className="grid grid-cols-2 gap-3 text-aux">
-                  <div>
-                    <div className="text-meta text-ink-fg-3 mb-0.5">
-                      {t('llm.cacheTokensCreation')}
+                <div className="border-t border-ink-border-soft pt-3">
+                  <div className="text-aux font-medium text-ink-fg mb-2">
+                    {t('llm.cacheTokens')}
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-aux">
+                    <div>
+                      <div className="text-aux text-ink-fg-3 mb-0.5">
+                        {t('llm.cacheTokensCreation')}
+                      </div>
+                      <div className="font-mono tabular-nums text-ink-fg">
+                        {fmtTokens(cost.cache_creation_input_tokens)}
+                      </div>
                     </div>
-                    <div className="font-mono tabular-nums text-ink-fg">
-                      {fmtTokens(cost.cache_creation_input_tokens)}
+                    <div>
+                      <div className="text-aux text-ink-fg-3 mb-0.5">{t('llm.cacheTokensRead')}</div>
+                      <div className="font-mono tabular-nums text-ink-fg">
+                        {fmtTokens(cost.cache_read_input_tokens)}
+                      </div>
                     </div>
                   </div>
-                  <div>
-                    <div className="text-meta text-ink-fg-3 mb-0.5">{t('llm.cacheTokensRead')}</div>
-                    <div className="font-mono tabular-nums text-ink-fg">
-                      {fmtTokens(cost.cache_read_input_tokens)}
-                    </div>
-                  </div>
                 </div>
               </div>
             </div>
-          </section>
 
-          {(data.by_model?.length ?? 0) > 0 && (
-            <section>
-              <ByModelTable rows={data.by_model ?? []} />
-            </section>
-          )}
-        </>
-      )}
+            {(data.by_model?.length ?? 0) > 0 && <ByModelTable rows={data.by_model ?? []} />}
+          </>
+        )}
 
-      {statsQ.isLoading && (
-        <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <SkeletonCard />
-          <SkeletonCard />
-          <SkeletonCard />
-          <SkeletonCard />
-        </section>
-      )}
-      {statsQ.isError && (
-        <EmptyState
-          icon={<Activity size={20} strokeWidth={1.75} className="text-fail" />}
-          title={t('llm.error')}
-          action={
-            <button
-              type="button"
-              onClick={() => void statsQ.refetch()}
-              className={cn(
-                'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-aux',
-                'text-coral border border-coral/30 hover:bg-coral/10 transition-colors duration-fast'
-              )}
-            >
-              {t('admin.retry')}
-            </button>
-          }
-        />
-      )}
+        {statsQ.isLoading && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
+          </div>
+        )}
+        {statsQ.isError && (
+          <EmptyState
+            icon={<Activity size={20} strokeWidth={1.75} className="text-fail" />}
+            title={t('llm.error')}
+            action={
+              <button
+                type="button"
+                onClick={() => void statsQ.refetch()}
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-aux',
+                  'text-coral border border-coral/30 hover:bg-coral/10 transition-colors duration-fast'
+                )}
+              >
+                {t('admin.retry')}
+              </button>
+            }
+          />
+        )}
+      </section>
 
       {/* issue #59 R7 —「知识库入库」区。挂载无条件：gate 封在组件内部
           （后端下发的 data.enabled，照 DavMailHealthCard 先例）。
-          days 与上方 LLM 区共用同一个 range chips state。 */}
+          days 与上方邮件预处理区共用同一个 range chips state。 */}
       <KosIngestSection days={days} />
     </div>
   )

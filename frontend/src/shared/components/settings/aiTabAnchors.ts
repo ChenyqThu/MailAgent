@@ -25,6 +25,8 @@ import { SYSTEM_CAP_SCROLL_TARGETS } from './custom-ai/scrollTargets'
 /** 设置-AI 各区块的锚点 id。值即 DOM id，外裹 wrapper 用它，nav 用它跳转。 */
 export const AI_TAB_ANCHOR_IDS = {
   modelServices: 'settings-ai-model-services',
+  privacyMask: 'settings-ai-privacy-mask',
+  usage: 'settings-ai-usage',
   gateway: 'settings-ai-gateway',
   translate: 'settings-ai-translate',
   imageGenModel: 'settings-ai-image-gen-model',
@@ -66,6 +68,7 @@ export function llmProviderAnchorId(providerId: string): string {
  *  上，最坏是自己往下滚一屏，而不是留一个永不结束的轮询。 */
 export function scrollToAnchorWhenReady(id: string, fallbackId?: string, budgetMs = 2000): void {
   if (typeof document === 'undefined' || typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent('mailagent:focus-anchor', { detail: id }))
   const deadline = Date.now() + budgetMs
   const tick = (): void => {
     const el = document.getElementById(id)
@@ -89,6 +92,8 @@ export function useAiTabAnchorItems(): SectionAnchorItem[] {
   return React.useMemo(
     () => [
       { id: AI_TAB_ANCHOR_IDS.modelServices, label: t('settings.providers.title') },
+      { id: AI_TAB_ANCHOR_IDS.privacyMask, label: t('settings.privacyMask.title') },
+      { id: AI_TAB_ANCHOR_IDS.usage, label: t('settings.usageDashboard.title') },
       { id: AI_TAB_ANCHOR_IDS.gateway, label: t('settings.ai.title') },
       { id: AI_TAB_ANCHOR_IDS.translate, label: t('settings.ai.translate.title') },
       { id: AI_TAB_ANCHOR_IDS.imageGenModel, label: t('settings.imageGenModel.title') },

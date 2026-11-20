@@ -11,7 +11,7 @@ import { useQuery } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
 
 import { useEnabledModels, FALLBACK_MODELS } from '@shared/hooks/useLlmModels'
-import { useProviderRegistryEnabled } from '@shared/hooks/useLlmProviders'
+import { useLlmProviders, useProviderRegistryEnabled } from '@shared/hooks/useLlmProviders'
 import { useEnvStore } from '@shared/state/env'
 
 import { Section } from '../parts/Section'
@@ -27,6 +27,7 @@ export function MemoryCaptureModelSection(): React.ReactElement | null {
   // task 07-12 P3 — provider registry on 时选项按 provider 分组（值仍是 providerRef 全串，
   // 写入面 MEMORY_CAPTURE_MODEL 不变）；off（默认）→ 下方扁平 options 路径字节级现状。
   const registryEnabled = useProviderRegistryEnabled()
+  const { providers } = useLlmProviders(registryEnabled)
   const currentModel = useEnvStore((s) =>
     s.state.status === 'ready' ? (s.state.snapshot.values['MEMORY_CAPTURE_MODEL'] ?? '') : ''
   )
@@ -53,10 +54,13 @@ export function MemoryCaptureModelSection(): React.ReactElement | null {
         ? [...withDefault, currentModel]
         : withDefault
     if (registryEnabled) {
-      return { options: undefined, optionGroups: buildModelOptionGroups(withOrphan, t) }
+      return {
+        options: undefined,
+        optionGroups: buildModelOptionGroups(withOrphan, t, undefined, providers)
+      }
     }
     return { options: withOrphan.map((id) => ({ value: id, label: id })), optionGroups: undefined }
-  }, [enabledModels, currentModel, registryEnabled, t])
+  }, [enabledModels, currentModel, registryEnabled, providers, t])
 
   if (!editorEnabled) return null
 

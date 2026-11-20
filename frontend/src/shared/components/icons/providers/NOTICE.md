@@ -28,6 +28,13 @@
 | `CohereIcon` | `cohere.svg` | — | 只补 mono ⁵ |
 | `TogetherAiIcon` | `together.svg` | — | 只补 mono ⁵ |
 | `FireworksIcon` | `fireworks.svg` | — | 只补 mono ⁵ |
+| `OllamaIcon` | — | — | 本地推理标识 ⁶ |
+| `LmStudioIcon` | — | — | 本地推理标识 ⁶ |
+| `OpenCodeIcon` | — | — | 几何标识 ⁶ |
+| `AzureIcon` | — | `AzureColorIcon` | Azure 品牌几何标识 ⁶ |
+| `BedrockIcon` | — | `BedrockColorIcon` | AWS Bedrock 几何标识 ⁶ |
+| `GitHubIcon` | — | — | GitHub Invertocat 标识 ⁶ |
+| `NvidiaIcon` | — | `NvidiaColorIcon` | NVIDIA 螺旋几何标识 ⁶ |
 
 ¹ 上游没有 `anthropic-color`；`claude-color`（`#D97757` 珊瑚色放射标）就是各家产品里代表
 Anthropic 的那枚。
@@ -38,6 +45,7 @@ Anthropic 的那枚。
 ⁵ 这七家是 2026-09-02 补的（此前登记在 `providerIcons.test.ts` 的「有意无资产」名单里，
 模型目录快照有它们的条目但解析不到 logo，只能掉 lucide `Cpu`）。本轮只拷 mono：彩色语境
 下按既有的逐级回退用 mono，与 openai 一致；等真有需要再补 `-color`。
+⁶ 2026-11-17 补齐本地推理（Ollama / LM Studio / vLLM）与云厂商/开发平台（OpenCode / Azure / AWS Bedrock / GitHub Models / NVIDIA NIM）几何矢量标识，用于 Provider workbench 与全站 ModelSelect 全覆盖。
 
 改动只做了 JSX 化（`fill-opacity`→`fillOpacity`、`clip-rule`→`clipRule`、`stop-color`→
 `stopColor`、渐变 `id` 重命名为 `ma-icon-*` 防与页面内其它 svg 撞、宽高从 `1em` 交给

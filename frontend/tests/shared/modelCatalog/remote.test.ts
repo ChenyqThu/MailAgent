@@ -175,14 +175,51 @@ describe('remote model catalog', () => {
     expect(fetcher).toHaveBeenCalledTimes(1)
   })
 
-  test('cloud endpoint is allowed by both shipping CSPs', async () => {
-    const { MODEL_CATALOG_URL } = await import('@shared/modelCatalog/remote')
-    const origin = new URL(MODEL_CATALOG_URL).origin
-    for (const file of ['src/electron/renderer/index.html', 'src/web/index.html']) {
-      const html = readFileSync(resolve(file), 'utf8')
-      expect(html.match(/content="[^"]*connect-src ([^;"']*(?:'self')?[^;"]*)/)?.[1]).toContain(
-        origin
-      )
+  test('cloud endpoint and CDN mirror are allowed by both shipping CSPs', async () => {
+    const { MODEL_CATALOG_URL, MODEL_CATALOG_FALLBACK_URL } =
+      await import('@shared/modelCatalog/remote')
+    for (const targetUrl of [MODEL_CATALOG_URL, MODEL_CATALOG_FALLBACK_URL]) {
+      const origin = new URL(targetUrl).origin
+      for (const file of ['src/electron/renderer/index.html', 'src/web/index.html']) {
+        const html = readFileSync(resolve(file), 'utf8')
+        expect(html.match(/content="[^"]*connect-src ([^;"']*(?:'self')?[^;"]*)/)?.[1]).toContain(
+          origin
+        )
+      }
     }
+  })
+
+  test('falls back to jsDelivr mirror when primary fails and forceRefresh bypasses 6h throttle', async () => {
+    const { startModelCatalogUpdates, MODEL_CATALOG_URL, MODEL_CATALOG_FALLBACK_URL } =
+      await import('@shared/modelCatalog/remote')
+    const { lookupModelMeta } = await import('@shared/modelCatalog/lookup')
+    const fetcher = vi.fn(async (url: string | URL | Request) => {
+      const u = String(url)
+      if (u === MODEL_CATALOG_URL) return new Response('not found', { status: 404 })
+      if (u === MODEL_CATALOG_FALLBACK_URL) {
+        return new Response(
+          fetcher.mock.calls.length > 2
+            ? payload('2030-01-02T00:00:00.000Z', 'Refreshed Model')
+            : payload()
+        )
+      }
+      throw new Error(`unexpected url ${u}`)
+    })
+    const updater = startModelCatalogUpdates({
+      fetcher: fetcher as unknown as typeof fetch,
+      fallbackUrls: [MODEL_CATALOG_FALLBACK_URL],
+      onError: vi.fn()
+    })
+    await updater.refresh()
+    expect(lookupModelMeta('cloud-only-model', 'deepseek')?.displayName).toBe('Cloud model')
+    // Normal refresh respects 6h throttle
+    const callsBefore = fetcher.mock.calls.length
+    await updater.refresh()
+    expect(fetcher.mock.calls.length).toBe(callsBefore)
+    // forceRefresh bypasses throttle
+    const ok = await updater.forceRefresh()
+    expect(ok).toBe(true)
+    expect(lookupModelMeta('cloud-only-model', 'deepseek')?.displayName).toBe('Refreshed Model')
+    updater.stop()
   })
 })

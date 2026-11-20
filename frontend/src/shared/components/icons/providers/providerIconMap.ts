@@ -32,6 +32,10 @@ import type { LlmProviderProtocol } from '@shared/hooks/useLlmProviders'
 import {
   AnthropicColorIcon,
   AnthropicIcon,
+  AzureColorIcon,
+  AzureIcon,
+  BedrockColorIcon,
+  BedrockIcon,
   CohereIcon,
   DeepSeekColorIcon,
   DeepSeekIcon,
@@ -40,12 +44,18 @@ import {
   FireworksIcon,
   GeminiColorIcon,
   GeminiIcon,
+  GitHubIcon,
   GroqIcon,
   KimiIcon,
+  LmStudioIcon,
   MiniMaxColorIcon,
   MiniMaxIcon,
   MistralIcon,
+  NvidiaColorIcon,
+  NvidiaIcon,
+  OllamaIcon,
   OpenAiIcon,
+  OpenCodeIcon,
   OpenRouterIcon,
   PerplexityIcon,
   QwenColorIcon,
@@ -96,6 +106,8 @@ export const PROVIDER_ICONS: Record<string, ProviderIconRender> = {
   moonshotai: KimiIcon,
   minimax: MiniMaxIcon,
   doubao: DoubaoIcon,
+  volcengine: DoubaoIcon,
+  ark: DoubaoIcon,
   siliconflow: SiliconCloudIcon,
   siliconcloud: SiliconCloudIcon,
   xai: XaiIcon,
@@ -107,7 +119,22 @@ export const PROVIDER_ICONS: Record<string, ProviderIconRender> = {
   together: TogetherAiIcon,
   cohere: CohereIcon,
   'fireworks-ai': FireworksIcon,
-  fireworks: FireworksIcon
+  fireworks: FireworksIcon,
+  ollama: OllamaIcon,
+  lmstudio: LmStudioIcon,
+  'lm-studio': LmStudioIcon,
+  vllm: LmStudioIcon,
+  opencode: OpenCodeIcon,
+  azure: AzureIcon,
+  'azure-openai': AzureIcon,
+  bedrock: BedrockIcon,
+  'amazon-bedrock': BedrockIcon,
+  aws: BedrockIcon,
+  github: GitHubIcon,
+  'github-models': GitHubIcon,
+  copilot: GitHubIcon,
+  nvidia: NvidiaIcon,
+  nim: NvidiaIcon
 }
 
 /** 上表的 color 对应物。**只列真的有可用 color 资产的家** —— 查不到就自动落回 mono 表，
@@ -129,8 +156,17 @@ export const PROVIDER_COLOR_ICONS: Record<string, ProviderIconRender> = {
   zai: ZhipuColorIcon,
   minimax: MiniMaxColorIcon,
   doubao: DoubaoColorIcon,
+  volcengine: DoubaoColorIcon,
+  ark: DoubaoColorIcon,
   siliconflow: SiliconCloudColorIcon,
-  siliconcloud: SiliconCloudColorIcon
+  siliconcloud: SiliconCloudColorIcon,
+  azure: AzureColorIcon,
+  'azure-openai': AzureColorIcon,
+  bedrock: BedrockColorIcon,
+  'amazon-bedrock': BedrockColorIcon,
+  aws: BedrockColorIcon,
+  nvidia: NvidiaColorIcon,
+  nim: NvidiaColorIcon
 }
 
 /** protocol → logo。`openai-compatible` 有意留空：它是「随便什么中转」的意思，
@@ -152,6 +188,8 @@ export const PROTOCOL_COLOR_ICONS: Partial<Record<LlmProviderProtocol, ProviderI
 /** 解析的输入。**有意写成对象而不是位置参数**：优先级正是这次的 bug 本体（新加的
  *  `catalogProviderId` 排在最前），第四个位置参数却读起来像最不重要的那个。 */
 export interface ProviderIconSource {
+  /** 用户显式覆盖图标（slug 或自定义字符/emoji）。高于目录/providerId/protocol。 */
+  customIcon?: string | null
   /** ① 目录命中的厂商（`CatalogModelMeta.catalogProviderId`）。目录未命中 / 判歧义时传
    *  null|undefined —— 解析自然落到 ②。 */
   catalogProviderId?: string | null
@@ -181,6 +219,8 @@ export function resolveProviderIcon(
   source: ProviderIconSource,
   variant: ProviderIconVariant = 'mono'
 ): ProviderIconRender | null {
+  const byCustom = iconForSlug(source.customIcon, variant)
+  if (byCustom) return byCustom
   const byCatalog = iconForSlug(source.catalogProviderId, variant)
   if (byCatalog) return byCatalog
   const byId = iconForSlug(source.providerId, variant)

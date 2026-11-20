@@ -268,7 +268,7 @@ export function DomainPanel({
               <span>version</span>
               <button
                 type="button"
-                onClick={() => navigateToSettingsTab(navigate, 'island')}
+                onClick={() => navigateToSettingsTab(navigate, 'notifications')}
                 className="hover:text-coral transition-colors duration-fast"
               >
                 v{appVersion}

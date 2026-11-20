@@ -23,9 +23,9 @@ import { TitleBar } from './TitleBar'
 // 在设置域面板 footer；其余段是纯展示，随组件删。
 export function AppShell({ children }: { children: React.ReactNode }): React.ReactElement {
   return (
-    <div className="flex flex-col h-full text-ink-fg">
+    <div className="flex flex-col h-full overflow-hidden text-ink-fg">
       <TitleBar />
-      <div className="flex flex-1 min-h-0">
+      <div className="flex flex-1 min-h-0 overflow-hidden">
         <Sidebar />
         {children}
       </div>

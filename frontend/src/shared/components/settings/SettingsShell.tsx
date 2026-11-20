@@ -28,9 +28,12 @@ import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { Tabs, TabsContent } from '@shared/components/ui/tabs'
 import { useEnvStore } from '@shared/state/env'
 import { useMainBreadcrumb } from '@shared/state/main-breadcrumb'
-import { SETTINGS_TABS, type SettingsTab } from '@shared/router-instance'
+import { useMattersEnabled } from '@shared/components/matters/hooks'
+import { clampSettingsTab, legacyAnchorForTab, type SettingsTab } from '@shared/lib/settingsTabs'
 
+import { scrollToAnchorWhenReady } from './aiTabAnchors'
 import { RestartBanner } from './RestartBanner'
+import { SettingsSearchBar } from './SettingsSearchBar'
 import { settingsTabLabelKey } from './settingsTabMeta'
 import { SettingsScrollContext } from './settingsScrollContext'
 import { AccountsTab } from './tabs/AccountsTab'
@@ -41,7 +44,6 @@ import { IntegrationsTab } from './tabs/IntegrationsTab'
 import { IslandUpdatesTab } from './tabs/IslandUpdatesTab'
 import { LabsTab } from './tabs/LabsTab'
 import { MattersTab } from './tabs/MattersTab'
-import { McpServiceTab } from './tabs/McpServiceTab'
 import { NotificationsTab } from './tabs/NotificationsTab'
 import { RealtimeStorageTab } from './tabs/RealtimeStorageTab'
 import { RemoteAccessTab } from './tabs/RemoteAccessTab'
@@ -49,8 +51,13 @@ import { SyncTab } from './tabs/SyncTab'
 
 export function SettingsShell(): React.ReactElement {
   const { t } = useTranslation()
-  const search = useSearch({ strict: false }) as { tab?: string }
+  const search = useSearch({ strict: false }) as {
+    tab?: string
+    section?: 'connectors' | 'mcp'
+    anchor?: string
+  }
   const refresh = useEnvStore((s) => s.refresh)
+  const mattersEnabled = useMattersEnabled()
   // Remote web (HttpApi) is read-only: env.set is notImplemented and every
   // EnvField renders disabled. Surface that ONCE here as a page-level note,
   // instead of repeating it on each of the ~72 fields (which would also
@@ -63,11 +70,19 @@ export function SettingsShell(): React.ReactElement {
     void refresh()
   }, [refresh])
 
-  const tab: SettingsTab =
-    typeof search.tab === 'string' && (SETTINGS_TABS as readonly string[]).includes(search.tab)
-      ? (search.tab as SettingsTab)
-      : 'general'
+  const rawTab = typeof search.tab === 'string' ? search.tab : undefined
+  const tab: SettingsTab = clampSettingsTab(rawTab)
+  const anchor =
+    typeof search.anchor === 'string' && search.anchor.length > 0
+      ? search.anchor
+      : legacyAnchorForTab(rawTab)
   const isConnectorsTab = tab === 'connectors'
+
+  React.useEffect(() => {
+    if (anchor) {
+      scrollToAnchorWhenReady(anchor)
+    }
+  }, [anchor, tab])
 
   // 主标签第二段 = 当前分节（design §三）。label key 走 settingsTabMeta 的同一份约定，
   // 与二级栏的设置分节行同名。
@@ -113,6 +128,11 @@ export function SettingsShell(): React.ReactElement {
           isConnectorsTab ? 'flex flex-col overflow-hidden' : 'overflow-y-auto scrollbar-thin'
         }`}
       >
+        <div className="sticky top-0 z-20 shrink-0 border-b border-ink-border-soft bg-ink-1/85 px-4 py-2 backdrop-blur-md">
+          <div className="mx-auto w-full max-w-[760px]">
+            <SettingsSearchBar includeMatters={mattersEnabled} />
+          </div>
+        </div>
         <RestartBanner />
         {isWeb ? (
           <div
@@ -139,36 +159,43 @@ export function SettingsShell(): React.ReactElement {
             </TabsContent>
             <TabsContent value="accounts">
               <AccountsTab />
-            </TabsContent>
-            <TabsContent value="sync">
-              <SyncTab />
+              <div id="settings-accounts-sync" className="mt-10 border-t border-ink-border-soft pt-8">
+                <SyncTab />
+              </div>
             </TabsContent>
             <TabsContent value="ai">
               <AiTab />
             </TabsContent>
             <TabsContent value="connectors" className="h-full min-h-0">
-              <ConnectorsTab />
+              <ConnectorsTab
+                initialSection={
+                  search.section === 'mcp' || rawTab === 'mcp' ? 'mcp' : 'connectors'
+                }
+              />
             </TabsContent>
             <TabsContent value="matters">
               <MattersTab />
             </TabsContent>
             <TabsContent value="notifications">
               <NotificationsTab />
+              <div
+                id="settings-notifications-island"
+                className="mt-10 border-t border-ink-border-soft pt-8"
+              >
+                <IslandUpdatesTab />
+              </div>
             </TabsContent>
             <TabsContent value="integrations">
               <IntegrationsTab />
             </TabsContent>
             <TabsContent value="realtime">
               <RealtimeStorageTab />
-            </TabsContent>
-            <TabsContent value="remote">
-              <RemoteAccessTab />
-            </TabsContent>
-            <TabsContent value="mcp">
-              <McpServiceTab />
-            </TabsContent>
-            <TabsContent value="island">
-              <IslandUpdatesTab />
+              <div
+                id="settings-realtime-remote"
+                className="mt-10 border-t border-ink-border-soft pt-8"
+              >
+                <RemoteAccessTab />
+              </div>
             </TabsContent>
             <TabsContent value="labs">
               <LabsTab />

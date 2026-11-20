@@ -27,7 +27,7 @@ interface PageFrameProps {
   rightDock?: React.ReactNode
 }
 
-const DEFAULT_MAIN = 'flex-1 overflow-y-auto min-w-0 scrollbar-thin'
+const DEFAULT_MAIN = 'flex-1 h-full min-h-0 min-w-0 overflow-y-auto scrollbar-thin'
 
 export function PageFrame({
   children,

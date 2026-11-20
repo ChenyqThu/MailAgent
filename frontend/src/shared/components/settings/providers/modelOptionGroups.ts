@@ -1,17 +1,22 @@
 // task 07-12 P3 — EnvField optionGroups 的构建 helper（功能位选择器按 provider 分组）。
 //
-// 仅 providerRegistryEnabled=true 的分支调用（flag off 的扁平 options 路径不经过这里，
-// 字节级不变）。value 恒为完整 providerRef（写入面不变——env 键 / report_agent 行存全串），
-// 组内 label 显示去前缀的 model id；orphan 标注由调用方经 renderLabel 注入。
+// 使用 React.createElement（零 JSX）保留 .ts 形态，避开 react-refresh/only-export-components。
+// value 恒为完整 providerRef；label 带厂商彩色 SVG + 模型名；有 providers 列表时组标题使用人类 displayName。
 
-import type * as React from 'react'
+import * as React from 'react'
 import type { TFunction } from 'i18next'
 
+import { ProviderBrandIcon } from '@shared/components/icons/providers'
 import {
-  DEFAULT_PROVIDER_ID,
+  indexProvidersById,
+  resolveProviderGroupLabel
+} from '@shared/components/providers/modelSelect.lib'
+import {
   groupModelRefs,
-  stripProviderPrefix
+  stripProviderPrefix,
+  type LlmProviderSummary
 } from '@shared/hooks/useLlmProviders'
+import { lookupModelMeta } from '@shared/modelCatalog/lookup'
 
 export interface ModelOptionGroup {
   label: React.ReactNode
@@ -21,14 +26,55 @@ export interface ModelOptionGroup {
 export function buildModelOptionGroups(
   ids: string[],
   t: TFunction,
-  renderLabel?: (id: string, display: string) => React.ReactNode
+  renderLabel?: (id: string, display: string) => React.ReactNode,
+  providers?: readonly LlmProviderSummary[]
 ): ModelOptionGroup[] {
-  return groupModelRefs(ids).map((g) => ({
-    label:
-      g.providerId === DEFAULT_PROVIDER_ID ? t('settings.providers.group.default') : g.providerId,
-    options: g.refs.map((id) => {
-      const display = stripProviderPrefix(id)
-      return { value: id, label: renderLabel ? renderLabel(id, display) : display }
-    })
-  }))
+  const providersById = indexProvidersById(providers)
+  return groupModelRefs(ids).map((g) => {
+    const prov = providersById.get(g.providerId)
+    const groupText = resolveProviderGroupLabel(
+      g.providerId,
+      providersById,
+      t('settings.providers.group.default')
+    )
+    const groupLabel = prov
+      ? React.createElement(
+          'span',
+          { className: 'inline-flex items-center gap-1.5' },
+          React.createElement(ProviderBrandIcon, {
+            customIcon: prov.customIcon,
+            providerId: g.providerId,
+            protocol: prov.protocol,
+            variant: 'color',
+            className: 'size-3.5 shrink-0'
+          }),
+          React.createElement('span', null, groupText)
+        )
+      : groupText
+
+    return {
+      label: groupLabel,
+      options: g.refs.map((id) => {
+        const display = stripProviderPrefix(id)
+        const textNode = renderLabel ? renderLabel(id, display) : display
+        const meta = lookupModelMeta(display, prov?.protocol ?? null)
+        return {
+          value: id,
+          label: React.createElement(
+            'span',
+            { className: 'inline-flex items-center gap-1.5' },
+            React.createElement(ProviderBrandIcon, {
+              customIcon: prov?.customIcon,
+              catalogProviderId: meta?.catalogProviderId,
+              providerId: g.providerId,
+              protocol: prov?.protocol,
+              variant: 'color',
+              className: 'size-3.5 shrink-0'
+            }),
+            React.createElement('span', null, textNode)
+          )
+        }
+      })
+    }
+  })
 }

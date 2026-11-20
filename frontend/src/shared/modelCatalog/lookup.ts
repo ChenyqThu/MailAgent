@@ -124,14 +124,75 @@ export function installModelCatalog(
 export const MODEL_CATALOG_SOURCE = CATALOG.source
 export const MODEL_CATALOG_GENERATED_AT = CATALOG.generatedAt
 
+export function getModelCatalogInfo(): {
+  source: string
+  generatedAt: string
+  publishedAt: string | null
+  isRemote: boolean
+} {
+  return {
+    source: remoteCatalog?.source ?? CATALOG.source,
+    generatedAt: remoteCatalog?.generatedAt ?? CATALOG.generatedAt,
+    publishedAt: remotePublishedAt || null,
+    isRemote: remoteCatalog !== null
+  }
+}
+
 // ── 本地覆盖表（扩展位）────────────────────────────────────────────────────────────
 
 /** models.dev 覆盖不到的模型在这里补 —— 形状与 catalog.json 的 `providers` 逐字一致，
  *  查表时**叠在快照之上**（同 provider 同 id 时覆盖表赢），并同样参与有序链与全局回退。
  *
- *  现在是空的。已知的唯一硬缺口是**豆包 / 火山**（models.dev 无第一方条目），owner 当前不用，
- *  故有意不补。要补时往这里加，**不要**改 catalog.json（那是生成物，下次 sync 会被覆写）。 */
-export const LOCAL_CATALOG_OVERRIDES: Record<string, RawCatalogProvider> = {}
+ *  当前补充 models.dev 尚未收录的豆包/火山方舟主流模型，其余厂商仍以同步快照为准。 */
+export const LOCAL_CATALOG_OVERRIDES: Record<string, RawCatalogProvider> = {
+  doubao: {
+    name: '豆包方舟',
+    models: {
+      'doubao-seed-1-6': {
+        name: 'Doubao Seed 1.6',
+        description: '字节跳动火山方舟旗舰深度思考多模态模型，支持自适应思考。',
+        context: 256_000,
+        output: 16_384,
+        caps: ['tools', 'vision', 'reasoning']
+      },
+      'doubao-seed-1-6-thinking': {
+        name: 'Doubao Seed 1.6 Thinking',
+        description: '豆包 Seed 1.6 深度推理版本，增强复杂推理与代码能力。',
+        context: 256_000,
+        output: 16_384,
+        caps: ['tools', 'vision', 'reasoning']
+      },
+      'doubao-seed-1-6-flash': {
+        name: 'Doubao Seed 1.6 Flash',
+        description: '豆包 Seed 1.6 轻量高速版，低延迟高性价比。',
+        context: 256_000,
+        output: 16_384,
+        caps: ['tools', 'vision', 'reasoning']
+      },
+      'doubao-1-5-pro-32k': {
+        name: 'Doubao 1.5 Pro 32K',
+        description: '火山方舟主力均衡模型（32K 上下文）。',
+        context: 32_768,
+        output: 16_384,
+        caps: ['tools']
+      },
+      'doubao-1-5-pro-256k': {
+        name: 'Doubao 1.5 Pro 256K',
+        description: '火山方舟长上下文模型（256K 上下文）。',
+        context: 256_000,
+        output: 16_384,
+        caps: ['tools']
+      },
+      'doubao-1-5-vision-pro-32k': {
+        name: 'Doubao 1.5 Vision Pro 32K',
+        description: '火山方舟多模态视觉理解模型（32K 上下文）。',
+        context: 32_768,
+        output: 16_384,
+        caps: ['tools', 'vision']
+      }
+    }
+  }
+}
 
 // ── 匹配策略 ──────────────────────────────────────────────────────────────────────
 
@@ -158,6 +219,7 @@ export const PREFERRED_CATALOG_PROVIDERS: Record<LlmProviderProtocol, readonly s
     'alibaba',
     'alibaba-cn',
     'minimax',
+    'doubao',
     'xai',
     'mistral',
     'siliconflow',
@@ -169,9 +231,7 @@ export const PREFERRED_CATALOG_PROVIDERS: Record<LlmProviderProtocol, readonly s
   ]
 }
 
-/** id 归一化 —— 两条规则，都是从 owner 真实数据反推的，不是臆想：
- *   ① 去掉尾部方括号后缀（`claude-opus-5[1m]` —— 中转用它表示 1M 上下文档位）
- *   ② 去掉 `vendor/` 前缀（`openai/gpt-4o` —— OpenRouter 的 wire id 形状）
+/** id 归一化 —— 按顺序剥除中转档位/聚合器路由后缀，仅在精确命中落空时作为兜底推断。
  *  🔴 只归一化**我们这一侧**的 id，不归一化目录里的 id：目录侧也归一会让同一家里的
  *  `foo/bar` 与 `baz/bar` 撞成一个键。 */
 export function normalizeCatalogModelId(modelId: string): string {
@@ -179,6 +239,8 @@ export function normalizeCatalogModelId(modelId: string): string {
   s = s.replace(/\[[^\]]*\]\s*$/, '')
   const slash = s.lastIndexOf('/')
   if (slash >= 0) s = s.slice(slash + 1)
+  s = s.replace(/:(free|extended|thinking|beta|exacto)\s*$/, '')
+  s = s.replace(/-latest\s*$/, '')
   return s.trim()
 }
 

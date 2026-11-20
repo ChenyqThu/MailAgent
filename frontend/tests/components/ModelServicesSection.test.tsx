@@ -1,16 +1,15 @@
 // @vitest-environment happy-dom
 //
-// ModelServicesSection — Settings「模型服务」区（task 07-12 P3）unit tests.
+// ModelServicesSection — Settings「模型服务」区（task 07-12 P3 + Magpie Workbench 升级）unit tests.
 //
 // 覆盖：
-//   1. provider 列表渲染（displayName + protocol 徽标 + default 徽标；default 无删除钮）
-//   2. 添加流：模板预填 → POST body（protocol/baseUrl 来自模板）
-//   3. secret 掩码：apiKey 输入 placeholder 只见 hasKey+last4，新值 blur → PATCH 后清空，
-//      明文不残留 DOM
+//   1. Master-Detail 列表 + 详情切换（CRS default 无删除钮；切到 Qwen 有删除钮）
+//   2. AddProviderDialog 添加流：模板预填 → POST body（protocol/baseUrl 来自模板，空 key 不携带 apiKey）
+//   3. secret 掩码：apiKey 输入 placeholder 只见 hasKey+last4，新值 blur → PATCH 后清空，明文不残留 DOM
 //   4. 连通性测试：ok → 「连接正常（{ms}ms）」；error → 可读文案
-//   5. 模型管理：启用勾选 → PUT {id, enabled}；拉取 → GET ?refresh=true
-//
-// 纯 UI 测试（raw fetch 全局 stub 按 URL 路由）；i18n 真实 zh-CN 资源（spec i18n.md）。
+//   5. 模型管理：启用勾选 → PUT {id, enabled:false}；拉取 → POST /models/refresh（零 GET ?refresh=）
+//   6. 增量式 Header 编辑（headerPatch）：只显名 + 占位；更新单键 → PATCH {headerPatch:{k:v}}；
+//      删除单键 → PATCH {headerPatch:{k:null}}；新增单键无需重输其余保留 Header
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -22,10 +21,6 @@ import { ModelServicesSection } from '../../src/shared/components/settings/provi
 
 await i18n.changeLanguage('zh-CN')
 
-// ---------------------------------------------------------------------------
-// fetch 路由 stub（envelope 契约同 serve-api：{status:'success', data}）
-// ---------------------------------------------------------------------------
-
 type Call = { method: string; url: string; body: unknown }
 const calls: Call[] = []
 
@@ -34,12 +29,16 @@ const DEFAULT_PROVIDER = {
   protocol: 'anthropic',
   displayName: 'CRS',
   baseUrl: 'https://crs.example.com/api',
-  // HIGH-1: header 值 write-only —— 列表投影只回名。
   headerNames: ['X-Gw-Sign'],
   enabled: true,
   sortOrder: 0,
   hasKey: true,
   keyLast4: '1234',
+  keyCount: 1,
+  extraKeyLast4s: [],
+  customIcon: null,
+  enabledModelCount: 1,
+  totalModelCount: 1,
   isDefault: true,
   createdAt: 1,
   updatedAt: 1
@@ -50,6 +49,7 @@ const DASH_PROVIDER = {
   protocol: 'openai-compatible',
   displayName: 'Qwen',
   baseUrl: 'https://d/v1',
+  headerNames: [],
   hasKey: false,
   keyLast4: null,
   isDefault: false
@@ -66,7 +66,6 @@ function envelope(data: unknown): Response {
     ok: true,
     status: 200,
     statusText: 'OK',
-    // request() 消费 text()；/chat/config 的 flag/enabledModels 探针消费 json()。
     text: async () => JSON.stringify({ status: 'success', data }),
     json: async () => ({ status: 'success', data })
   } as unknown as Response
@@ -86,6 +85,7 @@ const mockFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
         enabled: body.enabled ?? true,
         capabilities: null,
         maxOutput: null,
+        contextWindow: null,
         source: 'manual',
         fetchedAt: null
       })
@@ -100,6 +100,7 @@ const mockFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
           enabled: true,
           capabilities: null,
           maxOutput: null,
+          contextWindow: null,
           source: 'manual',
           fetchedAt: null
         }
@@ -144,32 +145,45 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-async function expandDefault(): Promise<void> {
-  fireEvent.click(await screen.findByLabelText('展开 CRS'))
-}
-
-describe('ModelServicesSection — 列表', () => {
-  test('渲染 provider 行：名称 + protocol 徽标 + default 徽标；default 行无删除钮', async () => {
+describe('ModelServicesSection — 列表与配置弹窗切换', () => {
+  test('渲染纵向列表（含启停开关）；点击行开弹窗：default 无删除钮，点击 Qwen 显示删除钮', async () => {
     renderUi()
     expect(await screen.findByText('CRS')).toBeTruthy()
     expect(screen.getByText('Qwen')).toBeTruthy()
     expect(screen.getByText('anthropic')).toBeTruthy()
     expect(screen.getByText('默认')).toBeTruthy()
-    // default 禁删：只有非 default 行有删除钮
-    expect(screen.queryByLabelText('删除 CRS')).toBeNull()
-    expect(screen.getByLabelText('删除 Qwen')).toBeTruthy()
+
+    // 行内启停开关可直接切换
+    fireEvent.click(screen.getByLabelText('启用/停用 Qwen'))
+    await waitFor(() => {
+      const patch = calls.find((c) => c.method === 'PATCH' && c.url.endsWith('/dash'))
+      expect(patch?.body).toEqual({ enabled: false })
+    })
+
+    // 点击 CRS 打开配置弹窗（default 无删除钮）
+    fireEvent.click(screen.getByLabelText('配置 CRS'))
+    const crsDialog = await screen.findByRole('dialog')
+    expect(within(crsDialog).queryByLabelText('删除 CRS')).toBeNull()
+
+    // 关闭后点击 Qwen（非 default 有删除钮）
+    fireEvent.click(within(crsDialog).getByRole('button', { name: 'Close' }))
+    fireEvent.click(screen.getByLabelText('配置 Qwen'))
+    const qwenDialog = await screen.findByRole('dialog')
+    expect(await within(qwenDialog).findByLabelText('删除 Qwen')).toBeTruthy()
   })
 })
 
-describe('ModelServicesSection — 添加流', () => {
-  test('模板预填 protocol/baseUrl，创建 → POST body 对齐模板', async () => {
+describe('ModelServicesSection — AddProviderDialog 添加流', () => {
+  test('模板预填 protocol/baseUrl，创建 → POST /llm/providers body 对齐模板', async () => {
     renderUi()
     await screen.findByText('CRS')
-    fireEvent.click(screen.getByText('添加'))
-    // 默认选中首个模板（Anthropic 官方）：id 预填 'anthropic'，baseUrl 空 = 官方默认
-    fireEvent.click(screen.getByText('创建'))
+    fireEvent.click(screen.getAllByText('添加')[0])
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByText('创建'))
     await waitFor(() => {
-      const post = calls.find((c) => c.method === 'POST' && !c.url.endsWith('/test'))
+      const post = calls.find(
+        (c) => c.method === 'POST' && c.url.endsWith('/llm/providers')
+      )
       expect(post).toBeTruthy()
       expect(post!.body).toMatchObject({
         id: 'anthropic',
@@ -177,7 +191,6 @@ describe('ModelServicesSection — 添加流', () => {
         displayName: 'Anthropic',
         baseUrl: ''
       })
-      // 未填 key → body 不携带 apiKey 键
       expect('apiKey' in (post!.body as Record<string, unknown>)).toBe(false)
     })
   })
@@ -186,8 +199,10 @@ describe('ModelServicesSection — 添加流', () => {
 describe('ModelServicesSection — secret 掩码', () => {
   test('placeholder 只见掩码（····1234），新值 blur → PATCH 且输入清空、明文不残留', async () => {
     renderUi()
-    await expandDefault()
-    const input = screen.getByPlaceholderText(/····1234/) as HTMLInputElement
+    fireEvent.click(await screen.findByLabelText('配置 CRS'))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('tab', { name: '连接与安全' }))
+    const input = (await within(dialog).findByPlaceholderText(/····1234/)) as HTMLInputElement
     expect(input.type).toBe('password')
     fireEvent.change(input, { target: { value: 'sk-new-secret' } })
     fireEvent.blur(input)
@@ -204,9 +219,10 @@ describe('ModelServicesSection — secret 掩码', () => {
 describe('ModelServicesSection — 连通性测试', () => {
   test('ok → 展示「连接正常（123ms）」', async () => {
     renderUi()
-    await expandDefault()
-    fireEvent.click(screen.getByRole('button', { name: /测试连接/ }))
-    expect(await screen.findByText('连接正常（123ms）')).toBeTruthy()
+    fireEvent.click(await screen.findByLabelText('配置 CRS'))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: /测试连接/ }))
+    expect(await within(dialog).findByText('连接正常（123ms）')).toBeTruthy()
     expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/test'))).toBe(true)
   })
 
@@ -217,17 +233,19 @@ describe('ModelServicesSection — 连通性测试', () => {
       error: 'authentication failed (HTTP 401) — check the API key'
     }
     renderUi()
-    await expandDefault()
-    fireEvent.click(screen.getByRole('button', { name: /测试连接/ }))
-    expect(await screen.findByText(/authentication failed \(HTTP 401\)/)).toBeTruthy()
+    fireEvent.click(await screen.findByLabelText('配置 CRS'))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: /测试连接/ }))
+    expect(await within(dialog).findByText(/authentication failed \(HTTP 401\)/)).toBeTruthy()
   })
 })
 
 describe('ModelServicesSection — 模型管理', () => {
-  test('启用勾选 → PUT {id, enabled:false}', async () => {
+  test('已配 Key 默认打开模型 Tab：启用勾选 → PUT {id, enabled:false}', async () => {
     renderUi()
-    await expandDefault()
-    const checkbox = await screen.findByLabelText('claude-sonnet-4-6')
+    fireEvent.click(await screen.findByLabelText('配置 CRS'))
+    const dialog = await screen.findByRole('dialog')
+    const checkbox = await within(dialog).findByLabelText('claude-sonnet-4-6')
     fireEvent.click(checkbox)
     await waitFor(() => {
       const put = calls.find((c) => c.method === 'PUT')
@@ -236,68 +254,70 @@ describe('ModelServicesSection — 模型管理', () => {
     })
   })
 
-  test('拉取模型列表 → POST /models/refresh（HIGH-2 后独立写端点，GET 纯读）', async () => {
+  test('拉取模型列表 → POST /models/refresh（独立写端点，GET 纯读）', async () => {
     renderUi()
-    await expandDefault()
-    fireEvent.click(await screen.findByText('拉取模型列表'))
+    fireEvent.click(await screen.findByLabelText('配置 CRS'))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(await within(dialog).findByText('拉取模型列表'))
     await waitFor(() => {
       expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/models/refresh'))).toBe(true)
     })
-    // GET 面不再携带 refresh 参数（读端点不出网不写库）。
     expect(calls.some((c) => c.method === 'GET' && c.url.includes('refresh='))).toBe(false)
   })
 })
 
-describe('ModelServicesSection — headers write-only（HIGH-1）', () => {
-  test('已存 header 只显名 + •••• 占位，值不回显；输入新值保存 → PATCH 全量明文 map', async () => {
+describe('ModelServicesSection — 增量 headers write-only（headerPatch）', () => {
+  test('已存 header 只显名不回显值；单键更新 → PATCH headerPatch，明文不残留 DOM', async () => {
     renderUi()
-    await expandDefault()
-    const input = (await screen.findByLabelText('X-Gw-Sign')) as HTMLInputElement
+    fireEvent.click(await screen.findByLabelText('配置 CRS'))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('tab', { name: '连接与安全' }))
+    const input = (await within(dialog).findByLabelText('X-Gw-Sign')) as HTMLInputElement
     expect(input.type).toBe('password')
     expect(input.value).toBe('')
-    expect(input.placeholder).toBe('••••')
 
     fireEvent.change(input, { target: { value: 'gw-secret-2' } })
-    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: '更新' }))
     await waitFor(() => {
       const patch = calls.find((c) => c.method === 'PATCH')
       expect(patch).toBeTruthy()
-      expect(patch!.body).toEqual({ headers: { 'X-Gw-Sign': 'gw-secret-2' } })
+      expect(patch!.body).toEqual({ headerPatch: { 'X-Gw-Sign': 'gw-secret-2' } })
     })
-    // 保存成功后明文草稿清空、不残留 DOM。
     await waitFor(() => {
-      expect((screen.getByLabelText('X-Gw-Sign') as HTMLInputElement).value).toBe('')
+      expect((within(dialog).getByLabelText('X-Gw-Sign') as HTMLInputElement).value).toBe('')
     })
     expect(document.body.textContent).not.toContain('gw-secret-2')
   })
 
-  test('删除 header → 保存 → PATCH {headers:{}}（清空语义）', async () => {
+  test('单键删除 header → PATCH {headerPatch:{[name]:null}}', async () => {
     renderUi()
-    await expandDefault()
-    await screen.findByLabelText('X-Gw-Sign')
-    fireEvent.click(screen.getByLabelText('删除 header X-Gw-Sign'))
-    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    fireEvent.click(await screen.findByLabelText('配置 CRS'))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('tab', { name: '连接与安全' }))
+    await within(dialog).findByLabelText('X-Gw-Sign')
+    fireEvent.click(within(dialog).getByLabelText('删除 header X-Gw-Sign'))
     await waitFor(() => {
       const patch = calls.find((c) => c.method === 'PATCH')
       expect(patch).toBeTruthy()
-      expect(patch!.body).toEqual({ headers: {} })
+      expect(patch!.body).toEqual({ headerPatch: { 'X-Gw-Sign': null } })
     })
   })
 
-  test('未重输值的保留项挡住保存（write-only 构不出完整 map）', async () => {
+  test('新增 header → PATCH {headerPatch:{X-New:v1}}，无需重填已有加密 header', async () => {
     renderUi()
-    await expandDefault()
-    await screen.findByLabelText('X-Gw-Sign')
-    // 新增一个 header（有值）→ 已存 X-Gw-Sign 未重输 → 保存禁用 + hint 在场。
-    const draftKeyInput = screen.getByPlaceholderText('Header 名')
+    fireEvent.click(await screen.findByLabelText('配置 CRS'))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('tab', { name: '连接与安全' }))
+    await within(dialog).findByLabelText('X-Gw-Sign')
+    const draftKeyInput = within(dialog).getByPlaceholderText('Header 名')
     fireEvent.change(draftKeyInput, { target: { value: 'X-New' } })
-    fireEvent.change(screen.getByPlaceholderText('值'), { target: { value: 'v1' } })
-    // 「添加」同名者有三（Section 头/HeadersEditor/模型手动添加）——按行内 scope 取。
+    fireEvent.change(within(dialog).getByPlaceholderText('值'), { target: { value: 'v1' } })
     const draftRow = draftKeyInput.closest('div') as HTMLElement
     fireEvent.click(within(draftRow).getByRole('button', { name: '添加' }))
-    const save = screen.getByRole('button', { name: '保存' }) as HTMLButtonElement
-    expect(save.disabled).toBe(true)
-    expect(screen.getByText(/重新输入值/)).toBeTruthy()
-    expect(calls.some((c) => c.method === 'PATCH')).toBe(false)
+    await waitFor(() => {
+      const patch = calls.find((c) => c.method === 'PATCH')
+      expect(patch).toBeTruthy()
+      expect(patch!.body).toEqual({ headerPatch: { 'X-New': 'v1' } })
+    })
   })
 })

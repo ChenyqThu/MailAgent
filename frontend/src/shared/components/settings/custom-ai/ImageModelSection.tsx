@@ -36,7 +36,10 @@ export function ImageModelSection(): React.ReactElement | null {
       currentModel && !candidates.includes(currentModel)
         ? [...candidates, currentModel]
         : candidates
-    return { optionGroups: buildModelOptionGroups(withOrphan, t), empty: candidates.length === 0 }
+    return {
+      optionGroups: buildModelOptionGroups(withOrphan, t, undefined, providers),
+      empty: candidates.length === 0
+    }
   }, [rawEnabled, providers, currentModel, t])
 
   if (!registryEnabled) return null

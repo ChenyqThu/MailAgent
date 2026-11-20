@@ -31,7 +31,7 @@ import type { useNavigate, useRouter } from '@tanstack/react-router'
 
 import type { EmailView } from '@shared/state/email-filter'
 import type { DeeplinkTarget } from '@shared/lib/deeplink_target'
-import type { SettingsTab } from '@shared/lib/settingsTabs'
+import type { LegacySettingsTab, SettingsTab } from '@shared/lib/settingsTabs'
 import { SHORTCUTS } from '@shared/keymap'
 import {
   BotIcon,
@@ -428,6 +428,7 @@ const ENTRIES = [
     // 再放一行「日历」是重复。
     rail: { order: 3 },
     palette: { order: 25, metaI18nKey: 'palette.jump.calendarMeta' },
+    notificationRoute: true,
     deeplinkKind: 'calendar'
   },
   {
@@ -727,8 +728,12 @@ export function navigateToNavEntry(navigate: NavigateFn, entry: NavEntry): void 
 
 /** 设置域面板 tab 行的落点（path 字面量不出 registry）。tab 词表单源
  *  `@shared/lib/settingsTabs`（`import type` 编译期擦除，叶子纪律不破）。 */
-export function navigateToSettingsTab(navigate: NavigateFn, tab: SettingsTab): void {
-  void navigate({ to: '/settings', search: { tab } })
+export function navigateToSettingsTab(
+  navigate: NavigateFn,
+  tab: SettingsTab | LegacySettingsTab
+): void {
+  // LegacySettingsTab 传入 URL 后由 router-instance validateSearch 自动重定向至合并目标与 anchor。
+  void navigate({ to: '/settings', search: { tab: tab as SettingsTab } })
 }
 
 /** 某一份报告的落点（报告清单行点击 / 通知中心「报告完成」深链共用）。

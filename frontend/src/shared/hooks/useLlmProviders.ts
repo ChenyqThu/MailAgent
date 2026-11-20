@@ -32,13 +32,24 @@ export interface LlmProviderSummary {
   displayName: string
   baseUrl: string
   /** 自定义 header 只回名不回值（批 2 review HIGH-1：header 值按 secret 纪律 write-only，
-   *  明文仅在 snapshot（verify_local_token）面）。改值 = PATCH headers 明文 map 全量替换。 */
+   *  明文仅在 snapshot（verify_local_token）面）。改值支持 headers 全量替换或 headerPatch 单键改删。 */
   headerNames: string[]
   enabled: boolean
   sortOrder: number
   hasKey: boolean
   /** 掩码尾 4 位（识别是哪把 key）；解密失败/无 key → null。明文永不出 wire。 */
   keyLast4: string | null
+  /** 可用 key 总数（主 key + 备用池）。 */
+  keyCount?: number
+  /** 备用池 key 掩码尾 4 位列表。 */
+  extraKeyLast4s?: string[]
+  /** 自定义图标 slug 或 emoji/缩写。 */
+  customIcon?: string | null
+  /** 出站双向隐私占位符脱敏开关。 */
+  privacyMaskEnabled?: boolean
+  /** 已启用模型数与总模型数。 */
+  enabledModelCount?: number
+  totalModelCount?: number
   isDefault: boolean
   createdAt: number
   updatedAt: number
@@ -101,7 +112,12 @@ export async function createLlmProvider(input: {
   displayName?: string
   baseUrl?: string
   apiKey?: string
+  extraApiKeys?: string[]
   headers?: Record<string, string>
+  customIcon?: string | null
+  privacyMaskEnabled?: boolean
+  enabled?: boolean
+  sortOrder?: number
 }): Promise<LlmProviderSummary> {
   return request(resolveApiBaseUrl(), 'POST', '/llm/providers', { body: input })
 }
@@ -109,12 +125,19 @@ export async function createLlmProvider(input: {
 export async function updateLlmProvider(
   providerId: string,
   patch: {
+    protocol?: LlmProviderProtocol
     displayName?: string
     baseUrl?: string
     /** 非空 = 轮换；'' / null = 清除（后端语义）。 */
     apiKey?: string | null
+    /** 备用 key 轮换池（null/[] 清空）。 */
+    extraApiKeys?: string[] | null
     /** write-only 明文 map，全量替换：省略 = 不改，{} = 清空（跨 lane 契约）。 */
     headers?: Record<string, string>
+    /** 增量单键改删（str 写入 / null 删除）。 */
+    headerPatch?: Record<string, string | null>
+    customIcon?: string | null
+    privacyMaskEnabled?: boolean
     enabled?: boolean
     sortOrder?: number
   }
@@ -122,6 +145,24 @@ export async function updateLlmProvider(
   return request(resolveApiBaseUrl(), 'PATCH', `/llm/providers/${encodeURIComponent(providerId)}`, {
     body: patch
   })
+}
+
+export async function probeLlmProviderDraft(input: {
+  protocol: LlmProviderProtocol
+  baseUrl?: string
+  apiKey?: string
+  providerId?: string
+  modelId?: string
+  headers?: Record<string, string>
+}): Promise<LlmProviderTestResult> {
+  return request(resolveApiBaseUrl(), 'POST', '/llm/providers/probe', { body: input })
+}
+
+export async function reorderLlmProviders(ids: string[]): Promise<{
+  providers: LlmProviderSummary[]
+  version: number
+}> {
+  return request(resolveApiBaseUrl(), 'PUT', '/llm/providers/reorder', { body: { ids } })
 }
 
 export async function deleteLlmProvider(providerId: string): Promise<void> {
@@ -147,11 +188,30 @@ export async function refreshLlmProviderModels(providerId: string): Promise<LlmP
   )
 }
 
-export async function testLlmProvider(providerId: string): Promise<LlmProviderTestResult> {
+export async function testLlmProvider(
+  providerId: string,
+  modelId?: string
+): Promise<LlmProviderTestResult> {
   return request(
     resolveApiBaseUrl(),
     'POST',
-    `/llm/providers/${encodeURIComponent(providerId)}/test`
+    `/llm/providers/${encodeURIComponent(providerId)}/test`,
+    modelId ? { body: { modelId } } : undefined
+  )
+}
+
+export async function batchUpdateLlmProviderModels(
+  providerId: string,
+  input: {
+    action: 'enable' | 'disable' | 'clear_unenabled_fetched'
+    modelIds?: string[]
+  }
+): Promise<{ provider: string; models: LlmProviderModel[]; affected: number }> {
+  return request(
+    resolveApiBaseUrl(),
+    'POST',
+    `/llm/providers/${encodeURIComponent(providerId)}/models/batch`,
+    { body: input }
   )
 }
 
@@ -162,6 +222,7 @@ export async function upsertLlmProviderModel(
   input: {
     id: string
     displayName?: string | null
+    groupName?: string | null
     enabled?: boolean
     capabilities?: LlmModelCapabilities | null
     maxOutput?: number | null
@@ -218,6 +279,59 @@ export function useLlmProviders(enabled: boolean): {
     isLoading: q.isLoading,
     isError: q.isError
   }
+}
+
+export type PrivacyBuiltinCategory = 'secret' | 'id_card' | 'phone' | 'email' | 'bank_card'
+
+export interface PrivacyMaskCustomRuleWire {
+  id: string
+  name: string
+  pattern: string
+  tag: string
+  enabled: boolean
+}
+
+export interface PrivacyMaskConfigWire {
+  builtIn: Record<PrivacyBuiltinCategory, boolean>
+  customRules: PrivacyMaskCustomRuleWire[]
+}
+
+export interface PrivacyMaskHitsWire {
+  total: number
+  byCategory: Array<{
+    category: string
+    count: number
+    updatedAt: number
+  }>
+}
+
+export interface PrivacyMaskStateWire {
+  config: PrivacyMaskConfigWire
+  hits: PrivacyMaskHitsWire
+}
+
+export async function getPrivacyMaskConfig(): Promise<PrivacyMaskStateWire> {
+  return request(resolveApiBaseUrl(), 'GET', '/llm/providers/privacy-config')
+}
+
+export async function savePrivacyMaskConfig(
+  config: PrivacyMaskConfigWire
+): Promise<PrivacyMaskStateWire> {
+  return request(resolveApiBaseUrl(), 'PUT', '/llm/providers/privacy-config', { body: config })
+}
+
+export async function clearPrivacyMaskHits(): Promise<{ cleared: number }> {
+  return request(resolveApiBaseUrl(), 'DELETE', '/llm/providers/privacy-hits')
+}
+
+export function usePrivacyMaskConfig(enabled = true): ReturnType<typeof useQuery<PrivacyMaskStateWire>> {
+  return useQuery({
+    queryKey: qk.llm.privacyConfig(),
+    queryFn: getPrivacyMaskConfig,
+    enabled,
+    staleTime: 10_000,
+    retry: false
+  })
 }
 
 export function useLlmProviderModels(

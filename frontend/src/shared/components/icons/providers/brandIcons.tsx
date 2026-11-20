@@ -234,6 +234,72 @@ export function FireworksIcon(props: ProviderIconProps): React.JSX.Element {
   )
 }
 
+/** Ollama — 羊驼轮廓矢量标识（mono）。 */
+export function OllamaIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path d="M12 2.2c-1.45 0-2.63.65-3.45 1.72-.42-.97-1.18-1.57-2.06-1.57-.95 0-1.64.86-1.64 2.15 0 1.05.33 2.02.89 2.81-.79 1.04-1.24 2.34-1.24 3.74 0 1.48.51 2.86 1.36 3.96-.24.79-.36 1.66-.36 2.57V21c0 .55.45 1 1 1h2.4c.55 0 1-.45 1-1v-2.15c.65.17 1.35.25 2.1.25s1.45-.08 2.1-.25V21c0 .55.45 1 1 1h2.4c.55 0 1-.45 1-1v-3.42c0-.91-.12-1.78-.36-2.57.85-1.1 1.36-2.48 1.36-3.96 0-1.4-.45-2.7-1.24-3.74.56-.79.89-1.76.89-2.81 0-1.29-.69-2.15-1.64-2.15-.88 0-1.64.6-2.06 1.57C14.63 2.85 13.45 2.2 12 2.2zm-2.6 8.3a1.05 1.05 0 110 2.1 1.05 1.05 0 010-2.1zm5.2 0a1.05 1.05 0 110 2.1 1.05 1.05 0 010-2.1zM12 13.4c.95 0 1.75.6 1.75 1.35 0 .75-.8 1.35-1.75 1.35s-1.75-.6-1.75-1.35c0-.75.8-1.35 1.75-1.35z" />
+    </svg>
+  )
+}
+
+/** LM Studio / vLLM — 本地推理引擎终端方块标识（mono）。 */
+export function LmStudioIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path d="M4.2 3h15.6C21.01 3 22 3.99 22 5.2v13.6c0 1.21-.99 2.2-2.2 2.2H4.2C2.99 21 2 20.01 2 18.8V5.2C2 3.99 2.99 3 4.2 3zm2.6 5.2v7.6h4.6v-1.7H8.6V8.2H6.8zm6.4 0v7.6H15v-4.6l1.7 3h1.1l1.7-3v4.6h1.7V8.2h-1.8l-2.15 3.85L15 8.2h-1.8z" />
+    </svg>
+  )
+}
+
+/** OpenCode — 几何括号块标识（mono）。 */
+export function OpenCodeIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path
+        clipRule="evenodd"
+        d="M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2zm2.5 4.5v9h9v-9h-9zm2.25 2.25h4.5v4.5h-4.5v-4.5z"
+      />
+    </svg>
+  )
+}
+
+/** Azure / Azure OpenAI（mono）。 */
+export function AzureIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path d="M13.05 2.5L5.7 14.9h4.6l-3.65 6.6L21.5 9.8h-5.85l4.2-7.3h-6.8zM7.65 4.2L2.5 19.5h5.05l3.9-7.15L7.65 4.2z" />
+    </svg>
+  )
+}
+
+/** Amazon Bedrock / AWS（mono）。 */
+export function BedrockIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path d="M12 2L3.5 6.9v10.2L12 22l8.5-4.9V6.9L12 2zm0 2.3l6.3 3.65L12 11.6 5.7 7.95 12 4.3zM5.5 9.7l5.5 3.2v6.6l-5.5-3.2V9.7zm13 0v6.6L13 19.5v-6.6l5.5-3.2z" />
+    </svg>
+  )
+}
+
+/** GitHub / GitHub Models（mono）。 */
+export function GitHubIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.57.11.78-.25.78-.55v-1.95c-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.23-1.28-5.23-5.68 0-1.25.45-2.28 1.18-3.08-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.17 1.18a11 11 0 015.76 0c2.2-1.49 3.17-1.18 3.17-1.18.62 1.58.23 2.75.11 3.04.73.8 1.18 1.83 1.18 3.08 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.79.55A11.5 11.5 0 0023.5 12C23.5 5.65 18.35.5 12 .5z" />
+    </svg>
+  )
+}
+
+/** NVIDIA / NIM（mono）。 */
+export function NvidiaIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path d="M9.6 6.2c3.8-.7 7.6.9 9.9 4.1 1.1 1.5 1.8 3.3 2.1 5.2H18c-.3-2.9-2.2-5.4-5-6.3-.9-.3-1.9-.4-2.8-.2V6.2zm-1 3.1c2.8-.7 5.8.7 7.2 3.3.5.9.8 1.9.9 2.9h-2.9c-.2-1.7-1.5-3.1-3.2-3.5-.7-.2-1.4-.1-2 .1V9.3zm-1 3.1c1.7-.5 3.6.5 4.2 2.2.1.3.2.6.2.9H9.3c-.2-.5-.6-.9-1.1-1-.2-.1-.4 0-.6 0v-2.1zm-5.6 1c1.3-3.1 4-5.4 7.1-6.5v2.7c-2 .8-3.6 2.4-4.4 4.4H2zm0 2.5h19.8c-.9 2.1-2.5 3.7-4.6 4.7-2.2 1-4.8 1.1-7.1.3-3.4-1-6-3.1-8.1-5z" />
+    </svg>
+  )
+}
+
 // ── color 变体 ────────────────────────────────────────────────────────────────────
 // 与 mono 的唯一差别是 fill 来自各家官方品牌色（不吃 currentColor）。svg 上不设 fill，
 // 每个 path 自带；`fillRule` 也逐 path 照抄上游，不走 SVG_PROPS 的 evenodd 默认值。
@@ -403,6 +469,38 @@ export function SiliconCloudColorIcon(props: ProviderIconProps): React.JSX.Eleme
         d="M22.956 6.521H12.522c-.577 0-1.044.468-1.044 1.044v3.13c0 .577-.466 1.044-1.043 1.044H1.044c-.577 0-1.044.467-1.044 1.044v4.174C0 17.533.467 18 1.044 18h10.434c.577 0 1.044-.467 1.044-1.043v-3.13c0-.578.466-1.044 1.043-1.044h9.391c.577 0 1.044-.467 1.044-1.044V7.565c0-.576-.467-1.044-1.044-1.044z"
         fill="#6E29F6"
         fillRule="evenodd"
+      />
+    </svg>
+  )
+}
+
+/** Azure / Azure OpenAI（color）。 */
+export function AzureColorIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...COLOR_SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path d="M13.05 2.5L5.7 14.9h4.6l-3.65 6.6L21.5 9.8h-5.85l4.2-7.3h-6.8z" fill="#0078D4" />
+      <path d="M7.65 4.2L2.5 19.5h5.05l3.9-7.15L7.65 4.2z" fill="#50E6FF" />
+    </svg>
+  )
+}
+
+/** Amazon Bedrock / AWS（color）。 */
+export function BedrockColorIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...COLOR_SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path d="M12 2L3.5 6.9v10.2L12 22l8.5-4.9V6.9L12 2zm0 2.3l6.3 3.65L12 11.6 5.7 7.95 12 4.3z" fill="#FF9900" />
+      <path d="M5.5 9.7l5.5 3.2v6.6l-5.5-3.2V9.7zm13 0v6.6L13 19.5v-6.6l5.5-3.2z" fill="#232F3E" />
+    </svg>
+  )
+}
+
+/** NVIDIA / NIM（color）。 */
+export function NvidiaColorIcon(props: ProviderIconProps): React.JSX.Element {
+  return (
+    <svg {...COLOR_SVG_PROPS} className={cn(BASE_CLASS, props.className)}>
+      <path
+        d="M9.6 6.2c3.8-.7 7.6.9 9.9 4.1 1.1 1.5 1.8 3.3 2.1 5.2H18c-.3-2.9-2.2-5.4-5-6.3-.9-.3-1.9-.4-2.8-.2V6.2zm-1 3.1c2.8-.7 5.8.7 7.2 3.3.5.9.8 1.9.9 2.9h-2.9c-.2-1.7-1.5-3.1-3.2-3.5-.7-.2-1.4-.1-2 .1V9.3zm-1 3.1c1.7-.5 3.6.5 4.2 2.2.1.3.2.6.2.9H9.3c-.2-.5-.6-.9-1.1-1-.2-.1-.4 0-.6 0v-2.1zm-5.6 1c1.3-3.1 4-5.4 7.1-6.5v2.7c-2 .8-3.6 2.4-4.4 4.4H2zm0 2.5h19.8c-.9 2.1-2.5 3.7-4.6 4.7-2.2 1-4.8 1.1-7.1.3-3.4-1-6-3.1-8.1-5z"
+        fill="#76B900"
       />
     </svg>
   )

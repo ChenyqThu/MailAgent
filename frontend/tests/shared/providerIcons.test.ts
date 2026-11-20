@@ -203,4 +203,28 @@ describe('目录厂商 × 图标表的覆盖闸', () => {
       expect(resolveProviderIcon({ catalogProviderId: pid }, 'color')).toBe(mono)
     }
   })
+
+  test('Phase 1 新增厂商与本地引擎图标 + customIcon 覆盖解析', () => {
+    for (const pid of [
+      'ollama',
+      'lmstudio',
+      'vllm',
+      'opencode',
+      'azure',
+      'bedrock',
+      'github',
+      'nvidia',
+      'volcengine'
+    ]) {
+      expect(resolveProviderIcon({ providerId: pid }, 'mono'), `${pid} mono`).not.toBeNull()
+      expect(resolveProviderIcon({ providerId: pid }, 'color'), `${pid} color`).not.toBeNull()
+    }
+    // customIcon 优先级高于 catalogProviderId / providerId / protocol
+    expect(
+      resolveProviderIcon(
+        { customIcon: 'ollama', catalogProviderId: 'anthropic', providerId: 'openai', protocol: 'openai' },
+        'color'
+      )
+    ).toBe(resolveProviderIcon({ providerId: 'ollama' }, 'color'))
+  })
 })

@@ -19,8 +19,9 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useUpstreamModels, useEnabledModels, FALLBACK_MODELS } from '@shared/hooks/useLlmModels'
-import { useProviderRegistryEnabled } from '@shared/hooks/useLlmProviders'
+import { useLlmProviders, useProviderRegistryEnabled } from '@shared/hooks/useLlmProviders'
 import { useChatCompactFlags } from '@shared/hooks/useChatCompactEnabled'
+import { ModelSelect } from '@shared/components/providers/ModelSelect'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
@@ -54,6 +55,7 @@ import { Row } from '../parts/Row'
 import { EnvField } from '../parts/EnvField'
 import { EnvSecretField } from '../parts/EnvSecretField'
 import { ModelServicesSection } from '../providers/ModelServicesSection'
+import { PrivacyMaskSection } from '../providers/PrivacyMaskSection'
 import { buildModelOptionGroups } from '../providers/modelOptionGroups'
 import { CustomAiSection } from '../CustomAiSection'
 import { ImageModelSection } from '../custom-ai/ImageModelSection'
@@ -154,6 +156,13 @@ export function AiTab(): React.ReactElement {
   const currentTranslateModel = useEnvStore((s) =>
     s.state.status === 'ready' ? (s.state.snapshot.values['LLM_TRANSLATE_MODEL'] ?? '') : ''
   )
+  const currentTranslateBaseUrl = useEnvStore((s) =>
+    s.state.status === 'ready' ? (s.state.snapshot.values['LLM_TRANSLATE_BASE_URL'] ?? '') : ''
+  )
+  const currentTranslateApiKey = useEnvStore((s) =>
+    s.state.status === 'ready' ? (s.state.snapshot.values['LLM_TRANSLATE_API_KEY'] ?? '') : ''
+  )
+  const [showTranslateOverride, setShowTranslateOverride] = React.useState(false)
 
   // Remote web is read-only for env writes (matches EnvField.isWeb logic).
   const isWeb =
@@ -165,6 +174,7 @@ export function AiTab(): React.ReactElement {
   // 不变；on → LLM_API_BASE/KEY + 启用模型勾选区被「模型服务」section 取代，模型下拉
   // 选项按 provider 分组（值仍写原 env 键——providerRef 向后兼容由 P1/P2 消化）。
   const providerRegistryEnabled = useProviderRegistryEnabled()
+  const { providers } = useLlmProviders(providerRegistryEnabled)
 
   // flag on 时三个功能位下拉的分组选项（flag off 恒 undefined → EnvField 走旧扁平渲染）。
   const notEnabledSuffix = t('settings.ai.enabledModels.notEnabled')
@@ -173,10 +183,14 @@ export function AiTab(): React.ReactElement {
     const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
     const withOrphan =
       currentLlmModel && !base.includes(currentLlmModel) ? [...base, currentLlmModel] : base
-    return buildModelOptionGroups(withOrphan, t, (id, display) =>
-      id === currentLlmModel && !base.includes(id) ? `${display} ${notEnabledSuffix}` : display
+    return buildModelOptionGroups(
+      withOrphan,
+      t,
+      (id, display) =>
+        id === currentLlmModel && !base.includes(id) ? `${display} ${notEnabledSuffix}` : display,
+      providers
     )
-  }, [providerRegistryEnabled, enabledModels, currentLlmModel, t, notEnabledSuffix])
+  }, [providerRegistryEnabled, enabledModels, currentLlmModel, providers, t, notEnabledSuffix])
   const llmFallbackGroups = React.useMemo(() => {
     if (!providerRegistryEnabled) return undefined
     const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
@@ -184,10 +198,14 @@ export function AiTab(): React.ReactElement {
       currentLlmFallback && !base.includes(currentLlmFallback)
         ? [...base, currentLlmFallback]
         : base
-    return buildModelOptionGroups(withOrphan, t, (id, display) =>
-      id === currentLlmFallback && !base.includes(id) ? `${display} ${notEnabledSuffix}` : display
+    return buildModelOptionGroups(
+      withOrphan,
+      t,
+      (id, display) =>
+        id === currentLlmFallback && !base.includes(id) ? `${display} ${notEnabledSuffix}` : display,
+      providers
     )
-  }, [providerRegistryEnabled, enabledModels, currentLlmFallback, t, notEnabledSuffix])
+  }, [providerRegistryEnabled, enabledModels, currentLlmFallback, providers, t, notEnabledSuffix])
   // 翻译模型：flag on 选项源从 translate 上游列表升级为聚合 enabledModels（跨 provider）。
   const translateModelGroups = React.useMemo(() => {
     if (!providerRegistryEnabled) return undefined
@@ -197,10 +215,14 @@ export function AiTab(): React.ReactElement {
         ? [...base, currentTranslateModel]
         : base
     const notInList = t('settings.ai.translateModel.notInList', { defaultValue: '（不在列表）' })
-    return buildModelOptionGroups(withOrphan, t, (id, display) =>
-      id === currentTranslateModel && !base.includes(id) ? `${display} ${notInList}` : display
+    return buildModelOptionGroups(
+      withOrphan,
+      t,
+      (id, display) =>
+        id === currentTranslateModel && !base.includes(id) ? `${display} ${notInList}` : display,
+      providers
     )
-  }, [providerRegistryEnabled, enabledModels, currentTranslateModel, t])
+  }, [providerRegistryEnabled, enabledModels, currentTranslateModel, providers, t])
 
   async function handleRefreshUpstream(): Promise<void> {
     setRefreshing(true)
@@ -257,13 +279,16 @@ export function AiTab(): React.ReactElement {
     }
   }
 
+  const [subtab, setSubtab] = React.useState<'all' | 'models' | 'agent'>('all')
+  React.useEffect(() => {
+    const onFocusAnchor = (): void => setSubtab('all')
+    window.addEventListener('mailagent:focus-anchor', onFocusAnchor)
+    return () => window.removeEventListener('mailagent:focus-anchor', onFocusAnchor)
+  }, [])
+
   return (
     <div className="relative">
-      {/* 锚点导航挂在 760px 内容列**外侧右方**（absolute left-full），不挤压正文。
-          断点 min-[1500px]：内容列右侧的空余 = (视口 - 侧边栏240 - 设置 rail 200 - 760)/2，
-          1500px 起才够放下 ml-4 + w-148（含列内 px-10 的 40px 让位），再窄整块隐藏 ——
-          宁可没有导航，也不让它溢出到 section 的横向滚动条里。
-          pointer-events 只在 nav 本体打开：外层撑满高度的空壳不该吃掉正文右侧的点击。 */}
+      {/* 锚点导航挂在 760px 内容列外侧右方（absolute left-full），不挤压正文。 */}
       <div className="pointer-events-none absolute left-full top-0 ml-4 hidden h-full w-[148px] min-[1500px]:block">
         <div className="pointer-events-auto sticky top-6">
           <SectionAnchorNav
@@ -282,12 +307,61 @@ export function AiTab(): React.ReactElement {
         })}
       />
 
-      {/* task 07-12 P3 — provider registry on 时「模型服务」区取代下方 LLM_API_BASE/KEY +
-          启用模型勾选（prd §4.5.6）；off（默认）字节级现状。
-          外裹 id wrapper 供锚点导航跳转：flag off 时 wrapper 空高 0 → 导航自动过滤掉这条。 */}
-      <div id={AI_TAB_ANCHOR_IDS.modelServices} className={AI_TAB_ANCHOR_SCROLL_MT}>
-        {providerRegistryEnabled && <ModelServicesSection />}
+      <div
+        role="group"
+        aria-label={t('settings.tabs.ai')}
+        className="mb-6 flex flex-wrap items-center gap-1.5"
+      >
+        {(['all', 'models', 'agent'] as const).map((key) => (
+          <button
+            key={key}
+            type="button"
+            aria-pressed={subtab === key}
+            onClick={() => setSubtab(key)}
+            className={`rounded-md px-3 py-1 text-aux transition-colors ${
+              subtab === key
+                ? 'bg-ink-3 font-medium text-ink-fg'
+                : 'text-ink-fg-2 hover:bg-ink-2 hover:text-ink-fg'
+            }`}
+          >
+            {t(`settings.aiSubtabs.${key}`)}
+          </button>
+        ))}
       </div>
+
+      {subtab !== 'agent' && (
+        <>
+          {/* task 07-12 P3 — provider registry on 时「模型服务」区取代下方 LLM_API_BASE/KEY +
+              启用模型勾选（prd §4.5.6）；off（默认）字节级现状。
+              外裹 id wrapper 供锚点导航跳转：flag off 时 wrapper 空高 0 → 导航自动过滤掉这条。 */}
+          <div id={AI_TAB_ANCHOR_IDS.modelServices} className={AI_TAB_ANCHOR_SCROLL_MT}>
+            {providerRegistryEnabled && <ModelServicesSection />}
+          </div>
+
+          <div id={AI_TAB_ANCHOR_IDS.privacyMask} className={AI_TAB_ANCHOR_SCROLL_MT}>
+            <PrivacyMaskSection />
+          </div>
+
+          <div id={AI_TAB_ANCHOR_IDS.usage} className={AI_TAB_ANCHOR_SCROLL_MT}>
+            <Section
+              title={t('settings.usageDashboard.title')}
+              helper={t('settings.usageDashboard.shortcutHelper')}
+            >
+              <div className="flex items-center justify-between gap-3 px-[var(--settings-tile-px,1rem)] py-[var(--settings-tile-py,0.875rem)]">
+                <div className="min-w-0 flex-1 text-aux text-ink-fg-2">
+                  {t('settings.usageDashboard.shortcutCardHelper')}
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => void navigate({ to: '/admin/llm' })}
+                >
+                  {t('settings.usageDashboard.openLlmDashboard')}
+                  <ArrowUpRight className="size-3.5" aria-hidden="true" />
+                </Button>
+              </div>
+            </Section>
+          </div>
 
       {/* LLM_AGENT_ENABLED 已收敛到团队页「AI 邮件预处理」配置页（不再两处）。LLM_MODEL /
           LLM_FALLBACK_MODELS 保留在此作全局语义——chat gateway 默认模型 + 后台 AI 任务兜底/
@@ -481,21 +555,23 @@ export function AiTab(): React.ReactElement {
             }
             optionGroups={llmFallbackGroups}
           />
-          <Row
-            label={t('settings.ai.testGateway.label')}
-            helper={t('settings.ai.testGateway.helper')}
-          >
-            <Button onClick={handleTestGateway} disabled={testing} variant="secondary" size="sm">
-              {testing ? (
-                <>
-                  <Loader2 className="size-3.5 animate-spin" />
-                  {t('settings.ai.testGateway.running')}
-                </>
-              ) : (
-                t('settings.ai.testGateway.button')
-              )}
-            </Button>
-          </Row>
+          {!providerRegistryEnabled && (
+            <Row
+              label={t('settings.ai.testGateway.label')}
+              helper={t('settings.ai.testGateway.helper')}
+            >
+              <Button onClick={handleTestGateway} disabled={testing} variant="secondary" size="sm">
+                {testing ? (
+                  <>
+                    <Loader2 className="size-3.5 animate-spin" />
+                    {t('settings.ai.testGateway.running')}
+                  </>
+                ) : (
+                  t('settings.ai.testGateway.button')
+                )}
+              </Button>
+            </Row>
+          )}
         </Section>
       </div>
 
@@ -507,21 +583,6 @@ export function AiTab(): React.ReactElement {
           title={t('settings.ai.translate.title')}
           helper={t('settings.ai.translate.helper')}
         >
-          <EnvField
-            envKey="LLM_TRANSLATE_BASE_URL"
-            control="text"
-            label={t('settings.ai.translateBaseUrl.label')}
-            helper={t('settings.ai.translateBaseUrl.helper')}
-            placeholder={t('settings.ai.translateBaseUrl.placeholder', {
-              defaultValue: '留空 = 跟随主网关'
-            })}
-          />
-          <EnvSecretField
-            envKey="LLM_TRANSLATE_API_KEY"
-            keytarSlot="llmTranslateApiKey"
-            label={t('settings.ai.translateApiKey.label')}
-            helper={t('settings.ai.translateApiKey.helper')}
-          />
           {/* LLM_TRANSLATE_MODEL: single-select from translate provider's upstream list.
             Falls back to showing the current value if not in the list (orphan).
             Refresh button pulls fresh list from the translate provider endpoint.
@@ -579,6 +640,39 @@ export function AiTab(): React.ReactElement {
                   : t('settings.ai.translateModel.refresh', { defaultValue: '刷新模型列表' })}
               </button>
             </Row>
+          )}
+          {providerRegistryEnabled &&
+          !currentTranslateBaseUrl &&
+          !currentTranslateApiKey &&
+          !showTranslateOverride ? (
+            <div className="px-[var(--settings-tile-px,1rem)] py-2">
+              <button
+                type="button"
+                onClick={() => setShowTranslateOverride(true)}
+                className="inline-flex items-center gap-1 text-aux text-ink-fg-3 transition-colors hover:text-ink-fg"
+              >
+                <ChevronDown className="size-3.5 -rotate-90" />
+                {t('settings.ai.translate.overrideToggle')}
+              </button>
+            </div>
+          ) : (
+            <>
+              <EnvField
+                envKey="LLM_TRANSLATE_BASE_URL"
+                control="text"
+                label={t('settings.ai.translateBaseUrl.label')}
+                helper={t('settings.ai.translateBaseUrl.helper')}
+                placeholder={t('settings.ai.translateBaseUrl.placeholder', {
+                  defaultValue: '留空 = 跟随主网关'
+                })}
+              />
+              <EnvSecretField
+                envKey="LLM_TRANSLATE_API_KEY"
+                keytarSlot="llmTranslateApiKey"
+                label={t('settings.ai.translateApiKey.label')}
+                helper={t('settings.ai.translateApiKey.helper')}
+              />
+            </>
           )}
         </Section>
       </div>
@@ -638,30 +732,43 @@ export function AiTab(): React.ReactElement {
                 defaultValue: '生成标题用的模型，建议用快速便宜的小模型（如 haiku）。'
               })}
             >
-              <Select
-                value={autoTitleModel}
-                onValueChange={(v) => {
-                  setAutoTitleModel(v)
-                  writeAutoTitleModel(v)
-                }}
-              >
-                <SelectTrigger className="w-[200px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {(() => {
-                    const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
-                    const withOrphan = base.includes(autoTitleModel)
-                      ? base
-                      : [...base, autoTitleModel]
-                    return withOrphan.map((id) => (
-                      <SelectItem key={id} value={id}>
-                        {id}
-                      </SelectItem>
-                    ))
-                  })()}
-                </SelectContent>
-              </Select>
+              {providerRegistryEnabled ? (
+                <ModelSelect
+                  value={autoTitleModel}
+                  onValueChange={(v) => {
+                    setAutoTitleModel(v)
+                    writeAutoTitleModel(v)
+                  }}
+                  models={enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS}
+                  providers={providers}
+                  ariaLabel={t('settings.ai.autoTitle.modelLabel')}
+                />
+              ) : (
+                <Select
+                  value={autoTitleModel}
+                  onValueChange={(v) => {
+                    setAutoTitleModel(v)
+                    writeAutoTitleModel(v)
+                  }}
+                >
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(() => {
+                      const base = enabledModels.length > 0 ? enabledModels : FALLBACK_MODELS
+                      const withOrphan = base.includes(autoTitleModel)
+                        ? base
+                        : [...base, autoTitleModel]
+                      return withOrphan.map((id) => (
+                        <SelectItem key={id} value={id}>
+                          {id}
+                        </SelectItem>
+                      ))
+                    })()}
+                  </SelectContent>
+                </Select>
+              )}
             </Row>
           )}
         </Section>
@@ -686,8 +793,12 @@ export function AiTab(): React.ReactElement {
           </Section>
         </div>
       )}
+        </>
+      )}
 
-      <div id={AI_TAB_ANCHOR_IDS.approval} className={AI_TAB_ANCHOR_SCROLL_MT}>
+      {subtab !== 'models' && (
+        <>
+          <div id={AI_TAB_ANCHOR_IDS.approval} className={AI_TAB_ANCHOR_SCROLL_MT}>
         <Section
           title={t('settings.ai.approval.title', { defaultValue: 'Agent 操作审批' })}
           helper={t('settings.ai.approval.helper', {
@@ -761,6 +872,8 @@ export function AiTab(): React.ReactElement {
       </div>
 
       <CustomAiSection />
+        </>
+      )}
     </div>
   )
 }

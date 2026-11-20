@@ -24,19 +24,39 @@ import { resolveProviderIcon, type ProviderIconVariant } from './providerIconMap
  *  🔴 `render(props)` 直接调用而非 `<Icon/>`：表里的值是无 hook 的纯 SVG 渲染函数，
  *  当组件用会触发 react-hooks/static-components（抄 ToolTraceCard.toolKindIconEl 先例）。 */
 export function ProviderBrandIcon({
+  customIcon,
   catalogProviderId,
   providerId,
   protocol,
   className,
   variant = 'color'
 }: {
+  customIcon?: string | null
   catalogProviderId?: string | null
   providerId: string | null | undefined
   protocol?: LlmProviderProtocol | null
   className?: string
   variant?: ProviderIconVariant
 }): React.JSX.Element {
-  const render = resolveProviderIcon({ catalogProviderId, providerId, protocol }, variant)
+  const render = resolveProviderIcon(
+    { customIcon, catalogProviderId, providerId, protocol },
+    variant
+  )
   if (render) return render({ className })
+  const glyph = customIcon?.trim()
+  if (glyph) {
+    const label = Array.from(glyph).slice(0, 2).join('')
+    return (
+      <span
+        aria-hidden
+        className={cn(
+          'inline-flex size-4 shrink-0 select-none items-center justify-center rounded bg-ink-3 text-aux font-medium leading-none text-ink-fg',
+          className
+        )}
+      >
+        {label}
+      </span>
+    )
+  }
   return <Cpu strokeWidth={2} className={cn('size-4 shrink-0', className)} aria-hidden />
 }

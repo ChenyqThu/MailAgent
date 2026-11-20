@@ -137,8 +137,9 @@ describe('nav registry — deeplink 通道', () => {
 describe('nav registry — 通知深链白名单', () => {
   // 09-02 对话域拆分：群聊拿到 `/groups` 后**没有**跟着进白名单 —— 群聊通知落的是
   // link 型（`navigateToGroupSession` 要先点名群会话再进域），路由目标白名单帮不上忙。
-  test('只有现状三条（加档要先确认真有信源会发它）', () => {
+  test('只有现状四条（加档要先确认真有信源会发它）', () => {
     expect([...NOTIFICATION_ROUTE_TARGETS].sort()).toEqual([
+      '/admin/calendar',
       '/admin/kanban',
       '/agents',
       '/settings'
