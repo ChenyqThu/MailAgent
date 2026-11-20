@@ -234,6 +234,15 @@ class ConnectorRow:
     source: str = "custom_mcp"
     #: composio 行的 tool-router session id（明文非敏感；服务端持久，复用而非每次重建）。
     composio_session_id: Optional[str] = None
+    #: Phase 5 (WP-5B.4) — 自定义 HTTP header 名称与 stdio 配置（非密元数据；密文另存 BLOB 列）。
+    custom_header_names: tuple[str, ...] = ()
+    stdio_command: Optional[dict[str, Any]] = None
+    stdio_env_keys: tuple[str, ...] = ()
+    #: WS-3：managed_local 运行时配置（例如 browser_use 的 {"mode": "cdp_chrome", "cdp_url": ...}）。
+    runtime_config: Optional[dict[str, Any]] = None
+
+
+CONNECTOR_TRANSPORTS = ("streamable_http", "sse", "stdio")
 
 
 @dataclass(frozen=True)
@@ -257,8 +266,9 @@ class ConnectorToolRow:
     first_seen_at: int
     last_seen_at: int
     updated_at: int
-    #: 08-05 per-tool 三档（owner 拍板，master-plan WP-10）：``'auto' | 'ask' | 'off'``；
-    #: None = 跟随默认（``connector_tool_effective_mode`` 折算为 **auto**）。用户配置——
+    #: per-tool 三档：``'auto' | 'ask' | 'off'``；
+    #: None = 跟随默认（``connector_tool_effective_mode``：非破坏性 ``read`` 默认 ``auto``，
+    #: ``write`` / ``update`` / ``destructive`` 默认 ``ask``）。用户配置——
     #: refresh 纪律 2「永不覆盖」原样适用。
     mode: Optional[str] = None
 
@@ -296,7 +306,7 @@ CONNECTOR_CRUD_TYPES = ("read", "write", "update")
 #: 行会吃默认值，而存量行**全是**直连的（08-05 之前不存在 composio 行）——默认写成 composio
 #: 会把两条老直连行当场标错源，之后所有按 source 分派的地方（client 装配、出站告知、
 #: 「已取代」提示）都跟着错。新建 composio 行一律显式传 source。
-CONNECTOR_SOURCES = ("composio", "custom_mcp")
+CONNECTOR_SOURCES = ("composio", "custom_mcp", "managed_local")
 
 #: per-tool 三档值域（08-05 owner 拍板，master-plan WP-10）——**canonical 源**：
 #: ``auto`` = 注册且 owner-present 场地免卡执行（read 的 auto 就是既有 silent 行为）；
@@ -308,16 +318,25 @@ CONNECTOR_SOURCES = ("composio", "custom_mcp")
 CONNECTOR_TOOL_MODES = ("auto", "ask", "off")
 
 
-def connector_tool_effective_mode(mode_override: Optional[str]) -> str:
-    """工具的有效档位（纯函数）：用户覆盖优先；无覆盖/野值 → **默认 ``auto``**。
+def connector_tool_effective_mode(
+    mode_override: Optional[str],
+    *,
+    crud_type: str = "read",
+    destructive: bool = False,
+) -> str:
+    """工具的有效档位（纯函数）：用户覆盖优先；无覆盖 → 按权限与破坏性折算。
 
-    🔴 08-05 owner 拍板（跟随参考产品）：默认档 = auto——**含 write/update/destructive**。
-    旧「read 默认开 / write·update 默认关」折算已随 ``connector_tool_effective_enabled``
-    整体退役；升级时旧 ``enabled`` 列一次性折入 ``mode``（见 ``_migrate_additive``）。
-    值域外野值（只可能来自手改 DB——写侧入库即拒）**fail-closed 折算成 ``off``**：一个
-    看不懂的档位名绝不能被当成「免卡执行」（镜像 ``ceiling_allows`` 的值域外拒纪律）。
+    Phase 5 安全收紧（对标 Magpie 按类默认权限 + fail-closed 护栏）：
+    - ``mode_override`` 显式为 ``'auto' | 'ask' | 'off'`` 时直接生效；
+    - ``mode_override is None``：
+      - ``destructive=True`` 或 ``crud_type in ("write", "update")`` → 默认 ``"ask"``（需审批）；
+      - 非破坏性 ``read`` → 默认 ``"auto"``（免卡只读）。
+    - 值域外野值（只可能来自手改 DB——写侧入库即拒）**fail-closed 折算成 ``off``**：一个
+      看不懂的档位名绝不能被当成「免卡执行」（镜像 ``ceiling_allows`` 的值域外拒纪律）。
     """
     if mode_override is None:
+        if destructive or crud_type in ("write", "update"):
+            return "ask"
         return "auto"
     if mode_override in CONNECTOR_TOOL_MODES:
         return mode_override
@@ -528,6 +547,12 @@ CREATE TABLE IF NOT EXISTS connector (
     source         TEXT NOT NULL DEFAULT 'custom_mcp',
     -- composio 行的 tool-router session id（明文非敏感）；custom_mcp 行恒 NULL。
     composio_session_id TEXT,
+    -- Phase 5 (WP-5B.4)：自定义 HTTP 静态 header 名与加密值；stdio 启动参数与加密 env。
+    custom_header_names_json TEXT,
+    custom_headers_cipher BLOB,
+    stdio_command_json TEXT,
+    stdio_env_cipher BLOB,
+    runtime_config_json TEXT,
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL
 );
@@ -658,6 +683,16 @@ class AgentConfigStore:
             )
         if c_cols and "composio_session_id" not in c_cols:
             conn.execute("ALTER TABLE connector ADD COLUMN composio_session_id TEXT")
+        if c_cols and "custom_header_names_json" not in c_cols:
+            conn.execute("ALTER TABLE connector ADD COLUMN custom_header_names_json TEXT")
+        if c_cols and "custom_headers_cipher" not in c_cols:
+            conn.execute("ALTER TABLE connector ADD COLUMN custom_headers_cipher BLOB")
+        if c_cols and "stdio_command_json" not in c_cols:
+            conn.execute("ALTER TABLE connector ADD COLUMN stdio_command_json TEXT")
+        if c_cols and "stdio_env_cipher" not in c_cols:
+            conn.execute("ALTER TABLE connector ADD COLUMN stdio_env_cipher BLOB")
+        if c_cols and "runtime_config_json" not in c_cols:
+            conn.execute("ALTER TABLE connector ADD COLUMN runtime_config_json TEXT")
         # 08-03 delete 档位退役 —— 存量陈旧行**离线重推导**（不需要网络 re-sync）。
         # 🔴 可证明等价：旧映射里产出 delete 的**唯一**路径是 `destructive_hint is True`，而
         # 当前 `derive_crud_type` 对同一输入产出 write，`derive_destructive` 产出 True ⇒ 这条
@@ -1490,24 +1525,36 @@ class AgentConfigStore:
         transport: str = "streamable_http",
         source: Optional[str] = None,
         composio_session_id: Any = _UNSET,
+        runtime_config: Any = _UNSET,
     ) -> None:
         """建/刷 connector 行的**静态定义**字段。冲突时只更新 server_url/display_name/
-        transport/updated_at（+ 显式传了的 source / composio_session_id）—— status/enabled/
-        scopes 等运行态一律不动（另走 ``update_connector_state``）。
+        transport/updated_at（+ 显式传了的 source / composio_session_id / runtime_config）——
+        status/enabled/scopes 等运行态一律不动（另走 ``update_connector_state``）。
 
         ``source``（08-05 WP-12）：``None`` = 不动（建行时吃 DDL 默认 ``custom_mcp``）。
-        ``composio_session_id`` 用哨兵区分「不动」与「显式清空 None」（重建 session 时要能
-        把旧 id 换掉，而 sync 这类不碰 session 的调用方绝不能顺手抹掉它）。
+        ``composio_session_id`` 与 ``runtime_config`` 用哨兵区分「不动」与「显式清空 None」。
         """
         if not connector_id or not isinstance(connector_id, str):
             raise ValueError("connector_id must be a non-empty string")
         if source is not None and source not in CONNECTOR_SOURCES:
             raise ValueError(f"connector source {source!r} not in {CONNECTOR_SOURCES}")
+        if (
+            runtime_config is not _UNSET
+            and runtime_config is not None
+            and not isinstance(runtime_config, dict)
+        ):
+            raise ValueError("connector runtime_config must be a dict or None")
+        rc_json = (
+            None
+            if runtime_config is _UNSET or runtime_config is None
+            else json.dumps(runtime_config, ensure_ascii=False)
+        )
         now = _now()
         with self._connection() as conn:
             conn.execute(
                 "INSERT INTO connector (connector_id, server_url, transport, display_name,"
-                " source, composio_session_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?) "
+                " source, composio_session_id, runtime_config_json, created_at, updated_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(connector_id) DO UPDATE SET server_url=excluded.server_url,"
                 " transport=excluded.transport, display_name=excluded.display_name,"
                 " updated_at=excluded.updated_at",
@@ -1518,6 +1565,7 @@ class AgentConfigStore:
                     display_name,
                     source or "custom_mcp",
                     None if composio_session_id is _UNSET else composio_session_id,
+                    rc_json,
                     now,
                     now,
                 ),
@@ -1530,12 +1578,181 @@ class AgentConfigStore:
             if composio_session_id is not _UNSET:
                 sets.append("composio_session_id=?")
                 params.append(composio_session_id)
+            if runtime_config is not _UNSET:
+                sets.append("runtime_config_json=?")
+                params.append(rc_json)
             if sets:
                 params.append(connector_id)
                 conn.execute(
                     f"UPDATE connector SET {', '.join(sets)} WHERE connector_id=?", params
                 )
             conn.commit()
+
+    def upsert_custom_connector(
+        self,
+        connector_id: str,
+        *,
+        display_name: str,
+        transport: str = "streamable_http",
+        server_url: str = "",
+        custom_headers: Optional[dict[str, str]] = None,
+        replace_headers: bool = False,
+        stdio_command: Optional[dict[str, Any]] = None,
+        stdio_env: Optional[dict[str, str]] = None,
+        replace_env: bool = False,
+    ) -> ConnectorRow:
+        """创建或更新自定义 MCP connector（HTTP 静态 header 或本机 stdio 进程）。
+
+        - 静态 headers 与 stdio env 用 ``secrets.encrypt_secret``（Fernet）加密存 BLOB；
+          键名单独存明文 JSON 列，列表接口零解密开销、密文永不出 wire。
+        - 更新模式（行已存在）且未传新 headers / env（replace=False）时保留既有密文。
+        """
+        if not connector_id or not isinstance(connector_id, str):
+            raise ValueError("connector_id must be a non-empty string")
+        if transport not in CONNECTOR_TRANSPORTS:
+            raise ValueError(f"transport must be one of {CONNECTOR_TRANSPORTS}")
+        from src.agent_config.secrets import encrypt_secret
+
+        now = _now()
+        with self._connection() as conn:
+            existing = conn.execute(
+                "SELECT * FROM connector WHERE connector_id = ?", (connector_id,)
+            ).fetchone()
+
+            if custom_headers is not None or replace_headers:
+                clean_headers = {
+                    str(k).strip(): str(v)
+                    for k, v in (custom_headers or {}).items()
+                    if str(k).strip()
+                }
+                header_names_json: Optional[str] = (
+                    json.dumps(sorted(clean_headers.keys()), ensure_ascii=False)
+                    if clean_headers
+                    else None
+                )
+                headers_cipher: Optional[bytes] = (
+                    encrypt_secret(json.dumps(clean_headers, ensure_ascii=False))
+                    if clean_headers
+                    else None
+                )
+            elif existing is not None:
+                header_names_json = existing["custom_header_names_json"]
+                headers_cipher = existing["custom_headers_cipher"]
+            else:
+                header_names_json = None
+                headers_cipher = None
+
+            if stdio_env is not None or replace_env:
+                clean_env = {
+                    str(k).strip(): str(v)
+                    for k, v in (stdio_env or {}).items()
+                    if str(k).strip()
+                }
+                env_keys = sorted(clean_env.keys())
+                env_cipher: Optional[bytes] = (
+                    encrypt_secret(json.dumps(clean_env, ensure_ascii=False))
+                    if clean_env
+                    else None
+                )
+            elif existing is not None:
+                env_cipher = existing["stdio_env_cipher"]
+                existing_cmd = (
+                    _json_object_or_none(existing["stdio_command_json"]) or {}
+                )
+                raw_keys = existing_cmd.get("env_keys") or []
+                env_keys = [str(k) for k in raw_keys if isinstance(k, str)]
+            else:
+                env_cipher = None
+                env_keys = []
+
+            if stdio_command is not None:
+                cmd_payload: Optional[dict[str, Any]] = {
+                    "command": str(stdio_command.get("command") or "").strip(),
+                    "args": [str(a) for a in (stdio_command.get("args") or [])],
+                    "cwd": (
+                        str(stdio_command["cwd"]).strip()
+                        if stdio_command.get("cwd")
+                        else None
+                    ),
+                    "env_keys": env_keys,
+                }
+                cmd_json: Optional[str] = json.dumps(cmd_payload, ensure_ascii=False)
+            elif existing is not None and transport == "stdio":
+                existing_cmd = (
+                    _json_object_or_none(existing["stdio_command_json"]) or {}
+                )
+                existing_cmd["env_keys"] = env_keys
+                cmd_json = json.dumps(existing_cmd, ensure_ascii=False)
+            elif transport in ("streamable_http", "sse"):
+                cmd_json = None
+                env_cipher = None
+            else:
+                cmd_json = None
+
+            conn.execute(
+                "INSERT INTO connector ("
+                " connector_id, server_url, transport, display_name, status, enabled,"
+                " source, custom_header_names_json, custom_headers_cipher,"
+                " stdio_command_json, stdio_env_cipher, created_at, updated_at"
+                ") VALUES (?,?,?,?, 'connected', 1, 'custom_mcp', ?,?,?,?,?,?) "
+                "ON CONFLICT(connector_id) DO UPDATE SET "
+                " server_url=excluded.server_url,"
+                " transport=excluded.transport,"
+                " display_name=excluded.display_name,"
+                " status='connected',"
+                " last_error=NULL,"
+                " source='custom_mcp',"
+                " custom_header_names_json=excluded.custom_header_names_json,"
+                " custom_headers_cipher=excluded.custom_headers_cipher,"
+                " stdio_command_json=excluded.stdio_command_json,"
+                " stdio_env_cipher=excluded.stdio_env_cipher,"
+                " updated_at=excluded.updated_at",
+                (
+                    connector_id,
+                    server_url,
+                    transport,
+                    display_name,
+                    header_names_json,
+                    headers_cipher,
+                    cmd_json,
+                    env_cipher,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+        row = self.get_connector(connector_id)
+        assert row is not None
+        return row
+
+    def get_connector_custom_secrets(
+        self, connector_id: str
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """按需解密一个自定义 connector 的静态 headers 与 stdio env。"""
+        from src.agent_config.secrets import decrypt_secret
+
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT custom_headers_cipher, stdio_env_cipher FROM connector "
+                "WHERE connector_id = ?",
+                (connector_id,),
+            ).fetchone()
+        if row is None:
+            return {}, {}
+
+        def _decode(cipher: Any) -> dict[str, str]:
+            if not cipher:
+                return {}
+            try:
+                raw = decrypt_secret(bytes(cipher))
+                obj = json.loads(raw)
+                if isinstance(obj, dict):
+                    return {str(k): str(v) for k, v in obj.items() if str(k)}
+            except Exception:  # noqa: BLE001 — 绝不泄露密文/异常细节
+                pass
+            return {}
+
+        return _decode(row["custom_headers_cipher"]), _decode(row["stdio_env_cipher"])
 
     def delete_connector(self, connector_id: str) -> bool:
         """整行移除（08-05 WP-12「断开并清除配置」）：connector 行 + 它的全部工具行。
@@ -1599,6 +1816,32 @@ class AgentConfigStore:
             conn.commit()
         if cur.rowcount == 0:
             raise KeyError(f"connector not found: {connector_id}")
+
+    def update_connector_runtime_config(
+        self,
+        connector_id: str,
+        runtime_config: Optional[dict[str, Any]],
+    ) -> ConnectorRow:
+        """更新受管连接器运行选项（``runtime_config_json``），返回最新行。"""
+        if runtime_config is not None and not isinstance(runtime_config, dict):
+            raise ValueError("connector runtime_config must be a dict or None")
+        rc_json = (
+            json.dumps(runtime_config, ensure_ascii=False)
+            if runtime_config is not None
+            else None
+        )
+        now = _now()
+        with self._connection() as conn:
+            cur = conn.execute(
+                "UPDATE connector SET runtime_config_json=?, updated_at=? WHERE connector_id=?",
+                (rc_json, now, connector_id),
+            )
+            conn.commit()
+        if cur.rowcount == 0:
+            raise KeyError(f"connector not found: {connector_id}")
+        row = self.get_connector(connector_id)
+        assert row is not None
+        return row
 
     def get_connector(self, connector_id: str) -> Optional[ConnectorRow]:
         with self._connection() as conn:
@@ -2218,6 +2461,31 @@ def _row_to_connector(row: sqlite3.Row) -> ConnectorRow:
                 scopes = parsed
         except (ValueError, TypeError):
             scopes = None  # 坏 JSON → None（展示位缺失不阻断行读取）
+    header_names: tuple[str, ...] = ()
+    raw_headers = row["custom_header_names_json"] if "custom_header_names_json" in row.keys() else None
+    if raw_headers:
+        try:
+            parsed_h = json.loads(raw_headers)
+            if isinstance(parsed_h, list):
+                header_names = tuple(str(h) for h in parsed_h if isinstance(h, str) and h)
+        except (ValueError, TypeError):
+            header_names = ()
+    stdio_cmd: Optional[dict[str, Any]] = None
+    stdio_env_keys: tuple[str, ...] = ()
+    raw_cmd = row["stdio_command_json"] if "stdio_command_json" in row.keys() else None
+    if raw_cmd:
+        parsed_cmd = _json_object_or_none(raw_cmd)
+        if parsed_cmd is not None and isinstance(parsed_cmd.get("command"), str):
+            raw_keys = parsed_cmd.get("env_keys") or []
+            if isinstance(raw_keys, list):
+                stdio_env_keys = tuple(str(k) for k in raw_keys if isinstance(k, str) and k)
+            stdio_cmd = {
+                "command": parsed_cmd["command"],
+                "args": [str(a) for a in (parsed_cmd.get("args") or []) if a is not None],
+                "cwd": parsed_cmd.get("cwd") if isinstance(parsed_cmd.get("cwd"), str) else None,
+            }
+    raw_rc = row["runtime_config_json"] if "runtime_config_json" in row.keys() else None
+    runtime_config = _json_object_or_none(raw_rc) if raw_rc else None
     return ConnectorRow(
         connector_id=row["connector_id"],
         server_url=row["server_url"],
@@ -2237,6 +2505,10 @@ def _row_to_connector(row: sqlite3.Row) -> ConnectorRow:
             row["source"] if row["source"] in CONNECTOR_SOURCES else "custom_mcp"
         ),
         composio_session_id=row["composio_session_id"],
+        custom_header_names=header_names,
+        stdio_command=stdio_cmd,
+        stdio_env_keys=stdio_env_keys,
+        runtime_config=runtime_config,
     )
 
 

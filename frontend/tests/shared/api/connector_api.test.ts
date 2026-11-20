@@ -223,3 +223,102 @@ test('disconnect 恒显式发 purge（默认 false = 只删凭证、留配置）
   await api.disconnect('notion', true)
   expect(calledBody()).toEqual({ purge: true })
 })
+
+test('Wave 3 managed_local endpoints: install / install-status / uninstall / runtime-options / system-permissions', async () => {
+  fetchMock.mockResolvedValue(
+    envelopeResponse({
+      ok: true,
+      connector_id: 'browser_use',
+      installed: true,
+      version: '0.0.41',
+      mode: 'cdp_chrome',
+      supported_modes: ['cdp_chrome', 'extension', 'isolated_profile'],
+      runtime_config: { mode: 'cdp_chrome', browser_mode: 'cdp_chrome' },
+      requires_permissions: [],
+      platform_supported: true,
+      executable: 'npx',
+      error: null
+    })
+  )
+  const installed = await api.install!('browser_use', { mode: 'cdp_chrome', browser_mode: 'cdp_chrome' })
+  expect(calledUrl()).toBe('/api/connector/browser_use/install')
+  expect(String(calledInit().method)).toBe('POST')
+  expect(calledBody()).toEqual({ mode: 'cdp_chrome', browser_mode: 'cdp_chrome' })
+  expect(installed.installed).toBe(true)
+
+  fetchMock.mockClear()
+  fetchMock.mockResolvedValue(
+    envelopeResponse({
+      ok: true,
+      connector_id: 'browser_use',
+      installed: true,
+      version: '0.0.41',
+      mode: 'cdp_chrome',
+      supported_modes: ['cdp_chrome', 'extension', 'isolated_profile'],
+      runtime_config: null,
+      requires_permissions: [],
+      platform_supported: true,
+      executable: 'npx',
+      error: null
+    })
+  )
+  await api.installStatus!('browser_use')
+  expect(calledUrl()).toBe('/api/connector/browser_use/install-status')
+  expect(String(calledInit().method ?? 'GET')).toBe('GET')
+
+  fetchMock.mockClear()
+  fetchMock.mockResolvedValue(
+    envelopeResponse({
+      ok: true,
+      connector_id: 'browser_use',
+      mode: 'extension',
+      browser_mode: 'extension',
+      runtime_config: { browser_mode: 'extension' }
+    })
+  )
+  const opts = await api.setRuntimeOptions!('browser_use', { mode: 'extension', browser_mode: 'extension' })
+  expect(calledUrl()).toBe('/api/connector/browser_use/runtime-options')
+  expect(String(calledInit().method)).toBe('PATCH')
+  expect(calledBody()).toEqual({ mode: 'extension', browser_mode: 'extension' })
+  expect(opts.browser_mode).toBe('extension')
+
+  fetchMock.mockClear()
+  fetchMock.mockResolvedValue(
+    envelopeResponse({
+      ok: true,
+      connector_id: 'browser_use',
+      installed: false,
+      version: null,
+      mode: null,
+      supported_modes: [],
+      runtime_config: null,
+      requires_permissions: [],
+      platform_supported: true,
+      executable: null,
+      error: null
+    })
+  )
+  await api.uninstall!('browser_use')
+  expect(calledUrl()).toBe('/api/connector/browser_use/uninstall')
+  expect(String(calledInit().method)).toBe('POST')
+
+  fetchMock.mockClear()
+  fetchMock.mockResolvedValue(
+    envelopeResponse({
+      platform: 'darwin',
+      accessibility: 'granted',
+      screen_recording: 'denied'
+    })
+  )
+  const perms = await api.systemPermissions!()
+  expect(calledUrl()).toBe('/api/connector/system-permissions')
+  expect(perms.accessibility).toBe('granted')
+
+  fetchMock.mockClear()
+  fetchMock.mockResolvedValue(envelopeResponse({ ok: true, kind: 'screen_recording', opened: true }))
+  const opened = await api.openSystemPermission!('screen_recording')
+  expect(calledUrl()).toBe('/api/connector/system-permissions/open')
+  expect(String(calledInit().method)).toBe('POST')
+  expect(calledBody()).toEqual({ kind: 'screen_recording' })
+  expect(opened.opened).toBe(true)
+})

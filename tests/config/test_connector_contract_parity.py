@@ -72,6 +72,15 @@ CONNECTOR_TS = p.REPO_ROOT / "frontend" / "src" / "ai-gateway" / "tools" / "conn
 CONNECTOR_TYPES_TS = (
     p.REPO_ROOT / "frontend" / "src" / "shared" / "api" / "types" / "connector.ts"
 )
+CUSTOM_MCP_DIALOG_TSX = (
+    p.REPO_ROOT
+    / "frontend"
+    / "src"
+    / "shared"
+    / "components"
+    / "connectors"
+    / "CustomMcpDialog.tsx"
+)
 
 
 # ── Python 侧抽取（AST，绕开 config.py 的模块级 pydantic 实例化）─────────────────
@@ -192,6 +201,22 @@ def ts_zod_enum(path: Path, decl: str, src: Optional[str] = None) -> Tuple[str, 
     assert m, f"{path.name}: `{decl}` 抽不到 z.enum([...]) —— 写法变了，抽取器需更新"
     lits = tuple(re.findall(r"'([^']+)'", m.group(1)))
     assert lits, f"{path.name}: `{decl}` 的 z.enum 是空的 —— 抽取器需更新"
+    return lits
+
+
+def ts_custom_mcp_dialog_transports(
+    path: Path = CUSTOM_MCP_DIALOG_TSX, src: Optional[str] = None
+) -> Tuple[str, ...]:
+    """``CustomMcpDialog.tsx`` 里传输选择按钮的 ``(['streamable_http', 'sse', 'stdio'] as const).map``。"""
+    text = _read(path, src)
+    m = re.search(
+        r"\(\s*\[([^\]]+)\]\s*as\s*const\s*\)\s*\.map\(\s*\(?mode\b",
+        text,
+        re.DOTALL,
+    )
+    assert m, f"{path.name} 里找不到传输选项 `([... ] as const).map((mode)` —— 抽取器需同步更新"
+    lits = tuple(re.findall(r"'([^']+)'", m.group(1)))
+    assert lits, f"{path.name}: 传输选项数组抽到空集 —— 抽取器需更新"
     return lits
 
 
@@ -419,7 +444,7 @@ def test_connector_source_vocabulary_is_identical_across_both_sites():
     """
     extracted = {name: fn() for name, fn in _SOURCE_SITES.items()}
     canonical = extracted["py:store.CONNECTOR_SOURCES"]
-    assert canonical == ("composio", "custom_mcp"), (
+    assert canonical == ("composio", "custom_mcp", "managed_local"), (
         f"connector.source 值域变成 {canonical!r} —— 改它必须同步 TS wire 类型 + 设置面告知"
         f" + McpApprovalCard 的判据 + mcp-connectors.md 的 Composio 章节"
     )
@@ -449,7 +474,7 @@ def test_track_vocabulary_is_identical_across_both_sites():
     """
     extracted = {name: fn() for name, fn in _TRACK_SITES.items()}
     canonical = extracted["py:catalog.CONNECTOR_TRACKS"]
-    assert canonical == ("direct", "composio"), (
+    assert canonical == ("direct", "composio", "managed_local"), (
         f"目录 track 值域变成 {canonical!r} —— 加一条轨道要同时给出它的 source 归属"
         f"（TRACK_TO_SOURCE）、连接端点的分派分支、TS 联合类型与目录卡的渲染分支"
     )
@@ -482,6 +507,36 @@ def test_track_to_source_is_a_bijection_onto_the_source_vocabulary():
     )
 
 
+# ── ③d connector.transport 值域（WS-1A：streamable_http / sse / stdio）─────────
+
+_TRANSPORT_SITES = {
+    "py:store.CONNECTOR_TRANSPORTS": lambda: py_str_tuple(
+        STORE_PY, "CONNECTOR_TRANSPORTS"
+    ),
+    "ts:shared api ConnectorTransport": lambda: ts_string_union(
+        CONNECTOR_TYPES_TS, "export type ConnectorTransport ="
+    ),
+    "ts:CustomMcpDialog transport options": lambda: ts_custom_mcp_dialog_transports(
+        CUSTOM_MCP_DIALOG_TSX
+    ),
+}
+
+
+def test_connector_transport_vocabulary_is_identical_across_both_sites():
+    """Python ``CONNECTOR_TRANSPORTS`` ↔ TS ``ConnectorTransport`` ↔ ``CustomMcpDialog`` 一致。"""
+    extracted = {name: fn() for name, fn in _TRANSPORT_SITES.items()}
+    canonical = extracted["py:store.CONNECTOR_TRANSPORTS"]
+    assert canonical == ("streamable_http", "sse", "stdio"), (
+        f"connector.transport 值域变成 {canonical!r} —— 改它必须同步 TS wire 类型 + "
+        f"CustomMcpDialog + routers/connector.py + ConnectorClient.session()"
+    )
+    for name, values in extracted.items():
+        assert values == canonical, (
+            f"{name} = {values!r} 与 canonical {canonical!r} 不一致 —— "
+            f"新建/编辑自定义 MCP 连接器时两侧会出现选项不可用或服务端 400"
+        )
+
+
 # ── ④ canary：抽取器失效必须红，不许变成平凡绿 ─────────────────────────────────
 
 
@@ -508,6 +563,12 @@ def test_extraction_failure_is_red_not_silently_green():
         )
     with pytest.raises(AssertionError, match="找不到"):
         ts_string_union(CONNECTOR_TYPES_TS, "export type ConnectorTrack =", src="const x = 1\n")
+    with pytest.raises(AssertionError, match="找不到顶层常量"):
+        py_str_tuple(STORE_PY, "CONNECTOR_TRANSPORTS", src="X = 1\n")
+    with pytest.raises(AssertionError, match="找不到"):
+        ts_string_union(CONNECTOR_TYPES_TS, "export type ConnectorTransport =", src="const x = 1\n")
+    with pytest.raises(AssertionError, match="找不到传输选项"):
+        ts_custom_mcp_dialog_transports(CUSTOM_MCP_DIALOG_TSX, src="const x = 1\n")
     with pytest.raises(AssertionError, match="找不到顶层常量"):
         py_str_int_dict(SERVICE_PY, "CONNECTOR_CRUD_RANK", src="X = 1\n")
     with pytest.raises(AssertionError, match="找不到"):
@@ -539,4 +600,9 @@ def test_gate_would_go_red_on_a_synthetic_drift():
     assert "delete" in values  # 抽取器确实看见了漂移…
     assert values != ts_string_union(POLICY_TS, "export type ConnectorGrant ="), (
         "合成漂移没能让相等闸红 —— 说明闸本身失效"
+    )
+    drifted_transport = "CONNECTOR_TRANSPORTS = (\"streamable_http\", \"stdio\")\n"
+    t_values = py_str_tuple(STORE_PY, "CONNECTOR_TRANSPORTS", src=drifted_transport)
+    assert t_values != ts_string_union(CONNECTOR_TYPES_TS, "export type ConnectorTransport ="), (
+        "合成 transport 漂移没能让相等闸红 —— 说明 transport parity 闸失效"
     )

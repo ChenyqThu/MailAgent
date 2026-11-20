@@ -6,12 +6,18 @@
 // 提示的 localStorage 标记）全部由配置台接手，单源在此。
 
 import type {
+  ConnectorApi,
   ConnectorCatalogEntry,
   ConnectorCrudType,
   ConnectorStatusValue,
   ConnectorToolMode,
-  ConnectorTrack
+  ConnectorTrack,
+  ManagedBrowserMode,
+  OpenSystemPermissionResult,
+  SystemPermissionKind,
+  SystemPermissionsStatus
 } from '@shared/api/types'
+import { SYSTEM_PERMISSIONS_IPC } from '@shared/systemPermissionsIpcContract'
 
 /** 授权回调轮询节拍。服务端 `callback_timeout_seconds`（默认 300s）是上限，到点即放弃。 */
 export const AUTH_POLL_INTERVAL_MS = 2000
@@ -66,7 +72,115 @@ export function formatEpoch(sec: number | null | undefined): string | null {
  *  老服务端时字段缺席，缺席按 `composio`（现状语义）处理 —— 把一个 Composio 轨条目误当
  *  直连轨只是少了 BYOK gate 提示，反过来会让直连条目卡在「先填 key」死路上。 */
 export function resolveCatalogTrack(entry: ConnectorCatalogEntry): ConnectorTrack {
-  return (entry as { track?: unknown }).track === 'direct' ? 'direct' : 'composio'
+  const track = (entry as { track?: unknown }).track
+  if (track === 'direct' || track === 'composio' || track === 'managed_local') {
+    return track
+  }
+  return 'composio'
+}
+
+export const MANAGED_BROWSER_MODES: readonly ManagedBrowserMode[] = [
+  'cdp_chrome',
+  'extension',
+  'isolated_profile'
+] as const
+
+export const CHROME_REMOTE_DEBUGGING_URL = 'chrome://inspect/#remote-debugging'
+
+export function isManagedBrowserMode(value: unknown): value is ManagedBrowserMode {
+  return value === 'cdp_chrome' || value === 'extension' || value === 'isolated_profile'
+}
+
+export function resolveManagedBrowserMode(source: {
+  runtime_mode?: string | null
+  runtime_config?: Record<string, unknown> | null
+}): ManagedBrowserMode {
+  if (isManagedBrowserMode(source.runtime_mode)) return source.runtime_mode
+  const cfg = source.runtime_config
+  if (cfg && isManagedBrowserMode(cfg.browser_mode)) return cfg.browser_mode
+  if (cfg && isManagedBrowserMode(cfg.mode)) return cfg.mode
+  return 'cdp_chrome'
+}
+
+type ElectronInvoke = (channel: string, ...args: unknown[]) => Promise<unknown>
+
+function getElectronInvoke(): ElectronInvoke | null {
+  if (typeof window === 'undefined') return null
+  const w = window as unknown as {
+    electron?: { ipcRenderer?: { invoke?: ElectronInvoke } }
+  }
+  const invoke = w.electron?.ipcRenderer?.invoke
+  return typeof invoke === 'function' ? invoke.bind(w.electron?.ipcRenderer) : null
+}
+
+/** 优先走 Electron 主进程 TCC 权威探针；无 IPC 时回退到 Python `/api/connector/system-permissions`。 */
+export async function fetchSystemPermissions(
+  connectorApi: ConnectorApi
+): Promise<SystemPermissionsStatus> {
+  if (isWebBuild()) {
+    return {
+      platform: 'web',
+      accessibility: 'unsupported',
+      screen_recording: 'unsupported',
+      source: 'backend'
+    }
+  }
+  const invoke = getElectronInvoke()
+  if (invoke) {
+    try {
+      const result = (await invoke(SYSTEM_PERMISSIONS_IPC.check)) as SystemPermissionsStatus | null
+      if (result && typeof result.accessibility === 'string') {
+        return result
+      }
+    } catch {
+      /* 测试环境或旧 preload 未注册 IPC：安全回退至后端探针 */
+    }
+  }
+  if (connectorApi.systemPermissions) {
+    const res = await connectorApi.systemPermissions()
+    return { ...res, source: res.source ?? 'backend' }
+  }
+  throw new Error('System permissions probe unavailable')
+}
+
+/** 优先走 Electron 主进程打开 macOS 系统设置隐私面板；无 IPC 时回退后端 API。 */
+export async function openSystemPermissionPane(
+  connectorApi: ConnectorApi,
+  kind: SystemPermissionKind
+): Promise<OpenSystemPermissionResult> {
+  if (isWebBuild()) {
+    return { ok: false, kind, opened: false }
+  }
+  const invoke = getElectronInvoke()
+  if (invoke) {
+    try {
+      const result = (await invoke(
+        SYSTEM_PERMISSIONS_IPC.open,
+        kind
+      )) as OpenSystemPermissionResult | null
+      if (result && result.ok) {
+        return result
+      }
+    } catch {
+      /* 回退至后端触发 */
+    }
+  }
+  if (connectorApi.openSystemPermission) {
+    return connectorApi.openSystemPermission(kind)
+  }
+  throw new Error('System settings opener unavailable')
+}
+
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+    return false
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    return false
+  }
 }
 
 // ── 一次性提示的 localStorage 标记（读写都 try/catch：storage 被禁时提示每次都出，

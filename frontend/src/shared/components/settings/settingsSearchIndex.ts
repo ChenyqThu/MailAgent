@@ -389,12 +389,11 @@ export const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchEntry[] = [
     tab: 'labs',
     titleKey: 'settings.labs.page.title',
     title: '实验室特性开关',
-    subtitle: 'MAILAGENT_MCP_CONNECTORS · MAILAGENT_MEMORY_LAYERS · MAILAGENT_AG_UI_MIRROR',
+    subtitle: 'MAILAGENT_SKILL_CATALOG_PROMPT · MAILAGENT_MEMORY_LAYERS · MAILAGENT_AG_UI_MIRROR',
     keywords: [
       'labs',
       'experimental',
       'flags',
-      'MAILAGENT_MCP_CONNECTORS',
       'MAILAGENT_SKILL_CATALOG_PROMPT',
       'MAILAGENT_MEMORY_LAYERS',
       'MAILAGENT_AG_UI_MIRROR',

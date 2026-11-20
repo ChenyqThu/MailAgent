@@ -9,6 +9,20 @@
 // PR3 那组「授权天花板词表」不同（后者是安全判定、已由
 // tests/config/test_connector_contract_parity.py 建闸）。
 
+import type {
+  OpenSystemPermissionResult,
+  SystemPermissionKind,
+  SystemPermissionsStatus,
+  SystemPermissionState
+} from '../../systemPermissionsIpcContract'
+
+export type {
+  OpenSystemPermissionResult,
+  SystemPermissionKind,
+  SystemPermissionsStatus,
+  SystemPermissionState
+}
+
 /** connector 连接态值域（Python `CONNECTOR_STATUSES`，写侧校验的同一组值）。
  *
  *  🔴 `'needs_reauth'`（PR5）与 `'error'` **不是**同一件事，故是独立的值而不是复用 error：
@@ -39,14 +53,20 @@ export type ConnectorCrudType = 'read' | 'write' | 'update'
  *  折算 auto**——含 write/update/destructive（跟随参考产品，升级说明已列工具面变宽）。 */
 export type ConnectorToolMode = 'auto' | 'ask' | 'off'
 
+/** 自定义 MCP 传输方式（镜像 Python `src/agent_config/store.py::CONNECTOR_TRANSPORTS`）。
+ *  由 `tests/config/test_connector_contract_parity.py` 抽取对账。 */
+export type ConnectorTransport = 'streamable_http' | 'sse' | 'stdio'
+
 /** 装配路线（Python `CONNECTOR_SOURCES`，08-05 WP-12）。
  *
  *  `composio` = 预置目录条目：授权与工具执行都经 Composio 云（token 托管在它那边，工具的
  *  输入与结果会过它的服务器）——**这就是设置页「经 Composio」小字与审批卡那行告知的判据**。
  *  `custom_mcp` = 直连远端 MCP server（我们自己的 OAuth 2.1/PKCE/DCR + loopback 回调），
  *  也是**存量直连行**（Notion / Atlassian）升级后的归属。
+ *  `managed_local` = 本机托管 stdio runtime（`@playwright/mcp` / `agent-desktop`，一键装到
+ *  `<userData>/mcp-runtimes/`，不经 Composio 云）。
  *  🔴 前端**不推断**这个值（不能靠 URL 长相猜），恒读服务端字段。 */
-export type ConnectorSource = 'composio' | 'custom_mcp'
+export type ConnectorSource = 'composio' | 'custom_mcp' | 'managed_local'
 
 /** 目录条目的**出厂轨道**（Python `src/connectors/catalog.py::CONNECTOR_TRACKS`，08-06 双轨）。
  *
@@ -60,7 +80,10 @@ export type ConnectorSource = 'composio' | 'custom_mcp'
  *  `source` 是**行侧**的既成事实（这一行当初是怎么连上的）。用户可能先连了 Composio 版再换直连，
  *  此时行是 `composio`、目录是 `direct` —— 那正是 `superseded` 为 true 的情形。
  *  编译期类型联合无运行时值可 import ⇒ 由 `tests/config/test_connector_contract_parity.py` 建闸。 */
-export type ConnectorTrack = 'direct' | 'composio'
+export type ConnectorTrack = 'direct' | 'composio' | 'managed_local'
+
+/** `browser_use`（`@playwright/mcp`）本机托管浏览器连接模式。 */
+export type ManagedBrowserMode = 'cdp_chrome' | 'extension' | 'isolated_profile'
 
 /** 凭证健康视图（只走明文列 peek —— master key 不可用时照样成立，故它不是「解密成功」的证据）。 */
 export interface ConnectorCredentialView {
@@ -119,13 +142,60 @@ export interface ConnectorStatusView {
  *
  *  🔴 08-05 WP-12 语义变更：列表 = **库里的行**（已配置过的），不再是 registry 全集。
  *  「还没连过的服务」由 `catalog()` 的预置目录承担 —— 两处不重复渲染同一家。 */
+export interface CustomConnectorStdioCommand {
+  command: string
+  args: string[]
+  cwd?: string | null
+}
+
+export interface CustomConnectorCreateInput {
+  connector_id: string
+  display_name: string
+  transport: ConnectorTransport
+  server_url?: string
+  headers?: Record<string, string>
+  command?: string
+  args?: string[]
+  cwd?: string | null
+  env?: Record<string, string>
+}
+
+export interface CustomConnectorUpdateInput {
+  display_name?: string
+  transport?: ConnectorTransport
+  server_url?: string
+  headers?: Record<string, string>
+  command?: string
+  args?: string[]
+  cwd?: string | null
+  env?: Record<string, string>
+}
+
+export interface CustomConnectorDeleteResult {
+  connector_id: string
+  deleted: boolean
+}
+
 export interface ConnectorSummary extends ConnectorStatusView {
   server_url: string
-  transport: string
+  transport: ConnectorTransport
   /** 这一行的装配路线与目录出厂轨道**不符**（同 id 的另一轨版本要先断开并清除配置才能装）。
    *  🔴 08-06 双轨后判据是 `source` vs 目录 `track` 的比对，不再是「custom_mcp 且目录里有」
    *  —— 后者会把正确的直连行（Notion / Atlassian）误标成「已被取代」。 */
   superseded_by_catalog: boolean
+  /** Phase 5 (WP-5B.4) — 用户自定义 MCP 连接及其非密元数据（secret 值不出 wire）。 */
+  is_custom?: boolean
+  custom_header_names?: string[]
+  stdio_command?: CustomConnectorStdioCommand | null
+  stdio_env_keys?: string[]
+  /** `managed_local` 本机托管运行时元数据（Wave 3）。 */
+  runtime_installed?: boolean
+  runtime_version?: string | null
+  runtime_mode?: string | null
+  supported_modes?: string[]
+  requires_permissions?: string[]
+  platform_supported?: boolean
+  runtime_config?: Record<string, unknown> | null
 }
 
 /** 预置目录一条（`GET /api/connector/catalog`）。全部字段是**代码内 curated 数据**，
@@ -157,6 +227,13 @@ export interface ConnectorCatalogEntry {
    *  两种成因：老直连行遇上 composio 轨条目；composio 行遇上 direct 轨条目（08-06 之后
    *  Notion / Atlassian 回到直连轨，活库里那些 Composio 版本的行就落这一种）。 */
   superseded: boolean
+  /** `managed_local` 目录项的本机安装与平台支持快照（Wave 3）。 */
+  runtime_installed?: boolean
+  runtime_version?: string | null
+  runtime_mode?: string | null
+  supported_modes?: string[]
+  requires_permissions?: string[]
+  platform_supported?: boolean
 }
 
 /** Composio BYOK key 的状态视图。🔴 **永远不含 key 的任何字符**（脱敏纪律）。 */
@@ -182,9 +259,9 @@ export interface ConnectorToolSummary {
    *  一次性红色确认」的判据。delete 档退役后它是「破坏性」的**唯一**判据（删除类工具 =
    *  destructive 的 write）。 */
   destructive: boolean
-  /** per-tool 三档用户覆盖；null = 未覆盖（跟随默认档 auto）。 */
+  /** per-tool 三档用户覆盖；null = 未覆盖（read 默认 auto，write/update/destructive 默认 ask）。 */
   mode_override: ConnectorToolMode | null
-  /** 折算后的有效档位（null → auto）。
+  /** 折算后的有效档位（非破坏 read null→auto；write/update/destructive null→ask）。
    *  🔴 前端**读这个**，不要自己再折算一遍默认规则（那会成第二处手抄）。 */
   effective_mode: ConnectorToolMode
   /** 远端清单里已消失（配置行保留，但不注册也不可调用）。 */
@@ -235,6 +312,57 @@ export interface ConnectorApi {
   /** PR5 — 删掉 orphan 工具行（远端已不再提供的那些）。只删已失效行，非破坏性：
    *  它们本来就恒不注册、恒不可调用，删的是一份过期台账。 */
   purgeOrphans(connectorId: string): Promise<ConnectorPurgeOrphansResult>
+  /** Phase 5 (WP-5B.4) — 创建/编辑/删除自定义 HTTP（Streamable HTTP / SSE）或本机 stdio MCP connector。 */
+  createCustom?(input: CustomConnectorCreateInput): Promise<ConnectorSummary>
+  updateCustom?(
+    connectorId: string,
+    input: CustomConnectorUpdateInput
+  ): Promise<ConnectorSummary>
+  deleteCustom?(connectorId: string): Promise<CustomConnectorDeleteResult>
+  /** Wave 3 — `managed_local` 本机托管运行时的安装 / 卸载 / 模式切换 / macOS TCC 诊断（Desktop only）。 */
+  install?(
+    connectorId: string,
+    input?: ManagedRuntimeOptionsInput
+  ): Promise<ConnectorInstallStatus>
+  installStatus?(connectorId: string): Promise<ConnectorInstallStatus>
+  uninstall?(connectorId: string): Promise<ConnectorInstallStatus>
+  setRuntimeOptions?(
+    connectorId: string,
+    input: ManagedRuntimeOptionsInput
+  ): Promise<ConnectorRuntimeOptionsResult>
+  systemPermissions?(): Promise<SystemPermissionsStatus>
+  openSystemPermission?(kind: SystemPermissionKind): Promise<OpenSystemPermissionResult>
+}
+
+export interface ManagedRuntimeOptionsInput {
+  mode?: ManagedBrowserMode | string
+  browser_mode?: ManagedBrowserMode | string
+  cdp_url?: string
+}
+
+export interface ConnectorInstallStatus {
+  ok: boolean
+  connector_id: string
+  installed: boolean
+  version: string | null
+  mode: string | null
+  supported_modes: string[]
+  runtime_config: Record<string, unknown> | null
+  requires_permissions: string[]
+  platform_supported: boolean
+  executable: string | null
+  error: string | null
+  connector?: ConnectorSummary | null
+  status?: ConnectorInstallStatus | null
+}
+
+export interface ConnectorRuntimeOptionsResult {
+  ok: boolean
+  connector_id: string
+  mode: string | null
+  browser_mode: string | null
+  runtime_config: Record<string, unknown>
+  connector?: ConnectorSummary | null
 }
 
 export interface ConnectorOAuthStartResult {

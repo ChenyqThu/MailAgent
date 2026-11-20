@@ -9,6 +9,8 @@ OAuth app 会去要**公司租户**的管理员同意（落到 Omada 的 IdP 就
     ``server_url``，连接走 ``client.run_connect_flow``（loopback OAuth + DCR）。
   - ``composio`` —— ``composio_catalog.COMPOSIO_CATALOG`` 的其余 14 家：托管 MCP，
     连接走 ``composio_flow.run_composio_connect_flow``。
+  - ``managed_local`` —— 本模块 ``MANAGED_LOCAL_CATALOG``（``browser_use`` /
+    ``desktop_use``）：受管本机 stdio MCP 运行时，一键装入 ``<userData>/mcp-runtimes/``。
 
 🔴 **direct 轨不套用 Composio 的 curated 白名单**：那份白名单是 Composio 自己的 slug 命名
 （``NOTION_FETCH_DATA`` 等），官方 MCP 端点 ``tools/list`` 自报的是完全另一套名字，套过去
@@ -36,12 +38,16 @@ from src.connectors.composio_catalog import COMPOSIO_CATALOG, get_catalog_entry
 #: 目录条目的出厂轨道值域（**canonical 源**）。镜像 TS
 #: ``frontend/src/shared/api/types/connector.ts::ConnectorTrack``，闸在
 #: ``tests/config/test_connector_contract_parity.py``。
-CONNECTOR_TRACKS: tuple[str, ...] = ("direct", "composio")
+CONNECTOR_TRACKS: tuple[str, ...] = ("direct", "composio", "managed_local")
 
 #: 轨道 → 该轨连出来的行在 ``connector.source`` 列上的值（``store.CONNECTOR_SOURCES``）。
 #: 🔴 两套词表**只在这里**对接：别处再写一次 `'direct' → 'custom_mcp'` 就是第二处手抄。
 #: 值域相等由 parity 闸断言（这里刻意不 import store —— 本模块要保持零重依赖）。
-TRACK_TO_SOURCE: dict[str, str] = {"direct": "custom_mcp", "composio": "composio"}
+TRACK_TO_SOURCE: dict[str, str] = {
+    "direct": "custom_mcp",
+    "composio": "composio",
+    "managed_local": "managed_local",
+}
 
 
 @dataclass(frozen=True)
@@ -86,8 +92,55 @@ DIRECT_CATALOG: dict[str, DirectCatalogEntry] = {
 
 
 @dataclass(frozen=True)
+class ManagedLocalCatalogEntry:
+    """受管本机 stdio 运行时预置条目（WS-3：``browser_use`` / ``desktop_use``）。"""
+
+    connector_id: str
+    display_name: str
+    description_key: str
+    category: str
+    logo_text: str
+    logo_color: str
+    default_mode: Optional[str] = None
+    supported_modes: tuple[str, ...] = ()
+    requires_permissions: tuple[str, ...] = ()
+    supported_platforms: tuple[str, ...] = ()
+    package_spec: str = ""
+
+
+MANAGED_LOCAL_CATALOG: dict[str, ManagedLocalCatalogEntry] = {
+    "browser_use": ManagedLocalCatalogEntry(
+        connector_id="browser_use",
+        display_name="Browser Use",
+        description_key="settings.connectors.catalog.desc.browser_use",
+        category="browser",
+        logo_text="B",
+        logo_color="#2563EB",
+        default_mode="cdp_chrome",
+        supported_modes=("cdp_chrome", "extension", "isolated_profile"),
+        requires_permissions=(),
+        supported_platforms=("darwin", "win32", "linux"),
+        package_spec="@playwright/mcp",
+    ),
+    "desktop_use": ManagedLocalCatalogEntry(
+        connector_id="desktop_use",
+        display_name="Desktop Use",
+        description_key="settings.connectors.catalog.desc.desktop_use",
+        category="desktop",
+        logo_text="D",
+        logo_color="#7C3AED",
+        default_mode=None,
+        supported_modes=(),
+        requires_permissions=("accessibility", "screen_recording"),
+        supported_platforms=("darwin", "win32"),
+        package_spec="vercel-labs/agent-desktop",
+    ),
+}
+
+
+@dataclass(frozen=True)
 class CatalogEntryView:
-    """一条目录条目的**统一展示形状**（两轨共用；``GET /api/connector/catalog`` 的投影源）。"""
+    """一条目录条目的**统一展示形状**（三轨共用；``GET /api/connector/catalog`` 的投影源）。"""
 
     connector_id: str
     display_name: str
@@ -96,12 +149,15 @@ class CatalogEntryView:
     category: str
     logo_text: str
     logo_color: str
-    #: direct 轨恒带（官方端点）；composio 轨恒 ``None``（托管 endpoint 要 session 建出来才有）。
+    #: direct 轨恒带（官方端点）；composio / managed_local 轨恒 ``None``。
     server_url: Optional[str]
-    #: composio 轨 = curated 白名单覆盖的 toolkit；direct 轨恒空。
+    #: composio 轨 = curated 白名单覆盖的 toolkit；direct / managed_local 轨恒空。
     toolkits: tuple[str, ...]
-    #: composio 轨 = 白名单条数（目录卡如实告知「会开多少个工具」）；direct 轨恒 ``None``。
+    #: composio 轨 = 白名单条数（目录卡如实告知「会开多少个工具」）；direct / managed_local 轨恒 ``None``。
     tool_count: Optional[int]
+    supported_modes: tuple[str, ...] = ()
+    requires_permissions: tuple[str, ...] = ()
+    supported_platforms: tuple[str, ...] = ()
 
 
 def get_direct_entry(connector_id: str) -> Optional[DirectCatalogEntry]:
@@ -109,15 +165,22 @@ def get_direct_entry(connector_id: str) -> Optional[DirectCatalogEntry]:
     return DIRECT_CATALOG.get(connector_id)
 
 
-def track_for(connector_id: str) -> Optional[str]:
-    """该 id 的**出厂轨道**；两张表都没有 → None（自定义 MCP 行就落这里）。
+def get_managed_local_entry(connector_id: str) -> Optional[ManagedLocalCatalogEntry]:
+    """受管本机目录里有这一家吗（没有 → None，不抛）。"""
+    return MANAGED_LOCAL_CATALOG.get(connector_id)
 
-    🔴 direct 优先：notion / atlassian 同时在两张表里（见模块 docstring）。
+
+def track_for(connector_id: str) -> Optional[str]:
+    """该 id 的**出厂轨道**；三张表都没有 → None（自定义 MCP 行就落这里）。
+
+    🔴 direct 优先：notion / atlassian 同时在 direct 与 composio 两张表里（见模块 docstring）。
     """
     if connector_id in DIRECT_CATALOG:
         return "direct"
     if connector_id in COMPOSIO_CATALOG:
         return "composio"
+    if connector_id in MANAGED_LOCAL_CATALOG:
+        return "managed_local"
     return None
 
 
@@ -145,12 +208,12 @@ def row_is_off_track(source: str, connector_id: str) -> bool:
 
 
 def catalog_ids() -> tuple[str, ...]:
-    """两轨目录的全部 id（排序；``registry`` 的 KeyError 文案用）。"""
-    return tuple(sorted(set(DIRECT_CATALOG) | set(COMPOSIO_CATALOG)))
+    """三轨目录的全部 id（排序；``registry`` 的 KeyError 文案用）。"""
+    return tuple(sorted(set(DIRECT_CATALOG) | set(COMPOSIO_CATALOG) | set(MANAGED_LOCAL_CATALOG)))
 
 
-def catalog_views() -> list[CatalogEntryView]:
-    """两轨合一的目录视图（按 id 排序，同 id 只出现一次 —— direct 优先）。
+def catalog_views(*, include_managed_local: bool = True) -> list[CatalogEntryView]:
+    """三轨合一的目录视图（按 id 排序，同 id 只出现一次 —— direct 优先）。
 
     🔴 轨道归属**只问 ``track_for``**：这里再写一次 `cid in DIRECT_CATALOG` 就是第二处判据，
     与 ``row_is_off_track``（走 ``track_for``）漂开时的症状正是目录卡说自己是 direct、
@@ -158,7 +221,8 @@ def catalog_views() -> list[CatalogEntryView]:
     """
     out: list[CatalogEntryView] = []
     for cid in catalog_ids():
-        if track_for(cid) == "direct":
+        track = track_for(cid)
+        if track == "direct":
             direct = DIRECT_CATALOG[cid]
             out.append(
                 CatalogEntryView(
@@ -175,8 +239,30 @@ def catalog_views() -> list[CatalogEntryView]:
                 )
             )
             continue
+        if track == "managed_local":
+            if not include_managed_local:
+                continue
+            local = MANAGED_LOCAL_CATALOG[cid]
+            out.append(
+                CatalogEntryView(
+                    connector_id=local.connector_id,
+                    display_name=local.display_name,
+                    track="managed_local",
+                    description_key=local.description_key,
+                    category=local.category,
+                    logo_text=local.logo_text,
+                    logo_color=local.logo_color,
+                    server_url=None,
+                    toolkits=(),
+                    tool_count=None,
+                    supported_modes=local.supported_modes,
+                    requires_permissions=local.requires_permissions,
+                    supported_platforms=local.supported_platforms,
+                )
+            )
+            continue
         entry = get_catalog_entry(cid)
-        assert entry is not None  # catalog_ids() 的构造保证（两张表的并集）
+        assert entry is not None  # catalog_ids() 的构造保证（三张表的并集）
         out.append(
             CatalogEntryView(
                 connector_id=entry.connector_id,
@@ -195,7 +281,7 @@ def catalog_views() -> list[CatalogEntryView]:
 
 
 def validate_direct_catalog() -> None:
-    """直连目录自检（import 期跑一次）——加错数据当场炸，不等到用户点连接才发现。
+    """预置目录自检（import 期跑一次）——加错数据当场炸，不等到用户点连接才发现。
 
     钉住的是「直连条目**必须**带一个可用的 https 端点」：server_url 空/写错的直连条目会一路
     走到 ``client.session``，在那里才以 not-connected 的面目出现（症状与「没授权」完全一样，
@@ -218,6 +304,21 @@ def validate_direct_catalog() -> None:
             )
         if not entry.display_name or not entry.logo_text or not entry.logo_color:
             raise ValueError(f"direct catalog entry {cid!r} is missing display metadata")
+    for cid, local in MANAGED_LOCAL_CATALOG.items():
+        if cid != local.connector_id:
+            raise ValueError(
+                f"managed_local catalog key {cid!r} != entry.connector_id {local.connector_id!r}"
+            )
+        if cid in DIRECT_CATALOG or cid in COMPOSIO_CATALOG:
+            raise ValueError(
+                f"managed_local catalog id {cid!r} collides with direct/composio catalog"
+            )
+        if local.supported_modes and local.default_mode not in local.supported_modes:
+            raise ValueError(
+                f"managed_local entry {cid!r} default_mode={local.default_mode!r} not in {local.supported_modes!r}"
+            )
+        if not local.display_name or not local.logo_text or not local.logo_color:
+            raise ValueError(f"managed_local catalog entry {cid!r} is missing display metadata")
 
 
 validate_direct_catalog()

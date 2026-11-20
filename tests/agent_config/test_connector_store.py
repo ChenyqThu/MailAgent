@@ -384,10 +384,15 @@ def test_every_listed_tool_is_configurable_write_side(tmp_path):
 
 
 def test_effective_mode_resolution():
-    # 默认（NULL）→ auto（08-05 owner 拍板：含 write/update/destructive）。
+    # 默认（NULL）：非破坏性 read → auto；write/update/destructive → ask。
     assert connector_tool_effective_mode(None) == "auto"
-    # 显式覆盖原样透出。
+    assert connector_tool_effective_mode(None, crud_type="read", destructive=False) == "auto"
+    assert connector_tool_effective_mode(None, crud_type="write", destructive=False) == "ask"
+    assert connector_tool_effective_mode(None, crud_type="update", destructive=False) == "ask"
+    assert connector_tool_effective_mode(None, crud_type="read", destructive=True) == "ask"
+    # 显式覆盖原样透出（即使 destructive=True 也可用户显式设为 auto）。
     assert connector_tool_effective_mode("auto") == "auto"
+    assert connector_tool_effective_mode("auto", crud_type="write", destructive=True) == "auto"
     assert connector_tool_effective_mode("ask") == "ask"
     assert connector_tool_effective_mode("off") == "off"
     # 值域外野值（手改 DB）fail-closed 折算成 off —— 绝不折成免卡的 auto。

@@ -76,17 +76,20 @@ def test_catalog_view_composio_entries_have_whitelist_and_no_endpoint():
 
 
 def test_catalog_view_lists_every_id_exactly_once_sorted():
-    """两张表的并集，同 id 只出现一次（direct 优先）——否则设置页会渲染出两张 Notion 卡。"""
+    """三张表的并集，同 id 只出现一次（direct 优先）——否则设置页会渲染出两张 Notion 卡。"""
     views = catalog_views()
     ids = [v.connector_id for v in views]
     assert ids == sorted(ids) == list(catalog_ids())
-    assert len(ids) == len(set(ids)) == 16
+    assert len(ids) == len(set(ids)) == 18
 
 
 def test_track_and_source_are_a_bijection():
-    assert set(CONNECTOR_TRACKS) == {"direct", "composio"}
+    assert set(CONNECTOR_TRACKS) == {"direct", "composio", "managed_local"}
     assert source_for_track("direct") == "custom_mcp"
     assert source_for_track("composio") == "composio"
+    assert source_for_track("managed_local") == "managed_local"
+    assert row_is_off_track("managed_local", "browser_use") is False
+    assert row_is_off_track("custom_mcp", "browser_use") is True
     with pytest.raises(KeyError):
         source_for_track("made-up-track")
 
@@ -247,3 +250,47 @@ def test_unknown_id_still_raises_when_the_row_lookup_blows_up(fresh_agent_cfg, m
     _break_row_lookup(monkeypatch)
     with pytest.raises(KeyError):
         get_connector_def("definitely-not-a-service")
+
+
+def test_managed_local_catalog_and_registry_not_marked_custom(
+    fresh_agent_cfg, tmp_path, monkeypatch
+):
+    """WS-3: managed_local rows never get is_custom=True and derive stdio_command dynamically."""
+    from src.connectors import local_installer
+    from src.connectors.registry import get_connector_def
+
+    monkeypatch.setattr(local_installer, "_RUNTIMES_DIR_OVERRIDE", tmp_path / "rt")
+    # Catalog fallback before install: stdio_command is None
+    d_uninstalled = get_connector_def("browser_use")
+    assert d_uninstalled.source == "managed_local"
+    assert d_uninstalled.transport == "stdio"
+    assert d_uninstalled.is_custom is False
+    assert d_uninstalled.stdio_command is None
+
+    # Persisted row is still not custom, and derives args once installed
+    fresh_agent_cfg.upsert_connector(
+        "browser_use",
+        server_url="",
+        display_name="Browser Use",
+        transport="stdio",
+        source="managed_local",
+        runtime_config={"mode": "extension"},
+    )
+    rt_dir = tmp_path / "rt" / "browser_use"
+    cli = rt_dir / "pkg" / "node_modules" / "@playwright" / "mcp" / "cli.js"
+    cli.parent.mkdir(parents=True, exist_ok=True)
+    cli.write_text("// stub", encoding="utf-8")
+    (rt_dir / "manifest.json").write_text(
+        '{"connector_id":"browser_use","version":"1.0.0","entrypoint":"pkg/node_modules/@playwright/mcp/cli.js"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(local_installer, "_find_node", lambda: "/mock/node")
+
+    d_installed = get_connector_def("browser_use")
+    assert d_installed.is_custom is False
+    assert d_installed.source == "managed_local"
+    assert d_installed.stdio_command == {
+        "command": "/mock/node",
+        "args": [str(cli.resolve()), "--extension"],
+        "cwd": str(rt_dir.resolve()),
+    }

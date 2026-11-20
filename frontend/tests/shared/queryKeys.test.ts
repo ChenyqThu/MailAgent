@@ -134,6 +134,15 @@ describe('qk — settings / skill / notionAgent / policy / llm / admin', () => {
     expect(qk.mcpService.scopeOptions()).toEqual(['mcp-service', 'scope-options'])
     expect(qk.mcpService.tools()).toEqual(['mcp-service', 'tools'])
     expect(qk.mcpService.audit(20)).toEqual(['mcp-service', 'audit', 20])
+    expect(qk.connectors()).toEqual(['connectors'])
+    expect(qk.connectorTools('notion')).toEqual(['connectors', 'notion', 'tools'])
+    expect(qk.connectorCatalog()).toEqual(['connectors', 'catalog'])
+    expect(qk.connectorInstallStatus('browser_use')).toEqual([
+      'connectors',
+      'browser_use',
+      'install-status'
+    ])
+    expect(qk.connectorSystemPermissions()).toEqual(['connectors', 'system-permissions'])
     expect(qk.skillSecrets('s')).toEqual(['skillSecrets', 's'])
     expect(qk.skillConfig('s')).toEqual(['skillConfig', 's'])
   })

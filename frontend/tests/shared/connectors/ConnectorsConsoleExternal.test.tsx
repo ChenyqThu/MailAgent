@@ -85,7 +85,13 @@ const { stableMailApi, chatApi, connectorApi } = vi.hoisted(() => {
     purgeOrphans: vi.fn(),
     catalog: vi.fn(),
     setComposioKey: vi.fn(),
-    clearComposioKey: vi.fn()
+    clearComposioKey: vi.fn(),
+    install: vi.fn(),
+    installStatus: vi.fn(),
+    uninstall: vi.fn(),
+    setRuntimeOptions: vi.fn(),
+    systemPermissions: vi.fn(),
+    openSystemPermission: vi.fn()
   }
   return { stableMailApi: { chat: chatApi, connector: connectorApi }, chatApi, connectorApi }
 })
@@ -121,10 +127,11 @@ function connector(
   partial: Partial<ConnectorSummary> & { connector_id: string }
 ): ConnectorSummary {
   return {
+    ...partial,
     connector_id: partial.connector_id,
     display_name: partial.display_name ?? partial.connector_id,
     server_url: partial.server_url ?? `https://mcp.${partial.connector_id}.test/mcp`,
-    transport: partial.transport ?? 'http',
+    transport: partial.transport ?? 'streamable_http',
     status: partial.status ?? 'disconnected',
     enabled: partial.enabled ?? true,
     preprocess_enabled: partial.preprocess_enabled ?? false,
@@ -139,11 +146,12 @@ function connector(
 }
 
 /** 目录条目夹具 —— 08-06 双轨契约的默认形状（composio 轨）。`track`/`server_url` 可覆盖，
- *  容错用例会显式делete `track`。 */
+ *  容错用例会显式 delete `track`。 */
 function catalogEntry(
   partial: Partial<ConnectorCatalogEntry> & { connector_id: string }
 ): ConnectorCatalogEntry {
   return {
+    ...partial,
     connector_id: partial.connector_id,
     display_name: partial.display_name ?? partial.connector_id,
     track: partial.track ?? 'composio',
@@ -297,6 +305,49 @@ beforeEach(() => {
   })
   connectorApi.setComposioKey.mockResolvedValue({ configured: true, updated_at: 1 })
   connectorApi.clearComposioKey.mockResolvedValue({ configured: false, updated_at: null })
+  connectorApi.install.mockResolvedValue({
+    ok: true,
+    connector_id: 'browser_use',
+    installed: true,
+    version: '0.0.41',
+    mode: 'cdp_chrome',
+    supported_modes: ['cdp_chrome', 'extension', 'isolated_profile'],
+    runtime_config: { mode: 'cdp_chrome', browser_mode: 'cdp_chrome' },
+    requires_permissions: [],
+    platform_supported: true,
+    executable: 'npx',
+    error: null
+  })
+  connectorApi.uninstall.mockResolvedValue({
+    ok: true,
+    connector_id: 'browser_use',
+    installed: false,
+    version: null,
+    mode: null,
+    supported_modes: [],
+    runtime_config: null,
+    requires_permissions: [],
+    platform_supported: true,
+    executable: null,
+    error: null
+  })
+  connectorApi.setRuntimeOptions.mockResolvedValue({
+    ok: true,
+    connector_id: 'browser_use',
+    mode: 'extension',
+    browser_mode: 'extension',
+    runtime_config: { mode: 'extension', browser_mode: 'extension' }
+  })
+  connectorApi.systemPermissions.mockResolvedValue({
+    platform: 'darwin',
+    accessibility: 'granted',
+    screen_recording: 'denied'
+  })
+  connectorApi.openSystemPermission.mockResolvedValue({
+    ok: true,
+    kind: 'screen_recording',
+    opened: true
+  })
   window.localStorage.setItem(NOTICE_KEY, '1')
   window.localStorage.setItem(COMPOSIO_NOTICE_KEY, '1')
 })
@@ -1037,5 +1088,183 @@ describe('ConnectorsConsole — 已配置目录条目不给第二个入口（补
     // 留下的那一行是**已连行**（右侧是轨道标识），不是目录的「连接」卡。
     expect(notionRows[0].textContent).toContain('settings.connectors.viaDirect')
     expect(notionRows[0].textContent).not.toContain('settings.connectors.connect')
+  })
+
+  test('custom SSE 连接器：左栏显示 SSE 标记，右栏显示 badgeSse，编辑弹窗保留 sse 传输', async () => {
+    const customSse = connector({
+      connector_id: 'legacy-srv',
+      display_name: 'Legacy Server',
+      source: 'custom_mcp',
+      is_custom: true,
+      transport: 'sse',
+      server_url: 'https://mcp.example.test/sse',
+      status: 'connected'
+    })
+    connectorApi.list.mockResolvedValue([customSse])
+    renderUi()
+
+    const row = await externalRow('Legacy Server')
+    expect(row.textContent).toContain('SSE')
+
+    fireEvent.click(row)
+    await screen.findByText('settings.connectors.custom.badgeSse')
+    expect(screen.getByText('https://mcp.example.test/sse')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.connectors.custom.editButton' }))
+    const dialog = await screen.findByRole('dialog')
+    const sseBtn = within(dialog).getByRole('button', {
+      name: 'settings.connectors.custom.transportSse'
+    })
+    expect(sseBtn.className).toContain('text-coral')
+  })
+})
+
+describe('ConnectorsConsole — Wave 3 managed_local（Browser Use / Desktop Use）', () => {
+  test('目录卡片：managed_local 显示本机托管徽标 + 像素脱敏告知 + 一键安装调 install()', async () => {
+    connectorApi.list.mockResolvedValue([])
+    connectorApi.catalog.mockResolvedValue({
+      composio: { configured: false, updated_at: null },
+      entries: [
+        catalogEntry({
+          connector_id: 'browser_use',
+          display_name: 'Browser Use',
+          track: 'managed_local',
+          toolkits: [],
+          tool_count: null,
+          supported_modes: ['cdp_chrome', 'extension', 'isolated_profile'],
+          platform_supported: true
+        })
+      ]
+    })
+    renderUi()
+
+    await selectConnector('Browser Use')
+    expect((await screen.findAllByText('settings.connectors.viaManagedLocal')).length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText('settings.connectors.managed.pixelPrivacyTitle')).toBeTruthy()
+    expect(screen.getByText('settings.connectors.managed.pixelPrivacyBody')).toBeTruthy()
+
+    const installBtn = screen.getByRole('button', {
+      name: 'settings.connectors.managed.installAndEnable'
+    })
+    fireEvent.click(installBtn)
+    await waitFor(() => expect(connectorApi.install).toHaveBeenCalledWith('browser_use'))
+  })
+
+  test('已安装 Browser Use：3 模式 Chrome 选择器 + CDP 调试指令 + 切换模式调用 setRuntimeOptions', async () => {
+    const browserConnector = connector({
+      connector_id: 'browser_use',
+      display_name: 'Browser Use',
+      source: 'managed_local',
+      transport: 'stdio',
+      server_url: '',
+      status: 'connected',
+      is_custom: false,
+      runtime_installed: true,
+      runtime_version: '0.0.41',
+      runtime_mode: 'cdp_chrome',
+      supported_modes: ['cdp_chrome', 'extension', 'isolated_profile'],
+      runtime_config: { mode: 'cdp_chrome', browser_mode: 'cdp_chrome' }
+    })
+    connectorApi.list.mockResolvedValue([browserConnector])
+    connectorApi.tools.mockResolvedValue([])
+    renderUi()
+
+    const row = await externalRow('Browser Use')
+    expect(row.textContent).toContain('settings.connectors.viaManagedLocal')
+    fireEvent.click(row)
+
+    await screen.findByText('settings.connectors.managed.browserModeTitle')
+    expect(screen.getByText('chrome://inspect/#remote-debugging')).toBeTruthy()
+    expect(screen.getByText('0.0.41')).toBeTruthy()
+
+    const extRadio = screen.getByRole('radio', {
+      name: /settings\.connectors\.managed\.modes\.extension\.title/
+    })
+    fireEvent.click(extRadio)
+    await waitFor(() =>
+      expect(connectorApi.setRuntimeOptions).toHaveBeenCalledWith('browser_use', {
+        mode: 'extension',
+        browser_mode: 'extension'
+      })
+    )
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.connectors.managed.uninstallButton' })
+    )
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(
+      within(dialog).getByRole('button', {
+        name: 'settings.connectors.managed.uninstallButton'
+      })
+    )
+    await waitFor(() => expect(connectorApi.uninstall).toHaveBeenCalledWith('browser_use'))
+  })
+
+  test('Desktop Use：Electron TCC IPC 优先 + 回退 Python + 前往系统设置 + web 面禁用全部本机动作', async () => {
+    const desktopConnector = connector({
+      connector_id: 'desktop_use',
+      display_name: 'Desktop Use',
+      source: 'managed_local',
+      transport: 'stdio',
+      server_url: '',
+      status: 'connected',
+      is_custom: false,
+      runtime_installed: true,
+      requires_permissions: ['accessibility', 'screen_recording']
+    })
+    connectorApi.list.mockResolvedValue([desktopConnector])
+    connectorApi.tools.mockResolvedValue([])
+
+    const invokeMock = vi.fn(async (ch: string, arg?: unknown) => {
+      if (ch === 'systemPermissions:check') {
+        return {
+          platform: 'darwin',
+          accessibility: 'granted',
+          screen_recording: 'denied',
+          source: 'electron'
+        }
+      }
+      if (ch === 'systemPermissions:open') {
+        return { ok: true, kind: String(arg), opened: true }
+      }
+      return null
+    })
+    Object.defineProperty(window, 'electron', {
+      configurable: true,
+      value: { ipcRenderer: { invoke: invokeMock } }
+    })
+
+    try {
+      renderUi()
+      await selectConnector('Desktop Use')
+      await screen.findByText('settings.connectors.managed.tccTitle')
+      await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('systemPermissions:check'))
+      expect(connectorApi.systemPermissions).not.toHaveBeenCalled()
+      expect(screen.getByText('settings.connectors.managed.tccState.granted')).toBeTruthy()
+      expect(screen.getByText('settings.connectors.managed.tccState.denied')).toBeTruthy()
+
+      const openButtons = screen.getAllByRole('button', {
+        name: 'settings.connectors.managed.tccOpenSettings'
+      })
+      fireEvent.click(openButtons[1])
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith('systemPermissions:open', 'screen_recording')
+      )
+
+      cleanup()
+      vi.stubEnv('VITE_BUILD_TARGET', 'web')
+      renderUi()
+      await selectConnector('Desktop Use')
+      await screen.findByText('settings.connectors.managed.tccWebDisabled')
+      expect(
+        (
+          screen.getByRole('button', {
+            name: 'settings.connectors.managed.uninstallButton'
+          }) as HTMLButtonElement
+        ).disabled
+      ).toBe(true)
+    } finally {
+      delete (window as unknown as { electron?: unknown }).electron
+    }
   })
 })

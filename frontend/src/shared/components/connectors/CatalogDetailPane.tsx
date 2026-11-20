@@ -39,6 +39,7 @@ import {
   resolveCatalogTrack,
   writeComposioNoticeAck
 } from './consoleShared'
+import { ManagedPixelPrivacyNotice } from './ManagedLocalSections'
 
 /** 品牌字母牌（代码内数据，零网络）——见 `catalog.py` 的 logo 取舍注释。 */
 export function CatalogLogo({
@@ -82,9 +83,22 @@ export function CatalogDetailPane({
   // 出站告知②：首次连接任一 Composio 轨服务前的一次性 confirm。直连轨不经它。
   const [noticeOpen, setNoticeOpen] = React.useState(false)
 
+  const isManagedLocal = track === 'managed_local'
+
   async function startConnect(): Promise<void> {
     setConnecting(true)
     try {
+      if (isManagedLocal) {
+        if (!api.connector.install) {
+          throw new Error('Managed local installer unavailable')
+        }
+        await api.connector.install(entry.connector_id)
+        await qc.invalidateQueries({ queryKey: qk.connectors() })
+        await qc.invalidateQueries({ queryKey: qk.connectorCatalog() })
+        await qc.invalidateQueries({ queryKey: qk.connectorInstallStatus(entry.connector_id) })
+        toastSuccess(t('settings.connectors.managed.installSuccess', { name: entry.display_name }))
+        return
+      }
       const started = await api.connector.oauthStart(entry.connector_id)
       // 🔴 没有 URL = 这家在 Composio 侧之前就授权过：不开浏览器，行已建出来。
       if (started.authorize_url) openExternal(started.authorize_url)
@@ -92,7 +106,12 @@ export function CatalogDetailPane({
       await qc.invalidateQueries({ queryKey: qk.connectors() })
       await qc.invalidateQueries({ queryKey: qk.connectorCatalog() })
     } catch (err) {
-      toastError(t('settings.connectors.authFailed'), errorMessage(err))
+      toastError(
+        isManagedLocal
+          ? t('settings.connectors.managed.installFailed')
+          : t('settings.connectors.authFailed'),
+        errorMessage(err)
+      )
     } finally {
       setConnecting(false)
     }
@@ -106,10 +125,11 @@ export function CatalogDetailPane({
     void startConnect()
   }
 
-  // direct 轨在 web 面结构性连不上（loopback 回调）；composio 轨不受限。
-  const webBlocked = track === 'direct' && isWeb
+  // direct 轨与 managed_local 轨在 web 面结构性不可用；composio 轨不受限。
+  const webBlocked = (track === 'direct' || isManagedLocal) && isWeb
   const gateBlocked = track === 'composio' && !keyConfigured
-  const disabled = entry.configured || connecting || webBlocked || gateBlocked
+  const platformBlocked = isManagedLocal && entry.platform_supported === false
+  const disabled = entry.configured || connecting || webBlocked || gateBlocked || platformBlocked
 
   return (
     <div>
@@ -119,10 +139,17 @@ export function CatalogDetailPane({
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-lead font-medium text-ink-fg">{entry.display_name}</h2>
-              <span className={cn(PILL_BASE, 'bg-ink-4 text-ink-fg-3')}>
+              <span
+                className={cn(
+                  PILL_BASE,
+                  isManagedLocal ? 'text-aux bg-ink-4 text-ink-fg-2' : 'bg-ink-4 text-ink-fg-3'
+                )}
+              >
                 {track === 'composio'
                   ? t('settings.connectors.viaComposio')
-                  : t('settings.connectors.viaDirect')}
+                  : isManagedLocal
+                    ? t('settings.connectors.viaManagedLocal')
+                    : t('settings.connectors.viaDirect')}
               </span>
               {/* 🔴 direct 轨 tool_count 恒 null：清单来自官方端点 tools/list，连上之前
                   拿不到数量 —— 渲染成「0 个工具」是说谎，如实说「连接后获取」。 */}
@@ -144,10 +171,14 @@ export function CatalogDetailPane({
                 {entry.server_url}
               </div>
             ) : null}
-            {/* 出站告知①：composio 轨的常驻声明（不折叠、不 hover 才出现）。 */}
+            {/* 出站告知①：composio 轨的常驻声明；managed_local 明示本机运行。 */}
             {track === 'composio' ? (
               <p className="mt-1 text-meta text-ink-fg-3">
                 {t('settings.connectors.catalog.outboundNotice')}
+              </p>
+            ) : isManagedLocal ? (
+              <p className="mt-1 text-aux text-ink-fg-2">
+                {t('connectorsConsole.managedLocalTrackNote')}
               </p>
             ) : (
               <p className="mt-1 text-meta text-ink-fg-3">
@@ -160,7 +191,16 @@ export function CatalogDetailPane({
               </p>
             ) : null}
             {webBlocked ? (
-              <p className="mt-1 text-micro text-ink-fg-3">{t('settings.connectors.connectWeb')}</p>
+              <p className={cn('mt-1 text-ink-fg-3', isManagedLocal ? 'text-aux' : 'text-micro')}>
+                {isManagedLocal
+                  ? t('settings.connectors.managed.webDisabled')
+                  : t('settings.connectors.connectWeb')}
+              </p>
+            ) : null}
+            {platformBlocked ? (
+              <p className="mt-1 text-aux text-fail">
+                {t('settings.connectors.managed.platformUnsupported')}
+              </p>
             ) : null}
           </div>
         </div>
@@ -169,16 +209,26 @@ export function CatalogDetailPane({
             size="sm"
             variant={entry.configured ? 'ghost' : 'default'}
             disabled={disabled}
-            title={webBlocked ? t('settings.connectors.connectWeb') : undefined}
+            title={
+              webBlocked
+                ? isManagedLocal
+                  ? t('settings.connectors.managed.webDisabled')
+                  : t('settings.connectors.connectWeb')
+                : undefined
+            }
             onClick={handleConnect}
           >
             {connecting ? <Loader2 className="size-3.5 animate-spin" /> : null}
             {entry.configured
               ? t('settings.connectors.catalog.alreadyAdded')
-              : t('settings.connectors.connect')}
+              : isManagedLocal
+                ? t('settings.connectors.managed.installAndEnable')
+                : t('settings.connectors.connect')}
           </Button>
         </div>
       </div>
+
+      {isManagedLocal ? <ManagedPixelPrivacyNotice className="mt-3" /> : null}
 
       {/* BYOK gate（composio 轨 · 没配 key）：三步引导 + 跳「Composio 账户」面。 */}
       {gateBlocked && !entry.configured ? (

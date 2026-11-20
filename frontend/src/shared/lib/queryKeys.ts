@@ -273,6 +273,9 @@ export const qk = {
   // 08-05 WP-12 — 预置目录 + BYOK key 状态。同挂 `connectors` 前缀：连接/断开/清除配置
   // 之后 invalidate 一处，目录里的「已配置 / 已被取代」跟着刷。
   connectorCatalog: () => ['connectors', 'catalog'] as const,
+  // Wave 3 — managed_local 本机运行时安装态与 macOS TCC 权限诊断，同挂 `connectors` 前缀。
+  connectorInstallStatus: (id: string) => ['connectors', id, 'install-status'] as const,
+  connectorSystemPermissions: () => ['connectors', 'system-permissions'] as const,
 
   // 设置 →「MCP 服务」（`/api/mcp-service/*`）。新建 / 轮换 / 撤销密钥后 invalidate
   // `all()` 一处，状态里的可用密钥数与列表一起刷。

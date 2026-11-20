@@ -505,7 +505,6 @@
       "openAiPanel": "Toggle AI chat",
       "sendChat": "Send AI message",
       "newChat": "New AI conversation",
-      "toggleIsland": "Toggle Dynamic Island",
       "toggleLocale": "Toggle language",
       "calViewDay": "Day view",
       "calViewWeek": "Week view",
@@ -762,8 +761,10 @@
     "subtitle": "One console for built-in tool approval tiers and external service connections",
     "sectionBuiltin": "Built-in tools",
     "sectionExternal": "External connections",
+    "addCustomMcp": "Add custom MCP",
     "composioAccount": "Composio account",
     "directTrackNote": "Connects directly to the official MCP endpoint (the OAuth page is the vendor's own) — no third-party relay, no API key required.",
+    "managedLocalTrackNote": "Installs and runs locally on this machine via stdio — no Composio cloud relay, zero credentials stored off-device.",
     "toolCountUnknown": "Tool list arrives after connecting",
     "switchTrack": "Switch track (disconnect and clear config)",
     "supersededByDirect": "This connection runs through Composio, but the service now ships as a direct connection to the official endpoint (no third-party approval needed). Use “Switch track” to disconnect and clear its config, then reconnect directly from the catalog.",
@@ -1152,6 +1153,8 @@
       "contact_update_fields": "Edit contact details",
       "contact_set_manager": "Set contact manager",
       "notion_agent_chat": "Ask the Notion agent",
+      "tool_search": "Search available tools",
+      "computer_use_run": "Operate desktop & browser",
       "plan_update": "Update plan",
       "suggest_followups": "Suggesting follow-ups",
       "submit_feedback": "Submit product feedback",
@@ -1302,6 +1305,38 @@
       "sensitiveWarn": "Body contains sensitive terms: {terms} — double-check before sending.",
       "expired": "Approval expired — ask the assistant to start over",
       "countdown": "Approval valid for {time}"
+    },
+    "computerUseCard": {
+      "title": "Operate desktop & browser",
+      "goal": "Goal",
+      "emptyGoal": "(No goal provided)",
+      "target": "Target surface",
+      "targetValue": {
+        "auto": "Auto (Browser / Desktop)",
+        "browser": "Browser",
+        "desktop": "Desktop apps"
+      },
+      "allowedApps": "Allowed apps",
+      "allowedDomains": "Allowed domains",
+      "unboundedScope": "No explicit allowlist specified",
+      "stopBeforeSubmit": "Stop before submit",
+      "stopBeforeSubmitOn": "Enabled · Pauses before submit, send, approve, or payment",
+      "stopBeforeSubmitOff": "Disabled · May trigger terminal submit actions",
+      "maxSteps": "Step limit",
+      "maxStepsValue": "{count} steps",
+      "pixelPrivacyTitle": "Screenshots bypass text privacy masking",
+      "pixelPrivacyBody": "privacyMaskMiddleware only redacts text parameters and outputs — it cannot blur or mask pixels in browser or desktop screenshots sent directly to your vision LLM.",
+      "approve": "Approve & run",
+      "error": "Computer-use execution failed",
+      "statusLabel": "Run outcome",
+      "resultStatus": {
+        "awaiting_confirmation": "Paused · Awaiting your confirmation",
+        "scope_violation": "Halted · Out-of-scope app or domain detected",
+        "completed": "Completed"
+      },
+      "currentTarget": "Current target",
+      "pendingAction": "Pending action",
+      "filledFields": "Filled fields"
     },
     "execApprovalCard": {
       "title": {
@@ -1709,7 +1744,11 @@
       "saved": "Updated \"{name}\"",
       "savedDetail": "Takes effect for the AI within ~30s",
       "approvalHint": "Read tools run directly; write tools ask for your approval every time.",
-      "activeHint": "Connectors active"
+      "activeHint": "Connectors active",
+      "sessionPause": "Pause for session",
+      "sessionPaused": "Paused for session",
+      "sessionMutedBadge": "{count} paused in session",
+      "sessionReset": "Restore all"
     },
     "draftReply": {
       "header": "Draft reply",
@@ -1991,6 +2030,9 @@
   },
   "llm": {
     "title": "LLM Dashboard",
+    "subtitle": "Unified AI gateway token spend, prompt cache hit rate, probe diagnostics, and email AI pipeline metrics.",
+    "emailPipelineTitle": "Email AI Preprocessing Pipeline",
+    "emailPipelineSubtitle": "Completion rates, latency, and per-model breakdown for background email classification.",
     "loading": "Loading…",
     "error": "Failed to load · retry",
     "processed": "Processed",
@@ -2501,6 +2543,50 @@
       "neverSynced": "Tool list never synced",
       "lastError": "Last error: {message}",
       "saveFailed": "Save failed",
+      "custom": {
+        "createTitle": "Add custom MCP connection",
+        "editTitle": "Edit {name}",
+        "desc": "Connect a custom Streamable HTTP / SSE MCP endpoint or a local lazy-started stdio MCP process (headers and env secrets are encrypted at rest; desktop only).",
+        "displayName": "Display name",
+        "displayNamePlaceholder": "e.g., GitHub Enterprise / Local Filesystem",
+        "connectorId": "Connector ID",
+        "transportLabel": "Transport",
+        "transportHttp": "Streamable HTTP",
+        "transportSse": "HTTP + SSE",
+        "transportStdio": "Local process (stdio)",
+        "serverUrl": "MCP endpoint URL",
+        "urlHint": "Remote endpoints must use https://; http:// is allowed for localhost / 127.0.0.1.",
+        "headersLabel": "Custom HTTP headers",
+        "envLabel": "Environment variables",
+        "addPair": "Add",
+        "removePair": "Remove entry",
+        "replaceSecrets": "Replace stored secrets",
+        "noHeaders": "No custom headers configured.",
+        "noEnv": "No custom environment variables configured.",
+        "existingKeys": "Encrypted keys configured: {keys}",
+        "command": "Command",
+        "args": "Arguments (space-separated)",
+        "cwd": "Working directory (optional)",
+        "autoSync": "Sync tool manifest after saving",
+        "createAction": "Create connection",
+        "saveEdit": "Save changes",
+        "saving": "Saving…",
+        "created": "Added {name}",
+        "updated": "Updated {name}",
+        "deleted": "Deleted {name}",
+        "syncWarning": "Saved connection, but tool sync failed",
+        "nameRequired": "Display name is required",
+        "idInvalid": "ID must be 2–48 lowercase letters, digits, underscores, or hyphens starting with alphanumeric",
+        "urlRequired": "MCP endpoint URL is required",
+        "commandRequired": "Command is required for stdio connectors",
+        "editButton": "Edit",
+        "deleteButton": "Delete",
+        "deleteTitle": "Delete custom connection \"{name}\"?",
+        "deleteDesc": "Stops any running local process for this connector and removes its encrypted secrets and tool manifest.",
+        "badgeStdio": "stdio",
+        "badgeHttp": "HTTP",
+        "badgeSse": "SSE"
+      },
       "disconnectDialog": {
         "title": "Disconnect {name}?",
         "desc": "This deletes the credentials stored on this machine, and the service's tools stop being available to the AI immediately. The tool list and per-tool permissions are kept and apply again after reconnecting.",
@@ -2514,7 +2600,7 @@
         "loading": "Loading tool list…",
         "loadError": "Could not load the tool list: {message}",
         "empty": "No tools synced yet — use “Sync tools” above to fetch the list.",
-        "defaultHint": "Default tier = Auto (writes/updates included; runs without an approval card).",
+        "defaultHint": "Default tier: read runs Auto; write, update, and destructive tools require Approval.",
         "destructive": "Destructive",
         "orphan": "Gone",
         "orphanTip": "The remote server no longer offers this tool; the setting is kept but the tool is not given to the AI.",
@@ -2563,6 +2649,60 @@
       },
       "viaComposio": "via Composio",
       "viaDirect": "direct",
+      "viaManagedLocal": "Managed local",
+      "managed": {
+        "installAndEnable": "Install & enable",
+        "installSuccess": "Installed and enabled {name}",
+        "installFailed": "Failed to install local runtime",
+        "uninstallButton": "Uninstall",
+        "uninstallSuccess": "Uninstalled {name}",
+        "uninstallDialogTitle": "Uninstall {name}?",
+        "uninstallDialogDesc": "This stops the local runtime, deletes its managed files from disk, and clears the saved connection configuration.",
+        "runtimeMissing": "Local runtime binary is missing — click “Install & enable” to repair it.",
+        "platformUnsupported": "This local runtime does not support the current operating system or CPU architecture.",
+        "webDisabled": "Managed local runtimes install and control apps on this computer — manage them inside the desktop app.",
+        "webDisabledShort": "Desktop app only",
+        "pixelPrivacyTitle": "Screenshots bypass text privacy masking",
+        "pixelPrivacyBody": "privacyMaskMiddleware only redacts outbound text tool parameters and outputs — it does not blur or mask pixels inside web or desktop screenshots. Raw image frames are sent directly to your configured vision-capable LLM.",
+        "browserModeTitle": "Chrome connection mode",
+        "browserModeHelper": "Choose how Browser Use attaches to a browser. Switching modes restarts the local MCP process on next call.",
+        "recommendedBadge": "Recommended",
+        "modeUpdated": "Switched browser mode to {mode}",
+        "modes": {
+          "cdp_chrome": {
+            "title": "Attach to running Chrome (CDP)",
+            "desc": "Connects via Chrome Remote Debugging so existing logins and extensions stay available inside your everyday browser."
+          },
+          "extension": {
+            "title": "Playwright MCP Extension",
+            "desc": "Bridges through the Playwright MCP browser extension without launching Chrome with a debugging flag."
+          },
+          "isolated_profile": {
+            "title": "Isolated browser profile",
+            "desc": "Launches an isolated clean Chromium profile stored under the managed runtime directory with zero existing cookies."
+          }
+        },
+        "cdpGuideTitle": "Enable Chrome remote debugging once",
+        "cdpGuideBody": "Open the address below in Chrome and enable the remote debugging toggle so Browser Use can attach to your tabs:",
+        "copyCdpUrl": "Copy address",
+        "copiedCdpUrl": "Copied",
+        "tccTitle": "macOS system permissions",
+        "tccSubtitle": "Desktop Use needs Accessibility control and Screen Recording permission granted to the desktop app.",
+        "tccRefresh": "Refresh status",
+        "tccChecking": "Checking…",
+        "tccWebDisabled": "System permission checks are only available inside the desktop app.",
+        "tccAccessibility": "Accessibility",
+        "tccAccessibilityDesc": "Required to inspect UI elements and perform mouse clicks or keystrokes.",
+        "tccScreenRecording": "Screen Recording",
+        "tccScreenRecordingDesc": "Required to capture desktop and window screenshots for visual grounding.",
+        "tccOpenSettings": "Open System Settings",
+        "tccState": {
+          "granted": "Granted",
+          "denied": "Not granted",
+          "unknown": "Needs confirmation",
+          "unsupported": "Not required on this OS"
+        }
+      },
       "supersededHint": "This connection is a self-hosted direct link, but the service now ships through Composio. Use “Switch track” to disconnect and clear its config, then reconnect from the catalog.",
       "catalog": {
         "title": "Preset catalog",
@@ -2589,6 +2729,8 @@
         "desc": {
           "asana": "Asana: search tasks and projects, create tasks and comments, update tasks.",
           "atlassian": "Atlassian: Jira issues (search/create/edit/transition) + Confluence pages (search/read/create/edit).",
+          "browser_use": "Browser Use: control Chrome or an isolated browser via Playwright MCP — inspect tabs, fill forms, capture screenshots.",
+          "desktop_use": "Desktop Use: operate desktop apps via Agent Desktop MCP — accessibility tree, click, type, and screen capture.",
           "figma": "Figma: read file structure and components, pull design variables, render nodes, comment.",
           "github": "GitHub: read repo content and READMEs, browse issues/PRs, open issues and comments.",
           "gmail": "Gmail: search and read mail and drafts, read contacts; drafting only — no sending.",
@@ -2860,7 +3002,7 @@
     },
     "providers": {
       "title": "Model services",
-      "helper": "Manage LLM upstream providers: official models, OpenAI-compatible relays and Anthropic-compatible relays can coexist. The default provider carries over the legacy gateway config (legacy model refs need no migration).",
+      "helper": "Manage LLM upstream providers: official APIs, OpenAI/Anthropic-compatible relays, and local engines can coexist. The default provider carries over the legacy gateway config.",
       "loading": "Loading…",
       "loadError": "Failed to load providers.",
       "empty": "No providers yet. Click “Add” in the corner to create one from a template.",
@@ -2869,29 +3011,78 @@
       "added": "Added {name}",
       "deleted": "Deleted {name}",
       "defaultBadge": "default",
+      "configureButton": "Configure",
+      "configureAria": "Configure {name}",
+      "modalTabs": {
+        "models": "Models",
+        "connection": "Connection & Security"
+      },
       "expandAria": "Expand {name}",
       "enabledAria": "Enable/disable {name}",
       "deleteAria": "Delete {name}",
+      "dragAria": "Drag to reorder {name}",
+      "disabledBadge": "Disabled",
+      "keyConfiguredBadge": "Key set",
+      "keyMissingBadge": "No key",
+      "localNoKeyBadge": "Local / No key",
+      "catalogStatus": "Catalog {date}",
+      "catalogRefresh": "Refresh catalog",
+      "catalogRefreshing": "Updating…",
+      "catalogUpdated": "Model catalog updated",
+      "catalogUpToDate": "Model catalog is already up to date",
+      "catalogSyncFailed": "Catalog refresh failed; keeping cached catalog",
       "displayName": "Name",
       "baseUrl": "API base URL",
       "baseUrlPlaceholder": "Empty = official default endpoint",
+      "categories": {
+        "all": "All",
+        "popular": "Popular",
+        "cn": "China",
+        "global": "Global",
+        "local": "Local",
+        "custom": "Custom"
+      },
       "apiKey": {
         "label": "API key",
-        "set": "Set (····{last4}) — type a new value to rotate",
+        "set": "Set (····{last4}) — enter a new value and save to rotate",
         "unset": "Not set",
         "clear": "Clear",
-        "clearAria": "Clear API key"
+        "clearAria": "Clear API key",
+        "save": "Save key",
+        "saved": "API key updated",
+        "showAria": "Show API key",
+        "hideAria": "Hide API key"
+      },
+      "keyPool": {
+        "title": "Backup key pool (429 rotation)",
+        "helper": "Enter one spare API key per line. Automatically rotates past HTTP 429 cooldowns while staying sticky on the primary key when healthy.",
+        "countBadge": "{count} Keys",
+        "placeholder": "One spare key per line, e.g.\nsk-spare-1\nsk-spare-2",
+        "save": "Save pool",
+        "clear": "Clear",
+        "saved": "Backup key pool updated"
       },
       "headers": {
         "label": "Custom headers",
         "opencodeSessionHint": "OpenCode requires an x-opencode-session header. MailAgent attaches a random ID per conversation automatically (used only for OpenCode routing and caching; it contains no conversation content), so there is no need to add it here. If you add one, your value is used instead.",
+        "incrementalHint": "Supports per-header updates and deletions without re-entering other stored secrets.",
+        "setPlaceholder": "Configured (enter a new value to replace)",
         "keyPlaceholder": "Header name",
         "valuePlaceholder": "Value",
         "add": "Add",
+        "update": "Update",
+        "updated": "Custom headers updated",
         "deleteAria": "Delete header {name}",
         "save": "Save",
         "cancel": "Cancel",
         "reenterHint": "Header values are write-only — re-enter every kept value before saving"
+      },
+      "iconPicker": {
+        "buttonAria": "Change provider icon",
+        "title": "Choose icon",
+        "customPlaceholder": "1-2 chars or emoji",
+        "apply": "Apply",
+        "reset": "Reset"
       },
       "test": {
         "label": "Connectivity test",
@@ -2899,7 +3090,9 @@
         "running": "Testing…",
         "ok": "Connected ({ms}ms)",
         "okNoLatency": "Connected",
-        "fail": "Connection failed"
+        "fail": "Connection failed",
+        "modelAuto": "Auto-select model",
+        "modelAria": "Select model to probe"
       },
       "models": {
         "title": "Models",
@@ -2907,9 +3100,27 @@
         "refreshing": "Fetching…",
         "loading": "Loading…",
         "empty": "No models yet. Click “Fetch model list” to pull from upstream, or add one manually below (fallback for relays that don't expose /models).",
+        "noMatch": "No models match the current filter.",
         "manualBadge": "manual",
         "manualPlaceholder": "Add a model id manually (wire id)",
         "manualAdd": "Add",
+        "searchPlaceholder": "Search model ID or name…",
+        "filter": {
+          "all": "All",
+          "enabled": "Enabled",
+          "reasoning": "Reasoning",
+          "vision": "Vision"
+        },
+        "batch": {
+          "enableFiltered": "Enable shown",
+          "disableAll": "Disable all",
+          "clearUnenabled": "Clear disabled fetched",
+          "updated": "Updated {count} models"
+        },
+        "colModel": "Model",
+        "colMaxOutput": "Max output",
+        "colContextWindow": "Context",
+        "groupOther": "Other models",
         "maxOutputPlaceholder": "maxOutput",
         "maxOutputAria": "Max output tokens for {model}",
         "contextWindowPlaceholder": "context",
@@ -2922,20 +3133,144 @@
         }
       },
       "template": {
+        "ollama": "Ollama (Local)",
+        "lmstudio": "LM Studio (Local)",
+        "opencode": "OpenCode Zen",
         "custom-openai": "Custom OpenAI-compatible",
         "custom-anthropic": "Custom Anthropic-compatible"
       },
       "add": {
+        "desc": "Pick a cloud or local template, verify connectivity, and save to fetch models.",
         "template": "Template",
         "id": "ID (slug)",
         "idPlaceholder": "Lowercase letter first; digits/-/_ allowed",
         "idInvalid": "Invalid slug",
+        "protocol": "Protocol",
+        "advancedToggle": "Advanced: custom ID & protocol",
+        "keyOptionalHint": "Optional for local inference engines",
+        "probe": "Test connection",
+        "probing": "Testing…",
+        "probeOk": "Connected ({ms}ms)",
+        "probeFail": "Connection failed",
         "baseUrlRequired": "Required (this protocol has no official default endpoint)",
         "submit": "Create",
         "cancel": "Cancel"
       },
+      "select": {
+        "searchPlaceholder": "Search model or provider…",
+        "empty": "No matching models",
+        "placeholder": "Select a model"
+      },
       "group": {
         "default": "default (main gateway)"
+      },
+      "privacyMask": {
+        "label": "Privacy masking",
+        "aria": "Enable outbound privacy masking for {name}",
+        "helper": "Replace secrets, IDs, phones, emails, and custom regexes with placeholders locally before sending and restore them on arrival (fails closed with HTTP 503 on error).",
+        "configureRules": "Configure rules"
+      }
+    },
+    "privacyMask": {
+      "title": "Outbound Privacy Masking",
+      "helper": "Per-provider bidirectional local redaction: replaces sensitive data with [[PII_TYPE_N]] before leaving this machine and restores original values locally. Only hit counts are stored.",
+      "loading": "Loading privacy masking config…",
+      "loadFailed": "Failed to load privacy masking config",
+      "retry": "Retry",
+      "saved": "Privacy masking rules saved",
+      "saveFailed": "Failed to save privacy masking rules",
+      "hitsCleared": "Hit counters cleared",
+      "hitsClearFailed": "Failed to clear hit counters",
+      "builtin": {
+        "secret": {
+          "label": "API keys & tokens",
+          "helper": "Masks sk-, mak_, AIza, ghp_, and AKIA secret tokens"
+        },
+        "id_card": {
+          "label": "National ID (18-digit checksum)",
+          "helper": "Validated with ISO 7064 check digit to avoid order-ID false positives"
+        },
+        "phone": {
+          "label": "Mobile phone numbers",
+          "helper": "Matches mainland mobile numbers including +86 prefix"
+        },
+        "email": {
+          "label": "Email addresses",
+          "helper": "Masks emails outbound and restores them inside text and tool call inputs"
+        },
+        "bank_card": {
+          "label": "Bank card numbers (Luhn)",
+          "helper": "Matches 16–19 digit sequences verified by Luhn checksum"
+        }
+      },
+      "customRules": {
+        "title": "Custom regex rules",
+        "helper": "Add custom regex patterns (e.g. EMP-\\d{6}); syntax and catastrophic ReDoS patterns are checked before saving.",
+        "namePlaceholder": "Rule name",
+        "add": "Add rule",
+        "deleteAria": "Delete rule {name}"
+      },
+      "preview": {
+        "title": "Local test preview (stays offline)"
+      },
+      "hits": {
+        "title": "Local redaction hit counters",
+        "empty": "No hits recorded yet.",
+        "clear": "Clear counters"
+      }
+    },
+    "usageDashboard": {
+      "title": "AI Usage & Cache Monitor",
+      "helper": "Unified token spend, token-weighted prompt cache hit rate, estimated USD cost, and latest 50 connectivity/runtime probe logs across chat, agents, groups, reports, and email processing.",
+      "shortcutHelper": "Token spend, prompt cache hit rate trends, surface/model billing, and latest 50 probe/error logs now live in Operations → LLM Dashboard.",
+      "shortcutCardHelper": "Inspect live token spend, cache savings, and probe logs in the Operations view",
+      "openLlmDashboard": "Open LLM Dashboard",
+      "rangeAria": "Usage time range",
+      "refreshAria": "Refresh usage analytics",
+      "loading": "Loading usage analytics…",
+      "loadError": "Failed to load usage analytics.",
+      "emptyRange": "No LLM calls recorded in this window.",
+      "emptyBreakdown": "No breakdown entries yet.",
+      "chartTitle": "Token volume & cache hit rate",
+      "legendCacheRead": "Cache read tokens",
+      "legendHitRate": "Cache hit rate",
+      "bySurfaceTitle": "By surface",
+      "byModelTitle": "By model",
+      "kpi": {
+        "totalTokens": "Total tokens",
+        "cacheHitRate": "Token cache hit rate",
+        "estimatedCost": "Estimated cost",
+        "cacheSaved": "Saved by cache"
+      },
+      "surfaces": {
+        "chat": "Chat",
+        "agent_run": "Background agents",
+        "group": "Agent group",
+        "email_classify": "Email classification",
+        "report": "Reports",
+        "matter_run": "Matter runs",
+        "auto_title": "Auto-title",
+        "compact": "Context compact",
+        "search_agent": "AI search",
+        "paused_turn": "Paused approval turn",
+        "translate": "Translation",
+        "nl_search": "NL search",
+        "memory_capture": "Memory capture",
+        "user_md_compile": "Preference compile",
+        "contact_profile": "Contact profile",
+        "task_extract": "Task extraction",
+        "py_loopback": "Python loopback"
+      },
+      "probelog": {
+        "title": "Probe & error diagnostics (latest 50)",
+        "filter": {
+          "all": "All",
+          "errors": "Errors only"
+        },
+        "clear": "Clear",
+        "cleared": "Diagnostics log cleared",
+        "clearFail": "Failed to clear diagnostics log",
+        "empty": "No diagnostic or probe logs yet."
       }
     },
     "skillPacks": {
@@ -3155,19 +3490,35 @@
       "remoteReadonly": "Remote is read-only; edit settings on the host machine"
     },
     "tabs": {
-      "general": "General",
-      "accounts": "Accounts",
+      "general": "General & Appearance",
+      "accounts": "Accounts & Sync",
       "sync": "Sync",
-      "ai": "AI",
-      "connectors": "Connectors",
+      "ai": "Models & AI",
+      "connectors": "Tools & MCP",
       "matters": "Matters",
-      "notifications": "Notifications",
-      "integrations": "Integrations",
-      "realtime": "Realtime & Storage",
+      "notifications": "Notifications & Resident",
+      "integrations": "Knowledge & Integrations",
+      "realtime": "Storage & Remote",
       "remote": "Remote Access",
       "mcp": "MCP Server",
-      "island": "Island & Updates",
       "labs": "Labs"
+    },
+    "search": {
+      "placeholder": "Search settings, env keys, or keywords…",
+      "shortcut": "⌘F",
+      "empty": "No matching settings found",
+      "aria": "Search all settings"
+    },
+    "connectorsTab": {
+      "connectors": "Tools & Connectors",
+      "mcp": "Outbound MCP Server",
+      "expandWorkspace": "Collapse settings nav",
+      "toggleMasterAria": "Toggle connectors sidebar"
+    },
+    "aiSubtabs": {
+      "all": "All",
+      "models": "Models & Routing",
+      "agent": "Agent & Capabilities"
     },
     "labs": {
       "page": {
@@ -3192,11 +3543,6 @@
       "groupAgents": {
         "label": "Multi-agent group chat (experimental)",
         "helper": "Lets the local AI service drive who speaks in a group: each member's response mode decides who wakes up, members can reply to each other, and every round is bounded by the chain cap and hourly budgets. Turn it off to go back to \"you send one message, each member replies once\". Takes effect immediately — no restart."
-      },
-      "mcpConnectors": {
-        "label": "External service connectors",
-        "helper": "Connect direct Notion / Atlassian services and Composio-managed connectors. When enabled, an external connections section appears under Connections & Tools in the sidebar.",
-        "restartHint": "Restart the backend and quit and reopen the App for the full change to take effect."
       },
       "skillCatalogPrompt": {
         "label": "Skill catalog prompt",
@@ -3574,7 +3920,8 @@
       },
       "translate": {
         "title": "Email translation",
-        "helper": "Electron-main translation pipeline; independent gateway/key/model + bilingual"
+        "helper": "Electron-main translation pipeline; independent gateway/key/model + bilingual",
+        "overrideToggle": "Use dedicated translation gateway override (advanced)"
       },
       "translateBaseUrl": {
         "label": "Translation gateway URL",
@@ -3738,6 +4085,80 @@
       }
     },
     "notifications": {
+      "desktop": {
+        "title": "macOS permission & menu bar",
+        "helper": "Grant notification permission on first use; choose Alerts style in System Settings to show action buttons directly on banners.",
+        "statusLabel": "System notification availability",
+        "supported": "Desktop notifications supported",
+        "unsupported": "Desktop banners unavailable in this runtime",
+        "authUnknown": "Permission not yet verified — click the button to trigger the macOS prompt",
+        "authPrompted": "Permission prompt triggered (open System Settings if banners are muted)",
+        "authDelivered": "macOS system banner delivery verified",
+        "alertStyleHint": "Tip: set MailAgent alert style to Alerts in System Settings → Notifications to show action buttons inline.",
+        "testBtn": "Send test notification",
+        "requestPermBtn": "Request permission & test banner",
+        "openSystemSettingsBtn": "Open System Settings",
+        "testOk": "Test notification dispatched",
+        "testPrompted": "Requested macOS notification permission — allow alerts in the system prompt",
+        "testFailed": "Failed to send test notification",
+        "openSettingsFailed": "Unable to open macOS Notification Settings",
+        "trayLabel": "Show menu bar tray & popover",
+        "trayHelper": "Pin quick access to replies, notifications, next meeting, and AI quick-capture in the menu bar.",
+        "dockBadgeLabel": "Sync Dock unread badge",
+        "dockBadgeHelper": "Show the unread notification count on the Dock icon.",
+        "matrixTitle": "Category notification rules",
+        "matrixHelper": "Bell-only mode still alerts via system banner for critical severity items.",
+        "modes": {
+          "banner": "Banner + Bell",
+          "center_only": "Bell only (critical banners)",
+          "off": "Silent (Bell only)"
+        },
+        "categories": {
+          "action_required": "Action required (urgent mail, meetings, approvals)",
+          "reviews": "Important mail & contact reviews",
+          "results": "Completed runs & reports",
+          "system": "System health & watchdog alerts"
+        },
+        "saveFailed": "Failed to save notification settings"
+      },
+      "channels": {
+        "title": "Scenario channels & deduplication",
+        "helper": "Choose per-scenario delivery channels instead of notifying across every surface at once.",
+        "suppressFocusedLabel": "Suppress system banners while MailAgent is focused",
+        "suppressFocusedHelper": "Skip non-outage macOS desktop banners when you are actively using the main window.",
+        "skipFeishuLabel": "Skip desktop banner when Feishu already pushed the email",
+        "skipFeishuHelper": "Avoid ringing both Feishu and macOS desktop banners for the same urgent email.",
+        "deliveryOptions": {
+          "both": "macOS banner + In-app bell",
+          "system_only": "macOS banner only (no bell unread count)",
+          "center_only": "In-app bell & Menu Bar only",
+          "off": "Off"
+        },
+        "mailTitle": "Email alerts",
+        "mailHelper": "Triggered when local AI flags incoming emails as urgent or important action items.",
+        "mailScopeLabel": "Banner trigger threshold",
+        "mailScopeUrgentAndImportant": "🔴 Urgent + 🟡 Important action items (Recommended)",
+        "mailScopeUrgentOnly": "🔴 Urgent action items only",
+        "mailActionsLabel": "Include email action buttons",
+        "mailActionsHelper": "Attach 'AI Draft / Follow-up' and 'Remind in 1h' actions to email alerts.",
+        "meetingTitle": "Meeting reminders & Meeting Prep preset",
+        "meetingHelper": "Alert before scheduled meetings with join links, calendar detail deep-link, and AI sidebar.",
+        "meetingLeadLabel": "Reminder lead time",
+        "meetingLeadMinutes": "{count} min before",
+        "meetingActionsLabel": "Include meeting action buttons (Join / AI Follow-up)",
+        "meetingActionsHelper": "Launch meeting clients directly or open the event drawer with the AI sidebar.",
+        "meetingPrepLabel": "Enable 'Meeting Prep' preset agent",
+        "meetingPrepHelper": "Attach brief generation directly to meeting alerts, on-demand or automatically before start.",
+        "meetingPrepModeLabel": "Preparation schedule mode",
+        "meetingPrepOnDemand": "On-demand ('Prepare now' button on reminder — zero idle tokens)",
+        "meetingPrepAutoBefore": "Auto-prepare silently before start (button becomes 'View prep brief')",
+        "meetingPrepLeadLabel": "Auto-prepare lead time",
+        "backgroundTitle": "Background jobs & system alerts",
+        "backgroundHelper": "Route background Custom Agent runs, reports, and watchdog health alerts.",
+        "agentResultsLabel": "Custom Agent & report completions",
+        "systemAlertsLabel": "System health & DavMail watchdog alerts",
+        "saveFailed": "Failed to save notification preferences"
+      },
       "feishu": {
         "title": "Feishu app bot",
         "helper": "Important mail push + interactive reply buttons → Openclaw",
@@ -4073,8 +4494,14 @@
         "running": "Running · {count, plural, one {# active key} other {# active keys}}"
       },
       "localUrl": {
-        "label": "Local address",
-        "hint": "For clients on this Mac (such as Claude Code)"
+        "label": "Local Streamable HTTP URL",
+        "hint": "Standard /mcp endpoint (stateless POST & stateful session/SSE) for local clients such as Claude Code or Cursor",
+        "copy": "Copy local Streamable HTTP URL"
+      },
+      "sseUrl": {
+        "label": "Local HTTP+SSE URL",
+        "hint": "Legacy HTTP+SSE endpoint (/mcp/sse) for clients that only support legacy SSE transport",
+        "copy": "Copy local SSE URL"
       },
       "publicUrl": {
         "label": "Public address",
@@ -4122,6 +4549,9 @@
         "createdAt": "Created {time}",
         "lastUsedAt": "Last used {time}",
         "neverUsed": "Never used",
+        "expiresAt": "Expires {time}",
+        "writeRpmBadge": "Write cap {limit}/min",
+        "disabledToolsBadge": "{count} tools disabled",
         "rotate": "Rotate",
         "revoke": "Revoke",
         "revoked": "Revoked “{label}”",
@@ -4161,6 +4591,42 @@
         "title": "Edit permissions for “{label}”",
         "desc": "Changes take effect immediately. The key itself stays the same, so configured clients do not need updating.",
         "submit": "Save"
+      },
+      "policy": {
+        "advancedToggle": "Fine-grained scopes, TTL & rate limits",
+        "scopeModeLabel": "Permission granularity",
+        "usePresetMode": "Use base presets",
+        "useGranularMode": "Pick scopes individually",
+        "readScopesLabel": "Read permissions",
+        "writeScopesLabel": "Write & run permissions",
+        "selectAllRead": "Select all read",
+        "ttlLabel": "Key expiration",
+        "ttlNever": "Never expires",
+        "ttlDays": "Expires in {days} days",
+        "writeRpmLabel": "Write calls per minute",
+        "writeRpmUnlimited": "Unlimited",
+        "disabledToolsLabel": "Per-tool allow/block for this key",
+        "toolEnabled": "Allowed",
+        "toolDisabled": "Blocked"
+      },
+      "clientConfig": {
+        "rowTitle": "One-click client configuration",
+        "rowHelper": "Creates a .bak backup and surgically merges the MailAgent MCP entry into your local client config.",
+        "openButton": "Configure client",
+        "dialogTitle": "Configure local MCP client",
+        "dialogDesc": "Updates only mcpServers.mailagent while preserving all other config keys and writing a .bak backup.",
+        "targetLabel": "Target client",
+        "modeLabel": "Transport mode",
+        "modeHttp": "Streamable HTTP (/mcp)",
+        "modeSse": "HTTP+SSE (/mcp/sse)",
+        "modeStdio": "Local stdio wrapper",
+        "apiKeyLabel": "Access key (Bearer key)",
+        "apiKeyHint": "Leave blank to insert the <YOUR_MAILAGENT_API_KEY> placeholder for previewing or manual editing.",
+        "previewButton": "Preview changes",
+        "writeButton": "Write config",
+        "wroteSuccess": "Wrote config to {path}",
+        "backupCreated": "Backup created: {path}",
+        "failed": "Failed to write config"
       },
       "scopes": {
         "email_read": {
@@ -4226,6 +4692,7 @@
         "copyKey": "Copy key",
         "copyNotion": "Copy Notion config",
         "copyHttp": "Copy HTTP client config",
+        "copySse": "Copy SSE client config",
         "done": "Done"
       },
       "revoke": {
@@ -4358,71 +4825,6 @@
       "autoDownloadHint": "Download new versions in the background automatically, then prompt to restart and install.",
       "unsignedNotice": "This is an ad-hoc signed build: update checks work, but new versions must be downloaded and installed manually from the releases page (in-app one-click update requires a signed build).",
       "openDownloadCta": "Open download page"
-    },
-    "island": {
-      "heading": "Dynamic Island integration",
-      "channel": "ping-island · /tmp/island.sock · ad-hoc",
-      "statusLabel": "Connection",
-      "socketPath": "Socket path",
-      "testConnection": "Test connection",
-      "enable": "Enable Dynamic Island",
-      "enableHint": "Safe to leave on when ping-island.app is not running; main process fails open without blocking sync.",
-      "testing": "Probing…",
-      "testOk": "Island connected",
-      "testFail": "Island probe failed",
-      "lastProbe": "Last probe {agoSec}s ago",
-      "toggleOn": "On",
-      "toggleOff": "Off",
-      "installHint": "/tmp/island.sock missing — ping-island.app is not running or not installed.",
-      "installLinkLabel": "Get the fork (feat/mail-brand)",
-      "state": {
-        "idle": "Not probed",
-        "connected": "Connected",
-        "degraded": "Degraded",
-        "disconnected": "Not running",
-        "devDisabled": "Dev · disabled",
-        "disabled": "Off"
-      },
-      "page": {
-        "eyebrow": "ISLAND & UPDATES",
-        "title": "Island & Updates",
-        "intro": "ping-island bridge status and app auto-update channel."
-      },
-      "mailNotifyScope": {
-        "label": "Email card scope",
-        "helper": "Controls which emails pop a card on the Dynamic Island. \"Important only\" (default) pops only when the AI rates an email urgent or important; \"All\" pops for every new email (noisy). Calendar reminders, AI approvals and other non-email cards are unaffected.",
-        "important": "Important only (AI-rated urgent / important)",
-        "all": "All (every new email pops)",
-        "placeholder": "Important only (default)"
-      },
-      "accent": {
-        "label": "Island accent color",
-        "helper": "Accent color of Dynamic Island cards, independent of the app's own accent. Defaults to coral.",
-        "coral": "Coral (default)",
-        "cobalt": "Cobalt",
-        "teal": "Teal",
-        "rose": "Rose",
-        "slate": "Slate",
-        "olive": "Olive",
-        "placeholder": "Coral (default)"
-      },
-      "islandTheme": {
-        "label": "Island appearance",
-        "helper": "Dark or light background for Dynamic Island cards, independent of the app's own appearance setting. Defaults to dark.",
-        "dark": "Dark (default)",
-        "light": "Light",
-        "placeholder": "Dark (default)"
-      },
-      "digest": {
-        "heading": "Daily digest",
-        "sectionHelper": "Periodically summarizes recent email and pushes a digest card to the Dynamic Island; requires the Island to be enabled.",
-        "enable": "Enable daily digest",
-        "enableHint": "At the configured hours, automatically summarizes the period's email (AI summary + suggested to-dos) and pushes it as an Island card. Off by default.",
-        "hours": {
-          "label": "Digest hours",
-          "helper": "Which hours of the day to run, 24-hour clock, comma-separated (local timezone). E.g. 9,18 runs at 9 AM and 6 PM."
-        }
-      }
     },
     "folder": {
       "section": {
@@ -4617,15 +5019,6 @@
     }
   },
   "titleBar": {
-    "island": {
-      "label": "Island",
-      "idle": "Dynamic Island warming up…",
-      "connected": "Dynamic Island connected",
-      "degraded": "Dynamic Island degraded — see Settings",
-      "disconnected": "ping-island.app not running",
-      "devDisabled": "Dev · Dynamic Island disabled",
-      "disabled": "Dynamic Island off"
-    },
     "synced": "Synced",
     "themeCycle": "Theme · click to switch",
     "update": {
@@ -5206,7 +5599,14 @@
           "disabledHint": "Connector support is off (controlled by MAILAGENT_MCP_CONNECTORS); grants saved here will not take effect yet.",
           "warn": "Writable grants the \"read + create + update\" ceiling: this agent's background runs may create and modify data in the service (delete is never available).",
           "empty": "No external service is connected yet. Connect one in Settings → AI first, then grant it to this agent here.",
-          "notConnected": "Not connected"
+          "notConnected": "Not connected",
+          "allowlistAll": "Tool allowlist: all granted tools",
+          "allowlistCustom": "Tool allowlist: {count} selected",
+          "allToolsActive": "No per-tool restriction: all tools allowed by the tier remain active",
+          "selectedToolsCount": "{count}/{total} tools allowed",
+          "resetTools": "Reset to all",
+          "toolsLoading": "Loading tool list…",
+          "toolsEmpty": "No synced tools yet — sync the connector first in External Connections."
         },
         "library": {
           "title": "Library",
@@ -8185,5 +8585,40 @@
     "E_RUN_ERROR": "Run failed",
     "E_WORKER_CRASH": "Background worker exited unexpectedly",
     "E_RUN_ACTIVE": "Another run is already active in this session"
+  },
+  "tray": {
+    "health": {
+      "local": "Local Mail.app mode",
+      "ok": "DavMail connected",
+      "warning": "Connection degraded",
+      "critical": "Re-auth or check required",
+      "unknown": "Status unknown"
+    },
+    "refresh": "Refresh",
+    "settings": "Notification & tray settings",
+    "openApp": "Open window",
+    "newChat": "New chat",
+    "openToday": "Today",
+    "composeEmail": "Compose email",
+    "viewAllToday": "View all Today",
+    "quit": "Quit MailAgent",
+    "quickPromptPlaceholder": "Ask AI to search, draft, or act…",
+    "nextUpStarted": "In progress",
+    "emptyAll": "All caught up for today",
+    "llmDashboard": "LLM Metrics",
+    "activeGateway": "Active Model",
+    "cacheHit24h": "24h Cache Hit",
+    "providersActive": "{enabled}/{total} providers ready",
+    "noProvider": "No provider configured",
+    "openLlmTitle": "Open Operations LLM Dashboard",
+    "section": {
+      "notifications": "Unread notifications",
+      "pendingReplies": "Pending replies"
+    },
+    "emptyNotifications": "No unread notifications",
+    "emptyReplies": "Inbox replies caught up",
+    "footer": {
+      "ai24h": "24h AI usage"
+    }
   }
 }

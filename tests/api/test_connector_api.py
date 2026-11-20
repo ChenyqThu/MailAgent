@@ -75,15 +75,11 @@ def flag_on_client(client, fresh_agent_cfg):
 # ── flag off（默认）：除 callback 外全部 409 ─────────────────────────────────────
 
 
-def test_connector_flag_defaults_off():
-    """灰度纪律 pin：pydantic 默认必须 False（ship off → dogfood → cutover，island 模式）。
-
-    这条红了 = 有人把 cutover 顺手做了 —— 翻默认是产品决定（且要连 Node envBool 一起翻，
-    见 tests/config/test_flag_cross_language.py），不是实现细节。
-    """
+def test_connector_flag_defaults_on_after_cutover():
+    """2026-11-20 cutover：pydantic 默认必须 True（与 Node envBool 两侧同开），显式 false 作应急回退。"""
     from src.config import Config
 
-    assert Config.model_fields["mcp_connectors_enabled"].default is False
+    assert Config.model_fields["mcp_connectors_enabled"].default is True
 
 
 def test_flag_off_all_non_callback_endpoints_409(flag_off_client):
@@ -224,10 +220,10 @@ def test_sync_persists_tools_and_status(flag_on_client, fresh_agent_cfg, monkeyp
     assert t.status_code == 200
     tools = {x["name"]: x for x in t.json()["data"]["tools"]}
     assert set(tools) == {"search", "create_page", "update_page"}
-    # 折算（08-05 三档）：默认档 = auto —— write/update 也不再默认关。
+    # Phase 5 安全收紧：非破坏 read 默认 auto；write / update / destructive 默认 ask。
     assert tools["search"]["effective_mode"] == "auto"
-    assert tools["create_page"]["effective_mode"] == "auto"
-    assert tools["update_page"]["effective_mode"] == "auto"
+    assert tools["create_page"]["effective_mode"] == "ask"
+    assert tools["update_page"]["effective_mode"] == "ask"
     assert tools["search"]["mode_override"] is None
     assert tools["update_page"]["crud_type"] == "update"
     # PR2 裁决① — destructive 位随清单返回（审批卡红警告的数据源）。
@@ -953,9 +949,9 @@ def test_tool_mode_roundtrip(flag_on_client, fresh_agent_cfg):
     d = _set_tool(flag_on_client, "create_page", {"mode": "off"}).json()["data"]
     assert d["mode_override"] == "off" and d["effective_mode"] == "off"
 
-    # null 清覆盖 → 回默认档 auto。
+    # null 清覆盖 → write/destructive 工具回默认档 ask。
     d = _set_tool(flag_on_client, "create_page", {"mode": None}).json()["data"]
-    assert d["mode_override"] is None and d["effective_mode"] == "auto"
+    assert d["mode_override"] is None and d["effective_mode"] == "ask"
 
     # 响应即库中事实：tools 端点（同一折算函数）读到一样的档位。
     d = _set_tool(flag_on_client, "search", {"mode": "auto"}).json()["data"]
@@ -966,7 +962,7 @@ def test_tool_mode_roundtrip(flag_on_client, fresh_agent_cfg):
     }
     assert tools["search"]["mode_override"] == "auto"
     assert tools["create_page"]["mode_override"] is None
-    assert tools["create_page"]["effective_mode"] == "auto"
+    assert tools["create_page"]["effective_mode"] == "ask"
 
 
 def test_tool_mode_every_listed_tool_is_configurable(flag_on_client, fresh_agent_cfg):
@@ -1405,3 +1401,387 @@ def test_failed_composio_row_can_be_replaced_by_a_direct_connection(
     r = flag_on_client.post("/api/connector/atlassian/oauth/start")
     assert r.status_code == 200
     assert spy.called == ["direct"]
+
+
+def test_custom_sse_connector_create_update_and_invoke_images(
+    flag_on_client, fresh_agent_cfg, monkeypatch
+):
+    """WS-1A: custom SSE connector validates server_url, encrypts headers, and threads images."""
+    import src.connectors.client as client_mod
+
+    bad = flag_on_client.post(
+        "/api/connector/custom",
+        json={
+            "connector_id": "sse_bad",
+            "display_name": "SSE Bad",
+            "transport": "sse",
+            "server_url": "   ",
+        },
+    )
+    assert bad.status_code == 400
+    assert bad.json()["error"]["code"] == "E_INVALID_ARG"
+
+    created = flag_on_client.post(
+        "/api/connector/custom",
+        json={
+            "connector_id": "custom_sse_srv",
+            "display_name": "Custom SSE",
+            "transport": "sse",
+            "server_url": "https://mcp.sse.example/sse",
+            "headers": {"Authorization": "Bearer secret-sse-tok"},
+        },
+    )
+    assert created.status_code == 200, created.text
+    data = created.json()["data"]
+    assert data["transport"] == "sse"
+    assert data["is_custom"] is True
+    assert data["custom_header_names"] == ["Authorization"]
+    assert "secret-sse-tok" not in created.text
+
+    headers_dec, env_dec = fresh_agent_cfg.get_connector_custom_secrets("custom_sse_srv")
+    assert headers_dec == {"Authorization": "Bearer secret-sse-tok"}
+    assert env_dec == {}
+
+    updated = flag_on_client.patch(
+        "/api/connector/custom/custom_sse_srv",
+        json={"display_name": "Custom SSE v2", "server_url": "http://127.0.0.1:9001/sse"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["data"]["transport"] == "sse"
+    assert updated.json()["data"]["server_url"] == "http://127.0.0.1:9001/sse"
+
+    fresh_agent_cfg.sync_connector_tools(
+        "custom_sse_srv",
+        [{"name": "shot", "description": "Shot", "input_schema": None,
+          "output_schema": None, "crud_type": "read"}],
+    )
+
+    class _ImageStubClient:
+        def __init__(self, connector_id, **_kwargs):
+            self.connector_id = connector_id
+
+        async def call_tool(self, tool_name, arguments=None, **_kwargs):
+            return {
+                "content": "screenshot captured",
+                "images": [{"media_type": "image/png", "data": "iVBORw0KGgo="}],
+                "is_error": False,
+                "truncated": False,
+            }
+
+    monkeypatch.setattr(client_mod, "ConnectorClient", _ImageStubClient)
+    inv = flag_on_client.post("/api/connector/custom_sse_srv/tools/shot/invoke")
+    assert inv.status_code == 200, inv.text
+    inv_data = inv.json()["data"]
+    assert inv_data["content"] == "screenshot captured"
+    assert inv_data["images"] == [{"media_type": "image/png", "data": "iVBORw0KGgo="}]
+
+
+def test_managed_local_endpoints_reject_cf_jwt_require_local_token(
+    flag_on_client, monkeypatch
+):
+    """WS-3: 6 desktop-only endpoints hang verify_local_token -> valid CF JWT alone gets 403."""
+    import src.api.auth as auth_mod
+    from src.connectors import local_installer
+
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+
+    class _Key:
+        key = "irrelevant"
+
+    monkeypatch.setattr(auth_mod._jwk_client, "get_signing_key_from_jwt", lambda _t: _Key())
+    monkeypatch.setattr(auth_mod.jwt, "decode", lambda *a, **k: {"email": "owner@example.com"})
+    monkeypatch.setattr(auth_mod, "_resolve_allowed_emails", lambda: {"owner@example.com"})
+    local_tok = "ephemeral-local-secret-ws3"
+    monkeypatch.setattr(auth_mod, "_LOCAL_API_TOKEN", local_tok)
+
+    cf_headers = {"Cf-Access-Jwt-Assertion": "hdr.payload.sig"}
+    local_headers = {auth_mod.LOCAL_TOKEN_HEADER: local_tok}
+
+    cases = [
+        ("GET", "/api/connector/system-permissions", None),
+        ("POST", "/api/connector/system-permissions/open", {"kind": "accessibility"}),
+        ("GET", "/api/connector/browser_use/install-status", None),
+        ("POST", "/api/connector/browser_use/install", {"mode": "cdp_chrome"}),
+        ("POST", "/api/connector/browser_use/uninstall", None),
+        ("PATCH", "/api/connector/browser_use/runtime-options", {"mode": "extension"}),
+    ]
+    for method, path, body in cases:
+        r = flag_on_client.request(method, path, json=body, headers=cf_headers)
+        assert r.status_code == 403, f"{method} {path} should reject CF-only with 403, got {r.status_code}"
+
+    monkeypatch.setattr(
+        local_installer,
+        "check_system_permissions",
+        lambda: {"platform": "darwin", "accessibility": "granted", "screen_recording": "denied"},
+    )
+    ok = flag_on_client.get("/api/connector/system-permissions", headers=local_headers)
+    assert ok.status_code == 200
+    assert ok.json()["data"]["accessibility"] == "granted"
+
+
+def test_managed_local_install_runtime_options_and_uninstall_lifecycle(
+    flag_on_client, fresh_agent_cfg, tmp_path, monkeypatch
+):
+    """WS-3 end-to-end API flow: catalog -> install -> options -> uninstall."""
+    import src.connectors.client as client_mod
+    from src.connectors import local_installer
+    from src.connectors.stdio_pool import stdio_pool
+
+    monkeypatch.setattr(local_installer, "_RUNTIMES_DIR_OVERRIDE", tmp_path / "rt")
+    # 1) Catalog exposes browser_use & desktop_use under track=managed_local
+    cat = flag_on_client.get("/api/connector/catalog")
+    assert cat.status_code == 200
+    entries = {e["connector_id"]: e for e in cat.json()["data"]["entries"]}
+    assert entries["browser_use"]["track"] == "managed_local"
+    assert entries["browser_use"]["supported_modes"] == [
+        "cdp_chrome",
+        "extension",
+        "isolated_profile",
+    ]
+    assert entries["browser_use"]["runtime_installed"] is False
+    assert entries["desktop_use"]["track"] == "managed_local"
+    assert entries["desktop_use"]["requires_permissions"] == [
+        "accessibility",
+        "screen_recording",
+    ]
+
+    # Reserved IDs cannot be hijacked via /custom and cannot use /oauth/start
+    conflict = flag_on_client.post(
+        "/api/connector/custom",
+        json={
+            "connector_id": "browser_use",
+            "display_name": "Hack",
+            "transport": "stdio",
+            "command": "echo",
+        },
+    )
+    assert conflict.status_code == 409
+    bad_oauth = flag_on_client.post("/api/connector/browser_use/oauth/start")
+    assert bad_oauth.status_code == 400
+    assert bad_oauth.json()["error"]["code"] == "E_CONNECTOR_UNSUPPORTED"
+
+    # 2) Install browser_use (mock npm + stdio manifest sync)
+    def _fake_install_browser_use(staging_dir):
+        ep = staging_dir / "pkg" / "node_modules" / "@playwright" / "mcp" / "cli.js"
+        ep.parent.mkdir(parents=True, exist_ok=True)
+        ep.write_text("// stub", encoding="utf-8")
+        return local_installer._write_manifest(
+            staging_dir,
+            {
+                "connector_id": "browser_use",
+                "version": "0.0.50",
+                "entrypoint": "pkg/node_modules/@playwright/mcp/cli.js",
+                "installed_at": 1,
+                "platform": "darwin",
+            },
+        )
+
+    monkeypatch.setattr(local_installer, "_install_browser_use", _fake_install_browser_use)
+    monkeypatch.setattr(local_installer, "_find_node", lambda: "/mock/node")
+
+    class _BrowserSyncStub:
+        def __init__(self, connector_id, **_kwargs):
+            self.connector_id = connector_id
+
+        async def list_tools_manifest(self):
+            return [
+                {
+                    "name": "browser_navigate",
+                    "description": "Navigate",
+                    "input_schema": None,
+                    "output_schema": None,
+                    "crud_type": "write",
+                }
+            ]
+
+    monkeypatch.setattr(client_mod, "ConnectorClient", _BrowserSyncStub)
+
+    inst = flag_on_client.post(
+        "/api/connector/browser_use/install",
+        json={"mode": "cdp_chrome", "cdp_url": "http://127.0.0.1:9222"},
+    )
+    assert inst.status_code == 200, inst.text
+    inst_data = inst.json()["data"]
+    assert inst_data["ok"] is True
+    assert inst_data["installed"] is True
+    assert inst_data["version"] == "0.0.50"
+    assert inst_data["mode"] == "cdp_chrome"
+    summary = inst_data["connector"]
+    assert summary["source"] == "managed_local"
+    assert summary["is_custom"] is False
+    assert summary["runtime_installed"] is True
+    assert summary["stdio_command"]["args"][1:] == [
+        "--cdp-endpoint=http://127.0.0.1:9222",
+    ]
+
+    # Tools were synced into agent_config.db
+    tools = fresh_agent_cfg.list_connector_tools("browser_use")
+    assert [t.tool_name for t in tools] == ["browser_navigate"]
+
+    # 3) install-status + PATCH /runtime-options invalidates stdio_pool
+    st_res = flag_on_client.get("/api/connector/browser_use/install-status")
+    assert st_res.status_code == 200
+    assert st_res.json()["data"]["installed"] is True
+
+    invalidated: list[str] = []
+
+    async def _spy_invalidate(cid: str) -> None:
+        invalidated.append(cid)
+
+    monkeypatch.setattr(stdio_pool, "invalidate", _spy_invalidate)
+
+    bad_opt = flag_on_client.patch(
+        "/api/connector/browser_use/runtime-options",
+        json={"mode": "invalid_mode"},
+    )
+    assert bad_opt.status_code == 422
+    assert bad_opt.json()["error"]["code"] == "E_INVALID_RUNTIME_OPTION"
+
+    patch_res = flag_on_client.patch(
+        "/api/connector/browser_use/runtime-options",
+        json={"mode": "extension"},
+    )
+    assert patch_res.status_code == 200, patch_res.text
+    assert invalidated == ["browser_use"]
+    pdata = patch_res.json()["data"]
+    assert pdata["mode"] == "extension"
+    assert pdata["connector"]["runtime_mode"] == "extension"
+    assert pdata["connector"]["stdio_command"]["args"][1:] == ["--extension"]
+
+    # List reflects updated managed_local summary and never marks it custom
+    rows = {
+        c["connector_id"]: c
+        for c in flag_on_client.get("/api/connector").json()["data"]["connectors"]
+    }
+    assert rows["browser_use"]["is_custom"] is False
+    assert rows["browser_use"]["runtime_mode"] == "extension"
+
+    # 4) System permissions open endpoint + invalid kind check
+    monkeypatch.setattr(
+        local_installer,
+        "open_system_permission_pane",
+        lambda kind: {"ok": True, "kind": kind, "opened": True},
+    )
+    open_res = flag_on_client.post(
+        "/api/connector/system-permissions/open",
+        json={"kind": "accessibility"},
+    )
+    assert open_res.status_code == 200
+    assert open_res.json()["data"]["opened"] is True
+
+    # 5) Uninstall cleans runtime dir, invalidates pool, and removes DB row
+    uninst = flag_on_client.post("/api/connector/browser_use/uninstall")
+    assert uninst.status_code == 200, uninst.text
+    assert uninst.json()["data"]["installed"] is False
+    assert fresh_agent_cfg.get_connector("browser_use") is None
+    assert not (tmp_path / "rt" / "browser_use").exists()
+    assert invalidated == ["browser_use", "browser_use"]
+
+
+def test_invoke_endpoint_belt3_matter_computer_use_http_roundtrip(
+    flag_on_client, fresh_agent_cfg, tmp_path, monkeypatch
+):
+    """WS-5 Belt 3 HTTP gate: router accepts optional caller job_id/dispatch_id/child_tool and verifies DB."""
+    import json as _json
+    import sqlite3 as _sqlite3
+    import time as _time
+
+    import src.config as cfg_mod
+    import src.connectors.client as client_mod
+    from src.mail.sync_store import SyncStore
+
+    db_path = str(tmp_path / "belt3_http.db")
+    monkeypatch.setattr(cfg_mod.config, "sync_store_db_path", db_path)
+    SyncStore(db_path)
+    now_ms = int(_time.time() * 1000)
+    conn = _sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO matter (public_id, title, created_at, updated_at) "
+            "VALUES ('MAT-HTTP-1', 'OA Form', ?, ?)",
+            (now_ms, now_ms),
+        )
+        mid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO matter_item (matter_id, kind, title, status, owner_kind, "
+            "created_by_kind, created_at, updated_at) "
+            "VALUES (?, 'action', 'Submit OA', 'open', 'user', 'user', ?, ?)",
+            (mid, now_ms, now_ms),
+        )
+        iid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO async_jobs (job_type, params_json, status, created_at, updated_at) "
+            "VALUES ('matter_item_run', ?, 'running', ?, ?)",
+            (
+                _json.dumps(
+                    {
+                        "computer_use_draft": {
+                            "allowed_apps": [],
+                            "allowed_domains": ["oa.company.com"],
+                            "connectors": ["browser_use"],
+                        }
+                    }
+                ),
+                _time.time(),
+                _time.time(),
+            ),
+        )
+        jid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO matter_item_dispatch (matter_id, item_id, state, executor_kind, "
+            "executor_id, exec_profile, async_job_id, created_by_kind, dispatched_at, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, 'running', 'agent', 'matter_followup', 'propose_only', ?, 'user', ?, ?, ?)",
+            (mid, iid, jid, now_ms, now_ms, now_ms),
+        )
+        did = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+
+    fresh_agent_cfg.upsert_connector(
+        "browser_use", server_url="", display_name="Browser Use", transport="stdio", source="managed_local"
+    )
+    fresh_agent_cfg.update_connector_state("browser_use", status="connected")
+    fresh_agent_cfg.sync_connector_tools(
+        "browser_use",
+        [
+            {"name": "browser_click", "description": "Click", "input_schema": None, "output_schema": None, "crud_type": "write"},
+        ],
+    )
+    fresh_agent_cfg.sync_connector_tools(
+        "notion",
+        [
+            {"name": "notion_edit", "description": "Edit", "input_schema": None, "output_schema": None, "crud_type": "write"},
+        ],
+    )
+
+    class _StubClient:
+        def __init__(self, connector_id, **_k):
+            self.connector_id = connector_id
+
+        async def call_tool(self, tool_name, arguments=None, **_k):
+            return {"content": f"{self.connector_id}:{tool_name}", "images": [], "is_error": False, "truncated": False}
+
+    monkeypatch.setattr(client_mod, "ConnectorClient", _StubClient)
+
+    valid_caller = {
+        "context_mode": "matter_followup",
+        "agent_id": "matter:MAT-HTTP-1",
+        "job_id": int(jid),
+        "dispatch_id": int(did),
+        "child_tool": "computer_use_run",
+    }
+    ok = flag_on_client.post(
+        "/api/connector/browser_use/tools/browser_click/invoke",
+        json={"arguments": {"ref": "e1"}, "caller": valid_caller},
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["data"]["content"] == "browser_use:browser_click"
+
+    denied = flag_on_client.post(
+        "/api/connector/notion/tools/notion_edit/invoke",
+        json={"arguments": {}, "caller": valid_caller},
+    )
+    assert denied.status_code == 403
+    assert denied.json()["error"]["code"] == "E_CONNECTOR_GRANT_DENIED"

@@ -31,11 +31,11 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from loguru import logger
 
-from src.connectors.catalog import catalog_ids, get_direct_entry
+from src.connectors.catalog import catalog_ids, get_direct_entry, get_managed_local_entry
 from src.connectors.composio_catalog import get_catalog_entry
 
 
@@ -48,20 +48,49 @@ class ConnectorDef:
     display_name: str
     #: OAuth DCR 注册时的 client_name（对方授权页展示给用户看的名字）。`custom_mcp` 轨才用。
     client_name: str = "MailAgent"
-    #: transport 留位：MVP 只实现 streamable_http，stdio 只留表结构（PRD Assumptions）。
+    #: transport 路由（streamable_http | sse | stdio）。
     transport: str = "streamable_http"
     #: 装配路线（`store.CONNECTOR_SOURCES`）：`composio` = 静态 header 打托管 MCP endpoint；
-    #: `custom_mcp` = OAuth 2.1/PKCE/DCR 直连。
+    #: `custom_mcp` = 直连远端 MCP 或用户自定义 HTTP/stdio MCP。
     source: str = "custom_mcp"
+    #: Phase 5 (WP-5B.4) — 是否为用户自定义 MCP、自定义 HTTP header 名、与 stdio 命令配置。
+    is_custom: bool = False
+    custom_header_names: tuple[str, ...] = ()
+    stdio_command: Optional[dict[str, Any]] = None
+    stdio_env_keys: tuple[str, ...] = ()
 
 
 def _def_from_row(row) -> ConnectorDef:
+    in_catalog = (
+        get_direct_entry(row.connector_id) is not None
+        or get_catalog_entry(row.connector_id) is not None
+        or get_managed_local_entry(row.connector_id) is not None
+    )
+    header_names = getattr(row, "custom_header_names", ()) or ()
+    stdio_cmd = getattr(row, "stdio_command", None)
+    stdio_env_keys = getattr(row, "stdio_env_keys", ()) or ()
+    transport = row.transport or "streamable_http"
+    if row.source == "managed_local":
+        from src.connectors.local_installer import resolve_stdio_command
+
+        transport = "stdio"
+        stdio_cmd = resolve_stdio_command(
+            row.connector_id, getattr(row, "runtime_config", None)
+        )
+    is_custom = bool(
+        row.source == "custom_mcp"
+        and (transport == "stdio" or header_names or not in_catalog)
+    )
     return ConnectorDef(
         connector_id=row.connector_id,
         server_url=row.server_url or "",
         display_name=row.display_name or row.connector_id,
-        transport=row.transport or "streamable_http",
+        transport=transport,
         source=row.source,
+        is_custom=is_custom,
+        custom_header_names=tuple(header_names),
+        stdio_command=stdio_cmd,
+        stdio_env_keys=tuple(stdio_env_keys),
     )
 
 
@@ -90,6 +119,22 @@ def _def_from_catalog(connector_id: str, *, row_lookup_ok: bool) -> Optional[Con
             server_url=direct.server_url if row_lookup_ok else "",
             display_name=direct.display_name,
             source="custom_mcp",
+        )
+    local = get_managed_local_entry(connector_id)
+    if local is not None:
+        stdio_cmd = None
+        if row_lookup_ok:
+            from src.connectors.local_installer import resolve_stdio_command
+
+            stdio_cmd = resolve_stdio_command(local.connector_id, None)
+        return ConnectorDef(
+            connector_id=local.connector_id,
+            server_url="",
+            display_name=local.display_name,
+            transport="stdio",
+            source="managed_local",
+            is_custom=False,
+            stdio_command=stdio_cmd,
         )
     entry = get_catalog_entry(connector_id)
     if entry is None:

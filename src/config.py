@@ -710,18 +710,19 @@ class Config(BaseSettings):
     )
 
     # =========================================================================
-    # MCP Connector (08-01 阶段 1 PR1) — serve-api 持 MCP client 连外部服务
-    # (Notion / Atlassian)。凭证走 agent_config.db external_credential (Fernet)。
+    # MCP Connector — serve-api 持 MCP client 连外部服务与本机受管运行时
+    # (Notion / Atlassian / Composio / browser_use / desktop_use)。
+    # 凭证走 agent_config.db external_credential (Fernet)。
     # 🔴 字段名 mcp_connectors_enabled ≠ env MAILAGENT_MCP_CONNECTORS → 必须
     #    validation_alias (pydantic v2 忽略 Field(env=), 见本类顶 model_config 注释)。
     # =========================================================================
     mcp_connectors_enabled: bool = Field(
-        default=False, validation_alias="MAILAGENT_MCP_CONNECTORS",
+        default=True, validation_alias="MAILAGENT_MCP_CONNECTORS",
         description=(
-            "MCP connector 总闸 (灰度, 沿用 island ship-off→dogfood→cutover 模式): "
-            "off 时 /api/connector/* 除 oauth/callback 外全部 409, 工具注入 (PR2) "
-            "整体不激活。callback 永远只认 state 能力令牌 (off 时无活 rendezvous, "
-            "天然 404)。pydantic 载体 = 翻开关需重启 serve-api。"
+            "MCP connector 总闸 (2026-11-20 cutover 默认开; 显式 false 作应急回退): "
+            "off 时 /api/connector/* 除 oauth/callback 外全部 409, 工具注入整体不激活。"
+            "callback 永远只认 state 能力令牌 (off 时无活 rendezvous, 天然 404)。"
+            "pydantic 载体 = 翻开关需重启 serve-api。"
         ),
     )
     connector_timeout_seconds: float = Field(

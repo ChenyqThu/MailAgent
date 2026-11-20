@@ -505,7 +505,6 @@
       "openAiPanel": "开关侧边 AI 对话",
       "sendChat": "发送 AI 消息",
       "newChat": "新建 AI 对话",
-      "toggleIsland": "切换灵动岛",
       "toggleLocale": "切换语言",
       "calViewDay": "日视图",
       "calViewWeek": "周视图",
@@ -762,8 +761,10 @@
     "subtitle": "内置工具审批档与外部服务连接的统一配置台",
     "sectionBuiltin": "内置工具",
     "sectionExternal": "外部连接",
+    "addCustomMcp": "添加自定义 MCP",
     "composioAccount": "Composio 账户",
     "directTrackNote": "直连官方 MCP 端点（OAuth 授权页由服务方提供），不经任何第三方中转，也不需要 API Key。",
+    "managedLocalTrackNote": "在本机安装并作为独立本地 stdio 运行时工作，不经 Composio 云端中转，也无需第三方托管凭证。",
     "toolCountUnknown": "工具清单连接后获取",
     "switchTrack": "切换轨道（断开并清除配置）",
     "supersededByDirect": "这条连接走的是 Composio 托管，而该服务已改为直连官方端点（不需要第三方授权）。用「切换轨道」断开并清除配置，再从目录直连重连。",
@@ -1152,6 +1153,8 @@
       "contact_update_fields": "修改联系人资料",
       "contact_set_manager": "设置联系人上级",
       "notion_agent_chat": "咨询 Notion Agent",
+      "tool_search": "检索扩展工具",
+      "computer_use_run": "操作桌面与浏览器",
       "plan_update": "更新计划",
       "suggest_followups": "准备追问建议",
       "submit_feedback": "提交产品反馈",
@@ -1302,6 +1305,38 @@
       "sensitiveWarn": "正文含敏感词：{terms} —— 发送前请再核对。",
       "expired": "审批已过期，请让助手重新发起",
       "countdown": "审批有效期 {time}"
+    },
+    "computerUseCard": {
+      "title": "操作桌面与浏览器",
+      "goal": "执行目标",
+      "emptyGoal": "（未填写目标）",
+      "target": "操作面",
+      "targetValue": {
+        "auto": "自动选择（浏览器 / 桌面）",
+        "browser": "浏览器",
+        "desktop": "桌面应用"
+      },
+      "allowedApps": "允许应用",
+      "allowedDomains": "允许域名",
+      "unboundedScope": "未限定应用/域名白名单",
+      "stopBeforeSubmit": "提交前停靠",
+      "stopBeforeSubmitOn": "已开启 · 遇到提交 / 发送 / 审批 / 付款按钮前暂停",
+      "stopBeforeSubmitOff": "已关闭 · 允许执行终态提交动作",
+      "maxSteps": "步数上限",
+      "maxStepsValue": "{count} 步",
+      "pixelPrivacyTitle": "画面像素不经文本脱敏",
+      "pixelPrivacyBody": "privacyMaskMiddleware 仅脱敏文本类入参和出参，无法自动遮罩网页或桌面截图中的原始像素；屏幕画面将直接发送给视觉大模型。",
+      "approve": "允许并执行",
+      "error": "操作执行失败",
+      "statusLabel": "执行结果",
+      "resultStatus": {
+        "awaiting_confirmation": "已停靠 · 等待你的最终确认",
+        "scope_violation": "已熔断 · 检测到越界应用或域名",
+        "completed": "已完成"
+      },
+      "currentTarget": "停靠位置",
+      "pendingAction": "待确认动作",
+      "filledFields": "已填写字段"
     },
     "execApprovalCard": {
       "title": {
@@ -1709,7 +1744,11 @@
       "saved": "已更新「{name}」",
       "savedDetail": "约 30 秒内对 AI 生效",
       "approvalHint": "只读工具直接调用；写入类工具每次都会弹卡请你确认。",
-      "activeHint": "已启用外部连接"
+      "activeHint": "已启用外部连接",
+      "sessionPause": "本会话暂停",
+      "sessionPaused": "本会话已暂停",
+      "sessionMutedBadge": "本会话暂停 {count} 项",
+      "sessionReset": "恢复全部"
     },
     "draftReply": {
       "header": "草稿回复",
@@ -1991,6 +2030,9 @@
   },
   "llm": {
     "title": "LLM 看板",
+    "subtitle": "统一监控 AI 网关实时用量、Prompt 缓存命中率、探测诊断与邮件 AI 流水线状态。",
+    "emailPipelineTitle": "邮件 AI 预处理流水线",
+    "emailPipelineSubtitle": "后台自动分类、抽取与摘要任务的成功率、延迟与按模型分布。",
     "loading": "加载中…",
     "error": "加载失败 · 请重试",
     "processed": "已处理",
@@ -2501,6 +2543,50 @@
       "neverSynced": "尚未同步过工具清单",
       "lastError": "最近一次错误：{message}",
       "saveFailed": "保存失败",
+      "custom": {
+        "createTitle": "添加自定义 MCP 连接",
+        "editTitle": "编辑 {name}",
+        "desc": "接入自定义远端 Streamable HTTP / SSE 服务或本机按需启动的 stdio MCP 进程（密钥静态加密落库，仅桌面端可写）。",
+        "displayName": "显示名称",
+        "displayNamePlaceholder": "如：GitHub Enterprise / 本地文件系统",
+        "connectorId": "连接器 ID",
+        "transportLabel": "传输方式",
+        "transportHttp": "Streamable HTTP",
+        "transportSse": "HTTP + SSE",
+        "transportStdio": "本机进程（stdio）",
+        "serverUrl": "MCP 端点 URL",
+        "urlHint": "远端地址须使用 https://；本机调试允许 http://localhost / 127.0.0.1。",
+        "headersLabel": "自定义请求头",
+        "envLabel": "环境变量",
+        "addPair": "添加",
+        "removePair": "移除此项",
+        "replaceSecrets": "覆盖重写",
+        "noHeaders": "未配置自定义请求头。",
+        "noEnv": "未配置自定义环境变量。",
+        "existingKeys": "已配置加密键：{keys}",
+        "command": "启动命令",
+        "args": "命令参数（空格分隔）",
+        "cwd": "工作目录（可选）",
+        "autoSync": "保存后立即同步工具清单",
+        "createAction": "创建连接",
+        "saveEdit": "保存修改",
+        "saving": "保存中…",
+        "created": "已添加 {name}",
+        "updated": "已更新 {name}",
+        "deleted": "已删除 {name}",
+        "syncWarning": "连接已保存，但同步工具清单失败",
+        "nameRequired": "请填写显示名称",
+        "idInvalid": "ID 须为 2–48 位小写字母、数字、下划线或短横线，且以字母或数字开头",
+        "urlRequired": "请填写 MCP 端点 URL",
+        "commandRequired": "请填写启动命令",
+        "editButton": "编辑",
+        "deleteButton": "删除",
+        "deleteTitle": "删除自定义连接「{name}」？",
+        "deleteDesc": "将停止相关本机子进程（如有），并删除此连接的加密凭证与工具清单配置。",
+        "badgeStdio": "stdio",
+        "badgeHttp": "HTTP",
+        "badgeSse": "SSE"
+      },
       "disconnectDialog": {
         "title": "断开 {name}？",
         "desc": "会删除本机保存的授权凭证，该服务的工具立即停止对 AI 可用。工具清单与逐工具权限设置会保留，重新连接后继续生效。",
@@ -2514,7 +2600,7 @@
         "loading": "正在加载工具清单…",
         "loadError": "工具清单加载失败：{message}",
         "empty": "尚未同步到工具；点上方「同步工具」拉取清单。",
-        "defaultHint": "默认档 = 自动（含写入/更新；免审批执行）。",
+        "defaultHint": "默认档：只读自动执行，写入 / 更新 / 破坏性操作每次需审批。",
         "destructive": "破坏性",
         "orphan": "已失效",
         "orphanTip": "远端已不再提供这个工具；配置保留，但不会注入 AI。",
@@ -2563,6 +2649,60 @@
       },
       "viaComposio": "经 Composio",
       "viaDirect": "直连",
+      "viaManagedLocal": "本机托管",
+      "managed": {
+        "installAndEnable": "一键安装并启用",
+        "installSuccess": "已安装并启用 {name}",
+        "installFailed": "安装本机运行时失败",
+        "uninstallButton": "卸载",
+        "uninstallSuccess": "已卸载 {name}",
+        "uninstallDialogTitle": "卸载 {name}？",
+        "uninstallDialogDesc": "卸载会停止本机运行进程、删除托管目录中的本地程序文件，并清除该连接器的配置与工具记录。",
+        "runtimeMissing": "本机运行时文件缺失或尚未安装——点右上角「一键安装并启用」即可修复。",
+        "platformUnsupported": "当前操作系统或 CPU 架构暂不支持此本机托管运行时。",
+        "webDisabled": "本机托管运行时在本地电脑安装并操控本机程序，请在桌面端 App 中操作。",
+        "webDisabledShort": "仅限桌面端",
+        "pixelPrivacyTitle": "截图与画面不走文本脱敏",
+        "pixelPrivacyBody": "privacyMaskMiddleware 仅对文本型工具入参和出参做敏感词脱敏，不对网页或桌面截图中的原始像素进行打码处理；图片帧会按模型配置直接发送给多模态大模型。",
+        "browserModeTitle": "浏览器连接模式",
+        "browserModeHelper": "选择 Browser Use 接管浏览器的方式；切换模式会在下次调用时重启本地 MCP 进程生效。",
+        "recommendedBadge": "推荐",
+        "modeUpdated": "已切换浏览器模式为 {mode}",
+        "modes": {
+          "cdp_chrome": {
+            "title": "接管当前已打开的 Chrome（CDP）",
+            "desc": "通过 Chrome 远程调试接口接入你正在使用的浏览器，保留已有登录态与扩展。"
+          },
+          "extension": {
+            "title": "Chrome 扩展桥接模式",
+            "desc": "通过 Playwright MCP 浏览器扩展桥接当前标签页，无需手动开启调试端口参数。"
+          },
+          "isolated_profile": {
+            "title": "独立隔离浏览器配置文件",
+            "desc": "在托管运行目录中启动干净的独立浏览器配置，与个人日常 Cookie 和历史记录完全隔离。"
+          }
+        },
+        "cdpGuideTitle": "首次使用请在 Chrome 中开启远程调试",
+        "cdpGuideBody": "复制下方地址到 Chrome 地址栏打开，开启远程调试开关即可让 Browser Use 接管当前标签页：",
+        "copyCdpUrl": "复制地址",
+        "copiedCdpUrl": "已复制",
+        "tccTitle": "macOS 系统权限诊断",
+        "tccSubtitle": "Desktop Use 需要为本机桌面端 App 授予「辅助功能」与「屏幕录制」权限。",
+        "tccRefresh": "刷新状态",
+        "tccChecking": "检测中…",
+        "tccWebDisabled": "系统权限状态仅能在桌面端 App 内实时检测与跳转。",
+        "tccAccessibility": "辅助功能",
+        "tccAccessibilityDesc": "用于读取桌面窗口控件树，并模拟鼠标点击与键盘输入。",
+        "tccScreenRecording": "屏幕录制",
+        "tccScreenRecordingDesc": "用于截取屏幕或窗口画面，辅助模型识别当前界面位置。",
+        "tccOpenSettings": "前往系统设置",
+        "tccState": {
+          "granted": "已授权",
+          "denied": "未授权",
+          "unknown": "待确认",
+          "unsupported": "当前系统无需"
+        }
+      },
       "supersededHint": "这条连接走的是自建直连，而该服务的出厂轨道已改为 Composio 托管。用「切换轨道」断开并清除配置，再从目录重新连接。",
       "catalog": {
         "title": "预置目录",
@@ -2589,6 +2729,8 @@
         "desc": {
           "asana": "Asana：搜任务与项目、建任务与评论、改任务。",
           "atlassian": "Atlassian：Jira 议题（查/建/改/流转）+ Confluence 页面（搜/读/建/改）。",
+          "browser_use": "Browser Use：通过本机 Playwright MCP 控制 Chrome 或隔离浏览器——读网页、填表单、截屏与交互操作。",
+          "desktop_use": "Desktop Use：通过本机 Agent Desktop MCP 操作桌面应用——读取无障碍控件树、点击输入与桌面截屏。",
           "figma": "Figma：读文件结构与组件、取设计变量、渲染节点图、写评论。",
           "github": "GitHub：读仓库代码与 README、看 issue/PR、提 issue 与评论。",
           "gmail": "Gmail 邮箱：搜索/读取邮件与草稿、读取联系人；只给起草类写入，不给发信。",
@@ -2860,38 +3002,87 @@
     },
     "providers": {
       "title": "模型服务",
-      "helper": "管理 LLM 上游 provider：官方模型 / OpenAI 兼容中转 / Anthropic 兼容中转可多家并存。default provider 承接旧网关配置（legacy 模型引用零迁移）。",
+      "helper": "管理 LLM 上游 provider：官方模型 / OpenAI 兼容中转 / Anthropic 兼容中转与本地引擎可并存。default provider 承接旧网关配置（legacy 模型引用零迁移）。",
       "loading": "加载中…",
       "loadError": "加载 provider 列表失败。",
       "empty": "还没有 provider。点右上「添加」从模板创建。",
       "addButton": "添加",
-      "addTitle": "添加 provider",
+      "addTitle": "添加服务商",
       "added": "已添加 {name}",
       "deleted": "已删除 {name}",
       "defaultBadge": "默认",
+      "configureButton": "配置",
+      "configureAria": "配置 {name}",
+      "modalTabs": {
+        "models": "模型列表",
+        "connection": "连接与安全"
+      },
       "expandAria": "展开 {name}",
       "enabledAria": "启用/停用 {name}",
       "deleteAria": "删除 {name}",
+      "dragAria": "拖动排序 {name}",
+      "disabledBadge": "已停用",
+      "keyConfiguredBadge": "已配 Key",
+      "keyMissingBadge": "未配 Key",
+      "localNoKeyBadge": "免密钥",
+      "catalogStatus": "目录 {date}",
+      "catalogRefresh": "刷新目录",
+      "catalogRefreshing": "更新中…",
+      "catalogUpdated": "模型目录已更新",
+      "catalogUpToDate": "模型目录已是最新",
+      "catalogSyncFailed": "目录刷新失败，继续使用本地缓存",
       "displayName": "名称",
       "baseUrl": "API 地址",
       "baseUrlPlaceholder": "留空 = 官方默认端点",
+      "categories": {
+        "all": "全部",
+        "popular": "常用",
+        "cn": "国内",
+        "global": "海外",
+        "local": "本地",
+        "custom": "自定义"
+      },
       "apiKey": {
         "label": "API Key",
-        "set": "已设置（····{last4}），输入新值可轮换",
+        "set": "已设置（····{last4}），输入新值保存以替换",
         "unset": "未设置",
         "clear": "清除",
-        "clearAria": "清除 API Key"
+        "clearAria": "清除 API Key",
+        "save": "保存密钥",
+        "saved": "API Key 已更新",
+        "showAria": "显示密钥",
+        "hideAria": "隐藏密钥"
+      },
+      "keyPool": {
+        "title": "备用 Key 轮换池（429 冷却）",
+        "helper": "每行输入一个备用 API Key。遇到限流（429）时自动轮换冷却，健康时优先粘滞主 Key 以保 Prompt 缓存。",
+        "countBadge": "{count} Keys",
+        "placeholder": "每行一个备用 Key，例如：\nsk-spare-1\nsk-spare-2",
+        "save": "保存备用池",
+        "clear": "清空",
+        "saved": "备用 Key 池已更新"
       },
       "headers": {
         "label": "自定义 Header",
         "opencodeSessionHint": "OpenCode 要求请求带 x-opencode-session。MailAgent 已自动为每段对话生成一个随机 ID 附上（只用于 OpenCode 的路由与缓存，不含对话内容），这里无需手动添加；手动添加后会改用你填的值。",
+        "incrementalHint": "支持单条增删改，不会影响其它已保存的加密 Header。",
+        "setPlaceholder": "已配置（输入新值以替换）",
         "keyPlaceholder": "Header 名",
         "valuePlaceholder": "值",
         "add": "添加",
+        "update": "更新",
+        "updated": "已更新自定义 Header",
         "deleteAria": "删除 header {name}",
         "save": "保存",
         "cancel": "取消",
         "reenterHint": "安全起见服务端不回显 header 值——保存前需为所有保留项重新输入值"
+      },
+      "iconPicker": {
+        "buttonAria": "更换服务商图标",
+        "title": "选择图标",
+        "customPlaceholder": "1-2 个字符或 Emoji",
+        "apply": "应用",
+        "reset": "恢复默认"
       },
       "test": {
         "label": "连通性测试",
@@ -2899,7 +3090,9 @@
         "running": "测试中…",
         "ok": "连接正常（{ms}ms）",
         "okNoLatency": "连接正常",
-        "fail": "连接失败"
+        "fail": "连接失败",
+        "modelAuto": "自动选择模型",
+        "modelAria": "选择探测模型"
       },
       "models": {
         "title": "模型",
@@ -2907,9 +3100,27 @@
         "refreshing": "拉取中…",
         "loading": "加载中…",
         "empty": "还没有模型。点「拉取模型列表」从上游获取，或在下方手动添加（中转不透传 /models 时的兜底）。",
+        "noMatch": "没有符合筛选条件的模型。",
         "manualBadge": "手动",
         "manualPlaceholder": "手动添加模型 id（wire id）",
         "manualAdd": "添加",
+        "searchPlaceholder": "搜索模型 ID 或名称…",
+        "filter": {
+          "all": "全部",
+          "enabled": "已启用",
+          "reasoning": "推理",
+          "vision": "视觉"
+        },
+        "batch": {
+          "enableFiltered": "启用当前筛选",
+          "disableAll": "全部停用",
+          "clearUnenabled": "清理未启用拉取项",
+          "updated": "已更新 {count} 个模型"
+        },
+        "colModel": "模型",
+        "colMaxOutput": "最大输出",
+        "colContextWindow": "上下文",
+        "groupOther": "其它模型",
         "maxOutputPlaceholder": "maxOutput",
         "maxOutputAria": "{model} 的 max output tokens",
         "contextWindowPlaceholder": "context",
@@ -2922,20 +3133,144 @@
         }
       },
       "template": {
-        "custom-openai": "自定义 OpenAI-compatible",
-        "custom-anthropic": "自定义 Anthropic-compatible"
+        "ollama": "Ollama（本地）",
+        "lmstudio": "LM Studio（本地）",
+        "opencode": "OpenCode Zen",
+        "custom-openai": "自定义 OpenAI 兼容",
+        "custom-anthropic": "自定义 Anthropic 兼容"
       },
       "add": {
+        "desc": "选择官方、中转或本地推理模板，可先测试连通性再保存并拉取模型。",
         "template": "模板",
         "id": "ID（slug）",
         "idPlaceholder": "小写字母开头，可含数字/-/_",
         "idInvalid": "非法 slug",
+        "protocol": "协议",
+        "advancedToggle": "高级：自定义 ID 与协议",
+        "keyOptionalHint": "本地推理服务通常无需 API Key，可留空",
+        "probe": "测试连接",
+        "probing": "测试中…",
+        "probeOk": "连接正常（{ms}ms）",
+        "probeFail": "连接失败",
         "baseUrlRequired": "必填（该协议无官方默认端点）",
         "submit": "创建",
         "cancel": "取消"
       },
+      "select": {
+        "searchPlaceholder": "搜索模型或服务商…",
+        "empty": "没有匹配的模型",
+        "placeholder": "选择模型"
+      },
       "group": {
         "default": "default（主网关）"
+      },
+      "privacyMask": {
+        "label": "出站隐私脱敏",
+        "aria": "为 {name} 开启出站隐私占位符脱敏",
+        "helper": "发送前在本地将 API Key、证件号、手机号、邮箱与自定义正则替换为占位符，并在响应中自动还原；失败即 503 阻断出站。",
+        "configureRules": "配置脱敏规则"
+      }
+    },
+    "privacyMask": {
+      "title": "隐私占位符脱敏",
+      "helper": "按 Provider 启用双向本地脱敏：请求离开本机前替换为 [[PII_TYPE_N]]，响应与工具参数在本地自动还原，仅统计命中次数（绝不落盘明文）。",
+      "loading": "正在加载隐私脱敏配置…",
+      "loadFailed": "加载隐私脱敏配置失败",
+      "retry": "重试",
+      "saved": "已保存隐私脱敏配置",
+      "saveFailed": "保存隐私脱敏配置失败",
+      "hitsCleared": "已清零本地脱敏统计",
+      "hitsClearFailed": "清零统计失败",
+      "builtin": {
+        "secret": {
+          "label": "API 密钥与凭证",
+          "helper": "拦截常见 sk-/mak_/AIza/ghp_/AKIA 等密钥"
+        },
+        "id_card": {
+          "label": "身份证号（18 位校验码）",
+          "helper": "通过 ISO 7064 校验位验证，避免误伤订单号"
+        },
+        "phone": {
+          "label": "手机号码",
+          "helper": "拦截中国大陆 11 位手机号（含 +86 前缀）"
+        },
+        "email": {
+          "label": "邮箱地址",
+          "helper": "将邮箱替换为占位符并在工具调用参数中自动还原"
+        },
+        "bank_card": {
+          "label": "银行卡号（Luhn 校验）",
+          "helper": "仅匹配通过 Luhn 校验的 16–19 位卡号"
+        }
+      },
+      "customRules": {
+        "title": "自定义正则规则",
+        "helper": "支持自定义正则（如工号 EMP-\\d{6}）；保存前校验语法与零宽/ReDoS 风险。",
+        "namePlaceholder": "规则名称",
+        "add": "添加规则",
+        "deleteAria": "删除规则 {name}"
+      },
+      "preview": {
+        "title": "本地预览（不发出网络请求）"
+      },
+      "hits": {
+        "title": "本地拦截命中统计",
+        "empty": "暂无命中记录。",
+        "clear": "清零计数"
+      }
+    },
+    "usageDashboard": {
+      "title": "AI 用量与缓存监控",
+      "helper": "统一汇总对话、群聊、自动化与邮件处理的 Token 消耗、Prompt 缓存命中率、估算美元账单，以及最近 50 条连通性探测与调用失败日志。",
+      "shortcutHelper": "Token 消耗、Prompt 缓存命中率趋势、按表面/模型账单与最近 50 条探测异常日志已整合至「运维 → LLM 看板」。",
+      "shortcutCardHelper": "前往运维看板查看实时用量、缓存收益与异常诊断日志",
+      "openLlmDashboard": "前往 LLM 看板",
+      "rangeAria": "统计时间窗口",
+      "refreshAria": "刷新用量统计",
+      "loading": "正在聚合用量统计…",
+      "loadError": "无法加载 AI 用量统计（后端暂不可达）。",
+      "emptyRange": "该时间窗口内暂无 LLM 调用记录。",
+      "emptyBreakdown": "暂无明细数据。",
+      "chartTitle": "Token 消耗与缓存命中率趋势",
+      "legendCacheRead": "缓存读取 Token",
+      "legendHitRate": "缓存命中率",
+      "bySurfaceTitle": "按调用表面统计",
+      "byModelTitle": "按模型统计",
+      "kpi": {
+        "totalTokens": "总 Token 消耗",
+        "cacheHitRate": "Token 缓存命中率",
+        "estimatedCost": "估算总花费",
+        "cacheSaved": "缓存节省估算"
+      },
+      "surfaces": {
+        "chat": "对话问答",
+        "agent_run": "自动化助手",
+        "group": "多 Agent 群聊",
+        "email_classify": "邮件 AI 分类",
+        "report": "日报 / 周报",
+        "matter_run": "事项跟进",
+        "auto_title": "会话自动标题",
+        "compact": "上下文压缩",
+        "search_agent": "AI 智能搜索",
+        "paused_turn": "暂停审批片段",
+        "translate": "邮件翻译",
+        "nl_search": "自然语言检索",
+        "memory_capture": "记忆抽取",
+        "user_md_compile": "偏好档案编译",
+        "contact_profile": "联系人画像",
+        "task_extract": "任务抽取",
+        "py_loopback": "后台网关调用"
+      },
+      "probelog": {
+        "title": "探测与异常诊断日志（最近 50 条）",
+        "filter": {
+          "all": "全部",
+          "errors": "仅异常"
+        },
+        "clear": "清空",
+        "cleared": "已清空诊断日志",
+        "clearFail": "清空诊断日志失败",
+        "empty": "暂无探测或异常日志。"
       }
     },
     "skillPacks": {
@@ -3155,19 +3490,35 @@
       "remoteReadonly": "远程为只读，配置请在本机修改"
     },
     "tabs": {
-      "general": "通用",
-      "accounts": "账户",
+      "general": "通用与外观",
+      "accounts": "账户与同步",
       "sync": "同步",
-      "ai": "AI",
-      "connectors": "连接器",
+      "ai": "模型与 AI",
+      "connectors": "工具与 MCP",
       "matters": "事项",
-      "notifications": "通知",
-      "integrations": "集成",
-      "realtime": "实时与存储",
+      "notifications": "通知与常驻",
+      "integrations": "知识库与集成",
+      "realtime": "存储与远程",
       "remote": "远程访问",
       "mcp": "MCP 服务",
-      "island": "灵动岛与更新",
       "labs": "实验室"
+    },
+    "search": {
+      "placeholder": "搜索设置项、环境变量或关键词…",
+      "shortcut": "⌘F",
+      "empty": "未找到匹配的设置项",
+      "aria": "全局搜索设置"
+    },
+    "connectorsTab": {
+      "connectors": "工具与外部连接器",
+      "mcp": "对外 MCP 服务",
+      "expandWorkspace": "收起设置导航以加宽",
+      "toggleMasterAria": "展开/收起左侧工具栏"
+    },
+    "aiSubtabs": {
+      "all": "全部",
+      "models": "模型与路由",
+      "agent": "Agent 与能力"
     },
     "labs": {
       "page": {
@@ -3192,11 +3543,6 @@
       "groupAgents": {
         "label": "群聊多 agent（实验）",
         "helper": "由本机的 AI 服务接管群里的发言：按每位成员的响应模式决定谁开口、成员之间可以互相接话，并受链上限与每小时预算约束。关掉就退回原来的「你发一条、成员各回一轮」。开关立即生效，不需要重启。"
-      },
-      "mcpConnectors": {
-        "label": "外部服务连接器",
-        "helper": "连接 Notion / Atlassian 直连服务与 Composio 托管连接器；开启后左侧导航会出现「连接与工具」的外部连接段。",
-        "restartHint": "需重启后端并退出重开 App 后完整生效。"
       },
       "skillCatalogPrompt": {
         "label": "技能目录提示",
@@ -3574,7 +3920,8 @@
       },
       "translate": {
         "title": "邮件翻译",
-        "helper": "Electron 主进程翻译流水线;独立 gateway/key/model + 双语对照"
+        "helper": "Electron 主进程翻译流水线;独立 gateway/key/model + 双语对照",
+        "overrideToggle": "使用独立翻译网关覆盖（高级）"
       },
       "translateBaseUrl": {
         "label": "翻译网关 URL",
@@ -3738,6 +4085,80 @@
       }
     },
     "notifications": {
+      "desktop": {
+        "title": "macOS 系统权限与常驻",
+        "helper": "首次使用系统横幅需在 macOS 授予通知权限；若需直接显示通知按钮，请在系统设置选「提示」样式。",
+        "statusLabel": "系统通知权限与支持",
+        "supported": "系统通知可用",
+        "unsupported": "当前环境不支持桌面横幅",
+        "authUnknown": "尚未验证系统通知权限 — 点击右侧按钮可唤起 macOS 授权弹窗",
+        "authPrompted": "已发起系统权限请求（若未见横幅，请点击「打开系统设置」检查开关与样式）",
+        "authDelivered": "macOS 系统通知已验证送达",
+        "alertStyleHint": "建议在「系统设置 → 通知 → MailAgent」将提醒样式设为「提示」，即可直接在横幅右侧展开快捷操作按钮。",
+        "testBtn": "发送测试通知",
+        "requestPermBtn": "申请权限并测试横幅",
+        "openSystemSettingsBtn": "打开系统设置",
+        "testOk": "测试通知已发送",
+        "testPrompted": "已向 macOS 请求系统通知权限，请在系统弹窗中点击「允许」",
+        "testFailed": "测试通知发送失败",
+        "openSettingsFailed": "无法打开系统通知设置",
+        "trayLabel": "启用菜单栏常驻图标（Menu Bar）",
+        "trayHelper": "点击顶部菜单栏图标快速查看待回复邮件、未读提醒、日程与 AI 速记。",
+        "dockBadgeLabel": "同步 Dock 未读角标",
+        "dockBadgeHelper": "在程序坞应用图标右上角展示通知中心未读总数。",
+        "matrixTitle": "分类通知策略",
+        "matrixHelper": "仅铃铛模式仍会在 critical 紧急级别时弹出系统横幅。",
+        "modes": {
+          "banner": "系统横幅 + 铃铛",
+          "center_only": "仅铃铛（仅紧急弹窗）",
+          "off": "仅铃铛不弹窗"
+        },
+        "categories": {
+          "action_required": "待办与审批（紧急邮件 / 会议提醒 / 操作确认）",
+          "reviews": "重要邮件与审阅建议",
+          "results": "任务执行与报告结果",
+          "system": "系统维护与服务告警"
+        },
+        "saveFailed": "桌面通知设置保存失败"
+      },
+      "channels": {
+        "title": "分场景通知渠道与防重复",
+        "helper": "按场景按需选择提醒渠道（不必全渠道轰炸），仅开启真正需要即时打断你的入口。",
+        "suppressFocusedLabel": "应用在前台聚焦时不重复弹系统横幅",
+        "suppressFocusedHelper": "正在使用 MailAgent 主窗口时，跳过非故障类 macOS 桌面弹窗。",
+        "skipFeishuLabel": "飞书已推送同封邮件时跳过桌面横幅",
+        "skipFeishuHelper": "优先保持飞书与桌面通知单通道送达，减少同一封邮件双端连响。",
+        "deliveryOptions": {
+          "both": "macOS 系统通知 + 应用内铃铛",
+          "system_only": "仅 macOS 系统通知（不增铃铛未读）",
+          "center_only": "仅应用内铃铛与 Menu Bar",
+          "off": "关闭此类提醒"
+        },
+        "mailTitle": "邮件通知",
+        "mailHelper": "由本地 AI 分类识别为紧急或重要且需行动的新邮件触发。",
+        "mailScopeLabel": "系统横幅触发范围",
+        "mailScopeUrgentAndImportant": "🔴 紧急 + 🟡 重要需行动（推荐）",
+        "mailScopeUrgentOnly": "仅 🔴 紧急需行动邮件",
+        "mailActionsLabel": "在邮件通知附带快捷动作按钮",
+        "mailActionsHelper": "支持直接「AI 拟稿 / 跟进」或在铃铛/横幅一键「1小时后提醒」。",
+        "meetingTitle": "会议提醒与会前准备预设",
+        "meetingHelper": "会议开始前自动弹出提醒，可一键入会或直达会议详情并唤起右侧 AI 侧边栏。",
+        "meetingLeadLabel": "提前提醒时间",
+        "meetingLeadMinutes": "提前 {count} 分钟",
+        "meetingActionsLabel": "附带会议快捷按钮（一键入会 / AI 跟进）",
+        "meetingActionsHelper": "检测到会议链接时直接拉起客户端，或打开该场日程并展开右侧 AI 助理。",
+        "meetingPrepLabel": "启用「会前准备」AI 预设",
+        "meetingPrepHelper": "让每个会议通知自带准备简报入口，支持按需实时生成或会前自动静默完成。",
+        "meetingPrepModeLabel": "会前准备执行方式",
+        "meetingPrepOnDemand": "按需触发（通知带「立即会前准备」按钮，省额度）",
+        "meetingPrepAutoBefore": "会前自动静默跑好（通知按钮变为「查看会前准备」）",
+        "meetingPrepLeadLabel": "自动准备提前量",
+        "backgroundTitle": "后台任务与系统告警",
+        "backgroundHelper": "控制自定义 Agent、报告执行结果与服务监控告警的提醒去向。",
+        "agentResultsLabel": "后台 Agent 与报告完成结果",
+        "systemAlertsLabel": "系统健康与 DavMail 服务告警",
+        "saveFailed": "通知偏好保存失败"
+      },
       "feishu": {
         "title": "飞书应用机器人",
         "helper": "重要邮件推送 + 交互回复按钮 → Openclaw",
@@ -4073,8 +4494,14 @@
         "running": "运行中 · {count} 个可用密钥"
       },
       "localUrl": {
-        "label": "本机地址",
-        "hint": "本机上的客户端（如 Claude Code）直接使用"
+        "label": "本机 Streamable HTTP 地址",
+        "hint": "标准 /mcp 端点（支持无状态 POST 与有状态 Session/SSE），供 Claude Code、Cursor 等本机客户端连接",
+        "copy": "复制本机 Streamable HTTP 地址"
+      },
+      "sseUrl": {
+        "label": "本机 HTTP+SSE 地址",
+        "hint": "Legacy HTTP+SSE 端点（/mcp/sse），供仅支持旧版 SSE 传输的外部客户端连接",
+        "copy": "复制本机 SSE 地址"
       },
       "publicUrl": {
         "label": "公网地址",
@@ -4122,6 +4549,9 @@
         "createdAt": "创建于 {time}",
         "lastUsedAt": "最近使用 {time}",
         "neverUsed": "从未使用",
+        "expiresAt": "有效期至 {time}",
+        "writeRpmBadge": "写限流 {limit}/分",
+        "disabledToolsBadge": "已禁用 {count} 个工具",
         "rotate": "轮换",
         "revoke": "撤销",
         "revoked": "已撤销「{label}」",
@@ -4161,6 +4591,42 @@
         "title": "修改「{label}」的权限",
         "desc": "保存后立即生效。密钥本身不变，已配置的客户端不用更换。",
         "submit": "保存"
+      },
+      "policy": {
+        "advancedToggle": "高级权限细分与限流 / 禁用工具",
+        "scopeModeLabel": "权限粒度",
+        "usePresetMode": "切回基础档",
+        "useGranularMode": "逐项细选权限",
+        "readScopesLabel": "只读权限（可单选或全选）",
+        "writeScopesLabel": "写入与执行权限",
+        "selectAllRead": "全选只读",
+        "ttlLabel": "密钥有效期",
+        "ttlNever": "永不过期",
+        "ttlDays": "{days} 天后过期",
+        "writeRpmLabel": "写操作每分钟上限（次）",
+        "writeRpmUnlimited": "不限",
+        "disabledToolsLabel": "逐工具启停（针对此密钥）",
+        "toolEnabled": "允许",
+        "toolDisabled": "禁用"
+      },
+      "clientConfig": {
+        "rowTitle": "一键配置外部客户端",
+        "rowHelper": "自动备份原配置（.bak）并将 MailAgent MCP 条目安全合并到目标客户端配置文件。",
+        "openButton": "一键配置客户端",
+        "dialogTitle": "一键配置本机 MCP 客户端",
+        "dialogDesc": "仅合并 mcpServers.mailagent 条目，保留原有配置并生成 .bak 备份。",
+        "targetLabel": "目标客户端",
+        "modeLabel": "连接方式",
+        "modeHttp": "Streamable HTTP (/mcp)",
+        "modeSse": "HTTP+SSE (/mcp/sse)",
+        "modeStdio": "本机 stdio 包装进程",
+        "apiKeyLabel": "访问密钥（Bearer Key）",
+        "apiKeyHint": "留空将写入占位符 <YOUR_MAILAGENT_API_KEY>，方便先预览或稍后手动填入。",
+        "previewButton": "预览合并结果",
+        "writeButton": "写入配置",
+        "wroteSuccess": "已写入 {path}",
+        "backupCreated": "已生成备份：{path}",
+        "failed": "写入配置失败"
       },
       "scopes": {
         "email_read": {
@@ -4226,6 +4692,7 @@
         "copyKey": "复制密钥",
         "copyNotion": "复制 Notion 配置",
         "copyHttp": "复制 HTTP 客户端配置",
+        "copySse": "复制 SSE 客户端配置",
         "done": "完成"
       },
       "revoke": {
@@ -4358,71 +4825,6 @@
       "autoDownloadHint": "检测到新版本后自动在后台下载,就绪后提示重启安装。",
       "unsignedNotice": "当前为 ad-hoc 签名版本:支持检查更新;有新版本时请前往下载页手动下载、覆盖安装(应用内一键更新需正式签名版本)。",
       "openDownloadCta": "前往下载页"
-    },
-    "island": {
-      "heading": "灵动岛集成",
-      "channel": "ping-island · /tmp/island.sock · ad-hoc",
-      "statusLabel": "连接状态",
-      "socketPath": "Socket 路径",
-      "testConnection": "测试连接",
-      "enable": "启用灵动岛",
-      "enableHint": "未运行 ping-island.app 时仍可启用;主进程 fail-open 不会阻塞同步",
-      "testing": "测试中…",
-      "testOk": "灵动岛连接正常",
-      "testFail": "灵动岛连接失败",
-      "lastProbe": "上次探测 {agoSec}s 前",
-      "toggleOn": "开",
-      "toggleOff": "关",
-      "installHint": "/tmp/island.sock 不存在 — ping-island.app 未运行或未安装。",
-      "installLinkLabel": "获取 fork (feat/mail-brand)",
-      "state": {
-        "idle": "未探测",
-        "connected": "已连接",
-        "degraded": "连接异常",
-        "disconnected": "未运行",
-        "devDisabled": "Dev 模式 · 已禁用",
-        "disabled": "已关闭"
-      },
-      "page": {
-        "eyebrow": "ISLAND & UPDATES",
-        "title": "灵动岛与更新",
-        "intro": "ping-island 桥接状态与应用自动更新通道。"
-      },
-      "mailNotifyScope": {
-        "label": "邮件弹卡范围",
-        "helper": "决定哪些邮件会在灵动岛弹卡打扰你。「仅重要」（默认）只在 AI 判定为紧急或重要时弹；「全部」则每封新邮件都弹（比较吵）。不影响日历提醒、AI 审批等非邮件卡片。",
-        "important": "仅重要（AI 判定紧急 / 重要才弹）",
-        "all": "全部（每封新邮件都弹）",
-        "placeholder": "仅重要（默认）"
-      },
-      "accent": {
-        "label": "灵动岛主题色",
-        "helper": "灵动岛卡片的强调色，与 App 主界面的强调色相互独立。默认珊瑚色。",
-        "coral": "珊瑚 Coral（默认）",
-        "cobalt": "钴蓝 Cobalt",
-        "teal": "青 Teal",
-        "rose": "玫瑰 Rose",
-        "slate": "岩灰 Slate",
-        "olive": "橄榄 Olive",
-        "placeholder": "珊瑚 Coral（默认）"
-      },
-      "islandTheme": {
-        "label": "灵动岛明暗",
-        "helper": "灵动岛卡片用深色还是浅色底，与 App 主界面的明暗设置相互独立。默认深色。",
-        "dark": "深色（默认）",
-        "light": "浅色",
-        "placeholder": "深色（默认）"
-      },
-      "digest": {
-        "heading": "每日巡检",
-        "sectionHelper": "定时汇总最近邮件并在灵动岛推送一张巡检卡片；需先启用灵动岛。",
-        "enable": "启用每日巡检",
-        "enableHint": "在设定的钟点自动汇总这段时间的邮件（AI 生成摘要与待办建议），以卡片形式推送到灵动岛。默认关闭。",
-        "hours": {
-          "label": "巡检钟点",
-          "helper": "每天几点巡检，24 小时制、逗号分隔（本机时区）。例如 9,18 表示早 9 点和晚 6 点各一次。"
-        }
-      }
     },
     "folder": {
       "section": {
@@ -4617,15 +5019,6 @@
     }
   },
   "titleBar": {
-    "island": {
-      "label": "灵动岛",
-      "idle": "灵动岛初始化中…",
-      "connected": "灵动岛已连接",
-      "degraded": "灵动岛连接异常 — 查看设置",
-      "disconnected": "灵动岛未运行 — 启动 ping-island.app",
-      "devDisabled": "Dev 模式 · 灵动岛禁用",
-      "disabled": "灵动岛已关闭"
-    },
     "synced": "已同步",
     "themeCycle": "主题 · 点击切换",
     "update": {
@@ -5206,7 +5599,14 @@
           "disabledHint": "外部服务连接未开启（由环境变量 MAILAGENT_MCP_CONNECTORS 控制），此处授权保存后暂不会生效。",
           "warn": "可写 = 授予「读 + 新建 + 修改」权限上限：该 Agent 后台运行可在该服务里新建和修改数据（删除永不可用）。",
           "empty": "尚未连接任何外部服务。先到 设置 → AI 完成连接，再回这里为该 Agent 授权。",
-          "notConnected": "未连接"
+          "notConnected": "未连接",
+          "allowlistAll": "工具白名单：全部已授权工具",
+          "allowlistCustom": "工具白名单：已选 {count} 个",
+          "allToolsActive": "当前未额外限制：沿用权限档位覆盖的全部可用工具",
+          "selectedToolsCount": "已选 {count}/{total} 个允许工具",
+          "resetTools": "恢复全部",
+          "toolsLoading": "正在读取工具列表…",
+          "toolsEmpty": "该服务暂未同步工具，请先到 外部连接 中同步工具列表。"
         },
         "library": {
           "title": "资料库",
@@ -8185,5 +8585,40 @@
     "E_RUN_ERROR": "运行出错",
     "E_WORKER_CRASH": "后台执行进程异常退出",
     "E_RUN_ACTIVE": "同一会话已有运行在进行"
+  },
+  "tray": {
+    "health": {
+      "local": "本地 Mail.app 模式",
+      "ok": "DavMail 连接正常",
+      "warning": "连接波动",
+      "critical": "需重新授权或检查",
+      "unknown": "状态未知"
+    },
+    "refresh": "刷新",
+    "settings": "通知与常驻设置",
+    "openApp": "打开窗口",
+    "newChat": "新建对话",
+    "openToday": "今日待办",
+    "composeEmail": "写新邮件",
+    "viewAllToday": "查看今日全部待办",
+    "quit": "退出 MailAgent",
+    "quickPromptPlaceholder": "让 AI 查信、总结或交办…",
+    "nextUpStarted": "进行中",
+    "emptyAll": "今日收件与提醒已清空",
+    "llmDashboard": "LLM 看板",
+    "activeGateway": "主路由模型",
+    "cacheHit24h": "24h 缓存命中",
+    "providersActive": "{enabled}/{total} 服务商就绪",
+    "noProvider": "暂未配置服务商",
+    "openLlmTitle": "打开运维 LLM 看板",
+    "section": {
+      "notifications": "未读通知",
+      "pendingReplies": "待回复邮件"
+    },
+    "emptyNotifications": "暂无未读提醒",
+    "emptyReplies": "今日收件已清空",
+    "footer": {
+      "ai24h": "24h AI 统计"
+    }
   }
 }

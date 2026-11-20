@@ -37,8 +37,11 @@ ExceptionGroup 拆包 / per-namespace 串行闸 **全部共用**）：
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import time
 from contextlib import asynccontextmanager
+from io import BytesIO
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
@@ -52,6 +55,7 @@ from mcp.client.auth import (
     OAuthRegistrationError,
     OAuthTokenError,
 )
+from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.auth import AuthorizationCodeResult, OAuthClientMetadata
 from mcp.shared.exceptions import MCPError
@@ -91,6 +95,15 @@ _LIST_TOOLS_MAX_PAGES = 20
 #: call_tool 归一结果的字符上限（镜像 routers/web.py ``_DEFAULT_MAX_CHARS`` 截断先例）——
 #: 一个 Notion 数据库可以是几万行，无界 payload 是 issue #66 那类病根；截断如实置 truncated。
 CALL_RESULT_MAX_CHARS = 50_000
+
+#: Legacy HTTP+SSE 读流超时（秒，匹配 MCP SDK ``sse_client`` 默认值）。
+SSE_READ_TIMEOUT_SECONDS = 300.0
+
+#: call_tool 归一化后的多模态图像上限（防单轮 prompt 上下文与 JSON 体积爆炸）。
+CALL_RESULT_MAX_IMAGES = 4
+CALL_RESULT_MAX_IMAGE_BYTES = 2 * 1024 * 1024
+CALL_RESULT_IMAGE_MAX_EDGE = 1280
+CALL_RESULT_SINGLE_IMAGE_COMPRESS_THRESHOLD = 512 * 1024
 
 
 def _configured_timeout() -> float:
@@ -150,6 +163,150 @@ class ConnectorUnconfigured(ConnectorError):
 
     def __init__(self, message: str) -> None:
         super().__init__(message, code="E_CONNECTOR_NOT_CONNECTED")
+
+
+def _build_sse_httpx_factory(
+    http_transport: Any,
+    default_timeout: float,
+) -> Callable[..., httpx2.AsyncClient]:
+    """构造注入测试 ``MockTransport`` 的 ``McpHttpClientFactory``。"""
+
+    def _factory(
+        headers: Optional[dict[str, str]] = None,
+        timeout: Optional[httpx2.Timeout] = None,
+        auth: Optional[httpx2.Auth] = None,
+    ) -> httpx2.AsyncClient:
+        kwargs: dict[str, Any] = {
+            "follow_redirects": True,
+            "transport": http_transport,
+            "timeout": (
+                timeout
+                if timeout is not None
+                else httpx2.Timeout(default_timeout, read=SSE_READ_TIMEOUT_SECONDS)
+            ),
+        }
+        if headers is not None:
+            kwargs["headers"] = headers
+        if auth is not None:
+            kwargs["auth"] = auth
+        return httpx2.AsyncClient(**kwargs)
+
+    return _factory
+
+
+def _is_image_block(block: Any) -> bool:
+    if getattr(block, "type", None) == "image":
+        return True
+    return hasattr(block, "data") and (
+        hasattr(block, "mimeType") or hasattr(block, "mime_type")
+    )
+
+
+def _to_rgb_white_bg(image: Any) -> Any:
+    """Flatten alpha/palette modes onto a white RGB canvas for JPEG encoding."""
+    from PIL import Image
+
+    if image.mode in ("RGBA", "LA") or (
+        image.mode == "P" and "transparency" in image.info
+    ):
+        rgba = image.convert("RGBA")
+        bg = Image.new("RGB", rgba.size, (255, 255, 255))
+        bg.paste(rgba, mask=rgba.split()[3])
+        return bg
+    if image.mode != "RGB":
+        return image.convert("RGB")
+    return image
+
+
+def _encode_image_bytes(
+    frame: Any,
+    raw_mime: str,
+    *,
+    remaining_bytes: int,
+) -> tuple[str, bytes]:
+    """Encode normalized PIL frame, preferring PNG/WebP and falling back to JPEG q=85."""
+    normalized_mime = (raw_mime or "image/png").split(";", 1)[0].strip().lower()
+    if normalized_mime in ("image/jpeg", "image/jpg"):
+        buf = BytesIO()
+        _to_rgb_white_bg(frame).save(buf, format="JPEG", quality=85, optimize=True)
+        return "image/jpeg", buf.getvalue()
+
+    if normalized_mime == "image/webp":
+        buf = BytesIO()
+        frame.save(buf, format="WEBP", quality=85)
+        encoded = buf.getvalue()
+        media_type = "image/webp"
+    else:
+        buf = BytesIO()
+        frame.save(buf, format="PNG", optimize=True)
+        encoded = buf.getvalue()
+        media_type = "image/png"
+
+    if (
+        len(encoded) > CALL_RESULT_SINGLE_IMAGE_COMPRESS_THRESHOLD
+        or len(encoded) > remaining_bytes
+    ):
+        jpg_buf = BytesIO()
+        _to_rgb_white_bg(frame).save(jpg_buf, format="JPEG", quality=85, optimize=True)
+        jpg_bytes = jpg_buf.getvalue()
+        if len(jpg_bytes) < len(encoded):
+            return "image/jpeg", jpg_bytes
+    return media_type, encoded
+
+
+def _normalize_image_block(
+    block: Any,
+    *,
+    remaining_bytes: int,
+) -> Optional[tuple[str, bytes]]:
+    """Decode, EXIF-orient, Retina-resize, and encode one MCP ImageContent block.
+
+    Returns ``(media_type, raw_bytes)`` or ``None`` if the image payload is corrupt/unreadable.
+    """
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    raw_data = getattr(block, "data", None)
+    if not isinstance(raw_data, str) or not raw_data.strip():
+        return None
+    raw_mime = (
+        getattr(block, "mimeType", None)
+        or getattr(block, "mime_type", None)
+        or "image/png"
+    )
+    if not isinstance(raw_mime, str):
+        raw_mime = "image/png"
+
+    try:
+        decoded = base64.b64decode("".join(raw_data.split()), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if not decoded:
+        return None
+
+    try:
+        with Image.open(BytesIO(decoded)) as img:
+            if getattr(img, "is_animated", False):
+                img.seek(0)
+            img.load()
+            frame = img.copy()
+        frame = ImageOps.exif_transpose(frame)
+        if frame.mode == "P":
+            frame = frame.convert("RGBA" if "transparency" in frame.info else "RGB")
+        elif frame.mode == "PA":
+            frame = frame.convert("RGBA")
+        elif frame.mode not in ("RGB", "RGBA", "L", "LA"):
+            frame = frame.convert("RGB")
+        w, h = frame.size
+        if w <= 0 or h <= 0:
+            return None
+        if max(w, h) > CALL_RESULT_IMAGE_MAX_EDGE:
+            scale = CALL_RESULT_IMAGE_MAX_EDGE / float(max(w, h))
+            new_w = max(1, int(round(w * scale)))
+            new_h = max(1, int(round(h * scale)))
+            frame = frame.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        return _encode_image_bytes(frame, raw_mime, remaining_bytes=remaining_bytes)
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError, ValueError):
+        return None
 
 
 def _sole_leaf(eg: BaseException) -> Optional[BaseException]:
@@ -360,6 +517,47 @@ class ConnectorClient:
             # ConnectorUnconfigured —— 落态点据类型放行（service.should_mark_needs_reauth）。
             raise ConnectorUnconfigured(str(e)) from e
 
+    async def _custom_http_config(self) -> dict[str, Any]:
+        """自定义 HTTP connector 的 httpx 客户端参数：有 OAuth token 用 OAuth；
+        有静态 headers（或无凭证的本地自定义端点）则直接附带解密后的静态 headers。"""
+        from starlette.concurrency import run_in_threadpool
+
+        from src.agent_config.store import get_agent_config_store
+
+        headers, _env = await run_in_threadpool(
+            get_agent_config_store().get_connector_custom_secrets,
+            self.connector_id,
+        )
+        # 若该自定义 connector 另走过 OAuth 授权且没有静态 header，复用 OAuth provider；
+        # 否则（静态 header 或本地无鉴权 HTTP MCP），直接用静态 headers 连接。
+        if not headers:
+            getter = getattr(self.storage, "get_tokens_with_expiry", None)
+            has_tokens = False
+            if getter is not None:
+                tokens, _exp = await getter()
+                has_tokens = tokens is not None
+            if has_tokens or self.interactive:
+                provider = self._build_provider()
+                await self._prime(provider)
+                return {"auth": provider}
+        return {"headers": headers} if headers else {}
+
+    async def _stdio_runtime_args(self) -> tuple[dict[str, Any], dict[str, str]]:
+        from starlette.concurrency import run_in_threadpool
+
+        from src.agent_config.store import get_agent_config_store
+
+        cmd = self.definition.stdio_command
+        if not cmd or not str(cmd.get("command") or "").strip():
+            raise ConnectorUnconfigured(
+                f"stdio connector {self.connector_id} has no command configured"
+            )
+        _headers, env = await run_in_threadpool(
+            get_agent_config_store().get_connector_custom_secrets,
+            self.connector_id,
+        )
+        return cmd, env
+
     @asynccontextmanager
     async def session(self, *, http_transport: Any = None) -> AsyncIterator[Client]:
         """打开一个 MCP 会话（namespace 闸内；错误统一转 ConnectorError 且带耗时）。
@@ -382,21 +580,44 @@ class ConnectorClient:
                         )
                     if self.is_composio:
                         client_kwargs: dict[str, Any] = {"headers": await self._composio_headers()}
+                    elif self.definition.is_custom:
+                        client_kwargs = await self._custom_http_config()
                     else:
                         provider = self._build_provider()
                         await self._prime(provider)
                         client_kwargs = {"auth": provider}
-                    async with httpx2.AsyncClient(
-                        follow_redirects=True,
-                        timeout=httpx2.Timeout(self.timeout),
-                        transport=http_transport,
-                        **client_kwargs,
-                    ) as http:
-                        transport = streamable_http_client(
-                            self.definition.server_url, http_client=http
-                        )
+                    if self.definition.transport == "sse":
+                        sse_kwargs: dict[str, Any] = {
+                            "headers": client_kwargs.get("headers"),
+                            "timeout": self.timeout,
+                            "sse_read_timeout": SSE_READ_TIMEOUT_SECONDS,
+                            "auth": client_kwargs.get("auth"),
+                        }
+                        if http_transport is not None:
+                            sse_kwargs["httpx_client_factory"] = _build_sse_httpx_factory(
+                                http_transport, self.timeout
+                            )
+                        transport = sse_client(self.definition.server_url, **sse_kwargs)
                         async with Client(transport) as client:
                             yield client
+                    elif self.definition.transport == "streamable_http":
+                        async with httpx2.AsyncClient(
+                            follow_redirects=True,
+                            timeout=httpx2.Timeout(self.timeout),
+                            transport=http_transport,
+                            **client_kwargs,
+                        ) as http:
+                            transport = streamable_http_client(
+                                self.definition.server_url, http_client=http
+                            )
+                            async with Client(transport) as client:
+                                yield client
+                    else:
+                        raise ConnectorError(
+                            f"connector {self.connector_id} has unsupported transport "
+                            f"{self.definition.transport!r}",
+                            code="E_CONNECTOR_PROTOCOL",
+                        )
             except BaseExceptionGroup as eg:  # noqa: F821 — 3.11 内建，见 _sole_leaf
                 # 🔴 会话内部是 anyio TaskGroup（streamable_http），它把**单个**异常也裹成
                 # ExceptionGroup —— 下面那串 `except ConnectorError / httpx / MCPError` 一条
@@ -444,6 +665,101 @@ class ConnectorClient:
                 code="E_CONNECTOR_PROTOCOL",
             ) from e
 
+    def _normalize_tools(self, raw_tools: list[Any]) -> list[dict[str, Any]]:
+        tools: list[dict[str, Any]] = []
+        for t in raw_tools:
+            if self.is_composio and is_meta_tool(t.name):
+                logger.debug(
+                    "[connector] {} skipped composio meta tool {}",
+                    self.connector_id,
+                    t.name,
+                )
+                continue
+            tools.append(
+                {
+                    "name": t.name,
+                    "description": t.description or "",
+                    "input_schema": t.input_schema,
+                    "output_schema": t.output_schema,
+                    "crud_type": derive_crud_type(t),
+                    "destructive": derive_destructive(t),
+                }
+            )
+        return tools
+
+    @staticmethod
+    def _format_call_result(result: Any) -> dict[str, Any]:
+        parts: list[str] = []
+        images: list[dict[str, str]] = []
+        total_image_bytes = 0
+        omitted_images = 0
+        cap_reached = False
+
+        for block in getattr(result, "content", None) or []:
+            if _is_image_block(block):
+                if cap_reached or len(images) >= CALL_RESULT_MAX_IMAGES:
+                    cap_reached = True
+                    omitted_images += 1
+                    continue
+                remaining = CALL_RESULT_MAX_IMAGE_BYTES - total_image_bytes
+                if remaining <= 0:
+                    cap_reached = True
+                    omitted_images += 1
+                    continue
+                normalized = _normalize_image_block(block, remaining_bytes=remaining)
+                if normalized is None:
+                    parts.append("[invalid image omitted]")
+                    continue
+                media_type, encoded = normalized
+                if total_image_bytes + len(encoded) > CALL_RESULT_MAX_IMAGE_BYTES:
+                    cap_reached = True
+                    omitted_images += 1
+                    continue
+                total_image_bytes += len(encoded)
+                images.append(
+                    {
+                        "media_type": media_type,
+                        "data": base64.b64encode(encoded).decode("ascii"),
+                    }
+                )
+                continue
+            text = getattr(block, "text", None)
+            if isinstance(text, str) and text:
+                parts.append(text)
+
+        content = "\n".join(parts)
+        structured = getattr(result, "structured_content", None)
+        if not content and structured is not None:
+            try:
+                import json as _json
+
+                content = _json.dumps(structured, ensure_ascii=False, default=str)
+            except (TypeError, ValueError):
+                content = str(structured)
+
+        text_truncated = len(content) > CALL_RESULT_MAX_CHARS
+        if text_truncated:
+            content = content[:CALL_RESULT_MAX_CHARS]
+
+        if omitted_images > 0:
+            cap_note = f"[omitted {omitted_images} extra images: payload cap reached]"
+            if content:
+                sep = "\n"
+                if len(content) + len(sep) + len(cap_note) > CALL_RESULT_MAX_CHARS:
+                    keep = max(0, CALL_RESULT_MAX_CHARS - len(sep) - len(cap_note))
+                    content = (content[:keep] + sep + cap_note)[:CALL_RESULT_MAX_CHARS]
+                else:
+                    content = f"{content}{sep}{cap_note}"
+            else:
+                content = cap_note[:CALL_RESULT_MAX_CHARS]
+
+        return {
+            "content": content,
+            "images": images,
+            "is_error": bool(getattr(result, "is_error", False)),
+            "truncated": text_truncated or (omitted_images > 0),
+        }
+
     async def list_tools_manifest(self, *, http_transport: Any = None) -> list[dict[str, Any]]:
         """拉全量工具清单 → 归一成入库形状（name/description/schema×2/crud_type）。
 
@@ -456,33 +772,32 @@ class ConnectorClient:
         模型一个不受本仓授权体系管的万能工具。故在同步入口就滤掉（`custom_mcp` 轨不滤：
         那边一个恰好叫 COMPOSIO_ 开头的远端工具就是个普通工具）。
         """
-        tools: list[dict[str, Any]] = []
+        if self.definition.transport == "stdio":
+            from src.connectors.stdio_pool import stdio_pool
+
+            gate_timeout = None if self.interactive else GATE_WAIT_TIMEOUT_SECONDS
+            idle_ttl = 600.0 if self.definition.source == "managed_local" else None
+            async with connector_gate.hold(self.namespace, timeout=gate_timeout):
+                cmd, env = await self._stdio_runtime_args()
+                raw_tools = await stdio_pool.list_tools(
+                    self.connector_id,
+                    cmd=cmd,
+                    env=env,
+                    timeout_seconds=self.timeout,
+                    idle_ttl_seconds=idle_ttl,
+                )
+            return self._normalize_tools(raw_tools)
+
+        raw_tools_http: list[Any] = []
         async with self.session(http_transport=http_transport) as client:
             cursor: Optional[str] = None
             for _ in range(_LIST_TOOLS_MAX_PAGES):
                 result = await client.list_tools(cursor=cursor)
-                for t in result.tools:
-                    if self.is_composio and is_meta_tool(t.name):
-                        logger.debug(
-                            "[connector] {} skipped composio meta tool {}",
-                            self.connector_id,
-                            t.name,
-                        )
-                        continue
-                    tools.append(
-                        {
-                            "name": t.name,
-                            "description": t.description or "",
-                            "input_schema": t.input_schema,
-                            "output_schema": t.output_schema,
-                            "crud_type": derive_crud_type(t),
-                            "destructive": derive_destructive(t),
-                        }
-                    )
+                raw_tools_http.extend(result.tools)
                 cursor = result.next_cursor
                 if not cursor:
                     break
-        return tools
+        return self._normalize_tools(raw_tools_http)
 
     async def call_tool(
         self,
@@ -501,30 +816,27 @@ class ConnectorClient:
           - ``is_error``：远端 tool-error 位原样透传（caller/模型自行读文案自纠）。
         围栏（UNTRUSTED_MCP_TOOL）在 TS gateway 侧套 —— 本层只管界。
         """
+        if self.definition.transport == "stdio":
+            from src.connectors.stdio_pool import stdio_pool
+
+            gate_timeout = None if self.interactive else GATE_WAIT_TIMEOUT_SECONDS
+            idle_ttl = 600.0 if self.definition.source == "managed_local" else None
+            async with connector_gate.hold(self.namespace, timeout=gate_timeout):
+                cmd, env = await self._stdio_runtime_args()
+                result = await stdio_pool.call_tool(
+                    self.connector_id,
+                    tool_name,
+                    arguments or {},
+                    cmd=cmd,
+                    env=env,
+                    timeout_seconds=self.timeout,
+                    idle_ttl_seconds=idle_ttl,
+                )
+            return self._format_call_result(result)
+
         async with self.session(http_transport=http_transport) as client:
             result = await client.call_tool(tool_name, arguments or {})
-        parts: list[str] = []
-        for block in getattr(result, "content", None) or []:
-            text = getattr(block, "text", None)
-            if isinstance(text, str) and text:
-                parts.append(text)
-        content = "\n".join(parts)
-        structured = getattr(result, "structured_content", None)
-        if not content and structured is not None:
-            try:
-                import json as _json
-
-                content = _json.dumps(structured, ensure_ascii=False, default=str)
-            except (TypeError, ValueError):
-                content = str(structured)
-        truncated = len(content) > CALL_RESULT_MAX_CHARS
-        if truncated:
-            content = content[:CALL_RESULT_MAX_CHARS]
-        return {
-            "content": content,
-            "is_error": bool(getattr(result, "is_error", False)),
-            "truncated": truncated,
-        }
+        return self._format_call_result(result)
 
 
 # ---------------------------------------------------------------------------

@@ -41,7 +41,6 @@ await i18n.changeLanguage('zh-CN')
 
 function renderTab(overrides: Record<string, string | undefined> = {}): void {
   const values: Record<string, string> = {
-    MAILAGENT_MCP_CONNECTORS: 'true',
     MAILAGENT_SKILL_CATALOG_PROMPT: 'false',
     MAILAGENT_MEMORY_LAYERS: 'false',
     MAILAGENT_AG_UI_MIRROR: 'false'
@@ -58,7 +57,6 @@ function renderTab(overrides: Record<string, string | undefined> = {}): void {
         exists: true,
         values,
         managedKeys: [
-          'MAILAGENT_MCP_CONNECTORS',
           'MAILAGENT_SKILL_CATALOG_PROMPT',
           'MAILAGENT_MEMORY_LAYERS',
           'MAILAGENT_AG_UI_MIRROR'
@@ -91,25 +89,24 @@ function switchFor(envKey: string): HTMLElement {
 }
 
 describe('LabsTab', () => {
-  test('渲染 warn 条、五个实验开关与页尾高级折叠区', () => {
+  test('渲染 warn 条、四个实验开关与页尾高级折叠区', () => {
     renderTab()
 
     expect(screen.getByText(/实验性功能可能不稳定/)).toBeTruthy()
-    expect(screen.getByText('等待重启生效')).toBeTruthy()
     expect(screen.getAllByText('群聊多 agent（实验）').length).toBeGreaterThan(0)
-    expect(screen.getByText('外部服务连接器')).toBeTruthy()
+    expect(screen.queryByText('外部服务连接器')).toBeNull()
     expect(screen.getByText('技能目录提示')).toBeTruthy()
     expect(screen.getByText('五层记忆整理')).toBeTruthy()
     expect(screen.getByText('AG-UI 协议镜像')).toBeTruthy()
     expect(screen.queryByText('事项')).toBeNull()
     expect(screen.queryByText('通讯录')).toBeNull()
-    // 四个 env 型 + 一个 owner_settings 型。
-    expect(screen.getAllByRole('switch')).toHaveLength(5)
+    // 三个 env 型 + 一个 owner_settings 型（MAILAGENT_MCP_CONNECTORS 已 cutover 撤出 Labs）。
+    expect(screen.getAllByRole('switch')).toHaveLength(4)
     const disclosure = screen.getByRole('button', { name: /高级实验/ })
     expect(disclosure.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(disclosure)
     expect(disclosure.getAttribute('aria-expanded')).toBe('true')
-    expect(screen.getAllByRole('switch')).toHaveLength(5)
+    expect(screen.getAllByRole('switch')).toHaveLength(4)
   })
 
   test('群聊多 agent 是 owner_settings 型：切换调 setLabs，且这一行不谈重启', async () => {
@@ -124,7 +121,7 @@ describe('LabsTab', () => {
     const helper = screen.getByText(/关掉就退回原来的/)
     expect(helper.textContent).toMatch(/不需要重启/)
     expect(helper.textContent).not.toMatch(/需重启|退出重开/)
-    // env 型的重启按钮只属于 mcpConnectors / memoryLayers 两行，没有随新行多出来。
-    expect(screen.getAllByRole('button', { name: /重启后端/ })).toHaveLength(2)
+    // env 型的重启按钮只属于 memoryLayers 一行，没有随新行多出来。
+    expect(screen.getAllByRole('button', { name: /重启后端/ })).toHaveLength(1)
   })
 })

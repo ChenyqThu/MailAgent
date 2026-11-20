@@ -18,7 +18,9 @@ import type {
   ConnectorCatalogView,
   ConnectorCrudType,
   ConnectorDisconnectResult,
+  ConnectorInstallStatus,
   ConnectorOAuthStartResult,
+  ConnectorRuntimeOptionsResult,
   ConnectorSetEnabledResult,
   ConnectorSetPreprocessResult,
   ConnectorPurgeOrphansResult,
@@ -27,7 +29,14 @@ import type {
   ConnectorSummary,
   ConnectorSyncResult,
   ConnectorToolMode,
-  ConnectorToolSummary
+  ConnectorToolSummary,
+  CustomConnectorCreateInput,
+  CustomConnectorDeleteResult,
+  CustomConnectorUpdateInput,
+  ManagedRuntimeOptionsInput,
+  OpenSystemPermissionResult,
+  SystemPermissionKind,
+  SystemPermissionsStatus
 } from './types/connector'
 
 /** connector id 与工具名进 URL 路径 —— 工具名来自远端 manifest（可能带 `/` 或空格），
@@ -155,6 +164,82 @@ export function createConnectorApi(baseUrl: string): ConnectorApi {
         baseUrl,
         'POST',
         `/connector/${seg(connectorId)}/tools/purge_orphans`
+      )
+    },
+
+    createCustom(input: CustomConnectorCreateInput): Promise<ConnectorSummary> {
+      return request<ConnectorSummary>(baseUrl, 'POST', '/connector/custom', {
+        body: input
+      })
+    },
+
+    updateCustom(
+      connectorId: string,
+      input: CustomConnectorUpdateInput
+    ): Promise<ConnectorSummary> {
+      return request<ConnectorSummary>(baseUrl, 'PATCH', `/connector/custom/${seg(connectorId)}`, {
+        body: input
+      })
+    },
+
+    deleteCustom(connectorId: string): Promise<CustomConnectorDeleteResult> {
+      return request<CustomConnectorDeleteResult>(
+        baseUrl,
+        'DELETE',
+        `/connector/custom/${seg(connectorId)}`
+      )
+    },
+
+    install(
+      connectorId: string,
+      input?: ManagedRuntimeOptionsInput
+    ): Promise<ConnectorInstallStatus> {
+      return request<ConnectorInstallStatus>(
+        baseUrl,
+        'POST',
+        `/connector/${seg(connectorId)}/install`,
+        input !== undefined ? { body: input } : undefined
+      )
+    },
+
+    installStatus(connectorId: string): Promise<ConnectorInstallStatus> {
+      return request<ConnectorInstallStatus>(
+        baseUrl,
+        'GET',
+        `/connector/${seg(connectorId)}/install-status`
+      )
+    },
+
+    uninstall(connectorId: string): Promise<ConnectorInstallStatus> {
+      return request<ConnectorInstallStatus>(
+        baseUrl,
+        'POST',
+        `/connector/${seg(connectorId)}/uninstall`
+      )
+    },
+
+    setRuntimeOptions(
+      connectorId: string,
+      input: ManagedRuntimeOptionsInput
+    ): Promise<ConnectorRuntimeOptionsResult> {
+      return request<ConnectorRuntimeOptionsResult>(
+        baseUrl,
+        'PATCH',
+        `/connector/${seg(connectorId)}/runtime-options`,
+        { body: input }
+      )
+    },
+
+    systemPermissions(): Promise<SystemPermissionsStatus> {
+      return request<SystemPermissionsStatus>(baseUrl, 'GET', '/connector/system-permissions')
+    },
+
+    openSystemPermission(kind: SystemPermissionKind): Promise<OpenSystemPermissionResult> {
+      return request<OpenSystemPermissionResult>(
+        baseUrl,
+        'POST',
+        '/connector/system-permissions/open',
+        { body: { kind } }
       )
     }
   }

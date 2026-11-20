@@ -13,7 +13,6 @@ import { useTranslation } from 'react-i18next'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
 
-import { useOpennessFlags } from '@shared/components/agents/hooks'
 import { Button } from '@shared/components/ui/button'
 import { Switch } from '@shared/components/ui/switch'
 import { setLabs, type LabsFlagValue } from '@shared/api/groupSettings'
@@ -30,7 +29,6 @@ import { Row } from '../parts/Row'
 import { Section } from '../parts/Section'
 
 type LabFlag =
-  | 'MAILAGENT_MCP_CONNECTORS'
   | 'MAILAGENT_SKILL_CATALOG_PROMPT'
   | 'MAILAGENT_MEMORY_LAYERS'
   | 'MAILAGENT_AG_UI_MIRROR'
@@ -146,7 +144,6 @@ export function LabsTab(): React.ReactElement {
   const api = useMailApi()
   const queryClient = useQueryClient()
   const envState = useEnvStore((s) => s.state)
-  const runtimeFlags = useOpennessFlags(true)
   const [savingKey, setSavingKey] = React.useState<LabFlag | null>(null)
   const [restartingKey, setRestartingKey] = React.useState<LabFlag | null>(null)
   const labs = useLabsFlags()
@@ -162,11 +159,9 @@ export function LabsTab(): React.ReactElement {
 
   const ready = envState.status === 'ready'
   const values = ready ? envState.snapshot.values : {}
-  const mcpConnectors = isEnabled(values['MAILAGENT_MCP_CONNECTORS'] ?? '')
   const skillCatalog = isEnabled(values['MAILAGENT_SKILL_CATALOG_PROMPT'] ?? '')
   const memoryLayers = isEnabled(values['MAILAGENT_MEMORY_LAYERS'] ?? '')
   const agUiMirror = isEnabled(values['MAILAGENT_AG_UI_MIRROR'] ?? '')
-  const connectorRuntime = runtimeFlags.connectorToolsEnabled
 
   async function saveFlag(flag: LabFlag, patch: Record<string, string>): Promise<void> {
     setSavingKey(flag)
@@ -204,10 +199,6 @@ export function LabsTab(): React.ReactElement {
         )
       }
       toastSuccess(t('settings.labs.restart.success'))
-      if (flag === 'MAILAGENT_MCP_CONNECTORS') {
-        await new Promise<void>((resolve) => setTimeout(resolve, 1200))
-        await queryClient.invalidateQueries({ queryKey: qk.chat.config('opennessFlags') })
-      }
     } catch (err) {
       toastError(t('settings.labs.restart.failed'), errorMessage(err))
     } finally {
@@ -238,28 +229,6 @@ export function LabsTab(): React.ReactElement {
           checked={labs.groupAgents}
           busy={labs.loading || saveLabs.isPending}
           onToggle={(checked) => saveLabs.mutate(checked ? 'on' : 'off')}
-        />
-      </Section>
-
-      <Section title={t('settings.labs.mcpConnectors.label')}>
-        <ExperimentalFlagRow
-          envKey="MAILAGENT_MCP_CONNECTORS"
-          checked={mcpConnectors}
-          ready={ready}
-          saving={savingKey === 'MAILAGENT_MCP_CONNECTORS'}
-          restarting={restartingKey === 'MAILAGENT_MCP_CONNECTORS'}
-          label="MAILAGENT_MCP_CONNECTORS"
-          helper={t('settings.labs.mcpConnectors.helper')}
-          restartHint={t('settings.labs.mcpConnectors.restartHint')}
-          waitingForRestart={
-            typeof connectorRuntime === 'boolean' && connectorRuntime !== mcpConnectors
-          }
-          onToggle={(checked) =>
-            void saveFlag('MAILAGENT_MCP_CONNECTORS', {
-              MAILAGENT_MCP_CONNECTORS: checked ? 'true' : 'false'
-            })
-          }
-          onRestartBackend={() => void restartBackend('MAILAGENT_MCP_CONNECTORS')}
         />
       </Section>
 

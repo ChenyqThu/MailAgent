@@ -63,9 +63,9 @@ CROSS_LANGUAGE_FLAGS = {
     "MAILAGENT_AGENT_PLUGINS": [_FLAGS, _CHAT],
     # standing context：Python env-only 热读
     "MAILAGENT_STANDING_CONTEXT_ENABLED": [_CHAT],
-    # MCP connector 总闸（08-01 阶段 1）：Node envBool（gateway 动态工具注入 + manifest 拉取）
-    # ＋ pydantic（serve-api /api/connector/* 的 409 门）—— 与 island 同形态的双载体。
-    # 🔴 双侧默认必须同为 false（灰度未 cutover）；翻默认时两边一起翻，不然会出现
+    # MCP connector 总闸（2026-11-20 cutover 默认开）：Node envBool（gateway 动态工具注入 + manifest 拉取）
+    # ＋ pydantic（serve-api /api/connector/* 的 409 门）。
+    # 🔴 双侧默认必须同为 true（翻默认或应急回退时两边一起翻），不然会出现
     # 「gateway 注册了连接器工具但每次调用都 409」或反过来「端点开着却没工具」。
     "MAILAGENT_MCP_CONNECTORS": [_LIFECYCLE, _CONFIG],
     # 飞书 IM 总闸（08-01 阶段 2 PR-1/PR-2）：Node envBool（gateway /api/ai/im-chat 端点注册 +
@@ -167,37 +167,10 @@ def test_cutover_flag_defaults_consistent():
 # (tests/config/test_flag_cross_language.py)" 是句空话（映射表只断言 env 键**出现**，不看默认值）。
 # 🔴 期望值显式登记而不是「两侧相等即可」：cutover 是要人拍板的动作，写死期望值能让「谁把默认
 # 悄悄翻了」也变成红，而不只是拦住「只翻一侧」。
-# pydantic **单载体** flag 的默认值登记（与上面双载体表同理：期望值显式写死，
-# 「谁把默认悄悄翻了」= 红，cutover 是要人拍板的动作）。单载体没有 Node envBool
-# 可比对，所以不进 NODE_PYDANTIC_DUAL_CARRIER_FLAGS（那张表的 canary 会因
-# lifecycle 缺键而误红）。
-PYDANTIC_SINGLE_CARRIER_FLAGS = {}
-
-
-def test_pydantic_single_carrier_defaults_match_expected():
-    """pydantic 单载体 flag：config.py 默认值等于登记的期望值。"""
-    config_fields = p.parse_config_fields()
-    drift = []
-    for env_key, (field_name, expected) in PYDANTIC_SINGLE_CARRIER_FLAGS.items():
-        py_default = p.config_bool_default(field_name, config_fields)
-        assert py_default is not None, (
-            f"canary miss: config.py {field_name} 默认不是 bool 常量（改名了？漏 "
-            f"validation_alias={env_key}？）"
-        )
-        if py_default is not expected:
-            drift.append(
-                f"{env_key}: config.py {field_name} 默认={py_default} —— 期望 {expected}"
-            )
-    assert not drift, (
-        "pydantic 单载体 flag 默认值漂移（cutover 需人拍板，不许悄悄翻）：\n"
-        + "\n".join(f"  {d}" for d in drift)
-    )
-
-
 NODE_PYDANTIC_DUAL_CARRIER_FLAGS = {
     # env 键 → (pydantic 字段名, 两侧期望默认)
-    # MCP connector 总闸：灰度未 cutover（ship-off → dogfood → cutover 另拍）。
-    "MAILAGENT_MCP_CONNECTORS": ("mcp_connectors_enabled", False),
+    # MCP connector 总闸（2026-11-20 cutover 默认开；显式 false 作应急回退）。
+    "MAILAGENT_MCP_CONNECTORS": ("mcp_connectors_enabled", True),
     # 飞书 IM 总闸（08-01 阶段 2）：**cutover 2026-08-04**（owner dogfood 通过）。翻默认漏一侧
     # = 「桥在跑但 gateway /api/ai/im-chat 404」或反过来「端点开着却没有桥来调」。
     "MAILAGENT_IM_FEISHU": ("im_feishu_enabled", True),

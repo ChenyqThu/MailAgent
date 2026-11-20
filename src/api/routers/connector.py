@@ -24,8 +24,10 @@ serve-api 启动零新副作用。
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from typing import Any, NoReturn, Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import HTMLResponse
@@ -33,7 +35,7 @@ from loguru import logger
 from starlette.concurrency import run_in_threadpool
 
 from src.api.app import APIError, success_envelope
-from src.api.auth import verify_cf_access
+from src.api.auth import verify_cf_access, verify_local_token
 from src.api.deps import get_settings
 
 router = APIRouter(prefix="/api/connector", tags=["connector"])
@@ -52,6 +54,10 @@ def _require_enabled(settings: Any) -> None:
             "MCP connectors are disabled (set MAILAGENT_MCP_CONNECTORS=true and restart serve-api)",
             http_status=409,
         )
+
+
+def _require_managed_local_enabled(settings: Any) -> None:
+    _require_enabled(settings)
 
 
 async def _connector_def(connector_id: str):
@@ -144,6 +150,111 @@ def _credential_view(namespace: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _is_custom_row(row: Any) -> bool:
+    from src.connectors.catalog import get_direct_entry, get_managed_local_entry
+    from src.connectors.composio_catalog import get_catalog_entry
+
+    in_catalog = (
+        get_direct_entry(row.connector_id) is not None
+        or get_catalog_entry(row.connector_id) is not None
+        or get_managed_local_entry(row.connector_id) is not None
+    )
+    return bool(
+        row.source == "custom_mcp"
+        and (
+            row.transport == "stdio"
+            or getattr(row, "custom_header_names", ())
+            or not in_catalog
+        )
+    )
+
+
+def _managed_summary_fields(row: Any) -> dict[str, Any]:
+    if row.source != "managed_local":
+        return {
+            "stdio_command": getattr(row, "stdio_command", None),
+            "runtime_installed": False,
+            "runtime_version": None,
+            "runtime_mode": None,
+            "supported_modes": [],
+            "requires_permissions": [],
+            "platform_supported": True,
+            "runtime_config": None,
+        }
+    from src.connectors.local_installer import (
+        LocalInstallerError,
+        get_install_status,
+        resolve_stdio_command,
+    )
+
+    rc = getattr(row, "runtime_config", None)
+    try:
+        st = get_install_status(row.connector_id, rc)
+        cmd = resolve_stdio_command(row.connector_id, rc)
+        return {
+            "stdio_command": cmd,
+            "runtime_installed": bool(st["installed"]),
+            "runtime_version": st["version"],
+            "runtime_mode": st["mode"],
+            "supported_modes": list(st["supported_modes"]),
+            "requires_permissions": list(st["requires_permissions"]),
+            "platform_supported": bool(st["platform_supported"]),
+            "runtime_config": st["runtime_config"],
+        }
+    except LocalInstallerError:
+        return {
+            "stdio_command": None,
+            "runtime_installed": False,
+            "runtime_version": None,
+            "runtime_mode": None,
+            "supported_modes": [],
+            "requires_permissions": [],
+            "platform_supported": False,
+            "runtime_config": rc,
+        }
+
+
+def _serialize_connector_summary(
+    row: Any,
+    cred: dict[str, Any],
+    flow: Any,
+    *,
+    managed_meta: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    from src.connectors.catalog import row_is_off_track
+
+    cid = row.connector_id
+    meta = managed_meta if managed_meta is not None else _managed_summary_fields(row)
+    return {
+        "connector_id": cid,
+        "display_name": row.display_name or cid,
+        "server_url": row.server_url,
+        "transport": row.transport,
+        "status": row.status,
+        "enabled": row.enabled,
+        # PR3：分类侧独立授权位（默认关）。
+        "preprocess_enabled": row.preprocess_enabled,
+        "scopes": row.scopes,
+        "last_error": row.last_error,
+        "last_synced_at": row.last_synced_at,
+        "source": row.source,
+        "superseded_by_catalog": row_is_off_track(row.source, cid),
+        "is_custom": _is_custom_row(row),
+        "custom_header_names": list(getattr(row, "custom_header_names", ()) or ()),
+        "stdio_command": meta["stdio_command"],
+        "stdio_env_keys": list(getattr(row, "stdio_env_keys", ()) or ()),
+        "runtime_installed": meta["runtime_installed"],
+        "runtime_version": meta["runtime_version"],
+        "runtime_mode": meta["runtime_mode"],
+        "supported_modes": meta["supported_modes"],
+        "requires_permissions": meta["requires_permissions"],
+        "platform_supported": meta["platform_supported"],
+        "runtime_config": meta["runtime_config"],
+        "credential": cred,
+        "flow": flow,
+    }
+
+
 @router.get("", dependencies=[Depends(verify_cf_access)])
 async def list_connectors(request: Request, settings=Depends(get_settings)) -> Any:
     """**已配置的** connector 行 ∪ 凭证健康 ∪ 在途流。
@@ -154,7 +265,6 @@ async def list_connectors(request: Request, settings=Depends(get_settings)) -> A
     `GET /catalog` 的预置目录承担，两处不重复渲染同一家。
     """
     _require_enabled(settings)
-    from src.connectors.catalog import row_is_off_track
     from src.connectors.oauth_flow import get_flow
     from src.connectors.registry import namespace_for
 
@@ -164,31 +274,304 @@ async def list_connectors(request: Request, settings=Depends(get_settings)) -> A
     for row in rows:
         cid = row.connector_id
         cred = await run_in_threadpool(_credential_view, namespace_for(cid))
+        meta = await run_in_threadpool(_managed_summary_fields, row)
         items.append(
-            {
-                "connector_id": cid,
-                "display_name": row.display_name or cid,
-                "server_url": row.server_url,
-                "transport": row.transport,
-                "status": row.status,
-                "enabled": row.enabled,
-                # PR3：分类侧独立授权位（默认关）。
-                "preprocess_enabled": row.preprocess_enabled,
-                "scopes": row.scopes,
-                "last_error": row.last_error,
-                "last_synced_at": row.last_synced_at,
-                # 08-05 WP-12：装配路线 —— 设置页据此显示「经 Composio」/「直连」（出站告知
-                # 三处之一），并对与目录出厂轨道不符的行给迁移提示。
-                # 🔴 08-06 双轨改判：判据从「custom_mcp 行 + 目录里有同 id」改成
-                # `row_is_off_track` —— 老判据会把**正确的直连行**（notion / atlassian 出厂
-                # 就是 direct 轨）误标成「已被目录取代」，把 owner 诱导去断开重连一遍。
-                "source": row.source,
-                "superseded_by_catalog": row_is_off_track(row.source, cid),
-                "credential": cred,
-                "flow": _flow_view(get_flow(cid)),
-            }
+            _serialize_connector_summary(
+                row, cred, _flow_view(get_flow(cid)), managed_meta=meta
+            )
         )
     return success_envelope({"connectors": items}, request=request)
+
+
+_CUSTOM_CONNECTOR_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,47}$")
+
+
+def _validate_http_endpoint(url: str, *, transport: str = "streamable_http") -> str:
+    cleaned = url.strip()
+    if not cleaned:
+        raise APIError("E_INVALID_ARG", f"server_url is required for {transport}", http_status=400)
+    parsed = urlparse(cleaned)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme == "https" and host:
+        return cleaned
+    if parsed.scheme == "http" and host in ("127.0.0.1", "localhost", "::1"):
+        return cleaned
+    raise APIError(
+        "E_INVALID_ARG",
+        "server_url must use https:// (or http:// for localhost/127.0.0.1/[::1])",
+        http_status=400,
+    )
+
+
+def _validate_str_dict(raw: Any, field_name: str) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        raise APIError("E_INVALID_ARG", f"{field_name} must be a JSON object", http_status=400)
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        if not isinstance(k, str) or not k.strip() or not isinstance(v, str):
+            raise APIError(
+                "E_INVALID_ARG",
+                f"{field_name} keys must be non-empty strings and values must be strings",
+                http_status=400,
+            )
+        out[k.strip()] = v
+    return out
+
+
+def _parse_stdio_payload(body: dict[str, Any], *, existing: Any = None) -> dict[str, Any]:
+    nested = body.get("stdio_command")
+    if nested is not None and not isinstance(nested, dict):
+        raise APIError("E_INVALID_ARG", "stdio_command must be an object", http_status=400)
+    src = nested if isinstance(nested, dict) else body
+    if "command" in src:
+        raw_cmd = src.get("command")
+    elif existing is not None and existing.stdio_command:
+        raw_cmd = existing.stdio_command.get("command")
+    else:
+        raw_cmd = None
+    if not isinstance(raw_cmd, str) or not raw_cmd.strip():
+        raise APIError("E_INVALID_ARG", "command is required for stdio connector", http_status=400)
+
+    if "args" in src:
+        raw_args = src.get("args")
+        if raw_args is None:
+            args_list: list[str] = []
+        elif isinstance(raw_args, list) and all(isinstance(x, str) for x in raw_args):
+            args_list = list(raw_args)
+        else:
+            raise APIError("E_INVALID_ARG", "args must be a list of strings", http_status=400)
+    elif existing is not None and existing.stdio_command:
+        args_list = list(existing.stdio_command.get("args") or [])
+    else:
+        args_list = []
+
+    if "cwd" in src:
+        raw_cwd = src.get("cwd")
+        if raw_cwd is not None and not isinstance(raw_cwd, str):
+            raise APIError("E_INVALID_ARG", "cwd must be a string or null", http_status=400)
+        cwd_val = raw_cwd.strip() if isinstance(raw_cwd, str) and raw_cwd.strip() else None
+    elif existing is not None and existing.stdio_command:
+        cwd_val = existing.stdio_command.get("cwd")
+    else:
+        cwd_val = None
+
+    return {"command": raw_cmd.strip(), "args": args_list, "cwd": cwd_val}
+
+
+@router.post("/custom", dependencies=[Depends(verify_local_token)])
+async def create_custom_connector(
+    request: Request,
+    payload: dict[str, Any] = Body(...),
+    settings=Depends(get_settings),
+) -> Any:
+    """创建自定义 MCP connector（HTTP 静态 header 或本机 lazy stdio 进程）。
+
+    🔴 鉴权 = ``Depends(verify_local_token)``（仅本机 desktop renderer / loopback，
+    禁止远程 CF JWT 任意拉起本机子进程或探测内网 HTTP 端点）。
+    """
+    _require_enabled(settings)
+    from src.agent_config.store import CONNECTOR_TRANSPORTS
+    from src.connectors.catalog import get_direct_entry, get_managed_local_entry
+    from src.connectors.composio_catalog import get_catalog_entry
+    from src.connectors.oauth_flow import get_flow
+    from src.connectors.registry import namespace_for
+
+    cid_raw = payload.get("connector_id")
+    if not isinstance(cid_raw, str) or not _CUSTOM_CONNECTOR_ID_RE.match(cid_raw.strip()):
+        raise APIError(
+            "E_INVALID_ARG",
+            f"connector_id must match {_CUSTOM_CONNECTOR_ID_RE.pattern}",
+            http_status=400,
+        )
+    cid = cid_raw.strip()
+    if (
+        get_direct_entry(cid) is not None
+        or get_catalog_entry(cid) is not None
+        or get_managed_local_entry(cid) is not None
+    ):
+        raise APIError(
+            "E_CONFLICT",
+            f"connector_id {cid!r} conflicts with a built-in catalog connector",
+            http_status=409,
+        )
+
+    store = _store()
+    existing = await run_in_threadpool(store.get_connector, cid)
+    if existing is not None:
+        raise APIError("E_CONFLICT", f"connector {cid!r} already exists", http_status=409)
+
+    display_raw = payload.get("display_name")
+    if not isinstance(display_raw, str) or not display_raw.strip():
+        raise APIError("E_INVALID_ARG", "display_name is required", http_status=400)
+    display_name = display_raw.strip()
+
+    transport = payload.get("transport", "streamable_http")
+    if transport not in CONNECTOR_TRANSPORTS:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"transport must be one of {list(CONNECTOR_TRANSPORTS)}",
+            http_status=400,
+        )
+
+    server_url = ""
+    custom_headers: Optional[dict[str, str]] = None
+    stdio_cmd: Optional[dict[str, Any]] = None
+    stdio_env: Optional[dict[str, str]] = None
+    if transport in ("streamable_http", "sse"):
+        raw_url = payload.get("server_url")
+        if not isinstance(raw_url, str):
+            raise APIError("E_INVALID_ARG", "server_url must be a string", http_status=400)
+        server_url = _validate_http_endpoint(raw_url, transport=transport)
+        if "headers" in payload and payload["headers"] is not None:
+            custom_headers = _validate_str_dict(payload["headers"], "headers")
+    else:
+        stdio_cmd = _parse_stdio_payload(payload)
+        if "env" in payload and payload["env"] is not None:
+            stdio_env = _validate_str_dict(payload["env"], "env")
+
+    row = await run_in_threadpool(
+        lambda: store.upsert_custom_connector(
+            cid,
+            display_name=display_name,
+            transport=transport,
+            server_url=server_url,
+            custom_headers=custom_headers,
+            replace_headers=custom_headers is not None,
+            stdio_command=stdio_cmd,
+            stdio_env=stdio_env,
+            replace_env=stdio_env is not None,
+        )
+    )
+    cred = await run_in_threadpool(_credential_view, namespace_for(cid))
+    return success_envelope(
+        _serialize_connector_summary(row, cred, _flow_view(get_flow(cid))),
+        request=request,
+    )
+
+
+@router.patch("/custom/{connector_id}", dependencies=[Depends(verify_local_token)])
+async def update_custom_connector(
+    connector_id: str,
+    request: Request,
+    payload: dict[str, Any] = Body(...),
+    settings=Depends(get_settings),
+) -> Any:
+    """更新自定义 MCP connector；省略 headers/env 保留原有加密配置，传 `{}` 清空。"""
+    _require_enabled(settings)
+    from src.agent_config.store import CONNECTOR_TRANSPORTS
+    from src.connectors.oauth_flow import get_flow
+    from src.connectors.registry import namespace_for
+    from src.connectors.stdio_pool import stdio_pool
+
+    store = _store()
+    existing = await run_in_threadpool(store.get_connector, connector_id)
+    if existing is None:
+        raise APIError("E_NOT_FOUND", f"connector {connector_id!r} not found", http_status=404)
+    if not _is_custom_row(existing):
+        raise APIError(
+            "E_INVALID_ARG",
+            f"connector {connector_id!r} is a catalog connector and cannot be edited here",
+            http_status=400,
+        )
+
+    display_name = existing.display_name or connector_id
+    if "display_name" in payload:
+        if not isinstance(payload["display_name"], str) or not payload["display_name"].strip():
+            raise APIError("E_INVALID_ARG", "display_name must be a non-empty string", http_status=400)
+        display_name = payload["display_name"].strip()
+
+    transport = payload.get("transport", existing.transport or "streamable_http")
+    if transport not in CONNECTOR_TRANSPORTS:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"transport must be one of {list(CONNECTOR_TRANSPORTS)}",
+            http_status=400,
+        )
+
+    server_url = existing.server_url or ""
+    custom_headers: Optional[dict[str, str]] = None
+    replace_headers = False
+    stdio_cmd: Optional[dict[str, Any]] = None
+    stdio_env: Optional[dict[str, str]] = None
+    replace_env = False
+
+    if transport in ("streamable_http", "sse"):
+        if "server_url" in payload:
+            if not isinstance(payload["server_url"], str):
+                raise APIError("E_INVALID_ARG", "server_url must be a string", http_status=400)
+            server_url = _validate_http_endpoint(payload["server_url"], transport=transport)
+        else:
+            server_url = _validate_http_endpoint(server_url, transport=transport)
+        if "headers" in payload:
+            if payload["headers"] is None:
+                custom_headers = {}
+            else:
+                custom_headers = _validate_str_dict(payload["headers"], "headers")
+            replace_headers = True
+    else:
+        server_url = ""
+        stdio_cmd = _parse_stdio_payload(payload, existing=existing)
+        if "env" in payload:
+            if payload["env"] is None:
+                stdio_env = {}
+            else:
+                stdio_env = _validate_str_dict(payload["env"], "env")
+            replace_env = True
+
+    await stdio_pool.close_connector(connector_id)
+    row = await run_in_threadpool(
+        lambda: store.upsert_custom_connector(
+            connector_id,
+            display_name=display_name,
+            transport=transport,
+            server_url=server_url,
+            custom_headers=custom_headers,
+            replace_headers=replace_headers,
+            stdio_command=stdio_cmd,
+            stdio_env=stdio_env,
+            replace_env=replace_env,
+        )
+    )
+    cred = await run_in_threadpool(_credential_view, namespace_for(connector_id))
+    return success_envelope(
+        _serialize_connector_summary(row, cred, _flow_view(get_flow(connector_id))),
+        request=request,
+    )
+
+
+@router.delete("/custom/{connector_id}", dependencies=[Depends(verify_local_token)])
+async def delete_custom_connector(
+    connector_id: str,
+    request: Request,
+    settings=Depends(get_settings),
+) -> Any:
+    """删除自定义 MCP connector（关闭在途 stdio 进程 + 清除凭证与工具行）。"""
+    _require_enabled(settings)
+    from src.agent_config.credentials import delete_credential, list_credentials
+    from src.connectors.registry import namespace_for
+    from src.connectors.stdio_pool import stdio_pool
+
+    store = _store()
+    existing = await run_in_threadpool(store.get_connector, connector_id)
+    if existing is None:
+        raise APIError("E_NOT_FOUND", f"connector {connector_id!r} not found", http_status=404)
+    if not _is_custom_row(existing):
+        raise APIError(
+            "E_INVALID_ARG",
+            f"connector {connector_id!r} is not a custom connector — use /disconnect",
+            http_status=400,
+        )
+
+    await stdio_pool.close_connector(connector_id)
+    namespace = namespace_for(connector_id)
+    metas = await run_in_threadpool(list_credentials, namespace)
+    for meta in metas:
+        await run_in_threadpool(delete_credential, namespace, meta.credential_key)
+    purged = await run_in_threadpool(store.delete_connector, connector_id)
+    return success_envelope(
+        {"connector_id": connector_id, "deleted": purged},
+        request=request,
+    )
 
 
 @router.get("/catalog", dependencies=[Depends(verify_cf_access)])
@@ -214,12 +597,36 @@ async def connector_catalog(request: Request, settings=Depends(get_settings)) ->
     _require_enabled(settings)
     from src.connectors import composio
     from src.connectors.catalog import catalog_views, row_is_off_track
+    from src.connectors.local_installer import get_install_status
 
     rows = {r.connector_id: r for r in await run_in_threadpool(_store().list_connectors)}
     key_status = await run_in_threadpool(composio.api_key_status)
     entries = []
-    for view in catalog_views():
+    for view in catalog_views(include_managed_local=True):
         row = rows.get(view.connector_id)
+        if view.track == "managed_local":
+            st = await run_in_threadpool(
+                get_install_status,
+                view.connector_id,
+                row.runtime_config if row else None,
+            )
+            runtime_fields = {
+                "runtime_installed": bool(st["installed"]),
+                "runtime_version": st["version"],
+                "runtime_mode": st["mode"],
+                "supported_modes": list(st["supported_modes"]),
+                "requires_permissions": list(st["requires_permissions"]),
+                "platform_supported": bool(st["platform_supported"]),
+            }
+        else:
+            runtime_fields = {
+                "runtime_installed": False,
+                "runtime_version": None,
+                "runtime_mode": None,
+                "supported_modes": [],
+                "requires_permissions": [],
+                "platform_supported": True,
+            }
         entries.append(
             {
                 "connector_id": view.connector_id,
@@ -235,6 +642,7 @@ async def connector_catalog(request: Request, settings=Depends(get_settings)) ->
                 "configured": row is not None,
                 "superseded": row is not None
                 and row_is_off_track(row.source, view.connector_id),
+                **runtime_fields,
             }
         )
     return success_envelope(
@@ -275,6 +683,256 @@ async def clear_composio_key(request: Request, settings=Depends(get_settings)) -
     return success_envelope({**status, "deleted": deleted}, request=request)
 
 
+@router.get("/system-permissions", dependencies=[Depends(verify_local_token)])
+async def system_permissions(request: Request, settings=Depends(get_settings)) -> Any:
+    """检测本机 TCC 权限（仅 Desktop loopback，拒绝远程 CF JWT）。"""
+    _require_enabled(settings)
+    from src.connectors.local_installer import check_system_permissions
+
+    data = await run_in_threadpool(check_system_permissions)
+    return success_envelope(data, request=request)
+
+
+@router.post("/system-permissions/open", dependencies=[Depends(verify_local_token)])
+async def open_system_permissions(
+    request: Request,
+    payload: dict[str, Any] = Body(...),
+    settings=Depends(get_settings),
+) -> Any:
+    """打开 macOS 系统设置 TCC 面板（仅 Desktop loopback）。"""
+    _require_enabled(settings)
+    from src.connectors.local_installer import (
+        LocalInstallerError,
+        open_system_permission_pane,
+    )
+
+    kind = payload.get("kind") or payload.get("permission")
+    if not isinstance(kind, str) or not kind.strip():
+        raise APIError(
+            "E_INVALID_ARG",
+            "kind must be 'accessibility' or 'screen_recording'",
+            http_status=400,
+        )
+    try:
+        data = await run_in_threadpool(open_system_permission_pane, kind.strip())
+    except LocalInstallerError as e:
+        raise APIError(e.code, e.message, http_status=e.status_code) from None
+    return success_envelope(data, request=request)
+
+
+@router.get("/{connector_id}/install-status", dependencies=[Depends(verify_local_token)])
+async def managed_install_status(
+    connector_id: str,
+    request: Request,
+    settings=Depends(get_settings),
+) -> Any:
+    """查看受管本机连接器安装状态与配置摘要（仅 Desktop loopback）。"""
+    _require_managed_local_enabled(settings)
+    from src.connectors.local_installer import LocalInstallerError, get_install_status
+
+    row = await run_in_threadpool(_store().get_connector, connector_id)
+    try:
+        data = await run_in_threadpool(
+            get_install_status,
+            connector_id,
+            row.runtime_config if row else None,
+        )
+    except LocalInstallerError as e:
+        raise APIError(e.code, e.message, http_status=e.status_code) from None
+    return success_envelope(data, request=request)
+
+
+@router.post("/{connector_id}/install", dependencies=[Depends(verify_local_token)])
+async def install_managed_connector(
+    connector_id: str,
+    request: Request,
+    payload: Optional[dict[str, Any]] = Body(default=None),
+    settings=Depends(get_settings),
+) -> Any:
+    """一键安装受管本机 stdio MCP 运行时（仅 Desktop loopback）。"""
+    _require_managed_local_enabled(settings)
+    from src.connectors.catalog import get_managed_local_entry
+    from src.connectors.client import ConnectorClient
+    from src.connectors.local_installer import (
+        LocalInstallerError,
+        install_runtime,
+        normalize_runtime_options,
+    )
+    from src.connectors.oauth_flow import get_flow
+    from src.connectors.registry import get_connector_def, namespace_for
+    from src.connectors.stdio_pool import stdio_pool
+
+    entry = get_managed_local_entry(connector_id)
+    if entry is None:
+        raise APIError(
+            "E_CONNECTOR_UNSUPPORTED",
+            f"connector {connector_id!r} is not a managed_local catalog entry",
+            http_status=404,
+        )
+
+    store = _store()
+    existing = await run_in_threadpool(store.get_connector, connector_id)
+    try:
+        normalized_rc = normalize_runtime_options(
+            connector_id,
+            payload or {},
+            existing=existing.runtime_config if existing else None,
+        )
+    except LocalInstallerError as e:
+        raise APIError(e.code, e.message, http_status=e.status_code) from None
+
+    await stdio_pool.invalidate(connector_id)
+    try:
+        status_view = await run_in_threadpool(install_runtime, connector_id, normalized_rc)
+    except LocalInstallerError as e:
+        raise APIError(e.code, e.message, http_status=e.status_code) from None
+
+    await run_in_threadpool(
+        lambda: store.upsert_connector(
+            connector_id,
+            server_url="",
+            display_name=entry.display_name,
+            transport="stdio",
+            source="managed_local",
+            runtime_config=normalized_rc,
+        )
+    )
+    await run_in_threadpool(
+        lambda: store.update_connector_state(
+            connector_id,
+            status="connected",
+            last_error=None,
+        )
+    )
+
+    try:
+        definition = await run_in_threadpool(get_connector_def, connector_id)
+        client = ConnectorClient(connector_id, interactive=False, definition=definition)
+        tools = await client.list_tools_manifest()
+        await run_in_threadpool(store.sync_connector_tools, connector_id, tools)
+        await run_in_threadpool(
+            lambda: store.update_connector_state(
+                connector_id,
+                status="connected",
+                last_error=None,
+                last_synced_at=int(time.time()),
+            )
+        )
+    except Exception as sync_err:  # noqa: BLE001 — 安装成功后初始同步失败保留运行时与行
+        logger.warning(
+            "[connector] initial tool sync skipped/failed after install for {}: {}",
+            connector_id,
+            sync_err,
+        )
+
+    row = await run_in_threadpool(store.get_connector, connector_id)
+    cred = await run_in_threadpool(_credential_view, namespace_for(connector_id))
+    meta = await run_in_threadpool(_managed_summary_fields, row)
+    summary = _serialize_connector_summary(
+        row, cred, _flow_view(get_flow(connector_id)), managed_meta=meta
+    )
+    return success_envelope(
+        {
+            "ok": True,
+            **status_view,
+            "status": dict(status_view),
+            "connector": summary,
+        },
+        request=request,
+    )
+
+
+@router.post("/{connector_id}/uninstall", dependencies=[Depends(verify_local_token)])
+async def uninstall_managed_connector(
+    connector_id: str,
+    request: Request,
+    settings=Depends(get_settings),
+) -> Any:
+    """卸载受管本机运行时、关闭 stdio 池并清库行（仅 Desktop loopback）。"""
+    _require_managed_local_enabled(settings)
+    from src.connectors.local_installer import LocalInstallerError, uninstall_runtime
+    from src.connectors.stdio_pool import stdio_pool
+
+    await stdio_pool.invalidate(connector_id)
+    try:
+        status_view = await run_in_threadpool(uninstall_runtime, connector_id)
+    except LocalInstallerError as e:
+        raise APIError(e.code, e.message, http_status=e.status_code) from None
+    await run_in_threadpool(_store().delete_connector, connector_id)
+    return success_envelope(
+        {
+            "ok": True,
+            **status_view,
+            "status": dict(status_view),
+            "connector": None,
+        },
+        request=request,
+    )
+
+
+@router.patch("/{connector_id}/runtime-options", dependencies=[Depends(verify_local_token)])
+async def update_managed_runtime_options(
+    connector_id: str,
+    request: Request,
+    payload: dict[str, Any] = Body(...),
+    settings=Depends(get_settings),
+) -> Any:
+    """切换受管连接器运行选项（如 Chrome CDP/Extension/Isolated），仅 Desktop loopback。"""
+    _require_managed_local_enabled(settings)
+    from src.connectors.local_installer import (
+        LocalInstallerError,
+        get_install_status,
+        normalize_runtime_options,
+    )
+    from src.connectors.oauth_flow import get_flow
+    from src.connectors.registry import namespace_for
+    from src.connectors.stdio_pool import stdio_pool
+
+    store = _store()
+    existing = await run_in_threadpool(store.get_connector, connector_id)
+    if existing is None:
+        raise APIError(
+            "E_NOT_FOUND",
+            f"connector {connector_id!r} is not installed",
+            http_status=404,
+        )
+    if existing.source != "managed_local":
+        raise APIError(
+            "E_CONNECTOR_UNSUPPORTED",
+            f"connector {connector_id!r} does not use managed_local runtime options",
+            http_status=400,
+        )
+    try:
+        normalized_rc = normalize_runtime_options(
+            connector_id, payload, existing=existing.runtime_config
+        )
+    except LocalInstallerError as e:
+        raise APIError(e.code, e.message, http_status=e.status_code) from None
+
+    updated = await run_in_threadpool(
+        store.update_connector_runtime_config, connector_id, normalized_rc
+    )
+    await stdio_pool.invalidate(connector_id)
+
+    status_view = await run_in_threadpool(get_install_status, connector_id, normalized_rc)
+    cred = await run_in_threadpool(_credential_view, namespace_for(connector_id))
+    meta = await run_in_threadpool(_managed_summary_fields, updated)
+    summary = _serialize_connector_summary(
+        updated, cred, _flow_view(get_flow(connector_id)), managed_meta=meta
+    )
+    return success_envelope(
+        {
+            "ok": True,
+            "connector_id": connector_id,
+            "mode": status_view["mode"],
+            "browser_mode": status_view["mode"],
+            "runtime_config": normalized_rc,
+            "connector": summary,
+        },
+        request=request,
+    )
+
+
 @router.post("/{connector_id}/oauth/start", dependencies=[Depends(verify_cf_access)])
 async def oauth_start(
     connector_id: str, request: Request, settings=Depends(get_settings)
@@ -299,6 +957,12 @@ async def oauth_start(
     from src.connectors.client import run_connect_flow
     from src.connectors.oauth_flow import begin_flow
 
+    if definition.source == "managed_local":
+        raise APIError(
+            "E_CONNECTOR_UNSUPPORTED",
+            f"connector {connector_id!r} uses local installation (/install) rather than OAuth",
+            http_status=400,
+        )
     if definition.source == "composio":
         entry = get_composio_entry(connector_id)
         if entry is None:
@@ -410,19 +1074,20 @@ async def sync_tools(
 
     store = _store()
     row = await run_in_threadpool(store.get_connector, connector_id)
-    if row is None or not definition.server_url:
+    if row is None or (definition.transport != "stdio" and not definition.server_url):
         raise APIError(
             "E_CONNECTOR_NOT_CONNECTED",
             f"connector {connector_id!r} has not been connected yet — connect it first",
             http_status=409,
         )
-    await run_in_threadpool(
-        store.upsert_connector,
-        connector_id,
-        server_url=definition.server_url,
-        display_name=definition.display_name,
-        transport=definition.transport,
-    )
+    if not definition.is_custom:
+        await run_in_threadpool(
+            store.upsert_connector,
+            connector_id,
+            server_url=definition.server_url,
+            display_name=definition.display_name,
+            transport=definition.transport,
+        )
     # definition 复用上面解析好的那一份（别在 event loop 上再读一次 `connector` 行）。
     client = ConnectorClient(connector_id, interactive=False, definition=definition)
     try:
@@ -462,10 +1127,10 @@ async def list_tools(
 ) -> Any:
     """已同步工具清单（PR2 的 ``createConnectorTools()`` 读这里）。
 
-    08-05 per-tool 三档：``mode_override`` = 用户覆盖原样（null=跟随默认），
-    ``effective_mode`` = 服务端折算（NULL→auto；折算**不在前端重算**——那会成第二处
-    手抄）。orphan 行照常在列（注册侧跳过它们）。``destructive`` 原样透出 —— 设置面 /
-    审批卡的红警告读它。
+    per-tool 三档：``mode_override`` = 用户覆盖原样（null=跟随默认），
+    ``effective_mode`` = 服务端折算（非破坏性 read 默认 ``auto``，write/update/destructive
+    默认 ``ask``；折算**不在前端重算**——那会成第二处手抄）。orphan 行照常在列（注册侧跳过它们）。
+    ``destructive`` 原样透出 —— 设置面 / 审批卡的红警告读它。
 
     🔴 顶层还带 ``source``（08-05 WP-12 出站告知第三处）：`McpApprovalCard` 就是从这条
     **live** 通道拿事实的（镜像 destructive 红警告的做法 —— 模型无法把「经 Composio 云
@@ -489,7 +1154,9 @@ async def list_tools(
                     "crud_type": r.crud_type,
                     "destructive": r.destructive,
                     "mode_override": r.mode,
-                    "effective_mode": connector_tool_effective_mode(r.mode),
+                    "effective_mode": connector_tool_effective_mode(
+                        r.mode, crud_type=r.crud_type, destructive=r.destructive
+                    ),
                     "orphan": r.orphan,
                     "first_seen_at": r.first_seen_at,
                     "last_seen_at": r.last_seen_at,
@@ -583,7 +1250,8 @@ async def set_tool_mode(
     """per-tool 三档覆盖（08-05 改判，取代旧 ``…/enabled`` 端点）：
     ``{"mode": "auto"|"ask"|"off"|null}``。
 
-    ``null`` = 清除覆盖回默认档（**auto**）—— 与「显式 off」不是一回事，故键必须在场
+    ``null`` = 清除覆盖回默认档（只读非破坏默认 ``auto``；写/更新/破坏默认 ``ask``）——
+    与「显式 off」不是一回事，故键必须在场
     （缺键 → 400，不把「没说」当成 null 猜）。响应带**更新后的事实**（``mode_override``
     原样 + ``effective_mode`` 折算），免得前端自己再折算一遍默认规则（第二处手抄）。
 
@@ -612,7 +1280,9 @@ async def set_tool_mode(
             "connector_id": connector_id,
             "tool_name": tool_name,
             "mode_override": row.mode,
-            "effective_mode": connector_tool_effective_mode(row.mode),
+            "effective_mode": connector_tool_effective_mode(
+                row.mode, crud_type=row.crud_type, destructive=row.destructive
+            ),
         },
         request=request,
     )
@@ -740,7 +1410,7 @@ async def invoke_tool(
     flag 门在这里；**闸序与执行在 ``src/connectors/service.py``**（PR3 起 Python 侧 LLM
     工厂是第二个调用面，两面共用同一份闸——绝不手抄两份）。
 
-    ``caller``（PR3 新增，可选）：``{"context_mode": str, "agent_id": str|null}``。
+    ``caller``（PR3 新增，可选）：``{"context_mode": str, "agent_id": str|null, "job_id"?: int, "dispatch_id"?: int, "child_tool"?: str}``。
     headless（untrusted_trigger / cron_headless）时按该 agent 的 ``grant_connectors``
     重新判天花板 = **授权判定与执行同侧**的第二道闸（gateway 注册期过滤是第一道）；
     缺席 / owner-present（``manual_chat`` / ``im_chat`` —— 后者自阶段 2 PR-1 起与 manual
@@ -757,25 +1427,45 @@ async def invoke_tool(
     from src.connectors.service import (
         ConnectorInvokeDenied,
         invoke_connector_tool,
+        is_matter_computer_use_child_authorized,
         is_matter_followup_caller,
+        resolve_caller_allowed_tools,
         resolve_caller_ceiling,
     )
 
+    caller = body.get("caller")
     try:
         ceiling = await run_in_threadpool(
-            resolve_caller_ceiling, body.get("caller"), connector_id
+            resolve_caller_ceiling, caller, connector_id
+        )
+        allowed_tools = await run_in_threadpool(
+            resolve_caller_allowed_tools, caller, connector_id
         )
         # 0813 批 P —— matter_followup 是无审批链宿主的无人值守场地：ask ≙ 不可用 +
         # destructive 恒拒（gateway 注册期 matterVenueAdmitsEntry 是第一道，这里是
         # 判定与执行同侧的第二道；其余调用面两个开关恒 False，字节不变）。
-        matter_venue = is_matter_followup_caller(body.get("caller"))
+        # WS-5 Belt 3 —— 若 DB 实证核验是 active running propose_only 行动项的
+        # computer_use_run 子代理调 browser_use/desktop_use，豁免 deny_ask_mode（但保留 deny_destructive）。
+        matter_venue = is_matter_followup_caller(caller)
+        matter_child_granted = (
+            await run_in_threadpool(
+                is_matter_computer_use_child_authorized, caller, connector_id
+            )
+            if matter_venue
+            else False
+        )
+        invoke_kwargs: dict[str, Any] = {
+            "ceiling": ceiling,
+            "deny_ask_mode": matter_venue and not matter_child_granted,
+            "deny_destructive": matter_venue,
+        }
+        if allowed_tools is not None:
+            invoke_kwargs["allowed_tools"] = allowed_tools
         result = await invoke_connector_tool(
             connector_id,
             tool_name,
             body.get("arguments"),
-            ceiling=ceiling,
-            deny_ask_mode=matter_venue,
-            deny_destructive=matter_venue,
+            **invoke_kwargs,
         )
     except ConnectorInvokeDenied as e:
         raise APIError(e.code, str(e), http_status=e.http_status) from None
@@ -811,7 +1501,9 @@ async def disconnect(
     from src.agent_config.credentials import delete_credential, list_credentials
     from src.connectors.oauth_flow import get_flow
     from src.connectors.registry import namespace_for
+    from src.connectors.stdio_pool import stdio_pool
 
+    await stdio_pool.close_connector(connector_id)
     purge = bool((payload or {}).get("purge") is True)
     namespace = namespace_for(connector_id)
     metas = await run_in_threadpool(list_credentials, namespace)

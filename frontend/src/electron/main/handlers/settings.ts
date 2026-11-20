@@ -43,6 +43,7 @@ import { resolveEnvPath } from '../lib/env-path'
 // code-split benefit. Static import path is settings → llm_stats → cli_runner
 // → keychain; no circular dependency.
 import { runLlmSelfTest } from './llm_stats'
+import { registerSystemPermissionsHandlers } from './system_permissions'
 
 const SETTINGS_FILE = join(app.getPath('userData'), 'settings.json')
 
@@ -74,7 +75,6 @@ export interface PersistentSettings {
   userEmail: string | null
   /** 邮件签名 (HTML/纯文本) — compose 工具栏「签名」按钮在光标处插入。user-writable。 */
   signature: string | null
-}
   /** Phase 3 — macOS Menu Bar 常驻图标与 Popover 微面板。 */
   trayEnabled: boolean
   /** Phase 3 — Dock 未读角标同步。 */
@@ -99,6 +99,7 @@ const DEFAULT_NOTIFICATION_CHANNEL_PREFS: PersistentSettings['notificationChanne
   reviews: 'center_only',
   results: 'center_only',
   system: 'center_only'
+}
 
 const DEFAULTS: PersistentSettings = {
   dbPath: null,
@@ -209,7 +210,6 @@ function sanitize(raw: Partial<PersistentSettings>): Partial<PersistentSettings>
   if (typeof raw.signature === 'string' || raw.signature === null) {
     out.signature = raw.signature
   }
-  return out
   if (typeof raw.trayEnabled === 'boolean') {
     out.trayEnabled = raw.trayEnabled
   }
@@ -255,9 +255,9 @@ function sanitize(raw: Partial<PersistentSettings>): Partial<PersistentSettings>
       out.notificationChannelPrefs = next as PersistentSettings['notificationChannelPrefs']
     }
   }
+  return out
 }
 
-function writeSettings(s: PersistentSettings): void {
 const _settingsListeners = new Set<(settings: PersistentSettings) => void>()
 
 export function onSettingsChanged(listener: (settings: PersistentSettings) => void): () => void {
@@ -267,6 +267,7 @@ export function onSettingsChanged(listener: (settings: PersistentSettings) => vo
   }
 }
 
+function writeSettings(s: PersistentSettings): void {
   // feat/auto-update re-review (codex, MEDIUM) — propagate write failures instead
   // of swallowing them. settings:set is the sole caller; rethrowing makes the IPC
   // reject so renderer callers (PathPicker, the auto-download toggle) revert their
@@ -282,7 +283,6 @@ export function onSettingsChanged(listener: (settings: PersistentSettings) => vo
   }
 }
 
-export interface SecretWriteRequest {
 export function updateSettingsPatch(partial: Partial<PersistentSettings>): PersistentSettings {
   const prev = readSettings()
   const nextPatch = sanitize(partial ?? {})
@@ -305,6 +305,7 @@ export function updateSettingsPatch(partial: Partial<PersistentSettings>): Persi
   return merged
 }
 
+export interface SecretWriteRequest {
   secret: 'cliApiKey' | 'llmApiKey' | 'llmTranslateApiKey' | 'customApiKey'
   value: string
 }
@@ -434,6 +435,9 @@ export function registerSettingsHandlers(): void {
   // ---- secret ping tests -------------------------------------------------
   ipcMain.handle('settings:test:llm', async (): Promise<PingResult> => pingLlmEndpoint())
   ipcMain.handle('settings:test:customApi', async (): Promise<PingResult> => pingCustomApi())
+
+  // ---- Wave 3: macOS TCC probe & System Settings deep-links --------------
+  registerSystemPermissionsHandlers()
 }
 
 export const __testing = {

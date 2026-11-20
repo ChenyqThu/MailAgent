@@ -62,9 +62,16 @@ import {
   isWebBuild,
   openExternal,
   readToolfaceNoticeAck,
+  resolveManagedBrowserMode,
   writeToolfaceNoticeAck
 } from './consoleShared'
 import { BulkMenu, SegIconSelect, ToolCategoryGroup, type SegOption } from './parts'
+import { CustomMcpDialog } from './CustomMcpDialog'
+import {
+  ManagedBrowserModeSection,
+  ManagedPixelPrivacyNotice,
+  ManagedSystemPermissionsSection
+} from './ManagedLocalSections'
 
 const TOOL_MODE_ICONS: Record<
   ConnectorToolMode,
@@ -160,9 +167,19 @@ export function ConnectorDetailPane({
   } | null>(null)
   const dismissedFlowRef = React.useRef<number | null>(null)
   const [syncing, setSyncing] = React.useState(false)
+  const [editCustomOpen, setEditCustomOpen] = React.useState(false)
+  const [deleteCustomOpen, setDeleteCustomOpen] = React.useState(false)
+  const [deletingCustom, setDeletingCustom] = React.useState(false)
   const [purging, setPurging] = React.useState(false)
   const [confirmOpen, setConfirmOpen] = React.useState(false)
   const [disconnecting, setDisconnecting] = React.useState(false)
+  const [installingManaged, setInstallingManaged] = React.useState(false)
+  const [uninstallConfirmOpen, setUninstallConfirmOpen] = React.useState(false)
+  const [uninstallingManaged, setUninstallingManaged] = React.useState(false)
+  const isManagedLocal = connector.source === 'managed_local'
+  const isBrowserUse = isManagedLocal && id === 'browser_use'
+  const needsTccPermissions =
+    isManagedLocal && ((connector.requires_permissions?.length ?? 0) > 0 || id === 'desktop_use')
   // 断开对话框里的「同时清除工具配置」勾选。被目录取代（轨道不符）的行**默认勾上** ——
   // 那一行的存在意义就是等着被换掉，留着它另一轨版本装不进来。
   const [purgeOnDisconnect, setPurgeOnDisconnect] = React.useState(connector.superseded_by_catalog)
@@ -353,6 +370,59 @@ export function ConnectorDetailPane({
     }
   }
 
+  async function handleDeleteCustom(): Promise<void> {
+    if (!api.connector.deleteCustom) return
+    setDeletingCustom(true)
+    try {
+      await api.connector.deleteCustom(id)
+      await invalidateList()
+      await qc.invalidateQueries({ queryKey: qk.connectorTools(id) })
+      setDeleteCustomOpen(false)
+      toastSuccess(t('settings.connectors.custom.deleted', { name: connector.display_name }))
+    } catch (err) {
+      toastError(t('settings.connectors.title'), errorMessage(err))
+    } finally {
+      setDeletingCustom(false)
+    }
+  }
+
+  async function handleInstallManaged(): Promise<void> {
+    if (!api.connector.install || isWeb) return
+    setInstallingManaged(true)
+    try {
+      await api.connector.install(id)
+      await invalidateList()
+      await qc.invalidateQueries({ queryKey: qk.connectorCatalog() })
+      await qc.invalidateQueries({ queryKey: qk.connectorInstallStatus(id) })
+      await qc.invalidateQueries({ queryKey: qk.connectorTools(id) })
+      toastSuccess(t('settings.connectors.managed.installSuccess', { name: connector.display_name }))
+    } catch (err) {
+      toastError(t('settings.connectors.managed.installFailed'), errorMessage(err))
+    } finally {
+      setInstallingManaged(false)
+    }
+  }
+
+  async function handleUninstallManaged(): Promise<void> {
+    if (!api.connector.uninstall || isWeb) return
+    setUninstallingManaged(true)
+    try {
+      await api.connector.uninstall(id)
+      await invalidateList()
+      await qc.invalidateQueries({ queryKey: qk.connectorCatalog() })
+      await qc.invalidateQueries({ queryKey: qk.connectorInstallStatus(id) })
+      await qc.invalidateQueries({ queryKey: qk.connectorTools(id) })
+      setUninstallConfirmOpen(false)
+      toastSuccess(
+        t('settings.connectors.managed.uninstallSuccess', { name: connector.display_name })
+      )
+    } catch (err) {
+      toastError(t('settings.connectors.title'), errorMessage(err))
+    } finally {
+      setUninstallingManaged(false)
+    }
+  }
+
   async function applyToolMode(toolName: string, next: ConnectorToolMode): Promise<void> {
     try {
       await api.connector.setToolMode(id, toolName, next)
@@ -421,6 +491,59 @@ export function ConnectorDetailPane({
   const lastSynced = formatEpoch(connector.last_synced_at)
 
   const headerActions: React.ReactNode = (() => {
+    if (isManagedLocal) {
+      const runtimeReady = connector.runtime_installed !== false
+      if (connected && runtimeReady) {
+        return (
+          <>
+            <Button size="sm" variant="ghost" onClick={() => void handleResetPermissions()}>
+              {t('settings.connectors.tools.reset')}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={syncing}
+              onClick={() => void handleSync()}
+            >
+              {syncing ? <Loader2 className="size-3.5 animate-spin" /> : null}
+              {syncing ? t('settings.connectors.syncing') : t('settings.connectors.sync')}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={isWeb || uninstallingManaged}
+              title={isWeb ? t('settings.connectors.managed.webDisabled') : undefined}
+              onClick={() => setUninstallConfirmOpen(true)}
+            >
+              {uninstallingManaged ? <Loader2 className="size-3.5 animate-spin" /> : null}
+              {t('settings.connectors.managed.uninstallButton')}
+            </Button>
+          </>
+        )
+      }
+      return (
+        <>
+          <Button
+            size="sm"
+            disabled={isWeb || installingManaged || connector.platform_supported === false}
+            title={isWeb ? t('settings.connectors.managed.webDisabled') : undefined}
+            onClick={() => void handleInstallManaged()}
+          >
+            {installingManaged ? <Loader2 className="size-3.5 animate-spin" /> : null}
+            {t('settings.connectors.managed.installAndEnable')}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={isWeb || uninstallingManaged}
+            title={isWeb ? t('settings.connectors.managed.webDisabled') : undefined}
+            onClick={() => setUninstallConfirmOpen(true)}
+          >
+            {t('settings.connectors.managed.uninstallButton')}
+          </Button>
+        </>
+      )
+    }
     if (awaiting != null) {
       return (
         <>
@@ -444,6 +567,11 @@ export function ConnectorDetailPane({
     if (connected) {
       return (
         <>
+          {connector.is_custom === true && !isWeb && (
+            <Button size="sm" variant="ghost" onClick={() => setEditCustomOpen(true)}>
+              {t('settings.connectors.custom.editButton')}
+            </Button>
+          )}
           <Button size="sm" variant="ghost" onClick={() => void handleResetPermissions()}>
             {t('settings.connectors.tools.reset')}
           </Button>
@@ -456,17 +584,25 @@ export function ConnectorDetailPane({
             {syncing ? <Loader2 className="size-3.5 animate-spin" /> : null}
             {syncing ? t('settings.connectors.syncing') : t('settings.connectors.sync')}
           </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              // 每次打开都按当前行状态重算勾选（useState 初值只在挂载那一次生效）。
-              setPurgeOnDisconnect(connector.superseded_by_catalog)
-              setConfirmOpen(true)
-            }}
-          >
-            {t('settings.connectors.disconnect')}
-          </Button>
+          {connector.is_custom === true ? (
+            !isWeb && (
+              <Button size="sm" variant="ghost" onClick={() => setDeleteCustomOpen(true)}>
+                {t('settings.connectors.custom.deleteButton')}
+              </Button>
+            )
+          ) : (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                // 每次打开都按当前行状态重算勾选（useState 初值只在挂载那一次生效）。
+                setPurgeOnDisconnect(connector.superseded_by_catalog)
+                setConfirmOpen(true)
+              }}
+            >
+              {t('settings.connectors.disconnect')}
+            </Button>
+          )}
         </>
       )
     }
@@ -597,11 +733,29 @@ export function ConnectorDetailPane({
               {t(STATUS_LABEL_KEYS[status])}
             </span>
             {/* 出站告知：每行如实说这条连接的**执行路线**。判据是服务端字段，不靠 URL 长相猜。 */}
-            <span className={cn(PILL_BASE, 'bg-ink-4 text-ink-fg-3')}>
-              {connector.source === 'composio'
-                ? t('settings.connectors.viaComposio')
-                : t('settings.connectors.viaDirect')}
+            <span
+              className={cn(
+                PILL_BASE,
+                isManagedLocal ? 'text-aux bg-ink-4 text-ink-fg-2' : 'bg-ink-4 text-ink-fg-3'
+              )}
+            >
+              {connector.is_custom === true
+                ? connector.transport === 'stdio'
+                  ? t('settings.connectors.custom.badgeStdio')
+                  : connector.transport === 'sse'
+                    ? t('settings.connectors.custom.badgeSse')
+                    : t('settings.connectors.custom.badgeHttp')
+                : connector.source === 'composio'
+                  ? t('settings.connectors.viaComposio')
+                  : connector.source === 'managed_local'
+                    ? t('settings.connectors.viaManagedLocal')
+                    : t('settings.connectors.viaDirect')}
             </span>
+            {isManagedLocal && connector.runtime_version ? (
+              <span className={cn(PILL_BASE, 'bg-ink-4 font-mono text-ink-fg-2')}>
+                {connector.runtime_version}
+              </span>
+            ) : null}
           </div>
           {catalogEntry ? (
             <p className="mt-1 text-aux leading-relaxed text-ink-fg-2">
@@ -609,7 +763,28 @@ export function ConnectorDetailPane({
             </p>
           ) : null}
           <div className="mt-1 flex flex-col gap-0.5 text-meta text-ink-fg-2">
-            <span className="truncate font-mono">{connector.server_url}</span>
+            {connector.transport === 'stdio' && connector.stdio_command ? (
+              <span className="truncate font-mono">
+                {`${connector.stdio_command.command} ${(connector.stdio_command.args ?? []).join(' ')}`.trim()}
+              </span>
+            ) : (
+              <span className="truncate font-mono">{connector.server_url}</span>
+            )}
+            {connector.is_custom === true &&
+              (connector.custom_header_names?.length ?? 0) > 0 && (
+                <span className="text-aux text-ink-fg-3">
+                  {t('settings.connectors.custom.existingKeys', {
+                    keys: connector.custom_header_names?.join(', ')
+                  })}
+                </span>
+              )}
+            {connector.is_custom === true && (connector.stdio_env_keys?.length ?? 0) > 0 && (
+              <span className="text-aux text-ink-fg-3">
+                {t('settings.connectors.custom.existingKeys', {
+                  keys: connector.stdio_env_keys?.join(', ')
+                })}
+              </span>
+            )}
             {connector.superseded_by_catalog ? (
               // 🔴 双向 superseded（08-06）：不能只留一句提示 —— owner 活库那行 error 的
               // atlassian(composio) 点「重新连接」只会再走一次走不通的 Composio 流程。
@@ -652,16 +827,18 @@ export function ConnectorDetailPane({
                     ))}
                   </span>
                 ) : null}
-                <span className={expired ? 'text-warn' : undefined}>
-                  {/* 🔴 `expires_at == null` 的真实语义是「**由自动刷新维护**」，不是「未知」。 */}
-                  {connector.credential == null
-                    ? t('settings.connectors.tokenNone')
-                    : expiresAt == null
-                      ? t('settings.connectors.tokenAutoRefresh')
-                      : expired
-                        ? t('settings.connectors.tokenExpired', { time: expiresAt })
-                        : t('settings.connectors.tokenExpires', { time: expiresAt })}
-                </span>
+                {!isManagedLocal ? (
+                  <span className={expired ? 'text-warn' : undefined}>
+                    {/* 🔴 `expires_at == null` 的真实语义是「**由自动刷新维护**」，不是「未知」。 */}
+                    {connector.credential == null
+                      ? t('settings.connectors.tokenNone')
+                      : expiresAt == null
+                        ? t('settings.connectors.tokenAutoRefresh')
+                        : expired
+                          ? t('settings.connectors.tokenExpired', { time: expiresAt })
+                          : t('settings.connectors.tokenExpires', { time: expiresAt })}
+                  </span>
+                ) : null}
                 <span>
                   {lastSynced == null
                     ? t('settings.connectors.neverSynced')
@@ -669,12 +846,26 @@ export function ConnectorDetailPane({
                 </span>
               </>
             ) : null}
+            {isManagedLocal && connector.runtime_installed === false ? (
+              <span className="text-aux text-warn">
+                {t('settings.connectors.managed.runtimeMissing')}
+              </span>
+            ) : null}
+            {isManagedLocal && connector.platform_supported === false ? (
+              <span className="text-aux text-fail">
+                {t('settings.connectors.managed.platformUnsupported')}
+              </span>
+            ) : null}
             {connector.last_error ? (
               <span className="text-fail">
                 {t('settings.connectors.lastError', { message: connector.last_error })}
               </span>
             ) : null}
-            {!connected && isWeb ? (
+            {isManagedLocal && isWeb ? (
+              <span className="text-aux text-ink-fg-3">
+                {t('settings.connectors.managed.webDisabled')}
+              </span>
+            ) : !connected && isWeb ? (
               <span className="text-ink-fg-3">{t('settings.connectors.connectWeb')}</span>
             ) : null}
           </div>
@@ -766,6 +957,19 @@ export function ConnectorDetailPane({
         </div>
       ) : null}
 
+      {isManagedLocal ? <ManagedPixelPrivacyNotice className="mt-3" /> : null}
+
+      {isBrowserUse || (isManagedLocal && (connector.supported_modes?.length ?? 0) > 0) ? (
+        <ManagedBrowserModeSection
+          connectorId={id}
+          currentMode={resolveManagedBrowserMode(connector)}
+          supportedModes={connector.supported_modes ?? []}
+          isWeb={isWeb}
+        />
+      ) : null}
+
+      {needsTccPermissions ? <ManagedSystemPermissionsSection isWeb={isWeb} /> : null}
+
       <div className="mt-3">{toolsBody}</div>
 
       {/* destructive 工具设 auto 的一次性红色确认（单个 / 组级批量两形态）。 */}
@@ -843,6 +1047,76 @@ export function ConnectorDetailPane({
               {disconnecting
                 ? t('settings.connectors.disconnectDialog.confirming')
                 : t('settings.connectors.disconnectDialog.confirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <CustomMcpDialog
+        open={editCustomOpen}
+        onOpenChange={setEditCustomOpen}
+        initialConnector={connector}
+      />
+
+      <Dialog open={deleteCustomOpen} onOpenChange={setDeleteCustomOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {t('settings.connectors.custom.deleteTitle', { name: connector.display_name })}
+            </DialogTitle>
+            <DialogDescription>{t('settings.connectors.custom.deleteDesc')}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={deletingCustom}
+              onClick={() => setDeleteCustomOpen(false)}
+            >
+              {t('settings.connectors.cancel')}
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={deletingCustom}
+              onClick={() => void handleDeleteCustom()}
+            >
+              {deletingCustom ? <Loader2 className="size-3.5 animate-spin" /> : null}
+              {t('settings.connectors.custom.deleteButton')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={uninstallConfirmOpen} onOpenChange={setUninstallConfirmOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {t('settings.connectors.managed.uninstallDialogTitle', {
+                name: connector.display_name
+              })}
+            </DialogTitle>
+            <DialogDescription>
+              {t('settings.connectors.managed.uninstallDialogDesc')}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={uninstallingManaged}
+              onClick={() => setUninstallConfirmOpen(false)}
+            >
+              {t('settings.connectors.cancel')}
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={uninstallingManaged}
+              onClick={() => void handleUninstallManaged()}
+            >
+              {uninstallingManaged ? <Loader2 className="size-3.5 animate-spin" /> : null}
+              {t('settings.connectors.managed.uninstallButton')}
             </Button>
           </DialogFooter>
         </DialogContent>

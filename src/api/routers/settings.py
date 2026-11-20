@@ -156,8 +156,6 @@ _MANAGED_ENV_KEYS: List[str] = [
     # 🔴 总闸 MAILAGENT_IM_FEISHU 有意不受管（灰度期 env 手动管理）。镜像 env-keys.ts。
     "MAILAGENT_IM_WEB_ENABLED",
     # — Labs 默认 OFF 灰度 flag（逐字镜像 env-keys.ts）。
-    # MCP_CONNECTORS = Python serve-api + Electron gateway 双载体；完整生效需后端重启 + App 重开。
-    "MAILAGENT_MCP_CONNECTORS",
     # Electron gateway 单载体；默认 OFF；需退出重开 App。
     "MAILAGENT_SKILL_CATALOG_PROMPT",
     # Python pydantic 启动读取；默认 OFF；需重启后端。
@@ -554,6 +552,8 @@ async def get_settings_payload(request: Request):
         # MAILAGENT_PROJECT_ROOT / MAILAGENT_ENV_FILE / SYNC_STORE_DB_PATH）。故这里恒
         # None = 类型诚实（键在、值空），远程 compose 的「签名」按钮保持禁用。要让远程
         # 真能取到签名，需要 owner 拍板给 serve-api 一条读 Electron settings.json 的路
+        # （新增跨进程文件依赖），不在本次镜像对账范围内。
+        "signature": None,
         "trayEnabled": False,
         "dockBadgeEnabled": False,
         "suppressBannerWhenFocused": True,
@@ -565,8 +565,6 @@ async def get_settings_payload(request: Request):
             "results": "center_only",
             "system": "center_only",
         },
-        # （新增跨进程文件依赖），不在本次镜像对账范围内。
-        "signature": None,
     }
     return success_envelope(payload, request=request, source="config")
 

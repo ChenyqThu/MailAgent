@@ -25,12 +25,13 @@ import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearch } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, Check, Loader2 } from 'lucide-react'
+import { AlertCircle, Check, Loader2, PanelLeftClose, PanelLeftOpen, Plus } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
+import { useDomainCollapsed, useNavShell } from '@shared/state/nav-shell'
 import { toastError } from '@shared/state/toast'
 import { Button } from '@shared/components/ui/button'
 import { fetchConnectorToolsEnabled } from '@shared/components/settings/custom-ai/shared'
@@ -41,6 +42,7 @@ import type {
 } from '@shared/api/types'
 
 import {
+  isWebBuild,
   parseItemParam,
   resolveCatalogTrack,
   type ConsoleItemParam,
@@ -49,6 +51,7 @@ import {
 import { BuiltinDetailPane } from './BuiltinDetailPane'
 import { ConnectorDetailPane } from './ConnectorDetailPane'
 import { CatalogDetailPane, CatalogLogo, ComposioAccountPane } from './CatalogDetailPane'
+import { CustomMcpDialog } from './CustomMcpDialog'
 
 /** 左栏行 —— 复用 Sidebar NavRow 的选中签名（`.row-selected acc-select` = --sel-wash 药丸 +
  *  3px 左条，DESIGN §18.1 C5：配置台左栏是导航面）。 */
@@ -177,6 +180,10 @@ export function ConnectorsConsolePage(): React.ReactElement {
   // 深链变化用「render 期比较-写入」承接（React docs 的 adjust-state-on-prop-change 形状，
   // 不是 effect 里 setState）：页面已挂载时再收到 navigate 深链（如设置页跳过来前就开着），
   // 用新 item 覆盖当前选中。
+  const [collapsedMaster, setCollapsedMaster] = React.useState(false)
+  const [customDialogOpen, setCustomDialogOpen] = React.useState(false)
+  const isWeb = isWebBuild()
+  const outerCollapsed = useDomainCollapsed('settings')
   const [rawSelection, setRawSelection] = React.useState<ConsoleItemParam | null>(() =>
     parseItemParam(search.item)
   )
@@ -341,10 +348,18 @@ export function ConnectorsConsolePage(): React.ReactElement {
             selected={selection?.kind === 'connector' && selection.id === c.connector_id}
             onClick={() => select({ kind: 'connector', id: c.connector_id })}
             right={
-              <span className="text-micro text-ink-fg-3">
-                {c.source === 'composio'
-                  ? t('settings.connectors.viaComposio')
-                  : t('settings.connectors.viaDirect')}
+              <span className="text-aux text-ink-fg-3">
+                {c.is_custom === true
+                  ? c.transport === 'stdio'
+                    ? 'stdio'
+                    : c.transport === 'sse'
+                      ? 'SSE'
+                      : 'HTTP'
+                  : c.source === 'composio'
+                    ? t('settings.connectors.viaComposio')
+                    : c.source === 'managed_local'
+                      ? t('settings.connectors.viaManagedLocal')
+                      : t('settings.connectors.viaDirect')}
               </span>
             }
           >
@@ -358,7 +373,7 @@ export function ConnectorsConsolePage(): React.ReactElement {
             selected={selection?.kind === 'catalog' && selection.id === entry.connector_id}
             onClick={() => select({ kind: 'catalog', id: entry.connector_id })}
             right={
-              <span className="text-micro text-coral">{t('settings.connectors.connect')}</span>
+              <span className="text-aux text-coral">{t('settings.connectors.connect')}</span>
             }
           >
             <CatalogLogo entry={entry} size="sm" />
@@ -366,12 +381,14 @@ export function ConnectorsConsolePage(): React.ReactElement {
             <span className="sr-only">
               {resolveCatalogTrack(entry) === 'composio'
                 ? t('settings.connectors.viaComposio')
-                : t('settings.connectors.viaDirect')}
+                : resolveCatalogTrack(entry) === 'managed_local'
+                  ? t('settings.connectors.viaManagedLocal')
+                  : t('settings.connectors.viaDirect')}
             </span>
           </MasterRow>
         ))}
         {catalog.isFetching && !catalog.data ? (
-          <div className="flex items-center gap-2 px-2 py-1 text-micro text-ink-fg-3">
+          <div className="flex items-center gap-2 px-2 py-1 text-aux text-ink-fg-3">
             <Loader2 className="size-3 shrink-0 animate-spin" />
             {t('settings.connectors.loading')}
           </div>
@@ -386,6 +403,16 @@ export function ConnectorsConsolePage(): React.ReactElement {
           <span aria-hidden="true" className="mx-1 size-1.5 shrink-0 rounded-full bg-ink-fg-3" />
           <span className="min-w-0 flex-1 truncate">{t('connectorsConsole.composioAccount')}</span>
         </MasterRow>
+        {!isWeb && (
+          <button
+            type="button"
+            onClick={() => setCustomDialogOpen(true)}
+            className="mt-1.5 flex w-full items-center gap-2 rounded-[var(--r-ctl)] border border-dashed border-ink-border px-2 py-1.5 text-aux text-ink-fg-2 transition-colors duration-fast hover:border-coral/50 hover:text-coral"
+          >
+            <Plus className="size-3.5 shrink-0" aria-hidden="true" />
+            <span className="truncate">{t('connectorsConsole.addCustomMcp')}</span>
+          </button>
+        )}
       </nav>
     </>
   )
@@ -394,54 +421,92 @@ export function ConnectorsConsolePage(): React.ReactElement {
     <div className="flex h-full min-h-0 flex-col">
       {/* 页头 —— 高度 41 与 sidebar app-nav-header 共线（各页页头同款约束）。 */}
       <div
-        className="flex shrink-0 items-center gap-3 px-[18px]"
+        className="flex shrink-0 items-center justify-between gap-3 px-[18px]"
         style={{ height: 41, borderBottom: '1px solid var(--hairline)' }}
       >
-        <h1 className="text-body font-semibold text-ink-fg">{t('connectorsConsole.title')}</h1>
-        <span className="truncate text-meta text-ink-fg-2">{t('connectorsConsole.subtitle')}</span>
+        <div className="flex min-w-0 items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => setCollapsedMaster((prev) => !prev)}
+            aria-label={t('settings.connectorsTab.toggleMasterAria')}
+            title={t('settings.connectorsTab.toggleMasterAria')}
+            className="inline-flex size-6 shrink-0 items-center justify-center rounded text-ink-fg-2 transition-colors hover:bg-ink-3 hover:text-ink-fg"
+          >
+            {collapsedMaster ? (
+              <PanelLeftOpen className="size-3.5" aria-hidden="true" />
+            ) : (
+              <PanelLeftClose className="size-3.5" aria-hidden="true" />
+            )}
+          </button>
+          <h1 className="shrink-0 text-body font-semibold text-ink-fg">
+            {t('connectorsConsole.title')}
+          </h1>
+          <span className="truncate text-aux text-ink-fg-2">{t('connectorsConsole.subtitle')}</span>
+        </div>
+
+        {!outerCollapsed && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => useNavShell.getState().setCollapsed('settings', true)}
+            className="shrink-0 text-aux text-ink-fg-2 hover:text-ink-fg"
+          >
+            {t('settings.connectorsTab.expandWorkspace')}
+          </Button>
+        )}
       </div>
 
       <div className="flex min-h-0 flex-1">
-        {/* 左栏 master */}
-        <aside
-          aria-label={t('connectorsConsole.title')}
-          className="w-60 shrink-0 overflow-y-auto border-r border-ink-border/60 py-2 scrollbar-thin"
-        >
-          <SectionHeader>{t('connectorsConsole.sectionBuiltin')}</SectionHeader>
-          <nav className="space-y-px px-2" aria-label={t('connectorsConsole.sectionBuiltin')}>
-            {prefsError != null ? (
-              <div className="px-2 py-1 text-micro text-ink-fg-3">
-                {t('settings.ai.toolPrefs.loadError', { message: prefsError })}
-              </div>
-            ) : prefs == null ? (
-              <div className="flex items-center gap-2 px-2 py-1 text-micro text-ink-fg-3">
-                <Loader2 className="size-3 shrink-0 animate-spin" />
-              </div>
-            ) : (
-              builtinGroups.map(({ group, count }) => (
-                <MasterRow
-                  key={group}
-                  selected={selection?.kind === 'builtin' && selection.group === group}
-                  onClick={() => select({ kind: 'builtin', group })}
-                  right={
-                    <span className="font-mono text-micro tabular-nums text-ink-fg-3">{count}</span>
-                  }
-                >
-                  <span className="min-w-0 flex-1 truncate">
-                    {t(`settings.ai.toolPrefs.group.${group}`)}
-                  </span>
-                </MasterRow>
-              ))
-            )}
-          </nav>
-          {externalSection}
-        </aside>
+        {/* 左栏 master —— 桌面窄宽默认收窄至 w-48 xl:w-56，且可折叠避免四栏挤压。 */}
+        {!collapsedMaster && (
+          <aside
+            aria-label={t('connectorsConsole.title')}
+            className="w-48 xl:w-56 shrink-0 overflow-y-auto border-r border-ink-border/60 py-2 scrollbar-thin"
+          >
+            <SectionHeader>{t('connectorsConsole.sectionBuiltin')}</SectionHeader>
+            <nav className="space-y-px px-2" aria-label={t('connectorsConsole.sectionBuiltin')}>
+              {prefsError != null ? (
+                <div className="px-2 py-1 text-aux text-ink-fg-3">
+                  {t('settings.ai.toolPrefs.loadError', { message: prefsError })}
+                </div>
+              ) : prefs == null ? (
+                <div className="flex items-center gap-2 px-2 py-1 text-aux text-ink-fg-3">
+                  <Loader2 className="size-3 shrink-0 animate-spin" />
+                </div>
+              ) : (
+                builtinGroups.map(({ group, count }) => (
+                  <MasterRow
+                    key={group}
+                    selected={selection?.kind === 'builtin' && selection.group === group}
+                    onClick={() => select({ kind: 'builtin', group })}
+                    right={
+                      <span className="font-mono text-micro tabular-nums text-ink-fg-3">
+                        {count}
+                      </span>
+                    }
+                  >
+                    <span className="min-w-0 flex-1 truncate">
+                      {t(`settings.ai.toolPrefs.group.${group}`)}
+                    </span>
+                  </MasterRow>
+                ))
+              )}
+            </nav>
+            {externalSection}
+          </aside>
+        )}
 
         {/* 右栏 detail */}
         <section className="min-w-0 flex-1 overflow-y-auto px-6 py-5 scrollbar-thin">
           <div className="mx-auto max-w-[720px]">{detail}</div>
         </section>
       </div>
+      <CustomMcpDialog
+        open={customDialogOpen}
+        onOpenChange={setCustomDialogOpen}
+        onSaved={(connectorId) => select({ kind: 'connector', id: connectorId })}
+      />
     </div>
   )
 }

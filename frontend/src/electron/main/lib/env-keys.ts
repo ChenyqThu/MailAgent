@@ -190,9 +190,6 @@ export const MANAGED_ENV_KEYS = [
   'MAILAGENT_IM_WEB_ENABLED',
 
   // — Labs 默认 OFF 灰度 flag。cutover 默认 ON 后须从 Labs 撤条目。
-  // 外部 MCP 连接器：Python serve-api + Electron gateway 双载体；完整生效需重启 serve/
-  // serve-api 并退出重开 App。Labs 行内按钮只负责两路后端重启，App 侧按文案手动重开。
-  'MAILAGENT_MCP_CONNECTORS',
   // 技能目录注入系统提示：Electron gateway 单载体，默认 OFF；需退出重开 App。
   'MAILAGENT_SKILL_CATALOG_PROMPT',
   // 五层记忆自动整理：Python pydantic 启动读取，默认 OFF；需重启后端。
