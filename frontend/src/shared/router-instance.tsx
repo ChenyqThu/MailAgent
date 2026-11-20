@@ -53,9 +53,17 @@ import { useDavMailReauthStore } from './state/davmail-reauth'
 import { useMatterNavigation } from './components/matters/navigation'
 // task 08-20-notification-center M2 批 B4 — 系统通知点击深跳：main 的通知 fanout 经
 // 'notifications:navigate' 送来通知行 payload，这里用**单源解析器**收窄（不另抄判据）。
-import { resolveNotificationLink } from './components/notifications/navigation'
+import {
+  executeNotificationAction,
+  navigateNotificationRoute,
+  openNotificationSession,
+  parseNotificationAction,
+  resolveNotificationLink
+} from './components/notifications/navigation'
+import { useNotificationsApi } from './components/notifications/hooks'
 import { useMailApi } from './hooks/useMailApi'
 import { openNewChatTab } from './state/active-chat'
+import { openNewCompose } from './state/compose-new'
 import {
   navigateToGroupSession,
   navigateToGroupThread
@@ -66,12 +74,8 @@ import { NAV_ENTRIES, navEntry, navigateToNavEntry, NAV_DEEPLINK_PATH } from './
 import { resolveStaticNavGate } from './navigation/useNavGates'
 // 标签工作区 ↔ 路由双向同步（08-27 P2 Lane W）：boot 恢复 / 标签激活跟路由 / rail 切域收敛标签态。
 import { useTabRouteSync } from './navigation/useTabRouteSync'
-import {
-  navigateNotificationRoute,
-  openNotificationSession
-} from './components/notifications/navigation'
 import type { DeeplinkTarget } from './lib/deeplink_target'
-import { clampSettingsTab, type SettingsTab } from './lib/settingsTabs'
+import { clampSettingsTab, legacyAnchorForTab, type SettingsTab } from './lib/settingsTabs'
 
 // F6 — mailagent:// deeplink target。形状单源自 @shared/lib/deeplink_target（issue #68：
 // 此前这里 inline 抄一份，理由是"renderer 不能 import main 模块" —— 属实，但正解是把类型
@@ -172,14 +176,50 @@ function useGeneralAgentMenu(): void {
       }
     ).electron?.ipcRenderer
     if (!ipc) return
-    const handler = (): void => {
+    const handler = (...args: unknown[]): void => {
+      const payload = args[1] as { prompt?: unknown } | undefined
+      const prompt =
+        payload && typeof payload.prompt === 'string' && payload.prompt.trim().length > 0
+          ? payload.prompt.trim()
+          : undefined
       navigateToNavEntry(navigate, entry)
-      openNewChatTab()
+      openNewChatTab(prompt)
     }
     const off = ipc.on('mailagent:open-general-agent', handler)
     return typeof off === 'function'
       ? off
       : () => ipc.removeListener?.('mailagent:open-general-agent', handler)
+  }, [navigate])
+}
+
+function useTrayNavigation(): void {
+  const navigate = useNavigate()
+  useEffect(() => {
+    const ipc = (
+      window as unknown as {
+        electron?: {
+          ipcRenderer?: {
+            on(ch: string, fn: (...args: unknown[]) => void): (() => void) | void
+            removeListener?(ch: string, fn: (...args: unknown[]) => void): void
+          }
+        }
+      }
+    ).electron?.ipcRenderer
+    if (!ipc) return
+    const handleToday = (): void => {
+      void navigate({ to: '/today' })
+    }
+    const handleComposeNew = (): void => {
+      openNewCompose()
+    }
+    const offToday = ipc.on('mailagent:tray-open-today', handleToday)
+    const offCompose = ipc.on('mailagent:tray-compose-new', handleComposeNew)
+    return (): void => {
+      if (typeof offToday === 'function') offToday()
+      else ipc.removeListener?.('mailagent:tray-open-today', handleToday)
+      if (typeof offCompose === 'function') offCompose()
+      else ipc.removeListener?.('mailagent:tray-compose-new', handleComposeNew)
+    }
   }, [navigate])
 }
 
@@ -197,6 +237,7 @@ function useNotificationClickNavigation(): void {
   const navigate = useNavigate()
   // session 型的落地要回查会话（老通知行没带 agentId），api 走与组件同一条取法。
   const mailApi = useMailApi()
+  const notifRestApi = useNotificationsApi()
   useEffect(() => {
     const notificationsApi = (
       window as unknown as {
@@ -211,7 +252,25 @@ function useNotificationClickNavigation(): void {
 
     return notificationsApi.onNavigate((raw) => {
       if (!raw || typeof raw !== 'object') return
-      const payload = (raw as { payload?: unknown }).payload
+      const msg = raw as { id?: unknown; payload?: unknown; action?: unknown }
+      const notifId = typeof msg.id === 'number' && Number.isInteger(msg.id) ? msg.id : 0
+      if (notifId > 0) {
+        void notifRestApi.markRead(notifId).catch(() => {})
+      }
+      const action = parseNotificationAction(msg.action)
+      if (action) {
+        executeNotificationAction(action, {
+          navigate,
+          onSnooze1h:
+            notifId > 0
+              ? () => {
+                  void notifRestApi.snooze(notifId, Date.now() + 3_600_000).catch(() => {})
+                }
+              : undefined
+        })
+        return
+      }
+      const payload = msg.payload
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return
       const link = resolveNotificationLink(payload as Record<string, unknown>)
       if (!link) return
@@ -242,13 +301,18 @@ function useNotificationClickNavigation(): void {
         useDavMailReauthStore.getState().openDialog()
         return
       }
+      if (link.type === 'email') {
+        useActiveEmail.getState().setActive(link.emailId, { navTarget: true })
+        void navigate({ to: '/' })
+        return
+      }
       if (link.type === 'route') {
         // 落地 switch 单源在 notifications/navigation.ts（与 NotificationPanel 共用，
         // Step R check ① 的两份手抄 switch 收敛 + `/settings` case 补齐在那边）。
         navigateNotificationRoute(navigate, link)
       }
     })
-  }, [navigate, mailApi])
+  }, [navigate, mailApi, notifRestApi])
 }
 
 // Popmenu showcase（dev-only 审批物, ⌃⇧P 开）。生产构建时 Vite 把 import.meta.env.DEV
@@ -260,6 +324,7 @@ const PopmenuShowcaseMount = import.meta.env.DEV
 function RootLayout(): React.ReactElement {
   useDeeplinkRouter()
   useGeneralAgentMenu()
+  useTrayNavigation()
   useNotificationClickNavigation()
   useTabRouteSync()
   return (
@@ -510,6 +575,8 @@ export { SETTINGS_TABS, type SettingsTab } from './lib/settingsTabs'
 export interface SettingsSearch {
   tab: SettingsTab
   item?: string
+  section?: 'connectors' | 'mcp'
+  anchor?: string
 }
 
 const settingsRoute = createRoute({
@@ -520,11 +587,20 @@ const settingsRoute = createRoute({
     'SettingsLayout'
   ),
   validateSearch: (search: Record<string, unknown>): SettingsSearch => {
-    // clamp 走叶子的 `clampSettingsTab` —— 通知落地 / deeplink 都调它, 路由这里
-    // 再手抄一遍判据就又是一处会漂的镜像 (check, Step B)。
-    const tab: SettingsTab = clampSettingsTab(search.tab)
+    const rawTab = typeof search.tab === 'string' ? search.tab : undefined
+    const tab: SettingsTab = clampSettingsTab(rawTab)
     const item = search.item
-    return typeof item === 'string' && item.length > 0 ? { tab, item } : { tab }
+    const section = search.section === 'mcp' || rawTab === 'mcp' ? 'mcp' : undefined
+    const anchor =
+      typeof search.anchor === 'string' && search.anchor.length > 0
+        ? search.anchor
+        : legacyAnchorForTab(rawTab)
+    return {
+      tab,
+      ...(typeof item === 'string' && item.length > 0 ? { item } : {}),
+      ...(section ? { section } : {}),
+      ...(anchor ? { anchor } : {})
+    }
   }
 })
 

@@ -513,3 +513,48 @@ def test_publish_endpoint_rejects_valid_cf_session(client, notify_center, monkey
     assert client.get(
         "/api/notifications", headers={"Cf-Access-Jwt-Assertion": "valid-token"}
     ).status_code == 200
+
+
+def test_notification_preferences_get_put_and_preset_sync(client, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from src.api.deps import get_settings
+    from src.notify.prefs import MEETING_PREP_PRESET_AGENT_ID
+    from src.reports.store import ReportStore
+
+    db_path = tmp_path / "prefs_api.db"
+    SyncStore(str(db_path))
+    report_store = ReportStore(str(db_path))
+    app.dependency_overrides[get_settings] = lambda: SimpleNamespace(
+        sync_store_db_path=str(db_path)
+    )
+    monkeypatch.setattr(notifications_router, "get_report_store", lambda: report_store)
+    try:
+        r0 = client.get("/api/notifications/preferences")
+        assert r0.status_code == 200
+        assert r0.json()["data"]["mailDelivery"] == "both"
+        assert r0.json()["data"]["meetingPrepEnabled"] is False
+
+        r1 = client.put(
+            "/api/notifications/preferences",
+            json={
+                "mailDelivery": "system_only",
+                "meetingPrepEnabled": True,
+                "meetingPrepMode": "auto_before",
+                "meetingPrepLeadMinutes": 60,
+            },
+        )
+        assert r1.status_code == 200
+        assert r1.json()["data"]["mailDelivery"] == "system_only"
+        assert r1.json()["data"]["meetingPrepMode"] == "auto_before"
+
+        agent = report_store.get_agent(MEETING_PREP_PRESET_AGENT_ID)
+        assert agent is not None and bool(agent["enabled"]) is True
+        assert '"lead_seconds": 3600' in agent["trigger_json"]
+
+        bad = client.put(
+            "/api/notifications/preferences",
+            json={"mailDelivery": "bad_mode"},
+        )
+        assert bad.status_code == 400
+    finally:
+        app.dependency_overrides.pop(get_settings, None)

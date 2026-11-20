@@ -96,6 +96,7 @@ mac:
     # 消除「每次安装后弹读取文稿授权框」(ad-hoc 签名重装重置 TCC → 首次访问重弹)。
     NSDownloadsFolderUsageDescription: MailAgent saves email attachments to your Downloads folder when you export them.
     NSAppleEventsUsageDescription: MailAgent uses Mail.app and Notion automation events to create draft replies and open email pages.
+    NSUserNotificationAlertStyle: alert
 dmg:
   artifactName: ${name}-${version}-${arch}.${ext}
   # DMG 安装窗口布局：左边 .app，右边 Applications 链接（与拖拽箭头方向一致）。

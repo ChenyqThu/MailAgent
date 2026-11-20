@@ -90,4 +90,23 @@ describe('useNotificationClickNavigation — matter 型', () => {
     expect(useDavMailReauthStore.getState().open).toBe(true)
     expect(await screen.findByRole('dialog')).toBeTruthy()
   })
+
+  test('email link → useActiveEmail.setActive(emailId) + 跳 /', async () => {
+    const { router } = await import('../../src/shared/router-instance')
+    const { useActiveEmail } = await import('../../src/shared/state/active-email')
+    await router.navigate({ to: '/settings', search: { tab: 'general' } })
+
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    )
+    await waitFor(() => expect(handler).toBeTruthy())
+
+    handler!({ id: 9, payload: { link: { type: 'email', emailId: 99 } } })
+
+    expect(useActiveEmail.getState().navTargetId).toBe(99)
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'))
+  })
 })

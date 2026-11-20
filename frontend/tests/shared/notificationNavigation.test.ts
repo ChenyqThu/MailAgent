@@ -122,6 +122,25 @@ describe('resolveNotificationLink — 真实信源形状', () => {
       fileId: 12
     })
   })
+
+  it('重要/紧急邮件通知：email 型带 emailId', () => {
+    expect(resolveNotificationLink({ link: { type: 'email', emailId: 42 } })).toEqual({
+      type: 'email',
+      emailId: 42
+    })
+  })
+
+  it('日历会前提醒：/admin/calendar 路由', () => {
+    expect(
+      resolveNotificationLink({
+        link: { type: 'route', to: '/admin/calendar', search: { view: 'today' } }
+      })
+    ).toEqual({
+      type: 'route',
+      to: '/admin/calendar',
+      search: { view: 'today' }
+    })
+  })
 })
 
 describe('resolveNotificationLink — 拒绝的形状（一律 null = 只标已读不跳转）', () => {
@@ -207,6 +226,16 @@ describe('navigateNotificationRoute — route 型落地', () => {
     ).toEqual({ to: '/agents' })
     expect(run(resolveNotificationLink({ link: { type: 'route', to: '/admin/kanban' } }))).toEqual({
       to: '/admin/kanban'
+    })
+    expect(
+      run(
+        resolveNotificationLink({
+          link: { type: 'route', to: '/admin/calendar', search: { view: 'today' } }
+        })
+      )
+    ).toEqual({
+      to: '/admin/calendar',
+      search: { view: 'today' }
     })
   })
 })

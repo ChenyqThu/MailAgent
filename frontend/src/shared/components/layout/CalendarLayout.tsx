@@ -58,6 +58,8 @@ import { DUR, gsap, useGSAP } from '@shared/lib/gsap'
 import { CALENDAR_VIEWS } from '@shared/router-instance'
 
 import { PageFrame } from './PageFrame'
+import { AssistantChatDock } from '@shared/assistant/modal/AssistantChatDock'
+import { ChatModalFab } from '@shared/assistant/modal/ChatModalFab'
 
 // Lane D — 视图切换 cue: fade + x:±16 方向位移 (subtle, 非 parallax).
 // 方向按 CALENDAR_VIEWS 索引差符号推导: 前进 (索引增大) dir=+1 (新视图从右
@@ -284,7 +286,12 @@ export function CalendarLayout(): React.ReactElement {
     if (targetMs < Date.parse(navWindow.fromIso) || targetMs >= Date.parse(navWindow.toIso)) return
     const match = matchFocusTarget(navSeq, focusTarget, Date.now())
     // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot: 异步 query 数据到达后的单次匹配落锚 + 清 target, 非派生状态.
-    if (match) setAnchor(match)
+    if (match) {
+      setAnchor(match)
+      if (focusTarget.openDrawer) {
+        setActive(match)
+      }
+    }
     setFocusTarget(null)
   }, [focusTarget, navWindow, navFetching, navEvents, navSeq])
 
@@ -347,18 +354,23 @@ export function CalendarLayout(): React.ReactElement {
   })
 
   return (
-    <PageFrame ariaLabel="calendar" mainClassName="flex-1 min-w-0 flex flex-col overflow-hidden">
-      <CalendarToolbar
-        view={view}
-        onViewChange={setView}
-        currentDate={currentDate}
-        onDateChange={handleDateChange}
-        calendars={calendars}
-        selectedCalendars={selectedCalendars}
-        onSelectedCalendarsChange={setSelectedCalendars}
-        createOpen={createOpen}
-        onCreateOpenChange={setCreateOpen}
-      />
+    <>
+      <PageFrame
+        ariaLabel="calendar"
+        mainClassName="flex-1 min-w-0 flex flex-col overflow-hidden"
+        rightDock={<AssistantChatDock />}
+      >
+        <CalendarToolbar
+          view={view}
+          onViewChange={setView}
+          currentDate={currentDate}
+          onDateChange={handleDateChange}
+          calendars={calendars}
+          selectedCalendars={selectedCalendars}
+          onSelectedCalendarsChange={setSelectedCalendars}
+          createOpen={createOpen}
+          onCreateOpenChange={setCreateOpen}
+        />
       {/* CALENDAR-02 — 窄屏收窄横向 padding 多给 grid 空间 (week/month 7 列)。 */}
       <div className="flex-1 min-h-0 px-2 sm:px-5 pb-4">
         <div className="h-full glass-2 border border-ink-border/60 rounded-[10px] overflow-hidden flex flex-col">
@@ -489,5 +501,7 @@ export function CalendarLayout(): React.ReactElement {
       {/* §11.2 — undo toast stack: fixed 定位脱离 layout flow, 出现在底部居中 */}
       <UndoToastStack />
     </PageFrame>
+    <ChatModalFab />
+    </>
   )
 }

@@ -17,11 +17,37 @@
 //    seen set 防同轮重弹。不判 App 前台（macOS 自行降噪）；全吞异常，绝不影响
 //    SSE 桥的其他消费者。
 
-import { BrowserWindow, Notification } from 'electron'
+import { BrowserWindow, ipcMain, Notification, shell } from 'electron'
 
 import { DEFAULT_API_PORT } from '@shared/lib/ports'
 import { onSseEvent } from './events_bridge'
 import { getLocalApiToken, LOCAL_TOKEN_HEADER } from './local_token'
+
+export type NotificationChannelMode = 'banner' | 'both' | 'system_only' | 'center_only' | 'off'
+
+export type NotificationChannelPrefs = Partial<Record<string, NotificationChannelMode>>
+
+export type MacAuthState = 'unknown' | 'prompted' | 'delivered' | 'unsupported'
+
+export interface NotificationAuthMeta {
+  notificationAuthState?: 'unknown' | 'prompted' | 'delivered'
+  notificationLastTestedAt?: number | null
+}
+
+export interface RegisterNotificationFanoutOptions {
+  getChannelPrefs?: () => NotificationChannelPrefs | undefined
+  getSuppressWhenFocused?: () => boolean | undefined
+  ensureMainWindow?: () => Promise<BrowserWindow | null> | BrowserWindow | null
+}
+
+export interface RegisterNotificationSystemHandlersOptions {
+  getAuthMeta?: () => NotificationAuthMeta
+  saveAuthMeta?: (meta: {
+    notificationAuthState: 'unknown' | 'prompted' | 'delivered'
+    notificationLastTestedAt: number
+  }) => void
+  ensureMainWindow?: () => Promise<BrowserWindow | null> | BrowserWindow | null
+}
 
 // ---- loopback 基座 --------------------------------------------------------
 
@@ -277,14 +303,30 @@ const SEEN_SET_CAP = 300
 
 /** 消费的字段子集（wire 全形见 @shared/api/types/notifications.ts::NotificationItem；
  *  main 侧对 loopback 响应仍做宽松运行时校验，不信任类型断言）。 */
+export interface FanoutActionSpec {
+  id: string
+  label: string
+  url?: string
+  emailId?: number
+  emailSubject?: string
+  icalUid?: string
+  recurrenceId?: string | null
+  occurrenceStartIso?: string
+  meetingSummary?: string
+  prepSessionId?: number
+  agentId?: string
+}
+
 interface FanoutItem {
   id: number
   category: string
   severity: string
+  state: string
   title: string
   body: string
   recurrenceNo: number
   lastEventAt: number
+  readAt: number | null
   payload: Record<string, unknown> | null
 }
 
@@ -292,10 +334,51 @@ let _watermarkMs = 0
 let _registered = false
 let _debounceTimer: ReturnType<typeof setTimeout> | null = null
 const _seen = new Set<string>()
+let _getChannelPrefs: (() => NotificationChannelPrefs | undefined) | null = null
+let _getSuppressWhenFocused: (() => boolean | undefined) | null = null
+let _ensureMainWindow: (() => Promise<BrowserWindow | null> | BrowserWindow | null) | null = null
+let _fallbackAuthMeta: {
+  notificationAuthState: 'unknown' | 'prompted' | 'delivered'
+  notificationLastTestedAt: number | null
+} = {
+  notificationAuthState: 'unknown',
+  notificationLastTestedAt: null
+}
 
 function isNotificationChangedEvent(payload: unknown): boolean {
   if (!payload || typeof payload !== 'object') return false
   return (payload as { event_type?: unknown }).event_type === 'notification.changed'
+}
+
+export function parseNotificationActions(
+  payload: Record<string, unknown> | null | undefined
+): FanoutActionSpec[] {
+  if (!payload || !Array.isArray(payload.actions)) return []
+  const out: FanoutActionSpec[] = []
+  for (const raw of payload.actions) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const r = raw as Record<string, unknown>
+    if (typeof r.id !== 'string' || !r.id || typeof r.label !== 'string' || !r.label.trim()) {
+      continue
+    }
+    const spec: FanoutActionSpec = { id: r.id, label: r.label.trim() }
+    if (typeof r.url === 'string' && r.url.startsWith('https://')) spec.url = r.url
+    if (typeof r.emailId === 'number' && Number.isInteger(r.emailId)) spec.emailId = r.emailId
+    if (typeof r.emailSubject === 'string') spec.emailSubject = r.emailSubject
+    if (typeof r.icalUid === 'string') spec.icalUid = r.icalUid
+    if (typeof r.recurrenceId === 'string' || r.recurrenceId === null) {
+      spec.recurrenceId = r.recurrenceId
+    }
+    if (typeof r.occurrenceStartIso === 'string') spec.occurrenceStartIso = r.occurrenceStartIso
+    if (typeof r.meetingSummary === 'string') spec.meetingSummary = r.meetingSummary
+    if (typeof r.prepSessionId === 'number' && Number.isInteger(r.prepSessionId)) {
+      spec.prepSessionId = r.prepSessionId
+    }
+    if (typeof r.agentId === 'string') spec.agentId = r.agentId
+    out.push(spec)
+    if (out.length >= 2) break
+  }
+  return out
 }
 
 function parseFanoutItem(raw: unknown): FanoutItem | null {
@@ -314,10 +397,12 @@ function parseFanoutItem(raw: unknown): FanoutItem | null {
     id: r.id,
     category: r.category,
     severity: r.severity,
+    state: typeof r.state === 'string' ? r.state : 'open',
     title: r.title,
     body: typeof r.body === 'string' ? r.body : '',
     recurrenceNo: typeof r.recurrenceNo === 'number' ? r.recurrenceNo : 1,
     lastEventAt: r.lastEventAt,
+    readAt: typeof r.readAt === 'number' ? r.readAt : null,
     payload:
       r.payload && typeof r.payload === 'object' && !Array.isArray(r.payload)
         ? (r.payload as Record<string, unknown>)
@@ -325,35 +410,174 @@ function parseFanoutItem(raw: unknown): FanoutItem | null {
   }
 }
 
-/** 系统通知档位：critical（任何类目）或 Action Required（审批/待办类）。 */
-function shouldAlert(item: Pick<FanoutItem, 'category' | 'severity'>): boolean {
-  return item.severity === 'critical' || item.category === 'action_required'
+function isAnyMainWindowFocused(): boolean {
+  try {
+    return BrowserWindow.getAllWindows().some((win) => {
+      if (!win || win.isDestroyed()) return false
+      const focused = typeof win.isFocused === 'function' ? win.isFocused() : false
+      if (!focused) return false
+      return typeof win.isVisible === 'function' ? win.isVisible() : true
+    })
+  } catch {
+    return false
+  }
 }
 
-function navigateToNotification(item: FanoutItem): void {
-  const mainWindow = BrowserWindow.getAllWindows()[0]
-  if (!mainWindow || mainWindow.isDestroyed()) return
+/**
+ * 系统通知档位：
+ * 1. 若后端已在 `payload.delivery` 注明通道决策（`'off' | 'center_only' | 'system_only' | 'both'`），优先遵守；
+ * 2. 开启 `suppressWhenFocused` 且主窗口在前台聚焦时，跳过重复系统横幅（system + critical 故障除外）；
+ * 3. 无 `payload.delivery` 时按设置页矩阵（`action_required` 默认 `'banner'`，其余 `'center_only'` 仅 `critical` 弹窗）。
+ */
+function shouldAlert(
+  item: Pick<FanoutItem, 'category' | 'severity'> & { payload?: Record<string, unknown> | null },
+  prefs?: NotificationChannelPrefs,
+  opts?: { suppressWhenFocused?: boolean; isMainWindowFocused?: boolean }
+): boolean {
+  const delivery = item.payload?.delivery
+  if (delivery === 'off' || delivery === 'center_only') return false
+
+  const suppressedByFocus = Boolean(
+    opts?.suppressWhenFocused &&
+      opts?.isMainWindowFocused &&
+      !(item.severity === 'critical' && item.category === 'system')
+  )
+  if (suppressedByFocus) return false
+
+  if (delivery === 'system_only' || delivery === 'both') return true
+
+  const mode: NotificationChannelMode =
+    prefs?.[item.category] ?? (item.category === 'action_required' ? 'banner' : 'center_only')
+  if (mode === 'off') return false
+  if (mode === 'banner' || mode === 'both' || mode === 'system_only') return true
+  return item.severity === 'critical'
+}
+
+function dispatchToWindow(
+  mainWindow: BrowserWindow,
+  item: FanoutItem,
+  action: FanoutActionSpec | null = null
+): void {
+  if (mainWindow.isDestroyed()) return
   if (mainWindow.isMinimized()) mainWindow.restore()
+  if (typeof mainWindow.show === 'function') mainWindow.show()
   mainWindow.focus()
-  // renderer 侧（router-instance.tsx）经单源解析器 resolveNotificationLink 按
-  // payload.link 深跳；无 link / 未知型 → 只聚焦（上面已做）。
-  mainWindow.webContents.send('notifications:navigate', { id: item.id, payload: item.payload })
+  // renderer 侧（router-instance.tsx）经单源解析器 resolveNotificationLink /
+  // executeNotificationAction 落地；普通点击维持 `{ id, payload }` 最小形状。
+  const payload = action
+    ? { id: item.id, payload: item.payload, action }
+    : { id: item.id, payload: item.payload }
+  const contents = mainWindow.webContents
+  if (
+    typeof contents.isLoading === 'function' &&
+    contents.isLoading() &&
+    typeof contents.once === 'function'
+  ) {
+    contents.once('did-finish-load', (): void => {
+      if (!mainWindow.isDestroyed()) {
+        contents.send('notifications:navigate', payload)
+      }
+    })
+    return
+  }
+  contents.send('notifications:navigate', payload)
+}
+
+function navigateToNotification(
+  item: FanoutItem,
+  action: FanoutActionSpec | null = null,
+  customEnsure?: (() => Promise<BrowserWindow | null> | BrowserWindow | null) | null
+): void {
+  const ensure = customEnsure ?? _ensureMainWindow
+  if (!ensure) {
+    const mainWindow = BrowserWindow.getAllWindows()[0]
+    if (mainWindow) dispatchToWindow(mainWindow, item, action)
+    return
+  }
+  const resolved = ensure()
+  if (resolved && typeof (resolved as Promise<BrowserWindow | null>).then === 'function') {
+    void (resolved as Promise<BrowserWindow | null>)
+      .then((win): void => {
+        if (win) dispatchToWindow(win, item, action)
+      })
+      .catch((err: unknown): void => {
+        console.warn('[notify-center] ensureMainWindow failed:', err)
+      })
+    return
+  }
+  if (resolved) dispatchToWindow(resolved as BrowserWindow, item, action)
+}
+
+function markNotificationReadBestEffort(notificationId: number): void {
+  if (!Number.isInteger(notificationId) || notificationId <= 0) return
+  void fetch(`${resolveApiBaseUrl()}/notifications/${notificationId}/read`, {
+    method: 'POST',
+    headers: { [LOCAL_TOKEN_HEADER]: getLocalApiToken() }
+  }).catch(() => {})
+}
+
+function snoozeNotification1hBestEffort(notificationId: number): void {
+  if (!Number.isInteger(notificationId) || notificationId <= 0) return
+  const key = `banner-snooze-${notificationId}-${Date.now()}`
+  const until = Date.now() + 3_600_000
+  void fetch(`${resolveApiBaseUrl()}/notifications/${notificationId}/snooze`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      [LOCAL_TOKEN_HEADER]: getLocalApiToken(),
+      'Idempotency-Key': key
+    },
+    body: JSON.stringify({
+      mutation: { idempotency_key: key },
+      until
+    })
+  }).catch(() => {})
+}
+
+function handleBannerAction(item: FanoutItem, action: FanoutActionSpec): void {
+  markNotificationReadBestEffort(item.id)
+  if (action.id === 'join_meeting' && action.url) {
+    void shell.openExternal(action.url)
+    return
+  }
+  if (action.id === 'snooze_1h') {
+    snoozeNotification1hBestEffort(item.id)
+    return
+  }
+  navigateToNotification(item, action)
 }
 
 function showNotification(item: FanoutItem): void {
   if (!Notification.isSupported()) return
-  const notification = new Notification({ title: item.title, body: item.body })
-  notification.on('click', () => navigateToNotification(item))
+  const actions = parseNotificationActions(item.payload)
+  const opts: Electron.NotificationConstructorOptions = {
+    title: item.title,
+    body: item.body
+  }
+  if (process.platform === 'darwin' && actions.length > 0) {
+    opts.actions = actions.map((act) => ({ type: 'button', text: act.label }))
+  }
+  const notification = new Notification(opts)
+  notification.on('click', () => {
+    markNotificationReadBestEffort(item.id)
+    navigateToNotification(item, null)
+  })
+  if (actions.length > 0) {
+    notification.on('action', (_event, index) => {
+      const picked = actions[index]
+      if (picked) handleBannerAction(item, picked)
+    })
+  }
   try {
     notification.show()
   } catch {
-    /* 平台通知不可用 —— 吞掉，铃铛仍有这条 */
+    /* 平台通知不可用 —— 吞掉，铃铛或静默丢弃 */
   }
 }
 
 async function fetchAndAlert(): Promise<void> {
   const res = await fetch(
-    `${resolveApiBaseUrl()}/notifications?unreadOnly=true&limit=${FANOUT_FETCH_LIMIT}`,
+    `${resolveApiBaseUrl()}/notifications?state=all&limit=${FANOUT_FETCH_LIMIT}`,
     { headers: { [LOCAL_TOKEN_HEADER]: getLocalApiToken() } }
   )
   if (!res.ok) return
@@ -361,11 +585,18 @@ async function fetchAndAlert(): Promise<void> {
   const rows = Array.isArray(json?.data) ? json.data : []
   const items = rows
     .map(parseFanoutItem)
-    .filter((it): it is FanoutItem => it !== null && it.lastEventAt > _watermarkMs)
+    .filter((it): it is FanoutItem => {
+      if (it === null || it.lastEventAt <= _watermarkMs) return false
+      if (it.payload?.delivery === 'system_only') return true
+      return it.state !== 'resolved' && it.state !== 'dismissed' && it.readAt === null
+    })
     // 列表按 lastEventAt DESC 返回；升序弹（旧的先弹，通知中心叠放次序自然）。
     .sort((a, b) => a.lastEventAt - b.lastEventAt)
+  const prefs = _getChannelPrefs?.()
+  const suppressWhenFocused = Boolean(_getSuppressWhenFocused?.())
+  const focused = suppressWhenFocused ? isAnyMainWindowFocused() : false
   for (const item of items) {
-    if (shouldAlert(item)) {
+    if (shouldAlert(item, prefs, { suppressWhenFocused, isMainWindowFocused: focused })) {
       const seenKey = `${item.id}:${item.recurrenceNo}`
       if (!_seen.has(seenKey)) {
         if (_seen.size >= SEEN_SET_CAP) _seen.clear()
@@ -391,13 +622,16 @@ function handleSseEvent(payload: unknown): void {
 }
 
 /** 注册 fanout：水位取注册时刻（启动前的存量未读不弹 —— 铃铛已呈现）。返回反注册。 */
-export function registerNotificationFanout(): () => void {
+export function registerNotificationFanout(opts?: RegisterNotificationFanoutOptions): () => void {
+  _getChannelPrefs = opts?.getChannelPrefs ?? null
+  _getSuppressWhenFocused = opts?.getSuppressWhenFocused ?? null
+  _ensureMainWindow = opts?.ensureMainWindow ?? null
   if (!_registered) {
     _registered = true
     _watermarkMs = Date.now()
   }
   const off = onSseEvent(handleSseEvent)
-  return () => {
+  return (): void => {
     off()
     if (_debounceTimer) {
       clearTimeout(_debounceTimer)
@@ -406,14 +640,191 @@ export function registerNotificationFanout(): () => void {
   }
 }
 
+function resolveStatusSnapshot(getAuthMeta?: () => NotificationAuthMeta): {
+  supported: boolean
+  platform: string
+  authState: MacAuthState
+  lastTestedAt: number | null
+} {
+  const supported = Notification.isSupported()
+  const meta = getAuthMeta?.() ?? _fallbackAuthMeta
+  const rawState = meta.notificationAuthState
+  const authState: MacAuthState = !supported
+    ? 'unsupported'
+    : rawState === 'delivered' || rawState === 'prompted'
+      ? rawState
+      : 'unknown'
+  return {
+    supported,
+    platform: process.platform,
+    authState,
+    lastTestedAt: meta.notificationLastTestedAt ?? null
+  }
+}
+
+function persistAuthState(
+  opts: RegisterNotificationSystemHandlersOptions | undefined,
+  state: 'prompted' | 'delivered',
+  at: number
+): void {
+  _fallbackAuthMeta = { notificationAuthState: state, notificationLastTestedAt: at }
+  opts?.saveAuthMeta?.({ notificationAuthState: state, notificationLastTestedAt: at })
+}
+
+function sendPermissionAndTestBanner(
+  opts: RegisterNotificationSystemHandlersOptions | undefined,
+  waitForShowMs: number
+): Promise<{
+  ok: boolean
+  shown: boolean
+  authState: MacAuthState
+  detail?: string
+}> {
+  if (!Notification.isSupported()) {
+    return Promise.resolve({
+      ok: false,
+      shown: false,
+      authState: 'unsupported',
+      detail: 'System notifications are not supported on this host.'
+    })
+  }
+  const now = Date.now()
+  const demoActions: FanoutActionSpec[] = [
+    { id: 'open_calendar_today', label: '打开今日日程' },
+    { id: 'open_assistant', label: '唤起 AI 助手' }
+  ]
+  const notifOpts: Electron.NotificationConstructorOptions = {
+    title: 'MailAgent 系统通知已连接',
+    body: '重要邮件与会前提醒将在此弹出。点击通知右侧按钮可直达日程或 AI 助手。'
+  }
+  if (process.platform === 'darwin') {
+    notifOpts.actions = demoActions.map((act) => ({ type: 'button', text: act.label }))
+  }
+
+  let shown = false
+  let resolveShowWait: (() => void) | null = null
+  const notification = new Notification(notifOpts)
+  const ensure = opts?.ensureMainWindow ?? _ensureMainWindow
+
+  const targetItem = (payload: Record<string, unknown>): FanoutItem => ({
+    id: 0,
+    category: 'system',
+    severity: 'info',
+    state: 'open',
+    title: 'MailAgent',
+    body: '',
+    recurrenceNo: 1,
+    lastEventAt: now,
+    readAt: null,
+    payload
+  })
+
+  notification.on('show', () => {
+    shown = true
+    persistAuthState(opts, 'delivered', Date.now())
+    resolveShowWait?.()
+    resolveShowWait = null
+  })
+  notification.on('click', () => {
+    navigateToNotification(targetItem({}), null, ensure)
+  })
+  notification.on('action', (_event, index) => {
+    if (index === 0) {
+      navigateToNotification(
+        targetItem({ link: { type: 'route', to: '/admin/calendar', search: { view: 'today' } } }),
+        null,
+        ensure
+      )
+      return
+    }
+    if (index === 1) {
+      navigateToNotification(
+        targetItem({}),
+        { id: 'open_assistant', label: '唤起 AI 助手' },
+        ensure
+      )
+    }
+  })
+
+  try {
+    notification.show()
+  } catch (err) {
+    return Promise.resolve({
+      ok: false,
+      shown: false,
+      authState: 'prompted',
+      detail: err instanceof Error ? err.message : String(err)
+    })
+  }
+
+  if (shown) {
+    return Promise.resolve({ ok: true, shown: true, authState: 'delivered' })
+  }
+  persistAuthState(opts, 'prompted', now)
+
+  if (waitForShowMs <= 0) {
+    return Promise.resolve({ ok: true, shown: false, authState: 'prompted' })
+  }
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      resolveShowWait = null
+      resolve({
+        ok: true,
+        shown,
+        authState: shown ? 'delivered' : 'prompted'
+      })
+    }, waitForShowMs)
+    resolveShowWait = (): void => {
+      clearTimeout(timer)
+      resolve({ ok: true, shown: true, authState: 'delivered' })
+    }
+  })
+}
+
+/** 供 Settings「通知与常驻」页诊断系统通知权限、发起权限探测并跳转系统设置。 */
+export function registerNotificationSystemHandlers(
+  opts?: RegisterNotificationSystemHandlersOptions
+): void {
+  ipcMain.handle('notifications:systemStatus', async () => resolveStatusSnapshot(opts?.getAuthMeta))
+  ipcMain.handle('notifications:sendTest', async (): Promise<{ ok: boolean; detail?: string }> => {
+    const res = await sendPermissionAndTestBanner(opts, 0)
+    return res.detail ? { ok: res.ok, detail: res.detail } : { ok: res.ok }
+  })
+  ipcMain.handle('notifications:requestPermission', async () =>
+    sendPermissionAndTestBanner(opts, 350)
+  )
+  ipcMain.handle('notifications:openSystemSettings', async (): Promise<{ ok: boolean }> => {
+    if (process.platform !== 'darwin') return { ok: false }
+    try {
+      await shell.openExternal(
+        'x-apple.systempreferences:com.apple.Notifications-Settings.extension'
+      )
+      return { ok: true }
+    } catch {
+      try {
+        await shell.openExternal('x-apple.systempreferences:com.apple.preference.notifications')
+        return { ok: true }
+      } catch {
+        return { ok: false }
+      }
+    }
+  })
+}
+
 export const __testing = {
   parseFanoutItem,
+  parseNotificationActions,
   shouldAlert,
   fetchAndAlert,
   reset(watermarkMs?: number): void {
     _registered = false
     _watermarkMs = watermarkMs ?? 0
     _seen.clear()
+    _getChannelPrefs = null
+    _getSuppressWhenFocused = null
+    _ensureMainWindow = null
+    _fallbackAuthMeta = { notificationAuthState: 'unknown', notificationLastTestedAt: null }
     if (_debounceTimer) {
       clearTimeout(_debounceTimer)
       _debounceTimer = null

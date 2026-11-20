@@ -30,6 +30,7 @@ import {
   Mail,
   MapPin,
   Pencil,
+  Sparkles,
   Trash2,
   User,
   Users,
@@ -53,6 +54,7 @@ import { extractMeetingLink, MEETING_PROVIDER_LABEL, openMeetingLink } from './l
 import { CALENDAR_EVENTS_KEY, useCalendarEvent } from './hooks/useCalendarEvents'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useActiveEmail } from '@shared/state/active-email'
+import { startChatWithPrompt, useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { useMailbox } from '@shared/state/mailbox'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import type {
@@ -644,6 +646,40 @@ export function EventDetailDrawer({ occurrence, onClose, onReopen }: Props): Rea
                 阶段 3 (#11) — 能力表门控: owner 编辑/删除区走 caps.write,
                 attendee RSVP 区走 caps.rsvp (写端点就绪后两端 true). */}
             <div className="dw-foot">
+              <div className="mb-2.5 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={(): void => {
+                    const title = occurrence.summary || t('calendar.shared.untitled', '未命名事件')
+                    const org = occurrence.organizer ? `（组织者：${occurrence.organizer}）` : ''
+                    useAIChatPanel.getState().setMode('sidebar')
+                    startChatWithPrompt(
+                      `请结合日历事件「${title}」（时间：${occurrence.occurrence_start_iso}${org}）及相关邮件，帮我整理当前上下文与下一步跟进建议。`,
+                      sourceEmail?.internal_id ?? null
+                    )
+                  }}
+                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-1.5 text-aux font-medium text-ink-fg transition-colors hover:bg-ink-3"
+                >
+                  <Sparkles size={13} strokeWidth={2} className="text-coral" />
+                  <span>{t('calendar.drawer.aiFollowUp', 'AI 跟进此会')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={(): void => {
+                    const title = occurrence.summary || t('calendar.shared.untitled', '未命名事件')
+                    const org = occurrence.organizer ? `（组织者：${occurrence.organizer}）` : ''
+                    useAIChatPanel.getState().setMode('sidebar')
+                    startChatWithPrompt(
+                      `请为即将开始的会议「${title}」（时间：${occurrence.occurrence_start_iso}${org}）执行会前准备：检索相关历史邮件与待办，按「会议背景 / 相关邮件要点 / 未决问题 / 建议准备事项」四部分简明输出。`,
+                      sourceEmail?.internal_id ?? null
+                    )
+                  }}
+                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-[var(--r-ctl)] border border-coral/35 bg-coral/12 px-3 py-1.5 text-aux font-medium text-coral transition-colors hover:bg-coral/18"
+                >
+                  <Sparkles size={13} strokeWidth={2} />
+                  <span>{t('calendar.drawer.meetingPrep', '会前准备')}</span>
+                </button>
+              </div>
               {isOwner
                 ? caps.write && (
                     /* owner: 单行 [编辑.btn-op.edit] [删除.btn-op.delete] */

@@ -14,6 +14,8 @@ export interface CalendarFocusTarget {
   dateIso: string
   icalUid: string
   recurrenceId: string | null
+  /** 来自通知中心深跳时可要求自动打开 EventDetailDrawer。 */
+  openDrawer?: boolean
 }
 
 interface CalendarFocusState {

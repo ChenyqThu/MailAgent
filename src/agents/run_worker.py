@@ -33,6 +33,11 @@ from loguru import logger
 from src.agents.run_state import derive_agent_run_state
 from src.agents.trigger import Budget, parse_budget
 from src.notify.center import NotifyCenter
+from src.notify.prefs import (
+    MEETING_PREP_PRESET_AGENT_ID,
+    load_notification_prefs,
+    record_meeting_prep_session,
+)
 
 if TYPE_CHECKING:
     from src.reports.store import ReportStore
@@ -40,13 +45,9 @@ if TYPE_CHECKING:
 
 # gateway loopback 默认端口（与 ai_gateway_proxy._resolve_gateway_port / config.ts 同源）。
 _DEFAULT_AI_GATEWAY_PORT = 8300
-# serve-api loopback 默认端口（island announce 端点所在；同 island_agent.resolve_api_port）。
-_DEFAULT_SERVE_API_PORT = 8200
 # httpx 总超时 = spec.maxRunSeconds + 余量（drain 有界，超时兜底防 worker 卡死）。
 _HTTP_MARGIN_SEC = 30
 _CONNECT_TIMEOUT_SEC = 10.0
-# 岛通知短连接超时（fire-and-forget 语义，失败不阻断 job 终态）。
-_ANNOUNCE_TIMEOUT_SEC = 5.0
 # 「待审批」待办通知的 dedupe_key 前缀（publish / resolve / 过期归档三处共用一个常量）。
 _PAUSED_DEDUPE_PREFIX = "agent_run_paused:"
 # 审批 TTL 过期归档的扫描节拍与窗口（寄生主循环空闲轮，不新增 tick）。
@@ -577,6 +578,7 @@ class AgentRunWorker:
                 output_watermark=output_watermark,
                 usage=usage or None,
                 model=resp.get("model"),
+                cost_usd=resp.get("costUsd") if isinstance(resp.get("costUsd"), (int, float)) else None,
                 chat_session_id=session_id,
             )
             result = self._result_json(resp)
@@ -609,6 +611,7 @@ class AgentRunWorker:
                 output_watermark=output_watermark,
                 usage=usage or None,
                 model=resp.get("model"),
+                cost_usd=resp.get("costUsd") if isinstance(resp.get("costUsd"), (int, float)) else None,
                 error=error_payload,
                 chat_session_id=session_id,
             )
@@ -702,10 +705,6 @@ class AgentRunWorker:
         title, summary = self._announce_text(job, agent_id, kind, result, last_error)
         session_id = self._session_id_of(result)
         await self._publish_notification(job, kind, agent_id, title, summary, session_id)
-        try:
-            await self._post_announce(kind, session_id, title, summary)
-        except Exception as exc:  # noqa: BLE001 — 通知失败绝不影响 job 终态（已在 _mark 落库）
-            logger.warning(f"[agent-run-worker] island announce failed job_id={job.job_id}: {exc}")
 
     async def _publish_notification(
         self, job: "AsyncJob", kind: str, agent_id: str, title: str, summary: str, session_id: int
@@ -734,10 +733,53 @@ class AgentRunWorker:
             logger.warning(
                 f"[agent-run-worker] notify resolve paused failed job_id={job.job_id}: {exc}"
             )
+
+        category = "reviews" if job.job_type == "contact_governance" else "results"
+        prefs: dict[str, Any] = {}
+        try:
+            prefs = await asyncio.to_thread(load_notification_prefs, self.repo.db_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"[agent-run-worker] load notification prefs skipped: {exc}")
+
+        if agent_id == MEETING_PREP_PRESET_AGENT_ID and kind == "completed":
+            params = job.params or {}
+            uid = params.get("calendar_event_uid")
+            occ_iso = params.get("occurrence_start_iso")
+            if isinstance(uid, str) and isinstance(occ_iso, str) and session_id > 0:
+                try:
+                    await asyncio.to_thread(
+                        record_meeting_prep_session,
+                        self.repo.db_path,
+                        uid,
+                        occ_iso,
+                        session_id,
+                        agent_id,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        f"[agent-run-worker] record meeting prep session skipped: {exc}"
+                    )
+            if (
+                prefs.get("meetingPrepMode") == "auto_before"
+                and prefs.get("meetingDelivery", "both") != "off"
+            ):
+                # 自动会前准备完成后，不额外弹一条任务完成通知，统一由会前提醒挂载「查看会前准备」
+                return
+
+        payload: dict[str, Any] = {"link": link}
+        publish_kwargs: dict[str, Any] = {}
+        if category == "results":
+            delivery = str(prefs.get("agentResultsDelivery") or "center_only")
+            if delivery == "off":
+                return
+            payload["delivery"] = delivery
+            if delivery == "system_only":
+                publish_kwargs["system_only"] = True
+
         try:
             await asyncio.to_thread(
                 self._notify_center.publish,
-                category="reviews" if job.job_type == "contact_governance" else "results",
+                category=category,
                 source="agent_run",
                 title=title,
                 body=summary,
@@ -746,7 +788,8 @@ class AgentRunWorker:
                     f"agent_run:{job.job_id}" if kind == "completed"
                     else f"agent_run_failed:{agent_id}"
                 ),
-                payload={"link": link},
+                payload=payload,
+                **publish_kwargs,
             )
         except Exception as exc:  # noqa: BLE001 — 通知失败绝不影响 job 终态（已在 _mark 落库）
             logger.warning(
@@ -946,34 +989,10 @@ class AgentRunWorker:
 
     @staticmethod
     def _session_id_of(result: Optional[dict]) -> int:
-        """result_json 里的 sessionId（岛卡关联）；缺失/非法 → 0（通知类卡不强依赖真 session）。"""
         try:
             return int((result or {}).get("sessionId") or 0)
         except (TypeError, ValueError):
             return 0
-
-    async def _post_announce(self, kind: str, session_id: int, title: str, summary: str) -> None:
-        """POST serve-api ``/api/island/agent/announce``（loopback + 本地 token, 沿 island.py 纪律）。"""
-        url = f"http://127.0.0.1:{self._serve_api_port()}/api/island/agent/announce"
-        payload = {"kind": kind, "sessionId": session_id, "title": title, "summary": summary}
-        headers = {}
-        token = os.environ.get("MAILAGENT_LOCAL_API_TOKEN", "").strip()
-        if token:
-            headers["X-MailAgent-Local-Token"] = token
-        async with httpx.AsyncClient(timeout=_ANNOUNCE_TIMEOUT_SEC) as client:
-            await client.post(url, json=payload, headers=headers)
-
-    @staticmethod
-    def _serve_api_port() -> int:
-        """serve-api loopback 端口（env MAILAGENT_API_PORT，缺省/非法 → 8200）——同 island_agent.resolve_api_port。"""
-        raw = os.environ.get("MAILAGENT_API_PORT")
-        if raw is None:
-            return _DEFAULT_SERVE_API_PORT
-        try:
-            n = int(raw)
-        except (TypeError, ValueError):
-            return _DEFAULT_SERVE_API_PORT
-        return n if n > 0 else _DEFAULT_SERVE_API_PORT
 
     # ── poke gateway ──────────────────────────────────────────────────────────────
 

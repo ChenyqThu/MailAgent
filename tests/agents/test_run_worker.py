@@ -319,31 +319,31 @@ def _announce_calls(calls: list) -> list:
 def test_completed_announces_island_completed(env, monkeypatch):
     repo, store = env
     job_id = _claim_agent_job(repo)
-    calls = _patch_client_capturing(monkeypatch, gateway_resp=_FakeResp(200, {
+    _patch_client_capturing(monkeypatch, gateway_resp=_FakeResp(200, {
         "ok": True, "outcome": "completed", "sessionId": 7, "steps": 1,
     }))
     worker = AgentRunWorker(repo=repo, store=store)
     _run(worker._execute(repo.get(job_id)))
 
-    ann = _announce_calls(calls)
-    assert len(ann) == 1
-    assert ann[0]["json"]["kind"] == "completed"
-    assert ann[0]["json"]["sessionId"] == 7
-    assert "DMS" in ann[0]["json"]["title"]  # agent 名进 title
+    rows = _notifications(repo)
+    assert len(rows) == 1
+    assert rows[0]["severity"] == "info"
+    assert json.loads(rows[0]["payload_json"])["link"]["sessionId"] == 7
+    assert "DMS" in rows[0]["title"]
 
 
 def test_error_announces_island_error(env, monkeypatch):
     repo, store = env
     job_id = _claim_agent_job(repo)
-    calls = _patch_client_capturing(monkeypatch, gateway_resp=_FakeResp(200, {
+    _patch_client_capturing(monkeypatch, gateway_resp=_FakeResp(200, {
         "ok": False, "outcome": "error", "error": "E_BUDGET_TIME",
     }))
     worker = AgentRunWorker(repo=repo, store=store)
     _run(worker._execute(repo.get(job_id)))
 
-    ann = _announce_calls(calls)
-    assert len(ann) == 1 and ann[0]["json"]["kind"] == "error"
-    assert "E_BUDGET_TIME" in ann[0]["json"]["summary"]
+    rows = _notifications(repo)
+    assert len(rows) == 1 and rows[0]["severity"] == "warn"
+    assert "E_BUDGET_TIME" in rows[0]["body"]
 
 
 def test_paused_handoff_does_not_announce(env, monkeypatch):
@@ -473,11 +473,6 @@ def test_contact_governance_notification_lands_in_reviews(env, monkeypatch):
         idempotency_key="contact-governance-notify",
     )
     worker = AgentRunWorker(repo=repo, store=store)
-
-    async def no_island(*a, **k):
-        return None
-
-    monkeypatch.setattr(worker, "_post_announce", no_island)
     _run(worker._announce_terminal(
         repo.get(job_id), "succeeded",
         {"outcome": "completed", "summary": "新增 2 条建议"}, None,
@@ -502,11 +497,6 @@ def test_contact_governance_notification_names_agent_and_links_to_team_record(en
         idempotency_key="contact-governance-schedule",
     )
     worker = AgentRunWorker(repo=repo, store=store)
-
-    async def no_island(*a, **k):
-        return None
-
-    monkeypatch.setattr(worker, "_post_announce", no_island)
     _run(worker._announce_terminal(
         repo.get(job_id), "succeeded",
         {"outcome": "completed", "sessionId": 263, "summary": "新增 2 条建议"}, None,
@@ -581,11 +571,6 @@ def test_terminal_resolves_pending_approval_todo_before_publishing(env, monkeypa
     repo, store = env
     job_id = _claim_agent_job(repo)
     worker = AgentRunWorker(repo=repo, store=store)
-
-    async def no_island(*a, **k):
-        return None
-
-    monkeypatch.setattr(worker, "_post_announce", no_island)
     # ① 先落一条「待审批」待办
     _run(worker._announce_terminal(
         repo.get(job_id), "succeeded",
@@ -754,9 +739,8 @@ def test_notify_publish_failure_does_not_block_terminal_or_island(env, monkeypat
     monkeypatch.setattr(worker._notify_center, "publish", boom)
     _run(worker._execute(repo.get(job_id)))
 
-    # publish 抛异常被挂点吞：job 终态与岛卡都不受牵连
+    # publish 抛异常被挂点吞：job 终态不受牵连
     assert repo.get(job_id).status == "succeeded"
-    assert len(_announce_calls(calls)) == 1
     assert _notifications(repo) == []
 
 

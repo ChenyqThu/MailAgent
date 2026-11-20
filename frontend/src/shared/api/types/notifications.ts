@@ -44,7 +44,8 @@ export const NOTIFICATION_LINK_TYPE_VALUES = [
   'contact_queue',
   'matter',
   'library',
-  'davmail_reauth'
+  'davmail_reauth',
+  'email'
 ] as const
 
 /** 单条投影（design §5 wire，camelCase）。`payload` 是自由结构化载荷，deep-link 在
@@ -91,4 +92,24 @@ export interface NotificationUnreadCount {
    *  铃铛的 `AgentPendingBadge` 是 level 型（审批挂着数字就在）——「读了通知但没去批」
    *  时铃铛靠这一轴保留一档持久指示。 */
   openByCategory: Record<NotificationCategory, number>
+}
+
+export type ScenarioDeliveryMode = 'off' | 'center_only' | 'system_only' | 'both'
+export type MailNotificationScope = 'urgent_only' | 'urgent_and_important'
+export type MeetingPrepPresetMode = 'on_demand' | 'auto_before'
+
+export interface NotificationPreferences {
+  mailDelivery: ScenarioDeliveryMode
+  mailScope: MailNotificationScope
+  mailActionsEnabled: boolean
+  meetingDelivery: ScenarioDeliveryMode
+  meetingLeadMinutes: 5 | 10 | 15 | 30
+  meetingActionsEnabled: boolean
+  meetingPrepEnabled: boolean
+  meetingPrepMode: MeetingPrepPresetMode
+  meetingPrepLeadMinutes: 15 | 30 | 60 | 120
+  agentResultsDelivery: ScenarioDeliveryMode
+  systemAlertsDelivery: ScenarioDeliveryMode
+  suppressBannerWhenFocused: boolean
+  skipBannerWhenFeishuSent: boolean
 }

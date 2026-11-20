@@ -1969,9 +1969,6 @@ class NewWatcher:
         self._maybe_trigger_kos_hook(email_obj, internal_id, page_id)
 
         if not history_ingest:
-            # ping-island MailReceived（非阻塞，默认关；启用前提见 .env.example）
-            self._maybe_dispatch_island_received(email_obj, internal_id, page_id)
-
             # Custom Agent email_filter 触发钩子（S4，非阻塞，默认关）
             self._maybe_trigger_custom_agents(email_obj, internal_id)
 
@@ -2330,14 +2327,18 @@ class NewWatcher:
                             f"action_type={labels.get('action_type')} "
                             f"tokens={labels.get('tokens')}"
                         )
-                        # ping-island LLMReviewed[Urgent] hook（默认关）
-                        self._maybe_dispatch_island_reviewed(
+                        # 飞书推送先判定；开启 skipBannerWhenFeishuSent 时本地通知不再重复弹桌面横幅
+                        feishu_sent = await self._maybe_notify_feishu(
                             email_obj, internal_id, notion_page_id, labels,
                         )
-                        # 本地 LLM review 路径补飞书通知（取代停用的 Notion webhook 回环）
-                        await self._maybe_notify_feishu(
-                            email_obj, internal_id, notion_page_id, labels,
-                        )
+                        if feishu_sent:
+                            await self._maybe_notify_center_reviewed(
+                                email_obj, internal_id, labels, feishu_sent=True,
+                            )
+                        else:
+                            await self._maybe_notify_center_reviewed(
+                                email_obj, internal_id, labels,
+                            )
                     else:
                         logger.warning(
                             f"[llm-hook] failed internal_id={internal_id} "
@@ -2549,77 +2550,10 @@ class NewWatcher:
                 f"[kos-hook] dispatch failed internal_id={internal_id}: {e}"
             )
 
-    def _maybe_dispatch_island_received(
-        self, email_obj: Email, internal_id: int, notion_page_id: str
-    ) -> None:
-        """ping-island ``MailReceived`` 派发（默认关，fail-open）.
-
-        在 ``_sync_single_email_v3`` Notion sync 成功后调；envelope 构造与发送都是 fire-and-forget，
-        异常不影响主同步流程。详见 frontend/ISLAND-PLUGIN.md §4.3。
-        """
-        try:
-            from src.notify import island_dispatch
-            if not island_dispatch.is_enabled():
-                return
-            island_dispatch.dispatch_mail_received(
-                internal_id=internal_id,
-                page_id=notion_page_id or "",
-                subject=getattr(email_obj, "subject", "") or "",
-                sender_email=getattr(email_obj, "sender", "") or "",
-                sender_name=getattr(email_obj, "sender_name", "") or "",
-                mailbox=getattr(email_obj, "mailbox", "") or "",
-                is_flagged=bool(getattr(email_obj, "is_flagged", False)),
-                attach_count=len(getattr(email_obj, "attachments", []) or []),
-            )
-        except Exception as e:
-            logger.debug(f"[island-hook] mail_received dispatch failed: {e}")
-
-    def _maybe_dispatch_island_reviewed(
-        self, email_obj: Email, internal_id: int,
-        notion_page_id: str, labels: Dict[str, Any],
-    ) -> None:
-        """ping-island ``LLMReviewed`` / ``LLMReviewedUrgent`` 派发（默认关，fail-open）.
-
-        Phase 1 (PRD §5.1): 透传 ``ai_summary`` 给 envelope metadata，让 fork 端
-        ``MailAgentSessionView`` 渲染 1 行 LLM 摘要。
-        """
-        try:
-            from src.notify import island_dispatch
-            if not island_dispatch.is_enabled():
-                return
-            priority = str(labels.get("priority") or "")
-            action = str(labels.get("action_type") or labels.get("action") or "")
-            # 走 ai_summary_full (完整 2-4 句中文); ai_summary 字段是 summary_for_log 内
-            # 截 80 后的 log line 用副本, 不适合 envelope.metadata.
-            ai_summary = str(
-                labels.get("ai_summary_full") or labels.get("ai_summary") or ""
-            )
-            # Phase 2 (PRD §5.2): LLM sanitized recommended_actions 透传给 dispatch
-            # → urgent 分支动态构 intervention.options 替代 DEFAULT_OPTION_IDS.
-            # processor._parse 已按 mailbox-specific whitelist filter, dispatch 再做
-            # confidence >= 0.5 + handler whitelist 二次防御性 filter.
-            recommended_actions = labels.get("recommended_actions") or []
-            if not isinstance(recommended_actions, list):
-                recommended_actions = []
-            island_dispatch.dispatch_llm_reviewed(
-                internal_id=internal_id,
-                page_id=notion_page_id or "",
-                subject=getattr(email_obj, "subject", "") or "",
-                sender_email=getattr(email_obj, "sender", "") or "",
-                sender_name=getattr(email_obj, "sender_name", "") or "",
-                mailbox=getattr(email_obj, "mailbox", "") or "",
-                priority=priority,
-                action=action,
-                ai_summary=ai_summary,
-                recommended_actions=recommended_actions,
-            )
-        except Exception as e:
-            logger.debug(f"[island-hook] llm_reviewed dispatch failed: {e}")
-
     async def _maybe_notify_feishu(
         self, email_obj: Email, internal_id: int,
         notion_page_id: str, labels: Dict[str, Any],
-    ) -> None:
+    ) -> bool:
         """本地 LLM review 完成后, 对重要/紧急且需行动的邮件直推飞书通知.
 
         取代旧链路: Notion Email Agent → Automation webhook(ai_reviewed) → Redis
@@ -2631,8 +2565,8 @@ class NewWatcher:
         labels.summary_for_log(), 格式与飞书判据天然一致 (PRIORITY_ENUM).
         飞书内部自带 page_id 去重(10min) + 3 天时效过滤; 失败仅 warning 不阻塞.
         """
-        if self._feishu is None:
-            return
+        if getattr(self, "_feishu", None) is None:
+            return False
         # 与 handlers.FLAG_ACTIONS / reverse_sync.NOTIFY_PRIORITIES 同口径
         notify_priorities = {"🔴 紧急", "🟡 重要"}
         flag_actions = {
@@ -2644,11 +2578,11 @@ class NewWatcher:
             action = str(labels.get("action_type") or "")
             mailbox = getattr(email_obj, "mailbox", "") or ""
             if priority not in notify_priorities:
-                return
+                return False
             if action not in flag_actions:
-                return
+                return False
             if is_sent_mailbox(mailbox):
-                return
+                return False
             # L3 降噪: 自定义文件夹默认不通知 (PRD §2.3); 开了通知的才推。权威是
             # folder_pref 行, 无行时回退 FOLDER_NOTIFY_ENABLED (见 _skip_feishu_for_folder)。
             if self._skip_feishu_for_folder(mailbox):
@@ -2656,12 +2590,12 @@ class NewWatcher:
                     f"[feishu] skip custom folder internal_id={internal_id} "
                     f"mailbox={mailbox!r} (L3 降噪; 设置里打开该文件夹的通知即可)"
                 )
-                return
+                return False
 
             # E: 对账补抓的**老**邮件不推送 (通知是实时性语义)。判据是
             # 「补抓来源 AND 超龄」—— 正常增量 (含停机后的积压) 不受此门约束。
             if self._suppress_reconcile_notify(internal_id):
-                return
+                return False
 
             email_date = getattr(email_obj, "date", None)
             date_iso = (
@@ -2690,14 +2624,117 @@ class NewWatcher:
                 # 飞书卡片回复按钮由 Openclaw 按 page_id/message_id 处理, 此处留空.
                 "reply_suggestion": "",
             }
-            ok = await self._feishu.notify_important_email(page_info)
+            ok = bool(await self._feishu.notify_important_email(page_info))
             if ok:
                 logger.info(
                     f"[feishu] notified internal_id={internal_id} "
                     f"priority={priority} action={action}"
                 )
+            return ok
         except Exception as e:
             logger.warning(f"[feishu] notify failed internal_id={internal_id}: {e}")
+            return False
+
+    async def _maybe_notify_center_reviewed(
+        self,
+        email_obj: Email,
+        internal_id: int,
+        labels: Dict[str, Any],
+        *,
+        feishu_sent: bool = False,
+    ) -> None:
+        """本地 LLM review 完成后, 将重要/紧急且需行动的邮件按偏好发布到 NotifyCenter.
+
+        遵守分场景渠道偏好 (mailDelivery / mailScope / mailActionsEnabled /
+        skipBannerWhenFeishuSent), 失败 fail-open.
+        """
+        notify_priorities = {"🔴 紧急", "🟡 重要"}
+        flag_actions = {
+            "需要回复", "需要决策", "需要Review",
+            "需要会议", "需要跟进", "等待响应",
+        }
+        try:
+            priority = str(labels.get("priority") or "")
+            action = str(labels.get("action_type") or "")
+            mailbox = getattr(email_obj, "mailbox", "") or ""
+            if priority not in notify_priorities:
+                return
+            if action not in flag_actions:
+                return
+            if is_sent_mailbox(mailbox):
+                return
+            if self._skip_feishu_for_folder(mailbox):
+                return
+            if self._suppress_reconcile_notify(internal_id):
+                return
+            db_path = getattr(getattr(self, "sync_store", None), "db_path", None)
+            if not db_path:
+                return
+
+            from src.notify.center import NotifyCenter
+            from src.notify.prefs import load_notification_prefs
+
+            is_urgent = priority == "🔴 紧急"
+            prefs = load_notification_prefs(db_path)
+            delivery = str(prefs.get("mailDelivery") or "both")
+            if delivery == "off":
+                return
+            if not is_urgent and prefs.get("mailScope") == "urgent_only":
+                if delivery == "system_only":
+                    return
+                if delivery == "both":
+                    delivery = "center_only"
+            if feishu_sent and prefs.get("skipBannerWhenFeishuSent", True):
+                if delivery == "system_only":
+                    return
+                if delivery == "both":
+                    delivery = "center_only"
+
+            sender_display = (
+                getattr(email_obj, "sender_name", "") or getattr(email_obj, "sender", "") or ""
+            ).strip()
+            subject = (getattr(email_obj, "subject", "") or "").strip()
+            if sender_display and subject:
+                title = f"{sender_display}: {subject}"
+            else:
+                title = subject or sender_display or f"Email #{internal_id}"
+            ai_summary = str(
+                labels.get("ai_summary_full") or labels.get("ai_summary") or ""
+            ).strip()
+            payload: Dict[str, Any] = {
+                "delivery": delivery,
+                "link": {"type": "email", "emailId": int(internal_id)},
+            }
+            if prefs.get("mailActionsEnabled", True):
+                actions: list[dict[str, Any]] = [
+                    {
+                        "id": "open_email_ai",
+                        "label": "AI 拟稿 / 跟进",
+                        "emailId": int(internal_id),
+                        "emailSubject": (subject or title)[:80],
+                    }
+                ]
+                if delivery != "system_only":
+                    actions.append({"id": "snooze_1h", "label": "1小时后提醒"})
+                payload["actions"] = actions
+
+            center = NotifyCenter(db_path)
+            publish_kwargs: Dict[str, Any] = {}
+            if delivery == "system_only":
+                publish_kwargs["system_only"] = True
+            await asyncio.to_thread(
+                center.publish,
+                category="action_required" if is_urgent else "reviews",
+                source="mail_urgent" if is_urgent else "mail_important",
+                severity="critical" if is_urgent else "warn",
+                title=title[:120],
+                body=ai_summary[:240],
+                dedupe_key=f"mail_review:{internal_id}",
+                payload=payload,
+                **publish_kwargs,
+            )
+        except Exception as e:
+            logger.debug(f"[notify-center] mail review publish skipped internal_id={internal_id}: {e}")
 
     async def _process_llm_retry_queue(self) -> None:
         """重试 LLM 失败的邮件（指数退避：1m/5m/15m/1h/2h）。

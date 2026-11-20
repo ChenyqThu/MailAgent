@@ -30,9 +30,30 @@ import type { ChatSession } from '@shared/api/types'
 import { navigateToTeamRecord } from '@shared/components/agents/navigation'
 import { isMatterScopedAgentId } from '@shared/components/agents/team/teamTimeline'
 import { clampSettingsTab } from '@shared/lib/settingsTabs'
-import { requestOpenAgentSession } from '@shared/state/ai-chat-panel'
+import { openNewChatTab } from '@shared/state/active-chat'
+import { useActiveEmail } from '@shared/state/active-email'
+import {
+  requestOpenAgentSession,
+  startChatWithPrompt,
+  useAIChatPanel
+} from '@shared/state/ai-chat-panel'
+import { useCalendarFocus } from '@shared/state/calendar-focus'
 
 export { NOTIFICATION_ROUTE_TARGETS, type NotificationRouteTarget }
+
+export interface NotificationActionSpec {
+  id: string
+  label: string
+  url?: string
+  emailId?: number
+  emailSubject?: string
+  icalUid?: string
+  recurrenceId?: string | null
+  occurrenceStartIso?: string
+  meetingSummary?: string
+  prepSessionId?: number
+  agentId?: string
+}
 
 export type NotificationLink =
   /** agent 执行终态（`run_worker.py`）。`agentId` 自 09-02 起随 `agent_run` /
@@ -68,6 +89,8 @@ export type NotificationLink =
   /** DavMail 登录失效 / 即将过期（`davmail_watchdog.py` 的认证类告警）→ 打开全局重认证弹窗
    *  （`state/davmail-reauth.ts`）。 */
   | { type: 'davmail_reauth' }
+  /** 重要/紧急邮件通知（`new_watcher.py` LLM review 完成后发布）→ 选中对应邮件并落收件箱。 */
+  | { type: 'email'; emailId: number }
 
 /** 非空字符串字段的统一取法（reportId / publicId 都是不透明 id，只校验形状）。 */
 function nonEmptyString(value: unknown): string | null {
@@ -148,6 +171,11 @@ export function resolveNotificationLink(
     return fileId === null ? null : { type: 'library', fileId }
   }
 
+  if (link.type === 'email') {
+    const emailId = positiveInt(link.emailId)
+    return emailId === null ? null : { type: 'email', emailId }
+  }
+
   return null
 }
 
@@ -179,6 +207,28 @@ export function navigateNotificationRoute(
     case '/settings':
       void navigate({ to: '/settings', search: { tab: clampSettingsTab(link.search?.tab) } })
       return
+    case '/admin/calendar': {
+      const rawView = link.search?.view
+      const view =
+        rawView === 'today' ||
+        rawView === 'week' ||
+        rawView === 'month' ||
+        rawView === 'agenda' ||
+        rawView === 'recurring'
+          ? rawView
+          : 'today'
+      if (typeof link.search?.icalUid === 'string' && typeof link.search?.dateIso === 'string') {
+        useCalendarFocus.getState().request({
+          dateIso: link.search.dateIso,
+          icalUid: link.search.icalUid,
+          recurrenceId:
+            typeof link.search.recurrenceId === 'string' ? link.search.recurrenceId : null,
+          openDrawer: link.search.openDrawer === true
+        })
+      }
+      void navigate({ to: '/admin/calendar', search: { view } })
+      return
+    }
     default: {
       const exhaustive: never = link.to
       return exhaustive
@@ -222,4 +272,116 @@ export async function openNotificationSession(
   }
   requestOpenAgentSession(link.sessionId)
   void navigate({ to: '/sessions' })
+}
+
+export function parseNotificationAction(raw: unknown): NotificationActionSpec | null {
+  if (!isRecord(raw)) return null
+  if (typeof raw.id !== 'string' || !raw.id || typeof raw.label !== 'string' || !raw.label.trim()) {
+    return null
+  }
+  const spec: NotificationActionSpec = { id: raw.id, label: raw.label.trim() }
+  if (typeof raw.url === 'string' && raw.url.startsWith('https://')) spec.url = raw.url
+  if (typeof raw.emailId === 'number' && Number.isInteger(raw.emailId)) spec.emailId = raw.emailId
+  if (typeof raw.emailSubject === 'string') spec.emailSubject = raw.emailSubject
+  if (typeof raw.icalUid === 'string') spec.icalUid = raw.icalUid
+  if (typeof raw.recurrenceId === 'string' || raw.recurrenceId === null) {
+    spec.recurrenceId = raw.recurrenceId
+  }
+  if (typeof raw.occurrenceStartIso === 'string') spec.occurrenceStartIso = raw.occurrenceStartIso
+  if (typeof raw.meetingSummary === 'string') spec.meetingSummary = raw.meetingSummary
+  if (typeof raw.prepSessionId === 'number' && Number.isInteger(raw.prepSessionId)) {
+    spec.prepSessionId = raw.prepSessionId
+  }
+  if (typeof raw.agentId === 'string') spec.agentId = raw.agentId
+  return spec
+}
+
+export function parseNotificationActions(
+  payload: Record<string, unknown> | null | undefined
+): NotificationActionSpec[] {
+  if (!payload || !Array.isArray(payload.actions)) return []
+  const out: NotificationActionSpec[] = []
+  for (const item of payload.actions) {
+    const parsed = parseNotificationAction(item)
+    if (parsed) {
+      out.push(parsed)
+      if (out.length >= 2) break
+    }
+  }
+  return out
+}
+
+export function executeNotificationAction(
+  action: NotificationActionSpec,
+  deps: { navigate: NavigateFn; onSnooze1h?: () => void }
+): void {
+  const { navigate, onSnooze1h } = deps
+  switch (action.id) {
+    case 'join_meeting':
+      if (action.url && action.url.startsWith('https://')) {
+        window.open(action.url, '_blank', 'noopener,noreferrer')
+      }
+      return
+    case 'snooze_1h':
+      onSnooze1h?.()
+      return
+    case 'open_email_ai': {
+      const emailId = typeof action.emailId === 'number' ? action.emailId : null
+      if (emailId !== null) {
+        useActiveEmail.getState().setActive(emailId, { navTarget: true })
+      }
+      void navigate({ to: '/' })
+      useAIChatPanel.getState().setMode('sidebar')
+      const subjectHint = action.emailSubject ? `「${action.emailSubject}」` : '这封邮件'
+      startChatWithPrompt(
+        `请帮我阅读并总结邮件${subjectHint}的重点与需决策事项，并按需起草一封得体的回复建议。`,
+        emailId
+      )
+      return
+    }
+    case 'open_calendar_ai': {
+      if (action.icalUid && action.occurrenceStartIso) {
+        useCalendarFocus.getState().request({
+          dateIso: action.occurrenceStartIso,
+          icalUid: action.icalUid,
+          recurrenceId: action.recurrenceId ?? null,
+          openDrawer: true
+        })
+      }
+      void navigate({ to: '/admin/calendar', search: { view: 'today' } })
+      useAIChatPanel.getState().setMode('sidebar')
+      const meetingTitle = action.meetingSummary ? `「${action.meetingSummary}」` : '当前会议'
+      startChatWithPrompt(
+        `请结合日历事件${meetingTitle}（时间：${action.occurrenceStartIso ?? '即将开始'}）及相关历史邮件，梳理讨论要点与跟进清单。`,
+        null
+      )
+      return
+    }
+    case 'meeting_prep': {
+      if (typeof action.prepSessionId === 'number' && action.prepSessionId > 0) {
+        navigateToTeamRecord(navigate, action.agentId || 'preset-meeting-prep', action.prepSessionId)
+        return
+      }
+      if (action.icalUid && action.occurrenceStartIso) {
+        useCalendarFocus.getState().request({
+          dateIso: action.occurrenceStartIso,
+          icalUid: action.icalUid,
+          recurrenceId: action.recurrenceId ?? null,
+          openDrawer: true
+        })
+      }
+      void navigate({ to: '/admin/calendar', search: { view: 'today' } })
+      useAIChatPanel.getState().setMode('sidebar')
+      const meetingTitle = action.meetingSummary ? `「${action.meetingSummary}」` : '即将开始的会议'
+      startChatWithPrompt(
+        `请为${meetingTitle}（时间：${action.occurrenceStartIso ?? '即将开始'}）执行会前准备：搜索与会人及主题相关的近期邮件，按「会议背景 / 相关邮件要点 / 未决问题 / 建议准备事项」四节简洁输出。`,
+        null
+      )
+      return
+    }
+    case 'open_assistant':
+      void navigate({ to: '/sessions' })
+      openNewChatTab()
+      return
+  }
 }

@@ -1,6 +1,6 @@
 import './index.css'
 
-import { StrictMode } from 'react'
+import { lazy, StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 
 // Sprint 14 PR E — popout chrome must resolve BEFORE the App component
@@ -24,13 +24,21 @@ bootDetachedModeFromQuery()
 // (/sessions) 会把启动 query 冲掉，懒写 stash 存在「从没人读过就丢了」的洞（详见 flags.ts）。
 captureAiGatewayPortAtBoot()
 
+const TrayPopoverApp = lazy(() => import('./tray/TrayPopoverApp'))
+
 // 打包 onboarding: 主进程对 new/config-incomplete 用户以 ?onboarding=1 开窗 → 渲染配置
 // 向导而非主 App。向导完成后主进程 reload 窗口去掉该 query → 落回 App。隔离, 不碰主路径。
-const isOnboarding = new URLSearchParams(window.location.search).has('onboarding')
+const searchParams = new URLSearchParams(window.location.search)
+const isOnboarding = searchParams.has('onboarding')
+const isTrayPopover = searchParams.has('tray')
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {isOnboarding ? (
+    {isTrayPopover ? (
+      <Suspense fallback={null}>
+        <TrayPopoverApp />
+      </Suspense>
+    ) : isOnboarding ? (
       // ErrorBoundary so a render-phase throw (e.g. an unexpected exception that
       // escapes the .catch degradation paths) surfaces a reload affordance
       // instead of white-screening the onboarding window with zero escape hatch.

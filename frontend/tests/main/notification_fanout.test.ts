@@ -17,9 +17,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => {
   const notificationInstances: Array<{
-    options: { title: string; body: string }
+    options: Electron.NotificationConstructorOptions
     show: ReturnType<typeof vi.fn>
-    emit(event: string): void
+    emit(event: string, ...args: unknown[]): void
   }> = []
   const isSupportedMock = vi.fn(() => true)
   const sendMock = vi.fn()
@@ -27,9 +27,14 @@ const mocks = vi.hoisted(() => {
   const restoreMock = vi.fn()
   const isMinimizedMock = vi.fn(() => false)
   const isDestroyedMock = vi.fn(() => false)
+  const isFocusedMock = vi.fn(() => false)
+  const isVisibleMock = vi.fn(() => true)
+  const openExternalMock = vi.fn(async () => undefined)
   const mainWindowMock = {
     isDestroyed: isDestroyedMock,
     isMinimized: isMinimizedMock,
+    isFocused: isFocusedMock,
+    isVisible: isVisibleMock,
     restore: restoreMock,
     focus: focusMock,
     webContents: { send: sendMock }
@@ -39,22 +44,22 @@ const mocks = vi.hoisted(() => {
   class MockNotification {
     static isSupported = isSupportedMock
 
-    readonly options: { title: string; body: string }
+    readonly options: Electron.NotificationConstructorOptions
     readonly show = vi.fn()
-    private readonly listeners = new Map<string, () => void>()
+    private readonly listeners = new Map<string, (...args: unknown[]) => void>()
 
-    constructor(options: { title: string; body: string }) {
+    constructor(options: Electron.NotificationConstructorOptions) {
       this.options = options
       notificationInstances.push(this)
     }
 
-    on(event: string, listener: () => void): this {
+    on(event: string, listener: (...args: unknown[]) => void): this {
       this.listeners.set(event, listener)
       return this
     }
 
-    emit(event: string): void {
-      this.listeners.get(event)?.()
+    emit(event: string, ...args: unknown[]): void {
+      this.listeners.get(event)?.(...args)
     }
   }
 
@@ -67,6 +72,9 @@ const mocks = vi.hoisted(() => {
     restoreMock,
     isMinimizedMock,
     isDestroyedMock,
+    isFocusedMock,
+    isVisibleMock,
+    openExternalMock,
     mainWindowMock,
     getAllWindowsMock
   }
@@ -76,7 +84,8 @@ vi.mock('electron', () => ({
   app: { isPackaged: false, on: vi.fn(), getVersion: vi.fn(() => '1.2.3') },
   BrowserWindow: { getAllWindows: mocks.getAllWindowsMock },
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
-  Notification: mocks.MockNotification
+  Notification: mocks.MockNotification,
+  shell: { openExternal: mocks.openExternalMock }
 }))
 
 // updater.ts 静态 import readSettings（→ keychain 图）；mock 掉保持叶子级。
@@ -90,7 +99,8 @@ import {
   __testing as fanoutTesting,
   maybeNotifyChatRunFinished,
   publishNotificationToCenter,
-  registerNotificationFanout
+  registerNotificationFanout,
+  registerNotificationSystemHandlers
 } from '../../src/electron/main/notification_fanout'
 import {
   __resetForTesting as resetUpdaterForTesting,
@@ -103,7 +113,7 @@ import { LOCAL_TOKEN_HEADER } from '../../src/electron/main/local_token'
 const API_PORT = 'MAILAGENT_API_PORT'
 const savedApiPort = process.env[API_PORT]
 const PUBLISH_URL = 'http://127.0.0.1:8317/api/notifications/publish'
-const LIST_URL = 'http://127.0.0.1:8317/api/notifications?unreadOnly=true&limit=20'
+const LIST_URL = 'http://127.0.0.1:8317/api/notifications?state=all&limit=20'
 
 type Listener = (...args: unknown[]) => void
 
@@ -173,6 +183,9 @@ beforeEach(() => {
   mocks.restoreMock.mockReset()
   mocks.isMinimizedMock.mockReset().mockReturnValue(false)
   mocks.isDestroyedMock.mockReset().mockReturnValue(false)
+  mocks.isFocusedMock.mockReset().mockReturnValue(false)
+  mocks.isVisibleMock.mockReset().mockReturnValue(true)
+  mocks.openExternalMock.mockReset().mockResolvedValue(undefined)
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })))
   process.env[API_PORT] = '8317'
 })
@@ -498,5 +511,181 @@ describe('macOS notification fanout', () => {
     )
     await fanoutTesting.fetchAndAlert()
     expect(mocks.notificationInstances).toHaveLength(0)
+  })
+
+  test('Phase 3 category prefs override banner/center_only/off routing', async () => {
+    registerNotificationFanout({
+      getChannelPrefs: () => ({
+        action_required: 'off',
+        reviews: 'banner',
+        results: 'center_only'
+      })
+    })
+    fanoutTesting.setWatermarkMs(1000)
+    vi.mocked(fetch).mockResolvedValueOnce(
+      listResponse([
+        wireItem({ id: 10, category: 'action_required', severity: 'critical', lastEventAt: 2000 }),
+        wireItem({ id: 11, category: 'reviews', severity: 'info', lastEventAt: 3000 }),
+        wireItem({ id: 12, category: 'results', severity: 'info', lastEventAt: 4000 })
+      ])
+    )
+
+    await fanoutTesting.fetchAndAlert()
+
+    // action_required='off' muted; reviews='banner' shows; results='center_only' skips info
+    expect(mocks.notificationInstances).toHaveLength(1)
+    expect(mocks.notificationInstances[0].options.title).toBe('通知')
+  })
+
+  test('Phase 3 ensureMainWindow recovers closed window and waits for did-finish-load', async () => {
+    let loadedCb: (() => void) | undefined
+    const recreatedSend = vi.fn()
+    const recreatedWin = {
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+      webContents: {
+        isLoading: () => true,
+        once: vi.fn((evt: string, cb: () => void) => {
+          if (evt === 'did-finish-load') loadedCb = cb
+        }),
+        send: recreatedSend
+      }
+    }
+    const ensureMainWindow = vi.fn(async () => recreatedWin as never)
+    registerNotificationFanout({ ensureMainWindow })
+    fanoutTesting.setWatermarkMs(1000)
+    const payload = { link: { type: 'email', emailId: 77 } }
+    vi.mocked(fetch).mockResolvedValueOnce(
+      listResponse([wireItem({ id: 21, category: 'action_required', lastEventAt: 2000, payload })])
+    )
+
+    await fanoutTesting.fetchAndAlert()
+    mocks.notificationInstances[0].emit('click')
+    await Promise.resolve()
+
+    expect(ensureMainWindow).toHaveBeenCalledOnce()
+    expect(recreatedWin.show).toHaveBeenCalledOnce()
+    expect(recreatedSend).not.toHaveBeenCalled()
+
+    loadedCb?.()
+    expect(recreatedSend).toHaveBeenCalledWith('notifications:navigate', { id: 21, payload })
+  })
+
+  test('Phase 3 registerNotificationSystemHandlers reports status and dispatches test banner', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>()
+    const electron = await import('electron')
+    vi.mocked(electron.ipcMain.handle).mockImplementation((ch, fn) => {
+      handlers.set(ch, fn as (...args: unknown[]) => Promise<unknown>)
+      return undefined as never
+    })
+
+    registerNotificationSystemHandlers()
+    const status = await handlers.get('notifications:systemStatus')?.()
+    expect(status).toEqual({
+      supported: true,
+      platform: process.platform,
+      authState: 'unknown',
+      lastTestedAt: null
+    })
+
+    const res = await handlers.get('notifications:sendTest')?.()
+    expect(res).toEqual({ ok: true })
+    expect(mocks.notificationInstances.length).toBeGreaterThanOrEqual(1)
+  })
+
+  test('system_only delivery & focus suppression + macOS action button dispatch', async () => {
+    const savedMeta: unknown[] = []
+    const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>()
+    const electron = await import('electron')
+    vi.mocked(electron.ipcMain.handle).mockImplementation((ch, fn) => {
+      handlers.set(ch, fn as (...args: unknown[]) => Promise<unknown>)
+      return undefined as never
+    })
+    registerNotificationSystemHandlers({
+      getAuthMeta: () => ({ notificationAuthState: 'unknown', notificationLastTestedAt: null }),
+      saveAuthMeta: (m) => savedMeta.push(m)
+    })
+
+    // requestPermission emits show → upgrades authState to delivered
+    const permPromise = handlers.get('notifications:requestPermission')?.()
+    expect(mocks.notificationInstances).toHaveLength(1)
+    mocks.notificationInstances[0].emit('show')
+    const permRes = await permPromise
+    expect(permRes).toEqual({ ok: true, shown: true, authState: 'delivered' })
+    expect(savedMeta.length).toBeGreaterThanOrEqual(1)
+
+    await handlers.get('notifications:openSystemSettings')?.()
+    if (process.platform === 'darwin') {
+      expect(mocks.openExternalMock).toHaveBeenCalledOnce()
+    }
+
+    mocks.notificationInstances.length = 0
+    registerNotificationFanout({ getSuppressWhenFocused: () => true })
+    fanoutTesting.setWatermarkMs(1000)
+
+    // Suppressed when main window focused
+    mocks.isFocusedMock.mockReturnValue(true)
+    vi.mocked(fetch).mockResolvedValueOnce(
+      listResponse([
+        wireItem({
+          id: 50,
+          category: 'action_required',
+          state: 'resolved',
+          readAt: 2000,
+          lastEventAt: 2000,
+          payload: {
+            delivery: 'system_only',
+            actions: [
+              { id: 'join_meeting', label: '一键入会', url: 'https://meet.google.com/abc-xyz' },
+              { id: 'meeting_prep', label: '立即会前准备', icalUid: 'u1', occurrenceStartIso: '2026-11-18T10:00:00Z' }
+            ]
+          }
+        })
+      ])
+    )
+    await fanoutTesting.fetchAndAlert()
+    expect(mocks.notificationInstances).toHaveLength(0)
+
+    // Unfocused → system_only resolved item STILL alerts and carries macOS actions
+    mocks.isFocusedMock.mockReturnValue(false)
+    vi.mocked(fetch).mockResolvedValueOnce(
+      listResponse([
+        wireItem({
+          id: 51,
+          category: 'action_required',
+          state: 'resolved',
+          readAt: 3000,
+          lastEventAt: 3000,
+          title: '架构评审',
+          payload: {
+            delivery: 'system_only',
+            actions: [
+              { id: 'join_meeting', label: '一键入会', url: 'https://meet.google.com/abc-xyz' },
+              { id: 'meeting_prep', label: '立即会前准备', icalUid: 'u1', occurrenceStartIso: '2026-11-18T10:00:00Z' }
+            ]
+          }
+        })
+      ])
+    )
+    await fanoutTesting.fetchAndAlert()
+    expect(mocks.notificationInstances).toHaveLength(1)
+    const banner = mocks.notificationInstances[0]
+    if (process.platform === 'darwin') {
+      expect(banner.options.actions).toEqual([
+        { type: 'button', text: '一键入会' },
+        { type: 'button', text: '立即会前准备' }
+      ])
+    }
+    banner.emit('action', {}, 1)
+    expect(mocks.sendMock).toHaveBeenCalledWith(
+      'notifications:navigate',
+      expect.objectContaining({
+        id: 51,
+        action: expect.objectContaining({ id: 'meeting_prep', label: '立即会前准备' })
+      })
+    )
   })
 })

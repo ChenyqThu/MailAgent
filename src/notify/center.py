@@ -136,8 +136,14 @@ class NotifyCenter:
         severity: str = "info",
         payload: Optional[dict] = None,
         emit_event: bool = True,
+        system_only: bool = False,
     ) -> PublishResult:
         """落库一条通知; 同 dedupe_key 有活跃行则计次更新 (design §3.2)。
+
+        ``system_only=True`` 时以 ``state='resolved', read_at=now, resolved_at=now``
+        直落已归档记录（并注入 ``payload.delivery='system_only'``），专供「仅 macOS
+        系统横幅、不进应用内铃铛未读/待办角标」通道；Electron fanout 从
+        ``GET /notifications?state=all`` 感知后弹横幅。
 
         枚举参数前置校验 —— 让 INSERT 阶段的 IntegrityError **只可能**来自
         partial unique 撞车, 重试路径语义才干净 (CHECK 违例混进来会被误当竞态
@@ -150,34 +156,53 @@ class NotifyCenter:
         if not dedupe_key:
             raise NotifyCenterError("E_INVALID_ARG", "dedupe_key is required")
         now = self.clock_ms()
+        effective_payload = (
+            {**(payload or {}), "delivery": "system_only"} if system_only else payload
+        )
         payload_json = (
-            json.dumps(payload, ensure_ascii=False) if payload is not None else None
+            json.dumps(effective_payload, ensure_ascii=False)
+            if effective_payload is not None
+            else None
         )
         with self._transaction() as conn:
-            row = self._active_row(conn, dedupe_key)
-            if row is not None:
-                result = self._bump(
-                    conn, row, now=now, severity=severity, title=title,
-                    body=body, payload_json=payload_json,
+            if system_only:
+                result = self._insert_new(
+                    conn,
+                    now=now,
+                    category=category,
+                    source=source,
+                    severity=severity,
+                    dedupe_key=dedupe_key,
+                    title=title,
+                    body=body,
+                    payload_json=payload_json,
+                    system_only=True,
                 )
             else:
-                try:
-                    result = self._insert_new(
-                        conn, now=now, category=category, source=source,
-                        severity=severity, dedupe_key=dedupe_key, title=title,
-                        body=body, payload_json=payload_json,
-                    )
-                except sqlite3.IntegrityError:
-                    # BEGIN IMMEDIATE 下他连接进不来, 这是并发窗口的兜底
-                    # (design §3.2 规则 4): 撞 uq_notification_active_dedupe
-                    # → 重走一次活跃行查找, 转计次路径; 至多重试一次。
-                    row = self._active_row(conn, dedupe_key)
-                    if row is None:
-                        raise
+                row = self._active_row(conn, dedupe_key)
+                if row is not None:
                     result = self._bump(
                         conn, row, now=now, severity=severity, title=title,
                         body=body, payload_json=payload_json,
                     )
+                else:
+                    try:
+                        result = self._insert_new(
+                            conn, now=now, category=category, source=source,
+                            severity=severity, dedupe_key=dedupe_key, title=title,
+                            body=body, payload_json=payload_json,
+                        )
+                    except sqlite3.IntegrityError:
+                        # BEGIN IMMEDIATE 下他连接进不来, 这是并发窗口的兜底
+                        # (design §3.2 规则 4): 撞 uq_notification_active_dedupe
+                        # → 重走一次活跃行查找, 转计次路径; 至多重试一次。
+                        row = self._active_row(conn, dedupe_key)
+                        if row is None:
+                            raise
+                        result = self._bump(
+                            conn, row, now=now, severity=severity, title=title,
+                            body=body, payload_json=payload_json,
+                        )
         if emit_event:
             self.emit_changed(category=category)
         return result
@@ -232,11 +257,14 @@ class NotifyCenter:
         title: str,
         body: str,
         payload_json: Optional[str],
+        system_only: bool = False,
     ) -> PublishResult:
         """开新行; recurrence_no 从同 key 最近一代续接 (design §3.2 规则 3)。
 
         resolved / dismissed 之后再来 = 新条目复活成新行 (历史行是审计轨迹,
         不改老行); 计数续接让「第 N 次」在面板可见。
+        ``system_only=True`` 时以 resolved + read_at=now + resolved_at=now 落表,
+        供仅系统通知渠道记录事件而不增加应用内未读/待办计数。
         """
         prev = conn.execute(
             "SELECT recurrence_no FROM notification WHERE dedupe_key=? "
@@ -244,13 +272,17 @@ class NotifyCenter:
             (dedupe_key,),
         ).fetchone()
         recurrence_no = (int(prev["recurrence_no"]) + 1) if prev is not None else 1
+        state = "resolved" if system_only else "open"
+        read_at = now if system_only else None
+        resolved_at = now if system_only else None
         cursor = conn.execute(
             "INSERT INTO notification (category, source, severity, state, dedupe_key, "
-            "recurrence_no, title, body, payload_json, first_created_at, last_event_at) "
-            "VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?)",
+            "recurrence_no, title, body, payload_json, first_created_at, last_event_at, "
+            "read_at, resolved_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                category, source, severity, dedupe_key, recurrence_no,
-                title, body, payload_json, now, now,
+                category, source, severity, state, dedupe_key, recurrence_no,
+                title, body, payload_json, now, now, read_at, resolved_at,
             ),
         )
         return PublishResult(

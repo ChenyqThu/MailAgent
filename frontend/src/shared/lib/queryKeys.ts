@@ -169,7 +169,9 @@ export const qk = {
     statsDays: (days: number) => ['llm', 'stats', days] as const,
     // task 07-12 P3 — Settings「模型服务」区（provider 管理 + per-provider 模型行）。
     providers: () => ['llm', 'providers'] as const,
-    providerModels: (providerId: string) => ['llm', 'providers', providerId, 'models'] as const
+    providerModels: (providerId: string) => ['llm', 'providers', providerId, 'models'] as const,
+    usage: (range: string) => ['llm', 'providers', 'usage', range] as const,
+    privacyConfig: () => ['llm', 'providers', 'privacy-config'] as const
   },
 
   // issue #59 — KOS 入库台账（LLM Dashboard 底部「知识库入库」区）。
@@ -410,6 +412,7 @@ export const qk = {
     // （notificationModel::filterByTab）。按 tab 分键等于 5 份缓存各自冷 fetch、
     // 各自白屏，而 All 的那一份本来就含全部类别。
     list: (state: string) => ['notifications', 'list', state] as const,
-    unreadCount: () => ['notifications', 'unread-count'] as const
+    unreadCount: () => ['notifications', 'unread-count'] as const,
+    preferences: () => ['notifications', 'preferences'] as const
   }
 } as const

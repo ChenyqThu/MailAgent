@@ -61,10 +61,14 @@ export function openChatTab(sessionId: number, title?: string): void {
   if (!openObjectTab('chat', sessionId, title)) useActiveChat.setState(prev)
 }
 
-/** 「开一个新会话标签」的单源 —— ⌘O 与原生菜单「AI → General Agent」共用（两处各抄一份
- *  就会出现「菜单落上次的会话、快捷键开新标签」这种分叉，08-27 那版正是为此把动作收敛的）。 */
-export function openNewChatTab(): void {
-  openChatTab(nextTempChatId(), i18next.isInitialized ? i18next.t('chat.tabs.newChat') : '')
+/** 「开一个新会话标签」的单源 —— ⌘O、原生菜单与 Menu Bar 速记共用。 */
+export function openNewChatTab(initialDraft?: string): void {
+  const tempId = nextTempChatId()
+  openChatTab(tempId, i18next.isInitialized ? i18next.t('chat.tabs.newChat') : '')
+  const trimmed = initialDraft?.trim()
+  if (trimmed) {
+    saveChatTabDraft(tempId, trimmed)
+  }
 }
 
 /** 首发换锚：临时负 id → 真 session id。标签走 bridge 的 `retargetObjectTab`（身份延续：

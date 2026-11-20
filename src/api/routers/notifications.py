@@ -27,7 +27,7 @@ from pydantic import Field
 
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access, verify_local_token
-from src.api.deps import get_settings
+from src.api.deps import get_report_store, get_settings
 
 # mutation 信封与 snooze 预设**复用 matters 既有单源**，不在本域另造镜像：
 # `MutationEnvelope` / `MutationOnly` / `StrictModel` 是通用 mutation DTO（历史上
@@ -35,6 +35,11 @@ from src.api.deps import get_settings
 from src.api.schemas.matters import MutationEnvelope, MutationOnly, StrictModel
 from src.matters.attention import SNOOZE_3D_MS
 from src.notify.center import NotifyCenter, NotifyCenterError
+from src.notify.prefs import (
+    load_notification_prefs,
+    save_notification_prefs,
+    sync_meeting_prep_preset_agent,
+)
 
 router = APIRouter(
     prefix="/api/notifications",
@@ -152,6 +157,46 @@ async def get_unread_count(
     )
 
 
+@router.get("/preferences")
+async def get_notification_preferences(
+    request: Request,
+    settings=Depends(get_settings),
+):
+    """读取用户分场景通知渠道偏好与会前准备预设开关（存储在 sync_state）。"""
+    prefs = await asyncio.to_thread(
+        load_notification_prefs, str(settings.sync_store_db_path)
+    )
+    return success_envelope(prefs, request=request, source="sqlite")
+
+
+@router.put("/preferences")
+async def update_notification_preferences(
+    request: Request,
+    body: dict[str, Any],
+    settings=Depends(get_settings),
+):
+    """更新分场景通知渠道偏好，并同步 `preset-meeting-prep` 预设 Agent 启停与触发模式。"""
+    if not isinstance(body, dict):
+        raise APIError("E_INVALID_ARG", "preferences patch must be an object", source="sqlite")
+    try:
+        saved = await asyncio.to_thread(
+            save_notification_prefs, str(settings.sync_store_db_path), body
+        )
+    except ValueError as exc:
+        raise APIError("E_INVALID_ARG", str(exc), source="sqlite") from exc
+    if any(
+        k in body
+        for k in ("meetingPrepEnabled", "meetingPrepMode", "meetingPrepLeadMinutes")
+    ):
+        try:
+            await asyncio.to_thread(
+                sync_meeting_prep_preset_agent, saved, get_report_store()
+            )
+        except Exception as exc:  # noqa: BLE001 — fail-open if custom agent store unavailable
+            raise APIError("E_INTERNAL", f"preset agent sync failed: {exc}", source="sqlite") from exc
+    return success_envelope(saved, request=request, source="sqlite")
+
+
 @router.post("/read-all")
 async def read_all_notifications(
     request: Request,
@@ -215,6 +260,7 @@ class NotificationPublishRequest(StrictModel):
     body: str = ""
     severity: str = "info"
     payload: dict[str, Any] | None = None
+    system_only: bool = False
 
 
 def _check_idempotency(mutation: MutationEnvelope, header_key: str | None) -> None:
@@ -308,16 +354,18 @@ async def publish_notification(
     计次 / severity 只升不降 / commit 后发事件) 全在 `NotifyCenter.publish`, 这里
     只做 body 解析: **不复制**任何发布逻辑 (PRD 基线 4 发布入口单源)。
     """
-    result = _call(
-        center.publish,
-        category=body.category,
-        source=body.source,
-        title=body.title,
-        dedupe_key=body.dedupe_key,
-        body=body.body,
-        severity=body.severity,
-        payload=body.payload,
-    )
+    kwargs: dict[str, Any] = {
+        "category": body.category,
+        "source": body.source,
+        "title": body.title,
+        "dedupe_key": body.dedupe_key,
+        "body": body.body,
+        "severity": body.severity,
+        "payload": body.payload,
+    }
+    if body.system_only:
+        kwargs["system_only"] = True
+    result = _call(center.publish, **kwargs)
     projected = _call(center.get, result.id)  # publish 只回 id/created/计次
     return success_envelope(_to_wire(projected), request=request)
 

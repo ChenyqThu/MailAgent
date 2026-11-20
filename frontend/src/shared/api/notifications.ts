@@ -11,6 +11,7 @@ import type {
   NotificationItem,
   NotificationListResult,
   NotificationListState,
+  NotificationPreferences,
   NotificationUnreadCount
 } from './types/notifications'
 
@@ -36,6 +37,10 @@ export interface NotificationsApi {
   snooze(notificationId: number, untilMs: number): Promise<NotificationItem>
   /** 标记已处理。与「已读」是两个独立轴：resolve 不动 `readAt`。 */
   resolve(notificationId: number): Promise<NotificationItem>
+  /** 读取按场景划分的通知渠道与会前准备预设偏好。 */
+  getPreferences(): Promise<NotificationPreferences>
+  /** 更新分场景通知偏好，并同步会前准备预设 Agent。 */
+  updatePreferences(patch: Partial<NotificationPreferences>): Promise<NotificationPreferences>
 }
 
 let fallbackKeyCounter = 0
@@ -116,6 +121,14 @@ export function createNotificationsApi(baseUrl: string): NotificationsApi {
     resolve(notificationId: number): Promise<NotificationItem> {
       const { body, headers } = mutationRequest()
       return request(baseUrl, 'POST', `/notifications/${notificationId}/resolve`, { body, headers })
+    },
+
+    getPreferences(): Promise<NotificationPreferences> {
+      return request(baseUrl, 'GET', '/notifications/preferences')
+    },
+
+    updatePreferences(patch: Partial<NotificationPreferences>): Promise<NotificationPreferences> {
+      return request(baseUrl, 'PUT', '/notifications/preferences', { body: patch })
     }
   }
 }

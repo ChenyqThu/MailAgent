@@ -17,6 +17,7 @@ import type {
   NotificationItem,
   NotificationListResult,
   NotificationListState,
+  NotificationPreferences,
   NotificationUnreadCount
 } from '@shared/api/types/notifications'
 import { resolveApiBaseUrl } from '@shared/components/settings/custom-ai/shared'
@@ -138,5 +139,29 @@ export function useResolveNotification(): UseMutationResult<NotificationItem, Er
   return useMutation({
     mutationFn: (notificationId: number) => api.resolve(notificationId),
     onSuccess: () => refreshNotifications(client)
+  })
+}
+
+export function useNotificationPreferences(): UseQueryResult<NotificationPreferences> {
+  const api = useNotificationsApi()
+  return useQuery({
+    queryKey: qk.notifications.preferences(),
+    queryFn: () => api.getPreferences(),
+    staleTime: 30_000
+  })
+}
+
+export function useUpdateNotificationPreferences(): UseMutationResult<
+  NotificationPreferences,
+  Error,
+  Partial<NotificationPreferences>
+> {
+  const api = useNotificationsApi()
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (patch: Partial<NotificationPreferences>) => api.updatePreferences(patch),
+    onSuccess: (next) => {
+      client.setQueryData(qk.notifications.preferences(), next)
+    }
   })
 }

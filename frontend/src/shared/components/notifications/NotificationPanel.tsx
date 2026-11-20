@@ -40,6 +40,7 @@ import {
 import { useContactNavigation } from '@shared/components/contacts/navigation'
 import { navigateToLibraryFile } from '@shared/components/library/deeplink'
 import { useMatterNavigation } from '@shared/components/matters/navigation'
+import { useActiveEmail } from '@shared/state/active-email'
 import { useDavMailReauthStore } from '@shared/state/davmail-reauth'
 
 import {
@@ -52,9 +53,12 @@ import {
   useSnoozeNotification
 } from './hooks'
 import {
+  executeNotificationAction,
   navigateNotificationRoute,
   openNotificationSession,
-  resolveNotificationLink
+  parseNotificationActions,
+  resolveNotificationLink,
+  type NotificationActionSpec
 } from './navigation'
 import { NotificationListSkeleton } from './NotificationSkeleton'
 import {
@@ -131,6 +135,7 @@ function NotificationRow({
   menuOpen,
   onMenuOpenChange,
   onActivate,
+  onAction,
   onSnooze,
   onResolve
 }: {
@@ -143,12 +148,14 @@ function NotificationRow({
   menuOpen: boolean
   onMenuOpenChange(id: number | null): void
   onActivate(item: NotificationItem): void
+  onAction(item: NotificationItem, action: NotificationActionSpec): void
   onSnooze(item: NotificationItem, preset: SnoozePreset): void
   onResolve(item: NotificationItem): void
 }): React.ReactElement {
   const { t } = useTranslation()
   const moreRef = useRef<HTMLButtonElement>(null)
   const { Icon, tone } = metaOf(item)
+  const actions = useMemo(() => parseNotificationActions(item.payload), [item.payload])
   // 历史行一律按已读画：那条 `readAt` 对已处理的行没有消费点（未读数只统计活跃行），
   // 在这里亮一颗未读点只会让人以为还有事要做。
   const unread = !history && item.readAt == null
@@ -194,67 +201,92 @@ function NotificationRow({
         menuOpen ? 'bg-ink-3' : 'hover:bg-ink-3'
       )}
     >
-      <button
-        type="button"
-        onClick={() => onActivate(item)}
-        className="flex min-w-0 flex-1 gap-2.5 text-left"
-      >
-        <span
-          className={cn(
-            'relative w-[26px] h-[26px] mt-px shrink-0 rounded-lg flex items-center justify-center',
-            unread ? toneClass.icon : toneClass.iconRead
-          )}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <button
+          type="button"
+          onClick={() => onActivate(item)}
+          className="flex min-w-0 w-full gap-2.5 text-left"
         >
-          <Icon size={14} strokeWidth={2} />
-          {/* 未读角标：贴在图标容器右上角（不占独立 gutter 列），2px 面板底色 ring 把它从
-              图标底衬里切出来 —— ring 色必须是面板实底 ink-2（.glass-pop 的 background）。 */}
-          {unread && (
-            <span
-              className="absolute -top-[3px] -right-[3px] w-[7px] h-[7px] rounded-full bg-coral/100"
-              style={{ boxShadow: '0 0 0 2px rgb(var(--ink-2))' }}
-              title={t('notifications.unreadDot')}
-              aria-label={t('notifications.unreadDot')}
-            />
-          )}
-        </span>
-
-        <span className="flex-1 min-w-0 flex flex-col">
-          <span className="flex items-baseline justify-between gap-2">
-            <span
-              className={cn(
-                'text-aux truncate',
-                unread ? 'font-medium text-ink-fg' : 'text-ink-fg-1'
-              )}
-            >
-              {item.title}
-            </span>
-            <span className="flex items-baseline gap-1.5 shrink-0">
-              {item.recurrenceNo > 1 && (
-                <span
-                  className={cn(
-                    'px-[5px] rounded border text-micro font-mono tabular-nums',
-                    toneClass.chip
-                  )}
-                  title={t('notifications.recurrenceTitle', { count: item.recurrenceNo })}
-                >
-                  {t('notifications.recurrence', { count: item.recurrenceNo })}
-                </span>
-              )}
-              <span className="text-micro font-mono text-ink-fg-3">{time}</span>
-            </span>
+          <span
+            className={cn(
+              'relative w-[26px] h-[26px] mt-px shrink-0 rounded-lg flex items-center justify-center',
+              unread ? toneClass.icon : toneClass.iconRead
+            )}
+          >
+            <Icon size={14} strokeWidth={2} />
+            {/* 未读角标：贴在图标容器右上角（不占独立 gutter 列），2px 面板底色 ring 把它从
+                图标底衬里切出来 —— ring 色必须是面板实底 ink-2（.glass-pop 的 background）。 */}
+            {unread && (
+              <span
+                className="absolute -top-[3px] -right-[3px] w-[7px] h-[7px] rounded-full bg-coral/100"
+                style={{ boxShadow: '0 0 0 2px rgb(var(--ink-2))' }}
+                title={t('notifications.unreadDot')}
+                aria-label={t('notifications.unreadDot')}
+              />
+            )}
           </span>
-          {item.body && (
-            <span
-              className={cn(
-                'text-meta mt-0.5 line-clamp-2',
-                unread ? 'text-ink-fg-2' : 'text-ink-fg-2/75'
-              )}
-            >
-              {item.body}
+
+          <span className="flex-1 min-w-0 flex flex-col">
+            <span className="flex items-baseline justify-between gap-2">
+              <span
+                className={cn(
+                  'text-aux truncate',
+                  unread ? 'font-medium text-ink-fg' : 'text-ink-fg-1'
+                )}
+              >
+                {item.title}
+              </span>
+              <span className="flex items-baseline gap-1.5 shrink-0">
+                {item.recurrenceNo > 1 && (
+                  <span
+                    className={cn(
+                      'px-[5px] rounded border text-micro font-mono tabular-nums',
+                      toneClass.chip
+                    )}
+                    title={t('notifications.recurrenceTitle', { count: item.recurrenceNo })}
+                  >
+                    {t('notifications.recurrence', { count: item.recurrenceNo })}
+                  </span>
+                )}
+                <span className="text-micro font-mono text-ink-fg-3">{time}</span>
+              </span>
             </span>
-          )}
-        </span>
-      </button>
+            {item.body && (
+              <span
+                className={cn(
+                  'text-meta mt-0.5 line-clamp-2',
+                  unread ? 'text-ink-fg-2' : 'text-ink-fg-2/75'
+                )}
+              >
+                {item.body}
+              </span>
+            )}
+          </span>
+        </button>
+
+        {!history && actions.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-9">
+            {actions.map((act, idx) => (
+              <button
+                key={`${act.id}-${idx}`}
+                type="button"
+                onClick={(event): void => {
+                  event.stopPropagation()
+                  onAction(item, act)
+                }}
+                className={cn(
+                  'inline-flex items-center rounded-[var(--r-ctl)] border px-2.5 py-0.5 text-aux font-medium transition-colors duration-fast',
+                  idx === 0
+                    ? 'border-coral/35 bg-coral/12 text-coral hover:bg-coral/18'
+                    : 'border-ink-border bg-ink-2 text-ink-fg-1 hover:bg-ink-4 hover:text-ink-fg'
+                )}
+              >
+                {act.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* hover 唯一动作钮：更多。占位恒在、只淡入淡出（绝对定位浮在行上会盖住时间戳）。
           🔴 历史视图整块不渲染（而不是藏起来）—— 已处理是终态，Snooze / 标记已处理都无从
@@ -396,6 +428,10 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
         return
       case 'davmail_reauth':
         openDavMailReauth()
+        return
+      case 'email':
+        useActiveEmail.getState().setActive(link.emailId, { navTarget: true })
+        void navigate({ to: '/' })
         return
       case 'library':
         // `/library` 页读 URL 的 `file` 参数后自行展开所在文件夹 + 选中 + missing/trashed
@@ -548,6 +584,15 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
                   menuOpen={menuOpenId === item.id}
                   onMenuOpenChange={setMenuOpenId}
                   onActivate={activate}
+                  onAction={(target, act): void => {
+                    if (!history && target.readAt == null) markRead.mutate(target.id)
+                    if (act.id !== 'snooze_1h') onClose()
+                    executeNotificationAction(act, {
+                      navigate,
+                      onSnooze1h: () =>
+                        snooze.mutate({ id: target.id, untilMs: Date.now() + 3_600_000 })
+                    })
+                  }}
                   onSnooze={(target, preset) => {
                     setMenuOpenId(null)
                     snooze.mutate({ id: target.id, untilMs: snoozeUntilMs(preset, Date.now()) })

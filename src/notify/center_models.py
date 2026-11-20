@@ -55,6 +55,7 @@ NOTIFICATION_LINK_TYPE_VALUES: Tuple[str, ...] = (
     "matter",
     "library",
     "davmail_reauth",
+    "email",
 )
 
 #: 计次更新时 severity **只升不降** 的比较基准 (design §3.2 规则 2;
