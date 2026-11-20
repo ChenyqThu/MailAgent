@@ -31,15 +31,17 @@ import { createAnthropic } from '@ai-sdk/anthropic'
 // (whose top level pulls six provider SDK packages; it only loads via the lifecycle's flag-on
 // dynamic import). Pinned by tests/ai-gateway/provider_lazy_import.test.ts.
 import {
+  isPrivacyMaskError,
   isProviderCredentialsError,
   parseProviderRef,
   type ProviderProtocol,
   type ResolvedProviderModel
 } from './providerRef'
-import type {
-  GatewayApprovalMode,
-  GatewayToolApprovalPrefs,
-  GatewayToolAuditEntry
+import {
+  redactAuditImages,
+  type GatewayApprovalMode,
+  type GatewayToolApprovalPrefs,
+  type GatewayToolAuditEntry
 } from './tools/types'
 // S2 W0 (ADR-001 D1) — the run's context mode is a TRUSTED prepareChatRun parameter asserted by
 // each entrypoint in its own code. It is NEVER read from the request body (a client cannot claim
@@ -68,7 +70,17 @@ import {
 // D1 (connector dogfood batch) — per-run scoping of the connector catalog reuses the connector
 // module's ONE load seam + ceiling order (never a second filter implementation here); 0804 dogfood
 // reuses the SAME seam to decide whether this run must warm the manifest before buildTools.
-import { connectorCatalogForRun, shouldLoadConnectorTools } from './tools/connector'
+import {
+  connectorCatalogForRun,
+  shouldLoadConnectorTools,
+  type ConnectorCatalogRunOpts
+} from './tools/connector'
+import {
+  bindToolSearchPartition,
+  partitionToolsForLazyLoading,
+  type LazyToolPartition
+} from './tools/tool_search'
+import { bindComputerUseExecution } from './tools/computer_use'
 import {
   isValidContextSnapshot,
   type AgentContextSnapshot
@@ -186,7 +198,8 @@ export function scopeConnectorCatalogForRun(
   promptConfig: GatewaySystemPromptConfig | null,
   contextMode: AgentContextMode | undefined,
   hasAgentRunContext: boolean,
-  connectorGrants: unknown
+  connectorGrants: unknown,
+  opts?: ConnectorCatalogRunOpts
 ): GatewaySystemPromptConfig | null {
   if (!promptConfig?.connectorCatalog || promptConfig.connectorCatalog.length === 0) {
     return promptConfig
@@ -197,7 +210,8 @@ export function scopeConnectorCatalogForRun(
       promptConfig.connectorCatalog,
       contextMode,
       hasAgentRunContext,
-      connectorGrants
+      connectorGrants,
+      opts
     )
   }
 }
@@ -277,6 +291,8 @@ export interface PreparedChatRun {
    *  不进 memory.md。Today no group path attaches makePersistOnFinish at all (both drain
    *  textStream directly, see server.ts), so this is the structural guard for the day one does. */
   groupSpeakerRun?: boolean
+  /** WS-2 Plane 1 — lazy schema loading partition metadata when `cfg.toolSearchEnabled === true`. */
+  lazyPartition?: LazyToolPartition
 }
 
 export type PrepareChatOutcome =
@@ -340,6 +356,9 @@ export async function prepareChatRun(
   } catch (e) {
     if (isProviderCredentialsError(e)) {
       return { ok: false, status: 503, body: { error: 'E_NO_LLM_KEY', hint: e.message } }
+    }
+    if (isPrivacyMaskError(e)) {
+      return { ok: false, status: 503, body: { error: 'E_PRIVACY_MASK_FAILED', hint: e.message } }
     }
     throw e
   }
@@ -525,6 +544,14 @@ export async function prepareChatRun(
   // unchanged (A3 §3 发言 turn 无写工具). The custom_agent_call recursion guard stays subsumed (neither
   // factory holds it); identity.group is only ever set by handleGroupChat / speakAsGroupMember
   // from server-resolved facts, never from the body.
+  const rawDisabledConnectors =
+    contextMode === 'manual_chat' && Array.isArray(body.disabledConnectors)
+      ? body.disabledConnectors.filter(
+          (id): id is string => typeof id === 'string' && id.trim().length > 0
+        )
+      : []
+  const disabledConnectors = rawDisabledConnectors.length > 0 ? rawDisabledConnectors : undefined
+
   const isGroupSpeakerRun = sessionAgent?.group != null
   const sessionAgentId = contextMode === 'manual_chat' ? (sessionAgent?.agentId ?? null) : null
   const groupIdentity = sessionAgent?.group
@@ -547,7 +574,7 @@ export async function prepareChatRun(
           toolApprovalPrefs,
           undefined,
           sessionAgentId,
-          { isGroupSession, enabled: groupToolsEnabled }
+          { isGroupSession, enabled: groupToolsEnabled, ...(disabledConnectors ? { disabledConnectors } : {}) }
         )
       : cfg.buildTools?.(
           auditEntries,
@@ -557,13 +584,34 @@ export async function prepareChatRun(
           toolApprovalPrefs,
           sessionId,
           sessionAgentId,
-          { isGroupSession, enabled: groupToolsEnabled }
+          { isGroupSession, enabled: groupToolsEnabled, ...(disabledConnectors ? { disabledConnectors } : {}) }
         )
+  if (tools && 'computer_use_run' in tools) {
+    const allowMatterComputerUse =
+      contextMode === 'matter_followup' &&
+      cfg.agentRunContext?.matterItemComputerUse?.enabled === true &&
+      cfg.agentRunContext.matterItemComputerUse.mode === 'propose_only' &&
+      cfg.agentRunContext.matterItemComputerUse.stopBeforeSubmit === true
+    if (
+      cfg.computerUseEnabled === false ||
+      (contextMode !== 'manual_chat' && !allowMatterComputerUse)
+    ) {
+      delete tools.computer_use_run
+    } else {
+      bindComputerUseExecution(tools.computer_use_run, {
+        model: resolvedModel.model,
+        maxOutputTokens,
+        sessionId,
+        finalTools: tools
+      })
+    }
+  }
   const hasTools = tools != null && Object.keys(tools).length > 0
   // W6 — the run holds the suggest_followups tool (manual chat with a real gateway ToolSet). Drives
   // the follow-up guidance block in the system prompt below — keyed off the BUILT set, never off
   // the mode alone.
   const followupToolAvailable = hasTools && SUGGEST_FOLLOWUPS_TOOL_NAME in (tools as ToolSet)
+  const computerUseAvailable = hasTools && 'computer_use_run' in (tools as ToolSet)
 
   // System prompt. With the injection provider set (always injected since S3) assemble
   // from standing-context + the typed snapshot, reusing the legacy stable prefix
@@ -585,7 +633,11 @@ export async function prepareChatRun(
       (await cfg.systemPromptProvider()) ?? null,
       contextMode,
       cfg.agentRunContext != null,
-      cfg.agentRunContext?.modeGrants?.connectors
+      cfg.agentRunContext?.modeGrants?.connectors,
+      {
+        connectorToolGrants: cfg.agentRunContext?.modeGrants?.connectorTools,
+        disabledConnectors
+      }
     )
     // 07-01 — the bounded memory.md rides IN promptConfig.memorySummary (the cacheable stable prefix,
     // rendered by buildStableSystemPrompt as an untrusted MEMORY fence). The M2 per-query recall path
@@ -601,6 +653,8 @@ export async function prepareChatRun(
       sessionAgentIdentity: contextMode === 'manual_chat' ? (sessionAgent ?? null) : null,
       // W6 — inject the follow-up guidance only when THIS run's ToolSet holds the tool.
       followupToolAvailable,
+      // WS-5 — inject Tier 1 > Tier 2 > Tier 3 routing discipline when THIS run holds computer_use_run.
+      computerUseAvailable,
       // g1 — prompt 减重门 + 沉默契约, set by the 调度器's speak adapter and (T4 M7) the v30
       // renderer-driven speaker branch (both in server.ts): every group speaker turn is the 减重态.
       groupSpeakerRun: sessionAgent?.group?.groupSpeakerRun === true
@@ -624,11 +678,30 @@ export async function prepareChatRun(
     system = appendCompactSummaryToSystem(system ?? '', selectedContext.summary)
   }
 
+  // WS-2 Plane 1 — Partition already-admitted tools AFTER buildTools/wrapCfgForAgentRun/mode/deny
+  // filtering and AFTER context selection, BEFORE convertToModelMessages & streamText.
+  // CRITICAL: `tools` stays FULL for BOTH convertToModelMessages({ tools }) (toModelOutput replay)
+  // AND streamText({ tools }) (AI SDK tool resolution), while `activeTools` + `prepareStep` gate
+  // which schemas the LLM sees on each step.
+  let lazyPartition: LazyToolPartition | undefined
+  if (hasTools && cfg.toolSearchEnabled === true && tools) {
+    lazyPartition = partitionToolsForLazyLoading(tools, selectedContext.messages, {
+      toolSearchEnabled: true
+    })
+    if (lazyPartition.deferredToolNames.length > 0 && 'tool_search' in tools) {
+      bindToolSearchPartition(tools.tool_search, tools, lazyPartition)
+    }
+  }
+
   // 🔴 ai@6 convertToModelMessages is ASYNC (returns a Promise) — must await, else
   // streamText.standardizePrompt receives a Promise and throws "messages.some is not a function".
+  // 🔴 WS-1A replay invariant: pass the EXACT same `tools` ToolSet to convertToModelMessages so
+  // tool.toModelOutput runs when replaying historical multimodal tool outputs across turns.
   let modelMessages
   try {
-    modelMessages = await convertToModelMessages(selectedContext.messages)
+    modelMessages = hasTools
+      ? await convertToModelMessages(selectedContext.messages, { tools })
+      : await convertToModelMessages(selectedContext.messages)
   } catch {
     return {
       ok: false,
@@ -702,6 +775,14 @@ export async function prepareChatRun(
     ...(hasTools
       ? {
           tools,
+          ...(lazyPartition
+            ? {
+                activeTools: Array.from(lazyPartition.activatedTools),
+                prepareStep: async () => ({
+                  activeTools: Array.from(lazyPartition.activatedTools)
+                })
+              }
+            : {}),
           // suggest_followups 不是停止信号：模型先调它、再写最终回答。Opus 5.5 / Sonnet 5.5 把
           // 「工具调用之前」的长文本改成进度型 thinking 块返回（默认不带文字），回答若写在这次
           // 调用之前就会整段消失；回答必须落在最后一次工具调用之后才是普通 text 块。
@@ -723,7 +804,8 @@ export async function prepareChatRun(
       toolNames: hasTools ? Object.keys(tools as ToolSet) : [],
       originalBody: body,
       contextMode,
-      groupSpeakerRun: isGroupSpeakerRun
+      groupSpeakerRun: isGroupSpeakerRun,
+      ...(lazyPartition ? { lazyPartition } : {})
     }
   }
 }
@@ -935,19 +1017,12 @@ function clearPausedMarker(cfg: AiGatewayConfig, sessionId: number | null): void
 }
 
 /**
- * Part B / S6 W2 (PRD P8) — on a paused approval, stash the run for server-side resume, and (island
- * only) fire-and-forget announce it to the island.
+ * Stash a paused approval run for server-side resume via `/api/ai/approval/decide`.
  *
- * The STASH step gates on cfg.approvalStash PRESENCE alone: the lifecycle now injects the stash
- * whenever server-side resume is live (island OR custom agents), so a headless custom-agent pause is
- * claimable in-app via the record view's /decide even with the island off ("内部审批优先"). The
- * ANNOUNCE step stays island-only (cfg.announceApprovalToIsland is only wired when the island flag is
- * on → the `if (cfg.islandAgentEnabled)` guard + `?.` are belt-and-suspenders). Both flags off → the
- * lifecycle leaves cfg.approvalStash undefined → this returns early (byte-identical to pre-S6). The
- * announce is best-effort (never awaited, self-contained try/catch) so it can't block or break the
- * already-streamed paused turn.
+ * The STASH step gates on cfg.approvalStash presence alone so in-panel decide cards,
+ * Feishu approval cards, and headless agent runs can all claim/resume paused tools.
  */
-function maybeStashAndAnnounceApproval(
+function maybeStashApproval(
   cfg: AiGatewayConfig,
   run: PreparedChatRun,
   responseMessage: MailAgentUIMessage
@@ -956,65 +1031,19 @@ function maybeStashAndAnnounceApproval(
   try {
     const info = extractApprovalStashInput(responseMessage)
     if (!info) return
-    const resumeToken = cfg.approvalStash.stash({
+    cfg.approvalStash.stash({
       toolCallId: info.toolCallId,
       approvalId: info.approvalId,
       toolName: info.toolName,
       sessionId: run.sessionId,
       body: run.originalBody,
       responseMessage,
-      // S2 W0 (ADR-001 D1) — freeze the pause-time trusted mode into the stash: the island resume
-      // re-runs under EXACTLY this mode (approvalResume passes it back to prepareChatRun), so a
-      // resume can never escalate. Hand-built runs without a mode fail-close to untrusted.
       contextMode: normalizeContextMode(run.contextMode),
-      // S5 W4 (ADR-004 §4.4) — freeze the per-agent tool context from the pause-time server cfg
-      // (wrapCfgForAgentRun set it on the headless cfg2; manual cfgs never carry it → undefined,
-      // byte-identical stash). The resume rebuilds through the same wrapper, so the narrowed
-      // ToolSet + grants survive the island round-trip; a re-pause re-enters here with the SAME
-      // cfg → the chain re-freezes the same context every hop.
       agentRunContext: cfg.agentRunContext,
-      // Stage 2 PR-4 (task 08-01 messenger) — freeze the connector tool's DESTRUCTIVE bit so an
-      // out-of-app approval surface (the Feishu card) can render the same red warning the desktop
-      // McpApprovalCard does. Read from the runtime registry that createConnectorTools populated
-      // at build time, NEVER from info.input (a model must not be able to spoof it away).
-      // Non-connector tools are absent from the registry → false → no warning, as before.
       destructive: isRuntimeToolDestructive(info.toolName)
     })
-    // ANNOUNCE step (island-only, P8): only the island needs the pushed card + the resumeToken; the
-    // in-app record view claims from the stash directly via /decide (no token leaves the gateway).
-    // announceApprovalToIsland is undefined unless the island flag is on, so the explicit guard just
-    // documents the split and skips the preview compute when the island is off.
-    if (cfg.islandAgentEnabled) {
-      const announce = (inputPreview: string): void => {
-        cfg.announceApprovalToIsland?.({
-          sessionId: run.sessionId,
-          toolCallId: info.toolCallId,
-          toolName: info.toolName,
-          risk: '', // the lifecycle enriches risk from ApprovalGuard.peek (it owns the guard)
-          inputPreview,
-          resumeToken
-        })
-      }
-      // L4 批次1 #6 — the preview line now prefers serve-api's server-derived facts. The hook is
-      // async, and the announce is already fire-and-forget, so we let the card wait for the facts
-      // (bounded by the wrapper's own timeout) instead of pushing a line we know is weaker.
-      // 🔴 No hook wired (harness cfg / preview endpoint unreachable at construction time) → the
-      // SYNCHRONOUS old path, so a pause still announces within this tick exactly as before.
-      if (cfg.fetchApprovalPreview) {
-        void resolveApprovalPreview(cfg, info.toolName, info.input)
-          .then(announce)
-          // resolveApprovalPreview never rejects (it owns the fallback); this catch is the async
-          // half of the outer try/catch — an announce that throws must not surface as an
-          // unhandled rejection.
-          .catch((err) => {
-            console.error('[ai-gateway] island approval announce failed (turn paused OK)', err)
-          })
-      } else {
-        announce(approvalInputPreview(info.toolName, info.input))
-      }
-    }
   } catch (err) {
-    console.error('[ai-gateway] island approval stash/announce failed (turn paused OK)', err)
+    console.error('[ai-gateway] approval stash failed (turn paused OK)', err)
   }
 }
 
@@ -1143,6 +1172,80 @@ export function appendLengthTruncationWarning(
   } as MailAgentUIMessage
 }
 
+export function extractSdkUsage(
+  usage:
+    | {
+        inputTokens?: number
+        outputTokens?: number
+        inputTokenDetails?: {
+          noCacheTokens?: number
+          cacheReadTokens?: number
+          cacheWriteTokens?: number
+        }
+      }
+    | undefined
+    | null
+): {
+  inputTokens: number | null
+  outputTokens: number | null
+  cacheReadTokens: number | null
+  cacheWriteTokens: number | null
+  noCacheTokens: number | null
+} | undefined {
+  if (!usage) return undefined
+  return {
+    inputTokens: usage.inputTokens ?? null,
+    outputTokens: usage.outputTokens ?? null,
+    cacheReadTokens: usage.inputTokenDetails?.cacheReadTokens ?? null,
+    cacheWriteTokens: usage.inputTokenDetails?.cacheWriteTokens ?? null,
+    noCacheTokens: usage.inputTokenDetails?.noCacheTokens ?? null
+  }
+}
+
+/** Maximum number of recent tool-output parts retaining raw `images[].data` base64 when
+ *  persisting `ui_message_json` in `makePersistOnFinish` (older parts are redacted via
+ *  `redactAuditImages` to prevent multi-MB base64 bloat in `ai_chat.db`). */
+export const PERSISTED_TOOL_IMAGE_WINDOW = 2
+
+/**
+ * Redact `output.images[].data` on tool-output parts older than the latest
+ * `maxVisualParts` visual tool calls in a persisted assistant `UIMessage`.
+ * Returns the original `message` reference unchanged when within window.
+ */
+export function prunePersistedToolImages(
+  message: MailAgentUIMessage,
+  maxVisualParts = PERSISTED_TOOL_IMAGE_WINDOW
+): MailAgentUIMessage {
+  const parts = (message as { parts?: unknown }).parts
+  if (!Array.isArray(parts)) return message
+  const visualIndices: number[] = []
+  const redactedOutputs = new Map<number, unknown>()
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i]
+    if (part == null || typeof part !== 'object') continue
+    const p = part as { type?: unknown; output?: unknown }
+    if (
+      typeof p.type !== 'string' ||
+      (!p.type.startsWith('tool-') && p.type !== 'dynamic-tool') ||
+      p.output === undefined
+    ) {
+      continue
+    }
+    const redacted = redactAuditImages(p.output)
+    if (redacted !== p.output) {
+      visualIndices.push(i)
+      redactedOutputs.set(i, redacted)
+    }
+  }
+  const dropCount = visualIndices.length - Math.max(0, maxVisualParts)
+  if (dropCount <= 0) return message
+  const toRedact = new Set(visualIndices.slice(0, dropCount))
+  const nextParts = parts.map((part, idx) =>
+    toRedact.has(idx) ? { ...(part as object), output: redactedOutputs.get(idx) } : part
+  )
+  return { ...(message as object), parts: nextParts } as MailAgentUIMessage
+}
+
 /**
  * Build the onFinish callback that persists a finished turn (ai_chat.db dual-write) — the SAME
  * persistence both endpoints use (the AG-UI mirror is a true mirror, including audit). Best-effort:
@@ -1170,7 +1273,7 @@ export function makePersistOnFinish(
     // through.) 07-15 owner拍板 (island-independent approvals): gated by serverResumeEnabled (the
     // lifecycle sets it unconditionally — the in-panel decide card is a second approval surface even
     // with the island off) with islandAgentEnabled kept as the legacy fallback gate.
-    if (cfg.serverResumeEnabled || cfg.islandAgentEnabled) {
+    if (cfg.serverResumeEnabled) {
       for (const id of collectRejectedApprovalToolCallIds(run.rawMessages)) cfg.rejectApproval?.(id)
     }
     // dogfood #3 (HITL 授权重复/卡 loading) — a turn PAUSED at an approval gate still finishes the
@@ -1193,42 +1296,53 @@ export function makePersistOnFinish(
         try {
           const redacted = redactApprovalRequestedParts(responseMessage as MailAgentUIMessage)
           if (redacted) {
-            cfg.persistPausedAssistant(run.sessionId, redacted, run.modelId, run.runId ?? null)
+            cfg.persistPausedAssistant(
+              run.sessionId,
+              prunePersistedToolImages(redacted),
+              run.modelId,
+              run.runId ?? null
+            )
           }
         } catch (err) {
           console.error('[ai-gateway] persistPausedAssistant failed (pause still streamed OK)', err)
         }
       }
-      // Part B (harness 上岛) — when island agent is on, a paused approval is ALSO stashed for
-      // server-side (island-driven) resume + announced to the island. Runs AFTER the R2-3 redacted
-      // persist above: both must happen on a pause (history shows what the model said; the island can
-      // approve), each self-contained (its own try/catch) so one failing never blocks the other. The
-      // island /decide resume re-enters persistence through the SAME makePersistOnFinish → persistTurn
-      // upsert (same UIMessage id), so the redacted row is replaced, never duplicated. flag-off
-      // (default) → both cfg hooks are undefined → this call is inert (byte-identical early return).
-      maybeStashAndAnnounceApproval(cfg, run, responseMessage as MailAgentUIMessage)
+      maybeStashApproval(cfg, run, responseMessage as MailAgentUIMessage)
       // R7 (L4 批次3) — third self-contained leg: the durable「曾暂停」marker, so a manual session
       // can render the honest expired notice after the stash above is gone (gateway restart).
       writePausedMarker(cfg, run.sessionId, responseMessage as MailAgentUIMessage)
+      // Phase 4 WP-4B — paused turns are not written to ai_chat_messages yet (only redacted preview);
+      // if never resumed/abandoned they would become dark spend. Record usage best-effort here.
+      if (cfg.recordUsageEvent) {
+        try {
+          const pausedUsage = extractSdkUsage(
+            await Promise.resolve(run.result.usage).catch(() => undefined)
+          )
+          if (pausedUsage) {
+            cfg.recordUsageEvent({
+              surface: 'paused_turn',
+              model: run.modelId,
+              protocol: run.protocol,
+              ...pausedUsage,
+              status: 'ok'
+            })
+          }
+        } catch {
+          /* best-effort */
+        }
+      }
       return
     }
-    // Part B (harness 上岛, finding 2) — if the one-shot guard.consume rejected this turn's tool
-    // (E_APPROVAL_USED audit), the OTHER surface already executed + persisted the authoritative turn →
-    // skip this duplicate error persist (and capture). Only relevant for a COMPLETED turn: a re-paused
-    // turn already returned above without persisting. 07-15 — gated by serverResumeEnabled (see the
-    // tombstone gate above; one-shot consume is live whenever server-side resume is), islandAgentEnabled
-    // kept as the legacy fallback gate.
-    if ((cfg.serverResumeEnabled || cfg.islandAgentEnabled) && runHasApprovalUsedError(run)) return
-    const usage = await Promise.resolve(run.result.usage).catch(() => undefined)
+    if (cfg.serverResumeEnabled && runHasApprovalUsedError(run)) return
+    const usage = extractSdkUsage(await Promise.resolve(run.result.usage).catch(() => undefined))
     // WP-15 (context 环) — 上下文占用另取**末 step** 的 inputTokens（`usage` 是多 step 求和，
     // 语义不同，见 lastStepContextTokens）。与 usage 同样 best-effort：拿不到 → null → 前端不渲染。
     const steps = await Promise.resolve(run.result.steps).catch(() => undefined)
     // harness-chat lane C (07-15, PRD §3) — finishReason==='length' fail-loud: append a visible
     // warning to what gets PERSISTED (see appendLengthTruncationWarning's doc comment for why this
     // can't reach the already-streamed wire). No-op for every other finish reason.
-    const persistedResponseMessage = appendLengthTruncationWarning(
-      responseMessage as MailAgentUIMessage,
-      finishReason
+    const persistedResponseMessage = prunePersistedToolImages(
+      appendLengthTruncationWarning(responseMessage as MailAgentUIMessage, finishReason)
     )
     const turn: PersistTurnInput = {
       sessionId: run.sessionId,
@@ -1236,9 +1350,7 @@ export function makePersistOnFinish(
       protocol: run.protocol,
       userMessage: lastUserMessage(run.rawMessages),
       responseMessage: persistedResponseMessage,
-      usage: usage
-        ? { inputTokens: usage.inputTokens ?? null, outputTokens: usage.outputTokens ?? null }
-        : undefined,
+      usage,
       contextTokens: lastStepContextTokens(steps),
       toolCalls: run.auditEntries,
       // codex r2 [C] — per-run settle dedup: the broadcast carries this runId to the renderer.
@@ -1351,13 +1463,35 @@ export async function generateSessionTitle(
 ): Promise<string | null> {
   const factory = resolveModelFactory(cfg)
   const resolvedModel = await factory(modelId)
-  const { text } = await generateText({
-    model: resolvedModel.model,
-    prompt: buildTitlePrompt(firstUserText),
-    maxOutputTokens: 64,
-    abortSignal
-  })
-  return sanitizeSessionTitle(text)
+  const t0 = Date.now()
+  try {
+    const { text, usage } = await generateText({
+      model: resolvedModel.model,
+      prompt: buildTitlePrompt(firstUserText),
+      maxOutputTokens: 64,
+      abortSignal
+    })
+    const extracted = extractSdkUsage(usage)
+    cfg.recordUsageEvent?.({
+      surface: 'auto_title',
+      model: modelId,
+      protocol: resolvedModel.protocol,
+      ...extracted,
+      latencyMs: Date.now() - t0,
+      status: 'ok'
+    })
+    return sanitizeSessionTitle(text)
+  } catch (err) {
+    cfg.recordUsageEvent?.({
+      surface: 'auto_title',
+      model: modelId,
+      protocol: resolvedModel.protocol,
+      latencyMs: Date.now() - t0,
+      status: 'error',
+      errorCode: err instanceof Error ? err.name : 'E_UPSTREAM'
+    })
+    throw err
+  }
 }
 
 // (W6 — the dogfood-3 out-of-turn follow-up generation trio [parseFollowups / buildFollowupsPrompt /

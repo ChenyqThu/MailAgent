@@ -884,6 +884,12 @@ export interface AiGatewayConfig {
   }
   /** MAILAGENT_SESSION_PROVENANCE main-env-only emergency rollback switch. */
   sessionProvenanceEnabled?: boolean
+  /** WS-2 Plane 1: enables lazy schema partitioning + activeTools /
+   *  prepareStep on-demand activation in prepareChatRun (enabled by default in ai_gateway_lifecycle.ts). */
+  toolSearchEnabled?: boolean
+  /** WS-4: gates `computer_use_run` registration/execution; explicit false
+   *  strips `computer_use_run` for isolated tests (enabled by default in `ai_gateway_lifecycle.ts`). */
+  computerUseEnabled?: boolean
   /** Phase 4 WP-4B — record non-chat auxiliary LLM spend into ai_llm_usage_log. Best-effort, never throws. */
   recordUsageEvent?: (event: GatewayUsageEvent) => void
 }

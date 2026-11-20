@@ -19,6 +19,7 @@ import { ApprovalActionCard } from './generic/ApprovalActionCard'
 import { SystemDocApprovalCard } from './generic/SystemDocApprovalCard'
 import { SkillToggleCard } from './generic/SkillToggleCard'
 import { ExecApprovalCard } from './generic/ExecApprovalCard'
+import { ComputerUseApprovalCard } from './generic/ComputerUseApprovalCard'
 import { SkillInstallCard } from './generic/SkillInstallCard'
 import { SkillInstallConfirmCard } from './generic/SkillInstallConfirmCard'
 import { SkillUninstallCard } from './generic/SkillUninstallCard'
@@ -119,6 +120,12 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
     component: A2UI_COMPONENTS.ExecApprovalCard,
     toolNames: ['run_command', 'file_read', 'file_write'],
     render: ExecApprovalCard
+  },
+  // Wave 4 — `computer_use_run` 任务级审批卡（禁止暂停后落到无按钮 ToolTraceCard）。
+  {
+    component: A2UI_COMPONENTS.ComputerUseApprovalCard,
+    toolNames: ['computer_use_run'],
+    render: ComputerUseApprovalCard
   },
   // S2 W4 — skill-supply approval cards (behind MAILAGENT_OPENNESS_SKILL_INSTALL + A2UI;
   // skill_read is a silent read → no card). The confirm card renders SERVER quarantine facts.

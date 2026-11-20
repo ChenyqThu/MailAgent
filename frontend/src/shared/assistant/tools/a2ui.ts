@@ -165,7 +165,11 @@ export const A2UI_COMPONENTS = {
   // `componentForTool` 对这四个返回 null（不落 audited ui_payload），卡自己读 tool part 的 args；
   // overwrite / append 只有 `file_id` 时，路径由卡片向 serve-api 查一次补上（CalendarApprovalCard
   // 先例 —— 展示用的服务端事实绝不从模型参数里推）。
-  LibraryWriteCard: 'LibraryWriteCard'
+  LibraryWriteCard: 'LibraryWriteCard',
+  // Wave 4 (Computer Use MCP Epic §5.4) — `computer_use_run` 任务级审批卡。展示 goal /
+  // allowed_apps / allowed_domains / stop_before_submit / 像素脱敏告知，绝不落到无按钮
+  // ToolTraceCard。
+  ComputerUseApprovalCard: 'ComputerUseApprovalCard'
 } as const
 
 /** Which A2UI component renders a given gateway write tool. Unknown / read tools → null
@@ -193,6 +197,8 @@ export function componentForTool(toolName: string): string | null {
     case 'file_read':
     case 'file_write':
       return A2UI_COMPONENTS.ExecApprovalCard
+    case 'computer_use_run':
+      return A2UI_COMPONENTS.ComputerUseApprovalCard
     case 'skill_install':
       return A2UI_COMPONENTS.SkillInstallCard
     case 'skill_install_confirm':
@@ -337,6 +343,20 @@ export interface ExecApprovalCardProps {
   injectedSecretNames?: string[] | null
   /** run_command only, result-phase — skill entrypoints this run recorded as first-run approved. */
   firstRunRecorded?: string[] | null
+}
+
+/** computer_use_run (Wave 4, edit tier + default ask) — 任务级电脑/浏览器操控审批卡。 */
+export interface ComputerUseApprovalCardProps {
+  goal: string
+  targetHint: 'auto' | 'browser' | 'desktop'
+  allowedApps: string[]
+  allowedDomains: string[]
+  stopBeforeSubmit: boolean
+  maxSteps?: number
+  resultStatus?: string | null
+  pendingAction?: string | null
+  currentUrlOrApp?: string | null
+  filledFields?: string[]
 }
 
 /** skill_install (S2 W4, edit tier) — stage 1: fetch into quarantine. Only the SOURCE (url/path)
@@ -704,6 +724,31 @@ export function buildToolA2UIPayload(
       injectedSecretNames:
         kind === 'run_command' ? asStrArray(result?.injected_secret_names) : null,
       firstRunRecorded: kind === 'run_command' ? asStrArray(result?.first_run_recorded) : null
+    }
+    return {
+      protocol: A2UI_PROTOCOL,
+      version: A2UI_VERSION,
+      component,
+      props: props as unknown as Record<string, unknown>,
+      audit: { risk: io.risk ?? 'edit', requiresApproval }
+    }
+  }
+
+  if (component === A2UI_COMPONENTS.ComputerUseApprovalCard) {
+    const rawHint = asStr(args.target_hint)
+    const targetHint: 'auto' | 'browser' | 'desktop' =
+      rawHint === 'browser' || rawHint === 'desktop' ? rawHint : 'auto'
+    const props: ComputerUseApprovalCardProps = {
+      goal: asStr(args.goal) ?? '',
+      targetHint,
+      allowedApps: asStrArray(args.allowed_apps),
+      allowedDomains: asStrArray(args.allowed_domains),
+      stopBeforeSubmit: args.stop_before_submit !== false,
+      maxSteps: typeof args.max_steps === 'number' ? args.max_steps : undefined,
+      resultStatus: asStr(result?.status) ?? null,
+      pendingAction: asStr(result?.pending_action) ?? null,
+      currentUrlOrApp: asStr(result?.current_url_or_app) ?? null,
+      filledFields: result ? asStrArray(result.filled_fields) : undefined
     }
     return {
       protocol: A2UI_PROTOCOL,

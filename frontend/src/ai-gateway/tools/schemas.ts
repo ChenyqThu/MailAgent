@@ -2224,3 +2224,71 @@ export const generateImageSchema = z.object({
     )
 })
 export type GenerateImageInput = z.infer<typeof generateImageSchema>
+
+/** tool_search (WS-2 Plane 1) — search and activate deferred tools on demand.
+ *  All fields are flat top-level primitives/enums (no root refine/union) for cross-provider
+ *  JSON-schema strictness; at-least-one-of (query | connector_id) is enforced in tool run. */
+export const toolSearchSchema = z.object({
+  query: z
+    .string()
+    .max(200)
+    .optional()
+    .describe('Keywords matching the desired action, connector, or tool name (English or Chinese).'),
+  connector_id: z
+    .string()
+    .min(1)
+    .max(128)
+    .optional()
+    .describe('Exact MCP connector ID (for example "notion", "chrome_devtools", "computer_use") to filter its tools.'),
+  category: z
+    .enum(['all', 'connector', 'builtin'])
+    .default('all')
+    .describe('Restrict search to connector tools, built-in tools, or all deferred tools.'),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(25)
+    .default(10)
+    .describe('Maximum number of matching deferred tools to activate and return (1-25).')
+})
+export type ToolSearchInput = z.infer<typeof toolSearchSchema>
+
+/** computer_use_run (WS-4) — launch a bounded browser/desktop operator sub-agent loop.
+ *  Flat schema fields; allowlists and `stop_before_submit` guardrails are enforced deterministically
+ *  at policy evaluation, tool pre-flight, and post-step verification inside `computer_use.ts`. */
+export const computerUseRunSchema = z.object({
+  goal: z
+    .string()
+    .min(1)
+    .max(4000)
+    .describe('Clear, bounded task objective for the browser or desktop operator sub-agent.'),
+  target_hint: z
+    .enum(['auto', 'browser', 'desktop'])
+    .default('auto')
+    .describe('Surface preference: browser (Playwright/Chrome), desktop (macOS AX), or auto.'),
+  allowed_apps: z
+    .array(z.string().min(1).max(128))
+    .max(16)
+    .optional()
+    .describe('Optional allowlist of desktop application names or bundle IDs permitted for this task.'),
+  allowed_domains: z
+    .array(z.string().min(1).max(255))
+    .max(16)
+    .optional()
+    .describe('Optional allowlist of website domains permitted for browser navigation.'),
+  stop_before_submit: z
+    .boolean()
+    .default(true)
+    .describe(
+      'When true (default), pause before clicking irreversible submit/send/approve/pay/delete actions and return a confirmation draft.'
+    ),
+  max_steps: z
+    .number()
+    .int()
+    .min(1)
+    .max(30)
+    .default(15)
+    .describe('Maximum step budget for the operator sub-agent loop (1-30, default 15).')
+})
+export type ComputerUseRunInput = z.infer<typeof computerUseRunSchema>

@@ -14,6 +14,18 @@ export interface AgentRunMatchedRule {
   folders?: string[]
 }
 
+/** Wave 5 (`matter_item_run` + `propose_only` 草稿模式) — 服务端 `src/matters/run_spec.py::assemble_item_spec`
+ *  投影的电脑操控草稿策略。`ts-gw` (`agentRun.ts`) 仅在 `runKind === 'matter_item_run'` 且
+ *  `mode === 'propose_only' && stopBeforeSubmit === true` 时读取此策略；绝不在 `autonomous` 或其它场地开启。 */
+export interface AgentRunComputerUsePolicy {
+  enabled: boolean
+  mode: 'propose_only'
+  stopBeforeSubmit: boolean
+  allowedApps?: string[]
+  allowedDomains?: string[]
+  connectors?: Array<'browser_use' | 'desktop_use'>
+}
+
 /** The authoritative headless-run spec pulled from serve-api (never from the poke body). */
 export interface AgentRunSpec {
   jobId: number
@@ -57,6 +69,9 @@ export interface AgentRunSpec {
     itemTitle: string
     dispatchId: number
   }
+  /** Wave 5 — `matter_item_run` 显式草稿派发的 computer-use 策略（`ts-gw` 仅在 `runKind === 'matter_item_run'`
+   *  且 `mode === 'propose_only' && stopBeforeSubmit === true` 时消费，其余运行缺席）。 */
+  computerUsePolicy?: AgentRunComputerUsePolicy
   trigger: {
     /** 'cron' | 'schedule' → cron_headless, 'email_filter' → untrusted_trigger, 'im' → im_chat
      *  (阶段 0b 预置 —— 阶段 2 飞书对话；当前无任何 spec 会带它); anything else

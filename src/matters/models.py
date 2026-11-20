@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Iterable, TypeAlias
+import re
+from typing import Any, Iterable, Mapping, Sequence, TypeAlias
+from urllib.parse import urlsplit
 import uuid
 
 
@@ -453,6 +455,141 @@ def normalize_progress_refs(refs: Iterable[object] | None) -> tuple[dict[str, ob
         if len(normalized) > MATTER_PROGRESS_MAX_REFS:
             raise ValueError(f"at most {MATTER_PROGRESS_MAX_REFS} progress refs are allowed")
     return tuple(normalized)
+
+
+COMPUTER_USE_CONNECTOR_IDS: tuple[str, ...] = ("browser_use", "desktop_use")
+_COMPUTER_USE_DRAFT_KEYS = frozenset({"allowed_apps", "allowed_domains", "connectors"})
+_UNSAFE_COMPUTER_USE_DOMAIN_SCHEMES = frozenset(
+    {"about", "blob", "chrome", "data", "file", "javascript", "vbscript"}
+)
+_COMPUTER_USE_DOMAIN_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def _normalize_computer_use_domain(raw: Any) -> str:
+    """Validate and normalize one computer-use domain allowlist entry."""
+    if not isinstance(raw, str):
+        raise ValueError("allowed_domains entries must be strings")
+    value = raw.strip().lower()
+    if not value or any(ch.isspace() or ord(ch) < 32 for ch in value):
+        raise ValueError("allowed_domains entries must be non-empty hostnames")
+    if "://" in value:
+        scheme = value.split("://", 1)[0]
+        if scheme not in ("http", "https"):
+            raise ValueError(f"unsupported domain scheme: {scheme}")
+        parsed = urlsplit(value)
+        if parsed.username or parsed.password:
+            raise ValueError("allowed_domains entries must not contain credentials")
+        value = (parsed.hostname or "").strip().lower()
+        if not value:
+            raise ValueError("allowed_domains URL missing hostname")
+    elif ":" in value:
+        prefix, rest = value.split(":", 1)
+        if prefix in _UNSAFE_COMPUTER_USE_DOMAIN_SCHEMES or not rest.isdigit():
+            raise ValueError(f"unsafe or invalid domain entry: {raw!r}")
+        value = prefix
+
+    value = value.rstrip(".")
+    if not value or value in {"*", "*.*"}:
+        raise ValueError(f"bare wildcard is not allowed in allowed_domains: {raw!r}")
+
+    if "*" in value:
+        if not value.startswith("*."):
+            raise ValueError(f"invalid wildcard domain pattern: {raw!r}")
+        check_host = value[2:]
+        if not check_host or "*" in check_host or len(check_host.split(".")) < 2:
+            raise ValueError(f"bare or top-level wildcard is not allowed: {raw!r}")
+    else:
+        check_host = value
+
+    if any(ch in check_host for ch in "/\\?#@"):
+        raise ValueError(f"invalid hostname characters in allowed_domains: {raw!r}")
+    labels = check_host.split(".")
+    if not all(_COMPUTER_USE_DOMAIN_LABEL_RE.fullmatch(label) for label in labels):
+        raise ValueError(f"invalid domain hostname: {raw!r}")
+    return value
+
+
+def _dedupe_str_sequence(
+    raw: Any, *, field_name: str, normalize_fn: Any
+) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence):
+        raise ValueError(f"{field_name} must be a list of strings")
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        normalized = normalize_fn(item)
+        if normalized not in seen:
+            seen.add(normalized)
+            out.append(normalized)
+    return out
+
+
+def _normalize_computer_use_app(raw: Any) -> str:
+    if not isinstance(raw, str):
+        raise ValueError("allowed_apps entries must be strings")
+    app = raw.strip()
+    if not app or any(ord(ch) < 32 for ch in app):
+        raise ValueError("allowed_apps entries must be non-empty strings")
+    if "*" in app:
+        raise ValueError(f"wildcard is not allowed in allowed_apps: {raw!r}")
+    return app
+
+
+def _normalize_computer_use_connector(raw: Any) -> str:
+    if not isinstance(raw, str):
+        raise ValueError("connectors entries must be strings")
+    connector = raw.strip().lower()
+    if connector not in COMPUTER_USE_CONNECTOR_IDS:
+        raise ValueError(f"unsupported computer-use connector: {raw!r}")
+    return connector
+
+
+def normalize_computer_use_draft(raw: Any) -> dict[str, list[str]]:
+    """Validate and normalize explicit propose-only computer-use draft grants."""
+    if not isinstance(raw, Mapping):
+        raise ValueError("computer_use_draft must be an object")
+    unknown = set(raw.keys()) - _COMPUTER_USE_DRAFT_KEYS
+    if unknown:
+        raise ValueError(f"unknown computer_use_draft keys: {sorted(unknown)}")
+
+    allowed_apps = _dedupe_str_sequence(
+        raw.get("allowed_apps"),
+        field_name="allowed_apps",
+        normalize_fn=_normalize_computer_use_app,
+    )
+    allowed_domains = _dedupe_str_sequence(
+        raw.get("allowed_domains"),
+        field_name="allowed_domains",
+        normalize_fn=_normalize_computer_use_domain,
+    )
+    if not allowed_apps and not allowed_domains:
+        raise ValueError(
+            "computer_use_draft requires non-empty allowed_apps or allowed_domains"
+        )
+
+    raw_connectors = raw.get("connectors")
+    if raw_connectors is None:
+        connectors: list[str] = []
+        if allowed_domains:
+            connectors.append("browser_use")
+        if allowed_apps:
+            connectors.append("desktop_use")
+    else:
+        connectors = _dedupe_str_sequence(
+            raw_connectors,
+            field_name="connectors",
+            normalize_fn=_normalize_computer_use_connector,
+        )
+        if not connectors:
+            raise ValueError("connectors cannot be empty when specified")
+
+    return {
+        "allowed_apps": allowed_apps,
+        "allowed_domains": allowed_domains,
+        "connectors": connectors,
+    }
 
 
 def sql_check_clause(enum_or_values: EnumValues) -> str:

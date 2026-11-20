@@ -136,6 +136,7 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'run_command',
   'file_read',
   'file_write',
+  'computer_use_run',
   // calendar
   'calendar_events_list',
   'calendar_event_get',
@@ -195,6 +196,8 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'submit_feedback',
   // image generation / editing (task 09-02)
   'generate_image',
+  // lazy tool discovery (WS-2)
+  'tool_search',
   // legacy (deleted engine, still present in persisted history)
   'plan_update'
 ])

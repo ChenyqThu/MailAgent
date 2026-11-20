@@ -27,8 +27,13 @@
 import { APICallError, type ToolSet } from 'ai'
 
 import type { AiGatewayConfig } from './config'
+import { isPrivacyMaskError } from './providerRef'
+import { parseConnectorToolGrants } from './tools/connector'
 import { reportStreamError } from './streamError'
+import { unwrapUpstreamError } from './upstreamError'
+import { costUsdFor } from './modelCost'
 import {
+  extractSdkUsage,
   makeIdGenerator,
   makePersistOnFinish,
   prepareChatRun,
@@ -37,6 +42,7 @@ import {
 import {
   classOfTool,
   CONTACT_PROPOSE_TOOLS,
+  isMatterItemComputerUseEnabled,
   LIBRARY_RUN_APPEND_TOOL,
   MATTER_ITEM_REPORT_TOOL,
   MATTER_RUN_PROPOSE_TOOL,
@@ -48,6 +54,7 @@ import {
   type AgentContextMode,
   type AgentRunContext,
   type GatewayToolClass,
+  type MatterItemComputerUsePolicy,
   type MatterRunWebFace
 } from './tools/policy'
 // RELATIVE import (pure TS, zero imports — safe for the tsx harness): the ONE naming source for
@@ -218,6 +225,7 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
   // Conditional include: absent/empty grants keep the modeGrants object byte-identical to the
   // pre-PR3 two-key shape (the stash-freeze assertions depend on that).
   const connectors = parseConnectorGrants(toolPolicy?.grantConnectors)
+  const connectorTools = parseConnectorToolGrants(toolPolicy?.grantConnectorTools)
   // P4 (D5/D7) — the Matter anchor of a follow-up run. Same discriminated discipline as the
   // grants: BOTH the runKind stamp and every field's runtime type are re-checked here, so a
   // partial/junk `matter` key can never mint a half-anchor (a scope filter without a runId would
@@ -226,6 +234,10 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
   // L4 批次3 — same all-or-nothing funnel for the item-dispatch anchor (a half anchor would
   // register a report tool that cannot address any dispatch).
   const matterItemRun = matterItemRunFromSpec(spec)
+  // WS-5 — bounded propose-only Computer Use draft policy, constructed strictly for
+  // `matter_item_run` with `mode === 'propose_only' && stopBeforeSubmit === true` and non-empty
+  // concrete scope; autonomous/malformed specs fail closed to undefined.
+  const matterItemComputerUse = matterItemComputerUseFromSpec(spec, jobId, matterItemRun)
   const specUseKos = (spec as AgentRunSpec & { useKos?: unknown }).useKos
   // task 09-02 — the chat-history read radius, same discriminated funnel as the grants: only the
   // exact 'all' literal widens; conditional include keeps every pre-09-02 context byte-identical.
@@ -241,7 +253,9 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
     modeGrants: {
       exec: toolPolicy?.grantExec === true,
       web: parseWebGrant(toolPolicy?.grantWeb),
-      ...(connectors !== undefined ? { connectors } : {})
+      ...(connectors !== undefined ? { connectors } : {}),
+      ...(connectorTools !== undefined ? { connectorTools } : {}),
+      ...(matterItemComputerUse !== undefined ? { matterItemComputerUse } : {})
     },
     // S6 W1 — carry the run's jobId so a paused approval freezes it into the stash for the
     // record-view pending projection. Conditional include: a caller that omits it (every existing
@@ -253,6 +267,7 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
     ...(matterRun !== undefined ? { matterRun } : {}),
     // L4 批次3 — same conditional-include discipline.
     ...(matterItemRun !== undefined ? { matterItemRun } : {}),
+    ...(matterItemComputerUse !== undefined ? { matterItemComputerUse } : {}),
     // WP7 — same conditional-include discipline: only a spec STAMPED contact_governance mints the
     // flag, so every other run's context object is byte-identical to the pre-WP7 shape.
     ...(spec.runKind === CONTACT_GOVERNANCE_RUN_KIND
@@ -297,6 +312,78 @@ function matterItemRunFromSpec(spec: AgentRunSpec): AgentRunContext['matterItemR
   if (!Number.isInteger(itemId) || (itemId as number) <= 0) return undefined
   if (!Number.isInteger(dispatchId) || (dispatchId as number) <= 0) return undefined
   return { matterId, publicId, itemId, dispatchId }
+}
+
+const VALID_MATTER_CU_CONNECTORS = new Set<'browser_use' | 'desktop_use'>([
+  'browser_use',
+  'desktop_use'
+])
+
+function normalizeConcreteScopeList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const item of raw) {
+    if (typeof item !== 'string') continue
+    const trimmed = item.trim()
+    if (!trimmed || trimmed.includes('*')) continue
+    const lower = trimmed.toLowerCase()
+    if (lower === 'all' || lower === 'any') continue
+    if (!seen.has(trimmed)) {
+      seen.add(trimmed)
+      out.push(trimmed)
+    }
+  }
+  return out
+}
+
+/** WS-5 (Belt 1/2 spec funnel) — fail-closed construction of the bounded propose-only Computer Use
+ *  policy for `matter_item_run`. Rejects autonomous mode, stopBeforeSubmit !== true, wildcards,
+ *  or missing dispatch anchor. */
+function matterItemComputerUseFromSpec(
+  spec: AgentRunSpec,
+  jobId: number | undefined,
+  matterItemRun: AgentRunContext['matterItemRun']
+): MatterItemComputerUsePolicy | undefined {
+  if (spec.runKind !== MATTER_ITEM_RUN_KIND || !matterItemRun) return undefined
+  const raw = spec.computerUsePolicy as unknown as Record<string, unknown> | undefined
+  if (!raw || typeof raw !== 'object') return undefined
+  if (raw.enabled !== true) return undefined
+  if (raw.mode !== 'propose_only') return undefined
+  if (raw.stopBeforeSubmit !== true) return undefined
+
+  const allowedApps = normalizeConcreteScopeList(raw.allowedApps)
+  const allowedDomains = normalizeConcreteScopeList(raw.allowedDomains)
+  if (allowedApps.length === 0 && allowedDomains.length === 0) return undefined
+
+  let connectors: Array<'browser_use' | 'desktop_use'>
+  if (Array.isArray(raw.connectors)) {
+    connectors = Array.from(
+      new Set(
+        raw.connectors.filter(
+          (c): c is 'browser_use' | 'desktop_use' =>
+            typeof c === 'string' &&
+            VALID_MATTER_CU_CONNECTORS.has(c as 'browser_use' | 'desktop_use')
+        )
+      )
+    )
+  } else {
+    connectors = []
+    if (allowedDomains.length > 0) connectors.push('browser_use')
+    if (allowedApps.length > 0) connectors.push('desktop_use')
+  }
+  if (connectors.length === 0) return undefined
+
+  return {
+    enabled: true,
+    mode: 'propose_only',
+    stopBeforeSubmit: true,
+    allowedApps,
+    allowedDomains,
+    connectors,
+    ...(typeof jobId === 'number' && Number.isInteger(jobId) && jobId > 0 ? { jobId } : {}),
+    dispatchId: matterItemRun.dispatchId
+  }
 }
 
 /** 🔴 0812 codex修复批 — the SINGLE decision point for web tools in a Matter follow-up run
@@ -472,7 +559,8 @@ export function wrapCfgForAgentRun(
             cls === 'read' ||
             name === MATTER_ITEM_REPORT_TOOL ||
             name === LIBRARY_RUN_APPEND_TOOL ||
-            matterRunAdmitsWeb(name, cls, webFace)
+            matterRunAdmitsWeb(name, cls, webFace) ||
+            (name === 'computer_use_run' && isMatterItemComputerUseEnabled(ctx.modeGrants))
           )
             out[name] = t
           continue
@@ -485,8 +573,9 @@ export function wrapCfgForAgentRun(
         }
         if (
           name === 'plan_update' ||
+          name === 'tool_search' ||
           SESSION_TOOL_NAMES.has(name) ||
-          cls === 'exec' ||
+          (cls === 'exec' && name !== 'computer_use_run') ||
           cls === 'web' ||
           isMcpToolName(name) ||
           keep.has(name)
@@ -501,10 +590,14 @@ export function wrapCfgForAgentRun(
 /** Map a drain failure to a structured error code (mirrors searchAgentRun.normalizeLoopError):
  *  HTTP 429 → E_QUOTA, other upstream API errors → E_UPSTREAM, anything else → E_AGENT. */
 function normalizeAgentError(err: unknown): { code: string; message: string } {
-  if (APICallError.isInstance(err)) {
-    return { code: err.statusCode === 429 ? 'E_QUOTA' : 'E_UPSTREAM', message: err.message }
+  const cause = unwrapUpstreamError(err)
+  if (isPrivacyMaskError(cause)) {
+    return { code: 'E_PRIVACY_MASK_FAILED', message: cause.message }
   }
-  return { code: 'E_AGENT', message: err instanceof Error ? err.message : String(err) }
+  if (APICallError.isInstance(cause)) {
+    return { code: cause.statusCode === 429 ? 'E_QUOTA' : 'E_UPSTREAM', message: cause.message }
+  }
+  return { code: 'E_AGENT', message: cause instanceof Error ? cause.message : String(cause) }
 }
 
 /** Clip the accumulated assistant text to a one-line summary (mirrors approvalResume.clipSummary). */
@@ -641,7 +734,10 @@ async function runHeadlessAgentOnce(
   // is 3s-bounded per request and contracted never to throw). Any failure → warn and continue
   // WITHOUT connector tools (the run must never freeze on a slow serve-api). No grants / no hook
   // (manual cfgs, tests, flag off) → zero work, byte-identical.
-  if (agentRunContext.modeGrants?.connectors && cfg.ensureConnectorManifest) {
+  if (
+    (agentRunContext.modeGrants?.connectors || agentRunContext.matterItemComputerUse?.enabled) &&
+    cfg.ensureConnectorManifest
+  ) {
     try {
       await cfg.ensureConnectorManifest()
     } catch (err) {
@@ -793,19 +889,31 @@ async function runHeadlessAgentOnce(
         : {})
     }
   }
-  const usage = await Promise.resolve(run.result.usage).catch(() => undefined)
+  const rawUsage = await Promise.resolve(run.result.usage).catch(() => undefined)
+  const extracted = extractSdkUsage(rawUsage)
+  const costUsd = extracted ? costUsdFor(run.modelId, extracted, run.protocol) : null
   return {
     ok: true,
     outcome: 'completed',
     sessionId,
     steps,
+    model: run.modelId,
+    costUsd,
     summary: clipSummary(assistantText) || undefined,
-    usage
+    usage: rawUsage
+      ? {
+          inputTokens: extracted?.inputTokens ?? null,
+          outputTokens: extracted?.outputTokens ?? null,
+          cacheReadTokens: extracted?.cacheReadTokens ?? null,
+          cacheWriteTokens: extracted?.cacheWriteTokens ?? null,
+          totalTokens: rawUsage.totalTokens ?? null
+        }
+      : undefined
   }
 }
 
-/** Abort-shaped failures: the run was cancelled, not the model's fault → never retried. */
-const CHAIN_STOP_CODES = new Set(['E_BUDGET_TIME', 'E_RUN_STOPPED'])
+/** Abort-shaped or fail-closed privacy failures: never retried onto another model. */
+const CHAIN_STOP_CODES = new Set(['E_BUDGET_TIME', 'E_RUN_STOPPED', 'E_PRIVACY_MASK_FAILED'])
 
 /**
  * The public entrypoint: `runHeadlessAgentOnce` walked over the spec's model chain

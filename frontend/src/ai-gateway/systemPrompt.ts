@@ -172,6 +172,9 @@ export interface GatewaySystemPromptArgs {
    *  sentence to the group block. Absent/false on every other path (main agent / headless /
    *  team) → byte-identical. */
   groupSpeakerRun?: boolean
+  /** WS-5 — true iff THIS run's built ToolSet holds `computer_use_run`. Injects the deterministic
+   *  Tier 1 > Tier 2 > Tier 3 routing discipline into the cacheable prefix. */
+  computerUseAvailable?: boolean
 }
 
 /** The gateway system prompt as its cacheable and volatile parts. `cacheable` is never empty: the
@@ -225,7 +228,8 @@ export function buildGatewaySystemPromptParts(args: GatewaySystemPromptArgs): {
         ? pc.connectorCatalog
         : null,
     standingContext:
-      pc?.standingContext && pc.standingContext.length > 0 ? pc.standingContext : null
+      pc?.standingContext && pc.standingContext.length > 0 ? pc.standingContext : null,
+    computerUseAvailable: args.computerUseAvailable === true && !groupSpeakerRun
   }
   // ctx=null + no-op digest → the EXACT legacy stable prefix (floor + standing/SOUL + user + memory.md
   // + KOS guidance), byte-identical to the custom-api path's cacheable prefix. 07-01 — the bounded

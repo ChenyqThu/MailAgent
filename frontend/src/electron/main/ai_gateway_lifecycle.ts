@@ -25,12 +25,13 @@ import { join } from 'path'
 
 import { startAiGatewayServer, type AiGatewayHandle } from '../../ai-gateway/server'
 import { startMainModelCatalogUpdates } from './model_catalog_updates'
+import { costUsdFor } from '../../ai-gateway/modelCost'
 import {
   resolveAiGatewayPort,
   type AiGatewayConfig,
+  type GatewayUsageEvent,
   type GroupRunLogMirror,
   type GroupSessionMember,
-  type IslandApprovalAnnounce,
   type LabsFlags,
   type PersistTurnInput
 } from '../../ai-gateway/config'
@@ -42,12 +43,15 @@ import { buildGatewayTools } from '../../ai-gateway/tools'
 import {
   connectorCatalogForRun,
   connectorManifestSkipReason,
+  createComputerUseChildConnectorTools,
   createConnectorManifestCache,
   createConnectorTools,
   fetchConnectorManifest,
   projectConnectorCatalog,
   shouldLoadConnectorTools
 } from '../../ai-gateway/tools/connector'
+import { hasActiveComputerUseChildTools } from '../../ai-gateway/tools/computer_use'
+import { isMatterItemComputerUseEnabled } from '../../ai-gateway/tools/policy'
 import type { ConnectorCatalogEntry } from '../../ai-gateway/prompts/stable_prompt'
 import type { ToolSet } from 'ai'
 import {
@@ -107,6 +111,7 @@ import {
 import { buildToolA2UIPayload } from '../../shared/assistant/tools/a2ui'
 import { chatMessageToUIMessage, extractTextFromUIMessage } from '@shared/assistant/uiMessage'
 import {
+  appendLlmUsageLog,
   appendMessage,
   appendToolCall,
   cancelQueuedInput,
@@ -517,6 +522,9 @@ function persistTurn(turn: PersistTurnInput): void {
   // survives app restarts, no in-memory state. Normal turns: lookup misses（one cheap per-session
   // SELECT）→ append as before.
   const pausedRowId = findAssistantMessageRowIdByUiId(turn.sessionId, turn.responseMessage.id)
+  const turnCostUsd = turn.usage ? costUsdFor(turn.model, turn.usage, turn.protocol) : null
+  const cacheReadTokens = turn.usage?.cacheReadTokens ?? null
+  const cacheWriteTokens = turn.usage?.cacheWriteTokens ?? null
   let assistantId: number
   if (pausedRowId != null) {
     updateMessage(pausedRowId, {
@@ -525,6 +533,9 @@ function persistTurn(turn: PersistTurnInput): void {
       model: turn.model,
       tokensInput: turn.usage?.inputTokens ?? null,
       tokensOutput: turn.usage?.outputTokens ?? null,
+      cacheReadTokens,
+      cacheWriteTokens,
+      costUsd: turnCostUsd,
       // WP-15 (context 环) — 暂停那一段没有落过占用（早退不 persistTurn），resume 在这里补写。
       contextTokens: turn.contextTokens ?? null,
       uiMessageJson: JSON.stringify(turn.responseMessage)
@@ -539,6 +550,9 @@ function persistTurn(turn: PersistTurnInput): void {
       model: turn.model,
       tokensInput: turn.usage?.inputTokens ?? null,
       tokensOutput: turn.usage?.outputTokens ?? null,
+      cacheReadTokens,
+      cacheWriteTokens,
+      costUsd: turnCostUsd,
       // WP-15 (context 环) — 末 step 的 inputTokens（≠ tokensInput 的多 step 求和）。
       contextTokens: turn.contextTokens ?? null,
       uiMessageJson: JSON.stringify(turn.responseMessage)
@@ -712,26 +726,14 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // The domain ApprovalGuard (toolCallId + input hash + expiry, surviving across the two
   // HTTP calls) plus the send tool's Python-side double guard already gate every write.
   //
-  // Part B (harness 上岛, MAILAGENT_ISLAND_AGENT_ENABLED) — when the island agent path is on, an
-  // approval can wait on the island (user off the app) → extend the guard TTL to the island ack
-  // window (30 min, DEFAULT_STASH_TTL_MS) so verify()/consume() don't expire before the user comes
-  // back to click. Default ON since E3 cutover (2026-07-06, owner 终拍) — no island installed/running
-  // is a first-class fail-open path (the announce POST to serve-api never throws; the island socket
-  // send fails closed → debug-only log, no retry, no queue backlog — covered by direct unit tests, see
-  // research/island-no-island-degradation.md), so users without the island app get inert no-op, not
-  // errors. An explicit custom-agent-call flag false keeps the established 30-min single TTL.
-  const islandAgentEnabled = envBool('MAILAGENT_ISLAND_AGENT_ENABLED', true)
-  // 07-15 owner拍板（无灵动岛方案优先，task 07-15-harness-chat lane A）— the SERVER-SIDE approval
-  // resume infra (stash + extended guard TTL + /pending + /decide + settle broadcast) is now
-  // UNCONDITIONAL: the in-panel approval card (chat 面板内可批卡) is the PRIMARY approval surface and
-  // must work with BOTH MAILAGENT_ISLAND_AGENT_ENABLED and MAILAGENT_CUSTOM_AGENTS_ENABLED explicitly
-  // false — the island is an optional overlay notification face that may be removed. Only the island
-  // ANNOUNCE leg (+ the island result cards) stays island-gated below. Security posture is unchanged:
-  // /decide stays fail-closed (one-shot claim, approvalId/token-matched), the guard stays hash-bound
-  // one-shot, and cross-surface single-resolver semantics (oneShotWrites / isApprovalResolved /
-  // rejectApproval / serverResumeEnabled in chatRun) are now ALWAYS live — a strictly stricter write
-  // gate than the old flag-gated wiring. (customAgentsEnabled still gates the S4 headless agent-run
-  // endpoint + job settle below; default ON since E3 cutover, env explicit false = kill-switch.)
+  // 07-15 owner拍板 — the SERVER-SIDE approval resume infra (stash + extended guard TTL + /pending +
+  // /decide + settle broadcast) is UNCONDITIONAL: the in-panel approval card and Feishu approval
+  // card are first-class approval surfaces. Security posture is unchanged: /decide stays fail-closed
+  // (one-shot claim, approvalId/token-matched), the guard stays hash-bound one-shot, and
+  // cross-surface single-resolver semantics (oneShotWrites / isApprovalResolved / rejectApproval /
+  // serverResumeEnabled in chatRun) are ALWAYS live. (customAgentsEnabled still gates the S4
+  // headless agent-run endpoint + job settle below; default ON since E3 cutover, env explicit false
+  // = kill-switch.)
   const customAgentsEnabled = envBool('MAILAGENT_CUSTOM_AGENTS_ENABLED', true)
   const customAgentCallEnabled = envBool('MAILAGENT_CUSTOM_AGENT_CALL', true)
   // task 08-14 — 内建 agent 工具面。🔴 双载体：这里与 Python `internal_agent_tools_enabled`
@@ -870,11 +872,11 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   const notionAgentToolsEnabled = envBool('MAILAGENT_NOTION_AGENT_TOOL', true)
   // Stage 1 PR2 — MAILAGENT_MCP_CONNECTORS gates the dynamic MCP connector tools
   // (`mcp__<connector>__<tool>`, read silent / write·update edit-tier 恒 HITL via the runtime
-  // 'connector_write' class). Default OFF (ship off → dogfood → cutover 另拍, island 模式);
+  // 'connector_write' class). Default ON (2026-11-20 cutover; explicit false = emergency rollback);
   // off → no manifest fetch, no registration, buildGatewayTools byte-identical. main-env-only,
   // NO vite define (mirrors the other tool-family flags). Python serve-api reads the SAME env via
   // pydantic (mcp_connectors_enabled) — off there turns every /api/connector/* endpoint 409.
-  const mcpConnectorsEnabled = envBool('MAILAGENT_MCP_CONNECTORS', false)
+  const mcpConnectorsEnabled = envBool('MAILAGENT_MCP_CONNECTORS', true)
   // Stage 2 PR-1 (task 08-01 messenger) — MAILAGENT_IM_FEISHU gates the im_chat entrypoint
   // (POST /api/ai/im-chat, the ONLY code asserting 'im_chat') + the createImSession hook.
   // Default ON (cutover 2026-08-04, owner dogfood 通过); an explicit env false → the route is
@@ -891,6 +893,13 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // Only the im_chat matrix branch reads it, so non-im runs are byte-identical either way.
   // main-env-only, NO vite define.
   const imWebEnabled = envBool('MAILAGENT_IM_WEB_ENABLED', false)
+  // WS-2 Plane 1 — lazy schema loading for long-tail external MCP tools (`tool_search` +
+  // prepareStep `activeTools` partition), unconditionally enabled by default.
+  const toolSearchEnabled = true
+  // WS-4 — bounded `computer_use_run` sub-agent tool when at least one active
+  // `browser_use` or `desktop_use` connector is mounted in `manual_chat` (or explicit `matter_item_run`),
+  // unconditionally enabled by default.
+  const computerUseEnabled = true
   // TTL-cached connector tool manifest (loopback pulls stay OFF the request path — buildTools is
   // synchronous). A fetch failure caches null = no connector tools (silent degradation, warned in
   // fetchConnectorManifest) but only for the SHORT failure TTL (0804 dogfood — a 30s negative
@@ -1128,38 +1137,6 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       console.warn('[ai-gateway] approval preview fetch failed — falling back to model args', err)
       return null
     }
-  }
-
-  // Part B (harness 上岛) — fire-and-forget announce a paused approval to the island via serve-api
-  // /api/island/agent/announce. Enriches `risk` from the ApprovalGuard (main owns it) and stamps THIS
-  // gateway's port so serve-api's ack → /api/ai/approval/decide callback reaches us. Local-token
-  // authenticated (gateway → serve-api loopback). Never awaited (best-effort; a slow/failed announce
-  // can't block the already-paused turn). Skips unsaved sessions (sessionId null → the user is active
-  // in-app, the renderer resumes; no island card needed).
-  const announceApprovalToIsland = (info: IslandApprovalAnnounce): void => {
-    if (info.sessionId == null) return
-    const rec = approvalGuard.peek(info.toolCallId)
-    const payload = {
-      kind: 'approval',
-      sessionId: info.sessionId,
-      toolName: info.toolName,
-      inputPreview: info.inputPreview,
-      risk: rec?.risk ?? info.risk,
-      toolCallId: info.toolCallId,
-      resumeToken: info.resumeToken,
-      gatewayPort
-    }
-    const localToken = getLocalApiToken()
-    void fetch(`http://127.0.0.1:${resolveApiPort()}/api/island/agent/announce`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(localToken ? { 'X-MailAgent-Local-Token': localToken } : {})
-      },
-      body: JSON.stringify(payload)
-    }).catch((err) => {
-      console.error('[ai-gateway] island approval announce failed (turn paused OK)', err)
-    })
   }
 
   const compactEnabled = envBool('MAILAGENT_CHAT_COMPACT', true)
@@ -1517,6 +1494,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       // self-description tool stops being connector-blind (dogfood root cause ②).
       let connectorCatalog: ConnectorCatalogEntry[] | null = null
       const connectorGrants = agentRunContext?.modeGrants?.connectors
+      const connectorToolGrants = agentRunContext?.modeGrants?.connectorTools
+      const disabledConnectors =
+        contextMode === 'manual_chat' ? groupTools?.disabledConnectors : undefined
       if (
         shouldLoadConnectorTools(
           mcpConnectorsEnabled,
@@ -1546,15 +1526,21 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
             // PR3 — headless only: the per-connector ceilings + the caller agent id (manual runs
             // carry no context → both absent → PR2 byte-identical).
             ...(agentRunContext != null
-              ? { connectorGrants, agentId: agentRunContext.agentId }
-              : {})
+              ? {
+                  connectorGrants,
+                  ...(connectorToolGrants !== undefined ? { connectorToolGrants } : {}),
+                  agentId: agentRunContext.agentId
+                }
+              : {}),
+            ...(disabledConnectors && disabledConnectors.length > 0 ? { disabledConnectors } : {})
           })
           // Same single filter source as the prompt path: projection + per-run narrowing.
           connectorCatalog = connectorCatalogForRun(
             projectConnectorCatalog(manifest),
             contextMode,
             agentRunContext != null,
-            connectorGrants
+            connectorGrants,
+            { connectorToolGrants, disabledConnectors }
           )
           // D1 observability — registered-count line per connector-bearing run (on-disk log).
           gatewayLogLine({
@@ -1565,6 +1551,38 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           })
         }
       }
+      // WS-5 — private child connector tools for explicit `propose_only` `matter_item_run`
+      // (`browser_use` / `desktop_use` ONLY, NEVER exposed to `dynamicTools` or the outer ToolSet).
+      let matterComputerUseChildTools: ToolSet | undefined
+      const matterCuPolicy =
+        computerUseEnabled &&
+        contextMode === 'matter_followup' &&
+        isMatterItemComputerUseEnabled(agentRunContext?.modeGrants)
+          ? agentRunContext!.modeGrants!.matterItemComputerUse
+          : undefined
+      if (mcpConnectorsEnabled && matterCuPolicy) {
+        void refreshConnectorManifest()
+        const manifest = connectorManifest.peek()
+        if (connectorManifestSkipReason(manifest) === null && manifest) {
+          matterComputerUseChildTools = createComputerUseChildConnectorTools(
+            domain,
+            collector,
+            manifest,
+            {
+              connectors: matterCuPolicy.connectors,
+              agentId: agentRunContext?.agentId,
+              jobId: matterCuPolicy.jobId ?? agentRunContext?.jobId,
+              dispatchId: matterCuPolicy.dispatchId
+            }
+          )
+        }
+      }
+      const manualComputerUseActive =
+        computerUseEnabled && contextMode === 'manual_chat' && hasActiveComputerUseChildTools(dynamicTools)
+      const matterComputerUseActive =
+        Boolean(matterCuPolicy) &&
+        matterComputerUseChildTools != null &&
+        Object.keys(matterComputerUseChildTools).length > 0
       return buildGatewayTools(
         {
           domain,
@@ -1572,6 +1590,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // P0 — default ON fixes the prompt/tool mismatch; this main-process-only flag is an
           // emergency rollback switch and is intentionally not exposed through a Vite define.
           planToolsEnabled: envBool('MAILAGENT_PLAN_TOOL', true),
+          toolSearchEnabled,
           sessionProvenanceEnabled,
           writeToolsEnabled: envBool('MAILAGENT_AI_SDK_WRITE_TOOLS', true),
           approvalGuard,
@@ -1697,7 +1716,33 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // empty cache) → identity pass-through, byte-identical.
           dynamicTools,
           // D1 — the matching run-scoped catalog (discover_skills External-connectors summary).
-          connectorCatalog
+          connectorCatalog,
+          // WS-4 + WS-5 — expose computer_use_run in manual_chat OR explicit propose_only
+          // matter_item_run when bounded browser_use / desktop_use child tools are available.
+          computerUse:
+            manualComputerUseActive || matterComputerUseActive
+              ? {
+                  ...(matterComputerUseActive && matterCuPolicy
+                    ? {
+                        childTools: matterComputerUseChildTools,
+                        forceStopBeforeSubmit: true,
+                        matterItemPolicy: matterCuPolicy
+                      }
+                    : {}),
+                  persistChildSummary: (childSid, summaryText) => {
+                    try {
+                      appendMessage({
+                        sessionId: childSid,
+                        role: 'assistant',
+                        content: summaryText,
+                        status: 'complete'
+                      })
+                    } catch (err) {
+                      console.warn('[ai-gateway] computer_use child summary persist failed', err)
+                    }
+                  }
+                }
+              : undefined
         },
         collector
       )
@@ -1806,6 +1851,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         speakerAgentId: message.speakerAgentId ?? null,
         tokensInput: message.tokensInput ?? null,
         tokensOutput: message.tokensOutput ?? null,
+        cacheReadTokens: message.cacheReadTokens ?? null,
+        cacheWriteTokens: message.cacheWriteTokens ?? null,
         costUsd: message.costUsd ?? null,
         chainId: message.chainId ?? null,
         metadata: message.metadata ?? null
@@ -1926,10 +1973,6 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       return { title: session.title ?? null, firstUserText: getFirstUserText(sessionId) }
     },
     saveSessionTitle: (sessionId, title) => updateSessionTitle(sessionId, title),
-    // Part B (harness 上岛) + 07-15 owner拍板 — the island flag now ONLY gates the announce leg
-    // (island card push); the stash + cross-surface single-resolver hooks are ALWAYS wired so the
-    // in-panel approval card works with the island (and custom agents) explicitly off.
-    islandAgentEnabled,
     serverResumeEnabled,
     approvalStash,
     // task 09-02 — the generate_image store root; the GET /api/ai/generated/:fileId route reads
@@ -1940,9 +1983,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // when the env kill-switch is false → /api/ai/chat keeps close→abort + run endpoints 404.
     detachedRunsEnabled,
     activeRuns,
-    announceApprovalToIsland: islandAgentEnabled ? announceApprovalToIsland : undefined,
-    // L4 批次1 #6 — always wired (not island-gated): the in-panel / record-view pending probe is a
-    // first-class approval surface too, and it reads the same preview line.
+    // L4 批次1 #6 — always wired: the in-panel / record-view pending probe reads this preview line.
     fetchApprovalPreview,
     // /decide short-circuit vs a renderer that won the race: has THIS approval already reached a
     // terminal decision (executed OR rejected) on the other surface? If so, resumeApprovalRun does
@@ -2035,7 +2076,42 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // let a one-shot cron run read an empty cold cache and silently miss its granted tools).
     // Single-flight + fresh-cache short-circuit inside refreshConnectorManifest; the fetch is
     // 3s-bounded per request and never throws. Flag off → unwired → zero work, byte-identical.
-    ensureConnectorManifest: mcpConnectorsEnabled ? () => refreshConnectorManifest() : undefined
+    ensureConnectorManifest: mcpConnectorsEnabled ? () => refreshConnectorManifest() : undefined,
+    toolSearchEnabled,
+    computerUseEnabled,
+    localApiToken: getLocalApiToken(),
+    recordUsageEvent: (ev: GatewayUsageEvent): void => {
+      try {
+        const parsed = parseProviderRef(ev.model)
+        const costUsd = costUsdFor(
+          ev.model,
+          {
+            inputTokens: ev.inputTokens ?? null,
+            outputTokens: ev.outputTokens ?? null,
+            cacheReadTokens: ev.cacheReadTokens ?? null,
+            cacheWriteTokens: ev.cacheWriteTokens ?? null,
+            noCacheTokens: ev.noCacheTokens ?? null
+          },
+          ev.protocol
+        )
+        appendLlmUsageLog({
+          surface: ev.surface,
+          providerId: parsed.providerId,
+          model: ev.model,
+          protocol: ev.protocol ?? null,
+          tokensInput: ev.inputTokens ?? null,
+          tokensOutput: ev.outputTokens ?? null,
+          cacheReadTokens: ev.cacheReadTokens ?? null,
+          cacheWriteTokens: ev.cacheWriteTokens ?? null,
+          costUsd,
+          latencyMs: ev.latencyMs ?? null,
+          status: ev.status ?? 'ok',
+          errorCode: ev.errorCode ?? null
+        })
+      } catch (err) {
+        console.warn('[ai-gateway] recordUsageEvent failed (best-effort)', err)
+      }
+    }
   }
 
   // g2 — the hook bundle every group tool factory (main agent / member / judge) reads its facts

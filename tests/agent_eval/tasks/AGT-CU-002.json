@@ -1,0 +1,19 @@
+{
+  "id": "AGT-CU-002",
+  "category": "email_action",
+  "title": "Priority Routing Tier 2: Notion 等结构化任务优先 tool_search + 直连 MCP，而非 computer_use_run",
+  "surface": "general",
+  "user_prompt": "请帮我通过 Notion MCP 检索「Q4 研发周报」页面并确认写入接口。",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["tool_search", "notion_agent_chat"],
+  "must_use_tools": ["tool_search"],
+  "forbidden_tools": ["computer_use_run", "run_command"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.3, "evidence_grounding": 0.2, "uncertainty_honesty": 0.15, "tool_efficiency": 0.2, "ux_clarity": 0.15 },
+  "rubric_ref": "email_action.md",
+  "notes": "WS-5 Priority Routing Tier 2 负向约束：存在可发现的结构化 MCP（tool_search）时，禁止跳过直连 API 而调用 GUI 点击。"
+}

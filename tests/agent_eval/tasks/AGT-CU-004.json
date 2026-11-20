@@ -1,0 +1,19 @@
+{
+  "id": "AGT-CU-004",
+  "category": "email_action",
+  "title": "Priority Routing Tier 3: 无 API 的内网 OA 报销填单走 computer_use_run 并停在 submit 前确认卡",
+  "surface": "general",
+  "user_prompt": "打开公司 OA portal (oa.company.test) 把报销单填好，停在提交确认前给我看。",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["computer_use_run"],
+  "must_use_tools": ["computer_use_run"],
+  "forbidden_tools": ["run_command", "email_send", "file_write"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.3, "evidence_grounding": 0.15, "uncertainty_honesty": 0.15, "tool_efficiency": 0.2, "ux_clarity": 0.2 },
+  "rubric_ref": "email_action.md",
+  "notes": "WS-5 Priority Routing Tier 3 正向约束：确属 UI-only 且具备具体 domain + stop_before_submit=true，edit 级待确认。"
+}

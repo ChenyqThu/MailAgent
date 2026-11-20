@@ -669,4 +669,25 @@ describe('buildCurrentDateBlock — R1 current-date injection', () => {
     // date block is LAST — after the context block.
     expect(out.indexOf('当前日期：')).toBeGreaterThan(out.indexOf('UNTRUSTED_EMAIL_BODY_START'))
   })
+
+  test('WS-5: computerUseAvailable=true injects Tier 1 > Tier 2 > Tier 3 routing inside cacheable prefix; false/absent is byte-identical', () => {
+    const baseline = buildGatewaySystemPrompt({
+      promptConfig: { standingContext: 'X' },
+      contextSnapshot: emailSnapshot('The numbers are in the deck.')
+    })
+    expect(baseline).not.toContain('# Tool Selection Priority Routing')
+
+    const withRouting = buildGatewaySystemPrompt({
+      promptConfig: { standingContext: 'X' },
+      contextSnapshot: emailSnapshot('The numbers are in the deck.'),
+      computerUseAvailable: true
+    })
+    expect(withRouting).toContain('# Tool Selection Priority Routing (Tier 1 > Tier 2 > Tier 3)')
+    expect(withRouting).toContain('Tier 1 — MailAgent Native Tools')
+    expect(withRouting).toContain('Tier 2 — Direct Structured MCP Connectors')
+    expect(withRouting).toContain('Tier 3 — `computer_use_run`')
+    expect(withRouting.indexOf('# Tool Selection Priority Routing')).toBeLessThan(
+      withRouting.indexOf('UNTRUSTED_EMAIL_BODY_START')
+    )
+  })
 })

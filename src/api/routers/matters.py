@@ -163,6 +163,10 @@ class MatterPatchWithScheduleRequest(MatterPatchRequest):
     schedule_json: dict[str, Any] | None = None
 
 
+class MatterItemDispatchWithDraftRequest(MatterItemDispatchRequest):
+    computer_use_draft: dict[str, Any] | None = None
+
+
 class MatterCreateDraftRequest(BaseModel):
     internal_id: int = Field(gt=0)
     thread_id: str | None = None
@@ -782,7 +786,7 @@ async def list_item_dispatches(
 async def dispatch_item(
     matter_id: str,
     item_id: int,
-    body: MatterItemDispatchRequest,
+    body: MatterItemDispatchWithDraftRequest,
     request: Request,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     service: MatterService = Depends(get_matter_service),
@@ -794,6 +798,7 @@ async def dispatch_item(
         item_id,
         executor_id=body.executor_id,
         profile=body.profile,
+        computer_use_draft=body.computer_use_draft,
         expected_version=body.mutation.expected_version,
         **args,
     )

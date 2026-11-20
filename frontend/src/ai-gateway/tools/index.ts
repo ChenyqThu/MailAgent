@@ -49,6 +49,8 @@ import { createLibraryReadTools, createLibraryWriteTools } from './library'
 import { createNotionAgentTools } from './notion_agent'
 import { createFeedbackTools, type FeedbackSubmitFn } from './feedback'
 import { createImageTools, type ImageGenToolDeps } from './image'
+import { createToolSearchTool } from './tool_search'
+import { createComputerUseTools, type ComputerUseToolDeps } from './computer_use'
 import {
   admitDynamicTools,
   applyContextModePolicy,
@@ -264,6 +266,15 @@ export interface BuildGatewayToolsOpts {
    *  discover_skills' "External connectors" summary so the self-description tool stops being
    *  connector-blind. Absent / null → discover_skills output byte-identical. */
   connectorCatalog?: ConnectorCatalogEntry[] | null
+  /** WS-2 Plane 1 — registers `tool_search` into the gateway ToolSet so
+   *  `prepareChatRun` can defer long-tail MCP schemas behind `activeTools` + `prepareStep`.
+   *  Absent / false → pre-lazy ToolSet byte-identical. */
+  toolSearchEnabled?: boolean
+  /** WS-4 — optional dependencies for registering `computer_use_run`.
+   *  Decoupled from `customAgentCallEnabled` so `computer_use_run` runs an in-gateway child
+   *  `streamText` loop over active `mcp__browser_use__*` / `mcp__desktop_use__*` tools with
+   *  optional parent-child session creation (`createAgentCallSession`). */
+  computerUse?: ComputerUseToolDeps
 }
 
 /** Names of the read tools exposed by the gateway (for tests / observability). */
@@ -779,6 +790,36 @@ export function buildGatewayTools(
       )
     )
   }
+  const computerUseToolsHolder: { current?: ToolSet } = {}
+  // WS-4 — register `computer_use_run` independently of `customAgentCallEnabled`:
+  // parent-child sessions reuse `createAgentCallSession`, while `class: 'exec'` +
+  // `applyContextModePolicy` keep it restricted to `manual_chat` and authorized `matter_item_run`.
+  if (opts.computerUse && opts.approvalGuard) {
+    Object.assign(
+      tools,
+      createComputerUseTools(opts.domain, collector, opts.approvalGuard, {
+        ...opts.computerUse,
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
+        toolApprovalPrefs: prefTiers,
+        oneShot: opts.oneShotWrites,
+        contextMode,
+        agentRunContext: opts.agentRunContext,
+        parentSessionId: opts.computerUse.parentSessionId ?? opts.parentSessionId,
+        findSessionByParentToolCall:
+          opts.computerUse.findSessionByParentToolCall ?? opts.findSessionByParentToolCall,
+        createAgentSession: opts.computerUse.createAgentSession ?? opts.createAgentCallSession,
+        getChildToolsFromFinalSet: () => computerUseToolsHolder.current
+      })
+    )
+  }
+  // WS-2 Plane 1 — register `tool_search` BEFORE skill-gating / mode /
+  // display-name injection so CORE_UNGATED keeps it across modes, stripOwnerDeniedTools applies,
+  // and applyToolDisplayNames prefixes 「检索扩展工具」 cleanly. `prepareChatRun` later binds
+  // the post-admission deferred set and hides `tool_search` from `activeTools` when deferred = 0.
+  if (opts.toolSearchEnabled) {
+    tools.tool_search = createToolSearchTool({}, collector)
+  }
   // M4a — skill→tool gating after the full set is assembled, behind MAILAGENT_SKILL_SELF_MOUNT.
   // flag-off OR advertisedSkills null (Python hiccup → fail-open) → not called → byte-identical to the
   // cutover set. advertisedSkills=[] (all disabled) → gates every mapped skill read tool. The gated set
@@ -830,5 +871,7 @@ export function buildGatewayTools(
   // 中文显示名注入 LAST —— 在最终 ToolSet（含 dynamic tools、两道 gating、mode 过滤、owner deny）
   // 上一次拼完，是唯一的注入点：任何新增工具族不用各自记得加前缀。只改 description，不改工具名 /
   // 入参 / execute，所以对上面每一道装配语义都是透明的。
-  return applyToolDisplayNames(stripOwnerDeniedTools(filtered, prefTiers))
+  const finalTools = applyToolDisplayNames(stripOwnerDeniedTools(filtered, prefTiers))
+  computerUseToolsHolder.current = finalTools
+  return finalTools
 }

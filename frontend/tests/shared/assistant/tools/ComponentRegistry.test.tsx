@@ -71,6 +71,7 @@ describe('componentRegistry — resolution', () => {
       'calendar_event_delete',
       'calendar_event_reschedule',
       'calendar_event_rsvp',
+      'computer_use_run',
       'custom_agent_call',
       'custom_agent_create',
       'custom_agent_delete',
@@ -126,6 +127,7 @@ describe('componentRegistry — resolution', () => {
     expect(Object.keys(componentRegistry.components).sort()).toEqual([
       'ApprovalActionCard',
       'CalendarApprovalCard',
+      'ComputerUseApprovalCard',
       'CustomAgentApprovalCard',
       'CustomAgentCallCard',
       'DraftComposeCard',
@@ -199,6 +201,12 @@ describe('componentRegistry — resolution', () => {
     const flag = componentRegistry.resolve('email_flag')
     expect(componentRegistry.resolve('email_archive')).toBe(flag)
     expect(componentRegistry.resolve('email_pin')).toBe(flag)
+  })
+
+  test('computer_use_run resolves to ComputerUseApprovalCard (not buttonless ToolTraceCard)', () => {
+    const card = componentRegistry.resolve('computer_use_run')
+    expect(card).toBeTypeOf('function')
+    expect(card).not.toBe(ToolTraceCard)
   })
 })
 

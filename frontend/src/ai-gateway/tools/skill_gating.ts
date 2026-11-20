@@ -229,7 +229,13 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'group_history',
   'group_members',
   'group_post',
-  'group_create'
+  'group_create',
+  // Lazy tool schema discovery meta-tool (WS-2 Plane 1): CORE_UNGATED because skill toggles must
+  // never drop tool_search itself; it only indexes admitted deferred tools.
+  'tool_search',
+  // Computer Use operator sub-agent (WS-4): CORE_UNGATED because its access control is exec-class
+  // venue isolation + approval guard, not a user Settings skill toggle.
+  'computer_use_run'
 ])
 
 /** 删掉「归属 skill ∉ advertisedSkills 且无任一 advertised skill 仍拥有它 且非 collision-exempt」的

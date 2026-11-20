@@ -50,11 +50,13 @@ from .models import (
     MATTER_UPDATE_REVIEW_STATUSES,
     MatterActorKind,
     MatterItemDispatchState,
+    MatterItemExecProfile,
     MatterItemKind,
     MatterResourceSummarySource,
     MatterSuggestionBulkAction,
     MatterSuggestionBulkSkipReason,
     format_public_id,
+    normalize_computer_use_draft,
     normalize_goal_checks,
     normalize_progress_refs,
     normalize_tags,
@@ -1661,6 +1663,7 @@ class MatterService:
         *,
         executor_id: str | None = None,
         profile: str | None = None,
+        computer_use_draft: Mapping[str, Any] | None = None,
         expected_version: int | None = None,
         idempotency_key: str,
         source: str,
@@ -1677,6 +1680,18 @@ class MatterService:
         resolved_profile = (
             self._require_exec_profile(profile) if profile is not None else None
         )
+        normalized_draft: dict[str, list[str]] | None = None
+        if computer_use_draft is not None:
+            # 仅人类 owner（Matters 域 Actor.kind == "user"）可显式开启 Computer Use 草稿态授权。
+            if actor.kind != MatterActorKind.USER.value:
+                raise MatterError(
+                    "E_AUTH_FAILED",
+                    "computer_use_draft requires a user-initiated dispatch",
+                )
+            try:
+                normalized_draft = normalize_computer_use_draft(computer_use_draft)
+            except ValueError as exc:
+                raise MatterError("E_INVALID_ARG", str(exc)) from exc
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
         with self._transaction() as conn:
@@ -1700,6 +1715,15 @@ class MatterService:
                 frozen_profile = self._require_exec_profile(item.get("exec_profile"))
             else:
                 frozen_profile = str(MATTER_ITEM_DISPATCH_DEFAULT_PROFILE)
+            if (
+                normalized_draft is not None
+                and frozen_profile != MatterItemExecProfile.PROPOSE_ONLY.value
+            ):
+                raise MatterError(
+                    "E_INVALID_STATE",
+                    f"computer_use_draft is only permitted with propose_only exec_profile (got {frozen_profile!r})",
+                    hint="Set exec_profile='propose_only' before staging a computer-use draft.",
+                )
             self._cas_update_rebase(
                 conn,
                 matter,
@@ -1728,6 +1752,15 @@ class MatterService:
                     "updated_at": now,
                 },
             )
+            event_payload: dict[str, Any] = {
+                "dispatch_id": dispatch_id,
+                "title": truncated_text(item.get("title")),
+                "executor_id": executor,
+                "exec_profile": frozen_profile,
+                "attempt": 1,
+            }
+            if normalized_draft is not None:
+                event_payload["computer_use_draft"] = normalized_draft
             event_id = self._append_event(
                 conn,
                 matter_id=matter["id"],
@@ -1737,13 +1770,7 @@ class MatterService:
                 dedupe_key=dedupe_key,
                 reason=reason,
                 item_id=item_id,
-                payload={
-                    "dispatch_id": dispatch_id,
-                    "title": truncated_text(item.get("title")),
-                    "executor_id": executor,
-                    "exec_profile": frozen_profile,
-                    "attempt": 1,
-                },
+                payload=event_payload,
                 happened_at=now,
                 reverses_event_id=reverses_event_id,
             )
@@ -1756,7 +1783,13 @@ class MatterService:
             )
         # 🔴 事务外 enqueue（async_jobs 用独立连接写同一个 db 文件；放事务内会等
         # BEGIN IMMEDIATE 的写锁到超时）。失败 → 派发直接收敛 failed，不留悬挂 queued。
-        self._enqueue_dispatch_job(public_id, matter["id"], result["dispatch"], attempt=1)
+        self._enqueue_dispatch_job(
+            public_id,
+            matter["id"],
+            result["dispatch"],
+            attempt=1,
+            computer_use_draft=normalized_draft,
+        )
         result["dispatch"] = self._reload_dispatch(dispatch_id)
         self._publish_dispatch_changed(public_id, dispatch_id, item_id)
         return result
@@ -1792,6 +1825,19 @@ class MatterService:
                 return replay
             matter = self._require_matter(conn, public_id)
             dispatch = self._require_dispatch(conn, matter, dispatch_id)
+            prior_job_id = dispatch.get("async_job_id")
+            prior_computer_use_draft = self._extract_dispatch_computer_use_draft(
+                conn, int(matter["id"]), dispatch
+            )
+            if prior_computer_use_draft is not None:
+                if actor.kind != MatterActorKind.USER.value:
+                    raise MatterError(
+                        "E_AUTH_FAILED",
+                        "computer_use_draft requires a user-initiated dispatch",
+                    )
+                prior_computer_use_draft = self._validate_resumed_computer_use_draft(
+                    dispatch, prior_computer_use_draft
+                )
             answers = list(dispatch.get("answers") or [])
             question = dispatch.get("question") or {}
             answers.append(
@@ -1849,8 +1895,20 @@ class MatterService:
             result = self._mutation(
                 after, [event_id], dispatch=self.repository.get_dispatch(conn, dispatch_id)
             )
+        if prior_computer_use_draft is None and isinstance(prior_job_id, int) and not isinstance(prior_job_id, bool):
+            prior_job = self._jobs().get(prior_job_id)
+            if prior_job and isinstance(prior_job.params, Mapping):
+                raw_draft = prior_job.params.get("computer_use_draft")
+                if raw_draft is not None:
+                    prior_computer_use_draft = self._validate_resumed_computer_use_draft(
+                        dispatch, raw_draft
+                    )
         self._enqueue_dispatch_job(
-            public_id, matter["id"], result["dispatch"], attempt=attempt
+            public_id,
+            matter["id"],
+            result["dispatch"],
+            attempt=attempt,
+            computer_use_draft=prior_computer_use_draft,
         )
         result["dispatch"] = self._reload_dispatch(dispatch_id)
         self._publish_dispatch_changed(public_id, dispatch_id, int(dispatch["item_id"]))
@@ -2318,6 +2376,66 @@ class MatterService:
             self.job_repo = AsyncJobRepository(str(self.repository.db_path))
         return self.job_repo
 
+    @staticmethod
+    def _validate_resumed_computer_use_draft(
+        dispatch: Mapping[str, Any], raw_draft: Any
+    ) -> dict[str, list[str]]:
+        if (
+            str(dispatch.get("exec_profile") or "")
+            != MatterItemExecProfile.PROPOSE_ONLY.value
+        ):
+            raise MatterError(
+                "E_INVALID_STATE",
+                "computer_use_draft is only permitted with propose_only exec_profile",
+            )
+        try:
+            return normalize_computer_use_draft(raw_draft)
+        except ValueError as exc:
+            raise MatterError("E_INVALID_ARG", str(exc)) from exc
+
+    @staticmethod
+    def _extract_dispatch_computer_use_draft(
+        conn: sqlite3.Connection, matter_id: int, dispatch: Mapping[str, Any]
+    ) -> Any:
+        prior_job_id = dispatch.get("async_job_id")
+        if isinstance(prior_job_id, int) and not isinstance(prior_job_id, bool):
+            try:
+                job_row = conn.execute(
+                    "SELECT params_json FROM async_jobs WHERE id = ?",
+                    (prior_job_id,),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                job_row = None
+            if job_row is not None and job_row[0]:
+                try:
+                    params = json.loads(job_row[0])
+                except (TypeError, json.JSONDecodeError):
+                    params = None
+                if isinstance(params, Mapping) and "computer_use_draft" in params:
+                    return params.get("computer_use_draft")
+
+        event_rows = conn.execute(
+            "SELECT payload_json FROM matter_event "
+            "WHERE matter_id = ? AND kind = ? AND item_id = ? "
+            "ORDER BY id DESC LIMIT 20",
+            (matter_id, ITEM_DISPATCHED, int(dispatch["item_id"])),
+        ).fetchall()
+        dispatch_id = int(dispatch["id"])
+        for row in event_rows:
+            if not row[0]:
+                continue
+            try:
+                payload = json.loads(row[0])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if (
+                isinstance(payload, Mapping)
+                and payload.get("dispatch_id") == dispatch_id
+                and "computer_use_draft" in payload
+            ):
+                return payload.get("computer_use_draft")
+        return None
+
     def _enqueue_dispatch_job(
         self,
         public_id: str,
@@ -2325,19 +2443,23 @@ class MatterService:
         dispatch: Mapping[str, Any],
         *,
         attempt: int,
+        computer_use_draft: Mapping[str, Any] | None = None,
     ) -> None:
         dispatch_id = int(dispatch["id"])
+        job_params: dict[str, Any] = {
+            "matter_id": int(matter_id),
+            "item_id": int(dispatch["item_id"]),
+            "dispatch_id": dispatch_id,
+            "attempt": int(attempt),
+        }
+        if computer_use_draft is not None:
+            job_params["computer_use_draft"] = dict(computer_use_draft)
         try:
             job_id, _ = self._jobs().enqueue(
                 job_type=MATTER_ITEM_RUN_JOB_TYPE,
                 target_kind="matter_item",
                 target_key=f"{public_id}:{dispatch['item_id']}",
-                params={
-                    "matter_id": int(matter_id),
-                    "item_id": int(dispatch["item_id"]),
-                    "dispatch_id": dispatch_id,
-                    "attempt": int(attempt),
-                },
+                params=job_params,
                 # 每一轮各一个键：回答之后那一轮是**新的一次执行**，与上一轮去重会让
                 # 「回答了但没再跑」变成默认行为。
                 idempotency_key=f"item_dispatch:{dispatch_id}:attempt:{attempt}",

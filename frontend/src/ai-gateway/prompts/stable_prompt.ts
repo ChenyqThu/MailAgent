@@ -109,8 +109,10 @@ function buildConnectorCatalogBlock(entries: ConnectorCatalogEntry[]): string {
   return [
     '# External connectors (MCP) — direct tools registered right now',
     '# Read silently. Each connector below contributes tools named mcp__<connector>__<tool> that are',
-    '# registered and callable THIS run — use them directly like any other tool. Read tools run',
-    "# without approval; write tools follow the approval rule stated in each tool's own description.",
+    '# registered and callable THIS run — use them directly like any other tool. When many MCP',
+    '# tools are configured, long-tail mcp__* schemas are deferred at turn start; call tool_search',
+    '# with query or connector_id to activate them before calling. Read tools run without',
+    "# approval; write tools follow the approval rule stated in each tool's own description.",
     '# 🔴 These DIRECT MCP connector tools are a different system from the `notion_agent` skill',
     '# (which delegates to an external CLI): for Notion workspace operations prefer the direct',
     '# mcp__* tools when a Notion connector is listed below.',
@@ -160,6 +162,37 @@ export interface ChatModelConfig {
    *  from serve-api /chat/config. Non-null → layered `PRODUCT_SAFETY_FLOOR + standingContext`;
    *  null / "" → SOUL_MARKDOWN fallback (flag off or store unavailable), byte-identical. */
   standingContext: string | null
+  /** Wave 5 (WS-5) — true ONLY when `computer_use_run` is actually registered on the run's
+   *  ToolSet (manual_chat or explicit propose_only matter_item_run). Injects the deterministic
+   *  Tier 1 > Tier 2 > Tier 3 routing discipline inside the cacheable prefix; absent/false →
+   *  byte-identical prompt for every non-CU run & existing prompt snapshots. */
+  computerUseAvailable?: boolean
+}
+
+/** Wave 5 (WS-5) — deterministic 3-tier tool selection routing discipline. Injected ONLY when
+ *  `computer_use_run` is available on the run so the model strictly prefers structured APIs
+ *  before reaching for browser/desktop GUI clicks. */
+export const TOOL_ROUTING_DISCIPLINE = [
+  '# Tool Selection Priority Routing (Tier 1 > Tier 2 > Tier 3)',
+  'Follow this strict priority order whenever choosing tools:',
+  '1. Tier 1 — MailAgent Native Tools (ALWAYS FIRST): For email, calendar, contacts, matters,',
+  '   local library files, or KOS knowledge, use MailAgent native tools (`email_*`, `calendar_*`,',
+  '   `matter_*`, `contact_*`, `library_*`, `kos_*`). Never automate a mail/calendar GUI.',
+  '2. Tier 2 — Direct Structured MCP Connectors (`tool_search` + `mcp__*`): When an external',
+  '   service is available via MCP (`# External connectors` or `tool_search` — e.g. Notion,',
+  '   Jira, GitHub, Slack, Feishu, Linear), search and call those structured `mcp__*` APIs',
+  '   directly instead of clicking through a UI. For example, creating/updating Notion pages or',
+  '   databases must use `mcp__notion__*` when available, never `computer_use_run`.',
+  '3. Tier 3 — `computer_use_run` (BOUNDED GUI FALLBACK ONLY): Use `computer_use_run` ONLY when',
+  '   no Tier 1 or Tier 2 structured API exists for the action — such as Microsoft Teams desktop',
+  '   chat/drafting without a Teams MCP connector, Notion Desktop UI-only layout/block work, or',
+  '   intranet OA/ERP/expense portals behind Chrome SSO/VPN. Always provide concrete',
+  '   `allowed_apps` / `allowed_domains` (never `*`) and set `stop_before_submit: true` so',
+  '   terminal commit actions pause for confirmation.'
+].join('\n')
+
+export function buildComputerUseRoutingBlock(): string {
+  return TOOL_ROUTING_DISCIPLINE
 }
 
 /** The legacy per-email context shape — only `senderAddr` participates here (the L1
@@ -295,6 +328,9 @@ export function buildStableSystemPrompt(
   // "honestly" denies having them (dogfood root cause ①). Absent / empty → skip, byte-identical.
   if (cfg.connectorCatalog && cfg.connectorCatalog.length > 0) {
     text += '\n\n' + buildConnectorCatalogBlock(cfg.connectorCatalog)
+  }
+  if (cfg.computerUseAvailable === true) {
+    text += '\n\n' + buildComputerUseRoutingBlock()
   }
   // KOS 可用（启用 AND 对接，= kosConfigured）时注入使用指南（静态、可缓存）。🔴 这个 gate
   // 只管**指南**：6 个 KOS 只读工具在 buildGatewayTools() 里恒注册、不受此 flag 影响（未对接

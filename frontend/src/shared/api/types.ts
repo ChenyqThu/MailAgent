@@ -124,6 +124,11 @@ export type {
 export type {
   SecretSlot,
   SecretsStatus,
+  MacNotificationAuthState,
+  NotificationChannelMode,
+  NotificationChannelPrefs,
+  NotificationPermissionResult,
+  NotificationSystemStatus,
   PersistentSettings,
   PingResult,
   SettingsApi,
@@ -148,6 +153,7 @@ export type {
 } from './types/settings'
 export type {
   AgentRunMatchedRule,
+  AgentRunComputerUsePolicy,
   AgentRunSpec,
   HeadlessAgentResult,
   ChatBackendKind,
@@ -189,6 +195,7 @@ export type {
   ConnectorStatusValue,
   ConnectorCrudType,
   ConnectorToolMode,
+  ConnectorTransport,
   ConnectorSource,
   ConnectorTrack,
   ConnectorCatalogEntry,
@@ -207,6 +214,18 @@ export type {
   ConnectorSetPreprocessResult,
   ConnectorDisconnectResult,
   ConnectorPurgeOrphansResult,
+  CustomConnectorStdioCommand,
+  CustomConnectorCreateInput,
+  CustomConnectorUpdateInput,
+  CustomConnectorDeleteResult,
+  ManagedBrowserMode,
+  ManagedRuntimeOptionsInput,
+  ConnectorInstallStatus,
+  ConnectorRuntimeOptionsResult,
+  SystemPermissionKind,
+  SystemPermissionState,
+  SystemPermissionsStatus,
+  OpenSystemPermissionResult,
   ConnectorApi
 } from './types/connector'
 export type {
@@ -214,6 +233,10 @@ export type {
   McpUiKeyPreset,
   McpKeyBase,
   McpScopeRisk,
+  McpClientTarget,
+  McpClientMode,
+  McpWriteScopeOption,
+  McpAvailableToolOption,
   McpScopeOptions,
   McpServiceStatus,
   McpApiKey,
@@ -223,6 +246,10 @@ export type {
   McpAuditEntry,
   McpProbeResultValue,
   McpProbeResult,
+  McpCreateKeyPolicyInput,
+  McpUpdateKeyPolicyInput,
+  McpWriteClientConfigInput,
+  McpWriteClientConfigResult,
   McpServiceApi
 } from './types/mcpService'
 export type {
@@ -232,15 +259,6 @@ export type {
   DavMailApi
 } from './types/davmail'
 export type { SearchAgentPhase, SearchAgentInput, SearchAgentResult } from './types/search-agent'
-export type {
-  IslandConnectionState,
-  IslandStatus,
-  IslandAppearancePayload,
-  IslandAIDraftStartPayload,
-  IslandAIDraftStreamPayload,
-  IslandAIDraftReadyPayload,
-  IslandApi
-} from './types/island'
 export type { UpdaterState, UpdaterStatus, UpdaterApi } from './types/updater'
 export type {
   SseEventType,

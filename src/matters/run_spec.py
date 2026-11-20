@@ -66,7 +66,12 @@ from loguru import logger
 from src.agents.fence import fence_untrusted
 
 from .agent_defaults import load_agent_defaults
-from .models import MATTER_ITEM_BUILTIN_EXECUTOR
+from .models import (
+    COMPUTER_USE_CONNECTOR_IDS,
+    MATTER_ITEM_BUILTIN_EXECUTOR,
+    MatterItemExecProfile,
+    normalize_computer_use_draft,
+)
 from .repository import MatterRepository
 from .resource_proposal import connected_connector_ids
 from .run_service import MatterRunService, watermark_diff
@@ -255,7 +260,11 @@ def _connector_read_grants(settings: Any) -> dict[str, str]:
     单源：提案的 provider 白名单问的是同一个问题（这个 run 结构上有没有可能看见这个来源），
     两处各写一遍就会在「connector 掉线」这类边角上悄悄漂开。
     """
-    return {cid: "read" for cid in connected_connector_ids(settings)}
+    return {
+        cid: "read"
+        for cid in connected_connector_ids(settings)
+        if cid not in COMPUTER_USE_CONNECTOR_IDS
+    }
 
 
 def _parse_fallback_models(raw: Any) -> Optional[list[str]]:
@@ -540,6 +549,36 @@ def assemble_item_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
         dispatch = repository.get_dispatch(conn, dispatch_id, matter_id=matter_id)
         if dispatch is None or int(dispatch["item_id"]) != item_id:
             raise MatterError("E_SPEC_AGENT_INVALID", f"dispatch {dispatch_id} missing")
+
+    raw_computer_use_draft = params.get("computer_use_draft")
+    computer_use_policy: dict[str, Any] | None = None
+    if raw_computer_use_draft is not None:
+        if (
+            str(dispatch.get("exec_profile") or "")
+            != MatterItemExecProfile.PROPOSE_ONLY.value
+        ):
+            raise MatterError(
+                "E_SPEC_AGENT_INVALID",
+                f"dispatch {dispatch_id} refuses computer_use_draft under exec_profile={dispatch.get('exec_profile')!r}",
+            )
+        dispatch_job_id = dispatch.get("async_job_id")
+        if dispatch_job_id is None or int(dispatch_job_id) != int(job.job_id):
+            raise MatterError(
+                "E_SPEC_AGENT_INVALID",
+                f"dispatch {dispatch_id} async_job_id mismatch for computer_use_draft",
+            )
+        try:
+            normalized_draft = normalize_computer_use_draft(raw_computer_use_draft)
+        except ValueError as exc:
+            raise MatterError("E_SPEC_AGENT_INVALID", str(exc)) from exc
+        computer_use_policy = {
+            "enabled": True,
+            "mode": MatterItemExecProfile.PROPOSE_ONLY.value,
+            "stopBeforeSubmit": True,
+            "allowedApps": list(normalized_draft["allowed_apps"]),
+            "allowedDomains": list(normalized_draft["allowed_domains"]),
+            "connectors": list(normalized_draft["connectors"]),
+        }
     public_id = str(matter["public_id"])
     # 执行器是 custom agent 时**只取它的 model / fallback 段**（工具面、grant、budget 一个键
     # 都不继承）：执行契约挂在行动项上，不挂 agent —— 同一个 agent 在别处能干什么，与它在这
@@ -566,6 +605,18 @@ def assemble_item_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
         persona_parts.append(instructions)
     if persona_parts:
         sections.append("【补充指引】\n" + PERSONA_PREFIX + "\n" + "\n\n".join(persona_parts))
+    if computer_use_policy is not None:
+        apps_text = ", ".join(computer_use_policy["allowedApps"]) or "(none)"
+        domains_text = ", ".join(computer_use_policy["allowedDomains"]) or "(none)"
+        connectors_text = ", ".join(computer_use_policy["connectors"])
+        sections.append(
+            "## Computer Use Draft Mode (propose_only)\n"
+            f"- Authorized connectors: {connectors_text}\n"
+            f"- Allowed apps: {apps_text}\n"
+            f"- Allowed domains: {domains_text}\n"
+            "- Hard boundary (stop_before_submit=True): Use authorized browser/desktop actions ONLY to gather context or stage a draft.\n"
+            "- NEVER perform irreversible submission (send, submit, pay, purchase, delete, approve, or publish). Once the draft is ready or staged, stop and call matter_item_report(summary, changes)."
+        )
     task_prompt = "\n\n".join(section for section in sections if section)
 
     # 模型链：执行器 profile → 全局跟进 Agent 默认 → gateway 全局默认。
@@ -623,6 +674,8 @@ def assemble_item_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
         spec["fallbackModels"] = fallback
     elif "fallback_models" in defaults:
         spec["fallbackModels"] = list(defaults["fallback_models"])
+    if computer_use_policy is not None:
+        spec["computerUsePolicy"] = computer_use_policy
     return spec
 
 

@@ -480,3 +480,50 @@ def test_matter_venue_admits_artifact_by_name_including_item_report():
         "matter venue 的 artifact 名单变了：期望恰为两条交付通道（跟进提案 + 行动项交付）"
         "—— 多一个成员就是多一条无人值守的写通道"
     )
+
+
+def test_item_read_face_and_policy_guard_computer_use_strictly():
+    """WS-5 Belt 1/2 跨语言结构 pin：
+    1) agentRun.ts::itemReadFace 仅在 isMatterItemComputerUseEnabled(ctx.modeGrants) 下放行 computer_use_run；
+       matterReadFace / contactReadFace 绝不放行 computer_use_run；
+    2) policy.ts::isToolClassAllowedInMode 对 matter_followup + exec 仍恒返 False。
+    """
+    agent_src = _read(_AGENT_RUN_TS)
+    matter_block = re.search(
+        r"if \(matterReadFace\)\s*\{(?P<body>.*?)^\s*continue\s*\}",
+        agent_src,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert matter_block and "computer_use_run" not in matter_block.group("body")
+
+    item_block = re.search(
+        r"if \(itemReadFace\)\s*\{(?P<body>.*?)^\s*continue\s*\}",
+        agent_src,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert item_block, "agentRun.ts itemReadFace 分支抽取失败"
+    item_body = item_block.group("body")
+    assert "name === 'computer_use_run'" in item_body
+    assert "isMatterItemComputerUseEnabled(ctx.modeGrants)" in item_body
+    for forbidden in ("run_command", "file_write", "file_read"):
+        assert forbidden not in item_body
+
+    contact_block = re.search(
+        r"if \(contactReadFace\)\s*\{(?P<body>.*?)^\s*continue\s*\}",
+        agent_src,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert contact_block and "computer_use_run" not in contact_block.group("body")
+
+    policy_src = _read(_POLICY_TS)
+    exec_fn = re.search(
+        r"export function isToolClassAllowedInMode\b.*?\n}", policy_src, re.DOTALL
+    )
+    assert exec_fn, "isToolClassAllowedInMode 抽取失败"
+    mf_branch = re.search(
+        rf"if\s*\(\s*mode\s*===\s*'{MATTER_FOLLOWUP_MODE}'\s*\)\s*\{{(?P<block>.*?)\n  \}}",
+        exec_fn.group(0),
+        re.DOTALL,
+    )
+    assert mf_branch and "computer_use_run" not in mf_branch.group("block")
+    assert re.search(r"return false\s*$", mf_branch.group("block").strip())

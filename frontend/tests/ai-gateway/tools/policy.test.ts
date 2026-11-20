@@ -21,6 +21,8 @@ import {
   applyContextModePolicy,
   classOfTool,
   CONTACT_PROPOSE_TOOLS,
+  isMatterItemComputerUseEnabled,
+  isToolAllowedInContext,
   isToolClassAllowedInMode,
   MATTER_RUN_PROPOSE_TOOL,
   mayAutoApprove,
@@ -93,6 +95,8 @@ function buildAllTools(contextMode?: AgentContextMode) {
     // L4 群聊 g2 — 群工具面四件（labs labs_group_agents）。isGroupSession:false = 主 agent 单聊
     // 那条装配路径（群 run 内的成员 / 法官工厂不经 buildGatewayTools）。
     groupTools: { enabled: true, isGroupSession: false, hooks: fakeGroupHooks(), sessionId: 1 },
+    toolSearchEnabled: true,
+    computerUse: {},
     // Matters MVP P3 (D6) + P4 (D8) — eleven default matter tools, classified
     // read (2) + domain_write (9). The gateway class layer admits them in every venue incl.
     // headless — the real headless gate is the HEADLESS_TOOL_OPTIONS checkbox face (matter is
@@ -1134,5 +1138,77 @@ describe('drift guards — classification completeness + eval catalog mirror', (
       expect(catalog.tools[name], `${name} missing from tool_catalog.json`).toBeDefined()
       expect(catalog.tools[name].tool_class, `tool_class drift for ${name}`).toBe(cls)
     }
+  })
+})
+
+describe('WS-5 Belt 2 — isToolAllowedInContext preserves exec lock in isToolClassAllowedInMode while admitting bounded propose_only computer_use_run', () => {
+  test('isToolClassAllowedInMode stays strictly false for exec in matter_followup even with grants', () => {
+    const grants: AgentModeGrants = {
+      exec: true,
+      matterItemComputerUse: {
+        enabled: true,
+        mode: 'propose_only',
+        stopBeforeSubmit: true,
+        allowedApps: [],
+        allowedDomains: ['oa.company.test'],
+        connectors: ['browser_use'],
+        jobId: 101,
+        dispatchId: 55
+      }
+    }
+    expect(isToolClassAllowedInMode('exec', 'matter_followup', grants)).toBe(false)
+    expect(isMatterItemComputerUseEnabled(grants)).toBe(true)
+    // run_command stays forbidden; ONLY computer_use_run is admitted.
+    expect(isToolAllowedInContext('run_command', 'exec', 'matter_followup', grants)).toBe(false)
+    expect(isToolAllowedInContext('computer_use_run', 'exec', 'matter_followup', grants)).toBe(true)
+  })
+
+  test('fails closed when stopBeforeSubmit !== true, mode !== propose_only, dispatchId <= 0, or scope empty', () => {
+    const valid = {
+      enabled: true as const,
+      mode: 'propose_only' as const,
+      stopBeforeSubmit: true as const,
+      allowedApps: ['Microsoft Teams'],
+      allowedDomains: [],
+      connectors: ['desktop_use' as const],
+      dispatchId: 12
+    }
+    expect(isToolAllowedInContext('computer_use_run', 'exec', 'matter_followup', { matterItemComputerUse: valid })).toBe(true)
+    expect(
+      isToolAllowedInContext('computer_use_run', 'exec', 'matter_followup', {
+        matterItemComputerUse: { ...valid, stopBeforeSubmit: false as never }
+      })
+    ).toBe(false)
+    expect(
+      isToolAllowedInContext('computer_use_run', 'exec', 'matter_followup', {
+        matterItemComputerUse: { ...valid, mode: 'autonomous' as never }
+      })
+    ).toBe(false)
+    expect(
+      isToolAllowedInContext('computer_use_run', 'exec', 'matter_followup', {
+        matterItemComputerUse: { ...valid, allowedApps: [], allowedDomains: [] }
+      })
+    ).toBe(false)
+    expect(
+      isToolAllowedInContext('computer_use_run', 'exec', 'matter_followup', {
+        matterItemComputerUse: { ...valid, dispatchId: 0 }
+      })
+    ).toBe(false)
+    // Never admitted in cron_headless/untrusted_trigger without exec grant, and never in im_chat.
+    expect(
+      isToolAllowedInContext('computer_use_run', 'exec', 'cron_headless', {
+        matterItemComputerUse: valid
+      })
+    ).toBe(false)
+    expect(
+      isToolAllowedInContext('computer_use_run', 'exec', 'untrusted_trigger', {
+        matterItemComputerUse: valid
+      })
+    ).toBe(false)
+    expect(
+      isToolAllowedInContext('computer_use_run', 'exec', 'im_chat', {
+        matterItemComputerUse: valid
+      })
+    ).toBe(false)
   })
 })

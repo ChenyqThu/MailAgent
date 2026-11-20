@@ -32,8 +32,11 @@ gateway 注册期过滤（grant 外根本不注册）是第一道，但那道在
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import sqlite3
 import time
-from typing import Any, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from loguru import logger
 
@@ -179,6 +182,44 @@ def connector_grants_for_agent(agent_id: str) -> dict[str, str]:
     return dict(policy.grant_connectors)
 
 
+def connector_tool_allowlist_for_agent(agent_id: str) -> dict[str, tuple[str, ...]]:
+    """agent 行 → ``{connector_id: (tool_name, ...)}``（per-tool 白名单收窄）。
+
+    缺某 connector_id 键 = 不做工具级二次收窄（沿用 crud 天花板）；存在键（含 ``()``）=
+    仅允许该清单内工具（``()`` 表示该 connector 对此 agent 结构上无可用工具）。
+    """
+    from src.agents.trigger import parse_tool_policy
+
+    row = _load_agent_row(agent_id)
+    if row is None:
+        return {}
+    try:
+        policy = parse_tool_policy(row.get("tool_policy_json"))
+    except ValueError:
+        return {}
+    return dict(policy.grant_connector_tools)
+
+
+def resolve_caller_allowed_tools(
+    caller: Optional[Mapping[str, Any]], connector_id: str
+) -> Optional[frozenset[str]]:
+    """headless agent 调用时解析 ``grant_connector_tools[connector_id]``（``None`` = 未收窄）。
+
+    owner-present（``manual_chat`` / ``im_chat``）、``matter_followup`` 与缺 caller 返回 ``None``。
+    """
+    if caller is None or not isinstance(caller, Mapping):
+        return None
+    if caller.get("context_mode") not in HEADLESS_CONTEXT_MODES:
+        return None
+    agent_id = caller.get("agent_id")
+    if not agent_id or not isinstance(agent_id, str):
+        return None
+    allow_map = connector_tool_allowlist_for_agent(agent_id)
+    if connector_id not in allow_map:
+        return None
+    return frozenset(allow_map[connector_id])
+
+
 def resolve_caller_ceiling(
     caller: Optional[Mapping[str, Any]], connector_id: str
 ) -> Optional[str]:
@@ -221,6 +262,20 @@ def resolve_caller_ceiling(
     if mode == "matter_followup":
         # 0812 —— venue 级定值，先于 agent-grant 分支：不查 report_agent、不认 spec 的
         # 天花板声称，read 就是这个场地的结构上限（write/update 类工具 ceiling_allows 必拒）。
+        # WS-5 Belt 3 —— 唯一窄例外：active running propose_only 行动项的 computer_use_run
+        # 子代理，经 DB 核验 active dispatch + async_job + computer_use_draft 后放行到 'write'
+        # 仅限 browser_use / desktop_use（仍保留 deny_destructive=True）。
+        if _caller_claims_matter_computer_use(caller):
+            if is_matter_computer_use_child_authorized(caller, connector_id):
+                return "write"
+            raise ConnectorInvokeDenied(
+                "E_CONNECTOR_GRANT_DENIED",
+                (
+                    f"matter_followup computer_use_run child invoke rejected for connector "
+                    f"{connector_id!r} (requires active propose_only dispatch/job grant)"
+                ),
+                http_status=403,
+            )
         return "read"
     if mode not in HEADLESS_CONTEXT_MODES:
         # 当前值域下不可达（四个 mode 已被上面两张白名单划尽），保留作将来第五种 mode 的
@@ -249,6 +304,110 @@ def resolve_caller_ceiling(
     return ceiling
 
 
+_MATTER_COMPUTER_USE_CONNECTORS: tuple[str, ...] = ("browser_use", "desktop_use")
+
+
+def _is_strict_pos_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _caller_claims_matter_computer_use(caller: Mapping[str, Any]) -> bool:
+    return any(caller.get(k) is not None for k in ("child_tool", "job_id", "dispatch_id"))
+
+
+def _load_matter_dispatch_job(dispatch_id: int, job_id: int) -> Optional[dict[str, Any]]:
+    """从 ``sync_store_db_path`` 直查行动项派发与后台 job 关联行（Belt 3 DB 校验接缝）。"""
+    conn: Optional[sqlite3.Connection] = None
+    try:
+        from src.config import config as settings
+
+        db_path = getattr(settings, "sync_store_db_path", "") or ""
+        if not db_path or not os.path.isfile(db_path):
+            return None
+        conn = sqlite3.connect(db_path, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT d.id, d.state, d.exec_profile, d.async_job_id, "
+            "       j.job_id, j.status, j.params_json "
+            "FROM matter_item_dispatch d "
+            "JOIN async_jobs j ON d.async_job_id = j.job_id "
+            "WHERE d.id = ? AND j.job_id = ?",
+            (dispatch_id, job_id),
+        ).fetchone()
+        return dict(row) if row is not None else None
+    except Exception as exc:  # noqa: BLE001 — fail-closed
+        logger.warning(
+            "[connector] matter dispatch/job lookup failed dispatch_id={} job_id={}: {}",
+            dispatch_id,
+            job_id,
+            exc,
+        )
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _computer_use_draft_allows_connector(params_json: Any, connector_id: str) -> bool:
+    if isinstance(params_json, str):
+        try:
+            params = json.loads(params_json) if params_json.strip() else {}
+        except (ValueError, TypeError):
+            return False
+    elif isinstance(params_json, Mapping):
+        params = dict(params_json)
+    else:
+        return False
+    if not isinstance(params, Mapping):
+        return False
+
+    draft = params.get("computer_use_draft")
+    if not isinstance(draft, Mapping):
+        return False
+    from src.matters.models import normalize_computer_use_draft
+
+    try:
+        normalized = normalize_computer_use_draft(draft)
+    except ValueError:
+        return False
+    return connector_id in normalized["connectors"]
+
+
+def is_matter_computer_use_child_authorized(
+    caller: Optional[Mapping[str, Any]], connector_id: str
+) -> bool:
+    """Belt 3：DB 实证核验 ``matter_followup`` 下 ``computer_use_run`` 子调用是否被授权写面。"""
+    if connector_id not in _MATTER_COMPUTER_USE_CONNECTORS:
+        return False
+    if not isinstance(caller, Mapping):
+        return False
+    if caller.get("context_mode") != "matter_followup":
+        return False
+    if caller.get("child_tool") != "computer_use_run":
+        return False
+    job_id = caller.get("job_id")
+    dispatch_id = caller.get("dispatch_id")
+    if not (_is_strict_pos_int(job_id) and _is_strict_pos_int(dispatch_id)):
+        return False
+
+    row = _load_matter_dispatch_job(dispatch_id, job_id)
+    if row is None:
+        return False
+    if (
+        row.get("job_id") != job_id
+        or row.get("async_job_id") != job_id
+        or row.get("status") != "running"
+        or row.get("id") != dispatch_id
+        or row.get("state") != "running"
+        or row.get("exec_profile") != "propose_only"
+    ):
+        return False
+    return _computer_use_draft_allows_connector(row.get("params_json"), connector_id)
+
+
 def is_matter_followup_caller(caller: Optional[Mapping[str, Any]]) -> bool:
     """这个 ``caller`` 信封是不是 matter_followup 场地的调用（0813 批 P）。
 
@@ -272,12 +431,14 @@ async def invoke_connector_tool(
     ceiling: Optional[str] = None,
     deny_ask_mode: bool = False,
     deny_destructive: bool = False,
+    allowed_tools: Optional[Iterable[str]] = None,
 ) -> dict[str, Any]:
     """闸序 + 远端调用（HTTP invoke 端点与 Python LLM 工厂的**共用**执行路径）。
 
-    返回 ``{content, is_error, truncated, elapsed_ms}``；``content`` 已在
-    ``ConnectorClient.call_tool`` 截断（``CALL_RESULT_MAX_CHARS``），围栏由各调用面自己套
-    （TS gateway 走 contextSerializer，Python 走 ``llm_tools`` 的 ``fence_untrusted``）。
+    返回 ``{content, images, is_error, truncated, elapsed_ms}``；``content`` 已在
+    ``ConnectorClient.call_tool`` 截断（``CALL_RESULT_MAX_CHARS``），``images`` 为归一化后
+    的多模态图像列表，围栏由各调用面自己套（TS gateway 走 contextSerializer，Python 走
+    ``llm_tools`` 的 ``fence_untrusted``）。
 
     闸拒 → ``ConnectorInvokeDenied``；远端 / 传输 / 授权失效 → ``ConnectorBusy`` /
     ``ConnectorError`` 原样上抛（各调用面自行映射 HTTP 语义 or 回灌给模型）。
@@ -336,7 +497,16 @@ async def invoke_connector_tool(
             f"above the caller's granted ceiling {ceiling!r}",
             http_status=403,
         )
-    effective_mode = connector_tool_effective_mode(row.mode)
+    if allowed_tools is not None and tool_name not in allowed_tools:
+        raise ConnectorInvokeDenied(
+            "E_CONNECTOR_TOOL_NOT_GRANTED",
+            f"tool {tool_name!r} on connector {connector_id!r} is not in the agent's "
+            "grant_connector_tools allowlist",
+            http_status=403,
+        )
+    effective_mode = connector_tool_effective_mode(
+        row.mode, crud_type=row.crud_type, destructive=row.destructive
+    )
     if effective_mode == "off":
         raise ConnectorInvokeDenied(
             "E_CONNECTOR_TOOL_DISABLED",
@@ -387,6 +557,7 @@ async def invoke_connector_tool(
         raise
     return {
         "content": result["content"],
+        "images": list(result.get("images") or []),
         "is_error": result["is_error"],
         "truncated": result["truncated"],
         "elapsed_ms": int((time.monotonic() - started) * 1000),

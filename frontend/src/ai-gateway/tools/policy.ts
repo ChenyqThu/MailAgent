@@ -255,6 +255,7 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   agent_profile_read: 'read',
   agent_profile_history: 'read',
   discover_skills: 'read',
+  tool_search: 'read',
   // domain_write — reversible in-domain writes (cheap to undo); the only class auto-approve may
   // ever relax, and only in manual_chat.
   email_flag: 'domain_write',
@@ -413,7 +414,8 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // ask/error fail-closed to the card).
   run_command: 'exec',
   file_read: 'exec',
-  file_write: 'exec'
+  file_write: 'exec',
+  computer_use_run: 'exec'
 }
 
 // ---- Stage 0b (harness-expansion epic) — runtime tool-class registry for DYNAMIC tools --------
@@ -588,6 +590,17 @@ function hasConnectorWriteGrant(connectors: unknown): boolean {
  *  parseConnectorGrants yields a non-empty record — an absent key means "no connector grants",
  *  keeping every pre-PR3 grants object byte-identical) — NEVER a passthrough of a raw spec object
  *  (a future spec field must not silently flow into the matrix). */
+export interface MatterItemComputerUsePolicy {
+  enabled: true
+  mode: 'propose_only'
+  stopBeforeSubmit: true
+  allowedApps: string[]
+  allowedDomains: string[]
+  connectors: Array<'browser_use' | 'desktop_use'>
+  jobId?: number
+  dispatchId: number
+}
+
 export interface AgentModeGrants {
   exec?: boolean
   web?: WebGrant
@@ -596,6 +609,12 @@ export interface AgentModeGrants {
    *  connector_write matrix row below (coarse class gate) and (b) createConnectorTools'
    *  registration filter (the per-connector / per-tool precision). */
   connectors?: Record<string, ConnectorGrant>
+  /** Phase 5 — per-connector per-tool allowlists ({connectorId: [toolName, ...]}). */
+  connectorTools?: Record<string, string[]>
+  /** WS-5 — bounded Computer Use draft grant on a `matter_followup` item-run (`propose_only` +
+   *  `stopBeforeSubmit === true` only). Read solely by `isToolAllowedInContext` (never by
+   *  `isToolClassAllowedInMode`, keeping `exec` strictly closed for general exec tools). */
+  matterItemComputerUse?: MatterItemComputerUsePolicy
 }
 
 /** The per-agent run context threaded through a headless custom-agent run (ADR-004 §3.1/§4.4):
@@ -657,6 +676,10 @@ export interface AgentRunContext {
     itemId: number
     dispatchId: number
   }
+  /** WS-5 — validated `computer_use_run` propose-only draft policy for a `matter_item_run`.
+   *  Present ONLY when `runKind === 'matter_item_run'`, `mode === 'propose_only'`,
+   *  `stopBeforeSubmit === true`, and non-empty concrete scope entries exist. */
+  matterItemComputerUse?: MatterItemComputerUsePolicy
   /** 0812 dogfood — the owner-configured web tier of THIS follow-up run, resolved ONCE by
    *  runHeadlessAgent (owner_settings `matter_run_web_face` via the lifecycle's TTL-cached hot
    *  read) and consumed ONLY by wrapCfgForAgentRun's matter belt (matterRunAdmitsWeb). It rides
@@ -863,6 +886,44 @@ export function mayAutoApprove(toolClass: GatewayToolClass, mode: AgentContextMo
   return toolClass === 'domain_write' && mode === 'manual_chat'
 }
 
+/** WS-5 (Belt 2) — verify a server-authorized `matter_item_run` Computer Use draft policy. */
+export function isMatterItemComputerUseEnabled(
+  grants?: AgentModeGrants
+): grants is AgentModeGrants & { matterItemComputerUse: MatterItemComputerUsePolicy } {
+  const cu = grants?.matterItemComputerUse
+  return (
+    cu != null &&
+    cu.enabled === true &&
+    cu.mode === 'propose_only' &&
+    cu.stopBeforeSubmit === true &&
+    Number.isInteger(cu.dispatchId) &&
+    cu.dispatchId > 0 &&
+    (cu.allowedApps.length > 0 || cu.allowedDomains.length > 0) &&
+    cu.connectors.length > 0
+  )
+}
+
+/** WS-5 — tool-name-aware context admission consumed by BOTH `applyContextModePolicy` and
+ *  `auditedWriteTool` (`types.ts`). Keeps `isToolClassAllowedInMode('exec', 'matter_followup', ...)`
+ *  strictly `false` so `run_command`/general `exec` stay locked while admitting `computer_use_run`
+ *  exclusively when `matterItemComputerUse` is verified (`propose_only` + `stopBeforeSubmit`). */
+export function isToolAllowedInContext(
+  toolName: string,
+  toolClass: GatewayToolClass,
+  mode: AgentContextMode,
+  grants?: AgentModeGrants,
+  venue?: ImVenueSwitches
+): boolean {
+  if (
+    toolName === 'computer_use_run' &&
+    mode === 'matter_followup' &&
+    isMatterItemComputerUseEnabled(grants)
+  ) {
+    return true
+  }
+  return isToolClassAllowedInMode(toolClass, mode, grants, venue, toolName)
+}
+
 // ── 08-05 WP-11 (owner 拍板) — the acceptEdits sets + the bypass carve-out are RETIRED ─────────
 //
 // 07-16's ACCEPT_EDITS_AUTO_APPROVE_TOOLS / ACCEPT_EDITS_ASK_TOOLS / BYPASS_STILL_ASK used to
@@ -902,9 +963,9 @@ export function applyContextModePolicy(
   if (mode === 'manual_chat') return tools
   const out: ToolSet = {}
   for (const [name, t] of Object.entries(tools)) {
-    // 0812 codex修复批 — the NAME rides along so the matter_followup row can admit artifact
-    // by name (MATTER_RUN_PROPOSE_TOOL); every other mode ignores the argument.
-    if (isToolClassAllowedInMode(classOfTool(name), mode, grants, venue, name)) out[name] = t
+    // 0812 codex修复批 + WS-5 — name-aware admission (MATTER_RUN_ARTIFACT_TOOLS and bounded
+    // `computer_use_run` in `matter_followup` `propose_only`); class matrix stays pure.
+    if (isToolAllowedInContext(name, classOfTool(name), mode, grants, venue)) out[name] = t
   }
   return out
 }

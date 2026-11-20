@@ -97,7 +97,9 @@ function buildAllTools() {
     // CORE_UNGATED entry turns red.
     // S2 W0 — the drift guard reasons over the MANUAL-session universe (fail-closed default is
     // 'untrusted_trigger', which strips capability_change/outbound and would blind the guard).
-    contextMode: 'manual_chat'
+    contextMode: 'manual_chat',
+    toolSearchEnabled: true,
+    computerUse: {}
   })
   const grantedHeadless = buildGatewayTools({
     domain: mockDomain(() => okEnvelope([])),
@@ -335,6 +337,8 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
       // L4 群聊 g2 — 群工具面同样是 CORE_UNGATED，这个探针必须把它们建出来，否则下面的
       // floor sweep 会去断言四个它自己没要过的工具。
       groupTools: { enabled: true, isGroupSession: false, hooks: fakeGroupHooks(), sessionId: 1 },
+      toolSearchEnabled: true,
+      computerUse: {},
       contextMode: 'manual_chat', // manual probe isolates the mount gate from the mode floor
       agentRunContext: { agentId: 'dms', skills: [] }
     })

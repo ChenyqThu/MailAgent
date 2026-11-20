@@ -1156,11 +1156,19 @@ export interface MatterItemListOptions {
   includeDeleted?: boolean
 }
 
+/** Wave 5 — 派发 `propose_only` 行动项时可选显式附带的 computer-use 草稿作用域。 */
+export interface MatterComputerUseDraftInput {
+  allowed_apps?: string[]
+  allowed_domains?: string[]
+  connectors?: Array<'browser_use' | 'desktop_use'>
+}
+
 /** 派发一条行动项。两个字段都可缺省：执行器缺省 = 内建跟进 Agent；档缺省 = 取 item 的
  *  `exec_profile`，仍缺省 = 出厂档 `propose_only`（值域校验在服务端单判）。 */
 export interface MatterItemDispatchInput {
   executor_id?: string | null
   profile?: MatterItemExecProfile | null
+  computer_use_draft?: MatterComputerUseDraftInput | null
 }
 
 /** 跨事项派发读面的过滤（`GET /api/matters/item-dispatches`）。`states` 缺省 = 服务端的
