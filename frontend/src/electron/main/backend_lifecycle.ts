@@ -786,6 +786,9 @@ export class BackendLifecycleManager {
       // dual-auth 本地腿)。同一单例也供 events_bridge 带 header → 两端同值。getLocalApiToken
       // 首次取用即 randomBytes 生成, 进程级常驻。
       [LOCAL_TOKEN_ENV]: getLocalApiToken(),
+      // Phase 4 WP-4C — serve (后台分类/报告/记忆) 与 serve-api (web ai_gateway_proxy) 共用同一
+      // 嵌入式 ai-gateway loopback 端口单源，配对 MAILAGENT_LOCAL_API_TOKEN 调 /api/ai/internal/complete。
+      MAILAGENT_AI_GATEWAY_PORT: String(resolveAiGatewayPort()),
       // memleak-orphan 修复 — 两个止血 env (仅打包态 spawn 注入; pm2/dev 不设 → Python 侧
       // 零行为变更, 不会误杀 pm2 daemon 重启等场景):
       //   - MAILAGENT_PARENT_WATCHDOG: src/utils/parent_watchdog.py 的 gate。子进程 daemon
@@ -923,12 +926,7 @@ export class BackendLifecycleManager {
   private serveApiEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {
       ...baseEnv,
-      MAILAGENT_API_PORT: String(resolveApiPort()),
-      // task A — 远程 web 切 AI SDK: serve-api 的 ai_gateway_proxy 据此 env 把 web 的 chat 请求转发
-      // 到同机 loopback AI SDK Gateway。值 = resolveAiGatewayPort() (env 覆盖否则 8300), 与 index.ts
-      // createWindow 注入 renderer 的 ?aiGatewayPort= / 嵌入式 gateway listen 端口同一单源 →
-      // 代理与 gateway 永远指向同一端口。本地 electron 不经代理 (renderer 直连)，此 env 仅供 web 代理用。
-      MAILAGENT_AI_GATEWAY_PORT: String(resolveAiGatewayPort())
+      MAILAGENT_API_PORT: String(resolveApiPort())
     }
     const spaDir = resolveSpaDir()
     if (spaDir) env.MAILAGENT_SPA_DIR = spaDir

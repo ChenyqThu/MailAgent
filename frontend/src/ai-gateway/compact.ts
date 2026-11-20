@@ -6,7 +6,7 @@ import {
   estimateTokens
 } from '@shared/assistant/components/contextUsage.lib'
 import type { AiGatewayConfig } from './config'
-import { resolveModelFactory } from './chatRun'
+import { extractSdkUsage, resolveModelFactory } from './chatRun'
 import { effortCallOptions } from './thinking'
 import type { CompactMessageMetadata } from './compactSelect'
 import { COMPACT_AUTO_RATIO } from '@shared/assistant/compactConstants'
@@ -282,6 +282,7 @@ async function generateCompactSummary(
   )
   const summaries: string[] = []
   for (const prompt of prompts) {
+    const t0 = Date.now()
     const result = await generateText({
       model: resolvedModel.model,
       prompt,
@@ -290,12 +291,21 @@ async function generateCompactSummary(
       ...(effort?.providerOptions ? { providerOptions: effort.providerOptions } : {}),
       ...(effort?.reasoning ? { reasoning: effort.reasoning } : {})
     })
+    cfg.recordUsageEvent?.({
+      surface: 'compact',
+      model: modelId,
+      protocol: resolvedModel.protocol,
+      ...extractSdkUsage(result.usage),
+      latencyMs: Date.now() - t0,
+      status: 'ok'
+    })
     if (abortSignal.aborted) throw new DOMException('Compact aborted', 'AbortError')
     const summary = result.text.trim()
     if (!summary) throw new Error('Compact model returned an empty summary')
     summaries.push(summary)
   }
   if (summaries.length === 1) return summaries[0]
+  const mergeT0 = Date.now()
   const merged = await generateText({
     model: resolvedModel.model,
     prompt: buildCompactMergePrompt(summaries),
@@ -303,6 +313,14 @@ async function generateCompactSummary(
     abortSignal,
     ...(effort?.providerOptions ? { providerOptions: effort.providerOptions } : {}),
     ...(effort?.reasoning ? { reasoning: effort.reasoning } : {})
+  })
+  cfg.recordUsageEvent?.({
+    surface: 'compact',
+    model: modelId,
+    protocol: resolvedModel.protocol,
+    ...extractSdkUsage(merged.usage),
+    latencyMs: Date.now() - mergeT0,
+    status: 'ok'
   })
   if (abortSignal.aborted) throw new DOMException('Compact aborted', 'AbortError')
   const summary = merged.text.trim()

@@ -510,14 +510,14 @@ describe('serve-api gate — 默认开 (gate on → spawn serve + serve-api)', (
     expect(env.MAILAGENT_AI_GATEWAY_PORT).toBe('8765')
   })
 
-  test('serve 的 env 不带 MAILAGENT_AI_GATEWAY_PORT (gateway 端口只注入 serve-api)', () => {
+  test('serve 与 serve-api 都注入 MAILAGENT_AI_GATEWAY_PORT (后台 loopback + web proxy 共用)', () => {
     appMock.isPackaged = true
     enableGate()
     const mgr = new BackendLifecycleManager(fastApiOpts())
     mgr.start()
     const serveCall = spawnCalls.find((c) => c.args[0] === 'serve')!
     const env = serveCall.opts.env as NodeJS.ProcessEnv
-    expect(env.MAILAGENT_AI_GATEWAY_PORT).toBeUndefined()
+    expect(env.MAILAGENT_AI_GATEWAY_PORT).toBe('8300')
   })
 
   test('dev 模式 (isPackaged=false) 即便 gate on 也不 spawn 任何进程', () => {

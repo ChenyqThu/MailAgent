@@ -23,13 +23,13 @@ import { APICallError, generateText, hasToolCall, stepCountIs, tool, type ToolSe
 import { z } from 'zod'
 
 import type { AiGatewayConfig } from './config'
-import { resolveModelFactory } from './chatRun'
+import { extractSdkUsage, resolveModelFactory } from './chatRun'
 // HIGH-1 (batch1 review) — SDK-free typed credentials error from the registry resolver; mapped to
 // the E_NO_LLM_KEY vocabulary in normalizeLoopError (the SSE is already open when resolve runs).
-import { isProviderCredentialsError } from './providerRef'
+import { isPrivacyMaskError, isProviderCredentialsError } from './providerRef'
 // 发版终审 M3 — registry 语境下 normalizeLoopError 的 message 走固定形状脱敏（上游错误正文
 // 可能回显凭证，会经 SSE result 帧进 renderer）；flag off 保持原 message 形状（字节级纪律）。
-import { sanitizedUpstreamErrorMessage } from './upstreamError'
+import { sanitizedUpstreamErrorMessage, unwrapUpstreamError } from './upstreamError'
 // Relative type-only import (erased) — same discipline as tools/email.ts's relative
 // runtime import: the pure-Node poc harness (tsx) must be able to load this module.
 import type { SearchAgentPhase, SearchHit } from '../shared/api/types'
@@ -126,22 +126,26 @@ function normalizeLoopError(
   err: unknown,
   sanitizeUpstream: boolean
 ): { code: string; message: string } {
+  const cause = unwrapUpstreamError(err)
   // HIGH-1 — registry-path credential failure keeps the gateway-wide E_NO_LLM_KEY code (the
   // renderer client already maps it, see searchAgentClient.ts).
-  if (isProviderCredentialsError(err)) {
-    return { code: 'E_NO_LLM_KEY', message: err.message }
+  if (isProviderCredentialsError(cause)) {
+    return { code: 'E_NO_LLM_KEY', message: cause.message }
   }
-  if (APICallError.isInstance(err)) {
-    const code = err.statusCode === 429 ? 'E_QUOTA' : 'E_UPSTREAM'
-    return { code, message: sanitizeUpstream ? sanitizedUpstreamErrorMessage(err) : err.message }
+  if (isPrivacyMaskError(cause)) {
+    return { code: 'E_PRIVACY_MASK_FAILED', message: cause.message }
+  }
+  if (APICallError.isInstance(cause)) {
+    const code = cause.statusCode === 429 ? 'E_QUOTA' : 'E_UPSTREAM'
+    return { code, message: sanitizeUpstream ? sanitizedUpstreamErrorMessage(cause) : cause.message }
   }
   return {
     code: 'E_AGENT',
     message: sanitizeUpstream
-      ? sanitizedUpstreamErrorMessage(err)
-      : err instanceof Error
-        ? err.message
-        : String(err)
+      ? sanitizedUpstreamErrorMessage(cause)
+      : cause instanceof Error
+        ? cause.message
+        : String(cause)
   }
 }
 
@@ -191,10 +195,10 @@ export async function runHeadlessSearchAgent(
   const tools: ToolSet = { ...pickSearchAgentTools(all), present_results }
 
   let steps = 0
+  const searchModelId = opts.model && opts.model.length > 0 ? opts.model : cfg.model
+  const t0 = Date.now()
   try {
-    const resolvedModel = await resolveModelFactory(cfg)(
-      opts.model && opts.model.length > 0 ? opts.model : cfg.model
-    )
+    const resolvedModel = await resolveModelFactory(cfg)(searchModelId)
     // harness-chat lane C (07-15, feedback_llm_call_settings) — same explicit 64k discipline as the
     // main chat loop (chatRun.ts prepareChatRun); see that call site's comment for why an explicit
     // value (not the providers.ts middleware alone) is required.
@@ -216,6 +220,14 @@ export async function runHeadlessSearchAgent(
       }
     })
     steps = result.steps.length
+    cfg.recordUsageEvent?.({
+      surface: 'search_agent',
+      model: searchModelId,
+      protocol: resolvedModel.protocol,
+      ...extractSdkUsage(result.usage),
+      latencyMs: Date.now() - t0,
+      status: 'ok'
+    })
   } catch (err) {
     // User cancel (client disconnect → req close → abort): the caller can't write to a
     // closed response anyway; the code mirrors the legacy f-bis contract.

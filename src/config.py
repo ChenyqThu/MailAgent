@@ -569,6 +569,14 @@ class Config(BaseSettings):
             "Node gateway 侧读同名 env（main-env-only，同语义：显式 false 才 off）。"
         ),
     )
+    mailagent_ai_gateway_loopback: bool = Field(
+        default=True, validation_alias="MAILAGENT_AI_GATEWAY_LOOPBACK",
+        description=(
+            "Python 后台 LLM 调用（classify / run_tool_loop）优先走本机内嵌 ai-gateway "
+            "POST /api/ai/internal/complete（共享 6 协议 AI SDK、多 Key 轮换、<tool_call> 修复中间件）；"
+            "未注入 local token 或网关不可达时自动 fail-open 回落 Python 直连 SDK。"
+        ),
+    )
     memory_capture_model: str = Field(
         default="claude-haiku-4-5", validation_alias="MEMORY_CAPTURE_MODEL",
         description=(

@@ -28,6 +28,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { UI_MESSAGE_STREAM_HEADERS } from 'ai'
 
 import { formatStreamError, reportStreamError } from './streamError'
+import { handleInternalComplete } from './internalComplete'
 
 import type { AiGatewayConfig, GroupSessionFacts, SessionAgentIdentity } from './config'
 // task 09-02 — the generate_image store's id → path mapper (shared with the tool, single source).
@@ -56,7 +57,7 @@ import {
 } from './chatRun'
 // HIGH-1 (batch1 review) — SDK-free typed credentials error (the registry resolver throws it when
 // the selected provider row lacks a required key); mapped back to 503 E_NO_LLM_KEY below.
-import { isProviderCredentialsError } from './providerRef'
+import { isPrivacyMaskError, isProviderCredentialsError } from './providerRef'
 import {
   corsHeadersFor,
   delay,
@@ -422,7 +423,7 @@ async function handleChat(
     type FinishEvent = Parameters<ReturnType<typeof makePersistOnFinish>>[0]
     const drainAttempt = async (
       attempt: number
-    ): Promise<{ recover: boolean; deferred: unknown[]; error: unknown }> => {
+    ): Promise<{ recover: boolean; deferred: unknown[]; error: unknown; endedWithJson?: boolean }> => {
       const deferred: unknown[] = []
       let rawError: unknown = null
       let finishEvent: FinishEvent | null = null
@@ -454,6 +455,11 @@ async function handleChat(
               ? (chunk as { type?: unknown }).type
               : undefined
           if (!responseStarted && type === 'error') {
+            if (isPrivacyMaskError(rawError)) {
+              responseStarted = true
+              writeJson(res, 503, { error: 'E_PRIVACY_MASK_FAILED', hint: rawError.message })
+              return { recover: false, deferred: [], error: rawError, endedWithJson: true }
+            }
             deferred.push(chunk)
             if (
               shouldRecoverContextOverflow({
@@ -504,9 +510,14 @@ async function handleChat(
         }
       })
     }
+    let wroteJsonError = false
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const outcome = await drainAttempt(attempt)
+        if (outcome.endedWithJson) {
+          wroteJsonError = true
+          break
+        }
         if (!outcome.recover) break
         if (attempt > 0 || run.sessionId == null) {
           await flushChunks(
@@ -564,9 +575,15 @@ async function handleChat(
           break
         }
       }
-      if (responseStarted && !clientGone && !res.destroyed) res.write('data: [DONE]\n\n')
+      if (!wroteJsonError && responseStarted && !clientGone && !res.destroyed) {
+        res.write('data: [DONE]\n\n')
+      }
     } catch (error) {
-      console.error('[ai-gateway] /api/ai/chat overflow-aware drain failed', error)
+      if (!responseStarted && isPrivacyMaskError(error) && !res.destroyed && !res.writableEnded) {
+        writeJson(res, 503, { error: 'E_PRIVACY_MASK_FAILED', hint: error.message })
+      } else {
+        console.error('[ai-gateway] /api/ai/chat overflow-aware drain failed', error)
+      }
     } finally {
       if (runToken != null && run.sessionId != null) {
         cfg.activeRuns?.release(run.sessionId, runToken.runId)
@@ -1193,6 +1210,10 @@ async function handleTitle(
       writeJson(res, 503, { error: 'E_NO_LLM_KEY', hint: e.message })
       return
     }
+    if (isPrivacyMaskError(e)) {
+      writeJson(res, 503, { error: 'E_PRIVACY_MASK_FAILED', hint: e.message })
+      return
+    }
     // M3 — registry 路径：hint 与日志都不得携带上游错误原文（可能回显凭证）；flag off
     // 保持既有 message/完整错误对象日志形状（nl_search.ts 同款分叉手法）。
     if (cfg.providerRegistryEnabled) {
@@ -1582,7 +1603,10 @@ export async function speakAsGroupMember(
     modelId: prepared.run.modelId,
     usage: {
       inputTokens: usage.inputTokens ?? null,
-      outputTokens: usage.outputTokens ?? null
+      outputTokens: usage.outputTokens ?? null,
+      cacheReadTokens: usage.inputTokenDetails?.cacheReadTokens ?? null,
+      cacheWriteTokens: usage.inputTokenDetails?.cacheWriteTokens ?? null,
+      noCacheTokens: usage.inputTokenDetails?.noCacheTokens ?? null
     },
     protocol: prepared.run.protocol
   }
@@ -1670,6 +1694,8 @@ function toAgentRunWire(result: HeadlessAgentResult): Record<string, unknown> {
     sessionId: result.sessionId,
     steps: result.steps
   }
+  if (result.model) wire.model = result.model
+  if (result.costUsd !== undefined) wire.costUsd = result.costUsd
   if (result.summary) wire.summary = result.summary
   if (result.usage) wire.usage = result.usage
   if (result.error) {
@@ -2368,6 +2394,12 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     // (cfg.aguiMirrorEnabled); flag-off the path falls through to 404 (byte-identical to 04b).
     if (cfg.aguiMirrorEnabled && method === 'POST' && path === '/api/ai/agui/chat') {
       dispatch('/api/ai/agui/chat', res, handleAguiChat(req, res, cfg))
+      return
+    }
+
+    // Phase 4 WP-4C — Internal loopback LLM completion endpoint for Python background workers.
+    if (method === 'POST' && path === '/api/ai/internal/complete') {
+      dispatch('/api/ai/internal/complete', res, handleInternalComplete(req, res, cfg))
       return
     }
 
