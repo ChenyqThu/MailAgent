@@ -5,6 +5,29 @@ import type { UpdateFlagOpts } from './email'
 
 export type SecretSlot = 'cliApiKey' | 'llmApiKey' | 'llmTranslateApiKey' | 'customApiKey'
 
+export type NotificationChannelMode = 'banner' | 'both' | 'system_only' | 'center_only' | 'off'
+
+export type NotificationChannelPrefs = Record<
+  'action_required' | 'reviews' | 'results' | 'system',
+  NotificationChannelMode
+>
+
+export type MacNotificationAuthState = 'unknown' | 'prompted' | 'delivered' | 'unsupported'
+
+export interface NotificationSystemStatus {
+  supported: boolean
+  platform: string
+  authState?: MacNotificationAuthState
+  lastTestedAt?: number | null
+}
+
+export interface NotificationPermissionResult {
+  ok: boolean
+  shown?: boolean
+  authState: MacNotificationAuthState
+  detail?: string
+}
+
 export interface SecretsStatus {
   cliApiKey: boolean
   llmApiKey: boolean
@@ -30,6 +53,18 @@ export interface PersistentSettings {
   /** 邮件签名 (HTML/纯文本)。compose 工具栏「签名」按钮在光标处插入。
    *  null/空 = 未设置。SettingsPanel 的签名编辑框写入。 */
   signature: string | null
+  /** Phase 3 — 是否启用 macOS Menu Bar 常驻图标与 Popover 微面板。 */
+  trayEnabled?: boolean
+  /** Phase 3 — 是否同步显示 Dock 未读角标。 */
+  dockBadgeEnabled?: boolean
+  /** 窗口在前台聚焦时是否抑制重复的 macOS 系统通知横幅。 */
+  suppressBannerWhenFocused?: boolean
+  /** macOS 系统通知权限与送达探针状态（persist locally in settings.json）。 */
+  notificationAuthState?: 'unknown' | 'prompted' | 'delivered'
+  /** 最近一次系统通知权限请求 / 测试弹窗时间戳（ms）。 */
+  notificationLastTestedAt?: number | null
+  /** Phase 3 — 四类通知（action_required/reviews/results/system）的桌面推送档位。 */
+  notificationChannelPrefs?: Partial<NotificationChannelPrefs>
 }
 
 export interface PingResult {
@@ -52,6 +87,14 @@ export interface SettingsApi {
   testLlm(): Promise<PingResult>
   /** Soft check: confirms custom-api-key + endpoint configured. */
   testCustomApi(): Promise<PingResult>
+  /** 查询当前平台系统通知支持与授权探针状态。 */
+  systemNotificationStatus(): Promise<NotificationSystemStatus>
+  /** 触发一条本地测试桌面通知（兼容旧接口）。 */
+  testNotification(): Promise<PingResult>
+  /** 申请/验证 macOS 系统通知权限并发送带快捷动作按钮的测试横幅。 */
+  requestNotificationPermission(): Promise<NotificationPermissionResult>
+  /** 打开 macOS 系统设置 → 通知与聚焦，引导开启横幅/提示样式。 */
+  openNotificationSystemSettings(): Promise<{ ok: boolean }>
 }
 
 export interface NotionWriteApi {

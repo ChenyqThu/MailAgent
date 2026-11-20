@@ -49,6 +49,9 @@ export function RestartBanner(): React.ReactElement | null {
     try {
       const result = await api.services.restart('mail-sync')
       if (result.ok) {
+        // serve-api 同样读一份 pydantic .env 配置（例如 MEMORY_CAPTURE_MODEL 等），
+        // 同步 best-effort 重启之；dev 模式下 serve-api 若未挂 pm2，失败不阻断。
+        await api.services.restart('serve-api').catch(() => null)
         setLastRestartAt(Date.now())
         // Give pm2 a moment to bring the Python process back up before we
         // ask for status. Without the delay the jlist read often returns

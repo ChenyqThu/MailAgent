@@ -107,12 +107,6 @@ import type {
   ServicesApi,
   SseEvent,
   SystemAlertsData,
-  IslandAIDraftReadyPayload,
-  IslandAIDraftStartPayload,
-  IslandAIDraftStreamPayload,
-  IslandApi,
-  IslandAppearancePayload,
-  IslandStatus,
   JobEnqueueResult,
   JobRecord,
   JobsApi,
@@ -127,6 +121,8 @@ import type {
   MailApi,
   MailboxSummary,
   NlToDslResult,
+  NotificationPermissionResult,
+  NotificationSystemStatus,
   NotionWriteApi,
   PersistentSettings,
   PingResult,
@@ -627,6 +623,20 @@ class ElectronSettingsApi implements SettingsApi {
   async testCustomApi(): Promise<PingResult> {
     return (await invoker()('settings:test:customApi')) as PingResult
   }
+  async systemNotificationStatus(): Promise<NotificationSystemStatus> {
+    return (await invoker()('notifications:systemStatus')) as NotificationSystemStatus
+  }
+  async testNotification(): Promise<PingResult> {
+    return (await invoker()('notifications:sendTest')) as PingResult
+  }
+  async requestNotificationPermission(): Promise<NotificationPermissionResult> {
+    return (await invoker()(
+      'notifications:requestPermission'
+    )) as NotificationPermissionResult
+  }
+  async openNotificationSystemSettings(): Promise<{ ok: boolean }> {
+    return (await invoker()('notifications:openSystemSettings')) as { ok: boolean }
+  }
 }
 
 class ElectronNotionWriteApi implements NotionWriteApi {
@@ -788,36 +798,6 @@ function createElectronChatRuntime(): ChatApi {
         threadId: target?.threadId ?? null
       })
     }
-  }
-}
-
-class ElectronIslandApi implements IslandApi {
-  async status(): Promise<IslandStatus> {
-    return (await invoker()('island:status')) as IslandStatus
-  }
-  async testConnection(): Promise<IslandStatus> {
-    return (await invoker()('island:testConnection')) as IslandStatus
-  }
-  async setEnabled(enabled: boolean): Promise<IslandStatus> {
-    return (await invoker()('island:setEnabled', enabled)) as IslandStatus
-  }
-  appearance(payload: IslandAppearancePayload): void {
-    sender()?.('island:appearance', payload)
-  }
-  aiDraftStart(payload: IslandAIDraftStartPayload): void {
-    sender()?.('island:aiDraftStart', payload)
-  }
-  aiDraftStream(payload: IslandAIDraftStreamPayload): void {
-    sender()?.('island:aiDraftStream', payload)
-  }
-  aiDraftReady(payload: IslandAIDraftReadyPayload): void {
-    sender()?.('island:aiDraftReady', payload)
-  }
-  onEvent(handler: (status: IslandStatus) => void): () => void {
-    return subscribe('island:event', (...args: unknown[]) => {
-      const s = args[0] as IslandStatus | undefined
-      if (s && typeof s === 'object') handler(s)
-    })
   }
 }
 
@@ -1091,7 +1071,6 @@ export class ElectronApi implements MailApi {
   calendar: CalendarApi = new ElectronCalendarApi()
   settings: SettingsApi = new ElectronSettingsApi()
   updater: UpdaterApi = new ElectronUpdaterApi()
-  island: IslandApi = new ElectronIslandApi()
   events: EventsApi = new ElectronEventsApi()
   env: EnvApi = new ElectronEnvApi()
   services: ServicesApi = new ElectronServicesApi()

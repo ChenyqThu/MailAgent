@@ -75,6 +75,30 @@ export interface PersistentSettings {
   /** 邮件签名 (HTML/纯文本) — compose 工具栏「签名」按钮在光标处插入。user-writable。 */
   signature: string | null
 }
+  /** Phase 3 — macOS Menu Bar 常驻图标与 Popover 微面板。 */
+  trayEnabled: boolean
+  /** Phase 3 — Dock 未读角标同步。 */
+  dockBadgeEnabled: boolean
+  /** 窗口在前台聚焦时是否抑制重复的 macOS 系统通知横幅。 */
+  suppressBannerWhenFocused: boolean
+  /** macOS 系统通知权限/送达探针状态。 */
+  notificationAuthState: 'unknown' | 'prompted' | 'delivered'
+  /** 最近一次请求/测试系统通知的时间戳。 */
+  notificationLastTestedAt: number | null
+  /** Phase 3 — 四类通知（action_required/reviews/results/system）的桌面推送档位。 */
+  notificationChannelPrefs: {
+    action_required: 'banner' | 'both' | 'system_only' | 'center_only' | 'off'
+    reviews: 'banner' | 'both' | 'system_only' | 'center_only' | 'off'
+    results: 'banner' | 'both' | 'system_only' | 'center_only' | 'off'
+    system: 'banner' | 'both' | 'system_only' | 'center_only' | 'off'
+  }
+}
+
+const DEFAULT_NOTIFICATION_CHANNEL_PREFS: PersistentSettings['notificationChannelPrefs'] = {
+  action_required: 'banner',
+  reviews: 'center_only',
+  results: 'center_only',
+  system: 'center_only'
 
 const DEFAULTS: PersistentSettings = {
   dbPath: null,
@@ -85,7 +109,13 @@ const DEFAULTS: PersistentSettings = {
   customApiEndpoint: null,
   autoDownloadUpdates: false,
   userEmail: null,
-  signature: null
+  signature: null,
+  trayEnabled: true,
+  dockBadgeEnabled: true,
+  suppressBannerWhenFocused: true,
+  notificationAuthState: 'unknown',
+  notificationLastTestedAt: null,
+  notificationChannelPrefs: { ...DEFAULT_NOTIFICATION_CHANNEL_PREFS }
 }
 
 /** Sprint 11 V1.4 — read USER_EMAIL from the repo-root `.env`. The file is
@@ -123,7 +153,16 @@ export function readSettings(): PersistentSettings {
     /* corrupt file — fall through to defaults */
   }
   const userEmail = loadUserEmailFromEnv()
-  return { ...DEFAULTS, ...sanitize(persisted), userEmail }
+  const cleaned = sanitize(persisted)
+  return {
+    ...DEFAULTS,
+    ...cleaned,
+    notificationChannelPrefs: {
+      ...DEFAULT_NOTIFICATION_CHANNEL_PREFS,
+      ...(cleaned.notificationChannelPrefs ?? {})
+    },
+    userEmail
+  }
 }
 
 // Sprint 7 Day 1 (Sprint 6 review opus MEDIUM #1) — `isSafeUserPath` moved
@@ -171,9 +210,63 @@ function sanitize(raw: Partial<PersistentSettings>): Partial<PersistentSettings>
     out.signature = raw.signature
   }
   return out
+  if (typeof raw.trayEnabled === 'boolean') {
+    out.trayEnabled = raw.trayEnabled
+  }
+  if (typeof raw.dockBadgeEnabled === 'boolean') {
+    out.dockBadgeEnabled = raw.dockBadgeEnabled
+  }
+  if (typeof raw.suppressBannerWhenFocused === 'boolean') {
+    out.suppressBannerWhenFocused = raw.suppressBannerWhenFocused
+  }
+  if (
+    raw.notificationAuthState === 'unknown' ||
+    raw.notificationAuthState === 'prompted' ||
+    raw.notificationAuthState === 'delivered'
+  ) {
+    out.notificationAuthState = raw.notificationAuthState
+  }
+  if (
+    raw.notificationLastTestedAt === null ||
+    (typeof raw.notificationLastTestedAt === 'number' && Number.isFinite(raw.notificationLastTestedAt))
+  ) {
+    out.notificationLastTestedAt = raw.notificationLastTestedAt
+  }
+  if (
+    raw.notificationChannelPrefs &&
+    typeof raw.notificationChannelPrefs === 'object' &&
+    !Array.isArray(raw.notificationChannelPrefs)
+  ) {
+    const src = raw.notificationChannelPrefs as Record<string, unknown>
+    const next: Partial<PersistentSettings['notificationChannelPrefs']> = {}
+    for (const cat of ['action_required', 'reviews', 'results', 'system'] as const) {
+      const val = src[cat]
+      if (
+        val === 'banner' ||
+        val === 'both' ||
+        val === 'system_only' ||
+        val === 'center_only' ||
+        val === 'off'
+      ) {
+        next[cat] = val
+      }
+    }
+    if (Object.keys(next).length > 0) {
+      out.notificationChannelPrefs = next as PersistentSettings['notificationChannelPrefs']
+    }
+  }
 }
 
 function writeSettings(s: PersistentSettings): void {
+const _settingsListeners = new Set<(settings: PersistentSettings) => void>()
+
+export function onSettingsChanged(listener: (settings: PersistentSettings) => void): () => void {
+  _settingsListeners.add(listener)
+  return (): void => {
+    _settingsListeners.delete(listener)
+  }
+}
+
   // feat/auto-update re-review (codex, MEDIUM) — propagate write failures instead
   // of swallowing them. settings:set is the sole caller; rethrowing makes the IPC
   // reject so renderer callers (PathPicker, the auto-download toggle) revert their
@@ -190,6 +283,28 @@ function writeSettings(s: PersistentSettings): void {
 }
 
 export interface SecretWriteRequest {
+export function updateSettingsPatch(partial: Partial<PersistentSettings>): PersistentSettings {
+  const prev = readSettings()
+  const nextPatch = sanitize(partial ?? {})
+  const merged: PersistentSettings = {
+    ...prev,
+    ...nextPatch,
+    notificationChannelPrefs: {
+      ...prev.notificationChannelPrefs,
+      ...(nextPatch.notificationChannelPrefs ?? {})
+    }
+  }
+  writeSettings(merged)
+  for (const listener of _settingsListeners) {
+    try {
+      listener(merged)
+    } catch (err) {
+      console.warn('[settings] change listener failed:', err)
+    }
+  }
+  return merged
+}
+
   secret: 'cliApiKey' | 'llmApiKey' | 'llmTranslateApiKey' | 'customApiKey'
   value: string
 }
@@ -302,11 +417,8 @@ export function registerSettingsHandlers(): void {
 
   ipcMain.handle(
     'settings:set',
-    async (_evt, partial: Partial<PersistentSettings>): Promise<PersistentSettings> => {
-      const merged: PersistentSettings = { ...readSettings(), ...sanitize(partial ?? {}) }
-      writeSettings(merged)
-      return merged
-    }
+    async (_evt, partial: Partial<PersistentSettings>): Promise<PersistentSettings> =>
+      updateSettingsPatch(partial ?? {})
   )
 
   // ---- folder picker dialogs --------------------------------------------

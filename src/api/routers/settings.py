@@ -554,6 +554,17 @@ async def get_settings_payload(request: Request):
         # MAILAGENT_PROJECT_ROOT / MAILAGENT_ENV_FILE / SYNC_STORE_DB_PATH）。故这里恒
         # None = 类型诚实（键在、值空），远程 compose 的「签名」按钮保持禁用。要让远程
         # 真能取到签名，需要 owner 拍板给 serve-api 一条读 Electron settings.json 的路
+        "trayEnabled": False,
+        "dockBadgeEnabled": False,
+        "suppressBannerWhenFocused": True,
+        "notificationAuthState": "unknown",
+        "notificationLastTestedAt": None,
+        "notificationChannelPrefs": {
+            "action_required": "banner",
+            "reviews": "center_only",
+            "results": "center_only",
+            "system": "center_only",
+        },
         # （新增跨进程文件依赖），不在本次镜像对账范围内。
         "signature": None,
     }

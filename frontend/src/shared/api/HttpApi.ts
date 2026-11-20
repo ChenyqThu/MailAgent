@@ -833,7 +833,21 @@ export class HttpApi implements MailApi {
     set: () => notImplemented('settings.set'),
     pickFolder: () => notImplemented('settings.pickFolder'),
     testLlm: () => notImplemented('settings.testLlm'),
-    testCustomApi: () => notImplemented('settings.testCustomApi')
+    testCustomApi: () => notImplemented('settings.testCustomApi'),
+    systemNotificationStatus: async () => ({
+      supported: false,
+      platform: 'web',
+      authState: 'unsupported' as const,
+      lastTestedAt: null
+    }),
+    testNotification: () => notImplemented('settings.testNotification'),
+    requestNotificationPermission: async () => ({
+      ok: false,
+      shown: false,
+      authState: 'unsupported' as const,
+      detail: 'System notifications are unavailable in web mode.'
+    }),
+    openNotificationSystemSettings: async () => ({ ok: false })
   }
 
   // No in-app updater in the browser; no endpoint. onEvent → noop unsub.
@@ -921,33 +935,6 @@ export class HttpApi implements MailApi {
       this.req<NotionAgentListItem[]>('GET', '/notion-agent/agents'),
     setAgent: () => notImplemented('notionAgent.setAgent'),
     setModel: () => notImplemented('notionAgent.setModel')
-  }
-
-  // Ping-island lives on the Mac host; web stubs are no-ops, onEvent → noop.
-  island = {
-    // web 无 ping-island: 返回 disabled 态, graceful 不 throw —— TitleBar/Settings
-    // mount 时 island state hydration 会调它。
-    status: async () => ({
-      state: 'disabled' as const,
-      socketPath: '',
-      lastProbeAt: null,
-      lastError: null
-    }),
-    testConnection: () => notImplemented('island.testConnection'),
-    setEnabled: () => notImplemented('island.setEnabled'),
-    appearance: (): void => {
-      /* no-op stub */
-    },
-    aiDraftStart: (): void => {
-      /* no-op stub */
-    },
-    aiDraftStream: (): void => {
-      /* no-op stub */
-    },
-    aiDraftReady: (): void => {
-      /* no-op stub */
-    },
-    onEvent: (): (() => void) => () => undefined
   }
 
   // V2.1 — 报告 Agent: serve-api /api/reports + /api/report-agents 端点（in-process

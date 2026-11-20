@@ -32,10 +32,13 @@ import { registerNlSearchHandlers } from './handlers/nl_search'
 import { registerChatLocalBridge } from './chat_local_bridge'
 import { getChatDb } from './chat_db'
 import { registerWriteOpsHandlers } from './handlers/write_ops'
-import { startEventsBridge } from './events_bridge'
+import { startEventsBridge, onSseEvent } from './events_bridge'
 // task 08-20-notification-center M2 批 B4 — 通知中心 macOS 原生通知 fanout
 // (critical / action_required 档上系统通知; 水位=注册时刻, 存量未读不弹)。
-import { registerNotificationFanout } from './notification_fanout'
+import {
+  registerNotificationFanout,
+  registerNotificationSystemHandlers
+} from './notification_fanout'
 import { registerDraftHandlers } from './handlers/draft'
 // Sprint 6 §2.2 — admin / llm dashboard / calendar / settings IPC handlers.
 import { registerAdminHandlers } from './handlers/admin'
@@ -44,7 +47,13 @@ import { registerLlmStatsHandlers } from './handlers/llm_stats'
 import { registerKosStatsHandlers } from './handlers/kos_stats'
 import { registerCalendarHandlers } from './handlers/calendar'
 import { registerTodayHandlers } from './handlers/today'
-import { registerSettingsHandlers } from './handlers/settings'
+import {
+  onSettingsChanged,
+  readSettings,
+  registerSettingsHandlers,
+  updateSettingsPatch
+} from './handlers/settings'
+import { registerTray } from './tray'
 import { registerNotionAgentHandlers } from './handlers/notion_agent'
 // task 08-20 — Notion OAuth 授权内核 (loopback 回调 + exchange 代理换 token +
 // data source 库发现 + NOTION_OAUTH_ENV_KEYS 原子写)。token 明文永不过 renderer IPC。
@@ -52,11 +61,6 @@ import { registerNotionOauthHandlers } from './notion_oauth'
 import { registerPromptHandlers } from './handlers/prompts'
 // Sprint 8 §2.2 — electron-updater bridge (auto-updater state + IPC).
 import { registerUpdaterHandlers } from './handlers/updater'
-// Sprint 9 §2.2 — ping-island bridge (unix socket sender + appearance / AI
-// draft envelopes + connection probe). The probe loop is auto-skipped in
-// dev mode so a developer without ping-island.app doesn't see spurious
-// probe-failure noise in the log.
-import { registerIslandHandlers } from './handlers/island'
 // Sprint 18 §PR B — repo-root .env read/write (env:get/:set) + pm2 restart
 // bridge (services:restart/:status). Settings tabs use env:set on blur to
 // persist managed keys to the Python-side .env, then surface RestartBanner
@@ -146,11 +150,7 @@ if (!is.dev) {
     app.on('second-instance', (_event, argv) => {
       const url = extractDeeplinkFromArgv(argv)
       if (url) dispatchDeeplink(url)
-      const win = BrowserWindow.getAllWindows()[0]
-      if (win) {
-        if (win.isMinimized()) win.restore()
-        win.focus()
-      }
+      void ensureMainWindow()
     })
   }
 }
@@ -162,7 +162,19 @@ if (!is.dev) {
 // signed .app bundle's Info.plist; this fixes the dev experience.
 app.setName('MailAgent')
 
-function createWindow(opts: { onboarding?: boolean } = {}): void {
+let primaryWindow: BrowserWindow | null = null
+
+async function ensureMainWindow(): Promise<BrowserWindow | null> {
+  if (primaryWindow && !primaryWindow.isDestroyed()) {
+    if (primaryWindow.isMinimized()) primaryWindow.restore()
+    primaryWindow.show()
+    primaryWindow.focus()
+    return primaryWindow
+  }
+  return createWindow()
+}
+
+function createWindow(opts: { onboarding?: boolean } = {}): BrowserWindow {
   // onboarding 模式: 用 ?onboarding=1 query 让 renderer main.tsx 渲染配置向导而非主 App
   // (复用 popout 的 ?popout=1 query 同款机制)。完成后 onboarding:complete 会 reload 去掉它。
   // V2.1 3c-3: 透传 serve-api 端口给 renderer —— ChatRuntime 的 loopback baseUrl
@@ -243,6 +255,16 @@ function createWindow(opts: { onboarding?: boolean } = {}): void {
   // 正文 iframe 内链接点击 → 默认浏览器 (见 attachExternalLinkGuard 注释)。
   attachExternalLinkGuard(mainWindow.webContents)
 
+  mainWindow.on('closed', () => {
+    if (primaryWindow === mainWindow) {
+      primaryWindow = null
+    }
+  })
+
+  if (!opts.onboarding) {
+    primaryWindow = mainWindow
+  }
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(
       search
@@ -255,6 +277,7 @@ function createWindow(opts: { onboarding?: boolean } = {}): void {
       search ? { search } : undefined
     )
   }
+  return mainWindow
 }
 
 // Sprint 14 PR E — chat popout chrome. Spawned by the renderer via
@@ -433,14 +456,15 @@ app.whenReady().then(async () => {
             // the menu only does click → IPC → renderer navigates to /sessions
             // and starts a new session there (same action as ⌘O, 08-27 P2).
             click(): void {
-              // Main window = first window (popout windows are created later;
-              // same simplification as setDeeplinkSink). PopoutShell has no
-              // GeneralAgentDialog, so never target a popout.
-              const win = BrowserWindow.getAllWindows()[0]
-              if (!win) return
-              if (win.isMinimized()) win.restore()
-              win.focus()
-              win.webContents.send('mailagent:open-general-agent')
+              void ensureMainWindow().then((win): void => {
+                if (!win || win.isDestroyed()) return
+                const send = (): void => win.webContents.send('mailagent:open-general-agent')
+                if (win.webContents.isLoading()) {
+                  win.webContents.once('did-finish-load', send)
+                } else {
+                  send()
+                }
+              })
             }
           }
         ]
@@ -504,7 +528,24 @@ app.whenReady().then(async () => {
   // Sprint 16 — 主进程持久连接 mail-sync 本地 SSE endpoint, 通过 IPC broadcast
   // 把事件转发给 renderer; 替换 EmailList / Sidebar 5s 硬轮询. 失败自动指数退避
   // 重连, renderer 通过 events:status 看连接状态决定是否启用 fallback polling.
-  registerNotificationFanout()
+  registerNotificationSystemHandlers({
+    getAuthMeta: () => {
+      const s = readSettings()
+      return {
+        notificationAuthState: s.notificationAuthState,
+        notificationLastTestedAt: s.notificationLastTestedAt
+      }
+    },
+    saveAuthMeta: (meta) => {
+      updateSettingsPatch(meta)
+    },
+    ensureMainWindow
+  })
+  registerNotificationFanout({
+    getChannelPrefs: () => readSettings().notificationChannelPrefs,
+    getSuppressWhenFocused: () => readSettings().suppressBannerWhenFocused,
+    ensureMainWindow
+  })
   startEventsBridge()
   // Sprint 6 §2.2 — admin dashboard / LLM dashboard / calendar list /
   // settings page. Each handler group is read-only by default (admin:health,
@@ -540,10 +581,6 @@ app.whenReady().then(async () => {
     updaterStub = autoUpdater as unknown as import('./handlers/updater').AutoUpdaterLike
   }
   registerUpdaterHandlers({ updater: updaterStub })
-  // Sprint 9 §2.2 — register the IPC channels before createWindow so the
-  // renderer's first `island:status` invoke (on TitleBar mount) hits a
-  // handler that exists. Probe loop runs in production only.
-  registerIslandHandlers()
   // Sprint 18 §PR B — env:* read/write + services:* pm2 control. Must be
   // wired before createWindow so SettingsPage's first env:get on mount has
   // a handler to hit. Both registrations are side-effect-only (no state).
@@ -648,23 +685,43 @@ app.whenReady().then(async () => {
     }
   })()
 
-  // F6 — deeplink sink: 聚焦主窗口 + 把 target 转给 renderer (useDeeplinkRouter
-  // 监听 'mailagent:deeplink' → router.navigate + setActive). createWindow 后注册,
-  // 有 cold-start buffer 立即 flush. 主窗口取第一个非 popout window (popout 也是
-  // BrowserWindow 但 title 不同 — 简化取 getAllWindows()[0], createWindow 先建主窗).
+  const rendererUrl =
+    is.dev && process.env['ELECTRON_RENDERER_URL']
+      ? process.env['ELECTRON_RENDERER_URL']
+      : undefined
+  registerTray({
+    ensureMainWindow,
+    getSettings: () => readSettings(),
+    onSettingsChanged,
+    onSseEvent,
+    resolveApiPort,
+    resolveAiGatewayPort,
+    preloadPath: join(mainDirname, '../preload/index.mjs'),
+    rendererHtmlPath: join(mainDirname, '../renderer/index.html'),
+    rendererUrl,
+    surfaceWindowOptions,
+    applyNativeSurface,
+    getPersistedSurface
+  })
+
+  // F6 — deeplink sink: 聚焦/按需重建主窗口 + 把 target 转给 renderer (useDeeplinkRouter).
   setDeeplinkSink((target) => {
-    const win = BrowserWindow.getAllWindows()[0]
-    if (!win) return
-    if (win.isMinimized()) win.restore()
-    win.focus()
-    win.webContents.send('mailagent:deeplink', target)
+    void ensureMainWindow().then((win): void => {
+      if (!win || win.isDestroyed()) return
+      const send = (): void => win.webContents.send('mailagent:deeplink', target)
+      if (win.webContents.isLoading()) {
+        win.webContents.once('did-finish-load', send)
+      } else {
+        send()
+      }
+    })
   })
   // Win/Linux 冷启动 argv 里的 deeplink (macOS 走 open-url, 已在 module 级注册).
   const coldUrl = extractDeeplinkFromArgv(process.argv)
   if (coldUrl) dispatchDeeplink(coldUrl)
 
   app.on('activate', function () {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    void ensureMainWindow()
   })
 })
 

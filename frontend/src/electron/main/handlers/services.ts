@@ -128,10 +128,15 @@ async function restartTarget(target: ServiceTarget): Promise<ServiceRestartResul
   // stop + 重读 enabled gate(从被 env:set 同步过的 process.env, 见 blocker A) + respawn,
   // 让 Settings 改的开关/端口/CF 热生效, 不必重启整个 app。calendar-sync/all 是
   // dev-pm2 概念, 打包态无对应 → 继续走下面 pm2 路径(E_PM2_NOT_FOUND, renderer 兜底)。
-  if (app?.isPackaged && (target === 'mail-sync' || target === 'serve-api')) {
-    const svcName: ServiceName = target === 'serve-api' ? 'serve-api' : 'serve'
+  if (app?.isPackaged && (target === 'mail-sync' || target === 'serve-api' || target === 'all')) {
     try {
-      await getBackendLifecycle().restartService(svcName)
+      if (target === 'all') {
+        await getBackendLifecycle().restartService('serve')
+        await getBackendLifecycle().restartService('serve-api')
+      } else {
+        const svcName: ServiceName = target === 'serve-api' ? 'serve-api' : 'serve'
+        await getBackendLifecycle().restartService(svcName)
+      }
       await restartGatewayAfterServices(target)
       return { ok: true, target, exitCode: 0, stdout: '', stderr: '' }
     } catch (err) {
@@ -143,7 +148,7 @@ async function restartTarget(target: ServiceTarget): Promise<ServiceRestartResul
         stderr: '',
         error: {
           code: 'E_PM2_FAILED',
-          message: `BackendLifecycle restartService('${svcName}') failed: ${(err as Error).message}`
+          message: `BackendLifecycle restartService('${target}') failed: ${(err as Error).message}`
         }
       }
     }
