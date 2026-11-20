@@ -46,9 +46,7 @@ logs/
 .omc/
 .claude/worktrees/
 .claude/scheduled_tasks.lock
-.agents/
 .codex/
-AGENTS.md
 
 # Env backups (含 secrets)
 .env.bak.*
