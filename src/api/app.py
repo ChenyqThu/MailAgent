@@ -283,11 +283,19 @@ async def _assert_bind_loopback() -> None:
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """FastAPI lifespan (取代 deprecated ``@app.on_event('startup')``)。
 
-    startup: 跑 loopback 断言 (bind 非 127.0.0.1 立即退出)。shutdown: 当前无副作用
-    (EmailRepository 是 per-call 短命连接，无长命资源要关 —— deps.py gotcha #13)。
+    startup: 跑 loopback 断言 (bind 非 127.0.0.1 立即退出)。shutdown: 清理 stdio
+    MCP 子进程池（若有惰性拉起过）；EmailRepository 仍是 per-call 短命连接。
     """
     await _assert_bind_loopback()
-    yield
+    try:
+        yield
+    finally:
+        try:
+            from src.connectors.stdio_pool import stdio_pool
+
+            await stdio_pool.close_all()
+        except Exception:  # noqa: BLE001 — bare worktree without mcp or best-effort shutdown
+            pass
 
 
 # ---------------------------------------------------------------------------
