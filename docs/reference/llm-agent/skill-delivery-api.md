@@ -243,22 +243,29 @@ handoff 推荐 key（`--preset handoff`）= 全部八个读 scope + `report:run`
   Notion 等客户端据此把读工具归入「自动执行」，写工具默认「先确认」。🔴 annotations 只是提示，
   不是安全边界：真正的权限仍是 scope + confirm 闸 + 配额。builtin ToolDef 缺 `title` 会让
   `tests/skills/test_tooldef_contract.py` 变红。
-- **MCP over HTTP**：serve-api 的 `POST /mcp`（`src/api/routers/skills.py::mcp_router`），给只能填
-  「URL + 请求头」的远程 MCP 客户端（Notion Custom Agent 等）用。无状态 Streamable HTTP：
-  - 一个 JSON-RPC 消息（或批量数组）一次请求；含 request → `200 application/json`，只有
-    notification / response → `202` 无 body；body 不是合法 JSON → JSON-RPC `-32700`。
-  - 不发 `Mcp-Session-Id`、不提供 SSE 流：`GET /mcp` / `DELETE /mcp` → `405`。
-  - 分派复用 `mailagent_mcp.handle_request`（与 stdio 同一份），client 是 in-process 的
-    `PrincipalSkillClient`：按已鉴权的 principal 调 `build_manifest` / `invoke_skill`，
-    scope / confirm / 配额 / 输入校验与 REST 完全同一条 chokepoint。
+- **MCP over HTTP**（`src/api/routers/skills.py::mcp_router` + `src/mcp/http_sessions.py`）：提供给远程（Notion Custom Agent / Claude Code / Cursor / Antigravity）与本地客户端使用，无需 `.env` 额外开关，默认同时启用有状态 Streamable HTTP 与 Legacy HTTP+SSE：
+  - **Streamable HTTP `/mcp`**：
+    - `POST /mcp`：一个 JSON-RPC 消息（或批量数组）一次请求；含 request → `200 application/json`（当请求 `Accept` 偏好 `text/event-stream` 时回 SSE 响应），只有 notification / response → `202` 无 body；非合法 JSON → JSON-RPC `-32700`。首次 `initialize` 签发高熵 `Mcp-Session-Id`；后续带该 header 校验归属，不带该 header 的普通请求保持无状态向后兼容。
+    - `GET /mcp`：校验 `Mcp-Session-Id` 后建立下行 SSE 事件流（15s keepalive）；无 header 返回 `400`。
+    - `DELETE /mcp`：校验归属后关闭并删除会话，返回 `204`。
+  - **Legacy HTTP+SSE `/mcp/sse` + `/mcp/messages`**：
+    - `GET /mcp/sse`：创建 `legacy_sse` 会话，首事件下发 `endpoint`（`/mcp/messages?session_id=<id>`）并保持长连接。
+    - `POST /mcp/messages?session_id=...`：校验归属与 JSON 负载后执行 JSON-RPC，并将响应推入该会话的 SSE 队列后返回 `202`（无 `session_id` 返回 `400`）。
+  - **`McpSessionManager` 会话安全模型**（`src/mcp/http_sessions.py`，单 worker 内存态）：
+    - 每个会话创建时强绑定 `owner_key = (principal.kind, principal.key_id or "owner")` 与 `transport_kind`；`get_owned` 先清理过期（`DEFAULT_IDLE_TTL_SECONDS = 1800.0`），对未知、过期、跨 Key 或跨传输访问统一返回 `404`，不泄露会话存在性。
+    - 单 Principal 活跃会话上限 `DEFAULT_MAX_SESSIONS_PER_PRINCIPAL = 8`（满时驱逐最久空闲会话），SSE 出站队列上限 `DEFAULT_QUEUE_MAX_SIZE = 128`。
+  - **公网探测与一键配置写入**（`src/api/routers/mcp_service.py` & `src/mcp/client_config_writer.py`）：
+    - `_classify_probe` 对探测响应兼容无状态（`405` + `Allow: POST`）与有状态（`400` / `401`）均判 `"reachable"`，对 Cloudflare Access `3xx → cloudflareaccess.com` 或 `200 text/html` 判 `"access_blocked"`。
+    - `POST /api/mcp-service/client-config`（`Depends(verify_local_token)`）调用 `write_client_mcp_config`，支持 `mode = "http" | "streamable_http" | "sse" | "stdio"`，其中 `"sse"` 生成 `{"type": "sse", "url": "<base>/mcp/sse", "headers": {"Authorization": "Bearer ..."}}`。
+  - 分派复用 `mailagent_mcp.handle_request`（与 stdio 同一份），client 是 in-process 的 `PrincipalSkillClient`：按已鉴权的 principal 调 `build_manifest` / `invoke_skill`，scope / confirm / 配额 / 输入校验与 REST 完全同一条 chokepoint。
   - 鉴权同 `/api/skills`（`authenticate_principal`）：无凭据 401，坏 / 撤销 / 过期 key 403。
     key scope 外的工具在 `tools/list` 里看不到，`tools/call` 返回 JSON-RPC `-32602 unknown tool`；
     scope 内但被 confirm 闸等拒绝的调用返回 `isError` 文本 `[<code>] <message>`。
-  - 每次 `tools/call` 落到 invoke 的调用写一行 `agent_api_key_audit`，`route='/mcp'`。
+  - 每次 `tools/call` 落到 invoke 的调用写一行 `agent_api_key_audit`，`route='/mcp'` 或 `'/mcp/messages'`。
   - `initialize` 做版本协商（stdio 同）：请求的 `protocolVersion` 在
     `2024-11-05` / `2025-03-26` / `2025-06-18` 内则回显，否则回 `2025-06-18`；不带版本回
     `2024-11-05`。
-  - 测试：`tests/api/test_mcp_http.py`。
+  - 测试：`tests/api/test_mcp_http.py` · `tests/api/test_mcp_service.py`。
 - `scripts/export_skill_pack.py` → `dist/mailagent-skill-pack/`（gitignored）：README /
   mcp-config.example.json / manifest.json / openapi.json / selftest.sh / skills/<skill>/SKILL.md。
   `selftest.sh` 只跑安全动作（health / manifest / search / report_list；report.run 为 opt-in）。

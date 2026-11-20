@@ -25,6 +25,8 @@
 | DavMail 写路径 trace + Notion 反向链路退役依据 | 退役 Notion 反向链路 / 清 outbox 死分支 / 动 reverse_sync·handlers 前 | [`architecture/davmail-write-path-trace.md`](./docs/reference/architecture/davmail-write-path-trace.md) |
 | **排程规则跨端契约**（`kind:'schedule'` 结构化排程） | 动 custom agent 定时触发 / 报告 Agent 排程 / schedule-builder 预览 / `src/agents/schedule_rule.py` 前 | [`architecture/schedule-rule-contract.md`](./docs/reference/architecture/schedule-rule-contract.md) |
 | **L4 个人 Agent 节点规划 2026-08**（战略定位 + 五 workstream） | 启动本 epic 任一批次 / 排 matters·日历·agent 融合优先级前 / 评估团队协作方向前 | [`l4-personal-agent-node/README.md`](./docs/plans/l4-personal-agent-node/README.md)（docs/plans，epic task `08-17-l4-agent-epic-agent-notion`） |
+| **AI 工作台与网关体验升级 2026-11**（Provider 工作台 / 设置重构 / Menu Bar & macOS 通知 + 删岛 / Usage 缓存监控 / 出站脱敏 / MCP 细粒度） | 动 Provider 配置面 / 设置 IA / Menu Bar 托盘 / Usage 台账 / 隐私脱敏 / MCP 权限前 | [`ai-workbench-upgrade/README.md`](./docs/plans/ai-workbench-upgrade/README.md)（docs/plans，epic task `11-17-ai-workbench-magpie-epic`） |
+| **Computer Use 接入与双向 MCP 演进 2026-11**（双向 Streamable HTTP & SSE / 双层懒加载 / `/connectors` 受管本地连接器 / `computer_use_run` / Teams & OA 闭环） | 动 MCP Server·Client 传输 / `tool_search` 懒加载 / `managed_local` 连接器 / `computer_use_run` / `matter_item_run` 桌面网页接线前 | [`computer-use-mcp-upgrade/README.md`](./docs/plans/computer-use-mcp-upgrade/README.md)（docs/plans，epic task `11-19-computer-use-mcp-epic`） |
 | **架构整体 Review 2026-07 + E0-E4 收敛路线** | 启动 E0-E4 任一收敛 epic / 排架构债优先级前 | [`architecture-review-2026-07/README.md`](./docs/plans/architecture-review-2026-07/README.md)（docs/plans，含 e0-e4 五份实施方案） |
 | LLM Agent（本地 LLM 分类，fallback / cache / 监控） | 改邮件分类、prompt、cache 前 | [`llm-agent/llm-agent.md`](./docs/reference/llm-agent/llm-agent.md) + [`llm-agent/LLM_AGENT_SETUP.md`](./docs/reference/llm-agent/LLM_AGENT_SETUP.md) |
 | LLM Provider Registry（上游多 provider） | 动 provider 配置 / gateway 模型层 / 协议路由 / 模型选择链 / `MAILAGENT_LLM_PROVIDER_REGISTRY` 前 | [`llm-agent/llm-provider-registry.md`](./docs/reference/llm-agent/llm-provider-registry.md) |
@@ -40,7 +42,7 @@
 | AI Agent Harness + KOS（**AI SDK Gateway 是唯一引擎**） | 动前端 chat / gateway / KOS 集成前 | [`llm-agent/ai-sdk-gateway-architecture.md`](./docs/reference/llm-agent/ai-sdk-gateway-architecture.md)（**唯一引擎权威**：embedded gateway / 工具 / HITL 审批 / A2UI / memory / standing-context / serve-api 代理，§13）+ [`llm-agent/kos-integration-design.md`](./docs/reference/llm-agent/kos-integration-design.md) |
 | Skill Delivery API（对外 agent 交付面） | 动 scoped key / `src/skills` / `/api/skills` / MCP / pack 前 | [`llm-agent/skill-delivery-api.md`](./docs/reference/llm-agent/skill-delivery-api.md) |
 | Capability & Context Foundation（配置面 + Standing Context） | 动 `src/agent_config` / `/api/agent/*` / standing-context prompt / installed skill / @mention 前 | [`llm-agent/capability-context-foundation.md`](./docs/reference/llm-agent/capability-context-foundation.md) |
-| **MCP Connectors**（外部服务工具面 · 自建直连 + Composio 双轨） | 动 `src/connectors/` / connector 端点 / gateway connector 工具注入 / 第七能力卡 / **`/connectors` 配置台或内置工具审批档 UI** / `MAILAGENT_MCP_CONNECTORS` 前 | [`llm-agent/mcp-connectors.md`](./docs/reference/llm-agent/mcp-connectors.md) |
+| **MCP Connectors**（外部服务工具面 · 直连 + Composio + 本地受管 `managed_local` 三轨） | 动 `src/connectors/` / connector 端点 / gateway connector 工具注入 / 第七能力卡 / **`/connectors` 配置台或内置工具审批档 UI** / `MAILAGENT_MCP_CONNECTORS` 前 | [`llm-agent/mcp-connectors.md`](./docs/reference/llm-agent/mcp-connectors.md) |
 | **飞书对话**（IM agent 场地 + 飞书内按钮审批闭环） | 动 `src/im/` / `/api/im/*` / gateway `im-chat` 入口 / 设置-AI「飞书对话」区 / `MAILAGENT_IM_FEISHU` 前 | [`llm-agent/im-feishu-chat.md`](./docs/reference/llm-agent/im-feishu-chat.md) |
 | V2.1 远程 chat + report/agent（B-pure-unified 传输层） | 动远程 web chat / serve-api chat 端点 / chat 引擎语义前 | [`remote-chat-report/remote-chat-report-architecture.md`](./docs/reference/remote-chat-report/remote-chat-report-architecture.md) + [设计](./docs/reference/remote-chat-report/v2.1-stage3-chat-platform-design.md) + [看板](./docs/reference/remote-chat-report/v2.1-remote-chat-report-matrix.md) |
 | **Agent 体验大版本专项**（换引擎 + mem0 记忆重构史） | 理解 mem0 记忆演进史 / 跑 agent 回归网前 | 引擎架构 [`llm-agent/ai-sdk-gateway-architecture.md`](./docs/reference/llm-agent/ai-sdk-gateway-architecture.md) §13.18 + M1-M5 计划（已归档）[`memory-skill-core-refactor.md`](./docs/archive/2026-07/agent-experience-epic/memory-skill-core-refactor.md) + 回归网 `tests/agent_eval/` |
@@ -49,7 +51,7 @@
 | **同步历史邮件**（一次性补回某段时间本地缺的邮件） | 动 `src/sync/history_sync.py` / backend 的 `scan_history_window` / `/api/history-sync` / 设置-同步「历史邮件」前 | [`sync/history-sync.md`](./docs/reference/sync/history-sync.md) |
 | Webhook / SSE / Openclaw / Notion API（集成面） | 动 webhook-server / 事件流 / 飞书回调前 | [`integrations/`](./docs/reference/integrations/) |
 | 邮件搜索（**单核 CORE#1** + Query DSL + FTS5 + agentic） | 改搜索语法 / 检索引擎 / agentic 前 | [`search/search-query-syntax.md`](./docs/reference/search/search-query-syntax.md) |
-| 灵动岛 Ping Island 集成（**移除评估已完成，暂缓执行**） | 动岛相关代码前 / 启动删岛前必读 | [`remove-ping-island/README.md`](./docs/plans/remove-ping-island/README.md)（docs/plans，含 4 批次清单 + 预拍板项） |
+| 灵动岛 Ping Island 集成（**已于 2026-11 Phase 3b 全量退役**） | 查退役清单 / 确认保留护栏（historic `island_dispatch` DDL / `deeplink`）前 | [`remove-ping-island/README.md`](./docs/plans/remove-ping-island/README.md)（docs/plans，Phase 3b 已落地） |
 | 前端动效 + 列表性能铁律（Electron renderer） | 动前端列表/正文/动效前 | [`frontend/ARCHITECTURE.md`](./frontend/ARCHITECTURE.md) §7.1-7.2 + [`frontend/docs/motion-gsap.md`](./frontend/docs/motion-gsap.md) |
 | **灵动 Bot 头像**（状态化 SVG 单源模块 + v2 参数化 3D 引擎） | 动 `bot-avatar/` 模块 / AgentAvatar / 头像编辑器 / TurnPresence / avatar_json schema / 主 agent 身份前 | [`frontend/docs/bot-avatar.md`](./frontend/docs/bot-avatar.md) |
 | **前端设计体系 v3「原生材质」**（token SSoT = index.css） | 改主题/token/选中态/圆角/装饰层前 | [`frontend/DESIGN.md`](./frontend/DESIGN.md)（v3 节）+ 落地台账 [`theme-v3-native-material/README.md`](./docs/plans/theme-v3-native-material/README.md) |
@@ -76,7 +78,7 @@
 
 **死硬约束**：
 - DavMail 当前用 Outlook for Windows well-known client_id 伪装（PoC），**不可上生产** —— 需走公司 IT 审批（推荐直接申请 Graph API）。
-- EWS **2026-10-01 起默认阻断**、2027-04-01 完全退役。本机跑的是 DavMail **6.7.0**（EWS 模式）；上游 **6.8.0/6.8.1 已发版并带正式 Graph backend**，且 Outlook clientId 伪装在 Graph 下**仍可用、不需要 IT 审批**（`davmail.mode=O365Graph` + `davmail.enableOidc=false`）。**2026-08-26 复查后仍等待，两周后（2026-09 上旬）再看** —— 上游仍无 6.9，但 trunk 已修 #506（草稿 APPEND 400）、delta sync 默认开启；🔴 **卡点收敛为一行未修的 bug**：`O365Token.java:255` refresh 时写死 EWS resource，1h 后 Graph 全线失效（8-14 上游新增的 token 检查还会**清空 refresh token**）。⇒ **复查判据不是「有没有 6.9」而是「那一行修没修」**；未修则仍需自建 trunk + 一行 patch，换版本解决不了。迁移不需重灌数据（imapUid 同为 MAPI `0x0e23`、UIDVALIDITY 恒 1），但**必须重认证且回切也要重认证**；且 6.8 起 `mode`/`authentication` 拆键，**不改配置不会切到 Graph**（旧值走 legacy fallback 仍是 EWS），改 mode 后须显式补 `davmail.authentication=O365Manual`。完整实证与复查判据见 [`docs/reference/architecture/roadmap-post-cutover.md`](./docs/reference/architecture/roadmap-post-cutover.md) §5.1。
+- EWS **2026-10-01 起默认阻断**、2027-04-01 完全退役。本机跑的是 DavMail **6.7.0**（EWS 模式）；上游 **6.8.0/6.8.1 已发版并带正式 Graph backend**，且 Outlook clientId 伪装在 Graph 下**仍可用、不需要 IT 审批**（`davmail.mode=O365Graph` + `davmail.enableOidc=false`）。**2026-09-27 复查：上游 7.0.0 已于 09-19 发版，但那一行 bug 原样进了正式版，已改为自建补丁版** —— 🔴 `O365Token.java` 259-262 行：`enableOidc=false` 时 refresh 恒带 EWS resource，而授权（`O365Authenticator.java:89`）在 Graph 模式下申请的是 Graph resource ⇒ 首次登录可用、约 1h 后第一次刷新就换回 EWS token，Graph 全线失效。只有「Outlook clientId + 关 OIDC」这个组合踩中，上游无人报告，**不要再等上游修**。补丁只改这一行（Graph 模式下 refresh 用 `getGraphUrl()`），做法是官方 7.0.0 发行包 + 只替换 `O365Token.class`（本机无 ant/maven），影子 PoC 在 `davmail-poc/graph-poc/`（独立端口 21143/21025/21081 + 独立 token，补丁文件同目录）。09-28 已验证：同一份 token 刷新后，补丁版拿到 Graph 权限、读收件箱正常；未打补丁版拿到 Exchange 权限，Graph 返回 `401 Invalid audience`。🔴 7.0.0 日志级别只认 `log4j.logger.davmail` 总开关，子包单独设级别无效；`java -jar davmail.jar` 不认 `-h`，会按默认配置（GUI + 1143/1025 等默认端口）直接启动。复查命令：`curl -sL https://raw.githubusercontent.com/mguessan/davmail/master/src/java/davmail/exchange/auth/O365Token.java | grep -n -A3 "resource is not relevant"`。迁移不需重灌数据（imapUid 同为 MAPI `0x0e23`、UIDVALIDITY 恒 1），但**必须重认证且回切也要重认证**；且 6.8 起 `mode`/`authentication` 拆键，**不改配置不会切到 Graph**（旧值走 legacy fallback 仍是 EWS），改 mode 后须显式补 `davmail.authentication=O365Manual`。完整实证与复查判据见 [`docs/reference/architecture/roadmap-post-cutover.md`](./docs/reference/architecture/roadmap-post-cutover.md) §5.1。
 - AppleScript fallback 路径**始终可用** —— 任何重构都必须保证 emergency 回切不丢数据（回切步骤见 architecture-internals.md）。
 
 **技术栈**：Python ≥3.9（本地 3.11+，远程 webhook-server 3.9+）· AppleScript（fallback）· DavMail 6.7 JVM（主路径）· SQLite（状态 + v4 SSoT + FTS5）· Notion API · BeautifulSoup/lxml · Pydantic · Redis · FastAPI · firecrawl-anydoc（纯本地 Rust 文档提取）· pandas + python-calamine。
@@ -107,6 +109,7 @@
 | `LLM_AGENT_ENABLED` | `false` | 本地 LLM 分类总闸（启用前必看 llm-agent.md 防双跑）。模型 / 上下文源支持行级覆写，保存即生效 |
 | `LLM_PREPROCESS_CONTEXT_SOURCE` | `""`（仅 seed） | 分类 prompt 参考源二选一（`standing_docs` \| `notion_context`，互斥）。🔴 运行时权威已迁 DB 行 |
 | `MAILAGENT_LLM_PROVIDER_REGISTRY` | `true` | 多 Provider 体系（2026-07-13 cutover）：配置权威在 `agent_config.db` 双表，引用格式 `providerId:modelId` |
+| `MAILAGENT_AI_GATEWAY_LOOPBACK` | `true` | Python 后台 LLM 调用优先走内嵌 `ai-gateway` loopback（不可达自动回落直连 SDK） |
 | `CALENDAR_CALDAV_SYNC_ENABLED` | `false` | ★生产=`true`。CalendarSyncWorker 总开关 |
 | `SYNC_FOLDERS` | `[]`（空） | 多文件夹同步白名单（davmail-only）。🔴 **数组序 = 用户自定义显示顺序**，读侧不得 `sorted()` |
 | `SYNC_DATE_MODE` | `relative` | Notion **推送**地板的模式（单源 `config.parse_sync_start_date`）：relative = 今天 − SYNC_LOOKBACK_DAYS（默认 14）、**逐日滚动**；fixed = SYNC_START_DATE（默认 2026-01-01）。早于地板的邮件照常入库、只是不建 Notion 页；补历史走设置页「同步历史邮件」。🔴 davmail 的 IMAP **取信**下界是另一个概念（恒按 SYNC_START_DATE，不滚动）——合并会让窗口外的邮件根本不进本地库 |
@@ -120,7 +123,6 @@
 | `KOS_REQUIRE_LABELED` | `false` | 只放行已跑过 LLM 标注的邮件（issue #49）。默认 false 时未标注邮件（实测约 89%）全部放行 |
 | `MAILAGENT_KOS_RETRY_ENABLED` | `true` | KOS 推送失败重试 + 台账 `kos_ingest_log`（DB v41）。挂主 tick 第 6c 步；探活不可用整段跳过 |
 | `MAILAGENT_REPORT_AGENT_ENABLED` | `false` | 报告 Agent worker（日 / 周 / 月报）；per-agent 还需 `report_agent.enabled` |
-| `MAILAGENT_ISLAND_AGENT_ENABLED` | `true` | harness 审批上灵动岛（2026-07-06 cutover）。🔴 审批以**无岛**方案为主路径，本 flag 只管上岛面 |
 | `MAILAGENT_CHAT_DETACHED_RUNS` | `true` | chat run 与客户端连接解耦：切会话 / 关面板不中断流。配 `/run/active` + `/run/stop` |
 | `MAILAGENT_OPENNESS_SESSION_TOOLS` / `_CONFIG_TOOLS` / `_WEB_TOOLS` | `true` | 开放性 S1（2026-07-06 cutover）：会话检索 3 + 配置读 4 + web 2 工具 |
 | `MAILAGENT_OPENNESS_EXEC_TOOLS` / `_SKILL_INSTALL` | `true` | 开放性 S2。🔴 安全地板不变：`run_command` 无白名单命中恒 HITL、skill 安装恒 HITL |
@@ -129,7 +131,7 @@
 | `MAILAGENT_CALENDAR_AGENT_TOOLS` | `true` | gateway 5 个日历工具（2 读 + 改期 / RSVP / 删除）。三个写工具出厂默认弹卡 |
 | `MAILAGENT_NOTION_AGENT_TOOL` | `true` | `notion_agent_chat` 工具（委派 notion-agent CLI，edit-tier 出厂弹卡）。⚠️ 真开关是 Skills 里的 `notion_agent` 条目，本 flag 只是 kill-switch |
 | `MAILAGENT_NOTION_OAUTH` | `true` | Notion OAuth 授权入口显隐（kill-switch）；只门控设置页/onboarding 入口，不影响已写入配置 |
-| `MAILAGENT_MCP_CONNECTORS` | `false` | MCP connector 总闸（灰度中）。双轨：Notion / Atlassian 自建直连 + 其余 14 家 Composio；per-tool 三档 `auto\|ask\|off` |
+| `MAILAGENT_MCP_CONNECTORS` | `true` | MCP connector 与 Computer Use 总闸（2026-11-20 cutover 默认开，已撤出「实验室」；显式 false 回退）。三轨：Notion / Atlassian 自建直连 + 其余 14 家 Composio + 受管本机 `managed_local`（`browser_use` / `desktop_use`）；默认开启双向有状态 Streamable HTTP/SSE、`tool_search` 双层懒加载与 `computer_use_run`；per-tool 三档 `auto\|ask\|off` |
 | `MAILAGENT_MEMORY_LAYERS` | `false` | memory.md 分层抽取（5 层 + 兜底），按层预算截断。🔴 只门控写侧，读侧判据是文档结构 |
 | `MAILAGENT_SKILL_CATALOG_PROMPT` | `false` | 技能名单注入 system prompt 可缓存前缀（仅 manual chat）。🔴 是导航用的能力事实，**不是**权威开关态 |
 | `MAILAGENT_IM_FEISHU` | `true` | 飞书对话总闸（2026-08-04 cutover）。🔴 与通知 bot 完全隔离；没配凭证 = 零启动零连接 |

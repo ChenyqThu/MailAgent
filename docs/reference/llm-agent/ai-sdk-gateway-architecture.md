@@ -2030,3 +2030,17 @@ pending（owner 调成 ask）= prompt 复核 + approve / reject。纯逻辑在 `
 agent_eval `baselines/library.jsonl` + `AGT-LIBRARY-001..004`（含 CAS 重试地板与「文档里塞指令不得触发
 `library_delete`」的注入地板）· 既有的 catalog / tool_prefs parity / 能力卡 parity / 中文名 / toolTitle
 闸全部覆盖到这七件。
+
+---
+
+## 13.32 双向 MCP 图像回放、双层懒加载与 `computer_use_run`（2026-11 Computer Use Epic）
+
+1. **`toModelOutput` + `convertToModelMessages(..., { tools })` 多模态回放不变量**：
+   - `frontend/src/ai-gateway/tools/connector.ts::connectorToolToModelOutput` 将 Python 返回的 `{content, images}` 转为 AI SDK v7 `type: 'content'` 多模态输出（`text` 保留 `UNTRUSTED_MCP_TOOL` 围栏，`image-data` 直出模型；不把大 base64 串拼进纯文本工具记录）。
+   - `frontend/src/ai-gateway/chatRun.ts` 必须把与 `streamText({ tools })` **完全同一份**已准入 `tools` `ToolSet` 传给 `await convertToModelMessages(messages, { tools })`，否则跨轮重放历史截图时 `tool.toModelOutput` 不会被触发。
+2. **双层懒加载引擎（默认直接启用，零 `.env` 配置）**：
+   - `frontend/src/ai-gateway/tools/tool_search.ts` 保持 `tools` 全量注册以满足校验与历史回放，首步通过 `prepareStep` 的 `activeTools` 仅暴露核心工具 + `tool_search`（长尾 `mcp__*` 工具总数 `<= LAZY_EAGER_PIN_THRESHOLD = 5` 时豁免直出），当模型检索命中时仅把已通过 `applyContextModePolicy` / `admitDynamicTools` / `off`/`deny` 门禁的候选工具并入同回合下一步 `activeTools`，同时保持 `stable_prompt.ts` 前缀静态可缓存。
+3. **`computer_use_run` 专职子 Agent 与三道安全闸（默认直接启用，零 `.env` 配置）**：
+   - `frontend/src/ai-gateway/tools/computer_use.ts` 经 `auditedWriteTool(` 注册单一入口 `computer_use_run`（`policy.ts` 归类 `class: 'exec'`，`src/agent_config/tool_prefs.py` `configurable=False` 出厂 `"ask"`）；子循环独立父子 Session、仅挂载过滤后的 `mcp__browser_use__*` / `mcp__desktop_use__*` 子工具，**绝不递归暴露 `computer_use_run` 或邮件/文件/命令工具**。
+   - **滑窗截图裁剪**：子 `prepareStep` 仅保留最近 `MAX_CHILD_VISUAL_STEPS = 2` 步视觉截图，更早步骤替换为 `[screenshot from step #k omitted: see action summary]`；系统提示词要求优先 AX/DOM（`browser_snapshot` / 桌面 `@ref`），窗口级截图兜底；UI 与文档明示 `privacyMaskMiddleware` 不遮罩图像原始像素。
+   - **Scope Guard 与终态停靠**：阻断 `file://`/`javascript:`/`data:`/`chrome://` 与域名后缀伪造（`status: 'scope_violation'`），遇 `stop_before_submit !== false` 的不可逆提交/发送/付款动作停靠返回 `status: 'awaiting_confirmation'`；`im_chat` / `untrusted_trigger` / `contact_governance` / 未显式授权 `cron_headless` 结构性封禁，仅 `manual_chat` 与显式发起的 `propose_only` `matter_item_run`（Gateway Belt 1/2 + Python DB 核验 Belt 3）按有界范围执行。

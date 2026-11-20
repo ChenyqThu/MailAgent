@@ -9,13 +9,7 @@
 > 自己的能力交付给外部 agent —— 我们是 MCP **server**）；本文是我们当 MCP **client**。
 > gateway 工具注册的总体架构见 [`ai-sdk-gateway-architecture.md`](./ai-sdk-gateway-architecture.md)。
 
-`status: living` · `last-verified: 2026-08-06`（08-06 两笔 owner dogfood 拍板：③ **双轨预置
-目录** —— Notion / Atlassian 回到自建 MCP 直连、其余 14 家留在 Composio 托管，见 §12；
-④ **Connectors 独立配置台** —— 内置工具审批档与外部连接合并成 `/connectors` 一个页，
-设置页那两个区降级成深链，见 §13。task `08-05-08-06-connector-dual-track-and-console`。
-在此之前：08-05 两笔拍板 ① per-tool 三档 auto/ask/off（master-plan WP-10：默认档 auto、
-write 可免卡、预处理 read 天花板拆除、im 写类跟随三档）；② Composio 预置目录 + BYOK
-（WP-12，见 §11 —— 其「单轨」前提已被 ③ 证伪）。flag 仍默认 off）
+`status: living` · `last-verified: 2026-11-19`（2026-11 Computer Use 接入与双向 MCP 演进：新增 `sse` 客户端传输与 `ImageContent` Pillow 多模态归一化、第三轨 `managed_local`（`browser_use` / `desktop_use` 一键受管安装器与 Chrome 三模式 / TCC 权限面板）、`StdioSessionPool` 空闲 TTL 休眠、以及 `matter_followup` `propose_only` `computer_use_run` 的 DB 核验 Belt 3。在此之前：08-06 双轨预置目录 §12 与 `/connectors` 配置台 §13）
 
 ---
 
@@ -45,8 +39,8 @@ write 可免卡、预处理 read 天花板拆除、im 写类跟随三档）；�
   解析恒「行优先 → 目录兜底」。
   当前直连两家：`notion` → `https://mcp.notion.com/mcp`，`atlassian` →
   `https://mcp.atlassian.com/v1/mcp/authv2`（08-06 双轨，§12）。
-- **MVP 只做 Streamable HTTP**（两家目标服务都是）；`transport` 列留了 stdio 的位，不实现。
-- **只做 tools**：MCP 的 `prompts` / `resources` 不做。
+- **三种客户端传输全覆盖**：`CONNECTOR_TRANSPORTS = ("streamable_http", "sse", "stdio")` —— 支持远程 Streamable HTTP、传统 HTTP+SSE（`mcp.client.sse.sse_client`）及本地 `stdio` 子进程（含受管本地运行时 `browser_use` / `desktop_use`，见 §14）。
+- **工具结果支持文本 + 多模态 `ImageContent`**：`ConnectorClient._format_call_result` 对纯文本保留 50k 字符截断，对 MCP `ImageContent` 经 Pillow 归一化为 `images` 列表透传给 gateway `toModelOutput`（§14）；MCP `prompts` / `resources` 仍不做。
 
 ---
 
@@ -447,8 +441,8 @@ gateway 注册期过滤是第一道，但那道在 TS 侧、由调用方自证�
   owner 本人在环，审批链在 gateway 侧（`im_chat` 自阶段 2 PR-1 / 08-04 拍板起与 manual 同档；
   08-05 起写类审批形态按 per-tool 三档——`ask` 弹卡（manual 桌面卡 / im 经飞书按钮投递）、
   `auto` 免卡执行，§6.1）；
-- headless 两模式（`HEADLESS_CONTEXT_MODES`）→ 按 `agent_id` 读该 agent 的 `grant_connectors`；
-  无 agent_id / 无行 / 该 connector 不在 grants 里 → **拒**；
+- headless 两模式（`HEADLESS_CONTEXT_MODES`：`untrusted_trigger` / `cron_headless`）→ 按 `agent_id` 读该 agent 的 `grant_connectors`；无 agent_id / 无行 / 该 connector 不在 grants 里 → **拒**；
+- `matter_followup` venue → **常规调用恒返回 `"read"` 天花板** + `deny_ask_mode=True` + `deny_destructive=True`；**唯一窄例外（Belt 3，见 §14.5）**：仅当 `caller` 声明 `child_tool="computer_use_run"` 调 `browser_use` / `desktop_use`，且 `service.is_matter_computer_use_child_authorized` 在 `sync_store_db_path` 中核验命中 `running` 态的 `propose_only` `matter_item_dispatch` + `async_jobs.params_json.computer_use_draft` 时，才放行至 `"write"` 并豁免 `deny_ask_mode`（`deny_destructive=True` 与 `mode="off"` 依然强制生效）；任意校验失败 / `autonomous` / 第三方 connector 一律 403 `E_CONNECTOR_GRANT_DENIED`；
 - 🔴 **两张显式白名单**：两者互斥、并起来 == `CALLER_CONTEXT_MODES`（parity 闸锁着），落在两张
   白名单之外的 mode（当前值域下不可达，**将来任何新增的**场地都会落这里）一律拒——写成「排除
   owner-present 后就当 headless」会让某天跟着 TS `AGENT_CONTEXT_MODES` 新增的第五种 mode 悄悄
@@ -516,7 +510,7 @@ gateway 注册期过滤是第一道，但那道在 TS 侧、由调用方自证�
 |---|---|
 | `tests/config/test_connector_contract_parity.py` | crud 天花板词表 + 序（**七处副本**，🔴 任一侧多出 `delete` = 安全地板破口）· caller `context_mode` 值域（`service.CALLER_CONTEXT_MODES` ↔ `policy.ts::AGENT_CONTEXT_MODES`）· **per-tool 三档词表**（08-05：`store.CONNECTOR_TOOL_MODES` canonical ↔ TS 两处 `ConnectorToolMode` 类型联合 + gateway admission 判据锚点）· **目录 track 词表**（08-06 ③c：`catalog.CONNECTOR_TRACKS` canonical ↔ `types/connector.ts::ConnectorTrack`）+ **Python 内的 track↔source 双射闸**（`TRACK_TO_SOURCE` 的值必须恰好铺满 `CONNECTOR_SOURCES` —— 漏一边 = `row_is_off_track` 把一整轨的行全判成「已被取代」） |
 | `tests/config/test_untrusted_fence_parity.py` | `UNTRUSTED_MCP_TOOL` 围栏格式两语言逐字节一致 |
-| `tests/config/test_flag_cross_language.py` | `MAILAGENT_MCP_CONNECTORS` 已登记为 `[lifecycle, config]` 双载体，🔴 **双侧默认必须同为 false**，cutover 时两边一起翻 |
+| `tests/config/test_flag_cross_language.py` | `MAILAGENT_MCP_CONNECTORS` 已登记为 `[lifecycle, config]` 双载体，🔴 **双侧默认必须同为 true（2026-11-20 cutover）**，回退时两边一起翻 |
 
 七处副本 = `trigger._CONNECTOR_GRANT_VALUES`（保存闸，权威）· `service.CONNECTOR_CRUD_RANK` ·
 `policy.ts::ConnectorGrant`（类型联合）· `policy.ts::CONNECTOR_CRUD_RANK` ·
@@ -526,9 +520,9 @@ TS 三份里两份是编译期类型（压根没有值可 import）。
 
 ---
 
-## 8. 灰度开关与回退
+## 8. 开关与回退
 
-**`MAILAGENT_MCP_CONNECTORS`，默认 `false`**（沿用 island 的 ship off → dogfood → cutover 模式）。
+**`MAILAGENT_MCP_CONNECTORS`，默认 `true`**（2026-11-20 cutover 起开箱默认启用，不再需要 `.env` 配置，并已从设置「实验室」撤出；显式 `false` 作应急回退）。
 
 **双载体**（与 island 同形态），翻开关**两侧都要重启**：
 
@@ -539,7 +533,7 @@ TS 三份里两份是编译期类型（压根没有值可 import）。
 
 🔴 pydantic 而非 `.env` 热读是**刻意**的：热读会让 UI 与端点在同一次会话里劈叉（一半读到新值
 一半读到旧值）；且 env-only 直读有 ratchet 闸（`tests/config/test_env_only_reads.py` 禁新增）。
-代价 = 翻开关要重启，对灰度开关可接受。
+代价比热读多一次重启，但可保证前后端状态单调一致。
 
 **全部消费点**（off 时逐个字节级 inert）：
 
@@ -559,11 +553,7 @@ TS 三份里两份是编译期类型（压根没有值可 import）。
 **off 时存量数据惰性无害**：`connector` / `connector_tool` 行照常在库、`grant_connectors` 照常
 可存 —— 只是没有任何消费者。
 
-**当前状态 / 待 cutover 裁决**（owner 可否决）：**不加 Settings 开关**——dogfood 之后直接拍
-cutover 默认 on（env 显式 false 应急回退），对齐既有 harness flag 惯例（island / openness /
-custom agents 全是这么走的）。理由：一个既要 env 又要 UI 的双开关会产生「界面开着但 env 关着」
-的第二种失效态，而 connector 的真正 owner 控制面已经有三层（per-connector `enabled` /
-per-tool 三态 / per-agent grant）。
+**已 cutover 裁决（2026-11-20）**：**不进 Settings「实验室」**——开箱默认 `true`（env 显式 `false` 作应急回退），`/connectors`（含 `managed_local` 本机 `browser_use` / `desktop_use` 一键安装）与双向 MCP / `computer_use_run` 直接启用，无需修改 `.env`。
 
 ---
 
@@ -1056,3 +1046,41 @@ owner 明确要求（LobeHub 截图里是展开的，我们要更收敛的默认
 **测试**：`frontend/tests/shared/connectors/ConnectorsConsoleBuiltin.test.tsx` ·
 `ConnectorsConsoleExternal.test.tsx` · `ConnectorsSettingsLink.test.tsx`
 （覆盖分组默认折叠、组级批量走红确认、三档切换落库、不可配置工具不可改、设置页只剩深链）。
+
+---
+
+## 14. 2026-11 演进：SSE 客户端、`ImageContent`、受管本地轨 `managed_local` 与 SQLite 休眠
+
+### 14.1 `sse` 客户端传输与自定义 `httpx_client_factory`
+
+- `store.CONNECTOR_TRANSPORTS = ("streamable_http", "sse", "stdio")` 与 TS `ConnectorTransport` / `CustomMcpDialog` 由 `tests/config/test_connector_contract_parity.py` ③d 双向锁死。
+- `ConnectorClient.session()` 在 `transport == "sse"` 时调 `mcp.client.sse.sse_client`（`SSE_READ_TIMEOUT_SECONDS = 300.0`，不传不存在的 `http_client=` 参数，而是注入 `headers` / `auth`；单测注入 `http_transport` 时通过 `_build_sse_httpx_factory` 包成 `McpHttpClientFactory`）。
+- `POST/PATCH /api/connector/custom` 对 `"sse"` 走与 `"streamable_http"` 相同的 URL 校验与 `custom_headers_cipher` 加密逻辑。
+
+### 14.2 多模态 `ImageContent` Pillow 归一化
+
+- `ConnectorClient._format_call_result` 同时提取文本（`CALL_RESULT_MAX_CHARS = 50_000`）与 MCP `ImageContent` 块，并经 Pillow 归一化为 `images: list[{"media_type", "data"}]` 透传给 `service.invoke_connector_tool` 与 `POST /api/connector/{id}/tools/{name}/invoke`：
+  - `ImageOps.exif_transpose()` 矫正方向，最大边超 `CALL_RESULT_IMAGE_MAX_EDGE = 1280` 用 `LANCZOS` 等比缩小；单图超过 `CALL_RESULT_SINGLE_IMAGE_COMPRESS_THRESHOLD = 512 KiB` 转 JPEG q=85；
+  - 硬上限：最多 `CALL_RESULT_MAX_IMAGES = 4` 张、累计字节不超过 `CALL_RESULT_MAX_IMAGE_BYTES = 2 MiB`（超限置 `truncated=True` 并附文本提示；损坏图片字节不崩溃，附加 `[invalid image omitted]` 降级）。
+
+### 14.3 第三轨 `managed_local`（`browser_use` / `desktop_use`）与一键安装器
+
+- **三轨双射契约**：`catalog.CONNECTOR_TRACKS = ("direct", "composio", "managed_local")` 经 `catalog.TRACK_TO_SOURCE` 一一映射到 `store.CONNECTOR_SOURCES = ("composio", "custom_mcp", "managed_local")`，`registry._def_from_row` 绝不把 `managed_local` 标成 `is_custom=True`，且动态向 `local_installer.resolve_stdio_command` 求解启动参数。
+- **开箱即用与运行时路径**：`managed_local` 与 `MAILAGENT_MCP_CONNECTORS` 随 2026-11-20 cutover **直接默认启用**（无需额外 `.env` 开关，不进「实验室」）；运行时默认落盘于 `<userData>/mcp-runtimes/`（由 `resolve_agent_config_db_path()` 推导；单测通过 `local_installer._RUNTIMES_DIR_OVERRIDE` 隔离在 `tmp_path`）。
+- **`src/connectors/local_installer.py` 安全纪律**：
+  - 所有写/解压先入 `.tmp-<id>-<uuid>/`，全部校验通过才 `os.replace` 进 `<id>/`，`finally` fail-closed 清理残片，绝不调用 `sudo`、绝不写 `<runtime_base>` 之外。
+  - `browser_use`（`@playwright/mcp`）：隔离 `--prefix pkg --cache .npm-cache` 安装，支持三模式：`cdp_chrome`（默认 `--cdp-endpoint=chrome`，支持 `http(s)://` 覆写）、`extension`（`--extension`）、`isolated_profile`（`--user-data-dir <runtime_dir>/profile`）。
+  - `desktop_use`（`vercel-labs/agent-desktop` `v1.3.1`，`darwin-arm64` / `win32-x64`）：下载 `.tar.gz` 后强制 SHA-256 校验（不匹配抛 `E_CHECKSUM_MISMATCH` 500 并清 staging）、安全解压（拒绝路径穿越与 symlink）、赋 `0o755`，macOS 剥 `com.apple.quarantine` 并 ad-hoc `/usr/bin/codesign --sign - --force`，args 固定 `["mcp"]`。
+- **Desktop-only 端点**（`Depends(verify_local_token)`，拒绝远程 CF JWT）：
+  - `GET /api/connector/system-permissions` / `POST /api/connector/system-permissions/open`（Electron IPC 优先 + Python `ctypes` TCC 探针 / `/usr/bin/open` 兜底，非 macOS 返回 `unsupported`）。
+  - `GET /api/connector/{id}/install-status`、`POST /api/connector/{id}/install`、`POST /api/connector/{id}/uninstall`、`PATCH /api/connector/{id}/runtime-options`（更新 `agent_config.db::connector.runtime_config_json` 并立即 `stdio_pool.invalidate`）。
+
+### 14.4 SQLite 只读零进程休眠与 `StdioSessionPool`
+
+- 启动、`/catalog`、`/api/connector` 列表与 TS `tool_search` 只查询 `agent_config.db` 缓存清单，**零 `stdio` 子进程、零远端常驻连接**。
+- `src/connectors/stdio_pool.py::StdioSessionPool` 按需在单 task 内拉起 `stdio` 子进程（维护 `anyio` cancel scope），默认空闲 TTL 为 `300.0` 秒（受管长会话运行时 `browser_use` / `desktop_use` 为 `600.0` 秒）；卸载或切配置后调用 `invalidate()` 即时回收。
+
+### 14.5 `matter_followup` 下 `computer_use_run` 的 DB 核验 Belt 3
+
+- 对常规 `matter_followup` 调用及所有第三方 connector（`notion` 等），`resolve_caller_ceiling` 仍钉死 `"read"`、`is_matter_followup_caller` 为 `True`（`deny_ask_mode=True` + `deny_destructive=True`）。
+- 仅当 `caller` 携带 `context_mode="matter_followup"`、`child_tool="computer_use_run"`、严格正整数 `job_id` + `dispatch_id` 且目标为 `browser_use` / `desktop_use` 时，`service.is_matter_computer_use_child_authorized` 在 `sync_store_db_path` 中联表核验 `matter_item_dispatch.state == 'running'` ∧ `exec_profile == 'propose_only'` ∧ `async_jobs.status == 'running'` ∧ `params_json.computer_use_draft` 非空非通配且授权该 connector，命中才放行 `"write"` 天花板并豁免 `deny_ask_mode`（`deny_destructive=True` 依然强制保留）；任何伪造、停机 job 或 `autonomous` 一律 403 `E_CONNECTOR_GRANT_DENIED`（`tests/connectors/test_matter_computer_use_gate.py`）。
