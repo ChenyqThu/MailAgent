@@ -8,7 +8,6 @@ import type { EventsApi } from './events'
 import type { FeedbackApi } from './feedback'
 import type { FolderApi } from './folder'
 import type { HistorySyncApi } from './historySync'
-import type { IslandApi } from './island'
 import type { JobsApi } from './jobs'
 import type { KosApi } from './kos'
 import type { LlmApi } from './llm'
@@ -56,8 +55,6 @@ export interface MailApi {
   settings: SettingsApi
   /** Sprint 8 — electron-updater bridge (current version + check / download / install). */
   updater: UpdaterApi
-  /** Sprint 9 — ping-island bridge (status + appearance broadcast + AI draft envelopes). */
-  island: IslandApi
   /** Sprint 16 — SSE events bridge (replaces 5s polling). */
   events: EventsApi
   /** Sprint 18 §PR B — repo-root .env read/write. Settings tabs use this to

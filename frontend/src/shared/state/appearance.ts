@@ -357,24 +357,6 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
 // REVIEW-LOG C-06: op-id + rAF guard. Multiple rapid triggers collapse to last.
 let opCounter = 0
 
-// Sprint 10 reviewer L7: coalesce `island:appearance` envelope emits so a
-// rapid theme + accent flip in the same tick produces ONE envelope instead
-// of two. The main side dedupes by sessionKey, but each emit still burns a
-// socket connect (~ms-scale latency) that we'd rather not waste.
-let islandAppearanceRafId: ReturnType<typeof requestAnimationFrame> | null = null
-
-function scheduleIslandAppearance(): void {
-  if (islandAppearanceRafId !== null) return
-  islandAppearanceRafId = requestAnimationFrame(() => {
-    islandAppearanceRafId = null
-    const w = window as unknown as {
-      electron?: { ipcRenderer?: { send: (ch: string, v: unknown) => void } }
-    }
-    const { accent, resolvedTheme } = useAppearance.getState()
-    w.electron?.ipcRenderer?.send('island:appearance', { accent, theme: resolvedTheme })
-  })
-}
-
 export function applyResolvedTheme(): void {
   const myOp = ++opCounter
   requestAnimationFrame(() => {
@@ -402,15 +384,6 @@ export function applyResolvedTheme(): void {
       }
       w.electron?.ipcRenderer?.send('appearance:theme', resolved)
       w.electron?.ipcRenderer?.send('appearance:nativeTheme', themeMode)
-      // Sprint 9 §2.3 — broadcast a combined (accent, theme) snapshot to the
-      // ping-island bridge. main/handlers/island.ts wraps this into a
-      // `AppearanceChange` envelope; ping-island's fork uses metadata.* to
-      // repaint accent + theme. The send is silently no-op'd by main when
-      // the integration is disabled / dev-disabled / disconnected, so the
-      // renderer never has to gate on connection state itself.
-      // Sprint 10 L7: coalesced via scheduleIslandAppearance() so back-to-back
-      // applyResolvedTheme + applyAccent in the same tick → one envelope.
-      scheduleIslandAppearance()
     }
 
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -435,14 +408,8 @@ export function applyAccent(accent: AccentId): void {
     electron?: { ipcRenderer?: { send: (ch: string, v: unknown) => void } }
   }
   w.electron?.ipcRenderer?.send('appearance:accent', accent)
-  // Sprint 9 §2.3 + Sprint 10 L7 — combined payload coalesced into one rAF.
-  scheduleIslandAppearance()
 }
 
-// Sprint 18 #4 — Surface 是 UI 视觉风格, 不广播到 Island (Island 是 ping-
-// island 单独的视觉, 没有 glass-* layer 共享需求). 默认 'frosted' 不写
-// attribute, 让 CSS 的 base .glass-* 自然生效; solid 才写 attribute
-// 触发 :root[data-surface='...'] selector 覆盖.
 export function applySurface(surface: SurfaceStyle): void {
   const root = document.documentElement
   if (surface === 'frosted') root.removeAttribute('data-surface')

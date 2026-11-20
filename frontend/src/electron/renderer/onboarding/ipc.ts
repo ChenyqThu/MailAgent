@@ -108,9 +108,7 @@ export type BackendKind = MailBackendKind
 
 /** Plugin keys the wizard collects (core 'notion' is always on, not sent). */
 export interface PluginFlags {
-  island?: boolean
   llm?: boolean
-  digest?: boolean
   calendar?: boolean
   [key: string]: boolean | undefined
 }

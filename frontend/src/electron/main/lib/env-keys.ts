@@ -125,13 +125,6 @@ export const MANAGED_ENV_KEYS = [
   // 向导写入, 默认 applescript (零依赖)。
   'MAILAGENT_BACKEND',
 
-  // — Daily digest (Ping Island Phase 3 每日巡检)。config.py Field, boolean toggle,
-  // 默认 false。向导插件勾选项之一 (plugins.digest → 这里)。
-  'MAILAGENT_DAILY_DIGEST_ENABLED',
-  // 巡检钟点 (Lane 2 #3)。开关此前只在向导有 UI、钟点全无 UI = 半个功能 ——
-  // IslandUpdatesTab「每日巡检」区补齐两者。逗号分隔小时 (本机时区), 默认 9,18。
-  'MAILAGENT_DAILY_DIGEST_HOURS',
-
   // — Report agents (Lane 2 #10, 报告 agent 总闸)。config.py Field 默认 false。
   // 启动条件 = 本 flag OR 任一 report 行 enabled (service.py:737, OR 语义) —— flag 开 =
   // worker 常驻, 之后启用报告行**不用再重启**; flag 关 = 首次启用某报告后需重启一次。
@@ -278,20 +271,6 @@ export const MANAGED_ENV_KEYS = [
   // 🔴 默认值都不动 —— 翻默认会让存量用户入库量骤降 ~89% (无声破坏性变更)。
   'KOS_INGEST_PRIORITY_FLOOR',
   'KOS_REQUIRE_LABELED',
-
-  // — Island (PR D IslandUpdatesTab)
-  'PING_ISLAND_ENABLED',
-  'ISLAND_SOCKET_PATH',
-  // 邮件弹卡范围 (Lane 2 #1 —— 全批最该暴露的一个: 直接决定被打扰频率)。
-  // important (默认) = 仅 AI 判定紧急/重要弹卡; all = 每封新邮件都弹 (旧行为)。
-  // 二选一 select, 默认经 placeholder 如实展示; service.py 启动传入 → restart-required。
-  'ISLAND_MAIL_NOTIFY_SCOPE',
-  // 岛外观 (Lane 2 #10 追加项): 主题色六选一 (coral/cobalt/teal/rose/slate/olive,
-  // .env.example:627 权威枚举) + 明暗二选一。App 本体有完整主题设置、唯独岛只能改
-  // 文件——纯外观偏好零风险。envelope metadata 透传 Swift; service.py 启动传入 →
-  // restart-required。默认 coral / dark 经 placeholder 如实展示。
-  'ISLAND_ACCENT',
-  'ISLAND_THEME',
 
   // — Remote Access (serve-api / RemoteAccessTab). V2 远程访问从 dogfood (手动
   // nohup serve-api) 收尾成生产态: serve-api 进程纳入打包 app 的

@@ -895,85 +895,6 @@ class Config(BaseSettings):
         description="JobWorker 主循环 poll 间隔（秒），默认 5。空闲时 claim 不到 job 即 sleep 此值。",
     )
 
-    # =========================================================================
-    # ping-island 灵动岛集成 (Island-Sprint 2)
-    # 详见 frontend/ISLAND-PLUGIN.md。ping_island_enabled 默认开（Phase 1+2+F1-F6 已 ship）；仍需装 ping-island.app，未装则 socket fail-open
-    # =========================================================================
-    ping_island_enabled: bool = Field(
-        default=True, env="PING_ISLAND_ENABLED",
-        description="是否启用 ping-island 派发（默认开，Phase 1+2+F1-F6 已 ship）。失败 fail-open，不影响主同步。",
-    )
-    island_socket_path: str = Field(
-        default="/tmp/island.sock", env="ISLAND_SOCKET_PATH",
-        description="ping-island Swift daemon 监听的 unix domain socket 路径",
-    )
-    island_socket_timeout: float = Field(
-        default=3.0, env="ISLAND_SOCKET_TIMEOUT",
-        description="connect/sendall/recv 三阶段共享超时（秒，REVIEW-LOG H-16）",
-    )
-    ping_island_lang: str = Field(
-        default="system", env="PING_ISLAND_LANG",
-        description="envelope 标题/预览 i18n locale：system / zh-CN / en-US",
-    )
-    ping_island_reconnect_probe_interval: int = Field(
-        default=300, env="PING_ISLAND_RECONNECT_PROBE_INTERVAL",
-        description="sleep/wake 后探测 socket 文件存在的间隔（秒，H-17）",
-    )
-    ping_island_queue_max: int = Field(
-        default=20, env="PING_ISLAND_QUEUE_MAX",
-        description="发送失败 backlog queue 最大长度（deque maxlen，超出丢老的）",
-    )
-    island_accent: str = Field(
-        default="coral", env="ISLAND_ACCENT",
-        description="灵动岛主题色（前端 DESIGN.md §2.7 六色之一，envelope metadata 透传给 Swift）",
-    )
-    island_theme: str = Field(
-        default="dark", env="ISLAND_THEME",
-        description="灵动岛 light/dark mode（envelope metadata 透传，Swift 端按此切 token）",
-    )
-    island_mail_notify_scope: str = Field(
-        default="important", env="ISLAND_MAIL_NOTIFY_SCOPE",
-        description="邮件通知上岛范围。important（默认）= 仅 AI 判定重要及以上级别弹卡："
-                    "MailReceived 一律静默（该时点无 priority），LLMReviewed(Urgent) 仅"
-                    "🔴 紧急 / 🟡 重要发。all = 每封新邮件 + 全部 LLM 结果都弹（旧行为回退开关）。"
-                    "非邮件卡（日历 / DeadLetter / agent 审批等）不受影响。",
-    )
-    # ---- 灵动岛 harness agent 上岛（Part B，默认开，完全离岛 gateway 服务端 resume）----
-    # 🔴 字段名 island_agent_enabled ≠ env MAILAGENT_ISLAND_AGENT_ENABLED → 必须 validation_alias
-    #    (pydantic v2 忽略 Field(env=)，见本类顶 model_config 注释)。默认开（E3 cutover，
-    #    2026-07-06，owner 终拍）→ serve-api /api/island/agent/announce 正常登记 + 发卡；
-    #    无岛（Ping Island 未装/未跑）时 announce 是 fail-open no-op（socket send 失败仅 debug
-    #    日志，不抛、不重试、不入队，有直接单测），非报错。env 显式 false = 应急回退。
-    island_agent_enabled: bool = Field(
-        default=True, validation_alias="MAILAGENT_ISLAND_AGENT_ENABLED",
-        description="是否启用 harness agent(前端 chat)审批上灵动岛（Part B）。gated by ping_island_enabled；"
-                    "开时 AI SDK Gateway 需审批的写工具会把审批卡推上岛，岛上点批准经解耦 ack 通道触发"
-                    "gateway 服务端 resume（用户完全离开 app 也能执行）。默认开（E3 cutover 2026-07-06，"
-                    "owner 终拍）；无岛时 fail-open 静默 no-op（有单测），env 显式 false 应急回退。",
-    )
-
-    # ---- 灵动岛 Phase 3 DailyDigest（每日巡检，默认关闭，gate by ping_island_enabled）----
-    mailagent_daily_digest_enabled: bool = Field(
-        default=False, env="MAILAGENT_DAILY_DIGEST_ENABLED",
-        description="是否启用灵动岛每日巡检（DailyDigest）；island 开 + 此开关开才跑。默认关。",
-    )
-    mailagent_daily_digest_hours: str = Field(
-        default="9,18", env="MAILAGENT_DAILY_DIGEST_HOURS",
-        description="每日巡检触发钟点（本机系统时区，逗号分隔小时），默认 9,18。",
-    )
-    mailagent_daily_digest_window_hours: int = Field(
-        default=24, env="MAILAGENT_DAILY_DIGEST_WINDOW_HOURS",
-        description="巡检回看窗口小时数，默认 24（取最近 24h 邮件做汇总）。",
-    )
-    mailagent_daily_digest_max_emails: int = Field(
-        default=50, env="MAILAGENT_DAILY_DIGEST_MAX_EMAILS",
-        description="单次 digest 喂给 LLM 的邮件 brief 封数上限（按 priority/date 排序取前 N），默认 50。",
-    )
-    mailagent_daily_digest_max_bulk_ids: int = Field(
-        default=30, env="MAILAGENT_DAILY_DIGEST_MAX_BULK_IDS",
-        description="每个 bulk action 携带的 internal_id 列表上限（单次一键批量处理封数），默认 30。",
-    )
-
     # ---- 报告 Agent 系统（v18, src/reports；默认关）----
     mailagent_report_agent_enabled: bool = Field(
         default=False, env="MAILAGENT_REPORT_AGENT_ENABLED",
@@ -1291,9 +1212,8 @@ class Config(BaseSettings):
     calendar_reminder_lead_minutes: int = Field(
         default=10, env="CALENDAR_REMINDER_LEAD_MINUTES",
         description=(
-            "会前灵动岛提醒提前量 (分钟, epic 阶段2·2.5). 挂 CalendarSyncWorker "
-            "60s poll 顺路检查, 同 occurrence 只提醒一次; PING_ISLAND_ENABLED 关 / "
-            "无岛时静默 fail-open."
+            "会前提醒提前量 (分钟, epic 阶段2·2.5). 挂 CalendarSyncWorker "
+            "60s poll 顺路检查, 同 occurrence 只提醒一次, 通过 NotifyCenter 推送桌面提醒."
         ),
     )
     caldav_op_timeout_seconds: int = Field(

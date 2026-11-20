@@ -120,21 +120,6 @@ test('06 settings-full-page', async () => {
   await snap(win, '06-settings-full', { fullPage: true })
 })
 
-test('07 settings-island-section', async () => {
-  await openSettings(win)
-  // openSettings lands on the general tab; the "灵动岛集成" section lives inside
-  // the island tab's IslandSubsection. Radix TabsContent has no forceMount, so a
-  // non-active tab's content is absent from the DOM — click the rail's island tab
-  // first, then wait for its TabsContent to mount + GSAP autoAlpha fade to settle.
-  await win.getByRole('tab', { name: /灵动岛与更新|Island & Updates/ }).click()
-  await win
-    .locator('text=/灵动岛集成|Dynamic Island integration/')
-    .waitFor({ state: 'visible', timeout: 10_000 })
-  await win.locator('text=/灵动岛集成|Dynamic Island integration/').scrollIntoViewIfNeeded()
-  await win.waitForTimeout(200)
-  await snap(win, '07-settings-island')
-})
-
 test('08 inbox-en-locale', async () => {
   await setLocale(win, 'en-US')
   await win.locator('[aria-label="email-list"]').waitFor({ state: 'visible', timeout: 20_000 })

@@ -62,7 +62,7 @@ class TestAdminHealth:
         assert payload["data"]["db_version"] == _DB_VERSION
         for required in (
             "email_metadata", "email_body", "email_attachment", "email_body_fts",
-            "cli_checkpoints", "v4_rollout_stats", "island_dispatch", "email_outbox",
+            "cli_checkpoints", "v4_rollout_stats", "email_outbox",
         ):
             assert required in payload["data"]["tables_present"]
 

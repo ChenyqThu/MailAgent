@@ -29,8 +29,7 @@ vi.mock('@shared/hooks/useMailApi', () => ({
     email: { search: mockEmailSearch },
     chat: {},
     attachment: {},
-    ai: {},
-    island: {}
+    ai: {}
   })
 }))
 

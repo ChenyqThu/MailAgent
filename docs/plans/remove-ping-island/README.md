@@ -1,10 +1,10 @@
 # 灵动岛（Ping Island）对接移除 —— 评估与执行计划
 
-> **状态：暂缓执行**（owner 2026-08-21 拍板：评估落档，删除动作另行排期）。
-> 届时随删的两项预拍板（同日）：① DailyDigest 每日巡检**随岛一并删**（不换投递面；日后需要可在通知中心重建）；
-> ② LLM 输出字段 `recommended_actions`（岛按钮推荐）**一并砍**（岛没了无消费者，每封邮件白耗 token）。
-> 前置补位：通知中心 M2 已排 macOS 原生通知 fanout（见 §5 行为缺口——那是岛的核心价值替代）。
-> 评估基准 commit：`04bbb674`（2026-08-21）。执行前若隔了较久，先复核 §2 清单的行号漂移。
+> **状态：已完成（2026-11-17 Phase 3b 落地）**。
+> 随删项已兑现：① DailyDigest 每日巡检**随岛一并删**；
+> ② LLM 输出字段 `recommended_actions`（岛按钮推荐）**一并砍**。
+> 前置补位：Phase 3 已完成原生 macOS `electron.Tray` Menu Bar + `NotifyCenter`（邮件/日历/审批）与 macOS 原生通知 fanout 闭环。
+> 批 4 遗留说明：官网 `site/` 对外内容及 `islandRefreshNonce` 仅变量名微调按需单独审阅，运行时代码与配置门控已全量退役（`island_dispatch` 表 DDL 保留作 tombstone）。
 
 ## 1. 改动面判定：大（但核心风险已被历史拍板消掉）
 

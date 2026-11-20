@@ -14,11 +14,7 @@ import { simulateReadableStream } from 'ai'
 import { MockLanguageModelV3 } from 'ai/test'
 
 import { startAiGatewayServer, type AiGatewayHandle } from '../../src/ai-gateway/server'
-import type {
-  AiGatewayConfig,
-  IslandApprovalAnnounce,
-  PersistTurnInput
-} from '../../src/ai-gateway/config'
+import type { AiGatewayConfig, PersistTurnInput } from '../../src/ai-gateway/config'
 import { ApprovalGuard } from '../../src/ai-gateway/security/approval'
 import { ActiveRunRegistry } from '../../src/ai-gateway/activeRuns'
 import { ApprovalRunStash, DEFAULT_STASH_TTL_MS } from '../../src/ai-gateway/approvalStash'
@@ -96,12 +92,11 @@ test('island flag explicitly OFF → pause stashes (no announce) → /pending hi
   } as unknown as MailAgentDomainClient
   const guard = new ApprovalGuard({ ttlMs: DEFAULT_STASH_TTL_MS })
   const stash = new ApprovalRunStash()
-  const announced: IslandApprovalAnnounce[] = []
   const persisted: PersistTurnInput[] = []
   const paused: MailAgentUIMessage[] = []
   const model = twoPhaseModel() // ONE stateful instance across pause + resume
 
-  // Mirrors ai_gateway_lifecycle.ts AFTER the 07-15 decoupling, with the island env flag FALSE.
+  // Mirrors ai_gateway_lifecycle.ts (serverResumeEnabled unconditional).
   const cfg: AiGatewayConfig = {
     port: 0,
     baseUrl: 'https://crs.example/api',
@@ -119,10 +114,8 @@ test('island flag explicitly OFF → pause stashes (no announce) → /pending hi
         },
         collector
       ),
-    islandAgentEnabled: false, // ← the owner-mandated scenario
     serverResumeEnabled: true, // 07-15 — unconditional in the lifecycle
     approvalStash: stash,
-    announceApprovalToIsland: (info) => announced.push(info), // must stay silent (island-gated leg)
     isApprovalResolved: (tc: string) => guard.isResolved(tc),
     rejectApproval: (tc: string) => guard.reject(tc),
     persistTurn: (t) => {
@@ -146,7 +139,6 @@ test('island flag explicitly OFF → pause stashes (no announce) → /pending hi
   expect(res.status).toBe(200)
   await res.text() // drain the paused stream
   await vi.waitFor(() => expect(stash.size()).toBe(1), { timeout: 3000 })
-  expect(announced).toHaveLength(0) // the announce leg is island-gated — flag off ⇒ silent
   expect(paused).toHaveLength(1) // R2-3 redacted eager persist still ran
   expect(persisted).toHaveLength(0) // a paused turn is not a complete turn
 
@@ -173,9 +165,8 @@ test('island flag explicitly OFF → pause stashes (no announce) → /pending hi
   expect(decided.status).toBe('completed')
   expect(domainCalls).toHaveLength(1)
   expect((domainCalls[0] as { internalId: number }).internalId).toBe(9)
-  // the resumed complete turn persisted exactly once; still zero island announces.
+  // the resumed complete turn persisted exactly once.
   expect(persisted).toHaveLength(1)
-  expect(announced).toHaveLength(0)
 })
 
 // check pass (07-15) — B1 × approval: a turn that PAUSES at an approval gate still terminates its
@@ -214,7 +205,6 @@ describe('B1 detached runs × approval pause — the paused turn frees the sessi
           },
           collector
         ),
-      islandAgentEnabled: false,
       serverResumeEnabled: true,
       approvalStash: stash,
       detachedRunsEnabled: true,
@@ -293,7 +283,6 @@ describe('P1-1 — /decide strict decision validation (fail-closed)', () => {
           },
           collector
         ),
-      islandAgentEnabled: false,
       serverResumeEnabled: true,
       approvalStash: stash,
       isApprovalResolved: (tc: string) => guard.isResolved(tc),
@@ -428,7 +417,6 @@ describe('P1-2 — approval resume holds the per-session run lease', () => {
           },
           collector
         ),
-      islandAgentEnabled: false,
       serverResumeEnabled: true,
       approvalStash: opts.stash,
       detachedRunsEnabled: opts.detached !== false,
@@ -748,7 +736,6 @@ describe('serverResumeEnabled gates the cross-surface single-resolver semantics 
           },
           collector
         ),
-      islandAgentEnabled: false,
       serverResumeEnabled: true,
       approvalStash: stash,
       isApprovalResolved: (tc: string) => guard.isResolved(tc),

@@ -12,12 +12,11 @@
 //   ③ the hook THROWING → the model-args line — fail-OPEN (a card must never be lost);
 //   ④ no hook wired at all → the pre-#6 behaviour, and on the announce leg still SYNCHRONOUS.
 
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, test } from 'vitest'
 
-import { approvalInputPreview, makePersistOnFinish } from '../../src/ai-gateway/chatRun'
-import type { PreparedChatRun } from '../../src/ai-gateway/chatRun'
+import { approvalInputPreview } from '../../src/ai-gateway/chatRun'
 import { startAiGatewayServer, type AiGatewayHandle } from '../../src/ai-gateway/server'
-import type { AiGatewayConfig, IslandApprovalAnnounce } from '../../src/ai-gateway/config'
+import type { AiGatewayConfig } from '../../src/ai-gateway/config'
 import { ApprovalRunStash } from '../../src/ai-gateway/approvalStash'
 import type { MailAgentUIMessage } from '../../src/shared/assistant/uiMessage'
 
@@ -109,82 +108,5 @@ describe('/api/ai/approval/pending — preview source', () => {
 
   test('④ hook not wired → pre-#6 behaviour verbatim', async () => {
     expect(await pendingPreview()).toBe(FALLBACK_LINE)
-  })
-})
-
-// ── announce leg (makePersistOnFinish → cfg.announceApprovalToIsland) ─────────────────────────
-
-function makeRun(): PreparedChatRun {
-  return {
-    result: { usage: Promise.resolve(undefined) } as unknown as PreparedChatRun['result'],
-    rawMessages: [
-      { id: 'u1', role: 'user', parts: [{ type: 'text', text: '帮我回复' }] }
-    ] as unknown as PreparedChatRun['rawMessages'],
-    sessionId: 42,
-    modelId: 'claude-sonnet-4-6',
-    protocol: 'anthropic',
-    auditEntries: [],
-    toolNames: [],
-    originalBody: { messages: [], model: 'claude-sonnet-4-6', sessionId: 42 }
-  }
-}
-
-function announceCfg(over: Partial<AiGatewayConfig>): {
-  cfg: AiGatewayConfig
-  announced: IslandApprovalAnnounce[]
-} {
-  const announced: IslandApprovalAnnounce[] = []
-  const cfg = {
-    islandAgentEnabled: true,
-    approvalStash: new ApprovalRunStash(),
-    // makePersistOnFinish returns early without it (a cfg that persists nothing has no pause branch)
-    persistTurn: () => {},
-    announceApprovalToIsland: (info: IslandApprovalAnnounce) => announced.push(info),
-    ...over
-  } as AiGatewayConfig
-  return { cfg, announced }
-}
-
-/** Fire the pause WITHOUT awaiting — ④ needs to observe the announce before any microtask runs
- *  (an awaited call can't tell "same tick" from "one microtask later"). */
-function firePause(cfg: AiGatewayConfig): Promise<void> {
-  const onFinish = makePersistOnFinish(cfg, makeRun())
-  return onFinish({ responseMessage: pausedResponse(), isAborted: false } as unknown as Parameters<
-    typeof onFinish
-  >[0]) as Promise<void>
-}
-
-async function pause(cfg: AiGatewayConfig): Promise<void> {
-  await firePause(cfg)
-}
-
-describe('island announce — preview source', () => {
-  test('① serve-api answers → the island card carries the SERVER line', async () => {
-    const { cfg, announced } = announceCfg({ fetchApprovalPreview: async () => SERVER_LINE })
-    await pause(cfg)
-    await vi.waitFor(() => expect(announced).toHaveLength(1))
-    expect(announced[0].inputPreview).toBe(SERVER_LINE)
-    expect(announced[0].resumeToken.length).toBeGreaterThan(0) // the stash contract is untouched
-  })
-
-  test('③ hook throws → the card is still announced, with the model-args line', async () => {
-    const { cfg, announced } = announceCfg({
-      fetchApprovalPreview: async () => {
-        throw new Error('ECONNREFUSED')
-      }
-    })
-    await pause(cfg)
-    await vi.waitFor(() => expect(announced).toHaveLength(1))
-    expect(announced[0].inputPreview).toBe(FALLBACK_LINE)
-  })
-
-  test('④ no hook → announced SYNCHRONOUSLY within the pause tick (pre-#6 timing)', async () => {
-    const { cfg, announced } = announceCfg({})
-    const settled = firePause(cfg)
-    // asserted BEFORE awaiting: with no hook the announce must still happen in the same tick,
-    // i.e. #6 costs an un-hooked gateway (harness / pre-#6 lifecycle) exactly nothing.
-    expect(announced).toHaveLength(1)
-    expect(announced[0].inputPreview).toBe(FALLBACK_LINE)
-    await settled
   })
 })

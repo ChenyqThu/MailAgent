@@ -16,11 +16,7 @@ import {
   responseMessageAwaitsApproval,
   type PreparedChatRun
 } from '../../src/ai-gateway/chatRun'
-import type {
-  AiGatewayConfig,
-  IslandApprovalAnnounce,
-  PersistTurnInput
-} from '../../src/ai-gateway/config'
+import type { AiGatewayConfig, PersistTurnInput } from '../../src/ai-gateway/config'
 import { ApprovalRunStash } from '../../src/ai-gateway/approvalStash'
 import type { GatewayToolAuditEntry } from '../../src/ai-gateway/tools/types'
 import type { MailAgentUIMessage } from '../../src/shared/assistant/uiMessage'
@@ -193,8 +189,8 @@ describe('makePersistOnFinish — skip the approval-paused partial (dogfood #3)'
   })
 })
 
-// Part B (harness 上岛) — cross-surface single-resolver side effects in makePersistOnFinish (codex
-// findings 1 + 2). All gated by islandAgentEnabled → flag-off is byte-identical.
+// Part B — cross-surface single-resolver side effects in makePersistOnFinish (findings 1 + 2).
+// Gated by serverResumeEnabled → flag-off is byte-identical.
 describe('makePersistOnFinish — Part B cross-surface side effects', () => {
   // A renderer RESUME whose incoming history ends with the paused tool part transitioned to
   // approval-responded + approved:false (the user rejected in-app).
@@ -224,12 +220,12 @@ describe('makePersistOnFinish — Part B cross-surface side effects', () => {
     const persisted: PersistTurnInput[] = []
     const rejected: string[] = []
     const cfg = {
-      islandAgentEnabled: true,
+      serverResumeEnabled: true,
       persistTurn: (t: PersistTurnInput) => persisted.push(t),
       rejectApproval: (tc: string) => rejected.push(tc)
     } as AiGatewayConfig
     await fire(makePersistOnFinish(cfg, makeRun(rejectedResumeRaw)), rejectDone)
-    expect(rejected).toEqual(['t2']) // the in-app reject tombstoned t2 (blocks a later island approve)
+    expect(rejected).toEqual(['t2'])
     expect(persisted).toHaveLength(1) // the denial reply is a real turn — still persisted
   })
 
@@ -245,12 +241,12 @@ describe('makePersistOnFinish — Part B cross-surface side effects', () => {
 
   // codex re-review edge case — a reject-of-A whose resume IMMEDIATELY re-pauses on approval-B must
   // STILL tombstone A (the tombstone derives from the incoming history, so it runs BEFORE the re-pause
-  // early return). Otherwise a stale island approve of A would slip through.
+  // early return).
   test('finding 1 — a reject that RE-PAUSES on another approval still tombstones the rejected one', async () => {
     const persisted: PersistTurnInput[] = []
     const rejected: string[] = []
     const cfg = {
-      islandAgentEnabled: true,
+      serverResumeEnabled: true,
       persistTurn: (t: PersistTurnInput) => persisted.push(t),
       rejectApproval: (tc: string) => rejected.push(tc)
     } as AiGatewayConfig
@@ -291,7 +287,7 @@ describe('makePersistOnFinish — Part B cross-surface side effects', () => {
     const persisted: PersistTurnInput[] = []
     const captured: PersistTurnInput[] = []
     const cfg = {
-      islandAgentEnabled: true,
+      serverResumeEnabled: true,
       persistTurn: (t: PersistTurnInput) => persisted.push(t),
       captureTurnMemory: (t: PersistTurnInput) => captured.push(t)
     } as AiGatewayConfig
@@ -309,15 +305,13 @@ describe('makePersistOnFinish — Part B cross-surface side effects', () => {
     expect(persisted).toHaveLength(1)
   })
 
-  test('finding 3 — a resume that RE-PAUSES re-stashes + re-announces a fresh island card (no persist)', async () => {
+  test('finding 3 — a resume that RE-PAUSES re-stashes the next approval (no persist)', async () => {
     const persisted: PersistTurnInput[] = []
-    const announced: IslandApprovalAnnounce[] = []
     const stash = new ApprovalRunStash()
     const cfg = {
-      islandAgentEnabled: true,
+      serverResumeEnabled: true,
       approvalStash: stash,
-      persistTurn: (t: PersistTurnInput) => persisted.push(t),
-      announceApprovalToIsland: (info: IslandApprovalAnnounce) => announced.push(info)
+      persistTurn: (t: PersistTurnInput) => persisted.push(t)
     } as AiGatewayConfig
     // A resume whose responseMessage is ITSELF paused at the next approval gate (draftPending).
     const run = makeRun(resumeTurn().rawMessages, {
@@ -326,18 +320,11 @@ describe('makePersistOnFinish — Part B cross-surface side effects', () => {
     await fire(makePersistOnFinish(cfg, run), draftPending)
     expect(persisted).toHaveLength(0) // a paused turn is never persisted
     expect(stash.size()).toBe(1) // the next approval is stashed for its own server-side resume
-    expect(announced).toHaveLength(1) // …and announced as a NEW island card (serve-api must not complete)
-    expect(announced[0].toolCallId).toBe('t2')
+    expect(stash.peek('t2')?.toolCallId).toBe('t2')
   })
 })
 
-// 块 2 复审「测试盲区」裁定 — after the rebase merge the PAUSE branch carries BOTH semantics:
-// main R2-3's redacted persist (history shows what the model already said) AND island Part B's
-// stash + announce (the island can approve). Each side's own suites pin only their own hook against
-// the shared final-state code; this describe pins their CO-OCCURRENCE on one pause, the ORDER
-// (persistPaused → stash → announce), and their mutual isolation (one failing never blocks the
-// other) — the exact contract the merge commit's pause-branch comment promises.
-describe('makePersistOnFinish — pause branch runs BOTH hooks (R2-3 redact + Part B stash/announce)', () => {
+describe('makePersistOnFinish — pause branch runs BOTH hooks (R2-3 redact + Part B stash)', () => {
   const ORIGINAL_BODY = {
     messages: [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: '帮我起草回复' }] }],
     model: 'claude-sonnet-4-6',
@@ -345,27 +332,28 @@ describe('makePersistOnFinish — pause branch runs BOTH hooks (R2-3 redact + Pa
   }
 
   /** Wire BOTH pause hooks around one shared call-log. The stash is a REAL ApprovalRunStash behind
-   *  a thin logging proxy (claim/peek pass through) so ④ can prove the announced token round-trips. */
+   *  a thin logging proxy (claim/peek pass through) so ④ can prove the minted token round-trips. */
   function wireBoth(overrides?: Partial<AiGatewayConfig>): {
     cfg: AiGatewayConfig
     log: string[]
     stash: ApprovalRunStash
     paused: MailAgentUIMessage[]
-    announced: IslandApprovalAnnounce[]
     persisted: PersistTurnInput[]
+    getCapturedToken: () => string | null
   } {
     const log: string[] = []
     const stash = new ApprovalRunStash()
+    let capturedToken: string | null = null
     const proxiedStash = {
       stash: (i: Parameters<ApprovalRunStash['stash']>[0]) => {
         log.push('stash')
-        return stash.stash(i)
+        capturedToken = stash.stash(i)
+        return capturedToken
       },
       claim: stash.claim.bind(stash),
       peek: stash.peek.bind(stash)
     } as unknown as ApprovalRunStash
     const paused: MailAgentUIMessage[] = []
-    const announced: IslandApprovalAnnounce[] = []
     const persisted: PersistTurnInput[] = []
     const cfg = {
       persistTurn: (t: PersistTurnInput) => {
@@ -375,28 +363,23 @@ describe('makePersistOnFinish — pause branch runs BOTH hooks (R2-3 redact + Pa
         log.push('persistPaused')
         paused.push(m)
       },
-      islandAgentEnabled: true,
+      serverResumeEnabled: true,
       approvalStash: proxiedStash,
-      announceApprovalToIsland: (info: IslandApprovalAnnounce) => {
-        log.push('announce')
-        announced.push(info)
-      },
       ...overrides
     } as AiGatewayConfig
-    return { cfg, log, stash, paused, announced, persisted }
+    return { cfg, log, stash, paused, persisted, getCapturedToken: () => capturedToken }
   }
 
   function pausedRun(): PreparedChatRun {
     return makeRun(freshTurn().rawMessages, { originalBody: ORIGINAL_BODY })
   }
 
-  test('① one pause → redacted persist EXACTLY once (approval part stripped) + one stash + one announce; turn NOT persisted', async () => {
-    const { cfg, log, paused, announced, persisted } = wireBoth()
+  test('① one pause → redacted persist EXACTLY once (approval part stripped) + one stash; turn NOT persisted', async () => {
+    const { cfg, log, paused, stash, persisted } = wireBoth()
     await fire(makePersistOnFinish(cfg, pausedRun()), draftPending)
 
     expect(log.filter((s) => s === 'persistPaused')).toHaveLength(1)
     expect(log.filter((s) => s === 'stash')).toHaveLength(1)
-    expect(log.filter((s) => s === 'announce')).toHaveLength(1)
     expect(persisted).toHaveLength(0) // a paused turn is still not a complete turn
 
     // the redacted copy: approval-requested part stripped, completed tool part kept.
@@ -404,48 +387,32 @@ describe('makePersistOnFinish — pause branch runs BOTH hooks (R2-3 redact + Pa
     const kept = (paused[0] as { parts: Array<{ type?: string }> }).parts
     expect(kept.some((p) => p.type === 'tool-email_get')).toBe(true)
 
-    expect(announced[0].toolCallId).toBe('t2')
-    expect(announced[0].toolName).toBe('email_draft_reply')
+    expect(stash.peek('t2')?.toolName).toBe('email_draft_reply')
   })
 
-  test('② order on one pause: persistPaused → stash → announce', async () => {
+  test('② order on one pause: persistPaused → stash', async () => {
     const { cfg, log } = wireBoth()
     await fire(makePersistOnFinish(cfg, pausedRun()), draftPending)
-    expect(log).toEqual(['persistPaused', 'stash', 'announce'])
+    expect(log).toEqual(['persistPaused', 'stash'])
   })
 
-  test('③ persistPausedAssistant throws → stash + announce still happen', async () => {
-    const { cfg, log, announced } = wireBoth({
+  test('③ persistPausedAssistant throws → stash still happens', async () => {
+    const { cfg, log, stash } = wireBoth({
       persistPausedAssistant: () => {
         throw new Error('disk full')
       }
     })
     await fire(makePersistOnFinish(cfg, pausedRun()), draftPending)
-    expect(log).toEqual(['stash', 'announce']) // R2-3 hook failed, Part B unaffected
-    expect(announced).toHaveLength(1)
+    expect(log).toEqual(['stash']) // R2-3 hook failed, stash unaffected
+    expect(stash.peek('t2')?.toolCallId).toBe('t2')
   })
 
-  test('③ announce throws synchronously → onFinish resolves; redacted persisted + stash entry live', async () => {
-    const { cfg, log, stash, paused } = wireBoth()
-    const withThrowingAnnounce = {
-      ...cfg,
-      announceApprovalToIsland: () => {
-        log.push('announce')
-        throw new Error('serve-api down')
-      }
-    } as AiGatewayConfig
-    await expect(
-      fire(makePersistOnFinish(withThrowingAnnounce, pausedRun()), draftPending)
-    ).resolves.toBeUndefined()
-    expect(paused).toHaveLength(1) // redacted persist happened before the throwing announce
-    expect(log).toEqual(['persistPaused', 'stash', 'announce']) // announce WAS reached, then threw
-    expect(stash.peek('t2')).not.toBeNull() // the stashed run survives — a later /decide can still resume
-  })
-
-  test('④ the announced resumeToken claims the stash entry (island round-trip capability)', async () => {
-    const { cfg, stash, announced } = wireBoth()
+  test('④ the minted resumeToken claims the stash entry', async () => {
+    const { cfg, stash, getCapturedToken } = wireBoth()
     await fire(makePersistOnFinish(cfg, pausedRun()), draftPending)
-    const entry = stash.claim('t2', announced[0].resumeToken)
+    const token = getCapturedToken()
+    expect(token).not.toBeNull()
+    const entry = stash.claim('t2', token!)
     expect(entry).not.toBeNull()
     expect(entry?.approvalId).toBe('ap1')
     expect(entry?.body).toEqual(ORIGINAL_BODY)

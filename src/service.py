@@ -332,42 +332,6 @@ class EmailNotionSyncApp:
                 f"{config.davmail_imap_port} smtp=:{config.davmail_smtp_port})"
             )
 
-        # ping-island 灵动岛集成（Island-Sprint 2，默认关）
-        self.island_enabled = bool(config.ping_island_enabled)
-        if self.island_enabled:
-            from src.notify import island_dispatch  # 触发 import
-            # 同步环境变量（dispatcher / reconnect / 模块都从 env 读）
-            os.environ.setdefault("ISLAND_SOCKET_PATH", config.island_socket_path)
-            os.environ.setdefault("ISLAND_SOCKET_TIMEOUT", str(config.island_socket_timeout))
-            os.environ.setdefault("PING_ISLAND_LANG", config.ping_island_lang)
-            os.environ.setdefault("PING_ISLAND_RECONNECT_PROBE_INTERVAL",
-                                  str(config.ping_island_reconnect_probe_interval))
-            os.environ.setdefault("PING_ISLAND_QUEUE_MAX", str(config.ping_island_queue_max))
-            # 首次启用 bootstrap manifest + locale 资源（idempotent）
-            try:
-                from src.notify.island_bootstrap import ensure_plugin_assets
-                ensure_plugin_assets()
-            except Exception as e:
-                logger.warning(f"[island] plugin bootstrap failed (non-fatal): {e}")
-            island_dispatch.init(
-                enabled=True,
-                sync_store=self.watcher.sync_store,
-                account_name=config.mail_account_name,
-                accent=config.island_accent,
-                theme=config.island_theme,
-                mail_notify_scope=config.island_mail_notify_scope,
-            )
-            logger.info(
-                f"[island] enabled (socket={config.island_socket_path} "
-                f"timeout={config.island_socket_timeout}s "
-                f"lang={config.ping_island_lang} "
-                f"accent={config.island_accent}/{config.island_theme})"
-            )
-        else:
-            # 也调一次 init() 保证 dispatcher 状态干净；is_enabled() 返回 False
-            from src.notify import island_dispatch
-            island_dispatch.init(enabled=False, sync_store=self.watcher.sync_store)
-
         # 防锁屏保活
         self.keep_alive = None
         if config.keep_alive_enabled:
@@ -724,41 +688,6 @@ class EmailNotionSyncApp:
                     )
                     self._sse_runner = None
 
-            # 启动 ping-island 重连 / snooze 后台任务（开启时才跑）
-            island_reconnect_task = None
-            island_snooze_task = None
-            daily_digest_task = None
-            if self.island_enabled:
-                from src.notify import island_reconnect, island_snooze
-                island_reconnect_task = self._spawn_supervised(
-                    lambda: island_reconnect.reconnect_loop(
-                        shutdown_event=self._shutdown_event
-                    ),
-                    "island_reconnect",
-                )
-                island_snooze_task = self._spawn_supervised(
-                    lambda: island_snooze.tick_loop(
-                        shutdown_event=self._shutdown_event
-                    ),
-                    "island_snooze",
-                )
-                # Phase 3 DailyDigest 每日巡检（island 开 + digest 开 才跑）
-                if config.mailagent_daily_digest_enabled:
-                    from src.notify import daily_digest
-                    daily_digest_task = self._spawn_supervised(
-                        lambda: daily_digest.tick_loop(
-                            sync_store=self.watcher.sync_store,
-                            run_once=self._run_daily_digest_once,
-                            shutdown_event=self._shutdown_event,
-                        ),
-                        "daily_digest",
-                    )
-                    logger.info(
-                        f"[daily-digest] enabled "
-                        f"(hours={config.mailagent_daily_digest_hours} "
-                        f"window={config.mailagent_daily_digest_window_hours}h)"
-                    )
-
             # 报告 Agent worker（独立于 island，自己的 gate；日/周/月报定时生成）。
             # 启动条件 = 总开关 flag 开 OR report_agent 表里存在 enabled 的 report
             # agent。后者让「前端启用某个报告 agent」即可自动定时生成，无需用户去翻
@@ -981,12 +910,6 @@ class EmailNotionSyncApp:
                 tasks.append(stats_task)
             if alert_task:
                 tasks.append(alert_task)
-            if island_reconnect_task:
-                tasks.append(island_reconnect_task)
-            if island_snooze_task:
-                tasks.append(island_snooze_task)
-            if daily_digest_task:
-                tasks.append(daily_digest_task)
             if report_worker_task:
                 tasks.append(report_worker_task)
             if contact_profile_worker_task:
@@ -1132,23 +1055,6 @@ class EmailNotionSyncApp:
 
         return reconstruct_invite_from_series_row(row)
 
-    async def _run_daily_digest_once(self, slot: str):
-        """Phase 3 DailyDigest 单次巡检（tick_loop 命中 fire window 时调）.
-
-        注入 repo / sync_store / config cap → daily_digest.run_digest_once 编排
-        取数 + LLM summary + dispatch。
-        """
-        from src.notify import daily_digest
-
-        return await daily_digest.run_digest_once(
-            sync_store=self.watcher.sync_store,
-            repo=self.watcher.email_repo,
-            slot=slot,
-            max_emails=config.mailagent_daily_digest_max_emails,
-            window_hours=config.mailagent_daily_digest_window_hours,
-            max_bulk_ids=config.mailagent_daily_digest_max_bulk_ids,
-        )
-
     async def _alert_check_loop(self):
         """告警检查循环：定期检测异常并发送告警"""
         interval = 60  # 每分钟检查一次
@@ -1242,18 +1148,6 @@ class EmailNotionSyncApp:
                 dead_count, config.alert_dead_letter_threshold
             ):
                 episodes.commit("dead_letters", action, dead_count)
-                # ping-island DeadLetterAccum hook（fail-open）— 与告警同源收敛,
-                # 不独立刷屏 (R3)。放在 commit 后同一条件下: 投递失败时本轮不
-                # commit → 下轮会重新判定重发, 岛卡若不跟着 gate 就会每轮刷一张。
-                try:
-                    from src.notify import island_dispatch
-                    if island_dispatch.is_enabled():
-                        island_dispatch.dispatch_dead_letter_accum(
-                            count=dead_count,
-                            threshold=config.alert_dead_letter_threshold,
-                        )
-                except Exception as e:
-                    logger.debug(f"[island-hook] dead_letter dispatch failed: {e}")
         elif action == episode_mod.RECOVER:
             if self.alerter and await self.alerter.alert_recovery("死信队列"):
                 episodes.commit("dead_letters", action, dead_count)

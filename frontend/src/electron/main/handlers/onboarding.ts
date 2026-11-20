@@ -215,15 +215,13 @@ export const ONBOARDING_WRITABLE_KEYS = [
  *  main 直接写入的，renderer 手里永远只有掩码/空）。空串同理（既有语义：不写）。 */
 const MASKED_SECRET_RE = /^\*+$/
 
-export type PluginKey = 'island' | 'llm' | 'digest' | 'calendar'
+export type PluginKey = 'llm' | 'calendar'
 
 /** 插件勾选 → config.py env flag。值写 'true'/'false' 字符串 (pydantic bool 解析)。
  *  S3 — 'agent' (MAILAGENT_AGENT_HARNESS) 已随 legacy harness 退役: chat agent
  *  (embedded AI SDK Gateway) 无条件在, 不再是可勾选插件。 */
 export const PLUGIN_FLAG_MAP: Record<PluginKey, string> = {
-  island: 'PING_ISLAND_ENABLED',
   llm: 'LLM_AGENT_ENABLED',
-  digest: 'MAILAGENT_DAILY_DIGEST_ENABLED',
   calendar: 'CALENDAR_CALDAV_SYNC_ENABLED'
 }
 

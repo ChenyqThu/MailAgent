@@ -55,7 +55,6 @@ REQUIRED_TABLES: tuple[str, ...] = (
     "email_body_fts",
     "cli_checkpoints",
     "v4_rollout_stats",
-    "island_dispatch",  # v7: ping-island Sprint 2 派发审计
     "email_outbox",     # v10: SQLite SSoT inversion (Sprint 15)
     "llm_processing",   # v37: 纳入版本化建表 (前端 listEnriched 无条件 LEFT JOIN)
 )

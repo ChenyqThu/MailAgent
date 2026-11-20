@@ -29,8 +29,7 @@ vi.mock('@shared/hooks/useStartupPrefetch', () => ({ useStartupPrefetch: (): voi
 vi.mock('@shared/modelCatalog/useModelCatalog', () => ({ useModelCatalogUpdates: (): void => {} }))
 vi.mock('@shared/api/factory', () => ({
   makeMailApi: () => ({
-    updater: { status: async () => ({}), onEvent: () => (): void => {} },
-    island: { status: async () => ({}), onEvent: () => (): void => {} }
+    updater: { status: async () => ({}), onEvent: () => (): void => {} }
   })
 }))
 

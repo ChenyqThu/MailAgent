@@ -18,7 +18,6 @@ import { refreshEnvPath } from '../../src/electron/main/lib/env-path'
  *  撤下 DAVMAIL_ROOT / FOLDER_NOTIFY_ENABLED / FOLDER_LLM_DISABLED（「env 输入框」
  *  是错解，正解形态排后续版本——见 env-keys.ts 同位注释）；追加岛外观两键。 */
 const LANE2_MANAGED_KEYS = [
-  'ISLAND_MAIL_NOTIFY_SCOPE', // #1 灵动岛邮件弹卡范围
   'KOS_REQUIRE_LABELED', // #2 仅推已标注
   'KOS_INGEST_PRIORITY_FLOOR', // #3 入库重要度门槛（与 #2 是同一决策的两半）
   'CALENDAR_REMINDER_LEAD_MINUTES', // #4 会前提醒提前量
@@ -27,10 +26,7 @@ const LANE2_MANAGED_KEYS = [
   'KEEP_ALIVE_ENABLED', // #6 防休眠保活
   'KEEP_ALIVE_DIM', // #6 保活调暗屏幕
   'MAILAGENT_ATTACHMENT_OCR_ENABLED', // #7 附件 OCR
-  'MAILAGENT_DAILY_DIGEST_HOURS', // #8 巡检钟点
-  'MAILAGENT_REPORT_AGENT_ENABLED', // #9 报告服务总闸
-  'ISLAND_ACCENT', // #10 岛主题色（六选一）
-  'ISLAND_THEME' // #10 岛明暗
+  'MAILAGENT_REPORT_AGENT_ENABLED' // #9 报告服务总闸
 ] as const
 
 /** 修订时撤下的三键 —— 必须**不在**白名单（防止有人从旧 diff 把它们捞回来）。 */
@@ -86,37 +82,37 @@ describe('Lane 2 抽查：新键经 env:set 真实落盘', () => {
     rmSync(dir, { recursive: true, force: true })
     // writePatch 成功后会把 changedKeys 同步进 process.env（blocker A 语义）——
     // 清掉抽查残留，别泄漏进后续测试。
-    delete process.env.ISLAND_MAIL_NOTIFY_SCOPE
+    delete process.env.KOS_INGEST_PRIORITY_FLOOR
     delete process.env.KOS_REQUIRE_LABELED
-    delete process.env.MAILAGENT_DAILY_DIGEST_HOURS
+    delete process.env.CALENDAR_REMINDER_LEAD_MINUTES
   })
 
-  test('枚举 / 布尔 / 逗号列表三形态：写入成功 + 落盘 + 快照读回', () => {
+  test('枚举 / 布尔 / 数值三形态：写入成功 + 落盘 + 快照读回', () => {
     const result = envHandler.writePatch({
-      ISLAND_MAIL_NOTIFY_SCOPE: 'all',
+      KOS_INGEST_PRIORITY_FLOOR: 'important',
       KOS_REQUIRE_LABELED: 'true',
-      MAILAGENT_DAILY_DIGEST_HOURS: '9,18'
+      CALENDAR_REMINDER_LEAD_MINUTES: '15'
     })
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.changedKeys.sort()).toEqual([
-      'ISLAND_MAIL_NOTIFY_SCOPE',
-      'KOS_REQUIRE_LABELED',
-      'MAILAGENT_DAILY_DIGEST_HOURS'
+      'CALENDAR_REMINDER_LEAD_MINUTES',
+      'KOS_INGEST_PRIORITY_FLOOR',
+      'KOS_REQUIRE_LABELED'
     ])
     expect(result.restartRequired).toBe(true)
 
     const text = readFileSync(envPath, 'utf8')
-    expect(text).toContain('ISLAND_MAIL_NOTIFY_SCOPE=all')
+    expect(text).toContain('KOS_INGEST_PRIORITY_FLOOR=important')
     expect(text).toContain('KOS_REQUIRE_LABELED=true')
-    expect(text).toContain('MAILAGENT_DAILY_DIGEST_HOURS=')
+    expect(text).toContain('CALENDAR_REMINDER_LEAD_MINUTES=15')
 
     // env:get 侧读回（受管过滤 + 非 secret 不脱敏 + parseEnv 解引号）——控件下次
     // 挂载显示的必须是已存值本身。
     const snap = envHandler.readSnapshot()
-    expect(snap.values.ISLAND_MAIL_NOTIFY_SCOPE).toBe('all')
+    expect(snap.values.KOS_INGEST_PRIORITY_FLOOR).toBe('important')
     expect(snap.values.KOS_REQUIRE_LABELED).toBe('true')
-    expect(snap.values.MAILAGENT_DAILY_DIGEST_HOURS).toBe('9,18')
+    expect(snap.values.CALENDAR_REMINDER_LEAD_MINUTES).toBe('15')
   })
 
   test('反向：白名单外的键仍被 E_INVALID_KEY 拒（抽查不是靠放松闸换来的）', () => {

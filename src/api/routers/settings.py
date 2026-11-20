@@ -117,10 +117,6 @@ _MANAGED_ENV_KEYS: List[str] = [
     "FOLDER_SYNC_MAX_MESSAGES",
     # — Backend selection
     "MAILAGENT_BACKEND",
-    # — Daily digest
-    "MAILAGENT_DAILY_DIGEST_ENABLED",
-    # 巡检钟点 (Lane 2 #3, 逗号分隔小时, 本机时区, 默认 9,18; IslandUpdatesTab 巡检区)。
-    "MAILAGENT_DAILY_DIGEST_HOURS",
     # — Report agents (Lane 2 #10, AgentsTab 报告区总闸; 与 report 行 enabled 是 OR 语义,
     # flag 开 = worker 常驻, 启用报告行不用再重启)。
     "MAILAGENT_REPORT_AGENT_ENABLED",
@@ -222,14 +218,6 @@ _MANAGED_ENV_KEYS: List[str] = [
     # require_labeled = 未标注邮件算不算数 (默认 false, 🔴 默认值不动)。
     "KOS_INGEST_PRIORITY_FLOOR",
     "KOS_REQUIRE_LABELED",
-    # — Island
-    "PING_ISLAND_ENABLED",
-    "ISLAND_SOCKET_PATH",
-    # 邮件弹卡范围 (Lane 2 #1): important (默认) = 仅重要弹卡; all = 每封都弹。
-    "ISLAND_MAIL_NOTIFY_SCOPE",
-    # 岛外观 (Lane 2 #10 追加): 主题色六选一 + 明暗二选一, 默认 coral / dark。
-    "ISLAND_ACCENT",
-    "ISLAND_THEME",
     # — Remote Access
     "MAILAGENT_REMOTE_ACCESS_ENABLED",
     "CF_AUDIENCE",

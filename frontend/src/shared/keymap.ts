@@ -333,15 +333,6 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     labelKey: 'shortcutHelp.binding.sendChat',
     wired: true
   },
-  // ── Island (L2 Island Hybrid future) ─────────────────────────────────
-  {
-    id: 'toggleIsland',
-    spec: 'alt+i',
-    display: '⌥I',
-    scope: 'global',
-    labelKey: 'shortcutHelp.binding.toggleIsland',
-    wired: false
-  },
   // ── Sprint 11 V1.4 — locale toggle ─────────────────────────────────
   // （同批的 `toggleNav`(⌥B) 已在 08-27 二级栏定宽时退役；09-01 侧栏批折叠回来后
   //   换了绑定，见上面的 navToggle `[` / navExpandFocus `]`，⌥B 不再复活。）

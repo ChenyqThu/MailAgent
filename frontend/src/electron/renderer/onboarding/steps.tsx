@@ -47,6 +47,7 @@ import {
   invalidCustomBaseUrlReason,
   ONBOARDING_LLM_TEMPLATES
 } from '@shared/onboarding/llmProviderTemplates'
+import { ProviderBrandIcon } from '@shared/components/icons/providers'
 
 /* ════════════════════════════════════════════════════════════════════════
    Shared step state (lifted to OnboardingRoot)
@@ -2015,27 +2016,11 @@ const PLUGINS: PluginDef[] = [
     restart: 'mail-sync'
   },
   {
-    key: 'island',
-    icon: 'bell',
-    name: '灵动岛通知',
-    desc: '新邮件 / AI 结果推送到灵动岛',
-    extDep: 'ping-island.app',
-    restart: '免重启'
-  },
-  {
     key: 'llm',
     icon: 'spark',
     name: 'LLM AI 智能',
     desc: '本地大模型分类 · 起草回复',
     needCred: true,
-    restart: 'mail-sync'
-  },
-  {
-    key: 'digest',
-    icon: 'clock',
-    name: '每日巡检',
-    desc: '每天定时汇总未读 / 待办',
-    needs: 'island',
     restart: 'mail-sync'
   },
   {
@@ -2306,14 +2291,24 @@ export function StepAiModel({ onNext, onBack }: StepAiModelProps): React.JSX.Ele
 
         <div className="flex flex-col gap-4 mt-5">
           <Field label="服务商" icon="spark" hint="模板固定协议与端点，凭证由你提供">
-            <div className="selwrap">
-              <select className="fld" value={tplKey} onChange={(e) => pickTemplate(e.target.value)}>
-                {ONBOARDING_LLM_TEMPLATES.map((t) => (
-                  <option key={t.key} value={t.key}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
+            <div className="flex items-center gap-2">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-ink-border bg-ink-2">
+                <ProviderBrandIcon
+                  providerId={tpl.key}
+                  protocol={tpl.protocol}
+                  variant="color"
+                  className="size-4"
+                />
+              </div>
+              <div className="selwrap min-w-0 flex-1">
+                <select className="fld" value={tplKey} onChange={(e) => pickTemplate(e.target.value)}>
+                  {ONBOARDING_LLM_TEMPLATES.map((t) => (
+                    <option key={t.key} value={t.key}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </Field>
 
@@ -2404,7 +2399,7 @@ export interface StepDoneProps {
 /** 可切换的插件 key (核心 'notion' 恒开、无 flag)。key → .env flag 的权威映射
  *  只存在于主进程 (handlers/onboarding.ts PLUGIN_FLAG_MAP, 单测已 pin); 渲染层
  *  只需把勾选状态按 key 透传, 不复制 flag 名以免 SSoT 漂移。 */
-const PLUGIN_KEYS = ['island', 'llm', 'digest', 'calendar'] as const
+const PLUGIN_KEYS = ['llm', 'calendar'] as const
 
 export function buildCompleteConfig(
   form: ConfigForm,

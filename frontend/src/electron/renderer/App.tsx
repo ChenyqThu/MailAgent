@@ -14,7 +14,6 @@ import { bootAppearance } from '@shared/state/appearance'
 import { installFileDropGuard } from '@shared/lib/fileDropGuard'
 import { makeMailApi } from '@shared/api/factory'
 import { setUpdaterStatus } from '@shared/state/updater'
-import { setIslandStatus } from '@shared/state/island'
 import { AppRouter } from '@shared/router'
 import { ErrorBoundary } from '@shared/components/ErrorBoundary'
 import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
@@ -99,7 +98,7 @@ export default function App(): React.ReactElement {
   // installFileDropGuard 返回卸载函数, 直接作 effect cleanup (StrictMode 双挂安全)。
   useEffect(() => installFileDropGuard(), [])
 
-  // 应用级单次订阅 updater / island 事件 → 写入对应 zustand store。
+  // 应用级单次订阅 updater 事件 → 写入对应 zustand store。
   // 之前每个路由的 StatusBar 各自订阅一份, 路由切换 remount 导致 ipcRenderer
   // 监听累积 (dev Fast Refresh 下报 MaxListenersExceededWarning)。收敛到 App
   // 一次订阅, StatusBar / 设置页仅通过 store selector 读取。makeMailApi 是模块
@@ -112,17 +111,9 @@ export default function App(): React.ReactElement {
       .catch(() => {
         /* preload missing in tests / web stub — keep initial seed */
       })
-    void api.island
-      .status()
-      .then(setIslandStatus)
-      .catch(() => {
-        /* web stub — keep initial idle state */
-      })
     const unsubUpdater = api.updater.onEvent((next) => setUpdaterStatus(next))
-    const unsubIsland = api.island.onEvent((next) => setIslandStatus(next))
     return () => {
       unsubUpdater()
-      unsubIsland()
     }
   }, [])
 

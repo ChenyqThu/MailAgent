@@ -12,7 +12,7 @@ import { MockLanguageModelV3 } from 'ai/test'
 
 import { startAiGatewayServer, type AiGatewayHandle } from '../../src/ai-gateway/server'
 import { APPROVAL_REASON_MAX_CHARS } from '../../src/ai-gateway/approvalResume'
-import type { AiGatewayConfig, IslandApprovalAnnounce } from '../../src/ai-gateway/config'
+import type { AiGatewayConfig } from '../../src/ai-gateway/config'
 import { ApprovalGuard } from '../../src/ai-gateway/security/approval'
 import { ApprovalRunStash } from '../../src/ai-gateway/approvalStash'
 import { buildGatewayTools } from '../../src/ai-gateway/tools'
@@ -110,7 +110,7 @@ function islandCfg(opts: {
         { domain, writeToolsEnabled: true, approvalGuard: guard, oneShotWrites: true, contextMode },
         collector
       ),
-    islandAgentEnabled: true,
+    serverResumeEnabled: true,
     approvalStash: stash,
     isApprovalResolved: opts.resolved,
     // the real guard is the tombstone target for an island reject (finding 1)
@@ -540,7 +540,7 @@ describe('/api/ai/approval/decide — contextMode freeze (untrusted_trigger resu
         seen.push({ mode: contextMode, keys: Object.keys(tools) })
         return tools
       },
-      islandAgentEnabled: true,
+      serverResumeEnabled: true,
       approvalStash: stash,
       rejectApproval: (tc: string) => guard.reject(tc)
     }
@@ -781,7 +781,6 @@ describe('/api/ai/approval/decide — chained two-hop approvals (repause)', () =
     const guard = new ApprovalGuard()
     const stash = new ApprovalRunStash()
     const domainCalls: unknown[] = []
-    const announced: IslandApprovalAnnounce[] = []
     const persisted: unknown[] = []
     const prompts: unknown[] = []
     const settled: Array<{ sessionId: number; status: string }> = []
@@ -840,15 +839,12 @@ describe('/api/ai/approval/decide — chained two-hop approvals (repause)', () =
           },
           collector
         ),
-      islandAgentEnabled: true,
+      serverResumeEnabled: true,
       approvalStash: stash,
-      announceApprovalToIsland: (info) => {
-        announced.push(info)
-      },
       isApprovalResolved: (tc: string) => guard.isResolved(tc),
       rejectApproval: (tc: string) => guard.reject(tc),
       // persistTurn MUST be wired: makePersistOnFinish early-returns without it, and the hop-1
-      // repause re-stash + re-announce live behind it (matches the production lifecycle).
+      // repause re-stash lives behind it (matches the production lifecycle).
       persistTurn: (t) => {
         persisted.push(t)
       },
@@ -860,23 +856,22 @@ describe('/api/ai/approval/decide — chained two-hop approvals (repause)', () =
     const h = await start(cfg)
     const tokenA = seedPausedApproval(guard, stash)
 
-    // hop-1: island approves A → tool A executes server-side; the model then requests B → repaused,
-    // a FRESH island card (new stash + announce) for B.
+    // hop-1: /decide approves A → tool A executes server-side; the model then requests B → repaused,
+    // a FRESH stash entry for B.
     const res1 = await decide(h.port, { toolCallId: TC, decision: 'approve', resumeToken: tokenA })
     expect(res1.status).toBe(200)
     const body1 = await res1.json()
     expect(body1.status).toBe('repaused')
     expect(domainCalls).toHaveLength(1)
-    expect(announced).toHaveLength(1)
-    expect(announced[0].toolCallId).toBe(TC_B)
+    const pendingB = stash.peek(TC_B)
+    expect(pendingB?.toolCallId).toBe(TC_B)
     expect(persisted).toHaveLength(0) // repaused turn is not a complete turn — nothing persisted yet
     expect(settled).toEqual([]) // repaused is NOT terminal — the panel keeps its live approval card
 
-    // hop-2: island approves B with the re-announced token.
+    // hop-2: approve B using the stashed approvalId.
     const res2 = await decide(h.port, {
-      toolCallId: TC_B,
-      decision: 'approve',
-      resumeToken: announced[0].resumeToken
+      approvalId: pendingB!.approvalId,
+      decision: 'approve'
     })
     expect(res2.status).toBe(200)
     const body2 = await res2.json()
@@ -989,9 +984,8 @@ describe('/api/ai/approval/decide — per-agent context freeze (headless agent r
           collector
         )
       },
-      islandAgentEnabled: true,
+      serverResumeEnabled: true,
       approvalStash: opts.stash,
-      announceApprovalToIsland: () => {},
       rejectApproval: (tc: string) => opts.guard.reject(tc),
       persistTurn: () => {}
     }

@@ -474,25 +474,6 @@ def test_flag_alerts_with_corrupt_baseline_still_alert():
     assert alerter.method_calls == []
 
 
-def test_island_dead_letter_card_converges_with_alert(monkeypatch):
-    """R3: 灵动岛 DeadLetterAccum 与告警同源 —— 静默轮不得独立刷屏."""
-    from src.notify import island_dispatch
-
-    dispatched: list[tuple] = []
-    monkeypatch.setattr(island_dispatch, "is_enabled", lambda: True)
-    monkeypatch.setattr(
-        island_dispatch,
-        "dispatch_dead_letter_accum",
-        lambda *, count, threshold: dispatched.append((count, threshold)),
-    )
-
-    alerter = _SignatureFakeAlerter()
-    app = _build_app(alerter=alerter, watcher_stats=_stats(dead_letter=10))
-    for _ in range(4):
-        asyncio.run(app._check_and_alert())
-    assert dispatched == [(10, 5)], "岛卡只应在 episode 进入时发一次"
-
-
 def test_service_unhealthy_and_radar_are_edge_triggered():
     """布尔态: 进入告一次 → 静默 → 恢复告一次."""
     alerter = _SignatureFakeAlerter()

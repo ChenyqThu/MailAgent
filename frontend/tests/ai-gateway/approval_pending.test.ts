@@ -81,7 +81,7 @@ function pending(port: number, query: string): Promise<Response> {
 describe('GET /api/ai/approval/pending — hit (enriched decide-card body)', () => {
   test('manual approval → 200 enriched, agentId/jobId null, NO resumeToken leak, read-only', async () => {
     const stash = new ApprovalRunStash()
-    const h = await start(baseCfg({ islandAgentEnabled: true, approvalStash: stash }))
+    const h = await start(baseCfg({ approvalStash: stash }))
     const token = seedStash(stash, 7)
 
     const res = await pending(h.port, '?sessionId=7')
@@ -103,7 +103,7 @@ describe('GET /api/ai/approval/pending — hit (enriched decide-card body)', () 
 
   test('headless agent approval → agentId + jobId from the frozen agentRunContext', async () => {
     const stash = new ApprovalRunStash()
-    const h = await start(baseCfg({ islandAgentEnabled: true, approvalStash: stash }))
+    const h = await start(baseCfg({ approvalStash: stash }))
     const ctx: AgentRunContext = {
       agentId: 'dms',
       allowedTools: ['email_draft_reply'],
@@ -128,14 +128,14 @@ describe('GET /api/ai/approval/pending — hit (enriched decide-card body)', () 
   //     rendering no warning at all.
   test('destructive bit round-trips; unset → false (never undefined)', async () => {
     const stash = new ApprovalRunStash()
-    const h = await start(baseCfg({ islandAgentEnabled: true, approvalStash: stash }))
+    const h = await start(baseCfg({ approvalStash: stash }))
 
     seedStash(stash, 21, { destructive: true })
     const hit = (await (await pending(h.port, '?sessionId=21')).json()) as Record<string, unknown>
     expect(hit.destructive).toBe(true)
 
     const stash2 = new ApprovalRunStash()
-    const h2 = await start(baseCfg({ islandAgentEnabled: true, approvalStash: stash2 }))
+    const h2 = await start(baseCfg({ approvalStash: stash2 }))
     seedStash(stash2, 22) // no destructive key at all
     const plain = (await (await pending(h2.port, '?sessionId=22')).json()) as Record<
       string,
@@ -222,7 +222,7 @@ describe('GET /api/ai/approval/pending — L4 批次2 edit/remember facts', () =
 describe('GET /api/ai/approval/pending — miss (404 fail-closed)', () => {
   test('no live entry for the session → 404 { pending:false }', async () => {
     const stash = new ApprovalRunStash()
-    const h = await start(baseCfg({ islandAgentEnabled: true, approvalStash: stash }))
+    const h = await start(baseCfg({ approvalStash: stash }))
     seedStash(stash, 7) // a DIFFERENT session's approval
 
     const res = await pending(h.port, '?sessionId=8')
@@ -243,7 +243,7 @@ describe('GET /api/ai/approval/pending — miss (404 fail-closed)', () => {
     const stash1 = new ApprovalRunStash()
     seedStash(stash1, 7)
     const stash2 = new ApprovalRunStash() // simulate the post-restart gateway
-    const h = await start(baseCfg({ islandAgentEnabled: true, approvalStash: stash2 }))
+    const h = await start(baseCfg({ approvalStash: stash2 }))
 
     const res = await pending(h.port, '?sessionId=7')
     expect(res.status).toBe(404)
@@ -251,9 +251,7 @@ describe('GET /api/ai/approval/pending — miss (404 fail-closed)', () => {
   })
 
   test('missing / non-integer sessionId → 400 E_INVALID_ARG', async () => {
-    const h = await start(
-      baseCfg({ islandAgentEnabled: true, approvalStash: new ApprovalRunStash() })
-    )
+    const h = await start(baseCfg({ approvalStash: new ApprovalRunStash() }))
     const missing = await pending(h.port, '')
     expect(missing.status).toBe(400)
     expect(((await missing.json()) as { error: string }).error).toBe('E_INVALID_ARG')

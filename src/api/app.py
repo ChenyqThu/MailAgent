@@ -422,7 +422,6 @@ from src.api.routers import (  # noqa: E402
     folder,
     history_sync,
     im,
-    island,
     jobs,
     kos,
     library,
@@ -511,9 +510,6 @@ app.include_router(agent_runs.router)
 # reply-all 真实收件人、日历改期的事件现值）；null / 失败时 gateway 回落旧文案。
 # owner-only 且只认本地 token（verify_local_token，不接受 CF JWT）—— 见 router docstring。
 app.include_router(approval_preview.router)
-# ping-island 解耦 ack 通道 (契约 §6/§9-4): 按钮点击 fire-and-forget POST 回灌。
-# 自认 ack_token 能力令牌 (不挂 verify_cf_access)，见 routers/island.py。
-app.include_router(island.router)
 # 08-01 阶段 1 PR1 (MCP connector) — /api/connector/* 连接/OAuth/工具清单同步。灰度开关
 # MAILAGENT_MCP_CONNECTORS 默认 off (非 callback 端点 409)。oauth/callback 是本仓第三个
 # 无 CF 门路由: 浏览器 302 带不了 header，state 即能力令牌 (单次消费+TTL，404 不泄因)，

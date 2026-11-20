@@ -13,9 +13,8 @@
 //      AssistantChatModal). Re-writing these smokes against the modal (open via ⌘J,
 //      locale flip inside AgentConversation) is a W5 follow-up — manual lane, needs a
 //      packaged .app run to author against the real DOM.
-//   ⑥ Settings → 灵动岛 testConnection → connected (Sprint 10 §2.5.4-D)
+//   ⑥ RETIRED (Phase 3b): Ping Island uninstalled; replaced by Tray + macOS Notifications.
 
-import fs from 'node:fs'
 import { test, expect, type Page } from '@playwright/test'
 import { launchApp, setLocale } from './electron-fixture'
 import type { ElectronApplication } from 'playwright'
@@ -81,42 +80,4 @@ test('③ ⌘K opens command palette', async () => {
   await expect(dialog).toBeVisible({ timeout: 5_000 })
   await win.keyboard.press('Escape')
   await expect(dialog).not.toBeVisible({ timeout: 5_000 })
-})
-
-test('⑥ Settings → Island testConnection → connected (ping-island live)', async () => {
-  // Requires /tmp/island.sock to exist and ping-island.app to be running.
-  // Per Sprint 10 §6.1 environment-prereq: this smoke is meaningful only
-  // when the env passes the precheck; otherwise we skip (env-dependent,
-  // not a code regression).
-  test.skip(
-    !fs.existsSync('/tmp/island.sock'),
-    'ping-island socket absent — env-dependent, not a code regression'
-  )
-  await expect(win.locator('[aria-label="email-list"]')).toBeVisible({ timeout: 20_000 })
-
-  // Sprint 10 user-acceptance — use the ⌘, shortcut for a locale-agnostic
-  // navigation. Palette substring matching ("设置" vs "Settings") was
-  // brittle when prior specs left the locale as en-US.
-  await win.keyboard.press('Meta+,')
-
-  // Settings：节导航是 DomainPanel 里的 NavRow button 行（唯一入口，设置页自己不出
-  // tab 条）；只有点过 tab 行之后 island TabsContent（"灵动岛集成" heading）才会
-  // mount（Radix 无 forceMount）。
-  await win.locator('main[aria-label="settings"]').waitFor({ state: 'visible', timeout: 10_000 })
-  await win.locator('[data-nav-panel]').waitFor({ state: 'visible', timeout: 10_000 })
-  await win.locator('[data-nav-panel] button', { hasText: /灵动岛与更新|Island & Updates/ }).click()
-  const islandHeading = win.locator('text=/灵动岛集成|Dynamic Island integration/')
-  await expect(islandHeading).toBeVisible({ timeout: 10_000 })
-
-  // Click "测试连接" / "Test connection". Match exact button text — the
-  // hint phrasing nearby contains the same substring.
-  const testBtn = win
-    .locator('button:has-text("测试连接"), button:has-text("Test connection")')
-    .first()
-  await testBtn.click()
-
-  // Pill should turn green = "已连接" / "Connected" within ~2s if
-  // ping-island is alive. Allow up to 8s for cold socket connect.
-  const connectedPill = win.locator('text=/已连接|^Connected$/').first()
-  await expect(connectedPill).toBeVisible({ timeout: 8_000 })
 })
