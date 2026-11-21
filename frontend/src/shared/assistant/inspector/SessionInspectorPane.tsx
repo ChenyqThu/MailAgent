@@ -2,8 +2,11 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import {
+  Ban,
   ChevronRight,
+  Code2,
   ExternalLink,
+  File,
   FileText,
   FolderKanban,
   Globe,
@@ -13,6 +16,7 @@ import {
   Mail,
   Paperclip,
   Plug,
+  RotateCcw,
   Search,
   Sparkles,
   User,
@@ -39,6 +43,8 @@ import { InspectorArtifactPreview } from './InspectorArtifactPreview'
 
 function artifactIcon(kind: WorkspaceArtifactKind): React.ReactElement {
   switch (kind) {
+    case 'html':
+      return <Code2 size={14} className="shrink-0 text-ai" />
     case 'image':
       return <ImageIcon size={14} className="shrink-0 text-coral" />
     case 'draft':
@@ -47,6 +53,8 @@ function artifactIcon(kind: WorkspaceArtifactKind): React.ReactElement {
       return <ListChecks size={14} className="shrink-0 text-ai" />
     case 'matter':
       return <FolderKanban size={14} className="shrink-0 text-ok" />
+    case 'file':
+      return <File size={14} className="shrink-0 text-ink-fg-2" />
     case 'report':
     case 'library':
     default:
@@ -215,25 +223,26 @@ function SessionInspectorOpenPane({
     filteredSkills.length +
     filteredConnectors.length
 
+  const showFilter = snapshot.totalItems >= 8
+
   const paneWidthClass =
     activeArtifact !== null
       ? presentation === 'push'
         ? 'w-[520px]'
         : 'w-[440px] max-w-[94%]'
       : presentation === 'push'
-        ? 'w-[300px]'
-        : 'w-[300px] max-w-[90%]'
+        ? 'w-[280px]'
+        : 'w-[280px] max-w-[90%]'
 
-  const paneBody = (
-    <aside
-      data-testid="session-inspector-pane"
-      aria-label={t('chat.inspector.title')}
+  const innerSurface = (
+    <div
       className={cn(
-        'flex min-h-0 flex-col border-l border-ink-border bg-ink-1',
-        !reduce && 'transition-[width] duration-base ease-standard',
-        paneWidthClass,
-        presentation === 'push' ? 'h-full shrink-0' : 'relative z-10 h-full shadow-sm',
-        className
+        'flex min-h-0 flex-col overflow-hidden bg-ink-1',
+        presentation === 'push'
+          ? activeArtifact !== null
+            ? 'h-full rounded-xl border border-ink-border-soft shadow-sm'
+            : 'max-h-full rounded-xl border border-ink-border-soft shadow-sm'
+          : 'h-full border-l border-ink-border shadow-sm'
       )}
     >
       {activeArtifact !== null ? (
@@ -243,10 +252,10 @@ function SessionInspectorOpenPane({
         />
       ) : (
         <>
-          <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b border-ink-border-soft px-3">
-            <div className="flex min-w-0 items-center gap-2">
-              <Layers size={14} strokeWidth={1.8} className="shrink-0 text-coral" aria-hidden />
-              <span className="truncate text-body font-medium text-ink-fg">
+          <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b border-ink-border-soft px-3">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <Layers size={13} strokeWidth={1.8} className="shrink-0 text-coral" aria-hidden />
+              <span className="truncate text-aux font-medium text-ink-fg">
                 {t('chat.inspector.title')}
               </span>
               {snapshot.totalItems > 0 && (
@@ -259,15 +268,15 @@ function SessionInspectorOpenPane({
               type="button"
               onClick={() => inspector.setOpen(false)}
               aria-label={t('chat.inspector.close')}
-              className="grid size-7 place-items-center rounded-md text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+              className="grid size-6 place-items-center rounded-md text-ink-fg-3 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
             >
-              <X size={14} strokeWidth={2} />
+              <X size={13} strokeWidth={2} />
             </button>
           </div>
 
-          {snapshot.totalItems > 0 && (
-            <div className="border-b border-ink-border-soft px-3 py-2">
-              <label className="flex items-center gap-2 rounded-md border border-ink-border-soft bg-ink-2 px-2.5 py-1.5">
+          {showFilter && (
+            <div className="border-b border-ink-border-soft px-2.5 py-2">
+              <label className="flex items-center gap-2 rounded-md border border-ink-border-soft bg-ink-2 px-2 py-1">
                 <Search size={13} className="shrink-0 text-ink-fg-3" aria-hidden />
                 <input
                   type="text"
@@ -280,13 +289,13 @@ function SessionInspectorOpenPane({
             </div>
           )}
 
-          <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
+          <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-2.5 py-1.5">
             {snapshot.totalItems === 0 ? (
-              <div className="px-2 py-8 text-center text-aux text-ink-fg-3">
+              <div className="px-2 py-6 text-center text-aux text-ink-fg-3">
                 {t('chat.inspector.empty')}
               </div>
             ) : totalFiltered === 0 ? (
-              <div className="px-2 py-8 text-center text-aux text-ink-fg-3">
+              <div className="px-2 py-6 text-center text-aux text-ink-fg-3">
                 {t('chat.inspector.noMatches')}
               </div>
             ) : (
@@ -316,6 +325,23 @@ function SessionInspectorOpenPane({
                           </span>
                         </span>
                       </button>
+                    ))}
+                  </InspectorSection>
+                )}
+
+                {filteredSkills.length > 0 && (
+                  <InspectorSection
+                    title={t('chat.inspector.sections.skills')}
+                    count={filteredSkills.length}
+                  >
+                    {filteredSkills.map((skill) => (
+                      <div
+                        key={skill.key}
+                        className="flex items-center gap-2 rounded-md px-2 py-1 text-aux text-ink-fg-1"
+                      >
+                        <Sparkles size={13} className="shrink-0 text-coral" aria-hidden />
+                        <span className="min-w-0 flex-1 truncate">{skill.name}</span>
+                      </div>
                     ))}
                   </InspectorSection>
                 )}
@@ -393,25 +419,6 @@ function SessionInspectorOpenPane({
                   </InspectorSection>
                 )}
 
-                {filteredSkills.length > 0 && (
-                  <InspectorSection
-                    title={t('chat.inspector.sections.skills')}
-                    count={filteredSkills.length}
-                  >
-                    <div className="flex flex-wrap gap-1.5 px-1.5 py-1">
-                      {filteredSkills.map((skill) => (
-                        <span
-                          key={skill.key}
-                          className="inline-flex items-center gap-1 rounded-md border border-ink-border-soft bg-ink-2 px-2 py-0.5 text-aux text-ink-fg-1"
-                        >
-                          <Sparkles size={12} className="text-coral" aria-hidden />
-                          <span>{skill.name}</span>
-                        </span>
-                      ))}
-                    </div>
-                  </InspectorSection>
-                )}
-
                 {filteredConnectors.length > 0 && (
                   <InspectorSection
                     title={t('chat.inspector.sections.connectors')}
@@ -424,8 +431,19 @@ function SessionInspectorOpenPane({
                           key={conn.connectorId}
                           className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-ink-2"
                         >
-                          <Plug size={14} className="shrink-0 text-ink-fg-2" />
-                          <span className="min-w-0 flex-1 truncate text-aux text-ink-fg">
+                          <Plug
+                            size={14}
+                            className={cn(
+                              'shrink-0',
+                              muted ? 'text-ink-fg-3 opacity-60' : 'text-ink-fg-2'
+                            )}
+                          />
+                          <span
+                            className={cn(
+                              'min-w-0 flex-1 truncate text-aux',
+                              muted ? 'text-ink-fg-3 line-through opacity-75' : 'text-ink-fg'
+                            )}
+                          >
                             {conn.displayName}
                           </span>
                           <span className="font-mono text-meta tabular-nums text-ink-fg-3">
@@ -434,16 +452,28 @@ function SessionInspectorOpenPane({
                           <button
                             type="button"
                             onClick={() => toggleConnector(conn.connectorId)}
-                            className={cn(
-                              'rounded px-1.5 py-0.5 text-aux transition-colors duration-fast',
+                            aria-label={
                               muted
-                                ? 'bg-ink-3 text-ink-fg-3 hover:text-ink-fg'
-                                : 'bg-coral/15 text-coral hover:bg-coral/25'
+                                ? t('chat.inspector.unmuteForSession')
+                                : t('chat.inspector.muteForSession')
+                            }
+                            title={
+                              muted
+                                ? t('chat.inspector.unmuteForSession')
+                                : t('chat.inspector.muteForSession')
+                            }
+                            className={cn(
+                              'grid size-6 shrink-0 place-items-center rounded transition-colors duration-fast',
+                              muted
+                                ? 'bg-ink-3 text-ink-fg-2 hover:text-ink-fg'
+                                : 'text-ink-fg-3 hover:bg-ink-3 hover:text-fail'
                             )}
                           >
-                            {muted
-                              ? t('chat.inspector.unmuteForSession')
-                              : t('chat.inspector.muteForSession')}
+                            {muted ? (
+                              <RotateCcw size={13} strokeWidth={1.8} />
+                            ) : (
+                              <Ban size={13} strokeWidth={1.8} />
+                            )}
                           </button>
                         </div>
                       )
@@ -483,6 +513,22 @@ function SessionInspectorOpenPane({
           )}
         </>
       )}
+    </div>
+  )
+
+  const paneBody = (
+    <aside
+      data-testid="session-inspector-pane"
+      aria-label={t('chat.inspector.title')}
+      className={cn(
+        'flex min-h-0 flex-col',
+        !reduce && 'transition-[width] duration-base ease-standard',
+        paneWidthClass,
+        presentation === 'push' ? 'h-full shrink-0 items-stretch py-3 pl-1 pr-4' : 'relative z-10 h-full',
+        className
+      )}
+    >
+      {innerSurface}
     </aside>
   )
 

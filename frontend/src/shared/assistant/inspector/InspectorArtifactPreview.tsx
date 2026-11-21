@@ -7,6 +7,7 @@ import { ArrowLeft, Check, Copy, ExternalLink } from 'lucide-react'
 import { cn } from '@shared/lib/cn'
 import { ImageLightbox } from '@shared/components/email/EmailBodyFrame'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
+import { HTML_PREVIEW_SANDBOX } from '@shared/components/library/HtmlPreview'
 import { useLibraryApi } from '@shared/components/library/hooks'
 import { useMatterNavigation } from '@shared/components/matters/navigation'
 import type { WorkspaceArtifact } from './deriveSessionWorkspace'
@@ -29,11 +30,13 @@ export function InspectorArtifactPreview({
   const libraryApi = useLibraryApi()
   const [copied, setCopied] = useState(false)
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
+  const [htmlMode, setHtmlMode] = useState<'rendered' | 'source'>('rendered')
+  const isHtmlArtifact = artifact.kind === 'html' || artifact.isHtml === true
 
   const liveTextQ = useQuery({
     queryKey: ['library', 'inspector-preview', artifact.fileId ?? 'none'],
     queryFn: () => libraryApi.text(artifact.fileId as number),
-    enabled: artifact.kind === 'library' && artifact.fileId != null,
+    enabled: (artifact.kind === 'library' || artifact.kind === 'html') && artifact.fileId != null,
     staleTime: 30_000
   })
 
@@ -86,6 +89,34 @@ export function InspectorArtifactPreview({
           <span>{t('chat.inspector.backToOverview')}</span>
         </button>
         <div className="ml-auto flex items-center gap-1">
+          {isHtmlArtifact && effectiveContent.length > 0 && (
+            <div className="mr-1 inline-flex rounded-md border border-ink-border-soft bg-ink-2 p-0.5">
+              <button
+                type="button"
+                onClick={() => setHtmlMode('rendered')}
+                className={cn(
+                  'rounded px-2 py-0.5 text-aux transition-colors duration-fast',
+                  htmlMode === 'rendered'
+                    ? 'bg-ink-1 font-medium text-ink-fg shadow-xs'
+                    : 'text-ink-fg-2 hover:text-ink-fg'
+                )}
+              >
+                {t('chat.inspector.previewRendered')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setHtmlMode('source')}
+                className={cn(
+                  'rounded px-2 py-0.5 text-aux transition-colors duration-fast',
+                  htmlMode === 'source'
+                    ? 'bg-ink-1 font-medium text-ink-fg shadow-xs'
+                    : 'text-ink-fg-2 hover:text-ink-fg'
+                )}
+              >
+                {t('chat.inspector.previewSource')}
+              </button>
+            </div>
+          )}
           {copyPayload.length > 0 && (
             <button
               type="button"
@@ -171,26 +202,40 @@ export function InspectorArtifactPreview({
         )}
 
         {(artifact.kind === 'library' ||
+          artifact.kind === 'html' ||
+          artifact.kind === 'file' ||
           artifact.kind === 'draft' ||
           artifact.kind === 'report' ||
           artifact.kind === 'matter') && (
           <>
-            {artifact.kind === 'library' && liveTextQ.isLoading && !effectiveContent ? (
+            {(artifact.kind === 'library' || artifact.kind === 'html') &&
+            artifact.fileId != null &&
+            liveTextQ.isLoading &&
+            !effectiveContent ? (
               <p className="text-aux text-ink-fg-3">{t('chat.inspector.loadingPreview')}</p>
             ) : effectiveContent.length > 0 ? (
-              <div
-                className={cn(
-                  'rounded-lg border border-ink-border-soft bg-ink-2 p-3 text-body text-ink-fg'
-                )}
-              >
-                {artifact.isMarkdown !== false ? (
-                  <TranslatedBody text={effectiveContent} />
-                ) : (
-                  <pre className="scrollbar-thin overflow-x-auto whitespace-pre-wrap break-words font-mono text-aux leading-relaxed text-ink-fg-1">
-                    {effectiveContent}
-                  </pre>
-                )}
-              </div>
+              isHtmlArtifact && htmlMode === 'rendered' ? (
+                <iframe
+                  title={artifact.title}
+                  srcDoc={effectiveContent}
+                  sandbox={HTML_PREVIEW_SANDBOX}
+                  className="h-[460px] w-full rounded-lg border border-ink-border-soft bg-white"
+                />
+              ) : (
+                <div
+                  className={cn(
+                    'rounded-lg border border-ink-border-soft bg-ink-2 p-3 text-body text-ink-fg'
+                  )}
+                >
+                  {!isHtmlArtifact && artifact.isMarkdown !== false ? (
+                    <TranslatedBody text={effectiveContent} />
+                  ) : (
+                    <pre className="scrollbar-thin overflow-x-auto whitespace-pre-wrap break-words font-mono text-aux leading-relaxed text-ink-fg-1">
+                      {effectiveContent}
+                    </pre>
+                  )}
+                </div>
+              )
             ) : (
               <p className="text-aux text-ink-fg-3">{t('chat.inspector.previewUnavailable')}</p>
             )}

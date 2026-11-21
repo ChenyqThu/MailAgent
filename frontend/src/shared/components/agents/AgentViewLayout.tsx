@@ -14,13 +14,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, Globe, Plus } from 'lucide-react'
+import { Plus } from 'lucide-react'
 
 import type { ChatSession, ChatSessionListItem } from '@shared/api/types'
 import type { ComposerDraftBridgeProps } from '@shared/assistant/components/ComposerDraftBridge'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useGeneralChat, type UseGeneralChatReturn } from '@shared/hooks/useGeneralChat'
-import { toastError } from '@shared/state/toast'
+import { toastError, toastInfo, toastSuccess } from '@shared/state/toast'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import {
@@ -39,11 +39,12 @@ import { closeObjectTab, openBrowserTab, setObjectTabTitle } from '@shared/state
 import { ManagedBrowserPane } from '@shared/components/browser/ManagedBrowserPane'
 import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
 import { InspectorProvider } from '@shared/assistant/inspector/InspectorProvider'
-import { InspectorTogglePill } from '@shared/assistant/inspector/InspectorTogglePill'
 import { SessionInspectorPane } from '@shared/assistant/inspector/SessionInspectorPane'
 import { useSessionInspector } from '@shared/assistant/inspector/inspectorContext'
+import { formatSessionTranscriptMarkdown } from '@shared/assistant/formatSessionMarkdown'
 
 import { AgentThreadList } from './AgentThreadList'
+import { AgentChatHeaderBar } from './AgentChatHeaderBar'
 import { AgentConversation } from './AgentConversation'
 import { useNarrow } from './hooks'
 import { titleOf } from './sessionTitle'
@@ -54,7 +55,11 @@ export function AgentViewLayout(): React.ReactElement {
   const mountKey = useActiveChat((s) => s.mountKey)
   const modalVisible = useAIChatPanel((s) => s.visible)
   return (
-    <InspectorProvider sessionKey={String(mountKey ?? 'none')} shortcutEnabled={!modalVisible}>
+    <InspectorProvider
+      sessionKey={String(mountKey ?? 'none')}
+      shortcutEnabled={!modalVisible}
+      autoOpenWhenPopulated={true}
+    >
       <AgentViewLayoutInner />
     </InspectorProvider>
   )
@@ -166,52 +171,107 @@ function AgentViewLayoutInner(): React.ReactElement {
     if (useActiveChat.getState().activeChatTargetId === null) openNewChatTab()
   }, [])
 
-  const actionFail = (err: unknown): void => {
-    toastError(t('agentView.actionFail', { error: errorMessage(err) }))
-  }
+  const activeSessionId =
+    activeChatTargetId !== null && activeChatTargetId > 0 ? activeChatTargetId : null
+  const listedHeaderSession =
+    activeSessionId != null ? (items.find((s) => s.id === activeSessionId) ?? null) : null
+  const directHeaderSessionQ = useQuery({
+    queryKey: ['chat', 'session', activeSessionId],
+    queryFn: () => mailApi.chat.getSession(activeSessionId as number),
+    enabled: activeSessionId != null && listedHeaderSession == null,
+    staleTime: 10_000
+  })
+  const activeHeaderSession = listedHeaderSession ?? directHeaderSessionQ.data ?? null
+  const activeHeaderTitle = activeHeaderSession !== null ? titleOf(activeHeaderSession, t) : null
+
+  const actionFail = useCallback(
+    (err: unknown): void => {
+      toastError(t('agentView.actionFail', { error: errorMessage(err) }))
+    },
+    [t]
+  )
+
+  const handleNewSession = useCallback((): void => {
+    openNewChatTab()
+    if (narrow) setMobileDetail(true)
+  }, [narrow])
+
+  const handleDeleteSession = useCallback(
+    (id: number): void => {
+      // 标签先收（指着已删行的标签重启后是死标签；激活的那张被关 → 宿主随 key 卸载），
+      // 服务端删完再刷新列表。
+      closeObjectTab('chat', id)
+      void mailApi.chat.deleteSession(id).then(invalidateSessions).catch(actionFail)
+    },
+    [actionFail, invalidateSessions, mailApi.chat]
+  )
+
+  const handleRenameSession = useCallback(
+    (id: number, title: string): void => {
+      // Persist the rename (serve-api → ai_chat.db) then refresh the list so the new title shows;
+      // the tab title follows at once (the list refresh would catch it too, a beat later).
+      setObjectTabTitle('chat', id, title)
+      void mailApi.chat.updateSessionTitle(id, title).then(invalidateSessions).catch(actionFail)
+    },
+    [actionFail, invalidateSessions, mailApi.chat]
+  )
+
+  const handleArchiveSession = useCallback(
+    (id: number): void => {
+      // dogfood-2: 归档 = 软删(从日期分组移到底部「归档」组；行/消息保留)。serve-api → ai_chat.db，刷新。
+      void mailApi.chat.updateSessionArchived(id, true).then(invalidateSessions).catch(actionFail)
+    },
+    [actionFail, invalidateSessions, mailApi.chat]
+  )
+
+  const handleRestoreSession = useCallback(
+    (id: number): void => {
+      // dogfood-3: 恢复 = 取消归档(archived=false)，从「归档」组移回日期分组。
+      void mailApi.chat.updateSessionArchived(id, false).then(invalidateSessions).catch(actionFail)
+    },
+    [actionFail, invalidateSessions, mailApi.chat]
+  )
+
+  const handlePinSession = useCallback(
+    (id: number, pinned: boolean): void => {
+      void mailApi.chat.updateSessionPinned(id, pinned).then(invalidateSessions).catch(actionFail)
+    },
+    [actionFail, invalidateSessions, mailApi.chat]
+  )
+
+  const handleShareActive = useCallback((): void => {
+    if (activeSessionId == null || !navigator.clipboard?.writeText) return
+    void mailApi.chat
+      .listMessages(activeSessionId)
+      .then((rows) => {
+        if (rows.length === 0) {
+          toastInfo(t('agentView.shareEmpty'))
+          return
+        }
+        const md = formatSessionTranscriptMarkdown(activeHeaderTitle ?? t('chat.tabs.newChat'), rows)
+        return navigator.clipboard.writeText(md).then(() => {
+          toastSuccess(t('agentView.shareCopied'))
+        })
+      })
+      .catch(actionFail)
+  }, [actionFail, activeHeaderTitle, activeSessionId, mailApi.chat, t])
 
   const list = (
     <AgentThreadList
       items={items}
       // 临时负 id 还不是列表里的行，高亮只认真 id。
-      activeSessionId={
-        activeChatTargetId !== null && activeChatTargetId > 0 ? activeChatTargetId : null
-      }
+      activeSessionId={activeSessionId}
       onSelect={(id) => {
         const item = items.find((s) => s.id === id)
         openChatTab(id, item === undefined ? undefined : titleOf(item, t))
         if (narrow) setMobileDetail(true)
       }}
-      onNew={() => {
-        openNewChatTab()
-        if (narrow) setMobileDetail(true)
-      }}
-      onDelete={(id) => {
-        // 标签先收（指着已删行的标签重启后是死标签；激活的那张被关 → 宿主随 key 卸载），
-        // 服务端删完再刷新列表。
-        closeObjectTab('chat', id)
-        void mailApi.chat.deleteSession(id).then(invalidateSessions).catch(actionFail)
-      }}
-      onRename={(id, title) => {
-        // Persist the rename (serve-api → ai_chat.db) then refresh the list so the new title shows;
-        // the tab title follows at once (the list refresh would catch it too, a beat later).
-        setObjectTabTitle('chat', id, title)
-        void mailApi.chat.updateSessionTitle(id, title).then(invalidateSessions).catch(actionFail)
-      }}
-      onArchive={(id) => {
-        // dogfood-2: 归档 = 软删(从日期分组移到底部「归档」组；行/消息保留)。serve-api → ai_chat.db，刷新。
-        void mailApi.chat.updateSessionArchived(id, true).then(invalidateSessions).catch(actionFail)
-      }}
-      onRestore={(id) => {
-        // dogfood-3: 恢复 = 取消归档(archived=false)，从「归档」组移回日期分组。
-        void mailApi.chat
-          .updateSessionArchived(id, false)
-          .then(invalidateSessions)
-          .catch(actionFail)
-      }}
-      onPin={(id, pinned) => {
-        void mailApi.chat.updateSessionPinned(id, pinned).then(invalidateSessions).catch(actionFail)
-      }}
+      onNew={handleNewSession}
+      onDelete={handleDeleteSession}
+      onRename={handleRenameSession}
+      onArchive={handleArchiveSession}
+      onRestore={handleRestoreSession}
+      onPin={handlePinSession}
       onStar={(id, starred) => {
         void mailApi.chat
           .updateSessionStarred(id, starred)
@@ -252,32 +312,36 @@ function AgentViewLayoutInner(): React.ReactElement {
   if (narrow) {
     return mobileDetail ? (
       <div className="flex h-full w-full flex-col">
-        <div className="flex h-11 shrink-0 items-center gap-2 border-b border-ink-border px-2">
-          <button
-            type="button"
-            onClick={() => setMobileDetail(false)}
-            aria-label={t('agents.reports.backToList')}
-            className="grid size-8 place-items-center rounded-md text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
-          >
-            <ChevronLeft size={16} strokeWidth={2} />
-          </button>
-          <span className="truncate text-body font-medium text-ink-fg">{t('nav.agentView')}</span>
-          <div className="ml-auto flex items-center gap-1.5">
-            <InspectorTogglePill compact />
-            <button
-              type="button"
-              onClick={() => openBrowserTab()}
-              aria-label={t('browserPane.toggleButton')}
-              className="inline-flex items-center gap-1.5 rounded-md border border-ink-border-soft bg-ink-2 px-2.5 py-1 text-aux text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
-            >
-              {browserActive && (
-                <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-coral/100" />
-              )}
-              <Globe size={14} strokeWidth={1.75} className="shrink-0" />
-              <span>{t('browserPane.toggleButton')}</span>
-            </button>
-          </div>
-        </div>
+        <AgentChatHeaderBar
+          sessionId={activeSessionId}
+          sessionTitle={activeHeaderTitle}
+          isPinned={activeHeaderSession?.pinned_at != null}
+          isArchived={Boolean(activeHeaderSession?.archived)}
+          browserOpen={false}
+          browserActive={browserActive}
+          narrow={true}
+          onBack={() => setMobileDetail(false)}
+          onNew={handleNewSession}
+          onShare={handleShareActive}
+          onToggleBrowser={() => openBrowserTab()}
+          onTogglePin={() => {
+            if (activeSessionId != null) {
+              handlePinSession(activeSessionId, activeHeaderSession?.pinned_at == null)
+            }
+          }}
+          onRename={(nextTitle) => {
+            if (activeSessionId != null) handleRenameSession(activeSessionId, nextTitle)
+          }}
+          onArchive={() => {
+            if (activeSessionId != null) handleArchiveSession(activeSessionId)
+          }}
+          onRestore={() => {
+            if (activeSessionId != null) handleRestoreSession(activeSessionId)
+          }}
+          onDelete={() => {
+            if (activeSessionId != null) handleDeleteSession(activeSessionId)
+          }}
+        />
         <div className="relative flex min-h-0 flex-1 flex-col">
           {conversation}
           <SessionInspectorPane presentation="overlay" />
@@ -292,25 +356,34 @@ function AgentViewLayoutInner(): React.ReactElement {
     <div className="flex h-full min-h-0">
       {list}
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex h-9 shrink-0 items-center justify-end gap-2 border-b border-ink-border-soft px-3">
-          <InspectorTogglePill />
-          <button
-            type="button"
-            aria-expanded={effectiveSidebarOpen}
-            onClick={toggleBrowserSidebar}
-            className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-aux transition-colors duration-fast ${
-              effectiveSidebarOpen
-                ? 'border-coral/40 bg-coral/10 text-ink-fg'
-                : 'border-ink-border-soft bg-ink-2 text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
-            }`}
-          >
-            {browserActive && (
-              <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-coral/100" />
-            )}
-            <Globe size={14} strokeWidth={1.75} className="shrink-0 text-coral" />
-            <span>{t('browserPane.toggleButton')}</span>
-          </button>
-        </div>
+        <AgentChatHeaderBar
+          sessionId={activeSessionId}
+          sessionTitle={activeHeaderTitle}
+          isPinned={activeHeaderSession?.pinned_at != null}
+          isArchived={Boolean(activeHeaderSession?.archived)}
+          browserOpen={effectiveSidebarOpen}
+          browserActive={browserActive}
+          onNew={handleNewSession}
+          onShare={handleShareActive}
+          onToggleBrowser={toggleBrowserSidebar}
+          onTogglePin={() => {
+            if (activeSessionId != null) {
+              handlePinSession(activeSessionId, activeHeaderSession?.pinned_at == null)
+            }
+          }}
+          onRename={(nextTitle) => {
+            if (activeSessionId != null) handleRenameSession(activeSessionId, nextTitle)
+          }}
+          onArchive={() => {
+            if (activeSessionId != null) handleArchiveSession(activeSessionId)
+          }}
+          onRestore={() => {
+            if (activeSessionId != null) handleRestoreSession(activeSessionId)
+          }}
+          onDelete={() => {
+            if (activeSessionId != null) handleDeleteSession(activeSessionId)
+          }}
+        />
         <div className="relative flex min-h-0 flex-1">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">{conversation}</div>
           <SessionInspectorPane

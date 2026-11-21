@@ -852,6 +852,9 @@
       "empty": "没有匹配的命令"
     },
     "newSession": "新会话",
+    "share": "分享会话",
+    "shareCopied": "已复制 Markdown 对话内容",
+    "shareEmpty": "当前会话暂无消息可分享",
     "rename": "重命名",
     "delete": "删除",
     "archive": "归档",
@@ -1835,6 +1838,8 @@
       },
       "artifactKinds": {
         "library": "资料库文档",
+        "html": "HTML 页面",
+        "file": "文件",
         "image": "生成图片",
         "draft": "邮件草稿",
         "report": "分析报告",
@@ -1846,6 +1851,9 @@
       "sourcesConsulted": "会话读取 / 检索",
       "muteForSession": "本会话禁用",
       "unmuteForSession": "恢复启用",
+      "mutedBadge": "已静音",
+      "previewRendered": "预览",
+      "previewSource": "源码",
       "contextBudget": "上下文窗口",
       "backToOverview": "返回工作区",
       "copy": "复制",

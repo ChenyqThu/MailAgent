@@ -200,8 +200,8 @@ describe('deriveSessionWorkspace', () => {
     expect(snap.artifacts.map((a) => [a.kind, a.title])).toEqual([
       ['library', 'brief.md'],
       ['image', 'Clean architecture diagram'],
-      ['draft', 'Re: Contract'],
       ['report', 'Weekly Digest'],
+      ['draft', 'Re: Contract'],
       ['matter', 'Vendor Audit'],
       ['plan', 'Audit docs v2']
     ])
@@ -287,11 +287,7 @@ describe('deriveSessionWorkspace', () => {
       'https://example.org/spec',
       'https://rag.dev/paper'
     ])
-    expect(snap.skills.map((s) => `${s.kind}:${s.name}`)).toEqual([
-      'skill:deploy-checklist',
-      'tool-activated:notion_search',
-      'tool-activated:notion_fetch'
-    ])
+    expect(snap.skills.map((s) => `${s.kind}:${s.name}`)).toEqual(['skill:deploy-checklist'])
     expect(snap.connectorsUsed).toEqual([
       {
         connectorId: 'notion',
@@ -300,5 +296,52 @@ describe('deriveSessionWorkspace', () => {
         actions: ['search', 'fetch']
       }
     ])
+  })
+
+  test('extracts html and local file_write outputs cleanly without host paths and orders deliverables first', () => {
+    const snap = deriveSessionWorkspace({
+      messages: [
+        {
+          role: 'assistant',
+          parts: [
+            {
+              type: 'tool-plan_update',
+              toolCallId: 'p1',
+              state: 'output-available',
+              input: {
+                goal: 'Build architecture overview',
+                steps: [{ id: 's1', title: 'Draft HTML', status: 'done' }]
+              }
+            },
+            {
+              type: 'tool-file_write',
+              toolCallId: 'fw1',
+              state: 'output-available',
+              input: {
+                path: '/Users/alice/reports/architecture-compare.html',
+                content: '<h1>Omada Architecture</h1>'
+              }
+            },
+            {
+              type: 'tool-file_write',
+              toolCallId: 'fw2',
+              state: 'output-available',
+              input: {
+                path: '/Users/alice/reports/notes.txt',
+                content: 'plain notes'
+              }
+            }
+          ]
+        }
+      ]
+    })
+
+    expect(snap.artifacts.map((a) => [a.kind, a.title, a.virtualPath])).toEqual([
+      ['html', 'architecture-compare.html', 'architecture-compare.html'],
+      ['file', 'notes.txt', 'notes.txt'],
+      ['plan', 'Build architecture overview', undefined]
+    ])
+    expect(snap.artifacts[0]?.isHtml).toBe(true)
+    expect(snap.artifacts[0]?.content).toBe('<h1>Omada Architecture</h1>')
   })
 })

@@ -47,6 +47,7 @@ export function TeamChatHost({
     <InspectorProvider
       sessionKey={`team:${member.key}:${sessionId ?? 'new'}`}
       shortcutEnabled={!modalVisible}
+      autoOpenWhenPopulated={true}
     >
       <TeamChatHostInner
         member={member}

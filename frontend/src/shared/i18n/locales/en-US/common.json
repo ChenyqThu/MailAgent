@@ -852,6 +852,9 @@
       "empty": "No matching commands"
     },
     "newSession": "New chat",
+    "share": "Share chat",
+    "shareCopied": "Conversation copied as Markdown",
+    "shareEmpty": "No messages to share yet",
     "rename": "Rename",
     "delete": "Delete",
     "archive": "Archive",
@@ -1835,6 +1838,8 @@
       },
       "artifactKinds": {
         "library": "Library doc",
+        "html": "HTML page",
+        "file": "File",
         "image": "Generated image",
         "draft": "Email draft",
         "report": "Report",
@@ -1846,6 +1851,9 @@
       "sourcesConsulted": "Consulted in session",
       "muteForSession": "Mute in session",
       "unmuteForSession": "Unmute",
+      "mutedBadge": "Muted",
+      "previewRendered": "Preview",
+      "previewSource": "Source",
       "contextBudget": "Context budget",
       "backToOverview": "Back",
       "copy": "Copy",

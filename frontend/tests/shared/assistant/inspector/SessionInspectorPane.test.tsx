@@ -143,11 +143,19 @@ function SeedInspector({
   return null
 }
 
-function renderHarness(snapshot: SessionWorkspaceSnapshot, usage: ContextUsageView | null = null) {
+function renderHarness(
+  snapshot: SessionWorkspaceSnapshot,
+  usage: ContextUsageView | null = null,
+  autoOpenWhenPopulated = false
+) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <InspectorProvider sessionKey="test:10" shortcutEnabled={true}>
+      <InspectorProvider
+        sessionKey="test:10"
+        shortcutEnabled={true}
+        autoOpenWhenPopulated={autoOpenWhenPopulated}
+      >
         <SeedInspector snapshot={snapshot} contextUsage={usage} sessionId={10} />
         <InspectorTogglePill />
         <SessionInspectorPane presentation="push" />
@@ -157,36 +165,92 @@ function renderHarness(snapshot: SessionWorkspaceSnapshot, usage: ContextUsageVi
 }
 
 describe('SessionInspectorPane & InspectorTogglePill', () => {
-  test('hides toggle pill on empty session', () => {
-    renderHarness({
-      artifacts: [],
-      sources: { explicit: [], consulted: [] },
-      links: [],
-      skills: [],
-      connectorsUsed: [],
-      totalItems: 0
-    })
+  test('hides toggle pill on empty session and does not auto-open on bare anchor-only snapshot', () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { rerender } = render(
+      <QueryClientProvider client={qc}>
+        <InspectorProvider sessionKey="test:10" shortcutEnabled={true} autoOpenWhenPopulated={true}>
+          <SeedInspector
+            snapshot={{
+              artifacts: [],
+              sources: {
+                explicit: [
+                  {
+                    key: 'email:1',
+                    kind: 'email',
+                    origin: 'explicit',
+                    title: 'Anchored Email',
+                    internalId: 1
+                  }
+                ],
+                consulted: []
+              },
+              links: [],
+              skills: [],
+              connectorsUsed: [],
+              totalItems: 1
+            }}
+            sessionId={10}
+          />
+          <InspectorTogglePill />
+          <SessionInspectorPane presentation="push" />
+        </InspectorProvider>
+      </QueryClientProvider>
+    )
 
-    expect(screen.queryByTestId('inspector-toggle-pill')).toBeNull()
     expect(screen.queryByTestId('session-inspector-pane')).toBeNull()
+
+    rerender(
+      <QueryClientProvider client={qc}>
+        <InspectorProvider sessionKey="test:10" shortcutEnabled={true} autoOpenWhenPopulated={true}>
+          <SeedInspector snapshot={POPULATED_SNAPSHOT} sessionId={10} />
+          <InspectorTogglePill />
+          <SessionInspectorPane presentation="push" />
+        </InspectorProvider>
+      </QueryClientProvider>
+    )
+
+    expect(screen.getByTestId('session-inspector-pane')).toBeTruthy()
   })
 
-  test('opens 300px overview, filters items, switches to 520px artifact preview, toggles connector, and supports Cmd+.', async () => {
+  test('opens 280px floating overview, switches to 520px artifact preview, toggles icon-only connector mute, and supports Cmd+.', async () => {
     const writeTextMock = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: { writeText: writeTextMock }
     })
 
-    renderHarness(POPULATED_SNAPSHOT, SAMPLE_USAGE)
+    const denseSnapshot: SessionWorkspaceSnapshot = {
+      ...POPULATED_SNAPSHOT,
+      artifacts: [
+        ...POPULATED_SNAPSHOT.artifacts,
+        {
+          id: 'html:1',
+          kind: 'html',
+          title: 'diagram.html',
+          content: '<html><body><h1>Arch</h1></body></html>',
+          isHtml: true
+        },
+        {
+          id: 'file:2',
+          kind: 'file',
+          title: 'summary.txt',
+          content: 'Summary body'
+        }
+      ],
+      totalItems: 8
+    }
+
+    renderHarness(denseSnapshot, SAMPLE_USAGE)
 
     const pill = screen.getByTestId('inspector-toggle-pill')
-    expect(pill.textContent).toContain('6')
+    expect(pill.textContent).toContain('8')
     fireEvent.click(pill)
 
     const pane = screen.getByTestId('session-inspector-pane')
-    expect(pane.className).toContain('w-[300px]')
+    expect(pane.className).toContain('w-[280px]')
     expect(screen.getByText('q4-brief.md')).toBeTruthy()
+    expect(screen.getByText('diagram.html')).toBeTruthy()
     expect(screen.getByText('Vendor Renewal Email')).toBeTruthy()
     expect(screen.getByText('Pricing FAQ')).toBeTruthy()
     expect(screen.getByText('Enterprise SLA')).toBeTruthy()
@@ -194,19 +258,29 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
     expect(screen.getByText('Notion')).toBeTruthy()
     expect(screen.getByText('64K / 200K')).toBeTruthy()
 
-    // Filter narrows items
+    // Filter narrows items (visible when totalItems >= 8)
     const filterInput = screen.getByPlaceholderText('Filter artifacts, sources, links…')
     fireEvent.change(filterInput, { target: { value: 'Notion' } })
     expect(screen.queryByText('q4-brief.md')).toBeNull()
     expect(screen.getByText('Notion')).toBeTruthy()
     fireEvent.change(filterInput, { target: { value: '' } })
 
-    // Connector mute toggle flips label
+    // Icon-only connector mute toggle flips aria-label cleanly
     const muteBtn = screen.getByRole('button', { name: 'Mute in session' })
+    expect(muteBtn.textContent).toBe('')
     fireEvent.click(muteBtn)
     expect(screen.getByRole('button', { name: 'Unmute' })).toBeTruthy()
 
-    // Click Artifact -> widens to 520px preview & fetches live library text
+    // Click HTML Artifact -> widens to 520px and renders sandboxed iframe with Source toggle
+    fireEvent.click(screen.getByText('diagram.html'))
+    expect(pane.className).toContain('w-[520px]')
+    const iframe = screen.getByTitle('diagram.html')
+    expect(iframe.tagName).toBe('IFRAME')
+    fireEvent.click(screen.getByRole('button', { name: 'Source' }))
+    expect(screen.getByText('<html><body><h1>Arch</h1></body></html>')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+
+    // Click Library Artifact -> widens to 520px preview & fetches live library text
     fireEvent.click(screen.getByText('q4-brief.md'))
     expect(pane.className).toContain('w-[520px]')
     await waitFor(() => {
@@ -223,9 +297,9 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open original' }))
     expect(navigateMock).toHaveBeenCalledWith({ to: '/library', search: { file: 77 } })
 
-    // Back returns to 300px overview
+    // Back returns to 280px overview
     fireEvent.click(screen.getByRole('button', { name: 'Back' }))
-    expect(pane.className).toContain('w-[300px]')
+    expect(pane.className).toContain('w-[280px]')
 
     // Clicking email source sets active email & navigates to /
     const setActiveSpy = vi.spyOn(useActiveEmail.getState(), 'setActive')

@@ -11,7 +11,15 @@ import {
 } from '@shared/assistant/tools/library/libraryWriteCard.lib'
 import { prettifyMcpToolName } from '@shared/assistant/tools/toolNarration'
 
-export type WorkspaceArtifactKind = 'library' | 'image' | 'draft' | 'report' | 'matter' | 'plan'
+export type WorkspaceArtifactKind =
+  | 'library'
+  | 'html'
+  | 'file'
+  | 'image'
+  | 'draft'
+  | 'report'
+  | 'matter'
+  | 'plan'
 
 export interface WorkspaceArtifact {
   readonly id: string
@@ -28,6 +36,7 @@ export interface WorkspaceArtifact {
   readonly plan?: PlanUpdateValue | undefined
   readonly matterPublicId?: string | undefined
   readonly isMarkdown?: boolean | undefined
+  readonly isHtml?: boolean | undefined
 }
 
 export type WorkspaceSourceKind =
@@ -178,6 +187,21 @@ function basenameOfPath(path: string | undefined): string | undefined {
   if (!path) return undefined
   const parts = path.split('/').filter(Boolean)
   return parts.at(-1) || path
+}
+
+function isHtmlPath(path: string | undefined): boolean {
+  return Boolean(path && /\.(?:html?|svg)$/i.test(path))
+}
+
+const ARTIFACT_KIND_ORDER: Readonly<Record<WorkspaceArtifactKind, number>> = {
+  html: 0,
+  library: 1,
+  file: 2,
+  image: 3,
+  report: 4,
+  draft: 5,
+  matter: 6,
+  plan: 7
 }
 
 /**
@@ -554,9 +578,10 @@ export function deriveSessionWorkspace(
             const existing = artifactMap.get(key)
             const mergedContent = parsed.content ?? nonEmptyStr(resObj?.content) ?? existing?.content
             const resolvedPath = safePath ?? existing?.virtualPath
+            const html = isHtmlPath(resolvedPath)
             artifactMap.set(key, {
               id: key,
-              kind: 'library',
+              kind: html ? 'html' : 'library',
               title:
                 basenameOfPath(resolvedPath) ??
                 existing?.title ??
@@ -566,9 +591,30 @@ export function deriveSessionWorkspace(
               writeCount: (existing?.writeCount ?? 0) + 1,
               content: mergedContent,
               subtitle: parsed.changeNote ?? existing?.subtitle,
-              isMarkdown: rendersAsMarkdown(resolvedPath ?? null)
+              isMarkdown: !html && rendersAsMarkdown(resolvedPath ?? null),
+              isHtml: html
             })
           }
+          continue
+        }
+
+        if (tc.toolName === 'file_write') {
+          const safePath = toSafeVirtualPath(argsObj?.path)
+          const key = safePath ? `file-path:${safePath}` : `file-call:${tc.toolCallId}`
+          const existing = artifactMap.get(key)
+          const mergedContent = nonEmptyStr(argsObj?.content) ?? existing?.content
+          const resolvedPath = safePath ?? existing?.virtualPath
+          const html = isHtmlPath(resolvedPath)
+          artifactMap.set(key, {
+            id: key,
+            kind: html ? 'html' : 'file',
+            title: basenameOfPath(resolvedPath) ?? existing?.title ?? 'File',
+            virtualPath: resolvedPath,
+            writeCount: (existing?.writeCount ?? 0) + 1,
+            content: mergedContent,
+            isMarkdown: !html && rendersAsMarkdown(resolvedPath ?? null),
+            isHtml: html
+          })
           continue
         }
 
@@ -848,31 +894,12 @@ export function deriveSessionWorkspace(
         if (skillName) recordSkill(skillName, 'skill')
         continue
       }
-
-      if (tc.toolName === 'tool_search') {
-        const candidates = [
-          resObj?.activated,
-          resObj?.activated_tools,
-          resObj?.tools,
-          resObj?.matches
-        ]
-        for (const list of candidates) {
-          if (!Array.isArray(list)) continue
-          for (const item of list) {
-            if (typeof item === 'string') {
-              recordSkill(item, 'tool-activated')
-            } else {
-              const row = asRecord(item)
-              const toolName = nonEmptyStr(row?.name)
-              if (toolName) recordSkill(toolName, 'tool-activated')
-            }
-          }
-        }
-      }
     }
   }
 
-  const artifacts = [...artifactMap.values()]
+  const artifacts = [...artifactMap.values()].sort(
+    (a, b) => ARTIFACT_KIND_ORDER[a.kind] - ARTIFACT_KIND_ORDER[b.kind]
+  )
   const explicit = [...explicitMap.values()]
   const consulted = [...consultedMap.values()]
   const links = [...linkMap.values()]
