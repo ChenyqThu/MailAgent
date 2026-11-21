@@ -139,6 +139,40 @@ MANAGED_LOCAL_CATALOG: dict[str, ManagedLocalCatalogEntry] = {
 
 
 @dataclass(frozen=True)
+class SelfHostedPresetEntry:
+    """自建远端 MCP 服务的一键预置模板（走 ``custom_mcp`` 轨建行，不改变三轨目录契约）。"""
+
+    connector_id: str
+    display_name: str
+    description_key: str
+    category: str
+    logo_text: str
+    logo_color: str
+    transport: str
+    default_server_url: str
+    url_placeholder: str
+    auth_header: str
+    auth_prefix: str
+
+
+SELF_HOSTED_PRESETS: dict[str, SelfHostedPresetEntry] = {
+    "artifact_server": SelfHostedPresetEntry(
+        connector_id="artifact_server",
+        display_name="Artifact Server",
+        description_key="settings.connectors.catalog.desc.artifact_server",
+        category="artifacts",
+        logo_text="A",
+        logo_color="#0F766E",
+        transport="streamable_http",
+        default_server_url="https://canvas.chenge.ink/mcp",
+        url_placeholder="https://canvas.chenge.ink/mcp",
+        auth_header="Authorization",
+        auth_prefix="Bearer ",
+    ),
+}
+
+
+@dataclass(frozen=True)
 class CatalogEntryView:
     """一条目录条目的**统一展示形状**（三轨共用；``GET /api/connector/catalog`` 的投影源）。"""
 
@@ -168,6 +202,16 @@ def get_direct_entry(connector_id: str) -> Optional[DirectCatalogEntry]:
 def get_managed_local_entry(connector_id: str) -> Optional[ManagedLocalCatalogEntry]:
     """受管本机目录里有这一家吗（没有 → None，不抛）。"""
     return MANAGED_LOCAL_CATALOG.get(connector_id)
+
+
+def get_self_hosted_preset(connector_id: str) -> Optional[SelfHostedPresetEntry]:
+    """自建 MCP 预置模板里有这一家吗（没有 → None，不抛）。"""
+    return SELF_HOSTED_PRESETS.get(connector_id)
+
+
+def self_hosted_preset_views() -> list[SelfHostedPresetEntry]:
+    """返回按 ``connector_id`` 排序的自建 MCP 预置模板列表。"""
+    return [SELF_HOSTED_PRESETS[cid] for cid in sorted(SELF_HOSTED_PRESETS)]
 
 
 def track_for(connector_id: str) -> Optional[str]:
@@ -319,6 +363,21 @@ def validate_direct_catalog() -> None:
             )
         if not local.display_name or not local.logo_text or not local.logo_color:
             raise ValueError(f"managed_local catalog entry {cid!r} is missing display metadata")
+    for cid, preset in SELF_HOSTED_PRESETS.items():
+        if cid != preset.connector_id:
+            raise ValueError(
+                f"self_hosted preset key {cid!r} != entry.connector_id {preset.connector_id!r}"
+            )
+        if cid in DIRECT_CATALOG or cid in COMPOSIO_CATALOG or cid in MANAGED_LOCAL_CATALOG:
+            raise ValueError(
+                f"self_hosted preset id {cid!r} collides with direct/composio/managed_local catalog"
+            )
+        if preset.transport not in ("streamable_http", "sse"):
+            raise ValueError(
+                f"self_hosted preset {cid!r} transport={preset.transport!r} must be streamable_http or sse"
+            )
+        if not preset.display_name or not preset.logo_text or not preset.logo_color:
+            raise ValueError(f"self_hosted preset {cid!r} is missing display metadata")
 
 
 validate_direct_catalog()

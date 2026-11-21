@@ -596,7 +596,7 @@ async def connector_catalog(request: Request, settings=Depends(get_settings)) ->
     """
     _require_enabled(settings)
     from src.connectors import composio
-    from src.connectors.catalog import catalog_views, row_is_off_track
+    from src.connectors.catalog import catalog_views, row_is_off_track, self_hosted_preset_views
     from src.connectors.local_installer import get_install_status
 
     rows = {r.connector_id: r for r in await run_in_threadpool(_store().list_connectors)}
@@ -645,8 +645,30 @@ async def connector_catalog(request: Request, settings=Depends(get_settings)) ->
                 **runtime_fields,
             }
         )
+    self_hosted_presets = [
+        {
+            "connector_id": preset.connector_id,
+            "display_name": preset.display_name,
+            "description_key": preset.description_key,
+            "category": preset.category,
+            "logo_text": preset.logo_text,
+            "logo_color": preset.logo_color,
+            "transport": preset.transport,
+            "default_server_url": preset.default_server_url,
+            "url_placeholder": preset.url_placeholder,
+            "auth_header": preset.auth_header,
+            "auth_prefix": preset.auth_prefix,
+            "configured": preset.connector_id in rows,
+        }
+        for preset in self_hosted_preset_views()
+    ]
     return success_envelope(
-        {"composio": key_status, "entries": entries}, request=request
+        {
+            "composio": key_status,
+            "entries": entries,
+            "self_hosted_presets": self_hosted_presets,
+        },
+        request=request,
     )
 
 

@@ -14,7 +14,15 @@ Design and build high-craft, self-contained HTML5 interactive deliverables via `
 3. Commit to one intentional Art Direction before coding.
 4. Write one complete, self-contained HTML5 document (`<!doctype html> ... </html>`) via `artifact_write`. Choose a concise kebab-case `slug` (e.g. `q4-vendor-renewal-board`).
 5. On revisions, pass the exact same `slug` to `artifact_write` so versions advance cleanly (`v1`, `v2`, ...) without overwriting prior snapshots.
-6. If the user asks to publish or share externally and an Artifact Server MCP connector is available, use its publish tool after confirming the local preview is clean.
+6. When the user asks to publish, share a link, or iterate from team feedback, and an Artifact Server connector (`mcp__artifact_server__*`) is available, follow Section 6 after the local preview is clean.
+
+## 6. Cloud Publishing & Review Loop
+
+When `mcp__artifact_server__*` tools are available in the session:
+
+- **Publish / Update**: Call `mcp__artifact_server__artifact_publish` with the same `slug`, `title`, `artifact_type`, `html` (or multi-file `files` bundle), and `change_note` (passing the latest HTML just saved with `artifact_write`). Always return the `share_url` and `review_url` to the user first so they can inspect and comment full-screen; never invent or print tokens.
+- **Inspect Team Feedback**: Call `mcp__artifact_server__comment_list` with `slug` and `status="open"` before revising an existing cloud artifact.
+- **Close the Loop**: Apply requested changes in a new immutable `artifact_write` version (`vN+1`), republish with `mcp__artifact_server__artifact_publish`, and mark addressed threads resolved with `mcp__artifact_server__comment_resolve`.
 
 ## 2. Art Direction & Visual Craft
 
