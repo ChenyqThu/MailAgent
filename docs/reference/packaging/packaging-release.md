@@ -53,21 +53,28 @@ pnpm build:mac
 
 ## 4. afterPack 签名（`scripts/afterPack.cjs`）—— 含头号 gotcha
 
-封签前对嵌入式 python 的 121 个 Mach-O（.so/.dylib）做 ad-hoc 预签 + 对整个 `.app` 做 `--deep` ad-hoc 签（`identity: null`，无 Developer ID）。
+`afterPack.cjs` 会按优先级识别构建模式：若存在 `CSC_LINK`、`CSC_NAME` 或通过 `hasLocalDeveloperIdIdentity()` 在本机钥匙串检测到 `Developer ID Application` 证书（且未显式设 `identity: null` 或 `CSC_IDENTITY_AUTO_DISCOVERY=false`），`afterPack` **自动跳过 ad-hoc 预签**，交由 `electron-builder`（`@electron/osx-sign`）用同一 Developer ID 证书（`TeamIdentifier=J5MQMJJ4TF`）从里到外签满整个 `.app`（包括 `Contents/Resources/python` 下的 `python3.11` 与全部 `.so/.dylib`）；仅在无任何 Developer ID 身份可用时才回退为 `--deep` ad-hoc 预签。
 
 > **🔴 头号 gotcha（本 session 踩过）**：若 `resources/python` **不存在**，afterPack 打印「未发现嵌入式 python, 跳过」并**跳过整个签名** → 产出的 `.app` 既无后端、签名又残缺 → `codesign --verify` FAIL。
 > **务必先确认 `resources/python` 在**（见 §2），再 build。
+>
+> **🔴 头号坑③（沙箱隐藏钥匙串 → 静默回落 ad-hoc → 丢 TCC 权限）**：**绝不要在隔离钥匙串的沙箱环境中运行 `electron-builder`**！沙箱会导致 `security find-identity` 返回 0 条且 `login.keychain-db` 不可读，静默产出 `Signature=adhoc` 包，替换 `/Applications/MailAgent.app` 后会与 macOS TCC 已记录的 `subject.OU = J5MQMJJ4TF` 团队要求失配，使完全磁盘访问、辅助功能、屏幕录制与 Chrome 应用数据读取权限全部失效。
 
 ## 5. 验证产物（每次 build 后必做）
 
 ```bash
 APP=dist/mac-arm64/MailAgent.app
 /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Contents/Info.plist"   # = 期望版本
-codesign --verify --deep --strict "$APP" && echo OK                                          # 必须 OK
+codesign --verify --deep --strict "$APP" && echo OK                                          # 必须 OK（验证证书链需能访问 macOS trustd）
+codesign -dvv "$APP" 2>&1 | grep -E "Authority=|TeamIdentifier=|Signature="
+codesign -dvv "$APP/Contents/Resources/python/bin/python3.11" 2>&1 | grep -E "Authority=|TeamIdentifier=|Signature="
+# 必须均显示 Developer ID Application + TeamIdentifier=J5MQMJJ4TF（绝不能出现 Signature=adhoc）
 ls "$APP/Contents/Resources/python/bin/python3.11"                                            # 后端在
 # 改动是否进包（app.asar 是归档，用 grep -a 文本搜）:
 grep -ac '<改动里的唯一串>' "$APP/Contents/Resources/app.asar"
 ```
+
+> 注：未经过苹果公证（`notarize`）的本地 Developer ID 包在首次冷启动时，`macOS syspolicyd` 会对包内数百个嵌入式 `.so` 做一次性签名检查，首次启动可能耗时 1–3 分钟，属正常现象。
 
 ## 6. 安装 / 升级（本地，Developer ID 就绪前）
 
@@ -107,6 +114,7 @@ bash frontend/scripts/build-python-venv.sh arm64   # 重装 src/ 进嵌入式 py
 | 症状 | 根因 / 处置 |
 |---|---|
 | `codesign --verify` FAIL + `.app` 无 python | `resources/python` 缺失 → afterPack 跳过签名（§4）。provision 后重 build。 |
+| 安装新版后完全磁盘访问 / 辅助功能 / 屏幕录制失效，或导入 Chrome 登录态报 `PermissionError` (`E_CHROME_PERMISSION_DENIED`) | 本地打包在隔离钥匙串的沙箱里执行，静默回落 ad-hoc 签名（`TeamIdentifier=not set`），与 macOS TCC 记录的开发者团队要求（`subject.OU = J5MQMJJ4TF`）失配。脱离沙箱重跑 `electron-builder` 并验 `codesign -dvv` 确认主包与 `python3.11` 均为 `Developer ID Application` + `TeamIdentifier=J5MQMJJ4TF` 后重装；若曾在 ad-hoc 期间手动改过系统权限，重新勾选一次即可重新锚定到开发者证书永久保留。 |
 | dmg 步骤 `hdiutil couldn't unmount ... 资源忙` | dmg flaky（Finder/残留挂载占用）。本地装不需要 dmg → 改用 `electron-builder --dir`（§3）。或 `hdiutil detach` 残留盘后重试。 |
 | `pnpm build:mac` 报 `BUILD_EXIT=0` 但其实失败 | `$?` 取的是管道末端 `tail` 的退出码，不是 pnpm。看日志里有无 `ELIFECYCLE Command failed`。 |
 | 启动后主界面卡进 onboarding 小窗 | 旧 bug，0.1.1 已修（`reloadToMain` 恢复窗口尺寸）。 |

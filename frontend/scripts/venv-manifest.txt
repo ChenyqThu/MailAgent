@@ -1,30 +1,30 @@
 # venv-manifest.txt — 嵌入式 CPython 运行时体积审计快照 (每次 provision 覆写, 由 build-python-venv.sh 生成)
-generated_at: 2026-11-17T23:43:07Z
+generated_at: 2026-11-20T23:29:15Z
 arch: arm64
 pbs_tag: 20260510
 pyver: 3.11.15
-total_size: 502M
+total_size: 447M
 
 ## site-packages 包体积 top20 (du -sk, 降序)
-     69528K  onnxruntime
      48936K  lark_oapi
-     38844K  grpc
-     25488K  pandas
-     19432K  lxml
-     16672K  faiss
+     45052K  onnxruntime
+     23568K  pandas
+     22468K  grpc
+     17292K  lxml
+     16616K  faiss
      15492K  PyObjCTest
-     14412K  numpy
-     13124K  PIL
-     11884K  cryptography
+     13900K  numpy
+     11856K  PIL
      10852K  qh3
-      9616K  objc
-      9280K  sqlalchemy
-      9276K  Crypto
+     10096K  cryptography
+      9240K  Crypto
+      9168K  objc
+      9104K  sqlalchemy
       8692K  openai
-      8592K  tokenizers
-      8364K  src
+      8520K  src
       7604K  hf_xet
       6832K  anydoc
+      6824K  tokenizers
       6040K  anthropic
 
 ## site-packages tests/test 残量 (预期 ≈0, 不含 testing/)

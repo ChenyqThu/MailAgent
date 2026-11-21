@@ -48,6 +48,10 @@ model: sonnet
    - `pnpm build:mac` 已含 `build:web`；仅 `electron-builder --dir` 装机路径需手动 `pnpm build:web &&`。
    - ⚠️ 若本次产物要含远程 web（mail.chenge.ink/app），确认走的命令已含 build:web。
 
+6. **本地签名证书可达（坑③：沙箱隐藏钥匙串 → 静默回落 ad-hoc → 装机后 TCC 权限全失配）**
+   - `security find-identity -v -p codesigning` 必须可见 `Developer ID Application:` 证书（绝不在隔离钥匙串的沙箱环境中跑 `electron-builder`）。
+   - 若 `frontend/dist/mac-arm64/MailAgent.app` 已存在（复验产物时），用 `codesign -dvv` 同时检查 `.app` 与 `Contents/Resources/python/bin/python3.11`，确认均带 `TeamIdentifier`（非 `Signature=adhoc` / `TeamIdentifier=not set`）。
+
 ## 输出格式
 
 - 逐项 ✅ / 🔴 / ⚠️ + 不通过项的**确切修复命令**。

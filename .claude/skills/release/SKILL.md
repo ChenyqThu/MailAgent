@@ -17,6 +17,7 @@ disable-model-invocation: true
 - better-sqlite3 是 Electron ABI：`cd frontend && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e "require('better-sqlite3')"`（报错 → `cd frontend && pnpm rebuild:electron`；注意 `pnpm test` 会把它切回 node ABI）
 - DB_VERSION 两侧一致：`src/mail/sync_store.py` 的 `DB_VERSION` == `frontend/src/electron/main/backend_lifecycle.ts` 的 `EXPECTED_DB_VERSION`
 - 改过 Python 后端 → 先 `bash frontend/scripts/build-python-venv.sh arm64` 重 provision 才进包
+- 本机签名证书可达（非沙箱环境）：`security find-identity -v -p codesigning` 必须能看到 `Developer ID Application:` 证书；**严禁在隔离钥匙串的沙箱中运行 `electron-builder`**
 
 ## 2. 本地 dogfood 构建 + 装机验证
 
@@ -27,6 +28,9 @@ disable-model-invocation: true
   APP=frontend/dist/mac-arm64/MailAgent.app
   /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Contents/Info.plist"   # == 期望版本
   codesign --verify --deep --strict "$APP" && echo OK                                         # 必须 OK
+  codesign -dvv "$APP" 2>&1 | grep -E "Authority=|TeamIdentifier=|Signature="
+  codesign -dvv "$APP/Contents/Resources/python/bin/python3.11" 2>&1 | grep -E "Authority=|TeamIdentifier=|Signature="
+  # 两者必须均为 Authority=Developer ID Application + TeamIdentifier（绝不能是 Signature=adhoc）
   ls "$APP/Contents/Resources/python/bin/python3.11"                                           # 后端在
   ```
 - 装机（**三步串行单线，防 torn bundle**）：
@@ -58,4 +62,5 @@ disable-model-invocation: true
 - **不要**手动 `gh release create` / 上传产物 —— push tag 已触发 CI 传 draft，手动会撞车。
 - 装机三步必串行单线，勿并发多个 ditto（torn bundle → dyld `libffmpeg.dylib` missing → SIGABRT，易误判成「启动崩溃 / DB 版本 bug」；修复：`rm -rf` + 单次 ditto 重装）。
 - **勿改** `frontend/package.json` 的 `name`（`mailagent-frontend`，决定 userData 目录 `~/Library/Application Support/mailagent-frontend/`，改了已装用户数据 / `.env` 易主）。
+- **严禁**把 ad-hoc 签名的 `.app` 覆盖安装到已由 `Developer ID Application` 签名的 `/Applications/MailAgent.app`（会破坏 macOS TCC 对 `J5MQMJJ4TF` 的绑定，导致完全磁盘访问、辅助功能、屏幕录制与 Chrome 应用数据权限全部失效）。
 - 本地 `pnpm build:mac` 仅 dogfood；CI 会从 tagged commit 重新构建发布字节。

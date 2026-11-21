@@ -17,6 +17,19 @@ const fs = require('node:fs')
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+function hasLocalDeveloperIdIdentity() {
+  if (process.env.CSC_IDENTITY_AUTO_DISCOVERY === 'false') return false
+  try {
+    const out = execFileSync('security', ['find-identity', '-v', '-p', 'codesigning'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    })
+    return /"Developer ID Application:/.test(out)
+  } catch {
+    return false
+  }
+}
+
 // codesign 偶发 EAGAIN: build 链 (vite/electron-vite/python provision) 刚跑完, 系统瞬时
 // fork 资源未释放, afterPack 立刻 fork 上百个 codesign 子进程会撞 spawnSync EAGAIN。
 // 短退避重试 (前面步骤资源很快释放, 实测重跑一次即过) → 免去人工重跑 electron-builder。
@@ -90,9 +103,19 @@ exports.default = async function afterPack(context) {
   // 公证 reject ("signature does not include a secure timestamp")。故有证书时直接交还给
   // electron-builder。无 CSC_LINK (本地 dev / 内部分发; electron-builder identity 省略时 arm64
   // fallback ad-hoc) 才走下面的 afterPack ad-hoc 全签 (arm64 每个 Mach-O 至少要 ad-hoc 签才能跑)。
-  if (process.env.CSC_LINK) {
+  const explicitIdentityNull =
+    context.packager?.platformSpecificBuildOptions?.identity === null
+  if (
+    !explicitIdentityNull &&
+    (process.env.CSC_LINK || process.env.CSC_NAME || hasLocalDeveloperIdIdentity())
+  ) {
+    const via = process.env.CSC_LINK
+      ? 'CSC_LINK'
+      : process.env.CSC_NAME
+        ? 'CSC_NAME'
+        : '本地 Keychain Developer ID Application'
     console.log(
-      '[afterPack] Developer ID 构建 (CSC_LINK present) — 跳过 ad-hoc 预签, 交由 electron-builder + notarytool 签名/公证'
+      `[afterPack] Developer ID 构建 (${via}) — 跳过 ad-hoc 预签, 交由 electron-builder 统一签名`
     )
     return
   }
