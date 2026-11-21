@@ -933,7 +933,7 @@ class LibraryService:
                 ).status()
             except Exception:  # noqa: BLE001 — email semantic status is informational
                 email_semantic = None
-        active_ep = getattr(self._encoder, "active_ep", None)
+        active_ep = getattr(self._encoder, "active_ep", None) or mgr.active_ep()
         return {
             "model": {
                 "available": available,

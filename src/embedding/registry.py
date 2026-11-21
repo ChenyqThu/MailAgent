@@ -167,6 +167,10 @@ class EmbeddingManager:
                 return cfg.dim
         return BUILTIN_EMBEDDING_GEMMA_PROFILE.output_dim
 
+    def active_ep(self) -> Optional[str]:
+        with self._lock:
+            return self._provider.active_ep if self._provider is not None else None
+
     def active_min_score(self) -> float:
         cfg = self.get_config()
         if cfg.kind == "openai_compat":

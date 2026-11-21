@@ -236,3 +236,31 @@ def test_embedding_manager_idle_unload_and_persistence(tmp_path) -> None:
     assert mgr2.get_config().kind == "openai_compat"
     assert mgr2.get_config().model == "qwen3-embedding:0.6b"
     mgr.unload()
+
+
+def test_embedding_manager_active_ep_lifecycle(tmp_path) -> None:
+    lib_root = tmp_path / "library"
+    lib_root.mkdir()
+
+    class _FakeProv:
+        model_id = "fake-local"
+        dim = 256
+        provider_kind = "builtin_onnx"
+        active_ep = "CPUExecutionProvider"
+
+        def encode(self, texts, **_kw):
+            return np.ones((len(texts), 256), dtype=np.float32)
+
+        def encode_query(self, query):
+            return np.ones(256, dtype=np.float32)
+
+        def close(self):
+            pass
+
+    mgr = EmbeddingManager(library_root=str(lib_root), idle_ttl_sec=60.0)
+    assert mgr.active_ep() is None
+    prov = mgr.get_provider(str(lib_root), builtin_loader=lambda _r: _FakeProv(), builtin_present=lambda _r: True)
+    assert prov is not None
+    assert mgr.active_ep() == "CPUExecutionProvider"
+    mgr.unload()
+    assert mgr.active_ep() is None

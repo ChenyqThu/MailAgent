@@ -450,6 +450,8 @@ class OnnxEncoder:
         self.model_id = self._inner.model_id
         self.dim = self._inner.dim
         self.providers = list(self._inner.providers)
+        self.active_ep = self._inner.active_ep
+        self.provider_kind = self._inner.provider_kind
         self.session = self._inner.session
 
     def encode(self, texts: Sequence[str], *, batch_size: int = 8) -> np.ndarray:
