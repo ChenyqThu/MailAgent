@@ -87,6 +87,10 @@ import { resolveConversationContextSource, seededEmailIdOf } from './conversatio
 import { createEnsureSession } from './ensureSession'
 import { AgentQuickActions } from './AgentQuickActions'
 import { AgentRecordConversation } from './AgentRecordView'
+import {
+  SessionInspectorBridge,
+  type SessionInspectorBridgeProps
+} from '@shared/assistant/inspector/SessionInspectorBridge'
 
 // W8 (task 08-04 WP2) — the model pref moved into useSessionModelPreference (shared with the email
 // panel): PER-SESSION truth (ai_chat_sessions.backend_model) with the localStorage key demoted to
@@ -563,6 +567,27 @@ export function AgentConversation({
     email: emailContext?.internalId ?? emailAnchorId,
     matter: matterAnchor?.id ?? null
   }
+  const inspectorEmailId = emailContext?.internalId ?? emailAnchorId
+  const inspectorEmailSubject = emailContext?.subject ?? null
+  const inspectorAnchors = useMemo<SessionInspectorBridgeProps['anchors']>(() => {
+    const email =
+      inspectorEmailId != null
+        ? { internalId: inspectorEmailId, subject: inspectorEmailSubject }
+        : undefined
+    const anchoredMatter = matterAnchor
+      ? { publicId: matterAnchor.publicId, title: matterAnchor.title }
+      : undefined
+    return email || anchoredMatter ? { email, matter: anchoredMatter } : undefined
+  }, [inspectorEmailId, inspectorEmailSubject, matterAnchor])
+  const inspectorMentions = useMemo<SessionInspectorBridgeProps['mentions']>(
+    () => ({
+      emails: mentions,
+      matters: activeMatterMentions,
+      libraryFiles: libraryMentions,
+      attachments: attachments.map((a) => ({ id: a.id, name: a.filename }))
+    }),
+    [mentions, activeMatterMentions, libraryMentions, attachments]
+  )
 
   // ── context snapshot (email session → inject that email's body; general → SOUL-only prompt) ──────
   // S3 — always on for live ai-sdk sessions (the CONTEXT_INJECTION flag was GA'd away).
@@ -1162,6 +1187,12 @@ export function AgentConversation({
               sessionId={null}
               initialMessages={readOnlyMessages}
             >
+              <SessionInspectorBridge
+                anchors={inspectorAnchors}
+                mentions={inspectorMentions}
+                persistedRows={chat.messages}
+                sessionId={chat.activeSessionId}
+              />
               <AgentThread readOnly welcomeAlign={welcomeAlign} />
             </AiSdkRuntimeProvider>
           )
@@ -1198,6 +1229,12 @@ export function AgentConversation({
               {/* 07-15 — feeds the settle handler's mid-stream guard + the background-run
                   placeholder's own-stream mask (renders nothing). */}
               <ThreadRunningBridge runningRef={aiSdkRunningRef} onRunningChange={setAiSdkRunning} />
+              <SessionInspectorBridge
+                anchors={inspectorAnchors}
+                mentions={inspectorMentions}
+                persistedRows={chat.messages}
+                sessionId={chat.activeSessionId}
+              />
               {/* 0812 —— 外部指令派发（渲染 null；住在 provider 里才拿得到 thread）。 */}
               <ChatPromptDispatcher request={promptRequest} onDispatched={onPromptDispatched} />
               {/* 09-02 —— 标签草稿快照桥（渲染 null；同样要 thread 上下文）。 */}
@@ -1227,6 +1264,12 @@ export function AgentConversation({
             sessionId={null}
             initialMessages={chat.messages.map(chatMessageToUIMessage)}
           >
+            <SessionInspectorBridge
+              anchors={inspectorAnchors}
+              mentions={inspectorMentions}
+              persistedRows={chat.messages}
+              sessionId={chat.activeSessionId}
+            />
             <AgentThread readOnly welcomeAlign={welcomeAlign} />
           </AiSdkRuntimeProvider>
         ) : (

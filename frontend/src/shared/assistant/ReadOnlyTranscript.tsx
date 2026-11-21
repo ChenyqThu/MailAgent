@@ -24,6 +24,7 @@ import type { ChatMessage } from '@shared/api/types'
 import { AiSdkRuntimeProvider } from './runtime/AiSdkRuntimeProvider'
 import { resolveAiGatewayBaseUrl } from './runtime/flags'
 import { AssistantThread } from './components/thread'
+import { SessionInspectorBridge } from './inspector/SessionInspectorBridge'
 import { chatMessageToUIMessage } from './uiMessage'
 
 export interface ReadOnlyTranscriptProps {
@@ -51,6 +52,7 @@ export function ReadOnlyTranscript({
       sessionId={null}
       initialMessages={initialMessages}
     >
+      <SessionInspectorBridge />
       <AssistantThread readOnly emptyState={emptyState} />
     </AiSdkRuntimeProvider>
   )

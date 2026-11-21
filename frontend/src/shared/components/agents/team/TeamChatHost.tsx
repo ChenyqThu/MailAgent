@@ -10,14 +10,19 @@
 // 欢迎屏的「它什么时候会自己动」复用排程句子生成器（sentenceText/coerceRule —— 语义单源
 // schedule-rule-contract.md，这里只取句子不重算 occurrence）。
 
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
 import type { ChatSessionListItem } from '@shared/api/types'
 import { qk } from '@shared/lib/queryKeys'
 import { useGeneralChat } from '@shared/hooks/useGeneralChat'
+import { useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
+import { InspectorProvider } from '@shared/assistant/inspector/InspectorProvider'
+import { InspectorTogglePill } from '@shared/assistant/inspector/InspectorTogglePill'
+import { SessionInspectorPane } from '@shared/assistant/inspector/SessionInspectorPane'
+import { useSessionInspector } from '@shared/assistant/inspector/inspectorContext'
 
 import { AgentAvatar } from '../AgentAvatar'
 import { AgentConversation, type AgentConversationAgentIdentity } from '../AgentConversation'
@@ -37,9 +42,45 @@ export function TeamChatHost({
   /** 既有会话的列表行（backend_kind / origin 路由用）；新对话传 null。 */
   sessionRow: ChatSessionListItem | null
 }): React.ReactElement {
+  const modalVisible = useAIChatPanel((s) => s.visible)
+  return (
+    <InspectorProvider
+      sessionKey={`team:${member.key}:${sessionId ?? 'new'}`}
+      shortcutEnabled={!modalVisible}
+    >
+      <TeamChatHostInner
+        member={member}
+        memberTitle={memberTitle}
+        sessionId={sessionId}
+        sessionRow={sessionRow}
+      />
+    </InspectorProvider>
+  )
+}
+
+function TeamChatHostInner({
+  member,
+  memberTitle,
+  sessionId,
+  sessionRow
+}: {
+  member: TeamMember
+  memberTitle: string
+  sessionId: number | null
+  sessionRow: ChatSessionListItem | null
+}): React.ReactElement {
   const { t, i18n } = useTranslation()
   const qc = useQueryClient()
   const chat = useGeneralChat()
+  const inspector = useSessionInspector()
+  const [windowWidth, setWindowWidth] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth : 1440
+  )
+  useEffect(() => {
+    const onResize = (): void => setWindowWidth(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
   const agentId = member.ref.kind === 'agent' ? member.ref.agentId : null
 
   // 打开记录列点中的既有会话（宿主按 sessionId keyed，重挂即一次性 select；
@@ -81,11 +122,23 @@ export function TeamChatHost({
     }
   }, [agentId, member.cfg, memberTitle, t, i18n.language])
 
+  const showHeaderPill = (inspector?.snapshot.totalItems ?? 0) > 0 || Boolean(inspector?.open)
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-team-chat-host={member.key}>
-      <ChatPanelBoundary resetKeys={[chat.activeSessionId]}>
-        <AgentConversation chat={chat} activeItem={sessionRow} agentIdentity={agentIdentity} />
-      </ChatPanelBoundary>
+      {showHeaderPill && (
+        <div className="flex h-9 shrink-0 items-center justify-end border-b border-ink-border-soft px-3">
+          <InspectorTogglePill />
+        </div>
+      )}
+      <div className="relative flex min-h-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <ChatPanelBoundary resetKeys={[chat.activeSessionId]}>
+            <AgentConversation chat={chat} activeItem={sessionRow} agentIdentity={agentIdentity} />
+          </ChatPanelBoundary>
+        </div>
+        <SessionInspectorPane presentation={windowWidth >= 1060 ? 'push' : 'overlay'} />
+      </div>
     </div>
   )
 }

@@ -38,6 +38,10 @@ import { selectActiveTab, useTabWorkspace } from '@shared/state/tab-workspace'
 import { closeObjectTab, openBrowserTab, setObjectTabTitle } from '@shared/state/tab-workspace-bridge'
 import { ManagedBrowserPane } from '@shared/components/browser/ManagedBrowserPane'
 import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
+import { InspectorProvider } from '@shared/assistant/inspector/InspectorProvider'
+import { InspectorTogglePill } from '@shared/assistant/inspector/InspectorTogglePill'
+import { SessionInspectorPane } from '@shared/assistant/inspector/SessionInspectorPane'
+import { useSessionInspector } from '@shared/assistant/inspector/inspectorContext'
 
 import { AgentThreadList } from './AgentThreadList'
 import { AgentConversation } from './AgentConversation'
@@ -47,12 +51,34 @@ import { titleOf } from './sessionTitle'
 const ALL_SESSIONS_KEY = [...qk.chat.allSessions(), 'interactive'] as const
 
 export function AgentViewLayout(): React.ReactElement {
+  const mountKey = useActiveChat((s) => s.mountKey)
+  const modalVisible = useAIChatPanel((s) => s.visible)
+  return (
+    <InspectorProvider sessionKey={String(mountKey ?? 'none')} shortcutEnabled={!modalVisible}>
+      <AgentViewLayoutInner />
+    </InspectorProvider>
+  )
+}
+
+function AgentViewLayoutInner(): React.ReactElement {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const mailApi = useMailApi()
   const qc = useQueryClient()
   const narrow = useNarrow()
+  const inspector = useSessionInspector()
+  const [windowWidth, setWindowWidth] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth : 1440
+  )
+  useEffect(() => {
+    const onResize = (): void => setWindowWidth(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
   const [collapsed, setCollapsed] = useState(false)
+  const forceAutoCollapse = Boolean(
+    inspector?.open && inspector.previewArtifactId != null && windowWidth < 1320 && !narrow
+  )
   // 会话列 = 对话域的「二级栏」（registry second:'page'）：折叠读 nav-shell store（09-01 侧栏批，
   // 按域一份）。窄窗（<780）单栏由 useNarrow 自治，列是整页，不藏。
   const navHidden = useDomainCollapsed('chats')
@@ -192,7 +218,7 @@ export function AgentViewLayout(): React.ReactElement {
           .then(invalidateSessions)
           .catch(actionFail)
       }}
-      collapsed={collapsed}
+      collapsed={collapsed || forceAutoCollapse}
       onToggleCollapse={() => setCollapsed((c) => !c)}
       fluid={narrow}
       navHidden={navHidden}
@@ -236,20 +262,26 @@ export function AgentViewLayout(): React.ReactElement {
             <ChevronLeft size={16} strokeWidth={2} />
           </button>
           <span className="truncate text-body font-medium text-ink-fg">{t('nav.agentView')}</span>
-          <button
-            type="button"
-            onClick={() => openBrowserTab()}
-            aria-label={t('browserPane.toggleButton')}
-            className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-ink-border-soft bg-ink-2 px-2.5 py-1 text-aux text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
-          >
-            {browserActive && (
-              <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-coral/100" />
-            )}
-            <Globe size={14} strokeWidth={1.75} className="shrink-0" />
-            <span>{t('browserPane.toggleButton')}</span>
-          </button>
+          <div className="ml-auto flex items-center gap-1.5">
+            <InspectorTogglePill compact />
+            <button
+              type="button"
+              onClick={() => openBrowserTab()}
+              aria-label={t('browserPane.toggleButton')}
+              className="inline-flex items-center gap-1.5 rounded-md border border-ink-border-soft bg-ink-2 px-2.5 py-1 text-aux text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+            >
+              {browserActive && (
+                <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-coral/100" />
+              )}
+              <Globe size={14} strokeWidth={1.75} className="shrink-0" />
+              <span>{t('browserPane.toggleButton')}</span>
+            </button>
+          </div>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col">{conversation}</div>
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          {conversation}
+          <SessionInspectorPane presentation="overlay" />
+        </div>
       </div>
     ) : (
       <div className="h-full w-full">{list}</div>
@@ -261,6 +293,7 @@ export function AgentViewLayout(): React.ReactElement {
       {list}
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex h-9 shrink-0 items-center justify-end gap-2 border-b border-ink-border-soft px-3">
+          <InspectorTogglePill />
           <button
             type="button"
             aria-expanded={effectiveSidebarOpen}
@@ -278,7 +311,12 @@ export function AgentViewLayout(): React.ReactElement {
             <span>{t('browserPane.toggleButton')}</span>
           </button>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col">{conversation}</div>
+        <div className="relative flex min-h-0 flex-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">{conversation}</div>
+          <SessionInspectorPane
+            presentation={!effectiveSidebarOpen && windowWidth >= 1060 ? 'push' : 'overlay'}
+          />
+        </div>
       </div>
       {effectiveSidebarOpen && (
         <>

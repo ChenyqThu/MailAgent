@@ -1819,6 +1819,41 @@
         "Working through details…"
       ]
     },
+    "inspector": {
+      "toggle": "Workspace",
+      "title": "Session Workspace",
+      "close": "Close workspace",
+      "filterPlaceholder": "Filter artifacts, sources, links…",
+      "empty": "No artifacts, sources, or links in this session yet",
+      "noMatches": "No matching workspace items",
+      "sections": {
+        "artifacts": "Artifacts",
+        "sources": "Sources",
+        "links": "Links",
+        "skills": "Skills",
+        "connectors": "Connectors"
+      },
+      "artifactKinds": {
+        "library": "Library doc",
+        "image": "Generated image",
+        "draft": "Email draft",
+        "report": "Report",
+        "matter": "Matter",
+        "plan": "Plan"
+      },
+      "writeCount": "Updated {count}×",
+      "sourcesExplicit": "Attached / @mentioned",
+      "sourcesConsulted": "Consulted in session",
+      "muteForSession": "Mute in session",
+      "unmuteForSession": "Unmute",
+      "contextBudget": "Context budget",
+      "backToOverview": "Back",
+      "copy": "Copy",
+      "copied": "Copied",
+      "openOriginal": "Open original",
+      "loadingPreview": "Loading content…",
+      "previewUnavailable": "Preview unavailable"
+    },
     "effort": {
       "label": "Thinking effort",
       "unsupported": "This model has no adjustable thinking effort",

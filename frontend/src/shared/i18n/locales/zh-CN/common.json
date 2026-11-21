@@ -1819,6 +1819,41 @@
         "正在推敲细节…"
       ]
     },
+    "inspector": {
+      "toggle": "工作区",
+      "title": "会话工作区",
+      "close": "收起工作区",
+      "filterPlaceholder": "筛选产物、来源或链接…",
+      "empty": "本会话暂无产物、参考资料或链接",
+      "noMatches": "没有匹配的工作区条目",
+      "sections": {
+        "artifacts": "产物",
+        "sources": "引用来源",
+        "links": "链接",
+        "skills": "技能",
+        "connectors": "连接器"
+      },
+      "artifactKinds": {
+        "library": "资料库文档",
+        "image": "生成图片",
+        "draft": "邮件草稿",
+        "report": "分析报告",
+        "matter": "事项",
+        "plan": "执行计划"
+      },
+      "writeCount": "更新 {count} 次",
+      "sourcesExplicit": "显式提供 / @引用",
+      "sourcesConsulted": "会话读取 / 检索",
+      "muteForSession": "本会话禁用",
+      "unmuteForSession": "恢复启用",
+      "contextBudget": "上下文窗口",
+      "backToOverview": "返回工作区",
+      "copy": "复制",
+      "copied": "已复制",
+      "openOriginal": "打开原件",
+      "loadingPreview": "正在加载正文…",
+      "previewUnavailable": "暂无可预览正文"
+    },
     "effort": {
       "label": "思考强度",
       "unsupported": "当前模型不支持调节思考强度",

@@ -67,6 +67,13 @@ import { useAgentContextSnapshot } from './context/useAgentContextSnapshot'
 import type { CapabilityContext, ContextScope } from './context/contextSnapshot'
 import { chatMessageToUIMessage } from './uiMessage'
 import { refreshAfterCompact } from './compactRefresh'
+import { InspectorProvider } from './inspector/InspectorProvider'
+import { InspectorTogglePill } from './inspector/InspectorTogglePill'
+import {
+  SessionInspectorBridge,
+  type SessionInspectorBridgeProps
+} from './inspector/SessionInspectorBridge'
+import { SessionInspectorPane } from './inspector/SessionInspectorPane'
 
 // W8 (task 08-04 WP2) — the model pref moved into useSessionModelPreference: PER-SESSION truth
 // (ai_chat_sessions.backend_model) with the shared localStorage key demoted to "default for a NEW
@@ -93,6 +100,14 @@ export function AIChatPanel({
   const navigate = useNavigate()
   const mailApi = useMailApi()
   const activeInternalId = useActiveEmail((s) => s.activeInternalId)
+  const [windowWidth, setWindowWidth] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth : 1440
+  )
+  useEffect(() => {
+    const onResize = (): void => setWindowWidth(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   // The embedded AI SDK Gateway path is live when its base URL was discovered
   // (?aiGatewayPort= loopback / same-origin web proxy). resolveAiGatewayBaseUrl
@@ -689,6 +704,20 @@ export function AIChatPanel({
 
   // 0813 主 agent 身份：标题用 owner 起的名（Jarvis），未配置回 i18n 'chat.title'。
   const assistantIdentity = useAssistantIdentity()
+  const inspectorAnchors = useMemo<SessionInspectorBridgeProps['anchors']>(
+    () =>
+      activeInternalId != null
+        ? { email: { internalId: activeInternalId, subject: null } }
+        : undefined,
+    [activeInternalId]
+  )
+  const inspectorMentions = useMemo<SessionInspectorBridgeProps['mentions']>(
+    () => ({
+      emails: mentions,
+      attachments: attachments.map((a) => ({ id: a.id, name: a.filename }))
+    }),
+    [mentions, attachments]
+  )
 
   // "+New" — a fresh conversation is always ai-sdk; a legacy read-only re-scope
   // returns to the default kind here (D6).
@@ -716,18 +745,22 @@ export function AIChatPanel({
   )
 
   return (
-    <aside
-      aria-label="ai-chat-panel"
-      data-assistant-ui-panel
-      className={cn(
-        'glass-panel flex min-h-0 flex-col border-l border-ink-border',
-        fullScreen
-          ? 'w-full flex-1 border-l-0'
-          : fillWrapper
-            ? 'w-full shrink-0'
-            : 'w-[360px] max-w-[92vw] shrink-0'
-      )}
+    <InspectorProvider
+      sessionKey={`email:${activeInternalId ?? 'none'}:${chat.activeSessionId ?? 'new'}`}
+      shortcutEnabled={true}
     >
+      <aside
+        aria-label="ai-chat-panel"
+        data-assistant-ui-panel
+        className={cn(
+          'glass-panel flex min-h-0 flex-col border-l border-ink-border',
+          fullScreen
+            ? 'w-full flex-1 border-l-0'
+            : fillWrapper
+              ? 'w-full shrink-0'
+              : 'w-[360px] max-w-[92vw] shrink-0'
+        )}
+      >
       {/* Header bar (40px) — title + New / History / Popout / Close. */}
       <div
         className={cn(
@@ -750,6 +783,7 @@ export function AIChatPanel({
           className="ml-auto flex items-center gap-1"
           style={fullScreen ? ({ WebkitAppRegion: 'no-drag' } as React.CSSProperties) : undefined}
         >
+          <InspectorTogglePill compact={!fullScreen} />
           <HoverTip text={`${t('chat.newChat')}\n${t('chat.newChatHint')}`} side="bottom">
             <button
               type="button"
@@ -834,7 +868,7 @@ export function AIChatPanel({
         )}
       </div>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
         <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col">
           <BackendSelector value={backend} agentName={null} />
           <ContextChips
@@ -962,6 +996,12 @@ export function AIChatPanel({
                         runningRef={aiSdkRunningRef}
                         onRunningChange={setAiSdkRunning}
                       />
+                      <SessionInspectorBridge
+                        anchors={inspectorAnchors}
+                        mentions={inspectorMentions}
+                        persistedRows={chat.messages}
+                        sessionId={chat.activeSessionId}
+                      />
                       {/* pendingSlot — B3 in-panel approval card + 后台 run 在场行 + 排队中的用户
                           消息（三者都自门控，不适用时渲染 null）。 */}
                       <AssistantThread
@@ -975,7 +1015,11 @@ export function AIChatPanel({
             </>
           )}
         </div>
+        <SessionInspectorPane
+          presentation={fullScreen && windowWidth >= 1060 ? 'push' : 'overlay'}
+        />
       </div>
     </aside>
+    </InspectorProvider>
   )
 }

@@ -50,6 +50,9 @@ import { selectDockAnchorTab, useTabWorkspace, type TabId } from '@shared/state/
 import { bindTabChatSession } from '@shared/state/tab-workspace-bridge'
 import { AgentConversation } from '@shared/components/agents/AgentConversation'
 import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
+import { InspectorProvider } from '@shared/assistant/inspector/InspectorProvider'
+import { InspectorTogglePill } from '@shared/assistant/inspector/InspectorTogglePill'
+import { SessionInspectorPane } from '@shared/assistant/inspector/SessionInspectorPane'
 import { ChatModalHistoryDropdown } from './ChatModalHistoryDropdown'
 import { openDockForTab } from './dockForTab'
 import { titleOf } from './sessionTitle'
@@ -351,13 +354,14 @@ function AssistantChatModalInner(): React.JSX.Element {
         )
 
   return (
-    <div
-      ref={rootRef}
-      role="dialog"
-      aria-label={t('chat.modal.title')}
-      className={cn('overflow-hidden', wrapperClass)}
-      style={sidebar && visible ? { width: sidebarWidth } : undefined}
-    >
+    <InspectorProvider sessionKey={`modal:${chat.activeSessionId ?? 'new'}`} shortcutEnabled={visible}>
+      <div
+        ref={rootRef}
+        role="dialog"
+        aria-label={t('chat.modal.title')}
+        className={cn('overflow-hidden', wrapperClass)}
+        style={sidebar && visible ? { width: sidebarWidth } : undefined}
+      >
       {/* sidebar 左缘可调宽手柄（仅 sidebar + 展开时）。细条 w-1，col-resize cursor，z-50 接 mousedown。 */}
       {sidebar && visible && (
         <div
@@ -416,6 +420,7 @@ function AssistantChatModalInner(): React.JSX.Element {
           )}
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
+          <InspectorTogglePill compact />
           <button
             type="button"
             onClick={() => {
@@ -464,7 +469,7 @@ function AssistantChatModalInner(): React.JSX.Element {
         </div>
       </div>
       {/* body: ONE conversation component. 事项只是它身上的一枚 context chip（+ 一组事项控件）。 */}
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 flex-1 flex-col">
         {/* P2-9 — local boundary: a streaming-render crash resets in place
             instead of blanking the whole window; switching session while
             crashed auto-clears via resetKeys. */}
@@ -479,8 +484,10 @@ function AssistantChatModalInner(): React.JSX.Element {
             denseControls
           />
         </ChatPanelBoundary>
+        <SessionInspectorPane presentation="overlay" />
       </div>
     </div>
+    </InspectorProvider>
   )
 }
 
