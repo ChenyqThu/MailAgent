@@ -432,11 +432,11 @@ class LibraryRepository:
         if not rows:
             return
         conn.executemany(
-            "INSERT INTO library_chunk (file_id, model, idx, char_start, char_end, text_hash, source_hash, vec, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO library_chunk (file_id, model, idx, char_start, char_end, text_hash, source_hash, vec, bq_vec, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (int(file_id), model, int(r["idx"]), int(r["char_start"]), int(r["char_end"]),
-                 str(r["text_hash"]), str(r["source_hash"]), r["vec"], float(r["created_at"]))
+                 str(r["text_hash"]), str(r["source_hash"]), r["vec"], r.get("bq_vec"), float(r["created_at"]))
                 for r in rows
             ],
         )
@@ -463,10 +463,12 @@ class LibraryRepository:
         ).fetchone()
         return int(row[0]), int(row[1]), float(row[2])
 
-    def load_vectors(self, conn: sqlite3.Connection, model: str) -> tuple[list[int], list[int], list[int], list[bytes]]:
-        """全量向量（只含 present 的文件）：``(file_ids, char_starts, char_ends, blobs)``，行序即矩阵行序。"""
+    def load_vectors(
+        self, conn: sqlite3.Connection, model: str
+    ) -> tuple[list[int], list[int], list[int], list[bytes], list[Optional[bytes]]]:
+        """全量向量（只含 present 的文件）：``(file_ids, char_starts, char_ends, vec_blobs, bq_blobs)``。"""
         rows = conn.execute(
-            "SELECT c.file_id, c.char_start, c.char_end, c.vec FROM library_chunk c"
+            "SELECT c.file_id, c.char_start, c.char_end, c.vec, c.bq_vec FROM library_chunk c"
             " JOIN library_file f ON f.id = c.file_id"
             " WHERE c.model=? AND f.status='present' ORDER BY c.file_id, c.idx",
             (model,),
@@ -476,6 +478,7 @@ class LibraryRepository:
             [int(r["char_start"]) for r in rows],
             [int(r["char_end"]) for r in rows],
             [bytes(r["vec"]) for r in rows],
+            [bytes(r["bq_vec"]) if r["bq_vec"] is not None else None for r in rows],
         )
 
     #: 「按当前正文嵌过了没有」——判据是 ``library_chunk.source_hash == library_text.source_hash``。

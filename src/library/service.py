@@ -34,6 +34,12 @@ from typing import Any, Optional
 import numpy as np
 from loguru import logger
 
+from src.embedding import (
+    EmbeddingProviderConfig,
+    get_embedding_manager,
+    two_stage_rank,
+    unpack_bq_matrix,
+)
 from src.library import embed as E
 from src.library import paths as P
 from src.library.constants import (
@@ -178,16 +184,17 @@ class LibraryService:
     def __init__(self, db_path: str, library_root: str, sync_store_db_path: Optional[str] = None) -> None:
         self.db = LibraryDb(db_path)
         self.repo = LibraryRepository(self.db, sync_store_db_path)
+        self._sync_store_db_path = sync_store_db_path
         os.makedirs(library_root, exist_ok=True)
         self.root_path = os.path.realpath(library_root)
         for slug in ROOT_WRITABLE_TOP + (TRASH_SLUG,):
             os.makedirs(os.path.join(self.root_path, slug), exist_ok=True)
         self.root = MountRoot(id=0, label="", abs_path=self.root_path, mode="rw")
-        # 语义 lane 的进程内状态：encoder 懒加载一次、向量矩阵按指纹缓存、后台作业单实例。
+        # 语义 lane 的进程内状态：encoder 懒加载（经全局共享 EmbeddingManager）、向量矩阵按指纹缓存、后台作业单实例。
         self._encoder: Optional[Any] = None
         self._encoder_loaded = False
         self._encoder_lock = threading.Lock()
-        self._vec_cache: Optional[tuple[tuple[int, int, float], tuple[list[int], list[int], list[int], Any]]] = None
+        self._vec_cache: Optional[tuple[tuple[str, int, int, float], tuple[list[int], list[int], list[int], Any, Any]]] = None
         self._query_vec_cache: OrderedDict[str, Any] = OrderedDict()
         self._query_vec_lock = threading.Lock()
         self._query_vec_cap = 256
@@ -675,11 +682,12 @@ class LibraryService:
             raise LibraryError("E_INVALID_ARG", f"invalid mode: {mode!r}", hint=f"mode ∈ {', '.join(SEARCH_MODES)}")
         limit = max(1, min(int(limit), 100))
 
+        active_model = self._active_model_id()
         # 仅在真有待抽取文件时才开短暂写事务，避免把纯读搜索与 ONNX 推理关进 BEGIN IMMEDIATE 写锁。
         probe_conn = self.db.connect()
         try:
             has_pending = bool(self.repo.list_pending_extraction(probe_conn, limit=1))
-            chunks = self.repo.count_chunks(probe_conn, EMBED_MODEL_ID)
+            chunks = self.repo.count_chunks(probe_conn, active_model)
         finally:
             probe_conn.close()
 
@@ -693,9 +701,9 @@ class LibraryService:
                     row = self._reconcile_file(wconn, row)
                     if row["status"] == "present":
                         ensure_text(self.repo, wconn, row, resolved.abs_path)
-                chunks = self.repo.count_chunks(wconn, EMBED_MODEL_ID)
+                chunks = self.repo.count_chunks(wconn, active_model)
 
-        model_ready = E.model_present(self.root_path)
+        model_ready = self._is_model_available()
         encoder = self._get_encoder() if (mode == "hybrid" and model_ready) else None
         semantic_active = encoder is not None
         warnings: list[str] = []
@@ -710,8 +718,8 @@ class LibraryService:
 
         conn = self.db.connect()
         try:
-            chunks = self.repo.count_chunks(conn, EMBED_MODEL_ID)
-            pending = self.repo.count_files_needing_embed(conn, EMBED_MODEL_ID) if semantic_active else 0
+            chunks = self.repo.count_chunks(conn, active_model)
+            pending = self.repo.count_files_needing_embed(conn, active_model) if semantic_active else 0
             # 🔴 「没下载模型」**不进 warnings**：warnings 说的是这次 query 出了什么事
             #（`cjk_too_short:X` 那种），能力在不在是 `semantic.available` 的事。
             result: SearchResult = self.repo.search(conn, query, limit=SEARCH_LANE_TOP_K if semantic_active else limit)
@@ -727,7 +735,7 @@ class LibraryService:
                 "search_mode": "hybrid" if semantic_active else "fts",
                 "semantic": {
                     "available": semantic_available,
-                    "model": EMBED_MODEL_ID if semantic_available else None,
+                    "model": active_model if semantic_available else None,
                     "chunks": chunks,
                 },
                 "hits": hits,
@@ -778,24 +786,49 @@ class LibraryService:
             out.append(hit)
         return out
 
-    # ── 语义 lane（design §9.1）──────────────────────────────────────────────
+    # ── 语义 lane（design §9.1 + Wave 4 统一本地嵌入）────────────────────────
+
+    def _embedding_manager(self):
+        return get_embedding_manager(self.root_path)
+
+    def _active_model_id(self) -> str:
+        return self._embedding_manager().active_model_id()
+
+    def _active_min_score(self) -> float:
+        return self._embedding_manager().active_min_score()
+
+    def _active_dim(self) -> int:
+        return self._embedding_manager().active_dim()
+
+    def _is_model_available(self) -> bool:
+        mgr = self._embedding_manager()
+        if mgr.get_config().kind == "openai_compat":
+            return mgr.is_available(self.root_path)
+        return bool(E.model_present(self.root_path))
 
     def _get_encoder(self) -> Optional[Any]:
-        """懒加载一次。**没权重返回 None 是常态**，不是异常（纯 FTS 是合法姿态）。"""
+        """懒加载一次，共享进程内单实例 + 5 分钟空闲自动卸载；没权重返回 None 是常态。"""
         with self._encoder_lock:
-            if not self._encoder_loaded:
-                self._encoder = E.load_encoder(self.root_path)
-                self._encoder_loaded = True
+            mgr = self._embedding_manager()
+            provider = mgr.get_provider(
+                self.root_path,
+                builtin_loader=lambda r: E.load_encoder(r, use_coreml=mgr.get_config().use_coreml),
+                builtin_present=lambda r: E.model_present(r),
+            )
+            self._encoder = provider
+            self._encoder_loaded = True
             return self._encoder
 
     def _reset_encoder(self) -> None:
         with self._encoder_lock:
+            self._embedding_manager().invalidate()
             self._encoder, self._encoder_loaded = None, False
+        self._vec_cache = None
         with self._query_vec_lock:
             self._query_vec_cache.clear()
 
     def _encode_query_cached(self, encoder: Any, query: str) -> Any:
-        cache_key = f"{getattr(encoder, 'model_id', EMBED_MODEL_ID)}:{query}"
+        cache_key = f"{getattr(encoder, 'model_id', self._active_model_id())}:{query}"
         with self._query_vec_lock:
             cached = self._query_vec_cache.get(cache_key)
             if cached is not None:
@@ -809,13 +842,20 @@ class LibraryService:
                 self._query_vec_cache.popitem(last=False)
         return qvec
 
-    def _vectors(self, conn) -> tuple[list[int], list[int], list[int], Any]:
-        """全库向量矩阵，按 ``(行数, max rowid, 最新写入时刻)`` 指纹缓存 —— 每次检索重读几十 MB 会卡。"""
-        sig = self.repo.vector_signature(conn, EMBED_MODEL_ID)
+    def _vectors(self, conn) -> tuple[list[int], list[int], list[int], Any, Any]:
+        """全库向量矩阵（int8 + BQ 紧凑双层表示），按 ``(model, 行数, max rowid, 最新写入时刻)`` 指纹缓存。"""
+        model_id = self._active_model_id()
+        sig = (model_id, *self.repo.vector_signature(conn, model_id))
         if self._vec_cache is not None and self._vec_cache[0] == sig:
             return self._vec_cache[1]
-        ids, starts, ends, blobs = self.repo.load_vectors(conn, EMBED_MODEL_ID)
-        payload = (ids, starts, ends, E.dequantize(blobs))
+        ids, starts, ends, blobs, bq_blobs = self.repo.load_vectors(conn, model_id)
+        if blobs:
+            rows = [np.frombuffer(b, dtype=np.int8) for b in blobs]
+            i8_mat = np.stack(rows)
+        else:
+            i8_mat = np.zeros((0, self._active_dim()), dtype=np.int8)
+        bq_mat = unpack_bq_matrix(bq_blobs, i8_mat)
+        payload = (ids, starts, ends, i8_mat, bq_mat)
         self._vec_cache = (sig, payload)
         return payload
 
@@ -828,13 +868,13 @@ class LibraryService:
         warnings: list[str],
         qvec: Any = _UNSET,
     ) -> tuple[list[int], dict[int, tuple[float, int, int]]]:
-        """numpy 暴力点积 → 按文件取最好的那块 → top-N。文件级得分 = 块得分的最大值，低于地板的块直接丢。"""
+        """MRL + BQ 二段检索（Hamming 粗排 → int8 精确点积重打分）→ 文件级 top-N。"""
         if qvec is None:
             return [], {}
         encoder = self._get_encoder() if qvec is _UNSET else None
         if qvec is _UNSET and encoder is None:
             return [], {}
-        ids, starts, ends, matrix = self._vectors(conn)
+        ids, starts, ends, i8_mat, bq_mat = self._vectors(conn)
         if not ids:
             return [], {}
         if len(ids) > VECTOR_BRUTE_FORCE_MAX_CHUNKS:
@@ -846,12 +886,18 @@ class LibraryService:
                 logger.warning(f"[library] query embedding failed: {exc}")
                 warnings.append("semantic_query_failed")
                 return [], {}
-        scores = matrix @ qvec
-        matched_idx = np.flatnonzero(scores >= VECTOR_MIN_SCORE)
+        bq_candidates = max(100, limit * 10)
+        chunk_top_k = len(ids) if len(ids) <= bq_candidates else max(200, limit * 10)
+        ranked_chunks = two_stage_rank(
+            qvec,
+            i8_mat,
+            bq_mat,
+            top_k=chunk_top_k,
+            bq_candidates=bq_candidates,
+            min_score=self._active_min_score(),
+        )
         best: dict[int, tuple[float, int, int]] = {}
-        for idx_np in matched_idx:
-            i = int(idx_np)
-            score = float(scores[i])
+        for i, score in ranked_chunks:
             fid = ids[i]
             current = best.get(fid)
             if current is None or score > current[0]:
@@ -862,39 +908,120 @@ class LibraryService:
     # ── 嵌入队列（后台低速；抄附件抽取 worker 的批 + 间隔范式）────────────────
 
     def embed_status(self) -> dict[str, Any]:
-        """设置页的进度面：模型在不在 / 索引到哪了 / 有没有作业在跑。**不含任何绝对路径**。"""
+        """设置页的进度面：模型在不在 / 索引到哪了 / 有没有作业在跑 / Provider 状态。**不含任何绝对路径**。"""
+        mgr = self._embedding_manager()
+        cfg = mgr.get_config()
+        model_id = self._active_model_id()
         conn = self.db.connect()
         try:
             total = self.repo.count_embeddable_files(conn)
-            pending = self.repo.count_files_needing_embed(conn, EMBED_MODEL_ID)
-            chunks = self.repo.count_chunks(conn, EMBED_MODEL_ID)
+            pending = self.repo.count_files_needing_embed(conn, model_id)
+            chunks = self.repo.count_chunks(conn, model_id)
         finally:
             conn.close()
-        available = E.model_present(self.root_path)
+        builtin_available = E.model_present(self.root_path)
+        available = self._is_model_available()
         with self._job_lock:
             job = self._job.to_dict() if self._job is not None else None
+        email_semantic: Optional[dict[str, Any]] = None
+        if self._sync_store_db_path:
+            try:
+                from src.semantic.service import get_semantic_service  # noqa: PLC0415
+
+                email_semantic = get_semantic_service(
+                    self._sync_store_db_path, library_root=self.root_path
+                ).status()
+            except Exception:  # noqa: BLE001 — email semantic status is informational
+                email_semantic = None
+        active_ep = getattr(self._encoder, "active_ep", None)
         return {
             "model": {
-                "available": available, "model_id": EMBED_MODEL_ID, "repo": EMBED_MODEL_REPO,
+                "available": available,
+                "model_id": model_id,
+                "repo": EMBED_MODEL_REPO if cfg.kind == "builtin_onnx" else (cfg.base_url or ""),
                 "approx_bytes": EMBED_MODEL_APPROX_BYTES,
-                "bytes_on_disk": E.model_bytes_on_disk(self.root_path) if available else 0,
+                "bytes_on_disk": E.model_bytes_on_disk(self.root_path) if builtin_available else 0,
+            },
+            "provider": {
+                "kind": cfg.kind,
+                "base_url": cfg.base_url,
+                "model": cfg.model,
+                "dim": self._active_dim(),
+                "min_score": self._active_min_score(),
+                "active_ep": active_ep,
             },
             "index": {
                 "files_total": total, "files_indexed": max(0, total - pending), "files_pending": pending, "chunks": chunks,
             },
             "job": job,
+            **({"email_semantic": email_semantic} if email_semantic is not None else {}),
         }
 
-    def _embed_one(self, encoder: Any, file_id: int) -> int:
-        """一个文件：切块 → 只嵌 hash 变了的块 → 整文件替换。返回**真正跑了模型**的块数。
+    def probe_embed_providers(self, *, custom_url: Optional[str] = None) -> dict[str, Any]:
+        """探测本机运行的 Ollama / LM Studio / 自定义 OpenAI-compatible 嵌入服务端。"""
+        from src.embedding.openai_compat import probe_local_openai_servers  # noqa: PLC0415
 
-        编码在事务外做（几百毫秒起步），写回时重读 ``source_hash``：正文在编码期间被改过就整批丢弃，
-        下一轮队列会重新领走它。
-        """
+        servers = probe_local_openai_servers(custom_url=custom_url)
+        cfg = self._embedding_manager().get_config()
+        return {
+            "servers": servers,
+            "current": {
+                "kind": cfg.kind,
+                "base_url": cfg.base_url,
+                "model": cfg.model,
+                "dim": cfg.dim,
+                "min_score": cfg.min_score,
+            },
+        }
+
+    def configure_embed_provider(
+        self,
+        *,
+        kind: str,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+        dim: Optional[int] = None,
+        min_score: Optional[float] = None,
+    ) -> dict[str, Any]:
+        """切换本地嵌入 Provider（built-in ONNX vs 本机 Ollama / LM Studio），不同 model_id 自动共存。"""
+        if kind not in ("builtin_onnx", "openai_compat"):
+            raise LibraryError("E_INVALID_ARG", f"invalid provider kind: {kind!r}")
+        if kind == "openai_compat":
+            cleaned_url = (base_url or "").strip().rstrip("/")
+            cleaned_model = (model or "").strip()
+            if not cleaned_url or not cleaned_model:
+                raise LibraryError("E_INVALID_ARG", "base_url and model are required for openai_compat provider")
+            cfg = EmbeddingProviderConfig(
+                kind="openai_compat",
+                base_url=cleaned_url,
+                model=cleaned_model,
+                dim=dim if dim and dim > 0 else None,
+                min_score=float(min_score) if min_score is not None else 0.35,
+            )
+        else:
+            cfg = EmbeddingProviderConfig(
+                kind="builtin_onnx",
+                min_score=float(min_score) if min_score is not None else VECTOR_MIN_SCORE,
+            )
+        self._embedding_manager().set_config(cfg)
+        self._reset_encoder()
+        if self._is_model_available():
+            conn = self.db.connect()
+            try:
+                pending = self.repo.count_files_needing_embed(conn, self._active_model_id())
+            finally:
+                conn.close()
+            if pending > 0:
+                self._kick_index()
+        return self.embed_status()
+
+    def _embed_one(self, encoder: Any, file_id: int) -> int:
+        """一个文件：切块 → 只嵌 hash 变了的块 → 整文件替换。返回**真正跑了模型**的块数。"""
+        model_id = self._active_model_id()
         conn = self.db.connect()
         try:
             text_row = self.repo.get_text(conn, file_id)
-            existing = self.repo.chunk_vectors_by_hash(conn, file_id, EMBED_MODEL_ID)
+            existing = self.repo.chunk_vectors_by_hash(conn, file_id, model_id)
         finally:
             conn.close()
         if text_row is None:
@@ -902,21 +1029,25 @@ class LibraryService:
         source_hash = str(text_row["source_hash"])
         chunks = E.chunk_text(str(text_row["text_content"] or ""), filename=str(text_row["filename"]))
         todo = [c for c in chunks if c.text_hash not in existing]
+        bq_map: dict[str, bytes] = {}
+        for h, blob in existing.items():
+            bq_map[h] = E.pack_bq(np.frombuffer(blob, dtype=np.int8))
         if todo:
             vectors = encoder.encode([c.payload for c in todo])
             for chunk, vec in zip(todo, vectors):
                 existing[chunk.text_hash] = E.quantize(vec)
+                bq_map[chunk.text_hash] = E.pack_bq(vec)
         now = time.time()
         rows = [
             {"idx": c.idx, "char_start": c.char_start, "char_end": c.char_end, "text_hash": c.text_hash,
-             "source_hash": source_hash, "vec": existing[c.text_hash], "created_at": now}
+             "source_hash": source_hash, "vec": existing[c.text_hash], "bq_vec": bq_map[c.text_hash], "created_at": now}
             for c in chunks
         ]
         with self.db.transaction() as conn:
             fresh = self.repo.get_text(conn, file_id)
             if fresh is None or str(fresh["source_hash"]) != source_hash:
                 return 0
-            self.repo.replace_chunks(conn, file_id, EMBED_MODEL_ID, rows)
+            self.repo.replace_chunks(conn, file_id, model_id, rows)
         return len(todo)
 
     def embed_pending(self, *, max_files: int = EMBED_BATCH_FILES) -> dict[str, Any]:
@@ -924,10 +1055,11 @@ class LibraryService:
         encoder = self._get_encoder()
         if encoder is None:
             return {"available": False, "files": 0, "chunks": 0, "remaining": 0}
+        model_id = self._active_model_id()
         files = chunks = 0
         conn = self.db.connect()
         try:
-            queue = self.repo.files_needing_embed(conn, EMBED_MODEL_ID, limit=max_files)
+            queue = self.repo.files_needing_embed(conn, model_id, limit=max_files)
         finally:
             conn.close()
         for row in queue:
@@ -935,7 +1067,7 @@ class LibraryService:
             files += 1
         conn = self.db.connect()
         try:
-            remaining = self.repo.count_files_needing_embed(conn, EMBED_MODEL_ID)
+            remaining = self.repo.count_files_needing_embed(conn, model_id)
         finally:
             conn.close()
         return {"available": True, "files": files, "chunks": chunks, "remaining": remaining}
@@ -947,8 +1079,9 @@ class LibraryService:
         """
         if self._get_encoder() is None:
             raise LibraryError("E_INVALID_STATE", "semantic model is not downloaded", hint="先在设置页下载语义模型")
+        model_id = self._active_model_id()
         with self.db.transaction() as conn:
-            removed = self.repo.delete_chunks(conn, model=EMBED_MODEL_ID)
+            removed = self.repo.delete_chunks(conn, model=model_id)
         self._vec_cache = None
         with self._query_vec_lock:
             self._query_vec_cache.clear()

@@ -131,6 +131,7 @@ export interface SearchOpts {
   until?: string
   limit?: number
   mode?: 'smart' | 'raw'
+  searchMode?: 'fts' | 'hybrid'
   /** Cross-language fixture injection; production callers omit both fields. */
   now?: string
   tzOffsetMinutes?: number

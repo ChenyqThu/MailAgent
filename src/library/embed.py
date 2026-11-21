@@ -29,6 +29,13 @@ from urllib.parse import urlparse
 
 import numpy as np
 
+from src.embedding.protocol import BUILTIN_EMBEDDING_GEMMA_PROFILE
+from src.embedding.quantize import (
+    dequantize_int8 as _emb_dequantize,
+    l2_normalize,
+    pack_bq,
+    quantize_int8 as quantize,
+)
 from src.library.constants import (
     CHUNK_MAX_MODEL_TOKENS,
     CHUNK_MAX_PER_FILE,
@@ -37,17 +44,25 @@ from src.library.constants import (
     CHUNK_TARGET_TOKENS,
     EMBED_CACHE_DIRNAME,
     EMBED_DIM,
+    EMBED_DOC_PREFIX,
+    EMBED_MODEL_EXTRA_FILES,
     EMBED_MODEL_FILE,
     EMBED_MODEL_ID,
     EMBED_MODEL_REPO,
+    EMBED_QUERY_PREFIX,
     EMBED_QUERY_TASK,
 )
 from src.repository.email_repository import _is_cjk_char
 
+#: 远端相对路径（含可选外部权重文件，如 ``onnx/model_q4.onnx_data``）。
+_REMOTE_FILES: tuple[str, ...] = (
+    EMBED_MODEL_FILE,
+    *EMBED_MODEL_EXTRA_FILES,
+    "tokenizer.json",
+    "config.json",
+)
 #: 权重目录里需要凑齐的文件（本地一律拍平成 basename）。
-MODEL_FILES: tuple[str, ...] = (os.path.basename(EMBED_MODEL_FILE), "tokenizer.json", "config.json")
-#: 远端相对路径（与 MODEL_FILES 一一对应）。
-_REMOTE_FILES: tuple[str, ...] = (EMBED_MODEL_FILE, "tokenizer.json", "config.json")
+MODEL_FILES: tuple[str, ...] = tuple(os.path.basename(p) for p in _REMOTE_FILES)
 _DEFAULT_MIRRORS: tuple[str, ...] = ("https://huggingface.co", "https://hf-mirror.com")
 _HF_URL = "{base}/{repo}/resolve/main/{path}"
 
@@ -215,28 +230,19 @@ def chunk_text(
     return chunks[:max_chunks]
 
 
-def query_text(query: str, *, task: str = EMBED_QUERY_TASK) -> str:
-    """query 侧指令前缀（文档侧不带 —— 两侧都带会把 query 向量拉向指令本身）。"""
-    return f"Instruct: {task}\nQuery: {query}"
+def query_text(query: str, *, prefix: str = EMBED_QUERY_PREFIX) -> str:
+    """query 侧提示前缀（EmbeddingGemma 默认 `task: search result | query: `）。"""
+    return f"{prefix}{query}"
 
 
-def quantize(vec: Sequence[float]) -> bytes:
-    """L2 归一化后的向量 → int8（scale 127，无 per-vector scale：分量恒在 [-1, 1]）。1024 维 = 1 KB。"""
-    arr = np.asarray(vec, dtype=np.float32)
-    return np.clip(np.rint(arr * 127.0), -127, 127).astype(np.int8).tobytes()
+def doc_text(text: str, *, prefix: str = EMBED_DOC_PREFIX) -> str:
+    """文档块侧提示前缀（与 query 侧区分）。"""
+    return f"{prefix}{text}"
 
 
 def dequantize(blobs: Iterable[bytes], *, dim: int = EMBED_DIM) -> np.ndarray:
     """一批 int8 blob → ``(n, dim)`` float32 矩阵（已除回 127；仍近似 L2 归一）。"""
-    rows = [np.frombuffer(b, dtype=np.int8) for b in blobs]
-    if not rows:
-        return np.zeros((0, dim), dtype=np.float32)
-    return np.stack(rows).astype(np.float32) / 127.0
-
-
-def l2_normalize(mat: np.ndarray) -> np.ndarray:
-    norms = np.linalg.norm(mat, axis=-1, keepdims=True)
-    return mat / np.maximum(norms, 1e-12)
+    return _emb_dequantize(blobs, dim=dim)
 
 
 # =============================================================================
@@ -432,129 +438,41 @@ def download_model(
 
 
 class OnnxEncoder:
-    """Qwen3-Embedding 的 ONNX 会话：tokenize → run → last-token 池化 → L2 归一。
-
-    ``providers`` 缺省先试 CoreML 再回落 CPU；int8 图在 CoreML 上常整体回落 CPU，是否真有加速由 PoC 定。
-    """
+    """向后兼容封装 —— 委托给统一 ``OnnxLocalProvider``（支持 MRL + CoreML 安全探针）。"""
 
     def __init__(self, model_dir: str, *, use_coreml: bool = False, max_tokens: int = CHUNK_MAX_MODEL_TOKENS) -> None:
-        import onnxruntime as ort  # 函数级：~150 MB，只有真跑语义时才付
-        from tokenizers import Tokenizer
+        from dataclasses import replace  # noqa: PLC0415
+        from src.embedding.onnx_provider import OnnxLocalProvider  # noqa: PLC0415
 
+        prof = replace(BUILTIN_EMBEDDING_GEMMA_PROFILE, max_tokens=int(max_tokens))
+        self._inner = OnnxLocalProvider(model_dir, profile=prof, use_coreml=use_coreml)
         self.model_dir = model_dir
-        self.max_tokens = int(max_tokens)
-        self.model_id = EMBED_MODEL_ID
-        self.dim = EMBED_DIM
-        self._tok = Tokenizer.from_file(os.path.join(model_dir, "tokenizer.json"))
-        self._tok.no_padding()
-        self._tok.enable_truncation(max_length=max(8, self.max_tokens - 1))
-        available = set(ort.get_available_providers())
-        wanted = [p for p in (("CoreMLExecutionProvider",) if use_coreml else ()) if p in available]
-        wanted.append("CPUExecutionProvider")
-        opts = ort.SessionOptions()
-        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        self.session = ort.InferenceSession(
-            os.path.join(model_dir, os.path.basename(EMBED_MODEL_FILE)), sess_options=opts, providers=wanted
-        )
-        self.providers = list(self.session.get_providers())
-        self._inputs = {i.name: i for i in self.session.get_inputs()}
-        self._eos_id = self._tok.token_to_id("<|endoftext|>")
-        self._pad_id = self._eos_id if self._eos_id is not None else 0
-
-    # ── 内部 ──────────────────────────────────────────────────────────────
-
-    def _tokenize(self, texts: Sequence[str]) -> tuple[np.ndarray, np.ndarray]:
-        """右 padding + 末尾补 EOS（Qwen3-Embedding 的 last-token 池化取的就是这个位置）。"""
-        encoded = self._tok.encode_batch(list(texts))
-        seqs: list[list[int]] = []
-        for enc in encoded:
-            ids = list(enc.ids)
-            if self._eos_id is not None and (not ids or ids[-1] != self._eos_id):
-                ids.append(self._eos_id)
-            seqs.append(ids or [self._pad_id])
-        width = max(len(s) for s in seqs)
-        input_ids = np.full((len(seqs), width), self._pad_id, dtype=np.int64)
-        mask = np.zeros((len(seqs), width), dtype=np.int64)
-        for i, seq in enumerate(seqs):
-            input_ids[i, : len(seq)] = seq
-            mask[i, : len(seq)] = 1
-        return input_ids, mask
-
-    _DTYPES = {"tensor(float)": np.float32, "tensor(float16)": np.float16, "tensor(int64)": np.int64}
-
-    def _feeds(self, input_ids: np.ndarray, mask: np.ndarray) -> dict[str, np.ndarray]:
-        """按图**声明的**输入喂参：transformers.js 风格的导出还要 position_ids + 空 past_key_values。"""
-        batch, width = input_ids.shape
-        feeds: dict[str, np.ndarray] = {}
-        for name, spec in self._inputs.items():
-            if name == "input_ids":
-                feeds[name] = input_ids
-            elif name == "attention_mask":
-                feeds[name] = mask
-            elif name == "position_ids":
-                feeds[name] = np.tile(np.arange(width, dtype=np.int64), (batch, 1))
-            else:
-                dtype = self._DTYPES.get(spec.type, np.float32)
-                shape = [batch if isinstance(d, str) and "batch" in d else (0 if isinstance(d, str) else int(d)) for d in spec.shape]
-                feeds[name] = np.zeros(shape, dtype=dtype)
-        return feeds
-
-    def _pool(self, outputs: Sequence[np.ndarray], mask: np.ndarray) -> np.ndarray:
-        names = [o.name for o in self.session.get_outputs()]
-        picked = None
-        for i, name in enumerate(names):
-            if name in ("sentence_embedding", "last_hidden_state") or outputs[i].ndim in (2, 3):
-                picked = np.asarray(outputs[i], dtype=np.float32)
-                if picked.ndim in (2, 3):
-                    break
-        if picked is None:
-            picked = np.asarray(outputs[0], dtype=np.float32)
-        if picked.ndim == 2:  # 已经池化过的导出，直接归一
-            return l2_normalize(picked)
-        last = np.maximum(mask.sum(axis=1) - 1, 0)
-        return l2_normalize(picked[np.arange(picked.shape[0]), last])
-
-    # ── 对外 ──────────────────────────────────────────────────────────────
+        self.model_id = self._inner.model_id
+        self.dim = self._inner.dim
+        self.providers = list(self._inner.providers)
+        self.session = self._inner.session
 
     def encode(self, texts: Sequence[str], *, batch_size: int = 8) -> np.ndarray:
-        """文档侧（**不带**指令前缀）→ ``(n, dim)`` float32，已 L2 归一。"""
-        if not texts:
-            return np.zeros((0, self.dim), dtype=np.float32)
-        out: list[np.ndarray] = []
-        for start in range(0, len(texts), batch_size):
-            batch = list(texts[start : start + batch_size])
-            input_ids, mask = self._tokenize(batch)
-            outputs = self.session.run(None, self._feeds(input_ids, mask))
-            out.append(self._pool(outputs, mask))
-        return np.concatenate(out, axis=0)
+        return self._inner.encode(texts, batch_size=batch_size)
 
     def encode_query(self, query: str) -> np.ndarray:
-        """query 侧（带 ``Instruct:`` 前缀）→ ``(dim,)`` float32。"""
-        return self.encode([query_text(query)])[0]
+        return self._inner.encode_query(query)
+
+    def close(self) -> None:
+        self._inner.close()
 
 
 def load_encoder(library_root: str, *, use_coreml: bool = False) -> Optional[Any]:
     """有权重就开会话，**没权重返回 None**（不是异常 —— 纯 FTS 是合法的常态）。
 
-    开会话本身失败（图不匹配 / EP 挂了）也返回 None：语义 lane 是增强，不该把检索整条打死。
-
-    🔴 ``use_coreml`` 默认 **False**（2026-09-03 实测改的）。CoreML EP 会接下这张图的 141 个分区，
-    但一 ``run`` 就炸：
-
-        coreml_execution_provider.cc:222 Input (past_key_values.0.key) has a dynamic shape
-        ({-1,8,-1,128}) but the runtime shape ({3,8,0,128}) has zero elements.
-
-    Qwen3 的导出图带 KV-cache 输入，首次前向时它们是**零元素**张量，而 CoreML EP 不收零元素的
-    动态形状。这不是机器差异，是这张图的结构决定的 —— 任何 Mac 都会撞。更麻烦的是 ORT 不会为此
-    回落到 CPU：分区在 CoreML 上失败就整条 ``run`` 抛异常，而 ``load_encoder`` 只捕获**建会话**
-    阶段的异常，所以留着这个默认值等于交出一个「建得起来、一用就炸」的 encoder。
-    参数保留：将来 ORT / CoreML 支持零元素动态形状后，重测一次就能翻回来。
+    Step 4A PoC 实测：Apple Silicon 上 CoreML EP 对单 query 推理比 CPU EP 慢 7–13 倍，
+    故 ``use_coreml`` 缺省保持 ``False``；开启时自动执行 2-token dummy forward 探针并在失败时回落 CPU。
     """
     if not model_present(library_root):
         return None
     try:
         return OnnxEncoder(cache_dir(library_root), use_coreml=use_coreml)
-    except Exception as exc:  # noqa: BLE001 — 见 docstring：语义 lane 坏了也只降级
+    except Exception as exc:  # noqa: BLE001 — 语义 lane 坏了也只降级
         from loguru import logger
 
         logger.warning(f"[library] semantic encoder unavailable: {exc}")

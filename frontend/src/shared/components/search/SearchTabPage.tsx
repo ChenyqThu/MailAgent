@@ -27,7 +27,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useNavigate, useRouter } from '@tanstack/react-router'
 import { AlertTriangle, Search as SearchGlyph, X } from 'lucide-react'
 
-import type { SearchHit, SearchResult } from '@shared/api/types'
+import type { SearchHit } from '@shared/api/types'
 import type { ContactRowDto } from '@shared/api/types/contact'
 import type { Matter } from '@shared/api/types/matter'
 import { runGatewaySearchAgent } from '@shared/assistant/searchAgentClient'
@@ -43,6 +43,7 @@ import { useMattersApi, useMattersEnabled } from '@shared/components/matters/hoo
 import { useMatterNavigation } from '@shared/components/matters/navigation'
 import { useDebouncedValue } from '@shared/hooks/useDebouncedValue'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useProgressiveEmailSearch } from '@shared/hooks/useProgressiveEmailSearch'
 import { cn } from '@shared/lib/cn'
 import { toggleDslToken } from '@shared/lib/dsl_token'
 import { extractTerms } from '@shared/lib/highlight_terms'
@@ -197,15 +198,14 @@ export function SearchTabPage(): React.ReactElement {
 
   // ── 三路检索（与 palette 同 query key —— 缓存共享，后端路径同一条）────────────
 
-  const searchQ = useQuery<SearchResult>({
-    queryKey: qk.palette.search(normalised),
-    queryFn: () => mailApi.email.search({ query: normalised, limit: MAX_EMAIL_HITS }),
-    staleTime: 30_000,
-    placeholderData: keepPreviousData,
+  const searchQ = useProgressiveEmailSearch({
+    mailApi,
+    query: normalised,
+    limit: MAX_EMAIL_HITS,
     enabled: hasQuery
   })
   const hits: SearchHit[] = useMemo(() => searchQ.data?.items ?? [], [searchQ.data?.items])
-  const isSearching = searchQ.isFetching && hasQuery
+  const isSearching = (searchQ.isFetching || searchQ.isEnhancing) && hasQuery
 
   // 与 palette 同判据（CommandPalette G-B3）：settled 成功搜索推一次进历史 —— 左列
   // 「最近搜索」由页内搜索与 ⌘K 共同喂，不再是单向账本。palette 侧多一个 open 闸，

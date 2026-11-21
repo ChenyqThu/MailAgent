@@ -62,6 +62,42 @@ export interface LibraryEmbedJob {
   cancelled?: boolean
 }
 
+export interface LibraryEmbedProviderInfo {
+  kind: 'builtin_onnx' | 'openai_compat'
+  base_url: string | null
+  model: string | null
+  dim: number
+  min_score: number
+  active_ep: string | null
+}
+
+export interface LibraryEmbedServerProbe {
+  kind: 'ollama' | 'lmstudio' | 'custom'
+  label: string
+  base_url: string
+  running: boolean
+  models: { id: string; likely_embedding: boolean }[]
+}
+
+export interface LibraryEmbedProbeResponse {
+  servers: LibraryEmbedServerProbe[]
+  current: {
+    kind: 'builtin_onnx' | 'openai_compat'
+    base_url: string | null
+    model: string | null
+    dim: number | null
+    min_score: number
+  }
+}
+
+export interface LibraryEmailSemanticStatus {
+  available: boolean
+  model_id: string
+  indexed_emails: number
+  total_emails: number
+  pending_emails: number
+}
+
 /** `GET /library/embed/status` —— 设置页语义检索区的唯一数据源。**不含任何绝对路径**。 */
 export interface LibraryEmbedStatus {
   model: {
@@ -72,8 +108,10 @@ export interface LibraryEmbedStatus {
     approx_bytes: number
     bytes_on_disk: number
   }
+  provider?: LibraryEmbedProviderInfo
   index: { files_total: number; files_indexed: number; files_pending: number; chunks: number }
   job: LibraryEmbedJob | null
+  email_semantic?: LibraryEmailSemanticStatus
 }
 
 /** 文件夹内容区的排序维度（design §2.3）。🔴 排序是**服务端**做的：分页 200 之后
@@ -188,6 +226,16 @@ export interface LibraryApi {
   embedCancel(): Promise<LibraryEmbedStatus>
   /** 清掉本模型的全部向量重建。没模型同样 `E_INVALID_STATE`。 */
   embedRebuild(): Promise<LibraryEmbedStatus>
+  /** 探测本机运行的 Ollama / LM Studio 嵌入服务端。 */
+  embedProbeProviders(customUrl?: string): Promise<LibraryEmbedProbeResponse>
+  /** 切换本地嵌入 Provider（built-in ONNX vs Ollama / LM Studio）。 */
+  embedSetProvider(config: {
+    kind: 'builtin_onnx' | 'openai_compat'
+    base_url?: string | null
+    model?: string | null
+    dim?: number | null
+    min_score?: number | null
+  }): Promise<LibraryEmbedStatus>
 }
 
 export function createLibraryApi(baseUrl: string): LibraryApi {
@@ -364,6 +412,22 @@ export function createLibraryApi(baseUrl: string): LibraryApi {
 
     embedRebuild(): Promise<LibraryEmbedStatus> {
       return request(baseUrl, 'POST', '/library/embed/rebuild')
+    },
+
+    embedProbeProviders(customUrl?: string): Promise<LibraryEmbedProbeResponse> {
+      return request(baseUrl, 'GET', '/library/embed/providers/probe', {
+        query: customUrl ? { custom_url: customUrl } : undefined
+      })
+    },
+
+    embedSetProvider(config: {
+      kind: 'builtin_onnx' | 'openai_compat'
+      base_url?: string | null
+      model?: string | null
+      dim?: number | null
+      min_score?: number | null
+    }): Promise<LibraryEmbedStatus> {
+      return request(baseUrl, 'PUT', '/library/embed/provider', { body: config })
     }
   }
 }

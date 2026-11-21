@@ -13,7 +13,8 @@ import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, ExternalLink, RotateCcw } from 'lucide-react'
 
-import type { LibraryEmbedStatus } from '@shared/api/library'
+import type { LibraryEmbedProbeResponse, LibraryEmbedStatus } from '@shared/api/library'
+import { EMBED_MODEL_APPROX_BYTES } from '@shared/libraryConstants'
 import type { LibraryMount } from '@shared/api/types/library'
 import { Button } from '@shared/components/ui/button'
 import { useLibraryApi } from '@shared/components/library/hooks'
@@ -221,12 +222,49 @@ function SemanticSection(): ReactElement {
   const api = useLibraryApi()
   const qc = useQueryClient()
   const [busy, setBusy] = useState(false)
+  const [probeBusy, setProbeBusy] = useState(false)
+  const [probeData, setProbeData] = useState<LibraryEmbedProbeResponse | null>(null)
+  const [selectedServerUrl, setSelectedServerUrl] = useState('')
+  const [selectedLocalModel, setSelectedLocalModel] = useState('')
 
   const status = useQuery<LibraryEmbedStatus>({
     queryKey: ['library', 'embed', 'status'],
     queryFn: () => api.embedStatus(),
     refetchInterval: (query) => (query.state.data?.job?.running === true ? JOB_POLL_MS : false)
   })
+
+  async function detectLocalServers(): Promise<void> {
+    setProbeBusy(true)
+    try {
+      const res = await api.embedProbeProviders()
+      setProbeData(res)
+      const firstRunning = res.servers.find((s) => s.running && s.models.length > 0)
+      if (firstRunning) {
+        setSelectedServerUrl(firstRunning.base_url)
+        setSelectedLocalModel(firstRunning.models[0]?.id ?? '')
+      }
+    } catch (err) {
+      toastError(t('library.settings.detectServers'), mountErrorText(err))
+    } finally {
+      setProbeBusy(false)
+    }
+  }
+
+  async function switchProvider(config: {
+    kind: 'builtin_onnx' | 'openai_compat'
+    base_url?: string | null
+    model?: string | null
+  }): Promise<void> {
+    setBusy(true)
+    try {
+      const next = await api.embedSetProvider(config)
+      qc.setQueryData(['library', 'embed', 'status'], next)
+    } catch (err) {
+      toastError(t('library.settings.providerTitle'), mountErrorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function run(kind: 'download' | 'rebuild'): Promise<void> {
     setBusy(true)
@@ -260,6 +298,14 @@ function SemanticSection(): ReactElement {
   const job = data?.job ?? null
   const running = job?.running === true
   const resumedDownload = !running && job?.cancelled === true && job.done > 0
+  const providerKind = data?.provider?.kind ?? 'builtin_onnx'
+  const approxSize = formatFileSize(data?.model.approx_bytes ?? EMBED_MODEL_APPROX_BYTES)
+  const runningServers = (probeData?.servers ?? []).filter((s) => s.running && s.models.length > 0)
+  const activeServer =
+    runningServers.find((s) => s.base_url === selectedServerUrl) ?? runningServers[0] ?? null
+  const modelChoices = activeServer?.models ?? []
+  const effectiveLocalModel =
+    modelChoices.find((m) => m.id === selectedLocalModel)?.id ?? modelChoices[0]?.id ?? ''
 
   let downloadHelper = job !== null ? `${formatFileSize(job.done)} / ${formatFileSize(job.total)}` : ''
   if (job !== null && job.speed_bps != null && job.speed_bps > 0) {
@@ -271,6 +317,89 @@ function SemanticSection(): ReactElement {
 
   return (
     <Section title={t('library.settings.semanticTitle')}>
+      <Row
+        label={t('library.settings.providerTitle')}
+        helper={
+          providerKind === 'openai_compat' && data?.provider?.model
+            ? `${data.provider.model}${data.provider.base_url ? ` · ${data.provider.base_url}` : ''}`
+            : t('library.settings.providerBuiltin')
+        }
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          {providerKind === 'openai_compat' && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => void switchProvider({ kind: 'builtin_onnx' })}
+            >
+              {t('library.settings.providerBuiltin')}
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={probeBusy || busy}
+            onClick={() => void detectLocalServers()}
+          >
+            {t('library.settings.detectServers')}
+          </Button>
+        </div>
+      </Row>
+
+      {probeData !== null && (
+        <Row label={t('library.settings.providerLocalServer')}>
+          {runningServers.length === 0 ? (
+            <span className="text-aux text-ink-fg-3">{t('library.settings.noLocalServers')}</span>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                aria-label={t('library.settings.providerLocalServer')}
+                value={activeServer?.base_url ?? ''}
+                onChange={(e) => {
+                  const nextUrl = e.target.value
+                  setSelectedServerUrl(nextUrl)
+                  const srv = runningServers.find((s) => s.base_url === nextUrl)
+                  setSelectedLocalModel(srv?.models[0]?.id ?? '')
+                }}
+                className="h-8 rounded-md border border-ink-border bg-ink-2 px-2 text-aux text-ink-fg"
+              >
+                {runningServers.map((s) => (
+                  <option key={s.base_url} value={s.base_url}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label={t('library.settings.selectLocalModel')}
+                value={effectiveLocalModel}
+                onChange={(e) => setSelectedLocalModel(e.target.value)}
+                className="h-8 max-w-[200px] rounded-md border border-ink-border bg-ink-2 px-2 text-aux text-ink-fg"
+              >
+                {modelChoices.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.id}
+                  </option>
+                ))}
+              </select>
+              <Button
+                size="sm"
+                disabled={busy || !activeServer || !effectiveLocalModel}
+                onClick={() =>
+                  void switchProvider({
+                    kind: 'openai_compat',
+                    base_url: activeServer?.base_url,
+                    model: effectiveLocalModel
+                  })
+                }
+              >
+                {t('library.settings.applyProvider')}
+              </Button>
+            </div>
+          )}
+        </Row>
+      )}
+
       {/* 下载中：done/total 是**字节**。 */}
       {running && job !== null && job.kind === 'download' ? (
         <Row label={t('library.settings.downloading')} helper={downloadHelper}>
@@ -293,7 +422,7 @@ function SemanticSection(): ReactElement {
         </Row>
       ) : null}
 
-      {!running && data !== undefined && !data.model.available ? (
+      {providerKind === 'builtin_onnx' && !running && data !== undefined && !data.model.available ? (
         <>
           {job?.cancelled === true ? (
             <Row label={t('library.settings.downloadCancelled')}>{null}</Row>
@@ -301,11 +430,9 @@ function SemanticSection(): ReactElement {
           <Row label={t('library.settings.semanticNotReady')}>
             <Button size="sm" disabled={busy} onClick={() => void run('download')}>
               <Download size={13} aria-hidden />
-              {t(
-                resumedDownload
-                  ? 'library.settings.resumeDownload'
-                  : 'library.settings.downloadModel'
-              )}
+              {resumedDownload
+                ? t('library.settings.resumeDownload')
+                : t('library.settings.downloadModel', { size: approxSize })}
             </Button>
           </Row>
         </>
@@ -313,10 +440,22 @@ function SemanticSection(): ReactElement {
 
       {data !== undefined && data.model.available ? (
         <>
-          <Row label={t('library.settings.modelReady')}>
-            <span className="font-mono text-meta tabular-nums text-ink-fg-2">
-              {formatFileSize(data.model.bytes_on_disk)}
-            </span>
+          <Row
+            label={t('library.settings.modelReady')}
+            helper={
+              data.email_semantic
+                ? t('library.settings.emailIndexProgress', {
+                    done: data.email_semantic.indexed_emails,
+                    total: data.email_semantic.total_emails
+                  })
+                : undefined
+            }
+          >
+            {data.model.bytes_on_disk > 0 ? (
+              <span className="font-mono text-meta tabular-nums text-ink-fg-2">
+                {formatFileSize(data.model.bytes_on_disk)}
+              </span>
+            ) : null}
           </Row>
           {running ? null : (
             <Row

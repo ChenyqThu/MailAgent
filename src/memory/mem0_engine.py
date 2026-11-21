@@ -21,6 +21,7 @@ mem0 是**同步**库 → 调用方（capture 端点）须用 `run_in_threadpool
 from __future__ import annotations
 
 import os
+import re
 import threading
 from typing import Any, Dict, Optional
 
@@ -197,6 +198,82 @@ def _capture_llm_config(extraction_model: str) -> Dict[str, Any]:
     }
 
 
+def _local_library_root() -> str:
+    sync_db = getattr(cfg, "sync_store_db_path", None)
+    if sync_db:
+        from src.library.db import library_root_for  # noqa: PLC0415
+
+        return library_root_for(sync_db)
+    return os.path.join(DATA_ROOT, "data", "library")
+
+
+def _local_mem0_embedder_selection() -> Optional[Dict[str, Any]]:
+    """Resolve unified local embedding settings when ``MEM0_EMBEDDING_PROVIDER == 'local'``."""
+    try:
+        from src.embedding import get_embedding_manager  # noqa: PLC0415
+
+        lib_root = _local_library_root()
+        mgr = get_embedding_manager(lib_root)
+        if not mgr.is_available(lib_root):
+            return None
+        emp_cfg = mgr.get_config()
+        model_id = mgr.active_model_id()
+        dim = mgr.active_dim()
+        slug = re.sub(r"[^a-zA-Z0-9._-]+", "_", model_id).strip("_") or "local"
+        if emp_cfg.kind == "openai_compat" and emp_cfg.base_url and emp_cfg.model:
+            base = emp_cfg.base_url.rstrip("/")
+            openai_base = base if base.endswith("/v1") else f"{base}/v1"
+            return {
+                "mode": "openai_compat",
+                "slug": slug,
+                "dim": dim,
+                "embedder": {
+                    "provider": "openai",
+                    "config": {
+                        "model": emp_cfg.model,
+                        "openai_base_url": openai_base,
+                        "api_key": "local-no-key",
+                        "embedding_dims": dim,
+                    },
+                },
+            }
+        return {
+            "mode": "builtin_onnx",
+            "slug": slug,
+            "dim": dim,
+            # Construct without triggering fastembed downloads; Mem0Engine._memory() swaps
+            # `mem.embedding_model` with `_LocalMem0Embedder` sharing EmbeddingManager.
+            "embedder": {
+                "provider": "openai",
+                "config": {
+                    "model": model_id,
+                    "api_key": "local-no-key",
+                    "embedding_dims": dim,
+                },
+            },
+        }
+    except Exception:  # noqa: BLE001
+        return None
+
+
+class _LocalMem0Embedder:
+    """Adapter bridging mem0 ``.embed(text, memory_action=...)`` to shared ``EmbeddingManager``."""
+
+    def __init__(self, library_root: str) -> None:
+        self._library_root = library_root
+
+    def embed(self, text: str, memory_action: Optional[str] = None) -> list[float]:
+        from src.embedding import get_embedding_manager  # noqa: PLC0415
+
+        mgr = get_embedding_manager(self._library_root)
+        provider = mgr.get_provider(self._library_root)
+        if provider is None:
+            raise RuntimeError("local embedding model unavailable for mem0")
+        if memory_action == "search":
+            return provider.encode_query(str(text)).tolist()
+        return provider.encode([str(text)])[0].tolist()
+
+
 def build_mem0_config(model: Optional[str] = None) -> Dict[str, Any]:
     """组装 mem0 `Memory.from_config` 的 config dict（纯函数，不 import mem0）。
 
@@ -205,6 +282,32 @@ def build_mem0_config(model: Optional[str] = None) -> Dict[str, Any]:
     """
     root = _mem0_root()
     extraction_model = model or cfg.memory_capture_model or cfg.llm_model
+    embed_mode = str(getattr(cfg, "mem0_embedding_provider", "fastembed") or "fastembed").lower()
+    if embed_mode == "local":
+        local_sel = _local_mem0_embedder_selection()
+        if local_sel is not None:
+            dim = int(local_sel["dim"])
+            faiss_dir = os.path.join(root, f"faiss_{local_sel['slug']}")
+            return {
+                "version": "v1.1",
+                "llm": _capture_llm_config(extraction_model),
+                "embedder": local_sel["embedder"],
+                "vector_store": {
+                    "provider": "faiss",
+                    "config": {
+                        "collection_name": f"mailagent_memory_{local_sel['slug']}",
+                        "path": faiss_dir,
+                        "embedding_model_dims": dim,
+                        "distance_strategy": "cosine",
+                    },
+                },
+                "history_db_path": os.path.join(root, "history.db"),
+                "custom_instructions": CAPTURE_INSTRUCTIONS,
+            }
+        from loguru import logger  # noqa: PLC0415
+
+        logger.warning("[mem0] MEM0_EMBEDDING_PROVIDER=local requested but local model unavailable; falling back to fastembed")
+
     return {
         "version": "v1.1",
         "llm": _capture_llm_config(extraction_model),
@@ -261,6 +364,15 @@ class Mem0Engine:
                     from mem0 import Memory  # 懒 import：flag-off 不触发重依赖
 
                     self._mem = Memory.from_config(build_mem0_config(self._model))
+                    if (
+                        str(getattr(cfg, "mem0_embedding_provider", "fastembed") or "").lower()
+                        == "local"
+                    ):
+                        local_sel = _local_mem0_embedder_selection()
+                        if local_sel is not None and local_sel["mode"] == "builtin_onnx":
+                            self._mem.embedding_model = _LocalMem0Embedder(
+                                _local_library_root()
+                            )
         return self._mem
 
     def add(

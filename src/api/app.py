@@ -290,18 +290,24 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """
     await _assert_bind_loopback()
     cjk2_stop = threading.Event()
+    semantic_stop = threading.Event()
     try:
         from src.config import config as _cfg
         from src.mail.cjk2_backfill_worker import start_background_thread
+        from src.semantic.service import get_semantic_service
 
         if Path(_cfg.sync_store_db_path).is_file():
             start_background_thread(_cfg.sync_store_db_path, stop_event=cjk2_stop)
+            get_semantic_service(_cfg.sync_store_db_path).start_background_worker(
+                semantic_stop
+            )
     except Exception:  # noqa: BLE001 — 无 .env 或裸测试环境跳过
         pass
     try:
         yield
     finally:
         cjk2_stop.set()
+        semantic_stop.set()
         try:
             from src.connectors.stdio_pool import stdio_pool
 

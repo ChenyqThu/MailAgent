@@ -345,11 +345,12 @@ def test_search_response_carries_the_semantic_contract_even_without_a_model(lib)
 def test_embed_status_shape_without_a_model(lib):
     c, _ = lib
     st = _data(c.get("/api/library/embed/status"))
-    assert set(st) == {"model", "index", "job"}
+    assert set(st) == {"model", "index", "job", "provider", "email_semantic"}
     assert set(st["model"]) == {"available", "model_id", "repo", "approx_bytes", "bytes_on_disk"}
     assert st["model"]["available"] is False and st["model"]["approx_bytes"] > 0
     assert set(st["index"]) == {"files_total", "files_indexed", "files_pending", "chunks"}
     assert st["job"] is None
+    assert st["provider"]["kind"] == "builtin_onnx"
     # 🔴 不含任何绝对路径（renderer 永不拿到库根的真实位置）。
     assert "/" not in st["model"]["model_id"]
 

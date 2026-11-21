@@ -82,7 +82,7 @@ import { useSearchHistory } from '@shared/state/search-history'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { extractTerms } from '@shared/lib/highlight_terms'
 import { hasDslToken, toggleDslToken } from '@shared/lib/dsl_token'
-import type { MailboxSummary, SearchAgentPhase, SearchHit, SearchResult } from '@shared/api/types'
+import type { MailboxSummary, SearchAgentPhase, SearchHit } from '@shared/api/types'
 import type { Matter } from '@shared/api/types/matter'
 import type { ContactRowDto } from '@shared/api/types/contact'
 import { useMattersApi, useMattersEnabled } from '@shared/components/matters/hooks'
@@ -93,6 +93,7 @@ import { useContactNavigation } from '@shared/components/contacts/navigation'
 import { navigateToLibraryFile } from '@shared/components/library/deeplink'
 import { useLibraryApi } from '@shared/components/library/hooks'
 import { useProgressiveLibrarySearch } from '@shared/components/library/useProgressiveLibrarySearch'
+import { useProgressiveEmailSearch } from '@shared/hooks/useProgressiveEmailSearch'
 // jump 段的静态行 = nav registry 投影（task 08-24-l4-nav-shell Step R）：一级入口
 // 加/删/改门控只动 registry 一处，⌘K 自动跟上（此前是三行手抄，新入口从来不会出现在这里）。
 import {
@@ -405,29 +406,13 @@ export function CommandPalette(): React.ReactElement | null {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: `?? []` 仅在 query 空档产生新数组; 包 useMemo 属 React Compiler 迁移债, 此处行为无害。
   const mailboxes: MailboxSummary[] = mailboxesQ.data ?? []
 
-  // Single search query covers both "user typed something" and "open the
-  // palette to baseline-load total_indexed for the footer". The IPC handler
-  // returns empty items + cached COUNT in ~1ms for blank queries.
-  const searchQ = useQuery<SearchResult>({
-    queryKey: qk.palette.search(normalised),
-    queryFn: async () => {
-      const isEmpty = normalised.length === 0
-      const t0 = performance.now()
-      const r = await mailApi.email.search({
-        query: isEmpty ? '' : normalised,
-        limit: isEmpty ? 0 : MAX_EMAIL_HITS
-      })
-      if (!isEmpty) {
-        setLastLatencyMs(Math.round(performance.now() - t0))
-      }
-      return r
-    },
-    staleTime: 30_000,
-    // Keep the previous query's hits visible while a new query is in flight so
-    // editing the search box does not flash the list to empty between debounced
-    // re-runs. Matches EmailList / EmailDetail usage.
-    placeholderData: keepPreviousData,
-    enabled: open
+  const searchQ = useProgressiveEmailSearch({
+    mailApi,
+    query: normalised,
+    limit: MAX_EMAIL_HITS,
+    enabled: open,
+    allowEmpty: true,
+    onMeasuredLatency: setLastLatencyMs
   })
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: 同上, `?? []` 空档新数组无害, React Compiler 迁移时统一收。
@@ -463,7 +448,7 @@ export function CommandPalette(): React.ReactElement | null {
         return t('palette.warn.generic')
     }
   }
-  const isSearching = searchQ.isFetching && normalised.length > 0
+  const isSearching = (searchQ.isFetching || searchQ.isEnhancing) && normalised.length > 0
 
   const mattersQ = useQuery({
     queryKey: qk.matters.paletteSearch(normalised),

@@ -287,6 +287,43 @@ def library_embed_rebuild(request: Request, service: LibraryService = Depends(ge
     return _run(request, service.rebuild_index)
 
 
+class EmbedProviderConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["builtin_onnx", "openai_compat"]
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    dim: Optional[int] = None
+    min_score: Optional[float] = None
+
+
+@router.get("/embed/providers/probe")
+def library_embed_probe_providers(
+    request: Request,
+    custom_url: Optional[str] = Query(None),
+    service: LibraryService = Depends(get_library_service),
+):
+    """探测本机运行的 Ollama / LM Studio / 自定义 OpenAI-compatible 本地嵌入服务端。"""
+    return _run(request, service.probe_embed_providers, custom_url=custom_url)
+
+
+@router.put("/embed/provider")
+def library_embed_configure_provider(
+    request: Request,
+    body: EmbedProviderConfigRequest,
+    service: LibraryService = Depends(get_library_service),
+):
+    """切换本地嵌入 Provider（built-in ONNX vs 本机 Ollama / LM Studio）并返回最新 status。"""
+    return _run(
+        request,
+        service.configure_embed_provider,
+        kind=body.kind,
+        base_url=body.base_url,
+        model=body.model,
+        dim=body.dim,
+        min_score=body.min_score,
+    )
+
+
 @router.get("/file/{file_id}")
 def library_file(
     request: Request,

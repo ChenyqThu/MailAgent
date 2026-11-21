@@ -319,3 +319,106 @@ def test_package_lazy_export():
     assert pkg.Mem0Engine is me.Mem0Engine
     with pytest.raises(AttributeError):
         _ = pkg.nonexistent_symbol
+
+
+def test_local_embedder_fallback_when_unavailable(monkeypatch, tmp_path):
+    from src.embedding.registry import reset_embedding_manager_for_tests
+
+    reset_embedding_manager_for_tests()
+    try:
+        monkeypatch.setattr(me, "_mem0_root", lambda: str(tmp_path / "mem0"))
+        monkeypatch.setattr(me, "DATA_ROOT", str(tmp_path))
+        monkeypatch.setattr(
+            me,
+            "cfg",
+            _fake_cfg(
+                mem0_embedding_provider="local",
+                sync_store_db_path=str(tmp_path / "data" / "sync_store.db"),
+            ),
+        )
+        monkeypatch.setattr("src.library.embed.model_present", lambda root: False)
+        config = me.build_mem0_config()
+        assert config["embedder"]["provider"] == "fastembed"
+        assert config["vector_store"]["config"]["path"] == str(tmp_path / "mem0" / "faiss")
+    finally:
+        reset_embedding_manager_for_tests()
+
+
+def test_local_embedder_isolated_faiss_and_action_routing(monkeypatch, tmp_path):
+    import sys
+    import types
+    import numpy as np
+    from src.embedding.registry import reset_embedding_manager_for_tests
+
+    calls = []
+
+    class _FakeLocalProvider:
+        model_id = "embeddinggemma-300m-q4-mrl256"
+        dim = 256
+        provider_kind = "builtin_onnx"
+        active_ep = "CPUExecutionProvider"
+
+        def encode(self, texts, *, batch_size=8):
+            calls.append(("encode", list(texts)))
+            return np.ones((len(texts), 256), dtype=np.float32)
+
+        def encode_query(self, query):
+            calls.append(("encode_query", query))
+            return np.full((256,), 0.5, dtype=np.float32)
+
+        def close(self):
+            pass
+
+    fake_provider = _FakeLocalProvider()
+    reset_embedding_manager_for_tests()
+    try:
+        monkeypatch.setattr(me, "_mem0_root", lambda: str(tmp_path / "mem0"))
+        monkeypatch.setattr(me, "DATA_ROOT", str(tmp_path))
+        monkeypatch.setattr(
+            me,
+            "cfg",
+            _fake_cfg(
+                mem0_embedding_provider="local",
+                sync_store_db_path=str(tmp_path / "data" / "sync_store.db"),
+            ),
+        )
+        monkeypatch.setattr("src.library.embed.model_present", lambda root: True)
+        monkeypatch.setattr(
+            "src.library.embed.load_encoder", lambda root, use_coreml=False: fake_provider
+        )
+
+        config = me.build_mem0_config()
+        assert config["vector_store"]["config"]["embedding_model_dims"] == 256
+        assert config["vector_store"]["config"]["path"].endswith("faiss_embeddinggemma-300m-q4-mrl256")
+        assert config["embedder"]["provider"] == "openai"
+
+        class _DummyMem:
+            def __init__(self):
+                self.embedding_model = object()
+
+        dummy_mem = _DummyMem()
+        fake_mem0_mod = types.ModuleType("mem0")
+
+        class _FakeMemory:
+            @classmethod
+            def from_config(cls, cfg_dict):
+                return dummy_mem
+
+        fake_mem0_mod.Memory = _FakeMemory
+        monkeypatch.setitem(sys.modules, "mem0", fake_mem0_mod)
+
+        engine = me.Mem0Engine()
+        mem = engine._memory()
+        assert mem is dummy_mem
+        assert isinstance(mem.embedding_model, me._LocalMem0Embedder)
+
+        q_vec = mem.embedding_model.embed("find invoice", memory_action="search")
+        a_vec = mem.embedding_model.embed("remember pref", memory_action="add")
+        assert len(q_vec) == 256 and q_vec[0] == 0.5
+        assert len(a_vec) == 256 and a_vec[0] == 1.0
+        assert calls == [
+            ("encode_query", "find invoice"),
+            ("encode", ["remember pref"]),
+        ]
+    finally:
+        reset_embedding_manager_for_tests()

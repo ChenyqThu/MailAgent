@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import time as _time
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
@@ -401,6 +401,90 @@ async def get_email_body(
 # ===========================================================================
 
 
+def _probe_email_semantic(repo: "EmailRepository") -> tuple[Optional[Any], dict[str, Any]]:
+    """Cheap status probe (zero ONNX model load) for email search Stage 1→2."""
+    try:
+        from src.semantic.service import get_semantic_service
+
+        svc = get_semantic_service(getattr(repo, "db_path", None))
+        st = svc.status()
+        avail = bool(st.get("available"))
+        return svc, {
+            "available": avail,
+            "model": st.get("model_id") if avail else None,
+            "indexed_emails": int(st.get("indexed_emails") or 0),
+        }
+    except Exception:  # noqa: BLE001 — degrade silently to pure FTS
+        return None, {"available": False, "model": None, "indexed_emails": 0}
+
+
+def _semantic_candidate_items(
+    repo: "EmailRepository",
+    candidate_ids: list[int],
+    *,
+    query: str,
+    mailbox: Optional[str],
+    since: Optional[str],
+    until: Optional[str],
+    matter_id: Optional[int],
+    map_priority: Any,
+) -> dict[int, dict[str, Any]]:
+    """Filter semantic hit IDs by active structured/matter filters & hydrate UI fields."""
+    if not candidate_ids or not hasattr(repo, "_connect"):
+        return {}
+    from src.repository.search_query import build_structured_filter_predicates, parse_search_query
+
+    parsed = parse_search_query(query)
+    filters, _ = build_structured_filter_predicates(
+        mailbox=mailbox, since_date=since, until_date=until
+    )
+    safe_dsl = [p for p in parsed.filters if "email_attachment" not in p.sql]
+    filters = [*filters, *safe_dsl]
+    if hasattr(repo, "_append_matter_filter"):
+        repo._append_matter_filter(filters, matter_id)
+
+    placeholders = ", ".join("?" for _ in candidate_ids)
+    params: list[Any] = [int(x) for x in candidate_ids]
+    where = repo._append_metadata_predicates(
+        f" WHERE m.internal_id IN ({placeholders})", params, filters
+    )
+    sql = (
+        "SELECT m.internal_id, m.subject, m.sender, m.date_received, m.mailbox,"
+        " m.notion_page_id, m.snippet, m.ai_priority,"
+        " substr(COALESCE(b.body_markdown, ''), 1, 180) AS body_head"
+        " FROM email_metadata m"
+        " LEFT JOIN email_body b ON b.internal_id = m.internal_id"
+        + where
+    )
+    conn = repo._connect()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+    out: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        iid = int(row["internal_id"])
+        raw_snip = (row["snippet"] or row["body_head"] or "").strip()
+        clean_snip = " ".join(raw_snip.split())[:160] if raw_snip else ""
+        out[iid] = {
+            "internal_id": iid,
+            "subject": row["subject"],
+            "sender": row["sender"],
+            "date_received": row["date_received"],
+            "mailbox": row["mailbox"],
+            "rank": None,
+            "snippet": clean_snip,
+            "notion_page_id": row["notion_page_id"],
+            "notion_url": None,
+            "source": "body",
+            "filename": None,
+            "ai_priority": map_priority(row["ai_priority"]),
+            "lang": None,
+        }
+    return out
+
+
 @router.get("/search", dependencies=[Depends(verify_cf_access)])
 async def search_emails(
     request: Request,
@@ -412,37 +496,23 @@ async def search_emails(
     limit: int = Query(50, ge=0, le=SEARCH_LIMIT_MAX),
     raw: bool = Query(False, description="true=直传 FTS5; false(默认)=查询语法 + CJK smart"),
     matter_id: Optional[int] = Query(None, ge=1),
+    search_mode: Literal["fts", "hybrid"] = Query("fts", description="fts=仅关键词; hybrid=FTS5+本地向量RRF"),
 ):
-    """FTS5 全文搜索邮件正文 + subject + sender。
-
-    默认 smart 模式支持 Search Query DSL v1 + CJK-aware query 改写；
-    raw=true 走原 FTS5 syntax。
-    data = SearchResult (前端 types.ts): {items, total_indexed, transformed_query?,
-    mode?, parse_warnings?}。meta += {query, mode, total_hits, limit, count,
-    transformed_query?, parse_warnings?} (镜像 CLI `email search` meta)。
-    FTS 语法错误 → 空命中 (repo 内部吞掉)。
-
-    G-B1a P1 (收敛单核, footer parity): 桌面搜索框改走本端点后, 空 query / limit==0
-    是「仅取 total_indexed 填 footer」的合法路径 (CommandPalette 空查询发
-    ``{query:'', limit:0}``)。空 q 或 limit==0 → 早返回 footer-only 形状
-    (items:[], total_indexed, total_matches:0, has_more:False), 不跑检索 / 不发
-    transformed_query / parse_warnings, 与 TS 空路径一致。
-
-    A5 (故意偏离 cli-schema): 本端点 ``data`` 是 SearchResult **对象** (含 total_indexed
-    等), **非** CLI `email search` emit 的命中数组 —— 因前端 types.ts EmailApi.search
-    返回 SearchResult。未来的 schema-conformance 测试勿据 cli-schema 数组形误报本端点。
-    """
+    """FTS5 全文搜索邮件正文 + subject + sender，支持按需本地轻量语义混合检索。"""
     mode = "raw" if raw else "smart"
 
     # G-B1a P1: 空 query / limit==0 → footer-only 早返回 (不跑检索)。
     if not q.strip() or limit == 0:
         total_indexed = _count_fts_indexed(repo)
+        _sem_svc, sem_info = _probe_email_semantic(repo)
         data: dict[str, Any] = {
             "items": [],
             "total_indexed": total_indexed,
             "total_matches": 0,
             "has_more": False,
             "mode": mode,
+            "search_mode": "fts",
+            "semantic": sem_info,
         }
         meta_extra: dict[str, Any] = {
             "query": q,
@@ -473,7 +543,7 @@ async def search_emails(
     # 函数内 import 破 email ↔ email_views 模块级循环 (两者都被 app 批量 import)。
     from src.api.routers.email_views import _map_language, _map_priority
 
-    items = [
+    fts_items = [
         {
             "internal_id": hit.internal_id,
             "subject": hit.subject,
@@ -495,6 +565,71 @@ async def search_emails(
         for hit in hits
     ]
 
+    sem_svc, sem_info = _probe_email_semantic(repo)
+    eff_search_mode = "fts"
+    items = fts_items
+    if (
+        search_mode == "hybrid"
+        and not raw
+        and sem_svc is not None
+        and sem_info["available"]
+        and sem_info["indexed_emails"] > 0
+    ):
+        try:
+            from src.library.repository import rrf_fuse
+            from src.repository.search_query import parse_search_query
+
+            parsed_q = parse_search_query(q)
+            has_nl = bool(
+                parsed_q.fts_terms
+                or parsed_q.fts_phrases
+                or parsed_q.fts_or_groups
+                or not parsed_q.filters
+            )
+            if has_nl:
+                vec_pairs = sem_svc.search_emails(q, limit=max(limit, 30))
+                eff_search_mode = "hybrid"
+                if vec_pairs:
+                    fts_by_id = {int(it["internal_id"]): it for it in fts_items}
+                    fts_ids = [int(it["internal_id"]) for it in fts_items]
+                    vec_ids_raw = [iid for iid, _sc in vec_pairs]
+                    missing_ids = [iid for iid in vec_ids_raw if iid not in fts_by_id]
+                    hydrated = (
+                        _semantic_candidate_items(
+                            repo,
+                            missing_ids,
+                            query=q,
+                            mailbox=mailbox,
+                            since=since,
+                            until=until,
+                            matter_id=matter_id,
+                            map_priority=_map_priority,
+                        )
+                        if missing_ids
+                        else {}
+                    )
+                    # Also validate vec hits already in FTS (guaranteed valid), dropping filtered-out IDs.
+                    valid_vec_ids = [
+                        iid for iid in vec_ids_raw if iid in fts_by_id or iid in hydrated
+                    ]
+                    if valid_vec_ids:
+                        fused = rrf_fuse(
+                            {"fts": fts_ids, "vec": valid_vec_ids}, limit=limit
+                        )
+                        merged: list[dict[str, Any]] = []
+                        for iid, score, lane in fused:
+                            row = fts_by_id.get(iid) or hydrated.get(iid)
+                            if row is None:
+                                continue
+                            cloned = dict(row)
+                            cloned["rank"] = -float(score)
+                            cloned["lane"] = lane
+                            merged.append(cloned)
+                        items = merged
+        except Exception:  # noqa: BLE001 — hybrid degradation must never break search
+            eff_search_mode = "fts"
+            items = fts_items
+
     total_indexed = _count_fts_indexed(repo)
     # Phase A G-A2: 本次命中数 (= len(items), ≤ limit) + 是否还有更多 (repo limit+1 探针)。
     # total_matches 取代 total_indexed (语料总量) 作搜索 agent 的自我收敛信号。
@@ -510,6 +645,8 @@ async def search_emails(
         "total_matches": total_matches,
         "has_more": has_more,
         "mode": mode,
+        "search_mode": eff_search_mode,
+        "semantic": sem_info,
     }
     transformed_changed = (not raw) and transformed_query != q
     if transformed_changed:

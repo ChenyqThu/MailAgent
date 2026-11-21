@@ -111,8 +111,8 @@ export const GATEWAY_LIBRARY_WRITE_TOOL_NAMES = [
  * 检索请求的 `mode` 用 `SEARCH_MODES`，命中行的 lane 徽标用 `SEARCH_LANES`。
  */
 
-/** 权重体积 —— 「下载语义模型（614 MB）」这句文案的单源。 */
-export const EMBED_MODEL_APPROX_BYTES = 614 * 1024 * 1024
+/** 权重体积 —— 「下载语义模型（208 MB）」这句文案的单源。 */
+export const EMBED_MODEL_APPROX_BYTES = 208 * 1024 * 1024
 
 /** 检索模式（`GET /library/search` 的 `mode` 入参）。 */
 export const SEARCH_MODES = ['fts', 'hybrid'] as const

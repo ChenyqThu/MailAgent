@@ -84,11 +84,13 @@ def test_chunk_edge_cases_empty_and_cap() -> None:
     assert len(capped) == 5
 
 
-def test_query_gets_instruct_prefix_and_documents_do_not() -> None:
+def test_query_gets_prefix_and_documents_do_not() -> None:
+    from src.library.constants import EMBED_QUERY_PREFIX
+
     q = E.query_text("预算超了多少")
-    assert q.startswith("Instruct: ") and "\nQuery: 预算超了多少" in q
+    assert q.startswith(EMBED_QUERY_PREFIX) and "预算超了多少" in q
     doc = E.chunk_text("预算超了多少" * 20, filename="a.md")[0]
-    assert "Instruct:" not in doc.payload, "文档侧带指令前缀会把向量拉向指令本身"
+    assert EMBED_QUERY_PREFIX not in doc.payload, "文档侧不得混入 query 前缀"
 
 
 def test_int8_quantization_is_one_byte_per_dim_and_keeps_direction() -> None:
@@ -400,26 +402,26 @@ def test_load_encoder_defaults_to_cpu_only():
 def test_vector_floor_stays_below_a_literal_phrase_match():
     """🔴 向量腿的地板是**噪声地板**，不是相关度阈值。
 
-    2026-09-03 用真权重实测：文档里**原样出现**的词组「续约条款」余弦只有 0.290，而旧值
-    0.3 恰好卡在它上面 —— 用户搜一句自己文档里的原话，向量腿一个结果都不给。地板必须留在
-    这条观测之下。（乱码 query 实测上限 0.232，所以 0.232 < 地板 < 0.290 是可用区间。）
+    Step 4A Apple Silicon 真机基准（EmbeddingGemma-300M Q4 @ 256d MRL + int8）：
+    乱码/无关 noise_max = 0.4472，真实目标 min = 0.5191，因此 0.4472 < 地板 < 0.5191 是标定区间。
     """
     from src.library.constants import VECTOR_MIN_SCORE
 
-    assert 0.232 < VECTOR_MIN_SCORE < 0.290
+    assert 0.4472 < VECTOR_MIN_SCORE < 0.5191
 
 
 def test_download_model_mirror_fallback_and_range_resume(tmp_path, monkeypatch) -> None:
-    """首个镜像失败自动回落 hf-mirror，且已有的 .part 文件按 HTTP Range 206 续传。"""
+    """首个镜像失败自动回落 hf-mirror，且已有的 .part 文件按 HTTP Range 206 续传，含 companion .onnx_data。"""
     import os
-    import types
     import requests
+    from src.library.constants import EMBED_MODEL_FILE
 
     root = str(tmp_path / "library")
     cache = E.cache_dir(root)
     os.makedirs(cache, exist_ok=True)
-    # 预置部分下载的 model_int8.onnx.part（前 3 字节）
-    with open(os.path.join(cache, "model_int8.onnx.part"), "wb") as fh:
+    main_name = os.path.basename(EMBED_MODEL_FILE)
+    # 预置部分下载的主模型 .part（前 3 字节）
+    with open(os.path.join(cache, f"{main_name}.part"), "wb") as fh:
         fh.write(b"abc")
 
     seen: list[tuple[str, dict[str, str]]] = []
@@ -450,7 +452,7 @@ def test_download_model_mirror_fallback_and_range_resume(tmp_path, monkeypatch) 
         seen.append((url, hdrs))
         if url.startswith("https://huggingface.co"):
             raise requests.ConnectionError("hf blocked")
-        if url.endswith("model_int8.onnx"):
+        if url.endswith(main_name):
             assert hdrs.get("Range") == "bytes=3-"
             return _FakeResp(206, b"def", {"Content-Range": "bytes 3-5/6", "content-length": "3"})
         return _FakeResp(200, b"{}", {"content-length": "2"})
@@ -465,21 +467,24 @@ def test_download_model_mirror_fallback_and_range_resume(tmp_path, monkeypatch) 
         chunk_bytes=2,
     )
     assert target == cache
-    with open(os.path.join(cache, "model_int8.onnx"), "rb") as fh:
+    with open(os.path.join(cache, main_name), "rb") as fh:
         assert fh.read() == b"abcdef"
-    assert not os.path.exists(os.path.join(cache, "model_int8.onnx.part"))
-    # 首文件在 huggingface.co 失败切到 hf-mirror.com，后续 tokenizer/config 直接先试 hf-mirror.com
+    assert not os.path.exists(os.path.join(cache, f"{main_name}.part"))
+    for req_file in E.MODEL_FILES:
+        assert os.path.isfile(os.path.join(cache, req_file))
+    # 首文件在 huggingface.co 失败切到 hf-mirror.com，后续文件/tokenizer/config 直接先试 hf-mirror.com
     assert seen[0][0].startswith("https://huggingface.co")
-    assert seen[1][0].startswith("https://hf-mirror.com")
-    assert seen[2][0].startswith("https://hf-mirror.com")
+    assert all(u.startswith("https://hf-mirror.com") for u, _h in seen[1:])
     assert any(m.get("mirror") == "hf-mirror.com" for m in metrics_seen)
-    assert progress_events[-1][0] == progress_events[-1][1] == 10
+    expected_total = 6 + 2 * (len(E.MODEL_FILES) - 1)
+    assert progress_events[-1][0] == progress_events[-1][1] == expected_total
 
 
 def test_download_cancellation_preserves_part_and_skips_index(svc: LibraryService, monkeypatch) -> None:
     import os
     import threading
     import requests
+    from src.library.constants import EMBED_MODEL_FILE
 
     cancel_ev = threading.Event()
 
@@ -504,7 +509,7 @@ def test_download_cancellation_preserves_part_and_skips_index(svc: LibraryServic
     monkeypatch.setattr(requests, "get", lambda *_a, **_kw: _StreamingResp())
     with pytest.raises(E.DownloadCancelled):
         E.download_model(svc.root_path, cancel_event=cancel_ev, chunk_bytes=4)
-    part_path = os.path.join(E.cache_dir(svc.root_path), "model_int8.onnx.part")
+    part_path = os.path.join(E.cache_dir(svc.root_path), f"{os.path.basename(EMBED_MODEL_FILE)}.part")
     assert os.path.isfile(part_path)
     with open(part_path, "rb") as fh:
         assert fh.read() == b"1234"

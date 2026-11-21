@@ -605,6 +605,14 @@ class Config(BaseSettings):
             "不受影响，恒照常合并。MEM0_EXPLICIT_EDIT_COOLDOWN_S env 可覆盖；≤0 关闭冷却（每轮照常）。"
         ),
     )
+    mem0_embedding_provider: str = Field(
+        default="fastembed",
+        validation_alias="MEM0_EMBEDDING_PROVIDER",
+        description=(
+            "mem0 长期记忆嵌入源: 'fastembed'(默认, 沿用 bge-small-en-v1.5 384d FAISS) 或 "
+            "'local'(复用 src.embedding 统一本地模型/本机 Ollama, FAISS 按模型隔离目录防混维)。"
+        ),
+    )
     # 🔴 字段名 memory_layers_enabled ≠ env MAILAGENT_MEMORY_LAYERS → 必须 validation_alias
     #    （pydantic v2 忽略 Field(env=)，见本类顶 model_config 注释）。
     memory_layers_enabled: bool = Field(

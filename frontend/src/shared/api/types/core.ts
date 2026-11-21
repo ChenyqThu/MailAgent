@@ -100,6 +100,12 @@ export interface SearchResult {
   transformed_query?: string
   parse_warnings?: string[]
   mode?: 'smart' | 'raw'
+  search_mode?: 'fts' | 'hybrid'
+  semantic?: {
+    available: boolean
+    model: string | null
+    indexed_emails: number
+  }
 }
 
 export interface ContactSuggestion {

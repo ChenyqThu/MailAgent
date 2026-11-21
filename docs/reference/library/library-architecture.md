@@ -394,7 +394,7 @@ sqlite3 "$DB" "SELECT id, label, mode, status FROM library_mount"
 
 | # | 事项 | 状态 |
 |---|---|---|
-| 1 | **语义检索的 PoC 未跑**：要先下载 614 MB 权重（`onnx-community/Qwen3-Embedding-0.6B-ONNX` 的 `onnx/model_int8.onnx`）才能测吞吐与中英混合 query 的召回。因此 `VECTOR_MIN_SCORE = 0.3` 是**待校准的起始值，不是实测结论**；「留 Qwen3 还是降级 jina」也没定 | 等 owner 放行下载 |
+| 1 | **语义检索的 PoC 已完成并切换**：实测选型为 `onnx-community/embeddinggemma-300m-ONNX`（`model_q4.onnx` + `model_q4.onnx_data`，共约 208 MB，256d MRL + BQ 两阶段检索），CPU 推理默认开启（CoreML 经实测在短 query 下更慢，`use_coreml=False`），`VECTOR_MIN_SCORE = 0.48`（基于负样与正样分布中点校准）；统一引擎收口至 `src/embedding/` 并支撑 `semantic_index.db` 邮件语义检索 | 已完成 |
 | 2 | 通知信源的**调用点**尚未接进 `src/library/service.py` 的 append / write 路径。`notify_library_file_written` 本身已就位并有测试。接线时的硬约束：**只在无人值守写入时发**、**必须在写事务 commit 之后**（事务内 publish 会与 NotifyCenter 的 `BEGIN IMMEDIATE` 死锁，`tests/notify/test_library_signals.py` 第 ⑤ 例已钉死后果） | 未做 |
 | 3 | standing prompt 尚未注入顶层文件夹清单 + 用途 + 文件总数（取数走 `GET /library/tree`）。**绝不注入文件清单** | 未做 |
 | 4 | `src/matters/run_spec.py` 的契约 prompt 一个字没提资料库（跟进 run 的【查证顺序】与行动项 run 的工具面清单都没有）。工具**是**放行的（读族 class `read`，belt 按 class 自动带进去），缺的只是契约里没告诉模型有这回事。行动项 run 该不该看见资料库需 owner 拍板 | 待拍板 |

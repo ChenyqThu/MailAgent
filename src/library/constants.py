@@ -103,18 +103,21 @@ GATEWAY_LIBRARY_WRITE_TOOL_NAMES: Tuple[str, ...] = (
 # 🔴 **没下载 = 纯 FTS**，模型在不在就是开关 —— 不加 ``MAILAGENT_*`` 灰度变量。
 
 #: 权重仓库与文件（onnx-community 的 Qwen3-Embedding-0.6B ONNX 导出）。
-EMBED_MODEL_REPO: str = "onnx-community/Qwen3-Embedding-0.6B-ONNX"
-EMBED_MODEL_FILE: str = "onnx/model_int8.onnx"
+EMBED_MODEL_REPO: str = "onnx-community/embeddinggemma-300m-ONNX"
+EMBED_MODEL_FILE: str = "onnx/model_q4.onnx"
+EMBED_MODEL_EXTRA_FILES: Tuple[str, ...] = ("onnx/model_q4.onnx_data",)
 #: ``library_chunk.model`` 的值。换模型 = 换这个 id，旧向量被查询的 ``WHERE model=?`` 自然排除。
-EMBED_MODEL_ID: str = "qwen3-embedding-0.6b-int8"
+EMBED_MODEL_ID: str = "embeddinggemma-300m-q4-mrl256"
 #: 向量维度（int8 量化后 1 KB / 块）。
-EMBED_DIM: int = 1024
+EMBED_DIM: int = 256
+EMBED_QUERY_PREFIX: str = "task: search result | query: "
+EMBED_DOC_PREFIX: str = "title: none | text: "
 #: 权重目录名（挂在库根下；库根的树 / 扫描只走 ROOT_WRITABLE_TOP，因此天然不被索引）。
 EMBED_CACHE_DIRNAME: str = "embed_cache"
 #: query 侧指令前缀的 task 描述（``Instruct: {task}\nQuery: {q}``）；**文档侧不带前缀**。
 EMBED_QUERY_TASK: str = "Given a search query, retrieve relevant documents from the personal library"
-#: 权重体积 —— 「下载语义模型（614 MB）」这句文案的单源。
-EMBED_MODEL_APPROX_BYTES: int = 614 * 1024 * 1024
+#: 权重体积 —— 「下载语义模型（208 MB）」这句文案的单源（~207.5 MB 实测含 onnx_data + tokenizer）。
+EMBED_MODEL_APPROX_BYTES: int = 208 * 1024 * 1024
 
 #: 切块：约 400 token 一块、15% 重叠（60 token）；比 CHUNK_MIN_TOKENS 还短的尾块并进上一块。
 CHUNK_TARGET_TOKENS: int = 400
@@ -123,7 +126,7 @@ CHUNK_MIN_TOKENS: int = 24
 #: 单文件块数上限（256 KB 抽取上限下的自然天花板，外加防病态文本）。
 CHUNK_MAX_PER_FILE: int = 400
 #: 模型上下文里给一块留的 token 上限（前缀 + 正文；超出由 tokenizer 截断）。
-CHUNK_MAX_MODEL_TOKENS: int = 640
+CHUNK_MAX_MODEL_TOKENS: int = 512
 
 #: 混合检索：两条 lane 各取 top-N 再 RRF。
 SEARCH_LANE_TOP_K: int = 50
@@ -143,8 +146,10 @@ SEARCH_RRF_K: int = 60
 #: 取 0.25 的理由只有一条：它压在实测乱码上限（0.232）之上、压在向量腿真正负责的最低真命中
 #: （0.290「续约条款」）之下。旧值 0.3 恰好卡在那条真命中上 —— 文档里**原样出现**的词组被挡掉。
 #: 落在地板下的短词（如 0.148 的「法务」）本就归关键词腿：CJK 两字走 LIKE，实测能命中。
-#: ⚠️ 校准集只有 2 份文档，样本很薄；真实库跑起来后应按同一方法重测。
-VECTOR_MIN_SCORE: float = 0.25
+#: Step 4A Apple Silicon 真机基准（EmbeddingGemma-300M Q4 @ 256d MRL + int8）：
+#:   乱码/无关 noise_max = 0.4472 · 真实命中 min = 0.5191 · p10 = 0.5460 · median = 0.6273
+#: 取 0.48 落在噪声上限（0.4472）与最低真命中（0.5191）的正中间区间。
+VECTOR_MIN_SCORE: float = 0.48
 #: 暴力点积的块数警戒线；超过它再考虑 faiss（design §9.1 「10 万块以内不上 faiss」）。
 VECTOR_BRUTE_FORCE_MAX_CHUNKS: int = 100000
 

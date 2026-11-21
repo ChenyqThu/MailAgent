@@ -23,7 +23,7 @@ from typing import Iterator, Optional
 
 from src.library.constants import FILE_STATUS, KINDS, MOUNT_MODES, MOUNT_STATUS, SOURCES, TEXT_STATUS
 
-LIBRARY_SCHEMA_VERSION = 2
+LIBRARY_SCHEMA_VERSION = 3
 LIBRARY_DB_FILENAME = "library.db"
 LIBRARY_DIRNAME = "library"
 
@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS library_chunk (
     text_hash   TEXT NOT NULL,
     source_hash TEXT NOT NULL,
     vec         BLOB NOT NULL,
+    bq_vec      BLOB,
     created_at  REAL NOT NULL,
     PRIMARY KEY (file_id, model, idx)
 );
@@ -204,6 +205,11 @@ class LibraryDb:
         try:
             conn.execute("PRAGMA journal_mode = WAL")
             conn.executescript(_DDL)
+            cols = {
+                str(r["name"]) for r in conn.execute("PRAGMA table_info(library_chunk)").fetchall()
+            }
+            if "bq_vec" not in cols:
+                conn.execute("ALTER TABLE library_chunk ADD COLUMN bq_vec BLOB")
             conn.execute(
                 "INSERT OR REPLACE INTO library_meta (key, value) VALUES ('schema_version', ?)",
                 (str(LIBRARY_SCHEMA_VERSION),),

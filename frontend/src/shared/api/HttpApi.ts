@@ -282,7 +282,8 @@ export class HttpApi implements MailApi {
           since: opts.since,
           until: opts.until,
           limit: opts.limit,
-          raw: opts.mode === 'raw' ? true : undefined
+          raw: opts.mode === 'raw' ? true : undefined,
+          search_mode: opts.searchMode
         }
       }),
 
