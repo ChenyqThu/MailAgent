@@ -70,6 +70,7 @@ def code_builtin_skills() -> tuple[BoundSkill, ...]:
     """代码内置 builtin skills（进程内缓存 —— 不随运行时变化）。新增 builtin 在此登记 builder。"""
     from src.skills.builtin import (
         agents,
+        artifact_studio,
         calendar,
         contacts,
         custom_agent,
@@ -100,6 +101,7 @@ def code_builtin_skills() -> tuple[BoundSkill, ...]:
         agents.build_skill(),
         email_organize.build_skill(),
         matter_write.build_skill(),
+        artifact_studio.build_skill(),
     )
 
 

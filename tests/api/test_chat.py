@@ -707,6 +707,7 @@ def test_chat_config_skill_catalog_lists_every_builtin(
         "agents",
         "email_organize",
         "matter_write",
+        "artifact_studio",
     }
     assert set(catalog[0]) == {
         "name",
@@ -867,15 +868,33 @@ def test_chat_config_custom_agent_fragment_follows_skill_toggle(
 ) -> None:
     """W6 workflow guidance is code-owned and follows the advertised-skill enablement snapshot.
 
-    🔴 `trustedSkillFragments == ""` 要成立，得把 TRUSTED_PROMPT_FRAGMENT_SKILLS 里**两个**
-    fragment 来源都通过 store override 显式关掉；Matters 是恒启用能力，但用户仍可关闭其
-    advertised skill fragment。"""
+    🔴 `trustedSkillFragments == ""` 要成立，得把 TRUSTED_PROMPT_FRAGMENT_SKILLS 里全部
+    fragment 来源都通过 store override 显式关掉；Matters / Artifact Studio 默认启用，
+    但用户仍可关闭其 advertised skill fragment。"""
     fresh_agent_cfg.set_enabled("custom_agent", False)
     fresh_agent_cfg.set_enabled("matters", False)
+    fresh_agent_cfg.set_enabled("artifact_studio", False)
     with _config_client(monkeypatch, _ChatConfigStub()) as c:
         data = c.get("/api/chat/config").json()["data"]
     assert "custom_agent" not in data["advertisedSkills"]
     assert data["trustedSkillFragments"] == ""
+
+
+def test_chat_config_artifact_studio_skill_fragment_reaches_system_prompt(
+    monkeypatch: pytest.MonkeyPatch, fresh_agent_cfg
+) -> None:
+    """artifact_studio 开启时既在 advertisedSkills 里，其 prompt_fragment 也进 trustedSkillFragments。"""
+    fresh_agent_cfg.set_enabled("artifact_studio", True)
+    with _config_client(monkeypatch, _ChatConfigStub()) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert "artifact_studio" in data["advertisedSkills"]
+    assert "artifact_write" in data["trustedSkillFragments"]
+
+    fresh_agent_cfg.set_enabled("artifact_studio", False)
+    with _config_client(monkeypatch, _ChatConfigStub()) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert "artifact_studio" not in data["advertisedSkills"]
+    assert "artifact_write" not in data["trustedSkillFragments"]
 
 
 def test_chat_config_matters_skill_fragment_reaches_system_prompt(

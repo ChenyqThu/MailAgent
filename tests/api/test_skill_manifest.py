@@ -80,6 +80,7 @@ EXPECTED_TOOLS = {
         "matter_item_add": ("write", "preview", ["matters:write"], True),
         "matter_item_update": ("write", "preview", ["matters:write"], True),
     },
+    "artifact_studio": {},
 }
 
 
