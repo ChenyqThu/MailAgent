@@ -153,6 +153,7 @@ def serve_api() -> None:
     """
     # 延迟 import: 避免 --help / 其他子命令解析时载入 fastapi / uvicorn / 整个后端链
     # (与 serve / 其它子命令一致)。
+    import importlib
     import os
 
     import uvicorn
@@ -164,9 +165,7 @@ def serve_api() -> None:
     from src.utils.mem_guard import maybe_start_tracemalloc, start_mem_guard
     from src.utils.parent_watchdog import start_parent_watchdog
 
-    maybe_start_tracemalloc()
     start_parent_watchdog()
-    start_mem_guard()
 
     host = "127.0.0.1"  # 硬绑 loopback (§6.5 startup assertion 二次校验)
     port = int(os.environ.get("MAILAGENT_API_PORT", "8200"))
@@ -174,6 +173,12 @@ def serve_api() -> None:
     # F1: app 的 lifespan loopback 断言读 MAILAGENT_API_HOST (不是 uvicorn 从不设的
     # UVICORN_HOST)。在 uvicorn.run 前显式落到 env，让那道二次兜底真正生效。
     os.environ["MAILAGENT_API_HOST"] = host
+
+    # 先完成一次性静态模块导入 (FastAPI / Pydantic / SDK 等), 再按 MAILAGENT_MEM_DIAG=1
+    # 开启 tracemalloc —— 避免 10 帧分配采样把冷启动 import 拖慢 ~20 倍。
+    importlib.import_module("src.api.app")
+    maybe_start_tracemalloc()
+    start_mem_guard()
 
     # 用 import string ("src.api.app:app") 而非 import 后的对象 (uvicorn reload/worker
     # 友好)；log_config=None 让 loguru/uvicorn 自身拥有日志 (与 serve 的 setup_logger

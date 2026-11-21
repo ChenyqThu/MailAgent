@@ -261,3 +261,45 @@ def test_maybe_start_tracemalloc_on(monkeypatch):
     finally:
         if not already_tracing:
             tracemalloc.stop()
+
+
+def test_tracemalloc_deferred_after_startup_imports():
+    """tracemalloc must start after one-shot static module imports complete."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    cli_text = (root / "src" / "cli" / "main.py").read_text(encoding="utf-8")
+    import_marker = 'importlib.import_module("src.api.app")'
+    trace_marker = "maybe_start_tracemalloc()"
+    uvicorn_marker = "uvicorn.run("
+    assert import_marker in cli_text
+    assert trace_marker in cli_text
+    assert (
+        cli_text.index(import_marker)
+        < cli_text.index(trace_marker)
+        < cli_text.index(uvicorn_marker)
+    )
+
+    service_text = (root / "src" / "service.py").read_text(encoding="utf-8")
+    app_marker = "app = EmailNotionSyncApp()"
+    start_marker = "await app.start()"
+    assert app_marker in service_text
+    assert trace_marker in service_text
+    assert (
+        service_text.index(app_marker)
+        < service_text.index(trace_marker)
+        < service_text.index(start_marker)
+    )
+
+
+def test_contact_profile_does_not_eagerly_import_llm_client():
+    """src.contacts.profile must not eagerly pull anthropic SDK at import time."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    profile_text = (root / "src" / "contacts" / "profile.py").read_text(encoding="utf-8")
+    for idx, line in enumerate(profile_text.splitlines(), start=1):
+        # Top-level (zero-indent) import would force anthropic SDK load on API startup.
+        assert not line.startswith("from src.llm_agent.client import"), (
+            f"Unexpected eager import at line {idx}: {line}"
+        )

@@ -1417,13 +1417,13 @@ async def run_service():
 
     # task 06-10-memleak-orphan: 打包态进程护栏 (全部 env-gated, pm2/dev 不设
     # 对应 env 时零行为变更)。
-    # - tracemalloc 诊断 (MAILAGENT_MEM_DIAG=1): 尽早启动才能覆盖后续分配。
     # - parent watchdog (MAILAGENT_PARENT_WATCHDOG=1): Electron force-quit /
     #   crash 后 PPID→1 即 os._exit, 防孤儿进程 (prd Fix 1b)。
+    # - tracemalloc 诊断 (MAILAGENT_MEM_DIAG=1): 延后至一次性启动导入与 DB 安全
+    #   检查完成后再开启, 保留运行时持续追踪的同时避免启动卡顿。
     from src.utils.mem_guard import maybe_start_tracemalloc, start_mem_guard
     from src.utils.parent_watchdog import start_parent_watchdog
 
-    maybe_start_tracemalloc()
     start_parent_watchdog()
 
     # E0-WP2 数据安全网: worker 未起、SyncStore 尚未打开 DB 的最早时点, 对 Python
@@ -1520,6 +1520,10 @@ async def run_service():
         logger.warning(f"[library] matters resolver 未装上 (事项里的库文件会显示不可用): {e}")
 
     app = EmailNotionSyncApp()
+
+    # 一次性模块导入与 DB 检查完成后再开启 tracemalloc (MAILAGENT_MEM_DIAG=1),
+    # 覆蓋主循环及后台 worker 的运行时分配而不拖慢启动。
+    maybe_start_tracemalloc()
 
     # mem guard (MAILAGENT_MEM_LIMIT_MB): RSS 超限 → 诊断 dump + 优雅退出 +
     # 60s 硬兜底 (prd Fix 2a)。on_breach 在 guard 线程里跑, 而 _shutdown_event

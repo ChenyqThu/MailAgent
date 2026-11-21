@@ -9,7 +9,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 from jsonschema import ValidationError, validate
 from loguru import logger
@@ -38,9 +38,11 @@ from src.contacts.profile_prompts import (
 )
 from src.contacts.repository import ContactRepository
 from src.contacts.taxonomy import CONTACT_KIND_PERSON, strip_evidence_refs
-from src.llm_agent.client import LLMCallError, LLMClient
 from src.kos.client import KOSClient
 from src.repository.email_repository import EmailRepository
+
+if TYPE_CHECKING:
+    from src.llm_agent.client import LLMClient
 
 PROFILE_MIN = 50
 PROFILE_INCREMENTAL_MIN = 10
@@ -500,6 +502,8 @@ async def generate_contact_profile(
     now_ms = now_ms or int(time.time() * 1000)
     cfg = cfg or get_contact_profile_agent_config(db_path)
     org_frame = load_org_frame()
+    from src.llm_agent.client import LLMCallError, LLMClient
+
     try:
         conn = ContactRepository(db_path).connect()
         try:
