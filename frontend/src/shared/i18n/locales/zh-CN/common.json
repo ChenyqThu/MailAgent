@@ -1169,8 +1169,10 @@
       "library_write": "写入资料库文件",
       "library_move": "移动资料库文件",
       "library_delete": "删除资料库文件",
+      "omada_catalog_query": "查询 Omada 组件目录",
       "artifact_write": "生成交互产物",
-      "artifact_build_omada": "构建 Omada 原型"
+      "artifact_build_omada": "构建 Omada 原型",
+      "artifact_publish_bundle": "发布产物到云端"
     },
     "planCard": {
       "title": "计划",
@@ -2032,6 +2034,7 @@
     },
     "artifactWriteCard": {
       "title": "交互产物",
+      "publishTitle": "发布产物到云端",
       "typeLabel": "类型",
       "pathLabel": "保存路径",
       "noteLabel": "变更说明",

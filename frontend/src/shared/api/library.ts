@@ -112,6 +112,16 @@ export interface ArtifactBundlePublishResult {
   raw_url?: string
 }
 
+export interface ArtifactPreviewTokenResult {
+  ok: true
+  token: string
+  slug: string
+  version: number
+  entry_path: string
+  preview_url: string
+  ttl_seconds: number
+}
+
 export interface LibraryEmbedStatus {
   model: {
     /** 权重在不在就是开关（design §9.1：不加 `MAILAGENT_*` flag）。 */
@@ -259,6 +269,11 @@ export interface LibraryApi {
     change_note?: string
     entry_path?: string
   }): Promise<ArtifactBundlePublishResult>
+  issueArtifactPreviewToken(input: {
+    slug: string
+    version?: number
+    entry_path?: string
+  }): Promise<ArtifactPreviewTokenResult>
 }
 
 export function createLibraryApi(baseUrl: string): LibraryApi {
@@ -472,6 +487,20 @@ export function createLibraryApi(baseUrl: string): LibraryApi {
           project: input.project ?? null,
           visibility: input.visibility ?? null,
           change_note: input.change_note ?? null,
+          entry_path: input.entry_path ?? 'index.html'
+        }
+      })
+    },
+
+    issueArtifactPreviewToken(input: {
+      slug: string
+      version?: number
+      entry_path?: string
+    }): Promise<ArtifactPreviewTokenResult> {
+      return request(baseUrl, 'POST', '/library/artifacts/preview-token', {
+        body: {
+          slug: input.slug,
+          version: input.version ?? null,
           entry_path: input.entry_path ?? 'index.html'
         }
       })

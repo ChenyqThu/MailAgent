@@ -830,8 +830,16 @@ export function deriveSessionWorkspace(
           continue
         }
 
-        if (mcp && (mcp.action === 'artifact_publish' || tc.toolName.endsWith('__artifact_publish'))) {
-          const payload = parseMcpArtifactPublishPayload(resObj)
+        if (
+          tc.toolName === 'artifact_publish_bundle' ||
+          (mcp && (mcp.action === 'artifact_publish' || tc.toolName.endsWith('__artifact_publish')))
+        ) {
+          const payload =
+            tc.toolName === 'artifact_publish_bundle'
+              ? resObj && resObj.ok !== false
+                ? resObj
+                : null
+              : parseMcpArtifactPublishPayload(resObj)
           if (payload) {
             const slug = nonEmptyStr(payload.slug) ?? nonEmptyStr(argsObj?.slug)
             const linksObj = asRecord(payload.links)

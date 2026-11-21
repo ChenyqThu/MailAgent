@@ -12,6 +12,8 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -20,11 +22,29 @@ from src.config import config
 from src.library.constants import AGENT_DOCS_SLUG
 from src.library.service import Actor, LibraryError, LibraryService
 
+OMADA_NPM_PACKAGE = "@chenyqthu/omada-ui-kit"
+OMADA_CDN_CSS_URL = "https://cdn.jsdelivr.net/npm/@chenyqthu/omada-ui-kit@latest/dist/style.css"
+OMADA_CDN_STANDALONE_URL = "https://cdn.jsdelivr.net/npm/@chenyqthu/omada-ui-kit@latest/dist/standalone.js"
+OMADA_CDN_CATALOG_URL = "https://cdn.jsdelivr.net/npm/@chenyqthu/omada-ui-kit@latest/dist/catalog.json"
+OMADA_CDN_BABEL_URL = "https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"
+
+_CATALOG_CDN_TTL_SEC = 600.0
+_CATALOG_QUERY_ACTIONS = frozenset({
+    "info",
+    "list_components",
+    "component",
+    "search_icons",
+    "search_assets",
+    "tokens",
+    "recipes",
+})
+_ASSET_GROUPS = frozenset({"products", "illustrations", "clients", "brand"})
+
 _ARTIFACTS_PREFIX = f"{AGENT_DOCS_SLUG}/artifacts"
 _SLUG_MAX_LEN = 64
 _BUILD_HARNESS_DIRNAME = ".mailagent-build"
 _DEFAULT_BUILD_TIMEOUT_SEC = 90
-_PREVIEW_TOKEN_TTL_SEC = 1800.0
+_PREVIEW_TOKEN_TTL_SEC = 86400.0
 _PREVIEW_MAX_TOKENS = 256
 _MAX_BUNDLE_FILES = 100
 _MAX_BUNDLE_TOTAL_BYTES = 20 * 1024 * 1024  # Matches artifact-server MAX_TOTAL_BYTES (20 MiB)
@@ -76,6 +96,10 @@ class _PreviewEntry:
 
 _PREVIEW_LOCK = threading.Lock()
 _PREVIEW_TOKENS: dict[str, _PreviewEntry] = {}
+
+_CATALOG_LOCK = threading.Lock()
+_LOCAL_CATALOG_CACHE: Optional[tuple[str, int, dict[str, Any]]] = None
+_CDN_CATALOG_CACHE: Optional[tuple[float, dict[str, Any]]] = None
 
 
 def normalize_artifact_slug(raw: str) -> str:
@@ -180,6 +204,284 @@ def read_omada_catalog(kit_root: Optional[str | Path] = None) -> dict[str, Any]:
         "symbol_count": len(exported),
         "css_modules": css_modules,
         "components_doc": components_md,
+    }
+
+
+def clear_omada_catalog_cache() -> None:
+    """Clear cached local and CDN Omada UI Kit catalog data."""
+    global _LOCAL_CATALOG_CACHE, _CDN_CATALOG_CACHE
+    with _CATALOG_LOCK:
+        _LOCAL_CATALOG_CACHE = None
+        _CDN_CATALOG_CACHE = None
+
+
+def _resolve_catalog_root(explicit_root: Optional[str | Path] = None) -> Path:
+    raw = str(explicit_root).strip() if explicit_root else (config.omada_kit_root or "").strip()
+    return Path(raw).expanduser() if raw else (Path.home() / "Documents" / "omada-ui-kit")
+
+
+def _validate_catalog_payload(payload: Any, origin: str) -> dict[str, Any]:
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("components"), list)
+        or not isinstance(payload.get("assets"), dict)
+    ):
+        raise LibraryError("E_REMOTE_ERROR", f"invalid omada catalog payload from {origin}")
+    return payload
+
+
+def _load_omada_catalog_json(kit_root: Optional[str | Path] = None) -> tuple[dict[str, Any], str]:
+    """Load catalog.json from local omada-ui-kit first, falling back to jsDelivr CDN with TTL cache."""
+    global _LOCAL_CATALOG_CACHE, _CDN_CATALOG_CACHE
+    root = _resolve_catalog_root(kit_root)
+    for rel in ("dist/catalog.json", "skills/omada-ui-kit/references/catalog.json"):
+        candidate = root / rel
+        try:
+            if not candidate.is_file():
+                continue
+            resolved = str(candidate.resolve())
+            mtime_ns = candidate.stat().st_mtime_ns
+        except OSError:
+            continue
+
+        with _CATALOG_LOCK:
+            if (
+                _LOCAL_CATALOG_CACHE is not None
+                and _LOCAL_CATALOG_CACHE[0] == resolved
+                and _LOCAL_CATALOG_CACHE[1] == mtime_ns
+            ):
+                return _LOCAL_CATALOG_CACHE[2], "local"
+
+        try:
+            data = _validate_catalog_payload(
+                json.loads(candidate.read_text(encoding="utf-8")),
+                resolved,
+            )
+        except (OSError, json.JSONDecodeError, LibraryError):
+            continue
+
+        with _CATALOG_LOCK:
+            _LOCAL_CATALOG_CACHE = (resolved, mtime_ns, data)
+        return data, "local"
+
+    now_mono = time.monotonic()
+    with _CATALOG_LOCK:
+        if _CDN_CATALOG_CACHE is not None and (now_mono - _CDN_CATALOG_CACHE[0]) < _CATALOG_CDN_TTL_SEC:
+            return _CDN_CATALOG_CACHE[1], "cdn"
+
+    req = urllib.request.Request(
+        OMADA_CDN_CATALOG_URL,
+        headers={"User-Agent": "MailAgent/1.0", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw_text = resp.read().decode("utf-8")
+        data = _validate_catalog_payload(json.loads(raw_text), OMADA_CDN_CATALOG_URL)
+    except (OSError, urllib.error.URLError, ValueError, LibraryError) as exc:
+        raise LibraryError(
+            "E_NOT_FOUND",
+            f"failed to load omada-ui-kit catalog from local workspace or CDN: {exc}",
+            hint="Ensure ~/Documents/omada-ui-kit/dist/catalog.json exists or network access to jsDelivr is available",
+        ) from exc
+
+    with _CATALOG_LOCK:
+        _CDN_CATALOG_CACHE = (time.monotonic(), data)
+    return data, "cdn"
+
+
+def query_omada_catalog(
+    action: str = "info",
+    *,
+    query: Optional[str] = None,
+    asset_group: Optional[str] = None,
+    theme: str = "light",
+    limit: int = 25,
+    kit_root: Optional[str | Path] = None,
+) -> dict[str, Any]:
+    """Query @chenyqthu/omada-ui-kit components, props, Figma assets, tokens, and recipes."""
+    clean_action = (action or "").strip().lower()
+    if clean_action not in _CATALOG_QUERY_ACTIONS:
+        raise LibraryError(
+            "E_INVALID_ARG",
+            f"invalid omada catalog action: {action!r}",
+            hint=f"action must be one of: {', '.join(sorted(_CATALOG_QUERY_ACTIONS))}",
+        )
+
+    try:
+        clamped_limit = max(1, min(100, int(limit if limit is not None else 25)))
+    except (TypeError, ValueError) as exc:
+        raise LibraryError("E_INVALID_ARG", f"invalid limit: {limit!r}") from exc
+
+    q_clean = (query or "").strip()
+    q_lower = q_clean.lower()
+
+    catalog, source = _load_omada_catalog_json(kit_root)
+    components = [c for c in (catalog.get("components") or []) if isinstance(c, dict)]
+    assets = catalog.get("assets") if isinstance(catalog.get("assets"), dict) else {}
+
+    if clean_action == "info":
+        pkg_raw = catalog.get("package") if isinstance(catalog.get("package"), dict) else {}
+        cdn_raw = pkg_raw.get("cdn") if isinstance(pkg_raw.get("cdn"), dict) else {}
+        cdn = {
+            "jsdelivrCss": OMADA_CDN_CSS_URL,
+            "jsdelivrStandalone": OMADA_CDN_STANDALONE_URL,
+            "catalogUrl": OMADA_CDN_CATALOG_URL,
+            **cdn_raw,
+            "babelUrl": OMADA_CDN_BABEL_URL,
+        }
+        pkg = {
+            "name": OMADA_NPM_PACKAGE,
+            **pkg_raw,
+            "cdn": cdn,
+        }
+        categories = sorted({str(c.get("category") or "") for c in components if c.get("category")})
+        return {
+            "ok": True,
+            "source": source,
+            "package": pkg,
+            "counts": catalog.get("counts") or {},
+            "categories": categories,
+            "icon_categories": list(assets.get("iconCategories") or []),
+        }
+
+    if clean_action == "list_components":
+        if not q_lower:
+            matched = [c for c in components if c.get("kind") not in ("antd-primitive", "data")]
+        else:
+            matched = [c for c in components if str(c.get("category") or "").lower() == q_lower]
+            if not matched:
+                matched = [
+                    c
+                    for c in components
+                    if q_lower in str(c.get("name") or "").lower()
+                    or q_lower in str(c.get("category") or "").lower()
+                    or q_lower in str(c.get("description") or "").lower()
+                ]
+        categories = sorted({str(c.get("category") or "") for c in matched if c.get("category")})
+        items = [
+            {
+                "name": c.get("name"),
+                "category": c.get("category"),
+                "kind": c.get("kind"),
+                "prop_count": len(c.get("props") or []),
+                "description": str(c.get("description") or "")[:200],
+            }
+            for c in matched
+        ]
+        return {
+            "ok": True,
+            "source": source,
+            "query": q_clean,
+            "total": len(items),
+            "categories": categories,
+            "items": items,
+        }
+
+    if clean_action == "component":
+        if not q_lower:
+            raise LibraryError("E_INVALID_ARG", "query (component name) is required for action='component'")
+        exact = [c for c in components if str(c.get("name") or "").lower() == q_lower]
+        matched = exact[:1] if exact else [c for c in components if q_lower in str(c.get("name") or "").lower()][:8]
+        return {
+            "ok": True,
+            "source": source,
+            "query": q_clean,
+            "matches": [
+                {
+                    "name": c.get("name"),
+                    "category": c.get("category"),
+                    "kind": c.get("kind"),
+                    "description": c.get("description") or "",
+                    "sourcePath": c.get("sourcePath"),
+                    "extends": c.get("extends"),
+                    "propsType": c.get("propsType"),
+                    "props": list(c.get("props") or []),
+                }
+                for c in matched
+            ],
+        }
+
+    if clean_action == "search_icons":
+        icons = [item for item in (assets.get("icons") or []) if isinstance(item, dict)]
+        matched = [
+            icon
+            for icon in icons
+            if not q_lower
+            or q_lower in str(icon.get("name") or "").lower()
+            or q_lower in str(icon.get("category") or "").lower()
+            or q_lower in str(icon.get("figmaName") or "").lower()
+        ]
+        sliced = matched[:clamped_limit]
+        return {
+            "ok": True,
+            "source": source,
+            "query": q_clean,
+            "total_matches": len(matched),
+            "showing": len(sliced),
+            "items": sliced,
+            "categories": list(assets.get("iconCategories") or []),
+        }
+
+    if clean_action == "search_assets":
+        group = (asset_group or "products").strip().lower()
+        if group not in _ASSET_GROUPS:
+            raise LibraryError(
+                "E_INVALID_ARG",
+                f"invalid asset_group: {group!r}",
+                hint="asset_group must be one of: products, illustrations, clients, brand",
+            )
+        entries = [item for item in (assets.get(group) or []) if isinstance(item, dict)]
+        matched = [
+            entry
+            for entry in entries
+            if not q_lower
+            or q_lower in str(entry.get("name") or "").lower()
+            or q_lower in str(entry.get("category") or "").lower()
+        ]
+        sliced = matched[:clamped_limit]
+        return {
+            "ok": True,
+            "source": source,
+            "group": group,
+            "query": q_clean,
+            "total_matches": len(matched),
+            "showing": len(sliced),
+            "items": sliced,
+        }
+
+    if clean_action == "tokens":
+        mode = "dark" if (theme or "").strip().lower() == "dark" else "light"
+        tokens = catalog.get("tokens") if isinstance(catalog.get("tokens"), dict) else {}
+        semantic_all = tokens.get("semantic") if isinstance(tokens.get("semantic"), dict) else {}
+        port_all = tokens.get("portColors") if isinstance(tokens.get("portColors"), dict) else {}
+        palette_all = tokens.get("chartPalette")
+        chart_palette = palette_all.get(mode) if isinstance(palette_all, dict) else palette_all
+        return {
+            "ok": True,
+            "source": source,
+            "theme": mode,
+            "semantic": semantic_all.get(mode),
+            "layout": tokens.get("layout"),
+            "radius": tokens.get("radius"),
+            "portColors": port_all.get(mode),
+            "chartPalette": chart_palette,
+        }
+
+    # clean_action == "recipes"
+    recipes = [r for r in (catalog.get("recipes") or []) if isinstance(r, dict)]
+    matched_recipes = [
+        r
+        for r in recipes
+        if not q_lower
+        or q_lower in str(r.get("id") or "").lower()
+        or q_lower in str(r.get("title") or "").lower()
+        or q_lower in str(r.get("summary") or "").lower()
+    ]
+    return {
+        "ok": True,
+        "source": source,
+        "query": q_clean,
+        "recipes": matched_recipes,
     }
 
 
@@ -304,16 +606,23 @@ def resolve_preview_file(token: str, rel_path: str = "") -> Path:
     return resolved
 
 
+def _render_entry_css(clean_slug: str) -> str:
+    return f"""@import "../../src/styles/tokens.css";
+@source "../../src/omada";
+@source "../../src/demos/{clean_slug}";
+"""
+
+
 def _render_entry_tsx(clean_slug: str, theme_mode: Literal["light", "dark"], css_modules: list[str]) -> str:
     module_imports = "\n".join(f"import '../../src/styles/modules/{name}';" for name in css_modules)
     safe_theme = "dark" if theme_mode == "dark" else "light"
     return f"""import React from 'react';
 import ReactDOM from 'react-dom/client';
-import '@fontsource/manrope/400.css';
-import '@fontsource/manrope/500.css';
-import '@fontsource/manrope/600.css';
-import '@fontsource/manrope/700.css';
-import '../../src/styles/tokens.css';
+import '@fontsource/manrope/latin-400.css';
+import '@fontsource/manrope/latin-500.css';
+import '@fontsource/manrope/latin-600.css';
+import '@fontsource/manrope/latin-700.css';
+import './entry.css';
 import '../../src/styles/omada-antd-overrides.css';
 {module_imports}
 import {{ OmadaProvider }} from '@/omada';
@@ -370,11 +679,71 @@ import tailwindcss from '@tailwindcss/vite';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const kitRoot = path.resolve(__dirname, '../..');
+const omadaDirPrefix = path.resolve(kitRoot, 'src/omada') + path.sep;
+
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');
+}
+
+function inlineSingleFilePlugin() {
+  return {
+    name: 'mailagent-inline-singlefile',
+    enforce: 'post',
+    generateBundle(_options, bundle) {
+      const htmlEntry = bundle['index.html'];
+      if (!htmlEntry || htmlEntry.type !== 'asset' || typeof htmlEntry.source !== 'string') {
+        return;
+      }
+      let html = htmlEntry.source;
+      const toDelete = [];
+
+      for (const [fileName, asset] of Object.entries(bundle)) {
+        if (asset.type !== 'asset' || !fileName.endsWith('.css')) continue;
+        const cssText = typeof asset.source === 'string'
+          ? asset.source
+          : Buffer.from(asset.source).toString('utf8');
+        const escaped = escapeRegExp(fileName);
+        const linkRe = new RegExp(
+          `<link[^>]+rel=["']stylesheet["'][^>]*href=["'](?:\\.\\/)?${escaped}["'][^>]*>|<link[^>]+href=["'](?:\\.\\/)?${escaped}["'][^>]*rel=["']stylesheet["'][^>]*>`,
+          'gi'
+        );
+        if (linkRe.test(html)) {
+          html = html.replace(linkRe, () => `<style>${cssText}</style>`);
+          toDelete.push(fileName);
+        }
+      }
+
+      for (const [fileName, chunk] of Object.entries(bundle)) {
+        if (chunk.type !== 'chunk' || !fileName.endsWith('.js')) continue;
+        const escaped = escapeRegExp(fileName);
+        const preloadRe = new RegExp(
+          `<link[^>]+rel=["']modulepreload["'][^>]*href=["'](?:\\.\\/)?${escaped}["'][^>]*>\\s*`,
+          'gi'
+        );
+        html = html.replace(preloadRe, '');
+        const scriptRe = new RegExp(
+          `<script[^>]+src=["'](?:\\.\\/)?${escaped}["'][^>]*>\\s*<\\/script>`,
+          'gi'
+        );
+        if (scriptRe.test(html)) {
+          const safeCode = chunk.code.replace(/<\\/(script)/gi, '<\\\\/$1');
+          html = html.replace(scriptRe, () => `<script type="module">${safeCode}<\\/script>`);
+          toDelete.push(fileName);
+        }
+      }
+
+      htmlEntry.source = html;
+      for (const key of toDelete) {
+        delete bundle[key];
+      }
+    },
+  };
+}
 
 export default defineConfig({
   root: __dirname,
   base: './',
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), inlineSingleFilePlugin()],
   resolve: {
     alias: {
       '@': path.resolve(kitRoot, 'src'),
@@ -384,7 +753,26 @@ export default defineConfig({
     outDir: path.resolve(__dirname, 'dist'),
     emptyOutDir: true,
     sourcemap: false,
+    cssCodeSplit: false,
+    assetsInlineLimit: 100 * 1024,
     chunkSizeWarningLimit: 6000,
+    rolldownOptions: {
+      treeshake: {
+        moduleSideEffects(id) {
+          const cleanId = id.split('?')[0];
+          if (
+            cleanId.startsWith(omadaDirPrefix) &&
+            (cleanId.endsWith('.ts') || cleanId.endsWith('.tsx'))
+          ) {
+            return false;
+          }
+          return true;
+        },
+      },
+      output: {
+        inlineDynamicImports: true,
+      },
+    },
   },
 });
 """
@@ -437,6 +825,7 @@ def build_omada_demo(
     built_files: list[tuple[str, bytes]] = []
     try:
         (harness_dir / "index.html").write_text(_render_index_html(clean_title), encoding="utf-8")
+        (harness_dir / "entry.css").write_text(_render_entry_css(clean_slug), encoding="utf-8")
         (harness_dir / "entry.tsx").write_text(
             _render_entry_tsx(clean_slug, theme_mode, css_modules), encoding="utf-8"
         )

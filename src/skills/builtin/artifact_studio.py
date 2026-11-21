@@ -20,6 +20,8 @@ Rules:
   fill gaps with placeholders.
 - Reuse the same `slug` when revising an existing artifact so `artifact_write` produces clean immutable
   versions (`v1`, `v2`, ...).
+- When the user asks to publish a saved artifact to Canvas Artifact Server, call `artifact_publish_bundle`
+  (passing `slug` and optional `visibility`) rather than pasting large HTML into MCP arguments.
 - Do not call `artifact_write` for short inline chat answers that are better served as plain Markdown."""
 
 

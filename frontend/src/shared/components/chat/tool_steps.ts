@@ -190,8 +190,10 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'library_write',
   'library_move',
   'library_delete',
+  'omada_catalog_query',
   'artifact_write',
   'artifact_build_omada',
+  'artifact_publish_bundle',
   // notion
   'notion_agent_chat',
   // feedback (task 08-27 P4a)

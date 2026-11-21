@@ -17,6 +17,9 @@ export interface ArtifactWriteInput {
   html: string | null
   code: string | null
   changeNote: string | null
+  version: number | null
+  visibility: string | null
+  project: string | null
 }
 
 export interface ArtifactWriteOutput {
@@ -31,6 +34,9 @@ export interface ArtifactWriteOutput {
   fileCount: number | null
   buildMs: number | null
   sourceDemo: string | null
+  reviewUrl: string | null
+  shareUrl: string | null
+  rawUrl: string | null
   issues: string[]
   warnings: string[]
 }
@@ -81,7 +87,10 @@ export function readArtifactWriteInput(
     artifactType: asArtifactType(obj?.artifact_type) ?? (code ? 'app' : null),
     html: typeof obj?.html === 'string' && obj.html.length > 0 ? obj.html : null,
     code,
-    changeNote: str(obj?.change_note)
+    changeNote: str(obj?.change_note),
+    version: positiveInt(obj?.version),
+    visibility: str(obj?.visibility),
+    project: str(obj?.project)
   }
 }
 
@@ -100,6 +109,9 @@ export function readArtifactWriteOutput(result: unknown): ArtifactWriteOutput | 
     fileCount: positiveInt(obj.file_count),
     buildMs: nonNegInt(obj.build_ms),
     sourceDemo: str(obj.source_demo),
+    reviewUrl: str(obj.review_url),
+    shareUrl: str(obj.share_url),
+    rawUrl: str(obj.raw_url),
     issues: strList(obj.issues),
     warnings: strList(obj.warnings)
   }

@@ -2730,6 +2730,36 @@ export class MailAgentDomainClient {
     return this._req<Record<string, unknown>>('GET', '/library/omada/catalog', { signal })
   }
 
+  /** Query @chenyqthu/omada-ui-kit structured catalog (props, Figma assets, tokens, CDN URLs, recipes). */
+  libraryQueryOmadaCatalog(
+    input: {
+      action:
+        | 'info'
+        | 'list_components'
+        | 'component'
+        | 'search_icons'
+        | 'search_assets'
+        | 'tokens'
+        | 'recipes'
+      query?: string
+      assetGroup?: 'products' | 'illustrations' | 'clients' | 'brand'
+      theme?: 'light' | 'dark'
+      limit?: number
+    },
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('GET', '/library/omada/catalog', {
+      query: {
+        action: input.action,
+        query: input.query,
+        asset_group: input.assetGroup,
+        theme: input.theme,
+        limit: input.limit
+      },
+      signal
+    })
+  }
+
   /** Compile a real omada-ui-kit TSX demo with Vite, ingest dist/ into Library, and issue preview URL. */
   libraryBuildOmadaDemo(
     input: {
@@ -2764,6 +2794,35 @@ export class MailAgentDomainClient {
       body: {
         slug: input.slug,
         version: input.version ?? null,
+        entry_path: input.entryPath ?? 'index.html'
+      },
+      signal
+    })
+  }
+
+  /** Publish a saved local artifact directory / bundle to Canvas Artifact Server. */
+  libraryPublishArtifactBundle(
+    input: {
+      slug: string
+      version?: number
+      title?: string
+      artifactType?: string
+      project?: string
+      visibility?: 'private' | 'unlisted' | 'public'
+      changeNote?: string
+      entryPath?: string
+    },
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('POST', '/library/artifacts/publish-bundle', {
+      body: {
+        slug: input.slug,
+        version: input.version ?? null,
+        title: input.title ?? null,
+        artifact_type: input.artifactType ?? 'app',
+        project: input.project ?? null,
+        visibility: input.visibility ?? null,
+        change_note: input.changeNote ?? null,
         entry_path: input.entryPath ?? 'index.html'
       },
       signal

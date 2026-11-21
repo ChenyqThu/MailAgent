@@ -88,23 +88,58 @@ describe('lintArtifactHtml', () => {
     expect(res.errors).toEqual([])
     expect(res.warnings).toEqual([])
   })
+
+  test('passes cleanly on Mode A @chenyqthu/omada-ui-kit CDN + text/babel single-file HTML', () => {
+    const modeAHtml = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Omada PRD Demo</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@chenyqthu/omada-ui-kit@latest/dist/style.css" />
+    <script src="https://cdn.jsdelivr.net/npm/@chenyqthu/omada-ui-kit@latest/dist/standalone.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  </head>
+  <body style="margin: 0;">
+    <div id="root"></div>
+    <script type="text/babel">
+      const { OmadaProvider, SButton } = window.OmadaUI;
+      OmadaUI.render(<OmadaProvider><SButton variant="primary">OK</SButton></OmadaProvider>, '#root');
+    </script>
+  </body>
+</html>`
+    const res = lintArtifactHtml(modeAHtml)
+    expect(res.errors).toEqual([])
+    expect(res.warnings).toEqual([])
+  })
 })
 
 describe('artifact_write tool', () => {
-  test('registers under approvalGuard as domain_write and CORE_UNGATED', () => {
-    expect(GATEWAY_ARTIFACT_TOOL_NAMES).toEqual(['artifact_write', 'artifact_build_omada'])
+  test('registers under approvalGuard with expected policy classes and CORE_UNGATED', () => {
+    expect(GATEWAY_ARTIFACT_TOOL_NAMES).toEqual([
+      'omada_catalog_query',
+      'artifact_write',
+      'artifact_build_omada',
+      'artifact_publish_bundle'
+    ])
+    expect(GATEWAY_TOOL_CLASSES.omada_catalog_query).toBe('read')
     expect(GATEWAY_TOOL_CLASSES.artifact_write).toBe('domain_write')
     expect(GATEWAY_TOOL_CLASSES.artifact_build_omada).toBe('domain_write')
+    expect(GATEWAY_TOOL_CLASSES.artifact_publish_bundle).toBe('domain_write')
+    expect(CORE_UNGATED_GATEWAY_TOOLS.has('omada_catalog_query')).toBe(true)
     expect(CORE_UNGATED_GATEWAY_TOOLS.has('artifact_write')).toBe(true)
     expect(CORE_UNGATED_GATEWAY_TOOLS.has('artifact_build_omada')).toBe(true)
+    expect(CORE_UNGATED_GATEWAY_TOOLS.has('artifact_publish_bundle')).toBe(true)
 
     const tools = buildGatewayTools({
       domain: domainWith(() => ({ json: { status: 'success', data: {} } }), []),
       approvalGuard: new ApprovalGuard(),
       contextMode: 'manual_chat'
     })
+    expect(tools.omada_catalog_query).toBeDefined()
+    expect(tools.omada_catalog_query.needsApproval).toBeUndefined()
     expect(tools.artifact_write).toBeDefined()
     expect(tools.artifact_build_omada).toBeDefined()
+    expect(tools.artifact_publish_bundle).toBeDefined()
   })
 
   test('creates v1 when artifact folder does not exist yet (E_NOT_FOUND)', async () => {
@@ -345,5 +380,110 @@ describe('artifact_build_omada tool', () => {
     expect(res.ok).toBe(false)
     expect(res.error).toBe('E_ARTIFACT_LINT')
     expect(calls).toHaveLength(0)
+  })
+})
+
+describe('artifact_publish_bundle tool', () => {
+  test('calls POST /library/artifacts/publish-bundle with normalized slug and metadata', async () => {
+    const calls: Call[] = []
+    const domain = domainWith((call) => {
+      if (call.method === 'POST' && call.url.endsWith('/library/artifacts/publish-bundle')) {
+        return {
+          json: {
+            status: 'success',
+            data: {
+              ok: true,
+              slug: 'omada-ap-health-monitor',
+              title: 'AP Health Monitor',
+              version: 1,
+              local_version: 1,
+              file_count: 1,
+              size_bytes: 980000,
+              review_url: 'https://canvas.chenge.ink/a/omada-ap-health-monitor/v/1?t=tok',
+              share_url: 'https://canvas.chenge.ink/s/tok?v=1'
+            }
+          }
+        }
+      }
+      throw new Error(`Unexpected call: ${call.method} ${call.url}`)
+    }, calls)
+
+    const guard = new ApprovalGuard()
+    const { artifact_publish_bundle } = createArtifactTools(domain, [], guard, {
+      contextMode: 'manual_chat',
+      toolApprovalPrefs: { artifact_publish_bundle: { tier: 'auto', source: 'owner' } }
+    })
+
+    const res = (await runWithAuto(artifact_publish_bundle, {
+      slug: ' Omada AP_Health_Monitor ',
+      title: 'AP Health Monitor',
+      visibility: 'unlisted',
+      change_note: 'Single-file build'
+    })) as Record<string, unknown>
+
+    expect(res).toMatchObject({
+      ok: true,
+      slug: 'omada-ap-health-monitor',
+      version: 1,
+      review_url: 'https://canvas.chenge.ink/a/omada-ap-health-monitor/v/1?t=tok',
+      share_url: 'https://canvas.chenge.ink/s/tok?v=1'
+    })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.body).toMatchObject({
+      slug: 'omada-ap-health-monitor',
+      title: 'AP Health Monitor',
+      visibility: 'unlisted',
+      change_note: 'Single-file build',
+      entry_path: 'index.html'
+    })
+  })
+})
+
+describe('omada_catalog_query tool', () => {
+  test('calls GET /library/omada/catalog with structured query params silently', async () => {
+    const calls: Call[] = []
+    const domain = domainWith((call) => {
+      if (call.method === 'GET' && call.url.includes('/library/omada/catalog')) {
+        return {
+          json: {
+            status: 'success',
+            data: {
+              ok: true,
+              source: 'cdn',
+              query: 'SEmulatorShell',
+              matches: [{ name: 'SEmulatorShell', category: 'emulator-v6', props: [] }]
+            }
+          }
+        }
+      }
+      throw new Error(`Unexpected call: ${call.method} ${call.url}`)
+    }, calls)
+
+    const { omada_catalog_query } = createArtifactTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    expect(omada_catalog_query.needsApproval).toBeUndefined()
+
+    const exec = omada_catalog_query.execute as (
+      i: unknown,
+      o: { toolCallId: string; messages: unknown[]; abortSignal?: AbortSignal }
+    ) => Promise<unknown>
+    const res = (await exec(
+      { action: 'component', query: 'SEmulatorShell', limit: 10 },
+      { toolCallId: 'tc-cat-1', messages: [], abortSignal: undefined }
+    )) as Record<string, unknown>
+
+    expect(res).toMatchObject({
+      ok: true,
+      source: 'cdn',
+      query: 'SEmulatorShell'
+    })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.method).toBe('GET')
+    const url = new URL(calls[0]!.url)
+    expect(url.pathname).toBe('/api/library/omada/catalog')
+    expect(url.searchParams.get('action')).toBe('component')
+    expect(url.searchParams.get('query')).toBe('SEmulatorShell')
+    expect(url.searchParams.get('limit')).toBe('10')
   })
 })

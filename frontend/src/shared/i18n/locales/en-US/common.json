@@ -1169,8 +1169,10 @@
       "library_write": "Write library file",
       "library_move": "Move library file",
       "library_delete": "Delete library file",
+      "omada_catalog_query": "Query Omada UI catalog",
       "artifact_write": "Create interactive artifact",
-      "artifact_build_omada": "Build Omada prototype"
+      "artifact_build_omada": "Build Omada prototype",
+      "artifact_publish_bundle": "Publish artifact to cloud"
     },
     "planCard": {
       "title": "Plan",
@@ -2032,6 +2034,7 @@
     },
     "artifactWriteCard": {
       "title": "Interactive artifact",
+      "publishTitle": "Publish artifact to cloud",
       "typeLabel": "Type",
       "pathLabel": "Saved path",
       "noteLabel": "Change note",

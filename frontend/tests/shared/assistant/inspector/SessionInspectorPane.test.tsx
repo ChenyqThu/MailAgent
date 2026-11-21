@@ -23,6 +23,7 @@ import { useManagedBrowserUi } from '@shared/state/managed-browser-ui'
 const navigateMock = vi.fn()
 const libraryTextMock = vi.fn()
 const libraryPublishArtifactBundleMock = vi.fn()
+const libraryIssueArtifactPreviewTokenMock = vi.fn()
 const connectorListMock = vi.fn()
 const connectorInvokeToolMock = vi.fn()
 
@@ -33,7 +34,8 @@ vi.mock('@tanstack/react-router', () => ({
 vi.mock('@shared/components/library/hooks', () => ({
   useLibraryApi: () => ({
     text: libraryTextMock,
-    publishArtifactBundle: libraryPublishArtifactBundleMock
+    publishArtifactBundle: libraryPublishArtifactBundleMock,
+    issueArtifactPreviewToken: libraryIssueArtifactPreviewTokenMock
   })
 }))
 
@@ -68,6 +70,7 @@ beforeEach(() => {
   libraryTextMock.mockReset()
   libraryTextMock.mockResolvedValue({ markdown: '# Live Server Text\n\nUpdated content' })
   libraryPublishArtifactBundleMock.mockReset()
+  libraryIssueArtifactPreviewTokenMock.mockReset()
   connectorListMock.mockReset()
   connectorListMock.mockResolvedValue([])
   connectorInvokeToolMock.mockReset()
@@ -422,31 +425,18 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
     expect(pane.className).toContain('w-[540px]')
   })
 
-  test('navigates to Artifact Server setup when disconnected and publishes via MCP when connected', async () => {
+  test('navigates to Artifact Server setup when disconnected and publishes inline HTML via MCP when no bundle dir exists', async () => {
     const htmlSnapshot: SessionWorkspaceSnapshot = {
       ...POPULATED_SNAPSHOT,
       artifacts: [
         {
-          id: 'artifact:q4-board',
+          id: 'file-path:notes/q4-board.html',
           kind: 'html',
-          title: 'Q4 Board',
-          slug: 'q4-board',
-          artifactType: 'dashboard',
-          version: 1,
-          fileId: 201,
-          virtualPath: 'agent-docs/artifacts/q4-board/v1/index.html',
+          title: 'q4-board.html',
+          virtualPath: 'notes/q4-board.html',
           content: '<!doctype html><html><body>v1</body></html>',
           isHtml: true,
-          isMarkdown: false,
-          versions: [
-            {
-              version: 1,
-              fileId: 201,
-              virtualPath: 'agent-docs/artifacts/q4-board/v1/index.html',
-              content: '<!doctype html><html><body>v1</body></html>',
-              changeNote: 'Initial KPI board'
-            }
-          ]
+          isMarkdown: false
         }
       ],
       totalItems: 1
@@ -454,7 +444,7 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
 
     renderHarness(htmlSnapshot)
     fireEvent.click(screen.getByTestId('inspector-toggle-pill'))
-    fireEvent.click(screen.getByText('Q4 Board'))
+    fireEvent.click(screen.getByText('q4-board.html'))
 
     // Disconnected -> Cloud shortcut jumps to self-hosted preset in Settings
     const setupBtn = await screen.findByRole('button', {
@@ -475,9 +465,9 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
       tool_name: 'artifact_publish',
       content: JSON.stringify({
         ok: true,
-        slug: 'q4-board',
+        slug: 'q4-boardhtml',
         version: 1,
-        review_url: 'https://canvas.chenge.ink/a/q4-board/v/1?t=tok',
+        review_url: 'https://canvas.chenge.ink/a/q4-boardhtml/v/1?t=tok',
         share_url: 'https://canvas.chenge.ink/s/tok?v=1'
       }),
       images: [],
@@ -487,7 +477,7 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
 
     renderHarness(htmlSnapshot)
     fireEvent.click(screen.getByTestId('inspector-toggle-pill'))
-    fireEvent.click(screen.getByText('Q4 Board'))
+    fireEvent.click(screen.getByText('q4-board.html'))
 
     const publishBtn = await screen.findByRole('button', { name: 'Publish' })
     fireEvent.click(publishBtn)
@@ -497,11 +487,10 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
         'artifact_server',
         'artifact_publish',
         {
-          slug: 'q4-board',
-          title: 'Q4 Board',
-          artifact_type: 'dashboard',
-          html: '<!doctype html><html><body>v1</body></html>',
-          change_note: 'Initial KPI board'
+          slug: 'q4-boardhtml',
+          title: 'q4-board.html',
+          artifact_type: 'app',
+          html: '<!doctype html><html><body>v1</body></html>'
         }
       )
     )
@@ -510,7 +499,7 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
     expect(screen.getByRole('button', { name: 'Copy share link' })).toBeTruthy()
   })
 
-  test('publishes multi-file Omada bundle via libraryApi.publishArtifactBundle when connected', async () => {
+  test('prefers libraryApi.publishArtifactBundle for versioned artifacts and opens browser preview token via Globe button', async () => {
     connectorListMock.mockResolvedValue([
       { connector_id: 'artifact_server', enabled: true, status: 'connected' }
     ])
@@ -520,11 +509,21 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
       title: 'Omada AP Monitor',
       version: 1,
       local_version: 1,
-      file_count: 6,
-      size_bytes: 1200400,
+      file_count: 1,
+      size_bytes: 980400,
       review_url: 'https://canvas.chenge.ink/a/omada-ap-board/v/1',
       share_url: 'https://canvas.chenge.ink/s/omada-tok?v=1'
     })
+    libraryIssueArtifactPreviewTokenMock.mockResolvedValue({
+      ok: true,
+      token: 'preview-tok-1',
+      slug: 'omada-ap-board',
+      version: 1,
+      entry_path: 'index.html',
+      preview_url: 'http://127.0.0.1:8200/api/library/artifacts/preview/preview-tok-1/index.html',
+      ttl_seconds: 86400
+    })
+    const winOpenSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
 
     const bundleSnapshot: SessionWorkspaceSnapshot = {
       ...POPULATED_SNAPSHOT,
@@ -537,7 +536,7 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
           artifactType: 'app',
           version: 1,
           fileId: 301,
-          fileCount: 6,
+          fileCount: 1,
           virtualPath: 'agent-docs/artifacts/omada-ap-board/v1/index.html',
           isHtml: true,
           isMarkdown: false,
@@ -545,7 +544,7 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
             {
               version: 1,
               fileId: 301,
-              fileCount: 6,
+              fileCount: 1,
               virtualPath: 'agent-docs/artifacts/omada-ap-board/v1/index.html',
               changeNote: 'Initial AP health console'
             }
@@ -558,6 +557,21 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
     renderHarness(bundleSnapshot)
     fireEvent.click(screen.getByTestId('inspector-toggle-pill'))
     fireEvent.click(screen.getByText('Omada AP Monitor'))
+
+    const browserBtn = await screen.findByRole('button', { name: 'Open in system browser' })
+    fireEvent.click(browserBtn)
+    await waitFor(() =>
+      expect(libraryIssueArtifactPreviewTokenMock).toHaveBeenCalledWith({
+        slug: 'omada-ap-board',
+        version: 1
+      })
+    )
+    expect(winOpenSpy).toHaveBeenCalledWith(
+      'http://127.0.0.1:8200/api/library/artifacts/preview/preview-tok-1/index.html',
+      '_blank',
+      'noopener'
+    )
+    winOpenSpy.mockRestore()
 
     const publishBtn = await screen.findByRole('button', { name: 'Publish' })
     fireEvent.click(publishBtn)

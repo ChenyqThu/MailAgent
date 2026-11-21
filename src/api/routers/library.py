@@ -43,6 +43,7 @@ from src.library.omada_builder import (
     guess_media_type,
     issue_preview_token,
     publish_artifact_bundle,
+    query_omada_catalog,
     read_omada_catalog,
     resolve_preview_file,
 )
@@ -633,9 +634,27 @@ def library_remove_mount(request: Request, mount_id: int, service: LibraryServic
 
 
 @router.get("/omada/catalog")
-def library_omada_catalog(request: Request):
-    """Return exported components, CSS modules, and usage docs from local omada-ui-kit."""
-    return _run(request, read_omada_catalog)
+async def library_omada_catalog(
+    request: Request,
+    action: Optional[str] = Query(None),
+    query: Optional[str] = Query(None),
+    asset_group: Optional[str] = Query(None),
+    theme: str = Query("light"),
+    limit: int = Query(25, ge=1, le=100),
+):
+    """Return exported components or structured @chenyqthu/omada-ui-kit catalog queries."""
+    if action:
+        return await run_in_threadpool(
+            _run,
+            request,
+            query_omada_catalog,
+            action,
+            query=query,
+            asset_group=asset_group,
+            theme=theme,
+            limit=limit,
+        )
+    return await run_in_threadpool(_run, request, read_omada_catalog)
 
 
 @router.post("/artifacts/build-omada")
@@ -736,11 +755,11 @@ def _serve_preview_file(request: Request, token: str, rel_path: str) -> FileResp
     )
 
 
-@preview_router.get("/artifacts/preview/{token}")
+@preview_router.api_route("/artifacts/preview/{token}", methods=["GET", "HEAD"])
 def library_preview_entry(request: Request, token: str):
     return _serve_preview_file(request, token, "")
 
 
-@preview_router.get("/artifacts/preview/{token}/{rel_path:path}")
+@preview_router.api_route("/artifacts/preview/{token}/{rel_path:path}", methods=["GET", "HEAD"])
 def library_preview_asset(request: Request, token: str, rel_path: str):
     return _serve_preview_file(request, token, rel_path)

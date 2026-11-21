@@ -9,20 +9,18 @@ Design and build high-craft, self-contained HTML5 interactive deliverables via `
    - `slides`: 16:9 keyboard-navigable presentation decks with overview/notes and print-to-PDF support.
    - `report`: editorial long-form analysis, comparisons, decision memos with sticky outline navigation.
    - `diagram`: crisp system architecture, sequence, flow, or data-model visuals with interactive inspection.
-   - `app`: focused interactive calculators, forms, configurators, or UI prototypes.
+   - `app`: focused interactive calculators, forms, configurators, or UI prototypes. (For **Omada Controller / TP-Link network management UI prototypes**, call `skill_read("omada_prototype")` first and use `omada_catalog_query` + `artifact_write` with `@chenyqthu/omada-ui-kit`.)
 2. Gather real facts from emails, Matters, Library documents, contacts, or connected tools before writing a single line of HTML. Never invent numbers, names, or dates. If a metric is missing, label it explicitly as unavailable.
 3. Commit to one intentional Art Direction before coding.
 4. Write one complete, self-contained HTML5 document (`<!doctype html> ... </html>`) via `artifact_write`. Choose a concise kebab-case `slug` (e.g. `q4-vendor-renewal-board`).
 5. On revisions, pass the exact same `slug` to `artifact_write` so versions advance cleanly (`v1`, `v2`, ...) without overwriting prior snapshots.
-6. When the user asks to publish, share a link, or iterate from team feedback, and an Artifact Server connector (`mcp__artifact_server__*`) is available, follow Section 6 after the local preview is clean.
+6. When the user asks to publish, share a link, or iterate from team feedback, follow Section 6 after the local preview is clean.
 
 ## 6. Cloud Publishing & Review Loop
 
-When `mcp__artifact_server__*` tools are available in the session:
-
-- **Publish / Update**: Call `mcp__artifact_server__artifact_publish` with the same `slug`, `title`, `artifact_type`, `html` (or multi-file `files` bundle), and `change_note` (passing the latest HTML just saved with `artifact_write`). Always return the `share_url` and `review_url` to the user first so they can inspect and comment full-screen; never invent or print tokens.
-- **Inspect Team Feedback**: Call `mcp__artifact_server__comment_list` with `slug` and `status="open"` before revising an existing cloud artifact.
-- **Close the Loop**: Apply requested changes in a new immutable `artifact_write` version (`vN+1`), republish with `mcp__artifact_server__artifact_publish`, and mark addressed threads resolved with `mcp__artifact_server__comment_resolve`.
+- **Publish / Update**: ALWAYS call `artifact_publish_bundle` with `slug` (and optional `version`, `title`, `artifact_type`, `visibility`, `change_note`) to upload the saved artifact directly from disk to Canvas Artifact Server — **never** paste compiled HTML or bundles into `mcp__artifact_server__artifact_publish`. Always return the `share_url` and `review_url` to the user first so they can inspect and comment full-screen; never invent or print tokens.
+- **Inspect Team Feedback**: When `mcp__artifact_server__*` tools are available, call `mcp__artifact_server__comment_list` with `slug` and `status="open"` before revising an existing cloud artifact.
+- **Close the Loop**: Apply requested changes in a new immutable `artifact_write` (or `artifact_build_omada`) version (`vN+1`), republish with `artifact_publish_bundle`, and mark addressed threads resolved with `mcp__artifact_server__comment_resolve`.
 
 ## 2. Art Direction & Visual Craft
 

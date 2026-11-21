@@ -356,6 +356,12 @@ async def _timing_middleware(request: Request, call_next):  # type: ignore[no-un
     """
     request.state.t0 = time.perf_counter()
     response = await call_next(request)
+    if (
+        request.url.path.startswith("/api/library/artifacts/preview/")
+        and response.headers.get("access-control-allow-origin") == "*"
+        and "access-control-allow-credentials" in response.headers
+    ):
+        del response.headers["access-control-allow-credentials"]
     return response
 
 

@@ -890,13 +890,13 @@ def test_chat_config_artifact_studio_skill_fragment_reaches_system_prompt(
     with _config_client(monkeypatch, _ChatConfigStub()) as c:
         data = c.get("/api/chat/config").json()["data"]
     assert "artifact_studio" in data["advertisedSkills"]
-    assert "artifact_write" in data["trustedSkillFragments"]
+    assert '"artifact_studio"' in data["trustedSkillFragments"]
 
     fresh_agent_cfg.set_enabled("artifact_studio", False)
     with _config_client(monkeypatch, _ChatConfigStub()) as c:
         data = c.get("/api/chat/config").json()["data"]
     assert "artifact_studio" not in data["advertisedSkills"]
-    assert "artifact_write" not in data["trustedSkillFragments"]
+    assert '"artifact_studio"' not in data["trustedSkillFragments"]
 
 
 def test_chat_config_omada_prototype_skill_fragment_reaches_system_prompt(
@@ -908,12 +908,14 @@ def test_chat_config_omada_prototype_skill_fragment_reaches_system_prompt(
         data = c.get("/api/chat/config").json()["data"]
     assert "omada_prototype" in data["advertisedSkills"]
     assert "artifact_build_omada" in data["trustedSkillFragments"]
+    assert "omada_catalog_query" in data["trustedSkillFragments"]
 
     fresh_agent_cfg.set_enabled("omada_prototype", False)
     with _config_client(monkeypatch, _ChatConfigStub()) as c:
         data = c.get("/api/chat/config").json()["data"]
     assert "omada_prototype" not in data["advertisedSkills"]
     assert "artifact_build_omada" not in data["trustedSkillFragments"]
+    assert "omada_catalog_query" not in data["trustedSkillFragments"]
 
 
 def test_chat_config_matters_skill_fragment_reaches_system_prompt(

@@ -9,6 +9,7 @@ import {
   Copy,
   Download,
   ExternalLink,
+  Globe,
   Loader2,
   Maximize2,
   Minimize2,
@@ -56,9 +57,8 @@ function normalizePublishSlug(raw: string): string {
   return cleaned || 'artifact'
 }
 
-function triggerHtmlDownload(filename: string, html: string): void {
+function triggerBlobDownload(filename: string, blob: Blob): void {
   if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return
-  const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
   const objectUrl = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = objectUrl
@@ -68,6 +68,10 @@ function triggerHtmlDownload(filename: string, html: string): void {
   anchor.click()
   anchor.remove()
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000)
+}
+
+function triggerHtmlDownload(filename: string, html: string): void {
+  triggerBlobDownload(filename, new Blob([html], { type: 'text/html;charset=utf-8' }))
 }
 
 function parseArtifactBundleTarget(
@@ -106,6 +110,7 @@ export function InspectorArtifactPreview({
   const [copied, setCopied] = useState(false)
   const [shareCopied, setShareCopied] = useState(false)
   const [publishing, setPublishing] = useState(false)
+  const [openingBrowser, setOpeningBrowser] = useState(false)
   const [publishedByKey, setPublishedByKey] = useState<
     Record<string, { readonly reviewUrl: string; readonly shareUrl?: string; readonly version?: number }>
   >({})
@@ -135,7 +140,6 @@ export function InspectorArtifactPreview({
   const activeFileId = activeVersionEntry?.fileId ?? artifact.fileId
   const activeVirtualPath = activeVersionEntry?.virtualPath ?? artifact.virtualPath
   const activeContentFallback = activeVersionEntry?.content ?? artifact.content ?? ''
-  const activeFileCount = activeVersionEntry?.fileCount ?? artifact.fileCount
   const activeSubtitle =
     activeVersionEntry?.changeNote ??
     (artifact.subtitle && artifact.subtitle !== artifact.to ? artifact.subtitle : undefined)
@@ -172,6 +176,14 @@ export function InspectorArtifactPreview({
     staleTime: 30_000
   })
 
+  const previewUrl =
+    isHtmlArtifact &&
+    isElectronPreviewAvailable() &&
+    activeFileId != null &&
+    activeVirtualPath
+      ? buildLibraryPreviewUrl(activeVirtualPath)
+      : null
+
   const liveHtmlFileQ = useQuery({
     queryKey: ['library', 'inspector-html', activeFileId ?? 'none'],
     queryFn: () => libraryApi.file(activeFileId as number),
@@ -179,7 +191,8 @@ export function InspectorArtifactPreview({
       isHtmlArtifact &&
       activeFileId != null &&
       !activeContentFallback &&
-      typeof libraryApi.file === 'function',
+      typeof libraryApi.file === 'function' &&
+      (htmlMode === 'source' || previewUrl === null),
     staleTime: 30_000
   })
 
@@ -188,14 +201,6 @@ export function InspectorArtifactPreview({
       (typeof liveHtmlFileQ.data?.content === 'string' ? liveHtmlFileQ.data.content : '')
     : (typeof liveTextQ.data?.markdown === 'string' && liveTextQ.data.markdown) ||
       activeContentFallback
-
-  const previewUrl =
-    isHtmlArtifact &&
-    isElectronPreviewAvailable() &&
-    activeFileId != null &&
-    activeVirtualPath
-      ? buildLibraryPreviewUrl(activeVirtualPath)
-      : null
 
   const copyPayload =
     artifact.kind === 'plan' && artifact.plan
@@ -217,11 +222,17 @@ export function InspectorArtifactPreview({
     activeVersionEntry?.version ?? artifact.version
   )
   const prefersBundlePublish =
-    Boolean(bundleTarget) &&
-    typeof libraryApi.publishArtifactBundle === 'function' &&
-    ((activeFileCount != null && activeFileCount > 1) || effectiveContent.length === 0)
+    Boolean(bundleTarget) && typeof libraryApi.publishArtifactBundle === 'function'
   const canInvokeSinglePublish =
     effectiveContent.length > 0 && typeof mailApi?.connector?.invokeTool === 'function'
+  const canDownloadHtml =
+    isHtmlArtifact &&
+    (effectiveContent.length > 0 ||
+      (activeFileId != null && typeof libraryApi.inlineUrl === 'function'))
+  const canOpenInBrowser =
+    isHtmlArtifact &&
+    bundleTarget !== null &&
+    typeof libraryApi.issueArtifactPreviewToken === 'function'
   const canShowCloudControl =
     isHtmlArtifact &&
     (hasHtmlRenderSource || (Boolean(bundleTarget) && typeof libraryApi.publishArtifactBundle === 'function'))
@@ -236,8 +247,7 @@ export function InspectorArtifactPreview({
     })
   }
 
-  const handleDownloadHtml = (): void => {
-    if (!effectiveContent) return
+  const handleDownloadHtml = async (): Promise<void> => {
     const baseName = artifact.slug
       ? activeVersionEntry
         ? `${artifact.slug}-v${activeVersionEntry.version}.html`
@@ -245,7 +255,50 @@ export function InspectorArtifactPreview({
       : artifact.title.endsWith('.html')
         ? artifact.title
         : `${artifact.title}.html`
+    let fetchError: unknown = null
+    if (
+      activeFileId != null &&
+      typeof libraryApi.inlineUrl === 'function' &&
+      typeof fetch === 'function'
+    ) {
+      try {
+        const resp = await fetch(libraryApi.inlineUrl(activeFileId), { credentials: 'include' })
+        if (resp.ok) {
+          const blob = await resp.blob()
+          triggerBlobDownload(baseName, blob)
+          return
+        }
+        fetchError = new Error(`HTTP ${resp.status}`)
+      } catch (err) {
+        fetchError = err
+      }
+    }
+    if (!effectiveContent) {
+      toastError(t('chat.inspector.downloadHtml'), errorMessage(fetchError ?? 'Download failed'))
+      return
+    }
     triggerHtmlDownload(baseName, effectiveContent)
+  }
+
+  const handleOpenInBrowser = async (): Promise<void> => {
+    if (openingBrowser || !bundleTarget || typeof libraryApi.issueArtifactPreviewToken !== 'function') {
+      return
+    }
+    setOpeningBrowser(true)
+    try {
+      const res = await libraryApi.issueArtifactPreviewToken({
+        slug: bundleTarget.slug,
+        ...(bundleTarget.version !== undefined ? { version: bundleTarget.version } : {})
+      })
+      if (!res?.preview_url) {
+        throw new Error('Preview URL unavailable')
+      }
+      openExternal(res.preview_url)
+    } catch (err) {
+      toastError(t('chat.inspector.openInSystemBrowser'), errorMessage(err))
+    } finally {
+      setOpeningBrowser(false)
+    }
   }
 
   const handleOpenOriginal = (): void => {
@@ -349,6 +402,7 @@ export function InspectorArtifactPreview({
     (isHtmlArtifact &&
       activeFileId != null &&
       !activeContentFallback &&
+      (htmlMode === 'source' || previewUrl === null) &&
       liveHtmlFileQ.isLoading)
 
   return (
@@ -426,18 +480,30 @@ export function InspectorArtifactPreview({
                   </button>
                 </div>
               )}
-              {effectiveContent.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handleDownloadHtml}
-                  aria-label={t('chat.inspector.downloadHtml')}
-                  title={t('chat.inspector.downloadHtml')}
-                  className="grid size-7 place-items-center rounded-md border border-ink-border-soft bg-ink-2 text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3"
-                >
-                  <Download size={13} />
-                </button>
-              )}
             </>
+          )}
+          {canOpenInBrowser && (
+            <button
+              type="button"
+              onClick={() => void handleOpenInBrowser()}
+              disabled={openingBrowser}
+              aria-label={t('chat.inspector.openInSystemBrowser')}
+              title={t('chat.inspector.openInSystemBrowser')}
+              className="grid size-7 place-items-center rounded-md border border-ink-border-soft bg-ink-2 text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3 disabled:opacity-60"
+            >
+              {openingBrowser ? <Loader2 size={13} className="animate-spin" /> : <Globe size={13} />}
+            </button>
+          )}
+          {canDownloadHtml && (
+            <button
+              type="button"
+              onClick={() => void handleDownloadHtml()}
+              aria-label={t('chat.inspector.downloadHtml')}
+              title={t('chat.inspector.downloadHtml')}
+              className="grid size-7 place-items-center rounded-md border border-ink-border-soft bg-ink-2 text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3"
+            >
+              <Download size={13} />
+            </button>
           )}
           {canShowCloudControl &&
             (artifactServerConnected && (prefersBundlePublish || canInvokeSinglePublish) ? (

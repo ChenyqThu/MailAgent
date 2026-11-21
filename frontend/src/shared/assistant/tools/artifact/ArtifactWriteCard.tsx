@@ -1,7 +1,8 @@
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
-import { AlertTriangle, Code2, Eye } from 'lucide-react'
+import { AlertTriangle, Code2, ExternalLink, Eye, UploadCloud } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { openExternal } from '@shared/components/connectors/consoleShared'
 import { artifactWorkspaceId } from '../../inspector/deriveSessionWorkspace'
 import { useSessionInspector } from '../../inspector/inspectorContext'
 import { ApprovalActions, CardDetails, CardFrame, TerminalBanner } from '../_cardShell'
@@ -9,20 +10,27 @@ import { deriveCardPhase, toolErrorDetail } from '../_cardShell.lib'
 import { readArtifactWriteInput, readArtifactWriteOutput } from './artifactWriteCard.lib'
 
 export function ArtifactWriteCard(props: ToolCallMessagePartProps): React.JSX.Element {
-  const { toolCallId, args, argsText, result, respondToApproval } = props
+  const { toolCallId, toolName, args, argsText, result, respondToApproval } = props
   const { t } = useTranslation()
   const inspector = useSessionInspector()
   const phase = deriveCardPhase(props)
+  const isPublishTool = toolName === 'artifact_publish_bundle'
   const input = readArtifactWriteInput(args, argsText)
   const output = phase === 'done' ? readArtifactWriteOutput(result) : null
   const lintFailed = phase === 'done' && output?.ok === false
   const framePhase = lintFailed ? 'error' : phase
 
-  const displayTitle = output?.title ?? input.title ?? t('chat.artifactWriteCard.title')
+  const displayTitle =
+    output?.title ??
+    input.title ??
+    input.slug ??
+    t(isPublishTool ? 'chat.artifactWriteCard.publishTitle' : 'chat.artifactWriteCard.title')
   const displayType = output?.artifactType ?? input.artifactType
   const displaySlug = output?.slug ?? input.slug
   const displayPath = output?.path
-  const displayVersion = output?.version
+  const displayVersion = output?.version ?? input.version
+  const displayVisibility = input.visibility
+  const reviewUrl = output?.reviewUrl ?? output?.shareUrl
   const errorDetail = phase === 'error' ? toolErrorDetail(result) : null
 
   const onApprove = (): Promise<void> => respondToApproval({ approved: true })
@@ -36,7 +44,7 @@ export function ArtifactWriteCard(props: ToolCallMessagePartProps): React.JSX.El
 
   return (
     <CardFrame
-      icon={<Code2 size={13} strokeWidth={2} />}
+      icon={isPublishTool ? <UploadCloud size={13} strokeWidth={2} /> : <Code2 size={13} strokeWidth={2} />}
       title={displayTitle}
       phase={framePhase}
     >
@@ -52,12 +60,17 @@ export function ArtifactWriteCard(props: ToolCallMessagePartProps): React.JSX.El
               v{displayVersion}
             </span>
           ) : null}
+          {isPublishTool && displayVisibility ? (
+            <span className="rounded bg-ink-3 px-1.5 py-0.5 font-mono text-meta text-ink-fg-2">
+              {displayVisibility}
+            </span>
+          ) : null}
           {output?.fileCount && output.fileCount > 1 ? (
             <span className="rounded bg-ink-3 px-1.5 py-0.5 font-mono text-meta tabular-nums text-ink-fg-2">
               {output.fileCount} files
             </span>
           ) : null}
-          {output?.buildMs !== null && output?.buildMs !== undefined ? (
+          {output && output.buildMs !== null && output.buildMs !== undefined ? (
             <span className="rounded bg-ink-3 px-1.5 py-0.5 font-mono text-meta tabular-nums text-ink-fg-3">
               {output.buildMs} ms
             </span>
@@ -127,17 +140,29 @@ export function ArtifactWriteCard(props: ToolCallMessagePartProps): React.JSX.El
           </CardDetails>
         ) : null}
 
-        {phase === 'done' && !lintFailed && inspector !== null ? (
-          <div className="pt-1">
-            <button
-              type="button"
-              onClick={handleOpenPreview}
-              aria-label={t('chat.artifactWriteCard.openPreview')}
-              className="inline-flex items-center gap-1.5 rounded-md border border-ink-border-soft bg-ink-2 px-2.5 py-1 text-aux font-medium text-ink-fg transition-colors duration-fast hover:bg-ink-3"
-            >
-              <Eye size={13} strokeWidth={2} className="text-coral" />
-              <span>{t('chat.artifactWriteCard.preview')}</span>
-            </button>
+        {phase === 'done' && !lintFailed && (inspector !== null || reviewUrl !== null) ? (
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {inspector !== null ? (
+              <button
+                type="button"
+                onClick={handleOpenPreview}
+                aria-label={t('chat.artifactWriteCard.openPreview')}
+                className="inline-flex items-center gap-1.5 rounded-md border border-ink-border-soft bg-ink-2 px-2.5 py-1 text-aux font-medium text-ink-fg transition-colors duration-fast hover:bg-ink-3"
+              >
+                <Eye size={13} strokeWidth={2} className="text-coral" />
+                <span>{t('chat.artifactWriteCard.preview')}</span>
+              </button>
+            ) : null}
+            {reviewUrl ? (
+              <button
+                type="button"
+                onClick={() => openExternal(reviewUrl)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-ink-border-soft bg-ink-2 px-2.5 py-1 text-aux font-medium text-ink-fg transition-colors duration-fast hover:bg-ink-3"
+              >
+                <ExternalLink size={13} strokeWidth={2} className="text-ok" />
+                <span>{t('chat.inspector.cloud.openReview')}</span>
+              </button>
+            ) : null}
           </div>
         ) : null}
 

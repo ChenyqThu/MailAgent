@@ -530,4 +530,59 @@ describe('deriveSessionWorkspace', () => {
     })
     expect(snap.artifacts[0]?.content).toBeUndefined()
   })
+
+  test('attaches remote review and share links from tool-artifact_publish_bundle onto matching artifact', () => {
+    const snap = deriveSessionWorkspace({
+      messages: [
+        {
+          role: 'assistant',
+          parts: [
+            {
+              type: 'tool-artifact_build_omada',
+              toolCallId: 'om-v1',
+              state: 'output-available',
+              input: {
+                slug: 'omada-ap-health-monitor',
+                title: 'AP Health Monitor',
+                code: 'export default function Demo() { return null }'
+              },
+              output: {
+                ok: true,
+                slug: 'omada-ap-health-monitor',
+                title: 'AP Health Monitor',
+                artifact_type: 'app',
+                version: 1,
+                file_id: 401,
+                file_count: 1,
+                path: 'agent-docs/artifacts/omada-ap-health-monitor/v1/index.html'
+              }
+            },
+            {
+              type: 'tool-artifact_publish_bundle',
+              toolCallId: 'pub-v1',
+              state: 'output-available',
+              input: {
+                slug: 'omada-ap-health-monitor',
+                visibility: 'unlisted'
+              },
+              output: {
+                ok: true,
+                slug: 'omada-ap-health-monitor',
+                version: 2,
+                review_url: 'https://canvas.chenge.ink/a/omada-ap-health-monitor/v/2?t=tok2',
+                share_url: 'https://canvas.chenge.ink/s/tok2?v=2'
+              }
+            }
+          ]
+        }
+      ]
+    })
+
+    expect(snap.artifacts).toHaveLength(1)
+    expect(snap.artifacts[0]?.remoteUrl).toBe(
+      'https://canvas.chenge.ink/a/omada-ap-health-monitor/v/2?t=tok2'
+    )
+    expect(snap.artifacts[0]?.shareUrl).toBe('https://canvas.chenge.ink/s/tok2?v=2')
+    expect(snap.artifacts[0]?.remoteVersion).toBe(2)
+  })
 })

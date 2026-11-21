@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import subprocess
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,10 +15,15 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.library.omada_builder import (
+    OMADA_CDN_BABEL_URL,
+    OMADA_CDN_CSS_URL,
+    OMADA_CDN_STANDALONE_URL,
     build_omada_demo,
+    clear_omada_catalog_cache,
     issue_preview_token,
     normalize_artifact_slug,
     publish_artifact_bundle,
+    query_omada_catalog,
     read_omada_catalog,
     resolve_preview_file,
 )
@@ -122,7 +129,7 @@ def test_build_omada_demo_ingests_bundle_versions_and_cleans_harness(
 
     # Preview route serves entry HTML & relative binary assets cleanly with sandbox CSP + CORS
     monkeypatch.setenv("MAILAGENT_LOCAL_API_TOKEN", "test-local-token")
-    from src.api.app import APIError, error_envelope
+    from src.api.app import APIError, app as real_app, error_envelope
     from src.api.routers import library as library_router
 
     app = FastAPI()
@@ -138,6 +145,19 @@ def test_build_omada_demo_ingests_bundle_versions_and_cleans_harness(
     assert res_html.headers["content-security-policy"] == "sandbox allow-scripts allow-popups allow-forms allow-modals"
     assert res_html.headers["access-control-allow-origin"] == "*"
     assert "./assets/app.js" in res_html.text
+
+    res_head = client.head(f"/api/library/artifacts/preview/{v1['preview_token']}/index.html")
+    assert res_head.status_code == 200
+
+    # Real FastAPI middleware stack must strip allow-credentials when ACAO is '*' (Origin: null)
+    real_client = TestClient(real_app)
+    res_null_origin = real_client.get(
+        f"/api/library/artifacts/preview/{v1['preview_token']}/index.html",
+        headers={"Origin": "null"},
+    )
+    assert res_null_origin.status_code == 200
+    assert res_null_origin.headers.get("access-control-allow-origin") == "*"
+    assert "access-control-allow-credentials" not in res_null_origin.headers
 
     res_js = client.get(f"/api/library/artifacts/preview/{v1['preview_token']}/assets/app.js")
     assert res_js.status_code == 200
@@ -262,12 +282,231 @@ def test_real_omada_ui_kit_vite_smoke_build(svc: LibraryService) -> None:
         res = build_omada_demo(svc, smoke_slug, code, title="Pytest Omada Smoke")
         assert res["ok"] is True
         assert res["version"] == 1
-        assert res["file_count"] >= 2
+        assert res["file_count"] == 1
+        assert res["size_bytes"] < 4 * 1024 * 1024
         resolved_entry = resolve_preview_file(res["preview_token"], "index.html")
         assert resolved_entry.is_file()
-        assert "./assets/" in resolved_entry.read_text(encoding="utf-8")
+        html = resolved_entry.read_text(encoding="utf-8")
+        assert "<style>" in html
+        assert '<script type="module">' in html
+        assert "--omada-brand" in html
+        assert ".p-6{" in html or ".p-6 {" in html
+        assert 'src="./assets/' not in html
+        assert 'href="./assets/' not in html
     finally:
         import shutil
 
         shutil.rmtree(demo_dir, ignore_errors=True)
         shutil.rmtree(_REAL_OMADA_KIT / "src" / "demos" / "_mailagent-pytest-smoke", ignore_errors=True)
+
+
+@pytest.fixture()
+def sample_catalog_payload() -> dict:
+    return {
+        "schemaVersion": "1.0.0",
+        "package": {
+            "name": "@chenyqthu/omada-ui-kit",
+            "version": "0.1.0",
+            "cdn": {
+                "jsdelivrCss": OMADA_CDN_CSS_URL,
+                "jsdelivrStandalone": OMADA_CDN_STANDALONE_URL,
+            },
+        },
+        "counts": {"components": 3, "icons": 2, "products": 1},
+        "components": [
+            {
+                "name": "SEmulatorShell",
+                "category": "emulator-v6",
+                "kind": "component",
+                "sourcePath": "src/omada/layout/SEmulatorShell.tsx",
+                "description": "Omada Controller v6.3 shell",
+                "propsType": "SEmulatorShellProps",
+                "props": [{"name": "activeKey", "type": "string", "optional": False}],
+            },
+            {
+                "name": "SPageHeader",
+                "category": "layout",
+                "kind": "component",
+                "sourcePath": "src/omada/components/SPageHeader.tsx",
+                "description": "Page header bar",
+                "propsType": "SPageHeaderProps",
+                "props": [{"name": "title", "type": "string", "optional": False}],
+            },
+            {
+                "name": "Button",
+                "category": "antd-reexport",
+                "kind": "antd-primitive",
+                "sourcePath": "antd/es/button",
+                "description": "",
+            },
+        ],
+        "assets": {
+            "iconCategories": ["sidebar", "status"],
+            "icons": [
+                {"name": "refresh", "category": "topbar", "figmaName": "topbar/refresh", "width": 16, "height": 16},
+                {"name": "device-ap", "category": "status", "figmaName": "status/ap", "width": 16, "height": 16},
+            ],
+            "products": [
+                {"name": "eap650", "category": "Product AP", "themes": ["light", "dark"], "width": 40, "height": 40}
+            ],
+            "illustrations": [
+                {"name": "empty-devices", "category": "empty", "themes": ["light"], "width": 200, "height": 120}
+            ],
+            "clients": [],
+            "brand": [],
+        },
+        "tokens": {
+            "semantic": {"light": {"brand": "#00A870"}, "dark": {"brand": "#1DB985"}},
+            "layout": {"topBarHeight": 56},
+            "radius": {"md": 6},
+            "portColors": {"light": {"1G": "#00A870"}, "dark": {"1G": "#1DB985"}},
+            "chartPalette": {"light": ["#006F71"], "dark": ["#00595A"]},
+        },
+        "recipes": [
+            {
+                "id": "single-file-html",
+                "title": "Zero-Build Single-File HTML Demo",
+                "summary": "Fastest shareable PRD prototype",
+                "components": ["OmadaProvider", "SEmulatorShell"],
+            }
+        ],
+    }
+
+
+def test_query_omada_catalog_local_actions(tmp_path: Path, sample_catalog_payload: dict) -> None:
+    clear_omada_catalog_cache()
+    kit = tmp_path / "kit"
+    (kit / "dist").mkdir(parents=True)
+    (kit / "dist" / "catalog.json").write_text(json.dumps(sample_catalog_payload), encoding="utf-8")
+
+    info = query_omada_catalog("info", kit_root=kit)
+    assert info["ok"] is True
+    assert info["source"] == "local"
+    assert info["package"]["name"] == "@chenyqthu/omada-ui-kit"
+    assert info["package"]["cdn"]["babelUrl"] == OMADA_CDN_BABEL_URL
+    assert info["categories"] == ["antd-reexport", "emulator-v6", "layout"]
+
+    default_list = query_omada_catalog("list_components", kit_root=kit)
+    assert [item["name"] for item in default_list["items"]] == ["SEmulatorShell", "SPageHeader"]
+
+    cat_list = query_omada_catalog("list_components", query="emulator-v6", kit_root=kit)
+    assert [item["name"] for item in cat_list["items"]] == ["SEmulatorShell"]
+
+    exact_comp = query_omada_catalog("component", query="semulatorshell", kit_root=kit)
+    assert len(exact_comp["matches"]) == 1
+    assert exact_comp["matches"][0]["name"] == "SEmulatorShell"
+    assert exact_comp["matches"][0]["props"][0]["name"] == "activeKey"
+
+    sub_comp = query_omada_catalog("component", query="Header", kit_root=kit)
+    assert [m["name"] for m in sub_comp["matches"]] == ["SPageHeader"]
+
+    icons = query_omada_catalog("search_icons", query="refresh", limit=5, kit_root=kit)
+    assert icons["total_matches"] == 1
+    assert icons["items"][0]["name"] == "refresh"
+
+    products = query_omada_catalog("search_assets", asset_group="products", query="eap", kit_root=kit)
+    assert products["total_matches"] == 1
+    assert products["items"][0]["name"] == "eap650"
+
+    dark_tokens = query_omada_catalog("tokens", theme="dark", kit_root=kit)
+    assert dark_tokens["theme"] == "dark"
+    assert dark_tokens["semantic"] == {"brand": "#1DB985"}
+    assert dark_tokens["chartPalette"] == ["#00595A"]
+
+    recipes = query_omada_catalog("recipes", query="single-file", kit_root=kit)
+    assert len(recipes["recipes"]) == 1
+    assert recipes["recipes"][0]["id"] == "single-file-html"
+
+    with pytest.raises(LibraryError) as bad_action:
+        query_omada_catalog("unknown_action", kit_root=kit)
+    assert bad_action.value.code == "E_INVALID_ARG"
+
+    with pytest.raises(LibraryError) as missing_comp:
+        query_omada_catalog("component", query="  ", kit_root=kit)
+    assert missing_comp.value.code == "E_INVALID_ARG"
+
+    with pytest.raises(LibraryError) as bad_group:
+        query_omada_catalog("search_assets", asset_group="videos", kit_root=kit)
+    assert bad_group.value.code == "E_INVALID_ARG"
+
+
+def test_query_omada_catalog_cdn_fallback_and_ttl_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    sample_catalog_payload: dict,
+) -> None:
+    clear_omada_catalog_cache()
+    empty_kit = tmp_path / "missing-kit"
+    calls: list[str] = []
+
+    class _FakeResp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def _fake_urlopen(req, timeout=15):
+        calls.append(req.full_url)
+        return _FakeResp(json.dumps(sample_catalog_payload).encode("utf-8"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    first = query_omada_catalog("info", kit_root=empty_kit)
+    second = query_omada_catalog("component", query="SPageHeader", kit_root=empty_kit)
+    assert first["source"] == "cdn"
+    assert second["source"] == "cdn"
+    assert second["matches"][0]["name"] == "SPageHeader"
+    assert len(calls) == 1
+    clear_omada_catalog_cache()
+
+
+def test_library_omada_catalog_route_supports_structured_and_legacy_queries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    sample_catalog_payload: dict,
+) -> None:
+    clear_omada_catalog_cache()
+    kit = tmp_path / "omada-kit"
+    (kit / "src" / "omada").mkdir(parents=True)
+    (kit / "dist").mkdir(parents=True)
+    (kit / "package.json").write_text(
+        json.dumps({"name": "@chenyqthu/omada-ui-kit", "dependencies": {"react": "^19.0.0"}}),
+        encoding="utf-8",
+    )
+    (kit / "src" / "omada" / "index.ts").write_text("export { SEmulatorShell } from './layout';\n", encoding="utf-8")
+    (kit / "dist" / "catalog.json").write_text(json.dumps(sample_catalog_payload), encoding="utf-8")
+
+    monkeypatch.setenv("MAILAGENT_LOCAL_API_TOKEN", "test-local-token")
+    from src.api.app import APIError, error_envelope
+    from src.api.routers import library as library_router
+    from src.config import config
+
+    monkeypatch.setattr(config, "omada_kit_root", str(kit))
+
+    app = FastAPI()
+    app.include_router(library_router.router)
+
+    @app.exception_handler(APIError)
+    async def _err(req, exc: APIError):
+        return error_envelope(exc.code, exc.message, http_status=exc.http_status, request=req)
+
+    client = TestClient(app)
+    headers = {"X-MailAgent-Local-Token": "test-local-token"}
+
+    legacy = client.get("/api/library/omada/catalog", headers=headers)
+    assert legacy.status_code == 200
+    assert legacy.json()["data"]["exported_symbols"] == ["SEmulatorShell"]
+
+    info = client.get("/api/library/omada/catalog", params={"action": "info"}, headers=headers)
+    assert info.status_code == 200
+    assert info.json()["data"]["package"]["name"] == "@chenyqthu/omada-ui-kit"
+
+    comp = client.get(
+        "/api/library/omada/catalog",
+        params={"action": "component", "query": "SEmulatorShell"},
+        headers=headers,
+    )
+    assert comp.status_code == 200
+    assert comp.json()["data"]["matches"][0]["name"] == "SEmulatorShell"
+    clear_omada_catalog_cache()
