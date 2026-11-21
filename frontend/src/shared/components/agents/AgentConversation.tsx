@@ -682,7 +682,7 @@ export function AgentConversation({
     maybeAutoTitle
   ])
   // B1/B2/B4 — detached-run probe + placeholder + settle reload + unread-badge broadcast glue.
-  const { backgroundActive, backgroundStartedAt } = useBackgroundChatRun({
+  const { backgroundActive, backgroundStartedAt, backgroundLiveStage } = useBackgroundChatRun({
     gatewayBaseUrl,
     sessionId: chatActiveSessionId,
     enabled: useAiSdkRuntime,
@@ -906,6 +906,7 @@ export function AgentConversation({
       <BackgroundRunPresence
         active={backgroundActive || queuedRows.dispatchInFlight}
         startedAt={backgroundStartedAt ?? queuedRows.dispatchStartedAt}
+        liveStage={backgroundLiveStage}
         className="mx-auto mb-4 w-full max-w-[var(--thread-max-width)] px-1"
       />
       <div className="mx-auto w-full max-w-[var(--thread-max-width)]">

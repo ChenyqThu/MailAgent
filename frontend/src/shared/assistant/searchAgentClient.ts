@@ -220,14 +220,18 @@ async function postSearchAgent(
     for (const frame of frames) {
       const line = frame.replace(/^data: /, '').trim()
       if (!line) continue
-      let evt: { type?: unknown; phase?: unknown; result?: unknown }
+      let evt: { type?: unknown; phase?: unknown; detail?: unknown; result?: unknown }
       try {
         evt = JSON.parse(line) as typeof evt
       } catch {
         continue // keepalive / non-JSON frame
       }
-      if (evt.type === 'phase' && (evt.phase === 'searching' || evt.phase === 'summarizing')) {
-        opts.onPhase?.(evt.phase)
+      if (
+        (evt.type === 'phase' || evt.type === 'progress') &&
+        (evt.phase === 'searching' || evt.phase === 'summarizing')
+      ) {
+        const detail = typeof evt.detail === 'string' && evt.detail.trim() ? evt.detail : undefined
+        opts.onPhase?.(evt.phase, detail)
       } else if (evt.type === 'result' && evt.result && typeof evt.result === 'object') {
         return evt.result as GatewayAgentResult
       }

@@ -13,7 +13,7 @@
 //   ② a group containing an approval-requested OR errored tool is FORCE-EXPANDED and cannot be
 //      collapsed — an approval card must never be hidden (no approve button = island-less deadlock).
 
-import { useState, type PropsWithChildren } from 'react'
+import { useMemo, useState, type PropsWithChildren } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight } from 'lucide-react'
 import { useAuiState } from '@assistant-ui/react'
@@ -22,6 +22,7 @@ import { cn } from '@shared/lib/cn'
 import { CollapsibleRegion } from '@shared/components/ui/collapsible'
 import { ShimmerText } from '@shared/components/ShimmerText'
 import type { TurnStagePart } from '@shared/assistant/runtime/useTurnStage'
+import { summarizeToolActions } from '@shared/assistant/tools/toolNarration'
 import { summarizeToolGroup } from './toolGroupSummary'
 
 export function ToolGroupCard({
@@ -33,7 +34,12 @@ export function ToolGroupCard({
   const parts = useAuiState((s) => s.message.parts) as readonly TurnStagePart[]
 
   const single = endIndex === startIndex
-  const summary = summarizeToolGroup(single ? [] : parts.slice(startIndex, endIndex + 1))
+  const groupParts = useMemo(
+    () => (single ? [] : parts.slice(startIndex, endIndex + 1)),
+    [single, parts, startIndex, endIndex]
+  )
+  const summary = useMemo(() => summarizeToolGroup(groupParts), [groupParts])
+  const names = useMemo(() => summarizeToolActions(groupParts, t), [groupParts, t])
   const done = summary.aggregate === 'done'
   const { forceExpand } = summary
 
@@ -65,7 +71,6 @@ export function ToolGroupCard({
       : summary.aggregate === 'error'
         ? t('chat.toolGroup.errored', { n: summary.count })
         : t('chat.toolGroup.using', { n: summary.count })
-  const names = summary.toolNames.filter(Boolean).join(' · ')
 
   return (
     <div className="my-1.5 min-w-0 overflow-hidden rounded-lg border border-[var(--hairline)] bg-ink-2">
@@ -95,7 +100,7 @@ export function ToolGroupCard({
           <span className="text-aux text-ink-fg-2">{headerText}</span>
         )}
         {names && (
-          <span className="min-w-0 flex-1 truncate text-meta text-ink-fg-3" title={names}>
+          <span className="min-w-0 flex-1 truncate text-aux text-ink-fg-3" title={names}>
             {names}
           </span>
         )}

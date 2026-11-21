@@ -25,7 +25,8 @@ const AI_IDLE = {
   aiSummary: null as string | null,
   aiError: null as string | null,
   aiCompleted: false,
-  aiPhase: 'searching' as SearchAgentPhase
+  aiPhase: 'searching' as SearchAgentPhase,
+  aiPhaseDetail: null as string | null
 }
 
 /** 在途 agentic run 的 AbortController —— 模块级而非组件 ref：页面 remount 之后
@@ -45,6 +46,7 @@ interface SearchTabPageState {
   readonly aiError: string | null
   readonly aiCompleted: boolean
   readonly aiPhase: SearchAgentPhase
+  readonly aiPhaseDetail: string | null
 
   /** 输入 / chip / 历史回放的唯一写入口：写 query + 清 AI 态 + abort 在途 run。 */
   setQuery(next: string): void
@@ -52,7 +54,7 @@ interface SearchTabPageState {
    *  否则重置 AI 态并返回新 controller —— 后续状态写入由调用方按 `signal.aborted`
    *  闸（被 setQuery / 新 run 顶掉的旧 run 不许再写）。 */
   beginAiRun(): AbortController | null
-  setAiPhase(phase: SearchAgentPhase): void
+  setAiPhase(phase: SearchAgentPhase, detail?: string): void
   /** run 正常收官（含诚实 0 命中 —— aiCompleted 标记空态可渲染）。 */
   resolveAiRun(hits: SearchHit[], summary: string | null): void
   failAiRun(message: string): void
@@ -79,8 +81,11 @@ export const useSearchTabPage = create<SearchTabPageState>((set, get) => ({
     return ac
   },
 
-  setAiPhase(phase) {
-    set({ aiPhase: phase })
+  setAiPhase(phase, detail) {
+    set((prev) => ({
+      aiPhase: phase,
+      aiPhaseDetail: detail !== undefined ? detail : prev.aiPhase !== phase ? null : prev.aiPhaseDetail
+    }))
   },
 
   resolveAiRun(hits, summary) {

@@ -26,6 +26,7 @@ import type { ChatLibraryPartData } from '@shared/assistant/runtime/chatAttachme
 import { parseQueuedFollowups } from '@shared/assistant/queuedFollowups'
 
 import { getAssistantPartComponents } from '../tools/registerToolUIs'
+import { AssistantParts } from './AssistantParts'
 import { TurnPresence, TurnPresenceEmpty } from './TurnPresence'
 import { turnErrorText } from '@shared/assistant/turnErrorText'
 import { AssistantActionBar, UserActionBar } from './action-bar'
@@ -308,7 +309,7 @@ export function AssistantMessage(): React.JSX.Element {
       <TurnPresence className="mb-1.5" />
       {hasBubbleContent && (
         <div className="min-w-0 max-w-[85%] space-y-1.5 rounded-2xl rounded-bl-md border border-[var(--hairline)] bg-ink-3 px-3.5 py-2 text-body leading-relaxed text-ink-fg">
-          <MessagePrimitive.Parts components={partComponents} />
+          <AssistantParts components={partComponents} />
           <MessagePrimitive.Error>
             <AssistantMessageError />
           </MessagePrimitive.Error>

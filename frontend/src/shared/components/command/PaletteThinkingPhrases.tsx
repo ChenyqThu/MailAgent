@@ -18,12 +18,15 @@ import type { SearchAgentPhase } from '@shared/api/types'
 const CYCLE_MS = 2600
 
 export function PaletteThinkingPhrases({
-  phase = 'searching'
+  phase = 'searching',
+  detail
 }: {
   phase?: SearchAgentPhase
+  detail?: string | null
 }): React.ReactElement {
   const { t } = useTranslation()
   const reduce = useReducedMotion()
+  const trimmedDetail = detail?.trim() ?? ''
   const key =
     phase === 'summarizing' ? 'palette.ai.summarizingPhrases' : 'palette.ai.searchingPhrases'
   const raw = t(key, { returnObjects: true })
@@ -38,17 +41,19 @@ export function PaletteThinkingPhrases({
     setIdx(0)
   }
   React.useEffect(() => {
-    if (reduce || phrases.length <= 1) return
+    if (reduce || trimmedDetail.length > 0 || phrases.length <= 1) return
     const id = window.setInterval(() => setIdx((i) => (i + 1) % phrases.length), CYCLE_MS)
     return () => window.clearInterval(id)
-  }, [reduce, phrases.length])
+  }, [reduce, trimmedDetail, phrases.length])
   // key={safe} 让切换时重新 mount → 触发 .thinking-phrases-item 的 enter 动画。
   const safe = idx < phrases.length ? idx : 0
+  const display = trimmedDetail.length > 0 ? trimmedDetail : (phrases[safe] ?? '')
+  const animKey = trimmedDetail.length > 0 ? `${phase}-d-${trimmedDetail}` : `${phase}-${safe}`
   return (
     <span className="thinking-phrases">
       <ShimmerText
-        key={`${phase}-${safe}`}
-        text={phrases[safe] ?? ''}
+        key={animKey}
+        text={display}
         neutral
         className="thinking-phrases-item"
       />

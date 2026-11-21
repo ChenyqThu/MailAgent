@@ -1799,6 +1799,26 @@
       "duration": "Thought for {duration}",
       "streaming": "Thinking…"
     },
+    "turnNarration": {
+      "callingWithArg": "{tool} \"{arg}\"…",
+      "thinkingHeading": "Thinking: {heading}…"
+    },
+    "processTimeline": {
+      "running": "Working through steps…",
+      "settledSummary": "Completed {count} steps",
+      "actionCount": "{action} ×{count}",
+      "moreActions": "+{n} more",
+      "showAllSteps": "Show all {count} steps",
+      "resultCount": "Returned {count} results"
+    },
+    "spinnerVerbs": {
+      "pool": [
+        "Reviewing context…",
+        "Analyzing request…",
+        "Organizing thoughts…",
+        "Working through details…"
+      ]
+    },
     "effort": {
       "label": "Thinking effort",
       "unsupported": "This model has no adjustable thinking effort",

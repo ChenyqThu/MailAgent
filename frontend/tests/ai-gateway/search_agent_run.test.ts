@@ -454,4 +454,41 @@ describe('pickSearchAgentTools', () => {
   test('max-iter constant matches the legacy budget', () => {
     expect(SEARCH_AGENT_MAX_ITER).toBe(6)
   })
+
+  test('streams step details on searching/progress/summarizing events', async () => {
+    const model = mockStepModel([
+      { content: [toolCall('t1', 'email_search_fulltext', { query: 'redis' })], finishReason: 'tool-calls' },
+      { content: [toolCall('t2', 'email_search_attachments', { query: 'contract' })], finishReason: 'tool-calls' },
+      {
+        content: [
+          toolCall('t3', 'present_results', {
+            matched_internal_ids: [11],
+            summary: 'ok'
+          })
+        ],
+        finishReason: 'tool-calls'
+      }
+    ])
+    const allTools: ToolSet = {
+      ...mockBuildTools()(),
+      email_search_attachments: tool({
+        description: 'mock att search',
+        inputSchema: z.object({ query: z.string() }),
+        execute: async () => ({ items: [] })
+      })
+    }
+    await withServer(
+      { createModel: () => model, buildTools: () => allTools },
+      async (base) => {
+        const res = await postSearch(base, { userContent: 'redis' })
+        expect(res.status).toBe(200)
+        const events = await readEvents(res)
+        const phaseEvents = events.filter((e) => e.type === 'phase')
+        const progressEvents = events.filter((e) => e.type === 'progress')
+        expect(phaseEvents[0]).toMatchObject({ type: 'phase', phase: 'searching', detail: '搜索「redis」' })
+        expect(progressEvents[0]).toMatchObject({ type: 'progress', phase: 'searching', detail: '检索附件「contract」' })
+        expect(phaseEvents[1]).toMatchObject({ type: 'phase', phase: 'summarizing', detail: '整理 3 封候选结果' })
+      }
+    )
+  })
 })

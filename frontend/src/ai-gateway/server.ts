@@ -79,6 +79,34 @@ import { CompactCoordinator, shouldRecoverContextOverflow } from './compact'
 
 const GATEWAY_VERSION = '0.2.0'
 
+function observeStreamChunkStage(
+  cfg: AiGatewayConfig,
+  sessionId: number,
+  runId: string,
+  chunk: unknown
+): void {
+  if (!cfg.activeRuns || chunk === null || typeof chunk !== 'object') return
+  const rec = chunk as { type?: unknown; toolName?: unknown }
+  if (rec.type === 'reasoning-start' || rec.type === 'reasoning-delta') {
+    cfg.activeRuns.updateStage(sessionId, runId, { stage: 'thinking' })
+    return
+  }
+  if (rec.type === 'tool-input-start' || rec.type === 'tool-input-available') {
+    cfg.activeRuns.updateStage(sessionId, runId, {
+      stage: 'calling-tool',
+      toolName: typeof rec.toolName === 'string' ? rec.toolName : undefined
+    })
+    return
+  }
+  if (rec.type === 'tool-output-available' || rec.type === 'tool-output-error') {
+    cfg.activeRuns.updateStage(sessionId, runId, { stage: 'thinking' })
+    return
+  }
+  if (rec.type === 'text-start' || rec.type === 'text-delta') {
+    cfg.activeRuns.updateStage(sessionId, runId, { stage: 'writing' })
+  }
+}
+
 export interface AiGatewayHandle {
   server: Server
   /** actual listening port (kernel-assigned when cfg.port === 0). */
@@ -450,6 +478,9 @@ async function handleChat(
           }
         })
         for await (const chunk of stream) {
+          if (runToken != null && run.sessionId != null) {
+            observeStreamChunkStage(cfg, run.sessionId, runToken.runId, chunk)
+          }
           const type =
             chunk !== null && typeof chunk === 'object'
               ? (chunk as { type?: unknown }).type
@@ -667,6 +698,9 @@ async function handleChat(
       clientGone = true
     }
     for await (const chunk of stream) {
+      if (runToken && run.sessionId != null) {
+        observeStreamChunkStage(cfg, run.sessionId, runToken.runId, chunk)
+      }
       if (clientGone || res.destroyed || res.writableEnded) {
         clientGone = true
         continue
@@ -768,7 +802,8 @@ function handleRunActive(
   writeJson(res, 200, {
     active: true,
     runId: entry.runId,
-    ageMs: Date.now() - entry.startedAt
+    ageMs: Date.now() - entry.startedAt,
+    ...(entry.liveStage ? { liveStage: entry.liveStage } : {})
   })
 }
 
@@ -1271,8 +1306,13 @@ async function handleSearchAgent(
     cfg,
     { userContent, mailbox, model },
     controller.signal,
-    (phase) => {
-      if (!controller.signal.aborted) writeSse(res, { type: 'phase', phase })
+    (phase, detail) => {
+      if (!controller.signal.aborted) {
+        writeSse(res, { type: 'phase', phase, ...(detail ? { detail } : {}) })
+      }
+    },
+    (phase, detail) => {
+      if (!controller.signal.aborted) writeSse(res, { type: 'progress', phase, detail })
     }
   )
   if (!controller.signal.aborted) writeSse(res, { type: 'result', result })

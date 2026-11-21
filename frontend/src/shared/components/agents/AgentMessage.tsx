@@ -24,6 +24,7 @@ import {
   UserMessageLibraryChips
 } from '@shared/assistant/components/message'
 import { getAssistantPartComponents } from '@shared/assistant/tools/registerToolUIs'
+import { AssistantParts } from '@shared/assistant/components/AssistantParts'
 import { AssistantActionBar, UserActionBar } from '@shared/assistant/components/action-bar'
 import { FollowupSuggestions } from '@shared/assistant/components/FollowupSuggestions'
 
@@ -93,7 +94,7 @@ export function AgentAssistantMessage(): React.JSX.Element {
           no new data channel for a structurally unreachable case. */}
       <TurnPresence className="mb-1.5 px-1" />
       <div className="min-w-0 px-1 text-body leading-relaxed text-ink-fg">
-        <MessagePrimitive.Parts components={partComponents} />
+        <AssistantParts components={partComponents} />
       </div>
       {/* dogfood round-7 — footer：copy/reload + 「答复时间」badge 现在同在 ONE ActionBarPrimitive.Root 内
           （MessageTiming 作为 trailing 传入）→ 与按钮共享 items-center 对齐（不再偏上几 px）+ 共享 opacity

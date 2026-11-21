@@ -164,8 +164,8 @@ export function SearchTabPage(): React.ReactElement {
         query: nl,
         mailbox: activeMailbox || undefined,
         signal: ac.signal,
-        onPhase: (p) => {
-          if (!ac.signal.aborted) useSearchTabPage.getState().setAiPhase(p)
+        onPhase: (p, detail) => {
+          if (!ac.signal.aborted) useSearchTabPage.getState().setAiPhase(p, detail)
         }
       })
       if (ac.signal.aborted) return

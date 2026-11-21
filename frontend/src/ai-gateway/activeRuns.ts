@@ -25,10 +25,18 @@ import { randomUUID } from 'node:crypto'
  *  tool-loop turn. */
 export const STALE_RUN_MS = 15 * 60 * 1000
 
+export interface ActiveRunLiveStage {
+  stage: 'thinking' | 'calling-tool' | 'writing'
+  toolName?: string
+  summary?: string
+  updatedAt: number
+}
+
 export interface ActiveRunEntry {
   runId: string
   sessionId: number
   startedAt: number
+  liveStage?: ActiveRunLiveStage
 }
 
 interface StoredRun extends ActiveRunEntry {
@@ -61,7 +69,31 @@ export class ActiveRunRegistry {
     const entry = this.bySession.get(sessionId)
     if (!entry) return null
     if (this.now() - entry.startedAt >= STALE_RUN_MS && entry.controller.signal.aborted) return null
-    return { runId: entry.runId, sessionId: entry.sessionId, startedAt: entry.startedAt }
+    return {
+      runId: entry.runId,
+      sessionId: entry.sessionId,
+      startedAt: entry.startedAt,
+      ...(entry.liveStage ? { liveStage: entry.liveStage } : {})
+    }
+  }
+
+  /** Update the live execution stage observed on the stream for `/api/ai/run/active` consumers. */
+  updateStage(sessionId: number, runId: string, stage: Omit<ActiveRunLiveStage, 'updatedAt'>): void {
+    const entry = this.bySession.get(sessionId)
+    if (!entry || entry.runId !== runId) return
+    const prev = entry.liveStage
+    if (
+      prev != null &&
+      prev.stage === stage.stage &&
+      prev.toolName === stage.toolName &&
+      prev.summary === stage.summary
+    ) {
+      return
+    }
+    entry.liveStage = {
+      ...stage,
+      updatedAt: this.now()
+    }
   }
 
   /**

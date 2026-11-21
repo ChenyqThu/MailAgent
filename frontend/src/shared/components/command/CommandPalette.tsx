@@ -333,6 +333,7 @@ export function CommandPalette(): React.ReactElement | null {
   // G-A7 ③ — aiPhase 反映 runSearchAgent onPhase 真实阶段：检索中 → 整理中。
   const [aiCompleted, setAiCompleted] = useState(false)
   const [aiPhase, setAiPhase] = useState<SearchAgentPhase>('searching')
+  const [aiPhaseDetail, setAiPhaseDetail] = useState<string | null>(null)
   // 当前在途 search agent 的 AbortController：输入变化 / 再次触发 / 关闭面板 → abort。
   const aiAbortRef = useRef<AbortController | null>(null)
   // Adjust-on-prop-change pattern (react.dev): reset query + highlight when
@@ -353,6 +354,7 @@ export function CommandPalette(): React.ReactElement | null {
       setAiError(null)
       setAiCompleted(false)
       setAiPhase('searching')
+      setAiPhaseDetail(null)
     }
   }
 
@@ -590,6 +592,7 @@ export function CommandPalette(): React.ReactElement | null {
     setAiError(null)
     setAiCompleted(false)
     setAiPhase('searching')
+    setAiPhaseDetail(null)
     setHighlight(0)
     try {
       // S3 W1 — agentic 搜索改走 embedded AI SDK Gateway 的 headless run（POST
@@ -601,8 +604,11 @@ export function CommandPalette(): React.ReactElement | null {
         signal: ac.signal,
         // G-A7 ③ — 真实阶段驱动进行态 UI（检索中 → 整理中）。旧 run 被 abort 后
         // 不再写 phase（避免 stale phase 覆盖新 run 的进行态）。
-        onPhase: (p) => {
-          if (!ac.signal.aborted) setAiPhase(p)
+        onPhase: (p, detail) => {
+          if (!ac.signal.aborted) {
+            setAiPhase(p)
+            setAiPhaseDetail((prev) => (detail !== undefined ? detail : prev))
+          }
         }
       })
       // 被关闭面板/输入变化 abort 掉的旧 run → 静默丢弃（不覆盖新状态）。
@@ -649,6 +655,7 @@ export function CommandPalette(): React.ReactElement | null {
     setAiError(null)
     setAiCompleted(false)
     setAiPhase('searching')
+    setAiPhaseDetail(null)
     setHighlight(0)
     inputRef.current?.focus()
   }, [])
@@ -1224,6 +1231,7 @@ export function CommandPalette(): React.ReactElement | null {
               // G-A7 ② — 编辑 query 也清「AI 跑完」标记，否则 0 命中空态会黏住。
               if (aiCompleted) setAiCompleted(false)
               setAiPhase('searching')
+              setAiPhaseDetail(null)
             }}
             placeholder={t('palette.placeholder')}
             autoComplete="off"
@@ -1742,7 +1750,7 @@ export function CommandPalette(): React.ReactElement | null {
                     aria-hidden
                   />
                   {/* G-A7 ③ — phase 驱动短语组（检索中 → 整理中）。 */}
-                  <PaletteThinkingPhrases phase={aiPhase} />
+                  <PaletteThinkingPhrases phase={aiPhase} detail={aiPhaseDetail} />
                 </div>
               )}
               {!aiSearching && aiSummary && (

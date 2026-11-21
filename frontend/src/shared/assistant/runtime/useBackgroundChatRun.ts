@@ -70,11 +70,30 @@ export interface UseBackgroundChatRunOptions {
   onSessionsTouched?: () => void
 }
 
+export interface BackgroundLiveStage {
+  stage: 'thinking' | 'calling-tool' | 'writing'
+  toolName?: string
+  summary?: string
+}
+
+function parseBackgroundLiveStage(raw: unknown): BackgroundLiveStage | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as { stage?: unknown; toolName?: unknown; summary?: unknown }
+  if (r.stage !== 'thinking' && r.stage !== 'calling-tool' && r.stage !== 'writing') return null
+  return {
+    stage: r.stage,
+    ...(typeof r.toolName === 'string' && r.toolName ? { toolName: r.toolName } : {}),
+    ...(typeof r.summary === 'string' && r.summary ? { summary: r.summary } : {})
+  }
+}
+
 export function useBackgroundChatRun(opts: UseBackgroundChatRunOptions): {
   backgroundActive: boolean
   /** WP-14 — 后台 run 的回合起点（epoch ms），供 composer 上方运行条的秒表**接续**（切走再切回
    *  不清零）。`backgroundActive` 为假、或探针没给 `ageMs` 时为 null。 */
   backgroundStartedAt: number | null
+  /** Wave 2 — 后台 run 在 gateway 上观察到的最近阶段（thinking / calling-tool / writing）。 */
+  backgroundLiveStage: BackgroundLiveStage | null
 } {
   const {
     gatewayBaseUrl,
@@ -95,11 +114,17 @@ export function useBackgroundChatRun(opts: UseBackgroundChatRunOptions): {
       active: boolean
       runId: string | null
       startedAt: number | null
+      liveStage: BackgroundLiveStage | null
     }> => {
       try {
         const res = await fetch(`${gatewayBaseUrl}/api/ai/run/active?sessionId=${sessionId}`)
-        if (!res.ok) return { active: false, runId: null, startedAt: null } // 404 = fail-closed truth
-        const body = (await res.json()) as { active?: unknown; runId?: unknown; ageMs?: unknown }
+        if (!res.ok) return { active: false, runId: null, startedAt: null, liveStage: null } // 404 = fail-closed truth
+        const body = (await res.json()) as {
+          active?: unknown
+          runId?: unknown
+          ageMs?: unknown
+          liveStage?: unknown
+        }
         // WP-14 — 服务端只给「已经跑了多久」（handleRunActive: Date.now() - entry.startedAt），
         // 在拿到响应的这一刻折算成本地 epoch 起点，之后由渲染器墙钟自己往上长。非有限/负数一律
         // 当没有（宁可不显示秒表，也不显示一个编出来的数）。
@@ -111,10 +136,11 @@ export function useBackgroundChatRun(opts: UseBackgroundChatRunOptions): {
         return {
           active: body.active === true,
           runId: typeof body.runId === 'string' ? body.runId : null,
-          startedAt
+          startedAt,
+          liveStage: parseBackgroundLiveStage(body.liveStage)
         }
       } catch {
-        return { active: false, runId: null, startedAt: null }
+        return { active: false, runId: null, startedAt: null, liveStage: null }
       }
     },
     enabled: probeEnabled,
@@ -257,6 +283,7 @@ export function useBackgroundChatRun(opts: UseBackgroundChatRunOptions): {
   const backgroundActive = active && !localRunning && !activeIsOwnRun
   return {
     backgroundActive,
-    backgroundStartedAt: backgroundActive ? (runActiveQ.data?.startedAt ?? null) : null
+    backgroundStartedAt: backgroundActive ? (runActiveQ.data?.startedAt ?? null) : null,
+    backgroundLiveStage: backgroundActive ? (runActiveQ.data?.liveStage ?? null) : null
   }
 }

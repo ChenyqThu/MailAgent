@@ -19,6 +19,7 @@ import { CollapsibleRegion } from '@shared/components/ui/collapsible'
 import { ShimmerText } from '@shared/components/ShimmerText'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
 import { formatToolDuration, useToolElapsed } from '@shared/assistant/tools/generic/useToolElapsed'
+import { extractReasoningHeading } from '@shared/assistant/runtime/reasoningSummary'
 import { assistantMarkdownUrlTransform } from '@shared/assistant/tools/image/imageGenCard.lib'
 
 export function MarkdownText({ text, status }: TextMessagePartProps): React.JSX.Element {
@@ -34,6 +35,7 @@ export function MarkdownText({ text, status }: TextMessagePartProps): React.JSX.
 export function ReasoningText({ text, status }: ReasoningMessagePartProps): React.JSX.Element {
   const { t } = useTranslation()
   const active = status?.type === 'running'
+  const liveHeading = active ? extractReasoningHeading(text) : null
   // W3-① 折叠头耗时 —— 复用工具卡那口渲染器时钟（useToolElapsed）的三条契约，其中第一条最要紧：
   // 🔴 历史回放的 reasoning part 第一眼就是 settled，start 从未落过 → 返回 null → 折叠头保持静态
   // 「思考过程」，绝不显示编造的「思考了 0.0 秒」。运行中仍是 shimmer 的「思考中…」。
@@ -72,7 +74,14 @@ export function ReasoningText({ text, status }: ReasoningMessagePartProps): Reac
           )}
         />
         {active ? (
-          <ShimmerText text={t('chat.thinking.streaming')} className="text-aux" />
+          <>
+            <ShimmerText text={t('chat.thinking.streaming')} className="shrink-0 text-aux" />
+            {liveHeading && (
+              <span className="min-w-0 flex-1 truncate text-aux text-ink-fg-2">
+                · {liveHeading}
+              </span>
+            )}
+          </>
         ) : (
           <span className="text-aux text-ink-fg-2">
             {elapsed === null

@@ -112,6 +112,7 @@ export function SearchResultGroups({
   const aiSummary = useSearchTabPage((s) => s.aiSummary)
   const aiCompleted = useSearchTabPage((s) => s.aiCompleted)
   const aiPhase = useSearchTabPage((s) => s.aiPhase)
+  const aiPhaseDetail = useSearchTabPage((s) => s.aiPhaseDetail)
 
   const showAiEmpty = aiCompleted && !aiSearching && aiHits.length === 0
   const showAiGroup = aiSearching || aiHits.length > 0 || showAiEmpty
@@ -224,7 +225,7 @@ export function SearchResultGroups({
           {aiSearching && (
             <div className="flex items-center gap-2 px-2 py-1.5 text-aux text-ink-fg-2">
               <Sparkles size={14} strokeWidth={1.75} className="shrink-0 text-coral" aria-hidden />
-              <PaletteThinkingPhrases phase={aiPhase} />
+              <PaletteThinkingPhrases phase={aiPhase} detail={aiPhaseDetail} />
             </div>
           )}
           {!aiSearching && aiSummary && (

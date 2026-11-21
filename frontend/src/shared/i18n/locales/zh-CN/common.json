@@ -1799,6 +1799,26 @@
       "duration": "思考了 {duration}",
       "streaming": "思考中…"
     },
+    "turnNarration": {
+      "callingWithArg": "正在{tool}「{arg}」…",
+      "thinkingHeading": "思考：{heading}…"
+    },
+    "processTimeline": {
+      "running": "正在处理步骤…",
+      "settledSummary": "已完成 {count} 步",
+      "actionCount": "{action} ×{count}",
+      "moreActions": "等 {n} 项",
+      "showAllSteps": "展开全部 {count} 步",
+      "resultCount": "返回 {count} 条结果"
+    },
+    "spinnerVerbs": {
+      "pool": [
+        "正在梳理上下文…",
+        "正在分析意图…",
+        "正在组织思路…",
+        "正在推敲细节…"
+      ]
+    },
     "effort": {
       "label": "思考强度",
       "unsupported": "当前模型不支持调节思考强度",

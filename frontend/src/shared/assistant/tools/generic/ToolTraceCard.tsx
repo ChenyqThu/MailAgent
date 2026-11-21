@@ -49,12 +49,12 @@ import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 import { cn } from '@shared/lib/cn'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { CollapsibleRegion } from '@shared/components/ui/collapsible'
+import { classifyTool, prettyJson, type ToolKind } from '@shared/components/chat/tool_steps'
 import {
-  classifyTool,
-  prettyJson,
-  toolTitleKey,
-  type ToolKind
-} from '@shared/components/chat/tool_steps'
+  extractRepresentativeArg,
+  formatToolDisplayTitle,
+  summarizeToolResult
+} from '@shared/assistant/tools/toolNarration'
 import {
   deriveToolPhase,
   isToolCancelled,
@@ -157,30 +157,8 @@ const OUTPUT_MAX_HEIGHT = 220
  *  the micro mono text is a forgiving-but-not-sloppy threshold. */
 const STICK_TO_BOTTOM_EPSILON = 24
 
-/** Representative inline preview of the first non-empty string / number arg. Reads `args` (the
- *  partial-parsed object) first so it grows field by field while the model streams. */
-function argPreview(args: unknown, argsText: string): string {
-  const obj = asPlainObject(args) ?? safeParseObject(argsText)
-  if (!obj) return ''
-  for (const v of Object.values(obj)) {
-    if (typeof v === 'string' && v.trim()) return v.length > 48 ? `${v.slice(0, 48)}…` : v
-  }
-  for (const v of Object.values(obj)) {
-    if (typeof v === 'number') return String(v)
-  }
-  return ''
-}
-
 function asPlainObject(v: unknown): Record<string, unknown> | null {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
-}
-
-function safeParseObject(text: string): Record<string, unknown> | null {
-  try {
-    return asPlainObject(JSON.parse(text) as unknown)
-  } catch {
-    return null
-  }
 }
 
 /** 标题行右端的耗时读数。
@@ -255,13 +233,13 @@ export function ToolTraceCard({
           ? 'error'
           : 'ok'
   const kind = classifyTool(toolName)
-  const titleKey = toolTitleKey(toolName)
-  const title = titleKey === null ? toolName : t(titleKey)
+  const title = formatToolDisplayTitle(toolName, t)
   const text = argsText ?? ''
-  const preview = argPreview(args, text)
+  const preview = extractRepresentativeArg(toolName, args, text)
   const argsObject = asPlainObject(args)
   const hasArgs = argsObject !== null && Object.keys(argsObject).length > 0
   const hasResult = result !== undefined && result !== null
+  const resultSummary = hasResult ? summarizeToolResult(result) : null
   // 静息 = kind 图标；hover 或已展开 = chevron（展开再转 90°）。原右端独立 chevron 的显隐条件
   // （hover 才现 / 展开恒显）逐条搬到这里，可展开性本身不变（无参数照样能开）。
   const showChevron = hovered || open
@@ -428,6 +406,14 @@ export function ToolTraceCard({
           className="scrollbar-thin overflow-y-auto"
           style={{ maxHeight: OUTPUT_MAX_HEIGHT }}
         >
+          {resultSummary && (
+            <div className="mb-2 rounded border border-[var(--hairline)] bg-ink-2/60 px-2 py-1 text-aux text-ink-fg-1">
+              <span>{t('chat.processTimeline.resultCount', { count: resultSummary.count })}</span>
+              {resultSummary.samples.length > 0 && (
+                <span className="text-ink-fg-3"> · {resultSummary.samples.join(' / ')}</span>
+              )}
+            </div>
+          )}
           <div className="mb-1 text-meta font-medium text-ink-fg-1">
             {t('chat.toolStep.request')}
           </div>

@@ -11,7 +11,6 @@
 import {
   convertToModelMessages,
   generateText,
-  smoothStream,
   stepCountIs,
   streamText,
   type ModelMessage,
@@ -19,6 +18,7 @@ import {
   type ToolSet,
   type UIMessageStreamOnFinishCallback
 } from 'ai'
+import { adaptiveSmoothStream } from './adaptiveSmoothStream'
 
 import {
   anthropicBaseUrl,
@@ -768,9 +768,9 @@ export async function prepareChatRun(
     ...(resolvedModel.opencodeSession
       ? { headers: { [OPENCODE_SESSION_HEADER]: opencodeSessionId(sessionId) } }
       : {}),
-    experimental_transform: smoothStream({
+    experimental_transform: adaptiveSmoothStream({
       chunking: STREAM_CHUNKING_REGEX,
-      delayInMs: STREAM_CHUNKING_DELAY_MS
+      baseDelayMs: STREAM_CHUNKING_DELAY_MS
     }),
     ...(providerOptions ? { providerOptions } : {}),
     // WP-16a — google 协议的 effort 走 ai@7 统一 reasoning 参数（SDK 按模型代分流 thinkingLevel/

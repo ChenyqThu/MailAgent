@@ -68,6 +68,10 @@ import {
 import { avatarShellClass } from '@shared/components/agents/avatarShell'
 import { useAssistantIdentity } from '@shared/assistant/assistantIdentity'
 import { turnErrorText } from '@shared/assistant/turnErrorText'
+import { useSpinnerVerb } from '@shared/assistant/runtime/spinnerVerbs'
+import { useThrottledReasoningHeading } from '@shared/assistant/runtime/reasoningSummary'
+import { narrateToolCall } from '@shared/assistant/tools/toolNarration'
+import type { BackgroundLiveStage } from '@shared/assistant/runtime/useBackgroundChatRun'
 
 /** 主 agent 身份（0813）→ 本行的头像/名字投影：owner 配置的 bot 头像直接用；上传图走
  *  imageSrc（静态 img —— 状态表情对图片无意义）；未配置/legacy = 官方形象 sphere/orange。 */
@@ -218,6 +222,8 @@ interface TurnPresenceRowProps {
   assistantName?: string
   /** `error` 时的原因全文（消息 status.error 转成的文本）。行内只显示首行前段，全文进 title。 */
   errorReason?: string
+  /** Optional live 3-layer narration override computed by `TurnPresence`. */
+  liveLabel?: string | null | undefined
   className?: string
 }
 
@@ -232,6 +238,7 @@ export function TurnPresenceRow({
   imageSrc,
   assistantName,
   errorReason,
+  liveLabel,
   className
 }: TurnPresenceRowProps): React.JSX.Element | null {
   const { t } = useTranslation()
@@ -278,7 +285,13 @@ export function TurnPresenceRow({
   // 文字区 —— 0813 轮 5 起接管退役运行条的 label 集（见文件头那段改判说明）。celebrate 阶段
   // stage 已是 idle，所有分支全不命中 → 只剩头像在庆祝。
   let text: React.ReactNode = null
-  if (stage === 'connecting') {
+  const customLive = liveLabel?.trim() ?? ''
+  if (
+    customLive.length > 0 &&
+    (stage === 'connecting' || stage === 'thinking' || stage === 'calling-tool')
+  ) {
+    text = <ShimmerText shiny text={customLive} />
+  } else if (stage === 'connecting') {
     text = <ShimmerText shiny text={t('chat.runStatus.connecting')} />
   } else if (stage === 'thinking') {
     // {{name}} 插值：主 agent 起了名（如 Jarvis）就是「Jarvis 思考中…」；缺省 'AI'
@@ -355,9 +368,12 @@ interface TurnPresenceProps {
 /** Store 接线层：只挂「最后一条 assistant 消息」且非只读线程 —— 历史消息零头像、只读回放
  *  （AgentRecordView 等）零头像。必须在 message scope 内渲染（两个 assistant 消息包装层）。 */
 export function TurnPresence({ config, className }: TurnPresenceProps): React.JSX.Element | null {
+  const { t } = useTranslation()
+  const reduce = useReducedMotion()
   const isLast = useAuiState((s) => s.message.isLast)
   const readOnly = useThreadReadOnly()
-  const { stage, stallLevel, toolName } = useTurnStage()
+  const { stage, stallLevel, toolName, toolArgs, toolArgsText, reasoningText, turnStatusHint } =
+    useTurnStage()
   const completed = useAuiState((s) => s.message.status?.type === 'complete')
   // selector 只取原值（不在里面加工，否则 getSnapshot 每次新引用 → React #185）。
   const errorValue = useAuiState((s) =>
@@ -366,7 +382,25 @@ export function TurnPresence({ config, className }: TurnPresenceProps): React.JS
       : undefined
   )
   const identity = useAssistantPresenceIdentity()
+  const reasoningHeading = useThrottledReasoningHeading(reasoningText, stage === 'thinking')
+  const spinnerVerb = useSpinnerVerb(
+    stage === 'thinking' && !reasoningHeading && !turnStatusHint,
+    reduce
+  )
+
   if (!isLast || readOnly) return null
+
+  let liveLabel: string | undefined
+  if (turnStatusHint && (stage === 'connecting' || stage === 'thinking' || stage === 'calling-tool')) {
+    liveLabel = turnStatusHint
+  } else if (stage === 'calling-tool' && toolName) {
+    liveLabel = narrateToolCall({ toolName, args: toolArgs, argsText: toolArgsText }, t)
+  } else if (stage === 'thinking' && reasoningHeading) {
+    liveLabel = t('chat.turnNarration.thinkingHeading', { heading: reasoningHeading })
+  } else if (stage === 'thinking' && spinnerVerb) {
+    liveLabel = spinnerVerb
+  }
+
   return (
     <TurnPresenceRow
       stage={stage}
@@ -377,6 +411,7 @@ export function TurnPresence({ config, className }: TurnPresenceProps): React.JS
       imageSrc={config ? undefined : identity.imageSrc}
       assistantName={identity.name}
       errorReason={turnErrorText(errorValue)}
+      liveLabel={liveLabel}
       className={className}
     />
   )
@@ -400,17 +435,30 @@ export function TurnPresence({ config, className }: TurnPresenceProps): React.JS
 export function BackgroundRunPresence({
   active,
   startedAt = null,
+  liveStage = null,
   className
 }: {
   /** `useBackgroundChatRun().backgroundActive`（own-run 已在那里掩蔽：前台流式回合不会同时冒这条）。 */
   active: boolean
   /** 回合起点（epoch ms，由 `/run/active` 的 `ageMs` 换算）。秒表据此**接续**。 */
   startedAt?: number | null
+  /** Wave 2 — gateway liveStage snapshot (`thinking | calling-tool | writing`). */
+  liveStage?: BackgroundLiveStage | null
   className?: string
 }): React.JSX.Element | null {
   const { t } = useTranslation()
   const identity = useAssistantPresenceIdentity()
   if (!active) return null
+  let statusText = t('chat.runStatus.background')
+  if (liveStage) {
+    if (liveStage.stage === 'calling-tool' && liveStage.toolName) {
+      statusText = narrateToolCall({ toolName: liveStage.toolName }, t)
+    } else if (liveStage.stage === 'writing') {
+      statusText = t('chat.runStatus.writing')
+    } else if (liveStage.stage === 'thinking') {
+      statusText = liveStage.summary?.trim() || t('chat.status.thinking', { name: identity.name ?? 'AI' })
+    }
+  }
   return (
     <PresenceRow
       testId="background-run-presence"
@@ -420,7 +468,7 @@ export function BackgroundRunPresence({
       className={className}
     >
       <span className="min-w-0 truncate">
-        <ShimmerText shiny text={t('chat.runStatus.background')} />
+        <ShimmerText shiny text={statusText} />
       </span>
       <BackgroundStopwatch anchorMs={startedAt} title={t('chat.runStatus.elapsed')} />
       <span className="truncate text-meta text-ink-fg-3">{t('chat.runStatus.backgroundHint')}</span>

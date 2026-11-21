@@ -35,6 +35,10 @@ export interface TurnStagePart {
   readonly type: string
   readonly text?: string | undefined
   readonly toolName?: string | undefined
+  readonly args?: unknown
+  readonly argsText?: string | undefined
+  readonly name?: string | undefined
+  readonly data?: unknown
   readonly result?: unknown
   readonly isError?: boolean | undefined
   readonly approval?: { readonly approved?: boolean; readonly resolution?: string } | undefined
@@ -54,6 +58,10 @@ export interface TurnStageInput {
 export interface TurnStageResult {
   readonly stage: TurnStage
   readonly toolName?: string | undefined
+  readonly toolArgs?: unknown
+  readonly toolArgsText?: string | undefined
+  readonly reasoningText?: string | undefined
+  readonly turnStatusHint?: string | undefined
   readonly stallLevel: StallLevel
 }
 
@@ -91,6 +99,24 @@ function lastMeaningfulPart(parts: readonly TurnStagePart[]): TurnStagePart | un
   return undefined
 }
 
+/** Extract optional reserved gateway status hint (`data-turn-status`). */
+function extractTurnStatusHint(parts: readonly TurnStagePart[]): string | undefined {
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    const part = parts[i]
+    if (!part) continue
+    const isStatusPart =
+      part.type === 'data-turn-status' || (part.type === 'data' && part.name === 'turn-status')
+    if (!isStatusPart) continue
+    if (part.data && typeof part.data === 'object') {
+      const summary = (part.data as { summary?: unknown }).summary
+      if (typeof summary === 'string' && summary.trim().length > 0) {
+        return summary.trim()
+      }
+    }
+  }
+  return undefined
+}
+
 /** Pure stage derivation — parts + message status + stall level → stage. Order matters:
  *  terminal error first, then the approval gate (highest UI priority), then non-running, then
  *  the running sub-states (stall wins over the part-derived stage). */
@@ -122,15 +148,25 @@ export function deriveTurnStage(input: TurnStageInput): TurnStageResult {
 
   // Running sub-states.
   if (stallLevel > 0) return { stage: 'stalled', stallLevel }
-  if (last == null) return { stage: 'connecting', stallLevel }
-  if (last.type === 'reasoning') return { stage: 'thinking', stallLevel }
+  const turnStatusHint = extractTurnStatusHint(parts)
+  if (last == null) return { stage: 'connecting', turnStatusHint, stallLevel }
+  if (last.type === 'reasoning') {
+    return { stage: 'thinking', reasoningText: last.text, turnStatusHint, stallLevel }
+  }
   if (last.type === 'text') return { stage: 'writing', stallLevel }
   if (last.type === 'tool-call') {
     // A settled tool with the turn still running = the model is generating its next step.
-    if (toolPartResolved(last)) return { stage: 'thinking', stallLevel }
-    return { stage: 'calling-tool', toolName: last.toolName, stallLevel }
+    if (toolPartResolved(last)) return { stage: 'thinking', turnStatusHint, stallLevel }
+    return {
+      stage: 'calling-tool',
+      toolName: last.toolName,
+      toolArgs: last.args,
+      toolArgsText: last.argsText,
+      turnStatusHint,
+      stallLevel
+    }
   }
-  return { stage: 'connecting', stallLevel }
+  return { stage: 'connecting', turnStatusHint, stallLevel }
 }
 
 export const STALL_1_MS = 15_000

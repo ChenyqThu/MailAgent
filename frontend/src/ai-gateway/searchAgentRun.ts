@@ -149,6 +149,30 @@ function normalizeLoopError(
   }
 }
 
+function describeSearchStep(
+  toolCalls: ReadonlyArray<{ toolName: string; input?: unknown }>
+): string | undefined {
+  for (const call of toolCalls) {
+    const input =
+      call.input && typeof call.input === 'object' ? (call.input as Record<string, unknown>) : null
+    if (call.toolName === 'email_search_fulltext') {
+      const q = typeof input?.query === 'string' ? input.query.trim() : ''
+      return q ? `搜索「${q.slice(0, 24)}」` : '搜索邮件'
+    }
+    if (call.toolName === 'email_search_attachments') {
+      const q = typeof input?.query === 'string' ? input.query.trim() : ''
+      return q ? `检索附件「${q.slice(0, 24)}」` : '检索附件内容'
+    }
+  }
+  const readCount = toolCalls.filter(
+    (c) =>
+      c.toolName === 'email_body' || c.toolName === 'email_get' || c.toolName === 'email_list_thread'
+  ).length
+  if (readCount > 0) return `阅读 ${readCount} 封相关邮件`
+  if (toolCalls.some((c) => c.toolName === 'email_attachment_text')) return '阅读附件正文'
+  return undefined
+}
+
 /**
  * Run one headless search-agent loop: generateText with the four read tools + the
  * loop-private present_results terminator, then assemble the structured result from
@@ -159,11 +183,13 @@ export async function runHeadlessSearchAgent(
   cfg: AiGatewayConfig,
   opts: SearchAgentRunOpts,
   abortSignal: AbortSignal,
-  onPhase?: (phase: SearchAgentPhase) => void
+  onPhase?: (phase: SearchAgentPhase, detail?: string) => void,
+  onProgress?: (phase: SearchAgentPhase, detail: string) => void
 ): Promise<HeadlessSearchAgentResult> {
   const pool = new Map<number, SearchHit>()
   let presented: PresentResultsPayload | null = null
   let sawSearchPhase = false
+  let lastProgressDetail: string | undefined
 
   // present_results — loop-private terminator. The model-facing schema mirrors the
   // legacy JSON schema (same fields / required / caps in the description); execute
@@ -180,7 +206,8 @@ export async function runHeadlessSearchAgent(
     }),
     execute: async (input) => {
       if (!presented) presented = extractPresentResults(input)
-      onPhase?.('summarizing')
+      const count = pool.size
+      onPhase?.('summarizing', count > 0 ? `整理 ${count} 封候选结果` : undefined)
       // Placeholder output (legacy parity — the handler returned ok({})); the loop
       // stops via stopWhen before the model ever reads it.
       return {}
@@ -213,9 +240,14 @@ export async function runHeadlessSearchAgent(
         for (const tr of step.toolResults) {
           if (tr.toolName === 'email_search_fulltext') mergeSearchHits(pool, tr.output)
         }
+        const detail = describeSearchStep(step.toolCalls)
         if (!sawSearchPhase && step.toolCalls.some((c) => c.toolName === 'email_search_fulltext')) {
           sawSearchPhase = true
-          onPhase?.('searching')
+          lastProgressDetail = detail
+          onPhase?.('searching', detail)
+        } else if (detail && detail !== lastProgressDetail && !presented) {
+          lastProgressDetail = detail
+          onProgress?.('searching', detail)
         }
       }
     })

@@ -376,7 +376,7 @@ export function AIChatPanel({
   // 'chat:turn-persisted'. onSessionsTouched refreshes the popover's local session rows (badge
   // source for the email-scoped history list).
   const chatRefreshSessions = chat.refreshSessions
-  const { backgroundActive, backgroundStartedAt } = useBackgroundChatRun({
+  const { backgroundActive, backgroundStartedAt, backgroundLiveStage } = useBackgroundChatRun({
     gatewayBaseUrl,
     sessionId: chatActiveSessionId,
     enabled: contextInjectionOn,
@@ -633,6 +633,7 @@ export function AIChatPanel({
       <BackgroundRunPresence
         active={backgroundActive || queuedRows.dispatchInFlight}
         startedAt={backgroundStartedAt ?? queuedRows.dispatchStartedAt}
+        liveStage={backgroundLiveStage}
         className="mb-4"
       />
       <QueuedInputBar

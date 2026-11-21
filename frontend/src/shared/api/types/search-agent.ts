@@ -15,8 +15,8 @@ export interface SearchAgentInput {
   mailbox?: string
   /** 外部取消信号（与内部 AbortController 联动）。 */
   signal?: AbortSignal
-  /** 可选阶段回调：第一个 email_search_fulltext → 'searching'；present_results → 'summarizing'。 */
-  onPhase?: (phase: SearchAgentPhase) => void
+  /** 可选阶段回调：第一个 email_search_fulltext → 'searching'；present_results → 'summarizing'，附可选步骤明细。 */
+  onPhase?: (phase: SearchAgentPhase, detail?: string) => void
 }
 
 export interface SearchAgentResult {
