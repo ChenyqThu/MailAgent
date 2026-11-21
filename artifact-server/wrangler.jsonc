@@ -1,0 +1,36 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "mailagent-artifact-server",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "routes": [
+    {
+      "pattern": "canvas.chenge.ink",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "PUBLIC_BASE_URL": "https://canvas.chenge.ink",
+    "SERVER_NAME": "Canvas Artifact Server",
+    "ALLOW_CF_ACCESS": "false"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "canvas-artifacts-db",
+      "database_id": "b8992fdf-f1ed-4bc1-bf66-859ae6685aa0",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "ARTIFACTS_KV",
+      "id": "587e273278194d52a6649e65b6627a1f"
+    }
+  ]
+}
