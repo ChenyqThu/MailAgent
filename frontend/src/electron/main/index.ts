@@ -10,11 +10,14 @@ import {
 } from './appearance'
 import { registerCliLifecycle } from './cli_runner'
 import {
+  configureBackendBridgeHooks,
   readDbIntegrityFailure,
   registerBackendLifecycle,
   registerBackendQuitHook,
   resolveApiPort
 } from './backend_lifecycle'
+import { getLocalApiToken } from './local_token'
+import { registerEmbeddedBrowser, type EmbeddedBrowserController } from './embedded_browser'
 // chat-panel P4 Phase 02 — pure port resolver (config.ts only type-imports `ai`,
 // so this static import does NOT pull the heavy AI SDK chunk into the main bundle).
 import { resolveAiGatewayPort } from '../../ai-gateway/config'
@@ -403,6 +406,7 @@ function createDetachedWindow(kind: 'email' | 'report', id: string): void {
 }
 
 let cuOverlayDispose: (() => void) | null = null
+let embeddedBrowserDispose: (() => Promise<void>) | null = null
 
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('ink.chenge.mailagent')
@@ -597,6 +601,24 @@ app.whenReady().then(async () => {
   registerLibraryHandlers()
   installLibraryPreviewProtocol()
 
+  let embeddedBrowser: EmbeddedBrowserController | null = null
+  try {
+    embeddedBrowser = await registerEmbeddedBrowser({
+      getHostWindow: () => primaryWindow,
+      resolveApiPort,
+      getLocalToken: getLocalApiToken
+    })
+    embeddedBrowserDispose = embeddedBrowser.dispose
+    configureBackendBridgeHooks({
+      extraEnv: () => embeddedBrowser?.getBridgeEnv() ?? {},
+      onApiReady: () => {
+        void embeddedBrowser?.syncBridgeWithApi()
+      }
+    })
+  } catch (err) {
+    console.error('[embedded-browser] 启动失败 (将回退 headless Chromium 模式)', err)
+  }
+
   ipcMain.on('ping', () => console.log('pong'))
 
   // Sprint 14 PR E — popout opener. Fire-and-forget from the renderer
@@ -671,6 +693,7 @@ app.whenReady().then(async () => {
   } else {
     // dev / 服务器部署: 后端走 pm2, 不接管; 行为零变更。
     createWindow()
+    void embeddedBrowser?.syncBridgeWithApi()
   }
 
   const rendererUrl =
@@ -747,6 +770,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   abortAllTranslations()
   cuOverlayDispose?.()
+  void embeddedBrowserDispose?.()
   // V2.1 阶段 3c-4 cutover：chat dispatcher 的 _inflight 现在在 renderer 进程（ChatRuntime），
   // 随窗口生命周期销毁，main 不再持 → 无 abortAllChatSessions()。notion-agent 子进程串行闸
   // （drainNotionAgentGate）随 main execa backend 一并删除（serve-api asyncio spawn 接管）。

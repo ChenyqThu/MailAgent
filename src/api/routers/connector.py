@@ -894,10 +894,46 @@ async def launch_browser_managed_window(
     return success_envelope(res, request=request)
 
 
+@router.post("/browser_use/desktop-bridge", dependencies=[Depends(verify_local_token)])
+async def register_browser_desktop_bridge(
+    request: Request,
+    payload: Optional[dict[str, Any]] = Body(default=None),
+) -> Any:
+    """Electron 主进程注册或注销原生 WebContentsView 浏览器 loopback CDP/Cookie 桥接。"""
+    from src.connectors.desktop_bridge import desktop_browser_bridge
+    from src.connectors.stdio_pool import stdio_pool
+
+    raw = payload or {}
+    active = bool(raw.get("active"))
+    if active:
+        cdp_ws_url = raw.get("cdp_ws_url")
+        control_url = raw.get("control_url")
+        if not isinstance(cdp_ws_url, str) or not isinstance(control_url, str):
+            raise APIError(
+                "E_INVALID_ARG",
+                "cdp_ws_url and control_url are required when active=true",
+                http_status=400,
+            )
+        try:
+            desktop_browser_bridge.register(
+                cdp_ws_url,
+                control_url,
+                control_token=request.headers.get("X-MailAgent-Local-Token"),
+            )
+        except ValueError as e:
+            raise APIError("E_INVALID_ARG", str(e), http_status=400) from None
+    else:
+        desktop_browser_bridge.clear()
+
+    await stdio_pool.invalidate("browser_use")
+    return success_envelope({"active": active}, request=request)
+
+
 @router.get("/browser_use/live/status", dependencies=[Depends(verify_cf_access)])
 async def browser_live_status(request: Request, settings=Depends(get_settings)) -> Any:
     """只读查看内置受管浏览器的安装态、运行态与打开标签列表（永不拉起进程）。"""
     _require_managed_local_enabled(settings)
+    from src.connectors.desktop_bridge import desktop_browser_bridge
     from src.connectors.local_installer import LocalInstallerError, get_install_status
     from src.connectors.managed_browser import managed_browser
 
@@ -910,6 +946,23 @@ async def browser_live_status(request: Request, settings=Depends(get_settings)) 
         )
     except LocalInstallerError as e:
         raise APIError(e.code, e.message, http_status=e.status_code) from None
+
+    desktop_alive = await run_in_threadpool(desktop_browser_bridge.is_alive)
+    if desktop_alive:
+        return success_envelope(
+            {
+                "installed": bool(install.get("installed")),
+                "mode": str(install.get("mode") or "isolated_profile"),
+                "headless": bool((install.get("runtime_config") or {}).get("headless", True)),
+                "running": True,
+                "engine": "electron_native",
+                "cdp_url": None,
+                "active_viewers": 1,
+                "tabs": [],
+            },
+            request=request,
+        )
+
     live = await managed_browser.get_status()
     return success_envelope(
         {
@@ -917,6 +970,7 @@ async def browser_live_status(request: Request, settings=Depends(get_settings)) 
             "mode": str(install.get("mode") or "isolated_profile"),
             "headless": bool((install.get("runtime_config") or {}).get("headless", True)),
             "running": bool(live.get("running")),
+            "engine": "headless_screencast",
             "cdp_url": live.get("cdp_url"),
             "active_viewers": int(live.get("active_viewers") or 0),
             "tabs": live.get("tabs") or [],

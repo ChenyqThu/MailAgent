@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next'
 import {
   ArrowLeft,
   ArrowRight,
+  Code2,
   ExternalLink,
   Globe,
   KeyRound,
@@ -23,6 +24,7 @@ import {
   Plus,
   Power,
   RefreshCw,
+  RotateCcw,
   RotateCw,
   Square,
   X
@@ -30,6 +32,11 @@ import {
 
 import type { ManagedBrowserTabInfo } from '@shared/api/types'
 import { COMPUTER_USE_IPC } from '@shared/computerUseOverlayContract'
+import type {
+  EmbeddedBrowserBounds,
+  EmbeddedBrowserPreloadApi,
+  EmbeddedBrowserState
+} from '@shared/embeddedBrowserContract'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { resolveBrowserLiveWsUrl } from '@shared/lib/apiBaseUrl'
 import { cn } from '@shared/lib/cn'
@@ -93,6 +100,31 @@ function mouseButtonName(button: number): 'left' | 'middle' | 'right' {
   return 'left'
 }
 
+function getNativeBrowserApi(): EmbeddedBrowserPreloadApi | null {
+  if (typeof window === 'undefined') return null
+  const candidate = (window as unknown as { api?: { embeddedBrowser?: EmbeddedBrowserPreloadApi } })
+    .api?.embeddedBrowser
+  return candidate ?? null
+}
+
+function hasOverlappingDomOverlay(viewport: HTMLElement | null): boolean {
+  if (!viewport || typeof document === 'undefined') return false
+  const box = viewport.getBoundingClientRect()
+  if (box.width < 10 || box.height < 10) return false
+  const nodes = document.querySelectorAll(
+    '[role="dialog"], [aria-modal="true"], [data-radix-popper-content-wrapper]'
+  )
+  for (const el of nodes) {
+    if (viewport.contains(el)) continue
+    const r = el.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0) continue
+    const overlaps =
+      r.right > box.left && r.left < box.right && r.bottom > box.top && r.top < box.bottom
+    if (overlaps) return true
+  }
+  return false
+}
+
 export function ManagedBrowserPane({
   mode,
   onClose,
@@ -106,8 +138,11 @@ export function ManagedBrowserPane({
   const activity = useManagedBrowserUi((s) => s.activity)
   const pendingUrl = useManagedBrowserUi((s) => s.pendingUrl)
   const consumePendingUrl = useManagedBrowserUi((s) => s.consumePendingUrl)
+  const nativeBrowser = getNativeBrowserApi()
 
-  const [connStatus, setConnStatus] = useState<ConnectionStatus>('connecting')
+  const [connStatus, setConnStatus] = useState<ConnectionStatus>(() =>
+    nativeBrowser ? 'connected' : 'connecting'
+  )
   const [errorCode, setErrorCode] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [tabs, setTabs] = useState<ManagedBrowserTabInfo[]>([])
@@ -115,6 +150,12 @@ export function ManagedBrowserPane({
   const [currentUrl, setCurrentUrl] = useState<string>('about:blank')
   const [urlInput, setUrlInput] = useState<string>('')
   const [hasFrame, setHasFrame] = useState<boolean>(false)
+  const [nativeMeta, setNativeMeta] = useState<{
+    loading: boolean
+    canGoBack: boolean
+    canGoForward: boolean
+  }>({ loading: false, canGoBack: false, canGoForward: false })
+  const [hasCoveringOverlay, setHasCoveringOverlay] = useState<boolean>(false)
   const [reconnectNonce, setReconnectNonce] = useState<number>(0)
   const [stoppingAgent, setStoppingAgent] = useState<boolean>(false)
   const [menuOpen, setMenuOpen] = useState<boolean>(false)
@@ -152,6 +193,51 @@ export function ManagedBrowserPane({
     tRef.current = t
   }, [t])
 
+  const applyNativeState = useCallback((state: EmbeddedBrowserState): void => {
+    setTabs(state.tabs.map((tab) => ({ id: tab.id, title: tab.title, url: tab.url })))
+    setActiveTargetId(state.activeTabId)
+    const nextUrl = state.url || 'about:blank'
+    setCurrentUrl(nextUrl)
+    setNativeMeta({
+      loading: Boolean(state.loading),
+      canGoBack: Boolean(state.canGoBack),
+      canGoForward: Boolean(state.canGoForward)
+    })
+    if (document.activeElement !== urlInputRef.current) {
+      setUrlInput(nextUrl === 'about:blank' ? '' : nextUrl)
+    }
+    const displayTitle = state.title.trim() || (nextUrl !== 'about:blank' ? nextUrl : '')
+    if (displayTitle) {
+      onActiveTitleChangeRef.current?.(displayTitle)
+    }
+  }, [])
+
+  const measureNativeBounds = useCallback(
+    (visibleOverride?: boolean): EmbeddedBrowserBounds => {
+      const rect = viewportBoxRef.current?.getBoundingClientRect()
+      const width = rect ? Math.max(0, Math.round(rect.width)) : 0
+      const height = rect ? Math.max(0, Math.round(rect.height)) : 0
+      const hidden = cookiePanelOpen || menuOpen || hasCoveringOverlay
+      const visible =
+        visibleOverride !== undefined
+          ? visibleOverride
+          : !hidden && width >= 10 && height >= 10 && document.visibilityState !== 'hidden'
+      return {
+        x: rect ? Math.round(rect.left) : 0,
+        y: rect ? Math.round(rect.top) : 0,
+        width,
+        height,
+        visible
+      }
+    },
+    [cookiePanelOpen, menuOpen, hasCoveringOverlay]
+  )
+
+  const measureNativeBoundsRef = useRef(measureNativeBounds)
+  useEffect(() => {
+    measureNativeBoundsRef.current = measureNativeBounds
+  }, [measureNativeBounds])
+
   const sendCmd = useCallback((payload: Record<string, unknown>): void => {
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN) return
@@ -177,7 +263,96 @@ export function ManagedBrowserPane({
   }, [menuOpen])
 
   useEffect(() => {
-    if (connStatus !== 'connected' || !pendingUrl) return
+    if (!nativeBrowser || typeof MutationObserver === 'undefined' || typeof document === 'undefined') {
+      return
+    }
+    let raf = 0
+    const checkOverlay = (): void => {
+      raf = 0
+      setHasCoveringOverlay(hasOverlappingDomOverlay(viewportBoxRef.current))
+    }
+    const schedule = (): void => {
+      if (!raf) raf = window.requestAnimationFrame(checkOverlay)
+    }
+    schedule()
+    const mo = new MutationObserver(schedule)
+    mo.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['style', 'class', 'data-state', 'aria-hidden', 'open']
+    })
+    return () => {
+      mo.disconnect()
+      if (raf) window.cancelAnimationFrame(raf)
+    }
+  }, [nativeBrowser])
+
+  useEffect(() => {
+    if (!nativeBrowser) return
+    let disposed = false
+    const unsub = nativeBrowser.onStateChanged((s) => {
+      if (!disposed) applyNativeState(s)
+    })
+
+    const syncBounds = (): void => {
+      if (!disposed) {
+        void nativeBrowser.setBounds(measureNativeBoundsRef.current())
+      }
+    }
+
+    void nativeBrowser
+      .attach(measureNativeBoundsRef.current())
+      .then((s) => {
+        if (!disposed) {
+          setConnStatus('connected')
+          applyNativeState(s)
+        }
+      })
+      .catch((err) => {
+        if (!disposed) {
+          toastError(err instanceof Error ? err.message : String(err))
+        }
+      })
+
+    const box = viewportBoxRef.current
+    const ro =
+      box && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(syncBounds) : null
+    if (box && ro) ro.observe(box)
+    window.addEventListener('resize', syncBounds)
+    window.addEventListener('transitionend', syncBounds)
+    document.addEventListener('visibilitychange', syncBounds)
+
+    return () => {
+      disposed = true
+      unsub()
+      ro?.disconnect()
+      window.removeEventListener('resize', syncBounds)
+      window.removeEventListener('transitionend', syncBounds)
+      document.removeEventListener('visibilitychange', syncBounds)
+      void nativeBrowser.detach()
+    }
+  }, [nativeBrowser, applyNativeState])
+
+  useEffect(() => {
+    if (!nativeBrowser) return
+    void nativeBrowser.setBounds(measureNativeBounds())
+  }, [nativeBrowser, measureNativeBounds])
+
+  useEffect(() => {
+    if (!pendingUrl) return
+    if (nativeBrowser) {
+      const url = consumePendingUrl()
+      if (!url) return
+      const cur = currentUrlRef.current
+      const op =
+        !cur || cur === 'about:blank' ? nativeBrowser.navigate(url) : nativeBrowser.newTab(url)
+      void op.then(applyNativeState).catch((err: unknown) => {
+        toastError(err instanceof Error ? err.message : String(err))
+      })
+      return
+    }
+    if (connStatus !== 'connected') return
     const url = consumePendingUrl()
     if (!url) return
     const cur = currentUrlRef.current
@@ -186,7 +361,7 @@ export function ManagedBrowserPane({
     } else {
       sendCmd({ type: 'new_tab', url })
     }
-  }, [connStatus, pendingUrl, consumePendingUrl, sendCmd])
+  }, [nativeBrowser, connStatus, pendingUrl, consumePendingUrl, sendCmd, applyNativeState])
 
   const drawImageToCanvas = useCallback((img: HTMLImageElement, rw: number, rh: number): void => {
     const canvas = canvasRef.current
@@ -221,6 +396,7 @@ export function ManagedBrowserPane({
   }, [drawImageToCanvas])
 
   useEffect(() => {
+    if (nativeBrowser) return
     let disposed = false
     const wsUrl = resolveBrowserLiveWsUrl()
     const ws = new WebSocket(wsUrl)
@@ -301,7 +477,7 @@ export function ManagedBrowserPane({
       if (wsRef.current === ws) wsRef.current = null
       ws.close()
     }
-  }, [reconnectNonce, drawImageToCanvas])
+  }, [nativeBrowser, reconnectNonce, drawImageToCanvas])
 
   const clientToRemote = useCallback(
     (clientX: number, clientY: number): { x: number; y: number } => {
@@ -448,11 +624,98 @@ export function ManagedBrowserPane({
     }
   }
 
+  const navigateUrl = (rawUrl: string): void => {
+    if (nativeBrowser) {
+      void nativeBrowser.navigate(rawUrl).then(applyNativeState).catch((err: unknown) => {
+        toastError(err instanceof Error ? err.message : String(err))
+      })
+      return
+    }
+    sendCmd({ type: 'navigate', url: rawUrl })
+  }
+
+  const switchToTab = (tabId: string): void => {
+    if (nativeBrowser) {
+      void nativeBrowser.switchTab(tabId).then(applyNativeState)
+      return
+    }
+    sendCmd({ type: 'switch_tab', targetId: tabId })
+  }
+
+  const openNewTab = (rawUrl = 'about:blank'): void => {
+    if (nativeBrowser) {
+      void nativeBrowser.newTab(rawUrl).then(applyNativeState).catch((err: unknown) => {
+        toastError(err instanceof Error ? err.message : String(err))
+      })
+      return
+    }
+    sendCmd({ type: 'new_tab', url: rawUrl })
+  }
+
+  const closeTargetTab = (tabId: string): void => {
+    if (nativeBrowser) {
+      void nativeBrowser.closeTab(tabId).then(applyNativeState)
+      return
+    }
+    sendCmd({ type: 'close_tab', targetId: tabId })
+  }
+
+  const goBack = (): void => {
+    if (nativeBrowser) {
+      void nativeBrowser.back().then(applyNativeState)
+      return
+    }
+    sendCmd({ type: 'back' })
+  }
+
+  const goForward = (): void => {
+    if (nativeBrowser) {
+      void nativeBrowser.forward().then(applyNativeState)
+      return
+    }
+    sendCmd({ type: 'forward' })
+  }
+
+  const reloadPage = (): void => {
+    if (nativeBrowser) {
+      void nativeBrowser.reload().then(applyNativeState)
+      return
+    }
+    sendCmd({ type: 'reload' })
+  }
+
+  const handleOpenDevTools = (): void => {
+    if (!nativeBrowser) return
+    void nativeBrowser.openDevTools()
+  }
+
+  const handleResetSession = (): void => {
+    if (!nativeBrowser) return
+    void nativeBrowser.resetSession().then(applyNativeState).catch((err: unknown) => {
+      toastError(err instanceof Error ? err.message : String(err))
+    })
+  }
+
+  const handleOpenInSystemBrowser = (): void => {
+    const url = currentUrl
+    if (!url || !/^https?:\/\//i.test(url)) {
+      handleLaunchExternalChrome()
+      return
+    }
+    const ipc = (window as unknown as { electron?: { ipcRenderer?: ElectronIpcInvoker } }).electron
+      ?.ipcRenderer
+    if (ipc?.invoke) {
+      void ipc.invoke('shell:openExternal', url)
+      return
+    }
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
   const handleNavigateSubmit = (e: FormEvent<HTMLFormElement>): void => {
     e.preventDefault()
     const trimmed = urlInput.trim()
     if (!trimmed) return
-    sendCmd({ type: 'navigate', url: trimmed })
+    navigateUrl(trimmed)
   }
 
   const handleReconnect = (): void => {
@@ -525,11 +788,11 @@ export function ManagedBrowserPane({
                   role="tab"
                   aria-selected={selected}
                   tabIndex={0}
-                  onClick={() => sendCmd({ type: 'switch_tab', targetId: tab.id })}
+                  onClick={() => switchToTab(tab.id)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault()
-                      sendCmd({ type: 'switch_tab', targetId: tab.id })
+                      switchToTab(tab.id)
                     }
                   }}
                   title={tab.url}
@@ -547,7 +810,7 @@ export function ManagedBrowserPane({
                     title={t('browserPane.closeTab')}
                     onClick={(e) => {
                       e.stopPropagation()
-                      sendCmd({ type: 'close_tab', targetId: tab.id })
+                      closeTargetTab(tab.id)
                     }}
                     className="grid size-4 shrink-0 place-items-center rounded text-ink-fg-3 hover:bg-ink-5 hover:text-ink-fg"
                   >
@@ -561,7 +824,7 @@ export function ManagedBrowserPane({
             type="button"
             aria-label={t('browserPane.newTab')}
             title={t('browserPane.newTab')}
-            onClick={() => sendCmd({ type: 'new_tab', url: 'about:blank' })}
+            onClick={() => openNewTab('about:blank')}
             className="grid size-7 shrink-0 place-items-center rounded-md text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
           >
             <Plus size={14} strokeWidth={2} />
@@ -619,30 +882,73 @@ export function ManagedBrowserPane({
                   <KeyRound size={14} strokeWidth={1.75} className="shrink-0 text-coral" />
                   <span>{t('browserPane.manageCookies')}</span>
                 </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setMenuOpen(false)
-                    handleLaunchExternalChrome()
-                  }}
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-aux text-ink-fg transition-colors hover:bg-ink-3"
-                >
-                  <ExternalLink size={14} strokeWidth={1.75} className="shrink-0 text-ink-fg-2" />
-                  <span>{t('browserPane.openExternalChrome')}</span>
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setMenuOpen(false)
-                    handleStopKernel()
-                  }}
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-aux text-fail transition-colors hover:bg-ink-3"
-                >
-                  <Power size={14} strokeWidth={1.75} className="shrink-0" />
-                  <span>{t('browserPane.stopKernel')}</span>
-                </button>
+                {nativeBrowser ? (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenuOpen(false)
+                        handleOpenDevTools()
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-aux text-ink-fg transition-colors hover:bg-ink-3"
+                    >
+                      <Code2 size={14} strokeWidth={1.75} className="shrink-0 text-ink-fg-2" />
+                      <span>{t('browserPane.openDevTools')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenuOpen(false)
+                        handleOpenInSystemBrowser()
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-aux text-ink-fg transition-colors hover:bg-ink-3"
+                    >
+                      <ExternalLink size={14} strokeWidth={1.75} className="shrink-0 text-ink-fg-2" />
+                      <span>{t('chat.inspector.openInSystemBrowser')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenuOpen(false)
+                        handleResetSession()
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-aux text-fail transition-colors hover:bg-ink-3"
+                    >
+                      <RotateCcw size={14} strokeWidth={1.75} className="shrink-0" />
+                      <span>{t('browserPane.resetSession')}</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenuOpen(false)
+                        handleLaunchExternalChrome()
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-aux text-ink-fg transition-colors hover:bg-ink-3"
+                    >
+                      <ExternalLink size={14} strokeWidth={1.75} className="shrink-0 text-ink-fg-2" />
+                      <span>{t('browserPane.openExternalChrome')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenuOpen(false)
+                        handleStopKernel()
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-aux text-fail transition-colors hover:bg-ink-3"
+                    >
+                      <Power size={14} strokeWidth={1.75} className="shrink-0" />
+                      <span>{t('browserPane.stopKernel')}</span>
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -697,8 +1003,9 @@ export function ManagedBrowserPane({
           type="button"
           aria-label={t('browserPane.back')}
           title={t('browserPane.back')}
-          onClick={() => sendCmd({ type: 'back' })}
-          className="grid size-7 shrink-0 place-items-center rounded-md text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+          disabled={Boolean(nativeBrowser && !nativeMeta.canGoBack)}
+          onClick={goBack}
+          className="grid size-7 shrink-0 place-items-center rounded-md text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg disabled:opacity-40 disabled:pointer-events-none"
         >
           <ArrowLeft size={14} strokeWidth={1.75} />
         </button>
@@ -706,8 +1013,9 @@ export function ManagedBrowserPane({
           type="button"
           aria-label={t('browserPane.forward')}
           title={t('browserPane.forward')}
-          onClick={() => sendCmd({ type: 'forward' })}
-          className="grid size-7 shrink-0 place-items-center rounded-md text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+          disabled={Boolean(nativeBrowser && !nativeMeta.canGoForward)}
+          onClick={goForward}
+          className="grid size-7 shrink-0 place-items-center rounded-md text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg disabled:opacity-40 disabled:pointer-events-none"
         >
           <ArrowRight size={14} strokeWidth={1.75} />
         </button>
@@ -715,10 +1023,14 @@ export function ManagedBrowserPane({
           type="button"
           aria-label={t('browserPane.reload')}
           title={t('browserPane.reload')}
-          onClick={() => sendCmd({ type: 'reload' })}
+          onClick={reloadPage}
           className="grid size-7 shrink-0 place-items-center rounded-md text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
         >
-          <RotateCw size={14} strokeWidth={1.75} />
+          <RotateCw
+            size={14}
+            strokeWidth={1.75}
+            className={cn(nativeMeta.loading && 'animate-spin text-coral')}
+          />
         </button>
         <input
           ref={urlInputRef}
@@ -732,33 +1044,38 @@ export function ManagedBrowserPane({
         />
       </form>
 
-      {/* Live interactive screencast canvas */}
+      {/* Native WebContentsView host container (Electron) or live screencast canvas (Web) */}
       <div
         ref={viewportBoxRef}
+        data-testid="browser-viewport-box"
         className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-ink-0"
       >
-        <input
-          ref={imeInputRef}
-          type="text"
-          aria-hidden="true"
-          tabIndex={-1}
-          onCompositionStart={handleCompositionStart}
-          onCompositionEnd={handleCompositionEnd}
-          onInput={handleImeInput}
-          onPaste={handlePaste}
-          onKeyDown={handleImeKeyDown}
-          onKeyUp={handleImeKeyUp}
-          className="sr-only"
-        />
-        <canvas
-          ref={canvasRef}
-          onPointerDown={handlePointerDown}
-          onPointerUp={handlePointerUp}
-          onPointerMove={handlePointerMove}
-          onWheel={handleWheel}
-          onContextMenu={(e) => e.preventDefault()}
-          className="h-full w-full cursor-default select-none object-contain"
-        />
+        {!nativeBrowser && (
+          <>
+            <input
+              ref={imeInputRef}
+              type="text"
+              aria-hidden="true"
+              tabIndex={-1}
+              onCompositionStart={handleCompositionStart}
+              onCompositionEnd={handleCompositionEnd}
+              onInput={handleImeInput}
+              onPaste={handlePaste}
+              onKeyDown={handleImeKeyDown}
+              onKeyUp={handleImeKeyUp}
+              className="sr-only"
+            />
+            <canvas
+              ref={canvasRef}
+              onPointerDown={handlePointerDown}
+              onPointerUp={handlePointerUp}
+              onPointerMove={handlePointerMove}
+              onWheel={handleWheel}
+              onContextMenu={(e) => e.preventDefault()}
+              className="h-full w-full cursor-default select-none object-contain"
+            />
+          </>
+        )}
 
         {cookiePanelOpen ? (
           <div className="absolute inset-0 z-20 flex flex-col bg-ink-1">
@@ -767,7 +1084,7 @@ export function ManagedBrowserPane({
               onClose={() => setCookiePanelOpen(false)}
             />
           </div>
-        ) : showSetupCard ? (
+        ) : nativeBrowser ? null : showSetupCard ? (
           <div className="absolute inset-0 flex items-center justify-center bg-ink-0/90 p-6">
             <div className="flex max-w-sm flex-col items-center gap-3 rounded-xl border border-ink-border bg-ink-2 p-5 text-center">
               <Globe size={28} strokeWidth={1.5} className="text-coral" />

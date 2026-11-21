@@ -410,6 +410,7 @@ export interface ManagedBrowserLiveStatus {
   mode: string
   headless: boolean
   running: boolean
+  engine?: 'electron_native' | 'headless_screencast'
   cdp_url: string | null
   active_viewers: number
   tabs: ManagedBrowserTabInfo[]

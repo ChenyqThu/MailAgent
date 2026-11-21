@@ -398,7 +398,12 @@ def list_managed_cookie_domains(
     profile_dir: Optional[Path] = None,
     now_epoch: Optional[float] = None,
 ) -> dict[str, Any]:
-    """查看内置浏览器当前已保存登录态的域名清单（运行中走 CDP，未运行读受管 Cookies 库）。"""
+    """查看内置浏览器当前已保存登录态的域名清单（Desktop 优先走 Electron session，余走受管 Chromium）。"""
+    from src.connectors.desktop_bridge import desktop_browser_bridge
+
+    if profile_dir is None and desktop_browser_bridge.is_alive():
+        return desktop_browser_bridge.list_cookie_domains()
+
     from src.connectors.managed_browser import managed_browser
 
     if managed_browser.is_running():
@@ -426,6 +431,11 @@ def clear_managed_cookies(
 ) -> dict[str, Any]:
     """清理内置浏览器已保存的 Cookie（支持按域名单点清理或全部清空）。"""
     clean_domain = domain.strip() if isinstance(domain, str) and domain.strip() else None
+    from src.connectors.desktop_bridge import desktop_browser_bridge
+
+    if profile_dir is None and desktop_browser_bridge.is_alive():
+        return desktop_browser_bridge.clear_cookies(clean_domain)
+
     from src.connectors.managed_browser import managed_browser
 
     if managed_browser.is_running():
@@ -594,7 +604,14 @@ def inject_cookies_into_managed_profile(
     *,
     runtime_dir: Optional[Path] = None,
 ) -> dict[str, int]:
-    """把 Cookie 列表写入受管浏览器持久 Profile 目录（运行中走热注入，未启动则真实 Chrome 上下文注入并落盘）。"""
+    """把 Cookie 列表写入受管浏览器持久目录（Desktop 态直写 Electron session，否则走 CDP/冷注入）。"""
+    from src.connectors.desktop_bridge import desktop_browser_bridge
+
+    if runtime_dir is None and desktop_browser_bridge.is_alive():
+        if not cookies:
+            return {"imported": 0, "skipped": 0}
+        return desktop_browser_bridge.set_cookies(cookies)
+
     manifest, ep = _resolve_installed_entrypoint("browser_use")
     if manifest is None or ep is None:
         raise LocalInstallerError(
@@ -627,13 +644,17 @@ def import_chrome_cookies(
     cookie_injector: Optional[Callable[[list[dict[str, Any]], Path], dict[str, int]]] = None,
 ) -> dict[str, Any]:
     """端到端从指定 Chrome Profile 导入 Cookie 到内置受管浏览器持久目录。"""
-    manifest, ep = _resolve_installed_entrypoint("browser_use")
-    if manifest is None or ep is None:
-        raise LocalInstallerError(
-            "E_RUNTIME_NOT_INSTALLED",
-            "请先安装 Browser Use 本地运行时后再导入 Chrome 登录态。",
-            status_code=409,
-        )
+    from src.connectors.desktop_bridge import desktop_browser_bridge
+
+    desktop_alive = cookie_injector is None and desktop_browser_bridge.is_alive()
+    if not desktop_alive:
+        manifest, ep = _resolve_installed_entrypoint("browser_use")
+        if manifest is None or ep is None:
+            raise LocalInstallerError(
+                "E_RUNTIME_NOT_INSTALLED",
+                "请先安装 Browser Use 本地运行时后再导入 Chrome 登录态。",
+                status_code=409,
+            )
     pid = (profile_id or "Default").strip()
     cookie_db = resolve_chrome_cookie_db(pid, chrome_root=chrome_root)
     secret = keychain_reader()
@@ -642,9 +663,18 @@ def import_chrome_cookies(
         secret,
         domain_filters=domain_filters,
     )
-    rt_dir = runtime_dir_for("browser_use")
-    injector = cookie_injector or (lambda items, d: inject_cookies_into_managed_profile(items, runtime_dir=d))
-    counts = injector(cookies, rt_dir)
+    if desktop_alive:
+        counts = (
+            desktop_browser_bridge.set_cookies(cookies)
+            if cookies
+            else {"imported": 0, "skipped": 0}
+        )
+    else:
+        rt_dir = runtime_dir_for("browser_use")
+        injector = cookie_injector or (
+            lambda items, d: inject_cookies_into_managed_profile(items, runtime_dir=d)
+        )
+        counts = injector(cookies, rt_dir)
     logger.info(
         "[connector.chrome_import] imported {} cookie(s) (skipped {}) from Chrome profile {}",
         counts.get("imported", 0),

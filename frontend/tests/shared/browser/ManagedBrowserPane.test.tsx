@@ -93,6 +93,7 @@ afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
   delete (window as unknown as { electron?: unknown }).electron
+  delete (window as unknown as { api?: unknown }).api
 })
 
 describe('ManagedBrowserPane', () => {
@@ -196,5 +197,111 @@ describe('ManagedBrowserPane', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'browserPane.manageCookies' }))
     await screen.findByTestId('browser-cookie-manager')
     await waitFor(() => expect(mockManagedCookieDomains).toHaveBeenCalledTimes(1))
+  })
+})
+
+describe('ManagedBrowserPane native Electron WebContentsView mode', () => {
+  test('attaches native view, hides it when menu/cookie panel opens, routes navigation, and detaches on unmount', async () => {
+    let stateListener: ((s: Record<string, unknown>) => void) | null = null
+    const baseState = {
+      tabs: [
+        {
+          id: 'tab-1',
+          title: 'Internal Portal',
+          url: 'https://oa.corp',
+          loading: false,
+          canGoBack: true,
+          canGoForward: false
+        }
+      ],
+      activeTabId: 'tab-1',
+      url: 'https://oa.corp',
+      title: 'Internal Portal',
+      loading: false,
+      canGoBack: true,
+      canGoForward: false
+    }
+
+    const nativeApi = {
+      getState: vi.fn(async () => baseState),
+      attach: vi.fn(async () => baseState),
+      setBounds: vi.fn(async () => {}),
+      detach: vi.fn(async () => {}),
+      navigate: vi.fn(async (url: string) => ({ ...baseState, url, title: url })),
+      newTab: vi.fn(async (url = 'about:blank') => ({
+        ...baseState,
+        tabs: [
+          ...baseState.tabs,
+          { id: 'tab-2', title: '', url, loading: false, canGoBack: false, canGoForward: false }
+        ],
+        activeTabId: 'tab-2',
+        url
+      })),
+      switchTab: vi.fn(async () => baseState),
+      closeTab: vi.fn(async () => baseState),
+      back: vi.fn(async () => baseState),
+      forward: vi.fn(async () => baseState),
+      reload: vi.fn(async () => baseState),
+      openDevTools: vi.fn(async () => {}),
+      resetSession: vi.fn(async () => baseState),
+      onStateChanged: vi.fn((cb: (s: Record<string, unknown>) => void) => {
+        stateListener = cb
+        return () => {
+          stateListener = null
+        }
+      })
+    }
+
+    ;(window as unknown as { api?: unknown }).api = { embeddedBrowser: nativeApi }
+
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockReturnValue({
+        x: 50,
+        y: 60,
+        left: 50,
+        top: 60,
+        right: 650,
+        bottom: 760,
+        width: 600,
+        height: 700,
+        toJSON: () => ({})
+      } as DOMRect)
+
+    const { unmount } = render(<ManagedBrowserPane mode="sidebar" />)
+
+    await waitFor(() => expect(nativeApi.attach).toHaveBeenCalledTimes(1))
+    expect(FakeWebSocket.instances).toHaveLength(0)
+    expect(document.querySelector('canvas')).toBeNull()
+    expect(screen.getByText('Internal Portal')).toBeTruthy()
+    expect(stateListener).not.toBeNull()
+
+    // Navigate submits native IPC instead of WebSocket
+    const urlInput = screen.getByLabelText('browserPane.urlPlaceholder') as HTMLInputElement
+    fireEvent.change(urlInput, { target: { value: 'https://wiki.corp' } })
+    fireEvent.submit(urlInput.closest('form') as HTMLFormElement)
+    await waitFor(() => expect(nativeApi.navigate).toHaveBeenCalledWith('https://wiki.corp'))
+
+    // Opening cookie manager hides the native WebContentsView (`visible: false`)
+    fireEvent.click(screen.getByLabelText('browserPane.moreMenu'))
+    await waitFor(() =>
+      expect(nativeApi.setBounds).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: false })
+      )
+    )
+    fireEvent.click(screen.getByRole('menuitem', { name: 'browserPane.manageCookies' }))
+    await screen.findByTestId('browser-cookie-manager')
+
+    // Closing cookie manager restores visible: true
+    fireEvent.click(screen.getByLabelText('browserPane.cookieManager.close'))
+    await waitFor(() =>
+      expect(nativeApi.setBounds).toHaveBeenLastCalledWith(
+        expect.objectContaining({ visible: true, width: 600, height: 700 })
+      )
+    )
+
+    unmount()
+    expect(nativeApi.detach).toHaveBeenCalledTimes(1)
+    rectSpy.mockRestore()
   })
 })

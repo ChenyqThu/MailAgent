@@ -309,6 +309,17 @@ export function probeApiHealth(port: number = DEFAULT_API_PORT): Promise<boolean
   })
 }
 
+let _extraEnvProvider: (() => Record<string, string>) | null = null
+let _onApiReadyHook: (() => void) | null = null
+
+export function configureBackendBridgeHooks(opts: {
+  extraEnv?: () => Record<string, string>
+  onApiReady?: () => void
+}): void {
+  _extraEnvProvider = opts.extraEnv ?? null
+  _onApiReadyHook = opts.onApiReady ?? null
+}
+
 /** serve-api 首次就绪 → 广播给所有窗口 (events_bridge.broadcast 同形状)。
  *  尽力而为: 渲染进程已销毁 / 单测里 electron 只 mock 了 app —— 广播失败绝不能反过来
  *  打断软门控的就绪判定。 */
@@ -320,6 +331,11 @@ function broadcastApiReady(): void {
     }
   } catch {
     /* 窗口已拆 / BrowserWindow 不可用 — 忽略 */
+  }
+  try {
+    _onApiReadyHook?.()
+  } catch {
+    /* bridge sync is best-effort */
   }
 }
 
@@ -803,7 +819,8 @@ export class BackendLifecycleManager {
       // 08-12 win-port — Windows 上 python.exe 的 stdio 默认跟随控制台 code page
       // (cp1252), 后端的中文日志/异常一输出就 UnicodeEncodeError 把进程打崩。
       // 非 win32 返回空对象 → darwin 的 env 逐字节不变 (见 python_stdio_env.ts)。
-      ...pythonStdioEnv()
+      ...pythonStdioEnv(),
+      ...(_extraEnvProvider ? _extraEnvProvider() : {})
     }
   }
 
@@ -1267,4 +1284,6 @@ export function _resetBackendLifecycleForTests(): void {
   _quitHookRegistered = false
   _stopPromise = null
   _backendStopped = false
+  _extraEnvProvider = null
+  _onApiReadyHook = null
 }

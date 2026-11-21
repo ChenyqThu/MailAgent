@@ -552,22 +552,39 @@ class ConnectorClient:
             raise ConnectorUnconfigured(
                 f"stdio connector {self.connector_id} has no command configured"
             )
-        # Wave 7 — isolated_profile 模式的 browser_use 共用受管无头 Chromium CDP 实例，
-        # 让对话页内置实时画面面板与 @playwright/mcp 看到并操作同一浏览器页面与登录态。
+        # Wave 7 / Desktop Upgrade — isolated_profile 模式的 browser_use：
+        # Desktop 态优先通过目标隔离 loopback CDP WS 连接 Electron 原生 WebContentsView；
+        # Web/无头态回落 Python ManagedBrowserManager。
+        desktop_cdp_ws_url: Optional[str] = None
         if self.connector_id == "browser_use" and self.definition.source == "managed_local":
             args = [str(a) for a in (cmd.get("args") or [])]
             if "--user-data-dir" in args:
-                from src.connectors.managed_browser import managed_browser
+                from src.connectors.desktop_bridge import desktop_browser_bridge
 
-                cdp_url = await managed_browser.ensure_running(headless="--headless" in args)
-                cmd = {
-                    **cmd,
-                    "args": [args[0], f"--cdp-endpoint={cdp_url}"] if args else [f"--cdp-endpoint={cdp_url}"],
-                }
+                desktop_cdp_ws_url = await run_in_threadpool(
+                    desktop_browser_bridge.probe_cdp_ws_url
+                )
+                if desktop_cdp_ws_url:
+                    cmd = {
+                        **cmd,
+                        "args": [args[0]] if args else [],
+                    }
+                else:
+                    from src.connectors.managed_browser import managed_browser
+
+                    cdp_url = await managed_browser.ensure_running(headless="--headless" in args)
+                    cmd = {
+                        **cmd,
+                        "args": [args[0], f"--cdp-endpoint={cdp_url}"]
+                        if args
+                        else [f"--cdp-endpoint={cdp_url}"],
+                    }
         _headers, env = await run_in_threadpool(
             get_agent_config_store().get_connector_custom_secrets,
             self.connector_id,
         )
+        if desktop_cdp_ws_url:
+            env = {**(env or {}), "PLAYWRIGHT_MCP_CDP_ENDPOINT": desktop_cdp_ws_url}
         return cmd, env
 
     @asynccontextmanager
