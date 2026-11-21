@@ -51,6 +51,9 @@ export interface WorkspaceArtifact {
   readonly artifactType?: WorkspaceArtifactType | undefined
   readonly version?: number | undefined
   readonly versions?: readonly WorkspaceArtifactVersion[] | undefined
+  readonly remoteUrl?: string | undefined
+  readonly shareUrl?: string | undefined
+  readonly remoteVersion?: number | undefined
 }
 
 export type WorkspaceSourceKind =
@@ -215,6 +218,26 @@ function normalizeArtifactType(raw: unknown): WorkspaceArtifactType | undefined 
   return typeof raw === 'string' && ARTIFACT_TYPE_SET.has(raw as WorkspaceArtifactType)
     ? (raw as WorkspaceArtifactType)
     : undefined
+}
+
+function parseMcpArtifactPublishPayload(
+  resObj: Record<string, unknown> | null
+): Record<string, unknown> | null {
+  if (!resObj || resObj.is_error === true || resObj.ok === false) return null
+  const structured = asRecord(resObj.structuredContent)
+  if (structured && structured.ok !== false) return structured
+  if (typeof resObj.review_url === 'string' || typeof resObj.share_url === 'string' || resObj.links) {
+    return resObj
+  }
+  if (typeof resObj.content === 'string' && resObj.content.trim().startsWith('{')) {
+    try {
+      const parsed = asRecord(JSON.parse(resObj.content) as unknown)
+      if (parsed && parsed.ok !== false) return parsed
+    } catch {
+      return null
+    }
+  }
+  return null
 }
 
 export function artifactWorkspaceId(
@@ -796,6 +819,38 @@ export function deriveSessionWorkspace(
             matterPublicId: publicId ?? undefined,
             isMarkdown: true
           })
+          continue
+        }
+
+        if (mcp && (mcp.action === 'artifact_publish' || tc.toolName.endsWith('__artifact_publish'))) {
+          const payload = parseMcpArtifactPublishPayload(resObj)
+          if (payload) {
+            const slug = nonEmptyStr(payload.slug) ?? nonEmptyStr(argsObj?.slug)
+            const linksObj = asRecord(payload.links)
+            const reviewUrl = sanitizeExternalUrl(payload.review_url ?? linksObj?.review_url)?.url
+            const shareUrl = sanitizeExternalUrl(payload.share_url ?? linksObj?.share_url)?.url
+            const remoteVersion = positiveInt(payload.version) ?? undefined
+            const remoteUrl = reviewUrl ?? shareUrl
+            if (slug && remoteUrl) {
+              const key = artifactWorkspaceId(slug, tc.toolCallId)
+              const existing = artifactMap.get(key)
+              if (existing) {
+                artifactMap.set(key, {
+                  ...existing,
+                  remoteUrl,
+                  shareUrl: shareUrl ?? existing.shareUrl,
+                  remoteVersion: remoteVersion ?? existing.remoteVersion
+                })
+              } else {
+                recordLink(
+                  shareUrl ?? remoteUrl,
+                  nonEmptyStr(payload.title) ?? nonEmptyStr(argsObj?.title) ?? slug,
+                  'web-tool'
+                )
+              }
+            }
+          }
+          continue
         }
       }
 

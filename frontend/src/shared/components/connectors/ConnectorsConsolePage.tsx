@@ -52,6 +52,7 @@ import { BuiltinDetailPane } from './BuiltinDetailPane'
 import { ConnectorDetailPane } from './ConnectorDetailPane'
 import { CatalogDetailPane, CatalogLogo, ComposioAccountPane } from './CatalogDetailPane'
 import { CustomMcpDialog } from './CustomMcpDialog'
+import { SelfHostedPresetPane } from './SelfHostedPresetPane'
 
 /** 左栏行 —— 复用 Sidebar NavRow 的选中签名（`.row-selected acc-select` = --sel-wash 药丸 +
  *  3px 左条，DESIGN §18.1 C5：配置台左栏是导航面）。 */
@@ -208,6 +209,14 @@ export function ConnectorsConsolePage(): React.ReactElement {
     () => catalogEntries.filter((e) => !e.configured),
     [catalogEntries]
   )
+  const selfHostedPresets = React.useMemo(
+    () => catalog.data?.self_hosted_presets ?? [],
+    [catalog.data]
+  )
+  const unconfiguredPresets = React.useMemo(
+    () => selfHostedPresets.filter((p) => !p.configured),
+    [selfHostedPresets]
+  )
   const keyConfigured = catalog.data?.composio.configured === true
 
   // 归一：模糊落点（external）与失效落点（已被配置的 catalog 项 / 已删除的行）收敛到可渲染项。
@@ -220,7 +229,9 @@ export function ConnectorsConsolePage(): React.ReactElement {
         ? { kind: 'connector', id: connectors[0].connector_id }
         : unconfiguredEntries.length > 0
           ? { kind: 'catalog', id: unconfiguredEntries[0].connector_id }
-          : { kind: 'composio' }
+          : unconfiguredPresets.length > 0
+            ? { kind: 'preset', id: unconfiguredPresets[0].connector_id }
+            : { kind: 'composio' }
     const sel = rawSelection
     if (sel == null) return fallbackBuiltin ?? fallbackExternal
     switch (sel.kind) {
@@ -238,6 +249,9 @@ export function ConnectorsConsolePage(): React.ReactElement {
         if (catalogEntries.some((e) => e.connector_id === sel.id)) {
           return { kind: 'catalog', id: sel.id }
         }
+        if (selfHostedPresets.some((p) => p.connector_id === sel.id)) {
+          return { kind: 'preset', id: sel.id }
+        }
         return fallbackExternal ?? fallbackBuiltin
       }
       case 'catalog': {
@@ -250,6 +264,15 @@ export function ConnectorsConsolePage(): React.ReactElement {
           ? sel
           : (fallbackExternal ?? fallbackBuiltin)
       }
+      case 'preset': {
+        if (!externalEnabled) return fallbackBuiltin
+        if (connectors.some((c) => c.connector_id === sel.id)) {
+          return { kind: 'connector', id: sel.id }
+        }
+        return selfHostedPresets.some((p) => p.connector_id === sel.id)
+          ? sel
+          : (fallbackExternal ?? fallbackBuiltin)
+      }
       case 'composio':
         return externalEnabled ? sel : fallbackBuiltin
     }
@@ -259,6 +282,8 @@ export function ConnectorsConsolePage(): React.ReactElement {
     connectors,
     catalogEntries,
     unconfiguredEntries,
+    selfHostedPresets,
+    unconfiguredPresets,
     externalEnabled
   ])
 
@@ -327,6 +352,17 @@ export function ConnectorsConsolePage(): React.ReactElement {
           />
         )
       }
+      case 'preset': {
+        const preset = selfHostedPresets.find((p) => p.connector_id === selection.id)
+        if (preset == null) return null
+        return (
+          <SelfHostedPresetPane
+            key={selection.id}
+            preset={preset}
+            onConnected={(connectorId) => select({ kind: 'connector', id: connectorId })}
+          />
+        )
+      }
       case 'composio':
         return <ComposioAccountPane status={catalog.data?.composio ?? null} />
     }
@@ -385,6 +421,19 @@ export function ConnectorsConsolePage(): React.ReactElement {
                   ? t('settings.connectors.viaManagedLocal')
                   : t('settings.connectors.viaDirect')}
             </span>
+          </MasterRow>
+        ))}
+        {unconfiguredPresets.map((preset) => (
+          <MasterRow
+            key={preset.connector_id}
+            selected={selection?.kind === 'preset' && selection.id === preset.connector_id}
+            onClick={() => select({ kind: 'preset', id: preset.connector_id })}
+            right={
+              <span className="text-aux text-coral">{t('settings.connectors.connect')}</span>
+            }
+          >
+            <CatalogLogo entry={preset} size="sm" />
+            <span className="min-w-0 flex-1 truncate">{preset.display_name}</span>
           </MasterRow>
         ))}
         {catalog.isFetching && !catalog.data ? (

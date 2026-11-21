@@ -1876,6 +1876,18 @@
         "report": "Editorial report",
         "diagram": "Diagram",
         "app": "Interactive app"
+      },
+      "cloud": {
+        "publish": "Publish",
+        "publishing": "Publishing…",
+        "updateCloud": "Update cloud",
+        "publishSuccess": "Published to Artifact Server",
+        "publishFailed": "Failed to publish artifact",
+        "connectTitle": "Configure Artifact Server in Connectors to share",
+        "badge": "Cloud",
+        "openReview": "Open review",
+        "copyShareLink": "Copy share link",
+        "shareCopied": "Link copied"
       }
     },
     "effort": {
@@ -2821,6 +2833,16 @@
         "tccRequestPrompt": "Request permission"
       },
       "supersededHint": "This connection is a self-hosted direct link, but the service now ships through Composio. Use “Switch track” to disconnect and clear its config, then reconnect from the catalog.",
+      "selfHosted": {
+        "badge": "Self-hosted MCP preset",
+        "serverUrlLabel": "Server URL (MCP Endpoint)",
+        "serverUrlHint": "Point to the deployed Streamable HTTP `/mcp` endpoint (e.g. https://canvas.chenge.ink/mcp).",
+        "tokenLabel": "Agent Access Token (Bearer)",
+        "tokenPlaceholder": "Paste your server AGENT_API_TOKEN",
+        "tokenHint": "Encrypted in your local keychain; leave blank only for unauthenticated local dev servers.",
+        "connectAndSync": "Connect & Sync",
+        "webDisabled": "Self-hosted preset setup is only available from the desktop app."
+      },
       "catalog": {
         "title": "Preset catalog",
         "outboundNotice": "Preset connections execute through the Composio cloud: tool inputs and results pass through their servers and the OAuth tokens are held on their side. For services you want to reach directly, use “custom MCP” (a later release).",
@@ -2844,6 +2866,7 @@
           "confirm": "Understood, connect"
         },
         "desc": {
+          "artifact_server": "Artifact Server: publish interactive HTML dashboards, decks, and prototypes to your own Cloudflare/self-hosted workspace for versioned sharing and review comments.",
           "asana": "Asana: search tasks and projects, create tasks and comments, update tasks.",
           "atlassian": "Atlassian: Jira issues (search/create/edit/transition) + Confluence pages (search/read/create/edit).",
           "browser_use": "Browser Use: control Chrome or an isolated browser via Playwright MCP — inspect tabs, fill forms, capture screenshots.",

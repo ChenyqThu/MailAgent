@@ -299,9 +299,34 @@ export interface ComposioKeyStatus {
   updated_at: number | null
 }
 
+export interface SelfHostedPresetEntry {
+  connector_id: string
+  display_name: string
+  description_key: string
+  category: string
+  logo_text: string
+  logo_color: string
+  transport: ConnectorTransport
+  default_server_url: string
+  url_placeholder: string
+  auth_header: string
+  auth_prefix: string
+  configured: boolean
+}
+
 export interface ConnectorCatalogView {
   composio: ComposioKeyStatus
   entries: ConnectorCatalogEntry[]
+  self_hosted_presets?: SelfHostedPresetEntry[]
+}
+
+export interface ConnectorInvokeResult {
+  connector_id: string
+  tool_name: string
+  content: string
+  images: Array<{ media_type: string; data: string }>
+  is_error: boolean
+  truncated: boolean
 }
 
 /** `GET /api/connector/{id}/tools` 元素（已同步的工具清单行 = 白名单）。 */
@@ -376,6 +401,11 @@ export interface ConnectorApi {
     input: CustomConnectorUpdateInput
   ): Promise<ConnectorSummary>
   deleteCustom?(connectorId: string): Promise<CustomConnectorDeleteResult>
+  invokeTool?(
+    connectorId: string,
+    toolName: string,
+    args?: Record<string, unknown>
+  ): Promise<ConnectorInvokeResult>
   /** Wave 3 — `managed_local` 本机托管运行时的安装 / 卸载 / 模式切换 / macOS TCC 诊断（Desktop only）。 */
   install?(
     connectorId: string,

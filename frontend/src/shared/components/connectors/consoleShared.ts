@@ -326,11 +326,12 @@ export type ConsoleSelection =
   | { kind: 'builtin'; group: string }
   | { kind: 'connector'; id: string }
   | { kind: 'catalog'; id: string }
+  | { kind: 'preset'; id: string }
   | { kind: 'composio' }
 
 export type ConsoleItemParam = ConsoleSelection | { kind: 'external-root' }
 
-/** 选中项 → `?item=` 值（`builtin:<group>` / `connector:<id>` / `catalog:<id>` / `composio`）。 */
+/** 选中项 → `?item=` 值（`builtin:<group>` / `connector:<id>` / `catalog:<id>` / `preset:<id>` / `composio`）。 */
 export function selectionToItemParam(sel: ConsoleSelection): string {
   switch (sel.kind) {
     case 'builtin':
@@ -339,6 +340,8 @@ export function selectionToItemParam(sel: ConsoleSelection): string {
       return `connector:${sel.id}`
     case 'catalog':
       return `catalog:${sel.id}`
+    case 'preset':
+      return `preset:${sel.id}`
     case 'composio':
       return 'composio'
   }
@@ -357,5 +360,6 @@ export function parseItemParam(raw: string | undefined | null): ConsoleItemParam
   if (kind === 'builtin') return { kind: 'builtin', group: rest }
   if (kind === 'connector') return { kind: 'connector', id: rest }
   if (kind === 'catalog') return { kind: 'catalog', id: rest }
+  if (kind === 'preset') return { kind: 'preset', id: rest }
   return null
 }

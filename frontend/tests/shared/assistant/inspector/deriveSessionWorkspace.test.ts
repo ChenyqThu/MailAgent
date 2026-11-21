@@ -428,4 +428,57 @@ describe('deriveSessionWorkspace', () => {
     expect(art?.versions?.map((v) => v.version)).toEqual([1, 2])
     expect(art?.versions?.[0]?.fileId).toBe(201)
   })
+
+  test('merges cloud share/review URLs from mcp__artifact_server__artifact_publish into matching artifact', () => {
+    const messages = [
+      {
+        id: 'm1',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-call',
+            toolCallId: 'tc_write',
+            toolName: 'artifact_write',
+            args: {
+              slug: 'q4-board',
+              title: 'Q4 Board',
+              artifact_type: 'dashboard',
+              html: '<!doctype html><html><body>v1</body></html>'
+            },
+            result: {
+              ok: true,
+              slug: 'q4-board',
+              title: 'Q4 Board',
+              artifact_type: 'dashboard',
+              version: 1,
+              file_id: 201,
+              path: 'agent-docs/artifacts/q4-board/v1/index.html'
+            }
+          },
+          {
+            type: 'tool-call',
+            toolCallId: 'tc_pub',
+            toolName: 'mcp__artifact_server__artifact_publish',
+            args: { slug: 'q4-board' },
+            result: {
+              content: JSON.stringify({
+                ok: true,
+                slug: 'q4-board',
+                version: 1,
+                review_url: 'https://canvas.chenge.ink/a/q4-board/v/1?t=tok',
+                share_url: 'https://canvas.chenge.ink/s/tok?v=1'
+              }),
+              is_error: false
+            }
+          }
+        ]
+      }
+    ]
+
+    const snap = deriveSessionWorkspace({ messages })
+    const art = snap.artifacts.find((a) => a.id === 'artifact:q4-board')
+    expect(art?.remoteUrl).toBe('https://canvas.chenge.ink/a/q4-board/v/1?t=tok')
+    expect(art?.shareUrl).toBe('https://canvas.chenge.ink/s/tok?v=1')
+    expect(art?.remoteVersion).toBe(1)
+  })
 })

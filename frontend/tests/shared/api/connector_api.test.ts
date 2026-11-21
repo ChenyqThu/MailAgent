@@ -322,3 +322,21 @@ test('Wave 3 managed_local endpoints: install / install-status / uninstall / run
   expect(calledBody()).toEqual({ kind: 'screen_recording' })
   expect(opened.opened).toBe(true)
 })
+
+test('invokeTool → POST /{id}/tools/{tool}/invoke，包裹 { arguments }', async () => {
+  fetchMock.mockResolvedValue(
+    envelopeResponse({
+      connector_id: 'artifact_server',
+      tool_name: 'artifact_publish',
+      content: '{"ok":true,"share_url":"https://canvas.chenge.ink/s/abc"}',
+      images: [],
+      is_error: false,
+      truncated: false
+    })
+  )
+  const out = await api.invokeTool!('artifact_server', 'artifact_publish', { slug: 'demo' })
+  expect(calledUrl()).toBe('/api/connector/artifact_server/tools/artifact_publish/invoke')
+  expect(String(calledInit().method)).toBe('POST')
+  expect(calledBody()).toEqual({ arguments: { slug: 'demo' } })
+  expect(out.is_error).toBe(false)
+})

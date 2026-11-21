@@ -94,7 +94,8 @@ const { stableMailApi, chatApi, connectorApi } = vi.hoisted(() => {
     openSystemPermission: vi.fn(),
     chromeProfiles: vi.fn(),
     importChromeCookies: vi.fn(),
-    launchBrowserWindow: vi.fn()
+    launchBrowserWindow: vi.fn(),
+    createCustom: vi.fn()
   }
   return { stableMailApi: { chat: chatApi, connector: connectorApi }, chatApi, connectorApi }
 })
@@ -1324,5 +1325,61 @@ describe('ConnectorsConsole — Wave 3 managed_local（Browser Use / Desktop Use
       screen.getByRole('button', { name: 'settings.connectors.managed.launchWindowButton' })
     )
     await waitFor(() => expect(connectorApi.launchBrowserWindow).toHaveBeenCalledTimes(1))
+  })
+
+  test('renders unconfigured self-hosted artifact_server preset and connects via createCustom + sync', async () => {
+    connectorApi.createCustom.mockReset()
+    connectorApi.list.mockResolvedValue([])
+    connectorApi.catalog.mockResolvedValue({
+      composio: { configured: false, updated_at: null },
+      entries: [],
+      self_hosted_presets: [
+        {
+          connector_id: 'artifact_server',
+          display_name: 'Artifact Server',
+          description_key: 'settings.connectors.catalog.desc.artifact_server',
+          category: 'artifacts',
+          logo_text: 'A',
+          logo_color: '#0F766E',
+          transport: 'streamable_http',
+          default_server_url: 'https://canvas.chenge.ink/mcp',
+          url_placeholder: 'https://canvas.chenge.ink/mcp',
+          auth_header: 'Authorization',
+          auth_prefix: 'Bearer ',
+          configured: false
+        }
+      ]
+    })
+    connectorApi.createCustom.mockResolvedValue(
+      connector({
+        connector_id: 'artifact_server',
+        display_name: 'Artifact Server',
+        server_url: 'https://canvas.chenge.ink/mcp',
+        status: 'disconnected',
+        is_custom: true
+      })
+    )
+    connectorApi.sync.mockResolvedValue({ connector_id: 'artifact_server', total: 9 })
+
+    renderUi()
+    await selectConnector('Artifact Server')
+    await screen.findByText('settings.connectors.selfHosted.badge')
+
+    const tokenInput = screen.getByLabelText('settings.connectors.selfHosted.tokenLabel')
+    fireEvent.change(tokenInput, { target: { value: 'tok_canvas_123' } })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.connectors.selfHosted.connectAndSync' })
+    )
+
+    await waitFor(() =>
+      expect(connectorApi.createCustom).toHaveBeenCalledWith({
+        connector_id: 'artifact_server',
+        display_name: 'Artifact Server',
+        transport: 'streamable_http',
+        server_url: 'https://canvas.chenge.ink/mcp',
+        headers: { Authorization: 'Bearer tok_canvas_123' }
+      })
+    )
+    await waitFor(() => expect(connectorApi.sync).toHaveBeenCalledWith('artifact_server'))
   })
 })

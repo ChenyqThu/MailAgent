@@ -24,6 +24,7 @@ import type {
   ConnectorCrudType,
   ConnectorDisconnectResult,
   ConnectorInstallStatus,
+  ConnectorInvokeResult,
   ConnectorOAuthStartResult,
   ConnectorRuntimeOptionsResult,
   ConnectorSetEnabledResult,
@@ -310,6 +311,19 @@ export function createConnectorApi(baseUrl: string): ConnectorApi {
 
     stopBrowserLive(): Promise<ManagedBrowserStopResult> {
       return request<ManagedBrowserStopResult>(baseUrl, 'POST', '/connector/browser_use/live/stop')
+    },
+
+    invokeTool(
+      connectorId: string,
+      toolName: string,
+      args?: Record<string, unknown>
+    ): Promise<ConnectorInvokeResult> {
+      return request<ConnectorInvokeResult>(
+        baseUrl,
+        'POST',
+        `/connector/${seg(connectorId)}/tools/${seg(toolName)}/invoke`,
+        { body: { arguments: args ?? {} } }
+      )
     }
   }
 }

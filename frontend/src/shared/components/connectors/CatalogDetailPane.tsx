@@ -46,7 +46,7 @@ export function CatalogLogo({
   entry,
   size = 'md'
 }: {
-  entry: ConnectorCatalogEntry
+  entry: Pick<ConnectorCatalogEntry, 'logo_color' | 'logo_text'>
   size?: 'sm' | 'md'
 }): React.ReactElement {
   return (

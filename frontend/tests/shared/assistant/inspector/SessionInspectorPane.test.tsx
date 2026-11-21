@@ -22,6 +22,8 @@ import { useManagedBrowserUi } from '@shared/state/managed-browser-ui'
 
 const navigateMock = vi.fn()
 const libraryTextMock = vi.fn()
+const connectorListMock = vi.fn()
+const connectorInvokeToolMock = vi.fn()
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigateMock
@@ -30,6 +32,15 @@ vi.mock('@tanstack/react-router', () => ({
 vi.mock('@shared/components/library/hooks', () => ({
   useLibraryApi: () => ({
     text: libraryTextMock
+  })
+}))
+
+vi.mock('@shared/hooks/useMailApi', () => ({
+  useMailApi: () => ({
+    connector: {
+      list: connectorListMock,
+      invokeTool: connectorInvokeToolMock
+    }
   })
 }))
 
@@ -54,6 +65,9 @@ beforeEach(() => {
   navigateMock.mockReset()
   libraryTextMock.mockReset()
   libraryTextMock.mockResolvedValue({ markdown: '# Live Server Text\n\nUpdated content' })
+  connectorListMock.mockReset()
+  connectorListMock.mockResolvedValue([])
+  connectorInvokeToolMock.mockReset()
   window.localStorage.clear()
 })
 
@@ -403,5 +417,93 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
     expect(pane.className).toContain('w-[min(920px,64vw)]')
     fireEvent.click(screen.getByRole('button', { name: 'Compact preview' }))
     expect(pane.className).toContain('w-[540px]')
+  })
+
+  test('navigates to Artifact Server setup when disconnected and publishes via MCP when connected', async () => {
+    const htmlSnapshot: SessionWorkspaceSnapshot = {
+      ...POPULATED_SNAPSHOT,
+      artifacts: [
+        {
+          id: 'artifact:q4-board',
+          kind: 'html',
+          title: 'Q4 Board',
+          slug: 'q4-board',
+          artifactType: 'dashboard',
+          version: 1,
+          fileId: 201,
+          virtualPath: 'agent-docs/artifacts/q4-board/v1/index.html',
+          content: '<!doctype html><html><body>v1</body></html>',
+          isHtml: true,
+          isMarkdown: false,
+          versions: [
+            {
+              version: 1,
+              fileId: 201,
+              virtualPath: 'agent-docs/artifacts/q4-board/v1/index.html',
+              content: '<!doctype html><html><body>v1</body></html>',
+              changeNote: 'Initial KPI board'
+            }
+          ]
+        }
+      ],
+      totalItems: 1
+    }
+
+    renderHarness(htmlSnapshot)
+    fireEvent.click(screen.getByTestId('inspector-toggle-pill'))
+    fireEvent.click(screen.getByText('Q4 Board'))
+
+    // Disconnected -> Cloud shortcut jumps to self-hosted preset in Settings
+    const setupBtn = await screen.findByRole('button', {
+      name: 'Configure Artifact Server in Connectors to share'
+    })
+    fireEvent.click(setupBtn)
+    expect(navigateMock).toHaveBeenCalledWith({
+      to: '/settings',
+      search: { tab: 'connectors', item: 'preset:artifact_server' }
+    })
+
+    cleanup()
+    connectorListMock.mockResolvedValue([
+      { connector_id: 'artifact_server', enabled: true, status: 'connected' }
+    ])
+    connectorInvokeToolMock.mockResolvedValue({
+      connector_id: 'artifact_server',
+      tool_name: 'artifact_publish',
+      content: JSON.stringify({
+        ok: true,
+        slug: 'q4-board',
+        version: 1,
+        review_url: 'https://canvas.chenge.ink/a/q4-board/v/1?t=tok',
+        share_url: 'https://canvas.chenge.ink/s/tok?v=1'
+      }),
+      images: [],
+      is_error: false,
+      truncated: false
+    })
+
+    renderHarness(htmlSnapshot)
+    fireEvent.click(screen.getByTestId('inspector-toggle-pill'))
+    fireEvent.click(screen.getByText('Q4 Board'))
+
+    const publishBtn = await screen.findByRole('button', { name: 'Publish' })
+    fireEvent.click(publishBtn)
+
+    await waitFor(() =>
+      expect(connectorInvokeToolMock).toHaveBeenCalledWith(
+        'artifact_server',
+        'artifact_publish',
+        {
+          slug: 'q4-board',
+          title: 'Q4 Board',
+          artifact_type: 'dashboard',
+          html: '<!doctype html><html><body>v1</body></html>',
+          change_note: 'Initial KPI board'
+        }
+      )
+    )
+
+    expect(await screen.findByRole('button', { name: 'Open review' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Copy share link' })).toBeTruthy()
   })
 })

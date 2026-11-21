@@ -1876,6 +1876,18 @@
         "report": "深度简报",
         "diagram": "架构图表",
         "app": "交互原型"
+      },
+      "cloud": {
+        "publish": "发布到云端",
+        "publishing": "发布中…",
+        "updateCloud": "更新云端",
+        "publishSuccess": "已发布到 Artifact Server",
+        "publishFailed": "发布到云端失败",
+        "connectTitle": "前往设置连接 Artifact Server 以开启分享",
+        "badge": "已发布",
+        "openReview": "打开审核页",
+        "copyShareLink": "复制分享链接",
+        "shareCopied": "已复制链接"
       }
     },
     "effort": {
@@ -2821,6 +2833,16 @@
         "tccRequestPrompt": "请求系统授权"
       },
       "supersededHint": "这条连接走的是自建直连，而该服务的出厂轨道已改为 Composio 托管。用「切换轨道」断开并清除配置，再从目录重新连接。",
+      "selfHosted": {
+        "badge": "自建 MCP 预设",
+        "serverUrlLabel": "服务地址（MCP Endpoint）",
+        "serverUrlHint": "指向已部署服务暴露的 Streamable HTTP `/mcp` 端点（如 https://canvas.chenge.ink/mcp）。",
+        "tokenLabel": "Agent 访问令牌（Bearer Token）",
+        "tokenPlaceholder": "粘贴服务端 AGENT_API_TOKEN",
+        "tokenHint": "仅加密保存在本机系统钥匙串中；本机开发调试若未启用鉴权可留空。",
+        "connectAndSync": "连接并同步工具",
+        "webDisabled": "为保障本机钥匙串与出站连接安全，请在桌面客户端中完成连接。"
+      },
       "catalog": {
         "title": "预置目录",
         "outboundNotice": "预置连接经 Composio 云执行：工具的输入与返回结果会经过它的服务器，授权令牌也托管在它那边。只想本机直连的服务请用「自定义 MCP」（后续版本提供）。",
@@ -2844,6 +2866,7 @@
           "confirm": "我知道了，继续连接"
         },
         "desc": {
+          "artifact_server": "Artifact Server：将交互看板、原型与报告发布到自有 Cloudflare/自建画布服务，生成版本化分享链接并回收团队评论。",
           "asana": "Asana：搜任务与项目、建任务与评论、改任务。",
           "atlassian": "Atlassian：Jira 议题（查/建/改/流转）+ Confluence 页面（搜/读/建/改）。",
           "browser_use": "Browser Use：通过本机 Playwright MCP 控制 Chrome 或隔离浏览器——读网页、填表单、截屏与交互操作。",

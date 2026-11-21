@@ -5,17 +5,25 @@ import { useQuery } from '@tanstack/react-query'
 import {
   ArrowLeft,
   Check,
+  Cloud,
   Copy,
   Download,
   ExternalLink,
+  Loader2,
   Maximize2,
   Minimize2,
   Monitor,
-  Smartphone
+  Smartphone,
+  UploadCloud
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { errorMessage } from '@shared/lib/ipcErrors'
 import { buildLibraryPreviewUrl } from '@shared/libraryIpcContract'
+import { qk } from '@shared/lib/queryKeys'
+import { useMailApi } from '@shared/hooks/useMailApi'
+import { toastError, toastSuccess } from '@shared/state/toast'
+import { openExternal } from '@shared/components/connectors/consoleShared'
 import { ImageLightbox } from '@shared/components/email/EmailBodyFrame'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
 import { HTML_PREVIEW_SANDBOX } from '@shared/components/library/HtmlPreview'
@@ -34,6 +42,18 @@ function isElectronPreviewAvailable(): boolean {
   if (typeof window === 'undefined') return false
   const w = window as unknown as { electron?: { ipcRenderer?: unknown } }
   return Boolean(w.electron?.ipcRenderer)
+}
+
+function normalizePublishSlug(raw: string): string {
+  const cleaned = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-')
+    .replace(/[^a-z0-9-]+/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64)
+  return cleaned || 'artifact'
 }
 
 function triggerHtmlDownload(filename: string, html: string): void {
@@ -63,7 +83,13 @@ export function InspectorArtifactPreview({
   const { t } = useTranslation()
   const navigate = useNavigate()
   const libraryApi = useLibraryApi()
+  const mailApi = useMailApi()
   const [copied, setCopied] = useState(false)
+  const [shareCopied, setShareCopied] = useState(false)
+  const [publishing, setPublishing] = useState(false)
+  const [publishedByKey, setPublishedByKey] = useState<
+    Record<string, { readonly reviewUrl: string; readonly shareUrl?: string; readonly version?: number }>
+  >({})
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null)
   const [htmlMode, setHtmlMode] = useState<'rendered' | 'source'>('rendered')
   const [viewport, setViewport] = useState<'desktop' | 'mobile'>('desktop')
@@ -75,6 +101,7 @@ export function InspectorArtifactPreview({
     setSelectedVersion(null)
     setHtmlMode('rendered')
     setViewport('desktop')
+    setShareCopied(false)
   }
 
   const isHtmlArtifact = artifact.kind === 'html' || artifact.isHtml === true
@@ -92,6 +119,31 @@ export function InspectorArtifactPreview({
   const activeSubtitle =
     activeVersionEntry?.changeNote ??
     (artifact.subtitle && artifact.subtitle !== artifact.to ? artifact.subtitle : undefined)
+
+  const connectorsQ = useQuery({
+    queryKey: qk.connectors(),
+    queryFn: () => mailApi.connector.list(),
+    enabled: isHtmlArtifact && typeof mailApi?.connector?.list === 'function',
+    staleTime: 30_000,
+    retry: false
+  })
+  const artifactServerConnected = (connectorsQ.data ?? []).some(
+    (c) => c.connector_id === 'artifact_server' && c.enabled && c.status === 'connected'
+  )
+
+  const publishStateKey = `${artifact.id}:v${activeVersionEntry?.version ?? artifact.version ?? 1}`
+  const matchingArtifactRemote =
+    artifact.remoteUrl &&
+    (artifact.remoteVersion == null ||
+      activeVersionEntry == null ||
+      artifact.remoteVersion === activeVersionEntry.version)
+      ? {
+          reviewUrl: artifact.remoteUrl,
+          shareUrl: artifact.shareUrl,
+          version: artifact.remoteVersion
+        }
+      : null
+  const activeRemote = publishedByKey[publishStateKey] ?? matchingArtifactRemote
 
   const liveTextQ = useQuery({
     queryKey: ['library', 'inspector-preview', activeFileId ?? 'none'],
@@ -170,6 +222,69 @@ export function InspectorArtifactPreview({
     if (canOpenMatter && artifact.matterPublicId) {
       useMatterNavigation.getState().open(artifact.matterPublicId)
       void navigate({ to: '/matters' })
+    }
+  }
+
+  const handleOpenCloudSettings = (): void => {
+    void navigate({
+      to: '/settings',
+      search: { tab: 'connectors', item: 'preset:artifact_server' }
+    })
+  }
+
+  const handleCopyShareLink = (): void => {
+    const target = activeRemote?.shareUrl ?? activeRemote?.reviewUrl
+    if (!target || !navigator.clipboard?.writeText) return
+    void navigator.clipboard.writeText(target).then(() => {
+      setShareCopied(true)
+      window.setTimeout(() => setShareCopied(false), 1800)
+    })
+  }
+
+  const handlePublishCloud = async (): Promise<void> => {
+    if (!effectiveContent || !mailApi?.connector?.invokeTool || publishing) return
+    setPublishing(true)
+    try {
+      const slug = artifact.slug || normalizePublishSlug(artifact.title)
+      const res = await mailApi.connector.invokeTool('artifact_server', 'artifact_publish', {
+        slug,
+        title: artifact.title,
+        artifact_type: artifact.artifactType ?? 'app',
+        html: effectiveContent,
+        ...(activeVersionEntry?.changeNote ? { change_note: activeVersionEntry.changeNote } : {})
+      })
+      if (res.is_error) {
+        throw new Error(res.content || 'Publish failed')
+      }
+      const parsed = JSON.parse(res.content) as {
+        ok?: boolean
+        message?: string
+        version?: number
+        review_url?: string
+        share_url?: string
+        links?: { review_url?: string; share_url?: string }
+      }
+      if (parsed.ok === false) {
+        throw new Error(parsed.message || 'Publish failed')
+      }
+      const reviewUrl = parsed.review_url ?? parsed.links?.review_url ?? parsed.share_url
+      const shareUrl = parsed.share_url ?? parsed.links?.share_url
+      if (!reviewUrl) {
+        throw new Error('Artifact Server did not return a review URL')
+      }
+      setPublishedByKey((prev) => ({
+        ...prev,
+        [publishStateKey]: {
+          reviewUrl,
+          shareUrl,
+          version: typeof parsed.version === 'number' ? parsed.version : undefined
+        }
+      }))
+      toastSuccess(t('chat.inspector.cloud.publishSuccess'))
+    } catch (err) {
+      toastError(t('chat.inspector.cloud.publishFailed'), errorMessage(err))
+    } finally {
+      setPublishing(false)
     }
   }
 
@@ -266,6 +381,45 @@ export function InspectorArtifactPreview({
                   <Download size={13} />
                 </button>
               )}
+              {effectiveContent.length > 0 &&
+                (artifactServerConnected && typeof mailApi?.connector?.invokeTool === 'function' ? (
+                  <button
+                    type="button"
+                    onClick={() => void handlePublishCloud()}
+                    disabled={publishing}
+                    aria-label={
+                      publishing
+                        ? t('chat.inspector.cloud.publishing')
+                        : activeRemote
+                          ? t('chat.inspector.cloud.updateCloud')
+                          : t('chat.inspector.cloud.publish')
+                    }
+                    className="inline-flex items-center gap-1 rounded-md border border-ink-border-soft bg-ink-2 px-2 py-1 text-aux font-medium text-ink-fg transition-colors duration-fast hover:bg-ink-3 disabled:opacity-60"
+                  >
+                    {publishing ? (
+                      <Loader2 size={13} className="animate-spin text-coral" />
+                    ) : (
+                      <UploadCloud size={13} className="text-coral" />
+                    )}
+                    <span>
+                      {publishing
+                        ? t('chat.inspector.cloud.publishing')
+                        : activeRemote
+                          ? t('chat.inspector.cloud.updateCloud')
+                          : t('chat.inspector.cloud.publish')}
+                    </span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleOpenCloudSettings}
+                    aria-label={t('chat.inspector.cloud.connectTitle')}
+                    title={t('chat.inspector.cloud.connectTitle')}
+                    className="grid size-7 place-items-center rounded-md border border-ink-border-soft bg-ink-2 text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+                  >
+                    <Cloud size={13} />
+                  </button>
+                ))}
             </>
           )}
           {copyPayload.length > 0 && (
@@ -359,6 +513,41 @@ export function InspectorArtifactPreview({
                   </button>
                 )
               })}
+            </div>
+          )}
+          {activeRemote !== null && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-ink-border-soft bg-ink-2 px-2.5 py-1.5">
+              <span className="inline-flex items-center gap-1 text-aux font-medium text-ink-fg">
+                <Cloud size={13} className="text-ok" />
+                <span>{t('chat.inspector.cloud.badge')}</span>
+                {activeRemote.version != null && (
+                  <span className="font-mono text-meta tabular-nums text-ink-fg-2">
+                    v{activeRemote.version}
+                  </span>
+                )}
+              </span>
+              <div className="ml-auto flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => openExternal(activeRemote.reviewUrl)}
+                  className="inline-flex items-center gap-1 rounded border border-ink-border-soft bg-ink-1 px-2 py-0.5 text-aux text-ink-fg transition-colors duration-fast hover:bg-ink-3"
+                >
+                  <ExternalLink size={12} />
+                  <span>{t('chat.inspector.cloud.openReview')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopyShareLink}
+                  className="inline-flex items-center gap-1 rounded border border-ink-border-soft bg-ink-1 px-2 py-0.5 text-aux text-ink-fg transition-colors duration-fast hover:bg-ink-3"
+                >
+                  {shareCopied ? <Check size={12} className="text-ok" /> : <Copy size={12} />}
+                  <span>
+                    {shareCopied
+                      ? t('chat.inspector.cloud.shareCopied')
+                      : t('chat.inspector.cloud.copyShareLink')}
+                  </span>
+                </button>
+              </div>
             </div>
           )}
         </div>
