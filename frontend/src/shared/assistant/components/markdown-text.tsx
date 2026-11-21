@@ -18,9 +18,10 @@ import { cn } from '@shared/lib/cn'
 import { CollapsibleRegion } from '@shared/components/ui/collapsible'
 import { ShimmerText } from '@shared/components/ShimmerText'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
-import { formatToolDuration, useToolElapsed } from '@shared/assistant/tools/generic/useToolElapsed'
+import { useToolElapsed, formatToolDuration } from '@shared/assistant/tools/generic/useToolElapsed'
 import { extractReasoningHeading } from '@shared/assistant/runtime/reasoningSummary'
 import { assistantMarkdownUrlTransform } from '@shared/assistant/tools/image/imageGenCard.lib'
+import { openUrlInBuiltInBrowser } from '@shared/state/open-in-browser'
 
 export function MarkdownText({ text, status }: TextMessagePartProps): React.JSX.Element {
   return (
@@ -28,6 +29,7 @@ export function MarkdownText({ text, status }: TextMessagePartProps): React.JSX.
       text={text}
       streaming={status?.type === 'running'}
       urlTransform={assistantMarkdownUrlTransform}
+      onOpenLinkInBrowser={openUrlInBuiltInBrowser}
     />
   )
 }

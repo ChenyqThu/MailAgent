@@ -12,11 +12,14 @@ import {
   Copy,
   Download,
   ExternalLink,
+  KeyRound,
   Loader2,
   RefreshCw,
   ShieldAlert,
   ShieldCheck
 } from 'lucide-react'
+
+import { BrowserCookieManagerPanel } from '@shared/components/browser/BrowserCookieManagerPanel'
 
 import { Button } from '@shared/components/ui/button'
 import { Input } from '@shared/components/ui/input'
@@ -101,6 +104,7 @@ export function ManagedBrowserModeSection({
   const [domainFilterText, setDomainFilterText] = React.useState('')
   const [importingCookies, setImportingCookies] = React.useState(false)
   const [launchingWindow, setLaunchingWindow] = React.useState(false)
+  const [showDomainPicker, setShowDomainPicker] = React.useState(false)
 
   const modes: ManagedBrowserMode[] = React.useMemo(() => {
     const filtered = supportedModes.filter(isManagedBrowserMode)
@@ -416,6 +420,39 @@ export function ManagedBrowserModeSection({
               <p className="mt-1 text-aux text-ink-fg-3">
                 {t('settings.connectors.managed.launchWindowHint')}
               </p>
+
+              {typeof api.connector.chromeCookieDomains === 'function' ||
+              typeof api.connector.managedCookieDomains === 'function' ? (
+                <div className="mt-2.5">
+                  <Button
+                    size="default"
+                    variant="secondary"
+                    type="button"
+                    className="text-aux"
+                    onClick={() => setShowDomainPicker((prev) => !prev)}
+                  >
+                    <KeyRound className="size-3.5" />
+                    {showDomainPicker
+                      ? t('settings.connectors.managed.hideDomainsButton')
+                      : t('settings.connectors.managed.selectDomainsButton')}
+                  </Button>
+                  {showDomainPicker ? (
+                    <div className="mt-2.5">
+                      <BrowserCookieManagerPanel
+                        initialTab="import"
+                        compact
+                        onClose={() => setShowDomainPicker(false)}
+                        onImported={() => {
+                          void qc.invalidateQueries({ queryKey: qk.connectors() })
+                          void qc.invalidateQueries({
+                            queryKey: qk.connectorInstallStatus(connectorId)
+                          })
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>

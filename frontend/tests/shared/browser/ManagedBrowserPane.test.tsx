@@ -20,12 +20,17 @@ const mockLaunchBrowserWindow = vi.fn(async () => ({
   executable: '/tmp/chrome'
 }))
 const mockStopBrowserLive = vi.fn(async () => ({ stopped: true }))
+const mockManagedCookieDomains = vi.fn(async () => ({
+  domains: [{ domain: 'oa.example.com', count: 2 }],
+  total_cookies: 2
+}))
 
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
     connector: {
       launchBrowserWindow: mockLaunchBrowserWindow,
-      stopBrowserLive: mockStopBrowserLive
+      stopBrowserLive: mockStopBrowserLive,
+      managedCookieDomains: mockManagedCookieDomains
     }
   })
 }))
@@ -78,8 +83,10 @@ beforeEach(() => {
     sidebarOpen: false,
     sidebarWidth: 520,
     dismissedRunId: null,
+    pendingUrl: null,
     activity: IDLE_COMPUTER_USE_ACTIVITY
   })
+  mockManagedCookieDomains.mockClear()
 })
 
 afterEach(() => {
@@ -171,5 +178,23 @@ describe('ManagedBrowserPane', () => {
     await waitFor(() => expect(screen.getByText('browserPane.notInstalledTitle')).toBeTruthy())
     fireEvent.click(screen.getByText('browserPane.openConnectors'))
     expect(onOpenConnectors).toHaveBeenCalledTimes(1)
+  })
+
+  test('consumes pendingUrl on connect and opens inline cookie manager via more menu', async () => {
+    useManagedBrowserUi.getState().setPendingUrl('https://docs.example.com/guide')
+    render(<ManagedBrowserPane mode="sidebar" />)
+
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1))
+    const ws = FakeWebSocket.instances[0]
+    await waitFor(() =>
+      expect(ws.sent).toContainEqual({ type: 'navigate', url: 'https://docs.example.com/guide' })
+    )
+    expect(useManagedBrowserUi.getState().pendingUrl).toBeNull()
+
+    // Open more menu -> open cookie manager panel inline
+    fireEvent.click(screen.getByLabelText('browserPane.moreMenu'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'browserPane.manageCookies' }))
+    await screen.findByTestId('browser-cookie-manager')
+    await waitFor(() => expect(mockManagedCookieDomains).toHaveBeenCalledTimes(1))
   })
 })

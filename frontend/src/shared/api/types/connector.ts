@@ -94,6 +94,33 @@ export interface ChromeProfileSummary {
   has_cookies: boolean
 }
 
+export interface ChromeCookieDomainSummary {
+  domain: string
+  count: number
+  sensitive: boolean
+}
+
+export interface ChromeCookieDomainsResult {
+  profile_id: string
+  domains: ChromeCookieDomainSummary[]
+  total_cookies: number
+}
+
+export interface ManagedCookieDomainSummary {
+  domain: string
+  count: number
+}
+
+export interface ManagedCookieDomainsResult {
+  domains: ManagedCookieDomainSummary[]
+  total_cookies: number
+}
+
+export interface ClearManagedCookiesResult {
+  cleared: number
+  domain: string | null
+}
+
 export interface ChromeCookiesImportInput {
   profile_id?: string
   domain_filters?: string[]
@@ -363,7 +390,10 @@ export interface ConnectorApi {
   systemPermissions?(): Promise<SystemPermissionsStatus>
   openSystemPermission?(kind: SystemPermissionKind): Promise<OpenSystemPermissionResult>
   chromeProfiles?(): Promise<{ profiles: ChromeProfileSummary[] }>
+  chromeCookieDomains?(profileId?: string): Promise<ChromeCookieDomainsResult>
   importChromeCookies?(input: ChromeCookiesImportInput): Promise<ChromeCookiesImportResult>
+  managedCookieDomains?(): Promise<ManagedCookieDomainsResult>
+  clearManagedCookies?(input?: { domain?: string }): Promise<ClearManagedCookiesResult>
   launchBrowserWindow?(input?: { url?: string }): Promise<ManagedBrowserWindowLaunchResult>
   browserLiveStatus?(): Promise<ManagedBrowserLiveStatus>
   stopBrowserLive?(): Promise<ManagedBrowserStopResult>

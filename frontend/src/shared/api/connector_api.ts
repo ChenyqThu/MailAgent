@@ -12,9 +12,11 @@
 
 import { request } from './http_client'
 import type {
+  ChromeCookieDomainsResult,
   ChromeCookiesImportInput,
   ChromeCookiesImportResult,
   ChromeProfileSummary,
+  ClearManagedCookiesResult,
   ComposioKeyStatus,
   ConnectorApi,
   ConnectorBulkToolModeResult,
@@ -39,6 +41,7 @@ import type {
   ManagedBrowserLiveStatus,
   ManagedBrowserStopResult,
   ManagedBrowserWindowLaunchResult,
+  ManagedCookieDomainsResult,
   ManagedRuntimeOptionsInput,
   OpenSystemPermissionResult,
   SystemPermissionKind,
@@ -257,12 +260,38 @@ export function createConnectorApi(baseUrl: string): ConnectorApi {
       )
     },
 
+    chromeCookieDomains(profileId = 'Default'): Promise<ChromeCookieDomainsResult> {
+      return request<ChromeCookieDomainsResult>(
+        baseUrl,
+        'GET',
+        '/connector/browser_use/chrome-domains',
+        { query: { profile_id: profileId } }
+      )
+    },
+
     importChromeCookies(input: ChromeCookiesImportInput): Promise<ChromeCookiesImportResult> {
       return request<ChromeCookiesImportResult>(
         baseUrl,
         'POST',
         '/connector/browser_use/import-chrome-cookies',
         { body: input }
+      )
+    },
+
+    managedCookieDomains(): Promise<ManagedCookieDomainsResult> {
+      return request<ManagedCookieDomainsResult>(
+        baseUrl,
+        'GET',
+        '/connector/browser_use/cookies/domains'
+      )
+    },
+
+    clearManagedCookies(input?: { domain?: string }): Promise<ClearManagedCookiesResult> {
+      return request<ClearManagedCookiesResult>(
+        baseUrl,
+        'POST',
+        '/connector/browser_use/cookies/clear',
+        input !== undefined ? { body: input } : undefined
       )
     },
 

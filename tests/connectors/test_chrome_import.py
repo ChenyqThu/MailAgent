@@ -278,3 +278,92 @@ def test_decrypt_chrome_cookies_permission_error_raises_actionable_403(tmp_path,
     rt_base = tmp_path / "runtimes"
     if rt_base.exists():
         assert [p.name for p in rt_base.iterdir() if p.name.startswith(".tmp-")] == []
+
+
+def test_list_chrome_cookie_domains_excludes_expired_flags_sensitive_and_skips_keychain(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(local_installer, "_RUNTIMES_DIR_OVERRIDE", tmp_path / "runtimes")
+
+    def _boom_keychain():
+        raise AssertionError("Keychain must not be accessed for domain preview")
+
+    monkeypatch.setattr(chrome_import, "read_macos_chrome_safe_storage_key", _boom_keychain)
+
+    future_chrome_ts = int((9999999999.0 + chrome_import._CHROMIUM_EPOCH_OFFSET_SEC) * 1_000_000)
+    past_chrome_ts = int((1000000000.0 + chrome_import._CHROMIUM_EPOCH_OFFSET_SEC) * 1_000_000)
+
+    db = tmp_path / "Chrome" / "Default" / "Network" / "Cookies"
+    _create_fake_cookies_db(
+        db,
+        db_version=24,
+        secret=b"unused",
+        rows=[
+            (".github.com", "a", b"enc", "/", future_chrome_ts, 1, 1, 1),
+            ("github.com", "b", b"enc", "/", future_chrome_ts, 1, 1, 1),
+            ("github.com", "expired", b"enc", "/", past_chrome_ts, 1, 1, 1),
+            (".bankofamerica.com", "s", b"enc", "/", 0, 1, 1, 1),
+            ("oa.internal", "sess", b"enc", "/", 0, 0, 1, 2),
+        ],
+    )
+
+    res = chrome_import.list_chrome_cookie_domains("Default", chrome_root=tmp_path / "Chrome")
+    assert res["profile_id"] == "Default"
+    assert res["total_cookies"] == 4
+    assert res["domains"] == [
+        {"domain": "github.com", "count": 2, "sensitive": False},
+        {"domain": "bankofamerica.com", "count": 1, "sensitive": True},
+        {"domain": "oa.internal", "count": 1, "sensitive": False},
+    ]
+    # Zero secret/value fields anywhere in response
+    for entry in res["domains"]:
+        assert set(entry.keys()) == {"domain", "count", "sensitive"}
+
+    rt_base = tmp_path / "runtimes"
+    if rt_base.exists():
+        assert [p.name for p in rt_base.iterdir() if p.name.startswith(".tmp-")] == []
+
+
+def test_list_and_clear_managed_cookie_domains_offline(tmp_path, monkeypatch):
+    from src.connectors import managed_browser as mb_mod
+
+    monkeypatch.setattr(local_installer, "_RUNTIMES_DIR_OVERRIDE", tmp_path / "runtimes")
+    monkeypatch.setattr(mb_mod.managed_browser, "is_running", lambda: False)
+
+    profile_dir = tmp_path / "runtimes" / "browser_use" / "profile"
+    db = profile_dir / "Default" / "Cookies"
+    future_chrome_ts = int((9999999999.0 + chrome_import._CHROMIUM_EPOCH_OFFSET_SEC) * 1_000_000)
+    _create_fake_cookies_db(
+        db,
+        db_version=24,
+        secret=b"unused",
+        rows=[
+            (".oa.internal", "s1", b"enc", "/", future_chrome_ts, 1, 1, 1),
+            ("sub.oa.internal", "s2", b"enc", "/", future_chrome_ts, 1, 1, 1),
+            ("notion.so", "n1", b"enc", "/", future_chrome_ts, 1, 1, 1),
+        ],
+    )
+
+    listed = chrome_import.list_managed_cookie_domains(profile_dir=profile_dir)
+    assert listed == {
+        "domains": [
+            {"domain": "notion.so", "count": 1},
+            {"domain": "oa.internal", "count": 1},
+            {"domain": "sub.oa.internal", "count": 1},
+        ],
+        "total_cookies": 3,
+    }
+
+    cleared_oa = chrome_import.clear_managed_cookies("oa.internal", profile_dir=profile_dir)
+    assert cleared_oa == {"cleared": 2, "domain": "oa.internal"}
+    assert chrome_import.list_managed_cookie_domains(profile_dir=profile_dir) == {
+        "domains": [{"domain": "notion.so", "count": 1}],
+        "total_cookies": 1,
+    }
+
+    cleared_all = chrome_import.clear_managed_cookies(None, profile_dir=profile_dir)
+    assert cleared_all == {"cleared": 1, "domain": None}
+    assert chrome_import.list_managed_cookie_domains(profile_dir=profile_dir) == {
+        "domains": [],
+        "total_cookies": 0,
+    }

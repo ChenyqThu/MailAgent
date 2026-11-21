@@ -1860,7 +1860,9 @@
       "copied": "已复制",
       "openOriginal": "打开原件",
       "loadingPreview": "正在加载正文…",
-      "previewUnavailable": "暂无可预览正文"
+      "previewUnavailable": "暂无可预览正文",
+      "openInBuiltInBrowser": "在内置浏览器中打开",
+      "openInSystemBrowser": "在系统浏览器中打开"
     },
     "effort": {
       "label": "思考强度",
@@ -2789,6 +2791,8 @@
         "launchWindowDone": "已打开专属浏览器窗口，请完成登录（登录后状态持久保存）",
         "launchWindowFailed": "打开专属浏览器窗口失败",
         "launchWindowHint": "提示：若目标系统仅依赖 Cookie，可直接点右侧一键导入；导入与手登状态均保存在受管目录中，后续自动化全自动复用。",
+        "selectDomainsButton": "按域名勾选导入 / 管理登录态",
+        "hideDomainsButton": "收起登录态管理",
         "tccRequestPrompt": "请求系统授权"
       },
       "supersededHint": "这条连接走的是自建直连，而该服务的出厂轨道已改为 Composio 托管。用「切换轨道」断开并清除配置，再从目录重新连接。",
@@ -8768,6 +8772,36 @@
     "openConnectors": "前往连接器设置",
     "agentControlling": "AI 正在操作此浏览器",
     "stopTakeover": "停止 / 接管",
-    "untitledTab": "新标签页"
+    "untitledTab": "新标签页",
+    "moreMenu": "更多操作",
+    "manageCookies": "管理登录态 / 导入 Cookie",
+    "openDevTools": "打开开发者工具",
+    "resetSession": "重置浏览器会话",
+    "cookieManager": {
+      "title": "浏览器登录态管理",
+      "storedTab": "已保存登录态",
+      "importTab": "从 Chrome 导入",
+      "searchStoredPlaceholder": "搜索已保存域名…",
+      "searchImportPlaceholder": "搜索 Chrome 域名…",
+      "emptyStored": "内置浏览器暂未保存任何站点 Cookie",
+      "goImport": "从 Chrome 导入登录态",
+      "cookieCount": "{count} 条 Cookie",
+      "clearDomain": "清除此站点登录态",
+      "clearedDomain": "已清除 {domain} 的登录态（{count} 条 Cookie）",
+      "clearAll": "清除全部登录态",
+      "confirmClearAll": "确认清空全部（{count} 个站点）",
+      "cancel": "取消",
+      "clearedAll": "已清空内置浏览器全部登录态（{count} 条 Cookie）",
+      "selectNonSensitive": "全选非敏感",
+      "selectAll": "全选",
+      "clearSelection": "清空选择",
+      "sensitiveBadge": "敏感/金融",
+      "importSelected": "导入所选登录态 ({count})",
+      "importing": "正在导入…",
+      "selectedCount": "已选 {selected} / {total} 个域名",
+      "emptyChromeDomains": "该 Chrome 配置中未发现可导入的非过期 Cookie",
+      "refresh": "刷新列表",
+      "close": "关闭面板"
+    }
   }
 }

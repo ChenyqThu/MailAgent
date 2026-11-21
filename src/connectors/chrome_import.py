@@ -46,6 +46,27 @@ _KEYCHAIN_SERVICE = "Chrome Safe Storage"
 _PBKDF2_SALT = b"saltysalt"
 _PBKDF2_ITERATIONS = 1003
 _AES_IV = b" " * 16
+_SENSITIVE_DOMAIN_KEYWORDS = (
+    "bank",
+    "alipay",
+    "paypal",
+    "stripe",
+    "1password",
+    "bitwarden",
+    "lastpass",
+    "chase",
+    "icbc",
+    "cmbchina",
+    "ccb",
+    "boc.cn",
+    "appleid",
+    "icloud",
+)
+
+
+def _is_sensitive_domain(domain: str) -> bool:
+    d = domain.lstrip(".").lower()
+    return any(kw in d for kw in _SENSITIVE_DOMAIN_KEYWORDS)
 
 
 def _win_known_dir(var_name: str, fallback: Path) -> Path:
@@ -279,6 +300,174 @@ def _map_samesite(raw: Any, *, is_secure: bool) -> Optional[str]:
     return None
 
 
+def _stage_copy_sqlite_db(cookie_db_path: Path) -> tuple[Path, Path]:
+    """复制 Chrome/Chromium ``Cookies`` SQLite + sidecar 到隔离临时目录（避免占用原库文件锁）。"""
+    base = resolve_mcp_runtimes_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    stage_dir = base / f".tmp-chrome-cookies-{uuid.uuid4().hex[:12]}"
+    stage_dir.mkdir(parents=True, exist_ok=False)
+    staged_db = stage_dir / "Cookies"
+    try:
+        shutil.copyfile(cookie_db_path, staged_db)
+        for sidecar in ("-wal", "-shm"):
+            src_side = Path(f"{cookie_db_path}{sidecar}")
+            if src_side.is_file():
+                shutil.copyfile(src_side, Path(f"{staged_db}{sidecar}"))
+    except OSError as exc:
+        shutil.rmtree(stage_dir, ignore_errors=True)
+        if isinstance(exc, PermissionError) or exc.errno in (errno.EPERM, errno.EACCES):
+            raise LocalInstallerError(
+                "E_CHROME_PERMISSION_DENIED",
+                "macOS 隐私保护阻止读取 Chrome 登录数据：请在「系统设置 → 隐私与安全 → 完全磁盘访问权限」中勾选 MailAgent 并重启后重试（请确认应用使用同一开发者证书签名）；也可以直接点击「打开受管浏览器窗口」手动登录一次。",
+                status_code=403,
+            ) from None
+        raise
+    return stage_dir, staged_db
+
+
+def _read_cookie_domain_counts(
+    cookie_db_path: Path,
+    *,
+    now_epoch: Optional[float] = None,
+) -> dict[str, int]:
+    """只读聚合未过期 Cookie 的域名计数（绝不触碰 ``encrypted_value`` 或 macOS Keychain）。"""
+    stage_dir, staged_db = _stage_copy_sqlite_db(cookie_db_path)
+    now = float(now_epoch if now_epoch is not None else time.time())
+    counts: dict[str, int] = {}
+    try:
+        conn = sqlite3.connect(str(staged_db))
+        try:
+            rows = conn.execute(
+                "SELECT host_key, expires_utc, has_expires FROM cookies"
+            ).fetchall()
+        finally:
+            conn.close()
+        for host_key, expires_utc, has_expires in rows:
+            if not isinstance(host_key, str):
+                continue
+            domain = host_key.lstrip(".").lower()
+            if not domain:
+                continue
+            if has_expires and isinstance(expires_utc, (int, float)) and expires_utc > 0:
+                expires_unix = (float(expires_utc) / 1_000_000.0) - _CHROMIUM_EPOCH_OFFSET_SEC
+                if expires_unix <= now:
+                    continue
+            counts[domain] = counts.get(domain, 0) + 1
+    finally:
+        shutil.rmtree(stage_dir, ignore_errors=True)
+    return counts
+
+
+def list_chrome_cookie_domains(
+    profile_id: str = "Default",
+    *,
+    chrome_root: Optional[Path] = None,
+    now_epoch: Optional[float] = None,
+) -> dict[str, Any]:
+    """预览指定 Chrome Profile 中可导入的域名及 Cookie 数（零明文凭据、不弹窗请求 Keychain）。"""
+    pid = (profile_id or "Default").strip()
+    cookie_db = resolve_chrome_cookie_db(pid, chrome_root=chrome_root)
+    counts = _read_cookie_domain_counts(cookie_db, now_epoch=now_epoch)
+    sorted_items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    domains = [
+        {"domain": domain, "count": count, "sensitive": _is_sensitive_domain(domain)}
+        for domain, count in sorted_items
+    ]
+    return {
+        "profile_id": pid,
+        "domains": domains,
+        "total_cookies": sum(counts.values()),
+    }
+
+
+def _resolve_managed_cookie_db(profile_dir: Path) -> Optional[Path]:
+    for rel in (
+        Path("Default") / "Network" / "Cookies",
+        Path("Default") / "Cookies",
+        Path("Network") / "Cookies",
+        Path("Cookies"),
+    ):
+        cand = profile_dir / rel
+        if cand.is_file():
+            return cand
+    return None
+
+
+def list_managed_cookie_domains(
+    *,
+    profile_dir: Optional[Path] = None,
+    now_epoch: Optional[float] = None,
+) -> dict[str, Any]:
+    """查看内置浏览器当前已保存登录态的域名清单（运行中走 CDP，未运行读受管 Cookies 库）。"""
+    from src.connectors.managed_browser import managed_browser
+
+    if managed_browser.is_running():
+        return managed_browser.list_cookie_domains_live_sync()
+
+    p_dir = profile_dir if profile_dir is not None else runtime_dir_for("browser_use") / "profile"
+    if not p_dir.is_dir():
+        return {"domains": [], "total_cookies": 0}
+    cookie_db = _resolve_managed_cookie_db(p_dir)
+    if cookie_db is None:
+        return {"domains": [], "total_cookies": 0}
+
+    counts = _read_cookie_domain_counts(cookie_db, now_epoch=now_epoch)
+    sorted_items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return {
+        "domains": [{"domain": d, "count": n} for d, n in sorted_items],
+        "total_cookies": sum(counts.values()),
+    }
+
+
+def clear_managed_cookies(
+    domain: Optional[str] = None,
+    *,
+    profile_dir: Optional[Path] = None,
+) -> dict[str, Any]:
+    """清理内置浏览器已保存的 Cookie（支持按域名单点清理或全部清空）。"""
+    clean_domain = domain.strip() if isinstance(domain, str) and domain.strip() else None
+    from src.connectors.managed_browser import managed_browser
+
+    if managed_browser.is_running():
+        return managed_browser.clear_cookies_live_sync(clean_domain)
+
+    p_dir = profile_dir if profile_dir is not None else runtime_dir_for("browser_use") / "profile"
+    if not p_dir.is_dir():
+        return {"cleared": 0, "domain": clean_domain}
+    cookie_db = _resolve_managed_cookie_db(p_dir)
+    if cookie_db is None:
+        return {"cleared": 0, "domain": clean_domain}
+
+    cleared = 0
+    conn = sqlite3.connect(str(cookie_db), timeout=5.0)
+    try:
+        if clean_domain is None:
+            cur = conn.execute("DELETE FROM cookies")
+            if cur.rowcount is not None and cur.rowcount > 0:
+                cleared = int(cur.rowcount)
+        else:
+            norm = _normalize_domain_filter(clean_domain)
+            if norm:
+                rows = conn.execute("SELECT rowid, host_key FROM cookies").fetchall()
+                rowids = [
+                    int(rowid)
+                    for rowid, host_key in rows
+                    if isinstance(host_key, str) and _domain_matches_filters(host_key, [norm])
+                ]
+                chunk_size = 500
+                for idx in range(0, len(rowids), chunk_size):
+                    batch = rowids[idx : idx + chunk_size]
+                    placeholders = ",".join("?" for _ in batch)
+                    cur = conn.execute(f"DELETE FROM cookies WHERE rowid IN ({placeholders})", batch)
+                    if cur.rowcount is not None and cur.rowcount > 0:
+                        cleared += int(cur.rowcount)
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"cleared": cleared, "domain": clean_domain}
+
+
 def decrypt_chrome_cookies_from_db(
     cookie_db_path: Path,
     safe_storage_secret: bytes,
@@ -287,35 +476,15 @@ def decrypt_chrome_cookies_from_db(
     now_epoch: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     """暂存复制 Chrome ``Cookies`` SQLite + WAL 后解密并转换为 Playwright Cookie 列表。"""
-    base = resolve_mcp_runtimes_dir()
-    base.mkdir(parents=True, exist_ok=True)
-    stage_dir = base / f".tmp-chrome-cookies-{uuid.uuid4().hex[:12]}"
-    stage_dir.mkdir(parents=True, exist_ok=False)
-
     now = float(now_epoch if now_epoch is not None else time.time())
     normalized_filters = [
         nf for item in (domain_filters or []) if isinstance(item, str) and (nf := _normalize_domain_filter(item))
     ]
     aes_key = _derive_chrome_macos_aes_key(safe_storage_secret)
+    stage_dir, staged_db = _stage_copy_sqlite_db(cookie_db_path)
     out: list[dict[str, Any]] = []
 
     try:
-        staged_db = stage_dir / "Cookies"
-        try:
-            shutil.copyfile(cookie_db_path, staged_db)
-            for sidecar in ("-wal", "-shm"):
-                src_side = Path(f"{cookie_db_path}{sidecar}")
-                if src_side.is_file():
-                    shutil.copyfile(src_side, Path(f"{staged_db}{sidecar}"))
-        except OSError as exc:
-            if isinstance(exc, PermissionError) or exc.errno in (errno.EPERM, errno.EACCES):
-                raise LocalInstallerError(
-                    "E_CHROME_PERMISSION_DENIED",
-                    "macOS 隐私保护阻止读取 Chrome 登录数据：请在「系统设置 → 隐私与安全 → 完全磁盘访问权限」中勾选 MailAgent 并重启后重试（请确认应用使用同一开发者证书签名）；也可以直接点击「打开受管浏览器窗口」手动登录一次。",
-                    status_code=403,
-                ) from None
-            raise
-
         conn = sqlite3.connect(str(staged_db))
         try:
             db_version = 0

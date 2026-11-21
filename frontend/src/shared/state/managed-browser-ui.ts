@@ -43,18 +43,22 @@ export interface ManagedBrowserUiState {
   sidebarOpen: boolean
   sidebarWidth: number
   dismissedRunId: string | null
+  pendingUrl: string | null
   activity: ComputerUseActivityState
   openSidebar: () => void
   closeSidebar: () => void
   toggleSidebar: () => void
   setSidebarWidth: (width: number) => void
+  setPendingUrl: (url: string | null) => void
+  consumePendingUrl: () => string | null
   setActivity: (next: ComputerUseActivityState) => void
 }
 
-export const useManagedBrowserUi = create<ManagedBrowserUiState>((set) => ({
+export const useManagedBrowserUi = create<ManagedBrowserUiState>((set, get) => ({
   sidebarOpen: false,
   sidebarWidth: readPersistedWidth(),
   dismissedRunId: null,
+  pendingUrl: null,
   activity: IDLE_COMPUTER_USE_ACTIVITY,
 
   openSidebar: () =>
@@ -86,6 +90,16 @@ export const useManagedBrowserUi = create<ManagedBrowserUiState>((set) => ({
     const clamped = clampBrowserSidebarWidth(width)
     writePersistedWidth(clamped)
     set({ sidebarWidth: clamped })
+  },
+
+  setPendingUrl: (url: string | null) => set({ pendingUrl: url }),
+
+  consumePendingUrl: () => {
+    const url = get().pendingUrl
+    if (url !== null) {
+      set({ pendingUrl: null })
+    }
+    return url
   },
 
   setActivity: (next: ComputerUseActivityState) =>

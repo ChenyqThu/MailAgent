@@ -16,7 +16,9 @@ import {
   ArrowRight,
   ExternalLink,
   Globe,
+  KeyRound,
   Maximize2,
+  MoreVertical,
   PanelRight,
   Plus,
   Power,
@@ -33,6 +35,8 @@ import { resolveBrowserLiveWsUrl } from '@shared/lib/apiBaseUrl'
 import { cn } from '@shared/lib/cn'
 import { useManagedBrowserUi } from '@shared/state/managed-browser-ui'
 import { toastError } from '@shared/state/toast'
+
+import { BrowserCookieManagerPanel } from './BrowserCookieManagerPanel'
 
 export interface ManagedBrowserPaneProps {
   mode: 'sidebar' | 'tab'
@@ -100,6 +104,8 @@ export function ManagedBrowserPane({
   const { t } = useTranslation()
   const mailApi = useMailApi()
   const activity = useManagedBrowserUi((s) => s.activity)
+  const pendingUrl = useManagedBrowserUi((s) => s.pendingUrl)
+  const consumePendingUrl = useManagedBrowserUi((s) => s.consumePendingUrl)
 
   const [connStatus, setConnStatus] = useState<ConnectionStatus>('connecting')
   const [errorCode, setErrorCode] = useState<string | null>(null)
@@ -111,6 +117,14 @@ export function ManagedBrowserPane({
   const [hasFrame, setHasFrame] = useState<boolean>(false)
   const [reconnectNonce, setReconnectNonce] = useState<number>(0)
   const [stoppingAgent, setStoppingAgent] = useState<boolean>(false)
+  const [menuOpen, setMenuOpen] = useState<boolean>(false)
+  const [cookiePanelOpen, setCookiePanelOpen] = useState<boolean>(false)
+
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  const currentUrlRef = useRef<string>(currentUrl)
+  useEffect(() => {
+    currentUrlRef.current = currentUrl
+  }, [currentUrl])
 
   const wsRef = useRef<WebSocket | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -143,6 +157,36 @@ export function ManagedBrowserPane({
     if (!ws || ws.readyState !== WebSocket.OPEN) return
     ws.send(JSON.stringify(payload))
   }, [])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const onPointerDown = (e: globalThis.MouseEvent): void => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false)
+      }
+    }
+    const onKeyDown = (e: globalThis.KeyboardEvent): void => {
+      if (e.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [menuOpen])
+
+  useEffect(() => {
+    if (connStatus !== 'connected' || !pendingUrl) return
+    const url = consumePendingUrl()
+    if (!url) return
+    const cur = currentUrlRef.current
+    if (!cur || cur === 'about:blank') {
+      sendCmd({ type: 'navigate', url })
+    } else {
+      sendCmd({ type: 'new_tab', url })
+    }
+  }, [connStatus, pendingUrl, consumePendingUrl, sendCmd])
 
   const drawImageToCanvas = useCallback((img: HTMLImageElement, rw: number, rh: number): void => {
     const canvas = canvasRef.current
@@ -547,24 +591,61 @@ export function ManagedBrowserPane({
               <PanelRight size={14} strokeWidth={1.75} />
             </button>
           )}
-          <button
-            type="button"
-            aria-label={t('browserPane.openExternalChrome')}
-            title={t('browserPane.openExternalChrome')}
-            onClick={handleLaunchExternalChrome}
-            className="grid size-7 place-items-center rounded-md text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
-          >
-            <ExternalLink size={14} strokeWidth={1.75} />
-          </button>
-          <button
-            type="button"
-            aria-label={t('browserPane.stopKernel')}
-            title={t('browserPane.stopKernel')}
-            onClick={handleStopKernel}
-            className="grid size-7 place-items-center rounded-md text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-fail"
-          >
-            <Power size={14} strokeWidth={1.75} />
-          </button>
+          <div ref={menuRef} className="relative">
+            <button
+              type="button"
+              aria-label={t('browserPane.moreMenu')}
+              title={t('browserPane.moreMenu')}
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen((prev) => !prev)}
+              className="grid size-7 place-items-center rounded-md text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+            >
+              <MoreVertical size={14} strokeWidth={1.75} />
+            </button>
+            {menuOpen && (
+              <div
+                role="menu"
+                className="absolute right-0 top-8 z-40 min-w-[200px] rounded-lg border border-ink-border bg-ink-2 py-1 shadow-md"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    setCookiePanelOpen((prev) => !prev)
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-aux text-ink-fg transition-colors hover:bg-ink-3"
+                >
+                  <KeyRound size={14} strokeWidth={1.75} className="shrink-0 text-coral" />
+                  <span>{t('browserPane.manageCookies')}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    handleLaunchExternalChrome()
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-aux text-ink-fg transition-colors hover:bg-ink-3"
+                >
+                  <ExternalLink size={14} strokeWidth={1.75} className="shrink-0 text-ink-fg-2" />
+                  <span>{t('browserPane.openExternalChrome')}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false)
+                    handleStopKernel()
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-aux text-fail transition-colors hover:bg-ink-3"
+                >
+                  <Power size={14} strokeWidth={1.75} className="shrink-0" />
+                  <span>{t('browserPane.stopKernel')}</span>
+                </button>
+              </div>
+            )}
+          </div>
           {mode === 'sidebar' && onClose && (
             <button
               type="button"
@@ -679,7 +760,14 @@ export function ManagedBrowserPane({
           className="h-full w-full cursor-default select-none object-contain"
         />
 
-        {showSetupCard ? (
+        {cookiePanelOpen ? (
+          <div className="absolute inset-0 z-20 flex flex-col bg-ink-1">
+            <BrowserCookieManagerPanel
+              initialTab="stored"
+              onClose={() => setCookiePanelOpen(false)}
+            />
+          </div>
+        ) : showSetupCard ? (
           <div className="absolute inset-0 flex items-center justify-center bg-ink-0/90 p-6">
             <div className="flex max-w-sm flex-col items-center gap-3 rounded-xl border border-ink-border bg-ink-2 p-5 text-center">
               <Globe size={28} strokeWidth={1.5} className="text-coral" />

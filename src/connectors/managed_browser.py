@@ -25,13 +25,19 @@ import threading
 import time
 import urllib.parse
 from contextlib import suppress
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional, TypeVar
 
 import httpx
 from loguru import logger
 
-from src.connectors.chrome_import import _find_chrome_executable
+from src.connectors.chrome_import import (
+    _domain_matches_filters,
+    _find_chrome_executable,
+    _normalize_domain_filter,
+)
 from src.connectors.local_installer import LocalInstallerError, runtime_dir_for
+
+_T = TypeVar("_T")
 
 #: 无前端查看器且无活动调用时的空闲回收超时（秒），对齐 ``LONG_SESSION_STDIO_CONNECTORS``。
 MANAGED_BROWSER_IDLE_TTL_SECONDS = 600.0
@@ -465,10 +471,13 @@ class ManagedBrowserManager:
         except Exception:  # noqa: BLE001
             return False
 
-    async def inject_cookies_live(self, cookies: list[dict[str, Any]]) -> dict[str, int]:
-        """当受管 Chrome 已在后台运行时，直接通过 CDP ``Network.setCookies`` 热注入 Cookie。"""
-        if not cookies:
-            return {"imported": 0, "skipped": 0}
+    async def _with_live_cdp(
+        self,
+        action: Callable[[_CdpConnection], Awaitable[_T]],
+        *,
+        error_code: str = "E_COOKIE_OP_FAILED",
+        error_prefix: str = "受管浏览器 CDP 操作失败",
+    ) -> _T:
         targets = await self.list_targets()
         if not targets:
             created = await self.new_tab("about:blank")
@@ -476,29 +485,14 @@ class ManagedBrowserManager:
                 targets = [created]
         if not targets:
             raise LocalInstallerError(
-                "E_COOKIE_INJECT_FAILED",
-                "未找到可用的受管浏览器页面 Target 以热写入 Cookie。",
+                error_code,
+                "未找到可用的受管浏览器页面 Target。",
                 status_code=500,
             )
 
         from websockets.asyncio.client import connect as ws_connect
 
-        sanitized: list[dict[str, Any]] = []
-        for c in cookies:
-            item = {
-                k: v
-                for k, v in c.items()
-                if k in ("name", "value", "url", "domain", "path", "secure", "httpOnly", "sameSite", "expires")
-            }
-            if item:
-                sanitized.append(item)
-
-        if not sanitized:
-            return {"imported": 0, "skipped": len(cookies)}
-
         ws_url = targets[0]["ws_url"]
-        imported = 0
-        skipped = len(cookies) - len(sanitized)
         try:
             async with ws_connect(ws_url, proxy=None, open_timeout=5.0) as ws:
                 cdp = _CdpConnection(targets[0]["id"], ws)
@@ -515,22 +509,8 @@ class ManagedBrowserManager:
                 reader_task = asyncio.create_task(_read_cdp_replies())
                 try:
                     await cdp.call("Network.enable", timeout=3.0)
-                    chunk_size = 100
-                    for idx in range(0, len(sanitized), chunk_size):
-                        chunk = sanitized[idx : idx + chunk_size]
-                        try:
-                            await cdp.call("Network.setCookies", {"cookies": chunk}, timeout=10.0)
-                            imported += len(chunk)
-                        except (TimeoutError, asyncio.TimeoutError):
-                            raise
-                        except RuntimeError:
-                            for single in chunk:
-                                try:
-                                    await cdp.call("Network.setCookies", {"cookies": [single]}, timeout=5.0)
-                                    imported += 1
-                                except Exception:  # noqa: BLE001 — 单条损坏 Cookie 跳过，不阻断整批导入
-                                    skipped += 1
-                    await asyncio.sleep(0.2)
+                    result = await action(cdp)
+                    return result
                 finally:
                     reader_task.cancel()
                     with suppress(asyncio.CancelledError, Exception):
@@ -540,13 +520,134 @@ class ManagedBrowserManager:
             raise
         except (TimeoutError, asyncio.TimeoutError, OSError, RuntimeError) as exc:
             raise LocalInstallerError(
-                "E_COOKIE_INJECT_FAILED",
-                f"向受管浏览器注入 Cookie 失败：{exc}",
+                error_code,
+                f"{error_prefix}：{exc}",
                 status_code=500,
             ) from exc
 
+    async def inject_cookies_live(self, cookies: list[dict[str, Any]]) -> dict[str, int]:
+        """当受管 Chrome 已在后台运行时，直接通过 CDP ``Network.setCookies`` 热注入 Cookie。"""
+        if not cookies:
+            return {"imported": 0, "skipped": 0}
+
+        sanitized: list[dict[str, Any]] = []
+        for c in cookies:
+            item = {
+                k: v
+                for k, v in c.items()
+                if k in ("name", "value", "url", "domain", "path", "secure", "httpOnly", "sameSite", "expires")
+            }
+            if item:
+                sanitized.append(item)
+
+        if not sanitized:
+            return {"imported": 0, "skipped": len(cookies)}
+
+        skipped_invalid = len(cookies) - len(sanitized)
+
+        async def _inject(cdp: _CdpConnection) -> dict[str, int]:
+            imported = 0
+            skipped = skipped_invalid
+            chunk_size = 100
+            for idx in range(0, len(sanitized), chunk_size):
+                chunk = sanitized[idx : idx + chunk_size]
+                try:
+                    await cdp.call("Network.setCookies", {"cookies": chunk}, timeout=10.0)
+                    imported += len(chunk)
+                except (TimeoutError, asyncio.TimeoutError):
+                    raise
+                except RuntimeError:
+                    for single in chunk:
+                        try:
+                            await cdp.call("Network.setCookies", {"cookies": [single]}, timeout=5.0)
+                            imported += 1
+                        except Exception:  # noqa: BLE001 — 单条损坏 Cookie 跳过，不阻断整批导入
+                            skipped += 1
+            await asyncio.sleep(0.2)
+            return {"imported": imported, "skipped": skipped}
+
+        counts = await self._with_live_cdp(
+            _inject,
+            error_code="E_COOKIE_INJECT_FAILED",
+            error_prefix="向受管浏览器注入 Cookie 失败",
+        )
         self.touch()
-        return {"imported": imported, "skipped": skipped}
+        return counts
+
+    async def list_cookie_domains_live(self) -> dict[str, Any]:
+        """读取运行中受管浏览器的已保存 Cookie 域名统计（绝不返回明文值）。"""
+        async def _list(cdp: _CdpConnection) -> dict[str, Any]:
+            resp = await cdp.call("Network.getAllCookies", timeout=5.0)
+            raw_cookies = resp.get("cookies") if isinstance(resp, dict) else []
+            counts: dict[str, int] = {}
+            for c in raw_cookies or []:
+                if not isinstance(c, dict):
+                    continue
+                domain = str(c.get("domain") or "").lstrip(".").lower()
+                if not domain:
+                    continue
+                counts[domain] = counts.get(domain, 0) + 1
+            sorted_items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            return {
+                "domains": [{"domain": d, "count": n} for d, n in sorted_items],
+                "total_cookies": sum(counts.values()),
+            }
+
+        res = await self._with_live_cdp(
+            _list,
+            error_code="E_COOKIE_QUERY_FAILED",
+            error_prefix="读取受管浏览器登录态域名失败",
+        )
+        self.touch()
+        return res
+
+    def list_cookie_domains_live_sync(self) -> dict[str, Any]:
+        """在 threadpool 线程中同步查询运行中受管浏览器的 Cookie 域名统计。"""
+        return asyncio.run(self.list_cookie_domains_live())
+
+    async def clear_cookies_live(self, domain: Optional[str] = None) -> dict[str, Any]:
+        """清空运行中受管浏览器的指定域名或全部 Cookie。"""
+        clean_domain = domain.strip() if isinstance(domain, str) and domain.strip() else None
+
+        async def _clear(cdp: _CdpConnection) -> dict[str, Any]:
+            resp = await cdp.call("Network.getAllCookies", timeout=5.0)
+            raw_cookies = resp.get("cookies") if isinstance(resp, dict) else []
+            cookies_list = [c for c in (raw_cookies or []) if isinstance(c, dict)]
+            if clean_domain is None:
+                await cdp.call("Network.clearBrowserCookies", timeout=5.0)
+                return {"cleared": len(cookies_list), "domain": None}
+            norm = _normalize_domain_filter(clean_domain)
+            if not norm:
+                return {"cleared": 0, "domain": clean_domain}
+            cleared = 0
+            for c in cookies_list:
+                c_domain = str(c.get("domain") or "")
+                c_name = str(c.get("name") or "")
+                if not c_name or not c_domain or not _domain_matches_filters(c_domain, [norm]):
+                    continue
+                await cdp.call(
+                    "Network.deleteCookies",
+                    {
+                        "name": c_name,
+                        "domain": c_domain,
+                        "path": str(c.get("path") or "/"),
+                    },
+                    timeout=5.0,
+                )
+                cleared += 1
+            return {"cleared": cleared, "domain": clean_domain}
+
+        res = await self._with_live_cdp(
+            _clear,
+            error_code="E_COOKIE_CLEAR_FAILED",
+            error_prefix="清理受管浏览器登录态失败",
+        )
+        self.touch()
+        return res
+
+    def clear_cookies_live_sync(self, domain: Optional[str] = None) -> dict[str, Any]:
+        """在 threadpool 线程中同步清理运行中受管浏览器的 Cookie。"""
+        return asyncio.run(self.clear_cookies_live(domain))
 
     def inject_cookies_live_sync(self, cookies: list[dict[str, Any]]) -> dict[str, int]:
         """在 threadpool 线程中同步调用热 Cookie 注入。"""

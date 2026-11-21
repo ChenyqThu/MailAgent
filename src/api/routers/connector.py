@@ -732,6 +732,66 @@ async def list_browser_chrome_profiles(
     return success_envelope({"profiles": profiles}, request=request)
 
 
+@router.get("/browser_use/chrome-domains", dependencies=[Depends(verify_local_token)])
+async def list_browser_chrome_domains(
+    request: Request,
+    profile_id: str = "Default",
+    settings=Depends(get_settings),
+) -> Any:
+    """按域名汇总 Chrome Profile 可导入 Cookie 数量（绝不返回明文值，亦不触发 Keychain 弹窗）。"""
+    _require_managed_local_enabled(settings)
+    from src.connectors.chrome_import import list_chrome_cookie_domains
+    from src.connectors.local_installer import LocalInstallerError
+
+    try:
+        data = await run_in_threadpool(list_chrome_cookie_domains, profile_id)
+    except LocalInstallerError as e:
+        raise APIError(e.code, e.message, http_status=e.status_code) from None
+    return success_envelope(data, request=request)
+
+
+@router.get("/browser_use/cookies/domains", dependencies=[Depends(verify_local_token)])
+async def list_managed_browser_cookie_domains(
+    request: Request,
+    settings=Depends(get_settings),
+) -> Any:
+    """查看内置浏览器当前已保存登录态的域名与数量（绝不返回明文 Cookie 值）。"""
+    _require_managed_local_enabled(settings)
+    from src.connectors.chrome_import import list_managed_cookie_domains
+    from src.connectors.local_installer import LocalInstallerError
+
+    try:
+        data = await run_in_threadpool(list_managed_cookie_domains)
+    except LocalInstallerError as e:
+        raise APIError(e.code, e.message, http_status=e.status_code) from None
+    return success_envelope(data, request=request)
+
+
+@router.post("/browser_use/cookies/clear", dependencies=[Depends(verify_local_token)])
+async def clear_managed_browser_cookies(
+    request: Request,
+    payload: Optional[dict[str, Any]] = Body(default=None),
+    settings=Depends(get_settings),
+) -> Any:
+    """清除内置浏览器指定域名或全部已保存 Cookie（仅 Desktop loopback）。"""
+    _require_managed_local_enabled(settings)
+    from src.connectors.chrome_import import clear_managed_cookies
+    from src.connectors.local_installer import LocalInstallerError
+    from src.connectors.stdio_pool import stdio_pool
+
+    raw = payload or {}
+    domain = raw.get("domain")
+    if domain is not None and not isinstance(domain, str):
+        raise APIError("E_INVALID_ARG", "domain must be a string", http_status=400)
+
+    await stdio_pool.invalidate("browser_use")
+    try:
+        data = await run_in_threadpool(clear_managed_cookies, domain)
+    except LocalInstallerError as e:
+        raise APIError(e.code, e.message, http_status=e.status_code) from None
+    return success_envelope(data, request=request)
+
+
 @router.post("/browser_use/import-chrome-cookies", dependencies=[Depends(verify_local_token)])
 async def import_browser_chrome_cookies(
     request: Request,

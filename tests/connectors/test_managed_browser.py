@@ -272,3 +272,84 @@ def test_inject_cookies_cold_launches_injects_and_closes_gracefully(tmp_path, mo
         "graceful_close:http://127.0.0.1:45555",
         "terminate",
     ]
+
+
+def test_list_and_clear_cookie_domains_live_cdp(monkeypatch) -> None:
+    mgr = mb_mod.ManagedBrowserManager(idle_ttl_seconds=0)
+    monkeypatch.setattr(
+        mgr,
+        "list_targets",
+        lambda: asyncio.sleep(0, result=[{"id": "t1", "ws_url": "ws://127.0.0.1:9999/page/1"}]),
+    )
+
+    state_cookies = [
+        {"name": "sid", "value": "SECRET_DO_NOT_RETURN", "domain": ".oa.corp", "path": "/"},
+        {"name": "csrf", "value": "SECRET_2", "domain": "sub.oa.corp", "path": "/app"},
+        {"name": "tok", "value": "SECRET_3", "domain": "notion.so", "path": "/"},
+    ]
+    deleted_calls: list[dict] = []
+    clear_all_calls: list[str] = []
+
+    class FakeWs:
+        def __init__(self) -> None:
+            self._queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+        async def __aenter__(self) -> "FakeWs":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            await self.close()
+
+        async def close(self) -> None:
+            await self._queue.put(None)
+
+        async def send(self, raw: str) -> None:
+            msg = json.loads(raw)
+            msg_id = msg["id"]
+            method = msg["method"]
+            params = msg.get("params") or {}
+            if method == "Network.getAllCookies":
+                await self._queue.put(json.dumps({"id": msg_id, "result": {"cookies": list(state_cookies)}}))
+                return
+            if method == "Network.deleteCookies":
+                deleted_calls.append(params)
+                state_cookies[:] = [
+                    c
+                    for c in state_cookies
+                    if not (c["name"] == params.get("name") and c["domain"] == params.get("domain"))
+                ]
+            elif method == "Network.clearBrowserCookies":
+                clear_all_calls.append("all")
+                state_cookies.clear()
+            await self._queue.put(json.dumps({"id": msg_id, "result": {}}))
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self) -> str:
+            item = await self._queue.get()
+            if item is None:
+                raise StopAsyncIteration
+            return item
+
+    import websockets.asyncio.client as ws_client_mod
+
+    monkeypatch.setattr(ws_client_mod, "connect", lambda *args, **kwargs: FakeWs())
+
+    listed = asyncio.run(mgr.list_cookie_domains_live())
+    assert listed == {
+        "domains": [
+            {"domain": "notion.so", "count": 1},
+            {"domain": "oa.corp", "count": 1},
+            {"domain": "sub.oa.corp", "count": 1},
+        ],
+        "total_cookies": 3,
+    }
+
+    cleared_domain = asyncio.run(mgr.clear_cookies_live("oa.corp"))
+    assert cleared_domain == {"cleared": 2, "domain": "oa.corp"}
+    assert len(deleted_calls) == 2
+
+    cleared_all = asyncio.run(mgr.clear_cookies_live(None))
+    assert cleared_all == {"cleared": 1, "domain": None}
+    assert clear_all_calls == ["all"]

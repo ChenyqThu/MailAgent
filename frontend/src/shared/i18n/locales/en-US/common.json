@@ -1860,7 +1860,9 @@
       "copied": "Copied",
       "openOriginal": "Open original",
       "loadingPreview": "Loading content…",
-      "previewUnavailable": "Preview unavailable"
+      "previewUnavailable": "Preview unavailable",
+      "openInBuiltInBrowser": "Open in built-in browser",
+      "openInSystemBrowser": "Open in system browser"
     },
     "effort": {
       "label": "Thinking effort",
@@ -2789,6 +2791,8 @@
         "launchWindowDone": "Managed browser window opened; sign-ins here persist automatically",
         "launchWindowFailed": "Failed to open managed browser window",
         "launchWindowHint": "Tip: Cookie-based logins can use one-click import; both imported cookies and manual window logins persist in the managed profile.",
+        "selectDomainsButton": "Select domains / Manage logins",
+        "hideDomainsButton": "Hide login manager",
         "tccRequestPrompt": "Request permission"
       },
       "supersededHint": "This connection is a self-hosted direct link, but the service now ships through Composio. Use “Switch track” to disconnect and clear its config, then reconnect from the catalog.",
@@ -8768,6 +8772,36 @@
     "openConnectors": "Open Connector Settings",
     "agentControlling": "AI is operating this browser",
     "stopTakeover": "Stop / Take over",
-    "untitledTab": "New tab"
+    "untitledTab": "New tab",
+    "moreMenu": "More actions",
+    "manageCookies": "Login state & cookies",
+    "openDevTools": "Open DevTools",
+    "resetSession": "Reset browser session",
+    "cookieManager": {
+      "title": "Browser login state",
+      "storedTab": "Saved logins",
+      "importTab": "Import from Chrome",
+      "searchStoredPlaceholder": "Filter saved domains…",
+      "searchImportPlaceholder": "Filter Chrome domains…",
+      "emptyStored": "No saved site cookies yet",
+      "goImport": "Import from Chrome",
+      "cookieCount": "{count} cookies",
+      "clearDomain": "Clear site cookies",
+      "clearedDomain": "Cleared {domain} ({count} cookies)",
+      "clearAll": "Clear all logins",
+      "confirmClearAll": "Confirm clear all ({count} sites)",
+      "cancel": "Cancel",
+      "clearedAll": "Cleared all built-in browser cookies ({count})",
+      "selectNonSensitive": "Non-sensitive",
+      "selectAll": "Select all",
+      "clearSelection": "Clear selection",
+      "sensitiveBadge": "Sensitive",
+      "importSelected": "Import selected ({count})",
+      "importing": "Importing…",
+      "selectedCount": "{selected} / {total} domains selected",
+      "emptyChromeDomains": "No active cookies found in this Chrome profile",
+      "refresh": "Refresh",
+      "close": "Close panel"
+    }
   }
 }

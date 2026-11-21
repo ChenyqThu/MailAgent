@@ -29,6 +29,7 @@ import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useContactNavigation } from '@shared/components/contacts/navigation'
 import { useMatterNavigation } from '@shared/components/matters/navigation'
+import { openUrlInBuiltInBrowser } from '@shared/state/open-in-browser'
 import { formatTokens } from '@shared/assistant/components/modelDetailCard.lib'
 import { sessionKeyForId, useSessionDisabledConnectors } from '@shared/assistant/sessionConnectors'
 import type {
@@ -400,21 +401,41 @@ function SessionInspectorOpenPane({
                     count={filteredLinks.length}
                   >
                     {filteredLinks.map((link) => (
-                      <button
+                      <div
                         key={link.url}
-                        type="button"
-                        onClick={() => window.open(link.url, '_blank', 'noopener,noreferrer')}
-                        className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-fast hover:bg-ink-2"
+                        className="group flex items-center gap-1 rounded-md px-1 py-0.5 transition-colors duration-fast hover:bg-ink-2"
                       >
-                        <Globe size={14} className="mt-0.5 shrink-0 text-info" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-aux text-ink-fg">{link.title}</span>
-                          <span className="block truncate font-mono text-meta text-ink-fg-3">
-                            {link.hostname}
+                        <button
+                          type="button"
+                          title={t('chat.inspector.openInBuiltInBrowser')}
+                          onClick={() => {
+                            if (!openUrlInBuiltInBrowser(link.url)) {
+                              window.open(link.url, '_blank', 'noopener,noreferrer')
+                            }
+                          }}
+                          className="flex min-w-0 flex-1 items-start gap-2 rounded px-1 py-1 text-left"
+                        >
+                          <Globe size={14} className="mt-0.5 shrink-0 text-info" />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-aux text-ink-fg">{link.title}</span>
+                            <span className="block truncate font-mono text-meta text-ink-fg-3">
+                              {link.hostname}
+                            </span>
                           </span>
-                        </span>
-                        <ExternalLink size={12} className="mt-1 shrink-0 text-ink-fg-3" />
-                      </button>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`${t('chat.inspector.openInSystemBrowser')}: ${link.title}`}
+                          title={t('chat.inspector.openInSystemBrowser')}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            window.open(link.url, '_blank', 'noopener,noreferrer')
+                          }}
+                          className="grid size-6 shrink-0 place-items-center rounded text-ink-fg-3 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+                        >
+                          <ExternalLink size={12} />
+                        </button>
+                      </div>
                     ))}
                   </InspectorSection>
                 )}

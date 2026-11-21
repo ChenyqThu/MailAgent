@@ -18,6 +18,7 @@ import {
   type ContextUsageView
 } from '@shared/assistant/components/contextUsage.lib'
 import { useActiveEmail } from '@shared/state/active-email'
+import { useManagedBrowserUi } from '@shared/state/managed-browser-ui'
 
 const navigateMock = vi.fn()
 const libraryTextMock = vi.fn()
@@ -307,6 +308,23 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
     expect(setActiveSpy).toHaveBeenCalledWith(42, { navTarget: true })
     expect(navigateMock).toHaveBeenCalledWith({ to: '/' })
     setActiveSpy.mockRestore()
+
+    // Clicking link hands off to built-in browser; trailing action opens system browser
+    useManagedBrowserUi.getState().setPendingUrl(null)
+    const winOpenSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+    fireEvent.click(screen.getByText('Enterprise SLA'))
+    expect(useManagedBrowserUi.getState().pendingUrl).toBe('https://docs.example.com/sla')
+    expect(winOpenSpy).not.toHaveBeenCalled()
+
+    useManagedBrowserUi.getState().setPendingUrl(null)
+    fireEvent.click(screen.getByLabelText('Open in system browser: Enterprise SLA'))
+    expect(winOpenSpy).toHaveBeenCalledWith(
+      'https://docs.example.com/sla',
+      '_blank',
+      'noopener,noreferrer'
+    )
+    expect(useManagedBrowserUi.getState().pendingUrl).toBeNull()
+    winOpenSpy.mockRestore()
 
     // Cmd+. toggles pane closed then open
     fireEvent.keyDown(document, { key: '.', metaKey: true })
