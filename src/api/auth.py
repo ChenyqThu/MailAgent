@@ -36,7 +36,7 @@ import logging
 import os
 
 import jwt
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, WebSocket
 from jwt import PyJWKClient
 
 logger = logging.getLogger("mailagent.api.auth")
@@ -172,40 +172,7 @@ def _resolve_allowed_email() -> str:
     return ""
 
 
-async def verify_cf_access(request: Request) -> None:
-    """FastAPI dependency: 校验 Cf-Access-Jwt-Assertion，把 email 落到 request.state。
-
-    成功: request.state.user_email = <verified + allow-listed claims email>，无返回值。
-    失败: raise HTTPException —
-          - 缺 token → 401；
-          - JWT 非法 / 签名校验失败 → 403；
-          - JWT 合法但缺 ``email`` claim → 403 (codex C1)；
-          - email 不在配置的多邮箱白名单内（USER_EMAIL ∪ MAILAGENT_API_ALLOWED_EMAIL）→ 403 (codex C1)。
-          (与 §6.3 范本、auth-layer 失败映射一致。)
-
-    dev bypass: AUTH_DISABLED 时直接放行，user_email = "dev@localhost" (仅 dev，
-    模块加载期已强制 MAILAGENT_API_DEV=true，见顶部 C2 守卫)。
-
-    C2 双层鉴权: 远程 CF JWT 逻辑**一字不改** (下方); 仅在其之前加一条本地 token 腿 ——
-    配了 _LOCAL_API_TOKEN 且 X-MailAgent-Local-Token header 匹配 (compare_digest 防时序
-    侧信道) → 放行本地身份。未配 token / 不匹配 → 跳过, 回落 CF JWT (fail-closed: 都没有→401)。
-    """
-    if AUTH_DISABLED:
-        request.state.user_email = "dev@localhost"
-        return
-
-    # --- 本地 ephemeral token 腿 (同机 Electron/renderer) ---------------------
-    local_tok = request.headers.get(LOCAL_TOKEN_HEADER)
-    if _LOCAL_API_TOKEN and local_tok and hmac.compare_digest(local_tok, _LOCAL_API_TOKEN):
-        # 本地身份 = 配置的 allowed email (USER_EMAIL 优先); 解析不出则回落同机 sentinel。
-        # 用 _resolve_allowed_email() 取有序第一个（config.user_email 优先于 override）。
-        request.state.user_email = _resolve_allowed_email() or "local@127.0.0.1"
-        return
-
-    token = request.headers.get("Cf-Access-Jwt-Assertion")
-    if not token:
-        raise HTTPException(status_code=401, detail="no access JWT")
-
+def _verify_cf_jwt_token(token: str) -> str:
     try:
         signing_key = _jwk_client.get_signing_key_from_jwt(token)
         claims = jwt.decode(
@@ -241,7 +208,63 @@ async def verify_cf_access(request: Request) -> None:
         logger.warning("CF Access JWT email not in allowlist — rejected")
         raise HTTPException(status_code=403, detail="email not allowed")
 
-    request.state.user_email = email
+    return email
+
+
+async def verify_cf_access(request: Request) -> None:
+    """FastAPI dependency: 校验 Cf-Access-Jwt-Assertion，把 email 落到 request.state。
+
+    成功: request.state.user_email = <verified + allow-listed claims email>，无返回值。
+    失败: raise HTTPException —
+          - 缺 token → 401；
+          - JWT 非法 / 签名校验失败 → 403；
+          - JWT 合法但缺 ``email`` claim → 403 (codex C1)；
+          - email 不在配置的多邮箱白名单内（USER_EMAIL ∪ MAILAGENT_API_ALLOWED_EMAIL）→ 403 (codex C1)。
+          (与 §6.3 范本、auth-layer 失败映射一致。)
+
+    dev bypass: AUTH_DISABLED 时直接放行，user_email = "dev@localhost" (仅 dev，
+    模块加载期已强制 MAILAGENT_API_DEV=true，见顶部 C2 守卫)。
+
+    C2 双层鉴权: 远程 CF JWT 逻辑**一字不改** (下方); 仅在其之前加一条本地 token 腿 ——
+    配了 _LOCAL_API_TOKEN 且 X-MailAgent-Local-Token header 匹配 (compare_digest 防时序
+    侧信道) → 放行本地身份。未配 token / 不匹配 → 跳过, 回落 CF JWT (fail-closed: 都没有→401)。
+    """
+    if AUTH_DISABLED:
+        request.state.user_email = "dev@localhost"
+        return
+
+    # --- 本地 ephemeral token 腿 (同机 Electron/renderer) ---------------------
+    local_tok = request.headers.get(LOCAL_TOKEN_HEADER)
+    if _LOCAL_API_TOKEN and local_tok and hmac.compare_digest(local_tok, _LOCAL_API_TOKEN):
+        # 本地身份 = 配置的 allowed email (USER_EMAIL 优先); 解析不出则回落同机 sentinel。
+        # 用 _resolve_allowed_email() 取有序第一个（config.user_email 优先于 override）。
+        request.state.user_email = _resolve_allowed_email() or "local@127.0.0.1"
+        return
+
+    token = request.headers.get("Cf-Access-Jwt-Assertion")
+    if not token:
+        raise HTTPException(status_code=401, detail="no access JWT")
+
+    request.state.user_email = _verify_cf_jwt_token(token)
+
+
+async def verify_websocket_access(websocket: WebSocket) -> str:
+    """校验 WebSocket 握手鉴权（本地 X-MailAgent-Local-Token 或远程 CF Access JWT/Cookie）。"""
+    if AUTH_DISABLED:
+        return "dev@localhost"
+
+    local_tok = websocket.headers.get(LOCAL_TOKEN_HEADER)
+    if _LOCAL_API_TOKEN and local_tok and hmac.compare_digest(local_tok, _LOCAL_API_TOKEN):
+        return _resolve_allowed_email() or "local@127.0.0.1"
+
+    token = (
+        websocket.headers.get("Cf-Access-Jwt-Assertion")
+        or websocket.cookies.get("CF_Authorization")
+    )
+    if not token:
+        raise HTTPException(status_code=401, detail="no access JWT")
+
+    return _verify_cf_jwt_token(token)
 
 
 async def verify_local_token(request: Request) -> None:

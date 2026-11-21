@@ -40,7 +40,14 @@ function loopbackFilter(): { urls: string[] } {
   const raw = process.env.MAILAGENT_API_PORT
   const n = raw != null ? Number.parseInt(raw, 10) : NaN
   const port = Number.isFinite(n) && n > 0 ? n : DEFAULT_API_PORT
-  return { urls: [`http://127.0.0.1:${port}/*`, `http://localhost:${port}/*`] }
+  return {
+    urls: [
+      `http://127.0.0.1:${port}/*`,
+      `http://localhost:${port}/*`,
+      `ws://127.0.0.1:${port}/*`,
+      `ws://localhost:${port}/*`
+    ]
+  }
 }
 
 /**

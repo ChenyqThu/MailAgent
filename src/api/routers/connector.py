@@ -29,13 +29,13 @@ import time
 from typing import Any, NoReturn, Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Body, Depends, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from loguru import logger
 from starlette.concurrency import run_in_threadpool
 
 from src.api.app import APIError, success_envelope
-from src.api.auth import verify_cf_access, verify_local_token
+from src.api.auth import verify_cf_access, verify_local_token, verify_websocket_access
 from src.api.deps import get_settings
 
 router = APIRouter(prefix="/api/connector", tags=["connector"])
@@ -811,6 +811,7 @@ async def launch_browser_managed_window(
     _require_managed_local_enabled(settings)
     from src.connectors.chrome_import import launch_managed_browser_window
     from src.connectors.local_installer import LocalInstallerError
+    from src.connectors.managed_browser import managed_browser
     from src.connectors.stdio_pool import stdio_pool
 
     raw = payload or {}
@@ -819,11 +820,126 @@ async def launch_browser_managed_window(
         raise APIError("E_INVALID_ARG", "url must be a string", http_status=400)
 
     await stdio_pool.invalidate("browser_use")
+    await managed_browser.stop()
     try:
         res = await run_in_threadpool(launch_managed_browser_window, start_url=start_url)
     except LocalInstallerError as e:
         raise APIError(e.code, e.message, http_status=e.status_code) from None
     return success_envelope(res, request=request)
+
+
+@router.get("/browser_use/live/status", dependencies=[Depends(verify_cf_access)])
+async def browser_live_status(request: Request, settings=Depends(get_settings)) -> Any:
+    """只读查看内置受管浏览器的安装态、运行态与打开标签列表（永不拉起进程）。"""
+    _require_managed_local_enabled(settings)
+    from src.connectors.local_installer import LocalInstallerError, get_install_status
+    from src.connectors.managed_browser import managed_browser
+
+    row = await run_in_threadpool(_store().get_connector, "browser_use")
+    try:
+        install = await run_in_threadpool(
+            get_install_status,
+            "browser_use",
+            row.runtime_config if row else None,
+        )
+    except LocalInstallerError as e:
+        raise APIError(e.code, e.message, http_status=e.status_code) from None
+    live = await managed_browser.get_status()
+    return success_envelope(
+        {
+            "installed": bool(install.get("installed")),
+            "mode": str(install.get("mode") or "isolated_profile"),
+            "headless": bool((install.get("runtime_config") or {}).get("headless", True)),
+            "running": bool(live.get("running")),
+            "cdp_url": live.get("cdp_url"),
+            "active_viewers": int(live.get("active_viewers") or 0),
+            "tabs": live.get("tabs") or [],
+        },
+        request=request,
+    )
+
+
+@router.post("/browser_use/live/stop", dependencies=[Depends(verify_cf_access)])
+async def stop_browser_live(request: Request, settings=Depends(get_settings)) -> Any:
+    """停止内置受管 Chromium 进程与 Browser Use stdio 会话池。"""
+    _require_managed_local_enabled(settings)
+    from src.connectors.managed_browser import managed_browser
+    from src.connectors.stdio_pool import stdio_pool
+
+    await stdio_pool.invalidate("browser_use")
+    await managed_browser.stop()
+    return success_envelope({"stopped": True}, request=request)
+
+
+@router.websocket("/browser_use/live")
+async def browser_live_websocket(
+    websocket: WebSocket,
+    settings=Depends(get_settings),
+) -> None:
+    """WebSocket 双向桥：向界面推送受管浏览器实时画面并转发键鼠与导航指令。"""
+    try:
+        await verify_websocket_access(websocket)
+    except HTTPException:
+        await websocket.close(code=4401)
+        return
+
+    await websocket.accept()
+    from src.connectors.local_installer import LocalInstallerError, get_install_status
+    from src.connectors.managed_browser import managed_browser
+
+    try:
+        _require_managed_local_enabled(settings)
+        row = await run_in_threadpool(_store().get_connector, "browser_use")
+        install = await run_in_threadpool(
+            get_install_status,
+            "browser_use",
+            row.runtime_config if row else None,
+        )
+        if not install.get("installed"):
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "code": "E_RUNTIME_NOT_INSTALLED",
+                    "message": "请先在设置 → 连接器中一键安装并启用 Browser Use。",
+                }
+            )
+            await websocket.close(code=4409)
+            return
+        mode = str(install.get("mode") or "isolated_profile")
+        if mode != "isolated_profile":
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "code": "E_MODE_NOT_LIVE_VIEWABLE",
+                    "message": "当前 Browser Use 未处于「内置受管浏览器」模式，切回该模式后即可在应用内直接查看与操作。",
+                }
+            )
+            await websocket.close(code=4409)
+            return
+
+        headless = bool((install.get("runtime_config") or {}).get("headless", True))
+        await managed_browser.stream_live_session(websocket, headless=headless)
+    except WebSocketDisconnect:
+        return
+    except APIError as err:
+        try:
+            await websocket.send_json({"type": "error", "code": err.code, "message": err.message})
+            await websocket.close(code=4409)
+        except Exception:  # noqa: BLE001
+            pass
+    except LocalInstallerError as err:
+        try:
+            await websocket.send_json({"type": "error", "code": err.code, "message": err.message})
+            await websocket.close(code=4500)
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as err:  # noqa: BLE001
+        logger.warning("[connector.ws] live session error: {}", err)
+        try:
+            await websocket.send_json({"type": "error", "code": "E_INTERNAL", "message": str(err)})
+            await websocket.close(code=4500)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 @router.get("/{connector_id}/install-status", dependencies=[Depends(verify_local_token)])

@@ -524,6 +524,11 @@ def inject_cookies_into_managed_profile(
     if not cookies:
         return {"imported": 0, "skipped": 0}
 
+    from src.connectors.managed_browser import managed_browser
+
+    if managed_browser.is_running():
+        return managed_browser.inject_cookies_live_sync(cookies)
+
     env = os.environ.copy()
     env["MAILAGENT_PW_PKG_DIR"] = str(pkg_dir)
     env["MAILAGENT_PW_PROFILE_DIR"] = str(profile_dir)
@@ -657,6 +662,10 @@ def launch_managed_browser_window(*, start_url: Optional[str] = None) -> dict[st
             "未在本机检测到 Google Chrome 可执行文件，无法打开可视浏览器窗口。",
             status_code=404,
         )
+
+    from src.connectors.managed_browser import managed_browser
+
+    managed_browser.stop_sync()
 
     profile_dir = runtime_dir_for("browser_use") / "profile"
     profile_dir.mkdir(parents=True, exist_ok=True)

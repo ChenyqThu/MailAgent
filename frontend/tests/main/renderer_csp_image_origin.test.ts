@@ -64,4 +64,17 @@ describe('renderer CSP 放行 ai-gateway 的图片 origin', () => {
     expect(html).toContain('img-src ')
     expect(html).toContain('connect-src ')
   })
+
+  test('connect-src 放行 ws://127.0.0.1:* 供内置浏览器 WebSocket 画面流使用', () => {
+    const html = readFileSync(resolve(FRONTEND, 'src/electron/renderer/index.html'), 'utf8')
+    const csp = /http-equiv="Content-Security-Policy"\s*\n?\s*content="([^"]+)"/.exec(html)
+    expect(csp).not.toBeNull()
+    const directive = (csp as RegExpExecArray)[1]
+      .split(';')
+      .map((part) => part.trim())
+      .find((part) => part.startsWith('connect-src '))
+    expect(directive).toBeDefined()
+    const entries = (directive as string).slice('connect-src '.length).split(/\s+/).filter(Boolean)
+    expect(entries.some((entry) => admits(entry, 'ws://127.0.0.1:'))).toBe(true)
+  })
 })

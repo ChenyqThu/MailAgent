@@ -296,6 +296,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             await stdio_pool.close_all()
         except Exception:  # noqa: BLE001 — bare worktree without mcp or best-effort shutdown
             pass
+        try:
+            from src.connectors.managed_browser import managed_browser
+
+            await managed_browser.stop()
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            pass
 
 
 # ---------------------------------------------------------------------------
