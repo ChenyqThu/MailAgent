@@ -1,8 +1,25 @@
 import { isSuggestFollowupsPart } from '@shared/assistant/followups'
 import { PLAN_UPDATE_TOOL_NAME } from '@shared/assistant/plan'
-import { deriveToolPhase, partAwaitsApproval } from '@shared/assistant/runtime/toolPhase'
+import {
+  deriveToolPhase,
+  isToolCancelled,
+  isToolDenied,
+  partAwaitsApproval
+} from '@shared/assistant/runtime/toolPhase'
 import type { TurnStagePart } from '@shared/assistant/runtime/useTurnStage'
 import { componentRegistry } from '../ComponentRegistry'
+
+function isComputerUseAttentionPart(part: TurnStagePart): boolean {
+  if (partAwaitsApproval(part)) return true
+  if (deriveToolPhase(part) === 'error') return true
+  if (isToolDenied(part) || isToolCancelled(part)) return true
+  const result = part.result
+  if (result !== null && typeof result === 'object' && !Array.isArray(result)) {
+    const status = (result as { status?: unknown }).status
+    if (status === 'awaiting_confirmation' || status === 'scope_violation') return true
+  }
+  return false
+}
 
 /** Canonical set of tool names that render dedicated rich A2UI / action cards (never folded into
  *  a silent process timeline so interactive write receipts, drafts, and plans remain prominent). */
@@ -44,6 +61,9 @@ export function isFoldableProcessPart(
   if (part.type === 'tool-call') {
     if (isSuggestFollowupsPart(part)) return false
     const toolName = part.toolName ?? ''
+    if (toolName === 'computer_use_run') {
+      return !isComputerUseAttentionPart(part)
+    }
     if (richCardNames.has(toolName)) return false
     if (partAwaitsApproval(part)) return false
     if (deriveToolPhase(part) === 'error') return false

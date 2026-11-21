@@ -5,11 +5,13 @@
 // 文本脱敏中间件自动遮罩」的诚实隐私提醒。暂停态走 assistant-ui 原生 `respondToApproval`（通
 // 道 A），绝不落入无按钮 ToolTraceCard 死锁。
 
-import { useState } from 'react'
-import { Monitor, ShieldAlert } from 'lucide-react'
+import { useId, useState } from 'react'
+import { Check, ChevronRight, Loader2, Monitor, ShieldAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
+import { CollapsibleRegion } from '@shared/components/ui/collapsible'
+import { cn } from '@shared/lib/cn'
 import { buildToolA2UIPayload, type ComputerUseApprovalCardProps } from '../a2ui'
 import {
   ApprovalActions,
@@ -88,6 +90,8 @@ export function ComputerUseApprovalCard(props: ToolCallMessagePartProps): React.
   const phase = deriveCardPhase(props)
   const data = propsOf(args, argsText, result)
   const [alwaysAllow, setAlwaysAllow] = useState(false)
+  const [open, setOpen] = useState(false)
+  const compactDetailsId = useId()
   const canRemember =
     data.stopBeforeSubmit && (data.allowedApps.length > 0 || data.allowedDomains.length > 0)
 
@@ -206,6 +210,82 @@ export function ComputerUseApprovalCard(props: ToolCallMessagePartProps): React.
       label: t('chat.computerUseCard.filledFields'),
       value: data.filledFields!.join(', ')
     })
+  }
+
+  const needsFullCard =
+    phase === 'pending' ||
+    phase === 'error' ||
+    phase === 'rejected' ||
+    phase === 'expired' ||
+    data.resultStatus === 'awaiting_confirmation' ||
+    data.resultStatus === 'scope_violation'
+
+  if (!needsFullCard) {
+    const goalText = data.goal.trim().length > 0 ? data.goal : t('chat.computerUseCard.emptyGoal')
+    const statusLabel = t(
+      phase === 'authorized'
+        ? 'chat.approvalShell.phase.authorized'
+        : 'chat.approvalShell.phase.done'
+    )
+    return (
+      <div
+        data-testid="computer-use-compact-row"
+        className="my-1 min-w-0 overflow-hidden rounded-lg border border-[var(--hairline)] bg-ink-2/70"
+      >
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          aria-controls={compactDetailsId}
+          className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left transition-colors duration-fast hover:bg-ink-3"
+        >
+          <ChevronRight
+            size={13}
+            className={cn(
+              'shrink-0 text-ink-fg-3 transition-transform duration-fast',
+              open && 'rotate-90'
+            )}
+          />
+          <Monitor size={13} strokeWidth={2} className="shrink-0 text-coral" aria-hidden="true" />
+          <span className="shrink-0 text-aux font-medium text-ink-fg-1">
+            {t('chat.computerUseCard.title')}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-aux text-ink-fg-2" title={goalText}>
+            {goalText}
+          </span>
+          {phase === 'done' && data.currentUrlOrApp ? (
+            <span
+              className="hidden max-w-[180px] shrink-0 truncate font-mono text-aux text-ink-fg-3 sm:inline"
+              title={data.currentUrlOrApp}
+            >
+              {data.currentUrlOrApp}
+            </span>
+          ) : null}
+          <span className="shrink-0" aria-label={statusLabel} title={statusLabel}>
+            {phase === 'authorized' ? (
+              <Loader2
+                size={13}
+                strokeWidth={2}
+                className="animate-spin text-info"
+                aria-hidden="true"
+              />
+            ) : (
+              <Check size={13} strokeWidth={2.25} className="text-ok" aria-hidden="true" />
+            )}
+          </span>
+        </button>
+        <CollapsibleRegion
+          expanded={open}
+          id={compactDetailsId}
+          bodyClassName="border-t border-[var(--hairline)] px-3 py-2"
+        >
+          <div className="border-l border-[var(--hairline)] pl-3">
+            {outcomeItems.length > 0 ? <CardParams items={outcomeItems} className="mb-1.5" /> : null}
+            <CardParams items={reviewItems} />
+          </div>
+        </CollapsibleRegion>
+      </div>
+    )
   }
 
   return (

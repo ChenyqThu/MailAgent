@@ -70,4 +70,71 @@ describe('segmentAssistantParts', () => {
       { kind: 'single', index: 3 }
     ])
   })
+
+  test('folds consecutive completed or running computer_use_run calls into one process timeline', () => {
+    const parts: TurnStagePart[] = [
+      readTool('computer_use_run', {
+        approval: { approved: true },
+        result: { status: 'completed', current_url_or_app: 'https://oa.internal.test/1' }
+      }),
+      readTool('computer_use_run', {
+        approval: { approved: true },
+        result: { status: 'completed', current_url_or_app: 'https://oa.internal.test/2' }
+      }),
+      {
+        type: 'tool-call',
+        toolName: 'computer_use_run',
+        approval: { approved: true },
+        result: undefined,
+        status: { type: 'running' }
+      },
+      textPart('All steps completed.')
+    ]
+    expect(segmentAssistantParts(parts)).toEqual([
+      { kind: 'process', key: 'process-0', foldableIndices: [0, 1, 2], hasFollowingContent: true },
+      { kind: 'single', index: 3 }
+    ])
+  })
+
+  test('never folds computer_use_run when attention is required (pending, awaiting_confirmation, scope_violation, error, denied)', () => {
+    const parts: TurnStagePart[] = [
+      readTool('computer_use_run', {
+        approval: { approved: true },
+        result: { status: 'completed' }
+      }),
+      {
+        type: 'tool-call',
+        toolName: 'computer_use_run',
+        approval: { approved: undefined },
+        result: undefined,
+        status: { type: 'requires-action' }
+      },
+      readTool('computer_use_run', {
+        approval: { approved: true },
+        result: { status: 'awaiting_confirmation', pending_action: 'Click Submit' }
+      }),
+      readTool('computer_use_run', {
+        approval: { approved: true },
+        result: { status: 'scope_violation' }
+      }),
+      readTool('computer_use_run', {
+        isError: true,
+        approval: { approved: true },
+        result: { error: 'boom' }
+      }),
+      readTool('computer_use_run', {
+        isError: true,
+        approval: { approved: false },
+        result: { rejected: true }
+      })
+    ]
+    expect(segmentAssistantParts(parts)).toEqual([
+      { kind: 'process', key: 'process-0', foldableIndices: [0], hasFollowingContent: true },
+      { kind: 'single', index: 1 },
+      { kind: 'single', index: 2 },
+      { kind: 'single', index: 3 },
+      { kind: 'single', index: 4 },
+      { kind: 'single', index: 5 }
+    ])
+  })
 })

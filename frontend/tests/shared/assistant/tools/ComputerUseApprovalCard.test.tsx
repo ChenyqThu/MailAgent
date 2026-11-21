@@ -194,4 +194,58 @@ describe('ComputerUseApprovalCard — 终态与错误态', () => {
     )
     expect(screen.getByText('已拒绝，未执行该操作。')).toBeTruthy()
   })
+
+  test('clean completed and authorized states render as a collapsed-by-default compact row with expandable details', () => {
+    render(
+      <ComputerUseApprovalCard
+        {...mockProps({
+          status: { type: 'complete' },
+          approval: { id: 'apr-cu-clean', approved: true },
+          args: {
+            goal: '在内部系统查询本周订单',
+            target_hint: 'browser',
+            allowed_domains: ['erp.internal.test']
+          },
+          result: {
+            status: 'completed',
+            current_url_or_app: 'https://erp.internal.test/orders',
+            filled_fields: ['周期: 本周']
+          }
+        })}
+      />
+    )
+
+    const toggle = screen.getByRole('button', { name: /操作桌面与浏览器/ })
+    const region = document.getElementById(toggle.getAttribute('aria-controls') ?? '')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(region?.hasAttribute('inert')).toBe(true)
+    expect(screen.getAllByText('在内部系统查询本周订单').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByRole('button', { name: '允许并执行' })).toBeNull()
+
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(region?.hasAttribute('inert')).toBe(false)
+    expect(screen.getByText('已完成')).toBeTruthy()
+    expect(screen.getByText('周期: 本周')).toBeTruthy()
+    expect(screen.getByText('erp.internal.test')).toBeTruthy()
+
+    cleanup()
+    render(
+      <ComputerUseApprovalCard
+        {...mockProps({
+          status: { type: 'running' },
+          approval: { id: 'apr-cu-run', approved: true },
+          args: {
+            goal: '正在打开页面',
+            target_hint: 'browser',
+            allowed_domains: ['erp.internal.test']
+          },
+          result: undefined
+        })}
+      />
+    )
+    const runningToggle = screen.getByRole('button', { name: /操作桌面与浏览器/ })
+    expect(runningToggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.getAllByText('正在打开页面').length).toBeGreaterThanOrEqual(1)
+  })
 })
