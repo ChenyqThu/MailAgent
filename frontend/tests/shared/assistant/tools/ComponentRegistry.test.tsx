@@ -68,6 +68,7 @@ describe('componentRegistry — resolution', () => {
       // buttonless ToolTraceCard (approval-paused = permanent spinner, island-only approve).
       'agent_memory_update',
       'agent_profile_restore',
+      'artifact_write',
       'calendar_event_delete',
       'calendar_event_reschedule',
       'calendar_event_rsvp',
@@ -126,6 +127,7 @@ describe('componentRegistry — resolution', () => {
     ])
     expect(Object.keys(componentRegistry.components).sort()).toEqual([
       'ApprovalActionCard',
+      'ArtifactWriteCard',
       'CalendarApprovalCard',
       'ComputerUseApprovalCard',
       'CustomAgentApprovalCard',
@@ -207,6 +209,13 @@ describe('componentRegistry — resolution', () => {
     const card = componentRegistry.resolve('computer_use_run')
     expect(card).toBeTypeOf('function')
     expect(card).not.toBe(ToolTraceCard)
+  })
+
+  test('artifact_write resolves to ArtifactWriteCard (not buttonless ToolTraceCard)', () => {
+    const card = componentRegistry.resolve('artifact_write')
+    expect(card).toBeTypeOf('function')
+    expect(card).not.toBe(ToolTraceCard)
+    expect(card).not.toBe(componentRegistry.resolve('library_write'))
   })
 })
 

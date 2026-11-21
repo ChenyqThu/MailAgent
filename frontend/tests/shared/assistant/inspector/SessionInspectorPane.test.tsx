@@ -59,6 +59,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  delete (window as unknown as { electron?: unknown }).electron
 })
 
 const POPULATED_SNAPSHOT: SessionWorkspaceSnapshot = {
@@ -272,18 +273,18 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
     fireEvent.click(muteBtn)
     expect(screen.getByRole('button', { name: 'Unmute' })).toBeTruthy()
 
-    // Click HTML Artifact -> widens to 520px and renders sandboxed iframe with Source toggle
+    // Click HTML Artifact -> widens to 540px and renders sandboxed iframe with Source toggle
     fireEvent.click(screen.getByText('diagram.html'))
-    expect(pane.className).toContain('w-[520px]')
+    expect(pane.className).toContain('w-[540px]')
     const iframe = screen.getByTitle('diagram.html')
     expect(iframe.tagName).toBe('IFRAME')
     fireEvent.click(screen.getByRole('button', { name: 'Source' }))
     expect(screen.getByText('<html><body><h1>Arch</h1></body></html>')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Back' }))
 
-    // Click Library Artifact -> widens to 520px preview & fetches live library text
+    // Click Library Artifact -> widens to 540px preview & fetches live library text
     fireEvent.click(screen.getByText('q4-brief.md'))
-    expect(pane.className).toContain('w-[520px]')
+    expect(pane.className).toContain('w-[540px]')
     await waitFor(() => {
       expect(screen.getByText(/Live Server Text/)).toBeTruthy()
     })
@@ -331,5 +332,76 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
     expect(screen.queryByTestId('session-inspector-pane')).toBeNull()
     fireEvent.keyDown(document, { key: '.', metaKey: true })
     expect(screen.getByTestId('session-inspector-pane')).toBeTruthy()
+  })
+
+  test('renders persisted HTML via libpreview:// in Electron, supports versions, mobile viewport, and studio expand', () => {
+    ;(window as unknown as { electron?: unknown }).electron = { ipcRenderer: {} }
+    const studioSnapshot: SessionWorkspaceSnapshot = {
+      ...POPULATED_SNAPSHOT,
+      artifacts: [
+        {
+          id: 'artifact:q4-board',
+          kind: 'html',
+          title: 'Q4 Board',
+          slug: 'q4-board',
+          artifactType: 'dashboard',
+          version: 2,
+          fileId: 202,
+          virtualPath: 'agent-docs/artifacts/q4-board/v2/index.html',
+          content: '<!doctype html><html><body>v2</body></html>',
+          isHtml: true,
+          isMarkdown: false,
+          versions: [
+            {
+              version: 1,
+              fileId: 201,
+              virtualPath: 'agent-docs/artifacts/q4-board/v1/index.html',
+              content: '<!doctype html><html><body>v1</body></html>',
+              changeNote: 'Initial draft'
+            },
+            {
+              version: 2,
+              fileId: 202,
+              virtualPath: 'agent-docs/artifacts/q4-board/v2/index.html',
+              content: '<!doctype html><html><body>v2</body></html>',
+              changeNote: 'Added KPI row'
+            }
+          ]
+        }
+      ],
+      totalItems: 1
+    }
+
+    renderHarness(studioSnapshot)
+    fireEvent.click(screen.getByTestId('inspector-toggle-pill'))
+    expect(screen.getByText('v2')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('Q4 Board'))
+    const pane = screen.getByTestId('session-inspector-pane')
+    expect(pane.className).toContain('w-[540px]')
+
+    // Uses libpreview:// src (not srcDoc) when Electron + fileId + virtualPath are present
+    const iframeV2 = screen.getByTitle('Q4 Board') as HTMLIFrameElement
+    expect(iframeV2.getAttribute('src')).toBe(
+      'libpreview://library/agent-docs/artifacts/q4-board/v2/index.html'
+    )
+    expect(iframeV2.hasAttribute('srcdoc')).toBe(false)
+
+    // Switch back to v1
+    fireEvent.click(screen.getByRole('button', { name: 'v1' }))
+    const iframeV1 = screen.getByTitle('Q4 Board') as HTMLIFrameElement
+    expect(iframeV1.getAttribute('src')).toBe(
+      'libpreview://library/agent-docs/artifacts/q4-board/v1/index.html'
+    )
+
+    // Toggle mobile viewport
+    fireEvent.click(screen.getByRole('button', { name: 'Mobile viewport' }))
+    expect(screen.getByTitle('Q4 Board').className).toContain('w-[390px]')
+
+    // Toggle expand studio width
+    fireEvent.click(screen.getByRole('button', { name: 'Expand preview' }))
+    expect(pane.className).toContain('w-[min(920px,64vw)]')
+    fireEvent.click(screen.getByRole('button', { name: 'Compact preview' }))
+    expect(pane.className).toContain('w-[540px]')
   })
 })

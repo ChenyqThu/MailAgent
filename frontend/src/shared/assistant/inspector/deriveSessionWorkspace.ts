@@ -21,6 +21,16 @@ export type WorkspaceArtifactKind =
   | 'matter'
   | 'plan'
 
+export type WorkspaceArtifactType = 'dashboard' | 'slides' | 'report' | 'diagram' | 'app'
+
+export interface WorkspaceArtifactVersion {
+  readonly version: number
+  readonly fileId?: number | undefined
+  readonly virtualPath?: string | undefined
+  readonly content?: string | undefined
+  readonly changeNote?: string | undefined
+}
+
 export interface WorkspaceArtifact {
   readonly id: string
   readonly kind: WorkspaceArtifactKind
@@ -37,6 +47,10 @@ export interface WorkspaceArtifact {
   readonly matterPublicId?: string | undefined
   readonly isMarkdown?: boolean | undefined
   readonly isHtml?: boolean | undefined
+  readonly slug?: string | undefined
+  readonly artifactType?: WorkspaceArtifactType | undefined
+  readonly version?: number | undefined
+  readonly versions?: readonly WorkspaceArtifactVersion[] | undefined
 }
 
 export type WorkspaceSourceKind =
@@ -187,6 +201,28 @@ function basenameOfPath(path: string | undefined): string | undefined {
   if (!path) return undefined
   const parts = path.split('/').filter(Boolean)
   return parts.at(-1) || path
+}
+
+const ARTIFACT_TYPE_SET = new Set<WorkspaceArtifactType>([
+  'dashboard',
+  'slides',
+  'report',
+  'diagram',
+  'app'
+])
+
+function normalizeArtifactType(raw: unknown): WorkspaceArtifactType | undefined {
+  return typeof raw === 'string' && ARTIFACT_TYPE_SET.has(raw as WorkspaceArtifactType)
+    ? (raw as WorkspaceArtifactType)
+    : undefined
+}
+
+export function artifactWorkspaceId(
+  slug: string | null | undefined,
+  fallbackId: string
+): string {
+  const cleaned = typeof slug === 'string' ? slug.trim() : ''
+  return cleaned ? `artifact:${cleaned}` : `artifact-call:${fallbackId}`
 }
 
 function isHtmlPath(path: string | undefined): boolean {
@@ -565,6 +601,66 @@ export function deriveSessionWorkspace(
       }
 
       if (!tc.isError && !tc.rejected) {
+        if (tc.toolName === 'artifact_write') {
+          if (resObj?.ok === false) continue
+          const slug = nonEmptyStr(resObj?.slug) ?? nonEmptyStr(argsObj?.slug)
+          const key = artifactWorkspaceId(slug, tc.toolCallId)
+          const existing = artifactMap.get(key)
+          const title =
+            nonEmptyStr(resObj?.title) ??
+            nonEmptyStr(argsObj?.title) ??
+            existing?.title ??
+            slug ??
+            'Artifact'
+          const artifactType =
+            normalizeArtifactType(resObj?.artifact_type) ??
+            normalizeArtifactType(argsObj?.artifact_type) ??
+            existing?.artifactType
+          const fileId = positiveInt(resObj?.file_id) ?? positiveInt(resObj?.id)
+          const virtualPath = toSafeVirtualPath(resObj?.path)
+          const content =
+            typeof argsObj?.html === 'string' && argsObj.html.trim().length > 0
+              ? argsObj.html
+              : existing?.content
+          const changeNote = nonEmptyStr(argsObj?.change_note) ?? undefined
+          const prevVersions = existing?.versions ?? []
+          const version =
+            positiveInt(resObj?.version) ??
+            (prevVersions.length > 0
+              ? Math.max(...prevVersions.map((v) => v.version)) + 1
+              : 1)
+          const entry: WorkspaceArtifactVersion = {
+            version,
+            fileId: fileId ?? undefined,
+            virtualPath,
+            content,
+            changeNote
+          }
+          const byVersion = new Map<number, WorkspaceArtifactVersion>()
+          for (const v of prevVersions) byVersion.set(v.version, v)
+          byVersion.set(version, entry)
+          const versions = [...byVersion.values()].sort((a, b) => a.version - b.version)
+          const latest = versions[versions.length - 1] ?? entry
+
+          artifactMap.set(key, {
+            id: key,
+            kind: 'html',
+            title,
+            subtitle: changeNote ?? existing?.subtitle,
+            slug: slug ?? existing?.slug,
+            artifactType,
+            version: latest.version,
+            versions,
+            virtualPath: latest.virtualPath ?? existing?.virtualPath,
+            fileId: latest.fileId ?? existing?.fileId,
+            writeCount: versions.length,
+            content: latest.content ?? existing?.content,
+            isMarkdown: false,
+            isHtml: true
+          })
+          continue
+        }
+
         if (tc.toolName === 'library_write' || tc.toolName === 'library_append') {
           const parsed = readLibraryWriteInput(tc.toolName, argsObj, tc.argsText)
           if (parsed.shape !== 'delete') {

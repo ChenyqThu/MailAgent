@@ -33,6 +33,7 @@ import { CalendarApprovalCard } from './calendar/CalendarApprovalCard'
 import { MatterWriteCard } from './matters/MatterWriteCard'
 import { ImageGenCard } from './image/ImageGenCard'
 import { LibraryWriteCard } from './library/LibraryWriteCard'
+import { ArtifactWriteCard } from './artifact/ArtifactWriteCard'
 import { GATEWAY_LIBRARY_WRITE_TOOL_NAMES } from '@shared/libraryConstants'
 
 /** One registration: an A2UI component (by name) + the tool names that render through it. */
@@ -211,6 +212,11 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
     component: A2UI_COMPONENTS.LibraryWriteCard,
     toolNames: [...GATEWAY_LIBRARY_WRITE_TOOL_NAMES],
     render: LibraryWriteCard
+  },
+  {
+    component: A2UI_COMPONENTS.ArtifactWriteCard,
+    toolNames: ['artifact_write'],
+    render: ArtifactWriteCard
   },
   // calendar epic 4.2 — the calendar write approval card (behind MAILAGENT_CALENDAR_AGENT_TOOLS).
   // Reschedule renders a server-fact before→after time diff; rsvp/delete carry the irrevocable

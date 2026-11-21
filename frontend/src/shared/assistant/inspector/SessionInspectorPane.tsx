@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import {
@@ -144,6 +144,50 @@ function SessionInspectorOpenPane({
     return snapshot.artifacts.find((a) => a.id === previewArtifactId) ?? null
   }, [previewArtifactId, snapshot.artifacts])
 
+  const [expanded, setExpanded] = useState(false)
+  const [customWidth, setCustomWidth] = useState<number | null>(null)
+  const [prevActiveId, setPrevActiveId] = useState<string | null>(null)
+  const currentActiveId = activeArtifact?.id ?? null
+  if (prevActiveId !== currentActiveId) {
+    setPrevActiveId(currentActiveId)
+    if (currentActiveId === null) {
+      setExpanded(false)
+      setCustomWidth(null)
+    }
+  }
+
+  const asideRef = useRef<HTMLElement | null>(null)
+  const dragCleanupRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => dragCleanupRef.current?.(), [])
+
+  const startResizeDrag = useCallback((e: React.PointerEvent<HTMLDivElement>): void => {
+    e.preventDefault()
+    dragCleanupRef.current?.()
+    const startX = e.clientX
+    const startWidth = asideRef.current?.getBoundingClientRect().width ?? 540
+    const onMove = (moveEvt: PointerEvent): void => {
+      const viewportMax =
+        typeof window !== 'undefined'
+          ? Math.max(560, Math.round(window.innerWidth * 0.72))
+          : 1000
+      const next = Math.max(420, Math.min(viewportMax, Math.round(startWidth + (startX - moveEvt.clientX))))
+      setCustomWidth(next)
+    }
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      dragCleanupRef.current = null
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    dragCleanupRef.current = onUp
+  }, [])
+
+  const handleToggleExpand = useCallback((): void => {
+    setCustomWidth(null)
+    setExpanded((prev) => !prev)
+  }, [])
+
   const query = filterText.trim().toLowerCase()
 
   const filteredArtifacts = useMemo(() => {
@@ -226,11 +270,20 @@ function SessionInspectorOpenPane({
 
   const showFilter = snapshot.totalItems >= 8
 
+  const useCustomPushWidth =
+    activeArtifact !== null && presentation === 'push' && customWidth !== null
+
   const paneWidthClass =
     activeArtifact !== null
       ? presentation === 'push'
-        ? 'w-[520px]'
-        : 'w-[440px] max-w-[94%]'
+        ? useCustomPushWidth
+          ? ''
+          : expanded
+            ? 'w-[min(920px,64vw)]'
+            : 'w-[540px]'
+        : expanded
+          ? 'w-[96%]'
+          : 'w-[460px] max-w-[94%]'
       : presentation === 'push'
         ? 'w-[280px]'
         : 'w-[280px] max-w-[90%]'
@@ -238,7 +291,7 @@ function SessionInspectorOpenPane({
   const innerSurface = (
     <div
       className={cn(
-        'flex min-h-0 flex-col overflow-hidden bg-ink-1',
+        'flex min-h-0 flex-1 flex-col overflow-hidden bg-ink-1',
         presentation === 'push'
           ? activeArtifact !== null
             ? 'h-full rounded-xl border border-ink-border-soft shadow-sm'
@@ -250,6 +303,8 @@ function SessionInspectorOpenPane({
         <InspectorArtifactPreview
           artifact={activeArtifact}
           onBack={inspector.closeArtifactPreview}
+          expanded={expanded}
+          onToggleExpand={handleToggleExpand}
         />
       ) : (
         <>
@@ -318,11 +373,21 @@ function SessionInspectorOpenPane({
                           <span className="block truncate text-aux font-medium text-ink-fg">
                             {artifact.title}
                           </span>
-                          <span className="block truncate text-aux text-ink-fg-3">
-                            {t(`chat.inspector.artifactKinds.${artifact.kind}`)}
-                            {artifact.writeCount && artifact.writeCount > 1
-                              ? ` · ${t('chat.inspector.writeCount', { count: artifact.writeCount })}`
-                              : ''}
+                          <span className="flex items-center gap-1.5 truncate text-aux text-ink-fg-3">
+                            <span className="truncate">
+                              {artifact.artifactType
+                                ? t(`chat.inspector.artifactTypes.${artifact.artifactType}`)
+                                : t(`chat.inspector.artifactKinds.${artifact.kind}`)}
+                            </span>
+                            {artifact.version != null ? (
+                              <span className="shrink-0 rounded bg-ink-3 px-1.5 py-0.5 font-mono text-meta tabular-nums text-ink-fg-2">
+                                v{artifact.version}
+                              </span>
+                            ) : artifact.writeCount && artifact.writeCount > 1 ? (
+                              <span className="truncate">
+                                {`· ${t('chat.inspector.writeCount', { count: artifact.writeCount })}`}
+                              </span>
+                            ) : null}
                           </span>
                         </span>
                       </button>
@@ -539,16 +604,27 @@ function SessionInspectorOpenPane({
 
   const paneBody = (
     <aside
+      ref={asideRef}
       data-testid="session-inspector-pane"
       aria-label={t('chat.inspector.title')}
+      style={useCustomPushWidth && customWidth !== null ? { width: customWidth } : undefined}
       className={cn(
-        'flex min-h-0 flex-col',
-        !reduce && 'transition-[width] duration-base ease-standard',
+        'relative flex min-h-0 flex-col',
+        !reduce && !useCustomPushWidth && 'transition-[width] duration-base ease-standard',
         paneWidthClass,
         presentation === 'push' ? 'h-full shrink-0 items-stretch py-3 pl-1 pr-4' : 'relative z-10 h-full',
         className
       )}
     >
+      {presentation === 'push' && activeArtifact !== null && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t('chat.inspector.title')}
+          onPointerDown={startResizeDrag}
+          className="absolute bottom-3 left-0 top-3 z-10 w-1.5 cursor-col-resize rounded-full bg-transparent transition-colors hover:bg-coral/40"
+        />
+      )}
       {innerSurface}
     </aside>
   )

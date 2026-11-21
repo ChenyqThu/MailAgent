@@ -69,7 +69,10 @@ export async function handleLibraryPreviewRequest(request: Request): Promise<Res
       headers: {
         'content-type': mimeForPath(absPath),
         'content-length': String(stat.size),
-        'cache-control': 'no-store'
+        'cache-control': 'no-store',
+        // Sandboxed iframes without allow-same-origin run under an opaque `null` origin
+        // and send CORS requests for `<script type="module" src="./assets/...">` / relative fetch().
+        'access-control-allow-origin': '*'
       }
     })
   } catch {

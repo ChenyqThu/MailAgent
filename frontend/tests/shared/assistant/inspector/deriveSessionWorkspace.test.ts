@@ -344,4 +344,88 @@ describe('deriveSessionWorkspace', () => {
     expect(snap.artifacts[0]?.isHtml).toBe(true)
     expect(snap.artifacts[0]?.content).toBe('<h1>Omada Architecture</h1>')
   })
+
+  test('aggregates versioned artifact_write calls by slug and skips lint failures', () => {
+    const snap = deriveSessionWorkspace({
+      messages: [
+        {
+          role: 'assistant',
+          parts: [
+            {
+              type: 'tool-artifact_write',
+              toolCallId: 'aw-lint',
+              state: 'output-available',
+              input: {
+                slug: 'q4-board',
+                title: 'Broken',
+                artifact_type: 'dashboard',
+                html: 'broken'
+              },
+              output: { ok: false, error: 'E_ARTIFACT_LINT', issues: ['bad html'] }
+            },
+            {
+              type: 'tool-artifact_write',
+              toolCallId: 'aw-v1',
+              state: 'output-available',
+              input: {
+                slug: 'q4-board',
+                title: 'Q4 Board',
+                artifact_type: 'dashboard',
+                html: '<!doctype html><html><body>v1</body></html>',
+                change_note: 'Initial draft'
+              },
+              output: {
+                ok: true,
+                slug: 'q4-board',
+                title: 'Q4 Board',
+                artifact_type: 'dashboard',
+                version: 1,
+                file_id: 201,
+                path: 'agent-docs/artifacts/q4-board/v1/index.html'
+              }
+            },
+            {
+              type: 'tool-artifact_write',
+              toolCallId: 'aw-v2',
+              state: 'output-available',
+              input: {
+                slug: 'q4-board',
+                title: 'Q4 Board',
+                artifact_type: 'dashboard',
+                html: '<!doctype html><html><body>v2</body></html>',
+                change_note: 'Added filters'
+              },
+              output: {
+                ok: true,
+                slug: 'q4-board',
+                title: 'Q4 Board',
+                artifact_type: 'dashboard',
+                version: 2,
+                file_id: 202,
+                path: 'agent-docs/artifacts/q4-board/v2/index.html'
+              }
+            }
+          ]
+        }
+      ]
+    })
+
+    expect(snap.artifacts).toHaveLength(1)
+    const art = snap.artifacts[0]
+    expect(art).toMatchObject({
+      id: 'artifact:q4-board',
+      kind: 'html',
+      title: 'Q4 Board',
+      slug: 'q4-board',
+      artifactType: 'dashboard',
+      version: 2,
+      fileId: 202,
+      virtualPath: 'agent-docs/artifacts/q4-board/v2/index.html',
+      writeCount: 2,
+      isHtml: true,
+      isMarkdown: false
+    })
+    expect(art?.versions?.map((v) => v.version)).toEqual([1, 2])
+    expect(art?.versions?.[0]?.fileId).toBe(201)
+  })
 })

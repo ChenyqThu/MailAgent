@@ -268,6 +268,7 @@ describe('libpreview:// 协议', () => {
     )
     expect(res.status).toBe(200)
     expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8')
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
     expect(await res.text()).toBe('<script>document.title="ran"</script>')
   })
 

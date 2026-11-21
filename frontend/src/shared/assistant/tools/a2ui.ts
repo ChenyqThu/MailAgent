@@ -166,6 +166,7 @@ export const A2UI_COMPONENTS = {
   // overwrite / append 只有 `file_id` 时，路径由卡片向 serve-api 查一次补上（CalendarApprovalCard
   // 先例 —— 展示用的服务端事实绝不从模型参数里推）。
   LibraryWriteCard: 'LibraryWriteCard',
+  ArtifactWriteCard: 'ArtifactWriteCard',
   // Wave 4 (Computer Use MCP Epic §5.4) — `computer_use_run` 任务级审批卡。展示 goal /
   // allowed_apps / allowed_domains / stop_before_submit / 像素脱敏告知，绝不落到无按钮
   // ToolTraceCard。
