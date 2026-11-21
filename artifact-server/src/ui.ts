@@ -2,7 +2,9 @@ import type {
   ArtifactLinks,
   ArtifactListItem,
   ArtifactRow,
+  AuthIdentity,
   CommentRow,
+  SafeUser,
   VersionRow
 } from './types'
 
@@ -58,7 +60,12 @@ button, input, select, textarea { font-family: inherit; font-size: 14px; }
 .pill-warn { background: var(--warn-soft); color: var(--warn); border-color: rgba(180, 83, 9, 0.22); }
 `
 
-export function renderLoginPage(serverName: string, nextPath: string, errorMsg?: string): string {
+export function renderLoginPage(
+  serverName: string,
+  nextPath: string,
+  errorMsg?: string,
+  hasD1Admin = false
+): string {
   const safeNext = /^\/(?!\/)/.test(nextPath) ? nextPath : '/'
   return `<!doctype html>
 <html lang="en">
@@ -69,15 +76,17 @@ export function renderLoginPage(serverName: string, nextPath: string, errorMsg?:
   <style>
     ${BASE_CSS}
     body { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
-    .card { width: 100%; max-width: 400px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 28px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+    .card { width: 100%; max-width: 420px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 28px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
     .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
     .logo { width: 32px; height: 32px; border-radius: 8px; background: var(--accent); color: #fff; display: grid; place-items: center; font-weight: 700; }
     h1 { margin: 0; font-size: 18px; font-weight: 600; }
     p { margin: 6px 0 18px; color: var(--ink-2); font-size: 14px; }
+    .field { margin-bottom: 14px; }
     label { display: block; margin-bottom: 6px; font-weight: 500; color: var(--ink-2); }
-    input[type="password"] { width: 100%; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); color: var(--ink); outline: none; }
-    input[type="password"]:focus { border-color: var(--accent); background: var(--surface); }
-    .submit { width: 100%; margin-top: 14px; justify-content: center; padding: 9px 14px; }
+    input[type="email"], input[type="password"] { width: 100%; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); color: var(--ink); outline: none; }
+    input[type="email"]:focus, input[type="password"]:focus { border-color: var(--accent); background: var(--surface); }
+    .hint { margin-top: 4px; font-size: 12px; color: var(--ink-3); }
+    .submit { width: 100%; margin-top: 6px; justify-content: center; padding: 9px 14px; }
     .err { margin-top: 12px; padding: 8px 10px; border-radius: 7px; background: var(--danger-soft); color: var(--danger); font-size: 13px; display: ${errorMsg ? 'block' : 'none'}; }
   </style>
 </head>
@@ -89,10 +98,20 @@ export function renderLoginPage(serverName: string, nextPath: string, errorMsg?:
         <h1>${escapeHtml(serverName)}</h1>
       </div>
     </div>
-    <p>Sign in with the workspace admin password or agent token to browse and manage artifacts.</p>
+    <p>${
+      hasD1Admin
+        ? 'Sign in with your account email and password to access the workspace.'
+        : 'Sign in with your email and password, or leave email blank to use the initial admin password.'
+    }</p>
     <form id="login-form">
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" required autofocus placeholder="Enter admin password" />
+      <div class="field">
+        <label for="email">${hasD1Admin ? 'Email' : 'Email (optional for initial admin)'}</label>
+        <input id="email" name="email" type="email" autocomplete="username" ${hasD1Admin ? 'required autofocus' : ''} placeholder="you@company.com" />
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required ${hasD1Admin ? '' : 'autofocus'} placeholder="Enter password" />
+      </div>
       <button type="submit" class="btn btn-primary submit">Sign In</button>
       <div id="err" class="err">${escapeHtml(errorMsg ?? '')}</div>
     </form>
@@ -104,12 +123,13 @@ export function renderLoginPage(serverName: string, nextPath: string, errorMsg?:
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       errEl.style.display = 'none';
+      const email = document.getElementById('email').value.trim();
       const password = document.getElementById('password').value;
       try {
         const res = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ password })
+          body: JSON.stringify({ email: email || undefined, password })
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -131,7 +151,8 @@ export function renderLoginPage(serverName: string, nextPath: string, errorMsg?:
 export function renderGalleryPage(
   serverName: string,
   baseUrl: string,
-  items: ArtifactListItem[]
+  items: ArtifactListItem[],
+  identity?: AuthIdentity
 ): string {
   const initialData = items.map((item) => {
     const shareUrl =
@@ -190,7 +211,15 @@ export function renderGalleryPage(
         <span>${escapeHtml(serverName)}</span>
         <span class="pill mono" id="total-pill">${items.length}</span>
       </div>
-      <div style="display:flex;align-items:center;gap:8px;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        ${
+          identity
+            ? `<span class="pill">${escapeHtml(identity.actor)} · ${escapeHtml(
+                identity.isAdmin ? 'admin' : identity.role
+              )}</span>`
+            : ''
+        }
+        <a href="/settings" class="btn">${identity?.isAdmin ? 'Account & Users' : 'Account'}</a>
         <button id="logout-btn" type="button" class="btn">Sign Out</button>
       </div>
     </div>
@@ -327,11 +356,22 @@ export function renderReviewPage(opts: {
   comments: CommentRow[]
   links: ArtifactLinks
   isOwner: boolean
+  isAdmin?: boolean
   shareToken: string | null
   defaultAuthor: string
 }): string {
-  const { serverName, artifact, versions, activeVersion, comments, links, isOwner, shareToken, defaultAuthor } =
-    opts
+  const {
+    serverName,
+    artifact,
+    versions,
+    activeVersion,
+    comments,
+    links,
+    isOwner,
+    isAdmin = isOwner,
+    shareToken,
+    defaultAuthor
+  } = opts
 
   const bootState = {
     slug: artifact.slug,
@@ -403,7 +443,7 @@ export function renderReviewPage(opts: {
           <button type="button" id="vp-mobile">390px</button>
         </div>
         ${
-          isOwner
+          isAdmin
             ? `<select id="vis-select" class="select" aria-label="Visibility">
                 <option value="unlisted">Unlisted link</option>
                 <option value="public">Public</option>
@@ -414,7 +454,7 @@ export function renderReviewPage(opts: {
         <button type="button" id="copy-share-btn" class="btn">Copy Share Link</button>
         <a id="raw-link" href="${escapeHtml(links.raw_url)}" target="_blank" rel="noopener" class="btn">Open Raw</a>
         <button type="button" id="toggle-comments-btn" class="btn btn-primary">Comments (<span id="open-count" class="mono">0</span>)</button>
-        ${isOwner ? '<button type="button" id="delete-btn" class="btn btn-danger">Delete</button>' : ''}
+        ${isAdmin ? '<button type="button" id="delete-btn" class="btn btn-danger">Delete</button>' : ''}
       </div>
     </header>
     <div class="workspace">
@@ -603,6 +643,428 @@ export function renderReviewPage(opts: {
     }
 
     renderComments();
+  </script>
+</body>
+</html>`
+}
+
+export function renderSettingsPage(opts: {
+  serverName: string
+  identity: AuthIdentity
+  users: SafeUser[]
+  hasD1Admin: boolean
+}): string {
+  const { serverName, identity, users, hasD1Admin } = opts
+  const bootState = {
+    identity,
+    users,
+    hasD1Admin
+  }
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Account &amp; Users · ${escapeHtml(serverName)}</title>
+  <style>
+    ${BASE_CSS}
+    header { position: sticky; top: 0; z-index: 10; background: rgba(248, 247, 244, 0.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border); }
+    .topbar { max-width: 1040px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+    .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; }
+    .panel h2 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+    .panel .sub { margin: 0 0 16px; font-size: 13px; color: var(--ink-2); }
+    .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; align-items: end; }
+    .field label { display: block; font-size: 12px; font-weight: 500; color: var(--ink-2); margin-bottom: 4px; }
+    .field input, .field select { width: 100%; padding: 8px 10px; border-radius: 7px; border: 1px solid var(--border-strong); background: var(--bg); color: var(--ink); }
+    .field input:focus, .field select:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+    .notice { margin-top: 12px; padding: 9px 12px; border-radius: 8px; font-size: 13px; display: none; }
+    .notice.ok { display: block; background: var(--accent-soft); color: var(--accent); }
+    .notice.err { display: block; background: var(--danger-soft); color: var(--danger); }
+    .banner { padding: 12px 14px; border-radius: 9px; background: var(--warn-soft); border: 1px solid rgba(180, 83, 9, 0.25); color: var(--warn); font-size: 13px; margin-bottom: 14px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
+    th { color: var(--ink-3); font-weight: 500; font-size: 12px; }
+    .row-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .reset-box { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+    .reset-box input { padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--bg); font-size: 13px; width: 160px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <a href="/" class="btn">← Gallery</a>
+        <strong>${escapeHtml(serverName)} · Account &amp; Access</strong>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="pill">${escapeHtml(identity.actor)} · ${escapeHtml(identity.isAdmin ? 'admin' : identity.role)}</span>
+        <button id="logout-btn" type="button" class="btn">Sign Out</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="panel" id="account-panel"></section>
+    ${
+      identity.isAdmin
+        ? `<section class="panel" id="team-panel">
+             <h2>Team Accounts</h2>
+             <p class="sub">Manage workspace admins and team members. Disabling or resetting a user's password signs them out immediately.</p>
+             <form id="create-user-form" class="form-grid">
+               <div class="field">
+                 <label for="new-email">Email</label>
+                 <input id="new-email" type="email" required placeholder="teammate@company.com" />
+               </div>
+               <div class="field">
+                 <label for="new-name">Display Name</label>
+                 <input id="new-name" type="text" maxlength="80" placeholder="Alex Chen" />
+               </div>
+               <div class="field">
+                 <label for="new-role">Role</label>
+                 <select id="new-role">
+                   <option value="member">member (browse, review &amp; comment)</option>
+                   <option value="admin">admin (full publish, visibility, delete &amp; users)</option>
+                 </select>
+               </div>
+               <div class="field">
+                 <label for="new-password">Initial Password (min 8 chars)</label>
+                 <input id="new-password" type="password" required minlength="8" autocomplete="new-password" placeholder="••••••••" />
+               </div>
+               <div>
+                 <button type="submit" class="btn btn-primary">Add User</button>
+               </div>
+             </form>
+             <div id="team-notice" class="notice"></div>
+             <div style="overflow-x:auto;">
+               <table>
+                 <thead>
+                   <tr>
+                     <th>User</th>
+                     <th>Role</th>
+                     <th>Status</th>
+                     <th>Actions</th>
+                   </tr>
+                 </thead>
+                 <tbody id="users-tbody"></tbody>
+               </table>
+             </div>
+           </section>`
+        : ''
+    }
+  </main>
+
+  <script>
+    const BOOT = ${safeJsonForScript(bootState)};
+    let users = BOOT.users || [];
+
+    function showNotice(el, kind, msg) {
+      el.className = 'notice ' + kind;
+      el.textContent = msg;
+    }
+
+    function renderAccountSection() {
+      const host = document.getElementById('account-panel');
+      host.replaceChildren();
+
+      if (BOOT.identity.isBootstrap && !BOOT.hasD1Admin) {
+        const h2 = document.createElement('h2');
+        h2.textContent = 'Upgrade Bootstrap Admin to Personal Account';
+        const sub = document.createElement('p');
+        sub.className = 'sub';
+        sub.textContent = 'You are currently signed in with the environment bootstrap password. Set your email and new admin password stored in D1 so you can rotate credentials anytime.';
+        const banner = document.createElement('div');
+        banner.className = 'banner';
+        banner.textContent = 'Once a D1 admin account exists, blank-email bootstrap login is automatically retired.';
+
+        const form = document.createElement('form');
+        form.className = 'form-grid';
+        form.innerHTML =
+          '<div class="field"><label for="bs-email">Admin Email</label><input id="bs-email" type="email" required placeholder="admin@company.com" /></div>' +
+          '<div class="field"><label for="bs-name">Display Name</label><input id="bs-name" type="text" maxlength="80" placeholder="Owner" /></div>' +
+          '<div class="field"><label for="bs-pwd">New Password (min 8 chars)</label><input id="bs-pwd" type="password" required minlength="8" autocomplete="new-password" /></div>' +
+          '<div class="field"><label for="bs-pwd2">Confirm Password</label><input id="bs-pwd2" type="password" required minlength="8" autocomplete="new-password" /></div>' +
+          '<div><button type="submit" class="btn btn-primary">Activate Admin Account</button></div>';
+
+        const notice = document.createElement('div');
+        notice.className = 'notice';
+
+        form.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const email = document.getElementById('bs-email').value.trim();
+          const display_name = document.getElementById('bs-name').value.trim();
+          const new_password = document.getElementById('bs-pwd').value;
+          const confirm = document.getElementById('bs-pwd2').value;
+          if (new_password !== confirm) {
+            showNotice(notice, 'err', 'Passwords do not match');
+            return;
+          }
+          const res = await fetch('/api/account/bootstrap-admin', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email, display_name, new_password })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            showNotice(notice, 'err', data.error || 'Failed to activate admin account');
+            return;
+          }
+          window.location.reload();
+        });
+
+        host.append(h2, sub, banner, form, notice);
+        return;
+      }
+
+      if (BOOT.identity.user) {
+        const u = BOOT.identity.user;
+        const h2 = document.createElement('h2');
+        h2.textContent = 'Change Your Password';
+        const sub = document.createElement('p');
+        sub.className = 'sub';
+        sub.textContent = u.display_name + ' (' + u.email + ') · Role: ' + u.role;
+
+        const form = document.createElement('form');
+        form.className = 'form-grid';
+        form.innerHTML =
+          '<div class="field"><label for="cur-pwd">Current Password</label><input id="cur-pwd" type="password" required autocomplete="current-password" /></div>' +
+          '<div class="field"><label for="nxt-pwd">New Password (min 8 chars)</label><input id="nxt-pwd" type="password" required minlength="8" autocomplete="new-password" /></div>' +
+          '<div class="field"><label for="nxt-pwd2">Confirm New Password</label><input id="nxt-pwd2" type="password" required minlength="8" autocomplete="new-password" /></div>' +
+          '<div><button type="submit" class="btn btn-primary">Update Password</button></div>';
+
+        const notice = document.createElement('div');
+        notice.className = 'notice';
+
+        form.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const current_password = document.getElementById('cur-pwd').value;
+          const new_password = document.getElementById('nxt-pwd').value;
+          const confirm = document.getElementById('nxt-pwd2').value;
+          if (new_password !== confirm) {
+            showNotice(notice, 'err', 'New passwords do not match');
+            return;
+          }
+          const res = await fetch('/api/account/password', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ current_password, new_password })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            showNotice(notice, 'err', data.error || 'Failed to update password');
+            return;
+          }
+          form.reset();
+          showNotice(notice, 'ok', 'Password updated. All other active sessions have been signed out.');
+        });
+
+        host.append(h2, sub, form, notice);
+        return;
+      }
+
+      const h2 = document.createElement('h2');
+      h2.textContent = 'Workspace Access';
+      const sub = document.createElement('p');
+      sub.className = 'sub';
+      sub.textContent = 'Signed in as ' + BOOT.identity.actor + ' (' + BOOT.identity.role + ').';
+      host.append(h2, sub);
+    }
+
+    function renderUsersTable() {
+      const tbody = document.getElementById('users-tbody');
+      if (!tbody) return;
+      const notice = document.getElementById('team-notice');
+      tbody.replaceChildren();
+
+      if (users.length === 0) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 4;
+        td.style.color = 'var(--ink-3)';
+        td.textContent = 'No D1 accounts created yet. Add an admin or member above.';
+        tr.append(td);
+        tbody.append(tr);
+        return;
+      }
+
+      const currentUid = BOOT.identity.user ? BOOT.identity.user.id : null;
+      for (const u of users) {
+        const tr = document.createElement('tr');
+
+        const userTd = document.createElement('td');
+        const nameEl = document.createElement('div');
+        nameEl.style.fontWeight = '600';
+        nameEl.textContent = u.display_name + (u.id === currentUid ? ' (you)' : '');
+        const emailEl = document.createElement('div');
+        emailEl.className = 'mono';
+        emailEl.style.cssText = 'font-size:12px;color:var(--ink-3);';
+        emailEl.textContent = u.email;
+        userTd.append(nameEl, emailEl);
+
+        const roleTd = document.createElement('td');
+        const roleSelect = document.createElement('select');
+        roleSelect.className = 'select';
+        roleSelect.disabled = u.id === currentUid;
+        for (const r of ['admin', 'member']) {
+          const opt = document.createElement('option');
+          opt.value = r;
+          opt.textContent = r;
+          opt.selected = u.role === r;
+          roleSelect.append(opt);
+        }
+        roleSelect.addEventListener('change', async () => {
+          const res = await fetch('/api/admin/users/' + encodeURIComponent(u.id), {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ role: roleSelect.value })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            roleSelect.value = u.role;
+            showNotice(notice, 'err', data.error || 'Failed to update role');
+            return;
+          }
+          users = users.map((item) => (item.id === u.id ? data.user : item));
+          showNotice(notice, 'ok', 'Updated role for ' + u.email);
+          renderUsersTable();
+        });
+        roleTd.append(roleSelect);
+
+        const statusTd = document.createElement('td');
+        const statusPill = document.createElement('span');
+        statusPill.className = 'pill ' + (u.disabled ? 'pill-warn' : 'pill-accent');
+        statusPill.textContent = u.disabled ? 'Disabled' : 'Active';
+        statusTd.append(statusPill);
+
+        const actionTd = document.createElement('td');
+        const actions = document.createElement('div');
+        actions.className = 'row-actions';
+
+        const resetBtn = document.createElement('button');
+        resetBtn.type = 'button';
+        resetBtn.className = 'btn';
+        resetBtn.textContent = 'Reset Password';
+
+        const resetWrap = document.createElement('div');
+        resetWrap.className = 'reset-box';
+        resetWrap.style.display = 'none';
+        const resetInput = document.createElement('input');
+        resetInput.type = 'password';
+        resetInput.minLength = 8;
+        resetInput.placeholder = 'New password (8+)';
+        const resetSave = document.createElement('button');
+        resetSave.type = 'button';
+        resetSave.className = 'btn btn-primary';
+        resetSave.textContent = 'Save';
+        resetWrap.append(resetInput, resetSave);
+
+        resetBtn.addEventListener('click', () => {
+          resetWrap.style.display = resetWrap.style.display === 'none' ? 'flex' : 'none';
+          if (resetWrap.style.display === 'flex') resetInput.focus();
+        });
+
+        resetSave.addEventListener('click', async () => {
+          const pwd = resetInput.value;
+          const res = await fetch('/api/admin/users/' + encodeURIComponent(u.id), {
+            method: 'PATCH',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ password: pwd })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            showNotice(notice, 'err', data.error || 'Failed to reset password');
+            return;
+          }
+          resetInput.value = '';
+          resetWrap.style.display = 'none';
+          showNotice(notice, 'ok', 'Reset password for ' + u.email + ' (sessions invalidated)');
+        });
+
+        actions.append(resetBtn);
+
+        if (u.id !== currentUid) {
+          const toggleBtn = document.createElement('button');
+          toggleBtn.type = 'button';
+          toggleBtn.className = 'btn';
+          toggleBtn.textContent = u.disabled ? 'Enable' : 'Disable';
+          toggleBtn.addEventListener('click', async () => {
+            const res = await fetch('/api/admin/users/' + encodeURIComponent(u.id), {
+              method: 'PATCH',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ disabled: !u.disabled })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              showNotice(notice, 'err', data.error || 'Failed to update status');
+              return;
+            }
+            users = users.map((item) => (item.id === u.id ? data.user : item));
+            showNotice(notice, 'ok', (data.user.disabled ? 'Disabled ' : 'Enabled ') + u.email);
+            renderUsersTable();
+          });
+
+          const delBtn = document.createElement('button');
+          delBtn.type = 'button';
+          delBtn.className = 'btn btn-danger';
+          delBtn.textContent = 'Delete';
+          delBtn.addEventListener('click', async () => {
+            if (!window.confirm('Delete account "' + u.email + '" permanently?')) return;
+            const res = await fetch('/api/admin/users/' + encodeURIComponent(u.id), {
+              method: 'DELETE'
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              showNotice(notice, 'err', data.error || 'Failed to delete user');
+              return;
+            }
+            users = users.filter((item) => item.id !== u.id);
+            showNotice(notice, 'ok', 'Deleted account ' + u.email);
+            renderUsersTable();
+          });
+
+          actions.append(toggleBtn, delBtn);
+        }
+
+        actionTd.append(actions, resetWrap);
+        tr.append(userTd, roleTd, statusTd, actionTd);
+        tbody.append(tr);
+      }
+    }
+
+    const createForm = document.getElementById('create-user-form');
+    if (createForm) {
+      const notice = document.getElementById('team-notice');
+      createForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = document.getElementById('new-email').value.trim();
+        const display_name = document.getElementById('new-name').value.trim();
+        const role = document.getElementById('new-role').value;
+        const password = document.getElementById('new-password').value;
+        const res = await fetch('/api/admin/users', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email, display_name, role, password })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showNotice(notice, 'err', data.error || 'Failed to create user');
+          return;
+        }
+        createForm.reset();
+        users = [...users, data.user];
+        showNotice(notice, 'ok', 'Added user ' + data.user.email);
+        renderUsersTable();
+      });
+    }
+
+    document.getElementById('logout-btn').addEventListener('click', async () => {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      window.location.assign('/login');
+    });
+
+    renderAccountSection();
+    renderUsersTable();
   </script>
 </body>
 </html>`

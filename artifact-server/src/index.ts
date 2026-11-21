@@ -3,30 +3,40 @@ import {
   clearSessionCookie,
   createSessionCookie,
   verifyAdminPassword,
-  verifyOwnerRequest
+  verifyAdminRequest,
+  verifyOwnerRequest,
+  verifyPassword
 } from './auth'
 import { getBlob } from './blobs'
 import { handleMcpRequest } from './mcp'
 import {
   ArtifactServerError,
   buildArtifactLinks,
+  changeUserPassword,
   createComment,
+  createUser,
   deleteArtifact,
+  deleteUser,
   getArtifactByShareToken,
   getArtifactBySlug,
+  getUserByEmail,
   getVersion,
   guessContentType,
+  hasActiveAdminUser,
   listArtifacts,
   listComments,
+  listUsers,
   listVersions,
   normalizeSlug,
   resolveBaseUrl,
   resolveComment,
   sanitizeRelativePath,
-  setVisibility
+  setVisibility,
+  toSafeUser,
+  updateUser
 } from './storage'
-import type { CommentStatus, Env } from './types'
-import { renderGalleryPage, renderLoginPage, renderReviewPage } from './ui'
+import type { CommentStatus, Env, UserRole } from './types'
+import { renderGalleryPage, renderLoginPage, renderReviewPage, renderSettingsPage } from './ui'
 
 const RAW_SANDBOX_CSP = 'sandbox allow-scripts allow-popups allow-forms allow-modals'
 
@@ -144,12 +154,30 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
     // ── Auth endpoints & Login UI ──
     if (path === '/login' && request.method === 'GET') {
       const next = url.searchParams.get('next') || '/'
-      return htmlResponse(renderLoginPage(serverName, next))
+      const hasD1Admin = await hasActiveAdminUser(env)
+      return htmlResponse(renderLoginPage(serverName, next, undefined, hasD1Admin))
     }
 
     if (path === '/api/auth/login' && request.method === 'POST') {
       const body = await readJsonBody(request)
+      const email = typeof body.email === 'string' ? body.email.trim() : ''
       const password = typeof body.password === 'string' ? body.password : ''
+
+      if (email) {
+        const user = await getUserByEmail(env, email)
+        if (!user || user.disabled || !(await verifyPassword(password, user.password_hash))) {
+          return jsonResponse({ error: 'Invalid email or password' }, 401)
+        }
+        const cookie = await createSessionCookie(env, user, { secure: isHttps })
+        if (!cookie) {
+          return jsonResponse({ error: 'Session secret unavailable on server' }, 500)
+        }
+        return jsonResponse({ ok: true, user: toSafeUser(user) }, 200, { 'set-cookie': cookie })
+      }
+
+      if (await hasActiveAdminUser(env)) {
+        return jsonResponse({ error: 'Email and password are required' }, 401)
+      }
       const ok = await verifyAdminPassword(password, env)
       if (!ok) {
         return jsonResponse({ error: 'Invalid password' }, 401)
@@ -165,6 +193,137 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
       return jsonResponse({ ok: true }, 200, { 'set-cookie': clearSessionCookie({ secure: isHttps }) })
     }
 
+    // ── Account & Team Settings UI + Self-Service APIs ──
+    if (path === '/settings' && request.method === 'GET') {
+      const owner = await verifyOwnerRequest(request, env)
+      if (!owner.ok) {
+        return Response.redirect(`${baseUrl}/login?next=${encodeURIComponent('/settings')}`, 302)
+      }
+      const [hasD1Admin, users] = await Promise.all([
+        hasActiveAdminUser(env),
+        owner.isAdmin ? listUsers(env) : Promise.resolve([])
+      ])
+      return htmlResponse(
+        renderSettingsPage({
+          serverName,
+          identity: owner,
+          users,
+          hasD1Admin
+        })
+      )
+    }
+
+    if (path === '/api/me' && request.method === 'GET') {
+      const owner = await verifyOwnerRequest(request, env)
+      if (!owner.ok) return jsonResponse({ error: 'Unauthorized' }, 401)
+      return jsonResponse({
+        ok: true,
+        actor: owner.actor,
+        role: owner.role,
+        is_admin: owner.isAdmin,
+        is_bootstrap: owner.isBootstrap,
+        user: owner.user
+      })
+    }
+
+    if (path === '/api/account/bootstrap-admin' && request.method === 'POST') {
+      const owner = await verifyOwnerRequest(request, env)
+      if (!owner.ok) return jsonResponse({ error: 'Unauthorized' }, 401)
+      if (!owner.isBootstrap) {
+        return jsonResponse({ error: 'Only bootstrap admin sessions can claim the initial D1 admin account' }, 409)
+      }
+      if (await hasActiveAdminUser(env)) {
+        return jsonResponse({ error: 'A D1 admin account already exists' }, 409)
+      }
+      const body = await readJsonBody(request)
+      const email = typeof body.email === 'string' ? body.email : ''
+      const displayName = typeof body.display_name === 'string' ? body.display_name : ''
+      const newPassword =
+        typeof body.new_password === 'string'
+          ? body.new_password
+          : typeof body.password === 'string'
+            ? body.password
+            : ''
+      const user = await createUser(env, {
+        email,
+        display_name: displayName,
+        role: 'admin',
+        password: newPassword
+      })
+      const cookie = await createSessionCookie(env, user, { secure: isHttps })
+      if (!cookie) {
+        return jsonResponse({ error: 'Session secret unavailable on server' }, 500)
+      }
+      return jsonResponse({ ok: true, user: toSafeUser(user) }, 201, { 'set-cookie': cookie })
+    }
+
+    if (path === '/api/account/password' && request.method === 'POST') {
+      const owner = await verifyOwnerRequest(request, env)
+      if (!owner.ok) return jsonResponse({ error: 'Unauthorized' }, 401)
+      if (!owner.user) {
+        return jsonResponse(
+          { error: 'Bootstrap session must first create a personal D1 admin account at /settings' },
+          400
+        )
+      }
+      const body = await readJsonBody(request)
+      const currentPassword = typeof body.current_password === 'string' ? body.current_password : ''
+      const newPassword = typeof body.new_password === 'string' ? body.new_password : ''
+      const updated = await changeUserPassword(env, owner.user.id, currentPassword, newPassword)
+      const cookie = await createSessionCookie(env, updated, { secure: isHttps })
+      if (!cookie) {
+        return jsonResponse({ error: 'Session secret unavailable on server' }, 500)
+      }
+      return jsonResponse({ ok: true, user: toSafeUser(updated) }, 200, { 'set-cookie': cookie })
+    }
+
+    // ── Admin Team User Management APIs ──
+    if (path === '/api/admin/users' && request.method === 'GET') {
+      const admin = await verifyAdminRequest(request, env)
+      if (!admin.ok) return jsonResponse({ error: admin.status === 401 ? 'Unauthorized' : 'Forbidden' }, admin.status)
+      const users = await listUsers(env)
+      return jsonResponse({ users })
+    }
+
+    if (path === '/api/admin/users' && request.method === 'POST') {
+      const admin = await verifyAdminRequest(request, env)
+      if (!admin.ok) return jsonResponse({ error: admin.status === 401 ? 'Unauthorized' : 'Forbidden' }, admin.status)
+      const body = await readJsonBody(request)
+      const user = await createUser(env, {
+        email: typeof body.email === 'string' ? body.email : '',
+        display_name: typeof body.display_name === 'string' ? body.display_name : undefined,
+        role: typeof body.role === 'string' ? (body.role as UserRole) : 'member',
+        password: typeof body.password === 'string' ? body.password : ''
+      })
+      return jsonResponse({ ok: true, user: toSafeUser(user) }, 201)
+    }
+
+    const adminUserMatch = /^\/api\/admin\/users\/([^/]+)$/.exec(path)
+    if (adminUserMatch) {
+      const admin = await verifyAdminRequest(request, env)
+      if (!admin.ok) return jsonResponse({ error: admin.status === 401 ? 'Unauthorized' : 'Forbidden' }, admin.status)
+      const targetId = decodeURIComponent(adminUserMatch[1] || '')
+      if (request.method === 'PATCH') {
+        const body = await readJsonBody(request)
+        const user = await updateUser(
+          env,
+          targetId,
+          {
+            display_name: typeof body.display_name === 'string' ? body.display_name : undefined,
+            role: typeof body.role === 'string' ? (body.role as UserRole) : undefined,
+            disabled: typeof body.disabled === 'boolean' ? body.disabled : undefined,
+            password: typeof body.password === 'string' ? body.password : undefined
+          },
+          admin.user?.id
+        )
+        return jsonResponse({ ok: true, user })
+      }
+      if (request.method === 'DELETE') {
+        const res = await deleteUser(env, targetId, admin.user?.id)
+        return jsonResponse({ ok: true, ...res })
+      }
+    }
+
     // ── Gallery root ──
     if (path === '/' && request.method === 'GET') {
       const owner = await verifyOwnerRequest(request, env)
@@ -177,7 +336,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
         query: url.searchParams.get('q') || undefined,
         limit: 100
       })
-      return htmlResponse(renderGalleryPage(serverName, baseUrl, items))
+      return htmlResponse(renderGalleryPage(serverName, baseUrl, items, owner))
     }
 
     // ── Tokenized share link (/s/:shareToken) ──
@@ -213,6 +372,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
           comments,
           links,
           isOwner: owner.ok,
+          isAdmin: owner.ok ? owner.isAdmin : false,
           shareToken: owner.ok ? null : artifact.share_token,
           defaultAuthor: owner.ok ? owner.actor : 'Reviewer'
         })
@@ -256,6 +416,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
           comments,
           links,
           isOwner: access.isOwner,
+          isAdmin: access.isAdmin,
           shareToken: access.isOwner ? null : tokenParam,
           defaultAuthor: access.isOwner ? access.actor : 'Reviewer'
         })
@@ -283,8 +444,8 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
       const subId = apiArtifactMatch[3] ? decodeURIComponent(apiArtifactMatch[3]) : ''
 
       if (sub === 'visibility' && request.method === 'PATCH' && !subId) {
-        const owner = await verifyOwnerRequest(request, env)
-        if (!owner.ok) return jsonResponse({ error: 'Unauthorized' }, 401)
+        const admin = await verifyAdminRequest(request, env)
+        if (!admin.ok) return jsonResponse({ error: admin.status === 401 ? 'Unauthorized' : 'Forbidden' }, admin.status)
         const body = await readJsonBody(request)
         const res = await setVisibility(
           env,
@@ -351,8 +512,8 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
           return jsonResponse({ artifact, versions, comments, links })
         }
         if (request.method === 'DELETE') {
-          const owner = await verifyOwnerRequest(request, env)
-          if (!owner.ok) return jsonResponse({ error: 'Unauthorized' }, 401)
+          const admin = await verifyAdminRequest(request, env)
+          if (!admin.ok) return jsonResponse({ error: admin.status === 401 ? 'Unauthorized' : 'Forbidden' }, admin.status)
           const res = await deleteArtifact(env, slug)
           return jsonResponse(res)
         }

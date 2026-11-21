@@ -1,9 +1,11 @@
+import { hashPassword, verifyPassword } from './auth'
 import { deleteBlobPrefix, putBlob } from './blobs'
 import {
   ARTIFACT_TYPES,
   ARTIFACT_VISIBILITIES,
   ArtifactServerError,
   COMMENT_STATUSES,
+  USER_ROLES,
   type ArtifactFileInput,
   type ArtifactLinks,
   type ArtifactListItem,
@@ -15,6 +17,9 @@ import {
   type Env,
   type PublishArtifactInput,
   type PublishArtifactResult,
+  type SafeUser,
+  type UserRole,
+  type UserRow,
   type VersionRow
 } from './types'
 
@@ -22,7 +27,7 @@ export { ArtifactServerError }
 
 const SLUG_MAX_LEN = 64
 const MAX_FILES_PER_PUBLISH = 100
-const MAX_TOTAL_BYTES = 10 * 1024 * 1024 // 10 MiB
+const MAX_TOTAL_BYTES = 20 * 1024 * 1024 // 20 MiB (fits single-object KV 25 MiB cap & Omada Vite bundles)
 
 const encoder = new TextEncoder()
 
@@ -655,4 +660,245 @@ export async function resolveComment(
     .bind(status, now, normalized, commentId)
     .run()
   return { ...existing, status, updated_at: now }
+}
+
+// ── Multi-User Accounts & Roles ─────────────────────────────────────────
+
+const USER_SELECT_COLS =
+  'id, email, display_name, role, password_hash, pwd_version, disabled, created_at, updated_at'
+
+export function normalizeEmail(raw: string): string {
+  const email = raw.trim().toLowerCase()
+  if (!email || email.length > 200 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new ArtifactServerError('E_INVALID_ARG', 'Valid email address is required', 400)
+  }
+  return email
+}
+
+export function validatePasswordInput(password: string, field = 'password'): string {
+  if (typeof password !== 'string' || password.length < 8 || password.length > 200) {
+    throw new ArtifactServerError('E_INVALID_ARG', `${field} must be 8–200 characters`, 400)
+  }
+  return password
+}
+
+export function toSafeUser(row: UserRow): SafeUser {
+  return {
+    id: row.id,
+    email: row.email,
+    display_name: row.display_name,
+    role: row.role,
+    disabled: Boolean(row.disabled),
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  }
+}
+
+export async function getUserById(env: Env, id: string): Promise<UserRow | null> {
+  const cleanId = id.trim()
+  if (!cleanId) return null
+  return env.DB.prepare(`SELECT ${USER_SELECT_COLS} FROM users WHERE id = ?`)
+    .bind(cleanId)
+    .first<UserRow>()
+}
+
+export async function getUserByEmail(env: Env, rawEmail: string): Promise<UserRow | null> {
+  const email = rawEmail.trim().toLowerCase()
+  if (!email) return null
+  return env.DB.prepare(`SELECT ${USER_SELECT_COLS} FROM users WHERE email = ?`)
+    .bind(email)
+    .first<UserRow>()
+}
+
+export async function countActiveAdmins(env: Env): Promise<number> {
+  const rows = await env.DB.prepare(`SELECT id FROM users WHERE role = 'admin' AND disabled = 0`).all<{
+    id: string
+  }>()
+  return rows.results.length
+}
+
+export async function hasActiveAdminUser(env: Env): Promise<boolean> {
+  const row = await env.DB.prepare(`SELECT id FROM users WHERE role = 'admin' AND disabled = 0 LIMIT 1`).first<{
+    id: string
+  }>()
+  return Boolean(row)
+}
+
+export async function listUsers(env: Env): Promise<SafeUser[]> {
+  const rows = await env.DB.prepare(`SELECT ${USER_SELECT_COLS} FROM users ORDER BY created_at ASC`).all<UserRow>()
+  return rows.results.map(toSafeUser)
+}
+
+export async function createUser(
+  env: Env,
+  input: {
+    email: string
+    display_name?: string
+    role?: UserRole
+    password: string
+  }
+): Promise<UserRow> {
+  const email = normalizeEmail(input.email)
+  const password = validatePasswordInput(input.password, 'password')
+  const role = (input.role ?? 'member') as UserRole
+  if (!(USER_ROLES as readonly string[]).includes(role)) {
+    throw new ArtifactServerError('E_INVALID_ARG', `role must be one of: ${USER_ROLES.join(', ')}`, 400)
+  }
+
+  const existing = await getUserByEmail(env, email)
+  if (existing) {
+    throw new ArtifactServerError('E_CONFLICT', `User already exists: ${email}`, 409)
+  }
+
+  const displayName = (input.display_name || '').trim().slice(0, 80) || email.split('@')[0]
+  const passwordHash = await hashPassword(password)
+  const id = crypto.randomUUID()
+  const now = Math.floor(Date.now() / 1000)
+
+  await env.DB.prepare(
+    `INSERT INTO users (id, email, display_name, role, password_hash, pwd_version, disabled, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?)`
+  )
+    .bind(id, email, displayName, role, passwordHash, now, now)
+    .run()
+
+  return {
+    id,
+    email,
+    display_name: displayName,
+    role,
+    password_hash: passwordHash,
+    pwd_version: 1,
+    disabled: 0,
+    created_at: now,
+    updated_at: now
+  }
+}
+
+export async function updateUser(
+  env: Env,
+  targetId: string,
+  patch: {
+    display_name?: string
+    role?: UserRole
+    disabled?: boolean
+    password?: string
+  },
+  actingUserId?: string | null
+): Promise<SafeUser> {
+  const existing = await getUserById(env, targetId)
+  if (!existing) {
+    throw new ArtifactServerError('E_NOT_FOUND', `User not found: ${targetId}`, 404)
+  }
+
+  let nextRole: UserRole = existing.role
+  if (patch.role !== undefined) {
+    if (!(USER_ROLES as readonly string[]).includes(patch.role)) {
+      throw new ArtifactServerError('E_INVALID_ARG', `role must be one of: ${USER_ROLES.join(', ')}`, 400)
+    }
+    nextRole = patch.role
+  }
+
+  const nextDisabled = patch.disabled !== undefined ? Boolean(patch.disabled) : Boolean(existing.disabled)
+  if (actingUserId && actingUserId === existing.id) {
+    if (nextDisabled) {
+      throw new ArtifactServerError('E_FORBIDDEN', 'Cannot disable your own account', 400)
+    }
+    if (nextRole !== 'admin' && existing.role === 'admin') {
+      throw new ArtifactServerError('E_FORBIDDEN', 'Cannot demote your own admin role', 400)
+    }
+  }
+
+  if (existing.role === 'admin' && existing.disabled === 0 && (nextRole !== 'admin' || nextDisabled)) {
+    const activeAdmins = await countActiveAdmins(env)
+    if (activeAdmins <= 1) {
+      throw new ArtifactServerError('E_FORBIDDEN', 'Cannot demote or disable the last active admin', 400)
+    }
+  }
+
+  const nextName =
+    patch.display_name !== undefined
+      ? patch.display_name.trim().slice(0, 80) || existing.display_name
+      : existing.display_name
+
+  let nextHash = existing.password_hash
+  let nextPwdVer = existing.pwd_version
+  if (patch.password !== undefined && patch.password !== '') {
+    validatePasswordInput(patch.password, 'password')
+    nextHash = await hashPassword(patch.password)
+    nextPwdVer += 1
+  }
+
+  const now = Math.floor(Date.now() / 1000)
+  const disabledInt = nextDisabled ? 1 : 0
+  await env.DB.prepare(
+    `UPDATE users SET display_name = ?, role = ?, password_hash = ?, pwd_version = ?, disabled = ?, updated_at = ? WHERE id = ?`
+  )
+    .bind(nextName, nextRole, nextHash, nextPwdVer, disabledInt, now, existing.id)
+    .run()
+
+  return toSafeUser({
+    ...existing,
+    display_name: nextName,
+    role: nextRole,
+    password_hash: nextHash,
+    pwd_version: nextPwdVer,
+    disabled: disabledInt,
+    updated_at: now
+  })
+}
+
+export async function changeUserPassword(
+  env: Env,
+  userId: string,
+  currentPassword: string,
+  newPassword: string
+): Promise<UserRow> {
+  const existing = await getUserById(env, userId)
+  if (!existing) {
+    throw new ArtifactServerError('E_NOT_FOUND', `User not found: ${userId}`, 404)
+  }
+  if (existing.disabled) {
+    throw new ArtifactServerError('E_FORBIDDEN', 'Account is disabled', 403)
+  }
+  if (!currentPassword || !(await verifyPassword(currentPassword, existing.password_hash))) {
+    throw new ArtifactServerError('E_UNAUTHORIZED', 'Current password is incorrect', 401)
+  }
+  validatePasswordInput(newPassword, 'new_password')
+  const newHash = await hashPassword(newPassword)
+  const nextPwdVer = existing.pwd_version + 1
+  const now = Math.floor(Date.now() / 1000)
+
+  await env.DB.prepare(`UPDATE users SET password_hash = ?, pwd_version = ?, updated_at = ? WHERE id = ?`)
+    .bind(newHash, nextPwdVer, now, existing.id)
+    .run()
+
+  return {
+    ...existing,
+    password_hash: newHash,
+    pwd_version: nextPwdVer,
+    updated_at: now
+  }
+}
+
+export async function deleteUser(
+  env: Env,
+  targetId: string,
+  actingUserId?: string | null
+): Promise<{ deleted: true; id: string }> {
+  if (actingUserId && actingUserId === targetId) {
+    throw new ArtifactServerError('E_FORBIDDEN', 'Cannot delete your own account', 400)
+  }
+  const existing = await getUserById(env, targetId)
+  if (!existing) {
+    throw new ArtifactServerError('E_NOT_FOUND', `User not found: ${targetId}`, 404)
+  }
+  if (existing.role === 'admin' && existing.disabled === 0) {
+    const activeAdmins = await countActiveAdmins(env)
+    if (activeAdmins <= 1) {
+      throw new ArtifactServerError('E_FORBIDDEN', 'Cannot delete the last active admin', 400)
+    }
+  }
+  await env.DB.prepare(`DELETE FROM users WHERE id = ?`).bind(existing.id).run()
+  return { deleted: true, id: existing.id }
 }

@@ -8,6 +8,8 @@ import type {
   CommentRow,
   CommentStatus,
   Env,
+  UserRole,
+  UserRow,
   VersionRow
 } from '../src/types'
 
@@ -143,6 +145,7 @@ class MemoryD1Database {
   artifacts = new Map<string, ArtifactRow>()
   versions: VersionRow[] = []
   comments: CommentRow[] = []
+  users = new Map<string, UserRow>()
   nextVersionId = 1
 
   prepare(sqlRaw: string): D1PreparedStatement {
@@ -173,6 +176,22 @@ class MemoryD1Database {
         if (sql.includes('FROM artifact_comments WHERE slug = ? AND id = ?')) {
           const [slug, id] = args
           return (db.comments.find((c) => c.slug === slug && c.id === id) ?? null) as unknown as T | null
+        }
+        if (sql.includes('FROM users WHERE id = ?')) {
+          return (db.users.get(String(args[0])) ?? null) as unknown as T | null
+        }
+        if (sql.includes('FROM users WHERE email = ?')) {
+          const email = String(args[0])
+          for (const u of db.users.values()) {
+            if (u.email === email) return u as unknown as T
+          }
+          return null
+        }
+        if (sql.includes("FROM users WHERE role = 'admin' AND disabled = 0 LIMIT 1")) {
+          for (const u of db.users.values()) {
+            if (u.role === 'admin' && u.disabled === 0) return { id: u.id } as unknown as T
+          }
+          return null
         }
         throw new Error(`Unsupported first() SQL in test D1: ${sql}`)
       },
@@ -229,6 +248,16 @@ class MemoryD1Database {
             results = results.filter((c) => c.status === status)
           }
           results.sort((a, b) => a.created_at - b.created_at)
+          return { results: results as unknown as T[], success: true, meta: {} as D1Result['meta'] }
+        }
+        if (sql.includes("FROM users WHERE role = 'admin' AND disabled = 0")) {
+          const results = [...db.users.values()]
+            .filter((u) => u.role === 'admin' && u.disabled === 0)
+            .map((u) => ({ id: u.id }))
+          return { results: results as unknown as T[], success: true, meta: {} as D1Result['meta'] }
+        }
+        if (sql.includes('FROM users ORDER BY created_at ASC')) {
+          const results = [...db.users.values()].sort((a, b) => a.created_at - b.created_at)
           return { results: results as unknown as T[], success: true, meta: {} as D1Result['meta'] }
         }
         throw new Error(`Unsupported all() SQL in test D1: ${sql}`)
@@ -333,6 +362,54 @@ class MemoryD1Database {
             found.status = status as CommentStatus
             found.updated_at = Number(updatedAt)
           }
+          return { results: [], success: true, meta: {} as D1Result['meta'] }
+        }
+        if (sql.startsWith('INSERT INTO users')) {
+          const [id, email, displayName, role, passwordHash, createdAt, updatedAt] = args
+          const cleanEmail = String(email)
+          for (const existing of db.users.values()) {
+            if (existing.email === cleanEmail) {
+              throw new Error('UNIQUE constraint failed: users.email')
+            }
+          }
+          db.users.set(String(id), {
+            id: String(id),
+            email: cleanEmail,
+            display_name: String(displayName),
+            role: role as UserRole,
+            password_hash: String(passwordHash),
+            pwd_version: 1,
+            disabled: 0,
+            created_at: Number(createdAt),
+            updated_at: Number(updatedAt)
+          })
+          return { results: [], success: true, meta: {} as D1Result['meta'] }
+        }
+        if (sql.startsWith('UPDATE users SET display_name = ?')) {
+          const [displayName, role, passwordHash, pwdVersion, disabled, updatedAt, id] = args
+          const u = db.users.get(String(id))
+          if (u) {
+            u.display_name = String(displayName)
+            u.role = role as UserRole
+            u.password_hash = String(passwordHash)
+            u.pwd_version = Number(pwdVersion)
+            u.disabled = Number(disabled)
+            u.updated_at = Number(updatedAt)
+          }
+          return { results: [], success: true, meta: {} as D1Result['meta'] }
+        }
+        if (sql.startsWith('UPDATE users SET password_hash = ?')) {
+          const [passwordHash, pwdVersion, updatedAt, id] = args
+          const u = db.users.get(String(id))
+          if (u) {
+            u.password_hash = String(passwordHash)
+            u.pwd_version = Number(pwdVersion)
+            u.updated_at = Number(updatedAt)
+          }
+          return { results: [], success: true, meta: {} as D1Result['meta'] }
+        }
+        if (sql.startsWith('DELETE FROM users WHERE id = ?')) {
+          db.users.delete(String(args[0]))
           return { results: [], success: true, meta: {} as D1Result['meta'] }
         }
         throw new Error(`Unsupported run() SQL in test D1: ${sql}`)
@@ -704,5 +781,250 @@ describe('artifact-server worker', () => {
     expect(delJson.result.structuredContent.deleted).toBe(true)
     expect(delJson.result.structuredContent.objects_removed).toBe(2)
     expect(kv.entries.size).toBe(0)
+  })
+
+  it('supports bootstrap admin upgrade, self-service password rotation, and multi-user RBAC', async () => {
+    const { env } = makeTestEnv()
+
+    // 1. Seed a private artifact as agent so we can test member read vs admin write
+    await callMcp(env, {
+      jsonrpc: '2.0',
+      id: 40,
+      method: 'tools/call',
+      params: {
+        name: 'artifact_publish',
+        arguments: {
+          slug: 'rbac-demo',
+          title: 'RBAC Private Board',
+          visibility: 'private',
+          html: '<!doctype html><html><body>private-ok</body></html>'
+        }
+      }
+    })
+
+    // 2. Sign in as bootstrap admin (email omitted), then claim personal D1 admin account
+    const bsLogin = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password: 'admin-password-for-tests' })
+      }),
+      env
+    )
+    expect(bsLogin.status).toBe(200)
+    const bsCookie = (bsLogin.headers.get('set-cookie') || '').split(';')[0]
+
+    const settingsBs = await handleRequest(
+      new Request('https://canvas.chenge.ink/settings', {
+        headers: { cookie: bsCookie }
+      }),
+      env
+    )
+    expect(settingsBs.status).toBe(200)
+    expect(await settingsBs.text()).toContain('Upgrade Bootstrap Admin')
+
+    const upgradeRes = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/account/bootstrap-admin', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: bsCookie },
+        body: JSON.stringify({
+          email: 'Owner@Example.com',
+          display_name: 'Owner Lead',
+          new_password: 'new-admin-pass-2026'
+        })
+      }),
+      env
+    )
+    expect(upgradeRes.status).toBe(201)
+    const upgradeJson = (await upgradeRes.json()) as { ok: boolean; user: { id: string; email: string; role: string } }
+    expect(upgradeJson.user.email).toBe('owner@example.com')
+    expect(upgradeJson.user.role).toBe('admin')
+    const adminCookie = (upgradeRes.headers.get('set-cookie') || '').split(';')[0]
+
+    // Blank-email bootstrap login must now be rejected once a D1 admin exists
+    const legacyLogin = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password: 'admin-password-for-tests' })
+      }),
+      env
+    )
+    expect(legacyLogin.status).toBe(401)
+
+    // Email + new password login works
+    const adminReLogin = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'owner@example.com', password: 'new-admin-pass-2026' })
+      }),
+      env
+    )
+    expect(adminReLogin.status).toBe(200)
+
+    // 3. Admin creates a member account
+    const createMemberRes = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/admin/users', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: adminCookie },
+        body: JSON.stringify({
+          email: 'alex@example.com',
+          display_name: 'Alex Designer',
+          role: 'member',
+          password: 'member-init-pass'
+        })
+      }),
+      env
+    )
+    expect(createMemberRes.status).toBe(201)
+    const createdMember = (await createMemberRes.json()) as { user: { id: string; role: string } }
+    expect(createdMember.user.role).toBe('member')
+
+    // Member logs in -> receives session cookie A
+    const memberLogin = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'alex@example.com', password: 'member-init-pass' })
+      }),
+      env
+    )
+    expect(memberLogin.status).toBe(200)
+    const memberCookieA = (memberLogin.headers.get('set-cookie') || '').split(';')[0]
+
+    // Member can browse gallery, read private artifact, and post comments
+    const galleryRes = await handleRequest(
+      new Request('https://canvas.chenge.ink/', { headers: { cookie: memberCookieA } }),
+      env
+    )
+    expect(galleryRes.status).toBe(200)
+    expect(await galleryRes.text()).toContain('rbac-demo')
+
+    const cmtRes = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/artifacts/rbac-demo/comments', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: memberCookieA },
+        body: JSON.stringify({ version: 1, body: 'Member feedback looks good' })
+      }),
+      env
+    )
+    expect(cmtRes.status).toBe(201)
+
+    // Member cannot perform admin actions (visibility, delete, user management)
+    const forbidVis = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/artifacts/rbac-demo/visibility', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', cookie: memberCookieA },
+        body: JSON.stringify({ visibility: 'public' })
+      }),
+      env
+    )
+    expect(forbidVis.status).toBe(403)
+
+    const forbidDel = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/artifacts/rbac-demo', {
+        method: 'DELETE',
+        headers: { cookie: memberCookieA }
+      }),
+      env
+    )
+    expect(forbidDel.status).toBe(403)
+
+    const forbidUsers = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/admin/users', {
+        headers: { cookie: memberCookieA }
+      }),
+      env
+    )
+    expect(forbidUsers.status).toBe(403)
+
+    // 4. Member changes their own password -> receives cookie B, old cookie A immediately invalidated
+    const wrongCur = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/account/password', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: memberCookieA },
+        body: JSON.stringify({ current_password: 'wrong', new_password: 'member-rotated-pass' })
+      }),
+      env
+    )
+    expect(wrongCur.status).toBe(401)
+
+    const rotatePwd = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/account/password', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: memberCookieA },
+        body: JSON.stringify({
+          current_password: 'member-init-pass',
+          new_password: 'member-rotated-pass'
+        })
+      }),
+      env
+    )
+    expect(rotatePwd.status).toBe(200)
+    const memberCookieB = (rotatePwd.headers.get('set-cookie') || '').split(';')[0]
+    expect(memberCookieB).toContain('canvas_session=')
+
+    // Cookie A is now dead due to pwd_version bump
+    const oldSessionMe = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/me', { headers: { cookie: memberCookieA } }),
+      env
+    )
+    expect(oldSessionMe.status).toBe(401)
+
+    // Cookie B remains valid
+    const newSessionMe = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/me', { headers: { cookie: memberCookieB } }),
+      env
+    )
+    expect(newSessionMe.status).toBe(200)
+    expect(((await newSessionMe.json()) as { role: string }).role).toBe('member')
+
+    // 5. Admin disables member -> cookie B immediately invalidated & login blocked
+    const disableRes = await handleRequest(
+      new Request(`https://canvas.chenge.ink/api/admin/users/${createdMember.user.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', cookie: adminCookie },
+        body: JSON.stringify({ disabled: true })
+      }),
+      env
+    )
+    expect(disableRes.status).toBe(200)
+
+    const disabledMe = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/me', { headers: { cookie: memberCookieB } }),
+      env
+    )
+    expect(disabledMe.status).toBe(401)
+
+    const disabledLogin = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'alex@example.com', password: 'member-rotated-pass' })
+      }),
+      env
+    )
+    expect(disabledLogin.status).toBe(401)
+
+    // 6. Protect last admin & self-delete
+    const selfDel = await handleRequest(
+      new Request(`https://canvas.chenge.ink/api/admin/users/${upgradeJson.user.id}`, {
+        method: 'DELETE',
+        headers: { cookie: adminCookie }
+      }),
+      env
+    )
+    expect(selfDel.status).toBe(400)
+
+    // Admin deletes disabled member
+    const delMember = await handleRequest(
+      new Request(`https://canvas.chenge.ink/api/admin/users/${createdMember.user.id}`, {
+        method: 'DELETE',
+        headers: { cookie: adminCookie }
+      }),
+      env
+    )
+    expect(delMember.status).toBe(200)
   })
 })

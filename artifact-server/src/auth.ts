@@ -1,7 +1,10 @@
-import type { ArtifactRow, Env } from './types'
+import { getUserByEmail, getUserById, toSafeUser } from './storage'
+import type { ArtifactRow, AuthIdentity, Env, UserRow } from './types'
 
 const SESSION_COOKIE_NAME = 'canvas_session'
 const SESSION_TTL_SEC = 60 * 60 * 24 * 7
+const PBKDF2_ITERATIONS = 100_000
+const PBKDF2_HASH_BYTES = 32
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -44,6 +47,46 @@ export async function timingSafeEqualStr(a: string, b: string): Promise<boolean>
     diff |= bytesA[i] ^ bytesB[i]
   }
   return diff === 0
+}
+
+export async function hashPassword(password: string): Promise<string> {
+  const salt = new Uint8Array(16)
+  crypto.getRandomValues(salt)
+  const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits'])
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      salt,
+      iterations: PBKDF2_ITERATIONS,
+      hash: 'SHA-256'
+    },
+    key,
+    PBKDF2_HASH_BYTES * 8
+  )
+  return `pbkdf2_sha256$${PBKDF2_ITERATIONS}$${toBase64Url(salt)}$${toBase64Url(new Uint8Array(bits))}`
+}
+
+export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  const parts = storedHash.split('$')
+  if (parts.length !== 4 || parts[0] !== 'pbkdf2_sha256') return false
+  const iterations = Number(parts[1])
+  if (!Number.isInteger(iterations) || iterations < 1000 || iterations > 1_000_000) return false
+  const salt = fromBase64Url(parts[2] || '')
+  const expected = fromBase64Url(parts[3] || '')
+  if (!salt || !expected || expected.length !== PBKDF2_HASH_BYTES) return false
+
+  const key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits'])
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      salt,
+      iterations,
+      hash: 'SHA-256'
+    },
+    key,
+    PBKDF2_HASH_BYTES * 8
+  )
+  return timingSafeEqualStr(toBase64Url(new Uint8Array(bits)), parts[3] || '')
 }
 
 function resolveSessionSecret(env: Env): string | null {
@@ -107,13 +150,25 @@ export async function verifyAdminPassword(password: string, env: Env): Promise<b
 
 export async function createSessionCookie(
   env: Env,
-  actor: string,
+  subject: string | Pick<UserRow, 'id' | 'email' | 'display_name' | 'role' | 'pwd_version'>,
   opts: { secure?: boolean } = {}
 ): Promise<string | null> {
   const secret = resolveSessionSecret(env)
   if (!secret) return null
   const exp = Math.floor(Date.now() / 1000) + SESSION_TTL_SEC
-  const payload = toBase64Url(encoder.encode(JSON.stringify({ actor, exp })))
+  const sessionBody =
+    typeof subject === 'string'
+      ? { v: 1, actor: subject, exp }
+      : {
+          v: 2,
+          uid: subject.id,
+          email: subject.email,
+          name: subject.display_name,
+          role: subject.role,
+          pwd_ver: subject.pwd_version,
+          exp
+        }
+  const payload = toBase64Url(encoder.encode(JSON.stringify(sessionBody)))
   const sig = await signHmac(secret, payload)
   const parts = [
     `${SESSION_COOKIE_NAME}=${payload}.${sig}`,
@@ -132,7 +187,7 @@ export function clearSessionCookie(opts: { secure?: boolean } = {}): string {
   return parts.join('; ')
 }
 
-export async function verifySessionCookie(request: Request, env: Env): Promise<string | null> {
+export async function verifyUserSession(request: Request, env: Env): Promise<AuthIdentity | null> {
   const secret = resolveSessionSecret(env)
   if (!secret) return null
   const cookies = parseCookies(request.headers.get('cookie'))
@@ -151,39 +206,107 @@ export async function verifySessionCookie(request: Request, env: Env): Promise<s
   if (!payloadBytes) return null
   try {
     const parsed = JSON.parse(decoder.decode(payloadBytes)) as {
+      v?: unknown
+      uid?: unknown
+      pwd_ver?: unknown
       actor?: unknown
       exp?: unknown
     }
-    if (
-      typeof parsed.actor !== 'string' ||
-      !parsed.actor ||
-      typeof parsed.exp !== 'number' ||
-      parsed.exp <= Math.floor(Date.now() / 1000)
-    ) {
+    if (typeof parsed.exp !== 'number' || parsed.exp <= Math.floor(Date.now() / 1000)) {
       return null
     }
-    return parsed.actor
+    if (parsed.v === 2 && typeof parsed.uid === 'string' && parsed.uid) {
+      const user = await getUserById(env, parsed.uid)
+      if (!user || user.disabled) return null
+      if (typeof parsed.pwd_ver !== 'number' || user.pwd_version !== parsed.pwd_ver) return null
+      const safe = toSafeUser(user)
+      return {
+        actor: safe.display_name || safe.email,
+        user: safe,
+        role: safe.role,
+        isAdmin: safe.role === 'admin',
+        isBootstrap: false
+      }
+    }
+    if (typeof parsed.actor === 'string' && parsed.actor) {
+      return {
+        actor: parsed.actor,
+        user: null,
+        role: 'bootstrap_admin',
+        isAdmin: true,
+        isBootstrap: true
+      }
+    }
+    return null
   } catch {
     return null
   }
 }
 
+export async function verifySessionCookie(request: Request, env: Env): Promise<string | null> {
+  const identity = await verifyUserSession(request, env)
+  return identity ? identity.actor : null
+}
+
 export async function verifyOwnerRequest(
   request: Request,
   env: Env
-): Promise<{ ok: true; actor: string } | { ok: false }> {
+): Promise<({ ok: true } & AuthIdentity) | { ok: false }> {
   const bearer = await verifyAgentBearer(request, env)
-  if (bearer.ok) return { ok: true, actor: bearer.actor }
+  if (bearer.ok) {
+    return {
+      ok: true,
+      actor: bearer.actor,
+      user: null,
+      role: 'agent',
+      isAdmin: true,
+      isBootstrap: false
+    }
+  }
 
-  const sessionActor = await verifySessionCookie(request, env)
-  if (sessionActor) return { ok: true, actor: sessionActor }
+  const sessionIdentity = await verifyUserSession(request, env)
+  if (sessionIdentity) {
+    return { ok: true, ...sessionIdentity }
+  }
 
   if (env.ALLOW_CF_ACCESS === 'true') {
     const cfEmail = request.headers.get('cf-access-authenticated-user-email')?.trim()
-    if (cfEmail) return { ok: true, actor: cfEmail }
+    if (cfEmail) {
+      const existing = await getUserByEmail(env, cfEmail)
+      if (existing) {
+        if (existing.disabled) return { ok: false }
+        const safe = toSafeUser(existing)
+        return {
+          ok: true,
+          actor: safe.display_name || safe.email,
+          user: safe,
+          role: safe.role,
+          isAdmin: safe.role === 'admin',
+          isBootstrap: false
+        }
+      }
+      return {
+        ok: true,
+        actor: cfEmail,
+        user: null,
+        role: 'bootstrap_admin',
+        isAdmin: true,
+        isBootstrap: false
+      }
+    }
   }
 
   return { ok: false }
+}
+
+export async function verifyAdminRequest(
+  request: Request,
+  env: Env
+): Promise<({ ok: true } & AuthIdentity) | { ok: false; status: 401 | 403 }> {
+  const owner = await verifyOwnerRequest(request, env)
+  if (!owner.ok) return { ok: false, status: 401 }
+  if (!owner.isAdmin) return { ok: false, status: 403 }
+  return owner
 }
 
 export async function canReadArtifact(
@@ -191,18 +314,18 @@ export async function canReadArtifact(
   request: Request,
   env: Env,
   tokenParam: string | null
-): Promise<{ allowed: boolean; isOwner: boolean; actor: string }> {
+): Promise<{ allowed: boolean; isOwner: boolean; isAdmin: boolean; actor: string }> {
   const owner = await verifyOwnerRequest(request, env)
   if (owner.ok) {
-    return { allowed: true, isOwner: true, actor: owner.actor }
+    return { allowed: true, isOwner: true, isAdmin: owner.isAdmin, actor: owner.actor }
   }
   if (artifact.visibility === 'public') {
-    return { allowed: true, isOwner: false, actor: 'guest' }
+    return { allowed: true, isOwner: false, isAdmin: false, actor: 'guest' }
   }
   if (artifact.visibility === 'unlisted' && tokenParam && tokenParam.trim().length > 0) {
     if (await timingSafeEqualStr(tokenParam.trim(), artifact.share_token)) {
-      return { allowed: true, isOwner: false, actor: 'reviewer' }
+      return { allowed: true, isOwner: false, isAdmin: false, actor: 'reviewer' }
     }
   }
-  return { allowed: false, isOwner: false, actor: '' }
+  return { allowed: false, isOwner: false, isAdmin: false, actor: '' }
 }

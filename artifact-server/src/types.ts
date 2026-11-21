@@ -7,6 +7,39 @@ export type ArtifactVisibility = (typeof ARTIFACT_VISIBILITIES)[number]
 export const COMMENT_STATUSES = ['open', 'resolved'] as const
 export type CommentStatus = (typeof COMMENT_STATUSES)[number]
 
+export const USER_ROLES = ['admin', 'member'] as const
+export type UserRole = (typeof USER_ROLES)[number]
+
+export interface UserRow {
+  id: string
+  email: string
+  display_name: string
+  role: UserRole
+  password_hash: string
+  pwd_version: number
+  disabled: number
+  created_at: number
+  updated_at: number
+}
+
+export interface SafeUser {
+  id: string
+  email: string
+  display_name: string
+  role: UserRole
+  disabled: boolean
+  created_at: number
+  updated_at: number
+}
+
+export interface AuthIdentity {
+  actor: string
+  user: SafeUser | null
+  role: UserRole | 'agent' | 'bootstrap_admin'
+  isAdmin: boolean
+  isBootstrap: boolean
+}
+
 export interface Env {
   DB: D1Database
   BUCKET?: R2Bucket
