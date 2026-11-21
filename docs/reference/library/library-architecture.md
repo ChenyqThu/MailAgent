@@ -347,6 +347,8 @@ URL；给 renderer 的 CSP 加 `unsafe-inline` / `unsafe-eval`；用 DOMPurify �
   与 `email_repository::_RRF_K` 同值）。**没下载语义模型时 `hybrid` 自动退化成纯 FTS**，返回体形状
   不变：`search_mode` 说实际跑了哪条、`semantic.available` 说模型在不在、每条命中的 `lane` 恒
   `'fts'`。能力缺席**不进 `warnings`**（那里只放这次 query 自身的事）。
+- **无锁检索、Query LRU 与渐进式前端搜索（2026-11 Wave 1）**：`src/library/service.py::search()` 已脱离全库 `BEGIN IMMEDIATE` 写锁，仅在确有 pending 文件时开短写事务，模型加载与 `encode_query` 在锁外执行并配 256 条线程安全 LRU；前端 `useProgressiveLibrarySearch.ts`（`200ms` 防抖 + IME 保护 + `AbortSignal`）先瞬回 `mode='fts'` 再异步合入混合语义结果，同步接入 `LibrarySearchPanel.tsx`、`LibraryWorkspace.tsx`、`CommandPalette.tsx` 与 `SearchTabPage.tsx`。
+- **统一本地嵌入引擎 `src/embedding/`（2026-11 Wave 4）**：`src/library/embed.py` 委托至统一懒加载包 `src/embedding/`（`onnx_provider.py` `EmbeddingGemma-300M` 256d MRL + int8/BQ 二段检索，`openai_compat.py` 本机 Ollama / LM Studio 兼容，支持空闲自动卸载）；模型下载支持 `Range` 断点续传、`MAILAGENT_HF_ENDPOINT` / `hf-mirror.com` 自动镜像切换，以及 `POST /api/library/embed/cancel` 实时取消与速度/ETA 回传（设置页 `LibrarySection.tsx` 可切换内置轻量模型或本机 Ollama / LM Studio）。
 - 🔴 响应里 `lane`（`fts|vec|both`）与 `match`（`filename|text`）是**两个独立字段**，不是一回事。
 
 ## 8 一致性闸

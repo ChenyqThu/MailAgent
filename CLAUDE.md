@@ -34,15 +34,15 @@
 | 报告 Agent 系统（日/周/月 + custom artifact） | 动 `src/reports/` / 报告 / Custom AI Agents 区前 | [`remote-chat-report/report-agent-prd.md`](./docs/reference/remote-chat-report/report-agent-prd.md) |
 | **Matters（事项）**（把「一件要推进的事」变成第一类对象） | 动 `src/matters/` / 事项前端 / 跟进 Agent / `matter_*` 表前 | [`matters/matters-architecture.md`](./docs/reference/matters/matters-architecture.md)（索引 [`matters/index.md`](./docs/reference/matters/index.md)） |
 | **通讯录 Contact Directory**（人级主键 + email 锚点账本） | 动 `src/contacts/` / `contact*` 三表 / `/api/contacts` / 通讯录前端 / compose 预填前 | [`contacts/contact-directory.md`](./docs/reference/contacts/contact-directory.md) |
-| **资料库 Library**（受管多根文件树 + 独立 `library.db` + 一组 agent 文件工具） | 动 `src/library/` / `library.db` / `/api/library` / 资料库前端 / `libpreview://` 预览 / 七个 `library_*` 工具前 | [`library/library-architecture.md`](./docs/reference/library/library-architecture.md) |
+| **资料库 Library**（受管多根文件树 + 独立 `library.db` + 一组 agent 文件工具 + 渐进混合检索 / 统一本地嵌入） | 动 `src/library/` / `src/embedding/` / `library.db` / `/api/library` / 资料库前端 / `libpreview://` 预览 / 七个 `library_*` 工具前 | [`library/library-architecture.md`](./docs/reference/library/library-architecture.md) |
 | **统一通知中心**（铃铛 + 持久化通知面，泛化 matter_attention 状态模型） | 动 `src/notify/center*` / `notification` 表 / 通知铃铛面板前 | [`notify-center/notification-center.md`](./docs/reference/notify-center/notification-center.md) |
 | Calendar Module（CalDAV → SQLite SSoT） | 动日历同步 / `calendar_event` 表前 | [`calendar/calendar-ops.md`](./docs/reference/calendar/calendar-ops.md) + [`calendar/calendar-module-prd.md`](./docs/reference/calendar/calendar-module-prd.md) |
 | v4 SQLite-SSoT（body/附件 SSoT + FTS5 全文搜索） | 动 `EmailRepository` / 双写 / 搜索前 | [`architecture/v4-ssot-ops.md`](./docs/reference/architecture/v4-ssot-ops.md) + [`architecture/architecture_v4_sqlite_ssot.md`](./docs/reference/architecture/architecture_v4_sqlite_ssot.md) |
 | 后端服务层（`src/services/` 统一写面 + async-jobs + 双层鉴权） | 改写操作（flag/resync/archive/pin/llm/compose/send）/ 加传输端 / 动 `src/services/` 前 | [`architecture/service-layer-architecture.md`](./docs/reference/architecture/service-layer-architecture.md) + `~/.claude/plans/cli-streamed-brook.md` |
-| AI Agent Harness + KOS（**AI SDK Gateway 是唯一引擎**） | 动前端 chat / gateway / KOS 集成前 | [`llm-agent/ai-sdk-gateway-architecture.md`](./docs/reference/llm-agent/ai-sdk-gateway-architecture.md)（**唯一引擎权威**：embedded gateway / 工具 / HITL 审批 / A2UI / memory / standing-context / serve-api 代理，§13）+ [`llm-agent/kos-integration-design.md`](./docs/reference/llm-agent/kos-integration-design.md) |
+| AI Agent Harness + KOS（**AI SDK Gateway 是唯一引擎**；含三层动态状态 / 过程折叠 / 工作台浮窗 / 实时流重连） | 动前端 chat / gateway / inspector / KOS 集成前 | [`llm-agent/ai-sdk-gateway-architecture.md`](./docs/reference/llm-agent/ai-sdk-gateway-architecture.md)（**唯一引擎权威**：embedded gateway / 工具 / HITL 审批 / A2UI / memory / standing-context / serve-api 代理，§13）+ [`llm-agent/kos-integration-design.md`](./docs/reference/llm-agent/kos-integration-design.md) |
 | Skill Delivery API（对外 agent 交付面） | 动 scoped key / `src/skills` / `/api/skills` / MCP / pack 前 | [`llm-agent/skill-delivery-api.md`](./docs/reference/llm-agent/skill-delivery-api.md) |
 | Capability & Context Foundation（配置面 + Standing Context） | 动 `src/agent_config` / `/api/agent/*` / standing-context prompt / installed skill / @mention 前 | [`llm-agent/capability-context-foundation.md`](./docs/reference/llm-agent/capability-context-foundation.md) |
-| **MCP Connectors**（外部服务工具面 · 直连 + Composio + 本地受管 `managed_local` 三轨） | 动 `src/connectors/` / connector 端点 / gateway connector 工具注入 / 第七能力卡 / **`/connectors` 配置台或内置工具审批档 UI** / `MAILAGENT_MCP_CONNECTORS` 前 | [`llm-agent/mcp-connectors.md`](./docs/reference/llm-agent/mcp-connectors.md) |
+| **MCP Connectors**（外部服务工具面 · 直连 + Composio + 受管本地 `managed_local` + 原生 `WebContentsView`/CDP 内置浏览器） | 动 `src/connectors/` / `embedded_browser*` / gateway connector 工具注入 / `/connectors` 配置台 / `MAILAGENT_MCP_CONNECTORS` 前 | [`llm-agent/mcp-connectors.md`](./docs/reference/llm-agent/mcp-connectors.md) |
 | **飞书对话**（IM agent 场地 + 飞书内按钮审批闭环） | 动 `src/im/` / `/api/im/*` / gateway `im-chat` 入口 / 设置-AI「飞书对话」区 / `MAILAGENT_IM_FEISHU` 前 | [`llm-agent/im-feishu-chat.md`](./docs/reference/llm-agent/im-feishu-chat.md) |
 | V2.1 远程 chat + report/agent（B-pure-unified 传输层） | 动远程 web chat / serve-api chat 端点 / chat 引擎语义前 | [`remote-chat-report/remote-chat-report-architecture.md`](./docs/reference/remote-chat-report/remote-chat-report-architecture.md) + [设计](./docs/reference/remote-chat-report/v2.1-stage3-chat-platform-design.md) + [看板](./docs/reference/remote-chat-report/v2.1-remote-chat-report-matrix.md) |
 | **Agent 体验大版本专项**（换引擎 + mem0 记忆重构史） | 理解 mem0 记忆演进史 / 跑 agent 回归网前 | 引擎架构 [`llm-agent/ai-sdk-gateway-architecture.md`](./docs/reference/llm-agent/ai-sdk-gateway-architecture.md) §13.18 + M1-M5 计划（已归档）[`memory-skill-core-refactor.md`](./docs/archive/2026-07/agent-experience-epic/memory-skill-core-refactor.md) + 回归网 `tests/agent_eval/` |
@@ -50,7 +50,7 @@
 | 存档/草稿箱 + 多文件夹同步（folder_sync） | 动 folder 同步前 | [`folder-sync/multi-folder-sync-design.md`](./docs/reference/folder-sync/multi-folder-sync-design.md) + [`folder-sync/folder-ui-prd.md`](./docs/reference/folder-sync/folder-ui-prd.md) |
 | **同步历史邮件**（一次性补回某段时间本地缺的邮件） | 动 `src/sync/history_sync.py` / backend 的 `scan_history_window` / `/api/history-sync` / 设置-同步「历史邮件」前 | [`sync/history-sync.md`](./docs/reference/sync/history-sync.md) |
 | Webhook / SSE / Openclaw / Notion API（集成面） | 动 webhook-server / 事件流 / 飞书回调前 | [`integrations/`](./docs/reference/integrations/) |
-| 邮件搜索（**单核 CORE#1** + Query DSL + FTS5 + agentic） | 改搜索语法 / 检索引擎 / agentic 前 | [`search/search-query-syntax.md`](./docs/reference/search/search-query-syntax.md) |
+| 邮件搜索（**单核 CORE#1** + Query DSL + FTS5/CJK2 + `semantic_index.db` 轻量语义 + agentic） | 改搜索语法 / 检索引擎 / `src/semantic/` / agentic 前 | [`search/search-query-syntax.md`](./docs/reference/search/search-query-syntax.md) |
 | 灵动岛 Ping Island 集成（**已于 2026-11 Phase 3b 全量退役**） | 查退役清单 / 确认保留护栏（historic `island_dispatch` DDL / `deeplink`）前 | [`remove-ping-island/README.md`](./docs/plans/remove-ping-island/README.md)（docs/plans，Phase 3b 已落地） |
 | 前端动效 + 列表性能铁律（Electron renderer） | 动前端列表/正文/动效前 | [`frontend/ARCHITECTURE.md`](./frontend/ARCHITECTURE.md) §7.1-7.2 + [`frontend/docs/motion-gsap.md`](./frontend/docs/motion-gsap.md) |
 | **灵动 Bot 头像**（状态化 SVG 单源模块 + v2 参数化 3D 引擎） | 动 `bot-avatar/` 模块 / AgentAvatar / 头像编辑器 / TurnPresence / avatar_json schema / 主 agent 身份前 | [`frontend/docs/bot-avatar.md`](./frontend/docs/bot-avatar.md) |
@@ -149,6 +149,8 @@
 | `MAILAGENT_INTERNAL_AGENT_TOOLS` | `true` | 主 agent 可读写四类**内建** agent 配置 + 事项跟进逐条配置。写工具恒 ask；白名单字段须有真实消费点 |
 | `FEISHU_NOTIFY_ENABLED` / `REDIS_EVENTS_ENABLED` / `ALERT_ENABLED` | `false` | 通知 / 事件消费 / 告警 |
 | `MAILAGENT_ASYNC_JOBS_ENABLED` | `true` | async_jobs 长任务子系统总闸（serve 进程内 JobWorker，`POST /api/jobs` 消费方）。2026-08-20 结束 C1 灰度翻默认；关闭时仍可 enqueue 但无 worker 执行。CLI 长任务不受影响 |
+| `MEM0_EMBEDDING_PROVIDER` | `fastembed` | mem0 长期记忆嵌入源：`fastembed`（默认）或 `local`（复用 `src/embedding/` 统一本地模型/本机 Ollama） |
+| `MAILAGENT_HF_ENDPOINT` | `""`（空） | 可选 HuggingFace 镜像源基址（同时兼容 `HF_ENDPOINT`），下载本地语义模型时优先尝试 |
 
 必填项：**硬必填仅 `USER_EMAIL`**；`MAIL_ACCOUNT_NAME` 有默认 `Exchange` 但需与实际账户名一致；Notion 三键（`NOTION_TOKEN` / `EMAIL_DATABASE_ID` / `CALENDAR_DATABASE_ID`）**可选**，空 = 本地-only 模式。全部可调项见 [`.env.example`](./.env.example)。
 
@@ -234,7 +236,9 @@ sqlite3 data/sync_store.db "SELECT COUNT(*) FROM email_metadata WHERE sync_statu
 | `src/calendar_notion/` | `sync.py` 日历→Notion · `caldav_reader.py` CalDAV 读 · `meeting_sync.py` 邮件 .ics → calendar_event |
 | `src/calendar_sync/` | Sprint 后新模块：repository / expander / reconciler / worker（CalDAV → SQLite SSoT） |
 | `src/converter/` | `html_converter.py`(HTML→Notion blocks+内联图) · `eml_generator.py` · `office_converter.py` · `attachment_text.py`(附件文本化) · `html_to_markdown.py` |
-| `src/repository/` | v4 `EmailRepository` / `AttachmentStore` / FTS5 搜索 |
+| `src/repository/` | v4 `EmailRepository` / `AttachmentStore` / FTS5 与 CJK 2-gram 搜索 |
+| `src/embedding/` | 统一本地嵌入引擎（ONNX `EmbeddingGemma-300M` MRL+BQ、本机 OpenAI-compatible Provider 与空闲卸载） |
+| `src/semantic/` | 独立轻量邮件语义索引库 `semantic_index.db`（单向量摘要 + 低速增量追平 + 混合召回） |
 | `src/llm_agent/` / `src/project_progress/` / `src/kos/` | 见对应下沉文档 |
 | `src/agent_config/` | Capability & Context 配置面（backend-owned `agent_config.db`）：统一 skill registry + Standing Context 文档 + history/rollback + 投影 + RULES 校验。配 `src/skills/installed.py` + `src/api/routers/agent.py` |
 | `src/reports/` | 报告 Agent 系统（日/周/月 + custom）：19 种 ReportDoc 块的 Python canonical vocabulary（TS 镜像有跨语言闸）+ 取数/摘要/装配 + worker + store |

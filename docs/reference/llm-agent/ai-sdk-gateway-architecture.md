@@ -1,7 +1,7 @@
 # Architecture — assistant-ui × Vercel AI SDK Gateway × MailAgent Domain Services
 
 > status: shipped
-> last-verified: 2026-07-16
+> last-verified: 2026-11-21
 > decision: use AI SDK for chat orchestration, not for MailAgent domain backend replacement
 > **Phase 00 spike：✅ 已完成（2026-06-23），裁决 = GO。实测结论 + 证据见 [§13](#13-phase-00-spike-实测结论2026-06-23go)。**
 > **Cutover：✅ 已发布（v0.20.0）。S3（2026-07-03）起 legacy 自研 TS harness（`frontend/src/shared/chat/`）已整体删除，AI SDK Gateway 是唯一引擎 —— 见 [§13.18](#1318-s3-落地2026-07-03第三波删-legacy-harness-engine-归一)。**
@@ -2044,3 +2044,17 @@ agent_eval `baselines/library.jsonl` + `AGT-LIBRARY-001..004`（含 CAS 重试�
    - `frontend/src/ai-gateway/tools/computer_use.ts` 经 `auditedWriteTool(` 注册单一入口 `computer_use_run`（`policy.ts` 归类 `class: 'exec'`，`src/agent_config/tool_prefs.py` `configurable=False` 出厂 `"ask"`）；子循环独立父子 Session、仅挂载过滤后的 `mcp__browser_use__*` / `mcp__desktop_use__*` 子工具，**绝不递归暴露 `computer_use_run` 或邮件/文件/命令工具**。
    - **滑窗截图裁剪**：子 `prepareStep` 仅保留最近 `MAX_CHILD_VISUAL_STEPS = 2` 步视觉截图，更早步骤替换为 `[screenshot from step #k omitted: see action summary]`；系统提示词要求优先 AX/DOM（`browser_snapshot` / 桌面 `@ref`），窗口级截图兜底；UI 与文档明示 `privacyMaskMiddleware` 不遮罩图像原始像素。
    - **Scope Guard 与终态停靠**：阻断 `file://`/`javascript:`/`data:`/`chrome://` 与域名后缀伪造（`status: 'scope_violation'`），遇 `stop_before_submit !== false` 的不可逆提交/发送/付款动作停靠返回 `status: 'awaiting_confirmation'`；`im_chat` / `untrusted_trigger` / `contact_governance` / 未显式授权 `cron_headless` 结构性封禁，仅 `manual_chat` 与显式发起的 `propose_only` `matter_item_run`（Gateway Belt 1/2 + Python DB 核验 Belt 3）按有界范围执行。
+
+---
+
+## 13.33 对话体验升级、实时流续接与右侧会话工作台浮窗（2026-11）
+
+1. **自适应平滑流式（`frontend/src/ai-gateway/adaptiveSmoothStream.ts`）**：
+   - 替换 `chatRun.ts` 裸固定延迟 `smoothStream`：`reasoning-delta` 与工具/步骤帧 **0ms 直通**，文本 `text-delta` 根据当前积压队列长度动态调节 chunk 步长（队列短时平滑输出，积压时加速追赶），消除长思考或慢模型下的尾部卡顿。
+2. **三层动态状态与统一过程时间轴折叠**：
+   - **三层状态表达**：`spinnerVerbs.ts`（自然中英文等待动词词表）+ `toolNarration.ts`（按工具家族生成语义化叙述与组头汇总，消解裸英文名与原始参数预览）+ `reasoningSummary.ts`（从流式思考正文实时提取语义短标题，驱动 `TurnPresence.tsx` 与折叠条头）；`searchAgentRun.ts` 同步发出真实步骤短语驱动 `⌘K` `PaletteThinkingPhrases.tsx`。
+   - **统一过程时间轴与自动收起**：`turnProcessSegments.ts` 纯函数把交错的思考与只读/过程工具段合并渲染为 `TurnProcessGroup.tsx`（进行中展示紧凑动态轨迹；正文开始流出或本轮结束后自动 `CollapsibleRegion` 折叠为耗时摘要），并**强制保持** pending 审批卡、失败错误卡与写操作结果卡外露不吞。已完结的 `computer_use_run` 卡片（`ComputerUseApprovalCard.tsx`）同步纳入自动紧凑折叠，避免多次浏览器/桌面操作刷屏。
+3. **Notion 风格头部栏、Artifact 优先右侧工作台浮窗与实时流重连**：
+   - **对话顶栏与浮窗**：`AgentChatHeaderBar.tsx` + `AgentViewLayout.tsx` 采用 Notion 风格精简顶栏（头像、名称/对话标题、新会话、分享、工作台浮窗开关、置顶、更多操作及内置浏览器入口）。
+   - **右侧工作台浮窗（零新表实时派生）**：`deriveSessionWorkspace.ts` 从当前会话 `UIMessage.parts`、上下文芯片、附件与已用连接器纯函数派生工作台视图（重点突出 `artifacts` 产物预览，精简高频工具对 Skills 的噪点，连接器会话禁用改为轻量图标）；`SessionInspectorPane.tsx` 与 `InspectorArtifactPreview.tsx` 支持就地分屏预览 Markdown / HTML / 图片 / 邮件草稿 / Plan。
+   - **关闭 Tab 重开实时流续接（`activeRuns.ts` / `server.ts` / `useMailAgentAiSdkRuntime.ts`）**：Active Run 除占槽与 `onFinish` 持久化外，在内存中维护有序 chunk 回放缓冲与多订阅者扇出；关闭/切换对话 Tab 后重新打开，若运行仍在进行则先重放已产出 chunk 再无缝续接后续实时增量流（同时在 `SessionInspectorBridge.tsx` 实时同步过程中产生的 Artifacts）。

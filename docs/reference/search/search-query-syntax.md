@@ -408,3 +408,12 @@ trigram 路径早期把 hit 的 `snippet` 设成 `''`（前端只剩 subject 高
 Agent 元数据工具：布尔参数省略或传 null 表示不过滤，显式 false 原样生效，并回显实际生效的过滤条件。读取缺失正文时区分元数据缺失、正文缺失、所需格式缺失，给出定向补取命令，不能据此推断内容不存在；同线程后来的邮件可能引用了旧内容。
 
 Notion 日期过滤不再挡住已抓取正文的本地入库。新的 skipped 行记录 `sync_skip_reason = notion_date_filter`，历史行的 NULL 视为原因未知。定向补取用 `mailagent backfill body --internal-ids ID`；批量补取可加 `--include-unmirrored`，沿用日期、邮箱、数量上限与 dry-run。两者都不会在搜索时自动抓取历史邮件。
+
+## 11. 2 字中文倒排索引与邮件轻量语义检索（2026-11）
+
+1. **2 字中文 CJK 2-gram FTS5 并行表（DB v75）**：
+   - 新增 `src/repository/cjk_bigram.py::extract_cjk_bigrams` 与内容型 FTS5 表 `email_body_fts_cjk2`、`email_attachment_fts_cjk2`（含同步触发器），前端 `EXPECTED_DB_VERSION` 同步至 `75`。
+   - `src/mail/cjk2_backfill_worker.py` 在后台低频分批为历史库回填 2-gram 索引并写入 `sync_state['cjk2_backfill_done']`；`EmailRepository` 在 2 字中文查询分支检测到回填完成后直接走 `MATCH`，未完成前自动回退原有 trigram `LIKE`（热库 2 字检索由 ~1.4s 降至毫秒级）。
+2. **邮件轻量单向量语义索引（`src/semantic/` + `<data>/semantic_index.db`）**：
+   - 新增独立库 `semantic_index.db`（`critical=False`，独立版本梯，不进 `sync_store.DB_VERSION`），复用 `src/embedding/` 统一本地模型为每封邮件存储主题 + 发件人 + 首段摘要单向量，由 `src/semantic/service.py` 低速增量追平。
+   - `email_repository.py` 与 `⌘K` / `/search` 支持在长自然语言查询或 FTS 少命中时渐进触发混合语义召回，与关键词检索 RRF 融合呈现；未下载或未就绪本地模型时零阻塞、自动保持纯 FTS。

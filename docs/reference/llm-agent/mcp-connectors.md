@@ -9,7 +9,7 @@
 > 自己的能力交付给外部 agent —— 我们是 MCP **server**）；本文是我们当 MCP **client**。
 > gateway 工具注册的总体架构见 [`ai-sdk-gateway-architecture.md`](./ai-sdk-gateway-architecture.md)。
 
-`status: living` · `last-verified: 2026-11-19`（2026-11 Computer Use 接入与双向 MCP 演进：新增 `sse` 客户端传输与 `ImageContent` Pillow 多模态归一化、第三轨 `managed_local`（`browser_use` / `desktop_use` 一键受管安装器与 Chrome 三模式 / TCC 权限面板）、`StdioSessionPool` 空闲 TTL 休眠、以及 `matter_followup` `propose_only` `computer_use_run` 的 DB 核验 Belt 3。在此之前：08-06 双轨预置目录 §12 与 `/connectors` 配置台 §13）
+`status: living` · `last-verified: 2026-11-21`（2026-11 Computer Use 与原生内置浏览器演进：新增 `sse` 客户端传输与 `ImageContent` Pillow 多模态归一化、第三轨 `managed_local`（`browser_use` / `desktop_use` 一键受管安装器与 Chrome 三模式 / TCC 权限面板）、`StdioSessionPool` 空闲 TTL 休眠、`matter_followup` `propose_only` `computer_use_run` 的 DB 核验 Belt 3，以及桌面端 Electron 原生 `WebContentsView` + 目标隔离 loopback CDP 桥 + 按域名 Chrome Cookie 导入与 OAuth/SSO 弹窗支持。在此之前：08-06 双轨预置目录 §12 与 `/connectors` 配置台 §13）
 
 ---
 
@@ -1095,10 +1095,12 @@ owner 明确要求（LobeHub 截图里是展开的，我们要更收敛的默认
   - `computer_use.ts` 注入 `onActivity` 与 `registerAbort`，在 `prepareStep` 及子工具调用前后汇报当前 `surface`（`desktop` / `browser`）、动作名与目标；用户触发 `stopActive` 时立即中止 `childAbort` 并干净返回 `{ status: 'stopped_by_user', ... }`。
   - `frontend/src/electron/main/computer_use_overlay.ts` 仅在 `active && surface === 'desktop'` 时展示置顶（`screen-saver`）、跨桌面且全屏鼠标穿透的透明 `BrowserWindow`（`?cuOverlay=1`）；纯 `browser_use` 任务绝不触发全局屏幕遮罩。
   - `frontend/src/electron/renderer/computer-use/ComputerUseOverlayApp.tsx` 与 `index.css` `[data-cu-overlay='1']` 规则禁用 `body::before` 遮罩以保持完全透明，仅在顶部居中悬浮药丸上动态切换 `setIgnoreMouseEvents` 提供实时步骤显示与「停止 / 接管」按钮。
-- **内置受管浏览器 CDP 守护与 WebSocket 双向画面流**：
-  - `src/connectors/managed_browser.py`（`ManagedBrowserManager` / `managed_browser` 单例）按需拉起共享持久 `<runtime_dir>/profile` 的 `--headless=new` Chromium（空闲 600s 且零 viewer 自动退出）；`client.py` 对 `isolated_profile` 改写为 `--cdp-endpoint=<url>` 接入同一实例；`chrome_import.py` 在 Cookie 注入热刷（`inject_cookies_live_sync`）与打开外部 Chrome 窗口前先 `stop_sync()` 释放 `SingletonLock`。
-  - `src/api/auth.py::verify_websocket_access` 与 `src/api/routers/connector.py` 暴露 `GET /api/connector/browser_use/live/status`、`POST /api/connector/browser_use/live/stop` 及 `WS /api/connector/browser_use/live`；`chat_local_bridge.ts` 对 `ws://127.0.0.1:${port}/*` 注入 `X-MailAgent-Local-Token`，`index.html` CSP `connect-src` 显式放行 `ws://127.0.0.1:*`。
-  - 双向桥通过 `Page.screencastFrame` 推送 JPEG 画面与标签页状态（支持 Playwright 新开标签自动跟随），并转发等比映射后的键鼠事件及中文输入法 `Input.insertText`。
-- **对话右侧可折叠分栏 + `/browser` 独立单例标签页**：
-  - `frontend/src/shared/components/browser/ManagedBrowserPane.tsx` 提供多标签页切换/新建/关闭、地址导航/前进/后退/刷新、Agent 操控状态条与「停止 / 接管」、外部 Chrome 窗口切换、停止浏览器内核，以及 `<canvas>` 实时交互画布（`resolveBrowserLiveWsUrl` 单源于 `@shared/lib/apiBaseUrl`）。
-  - `AgentViewLayout.tsx` 与 `managed-browser-ui.ts` / `useComputerUseActivityBridge.ts` 接入对话右侧可拖拽分栏（`browser` 任务启动时自动展开，已手动收起或已在 `/browser` 标签页时不重复展开）；`tab-workspace.ts` / `useTabRouteSync.ts` / `TabStrip.tsx` / `BrowserTabPage.tsx` / `router-instance.tsx` 注册 `/browser`（`BROWSER_TARGET_ID = 0`）全局单例标签页并支持与右侧栏一键互转。
+- **内置受管浏览器架构（2026-11 阶段 2 升级）**：
+  - **桌面端 Electron 原生 `WebContentsView`（默认主路径）**：`frontend/src/electron/main/embedded_browser.ts`（`EmbeddedBrowserManager`）与 `frontend/src/shared/embeddedBrowserContract.ts` 基于 Electron `WebContentsView`（`partition: "persist:mailagent-browser"`、`sandbox: true`、`contextIsolation: true`、零 preload）渲染真实 Chromium 视图；面板关闭或应用重启后登录态与站点数据持久化保留。构建 session 时清理 UA 中的 `Electron/` 与 `MailAgent/` 标识（`sanitizeBrowserUserAgent`）。
+  - **OAuth/SSO 受控弹窗兼容**：`attachNavigationAndPopupHooks` 对普通外链/新标签保持转为受管标签页，对满足弹窗特征（`disposition === 'new-window'` / 窗口尺寸 `features` / `about:blank` / 自定义非保留 `frameName`，且 URL 通过 `http/https` 安全白名单）的 `window.open` 放行共享 `persist:mailagent-browser` 分区的受控沙箱子窗口（上限 `MAX_AUTH_POPUP_WINDOWS = 4`，保留 `window.opener` 回调，关闭时 `flushStore()` 落盘并在 `resetSession`/`dispose` 统一回收）。
+  - **目标隔离 Loopback CDP 桥接（零外部依赖）**：`loopback_ws.ts` 实现轻量 RFC 6455 loopback WebSocket，`embedded_browser_cdp.ts`（`EmbeddedBrowserCdpServer`）仅监听 `127.0.0.1`：拒绝任意 `Origin` 头（`403`）、校验 `Host`（`403`）、HTTP 控制端点恒定时间校验 `X-MailAgent-Local-Token`（`401`）、WebSocket 校验随机 32-hex `/cdp/<token>` 路径（`403`），且 `/json/list` 与 CDP `Target.*` 仅暴露受管 `persist:mailagent-browser` 标签页，MailAgent 主界面 `BrowserWindow` 对 Playwright/Agent 完全不可见。
+  - **Python 桥接与 Web 端降级**：`backend_lifecycle.ts` 与 `POST /api/connector/browser_use/desktop-bridge` 向后端同步 `MAILAGENT_DESKTOP_BROWSER_CDP_WS_URL` / `MAILAGENT_DESKTOP_BROWSER_CONTROL_URL`；`src/connectors/desktop_bridge.py`、`client.py` 与 `chrome_import.py` 将 `PLAYWRIGHT_MCP_CDP_ENDPOINT` 与 Cookie 读写自动路由到 Electron 原生引擎（`GET /live/status` 返回 `engine: "electron_native"`）；非桌面/Web 构建继续保留 `managed_browser.py` + WebSocket `Page.screencastFrame` 画布降级路径。
+- **按域名 Chrome Cookie 预览导入、登录态管理与链接转交**：
+  - `GET /api/connector/browser_use/chrome-domains` 只读扫描本机 Chrome Cookie SQLite 域名统计与敏感域标记，**不触发 macOS Keychain 阻塞**；`POST /api/connector/browser_use/import-chrome-cookies` 支持按选中域名精准解密并热注入当前持久会话；`GET /api/connector/browser_use/cookies/domains` 与 `POST /api/connector/browser_use/cookies/clear` 支持在内置浏览器 `⋮` 菜单 `BrowserCookieManagerPanel.tsx` 与设置页查看或按域清理已保存登录态。
+  - `frontend/src/shared/state/open-in-browser.ts`（`openUrlInBuiltInBrowser`）支持在对话回复、右侧 Inspector 与邮件正文中一键将外部链接转交内置浏览器打开。
+  - `ManagedBrowserPane.tsx` 桌面端同步宿主容器边界并按弹窗/下拉覆盖物（`cookiePanelOpen || menuOpen || hasCoveringOverlay`）自动避让原生视图 Z 序；`AgentViewLayout.tsx`、`TabStrip.tsx` 与 `BrowserTabPage.tsx` 继续承载右侧可拖拽分栏与 `/browser` 全局单例标签页。
