@@ -37,6 +37,27 @@ function isPartRunning(part: TurnStagePart): boolean {
   return false
 }
 
+function deriveLiveSummary(
+  groupParts: readonly TurnStagePart[],
+  t: ReturnType<typeof useTranslation>['t']
+): string {
+  for (let i = groupParts.length - 1; i >= 0; i -= 1) {
+    const part = groupParts[i]
+    if (!part) continue
+    if (part.type === 'tool-call' && isPartRunning(part) && part.toolName) {
+      return narrateToolCall(
+        { toolName: part.toolName, args: part.args, argsText: part.argsText },
+        t
+      )
+    }
+    if (part.type === 'reasoning' && part.status?.type === 'running') {
+      const heading = extractReasoningHeading(part.text)
+      if (heading) return t('chat.turnNarration.thinkingHeading', { heading })
+    }
+  }
+  return t('chat.processTimeline.running')
+}
+
 export interface TurnProcessGroupProps {
   readonly foldableIndices: readonly number[]
   readonly hasFollowingContent: boolean
@@ -79,23 +100,7 @@ export function TurnProcessGroup({
 
   const [showAllLive, setShowAllLive] = useState(false)
 
-  const liveSummary = useMemo(() => {
-    for (let i = groupParts.length - 1; i >= 0; i -= 1) {
-      const part = groupParts[i]
-      if (!part) continue
-      if (part.type === 'tool-call' && isPartRunning(part) && part.toolName) {
-        return narrateToolCall(
-          { toolName: part.toolName, args: part.args, argsText: part.argsText },
-          t
-        )
-      }
-      if (part.type === 'reasoning' && part.status?.type === 'running') {
-        const heading = extractReasoningHeading(part.text)
-        if (heading) return t('chat.turnNarration.thinkingHeading', { heading })
-      }
-    }
-    return t('chat.processTimeline.running')
-  }, [groupParts, t])
+  const liveSummary = deriveLiveSummary(groupParts, t)
 
   const settledSummary = useMemo(() => {
     const base = t('chat.processTimeline.settledSummary', { count: foldableIndices.length })
