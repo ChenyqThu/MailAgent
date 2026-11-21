@@ -771,6 +771,12 @@ async def import_browser_chrome_cookies(
         )
     except LocalInstallerError as e:
         raise APIError(e.code, e.message, http_status=e.status_code) from None
+    except (TimeoutError, asyncio.TimeoutError):
+        raise APIError(
+            "E_COOKIE_INJECT_FAILED",
+            "向内置浏览器写入登录态超时，请重试。",
+            http_status=504,
+        ) from None
 
     store = _store()
     existing = await run_in_threadpool(store.get_connector, "browser_use")

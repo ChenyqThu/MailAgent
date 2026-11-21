@@ -162,25 +162,60 @@ def test_decrypt_chrome_cookies_handles_v20_v24_filters_and_cleanup(tmp_path, mo
         "expires": int(by_name["__Host-token"]["expires"]),
     }
 
-    # Verify Chromium < 130 (db_version=20) without 32-byte digest prefix
+    # Verify Chromium < 130 (db_version=20) without 32-byte digest prefix, and session cookie persistence
     db_v20 = tmp_path / "Chrome" / "Profile 1" / "Cookies"
     _create_fake_cookies_db(
         db_v20,
         db_version=20,
         secret=secret,
         rows=[
-            ("oa.internal", "SESSION", _encrypt_chrome_v10(secret, b"legacy-val"), "/", 0, 0, 1, 2)
+            ("oa.internal", "SESSION", _encrypt_chrome_v10(secret, b"legacy-val"), "/", 0, 0, 1, 2),
+            ("oa.internal", "V11_TOK", b"v11" + _encrypt_chrome_v10(secret, b"v11-val")[3:], "/", 0, 1, 1, 1),
         ],
     )
-    out_v20 = chrome_import.decrypt_chrome_cookies_from_db(db_v20, secret)
-    assert len(out_v20) == 1
-    assert out_v20[0]["value"] == "legacy-val"
-    assert out_v20[0]["sameSite"] == "Strict"
+    now_fixed = 1_700_000_000.0
+    out_v20 = chrome_import.decrypt_chrome_cookies_from_db(db_v20, secret, now_epoch=now_fixed)
+    assert len(out_v20) == 2
+    by_v20 = {c["name"]: c for c in out_v20}
+    assert by_v20["SESSION"]["value"] == "legacy-val"
+    assert by_v20["SESSION"]["sameSite"] == "Strict"
+    assert by_v20["SESSION"]["expires"] == now_fixed + chrome_import._SESSION_COOKIE_PERSIST_SECONDS
+    assert by_v20["V11_TOK"]["value"] == "v11-val"
 
     # Temp Staging directory must be completely wiped in finally
     rt_base = tmp_path / "runtimes"
     if rt_base.exists():
         assert [p.name for p in rt_base.iterdir() if p.name.startswith(".tmp-")] == []
+
+
+def test_inject_cookies_uses_cold_cdp_when_managed_browser_stopped(tmp_path, monkeypatch):
+    from src.connectors import managed_browser as mb_mod
+
+    monkeypatch.setattr(local_installer, "_RUNTIMES_DIR_OVERRIDE", tmp_path / "runtimes")
+    rt_dir = tmp_path / "runtimes" / "browser_use"
+    cli_path = rt_dir / "pkg" / "cli.js"
+    cli_path.parent.mkdir(parents=True, exist_ok=True)
+    cli_path.write_text("console.log('ok')\n", encoding="utf-8")
+    (rt_dir / "manifest.json").write_text(
+        json.dumps({"connector_id": "browser_use", "entrypoint": "pkg/cli.js"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mb_mod.managed_browser, "is_running", lambda: False)
+
+    calls: list[tuple[list[dict], Path]] = []
+
+    def _fake_cold_sync(cookies, *, profile_dir=None):
+        calls.append((cookies, profile_dir))
+        return {"imported": len(cookies), "skipped": 0}
+
+    monkeypatch.setattr(mb_mod.managed_browser, "inject_cookies_cold_sync", _fake_cold_sync)
+    res = chrome_import.inject_cookies_into_managed_profile(
+        [{"name": "sid", "value": "abc", "domain": "dms.company.com", "path": "/"}],
+        runtime_dir=rt_dir,
+    )
+    assert res == {"imported": 1, "skipped": 0}
+    assert len(calls) == 1
+    assert calls[0][1] == rt_dir / "profile"
 
 
 def test_import_chrome_cookies_end_to_end_mocked(tmp_path, monkeypatch):

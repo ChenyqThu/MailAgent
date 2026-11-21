@@ -146,6 +146,27 @@ class _CdpConnection:
             await self._ws.close()
 
 
+async def _graceful_cdp_close(cdp_url: str, timeout: float = 1.5) -> None:
+    """在强杀进程前发送 ``Browser.close`` 让 Chromium 把 Cookie / Storage 完整落盘。"""
+    try:
+        from websockets.asyncio.client import connect as ws_connect
+
+        async with httpx.AsyncClient(trust_env=False, timeout=1.0) as client:
+            resp = await client.get(f"{cdp_url}/json/version")
+            if resp.status_code != 200:
+                return
+            info = resp.json()
+        ws_url = info.get("webSocketDebuggerUrl") if isinstance(info, dict) else None
+        if not isinstance(ws_url, str) or not ws_url:
+            return
+        async with ws_connect(ws_url, proxy=None, open_timeout=timeout) as ws:
+            await ws.send(json.dumps({"id": 1, "method": "Browser.close"}))
+            with suppress(Exception):
+                await asyncio.wait_for(ws.recv(), timeout=timeout)
+    except Exception:  # noqa: BLE001 — 优雅关停尽力而为，兜底仍走 _terminate_proc_sync
+        pass
+
+
 class ManagedBrowserManager:
     """单例管理内置无头/可视 Chrome 进程、CDP 列表、热 Cookie 注入与 WebSocket Screencast。"""
 
@@ -219,11 +240,24 @@ class ManagedBrowserManager:
                 await self.stop()
                 return
 
-    async def ensure_running(self, *, headless: bool = True) -> str:
+    async def ensure_running(
+        self,
+        *,
+        headless: bool = True,
+        profile_dir: Optional[Any] = None,
+    ) -> str:
         """按需拉起或复用内置受管 Chrome（绑定 loopback 随机端口，使用持久 Profile）。"""
+        target_profile_dir = (
+            profile_dir if profile_dir is not None else runtime_dir_for("browser_use") / "profile"
+        )
+        rt_dir = target_profile_dir.parent
         async with self._get_lock():
             existing_url = self.cdp_url
-            if existing_url is not None and self._headless == headless:
+            if (
+                existing_url is not None
+                and self._headless == headless
+                and getattr(self, "_profile_dir", target_profile_dir) == target_profile_dir
+            ):
                 if await self._probe_version(existing_url) is not None:
                     self.touch()
                     self._ensure_reaper()
@@ -240,15 +274,13 @@ class ManagedBrowserManager:
                     status_code=404,
                 )
 
-            rt_dir = runtime_dir_for("browser_use")
-            profile_dir = rt_dir / "profile"
-            profile_dir.mkdir(parents=True, exist_ok=True)
+            target_profile_dir.mkdir(parents=True, exist_ok=True)
             port = _pick_free_loopback_port()
             cdp_url = f"http://127.0.0.1:{port}"
 
             cmd = [
                 chrome_exe,
-                f"--user-data-dir={profile_dir}",
+                f"--user-data-dir={target_profile_dir}",
                 f"--remote-debugging-port={port}",
                 "--remote-debugging-address=127.0.0.1",
                 "--no-first-run",
@@ -293,6 +325,7 @@ class ManagedBrowserManager:
                 self._port = port
                 self._cdp_url = cdp_url
                 self._headless = headless
+                self._profile_dir = target_profile_dir
                 self._last_activity = time.monotonic()
 
             self._ensure_reaper()
@@ -310,10 +343,13 @@ class ManagedBrowserManager:
         self._reaper_task = None
         with self._proc_lock:
             proc = self._proc
+            cdp_url = self._cdp_url
             self._proc = None
             self._port = None
             self._cdp_url = None
         if proc is not None:
+            if cdp_url and proc.poll() is None:
+                await _graceful_cdp_close(cdp_url)
             await asyncio.to_thread(_terminate_proc_sync, proc)
             logger.info("[managed_browser] stopped Chromium")
 
@@ -447,26 +483,100 @@ class ManagedBrowserManager:
 
         from websockets.asyncio.client import connect as ws_connect
 
-        ws_url = targets[0]["ws_url"]
-        async with ws_connect(ws_url, proxy=None, open_timeout=5.0) as ws:
-            cdp = _CdpConnection(targets[0]["id"], ws)
-            await cdp.call("Network.enable", timeout=3.0)
-            # 清理 Chromium 不接受或 Playwright 特有的多余字段
-            sanitized: list[dict[str, Any]] = []
-            for c in cookies:
-                item = {
-                    k: v
-                    for k, v in c.items()
-                    if k in ("name", "value", "url", "domain", "path", "secure", "httpOnly", "sameSite", "expires")
-                }
+        sanitized: list[dict[str, Any]] = []
+        for c in cookies:
+            item = {
+                k: v
+                for k, v in c.items()
+                if k in ("name", "value", "url", "domain", "path", "secure", "httpOnly", "sameSite", "expires")
+            }
+            if item:
                 sanitized.append(item)
-            await cdp.call("Network.setCookies", {"cookies": sanitized}, timeout=8.0)
+
+        if not sanitized:
+            return {"imported": 0, "skipped": len(cookies)}
+
+        ws_url = targets[0]["ws_url"]
+        imported = 0
+        skipped = len(cookies) - len(sanitized)
+        try:
+            async with ws_connect(ws_url, proxy=None, open_timeout=5.0) as ws:
+                cdp = _CdpConnection(targets[0]["id"], ws)
+
+                async def _read_cdp_replies() -> None:
+                    async for raw_msg in ws:
+                        try:
+                            data = json.loads(raw_msg)
+                        except (ValueError, TypeError):
+                            continue
+                        if isinstance(data, dict):
+                            cdp.resolve_if_reply(data)
+
+                reader_task = asyncio.create_task(_read_cdp_replies())
+                try:
+                    await cdp.call("Network.enable", timeout=3.0)
+                    chunk_size = 100
+                    for idx in range(0, len(sanitized), chunk_size):
+                        chunk = sanitized[idx : idx + chunk_size]
+                        try:
+                            await cdp.call("Network.setCookies", {"cookies": chunk}, timeout=10.0)
+                            imported += len(chunk)
+                        except (TimeoutError, asyncio.TimeoutError):
+                            raise
+                        except RuntimeError:
+                            for single in chunk:
+                                try:
+                                    await cdp.call("Network.setCookies", {"cookies": [single]}, timeout=5.0)
+                                    imported += 1
+                                except Exception:  # noqa: BLE001 — 单条损坏 Cookie 跳过，不阻断整批导入
+                                    skipped += 1
+                    await asyncio.sleep(0.2)
+                finally:
+                    reader_task.cancel()
+                    with suppress(asyncio.CancelledError, Exception):
+                        await reader_task
+                    await cdp.close()
+        except LocalInstallerError:
+            raise
+        except (TimeoutError, asyncio.TimeoutError, OSError, RuntimeError) as exc:
+            raise LocalInstallerError(
+                "E_COOKIE_INJECT_FAILED",
+                f"向受管浏览器注入 Cookie 失败：{exc}",
+                status_code=500,
+            ) from exc
+
         self.touch()
-        return {"imported": len(cookies), "skipped": 0}
+        return {"imported": imported, "skipped": skipped}
 
     def inject_cookies_live_sync(self, cookies: list[dict[str, Any]]) -> dict[str, int]:
         """在 threadpool 线程中同步调用热 Cookie 注入。"""
         return asyncio.run(self.inject_cookies_live(cookies))
+
+    async def inject_cookies_cold(
+        self,
+        cookies: list[dict[str, Any]],
+        *,
+        profile_dir: Optional[Any] = None,
+    ) -> dict[str, int]:
+        """未运行受管浏览器时，临时以无头模式拉起真实 Chrome、通过 CDP 注入并优雅落盘退出。"""
+        if not cookies:
+            return {"imported": 0, "skipped": 0}
+        was_running = self.is_running()
+        await self.ensure_running(headless=True, profile_dir=profile_dir)
+        try:
+            return await self.inject_cookies_live(cookies)
+        finally:
+            if not was_running:
+                await self.stop()
+
+    def inject_cookies_cold_sync(
+        self,
+        cookies: list[dict[str, Any]],
+        *,
+        profile_dir: Optional[Any] = None,
+    ) -> dict[str, int]:
+        """在 threadpool 线程中同步调用冷启动 Cookie 注入。"""
+        return asyncio.run(self.inject_cookies_cold(cookies, profile_dir=profile_dir))
 
     async def stream_live_session(self, websocket: Any, *, headless: bool = True) -> None:
         """把前端 WebSocket 桥接到运行中的受管 Chrome Target（双向 Screencast + 键鼠操控）。"""

@@ -32,7 +32,6 @@ from loguru import logger
 from src.connectors.local_installer import (
     LocalInstallerError,
     _find_executable,
-    _find_node,
     _resolve_installed_entrypoint,
     resolve_mcp_runtimes_dir,
     runtime_dir_for,
@@ -40,90 +39,13 @@ from src.connectors.local_installer import (
 
 _PROFILE_ID_RE = re.compile(r"^(Default|Profile \d+)$")
 _CHROMIUM_EPOCH_OFFSET_SEC = 11644473600.0
+#: 导入时无过期时间的会话 Cookie（``has_expires=0`` / ``expires_utc=0``）赋予 7 天持久化 TTL，
+#: 避免内置浏览器关闭、空闲回收或 App 重启后登录态立即消失（服务端自身仍会校验令牌有效期）。
+_SESSION_COOKIE_PERSIST_SECONDS = 7 * 24 * 60 * 60
 _KEYCHAIN_SERVICE = "Chrome Safe Storage"
 _PBKDF2_SALT = b"saltysalt"
 _PBKDF2_ITERATIONS = 1003
 _AES_IV = b" " * 16
-
-_COOKIE_INJECT_SCRIPT = r"""
-const fs = require('node:fs');
-const path = require('node:path');
-const { createRequire } = require('node:module');
-
-async function loadChromium(pkgDir) {
-  const mcpPkg = path.join(pkgDir, 'node_modules', '@playwright', 'mcp', 'package.json');
-  const candidates = [];
-  if (fs.existsSync(mcpPkg)) {
-    const req = createRequire(mcpPkg);
-    candidates.push(() => req('playwright-core'));
-    candidates.push(() => req('playwright'));
-  }
-  const topReq = createRequire(path.join(pkgDir, 'package.json'));
-  candidates.push(() => topReq('playwright-core'));
-  candidates.push(() => topReq('playwright'));
-  for (const loader of candidates) {
-    try {
-      const mod = loader();
-      if (mod && mod.chromium) return mod.chromium;
-    } catch (_) {}
-  }
-  throw new Error('playwright-core not found under ' + pkgDir);
-}
-
-(async () => {
-  const pkgDir = process.env.MAILAGENT_PW_PKG_DIR;
-  const profileDir = process.env.MAILAGENT_PW_PROFILE_DIR;
-  const raw = fs.readFileSync(0, 'utf-8');
-  const cookies = JSON.parse(raw || '[]');
-  const chromium = await loadChromium(pkgDir);
-
-  let context;
-  try {
-    context = await chromium.launchPersistentContext(profileDir, {
-      channel: 'chrome',
-      headless: true,
-    });
-  } catch (err) {
-    const msg = String(err && err.message ? err.message : err);
-    if (/SingletonLock|ProcessSingleton|profile directory.*in use|already running/i.test(msg)) {
-      throw err;
-    }
-    if (/executable|channel|chrome/i.test(msg)) {
-      context = await chromium.launchPersistentContext(profileDir, { headless: true });
-    } else {
-      throw err;
-    }
-  }
-
-  let imported = 0;
-  let skipped = 0;
-  try {
-    const chunkSize = 100;
-    for (let i = 0; i < cookies.length; i += chunkSize) {
-      const chunk = cookies.slice(i, i + chunkSize);
-      try {
-        await context.addCookies(chunk);
-        imported += chunk.length;
-      } catch (_) {
-        for (const item of chunk) {
-          try {
-            await context.addCookies([item]);
-            imported += 1;
-          } catch (_) {
-            skipped += 1;
-          }
-        }
-      }
-    }
-  } finally {
-    await context.close();
-  }
-  process.stdout.write(JSON.stringify({ imported, skipped }));
-})().catch((err) => {
-  process.stderr.write(String(err && err.stack ? err.stack : err));
-  process.exit(1);
-});
-""".strip()
 
 
 def _win_known_dir(var_name: str, fallback: Path) -> Path:
@@ -301,7 +223,7 @@ def _decrypt_v10_cookie_value(
     host_key: str,
     db_version: int,
 ) -> Optional[str]:
-    if not encrypted_value.startswith(b"v10"):
+    if encrypted_value[:3] not in (b"v10", b"v11"):
         return None
     ciphertext = encrypted_value[3:]
     if not ciphertext or len(ciphertext) % 16 != 0:
@@ -488,6 +410,9 @@ def decrypt_chrome_cookies_from_db(
                 item["sameSite"] = mapped_ss
             if expires_unix is not None:
                 item["expires"] = round(expires_unix, 3)
+            else:
+                # 会议/SSO 会话 Cookie 转持久化，避免内置浏览器关闭或重启后登录态丢失
+                item["expires"] = round(now + _SESSION_COOKIE_PERSIST_SECONDS, 3)
             out.append(item)
     finally:
         shutil.rmtree(stage_dir, ignore_errors=True)
@@ -500,7 +425,7 @@ def inject_cookies_into_managed_profile(
     *,
     runtime_dir: Optional[Path] = None,
 ) -> dict[str, int]:
-    """通过 stdin 一次性把 Cookie 列表注入受管浏览器持久 Profile 目录。"""
+    """把 Cookie 列表写入受管浏览器持久 Profile 目录（运行中走热注入，未启动则真实 Chrome 上下文注入并落盘）。"""
     manifest, ep = _resolve_installed_entrypoint("browser_use")
     if manifest is None or ep is None:
         raise LocalInstallerError(
@@ -508,16 +433,8 @@ def inject_cookies_into_managed_profile(
             "请先安装 Browser Use 本地运行时后再导入 Chrome 登录态。",
             status_code=409,
         )
-    node_exe = _find_node()
-    if not node_exe:
-        raise LocalInstallerError(
-            "E_RUNTIME_TOOL_MISSING",
-            "未检测到 Node.js，无法写入受管浏览器 Profile。",
-            status_code=409,
-        )
 
     rt_dir = runtime_dir if runtime_dir is not None else runtime_dir_for("browser_use")
-    pkg_dir = rt_dir / "pkg"
     profile_dir = rt_dir / "profile"
     profile_dir.mkdir(parents=True, exist_ok=True)
 
@@ -529,46 +446,7 @@ def inject_cookies_into_managed_profile(
     if managed_browser.is_running():
         return managed_browser.inject_cookies_live_sync(cookies)
 
-    env = os.environ.copy()
-    env["MAILAGENT_PW_PKG_DIR"] = str(pkg_dir)
-    env["MAILAGENT_PW_PROFILE_DIR"] = str(profile_dir)
-
-    proc = subprocess.run(
-        [node_exe, "-e", _COOKIE_INJECT_SCRIPT],
-        cwd=str(rt_dir),
-        env=env,
-        input=json.dumps(cookies, ensure_ascii=False),
-        capture_output=True,
-        text=True,
-        timeout=120.0,
-        check=False,
-    )
-    if proc.returncode != 0:
-        err = (proc.stderr or proc.stdout or "").strip()
-        if re.search(
-            r"SingletonLock|ProcessSingleton|profile directory.*in use|already running",
-            err,
-            re.IGNORECASE,
-        ):
-            raise LocalInstallerError(
-                "E_PROFILE_IN_USE",
-                "内置受管浏览器窗口正在运行中，请先关闭该窗口后再导入登录态。",
-                status_code=409,
-            )
-        raise LocalInstallerError(
-            "E_COOKIE_INJECT_FAILED",
-            f"注入内置浏览器 Profile 失败：{err[:280]}",
-            status_code=500,
-        )
-
-    try:
-        parsed = json.loads(proc.stdout.strip() or "{}")
-        return {
-            "imported": int(parsed.get("imported", 0)),
-            "skipped": int(parsed.get("skipped", 0)),
-        }
-    except (ValueError, TypeError):
-        return {"imported": len(cookies), "skipped": 0}
+    return managed_browser.inject_cookies_cold_sync(cookies, profile_dir=profile_dir)
 
 
 def import_chrome_cookies(

@@ -161,3 +161,114 @@ def test_inject_cookies_uses_live_cdp_when_managed_browser_running(tmp_path, mon
     )
     assert res == {"imported": 1, "skipped": 0}
     assert len(captured) == 1
+
+
+def test_inject_cookies_live_pumps_cdp_replies_and_handles_bad_cookie_fallback(monkeypatch) -> None:
+    mgr = mb_mod.ManagedBrowserManager(idle_ttl_seconds=0)
+    monkeypatch.setattr(
+        mgr,
+        "list_targets",
+        lambda: asyncio.sleep(0, result=[{"id": "t1", "ws_url": "ws://127.0.0.1:9999/page/1"}]),
+    )
+
+    sent_methods: list[str] = []
+
+    class FakeWs:
+        def __init__(self) -> None:
+            self._queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
+
+        async def __aenter__(self) -> "FakeWs":
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            await self.close()
+
+        async def close(self) -> None:
+            await self._queue.put(None)
+
+        async def send(self, raw: str) -> None:
+            msg = json.loads(raw)
+            msg_id = msg["id"]
+            method = msg["method"]
+            sent_methods.append(method)
+            if method == "Network.setCookies":
+                cookies = (msg.get("params") or {}).get("cookies") or []
+                if any(c.get("name") == "bad" for c in cookies):
+                    await self._queue.put(
+                        json.dumps({"id": msg_id, "error": {"code": -32602, "message": "Invalid cookie"}})
+                    )
+                    return
+            await self._queue.put(json.dumps({"id": msg_id, "result": {}}))
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self) -> str:
+            item = await self._queue.get()
+            if item is None:
+                raise StopAsyncIteration
+            return item
+
+    import websockets.asyncio.client as ws_client_mod
+
+    monkeypatch.setattr(ws_client_mod, "connect", lambda *args, **kwargs: FakeWs())
+
+    res = asyncio.run(
+        mgr.inject_cookies_live(
+            [
+                {"name": "ok1", "value": "1", "domain": "a.com", "path": "/"},
+                {"name": "bad", "value": "x", "domain": "b.com", "path": "/"},
+                {"name": "ok2", "value": "2", "domain": "c.com", "path": "/"},
+            ]
+        )
+    )
+    assert sent_methods[0] == "Network.enable"
+    assert res == {"imported": 2, "skipped": 1}
+
+
+def test_inject_cookies_cold_launches_injects_and_closes_gracefully(tmp_path, monkeypatch) -> None:
+    mgr = mb_mod.ManagedBrowserManager(idle_ttl_seconds=0)
+    calls: list[str] = []
+
+    async def _fake_ensure(*, headless: bool = True, profile_dir=None) -> str:
+        calls.append(f"ensure:{headless}:{profile_dir}")
+        mgr._cdp_url = "http://127.0.0.1:45555"
+
+        class DummyProc:
+            def poll(self):
+                return None
+
+            def terminate(self):
+                calls.append("terminate")
+
+            def wait(self, timeout=None):
+                return 0
+
+        mgr._proc = DummyProc()  # type: ignore[assignment]
+        return "http://127.0.0.1:45555"
+
+    async def _fake_inject(cookies):
+        calls.append(f"inject:{len(cookies)}")
+        return {"imported": len(cookies), "skipped": 0}
+
+    async def _fake_graceful(cdp_url: str, timeout: float = 1.5) -> None:
+        calls.append(f"graceful_close:{cdp_url}")
+
+    monkeypatch.setattr(mgr, "ensure_running", _fake_ensure)
+    monkeypatch.setattr(mgr, "inject_cookies_live", _fake_inject)
+    monkeypatch.setattr(mb_mod, "_graceful_cdp_close", _fake_graceful)
+
+    profile = tmp_path / "profile"
+    res = asyncio.run(
+        mgr.inject_cookies_cold(
+            [{"name": "sid", "value": "v", "domain": "oa.corp", "path": "/"}],
+            profile_dir=profile,
+        )
+    )
+    assert res == {"imported": 1, "skipped": 0}
+    assert calls == [
+        f"ensure:True:{profile}",
+        "inject:1",
+        "graceful_close:http://127.0.0.1:45555",
+        "terminate",
+    ]
