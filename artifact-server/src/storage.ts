@@ -1,4 +1,4 @@
-import { hashPassword, verifyPassword } from './auth'
+import { generateMcpToken, hashPassword, verifyPassword } from './auth'
 import { deleteBlobPrefix, putBlob } from './blobs'
 import {
   ARTIFACT_TYPES,
@@ -15,8 +15,10 @@ import {
   type CommentRow,
   type CommentStatus,
   type Env,
+  type McpTokenRow,
   type PublishArtifactInput,
   type PublishArtifactResult,
+  type SafeMcpToken,
   type SafeUser,
   type UserRole,
   type UserRow,
@@ -901,4 +903,131 @@ export async function deleteUser(
   }
   await env.DB.prepare(`DELETE FROM users WHERE id = ?`).bind(existing.id).run()
   return { deleted: true, id: existing.id }
+}
+
+// ── Per-User Revocable MCP Tokens ───────────────────────────────────────
+
+const TOKEN_SELECT_COLS =
+  'id, user_id, owner_label, label, token_prefix, token_hash, role_scope, last_used_at, revoked_at, created_at'
+
+export function toSafeMcpToken(row: McpTokenRow): SafeMcpToken {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    owner_label: row.owner_label,
+    label: row.label,
+    token_prefix: row.token_prefix,
+    role_scope: row.role_scope,
+    last_used_at: row.last_used_at,
+    revoked_at: row.revoked_at,
+    created_at: row.created_at
+  }
+}
+
+export async function getMcpTokenByHash(env: Env, tokenHash: string): Promise<McpTokenRow | null> {
+  if (!tokenHash) return null
+  return env.DB.prepare(`SELECT ${TOKEN_SELECT_COLS} FROM mcp_tokens WHERE token_hash = ?`)
+    .bind(tokenHash)
+    .first<McpTokenRow>()
+}
+
+export async function getMcpTokenById(env: Env, id: string): Promise<McpTokenRow | null> {
+  const cleanId = id.trim()
+  if (!cleanId) return null
+  return env.DB.prepare(`SELECT ${TOKEN_SELECT_COLS} FROM mcp_tokens WHERE id = ?`)
+    .bind(cleanId)
+    .first<McpTokenRow>()
+}
+
+export async function listMcpTokens(
+  env: Env,
+  opts: { isAdmin: boolean; userId: string | null }
+): Promise<SafeMcpToken[]> {
+  if (opts.isAdmin) {
+    const rows = await env.DB.prepare(`SELECT ${TOKEN_SELECT_COLS} FROM mcp_tokens ORDER BY created_at DESC LIMIT 200`)
+      .all<McpTokenRow>()
+    return rows.results.map(toSafeMcpToken)
+  }
+  if (!opts.userId) return []
+  const rows = await env.DB.prepare(
+    `SELECT ${TOKEN_SELECT_COLS} FROM mcp_tokens WHERE user_id = ? ORDER BY created_at DESC LIMIT 100`
+  )
+    .bind(opts.userId)
+    .all<McpTokenRow>()
+  return rows.results.map(toSafeMcpToken)
+}
+
+export async function createMcpToken(
+  env: Env,
+  input: {
+    userId: string | null
+    ownerLabel: string
+    roleScope: UserRole
+    label: string
+  }
+): Promise<{ token: SafeMcpToken; plaintext: string }> {
+  const label = (input.label || '').trim()
+  if (!label || label.length > 80) {
+    throw new ArtifactServerError('E_INVALID_ARG', 'Token label (1–80 chars) is required', 400)
+  }
+  const roleScope: UserRole = input.roleScope === 'admin' ? 'admin' : 'member'
+  const ownerLabel = (input.ownerLabel || 'owner').trim().slice(0, 120) || 'owner'
+  const generated = await generateMcpToken()
+  const id = crypto.randomUUID()
+  const now = Math.floor(Date.now() / 1000)
+
+  await env.DB.prepare(
+    `INSERT INTO mcp_tokens (id, user_id, owner_label, label, token_prefix, token_hash, role_scope, last_used_at, revoked_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
+  )
+    .bind(id, input.userId, ownerLabel, label, generated.prefix, generated.hash, roleScope, now)
+    .run()
+
+  return {
+    token: {
+      id,
+      user_id: input.userId,
+      owner_label: ownerLabel,
+      label,
+      token_prefix: generated.prefix,
+      role_scope: roleScope,
+      last_used_at: null,
+      revoked_at: null,
+      created_at: now
+    },
+    plaintext: generated.plaintext
+  }
+}
+
+export async function touchMcpTokenLastUsed(
+  env: Env,
+  tokenId: string,
+  prevLastUsedAt: number | null
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000)
+  if (prevLastUsedAt !== null && now - prevLastUsedAt < 60) return
+  await env.DB.prepare(`UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?`).bind(now, tokenId).run()
+}
+
+export async function revokeMcpToken(
+  env: Env,
+  tokenId: string,
+  actor: { isAdmin: boolean; userId: string | null }
+): Promise<{ revoked: true; token: SafeMcpToken }> {
+  const existing = await getMcpTokenById(env, tokenId)
+  if (!existing) {
+    throw new ArtifactServerError('E_NOT_FOUND', `Token not found: ${tokenId}`, 404)
+  }
+  if (!actor.isAdmin && (!actor.userId || existing.user_id !== actor.userId)) {
+    throw new ArtifactServerError('E_FORBIDDEN', 'You can only revoke your own tokens', 403)
+  }
+  if (existing.revoked_at !== null) {
+    return { revoked: true, token: toSafeMcpToken(existing) }
+  }
+  const now = Math.floor(Date.now() / 1000)
+  await env.DB.prepare(`UPDATE mcp_tokens SET revoked_at = ? WHERE id = ?`).bind(now, existing.id).run()
+  return {
+    revoked: true,
+    token: toSafeMcpToken({ ...existing, revoked_at: now })
+  }
 }

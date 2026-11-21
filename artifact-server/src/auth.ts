@@ -1,5 +1,11 @@
-import { getUserByEmail, getUserById, toSafeUser } from './storage'
-import type { ArtifactRow, AuthIdentity, Env, UserRow } from './types'
+import {
+  getMcpTokenByHash,
+  getUserByEmail,
+  getUserById,
+  toSafeUser,
+  touchMcpTokenLastUsed
+} from './storage'
+import type { AgentAuthResult, ArtifactRow, AuthIdentity, Env, UserRow } from './types'
 
 const SESSION_COOKIE_NAME = 'canvas_session'
 const SESSION_TTL_SEC = 60 * 60 * 24 * 7
@@ -47,6 +53,24 @@ export async function timingSafeEqualStr(a: string, b: string): Promise<boolean>
     diff |= bytesA[i] ^ bytesB[i]
   }
   return diff === 0
+}
+
+export async function sha256Hex(raw: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', encoder.encode(raw))
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+export async function generateMcpToken(): Promise<{
+  plaintext: string
+  prefix: string
+  hash: string
+}> {
+  const bytes = new Uint8Array(24)
+  crypto.getRandomValues(bytes)
+  const plaintext = `cas_${toBase64Url(bytes)}`
+  const prefix = plaintext.slice(0, 12)
+  const hash = await sha256Hex(plaintext)
+  return { plaintext, prefix, hash }
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -119,19 +143,46 @@ function parseCookies(headerValue: string | null): Record<string, string> {
   return out
 }
 
-export async function verifyAgentBearer(
-  request: Request,
-  env: Env
-): Promise<{ ok: boolean; actor: string }> {
-  const expected = env.AGENT_API_TOKEN?.trim()
-  if (!expected) return { ok: false, actor: '' }
+export async function verifyAgentBearer(request: Request, env: Env): Promise<AgentAuthResult> {
   const auth = request.headers.get('authorization') || ''
   const match = /^Bearer\s+(.+)$/i.exec(auth.trim())
-  if (!match) return { ok: false, actor: '' }
+  if (!match) return { ok: false }
   const presented = match[1].trim()
-  if (!presented) return { ok: false, actor: '' }
-  const ok = await timingSafeEqualStr(presented, expected)
-  return ok ? { ok: true, actor: 'agent' } : { ok: false, actor: '' }
+  if (!presented) return { ok: false }
+
+  const expected = env.AGENT_API_TOKEN?.trim()
+  if (expected && (await timingSafeEqualStr(presented, expected))) {
+    return { ok: true, actor: 'agent', isAdmin: true, user: null, tokenId: null }
+  }
+
+  const hash = await sha256Hex(presented)
+  const tokenRow = await getMcpTokenByHash(env, hash)
+  if (!tokenRow || tokenRow.revoked_at !== null) {
+    return { ok: false }
+  }
+
+  let actor = tokenRow.owner_label || 'member'
+  let isAdmin = tokenRow.role_scope === 'admin'
+  let safeUser: ReturnType<typeof toSafeUser> | null = null
+
+  if (tokenRow.user_id) {
+    const userRow = await getUserById(env, tokenRow.user_id)
+    if (!userRow || userRow.disabled) {
+      return { ok: false }
+    }
+    safeUser = toSafeUser(userRow)
+    actor = safeUser.display_name || safeUser.email
+    isAdmin = safeUser.role === 'admin'
+  }
+
+  await touchMcpTokenLastUsed(env, tokenRow.id, tokenRow.last_used_at).catch(() => {})
+  return {
+    ok: true,
+    actor,
+    isAdmin,
+    user: safeUser,
+    tokenId: tokenRow.id
+  }
 }
 
 export async function verifyAdminPassword(password: string, env: Env): Promise<boolean> {
@@ -257,9 +308,9 @@ export async function verifyOwnerRequest(
     return {
       ok: true,
       actor: bearer.actor,
-      user: null,
-      role: 'agent',
-      isAdmin: true,
+      user: bearer.user,
+      role: bearer.user ? bearer.user.role : 'agent',
+      isAdmin: bearer.isAdmin,
       isBootstrap: false
     }
   }

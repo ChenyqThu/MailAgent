@@ -8,6 +8,7 @@ import type {
   CommentRow,
   CommentStatus,
   Env,
+  McpTokenRow,
   UserRole,
   UserRow,
   VersionRow
@@ -146,6 +147,7 @@ class MemoryD1Database {
   versions: VersionRow[] = []
   comments: CommentRow[] = []
   users = new Map<string, UserRow>()
+  mcpTokens = new Map<string, McpTokenRow>()
   nextVersionId = 1
 
   prepare(sqlRaw: string): D1PreparedStatement {
@@ -192,6 +194,16 @@ class MemoryD1Database {
             if (u.role === 'admin' && u.disabled === 0) return { id: u.id } as unknown as T
           }
           return null
+        }
+        if (sql.includes('FROM mcp_tokens WHERE token_hash = ?')) {
+          const hash = String(args[0])
+          for (const tok of db.mcpTokens.values()) {
+            if (tok.token_hash === hash) return tok as unknown as T
+          }
+          return null
+        }
+        if (sql.includes('FROM mcp_tokens WHERE id = ?')) {
+          return (db.mcpTokens.get(String(args[0])) ?? null) as unknown as T | null
         }
         throw new Error(`Unsupported first() SQL in test D1: ${sql}`)
       },
@@ -258,6 +270,17 @@ class MemoryD1Database {
         }
         if (sql.includes('FROM users ORDER BY created_at ASC')) {
           const results = [...db.users.values()].sort((a, b) => a.created_at - b.created_at)
+          return { results: results as unknown as T[], success: true, meta: {} as D1Result['meta'] }
+        }
+        if (sql.includes('FROM mcp_tokens WHERE user_id = ?')) {
+          const uid = String(args[0])
+          const results = [...db.mcpTokens.values()]
+            .filter((t) => t.user_id === uid)
+            .sort((a, b) => b.created_at - a.created_at)
+          return { results: results as unknown as T[], success: true, meta: {} as D1Result['meta'] }
+        }
+        if (sql.includes('FROM mcp_tokens ORDER BY created_at DESC')) {
+          const results = [...db.mcpTokens.values()].sort((a, b) => b.created_at - a.created_at)
           return { results: results as unknown as T[], success: true, meta: {} as D1Result['meta'] }
         }
         throw new Error(`Unsupported all() SQL in test D1: ${sql}`)
@@ -410,6 +433,34 @@ class MemoryD1Database {
         }
         if (sql.startsWith('DELETE FROM users WHERE id = ?')) {
           db.users.delete(String(args[0]))
+          return { results: [], success: true, meta: {} as D1Result['meta'] }
+        }
+        if (sql.startsWith('INSERT INTO mcp_tokens')) {
+          const [id, userId, ownerLabel, label, tokenPrefix, tokenHash, roleScope, createdAt] = args
+          db.mcpTokens.set(String(id), {
+            id: String(id),
+            user_id: userId === null ? null : String(userId),
+            owner_label: String(ownerLabel),
+            label: String(label),
+            token_prefix: String(tokenPrefix),
+            token_hash: String(tokenHash),
+            role_scope: roleScope as UserRole,
+            last_used_at: null,
+            revoked_at: null,
+            created_at: Number(createdAt)
+          })
+          return { results: [], success: true, meta: {} as D1Result['meta'] }
+        }
+        if (sql.startsWith('UPDATE mcp_tokens SET last_used_at = ?')) {
+          const [ts, id] = args
+          const tok = db.mcpTokens.get(String(id))
+          if (tok) tok.last_used_at = Number(ts)
+          return { results: [], success: true, meta: {} as D1Result['meta'] }
+        }
+        if (sql.startsWith('UPDATE mcp_tokens SET revoked_at = ?')) {
+          const [ts, id] = args
+          const tok = db.mcpTokens.get(String(id))
+          if (tok) tok.revoked_at = Number(ts)
           return { results: [], success: true, meta: {} as D1Result['meta'] }
         }
         throw new Error(`Unsupported run() SQL in test D1: ${sql}`)
@@ -1026,5 +1077,207 @@ describe('artifact-server worker', () => {
       env
     )
     expect(delMember.status).toBe(200)
+  })
+
+  it('supports per-user revocable MCP tokens, RBAC tool scoping, and disable/revoke invalidation', async () => {
+    const { env } = makeTestEnv()
+
+    // Login as bootstrap admin -> upgrade to D1 admin -> create member teammate
+    const bsLogin = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password: 'admin-password-for-tests' })
+      }),
+      env
+    )
+    const bsCookie = (bsLogin.headers.get('set-cookie') || '').split(';')[0]
+    const upgradeRes = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/account/bootstrap-admin', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: bsCookie },
+        body: JSON.stringify({
+          email: 'lead@example.com',
+          display_name: 'Team Lead',
+          new_password: 'lead-admin-password'
+        })
+      }),
+      env
+    )
+    const adminCookie = (upgradeRes.headers.get('set-cookie') || '').split(';')[0]
+
+    const createMember = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/admin/users', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: adminCookie },
+        body: JSON.stringify({
+          email: 'teammate@example.com',
+          display_name: 'Teammate One',
+          role: 'member',
+          password: 'teammate-password'
+        })
+      }),
+      env
+    )
+    const createdMember = (await createMember.json()) as { user: { id: string } }
+
+    const memberLogin = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/auth/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: 'teammate@example.com', password: 'teammate-password' })
+      }),
+      env
+    )
+    const memberCookie = (memberLogin.headers.get('set-cookie') || '').split(';')[0]
+
+    // Both admin and teammate can generate personal revocable MCP tokens in /settings (/api/tokens)
+    const adminTokRes = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/tokens', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: adminCookie },
+        body: JSON.stringify({ label: 'Lead MacBook' })
+      }),
+      env
+    )
+    expect(adminTokRes.status).toBe(201)
+    const adminTokJson = (await adminTokRes.json()) as { plaintext: string; token: { id: string } }
+
+    const memberTokRes = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/tokens', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: memberCookie },
+        body: JSON.stringify({ label: 'Teammate Cursor' })
+      }),
+      env
+    )
+    expect(memberTokRes.status).toBe(201)
+    const memberTokJson = (await memberTokRes.json()) as {
+      plaintext: string
+      token: { id: string; role_scope: string }
+    }
+    expect(memberTokJson.plaintext.startsWith('cas_')).toBe(true)
+    expect(memberTokJson.token.role_scope).toBe('member')
+
+    // Member list shows only their own token; admin list sees both
+    const memberList = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/tokens', { headers: { cookie: memberCookie } }),
+      env
+    )
+    expect(((await memberList.json()) as { tokens: unknown[] }).tokens).toHaveLength(1)
+
+    const adminList = await handleRequest(
+      new Request('https://canvas.chenge.ink/api/tokens', { headers: { cookie: adminCookie } }),
+      env
+    )
+    expect(((await adminList.json()) as { tokens: unknown[] }).tokens).toHaveLength(2)
+
+    // Member token publishes an artifact cleanly with attributed created_by
+    const pub = await callMcp(
+      env,
+      {
+        jsonrpc: '2.0',
+        id: 50,
+        method: 'tools/call',
+        params: {
+          name: 'artifact_publish',
+          arguments: {
+            slug: 'teammate-proto',
+            title: 'Teammate Demo',
+            html: '<!doctype html><html><body>hi</body></html>'
+          }
+        }
+      },
+      memberTokJson.plaintext
+    )
+    expect(pub.status).toBe(200)
+
+    const meta = await callMcp(
+      env,
+      {
+        jsonrpc: '2.0',
+        id: 51,
+        method: 'tools/call',
+        params: { name: 'artifact_get', arguments: { slug: 'teammate-proto' } }
+      },
+      memberTokJson.plaintext
+    )
+    const metaJson = (await meta.json()) as {
+      result: { structuredContent: { active_version: { created_by: string } } }
+    }
+    expect(metaJson.result.structuredContent.active_version.created_by).toBe('Teammate One')
+
+    // Member token is blocked from admin-only MCP tools (visibility & delete)
+    const memberDel = await callMcp(
+      env,
+      {
+        jsonrpc: '2.0',
+        id: 52,
+        method: 'tools/call',
+        params: { name: 'artifact_delete', arguments: { slug: 'teammate-proto' } }
+      },
+      memberTokJson.plaintext
+    )
+    const memberDelJson = (await memberDel.json()) as { result: { isError: boolean } }
+    expect(memberDelJson.result.isError).toBe(true)
+
+    // Disabling user immediately blocks their MCP token (401), re-enabling restores until revoked
+    await handleRequest(
+      new Request(`https://canvas.chenge.ink/api/admin/users/${createdMember.user.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', cookie: adminCookie },
+        body: JSON.stringify({ disabled: true })
+      }),
+      env
+    )
+    const disabledCall = await callMcp(
+      env,
+      { jsonrpc: '2.0', id: 53, method: 'tools/list' },
+      memberTokJson.plaintext
+    )
+    expect(disabledCall.status).toBe(401)
+
+    await handleRequest(
+      new Request(`https://canvas.chenge.ink/api/admin/users/${createdMember.user.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', cookie: adminCookie },
+        body: JSON.stringify({ disabled: false })
+      }),
+      env
+    )
+
+    // Admin revokes teammate token -> immediately 401
+    const revokeRes = await handleRequest(
+      new Request(`https://canvas.chenge.ink/api/tokens/${memberTokJson.token.id}`, {
+        method: 'DELETE',
+        headers: { cookie: adminCookie }
+      }),
+      env
+    )
+    expect(revokeRes.status).toBe(200)
+
+    const revokedCall = await callMcp(
+      env,
+      { jsonrpc: '2.0', id: 54, method: 'tools/list' },
+      memberTokJson.plaintext
+    )
+    expect(revokedCall.status).toBe(401)
+
+    // Admin personal cas_ token CAN delete artifact
+    const adminDel = await callMcp(
+      env,
+      {
+        jsonrpc: '2.0',
+        id: 55,
+        method: 'tools/call',
+        params: { name: 'artifact_delete', arguments: { slug: 'teammate-proto' } }
+      },
+      adminTokJson.plaintext
+    )
+    const adminDelJson = (await adminDel.json()) as {
+      result: { isError: boolean; structuredContent: { deleted: boolean } }
+    }
+    expect(adminDelJson.result.isError).toBe(false)
+    expect(adminDelJson.result.structuredContent.deleted).toBe(true)
   })
 })

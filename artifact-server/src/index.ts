@@ -14,6 +14,7 @@ import {
   buildArtifactLinks,
   changeUserPassword,
   createComment,
+  createMcpToken,
   createUser,
   deleteArtifact,
   deleteUser,
@@ -25,11 +26,13 @@ import {
   hasActiveAdminUser,
   listArtifacts,
   listComments,
+  listMcpTokens,
   listUsers,
   listVersions,
   normalizeSlug,
   resolveBaseUrl,
   resolveComment,
+  revokeMcpToken,
   sanitizeRelativePath,
   setVisibility,
   toSafeUser,
@@ -199,18 +202,56 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
       if (!owner.ok) {
         return Response.redirect(`${baseUrl}/login?next=${encodeURIComponent('/settings')}`, 302)
       }
-      const [hasD1Admin, users] = await Promise.all([
+      const [hasD1Admin, users, tokens] = await Promise.all([
         hasActiveAdminUser(env),
-        owner.isAdmin ? listUsers(env) : Promise.resolve([])
+        owner.isAdmin ? listUsers(env) : Promise.resolve([]),
+        listMcpTokens(env, { isAdmin: owner.isAdmin, userId: owner.user?.id ?? null })
       ])
       return htmlResponse(
         renderSettingsPage({
           serverName,
+          baseUrl,
           identity: owner,
           users,
+          tokens,
           hasD1Admin
         })
       )
+    }
+
+    if (path === '/api/tokens' && request.method === 'GET') {
+      const owner = await verifyOwnerRequest(request, env)
+      if (!owner.ok) return jsonResponse({ error: 'Unauthorized' }, 401)
+      const tokens = await listMcpTokens(env, {
+        isAdmin: owner.isAdmin,
+        userId: owner.user?.id ?? null
+      })
+      return jsonResponse({ tokens })
+    }
+
+    if (path === '/api/tokens' && request.method === 'POST') {
+      const owner = await verifyOwnerRequest(request, env)
+      if (!owner.ok) return jsonResponse({ error: 'Unauthorized' }, 401)
+      const body = await readJsonBody(request)
+      const created = await createMcpToken(env, {
+        userId: owner.user?.id ?? null,
+        ownerLabel: owner.user?.email || owner.actor,
+        roleScope: owner.isAdmin ? 'admin' : 'member',
+        label: typeof body.label === 'string' ? body.label : ''
+      })
+      return jsonResponse({ ok: true, ...created }, 201)
+    }
+
+    const tokenMatch = /^\/api\/tokens\/([^/]+)$/.exec(path)
+    if (tokenMatch && request.method === 'DELETE') {
+      const owner = await verifyOwnerRequest(request, env)
+      if (!owner.ok) return jsonResponse({ error: 'Unauthorized' }, 401)
+      const tokenId = decodeURIComponent(tokenMatch[1] || '')
+      const res = await revokeMcpToken(env, tokenId, {
+        isAdmin: owner.isAdmin,
+        userId: owner.user?.id ?? null
+      })
+      return jsonResponse({ ok: true, ...res })
     }
 
     if (path === '/api/me' && request.method === 'GET') {

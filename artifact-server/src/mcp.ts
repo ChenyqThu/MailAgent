@@ -18,6 +18,7 @@ import {
   ARTIFACT_TYPES,
   ARTIFACT_VISIBILITIES,
   COMMENT_STATUSES,
+  type AgentAuthResult,
   type ArtifactFileInput,
   type ArtifactType,
   type ArtifactVisibility,
@@ -333,7 +334,8 @@ async function runMcpTool(
   name: string,
   args: Record<string, unknown>,
   env: Env,
-  baseUrl: string
+  baseUrl: string,
+  auth: Extract<AgentAuthResult, { ok: true }>
 ): Promise<unknown> {
   switch (name) {
     case 'artifact_publish':
@@ -347,7 +349,7 @@ async function runMcpTool(
         files: asFiles(args.files),
         entry_path: asStr(args.entry_path),
         change_note: asStr(args.change_note),
-        created_by: 'agent'
+        created_by: auth.actor
       })
 
     case 'artifact_list': {
@@ -420,6 +422,9 @@ async function runMcpTool(
     }
 
     case 'artifact_set_visibility': {
+      if (!auth.isAdmin) {
+        throw new ArtifactServerError('E_FORBIDDEN', 'Admin role required to change artifact visibility', 403)
+      }
       const slug = asStr(args.slug) ?? ''
       const res = await setVisibility(
         env,
@@ -437,6 +442,9 @@ async function runMcpTool(
     }
 
     case 'artifact_delete': {
+      if (!auth.isAdmin) {
+        throw new ArtifactServerError('E_FORBIDDEN', 'Admin role required to delete artifacts', 403)
+      }
       const slug = asStr(args.slug) ?? ''
       return { slug, ...(await deleteArtifact(env, slug)) }
     }
@@ -455,7 +463,7 @@ async function runMcpTool(
       const slug = asStr(args.slug) ?? ''
       const comment = await createComment(env, slug, {
         version: asInt(args.version),
-        author: asStr(args.author) ?? 'Agent',
+        author: asStr(args.author) ?? auth.actor,
         body: asStr(args.body) ?? '',
         anchor: asStr(args.anchor),
         parent_id: asStr(args.parent_id)
@@ -565,7 +573,7 @@ export async function handleMcpRequest(request: Request, env: Env): Promise<Resp
         return jsonRpcError(rpcId, -32602, 'Invalid params: tools/call requires name', 400)
       }
       try {
-        const result = await runMcpTool(toolName, rawArgs, env, baseUrl)
+        const result = await runMcpTool(toolName, rawArgs, env, baseUrl, auth)
         return jsonRpcResult(rpcId, {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
           structuredContent: result,

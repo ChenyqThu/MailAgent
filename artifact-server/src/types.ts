@@ -151,3 +151,38 @@ export interface PublishArtifactResult {
   share_url: string
   raw_url: string
 }
+
+export interface McpTokenRow {
+  id: string
+  user_id: string | null
+  owner_label: string
+  label: string
+  token_prefix: string
+  token_hash: string
+  role_scope: UserRole
+  last_used_at: number | null
+  revoked_at: number | null
+  created_at: number
+}
+
+export interface SafeMcpToken {
+  id: string
+  user_id: string | null
+  owner_label: string
+  label: string
+  token_prefix: string
+  role_scope: UserRole
+  last_used_at: number | null
+  revoked_at: number | null
+  created_at: number
+}
+
+export type AgentAuthResult =
+  | {
+      ok: true
+      actor: string
+      isAdmin: boolean
+      user: SafeUser | null
+      tokenId: string | null
+    }
+  | { ok: false }

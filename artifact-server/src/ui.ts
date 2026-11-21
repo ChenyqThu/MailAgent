@@ -4,6 +4,7 @@ import type {
   ArtifactRow,
   AuthIdentity,
   CommentRow,
+  SafeMcpToken,
   SafeUser,
   VersionRow
 } from './types'
@@ -650,14 +651,19 @@ export function renderReviewPage(opts: {
 
 export function renderSettingsPage(opts: {
   serverName: string
+  baseUrl: string
   identity: AuthIdentity
   users: SafeUser[]
+  tokens: SafeMcpToken[]
   hasD1Admin: boolean
 }): string {
-  const { serverName, identity, users, hasD1Admin } = opts
+  const { serverName, baseUrl, identity, users, tokens, hasD1Admin } = opts
+  const mcpUrl = `${baseUrl.replace(/\/+$/, '')}/mcp`
   const bootState = {
     identity,
     users,
+    tokens,
+    mcpUrl,
     hasD1Admin
   }
 
@@ -689,6 +695,15 @@ export function renderSettingsPage(opts: {
     .row-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
     .reset-box { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
     .reset-box input { padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--bg); font-size: 13px; width: 160px; }
+    .secret-box { margin-top: 12px; padding: 12px 14px; border-radius: 9px; background: var(--accent-soft); border: 1px solid rgba(15, 118, 110, 0.25); display: none; flex-direction: column; gap: 8px; }
+    .secret-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .secret-code { flex: 1; min-width: 220px; padding: 7px 10px; border-radius: 6px; background: var(--surface); border: 1px solid var(--border-strong); font-family: var(--mono); font-size: 13px; word-break: break-all; }
+    .guide-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-top: 14px; }
+    .guide-card { background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 14px; }
+    .guide-card h3 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+    .guide-card ol, .guide-card p { margin: 0 0 8px; padding-left: 18px; font-size: 13px; color: var(--ink-2); }
+    .guide-card p { padding-left: 0; }
+    .code-pre { margin: 8px 0 0; padding: 10px 12px; border-radius: 7px; border: 1px solid var(--border-strong); background: var(--surface); font-family: var(--mono); font-size: 12px; overflow-x: auto; white-space: pre; }
   </style>
 </head>
 <body>
@@ -707,6 +722,65 @@ export function renderSettingsPage(opts: {
 
   <main class="wrap">
     <section class="panel" id="account-panel"></section>
+    <section class="panel" id="mcp-tokens-panel">
+      <h2>MCP Access Tokens &amp; Client Setup</h2>
+      <p class="sub">Generate personal Bearer tokens for MailAgent, Claude Code, Cursor, or Antigravity. Member tokens can publish, list, read, and comment; only admin tokens can change artifact visibility or delete artifacts.</p>
+      <form id="create-token-form" class="form-grid">
+        <div class="field">
+          <label for="token-label">Token Label</label>
+          <input id="token-label" type="text" required maxlength="80" placeholder="MacBook MailAgent / Cursor" />
+        </div>
+        <div>
+          <button type="submit" class="btn btn-primary">Create MCP Token</button>
+        </div>
+      </form>
+      <div id="token-notice" class="notice"></div>
+      <div id="new-token-box" class="secret-box">
+        <div style="font-size:13px;font-weight:600;color:var(--accent);">Copy this Bearer token now — it will not be shown again:</div>
+        <div class="secret-row">
+          <code id="new-token-value" class="secret-code"></code>
+          <button id="copy-new-token-btn" type="button" class="btn btn-primary">Copy Token</button>
+        </div>
+      </div>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Label</th>
+              <th>Owner</th>
+              <th>Prefix</th>
+              <th>Scope</th>
+              <th>Last Used</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="tokens-tbody"></tbody>
+        </table>
+      </div>
+      <div class="guide-grid">
+        <div class="guide-card">
+          <h3>MailAgent Desktop Setup</h3>
+          <ol>
+            <li>Open <strong>Settings → Connectors → Self-hosted Presets → Artifact Server</strong>.</li>
+            <li>Paste the MCP Server URL below and click <strong>Connect</strong>.</li>
+            <li>Paste your newly created <code class="mono">cas_...</code> Bearer token (the header uses <code class="mono">Bearer &lt;token&gt;</code> automatically).</li>
+          </ol>
+          <div class="secret-row">
+            <code class="secret-code" id="mcp-endpoint-text">${escapeHtml(mcpUrl)}</code>
+            <button id="copy-mcp-url-btn" type="button" class="btn">Copy URL</button>
+          </div>
+        </div>
+        <div class="guide-card">
+          <h3>Claude Code / Cursor / Antigravity (Streamable HTTP)</h3>
+          <p>Replace <code class="mono">YOUR_CAS_TOKEN</code> with your personal token below:</p>
+          <div style="display:flex;justify-content:flex-end;">
+            <button id="copy-mcp-json-btn" type="button" class="btn">Copy JSON</button>
+          </div>
+          <pre id="mcp-json-snippet" class="code-pre"></pre>
+        </div>
+      </div>
+    </section>
     ${
       identity.isAdmin
         ? `<section class="panel" id="team-panel">
@@ -758,6 +832,7 @@ export function renderSettingsPage(opts: {
   <script>
     const BOOT = ${safeJsonForScript(bootState)};
     let users = BOOT.users || [];
+    let tokens = BOOT.tokens || [];
 
     function showNotice(el, kind, msg) {
       el.className = 'notice ' + kind;
@@ -1063,7 +1138,146 @@ export function renderSettingsPage(opts: {
       window.location.assign('/login');
     });
 
+    function fmtTs(sec) {
+      if (!sec) return 'Never';
+      return new Date(sec * 1000).toLocaleString();
+    }
+
+    function renderTokensTable() {
+      const tbody = document.getElementById('tokens-tbody');
+      if (!tbody) return;
+      const notice = document.getElementById('token-notice');
+      tbody.replaceChildren();
+      if (tokens.length === 0) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 7;
+        td.style.color = 'var(--ink-3)';
+        td.textContent = 'No MCP access tokens created yet. Create one above for yourself or your MailAgent client.';
+        tr.append(td);
+        tbody.append(tr);
+        return;
+      }
+      for (const tok of tokens) {
+        const tr = document.createElement('tr');
+
+        const labelTd = document.createElement('td');
+        labelTd.style.fontWeight = '600';
+        labelTd.textContent = tok.label;
+
+        const ownerTd = document.createElement('td');
+        ownerTd.className = 'mono';
+        ownerTd.style.fontSize = '12px';
+        ownerTd.textContent = tok.owner_label;
+
+        const prefixTd = document.createElement('td');
+        prefixTd.className = 'mono';
+        prefixTd.textContent = tok.token_prefix + '…';
+
+        const scopeTd = document.createElement('td');
+        const scopePill = document.createElement('span');
+        scopePill.className = 'pill';
+        scopePill.textContent = tok.role_scope;
+        scopeTd.append(scopePill);
+
+        const lastTd = document.createElement('td');
+        lastTd.style.cssText = 'font-size:12px;color:var(--ink-2);';
+        lastTd.textContent = fmtTs(tok.last_used_at);
+
+        const statusTd = document.createElement('td');
+        const stPill = document.createElement('span');
+        const revoked = tok.revoked_at !== null && tok.revoked_at !== undefined;
+        stPill.className = 'pill ' + (revoked ? 'pill-warn' : 'pill-accent');
+        stPill.textContent = revoked ? 'Revoked' : 'Active';
+        statusTd.append(stPill);
+
+        const actTd = document.createElement('td');
+        if (!revoked) {
+          const revBtn = document.createElement('button');
+          revBtn.type = 'button';
+          revBtn.className = 'btn btn-danger';
+          revBtn.textContent = 'Revoke';
+          revBtn.addEventListener('click', async () => {
+            if (!window.confirm('Revoke MCP token "' + tok.label + '"? Connected clients using it will be disconnected immediately.')) return;
+            const res = await fetch('/api/tokens/' + encodeURIComponent(tok.id), { method: 'DELETE' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              showNotice(notice, 'err', data.error || 'Failed to revoke token');
+              return;
+            }
+            tokens = tokens.map((item) => (item.id === tok.id ? data.token : item));
+            showNotice(notice, 'ok', 'Revoked token "' + tok.label + '"');
+            renderTokensTable();
+          });
+          actTd.append(revBtn);
+        }
+
+        tr.append(labelTd, ownerTd, prefixTd, scopeTd, lastTd, statusTd, actTd);
+        tbody.append(tr);
+      }
+    }
+
+    const mcpConfigJson = JSON.stringify(
+      {
+        mcpServers: {
+          artifact_server: {
+            url: BOOT.mcpUrl,
+            headers: {
+              Authorization: 'Bearer YOUR_CAS_TOKEN'
+            }
+          }
+        }
+      },
+      null,
+      2
+    );
+    const snippetEl = document.getElementById('mcp-json-snippet');
+    if (snippetEl) snippetEl.textContent = mcpConfigJson;
+
+    const createTokenForm = document.getElementById('create-token-form');
+    if (createTokenForm) {
+      const notice = document.getElementById('token-notice');
+      const revealBox = document.getElementById('new-token-box');
+      const revealVal = document.getElementById('new-token-value');
+      createTokenForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const label = document.getElementById('token-label').value.trim();
+        const res = await fetch('/api/tokens', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ label })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showNotice(notice, 'err', data.error || 'Failed to create token');
+          return;
+        }
+        createTokenForm.reset();
+        tokens = [data.token, ...tokens];
+        revealVal.textContent = data.plaintext;
+        revealBox.style.display = 'flex';
+        showNotice(notice, 'ok', 'Created MCP token "' + data.token.label + '".');
+        renderTokensTable();
+      });
+    }
+
+    function wireCopyButton(btnId, getText, defaultLabel) {
+      const btn = document.getElementById(btnId);
+      if (!btn) return;
+      btn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(getText());
+          btn.textContent = 'Copied';
+          setTimeout(() => { btn.textContent = defaultLabel; }, 1600);
+        } catch {}
+      });
+    }
+    wireCopyButton('copy-new-token-btn', () => document.getElementById('new-token-value').textContent || '', 'Copy Token');
+    wireCopyButton('copy-mcp-url-btn', () => BOOT.mcpUrl, 'Copy URL');
+    wireCopyButton('copy-mcp-json-btn', () => mcpConfigJson, 'Copy JSON');
+
     renderAccountSection();
+    renderTokensTable();
     renderUsersTable();
   </script>
 </body>
