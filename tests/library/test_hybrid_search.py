@@ -151,3 +151,55 @@ def test_rrf_k_matches_email_repository() -> None:
     from src.repository.email_repository import _RRF_K
 
     assert float(SEARCH_RRF_K) == float(_RRF_K)
+
+
+def test_fts_mode_skips_encoder_load_and_reports_semantic_available(svc: LibraryService, monkeypatch) -> None:
+    """渐进 Stage 1：mode='fts' 在权重在盘时不得加载 ONNX，但须透出 semantic.available=True 供前端追发 hybrid。"""
+    load_calls = 0
+
+    def spy_load(_root, **_kw):
+        nonlocal load_calls
+        load_calls += 1
+        return FakeEncoder()
+
+    tx_calls = 0
+    orig_tx = svc.db.transaction
+
+    def spy_tx():
+        nonlocal tx_calls
+        tx_calls += 1
+        return orig_tx()
+
+    monkeypatch.setattr(service_module.E, "model_present", lambda _root: True)
+    monkeypatch.setattr(service_module.E, "load_encoder", spy_load)
+    monkeypatch.setattr(svc.db, "transaction", spy_tx)
+
+    res = svc.search("预算", mode="fts")
+    assert load_calls == 0
+    assert tx_calls == 0
+    assert res["search_mode"] == "fts"
+    assert res["semantic"]["available"] is True
+    assert res["semantic"]["model"] == EMBED_MODEL_ID
+
+
+def test_hybrid_search_caches_query_vector_and_skips_write_tx(svc: LibraryService, fake: FakeEncoder, monkeypatch) -> None:
+    _index(svc)
+    tx_calls = 0
+    orig_tx = svc.db.transaction
+
+    def spy_tx():
+        nonlocal tx_calls
+        tx_calls += 1
+        return orig_tx()
+
+    monkeypatch.setattr(svc.db, "transaction", spy_tx)
+    fake.calls = 0
+
+    svc.search("预算", mode="hybrid")
+    svc.search("预算", mode="hybrid")
+    assert tx_calls == 0, "无 pending 抽取时 search() 不得拿 BEGIN IMMEDIATE 写锁"
+    assert fake.calls == 1, "同 query 重复 hybrid 检索应命中进程内 query 向量 LRU 缓存"
+
+    svc._reset_encoder()
+    svc.search("预算", mode="hybrid")
+    assert fake.calls == 2, "_reset_encoder() 必须清空 query 向量缓存"

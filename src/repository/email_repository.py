@@ -30,6 +30,11 @@ from src.mail.mailbox_semantics import (
     sql_not_in_or_null,
 )
 from src.repository.attachment_store import AttachmentStore
+from src.repository.cjk_bigram import (
+    extract_cjk_bigrams,
+    is_cjk_char as _is_cjk_char,
+    is_pure_cjk_bigram,
+)
 from src.repository.search_query import (
     FilterPredicate,
     ParsedSearchQuery,
@@ -341,24 +346,7 @@ class ThreadAttachmentRecord:
 #   原样下放
 
 
-def _is_cjk_char(c: str) -> bool:
-    """检测单字符是否 CJK / 日韩 (覆盖 BMP + 扩展 A/B-F + 假名 + 谚文)."""
-    if not c:
-        return False
-    cp = ord(c)
-    if 0x4E00 <= cp <= 0x9FFF:        # CJK Unified Ideographs
-        return True
-    if 0x3400 <= cp <= 0x4DBF:        # CJK Extension A
-        return True
-    if 0x20000 <= cp <= 0x2FA1F:      # CJK Extension B-F
-        return True
-    if 0x3040 <= cp <= 0x30FF:        # Hiragana / Katakana
-        return True
-    if 0xAC00 <= cp <= 0xD7AF:        # Hangul Syllables
-        return True
-    return False
-
-
+# Keep _is_cjk_char re-exported for callers/tests (canonical impl in src.repository.cjk_bigram).
 _FTS5_OPERATORS: frozenset = frozenset({'AND', 'OR', 'NOT'})
 
 
@@ -2235,6 +2223,79 @@ class EmailRepository:
             return []
         return [int(r["rowid"]) for r in rows]
 
+    def _cjk2_ready(self, conn: sqlite3.Connection) -> bool:
+        """2 字 CJK bigram 并行 FTS5 表是否已完成存量回填并就绪。"""
+        try:
+            row = conn.execute(
+                "SELECT value FROM sync_state WHERE key = 'cjk2_backfill_done'"
+            ).fetchone()
+            if not row or row[0] != "1":
+                return False
+            tbl = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='email_body_fts_cjk2'"
+            ).fetchone()
+            return tbl is not None
+        except sqlite3.OperationalError:
+            return False
+
+    @staticmethod
+    def _upsert_body_cjk2(
+        conn: sqlite3.Connection, internal_id: int, body_markdown: Optional[str]
+    ) -> None:
+        """写入或更新单封邮件的 CJK 2-gram 索引行（缺少 v75 表时静默降级）。"""
+        try:
+            meta = conn.execute(
+                "SELECT subject, sender FROM email_metadata WHERE internal_id = ?",
+                (internal_id,),
+            ).fetchone()
+            subject = meta["subject"] if meta else ""
+            sender = meta["sender"] if meta else ""
+            body_bg = extract_cjk_bigrams(body_markdown)
+            subj_bg = extract_cjk_bigrams(subject)
+            sender_bg = extract_cjk_bigrams(sender)
+            conn.execute("DELETE FROM email_body_fts_cjk2 WHERE rowid = ?", (internal_id,))
+            if body_bg or subj_bg or sender_bg:
+                conn.execute(
+                    """INSERT INTO email_body_fts_cjk2
+                       (rowid, body_bg, subject_bg, sender_bg)
+                       VALUES (?, ?, ?, ?)""",
+                    (internal_id, body_bg, subj_bg, sender_bg),
+                )
+        except sqlite3.OperationalError:
+            pass
+
+    @staticmethod
+    def _upsert_attachment_cjk2(
+        conn: sqlite3.Connection,
+        attachment_id: int,
+        text_content: Optional[str],
+        status: str,
+    ) -> None:
+        """写入或更新单份已抽取附件的 CJK 2-gram 索引行（缺少 v75 表时静默降级）。"""
+        try:
+            conn.execute(
+                "DELETE FROM email_attachment_fts_cjk2 WHERE rowid = ?",
+                (attachment_id,),
+            )
+            if status != "extracted" or not text_content:
+                return
+            att = conn.execute(
+                "SELECT filename FROM email_attachment WHERE id = ?",
+                (attachment_id,),
+            ).fetchone()
+            filename = att["filename"] if att else ""
+            fn_bg = extract_cjk_bigrams(filename)
+            txt_bg = extract_cjk_bigrams(text_content)
+            if fn_bg or txt_bg:
+                conn.execute(
+                    """INSERT INTO email_attachment_fts_cjk2
+                       (rowid, filename_bg, text_bg)
+                       VALUES (?, ?, ?)""",
+                    (attachment_id, fn_bg, txt_bg),
+                )
+        except sqlite3.OperationalError:
+            pass
+
     def _trigram_like_ids(
         self,
         conn: sqlite3.Connection,
@@ -2242,15 +2303,33 @@ class EmailRepository:
         *,
         query_for_log: str,
     ) -> list[int]:
-        """2 字 CJK: trigram 表 body/subject/sender LIKE '%词%' 兜底 (MATCH <3 无召回)。
+        """2 字 CJK: 优先走 email_body_fts_cjk2 bigram 倒排索引，未就绪或混合词回落 trigram LIKE。
 
         无 bm25, 按启发式排序: subject 命中 > sender 命中 > body 命中, 同档按 rowid DESC。
-        返回的列表顺序即作为该段的 rank 来源。
-
-        候选**不截断** (见 ``_trigram_term_candidate_ids`` doc): 多 term AND 交集前不能
-        先截断。NS-4 的 2 字 CJK LIKE 全表扫是 pre-existing perf (warmup 已缓解桌面),
-        非本次修复范围; NS-3 崩溃风险在 ``_filter_ids_by_metadata`` 分块解决。
         """
+        if is_pure_cjk_bigram(value) and self._cjk2_ready(conn):
+            sql_cjk2 = """
+                SELECT rowid,
+                       CASE
+                           WHEN instr(subject_bg, ?) > 0 THEN 0
+                           WHEN instr(sender_bg, ?)  > 0 THEN 1
+                           ELSE 2
+                       END AS boost
+                  FROM email_body_fts_cjk2
+                 WHERE email_body_fts_cjk2 MATCH ?
+                 ORDER BY boost ASC, rowid DESC
+            """
+            try:
+                rows = conn.execute(
+                    sql_cjk2, (value, value, _quote_fts_token(value))
+                ).fetchall()
+                return [int(r["rowid"]) for r in rows]
+            except sqlite3.OperationalError as e:
+                logger.warning(
+                    f"search_email_bodies(cjk2): MATCH failed for "
+                    f"{value!r} (query={query_for_log!r}), falling back to LIKE: {e}"
+                )
+
         like = f"%{escape_like_value(value)}%"
         sql = """
             SELECT rowid,
@@ -2356,11 +2435,36 @@ class EmailRepository:
         *,
         query_for_log: str,
     ) -> list[tuple[int, int, str]]:
-        """2 字 CJK: 附件 trigram 表 filename/text_content LIKE 兜底 (MATCH <3 无召回)。
+        """2 字 CJK: 优先走 email_attachment_fts_cjk2 倒排索引，未就绪或混合词回落 trigram LIKE。"""
+        if (
+            is_pure_cjk_bigram(value)
+            and self._cjk2_ready(conn)
+            and self._attachment_trigram_table_present(conn)
+        ):
+            sql_cjk2 = """
+                SELECT a.internal_id AS internal_id,
+                       email_attachment_fts_cjk2.rowid AS attachment_id,
+                       COALESCE(a.filename, '') AS filename,
+                       CASE
+                           WHEN instr(email_attachment_fts_cjk2.filename_bg, ?) > 0 THEN 0
+                           ELSE 1
+                       END AS boost
+                  FROM email_attachment_fts_cjk2
+                  JOIN email_attachment a ON a.id = email_attachment_fts_cjk2.rowid
+                 WHERE email_attachment_fts_cjk2 MATCH ?
+                 ORDER BY boost ASC, email_attachment_fts_cjk2.rowid DESC
+            """
+            try:
+                rows = conn.execute(
+                    sql_cjk2, (value, _quote_fts_token(value))
+                ).fetchall()
+                return self._dedupe_attachment_rows(rows)
+            except sqlite3.OperationalError as e:
+                logger.warning(
+                    f"search_email_bodies(cjk2): attachment MATCH failed for "
+                    f"{value!r} (query={query_for_log!r}), falling back to LIKE: {e}"
+                )
 
-        镜像 body 侧 ``_trigram_like_ids`` 的启发式: filename 命中 > text_content 命中,
-        同档按 rowid DESC。全召回不截断; 表缺失 graceful degrade 同 MATCH 分支。
-        """
         like = f"%{escape_like_value(value)}%"
         sql = """
             SELECT a.internal_id AS internal_id,
@@ -4071,6 +4175,7 @@ class EmailRepository:
                     created_at, now,
                 ),
             )
+            self._upsert_attachment_cjk2(conn, attachment_id, text_payload, status)
             conn.commit()
         finally:
             conn.close()
@@ -4575,13 +4680,22 @@ class EmailRepository:
             # 空格 = FTS5 隐式 AND, 合成单一跨两列 MATCH 表达式。
             where_clauses.append("email_attachment_fts_trigram MATCH ?")
             params.append(" ".join(match_phrases))
+        use_cjk2 = self._cjk2_ready(conn)
         for core in like_cores:
-            like = f"%{escape_like_value(core)}%"
-            where_clauses.append(
-                "(email_attachment_fts_trigram.filename LIKE ? ESCAPE '\\' "
-                "OR email_attachment_fts_trigram.text_content LIKE ? ESCAPE '\\')"
-            )
-            params.extend([like, like])
+            if use_cjk2 and is_pure_cjk_bigram(core):
+                where_clauses.append(
+                    "email_attachment_fts_trigram.rowid IN ("
+                    "SELECT rowid FROM email_attachment_fts_cjk2 "
+                    "WHERE email_attachment_fts_cjk2 MATCH ?)"
+                )
+                params.append(_quote_fts_token(core))
+            else:
+                like = f"%{escape_like_value(core)}%"
+                where_clauses.append(
+                    "(email_attachment_fts_trigram.filename LIKE ? ESCAPE '\\' "
+                    "OR email_attachment_fts_trigram.text_content LIKE ? ESCAPE '\\')"
+                )
+                params.extend([like, like])
         for predicate in filters:
             where_clauses.append(f"({predicate.sql})")
             params.extend(predicate.params)
@@ -4737,6 +4851,7 @@ class EmailRepository:
                 "UPDATE email_metadata SET snippet = substr(?, 1, 100) WHERE internal_id = ?",
                 (body.markdown, internal_id),
             )
+            self._upsert_body_cjk2(conn, internal_id, body.markdown)
 
             # 删除老的 attachment 行（重新 commit 时避免重复）
             conn.execute(

@@ -159,12 +159,14 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('SearchTabPage — 资料库组', () => {
-  test('输入 query → library.search(q, 8)，命中行与 [ ] 高亮就位', async () => {
+  test('输入 query → library.search(q, 8, fts)，命中行与 [ ] 高亮就位', async () => {
     renderPage()
     fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), { target: { value: 'redis' } })
-    await waitFor(() => expect(mockLibrarySearch).toHaveBeenCalledWith('redis', 8), {
-      timeout: 2000
-    })
+    await waitFor(
+      () =>
+        expect(mockLibrarySearch).toHaveBeenCalledWith('redis', 8, 'fts', expect.any(AbortSignal)),
+      { timeout: 2000 }
+    )
     const row = (await screen.findByText('my-docs/notes/runbook.md')).closest('li') as HTMLElement
     expect(Array.from(row.querySelectorAll('mark')).map((m) => m.textContent)).toEqual(['redis'])
   })

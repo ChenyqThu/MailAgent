@@ -17,7 +17,7 @@
 // 文案与 placeholder **不许暗示有字段语法**：资料库检索是纯关键词，抄邮件的 `from:` 说明会
 // 让模型 / 用户往里塞字段，被当字面文本召回归零且没有任何 warning。
 
-import { useMemo, type ReactElement } from 'react'
+import { useMemo, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Search, X } from 'lucide-react'
 
@@ -34,8 +34,9 @@ import { errorMessage } from '@shared/lib/ipcErrors'
 import type { LibrarySearchLane } from '@shared/libraryConstants'
 
 import { displayName, fileTimeLabel, libraryIconTone } from './fileMeta'
-import { useLibrarySearchQuery } from './hooks'
+import { SEARCH_PAGE_LIMIT, useLibraryApi } from './hooks'
 import { Notice, Pill } from './parts'
+import { useProgressiveLibrarySearch } from './useProgressiveLibrarySearch'
 
 /** lane 徽标的词表。🔴 与 `hit.match`（filename / text）是**两个独立词表**，别混用。 */
 const LANE_LABEL_KEY: Record<LibrarySearchLane, string> = {
@@ -59,23 +60,45 @@ export function LibrarySearchBar({
   onChange(next: string): void
 }): ReactElement {
   const { t } = useTranslation()
+  const composingRef = useRef(false)
+  const [draft, setDraft] = useState(value)
+  const displayed = composingRef.current ? draft : value
+
   return (
     <label className="flex h-7 min-w-0 flex-1 items-center gap-[7px] rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2.5 focus-within:border-coral/60">
       <Search size={13} aria-hidden className="shrink-0 text-ink-fg-3" />
       <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+        value={displayed}
+        onChange={(e) => {
+          const next = e.target.value
+          setDraft(next)
+          if (!composingRef.current) onChange(next)
+        }}
+        onCompositionStart={(e) => {
+          composingRef.current = true
+          setDraft(e.currentTarget.value)
+        }}
+        onCompositionEnd={(e) => {
+          composingRef.current = false
+          const next = e.currentTarget.value
+          setDraft(next)
+          onChange(next)
+        }}
         data-testid="library-search-input"
         placeholder={t('library.search.placeholder')}
         aria-label={t('library.folder.searchLibraryPlaceholder')}
         className="min-w-0 flex-1 bg-transparent text-body text-ink-fg outline-none placeholder:text-ink-fg-3"
       />
-      {value !== '' ? (
+      {displayed !== '' ? (
         <button
           type="button"
           data-testid="library-search-clear"
           aria-label={t('library.search.clear')}
-          onClick={() => onChange('')}
+          onClick={() => {
+            composingRef.current = false
+            setDraft('')
+            onChange('')
+          }}
           className="grid size-5 shrink-0 place-items-center rounded-[var(--r-ctl)] text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-fg/[0.08] hover:text-ink-fg-1"
         >
           <X size={11} aria-hidden />
@@ -143,10 +166,15 @@ export function LibrarySearchResults({
   onSelectFile(hit: LibrarySearchHit & { id: number }): void
 }): ReactElement {
   const { t } = useTranslation()
-  // 恒发 `hybrid`：没下载语义模型时服务端自己退化成纯 FTS，形状不变（`search_mode` 会说实话）。
-  const search = useLibrarySearchQuery(query, 'hybrid')
+  const api = useLibraryApi()
+  const search = useProgressiveLibrarySearch({
+    api,
+    query,
+    limit: SEARCH_PAGE_LIMIT,
+    queryKeyPrefix: ['library', 'search']
+  })
 
-  if (search.isPending) {
+  if (query.trim() === '' || search.isPending || search.data === undefined) {
     return <Skeleton rows={5} className="px-4 py-3" width="2/3" />
   }
   if (search.isError) {
@@ -164,11 +192,19 @@ export function LibrarySearchResults({
   const addressable = libraryAddressableHits(hits)
   return (
     <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-      {semantic.available ? null : (
+      {search.isEnhancing ? (
+        <div
+          data-testid="library-search-enhancing"
+          className="border-b border-ink-border-soft px-4 py-1.5 text-aux text-ink-fg-2"
+        >
+          {t('library.search.enhancingSemantic')}
+        </div>
+      ) : null}
+      {semantic?.available === false ? (
         <div className="border-b border-ink-border-soft px-4 py-1.5 text-meta text-ink-fg-2">
           {t('library.search.noSemantic')}
         </div>
-      )}
+      ) : null}
       <LibrarySearchWarnings warnings={warnings} className="px-4 py-2" />
       {addressable.map((hit) => (
         <HitRow key={hit.id} hit={hit} onSelect={() => onSelectFile(hit)} />

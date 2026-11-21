@@ -189,4 +189,49 @@ describe('P2-L7 资料库页内搜索', () => {
     fireEvent.click(screen.getByTestId('library-search-clear'))
     expect(onChange).toHaveBeenLastCalledWith('')
   })
+
+  test('IME 组合输入期间不触发搜索回调，compositionEnd 后一次性提交', () => {
+    const onChange = vi.fn()
+    render(<LibrarySearchBar value="" onChange={onChange} />)
+    const input = screen.getByTestId('library-search-input')
+    fireEvent.compositionStart(input)
+    fireEvent.change(input, { target: { value: 'he' } })
+    expect(onChange).not.toHaveBeenCalled()
+    fireEvent.compositionEnd(input, { target: { value: '合同' } })
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange).toHaveBeenCalledWith('合同')
+  })
+
+  test('渐进检索：Stage 1 先出 FTS 结果并展示语义补充提示，Stage 2 到来后合入 vec 命中', async () => {
+    let resolveHybrid!: (v: LibrarySearchResponse) => void
+    const hybridPromise = new Promise<LibrarySearchResponse>((resolve) => {
+      resolveHybrid = resolve
+    })
+    api.search.mockImplementation(async (_q: string, _limit: number, mode?: string) => {
+      if (mode === 'fts') {
+        return response({
+          search_mode: 'fts',
+          semantic: { available: true, model: 'qwen3-embed', chunks: 120 },
+          hits: [hit({ id: 12, filename: '定价.md', path: 'my-docs/plans/定价.md' })]
+        })
+      }
+      return hybridPromise
+    })
+
+    renderResults('客单价')
+    await screen.findByText('定价.md')
+    expect(await screen.findByTestId('library-search-enhancing')).toBeTruthy()
+
+    resolveHybrid(
+      response({
+        search_mode: 'hybrid',
+        hits: [
+          hit({ id: 12, filename: '定价.md', path: 'my-docs/plans/定价.md', lane: 'both' }),
+          hit({ id: 99, filename: '语义命中.md', path: 'my-docs/plans/语义命中.md', lane: 'vec' })
+        ]
+      })
+    )
+    await screen.findByText('语义命中.md')
+    await waitFor(() => expect(screen.queryByTestId('library-search-enhancing')).toBeNull())
+  })
 })

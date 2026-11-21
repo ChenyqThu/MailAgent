@@ -17,6 +17,7 @@ import type { LibraryFile } from '@shared/api/types/library'
 import { AssistantChatDock } from '@shared/assistant/modal/AssistantChatDock'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { PageFrame } from '@shared/components/layout/PageFrame'
+import { useDebouncedValue } from '@shared/hooks/useDebouncedValue'
 import { useMediaQuery } from '@shared/hooks/useMediaQuery'
 import { TRASH_SLUG } from '@shared/libraryConstants'
 import { useDomainCollapsed, useDomainWidth } from '@shared/state/nav-shell'
@@ -69,6 +70,8 @@ export function LibraryWorkspace(): ReactElement {
   const [attachmentRef, setAttachmentRef] = useState<LibraryFileRef | null>(null)
   // 全库搜索的关键词。非空 = 内容区显示结果面（不是「另开一个页面」，清空即原样回来）。
   const [query, setQuery] = useState('')
+  const debouncedQuery = useDebouncedValue(query, 200)
+  const effectiveQuery = query.trim() === '' ? '' : debouncedQuery
   const searching = query.trim() !== ''
   const fileRef: LibraryFileRef | null =
     selectedFileId !== null ? { id: selectedFileId } : attachmentRef
@@ -273,7 +276,7 @@ export function LibraryWorkspace(): ReactElement {
               关键词切面 —— 有关键词时结果面**顶掉**文件夹 / 预览，清空即回到原来看的东西。
               它与文件夹工具条上那个窄的「在当前文件夹中过滤」仍是两件事，刻意不合成一个框。 */}
           {searching ? (
-            <LibrarySearchResults query={query} onSelectFile={openHit} />
+            <LibrarySearchResults query={effectiveQuery} onSelectFile={openHit} />
           ) : fileRef !== null ? (
             <FilePreview
               // 换文件 = 换实例：编辑态草稿 / 冲突态 / 历史抽屉都是「这一个文件」的局部状态，

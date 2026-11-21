@@ -153,13 +153,62 @@ afterEach(() => {
 })
 
 describe('CommandPalette — 资料库第五 lane', () => {
-  test('输入 query → library.search(q, 8)，命中行渲染文件名 + 虚拟路径', async () => {
+  test('输入 query → Stage 1 发 library.search(q, 8, fts)，命中行渲染文件名 + 虚拟路径', async () => {
     useCommandPalette.getState().setOpen(true)
     renderPalette()
     await typeQuery('合同评审')
-    await waitFor(() => expect(mockLibrarySearch).toHaveBeenCalledWith('合同评审', 8))
+    await waitFor(() =>
+      expect(mockLibrarySearch).toHaveBeenCalledWith(
+        '合同评审',
+        8,
+        'fts',
+        expect.any(AbortSignal)
+      )
+    )
     // 文件名会被命中高亮拆开，行定位用**不参与高亮**的虚拟路径。
     await screen.findByText('my-docs/notes/合同评审.md')
+  })
+
+  test('Stage 1 返回 semantic.available=true 时追发 hybrid 并融合语义命中', async () => {
+    mockLibrarySearch.mockImplementation(async (_q: string, _limit: number, mode?: string) => {
+      if (mode === 'fts') {
+        return {
+          query: '合同评审',
+          mode: 'trigram',
+          search_mode: 'fts',
+          semantic: { available: true, model: 'qwen3', chunks: 20 },
+          hits: [libraryHit()],
+          warnings: []
+        }
+      }
+      return {
+        query: '合同评审',
+        mode: 'trigram',
+        search_mode: 'hybrid',
+        semantic: { available: true, model: 'qwen3', chunks: 20 },
+        hits: [
+          libraryHit(),
+          libraryHit({
+            id: 42,
+            rel_path: 'notes/法务语义扩展.md',
+            path: 'my-docs/notes/法务语义扩展.md',
+            filename: '法务语义扩展.md',
+            lane: 'vec'
+          })
+        ],
+        warnings: []
+      }
+    })
+    useCommandPalette.getState().setOpen(true)
+    renderPalette()
+    await typeQuery('合同评审')
+    await screen.findByText('my-docs/notes/法务语义扩展.md')
+    expect(mockLibrarySearch).toHaveBeenCalledWith(
+      '合同评审',
+      8,
+      'hybrid',
+      expect.any(AbortSignal)
+    )
   })
 
   test('空 query 不发 /library/search（hasQuery gate）', async () => {

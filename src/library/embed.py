@@ -21,8 +21,11 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional, Sequence
+from urllib.parse import urlparse
 
 import numpy as np
 
@@ -45,9 +48,14 @@ from src.repository.email_repository import _is_cjk_char
 MODEL_FILES: tuple[str, ...] = (os.path.basename(EMBED_MODEL_FILE), "tokenizer.json", "config.json")
 #: 远端相对路径（与 MODEL_FILES 一一对应）。
 _REMOTE_FILES: tuple[str, ...] = (EMBED_MODEL_FILE, "tokenizer.json", "config.json")
-_HF_URL = "https://huggingface.co/{repo}/resolve/main/{path}"
+_DEFAULT_MIRRORS: tuple[str, ...] = ("https://huggingface.co", "https://hf-mirror.com")
+_HF_URL = "{base}/{repo}/resolve/main/{path}"
 
 _HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(\S.*)$")
+
+
+class DownloadCancelled(Exception):
+    """下载被用户主动取消（保留 ``.part`` 文件供断点续传）。"""
 
 
 # =============================================================================
@@ -261,42 +269,163 @@ def model_bytes_on_disk(library_root: str) -> int:
     return total
 
 
+def _parse_total_from_content_range(header: Optional[str]) -> Optional[int]:
+    """解析 HTTP ``Content-Range: bytes start-end/total`` 或 ``bytes */total`` 中的总字节数。"""
+    if not header or "/" not in header:
+        return None
+    tail = header.rsplit("/", 1)[-1].strip()
+    if not tail or tail == "*":
+        return None
+    try:
+        val = int(tail)
+        return val if val >= 0 else None
+    except ValueError:
+        return None
+
+
+def _build_mirror_list(endpoints: Optional[Sequence[str]]) -> list[str]:
+    ordered: list[str] = []
+    for ep in [*(endpoints or ()), *_DEFAULT_MIRRORS]:
+        cleaned = str(ep or "").strip().rstrip("/")
+        if cleaned and cleaned not in ordered:
+            ordered.append(cleaned)
+    return ordered
+
+
 def download_model(
     library_root: str,
     *,
     progress: Optional[Callable[[int, int], None]] = None,
+    on_metrics: Optional[Callable[[dict[str, Any]], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
+    endpoints: Optional[Sequence[str]] = None,
     chunk_bytes: int = 1 << 20,
 ) -> str:
-    """把权重拉到 ``cache_dir()``（约 614 MB）。写 ``.part`` 再 rename —— 中断不会留下半个可用模型。
+    """把权重拉到 ``cache_dir()``（约 614 MB）。写 ``.part`` 再 rename —— 支持镜像回退、HTTP Range 断点续传与取消。
 
     只在用户在设置页显式点「下载语义模型」时调用；除这一次外整条语义链路零网络。
     """
     import requests  # 函数级：serve-api 常驻进程不为一个可选功能付顶层 import
+    from loguru import logger
 
     target = cache_dir(library_root)
     os.makedirs(target, exist_ok=True)
+    mirrors = _build_mirror_list(endpoints)
+
     done_bytes = 0
     total_bytes = 0
+    ema_speed: Optional[float] = None
+
+    def _emit_metrics(mirror_host: str) -> None:
+        if on_metrics is None:
+            return
+        eta: Optional[int] = None
+        if ema_speed is not None and ema_speed > 0 and total_bytes > done_bytes:
+            eta = int((total_bytes - done_bytes) / ema_speed)
+        on_metrics({"speed_bps": ema_speed, "eta_seconds": eta, "mirror": mirror_host})
+
     for remote, name in zip(_REMOTE_FILES, MODEL_FILES):
+        if cancel_event is not None and cancel_event.is_set():
+            raise DownloadCancelled("download cancelled")
         dest = os.path.join(target, name)
         if os.path.isfile(dest):
             done_bytes += os.path.getsize(dest)
             total_bytes = max(total_bytes, done_bytes)
             continue
-        url = _HF_URL.format(repo=EMBED_MODEL_REPO, path=remote)
+
         tmp = dest + ".part"
-        with requests.get(url, stream=True, timeout=60) as resp:
-            resp.raise_for_status()
-            total_bytes = max(total_bytes, done_bytes + int(resp.headers.get("content-length") or 0))
-            with open(tmp, "wb") as fh:
-                for block in resp.iter_content(chunk_size=chunk_bytes):
-                    if not block:
-                        continue
-                    fh.write(block)
-                    done_bytes += len(block)
-                    if progress is not None:
-                        progress(done_bytes, max(total_bytes, done_bytes))
-        os.replace(tmp, dest)
+        base_completed = done_bytes
+        last_exc: Optional[Exception] = None
+        downloaded = False
+
+        for mirror_idx, base in enumerate(mirrors):
+            mirror_host = urlparse(base).netloc or base
+            url = _HF_URL.format(base=base, repo=EMBED_MODEL_REPO, path=remote)
+            resume_offset = os.path.getsize(tmp) if os.path.isfile(tmp) else 0
+            try:
+                use_range = resume_offset > 0
+                for _attempt in range(2):
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise DownloadCancelled("download cancelled")
+                    headers = {"Range": f"bytes={resume_offset}-"} if use_range else {}
+                    with requests.get(url, headers=headers, stream=True, timeout=(10, 60)) as resp:
+                        if resp.status_code == 416 and use_range:
+                            cr_total = _parse_total_from_content_range(resp.headers.get("Content-Range"))
+                            if cr_total is not None and cr_total == resume_offset:
+                                done_bytes = base_completed + resume_offset
+                                total_bytes = max(total_bytes, done_bytes)
+                                os.replace(tmp, dest)
+                                downloaded = True
+                                break
+                            # `.part` 大小异常，退回从 0 重下
+                            resume_offset = 0
+                            use_range = False
+                            if os.path.isfile(tmp):
+                                os.unlink(tmp)
+                            continue
+
+                        resp.raise_for_status()
+                        if resp.status_code == 206 and use_range:
+                            open_mode = "ab"
+                            file_total = _parse_total_from_content_range(resp.headers.get("Content-Range"))
+                            if file_total is None:
+                                cl = int(resp.headers.get("content-length") or 0)
+                                file_total = (resume_offset + cl) if cl > 0 else 0
+                            done_bytes = base_completed + resume_offset
+                        else:
+                            open_mode = "wb"
+                            resume_offset = 0
+                            file_total = int(resp.headers.get("content-length") or 0)
+                            done_bytes = base_completed
+
+                        if file_total > 0:
+                            total_bytes = max(total_bytes, base_completed + file_total)
+                        _emit_metrics(mirror_host)
+                        if progress is not None:
+                            progress(done_bytes, max(total_bytes, done_bytes))
+
+                        win_start = time.monotonic()
+                        win_bytes = 0
+                        with open(tmp, open_mode) as fh:
+                            for block in resp.iter_content(chunk_size=chunk_bytes):
+                                if cancel_event is not None and cancel_event.is_set():
+                                    raise DownloadCancelled("download cancelled")
+                                if not block:
+                                    continue
+                                fh.write(block)
+                                n = len(block)
+                                done_bytes += n
+                                win_bytes += n
+                                now = time.monotonic()
+                                dt = now - win_start
+                                if dt >= 0.25 and win_bytes > 0:
+                                    inst = win_bytes / dt
+                                    ema_speed = inst if ema_speed is None else (0.35 * inst + 0.65 * ema_speed)
+                                    win_start = now
+                                    win_bytes = 0
+                                    _emit_metrics(mirror_host)
+                                if progress is not None:
+                                    progress(done_bytes, max(total_bytes, done_bytes))
+                        os.replace(tmp, dest)
+                        downloaded = True
+                        # 记住本轮可用镜像，后续文件优先走它
+                        if mirror_idx > 0:
+                            mirrors = [base] + [m for m in mirrors if m != base]
+                        break
+                if downloaded:
+                    break
+            except DownloadCancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 — 镜像失败尝试下一个（如 Network/HTTP error）
+                last_exc = exc
+                done_bytes = base_completed
+                logger.warning(f"[library] download {name} from {mirror_host} failed: {exc}")
+                continue
+
+        if not downloaded:
+            assert last_exc is not None
+            raise last_exc
+
     if progress is not None:
         progress(done_bytes, max(total_bytes, done_bytes))
     return target

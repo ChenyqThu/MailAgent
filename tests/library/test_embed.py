@@ -407,3 +407,118 @@ def test_vector_floor_stays_below_a_literal_phrase_match():
     from src.library.constants import VECTOR_MIN_SCORE
 
     assert 0.232 < VECTOR_MIN_SCORE < 0.290
+
+
+def test_download_model_mirror_fallback_and_range_resume(tmp_path, monkeypatch) -> None:
+    """首个镜像失败自动回落 hf-mirror，且已有的 .part 文件按 HTTP Range 206 续传。"""
+    import os
+    import types
+    import requests
+
+    root = str(tmp_path / "library")
+    cache = E.cache_dir(root)
+    os.makedirs(cache, exist_ok=True)
+    # 预置部分下载的 model_int8.onnx.part（前 3 字节）
+    with open(os.path.join(cache, "model_int8.onnx.part"), "wb") as fh:
+        fh.write(b"abc")
+
+    seen: list[tuple[str, dict[str, str]]] = []
+    metrics_seen: list[dict[str, Any]] = []
+
+    class _FakeResp:
+        def __init__(self, status: int, data: bytes, headers: dict[str, str]) -> None:
+            self.status_code = status
+            self._data = data
+            self.headers = headers
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise requests.HTTPError(f"HTTP {self.status_code}")
+
+        def iter_content(self, chunk_size: int = 1024):
+            for i in range(0, len(self._data), max(1, chunk_size)):
+                yield self._data[i : i + chunk_size]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def fake_get(url: str, headers: dict[str, str] | None = None, **_kw: Any):
+        hdrs = dict(headers or {})
+        seen.append((url, hdrs))
+        if url.startswith("https://huggingface.co"):
+            raise requests.ConnectionError("hf blocked")
+        if url.endswith("model_int8.onnx"):
+            assert hdrs.get("Range") == "bytes=3-"
+            return _FakeResp(206, b"def", {"Content-Range": "bytes 3-5/6", "content-length": "3"})
+        return _FakeResp(200, b"{}", {"content-length": "2"})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    progress_events: list[tuple[int, int]] = []
+    target = E.download_model(
+        root,
+        progress=lambda d, tot: progress_events.append((d, tot)),
+        on_metrics=lambda m: metrics_seen.append(m),
+        chunk_bytes=2,
+    )
+    assert target == cache
+    with open(os.path.join(cache, "model_int8.onnx"), "rb") as fh:
+        assert fh.read() == b"abcdef"
+    assert not os.path.exists(os.path.join(cache, "model_int8.onnx.part"))
+    # 首文件在 huggingface.co 失败切到 hf-mirror.com，后续 tokenizer/config 直接先试 hf-mirror.com
+    assert seen[0][0].startswith("https://huggingface.co")
+    assert seen[1][0].startswith("https://hf-mirror.com")
+    assert seen[2][0].startswith("https://hf-mirror.com")
+    assert any(m.get("mirror") == "hf-mirror.com" for m in metrics_seen)
+    assert progress_events[-1][0] == progress_events[-1][1] == 10
+
+
+def test_download_cancellation_preserves_part_and_skips_index(svc: LibraryService, monkeypatch) -> None:
+    import os
+    import threading
+    import requests
+
+    cancel_ev = threading.Event()
+
+    class _StreamingResp:
+        status_code = 200
+        headers = {"content-length": "10"}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_content(self, chunk_size: int = 4):
+            yield b"1234"
+            cancel_ev.set()
+            yield b"5678"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(requests, "get", lambda *_a, **_kw: _StreamingResp())
+    with pytest.raises(E.DownloadCancelled):
+        E.download_model(svc.root_path, cancel_event=cancel_ev, chunk_bytes=4)
+    part_path = os.path.join(E.cache_dir(svc.root_path), "model_int8.onnx.part")
+    assert os.path.isfile(part_path)
+    with open(part_path, "rb") as fh:
+        assert fh.read() == b"1234"
+
+    # Service 层取消：job.cancelled=True, error=None, 不接建索引
+    kicks: list[int] = []
+
+    def cancelled_dl(_root, **_kw):
+        raise E.DownloadCancelled("user cancelled")
+
+    monkeypatch.setattr(service_module.E, "download_model", cancelled_dl)
+    monkeypatch.setattr(LibraryService, "_kick_index", lambda _self: kicks.append(1))
+    job = service_module._Job(kind="download", started_at=0.0)
+    svc._job = job
+    svc._run_download(job)
+    assert job.cancelled is True and job.error is None and job.running is False
+    assert kicks == []

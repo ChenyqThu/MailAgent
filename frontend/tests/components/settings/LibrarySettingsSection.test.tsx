@@ -22,6 +22,7 @@ const { api, usageBytes, reveal } = vi.hoisted(() => ({
     rescan: vi.fn(),
     embedStatus: vi.fn(),
     embedDownload: vi.fn(),
+    embedCancel: vi.fn(),
     embedRebuild: vi.fn()
   },
   usageBytes: vi.fn(),
@@ -191,6 +192,35 @@ describe('语义检索四态', () => {
     )
     renderSection()
     expect(await screen.findByText('connection reset')).toBeTruthy()
+  })
+
+  test('下载中带速率/ETA/镜像并支持点击取消', async () => {
+    api.embedStatus.mockResolvedValue(
+      embed({
+        job: {
+          ...job('download', 218_000_000, 614_000_000),
+          speed_bps: 10_485_760,
+          eta_seconds: 38,
+          mirror: 'hf-mirror.com'
+        }
+      })
+    )
+    api.embedCancel.mockResolvedValue(
+      embed({
+        job: {
+          ...job('download', 218_000_000, 614_000_000),
+          running: false,
+          cancelled: true
+        }
+      })
+    )
+    renderSection()
+    expect(
+      await screen.findByText(/207\.9 MB \/ 585\.6 MB · 10 MB\/s · 38s · hf-mirror\.com/)
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(api.embedCancel).toHaveBeenCalled())
+    expect(await screen.findByRole('button', { name: 'Resume model download' })).toBeTruthy()
   })
 })
 

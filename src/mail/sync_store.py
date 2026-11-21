@@ -1977,7 +1977,14 @@ class SyncStore:
     #                逐封人工决定 (operation_id 管撤销; 有意不挂 email_metadata 外键, 理由见
     #                迁移块); email_metadata 加 sync_skip_reason (新 skipped 行记录原因, 老行
     #                NULL = 未知)。纯增量: 回退 v73 时旧代码忽略二者。
-    DB_VERSION = 74
+    # v75 (2026-11-20, 2 字 CJK 检索加速): 新增并行 unicode61 bigram FTS5 表
+    #                email_body_fts_cjk2(body_bg, subject_bg, sender_bg) 与
+    #                email_attachment_fts_cjk2(filename_bg, text_bg) 及删除/非 extracted
+    #                清理触发器; sync_state['cjk2_backfill_done'] 标记全量回填进度。
+    #                迁移期只建空表 (<50ms, 不阻塞 waitReady), 存量行由 cjk2_backfill_worker
+    #                后台分批回填; 未完成或缺失时自动回退 trigram LIKE 兜底。
+    #                回滚 (回退 v74): DROP TRIGGER/TABLE 即可, 主索引零改动。
+    DB_VERSION = 75
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
 
@@ -5038,6 +5045,63 @@ class SyncStore:
                     cursor.execute("ALTER TABLE email_metadata ADD COLUMN sync_skip_reason TEXT")
             except sqlite3.Error as exc:
                 raise SyncStoreMigrationError(f"v74 migration (reply decisions): {exc}") from exc
+        # === v75: 2 字 CJK bigram 并行 FTS5 索引（仅建空表 + 清理触发器，<50ms 不阻塞开窗）===
+        if current_version < 75:
+            try:
+                cursor.execute("""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS email_body_fts_cjk2 USING fts5(
+                        body_bg,
+                        subject_bg,
+                        sender_bg,
+                        tokenize='unicode61'
+                    )
+                """)
+                cursor.execute("""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS email_attachment_fts_cjk2 USING fts5(
+                        filename_bg,
+                        text_bg,
+                        tokenize='unicode61'
+                    )
+                """)
+                cursor.execute("""
+                    CREATE TRIGGER IF NOT EXISTS email_body_fts_cjk2_delete
+                    AFTER DELETE ON email_body BEGIN
+                        DELETE FROM email_body_fts_cjk2 WHERE rowid = OLD.internal_id;
+                    END
+                """)
+                cursor.execute("""
+                    CREATE TRIGGER IF NOT EXISTS email_attachment_fts_cjk2_delete
+                    AFTER DELETE ON email_attachment_text BEGIN
+                        DELETE FROM email_attachment_fts_cjk2 WHERE rowid = OLD.attachment_id;
+                    END
+                """)
+                cursor.execute("""
+                    CREATE TRIGGER IF NOT EXISTS email_attachment_fts_cjk2_non_extracted
+                    AFTER UPDATE ON email_attachment_text
+                    WHEN NEW.status != 'extracted' OR NEW.text_content IS NULL OR NEW.text_content = ''
+                    BEGIN
+                        DELETE FROM email_attachment_fts_cjk2 WHERE rowid = NEW.attachment_id;
+                    END
+                """)
+                has_existing_body = (
+                    cursor.execute("SELECT 1 FROM email_body LIMIT 1").fetchone() is not None
+                )
+                has_existing_att = (
+                    cursor.execute(
+                        "SELECT 1 FROM email_attachment_text "
+                        "WHERE status = 'extracted' AND text_content IS NOT NULL AND text_content != '' "
+                        "LIMIT 1"
+                    ).fetchone()
+                    is not None
+                )
+                done_val = "0" if (has_existing_body or has_existing_att) else "1"
+                cursor.execute(
+                    """INSERT OR IGNORE INTO sync_state (key, value, updated_at)
+                       VALUES ('cjk2_backfill_done', ?, ?)""",
+                    (done_val, time.time()),
+                )
+            except sqlite3.Error as exc:
+                raise SyncStoreMigrationError(f"v75 migration (cjk2 FTS5): {exc}") from exc
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
         # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →

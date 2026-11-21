@@ -92,6 +92,7 @@ import { useContactNavigation } from '@shared/components/contacts/navigation'
 // 资料库：API 单例与深链都用资料库域自己的那一份（第二处手抄 = 两个会漂的真相）。
 import { navigateToLibraryFile } from '@shared/components/library/deeplink'
 import { useLibraryApi } from '@shared/components/library/hooks'
+import { useProgressiveLibrarySearch } from '@shared/components/library/useProgressiveLibrarySearch'
 // jump 段的静态行 = nav registry 投影（task 08-24-l4-nav-shell Step R）：一级入口
 // 加/删/改门控只动 registry 一处，⌘K 自动跟上（此前是三行手抄，新入口从来不会出现在这里）。
 import {
@@ -507,12 +508,13 @@ export function CommandPalette(): React.ReactElement | null {
   // 🔴 纯关键词，不接字段语法：query 原样发 `GET /library/search`，服务端自己按 CJK /
   // 长度分流（1 字拦截 + warning ／ 2 字 LIKE ／ ≥3 字整串 MATCH）。
   // 远程 web build 整域隐藏（design §2.5），连请求都不发。
-  const libraryQ = useQuery({
-    queryKey: qk.library.paletteSearch(normalised),
-    queryFn: () => libraryApi.search(normalised, LIBRARY_MAX_HITS),
+  const libraryQ = useProgressiveLibrarySearch({
+    api: libraryApi,
+    query: normalised,
+    limit: LIBRARY_MAX_HITS,
+    enabled: open && !IS_WEB && hasQuery,
     staleTime: 30_000,
-    placeholderData: keepPreviousData,
-    enabled: open && !IS_WEB && hasQuery
+    queryKeyPrefix: ['library', 'palette-search']
   })
   const libraryHits = useMemo(
     () => libraryAddressableHits(libraryQ.data?.hits ?? []),
@@ -522,7 +524,7 @@ export function CommandPalette(): React.ReactElement | null {
   // `parseWarnings` 同款判据）。
   const libraryWarnings: string[] =
     libraryQ.isPlaceholderData || IS_WEB ? [] : (libraryQ.data?.warnings ?? [])
-  const isSearchingLibrary = libraryQ.isFetching && hasQuery
+  const isSearchingLibrary = (libraryQ.isFetching || libraryQ.isEnhancing) && hasQuery
 
   // G-B3 — record history on a *settled* successful search (not every keystroke):
   // debounce → normalised → searchQ resolves (non-placeholder) → push once. This

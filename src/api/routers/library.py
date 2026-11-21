@@ -275,6 +275,12 @@ def library_embed_download(request: Request, service: LibraryService = Depends(g
     return _run(request, service.start_download_job)
 
 
+@router.post("/embed/cancel")
+def library_embed_cancel(request: Request, service: LibraryService = Depends(get_library_service)):
+    """取消正在进行的模型下载，保留 ``.part`` 文件供断点续传。无下载作业在跑 → ``E_INVALID_STATE``。"""
+    return _run(request, service.cancel_download_job)
+
+
 @router.post("/embed/rebuild")
 def library_embed_rebuild(request: Request, service: LibraryService = Depends(get_library_service)):
     """清掉本模型的全部向量并重新后台建索引（低速队列）；返回一份 status，进度同上。没模型 → ``E_INVALID_STATE``。"""

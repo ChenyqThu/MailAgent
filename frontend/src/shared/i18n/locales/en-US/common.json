@@ -8443,6 +8443,9 @@
       "semanticNotReady": "Currently keyword-only search (FTS5). Download the semantic model to enable hybrid search.",
       "downloadModel": "Download semantic model (614 MB)",
       "downloading": "Downloading model",
+      "cancelDownload": "Cancel",
+      "resumeDownload": "Resume model download",
+      "downloadCancelled": "Download paused — partial file kept so you can resume anytime.",
       "modelReady": "Model ready · Qwen3-Embedding-0.6B (int8 ONNX)",
       "rebuildIndex": "Rebuild index",
       "indexProgress": "Embedded {done} / {total} files"
@@ -8455,6 +8458,7 @@
       "matchFts": "Keyword",
       "matchVec": "Semantic",
       "matchBoth": "Keyword + semantic",
+      "enhancingSemantic": "Refining with semantic matches…",
       "noSemantic": "Semantic search isn't on (model not downloaded) — matching by keyword only.",
       "groupTitle": "Library",
       "clear": "Clear search",

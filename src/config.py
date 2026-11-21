@@ -1236,6 +1236,12 @@ class Config(BaseSettings):
         ),
     )
 
+    hf_endpoint: str = Field(
+        default="",
+        validation_alias=AliasChoices("MAILAGENT_HF_ENDPOINT", "HF_ENDPOINT"),
+        description="可选 HuggingFace 镜像源基址，用于加速本地语义模型下载（如 https://hf-mirror.com）。",
+    )
+
 # 全局配置实例
 config = Config()
 

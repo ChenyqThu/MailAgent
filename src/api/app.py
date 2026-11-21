@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
 from fastapi import FastAPI, HTTPException, Request
@@ -283,13 +285,23 @@ async def _assert_bind_loopback() -> None:
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """FastAPI lifespan (取代 deprecated ``@app.on_event('startup')``)。
 
-    startup: 跑 loopback 断言 (bind 非 127.0.0.1 立即退出)。shutdown: 清理 stdio
-    MCP 子进程池（若有惰性拉起过）；EmailRepository 仍是 per-call 短命连接。
+    startup: 跑 loopback 断言 (bind 非 127.0.0.1 立即退出)，并视需要拉起一次性 cjk2 回填线程。
+    shutdown: 通知 cjk2 回填线程停工并清理 stdio MCP 子进程池。
     """
     await _assert_bind_loopback()
+    cjk2_stop = threading.Event()
+    try:
+        from src.config import config as _cfg
+        from src.mail.cjk2_backfill_worker import start_background_thread
+
+        if Path(_cfg.sync_store_db_path).is_file():
+            start_background_thread(_cfg.sync_store_db_path, stop_event=cjk2_stop)
+    except Exception:  # noqa: BLE001 — 无 .env 或裸测试环境跳过
+        pass
     try:
         yield
     finally:
+        cjk2_stop.set()
         try:
             from src.connectors.stdio_pool import stdio_pool
 

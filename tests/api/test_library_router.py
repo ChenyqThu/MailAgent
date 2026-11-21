@@ -367,11 +367,50 @@ def test_download_endpoint_returns_a_status_with_the_job_attached(lib, monkeypat
     monkeypatch.setattr(embed_mod, "download_model", lambda _root, **_kw: "")  # 🔴 绝不真下 614 MB
     c, _ = lib
     st = _data(c.post("/api/library/embed/download"))
-    assert set(st["job"]) == {"kind", "running", "done", "total", "error", "started_at", "finished_at"}
+    assert set(st["job"]) == {
+        "kind", "running", "done", "total", "error", "started_at", "finished_at",
+        "speed_bps", "eta_seconds", "mirror", "cancelled",
+    }
     # 🔴 下载**完成后会自动接上建索引**，所以这里读到的 job 可能已经是 'index' 了（本测试里
     # 下载被替换成瞬时 no-op，必然如此）。前端渲染进度必须按 `job.kind` 分两种文案，
     # 不能假定「点了下载 → job 恒为 download」。
     assert st["job"]["kind"] in ("download", "index")
+
+
+def test_cancel_download_refused_when_idle_and_cancels_active_download(lib, monkeypatch):
+    import threading
+    from src.library import embed as embed_mod
+
+    c, _ = lib
+    assert _err(c.post("/api/library/embed/cancel"))[:2] == (409, "E_INVALID_STATE")
+
+    started = threading.Event()
+    proceed = threading.Event()
+
+    def slow_download(_root, *, cancel_event=None, **_kw):
+        started.set()
+        while not proceed.wait(timeout=0.05):
+            if cancel_event is not None and cancel_event.is_set():
+                raise embed_mod.DownloadCancelled("cancelled in test")
+        if cancel_event is not None and cancel_event.is_set():
+            raise embed_mod.DownloadCancelled("cancelled in test")
+        return ""
+
+    monkeypatch.setattr(embed_mod, "download_model", slow_download)
+    _data(c.post("/api/library/embed/download"))
+    assert started.wait(timeout=2.0)
+    st = _data(c.post("/api/library/embed/cancel"))
+    assert st["job"]["kind"] == "download"
+    proceed.set()
+    for _ in range(40):
+        cur = _data(c.get("/api/library/embed/status"))
+        if cur["job"] and not cur["job"]["running"]:
+            assert cur["job"]["cancelled"] is True
+            assert cur["job"]["error"] is None
+            break
+        threading.Event().wait(0.05)
+    else:
+        pytest.fail("download job did not stop after cancel")
 
 
 def test_download_is_refused_when_the_model_is_already_there(lib, monkeypatch):

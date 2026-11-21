@@ -56,6 +56,10 @@ export interface LibraryEmbedJob {
   error: string | null
   started_at: number
   finished_at: number | null
+  speed_bps?: number | null
+  eta_seconds?: number | null
+  mirror?: string | null
+  cancelled?: boolean
 }
 
 /** `GET /library/embed/status` —— 设置页语义检索区的唯一数据源。**不含任何绝对路径**。 */
@@ -138,7 +142,12 @@ export interface LibraryApi {
 
   /** 全库检索。`mode` 缺省走服务端默认 `hybrid`；**没下载语义模型时服务端自动退化成纯 FTS**，
    *  返回体形状不变（看 `search_mode` / `semantic.available`，不看 `warnings`）。 */
-  search(q: string, limit?: number, mode?: LibrarySearchMode): Promise<LibrarySearchResponse>
+  search(
+    q: string,
+    limit?: number,
+    mode?: LibrarySearchMode,
+    signal?: AbortSignal
+  ): Promise<LibrarySearchResponse>
   /** 最近改动的文件（不含 trashed / missing）——「还没输关键词」时的选择器空态。 */
   recent(limit?: number): Promise<LibraryRecentResponse>
   createTextFile(input: LibraryCreateTextFile): Promise<LibraryFile>
@@ -175,6 +184,8 @@ export interface LibraryApi {
   embedStatus(): Promise<LibraryEmbedStatus>
   /** 下载权重（约 614 MB）。已下载 / 已有作业在跑都是 `E_INVALID_STATE`（HTTP **409**，不是 400）。 */
   embedDownload(): Promise<LibraryEmbedStatus>
+  /** 取消正在进行的模型下载，保留断点续传分片。 */
+  embedCancel(): Promise<LibraryEmbedStatus>
   /** 清掉本模型的全部向量重建。没模型同样 `E_INVALID_STATE`。 */
   embedRebuild(): Promise<LibraryEmbedStatus>
 }
@@ -226,8 +237,16 @@ export function createLibraryApi(baseUrl: string): LibraryApi {
       return `${baseUrl}/library/attachment/${attachmentId}/inline`
     },
 
-    search(q: string, limit?: number, mode?: LibrarySearchMode): Promise<LibrarySearchResponse> {
-      return request(baseUrl, 'GET', '/library/search', { query: { q, limit, mode } })
+    search(
+      q: string,
+      limit?: number,
+      mode?: LibrarySearchMode,
+      signal?: AbortSignal
+    ): Promise<LibrarySearchResponse> {
+      return request(baseUrl, 'GET', '/library/search', {
+        query: { q, limit, mode },
+        signal
+      })
     },
 
     recent(limit?: number): Promise<LibraryRecentResponse> {
@@ -337,6 +356,10 @@ export function createLibraryApi(baseUrl: string): LibraryApi {
 
     embedDownload(): Promise<LibraryEmbedStatus> {
       return request(baseUrl, 'POST', '/library/embed/download')
+    },
+
+    embedCancel(): Promise<LibraryEmbedStatus> {
+      return request(baseUrl, 'POST', '/library/embed/cancel')
     },
 
     embedRebuild(): Promise<LibraryEmbedStatus> {

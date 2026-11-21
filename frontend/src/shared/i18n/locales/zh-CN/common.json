@@ -8443,6 +8443,9 @@
       "semanticNotReady": "当前为纯关键词检索（FTS5）。下载语义模型后可混合检索。",
       "downloadModel": "下载语义模型（614 MB）",
       "downloading": "正在下载模型",
+      "cancelDownload": "取消下载",
+      "resumeDownload": "继续下载语义模型",
+      "downloadCancelled": "已暂停下载，保留了已下载部分，可随时续传。",
       "modelReady": "模型已就绪 · Qwen3-Embedding-0.6B（int8 ONNX）",
       "rebuildIndex": "重建索引",
       "indexProgress": "已嵌入 {done} / {total} 个文件"
@@ -8455,6 +8458,7 @@
       "matchFts": "关键词",
       "matchVec": "语义",
       "matchBoth": "关键词+语义",
+      "enhancingSemantic": "正在补充语义匹配…",
       "noSemantic": "语义检索未启用（模型未下载），当前只按关键词匹配。",
       "groupTitle": "资料库",
       "clear": "清除搜索",

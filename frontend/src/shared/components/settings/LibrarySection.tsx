@@ -206,6 +206,16 @@ function ProgressBar({ done, total }: { done: number; total: number }): ReactEle
   )
 }
 
+function formatEta(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  if (m < 60) return s > 0 ? `${m}m ${s}s` : `${m}m`
+  const h = Math.floor(m / 60)
+  const rem = m % 60
+  return rem > 0 ? `${h}h ${rem}m` : `${h}h`
+}
+
 function SemanticSection(): ReactElement {
   const { t } = useTranslation()
   const api = useLibraryApi()
@@ -234,19 +244,42 @@ function SemanticSection(): ReactElement {
     }
   }
 
+  async function cancel(): Promise<void> {
+    setBusy(true)
+    try {
+      const next = await api.embedCancel()
+      qc.setQueryData(['library', 'embed', 'status'], next)
+    } catch (err) {
+      toastError(t('library.settings.cancelDownload'), mountErrorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const data = status.data
   const job = data?.job ?? null
   const running = job?.running === true
+  const resumedDownload = !running && job?.cancelled === true && job.done > 0
+
+  let downloadHelper = job !== null ? `${formatFileSize(job.done)} / ${formatFileSize(job.total)}` : ''
+  if (job !== null && job.speed_bps != null && job.speed_bps > 0) {
+    const parts = [downloadHelper, `${formatFileSize(job.speed_bps)}/s`]
+    if (job.eta_seconds != null && job.eta_seconds > 0) parts.push(formatEta(job.eta_seconds))
+    if (job.mirror) parts.push(job.mirror)
+    downloadHelper = parts.join(' · ')
+  }
 
   return (
     <Section title={t('library.settings.semanticTitle')}>
       {/* 下载中：done/total 是**字节**。 */}
       {running && job !== null && job.kind === 'download' ? (
-        <Row
-          label={t('library.settings.downloading')}
-          helper={`${formatFileSize(job.done)} / ${formatFileSize(job.total)}`}
-        >
-          <ProgressBar done={job.done} total={job.total} />
+        <Row label={t('library.settings.downloading')} helper={downloadHelper}>
+          <div className="flex items-center gap-2">
+            <ProgressBar done={job.done} total={job.total} />
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void cancel()}>
+              {t('library.settings.cancelDownload')}
+            </Button>
+          </div>
         </Row>
       ) : null}
 
@@ -261,12 +294,21 @@ function SemanticSection(): ReactElement {
       ) : null}
 
       {!running && data !== undefined && !data.model.available ? (
-        <Row label={t('library.settings.semanticNotReady')}>
-          <Button size="sm" disabled={busy} onClick={() => void run('download')}>
-            <Download size={13} aria-hidden />
-            {t('library.settings.downloadModel')}
-          </Button>
-        </Row>
+        <>
+          {job?.cancelled === true ? (
+            <Row label={t('library.settings.downloadCancelled')}>{null}</Row>
+          ) : null}
+          <Row label={t('library.settings.semanticNotReady')}>
+            <Button size="sm" disabled={busy} onClick={() => void run('download')}>
+              <Download size={13} aria-hidden />
+              {t(
+                resumedDownload
+                  ? 'library.settings.resumeDownload'
+                  : 'library.settings.downloadModel'
+              )}
+            </Button>
+          </Row>
+        </>
       ) : null}
 
       {data !== undefined && data.model.available ? (

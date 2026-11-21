@@ -92,7 +92,8 @@ import { getLocalApiToken, LOCAL_TOKEN_ENV } from './local_token'
 // v71: matter_item_dispatch 行动项执行契约 (08-25).
 // v72: contact_profile_run 画像执行台账 (08-31; v73 已整表迁入 agent_run_log 并 DROP).
 // v73: agent_run_log/agent_run_step 统一执行台账 (08-31).
-export const EXPECTED_DB_VERSION = 74 // today_reply_dismissal「无需回复」+ sync_skip_reason (09-09)
+// v74: today_reply_dismissal「无需回复」+ sync_skip_reason (09-09).
+export const EXPECTED_DB_VERSION = 75 // email_body_fts_cjk2 + email_attachment_fts_cjk2 2字CJK索引 (11-20)
 
 /** 就绪判据的关键表子集 (02-landing-plan.md P1-6)。admin.py REQUIRED_TABLES 更全,
  *  但开窗门控只需保证「邮件读写主路径」已建: 元数据 / 正文 SSoT / outbox +

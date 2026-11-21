@@ -776,6 +776,17 @@ class EmailNotionSyncApp:
                     "extraction only via manual CLI `mailagent attachment extract`"
                 )
 
+            # v75 2-gram CJK FTS5 一次性存量回填：独立后台任务跑完即止（不挂 _spawn_supervised，
+            # 否则正常返回会被当作崩溃重启）。
+            from src.mail import cjk2_backfill_worker
+
+            cjk2_backfill_task = asyncio.create_task(
+                cjk2_backfill_worker.run_until_done(
+                    db_path=str(self.watcher.sync_store.db_path),
+                    shutdown_event=self._shutdown_event,
+                )
+            )
+
             # Custom Agent 触发 + 执行 worker（S4，默认关，flag-gated）。off → 零启动。
             #   - AgentTriggerWorker: cron 定时触发（email_filter 触发走 new_watcher 第 5 hook）→ 入队 agent_run；
             #   - AgentRunWorker: 认领 agent_run → poke gateway headless drain（W2/W3）。
@@ -916,6 +927,8 @@ class EmailNotionSyncApp:
                 tasks.append(contact_profile_worker_task)
             if attachment_text_task:
                 tasks.append(attachment_text_task)
+            if cjk2_backfill_task:
+                tasks.append(cjk2_backfill_task)
             if agent_trigger_task:
                 tasks.append(agent_trigger_task)
             if agent_run_task:

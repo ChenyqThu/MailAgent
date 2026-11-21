@@ -26,10 +26,12 @@ import shutil
 import threading
 import time
 import unicodedata
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+import numpy as np
 from loguru import logger
 
 from src.library import embed as E
@@ -106,15 +108,22 @@ class _Job:
     error: Optional[str] = None
     started_at: float = 0.0
     finished_at: Optional[float] = None
+    speed_bps: Optional[float] = None
+    eta_seconds: Optional[int] = None
+    mirror: Optional[str] = None
+    cancelled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "kind": self.kind, "running": self.running, "done": self.done, "total": self.total,
             "error": self.error, "started_at": self.started_at, "finished_at": self.finished_at,
+            "speed_bps": self.speed_bps, "eta_seconds": self.eta_seconds,
+            "mirror": self.mirror, "cancelled": self.cancelled,
         }
 
 
 USER = Actor()
+_UNSET = object()
 
 #: 库根下能放文件的顶层目录（= 内置 slug 去掉投影根与废纸篓；派生，不手抄）。
 ROOT_WRITABLE_TOP = tuple(s for s in TOP_LEVEL_SLUGS if s not in (PROJECTION_SLUG, TRASH_SLUG))
@@ -179,8 +188,12 @@ class LibraryService:
         self._encoder_loaded = False
         self._encoder_lock = threading.Lock()
         self._vec_cache: Optional[tuple[tuple[int, int, float], tuple[list[int], list[int], list[int], Any]]] = None
+        self._query_vec_cache: OrderedDict[str, Any] = OrderedDict()
+        self._query_vec_lock = threading.Lock()
+        self._query_vec_cap = 256
         self._job: Optional[_Job] = None
         self._job_lock = threading.Lock()
+        self._download_cancel: Optional[threading.Event] = None
 
     # ── 挂载根 ────────────────────────────────────────────────────────────────
 
@@ -661,37 +674,68 @@ class LibraryService:
         if mode not in SEARCH_MODES:
             raise LibraryError("E_INVALID_ARG", f"invalid mode: {mode!r}", hint=f"mode ∈ {', '.join(SEARCH_MODES)}")
         limit = max(1, min(int(limit), 100))
-        with self.db.transaction() as conn:
-            for row in self.repo.list_pending_extraction(conn, limit=EXTRACT_ON_SEARCH_CAP):
-                try:
-                    resolved = self._resolve_row(conn, row)
-                except LibraryError:
-                    continue
-                row = self._reconcile_file(conn, row)
-                if row["status"] == "present":
-                    ensure_text(self.repo, conn, row, resolved.abs_path)
+
+        # 仅在真有待抽取文件时才开短暂写事务，避免把纯读搜索与 ONNX 推理关进 BEGIN IMMEDIATE 写锁。
+        probe_conn = self.db.connect()
+        try:
+            has_pending = bool(self.repo.list_pending_extraction(probe_conn, limit=1))
+            chunks = self.repo.count_chunks(probe_conn, EMBED_MODEL_ID)
+        finally:
+            probe_conn.close()
+
+        if has_pending:
+            with self.db.transaction() as wconn:
+                for row in self.repo.list_pending_extraction(wconn, limit=EXTRACT_ON_SEARCH_CAP):
+                    try:
+                        resolved = self._resolve_row(wconn, row)
+                    except LibraryError:
+                        continue
+                    row = self._reconcile_file(wconn, row)
+                    if row["status"] == "present":
+                        ensure_text(self.repo, wconn, row, resolved.abs_path)
+                chunks = self.repo.count_chunks(wconn, EMBED_MODEL_ID)
+
+        model_ready = E.model_present(self.root_path)
+        encoder = self._get_encoder() if (mode == "hybrid" and model_ready) else None
+        semantic_active = encoder is not None
+        warnings: list[str] = []
+        qvec: Any = _UNSET
+        if semantic_active and chunks > 0:
+            try:
+                qvec = self._encode_query_cached(encoder, query)
+            except Exception as exc:  # noqa: BLE001 — 语义腿坏了只降级，不打死整条检索
+                logger.warning(f"[library] query embedding failed: {exc}")
+                warnings.append("semantic_query_failed")
+                qvec = None
+
+        conn = self.db.connect()
+        try:
             chunks = self.repo.count_chunks(conn, EMBED_MODEL_ID)
-            semantic = mode == "hybrid" and self._get_encoder() is not None
-            pending = self.repo.count_files_needing_embed(conn, EMBED_MODEL_ID) if semantic else 0
+            pending = self.repo.count_files_needing_embed(conn, EMBED_MODEL_ID) if semantic_active else 0
             # 🔴 「没下载模型」**不进 warnings**：warnings 说的是这次 query 出了什么事
-            #（`cjk_too_short:X` 那种），能力在不在是 `semantic.available` 的事。放进 warnings =
-            # 下载之前每一次搜索都挂一条同样的提示，UI 只能整条忽略。
-            warnings: list[str] = []
-            result: SearchResult = self.repo.search(conn, query, limit=SEARCH_LANE_TOP_K if semantic else limit)
-            if semantic:
-                hits = self._hybrid_hits(conn, query, result, limit=limit, warnings=warnings)
+            #（`cjk_too_short:X` 那种），能力在不在是 `semantic.available` 的事。
+            result: SearchResult = self.repo.search(conn, query, limit=SEARCH_LANE_TOP_K if semantic_active else limit)
+            if semantic_active:
+                hits = self._hybrid_hits(conn, query, result, limit=limit, warnings=warnings, qvec=qvec)
             else:
                 hits = [self._search_hit(conn, h, lane="fts") for h in result.hits]
+            # mode='fts'（渐进 Stage 1）不加载 ONNX，但如权重在盘需如实报 semantic.available=True 供 Stage 2 决定是否追加 hybrid。
+            semantic_available = semantic_active if mode == "hybrid" else model_ready
             payload = {
                 "query": query,
                 "mode": result.mode,
-                "search_mode": "hybrid" if semantic else "fts",
-                "semantic": {"available": semantic, "model": EMBED_MODEL_ID if semantic else None, "chunks": chunks},
+                "search_mode": "hybrid" if semantic_active else "fts",
+                "semantic": {
+                    "available": semantic_available,
+                    "model": EMBED_MODEL_ID if semantic_available else None,
+                    "chunks": chunks,
+                },
                 "hits": hits,
                 "warnings": result.warnings + warnings,
             }
-        # 🔴 踢队列必须在事务外：后台作业要写库，握着 BEGIN IMMEDIATE 的写锁去起它
-        # 等于让它先撞满 30s busy_timeout。
+        finally:
+            conn.close()
+        # 🔴 踢队列必须在连接与事务外。
         if pending:
             self._kick_index()
         return payload
@@ -702,11 +746,20 @@ class LibraryService:
         d.update({"snippet": row.get("snippet", ""), "rank": row.get("rank"), "match": row.get("match", "text"), "lane": lane})
         return d
 
-    def _hybrid_hits(self, conn, query: str, fts: SearchResult, *, limit: int, warnings: list[str]) -> list[dict[str, Any]]:
+    def _hybrid_hits(
+        self,
+        conn,
+        query: str,
+        fts: SearchResult,
+        *,
+        limit: int,
+        warnings: list[str],
+        qvec: Any = _UNSET,
+    ) -> list[dict[str, Any]]:
         """FTS top-50 ∪ 向量 top-50 → RRF（k 与邮件核同值）→ top-k。``rank`` 取 ``-rrf_score``（越小越相关，
         与 ``email_repository`` 的融合口径一致）。"""
         fts_ids = [int(h["id"]) for h in fts.hits]
-        vec_ids, vec_best = self._vector_lane(conn, query, limit=SEARCH_LANE_TOP_K, warnings=warnings)
+        vec_ids, vec_best = self._vector_lane(conn, query, limit=SEARCH_LANE_TOP_K, warnings=warnings, qvec=qvec)
         fused = rrf_fuse({"fts": fts_ids, "vec": vec_ids}, limit=limit)
         by_id = {int(h["id"]): h for h in fts.hits}
         missing = [fid for fid, _score, _lane in fused if fid not in by_id]
@@ -738,6 +791,23 @@ class LibraryService:
     def _reset_encoder(self) -> None:
         with self._encoder_lock:
             self._encoder, self._encoder_loaded = None, False
+        with self._query_vec_lock:
+            self._query_vec_cache.clear()
+
+    def _encode_query_cached(self, encoder: Any, query: str) -> Any:
+        cache_key = f"{getattr(encoder, 'model_id', EMBED_MODEL_ID)}:{query}"
+        with self._query_vec_lock:
+            cached = self._query_vec_cache.get(cache_key)
+            if cached is not None:
+                self._query_vec_cache.move_to_end(cache_key)
+                return cached
+        qvec = encoder.encode_query(query)
+        with self._query_vec_lock:
+            self._query_vec_cache[cache_key] = qvec
+            self._query_vec_cache.move_to_end(cache_key)
+            while len(self._query_vec_cache) > self._query_vec_cap:
+                self._query_vec_cache.popitem(last=False)
+        return qvec
 
     def _vectors(self, conn) -> tuple[list[int], list[int], list[int], Any]:
         """全库向量矩阵，按 ``(行数, max rowid, 最新写入时刻)`` 指纹缓存 —— 每次检索重读几十 MB 会卡。"""
@@ -749,28 +819,40 @@ class LibraryService:
         self._vec_cache = (sig, payload)
         return payload
 
-    def _vector_lane(self, conn, query: str, *, limit: int, warnings: list[str]) -> tuple[list[int], dict[int, tuple[float, int, int]]]:
+    def _vector_lane(
+        self,
+        conn,
+        query: str,
+        *,
+        limit: int,
+        warnings: list[str],
+        qvec: Any = _UNSET,
+    ) -> tuple[list[int], dict[int, tuple[float, int, int]]]:
         """numpy 暴力点积 → 按文件取最好的那块 → top-N。文件级得分 = 块得分的最大值，低于地板的块直接丢。"""
-        encoder = self._get_encoder()
-        if encoder is None:
+        if qvec is None:
+            return [], {}
+        encoder = self._get_encoder() if qvec is _UNSET else None
+        if qvec is _UNSET and encoder is None:
             return [], {}
         ids, starts, ends, matrix = self._vectors(conn)
         if not ids:
             return [], {}
         if len(ids) > VECTOR_BRUTE_FORCE_MAX_CHUNKS:
             warnings.append(f"vector_index_large:{len(ids)}")
-        try:
-            qvec = encoder.encode_query(query)
-        except Exception as exc:  # noqa: BLE001 — 语义腿坏了只降级，不打死整条检索
-            logger.warning(f"[library] query embedding failed: {exc}")
-            warnings.append("semantic_query_failed")
-            return [], {}
+        if qvec is _UNSET:
+            try:
+                qvec = self._encode_query_cached(encoder, query)
+            except Exception as exc:  # noqa: BLE001 — 语义腿坏了只降级，不打死整条检索
+                logger.warning(f"[library] query embedding failed: {exc}")
+                warnings.append("semantic_query_failed")
+                return [], {}
         scores = matrix @ qvec
+        matched_idx = np.flatnonzero(scores >= VECTOR_MIN_SCORE)
         best: dict[int, tuple[float, int, int]] = {}
-        for i, fid in enumerate(ids):
+        for idx_np in matched_idx:
+            i = int(idx_np)
             score = float(scores[i])
-            if score < VECTOR_MIN_SCORE:  # 没地板 = 任何 query 都恒返满额（见常量注释）
-                continue
+            fid = ids[i]
             current = best.get(fid)
             if current is None or score > current[0]:
                 best[fid] = (score, starts[i], ends[i])
@@ -868,6 +950,8 @@ class LibraryService:
         with self.db.transaction() as conn:
             removed = self.repo.delete_chunks(conn, model=EMBED_MODEL_ID)
         self._vec_cache = None
+        with self._query_vec_lock:
+            self._query_vec_cache.clear()
         logger.info(f"[library] semantic index rebuild: dropped {removed} chunks")
         # 🔴 已有作业在跑就让它跑（它自己会领走刚清空的全部文件）—— 不能因为「有人在建」
         # 就把「已经清掉了」这件事包装成报错扔回去。
@@ -909,24 +993,65 @@ class LibraryService:
         self._spawn_job("index", self._run_index)
         return self.embed_status()
 
+    def cancel_download_job(self) -> dict[str, Any]:
+        """取消正在进行的模型下载，保留 ``.part`` 文件供下次断点续传。"""
+        with self._job_lock:
+            if (
+                self._job is None
+                or not self._job.running
+                or self._job.kind != "download"
+                or self._download_cancel is None
+            ):
+                raise LibraryError("E_INVALID_STATE", "no download job is running")
+            self._download_cancel.set()
+        return self.embed_status()
+
     def _run_download(self, job: _Job) -> None:
         try:
             job.total = EMBED_MODEL_APPROX_BYTES
+            cancel_ev = threading.Event()
+            with self._job_lock:
+                self._download_cancel = cancel_ev
 
             def progress(done: int, total: int) -> None:
                 job.done, job.total = done, max(total, done)
 
-            E.download_model(self.root_path, progress=progress)
+            def on_metrics(metrics: dict[str, Any]) -> None:
+                job.speed_bps = metrics.get("speed_bps")
+                job.eta_seconds = metrics.get("eta_seconds")
+                job.mirror = metrics.get("mirror")
+
+            try:
+                from src.config import config as _cfg
+
+                custom_hf = str(getattr(_cfg, "hf_endpoint", "") or "").strip()
+            except Exception:  # noqa: BLE001 — 单测裸环境可能未初始化全局 Config
+                custom_hf = ""
+            endpoints = [custom_hf] if custom_hf else None
+
+            E.download_model(
+                self.root_path,
+                progress=progress,
+                on_metrics=on_metrics,
+                cancel_event=cancel_ev,
+                endpoints=endpoints,
+            )
             self._reset_encoder()
+        except E.DownloadCancelled:
+            job.cancelled = True
+            job.error = None
+            logger.info("[library] semantic model download cancelled")
         except Exception as exc:  # noqa: BLE001 — 作业失败进 job.error，由设置页显示
             job.error = str(exc)
             logger.warning(f"[library] semantic model download failed: {exc}")
         finally:
+            with self._job_lock:
+                self._download_cancel = None
             job.running, job.finished_at = False, time.time()
         # 下完接着建一次索引：否则用户等完 614 MB 看到的仍是 files_pending 一动不动，
         # 而唯一能按的按钮叫「重建索引」（名字说的是另一件事）。
         # 🔴 必须在 finally **之后** —— 作业是进程内单实例，还挂着 running 时起第二个会被自己挡掉。
-        if job.error is None:
+        if job.error is None and not job.cancelled:
             self._kick_index()
 
     def _run_index(self, job: _Job) -> None:

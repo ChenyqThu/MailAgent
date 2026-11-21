@@ -38,6 +38,7 @@ import { PageFrame } from '@shared/components/layout/PageFrame'
 // 资料库：API 单例与深链都用资料库域自己的那一份（第二处手抄 = 两个会漂的真相）。
 import { navigateToLibraryFile } from '@shared/components/library/deeplink'
 import { useLibraryApi } from '@shared/components/library/hooks'
+import { useProgressiveLibrarySearch } from '@shared/components/library/useProgressiveLibrarySearch'
 import { useMattersApi, useMattersEnabled } from '@shared/components/matters/hooks'
 import { useMatterNavigation } from '@shared/components/matters/navigation'
 import { useDebouncedValue } from '@shared/hooks/useDebouncedValue'
@@ -247,12 +248,13 @@ export function SearchTabPage(): React.ReactElement {
 
   // 资料库第五路（P2-L7）—— 与 ⌘K 同 query key、同 limit ⇒ 共享缓存与那一次请求。
   // 远程 web build 整域隐藏（design §2.5），连请求都不发。
-  const libraryQ = useQuery({
-    queryKey: qk.library.paletteSearch(normalised),
-    queryFn: () => libraryApi.search(normalised, LIBRARY_MAX_HITS),
+  const libraryQ = useProgressiveLibrarySearch({
+    api: libraryApi,
+    query: normalised,
+    limit: LIBRARY_MAX_HITS,
+    enabled: !IS_WEB && hasQuery,
     staleTime: 30_000,
-    placeholderData: keepPreviousData,
-    enabled: !IS_WEB && hasQuery
+    queryKeyPrefix: ['library', 'palette-search']
   })
   const libraryHits = useMemo(
     () => libraryAddressableHits(libraryQ.data?.hits ?? []),
@@ -485,7 +487,7 @@ export function SearchTabPage(): React.ReactElement {
               contactsBusy={contactsQ.isFetching && hasQuery}
               contactOverflow={contactOverflow}
               libraryHits={libraryHits}
-              libraryBusy={libraryQ.isFetching && hasQuery}
+              libraryBusy={(libraryQ.isFetching || libraryQ.isEnhancing) && hasQuery}
               libraryWarnings={libraryWarnings}
               aiHits={aiHits}
               dedupedHits={dedupedHits}
