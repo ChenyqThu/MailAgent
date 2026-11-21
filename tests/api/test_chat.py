@@ -708,6 +708,7 @@ def test_chat_config_skill_catalog_lists_every_builtin(
         "email_organize",
         "matter_write",
         "artifact_studio",
+        "omada_prototype",
     }
     assert set(catalog[0]) == {
         "name",
@@ -874,6 +875,7 @@ def test_chat_config_custom_agent_fragment_follows_skill_toggle(
     fresh_agent_cfg.set_enabled("custom_agent", False)
     fresh_agent_cfg.set_enabled("matters", False)
     fresh_agent_cfg.set_enabled("artifact_studio", False)
+    fresh_agent_cfg.set_enabled("omada_prototype", False)
     with _config_client(monkeypatch, _ChatConfigStub()) as c:
         data = c.get("/api/chat/config").json()["data"]
     assert "custom_agent" not in data["advertisedSkills"]
@@ -895,6 +897,23 @@ def test_chat_config_artifact_studio_skill_fragment_reaches_system_prompt(
         data = c.get("/api/chat/config").json()["data"]
     assert "artifact_studio" not in data["advertisedSkills"]
     assert "artifact_write" not in data["trustedSkillFragments"]
+
+
+def test_chat_config_omada_prototype_skill_fragment_reaches_system_prompt(
+    monkeypatch: pytest.MonkeyPatch, fresh_agent_cfg
+) -> None:
+    """omada_prototype 开启时既在 advertisedSkills 里，其 prompt_fragment 也进 trustedSkillFragments。"""
+    fresh_agent_cfg.set_enabled("omada_prototype", True)
+    with _config_client(monkeypatch, _ChatConfigStub()) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert "omada_prototype" in data["advertisedSkills"]
+    assert "artifact_build_omada" in data["trustedSkillFragments"]
+
+    fresh_agent_cfg.set_enabled("omada_prototype", False)
+    with _config_client(monkeypatch, _ChatConfigStub()) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert "omada_prototype" not in data["advertisedSkills"]
+    assert "artifact_build_omada" not in data["trustedSkillFragments"]
 
 
 def test_chat_config_matters_skill_fragment_reaches_system_prompt(

@@ -81,6 +81,7 @@ EXPECTED_TOOLS = {
         "matter_item_update": ("write", "preview", ["matters:write"], True),
     },
     "artifact_studio": {},
+    "omada_prototype": {},
 }
 
 

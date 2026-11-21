@@ -216,6 +216,9 @@ ERROR_CODE_TO_HTTP: dict[str, int] = {
     # Contact Directory WP5 (组织关系, set_manager 守卫)
     "E_MANAGER_SELF": 400,
     "E_MANAGER_CYCLE": 409,
+    "E_BUILD_FAILED": 422,
+    "E_DEPENDENCY": 503,
+    "E_REMOTE_ERROR": 502,
 }
 
 
@@ -556,6 +559,7 @@ app.include_router(im.router)
 # 09-03 资料库 P1 (task 09-03-library-p1-foundation) — /api/library/*: 多根文件树 / library.db 索引 /
 # CAS 写面 / 邮件附件投影 / 挂载根。鉴权 verify_local_token (与 exec 家族同姿态; 远程 web 只读面 P3 再议)。
 app.include_router(library.router)
+app.include_router(library.preview_router)
 
 # matters ← library 的存在性 / 摘要回调（进程级装一次）。不装 = 所有 `library:` 资料在
 # 事项里显示不可用、跟进 run 提议库文件恒被判 resource_not_found（fail-closed，见

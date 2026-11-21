@@ -24,7 +24,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, ValidationError
 from starlette.concurrency import run_in_threadpool
 
@@ -38,6 +38,14 @@ from src.api.routers.attachment import (
     _stream_response,
 )
 from src.library.constants import FOLDER_PAGE_SIZE, READ_TOOL_MAX_BYTES, SEARCH_MODES, SOURCES
+from src.library.omada_builder import (
+    build_omada_demo,
+    guess_media_type,
+    issue_preview_token,
+    publish_artifact_bundle,
+    read_omada_catalog,
+    resolve_preview_file,
+)
 from src.library.service import TEXT_KINDS, Actor, LibraryError, LibraryService, _cap_text
 
 router = APIRouter(
@@ -45,6 +53,15 @@ router = APIRouter(
     tags=["library"],
     dependencies=[Depends(verify_local_token)],
 )
+
+# Unauthenticated capability-token loopback router for browser_use preview of multi-file artifacts.
+preview_router = APIRouter(
+    prefix="/api/library",
+    tags=["library-preview"],
+)
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1", "testclient"})
+_RAW_PREVIEW_CSP = "sandbox allow-scripts allow-popups allow-forms allow-modals"
 
 _SOURCE = "library"
 
@@ -147,6 +164,35 @@ class MountPatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     label: Optional[str] = None
     mode: Optional[Literal["ro", "rw"]] = None
+
+
+class BuildOmadaRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    slug: str
+    code: str
+    title: Optional[str] = None
+    change_note: Optional[str] = None
+    theme_mode: Literal["light", "dark"] = "light"
+    actor: Optional[ActorSpec] = None
+
+
+class PublishBundleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    slug: str
+    version: Optional[int] = None
+    title: Optional[str] = None
+    artifact_type: str = "app"
+    project: Optional[str] = None
+    visibility: Optional[str] = None
+    change_note: Optional[str] = None
+    entry_path: str = "index.html"
+
+
+class PreviewTokenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    slug: str
+    version: Optional[int] = None
+    entry_path: str = "index.html"
 
 
 # ---------------------------------------------------------------------------
@@ -579,3 +625,122 @@ def library_patch_mount(request: Request, mount_id: int, body: MountPatchRequest
 def library_remove_mount(request: Request, mount_id: int, service: LibraryService = Depends(get_library_service)):
     """卸载：挂载行标 unmounted、文件行标 missing、清文本 / FTS；不删行、不动磁盘。"""
     return _run(request, service.remove_mount, mount_id)
+
+
+# ---------------------------------------------------------------------------
+# Omada UI Kit 真实组件原型构建 + 多文件云端发布 + 本地 loopback 预览通道
+# ---------------------------------------------------------------------------
+
+
+@router.get("/omada/catalog")
+def library_omada_catalog(request: Request):
+    """Return exported components, CSS modules, and usage docs from local omada-ui-kit."""
+    return _run(request, read_omada_catalog)
+
+
+@router.post("/artifacts/build-omada")
+async def library_build_omada(
+    request: Request,
+    body: BuildOmadaRequest,
+    service: LibraryService = Depends(get_library_service),
+):
+    """Compile an Omada UI Kit TSX demo with Vite, ingest dist/ into Library, and issue a preview URL."""
+    base_url = str(request.base_url).rstrip("/")
+    return await run_in_threadpool(
+        _run,
+        request,
+        build_omada_demo,
+        service,
+        body.slug,
+        body.code,
+        title=body.title,
+        change_note=body.change_note,
+        theme_mode=body.theme_mode,
+        actor=_actor(body.actor),
+        base_url=base_url,
+    )
+
+
+@router.post("/artifacts/preview-token")
+def library_issue_preview_token(
+    request: Request,
+    body: PreviewTokenRequest,
+    service: LibraryService = Depends(get_library_service),
+):
+    """Issue a short-lived loopback capability URL for browser_use / browser inspection."""
+    base_url = str(request.base_url).rstrip("/")
+    return _run(
+        request,
+        issue_preview_token,
+        service,
+        body.slug,
+        version=body.version,
+        entry_path=body.entry_path,
+        base_url=base_url,
+    )
+
+
+@router.post("/artifacts/publish-bundle")
+async def library_publish_artifact_bundle(
+    request: Request,
+    body: PublishBundleRequest,
+    service: LibraryService = Depends(get_library_service),
+):
+    """Read an immutable artifact version bundle (HTML/JS/CSS/fonts) and publish to `artifact_server`."""
+    from src.connectors.client import ConnectorError
+    from src.connectors.service import ConnectorInvokeDenied
+
+    try:
+        result = await publish_artifact_bundle(
+            service,
+            body.slug,
+            version=body.version,
+            title=body.title,
+            artifact_type=body.artifact_type,
+            project=body.project,
+            visibility=body.visibility,
+            change_note=body.change_note,
+            entry_path=body.entry_path,
+        )
+    except LibraryError as exc:
+        raise APIError(exc.code, exc.message, hint=exc.hint, source=_SOURCE) from exc
+    except ConnectorInvokeDenied as exc:
+        raise APIError(exc.code, str(exc), http_status=exc.http_status, source=_SOURCE) from exc
+    except ConnectorError as exc:
+        raise APIError("E_REMOTE_ERROR", str(exc), source=_SOURCE) from exc
+    return success_envelope(result, request=request, source=_SOURCE)
+
+
+def _serve_preview_file(request: Request, token: str, rel_path: str) -> FileResponse:
+    client_host = request.client.host if request.client is not None else ""
+    if client_host not in _LOOPBACK_HOSTS:
+        raise APIError(
+            "E_AUTH_FAILED",
+            "artifact preview URLs only accept local loopback requests",
+            source=_SOURCE,
+        )
+    try:
+        target_path = resolve_preview_file(token, rel_path)
+    except LibraryError as exc:
+        raise APIError(exc.code, exc.message, hint=exc.hint, source=_SOURCE) from exc
+
+    return FileResponse(
+        path=target_path,
+        media_type=guess_media_type(rel_path or target_path.name),
+        headers={
+            "Content-Security-Policy": _RAW_PREVIEW_CSP,
+            "Access-Control-Allow-Origin": "*",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@preview_router.get("/artifacts/preview/{token}")
+def library_preview_entry(request: Request, token: str):
+    return _serve_preview_file(request, token, "")
+
+
+@preview_router.get("/artifacts/preview/{token}/{rel_path:path}")
+def library_preview_asset(request: Request, token: str, rel_path: str):
+    return _serve_preview_file(request, token, rel_path)

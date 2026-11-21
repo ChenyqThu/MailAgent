@@ -88,3 +88,11 @@ Artifacts render inside an isolated sandboxed `<iframe>` without `allow-same-ori
   - Mermaid: `https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js`
   - Lucide icons: `https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js`
 - Always initialize charts after `DOMContentLoaded`, handle `ResizeObserver` / `window.resize`, and avoid external images unless URLs come directly from verified context.
+
+## 6. Optional Visual Self-Check with `browser_use`
+
+`artifact_write` and `artifact_build_omada` return a loopback `local_preview_url` alongside the saved Library path:
+
+- When `browser_use` tools are enabled in the session and visual polish is critical (dense charts, complex grids, or slide layouts), open `local_preview_url` to inspect rendered output at both desktop and mobile viewports and confirm zero console errors.
+- If you spot overlapping labels, contrast issues, or clipped containers, fix the artifact source and call `artifact_write` or `artifact_build_omada` again with the **same `slug`** to produce `v2`, `v3`, ... cleanly.
+- If `browser_use` is unavailable or disabled, never claim you visually inspected the rendered pixels — report your static HTML/build verification accurately.

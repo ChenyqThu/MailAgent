@@ -1249,6 +1249,11 @@ class Config(BaseSettings):
         validation_alias=AliasChoices("MAILAGENT_HF_ENDPOINT", "HF_ENDPOINT"),
         description="可选 HuggingFace 镜像源基址，用于加速本地语义模型下载（如 https://hf-mirror.com）。",
     )
+    omada_kit_root: str = Field(
+        default="",
+        validation_alias="MAILAGENT_OMADA_KIT_ROOT",
+        description="Optional path to local omada-ui-kit workspace for real-component React/Vite prototype builds (defaults to ~/Documents/omada-ui-kit).",
+    )
 
 # 全局配置实例
 config = Config()
