@@ -46,6 +46,7 @@ import {
   createMatterWriteTools
 } from './matters'
 import { createLibraryReadTools, createLibraryWriteTools } from './library'
+import { createArtifactTools } from './artifact'
 import { createNotionAgentTools } from './notion_agent'
 import { createFeedbackTools, type FeedbackSubmitFn } from './feedback'
 import { createImageTools, type ImageGenToolDeps } from './image'
@@ -723,6 +724,17 @@ export function buildGatewayTools(
     Object.assign(
       tools,
       createLibraryWriteTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
+        toolApprovalPrefs: prefTiers,
+        oneShot: opts.oneShotWrites,
+        contextMode,
+        agentRunContext: opts.agentRunContext
+      })
+    )
+    Object.assign(
+      tools,
+      createArtifactTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
         toolApprovalPrefs: prefTiers,

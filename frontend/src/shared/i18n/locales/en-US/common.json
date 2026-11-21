@@ -1168,7 +1168,8 @@
       "library_append": "Append to library file",
       "library_write": "Write library file",
       "library_move": "Move library file",
-      "library_delete": "Delete library file"
+      "library_delete": "Delete library file",
+      "artifact_write": "Create interactive artifact"
     },
     "planCard": {
       "title": "Plan",
@@ -1862,7 +1863,20 @@
       "loadingPreview": "Loading content…",
       "previewUnavailable": "Preview unavailable",
       "openInBuiltInBrowser": "Open in built-in browser",
-      "openInSystemBrowser": "Open in system browser"
+      "openInSystemBrowser": "Open in system browser",
+      "viewportDesktop": "Desktop viewport",
+      "viewportMobile": "Mobile viewport",
+      "expandPreview": "Expand preview",
+      "collapsePreview": "Compact preview",
+      "downloadHtml": "Download HTML",
+      "versionLabel": "Version",
+      "artifactTypes": {
+        "dashboard": "Dashboard",
+        "slides": "Slide deck",
+        "report": "Editorial report",
+        "diagram": "Diagram",
+        "app": "Interactive app"
+      }
     },
     "effort": {
       "label": "Thinking effort",
@@ -2002,6 +2016,17 @@
       "delete": {
         "title": "Delete file"
       }
+    },
+    "artifactWriteCard": {
+      "title": "Interactive artifact",
+      "typeLabel": "Type",
+      "pathLabel": "Saved path",
+      "noteLabel": "Change note",
+      "lintTitle": "HTML lint failed",
+      "warningsTitle": "Runtime notes",
+      "preview": "Preview",
+      "openPreview": "Open interactive preview",
+      "htmlSourceLabel": "HTML source"
     }
   },
   "admin": {

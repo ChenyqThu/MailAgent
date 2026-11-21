@@ -124,6 +124,7 @@ export const TOOL_DISPLAY_NAMES_ZH: Readonly<Record<string, string>> = {
   library_write: '写入资料库文件',
   library_move: '移动资料库文件',
   library_delete: '删除资料库文件',
+  artifact_write: '生成交互产物',
   notion_agent_chat: '咨询 Notion Agent',
   tool_search: '检索扩展工具',
   plan_update: '更新计划',

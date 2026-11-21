@@ -190,6 +190,7 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   library_write: 'domain_write',
   library_move: 'domain_write',
   library_delete: 'domain_write',
+  artifact_write: 'domain_write',
   email_get: 'read',
   email_body: 'read',
   email_list_thread: 'read',

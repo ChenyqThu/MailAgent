@@ -1168,7 +1168,8 @@
       "library_append": "追加到资料库文件",
       "library_write": "写入资料库文件",
       "library_move": "移动资料库文件",
-      "library_delete": "删除资料库文件"
+      "library_delete": "删除资料库文件",
+      "artifact_write": "生成交互产物"
     },
     "planCard": {
       "title": "计划",
@@ -1862,7 +1863,20 @@
       "loadingPreview": "正在加载正文…",
       "previewUnavailable": "暂无可预览正文",
       "openInBuiltInBrowser": "在内置浏览器中打开",
-      "openInSystemBrowser": "在系统浏览器中打开"
+      "openInSystemBrowser": "在系统浏览器中打开",
+      "viewportDesktop": "桌面视口",
+      "viewportMobile": "手机视口",
+      "expandPreview": "展开预览",
+      "collapsePreview": "收起宽屏",
+      "downloadHtml": "下载 HTML",
+      "versionLabel": "版本",
+      "artifactTypes": {
+        "dashboard": "数据看板",
+        "slides": "演示文稿",
+        "report": "深度简报",
+        "diagram": "架构图表",
+        "app": "交互原型"
+      }
     },
     "effort": {
       "label": "思考强度",
@@ -2002,6 +2016,17 @@
       "delete": {
         "title": "删除资料"
       }
+    },
+    "artifactWriteCard": {
+      "title": "交互产物",
+      "typeLabel": "类型",
+      "pathLabel": "保存路径",
+      "noteLabel": "变更说明",
+      "lintTitle": "HTML 静态检查未通过",
+      "warningsTitle": "运行时提示",
+      "preview": "在右侧预览",
+      "openPreview": "打开交互预览",
+      "htmlSourceLabel": "HTML 源码预览"
     }
   },
   "admin": {

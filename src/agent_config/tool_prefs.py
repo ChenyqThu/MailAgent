@@ -163,6 +163,7 @@ BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     # 它进的是 .trash（保留期内可恢复），够不上 send / run_command 那一档的安全地板。
     BuiltinToolPolicy("library_move", "library", "ask"),
     BuiltinToolPolicy("library_delete", "library", "ask", danger_auto=True),
+    BuiltinToolPolicy("artifact_write", "library", "auto"),
     # ── B 组：能力/身份面（全部有 history/rollback 补偿）─────────────────────────
     BuiltinToolPolicy("set_skill_enabled", "capability", "ask"),
     BuiltinToolPolicy("update_system_md", "capability", "ask"),

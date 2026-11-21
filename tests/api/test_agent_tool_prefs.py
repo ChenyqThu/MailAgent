@@ -65,6 +65,7 @@ EXPECTED_DEFAULT_AUTO = {
     # 回滚）、要被日常维护，与 matter 家族同一条论证。move / delete 不在此集合（ask）。
     "library_append",
     "library_write",
+    "artifact_write",
 }
 # configurable=False（固定形状）：send=收件人白名单 / run_command=policy_rules /
 # 供应链两卡 / custom-agent CRUD（run_now 除外）。
