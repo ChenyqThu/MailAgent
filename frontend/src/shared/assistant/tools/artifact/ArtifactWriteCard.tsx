@@ -52,6 +52,16 @@ export function ArtifactWriteCard(props: ToolCallMessagePartProps): React.JSX.El
               v{displayVersion}
             </span>
           ) : null}
+          {output?.fileCount && output.fileCount > 1 ? (
+            <span className="rounded bg-ink-3 px-1.5 py-0.5 font-mono text-meta tabular-nums text-ink-fg-2">
+              {output.fileCount} files
+            </span>
+          ) : null}
+          {output?.buildMs !== null && output?.buildMs !== undefined ? (
+            <span className="rounded bg-ink-3 px-1.5 py-0.5 font-mono text-meta tabular-nums text-ink-fg-3">
+              {output.buildMs} ms
+            </span>
+          ) : null}
           {displaySlug ? (
             <span className="truncate font-mono text-meta text-ink-fg-3">{displaySlug}</span>
           ) : null}
@@ -103,10 +113,16 @@ export function ArtifactWriteCard(props: ToolCallMessagePartProps): React.JSX.El
           <div className="text-aux text-fail">{errorDetail}</div>
         ) : null}
 
-        {phase === 'pending' && input.html ? (
-          <CardDetails label={t('chat.artifactWriteCard.htmlSourceLabel')}>
+        {phase === 'pending' && (input.html || input.code) ? (
+          <CardDetails
+            label={t(
+              input.code
+                ? 'chat.artifactWriteCard.codeSourceLabel'
+                : 'chat.artifactWriteCard.htmlSourceLabel'
+            )}
+          >
             <pre className="scrollbar-thin mt-1 max-h-60 overflow-auto rounded-md border border-ink-border-soft bg-ink-2 px-2.5 py-2 font-mono text-meta text-ink-fg">
-              {input.html}
+              {input.code ?? input.html}
             </pre>
           </CardDetails>
         ) : null}

@@ -92,9 +92,11 @@ describe('lintArtifactHtml', () => {
 
 describe('artifact_write tool', () => {
   test('registers under approvalGuard as domain_write and CORE_UNGATED', () => {
-    expect(GATEWAY_ARTIFACT_TOOL_NAMES).toEqual(['artifact_write'])
+    expect(GATEWAY_ARTIFACT_TOOL_NAMES).toEqual(['artifact_write', 'artifact_build_omada'])
     expect(GATEWAY_TOOL_CLASSES.artifact_write).toBe('domain_write')
+    expect(GATEWAY_TOOL_CLASSES.artifact_build_omada).toBe('domain_write')
     expect(CORE_UNGATED_GATEWAY_TOOLS.has('artifact_write')).toBe(true)
+    expect(CORE_UNGATED_GATEWAY_TOOLS.has('artifact_build_omada')).toBe(true)
 
     const tools = buildGatewayTools({
       domain: domainWith(() => ({ json: { status: 'success', data: {} } }), []),
@@ -102,6 +104,7 @@ describe('artifact_write tool', () => {
       contextMode: 'manual_chat'
     })
     expect(tools.artifact_write).toBeDefined()
+    expect(tools.artifact_build_omada).toBeDefined()
   })
 
   test('creates v1 when artifact folder does not exist yet (E_NOT_FOUND)', async () => {
@@ -122,6 +125,18 @@ describe('artifact_write tool', () => {
               path: 'agent-docs/artifacts/q4-board/v1/index.html',
               size_bytes: 512,
               content_hash: 'hash-v1'
+            }
+          }
+        }
+      }
+      if (call.method === 'POST' && call.url.endsWith('/library/artifacts/preview-token')) {
+        return {
+          json: {
+            status: 'success',
+            data: {
+              ok: true,
+              token: 'tok-v1',
+              preview_url: 'http://127.0.0.1:8200/api/library/artifacts/preview/tok-v1/index.html'
             }
           }
         }
@@ -151,6 +166,7 @@ describe('artifact_write tool', () => {
       file_id: 101,
       path: 'agent-docs/artifacts/q4-board/v1/index.html',
       content_hash: 'hash-v1',
+      local_preview_url: 'http://127.0.0.1:8200/api/library/artifacts/preview/tok-v1/index.html',
       warnings: []
     })
     const postCall = calls.find((c) => c.method === 'POST')
@@ -249,6 +265,85 @@ describe('artifact_write tool', () => {
     expect(res.ok).toBe(false)
     expect(res.error).toBe('E_ARTIFACT_LINT')
     expect(Array.isArray(res.issues)).toBe(true)
+    expect(calls).toHaveLength(0)
+  })
+})
+
+describe('artifact_build_omada tool', () => {
+  test('calls POST /library/artifacts/build-omada and returns bundle metadata + local_preview_url', async () => {
+    const calls: Call[] = []
+    const domain = domainWith((call) => {
+      if (call.method === 'POST' && call.url.endsWith('/library/artifacts/build-omada')) {
+        return {
+          json: {
+            status: 'success',
+            data: {
+              ok: true,
+              slug: 'omada-ap-board',
+              title: 'Omada AP Monitor',
+              artifact_type: 'app',
+              version: 1,
+              file_id: 301,
+              path: 'agent-docs/artifacts/omada-ap-board/v1/index.html',
+              folder: 'agent-docs/artifacts/omada-ap-board/v1',
+              file_count: 6,
+              size_bytes: 1200400,
+              build_ms: 820,
+              source_demo: 'omada-ui-kit/src/demos/omada-ap-board/Demo.tsx',
+              local_preview_url: 'http://127.0.0.1:8200/api/library/artifacts/preview/om1/index.html'
+            }
+          }
+        }
+      }
+      throw new Error(`Unexpected call: ${call.method} ${call.url}`)
+    }, calls)
+
+    const guard = new ApprovalGuard()
+    const { artifact_build_omada } = createArtifactTools(domain, [], guard, {
+      contextMode: 'manual_chat',
+      toolApprovalPrefs: { artifact_build_omada: { tier: 'auto', source: 'default' } }
+    })
+
+    const res = (await runWithAuto(artifact_build_omada, {
+      slug: 'Omada AP_Board',
+      title: 'Omada AP Monitor',
+      code: "import { SCard } from '@/omada'; export default function Demo() { return <SCard title='AP' />; }"
+    })) as Record<string, unknown>
+
+    expect(res).toMatchObject({
+      ok: true,
+      slug: 'omada-ap-board',
+      artifact_type: 'app',
+      version: 1,
+      file_id: 301,
+      file_count: 6,
+      build_ms: 820,
+      local_preview_url: 'http://127.0.0.1:8200/api/library/artifacts/preview/om1/index.html'
+    })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.body).toMatchObject({
+      slug: 'omada-ap-board',
+      theme_mode: 'light'
+    })
+  })
+
+  test('rejects TODO placeholders in Demo.tsx without calling backend build', async () => {
+    const calls: Call[] = []
+    const domain = domainWith(() => ({ json: { status: 'success', data: {} } }), calls)
+    const guard = new ApprovalGuard()
+    const { artifact_build_omada } = createArtifactTools(domain, [], guard, {
+      contextMode: 'manual_chat',
+      toolApprovalPrefs: { artifact_build_omada: { tier: 'auto', source: 'default' } }
+    })
+
+    const res = (await runWithAuto(artifact_build_omada, {
+      slug: 'omada-todo',
+      title: 'Incomplete',
+      code: 'export default function Demo() { // TODO implement\n return null; }'
+    })) as Record<string, unknown>
+
+    expect(res.ok).toBe(false)
+    expect(res.error).toBe('E_ARTIFACT_LINT')
     expect(calls).toHaveLength(0)
   })
 })

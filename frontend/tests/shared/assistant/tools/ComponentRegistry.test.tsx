@@ -68,6 +68,7 @@ describe('componentRegistry — resolution', () => {
       // buttonless ToolTraceCard (approval-paused = permanent spinner, island-only approve).
       'agent_memory_update',
       'agent_profile_restore',
+      'artifact_build_omada',
       'artifact_write',
       'calendar_event_delete',
       'calendar_event_reschedule',
@@ -211,11 +212,12 @@ describe('componentRegistry — resolution', () => {
     expect(card).not.toBe(ToolTraceCard)
   })
 
-  test('artifact_write resolves to ArtifactWriteCard (not buttonless ToolTraceCard)', () => {
+  test('artifact_write and artifact_build_omada resolve to ArtifactWriteCard (not buttonless ToolTraceCard)', () => {
     const card = componentRegistry.resolve('artifact_write')
     expect(card).toBeTypeOf('function')
     expect(card).not.toBe(ToolTraceCard)
     expect(card).not.toBe(componentRegistry.resolve('library_write'))
+    expect(componentRegistry.resolve('artifact_build_omada')).toBe(card)
   })
 })
 

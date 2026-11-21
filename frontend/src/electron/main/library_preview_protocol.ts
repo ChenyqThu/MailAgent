@@ -29,7 +29,16 @@ import { mimeForPath, resolveVirtualPath } from './library_paths'
  *  按 URL 规范在同一个根内解析；`secure` 让它享有 https 同等的安全上下文；`stream` 给流式响应。 */
 export function registerLibraryPreviewScheme(): void {
   protocol.registerSchemesAsPrivileged([
-    { scheme: LIBRARY_PREVIEW_SCHEME, privileges: { standard: true, secure: true, stream: true } }
+    {
+      scheme: LIBRARY_PREVIEW_SCHEME,
+      privileges: {
+        standard: true,
+        secure: true,
+        stream: true,
+        supportFetchAPI: true,
+        corsEnabled: true
+      }
+    }
   ])
 }
 

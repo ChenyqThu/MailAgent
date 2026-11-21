@@ -2724,6 +2724,51 @@ export class MailAgentDomainClient {
       signal
     })
   }
+
+  /** Fetch exported component & CSS catalog from local omada-ui-kit workspace. */
+  libraryOmadaCatalog(signal?: AbortSignal): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('GET', '/library/omada/catalog', { signal })
+  }
+
+  /** Compile a real omada-ui-kit TSX demo with Vite, ingest dist/ into Library, and issue preview URL. */
+  libraryBuildOmadaDemo(
+    input: {
+      slug: string
+      code: string
+      title?: string
+      changeNote?: string
+      themeMode?: 'light' | 'dark'
+    },
+    actor: DomainLibraryActor,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('POST', '/library/artifacts/build-omada', {
+      body: {
+        slug: input.slug,
+        code: input.code,
+        title: input.title ?? null,
+        change_note: input.changeNote ?? null,
+        theme_mode: input.themeMode ?? 'light',
+        actor: libraryActorWire(actor)
+      },
+      signal
+    })
+  }
+
+  /** Issue an ephemeral loopback capability URL for browser_use preview of saved artifacts. */
+  libraryIssueArtifactPreviewToken(
+    input: { slug: string; version?: number; entryPath?: string },
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>('POST', '/library/artifacts/preview-token', {
+      body: {
+        slug: input.slug,
+        version: input.version ?? null,
+        entry_path: input.entryPath ?? 'index.html'
+      },
+      signal
+    })
+  }
 }
 
 /** `LibraryFolderPage` —— 🔴 没有 has_more，分页靠 total/limit/offset

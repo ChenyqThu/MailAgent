@@ -481,4 +481,53 @@ describe('deriveSessionWorkspace', () => {
     expect(art?.shareUrl).toBe('https://canvas.chenge.ink/s/tok?v=1')
     expect(art?.remoteVersion).toBe(1)
   })
+
+  test('derives versioned omada bundle artifacts with fileCount and without stuffing TSX into HTML content', () => {
+    const snap = deriveSessionWorkspace({
+      messages: [
+        {
+          role: 'assistant',
+          parts: [
+            {
+              type: 'tool-artifact_build_omada',
+              toolCallId: 'om-v1',
+              state: 'output-available',
+              input: {
+                slug: 'omada-ssid-wizard',
+                title: 'Omada SSID Wizard',
+                code: "import { SStepModal } from '@/omada'; export default function Demo() { return null }",
+                change_note: 'Initial step modal'
+              },
+              output: {
+                ok: true,
+                slug: 'omada-ssid-wizard',
+                title: 'Omada SSID Wizard',
+                artifact_type: 'app',
+                version: 1,
+                file_id: 311,
+                file_count: 6,
+                path: 'agent-docs/artifacts/omada-ssid-wizard/v1/index.html',
+                change_note: 'Initial step modal'
+              }
+            }
+          ]
+        }
+      ]
+    })
+
+    expect(snap.artifacts).toHaveLength(1)
+    expect(snap.artifacts[0]).toMatchObject({
+      id: 'artifact:omada-ssid-wizard',
+      kind: 'html',
+      title: 'Omada SSID Wizard',
+      slug: 'omada-ssid-wizard',
+      artifactType: 'app',
+      version: 1,
+      fileId: 311,
+      fileCount: 6,
+      virtualPath: 'agent-docs/artifacts/omada-ssid-wizard/v1/index.html',
+      isHtml: true
+    })
+    expect(snap.artifacts[0]?.content).toBeUndefined()
+  })
 })

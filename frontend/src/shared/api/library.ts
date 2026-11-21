@@ -99,6 +99,19 @@ export interface LibraryEmailSemanticStatus {
 }
 
 /** `GET /library/embed/status` —— 设置页语义检索区的唯一数据源。**不含任何绝对路径**。 */
+export interface ArtifactBundlePublishResult {
+  ok: true
+  slug: string
+  title: string
+  version?: number
+  local_version?: number
+  file_count: number
+  size_bytes: number
+  review_url?: string
+  share_url?: string
+  raw_url?: string
+}
+
 export interface LibraryEmbedStatus {
   model: {
     /** 权重在不在就是开关（design §9.1：不加 `MAILAGENT_*` flag）。 */
@@ -236,6 +249,16 @@ export interface LibraryApi {
     dim?: number | null
     min_score?: number | null
   }): Promise<LibraryEmbedStatus>
+  publishArtifactBundle(input: {
+    slug: string
+    version?: number
+    title?: string
+    artifact_type?: string
+    project?: string
+    visibility?: 'private' | 'unlisted' | 'public'
+    change_note?: string
+    entry_path?: string
+  }): Promise<ArtifactBundlePublishResult>
 }
 
 export function createLibraryApi(baseUrl: string): LibraryApi {
@@ -428,6 +451,30 @@ export function createLibraryApi(baseUrl: string): LibraryApi {
       min_score?: number | null
     }): Promise<LibraryEmbedStatus> {
       return request(baseUrl, 'PUT', '/library/embed/provider', { body: config })
+    },
+
+    publishArtifactBundle(input: {
+      slug: string
+      version?: number
+      title?: string
+      artifact_type?: string
+      project?: string
+      visibility?: 'private' | 'unlisted' | 'public'
+      change_note?: string
+      entry_path?: string
+    }): Promise<ArtifactBundlePublishResult> {
+      return request(baseUrl, 'POST', '/library/artifacts/publish-bundle', {
+        body: {
+          slug: input.slug,
+          version: input.version ?? null,
+          title: input.title ?? null,
+          artifact_type: input.artifact_type ?? 'app',
+          project: input.project ?? null,
+          visibility: input.visibility ?? null,
+          change_note: input.change_note ?? null,
+          entry_path: input.entry_path ?? 'index.html'
+        }
+      })
     }
   }
 }

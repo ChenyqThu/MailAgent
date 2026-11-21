@@ -1169,7 +1169,8 @@
       "library_write": "Write library file",
       "library_move": "Move library file",
       "library_delete": "Delete library file",
-      "artifact_write": "Create interactive artifact"
+      "artifact_write": "Create interactive artifact",
+      "artifact_build_omada": "Build Omada prototype"
     },
     "planCard": {
       "title": "Plan",
@@ -2038,7 +2039,8 @@
       "warningsTitle": "Runtime notes",
       "preview": "Preview",
       "openPreview": "Open interactive preview",
-      "htmlSourceLabel": "HTML source"
+      "htmlSourceLabel": "HTML source",
+      "codeSourceLabel": "TSX component source"
     }
   },
   "admin": {

@@ -22,6 +22,7 @@ import { useManagedBrowserUi } from '@shared/state/managed-browser-ui'
 
 const navigateMock = vi.fn()
 const libraryTextMock = vi.fn()
+const libraryPublishArtifactBundleMock = vi.fn()
 const connectorListMock = vi.fn()
 const connectorInvokeToolMock = vi.fn()
 
@@ -31,7 +32,8 @@ vi.mock('@tanstack/react-router', () => ({
 
 vi.mock('@shared/components/library/hooks', () => ({
   useLibraryApi: () => ({
-    text: libraryTextMock
+    text: libraryTextMock,
+    publishArtifactBundle: libraryPublishArtifactBundleMock
   })
 }))
 
@@ -65,6 +67,7 @@ beforeEach(() => {
   navigateMock.mockReset()
   libraryTextMock.mockReset()
   libraryTextMock.mockResolvedValue({ markdown: '# Live Server Text\n\nUpdated content' })
+  libraryPublishArtifactBundleMock.mockReset()
   connectorListMock.mockReset()
   connectorListMock.mockResolvedValue([])
   connectorInvokeToolMock.mockReset()
@@ -503,6 +506,72 @@ describe('SessionInspectorPane & InspectorTogglePill', () => {
       )
     )
 
+    expect(await screen.findByRole('button', { name: 'Open review' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Copy share link' })).toBeTruthy()
+  })
+
+  test('publishes multi-file Omada bundle via libraryApi.publishArtifactBundle when connected', async () => {
+    connectorListMock.mockResolvedValue([
+      { connector_id: 'artifact_server', enabled: true, status: 'connected' }
+    ])
+    libraryPublishArtifactBundleMock.mockResolvedValue({
+      ok: true,
+      slug: 'omada-ap-board',
+      title: 'Omada AP Monitor',
+      version: 1,
+      local_version: 1,
+      file_count: 6,
+      size_bytes: 1200400,
+      review_url: 'https://canvas.chenge.ink/a/omada-ap-board/v/1',
+      share_url: 'https://canvas.chenge.ink/s/omada-tok?v=1'
+    })
+
+    const bundleSnapshot: SessionWorkspaceSnapshot = {
+      ...POPULATED_SNAPSHOT,
+      artifacts: [
+        {
+          id: 'artifact:omada-ap-board',
+          kind: 'html',
+          title: 'Omada AP Monitor',
+          slug: 'omada-ap-board',
+          artifactType: 'app',
+          version: 1,
+          fileId: 301,
+          fileCount: 6,
+          virtualPath: 'agent-docs/artifacts/omada-ap-board/v1/index.html',
+          isHtml: true,
+          isMarkdown: false,
+          versions: [
+            {
+              version: 1,
+              fileId: 301,
+              fileCount: 6,
+              virtualPath: 'agent-docs/artifacts/omada-ap-board/v1/index.html',
+              changeNote: 'Initial AP health console'
+            }
+          ]
+        }
+      ],
+      totalItems: 1
+    }
+
+    renderHarness(bundleSnapshot)
+    fireEvent.click(screen.getByTestId('inspector-toggle-pill'))
+    fireEvent.click(screen.getByText('Omada AP Monitor'))
+
+    const publishBtn = await screen.findByRole('button', { name: 'Publish' })
+    fireEvent.click(publishBtn)
+
+    await waitFor(() =>
+      expect(libraryPublishArtifactBundleMock).toHaveBeenCalledWith({
+        slug: 'omada-ap-board',
+        version: 1,
+        title: 'Omada AP Monitor',
+        artifact_type: 'app',
+        change_note: 'Initial AP health console'
+      })
+    )
+    expect(connectorInvokeToolMock).not.toHaveBeenCalled()
     expect(await screen.findByRole('button', { name: 'Open review' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Copy share link' })).toBeTruthy()
   })

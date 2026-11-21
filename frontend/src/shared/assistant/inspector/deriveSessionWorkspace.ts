@@ -29,6 +29,7 @@ export interface WorkspaceArtifactVersion {
   readonly virtualPath?: string | undefined
   readonly content?: string | undefined
   readonly changeNote?: string | undefined
+  readonly fileCount?: number | undefined
 }
 
 export interface WorkspaceArtifact {
@@ -39,6 +40,7 @@ export interface WorkspaceArtifact {
   readonly virtualPath?: string | undefined
   readonly fileId?: number | undefined
   readonly writeCount?: number | undefined
+  readonly fileCount?: number | undefined
   readonly content?: string | undefined
   readonly imageUrl?: string | undefined
   readonly subject?: string | undefined
@@ -624,8 +626,9 @@ export function deriveSessionWorkspace(
       }
 
       if (!tc.isError && !tc.rejected) {
-        if (tc.toolName === 'artifact_write') {
+        if (tc.toolName === 'artifact_write' || tc.toolName === 'artifact_build_omada') {
           if (resObj?.ok === false) continue
+          const isOmada = tc.toolName === 'artifact_build_omada'
           const slug = nonEmptyStr(resObj?.slug) ?? nonEmptyStr(argsObj?.slug)
           const key = artifactWorkspaceId(slug, tc.toolCallId)
           const existing = artifactMap.get(key)
@@ -638,14 +641,17 @@ export function deriveSessionWorkspace(
           const artifactType =
             normalizeArtifactType(resObj?.artifact_type) ??
             normalizeArtifactType(argsObj?.artifact_type) ??
-            existing?.artifactType
+            existing?.artifactType ??
+            (isOmada ? 'app' : undefined)
           const fileId = positiveInt(resObj?.file_id) ?? positiveInt(resObj?.id)
           const virtualPath = toSafeVirtualPath(resObj?.path)
+          const fileCount = positiveInt(resObj?.file_count) ?? undefined
           const content =
-            typeof argsObj?.html === 'string' && argsObj.html.trim().length > 0
+            !isOmada && typeof argsObj?.html === 'string' && argsObj.html.trim().length > 0
               ? argsObj.html
               : existing?.content
-          const changeNote = nonEmptyStr(argsObj?.change_note) ?? undefined
+          const changeNote =
+            nonEmptyStr(resObj?.change_note) ?? nonEmptyStr(argsObj?.change_note) ?? undefined
           const prevVersions = existing?.versions ?? []
           const version =
             positiveInt(resObj?.version) ??
@@ -657,7 +663,8 @@ export function deriveSessionWorkspace(
             fileId: fileId ?? undefined,
             virtualPath,
             content,
-            changeNote
+            changeNote,
+            ...(fileCount !== undefined ? { fileCount } : {})
           }
           const byVersion = new Map<number, WorkspaceArtifactVersion>()
           for (const v of prevVersions) byVersion.set(v.version, v)
@@ -677,6 +684,7 @@ export function deriveSessionWorkspace(
             virtualPath: latest.virtualPath ?? existing?.virtualPath,
             fileId: latest.fileId ?? existing?.fileId,
             writeCount: versions.length,
+            fileCount: latest.fileCount ?? existing?.fileCount,
             content: latest.content ?? existing?.content,
             isMarkdown: false,
             isHtml: true

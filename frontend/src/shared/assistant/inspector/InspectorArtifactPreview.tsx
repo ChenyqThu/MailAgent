@@ -70,6 +70,25 @@ function triggerHtmlDownload(filename: string, html: string): void {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000)
 }
 
+function parseArtifactBundleTarget(
+  virtualPath: string | undefined,
+  fallbackSlug: string | undefined,
+  fallbackVersion: number | undefined
+): { slug: string; version?: number } | null {
+  if (virtualPath) {
+    const match = /^agent-docs\/artifacts\/([^/]+)\/v(\d+)(?:\/|$)/.exec(virtualPath)
+    if (match) {
+      return { slug: match[1], version: Number(match[2]) }
+    }
+  }
+  if (fallbackSlug) {
+    return fallbackVersion !== undefined
+      ? { slug: fallbackSlug, version: fallbackVersion }
+      : { slug: fallbackSlug }
+  }
+  return null
+}
+
 /**
  * Wide in-place studio preview for a clicked session Artifact (interactive HTML5 artifact via
  * `libpreview://`, library document, generated image, email draft, report, matter summary, or plan).
@@ -116,6 +135,7 @@ export function InspectorArtifactPreview({
   const activeFileId = activeVersionEntry?.fileId ?? artifact.fileId
   const activeVirtualPath = activeVersionEntry?.virtualPath ?? artifact.virtualPath
   const activeContentFallback = activeVersionEntry?.content ?? artifact.content ?? ''
+  const activeFileCount = activeVersionEntry?.fileCount ?? artifact.fileCount
   const activeSubtitle =
     activeVersionEntry?.changeNote ??
     (artifact.subtitle && artifact.subtitle !== artifact.to ? artifact.subtitle : undefined)
@@ -191,6 +211,20 @@ export function InspectorArtifactPreview({
     (artifact.kind === 'library' || artifact.kind === 'html') && activeFileId != null
   const canOpenMatter = artifact.kind === 'matter' && artifact.matterPublicId != null
   const hasHtmlRenderSource = previewUrl !== null || effectiveContent.length > 0
+  const bundleTarget = parseArtifactBundleTarget(
+    activeVirtualPath,
+    artifact.slug,
+    activeVersionEntry?.version ?? artifact.version
+  )
+  const prefersBundlePublish =
+    Boolean(bundleTarget) &&
+    typeof libraryApi.publishArtifactBundle === 'function' &&
+    ((activeFileCount != null && activeFileCount > 1) || effectiveContent.length === 0)
+  const canInvokeSinglePublish =
+    effectiveContent.length > 0 && typeof mailApi?.connector?.invokeTool === 'function'
+  const canShowCloudControl =
+    isHtmlArtifact &&
+    (hasHtmlRenderSource || (Boolean(bundleTarget) && typeof libraryApi.publishArtifactBundle === 'function'))
   const isFullHeightHtmlRender =
     isHtmlArtifact && htmlMode === 'rendered' && hasHtmlRenderSource
 
@@ -242,33 +276,55 @@ export function InspectorArtifactPreview({
   }
 
   const handlePublishCloud = async (): Promise<void> => {
-    if (!effectiveContent || !mailApi?.connector?.invokeTool || publishing) return
+    if (publishing) return
+    const useBundleApi =
+      prefersBundlePublish && bundleTarget && typeof libraryApi.publishArtifactBundle === 'function'
+    if (!useBundleApi && (!effectiveContent || !mailApi?.connector?.invokeTool)) return
     setPublishing(true)
     try {
-      const slug = artifact.slug || normalizePublishSlug(artifact.title)
-      const res = await mailApi.connector.invokeTool('artifact_server', 'artifact_publish', {
-        slug,
-        title: artifact.title,
-        artifact_type: artifact.artifactType ?? 'app',
-        html: effectiveContent,
-        ...(activeVersionEntry?.changeNote ? { change_note: activeVersionEntry.changeNote } : {})
-      })
-      if (res.is_error) {
-        throw new Error(res.content || 'Publish failed')
+      let reviewUrl: string | undefined
+      let shareUrl: string | undefined
+      let publishedVersion: number | undefined
+
+      if (useBundleApi && bundleTarget) {
+        const res = await libraryApi.publishArtifactBundle({
+          slug: bundleTarget.slug,
+          ...(bundleTarget.version !== undefined ? { version: bundleTarget.version } : {}),
+          title: artifact.title,
+          artifact_type: artifact.artifactType ?? 'app',
+          ...(activeVersionEntry?.changeNote ? { change_note: activeVersionEntry.changeNote } : {})
+        })
+        reviewUrl = res.review_url ?? res.share_url
+        shareUrl = res.share_url
+        publishedVersion = typeof res.version === 'number' ? res.version : undefined
+      } else if (mailApi?.connector?.invokeTool) {
+        const slug = artifact.slug || normalizePublishSlug(artifact.title)
+        const res = await mailApi.connector.invokeTool('artifact_server', 'artifact_publish', {
+          slug,
+          title: artifact.title,
+          artifact_type: artifact.artifactType ?? 'app',
+          html: effectiveContent,
+          ...(activeVersionEntry?.changeNote ? { change_note: activeVersionEntry.changeNote } : {})
+        })
+        if (res.is_error) {
+          throw new Error(res.content || 'Publish failed')
+        }
+        const parsed = JSON.parse(res.content) as {
+          ok?: boolean
+          message?: string
+          version?: number
+          review_url?: string
+          share_url?: string
+          links?: { review_url?: string; share_url?: string }
+        }
+        if (parsed.ok === false) {
+          throw new Error(parsed.message || 'Publish failed')
+        }
+        reviewUrl = parsed.review_url ?? parsed.links?.review_url ?? parsed.share_url
+        shareUrl = parsed.share_url ?? parsed.links?.share_url
+        publishedVersion = typeof parsed.version === 'number' ? parsed.version : undefined
       }
-      const parsed = JSON.parse(res.content) as {
-        ok?: boolean
-        message?: string
-        version?: number
-        review_url?: string
-        share_url?: string
-        links?: { review_url?: string; share_url?: string }
-      }
-      if (parsed.ok === false) {
-        throw new Error(parsed.message || 'Publish failed')
-      }
-      const reviewUrl = parsed.review_url ?? parsed.links?.review_url ?? parsed.share_url
-      const shareUrl = parsed.share_url ?? parsed.links?.share_url
+
       if (!reviewUrl) {
         throw new Error('Artifact Server did not return a review URL')
       }
@@ -277,7 +333,7 @@ export function InspectorArtifactPreview({
         [publishStateKey]: {
           reviewUrl,
           shareUrl,
-          version: typeof parsed.version === 'number' ? parsed.version : undefined
+          version: publishedVersion
         }
       }))
       toastSuccess(t('chat.inspector.cloud.publishSuccess'))
@@ -381,47 +437,47 @@ export function InspectorArtifactPreview({
                   <Download size={13} />
                 </button>
               )}
-              {effectiveContent.length > 0 &&
-                (artifactServerConnected && typeof mailApi?.connector?.invokeTool === 'function' ? (
-                  <button
-                    type="button"
-                    onClick={() => void handlePublishCloud()}
-                    disabled={publishing}
-                    aria-label={
-                      publishing
-                        ? t('chat.inspector.cloud.publishing')
-                        : activeRemote
-                          ? t('chat.inspector.cloud.updateCloud')
-                          : t('chat.inspector.cloud.publish')
-                    }
-                    className="inline-flex items-center gap-1 rounded-md border border-ink-border-soft bg-ink-2 px-2 py-1 text-aux font-medium text-ink-fg transition-colors duration-fast hover:bg-ink-3 disabled:opacity-60"
-                  >
-                    {publishing ? (
-                      <Loader2 size={13} className="animate-spin text-coral" />
-                    ) : (
-                      <UploadCloud size={13} className="text-coral" />
-                    )}
-                    <span>
-                      {publishing
-                        ? t('chat.inspector.cloud.publishing')
-                        : activeRemote
-                          ? t('chat.inspector.cloud.updateCloud')
-                          : t('chat.inspector.cloud.publish')}
-                    </span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleOpenCloudSettings}
-                    aria-label={t('chat.inspector.cloud.connectTitle')}
-                    title={t('chat.inspector.cloud.connectTitle')}
-                    className="grid size-7 place-items-center rounded-md border border-ink-border-soft bg-ink-2 text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
-                  >
-                    <Cloud size={13} />
-                  </button>
-                ))}
             </>
           )}
+          {canShowCloudControl &&
+            (artifactServerConnected && (prefersBundlePublish || canInvokeSinglePublish) ? (
+              <button
+                type="button"
+                onClick={() => void handlePublishCloud()}
+                disabled={publishing}
+                aria-label={
+                  publishing
+                    ? t('chat.inspector.cloud.publishing')
+                    : activeRemote
+                      ? t('chat.inspector.cloud.updateCloud')
+                      : t('chat.inspector.cloud.publish')
+                }
+                className="inline-flex items-center gap-1 rounded-md border border-ink-border-soft bg-ink-2 px-2 py-1 text-aux font-medium text-ink-fg transition-colors duration-fast hover:bg-ink-3 disabled:opacity-60"
+              >
+                {publishing ? (
+                  <Loader2 size={13} className="animate-spin text-coral" />
+                ) : (
+                  <UploadCloud size={13} className="text-coral" />
+                )}
+                <span>
+                  {publishing
+                    ? t('chat.inspector.cloud.publishing')
+                    : activeRemote
+                      ? t('chat.inspector.cloud.updateCloud')
+                      : t('chat.inspector.cloud.publish')}
+                </span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleOpenCloudSettings}
+                aria-label={t('chat.inspector.cloud.connectTitle')}
+                title={t('chat.inspector.cloud.connectTitle')}
+                className="grid size-7 place-items-center rounded-md border border-ink-border-soft bg-ink-2 text-ink-fg-2 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+              >
+                <Cloud size={13} />
+              </button>
+            ))}
           {copyPayload.length > 0 && (
             <button
               type="button"

@@ -215,7 +215,7 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
   },
   {
     component: A2UI_COMPONENTS.ArtifactWriteCard,
-    toolNames: ['artifact_write'],
+    toolNames: ['artifact_write', 'artifact_build_omada'],
     render: ArtifactWriteCard
   },
   // calendar epic 4.2 — the calendar write approval card (behind MAILAGENT_CALENDAR_AGENT_TOOLS).

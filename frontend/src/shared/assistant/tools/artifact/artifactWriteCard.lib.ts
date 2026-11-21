@@ -15,6 +15,7 @@ export interface ArtifactWriteInput {
   title: string | null
   artifactType: WorkspaceArtifactType | null
   html: string | null
+  code: string | null
   changeNote: string | null
 }
 
@@ -27,6 +28,9 @@ export interface ArtifactWriteOutput {
   version: number | null
   fileId: number | null
   path: string | null
+  fileCount: number | null
+  buildMs: number | null
+  sourceDemo: string | null
   issues: string[]
   warnings: string[]
 }
@@ -41,6 +45,10 @@ function str(v: unknown): string | null {
 
 function positiveInt(v: unknown): number | null {
   return typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : null
+}
+
+function nonNegInt(v: unknown): number | null {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null
 }
 
 function asArtifactType(v: unknown): WorkspaceArtifactType | null {
@@ -66,11 +74,13 @@ export function readArtifactWriteInput(
       obj = null
     }
   }
+  const code = typeof obj?.code === 'string' && obj.code.length > 0 ? obj.code : null
   return {
     slug: str(obj?.slug),
     title: str(obj?.title),
-    artifactType: asArtifactType(obj?.artifact_type),
+    artifactType: asArtifactType(obj?.artifact_type) ?? (code ? 'app' : null),
     html: typeof obj?.html === 'string' && obj.html.length > 0 ? obj.html : null,
+    code,
     changeNote: str(obj?.change_note)
   }
 }
@@ -87,6 +97,9 @@ export function readArtifactWriteOutput(result: unknown): ArtifactWriteOutput | 
     version: positiveInt(obj.version),
     fileId: positiveInt(obj.file_id) ?? positiveInt(obj.id),
     path: str(obj.path),
+    fileCount: positiveInt(obj.file_count),
+    buildMs: nonNegInt(obj.build_ms),
+    sourceDemo: str(obj.source_demo),
     issues: strList(obj.issues),
     warnings: strList(obj.warnings)
   }

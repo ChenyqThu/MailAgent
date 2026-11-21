@@ -24,13 +24,41 @@ import {
 // can load this module directly (library.ts precedent).
 import { AGENT_DOCS_SLUG, TEXT_WRITE_MAX_BYTES } from '../../shared/libraryConstants'
 
-export const GATEWAY_ARTIFACT_TOOL_NAMES = ['artifact_write'] as const
+export const GATEWAY_ARTIFACT_TOOL_NAMES = ['artifact_write', 'artifact_build_omada'] as const
 
 export const ARTIFACT_TYPES = ['dashboard', 'slides', 'report', 'diagram', 'app'] as const
 export type ArtifactType = (typeof ARTIFACT_TYPES)[number]
 
-const ARTIFACT_ROOT = `${AGENT_DOCS_SLUG}/artifacts`
+const artifactBuildOmadaSchema = z.object({
+  slug: z
+    .string()
+    .trim()
+    .min(1)
+    .max(80)
+    .describe(
+      'Short ASCII kebab-case identifier (e.g. "omada-ap-health-monitor"). Reusing the same slug creates v2, v3, ...'
+    ),
+  title: z.string().trim().min(1).max(160).describe('Human-readable title of the Omada prototype.'),
+  code: z
+    .string()
+    .min(1)
+    .max(TEXT_WRITE_MAX_BYTES)
+    .describe(
+      'Complete React + TypeScript TSX component file saved as src/demos/<slug>/Demo.tsx inside omada-ui-kit. Must default-export (or export `Demo`) a React component using `@/omada` components.'
+    ),
+  theme_mode: z
+    .enum(['light', 'dark'])
+    .optional()
+    .describe('Default theme mode passed to OmadaProvider (default: "light").'),
+  change_note: z
+    .string()
+    .trim()
+    .max(200)
+    .optional()
+    .describe('Short summary of what changed in this prototype build.')
+})
 const VERSION_CONFLICT = 'E_VERSION_CONFLICT'
+const ARTIFACT_ROOT = `${AGENT_DOCS_SLUG}/artifacts`
 const SLUG_MAX_LEN = 64
 
 export interface ArtifactLintResult {
@@ -253,6 +281,20 @@ export function createArtifactTools(
         }
 
         const fallbackPath = `${artifactFolder}/v${version}/index.html`
+        let localPreviewUrl: string | null = null
+        if (typeof domain.libraryIssueArtifactPreviewToken === 'function') {
+          try {
+            const preview = await domain.libraryIssueArtifactPreviewToken(
+              { slug, version, entryPath: 'index.html' },
+              signal
+            )
+            if (typeof preview.preview_url === 'string' && preview.preview_url) {
+              localPreviewUrl = preview.preview_url
+            }
+          } catch {
+            // Non-fatal in minimal test/mock environments
+          }
+        }
         return {
           ok: true,
           slug,
@@ -263,6 +305,7 @@ export function createArtifactTools(
           path: typeof row.path === 'string' ? row.path : fallbackPath,
           size: typeof row.size_bytes === 'number' ? row.size_bytes : null,
           content_hash: typeof row.content_hash === 'string' ? row.content_hash : null,
+          local_preview_url: localPreviewUrl,
           warnings: lint.warnings,
           user_edited: userEdited
         }
@@ -272,5 +315,66 @@ export function createArtifactTools(
     guard
   )
 
-  return { artifact_write }
+  const artifact_build_omada = auditedWriteTool(
+    {
+      a2uiEnabled: opts.a2uiEnabled,
+      approvalMode: opts.approvalMode,
+      toolApprovalPrefs: opts.toolApprovalPrefs,
+      oneShot: opts.oneShot,
+      contextMode: opts.contextMode,
+      name: 'artifact_build_omada',
+      description:
+        'Compile a real React + TypeScript prototype using components from local omada-ui-kit ' +
+        '(src/demos/<slug>/Demo.tsx) with Vite, ingest the built multi-file bundle into ' +
+        'agent-docs/artifacts/<slug>/vN/, and return interactive local_preview_url. Edit tier.',
+      inputSchema: artifactBuildOmadaSchema,
+      risk: 'edit',
+      editableFields: ['title', 'code'],
+      run: async (input, { userEdited, signal }) => {
+        const slug = normalizeArtifactSlug(input.slug)
+        if (!slug) {
+          throw new DomainError(
+            'E_INVALID_ARG',
+            'slug must contain ASCII letters or digits (e.g. "omada-ap-health-monitor")'
+          )
+        }
+        if (/\/\/\s*TODO\b|\/\*\s*TODO\b/i.test(input.code)) {
+          return {
+            ok: false,
+            error: 'E_ARTIFACT_LINT',
+            slug,
+            issues: ['Remove TODO placeholders and ship complete interactive React components.'],
+            hint: 'Complete the Demo.tsx code and call artifact_build_omada again.'
+          }
+        }
+
+        const built = await surfaced(
+          domain.libraryBuildOmadaDemo(
+            {
+              slug,
+              title: input.title,
+              code: input.code,
+              themeMode: input.theme_mode ?? 'light',
+              changeNote: input.change_note
+            },
+            actor,
+            signal
+          )
+        )
+
+        return {
+          ...built,
+          ok: true,
+          slug: typeof built.slug === 'string' ? built.slug : slug,
+          title: typeof built.title === 'string' ? built.title : input.title,
+          artifact_type: 'app',
+          user_edited: userEdited
+        }
+      }
+    },
+    collector,
+    guard
+  )
+
+  return { artifact_write, artifact_build_omada }
 }

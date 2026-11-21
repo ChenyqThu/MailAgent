@@ -1169,7 +1169,8 @@
       "library_write": "写入资料库文件",
       "library_move": "移动资料库文件",
       "library_delete": "删除资料库文件",
-      "artifact_write": "生成交互产物"
+      "artifact_write": "生成交互产物",
+      "artifact_build_omada": "构建 Omada 原型"
     },
     "planCard": {
       "title": "计划",
@@ -2038,7 +2039,8 @@
       "warningsTitle": "运行时提示",
       "preview": "在右侧预览",
       "openPreview": "打开交互预览",
-      "htmlSourceLabel": "HTML 源码预览"
+      "htmlSourceLabel": "HTML 源码预览",
+      "codeSourceLabel": "TSX 组件源码预览"
     }
   },
   "admin": {
