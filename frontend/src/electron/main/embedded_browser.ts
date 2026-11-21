@@ -31,6 +31,10 @@ import {
 } from './embedded_browser_cdp'
 
 const DEFAULT_OFFSCREEN_BOUNDS = { x: 0, y: 0, width: 1280, height: 900 }
+export const MAX_AUTH_POPUP_WINDOWS = 4
+const RESERVED_TARGET_NAMES = new Set(['_blank', '_self', '_top', '_parent'])
+const POPUP_FEATURE_RE =
+  /\b(width|height|left|top|popup|dialog|menubar|toolbar|location|resizable|scrollbars)\b/i
 const BLOCKED_SCHEMES = [
   'javascript:',
   'data:',
@@ -42,6 +46,51 @@ const BLOCKED_SCHEMES = [
   'vbscript:',
   'blob:'
 ] as const
+
+export function sanitizeBrowserUserAgent(ua: string): string {
+  return (ua || '')
+    .replace(/\s+Electron\/[^\s]+/gi, '')
+    .replace(/\s+MailAgent\/[^\s]+/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+export function shouldOpenAsAuthPopup(details: {
+  url?: string
+  frameName?: string
+  features?: string
+  disposition?: string
+}): boolean {
+  if (details.disposition === 'new-window') return true
+  if (typeof details.features === 'string' && POPUP_FEATURE_RE.test(details.features)) {
+    return true
+  }
+  const isBackground = details.disposition === 'background-tab'
+  if (!isBackground && (!details.url || details.url === 'about:blank')) {
+    return true
+  }
+  const trimmedName = typeof details.frameName === 'string' ? details.frameName.trim() : ''
+  if (!isBackground && trimmedName.length > 0 && !RESERVED_TARGET_NAMES.has(trimmedName.toLowerCase())) {
+    return true
+  }
+  return false
+}
+
+export function parsePopupWindowSize(features?: string): { width: number; height: number } {
+  const clamp = (raw: string | undefined, fallback: number, min: number, max: number): number => {
+    if (!raw) return fallback
+    const parsed = Number.parseInt(raw, 10)
+    if (!Number.isFinite(parsed)) return fallback
+    return Math.min(max, Math.max(min, parsed))
+  }
+  const text = typeof features === 'string' ? features : ''
+  const widthMatch = /\bwidth\s*=\s*(\d+)/i.exec(text)
+  const heightMatch = /\bheight\s*=\s*(\d+)/i.exec(text)
+  return {
+    width: clamp(widthMatch?.[1], 520, 420, 1200),
+    height: clamp(heightMatch?.[1], 680, 480, 960)
+  }
+}
 
 export function normalizeEmbeddedBrowserUrl(raw: string): string {
   const text = (raw || '').trim()
@@ -179,6 +228,7 @@ export class EmbeddedBrowserManager {
   private readonly emitter = new EventEmitter()
 
   private readonly tabs: ManagedTabEntry[] = []
+  private readonly popupWindows = new Set<BrowserWindow>()
   private activeTabId: string | null = null
   private nextTabSeq = 1
   private stateEmitTimer: NodeJS.Timeout | null = null
@@ -195,6 +245,19 @@ export class EmbeddedBrowserManager {
     this.browserSession =
       opts.browserSession ?? session.fromPartition(EMBEDDED_BROWSER_PARTITION)
     this.getHostWindow = opts.getHostWindow
+    if (
+      typeof this.browserSession.getUserAgent === 'function' &&
+      typeof this.browserSession.setUserAgent === 'function'
+    ) {
+      const cleanUa = sanitizeBrowserUserAgent(this.browserSession.getUserAgent())
+      if (cleanUa) {
+        this.browserSession.setUserAgent(cleanUa)
+      }
+    }
+  }
+
+  getPopupCount(): number {
+    return this.popupWindows.size
   }
 
   createCdpHost(): EmbeddedBrowserCdpHost {
@@ -360,6 +423,7 @@ export class EmbeddedBrowserManager {
   }
 
   async resetSession(): Promise<EmbeddedBrowserState> {
+    this.closeAllPopupWindows()
     const oldTabs = [...this.tabs]
     this.detachChildViewOnly()
     this.tabs.length = 0
@@ -473,6 +537,7 @@ export class EmbeddedBrowserManager {
       clearTimeout(this.stateEmitTimer)
       this.stateEmitTimer = null
     }
+    this.closeAllPopupWindows()
     this.detachChildViewOnly()
     const oldTabs = this.tabs.splice(0, this.tabs.length)
     for (const old of oldTabs) {
@@ -480,6 +545,15 @@ export class EmbeddedBrowserManager {
         old.view.webContents.close({ waitForBeforeUnload: false })
       }
     }
+  }
+
+  private closeAllPopupWindows(): void {
+    for (const popup of [...this.popupWindows]) {
+      if (!popup.isDestroyed()) {
+        popup.close()
+      }
+    }
+    this.popupWindows.clear()
   }
 
   private toCdpTabHandle(entry: ManagedTabEntry): ManagedCdpTabHandle {
@@ -579,8 +653,7 @@ export class EmbeddedBrowserManager {
     return true
   }
 
-  private attachWebContentsHooks(entry: ManagedTabEntry): void {
-    const wc = entry.view.webContents
+  private attachNavigationAndPopupHooks(wc: Electron.WebContents): void {
     wc.on('will-navigate', (event, url) => {
       if (!isAllowedEmbeddedNavigationUrl(url)) {
         event.preventDefault()
@@ -592,11 +665,64 @@ export class EmbeddedBrowserManager {
       }
     })
     wc.setWindowOpenHandler((details) => {
-      if (isAllowedEmbeddedNavigationUrl(details.url)) {
+      if (details.url && !isAllowedEmbeddedNavigationUrl(details.url)) {
+        return { action: 'deny' }
+      }
+      if (shouldOpenAsAuthPopup(details)) {
+        if (this.popupWindows.size < MAX_AUTH_POPUP_WINDOWS) {
+          const { width, height } = parsePopupWindowSize(details.features)
+          const hostWin = this.getHostWindow()
+          const parentOption =
+            hostWin && !hostWin.isDestroyed() ? { parent: hostWin } : {}
+          return {
+            action: 'allow',
+            overrideBrowserWindowOptions: {
+              ...parentOption,
+              width,
+              height,
+              autoHideMenuBar: true,
+              title: 'Sign in',
+              webPreferences: {
+                session: this.browserSession,
+                sandbox: true,
+                contextIsolation: true,
+                nodeIntegration: false,
+                webSecurity: true,
+                allowRunningInsecureContent: false
+              }
+            }
+          }
+        }
+        if (details.url && details.url !== 'about:blank') {
+          this.createTabInternal(details.url, { activate: true })
+        }
+        return { action: 'deny' }
+      }
+      if (details.url && isAllowedEmbeddedNavigationUrl(details.url)) {
         this.createTabInternal(details.url, { activate: true })
       }
       return { action: 'deny' }
     })
+    wc.on('did-create-window', (popupWin) => {
+      this.trackPopupWindow(popupWin)
+    })
+  }
+
+  private trackPopupWindow(popupWin: BrowserWindow): void {
+    this.popupWindows.add(popupWin)
+    this.attachNavigationAndPopupHooks(popupWin.webContents)
+    popupWin.on('closed', () => {
+      this.popupWindows.delete(popupWin)
+      void this.browserSession.cookies.flushStore().catch(() => {
+        /* ignore cookie flush errors on closed popup */
+      })
+      this.emitStateSoon()
+    })
+  }
+
+  private attachWebContentsHooks(entry: ManagedTabEntry): void {
+    const wc = entry.view.webContents
+    this.attachNavigationAndPopupHooks(wc)
 
     const onChange = (): void => this.emitStateSoon()
     wc.on('did-start-loading', onChange)
