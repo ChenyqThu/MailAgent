@@ -205,15 +205,23 @@ export function useBackgroundChatRun(opts: UseBackgroundChatRunOptions): {
   const witnessedRunRef = useRef<string | null | undefined>(undefined)
   const pendingCompactRefreshRef = useRef(false)
   useEffect(() => {
-    if (active && !localRunningRef.current && !activeIsOwnRun) {
-      witnessedRunRef.current = probedRunId
+    if (active) {
+      if (localRunning || activeIsOwnRun) {
+        if (witnessedRunRef.current === probedRunId) {
+          witnessedRunRef.current = undefined
+        }
+      } else {
+        witnessedRunRef.current = probedRunId
+      }
+      return
     }
-    if (!active && witnessedRunRef.current !== undefined) {
+    if (witnessedRunRef.current !== undefined) {
       const witnessed = witnessedRunRef.current
       witnessedRunRef.current = undefined
+      if (witnessed != null && isOwnRun(witnessed)) return
       fireSettle(witnessed)
     }
-  }, [active, activeIsOwnRun, probedRunId, fireSettle])
+  }, [active, activeIsOwnRun, localRunning, probedRunId, fireSettle])
   // A session switch invalidates the witness (it would otherwise leak a stale settle into the next
   // session's first probe). The settled-run set survives — runIds are globally unique.
   useEffect(() => {

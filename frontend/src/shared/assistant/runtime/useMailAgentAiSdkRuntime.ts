@@ -125,6 +125,8 @@ export interface UseMailAgentAiSdkRuntimeOptions {
   /** Persist turns into this ai_chat.db session. null → Gateway skips persistence
    *  (unsaved temporary session). */
   sessionId?: number | null
+  /** Whether a mounted existing session should auto-reattach to an active stream (`GET /api/ai/run/stream`). */
+  resume?: boolean
   /** Model id override; null/undefined → the Gateway's configured default. */
   model?: string | null
   /** Optional system prompt fallback. Phase 06: when context injection is on, the gateway builds
@@ -211,10 +213,120 @@ export async function resolveAiSdkSessionId(
   return latch.inflight
 }
 
+type MailAgentResumableAdapter = ReturnType<
+  AssistantChatTransport<MailAgentUIMessage>['getResumableAdapter']
+>
+
+export interface MailAgentReconnectHandlers {
+  readonly gatewayBaseUrl: string
+  readonly getSessionId: () => number | null
+  readonly isMounted: () => boolean
+  readonly ownRunOwner: OwnRunOwner
+  readonly nextReconnectSeq: () => number
+  readonly currentReconnectSeq: () => number
+  readonly resumableAdapter?: MailAgentResumableAdapter
+}
+
+/**
+ * Custom AssistantChatTransport that overrides `reconnectToStream` to reattach to MailAgent's
+ * `/api/ai/run/stream?sessionId=N` without touching `body` / `onEnsureSession`, while preserving
+ * explicit Stop semantics and preventing tab-switch unmount or StrictMode replays from aborting runs.
+ */
+export class MailAgentChatTransport extends AssistantChatTransport<MailAgentUIMessage> {
+  private readonly initOptionsCopy: ConstructorParameters<
+    typeof AssistantChatTransport<MailAgentUIMessage>
+  >[0]
+  private readonly reconnectHandlers: MailAgentReconnectHandlers
+
+  constructor(
+    initOptions: ConstructorParameters<typeof AssistantChatTransport<MailAgentUIMessage>>[0],
+    reconnectHandlers: MailAgentReconnectHandlers
+  ) {
+    super(initOptions)
+    this.initOptionsCopy = initOptions
+    this.reconnectHandlers = reconnectHandlers
+  }
+
+  override __internal_clone(): MailAgentChatTransport {
+    return new MailAgentChatTransport(this.initOptionsCopy, this.reconnectHandlers)
+  }
+
+  override getResumableAdapter(): MailAgentResumableAdapter {
+    return this.reconnectHandlers.resumableAdapter
+  }
+
+  override async reconnectToStream(options: {
+    chatId: string
+    metadata?: unknown
+    headers?: Record<string, string> | Headers
+    body?: object
+    abortSignal?: AbortSignal
+  }): ReturnType<AssistantChatTransport<MailAgentUIMessage>['reconnectToStream']> {
+    const sid = this.reconnectHandlers.getSessionId()
+    if (sid == null) return null
+
+    let res: Response
+    try {
+      res = await fetch(`${this.reconnectHandlers.gatewayBaseUrl}/api/ai/run/stream?sessionId=${sid}`, {
+        method: 'GET',
+        signal: options.abortSignal
+      })
+    } catch {
+      return null
+    }
+    if (res.status === 204 || res.status === 404 || !res.ok || !res.body) {
+      return null
+    }
+    const contentType = res.headers.get('content-type') ?? ''
+    if (contentType && !contentType.toLowerCase().includes('text/event-stream')) {
+      return null
+    }
+    if (options.abortSignal?.aborted) {
+      void res.body.cancel().catch(() => {
+        /* ignore cancel errors on aborted reconnect */
+      })
+      return null
+    }
+
+    const seq = this.reconnectHandlers.nextReconnectSeq()
+    const signal = options.abortSignal
+    if (signal && !signal.aborted) {
+      signal.addEventListener(
+        'abort',
+        () => {
+          const stopSid = this.reconnectHandlers.getSessionId()
+          if (stopSid == null) return
+          setTimeout(() => {
+            if (
+              !this.reconnectHandlers.isMounted() ||
+              seq !== this.reconnectHandlers.currentReconnectSeq()
+            ) {
+              return
+            }
+            void fetch(`${this.reconnectHandlers.gatewayBaseUrl}/api/ai/run/stop`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sessionId: stopSid })
+            }).catch(() => {
+              /* best-effort — flag off / gateway gone */
+            })
+          }, 0)
+        },
+        { once: true }
+      )
+    }
+
+    const runId = res.headers.get('x-mailagent-run-id')
+    if (runId) recordOwnRun(this.reconnectHandlers.ownRunOwner, runId)
+    return this.processResponseStream(res.body)
+  }
+}
+
 export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions): AssistantRuntime {
   const {
     gatewayBaseUrl,
     sessionId,
+    resume,
     model,
     system,
     contextSnapshot,
@@ -247,6 +359,22 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
       mountedRef.current = false
     }
   }, [])
+  const reconnectSeqRef = useRef(0)
+  // Latch resumable reattach at mount so Turn #1 of a fresh session (sessionId: null -> N
+  // mid-stream) never triggers resumeStream() mid-response; only mounting an existing session
+  // reattaches to `/api/ai/run/stream`.
+  const [resumableAdapter] = useState<MailAgentResumableAdapter>(() => {
+    if ((sessionId ?? null) == null || resume === false) return undefined
+    return {
+      resumeApi: '',
+      storage: {
+        getStreamId: () => 'mailagent-mount-reattach',
+        setStreamId: () => {},
+        clear: () => {},
+        subscribe: () => () => {}
+      }
+    }
+  })
 
   // Phase 06a — per-thread session-id latch. Seeded from the sessionId prop (reload → an existing id;
   // a new conversation → null, created lazily on the first send). The panel remounts this provider
@@ -331,97 +459,111 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
         return false
       }
     }
-    return new AssistantChatTransport({
-      api: `${gatewayBaseUrl}/api/ai/chat`,
-      // harness-chat lane A B1 (task 07-15) — explicit-stop side-channel. With detached runs the
-      // gateway no longer aborts the upstream call on client disconnect, so the composer stop button
-      // (assistant-ui cancel → useChat.stop() → fetch abort) needs a server-visible signal: hook the
-      // request's abort and best-effort POST /api/ai/run/stop for this session. Fires ONLY on an
-      // explicit stop: a keyed remount (session / tab switch) aborts the fetch too, but the runtime
-      // is no longer mounted by then, so the run keeps going in the background. The destroy signal
-      // and our effect cleanup have no guaranteed order, so the mounted check is deferred one tick.
-      // Flag-off gateway answers 404 → harmless.
-      fetch: (input: RequestInfo | URL, init?: RequestInit) => {
-        const signal = init?.signal
-        if (signal && !signal.aborted) {
-          signal.addEventListener(
-            'abort',
-            () => {
-              const sid = latchRef.current.id
-              if (sid == null) return
-              setTimeout(() => {
-                if (!mountedRef.current) return
-                void fetch(`${gatewayBaseUrl}/api/ai/run/stop`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ sessionId: sid })
-                }).catch(() => {
-                  /* best-effort — flag off / gateway gone */
-                })
-              }, 0)
-            },
-            { once: true }
-          )
-        }
-        // codex r2 [C] — own-run attribution: the gateway stamps each leased chat response with
-        // its ActiveRunRegistry runId; recording it lets useBackgroundChatRun's settle door tell
-        // our own turn's persist broadcast from a genuine background settle (per-run, replacing
-        // the r1 time-window heuristics). Headers arrive at stream START (well before the persist
-        // broadcast) so the record is never late. Absent header (older gateway / unleased run) →
-        // no record, the poll-mask degrade path handles it. codex r3 P1 — recorded under THIS
-        // runtime instance's owner token: the mask holds only while this mount is alive; a header
-        // landing after unmount records against a released owner = background from the start.
-        return fetch(input, init).then(async (res) => {
-          const runId = res.headers.get('x-mailagent-run-id')
-          if (runId) recordOwnRun(ownRunOwner, runId)
-          if (res.status === RUN_LEASE_REJECTED_STATUS) {
-            const redirected = await redirectRejectedSendToQueue(res.clone(), init)
-            if (redirected) {
-              // 已经在排队条里等着了 —— 这一轮就此终止，但不是「消息没了」。
-              return res
-            }
+    return new MailAgentChatTransport(
+      {
+        api: `${gatewayBaseUrl}/api/ai/chat`,
+        // harness-chat lane A B1 (task 07-15) — explicit-stop side-channel. With detached runs the
+        // gateway no longer aborts the upstream call on client disconnect, so the composer stop button
+        // (assistant-ui cancel → useChat.stop() → fetch abort) needs a server-visible signal: hook the
+        // request's abort and best-effort POST /api/ai/run/stop for this session. Fires ONLY on an
+        // explicit stop: a keyed remount (session / tab switch) aborts the fetch too, but the runtime
+        // is no longer mounted by then, so the run keeps going in the background. The destroy signal
+        // and our effect cleanup have no guaranteed order, so the mounted check is deferred one tick.
+        // Flag-off gateway answers 404 → harmless.
+        fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+          const signal = init?.signal
+          if (signal && !signal.aborted) {
+            signal.addEventListener(
+              'abort',
+              () => {
+                const sid = latchRef.current.id
+                if (sid == null) return
+                setTimeout(() => {
+                  if (!mountedRef.current) return
+                  void fetch(`${gatewayBaseUrl}/api/ai/run/stop`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionId: sid })
+                  }).catch(() => {
+                    /* best-effort — flag off / gateway gone */
+                  })
+                }, 0)
+              },
+              { once: true }
+            )
           }
-          return res
-        })
+          // codex r2 [C] — own-run attribution: the gateway stamps each leased chat response with
+          // its ActiveRunRegistry runId; recording it lets useBackgroundChatRun's settle door tell
+          // our own turn's persist broadcast from a genuine background settle (per-run, replacing
+          // the r1 time-window heuristics). Headers arrive at stream START (well before the persist
+          // broadcast) so the record is never late. Absent header (older gateway / unleased run) →
+          // no record, the poll-mask degrade path handles it. codex r3 P1 — recorded under THIS
+          // runtime instance's owner token: the mask holds only while this mount is alive; a header
+          // landing after unmount records against a released owner = background from the start.
+          return fetch(input, init).then(async (res) => {
+            const runId = res.headers.get('x-mailagent-run-id')
+            if (runId) recordOwnRun(ownRunOwner, runId)
+            if (res.status === RUN_LEASE_REJECTED_STATUS) {
+              const redirected = await redirectRejectedSendToQueue(res.clone(), init)
+              if (redirected) {
+                // 已经在排队条里等着了 —— 这一轮就此终止，但不是「消息没了」。
+                return res
+              }
+            }
+            return res
+          })
+        },
+        body: async () => {
+          const muteKeyBefore = sessionKeyForId(sessionId ?? latchRef.current.id)
+          const sid = await resolveAiSdkSessionId(latchRef.current, sessionId, onEnsureSession)
+          if (sessionId == null && muteKeyBefore === 'draft' && sid != null) {
+            promoteDraftDisabledConnectors(sid)
+          }
+          const disabledConnectors = getSessionDisabledConnectors(sessionKeyForId(sid ?? sessionId))
+          // composer-parity C2 — resolve the mention/attachment prefix at send time (async: mention
+          // excerpts are fetched), send it as body.injectedContext (the gateway prepends it to the
+          // model's last user message; persistence keeps the original text), then clear the chips.
+          const injectedContext = buildInjectedContextRef.current
+            ? await buildInjectedContextRef.current()
+            : ''
+          if (injectedContext.length > 0) onConsumeInjectedRef.current?.()
+          return {
+            sessionId: sid ?? null,
+            ...(model ? { model } : {}),
+            ...(system ? { system } : {}),
+            ...(thinking ? { thinking: true } : {}),
+            // WP-16b — 档位存在才带这个键（undefined = 模型没有 reasoning 能力 / 只读线程 →
+            // 走 gateway 的旧路径）。与 `thinking` 一样是 transport useMemo 的依赖：换档要重建
+            // transport，而用户是在两轮之间换档，不是流中途。
+            ...(effort ? { effort } : {}),
+            // PART 2 — only send approvalMode when relaxing (auto-reversible); 'always'/absent omits it
+            // so the gateway default ('always') applies, byte-identical to the pre-toggle body.
+            // approvalMode is a transport useMemo dep (like `thinking`) — a settings change rebuilds the
+            // transport, which is fine: the user toggles this in Settings, not mid-stream.
+            ...(approvalMode === 'auto-reversible' ? { approvalMode } : {}),
+            ...(injectedContext.length > 0 ? { injectedContext } : {}),
+            ...(contextSnapshot ? { contextSnapshot } : {}),
+            ...(anchor ? { anchor } : {}),
+            ...(enabledSkills.length > 0 ? { options: { enabledSkills } } : {}),
+            ...(disabledConnectors.length > 0 ? { disabledConnectors: [...disabledConnectors] } : {})
+          }
+        }
       },
-      body: async () => {
-        const muteKeyBefore = sessionKeyForId(sessionId ?? latchRef.current.id)
-        const sid = await resolveAiSdkSessionId(latchRef.current, sessionId, onEnsureSession)
-        if (sessionId == null && muteKeyBefore === 'draft' && sid != null) {
-          promoteDraftDisabledConnectors(sid)
-        }
-        const disabledConnectors = getSessionDisabledConnectors(sessionKeyForId(sid ?? sessionId))
-        // composer-parity C2 — resolve the mention/attachment prefix at send time (async: mention
-        // excerpts are fetched), send it as body.injectedContext (the gateway prepends it to the
-        // model's last user message; persistence keeps the original text), then clear the chips.
-        const injectedContext = buildInjectedContextRef.current
-          ? await buildInjectedContextRef.current()
-          : ''
-        if (injectedContext.length > 0) onConsumeInjectedRef.current?.()
-        return {
-          sessionId: sid ?? null,
-          ...(model ? { model } : {}),
-          ...(system ? { system } : {}),
-          ...(thinking ? { thinking: true } : {}),
-          // WP-16b — 档位存在才带这个键（undefined = 模型没有 reasoning 能力 / 只读线程 →
-          // 走 gateway 的旧路径）。与 `thinking` 一样是 transport useMemo 的依赖：换档要重建
-          // transport，而用户是在两轮之间换档，不是流中途。
-          ...(effort ? { effort } : {}),
-          // PART 2 — only send approvalMode when relaxing (auto-reversible); 'always'/absent omits it
-          // so the gateway default ('always') applies, byte-identical to the pre-toggle body.
-          // approvalMode is a transport useMemo dep (like `thinking`) — a settings change rebuilds the
-          // transport, which is fine: the user toggles this in Settings, not mid-stream.
-          ...(approvalMode === 'auto-reversible' ? { approvalMode } : {}),
-          ...(injectedContext.length > 0 ? { injectedContext } : {}),
-          ...(contextSnapshot ? { contextSnapshot } : {}),
-          ...(anchor ? { anchor } : {}),
-          ...(enabledSkills.length > 0 ? { options: { enabledSkills } } : {}),
-          ...(disabledConnectors.length > 0 ? { disabledConnectors: [...disabledConnectors] } : {})
-        }
+      {
+        gatewayBaseUrl,
+        getSessionId: () => latchRef.current.id,
+        isMounted: () => mountedRef.current,
+        ownRunOwner,
+        nextReconnectSeq: () => {
+          reconnectSeqRef.current += 1
+          return reconnectSeqRef.current
+        },
+        currentReconnectSeq: () => reconnectSeqRef.current,
+        resumableAdapter
       }
-    })
+    )
     // sessionId intentionally excluded from deps — owned by latchRef (see comment above).
-    // ownRunOwner is a stable per-instance token (never changes within a mount) → never rebuilds.
+    // ownRunOwner and resumableAdapter are stable per-mount tokens → never trigger rebuilds.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     gatewayBaseUrl,
@@ -432,7 +574,8 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
     approvalMode,
     contextSnapshot,
     onEnsureSession,
-    ownRunOwner
+    ownRunOwner,
+    resumableAdapter
   ])
 
   return useChatRuntime({

@@ -24,6 +24,7 @@ import { randomUUID } from 'node:crypto'
  *  hasActive/getActive, and register() aborts + replaces them. Generous vs the longest legitimate
  *  tool-loop turn. */
 export const STALE_RUN_MS = 15 * 60 * 1000
+export const MAX_BUFFERED_STREAM_BYTES = 4 * 1024 * 1024
 
 export interface ActiveRunLiveStage {
   stage: 'thinking' | 'calling-tool' | 'writing'
@@ -39,8 +40,19 @@ export interface ActiveRunEntry {
   liveStage?: ActiveRunLiveStage
 }
 
+export interface ActiveRunStreamSubscriber {
+  write(frame: string): void
+  end(): void
+}
+
 interface StoredRun extends ActiveRunEntry {
   controller: AbortController
+  streamable: boolean
+  chunks: string[]
+  chunkBytes: number
+  bufferOverflowed: boolean
+  ended: boolean
+  subscribers: Set<ActiveRunStreamSubscriber>
 }
 
 /**
@@ -53,10 +65,16 @@ export class ActiveRunRegistry {
   private readonly bySession = new Map<number, StoredRun>()
   private readonly now: () => number
   private readonly onSessionIdle?: (sessionId: number) => void
+  private readonly maxBufferedBytes: number
 
-  constructor(opts?: { now?: () => number; onSessionIdle?: (sessionId: number) => void }) {
+  constructor(opts?: {
+    now?: () => number
+    onSessionIdle?: (sessionId: number) => void
+    maxBufferedBytes?: number
+  }) {
     this.now = opts?.now ?? (() => Date.now())
     this.onSessionIdle = opts?.onSessionIdle
+    this.maxBufferedBytes = opts?.maxBufferedBytes ?? MAX_BUFFERED_STREAM_BYTES
   }
 
   /** True when a live run is registered for this session. Aborted entries age out defensively. */
@@ -101,7 +119,11 @@ export class ActiveRunRegistry {
    * holds the session (the caller rejects the second POST with 409). A non-aborted headless run may
    * legitimately outlive STALE_RUN_MS, so only an already-aborted entry can be replaced.
    */
-  register(sessionId: number, controller: AbortController): { runId: string } | null {
+  register(
+    sessionId: number,
+    controller: AbortController,
+    opts?: { streamable?: boolean }
+  ): { runId: string } | null {
     const existing = this.bySession.get(sessionId)
     if (existing) {
       if (!existing.controller.signal.aborted) return null
@@ -113,8 +135,106 @@ export class ActiveRunRegistry {
       }
     }
     const runId = randomUUID()
-    this.bySession.set(sessionId, { runId, sessionId, startedAt: this.now(), controller })
+    this.bySession.set(sessionId, {
+      runId,
+      sessionId,
+      startedAt: this.now(),
+      controller,
+      streamable: opts?.streamable === true,
+      chunks: [],
+      chunkBytes: 0,
+      bufferOverflowed: false,
+      ended: false,
+      subscribers: new Set()
+    })
     return { runId }
+  }
+
+  /** Buffer an SSE frame for late-joining subscribers and fan it out to live subscribers. */
+  appendChunk(sessionId: number, runId: string, chunk: unknown): void {
+    const entry = this.bySession.get(sessionId)
+    if (!entry || !entry.streamable || entry.runId !== runId || entry.ended) return
+    const frame = `data: ${JSON.stringify(chunk)}\n\n`
+    if (!entry.bufferOverflowed) {
+      const byteLen = Buffer.byteLength(frame, 'utf8')
+      if (entry.chunkBytes + byteLen <= this.maxBufferedBytes) {
+        entry.chunks.push(frame)
+        entry.chunkBytes += byteLen
+      } else {
+        entry.bufferOverflowed = true
+        entry.chunks = []
+        entry.chunkBytes = 0
+      }
+    }
+    for (const sub of [...entry.subscribers]) {
+      try {
+        sub.write(frame)
+      } catch {
+        entry.subscribers.delete(sub)
+        try {
+          sub.end()
+        } catch {
+          /* already closed */
+        }
+      }
+    }
+  }
+
+  /** True when the active run is alive, unfinished, and its full stream prefix is replayable. */
+  isStreamable(sessionId: number): ActiveRunEntry | null {
+    const entry = this.bySession.get(sessionId)
+    if (!entry || !entry.streamable || entry.ended || entry.bufferOverflowed) return null
+    if (this.now() - entry.startedAt >= STALE_RUN_MS && entry.controller.signal.aborted) return null
+    return {
+      runId: entry.runId,
+      sessionId: entry.sessionId,
+      startedAt: entry.startedAt,
+      ...(entry.liveStage ? { liveStage: entry.liveStage } : {})
+    }
+  }
+
+  /** Replay buffered SSE frames synchronously and attach a live subscriber for remaining chunks. */
+  subscribe(
+    sessionId: number,
+    subscriber: ActiveRunStreamSubscriber
+  ): { runId: string; unsubscribe: () => void } | null {
+    const entry = this.bySession.get(sessionId)
+    if (!entry || !entry.streamable || entry.ended || entry.bufferOverflowed) return null
+    if (this.now() - entry.startedAt >= STALE_RUN_MS && entry.controller.signal.aborted) return null
+    for (const frame of entry.chunks) {
+      try {
+        subscriber.write(frame)
+      } catch {
+        return null
+      }
+    }
+    entry.subscribers.add(subscriber)
+    return {
+      runId: entry.runId,
+      unsubscribe: () => {
+        entry.subscribers.delete(subscriber)
+      }
+    }
+  }
+
+  private closeSubscribers(entry: StoredRun, sendDone: boolean): void {
+    entry.ended = true
+    const subs = [...entry.subscribers]
+    entry.subscribers.clear()
+    entry.chunks = []
+    entry.chunkBytes = 0
+    for (const sub of subs) {
+      try {
+        if (sendDone) sub.write('data: [DONE]\n\n')
+      } catch {
+        /* ignore write failure on closing subscriber */
+      }
+      try {
+        sub.end()
+      } catch {
+        /* ignore end failure on closing subscriber */
+      }
+    }
   }
 
   /** Remove a finished run. runId-matched: a stale release (this run was already stopped and a new
@@ -130,6 +250,7 @@ export class ActiveRunRegistry {
   release(sessionId: number, runId: string): boolean {
     const entry = this.bySession.get(sessionId)
     if (!entry || entry.runId !== runId) return false
+    this.closeSubscribers(entry, true)
     this.bySession.delete(sessionId)
     try {
       this.onSessionIdle?.(sessionId)
@@ -146,6 +267,7 @@ export class ActiveRunRegistry {
   stop(sessionId: number): { stopped: boolean; runId?: string } {
     const entry = this.bySession.get(sessionId)
     if (!entry) return { stopped: false }
+    this.closeSubscribers(entry, false)
     this.bySession.delete(sessionId)
     try {
       entry.controller.abort('E_RUN_STOPPED')

@@ -25,13 +25,21 @@ export interface SessionInspectorBridgeProps {
  * `s.thread.messages` (referentially stable selector) plus anchors/mentions and publishes it up to
  * the enclosing `InspectorProvider`.
  */
-export function SessionInspectorBridge({
+export function SessionInspectorBridge(props: SessionInspectorBridgeProps): React.JSX.Element | null {
+  const inspector = useSessionInspector()
+  if (!inspector) return null
+  return <SessionInspectorBridgeInner {...props} inspector={inspector} />
+}
+
+type InspectorContextHandle = NonNullable<ReturnType<typeof useSessionInspector>>
+
+function SessionInspectorBridgeInner({
   anchors,
   mentions,
   persistedRows,
-  sessionId = null
-}: SessionInspectorBridgeProps): null {
-  const inspector = useSessionInspector()
+  sessionId = null,
+  inspector
+}: SessionInspectorBridgeProps & { inspector: InspectorContextHandle }): null {
   const controls = useChatComposerControls()
   const messages = useAuiState((s) => s.thread.messages)
 
@@ -54,20 +62,18 @@ export function SessionInspectorBridge({
     [usedTokens, modelLimit]
   )
 
-  const publishSnapshot = inspector?.publishSnapshot
-  const publishContextUsage = inspector?.publishContextUsage
-  const publishSessionId = inspector?.publishSessionId
+  const { publishSnapshot, publishContextUsage, publishSessionId } = inspector
 
   useEffect(() => {
-    publishSnapshot?.(snapshot)
+    publishSnapshot(snapshot)
   }, [publishSnapshot, snapshot])
 
   useEffect(() => {
-    publishContextUsage?.(contextUsage)
+    publishContextUsage(contextUsage)
   }, [publishContextUsage, contextUsage])
 
   useEffect(() => {
-    publishSessionId?.(sessionId)
+    publishSessionId(sessionId)
   }, [publishSessionId, sessionId])
 
   return null

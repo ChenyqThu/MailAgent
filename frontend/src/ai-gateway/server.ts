@@ -284,7 +284,7 @@ async function handleChat(
   // detached branch: the try/finally below).
   let runToken: { runId: string } | null = null
   if (cfg.activeRuns && run.sessionId != null) {
-    runToken = cfg.activeRuns.register(run.sessionId, controller)
+    runToken = cfg.activeRuns.register(run.sessionId, controller, { streamable: detached })
     if (runToken == null) {
       controller.abort()
       writeJson(res, 409, {
@@ -411,6 +411,7 @@ async function handleChat(
     cfg.compactPersistence != null
   ) {
     let responseStarted = false
+    let streamPublished = false
     const writeHeaders = (): void => {
       if (responseStarted || clientGone || res.destroyed) return
       res.writeHead(200, {
@@ -421,6 +422,10 @@ async function handleChat(
       responseStarted = true
     }
     const writeChunk = async (chunk: unknown): Promise<void> => {
+      streamPublished = true
+      if (runToken != null && run.sessionId != null) {
+        cfg.activeRuns?.appendChunk(run.sessionId, runToken.runId, chunk)
+      }
       if (clientGone || res.destroyed || res.writableEnded) {
         clientGone = true
         return
@@ -485,7 +490,7 @@ async function handleChat(
             chunk !== null && typeof chunk === 'object'
               ? (chunk as { type?: unknown }).type
               : undefined
-          if (!responseStarted && type === 'error') {
+          if (!streamPublished && type === 'error') {
             if (isPrivacyMaskError(rawError)) {
               responseStarted = true
               writeJson(res, 503, { error: 'E_PRIVACY_MASK_FAILED', hint: rawError.message })
@@ -506,7 +511,7 @@ async function handleChat(
             deferred.length = 0
             continue
           }
-          if (!responseStarted && isPrelude(chunk)) {
+          if (!streamPublished && isPrelude(chunk)) {
             deferred.push(chunk)
             continue
           }
@@ -523,7 +528,7 @@ async function handleChat(
         if (
           shouldRecoverContextOverflow({
             attempt,
-            hasWrittenBytes: responseStarted,
+            hasWrittenBytes: streamPublished,
             error,
             protocol: run.protocol
           })
@@ -700,6 +705,7 @@ async function handleChat(
     for await (const chunk of stream) {
       if (runToken && run.sessionId != null) {
         observeStreamChunkStage(cfg, run.sessionId, runToken.runId, chunk)
+        cfg.activeRuns?.appendChunk(run.sessionId, runToken.runId, chunk)
       }
       if (clientGone || res.destroyed || res.writableEnded) {
         clientGone = true
@@ -805,6 +811,67 @@ function handleRunActive(
     ageMs: Date.now() - entry.startedAt,
     ...(entry.liveStage ? { liveStage: entry.liveStage } : {})
   })
+}
+
+/**
+ * `GET /api/ai/run/stream?sessionId=N` — replay buffered SSE frames for a live in-flight run
+ * and continue streaming new chunks in real time until the run finishes or subscriber disconnects.
+ */
+function handleRunStream(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: AiGatewayConfig,
+  url: string
+): void {
+  const raw = new URL(url, 'http://127.0.0.1').searchParams.get('sessionId')
+  const sessionId = raw != null && /^-?\d+$/.test(raw) ? Number(raw) : null
+  if (sessionId == null) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'sessionId (integer) required' })
+    return
+  }
+  const entry = cfg.activeRuns ? cfg.activeRuns.isStreamable(sessionId) : null
+  if (!entry) {
+    res.writeHead(204, corsHeadersFor(req.headers.origin))
+    res.end()
+    return
+  }
+  res.writeHead(200, {
+    ...UI_MESSAGE_STREAM_HEADERS,
+    ...corsHeadersFor(req.headers.origin),
+    'x-mailagent-run-id': entry.runId,
+    'access-control-expose-headers': 'x-mailagent-run-id'
+  })
+  const sub = cfg.activeRuns!.subscribe(sessionId, {
+    write: (frame: string) => {
+      if (!res.destroyed && !res.writableEnded) {
+        res.write(frame)
+      }
+    },
+    end: () => {
+      try {
+        if (!res.destroyed && !res.writableEnded) res.end()
+      } catch {
+        /* already closed */
+      }
+    }
+  })
+  if (!sub) {
+    try {
+      if (!res.destroyed && !res.writableEnded) res.end()
+    } catch {
+      /* already closed */
+    }
+    return
+  }
+  if (!res.destroyed && !res.writableEnded) {
+    res.flushHeaders()
+  }
+  const cleanup = (): void => {
+    sub.unsubscribe()
+  }
+  res.on('close', cleanup)
+  req.on('aborted', cleanup)
+  req.on('error', cleanup)
 }
 
 /**
@@ -2379,10 +2446,13 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
       return
     }
 
-    // B1 (harness-chat lane A) — detached-run truth probe + explicit stop channel. Registered
-    // unconditionally; cfg.activeRuns gates them (miss/404 when detached runs are off).
+    // B1 (harness-chat lane A) — detached-run truth probe + live stream replay + explicit stop channel.
     if (method === 'GET' && path === '/api/ai/run/active') {
       handleRunActive(res, cfg, url, groupScheduler)
+      return
+    }
+    if (method === 'GET' && path === '/api/ai/run/stream') {
+      handleRunStream(req, res, cfg, url)
       return
     }
     if (method === 'POST' && path === '/api/ai/run/stop') {
