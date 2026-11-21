@@ -19,6 +19,7 @@ import { useTranslation } from 'react-i18next'
 
 import type {
   AgentAvatarConfig,
+  CustomAgentComputerUseGrant,
   CustomAgentToolPolicy,
   CustomAgentTrigger,
   CustomAgentTriggerV2Entry,
@@ -228,6 +229,8 @@ export function CustomAgentDrawer({
   const [grantConnectors, setGrantConnectors] = useState<ConnectorGrantMap>({})
   const [grantConnectorTools, setGrantConnectorTools] = useState<ConnectorToolGrantMap>({})
   const [connectorsDirty, setConnectorsDirty] = useState(false)
+  const [grantComputerUse, setGrantComputerUse] = useState<CustomAgentComputerUseGrant | null>(null)
+  const [computerUseDirty, setComputerUseDirty] = useState(false)
   const [mountedSkills, setMountedSkills] = useState<string[]>([])
   const [skillsMode, setSkillsMode] = useState<'defaults' | 'explicit'>('defaults')
   const [skillsDirty, setSkillsDirty] = useState(false)
@@ -306,6 +309,8 @@ export function CustomAgentDrawer({
       setGrantConnectors({})
       setGrantConnectorTools({})
       setConnectorsDirty(false)
+      setGrantComputerUse(null)
+      setComputerUseDirty(false)
       setMountedSkills(DEFAULT_MOUNTED_SKILLS)
       setSkillsMode('defaults')
       setSkillsDirty(false)
@@ -398,6 +403,8 @@ export function CustomAgentDrawer({
     setGrantConnectors({ ...(cfg.tool_policy?.grant_connectors ?? {}) })
     setGrantConnectorTools({ ...(cfg.tool_policy?.grant_connector_tools ?? {}) })
     setConnectorsDirty(false)
+    setGrantComputerUse(cfg.tool_policy?.grant_computer_use ?? null)
+    setComputerUseDirty(false)
     // skills=NULL（未配置）→ 展示默认挂载集（defaults 模式，保存时未触碰不写 skills 键）；
     // 显式列表（含 []）→ 展示行内集合（explicit）。镜像 allowed_tools 的 defaults/explicit 两态。
     const mounts = cfg.tool_policy?.skills
@@ -584,6 +591,17 @@ export function CustomAgentDrawer({
         return t('agents.custom.errCalendarLead')
       }
     }
+    if (grantComputerUse?.enabled) {
+      const doms = grantComputerUse.allowed_domains ?? []
+      const apps = grantComputerUse.allowed_apps ?? []
+      const hasWildcard = [...doms, ...apps].some((s) => {
+        const l = s.trim().toLowerCase()
+        return !l || l.includes('*') || l === 'all' || l === 'any'
+      })
+      if ((doms.length === 0 && apps.length === 0) || hasWildcard) {
+        return t('agents.custom.errComputerUseScope')
+      }
+    }
     if (maxRunSeconds < 1 || maxRunSeconds > MAX_RUN_SECONDS_CEILING) {
       return t('agents.custom.errMaxRunSeconds', { max: MAX_RUN_SECONDS_CEILING })
     }
@@ -633,6 +651,9 @@ export function CustomAgentDrawer({
         Object.entries(grantConnectorTools).filter(([cid]) => grantConnectors[cid] !== undefined)
       )
       if (Object.keys(prunedTools).length > 0) toolPolicy.grant_connector_tools = prunedTools
+    }
+    if (grantComputerUse?.enabled) {
+      toolPolicy.grant_computer_use = grantComputerUse
     }
     if (create) {
       const id = createdId ?? slugifyTitle(title)
@@ -692,7 +713,7 @@ export function CustomAgentDrawer({
     // 都不会抹掉其它键（W3-2 教训）。各键的「按需物化」纪律：allowed_tools / skills 仅在「被触碰
     // 或行本就显式」时携带 —— 只翻 grant 的 NULL 行保持二者缺省（投影层默认集/默认挂载集不被物化）；
     // grant_exec 仅 true 携带、grant_web 仅非 'off' 携带（缺省语义 = parse_tool_policy 的 false/'off'）。
-    if (toolsDirty || grantDirty || webDirty || sessionsDirty || skillsDirty || connectorsDirty) {
+    if (toolsDirty || grantDirty || webDirty || sessionsDirty || skillsDirty || connectorsDirty || computerUseDirty) {
       const tp: CustomAgentToolPolicy = { v: 1 }
       if (toolsDirty || toolsMode === 'explicit') tp.allowed_tools = selectedTools
       if (grantExec) tp.grant_exec = true
@@ -714,6 +735,9 @@ export function CustomAgentDrawer({
         Object.keys(cfg.tool_policy.grant_connectors).length > 0
       ) {
         tp.grant_connectors = {}
+      }
+      if (grantComputerUse?.enabled) {
+        tp.grant_computer_use = grantComputerUse
       }
       editPatch.tool_policy = tp
     }
@@ -1208,6 +1232,11 @@ export function CustomAgentDrawer({
             onGrantConnectorToolsChange={(next) => {
               setGrantConnectorTools(next)
               setConnectorsDirty(true)
+            }}
+            grantComputerUse={grantComputerUse}
+            onGrantComputerUseChange={(next) => {
+              setGrantComputerUse(next)
+              setComputerUseDirty(true)
             }}
           />
 

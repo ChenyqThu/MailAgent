@@ -463,8 +463,28 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
     for (const mode of ['untrusted_trigger', 'cron_headless'] as const) {
       const filtered = applyContextModePolicy(tools, mode, { exec: true })
       for (const name of CLASSES_OF('exec')) {
-        expect(filtered[name], `${name} (exec) must survive ${mode} under the grant`).toBeDefined()
+        if (name === 'computer_use_run') {
+          expect(
+            filtered[name],
+            `computer_use_run must NOT unlock from bare exec grant in ${mode}`
+          ).toBeUndefined()
+        } else {
+          expect(filtered[name], `${name} (exec) must survive ${mode} under the grant`).toBeDefined()
+        }
       }
+      const cuFiltered = applyContextModePolicy(tools, mode, {
+        customAgentComputerUse: {
+          enabled: true,
+          submitMode: 'stop_before_submit',
+          allowedApps: [],
+          allowedDomains: ['dms.company.com'],
+          connectors: ['browser_use']
+        }
+      })
+      expect(cuFiltered.computer_use_run).toBeDefined()
+      expect(cuFiltered.run_command).toBeUndefined()
+      expect(cuFiltered.file_read).toBeUndefined()
+      expect(cuFiltered.file_write).toBeUndefined()
       for (const name of [
         ...CLASSES_OF('capability_change'),
         ...CLASSES_OF('web'),

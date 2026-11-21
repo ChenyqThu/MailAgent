@@ -494,6 +494,20 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
     if tool_policy.grant_sessions == "all":
         # 镜像 grantWeb：仅非默认值（own）才投影；gateway 侧 parseSessionsGrant 再判别一次。
         tool_policy_out["grantSessions"] = "all"
+    if tool_policy.grant_computer_use is not None and tool_policy.grant_computer_use.enabled:
+        cu = tool_policy.grant_computer_use
+        cu_connectors: list[str] = []
+        if cu.allowed_domains:
+            cu_connectors.append("browser_use")
+        if cu.allowed_apps:
+            cu_connectors.append("desktop_use")
+        tool_policy_out["grantComputerUse"] = {
+            "enabled": True,
+            "submitMode": cu.submit_mode,
+            "allowedDomains": list(cu.allowed_domains),
+            "allowedApps": list(cu.allowed_apps),
+            "connectors": cu_connectors,
+        }
     # S6 W3（rev3.1 §5.1）：skills **恒输出**解析完的数组（NULL → 默认挂载集已代入；显式 []
     # → []）—— gateway 不手抄默认集第二份；gateway 侧对缺 skills 的 spec 按 [] fail-closed。
     tool_policy_out["skills"] = (

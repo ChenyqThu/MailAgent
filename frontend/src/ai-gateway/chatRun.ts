@@ -47,6 +47,7 @@ import {
 // each entrypoint in its own code. It is NEVER read from the request body (a client cannot claim
 // manual_chat); absent/unknown fail-closes to 'untrusted_trigger'.
 import {
+  isCustomAgentComputerUseEnabled,
   isRuntimeToolDestructive,
   normalizeContextMode,
   type AgentContextMode
@@ -592,9 +593,12 @@ export async function prepareChatRun(
       cfg.agentRunContext?.matterItemComputerUse?.enabled === true &&
       cfg.agentRunContext.matterItemComputerUse.mode === 'propose_only' &&
       cfg.agentRunContext.matterItemComputerUse.stopBeforeSubmit === true
+    const allowCustomAgentComputerUse =
+      (contextMode === 'untrusted_trigger' || contextMode === 'cron_headless') &&
+      isCustomAgentComputerUseEnabled(cfg.agentRunContext?.modeGrants)
     if (
       cfg.computerUseEnabled === false ||
-      (contextMode !== 'manual_chat' && !allowMatterComputerUse)
+      (contextMode !== 'manual_chat' && !allowMatterComputerUse && !allowCustomAgentComputerUse)
     ) {
       delete tools.computer_use_run
     } else {

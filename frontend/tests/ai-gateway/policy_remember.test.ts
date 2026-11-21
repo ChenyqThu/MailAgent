@@ -7,6 +7,7 @@ import { describe, expect, test } from 'vitest'
 
 import { startAiGatewayServer } from '../../src/ai-gateway/server'
 import type { AiGatewayConfig } from '../../src/ai-gateway/config'
+import { deriveExecRule, ExecRuleDeriveError } from '../../src/electron/main/exec_policy_matcher'
 
 async function withServer(
   rememberExecApproval: AiGatewayConfig['rememberExecApproval'],
@@ -183,5 +184,50 @@ describe('POST /api/ai/policy/remember (web { approvalId })', () => {
         expect((await res.json()).error).toBe('E_INVALID_ARG')
       }
     )
+  })
+})
+
+describe('deriveExecRule for computer_use_run', () => {
+  test('derives bounded computer_use rule with concrete apps/domains and stop_before_submit=true', () => {
+    const rule = deriveExecRule('computer_use_run', {
+      goal: 'Approve request',
+      allowed_domains: ['HTTPS://DMS.Company.com/path'],
+      allowed_apps: ['Microsoft Teams'],
+      stop_before_submit: true
+    })
+    expect(rule).toEqual({
+      capability: 'computer_use',
+      matcher: {
+        v: 1,
+        allowed_domains: ['dms.company.com'],
+        allowed_apps: ['Microsoft Teams'],
+        stop_before_submit: true
+      }
+    })
+  })
+
+  test('rejects stop_before_submit=false, empty scope, and wildcards', () => {
+    expect(() =>
+      deriveExecRule('computer_use_run', {
+        goal: 'Submit',
+        allowed_domains: ['dms.company.com'],
+        stop_before_submit: false
+      })
+    ).toThrow(ExecRuleDeriveError)
+
+    expect(() =>
+      deriveExecRule('computer_use_run', {
+        goal: 'Empty',
+        allowed_domains: [],
+        allowed_apps: []
+      })
+    ).toThrow(ExecRuleDeriveError)
+
+    expect(() =>
+      deriveExecRule('computer_use_run', {
+        goal: 'Wildcard',
+        allowed_domains: ['*.company.com']
+      })
+    ).toThrow(ExecRuleDeriveError)
   })
 })

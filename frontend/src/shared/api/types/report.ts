@@ -387,6 +387,15 @@ export interface CustomAgentToolPolicy {
   /** Phase 5 — per-connector per-tool 细粒度白名单（{connector_id: [tool_name, ...]}）。
    *  缺失该 connector_id = 不做工具级二次收窄（沿用 crud 天花板）；存在 = 仅允许清单内工具。 */
   grant_connector_tools?: Record<string, string[]>
+  /** Wave 6 — Custom Agent 有界电脑/浏览器自动化授权（需具体域名或应用白名单，无通配符 *）。 */
+  grant_computer_use?: CustomAgentComputerUseGrant | null
+}
+
+export interface CustomAgentComputerUseGrant {
+  enabled: boolean
+  submit_mode: 'stop_before_submit' | 'allow_submit'
+  allowed_domains?: string[]
+  allowed_apps?: string[]
 }
 
 /** Custom Agent 预算两门（null/缺失 = 全默认；旧 max_steps 由后端忽略）。 */

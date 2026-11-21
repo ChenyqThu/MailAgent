@@ -276,6 +276,7 @@ export const qk = {
   // Wave 3 — managed_local 本机运行时安装态与 macOS TCC 权限诊断，同挂 `connectors` 前缀。
   connectorInstallStatus: (id: string) => ['connectors', id, 'install-status'] as const,
   connectorSystemPermissions: () => ['connectors', 'system-permissions'] as const,
+  connectorChromeProfiles: () => ['connectors', 'chrome-profiles'] as const,
 
   // 设置 →「MCP 服务」（`/api/mcp-service/*`）。新建 / 轮换 / 撤销密钥后 invalidate
   // `all()` 一处，状态里的可用密钥数与列表一起刷。

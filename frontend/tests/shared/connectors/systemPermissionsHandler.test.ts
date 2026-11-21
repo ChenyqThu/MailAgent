@@ -4,14 +4,16 @@
 
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
-const { handleMock, openExternalMock, isTrustedMock, getMediaMock } = vi.hoisted(() => ({
+const { handleMock, openExternalMock, isTrustedMock, getMediaMock, getSourcesMock } = vi.hoisted(() => ({
   handleMock: vi.fn(),
   openExternalMock: vi.fn(),
   isTrustedMock: vi.fn(),
-  getMediaMock: vi.fn()
+  getMediaMock: vi.fn(),
+  getSourcesMock: vi.fn()
 }))
 
 vi.mock('electron', () => ({
+  desktopCapturer: { getSources: getSourcesMock },
   ipcMain: { handle: handleMock },
   shell: { openExternal: openExternalMock },
   systemPreferences: {
@@ -24,7 +26,8 @@ import {
   mapScreenMediaStatus,
   openSystemPermissionSettings,
   probeSystemPermissions,
-  registerSystemPermissionsHandlers
+  registerSystemPermissionsHandlers,
+  requestSystemPermissionSettings
 } from '../../../src/electron/main/handlers/system_permissions'
 import {
   SYSTEM_PERMISSIONS_IPC,
@@ -93,9 +96,62 @@ describe('system_permissions Electron handler', () => {
     expect(nonMac).toEqual({ ok: true, kind: 'accessibility', opened: false })
   })
 
-  test('registerSystemPermissionsHandlers 注册两个 IPC 通道', () => {
+  test('requestSystemPermissionSettings 触发原生授权或回退系统设置', async () => {
+    const prefs = {
+      isTrustedAccessibilityClient: vi.fn((_prompt: boolean) => false),
+      getMediaAccessStatus: vi.fn(() => 'not-determined')
+    }
+    const opener = { openExternal: vi.fn(async () => {}) }
+    const captureScreen = vi.fn(async () => [])
+
+    const acc = await requestSystemPermissionSettings(
+      'accessibility',
+      'darwin',
+      prefs,
+      captureScreen,
+      opener
+    )
+    expect(prefs.isTrustedAccessibilityClient).toHaveBeenCalledWith(true)
+    expect(acc).toMatchObject({
+      ok: true,
+      kind: 'accessibility',
+      prompted: true,
+      opened: false,
+      status: { accessibility: 'denied' }
+    })
+
+    const scrPrompt = await requestSystemPermissionSettings(
+      'screen_recording',
+      'darwin',
+      prefs,
+      captureScreen,
+      opener
+    )
+    expect(captureScreen).toHaveBeenCalledTimes(1)
+    expect(opener.openExternal).not.toHaveBeenCalled()
+    expect(scrPrompt.prompted).toBe(true)
+    expect(scrPrompt.opened).toBe(false)
+
+    prefs.getMediaAccessStatus.mockReturnValue('denied')
+    const scrDenied = await requestSystemPermissionSettings(
+      'screen_recording',
+      'darwin',
+      prefs,
+      captureScreen,
+      opener
+    )
+    expect(opener.openExternal).toHaveBeenCalledWith(SYSTEM_PERMISSION_URLS.screen_recording)
+    expect(scrDenied.opened).toBe(true)
+    expect(scrDenied.status?.screen_recording).toBe('denied')
+  })
+
+  test('registerSystemPermissionsHandlers 注册三个 IPC 通道', () => {
     registerSystemPermissionsHandlers()
     const channels = handleMock.mock.calls.map((c) => c[0])
-    expect(channels).toEqual([SYSTEM_PERMISSIONS_IPC.check, SYSTEM_PERMISSIONS_IPC.open])
+    expect(channels).toEqual([
+      SYSTEM_PERMISSIONS_IPC.check,
+      SYSTEM_PERMISSIONS_IPC.open,
+      SYSTEM_PERMISSIONS_IPC.request
+    ])
   })
 })

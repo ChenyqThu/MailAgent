@@ -32,12 +32,14 @@ import {
 import { DomainError, type DomainPolicyVerdict, type MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard } from '../security/approval'
 import {
+  isCustomAgentComputerUseEnabled,
   isMatterItemComputerUseEnabled,
   isToolAllowedInContext,
   normalizeContextMode,
   type AgentContextMode,
   type AgentModeGrants,
   type AgentRunContext,
+  type CustomAgentComputerUsePolicy,
   type MatterItemComputerUsePolicy
 } from './policy'
 import { computerUseRunSchema, type ComputerUseRunInput } from './schemas'
@@ -105,6 +107,7 @@ export interface ComputerUseToolDeps {
   evaluateAutoScopeGrant?: ComputerUseAutoScopeGrantEvaluator
   forceStopBeforeSubmit?: boolean
   matterItemPolicy?: MatterItemComputerUsePolicy
+  customAgentPolicy?: CustomAgentComputerUsePolicy
 }
 
 export interface ComputerUseExecutionBinding {
@@ -396,52 +399,66 @@ function strictListSubset(requested: readonly string[] | undefined, granted: rea
   return requested.every((r) => grantedSet.has(r.trim().toLowerCase()))
 }
 
-function resolveMatterBoundedScope(
+interface BoundedComputerUseScopePolicy {
+  allowedApps: readonly string[]
+  allowedDomains: readonly string[]
+  connectors: readonly ('browser_use' | 'desktop_use')[]
+}
+
+function resolveBoundedScope(
   input: ComputerUseRunInput,
-  matterPolicy: MatterItemComputerUsePolicy
+  policy: BoundedComputerUseScopePolicy,
+  prefix: 'matter' | 'custom_agent' = 'matter'
 ): { allowedApps: string[]; allowedDomains: string[] } | { violation: PreflightViolation } {
   const hint = (input.target_hint ?? 'auto') as ComputerUseTargetHint
   if (
     hint === 'browser' &&
-    (matterPolicy.allowedDomains.length === 0 || !matterPolicy.connectors.includes('browser_use'))
+    (policy.allowedDomains.length === 0 || !policy.connectors.includes('browser_use'))
   ) {
-    return { violation: { reason: 'matter_target_hint_exceeded', observed: 'browser' } }
+    return { violation: { reason: `${prefix}_target_hint_exceeded`, observed: 'browser' } }
   }
   if (
     hint === 'desktop' &&
-    (matterPolicy.allowedApps.length === 0 || !matterPolicy.connectors.includes('desktop_use'))
+    (policy.allowedApps.length === 0 || !policy.connectors.includes('desktop_use'))
   ) {
-    return { violation: { reason: 'matter_target_hint_exceeded', observed: 'desktop' } }
+    return { violation: { reason: `${prefix}_target_hint_exceeded`, observed: 'desktop' } }
   }
 
   const reqApps = (input.allowed_apps ?? []).map((v) => v.trim()).filter(Boolean)
   if (reqApps.length > 0) {
-    if (matterPolicy.allowedApps.length === 0) {
-      return { violation: { reason: 'matter_app_scope_exceeded', observed: reqApps[0] } }
+    if (policy.allowedApps.length === 0) {
+      return { violation: { reason: `${prefix}_app_scope_exceeded`, observed: reqApps[0] } }
     }
-    const badApp = reqApps.find((app) => !matchesAllowedApp(app, matterPolicy.allowedApps))
+    const badApp = reqApps.find((app) => !matchesAllowedApp(app, policy.allowedApps))
     if (badApp) {
-      return { violation: { reason: 'matter_app_scope_exceeded', observed: badApp } }
+      return { violation: { reason: `${prefix}_app_scope_exceeded`, observed: badApp } }
     }
   }
 
   const reqDomains = (input.allowed_domains ?? []).map((v) => v.trim()).filter(Boolean)
   if (reqDomains.length > 0) {
-    if (matterPolicy.allowedDomains.length === 0) {
-      return { violation: { reason: 'matter_domain_scope_exceeded', observed: reqDomains[0] } }
+    if (policy.allowedDomains.length === 0) {
+      return { violation: { reason: `${prefix}_domain_scope_exceeded`, observed: reqDomains[0] } }
     }
     for (const rawDomain of reqDomains) {
       const host = normalizeDomainPattern(rawDomain)
-      if (!host || !validateNavigationUrl(`https://${host}`, matterPolicy.allowedDomains).allowed) {
-        return { violation: { reason: 'matter_domain_scope_exceeded', observed: rawDomain } }
+      if (!host || !validateNavigationUrl(`https://${host}`, policy.allowedDomains).allowed) {
+        return { violation: { reason: `${prefix}_domain_scope_exceeded`, observed: rawDomain } }
       }
     }
   }
 
   return {
-    allowedApps: reqApps.length > 0 ? reqApps : [...matterPolicy.allowedApps],
-    allowedDomains: reqDomains.length > 0 ? reqDomains : [...matterPolicy.allowedDomains]
+    allowedApps: reqApps.length > 0 ? reqApps : [...policy.allowedApps],
+    allowedDomains: reqDomains.length > 0 ? reqDomains : [...policy.allowedDomains]
   }
+}
+
+function resolveMatterBoundedScope(
+  input: ComputerUseRunInput,
+  matterPolicy: MatterItemComputerUsePolicy
+): { allowedApps: string[]; allowedDomains: string[] } | { violation: PreflightViolation } {
+  return resolveBoundedScope(input, matterPolicy, 'matter')
 }
 
 /** Narrow `policyEvaluate` helper: delegates to host evaluator or `/agent/policy/evaluate` ONLY
@@ -454,6 +471,7 @@ export async function evaluateComputerUsePolicy(
     evaluateAutoScopeGrant?: ComputerUseAutoScopeGrantEvaluator
     forceStopBeforeSubmit?: boolean
     matterItemPolicy?: MatterItemComputerUsePolicy
+    customAgentPolicy?: CustomAgentComputerUsePolicy
     agentId?: string
   }
 ): Promise<DomainPolicyVerdict> {
@@ -464,6 +482,29 @@ export async function evaluateComputerUsePolicy(
     }
     const scoped = resolveMatterBoundedScope(input, mp)
     if ('violation' in scoped) {
+      return { decision: 'ask', rule_id: null }
+    }
+    return {
+      decision: 'auto_allow',
+      rule_id: null,
+      audit_status: 'auto_scope_grant'
+    }
+  }
+
+  if (opts.contextMode === 'untrusted_trigger' || opts.contextMode === 'cron_headless') {
+    const cp = opts.customAgentPolicy
+    if (!cp || !isCustomAgentComputerUseEnabled({ customAgentComputerUse: cp })) {
+      return { decision: 'ask', rule_id: null }
+    }
+    const scoped = resolveBoundedScope(input, cp, 'custom_agent')
+    if ('violation' in scoped) {
+      return { decision: 'ask', rule_id: null }
+    }
+    if (
+      cp.submitMode === 'stop_before_submit' &&
+      input.stop_before_submit === false &&
+      opts.forceStopBeforeSubmit !== true
+    ) {
       return { decision: 'ask', rule_id: null }
     }
     return {
@@ -729,6 +770,7 @@ export function buildComputerUseTool(
 ): Tool {
   const contextMode = normalizeContextMode(opts.contextMode)
   const matterItemPolicy = opts.matterItemPolicy ?? opts.agentRunContext?.modeGrants?.matterItemComputerUse
+  const customAgentPolicy = opts.customAgentPolicy ?? opts.agentRunContext?.modeGrants?.customAgentComputerUse
   const binding: InternalComputerUseBinding = {
     model: opts.model,
     maxOutputTokens: opts.maxOutputTokens,
@@ -736,6 +778,11 @@ export function buildComputerUseTool(
     finalTools: opts.childTools,
     getChildToolsFromFinalSet: opts.getChildToolsFromFinalSet
   }
+
+  const allowSubmitSuffix =
+    customAgentPolicy?.submitMode === 'allow_submit'
+      ? ' Authorized custom-agent allow_submit mode: pass stop_before_submit=false when ready to click the final submit/approve/join action.'
+      : ''
 
   // CRITICAL: Non-generic `auditedWriteTool(` so `validate_catalog.py::FACTORY_RE` indexes it.
   const built = auditedWriteTool(
@@ -745,7 +792,8 @@ export function buildComputerUseTool(
         'Delegate a bounded browser or desktop GUI automation goal to an isolated Computer Use ' +
         'sub-agent (`mcp__browser_use__*` / `mcp__desktop_use__*` only). Edit tier — always asks ' +
         'unless a bounded manual-session auto_scope_grant rule matches with stop_before_submit=true. ' +
-        'Use ONLY when native MailAgent tools and direct MCP connectors do not cover the UI workflow.',
+        'Use ONLY when native MailAgent tools and direct MCP connectors do not cover the UI workflow.' +
+        allowSubmitSuffix,
       inputSchema: computerUseRunSchema,
       risk: 'edit',
       a2uiEnabled: opts.a2uiEnabled,
@@ -761,13 +809,17 @@ export function buildComputerUseTool(
           evaluateAutoScopeGrant: opts.evaluateAutoScopeGrant,
           forceStopBeforeSubmit: opts.forceStopBeforeSubmit,
           matterItemPolicy,
+          customAgentPolicy,
           agentId: opts.agentRunContext?.agentId
         }),
       run: async (input: ComputerUseRunInput, { signal, toolCallId }) => {
         const matterAuthorized =
           contextMode === 'matter_followup' &&
           isMatterItemComputerUseEnabled({ matterItemComputerUse: matterItemPolicy })
-        if (contextMode !== 'manual_chat' && !matterAuthorized) {
+        const customAgentAuthorized =
+          (contextMode === 'untrusted_trigger' || contextMode === 'cron_headless') &&
+          isCustomAgentComputerUseEnabled({ customAgentComputerUse: customAgentPolicy })
+        if (contextMode !== 'manual_chat' && !matterAuthorized && !customAgentAuthorized) {
           throw new DomainError(
             'E_CONTEXT_MODE_DENIED',
             `computer_use_run is not permitted in context mode '${contextMode}'.`
@@ -786,10 +838,23 @@ export function buildComputerUseTool(
           }
           effectiveAllowedApps = scoped.allowedApps
           effectiveAllowedDomains = scoped.allowedDomains
+        } else if (customAgentAuthorized && customAgentPolicy) {
+          const scoped = resolveBoundedScope(input, customAgentPolicy, 'custom_agent')
+          if ('violation' in scoped) {
+            throw new DomainError(
+              'E_SCOPE_VIOLATION',
+              `Requested Computer Use scope exceeds custom agent bounds (${scoped.violation.reason}): ${scoped.violation.observed}`
+            )
+          }
+          effectiveAllowedApps = scoped.allowedApps
+          effectiveAllowedDomains = scoped.allowedDomains
         }
 
+        const boundedPolicyActive = matterAuthorized || customAgentAuthorized
         const effectiveStopBeforeSubmit =
-          matterAuthorized || opts.forceStopBeforeSubmit === true
+          matterAuthorized ||
+          opts.forceStopBeforeSubmit === true ||
+          (customAgentAuthorized && customAgentPolicy?.submitMode === 'stop_before_submit')
             ? true
             : input.stop_before_submit !== false
         const targetHint = (input.target_hint ?? 'auto') as ComputerUseTargetHint
@@ -861,21 +926,22 @@ export function buildComputerUseTool(
                 ? { needsApproval: false }
                 : {}),
             execute: async (toolArgs, execOpts) => {
-              if (matterAuthorized) {
+              if (boundedPolicyActive) {
+                const scopePrefix = matterAuthorized ? 'matter' : 'custom_agent'
                 if (name.startsWith(DESKTOP_USE_PREFIX) && (!effectiveAllowedApps || effectiveAllowedApps.length === 0)) {
-                  scopeViolation = { reason: 'matter_app_scope_exceeded', observed: name }
+                  scopeViolation = { reason: `${scopePrefix}_app_scope_exceeded`, observed: name }
                   childAbort.abort(new Error(`Scope violation: desktop_use disabled in scope`))
                   throw new DomainError(
                     'E_SCOPE_VIOLATION',
-                    'Desktop automation is outside the matter dispatch allowed_apps scope.'
+                    'Desktop automation is outside the authorized allowed_apps scope.'
                   )
                 }
                 if (name.startsWith(BROWSER_USE_PREFIX) && (!effectiveAllowedDomains || effectiveAllowedDomains.length === 0)) {
-                  scopeViolation = { reason: 'matter_domain_scope_exceeded', observed: name }
+                  scopeViolation = { reason: `${scopePrefix}_domain_scope_exceeded`, observed: name }
                   childAbort.abort(new Error(`Scope violation: browser_use disabled in scope`))
                   throw new DomainError(
                     'E_SCOPE_VIOLATION',
-                    'Browser automation is outside the matter dispatch allowed_domains scope.'
+                    'Browser automation is outside the authorized allowed_domains scope.'
                   )
                 }
               }
@@ -922,8 +988,8 @@ export function buildComputerUseTool(
               }
               for (const u of observed.urls) {
                 const check =
-                  matterAuthorized && (!effectiveAllowedDomains || effectiveAllowedDomains.length === 0)
-                    ? { allowed: false, reason: 'matter_domain_scope_exceeded' }
+                  boundedPolicyActive && (!effectiveAllowedDomains || effectiveAllowedDomains.length === 0)
+                    ? { allowed: false, reason: `${matterAuthorized ? 'matter' : 'custom_agent'}_domain_scope_exceeded` }
                     : validateNavigationUrl(u, effectiveAllowedDomains)
                 if (!check.allowed) {
                   scopeViolation = { reason: check.reason ?? 'domain_drift', observed: u }
@@ -937,7 +1003,7 @@ export function buildComputerUseTool(
               }
               for (const app of observed.apps) {
                 const appAllowed =
-                  matterAuthorized && (!effectiveAllowedApps || effectiveAllowedApps.length === 0)
+                  boundedPolicyActive && (!effectiveAllowedApps || effectiveAllowedApps.length === 0)
                     ? false
                     : !effectiveAllowedApps?.length || matchesAllowedApp(app, effectiveAllowedApps)
                 if (!appAllowed) {

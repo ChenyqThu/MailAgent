@@ -455,3 +455,64 @@ def test_validate_patch_rejects_bad_tool_policy():
         validate_agent_config_patch({"tool_policy": {"v": 1, "unknown_key": 1}})
     # 清空（None）跳过（wire 落 SQL NULL）。
     validate_agent_config_patch({"tool_policy": None})
+
+
+def test_parse_tool_policy_grant_computer_use_validation_and_ceiling(monkeypatch):
+    from src.connectors import service as svc
+
+    tp = parse_tool_policy(
+        {
+            "v": 1,
+            "grant_computer_use": {
+                "enabled": True,
+                "submit_mode": "allow_submit",
+                "allowed_domains": ["HTTPS://DMS.Corp.com/portal", "dms.corp.com"],
+                "allowed_apps": ["Microsoft Teams", "microsoft teams.app"],
+            },
+        }
+    )
+    assert tp.grant_computer_use is not None
+    assert tp.grant_computer_use.enabled is True
+    assert tp.grant_computer_use.submit_mode == "allow_submit"
+    assert tp.grant_computer_use.allowed_domains == ("dms.corp.com",)
+    assert tp.grant_computer_use.allowed_apps == ("Microsoft Teams",)
+
+    # enabled=False collapses to None
+    tp_off = parse_tool_policy(
+        {"v": 1, "grant_computer_use": {"enabled": False, "allowed_domains": []}}
+    )
+    assert tp_off.grant_computer_use is None
+
+    # Wildcard, unknown keys, or empty scope fail closed
+    for bad in [
+        {"v": 1, "grant_computer_use": {"enabled": True}},
+        {"v": 1, "grant_computer_use": {"enabled": True, "allowed_domains": ["*.corp.com"]}},
+        {"v": 1, "grant_computer_use": {"enabled": True, "allowed_apps": ["*"]}},
+        {"v": 1, "grant_computer_use": {"enabled": True, "allowed_apps": ["Teams"], "submit_mode": "yolo"}},
+        {"v": 1, "grant_computer_use": {"enabled": True, "allowed_apps": ["Teams"], "extra": 1}},
+    ]:
+        with pytest.raises(ToolPolicyValidationError):
+            parse_tool_policy(bad)
+
+    # Python Belt: resolve_caller_ceiling authorizes granted browser_use/desktop_use for custom agent child calls
+    fake_row = {
+        "id": "dms-approver",
+        "type": "custom",
+        "tool_policy_json": (
+            '{"v": 1, "grant_computer_use": {"enabled": true, "submit_mode": "stop_before_submit", '
+            '"allowed_domains": ["dms.corp.com"]}}'
+        ),
+    }
+    monkeypatch.setattr(svc, "_load_agent_row", lambda aid: fake_row if aid == "dms-approver" else None)
+
+    cu_caller = {
+        "context_mode": "untrusted_trigger",
+        "agent_id": "dms-approver",
+        "child_tool": "computer_use_run",
+    }
+    assert svc.resolve_caller_ceiling(cu_caller, "browser_use") == "update"
+    assert svc.is_computer_use_child_destructive_denied(cu_caller, "browser_use") is True
+    with pytest.raises(svc.ConnectorInvokeDenied):
+        svc.resolve_caller_ceiling(cu_caller, "desktop_use")
+    with pytest.raises(svc.ConnectorInvokeDenied):
+        svc.resolve_caller_ceiling(cu_caller, "notion")

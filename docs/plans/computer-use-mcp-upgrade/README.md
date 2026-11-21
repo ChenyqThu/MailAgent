@@ -26,6 +26,7 @@
 | **Phase 3** | `/connectors` 一键安装受管本地连接器 | ✅ 已完成 | `managed_local` 第三轨契约（跨 Python/TS parity 闸）；`browser_use`（`@playwright/mcp`）日常 Chrome 三模式接管；`desktop_use`（`vercel-labs/agent-desktop` `v1.3.1`）Mac/Win 二进制 SHA-256 校验、macOS ad-hoc 签名与 Electron/Python 双探针 TCC 权限面板（`src/connectors/local_installer.py`、`ManagedLocalSections.tsx`） |
 | **Phase 4** | Computer Use 专职子 Agent 编排与安全围栏 | ✅ 已完成 | 主会话单入口 `computer_use_run`（`class: 'exec'`，`frontend/src/ai-gateway/tools/computer_use.ts`）；父子 Session 隔离；子循环滑动窗口裁剪历史截图（`<= 2` 步）；App/域名 Scope Guard；`stop_before_submit` 终态停靠；`ComputerUseApprovalCard.tsx` 与像素隐私诚实告知 |
 | **Phase 5** | 业务场景深水区接线 | ✅ 已完成 | Teams / Notion 桌面端与原生工具/直连 MCP 优先级路由纪律（`stable_prompt.ts` Tier 1>2>3）；内网 OA/ERP 表单与 L4 `Matters` 行动项 `matter_item_run`（显式 `propose_only` + Gateway Belt 1/2 + Python DB 核验 Belt 3）→ `/today` 例外面闭环；`AGT-CU-001..004` 回归与 Mock/Replay E2E 套件 |
+| **Wave 6** | 内置受管浏览器 + 授权简化 + Custom Agent 自动化 | ✅ 已完成 | `browser_use` 默认升级为 `isolated_profile`（Headless 后台静默 + 一键从已有 Chrome Keychain 解密导入 Cookie + 打开专属浏览器窗口）；新增 native TCC「请求系统授权」唤起、审批卡 `"computer_use"` 域/应用记忆白名单与 `/connectors` `auto` 选项；Custom Agent 解锁有界 `grant_computer_use`（`email_filter` / `calendar_before_start` 等触发自动操作内网审批或入会流） |
 
 ---
 

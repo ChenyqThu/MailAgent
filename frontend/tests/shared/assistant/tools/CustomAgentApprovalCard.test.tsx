@@ -157,7 +157,9 @@ describe('CustomAgentApprovalCard — update (server-fact before/after diff)', (
     // the fetch went to the report-agents row (server facts)
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/report-agents?agentId=dms-approver')
     // before value from the SERVER row (off), struck through; after red
-    expect(screen.getByText('关闭')).toBeTruthy()
+    expect(screen.getAllByText('关闭').some((el) => el.className.includes('line-through'))).toBe(
+      true
+    )
     expect(screen.getByText(/全开放联网/)).toBeTruthy() // escalation warning
     // 🔴 model-lie negative: the patch says nothing about exec/skills — the card shows the
     // server's real current values (exec 开启, skills email), not a fabricated baseline.
@@ -327,6 +329,29 @@ describe('CustomAgentApprovalCard — grant_connectors axis (PR3)', () => {
     )
     await waitFor(() => expect(screen.getByText(/不应盲批/)).toBeTruthy())
     expect(screen.queryByText('批准修改')).toBeNull()
+  })
+})
+
+describe('CustomAgentApprovalCard — grant_computer_use axis (Wave 6)', () => {
+  test('create with grant_computer_use renders scope summary and automation warning', () => {
+    render(
+      <CustomAgentApprovalCard
+        {...mockProps({
+          args: {
+            id: 'dms-approver',
+            title: 'DMS Approver',
+            grant_computer_use: {
+              enabled: true,
+              submit_mode: 'stop_before_submit',
+              allowed_domains: ['dms.company.com']
+            }
+          }
+        })}
+      />
+    )
+    expect(screen.getByText('桌面与浏览器操控')).toBeTruthy()
+    expect(screen.getByText('允许并在提交前停靠 (dms.company.com)')).toBeTruthy()
+    expect(screen.getByText(/已为该后台 Agent 开启电脑\/浏览器自动化权限/)).toBeTruthy()
   })
 })
 

@@ -601,6 +601,15 @@ export interface MatterItemComputerUsePolicy {
   dispatchId: number
 }
 
+export interface CustomAgentComputerUsePolicy {
+  enabled: true
+  submitMode: 'stop_before_submit' | 'allow_submit'
+  allowedApps: string[]
+  allowedDomains: string[]
+  connectors: Array<'browser_use' | 'desktop_use'>
+  jobId?: number
+}
+
 export interface AgentModeGrants {
   exec?: boolean
   web?: WebGrant
@@ -615,6 +624,8 @@ export interface AgentModeGrants {
    *  `stopBeforeSubmit === true` only). Read solely by `isToolAllowedInContext` (never by
    *  `isToolClassAllowedInMode`, keeping `exec` strictly closed for general exec tools). */
   matterItemComputerUse?: MatterItemComputerUsePolicy
+  /** Wave 6 — bounded Computer Use grant on an `untrusted_trigger` / `cron_headless` Custom Agent. */
+  customAgentComputerUse?: CustomAgentComputerUsePolicy
 }
 
 /** The per-agent run context threaded through a headless custom-agent run (ADR-004 §3.1/§4.4):
@@ -680,6 +691,8 @@ export interface AgentRunContext {
    *  Present ONLY when `runKind === 'matter_item_run'`, `mode === 'propose_only'`,
    *  `stopBeforeSubmit === true`, and non-empty concrete scope entries exist. */
   matterItemComputerUse?: MatterItemComputerUsePolicy
+  /** Wave 6 — validated bounded Computer Use policy for `untrusted_trigger` / `cron_headless` custom agents. */
+  customAgentComputerUse?: CustomAgentComputerUsePolicy
   /** 0812 dogfood — the owner-configured web tier of THIS follow-up run, resolved ONCE by
    *  runHeadlessAgent (owner_settings `matter_run_web_face` via the lifecycle's TTL-cached hot
    *  read) and consumed ONLY by wrapCfgForAgentRun's matter belt (matterRunAdmitsWeb). It rides
@@ -903,10 +916,25 @@ export function isMatterItemComputerUseEnabled(
   )
 }
 
+/** Wave 6 — verify a bounded Custom Agent `grant_computer_use` policy (`stop_before_submit` or `allow_submit`). */
+export function isCustomAgentComputerUseEnabled(
+  grants?: AgentModeGrants
+): grants is AgentModeGrants & { customAgentComputerUse: CustomAgentComputerUsePolicy } {
+  const cu = grants?.customAgentComputerUse
+  return (
+    cu != null &&
+    cu.enabled === true &&
+    (cu.submitMode === 'stop_before_submit' || cu.submitMode === 'allow_submit') &&
+    (cu.allowedApps.length > 0 || cu.allowedDomains.length > 0) &&
+    Array.isArray(cu.connectors) &&
+    cu.connectors.length > 0
+  )
+}
+
 /** WS-5 — tool-name-aware context admission consumed by BOTH `applyContextModePolicy` and
  *  `auditedWriteTool` (`types.ts`). Keeps `isToolClassAllowedInMode('exec', 'matter_followup', ...)`
  *  strictly `false` so `run_command`/general `exec` stay locked while admitting `computer_use_run`
- *  exclusively when `matterItemComputerUse` is verified (`propose_only` + `stopBeforeSubmit`). */
+ *  exclusively when `matterItemComputerUse` or `customAgentComputerUse` is verified. */
 export function isToolAllowedInContext(
   toolName: string,
   toolClass: GatewayToolClass,
@@ -914,12 +942,13 @@ export function isToolAllowedInContext(
   grants?: AgentModeGrants,
   venue?: ImVenueSwitches
 ): boolean {
-  if (
-    toolName === 'computer_use_run' &&
-    mode === 'matter_followup' &&
-    isMatterItemComputerUseEnabled(grants)
-  ) {
-    return true
+  if (toolName === 'computer_use_run') {
+    if (mode === 'manual_chat') return true
+    if (mode === 'matter_followup') return isMatterItemComputerUseEnabled(grants)
+    if (mode === 'untrusted_trigger' || mode === 'cron_headless') {
+      return isCustomAgentComputerUseEnabled(grants)
+    }
+    return false
   }
   return isToolClassAllowedInMode(toolClass, mode, grants, venue, toolName)
 }

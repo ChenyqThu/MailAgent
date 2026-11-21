@@ -105,7 +105,21 @@ def test_browser_use_install_three_modes_and_uninstall(tmp_path, monkeypatch):
     cmd_iso = local_installer.resolve_stdio_command(
         "browser_use", {"mode": "isolated_profile"}
     )
-    assert cmd_iso["args"][1:] == ["--user-data-dir", str((base / "browser_use" / "profile").resolve())]
+    assert cmd_iso["args"][1:] == [
+        "--browser=chrome",
+        "--user-data-dir",
+        str((base / "browser_use" / "profile").resolve()),
+        "--headless",
+    ]
+
+    cmd_iso_headed = local_installer.resolve_stdio_command(
+        "browser_use", {"mode": "isolated_profile", "headless": False}
+    )
+    assert cmd_iso_headed["args"][1:] == [
+        "--browser=chrome",
+        "--user-data-dir",
+        str((base / "browser_use" / "profile").resolve()),
+    ]
 
     uninstalled = local_installer.uninstall_runtime("browser_use")
     assert uninstalled["installed"] is False
@@ -342,3 +356,53 @@ async def test_managed_local_client_passes_600s_idle_ttl(tmp_path, monkeypatch):
     await client.list_tools_manifest()
     await client.call_tool("browser_snapshot", {})
     assert recorded_ttls == [600.0, 600.0]
+
+
+def test_browser_use_default_isolated_and_idempotent_db_migration(tmp_path):
+    from src.agent_config.store import AgentConfigStore
+
+    db_file = tmp_path / "migrate.db"
+    store = AgentConfigStore(str(db_file))
+    store.upsert_connector(
+        "browser_use",
+        server_url="",
+        display_name="Browser Use",
+        transport="stdio",
+        source="managed_local",
+        runtime_config={"mode": "cdp_chrome", "cdp_url": "chrome"},
+    )
+    # Remove one-time migration marker to simulate upgrading from Wave 5 DB
+    import sqlite3
+
+    conn = sqlite3.connect(db_file)
+    conn.execute("DELETE FROM owner_settings WHERE key = 'browser_use_default_isolated_v1'")
+    conn.commit()
+    conn.close()
+
+    upgraded = AgentConfigStore(str(db_file))
+    row = upgraded.get_connector("browser_use")
+    assert row is not None
+    assert row.runtime_config == {"mode": "isolated_profile", "headless": True}
+
+    # Explicit user switch back to cdp_chrome must persist across future restarts
+    upgraded.update_connector_runtime_config(
+        "browser_use", {"mode": "cdp_chrome", "cdp_url": "chrome"}
+    )
+
+    reopened = AgentConfigStore(str(db_file))
+    row_after = reopened.get_connector("browser_use")
+    assert row_after is not None
+    assert row_after.runtime_config == {"mode": "cdp_chrome", "cdp_url": "chrome"}
+
+    # Preserve last_imported_* metadata during runtime normalization
+    norm = local_installer.normalize_runtime_options(
+        "browser_use",
+        {"mode": "isolated_profile", "headless": False},
+        existing={"mode": "isolated_profile", "last_imported_profile": "Default", "last_imported_count": 12},
+    )
+    assert norm == {
+        "mode": "isolated_profile",
+        "headless": False,
+        "last_imported_profile": "Default",
+        "last_imported_count": 12,
+    }

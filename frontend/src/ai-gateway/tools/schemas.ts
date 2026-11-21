@@ -1906,6 +1906,31 @@ export const customAgentConnectorGrantsSchema = z.record(
 )
 export type CustomAgentConnectorGrantsInput = z.infer<typeof customAgentConnectorGrantsSchema>
 
+/** Wave 6 — bounded Computer Use grant for custom agents (`grant_computer_use`).
+ *  Requires concrete non-wildcard `allowed_domains` (for browser_use) and/or `allowed_apps`
+ *  (for desktop_use). */
+export const customAgentComputerUseGrantSchema = z
+  .object({
+    enabled: z.literal(true).default(true),
+    submit_mode: z.enum(['stop_before_submit', 'allow_submit']).default('stop_before_submit'),
+    allowed_domains: z
+      .array(z.string().min(1).max(253))
+      .max(32)
+      .optional()
+      .describe('Exact/parent domains allowed for browser automation (e.g. ["dms.company.com"], no "*").'),
+    allowed_apps: z
+      .array(z.string().min(1).max(128))
+      .max(32)
+      .optional()
+      .describe('Exact desktop app names allowed (e.g. ["Microsoft Teams", "Notion"], no "*").')
+  })
+  .strict()
+  .refine(
+    (v) => (v.allowed_domains?.length ?? 0) > 0 || (v.allowed_apps?.length ?? 0) > 0,
+    'grant_computer_use requires at least one entry in allowed_domains or allowed_apps'
+  )
+export type CustomAgentComputerUseGrantInput = z.infer<typeof customAgentComputerUseGrantSchema>
+
 const customAgentEmailCapabilitySchema = z.enum(['read', 'organize', 'draft'])
 const customAgentCalendarCapabilitySchema = z.enum(['off', 'read', 'write'])
 const customAgentToggleCapabilitySchema = z.enum(['off', 'on'])
@@ -1990,7 +2015,8 @@ export const customAgentCreateSchema = z
     grant_exec: z.boolean().optional(),
     grant_web: customAgentWebGrantSchema.optional(),
     skills: z.array(z.string().min(1).max(64)).max(32).optional(),
-    grant_connectors: customAgentConnectorGrantsSchema.optional()
+    grant_connectors: customAgentConnectorGrantsSchema.optional(),
+    grant_computer_use: customAgentComputerUseGrantSchema.optional()
   })
   .strict()
   .superRefine(rejectMixedCapabilityVocabulary)
@@ -2015,7 +2041,8 @@ export const customAgentUpdateSchema = z
     grant_exec: z.boolean().optional(),
     grant_web: customAgentWebGrantSchema.optional(),
     skills: z.array(z.string().min(1).max(64)).max(32).optional(),
-    grant_connectors: customAgentConnectorGrantsSchema.optional()
+    grant_connectors: customAgentConnectorGrantsSchema.optional(),
+    grant_computer_use: z.union([customAgentComputerUseGrantSchema, z.null()]).optional()
   })
   .strict()
   .superRefine(rejectMixedCapabilityVocabulary)

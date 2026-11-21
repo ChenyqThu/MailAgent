@@ -294,6 +294,26 @@ def resolve_caller_ceiling(
             f"headless caller ({mode}) must carry agent_id to be authorized for connector "
             f"{connector_id!r}",
         )
+    if (
+        caller.get("child_tool") == "computer_use_run"
+        and connector_id in _MATTER_COMPUTER_USE_CONNECTORS
+    ):
+        cu_grant = custom_agent_computer_use_grant(agent_id)
+        cu_allowed = (
+            cu_grant is not None
+            and cu_grant.enabled is True
+            and (
+                (connector_id == "browser_use" and bool(cu_grant.allowed_domains))
+                or (connector_id == "desktop_use" and bool(cu_grant.allowed_apps))
+            )
+        )
+        if cu_allowed:
+            return "update"
+        raise ConnectorInvokeDenied(
+            "E_CONNECTOR_GRANT_DENIED",
+            f"agent {agent_id!r} has not granted computer_use connector {connector_id!r}",
+            http_status=403,
+        )
     ceiling = connector_grants_for_agent(agent_id).get(connector_id)
     if ceiling is None:
         raise ConnectorInvokeDenied(
@@ -302,6 +322,43 @@ def resolve_caller_ceiling(
             "(set tool_policy.grant_connectors to read|write|update)",
         )
     return ceiling
+
+
+def custom_agent_computer_use_grant(agent_id: str) -> Any:
+    """agent 行 → ``ComputerUseGrant`` 或 ``None``（读侧宽容：坏配置或非 custom → None）。"""
+    from src.agents.trigger import parse_tool_policy
+
+    row = _load_agent_row(agent_id)
+    if row is None or (row.get("type") or "") != "custom":
+        return None
+    try:
+        policy = parse_tool_policy(row.get("tool_policy_json"))
+    except ValueError:
+        return None
+    cu = policy.grant_computer_use
+    if cu is None or not cu.enabled:
+        return None
+    return cu
+
+
+def is_computer_use_child_destructive_denied(
+    caller: Optional[Mapping[str, Any]], connector_id: str
+) -> bool:
+    """Custom Agent headless computer_use child call in ``stop_before_submit`` mode keeps ``deny_destructive=True``."""
+    if not isinstance(caller, Mapping):
+        return False
+    mode = caller.get("context_mode")
+    if mode == "matter_followup":
+        return True
+    if mode in HEADLESS_CONTEXT_MODES and caller.get("child_tool") == "computer_use_run":
+        if connector_id not in _MATTER_COMPUTER_USE_CONNECTORS:
+            return True
+        agent_id = caller.get("agent_id")
+        if not isinstance(agent_id, str) or not agent_id:
+            return True
+        cu = custom_agent_computer_use_grant(agent_id)
+        return cu is None or cu.submit_mode != "allow_submit"
+    return False
 
 
 _MATTER_COMPUTER_USE_CONNECTORS: tuple[str, ...] = ("browser_use", "desktop_use")

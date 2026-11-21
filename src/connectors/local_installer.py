@@ -34,7 +34,7 @@ from loguru import logger
 from src.agent_config.store import resolve_agent_config_db_path
 from src.connectors.catalog import get_managed_local_entry
 
-BROWSER_MODES: tuple[str, ...] = ("cdp_chrome", "extension", "isolated_profile")
+BROWSER_MODES: tuple[str, ...] = ("isolated_profile", "cdp_chrome", "extension")
 DEFAULT_CDP_URL = "chrome"
 PLAYWRIGHT_MCP_NPM_SPEC = "@playwright/mcp@latest"
 
@@ -204,6 +204,17 @@ def normalize_runtime_options(
                 status_code=422,
             )
         merged["mode"] = mode_val
+        if "headless" in payload and payload["headless"] is not None:
+            headless_val = payload["headless"]
+            if not isinstance(headless_val, bool):
+                raise LocalInstallerError(
+                    "E_INVALID_RUNTIME_OPTION",
+                    "headless must be a JSON boolean",
+                    status_code=422,
+                )
+            merged["headless"] = headless_val
+        elif mode_val == "isolated_profile" and "headless" not in merged:
+            merged["headless"] = True
         if "cdp_url" in payload and payload["cdp_url"] is not None:
             cdp_raw = str(payload["cdp_url"]).strip()
             if cdp_raw != "chrome" and not (
@@ -606,14 +617,16 @@ def resolve_stdio_command(
 
     if connector_id == "browser_use":
         rc = normalize_runtime_options("browser_use", runtime_config)
-        mode = rc.get("mode") or entry.default_mode or "cdp_chrome"
+        mode = rc.get("mode") or entry.default_mode or "isolated_profile"
         if mode == "cdp_chrome":
             endpoint = str(rc.get("cdp_url") or DEFAULT_CDP_URL)
             mode_args = [f"--cdp-endpoint={endpoint}"]
         elif mode == "extension":
             mode_args = ["--extension"]
         else:
-            mode_args = ["--user-data-dir", str(runtime_dir / "profile")]
+            mode_args = ["--browser=chrome", "--user-data-dir", str(runtime_dir / "profile")]
+            if rc.get("headless", True) is not False:
+                mode_args.append("--headless")
         if ep.suffix in (".js", ".mjs", ".cjs"):
             node_exe = _find_node() or "node"
             return {

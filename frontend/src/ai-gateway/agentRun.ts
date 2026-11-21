@@ -42,6 +42,7 @@ import {
 import {
   classOfTool,
   CONTACT_PROPOSE_TOOLS,
+  isCustomAgentComputerUseEnabled,
   isMatterItemComputerUseEnabled,
   LIBRARY_RUN_APPEND_TOOL,
   MATTER_ITEM_REPORT_TOOL,
@@ -53,6 +54,7 @@ import {
   parseWebGrant,
   type AgentContextMode,
   type AgentRunContext,
+  type CustomAgentComputerUsePolicy,
   type GatewayToolClass,
   type MatterItemComputerUsePolicy,
   type MatterRunWebFace
@@ -238,6 +240,7 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
   // `matter_item_run` with `mode === 'propose_only' && stopBeforeSubmit === true` and non-empty
   // concrete scope; autonomous/malformed specs fail closed to undefined.
   const matterItemComputerUse = matterItemComputerUseFromSpec(spec, jobId, matterItemRun)
+  const customAgentComputerUse = customAgentComputerUseFromSpec(spec, jobId)
   const specUseKos = (spec as AgentRunSpec & { useKos?: unknown }).useKos
   // task 09-02 — the chat-history read radius, same discriminated funnel as the grants: only the
   // exact 'all' literal widens; conditional include keeps every pre-09-02 context byte-identical.
@@ -255,7 +258,8 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
       web: parseWebGrant(toolPolicy?.grantWeb),
       ...(connectors !== undefined ? { connectors } : {}),
       ...(connectorTools !== undefined ? { connectorTools } : {}),
-      ...(matterItemComputerUse !== undefined ? { matterItemComputerUse } : {})
+      ...(matterItemComputerUse !== undefined ? { matterItemComputerUse } : {}),
+      ...(customAgentComputerUse !== undefined ? { customAgentComputerUse } : {})
     },
     // S6 W1 — carry the run's jobId so a paused approval freezes it into the stash for the
     // record-view pending projection. Conditional include: a caller that omits it (every existing
@@ -268,6 +272,7 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
     // L4 批次3 — same conditional-include discipline.
     ...(matterItemRun !== undefined ? { matterItemRun } : {}),
     ...(matterItemComputerUse !== undefined ? { matterItemComputerUse } : {}),
+    ...(customAgentComputerUse !== undefined ? { customAgentComputerUse } : {}),
     // WP7 — same conditional-include discipline: only a spec STAMPED contact_governance mints the
     // flag, so every other run's context object is byte-identical to the pre-WP7 shape.
     ...(spec.runKind === CONTACT_GOVERNANCE_RUN_KIND
@@ -383,6 +388,57 @@ function matterItemComputerUseFromSpec(
     connectors,
     ...(typeof jobId === 'number' && Number.isInteger(jobId) && jobId > 0 ? { jobId } : {}),
     dispatchId: matterItemRun.dispatchId
+  }
+}
+
+/** Wave 6 — fail-closed construction of bounded Custom Agent `grant_computer_use` policy.
+ *  Never enabled for matter/contact sentinel runs; requires non-wildcard allowedApps or allowedDomains. */
+function customAgentComputerUseFromSpec(
+  spec: AgentRunSpec,
+  jobId: number | undefined
+): CustomAgentComputerUsePolicy | undefined {
+  if (
+    spec.runKind === 'matter_followup' ||
+    spec.runKind === CONTACT_GOVERNANCE_RUN_KIND ||
+    spec.runKind === MATTER_ITEM_RUN_KIND
+  ) {
+    return undefined
+  }
+  const raw = spec.toolPolicy?.grantComputerUse as unknown as Record<string, unknown> | undefined
+  if (!raw || typeof raw !== 'object') return undefined
+  if (raw.enabled !== true) return undefined
+  const submitMode = raw.submitMode
+  if (submitMode !== 'stop_before_submit' && submitMode !== 'allow_submit') return undefined
+
+  const allowedApps = normalizeConcreteScopeList(raw.allowedApps)
+  const allowedDomains = normalizeConcreteScopeList(raw.allowedDomains)
+  if (allowedApps.length === 0 && allowedDomains.length === 0) return undefined
+
+  let connectors: Array<'browser_use' | 'desktop_use'>
+  if (Array.isArray(raw.connectors)) {
+    connectors = Array.from(
+      new Set(
+        raw.connectors.filter(
+          (c): c is 'browser_use' | 'desktop_use' =>
+            typeof c === 'string' &&
+            VALID_MATTER_CU_CONNECTORS.has(c as 'browser_use' | 'desktop_use')
+        )
+      )
+    )
+  } else {
+    connectors = []
+    if (allowedDomains.length > 0) connectors.push('browser_use')
+    if (allowedApps.length > 0) connectors.push('desktop_use')
+  }
+  if (connectors.length === 0) return undefined
+
+  return {
+    enabled: true,
+    submitMode,
+    allowedApps,
+    allowedDomains,
+    connectors,
+    ...(typeof jobId === 'number' && Number.isInteger(jobId) && jobId > 0 ? { jobId } : {})
   }
 }
 
@@ -576,9 +632,10 @@ export function wrapCfgForAgentRun(
           name === 'tool_search' ||
           SESSION_TOOL_NAMES.has(name) ||
           (cls === 'exec' && name !== 'computer_use_run') ||
+          (name === 'computer_use_run' && isCustomAgentComputerUseEnabled(ctx.modeGrants)) ||
           cls === 'web' ||
           isMcpToolName(name) ||
-          keep.has(name)
+          (name !== 'computer_use_run' && keep.has(name))
         )
           out[name] = t
       }
@@ -735,7 +792,9 @@ async function runHeadlessAgentOnce(
   // WITHOUT connector tools (the run must never freeze on a slow serve-api). No grants / no hook
   // (manual cfgs, tests, flag off) → zero work, byte-identical.
   if (
-    (agentRunContext.modeGrants?.connectors || agentRunContext.matterItemComputerUse?.enabled) &&
+    (agentRunContext.modeGrants?.connectors ||
+      agentRunContext.matterItemComputerUse?.enabled ||
+      agentRunContext.modeGrants?.customAgentComputerUse?.enabled) &&
     cfg.ensureConnectorManifest
   ) {
     try {

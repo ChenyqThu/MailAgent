@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple, Union
@@ -143,7 +144,7 @@ class Budget:
 _TOOL_POLICY_KEYS = frozenset(
     {
         "v", "allowed_tools", "grant_exec", "grant_web", "skills", "grant_connectors",
-        "grant_connector_tools", "grant_sessions",
+        "grant_connector_tools", "grant_sessions", "grant_computer_use",
     }
 )
 
@@ -166,6 +167,21 @@ _LEGACY_ALL_HISTORY_TOOL = "chat_session_list"
 # store.CONNECTOR_CRUD_TYPES / connectors/client.derive_crud_type）。
 # 🔴 值域外的字面量（含遗留的 ``"delete"``）**写入即拒**（不是读侧宽容），fail-closed。
 _CONNECTOR_GRANT_VALUES = ("read", "write", "update")
+_COMPUTER_USE_SUBMIT_MODES = frozenset({"stop_before_submit", "allow_submit"})
+_COMPUTER_USE_WILDCARDS = frozenset({"*", "*.*", "all", "any"})
+_COMPUTER_USE_GRANT_KEYS = frozenset(
+    {"enabled", "submit_mode", "allowed_domains", "allowed_apps"}
+)
+
+
+@dataclass(frozen=True)
+class ComputerUseGrant:
+    """custom agent 有界 computer_use 授权（域名 / 应用白名单 + 提交门控）。"""
+
+    enabled: bool = True
+    submit_mode: str = "stop_before_submit"
+    allowed_domains: Tuple[str, ...] = ()
+    allowed_apps: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -195,6 +211,7 @@ class ToolPolicy:
     grant_connectors: Tuple[Tuple[str, str], ...] = ()
     grant_connector_tools: Tuple[Tuple[str, Tuple[str, ...]], ...] = ()
     grant_sessions: str = "own"
+    grant_computer_use: Optional[ComputerUseGrant] = None
 
 
 def _as_dict(raw: Union[str, dict, None]) -> Optional[dict]:
@@ -730,6 +747,78 @@ def parse_tool_policy(raw: Union[str, dict, None]) -> ToolPolicy:
         raise ToolPolicyValidationError(
             "grant_connector_tools must be a JSON object of {connector: [tool_name, ...]}"
         )
+    cu_raw = data.get("grant_computer_use")
+    if cu_raw is None:
+        grant_cu: Optional[ComputerUseGrant] = None
+    elif not isinstance(cu_raw, dict):
+        raise ToolPolicyValidationError("grant_computer_use must be a JSON object or null")
+    else:
+        cu_unknown = set(cu_raw) - _COMPUTER_USE_GRANT_KEYS
+        if cu_unknown:
+            raise ToolPolicyValidationError(
+                f"unknown grant_computer_use keys: {sorted(cu_unknown)}"
+            )
+        cu_enabled = cu_raw.get("enabled", True)
+        if not isinstance(cu_enabled, bool):
+            raise ToolPolicyValidationError("grant_computer_use.enabled must be a JSON boolean")
+        if cu_enabled is False:
+            grant_cu = None
+        else:
+            submit_mode = cu_raw.get("submit_mode", "stop_before_submit")
+            if not isinstance(submit_mode, str) or submit_mode not in _COMPUTER_USE_SUBMIT_MODES:
+                raise ToolPolicyValidationError(
+                    "grant_computer_use.submit_mode must be one of ['stop_before_submit', 'allow_submit']"
+                )
+            raw_domains = cu_raw.get("allowed_domains", [])
+            raw_apps = cu_raw.get("allowed_apps", [])
+            if not isinstance(raw_domains, list) or not all(isinstance(d, str) for d in raw_domains):
+                raise ToolPolicyValidationError(
+                    "grant_computer_use.allowed_domains must be a list of strings"
+                )
+            if not isinstance(raw_apps, list) or not all(isinstance(a, str) for a in raw_apps):
+                raise ToolPolicyValidationError(
+                    "grant_computer_use.allowed_apps must be a list of strings"
+                )
+            domains_out: list[str] = []
+            seen_domains: set[str] = set()
+            for raw_d in raw_domains:
+                cleaned = raw_d.strip().lower().strip(".")
+                if "://" in cleaned:
+                    cleaned = (urllib.parse.urlsplit(cleaned).hostname or "").lower().rstrip(".")
+                else:
+                    cleaned = cleaned.split("/", 1)[0].split(":", 1)[0].lstrip(".")
+                if not cleaned or cleaned in _COMPUTER_USE_WILDCARDS or "*" in cleaned:
+                    raise ToolPolicyValidationError(
+                        f"grant_computer_use.allowed_domains contains invalid entry: {raw_d!r}"
+                    )
+                if cleaned not in seen_domains:
+                    seen_domains.add(cleaned)
+                    domains_out.append(cleaned)
+
+            apps_out: list[str] = []
+            seen_apps: set[str] = set()
+            for raw_a in raw_apps:
+                cleaned_a = raw_a.strip()
+                lower_a = cleaned_a.lower()
+                if not cleaned_a or lower_a in _COMPUTER_USE_WILDCARDS or "*" in cleaned_a:
+                    raise ToolPolicyValidationError(
+                        f"grant_computer_use.allowed_apps contains invalid entry: {raw_a!r}"
+                    )
+                key_a = lower_a.removesuffix(".app")
+                if key_a not in seen_apps:
+                    seen_apps.add(key_a)
+                    apps_out.append(cleaned_a)
+
+            if not domains_out and not apps_out:
+                raise ToolPolicyValidationError(
+                    "grant_computer_use requires non-empty allowed_domains or allowed_apps"
+                )
+            grant_cu = ComputerUseGrant(
+                enabled=True,
+                submit_mode=submit_mode,
+                allowed_domains=tuple(domains_out),
+                allowed_apps=tuple(apps_out),
+            )
     return ToolPolicy(
         allowed_tools=allowed,
         grant_exec=grant is True,
@@ -738,6 +827,7 @@ def parse_tool_policy(raw: Union[str, dict, None]) -> ToolPolicy:
         grant_connectors=connectors,
         grant_connector_tools=connector_tools,
         grant_sessions=grant_sessions,
+        grant_computer_use=grant_cu,
     )
 
 

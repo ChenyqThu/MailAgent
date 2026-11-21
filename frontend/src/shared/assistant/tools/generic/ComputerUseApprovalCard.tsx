@@ -5,6 +5,7 @@
 // 文本脱敏中间件自动遮罩」的诚实隐私提醒。暂停态走 assistant-ui 原生 `respondToApproval`（通
 // 道 A），绝不落入无按钮 ToolTraceCard 死锁。
 
+import { useState } from 'react'
 import { Monitor, ShieldAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
@@ -19,6 +20,27 @@ import {
   type CardParam
 } from '../_cardShell'
 import { deriveCardPhase } from '../_cardShell.lib'
+import { resolveAiGatewayBaseUrl } from '../../runtime/flags'
+
+async function postRememberComputerUsePolicy(toolCallId: string): Promise<void> {
+  const base = resolveAiGatewayBaseUrl()
+  if (base == null) throw new Error('E_NO_GATEWAY')
+  const res = await fetch(`${base}/api/ai/policy/remember`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ toolCallId })
+  })
+  if (!res.ok) {
+    let code = `E_HTTP_${res.status}`
+    try {
+      const body = (await res.json()) as { error?: string }
+      if (body.error) code = body.error
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(code)
+  }
+}
 
 function resolveEffectiveArgs(args: unknown, argsText: string | undefined): unknown {
   if (args && typeof args === 'object' && !Array.isArray(args)) {
@@ -61,12 +83,24 @@ const KNOWN_RESULT_STATUSES = new Set([
 ])
 
 export function ComputerUseApprovalCard(props: ToolCallMessagePartProps): React.JSX.Element {
-  const { args, argsText, result, respondToApproval } = props
+  const { args, argsText, result, toolCallId, respondToApproval } = props
   const { t } = useTranslation()
   const phase = deriveCardPhase(props)
   const data = propsOf(args, argsText, result)
+  const [alwaysAllow, setAlwaysAllow] = useState(false)
+  const canRemember =
+    data.stopBeforeSubmit && (data.allowedApps.length > 0 || data.allowedDomains.length > 0)
 
-  const onApprove = (): Promise<void> => respondToApproval({ approved: true })
+  const onApprove = async (): Promise<void> => {
+    if (canRemember && alwaysAllow && toolCallId) {
+      try {
+        await postRememberComputerUsePolicy(toolCallId)
+      } catch {
+        /* best-effort whitelist rule persistence */
+      }
+    }
+    await respondToApproval({ approved: true })
+  }
   const onReject = (reason?: string): Promise<void> =>
     respondToApproval({ approved: false, reason })
 
@@ -201,6 +235,24 @@ export function ComputerUseApprovalCard(props: ToolCallMessagePartProps): React.
               {t('chat.computerUseCard.pixelPrivacyBody')}
             </p>
           </div>
+        </div>
+      ) : null}
+      {phase === 'pending' && canRemember ? (
+        <div className="mt-2 rounded-md border border-ink-border-soft bg-ink-2/60 px-2.5 py-2">
+          <label className="flex cursor-pointer items-start gap-2">
+            <input
+              type="checkbox"
+              checked={alwaysAllow}
+              onChange={(e) => setAlwaysAllow(e.target.checked)}
+              className="mt-0.5 size-3.5 shrink-0 accent-[rgb(var(--c-accent))]"
+            />
+            <span className="text-aux text-ink-fg-2">
+              {t('chat.computerUseCard.alwaysAllowLabel')}
+              <span className="mt-0.5 block text-ink-fg-3">
+                {t('chat.computerUseCard.alwaysAllowHint')}
+              </span>
+            </span>
+          </label>
         </div>
       ) : null}
       <ApprovalActions

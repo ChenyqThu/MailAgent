@@ -11,6 +11,7 @@
 
 import type {
   OpenSystemPermissionResult,
+  RequestSystemPermissionResult,
   SystemPermissionKind,
   SystemPermissionsStatus,
   SystemPermissionState
@@ -18,6 +19,7 @@ import type {
 
 export type {
   OpenSystemPermissionResult,
+  RequestSystemPermissionResult,
   SystemPermissionKind,
   SystemPermissionsStatus,
   SystemPermissionState
@@ -83,7 +85,35 @@ export type ConnectorSource = 'composio' | 'custom_mcp' | 'managed_local'
 export type ConnectorTrack = 'direct' | 'composio' | 'managed_local'
 
 /** `browser_use`（`@playwright/mcp`）本机托管浏览器连接模式。 */
-export type ManagedBrowserMode = 'cdp_chrome' | 'extension' | 'isolated_profile'
+export type ManagedBrowserMode = 'isolated_profile' | 'cdp_chrome' | 'extension'
+
+export interface ChromeProfileSummary {
+  profile_id: string
+  name: string
+  user_name?: string | null
+  has_cookies: boolean
+}
+
+export interface ChromeCookiesImportInput {
+  profile_id?: string
+  domain_filters?: string[]
+}
+
+export interface ChromeCookiesImportResult {
+  ok: boolean
+  profile_id: string
+  matched: number
+  imported: number
+  skipped: number
+  runtime_config?: Record<string, unknown> | null
+  connector?: ConnectorSummary | null
+}
+
+export interface ManagedBrowserWindowLaunchResult {
+  ok: boolean
+  launched: boolean
+  profile_dir: string
+}
 
 /** 凭证健康视图（只走明文列 peek —— master key 不可用时照样成立，故它不是「解密成功」的证据）。 */
 export interface ConnectorCredentialView {
@@ -332,12 +362,16 @@ export interface ConnectorApi {
   ): Promise<ConnectorRuntimeOptionsResult>
   systemPermissions?(): Promise<SystemPermissionsStatus>
   openSystemPermission?(kind: SystemPermissionKind): Promise<OpenSystemPermissionResult>
+  chromeProfiles?(): Promise<{ profiles: ChromeProfileSummary[] }>
+  importChromeCookies?(input: ChromeCookiesImportInput): Promise<ChromeCookiesImportResult>
+  launchBrowserWindow?(input?: { url?: string }): Promise<ManagedBrowserWindowLaunchResult>
 }
 
 export interface ManagedRuntimeOptionsInput {
   mode?: ManagedBrowserMode | string
   browser_mode?: ManagedBrowserMode | string
   cdp_url?: string
+  headless?: boolean
 }
 
 export interface ConnectorInstallStatus {

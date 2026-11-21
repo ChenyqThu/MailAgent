@@ -13,8 +13,8 @@ import { prepareChatRun } from '../../src/ai-gateway/chatRun'
 import type { AiGatewayConfig } from '../../src/ai-gateway/config'
 import { ApprovalGuard } from '../../src/ai-gateway/security/approval'
 import { buildGatewayTools } from '../../src/ai-gateway/tools'
-import { createConnectorTools, type ConnectorToolManifestEntry } from '../../src/ai-gateway/tools/connector'
-import { resetRuntimeToolClasses } from '../../src/ai-gateway/tools/policy'
+import { createConnectorTools, createComputerUseChildConnectorTools, type ConnectorToolManifestEntry } from '../../src/ai-gateway/tools/connector'
+import { isCustomAgentComputerUseEnabled, resetRuntimeToolClasses } from '../../src/ai-gateway/tools/policy'
 import type { GatewayToolAuditEntry } from '../../src/ai-gateway/tools/types'
 import { agentRunContextFromSpec, wrapCfgForAgentRun } from '../../src/ai-gateway/agentRun'
 import type { MailAgentDomainClient } from '../../src/ai-gateway/python/domainClient'
@@ -657,5 +657,223 @@ describe('WS-5 Computer Use E2E (MockLanguageModelV3 + full prepareChatRun)', ()
       await pHeadless.run.result.consumeStream()
       expect(headlessSeen).not.toContain('computer_use_run')
     }
+  })
+
+  test('Wave 6 Custom Agent grantComputerUse: email_filter exposes bounded computer_use_run and blocks out-of-scope domains', async () => {
+    const guard = new ApprovalGuard()
+    const domainCallers: Array<{ contextMode: string; childTool?: string }> = []
+    const domain = {
+      ...mockDomain(() => okEnvelope([])),
+      invokeConnectorTool: async (
+        connectorId: string,
+        toolName: string,
+        _args: Record<string, unknown> | undefined,
+        _signal?: AbortSignal,
+        caller?: { contextMode: string; childTool?: string }
+      ) => {
+        if (caller) domainCallers.push(caller)
+        return {
+          connector_id: connectorId,
+          tool_name: toolName,
+          content: 'Page URL: https://dms.company.internal/request/42\nApproved',
+          is_error: false,
+          truncated: false
+        }
+      }
+    } as unknown as MailAgentDomainClient
+
+    const cuSpec: AgentRunSpec = {
+      jobId: 777,
+      agentId: 'dms-approver',
+      agentTitle: 'DMS Approver',
+      trigger: { kind: 'email_filter', firedAt: '2026-11-20T00:00:00Z' },
+      prompt: { taskPrompt: 'Approve DMS request #42' },
+      sessionTitle: 'DMS Approval',
+      model: null,
+      toolPolicy: {
+        allowedTools: ['email_body'],
+        skills: [],
+        grantComputerUse: {
+          enabled: true,
+          submitMode: 'allow_submit',
+          allowedDomains: ['dms.company.internal'],
+          connectors: ['browser_use']
+        }
+      },
+      budget: { maxRunSeconds: 60 }
+    }
+
+    const runCtx = agentRunContextFromSpec(cuSpec, 777)
+    expect(isCustomAgentComputerUseEnabled(runCtx.modeGrants)).toBe(true)
+
+    const cuManifest: ConnectorToolManifestEntry[] = [
+      entry('browser_use', 'browser_navigate', 'read', 'auto'),
+      entry('browser_use', 'browser_click', 'write', 'auto')
+    ]
+
+    let outerStep = 0
+    let childStep = 0
+    let seenTools: string[] = []
+    let finalSummary = ''
+
+    const modelFactory = () =>
+      new MockLanguageModelV3({
+        doStream: async (opts) => {
+          const names = (opts.tools ?? []).map((t) => t.name)
+          const isChild = names.some((n) => n.startsWith('mcp__browser_use__'))
+          if (isChild) {
+            childStep += 1
+            if (childStep === 1) {
+              return {
+                stream: simulateReadableStream({
+                  chunks: [
+                    { type: 'stream-start' as const, warnings: [] },
+                    {
+                      type: 'tool-call' as const,
+                      toolCallId: 'b1',
+                      toolName: 'mcp__browser_use__browser_navigate',
+                      input: JSON.stringify({ url: 'https://dms.company.internal/request/42' })
+                    },
+                    {
+                      type: 'finish' as const,
+                      finishReason: { unified: 'tool-calls' as const, raw: undefined },
+                      usage: USAGE
+                    }
+                  ]
+                })
+              }
+            }
+            if (childStep === 2) {
+              return {
+                stream: simulateReadableStream({
+                  chunks: [
+                    { type: 'stream-start' as const, warnings: [] },
+                    {
+                      type: 'tool-call' as const,
+                      toolCallId: 'b2',
+                      toolName: 'mcp__browser_use__browser_click',
+                      input: JSON.stringify({ element: 'Approve', selector: '#approve' })
+                    },
+                    {
+                      type: 'finish' as const,
+                      finishReason: { unified: 'tool-calls' as const, raw: undefined },
+                      usage: USAGE
+                    }
+                  ]
+                })
+              }
+            }
+            return {
+              stream: simulateReadableStream({
+                chunks: [
+                  { type: 'stream-start' as const, warnings: [] },
+                  { type: 'text-start' as const, id: 'c' },
+                  { type: 'text-delta' as const, id: 'c', delta: 'Clicked Approve on DMS' },
+                  { type: 'text-end' as const, id: 'c' },
+                  {
+                    type: 'finish' as const,
+                    finishReason: { unified: 'stop' as const, raw: undefined },
+                    usage: USAGE
+                  }
+                ]
+              })
+            }
+          }
+
+          seenTools = names
+          outerStep += 1
+          if (outerStep === 1) {
+            return {
+              stream: simulateReadableStream({
+                chunks: [
+                  { type: 'stream-start' as const, warnings: [] },
+                  {
+                    type: 'tool-call' as const,
+                    toolCallId: 'cu-dms-1',
+                    toolName: 'computer_use_run',
+                    input: JSON.stringify({
+                      goal: 'Open DMS and approve request #42',
+                      target_hint: 'browser',
+                      allowed_domains: ['dms.company.internal'],
+                      stop_before_submit: false,
+                      max_steps: 4
+                    })
+                  },
+                  {
+                    type: 'finish' as const,
+                    finishReason: { unified: 'tool-calls' as const, raw: undefined },
+                    usage: USAGE
+                  }
+                ]
+              })
+            }
+          }
+          return {
+            stream: simulateReadableStream({
+              chunks: [
+                { type: 'stream-start' as const, warnings: [] },
+                { type: 'text-start' as const, id: 'o' },
+                { type: 'text-delta' as const, id: 'o', delta: 'DMS approved automatically' },
+                { type: 'text-end' as const, id: 'o' },
+                {
+                  type: 'finish' as const,
+                  finishReason: { unified: 'stop' as const, raw: undefined },
+                  usage: USAGE
+                }
+              ]
+            })
+          }
+        }
+      })
+
+    const wrapped = wrapCfgForAgentRun(
+      {
+        port: 0,
+        baseUrl: 'https://crs.example/api',
+        apiKey: 'sk-test',
+        model: 'claude-sonnet-4-6',
+        createModel: modelFactory,
+        buildTools: (collector, approvalMode, cm, ctx) =>
+          buildGatewayTools(
+            {
+              domain,
+              contextMode: cm,
+              approvalMode,
+              approvalGuard: guard,
+              agentRunContext: ctx,
+              computerUse: {
+                childTools: createComputerUseChildConnectorTools(domain, collector, cuManifest, {
+                  contextMode: 'untrusted_trigger',
+                  connectors: ['browser_use'],
+                  agentId: ctx!.agentId,
+                  jobId: ctx!.jobId,
+                  allowDestructive: true
+                }),
+                customAgentPolicy: ctx?.modeGrants?.customAgentComputerUse,
+                forceStopBeforeSubmit: false
+              }
+            },
+            collector
+          )
+      },
+      runCtx
+    )
+
+    const prep = await prepareChatRun(
+      { messages: [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: 'approve #42' }] }] },
+      wrapped,
+      new AbortController().signal,
+      'untrusted_trigger'
+    )
+    expect(prep.ok).toBe(true)
+    if (prep.ok) {
+      await prep.run.result.consumeStream()
+      finalSummary = await prep.run.result.text
+    }
+    expect(seenTools).toContain('computer_use_run')
+    expect(finalSummary).toContain('DMS approved automatically')
+    expect(domainCallers.some((c) => c.contextMode === 'untrusted_trigger' && c.childTool === 'computer_use_run')).toBe(
+      true
+    )
   })
 })

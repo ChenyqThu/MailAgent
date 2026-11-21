@@ -5,15 +5,29 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Check, Copy, ExternalLink, Loader2, RefreshCw, ShieldAlert } from 'lucide-react'
+import {
+  AlertTriangle,
+  AppWindow,
+  Check,
+  Copy,
+  Download,
+  ExternalLink,
+  Loader2,
+  RefreshCw,
+  ShieldAlert,
+  ShieldCheck
+} from 'lucide-react'
 
 import { Button } from '@shared/components/ui/button'
+import { Input } from '@shared/components/ui/input'
+import { Switch } from '@shared/components/ui/switch'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import type {
+  ChromeProfileSummary,
   ManagedBrowserMode,
   SystemPermissionKind,
   SystemPermissionState,
@@ -26,8 +40,10 @@ import {
   PILL_BASE,
   copyTextToClipboard,
   fetchSystemPermissions,
+  formatEpoch,
   isManagedBrowserMode,
-  openSystemPermissionPane
+  openSystemPermissionPane,
+  requestSystemPermission
 } from './consoleShared'
 
 /** 诚实像素隐私告知：明确说明 privacyMaskMiddleware 仅脱敏出站文本，不对截图或屏幕画面打码。 */
@@ -57,28 +73,71 @@ export function ManagedPixelPrivacyNotice({
   )
 }
 
-/** `browser_use`（`@playwright/mcp`）三种浏览器连接模式选择器与 `chrome://inspect/#remote-debugging` 引导。 */
+/** `browser_use`（`@playwright/mcp`）三种浏览器连接模式选择器、内置受管浏览器控制与 Chrome 凭据导入。 */
 export function ManagedBrowserModeSection({
   connectorId,
   currentMode,
   supportedModes,
-  isWeb
+  isWeb,
+  runtimeInstalled = true,
+  headless = true,
+  runtimeConfig
 }: {
   connectorId: string
   currentMode: ManagedBrowserMode
   supportedModes: string[]
   isWeb: boolean
+  runtimeInstalled?: boolean
+  headless?: boolean
+  runtimeConfig?: Record<string, unknown> | null
 }): React.ReactElement {
   const { t } = useTranslation()
   const api = useMailApi()
   const qc = useQueryClient()
   const [savingMode, setSavingMode] = React.useState<ManagedBrowserMode | null>(null)
+  const [savingHeadless, setSavingHeadless] = React.useState(false)
   const [copiedCdp, setCopiedCdp] = React.useState(false)
+  const [selectedProfile, setSelectedProfile] = React.useState('Default')
+  const [domainFilterText, setDomainFilterText] = React.useState('')
+  const [importingCookies, setImportingCookies] = React.useState(false)
+  const [launchingWindow, setLaunchingWindow] = React.useState(false)
 
   const modes: ManagedBrowserMode[] = React.useMemo(() => {
     const filtered = supportedModes.filter(isManagedBrowserMode)
     return filtered.length > 0 ? filtered : [...MANAGED_BROWSER_MODES]
   }, [supportedModes])
+
+  const canQueryChromeProfiles =
+    !isWeb &&
+    runtimeInstalled &&
+    currentMode === 'isolated_profile' &&
+    typeof api.connector.chromeProfiles === 'function'
+
+  const chromeProfilesQuery = useQuery<{ profiles: ChromeProfileSummary[] }>({
+    queryKey: qk.connectorChromeProfiles(),
+    queryFn: () => api.connector.chromeProfiles!(),
+    enabled: canQueryChromeProfiles,
+    staleTime: 30_000,
+    retry: false
+  })
+
+  const chromeProfiles = chromeProfilesQuery.data?.profiles ?? []
+  const effectiveProfileId =
+    chromeProfiles.length > 0 && !chromeProfiles.some((p) => p.profile_id === selectedProfile)
+      ? chromeProfiles[0].profile_id
+      : selectedProfile
+
+  const lastImportedProfile =
+    typeof runtimeConfig?.last_imported_profile === 'string'
+      ? runtimeConfig.last_imported_profile
+      : null
+  const lastImportedCount =
+    typeof runtimeConfig?.last_imported_count === 'number'
+      ? runtimeConfig.last_imported_count
+      : null
+  const lastImportedTime = formatEpoch(
+    typeof runtimeConfig?.last_imported_at === 'number' ? runtimeConfig.last_imported_at : null
+  )
 
   async function handleSelectMode(nextMode: ManagedBrowserMode): Promise<void> {
     if (isWeb || savingMode !== null || nextMode === currentMode) return
@@ -100,6 +159,69 @@ export function ManagedBrowserModeSection({
       toastError(t('settings.connectors.saveFailed'), errorMessage(err))
     } finally {
       setSavingMode(null)
+    }
+  }
+
+  async function handleToggleHeadless(next: boolean): Promise<void> {
+    if (isWeb || savingHeadless || !api.connector.setRuntimeOptions) return
+    setSavingHeadless(true)
+    try {
+      await api.connector.setRuntimeOptions(connectorId, {
+        mode: 'isolated_profile',
+        browser_mode: 'isolated_profile',
+        headless: next
+      })
+      await qc.invalidateQueries({ queryKey: qk.connectors() })
+      await qc.invalidateQueries({ queryKey: qk.connectorInstallStatus(connectorId) })
+      toastSuccess(
+        next
+          ? t('settings.connectors.managed.headlessEnabledToast')
+          : t('settings.connectors.managed.headlessDisabledToast')
+      )
+    } catch (err) {
+      toastError(t('settings.connectors.saveFailed'), errorMessage(err))
+    } finally {
+      setSavingHeadless(false)
+    }
+  }
+
+  async function handleImportChromeCookies(): Promise<void> {
+    if (isWeb || importingCookies || !api.connector.importChromeCookies) return
+    setImportingCookies(true)
+    try {
+      const domainFilters = domainFilterText
+        .split(/[,，\s]+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+      const res = await api.connector.importChromeCookies({
+        profile_id: effectiveProfileId,
+        ...(domainFilters.length > 0 ? { domain_filters: domainFilters } : {})
+      })
+      await qc.invalidateQueries({ queryKey: qk.connectors() })
+      await qc.invalidateQueries({ queryKey: qk.connectorInstallStatus(connectorId) })
+      toastSuccess(
+        t('settings.connectors.managed.importChromeDone', {
+          count: res.imported,
+          profile: res.profile_id
+        })
+      )
+    } catch (err) {
+      toastError(t('settings.connectors.managed.importChromeFailed'), errorMessage(err))
+    } finally {
+      setImportingCookies(false)
+    }
+  }
+
+  async function handleLaunchManagedWindow(): Promise<void> {
+    if (isWeb || launchingWindow || !api.connector.launchBrowserWindow) return
+    setLaunchingWindow(true)
+    try {
+      await api.connector.launchBrowserWindow()
+      toastSuccess(t('settings.connectors.managed.launchWindowDone'))
+    } catch (err) {
+      toastError(t('settings.connectors.managed.launchWindowFailed'), errorMessage(err))
+    } finally {
+      setLaunchingWindow(false)
     }
   }
 
@@ -171,7 +293,7 @@ export function ManagedBrowserModeSection({
                   <span className="text-aux font-medium text-ink-fg">
                     {t(`settings.connectors.managed.modes.${mode}.title`)}
                   </span>
-                  {mode === 'cdp_chrome' ? (
+                  {mode === 'isolated_profile' ? (
                     <span className={cn(PILL_BASE, 'text-aux border-ok/30 bg-ok/15 text-ok')}>
                       {t('settings.connectors.managed.recommendedBadge')}
                     </span>
@@ -185,6 +307,119 @@ export function ManagedBrowserModeSection({
           )
         })}
       </div>
+
+      {currentMode === 'isolated_profile' ? (
+        <div className="mt-2.5 space-y-3 rounded-[var(--r-ctl)] border border-ink-border-soft bg-ink-1 px-3 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="text-aux font-medium text-ink-fg">
+                {t('settings.connectors.managed.headlessTitle')}
+              </div>
+              <p className="mt-0.5 text-aux leading-relaxed text-ink-fg-2">
+                {t('settings.connectors.managed.headlessDesc')}
+              </p>
+            </div>
+            <Switch
+              checked={headless}
+              disabled={isWeb || savingHeadless || !api.connector.setRuntimeOptions}
+              aria-label={t('settings.connectors.managed.headlessTitle')}
+              onCheckedChange={(next) => void handleToggleHeadless(next)}
+            />
+          </div>
+
+          {!isWeb && runtimeInstalled ? (
+            <div className="border-t border-ink-border-soft pt-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <div className="text-aux font-medium text-ink-fg">
+                    {t('settings.connectors.managed.importChromeTitle')}
+                  </div>
+                  <p className="mt-0.5 text-aux leading-relaxed text-ink-fg-2">
+                    {t('settings.connectors.managed.importChromeDesc')}
+                  </p>
+                </div>
+                {typeof api.connector.launchBrowserWindow === 'function' ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    type="button"
+                    disabled={launchingWindow}
+                    onClick={() => void handleLaunchManagedWindow()}
+                  >
+                    {launchingWindow ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <AppWindow className="size-3.5" />
+                    )}
+                    {t('settings.connectors.managed.launchWindowButton')}
+                  </Button>
+                ) : null}
+              </div>
+
+              {typeof api.connector.importChromeCookies === 'function' ? (
+                <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                  <select
+                    aria-label={t('settings.connectors.managed.chromeProfileLabel')}
+                    value={effectiveProfileId}
+                    disabled={importingCookies || chromeProfilesQuery.isFetching}
+                    onChange={(e) => setSelectedProfile(e.target.value)}
+                    className="h-9 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2.5 text-aux text-ink-fg"
+                  >
+                    {chromeProfiles.length > 0 ? (
+                      chromeProfiles.map((prof) => (
+                        <option key={prof.profile_id} value={prof.profile_id}>
+                          {prof.user_name
+                            ? `${prof.name} (${prof.user_name})`
+                            : `${prof.name} (${prof.profile_id})`}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="Default">Default</option>
+                    )}
+                  </select>
+                  <Input
+                    value={domainFilterText}
+                    onChange={(e) => setDomainFilterText(e.target.value)}
+                    placeholder={t('settings.connectors.managed.domainFilterPlaceholder')}
+                    aria-label={t('settings.connectors.managed.domainFilterPlaceholder')}
+                    className="min-w-[200px] flex-1 text-aux"
+                  />
+                  <Button
+                    size="sm"
+                    variant="default"
+                    type="button"
+                    disabled={importingCookies}
+                    onClick={() => void handleImportChromeCookies()}
+                  >
+                    {importingCookies ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Download className="size-3.5" />
+                    )}
+                    {importingCookies
+                      ? t('settings.connectors.managed.importingChromeButton')
+                      : t('settings.connectors.managed.importChromeButton')}
+                  </Button>
+                </div>
+              ) : null}
+
+              {lastImportedProfile != null && lastImportedCount != null ? (
+                <p className="mt-1.5 text-aux text-ink-fg-2">
+                  {t('settings.connectors.managed.lastImportedSummary', {
+                    profile: lastImportedProfile,
+                    count: lastImportedCount,
+                    time: lastImportedTime ?? '-'
+                  })}
+                </p>
+              ) : null}
+
+              <p className="mt-1 text-aux text-ink-fg-3">
+                {t('settings.connectors.managed.launchWindowHint')}
+              </p>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {currentMode === 'cdp_chrome' ? (
         <div className="mt-2.5 rounded-[var(--r-ctl)] border border-ink-border-soft bg-ink-1 px-3 py-2.5">
@@ -237,6 +472,7 @@ export function ManagedSystemPermissionsSection({
   const { t } = useTranslation()
   const api = useMailApi()
   const [openingKind, setOpeningKind] = React.useState<SystemPermissionKind | null>(null)
+  const [requestingKind, setRequestingKind] = React.useState<SystemPermissionKind | null>(null)
 
   const permsQuery = useQuery<SystemPermissionsStatus>({
     queryKey: qk.connectorSystemPermissions(),
@@ -247,7 +483,7 @@ export function ManagedSystemPermissionsSection({
   })
 
   async function handleOpenPane(kind: SystemPermissionKind): Promise<void> {
-    if (isWeb || openingKind !== null) return
+    if (isWeb || openingKind !== null || requestingKind !== null) return
     setOpeningKind(kind)
     try {
       await openSystemPermissionPane(api.connector, kind)
@@ -255,6 +491,19 @@ export function ManagedSystemPermissionsSection({
       toastError(t('settings.connectors.title'), errorMessage(err))
     } finally {
       setOpeningKind(null)
+    }
+  }
+
+  async function handleRequestPermission(kind: SystemPermissionKind): Promise<void> {
+    if (isWeb || openingKind !== null || requestingKind !== null) return
+    setRequestingKind(kind)
+    try {
+      await requestSystemPermission(api.connector, kind)
+      await permsQuery.refetch()
+    } catch (err) {
+      toastError(t('settings.connectors.title'), errorMessage(err))
+    } finally {
+      setRequestingKind(null)
     }
   }
 
@@ -336,20 +585,38 @@ export function ManagedSystemPermissionsSection({
                 <p className="mt-0.5 text-aux text-ink-fg-2">{t(row.descKey)}</p>
               </div>
               {row.state !== 'unsupported' ? (
-                <Button
-                  size="sm"
-                  variant={row.state === 'granted' ? 'ghost' : 'secondary'}
-                  type="button"
-                  disabled={openingKind !== null}
-                  onClick={() => void handleOpenPane(row.kind)}
-                >
-                  {openingKind === row.kind ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <ExternalLink className="size-3.5" />
-                  )}
-                  {t('settings.connectors.managed.tccOpenSettings')}
-                </Button>
+                <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                  {row.state !== 'granted' ? (
+                    <Button
+                      size="sm"
+                      variant="default"
+                      type="button"
+                      disabled={openingKind !== null || requestingKind !== null}
+                      onClick={() => void handleRequestPermission(row.kind)}
+                    >
+                      {requestingKind === row.kind ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <ShieldCheck className="size-3.5" />
+                      )}
+                      {t('settings.connectors.managed.tccRequestPrompt')}
+                    </Button>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    variant={row.state === 'granted' ? 'ghost' : 'secondary'}
+                    type="button"
+                    disabled={openingKind !== null || requestingKind !== null}
+                    onClick={() => void handleOpenPane(row.kind)}
+                  >
+                    {openingKind === row.kind ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <ExternalLink className="size-3.5" />
+                    )}
+                    {t('settings.connectors.managed.tccOpenSettings')}
+                  </Button>
+                </div>
               ) : null}
             </div>
           ))}

@@ -1260,7 +1260,12 @@
       "reject": "Reject",
       "createdDone": "Created {id}.",
       "updatedDone": "Updated {id}.",
-      "failed": "The operation failed — retry or ask the assistant to start over."
+      "failed": "The operation failed — retry or ask the assistant to start over.",
+      "grantComputerUse": "Computer & browser automation",
+      "computerUseOff": "Off",
+      "computerUseStopBeforeSubmit": "Allowed (stop before submit)",
+      "computerUseAllowSubmit": "Allowed (allow submit)",
+      "computerUseWarn": "Computer/browser automation granted for background runs within the listed domains/apps. Enable allow-submit only for trusted internal workflows."
     },
     "approvalShell": {
       "phase": {
@@ -1336,7 +1341,9 @@
       },
       "currentTarget": "Current target",
       "pendingAction": "Pending action",
-      "filledFields": "Filled fields"
+      "filledFields": "Filled fields",
+      "alwaysAllowLabel": "Remember this app/domain scope for future runs (stops before submit)",
+      "alwaysAllowHint": "Applies only to exact matching apps/domains with stop_before_submit enabled; final submit/send actions still pause."
     },
     "execApprovalCard": {
       "title": {
@@ -2678,8 +2685,8 @@
             "desc": "Bridges through the Playwright MCP browser extension without launching Chrome with a debugging flag."
           },
           "isolated_profile": {
-            "title": "Isolated browser profile",
-            "desc": "Launches an isolated clean Chromium profile stored under the managed runtime directory with zero existing cookies."
+            "title": "Built-in persistent managed browser (Headless)",
+            "desc": "MailAgent-managed persistent browser profile that runs silently with zero Chrome debug prompts and supports one-click Chrome cookie import or manual sign-in window."
           }
         },
         "cdpGuideTitle": "Enable Chrome remote debugging once",
@@ -2701,7 +2708,25 @@
           "denied": "Not granted",
           "unknown": "Needs confirmation",
           "unsupported": "Not required on this OS"
-        }
+        },
+        "headlessTitle": "Run silently in background (Headless)",
+        "headlessDesc": "Hides the browser window by default so automation never steals focus; turn this off or launch the dedicated window when visual inspection is needed.",
+        "headlessEnabledToast": "Headless mode enabled (takes effect on next run)",
+        "headlessDisabledToast": "Headless mode disabled; browser window will be visible on next run",
+        "importChromeTitle": "Import login session from Chrome",
+        "importChromeDesc": "Decrypts and copies cookies from your local Chrome profile into the built-in managed browser without affecting Chrome; open the dedicated window once for SSO/LocalStorage apps.",
+        "chromeProfileLabel": "Chrome profile",
+        "domainFilterPlaceholder": "Optional: filter domains (e.g. dms.company.com, oa.internal)",
+        "importChromeButton": "Import Chrome cookies",
+        "importingChromeButton": "Importing…",
+        "importChromeDone": "Imported {count} cookies from {profile} into built-in browser",
+        "importChromeFailed": "Failed to import Chrome cookies",
+        "lastImportedSummary": "Last import: profile {profile} · {count} cookies · {time}",
+        "launchWindowButton": "Open managed browser",
+        "launchWindowDone": "Managed browser window opened; sign-ins here persist automatically",
+        "launchWindowFailed": "Failed to open managed browser window",
+        "launchWindowHint": "Tip: Cookie-based logins can use one-click import; both imported cookies and manual window logins persist in the managed profile.",
+        "tccRequestPrompt": "Request permission"
       },
       "supersededHint": "This connection is a self-hosted direct link, but the service now ships through Composio. Use “Switch track” to disconnect and clear its config, then reconnect from the catalog.",
       "catalog": {
@@ -5621,7 +5646,21 @@
           "headlessNote": "Unattended runs skip approval only for Agent docs; mounted folders are always read-only, and move/delete always require approval."
         },
         "subsetBadge": "SUBSET",
-        "subsetHint": "The enabled tools are a subset of the “{tier}” tier. A tier states the upper bound of granted power, not that every tool in it is on. Expand “Advanced” for the exact list."
+        "subsetHint": "The enabled tools are a subset of the “{tier}” tier. A tier states the upper bound of granted power, not that every tool in it is on. Expand “Advanced” for the exact list.",
+        "computerUse": {
+          "title": "Computer Use automation",
+          "desc": "Allow background runs to automate specific browser domains or desktop apps (requires browser_use / desktop_use).",
+          "tier": {
+            "off": "Off",
+            "stop_before_submit": "Stop before submit",
+            "allow_submit": "Allow submit"
+          },
+          "domainsLabel": "Allowed domains (comma-separated, no wildcards)",
+          "domainsPlaceholder": "e.g. dms.company.com, oa.internal",
+          "appsLabel": "Allowed desktop apps (comma-separated, exact names)",
+          "appsPlaceholder": "e.g. Microsoft Teams, Notion",
+          "allowSubmitWarn": "High risk: allows unattended background runs to execute final submit, approve, or join actions inside the listed scope."
+        }
       },
       "budget": {
         "label": "Run budget",
@@ -5769,7 +5808,8 @@
           "empty": "Explicit zero mount: this agent has no skill tools."
         }
       },
-      "deleteConfirm": "Delete this agent?"
+      "deleteConfirm": "Delete this agent?",
+      "errComputerUseScope": "Computer Use requires at least one concrete domain or app name (wildcards like * or all are not allowed)."
     }
   },
   "agentSettings": {
@@ -8470,7 +8510,7 @@
     },
     "report": {
       "exportToLibrary": "Export to Library",
-      "exportedAs": "Report saved as \u201c{name}\u201d"
+      "exportedAs": "Report saved as “{name}”"
     },
     "toast": {
       "openAction": "Open",

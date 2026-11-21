@@ -59,7 +59,15 @@ def _unmet_dependencies(agent: dict[str, Any]) -> list[dict[str, str]]:
         if isinstance(name, str) and name not in available_skills:
             unmet.append({"type": "skill", "ref": name})
     grants = tool_policy.get("grant_connectors") or {}
-    connector_ids = grants.keys() if isinstance(grants, dict) else grants if isinstance(grants, list) else []
+    connector_ids = list(
+        grants.keys() if isinstance(grants, dict) else grants if isinstance(grants, list) else []
+    )
+    grant_cu = tool_policy.get("grant_computer_use")
+    if isinstance(grant_cu, dict) and grant_cu.get("enabled") is True:
+        if grant_cu.get("allowed_domains") and "browser_use" not in connector_ids:
+            connector_ids.append("browser_use")
+        if grant_cu.get("allowed_apps") and "desktop_use" not in connector_ids:
+            connector_ids.append("desktop_use")
     for connector_id in connector_ids:
         if isinstance(connector_id, str) and agent_store.get_connector(connector_id) is None:
             unmet.append({"type": "connector", "ref": connector_id})

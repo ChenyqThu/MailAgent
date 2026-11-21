@@ -5,12 +5,13 @@
 // `systemPreferences` 比子进程里的 ctypes 探针更权威。非 Electron / 单测环境仍退回
 // Python `/api/connector/system-permissions`。
 
-import { ipcMain, shell, systemPreferences } from 'electron'
+import { desktopCapturer, ipcMain, shell, systemPreferences } from 'electron'
 
 import {
   SYSTEM_PERMISSIONS_IPC,
   SYSTEM_PERMISSION_URLS,
   type OpenSystemPermissionResult,
+  type RequestSystemPermissionResult,
   type SystemPermissionKind,
   type SystemPermissionsStatus,
   type SystemPermissionState
@@ -23,6 +24,15 @@ export interface SystemPreferencesProbe {
 
 export interface ExternalUrlOpener {
   openExternal: (url: string) => Promise<void>
+}
+
+export type ScreenCaptureProbe = () => Promise<unknown>
+
+const defaultScreenCaptureProbe: ScreenCaptureProbe = async () => {
+  await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: { width: 1, height: 1 }
+  })
 }
 
 export function mapScreenMediaStatus(raw: string): SystemPermissionState {
@@ -86,6 +96,84 @@ export async function openSystemPermissionSettings(
   }
 }
 
+export async function requestSystemPermissionSettings(
+  kind: unknown,
+  platform: NodeJS.Platform = process.platform,
+  prefs: SystemPreferencesProbe = systemPreferences,
+  captureScreen: ScreenCaptureProbe = defaultScreenCaptureProbe,
+  opener: ExternalUrlOpener = shell
+): Promise<RequestSystemPermissionResult> {
+  if (!isSystemPermissionKind(kind)) {
+    return {
+      ok: false,
+      kind: typeof kind === 'string' ? kind : '',
+      prompted: false,
+      opened: false
+    }
+  }
+  if (platform !== 'darwin') {
+    return {
+      ok: true,
+      kind,
+      prompted: false,
+      opened: false,
+      status: probeSystemPermissions(platform, prefs)
+    }
+  }
+
+  if (kind === 'accessibility') {
+    let prompted = false
+    let grantedNow = false
+    try {
+      grantedNow = prefs.isTrustedAccessibilityClient(true)
+      prompted = !grantedNow
+    } catch {
+      const opened = await openSystemPermissionSettings(kind, platform, opener)
+      return {
+        ok: opened.ok,
+        kind,
+        prompted: false,
+        opened: opened.opened,
+        status: probeSystemPermissions(platform, prefs)
+      }
+    }
+    return {
+      ok: true,
+      kind,
+      prompted,
+      opened: false,
+      status: probeSystemPermissions(platform, prefs)
+    }
+  }
+
+  let beforeStatus: SystemPermissionState = 'unknown'
+  try {
+    beforeStatus = mapScreenMediaStatus(prefs.getMediaAccessStatus('screen'))
+  } catch {
+    beforeStatus = 'unknown'
+  }
+  let prompted = false
+  try {
+    await captureScreen()
+    prompted = beforeStatus !== 'granted'
+  } catch {
+    prompted = false
+  }
+  const after = probeSystemPermissions(platform, prefs)
+  let opened = false
+  if (after.screen_recording !== 'granted' && beforeStatus === 'denied') {
+    const paneRes = await openSystemPermissionSettings(kind, platform, opener)
+    opened = paneRes.opened
+  }
+  return {
+    ok: true,
+    kind,
+    prompted,
+    opened,
+    status: after
+  }
+}
+
 /** 注册系统权限查询与跳转 System Settings IPC（由 `registerSettingsHandlers` 接入启动流）。 */
 export function registerSystemPermissionsHandlers(): void {
   ipcMain.handle(SYSTEM_PERMISSIONS_IPC.check, (): SystemPermissionsStatus => probeSystemPermissions())
@@ -93,5 +181,10 @@ export function registerSystemPermissionsHandlers(): void {
     SYSTEM_PERMISSIONS_IPC.open,
     (_event, kind: unknown): Promise<OpenSystemPermissionResult> =>
       openSystemPermissionSettings(kind)
+  )
+  ipcMain.handle(
+    SYSTEM_PERMISSIONS_IPC.request,
+    (_event, kind: unknown): Promise<RequestSystemPermissionResult> =>
+      requestSystemPermissionSettings(kind)
   )
 }

@@ -761,31 +761,40 @@ export function createComputerUseChildConnectorTools(
   manifest: readonly ConnectorToolManifestEntry[],
   opts: {
     connectors: readonly ('browser_use' | 'desktop_use')[]
+    contextMode?: 'matter_followup' | 'untrusted_trigger' | 'cron_headless'
     agentId?: string
     jobId?: number
-    dispatchId: number
+    dispatchId?: number
+    allowDestructive?: boolean
   }
 ): ToolSet {
+  const mode = opts.contextMode ?? 'matter_followup'
   const allowedConnectorSet = new Set(
     opts.connectors.filter((c) => c === 'browser_use' || c === 'desktop_use')
   )
-  if (allowedConnectorSet.size === 0 || !Number.isInteger(opts.dispatchId) || opts.dispatchId <= 0) {
-    return {}
+  if (allowedConnectorSet.size === 0) return {}
+  if (mode === 'matter_followup') {
+    if (!Number.isInteger(opts.dispatchId) || (opts.dispatchId as number) <= 0) return {}
+  } else {
+    if (typeof opts.agentId !== 'string' || opts.agentId.trim().length === 0) return {}
   }
   const caller = {
-    contextMode: 'matter_followup',
+    contextMode: mode,
     ...(typeof opts.agentId === 'string' && opts.agentId.length > 0 ? { agentId: opts.agentId } : {}),
     ...(typeof opts.jobId === 'number' && Number.isInteger(opts.jobId) && opts.jobId > 0
       ? { jobId: opts.jobId }
       : {}),
-    dispatchId: opts.dispatchId,
+    ...(typeof opts.dispatchId === 'number' && Number.isInteger(opts.dispatchId) && opts.dispatchId > 0
+      ? { dispatchId: opts.dispatchId }
+      : {}),
     childTool: 'computer_use_run'
   }
   const out: ToolSet = {}
   for (const entry of manifest) {
     if (!allowedConnectorSet.has(entry.connectorId as 'browser_use' | 'desktop_use')) continue
     const crud = admissibleConnectorCrud(entry)
-    if (crud === null || entry.destructive === true) continue
+    if (crud === null) continue
+    if (entry.destructive === true && opts.allowDestructive !== true) continue
     const write = crud !== 'read'
     const name = mcpGatewayToolName(entry.connectorId, entry.toolName)
     if (!name || out[name] !== undefined) continue

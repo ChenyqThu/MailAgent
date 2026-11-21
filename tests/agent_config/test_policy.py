@@ -324,3 +324,88 @@ def test_rule_is_dangerously_wide():
     # 非 exec matcher / 非法 → False。
     assert P.rule_is_dangerously_wide({"v": 1, "realpath_prefix": "/tmp"}) is False
     assert P.rule_is_dangerously_wide({"garbage": True}) is False
+
+
+def test_computer_use_matcher_and_evaluate(tmp_path):
+    st = _store(tmp_path)
+    # Reject wildcards, empty scope, or stop_before_submit=False
+    with pytest.raises(Exception):
+        P.parse_matcher("computer_use", {"v": 1, "allowed_domains": [], "allowed_apps": []})
+    with pytest.raises(Exception):
+        P.parse_matcher("computer_use", {"v": 1, "allowed_domains": ["*.corp.com"]})
+    with pytest.raises(Exception):
+        P.parse_matcher("computer_use", {"v": 1, "allowed_apps": ["*"]})
+    with pytest.raises(Exception):
+        P.parse_matcher(
+            "computer_use",
+            {"v": 1, "allowed_domains": ["dms.corp.com"], "stop_before_submit": False},
+        )
+
+    rule = st.create_policy_rule(
+        "computer_use",
+        json.dumps(
+            {
+                "v": 1,
+                "allowed_domains": ["dms.corp.com"],
+                "allowed_apps": ["Microsoft Teams"],
+                "stop_before_submit": True,
+            }
+        ),
+        context_mode="manual_chat",
+    )
+
+    assert (
+        P.evaluate(
+            st,
+            "computer_use",
+            {
+                "tool": "computer_use_run",
+                "allowed_domains": ["approvals.dms.corp.com"],
+                "allowed_apps": ["microsoft teams.app"],
+                "stop_before_submit": True,
+            },
+            "manual_chat",
+        )
+        == {"decision": "auto_allow", "rule_id": rule.id}
+    )
+
+    # Suffix spoof or stop_before_submit=False or non-manual venue -> fail-closed ask
+    assert (
+        P.evaluate(
+            st,
+            "computer_use",
+            {
+                "tool": "computer_use_run",
+                "allowed_domains": ["dms.corp.com.attacker.io"],
+                "stop_before_submit": True,
+            },
+            "manual_chat",
+        )["decision"]
+        == "ask"
+    )
+    assert (
+        P.evaluate(
+            st,
+            "computer_use",
+            {
+                "tool": "computer_use_run",
+                "allowed_domains": ["dms.corp.com"],
+                "stop_before_submit": False,
+            },
+            "manual_chat",
+        )["decision"]
+        == "ask"
+    )
+    assert (
+        P.evaluate(
+            st,
+            "computer_use",
+            {
+                "tool": "computer_use_run",
+                "allowed_domains": ["dms.corp.com"],
+                "stop_before_submit": True,
+            },
+            "untrusted_trigger",
+        )["decision"]
+        == "ask"
+    )

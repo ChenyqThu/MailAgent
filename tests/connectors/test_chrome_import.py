@@ -1,0 +1,245 @@
+"""Wave 6 Chrome Profile 发现、AES-128-CBC / Chrome 130+ Cookie 解密与导入单测。"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+from pathlib import Path
+
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.hashes import SHA1
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.padding import PKCS7
+
+from src.connectors import chrome_import, local_installer
+
+
+def _encrypt_chrome_v10(secret: bytes, plaintext: bytes) -> bytes:
+    key = PBKDF2HMAC(
+        algorithm=SHA1(),
+        length=16,
+        salt=chrome_import._PBKDF2_SALT,
+        iterations=chrome_import._PBKDF2_ITERATIONS,
+    ).derive(secret)
+    padder = PKCS7(128).padder()
+    padded = padder.update(plaintext) + padder.finalize()
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(chrome_import._AES_IV)).encryptor()
+    return b"v10" + encryptor.update(padded) + encryptor.finalize()
+
+
+def _create_fake_cookies_db(
+    db_path: Path,
+    *,
+    db_version: int,
+    secret: bytes,
+    rows: list[tuple[str, str, bytes, str, int, int, int, int]],
+) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+    conn.execute("INSERT INTO meta (key, value) VALUES ('version', ?)", (str(db_version),))
+    conn.execute(
+        """
+        CREATE TABLE cookies (
+            host_key TEXT NOT NULL,
+            name TEXT NOT NULL,
+            value TEXT NOT NULL DEFAULT '',
+            encrypted_value BLOB NOT NULL,
+            path TEXT NOT NULL,
+            expires_utc INTEGER NOT NULL,
+            is_secure INTEGER NOT NULL,
+            is_httponly INTEGER NOT NULL,
+            samesite INTEGER NOT NULL,
+            has_expires INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+    conn.executemany(
+        "INSERT INTO cookies (host_key, name, encrypted_value, path, expires_utc, is_secure, is_httponly, samesite) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_list_chrome_profiles_reads_local_state_and_filters_dirs(tmp_path):
+    chrome_root = tmp_path / "Chrome"
+    (chrome_root / "Default" / "Network").mkdir(parents=True)
+    (chrome_root / "Default" / "Network" / "Cookies").write_bytes(b"db")
+    (chrome_root / "Profile 2").mkdir(parents=True)
+    (chrome_root / "Profile 2" / "Cookies").write_bytes(b"db")
+    (chrome_root / "System Profile").mkdir(parents=True)  # should be ignored
+    (chrome_root / "Local State").write_text(
+        json.dumps(
+            {
+                "profile": {
+                    "info_cache": {
+                        "Default": {"name": "Personal", "user_name": "me@example.com"},
+                        "Profile 2": {"name": "Work", "user_name": "work@corp.com"},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profiles = chrome_import.list_chrome_profiles(chrome_root)
+    assert profiles == [
+        {
+            "profile_id": "Default",
+            "name": "Personal",
+            "user_name": "me@example.com",
+            "has_cookies": True,
+        },
+        {
+            "profile_id": "Profile 2",
+            "name": "Work",
+            "user_name": "work@corp.com",
+            "has_cookies": True,
+        },
+    ]
+
+
+def test_decrypt_chrome_cookies_handles_v20_v24_filters_and_cleanup(tmp_path, monkeypatch):
+    monkeypatch.setattr(local_installer, "_RUNTIMES_DIR_OVERRIDE", tmp_path / "runtimes")
+    secret = b"test-chrome-safe-storage-secret"
+    future_chrome_ts = int((9999999999.0 + chrome_import._CHROMIUM_EPOCH_OFFSET_SEC) * 1_000_000)
+    past_chrome_ts = int((1000000000.0 + chrome_import._CHROMIUM_EPOCH_OFFSET_SEC) * 1_000_000)
+
+    # Chrome 130+ (db_version=24): SHA256(host_key) 32-byte prefix prepended inside ciphertext
+    host_a = "dms.company.com"
+    prefix_a = hashlib.sha256(host_a.encode("utf-8")).digest()
+    enc_v24 = _encrypt_chrome_v10(secret, prefix_a + b"sid=abc123")
+
+    # Non-secure cookie with samesite=0 (None in Chromium) -> downgraded to Lax
+    host_sub = ".sub.dms.company.com"
+    prefix_sub = hashlib.sha256(host_sub.encode("utf-8")).digest()
+    enc_sub = _encrypt_chrome_v10(secret, prefix_sub + b"prefs=dark")
+
+    # __Host- cookie -> url field instead of domain
+    enc_host_prefix = _encrypt_chrome_v10(secret, prefix_a + b"strict_tok")
+
+    # Expired cookie & unrelated domain
+    host_other = "other.org"
+    prefix_other = hashlib.sha256(host_other.encode("utf-8")).digest()
+    enc_other = _encrypt_chrome_v10(secret, prefix_other + b"x=1")
+
+    db_v24 = tmp_path / "Chrome" / "Default" / "Network" / "Cookies"
+    _create_fake_cookies_db(
+        db_v24,
+        db_version=24,
+        secret=secret,
+        rows=[
+            (host_a, "SID", enc_v24, "/", future_chrome_ts, 1, 1, 1),
+            (host_sub, "PREF", enc_sub, "/app", future_chrome_ts, 0, 0, 0),
+            (host_a, "__Host-token", enc_host_prefix, "/", future_chrome_ts, 1, 1, 1),
+            (host_a, "EXPIRED", enc_v24, "/", past_chrome_ts, 1, 1, 1),
+            (host_other, "OTHER", enc_other, "/", future_chrome_ts, 1, 1, 1),
+        ],
+    )
+
+    out = chrome_import.decrypt_chrome_cookies_from_db(
+        db_v24,
+        secret,
+        domain_filters=["dms.company.com"],
+    )
+    by_name = {c["name"]: c for c in out}
+    assert set(by_name) == {"SID", "PREF", "__Host-token"}
+    assert by_name["SID"]["value"] == "sid=abc123"
+    assert by_name["SID"]["domain"] == "dms.company.com"
+    assert by_name["SID"]["sameSite"] == "Lax"
+    assert by_name["PREF"]["value"] == "prefs=dark"
+    assert "sameSite" not in by_name["PREF"]  # non-secure cannot use SameSite=None
+    assert by_name["__Host-token"] == {
+        "name": "__Host-token",
+        "value": "strict_tok",
+        "url": "https://dms.company.com/",
+        "httpOnly": True,
+        "secure": True,
+        "sameSite": "Lax",
+        "expires": int(by_name["__Host-token"]["expires"]),
+    }
+
+    # Verify Chromium < 130 (db_version=20) without 32-byte digest prefix
+    db_v20 = tmp_path / "Chrome" / "Profile 1" / "Cookies"
+    _create_fake_cookies_db(
+        db_v20,
+        db_version=20,
+        secret=secret,
+        rows=[
+            ("oa.internal", "SESSION", _encrypt_chrome_v10(secret, b"legacy-val"), "/", 0, 0, 1, 2)
+        ],
+    )
+    out_v20 = chrome_import.decrypt_chrome_cookies_from_db(db_v20, secret)
+    assert len(out_v20) == 1
+    assert out_v20[0]["value"] == "legacy-val"
+    assert out_v20[0]["sameSite"] == "Strict"
+
+    # Temp Staging directory must be completely wiped in finally
+    rt_base = tmp_path / "runtimes"
+    if rt_base.exists():
+        assert [p.name for p in rt_base.iterdir() if p.name.startswith(".tmp-")] == []
+
+
+def test_import_chrome_cookies_end_to_end_mocked(tmp_path, monkeypatch):
+    monkeypatch.setattr(local_installer, "_RUNTIMES_DIR_OVERRIDE", tmp_path / "runtimes")
+    rt_dir = tmp_path / "runtimes" / "browser_use"
+    cli_path = rt_dir / "pkg" / "node_modules" / "@playwright" / "mcp" / "cli.js"
+    cli_path.parent.mkdir(parents=True, exist_ok=True)
+    cli_path.write_text("console.log('ok')\n", encoding="utf-8")
+    (rt_dir / "manifest.json").write_text(
+        json.dumps({"connector_id": "browser_use", "entrypoint": "pkg/node_modules/@playwright/mcp/cli.js"}),
+        encoding="utf-8",
+    )
+
+    secret = b"keychain-secret"
+    chrome_root = tmp_path / "Chrome"
+    cookie_db = chrome_root / "Default" / "Network" / "Cookies"
+    _create_fake_cookies_db(
+        cookie_db,
+        db_version=20,
+        secret=secret,
+        rows=[("dms.corp.com", "auth", _encrypt_chrome_v10(secret, b"tok123"), "/", 0, 1, 1, 1)],
+    )
+
+    injected_calls: list[tuple[list[dict], Path]] = []
+
+    def _fake_injector(cookies, target_dir):
+        injected_calls.append((cookies, target_dir))
+        return {"imported": len(cookies), "skipped": 0}
+
+    res = chrome_import.import_chrome_cookies(
+        "Default",
+        chrome_root=chrome_root,
+        keychain_reader=lambda: secret,
+        cookie_injector=_fake_injector,
+    )
+    assert res == {"ok": True, "profile_id": "Default", "matched": 1, "imported": 1, "skipped": 0}
+    assert len(injected_calls) == 1
+    assert injected_calls[0][1] == rt_dir.resolve()
+    assert injected_calls[0][0][0]["value"] == "tok123"
+
+
+def test_decrypt_chrome_cookies_permission_error_raises_actionable_403(tmp_path, monkeypatch):
+    import errno
+    import pytest
+
+    monkeypatch.setattr(local_installer, "_RUNTIMES_DIR_OVERRIDE", tmp_path / "runtimes")
+    db = tmp_path / "Chrome" / "Default" / "Cookies"
+    _create_fake_cookies_db(db, db_version=20, secret=b"s", rows=[])
+
+    def _raise_eperm(src, dst, *args, **kwargs):
+        raise PermissionError(errno.EPERM, "Operation not permitted", str(src))
+
+    monkeypatch.setattr(chrome_import.shutil, "copyfile", _raise_eperm)
+
+    with pytest.raises(local_installer.LocalInstallerError) as exc_info:
+        chrome_import.decrypt_chrome_cookies_from_db(db, b"s")
+
+    assert exc_info.value.code == "E_CHROME_PERMISSION_DENIED"
+    assert exc_info.value.status_code == 403
+    rt_base = tmp_path / "runtimes"
+    if rt_base.exists():
+        assert [p.name for p in rt_base.iterdir() if p.name.startswith(".tmp-")] == []

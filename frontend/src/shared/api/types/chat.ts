@@ -161,6 +161,14 @@ export interface AgentRunSpec {
     /** task 09-02 — projected ONLY when 'all' (same non-default-only shape as grantWeb); absent =
      *  'own'. Gateway re-derives it via parseSessionsGrant (fail-closed). */
     grantSessions?: 'all'
+    /** Wave 6 — bounded Computer Use grant projected when Custom Agent grant_computer_use is enabled. */
+    grantComputerUse?: {
+      enabled: boolean
+      submitMode: 'stop_before_submit' | 'allow_submit'
+      allowedDomains?: string[]
+      allowedApps?: string[]
+      connectors?: Array<'browser_use' | 'desktop_use'>
+    }
   }
   budget: { maxRunSeconds: number }
   /** Ordered backup models. `runHeadlessAgent` retries the whole turn on the next entry ONLY when

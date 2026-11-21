@@ -62,6 +62,7 @@ import {
   isWebBuild,
   openExternal,
   readToolfaceNoticeAck,
+  resolveManagedBrowserHeadless,
   resolveManagedBrowserMode,
   writeToolfaceNoticeAck
 } from './consoleShared'
@@ -965,6 +966,9 @@ export function ConnectorDetailPane({
           currentMode={resolveManagedBrowserMode(connector)}
           supportedModes={connector.supported_modes ?? []}
           isWeb={isWeb}
+          runtimeInstalled={connector.runtime_installed !== false}
+          headless={resolveManagedBrowserHeadless(connector)}
+          runtimeConfig={connector.runtime_config ?? null}
         />
       ) : null}
 

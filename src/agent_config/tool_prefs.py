@@ -200,7 +200,7 @@ BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     BuiltinToolPolicy("file_read", "exec", "ask"),
     BuiltinToolPolicy("file_write", "exec", "ask"),
     BuiltinToolPolicy("run_command", "exec", "ask", configurable=False),
-    BuiltinToolPolicy("computer_use_run", "exec", "ask", configurable=False),
+    BuiltinToolPolicy("computer_use_run", "exec", "ask", configurable=True, danger_auto=True),
     # ── C 组：真不可逆（D2=a，默认 ask 的体验税恰好为零）─────────────────────────
     BuiltinToolPolicy("email_prepare_send", "outbound", "ask", configurable=False),
     BuiltinToolPolicy("notion_agent_chat", "outbound", "ask", danger_auto=True),

@@ -12,6 +12,9 @@
 
 import { request } from './http_client'
 import type {
+  ChromeCookiesImportInput,
+  ChromeCookiesImportResult,
+  ChromeProfileSummary,
   ComposioKeyStatus,
   ConnectorApi,
   ConnectorBulkToolModeResult,
@@ -33,6 +36,7 @@ import type {
   CustomConnectorCreateInput,
   CustomConnectorDeleteResult,
   CustomConnectorUpdateInput,
+  ManagedBrowserWindowLaunchResult,
   ManagedRuntimeOptionsInput,
   OpenSystemPermissionResult,
   SystemPermissionKind,
@@ -240,6 +244,32 @@ export function createConnectorApi(baseUrl: string): ConnectorApi {
         'POST',
         '/connector/system-permissions/open',
         { body: { kind } }
+      )
+    },
+
+    chromeProfiles(): Promise<{ profiles: ChromeProfileSummary[] }> {
+      return request<{ profiles: ChromeProfileSummary[] }>(
+        baseUrl,
+        'GET',
+        '/connector/browser_use/chrome-profiles'
+      )
+    },
+
+    importChromeCookies(input: ChromeCookiesImportInput): Promise<ChromeCookiesImportResult> {
+      return request<ChromeCookiesImportResult>(
+        baseUrl,
+        'POST',
+        '/connector/browser_use/import-chrome-cookies',
+        { body: input }
+      )
+    },
+
+    launchBrowserWindow(input?: { url?: string }): Promise<ManagedBrowserWindowLaunchResult> {
+      return request<ManagedBrowserWindowLaunchResult>(
+        baseUrl,
+        'POST',
+        '/connector/browser_use/launch-window',
+        input !== undefined ? { body: input } : undefined
       )
     }
   }

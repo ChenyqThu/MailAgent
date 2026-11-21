@@ -220,12 +220,17 @@ export type {
   CustomConnectorDeleteResult,
   ManagedBrowserMode,
   ManagedRuntimeOptionsInput,
+  ChromeProfileSummary,
+  ChromeCookiesImportInput,
+  ChromeCookiesImportResult,
+  ManagedBrowserWindowLaunchResult,
   ConnectorInstallStatus,
   ConnectorRuntimeOptionsResult,
   SystemPermissionKind,
   SystemPermissionState,
   SystemPermissionsStatus,
   OpenSystemPermissionResult,
+  RequestSystemPermissionResult,
   ConnectorApi
 } from './types/connector'
 export type {
@@ -305,6 +310,7 @@ export type {
   CustomAgentTrigger,
   CustomAgentTriggerV2Entry,
   TriggerSetV2,
+  CustomAgentComputerUseGrant,
   CustomAgentToolPolicy,
   CustomAgentBudget,
   ReportAgentConfig,

@@ -64,6 +64,12 @@ type WebGrant = 'off' | 'gated' | 'open'
  *  (the ceiling vocabulary excludes it; Python rejects it at store time). */
 type ConnectorGrant = 'read' | 'write' | 'update'
 type ConnectorGrants = Record<string, ConnectorGrant>
+type ComputerUseSubmitMode = 'stop_before_submit' | 'allow_submit'
+interface ComputerUseState {
+  submitMode: ComputerUseSubmitMode
+  allowedDomains: string[]
+  allowedApps: string[]
+}
 
 /** One permission axis snapshot. skills null = not configured (server default mount set);
  *  connectors {} = no connector authorized (the safe default on both create and a NULL policy). */
@@ -72,6 +78,7 @@ interface PermState {
   web: WebGrant
   skills: string[] | null
   connectors: ConnectorGrants
+  computerUse: ComputerUseState | null
 }
 
 /** Presentational mirror of the backend DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS (agent_runs.py) —
@@ -96,6 +103,22 @@ function readConnectorGrants(raw: unknown): ConnectorGrants {
   return out
 }
 
+function readComputerUseState(raw: unknown): ComputerUseState | null {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const r = raw as Record<string, unknown>
+  if (r.enabled === false) return null
+  const submitMode: ComputerUseSubmitMode =
+    r.submit_mode === 'allow_submit' || r.submitMode === 'allow_submit'
+      ? 'allow_submit'
+      : 'stop_before_submit'
+  const toStrs = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length > 0) : []
+  const allowedDomains = toStrs(r.allowed_domains ?? r.allowedDomains)
+  const allowedApps = toStrs(r.allowed_apps ?? r.allowedApps)
+  if (allowedDomains.length === 0 && allowedApps.length === 0) return null
+  return { submitMode, allowedDomains, allowedApps }
+}
+
 function permsOfRow(row: ReportAgentConfig | null): PermState {
   const tp = row?.tool_policy
   const web = tp?.grant_web
@@ -103,7 +126,8 @@ function permsOfRow(row: ReportAgentConfig | null): PermState {
     exec: tp?.grant_exec === true,
     web: web === 'gated' || web === 'open' ? web : 'off',
     skills: Array.isArray(tp?.skills) ? tp.skills : null,
-    connectors: readConnectorGrants(tp?.grant_connectors)
+    connectors: readConnectorGrants(tp?.grant_connectors),
+    computerUse: readComputerUseState(tp?.grant_computer_use)
   }
 }
 
@@ -132,7 +156,8 @@ export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.
     data.skills !== undefined ||
     // PR3 — a connector grant IS a permission axis: without this the "no server baseline →
     // reject-only" floor would not apply to a patch that only moves connector ceilings.
-    data.connectors !== undefined
+    data.connectors !== undefined ||
+    data.grantComputerUse !== undefined
 
   useEffect(() => {
     if (phase !== 'pending' || !isUpdate || !data.agentId) return
@@ -176,6 +201,17 @@ export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.
           .join(' · ')
   }
 
+  const computerUseLabel = (cu: ComputerUseState | null): string => {
+    if (!cu) return t('chat.customAgentCard.computerUseOff')
+    const modeLabel = t(
+      cu.submitMode === 'allow_submit'
+        ? 'chat.customAgentCard.computerUseAllowSubmit'
+        : 'chat.customAgentCard.computerUseStopBeforeSubmit'
+    )
+    const scopes = [...cu.allowedDomains, ...cu.allowedApps].join(', ')
+    return scopes ? `${modeLabel} (${scopes})` : modeLabel
+  }
+
   const title = t(
     isUpdate ? 'chat.customAgentCard.titleUpdate' : 'chat.customAgentCard.titleCreate'
   )
@@ -183,7 +219,7 @@ export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.
   // ── permission model: create diffs against the safe defaults; update against the SERVER row ──
   const before: PermState = isUpdate
     ? permsOfRow(facts)
-    : { exec: false, web: 'off', skills: null, connectors: {} }
+    : { exec: false, web: 'off', skills: null, connectors: {}, computerUse: null }
   const after: PermState = {
     exec:
       data.capabilities?.files !== undefined
@@ -194,10 +230,23 @@ export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.
     // PR3 — grant_connectors is a WHOLE-MAP replace on the wire (toConfigPatch assigns it
     // verbatim), so an explicit `{}` really does clear every grant; an absent key keeps the row.
     connectors:
-      data.connectors !== undefined ? readConnectorGrants(data.connectors) : before.connectors
+      data.connectors !== undefined ? readConnectorGrants(data.connectors) : before.connectors,
+    computerUse:
+      data.grantComputerUse === undefined
+        ? before.computerUse
+        : readComputerUseState(data.grantComputerUse)
   }
   const execEscalated = !before.exec && after.exec
   const webEscalated = WEB_RANK[after.web] > WEB_RANK[before.web]
+  const computerUseEscalated =
+    after.computerUse !== null &&
+    (before.computerUse === null ||
+      (before.computerUse.submitMode !== 'allow_submit' &&
+        after.computerUse.submitMode === 'allow_submit') ||
+      after.computerUse.allowedDomains.some(
+        (d) => !before.computerUse!.allowedDomains.includes(d)
+      ) ||
+      after.computerUse.allowedApps.some((a) => !before.computerUse!.allowedApps.includes(a)))
   const newSkills = effectiveSkills(after.skills).filter(
     (s) => !effectiveSkills(before.skills).includes(s)
   )
@@ -359,6 +408,16 @@ export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.
                 connectorsLabel(after.connectors),
                 connectorsLabel(before.connectors) !== connectorsLabel(after.connectors),
                 escalatedConnectors.length > 0
+              )}
+              {permRow(
+                t('chat.customAgentCard.grantComputerUse'),
+                computerUseLabel(before.computerUse),
+                computerUseLabel(after.computerUse),
+                computerUseLabel(before.computerUse) !== computerUseLabel(after.computerUse),
+                computerUseEscalated || (!isUpdate && after.computerUse !== null)
+              )}
+              {after.computerUse && (computerUseEscalated || !isUpdate) && (
+                <div className="text-aux text-fail">{t('chat.customAgentCard.computerUseWarn')}</div>
               )}
               {isUpdate && newSkills.length > 0 && (
                 <div className="text-aux text-fail">

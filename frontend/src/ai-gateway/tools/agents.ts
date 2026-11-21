@@ -177,6 +177,7 @@ function specSummary(
     grant_sessions: agent.tool_policy?.grant_sessions ?? 'own',
     skills: agent.tool_policy?.skills ?? null,
     grant_connectors: agent.tool_policy?.grant_connectors ?? null,
+    grant_computer_use: agent.tool_policy?.grant_computer_use ?? null,
     budget: agent.budget ?? null,
     updated_at: isoOrNull(agent.updated_at)
   }
@@ -197,6 +198,12 @@ interface ConfigPatchInput {
   grant_web?: 'off' | 'gated' | 'open'
   skills?: string[]
   grant_connectors?: CustomAgentConnectorGrantsInput
+  grant_computer_use?: {
+    enabled: boolean
+    submit_mode: 'stop_before_submit' | 'allow_submit'
+    allowed_domains?: string[]
+    allowed_apps?: string[]
+  } | null
 }
 
 /** True when the input touches any tool_policy sub-field (they live in ONE server-side JSON blob,
@@ -208,7 +215,8 @@ function touchesToolPolicy(input: ConfigPatchInput): boolean {
     input.grant_exec !== undefined ||
     input.grant_web !== undefined ||
     input.skills !== undefined ||
-    input.grant_connectors !== undefined
+    input.grant_connectors !== undefined ||
+    input.grant_computer_use !== undefined
   )
 }
 
@@ -257,6 +265,7 @@ function toConfigPatch(
     if (cur?.grant_sessions !== undefined) tp.grant_sessions = cur.grant_sessions
     if (cur?.skills !== undefined) tp.skills = cur.skills
     if (cur?.grant_connectors !== undefined) tp.grant_connectors = cur.grant_connectors
+    if (cur?.grant_computer_use !== undefined) tp.grant_computer_use = cur.grant_computer_use
     if (input.capabilities !== undefined) {
       const mapped = applyCustomAgentCapabilityPatch(
         {
@@ -277,6 +286,13 @@ function toConfigPatch(
     if (input.grant_web !== undefined) tp.grant_web = input.grant_web
     if (input.skills !== undefined) tp.skills = input.skills
     if (input.grant_connectors !== undefined) tp.grant_connectors = input.grant_connectors
+    if (input.grant_computer_use !== undefined) {
+      if (input.grant_computer_use === null) {
+        delete tp.grant_computer_use
+      } else {
+        tp.grant_computer_use = input.grant_computer_use
+      }
+    }
     patch.tool_policy = tp
   }
   if (input.budget !== undefined) {

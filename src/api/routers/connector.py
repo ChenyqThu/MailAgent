@@ -720,6 +720,112 @@ async def open_system_permissions(
     return success_envelope(data, request=request)
 
 
+@router.get("/browser_use/chrome-profiles", dependencies=[Depends(verify_local_token)])
+async def list_browser_chrome_profiles(
+    request: Request, settings=Depends(get_settings)
+) -> Any:
+    """列出本机 Chrome Profile 列表供一键导入凭据（仅 Desktop loopback）。"""
+    _require_managed_local_enabled(settings)
+    from src.connectors.chrome_import import list_chrome_profiles
+
+    profiles = await run_in_threadpool(list_chrome_profiles)
+    return success_envelope({"profiles": profiles}, request=request)
+
+
+@router.post("/browser_use/import-chrome-cookies", dependencies=[Depends(verify_local_token)])
+async def import_browser_chrome_cookies(
+    request: Request,
+    payload: Optional[dict[str, Any]] = Body(default=None),
+    settings=Depends(get_settings),
+) -> Any:
+    """从本机 Chrome 导入 Cookie 至内置受管浏览器持久目录（仅 Desktop loopback）。"""
+    _require_managed_local_enabled(settings)
+    from src.connectors.chrome_import import import_chrome_cookies
+    from src.connectors.local_installer import LocalInstallerError, normalize_runtime_options
+    from src.connectors.oauth_flow import get_flow
+    from src.connectors.registry import namespace_for
+    from src.connectors.stdio_pool import stdio_pool
+
+    raw = payload or {}
+    profile_id = raw.get("profile_id") or "Default"
+    if not isinstance(profile_id, str) or not profile_id.strip():
+        raise APIError("E_INVALID_ARG", "profile_id must be a non-empty string", http_status=400)
+    raw_domains = raw.get("domain_filters")
+    domain_filters: Optional[list[str]] = None
+    if raw_domains is not None:
+        if not isinstance(raw_domains, list) or not all(isinstance(d, str) for d in raw_domains):
+            raise APIError(
+                "E_INVALID_ARG",
+                "domain_filters must be a list of domain strings",
+                http_status=400,
+            )
+        cleaned = [d.strip() for d in raw_domains if d.strip()]
+        domain_filters = cleaned or None
+
+    await stdio_pool.invalidate("browser_use")
+    try:
+        imported = await run_in_threadpool(
+            import_chrome_cookies,
+            profile_id.strip(),
+            domain_filters=domain_filters,
+        )
+    except LocalInstallerError as e:
+        raise APIError(e.code, e.message, http_status=e.status_code) from None
+
+    store = _store()
+    existing = await run_in_threadpool(store.get_connector, "browser_use")
+    updated_rc: Optional[dict[str, Any]] = None
+    summary: Optional[dict[str, Any]] = None
+    if existing is not None and existing.source == "managed_local":
+        base_rc = normalize_runtime_options("browser_use", existing.runtime_config)
+        base_rc["last_imported_profile"] = imported["profile_id"]
+        base_rc["last_imported_at"] = int(time.time())
+        base_rc["last_imported_count"] = imported["imported"]
+        updated_row = await run_in_threadpool(
+            store.update_connector_runtime_config, "browser_use", base_rc
+        )
+        updated_rc = base_rc
+        cred = await run_in_threadpool(_credential_view, namespace_for("browser_use"))
+        meta = await run_in_threadpool(_managed_summary_fields, updated_row)
+        summary = _serialize_connector_summary(
+            updated_row, cred, _flow_view(get_flow("browser_use")), managed_meta=meta
+        )
+
+    return success_envelope(
+        {
+            **imported,
+            "runtime_config": updated_rc,
+            "connector": summary,
+        },
+        request=request,
+    )
+
+
+@router.post("/browser_use/launch-window", dependencies=[Depends(verify_local_token)])
+async def launch_browser_managed_window(
+    request: Request,
+    payload: Optional[dict[str, Any]] = Body(default=None),
+    settings=Depends(get_settings),
+) -> Any:
+    """以可视窗口模式打开内置受管浏览器供手动登录或检查状态（仅 Desktop loopback）。"""
+    _require_managed_local_enabled(settings)
+    from src.connectors.chrome_import import launch_managed_browser_window
+    from src.connectors.local_installer import LocalInstallerError
+    from src.connectors.stdio_pool import stdio_pool
+
+    raw = payload or {}
+    start_url = raw.get("url")
+    if start_url is not None and not isinstance(start_url, str):
+        raise APIError("E_INVALID_ARG", "url must be a string", http_status=400)
+
+    await stdio_pool.invalidate("browser_use")
+    try:
+        res = await run_in_threadpool(launch_managed_browser_window, start_url=start_url)
+    except LocalInstallerError as e:
+        raise APIError(e.code, e.message, http_status=e.status_code) from None
+    return success_envelope(res, request=request)
+
+
 @router.get("/{connector_id}/install-status", dependencies=[Depends(verify_local_token)])
 async def managed_install_status(
     connector_id: str,
@@ -1427,6 +1533,7 @@ async def invoke_tool(
     from src.connectors.service import (
         ConnectorInvokeDenied,
         invoke_connector_tool,
+        is_computer_use_child_destructive_denied,
         is_matter_computer_use_child_authorized,
         is_matter_followup_caller,
         resolve_caller_allowed_tools,
@@ -1454,10 +1561,13 @@ async def invoke_tool(
             if matter_venue
             else False
         )
+        deny_destructive = matter_venue or await run_in_threadpool(
+            is_computer_use_child_destructive_denied, caller, connector_id
+        )
         invoke_kwargs: dict[str, Any] = {
             "ceiling": ceiling,
             "deny_ask_mode": matter_venue and not matter_child_granted,
-            "deny_destructive": matter_venue,
+            "deny_destructive": deny_destructive,
         }
         if allowed_tools is not None:
             invoke_kwargs["allowed_tools"] = allowed_tools

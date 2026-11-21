@@ -9,6 +9,7 @@ import {
   History,
   Library,
   Mail,
+  Monitor,
   Network,
   Plug,
   SlidersHorizontal,
@@ -18,7 +19,8 @@ import {
 import type {
   AgentRunToolOptions,
   ChatOpennessFlags,
-  ConnectorToolSummary
+  ConnectorToolSummary,
+  CustomAgentComputerUseGrant
 } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { qk } from '@shared/lib/queryKeys'
@@ -311,7 +313,9 @@ export function CapabilityCards({
   grantConnectors,
   onGrantConnectorsChange,
   grantConnectorTools,
-  onGrantConnectorToolsChange
+  onGrantConnectorToolsChange,
+  grantComputerUse,
+  onGrantComputerUseChange
 }: {
   selectedTools: string[]
   onSelectedToolsChange: React.Dispatch<React.SetStateAction<string[]>>
@@ -332,10 +336,14 @@ export function CapabilityCards({
   onGrantConnectorsChange: (next: ConnectorGrantMap) => void
   grantConnectorTools?: ConnectorToolGrantMap
   onGrantConnectorToolsChange?: (next: ConnectorToolGrantMap) => void
+  grantComputerUse?: CustomAgentComputerUseGrant | null
+  onGrantComputerUseChange?: (next: CustomAgentComputerUseGrant | null) => void
 }): React.ReactElement {
   const { t } = useTranslation()
   const [execConfirming, setExecConfirming] = useState(false)
   const [expandedConnectorTools, setExpandedConnectorTools] = useState<Record<string, boolean>>({})
+  const [cuDomainsDraft, setCuDomainsDraft] = useState<string | null>(null)
+  const [cuAppsDraft, setCuAppsDraft] = useState<string | null>(null)
   const toolsDisabled = toolOptions.tools.length === 0
   const webDisabled = flags.webToolsEnabled === false
   const execDisabled = flags.execToolsEnabled === false
@@ -764,6 +772,94 @@ export function CapabilityCards({
             <Guidance danger>{t('agents.custom.capabilityCards.connectors.warn')}</Guidance>
           )}
         </CapabilityCard>
+
+        {onGrantComputerUseChange && (() => {
+          const cuTier: 'off' | 'stop_before_submit' | 'allow_submit' = grantComputerUse?.enabled
+            ? grantComputerUse.submit_mode === 'allow_submit'
+              ? 'allow_submit'
+              : 'stop_before_submit'
+            : 'off'
+          const domainsValue = cuDomainsDraft ?? (grantComputerUse?.allowed_domains ?? []).join(', ')
+          const appsValue = cuAppsDraft ?? (grantComputerUse?.allowed_apps ?? []).join(', ')
+          const parseCsv = (raw: string): string[] =>
+            raw
+              .split(/[,，\n]/)
+              .map((s) => s.trim())
+              .filter(Boolean)
+          const emitCu = (
+            nextTier: 'off' | 'stop_before_submit' | 'allow_submit',
+            rawDomains: string,
+            rawApps: string
+          ): void => {
+            if (nextTier === 'off') {
+              onGrantComputerUseChange(null)
+              return
+            }
+            onGrantComputerUseChange({
+              enabled: true,
+              submit_mode: nextTier,
+              allowed_domains: parseCsv(rawDomains),
+              allowed_apps: parseCsv(rawApps)
+            })
+          }
+          return (
+            <CapabilityCard
+              icon={<Monitor size={16} />}
+              title={t('agents.custom.capabilityCards.computerUse.title')}
+              description={t('agents.custom.capabilityCards.computerUse.desc')}
+              danger={cuTier === 'allow_submit'}
+            >
+              <TierButtons
+                tiers={['off', 'stop_before_submit', 'allow_submit'] as const}
+                value={cuTier}
+                groupLabel={t('agents.custom.capabilityCards.computerUse.title')}
+                label={(tier) => t(`agents.custom.capabilityCards.computerUse.tier.${tier}`)}
+                onChange={(nextTier) => emitCu(nextTier, domainsValue, appsValue)}
+              />
+              {cuTier !== 'off' && (
+                <div className="mt-2.5 space-y-2">
+                  <div>
+                    <label className="mb-1 block text-aux text-ink-fg-2">
+                      {t('agents.custom.capabilityCards.computerUse.domainsLabel')}
+                    </label>
+                    <input
+                      type="text"
+                      value={domainsValue}
+                      onChange={(e) => {
+                        setCuDomainsDraft(e.target.value)
+                        emitCu(cuTier, e.target.value, appsValue)
+                      }}
+                      onBlur={() => setCuDomainsDraft(null)}
+                      placeholder={t('agents.custom.capabilityCards.computerUse.domainsPlaceholder')}
+                      className="w-full rounded-md border border-ink-border bg-ink-1/70 px-2.5 py-1.5 font-mono text-meta text-ink-fg placeholder:text-ink-fg-3 focus:border-coral focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-aux text-ink-fg-2">
+                      {t('agents.custom.capabilityCards.computerUse.appsLabel')}
+                    </label>
+                    <input
+                      type="text"
+                      value={appsValue}
+                      onChange={(e) => {
+                        setCuAppsDraft(e.target.value)
+                        emitCu(cuTier, domainsValue, e.target.value)
+                      }}
+                      onBlur={() => setCuAppsDraft(null)}
+                      placeholder={t('agents.custom.capabilityCards.computerUse.appsPlaceholder')}
+                      className="w-full rounded-md border border-ink-border bg-ink-1/70 px-2.5 py-1.5 font-mono text-meta text-ink-fg placeholder:text-ink-fg-3 focus:border-coral focus:outline-none"
+                    />
+                  </div>
+                </div>
+              )}
+              {cuTier === 'allow_submit' && (
+                <Guidance danger>
+                  {t('agents.custom.capabilityCards.computerUse.allowSubmitWarn')}
+                </Guidance>
+              )}
+            </CapabilityCard>
+          )
+        })()}
       </div>
 
       <details className="group mt-3 rounded-[var(--r-ctl)] border border-ink-border-soft bg-ink-1/45">

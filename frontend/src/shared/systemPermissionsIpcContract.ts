@@ -21,9 +21,18 @@ export interface OpenSystemPermissionResult {
   opened: boolean
 }
 
+export interface RequestSystemPermissionResult {
+  ok: boolean
+  kind: SystemPermissionKind | string
+  prompted: boolean
+  opened: boolean
+  status?: SystemPermissionsStatus
+}
+
 export const SYSTEM_PERMISSIONS_IPC = {
   check: 'systemPermissions:check',
-  open: 'systemPermissions:open'
+  open: 'systemPermissions:open',
+  request: 'systemPermissions:request'
 } as const
 
 export const SYSTEM_PERMISSION_URLS: Record<SystemPermissionKind, string> = {

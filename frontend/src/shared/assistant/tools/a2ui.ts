@@ -422,6 +422,12 @@ export interface CustomAgentApprovalCardProps {
    *  an external workspace — an approval card that cannot show it is not a review surface.
    *  'delete' is unrepresentable (rejected by the zod enum and by Python's parse_tool_policy). */
   connectors?: Record<string, 'read' | 'write' | 'update'>
+  /** Wave 6 — proposed bounded Computer Use grant (null clears the grant). */
+  grantComputerUse?: {
+    submitMode: 'stop_before_submit' | 'allow_submit'
+    allowedDomains: string[]
+    allowedApps: string[]
+  } | null
   /** Result echoes (land after execute). */
   applied?: boolean
 }
@@ -867,6 +873,22 @@ export function buildToolA2UIPayload(
         if (ceiling === 'read' || ceiling === 'write' || ceiling === 'update') parsed[cid] = ceiling
       }
       props.connectors = parsed
+    }
+    if ('grant_computer_use' in args) {
+      if (args.grant_computer_use === null) {
+        props.grantComputerUse = null
+      } else {
+        const gcu = asObj(args.grant_computer_use)
+        if (gcu && gcu.enabled !== false) {
+          const submitMode =
+            gcu.submit_mode === 'allow_submit' ? ('allow_submit' as const) : ('stop_before_submit' as const)
+          props.grantComputerUse = {
+            submitMode,
+            allowedDomains: asStrArray(gcu.allowed_domains),
+            allowedApps: asStrArray(gcu.allowed_apps)
+          }
+        }
+      }
     }
     if (result) props.applied = result.created === true || result.updated === true
     return {

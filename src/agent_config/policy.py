@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 
 # 支持的能力面 + 上下文三态（ADR-001 §3 D1；ADR-004 §3.2 扩 domain_write —— per-agent headless
 # 免卡用，manual 面的 domain_write 工具不走 policyEvaluate，全局规则建不出该 capability）。
-CAPABILITIES: tuple[str, ...] = ("exec", "file_read", "file_write", "web", "domain_write")
+CAPABILITIES: tuple[str, ...] = ("exec", "file_read", "file_write", "web", "domain_write", "computer_use")
 CONTEXT_MODES: tuple[str, ...] = ("manual_chat", "untrusted_trigger", "cron_headless")
 
 # 危险 argv0 basename（realpath 解析后按 basename 判定）——解释器 / shell / 包管理器 / 可扩展
@@ -259,6 +259,87 @@ class DomainWriteMatcher(BaseModel):
         return v
 
 
+_CU_WILDCARDS = frozenset({"*", "*.*", "all", "any"})
+
+
+def _normalize_cu_domain(raw: Any) -> Optional[str]:
+    if not isinstance(raw, str):
+        return None
+    s = raw.strip().lower().strip(".")
+    if not s or s in _CU_WILDCARDS or "*" in s:
+        return None
+    if "://" in s:
+        parsed = urllib.parse.urlsplit(s)
+        host = (parsed.hostname or "").lower().rstrip(".")
+        return host or None
+    if "/" in s:
+        s = s.split("/", 1)[0]
+    if ":" in s:
+        s = s.split(":", 1)[0]
+    s = s.lstrip(".")
+    if not s or s in _CU_WILDCARDS or "*" in s:
+        return None
+    return s
+
+
+def _normalize_cu_app(raw: Any) -> Optional[str]:
+    if not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    lower = s.lower()
+    if not s or lower in _CU_WILDCARDS or "*" in s:
+        return None
+    return s
+
+
+class ComputerUseMatcher(BaseModel):
+    """computer_use_run 域/应用范围白名单：严格要求非空具体 allowed_apps/allowed_domains 且 stop_before_submit=True。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    v: int
+    allowed_apps: list[str] = Field(default_factory=list)
+    allowed_domains: list[str] = Field(default_factory=list)
+    stop_before_submit: Literal[True] = True
+
+    @field_validator("v")
+    @classmethod
+    def _v1(cls, v: int) -> int:
+        if v != 1:
+            raise ValueError(f"unknown matcher version: {v}")
+        return v
+
+    @model_validator(mode="after")
+    def _bounded_scope(self) -> "ComputerUseMatcher":
+        norm_apps: list[str] = []
+        seen_apps: set[str] = set()
+        for raw_app in self.allowed_apps:
+            norm = _normalize_cu_app(raw_app)
+            if norm is None:
+                raise ValueError(f"invalid allowed_apps entry: {raw_app!r}")
+            key = norm.lower().removesuffix(".app")
+            if key not in seen_apps:
+                seen_apps.add(key)
+                norm_apps.append(norm)
+
+        norm_domains: list[str] = []
+        seen_domains: set[str] = set()
+        for raw_domain in self.allowed_domains:
+            norm = _normalize_cu_domain(raw_domain)
+            if norm is None:
+                raise ValueError(f"invalid allowed_domains entry: {raw_domain!r}")
+            if norm not in seen_domains:
+                seen_domains.add(norm)
+                norm_domains.append(norm)
+
+        if not norm_apps and not norm_domains:
+            raise ValueError("computer_use matcher requires non-empty allowed_apps or allowed_domains")
+
+        self.allowed_apps = norm_apps
+        self.allowed_domains = norm_domains
+        return self
+
+
 def parse_matcher(capability: str, matcher_dict: dict[str, Any]) -> BaseModel:
     """按 capability 把 matcher dict 解析成 typed 模型（非法 → pydantic ValidationError / ValueError）。
 
@@ -272,6 +353,8 @@ def parse_matcher(capability: str, matcher_dict: dict[str, Any]) -> BaseModel:
         return WebMatcher.model_validate(matcher_dict)
     if capability == "domain_write":
         return DomainWriteMatcher.model_validate(matcher_dict)
+    if capability == "computer_use":
+        return ComputerUseMatcher.model_validate(matcher_dict)
     raise ValueError(f"unknown capability: {capability}")
 
 
@@ -412,6 +495,47 @@ def _match_domain_write(matcher: DomainWriteMatcher, action: dict[str, Any]) -> 
     return isinstance(tool, str) and tool == matcher.tool
 
 
+def _match_computer_use(matcher: ComputerUseMatcher, action: dict[str, Any]) -> bool:
+    """computer_use_run 域/应用白名单匹配（仅限 stop_before_submit=True，拒绝空范围或越界请求）。"""
+    if action.get("tool") != "computer_use_run":
+        return False
+    if action.get("stop_before_submit") is not True:
+        return False
+    raw_apps = action.get("allowed_apps")
+    raw_domains = action.get("allowed_domains")
+    if raw_apps is None:
+        raw_apps = []
+    if raw_domains is None:
+        raw_domains = []
+    if not isinstance(raw_apps, list) or not isinstance(raw_domains, list):
+        return False
+    if not raw_apps and not raw_domains:
+        return False
+
+    if raw_apps:
+        if not matcher.allowed_apps:
+            return False
+        matcher_apps = {a.strip().lower().removesuffix(".app") for a in matcher.allowed_apps}
+        for raw_app in raw_apps:
+            norm = _normalize_cu_app(raw_app)
+            if norm is None:
+                return False
+            if norm.lower().removesuffix(".app") not in matcher_apps:
+                return False
+
+    if raw_domains:
+        if not matcher.allowed_domains:
+            return False
+        for raw_domain in raw_domains:
+            host = _normalize_cu_domain(raw_domain)
+            if host is None:
+                return False
+            if not any(host == md or host.endswith("." + md) for md in matcher.allowed_domains):
+                return False
+
+    return True
+
+
 # ---------------------------------------------------------------------------
 # 资料库无人值守免卡通道（design §5.3 B）—— 内建规则，不是 policy_rules 行
 # ---------------------------------------------------------------------------
@@ -516,6 +640,8 @@ def _match(capability: str, matcher: BaseModel, action: dict[str, Any]) -> bool:
         return _match_web(matcher, action)
     if capability == "domain_write" and isinstance(matcher, DomainWriteMatcher):
         return _match_domain_write(matcher, action)
+    if capability == "computer_use" and isinstance(matcher, ComputerUseMatcher):
+        return _match_computer_use(matcher, action)
     return False
 
 

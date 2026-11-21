@@ -24,7 +24,7 @@ const FIXED_EXEC_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'] as const
 
 /** A capability + structured matcher ready for POST /api/agent/policy/rules. */
 export interface DerivedExecRule {
-  capability: 'exec' | 'file_read' | 'file_write'
+  capability: 'exec' | 'file_read' | 'file_write' | 'computer_use'
   matcher: Record<string, unknown>
 }
 
@@ -108,6 +108,91 @@ export function deriveExecRule(toolName: string, input: unknown): DerivedExecRul
       )
     }
     return { capability: toolName, matcher: { v: 1, realpath_prefix: prefix } }
+  }
+  if (toolName === 'computer_use_run') {
+    if (obj.stop_before_submit === false) {
+      throw new ExecRuleDeriveError(
+        'E_INVALID_ARG',
+        'cannot remember computer_use_run with stop_before_submit=false'
+      )
+    }
+    const wildcards = new Set(['*', '*.*', 'all', 'any'])
+    const normalizeApps = (raw: unknown): string[] => {
+      if (raw === undefined) return []
+      if (!Array.isArray(raw)) {
+        throw new ExecRuleDeriveError('E_INVALID_ARG', 'allowed_apps must be an array')
+      }
+      const out: string[] = []
+      const seen = new Set<string>()
+      for (const item of raw) {
+        if (typeof item !== 'string') {
+          throw new ExecRuleDeriveError('E_INVALID_ARG', 'allowed_apps must contain strings')
+        }
+        const trimmed = item.trim()
+        const lower = trimmed.toLowerCase()
+        if (!trimmed || trimmed.includes('*') || wildcards.has(lower)) {
+          throw new ExecRuleDeriveError('E_INVALID_ARG', `invalid allowed_apps entry: ${item}`)
+        }
+        const key = lower.replace(/\.app$/, '')
+        if (!seen.has(key)) {
+          seen.add(key)
+          out.push(trimmed)
+        }
+      }
+      return out
+    }
+    const normalizeDomains = (raw: unknown): string[] => {
+      if (raw === undefined) return []
+      if (!Array.isArray(raw)) {
+        throw new ExecRuleDeriveError('E_INVALID_ARG', 'allowed_domains must be an array')
+      }
+      const out: string[] = []
+      const seen = new Set<string>()
+      for (const item of raw) {
+        if (typeof item !== 'string') {
+          throw new ExecRuleDeriveError('E_INVALID_ARG', 'allowed_domains must contain strings')
+        }
+        let s = item.trim().toLowerCase().replace(/^\.+/, '').replace(/\.+$/, '')
+        if (!s || s.includes('*') || wildcards.has(s)) {
+          throw new ExecRuleDeriveError('E_INVALID_ARG', `invalid allowed_domains entry: ${item}`)
+        }
+        if (s.includes('://')) {
+          try {
+            s = new URL(s).hostname.toLowerCase().replace(/\.+$/, '')
+          } catch {
+            throw new ExecRuleDeriveError('E_INVALID_ARG', `invalid allowed_domains entry: ${item}`)
+          }
+        } else {
+          s = s.split('/', 1)[0]?.split(':', 1)[0] ?? ''
+        }
+        s = s.replace(/^\.+/, '').replace(/\.+$/, '')
+        if (!s || s.includes('*') || wildcards.has(s)) {
+          throw new ExecRuleDeriveError('E_INVALID_ARG', `invalid allowed_domains entry: ${item}`)
+        }
+        if (!seen.has(s)) {
+          seen.add(s)
+          out.push(s)
+        }
+      }
+      return out
+    }
+    const allowedApps = normalizeApps(obj.allowed_apps)
+    const allowedDomains = normalizeDomains(obj.allowed_domains)
+    if (allowedApps.length === 0 && allowedDomains.length === 0) {
+      throw new ExecRuleDeriveError(
+        'E_INVALID_ARG',
+        'computer_use_run remember requires non-empty allowed_apps or allowed_domains'
+      )
+    }
+    return {
+      capability: 'computer_use',
+      matcher: {
+        v: 1,
+        allowed_apps: allowedApps,
+        allowed_domains: allowedDomains,
+        stop_before_submit: true
+      }
+    }
   }
   throw new ExecRuleDeriveError(
     'E_NOT_FOUND',

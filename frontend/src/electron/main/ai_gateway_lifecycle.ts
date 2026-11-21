@@ -51,7 +51,10 @@ import {
   shouldLoadConnectorTools
 } from '../../ai-gateway/tools/connector'
 import { hasActiveComputerUseChildTools } from '../../ai-gateway/tools/computer_use'
-import { isMatterItemComputerUseEnabled } from '../../ai-gateway/tools/policy'
+import {
+  isCustomAgentComputerUseEnabled,
+  isMatterItemComputerUseEnabled
+} from '../../ai-gateway/tools/policy'
 import type { ConnectorCatalogEntry } from '../../ai-gateway/prompts/stable_prompt'
 import type { ToolSet } from 'ai'
 import {
@@ -1355,7 +1358,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // and persist it via the owner policy API with context_mode PINNED to manual_chat (a whitelist
     // is manual-only, ADR-001 §9). Only wired when exec tools are on → /remember 501s otherwise.
     // Throws an ExecRuleDeriveError/.code (non-exec tool / no record / fs error) → typed HTTP.
-    rememberExecApproval: execToolsEnabled
+    rememberExecApproval: execToolsEnabled || computerUseEnabled
       ? async (toolCallId: string) => {
           const rec = approvalGuard.peek(toolCallId)
           // E_APPROVAL_NOT_FOUND → server maps to 404 (the pending approval expired / wrong id).
@@ -1569,10 +1572,41 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
             collector,
             manifest,
             {
+              contextMode: 'matter_followup',
               connectors: matterCuPolicy.connectors,
               agentId: agentRunContext?.agentId,
               jobId: matterCuPolicy.jobId ?? agentRunContext?.jobId,
               dispatchId: matterCuPolicy.dispatchId
+            }
+          )
+        }
+      }
+      // Wave 6 — private child connector tools for Custom Agents granted bounded `grant_computer_use`
+      let customAgentComputerUseChildTools: ToolSet | undefined
+      const cuHeadlessMode: 'untrusted_trigger' | 'cron_headless' | undefined =
+        contextMode === 'untrusted_trigger' || contextMode === 'cron_headless'
+          ? contextMode
+          : undefined
+      const customAgentCuPolicy =
+        computerUseEnabled &&
+        cuHeadlessMode != null &&
+        isCustomAgentComputerUseEnabled(agentRunContext?.modeGrants)
+          ? agentRunContext!.modeGrants!.customAgentComputerUse
+          : undefined
+      if (mcpConnectorsEnabled && cuHeadlessMode != null && customAgentCuPolicy && agentRunContext?.agentId) {
+        void refreshConnectorManifest()
+        const manifest = connectorManifest.peek()
+        if (connectorManifestSkipReason(manifest) === null && manifest) {
+          customAgentComputerUseChildTools = createComputerUseChildConnectorTools(
+            domain,
+            collector,
+            manifest,
+            {
+              contextMode: cuHeadlessMode,
+              connectors: customAgentCuPolicy.connectors,
+              agentId: agentRunContext.agentId,
+              jobId: customAgentCuPolicy.jobId ?? agentRunContext.jobId,
+              allowDestructive: customAgentCuPolicy.submitMode === 'allow_submit'
             }
           )
         }
@@ -1583,6 +1617,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         Boolean(matterCuPolicy) &&
         matterComputerUseChildTools != null &&
         Object.keys(matterComputerUseChildTools).length > 0
+      const customAgentComputerUseActive =
+        Boolean(customAgentCuPolicy) &&
+        customAgentComputerUseChildTools != null &&
+        Object.keys(customAgentComputerUseChildTools).length > 0
       return buildGatewayTools(
         {
           domain,
@@ -1720,7 +1758,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // WS-4 + WS-5 — expose computer_use_run in manual_chat OR explicit propose_only
           // matter_item_run when bounded browser_use / desktop_use child tools are available.
           computerUse:
-            manualComputerUseActive || matterComputerUseActive
+            manualComputerUseActive || matterComputerUseActive || customAgentComputerUseActive
               ? {
                   ...(matterComputerUseActive && matterCuPolicy
                     ? {
@@ -1728,7 +1766,14 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
                         forceStopBeforeSubmit: true,
                         matterItemPolicy: matterCuPolicy
                       }
-                    : {}),
+                    : customAgentComputerUseActive && customAgentCuPolicy
+                      ? {
+                          childTools: customAgentComputerUseChildTools,
+                          forceStopBeforeSubmit:
+                            customAgentCuPolicy.submitMode === 'stop_before_submit',
+                          customAgentPolicy: customAgentCuPolicy
+                        }
+                      : {}),
                   persistChildSummary: (childSid, summaryText) => {
                     try {
                       appendMessage({

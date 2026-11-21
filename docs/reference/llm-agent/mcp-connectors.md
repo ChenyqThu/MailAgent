@@ -1069,10 +1069,11 @@ owner 明确要求（LobeHub 截图里是展开的，我们要更收敛的默认
 - **开箱即用与运行时路径**：`managed_local` 与 `MAILAGENT_MCP_CONNECTORS` 随 2026-11-20 cutover **直接默认启用**（无需额外 `.env` 开关，不进「实验室」）；运行时默认落盘于 `<userData>/mcp-runtimes/`（由 `resolve_agent_config_db_path()` 推导；单测通过 `local_installer._RUNTIMES_DIR_OVERRIDE` 隔离在 `tmp_path`）。
 - **`src/connectors/local_installer.py` 安全纪律**：
   - 所有写/解压先入 `.tmp-<id>-<uuid>/`，全部校验通过才 `os.replace` 进 `<id>/`，`finally` fail-closed 清理残片，绝不调用 `sudo`、绝不写 `<runtime_base>` 之外。
-  - `browser_use`（`@playwright/mcp`）：隔离 `--prefix pkg --cache .npm-cache` 安装，支持三模式：`cdp_chrome`（默认 `--cdp-endpoint=chrome`，支持 `http(s)://` 覆写）、`extension`（`--extension`）、`isolated_profile`（`--user-data-dir <runtime_dir>/profile`）。
+  - `browser_use`（`@playwright/mcp`）：隔离 `--prefix pkg --cache .npm-cache` 安装，支持三模式：**`isolated_profile`（2026-11 Wave 6 默认推荐，内置受管持久浏览器：`--browser=chrome --user-data-dir <runtime_dir>/profile [--headless]`，支持 Chrome Keychain Cookie 一键导入与打开可见窗口手动登录）**、`cdp_chrome`（`--cdp-endpoint=chrome`，支持 `http(s)://` 覆写）、`extension`（`--extension`）。
   - `desktop_use`（`vercel-labs/agent-desktop` `v1.3.1`，`darwin-arm64` / `win32-x64`）：下载 `.tar.gz` 后强制 SHA-256 校验（不匹配抛 `E_CHECKSUM_MISMATCH` 500 并清 staging）、安全解压（拒绝路径穿越与 symlink）、赋 `0o755`，macOS 剥 `com.apple.quarantine` 并 ad-hoc `/usr/bin/codesign --sign - --force`，args 固定 `["mcp"]`。
 - **Desktop-only 端点**（`Depends(verify_local_token)`，拒绝远程 CF JWT）：
-  - `GET /api/connector/system-permissions` / `POST /api/connector/system-permissions/open`（Electron IPC 优先 + Python `ctypes` TCC 探针 / `/usr/bin/open` 兜底，非 macOS 返回 `unsupported`）。
+  - `GET /api/connector/system-permissions` / `POST /api/connector/system-permissions/open` / **`systemPermissions:request` 原生 TCC 授权唤起**（`AXIsProcessTrustedWithOptions` Prompt + 1×1 `desktopCapturer.getSources` 首次触发 macOS 自动登记应用，配合 Python `ctypes` / `/usr/bin/open` 兜底，非 macOS 返回 `unsupported`）。
+  - `GET /api/connector/browser_use/chrome-profiles` / `POST /api/connector/browser_use/import-chrome-cookies` / `POST /api/connector/browser_use/launch-window`（支持读取本机 Chrome `Local State` 多 Profile、通过 macOS Keychain `Chrome Safe Storage` 解密 AES-128-CBC / Chrome 130+ v24+ 前缀剥离并注入受管持久 Profile、以及打开专属窗口手动登录）。
   - `GET /api/connector/{id}/install-status`、`POST /api/connector/{id}/install`、`POST /api/connector/{id}/uninstall`、`PATCH /api/connector/{id}/runtime-options`（更新 `agent_config.db::connector.runtime_config_json` 并立即 `stdio_pool.invalidate`）。
 
 ### 14.4 SQLite 只读零进程休眠与 `StdioSessionPool`
@@ -1080,7 +1081,9 @@ owner 明确要求（LobeHub 截图里是展开的，我们要更收敛的默认
 - 启动、`/catalog`、`/api/connector` 列表与 TS `tool_search` 只查询 `agent_config.db` 缓存清单，**零 `stdio` 子进程、零远端常驻连接**。
 - `src/connectors/stdio_pool.py::StdioSessionPool` 按需在单 task 内拉起 `stdio` 子进程（维护 `anyio` cancel scope），默认空闲 TTL 为 `300.0` 秒（受管长会话运行时 `browser_use` / `desktop_use` 为 `600.0` 秒）；卸载或切配置后调用 `invalidate()` 即时回收。
 
-### 14.5 `matter_followup` 下 `computer_use_run` 的 DB 核验 Belt 3
+### 14.5 `matter_followup` 与 Custom Agent 下 `computer_use_run` 的双重授权闭环
 
 - 对常规 `matter_followup` 调用及所有第三方 connector（`notion` 等），`resolve_caller_ceiling` 仍钉死 `"read"`、`is_matter_followup_caller` 为 `True`（`deny_ask_mode=True` + `deny_destructive=True`）。
-- 仅当 `caller` 携带 `context_mode="matter_followup"`、`child_tool="computer_use_run"`、严格正整数 `job_id` + `dispatch_id` 且目标为 `browser_use` / `desktop_use` 时，`service.is_matter_computer_use_child_authorized` 在 `sync_store_db_path` 中联表核验 `matter_item_dispatch.state == 'running'` ∧ `exec_profile == 'propose_only'` ∧ `async_jobs.status == 'running'` ∧ `params_json.computer_use_draft` 非空非通配且授权该 connector，命中才放行 `"write"` 天花板并豁免 `deny_ask_mode`（`deny_destructive=True` 依然强制保留）；任何伪造、停机 job 或 `autonomous` 一律 403 `E_CONNECTOR_GRANT_DENIED`（`tests/connectors/test_matter_computer_use_gate.py`）。
+- **Matters 行动项（Belt 3）**：仅当 `caller` 携带 `context_mode="matter_followup"`、`child_tool="computer_use_run"`、严格正整数 `job_id` + `dispatch_id` 且目标为 `browser_use` / `desktop_use` 时，`service.is_matter_computer_use_child_authorized` 在 `sync_store_db_path` 中联表核验 `matter_item_dispatch.state == 'running'` ∧ `exec_profile == 'propose_only'` ∧ `async_jobs.status == 'running'` ∧ `params_json.computer_use_draft` 非空非通配且授权该 connector，命中才放行 `"write"` 天花板并豁免 `deny_ask_mode`（`deny_destructive=True` 依然强制保留）；任何伪造、停机 job 或 `autonomous` 一律 403 `E_CONNECTOR_GRANT_DENIED`（`tests/connectors/test_matter_computer_use_gate.py`）。
+- **Custom Agent 有界自动化（`grant_computer_use`，Wave 6）**：Custom Agent 仅通过显式 `tool_policy.grant_computer_use`（要求非空具体 `allowed_domains` 和/或 `allowed_apps`，禁止 `*`/`all`/`any` 通配符；`grant_exec` 单独永不解锁 `computer_use_run`）授权在 `email_filter` / `calendar_before_start` / `cron` / `schedule` 后台运行中执行 `computer_use_run`；支持 `stop_before_submit`（强制停靠并保持 `deny_destructive=True`）与 `allow_submit`（允许点击已授权范围内的最终提交/审批按钮），服务端 `resolve_caller_ceiling` 复核 `report_agent.tool_policy_json` 后按域名/应用权限放行对应受管连接器。
+- **主对话授权简化（Wave 6）**：`tool_prefs.py` 允许 owner 将 `computer_use_run` 配为 `auto`（带 `danger_auto` 确认，出厂默认仍为 `ask`）；`policy.py` 新增 `"computer_use"` 能力面与 `ComputerUseMatcher`（要求 `stop_before_submit=True` 与非空具体范围），`ComputerUseApprovalCard.tsx` 支持「记住此域名/应用范围，下次免确认自动执行」。

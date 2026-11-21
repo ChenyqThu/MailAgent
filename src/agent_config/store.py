@@ -743,6 +743,49 @@ class AgentConfigStore:
                 (now_iso,),
             )
 
+        # browser_use 默认模式升级：将未手工修改过的出厂 cdp_chrome 一次性迁移为
+        # 内置受管持久浏览器（isolated_profile + headless=True），以 owner_settings 作幂等哨兵。
+        migrated_flag = conn.execute(
+            "SELECT value FROM owner_settings WHERE key='browser_use_default_isolated_v1'"
+        ).fetchone()
+        if migrated_flag is None:
+            now_int = _now()
+            now_iso = _now_iso()
+            bu_row = conn.execute(
+                "SELECT source, runtime_config_json FROM connector WHERE connector_id='browser_use'"
+            ).fetchone()
+            if bu_row is not None and bu_row["source"] == "managed_local":
+                raw_bu_rc = bu_row["runtime_config_json"]
+                parsed_bu_rc: Optional[dict[str, Any]] = None
+                if raw_bu_rc:
+                    try:
+                        cand_bu_rc = json.loads(raw_bu_rc)
+                        if isinstance(cand_bu_rc, dict):
+                            parsed_bu_rc = cand_bu_rc
+                    except (ValueError, TypeError):
+                        parsed_bu_rc = None
+                is_untouched_default = parsed_bu_rc is None or (
+                    parsed_bu_rc.get("mode") == "cdp_chrome"
+                    and (parsed_bu_rc.get("cdp_url") in (None, "chrome"))
+                    and set(parsed_bu_rc).issubset({"mode", "browser_mode", "cdp_url"})
+                )
+                if is_untouched_default:
+                    conn.execute(
+                        "UPDATE connector SET runtime_config_json=?, updated_at=? WHERE connector_id='browser_use'",
+                        (
+                            json.dumps(
+                                {"mode": "isolated_profile", "headless": True},
+                                ensure_ascii=False,
+                            ),
+                            now_int,
+                        ),
+                    )
+            conn.execute(
+                "INSERT OR IGNORE INTO owner_settings (key, value, updated_at) "
+                "VALUES ('browser_use_default_isolated_v1', '1', ?)",
+                (now_iso,),
+            )
+
         # Templates are otherwise seed-once. Upgrade only an untouched doc: exact old-default
         # equality is the guard, so any user-edited content remains authoritative. The UPDATE
         # condition also makes this idempotent across every subsequent store open.

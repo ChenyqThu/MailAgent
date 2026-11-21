@@ -91,7 +91,10 @@ const { stableMailApi, chatApi, connectorApi } = vi.hoisted(() => {
     uninstall: vi.fn(),
     setRuntimeOptions: vi.fn(),
     systemPermissions: vi.fn(),
-    openSystemPermission: vi.fn()
+    openSystemPermission: vi.fn(),
+    chromeProfiles: vi.fn(),
+    importChromeCookies: vi.fn(),
+    launchBrowserWindow: vi.fn()
   }
   return { stableMailApi: { chat: chatApi, connector: connectorApi }, chatApi, connectorApi }
 })
@@ -347,6 +350,21 @@ beforeEach(() => {
     ok: true,
     kind: 'screen_recording',
     opened: true
+  })
+  connectorApi.chromeProfiles.mockResolvedValue({
+    profiles: [{ profile_id: 'Default', name: 'Personal', user_name: 'me@example.com', has_cookies: true }]
+  })
+  connectorApi.importChromeCookies.mockResolvedValue({
+    ok: true,
+    profile_id: 'Default',
+    matched: 12,
+    imported: 12,
+    skipped: 0
+  })
+  connectorApi.launchBrowserWindow.mockResolvedValue({
+    ok: true,
+    launched: true,
+    profile_dir: '/tmp/profile'
   })
   window.localStorage.setItem(NOTICE_KEY, '1')
   window.localStorage.setItem(COMPOSIO_NOTICE_KEY, '1')
@@ -1266,5 +1284,45 @@ describe('ConnectorsConsole — Wave 3 managed_local（Browser Use / Desktop Use
     } finally {
       delete (window as unknown as { electron?: unknown }).electron
     }
+  })
+
+  test('Wave 6 isolated_profile：Headless 开关、Chrome 导入与启动窗口 + TCC 原生授权按钮', async () => {
+    const browserConnector = connector({
+      connector_id: 'browser_use',
+      display_name: 'Browser Use',
+      source: 'managed_local',
+      transport: 'stdio',
+      server_url: '',
+      status: 'connected',
+      is_custom: false,
+      runtime_installed: true,
+      runtime_version: '0.0.41',
+      runtime_mode: 'isolated_profile',
+      supported_modes: ['isolated_profile', 'cdp_chrome', 'extension'],
+      runtime_config: { mode: 'isolated_profile', browser_mode: 'isolated_profile', headless: true }
+    })
+    connectorApi.list.mockResolvedValue([browserConnector])
+    connectorApi.tools.mockResolvedValue([])
+    renderUi()
+
+    await selectConnector('Browser Use')
+    await screen.findByText('settings.connectors.managed.headlessTitle')
+
+    const domainInput = screen.getByLabelText('settings.connectors.managed.domainFilterPlaceholder')
+    fireEvent.change(domainInput, { target: { value: 'dms.company.com, oa.internal' } })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.connectors.managed.importChromeButton' })
+    )
+    await waitFor(() =>
+      expect(connectorApi.importChromeCookies).toHaveBeenCalledWith({
+        profile_id: 'Default',
+        domain_filters: ['dms.company.com', 'oa.internal']
+      })
+    )
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.connectors.managed.launchWindowButton' })
+    )
+    await waitFor(() => expect(connectorApi.launchBrowserWindow).toHaveBeenCalledTimes(1))
   })
 })

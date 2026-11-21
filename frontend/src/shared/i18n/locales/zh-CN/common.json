@@ -1260,7 +1260,12 @@
       "reject": "拒绝",
       "createdDone": "已创建 {id}。",
       "updatedDone": "已修改 {id}。",
-      "failed": "操作失败，请重试或让助手重新发起。"
+      "failed": "操作失败，请重试或让助手重新发起。",
+      "grantComputerUse": "桌面与浏览器操控",
+      "computerUseOff": "关闭",
+      "computerUseStopBeforeSubmit": "允许并在提交前停靠",
+      "computerUseAllowSubmit": "允许自动执行最终提交",
+      "computerUseWarn": "已为该后台 Agent 开启电脑/浏览器自动化权限：限定域名或应用内将自动执行界面操作；若开启允许自动提交，请在信任的内部系统范围下使用。"
     },
     "approvalShell": {
       "phase": {
@@ -1336,7 +1341,9 @@
       },
       "currentTarget": "停靠位置",
       "pendingAction": "待确认动作",
-      "filledFields": "已填写字段"
+      "filledFields": "已填写字段",
+      "alwaysAllowLabel": "记住此域名 / 应用范围，下次免确认自动执行（提交前仍停靠）",
+      "alwaysAllowHint": "仅在当前允许应用/域名且 stop_before_submit 开启时生效，不会放行未审批的终态提交动作。"
     },
     "execApprovalCard": {
       "title": {
@@ -2678,8 +2685,8 @@
             "desc": "通过 Playwright MCP 浏览器扩展桥接当前标签页，无需手动开启调试端口参数。"
           },
           "isolated_profile": {
-            "title": "独立隔离浏览器配置文件",
-            "desc": "在托管运行目录中启动干净的独立浏览器配置，与个人日常 Cookie 和历史记录完全隔离。"
+            "title": "内置专属持久化浏览器（Headless 默认）",
+            "desc": "由 MailAgent 托管的独立持久化浏览器配置，后台静默运行且零 Chrome 远程调试弹窗；支持一键从已有 Chrome 导入登录态或打开专属窗口手动登录。"
           }
         },
         "cdpGuideTitle": "首次使用请在 Chrome 中开启远程调试",
@@ -2701,7 +2708,25 @@
           "denied": "未授权",
           "unknown": "待确认",
           "unsupported": "当前系统无需"
-        }
+        },
+        "headlessTitle": "后台静默运行（Headless）",
+        "headlessDesc": "默认隐藏浏览器窗口在后台执行，不抢夺桌面焦点；需排查页面时可关闭此开关或点击右侧打开可见窗口。",
+        "headlessEnabledToast": "已开启后台静默运行（下次调用生效）",
+        "headlessDisabledToast": "已关闭后台静默运行，将以可见窗口启动浏览器",
+        "importChromeTitle": "从已有 Chrome 导入登录态",
+        "importChromeDesc": "从本机 Chrome 配置文件解密并导入当前 Cookie 至内置专属浏览器（不影响你正在使用的 Chrome）；复杂 SSO / LocalStorage 登录可打开专属窗口手登一次。",
+        "chromeProfileLabel": "Chrome 配置文件",
+        "domainFilterPlaceholder": "可选：限定域名（如 dms.company.com, oa.internal）",
+        "importChromeButton": "一键导入 Chrome 登录态",
+        "importingChromeButton": "正在导入…",
+        "importChromeDone": "已从 {profile} 导入 {count} 条 Cookie 至内置专属浏览器",
+        "importChromeFailed": "导入 Chrome 登录态失败",
+        "lastImportedSummary": "上次导入：配置 {profile} · {count} 条 Cookie · {time}",
+        "launchWindowButton": "打开专属浏览器窗口",
+        "launchWindowDone": "已打开专属浏览器窗口，请完成登录（登录后状态持久保存）",
+        "launchWindowFailed": "打开专属浏览器窗口失败",
+        "launchWindowHint": "提示：若目标系统仅依赖 Cookie，可直接点右侧一键导入；导入与手登状态均保存在受管目录中，后续自动化全自动复用。",
+        "tccRequestPrompt": "请求系统授权"
       },
       "supersededHint": "这条连接走的是自建直连，而该服务的出厂轨道已改为 Composio 托管。用「切换轨道」断开并清除配置，再从目录重新连接。",
       "catalog": {
@@ -5621,7 +5646,21 @@
           "headlessNote": "无人值守时只有 Agents 文档免卡；挂载根恒只读，移动 / 删除恒弹卡。"
         },
         "subsetBadge": "部分",
-        "subsetHint": "当前启用的工具是「{tier}」档的一个子集——档位表示权限上限，不代表该档每个工具都开着。展开下方「高级」可看确切清单。"
+        "subsetHint": "当前启用的工具是「{tier}」档的一个子集——档位表示权限上限，不代表该档每个工具都开着。展开下方「高级」可看确切清单。",
+        "computerUse": {
+          "title": "电脑与浏览器操控",
+          "desc": "允许此后台 Agent 在指定域名或桌面应用范围内操作界面（需先配置内置浏览器或桌面连接器）。",
+          "tier": {
+            "off": "关闭",
+            "stop_before_submit": "提交前停靠",
+            "allow_submit": "允许自动提交"
+          },
+          "domainsLabel": "允许域名（逗号分隔，无通配符）",
+          "domainsPlaceholder": "例如：dms.company.com, oa.internal",
+          "appsLabel": "允许桌面应用（逗号分隔，精确名称）",
+          "appsPlaceholder": "例如：Microsoft Teams, Notion",
+          "allowSubmitWarn": "高风险：允许后台 Agent 在上述限定域名/应用内自动点击「提交 / 审批通过 / 加入」等终态按钮。"
+        }
       },
       "budget": {
         "label": "运行预算",
@@ -5769,7 +5808,8 @@
           "empty": "显式零挂载：该 Agent 无任何 Skill 工具。"
         }
       },
-      "deleteConfirm": "确认删除此 Agent？"
+      "deleteConfirm": "确认删除此 Agent？",
+      "errComputerUseScope": "开启电脑/浏览器自动化时，请填写至少一个具体域名或桌面应用名称（禁止使用 * / all 通配符）。"
     }
   },
   "agentSettings": {

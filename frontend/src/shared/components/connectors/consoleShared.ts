@@ -14,6 +14,7 @@ import type {
   ConnectorTrack,
   ManagedBrowserMode,
   OpenSystemPermissionResult,
+  RequestSystemPermissionResult,
   SystemPermissionKind,
   SystemPermissionsStatus
 } from '@shared/api/types'
@@ -80,15 +81,15 @@ export function resolveCatalogTrack(entry: ConnectorCatalogEntry): ConnectorTrac
 }
 
 export const MANAGED_BROWSER_MODES: readonly ManagedBrowserMode[] = [
+  'isolated_profile',
   'cdp_chrome',
-  'extension',
-  'isolated_profile'
+  'extension'
 ] as const
 
 export const CHROME_REMOTE_DEBUGGING_URL = 'chrome://inspect/#remote-debugging'
 
 export function isManagedBrowserMode(value: unknown): value is ManagedBrowserMode {
-  return value === 'cdp_chrome' || value === 'extension' || value === 'isolated_profile'
+  return value === 'isolated_profile' || value === 'cdp_chrome' || value === 'extension'
 }
 
 export function resolveManagedBrowserMode(source: {
@@ -99,7 +100,15 @@ export function resolveManagedBrowserMode(source: {
   const cfg = source.runtime_config
   if (cfg && isManagedBrowserMode(cfg.browser_mode)) return cfg.browser_mode
   if (cfg && isManagedBrowserMode(cfg.mode)) return cfg.mode
-  return 'cdp_chrome'
+  return 'isolated_profile'
+}
+
+export function resolveManagedBrowserHeadless(source: {
+  runtime_config?: Record<string, unknown> | null
+}): boolean {
+  const cfg = source.runtime_config
+  if (cfg && typeof cfg.headless === 'boolean') return cfg.headless
+  return true
 }
 
 type ElectronInvoke = (channel: string, ...args: unknown[]) => Promise<unknown>
@@ -169,6 +178,37 @@ export async function openSystemPermissionPane(
     return connectorApi.openSystemPermission(kind)
   }
   throw new Error('System settings opener unavailable')
+}
+
+/** 优先调 Electron 主进程直接触发 macOS 原生系统授权弹窗（Accessibility / Screen Recording），无 IPC 时退回系统设置跳转。 */
+export async function requestSystemPermission(
+  connectorApi: ConnectorApi,
+  kind: SystemPermissionKind
+): Promise<RequestSystemPermissionResult> {
+  if (isWebBuild()) {
+    return { ok: false, kind, prompted: false, opened: false }
+  }
+  const invoke = getElectronInvoke()
+  if (invoke) {
+    try {
+      const result = (await invoke(
+        SYSTEM_PERMISSIONS_IPC.request,
+        kind
+      )) as RequestSystemPermissionResult | null
+      if (result && result.ok) {
+        return result
+      }
+    } catch {
+      /* 回退至打开系统设置面板 */
+    }
+  }
+  const fallback = await openSystemPermissionPane(connectorApi, kind)
+  return {
+    ok: fallback.ok,
+    kind,
+    prompted: false,
+    opened: fallback.opened
+  }
 }
 
 export async function copyTextToClipboard(text: string): Promise<boolean> {
