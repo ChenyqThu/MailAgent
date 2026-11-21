@@ -29,6 +29,11 @@ import {
   type ToolSet
 } from 'ai'
 
+import {
+  IDLE_COMPUTER_USE_ACTIVITY,
+  type ComputerUseActivityState,
+  type ComputerUseSurface
+} from '../../shared/computerUseOverlayContract'
 import { DomainError, type DomainPolicyVerdict, type MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard } from '../security/approval'
 import {
@@ -108,6 +113,8 @@ export interface ComputerUseToolDeps {
   forceStopBeforeSubmit?: boolean
   matterItemPolicy?: MatterItemComputerUsePolicy
   customAgentPolicy?: CustomAgentComputerUsePolicy
+  onActivity?: (state: ComputerUseActivityState) => void
+  registerAbort?: (runId: string, abort: () => void) => () => void
 }
 
 export interface ComputerUseExecutionBinding {
@@ -901,10 +908,44 @@ export function buildComputerUseTool(
 
         let scopeViolation: PreflightViolation | null = null
         let dockedPause: { pendingAction: string } | null = null
+        let userStopped = false
         const filledFields: Record<string, string> = {}
         let currentUrlOrApp = 'unknown'
         let finalScreenshotRef: string | undefined
         let stepCount = 0
+
+        const startedAt = Date.now()
+        const runId = toolCallId || `cu-${startedAt}-${Math.random().toString(36).slice(2, 8)}`
+        const childToolNames = Object.keys(childToolsRaw)
+        const hasDesktopTools = childToolNames.some((n) => n.startsWith(DESKTOP_USE_PREFIX))
+        const hasBrowserTools = childToolNames.some((n) => n.startsWith(BROWSER_USE_PREFIX))
+        let currentSurface: ComputerUseSurface =
+          targetHint === 'desktop'
+            ? 'desktop'
+            : targetHint === 'browser'
+              ? 'browser'
+              : hasDesktopTools && !hasBrowserTools
+                ? 'desktop'
+                : 'browser'
+        let currentActionLabel: string | null = 'starting'
+        const emitActivity = (overrides?: Partial<ComputerUseActivityState>): void => {
+          opts.onActivity?.({
+            active: true,
+            runId,
+            surface: currentSurface,
+            actionLabel: currentActionLabel,
+            currentTarget: currentUrlOrApp === 'unknown' ? null : currentUrlOrApp,
+            stepCount,
+            startedAt,
+            ...overrides
+          })
+        }
+        const unregisterAbort = opts.registerAbort?.(runId, () => {
+          if (userStopped) return
+          userStopped = true
+          childAbort.abort(new Error('Stopped by user'))
+        })
+        emitActivity()
 
         const wrappedChildTools: ToolSet = {}
         for (const [name, childTool] of Object.entries(childToolsRaw)) {
@@ -926,6 +967,25 @@ export function buildComputerUseTool(
                 ? { needsApproval: false }
                 : {}),
             execute: async (toolArgs, execOpts) => {
+              if (userStopped) {
+                throw new DomainError('E_STOPPED_BY_USER', 'Computer use stopped by user.')
+              }
+              currentSurface = name.startsWith(DESKTOP_USE_PREFIX) ? 'desktop' : 'browser'
+              currentActionLabel = name
+                .replace(DESKTOP_USE_PREFIX, '')
+                .replace(BROWSER_USE_PREFIX, '')
+              if (toolArgs && typeof toolArgs === 'object') {
+                const argsObj = toolArgs as Record<string, unknown>
+                for (const key of [...URL_ARG_KEYS, ...APP_ARG_KEYS]) {
+                  const val = argsObj[key]
+                  if (typeof val === 'string' && val.trim()) {
+                    currentUrlOrApp = val.trim()
+                    break
+                  }
+                }
+              }
+              emitActivity()
+
               if (boundedPolicyActive) {
                 const scopePrefix = matterAuthorized ? 'matter' : 'custom_agent'
                 if (name.startsWith(DESKTOP_USE_PREFIX) && (!effectiveAllowedApps || effectiveAllowedApps.length === 0)) {
@@ -1018,6 +1078,7 @@ export function buildComputerUseTool(
                   currentUrlOrApp = app
                 }
               }
+              emitActivity()
 
               return res
             }
@@ -1047,6 +1108,7 @@ export function buildComputerUseTool(
             stopWhen: stepCountIs(input.max_steps ?? 15),
             prepareStep: ({ messages, stepNumber }) => {
               stepCount = stepNumber + 1
+              emitActivity({ stepCount })
               return {
                 messages: pruneSlidingWindowScreenshots(messages, MAX_CHILD_VISUAL_STEPS)
               }
@@ -1057,7 +1119,7 @@ export function buildComputerUseTool(
               streamError = (chunk as { error?: unknown }).error ?? 'Child streamText failed'
             }
           }
-          if (streamError != null && !scopeViolation && !dockedPause) {
+          if (streamError != null && !scopeViolation && !dockedPause && !userStopped) {
             throw streamError instanceof Error ? streamError : new Error(String(streamError))
           }
           finalSummary = await Promise.resolve(childRun.text)
@@ -1066,16 +1128,34 @@ export function buildComputerUseTool(
             stepCount = completedSteps.length
           }
         } catch (err) {
-          if (!scopeViolation && !dockedPause) {
+          if (!scopeViolation && !dockedPause && !userStopped) {
             signal?.removeEventListener('abort', onParentAbort)
             throw err
           }
         } finally {
           signal?.removeEventListener('abort', onParentAbort)
+          unregisterAbort?.()
+          opts.onActivity?.(IDLE_COMPUTER_USE_ACTIVITY)
         }
 
-        if (signal?.aborted && !scopeViolation && !dockedPause) {
+        if (signal?.aborted && !scopeViolation && !dockedPause && !userStopped) {
           throw signal.reason instanceof Error ? signal.reason : new Error('Aborted')
+        }
+
+        if (userStopped) {
+          const payload = {
+            status: 'stopped_by_user' as const,
+            child_session_id: childSessionId,
+            filled_fields: filledFields,
+            current_url_or_app: currentUrlOrApp,
+            ...(finalScreenshotRef ? { final_screenshot_ref: finalScreenshotRef } : {}),
+            steps_executed: stepCount,
+            summary: 'User stopped computer use and took over control.'
+          }
+          if (childSessionId != null && opts.persistChildSummary) {
+            opts.persistChildSummary(childSessionId, payload.summary)
+          }
+          return payload
         }
 
         if (scopeViolation) {

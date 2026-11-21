@@ -41,16 +41,19 @@ const SCHEMA_VERSION = 1
  *  的新会话拿不到 session id，先用**递减负数**当临时 targetId（`nextTempChatId`），首发拿到
  *  真 id 后 `retargetTab` 换锚 —— 故 chat 是唯一 targetId 可能为负的种类，且负 id 标签不跨
  *  重启恢复（见 parseTab）。 */
-export type TabKind = 'email' | 'matter' | 'search' | 'chat'
+export type TabKind = 'email' | 'matter' | 'search' | 'chat' | 'browser'
 
-export const TAB_KINDS: readonly TabKind[] = ['email', 'matter', 'search', 'chat']
+export const TAB_KINDS: readonly TabKind[] = ['email', 'matter', 'search', 'chat', 'browser']
 
-/** 归属一级域的对象种类（= TabKind 减去无域的搜索标签）。 */
-export type DomainTabKind = Exclude<TabKind, 'search'>
+/** 归属一级域的对象种类（= TabKind 减去无域的搜索/浏览器单例标签）。 */
+export type DomainTabKind = Exclude<TabKind, 'search' | 'browser'>
 
 /** 搜索标签的固定 targetId（原型 `open('search', 0)` 同值）—— 单例判据就是现行的
  *  `kind + targetId` 去重，不另加特判。 */
 export const SEARCH_TARGET_ID = 0
+
+/** 内置浏览器单例标签的固定 targetId。 */
+export const BROWSER_TARGET_ID = 0
 
 /** 标签种类 → 一级域。
  *  🔴 与 registry 的 `NAV_OBJECT_DOMAINS` 是同一件事的两种写法（那边是域名，这边是
@@ -139,6 +142,9 @@ export function tabId(kind: TabKind, targetId: number): TabId {
 
 /** 搜索标签的稳定 id（单例 ⇒ 恒等于这一个）。 */
 export const SEARCH_TAB_ID: TabId = tabId('search', SEARCH_TARGET_ID)
+
+/** 内置浏览器标签的稳定 id（单例 ⇒ 恒等于这一个）。 */
+export const BROWSER_TAB_ID: TabId = tabId('browser', BROWSER_TARGET_ID)
 
 // ── 返回值契约 ──────────────────────────────────────────────────────────────
 
@@ -286,9 +292,9 @@ function parseTab(raw: unknown): TabDescriptor | null {
   if (!isTabKind(rec.kind)) return null
   const targetId = rec.targetId
   if (typeof targetId !== 'number' || !Number.isInteger(targetId)) return null
-  // 搜索标签是单例：targetId 只有 SEARCH_TARGET_ID 一个合法值，存档被手改出第二个
-  // 搜索标签也不放进来（会破坏「已存在则激活」的单例判据）。
+  // 搜索与浏览器标签是单例：targetId 只有固定值 0，存档被手改出第二个也不放进来。
   if (rec.kind === 'search' && targetId !== SEARCH_TARGET_ID) return null
+  if (rec.kind === 'browser' && targetId !== BROWSER_TARGET_ID) return null
   // 临时负 id 的 chat 标签 = 还没发过第一条的空会话，服务端没有它的行 —— 跨重启恢复出来
   // 只会是一个永远加载不出内容的死标签，直接丢弃。发过一条的（真 session id，恒正）照常恢复。
   if (rec.kind === 'chat' && targetId <= 0) return null
@@ -314,8 +320,8 @@ function parseTab(raw: unknown): TabDescriptor | null {
     targetId,
     title: typeof rec.title === 'string' ? rec.title : '',
     lastActiveAt,
-    // 搜索标签永不 locked（词表注释）—— 存档里被写进 true 也在这里放平。
-    locked: rec.locked === true && rec.kind !== 'search',
+    // 搜索/浏览器单例标签永不 locked —— 存档里被写进 true 也在这里放平。
+    locked: rec.locked === true && rec.kind !== 'search' && rec.kind !== 'browser',
     pinned: rec.kind === 'email' && rec.pinned === true,
     drawerOpen: rec.drawerOpen === true,
     scrollTop,
@@ -598,8 +604,8 @@ export const useTabWorkspace = create<TabWorkspaceState>((set, get) => {
     },
 
     retargetTab(kind, oldTargetId, newTargetId) {
-      // 搜索标签是单例（targetId 恒 SEARCH_TARGET_ID），换锚会破坏单例判据。
-      if (kind === 'search' || oldTargetId === newTargetId) return
+      // 搜索与浏览器标签是单例，换锚会破坏单例判据。
+      if (kind === 'search' || kind === 'browser' || oldTargetId === newTargetId) return
       const state = get()
       const oldId = tabId(kind, oldTargetId)
       const source = state.tabs.find((t) => t.id === oldId)
@@ -682,9 +688,11 @@ export const useTabWorkspace = create<TabWorkspaceState>((set, get) => {
       const state = get()
       const target = state.tabs.find((t) => t.id === id)
       if (target === undefined) return
-      // 搜索标签永不 locked（词表注释）——锁定写入丢弃，其余字段照常。
+      // 搜索与浏览器标签永不 locked —— 锁定写入丢弃，其余字段照常。
       const applied =
-        target.kind === 'search' && patch.locked === true ? { ...patch, locked: false } : patch
+        (target.kind === 'search' || target.kind === 'browser') && patch.locked === true
+          ? { ...patch, locked: false }
+          : patch
       commit({ tabs: state.tabs.map((t) => (t.id === id ? { ...t, ...applied } : t)) })
     },
 

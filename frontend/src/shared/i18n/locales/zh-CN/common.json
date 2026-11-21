@@ -7866,6 +7866,7 @@
     "browseHint": "默认复用浏览标签；已保留和正在编辑的标签不会被替换。",
     "untitled": "未命名",
     "searchTitle": "新标签页",
+    "browserTitle": "内置浏览器",
     "newTab": "新标签页（⌘T）",
     "strip": "工作区标签",
     "close": "关闭标签（⌘W）",
@@ -8660,5 +8661,38 @@
     "footer": {
       "ai24h": "24h AI 统计"
     }
+  },
+  "computerUseOverlay": {
+    "activeTitle": "MailAgent 正在操控电脑",
+    "stepLabel": "第 {step} 步",
+    "stopTakeover": "停止 / 接管",
+    "stopping": "正在停止…",
+    "desktopBadge": "桌面操控"
+  },
+  "browserPane": {
+    "title": "内置浏览器",
+    "toggleButton": "内置浏览器",
+    "popOutTab": "在独立标签页中打开",
+    "returnToSidebar": "收回对话右侧栏",
+    "closeSidebar": "收起内置浏览器",
+    "newTab": "新建标签页",
+    "closeTab": "关闭标签页",
+    "back": "后退",
+    "forward": "前进",
+    "reload": "刷新",
+    "urlPlaceholder": "输入网址或搜索地址后回车",
+    "openExternalChrome": "在独立 Chrome 窗口打开",
+    "stopKernel": "停止浏览器内核",
+    "connecting": "正在连接内置浏览器…",
+    "disconnected": "与内置浏览器的实时连接已断开",
+    "reconnect": "重新连接",
+    "notInstalledTitle": "内置浏览器尚未启用",
+    "notInstalledHint": "请先在 设置 → 连接器 中一键安装并启用 Browser Use。",
+    "modeUnsupportedTitle": "当前模式不支持内置实时画面",
+    "modeUnsupportedHint": "请切回「内置受管浏览器」模式后，即可在应用内直接查看与操作。",
+    "openConnectors": "前往连接器设置",
+    "agentControlling": "AI 正在操作此浏览器",
+    "stopTakeover": "停止 / 接管",
+    "untitledTab": "新标签页"
   }
 }

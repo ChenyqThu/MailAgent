@@ -49,7 +49,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 
-import { Pin } from 'lucide-react'
+import { Globe, Pin } from 'lucide-react'
 
 import { PlusIcon, SearchIcon, XIcon } from '@shared/components/icons'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
@@ -439,9 +439,11 @@ function ObjectTab({
   const title =
     tab.kind === 'search'
       ? t('tabs.searchTitle')
-      : tab.title === ''
-        ? t('tabs.untitled')
-        : tab.title
+      : tab.kind === 'browser'
+        ? tab.title || t('tabs.browserTitle')
+        : tab.title === ''
+          ? t('tabs.untitled')
+          : tab.title
   // 改动点（accent）与锁定点（琥珀）互斥，dirty 优先 —— dirty 必带 draft ⇒ 必 locked，
   // 两个点一起画只是噪音（dogfood 波3）。dirty 位直读快照原始字段，与关闭守卫同判据。
   const dirty =
@@ -477,7 +479,13 @@ function ObjectTab({
     >
       {/* kind icon = 所属域的脸（registry 单源，不为标签另造 glyph）；搜索标签没有域，
           用放大镜（与页面 slogo / ⌘K 钮同一枚）。 */}
-      {tab.kind === 'search' ? <SearchIcon /> : NAV_DOMAINS[TAB_KIND_DOMAIN[tab.kind]].icon()}
+      {tab.kind === 'search' ? (
+        <SearchIcon />
+      ) : tab.kind === 'browser' ? (
+        <Globe size={13} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
+      ) : (
+        NAV_DOMAINS[TAB_KIND_DOMAIN[tab.kind]].icon()
+      )}
       <span className="ttab-title">{title}</span>
       {tab.kind === 'email' ? (
         <span

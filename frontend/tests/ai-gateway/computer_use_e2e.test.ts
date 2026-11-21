@@ -876,4 +876,113 @@ describe('WS-5 Computer Use E2E (MockLanguageModelV3 + full prepareChatRun)', ()
       true
     )
   })
+
+  test('onActivity emits desktop live states and registerAbort returns stopped_by_user cleanly', async () => {
+    const guard = new ApprovalGuard()
+    const auditEntries: GatewayToolAuditEntry[] = []
+    const observedStates: Array<{ active: boolean; surface: string | null; stepCount: number }> = []
+    let registeredAbort: (() => void) | null = null
+
+    const domain = {
+      ...mockDomain(() => okEnvelope([])),
+      invokeConnectorTool: async () => {
+        // Trigger emergency user takeover mid-step
+        registeredAbort?.()
+        return {
+          connector_id: 'desktop_use',
+          tool_name: 'desktop_ax_snapshot',
+          content: 'Active App: Notes',
+          is_error: false,
+          truncated: false
+        }
+      }
+    } as unknown as MailAgentDomainClient
+
+    const manifest: ConnectorToolManifestEntry[] = [
+      entry('desktop_use', 'desktop_ax_snapshot', 'read', 'auto'),
+      entry('desktop_use', 'desktop_click', 'write', 'auto')
+    ]
+
+    let childCall = 0
+    const childModel = new MockLanguageModelV3({
+      doStream: async () => {
+        childCall += 1
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start' as const, warnings: [] },
+              {
+                type: 'tool-call' as const,
+                toolCallId: `child-${childCall}`,
+                toolName: 'mcp__desktop_use__desktop_ax_snapshot',
+                input: JSON.stringify({ app: 'Notes' })
+              },
+              {
+                type: 'finish' as const,
+                finishReason: { unified: 'tool-calls' as const, raw: undefined },
+                usage: USAGE
+              }
+            ]
+          })
+        }
+      }
+    })
+
+    const { buildComputerUseTool } = await import('../../src/ai-gateway/tools/computer_use')
+    const cuTool = buildComputerUseTool(domain, auditEntries as never, guard, {
+      contextMode: 'manual_chat',
+      approvalMode: 'auto-reversible',
+      model: childModel,
+      childTools: createConnectorTools(domain, auditEntries as never, guard, manifest, {
+        a2uiEnabled: false,
+        approvalMode: 'auto-reversible',
+        contextMode: 'manual_chat'
+      }),
+      evaluateAutoScopeGrant: async () => ({
+        decision: 'auto_allow',
+        rule_id: 1,
+        audit_status: 'auto_scope_grant',
+        granted_apps: ['Notes']
+      }),
+      onActivity: (s) => observedStates.push({ active: s.active, surface: s.surface, stepCount: s.stepCount }),
+      registerAbort: (_runId, abort) => {
+        registeredAbort = abort
+        return () => {
+          registeredAbort = null
+        }
+      }
+    })
+
+    const runInput = {
+      goal: 'Open Notes',
+      target_hint: 'desktop' as const,
+      allowed_apps: ['Notes'],
+      stop_before_submit: true
+    }
+    const needsApproval = cuTool.needsApproval as (
+      input: unknown,
+      opts: { toolCallId: string; messages: unknown[] }
+    ) => Promise<boolean>
+    await needsApproval(runInput, { toolCallId: 'tc-user-stop', messages: [] })
+    const execute = cuTool.execute as (
+      input: unknown,
+      opts: { toolCallId: string; messages: unknown[]; abortSignal?: AbortSignal }
+    ) => Promise<unknown>
+    const result = await execute(runInput, {
+      toolCallId: 'tc-user-stop',
+      messages: [],
+      abortSignal: new AbortController().signal
+    })
+
+    expect(result).toMatchObject({
+      status: 'stopped_by_user',
+      summary: 'User stopped computer use and took over control.'
+    })
+    expect(observedStates.some((s) => s.active && s.surface === 'desktop')).toBe(true)
+    expect(observedStates[observedStates.length - 1]).toEqual({
+      active: false,
+      surface: null,
+      stepCount: 0
+    })
+  })
 })

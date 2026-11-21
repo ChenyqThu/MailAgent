@@ -365,6 +365,28 @@ export interface ConnectorApi {
   chromeProfiles?(): Promise<{ profiles: ChromeProfileSummary[] }>
   importChromeCookies?(input: ChromeCookiesImportInput): Promise<ChromeCookiesImportResult>
   launchBrowserWindow?(input?: { url?: string }): Promise<ManagedBrowserWindowLaunchResult>
+  browserLiveStatus?(): Promise<ManagedBrowserLiveStatus>
+  stopBrowserLive?(): Promise<ManagedBrowserStopResult>
+}
+
+export interface ManagedBrowserTabInfo {
+  id: string
+  title: string
+  url: string
+}
+
+export interface ManagedBrowserLiveStatus {
+  installed: boolean
+  mode: string
+  headless: boolean
+  running: boolean
+  cdp_url: string | null
+  active_viewers: number
+  tabs: ManagedBrowserTabInfo[]
+}
+
+export interface ManagedBrowserStopResult {
+  stopped: boolean
 }
 
 export interface ManagedRuntimeOptionsInput {

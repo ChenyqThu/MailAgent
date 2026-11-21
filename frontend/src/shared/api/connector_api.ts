@@ -36,6 +36,8 @@ import type {
   CustomConnectorCreateInput,
   CustomConnectorDeleteResult,
   CustomConnectorUpdateInput,
+  ManagedBrowserLiveStatus,
+  ManagedBrowserStopResult,
   ManagedBrowserWindowLaunchResult,
   ManagedRuntimeOptionsInput,
   OpenSystemPermissionResult,
@@ -271,6 +273,14 @@ export function createConnectorApi(baseUrl: string): ConnectorApi {
         '/connector/browser_use/launch-window',
         input !== undefined ? { body: input } : undefined
       )
+    },
+
+    browserLiveStatus(): Promise<ManagedBrowserLiveStatus> {
+      return request<ManagedBrowserLiveStatus>(baseUrl, 'GET', '/connector/browser_use/live/status')
+    },
+
+    stopBrowserLive(): Promise<ManagedBrowserStopResult> {
+      return request<ManagedBrowserStopResult>(baseUrl, 'POST', '/connector/browser_use/live/stop')
     }
   }
 }

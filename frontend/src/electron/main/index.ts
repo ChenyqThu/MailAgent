@@ -54,6 +54,7 @@ import {
   updateSettingsPatch
 } from './handlers/settings'
 import { registerTray } from './tray'
+import { registerComputerUseOverlay } from './computer_use_overlay'
 import { registerNotionAgentHandlers } from './handlers/notion_agent'
 // task 08-20 — Notion OAuth 授权内核 (loopback 回调 + exchange 代理换 token +
 // data source 库发现 + NOTION_OAUTH_ENV_KEYS 原子写)。token 明文永不过 renderer IPC。
@@ -401,6 +402,8 @@ function createDetachedWindow(kind: 'email' | 'report', id: string): void {
   }
 }
 
+let cuOverlayDispose: (() => void) | null = null
+
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('ink.chenge.mailagent')
 
@@ -670,6 +673,17 @@ app.whenReady().then(async () => {
     createWindow()
   }
 
+  const rendererUrl =
+    is.dev && process.env['ELECTRON_RENDERER_URL']
+      ? process.env['ELECTRON_RENDERER_URL']
+      : undefined
+  const cuOverlay = registerComputerUseOverlay({
+    preloadPath: join(mainDirname, '../preload/index.mjs'),
+    rendererHtmlPath: join(mainDirname, '../renderer/index.html'),
+    rendererUrl
+  })
+  cuOverlayDispose = cuOverlay.dispose
+
   // S3 — embedded AI SDK Gateway 无条件启动 (唯一 chat 引擎; cutover flag 已 GA 移除)。
   // Electron main 内嵌一个 loopback Node HTTP server (/health + /api/ai/config +
   // /api/ai/chat UIMessage 流), dev/打包均可启, 与 serve-api / DavMail 解耦。端口经
@@ -679,16 +693,12 @@ app.whenReady().then(async () => {
   void (async () => {
     try {
       const { startEmbeddedAiGateway } = await import('./ai_gateway_lifecycle')
-      await startEmbeddedAiGateway()
+      await startEmbeddedAiGateway({ computerUseOverlay: cuOverlay })
     } catch (err) {
       console.error('[ai-gateway] 启动失败 (不影响主流程)', err)
     }
   })()
 
-  const rendererUrl =
-    is.dev && process.env['ELECTRON_RENDERER_URL']
-      ? process.env['ELECTRON_RENDERER_URL']
-      : undefined
   registerTray({
     ensureMainWindow,
     getSettings: () => readSettings(),
@@ -736,6 +746,7 @@ app.on('window-all-closed', () => {
 // teardown (`registerCliLifecycle`) isn't the only path cleaning up.
 app.on('before-quit', () => {
   abortAllTranslations()
+  cuOverlayDispose?.()
   // V2.1 阶段 3c-4 cutover：chat dispatcher 的 _inflight 现在在 renderer 进程（ChatRuntime），
   // 随窗口生命周期销毁，main 不再持 → 无 abortAllChatSessions()。notion-agent 子进程串行闸
   // （drainNotionAgentGate）随 main execa backend 一并删除（serve-api asyncio spawn 接管）。

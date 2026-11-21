@@ -12,8 +12,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, Plus } from 'lucide-react'
+import { ChevronLeft, Globe, Plus } from 'lucide-react'
 
 import type { ChatSession, ChatSessionListItem } from '@shared/api/types'
 import type { ComposerDraftBridgeProps } from '@shared/assistant/components/ComposerDraftBridge'
@@ -32,7 +33,10 @@ import {
 } from '@shared/state/active-chat'
 import { useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { useDomainCollapsed } from '@shared/state/nav-shell'
-import { closeObjectTab, setObjectTabTitle } from '@shared/state/tab-workspace-bridge'
+import { useManagedBrowserUi } from '@shared/state/managed-browser-ui'
+import { selectActiveTab, useTabWorkspace } from '@shared/state/tab-workspace'
+import { closeObjectTab, openBrowserTab, setObjectTabTitle } from '@shared/state/tab-workspace-bridge'
+import { ManagedBrowserPane } from '@shared/components/browser/ManagedBrowserPane'
 import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
 
 import { AgentThreadList } from './AgentThreadList'
@@ -44,6 +48,7 @@ const ALL_SESSIONS_KEY = [...qk.chat.allSessions(), 'interactive'] as const
 
 export function AgentViewLayout(): React.ReactElement {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const mailApi = useMailApi()
   const qc = useQueryClient()
   const narrow = useNarrow()
@@ -56,6 +61,50 @@ export function AgentViewLayout(): React.ReactElement {
   const [mobileDetail, setMobileDetail] = useState(false)
   const activeChatTargetId = useActiveChat((s) => s.activeChatTargetId)
   const mountKey = useActiveChat((s) => s.mountKey)
+
+  const activeTabKind = useTabWorkspace((s) => selectActiveTab(s)?.kind ?? null)
+  const sidebarOpen = useManagedBrowserUi((s) => s.sidebarOpen)
+  const sidebarWidth = useManagedBrowserUi((s) => s.sidebarWidth)
+  const toggleBrowserSidebar = useManagedBrowserUi((s) => s.toggleSidebar)
+  const closeBrowserSidebar = useManagedBrowserUi((s) => s.closeSidebar)
+  const setBrowserSidebarWidth = useManagedBrowserUi((s) => s.setSidebarWidth)
+  const cuActivity = useManagedBrowserUi((s) => s.activity)
+  const effectiveSidebarOpen = sidebarOpen && activeTabKind !== 'browser'
+  const browserActive = cuActivity.active && cuActivity.surface === 'browser'
+
+  const dragCleanupRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => dragCleanupRef.current?.(), [])
+
+  const startResizeDrag = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>): void => {
+      e.preventDefault()
+      dragCleanupRef.current?.()
+      const onMove = (moveEvt: PointerEvent): void => {
+        setBrowserSidebarWidth(window.innerWidth - moveEvt.clientX)
+      }
+      const onUp = (): void => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        dragCleanupRef.current = null
+      }
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+      dragCleanupRef.current = onUp
+    },
+    [setBrowserSidebarWidth]
+  )
+
+  const handleOpenConnectors = useCallback((): void => {
+    void navigate({
+      to: '/settings',
+      search: { tab: 'connectors', item: 'connector:browser_use' }
+    })
+  }, [navigate])
+
+  const handlePopOutBrowserTab = useCallback((): void => {
+    closeBrowserSidebar()
+    openBrowserTab()
+  }, [closeBrowserSidebar])
 
   // Phase 9 — UNIFIED history (email + general) for the left list, from listAllSessions (same query key
   // as ChatsTab → shared cache). Each row carries its own title (email subject / first user message).
@@ -187,6 +236,18 @@ export function AgentViewLayout(): React.ReactElement {
             <ChevronLeft size={16} strokeWidth={2} />
           </button>
           <span className="truncate text-body font-medium text-ink-fg">{t('nav.agentView')}</span>
+          <button
+            type="button"
+            onClick={() => openBrowserTab()}
+            aria-label={t('browserPane.toggleButton')}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-ink-border-soft bg-ink-2 px-2.5 py-1 text-aux text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+          >
+            {browserActive && (
+              <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-coral/100" />
+            )}
+            <Globe size={14} strokeWidth={1.75} className="shrink-0" />
+            <span>{t('browserPane.toggleButton')}</span>
+          </button>
         </div>
         <div className="flex min-h-0 flex-1 flex-col">{conversation}</div>
       </div>
@@ -198,7 +259,49 @@ export function AgentViewLayout(): React.ReactElement {
   return (
     <div className="flex h-full min-h-0">
       {list}
-      <div className="flex min-w-0 flex-1 flex-col">{conversation}</div>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex h-9 shrink-0 items-center justify-end gap-2 border-b border-ink-border-soft px-3">
+          <button
+            type="button"
+            aria-expanded={effectiveSidebarOpen}
+            onClick={toggleBrowserSidebar}
+            className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-aux transition-colors duration-fast ${
+              effectiveSidebarOpen
+                ? 'border-coral/40 bg-coral/10 text-ink-fg'
+                : 'border-ink-border-soft bg-ink-2 text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
+            }`}
+          >
+            {browserActive && (
+              <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-coral/100" />
+            )}
+            <Globe size={14} strokeWidth={1.75} className="shrink-0 text-coral" />
+            <span>{t('browserPane.toggleButton')}</span>
+          </button>
+        </div>
+        <div className="flex min-h-0 flex-1 flex-col">{conversation}</div>
+      </div>
+      {effectiveSidebarOpen && (
+        <>
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t('browserPane.title')}
+            onPointerDown={startResizeDrag}
+            className="w-1 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-coral/40"
+          />
+          <aside
+            style={{ width: sidebarWidth }}
+            className="flex min-h-0 shrink-0 flex-col border-l border-ink-border bg-ink-1"
+          >
+            <ManagedBrowserPane
+              mode="sidebar"
+              onClose={closeBrowserSidebar}
+              onPopOutTab={handlePopOutBrowserTab}
+              onOpenConnectors={handleOpenConnectors}
+            />
+          </aside>
+        </>
+      )}
     </div>
   )
 }

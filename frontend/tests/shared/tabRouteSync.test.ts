@@ -12,9 +12,9 @@ vi.stubGlobal('localStorage', {
   clear: () => undefined
 })
 
-const { MAIN_SLOT, MAIN_PAGES, SEARCH_TARGET_ID, useTabWorkspace } =
+const { MAIN_SLOT, MAIN_PAGES, SEARCH_TARGET_ID, BROWSER_TARGET_ID, useTabWorkspace } =
   await import('../../src/shared/state/tab-workspace')
-const { SEARCH_SLOT, activeSlotDomain, needsRouteResync, reconcileRouteToTabs } =
+const { SEARCH_SLOT, BROWSER_SLOT, activeSlotDomain, needsRouteResync, reconcileRouteToTabs } =
   await import('../../src/shared/navigation/useTabRouteSync')
 // 「域 → 落点」的记忆与解析在自己的叶子模块（Sidebar 的导轨切域点击也读它）。
 const { __resetDomainLocations, domainDefaultEntry, navigateToDomain, recordRouteLocation } =
@@ -246,5 +246,14 @@ describe('每域最近落点：记录与回放', () => {
     const navigate = vi.fn()
     navigateToDomain(navigate as never, 'mail')
     expect(lastNavigate(navigate)).toEqual({ to: '/', search: { view: 'inbox' } })
+  })
+
+  test('内置浏览器单例映射到 BROWSER_SLOT，支持重新激活重同步，且不进域落点记忆', () => {
+    useTabWorkspace.getState().openTab('browser', BROWSER_TARGET_ID, '内置浏览器')
+    expect(activeSlotDomain(useTabWorkspace.getState())).toBe(BROWSER_SLOT)
+    const prev = useTabWorkspace.getState()
+    useTabWorkspace.getState().openTab('browser', BROWSER_TARGET_ID, '内置浏览器')
+    expect(needsRouteResync(useTabWorkspace.getState(), prev)).toBe(true)
+    expect(recordRouteLocation('/browser', {})).toBeNull()
   })
 })

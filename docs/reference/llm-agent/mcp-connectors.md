@@ -1087,3 +1087,18 @@ owner 明确要求（LobeHub 截图里是展开的，我们要更收敛的默认
 - **Matters 行动项（Belt 3）**：仅当 `caller` 携带 `context_mode="matter_followup"`、`child_tool="computer_use_run"`、严格正整数 `job_id` + `dispatch_id` 且目标为 `browser_use` / `desktop_use` 时，`service.is_matter_computer_use_child_authorized` 在 `sync_store_db_path` 中联表核验 `matter_item_dispatch.state == 'running'` ∧ `exec_profile == 'propose_only'` ∧ `async_jobs.status == 'running'` ∧ `params_json.computer_use_draft` 非空非通配且授权该 connector，命中才放行 `"write"` 天花板并豁免 `deny_ask_mode`（`deny_destructive=True` 依然强制保留）；任何伪造、停机 job 或 `autonomous` 一律 403 `E_CONNECTOR_GRANT_DENIED`（`tests/connectors/test_matter_computer_use_gate.py`）。
 - **Custom Agent 有界自动化（`grant_computer_use`，Wave 6）**：Custom Agent 仅通过显式 `tool_policy.grant_computer_use`（要求非空具体 `allowed_domains` 和/或 `allowed_apps`，禁止 `*`/`all`/`any` 通配符；`grant_exec` 单独永不解锁 `computer_use_run`）授权在 `email_filter` / `calendar_before_start` / `cron` / `schedule` 后台运行中执行 `computer_use_run`；支持 `stop_before_submit`（强制停靠并保持 `deny_destructive=True`）与 `allow_submit`（允许点击已授权范围内的最终提交/审批按钮），服务端 `resolve_caller_ceiling` 复核 `report_agent.tool_policy_json` 后按域名/应用权限放行对应受管连接器。
 - **主对话授权简化（Wave 6）**：`tool_prefs.py` 允许 owner 将 `computer_use_run` 配为 `auto`（带 `danger_auto` 确认，出厂默认仍为 `ask`）；`policy.py` 新增 `"computer_use"` 能力面与 `ComputerUseMatcher`（要求 `stop_before_submit=True` 与非空具体范围），`ComputerUseApprovalCard.tsx` 支持「记住此域名/应用范围，下次免确认自动执行」。
+
+### 14.6 Desktop Use 全屏透明状态浮窗与内置受管浏览器交互画面（Wave 7）
+
+- **Desktop Use 全屏屏幕状态提示与紧急停止**：
+  - `frontend/src/shared/computerUseOverlayContract.ts` 定义 `ComputerUseActivityState` 与 `COMPUTER_USE_IPC`（`getState` / `stopActive` / `activityChanged` / `overlaySetInteractive`）。
+  - `computer_use.ts` 注入 `onActivity` 与 `registerAbort`，在 `prepareStep` 及子工具调用前后汇报当前 `surface`（`desktop` / `browser`）、动作名与目标；用户触发 `stopActive` 时立即中止 `childAbort` 并干净返回 `{ status: 'stopped_by_user', ... }`。
+  - `frontend/src/electron/main/computer_use_overlay.ts` 仅在 `active && surface === 'desktop'` 时展示置顶（`screen-saver`）、跨桌面且全屏鼠标穿透的透明 `BrowserWindow`（`?cuOverlay=1`）；纯 `browser_use` 任务绝不触发全局屏幕遮罩。
+  - `frontend/src/electron/renderer/computer-use/ComputerUseOverlayApp.tsx` 与 `index.css` `[data-cu-overlay='1']` 规则禁用 `body::before` 遮罩以保持完全透明，仅在顶部居中悬浮药丸上动态切换 `setIgnoreMouseEvents` 提供实时步骤显示与「停止 / 接管」按钮。
+- **内置受管浏览器 CDP 守护与 WebSocket 双向画面流**：
+  - `src/connectors/managed_browser.py`（`ManagedBrowserManager` / `managed_browser` 单例）按需拉起共享持久 `<runtime_dir>/profile` 的 `--headless=new` Chromium（空闲 600s 且零 viewer 自动退出）；`client.py` 对 `isolated_profile` 改写为 `--cdp-endpoint=<url>` 接入同一实例；`chrome_import.py` 在 Cookie 注入热刷（`inject_cookies_live_sync`）与打开外部 Chrome 窗口前先 `stop_sync()` 释放 `SingletonLock`。
+  - `src/api/auth.py::verify_websocket_access` 与 `src/api/routers/connector.py` 暴露 `GET /api/connector/browser_use/live/status`、`POST /api/connector/browser_use/live/stop` 及 `WS /api/connector/browser_use/live`；`chat_local_bridge.ts` 对 `ws://127.0.0.1:${port}/*` 注入 `X-MailAgent-Local-Token`，`index.html` CSP `connect-src` 显式放行 `ws://127.0.0.1:*`。
+  - 双向桥通过 `Page.screencastFrame` 推送 JPEG 画面与标签页状态（支持 Playwright 新开标签自动跟随），并转发等比映射后的键鼠事件及中文输入法 `Input.insertText`。
+- **对话右侧可折叠分栏 + `/browser` 独立单例标签页**：
+  - `frontend/src/shared/components/browser/ManagedBrowserPane.tsx` 提供多标签页切换/新建/关闭、地址导航/前进/后退/刷新、Agent 操控状态条与「停止 / 接管」、外部 Chrome 窗口切换、停止浏览器内核，以及 `<canvas>` 实时交互画布（`resolveBrowserLiveWsUrl` 单源于 `@shared/lib/apiBaseUrl`）。
+  - `AgentViewLayout.tsx` 与 `managed-browser-ui.ts` / `useComputerUseActivityBridge.ts` 接入对话右侧可拖拽分栏（`browser` 任务启动时自动展开，已手动收起或已在 `/browser` 标签页时不重复展开）；`tab-workspace.ts` / `useTabRouteSync.ts` / `TabStrip.tsx` / `BrowserTabPage.tsx` / `router-instance.tsx` 注册 `/browser`（`BROWSER_TARGET_ID = 0`）全局单例标签页并支持与右侧栏一键互转。

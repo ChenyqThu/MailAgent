@@ -74,6 +74,7 @@ import { NAV_ENTRIES, navEntry, navigateToNavEntry, NAV_DEEPLINK_PATH } from './
 import { resolveStaticNavGate } from './navigation/useNavGates'
 // 标签工作区 ↔ 路由双向同步（08-27 P2 Lane W）：boot 恢复 / 标签激活跟路由 / rail 切域收敛标签态。
 import { useTabRouteSync } from './navigation/useTabRouteSync'
+import { useComputerUseActivityBridge } from './hooks/useComputerUseActivityBridge'
 import type { DeeplinkTarget } from './lib/deeplink_target'
 import { clampSettingsTab, legacyAnchorForTab, type SettingsTab } from './lib/settingsTabs'
 
@@ -327,6 +328,7 @@ function RootLayout(): React.ReactElement {
   useTrayNavigation()
   useNotificationClickNavigation()
   useTabRouteSync()
+  useComputerUseActivityBridge()
   return (
     <>
       {/* 外壳单例 (§②, task 08-20-perf-shell-prefetch-sidebar): TitleBar/Sidebar
@@ -469,6 +471,15 @@ const searchRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/search',
   component: lazyRouteComponent(() => import('./components/search/SearchTabPage'), 'SearchTabPage')
+})
+
+const browserRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/browser',
+  component: lazyRouteComponent(
+    () => import('./components/browser/BrowserTabPage'),
+    'BrowserTabPage'
+  )
 })
 
 // /today — L4 批次 2「例外面」：跨 agent / 跨事项的待处理态聚合。无 search 参数（页面
@@ -635,6 +646,7 @@ export const router = createRouter({
     reportsRoute.addChildren([reportDetailRoute]),
     mattersRoute,
     searchRoute,
+    browserRoute,
     contactsRoute,
     libraryRoute,
     connectorsRoute,

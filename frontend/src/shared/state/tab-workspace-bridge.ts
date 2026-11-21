@@ -25,6 +25,7 @@ import { useComposeStore } from './compose'
 import { useDetachedMode } from './detached-mode'
 import { usePopoutMode } from './popout-mode'
 import {
+  BROWSER_TARGET_ID,
   SEARCH_TARGET_ID,
   selectActiveTab,
   tabId,
@@ -99,6 +100,16 @@ export function openSearchTab(): void {
   if (inert()) return
   announceTabResult(
     useTabWorkspace.getState().openTab('search', SEARCH_TARGET_ID, tr('tabs.searchTitle'))
+  )
+}
+
+/** 打开内置受管浏览器单例标签（已开着则激活）。 */
+export function openBrowserTab(title?: string): void {
+  if (inert()) return
+  announceTabResult(
+    useTabWorkspace
+      .getState()
+      .openTab('browser', BROWSER_TARGET_ID, title || tr('tabs.browserTitle'))
   )
 }
 

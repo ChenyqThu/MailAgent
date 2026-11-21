@@ -986,6 +986,14 @@ body::before {
   background-color: transparent;
   background-image: var(--wp-fallback);
 }
+/* Desktop Computer Use 全屏状态浮窗: 完全透明, 不叠玻璃 tint 或实底。 */
+:root[data-cu-overlay='1'],
+:root[data-cu-overlay='1'] body {
+  background: transparent !important;
+}
+:root[data-cu-overlay='1'] body::before {
+  display: none !important;
+}
 .glass {
   background-color: var(--tier-side);
 }

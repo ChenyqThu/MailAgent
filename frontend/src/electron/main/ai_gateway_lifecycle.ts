@@ -26,15 +26,8 @@ import { join } from 'path'
 import { startAiGatewayServer, type AiGatewayHandle } from '../../ai-gateway/server'
 import { startMainModelCatalogUpdates } from './model_catalog_updates'
 import { costUsdFor } from '../../ai-gateway/modelCost'
-import {
-  resolveAiGatewayPort,
-  type AiGatewayConfig,
-  type GatewayUsageEvent,
-  type GroupRunLogMirror,
-  type GroupSessionMember,
-  type LabsFlags,
-  type PersistTurnInput
-} from '../../ai-gateway/config'
+import { resolveAiGatewayPort, type AiGatewayConfig, type GatewayUsageEvent, type GroupRunLogMirror, type GroupSessionMember, type LabsFlags, type PersistTurnInput } from '../../ai-gateway/config'
+import type { ComputerUseActivityState } from '../../shared/computerUseOverlayContract'
 import { MailAgentDomainClient } from '../../ai-gateway/python/domainClient'
 import { buildGatewayTools } from '../../ai-gateway/tools'
 // Stage 1 PR2 — MCP connector dynamic tools (MAILAGENT_MCP_CONNECTORS, default off): the manifest
@@ -694,7 +687,16 @@ async function getSystemPromptConfig(
  * port, /health-polls, and registers a before-quit close. Idempotent: a second
  * call while running is a no-op. Returns the listening port (or null on failure).
  */
-export async function startEmbeddedAiGateway(): Promise<number | null> {
+export interface StartEmbeddedAiGatewayOptions {
+  computerUseOverlay?: {
+    reportActivity: (state: ComputerUseActivityState) => void
+    registerAbort: (runId: string, abort: () => void) => () => void
+  }
+}
+
+export async function startEmbeddedAiGateway(
+  opts?: StartEmbeddedAiGatewayOptions
+): Promise<number | null> {
   if (_handle) return _handle.port
   registerGroupForegroundHandler()
   const apiKey = await getLlmApiKey()
@@ -1785,7 +1787,13 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
                     } catch (err) {
                       console.warn('[ai-gateway] computer_use child summary persist failed', err)
                     }
-                  }
+                  },
+                  ...(opts?.computerUseOverlay
+                    ? {
+                        onActivity: opts.computerUseOverlay.reportActivity,
+                        registerAbort: opts.computerUseOverlay.registerAbort
+                      }
+                    : {})
                 }
               : undefined
         },

@@ -36,3 +36,18 @@ export function resolveApiBaseUrl(): string {
   }
   return `http://127.0.0.1:${port}/api`
 }
+
+export function resolveBrowserLiveWsUrl(): string {
+  const base = resolveApiBaseUrl().trim()
+  let absHttp: string
+  if (base.startsWith('http://') || base.startsWith('https://')) {
+    absHttp = base
+  } else if (typeof window !== 'undefined' && window.location?.origin) {
+    absHttp = `${window.location.origin}${base.startsWith('/') ? '' : '/'}${base}`
+  } else {
+    absHttp = 'http://127.0.0.1:8200/api'
+  }
+  const normalized = absHttp.replace(/\/+$/, '')
+  const wsBase = normalized.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:')
+  return `${wsBase}/connector/browser_use/live`
+}

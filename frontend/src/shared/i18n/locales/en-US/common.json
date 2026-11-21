@@ -7866,6 +7866,7 @@
     "browseHint": "By default, reuse a browsing tab. Pinned tabs and editors are protected.",
     "untitled": "Untitled",
     "searchTitle": "New Tab",
+    "browserTitle": "Built-in Browser",
     "newTab": "New tab (⌘T)",
     "strip": "Workspace tabs",
     "close": "Close tab (⌘W)",
@@ -8660,5 +8661,38 @@
     "footer": {
       "ai24h": "24h AI usage"
     }
+  },
+  "computerUseOverlay": {
+    "activeTitle": "MailAgent is controlling your Mac",
+    "stepLabel": "Step {step}",
+    "stopTakeover": "Stop / Take over",
+    "stopping": "Stopping…",
+    "desktopBadge": "Desktop Use"
+  },
+  "browserPane": {
+    "title": "Built-in Browser",
+    "toggleButton": "Browser",
+    "popOutTab": "Open in standalone tab",
+    "returnToSidebar": "Return to chat sidebar",
+    "closeSidebar": "Collapse browser sidebar",
+    "newTab": "New tab",
+    "closeTab": "Close tab",
+    "back": "Back",
+    "forward": "Forward",
+    "reload": "Reload",
+    "urlPlaceholder": "Enter URL and press Enter",
+    "openExternalChrome": "Open in visible Chrome window",
+    "stopKernel": "Stop browser kernel",
+    "connecting": "Connecting to built-in browser…",
+    "disconnected": "Disconnected from built-in browser",
+    "reconnect": "Reconnect",
+    "notInstalledTitle": "Built-in browser not installed",
+    "notInstalledHint": "Open Settings → Connectors to install and enable Browser Use.",
+    "modeUnsupportedTitle": "Live preview unavailable in current mode",
+    "modeUnsupportedHint": "Switch Browser Use to the built-in managed browser mode to view and interact inline.",
+    "openConnectors": "Open Connector Settings",
+    "agentControlling": "AI is operating this browser",
+    "stopTakeover": "Stop / Take over",
+    "untitledTab": "New tab"
   }
 }

@@ -25,16 +25,26 @@ bootDetachedModeFromQuery()
 captureAiGatewayPortAtBoot()
 
 const TrayPopoverApp = lazy(() => import('./tray/TrayPopoverApp'))
+const ComputerUseOverlayApp = lazy(() => import('./computer-use/ComputerUseOverlayApp'))
 
 // 打包 onboarding: 主进程对 new/config-incomplete 用户以 ?onboarding=1 开窗 → 渲染配置
 // 向导而非主 App。向导完成后主进程 reload 窗口去掉该 query → 落回 App。隔离, 不碰主路径。
 const searchParams = new URLSearchParams(window.location.search)
 const isOnboarding = searchParams.has('onboarding')
 const isTrayPopover = searchParams.has('tray')
+const isCuOverlay = searchParams.has('cuOverlay')
+
+if (isCuOverlay) {
+  document.documentElement.setAttribute('data-cu-overlay', '1')
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {isTrayPopover ? (
+    {isCuOverlay ? (
+      <Suspense fallback={null}>
+        <ComputerUseOverlayApp />
+      </Suspense>
+    ) : isTrayPopover ? (
       <Suspense fallback={null}>
         <TrayPopoverApp />
       </Suspense>

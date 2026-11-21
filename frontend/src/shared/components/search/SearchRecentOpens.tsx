@@ -29,7 +29,7 @@ const KIND_META_KEY = {
 } as const satisfies Record<DomainTabKind, string>
 
 interface RecentEntry {
-  readonly kind: Exclude<TabKind, 'search'>
+  readonly kind: DomainTabKind
   readonly targetId: number
   readonly title: string
 }
@@ -43,7 +43,7 @@ export function SearchRecentOpens(): React.ReactElement | null {
     const out: RecentEntry[] = []
     const seen = new Set<string>()
     const push = (kind: TabKind, targetId: number, title: string): void => {
-      if (kind === 'search' || title === '') return
+      if (kind === 'search' || kind === 'browser' || title === '') return
       const key = `${kind}:${targetId}`
       if (seen.has(key)) return
       seen.add(key)

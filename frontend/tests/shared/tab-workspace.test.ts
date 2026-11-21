@@ -42,6 +42,8 @@ const {
   MAX_TABS_MIN,
   SEARCH_TAB_ID,
   SEARCH_TARGET_ID,
+  BROWSER_TAB_ID,
+  BROWSER_TARGET_ID,
   TAB_KIND_DOMAIN,
   selectActiveTab,
   selectActiveTargetId,
@@ -956,5 +958,30 @@ describe('reorderTab —— 拖拽排序', () => {
       'email:1',
       'email:2'
     ])
+  })
+
+  test('browser 单例标签永不 locked，retarget 与非 0 targetId 存档均受保护', async () => {
+    const r1 = s().openTab('browser', BROWSER_TARGET_ID, '内置浏览器')
+    expect(r1.outcome).toBe('opened')
+    const r2 = s().openTab('browser', BROWSER_TARGET_ID, '内置浏览器')
+    expect(r2.outcome).toBe('activated')
+    s().updateTab(BROWSER_TAB_ID, { locked: true, title: 'OA Portal' })
+    expect(s().tabs[0].locked).toBe(false)
+    expect(s().tabs[0].title).toBe('OA Portal')
+    s().retargetTab('browser', 0, 99)
+    expect(s().tabs.map((t) => t.id)).toEqual([BROWSER_TAB_ID])
+
+    const tampered = JSON.stringify({
+      v: 1,
+      tabs: [
+        { id: 'browser:0', kind: 'browser', targetId: 0, title: 'OK', locked: true },
+        { id: 'browser:2', kind: 'browser', targetId: 2, title: 'Bad' }
+      ],
+      active: 'browser:0',
+      mainPage: DEFAULT_MAIN_PAGE
+    })
+    const fresh = await reboot(tampered)
+    expect(fresh.useTabWorkspace.getState().tabs).toHaveLength(1)
+    expect(fresh.useTabWorkspace.getState().tabs[0].locked).toBe(false)
   })
 })

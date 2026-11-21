@@ -39,7 +39,7 @@ import {
   type TabKind,
   type TabWorkspaceState
 } from '@shared/state/tab-workspace'
-import { openSearchTab } from '@shared/state/tab-workspace-bridge'
+import { openBrowserTab, openSearchTab } from '@shared/state/tab-workspace-bridge'
 import { navigateToDomain, recordRouteLocation } from './domain-location'
 import { NAV_ENTRIES, navActiveDomain, type NavDomain } from './registry'
 
@@ -47,40 +47,38 @@ import { NAV_ENTRIES, navActiveDomain, type NavDomain } from './registry'
  *  白名单），路由注册在 router-instance 的 searchRoute —— 那边的 path 与这里必须同值，
  *  各自都是「自己那侧的必要字面量」（TanStack 的 typed `to` 也吃不了跨文件常量收敛）。 */
 const SEARCH_ROUTE_PATH = '/search'
+const BROWSER_ROUTE_PATH = '/browser'
 
 /** `activeSlotDomain` 的搜索槽哨兵 —— 搜索标签不归任何域，路由目标是 '/search' 专属面。 */
 export const SEARCH_SLOT = 'search' as const
 
-/** 激活槽的路由目标：某个域，或搜索面。 */
-export type SlotRouteTarget = NavDomain | typeof SEARCH_SLOT
+/** `activeSlotDomain` 的浏览器槽哨兵 —— 内置浏览器单例标签路由目标是 '/browser'。 */
+export const BROWSER_SLOT = 'browser' as const
 
-/** 激活槽归属的路由目标：对象标签按 kind 查 TAB_KIND_DOMAIN，搜索标签 = SEARCH_SLOT
- *  （无域），主标签 = mainPage。 */
+/** 激活槽的路由目标：某个域，或搜索/浏览器单例面。 */
+export type SlotRouteTarget = NavDomain | typeof SEARCH_SLOT | typeof BROWSER_SLOT
+
+/** 激活槽归属的路由目标：对象标签按 kind 查 TAB_KIND_DOMAIN，搜索/浏览器单例走各自专属面，
+ *  主标签 = mainPage。 */
 export function activeSlotDomain(
   state: Pick<TabWorkspaceState, 'tabs' | 'active' | 'mainPage'>
 ): SlotRouteTarget {
   const tab = selectActiveTab(state)
   if (tab === null) return state.mainPage
-  return tab.kind === 'search' ? SEARCH_SLOT : TAB_KIND_DOMAIN[tab.kind]
+  if (tab.kind === 'search') return SEARCH_SLOT
+  if (tab.kind === 'browser') return BROWSER_SLOT
+  return TAB_KIND_DOMAIN[tab.kind]
 }
 
-/** 订阅腿要不要校一次路由。主判据是「激活槽变了」；另有一支：**搜索单例被重新激活**
- *  （`active` 没变、`lastActiveAt` 变了）。
- *
- *  🔴 少了这一支，⌘T /「+」会有一种什么也不发生的局面：搜索标签已经激活、但路由已经
- *  不在 '/search' 了（rail 切到某个对象域、而那个域一个标签都没有时，激活槽按既有语义
- *  留在原处），此时再按 ⌘T 走 openTab 的 `activated` 支 —— 不改 `active`，只看 active
- *  变化就不会导航。⌘T 是「把我送到新标签页」的导航命令，必须恒到达。
- *
- *  对象标签**不**同样处理：再点一次同一封邮件不带导航意图，且它有列表冷启动自动重选
- *  这类非用户直接触发的重复 openTab，放开会变成从别的域被拽走。 */
+/** 订阅腿要不要校一次路由。主判据是「激活槽变了」；另有一支：**搜索/浏览器单例被重新激活**
+ *  （`active` 没变、`lastActiveAt` 变了）。 */
 export function needsRouteResync(
   state: Pick<TabWorkspaceState, 'tabs' | 'active' | 'mainPage'>,
   prev: Pick<TabWorkspaceState, 'tabs' | 'active' | 'mainPage'>
 ): boolean {
   if (state.active !== prev.active || state.mainPage !== prev.mainPage) return true
   const now = selectActiveTab(state)
-  if (now === null || now.kind !== 'search') return false
+  if (now === null || (now.kind !== 'search' && now.kind !== 'browser')) return false
   return now.lastActiveAt !== selectActiveTab(prev)?.lastActiveAt
 }
 
@@ -136,8 +134,9 @@ export function useTabRouteSync(): void {
   // lazy useState 只在首渲染求值一次（render 期写 ref 会撞 react-hooks/refs）。
   const [bootTarget] = useState<SlotRouteTarget | null>(() => {
     const target = activeSlotDomain(useTabWorkspace.getState())
-    // 恢复的激活槽是搜索标签：路由恒从 '/' 起步（≠ '/search'），恒需导航。
+    // 恢复的激活槽是搜索/浏览器单例：路由恒从 '/' 起步，恒需导航。
     if (target === SEARCH_SLOT) return pathname === SEARCH_ROUTE_PATH ? null : target
+    if (target === BROWSER_SLOT) return pathname === BROWSER_ROUTE_PATH ? null : target
     const current = navActiveDomain(NAV_ENTRIES, pathname)
     return current !== null && current !== target ? target : null
   })
@@ -148,6 +147,10 @@ export function useTabRouteSync(): void {
     if (target === SEARCH_SLOT) {
       // 搜索面不是域，绕过 navigateToDomain（那是「域 → 落点」的解析）。
       void navigate({ to: SEARCH_ROUTE_PATH })
+      return
+    }
+    if (target === BROWSER_SLOT) {
+      void navigate({ to: BROWSER_ROUTE_PATH })
       return
     }
     // 与 store→route 腿走同一个「域 → 落点」解析：boot 时记忆通常还是空的（落点由下方
@@ -173,6 +176,15 @@ export function useTabRouteSync(): void {
       if (selectActiveTab(useTabWorkspace.getState())?.kind !== 'search') openSearchTab()
       return
     }
+    if (pathname === BROWSER_ROUTE_PATH) {
+      if (bootNavTarget.current !== null) {
+        if (bootNavTarget.current !== BROWSER_SLOT) return
+        bootNavTarget.current = null
+        return
+      }
+      if (selectActiveTab(useTabWorkspace.getState())?.kind !== 'browser') openBrowserTab()
+      return
+    }
     // 记录本次落点（含在途的 boot 出发点：确实到过，回放它不会错）。
     const domain = recordRouteLocation(pathname, search)
     if (domain === null) return
@@ -193,6 +205,10 @@ export function useTabRouteSync(): void {
       if (target === SEARCH_SLOT) {
         // 激活搜索标签 → '/search'（特判腿；不是域，不走 navigateToDomain）。
         if (loc.pathname !== SEARCH_ROUTE_PATH) void navigate({ to: SEARCH_ROUTE_PATH })
+        return
+      }
+      if (target === BROWSER_SLOT) {
+        if (loc.pathname !== BROWSER_ROUTE_PATH) void navigate({ to: BROWSER_ROUTE_PATH })
         return
       }
       const current = navActiveDomain(NAV_ENTRIES, loc.pathname)
