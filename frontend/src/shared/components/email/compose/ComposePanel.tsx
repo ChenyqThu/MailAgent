@@ -1,43 +1,16 @@
 // Compose panel — 撰写 / 回复 / 回复所有 / 转发 / 草稿编辑 composer。
 // 布局参考 Outlook: 顶部动作工具栏 (发送/放弃/[保存草稿]/签名) + From(只读)/To/
 // Cc·Bcc/Subject(右侧 重要性) 表头 + 格式工具栏 + 正文 + 原文引用块。
-//
-// 三种数据源:
-//   - reply / reply-all / forward → `email.draftPlan` (dry-run) 预填收件人 + TipTap
-//     正文 (reply 建议 / forward 留空) + 折叠引用块。
-//   - draft-edit (草稿点开即编辑) → `email.get` 取 to/cc/subject + `email.body(html)`
-//     取正文灌进 TipTap; 顶部仅 发送/放弃(删除草稿); From 只读; 无引用块。wire mode='new'
-//     (显式收件人/正文、零线程派生)。
-//
-// 写操作:
-//   - 保存草稿 → email.draft (IMAP APPEND, re-entrant)。draft-edit 走 replace 语义
-//     (task 08-20: 服务端删旧行建新行, 本地锚随响应换新), 存后留在编辑态。
-//   - 发送 → SendConfirmDialog → email.send (SMTP, irreversible); draft-edit 发送成功后
-//     删掉原草稿 (替换语义)。
-//   - 放弃/删除 → reply/forward「丢弃」: 临时内容未持久化 → 直接关闭, 不确认;
-//     draft-edit「删除」: 改 DB 不可逆 → DeleteDraftDialog 二次确认 → deleteDraft。
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { useEditor } from '@tiptap/react'
-import {
-  ChevronDown,
-  ChevronRight,
-  FileDown,
-  Flag,
-  Loader2,
-  Paperclip,
-  PenLine,
-  RotateCcw,
-  Send,
-  Trash2,
-  X
-} from 'lucide-react'
+import { ChevronRight, Paperclip, RotateCcw } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
-import { toastError, toastSuccess } from '@shared/state/toast'
+import { toastError } from '@shared/state/toast'
 import { useComposeStore } from '@shared/state/compose'
 import { asWriteError } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
@@ -53,9 +26,8 @@ import { plaintextToHtml } from '@shared/lib/plaintext_html'
 import { splitQuoteHtml } from '@shared/lib/quoteSplit'
 import { LibraryFilePickerDialog } from '@shared/components/library/LibraryFilePickerDialog'
 import { desktopMacEnabled } from '@shared/navigation/useNavGates'
-import type { LibraryFile } from '@shared/api/types/library'
+import { clearObjectTabDraft } from '@shared/state/tab-workspace-bridge'
 import type {
-  ComposeAttachmentRef,
   ComposeImportance,
   ComposeMode,
   ComposeWireMode,
@@ -63,28 +35,21 @@ import type {
   DraftPlanResult
 } from '@shared/api/types'
 
-import {
-  clearObjectTabDraft,
-  getObjectTab,
-  retargetObjectTab,
-  saveObjectTabDraft,
-  setObjectTabTitle
-} from '@shared/state/tab-workspace-bridge'
-
 import { EmailBodyFrame } from '../EmailBodyFrame'
-import {
-  toDraftSnapshot,
-  type ComposeTabDraft,
-  type ComposeTabDraftAttachment,
-  type ComposeTabDraftMode
-} from './composeTabDraft'
-import { RecipientField } from './RecipientField'
-import { SenderChip } from './SenderChip'
+import type { ComposeTabDraft } from './composeTabDraft'
 import { ComposeEditor, ComposeFormatToolbar } from './ComposeEditor'
 import { DeleteDraftDialog, SendConfirmDialog, UnsavedChangesDialog } from './ComposeDialogs'
 import { useComposeGuard, type ComposeGuardHandle } from './useComposeGuard'
-import { COMPOSE_INLINE_IMAGE_DROP_FLAG, buildComposeExtensions } from './editor-extensions'
-import { AttachmentTray, kindFromName } from './AttachmentTray'
+import { buildComposeExtensions } from './editor-extensions'
+import { AttachmentTray } from './AttachmentTray'
+import { useComposeAttachments } from './useComposeAttachments'
+import { useComposeTabSnapshot } from './useComposeTabSnapshot'
+import { useComposeMutations } from './useComposeMutations'
+import {
+  ComposeActionHeader,
+  ComposeHeaderFields,
+  ComposePlanErrorBanner
+} from './ComposeHeaderFields'
 
 /** Panel mode = UI ComposeMode + 草稿编辑态 + 写新邮件态。 */
 export type PanelMode = ComposeMode | 'draft-edit' | 'new'
@@ -94,119 +59,9 @@ export type PanelMode = ComposeMode | 'draft-edit' | 'new'
  *  对应标签；普通关闭（取消编辑 / 存后关闭）不带原因，标签保留。 */
 export type ComposeCloseReason = 'sent' | 'deleted'
 
-/** "name" <a@x>, b@y; c@z → ['a@x','b@y','c@z'] —— 草稿回填 to_addr/cc_addr 提纯。
- *  通讯录 WP4 起收敛到 shared 单源 `parseAddressList`（行为等价 + 引号名内的
- *  逗号不再被误切成两条）；这里只要地址半边。 */
+/** "name" <a@x>, b@y; c@z → ['a@x','b@y','c@z'] —— 草稿回填 to_addr/cc_addr 提纯。 */
 function parseAddrList(raw?: string | null): string[] {
   return parseAddressList(raw).map((entry) => entry.email)
-}
-
-const IMPORTANCE_OPTS: ReadonlyArray<{ value: ComposeImportance; key: string }> = [
-  { value: 'high', key: 'compose.importanceHigh' },
-  { value: 'normal', key: 'compose.importanceNormal' },
-  { value: 'low', key: 'compose.importanceLow' }
-]
-
-/** 单附件上限 — mirror 服务端 _MAX_FORWARD_ATTACH_BYTES (20MB, mail_write.py:157)。
- *  前端先拦是 UX; 服务端 staging 端点是权威复核。 */
-const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
-
-/** chip → wire ref (snake_case 契约字面)。三条腿互斥, 服务端 `_normalize_attachment_refs`
- *  强制"恰好一个键"。 */
-function attachmentRefOf(a: ComposeAttachmentChip): ComposeAttachmentRef {
-  if (a.stageId != null) return { stage_id: a.stageId }
-  if (a.libraryFileId != null) return { library_file_id: a.libraryFileId }
-  return { attachment_id: a.attachmentId as number }
-}
-
-/** compose 附件 chip 本地态。三选一来源 (发送时各落成一种 ref, 见 attachmentRefOf):
- *  - staged: 用户新上传 → staging 端点回执 stageId → payload {stage_id}
- *  - existing: draft-edit 回填 / forward hydrate 的库内已有邮件附件 → payload {attachment_id}
- *    (draft-edit 发送是 mode='new' 新邮件, 不引用原草稿附件就会丢)
- *  - library: 资料库选择器挑来的库内文件 → payload {library_file_id}; 字节已在资料库里,
- *    没有上传步骤, 落地即 'done' (服务端按 id 过路径 jail 后自己读原件) */
-interface ComposeAttachmentChip {
-  localId: number
-  filename: string
-  size: number | null
-  status: 'uploading' | 'done' | 'error'
-  stageId?: string
-  attachmentId?: number
-  libraryFileId?: number
-  /** staged 图片的本地缩略预览 (URL.createObjectURL); 移除/卸载时 revoke。 */
-  previewUrl?: string
-}
-
-/** 重要性下拉 — 主题行右侧 (Outlook 同位)。high 用 warn 色旗标, low 灰旗, normal 朴素。 */
-function ImportanceSelect({
-  value,
-  onChange
-}: {
-  value: ComposeImportance
-  onChange: (v: ComposeImportance) => void
-}): React.ReactElement {
-  const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  const tone = value === 'high' ? 'text-warn' : value === 'low' ? 'text-ink-fg-3' : 'text-ink-fg-2'
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        title={t('compose.importance')}
-        className={cn(
-          'inline-flex items-center gap-1 rounded-[var(--r-ctl)] px-1.5 py-0.5 text-meta font-mono',
-          'hover:bg-ink-3/60 transition-colors duration-fast',
-          tone
-        )}
-      >
-        <Flag size={12} strokeWidth={2} fill={value === 'high' ? 'currentColor' : 'none'} />
-        {t(IMPORTANCE_OPTS.find((o) => o.value === value)?.key ?? 'compose.importanceNormal')}
-        <ChevronDown size={11} strokeWidth={2} />
-      </button>
-      {open && (
-        <ul
-          role="listbox"
-          className="absolute right-0 top-full mt-1 z-50 w-28 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 shadow-md py-1"
-        >
-          {IMPORTANCE_OPTS.map((o) => (
-            <li key={o.value} role="option" aria-selected={o.value === value}>
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  onChange(o.value)
-                  setOpen(false)
-                }}
-                className={cn(
-                  'w-full text-left px-2.5 py-1.5 flex items-center gap-2 text-meta',
-                  'transition-colors duration-fast hover:bg-ink-3',
-                  o.value === value ? 'text-ink-fg' : 'text-ink-fg-2'
-                )}
-              >
-                <Flag
-                  size={12}
-                  strokeWidth={2}
-                  className={
-                    o.value === 'high'
-                      ? 'text-warn'
-                      : o.value === 'low'
-                        ? 'text-ink-fg-3'
-                        : 'text-ink-fg-2'
-                  }
-                  fill={o.value === 'high' ? 'currentColor' : 'none'}
-                />
-                {t(o.key)}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
 }
 
 interface Props {
@@ -220,19 +75,13 @@ interface Props {
    *  'modal' = 居中模态卡片内 (写新邮件，外壳 ComposeNewModal 提供遮罩/卡框)。 */
   variant?: 'column' | 'modal'
   /** T6 离开守卫句柄出口 —— 外部关闭方 (新邮件浮窗 scrim·× / 标签关闭守卫) 持有此
-   *  ref, 经 handle.attemptClose 走同一守卫 (dirty → 弹确认)。内部 ESC/丢弃直接用
-   *  guard.guardClose, 不经此 ref。 */
+   *  ref, 经 handle.attemptClose 走同一守卫 (dirty → 弹确认)。 */
   guardRef?: React.MutableRefObject<ComposeGuardHandle | null>
-  /** mode='new' 专用：预填收件人（通讯录「写邮件」入口）。走 isNew 预填分支
-   *  （planApplied 之前），与其他预填一样不标脏。其余 mode 忽略。 */
+  /** mode='new' 专用：预填收件人（通讯录「写邮件」入口）。 */
   initialTo?: readonly string[]
-  /** mode='new' 专用：预填抄送（WP5「写邮件并抄送上级」）。非空时顺带展开
-   *  cc 行；同 initialTo 走 planApplied 之前的预填闸，不标脏。其余 mode 忽略。 */
+  /** mode='new' 专用：预填抄送（WP5「写邮件并抄送上级」）。 */
   initialCc?: readonly string[]
-  /** 08-27 标签工作区 —— 每标签 compose 现场快照（overlay 三模式 + draft-edit）：
-   *  切走时 EmailDetail 经 `snapshotRef` 的 getter 取现场；`initialTabDraft` 是切回时的
-   *  回填源（正常预填后覆写用户可编辑字段）。getter 只读 ref，卸载后仍可安全调用
-   *  （域切换兜底路径）。其余 mode 忽略。 */
+  /** 08-27 标签工作区 —— 每标签 compose 现场快照（overlay 三模式 + draft-edit）。 */
   snapshotRef?: React.MutableRefObject<(() => ComposeTabDraft | null) | null>
   initialTabDraft?: ComposeTabDraft | null
 }
@@ -253,10 +102,7 @@ export function ComposePanelInner({
   const { t } = useTranslation()
   const mailApi = useMailApi()
   const isDraftEdit = mode === 'draft-edit'
-  // 写新邮件 (无源邮件): 空表单 + 显式收件人/正文。internalId 传哨兵 -1 → 下方所有
-  // query 的 `internalId >= 0` 守卫天然 false → planQ/draftQ/detailQ 全跳过、不预填。
   const isNew = mode === 'new'
-  // 草稿编辑 / 写新邮件 保存/发送都走 wire mode='new' (显式收件人/正文、零线程派生)。
   const wireMode: ComposeWireMode = isDraftEdit || isNew ? 'new' : mode
 
   const [to, setTo] = useState<string[]>([])
@@ -264,10 +110,8 @@ export function ComposePanelInner({
   const [bcc, setBcc] = useState<string[]>([])
   const [subject, setSubject] = useState('')
   // C-1 replace 锚 (task 08-20 draft-save) — draft-edit 保存成功后服务端删旧行、
-  // 建本地镜像新行, 本地锚随响应的 mirror_internal_id 换新 (漏换 = 第二次保存
-  // 替换锚失效回退成新建 + 附件引用指向已删行)。非 draft-edit 恒等于 internalId。
+  // 建本地镜像新行, 本地锚随响应的 mirror_internal_id 换新。非 draft-edit 恒等于 internalId。
   const [draftRowId, setDraftRowId] = useState(internalId)
-  // draft-edit「已保存 HH:MM」轻提示 (存后留在编辑态, 顶栏常驻最近保存时间)。
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null)
   const [importance, setImportance] = useState<ComposeImportance>('normal')
   const [ccVisible, setCcVisible] = useState(false)
@@ -275,73 +119,34 @@ export function ComposePanelInner({
   const [sendOpen, setSendOpen] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [planAttachments, setPlanAttachments] = useState(0)
-  // 原文引用块 (reply/forward) — 与编辑器分离: 不灌进 TipTap (整条线程 HTML 几十~几百 KB 会卡 +
-  // 被 ProseMirror 重排), 单独用阅读区同款安全 iframe 渲染, 发送/存草稿时拼回正文。默认收起。
   const [quoteHtml, setQuoteHtml] = useState('')
   const [quoteOpen, setQuoteOpen] = useState(false)
-  // D5 — draft-edit 不可编辑富文本 (布局表/CID/VML/Outlook 汤) 保真模式: 原文整块进上面的
-  // quoteHtml iframe (不灌 TipTap 防剥离), 编辑器只写顶部新增, 发送时拼回。
   const [preserveOriginal, setPreserveOriginal] = useState(false)
-  // 本封行距覆写 ('' = 跟随设置里的撰写行距默认)。整封级: 编辑区经 --ma-compose-lh
-  // 生效, 发送/存草稿时同一个值由 serializeEmailComposerHtml 内联进出站 HTML。
   const [lineHeightChoice, setLineHeightChoice] = useState('')
-  // D2 Bug B — draft-edit 按 data-ma-quote marker 拆分成功: 回复段在编辑器里,
-  // 引用段在下方折叠引用区 (quoteHtml), 发送时原样拼回 (marker 保留)。
   const [splitQuote, setSplitQuote] = useState(false)
-  // D6 — 附件 chips (staged 上传 + draft-edit 回填 + forward hydrate 的库内已有附件 +
-  // 资料库选择器挑来的库内文件)。
-  const [attachList, setAttachList] = useState<ComposeAttachmentChip[]>([])
   const [libraryPickerOpen, setLibraryPickerOpen] = useState(false)
-  // 「从资料库选附件」跟资料库整域走同一道门 (registry.ts 的 library 条目 gate='desktopMac'):
-  // 选择器展示的就是那个域的内容, web 构建下它在导航里根本不存在, 单给 compose 开一个入口
-  // 等于把用户领进一个这个构建目标里没有的域。判据函数与导航共用一份, 不在这里另写平台判定。
   const libraryPickerAvailable = desktopMacEnabled()
-  // D2 隐藏保真集 (task 08-20 draft-save) — 草稿正文引用的 inline 部件 (cid:) 不进
-  // AttachmentTray 显示, 但随 refs 带走: 服务端把对应 MIME part 重新编入出站 EML
-  // (否则替换保存后的草稿有 cid 引用无 part, 内联图确定性丢)。filename 用于保存后
-  // 按 mirror_attachment_ids 换到新行引用。
-  const [inlineRefs, setInlineRefs] = useState<Array<{ id: number; filename: string }>>([])
-  // codex F1 — forward 原附件 hydration 状态机: 打开即补拉原邮件非 inline 附件成
-  // 可移除 {attachment_id} chips (显式权威列表契约); pending/error 期间发送硬阻断,
-  // error 给错误条 + 重试 (置回 'pending' 重跑 effect)。非 forward 恒 'done' 不参与。
-  const [fwdAttachState, setFwdAttachState] = useState<'pending' | 'done' | 'error'>(() =>
-    // 标签快照恢复且快照记录过 hydrate 已完成 → 不再重跑（chips 从快照回填；重跑会把
-    // 用户已显式移除的原附件加回来）。
-    mode === 'forward' && initialTabDraft?.fwdHydrated !== true ? 'pending' : 'done'
-  )
-  const attachSeq = useRef(0)
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
-  // staged 图片缩略预览的 objectURL 台账 — 单删时逐个 revoke, 卸载时兜底全量 revoke。
-  const previewUrlsRef = useRef<Set<string>>(new Set())
-  useEffect(() => {
-    const urls = previewUrlsRef.current
-    return () => {
-      for (const u of urls) URL.revokeObjectURL(u)
-    }
-  }, [])
-  // L0 — 拖拽附件: 拖文件到 composer 卡片任意位置即可添加。dragDepth 计数法消除
-  // 子元素 dragenter/dragleave 抖动 (提示层 pointer-events-none 不参与计数)。
-  const [isDragActive, setIsDragActive] = useState(false)
-  const dragDepth = useRef(0)
 
   // T6 Bug C — dirty 跟踪: baseline = 预填完成 (planApplied) 之后的变更才算脏。
-  // 预填的 setContent / setTo 等一律不标脏 —— 彻底规避 6 月「预填误标 dirty」旧坑:
-  // editor 'update' 监听在 planApplied 之后才挂 (预填 setContent 发生在此之前),
-  // 字段 setter 经 markDirty 且被 baselineReadyRef 二次闸住。保存/发送成功后复位。
   const [dirty, setDirty] = useState(false)
   const baselineReadyRef = useRef(false)
   const markDirty = useCallback(() => {
     if (!baselineReadyRef.current) return
     setDirty((d) => (d ? d : true))
   }, [])
+  const withDirty = useCallback(
+    <T,>(setter: (value: T) => void) =>
+      (value: T): void => {
+        setter(value)
+        markDirty()
+      },
+    [markDirty]
+  )
   // 08-27 标签快照 —— 正文的最新 HTML 走 ref（editor 'update' 顺手记，不逼组件重渲）。
-  // null = 用户没改过正文（快照恢复时保留 plan 建议正文）。
   const latestBodyHtmlRef = useRef<string | null>(null)
+  const busyRef = useRef(false)
 
-  // @mention 选中联系人 → 不在任何收件人字段时自动加进 To (契约 D4)。extensions 在
-  // useEditor 初始化时装配一次; 选中回调是纯事件时序 (suggestion 菜单点击/回车),
-  // 经 ref 间接调用最新处理器, 闭包不过期 (react-hooks/refs: effect 里同步, 不在
-  // render 期读写)。
+  // @mention 选中联系人 → 不在任何收件人字段时自动加进 To (契约 D4)。
   const mentionPickRef = useRef<(contact: ContactSuggestion) => void>(() => {})
   useEffect(() => {
     mentionPickRef.current = (contact: ContactSuggestion): void => {
@@ -353,9 +158,6 @@ export function ComposePanelInner({
     }
   }, [to, cc, bcc])
 
-  // T2 装配工厂 (editor-extensions.ts): StarterKit + TextStyle 族 + Image + Highlight
-  // + Mention(@联系人) + slash 块菜单。切换后工具栏高亮走真 Highlight mark
-  // (ComposeFormatToolbar 的 hasHighlight 兼容闸自动生效)。
   // eslint-disable-next-line react-hooks/refs -- onMentionPick 只在 suggestion 菜单选中事件触发 (纯事件时序), buildComposeExtensions 构造期不调用它; ref 间接层保证读到最新处理器。
   const [extensions] = useState(() =>
     buildComposeExtensions({ onMentionPick: (contact) => mentionPickRef.current(contact) })
@@ -366,11 +168,9 @@ export function ComposePanelInner({
     immediatelyRender: false
   })
 
-  // 撰写行距: 本封覆写 ?? 设置里的默认。编辑区 CSS 变量与出站 HTML 内联样式同源。
   const composeLineHeightDefault = useAppearance((s) => s.composeLineHeight)
   const effectiveLineHeight = lineHeightChoice ? Number(lineHeightChoice) : composeLineHeightDefault
 
-  // Owner email (From, read-only) + 签名 — same query key as Sidebar / drawers.
   const settingsQ = useQuery({
     queryKey: qk.settings.all(),
     queryFn: () => mailApi.settings.get(),
@@ -379,7 +179,6 @@ export function ComposePanelInner({
   const selfEmail = settingsQ.data?.userEmail ?? null
   const signature = settingsQ.data?.signature ?? null
 
-  // 预填数据源 ① reply/forward: draftPlan (dry-run)。
   const planQ = useQuery<DraftPlanResult>({
     queryKey: qk.compose.planMode(internalId, mode),
     queryFn: () => mailApi.email.draftPlan({ internalId, mode: mode as ComposeMode }),
@@ -389,8 +188,6 @@ export function ComposePanelInner({
   })
   const planError = planQ.isError ? asWriteError(planQ.error) : null
 
-  // 预填数据源 ② draft-edit: email.get (to/cc/subject/importance) + email.body html (正文)。
-  // html 为空时再取 markdown (D5 回落: AppleScript 存量行 / dual-write 关闭期的行)。
   const draftQ = useQuery({
     queryKey: qk.compose.draftEdit(internalId),
     queryFn: async () => {
@@ -411,8 +208,6 @@ export function ComposePanelInner({
     retry: false
   })
 
-  // 引用块展开时才拉原邮件 detail (reply/forward only)。draft-edit 保真模式直接用
-  // draftQ 已取的 detail (同一封邮件, 不再多拉一次)。
   const detailQ = useQuery({
     queryKey: qk.email.detail(internalId),
     queryFn: () => mailApi.email.get(internalId),
@@ -421,6 +216,16 @@ export function ComposePanelInner({
   })
   const quoteAttachments =
     (isDraftEdit ? draftQ.data?.detail?.attachments : detailQ.data?.attachments) ?? []
+
+  const attachments = useComposeAttachments({
+    internalId,
+    mode,
+    initialTabDraft,
+    busyRef,
+    markDirty
+  })
+  const { hydrateDraftAttachments, restoreSnapshotAttachments, remapMirrorAttachments } =
+    attachments
 
   // 一次性预填 (planApplied guard); editor.commands.setContent 是命令式副作用须留 effect。
   const [planApplied, setPlanApplied] = useState(false)
@@ -436,16 +241,6 @@ export function ComposePanelInner({
       if (ccArr.length > 0) setCcVisible(true)
       setSubject(d.detail?.subject ?? '')
       setImportance(d.detail?.is_important ? 'high' : 'normal')
-      // D5 富文本混合门: 标准 HTML/table → 直灌编辑器; 布局表/CID/VML 等
-      // preserve-only 内容 → 原文整块进折叠 iframe 保真 + 编辑器留空写新增,
-      // 发送时 getSanitizedHtml 拼回 (原文只进 quoteHtml 一处, 防双份);
-      // empty → markdown 回落 (plaintext 降级灌入, 不在前端造 md 渲染器)。
-      // D2 Bug B — 先按 data-ma-quote marker 拆分: 回复段进编辑器 (仍过富文本混合门),
-      // 引用段进折叠引用区 (发送时 getSanitizedHtml 原样拼回, marker 保留)。无 marker
-      // (存量草稿 / 外部客户端草稿) → 回退现状全量分流。
-      // 行距 wrapper 防嵌套: 上一轮出站注入的 <div data-ma-lh> 在进 draftHtmlGate /
-      // TipTap **之前**剥掉, 值恢复成本封的行距选择 —— 「发送→存草稿→再编辑→再发送」
-      // 恒只有一层 wrapper。preserve-only 段用原字节 (含 wrapper) 保真, 不剥。
       const { reply, quote } = splitQuoteHtml(d.html)
       if (quote !== null) {
         setSplitQuote(true)
@@ -453,8 +248,6 @@ export function ComposePanelInner({
         if (unwrapped.lineHeight !== null) setLineHeightChoice(String(unwrapped.lineHeight))
         const replyAssessment = assessDraftHtml(unwrapped.html)
         if (replyAssessment.compatibility === 'preserve-only') {
-          // 回复段编辑器表达不了 (布局表/CID/VML 等) → 与引用段一起整块保真,
-          // 编辑器留空写新增 — 零丢字节优先于可行内编辑。
           setQuoteHtml(reply + quote)
           setPreserveOriginal(true)
         } else {
@@ -479,39 +272,13 @@ export function ComposePanelInner({
           editor.commands.setContent(plaintextToHtml(d.markdown))
         }
       }
-      // 草稿已有附件 (OWA 建的带附件草稿) → attachment_id 引用 chips: draft-edit
-      // 发送是 mode='new' 新邮件, 不引用原草稿附件发出去就丢了。inline/derived 行
-      // 不算 (正文内联图 / office 预转产物, 同 AttachmentList 的 visible 过滤)。
-      const existing = (d.detail?.attachments ?? []).filter(
-        (a) => !a.is_inline && a.derived_from == null
-      )
-      if (existing.length > 0) {
-        setAttachList(
-          existing.map((a) => ({
-            localId: ++attachSeq.current,
-            filename: a.filename,
-            size: a.size_bytes ?? null,
-            status: 'done' as const,
-            attachmentId: a.id
-          }))
-        )
-      }
-      // D2 — inline 部件进隐藏保真集 (不显示为 chip, 但随 payload refs 带走)。
-      const inlineParts = (d.detail?.attachments ?? []).filter(
-        (a) => a.is_inline && a.derived_from == null
-      )
-      if (inlineParts.length > 0) {
-        setInlineRefs(inlineParts.map((a) => ({ id: a.id, filename: a.filename })))
+      if (d.detail?.attachments) {
+        hydrateDraftAttachments(d.detail.attachments)
       }
       setPlanApplied(true)
       return
     }
     if (isNew) {
-      // 写新邮件: 空表单（或调用方给的预填收件人/抄送 —— 通讯录「写邮件」/
-      // WP5「写邮件并抄送上级」入口）。预填发生在 planApplied 翻 true 之前 ⇒
-      // 不标脏（与 draft/plan 预填同一闸）。
-      // (放在 isDraftEdit 之后: 规则只报 effect 内首个 setState, 由上面的 disable
-      //  覆盖; 这里的 setState 是后续调用, 不触发规则、无需额外 disable。)
       if (initialTo && initialTo.length > 0) setTo([...initialTo])
       if (initialCc && initialCc.length > 0) {
         setCc([...initialCc])
@@ -529,19 +296,27 @@ export function ComposePanelInner({
     if ((plan.cc ?? []).length > 0) setCcVisible(true)
     if ((plan.bcc ?? []).length > 0) setBccVisible(true)
     setPlanAttachments(plan.attachments ?? 0)
-    // 编辑器只载 AI 建议; forward 留空让用户写转发语。原文引用块单独折叠展示, 不进 TipTap。
     const editorHtml = mode === 'forward' ? '' : plan.reply_html || ''
     if (editorHtml) editor.commands.setContent(editorHtml)
     setQuoteHtml(plan.quote_html || plan.forward_intro_html || '')
     setPlanApplied(true)
-  }, [planApplied, isDraftEdit, isNew, initialTo, initialCc, draftQ.data, planQ.data, editor, mode])
+  }, [
+    planApplied,
+    isDraftEdit,
+    isNew,
+    initialTo,
+    initialCc,
+    draftQ.data,
+    planQ.data,
+    editor,
+    mode,
+    hydrateDraftAttachments
+  ])
 
-  // 预填完成 → 开放 dirty 判定 (字段 setter 的 baseline 闸)。
   useEffect(() => {
     if (planApplied) baselineReadyRef.current = true
   }, [planApplied])
-  // editor 内容变更 → 标脏。监听在 planApplied 之后才注册: 预填 setContent 发生在
-  // planApplied 翻 true 之前, 那一刻监听尚未挂上, 故预填不会误标脏 (旧坑根因)。
+
   useEffect(() => {
     if (!editor || !planApplied) return
     const onUpdate = (): void => {
@@ -554,186 +329,53 @@ export function ComposePanelInner({
     }
   }, [editor, planApplied, markDirty])
 
-  // ── 08-27 标签工作区：compose 现场快照（overlay 三模式；dogfood 波3 扩到 draft-edit）──
-  const isOverlayMode = mode === 'reply' || mode === 'reply-all' || mode === 'forward'
-  const snapshotEligible = isOverlayMode || isDraftEdit
-  // 快照恢复：正常预填完成后覆写用户可编辑的字段（overlay 的 quote/splitQuote 从 plan
-  // 重建；draft-edit 的 quote/splitQuote/preserveOriginal/inlineRefs 从 draftQ 行数据重建，
-  // 见 composeTabDraft.ts 头注释）。恒只跑一次；mode 不匹配（快照是 reply、这次开的是
-  // forward）时整份放弃。
-  const [tabDraftApplied, setTabDraftApplied] = useState(false)
-  useEffect(() => {
-    if (!planApplied || tabDraftApplied || !editor) return
-    setTabDraftApplied(true)
-    const snap = initialTabDraft
-    if (!snapshotEligible || snap == null || snap.mode !== mode) return
-    setTo([...snap.to])
-    setCc([...snap.cc])
-    setBcc([...snap.bcc])
-    setSubject(snap.subject)
-    setImportance(snap.importance)
-    if (snap.cc.length > 0 || snap.ccVisible) setCcVisible(true)
-    if (snap.bcc.length > 0 || snap.bccVisible) setBccVisible(true)
-    if (snap.lineHeightChoice !== '') setLineHeightChoice(snap.lineHeightChoice)
-    if (snap.bodyHtml !== null) {
-      editor.commands.setContent(snap.bodyHtml)
-      latestBodyHtmlRef.current = snap.bodyHtml
-    }
-    // 附件：overlay 维持「非空才覆写」（reply 本来就从零开始）；draft-edit 的预填已从
-    // 行数据灌了 chips，快照是编辑后的权威列表 —— **空也要应用**（用户把原附件全删了，
-    // 不应用就等于删除被回滚）。inlineRefs（隐藏保真集）不在快照里，保留预填值。
-    if (snap.attachments.length > 0 || isDraftEdit) {
-      setAttachList(
-        snap.attachments.map((a) => ({
-          localId: ++attachSeq.current,
-          filename: a.filename,
-          size: a.size,
-          status: 'done' as const,
-          ...(a.stageId !== undefined ? { stageId: a.stageId } : {}),
-          ...(a.attachmentId !== undefined ? { attachmentId: a.attachmentId } : {}),
-          ...(a.libraryFileId !== undefined ? { libraryFileId: a.libraryFileId } : {})
-        }))
-      )
-    }
-    if (isDraftEdit) {
-      // C-1 replace 锚随快照恢复（保存过一次再切走的会话，锚已指镜像新行）。
-      if (typeof snap.draftRowId === 'number') setDraftRowId(snap.draftRowId)
-      if (typeof snap.lastSavedAtMs === 'number') setLastSavedAt(new Date(snap.lastSavedAtMs))
-    }
-    if (snap.dirty) setDirty(true)
-  }, [planApplied, tabDraftApplied, editor, initialTabDraft, snapshotEligible, isDraftEdit, mode])
+  const handleRestoreTabDraft = useCallback(
+    (snap: ComposeTabDraft) => {
+      setTo([...snap.to])
+      setCc([...snap.cc])
+      setBcc([...snap.bcc])
+      setSubject(snap.subject)
+      setImportance(snap.importance)
+      if (snap.cc.length > 0 || snap.ccVisible) setCcVisible(true)
+      if (snap.bcc.length > 0 || snap.bccVisible) setBccVisible(true)
+      if (snap.lineHeightChoice !== '') setLineHeightChoice(snap.lineHeightChoice)
+      if (snap.attachments.length > 0 || isDraftEdit) {
+        restoreSnapshotAttachments(snap.attachments)
+      }
+      if (isDraftEdit) {
+        if (typeof snap.draftRowId === 'number') setDraftRowId(snap.draftRowId)
+        if (typeof snap.lastSavedAtMs === 'number') setLastSavedAt(new Date(snap.lastSavedAtMs))
+      }
+      if (snap.dirty) setDirty(true)
+    },
+    [isDraftEdit, restoreSnapshotAttachments]
+  )
 
-  // 现场捕获：正文以外的字段每次提交后打进 ref（对象拼装廉价）；正文在快照落笔时从
-  // latestBodyHtmlRef 补上 —— 编辑器打字不触发 React 重渲，捕获时直接读 ref 才是最新值。
-  const tabDraftBaseRef = useRef<Omit<ComposeTabDraft, 'bodyHtml'> | null>(null)
-  useEffect(() => {
-    if (!snapshotEligible) return
-    tabDraftBaseRef.current = {
-      kind: 'compose',
-      mode: mode as ComposeTabDraftMode,
-      to,
-      cc,
-      bcc,
-      subject,
-      importance,
-      ccVisible,
-      bccVisible,
-      lineHeightChoice,
-      attachments: attachList
-        .filter((a) => a.status === 'done')
-        .map(
-          (a): ComposeTabDraftAttachment => ({
-            filename: a.filename,
-            size: a.size,
-            ...(a.stageId !== undefined ? { stageId: a.stageId } : {}),
-            ...(a.attachmentId !== undefined ? { attachmentId: a.attachmentId } : {}),
-            ...(a.libraryFileId !== undefined ? { libraryFileId: a.libraryFileId } : {})
-          })
-        ),
-      fwdHydrated: mode !== 'forward' || fwdAttachState === 'done',
-      dirty,
-      // draft-edit 的 replace 锚随现场走（保存后 = 镜像新行 = 标签 retarget 后的 targetId）。
-      ...(isDraftEdit ? { draftRowId } : {}),
-      ...(isDraftEdit && lastSavedAt !== null ? { lastSavedAtMs: lastSavedAt.getTime() } : {})
-    }
+  const { suppressUnmountSnapshot, schedulePostSaveSnapshot } = useComposeTabSnapshot({
+    internalId,
+    mode,
+    isDraftEdit,
+    editor,
+    planApplied,
+    initialTabDraft,
+    snapshotRef,
+    to,
+    cc,
+    bcc,
+    subject,
+    importance,
+    ccVisible,
+    bccVisible,
+    lineHeightChoice,
+    attachList: attachments.attachList,
+    fwdAttachState: attachments.fwdAttachState,
+    dirty,
+    draftRowId,
+    lastSavedAt,
+    latestBodyHtmlRef,
+    onRestore: handleRestoreTabDraft
   })
-  // getter 出口（EmailDetail 切邮件路径：面板还活着时取现场）。只读 ref，引用恒定。
-  useEffect(() => {
-    if (snapshotRef === undefined) return
-    snapshotRef.current = () => {
-      const base = tabDraftBaseRef.current
-      if (base === null) return null
-      return { ...base, bodyHtml: latestBodyHtmlRef.current }
-    }
-    // 🔴 卸载时**不清** getter：域切换时 EmailDetail 的收尾要在面板卸载后仍能读到冻结
-    // 的现场（全 ref，安全）；下一个面板实例挂载时会覆写。
-  }, [snapshotRef])
-  // 卸载兜底（overlay）：store 仍指向本邮件且 open（= 不是用户显式关闭，而是切域 / 详情
-  // 早退把树整个卸了）→ 把现场快照写进标签。显式关闭（丢弃 / 发送成功）先 closeCompose
-  // 再卸载，这里天然跳过；StrictMode 的 setup→cleanup→setup 重放只会多写一次等价快照。
-  useEffect(() => {
-    if (!isOverlayMode) return
-    return () => {
-      const base = tabDraftBaseRef.current
-      if (base === null) return
-      const cs = useComposeStore.getState()
-      if (!cs.open || cs.internalId !== internalId) return
-      saveObjectTabDraft(
-        'email',
-        internalId,
-        toDraftSnapshot({ ...base, bodyHtml: latestBodyHtmlRef.current })
-      )
-    }
-  }, [isOverlayMode, internalId])
-  // 卸载兜底（draft-edit，dogfood 波3）：切标签 / 切域 / 取消编辑都会把树卸掉，把现场
-  // 写进标签快照。写入条件 = 有未保存修改，或本次会话保存过（lastSavedAtMs 在 ——
-  // 恢复时「已保存 HH:MM」不丢）；从没动过的干看不写（否则每个点开过的草稿都带上
-  // draft 快照被锁死，永不进 LRU）。显式丢弃经 suppress 位压住；删除 / 发送时标签已
-  // 先被 EmailDetail 关掉，saveObjectTabDraft 找不到标签自然跳过。
-  // 🔴 写入目标是 base.draftRowId（replace 锚）不是挂载时的 internalId —— 保存过一次后
-  // 标签已 retarget 到镜像新行，旧 id 上已无标签。
-  const snapshotSuppressedRef = useRef(false)
-  useEffect(() => {
-    if (!isDraftEdit) return
-    return () => {
-      if (snapshotSuppressedRef.current) return
-      const base = tabDraftBaseRef.current
-      if (base === null) return
-      if (base.dirty !== true && base.lastSavedAtMs === undefined) return
-      saveObjectTabDraft(
-        'email',
-        base.draftRowId ?? internalId,
-        toDraftSnapshot({ ...base, bodyHtml: latestBodyHtmlRef.current })
-      )
-    }
-  }, [isDraftEdit, internalId])
-  // dirty 翻 true 当场把现场写进标签快照（不等切走）：标签条立即出改动点 + 上锁，
-  // 关闭守卫（⌘W / ×）也才有 dirty 位可判。翻回 false 的收敛由保存链（下方
-  // snapshotRefreshRef）与显式丢弃处理，这里只管「变脏即报」。
-  useEffect(() => {
-    if (!snapshotEligible || !dirty) return
-    const base = tabDraftBaseRef.current
-    if (base === null) return
-    saveObjectTabDraft(
-      'email',
-      base.draftRowId ?? internalId,
-      toDraftSnapshot({ ...base, bodyHtml: latestBodyHtmlRef.current })
-    )
-  }, [snapshotEligible, dirty, internalId])
-  // 保存成功后的快照收敛（onSuccess 里 tabDraftBaseRef 还是旧值 —— 附件引用 swap、
-  // dirty→false、lastSavedAt 都要等捕获 effect 拿到新一轮渲染，故这里存「期望的锚」、
-  // 等渲染追上再落笔。🔴 不能用布尔标记当场消费：TanStack 回调与 React 提交的批次
-  // 边界不可靠，实测有「标记已置、该次提交渲染的还是旧 draftRowId」的中间提交，当场
-  // 消费会把快照写到已 retarget 掉的旧标签上（no-op，等于丢了收敛）。
-  // draft-edit 恒重写（换锚后的标签要新快照，「已保存 HH:MM」靠它跨 remount 存活）；
-  // overlay 只在已有快照时刷新（把 dirty 位放平，没有快照不凭空造一个）。
-  const snapshotRefreshRef = useRef<number | null>(null)
-  useEffect(() => {
-    const expected = snapshotRefreshRef.current
-    if (expected === null || !snapshotEligible) return
-    const base = tabDraftBaseRef.current
-    if (base === null) return
-    // 渲染还没追上保存结果（dirty 未放平 / 锚未换新）→ 等下一个提交。保存后立即又被
-    // 编辑标脏的罕见交错里，live dirty 写会接管现场，这份收敛过期作废即可。
-    if (base.dirty === true) return
-    if (isDraftEdit && (base.draftRowId ?? internalId) !== expected) return
-    snapshotRefreshRef.current = null
-    if (!isDraftEdit && getObjectTab('email', expected)?.draft === undefined) return
-    saveObjectTabDraft(
-      'email',
-      expected,
-      toDraftSnapshot({ ...base, bodyHtml: latestBodyHtmlRef.current })
-    )
-  })
-  // 草稿标签标题跟手（bridge 同值不写）。回填也会经过这里：回填值 = 行数据主题 =
-  // 点行时的标题快照，同值早退，无噪音；保存成功后标题即已存主题。
-  useEffect(() => {
-    if (!isDraftEdit) return
-    setObjectTabTitle('email', draftRowId, subject)
-  }, [isDraftEdit, draftRowId, subject])
 
-  // 发送/存草稿正文 = 编辑器内容 + 原文引用块 (拼回)。行距只包新输入段 —— 序列化
-  // 发生在拼引用之前, 引用段作为兄弟拼在 wrapper 之后, 出站样式契约不受影响。
   const getSanitizedHtml = useCallback((): string => {
     const body = serializeEmailComposerHtml(editor?.getHTML() ?? '', {
       lineHeight: effectiveLineHeight
@@ -742,348 +384,48 @@ export function ComposePanelInner({
     return body + quote
   }, [editor, quoteHtml, effectiveLineHeight])
 
-  // 签名插入 — 在光标处插入 settings.signature (HTML 原样, 纯文本换行转 <br>)。
   const insertSignature = useCallback(() => {
     if (!editor || !signature) return
     const html = /[<>]/.test(signature) ? signature : signature.replace(/\n/g, '<br>')
     editor.chain().focus().insertContent(html).run()
   }, [editor, signature])
 
-  // D6 — 附件上传: File → ArrayBuffer → staging 端点 (PUT raw bytes), 回执 stage_id
-  // 落进 chip。失败 chip 标红 (可删掉重传), 不阻断其余文件。
-  const uploadAttachment = useCallback(
-    async (file: File) => {
-      const localId = ++attachSeq.current
-      // 图片附件生成本地缩略预览 (AttachmentTray 卡片); objectURL 在移除/卸载时 revoke。
-      let previewUrl: string | undefined
-      if (file.type.startsWith('image/') || kindFromName(file.name) === 'image') {
-        previewUrl = URL.createObjectURL(file)
-        previewUrlsRef.current.add(previewUrl)
-      }
-      setAttachList((prev) => [
-        ...prev,
-        { localId, filename: file.name, size: file.size, status: 'uploading', previewUrl }
-      ])
-      try {
-        const bytes = await file.arrayBuffer()
-        const staged = await mailApi.email.uploadComposeAttachment({
-          filename: file.name,
-          bytes,
-          mime: file.type || undefined
-        })
-        setAttachList((prev) =>
-          prev.map((a) =>
-            a.localId === localId ? { ...a, status: 'done', stageId: staged.stage_id } : a
-          )
-        )
-      } catch (err) {
-        const e = asWriteError(err)
-        setAttachList((prev) =>
-          prev.map((a) => (a.localId === localId ? { ...a, status: 'error' } : a))
-        )
-        toastError(
-          t('compose.toast.attachmentUploadFail', { name: file.name }),
-          e.code ? `${e.code} · ${e.message}` : e.message
-        )
-      }
-    },
-    [mailApi, t]
-  )
-
-  const handleFilesSelected = useCallback(
-    (files: FileList | null) => {
-      if (!files) return
-      for (const file of Array.from(files)) {
-        if (file.size > MAX_ATTACHMENT_BYTES) {
-          toastError(t('compose.toast.attachmentTooLarge', { name: file.name, max: 20 }))
-          continue
-        }
-        markDirty()
-        void uploadAttachment(file)
-      }
-    },
-    [uploadAttachment, t, markDirty]
-  )
-
-  // 资料库选择器的回执 —— 库内文件不经 staging (字节已在库里), 落地即 'done';
-  // 服务端按 library_file_id 过路径 jail 后自己读原件。
-  const addLibraryFiles = useCallback(
-    (files: readonly LibraryFile[]) => {
-      // 已在列表里的不重复添加。投影行 (邮件附件) 走 attachmentId, 与 forward hydrate
-      // 出来的原附件 chip 是同一个身份空间, 一条判据同时覆盖两种重复。
-      const already = (file: LibraryFile): boolean =>
-        file.id != null
-          ? attachList.some((a) => a.libraryFileId === file.id)
-          : attachList.some((a) => a.attachmentId === file.attachment_id)
-      const added: ComposeAttachmentChip[] = []
-      for (const file of files) {
-        if (already(file)) continue
-        // 与本机文件那条路同口径 (服务端 20MB 复核是权威, 前端先拦是 UX)。
-        if (file.size_bytes != null && file.size_bytes > MAX_ATTACHMENT_BYTES) {
-          toastError(t('compose.toast.attachmentTooLarge', { name: file.filename, max: 20 }))
-          continue
-        }
-        added.push({
-          localId: ++attachSeq.current,
-          filename: file.filename,
-          size: file.size_bytes,
-          status: 'done',
-          // 投影行没有 library id (id: null), 只能走已有的 {attachment_id} 腿。
-          ...(file.id != null
-            ? { libraryFileId: file.id }
-            : { attachmentId: file.attachment_id as number })
-        })
-      }
-      if (added.length === 0) return
-      setAttachList((prev) => [...prev, ...added])
-      markDirty()
-    },
-    [attachList, markDirty, t]
-  )
-
-  const removeAttachment = useCallback(
-    (localId: number) => {
-      // 只移除本地引用; staging 残留由服务端 TTL/send 后清理, 无需删端点。
-      const hit = attachList.find((a) => a.localId === localId)
-      if (hit?.previewUrl) {
-        URL.revokeObjectURL(hit.previewUrl)
-        previewUrlsRef.current.delete(hit.previewUrl)
-      }
-      setAttachList((prev) => prev.filter((a) => a.localId !== localId))
-      markDirty()
-    },
-    [attachList, markDirty]
-  )
-
-  const uploadsPending = attachList.some((a) => a.status === 'uploading')
-  const readyAttachments = attachList.filter((a) => a.status === 'done')
-
-  const queryClient = useQueryClient()
-  const invalidateLists = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: qk.emails.all() })
-    void queryClient.invalidateQueries({ queryKey: qk.mailboxes() })
-  }, [queryClient])
-
-  // codex F1 — forward 打开即 hydrate: 原邮件非 inline 附件进 attachList 成可移除
-  // tray 卡片。口径对齐服务端 _collect_forward_attachments (只滤 is_inline, 不滤
-  // derived); detail 走 ensureQueryData (引用块已拉过时命中缓存)。hydrate 不标
-  // dirty (等同预填)。失败 → 'error' (错误条 + 重试), 发送前未成功一律硬阻断,
-  // 绝不静默丢原附件 (契约 D4 附件铁律)。
-  useEffect(() => {
-    if (mode !== 'forward' || fwdAttachState !== 'pending') return
-    let cancelled = false
-    void (async () => {
-      try {
-        const detail = await queryClient.ensureQueryData({
-          queryKey: qk.email.detail(internalId),
-          queryFn: () => mailApi.email.get(internalId)
-        })
-        if (cancelled) return
-        const chips: ComposeAttachmentChip[] = (detail?.attachments ?? [])
-          .filter((a) => !a.is_inline)
-          .map((a) => ({
-            localId: ++attachSeq.current,
-            filename: a.filename,
-            size: a.size_bytes ?? null,
-            status: 'done' as const,
-            attachmentId: a.id
-          }))
-        // 原附件前置 (hydrate 落地前用户已 staged 的文件保持在后)。
-        setAttachList((prev) => [...chips, ...prev])
-        setFwdAttachState('done')
-      } catch {
-        if (!cancelled) setFwdAttachState('error')
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [mode, fwdAttachState, internalId, queryClient, mailApi])
-
-  const buildComposePayload = useCallback(() => {
-    // codex F1 — forward 附件权威列表契约: 原邮件非 inline 附件在打开时已 hydrate 进
-    // attachList (可移除 chips), 此处恒发显式 attachments (含空数组 []) —— 服务端收到
-    // 显式列表即跳过 auto-collect, 用户移除任一/全部原附件的意图得以表达 (旧实现列表
-    // 为空省略键 → 服务端 auto-collect 静默恢复全部原附件)。不发键 = 服务端缺省
-    // auto-collect, 那是 CLI/ping-island 的语义; 其他模式 (reply/new/draft-edit)
-    // 空列表仍省略键, 语义不变。未 hydrate 成功 → 硬阻断 (绝不静默丢原附件)。
-    if (mode === 'forward' && fwdAttachState !== 'done') {
-      throw Object.assign(new Error(t('compose.toast.forwardAttachLoadFail')), {
-        code: 'E_FORWARD_ATTACH'
-      })
-    }
-    // D1 refs: 三条腿见 attachmentRefOf。
-    // draft-edit 追加 D2 隐藏保真集 (inline 部件, 不显示为 chip 但必须过线)。
-    const refs: ComposeAttachmentRef[] = [
-      ...attachList.filter((a) => a.status === 'done').map(attachmentRefOf),
-      ...inlineRefs.map((a) => ({ attachment_id: a.id }))
-    ]
-    return {
-      // draft-edit 用替换锚 (保存后旧行已删, 锚随 mirror_internal_id 换新行)。
-      internalId: isDraftEdit ? draftRowId : internalId,
-      mode: wireMode,
-      to,
-      cc,
-      bcc,
-      subject,
-      // UI 里改主题是用户明确意图 — 跳过服务层 reply 改主题断线程守卫 (守卫防 agent/CLI 误用)
-      forceSubject: true,
-      bodyHtml: getSanitizedHtml(),
-      importance,
-      // D3 兜底闸 — draft-edit 恒发显式 attachments 键 (含空数组): 键省略时服务端
-      // 无从区分「没有附件」与「客户端漏传」, 会静默产出无附件 EML (服务端另有
-      // 拒绝守卫, 这里是权威列表的表达面, 同 forward 契约)。
-      ...(mode === 'forward' || isDraftEdit || refs.length > 0 ? { attachments: refs } : {}),
-      // D1 Bug A — draft-edit 保存/发送带草稿行自己的 id: 服务端读该行 draft_in_reply_to/
-      // draft_references/thread_id 恢复回复线程, linkage 空回退零派生 (契约 sourceDraftId);
-      // C-1 起服务端还按它执行替换删除 (旧行 → 墓碑 + 本地删 + EXPUNGE 后台)。
-      ...(isDraftEdit ? { sourceDraftId: draftRowId } : {})
-    }
-  }, [
+  const {
+    savePending,
+    sendPending,
+    deletePending,
+    sendMutate,
+    deleteMutate,
+    saveDraftAsync,
+    busy
+  } = useComposeMutations({
     internalId,
-    draftRowId,
-    wireMode,
     mode,
+    wireMode,
     isDraftEdit,
+    draftRowId,
     to,
     cc,
     bcc,
     subject,
-    getSanitizedHtml,
     importance,
-    attachList,
-    inlineRefs,
-    fwdAttachState,
-    t
-  ])
-
-  const saveMut = useMutation({
-    mutationFn: async () => mailApi.email.draft(await buildComposePayload()),
-    // 不在此处 onClose —— 关闭由调用方决定: 顶部「保存草稿」按钮 新建关闭 /
-    // draft-edit 留在编辑态, 离开守卫「保存草稿」存后继续原动作 (mutateAsync
-    // resolve → proceed)。存成功即 baseline 复位 (dirty=false)。
-    onSuccess: (data) => {
-      toastSuccess(t('compose.toast.draftOk'))
-      setDirty(false)
-      // 保存后的锚：draft-edit 有镜像时换新行，否则维持现锚。快照收敛（dirty 放平 /
-      // lastSavedAt / 换锚）写到它上面。
-      let anchorAfterSave = isDraftEdit ? draftRowId : internalId
-      if (isDraftEdit) {
-        setLastSavedAt(new Date())
-        // C-1 replace — 服务端删旧行建镜像新行: 替换锚 + 附件引用一并换到新行
-        // (旧行的 attachment_id 已随行删除, 不换则下次保存引用解析失败)。镜像
-        // 失败时 mirror_internal_id 为 null → 保持旧锚 (降级: 下次保存回退新建)。
-        const d = (data ?? {}) as {
-          mirror_internal_id?: number | null
-          mirror_attachment_ids?: Record<string, number> | null
-        }
-        if (typeof d.mirror_internal_id === 'number') {
-          setDraftRowId(d.mirror_internal_id)
-          anchorAfterSave = d.mirror_internal_id
-          const idMap = d.mirror_attachment_ids ?? {}
-          setAttachList((prev) =>
-            prev.map((c) => {
-              const nid = idMap[c.filename]
-              return typeof nid === 'number' ? { ...c, attachmentId: nid, stageId: undefined } : c
-            })
-          )
-          setInlineRefs((prev) =>
-            prev.map((r) => {
-              const nid = idMap[r.filename]
-              return typeof nid === 'number' ? { ...r, id: nid } : r
-            })
-          )
-          // dogfood 波3 — 标签跟着换锚（不换 = 标签指着已删行，重启后成死标签）。
-          // 🔴 次序: 先 retarget 再 invalidate —— 反过来会打开「标签还指旧行、
-          // 旧行详情已 404」的死窗口。
-          retargetObjectTab('email', draftRowId, d.mirror_internal_id)
-        }
-      }
-      // 期望锚交给上面的收敛 effect（等渲染追上再落笔快照）。
-      snapshotRefreshRef.current = anchorAfterSave
-      invalidateLists()
-    },
-    onError: (err: unknown) => {
-      const e = asWriteError(err)
-      const key =
-        e.code === 'E_AUTH'
-          ? 'compose.toast.draftFailAuth'
-          : e.code === 'E_INVALID_ARG'
-            ? 'compose.toast.draftFailArg'
-            : 'compose.toast.draftFailGeneric'
-      toastError(t(key), e.code ? `${e.code} · ${e.message}` : e.message)
-    }
+    getSanitizedHtml,
+    attachList: attachments.attachList,
+    inlineRefs: attachments.inlineRefs,
+    fwdAttachState: attachments.fwdAttachState,
+    setDirty,
+    setDraftRowId,
+    setLastSavedAt,
+    setSendOpen,
+    remapMirrorAttachments,
+    schedulePostSaveSnapshot,
+    onClose
   })
 
-  const sendMut = useMutation({
-    mutationFn: async () => mailApi.email.send(await buildComposePayload()),
-    onSuccess: () => {
-      toastSuccess(t('compose.toast.sendOk'))
-      setSendOpen(false)
-      setDirty(false)
-      // draft-edit 发送成功后删掉原草稿 (替换语义: 发出的是 mode='new' 独立邮件, 原草稿仍在)。
-      // task 08-20: 不再 await —— 删草稿 IMAP 慢链 (2.5-5.4s) 曾把发送反馈拖到
-      // ~11.5s 转圈。后台执行, 失败仅 toast (邮件已发出, 残留草稿用户可手动删)。
-      // 删除目标 = 替换锚 draftRowId (保存过一次后原 internalId 行已被 replace 删掉)。
-      if (isDraftEdit) {
-        void mailApi.email
-          .deleteDraft(draftRowId)
-          .catch(() => toastError(t('compose.toast.draftDeleteFail')))
-          .finally(() => invalidateLists())
-      }
-      // draft-edit 发送 = 原草稿行随替换语义消亡 → 带 reason 让 EmailDetail 收标签。
-      onClose(isDraftEdit ? 'sent' : undefined)
-    },
-    onError: (err: unknown) => {
-      setSendOpen(false)
-      const e = asWriteError(err)
-      const key =
-        e.code === 'E_AUTH'
-          ? 'compose.toast.sendFailAuth'
-          : e.code === 'E_INVALID_ARG'
-            ? 'compose.toast.sendFailArg'
-            : 'compose.toast.sendFailGeneric'
-      toastError(t(key), e.code ? `${e.code} · ${e.message}` : e.message)
-    }
-  })
+  useEffect(() => {
+    busyRef.current = busy
+  }, [busy])
 
-  // 草稿编辑「放弃」= 删除草稿 (IMAP \\Deleted + 本地行清理)。
-  // 乐观删除 (task 08-20): onMutate 即关面板 + 提示 —— IMAP 慢链 (实测 2.5-5.4s)
-  // 全部后台化, 列表由 SSE + invalidateLists 最终一致。失败仅 toast: 服务端本地行
-  // 先删且不因 IMAP 失败抛错, 真失败 (auth/网络) 时残留由 reconcile 自愈, 重删即可。
-  const deleteMut = useMutation({
-    // 目标 = 替换锚 draftRowId (draft-edit 保存过一次后原行已被 replace 删掉)。
-    mutationFn: () => mailApi.email.deleteDraft(draftRowId),
-    onMutate: () => {
-      toastSuccess(t('compose.toast.draftDeleted'))
-      // 对象消亡 → 带 reason 让 EmailDetail 收标签（deleteMut 只在 draft-edit 出现）。
-      onClose('deleted')
-    },
-    onSuccess: () => {
-      invalidateLists()
-    },
-    onError: (err: unknown) => {
-      const e = asWriteError(err)
-      toastError(
-        t('compose.toast.draftDeleteFail'),
-        e.code ? `${e.code} · ${e.message}` : e.message
-      )
-    }
-  })
-
-  // T6 Bug C — 离开守卫。saveDraft=mutateAsync (resolve=成功续跑, reject=留守)。
-  // 解构出稳定成员 (guardClose/handle/回调 稳定引用, unsavedOpen/saving 是值) 供 hook 依赖。
-  // 单飞 (task 08-20 draft-save): 顶部「保存草稿」按钮与离开守卫两个入口共用 —
-  // in-flight 复用同一 promise, 防双 APPEND (replace 语义下双 APPEND = 两行新草稿)。
-  const saveInflightRef = useRef<Promise<unknown> | null>(null)
-  const saveDraftAsync = useCallback(() => {
-    if (!saveInflightRef.current) {
-      saveInflightRef.current = saveMut.mutateAsync().finally(() => {
-        saveInflightRef.current = null
-      })
-    }
-    return saveInflightRef.current
-  }, [saveMut])
   const {
     guardClose,
     handle: guardHandle,
@@ -1093,8 +435,7 @@ export function ComposePanelInner({
     onDiscard: onGuardDiscard,
     onCancel: onGuardCancel
   } = useComposeGuard({ dirty, saveDraft: saveDraftAsync })
-  // 把守卫句柄挂到外部关闭方传入的 ref (新邮件浮窗 scrim·× / EmailDetail 切邮件),
-  // 让它们经同一守卫走; 内部 ESC/丢弃直接调 guardClose。handle 引用稳定, 只挂一次。
+
   useEffect(() => {
     if (!guardRef) return
     guardRef.current = guardHandle
@@ -1102,56 +443,13 @@ export function ComposePanelInner({
       if (guardRef) guardRef.current = null
     }
   }, [guardRef, guardHandle])
-  const busy = saveMut.isPending || sendMut.isPending || deleteMut.isPending
 
-  // L0 — 拖拽附件事件面: 只认真实文件拖入 (types 含 'Files'); 文本/HTML 拖拽不激活、
-  // 不 preventDefault → 落回 TipTap 原生行为。drop 复用 handleFilesSelected 管线
-  // (20MB 校验 → staging 上传 → chip), 零逻辑复制。busy 时不收 (对齐附件按钮 disabled)。
-  const handleDragEnter = useCallback(
-    (e: React.DragEvent) => {
-      if (busy || !e.dataTransfer.types.includes('Files')) return
-      dragDepth.current += 1
-      setIsDragActive(true)
-    },
-    [busy]
-  )
-  const handleDragOver = useCallback(
-    (e: React.DragEvent) => {
-      if (busy || !e.dataTransfer.types.includes('Files')) return
-      // preventDefault = 声明本区域可 drop (Chromium 默认 = 拒收/导航)。
-      e.preventDefault()
-      e.dataTransfer.dropEffect = 'copy'
-    },
-    [busy]
-  )
-  const handleDragLeave = useCallback(() => {
-    if (dragDepth.current === 0) return
-    dragDepth.current -= 1
-    if (dragDepth.current === 0) setIsDragActive(false)
-  }, [])
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      dragDepth.current = 0
-      setIsDragActive(false)
-      // 图片拖进正文时 composeInlineImage 插件已内联插入并在原生事件上打了标记
-      // (同一事件对象冒泡到这里) → 只收尾提示层, 不再把文件当附件重复添加。
-      if ((e.nativeEvent as unknown as Record<string, unknown>)[COMPOSE_INLINE_IMAGE_DROP_FLAG])
-        return
-      if (busy || !e.dataTransfer.types.includes('Files')) return
-      e.preventDefault()
-      handleFilesSelected(e.dataTransfer.files)
-    },
-    [busy, handleFilesSelected]
-  )
-
-  // forward / draft-edit / 写新邮件 必须有收件人; reply/reply-all 可空 (后端推导)。
-  // 附件上传中也不许发/存 (stage_id 未回执, 发出去就丢附件)。
   const requiresRecipient = mode === 'forward' || isDraftEdit || isNew
-  // codex F1 — forward 原附件未 hydrate 成功 (pending/error) 期间发/存硬阻断,
-  // 权威列表不完整就发会静默丢原附件。
-  const fwdAttachBlocked = mode === 'forward' && fwdAttachState !== 'done'
   const sendDisabled =
-    busy || uploadsPending || fwdAttachBlocked || (requiresRecipient && to.length === 0)
+    busy ||
+    attachments.uploadsPending ||
+    attachments.fwdAttachBlocked ||
+    (requiresRecipient && to.length === 0)
 
   const handleSendClick = useCallback(() => {
     if (requiresRecipient && to.length === 0) {
@@ -1161,9 +459,6 @@ export function ComposePanelInner({
     setSendOpen(true)
   }, [requiresRecipient, to.length, t])
 
-  // 顶部「放弃/删除」: reply/forward 的「丢弃」经离开守卫 —— 有未保存更改 (dirty) 才
-  // 弹 UnsavedChangesDialog, 否则直接关闭 (预填不标脏 → 刚打开即丢弃不会误弹)。draft-edit
-  // 的「删除」= 改 DB (IMAP \\Deleted + 本地行清理), 不可逆 → 仍走 DeleteDraftDialog 二次确认。
   const handleDiscard = useCallback(() => {
     if (isDraftEdit) {
       setDeleteConfirmOpen(true)
@@ -1172,8 +467,6 @@ export function ComposePanelInner({
     guardClose(onClose)
   }, [isDraftEdit, onClose, guardClose])
 
-  // ESC: 经离开守卫关闭 (dirty 弹确认, 否则直接关)。守卫弹窗已开时 ESC 交给 Radix
-  // (onOpenChange → onCancel), 此处 bail 防重复触发。
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
@@ -1197,22 +490,16 @@ export function ComposePanelInner({
   return (
     <main
       aria-label="compose-panel"
-      onDragEnter={handleDragEnter}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
+      onDragEnter={attachments.handleDragEnter}
+      onDragOver={attachments.handleDragOver}
+      onDragLeave={attachments.handleDragLeave}
+      onDrop={attachments.handleDrop}
       className={cn(
-        // L0 — relative: 拖拽 drop 提示层 (absolute inset-0) 的定位上下文。
         'relative flex flex-col min-h-0 overflow-hidden',
-        // column: 占满 detail 列 (glass-3 半透明作列背景)。
-        // modal: 撑满 ComposeNewModal 卡片 (背景/圆角/阴影由外壳给, 这里只布局)。
         variant === 'modal' ? 'h-full' : 'flex-1 min-w-0 glass-3'
       )}
     >
-      {/* L0 — 文件拖入提示层。pointer-events-none 让 drag/drop 事件全部落在
-          <main> 本体 (提示层不吞事件、不扰动 dragDepth 计数); accent 低透明浮层
-          配方 (bg/描边走 --c-accent token), 圆角走 --r-card 档。 */}
-      {isDragActive && (
+      {attachments.isDragActive && (
         <div
           aria-hidden
           className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-[var(--r-card)] border-2 border-dashed border-coral/50 bg-coral/10"
@@ -1223,299 +510,93 @@ export function ComposePanelInner({
           </span>
         </div>
       )}
-      {/* 顶部动作工具栏 (Outlook 式) — 替代旧 mode 徽头 + 底部 send dock。 */}
-      <header className="h-12 shrink-0 border-b border-ink-border/60 flex items-center gap-1.5 px-3">
-        <button
-          type="button"
-          onClick={handleSendClick}
-          disabled={sendDisabled}
-          className="gbtn gbtn-primary"
-          style={{ height: '34px' }}
-        >
-          {sendMut.isPending ? (
-            <Loader2 size={13} strokeWidth={2} className="animate-spin" />
-          ) : (
-            <Send size={13} strokeWidth={2} />
-          )}
-          {t('compose.send')}
-        </button>
-        <button
-          type="button"
-          onClick={handleDiscard}
-          disabled={busy}
-          className="gbtn gbtn-bare"
-          style={{ height: '34px' }}
-          title={isDraftEdit ? t('compose.deleteDraft') : `${t('compose.discard')} · Esc`}
-        >
-          {deleteMut.isPending ? (
-            <Loader2 size={13} strokeWidth={2} className="animate-spin" />
-          ) : (
-            <Trash2 size={13} strokeWidth={2} />
-          )}
-          {isDraftEdit ? t('compose.deleteDraft') : t('compose.discard')}
-        </button>
-        {/* 保存草稿 — draft-edit 也有 (task 08-20 draft-save B: 原「改完就发」设计
-            把唯一保存路径留给离开守卫弹框)。draft-edit 语义 = 存后留在编辑态
-            (replace 保存, 锚换新行); 其余模式维持存后关闭。走单飞 saveDraftAsync,
-            与离开守卫共用 in-flight。 */}
-        <button
-          type="button"
-          onClick={() => {
-            if (isDraftEdit) {
-              saveDraftAsync().catch(() => {})
-            } else {
-              saveDraftAsync().then(
-                () => onClose(),
-                () => {}
-              )
-            }
-          }}
-          disabled={busy || uploadsPending || fwdAttachBlocked}
-          className="gbtn"
-          style={{ height: '34px' }}
-        >
-          {saveMut.isPending ? (
-            <Loader2 size={13} strokeWidth={2} className="animate-spin" />
-          ) : null}
-          {t('compose.saveDraft')}
-        </button>
-        {isDraftEdit && lastSavedAt && (
-          <span className="text-meta font-mono text-ink-fg-3">
-            {t('compose.savedAt', {
-              time: lastSavedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-            })}
-          </span>
-        )}
-        <span className="w-px h-5 bg-ink-border-soft mx-1" aria-hidden />
-        <button
-          type="button"
-          onClick={insertSignature}
-          disabled={!signature || busy}
-          className="gbtn gbtn-bare"
-          style={{ height: '34px' }}
-          title={signature ? t('compose.signatureInsert') : t('compose.signatureEmpty')}
-        >
-          <PenLine size={13} strokeWidth={2} />
-          {t('compose.signature')}
-        </button>
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={busy}
-          className="gbtn gbtn-bare"
-          style={{ height: '34px' }}
-          title={t('compose.attach')}
-        >
-          <Paperclip size={13} strokeWidth={2} />
-          {t('compose.attach')}
-        </button>
-        {libraryPickerAvailable && (
-          <button
-            type="button"
-            onClick={() => setLibraryPickerOpen(true)}
-            disabled={busy}
-            className="gbtn gbtn-bare"
-            style={{ height: '34px' }}
-            title={t('library.compose.pickFromLibrary')}
-          >
-            <FileDown size={13} strokeWidth={2} />
-            {t('library.compose.pickFromLibrary')}
-          </button>
-        )}
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          hidden
-          aria-label={t('compose.attach')}
-          onChange={(e) => {
-            handleFilesSelected(e.currentTarget.files)
-            // 清空 value 让同一文件可重复选择 (删了再加回)。
-            e.currentTarget.value = ''
-          }}
-        />
-        <div className="ml-auto flex items-center gap-2 min-w-0">
-          <span className="text-meta text-ink-fg-2 truncate max-w-[220px]" title={headerHint}>
-            {headerHint}
-          </span>
-        </div>
-      </header>
 
-      {/* draftPlan 失败 banner (reply/forward only) — 失败时收件人/正文都预填不上, 显式告知 + 重试。 */}
+      <ComposeActionHeader
+        isDraftEdit={isDraftEdit}
+        busy={busy}
+        sendDisabled={sendDisabled}
+        sendPending={sendPending}
+        deletePending={deletePending}
+        savePending={savePending}
+        uploadsPending={attachments.uploadsPending}
+        fwdAttachBlocked={attachments.fwdAttachBlocked}
+        lastSavedAt={lastSavedAt}
+        signature={signature}
+        libraryPickerAvailable={libraryPickerAvailable}
+        headerHint={headerHint}
+        fileInputRef={attachments.fileInputRef}
+        onSendClick={handleSendClick}
+        onDiscard={handleDiscard}
+        onSaveDraftClick={() => {
+          if (isDraftEdit) {
+            saveDraftAsync().catch(() => {})
+          } else {
+            saveDraftAsync().then(
+              () => onClose(),
+              () => {}
+            )
+          }
+        }}
+        onInsertSignature={insertSignature}
+        onOpenLibraryPicker={() => setLibraryPickerOpen(true)}
+        onFilesSelected={attachments.handleFilesSelected}
+      />
+
       {!isDraftEdit && planQ.isError && (
-        <div className="border-b border-ink-border/60 shrink-0 px-4 py-3 flex items-start gap-3 bg-fail/10">
-          <div className="flex-1 text-aux text-fail">
-            <div className="font-medium">{t('compose.planError')}</div>
-            <div className="text-meta font-mono text-ink-fg-2 mt-0.5">
-              {t('compose.planErrorHint', {
-                code: planError?.code ?? planError?.message ?? 'E_UNKNOWN'
-              })}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => void planQ.refetch()}
-            className="shrink-0 px-2.5 py-1.5 rounded text-aux text-fail hover:bg-fail/15 transition-colors duration-fast inline-flex items-center gap-1.5"
-          >
-            <RotateCcw size={11} strokeWidth={2} />
-            {t('compose.planRetry')}
-          </button>
-        </div>
+        <ComposePlanErrorBanner
+          code={planError?.code ?? planError?.message ?? 'E_UNKNOWN'}
+          onRetry={() => void planQ.refetch()}
+        />
       )}
 
-      {/* 收件人表头 — From(只读) / To / Cc·Bcc / Subject(右侧 重要性) */}
-      <div className="border-b border-ink-border/60 shrink-0">
-        <div className="folder-field-row">
-          <span className="field-label">{t('compose.from')}</span>
-          <div className="flex items-center gap-2 min-w-0">
-            <SenderChip email={selfEmail} fallbackLabel={t('compose.fromUnknown')} />
-          </div>
-          <span />
-        </div>
+      <ComposeHeaderFields
+        selfEmail={selfEmail}
+        isNew={isNew}
+        to={to}
+        cc={cc}
+        bcc={bcc}
+        subject={subject}
+        importance={importance}
+        ccVisible={ccVisible}
+        bccVisible={bccVisible}
+        onToChange={withDirty(setTo)}
+        onCcChange={withDirty(setCc)}
+        onBccChange={withDirty(setBcc)}
+        onSubjectChange={withDirty(setSubject)}
+        onImportanceChange={withDirty(setImportance)}
+        onShowCc={() => setCcVisible(true)}
+        onShowBcc={() => setBccVisible(true)}
+        onCollapseCc={() => {
+          setCc([])
+          setCcVisible(false)
+          markDirty()
+        }}
+        onCollapseBcc={() => {
+          setBcc([])
+          setBccVisible(false)
+          markDirty()
+        }}
+      />
 
-        <div className="relative">
-          <RecipientField
-            label={t('compose.to')}
-            values={to}
-            placeholder={t('compose.toPlaceholder')}
-            onChange={(next) => {
-              setTo(next)
-              markDirty()
-            }}
-            selfEmail={selfEmail}
-            excludeEmails={[...cc, ...bcc]}
-            autoFocus={isNew}
-          />
-          {(!ccVisible || !bccVisible) && (
-            <div className="absolute right-3 top-2 flex items-center gap-1 text-meta font-mono text-ink-fg-2">
-              {!ccVisible && (
-                <button
-                  type="button"
-                  onClick={() => setCcVisible(true)}
-                  className="px-1.5 py-0.5 rounded hover:bg-ink-3/60 hover:text-ink-fg transition-colors duration-fast"
-                >
-                  Cc
-                </button>
-              )}
-              {!ccVisible && !bccVisible && <span className="text-ink-fg-3">·</span>}
-              {!bccVisible && (
-                <button
-                  type="button"
-                  onClick={() => setBccVisible(true)}
-                  className="px-1.5 py-0.5 rounded hover:bg-ink-3/60 hover:text-ink-fg transition-colors duration-fast"
-                >
-                  Bcc
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-
-        {ccVisible && (
-          <div className="relative">
-            <RecipientField
-              label={t('compose.cc')}
-              values={cc}
-              placeholder={t('compose.ccPlaceholder')}
-              onChange={(next) => {
-                setCc(next)
-                markDirty()
-              }}
-              selfEmail={selfEmail}
-              excludeEmails={[...to, ...bcc]}
-            />
-            {/* × 收起并清空 (design/app.jsx ComposeFields cmp-fieldx)。 */}
-            <button
-              type="button"
-              aria-label={t('compose.ccCollapse')}
-              title={t('compose.ccCollapse')}
-              onClick={() => {
-                setCc([])
-                setCcVisible(false)
-                markDirty()
-              }}
-              className="absolute right-3 top-2.5 p-1 rounded-[var(--r-ctl)] text-ink-fg-3 hover:text-ink-fg hover:bg-ink-3/60 transition-colors duration-fast"
-            >
-              <X size={13} strokeWidth={2} />
-            </button>
-          </div>
-        )}
-        {bccVisible && (
-          <div className="relative">
-            <RecipientField
-              label={t('compose.bcc')}
-              values={bcc}
-              placeholder={t('compose.bccPlaceholder')}
-              onChange={(next) => {
-                setBcc(next)
-                markDirty()
-              }}
-              selfEmail={selfEmail}
-              excludeEmails={[...to, ...cc]}
-            />
-            <button
-              type="button"
-              aria-label={t('compose.bccCollapse')}
-              title={t('compose.bccCollapse')}
-              onClick={() => {
-                setBcc([])
-                setBccVisible(false)
-                markDirty()
-              }}
-              className="absolute right-3 top-2.5 p-1 rounded-[var(--r-ctl)] text-ink-fg-3 hover:text-ink-fg hover:bg-ink-3/60 transition-colors duration-fast"
-            >
-              <X size={13} strokeWidth={2} />
-            </button>
-          </div>
-        )}
-
-        <div className="folder-field-row">
-          <span className="field-label">{t('compose.subject')}</span>
-          <input
-            className="text-aux font-medium"
-            value={subject}
-            placeholder={t('compose.subjectPlaceholder')}
-            onChange={(e) => {
-              setSubject(e.target.value)
-              markDirty()
-            }}
-            aria-label={t('compose.subject')}
-          />
-          <ImportanceSelect
-            value={importance}
-            onChange={(v) => {
-              setImportance(v)
-              markDirty()
-            }}
-          />
-        </div>
-      </div>
-
-      {/* 格式工具栏 (主题与正文之间, Outlook 同位) */}
       {editor && (
         <ComposeFormatToolbar
           editor={editor}
           lineHeight={lineHeightChoice}
-          onLineHeightChange={(v) => {
-            setLineHeightChoice(v)
-            markDirty()
-          }}
+          onLineHeightChange={withDirty(setLineHeightChoice)}
         />
       )}
 
-      {/* 单一纵向滚动所有者：附件、正文与引用共同受 composer 视口约束。 */}
       <div
         data-testid="compose-scroll-owner"
         className="flex-1 min-h-0 overflow-y-auto scrollbar-thin flex flex-col"
         style={{ scrollbarGutter: 'stable' }}
       >
-        {/* 原附件权威列表加载失败时优先露出重试入口，避免被长正文推到滚动区底部。 */}
-        {mode === 'forward' && fwdAttachState === 'error' && (
+        {mode === 'forward' && attachments.fwdAttachState === 'error' && (
           <div className="border-b border-ink-border/60 shrink-0 px-4 py-2.5 flex items-center gap-3 bg-fail/10">
             <div className="flex-1 text-aux text-fail">{t('compose.forwardAttachError')}</div>
             <button
               type="button"
-              onClick={() => setFwdAttachState('pending')}
+              onClick={attachments.retryForwardAttachments}
               className="shrink-0 px-2.5 py-1.5 rounded text-aux text-fail hover:bg-fail/15 transition-colors duration-fast inline-flex items-center gap-1.5"
             >
               <RotateCcw size={11} strokeWidth={2} />
@@ -1524,28 +605,24 @@ export function ComposePanelInner({
           </div>
         )}
 
-        {/* D6/T3 — 附件架置于主题/格式栏下方、正文上方。默认只展示两行，展开后
-            仍由本滚动区承接，不再以 shrink-0 行数把 composer 撑穿外层。 */}
-        {attachList.length > 0 && (
+        {attachments.attachList.length > 0 && (
           <div className="border-b border-ink-border/60 bg-ink-2/40 shrink-0">
             <AttachmentTray
-              items={attachList.map((a) => ({
+              items={attachments.attachList.map((a) => ({
                 localId: a.localId,
                 filename: a.filename,
                 size: a.size,
                 status: a.status,
                 previewUrl: a.previewUrl
               }))}
-              onAdd={() => fileInputRef.current?.click()}
-              onRemove={removeAttachment}
+              onAdd={() => attachments.fileInputRef.current?.click()}
+              onRemove={attachments.removeAttachment}
             />
           </div>
         )}
 
-        {/* 正文 */}
         <ComposeEditor editor={editor} lineHeight={effectiveLineHeight} />
 
-        {/* 原文引用块 — reply/forward 的引用原文, 或 draft-edit 保真模式的原草稿富文本。 */}
         {quoteHtml && (!isDraftEdit || preserveOriginal || splitQuote) && (
           <div className="border-t border-ink-border/60 bg-ink-2/40 shrink-0 min-h-0 flex flex-col">
             <div className="shrink-0 flex items-center gap-1.5 pr-3">
@@ -1579,9 +656,6 @@ export function ComposePanelInner({
             {quoteOpen && (
               <div className="px-3 pb-3">
                 <div className="border border-ink-border-soft rounded-md bg-ink-2/40 px-4 py-3.5">
-                  {/* draft-edit: 引用区只展示 quoteHtml 段 (htmlOverride), 不按 id 重拉全文 —
-                    marker 拆分后编辑器已有回复段, 全文渲染会视觉重复。reply/forward 维持
-                    现状按原邮件 id 取正文。 */}
                   <EmailBodyFrame
                     internalId={internalId}
                     attachments={quoteAttachments}
@@ -1593,7 +667,6 @@ export function ComposePanelInner({
           </div>
         )}
 
-        {/* 附件提示 (reply 原邮件附件不重传)。 */}
         {!isDraftEdit && mode !== 'forward' && planAttachments > 0 && (
           <div className="border-t border-ink-border/60 bg-ink-2/40 px-3 py-2 shrink-0 text-meta font-mono text-ink-fg-2">
             {t('compose.attachmentsNote', { n: planAttachments })}
@@ -1606,24 +679,24 @@ export function ComposePanelInner({
         to={to}
         cc={cc}
         bcc={bcc}
-        // forward 原附件已 hydrate 进 readyAttachments (F1), 再加 planAttachments
-        // 会双重计数; reply 维持现状 (planAttachments 是"不重传"提示对应的原附件数)。
-        attachments={(mode === 'forward' ? 0 : planAttachments) + readyAttachments.length}
-        pending={sendMut.isPending}
-        onConfirm={() => sendMut.mutate()}
+        attachments={
+          (mode === 'forward' ? 0 : planAttachments) + attachments.readyAttachments.length
+        }
+        pending={sendPending}
+        onConfirm={sendMutate}
         onCancel={() => setSendOpen(false)}
       />
       {libraryPickerAvailable && (
         <LibraryFilePickerDialog
           open={libraryPickerOpen}
           onOpenChange={setLibraryPickerOpen}
-          onConfirm={addLibraryFiles}
+          onConfirm={attachments.addLibraryFiles}
         />
       )}
       <DeleteDraftDialog
         open={deleteConfirmOpen}
-        pending={deleteMut.isPending}
-        onConfirm={() => deleteMut.mutate()}
+        pending={deletePending}
+        onConfirm={deleteMutate}
         onCancel={() => setDeleteConfirmOpen(false)}
       />
       <UnsavedChangesDialog
@@ -1631,11 +704,8 @@ export function ComposePanelInner({
         pending={guardSaving}
         onSave={onGuardSave}
         onDiscard={() => {
-          // draft-edit 丢弃 = 放弃未保存修改：清标签快照 + 压住卸载兜底（否则 cleanup
-          // 会把刚丢弃的现场又写回去）。overlay 的快照清理走 EmailDetail 的真实关闭
-          // effect（open 在本邮件上翻 false → clearObjectTabDraft），不在这里。
           if (isDraftEdit) {
-            snapshotSuppressedRef.current = true
+            suppressUnmountSnapshot()
             clearObjectTabDraft('email', draftRowId)
           }
           onGuardDiscard()
@@ -1647,10 +717,7 @@ export function ComposePanelInner({
 }
 
 /** Store-driven wrapper (reply / reply-all / forward overlay). 草稿编辑态由 EmailDetail
- *  直接渲染 ComposePanelInner (mode='draft-edit'), 不走此 store。
- *  08-27 标签工作区: overlay 的「切邮件不丢字节」由 snapshotRef / initialTabDraft 这对
- *  现场快照承担；guardRef 是标签**关闭守卫**的承接口（dogfood 波3: ⌘W / × 关 dirty
- *  标签时 EmailDetail 经它弹 UnsavedChangesDialog, 保存链在面板里）。 */
+ *  直接渲染 ComposePanelInner (mode='draft-edit'), 不走此 store。 */
 export function ComposePanel({
   snapshotRef,
   initialTabDraft,
