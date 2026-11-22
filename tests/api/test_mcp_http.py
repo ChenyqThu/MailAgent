@@ -9,6 +9,7 @@ Streamable HTTP (`Mcp-Session-Id` + `GET`/`DELETE /mcp`)、Legacy HTTP+SSE
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import threading
 import time
@@ -801,10 +802,25 @@ def test_real_mcp_sdk_clients_over_sse_and_streamable_http(
                     if not msg.get("more_body", False):
                         await send_ch.aclose()
 
-            tg = anyio.create_task_group()
-            await tg.__aenter__()
-            tg.start_soon(self.app, scope, receive, send)
+            async def _run_app():
+                try:
+                    await self.app(scope, receive, send)
+                except asyncio.CancelledError:
+                    raise
+                except (anyio.BrokenResourceError, anyio.ClosedResourceError):
+                    if not disconnect_ev.is_set():
+                        raise
+                finally:
+                    start_ev.set()
+                    with anyio.CancelScope(shield=True):
+                        await send_ch.aclose()
+
+            task = asyncio.create_task(_run_app())
             await start_ev.wait()
+            if task.done() and not task.cancelled():
+                exc = task.exception()
+                if exc is not None:
+                    raise exc
 
             class _BodyStream(httpx2.AsyncByteStream):
                 async def __aiter__(self):
@@ -813,10 +829,16 @@ def test_real_mcp_sdk_clients_over_sse_and_streamable_http(
                             yield chunk
 
                 async def aclose(self):
-                    disconnect_ev.set()
-                    await recv_ch.aclose()
-                    tg.cancel_scope.cancel()
-                    await tg.__aexit__(None, None, None)
+                    with anyio.CancelScope(shield=True):
+                        disconnect_ev.set()
+                        await recv_ch.aclose()
+                        if not task.done():
+                            try:
+                                await asyncio.wait_for(asyncio.shield(task), timeout=1.0)
+                            except asyncio.TimeoutError:
+                                task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await task
 
             return httpx2.Response(status_code=status, headers=resp_headers, stream=_BodyStream())
 
