@@ -10,7 +10,7 @@ from src.api.routers import chat
 from src.api.routers.matters import MatterPatchWithScheduleRequest
 from src.api.schemas.matters import MatterCreateRequest, MatterProposalNewResource
 from src.library.constants import RESOURCE_KEY_PREFIX
-from src.mail import sync_store
+from src.mail import sync_store, sync_store_migrations, sync_store_schema
 from src.matters import (
     models,
     resource_identity,
@@ -227,7 +227,11 @@ def test_file_proposals_only_admit_the_library_prefix_and_check_existence():
 
 
 def test_migration_ddl_uses_canonical_sql_check_helper():
-    source = inspect.getsource(sync_store)
+    source = (
+        inspect.getsource(sync_store_schema)
+        + "\n"
+        + inspect.getsource(sync_store_migrations)
+    )
     assert "sql_check_clause(MatterStatus)" in source
     assert "sql_check_clause(MatterItemKind)" in source
     assert "sql_check_clause(MatterUpdateReviewStatus)" in source

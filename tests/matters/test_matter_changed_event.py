@@ -209,7 +209,16 @@ _TX_ALLOWED = {
 }
 
 
-@pytest.mark.parametrize("filename", ["service.py", "run_service.py"])
+@pytest.mark.parametrize(
+    "filename",
+    [
+        *sorted(
+            p.name
+            for p in (pathlib.Path(__file__).resolve().parents[2] / "src/matters").glob("service*.py")
+        ),
+        "run_service.py",
+    ],
+)
 def test_no_direct_repository_transaction(filename):
     """🔴 `src/matters/` 里不许再直接用 `repository.transaction()`。
 
