@@ -12,29 +12,13 @@ import type { FeedbackLogEntry } from '../feedback/contract'
 import type {
   AdminApi,
   AdminHealthData,
-  AdminStatsData,
-  AgendaEntry,
-  AgendaOpts,
   AIFields,
   AiApi,
   AttachmentApi,
   AttachmentMeta,
   BodyOpts,
   CalendarApi,
-  CalendarEventDetail,
-  CalendarEventOccurrence,
   CalendarExpandOpts,
-  CalendarSyncStateItem,
-  EmailCalendarLink,
-  EventCreateOpts,
-  EventDeleteOpts,
-  EventGetOpts,
-  EventSourceEmail,
-  EventReplayOpts,
-  EventRsvpOpts,
-  EventUpdateOpts,
-  EventsListOpts,
-  SyncNowOpts,
   ChatApi,
   ConnectorApi,
   DavMailApi,
@@ -42,23 +26,8 @@ import type {
   NotionAgentApi,
   NotionAgentConfig,
   NotionAgentDoctorCheck,
-  AgentRunListItem,
-  AgentRunPendingCount,
-  AgentRunState,
-  AgentRunStep,
-  AgentRunToolOptions,
   NotionAgentListItem,
   ReportApi,
-  ReportAgentConfig,
-  ReportAgentCreateInput,
-  ReportCadence,
-  ReportConfigPatch,
-  ReportDetail,
-  ReportListItem,
-  ReportPagedResult,
-  ReportRunResult,
-  ProjectProgressRunItem,
-  CleanupDeadLetterOpts,
   ComposeDraftOpts,
   ContactSuggestion,
   CreateDraftOpts,
@@ -70,9 +39,6 @@ import type {
   SendEmailOpts,
   StagedAttachment,
   UploadComposeAttachmentOpts,
-  DavMailHealthData,
-  DeadLetterItem,
-  DeadLetterListOpts,
   EmailApi,
   EmailBody,
   EmailDetail,
@@ -84,40 +50,22 @@ import type {
   FeedbackDiagnostics,
   FeedbackSubmitOpts,
   FolderApi,
-  FolderCleanupResult,
-  FolderDiscoverResult,
-  FolderManageResult,
-  FolderPref,
-  FolderPrefPatch,
-  FolderPrefsResult,
-  FolderSetWhitelistResult,
-  FolderWhitelistResult,
   EnvApi,
   EnvSetResult,
   EnvSnapshot,
   EventsApi,
   EventsStatus,
   HistorySyncApi,
-  HistorySyncCancelResult,
-  HistorySyncStartResult,
-  HistorySyncState,
   ServiceRestartResult,
   ServiceStatus,
   ServiceTarget,
   ServicesApi,
   SseEvent,
-  SystemAlertsData,
   JobEnqueueResult,
-  JobRecord,
   JobsApi,
   KosApi,
-  KosStatsData,
   ListOpts,
   LlmApi,
-  LlmRunOpts,
-  LlmSelfTestData,
-  LlmStatsData,
-  LlmUpstreamModelsData,
   MailApi,
   MailboxSummary,
   NlToDslResult,
@@ -126,10 +74,7 @@ import type {
   NotionWriteApi,
   PersistentSettings,
   PingResult,
-  PromptContent,
-  PromptSlot,
   PromptsApi,
-  PromptWriteResult,
   RecurringDiscoverOpts,
   RecurringInviteItem,
   RecurringReplayOpts,
@@ -142,10 +87,8 @@ import type {
   SettingsApi,
   TargetLang,
   TodayApi,
-  TodayData as TodayApiData,
   TranslateBatchResult,
   TranslationCache,
-  UpdateFlagOpts,
   UpdaterApi,
   UpdaterStatus
 } from './types'
@@ -155,7 +98,6 @@ import { createConnectorApi } from './connector_api'
 import { createDavMailApi } from './davmail_api'
 import { createMcpServiceApi } from './mcp_service_api'
 import { HttpApi } from './HttpApi'
-import { request } from './http_client'
 
 type IpcInvoker = (channel: string, ...args: unknown[]) => Promise<unknown>
 type IpcSender = (channel: string, ...args: unknown[]) => void
@@ -191,9 +133,9 @@ function sender(): IpcSender | null {
   return typeof fn === 'function' ? fn : null
 }
 
-/** Loopback serve-api base URL for zero-IPC HTTP calls from Electron renderer
- *  (e.g. llm/models). Port injected by main via ?apiPort=N; falls back to 8200. */
-function loopbackBaseUrl(): string {
+/** Loopback serve-api base URL for zero-IPC HTTP calls from Electron renderer.
+ *  Port injected by main via ?apiPort=N; falls back to 8200. */
+export function loopbackBaseUrl(): string {
   let port = 8200
   try {
     const raw = new URLSearchParams(window.location.search).get('apiPort')
@@ -258,16 +200,8 @@ function unwrap<T>(env: WriteEnvelope<T>): T {
 }
 
 class ElectronEmailApi implements EmailApi {
-  // Phase B G-B1a — 桌面搜索框收敛单核：search 不再走 IPC `email:search`（已删的
-  // TS CORE#2），改委托 lazy loopback HttpApi 的 `.email.search`（serve-api Python
-  // CORE#1）。这样桌面人工搜索与 chat/agentic 搜索同走一套引擎，结果恒一致。
-  // token + CORS 由 main `chat_local_bridge` 的 webRequest 透明注入；`new HttpApi
-  // (loopback)` 的 lazy `.chat` getter 永不构造（破循环，见 HttpApi.chat 注释）。
-  private _searchApi?: HttpApi
-  private searchApi(): HttpApi {
-    if (!this._searchApi) this._searchApi = new HttpApi(loopbackBaseUrl())
-    return this._searchApi
-  }
+  constructor(private readonly loopbackHttp: HttpApi) {}
+
   async list(opts: ListOpts): Promise<EmailMeta[]> {
     return (await invoker()('email:list', opts)) as EmailMeta[]
   }
@@ -299,302 +233,59 @@ class ElectronEmailApi implements EmailApi {
     return (await invoker()('email:aiFields', internalId)) as AIFields | null
   }
   async search(opts: SearchOpts): Promise<SearchResult> {
-    return this.searchApi().email.search(opts)
+    return this.loopbackHttp.email.search(opts)
   }
   async contactSuggest(
     q: string,
     limit?: number,
     exclude?: string | string[]
   ): Promise<ContactSuggestion[]> {
-    return (await invoker()('email:contactSuggest', { q, limit, exclude })) as ContactSuggestion[]
+    return this.loopbackHttp.email.contactSuggest(q, limit, exclude)
   }
   async resync(internalId: number, opts?: ResyncOpts): Promise<ResyncResult> {
-    const env = (await invoker()('email:resync', internalId, opts ?? {})) as WriteEnvelope<unknown>
-    return unwrap(env) as ResyncResult
+    return this.loopbackHttp.email.resync(internalId, opts)
   }
   async createDraft(opts: CreateDraftOpts): Promise<CreateDraftResult> {
     const env = (await invoker()('email:createDraft', opts)) as WriteEnvelope<CreateDraftResult>
     return unwrap(env)
   }
   async setReplySuggestion(opts: SetReplySuggestionOpts): Promise<SetReplySuggestionResult> {
-    const env = (await invoker()(
-      'email:setReplySuggestion',
-      opts
-    )) as WriteEnvelope<SetReplySuggestionResult>
-    return unwrap(env)
+    return this.loopbackHttp.email.setReplySuggestion(opts)
   }
   async draft(opts: ComposeDraftOpts): Promise<unknown> {
-    const env = (await invoker()('email:draft', opts)) as WriteEnvelope<unknown>
-    return unwrap(env)
+    return this.loopbackHttp.email.draft(opts)
   }
   async deleteDraft(internalId: number): Promise<unknown> {
-    const env = (await invoker()('email:deleteDraft', internalId)) as WriteEnvelope<unknown>
-    return unwrap(env)
+    return this.loopbackHttp.email.deleteDraft(internalId)
   }
   async send(opts: SendEmailOpts): Promise<unknown> {
-    const env = (await invoker()('email:send', opts)) as WriteEnvelope<unknown>
-    return unwrap(env)
+    return this.loopbackHttp.email.send(opts)
   }
   async uploadComposeAttachment(opts: UploadComposeAttachmentOpts): Promise<StagedAttachment> {
-    // ArrayBuffer 走 IPC 结构化克隆; main 侧 raw PUT 到 serve-api staging 端点。
-    const env = (await invoker()(
-      'email:composeAttachmentUpload',
-      opts
-    )) as WriteEnvelope<StagedAttachment>
-    return unwrap(env)
+    return this.loopbackHttp.email.uploadComposeAttachment(opts)
   }
   async draftPlan(opts: DraftPlanOpts): Promise<DraftPlanResult> {
-    const env = (await invoker()('email:draftPlan', opts)) as WriteEnvelope<DraftPlanResult>
-    return unwrap(env)
+    return this.loopbackHttp.email.draftPlan(opts)
   }
   async pin(internalId: number, pinned: boolean, opts?: EmailPinOpts): Promise<boolean | null> {
-    // Write IPC → envelope. CLI returns {internal_id, is_pinned, changed,
-    // dry_run}; we only surface `is_pinned` (boolean) to the renderer.
-    // `opts` (batch ids / thread cascade) rides the 3rd IPC arg the handler
-    // already accepts; the batch data block adds internal_ids/changed_ids
-    // which the renderer does not read (SSE reconciles the full set).
-    const env = (await invoker()('email:pin', internalId, pinned, opts ?? {})) as WriteEnvelope<{
-      internal_id: number
-      is_pinned: boolean
-      changed: boolean
-      dry_run: boolean
-    } | null>
-    const data = unwrap(env)
-    return data?.is_pinned ?? null
+    return this.loopbackHttp.email.pin(internalId, pinned, opts)
   }
   async listPinnedIds(): Promise<number[]> {
     return (await invoker()('email:listPinnedIds')) as number[]
   }
   async flag(internalId: number | null, opts: EmailFlagOpts): Promise<unknown> {
-    // Same envelope contract as the other write IPCs. The CLI returns its
-    // structured `data` block (updated_ids / outbox_entries / not_found) on
-    // success; on failure the envelope carries E_PM2_RUNNING / E_AUTH /
-    // E_INVALID_ARG etc. for the renderer to branch on.
-    const env = (await invoker()('email:flag', internalId, opts ?? {})) as WriteEnvelope<unknown>
-    return unwrap(env)
+    return this.loopbackHttp.email.flag(internalId, opts)
   }
   async archive(internalId: number): Promise<unknown> {
-    // Write IPC → envelope. CLI does IMAP MOVE INBOX→Archive + SQLite/Notion
-    // Mailbox→存档 and returns {success, from_mailbox, to_mailbox, notion_updated}.
-    const env = (await invoker()('email:archive', internalId)) as WriteEnvelope<unknown>
-    return unwrap(env)
+    return this.loopbackHttp.email.archive(internalId)
   }
   async batchResync(internalIds: number[], opts?: ResyncOpts): Promise<JobEnqueueResult> {
-    // D2b — Write IPC → envelope. Enqueues an async_jobs resync job and returns
-    // {job_id, status:'queued', was_created, …}; watchResyncJob then tracks
-    // progress via SSE job.* + jobs.get polling.
-    const env = (await invoker()(
-      'email:batchResync',
-      internalIds,
-      opts ?? {}
-    )) as WriteEnvelope<JobEnqueueResult>
-    return unwrap(env)
+    return this.loopbackHttp.email.batchResync(internalIds, opts)
   }
   async nlToDsl(nl: string): Promise<NlToDslResult> {
     // P4b — main 侧 handlers/nl_search.ts 永不 reject (失败以 {dsl:'', error}
     // 返回), 故这里直接透传, 无 envelope/unwrap。
     return (await invoker()('email:nlToDsl', nl)) as NlToDslResult
-  }
-}
-
-class ElectronFolderApi implements FolderApi {
-  // 多文件夹同步 (P3) — discover/whitelist 走 Main→daemon→serve-api 转发 (D1)。
-  // 用 envelope 形态过 IPC 边界以保住 error.code (非 davmail → E_INVALID_ARG, 给
-  // FolderPicker 门控)。
-  async discover(opts?: { counts?: boolean; refresh?: boolean }): Promise<FolderDiscoverResult> {
-    const env = (await invoker()('folder:discover', opts)) as WriteEnvelope<FolderDiscoverResult>
-    return unwrap(env)
-  }
-  async getWhitelist(): Promise<FolderWhitelistResult> {
-    const env = (await invoker()('folder:getWhitelist')) as WriteEnvelope<FolderWhitelistResult>
-    return unwrap(env)
-  }
-  async setWhitelist(imapNames: string[]): Promise<FolderSetWhitelistResult> {
-    const env = (await invoker()(
-      'folder:setWhitelist',
-      imapNames
-    )) as WriteEnvelope<FolderSetWhitelistResult>
-    return unwrap(env)
-  }
-  // 文件夹管理 (P4) — 新建/重命名/删除 走 Main→daemon→serve-api 转发 (envelope 保 code)。
-  async createFolder(parentImapName: string | null, name: string): Promise<FolderManageResult> {
-    const env = (await invoker()(
-      'folder:create',
-      parentImapName,
-      name
-    )) as WriteEnvelope<FolderManageResult>
-    return unwrap(env)
-  }
-  async renameFolder(imapName: string, newName: string): Promise<FolderManageResult> {
-    const env = (await invoker()(
-      'folder:rename',
-      imapName,
-      newName
-    )) as WriteEnvelope<FolderManageResult>
-    return unwrap(env)
-  }
-  async deleteFolder(imapName: string): Promise<FolderManageResult> {
-    const env = (await invoker()(
-      'folder:manageDelete',
-      imapName
-    )) as WriteEnvelope<FolderManageResult>
-    return unwrap(env)
-  }
-  async cleanup(imapName: string): Promise<FolderCleanupResult> {
-    const env = (await invoker()('folder:cleanup', imapName)) as WriteEnvelope<FolderCleanupResult>
-    return unwrap(env)
-  }
-  // per-folder 配置 (v62) — 图标 + 通知开关 + AI 开关 (纯本地, 非 davmail 也可)。
-  async getPrefs(): Promise<FolderPrefsResult> {
-    const env = (await invoker()('folder:getPrefs')) as WriteEnvelope<FolderPrefsResult>
-    return unwrap(env)
-  }
-  async setPref(imapName: string, patch: FolderPrefPatch): Promise<FolderPref> {
-    const env = (await invoker()('folder:setPref', imapName, patch)) as WriteEnvelope<FolderPref>
-    return unwrap(env)
-  }
-}
-
-class ElectronLlmApi implements LlmApi {
-  async run(internalId: number, opts?: LlmRunOpts): Promise<unknown> {
-    const env = (await invoker()('llm:run', internalId, opts ?? {})) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
-  async stats(days = 7): Promise<LlmStatsData> {
-    return (await invoker()('llm:stats', days)) as LlmStatsData
-  }
-  async selftest(): Promise<LlmSelfTestData> {
-    return (await invoker()('llm:selftest')) as LlmSelfTestData
-  }
-  async listUpstreamModels(opts?: {
-    refresh?: boolean
-    provider?: 'main' | 'translate'
-  }): Promise<LlmUpstreamModelsData> {
-    // Zero new IPC: Electron renderer calls the loopback serve-api directly
-    // (same pattern as chat runtime). The API key stays on the serve-api host.
-    const query: Record<string, string> = {}
-    if (opts?.refresh) query['refresh'] = 'true'
-    if (opts?.provider) query['provider'] = opts.provider
-    return request<LlmUpstreamModelsData>(
-      loopbackBaseUrl(),
-      'GET',
-      '/llm/models',
-      Object.keys(query).length > 0 ? { query } : undefined
-    )
-  }
-}
-
-class ElectronKosApi implements KosApi {
-  async stats(days = 7): Promise<KosStatsData> {
-    return (await invoker()('kos:stats', days)) as KosStatsData
-  }
-}
-
-class ElectronAdminApi implements AdminApi {
-  async health(): Promise<AdminHealthData> {
-    return (await invoker()('admin:health')) as AdminHealthData
-  }
-  async stats(): Promise<AdminStatsData> {
-    return (await invoker()('admin:stats')) as AdminStatsData
-  }
-  async deadLetterList(opts?: DeadLetterListOpts): Promise<DeadLetterItem[]> {
-    return (await invoker()('admin:deadLetterList', opts ?? {})) as DeadLetterItem[]
-  }
-  async deadLetterRetry(internalId: number): Promise<unknown> {
-    const env = (await invoker()('admin:deadLetterRetry', internalId)) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
-  async deadLetterDelete(internalId: number): Promise<unknown> {
-    const env = (await invoker()('admin:deadLetterDelete', internalId)) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
-  async cleanupDeadLetter(opts?: CleanupDeadLetterOpts): Promise<unknown> {
-    const env = (await invoker()('admin:cleanupDeadLetter', opts ?? {})) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
-  async davmailHealth(): Promise<DavMailHealthData> {
-    return (await invoker()('admin:davmailHealth')) as DavMailHealthData
-  }
-  async systemAlerts(): Promise<SystemAlertsData> {
-    return (await invoker()('admin:systemAlerts')) as SystemAlertsData
-  }
-  // E4 §4.2 — 导出诊断包 (仅 Electron: fork CLI 组装 tmp zip → showSaveDialog →
-  // copy 到用户选路径 / 取消清 tmp)。远程 HTTP AdminApi 不实现此可选方法。
-  async exportDiagnostics(): Promise<{ saved: boolean; path?: string }> {
-    return (await invoker()('admin:exportDiagnostics')) as { saved: boolean; path?: string }
-  }
-}
-
-class ElectronCalendarApi implements CalendarApi {
-  async recurringDiscover(opts?: RecurringDiscoverOpts): Promise<RecurringInviteItem[]> {
-    return (await invoker()('calendar:recurringDiscover', opts ?? {})) as RecurringInviteItem[]
-  }
-  async recurringReplay(opts: RecurringReplayOpts): Promise<unknown> {
-    const env = (await invoker()('calendar:recurringReplay', opts)) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
-  async expand(opts?: CalendarExpandOpts): Promise<unknown> {
-    const env = (await invoker()('calendar:expand', opts ?? {})) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
-
-  // Phase 3 §3.1 — Calendar SSoT
-  async eventsList(opts: EventsListOpts = {}): Promise<CalendarEventOccurrence[]> {
-    return (await invoker()('calendar:eventsList', opts)) as CalendarEventOccurrence[]
-  }
-  // task 08-27 P3 — 三源聚合。handler 经 daemon_api 转发本机 serve-api;
-  // serve-api 不可达时 reject (E_NETWORK), 前端月视图诚实显示错误态。
-  async agenda(opts: AgendaOpts): Promise<AgendaEntry[]> {
-    return (await invoker()('calendar:agenda', opts)) as AgendaEntry[]
-  }
-  async eventGet(opts: EventGetOpts): Promise<CalendarEventDetail | null> {
-    return (await invoker()('calendar:eventGet', opts)) as CalendarEventDetail | null
-  }
-  async syncStatus(): Promise<CalendarSyncStateItem[]> {
-    return (await invoker()('calendar:syncStatus')) as CalendarSyncStateItem[]
-  }
-  async calendarNames(): Promise<string[]> {
-    return (await invoker()('calendar:calendarNames')) as string[]
-  }
-
-  // 阶段 2.1 (P1-3) — 邮件 ↔ 日历 ical_uid 双向反查
-  async emailCalendarLink(internalId: number): Promise<EmailCalendarLink | null> {
-    return (await invoker()('calendar:emailCalendarLink', internalId)) as EmailCalendarLink | null
-  }
-  async eventSourceEmail(icalUid: string): Promise<EventSourceEmail | null> {
-    return (await invoker()('calendar:eventSourceEmail', icalUid)) as EventSourceEmail | null
-  }
-  async syncTrigger(opts: SyncNowOpts = {}): Promise<unknown> {
-    const env = (await invoker()('calendar:syncTrigger', opts)) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
-
-  // Phase 2.4 — replay calendar_event 行到 Notion (any source)
-  async eventReplay(opts: EventReplayOpts): Promise<unknown> {
-    const env = (await invoker()('calendar:eventReplay', opts)) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
-
-  // Phase 2.1 — RSVP iTIP REPLY to organizer
-  async eventRsvp(opts: EventRsvpOpts): Promise<unknown> {
-    const env = (await invoker()('calendar:eventRsvp', opts)) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
-
-  // Phase 2.2 — CalDAV PUT 新建事件
-  async eventCreate(opts: EventCreateOpts): Promise<unknown> {
-    const env = (await invoker()('calendar:eventCreate', opts)) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
-
-  // Phase 2.3 — CalDAV PUT update / DELETE
-  async eventUpdate(opts: EventUpdateOpts): Promise<unknown> {
-    const env = (await invoker()('calendar:eventUpdate', opts)) as WriteEnvelope<unknown>
-    return unwrap(env)
-  }
-  async eventDelete(opts: EventDeleteOpts): Promise<unknown> {
-    const env = (await invoker()('calendar:eventDelete', opts)) as WriteEnvelope<unknown>
-    return unwrap(env)
   }
 }
 
@@ -636,17 +327,6 @@ class ElectronSettingsApi implements SettingsApi {
   }
   async openNotificationSystemSettings(): Promise<{ ok: boolean }> {
     return (await invoker()('notifications:openSystemSettings')) as { ok: boolean }
-  }
-}
-
-class ElectronNotionWriteApi implements NotionWriteApi {
-  async updateFlag(internalId: number, opts: UpdateFlagOpts): Promise<unknown> {
-    const env = (await invoker()(
-      'notion:updateFlag',
-      internalId,
-      opts ?? {}
-    )) as WriteEnvelope<unknown>
-    return unwrap(env)
   }
 }
 
@@ -703,27 +383,11 @@ class ElectronAiApi implements AiApi {
 // 经 loopback serve-api fetch（token + CORS 由 main `chat_local_bridge` 的
 // webRequest 透明注入）。runtime 同进程直 throw `Error & {code}`，无 IPC 边界。
 
-/** renderer 内 ChatRuntime 的 loopback serve-api baseUrl。host 恒 127.0.0.1
- *  (loopback)；端口由 main `createWindow` 经 `?apiPort=N` 注入（`resolveApiPort()`
- *  单一真源 = serve-api 实际端口 = `chat_local_bridge` webRequest filter 端口）。
- *  renderer 进程无 `process.env`，故端口必须由 main 透传；缺省 / 解析失败回退 8200。 */
-function loopbackChatBaseUrl(): string {
-  let port = 8200
-  try {
-    const raw = new URLSearchParams(window.location.search).get('apiPort')
-    const n = raw != null ? Number.parseInt(raw, 10) : NaN
-    if (Number.isFinite(n) && n > 0) port = n
-  } catch {
-    // window/location 不可用（非 renderer 测试环境）→ 回退默认端口。
-  }
-  return `http://127.0.0.1:${port}/api`
-}
-
 /** ElectronApi.chat 的进程内 ChatRuntime（V2.1 3c-3 / S3 直 fetch 面）。`openPopout`
  *  是 Electron BrowserWindow 能力（shared runtime 里是 no-op）→ 这里 override 回
  *  main 的 `window:openChatPopout` IPC（runtime 透明，web 无此第二窗口场景）。 */
 function createElectronChatRuntime(): ChatApi {
-  const baseUrl = loopbackChatBaseUrl()
+  const baseUrl = loopbackBaseUrl()
   const runtime = createChatRuntime({ baseUrl })
   return {
     ...runtime,
@@ -843,31 +507,6 @@ class ElectronEventsApi implements EventsApi {
   }
 }
 
-// D2b — async_jobs 长任务查询 (batch resync 进度轮询)。jobs:get 经 daemonRequest
-// 转发 GET /api/jobs/{id}; 返回 envelope → unwrap (E_NOT_FOUND 抛 Error & {code})。
-class ElectronJobsApi implements JobsApi {
-  async get(jobId: number): Promise<JobRecord> {
-    const env = (await invoker()('jobs:get', jobId)) as WriteEnvelope<JobRecord>
-    return unwrap(env)
-  }
-}
-
-// 同步历史邮件 (task 09-11)。三个 channel 经 daemonRequest 转发 /api/history-sync*;
-// 与 jobs:get 同款 envelope → unwrap (E_NOT_FOUND 等抛 Error & {code})。
-class ElectronHistorySyncApi implements HistorySyncApi {
-  async get(): Promise<HistorySyncState> {
-    return unwrap((await invoker()('historySync:get')) as WriteEnvelope<HistorySyncState>)
-  }
-  async start(range: { since: string; until: string }): Promise<HistorySyncStartResult> {
-    return unwrap(
-      (await invoker()('historySync:start', range)) as WriteEnvelope<HistorySyncStartResult>
-    )
-  }
-  async cancel(): Promise<HistorySyncCancelResult> {
-    return unwrap((await invoker()('historySync:cancel')) as WriteEnvelope<HistorySyncCancelResult>)
-  }
-}
-
 // Sprint 18 §PR B — repo-root .env + pm2 services. Both APIs are pure
 // thin IPC bridges; no caching here (cache lives in useEnvStore on the
 // renderer side, refreshed on demand).
@@ -887,15 +526,6 @@ class ElectronServicesApi implements ServicesApi {
   }
   async status(): Promise<ServiceStatus[]> {
     return (await invoker()('services:status')) as ServiceStatus[]
-  }
-}
-
-class ElectronPromptsApi implements PromptsApi {
-  async read(slot: PromptSlot): Promise<PromptContent> {
-    return (await invoker()('prompts:read', slot)) as PromptContent
-  }
-  async write(slot: PromptSlot, content: string): Promise<PromptWriteResult> {
-    return (await invoker()('prompts:write', { slot, content })) as PromptWriteResult
   }
 }
 
@@ -934,81 +564,6 @@ class ElectronNotionAgentApi implements NotionAgentApi {
   }
 }
 
-class ElectronReportApi implements ReportApi {
-  async list(opts?: {
-    cadence?: ReportCadence
-    agentId?: string
-    limit?: number
-    offset?: number
-  }): Promise<ReportPagedResult<ReportListItem>> {
-    return (await invoker()('report:list', opts ?? {})) as ReportPagedResult<ReportListItem>
-  }
-  async get(reportId: string): Promise<ReportDetail | null> {
-    return (await invoker()('report:get', reportId)) as ReportDetail | null
-  }
-  // task 08-27 P5 —— 轻窗（同 ElectronEmailApi.openDetached）。
-  openDetached(reportId: string): void {
-    if (reportId === '') return
-    sender()?.('window:openDetached', 'report', reportId)
-  }
-  async getConfig(): Promise<ReportAgentConfig[]> {
-    return (await invoker()('report:getConfig')) as ReportAgentConfig[]
-  }
-  async setConfig(agentId: string, patch: ReportConfigPatch): Promise<ReportAgentConfig> {
-    const env = (await invoker()(
-      'report:setConfig',
-      agentId,
-      patch
-    )) as WriteEnvelope<ReportAgentConfig>
-    return unwrap(env)
-  }
-  async runNow(
-    agentId: string,
-    opts?: { cadence?: ReportCadence; type?: string }
-  ): Promise<ReportRunResult> {
-    const env = (await invoker()(
-      'report:runNow',
-      agentId,
-      opts ?? {}
-    )) as WriteEnvelope<ReportRunResult>
-    return unwrap(env)
-  }
-  async delete(reportId: string): Promise<void> {
-    const env = (await invoker()('report:delete', reportId)) as WriteEnvelope<{ deleted: string }>
-    unwrap(env)
-  }
-  async createAgent(input: ReportAgentCreateInput): Promise<ReportAgentConfig> {
-    const env = (await invoker()('report:createAgent', input)) as WriteEnvelope<ReportAgentConfig>
-    return unwrap(env)
-  }
-  async deleteAgent(agentId: string): Promise<{ deleted: string }> {
-    const env = (await invoker()('report:deleteAgent', agentId)) as WriteEnvelope<{
-      deleted: string
-    }>
-    return unwrap(env)
-  }
-  async listRuns(opts?: {
-    agentId?: string
-    limit?: number
-    offset?: number
-    state?: AgentRunState
-  }): Promise<ReportPagedResult<AgentRunListItem>> {
-    return (await invoker()('report:listRuns', opts ?? {})) as ReportPagedResult<AgentRunListItem>
-  }
-  async runLogSteps(runLogId: number): Promise<AgentRunStep[]> {
-    return (await invoker()('report:runLogSteps', runLogId)) as AgentRunStep[]
-  }
-  async pendingCount(): Promise<AgentRunPendingCount> {
-    return (await invoker()('report:pendingCount')) as AgentRunPendingCount
-  }
-  async toolOptions(): Promise<AgentRunToolOptions> {
-    return (await invoker()('report:toolOptions')) as AgentRunToolOptions
-  }
-  async projectProgressRuns(limit?: number): Promise<ProjectProgressRunItem[]> {
-    return (await invoker()('report:projectProgressRuns', limit)) as ProjectProgressRunItem[]
-  }
-}
-
 // task 08-27 P4a — 快捷反馈。两条链路都只有主进程做得到（诊断包 fork CLI / 提交要绕开
 // renderer CSP + 统一设 UA），故 renderer 侧全是薄 invoke。
 // 🔴 submit 失败**照抛**：调用方必须显示「没发出去」并给「打开表单页」的降级 —— 私有
@@ -1031,52 +586,63 @@ class ElectronFeedbackApi implements FeedbackApi {
   }
 }
 
-// task 08-27 P4c — 今日聚合读。handler 经 daemon_api 转发本机 serve-api（与
-// calendar:agenda 同款：判据在 Python 侧，TS 不重写一遍）。
-class ElectronTodayApi implements TodayApi {
-  async get(opts?: { tz?: string; replyLimit?: number }): Promise<TodayApiData> {
-    return (await invoker()('today:get', opts ?? {})) as TodayApiData
-  }
-  async dismiss(internalIds: number[]): Promise<{ operationId: string }> {
-    return unwrap(
-      (await invoker()('today:dismiss', internalIds)) as WriteEnvelope<{ operationId: string }>
-    )
-  }
-  async undo(operationId: string): Promise<{ operationId: string }> {
-    return unwrap(
-      (await invoker()('today:undo', operationId)) as WriteEnvelope<{ operationId: string }>
-    )
-  }
-}
-
 export class ElectronApi implements MailApi {
-  email: EmailApi = new ElectronEmailApi()
-  jobs: JobsApi = new ElectronJobsApi()
-  historySync: HistorySyncApi = new ElectronHistorySyncApi()
-  folder: FolderApi = new ElectronFolderApi()
+  private readonly loopbackHttp = new HttpApi(loopbackBaseUrl(), { retryNetworkOnce: true })
+  email: EmailApi = new ElectronEmailApi(this.loopbackHttp)
+  jobs: JobsApi = this.loopbackHttp.jobs
+  historySync: HistorySyncApi = this.loopbackHttp.historySync
+  folder: FolderApi = this.loopbackHttp.folder
   attachment: AttachmentApi = new ElectronAttachmentApi()
   ai: AiApi = new ElectronAiApi()
   chat: ChatApi = createElectronChatRuntime()
   // 08-01 PR4 — connector 面无 IPC 通道，直接经 loopback serve-api fetch（与 chat 同 baseUrl；
   // token + CORS 由 main `chat_local_bridge` 的 webRequest 透明注入）。
-  connector: ConnectorApi = createConnectorApi(loopbackChatBaseUrl())
+  connector: ConnectorApi = createConnectorApi(loopbackBaseUrl())
   // 设置 →「MCP 服务」：同 connector，无 IPC 通道，经 loopback serve-api fetch。
-  mcpService: McpServiceApi = createMcpServiceApi(loopbackChatBaseUrl())
+  mcpService: McpServiceApi = createMcpServiceApi(loopbackBaseUrl())
   // DavMail 自助重新认证：同 connector，无 IPC 通道，经 loopback serve-api fetch。
-  davmail: DavMailApi = createDavMailApi(loopbackChatBaseUrl())
-  llm: LlmApi = new ElectronLlmApi()
-  kos: KosApi = new ElectronKosApi()
-  notion: NotionWriteApi = new ElectronNotionWriteApi()
-  admin: AdminApi = new ElectronAdminApi()
-  calendar: CalendarApi = new ElectronCalendarApi()
+  davmail: DavMailApi = createDavMailApi(loopbackBaseUrl())
+  llm: LlmApi = this.loopbackHttp.llm
+  kos: KosApi = this.loopbackHttp.kos
+  notion: NotionWriteApi = this.loopbackHttp.notion
+  admin: AdminApi = {
+    ...this.loopbackHttp.admin,
+    health: async (): Promise<AdminHealthData> => {
+      const data = await this.loopbackHttp.admin.health()
+      const dbPath = (await invoker()('admin:dbPath')) as string
+      return { ...data, db_path: dbPath }
+    },
+    exportDiagnostics: async (): Promise<{ saved: boolean; path?: string }> =>
+      (await invoker()('admin:exportDiagnostics')) as { saved: boolean; path?: string }
+  }
+  calendar: CalendarApi = {
+    ...this.loopbackHttp.calendar,
+    async recurringDiscover(opts?: RecurringDiscoverOpts): Promise<RecurringInviteItem[]> {
+      return (await invoker()('calendar:recurringDiscover', opts ?? {})) as RecurringInviteItem[]
+    },
+    async recurringReplay(opts: RecurringReplayOpts): Promise<unknown> {
+      const env = (await invoker()('calendar:recurringReplay', opts)) as WriteEnvelope<unknown>
+      return unwrap(env)
+    },
+    async expand(opts?: CalendarExpandOpts): Promise<unknown> {
+      const env = (await invoker()('calendar:expand', opts ?? {})) as WriteEnvelope<unknown>
+      return unwrap(env)
+    }
+  }
   settings: SettingsApi = new ElectronSettingsApi()
   updater: UpdaterApi = new ElectronUpdaterApi()
   events: EventsApi = new ElectronEventsApi()
   env: EnvApi = new ElectronEnvApi()
   services: ServicesApi = new ElectronServicesApi()
-  prompts: PromptsApi = new ElectronPromptsApi()
+  prompts: PromptsApi = this.loopbackHttp.prompts
   notionAgent: NotionAgentApi = new ElectronNotionAgentApi()
-  report: ReportApi = new ElectronReportApi()
-  today: TodayApi = new ElectronTodayApi()
+  report: ReportApi = {
+    ...this.loopbackHttp.report,
+    openDetached(reportId: string): void {
+      if (reportId === '') return
+      sender()?.('window:openDetached', 'report', reportId)
+    }
+  }
+  today: TodayApi = this.loopbackHttp.today
   feedback: FeedbackApi = new ElectronFeedbackApi()
 }

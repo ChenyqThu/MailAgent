@@ -1,460 +1,12 @@
-// Sprint 6 §2.2 — admin dashboard IPC handlers.
-//
-// Surface for `/admin` route:
-//   - admin:health           — GET /api/admin/health      (read, 本机 serve-api)
-//   - admin:stats            — GET /api/admin/stats       (read, 本机 serve-api)
-//   - admin:deadLetterList   — GET /api/admin/dead-letter (read, 本机 serve-api)
-//   - admin:deadLetterRetry  — `mailagent admin dead-letter retry <id>` (write+auth)
-//   - admin:deadLetterDelete — `mailagent admin dead-letter delete <id> --yes` (write+auth)
-//   - admin:cleanupDeadLetter — `mailagent admin cleanup-deadletter --older-than N`
-//                              + `--no-dry-run --yes` (write+auth)
-//
-// 🔴 三个读 handler 走**常驻 serve-api loopback**（daemonRead，task
-// 08-20-perf-dashboards）而不是 fork CLI：一次 fork = Python 冷启 ~500ms-1s，且
-// `admin stats` 的 CLI 路径顺带跑 SyncStore.__init__ 的 129 条 CREATE IF NOT EXISTS
-// + 迁移梯（每刷新一次看板就跟 mail-sync 抢一次写锁）。serve-api 的对应端点是纯
-// SELECT，~5ms。IPC 面与返回形状不变，renderer 零改动。
-//
-// Read handlers return raw `data` (serve-api 的 envelope 已由 daemonRead 拆开)。
-// Write handlers return `WriteEnvelope<T>` so the renderer
-// gets the structured `{ ok, data | code+message+hint }` shape that
-// survives the IPC boundary (Sprint 5 §2.2 envelope contract).
+// Native-only admin IPC handlers: local SQLite path resolution and OS diagnostics zip export.
+// Health/stats/dead-letter/davmail-health/system-alerts route directly to loopback serve-api via HttpApi.admin.
 
 import { app, dialog, ipcMain } from 'electron'
 import { copyFileSync, rmSync } from 'fs'
 import { basename, dirname } from 'path'
 
-import { authExpiryLevel } from '@shared/lib/davmailThresholds'
 import { callCli } from '../cli_runner'
-import type { AdminHealthData } from '@shared/api/types'
-import { daemonRead } from '../daemon_api'
-import { getDb, resolveDbPath } from '../db'
-import { ensureInternalId, envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
-
-const WRITE_TIMEOUT_MS = 60_000
-
-/** Re-exported from the shared type (itself derived from admin-health.schema.json) instead of
- *  redeclared: this local copy dropped `notes`, `workers` and `davmail`, so the CLI's E4
- *  diagnostics could not reach the renderer through this channel either (issue #67 item 5). */
-export type { AdminHealthData }
-
-export interface AdminStatsData {
-  watcher?: Record<string, unknown>
-  sync_store?: {
-    total_emails: number
-    by_status: Record<string, number>
-    by_mailbox: Record<string, number>
-    failure_queue: number
-    last_max_row_id: number | null
-    last_sync_time: string | null
-    db_size_mb: number
-    db_size_bytes: number
-    _source?: string
-  }
-  handlers?: Record<string, unknown>
-  v4_rollout?: {
-    from_sqlite_hit: number
-    fallback_miss: number
-    fallback_error: number
-    route_latency_p99_ms: number
-    body_miss_internal_ids: number[]
-    window_seconds: number
-    _staleness_seconds?: number
-    _source?: string
-  }
-}
-
-export interface DeadLetterItem {
-  internal_id: number
-  mailbox: string | null
-  subject: string | null
-  sender: string | null
-  date_received: string | null
-  retry_count: number
-  sync_status: string
-  sync_error: string | null
-  /** Raw float epoch **seconds** (the DB column `email_metadata.updated_at =
-   *  time.time()`), surfaced verbatim by the CLI list. NOT an ISO string —
-   *  the renderer's `formatRelative` branches on the number type. */
-  updated_at: number | null
-}
-
-export async function runAdminHealth(): Promise<AdminHealthData> {
-  const data = await daemonRead<AdminHealthData>('/admin/health')
-  // 🔴 `db_path` 是 serve-api 有意 redact 的一个字段（C9「不回显绝对 db_path」——
-  // host 文件布局属于部署细节，远程 web 不该拿到）。桌面这一侧本来就知道路径，且
-  // AdminPage 的「可访问」卡片把它当 hint 渲染，所以在 main 进程本地补回，而不是
-  // 让它从桌面看板上凭空消失，也不是把它塞进 wire 让远程也拿到。
-  return { ...data, db_path: resolveDbPath() }
-}
-
-export async function runAdminStats(): Promise<AdminStatsData> {
-  return daemonRead<AdminStatsData>('/admin/stats')
-}
-
-export interface DeadLetterListOpts {
-  limit?: number
-  mailbox?: string
-}
-
-export async function runDeadLetterList(opts: DeadLetterListOpts = {}): Promise<DeadLetterItem[]> {
-  const query: Record<string, string> = {}
-  if (opts.limit !== undefined) query['limit'] = String(opts.limit)
-  if (opts.mailbox) query['mailbox'] = opts.mailbox
-  const out = await daemonRead<DeadLetterItem[]>('/admin/dead-letter', { query })
-  // serve-api 返回裸数组；仍保留 `{items: [...]}` 归一（这道兜底跟着数据形状走，
-  // 不跟着传输端走，且它挡的是「上游改形状」而不是「CLI 特有的 flag 透传」）。
-  if (Array.isArray(out)) return out
-  if (out && typeof out === 'object' && Array.isArray((out as { items?: unknown }).items)) {
-    return (out as { items: DeadLetterItem[] }).items
-  }
-  return []
-}
-
-export async function runDeadLetterRetry(internalId: number): Promise<unknown> {
-  return callCli(['admin', 'dead-letter', 'retry', String(internalId)], {
-    write: true,
-    needsAuth: true,
-    timeoutMs: WRITE_TIMEOUT_MS
-  })
-}
-
-export async function runDeadLetterDelete(internalId: number): Promise<unknown> {
-  // Irreversible — the CLI requires --yes (the UI's confirm dialog is the human
-  // gate). Goes through delete_email_full → CASCADE (body/attachment/outbox) +
-  // local attachment dir cleanup; only dead_letter rows are accepted.
-  return callCli(['admin', 'dead-letter', 'delete', String(internalId), '--yes'], {
-    write: true,
-    needsAuth: true,
-    timeoutMs: WRITE_TIMEOUT_MS
-  })
-}
-
-export interface CleanupDeadLetterOpts {
-  /** Days; defaults to CLI's 30. */
-  olderThan?: number
-  dryRun?: boolean
-}
-
-export async function runCleanupDeadLetter(opts: CleanupDeadLetterOpts = {}): Promise<unknown> {
-  const args = ['admin', 'cleanup-deadletter']
-  if (opts.olderThan !== undefined) args.push('--older-than', String(opts.olderThan))
-  if (opts.dryRun === false) args.push('--no-dry-run', '--yes')
-  return callCli(args, {
-    write: !opts.dryRun,
-    needsAuth: !opts.dryRun,
-    timeoutMs: WRITE_TIMEOUT_MS
-  })
-}
-
-// ── DavMail health + system alerts (roadmap §4.5) ─────────────────────────
-//
-// 直读 SQLite `sync_state` 表的 davmail.* keys (mail-sync 进程内的
-// DavMailWatchdog 每 60s 写一份快照). 不走 callCli/fork mailagent,
-// admin handler 模式 ~1ms vs CLI ~500ms — 顶部红点 badge 5s 轮询不能 fork.
-// 系统告警从同一份快照派生 (current-state 模型而非 event stream),
-// 跟 watchdog 自己的 "announced once until cleared" 去重语义一致.
-
-export interface DavMailHealthData {
-  enabled: boolean
-  level: 'ok' | 'warning' | 'critical' | 'unknown'
-  last_probe_at: string | null
-  imap_reachable: boolean
-  smtp_reachable: boolean
-  consecutive_imap_failures: number
-  consecutive_smtp_failures: number
-  /** L2a — real IMAP LOGIN probe. Null when skipped (TCP down / disabled). */
-  imap_login_ok?: boolean | null
-  consecutive_login_failures?: number
-  /** F5 — effective login-fail threshold, propagated via sync_state (fallback 3). */
-  login_fail_threshold?: number
-  /** token.dat 距今天数，纯信息（每小时随 refresh 重写，不参与分级）。 */
-  token_age_days: number | null
-  token_mtime_iso: string | null
-  /** 登录到期（最近一次交互认证 + 登录有效期，watchdog 落盘 `davmail.auth.expires_at`）。
-   *  无交互认证记录 → null。 */
-  auth_expires_at?: string | null
-  /** 距登录到期的天数，读取时现算（可为负 = 已过期）。无记录 → null。 */
-  auth_days_left?: number | null
-  throttle_events_5min: number
-  last_oauth_error: string | null
-  last_oauth_error_at: string | null
-  uid_backfill_paused: boolean
-  /** davmail.folderSizeLimit 同步状态 (src/mail/davmail_properties.py 启动时落盘)。
-   *  与 watchdog 无关 → watchdog 没 tick 时也带值。null = 后端还没跑过同步。 */
-  folder_size_limit_status?: 'updated' | 'unchanged' | 'file_missing' | 'error' | 'disabled' | null
-  folder_size_limit_path?: string | null
-  folder_size_limit_desired?: number | null
-  /** davmail.properties 里实际的值 (读不到 → null)。 */
-  folder_size_limit_file_value?: number | null
-}
-
-export interface SystemAlertItem {
-  level: 'critical' | 'warning' | 'info'
-  source: string
-  title: string
-  message: string
-  ts: string | null
-}
-
-export interface SystemAlertsData {
-  alerts: SystemAlertItem[]
-  critical_count: number
-  warning_count: number
-  generated_at: string
-}
-
-/** sync_state davmail.folder_size_limit.* → DavMailHealthData 的四个字段。
- *  键缺失 (老后端 / 非 davmail 模式) → 全 null, UI 据此不渲染状态行。 */
-function readFolderSizeLimitState(
-  state: Record<string, string>
-): Pick<
-  DavMailHealthData,
-  | 'folder_size_limit_status'
-  | 'folder_size_limit_path'
-  | 'folder_size_limit_desired'
-  | 'folder_size_limit_file_value'
-> {
-  const asOptInt = (raw: string | undefined): number | null => {
-    if (!raw) return null
-    const n = parseInt(raw, 10)
-    return Number.isFinite(n) ? n : null
-  }
-  const status = state['davmail.folder_size_limit.status'] || null
-  return {
-    folder_size_limit_status: (status ?? null) as DavMailHealthData['folder_size_limit_status'],
-    folder_size_limit_path: state['davmail.folder_size_limit.path'] || null,
-    folder_size_limit_desired: asOptInt(state['davmail.folder_size_limit.desired']),
-    folder_size_limit_file_value: asOptInt(state['davmail.folder_size_limit.file_value'])
-  }
-}
-
-function readDavmailStateRows(): Record<string, string> {
-  const db = getDb()
-  const stmt = db.prepare(
-    "SELECT key, value FROM sync_state WHERE key LIKE 'davmail%' OR key = 'davmail_uid_backfill_paused'"
-  )
-  const rows = stmt.all() as Array<{ key: string; value: string }>
-  const out: Record<string, string> = {}
-  for (const r of rows) out[r.key] = r.value ?? ''
-  return out
-}
-
-export function runDavmailHealth(): DavMailHealthData {
-  let state: Record<string, string>
-  try {
-    state = readDavmailStateRows()
-  } catch {
-    // SQLite 不可达 (路径错 / 文件锁) — 视为 unknown, 不抛
-    return {
-      enabled: false,
-      level: 'unknown',
-      last_probe_at: null,
-      imap_reachable: false,
-      smtp_reachable: false,
-      consecutive_imap_failures: 0,
-      consecutive_smtp_failures: 0,
-      imap_login_ok: null,
-      consecutive_login_failures: 0,
-      token_age_days: null,
-      token_mtime_iso: null,
-      auth_expires_at: null,
-      auth_days_left: null,
-      throttle_events_5min: 0,
-      last_oauth_error: null,
-      last_oauth_error_at: null,
-      uid_backfill_paused: false
-    }
-  }
-  // davmail.folderSizeLimit 同步状态 (Python 启动时落盘, 与 watchdog 无关) —— 两条
-  // return 路径都带上: watchdog 还没 tick 时 Settings 面同样要能说清写没写进去。
-  const folderSizeLimit = readFolderSizeLimitState(state)
-  const lastProbe = state['davmail.last_probe_at'] || null
-  // 没 last_probe_at 说明 mail-sync 没在 davmail mode 跑 watchdog
-  if (!lastProbe) {
-    return {
-      ...folderSizeLimit,
-      enabled: false,
-      level: 'unknown',
-      last_probe_at: null,
-      imap_reachable: false,
-      smtp_reachable: false,
-      consecutive_imap_failures: 0,
-      consecutive_smtp_failures: 0,
-      imap_login_ok: null,
-      consecutive_login_failures: 0,
-      token_age_days: null,
-      token_mtime_iso: null,
-      auth_expires_at: null,
-      auth_days_left: null,
-      throttle_events_5min: 0,
-      last_oauth_error: null,
-      last_oauth_error_at: null,
-      uid_backfill_paused: state['davmail_uid_backfill_paused'] === 'true'
-    }
-  }
-  const tokenAgeRaw = state['davmail.token_age_days']
-  const tokenAge = tokenAgeRaw ? parseFloat(tokenAgeRaw) : -1
-  const imapOk = state['davmail.imap_reachable'] === '1'
-  const smtpOk = state['davmail.smtp_reachable'] === '1'
-  const imapFails = parseInt(state['davmail.consecutive_imap_failures'] || '0', 10)
-  const smtpFails = parseInt(state['davmail.consecutive_smtp_failures'] || '0', 10)
-  // L2a: '' = 该轮跳过 login 探测 (TCP down / 开关关 / 未注入 cfg) → null
-  const loginRaw = state['davmail.imap_login_ok']
-  const loginOk = loginRaw === '1' ? true : loginRaw === '0' ? false : null
-  const loginFails = parseInt(state['davmail.consecutive_login_failures'] || '0', 10)
-  // F5: 阈值经 sync_state 传播 (watchdog 落盘), 缺失 (老数据) fallback 3
-  const loginThreshold = parseInt(state['davmail.login_fail_threshold'] || '', 10) || 3
-  const throttleCount = parseInt(state['davmail.throttle_events_5min'] || '0', 10)
-  const lastOAuthErr = state['davmail.last_oauth_error'] || null
-  const lastOAuthAt = state['davmail.last_oauth_error_at'] || null
-  // watchdog 在 OAuth 失效期间保留错误行、恢复后清空（同 Python 读面的 bool(last_oauth_error)）。
-  // 不能按 last_oauth_error_at 的新旧判：恢复后它不清，会让看板在重认证成功后继续报 critical。
-  const oauthActive = !!lastOAuthErr
-  // `davmail.auth.expires_at` = epoch 秒字符串，'' = 没有交互认证记录（不判断到期）。
-  const authExpiresSec = parseFloat(state['davmail.auth.expires_at'] || '')
-  const authExpiresMs =
-    Number.isFinite(authExpiresSec) && authExpiresSec > 0 ? authExpiresSec * 1000 : null
-  const authDaysLeft = authExpiresMs === null ? null : (authExpiresMs - Date.now()) / 86_400_000
-  const authLevel = authExpiryLevel(authDaysLeft)
-
-  let level: DavMailHealthData['level'] = 'ok'
-  if (oauthActive) level = 'critical'
-  else if (!imapOk && imapFails >= 3) level = 'critical'
-  else if (!smtpOk && smtpFails >= 3) level = 'critical'
-  // L2a: TCP 可达但 LOGIN 连续失败 = token 劣化 (F5: 阈值随 watchdog 生效值)
-  else if (loginFails >= loginThreshold) level = 'critical'
-  else if (authLevel !== null) level = authLevel
-  else if (throttleCount >= 3) level = 'warning'
-  else if (!imapOk || !smtpOk) level = 'warning'
-
-  return {
-    ...folderSizeLimit,
-    enabled: true,
-    level,
-    last_probe_at: lastProbe,
-    imap_reachable: imapOk,
-    smtp_reachable: smtpOk,
-    consecutive_imap_failures: imapFails,
-    consecutive_smtp_failures: smtpFails,
-    imap_login_ok: loginOk,
-    consecutive_login_failures: loginFails,
-    login_fail_threshold: loginThreshold,
-    token_age_days: tokenAge >= 0 ? tokenAge : null,
-    token_mtime_iso: state['davmail.token_mtime_iso'] || null,
-    auth_expires_at: authExpiresMs === null ? null : new Date(authExpiresMs).toISOString(),
-    auth_days_left: authDaysLeft,
-    throttle_events_5min: throttleCount,
-    last_oauth_error: lastOAuthErr,
-    last_oauth_error_at: lastOAuthAt,
-    uid_backfill_paused: state['davmail_uid_backfill_paused'] === 'true'
-  }
-}
-
-export function runSystemAlerts(): SystemAlertsData {
-  const h = runDavmailHealth()
-  const alerts: SystemAlertItem[] = []
-  if (h.enabled && h.last_oauth_error) {
-    alerts.push({
-      level: 'critical',
-      source: 'davmail',
-      title: 'DavMail OAuth 续期失败',
-      message: h.last_oauth_error,
-      ts: h.last_oauth_error_at ?? h.last_probe_at
-    })
-  }
-  const authDays = h.auth_days_left ?? null
-  const authAlertLevel = h.enabled ? authExpiryLevel(authDays) : null
-  if (authAlertLevel === 'critical') {
-    alerts.push({
-      level: 'critical',
-      source: 'davmail',
-      title: 'DavMail 登录已过期',
-      message: '邮件收发已停止，请在设置 → 账户 → DavMail 里点「重新认证」',
-      ts: h.last_probe_at
-    })
-  } else if (authAlertLevel === 'warning' && authDays !== null) {
-    alerts.push({
-      level: 'warning',
-      source: 'davmail',
-      title: 'DavMail 登录即将过期',
-      message: `约 ${authDays.toFixed(1)} 天后过期，请在设置 → 账户 → DavMail 里点「重新认证」`,
-      ts: h.last_probe_at
-    })
-  }
-  if (h.enabled && !h.imap_reachable) {
-    if (h.consecutive_imap_failures >= 3) {
-      alerts.push({
-        level: 'critical',
-        source: 'davmail',
-        title: 'DavMail IMAP 端口不可达',
-        message: `连续 ${h.consecutive_imap_failures} 次 TCP probe 失败`,
-        ts: h.last_probe_at
-      })
-    } else {
-      alerts.push({
-        level: 'warning',
-        source: 'davmail',
-        title: 'DavMail IMAP 探测失败',
-        message: `连续 ${h.consecutive_imap_failures} 次失败 (<3, 还没到 critical)`,
-        ts: h.last_probe_at
-      })
-    }
-  }
-  if (h.enabled && !h.smtp_reachable) {
-    if (h.consecutive_smtp_failures >= 3) {
-      alerts.push({
-        level: 'critical',
-        source: 'davmail',
-        title: 'DavMail SMTP 端口不可达',
-        message: `连续 ${h.consecutive_smtp_failures} 次 TCP probe 失败`,
-        ts: h.last_probe_at
-      })
-    } else {
-      alerts.push({
-        level: 'warning',
-        source: 'davmail',
-        title: 'DavMail SMTP 探测失败',
-        message: `连续 ${h.consecutive_smtp_failures} 次失败 (<3, 还没到 critical)`,
-        ts: h.last_probe_at
-      })
-    }
-  }
-  // L2a: TCP 可达但 IMAP LOGIN 连续失败 = token 劣化 (能发不能收)
-  // F5: 阈值随 watchdog 生效值 (runDavmailHealth 已从 sync_state 解析), 缺失 fallback 3
-  if (h.enabled && (h.consecutive_login_failures ?? 0) >= (h.login_fail_threshold ?? 3)) {
-    alerts.push({
-      level: 'critical',
-      source: 'davmail',
-      title: 'DavMail IMAP LOGIN 持续失败',
-      message: `端口可达但 LOGIN 连续 ${h.consecutive_login_failures} 次失败 — token 劣化 (能发不能收), 建议 pm2 restart davmail-poc`,
-      ts: h.last_probe_at
-    })
-  }
-  if (h.enabled && h.throttle_events_5min >= 3) {
-    alerts.push({
-      level: 'warning',
-      source: 'davmail',
-      title: 'DavMail EWS throttling',
-      message: `5min 内 ${h.throttle_events_5min} 次 throttle, uid-mapper 已暂停`,
-      ts: h.last_probe_at
-    })
-  }
-  return {
-    alerts,
-    critical_count: alerts.filter((a) => a.level === 'critical').length,
-    warning_count: alerts.filter((a) => a.level === 'warning').length,
-    generated_at: new Date().toISOString()
-  }
-}
-
-// ── E4 §4.2 — 诊断包导出 (本地 Electron 专属) ────────────────────────────────
-//
-// fork `mailagent admin export-diagnostics` (读命令, 无 auth) 在 tmp 组装 zip
-// (近 7 天日志 + 脱敏配置快照 + health/db_check/manifest), 前端拿 zip_path 后弹保存
-// 对话框: 用户确认则 copy 到目标 + 清 tmp, 取消则直接清 tmp。quick_check 最坏 24s×2
-// (sync_store + agent_config), 故 callCli timeout 放大到 3min (远超默认 60s)。远程
-// web 不走此路 (HttpAdminApi 不实现 exportDiagnostics, AdminApi 该方法为 optional)。
+import { resolveDbPath } from '../db'
 
 const DIAGNOSTICS_TIMEOUT_MS = 180_000
 
@@ -472,34 +24,28 @@ interface DiagnosticsCliData {
   skipped?: string[]
 }
 
-/** tmp zip 落在 Python `tempfile.mkdtemp()` 目录下 (该目录只含这一个 zip) → 删掉整个
- *  临时目录即完整清理, best-effort (失败交给 OS tmp 回收)。 */
-function cleanupDiagnosticsTmp(zipPath: string): void {
+/** tmp zip sits inside its own Python tempfile.mkdtemp() directory; removing the parent cleans everything. */
+export function cleanupDiagnosticsTmp(zipPath: string): void {
   try {
     rmSync(dirname(zipPath), { recursive: true, force: true })
   } catch {
-    /* 清理失败无所谓 — OS tmp 最终回收 */
+    /* best-effort cleanup */
   }
 }
 
 export interface DiagnosticsOpts {
-  /** `false` → 给 CLI 加 `--no-quick-check`，跳过两个库的 `PRAGMA quick_check`。 */
+  /** `false` passes `--no-quick-check` to skip `PRAGMA quick_check`. */
   quickCheck?: boolean
 }
 
-/** 诊断包 CLI 的 argv。抽成纯函数是为了能不 fork 就断言参数拼接 —— 少一个
- *  `--no-quick-check` 不会报错，只会让调用方多等一分多钟，是那种测不到就发现不了的差异。 */
+/** Pure CLI argv builder for diagnostics export (unit-tested without forking). */
 export function diagnosticsCliArgs(appVersion: string, opts?: DiagnosticsOpts): string[] {
   const args = ['admin', 'export-diagnostics', '--app-version', appVersion]
   if (opts?.quickCheck === false) args.push('--no-quick-check')
   return args
 }
 
-/** 组装诊断包，返回 tmp zip 路径 —— **不弹保存对话框**。
- *
- *  抽出来是给快捷反馈用的（task 08-27 P4a）：反馈弹窗要把同一个包当附件传上去，而不是
- *  让用户先另存再手动挑文件。🔴 调用方**必须**在用完后 `cleanupDiagnosticsTmp(zipPath)`，
- *  否则 tmp 目录留到 OS 回收为止。 */
+/** Assemble diagnostics zip via CLI into a temp dir without showing a save dialog (used by feedback + export). */
 export async function buildDiagnosticsZip(opts?: DiagnosticsOpts): Promise<string> {
   const data = (await callCli(diagnosticsCliArgs(app.getVersion(), opts), {
     timeoutMs: DIAGNOSTICS_TIMEOUT_MS
@@ -511,8 +57,6 @@ export async function buildDiagnosticsZip(opts?: DiagnosticsOpts): Promise<strin
   return zipPath
 }
 
-export { cleanupDiagnosticsTmp }
-
 export async function runExportDiagnostics(): Promise<ExportDiagnosticsResult> {
   const zipPath = await buildDiagnosticsZip()
   const result = await dialog.showSaveDialog({
@@ -521,7 +65,6 @@ export async function runExportDiagnostics(): Promise<ExportDiagnosticsResult> {
     filters: [{ name: 'Zip Archive', extensions: ['zip'] }]
   })
   if (result.canceled || !result.filePath) {
-    // 用户取消 → 清理 tmp zip, 不当错误。
     cleanupDiagnosticsTmp(zipPath)
     return { saved: false }
   }
@@ -534,52 +77,14 @@ export async function runExportDiagnostics(): Promise<ExportDiagnosticsResult> {
 }
 
 export function registerAdminHandlers(): void {
-  ipcMain.handle('admin:health', async (): Promise<AdminHealthData> => runAdminHealth())
-  ipcMain.handle('admin:stats', async (): Promise<AdminStatsData> => runAdminStats())
-  ipcMain.handle('admin:davmailHealth', async (): Promise<DavMailHealthData> => runDavmailHealth())
-  ipcMain.handle('admin:systemAlerts', async (): Promise<SystemAlertsData> => runSystemAlerts())
+  ipcMain.handle('admin:dbPath', (): string => resolveDbPath())
   ipcMain.handle(
     'admin:exportDiagnostics',
     async (): Promise<ExportDiagnosticsResult> => runExportDiagnostics()
   )
-  ipcMain.handle(
-    'admin:deadLetterList',
-    async (_evt, opts: DeadLetterListOpts = {}): Promise<DeadLetterItem[]> => {
-      return runDeadLetterList(opts ?? {})
-    }
-  )
-  ipcMain.handle(
-    'admin:deadLetterRetry',
-    async (_evt, internalId: unknown): Promise<WriteEnvelope<unknown>> => {
-      const idOrErr = ensureInternalId(internalId, 'admin:deadLetterRetry')
-      if (typeof idOrErr !== 'number') return idOrErr
-      return envelopeFromCli(runDeadLetterRetry(idOrErr))
-    }
-  )
-  ipcMain.handle(
-    'admin:deadLetterDelete',
-    async (_evt, internalId: unknown): Promise<WriteEnvelope<unknown>> => {
-      const idOrErr = ensureInternalId(internalId, 'admin:deadLetterDelete')
-      if (typeof idOrErr !== 'number') return idOrErr
-      return envelopeFromCli(runDeadLetterDelete(idOrErr))
-    }
-  )
-  ipcMain.handle(
-    'admin:cleanupDeadLetter',
-    async (_evt, opts: CleanupDeadLetterOpts = {}): Promise<WriteEnvelope<unknown>> => {
-      return envelopeFromCli(runCleanupDeadLetter(opts ?? {}))
-    }
-  )
 }
 
 export const __testing = {
-  runAdminHealth,
-  runAdminStats,
-  runDeadLetterList,
-  runDeadLetterRetry,
-  runDeadLetterDelete,
-  runCleanupDeadLetter,
   runExportDiagnostics,
-  envelopeFromCli,
-  ensureInternalId
+  resolveDbPath
 }

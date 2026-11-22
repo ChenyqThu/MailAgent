@@ -124,7 +124,6 @@ import type {
 } from './types'
 import {
   fetchAsDataUrl,
-  request,
   requestRaw,
   requestWithMeta,
   type QueryValue,
@@ -158,21 +157,59 @@ function isNotFound(e: unknown): boolean {
   )
 }
 
-export class HttpApi implements MailApi {
-  constructor(private readonly baseUrl: string) {}
+const LOOPBACK_RETRY_DELAY_MS = 250
 
-  /** Thin instance wrapper around http_client.request bound to this baseUrl. */
-  private req<T>(method: string, path: string, opts?: RequestOptions): Promise<T> {
-    return request<T>(this.baseUrl, method, path, opts)
+function isNetworkError(e: unknown): boolean {
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    'code' in e &&
+    (e as { code?: unknown }).code === 'E_NETWORK'
+  )
+}
+
+function clampStatsDays(days: number): number {
+  return Number.isFinite(days) ? Math.max(1, Math.min(365, Math.floor(days))) : 7
+}
+
+export interface HttpApiOptions {
+  /** Retry read-only GET requests once on E_NETWORK (loopback cold-start). */
+  retryNetworkOnce?: boolean
+}
+
+export class HttpApi implements MailApi {
+  constructor(
+    private readonly baseUrl: string,
+    private readonly opts: HttpApiOptions = {}
+  ) {}
+
+  /** Thin instance wrapper around http_client.requestWithMeta bound to this baseUrl. */
+  private async req<T>(method: string, path: string, opts?: RequestOptions): Promise<T> {
+    const { data } = await this.reqWithMeta<T>(method, path, opts)
+    return data
   }
 
   /** task 07-21 — same as `req()` but also surfaces `meta` (pagination's `total`). */
-  private reqWithMeta<T>(
+  private async reqWithMeta<T>(
     method: string,
     path: string,
     opts?: RequestOptions
   ): Promise<{ data: T; meta: Record<string, unknown> }> {
-    return requestWithMeta<T>(this.baseUrl, method, path, opts)
+    try {
+      return await requestWithMeta<T>(this.baseUrl, method, path, opts)
+    } catch (e) {
+      if (
+        this.opts.retryNetworkOnce &&
+        method === 'GET' &&
+        !opts?.signal?.aborted &&
+        isNetworkError(e)
+      ) {
+        await new Promise((r) => setTimeout(r, LOOPBACK_RETRY_DELAY_MS))
+        if (opts?.signal?.aborted) throw e
+        return requestWithMeta<T>(this.baseUrl, method, path, opts)
+      }
+      throw e
+    }
   }
 
   /** camelCase ListOpts → query record. Drops undefined; `internalIds`
@@ -345,7 +382,7 @@ export class HttpApi implements MailApi {
         '/email/compose-attachment',
         new Uint8Array(opts.bytes),
         'application/octet-stream',
-        { query: { filename: opts.filename, mime: opts.mime } }
+        { query: { filename: opts.filename, mime: opts.mime || undefined } }
       ),
 
     draftPlan: (opts: DraftPlanOpts): Promise<DraftPlanResult> =>
@@ -397,7 +434,9 @@ export class HttpApi implements MailApi {
       const body: Record<string, unknown> = {}
       if (opts.isRead !== undefined) body.isRead = opts.isRead
       if (opts.isFlagged !== undefined) body.isFlagged = opts.isFlagged
-      if (opts.processingStatus !== undefined) body.processingStatus = opts.processingStatus
+      if (typeof opts.processingStatus === 'string' && opts.processingStatus.length > 0) {
+        body.processingStatus = opts.processingStatus
+      }
       // Thread cascade (虚拟头「标完成」) — only sent when set, keeping the
       // historical single-row wire byte-identical.
       if (opts.cascadeThread) body.cascadeThread = true
@@ -629,7 +668,7 @@ export class HttpApi implements MailApi {
       }),
 
     stats: (days = 7): Promise<LlmStatsData> =>
-      this.req<LlmStatsData>('GET', '/llm/stats', { query: { days } }),
+      this.req<LlmStatsData>('GET', '/llm/stats', { query: { days: clampStatsDays(days) } }),
 
     selftest: (): Promise<LlmSelfTestData> => this.req<LlmSelfTestData>('GET', '/llm/selftest'),
 
@@ -649,7 +688,7 @@ export class HttpApi implements MailApi {
   // 两端最终都落到同一个 src/kos/stats.py 聚合函数, SQL 不手抄第二份。
   kos = {
     stats: (days = 7): Promise<KosStatsData> =>
-      this.req<KosStatsData>('GET', '/kos/stats', { query: { days } })
+      this.req<KosStatsData>('GET', '/kos/stats', { query: { days: clampStatsDays(days) } })
   }
 
   // Sprint-15 write path is email.flag. The legacy notion.updateFlag endpoint
@@ -1017,6 +1056,7 @@ export class HttpApi implements MailApi {
           id: input.id,
           type: input.type ?? 'search',
           title: input.title,
+          ...(input.description !== undefined ? { description: input.description } : {}),
           enabled: input.enabled,
           model: input.model,
           prompt: input.prompt,

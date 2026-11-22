@@ -11,8 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const { mockDaemonRequest } = vi.hoisted(() => ({ mockDaemonRequest: vi.fn() }))
 
 vi.mock('../../src/electron/main/daemon_api', () => ({
-  daemonRequest: mockDaemonRequest,
-  daemonRequestRaw: vi.fn()
+  daemonRequest: mockDaemonRequest
 }))
 
 const { __test__ } = await import('../../src/electron/main/handlers/onboarding')

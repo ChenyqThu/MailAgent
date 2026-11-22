@@ -133,6 +133,7 @@ def row_to_dict(r: "CalendarEventRow") -> Dict[str, Any]:
         "rrule": r.rrule,
         "exdates": r.exdates,
         "rdates": r.rdates,
+        "tzid": r.tzid,
         "status": r.status,
         "response_status": r.response_status,
         "url": r.url,

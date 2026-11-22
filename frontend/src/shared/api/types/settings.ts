@@ -44,7 +44,7 @@ export interface PersistentSettings {
   customApiEndpoint: string | null
   /** feat/auto-update — auto-download an available update when the master
    *  AUTO_UPDATE_ENABLED flag is on. Default FALSE (detect → surface the
-   *  TitleBar download icon → download only on click); IslandUpdatesTab
+   *  TitleBar download icon → download only on click); UpdatesTab
    *  toggles it. */
   autoDownloadUpdates: boolean
   /** Owner's email — sourced from repo-root `.env` USER_EMAIL on every

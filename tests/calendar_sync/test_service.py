@@ -651,7 +651,7 @@ def test_row_to_dict_shape(repo: CalendarEventRepository, make_event):
     d = row_to_dict(row)
     for key in (
         "id", "ical_uid", "summary", "dtstart_iso", "dtend_iso",
-        "rrule", "exdates", "rdates", "ics_raw", "last_synced_at_iso",
+        "rrule", "exdates", "rdates", "tzid", "ics_raw", "last_synced_at_iso",
         "created_at_iso", "updated_at_iso", "source", "notion_page_id",
     ):
         assert key in d, f"row_to_dict missing key {key!r}"

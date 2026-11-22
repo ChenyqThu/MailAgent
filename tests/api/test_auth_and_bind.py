@@ -641,3 +641,18 @@ def test_serve_api_command_hardbinds_loopback():
     text = cli_main.read_text(encoding="utf-8")
     # The serve_api command body hard-codes the loopback host.
     assert 'host = "127.0.0.1"' in text
+
+
+def test_cors_preflight_allows_put_for_mail_origin(client):
+    """CORSMiddleware allow_methods must include PUT for compose-attachment / prompts / folder / reports."""
+    r = client.options(
+        "/api/email/compose-attachment",
+        headers={
+            "Origin": "https://mail.chenge.ink",
+            "Access-Control-Request-Method": "PUT",
+            "Access-Control-Request-Headers": "Content-Type",
+        },
+    )
+    assert r.status_code == 200
+    methods = [m.strip() for m in r.headers.get("access-control-allow-methods", "").split(",")]
+    assert "PUT" in methods

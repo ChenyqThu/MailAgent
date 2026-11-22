@@ -105,37 +105,44 @@ describe('HttpApi.historySync', () => {
 })
 
 describe('ElectronApi.historySync', () => {
-  test('get → invoke historySync:get，unwrap data', async () => {
-    invokeMock.mockResolvedValue({ ok: true, data: STATE })
+  test('get → loopback GET http://127.0.0.1:8200/api/history-sync，零 IPC', async () => {
+    fetchMock.mockResolvedValue(envelope(STATE))
     const out = await new ElectronApi().historySync.get()
-    expect(invokeMock).toHaveBeenCalledWith('historySync:get')
+    const call = fetchCall()
+    expect(call.method).toBe('GET')
+    expect(call.url).toBe('http://127.0.0.1:8200/api/history-sync')
+    expect(invokeMock).not.toHaveBeenCalled()
     expect(out).toEqual(STATE)
   })
 
-  test('start → invoke historySync:start 带 {since, until}', async () => {
-    invokeMock.mockResolvedValue({ ok: true, data: { job_id: 8, was_created: false } })
+  test('start → loopback POST /api/history-sync 带 {since, until}，零 IPC', async () => {
+    fetchMock.mockResolvedValue(envelope({ job_id: 8, was_created: false }))
     const out = await new ElectronApi().historySync.start({
       since: '2026-08-01',
       until: '2026-08-31'
     })
-    expect(invokeMock).toHaveBeenCalledWith('historySync:start', {
-      since: '2026-08-01',
-      until: '2026-08-31'
-    })
+    const call = fetchCall()
+    expect(call.method).toBe('POST')
+    expect(call.url).toBe('http://127.0.0.1:8200/api/history-sync')
+    expect(call.body).toEqual({ since: '2026-08-01', until: '2026-08-31' })
+    expect(invokeMock).not.toHaveBeenCalled()
     expect(out).toEqual({ job_id: 8, was_created: false })
   })
 
-  test('cancel → invoke historySync:cancel', async () => {
-    invokeMock.mockResolvedValue({ ok: true, data: { job_id: 8, cancel_requested: true } })
+  test('cancel → loopback POST /api/history-sync/cancel，零 IPC', async () => {
+    fetchMock.mockResolvedValue(envelope({ job_id: 8, cancel_requested: true }))
     const out = await new ElectronApi().historySync.cancel()
-    expect(invokeMock).toHaveBeenCalledWith('historySync:cancel')
+    const call = fetchCall()
+    expect(call.method).toBe('POST')
+    expect(call.url).toBe('http://127.0.0.1:8200/api/history-sync/cancel')
+    expect(invokeMock).not.toHaveBeenCalled()
     expect(out).toEqual({ job_id: 8, cancel_requested: true })
   })
 
   test('错误 envelope → 抛带 code 的 Error', async () => {
-    invokeMock.mockResolvedValue({ ok: false, code: 'E_INVALID_ARG', message: 'bad range' })
+    fetchMock.mockResolvedValue(errorEnvelope('E_INVALID_ARG', 400))
     await expect(
       new ElectronApi().historySync.start({ since: '2026-09-02', until: '2026-09-01' })
-    ).rejects.toMatchObject({ code: 'E_INVALID_ARG', message: 'bad range' })
+    ).rejects.toMatchObject({ code: 'E_INVALID_ARG', message: 'x' })
   })
 })

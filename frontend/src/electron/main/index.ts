@@ -26,15 +26,11 @@ import { registerOnboardingHandlers } from './handlers/onboarding'
 import { registerFeedbackHandlers } from './handlers/feedback'
 import { DETACHED_WINDOW, MAIN_WINDOW, ONBOARDING_WINDOW } from './lib/window-config'
 import { registerEmailHandlers } from './handlers/email'
-import { registerContactHandlers } from './handlers/contacts'
-import { registerFolderHandlers } from './handlers/folder'
-import { registerReportHandlers } from './handlers/report'
 import { registerAttachmentHandlers } from './handlers/attachment'
 import { registerTranslateHandlers, abortAllTranslations } from './handlers/translate'
 import { registerNlSearchHandlers } from './handlers/nl_search'
 import { registerChatLocalBridge } from './chat_local_bridge'
 import { getChatDb } from './chat_db'
-import { registerWriteOpsHandlers } from './handlers/write_ops'
 import { startEventsBridge, onSseEvent } from './events_bridge'
 // task 08-20-notification-center M2 批 B4 — 通知中心 macOS 原生通知 fanout
 // (critical / action_required 档上系统通知; 水位=注册时刻, 存量未读不弹)。
@@ -43,13 +39,8 @@ import {
   registerNotificationSystemHandlers
 } from './notification_fanout'
 import { registerDraftHandlers } from './handlers/draft'
-// Sprint 6 §2.2 — admin / llm dashboard / calendar / settings IPC handlers.
 import { registerAdminHandlers } from './handlers/admin'
-import { registerLlmStatsHandlers } from './handlers/llm_stats'
-// issue #59 — KOS 入库台账统计 (同一 /llm 页的「知识库入库」区)。
-import { registerKosStatsHandlers } from './handlers/kos_stats'
 import { registerCalendarHandlers } from './handlers/calendar'
-import { registerTodayHandlers } from './handlers/today'
 import {
   onSettingsChanged,
   readSettings,
@@ -62,7 +53,6 @@ import { registerNotionAgentHandlers } from './handlers/notion_agent'
 // task 08-20 — Notion OAuth 授权内核 (loopback 回调 + exchange 代理换 token +
 // data source 库发现 + NOTION_OAUTH_ENV_KEYS 原子写)。token 明文永不过 renderer IPC。
 import { registerNotionOauthHandlers } from './notion_oauth'
-import { registerPromptHandlers } from './handlers/prompts'
 // Sprint 8 §2.2 — electron-updater bridge (auto-updater state + IPC).
 import { registerUpdaterHandlers } from './handlers/updater'
 // Sprint 18 §PR B — repo-root .env read/write (env:get/:set) + pm2 restart
@@ -495,7 +485,6 @@ app.whenReady().then(async () => {
   // Sprint 1.2: IPC handlers (read-only — SQLite direct, ~4ms).
   // Write handlers (resync / update-flag) land in Sprint 5 atop cli_runner.
   registerEmailHandlers()
-  registerContactHandlers()
   // 邮件正文 iframe 内链接 → 系统默认浏览器。EmailBodyFrame 在 iframe 内拦截
   // <a> 点击 (导航前 preventDefault) 后调本 IPC —— 这是主路径, 因为 iframe 的
   // 页面 CSP (frame-src 'self') 会在渲染层把外部导航抢先拦成空白页, 主进程的
@@ -505,11 +494,6 @@ app.whenReady().then(async () => {
       void shell.openExternal(url)
     }
   })
-  // 多文件夹同步管理 IPC: folder discover / whitelist / 文件夹 CRUD / cleanup (davmail-only).
-  registerFolderHandlers()
-  // Sprint 20 — 报告 Agent (/agents 页): list/get 直读 sync_store.db,
-  // runNow/getConfig/setConfig 经 `mailagent report` CLI fork.
-  registerReportHandlers()
   registerAttachmentHandlers()
   registerTranslateHandlers()
   // P4b — AI 自然语言检索: 自然语言 → DSL (单次 LLM 调用, 不碰 P4a 搜索逻辑)。
@@ -528,10 +512,8 @@ app.whenReady().then(async () => {
   // 注入桥。提前铺设 webRequest 拦截器；electron chat 切 ChatRuntime（3c-3）后 renderer
   // 才真正打 8200。dev 仅注 token（CORS 走 serve-api _DEV_CORS）。
   registerChatLocalBridge()
-  // Sprint 5 §2.2 — Mail.app write commands (createDraft via AppleScript,
-  // resync / llm:run / notion:updateFlag via `mailagent` CLI fork).
+  // AppleScript reply-draft emergency fallback (`email:createDraft`).
   registerDraftHandlers()
-  registerWriteOpsHandlers()
   // Sprint 16 — 主进程持久连接 mail-sync 本地 SSE endpoint, 通过 IPC broadcast
   // 把事件转发给 renderer; 替换 EmailList / Sidebar 5s 硬轮询. 失败自动指数退避
   // 重连, renderer 通过 events:status 看连接状态决定是否启用 fallback polling.
@@ -554,17 +536,8 @@ app.whenReady().then(async () => {
     ensureMainWindow
   })
   startEventsBridge()
-  // Sprint 6 §2.2 — admin dashboard / LLM dashboard / calendar list /
-  // settings page. Each handler group is read-only by default (admin:health,
-  // admin:stats, llm:stats, calendar:recurringDiscover) with separate
-  // write+auth channels for retry / replay / cleanup.
   registerAdminHandlers()
-  registerLlmStatsHandlers()
-  registerKosStatsHandlers()
   registerCalendarHandlers()
-  // task 08-27 P4c — 今日聚合读（待回邮件 + 下一个硬时间点）。经 daemon_api 转发
-  // serve-api，判据全在 Python 侧（与报告的「已回」判定同一份）。
-  registerTodayHandlers()
   registerSettingsHandlers()
   // Notion Agent CLI config bridge — Settings page reads/edits the bound
   // Custom Agent + default model in ~/.notionagents/notion_account.json.
@@ -572,7 +545,6 @@ app.whenReady().then(async () => {
   // task 08-20 — Notion OAuth (notionOauth:start/cancel/listDatabases/
   // selectDatabases/removeConnection + notionOauth:status push)。
   registerNotionOauthHandlers()
-  registerPromptHandlers()
   // Sprint 8 §2.2 — electron-updater bridge.
   //
   // We pass the real `autoUpdater` lazily (require-after-app-ready) so test

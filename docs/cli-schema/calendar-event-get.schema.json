@@ -45,6 +45,7 @@
                 "rrule": {"type": "string"},
                 "exdates": {"type": "array", "items": {"type": "string"}},
                 "rdates": {"type": "array", "items": {"type": "string"}},
+                "tzid": {"type": ["string", "null"]},
                 "status": {"type": "string"},
                 "response_status": {"type": "string"},
                 "url": {"type": "string"},

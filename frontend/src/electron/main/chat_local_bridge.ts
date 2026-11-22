@@ -85,7 +85,7 @@ export function registerChatLocalBridge(): void {
     // credentials:'include' → ACAO 不能 '*'，echo file:// 的固定 Origin 'null'。
     headers['Access-Control-Allow-Origin'] = ['null']
     headers['Access-Control-Allow-Credentials'] = ['true']
-    headers['Access-Control-Allow-Methods'] = ['GET, POST, PATCH, DELETE, OPTIONS']
+    headers['Access-Control-Allow-Methods'] = ['GET, POST, PUT, PATCH, DELETE, OPTIONS']
     headers['Access-Control-Allow-Headers'] = ['Content-Type', LOCAL_TOKEN_HEADER]
     // Starlette 对 disallowed origin 的 preflight 返 400 → 改 200（CORS 头已注入）。
     // 仅 OPTIONS + 4xx 时改，不动正常响应的状态行。

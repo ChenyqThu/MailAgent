@@ -37,12 +37,8 @@ import { isSafeUserPath } from '../lib/path-guard'
 // USER_EMAIL reader below used to keep its own candidate list; now it
 // resolves the same file that env:* IPC and the Python CLI consume.
 import { resolveEnvPath } from '../lib/env-path'
-// Sprint 6 review (opus MEDIUM #4): dropped dynamic `await import('./llm_stats')`
-// in favour of a static import — they're already eagerly loaded by `index.ts`,
-// so the dynamic ceremony added a Vite warning + extra microtask without any
-// code-split benefit. Static import path is settings → llm_stats → cli_runner
-// → keychain; no circular dependency.
-import { runLlmSelfTest } from './llm_stats'
+import type { LlmSelfTestData } from '@shared/api/types'
+import { daemonRead } from '../daemon_api'
 import { registerSystemPermissionsHandlers } from './system_permissions'
 
 const SETTINGS_FILE = join(app.getPath('userData'), 'settings.json')
@@ -64,7 +60,7 @@ export interface PersistentSettings {
   /** feat/auto-update — when the master AUTO_UPDATE_ENABLED flag is on,
    *  auto-download an available update without a manual click. Default FALSE
    *  (07-04 update-indicator: detect → surface the TitleBar download icon →
-   *  download only on click); the IslandUpdatesTab exposes a toggle to opt
+   *  download only on click); UpdatesTab exposes a toggle to opt
    *  back into auto-download. Read LIVE by handlers/updater.ts at
    *  update-available time (never cached). */
   autoDownloadUpdates: boolean
@@ -320,26 +316,19 @@ export interface PingResult {
 }
 
 async function pingLlmEndpoint(): Promise<PingResult> {
-  // We piggyback on the existing `mailagent llm selftest` instead of opening
-  // a new HTTP connection from the renderer — it already knows how to find
-  // the configured CRS endpoint + handle the no-token health probe, and the
-  // CLI is on the user's PATH by the time settings is reachable. This keeps
-  // the secret out of the renderer entirely.
   try {
-    const data = await runLlmSelfTest()
-    // issue #67 item 2 — this read `data.detail`, a field the selftest has never emitted, so
-    // the Settings ping row showed a bare pass/fail with the actual cause discarded. The probe
-    // reports its diagnosis in `reasons` ("LLM_API_KEY is empty", …); when healthy there are
-    // none, so echo the model it resolved instead of an empty detail.
+    const data = await daemonRead<LlmSelfTestData>('/llm/selftest')
     const reasons = Array.isArray(data.reasons) ? data.reasons : []
     const detail = data.healthy ? data.primary_model || data.api_base : reasons.join(' · ')
     return { ok: data.healthy, detail: detail || undefined }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    const code =
-      err && typeof err === 'object' && 'errorCode' in err
-        ? String((err as { errorCode?: unknown }).errorCode)
-        : 'E_UNREACHABLE'
+    let code = 'E_UNREACHABLE'
+    if (err && typeof err === 'object') {
+      const obj = err as { code?: unknown; errorCode?: unknown }
+      if (typeof obj.code === 'string' && obj.code.length > 0) code = obj.code
+      else if (typeof obj.errorCode === 'string' && obj.errorCode.length > 0) code = obj.errorCode
+    }
     return { ok: false, code, detail: msg }
   }
 }

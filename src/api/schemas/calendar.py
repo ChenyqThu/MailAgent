@@ -120,6 +120,7 @@ class CalendarEventDetail(BaseModel):
     rrule: str
     exdates: list[str]
     rdates: list[str]
+    tzid: Optional[str] = None
     status: str
     response_status: str
     url: str

@@ -7,6 +7,8 @@
 // own try/catch + graceful-degradation fallbacks (the wizard must never
 // white-screen when a single channel errors or the preload is absent).
 
+import { loopbackBaseUrl } from '@shared/api/ElectronApi'
+import { HttpApi } from '@shared/api/HttpApi'
 import type { FolderDiscoverResult, FolderSetWhitelistResult } from '@shared/api/types'
 import type { MailBackendKind } from '@shared/lib/mailBackend'
 import type { LlmProviderTestResult } from '@shared/onboarding/llmProviderTemplates'
@@ -319,39 +321,22 @@ export function llmProviderTest(id: string): Promise<LlmProviderTestResult> {
 
 // ─── 多文件夹同步 (P4) — onboarding 「选择文件夹」步骤 ──────────────────────────
 //
-// 复用 handlers/folder.ts 已注册的 folder:discover / folder:setWhitelist 通道
-// (davmail-only, Main→daemon→serve-api 转发)。这些通道返回 WriteEnvelope 形态
-// ({ok,data} / {ok:false,code,message}) 以跨 IPC 保住 error.code, 故这里 unwrap:
-// 成功 → data; 失败 → throw 带 .code 的 Error。非 davmail 后端 → code='E_INVALID_ARG',
-// StepFolders 据此走门控态 (整步可跳过)。
+// 经 loopback serve-api `/api/folder/*` 直连（与 ElectronApi.folder 共用 HttpApi）；
+// http_client 在非 davmail 后端时会把 E_INVALID_ARG 收进 Error.code 抛出，StepFolders
+// 据此走门控态（整步可跳过）。
 
-interface FolderEnvelope<T> {
-  ok: boolean
-  data?: T
-  code?: string
-  message?: string
-}
-
-function unwrapFolderEnvelope<T>(raw: unknown): T {
-  const env = raw as FolderEnvelope<T> | null
-  if (env && env.ok === true) return env.data as T
-  const err = new Error(env?.message ?? 'folder IPC failed')
-  if (env?.code) (err as Error & { code?: string }).code = env.code
-  throw err
+function folderHttpApi(): HttpApi {
+  return new HttpApi(loopbackBaseUrl(), { retryNetworkOnce: true })
 }
 
 /** 拉文件夹树 (davmail-only)。失败抛带 .code 的 Error (非 davmail = E_INVALID_ARG)。
  *  counts 默认 false, 对齐全链路新默认 (issue #45: 大邮箱逐文件夹 STATUS 分钟级,
  *  必超 StepFolders 8s hang 兜底); counts:true 仍可显式 opt-in。 */
 export function discoverFolders(counts = false): Promise<FolderDiscoverResult> {
-  return getInvoke()('folder:discover', { counts }).then((raw) =>
-    unwrapFolderEnvelope<FolderDiscoverResult>(raw)
-  )
+  return folderHttpApi().folder.discover({ counts })
 }
 
 /** 覆盖式保存白名单 (imap 原始名)。返回去重排序结果 + restart_required。 */
 export function setFolderWhitelist(imapNames: string[]): Promise<FolderSetWhitelistResult> {
-  return getInvoke()('folder:setWhitelist', imapNames).then((raw) =>
-    unwrapFolderEnvelope<FolderSetWhitelistResult>(raw)
-  )
+  return folderHttpApi().folder.setWhitelist(imapNames)
 }

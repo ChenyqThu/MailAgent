@@ -9,15 +9,17 @@
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
-import { __testing } from '../../src/electron/main/handlers/draft'
+const { mockIpcHandle } = vi.hoisted(() => ({ mockIpcHandle: vi.fn() }))
 
-const {
-  buildDraftCommand,
-  parseScriptOutput,
-  classifyScriptError,
-  validateComposeOpts,
-  usesServeApiDraftPath
-} = __testing
+vi.mock('electron', async () => {
+  const actual = await vi.importActual<Record<string, unknown>>('electron')
+  return { ...actual, ipcMain: { handle: mockIpcHandle } }
+})
+
+import { __testing, registerDraftHandlers } from '../../src/electron/main/handlers/draft'
+
+const { buildDraftCommand, parseScriptOutput, classifyScriptError, usesServeApiDraftPath } =
+  __testing
 
 describe('usesServeApiDraftPath (task 08-12: != applescript 都走 serve-api 通用 backend 路径)', () => {
   afterEach(() => {
@@ -169,57 +171,13 @@ describe('classifyScriptError', () => {
   })
 })
 
-// 写新邮件 (mode='new'): 无源邮件, 哨兵 internalId=-1。adapter 层 (validateComposeOpts)
-// 须对 mode='new' 放宽非负校验, 否则 -1 在到达 serve-api 前就被拒 (codex review HIGH)。
-describe('validateComposeOpts', () => {
-  test("mode='new' allows sentinel internalId=-1", () => {
-    const r = validateComposeOpts(
-      { internalId: -1, mode: 'new', to: ['x@y.com'] } as never,
-      'email:draft'
-    )
-    // 通过 → 返回 opts 本身 (无 ok 字段); 失败 → {ok:false,...}。
-    expect('ok' in r).toBe(false)
-    expect((r as { internalId: number }).internalId).toBe(-1)
+describe('registerDraftHandlers', () => {
+  afterEach(() => {
+    mockIpcHandle.mockReset()
   })
 
-  test('non-new mode rejects negative internalId', () => {
-    const r = validateComposeOpts({ internalId: -1, mode: 'reply' } as never, 'email:draft')
-    expect((r as { ok: boolean }).ok).toBe(false)
-    expect((r as { code: string }).code).toBe('E_INVALID_ARG')
-  })
-
-  test("mode='new' still rejects non-integer internalId", () => {
-    const r = validateComposeOpts({ internalId: 1.5, mode: 'new' } as never, 'email:draft')
-    expect((r as { ok: boolean }).ok).toBe(false)
-  })
-
-  // D1 Bug A — sourceDraftId (草稿行自己的 internal_id, draft-edit 保存/发送带上,
-  // 服务端恢复线程 linkage)。IPC 层是三层校验之一: 可选、给了必须是非负 int。
-  test('sourceDraftId: 合法 int 放行且原样透传', () => {
-    const r = validateComposeOpts(
-      { internalId: -1, mode: 'new', sourceDraftId: 99 } as never,
-      'email:draft'
-    )
-    expect('ok' in r).toBe(false)
-    expect((r as { sourceDraftId: number }).sourceDraftId).toBe(99)
-  })
-
-  test('sourceDraftId: 缺省 (undefined) 不拦', () => {
-    const r = validateComposeOpts(
-      { internalId: -1, mode: 'new', to: ['x@y.com'] } as never,
-      'email:draft'
-    )
-    expect('ok' in r).toBe(false)
-  })
-
-  test('sourceDraftId: 非整数 / 负数 → E_INVALID_ARG', () => {
-    for (const bad of [1.5, -1, 'abc', null]) {
-      const r = validateComposeOpts(
-        { internalId: -1, mode: 'new', sourceDraftId: bad } as never,
-        'email:draft'
-      )
-      expect((r as { ok: boolean }).ok).toBe(false)
-      expect((r as { code: string }).code).toBe('E_INVALID_ARG')
-    }
+  test('registers only email:createDraft IPC channel', () => {
+    registerDraftHandlers()
+    expect(mockIpcHandle.mock.calls.map((c) => c[0])).toEqual(['email:createDraft'])
   })
 })

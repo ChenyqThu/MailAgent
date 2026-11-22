@@ -115,7 +115,7 @@ describe('chat_local_bridge — 响应腿（CORS 注入，仅打包态）', () =
     expect(resp.responseHeaders['Access-Control-Allow-Origin']).toEqual(['null'])
     expect(resp.responseHeaders['Access-Control-Allow-Credentials']).toEqual(['true'])
     expect(resp.responseHeaders['Access-Control-Allow-Methods']).toEqual([
-      'GET, POST, PATCH, DELETE, OPTIONS'
+      'GET, POST, PUT, PATCH, DELETE, OPTIONS'
     ])
     expect(resp.responseHeaders['Access-Control-Allow-Headers']).toEqual([
       'Content-Type',
@@ -168,6 +168,8 @@ describe('chat_local_bridge — 响应腿（CORS 注入，仅打包态）', () =
     // 旧的小写 ACAO 被删，不残留
     expect(headers['access-control-allow-origin']).toBeUndefined()
     expect(headers['Access-Control-Allow-Origin']).toEqual(['null'])
-    expect(headers['Access-Control-Allow-Methods']).toEqual(['GET, POST, PATCH, DELETE, OPTIONS'])
+    expect(headers['Access-Control-Allow-Methods']).toEqual([
+      'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+    ])
   })
 })

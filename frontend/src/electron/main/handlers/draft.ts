@@ -30,16 +30,7 @@ import { join } from 'path'
 
 import { getDb } from '../db'
 import { resolveBundledResourcesRoot } from '../cli_runner'
-import { daemonRequest, daemonRequestRaw } from '../daemon_api'
-import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
-import type {
-  ComposeDraftOpts,
-  ComposeMode,
-  DraftPlanOpts,
-  SendEmailOpts,
-  SetReplySuggestionOpts,
-  UploadComposeAttachmentOpts
-} from '@shared/api/types'
+import { daemonRequest } from '../daemon_api'
 
 // ---- request / response shapes ---------------------------------------------
 
@@ -253,11 +244,13 @@ export async function createDraft(opts: CreateDraftOpts): Promise<CreateDraftRes
   // 通用 backend 主路径 (davmail / outlook_com) — 转发 serve-api（不传 to/cc →
   // 服务端推导 reply-all + 拼引用原文）。
   if (usesServeApiDraftPath()) {
-    const data = (await runComposeDraft({
-      internalId: opts.internalId,
-      mode: 'reply-all',
-      bodyText: replyText,
-      quoteOriginal: true
+    const data = (await daemonRequest('POST', '/email/draft', {
+      body: {
+        internalId: opts.internalId,
+        mode: 'reply-all',
+        bodyText: replyText,
+        quoteOriginal: true
+      }
     })) as DraftEndpointData
     return {
       internalId: data.internal_id,
@@ -349,103 +342,6 @@ async function createDraftViaAppleScript(
   throw Object.assign(new Error(message), { code })
 }
 
-// ---- Compose: 转发本机 daemon (serve-api in-process) -----------------------
-//
-// 三 channel 收编到 serve-api (D1, 不再 fork CLI + 临时文件传 bodyHtml):
-//   email:draft     → POST /email/draft           (写进 Drafts, IMAP APPEND)
-//   email:send      → POST /email/send             (SMTP 真实发送, 不可逆; serve-api
-//                     端恒 confirmed=True, renderer 已先弹 SendConfirmDialog)
-//   email:draftPlan → POST /email/{id}/draft-plan  (dry-run 预填, 无 auth)
-//
-// bodyHtml (TipTap getHTML()) 直接进 JSON body —— 旧 fork 路径落临时文件
-// --body-html-file 那套整段删 (A4 已让 serve-api 直收字符串)。mirror
-// HttpApi.email.draft/.send/.draftPlan (raw-data 视角)。
-
-// 'new' = 草稿编辑(draft-edit)的 wire mode — 显式收件人/正文、零线程派生。
-const VALID_MODES: ReadonlySet<string> = new Set<string>(['reply', 'reply-all', 'forward', 'new'])
-
-function validateComposeOpts(
-  opts: ComposeDraftOpts | undefined,
-  channel: string
-): WriteEnvelope<never> | ComposeDraftOpts {
-  // mode='new' (写新邮件): 无源邮件, 前端传哨兵 internalId=-1 → 放宽非负校验
-  // (serve-api _prepare_draft 对 mode='new' 不依赖源 record)。其余模式必须非负。
-  const isNew = opts?.mode === 'new'
-  if (!opts || !Number.isInteger(opts.internalId) || (opts.internalId < 0 && !isNew)) {
-    return {
-      ok: false,
-      code: 'E_INVALID_ARG',
-      message: `${channel}: expected ${isNew ? 'integer' : 'non-negative integer'} internalId`
-    }
-  }
-  if (!VALID_MODES.has(opts.mode)) {
-    return {
-      ok: false,
-      code: 'E_INVALID_ARG',
-      message: `${channel}: mode must be reply|reply-all|forward|new, got ${String(opts.mode)}`
-    }
-  }
-  // sourceDraftId (D1 Bug A): draft-edit 保存/发送带草稿行自己的 internal_id, 服务端
-  // 据此恢复回复线程 (mail_write._prepare_draft)。可选; 给了就必须是非负 int ——
-  // 哨兵坑教训: 三层校验 (HTTP/service 由 T4 放行, 此处是 IPC 层) 缺一层就断线。
-  if (opts.sourceDraftId !== undefined) {
-    if (!Number.isInteger(opts.sourceDraftId) || opts.sourceDraftId < 0) {
-      return {
-        ok: false,
-        code: 'E_INVALID_ARG',
-        message: `${channel}: sourceDraftId must be a non-negative integer, got ${String(opts.sourceDraftId)}`
-      }
-    }
-  }
-  return opts
-}
-
-// ---- compose forwarders (unit-testable: tests mock daemonRequest) ---------
-//
-// path/body mirror HttpApi.email.draft/.send/.draftPlan. draft/send 直传整个
-// ComposeDraftOpts 作 body (含 internalId/mode/to/cc/bcc/subject/bodyHtml) ——
-// serve-api A4 的 _compose_request_from_body 读 camelCase body, bodyHtml 字符串直收。
-
-export function runComposeDraft(opts: ComposeDraftOpts): Promise<unknown> {
-  return daemonRequest('POST', '/email/draft', { body: opts })
-}
-
-export function runComposeSend(opts: SendEmailOpts): Promise<unknown> {
-  return daemonRequest('POST', '/email/send', { body: opts })
-}
-
-export function runDeleteDraft(internalId: number): Promise<unknown> {
-  return daemonRequest('DELETE', `/email/draft/${internalId}`)
-}
-
-export function runDraftPlan(opts: { internalId: number; mode: ComposeMode }): Promise<unknown> {
-  return daemonRequest('POST', `/email/${opts.internalId}/draft-plan`, {
-    body: { mode: opts.mode }
-  })
-}
-
-// D1 — compose 附件 staging 上传: PUT raw bytes (application/octet-stream, 服务端
-// 不用 python-multipart), filename/mime 走 query (buildQuery 负责 url-encode)。
-// 返回 data 块 {stage_id, filename, size, mime}, stage_id 进 draft/send 的
-// attachments refs。mirror HttpApi.email.uploadComposeAttachment。
-export function runComposeAttachmentUpload(
-  filename: string,
-  bytes: Uint8Array,
-  mime?: string
-): Promise<unknown> {
-  return daemonRequestRaw('PUT', '/email/compose-attachment', bytes, 'application/octet-stream', {
-    query: { filename, mime }
-  })
-}
-
-// F1 — persist a user-edited reply suggestion to the SSoT (serve-api
-// POST /email/{id}/reply-suggestion, body camelCase {replySuggestionMd}).
-export function runSetReplySuggestion(internalId: number, replyMd: string): Promise<unknown> {
-  return daemonRequest('POST', `/email/${internalId}/reply-suggestion`, {
-    body: { replySuggestionMd: replyMd }
-  })
-}
-
 // ---- IPC wiring ------------------------------------------------------------
 
 export function registerDraftHandlers(): void {
@@ -465,99 +361,6 @@ export function registerDraftHandlers(): void {
       }
     }
   )
-
-  // F1 — persist a user-edited reply suggestion to the SSoT (forwards to
-  // serve-api POST /email/{id}/reply-suggestion via daemon w/ local token).
-  // The composer's draftPlan reads the same reply_suggestion_md, so the top
-  // reply/reply-all prefill picks up the edit after the renderer invalidates
-  // the compose plan cache.
-  ipcMain.handle(
-    'email:setReplySuggestion',
-    async (_evt, opts: SetReplySuggestionOpts): Promise<WriteEnvelope<unknown>> => {
-      if (!opts || !Number.isInteger(opts.internalId) || opts.internalId < 0) {
-        return {
-          ok: false,
-          code: 'E_INVALID_ARG',
-          message: `bad internalId ${String(opts?.internalId)}`
-        }
-      }
-      if (typeof opts.body !== 'string') {
-        return { ok: false, code: 'E_INVALID_ARG', message: 'body (reply markdown) required' }
-      }
-      return envelopeFromCli(runSetReplySuggestion(opts.internalId, opts.body))
-    }
-  )
-
-  // Compose — write draft into Drafts (IMAP APPEND). bodyHtml rides in the JSON
-  // body (no temp file) — serve-api A4 takes the TipTap string directly.
-  ipcMain.handle(
-    'email:draft',
-    async (_evt, opts: ComposeDraftOpts): Promise<WriteEnvelope<unknown>> => {
-      const valid = validateComposeOpts(opts, 'email:draft')
-      if (!('mode' in valid)) return valid
-      return envelopeFromCli(runComposeDraft(valid))
-    }
-  )
-
-  // 草稿真删除 (IMAP \Deleted+EXPUNGE + 本地行清理) — 草稿箱列表行的删除按钮。
-  // 区别于收件箱删除按钮的归档语义 (flag→done)。davmail-only, serve-api 校验 mailbox。
-  ipcMain.handle(
-    'email:deleteDraft',
-    async (_evt, internalId: number): Promise<WriteEnvelope<unknown>> => {
-      if (!Number.isInteger(internalId) || internalId < 0) {
-        return { ok: false, code: 'E_INVALID_ARG', message: `bad internalId ${String(internalId)}` }
-      }
-      return envelopeFromCli(runDeleteDraft(internalId))
-    }
-  )
-
-  // Compose — SMTP real send (irreversible). serve-api /email/send is always
-  // confirmed=True (renderer shows SendConfirmDialog first), so no --yes knob
-  // crosses the wire.
-  ipcMain.handle(
-    'email:send',
-    async (_evt, opts: SendEmailOpts): Promise<WriteEnvelope<unknown>> => {
-      const valid = validateComposeOpts(opts, 'email:send')
-      if (!('mode' in valid)) return valid
-      return envelopeFromCli(runComposeSend(valid))
-    }
-  )
-
-  // D1 — compose 附件 staging 上传 (renderer File → ArrayBuffer 经 IPC 结构化克隆到达,
-  // 转 Uint8Array raw PUT 到 serve-api)。20MB cap 由 renderer 先拦 + 服务端权威复核,
-  // 此处只做形状早校验。
-  ipcMain.handle(
-    'email:composeAttachmentUpload',
-    async (_evt, opts: UploadComposeAttachmentOpts): Promise<WriteEnvelope<unknown>> => {
-      if (!opts || typeof opts.filename !== 'string' || opts.filename.trim().length === 0) {
-        return { ok: false, code: 'E_INVALID_ARG', message: 'filename required' }
-      }
-      // 结构化克隆后 ArrayBuffer 可能落地为 ArrayBuffer 或 Buffer/TypedArray 视图。
-      const raw = opts.bytes as ArrayBuffer | Uint8Array
-      const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw)
-      if (bytes.byteLength === 0) {
-        return { ok: false, code: 'E_INVALID_ARG', message: 'empty attachment bytes' }
-      }
-      return envelopeFromCli(
-        runComposeAttachmentUpload(opts.filename, bytes, opts.mime || undefined)
-      )
-    }
-  )
-
-  // Compose — dry-run plan for pre-filling the composer. Read-only, no auth.
-  ipcMain.handle(
-    'email:draftPlan',
-    async (_evt, opts: DraftPlanOpts): Promise<WriteEnvelope<unknown>> => {
-      const valid = validateComposeOpts(
-        opts ? { internalId: opts.internalId, mode: opts.mode } : undefined,
-        'email:draftPlan'
-      )
-      if (!('mode' in valid)) return valid
-      // draftPlan 只用于 reply/reply-all/forward (opts.mode = 窄 ComposeMode), 不会是 'new';
-      // valid.mode 是宽 ComposeWireMode (共享 validateComposeOpts), 故回传 opts 的窄类型。
-      return envelopeFromCli(runDraftPlan({ internalId: opts.internalId, mode: opts.mode }))
-    }
-  )
 }
 
 export const __testing = {
@@ -565,10 +368,5 @@ export const __testing = {
   classifyScriptError,
   lookupMailbox,
   parseScriptOutput,
-  usesServeApiDraftPath,
-  validateComposeOpts,
-  runComposeDraft,
-  runComposeSend,
-  runDraftPlan,
-  runComposeAttachmentUpload
+  usesServeApiDraftPath
 }
