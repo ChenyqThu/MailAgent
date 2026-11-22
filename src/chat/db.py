@@ -149,13 +149,16 @@ v13（P4 Phase 06a，task 06-23 chat-panel cutover）= ``ai_chat_sessions.backen
 加 ``'ai-sdk'``（经 AI SDK Gateway 创作的会话成为一等 backend_kind，面板按 session 路由 runtime）。
 chat_db.ts ``migrate`` 表重建放宽 CHECK；本文件纯镜像不建表，``get_or_create_session`` /
 ``create_new_session`` 的 ``backend_kind: str`` 形参无独立 CHECK，故只需同步本头注释版本号。
-读函数（阶段 2）+ 写函数（3b-3）SQL **逐字镜像** chat_db.ts 对应函数，行形状对齐前端
-``ChatSession`` / ``ChatSessionSummary`` / ``ChatMessage`` / ``ChatToolCall``（``model.ts``）：
-  - 读：``listSessionsForEmail`` / ``listAllSessions`` / ``listMessages`` / ``listToolCallsForMessage``。
-  - 写（3b-3 = ``ChatPersistPort`` 写面）：``getOrCreateSession`` / ``createNewSession`` /
-    ``appendMessage`` / ``updateMessage`` / ``deleteMessagesFromId`` / ``abortStreamingMessages`` /
-    ``appendToolCall`` / ``updateToolCall`` + 单行读 ``getSession`` / ``getMessage`` /
-    ``getToolCallByUseId``（dispatcher 需要）。
+读函数 + 单写权收敛边界（``CHAT_DB_VERSION 33`` 归前端 ``chat_db.ts`` owns）：
+  - 读：``listSessionsForEmail`` / ``listAllSessions`` / ``listMessages`` / ``listToolCallsForMessage`` /
+    ``getSession`` / ``getMessage``。
+  - 会话与群组元数据写：``getOrCreateSession`` / ``createNewSession`` / ``deleteSession`` /
+    ``updateSessionTitle`` / ``updateSessionModel`` / ``updateSessionArchived`` /
+    ``updateSessionPinned`` / ``updateSessionStarred`` / ``updateSessionLastRead`` /
+    ``updateGroupConfig`` / ``upsertGroupMemberModes`` / ``updateGroupMembers`` / ``attachThreadRoot`` /
+    ``deleteMessagesFromId``（回溯清理）。
+  - 消息正文/流式分片/``chat_tool_call`` 写入由 Node gateway（Electron main ``chat_db/*``）独占，
+    Python 侧不写消息与工具调用审计行（legacy ``HttpChatPlatform`` 双写路径已在 Wave 3B 移除）。
 
 路径 = ``DATA_ROOT/frontend/ai_chat.db``（对齐 chat_db.ts ``resolveChatDbPath``），env
 ``AI_CHAT_DB_PATH`` override。serve-api 由 ``backend_lifecycle`` 注入 ``MAILAGENT_DATA_ROOT``，
@@ -254,32 +257,6 @@ def _clip_snippet(content: str, query: str, snippet_chars: int) -> str:
     prefix = "…" if lead > 0 else ""
     suffix = "…" if lead + snippet_chars < len(content) else ""
     return f"{prefix}{clipped}{suffix}"
-
-
-# UpdateMessagePatch / UpdateToolCallPatch（camelCase wire key → 列名）映射，**字段顺序逐字
-# 镜像 chat_db.ts updateMessage / updateToolCall**。``key in patch`` 精确复刻 TS ``!== undefined``
-# 语义（key 缺 → 不更；key 在即便值 None → 更为 NULL），故 patch 来自 wire 时「省略 ≠ 置空」。
-_MESSAGE_PATCH_FIELDS = (
-    ("content", "content"),
-    ("status", "status"),
-    ("tokensInput", "tokens_input"),
-    ("tokensOutput", "tokens_output"),
-    ("costUsd", "cost_usd"),
-    ("errorMessage", "error_message"),
-    ("model", "model"),
-    ("metadata", "metadata"),
-    # task 06-08-chat 需求 5 — extended-thinking summary（finalizeMessage 终态写）。
-    ("thinking", "thinking"),
-    # v9（P4 Phase 02）— AI SDK UIMessage canonical JSON（gateway onFinish 终态写）。
-    ("uiMessageJson", "ui_message_json"),
-)
-_TOOL_CALL_PATCH_FIELDS = (
-    ("status", "status"),
-    ("outputJson", "output_json"),
-    ("durationMs", "duration_ms"),
-    ("userEditedInputJson", "user_edited_input_json"),
-    ("confirmedAt", "confirmed_at"),
-)
 
 
 def resolve_ai_chat_db_path() -> str:
@@ -1155,208 +1132,22 @@ class ChatDb:
             # pre-v20 ai_chat.db（no such column: last_read_at）→ best-effort no-op。
             pass
 
-    # ── messages（写 + 单读，3b-3）─────────────────────────────────────────
-
-    def append_message(
-        self,
-        session_id: int,
-        role: str,
-        content: str,
-        status: str,
-        model: Optional[str] = None,
-        tokens_input: Optional[int] = None,
-        tokens_output: Optional[int] = None,
-        cost_usd: Optional[float] = None,
-        error_message: Optional[str] = None,
-        metadata: Optional[str] = None,
-        ui_message_json: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """INSERT 一条消息 + bump session updated_at（列表排序反映新活动）。镜像 chat_db.ts
-        appendMessage → ChatMessage。两条语句同一 now、同一事务。
-
-        v9（P4 Phase 02）— ``ui_message_json`` = AI SDK UIMessage canonical JSON（gateway
-        runtime 双写）；legacy 写省略 → NULL（重载时由 content 合成 UIMessage）。"""
-        now = _now_ms()
-        with self._write_connection() as conn:
-            cur = conn.execute(
-                "INSERT INTO ai_chat_messages "
-                "(session_id, role, content, tokens_input, tokens_output, cost_usd, "
-                "model, status, error_message, metadata, ui_message_json, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    session_id,
-                    role,
-                    content,
-                    tokens_input,
-                    tokens_output,
-                    cost_usd,
-                    model,
-                    status,
-                    error_message,
-                    metadata,
-                    ui_message_json,
-                    now,
-                    now,
-                ),
-            )
-            conn.execute(
-                "UPDATE ai_chat_sessions SET updated_at = ? WHERE id = ?", (now, session_id)
-            )
-            return {
-                "id": int(cur.lastrowid),
-                "session_id": session_id,
-                "role": role,
-                "content": content,
-                "tokens_input": tokens_input,
-                "tokens_output": tokens_output,
-                "cost_usd": cost_usd,
-                "model": model,
-                "status": status,
-                "error_message": error_message,
-                "metadata": metadata,
-                # task 06-08-chat 需求 5 — appendMessage 不 seed thinking（finalizeMessage
-                # 终态经 update_message 写）；INSERT 未写该列 → 行 thinking=NULL。镜像 chat_db.ts。
-                "thinking": None,
-                "ui_message_json": ui_message_json,
-                "created_at": now,
-                "updated_at": now,
-            }
-
-    def update_message(self, message_id: int, patch: Dict[str, Any]) -> None:
-        """部分更新一条消息（streamContent 仅 content / finalizeMessage 终态全字段）。镜像
-        chat_db.ts updateMessage：动态拼字段（``key in patch`` = TS ``!== undefined``），无字段
-        即 no-op，**不** bump session updated_at。patch 用 camelCase wire key（见 _MESSAGE_PATCH_FIELDS）。"""
-        fields: List[str] = []
-        params: List[Any] = []
-        for key, col in _MESSAGE_PATCH_FIELDS:
-            if key in patch:
-                fields.append(f"{col} = ?")
-                params.append(patch[key])
-        if not fields:
-            return
-        fields.append("updated_at = ?")
-        params.append(_now_ms())
-        params.append(message_id)
-        with self._write_connection() as conn:
-            conn.execute(
-                f"UPDATE ai_chat_messages SET {', '.join(fields)} WHERE id = ?", params
-            )
+    # ── messages（单读 + 回溯清理；消息/工具调用实时写入独占归 Node chat_db）───────
 
     def get_message(self, message_id: int) -> Optional[Dict[str, Any]]:
-        """单消息行 or None。镜像 chat_db.ts getMessage → ChatMessage | null。"""
+        """单消息行 or None（供 save_to_kos / thread 校验使用）。"""
         return self._read_one(
             "SELECT * FROM ai_chat_messages WHERE id = ?", (message_id,)
         )
 
     def delete_messages_from_id(self, session_id: int, from_message_id: int) -> int:
-        """删 from_message_id 及之后所有消息（含自身，行内编辑重跑）。镜像 chat_db.ts
-        deleteMessagesFromId → 删除行数（``>= ?`` 不是 ``> ?``：调用方随后 appendMessage 重建编辑行）。"""
+        """删 from_message_id 及之后所有消息（含自身，行内编辑/群重跑）。"""
         with self._write_connection() as conn:
             cur = conn.execute(
                 "DELETE FROM ai_chat_messages WHERE session_id = ? AND id >= ?",
                 (session_id, from_message_id),
             )
             return cur.rowcount
-
-    def abort_streaming_messages(self, session_id: int) -> int:
-        """把该 session 的 pending/streaming 消息标 aborted（切邮件/关面板时）。镜像 chat_db.ts
-        abortStreamingMessages → 翻转行数。"""
-        now = _now_ms()
-        with self._write_connection() as conn:
-            cur = conn.execute(
-                "UPDATE ai_chat_messages SET status = 'aborted', updated_at = ? "
-                "WHERE session_id = ? AND status IN ('pending', 'streaming')",
-                (now, session_id),
-            )
-            return cur.rowcount
-
-    # ── chat_tool_call（写 + 单读，3b-3）───────────────────────────────────
-
-    def append_tool_call(
-        self,
-        message_id: int,
-        tool_use_id: str,
-        tool_name: str,
-        input_json: str,
-        confirmation_tier: str,
-        status: str,
-        content_offset: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """INSERT 一条工具调用审计行（user_edited/output/duration/confirmed_at 初始 NULL）。
-        镜像 chat_db.ts appendToolCall → ChatToolCall。
-
-        ``content_offset``（task 06-08-chat Bug 2）= 该工具卡在父 assistant 消息 ``content``
-        里的插入字符偏移（harness 见 tool_use 时的累积正文长度）；前端据此把 content split
-        交错渲染工具卡。chat_tool_call.content_offset 列由前端 chat_db.ts v5 迁移建（schema
-        归前端 owns）—— serve-api 只写既有列（生产里 renderer getChatDb() 已迁好库）。
-        """
-        now = _now_ms()
-        with self._write_connection() as conn:
-            cur = conn.execute(
-                "INSERT INTO chat_tool_call "
-                "(message_id, tool_use_id, tool_name, input_json, "
-                "user_edited_input_json, output_json, "
-                "status, duration_ms, confirmation_tier, confirmed_at, "
-                "content_offset, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, ?, NULL, ?, ?, ?)",
-                (
-                    message_id,
-                    tool_use_id,
-                    tool_name,
-                    input_json,
-                    status,
-                    confirmation_tier,
-                    content_offset,
-                    now,
-                    now,
-                ),
-            )
-            return {
-                "id": int(cur.lastrowid),
-                "message_id": message_id,
-                "tool_use_id": tool_use_id,
-                "tool_name": tool_name,
-                "input_json": input_json,
-                "user_edited_input_json": None,
-                "output_json": None,
-                "status": status,
-                "duration_ms": None,
-                "confirmation_tier": confirmation_tier,
-                "confirmed_at": None,
-                "content_offset": content_offset,
-                "created_at": now,
-                "updated_at": now,
-            }
-
-    def update_tool_call(self, tool_call_id: int, patch: Dict[str, Any]) -> None:
-        """部分更新一条工具调用（status/output/duration/userEditedInput/confirmedAt）。镜像
-        chat_db.ts updateToolCall：动态拼字段（``key in patch``），无字段即 no-op。patch 用
-        camelCase wire key（见 _TOOL_CALL_PATCH_FIELDS）。"""
-        fields: List[str] = []
-        params: List[Any] = []
-        for key, col in _TOOL_CALL_PATCH_FIELDS:
-            if key in patch:
-                fields.append(f"{col} = ?")
-                params.append(patch[key])
-        if not fields:
-            return
-        fields.append("updated_at = ?")
-        params.append(_now_ms())
-        params.append(tool_call_id)
-        with self._write_connection() as conn:
-            conn.execute(
-                f"UPDATE chat_tool_call SET {', '.join(fields)} WHERE id = ?", params
-            )
-
-    def get_tool_call_by_use_id(
-        self, message_id: int, tool_use_id: str
-    ) -> Optional[Dict[str, Any]]:
-        """单工具调用（by message + tool_use_id）or None。镜像 chat_db.ts getToolCallByUseId
-        → ChatToolCall | null（dispatcher 据此判「这个 tool_use_id 见过没」）。"""
-        return self._read_one(
-            "SELECT * FROM chat_tool_call WHERE message_id = ? AND tool_use_id = ?",
-            (message_id, tool_use_id),
-        )
 
     # ── 群聊 g1（CHAT_DB v31）─────────────────────────────────────────────
 

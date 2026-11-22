@@ -830,15 +830,11 @@ async def chat_config(request: Request):
     )
 
 
-# ── chat 持久化写端点（V2.1 阶段 3 3b-3：ChatPersistPort 写面）──────────────
+# ── chat 会话与读取端点（单写权边界：ai_chat_messages / chat_tool_call 由 Node chat_db 独占写）──
 #
-# serve-api 镜像 chat_db.ts 写函数（ChatDb 写方法 SQL verbatim 镜像）。**envelope**（非 SSE）。
-# ai_chat.db schema 归前端 owns（chat_db.ts migrate），serve-api 只写既有表、不建 schema。
-# 单读端点（getSession/getMessage/getToolCallByUseId）返 envelope data=row|null（不 404）——
-# ChatPersistPort 契约是 ``| null``，null 是正常结果（尤其 getToolCallByUseId「没见过此
-# tool_use_id」），区别于 reports.py「找不到=错误」的 404 语义。
-# 写校验缺失 → APIError E_INVALID_ARG（malformed JSON 由全局 RequestValidationError handler
-# → E_INVALID_ARG）。3b 不接 renderer（http persist 仅 3b-5 mock-fetch 测）→ 生产单 writer。
+# ai_chat.db schema 归前端 owns（chat_db.ts migrate），serve-api 仅负责只读查询、
+# 会话/群组元数据 CRUD（create/delete/rename/archive/pin/star/model/read/group_*），
+# 以及历史回溯清理（delete_messages_from_id）。已退役的 legacy 消息/工具调用双写端点已移除。
 #
 # 路由顺序：静态段（/sessions/new、/sessions/all[阶段2]）须在动态 {id:int} 之前能被匹配；
 # ``:int`` 转换器已挡住非 int（"new"/"all" 不匹配 {id:int}），此处顺序兼顾可读性。
@@ -1710,68 +1706,6 @@ async def update_session_starred(
     return success_envelope({"updated": True}, request=request, source="sqlite")
 
 
-@router.post("/sessions/{session_id:int}/messages", dependencies=[Depends(verify_cf_access)])
-async def append_message(
-    request: Request, session_id: int, body: Optional[Dict[str, Any]] = None
-):
-    """appendMessage：INSERT 一条消息 + bump session updated_at。镜像 chat_db appendMessage →
-    ChatMessage。body = AppendMessageInput（camelCase，去 sessionId — 取自 path）。"""
-    opts = body or {}
-    role = opts.get("role")
-    content = opts.get("content")
-    status = opts.get("status")
-    if not isinstance(role, str) or not role:
-        raise APIError("E_INVALID_ARG", "messages requires role:str", source="sqlite")
-    if not isinstance(content, str):  # "" 合法（NOT NULL 不是 non-empty）
-        raise APIError("E_INVALID_ARG", "messages requires content:str", source="sqlite")
-    if not isinstance(status, str) or not status:
-        raise APIError("E_INVALID_ARG", "messages requires status:str", source="sqlite")
-    msg = get_chat_db().append_message(
-        session_id=session_id,
-        role=role,
-        content=content,
-        status=status,
-        model=opts.get("model"),
-        tokens_input=opts.get("tokensInput"),
-        tokens_output=opts.get("tokensOutput"),
-        cost_usd=opts.get("costUsd"),
-        error_message=opts.get("errorMessage"),
-        metadata=opts.get("metadata"),
-    )
-    return success_envelope(msg, request=request, source="sqlite")
-
-
-@router.patch("/messages/{message_id:int}/stream", dependencies=[Depends(verify_cf_access)])
-async def stream_content(
-    request: Request, message_id: int, body: Optional[Dict[str, Any]] = None
-):
-    """streamContent：仅更新 content（流式增量）。镜像 chat_db updateMessage 的 content-only 子集。
-    HttpChatPlatform 在此端点上做 debounce（~1/s 合并 PATCH，3b-5）。"""
-    opts = body or {}
-    content = opts.get("content")
-    if not isinstance(content, str):
-        raise APIError("E_INVALID_ARG", "stream requires content:str", source="sqlite")
-    get_chat_db().update_message(message_id, {"content": content})
-    return success_envelope({"ok": True}, request=request, source="sqlite")
-
-
-@router.patch("/messages/{message_id:int}", dependencies=[Depends(verify_cf_access)])
-async def finalize_message(
-    request: Request, message_id: int, body: Optional[Dict[str, Any]] = None
-):
-    """finalizeMessage：终态 patch（status/content/token/cost/model/metadata/error 任意子集）。
-    镜像 chat_db updateMessage 全字段。body = UpdateMessagePatch（camelCase；省略的 key 不更新
-    = TS undefined 语义）。**缺 body（None / JSON null）→ E_INVALID_ARG**（PATCH 必须带 patch
-    对象，对齐写端点「body 校验缺失→E_INVALID_ARG」纪律）；显式空对象 {} → no-op（对齐
-    chat_db.ts updateMessage 无字段早返）。codex review LOW。"""
-    if body is None:
-        raise APIError(
-            "E_INVALID_ARG", "messages PATCH requires a patch object body", source="sqlite"
-        )
-    get_chat_db().update_message(message_id, body)
-    return success_envelope({"ok": True}, request=request, source="sqlite")
-
-
 @router.delete(
     "/sessions/{session_id:int}/messages/from/{from_message_id:int}",
     dependencies=[Depends(verify_cf_access)],
@@ -1781,93 +1715,6 @@ async def delete_messages_from(request: Request, session_id: int, from_message_i
     deleteMessagesFromId → {deleted: count}。"""
     count = get_chat_db().delete_messages_from_id(session_id, from_message_id)
     return success_envelope({"deleted": count}, request=request, source="sqlite")
-
-
-@router.post("/sessions/{session_id:int}/abort", dependencies=[Depends(verify_cf_access)])
-async def abort_streaming(request: Request, session_id: int):
-    """abortStreamingMessages：把 pending/streaming 消息标 aborted。镜像 chat_db
-    abortStreamingMessages → {aborted: count}。"""
-    count = get_chat_db().abort_streaming_messages(session_id)
-    return success_envelope({"aborted": count}, request=request, source="sqlite")
-
-
-@router.post("/messages/{message_id:int}/tool-calls", dependencies=[Depends(verify_cf_access)])
-async def append_tool_call(
-    request: Request, message_id: int, body: Optional[Dict[str, Any]] = None
-):
-    """appendToolCall：INSERT 一条工具调用审计行。镜像 chat_db appendToolCall → ChatToolCall
-    （ChatPersistPort 仅需 .id，返回全行 = 超集）。body = AppendToolCallInput（camelCase，
-    去 messageId — 取自 path）。"""
-    opts = body or {}
-    tool_use_id = opts.get("toolUseId")
-    tool_name = opts.get("toolName")
-    input_json = opts.get("inputJson")
-    confirmation_tier = opts.get("confirmationTier")
-    status = opts.get("status")
-    if not isinstance(tool_use_id, str) or not tool_use_id:
-        raise APIError("E_INVALID_ARG", "tool-calls requires toolUseId:str", source="sqlite")
-    if not isinstance(tool_name, str) or not tool_name:
-        raise APIError("E_INVALID_ARG", "tool-calls requires toolName:str", source="sqlite")
-    if not isinstance(input_json, str):
-        raise APIError("E_INVALID_ARG", "tool-calls requires inputJson:str", source="sqlite")
-    if not isinstance(confirmation_tier, str) or not confirmation_tier:
-        raise APIError(
-            "E_INVALID_ARG", "tool-calls requires confirmationTier:str", source="sqlite"
-        )
-    if not isinstance(status, str) or not status:
-        raise APIError("E_INVALID_ARG", "tool-calls requires status:str", source="sqlite")
-    # contentOffset（task 06-08-chat Bug 2）= 可选 int（工具卡在 content 里的插入偏移）；
-    # 缺省 / null → None（持久化 NULL，前端 degrade 到「工具卡在正文后」）。非 int 拒绝。
-    content_offset = opts.get("contentOffset")
-    if content_offset is not None and not isinstance(content_offset, int):
-        raise APIError(
-            "E_INVALID_ARG", "tool-calls contentOffset must be an int", source="sqlite"
-        )
-    call = get_chat_db().append_tool_call(
-        message_id=message_id,
-        tool_use_id=tool_use_id,
-        tool_name=tool_name,
-        input_json=input_json,
-        confirmation_tier=confirmation_tier,
-        status=status,
-        content_offset=content_offset,
-    )
-    return success_envelope(call, request=request, source="sqlite")
-
-
-@router.patch("/tool-calls/{tool_call_id:int}", dependencies=[Depends(verify_cf_access)])
-async def update_tool_call(
-    request: Request, tool_call_id: int, body: Optional[Dict[str, Any]] = None
-):
-    """updateToolCall：patch 工具调用（status/outputJson/durationMs/userEditedInputJson/
-    confirmedAt 任意子集）。镜像 chat_db updateToolCall。**缺 body（None / JSON null）→
-    E_INVALID_ARG**（同 finalize_message）；显式空对象 {} → no-op。codex review LOW。"""
-    if body is None:
-        raise APIError(
-            "E_INVALID_ARG",
-            "tool-calls PATCH requires a patch object body",
-            source="sqlite",
-        )
-    get_chat_db().update_tool_call(tool_call_id, body)
-    return success_envelope({"ok": True}, request=request, source="sqlite")
-
-
-@router.get(
-    "/messages/{message_id:int}/tool-calls/{tool_use_id}",
-    dependencies=[Depends(verify_cf_access)],
-)
-async def get_tool_call_by_use_id(request: Request, message_id: int, tool_use_id: str):
-    """单工具调用（by message + tool_use_id）。镜像 chat_db getToolCallByUseId →
-    ChatToolCall | null（data=null 当不存在，不 404）。"""
-    call = get_chat_db().get_tool_call_by_use_id(message_id, tool_use_id)
-    return success_envelope(call, request=request, source="sqlite")
-
-
-@router.get("/messages/{message_id:int}", dependencies=[Depends(verify_cf_access)])
-async def get_message(request: Request, message_id: int):
-    """单消息行。镜像 chat_db getMessage → ChatMessage | null（data=null 当不存在，不 404）。"""
-    msg = get_chat_db().get_message(message_id)
-    return success_envelope(msg, request=request, source="sqlite")
 
 
 # ── KOS 代理端点（V2.1 阶段 3 3b-4：工具板 kosCallTool / saveToKos 的 http 面）─────────────

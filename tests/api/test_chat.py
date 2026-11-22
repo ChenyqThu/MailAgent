@@ -1254,159 +1254,61 @@ def test_get_session_found_and_null(chat_client: TestClient) -> None:
     assert r.json()["data"] is None  # ChatPersistPort 契约 = | null
 
 
-# ── messages ──────────────────────────────────────────────────────────────
+# ── messages（单写权边界：Python 侧仅保留回溯删除，拒绝遗留双写路径）──────
 
 
-def test_append_message_and_readback(chat_client: TestClient) -> None:
-    r = chat_client.post(
-        f"/api/chat/sessions/{SESSION_ID}/messages",
-        json={"role": "user", "content": "追加的一条", "status": "complete"},
+def _seed_message(ai_chat_db: Path, session_id: int, role: str, content: str, now_ms: int) -> int:
+    conn = sqlite3.connect(str(ai_chat_db))
+    cur = conn.execute(
+        "INSERT INTO ai_chat_messages (session_id, role, content, status, created_at, updated_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (session_id, role, content, "complete", now_ms, now_ms),
     )
-    assert r.status_code == 200
-    msg = r.json()["data"]
-    assert msg["role"] == "user"
-    assert msg["content"] == "追加的一条"
-    assert msg["status"] == "complete"
-    # seed 有 2 条，现 3 条；新条在末尾（created_at 升序）。
-    msgs = chat_client.get(f"/api/chat/sessions/{SESSION_ID}/messages").json()["data"]
-    assert len(msgs) == 3
-    assert msgs[-1]["id"] == msg["id"]
-    # append bump session updated_at == 该消息 created_at（同一 now）。
-    session = chat_client.get(f"/api/chat/sessions/{SESSION_ID}").json()["data"]
-    assert session["updated_at"] == msg["created_at"]
+    mid = int(cur.lastrowid)
+    conn.commit()
+    conn.close()
+    return mid
 
 
-def test_append_message_missing_fields_400(chat_client: TestClient) -> None:
-    # 缺 status
-    r = chat_client.post(
+def test_legacy_message_and_tool_call_writers_removed(chat_client: TestClient) -> None:
+    """Wave 3B 单写权守卫：ai_chat_messages / chat_tool_call 写入归 Node chat_db 独占，
+    已退役的 serve-api 镜像写路径不再挂载（404 / 405）。"""
+    assert chat_client.post(
         f"/api/chat/sessions/{SESSION_ID}/messages",
-        json={"role": "user", "content": "x"},
-    )
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "E_INVALID_ARG"
-
-
-def test_append_message_empty_content_ok(chat_client: TestClient) -> None:
-    """content='' 合法（NOT NULL 而非 non-empty；流式起始空气泡）。"""
-    r = chat_client.post(
-        f"/api/chat/sessions/{SESSION_ID}/messages",
-        json={"role": "assistant", "content": "", "status": "streaming"},
-    )
-    assert r.status_code == 200
-    assert r.json()["data"]["content"] == ""
-
-
-def test_stream_content_updates_content_only(chat_client: TestClient) -> None:
-    """streamContent 仅更 content，status 不动（流式增量）。"""
-    appended = chat_client.post(
-        f"/api/chat/sessions/{SESSION_ID}/messages",
-        json={"role": "assistant", "content": "", "status": "streaming"},
-    ).json()["data"]
-    mid = appended["id"]
-    r = chat_client.patch(f"/api/chat/messages/{mid}/stream", json={"content": "增量片段"})
-    assert r.status_code == 200
-    got = chat_client.get(f"/api/chat/messages/{mid}").json()["data"]
-    assert got["content"] == "增量片段"
-    assert got["status"] == "streaming"  # 未被改
-
-
-def test_stream_content_missing_content_400(chat_client: TestClient) -> None:
-    r = chat_client.patch(f"/api/chat/messages/{MSG_ASSISTANT_ID}/stream", json={})
-    assert r.status_code == 400
-
-
-def test_finalize_message_full_patch(chat_client: TestClient) -> None:
-    appended = chat_client.post(
-        f"/api/chat/sessions/{SESSION_ID}/messages",
-        json={"role": "assistant", "content": "draft", "status": "streaming"},
-    ).json()["data"]
-    mid = appended["id"]
-    r = chat_client.patch(
-        f"/api/chat/messages/{mid}",
+        json={"role": "user", "content": "x", "status": "complete"},
+    ).status_code in (404, 405)
+    assert chat_client.patch(
+        f"/api/chat/messages/{MSG_ASSISTANT_ID}/stream",
+        json={"content": "x"},
+    ).status_code in (404, 405)
+    assert chat_client.patch(
+        f"/api/chat/messages/{MSG_ASSISTANT_ID}",
+        json={"status": "complete"},
+    ).status_code in (404, 405)
+    assert chat_client.post(f"/api/chat/sessions/{SESSION_ID}/abort").status_code in (404, 405)
+    assert chat_client.post(
+        f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls",
         json={
-            "status": "complete",
-            "content": "终态正文",
-            "tokensInput": 120,
-            "tokensOutput": 80,
-            "costUsd": 0.0123,
-            "model": "claude-opus-4-8",
-            "metadata": '{"thread_id":"t-9"}',
+            "toolUseId": "toolu_x",
+            "toolName": "email_get",
+            "inputJson": "{}",
+            "confirmationTier": "silent",
+            "status": "running",
         },
+    ).status_code in (404, 405)
+    assert chat_client.patch("/api/chat/tool-calls/1", json={"status": "ok"}).status_code in (
+        404,
+        405,
     )
-    assert r.status_code == 200
-    got = chat_client.get(f"/api/chat/messages/{mid}").json()["data"]
-    assert got["status"] == "complete"
-    assert got["content"] == "终态正文"
-    assert got["tokens_input"] == 120
-    assert got["tokens_output"] == 80
-    assert got["cost_usd"] == 0.0123
-    assert got["model"] == "claude-opus-4-8"
-    assert got["metadata"] == '{"thread_id":"t-9"}'
 
 
-def test_finalize_message_persists_thinking(chat_client: TestClient) -> None:
-    """task 06-08-chat 需求 5 — finalizeMessage 写 thinking 列（extended-thinking 摘要），
-    readback 带出。append 不 seed thinking → 初始 null；patch thinking → 持久化 + 读回。"""
-    appended = chat_client.post(
-        f"/api/chat/sessions/{SESSION_ID}/messages",
-        json={"role": "assistant", "content": "", "status": "streaming"},
-    ).json()["data"]
-    # append 不 seed thinking → 返回 + 行均 null（镜像 chat_db.ts appendMessage）。
-    assert appended["thinking"] is None
-    mid = appended["id"]
-    r = chat_client.patch(
-        f"/api/chat/messages/{mid}",
-        json={"status": "complete", "content": "答案", "thinking": "Let me reason about it."},
-    )
-    assert r.status_code == 200
-    got = chat_client.get(f"/api/chat/messages/{mid}").json()["data"]
-    assert got["status"] == "complete"
-    assert got["content"] == "答案"
-    assert got["thinking"] == "Let me reason about it."
-
-
-def test_finalize_message_partial_patch_preserves_unset(chat_client: TestClient) -> None:
-    """省略的 key 不更新（TS undefined 语义）：只 patch status+error，content 原样保留。"""
-    appended = chat_client.post(
-        f"/api/chat/sessions/{SESSION_ID}/messages",
-        json={"role": "assistant", "content": "原始正文", "status": "streaming"},
-    ).json()["data"]
-    mid = appended["id"]
-    chat_client.patch(
-        f"/api/chat/messages/{mid}", json={"status": "error", "errorMessage": "boom"}
-    )
-    got = chat_client.get(f"/api/chat/messages/{mid}").json()["data"]
-    assert got["status"] == "error"
-    assert got["error_message"] == "boom"
-    assert got["content"] == "原始正文"  # 未传 content → 不动
-
-
-def test_finalize_empty_patch_noop(chat_client: TestClient) -> None:
-    """空 patch → no-op（不报错，对齐 chat_db.ts updateMessage 无字段早返）。"""
-    r = chat_client.patch(f"/api/chat/messages/{MSG_ASSISTANT_ID}", json={})
-    assert r.status_code == 200
-    got = chat_client.get(f"/api/chat/messages/{MSG_ASSISTANT_ID}").json()["data"]
-    assert got["content"] == "讲的是 redis timeout."  # seed 原值未变
-
-
-def test_get_message_null(chat_client: TestClient) -> None:
-    r = chat_client.get("/api/chat/messages/99999")
-    assert r.status_code == 200
-    assert r.json()["data"] is None
-
-
-def test_delete_messages_from_id(chat_client: TestClient) -> None:
+def test_delete_messages_from_id(chat_client: TestClient, ai_chat_db: Path) -> None:
     """删 fromMessageId 及之后所有（含自身）。新建独立 session 隔离 seed 计数。"""
     sid = chat_client.post(
         "/api/chat/sessions/new", json={"emailId": 3003, "backendKind": "custom-api"}
     ).json()["data"]["id"]
-    ids = []
-    for i in range(3):
-        m = chat_client.post(
-            f"/api/chat/sessions/{sid}/messages",
-            json={"role": "user", "content": f"m{i}", "status": "complete"},
-        ).json()["data"]
-        ids.append(m["id"])
+    now = int(time.time() * 1000)
+    ids = [_seed_message(ai_chat_db, sid, "user", f"m{i}", now + i) for i in range(3)]
     # 从第 2 条删起 → 删 2 条（含自身）。
     r = chat_client.delete(f"/api/chat/sessions/{sid}/messages/from/{ids[1]}")
     assert r.status_code == 200
@@ -1415,17 +1317,14 @@ def test_delete_messages_from_id(chat_client: TestClient) -> None:
     assert [m["id"] for m in remaining] == [ids[0]]
 
 
-def test_delete_session(chat_client: TestClient) -> None:
+def test_delete_session(chat_client: TestClient, ai_chat_db: Path) -> None:
     """deleteSession：建独立 session + 消息 → DELETE → session 不可见 + 返 {deleted: True}。
     （CASCADE 删消息 + 工具调用是真实 schema FK 的职责，测试 DDL 无 FK 故不在此验，由前端
     chat_db deleteSession 测试钉；serve-api 端点职责 = 转发 DELETE + 正确 envelope。）"""
     sid = chat_client.post(
         "/api/chat/sessions/new", json={"emailId": 5005, "backendKind": "custom-api"}
     ).json()["data"]["id"]
-    chat_client.post(
-        f"/api/chat/sessions/{sid}/messages",
-        json={"role": "user", "content": "hi", "status": "complete"},
-    )
+    _seed_message(ai_chat_db, sid, "user", "hi", int(time.time() * 1000))
     # 删前可见。
     assert chat_client.get(f"/api/chat/sessions/{sid}").json()["data"]["id"] == sid
     r = chat_client.delete(f"/api/chat/sessions/{sid}")
@@ -1699,204 +1598,6 @@ def test_new_session_invalid_backend_kind(chat_client: TestClient) -> None:
     assert r.json()["error"]["code"] == "E_INVALID_ARG"
 
 
-def test_abort_streaming_messages(chat_client: TestClient) -> None:
-    """pending/streaming → aborted；complete 不动。"""
-    sid = chat_client.post(
-        "/api/chat/sessions/new", json={"emailId": 4004, "backendKind": "custom-api"}
-    ).json()["data"]["id"]
-    for status in ("pending", "streaming", "complete"):
-        chat_client.post(
-            f"/api/chat/sessions/{sid}/messages",
-            json={"role": "assistant", "content": status, "status": status},
-        )
-    r = chat_client.post(f"/api/chat/sessions/{sid}/abort")
-    assert r.status_code == 200
-    assert r.json()["data"]["aborted"] == 2  # pending + streaming
-    msgs = chat_client.get(f"/api/chat/sessions/{sid}/messages").json()["data"]
-    statuses = sorted(m["status"] for m in msgs)
-    assert statuses == ["aborted", "aborted", "complete"]
-
-
-# ── tool calls ──────────────────────────────────────────────────────────────
-
-
-def test_append_tool_call_and_get_by_use_id(chat_client: TestClient) -> None:
-    r = chat_client.post(
-        f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls",
-        json={
-            "toolUseId": "toolu_new",
-            "toolName": "email_get",
-            "inputJson": '{"internal_id":42}',
-            "confirmationTier": "silent",
-            "status": "running",
-        },
-    )
-    assert r.status_code == 200
-    call = r.json()["data"]
-    assert call["tool_name"] == "email_get"
-    assert call["user_edited_input_json"] is None
-    assert call["output_json"] is None
-    # by-use-id 读回。
-    got = chat_client.get(
-        f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls/toolu_new"
-    ).json()["data"]
-    assert got["id"] == call["id"]
-    # 不存在 → data null（不 404）。
-    miss = chat_client.get(f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls/toolu_nope")
-    assert miss.status_code == 200
-    assert miss.json()["data"] is None
-
-
-def test_append_tool_call_missing_fields_400(chat_client: TestClient) -> None:
-    r = chat_client.post(
-        f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls",
-        json={"toolUseId": "toolu_x"},  # 缺 toolName/inputJson/confirmationTier/status
-    )
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "E_INVALID_ARG"
-
-
-def test_append_tool_call_content_offset_round_trip(chat_client: TestClient) -> None:
-    """task 06-08-chat Bug 2 — contentOffset 写入 + by-use-id 读回（前端据此交错渲染工具卡）。"""
-    r = chat_client.post(
-        f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls",
-        json={
-            "toolUseId": "toolu_off",
-            "toolName": "email_search",
-            "inputJson": "{}",
-            "confirmationTier": "silent",
-            "status": "running",
-            "contentOffset": 23,
-        },
-    )
-    assert r.status_code == 200
-    assert r.json()["data"]["content_offset"] == 23
-    got = chat_client.get(
-        f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls/toolu_off"
-    ).json()["data"]
-    assert got["content_offset"] == 23
-
-
-def test_append_tool_call_content_offset_zero(chat_client: TestClient) -> None:
-    """contentOffset=0（工具卡在任何文本之前）必须落 0、不被当成「缺省」置 NULL。"""
-    r = chat_client.post(
-        f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls",
-        json={
-            "toolUseId": "toolu_zero",
-            "toolName": "email_get",
-            "inputJson": "{}",
-            "confirmationTier": "silent",
-            "status": "running",
-            "contentOffset": 0,
-        },
-    )
-    assert r.status_code == 200
-    assert r.json()["data"]["content_offset"] == 0
-
-
-def test_append_tool_call_no_content_offset_is_null(chat_client: TestClient) -> None:
-    """缺 contentOffset → NULL（旧前端 / degrade 路径，渲染回退到「工具卡在正文后」）。"""
-    r = chat_client.post(
-        f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls",
-        json={
-            "toolUseId": "toolu_noff",
-            "toolName": "email_get",
-            "inputJson": "{}",
-            "confirmationTier": "silent",
-            "status": "running",
-        },
-    )
-    assert r.status_code == 200
-    assert r.json()["data"]["content_offset"] is None
-
-
-def test_append_tool_call_content_offset_non_int_400(chat_client: TestClient) -> None:
-    """contentOffset 非 int（字符串）→ E_INVALID_ARG。"""
-    r = chat_client.post(
-        f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls",
-        json={
-            "toolUseId": "toolu_bad",
-            "toolName": "email_get",
-            "inputJson": "{}",
-            "confirmationTier": "silent",
-            "status": "running",
-            "contentOffset": "nope",
-        },
-    )
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "E_INVALID_ARG"
-
-
-def test_update_tool_call(chat_client: TestClient) -> None:
-    """seed tool_call id=1（toolu_abc，status='ok'）→ patch status/output/duration 读回。"""
-    r = chat_client.patch(
-        "/api/chat/tool-calls/1",
-        json={"status": "error", "outputJson": '{"ok":false}', "durationMs": 42},
-    )
-    assert r.status_code == 200
-    got = chat_client.get(
-        f"/api/chat/messages/{MSG_ASSISTANT_ID}/tool-calls/toolu_abc"
-    ).json()["data"]
-    assert got["status"] == "error"
-    assert got["output_json"] == '{"ok":false}'
-    assert got["duration_ms"] == 42
-
-
-# ── ChatDb 单元（update patch key-presence 语义，绕端点直测）─────────────────
-
-
-def test_update_message_key_presence_semantics(ai_chat_db: Path) -> None:
-    """``key in patch`` = TS ``!== undefined``：省略 key 不更；显式 None 更为 NULL；空 patch no-op。"""
-    db = ChatDb(str(ai_chat_db))
-    # 空 patch → no-op（content 保 seed 值）。
-    db.update_message(MSG_ASSISTANT_ID, {})
-    assert db.get_message(MSG_ASSISTANT_ID)["content"] == "讲的是 redis timeout."
-    # 显式 None → 置 NULL（model seed 是 'claude-sonnet-4-6'）。
-    db.update_message(MSG_ASSISTANT_ID, {"model": None})
-    assert db.get_message(MSG_ASSISTANT_ID)["model"] is None
-    # 省略 model、只更 content → model 不被重置回非 NULL。
-    db.update_message(MSG_ASSISTANT_ID, {"content": "改了"})
-    got = db.get_message(MSG_ASSISTANT_ID)
-    assert got["content"] == "改了"
-    assert got["model"] is None  # 仍 NULL（上一步置的，本步未传）
-
-
-def test_update_tool_call_key_presence_semantics(ai_chat_db: Path) -> None:
-    """update_tool_call 同 key-presence 语义（parity update_message）：空 patch no-op；
-    显式 None 置 NULL；省略 key 不动。seed tool_call id=1（toolu_abc, status='ok'）。"""
-    db = ChatDb(str(ai_chat_db))
-    # 空 patch → no-op（status 保 seed 'ok'）。
-    db.update_tool_call(1, {})
-    assert db.get_tool_call_by_use_id(MSG_ASSISTANT_ID, "toolu_abc")["status"] == "ok"
-    # 多字段更新落库。
-    db.update_tool_call(1, {"status": "running", "confirmedAt": 12345})
-    got = db.get_tool_call_by_use_id(MSG_ASSISTANT_ID, "toolu_abc")
-    assert got["status"] == "running"
-    assert got["confirmed_at"] == 12345
-    # 省略 status、显式 confirmedAt=None → status 不动，confirmed_at 回 NULL（present key→更）。
-    db.update_tool_call(1, {"confirmedAt": None})
-    got = db.get_tool_call_by_use_id(MSG_ASSISTANT_ID, "toolu_abc")
-    assert got["status"] == "running"  # 未传 → 不动
-    assert got["confirmed_at"] is None  # 显式 None → NULL
-    # userEditedInputJson explicit value 落库。
-    db.update_tool_call(1, {"userEditedInputJson": '{"edited":true}'})
-    assert (
-        db.get_tool_call_by_use_id(MSG_ASSISTANT_ID, "toolu_abc")["user_edited_input_json"]
-        == '{"edited":true}'
-    )
-
-
-def test_finalize_message_missing_body_400(chat_client: TestClient) -> None:
-    """PATCH /messages/{id} 无 body（None / JSON null）→ E_INVALID_ARG（缺 patch 对象，codex LOW）。
-    与 test_finalize_empty_patch_noop 互补：显式 {} 是合法 no-op，缺 body 才报错。"""
-    r = chat_client.patch(f"/api/chat/messages/{MSG_ASSISTANT_ID}")
-    assert r.json()["error"]["code"] == "E_INVALID_ARG"
-
-
-def test_update_tool_call_missing_body_400(chat_client: TestClient) -> None:
-    """PATCH /tool-calls/{id} 无 body → E_INVALID_ARG（同 finalize_message，codex LOW）。"""
-    r = chat_client.patch("/api/chat/tool-calls/1")
-    assert r.json()["error"]["code"] == "E_INVALID_ARG"
 
 
 # ── KOS 代理端点（3b-4：kos-call + save-to-kos）──────────────────────────────

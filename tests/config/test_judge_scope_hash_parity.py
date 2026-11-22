@@ -25,7 +25,7 @@ import pytest
 from . import _parsers as p
 
 LIFECYCLE_TS = (
-    p.REPO_ROOT / "frontend" / "src" / "electron" / "main" / "ai_gateway_lifecycle.ts"
+    p.REPO_ROOT / "frontend" / "src" / "electron" / "main" / "ai_gateway" / "groupGlue.ts"
 )
 CHAT_DB_PY = p.REPO_ROOT / "src" / "chat" / "db.py"
 
