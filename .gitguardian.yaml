@@ -1,0 +1,10 @@
+version: 2
+
+secret:
+  ignored_paths:
+    - "tests/**/*"
+    - "frontend/tests/**/*"
+    - "artifact-server/tests/**/*"
+    - "**/*.test.ts"
+    - "**/*.test.tsx"
+    - "**/*.spec.ts"
