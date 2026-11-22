@@ -18,3 +18,7 @@ export const FIELD_LABEL_KEY: Record<ContactLockableField, string> = {
   function: 'contacts.field.fn',
   seniority: 'contacts.field.level'
 }
+
+export function fmtContactMonth(ms: number, locale: string): string {
+  return new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short' }).format(ms)
+}

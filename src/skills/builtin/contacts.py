@@ -1,8 +1,8 @@
 """contacts skill —— 通讯录只读（搜人 / 看一个人 / 这个人的往来邮件）。
 
-取数复用 REST 的同一份实现：列表 = ``src/api/routers/contacts.py::query_contact_list``、详情 =
-同模块 ``_load_detail``、关联邮件 = ``src/contacts/service.py::list_contact_mail_rows``。路由模块
-顶层带 fastapi，故在 handler 内 lazy import（serve-api 进程里它本来就已加载）。
+取数复用 repository / service 单源：列表 = ``src/contacts/repository.py::query_contact_list``、
+详情 = 同模块 ``load_contact_detail``、关联邮件 = ``src/contacts/service.py::list_contact_mail_rows``。
+不经 FastAPI 路由模块中转，保持 skill 层与 REST 层解耦。
 
 **返回字段对照 gateway 同名工具**（``frontend/src/ai-gateway/tools/contacts.ts`` 的
 ``projectListRow`` / ``projectDetail`` / ``projectProfile`` 与 ``contact_list_mails`` 的行投影），
@@ -20,7 +20,6 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from src.skills.builtin._common import (
-    api_router,
     cap_list,
     domain_error,
     enum_arg,
@@ -243,14 +242,14 @@ def _contact_search(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     query = str_arg(params, "query", max_len=_QUERY_MAX_CHARS)
     view = enum_arg(params, "view", _VIEWS, "known")
     sort = enum_arg(params, "sort", _SORTS, "density")
-    contacts_router = api_router("contacts")
-    from src.api.app import APIError
+    from src.contacts.repository import query_contact_list
+    from src.contacts.service import ContactError
 
     try:
-        page = contacts_router.query_contact_list(
+        page = query_contact_list(
             _repo(ctx), view=view, q=query, sort=sort, limit=limit, cursor=None
         )
-    except APIError as exc:
+    except ContactError as exc:
         raise domain_error(exc) from exc
     items = page.get("items") or []
     return {
@@ -262,12 +261,12 @@ def _contact_search(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
 
 def _contact_get(ctx: Any, params: dict[str, Any]) -> dict[str, Any]:
     contact_id = required_int(params, "contact_id")
-    contacts_router = api_router("contacts")
+    from src.contacts.repository import load_contact_detail
     from src.contacts.service import ContactError
 
     conn = _repo(ctx).connect()
     try:
-        detail = contacts_router._load_detail(conn, contact_id, profile_enabled=True)
+        detail = load_contact_detail(conn, contact_id, profile_enabled=True)
     except ContactError as exc:
         raise domain_error(exc) from exc
     finally:

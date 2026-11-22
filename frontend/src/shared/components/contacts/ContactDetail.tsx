@@ -4,52 +4,36 @@
 // 名字变体）→ 关联邮件（角色过滤 + 加载更多）→ 关联事项。
 // 危险操作全收进「更多操作」菜单（🔒 不放行内悬浮危险钮）；「合并」不渲染（WP3）。
 
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import {
-  ChevronLeft,
-  ChevronRight,
-  EyeOff,
-  Inbox,
-  Mars,
-  Minus,
-  MoreHorizontal,
-  Send,
-  UsersRound,
-  Venus
-} from 'lucide-react'
+import { ChevronLeft, EyeOff, MoreHorizontal } from 'lucide-react'
 
 import type {
-  ContactEmailDto,
-  ContactGender,
   ContactLockableField,
   ContactMailDirection,
   ContactPatchBody
 } from '@shared/api/types/contact'
-import {
-  CONTACT_FUNCTION_VALUES,
-  CONTACT_GENDER_VALUES,
-  CONTACT_MAIL_DIRECTIONS,
-  CONTACT_SENIORITY_VALUES
-} from '@shared/api/types/contact'
-import { MatterPip } from '@shared/components/matters/MatterPip'
-import { MATTER_STATUS_ICONS, MATTER_STATUS_TONES } from '@shared/components/matters/matterVocab'
-import type { MatterStatus } from '@shared/api/types/matter'
-import { useMatterNavigation } from '@shared/components/matters/navigation'
+import { CONTACT_FUNCTION_VALUES, CONTACT_SENIORITY_VALUES } from '@shared/api/types/contact'
 import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
-import { SegmentedControl } from '@shared/components/ui/segmented'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { formatMatterAgo } from '@shared/lib/matterDerive'
 import { openNewCompose } from '@shared/state/compose-new'
-import { useActiveEmail } from '@shared/state/active-email'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { ContactOrgSection } from './ContactOrgSection'
 import { ContactProfileCard } from './ContactProfileCard'
+import type { ContactGovernanceTarget, ContactRowActions } from './ContactRow'
 import { ContactDetailSkeleton } from './ContactSkeleton'
+import { FIELD_LABEL_KEY, fmtContactMonth } from './contactFields'
+import {
+  useContactDetail,
+  useContactMails,
+  useContactMatters,
+  useContactsApi,
+  useInvalidateContact
+} from './hooks'
 import { Monogram } from './Monogram'
 import {
   AiMark,
@@ -62,455 +46,8 @@ import {
   SelfPip,
   TwoWayBar
 } from './parts'
-import {
-  useContactDetail,
-  useContactMails,
-  useContactMatters,
-  useContactsApi,
-  useInvalidateContact
-} from './hooks'
-import { FIELD_LABEL_KEY } from './contactFields'
-import type { ContactGovernanceTarget, ContactRowActions } from './ContactRow'
-
-function fmtMonth(ms: number, locale: string): string {
-  return new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short' }).format(ms)
-}
-
-// ── 字段行（点击即编辑 → PATCH 落锁；行尾锁 pill 可切换）──────────────────────
-
-function FieldRow({
-  field,
-  value,
-  locked,
-  onSave,
-  onToggleLock
-}: {
-  field: ContactLockableField
-  value: string | null
-  locked: boolean
-  onSave(next: string): void
-  onToggleLock(): void
-}): React.ReactElement {
-  const { t } = useTranslation()
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState('')
-  const commit = (): void => {
-    setEditing(false)
-    if (draft.trim() !== (value ?? '')) onSave(draft.trim())
-  }
-  return (
-    <div className="flex items-center gap-2.5 py-1.5">
-      <span className="w-16 shrink-0 text-meta text-ink-fg-2">{t(FIELD_LABEL_KEY[field])}</span>
-      {editing ? (
-        <input
-          autoFocus
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') commit()
-            if (event.key === 'Escape') setEditing(false)
-          }}
-          className="h-7 min-w-0 flex-1 rounded-[var(--r-ctl)] border border-coral/50 bg-ink-1 px-2 text-body text-ink-fg outline-none"
-        />
-      ) : (
-        <button
-          type="button"
-          title={t('contacts.detail.editHint')}
-          onClick={() => {
-            setDraft(value ?? '')
-            setEditing(true)
-          }}
-          className="min-w-0 flex-1 truncate rounded-[var(--r-ctl)] px-1 py-0.5 text-left text-body text-ink-fg hover:bg-ink-3"
-        >
-          {value || <span className="text-ink-fg-3">—</span>}
-        </button>
-      )}
-      <LockPill locked={locked} onToggle={onToggleLock} />
-    </div>
-  )
-}
-
-// ── 枚举行（职能 / 职级 = chips 选择）─────────────────────────────────────────
-
-function EnumRow({
-  field,
-  value,
-  values,
-  locked,
-  labelOf,
-  onSave,
-  onToggleLock
-}: {
-  field: ContactLockableField
-  value: string | null
-  values: readonly string[]
-  locked: boolean
-  labelOf(value: string): string
-  onSave(next: string | null): void
-  onToggleLock(): void
-}): React.ReactElement {
-  const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  return (
-    <div className="py-1.5">
-      <div className="flex items-center gap-2.5">
-        <span className="w-16 shrink-0 text-meta text-ink-fg-2">{t(FIELD_LABEL_KEY[field])}</span>
-        <button
-          type="button"
-          onClick={() => setOpen((next) => !next)}
-          className="min-w-0 flex-1 truncate rounded-[var(--r-ctl)] px-1 py-0.5 text-left text-body text-ink-fg hover:bg-ink-3"
-        >
-          {value ? labelOf(value) : <span className="text-ink-fg-3">—</span>}
-        </button>
-        <LockPill locked={locked} onToggle={onToggleLock} />
-      </div>
-      {open ? (
-        <div className="ml-[74px] mt-1.5 flex flex-wrap gap-1.5">
-          {values.map((candidate) => (
-            <button
-              key={candidate}
-              type="button"
-              onClick={() => {
-                setOpen(false)
-                if (candidate !== value) onSave(candidate)
-              }}
-              className={cn(
-                'rounded-full border px-[9px] py-[3px] text-meta leading-4 transition-colors duration-fast ease-standard',
-                candidate === value
-                  ? 'border-coral/30 bg-coral/10 text-coral'
-                  : 'border-ink-border text-ink-fg-2 hover:bg-ink-fg/[0.06]'
-              )}
-            >
-              {labelOf(candidate)}
-            </button>
-          ))}
-          {value ? (
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false)
-                onSave(null)
-              }}
-              className="rounded-full border border-ink-border px-[9px] py-[3px] text-meta leading-4 text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-fg/[0.06]"
-            >
-              {t('contacts.enum.clear')}
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-// ── 性别行（三态图标 segmented）─────────────────────────────────────────────
-
-/** `null`（未知）在 SegmentedControl 里没法当值 —— 它是 `T extends string` 的泛型。
- *  用一个只活在控件里的哨兵段，进出各转一次。 */
-const GENDER_SEGMENTS = ['unset', ...CONTACT_GENDER_VALUES] as const
-type GenderSegment = (typeof GENDER_SEGMENTS)[number]
-
-const GENDER_SEGMENT_ICON: Record<GenderSegment, typeof Minus> = {
-  unset: Minus,
-  male: Mars,
-  female: Venus
-}
-
-/** 性别行。owner 拍板要**图标按钮切换**而不是下拉 → 复用仓库统一的 SegmentedControl
- *  （v0.7.2 dogfood 收敛出来的那一个），三段 = 未设置 / 男 / 女，点一下就 PATCH。
- *
- *  🔴 gender **不参与字段锁**（后端 `CONTACT_LOCKABLE_FIELDS` 里没有它，已豁免）
- *  → 本行不渲染 LockPill；对应地 patch 的 onSuccess 也不能把它算进「已保存并锁定」。
- *  🔴 图标是唯一的可见内容 → 每段都带 `ariaLabel`（SegmentedControl 会落到按钮的
- *  aria-label 上），否则读屏念出来是三个空按钮。 */
-function GenderRow({
-  value,
-  onChange
-}: {
-  value: ContactGender | null
-  onChange(next: ContactGender | null): void
-}): React.ReactElement {
-  const { t } = useTranslation()
-  return (
-    <div className="flex items-center gap-2.5 py-1.5">
-      <span className="w-16 shrink-0 text-meta text-ink-fg-2">{t('contacts.field.gender')}</span>
-      <SegmentedControl<GenderSegment>
-        ariaLabel={t('contacts.field.gender')}
-        value={value ?? 'unset'}
-        onChange={(next) => onChange(next === 'unset' ? null : next)}
-        options={GENDER_SEGMENTS.map((segment) => {
-          const Icon = GENDER_SEGMENT_ICON[segment]
-          return {
-            value: segment,
-            label: <Icon size={13} aria-hidden />,
-            ariaLabel: t(`contacts.gender.${segment}`)
-          }
-        })}
-      />
-    </div>
-  )
-}
-
-// ── 邮箱锚点行 ────────────────────────────────────────────────────────────────
-
-function EmailAnchorRow({
-  email,
-  locale,
-  onSetPrimary,
-  onSetFormer
-}: {
-  email: ContactEmailDto
-  locale: string
-  onSetPrimary(address: string): void
-  onSetFormer(address: string, former: boolean): void
-}): React.ReactElement {
-  const { t } = useTranslation()
-  const [menuOpen, setMenuOpen] = useState(false)
-  const triggerRef = useRef<HTMLButtonElement>(null)
-  const former = email.former_at != null
-  const range =
-    email.first_seen_at != null && email.last_seen_at != null
-      ? t('contacts.email.meta', {
-          n: email.mail_count,
-          from: fmtMonth(email.first_seen_at, locale),
-          to: fmtMonth(email.last_seen_at, locale)
-        })
-      : undefined
-  const items: PopmenuItem[] = [
-    {
-      kind: 'action',
-      id: 'primary',
-      label: t(former ? 'contacts.email.setPrimaryRestore' : 'contacts.email.setPrimary'),
-      onSelect: () => onSetPrimary(email.address)
-    },
-    {
-      kind: 'action',
-      id: 'former',
-      label: t(former ? 'contacts.email.unformer' : 'contacts.email.former'),
-      onSelect: () => onSetFormer(email.address, !former)
-    },
-    {
-      kind: 'action',
-      id: 'copy',
-      label: t('contacts.email.copy'),
-      onSelect: () => {
-        void navigator.clipboard?.writeText(email.address)
-        toastSuccess(t('contacts.email.copied', { email: email.address }))
-      }
-    }
-  ]
-  // 原型 `cdetail.jsx::IdentitySection`：单行卡片（地址占余宽不被挤压），
-  // 主邮箱 = accent 淡描边 · 曾用 = 虚线 + 整体压暗 + 地址删除线。
-  return (
-    <div
-      className={cn(
-        'relative flex items-center gap-2.5 rounded-[var(--r-row)] border bg-ink-2 px-2.5 py-2',
-        email.is_primary ? 'border-coral/25' : 'border-ink-border',
-        former && 'border-dashed opacity-[0.72]'
-      )}
-      title={range}
-    >
-      <span
-        className={cn(
-          'min-w-0 flex-1 truncate font-mono text-meta text-ink-fg',
-          former && 'line-through decoration-ink-fg-3'
-        )}
-      >
-        {email.address}
-      </span>
-      {email.is_primary ? <ContactPip>{t('contacts.email.primary')}</ContactPip> : null}
-      {former ? <ContactPip>{t('contacts.email.formerPip')}</ContactPip> : null}
-      <span className="shrink-0 font-mono text-micro tabular-nums text-ink-fg-3">
-        {email.mail_count}
-      </span>
-      {!email.is_primary ? (
-        <>
-          <button
-            ref={triggerRef}
-            type="button"
-            aria-label={t('contacts.row.more')}
-            onClick={() => setMenuOpen((open) => !open)}
-            className="grid size-6 shrink-0 place-items-center rounded-[var(--r-ctl)] text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-fg/[0.08] hover:text-ink-fg-1"
-          >
-            <MoreHorizontal size={13} />
-          </button>
-          <Popmenu
-            open={menuOpen}
-            onClose={() => setMenuOpen(false)}
-            ariaLabel={t('contacts.row.more')}
-            items={items}
-            triggerRef={triggerRef}
-            align="end"
-            width={240}
-          />
-        </>
-      ) : null}
-    </div>
-  )
-}
-
-// ── 关联邮件 ──────────────────────────────────────────────────────────────────
-
-/** 🔴 `direction` 由 `ContactDetail` 持有（waterfall 拆解）：顶层要用同一个方向声明同一条
- *  查询，两处的 queryKey 才是同一个 —— 状态留在这里的话顶层只能猜一个方向，猜错就是白发一次。 */
-function ContactMailList({
-  contactId,
-  direction,
-  onDirectionChange
-}: {
-  contactId: number
-  direction: ContactMailDirection
-  onDirectionChange(direction: ContactMailDirection): void
-}): React.ReactElement {
-  const { t, i18n } = useTranslation()
-  const navigate = useNavigate()
-  const setActiveEmail = useActiveEmail((state) => state.setActive)
-  // render 期不许调 Date.now()（react-hooks/purity）—— 挂载时取一次快照。
-  const [now] = useState(() => Date.now())
-  const query = useContactMails(contactId, direction)
-  const items = useMemo(() => (query.data?.pages ?? []).flatMap((page) => page.items), [query.data])
-  const total = query.data?.pages[0]?.total ?? 0
-  const remaining = Math.max(0, total - items.length)
-  return (
-    <section>
-      <SecHead
-        title={t('contacts.section.mails')}
-        count={total}
-        right={
-          <SegmentedControl<ContactMailDirection>
-            size="sm"
-            ariaLabel={t('contacts.section.mails')}
-            value={direction}
-            onChange={(next) => onDirectionChange(next)}
-            options={CONTACT_MAIL_DIRECTIONS.map((value) => ({
-              value,
-              label: t(`contacts.mail.filter.${value}`)
-            }))}
-          />
-        }
-      />
-      {items.length === 0 && !query.isPending ? (
-        <div className="py-3 text-meta text-ink-fg-3">{t('contacts.mail.empty')}</div>
-      ) : (
-        <div className="flex flex-col">
-          {items.map((mail) => {
-            // 方向由后端给（自有地址集的权威在 resolve_self_addresses，前端再算
-            // 一遍就是第二个真源）；cc 只作行内次要标记，不参与方向判定。
-            const ccOnly =
-              mail.direction !== 'from_them' &&
-              mail.roles.includes('cc') &&
-              !mail.roles.includes('to')
-            const RoleIcon =
-              mail.direction === 'from_them'
-                ? Inbox
-                : mail.direction === 'from_me'
-                  ? Send
-                  : UsersRound
-            const roleKey = `contacts.mail.filter.${mail.direction}`
-            return (
-              <button
-                key={mail.internal_id}
-                type="button"
-                onClick={() => {
-                  // 🔴 `{ navTarget: true }` 与画像卡的证据钮同因：往来邮件按定义大多在
-                  // 收件箱列表当前加载窗口之外，不豁免的话 useEmailListRows 的 active-reset
-                  // 会立刻把 active 抢回列表第一封（dogfood 报的「点击也无法跳转」）。
-                  setActiveEmail(mail.internal_id, { navTarget: true })
-                  void navigate({ to: '/' })
-                }}
-                className="flex w-full items-start gap-2.5 rounded-[var(--r-row)] px-2.5 py-2 text-left transition-colors duration-fast ease-standard hover:bg-ink-fg/[0.035]"
-              >
-                <RoleIcon size={13} aria-hidden className="mt-0.5 shrink-0 text-ink-fg-3" />
-                <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                  {!mail.is_read ? (
-                    <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-coral/100" />
-                  ) : null}
-                  <span
-                    className={cn(
-                      'min-w-0 truncate text-body text-ink-fg',
-                      mail.is_read ? 'font-medium' : 'font-semibold'
-                    )}
-                  >
-                    {mail.subject || '—'}
-                  </span>
-                </span>
-                <span className="flex shrink-0 flex-col items-end gap-[3px]">
-                  <span className="text-micro tabular-nums text-ink-fg-3">
-                    {mail.seen_at != null
-                      ? formatMatterAgo(mail.seen_at, now, i18n.language || 'zh-CN')
-                      : ''}
-                  </span>
-                  <span className="text-[10.5px] leading-none text-ink-fg-3">
-                    {ccOnly ? `${t(roleKey)} · ${t('contacts.mail.ccMark')}` : t(roleKey)}
-                  </span>
-                </span>
-              </button>
-            )
-          })}
-        </div>
-      )}
-      {query.hasNextPage ? (
-        <button
-          type="button"
-          disabled={query.isFetchingNextPage}
-          onClick={() => void query.fetchNextPage()}
-          className="ml-2.5 mt-1.5 self-start text-meta text-coral transition-opacity duration-fast ease-standard hover:opacity-80 disabled:opacity-50"
-        >
-          {t('contacts.mail.more', { n: remaining })}
-        </button>
-      ) : null}
-    </section>
-  )
-}
-
-// ── 关联事项 ──────────────────────────────────────────────────────────────────
-
-function ContactMatterList({ contactId }: { contactId: number }): React.ReactElement {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-  const openMatter = useMatterNavigation((state) => state.open)
-  const query = useContactMatters(contactId, true)
-  const items = query.data?.items ?? []
-  return (
-    <section>
-      <SecHead title={t('contacts.section.matters')} count={items.length} />
-      {items.length === 0 ? (
-        <div className="py-2 text-meta text-ink-fg-3">{t('contacts.matters.empty')}</div>
-      ) : (
-        <div className="flex flex-col gap-1.5">
-          {items.map((matter) => {
-            const status = matter.status as MatterStatus
-            const StatusIcon = MATTER_STATUS_ICONS[status]
-            return (
-              <button
-                key={matter.matter_id}
-                type="button"
-                onClick={() => {
-                  openMatter(matter.public_id)
-                  void navigate({ to: '/matters' })
-                }}
-                className="flex w-full items-center gap-2.5 rounded-[var(--r-row)] border border-ink-border bg-ink-2 px-2.5 py-2 text-left transition-colors duration-fast ease-standard hover:border-ink-fg-3"
-              >
-                {StatusIcon ? (
-                  <MatterPip tone={MATTER_STATUS_TONES[status] ?? 'neutral'} icon={StatusIcon}>
-                    {t(`matters.status.${matter.status}`, { defaultValue: matter.status })}
-                  </MatterPip>
-                ) : null}
-                <span className="min-w-0 flex-1 truncate text-body text-ink-fg">
-                  {matter.title}
-                </span>
-                {matter.role ? (
-                  <span className="shrink-0 truncate text-meta text-ink-fg-3">{matter.role}</span>
-                ) : null}
-                <ChevronRight size={13} className="shrink-0 text-ink-fg-3" />
-              </button>
-            )
-          })}
-        </div>
-      )}
-    </section>
-  )
-}
+import { ContactMailList, ContactMatterList } from './detail/ContactActivityLists'
+import { EmailAnchorRow, EnumRow, FieldRow, GenderRow } from './detail/ContactFieldRows'
 
 // ── 档案页 ────────────────────────────────────────────────────────────────────
 
@@ -842,7 +379,7 @@ function ContactDetailView({
               {detail.first_seen_at != null && detail.last_seen_at != null ? (
                 <span className="text-meta text-ink-fg-3">
                   {t('contacts.stat.since', {
-                    date: fmtMonth(detail.first_seen_at, locale),
+                    date: fmtContactMonth(detail.first_seen_at, locale),
                     ago: formatMatterAgo(detail.last_seen_at, now, locale)
                   })}
                 </span>

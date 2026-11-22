@@ -1211,3 +1211,97 @@ def test_profile_detail_states_and_list_summary(client):
     assert "\n" not in item["profile_summary"]
     assert len(item["profile_summary"]) <= 120
     assert item["profile_min"] == 50
+
+
+def test_contacts_router_has_no_raw_sql():
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[2] / "src/api/routers/contacts.py"
+    ).read_text(encoding="utf-8")
+    assert ".execute(" not in src
+
+
+def test_contacts_openapi_declares_typed_success_envelopes():
+    openapi = app.openapi()
+    schemas = openapi["components"]["schemas"]
+    contact_ops = [
+        (path, method, op)
+        for path, item in openapi["paths"].items()
+        if path.startswith("/api/contacts")
+        for method, op in item.items()
+        if method in ("get", "post", "patch", "put", "delete")
+    ]
+    assert len(contact_ops) == 27
+    for path, method, op in contact_ops:
+        responses = op["responses"]
+        ok_code = "202" if "202" in responses else "200"
+        schema_ref = responses[ok_code]["content"]["application/json"]["schema"]["$ref"]
+        comp_name = schema_ref.rsplit("/", 1)[-1]
+        assert comp_name.startswith("SuccessEnvelope_"), (
+            f"{method.upper()} {path} -> {comp_name}"
+        )
+        data_prop = schemas[comp_name]["properties"]["data"]
+        assert "$ref" in data_prop or "type" in data_prop, (
+            f"{method.upper()} {path} data property untyped: {data_prop}"
+        )
+
+
+def test_contacts_live_responses_validate_against_response_models(client):
+    from src.api.schemas import SuccessEnvelope
+    from src.api.schemas.contacts import (
+        ContactAgentHistoryResponse,
+        ContactAgentStatusResponse,
+        ContactBackfillProgressResponse,
+        ContactDetailResponse,
+        ContactListResponse,
+        ContactMailsResponse,
+        ContactMattersResponse,
+        ContactPatchResponse,
+        ContactProfileDailySummaryResponse,
+        ContactResolveResponse,
+    )
+
+    http, _settings, path = client
+    _seed_contact(
+        path,
+        cid=1,
+        name="Alice",
+        mail=5,
+        sent=2,
+        first=100,
+        last=200,
+        emails=(("alice@x.com", 1),),
+    )
+
+    SuccessEnvelope[ContactListResponse].model_validate(
+        http.get("/api/contacts").json()
+    )
+    SuccessEnvelope[ContactDetailResponse].model_validate(
+        http.get("/api/contacts/1").json()
+    )
+    SuccessEnvelope[ContactResolveResponse].model_validate(
+        http.post("/api/contacts/resolve", json={"emails": ["alice@x.com"]}).json()
+    )
+    SuccessEnvelope[ContactBackfillProgressResponse].model_validate(
+        http.get("/api/contacts/backfill/progress").json()
+    )
+    SuccessEnvelope[ContactAgentStatusResponse].model_validate(
+        http.get("/api/contacts/agent/status").json()
+    )
+    SuccessEnvelope[ContactAgentHistoryResponse].model_validate(
+        http.get("/api/contacts/agent/history").json()
+    )
+    SuccessEnvelope[ContactProfileDailySummaryResponse].model_validate(
+        http.get("/api/contacts/profile/daily-summary").json()
+    )
+    SuccessEnvelope[ContactMailsResponse].model_validate(
+        http.get("/api/contacts/1/mails").json()
+    )
+    SuccessEnvelope[ContactMattersResponse].model_validate(
+        http.get("/api/contacts/1/matters").json()
+    )
+    SuccessEnvelope[ContactPatchResponse].model_validate(
+        http.patch("/api/contacts/1", json={"organization": "ACME"}).json()
+    )
+

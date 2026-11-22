@@ -12,7 +12,11 @@ from src.api.routers.contacts import (
     _call,
     get_contact_repository,
 )
-from src.api.schemas.contacts import ContactGovernanceProposalRequest
+from src.api.schemas import SuccessEnvelope
+from src.api.schemas.contacts import (
+    ContactGovernanceProposalRequest,
+    ContactGovernanceProposalResponse,
+)
 from src.contacts.governance import create_suggestion, notify_pending_suggestion
 from src.contacts.repository import ContactRepository
 
@@ -23,7 +27,10 @@ router = APIRouter(
 )
 
 
-@router.post("/proposals")
+@router.post(
+    "/proposals",
+    response_model=SuccessEnvelope[ContactGovernanceProposalResponse],
+)
 async def propose_contact_governance(
     body: ContactGovernanceProposalRequest,
     request: Request,

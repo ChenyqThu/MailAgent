@@ -24,6 +24,7 @@ from __future__ import annotations
 # error_envelope / APIError). schemas/envelope.py is now a docstring-only contract
 # note — its old pydantic ApiResponse/ApiMeta/ApiError/PartialFailure* models were
 # dead code (no router/test imported them) and were removed in the Sprint 1B cleanup.
+from src.api.schemas.envelope import SuccessEnvelope
 from src.api.schemas.email import (
     AIPriority,
     ArchiveResult,
@@ -91,7 +92,8 @@ from src.api.schemas.ai import (
 )
 
 __all__ = [
-    # (envelope: owned by src/api/app.py; schemas/envelope.py is docstring-only now)
+    # envelope
+    "SuccessEnvelope",
     # email
     "SyncStatus", "AIPriority", "Lang", "BodyFormat", "ComposeMode",
     "EmailListItem", "EmailBodySummary", "EmailGetAttachmentItem", "EmailRecord",

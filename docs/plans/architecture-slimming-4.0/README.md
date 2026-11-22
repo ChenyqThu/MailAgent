@@ -95,8 +95,12 @@
 1. **事项 Matters（试点）— ✅ 已完成（Wave 2.1）**：
    - 后端 `src/matters/service.py`（6,415 → **1,470** 行）拆分为零循环叶子 `service_common.py`（70 行）+ 7 个领域 Mixin 子模块（`service_dispatch.py` 948 / `service_items.py` 352 / `service_progress.py` 338 / `service_resources.py` 1,388 / `service_stakeholders.py` 594 / `service_tags.py` 314 / `service_updates.py` 1,155）+ `MatterService` 薄门面（保持 `MatterRunService` 继承、全量常量 re-export 与 `_transaction` 单一出口闸覆盖全部 `service*.py`）。
    - 前端 `MatterDetail.tsx`（3,114 → **1,164** 行）拆入 `detail/` 5 个高内聚子模块：`MatterDetailControls.tsx`（887 行）、`MatterGoalCard.tsx`（298 行）、`MatterItemGroups.tsx`（457 行）、`MatterStateCard.tsx`（184 行）、`useMatterDetailMutations.ts`（339 行），全部通过 `matterMutationGate` / `matterRefreshGate` / `matterTimelineModel` 结构闸与 ESLint / TS / Vite 构建门禁。
-2. **通讯录 & 日历（下一步：Wave 2.2）**：`routers/contacts.py` 40 处裸 SQL 下沉 repository；审视 `calendar_notion` 与 `calendar_sync` 合并空间；拆 `ContactDetail.tsx`；试点 `Envelope[T]` + `response_model`。
-3. **邮件 Email**：`email_repository.py` 拆正文附件仓储与 FTS/CJK2/trigram 检索引擎；`new_watcher.py` 解耦后置 hook；前端拆 `ComposePanel.tsx` 与 `EmailDetail.tsx`。
+2. **通讯录 & 日历 — ✅ 已完成（Wave 2.2）**：
+   - 通讯录后端：`src/api/routers/contacts.py`（1,321 → **889** 行）全量裸 SQL 清零（`execute(` = **0**），9 个读侧查询与投影统一下沉 `src/contacts/repository.py`（37 → **587** 行）；`src/skills/builtin/contacts.py` 直接依赖 `contacts.repository` / `contacts.service`，不再经 FastAPI 路由模块中转。
+   - OpenAPI 试点：在 `src/api/schemas/envelope.py` 定义泛型 `SuccessEnvelope[T]`（导出于 `src/api/schemas/__init__.py`），在 `src/api/schemas/contacts.py` 补齐 37 个响应与 DTO 模型，`routers/contacts.py` + `routers/contact_agent.py` 全部 **27** 个 `/api/contacts*` 端点挂载 `response_model=SuccessEnvelope[...]`，实测 OpenAPI schema 与实时响应模型校验全绿。
+   - 日历审计：确认 `src/api/routers/calendar.py` 已有 **0** 处裸 SQL、Calendar 前端模块拆分健康，且 `src/calendar_notion/` 已严格受控于 `calendar_notion_enabled()` 并复用 `src/calendar_sync/_common.py`，不强行合并以免扩大同步回归面。
+   - 通讯录前端：`ContactDetail.tsx`（1,097 → **634** 行）拆出 `detail/ContactFieldRows.tsx`（290 行）与 `detail/ContactActivityLists.tsx`（181 行），通用日期辅助 `fmtContactMonth` 迁入 `contactFields.ts`（24 行）。
+3. **邮件 Email（下一步：Wave 2.3）**：`email_repository.py` 拆正文附件仓储与 FTS/CJK2/trigram 检索引擎；`new_watcher.py` 解耦后置 hook；前端拆 `ComposePanel.tsx` 与 `EmailDetail.tsx`。
 4. **设置 & Onboarding**：拆 `McpServiceTab.tsx`、`FolderPicker.tsx`、`onboarding/steps.tsx`；审视清理已完成 cutover 的历史灰度配置开关；按业务域拆分 `common.json` i18n namespace。
 
 ### Wave 3：AI Chat & Agents 专项重构
@@ -122,5 +126,5 @@
 |---|---|---|---|
 | **Wave 0** | 公共地基物理拆解 + 命名清理 | ✅ 已完成 | 保留全量 462 个 `icons/animated/`（纯具名导出、生产包 0 KB 开销，便于新功能即查即用）；`sync_store.py`: 8,327 → **3,467** + `sync_store_schema.py` (1,403) + `sync_store_migrations.py` (3,589)；`index.css`: 6,402 → **12 行入口** + `styles/*.css` 8 个按域子文件 (6,398 LOC)；`IslandUpdatesTab.tsx` → `UpdatesTab.tsx` |
 | **Wave 1** | 传输层收口（去 CLI 子进程 / 去双跳） | ✅ 已完成 | **1A+1B 累计**：12 个旧 handler + 11 个旧测试删除；`handlers/` IPC 通道 **137→69**（移除 69 条，新增 1 条 `admin:dbPath`，净 **-68** / -49.6%）；`callCli` 20→**5**（-15）；`ElectronApi.ts` 1,082→**648** 行；`draft.ts` 574→**372** 行；`daemon_api.ts` 113→**85** 行；前后端 CORS `PUT` 与日历 `tzid` 全链对齐；代码与测试净减 **-6,040 LOC**（+844 / -6,884）；6 万封读 benchmark 保留只读 SQLite fast-path，OpenAPI→TS 延至 Wave 2 `response_model` 就绪后试点 |
-| **Wave 2** | 业务模块垂直瘦身（Matters → Contacts/Cal → Email → Settings） | 🚧 进行中（2.1 Matters ✅；下一步：2.2 Contacts & Calendar） | **Wave 2.1 Matters**：`service.py` 6,415→**1,470** 行 + 8 子模块（70–1,388 行）；`MatterDetail.tsx` 3,114→**1,164** 行 + 5 个 `detail/*` 子模块（184–887 行） |
+| **Wave 2** | 业务模块垂直瘦身（Matters → Contacts/Cal → Email → Settings） | 🚧 进行中（2.1 Matters ✅ · 2.2 Contacts/Cal ✅；下一步：2.3 Email） | **2.1 Matters**：`service.py` 6,415→**1,470** 行 + 8 子模块；`MatterDetail.tsx` 3,114→**1,164** 行 + 5 `detail/*`。<br>**2.2 Contacts/Cal**：`routers/contacts.py` 1,321→**889** 行（裸 SQL **0**）+ `contacts/repository.py` 37→**587** 行；**27** 个 `/api/contacts*` 端点挂载 `SuccessEnvelope[T]`；`calendar` 0 裸 SQL 维持隔离；`ContactDetail.tsx` 1,097→**634** 行 + 2 `detail/*` |
 | **Wave 3** | AI Chat & Agents 专项收敛 | ⏳ 待启动 | 目标：解耦 `ai_gateway_lifecycle` / `ai-gateway` / `ai_chat.db` 双写 |
