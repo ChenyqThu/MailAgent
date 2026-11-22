@@ -2,7 +2,19 @@
 // 08-02 review F9 — 唯一的组件 DangerBlock 已拆去 DangerBlock.tsx，本文件保持零 JSX（.ts），
 // 这样 react-refresh 的 Fast Refresh 边界干净；`from './shared'` 的既有导入路径不受影响。
 
+import type React from 'react'
 import type { CustomAgentToolPolicy } from '@shared/api/types'
+
+export const CUSTOM_AGENT_INPUT_STYLE: React.CSSProperties = {
+  width: '100%',
+  fontFamily: 'inherit',
+  fontSize: 13.5,
+  color: 'rgb(var(--ink-fg))',
+  background: 'rgb(var(--ink-1) / 0.55)',
+  border: '1px solid rgb(var(--ink-border))',
+  borderRadius: 8,
+  padding: '9px 11px'
+}
 
 export type WebGrant = 'off' | 'gated' | 'open'
 export const WEB_GRANTS: WebGrant[] = ['off', 'gated', 'open']

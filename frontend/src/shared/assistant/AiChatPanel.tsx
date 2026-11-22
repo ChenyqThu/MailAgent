@@ -23,7 +23,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
 import { History, Maximize2, Plus, Settings, X } from 'lucide-react'
 
-import type { ChatBackendKind, QueuedInput, ReportAgentConfig, SearchHit } from '@shared/api/types'
+import type { ChatBackendKind, ReportAgentConfig, SearchHit } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { useActiveEmail } from '@shared/state/active-email'
 import { hideAIChatPanel, useAIChatPanel } from '@shared/state/ai-chat-panel'
@@ -43,7 +43,6 @@ import { buildAgentMentionEnvelope, buildMentionContext } from '@shared/lib/ment
 import { useApprovalMode } from '@shared/lib/approvalMode'
 import { useChatCompactFlags } from '@shared/hooks/useChatCompactEnabled'
 import { useChatQueuedInputEnabled } from '@shared/hooks/useChatQueuedInputEnabled'
-import { fetchPendingApproval } from '@shared/assistant/approvalRecordClient'
 import { toastError, toastInfo, toastSuccess } from '@shared/state/toast'
 import { errorMessage } from '@shared/lib/ipcErrors'
 
@@ -51,7 +50,7 @@ import { AiSdkRuntimeProvider } from './runtime/AiSdkRuntimeProvider'
 import { ThreadRunningBridge } from './runtime/ThreadRunningBridge'
 import { makeSessionSettledHandler } from './runtime/threadRunningGuard'
 import { useBackgroundChatRun } from './runtime/useBackgroundChatRun'
-import { useQueuedInputRows } from './runtime/useQueuedInputRows'
+import { useChatQueuedInput, useGatewayHealthProbe } from './runtime/useChatSurfaceRuntime'
 import { useAssistantIdentity } from './assistantIdentity'
 import { useApprovalDecideBusy } from './useApprovalDecideBusy'
 import { PendingApprovalPanel } from './PendingApprovalPanel'
@@ -476,21 +475,7 @@ export function AIChatPanel({
   // /health once per mount (sticky: staleTime Infinity). A definitive failure (after one retry) no
   // longer degrades to another engine (none exists): the panel shows an error notice + retry below
   // and keeps the current session readable (ReadOnlyTranscript).
-  const healthQ = useQuery({
-    queryKey: qk.aiGateway.health(gatewayBaseUrl),
-    queryFn: async () => {
-      const res = await fetch(`${gatewayBaseUrl}/health`)
-      if (!res.ok) throw new Error('ai-gateway unhealthy')
-      const body = (await res.json()) as { status?: string }
-      if (body.status !== 'ok') throw new Error('ai-gateway unhealthy')
-      return body
-    },
-    enabled: gatewayBaseUrl !== null,
-    retry: 1,
-    staleTime: Infinity,
-    refetchOnWindowFocus: false
-  })
-  const gatewayDegraded = aiSdkEnabled && healthQ.isError
+  const { healthQ, gatewayDegraded } = useGatewayHealthProbe({ gatewayBaseUrl, aiSdkEnabled })
   // The live runtime needs the base URL discovered AND a healthy probe.
   const gatewayUnavailable = !aiSdkEnabled || gatewayDegraded
 
@@ -506,59 +491,14 @@ export function AIChatPanel({
     contextInjectionOn && gatewayBaseUrl != null && initialMessages && initialMessages.length > 0
       ? chat.activeSessionId
       : null
-  const pendingApprovalTruth = useQuery({
-    queryKey: qk.agentApprovalPending(chat.activeSessionId),
-    queryFn: () =>
-      chat.activeSessionId == null
-        ? Promise.resolve(null)
-        : fetchPendingApproval(chat.activeSessionId),
-    enabled: queuedInputEnabled && chat.activeSessionId != null,
-    staleTime: 3_000,
-    refetchOnWindowFocus: true
-  })
-  const approvalPendingExists = pendingApprovalTruth.data != null
-  // 0903 dogfood —— 派发一轮排队追问的头几秒 `/run/active` 还探不到 run（探针在 active:false 之后
-  // 停轮询，dispatcher 的 run 要等 prepareChatRun 走完才 register），面板于是既不显示在场行、又不进
-  // 排队模式，这时按下的 Enter 走直发、撞会话租约 409 被丢掉。判据补上 claim 那一刻就广播出来的
-  // `claimed` 行（见 useQueuedInputRows 头注）。AgentConversation 同源。
-  const queuedRows = useQueuedInputRows({
-    enabled: queuedInputEnabled,
-    gatewayBaseUrl,
-    sessionId: chat.activeSessionId
-  })
-  const queueModeActive =
-    queuedInputEnabled &&
-    chat.activeSessionId != null &&
-    (aiSdkRunning || backgroundActive || approvalPendingExists || queuedRows.dispatchInFlight)
-  const onEnqueueQueuedInput = useCallback(
-    (content: string): void => {
-      if (gatewayBaseUrl == null || chat.activeSessionId == null) return
-      void fetch(`${gatewayBaseUrl}/api/ai/queued-input`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: chat.activeSessionId, content })
-      })
-        .then(async (response) => {
-          const body = (await response.json()) as { error?: string; item?: QueuedInput }
-          if (!response.ok) throw new Error(body?.error ?? 'enqueue failed')
-          // task 09-02 — seed the list with the returned row (real id) so the bubble is on screen
-          // before the refetch round-trip; the invalidation right after keeps it authoritative.
-          const queryKey = qk.chat.queuedInput(chat.activeSessionId)
-          if (body.item) {
-            const item = body.item
-            queryClientForRead.setQueryData<QueuedInput[]>(queryKey, (old = []) =>
-              old.some((row) => row.id === item.id) ? old : [...old, item]
-            )
-          }
-          await queryClientForRead.invalidateQueries({ queryKey })
-        })
-        .catch((error: unknown) =>
-          toastError(t('chat.queuedInput.enqueueFailed'), errorMessage(error))
-        )
-    },
-    [chat.activeSessionId, gatewayBaseUrl, queryClientForRead, t]
-  )
+  const { approvalPendingExists, queuedRows, queueModeActive, onEnqueueQueuedInput } =
+    useChatQueuedInput({
+      queuedInputEnabled,
+      gatewayBaseUrl,
+      sessionId: chat.activeSessionId,
+      aiSdkRunning,
+      backgroundActive
+    })
   const composerControls = useMemo<ChatComposerControls>(
     () => ({
       effort: effort.control,

@@ -21,14 +21,11 @@ import { Mail, Settings } from 'lucide-react'
 import type {
   ChatBackendKind,
   ChatSession,
-  QueuedInput,
   ReportAgentConfig,
   SearchHit
 } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { qk } from '@shared/lib/queryKeys'
-import { errorMessage } from '@shared/lib/ipcErrors'
-import { toastError } from '@shared/state/toast'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import type { UseGeneralChatReturn } from '@shared/hooks/useGeneralChat'
 import { useChatQueuedInputEnabled } from '@shared/hooks/useChatQueuedInputEnabled'
@@ -53,9 +50,11 @@ import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProv
 import { ThreadRunningBridge } from '@shared/assistant/runtime/ThreadRunningBridge'
 import { makeSessionSettledHandler } from '@shared/assistant/runtime/threadRunningGuard'
 import { useBackgroundChatRun } from '@shared/assistant/runtime/useBackgroundChatRun'
-import { useQueuedInputRows } from '@shared/assistant/runtime/useQueuedInputRows'
+import {
+  useChatQueuedInput,
+  useGatewayHealthProbe
+} from '@shared/assistant/runtime/useChatSurfaceRuntime'
 import { useApprovalDecideBusy } from '@shared/assistant/useApprovalDecideBusy'
-import { fetchPendingApproval } from '@shared/assistant/approvalRecordClient'
 import { PendingApprovalPanel } from '@shared/assistant/PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from '@shared/assistant/runtime/flags'
 import { ChatComposerControlsProvider } from '@shared/assistant/components/composerControls'
@@ -171,21 +170,7 @@ export function AgentConversation({
   const aiSdkEnabled = gatewayBaseUrl !== null
   // One sticky /health probe per mount. D7 — a definitive failure no longer degrades to another
   // engine (none exists): the error notice below offers a retry (refetch) instead.
-  const healthQ = useQuery({
-    queryKey: qk.aiGateway.health(gatewayBaseUrl),
-    queryFn: async () => {
-      const res = await fetch(`${gatewayBaseUrl}/health`)
-      if (!res.ok) throw new Error('ai-gateway unhealthy')
-      const body = (await res.json()) as { status?: string }
-      if (body.status !== 'ok') throw new Error('ai-gateway unhealthy')
-      return body
-    },
-    enabled: gatewayBaseUrl !== null,
-    retry: 1,
-    staleTime: Infinity,
-    refetchOnWindowFocus: false
-  })
-  const gatewayDegraded = aiSdkEnabled && healthQ.isError
+  const { healthQ, gatewayDegraded } = useGatewayHealthProbe({ gatewayBaseUrl, aiSdkEnabled })
   const gatewayLive = aiSdkEnabled && !gatewayDegraded
 
   // Per-session runtime routing (mixed-kind unified history): an EXISTING session renders on its
@@ -728,58 +713,14 @@ export function AgentConversation({
   // 本组件 —— 于是 owner 日常那条链路上「运行中根本发不出消息」。判据与 AiChatPanel 同源：
   // 会话里有一轮在跑（前台或后台）、或有一件待决审批时，这一轮说的话进队列而不是直接发。
   const queuedInputEnabled = useChatQueuedInputEnabled()
-  const pendingApprovalTruth = useQuery({
-    queryKey: qk.agentApprovalPending(chatActiveSessionId),
-    queryFn: () =>
-      chatActiveSessionId == null
-        ? Promise.resolve(null)
-        : fetchPendingApproval(chatActiveSessionId),
-    enabled: queuedInputEnabled && chatActiveSessionId != null,
-    staleTime: 3_000,
-    refetchOnWindowFocus: true
-  })
-  const approvalPendingExists = pendingApprovalTruth.data != null
-  // 0903 dogfood —— 派发一轮排队追问的那 2~8 秒里 `/run/active` 探针还探不到 run（它在 active:false
-  // 之后停轮询，而 dispatcher 的 run 要等 prepareChatRun 走完才 register），面板于是既不显示在场行、
-  // 又不进排队模式，这时按下的 Enter 走直发、撞会话租约 409 被丢掉。claim 那一刻广播出来的
-  // `claimed` 行是同一件事的即时事实来源，判据补上它（见 useQueuedInputRows 头注）。
-  const queuedRows = useQueuedInputRows({
-    enabled: queuedInputEnabled,
-    gatewayBaseUrl,
-    sessionId: chatActiveSessionId
-  })
-  const queueModeActive =
-    queuedInputEnabled &&
-    chatActiveSessionId != null &&
-    (aiSdkRunning || backgroundActive || approvalPendingExists || queuedRows.dispatchInFlight)
-  const onEnqueueQueuedInput = useCallback(
-    (content: string): void => {
-      if (gatewayBaseUrl == null || chatActiveSessionId == null) return
-      void fetch(`${gatewayBaseUrl}/api/ai/queued-input`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: chatActiveSessionId, content })
-      })
-        .then(async (response) => {
-          const body = (await response.json()) as { error?: string; item?: QueuedInput }
-          if (!response.ok) throw new Error(body?.error ?? 'enqueue failed')
-          // 先用返回的真行把列表种上（气泡当场出现），紧接着的失效再让它回到权威值。
-          const queryKey = qk.chat.queuedInput(chatActiveSessionId)
-          if (body.item) {
-            const item = body.item
-            queryClient.setQueryData<QueuedInput[]>(queryKey, (old = []) =>
-              old.some((row) => row.id === item.id) ? old : [...old, item]
-            )
-          }
-          await queryClient.invalidateQueries({ queryKey })
-        })
-        .catch((error: unknown) =>
-          toastError(t('chat.queuedInput.enqueueFailed'), errorMessage(error))
-        )
-    },
-    [chatActiveSessionId, gatewayBaseUrl, queryClient, t]
-  )
+  const { approvalPendingExists, queuedRows, queueModeActive, onEnqueueQueuedInput } =
+    useChatQueuedInput({
+      queuedInputEnabled,
+      gatewayBaseUrl,
+      sessionId: chatActiveSessionId,
+      aiSdkRunning,
+      backgroundActive
+    })
 
   const composerControls = useMemo<ChatComposerControls>(
     () => ({
