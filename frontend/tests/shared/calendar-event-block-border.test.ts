@@ -12,14 +12,13 @@
 //
 // 🔴 抽取失败也必须红 —— 定位锚点抽不到就是 CSS 结构变了，不许静默放过。
 
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-
 import { describe, expect, test } from 'vitest'
+
+import { readRendererCss } from '../helpers/readRendererCss'
 
 describe('.evt 家族（日/周时间轴事件块）不得出现真实 border', () => {
   // 同 nav-shell.test.ts / chat_fab_avatar.test.tsx 两条既有 CSS 闸的取文件方式（cwd = frontend）。
-  const css = readFileSync(resolve(process.cwd(), 'src/electron/renderer/index.css'), 'utf8')
+  const css = readRendererCss()
 
   function extractEvtFamilyBlock(): string {
     const start = css.indexOf('.evt {')

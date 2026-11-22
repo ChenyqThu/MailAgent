@@ -375,12 +375,8 @@ describe('工具栏下拉：当前值可辨识', () => {
   })
 
   test('默认字号镜像 index.css（跨构件手抄一致性闸）', async () => {
-    const { readFileSync } = await import('node:fs')
-    const { resolve } = await import('node:path')
-    // happy-dom 环境下 import.meta.url 不是 file: URL（fileURLToPath 会抛），
-    // 故从 vitest root（= frontend/，vitest.config.ts 未改 root）取路径；
-    // 路径错 → readFileSync 抛 → 红，不会静默放行。
-    const css = readFileSync(resolve(process.cwd(), 'src/electron/renderer/index.css'), 'utf8')
+    const { readRendererCss } = await import('../helpers/readRendererCss')
+    const css = readRendererCss()
     // 只匹配 `.folder-draft-editor .ProseMirror {`（后跟其它选择器的规则不算），
     // 且必须唯一 —— 抽取失败/抽到多份都要红，而不是静默放行。
     const blocks = css.match(/\.folder-draft-editor \.ProseMirror \{[^}]*\}/g)

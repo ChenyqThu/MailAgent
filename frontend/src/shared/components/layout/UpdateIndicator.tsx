@@ -11,7 +11,7 @@
 //   idle / checking / not-available / dev-disabled → 不渲染
 //
 // notifyMode (未签名 / ad-hoc, enabled=false): 应用内装不上更新, 所有可点态改
-// 开 GitHub Releases 手动覆盖装 (与 UpdateReadyBanner / IslandUpdatesTab 一致),
+// 开 GitHub Releases 手动覆盖装 (与 UpdateReadyBanner / UpdatesTab 一致),
 // 不装死。
 
 import { useTranslation } from 'react-i18next'

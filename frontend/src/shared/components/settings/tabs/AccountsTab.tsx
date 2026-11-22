@@ -15,7 +15,7 @@
 // 二次读取 (持久 settings.userEmail 字段) 自动同步.
 //
 // 签名 (Signature) Section — PersistentSettings.signature, compose 工具栏「签名」
-// 按钮在光标处插入。读写走 settings:get/set (与 IslandUpdatesTab autoDownload 同款
+// 按钮在光标处插入。读写走 settings:get/set (与 UpdatesTab autoDownload 同款
 // mount 读初值 + onBlur 写回 precedent), 非 .env。
 
 import * as React from 'react'

@@ -1,0 +1,792 @@
+/* ─── Sprint 12 — Inbox EmailRow + List + AI chat sub-components ─────
+ * Ported from frontend/ref/mockup-inbox.html lines 630-1129 + 351-502.
+ * Authored CSS not Tailwind utilities so the class names are load-bearing
+ * (data-* attribute selectors, sticky group header z-index, etc. that
+ * Tailwind can't express in markup).
+ *
+ * Convention: row state is data-driven (`data-read` / `data-flag` /
+ * `data-pinned` / `data-important` / `data-priority`) so EmailRow.tsx
+ * stays declarative — no React class-toggle dance for read/flag washes. */
+
+/* ─── EmailRow — chevron(24) + avatar(32) + content(1fr) grid ────────── */
+/* Sprint 17 — thread chevron 从外层 wrap div 移到 row 内的第一格 grid cell.
+ * 这样 flag / done / selected 的 wash + 未读 dot 都跟 chevron 共享同一 row
+ * 容器, 高亮能 cover 折叠 icon 区域 (用户反馈: "flag 邮件的高亮背景, 也要
+ * cover 前面的折叠区域"). 单封邮件 chevron-cell 为空但保留 24px 占位,
+ * 列表所有行的 avatar / sender 列对齐 x 轴. */
+.email-row {
+  position: relative;
+  /* react-window 给的 row slot 高度 (100/84/78/60) 略大于 article 内容真实
+   * 高度 (padding + grid tracks ≈ 92/77/72/56), 不撑满会在每行底部留 ~5-7px
+   * 透明带 — thread child 的 wash / data-flag wash / is-selected accent bar
+   * 都画在 article 上, 透明带导致左侧深色点缀栏在 bundle 展开时不连续.
+   * height:100% 让背景填满整个 slot, 多余空间作为 grid track 余白留在底部
+   * (align-content: normal → start), 各 grid item 几何不变.
+   * (主题 v3 批1 曾药丸化 — 透明 border 内缩 + padding-box clip + 补偿圆角;
+   * 2026-07-12 owner 二次拍板退役, 回归 v2 整行 wash, 实现见 git a576bc48。) */
+  height: 100%;
+  display: grid;
+  grid-template-columns: var(--chevron-col-w) var(--avatar-size) 1fr;
+  gap: 0 8px;
+  padding: 9px 14px 10px 8px;
+  /* 行间分割线从 chevron 列之后开始, 让 thread child / flagged / selected
+   * 的深色 wash 在左侧 chevron-col 区域 (24px) 跨行连续. 直接 border-bottom
+   * 会贯穿整行 1px 把 wash 切断, 改用 linear-gradient 背景画底部 1px 横线
+   * 仅覆盖 avatar + content 区段, 视觉等同 border-bottom 但 thread bundle
+   * 内的"深色点缀栏"完全连续.
+   * 注: 因为这里用 background-image, 下方所有状态 (hover/selected/data-flag/
+   * data-thread='child') 必须用 background-color 而非 background shorthand,
+   * 否则会被 shorthand 重置 → 分割线消失. */
+  background-image: linear-gradient(
+    to right,
+    transparent 0,
+    transparent var(--chevron-col-w),
+    var(--row-divider) var(--chevron-col-w),
+    var(--row-divider) 100%
+  );
+  background-repeat: no-repeat;
+  background-position: 0 100%;
+  background-size: 100% 1px;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.email-row:hover {
+  background-color: rgb(var(--ink-3) / 0.55);
+}
+/* 主题 v2 — 选中行从 ink-4 平涂升级为 .acc-select 的向右衰减 accent wash。
+ * 这里不能直接挂 .acc-select 类: .email-row 的底部 1px 分割线画在
+ * background-image 上 (见上方注释), wash 也是 gradient → 必须把两层合进
+ * 同一组 background-* longhand, 否则 wash 会把分割线整组重置掉。 */
+.email-row.is-selected {
+  /* 主题 v3 — 选中 wash 收编 --sel-wash token (亮 13%→5% / 暗 16%→6%,
+   * README §2.2, 亮/暗档由 token 自身按 data-theme 切, 无需单独 light 覆盖)。
+   * 2026-07-12 owner 二次拍板: 回归 v2 整行 wash + 底部 divider 双层。
+   * longhand (repeat/position/size) 必须两层数组完整写 — 只覆 image 不覆
+   * size 会让数组错位、分割线被拉成整块。 */
+  background-image:
+    var(--sel-wash),
+    linear-gradient(
+      to right,
+      transparent 0,
+      transparent var(--chevron-col-w),
+      var(--row-divider) var(--chevron-col-w),
+      var(--row-divider) 100%
+    );
+  background-repeat: no-repeat, no-repeat;
+  background-position:
+    0 0,
+    0 100%;
+  background-size:
+    100% 100%,
+    100% 1px;
+}
+/* 选中 accent bar — ::before 常驻 (opacity:0)，选中时 fade-in (§4.5 降级方案:
+   不做行间滑动 Flip，虚拟列表内 fade 性价比更高)。主题 v2: accent 纯色;
+   主题 v3/C3: 9px 辉光退役, 左条本体保留。2026-07-12 owner 二次拍板: 药丸
+   退役后左条回归通高直角 (坐标系 = 无 border 的 .email-row 原始 containing
+   block)。🔴 不要做垂直渐变: 线程展开时 bundle 内多行的条上下拼接, 渐变会在
+   每行交界处出现明暗拼缝, 整条线程看起来不连续。 */
+.email-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--sel-bar-w);
+  background: var(--A);
+  opacity: 0;
+  transition: opacity 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.email-row.is-selected::before {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .email-row::before {
+    transition: none;
+  }
+}
+
+/* Sprint 17 — thread chevron 直接在 .email-row 第一格 grid cell 内, 不再
+ * 需要外层 .thread-row-wrap. selected wash / accent bar / flag wash 都画在
+ * .email-row 上, 自然 cover chevron 区域. child row 的 subtle inset tint
+ * 通过 data-thread='child' attribute 走 .email-row 自身的 selector. */
+.email-row[data-thread='child']:not(.is-selected) {
+  background-color: rgb(var(--ink-1) / 0.35);
+}
+/* child tint 特异性 (0,3,0) 恒压基础 .email-row:hover (0,2,0) → 非旗标/done
+ * 的子邮件行 hover 无反馈 (2026-07-12 owner dogfood 抓的死角); 补同强度
+ * hover, 值与基础行 hover 一致。旗标/done 行自有 (0,3,0) hover 不受影响。 */
+.email-row[data-thread='child']:not(.is-selected):hover {
+  background-color: rgb(var(--ink-3) / 0.55);
+}
+
+/* 线程展开 — 子行入场 (2026-07-20 owner 反馈「emaillist 的线程折叠没动效」)。
+ *
+ * 邮件列表是 react-window 虚拟列表, 展开线程 = 往 rows 数组里**插行**, 不是容器
+ * 高度变化, 所以详情页那套 grid-rows 0fr↔1fr 在这里用不上。列表里的等价物是子行
+ * 从母邮件行下方错峰滑出。
+ *
+ * 🔴 只动 opacity + **独立 translate 属性**: 行的定位由 react-window 写在 inline
+ * style 上 (v2 用 top), 独立 translate 与任何 transform 都能复合, 不抢定位。
+ * 🔴 由一次性的 data-thread-reveal 驱动, **不是** [data-thread='child']: 虚拟行
+ * 随滚动卸载重挂, 按静态状态驱动的话子行每次滚回视口都重播一遍入场。标记由
+ * useEmailListRows 在 REVEAL_WINDOW_MS 后清掉。
+ *
+ * 收起的退场不进 rows: 行高前缀和是滚动锚定 (rowTopOfId) 与 ⌘K 跳转定位的几何
+ * 依据, 留「幽灵行」会把这两条链一起算歪。收起过渡 = 方案 A + 幽灵退场
+ * (2026-08 dogfood 二轮, useThreadCollapseShift): 收起前克隆挂载中的子行 DOM
+ * 节点作旁挂幽灵层 (aria-hidden, 不进 rows/rowHeights 真源), autoAlpha 120ms
+ * 淡出 + 向 -6px 上浮 (上面入场 from 帧的镜像); 同时对存活行做一次性手工 FLIP,
+ * 把「下方行瞬移 Σ子行高度」补成 220ms 滑动 —— 同样只写独立 translate。
+ * 🔴 那条既有的 GSAP scrollTo 锚定 tween **不覆盖直接收起**: 它由 captureScrollAnchor
+ * 驱动, 而收起路径 (handleToggleThread) 从不设 anchor, 判空即 return。 */
+@keyframes thread-child-in {
+  from {
+    opacity: 0;
+    translate: 0 -6px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+[data-thread-reveal='true'] {
+  /* backwards: 带 delay 的行在等待期间保持 from 帧 (否则先闪一下再动)。 */
+  animation: thread-child-in var(--dur-base, 220ms) cubic-bezier(0.4, 0, 0.2, 1) backwards;
+  animation-delay: calc(var(--thread-reveal-i, 0) * 24ms);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-thread-reveal='true'] {
+    animation: none;
+  }
+}
+
+/* Sprint 17 — thread chevron-cell 占第一格. 单封邮件 cell 内为空但保留宽度
+ * (列对齐). thread head 显示可点 chevron, thread child 显示竖向 tether 线.
+ *
+ * cell 高度由默认 align-self: stretch 拉满整行 grid track (= row content
+ * 高度), 不需要显式 height: 100% / align-self: stretch — child tether 线
+ * (top: 0; bottom: 0; absolute) 自然覆盖整行高度. */
+.email-row > .thread-chevron-cell {
+  grid-column: 1;
+  grid-row: 1;
+  position: relative;
+  width: var(--chevron-col-w);
+}
+/* Sprint 17 — chevron 与 avatar 在 row 内同 y 几何对齐.
+ *
+ * chevron-cell (position: relative) 是 chevron-btn 的 containing block.
+ * cell 顶边 = grid track 1 top = row.padding-top — row 顶 padding 已经
+ * 被 grid 吃掉. chevron-btn 相对 cell 只需再下移 --avatar-mt (= avatar
+ * 的同名 margin) 就能与 avatar 顶端对齐. height = --avatar-size → 内部
+ * flex center 让 chevron 中心落在 avatar 圆心.
+ *
+ * row 字号/行高调整 → row 总高变, 但 avatar 几何 (mt + size) 不变,
+ * chevron 对齐恒久. avatar 大小调整 → :root 变量改一处, 这里自动 follow. */
+.thread-chevron-btn {
+  position: absolute;
+  top: var(--avatar-mt);
+  left: 0;
+  right: 0;
+  height: var(--avatar-size);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--ink-fg-2));
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+.thread-chevron-btn:hover {
+  color: rgb(var(--ink-fg));
+}
+/* round 7 — .thread-chevron-tether 已删: child 行的竖向 tether 线被用户
+ * 定稿移除 (线程归属由左侧通高条 + child inset tint 表达)。 */
+/* Avatar / cb share the second grid cell so batch-mode can swap without reflow */
+.email-row > .avatar,
+.email-row > .cb {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: start;
+  justify-self: center;
+  margin-top: var(--avatar-mt);
+}
+.email-row > .cb {
+  /* cb visual center 比 avatar 圆心略低 — checkbox 9×9 不是圆盘, 用 calc
+   * 保留 avatar-mt SSoT 同时让 cb 多偏 3px (5 = 2 + 3). */
+  margin-top: calc(var(--avatar-mt) + 3px);
+}
+.email-row > .row-content {
+  grid-column: 3;
+  grid-row: 1;
+  min-width: 0;
+}
+
+/* Avatar — 32px disc with initials. 6 hue rotations + grey for ext senders.
+ * Subtle inner highlight reads as glass; hash(sender) picks the slot. */
+.avatar {
+  width: var(--avatar-size);
+  height: var(--avatar-size);
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.96);
+  text-transform: uppercase;
+  flex-shrink: 0;
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.08),
+    0 1px 2px rgba(0, 0, 0, 0.25);
+  user-select: none;
+}
+/* 主题 v3/C9 批 3 — 头像渐变 hex 收编（README §2.3/§3-9，视觉零变化）。
+ * 14 个端点值逐字照抄自上面的写死 hex，仅间接化成变量，渐变角度/结构不动。 */
+:root {
+  --avatar-1a: #6fa8dc;
+  --avatar-1b: #4a78e5;
+  --avatar-2a: #b58cdb;
+  --avatar-2b: #8060c0;
+  --avatar-3a: #e89b4a;
+  --avatar-3b: #c77b3a;
+  --avatar-4a: #5dba8c;
+  --avatar-4b: #3d8a6c;
+  --avatar-5a: #e5634f;
+  --avatar-5b: #c04e3a;
+  --avatar-6a: #db5b7c;
+  --avatar-6b: #b0405e;
+  --avatar-ext-a: #8c95a3;
+  --avatar-ext-b: #5a6172;
+}
+.avatar-1 {
+  background: linear-gradient(135deg, var(--avatar-1a), var(--avatar-1b));
+}
+.avatar-2 {
+  background: linear-gradient(135deg, var(--avatar-2a), var(--avatar-2b));
+}
+.avatar-3 {
+  background: linear-gradient(135deg, var(--avatar-3a), var(--avatar-3b));
+}
+.avatar-4 {
+  background: linear-gradient(135deg, var(--avatar-4a), var(--avatar-4b));
+}
+.avatar-5 {
+  background: linear-gradient(135deg, var(--avatar-5a), var(--avatar-5b));
+}
+.avatar-6 {
+  background: linear-gradient(135deg, var(--avatar-6a), var(--avatar-6b));
+}
+.avatar-ext {
+  background: linear-gradient(135deg, var(--avatar-ext-a), var(--avatar-ext-b));
+}
+body[data-batch-mode='true'] .email-row > .avatar {
+  display: none;
+}
+
+/* Batch mode visibility gates — ported from mockup-inbox.html lines 436-446.
+ * Default = batch OFF: row checkboxes (.cb) and the floating batch action
+ * bar (#batch-bar) are hidden, so the inbox reads as a normal mail list.
+ * The list-header batch button sets body[data-batch-mode='true'] (via the
+ * useBatch store's syncBodyAttr helper) and reveals both. Single source of
+ * truth = body attribute, so CSS handles the swap with no JSX branches.
+ * Scoped to .email-row so the same stylesheet (loaded by the onboarding
+ * window via main.tsx) does NOT hide onboarding's own .cb checkboxes —
+ * the onboarding body never carries data-batch-mode. */
+body:not([data-batch-mode='true']) .email-row .cb {
+  display: none !important;
+}
+/* #batch-bar 的显隐由组件 useExitAnimation 接管（shouldRender 控制挂载 +
+   进/退场 GSAP）。原 display:none!important 会在退场窗口瞬间隐藏 bar 杀掉退场
+   动画，故移除。 */
+
+/* Floating batch action bar — fixed at the bottom edge of the inbox column,
+ * right of the left columns. `--app-nav-w`（nav-shell store 写；折叠 56 / 展开
+ * 56 + 该域记忆宽）让 bar 不用测量就能贴住左列右缘 —— bar 是 portal 到 body 的
+ * fixed 元素，量不到左列。left 的动画来自 :root 的变量过渡，这里不另写 transition。 */
+#batch-bar.floating {
+  position: fixed;
+  left: calc(var(--app-nav-w, 392px) + 16px);
+  right: 16px;
+  bottom: 12px;
+  height: 56px;
+  padding-inline: 14px;
+  border-radius: 14px;
+  border: 1px solid rgb(var(--ink-border) / 0.7);
+  background-color: rgb(var(--ink-2) / 0.92);
+  backdrop-filter: blur(18px) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(18px) saturate(var(--glass-sat));
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.32),
+    0 2px 6px rgba(0, 0, 0, 0.2);
+  z-index: 40;
+  /* 无 transition：opacity/transform 进退场交给 GSAP（双重动画会打架）；left 跟随
+     --app-nav-w 的变量过渡，本元素不再叠一层。 */
+}
+/* 0 selected — dim the bulk-op buttons (but keep the count badge, the
+ * "select all N", "clear" links, kbd Esc, and × close bright). */
+#batch-bar.batch-empty > button:not([data-batch-keep]):not(:last-child),
+#batch-bar.batch-empty > .ml-auto {
+  opacity: 0.45;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  #batch-bar.floating {
+    transition: none;
+  }
+}
+
+/* Sender + time line — sender wraps in one-line ellipsis, time stays right. */
+.row-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.sender-line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  line-height: 1.35;
+  color: rgb(var(--ink-fg));
+}
+.sender-line .sender-name {
+  font-weight: 500;
+}
+.sender-line .recipient-hint {
+  color: rgb(var(--ink-fg-2));
+  font-weight: 400;
+}
+.row-time {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11px;
+  color: rgb(var(--ink-fg-2));
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* External sender pill (Outlook 外部 badge) */
+.ext-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: 2.5px;
+  background: rgb(var(--ink-fg) / 0.06);
+  border: 1px solid rgb(var(--ink-border));
+  color: rgb(var(--ink-fg-1));
+  letter-spacing: 0.04em;
+  margin-right: 4px;
+  flex-shrink: 0;
+  text-transform: none;
+  vertical-align: middle;
+}
+
+/* Subject row — text on the left flex-truncates, action cluster on the
+ * right is fixed-width and never shrinks. */
+.subject-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  min-width: 0;
+}
+.subject-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: rgb(var(--ink-fg));
+}
+.body-preview {
+  margin-top: 1px;
+  font-size: 12.5px;
+  color: rgb(var(--ink-fg-2));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.45;
+}
+
+/* Unread treatment — sender + subject go bold + accent color, plus a small
+ * accent dot positioned at the same x as the thread chevron column center
+ * and vertically aligned to the subject row center (Sprint 17 user feedback:
+ * "未读小圆点垂直位置和标题行垂直居中, 水平位置和折叠 icon 水平居中").
+ * dot radius +1px (was 5px diameter → now 6px → radius 3px). */
+.email-row[data-read='false'] .sender-name,
+.email-row[data-read='false'] .subject-text {
+  /* 主题 v3/C6 — 未读文字回归前景色 (accent 只做信号, 不做正文着色) + weight
+   * 650; 未读圆点 (::after) 与 AI-strip 计数徽章仍走 accent。 */
+  font-weight: 650;
+  color: rgb(var(--ink-fg));
+}
+.email-row[data-read='false'] .row-time {
+  /* C6 — 未读时间同步回前景色; mono 数字用 weight 500 提示未读而不过重。 */
+  color: rgb(var(--ink-fg));
+  font-weight: 500;
+}
+.email-row[data-read='false']::after {
+  content: '';
+  position: absolute;
+  /* dot 6×6 的 top/left 值. 变量定义在 :root 几何 SSoT 段
+   * (--unread-dot-{top,left}), 改 row padding / 字号 / chevron 列宽时
+   * 去那里调一处. */
+  left: var(--unread-dot-left);
+  top: var(--unread-dot-top);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgb(var(--c-accent));
+  pointer-events: none;
+}
+.email-row.is-selected[data-read='false']::after {
+  display: none;
+}
+.email-row[data-read='true'] .sender-name {
+  color: rgb(var(--ink-fg-1));
+  font-weight: 400;
+}
+.email-row[data-read='true'] .subject-text {
+  color: rgb(var(--ink-fg-1));
+}
+
+/* Flag state row washes — subtle, never compete with selection.
+ * background-color (not shorthand) — 见 .email-row base 注释, divider 画在
+ * background-image 层, 二者天然共存 (保留底部 gradient 分割线)。主题 v2:
+ * 旗标 wash 从写死的 v1 coral 改 accent 派生, 换主题色自动跟; done 绿走
+ * --c-ok 语义色, 不跟 accent。 */
+.email-row[data-flag='flagged'] {
+  background-color: rgb(var(--c-accent) / 0.05);
+}
+.email-row[data-flag='flagged']:hover {
+  background-color: rgb(var(--c-accent) / 0.1);
+}
+.email-row[data-flag='done'] {
+  background-color: rgb(var(--c-ok) / 0.05);
+}
+.email-row[data-flag='done']:hover {
+  background-color: rgb(var(--c-ok) / 0.1);
+}
+.email-row[data-flag='done'] .subject-text {
+  color: rgb(var(--ink-fg-2));
+  text-decoration: line-through;
+  text-decoration-color: rgb(var(--ink-fg-3));
+  text-decoration-thickness: 1px;
+}
+.email-row[data-flag='done'] .body-preview {
+  opacity: 0.75;
+}
+
+/* ─── Row action icons (flag · pin · attach · important · delete) ─── */
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.row-actions .ricon {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--ink-fg-3));
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  border-radius: var(--r-ctl);
+  /* §8 对齐: flag/pin 三态 color/opacity 过渡补 standard 曲线（原缺显式曲线
+     用默认 ease）。CSS 过渡比 GSAP 更省，且免去虚拟列表内 tween 随 unmount
+     kill 的复杂度（§4.1/§4.3.1）。 */
+  transition:
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.row-actions .ricon:hover {
+  background: rgb(var(--ink-4) / 0.7);
+}
+.row-actions .ricon:active {
+  transform: scale(0.96);
+}
+.row-actions .ricon svg {
+  /* CSS 是 icon sizing 的 SSoT — inline SVG 不再带 width/height attr
+   * (Sprint 17 改造前 attr=11 与此处 14 冲突, 实际渲染按 CSS 14).
+   * 改尺寸只动这一处. */
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+/* Flag — 3-state cycler (0=off, 1=flagged accent, 2=done green)
+ * 主题 v2: flagged 态从写死 #e5634f 改 accent, 与行 wash 同源跟主题色。 */
+.ricon-flag[data-flag-state='0'] {
+  color: rgb(var(--ink-fg-3));
+  opacity: 0.55;
+}
+.email-row:hover .ricon-flag[data-flag-state='0'] {
+  opacity: 1;
+}
+.ricon-flag[data-flag-state='1'] {
+  color: rgb(var(--c-accent));
+  opacity: 1;
+}
+.ricon-flag[data-flag-state='1'] svg path {
+  fill: currentColor;
+}
+.ricon-flag[data-flag-state='2'] {
+  color: rgb(var(--c-ok));
+  opacity: 1;
+}
+/* Pin — pressed = accent (主题 v2: 原写死钴蓝 #4a78e5, 改跟主题色;
+ * 与 flag 的区分靠图标形状, 不再靠双色)。 */
+.ricon-pin[aria-pressed='false'] {
+  color: rgb(var(--ink-fg-3));
+  opacity: 0.55;
+}
+.email-row:hover .ricon-pin[aria-pressed='false'] {
+  opacity: 1;
+}
+.ricon-pin[aria-pressed='true'] {
+  color: rgb(var(--c-accent));
+  opacity: 1;
+}
+.ricon-pin[aria-pressed='true'] svg path {
+  fill: currentColor;
+}
+.ricon-attach {
+  color: rgb(var(--ink-fg-2));
+  cursor: default;
+}
+.ricon-important {
+  /* 用户定稿: 重要 = 警示红 (固定, 不跟 accent — 换 Slate/Olive 等冷调
+   * accent 时它仍要读作「重要」), 与 crit 优先级同色。 */
+  color: #e5634f;
+  cursor: default;
+}
+.ricon-important svg {
+  /* Fluent regular path 是 fill 型轮廓形状 (无 stroke)。 */
+  fill: currentColor;
+  stroke: none;
+}
+/* 列表悬浮删除钮 (.ricon-delete) — 已退役 (2026-07-12 owner 拍板): 删除/归档
+ * 是低频操作且悬浮在行右下角易误点, 统一走正文顶部工具栏 (非草稿=归档,
+ * 草稿=ComposePanel 删草稿)。原实现见 git 历史。 */
+
+/* ─── AI strip — one-line mono signal row ───────────────────────────── */
+.ai-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10.5px;
+  line-height: 1;
+  color: rgb(var(--ink-fg-2));
+  letter-spacing: 0.02em;
+  min-width: 0;
+}
+.ai-strip .pdot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ai-strip .pname {
+  font-weight: 600;
+  /* 收紧字距 (0.04em→0.02em): priority 文字 (IMPORTANT 等) 更紧凑, 响应
+     "badge 偏大" 反馈; 不动字号, 故不影响 EmailList 行高估算。 */
+  letter-spacing: 0.02em;
+}
+.ai-strip .sep {
+  color: rgb(var(--ink-fg-3));
+}
+.ai-strip .ai-bit {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-strip .ai-due {
+  color: rgb(var(--ink-fg-1));
+}
+.ai-strip .ai-reply {
+  color: rgb(var(--ink-fg-1));
+}
+.ai-strip .ai-failed {
+  color: #e36262;
+}
+.ai-strip .ai-done {
+  color: rgb(var(--c-ok));
+}
+.email-row[data-priority='crit'] .pname,
+.email-row[data-priority='crit'] .pdot {
+  color: rgb(var(--c-crit));
+}
+.email-row[data-priority='crit'] .pdot {
+  background: rgb(var(--c-crit));
+}
+.email-row[data-priority='urg'] .pname,
+.email-row[data-priority='urg'] .pdot {
+  color: rgb(var(--c-urg));
+}
+.email-row[data-priority='urg'] .pdot {
+  background: rgb(var(--c-urg));
+}
+.email-row[data-priority='impt'] .pname,
+.email-row[data-priority='impt'] .pdot {
+  color: rgb(var(--c-impt));
+}
+.email-row[data-priority='impt'] .pdot {
+  background: rgb(var(--c-impt));
+}
+.email-row[data-priority='norm'] .pname,
+.email-row[data-priority='norm'] .pdot {
+  color: rgb(var(--c-norm));
+}
+.email-row[data-priority='norm'] .pdot {
+  background: rgb(var(--c-norm));
+}
+.email-row[data-priority='low'] .pname,
+.email-row[data-priority='low'] .pdot {
+  color: rgb(var(--c-low));
+}
+.email-row[data-priority='low'] .pdot {
+  background: rgb(var(--c-low));
+}
+
+/* ─── Group header — sticky date divider above row clusters ─────────── */
+.group {
+  background: transparent;
+}
+.group-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* Sprint 14 round 10 — pull the chevron 3px to the left so it lines
+   * up vertically with the thread-bundle chevron column in EmailList.
+   * Chevron centre: padding-left 11 + width 10 / 2 = 16px from row
+   * left, matching the thread chevron's centre at left-2 + 8 = 16px. */
+  padding: 7px 14px 5px 11px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgb(var(--ink-fg-2));
+  cursor: pointer;
+  user-select: none;
+  /* 主题 v2 — 非浮层去 blur。基色从中性 ink 换 --glass-base 派生: 与窗口
+   * tint 同源 (带 accent mix, 换 accent/主题自动跟), 中性 ink 平涂在玻璃
+   * 列表上是一条死色横带 (割裂)。sticky 遮字靠高 alpha — 叠在 body tint
+   * (≥.85) 上有效不透明度 ≈ .97+, 滚过的行文字不会透出来。 */
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--glass-base) 96%, transparent),
+    color-mix(in srgb, var(--glass-base) 88%, transparent)
+  );
+  border-bottom: 1px solid var(--hairline);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  transition:
+    color 0.12s,
+    background 0.12s;
+}
+@media (prefers-reduced-transparency: reduce) {
+  .group-header {
+    background: rgb(var(--ink-1));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+.group-header:hover {
+  color: rgb(var(--ink-fg-1));
+}
+.group-chev {
+  width: 10px;
+  height: 10px;
+  transition: transform 0.18s ease;
+  flex-shrink: 0;
+}
+/* Sprint 12.6 — collapsed header points the chevron right (›) instead of
+ * down (v). The data-* attribute is set on .group-header (the <header>
+ * itself in EmailList.tsx), not on a missing .group parent — the old
+ * `.group[data-collapsed=…]` selector matched nothing. */
+.group-header[data-collapsed='true'] .group-chev {
+  transform: rotate(-90deg);
+}
+.group-count {
+  margin-left: auto;
+  font-size: 10px;
+  color: rgb(var(--ink-fg-3));
+}
+.group-pin-glyph {
+  width: 11px;
+  height: 11px;
+  color: rgb(var(--c-accent));
+  flex-shrink: 0;
+}
+
+/* ─── Inbox tabs (Focused / Other pill switch) ──────────────────────── */
+.inbox-tabs {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  background: rgb(var(--ink-3) / 0.6);
+  /* hairline-strong: 亮色下近纯白的 indicator 胶囊距外框只有 2px,
+   * ink-border-soft (10% 灰) 会被胶囊亮度淹没 — 看起来「切换后边框
+   * 丢失」。加强到 16% 让框在胶囊贴边时仍可辨。 */
+  border: 1px solid var(--hairline-strong);
+  border-radius: 999px;
+  padding: 2px;
+}
+.inbox-tab {
+  position: relative;
+  z-index: 1;
+  padding: 3px 11px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: rgb(var(--ink-fg-2));
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  /* §8 对齐: 激活胶囊背景已移到 .inbox-tab-indicator, 这里仅过渡文字色。 */
+  transition: color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.inbox-tab:hover {
+  color: rgb(var(--ink-fg));
+}
+.inbox-tab.is-active {
+  /* 胶囊背景由 .inbox-tab-indicator 承载, 这里只保留激活文字色。 */
+  color: rgb(var(--ink-fg));
+}
+/* §8 滑动 indicator — 激活 tab 的胶囊背景, 随激活 tab 滑动 (JS 测量 + GSAP x/width)。
+   top/bottom 留 2px 对齐 .inbox-tabs 的 padding。 */
+.inbox-tab-indicator {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  z-index: 0;
+  border-radius: 999px;
+  background: rgb(var(--ink-fg) / 0.1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  pointer-events: none;
+  visibility: hidden;
+}
+:root[data-theme='light'] .inbox-tab-indicator {
+  background: rgb(255 255 255 / 0.9);
+}
+

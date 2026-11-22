@@ -7,7 +7,7 @@ TS 联合类型钉成编译期真源），剩下这些**消灭不掉**，由本�
 
 | 镜像 | 为什么消灭不掉 |
 |---|---|
-| `src/mail/sync_store.py` 的 `CHECK (source IN (...))` | 建表 SQL 字符串，import 不进去（也是**最终执行者**：不在其中的值 INSERT 直接被拒） |
+| `src/mail/sync_store_migrations.py` 的 `CHECK (source IN (...))` | 建表 SQL 字符串，import 不进去（也是**最终执行者**：不在其中的值 INSERT 直接被拒） |
 | `src/api/schemas/calendar.py::CalendarEventSource` | `Literal[...]` 的参数必须是字面量，无法由运行期 tuple 派生 |
 | `src/skills/builtin/calendar.py::_VALID_SOURCES` | 对外 Skill 面的独立校验层 |
 | `frontend/src/shared/api/types/calendar.ts::CalendarEventSource` | 跨语言 |
@@ -39,7 +39,7 @@ from src.calendar_sync._common import SOURCES_TRY_ORDER
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 CANONICAL: Set[str] = set(SOURCES_TRY_ORDER)
 
-_SQL_CHECK = _REPO_ROOT / "src/mail/sync_store.py"
+_SQL_CHECK = _REPO_ROOT / "src/mail/sync_store_migrations.py"
 _SKILL = _REPO_ROOT / "src/skills/builtin/calendar.py"
 _TS_TYPES = _REPO_ROOT / "frontend/src/shared/api/types/calendar.ts"
 _TS_ZOD = _REPO_ROOT / "frontend/src/ai-gateway/tools/schemas.ts"

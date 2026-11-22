@@ -1,0 +1,596 @@
+/* ── impeccable a11y — global :focus-visible safety net (批B) ──────────
+ * DESIGN.md §9.2/§10 make a visible focus ring non-negotiable, but EmailRow
+ * (role=button), the ~50 AI-panel buttons (AI-CHAT-01), admin controls
+ * (ADMIN-DASHBOARD-04) and folder rows shipped without one. This base-layer
+ * net gives every focusable element a 2px accent outline on keyboard focus.
+ * `:where()` keeps specificity at 0, and Tailwind's `outline-none` (a
+ * transparent outline in the utilities layer) outranks it — so any component
+ * that sets `focus-visible:outline-none` keeps its bespoke ring and only
+ * elements with NO focus styling fall through here. outline (not box-shadow)
+ * never reflows layout or gets clipped by overflow. */
+@layer base {
+  :where(
+    button,
+    [role='button'],
+    a[href],
+    input:not([type='hidden']),
+    select,
+    textarea,
+    summary,
+    [tabindex]:not([tabindex='-1'])
+  ):focus-visible {
+    outline: 2px solid rgb(var(--c-accent));
+    outline-offset: 2px;
+  }
+  /* EmailRow sits in a react-window list with rows flush together; an outset
+   * outline would be clipped by the next row, so it insets (EMAIL-01). */
+  .email-row:focus-visible {
+    outline-offset: -2px;
+  }
+}
+
+/*
+ * MailAgent design tokens — DESIGN.md §2.1 / §2.7 / §3.1.
+ *
+ *   Surface (ink-*) + foreground (ink-fg-*) swap by data-theme attribute.
+ *   Accent (--c-accent*) swap by data-accent attribute, independent of theme.
+ *
+ * Both writable via Sprint 6 SettingsPage; Sprint 2 has a TitleBar cycle.
+ * Tailwind reads ink-* via `rgb(var(--ink-N) / <alpha-value>)`, so every
+ * `bg-ink-2/15`, `text-ink-fg-2`, etc. retints automatically.
+ */
+
+:root {
+  /* Dark surface (default) */
+  --ink-0: 14 16 19;
+  --ink-1: 21 24 29;
+  --ink-2: 26 30 36;
+  --ink-3: 31 36 43;
+  --ink-4: 38 44 53;
+  --ink-5: 46 52 62;
+  /* 主题 v2 round 5 — 暗色边框 token 提亮: v1 实底时代的冷暗灰 (44/31 级)
+   * 在透壁纸玻璃上读黑 (用户报「设置项外框黑色」)。demo 真源没有这个
+   * token — 描边全走 hairline 白系; 生产 166 处 tailwind 消费点走 token
+   * 级提亮一次收编, 亮色块的值不动。 */
+  --ink-border: 76 84 96;
+  --ink-border-soft: 58 65 76;
+
+  /* Sprint 4 a11y carry-forward (REVIEW-LOG C-08 / H-01):
+   * fg-2 and fg-3 needed brighter values to clear WCAG AA (4.5:1) over
+   * the realistic ink-2/3 surfaces. Sprint 3 baseline = 335 violations;
+   * targeting 0 with the lifts below + chip hue rebalance. */
+  --ink-fg: 232 234 238;
+  --ink-fg-1: 192 198 208;
+  --ink-fg-2: 162 168 180;
+  --ink-fg-3: 152 158 170;
+
+  /* Accent v2 — oklch 重调 (主题 v2, HANDOFF-theme-spec-v2 §2)。
+   * 设计源是 oklch(.75 .135 H), RGB triplet 是导出物 — 调色只动 oklch 重导。
+   * coral 由旧 hue≈40 (偏橙三文鱼) 移到 hue 28 (真珊瑚, 偏粉红); 6 色等亮
+   * 度等彩度, 对 ink-1/2/3 全部 ≥ 6.6:1 (AA+)。 */
+  --c-accent: 248 138 125; /* coral · oklch(.75 .135 28) */
+  --c-accent-hi: 230 123 110;
+  --c-accent-dim: 142 63 54;
+
+  /* CTA-on-accent foreground. Sprint 4 a11y carry-forward (REVIEW-LOG
+   * H-01): the previous `text-white` on `bg-coral/100` failed WCAG AA
+   * across all 6 accent swatches (mid-luminance accent + pure white text
+   * = ~3.3:1, AA threshold 4.5). A near-black foreground pulls the
+   * ratio to 6+ on every accent, dark and light alike, with no
+   * mockup-visible change beyond CTA legibility. */
+  --c-accent-fg: 15 16 21;
+
+  /* Sprint 13 round 7 user feedback — "起草回复" CTA needed visible
+   * mockup-style white text on a deep coral. text-accent-fg (near-black
+   * on lifted coral) preserved AA but read as muted compared with the
+   * mockup. The dim accent (Sprint 4 already tuned per swatch — see
+   * `--c-accent-dim`) is the deepest of the three accent stops; white
+   * fg on it lands ≥ 5:1 on every dark-mode swatch. Light mode keeps
+   * default accent (already deep) + white. */
+  --c-cta-bg: var(--c-accent-dim); /* deprecated (主题 v2) — .btn-cta 已改走 .acc-cta 渐变配方 */
+  /* Hover lifts one stop toward the brand accent so the button feels
+   * responsive; white fg drops to ~3:1 transiently, which is acceptable
+   * for a hover-only state. */
+  --c-cta-bg-hover: var(--c-accent); /* deprecated (主题 v2) */
+  --c-cta-fg: 255 255 255;
+
+  /* 主题 v2 — CTA 渐变端点, 全部相对色法从 accent 派生, 换 accent
+   * 自动跟色 (theme-v2.css §root)。CTA 渐变底端白字全 6 色 ≥ 5.6:1。
+   * (主题 v3: --acc-glow 静态辉光已退役, C3。) */
+  --A: rgb(var(--c-accent));
+  --cta-top: oklch(from var(--A) 0.6 c h);
+  --cta-bot: oklch(from var(--A) 0.49 calc(min(c, 0.12)) h);
+
+  /* ── 主题 v3「原生材质」token (README §2.2) ──────────────────────────
+   * 圆角四档 — 全局唯一来源 (胶囊 999 / 头像 50% 特例不变)。 */
+  --r-ctl: 8px; /* 按钮/输入/nav 项/工具钮 */
+  --r-row: 9px; /* 列表行药丸 (会话行; 邮件行 2026-07-12 二次拍板回归整行 wash, 不消费) */
+  --r-card: 12px; /* AI Fields 卡/审批卡/tile */
+  --r-pop: 14px; /* .glass-pop 浮层 */
+
+  /* 主题 v3 — 选中态: 向右衰减 accent wash (暗 16%→6%, 亮色覆盖 13%→5%),
+   * EmailRow / sidebar / chat 会话行同源消费。--sel-bar-w 左条 = 导航面
+   * (sidebar/设置 rail/会话行) 与邮件行共用宽度 token (2026-07-12 owner 二次
+   * 拍板: 邮件行回归 v2 整行 wash + 通高左条, 药丸退役)。 */
+  --sel-wash: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--A) 16%, transparent),
+    color-mix(in srgb, var(--A) 6%, transparent)
+  );
+  --sel-bar-w: 3px;
+
+  /* 主题 v3 — 统一缓动 (README §4: UI 过渡 ease-out-strong; 位移/morph
+   * 用 ease-move。时长沿用 tailwind fast 120 / base 220 / slow 380)。 */
+  --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-move: cubic-bezier(0.77, 0, 0.175, 1);
+
+  /* Chip palette — Sprint 4 a11y carry-forward (REVIEW-LOG H-01).
+   *
+   * Sprint 3 used fixed hex (#E5634F etc.) in tailwind.config.ts, which
+   * meant the same red rendered as text on both bg-crit/15 (mostly dark
+   * red over ink-0) and bg-crit/15 (mostly white in light mode). Same
+   * foreground on two opposite backgrounds → one of them always failed
+   * WCAG AA 4.5:1. The new shape splits dark + light luminance per chip
+   * so the foreground gets darker (more contrast) on light surfaces and
+   * stays bright on dark ones. Designer intent (red = critical, etc.)
+   * preserved; only the saturation/luminance tweaked. */
+  --c-crit: 248 144 124;
+  --c-urg: 252 188 116;
+  --c-impt: 242 208 116;
+  --c-norm: 192 198 210;
+  --c-low: 174 180 194;
+  --c-ok: 152 232 192;
+  --c-warn: 252 212 128;
+  --c-fail: 252 152 152;
+  --c-info: 184 214 244;
+  --c-ai: 224 196 244;
+
+  /* task 08-27 P3 — 日历三源源色 (r2 spec 暗档原值): 邮箱 / 事项 / Agent +
+   * hot (重要邮箱日程, 归邮箱组)。消费面: 月视图胶囊与跨天色带、小月历色点、
+   * 工具条源色点、二级栏源开关。亮档在 data-theme='light' 块按 v3 惯例压暗。 */
+  --cal-src-mail: 111 168 220;
+  --cal-src-matter: 240 180 80;
+  --cal-src-agent: 139 124 216;
+  --cal-src-hot: 229 101 75;
+
+  /* 主题 v3/C9 — AI-strip 优先级色与旗标 done 绿自 2026-07-12 起**直接消费
+   * 上方 --c-* AA token**（owner 拍板方案 A 归一）：Sprint 3 写死 hex 与
+   * Sprint 4 a11y 调过的 --c-* 是两支从未合流的分叉（strip 单值不分亮暗，
+   * 亮色底上对比度普遍 2-3:1）；批 3 曾按零视觉收编为 --strip-* 与 --flag-done
+   * 专用变量留档，归一后已删。对照表存档：docs/plans/theme-v3-native-material
+   * README §7 实录第 5 条 + commit 739b8771。 */
+
+  /* ── 主题 v2 — 「一块玻璃」材质 token (theme-v2.css §root 照搬) ─────
+   * v1 的 --glass/--glass-lg (28/40px 全屏 blur) 永久退役: OS vibrancy/
+   * acrylic 扛唯一一层重模糊, CSS 只画 tint + 氛围光; 面板差异只来自
+   * --tier-* overlay。--glass-stroke 更名 --hairline (全文件已替换)。 */
+  /* round 6 — hairline 全系弱化 (.085→.065 / .16→.13): 用户反馈分割线把
+   * 界面切得太碎, 要「稍微弱化避免割裂感」。 */
+  --hairline: rgb(255 255 255 / 0.065);
+  --hairline-strong: rgb(255 255 255 / 0.13);
+  /* EmailRow 行间分割线 — 用户定稿: 两主题都是白色 1px 细线 (亮色不沿用
+   * hairline 的深灰, 浅底上走白色蚀刻线, alpha 抬高才可见)。 */
+  --row-divider: rgb(255 255 255 / 0.065);
+  --pop-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.08),
+    0 24px 60px rgb(0 0 0 / 0.55),
+    0 6px 16px rgb(0 0 0 / 0.4);
+
+  /* Slider thumb — 两主题恒白 (macOS 系统滑块惯例)。round 5: 此前
+   * bg-accent-fg (暗色=近黑) 是压 coral range 的 AA 设计, 但暗色玻璃下
+   * 读成「黑色圆点」; 边缘辨识由 ink-border ring (已提亮) + 投影承担。 */
+  --slider-thumb: 255 255 255;
+
+  /* 玻璃调参 knobs — 2026-06-12 评审定稿默认值 (染色 tinted)。这组值同时是
+   * 「设置→通用→外观→高级玻璃调节」的出厂默认 (规范 §3.1/§3.5); 用户覆写
+   * 由 appearance.ts applyGlass 以 inline 变量盖在这里之上。 */
+  --glass-alpha: 0.85; /* 基底 tint 不透明度 (护栏: 暗 ≥.50 / 亮 ≥.72) */
+  --glass-blur: 30px; /* 仅 data-vib=off 回退路径生效; macOS/Win11 由 OS 扛 blur */
+  --glass-sat: 1.8; /* 透过色饱和增益 — 抗发灰主力 (glass-pop/filter-pop/drawer/batch-bar 等浮层消费) */
+  --glass-bright: 1.0;
+  --glass-accent-mix: 16%; /* accent 揉进玻璃基色的比例 */
+  --glass-white-mix: 0%; /* 亮砂档把基色抬向白 */
+  --ambient: 0.2; /* 窗口左上 accent 氛围光强度 */
+
+  /* 派生玻璃基色 — 不要手写色值, 一律从 ink-0 + accent 混出 */
+  --glass-lift: color-mix(in oklab, rgb(var(--ink-0)), white var(--glass-white-mix));
+  --glass-base: color-mix(in oklab, var(--glass-lift), var(--A) var(--glass-accent-mix));
+
+  /* 分层 overlay — 面板深浅差异的唯一来源 (整窗均匀) */
+  /* 08-27 标签工作区: bar 0.04→0.02 对齐标签条原型 (StatusBar 已退役, 唯一消费者
+   * = 顶栏标签条; 压暗一档换取激活标签面与条底的对比, 见 --tab-strip-surface)。 */
+  --tier-bar: rgb(255 255 255 / 0.02); /* titlebar (顶栏标签条) */
+  --tier-side: transparent; /* sidebar — 最透 */
+  --tier-list: rgb(255 255 255 / 0.03); /* 列表 */
+  --tier-detail: rgb(255 255 255 / 0.065); /* 详情 — 阅读面, 最亮 */
+  --tier-panel: rgb(255 255 255 / 0.045); /* AI 面板 */
+  /* 08-27 标签工作区 — 激活标签滑动面。推导: 滑动面叠在 --tier-bar 上, 合成色
+   * 必须等于下方内容面 --tier-detail (「激活标签与内容区连成一片」的全部依据):
+   *   1-(1-bar)(1-s) = detail  ⇒  s = (detail-bar)/(1-bar)
+   * 暗: (0.065-0.02)/(1-0.02) = 0.046。🔴 改 bar/detail 任一值必须重算这里
+   * (亮档与 vib-off/solid 的同名覆盖见各自 block)。 */
+  --tab-strip-surface: rgb(255 255 255 / 0.046);
+
+  /* 左列两个宽度（task 09-01-sidebar-fluid-optimization，按域折叠 / 拖宽）：
+   *   --app-second-w = 第二列（DomainPanel 或 page 域清单列）当前宽；折叠态 0。
+   *   --app-nav-w    = 左列总宽 = `.nav-rail`(56) + --app-second-w；抽屉态 44。
+   * 这里只是 JS 前的首帧默认值（展开 336 ⇒ 392）；运行时**唯一写入点**是
+   * state/nav-shell.ts 的 applyNavWidthVars（写 documentElement 内联样式）。
+   * 两个变量在 nav shell 段用 @property 注册并挂了 220ms 过渡 —— 切域 / 折叠 / 拖宽时
+   * 顶栏左段、DomainPanel、六个清单列、`#batch-bar.floating` 同帧跟随，不必各自 transition。
+   * 🔴 默认值与 `.nav-rail` 宽手抄两处，闸在 tests/shared/nav-shell.test.ts。 */
+  --app-nav-w: 392px;
+  --app-second-w: 336px;
+
+  /* 无 vibrancy 平台 (data-vib=off / web) 的内置回退壁纸 — 单光源, 与
+   * ambient 同向, accent 派生换色自动跟; 本身是平滑渐变, 零 blur。 */
+  --wp-fallback:
+    radial-gradient(
+      110% 70% at 14% -8%,
+      oklch(from var(--A) 0.42 calc(c * 0.85) h / 0.5),
+      transparent 60%
+    ),
+    linear-gradient(168deg, oklch(from var(--A) 0.26 calc(c * 0.4) h), rgb(var(--ink-0)) 62%);
+
+  /* Sprint 17 — EmailRow 第一/二列几何 SSoT.
+   * chevron-cell / avatar 圆 / 未读 dot 的对齐参数集中在这里, 避免散布
+   * 在多个 CSS rule 里手算 padding/margin/radius 反推. 修改 avatar 大小
+   * 或 chevron 列宽时只动这一段, 其他规则自动 follow.
+   *
+   * --unread-dot-{top,left}: 未读 dot (6×6) 直接的 CSS top/left 值
+   * (已经 = subject 行垂直中心 - dot 半径, 写绝对值避免 dot rule 里再
+   * calc(- 3px) 与直径耦合). top 36 ≈ row-pt 9 + sender-line(13.5×1.35
+   * ≈18) + subject-row.mt 2 + subject 行高/2(13.5×1.4/2 ≈9.5) - dot.r 3.
+   * left 17 = row-pl 8 + chevron-col-w 24 / 2 - dot.r 3. row padding 或
+   * 字号 改变 → 这两个值要同步重算 (没法纯 calc 因为依赖 inherited
+   * line-height resolution). */
+  --avatar-size: 32px;
+  --avatar-mt: 2px;
+  --chevron-col-w: 24px;
+  --unread-dot-top: 36px;
+  --unread-dot-left: 17px;
+
+  /* Sprint 18 — Settings 三列 + Tile + Control 几何 SSoT.
+   * mockup-settings.html 的数值集中在此, parts/EnvField / parts/Section /
+   * parts/Row / ui/switch / ui/radio-group / ui/slider 都通过 Tailwind
+   * arbitrary value `var(--name, default)` 读取. 调整一处 :root 改全局,
+   * 跟 Sprint 17 EmailRow 几何 SSoT 同款 pattern.
+   *
+   * Layout (mockup main row 800px 内):
+   *   --settings-rail-w        200  Settings 节 nav 宽 (review round 6: +20px, 让英文 tab label 不截断)
+   *   --settings-content-max-w 760  内容区 max-width (mockup max-w-[760px])
+   *   --settings-content-px    40   左右 padding (mockup px-10)
+   *   --settings-content-py    32   顶部 padding (mockup py-8)
+   *   --settings-content-pb    96   底部 padding (留 RestartBanner / save bar)
+   *   --settings-block-gap     28   Section 间距 (mockup mb-7)
+   *   --settings-tile-px       16   Row 水平 padding (mockup px-4)
+   *   --settings-tile-py       14   Row 垂直 padding (mockup py-3.5)
+   *
+   * Controls (mockup .tog / .rad / .slider):
+   *   --tog-w / --tog-h / --tog-thumb     32 / 18 / 14   Switch
+   *   --tog-thumb-travel  14                              translate-x on checked
+   *   --rad-size / --rad-dot              14 / 6          Radio
+   *   --slider-track-h / --slider-thumb-size  4 / 16     Slider
+   *   --swatch-size-inline / --swatch-size-pop  44 / 36  Accent swatch
+   *   --save-bar-bottom  32                               浮动保存 pill (PR E reserved) */
+  /* Sprint 19 — Streamdown 用 shadcn-style design tokens (--background /
+   * --muted / --card / --border / --radius). 我们 Tailwind config 把
+   * `bg-background` / `bg-muted` 之类 utility 都映射到 `rgb(var(--ink-X)
+   * / <alpha-value>)`. 这里再写一份 plain-color 形式 (不带 /<alpha>) 给
+   * 非 Tailwind 路径 (Streamdown 内联 style / 直接读 var()) 用. ink token
+   * 切换主题时 channels-only triplet 自动 follow, 这里 var(--ink-X) 也跟着
+   * resolve, 所以暗 / 亮模式 + accent 切换都无需重复声明. */
+  --radius: 0.5rem;
+  --background: rgb(var(--ink-3));
+  --foreground: rgb(var(--ink-fg));
+  --muted: rgb(var(--ink-4));
+  --muted-foreground: rgb(var(--ink-fg-2));
+  --border: rgb(var(--ink-border));
+  --input: rgb(var(--ink-border));
+  --card: rgb(var(--ink-2));
+  --card-foreground: rgb(var(--ink-fg));
+  --primary: rgb(var(--c-accent));
+  --primary-foreground: rgb(var(--c-accent-fg));
+  --secondary: rgb(var(--ink-4));
+  --secondary-foreground: rgb(var(--ink-fg));
+  --accent: rgb(var(--ink-4));
+  --accent-foreground: rgb(var(--ink-fg));
+  --destructive: rgb(var(--c-fail));
+  --destructive-foreground: rgb(var(--c-accent-fg));
+  --popover: rgb(var(--ink-2));
+  --popover-foreground: rgb(var(--ink-fg));
+  --ring: rgb(var(--c-accent));
+
+  --settings-rail-w: 200px;
+  --settings-content-max-w: 760px;
+  --settings-content-px: 2.5rem;
+  --settings-content-py: 2rem;
+  --settings-content-pb: 6rem;
+  --settings-block-gap: 1.75rem;
+  --settings-tile-px: 1rem;
+  --settings-tile-py: 0.875rem;
+  --tog-w: 32px;
+  --tog-h: 18px;
+  --tog-thumb: 14px;
+  --tog-thumb-travel: 14px;
+  --rad-size: 14px;
+  --rad-dot: 6px;
+  --slider-track-h: 4px;
+  --slider-thumb-size: 16px;
+  --swatch-size-inline: 44px;
+  --swatch-size-pop: 36px;
+  --save-bar-bottom: 2rem;
+}
+
+:root[data-theme='light'] {
+  --ink-0: 250 250 250;
+  --ink-1: 242 242 244;
+  --ink-2: 234 235 237;
+  --ink-3: 255 255 255;
+  --ink-4: 225 227 230;
+  --ink-5: 215 217 220;
+  --ink-border: 214 217 221;
+  --ink-border-soft: 234 235 237;
+
+  /* Sprint 4 a11y carry-forward — light fg-2 / fg-3 darkened so the
+   * dimmer metadata text clears WCAG AA over the off-white ink-2/3
+   * surfaces. fg-3 was the worst offender at 180/184/191 — barely a
+   * step darker than ink-4. */
+  --ink-fg: 26 29 34;
+  --ink-fg-1: 48 54 66;
+  --ink-fg-2: 68 74 86;
+  --ink-fg-3: 82 88 100;
+
+  /* CTA-on-accent foreground flips to white in light mode — the light
+   * accent palette is deep enough (e.g. coral 178/66/44 ≈ L 0.07) that
+   * white-on-accent reaches AA again. Dark mode keeps near-black fg. */
+  --c-accent-fg: 255 255 255;
+
+  /* Light mode CTA: default accent is already deep enough for white text. */
+  --c-cta-bg: var(--c-accent); /* deprecated (主题 v2) */
+  --c-cta-bg-hover: var(--c-accent-hi); /* deprecated (主题 v2) */
+
+  /* 主题 v2 — 亮色 CTA 渐变端点压深 (theme-v2.css light 块, 无 min(c)) */
+  --cta-top: oklch(from var(--A) 0.56 c h);
+  --cta-bot: oklch(from var(--A) 0.46 c h);
+
+  /* Light-mode chip palette — same role assignments as dark, but the
+   * foreground luminance is dropped so chip text reads as AA over the
+   * bg-X/15 wash (≈ 15% chip color over white). The neutral-on-neutral
+   * pairs (norm / low) needed the steepest drop since gray-on-gray was
+   * the worst-offender baseline.
+   * v3 dogfood 轮5 (2026-07-12) — 五档优先级值整体回调: 旧值按 chip 底纹
+   * 校准矫枉过深 (裸文本 8-13:1), AI-strip 归一直接消费后浅色底显墨块;
+   * 新值裸文本 5.2-6.1:1 / chip 底纹 4.4-5.0:1 (仅 low chip 4.40 略低于
+   * AA, 为修 norm/low 层级倒挂的取舍), norm/low 恢复「低优先级更浅」。 */
+  --c-crit: 172 48 32;
+  --c-urg: 150 82 18;
+  --c-impt: 128 92 22;
+  --c-norm: 94 101 114;
+  --c-low: 98 104 116;
+  --c-ok: 26 96 60;
+  --c-warn: 102 70 18;
+  --c-fail: 130 30 32;
+  --c-info: 24 70 116;
+  --c-ai: 92 58 130;
+
+  /* task 08-27 P3 — 日历三源源色亮档 (同色相压暗, wash 底/白底上做前景可读)。 */
+  --cal-src-mail: 44 98 150;
+  --cal-src-matter: 158 100 22;
+  --cal-src-agent: 90 74 158;
+  --cal-src-hot: 172 56 36;
+
+  /* 主题 v2 — 亮色玻璃 token (theme-v2.css light 块照搬)。hairline 转
+   * 深色细线 (亮纸上白线不可见); 亮色偏离暗色定稿默认的两项 (sat 1.4 /
+   * ambient 0.16) 是可读性护栏 (规范 §3.1), 其余与暗色共用。 */
+  /* round 6 — 亮色 hairline 比暗色降更多 (.1→.06 / .16→.1): round 4 用它
+   * 统一分割线后, 深灰 10% 在亮底上比原 ink-border-soft 浅灰线显眼一截
+   * (用户报「加白/加粗了? 割裂感反而强了」— 实为换色变明显)。 */
+  --hairline: rgb(15 23 42 / 0.06);
+  --hairline-strong: rgb(15 23 42 / 0.1);
+  /* round 7 — 亮色行分割线再弱一档 (.5→.35, 用户反馈仍明显)。 */
+  --row-divider: rgb(255 255 255 / 0.35);
+  --pop-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.85),
+    0 18px 50px rgb(18 24 46 / 0.18),
+    0 4px 14px rgb(18 24 46 / 0.1);
+
+  --glass-alpha: 0.85;
+  --glass-sat: 1.4;
+  --glass-bright: 1.06;
+  --glass-white-mix: 10%;
+  --ambient: 0.16;
+
+  /* 主题 v3 — 选中 wash 亮色档 (README §2.2: 亮 13%→5%, 暗 16%→6%)。 */
+  --sel-wash: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--A) 13%, transparent),
+    color-mix(in srgb, var(--A) 5%, transparent)
+  );
+
+  --tier-bar: rgb(255 255 255 / 0.38);
+  --tier-side: transparent;
+  --tier-list: rgb(255 255 255 / 0.32);
+  --tier-detail: rgb(255 255 255 / 0.62);
+  --tier-panel: rgb(255 255 255 / 0.44);
+  /* 激活标签滑动面 (推导见暗档同名 token): (0.62-0.38)/(1-0.38) = 0.387。 */
+  --tab-strip-surface: rgb(255 255 255 / 0.387);
+
+  --wp-fallback:
+    radial-gradient(
+      110% 70% at 14% -8%,
+      oklch(from var(--A) 0.85 calc(c * 0.45) h / 0.65),
+      transparent 60%
+    ),
+    linear-gradient(168deg, oklch(from var(--A) 0.93 calc(c * 0.18) h), rgb(var(--ink-0)) 62%);
+}
+
+/* Per-accent dark-mode swatches — accent v2 (oklch .75 .135 h 导出;
+ * slate C=.035 / olive C=.105 / teal C=.125 刻意压低彩度)。
+ * 2026-07 扩展 amber(h75) / emerald(h150) / violet(h300): 暗档 L .75/.70/.47。 */
+:root[data-accent='cobalt'] {
+  --c-accent: 126 173 255;
+  --c-accent-hi: 111 157 242;
+  --c-accent-dim: 55 89 152;
+}
+:root[data-accent='teal'] {
+  --c-accent: 55 199 174;
+  --c-accent-hi: 25 183 158;
+  --c-accent-dim: 0 110 91;
+}
+:root[data-accent='rose'] {
+  --c-accent: 241 136 175;
+  --c-accent-hi: 224 120 160;
+  --c-accent-dim: 138 61 92;
+}
+:root[data-accent='slate'] {
+  --c-accent: 158 176 196;
+  --c-accent-hi: 142 161 180;
+  --c-accent-dim: 76 93 110;
+}
+:root[data-accent='olive'] {
+  --c-accent: 163 185 108;
+  --c-accent-hi: 147 169 92;
+  --c-accent-dim: 81 99 18;
+}
+:root[data-accent='amber'] {
+  --c-accent: 223 160 60;
+  --c-accent-hi: 207 145 40;
+  --c-accent-dim: 126 80 0;
+}
+:root[data-accent='emerald'] {
+  --c-accent: 105 198 127;
+  --c-accent-hi: 88 182 112;
+  --c-accent-dim: 32 107 56;
+}
+:root[data-accent='violet'] {
+  --c-accent: 187 153 246;
+  --c-accent-hi: 172 138 229;
+  --c-accent-dim: 101 74 143;
+}
+
+/* Light-mode accent overrides — accent v2 (oklch .50 .14 h 导出, teal 用
+ * L .485 过 AA)。对 ink-1/2/3 全部 ≥ 4.75:1。
+ * 2026-07 扩展: 亮档 L .50/.44/.36; amber 黄区压彩度 C .105/.09 (同 teal
+ * 先例), emerald 用 L .49 提对比度余量。 */
+:root[data-theme='light']:not([data-accent]),
+:root[data-theme='light'][data-accent='coral'] {
+  --c-accent: 164 60 51;
+  --c-accent-hi: 144 40 34;
+  --c-accent-dim: 104 35 29;
+}
+:root[data-theme='light'][data-accent='cobalt'] {
+  --c-accent: 52 95 178;
+  --c-accent-hi: 36 77 158;
+  --c-accent-dim: 30 58 113;
+}
+:root[data-theme='light'][data-accent='teal'] {
+  --c-accent: 0 117 95;
+  --c-accent-hi: 0 100 80;
+  --c-accent-dim: 0 77 61;
+}
+:root[data-theme='light'][data-accent='rose'] {
+  --c-accent: 158 58 100;
+  --c-accent-hi: 138 39 84;
+  --c-accent-dim: 100 34 62;
+}
+:root[data-theme='light'][data-accent='slate'] {
+  --c-accent: 82 101 122;
+  --c-accent-hi: 66 84 104;
+  --c-accent-dim: 47 63 79;
+}
+:root[data-theme='light'][data-accent='olive'] {
+  --c-accent: 89 108 23;
+  --c-accent-hi: 73 91 0;
+  --c-accent-dim: 53 68 0;
+}
+:root[data-theme='light'][data-accent='amber'] {
+  --c-accent: 134 89 1;
+  --c-accent-hi: 115 72 0;
+  --c-accent-dim: 88 52 0;
+}
+:root[data-theme='light'][data-accent='emerald'] {
+  --c-accent: 0 117 49;
+  --c-accent-hi: 0 102 34;
+  --c-accent-dim: 0 75 30;
+}
+:root[data-theme='light'][data-accent='violet'] {
+  --c-accent: 113 76 166;
+  --c-accent-hi: 96 59 147;
+  --c-accent-dim: 70 46 105;
+}
+
+/* ── 主题 v2 — 玻璃气质 data-glass (用户设置, 默认 tinted) ─────────────
+ * tinted  染色 — 默认。accent 揉进玻璃 + 氛围光, knob 值即 :root 默认。
+ * neutral 银纱 — 近中性克制, 最接近 macOS 系统材质, 阅读优先。
+ * bright  亮砂 — 基色抬白提亮, 轻盈通透, 接近 acrylic。
+ * 切气质 = 加载该档预设并清空高级调节覆写 (规范 §3.5 R2)。 */
+:root[data-glass='neutral'] {
+  --glass-accent-mix: 0%;
+  --glass-alpha: 0.88;
+  --glass-sat: 1.5;
+  --ambient: 0;
+}
+:root[data-glass='bright'] {
+  --glass-accent-mix: 6%;
+  --glass-white-mix: 10%;
+  --glass-alpha: 0.78;
+  --glass-sat: 1.7;
+  --glass-bright: 1.06;
+  --ambient: 0.12;
+}
+:root[data-theme='light'][data-glass='neutral'] {
+  --glass-alpha: 0.9;
+  --glass-sat: 1.25;
+}
+:root[data-theme='light'][data-glass='bright'] {
+  --glass-white-mix: 40%;
+  --glass-alpha: 0.76;
+  --glass-bright: 1.08;
+}
+
+/* Pre-paint anchors so the first frame doesn't show "Electron blue".
+ * 主题 v2: frosted + vibrancy 时 html 必须真透明 — 不透明锚点会挡死 OS
+ * 玻璃, 半透明锚点会跟 body::before 叠成双 tint。锚点只保留文字色;
+ * 不透明兜底收窄到 solid / data-vib=off (无原生玻璃) 两条路径。 */
+html[data-theme='dark'],
+html:not([data-theme]) {
+  color: #e8eaee;
+}
+html[data-theme='light'] {
+  color: #1a1d22;
+}
+html[data-surface='solid'],
+html[data-vib='off'] {
+  background: rgb(var(--ink-0));
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  overscroll-behavior: none;
+}
+
+/* RESPONSIVE-XCUT-06 — 根级横向溢出护栏。窄视口下任一固定宽度列短暂溢出
+ * 不该让整个窗口横向滚动。用 `clip`（非 `hidden`）：hidden 会把另一轴的
+ * overflow 计算成 auto，给 #root 引入意外的纵向滚动条；clip 不创建滚动容器
+ * 也不影响纵轴，shell 内部各列仍自管 overflow-y。仅兜底，不替代逐组件降级。 */
+#root {
+  overflow-x: clip;
+}
+
+body {
+  margin: 0;
+  background: rgb(var(--ink-0));
+  color: rgb(var(--ink-fg));
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* DESIGN.md §3.1: SF Pro Text + PingFang SC; ss01 + cv11 OpenType for
+     tabular dots in the data-dense status bar / mono runs. */
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', system-ui, sans-serif;
+  font-feature-settings: 'ss01', 'cv11';
+  text-rendering: optimizeLegibility;
+}
+

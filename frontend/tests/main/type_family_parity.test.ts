@@ -141,32 +141,21 @@ function diffShared(
   return problems
 }
 
-const CALENDAR_MAIN = [
-  'frontend/src/electron/main/handlers/calendar-read.ts',
-  'frontend/src/electron/main/handlers/calendar-sync.ts',
-  'frontend/src/electron/main/handlers/calendar-write.ts'
-]
+const CALENDAR_MAIN = ['frontend/src/electron/main/handlers/calendar.ts']
 const CALENDAR_SHARED = 'frontend/src/shared/api/types/calendar.ts'
 const ONBOARDING_MAIN = 'frontend/src/electron/main/handlers/onboarding.ts'
 const ONBOARDING_RENDERER = 'frontend/src/electron/renderer/onboarding/ipc.ts'
 
-/** 日历侧**改了名**的镜像对（main 名 → shared 名）。
- *
- *  🔴 `CalendarEventRow` ↔ `CalendarEventDetail` 正是靠这条才进闸的：纯按同名匹配会整对漏掉，
- *  而它当时**真的漂着** —— 生产者发 `tzid`（v35 加的），消费侧类型没声明，前端读不到且
- *  编译期不报（issue #68 修复时补上，声明为 optional，因为 web 那条腿至今不发）。
- *  改名是漂移最好的藏身处：改名时顺手改字段，另一侧没跟，谁都不会红。 */
-const CALENDAR_ALIASES: Record<string, string> = {
-  CalendarEventRow: 'CalendarEventDetail'
-}
+/** Wave 1A 将 SSoT 日历 RPC 切走 IPC 后，main 侧仅剩 3 个 legacy Notion-mirror
+ *  handler 的 4 个 interface（同名一致，无改名镜像）。 */
+const CALENDAR_ALIASES: Record<string, string> = {}
 
 describe('日历 IPC 类型族 main ↔ shared/api/types', () => {
-  test('对应 interface 的字段键集一致（含 1 对改名镜像）', () => {
+  test('遗留 legacy 日历 interface 的字段键集一致', () => {
     const problems = diffShared(
       extractMany(CALENDAR_MAIN),
       extractInterfaces(read(CALENDAR_SHARED), CALENDAR_SHARED),
-      // 当前 17 对同名 + 1 对改名；留一档余量，掉到 15 以下说明镜像关系变了（该确认而非放宽）。
-      15,
+      4,
       CALENDAR_ALIASES
     )
     expect(

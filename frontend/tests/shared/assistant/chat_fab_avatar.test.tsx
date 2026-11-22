@@ -13,11 +13,10 @@
 //
 // 套件默认 reduced-motion（tests/setup.ts 全局），测真动画路径要 allowMotion() 显式退出。
 
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+
+import { readRendererCss } from '../../helpers/readRendererCss'
 
 import type { AssistantIdentity } from '@shared/api/types'
 import {
@@ -116,10 +115,7 @@ function eyePath(): string {
 // 不是 file: scheme，`new URL(...)` 会炸）。
 // 🔴 剥掉注释再断言：这些闸问的是「还有没有活的规则」，而讲清「为什么删」的注释里必然要
 //    点这些类名 —— 不剥的话，写下那段来龙去脉本身就会把闸弄红（首次跑真踩了）。
-const INDEX_CSS = readFileSync(
-  resolve(process.cwd(), 'src/electron/renderer/index.css'),
-  'utf8'
-).replace(/\/\*[\s\S]*?\*\//g, '')
+const INDEX_CSS = readRendererCss().replace(/\/\*[\s\S]*?\*\//g, '')
 
 beforeEach(() => {
   __resetAssistantIdentity()

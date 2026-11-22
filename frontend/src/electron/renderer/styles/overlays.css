@@ -1,0 +1,349 @@
+/* ─── Popmenu — 通用弹层基座 (ui/Popmenu.tsx) ──────────────────────────
+ * 移植自 lab.moumen.dev 的 unlimited-nested-menu (registry item 原源码)。
+ * 原组件「fully Tailwind, no CSS files」, 这里只落三样它从 lab-theme 拿的
+ * 主题变量 —— 其余类名在组件里原样保留 (本仓 tailwind.config 的 shadcn 别名
+ * 已把 bg-popover / text-foreground / bg-accent / ring 映到 ink/coral token,
+ * 故颜色自动双主题, 不必改类名)。
+ * 旧 .drill-* / .filter-pop 一族随本次重做删除 —— 只有 EmailListHeader 一个
+ * 消费者, 留着就是死 CSS。 */
+:root {
+  /* = lab-theme 的 --ease-smooth-out, 与组件里的 EASE 常量同一条曲线。 */
+  --popmenu-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* 🔴 面板必须**不透明** (bg-popover): 叠起来的层靠遮罩压暗, 给面板本身
+   * 上玻璃/透明度会让每一层都透出来, 读成「叠了好几份菜单」。
+   * 阴影几何逐字取自原实现 (亮色档见下方 [data-theme='light']); 暗色沿用同
+   * 一组 offset/blur/spread 只抬 alpha —— 原值是给亮底调的, 暗底上等于没有。 */
+  --popmenu-shadow-elev:
+    0 0 0 1px rgb(0 0 0 / 0.5), 0 14px 34px -10px rgb(0 0 0 / 0.55),
+    0 5px 14px -6px rgb(0 0 0 / 0.4);
+  --popmenu-shadow-behind: 0 0 0 1px rgb(0 0 0 / 0.45), 0 1px 2px -1px rgb(0 0 0 / 0.4);
+}
+:root[data-theme='light'] {
+  --popmenu-shadow-elev:
+    0 0 0 1px rgb(0 0 0 / 0.07), 0 14px 34px -10px rgb(0 0 0 / 0.26),
+    0 5px 14px -6px rgb(0 0 0 / 0.12);
+  --popmenu-shadow-behind: 0 0 0 1px rgb(0 0 0 / 0.05), 0 1px 2px -1px rgb(0 0 0 / 0.08);
+}
+/* 前面板独占整栈的层次感; 它后面的层塌成一条细边, 阴影不随深度叠加变糊。 */
+.popmenu-panel-elev {
+  box-shadow: var(--popmenu-shadow-elev);
+}
+.popmenu-panel-behind {
+  box-shadow: var(--popmenu-shadow-behind);
+}
+
+/* ============ DragReorderList (ui/DragReorderList.tsx) ============
+ * 移植自 lab.moumen.dev 的 drag-to-reorder-list (registry item 原源码)。
+ * 原实现把 rest/lifted 两档 boxShadow 写在 motion animate() 内联值里 (黑色
+ * rgba, 亮色调的值暗色下等于没有) —— 落到这里的变量档做双主题, 过渡时长/
+ * 曲线与组件内 LIFT 常量 (0.16s / [0.22,1,0.36,1]) 保持一致; scale 仍由
+ * motion animate()。阴影几何逐字取自原实现 (亮色档), 暗色沿用同一组
+ * offset/blur/spread 只抬 alpha (popmenu 同款手法)。 */
+:root {
+  --reorder-shadow-rest:
+    0 0 0 1px rgb(0 0 0 / 0.45), 0 1px 2px -1px rgb(0 0 0 / 0.4),
+    0 2px 4px 0 rgb(0 0 0 / 0.3);
+  --reorder-shadow-lift: 0 0 0 1px rgb(0 0 0 / 0.5), 0 12px 28px -10px rgb(0 0 0 / 0.6);
+}
+:root[data-theme='light'] {
+  --reorder-shadow-rest:
+    0 0 0 1px rgb(0 0 0 / 0.06), 0 1px 2px -1px rgb(0 0 0 / 0.06),
+    0 2px 4px 0 rgb(0 0 0 / 0.04);
+  --reorder-shadow-lift: 0 0 0 1px rgb(0 0 0 / 0.06), 0 12px 28px -10px rgb(0 0 0 / 0.28);
+}
+.reorder-card {
+  box-shadow: var(--reorder-shadow-rest);
+  transition: box-shadow 0.16s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.reorder-card-lifted {
+  box-shadow: var(--reorder-shadow-lift);
+}
+
+/* Filter button — quiet by default, loud when a filter narrows the view.
+ * Two-layer treatment: accent surface tint for the mode + red badge dot
+ * for the alert (different roles, different colors). */
+.filter-btn {
+  position: relative;
+}
+.filter-btn[data-active='true'] {
+  color: rgb(var(--c-accent));
+  background: rgb(var(--c-accent) / 0.14);
+}
+.filter-btn[data-active='true']:hover {
+  background: rgb(var(--c-accent) / 0.22);
+}
+.filter-btn[data-active='true']::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  /* 主题 v2: 激活指示点是 accent 性质的强调, 从写死 v1 coral 改跟主题色。 */
+  background: rgb(var(--c-accent));
+  box-shadow: 0 0 0 2px rgb(var(--ink-2));
+}
+
+/* 列表头的实心主 CTA（task 08-27 P1 Lane B：写邮件从二级栏搬到列表头第一行，
+ * 原 nav shell 的 .app-nav-compose-btn 随邮件域面板退役删除）。配色层 = accent
+ * 填充 + hover 提亮，几何在 TSX utility。 */
+.list-cta {
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+}
+.list-cta:hover {
+  filter: brightness(1.08);
+}
+.list-cta:active {
+  filter: brightness(0.96);
+}
+
+/* ─── AI Chat panel — tool-row + qchip + draft-card ─────────────────── */
+/* 主题 v2: 旧 .ai-bg (渐变 + glass-lg blur) 删除, AIChatPanel 容器改挂
+ * .glass-panel (tier overlay, 无 backdrop-filter) — 见「一块玻璃」结构。 */
+
+/* AI tool-call row — mono one-liner showing a backend tool invocation
+ * inside an assistant message (DESIGN.md §6.3). */
+.ai-tool-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: rgb(var(--ink-fg-2));
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgb(var(--ink-fg) / 0.04);
+  max-width: 100%;
+}
+.ai-tool-row .arrow {
+  color: #6fa8dc;
+}
+.ai-tool-row .dot-ok {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgb(var(--c-ok));
+  flex-shrink: 0;
+}
+.ai-tool-row .dot-run {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #e89b4a;
+  flex-shrink: 0;
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+.ai-tool-row .dot-err {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #e36262;
+  flex-shrink: 0;
+}
+
+/* Quick-action chip — rounded pill in the AI panel's chip bar. */
+.qchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1;
+  color: rgb(var(--ink-fg-1));
+  background: rgb(var(--ink-fg) / 0.04);
+  border: 1px solid rgb(var(--ink-border));
+  /* #14: 确切属性含 transform (勿 all) — hover 动 bg/color/border, press 动
+   * transform。 */
+  transition:
+    background-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+}
+.qchip:hover {
+  background: rgb(var(--ink-fg) / 0.08);
+  color: rgb(var(--ink-fg));
+  border-color: rgb(var(--ink-fg-3));
+}
+.qchip:active {
+  transform: scale(0.97);
+}
+
+/* Draft preview card — coral ring + faint glow because the draft IS the
+ * primary AI output (the one place we lean on color for emphasis). */
+.draft-card {
+  /* 主题 v2 — 面板内卡片非浮层, 去 blur (底下是 tier overlay 无文字) */
+  background: rgb(var(--ink-3) / 0.85);
+  border: 1px solid rgb(var(--c-accent) / 0.3);
+  box-shadow: 0 0 0 2px rgb(var(--c-accent) / 0.06);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+/* ─── Search palette (⌘K) — 1:1 mockup-search.html §palette-* ───────────
+ *
+ * Surface stack drawn over the live app:
+ *   palette-veil  (z 40) — soft dim + blur of whatever is behind
+ *   palette-pane  (z 50) — 720px glass-pop pane, anchored 96px from top
+ *
+ * Top inset on .palette-veil (44px) carves out the title bar so chrome stays
+ * interactive; the bottom inset is 0 since the status bar retired (08-27).
+ * Reduced-transparency users get a deeper opaque dim instead of the blur.
+ *
+ * .pal-row is shared by all three result groups (JUMP / EMAIL / AI
+ * ACTIONS); selection state is render-driven (React sets `.is-selected`
+ * on the highlighted item) so keyboard ↑↓/Tab and mouse hover land on
+ * the same visual. Hint kbds only on the selected row keep the list
+ * quiet — Linear / Raycast pattern.
+ */
+.palette-veil {
+  position: fixed;
+  /* 顶 inset = 顶栏高 (08-27 标签工作区: 36→44, tailwind spacing.titlebar 同步)；
+     底 inset = 0 (原来的 24 是给已随本批退役的 StatusBar 让位, 留着就是底部一条不变暗
+     的亮带)。 */
+  inset: 44px 0 0 0;
+  /* 主题 v2 — veil 去 blur 纯 dim (blur 预算只留真浮层面板), 加深补偿 */
+  background: rgb(var(--ink-0) / 0.62);
+  z-index: 40;
+}
+@media (prefers-reduced-transparency: reduce) {
+  .palette-veil {
+    background: rgb(var(--ink-0) / 0.86);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+.palette-pane {
+  position: fixed;
+  top: 96px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 44px - 24px - 96px - 32px);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  /* 主题 v3 C8/批 4: command palette = 内容浮层档，14px → token 化 --r-pop */
+  border-radius: var(--r-pop);
+  overflow: hidden;
+}
+
+/* P3 — General Agent dialog (Cmd+O). Same glass-pop-over-veil shell as the
+ * command palette, but taller: it hosts a full chat (message list + composer),
+ * not a result list. Veil keeps the title bar interactive (top inset 44). */
+.general-agent-veil {
+  position: fixed;
+  /* 顶 inset = 顶栏高、底 inset = 0 (StatusBar 已退役), 同 .palette-veil。 */
+  inset: 44px 0 0 0;
+  background: rgb(var(--ink-0) / 0.62);
+  z-index: 40;
+}
+@media (prefers-reduced-transparency: reduce) {
+  .general-agent-veil {
+    background: rgb(var(--ink-0) / 0.86);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+.general-agent-pane {
+  position: fixed;
+  top: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(760px, calc(100vw - 32px));
+  height: min(760px, calc(100vh - 72px - 24px - 28px));
+  z-index: 50;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.palette-input {
+  width: 100%;
+  height: 44px;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: rgb(var(--ink-fg));
+  font-size: 16px;
+  line-height: 1;
+  font-family: inherit;
+  caret-color: rgb(var(--c-accent));
+}
+.palette-input::placeholder {
+  color: rgb(var(--ink-fg-2));
+}
+
+.pal-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: rgb(var(--ink-fg-1));
+}
+.pal-row:hover {
+  background: rgb(var(--ink-fg) / 0.04);
+}
+.pal-row.is-selected {
+  background: rgb(var(--c-accent) / 0.1);
+  color: rgb(var(--ink-fg));
+}
+.pal-row.is-selected::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  background: rgb(var(--c-accent));
+  border-radius: 2px;
+}
+
+/* Disabled rows (e.g. AI Action "summarize" pending wiring) — readable but
+ * unmistakably inert. No hover highlight, no coral edge even when the
+ * keyboard cursor passes through. */
+.pal-row[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pal-row[aria-disabled='true']:hover {
+  background: transparent;
+}
+.pal-row[aria-disabled='true'].is-selected {
+  background: rgb(var(--ink-fg) / 0.03);
+}
+.pal-row[aria-disabled='true'].is-selected::before {
+  display: none;
+}
+
+/* Keyboard hint chip cluster — only visible on the highlighted row, both
+ * for noise reduction and to teach users which row their kbd will act on. */
+.pal-hint {
+  display: none;
+}
+.pal-row.is-selected .pal-hint {
+  display: inline-flex;
+}
+
+/* Empty-state tile (used when a group has zero matches in current query). */
+.empty-tile {
+  display: grid;
+  place-items: center;
+  /* place-items 只把每个格子居中, 换行的提示文案仍会左对齐 —— 与 EmptyState
+     组件同档需要显式 text-align (长 hint 已在两处调用点手打 text-center)。 */
+  text-align: center;
+  padding: 18px 16px;
+  border-radius: 8px;
+  gap: 6px;
+  color: rgb(var(--ink-fg-2));
+}
+

@@ -1,0 +1,642 @@
+/* ════════════════════════════════════════════════════════════════════
+   Sprint 20 — /agents 报告页动效 + 分段控件
+   设计稿 Agents.html <style> + ds.css .seg 移植。token 复用全局 --ink/--c-accent。
+   ════════════════════════════════════════════════════════════════════ */
+@keyframes agents-spin { to { transform: rotate(360deg); } }
+.spin > * { animation: agents-spin 0.9s linear infinite; }
+
+@keyframes agents-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+.shimmer {
+  background: linear-gradient(90deg, rgb(var(--ink-2)) 0%, rgb(var(--ink-3)) 50%, rgb(var(--ink-2)) 100%);
+  background-size: 800px 100%;
+  animation: agents-shimmer 1.4s linear infinite;
+}
+
+/* 通讯录骨架屏（ContactSkeleton.tsx）—— 铺满整屏的那一处，reduced-motion 下必须停。
+ * 🔴 有意只关停自己的 .contact-skel，**不动全局 .shimmer**：那个类另有十几处消费方
+ * （报告卡 / 抽屉懒加载字段等），本批无权替它们改行为。.folder-skel 早有同款局部关停。 */
+@media (prefers-reduced-motion: reduce) {
+  .contact-skel {
+    animation: none;
+  }
+}
+
+/* 事项骨架屏（MatterSkeleton.tsx）—— 同上，自己的关停开关，不动全局 .shimmer。 */
+@media (prefers-reduced-motion: reduce) {
+  .matter-skel {
+    animation: none;
+  }
+}
+
+/* 通知面板骨架屏（NotificationSkeleton.tsx）—— 同上，自己的关停开关，不动全局 .shimmer。 */
+@media (prefers-reduced-motion: reduce) {
+  .notify-skel {
+    animation: none;
+  }
+}
+
+@keyframes agents-email-flash {
+  0% { box-shadow: 0 0 0 2px rgb(var(--c-accent)); background: rgb(var(--c-accent) / 0.10); }
+  100% { box-shadow: 0 0 0 2px rgb(var(--c-accent) / 0); background: rgb(var(--c-accent) / 0); }
+}
+/* #1: 不写死 radius — box-shadow ring 跟随被高亮元素自身 border-radius
+ * (list 态 email_item 直角 / card 态 10), 避免直角行上浮出 8px 圆角光环。 */
+.email-flash { animation: agents-email-flash 1.6s ease; }
+
+/* ── Chat thinking block — text shimmer (streaming head) + blink caret ──
+   task 06-08-chat PR A. Distinct from the block-skeleton `.shimmer` above:
+   this is a *text* gradient (bg-clip-text) for the "思考中…" head while the
+   model reasons, plus a blinking caret at the streamed thinking tail. Both
+   stop under prefers-reduced-motion (see block below). Tokens from ds (light
+   + .dark).
+   §8 loading 词汇第三员（与 animate-spin / skeleton pulse 并列）：所有
+   *文字类* in-progress 标签（思考中/翻译中/生成中/Loading）统一用本类。
+   高光色经 --shimmer-hl 可换：AI 语境默认 --c-ai；非 AI 的纯加载文案挂
+   .shimmer-neutral 切 ink-fg 中性高光，不蹭 AI 紫。 */
+/* 思考态字形流光（ShimmerText.tsx）— 纯 CSS 双层 transform 抵消，绕过 GPU 对
+   bg-clip-text background-position / mask-position 的纹理缓存（元素处于合成层上下文
+   ——chat 列表祖先带 transform/will-change——时，文字裁切层光栅化成纹理后缓存，任何
+   background/mask 偏移更新都不重新光栅化；真机实测 CSS animation / GSAP inline / motion
+   三种 background-position 写法 + mask-position 均失效。唯 transform 走合成线程、不经
+   main-thread raster，合成层内仍逐帧重绘）。base 字形固定 + 高光字形 hi 固定 + transform
+   横扫的窗口 win（mask 软边）露出 hi；win/hi 反向 transform 抵消使 hi 视觉对齐 base →
+   只有窗口扫到的字形被照亮 = 字形流光。win width 40%、位移 -100%→250%(of winW)；hi 位移
+   40%→-100%(of hiW) = -0.4×win → 精确同步、任意文字宽自适应。详见 ShimmerText.tsx。
+   §8 loading 词汇：文字类 in-progress（思考中/翻译中/生成中/Loading）统一用 <ShimmerText>;
+   高光色 --shimmer-hl AI 语境默认 --c-ai，非 AI 纯加载传 neutral 切 ink-fg 中性高光。 */
+@keyframes shimmer-win { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+@keyframes shimmer-hi  { from { transform: translateX(40%); }   to { transform: translateX(-100%); } }
+.shimmer-text { position: relative; display: inline-block; white-space: nowrap; }
+.shimmer-text-static { color: rgb(var(--ink-fg-2)); }
+.shimmer-text-base { color: rgb(var(--ink-fg-2)); }
+.shimmer-text-win {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 40%;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 50%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 50%, transparent);
+  pointer-events: none;
+  animation: shimmer-win 1.4s linear infinite;
+}
+.shimmer-text-hi {
+  position: absolute;
+  top: 0;
+  left: 0;
+  white-space: nowrap;
+  /* 用户反馈：思考/加载流光高光改用强调色（coral accent），不再用 AI 紫。neutral 仍切 ink-fg。 */
+  color: rgb(var(--shimmer-hl, var(--c-accent)));
+  animation: shimmer-hi 1.4s linear infinite;
+}
+.shimmer-neutral { --shimmer-hl: var(--ink-fg); }
+/* ShinyText 风格变体（reactbits ShinyText 观感，transform 驱动 — 避开官方 bg-clip-text +
+   background-position 在 Electron macOS 合成层/虚拟滚动失效的坑，见 ShimmerText.tsx 注释）。
+   特征（采纳 codex 方案）：① 窗口加宽到 84%（dogfood +20%：更宽柔的渐变扫光带）
+   ② yoyo 来回扫（animation-direction: alternate + ease-in-out 两端减速）+ 时长 2.6s（dogfood：比原 2s 慢 ~30%）
+   ③ shine 色固定为白（dogfood：高光更亮、像「光」扫过；旧 ink-fg 在亮色主题=近黑 → 被看成「黑 shine」）；base 压暗到 ink-fg-3 拉对比。
+   🔴 win 加宽到 84% 必须同步重算 hi 抵消（保持 hi 视觉固定对齐 base）：
+     win 位移 -100%→220%（of winW=84% → 绝对 ∓84%/184.8% ×文字宽）；
+     hi 反向 = -0.84×win = 84%→-184.8%（of hiW=文字宽）。 */
+@keyframes shimmer-shiny-win {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(220%); }
+}
+@keyframes shimmer-shiny-hi {
+  from { transform: translateX(84%); }
+  to { transform: translateX(-184.8%); }
+}
+.shimmer-shiny .shimmer-text-base { color: rgb(var(--ink-fg-3)); }
+.shimmer-shiny .shimmer-text-win {
+  width: 84%;
+  animation: shimmer-shiny-win 2.6s ease-in-out infinite alternate;
+}
+.shimmer-shiny .shimmer-text-hi {
+  /* dogfood：shine 用固定白（高光像「光」扫过；旧 rgb(var(--ink-fg)) 在亮色主题=近黑，被看成黑 shine）。
+     base 是 ink-fg-3 中灰，白 shine 在明暗主题都能扫出亮带。 */
+  color: rgb(255 255 255);
+  animation: shimmer-shiny-hi 2.6s ease-in-out infinite alternate;
+}
+/* AI 思考态多段 phrase 轮播（ThinkingPhrases.tsx）：切换时 fade + 上移 enter（opacity/
+   transform 合成器属性，合成层内可靠）。reduce 下由下方 @media 关闭。 */
+.thinking-phrases { display: inline-block; }
+.thinking-phrases-item { animation: phrase-in 0.22s cubic-bezier(0.4, 0, 0.2, 1) both; }
+@keyframes phrase-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes chat-think-blink { 50% { opacity: 0; } }
+.think-caret {
+  display: inline-block;
+  width: 6px;
+  height: 13px;
+  background: rgb(var(--c-ai));
+  vertical-align: -2px;
+  margin-left: 1px;
+  animation: chat-think-blink 1s steps(2) infinite;
+}
+
+/* ── Chat tool group (Cowork mode) — timeline hairline behind step icons ──
+   task 06-08-chat PR B. The step list draws a single vertical hairline behind
+   the column of type icons; each icon paints a box-shadow ring in the panel's
+   base layer (--ink-2, the dominant .ai-bg gradient stop) so the line visibly
+   "breaks" at each icon, reading as icons threaded onto the timeline. Layout
+   (indent, sizing) stays in Tailwind on the elements; only the line + the
+   icon-break ring live here because they need ::before + box-shadow that
+   Tailwind can't express cleanly. */
+.tool-timeline {
+  position: relative;
+}
+.tool-timeline::before {
+  content: '';
+  position: absolute;
+  /* Align to the icon column centre: pl-[18px] container + 20px icon → centre
+     at 18 + 10 = 28px from the list's left edge. */
+  left: 27.25px;
+  top: 14px;
+  bottom: 13px;
+  width: 1.5px;
+  background: rgb(var(--ink-border));
+  border-radius: 1px;
+}
+.tool-step-ic {
+  position: relative;
+  z-index: 1;
+  /* Break the hairline at the icon: a 3px ring in the panel base colour. */
+  box-shadow: 0 0 0 3px rgb(var(--ink-2));
+}
+
+/* 分段控件（报告 cadence 过滤 / 配置排程 + 窗口）。 */
+.seg {
+  display: inline-flex;
+  /* 主题 v2 — ink 实底转半透 (玻璃下死色 segment 割裂), 同 .inbox-tabs。 */
+  background: rgb(var(--ink-3) / 0.6);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 7px;
+  padding: 2px;
+  gap: 2px;
+}
+.seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  color: rgb(var(--ink-fg-2));
+  cursor: pointer;
+  transition:
+    color var(--dur-fast, 120ms) cubic-bezier(0.4, 0, 0.2, 1),
+    background-color var(--dur-fast, 120ms) cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow var(--dur-fast, 120ms) cubic-bezier(0.4, 0, 0.2, 1),
+    transform var(--dur-fast, 120ms) cubic-bezier(0.4, 0, 0.2, 1);
+  background: transparent;
+  border: 0;
+  font-family: inherit;
+}
+.seg button:hover { color: rgb(var(--ink-fg)); }
+/* 激活态同 .inbox-tab-indicator 的胶囊语言 (暗 ink-fg 半透 / 亮近白)。 */
+.seg button.on {
+  background: rgb(var(--ink-fg) / 0.12);
+  color: rgb(var(--ink-fg));
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+:root[data-theme='light'] .seg button.on {
+  background: rgb(255 255 255 / 0.9);
+}
+
+/* v0.7.2 统一 SegmentedControl（ui/segmented.tsx）—— 测量式滑动指示器。
+ * 指示器复用 .seg button.on 的胶囊语言（暗 ink-fg 半透 / 亮近白，无硬实底）；
+ * 组件的 active 按钮不加 .on（避免 indicator + .on 双底叠加），文字色走
+ * .seg-active。存量 .seg + .on 原生用法（ScheduleBuilder / 各 agent 配置页）不受影响。 */
+.seg {
+  position: relative;
+}
+.seg .seg-indicator {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  border-radius: 5px;
+  background: rgb(var(--ink-fg) / 0.12);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  pointer-events: none;
+}
+:root[data-theme='light'] .seg .seg-indicator {
+  background: rgb(255 255 255 / 0.9);
+}
+/* 组件在「初次定位」与 reduced-motion 时不加该类 → 指示器直接就位不滑动。 */
+.seg .seg-indicator-anim {
+  transition:
+    transform var(--dur-fast, 120ms),
+    width var(--dur-fast, 120ms);
+}
+.seg button.seg-active {
+  color: rgb(var(--ink-fg));
+}
+
+/* F3c — 强调变体 (账户页「邮件源选择」)。默认 wash 胶囊在玻璃材质下太淡，用户
+ * 看不出选中态；accent 把指示器换成 coral 实底 + 选中段白字、所有段文字加粗。
+ * 仅 .seg-accent 作用域，不影响其它 SegmentedControl。indicator 的暗/亮规则各
+ * 加一条，特异性都要压过 :root[data-theme='light'] .seg .seg-indicator (0,4,0)。 */
+.seg.seg-accent button {
+  font-weight: 600;
+}
+.seg.seg-accent .seg-indicator {
+  background: rgb(var(--c-accent));
+  box-shadow: 0 1px 3px rgb(var(--c-accent) / 0.4);
+}
+:root[data-theme='light'] .seg.seg-accent .seg-indicator {
+  background: rgb(var(--c-accent));
+}
+.seg.seg-accent button.seg-active {
+  color: #fff;
+}
+
+/* 输入类控件底色 — 亮色保持 off-white 实底 (融合), 深色切半透墨色
+ * (实底 ink-2 在玻璃主题下是死黑块, dogfood round 3 用户反馈)。 */
+.input-surface {
+  background: rgb(var(--ink-2));
+}
+:root[data-theme='dark'] .input-surface {
+  background: rgb(var(--ink-3) / 0.55);
+}
+
+/* ── Icon swap — 同 slot 双图标 cross-fade（transitions.dev 09 适配版） ──
+ * copy→check / Eye↔EyeOff / 主题三态等图标切换的统一原语：两图标常驻
+ * DOM 堆同一 grid 格，data-state 翻转谁可见。原版 250ms ease-in-out +
+ * blur(2px) 按 §8 收编：120ms fast + standard 曲线；blur 砍掉（红线:
+ * 永不 transition filter），scale 0.25→0.85 收敛到克制档。
+ * 用法：<span class="icon-swap">
+ *         <span class="icon-swap-item" data-active={!copied}><Copy/></span>
+ *         <span class="icon-swap-item" data-active={copied}><Check/></span>
+ *       </span>
+ * data-active 收 boolean（React 序列化成 "true"/"false"），item 数量不限
+ * （主题 Sun/Moon/Monitor 三态即三个 item 各自 data-active）。 */
+.icon-swap {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+}
+.icon-swap-item {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  transition:
+    opacity 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.icon-swap-item[data-active='false'] {
+  opacity: 0;
+  transform: scale(0.85);
+  pointer-events: none;
+}
+
+/* AI FAB 头像的外投影（0813 dogfood，owner：「默认加点外阴影，不然看不出来区分」）。
+   本类取代了此前那套轮廓光环（`.chat-fab-halo-glow` / `.chat-fab-halo-arc` / `@keyframes
+   chat-fab-halo-travel`，两层一起删的理由见 ChatFabAvatar.tsx 文件头），更早的
+   `.rb-star-border` conic 环则在换头像那一版就已删除。全仓无残留消费点。
+   🔴 为什么是 filter 不是 box-shadow：钮面是**异形剪影**（bot 轮廓 / 上传图的圆角方），
+   box-shadow 画的是那个 56px 方盒的影子，与形状对不上；`drop-shadow` 跟随 alpha 通道，
+   两种身份共用一条声明（也是本文件 GeneralTab 色卡对号已在用的同一条路子）。
+   🔴 数值不新造：`0 8px 24px rgba(0,0,0,0.35)` = DESIGN.md §4.3 shadow level-1「raised」，
+   本仓给「脱离页面的浮层」的既有档（FAB 正是 createPortal 出去的浮层），`UpdateReadyBanner`
+   与 `ChatModalHistoryDropdown` 用的是同一组数、也同样不分主题。
+   🔴 明暗两档实测（playwright 渲染 ink-0 / ink-1 / 纯白正文三种底色）：暗色下 0.35 黑影把
+   ink-1 压到约 ink-0 一档，即设计体系自己用来区分表面层级的那个差值 —— 边界看得出；亮色下
+   是一圈干净的近影，不是 Material 那种厚重投影（DESIGN.md §1 明确不要）。层级更重的
+   `--pop-shadow` 有意没用：它按大面板标定（偏移 18–24px / 模糊 50–60px），落到 56px 的钮上
+   影子整团掉到钮下方、读成一块糊斑（同一次实测比过）。 */
+.chat-fab-avatar {
+  filter: drop-shadow(0 8px 24px rgba(0, 0, 0, 0.35));
+}
+
+/* reactbits Strands — motion-gsap §10 decorative backdrop (non-loading WebGL silk strands).
+   Position: absolute, fills the nearest `relative isolate` ancestor (AgentThread.Root).
+   Canvas is transparent; pointer events are suppressed via the wrapper's className. */
+.strands-container { position: absolute; inset: 0; width: 100%; height: 100%; background: transparent; }
+.strands-container canvas { display: block; width: 100%; height: 100%; }
+
+/* Agent 空态 Strands 装饰块遮罩 — greetings 文案上方的独立丝线块（dogfood：不再做全屏背景，单独
+   置于文案上方），居中椭圆径向渐隐柔化四边、不硬切。 */
+.agent-strands-banner {
+  /* 中心下移到 62%（丝线亮区往下沉，贴近下方欢迎语，减少 div 下部留白）+ 范围放大让丝线更饱满。 */
+  -webkit-mask-image: radial-gradient(88% 82% at 50% 62%, #000 52%, transparent 100%);
+  mask-image: radial-gradient(88% 82% at 50% 62%, #000 52%, transparent 100%);
+  /* #1 dogfood：负 z-index 把丝线块沉到最近 stacking context（Thread root isolate）
+     的背景层之上、其余内容之下，无需 greeting 文案持有 z-10 stacking context。
+     这样 ViewportFooter（含 AgentModelPicker 弹层）不再被 h1 z-10 压盖。 */
+  z-index: -1;
+}
+
+/* reactbits BorderGlow（官方 TS-CSS 逐字段移植，组件 effects/BorderGlow.tsx）— mesh-gradient 彩虹
+   边框 ::before + 近边背景填充 ::after（soft-light）+ edge-light 辉光环（::before 多层 box-shadow）+
+   inner。逐字节照搬官方 reactbits.dev/r/BorderGlow-TS-CSS，仅 3 处适配：类名/变量加 rb- 前缀（防全局
+   撞）；--rb-card-bg 默认 token（跟随主题）；末尾加 @media reduce 隐藏三层。颜色 hsla/hex/rgba 均在
+   .css（豁免 no-raw-hex）。⚠️ edge-light inset:-glow-padding 外扩盒子是官方设计 → AgentComposer 传
+   较小 glowRadius 控外扩，避免窄浮窗里撑横向滚动条。 */
+.rb-border-glow-card {
+  --rb-edge-proximity: 0;
+  --rb-cursor-angle: 45deg;
+  --rb-edge-sensitivity: 30;
+  --rb-color-sensitivity: calc(var(--rb-edge-sensitivity) + 20);
+  --rb-border-radius: 28px;
+  --rb-glow-padding: 40px;
+  --rb-cone-spread: 25;
+
+  position: relative;
+  border-radius: var(--rb-border-radius);
+  isolation: isolate;
+  transform: translate3d(0, 0, 0.01px);
+  display: grid;
+  border: 1px solid rgb(255 255 255 / 15%);
+  background: var(--rb-card-bg, #120f17);
+  overflow: visible;
+}
+.rb-border-glow-card::before,
+.rb-border-glow-card::after,
+.rb-border-glow-card > .rb-edge-light {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  transition: opacity 0.25s ease-out;
+  z-index: -1;
+}
+.rb-border-glow-card:not(:hover):not(.rb-sweep-active)::before,
+.rb-border-glow-card:not(:hover):not(.rb-sweep-active)::after,
+.rb-border-glow-card:not(:hover):not(.rb-sweep-active) > .rb-edge-light {
+  opacity: 0;
+  transition: opacity 0.75s ease-in-out;
+}
+/* colored mesh-gradient border */
+.rb-border-glow-card::before {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--rb-card-bg, #120f17) 0 100%) padding-box,
+    linear-gradient(rgb(255 255 255 / 0%) 0% 100%) border-box,
+    var(--rb-gradient-one, radial-gradient(at 80% 55%, hsla(268, 100%, 76%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-two, radial-gradient(at 69% 34%, hsla(349, 100%, 74%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-three, radial-gradient(at 8% 6%, hsla(136, 100%, 78%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-four, radial-gradient(at 41% 38%, hsla(192, 100%, 64%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-five, radial-gradient(at 86% 85%, hsla(186, 100%, 74%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-six, radial-gradient(at 82% 18%, hsla(52, 100%, 65%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-seven, radial-gradient(at 51% 4%, hsla(12, 100%, 72%, 1) 0px, transparent 50%)) border-box,
+    var(--rb-gradient-base, linear-gradient(#c299ff 0 100%)) border-box;
+
+  opacity: calc((var(--rb-edge-proximity) - var(--rb-color-sensitivity)) / (100 - var(--rb-color-sensitivity)));
+
+  mask-image: conic-gradient(
+    from var(--rb-cursor-angle) at center,
+    black calc(var(--rb-cone-spread) * 1%),
+    transparent calc((var(--rb-cone-spread) + 15) * 1%),
+    transparent calc((100 - var(--rb-cone-spread) - 15) * 1%),
+    black calc((100 - var(--rb-cone-spread)) * 1%)
+  );
+}
+/* colored mesh-gradient background fill near edges */
+.rb-border-glow-card::after {
+  border: 1px solid transparent;
+  background:
+    var(--rb-gradient-one, radial-gradient(at 80% 55%, hsla(268, 100%, 76%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-two, radial-gradient(at 69% 34%, hsla(349, 100%, 74%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-three, radial-gradient(at 8% 6%, hsla(136, 100%, 78%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-four, radial-gradient(at 41% 38%, hsla(192, 100%, 64%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-five, radial-gradient(at 86% 85%, hsla(186, 100%, 74%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-six, radial-gradient(at 82% 18%, hsla(52, 100%, 65%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-seven, radial-gradient(at 51% 4%, hsla(12, 100%, 72%, 1) 0px, transparent 50%)) padding-box,
+    var(--rb-gradient-base, linear-gradient(#c299ff 0 100%)) padding-box;
+
+  mask-image:
+    linear-gradient(to bottom, black, black),
+    radial-gradient(ellipse at 50% 50%, black 40%, transparent 65%),
+    radial-gradient(ellipse at 66% 66%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 33% 33%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 66% 33%, black 5%, transparent 40%),
+    radial-gradient(ellipse at 33% 66%, black 5%, transparent 40%),
+    conic-gradient(from var(--rb-cursor-angle) at center, transparent 5%, black 15%, black 85%, transparent 95%);
+
+  mask-composite: subtract, add, add, add, add, add;
+  opacity: calc(var(--rb-fill-opacity, 0.5) * (var(--rb-edge-proximity) - var(--rb-color-sensitivity)) / (100 - var(--rb-color-sensitivity)));
+  mix-blend-mode: soft-light;
+}
+/* outer glow layer */
+.rb-border-glow-card > .rb-edge-light {
+  inset: calc(var(--rb-glow-padding) * -1);
+  pointer-events: none;
+  z-index: 1;
+
+  mask-image: conic-gradient(
+    from var(--rb-cursor-angle) at center,
+    black 2.5%,
+    transparent 10%,
+    transparent 90%,
+    black 97.5%
+  );
+
+  opacity: calc((var(--rb-edge-proximity) - var(--rb-edge-sensitivity)) / (100 - var(--rb-edge-sensitivity)));
+  mix-blend-mode: plus-lighter;
+}
+.rb-border-glow-card > .rb-edge-light::before {
+  content: '';
+  position: absolute;
+  inset: var(--rb-glow-padding);
+  border-radius: inherit;
+  /* dogfood：官方暖黄 glowColor 在亮色白底上发散成白雾、外扩太多 → 改 accent token（饱和、跟随主题，
+     亮暗自动正确）；最外档 50px→32px 收一点外扩。 */
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--c-accent) / 1),
+    inset 0 0 1px 0 rgb(var(--c-accent) / 0.6),
+    inset 0 0 3px 0 rgb(var(--c-accent) / 0.5),
+    inset 0 0 6px 0 rgb(var(--c-accent) / 0.4),
+    inset 0 0 15px 0 rgb(var(--c-accent) / 0.3),
+    inset 0 0 25px 2px rgb(var(--c-accent) / 0.18),
+    inset 0 0 32px 2px rgb(var(--c-accent) / 0.1),
+    0 0 1px 0 rgb(var(--c-accent) / 0.6),
+    0 0 3px 0 rgb(var(--c-accent) / 0.5),
+    0 0 6px 0 rgb(var(--c-accent) / 0.4),
+    0 0 15px 0 rgb(var(--c-accent) / 0.3),
+    0 0 25px 2px rgb(var(--c-accent) / 0.18),
+    0 0 32px 2px rgb(var(--c-accent) / 0.1);
+}
+/* dogfood：亮色主题下 plus-lighter（变亮混合）把 accent 辉光在浅底上加成「白雾」（用户反馈「亮色下
+   白色外扩」）→ 亮色改 normal 混合，让 edge-light 显 accent 本色（半透 accent 叠浅底 = 明度更高的
+   coral，不发白）。暗色保留 plus-lighter（深底上辉光质感好，用户认可）。 */
+:root[data-theme='light'] .rb-border-glow-card > .rb-edge-light {
+  mix-blend-mode: normal;
+}
+/* 亮色：normal 混合下 edge-light::before 的 inset 系列（尤其最内 1px 实色 accent）会盖住 mesh 彩虹边框 +
+   ::after 近边填充（暗色 plus-lighter 是加光不盖、彩虹透出，无此问题）→ 用户「亮色没彩虹、只主强调色」。
+   亮色只保留 outer 外发光、去掉全部 inset：mesh 彩虹完整露出 + accent 仅在卡片外发光，二者共存。 */
+:root[data-theme='light'] .rb-border-glow-card > .rb-edge-light::before {
+  box-shadow:
+    0 0 1px 0 rgb(var(--c-accent) / 0.6),
+    0 0 3px 0 rgb(var(--c-accent) / 0.5),
+    0 0 6px 0 rgb(var(--c-accent) / 0.4),
+    0 0 15px 0 rgb(var(--c-accent) / 0.3),
+    0 0 25px 2px rgb(var(--c-accent) / 0.18),
+    0 0 32px 2px rgb(var(--c-accent) / 0.1);
+}
+.rb-border-glow-inner {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  /* 官方移植第 7 处适配（dogfood）：inner 原为 overflow:auto，会把 composer 里向上开的
+     model picker 弹层（bottom-full）+ top 向 HoverTip 裁死（列表显示不全无法切换）。BorderGlow
+     仅 AgentComposer 用，改 visible 让弹层/tooltip 逸出卡片；卡本身已 overflow:visible，内容有 p-2
+     内边距不会触到 16px 圆角，输入框自带 max-h-32 滚动，无回归。 */
+  overflow: visible;
+  z-index: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rb-border-glow-card::before,
+  .rb-border-glow-card::after,
+  .rb-border-glow-card > .rb-edge-light {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ef-input.invalid.ef-invalid-shake { animation: none; }
+  .spin > *, .shimmer, .email-flash, .think-caret { animation: none !important; }
+  /* 字形流光 + phrase 轮播停帧：ShimmerText 在 reduce 下已渲染 shimmer-text-static
+     （无 win/hi 层），此处再兜底关掉动画 + phrase enter（防 reduce 运行时切换残留）。 */
+  .shimmer-text-win, .shimmer-text-hi, .thinking-phrases-item { animation: none !important; }
+  .icon-swap-item { transition: none !important; }
+  /* Hide the (now non-blinking) caret so it doesn't read as a stuck cursor. */
+  .think-caret { display: none; }
+}
+
+/* ── Reduced-motion: 关掉本轮新增的 :active press scale。两类一起兜底：
+ *   ① index.css 内 authored 控件的按压 transform（.cb / .ricon / CTA / RSVP …）；
+ *   ② Tailwind 组件的 active:scale-*（button / switch / segmented / chat / batch …）——
+ *      用 [class*='active:scale-'] 一处覆盖，免逐组件加 motion-reduce 变体。本块在
+ *      @tailwind utilities（顶部 @layer）之后且处 layer 外，必覆盖 utilities，无需 !important。 */
+@media (prefers-reduced-motion: reduce) {
+  .cb:active,
+  .row-actions .ricon:active,
+  .btn-cta:active,
+  .acc-cta:active,
+  .evt:active,
+  .btn-rsvp:active:not(:disabled),
+  .btn-op:active:not(:disabled),
+  .qchip:active,
+  .gbtn:active:not(:disabled),
+  [class*='active:scale-']:active {
+    transform: none;
+  }
+}
+
+/* ── 阶段2.2 (UX-P0①) — 邮件详情会议邀请卡片 .cal-invite ─────────────────
+ * 挂在 EmailDetail meta 区下方 (MeetingInviteCard.tsx)。RSVP 键复用 .btn-rsvp,
+ * 「在日历中查看」复用 .link-row/.cal-linkbtn; 本块只补卡片壳/行区/chip。
+ * 无新增动画/transform — 悬浮反馈全部来自被复用类, 时长在其定义处受控。 */
+.cal-invite {
+  margin-top: 20px;
+  padding: 13px 16px 14px;
+  border: 1px solid rgb(var(--ink-border));
+  border-radius: var(--r-card);
+  background: rgb(var(--ink-fg) / 0.03);
+}
+.cal-invite-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cal-invite-head > svg {
+  flex: none;
+  color: rgb(var(--c-accent));
+}
+.cal-invite[data-cancelled='true'] .cal-invite-head > svg,
+.cal-invite[data-cancelled='true'] .cal-invite-title {
+  color: rgb(var(--c-fail));
+}
+.cal-invite-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: rgb(var(--ink-fg));
+}
+.cal-invite-badge,
+.cal-invite-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: rgb(var(--ink-fg-1));
+  background: rgb(var(--ink-fg) / 0.06);
+  border: 1px solid rgb(var(--ink-border));
+}
+.cal-invite-chip {
+  margin-left: auto;
+}
+.cal-invite-chip[data-tone='warn'] {
+  color: rgb(var(--c-warn));
+  background: rgb(var(--c-warn) / 0.12);
+  border-color: rgb(var(--c-warn) / 0.35);
+}
+.cal-invite-chip[data-tone='ok'] {
+  color: rgb(var(--ink-fg-2));
+}
+.cal-invite-rows {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+.cal-invite-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgb(var(--ink-fg-1));
+}
+.cal-invite-row > svg {
+  flex: none;
+  margin-top: 3px;
+  color: rgb(var(--ink-fg-3));
+}
+.cal-invite-time,
+.cal-invite-mono {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 12.5px;
+  color: rgb(var(--ink-fg));
+}
+.cal-invite-mono {
+  color: rgb(var(--ink-fg-1));
+}
+.cal-invite-attnames {
+  color: rgb(var(--ink-fg-2));
+}
+.cal-invite-foot {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.cal-invite-rsvp {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  max-width: 360px;
+}
+.cal-invite-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: rgb(var(--ink-fg-3));
+}
+.cal-invite-view {
+  margin-left: auto;
+  font-size: 12.5px;
+}
+
+/* Email retention shares one compact slot with unsaved changes. */
+.ttab-retention { width: 18px; height: 18px; flex-shrink: 0; display: grid; place-items: center; }
+.ttab-retention > * { grid-area: 1 / 1; }
+.ttab-pin { width: 18px; height: 18px; display: grid; place-items: center; opacity: 0; border-radius: 5px; color: rgb(var(--ink-fg-3)); }
+.ttab-retention.is-pinned .ttab-pin,
+.ttab:hover .ttab-pin, .ttab:focus-within .ttab-pin { opacity: 1; }
+.ttab:hover .ttab-retention .ttab-dirty, .ttab:focus-within .ttab-retention .ttab-dirty { visibility: hidden; }
+.ttab-pin:hover { background: rgb(var(--ink-fg) / 0.14); color: rgb(var(--ink-fg)); }
+@media (hover: none) { .ttab-pin { opacity: 1; } .ttab-retention.is-dirty .ttab-dirty { transform: translate(6px, -6px); } }

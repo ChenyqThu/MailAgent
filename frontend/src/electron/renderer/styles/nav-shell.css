@@ -1,0 +1,863 @@
+/* ─── task 08-24-l4-nav-shell Step B — 方案 B nav shell (IconRail + DomainPanel) ─
+ * 视觉基准 = 提案画布方案 B 板 (ProposalB.dc.html)。老「240↔56 双宽态」collapse
+ * contract（Sprint 11 V1.4 §2.11）退役；08-27 dogfood 修正批曾把折叠能力整体移除；
+ * task 09-01-sidebar-fluid-optimization（owner 看过 demo 后拍板 A′+C 混合）按**域**
+ * 记忆重新引入：56px 图标导轨常驻，第二列（DomainPanel / page 域清单列）每域各记一份
+ * `{collapsed, width}`，宽 280–420 可拖，折叠 = --app-second-w 收 0。
+ * 材质（0825 dogfood 拍板）：rail/panel 一律挂 --tier-side —— 画布的不透明
+ * ink 明度序会掉出 v3 surface-tier 透明体系（左 288px 对 Frosted/Surface
+ * 失效、吃不到壁纸辉光，与右侧透明面直接色裂）；分层交给 hairline。
+ *
+ * Authored CSS class names are load-bearing — Tailwind never sees these so
+ * the contract survives purge. 结构契约（`railbtn > svg` 直子等）有渲染期闸
+ * (tests/components/sidebar-contract.test.tsx)。 */
+
+/* 左列宽度变量注册成可过渡的自定义属性：切域回放另一个域的记忆 / 折叠 / 拖宽时，
+ * 过渡挂在 :root 的**变量**上，所有消费者（顶栏左段 .topbar-left、.nav-panel、六个
+ * page 域清单列、#batch-bar.floating 的 left）读到的是同一份插值 ⇒ 每帧共线，不必各自
+ * 写 transition。新挂载的清单列（切域）读到的也是插值，所以「从旧宽滑到新宽」自然成立。
+ * 拖拽期间（html[data-nav-dragging]，nav-shell store 写）关过渡跟手；reduced-motion 全关。
+ * 时长 220ms（base 档）/ 曲线 --ease-out-strong（v3 UI 过渡默认）。 */
+@property --app-nav-w {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 392px;
+}
+@property --app-second-w {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 336px;
+}
+:root {
+  transition:
+    --app-nav-w 220ms var(--ease-out-strong),
+    --app-second-w 220ms var(--ease-out-strong);
+}
+:root[data-nav-dragging] {
+  transition: none;
+}
+
+.app-nav {
+  display: flex;
+  flex-shrink: 0;
+  /* 拖宽手柄（.nav-resize-handle）按 --app-nav-w 绝对定位在左列右缘 —— page 域时
+   * .app-nav 自身只有 56 宽（清单列在页面里），手柄仍要落在 392 那条线上。 */
+  position: relative;
+}
+
+/* ── IconRail · 56px 常驻 ── */
+.nav-rail {
+  width: 56px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--tier-side);
+  border-right: 1px solid var(--hairline);
+}
+/* rail 头 41px (border-box 含底边) — 与 DomainPanel 头 / 右侧内容区顶栏
+ * (各页页头等, height:41) 的分割线共线（画布修正版基线）。 */
+.nav-rail-header {
+  height: 41px;
+  width: 100%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 8px;
+}
+.nav-rail-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgb(var(--ink-5));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgb(var(--ink-fg));
+}
+.nav-rail-cells {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+/* 对象域（邮件/事项）与页面域之间的分隔线（08-27 原型 railsep: 24×1）。 */
+.nav-rail-sep {
+  width: 24px;
+  height: 1px;
+  flex-shrink: 0;
+  background: rgb(var(--ink-border));
+  margin: 6px 0;
+}
+/* 底部沉「运维」「设置」（画布: 格间 6px, 距底 10px, icon 18px）。 */
+.nav-rail-bottom {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 10px;
+}
+/* 同步状态点（StatusBar 退役后 sync 段的常驻落位，原型 railfoot .sync: 8px 圆点）。
+ * 颜色类（bg-ok / bg-coral / bg-fail / bg-ink-fg-3）由 Sidebar 按 SSE 状态注入。 */
+.nav-rail-sync {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-bottom: 2px;
+}
+/* 面板开合按钮（三条恢复入口之一；0825 dogfood：收起态唯一展开入口 = 再点当前域格
+ * 太隐蔽）。抽屉态由 TSX 隐藏（那里没有折叠这回事）。 */
+.nav-rail-toggle {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: rgb(var(--ink-fg-3));
+  transition:
+    background-color 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.nav-rail-toggle:hover,
+.nav-rail-toggle:focus-visible {
+  background: rgb(var(--ink-3));
+  color: rgb(var(--ink-fg));
+}
+.nav-rail-toggle > svg {
+  width: 18px !important;
+  height: 18px !important;
+}
+/* 格 = 40×40 按钮 + 9px 标签（画布 .railbtn/.raillabel/.railbadge 逐属性）。
+ * 0825 dogfood: hover/selected 的 pill 从 40×40 icon 框上移到**整格**（icon 与
+ * 标签同框——wash 只包 icon 时标签悬在框外像掉出来的）; selected 配方对齐全 app
+ * 选中签名 --sel-wash（画布的 accent 0.18 渐变偏重, 与其他栏不一致）。 */
+.nav-rail-cell {
+  width: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 0 4px;
+  border-radius: 11px;
+  transition:
+    background-color 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.railbtn {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--ink-fg-2));
+  position: relative;
+  transition: color 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* hover 态画布未 spec — 沿用行 hover 语言 (ink-3 一档提亮)。 */
+.nav-rail-cell:hover,
+.nav-rail-cell:focus-visible {
+  background: rgb(var(--ink-3));
+}
+.nav-rail-cell:hover .railbtn,
+.nav-rail-cell:focus-visible .railbtn {
+  color: rgb(var(--ink-fg));
+}
+.nav-rail-cell[data-selected='true'] {
+  background: var(--sel-wash);
+}
+.nav-rail-cell[data-selected='true'] .railbtn {
+  color: rgb(var(--c-accent));
+}
+/* icon 19px (底部格 18px)。CSS width on <svg> overrides the inline width
+ * attr; !important guards against a Lucide `width` HTML attribute
+ * outranking the bare CSS rule. svg 必须是 .railbtn 直子 (D6 契约)。 */
+.railbtn > svg {
+  width: 19px !important;
+  height: 19px !important;
+}
+.nav-rail-bottom .railbtn > svg {
+  width: 18px !important;
+  height: 18px !important;
+}
+.railbadge {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
+  pointer-events: none;
+}
+/* 无数字状态点（registry `NavBadgeSpec.shape:'dot'` / `NavEntry.dot`）：6px 圆点与角标
+ * 同锚（icon 右上），底色描一圈让它压在 icon 线条上也能读出来。 */
+.railbadge[data-shape='dot'] {
+  min-width: 6px;
+  width: 6px;
+  height: 6px;
+  padding: 0;
+  top: 6px;
+  right: 7px;
+  box-shadow: 0 0 0 2px rgb(var(--ink-0) / 0.6);
+}
+.raillabel {
+  font-size: 9px;
+  line-height: 1;
+  color: rgb(var(--ink-fg-3));
+  margin-top: -6px;
+}
+.nav-rail-cell[data-selected='true'] .raillabel {
+  color: rgb(var(--c-accent));
+}
+
+/* ── DomainPanel · 宽读 --app-second-w（每域一份记忆，默认 336；折叠态 0）。
+ * 外层 overflow:hidden 裁切；内层 .nav-panel-inner 的宽由 DomainPanel 按该域记忆值
+ * 写内联 px（过渡期间内容不换行不挤压，同 08-25 手法），CSS 只给无 JS 时的兜底。 */
+.nav-panel {
+  width: var(--app-second-w, 336px);
+  flex-shrink: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--tier-side);
+  border-right: 1px solid var(--hairline);
+}
+.nav-panel-inner {
+  width: var(--app-second-w, 336px);
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* 折叠 = 变量收 0（宽度动画由 :root 的变量过渡负责）+ visibility hidden（挡键盘焦点进
+ * 被裁掉的面板；离散过渡延到宽度动画结束那一拍才翻，展开时立刻可见）。
+ * 🔴 必须是**子代**组合器：peek 浮层里的那份 DomainPanel（.nav-panel--peek）也在同一个
+ * `.app-nav[data-collapsed='true']` 里（NavPeek 是 Sidebar 的子节点），后代选择器会把它一起
+ * 隐藏 —— 折叠态 hover 今日 / 日历 / 运维 / 设置四个 nav 域只见空浮层（0902 dogfood 轮 1）。
+ * 特异度上 (0,2,0) 也压过 .nav-panel--peek 的 (0,1,0)，不能靠反向覆盖救。常驻那份是
+ * `.app-nav` 的直接子节点，peek 那份在 .nav-peek > .nav-peek-body 下，子代组合器正好分开。 */
+.app-nav[data-collapsed='true'] > .nav-panel {
+  border-right-width: 0;
+  visibility: hidden;
+  transition: visibility 0s linear 220ms;
+}
+/* peek 变体：折叠态 hover 导轨格浮出的同一份面板 —— 浮层里没有折叠钮 / 手柄，
+ * 宽由 NavPeek 按该域记忆值写内联。 */
+.nav-panel--peek {
+  width: 100%;
+  border-right: 0;
+  background: transparent;
+}
+.nav-panel--peek .nav-panel-inner {
+  width: 100%;
+}
+/* 面板头 41px — 域名 + 域级动作位, 分割线与 rail 头共线。 */
+.nav-panel-header {
+  height: 41px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+/* 段头（MAILBOXES / FOLDERS）— 画布 11px/600/0.08em; 字体族沿用 §3.3 mono
+ * uppercase 房规 (标记类 utility 在 TSX 上)。左右 6px + 容器 px-1.5 = 距面板
+ * 边 12px, 对齐画布 padding 14px 12px 6px。 */
+.nav-panel-sechdr {
+  padding: 14px 6px 6px;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  color: rgb(var(--ink-fg-3));
+}
+/* 选中行左光条: 行容器 px-1.5(6px) 内往左悬挂到面板边 (画布 .navrow.sel::before
+ * left:-6px), 覆盖全局 .app-nav 档的 -8px (那是老 px-2 容器的悬挂量, 在 6px
+ * padding 下会被 .nav-panel overflow 裁掉 2px)。 */
+.nav-panel .row-selected::before {
+  left: -6px;
+}
+
+/* ─── task 08-27-l4-tab-workspace P2 — 顶栏标签工作区 (原型 Main.dc.html .rtop 1:1) ─
+ * 44px 顶栏 = 左段 .topbar-left (与左列共宽, 跟随 --app-nav-w) + 右段标签条
+ * .tstrip。标签几何 (PAD_L 10 / 主标签 168 / 分隔 11 / gap 3 / 标签高 34 底对齐)
+ * 与滑动面/断口坐标由 TabStrip.tsx 按容器实测算好以内联 style 写入; 这里只管
+ * 形态与材质。合成色契约 (激活标签内部 = 内容面) 见 :root 的 --tab-strip-surface。 */
+.topbar-left {
+  width: var(--app-nav-w, 392px);
+  flex-shrink: 0;
+  overflow: hidden;
+  background: var(--tier-side);
+  border-right: 1px solid var(--hairline);
+}
+/* 🔴 折叠态保底 80：左段宽跟 --app-nav-w（折叠后 56），而 macOS 红绿灯是 OS 画在上层的、
+ * 占 x 7–59（TitleBar 里那 72px 占位随内层一起 visibility:hidden 了）⇒ 标签条从 x=56 起画，
+ * 灯簇压在标签上（0902 dogfood 轮 1 owner 反馈）。max() 只在折叠态起作用（展开态 ≥336 是
+ * no-op），宽度过渡仍由 :root 的变量过渡负责。Windows 无红绿灯：多出的 24px 留白与既有
+ * 72px 占位同一口径，不加平台分支。抽屉态（远程 web <768）左段是 44 的汉堡钮，排除在外。 */
+.topbar-left:not([data-nav-mode='drawer']) {
+  width: max(var(--app-nav-w, 392px), 80px);
+}
+/* 折叠态的 80 右缘与 rail 的 56 边界错位，那条竖 hairline 画出来是条断头线 —— 隐掉。 */
+.topbar-left[data-collapsed='true'] {
+  border-right-color: transparent;
+}
+/* 内层同样读 --app-nav-w（折叠态 56、抽屉态 44），过渡由 :root 的变量过渡负责。
+ * 🔴 这里**不能**像 .nav-panel-inner 那样定宽：左段的内容是「72px 红绿灯位 + 弹性空档 +
+ * 行尾控件簇」，簇必须贴着左列右缘那条 hairline。定宽 392 时，二级栏拖窄到 280（左列 336）
+ * 会被 .topbar-left 的 overflow:hidden 直接裁掉簇尾的「?」与亮暗钮；拖宽到 420 则簇停在
+ * 392、与 476 的边界脱节。中间只有空档在伸缩，没有会换行的行，所以跟随变量是安全的。 */
+.topbar-left-inner {
+  width: var(--app-nav-w, 392px);
+  height: 100%;
+  display: flex;
+  align-items: center;
+}
+/* 折叠态：左段只剩红绿灯，被裁掉的簇由 TitleBar 改渲染到标签条右端（.topbar-cluster--trailing）；
+ * 这里把裁掉的内层设 hidden，挡键盘焦点进不可见区。 */
+.topbar-left[data-collapsed='true'] .topbar-left-inner {
+  visibility: hidden;
+  transition: visibility 0s linear 220ms;
+}
+/* 抽屉态（远程 web <768）：左段 44 = 汉堡钮。 */
+.topbar-left[data-nav-mode='drawer'] .topbar-left-inner {
+  width: 44px;
+  justify-content: center;
+}
+.topbar-cluster {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.topbar-cluster--trailing {
+  flex-shrink: 0;
+  align-self: center;
+  padding: 0 10px 0 6px;
+  background: var(--tier-bar);
+  height: 100%;
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* ── page 域清单列外壳（InboxLayout / Matters / Contacts / Team / Reports / Chats / Search）
+ * 与 .nav-panel 同一套：外层宽读变量、overflow 裁切、折叠态 visibility 延翻；内层由页面
+ * 按该域记忆值写内联 px。 */
+.nav-second-col {
+  width: var(--app-second-w, 336px);
+  flex-shrink: 0;
+  position: relative;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+.nav-second-col[data-collapsed='true'] {
+  visibility: hidden;
+  transition: visibility 0s linear 220ms;
+}
+.nav-second-col-inner {
+  width: var(--app-second-w, 336px);
+  flex-shrink: 0;
+  display: flex;
+  min-height: 0;
+}
+
+/* ── 拖宽手柄：贴在左列右缘（--app-nav-w 那条线）的 7px 热区，hover / 拖拽时显 1px accent 线。 */
+.nav-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--app-nav-w, 392px) - 4px);
+  width: 7px;
+  cursor: col-resize;
+  z-index: 3;
+  touch-action: none;
+}
+.nav-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: transparent;
+  transition: background-color 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.nav-resize-handle:hover::after,
+.nav-resize-handle:focus-visible::after,
+:root[data-nav-dragging] .nav-resize-handle::after {
+  background: rgb(var(--c-accent));
+}
+
+/* ── peek 浮层（折叠态 hover / 聚焦导轨格 150ms 后浮出该域第二列；离开 300ms 关）。
+ * 脱流不改 --app-nav-w；材质 = .glass-pop（08-05 拍板浮层不透明）；宽由 NavPeek 按该域
+ * 记忆值写内联；z 40 与 batch-bar 同层、低于 popover 50。 */
+.nav-peek {
+  position: fixed;
+  left: 62px;
+  top: 52px;
+  bottom: 8px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateX(-4px);
+  transition:
+    opacity 120ms var(--ease-out-strong),
+    transform 120ms var(--ease-out-strong);
+}
+.nav-peek[data-open='true'] {
+  opacity: 1;
+  transform: none;
+}
+.nav-peek-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* 未访问过的 page 域：先骨架后到数据（30px 灰条 × 8）。 */
+.nav-peek-skeleton {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.nav-peek-skeleton > i {
+  display: block;
+  height: 30px;
+  border-radius: var(--r-ctl);
+  background: rgb(var(--ink-fg) / 0.06);
+}
+.nav-peek-skeleton > i:nth-child(odd) {
+  width: 82%;
+}
+.nav-peek-skeleton > i:nth-child(even) {
+  width: 64%;
+}
+
+/* ── 抽屉态（远程 web <768，build target 判据在 Sidebar）：左列 off-canvas，遮罩点击 / Esc 关。 */
+.app-nav[data-nav-mode='drawer'] {
+  position: fixed;
+  top: 44px;
+  bottom: 0;
+  left: 0;
+  z-index: 45;
+  width: min(var(--app-drawer-w, 392px), calc(100vw - 48px));
+  background: rgb(var(--ink-1));
+  box-shadow: var(--pop-shadow);
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition:
+    transform 220ms var(--ease-out-strong),
+    visibility 0s linear 220ms;
+}
+.app-nav[data-nav-mode='drawer'][data-drawer-open='true'] {
+  transform: none;
+  visibility: visible;
+  transition: transform 220ms var(--ease-out-strong);
+}
+.app-nav[data-nav-mode='drawer'] .nav-panel {
+  width: auto;
+  flex: 1;
+}
+.app-nav[data-nav-mode='drawer'] .nav-panel-inner {
+  width: 100% !important;
+}
+.nav-scrim {
+  position: fixed;
+  top: 44px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 44;
+  background: rgb(0 0 0 / 0.32);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms var(--ease-out-strong);
+}
+.nav-scrim[data-open='true'] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.tstrip {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  padding: 0 12px 0 10px;
+  /* 材质 = .glass-bar (TSX 同挂两类) —— solid / reduced-transparency 的既有
+   * 覆盖自动生效。滑动缓动是原型的 iOS sheet 曲线 (R2 拍板照抄, 与
+   * --ease-out-strong 不同——出手更缓, morph 面不「弹」)。 */
+  --tstrip-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --tstrip-dur: 440ms;
+}
+/* hairline 两段 — 在激活标签 (含两侧外凹圆角 ±12px) 范围内**断开**, 断口跟随
+ * 滑动面用同一条缓动。
+ * 🔴 不能改成整条线 + z-index 盖: 激活面是半透明的, 盖不住底下 0.065 的线,
+ * 两层叠出 ~0.13 反而比两边都亮 —— 正是 owner 报过的「还有条分割线」。 */
+.tstrip-hair {
+  position: absolute;
+  bottom: 0;
+  height: 1px;
+  background: var(--hairline);
+  z-index: 1;
+  transition:
+    left var(--tstrip-dur) var(--tstrip-ease),
+    width var(--tstrip-dur) var(--tstrip-ease);
+}
+/* 激活标签滑动面 — left/width 过渡 (🔴 不是 scaleX: scaleX 会把两侧外凹圆角
+ * 拉变形)。bottom:0 让底边正好压在 hairline 那一行上, 断口处面内颜色 = 内容面
+ * ⇒ 激活标签与内容区连成一片, 不溢出内容区。 */
+.tstrip-surface {
+  position: absolute;
+  bottom: 0;
+  height: 34px;
+  background: var(--tab-strip-surface);
+  border-radius: 11px 11px 0 0;
+  z-index: 2;
+  transition:
+    left var(--tstrip-dur) var(--tstrip-ease),
+    width var(--tstrip-dur) var(--tstrip-ease);
+}
+/* 两侧向外凹的圆角 (12px 略大于标签自身的 11px —— 凹角略大于凸角, 衔接更顺)。
+ * 圆心上移 0.5px 让伪元素底边整行落在实色侧, 与断开的 hairline 严丝合缝。 */
+.tstrip-surface::before,
+.tstrip-surface::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  width: 12px;
+  height: 12px;
+}
+.tstrip-surface::before {
+  left: -12px;
+  background: radial-gradient(
+    circle at 0 -0.5px,
+    transparent 11.4px,
+    var(--tab-strip-surface) 11.9px
+  );
+}
+.tstrip-surface::after {
+  right: -12px;
+  background: radial-gradient(
+    circle at 100% -0.5px,
+    transparent 11.4px,
+    var(--tab-strip-surface) 11.9px
+  );
+}
+
+/* 主标签 — 单例槽位 (168 定宽 / 永在最左 / 不可关), icon 与面包屑随承载切换。 */
+.ttab-main {
+  width: 168px;
+  height: 34px;
+  border-radius: 11px 11px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 3;
+  cursor: pointer;
+  color: rgb(var(--ink-fg-2));
+  transition:
+    color 240ms ease-out,
+    background-color 120ms ease-out;
+}
+.ttab-main:hover {
+  background: rgb(var(--ink-fg) / 0.04);
+}
+.ttab-main[aria-selected='true'],
+.ttab-main[aria-selected='true']:hover {
+  background: transparent; /* 激活底色由滑动面画 */
+  color: rgb(var(--ink-fg));
+}
+.ttab-main > svg,
+.ttab > svg {
+  flex-shrink: 0;
+}
+.tcrumb {
+  font-size: 13px;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+/* 第一段 (域名) 不截断; 第二段收缩出省略号。 */
+.tcrumb > :first-child {
+  flex-shrink: 0;
+}
+.tcrumb-sep {
+  color: rgb(var(--ink-fg-3) / 0.6);
+  flex-shrink: 0;
+}
+.tcrumb-2 {
+  color: rgb(var(--ink-fg-3));
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ttab-main[aria-selected='true'] .tcrumb-2 {
+  color: rgb(var(--ink-fg-2));
+}
+
+/* 主标签与对象标签之间的分隔 (1px 竖线 + 两侧 5px margin = 原型 SEP_W 11)。 */
+.tstrip-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--hairline-strong);
+  margin: 0 5px 14px;
+  flex-shrink: 0;
+  z-index: 3;
+}
+
+.tstrip-tabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  /* 极窄窗时标签压到 84 下限后横向裁切 (拍板: minWidth 保持 940, 不做滚动)。 */
+  overflow: hidden;
+}
+
+/* 「+」新标签页钮 (原型 .plus 28×28 圆角 8; ⌘T 的鼠标入口)。dogfood 轮4: 在
+ * .tstrip-tabs **内**、恒为最后一个子节点 —— Chrome 式跟在最后一个标签右侧,
+ * 关标签时随幽灵收缩一起左移。宽度 28 与 TabStrip 的 PLUS_W 手抄同一份数
+ * (tabW 公式手动扣掉它), 改任一侧必须同步另一侧。
+ * margin-bottom 8 ≈ 与 34px 底对齐标签的视觉中线齐平。 */
+.tstrip-plus {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--ink-fg-2));
+  flex-shrink: 0;
+  margin-bottom: 8px;
+  z-index: 3;
+  cursor: pointer;
+}
+.tstrip-plus:hover {
+  background: rgb(var(--ink-fg) / 0.05);
+  color: rgb(var(--ink-fg));
+}
+
+/* 对象标签 (邮件/事项)。宽度由 TabStrip.tsx 按容器实测计算 (clamp 84-190)。
+ * width 过渡走滑动面同一条 --tstrip-dur/--tstrip-ease (dogfood 轮4): 开/关标签引发的
+ * reflow (tabW 变化) 与幽灵收缩、入场长出全落同一条曲线, morph 面才能逐帧咬住标签
+ * 实际位置 (同曲线同时长的宽度过渡线性组合仍是同曲线)。 */
+.ttab {
+  height: 34px;
+  border-radius: 11px 11px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 6px 0 10px;
+  color: rgb(var(--ink-fg-2));
+  font-size: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+  min-width: 0;
+  position: relative;
+  z-index: 3;
+  transition:
+    color 240ms ease-out,
+    background-color 120ms ease-out,
+    width var(--tstrip-dur) var(--tstrip-ease);
+}
+/* 新开标签的入场: 从 0 宽长出 (Chrome 式滑入)。只写 from 帧 —— to = 元素自身的
+ * 内联宽度 (tabW 是实测算出来的, keyframe 里写不死)。 */
+@keyframes ttab-in {
+  from {
+    width: 0;
+    padding-left: 0;
+    padding-right: 0;
+    opacity: 0;
+  }
+}
+.ttab-enter {
+  animation: ttab-in var(--tstrip-dur) var(--tstrip-ease);
+  overflow: hidden;
+}
+/* 关闭的幽灵态 (TabStrip AnimatePresence-lite): 收缩到 0 宽 + 淡出, 到点由 JS 卸载。
+ * margin-right -2px 吃掉 flex gap —— 收缩到 0 时左右邻正好并拢, 卸载零跳变。 */
+.ttab-closing {
+  padding-left: 0;
+  padding-right: 0;
+  margin-right: -2px;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transition:
+    width var(--tstrip-dur) var(--tstrip-ease),
+    padding var(--tstrip-dur) var(--tstrip-ease),
+    margin var(--tstrip-dur) var(--tstrip-ease),
+    opacity var(--tstrip-dur) var(--tstrip-ease);
+}
+.ttab:hover {
+  background: rgb(var(--ink-fg) / 0.035);
+}
+.ttab[aria-selected='true'],
+.ttab[aria-selected='true']:hover {
+  background: transparent;
+  color: rgb(var(--ink-fg));
+}
+.ttab-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+/* 关闭钮 — 激活 / hover / 键盘焦点进入 (tab 本体聚焦后 Tab 一下可达) 时可见。 */
+.ttab-close {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--ink-fg-3));
+  flex-shrink: 0;
+}
+.ttab[aria-selected='true'] .ttab-close,
+.ttab:hover .ttab-close,
+.ttab:focus-within .ttab-close {
+  display: flex;
+}
+.ttab-close:hover {
+  background: rgb(var(--ink-fg) / 0.14);
+  color: rgb(var(--ink-fg));
+}
+/* 锁定点 (琥珀) — 正在写回复 / 抽屉里聊过 ⇒ 不参与自动淘汰 (prd「标签模型」)。 */
+.ttab-lock {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgb(var(--c-warn));
+  flex-shrink: 0;
+}
+/* 改动点 (accent) — 草稿有未保存修改 (dogfood 波3)。与锁定点同位互斥, dirty 优先
+ * (TabStrip 只画其一): dirty 必带 draft 快照 ⇒ 必 locked, 两点并列是噪音。 */
+.ttab-dirty {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgb(var(--c-accent));
+  flex-shrink: 0;
+}
+/* 拖拽排序中的标签 (P5, dnd-kit 抬起态)。位移 transform 由 dnd-kit 写内联, 时长与
+ * 曲线是 --tstrip-dur/--tstrip-ease 的同一份数 (TabStrip DRAG_TRANSITION) —— 被挤开
+ * 的标签与滑动面逐帧咬合。飞行中的标签自带一层底色 + lift 投影 (复用 reorder 基座
+ * 的档位): 激活标签的底色平时由滑动面画, 拖起后滑动面移去落位格, 不补这层就是一行
+ * 裸文字。选择器带 .tstrip 抬权重 —— 要压过后到的 [aria-selected]:hover 组合。 */
+.tstrip .ttab.ttab-dragging,
+.tstrip .ttab.ttab-dragging[aria-selected='true'] {
+  background: rgb(var(--ink-fg) / 0.07);
+  box-shadow: var(--reorder-shadow-lift);
+  z-index: 4;
+  cursor: grabbing;
+}
+
+/* 注：`.topbar-left` 不在这一组 —— 09-01 侧栏批起它的宽度动画来自 `:root` 的
+   `--app-nav-w` 变量过渡，关停点在 nav shell 段那条 reduced-motion 规则里（`:root`
+   打头的那组），本元素自己没有 transition 可关。 */
+@media (prefers-reduced-motion: reduce) {
+  .tstrip-hair,
+  .tstrip-surface,
+  .ttab-main,
+  .ttab,
+  .ttab-closing {
+    transition: none;
+  }
+  /* 开合动效的 JS 侧 (TabStrip 读 useReducedMotion) 在 reduce 下本就不产生幽灵 /
+   * 入场标记, 这里是 CSS 层的双保险。 */
+  .ttab-enter {
+    animation: none;
+  }
+}
+
+/* dogfood-2 — DotMatrix (agent 视图 working indicator) keyframes + @property + dot 动画规则。
+ * 复刻 assistant-ui demo dot-matrix；放 authored CSS 一次定义 (不依赖 React 19 style-hoisting)。
+ * 每点的 hi/lo 振幅 + animation duration/delay 由 DotMatrix 组件 inline style 注入; 这里只定
+ * keyframes / transition / iteration。@property 让 hi/lo 可过渡 → 状态切换逐点 cross-fade。 */
+@property --aui-dot-matrix-hi {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 1;
+}
+@property --aui-dot-matrix-lo {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 0.15;
+}
+@keyframes aui-dot-matrix-blink {
+  0%,
+  100% {
+    opacity: var(--aui-dot-matrix-hi, 1);
+  }
+  50% {
+    opacity: var(--aui-dot-matrix-lo, 0.15);
+  }
+}
+.aui-dot-matrix-dot {
+  transition-property: --aui-dot-matrix-hi, --aui-dot-matrix-lo, opacity;
+  transition-duration: 0.3s;
+  animation-name: aui-dot-matrix-blink;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .aui-dot-matrix-dot {
+    animation-name: none;
+  }
+}
+
+/* (老收起态数字角标 .nav-collapsed-badge 与 label cross-fade 随 240↔56 双宽态
+ * collapse contract 一并退役 — rail 角标见上方 .railbadge。) */
+
+/* Account dropdown popover — 主题 v2: 材质由组件同挂的 .glass-pop 提供,
+ * 旧的自带 bg + blur(24px) 是重复涂层 (双 blur), 删除。 */
+
+/* Reduced-motion: flatten chrome transitions. Layout identical.
+ * :root 那条是左列宽度变量过渡（nav shell 段）；peek / 抽屉 / 遮罩 / 开合钮一并压平。 */
+@media (prefers-reduced-motion: reduce) {
+  :root,
+  .nav-peek,
+  .nav-rail-toggle,
+  .nav-resize-handle::after,
+  .app-nav[data-nav-mode='drawer'],
+  .nav-scrim,
+  .railbtn {
+    transition: none;
+  }
+  .swatch {
+    transition: none;
+  }
+  .swatch:active {
+    transform: none;
+  }
+}
+

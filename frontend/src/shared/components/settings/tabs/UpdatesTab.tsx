@@ -238,7 +238,7 @@ function UpdaterSubsection(): React.ReactElement {
   )
 }
 
-export function IslandUpdatesTab(): React.ReactElement {
+export function UpdatesTab(): React.ReactElement {
   const { t } = useTranslation()
   return (
     <>

@@ -1,0 +1,706 @@
+/* ─── Slim scrollbar (macOS auto-hide 风) ───────────────────────────────
+ * 主题 v3 tweak (2026-07-12 owner 实机 review): 槽 10→8px + thumb 静止态
+ * 全透明 (视觉上无滚动条), hover 到滚动容器才浮现 4px thumb (8px 槽 −
+ * 2px×2 透明 border), thumb 自身 hover/拖拽再加深。轨道恒透明不占视觉。 */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: transparent;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+}
+.scrollbar-thin:hover::-webkit-scrollbar-thumb {
+  background: rgb(var(--ink-fg-3) / 0.35);
+  background-clip: padding-box;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover,
+.scrollbar-thin::-webkit-scrollbar-thumb:active {
+  background: rgb(var(--ink-fg-2) / 0.5);
+  background-clip: padding-box;
+}
+
+/* Hidden scrollbar (horizontal chip rows) — scrolls but shows no track/thumb. */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* ─── Native date input — 日历图标随主题变色 + 贴右 ──────────────────── */
+/* :root 默认暗色主题; 原生 <input type=date> 的 calendar-picker-indicator 跟随
+ * color-scheme 渲染, 缺省 light → 深色 glyph 在暗色背景上看不见。设 color-scheme
+ * 让 UA 暗色下渲白色图标 (浅色主题覆盖回 light)。margin-inline-start:auto 把图标
+ * 推到输入框最右 (吸收日期字段右侧空白, 修不贴右)。SyncTab 起始日期 + 日历事件表单共用。 */
+input[type='date'] {
+  color-scheme: dark;
+}
+:root[data-theme='light'] input[type='date'] {
+  color-scheme: light;
+}
+input[type='date']::-webkit-calendar-picker-indicator {
+  margin-inline-start: auto;
+  cursor: pointer;
+}
+
+/* ─── kbd shortcut hint chip ─────────────────────────────────────────── */
+kbd,
+.kbd {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgb(var(--ink-fg) / 0.04);
+  color: rgb(var(--ink-fg-1));
+  border: 1px solid rgb(var(--ink-border));
+  border-bottom-width: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* ─── Row + selected coral edge (EmailRow + Sidebar) ────────────────── */
+.row {
+  position: relative;
+}
+/* 主题 v2 — 选中左条升级为 .acc-bar 光条配方 (伪元素挂不了类, 配方内联;
+ * 顶端提亮渐变; 主题 v3/C3: 9px 辉光退役, 左条本体保留 — owner 红线)。
+ * 几何照 demo .it.on::before: 上下 inset 6px + 圆角 2px 的「胶囊光条」,
+ * 区别于 EmailRow 的通高直角条 (demo .erow.sel::before 即通高, 两者有意
+ * 不同)。 */
+.row-selected::before,
+[data-orientation='vertical'] .tabs-indicator::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  /* --sel-bar-w: 宽度 token 与 .email-row::before (通高直角条) 共用 */
+  width: var(--sel-bar-w);
+  border-radius: 2px;
+  background: linear-gradient(180deg, oklch(from var(--A) calc(l + 0.1) c h), var(--A));
+}
+/* Sidebar / 设置 rail 内光条往左悬挂到行卡片外 (demo .it.on::before
+ * left:-8px 同款): 条占 [-8,-5], 与 wash 圆角框之间留 5px 间距。设置 rail
+ * 滚动区 px-3 自带 ≥8px padding, 悬挂落在 padding 区不会被 overflow 裁。
+ * （方案 B 的 DomainPanel 行容器只有 px-1.5, 由后面的 `.nav-panel
+ * .row-selected::before` 覆盖成 -6px。）默认仍 left:0 —
+ * popover (SurfacePicker 等) 的选项行贴容器边 + overflow hidden,
+ * 悬挂会被裁掉。 */
+.app-nav .row-selected::before,
+[data-orientation='vertical'] .tabs-indicator::before {
+  left: -8px;
+}
+
+/* ─── Language pip (EN / JP — never used for CJK content) ───────────── */
+.lang-pip {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+  /* Sprint 4 a11y — pip pulls from --c-info so the lighter dark-mode
+   * variant + darker light-mode variant both clear AA over their
+   * /10 wash. Sprint 3 hard-coded #6FA8DC (light blue) which read OK
+   * on dark but failed on light (lavender on near-white). */
+  background: rgb(var(--c-info) / 0.16);
+  border: 1px solid rgb(var(--c-info) / 0.42);
+  color: rgb(var(--c-info));
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ─── <mark> search-snippet highlight — explicit AA both modes ──────── */
+/* Sprint 4 a11y carry-forward — fixed amber bg + near-black text in
+ * BOTH modes (mark stays its own surface independent of theme). White
+ * text on faint amber failed AA in light; black text on saturated amber
+ * passes ~13:1 both directions. */
+mark {
+  background: #fce28a;
+  color: #1a1d22;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+/* ─── Traffic-light placeholders (titlebar — real ones from macOS) ──── */
+.tl {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.tl-close {
+  background: #ff5f57;
+}
+.tl-min {
+  background: #febc2e;
+}
+.tl-max {
+  background: #28c840;
+}
+
+/* ─── HTML email body styling (mockup §<style>) ─────────────────────── */
+.mail-body {
+  color: rgb(var(--ink-fg-1));
+  font-size: 14px;
+  line-height: 1.7;
+}
+.mail-body h1,
+.mail-body h2,
+.mail-body h3 {
+  color: rgb(var(--ink-fg));
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 18px 0 8px;
+}
+.mail-body h1 {
+  font-size: 18px;
+}
+.mail-body h2 {
+  font-size: 16px;
+}
+.mail-body h3 {
+  font-size: 15px;
+}
+.mail-body p {
+  margin: 0 0 12px;
+}
+.mail-body strong {
+  color: rgb(var(--ink-fg));
+  font-weight: 600;
+}
+.mail-body em {
+  font-style: italic;
+}
+.mail-body code {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 12.5px;
+  background: rgb(232 155 74 / 0.1);
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: rgb(232 155 74);
+}
+.mail-body pre {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 12.5px;
+  background: rgb(var(--ink-0) / 0.5);
+  border: 1px solid rgb(var(--ink-border));
+  border-radius: 6px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  color: rgb(var(--ink-fg-1));
+  line-height: 1.6;
+  margin: 12px 0;
+}
+.mail-body pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+.mail-body a {
+  color: rgb(var(--c-accent));
+  text-decoration: underline;
+  text-decoration-color: rgb(var(--c-accent) / 0.4);
+  text-underline-offset: 3px;
+}
+.mail-body a:hover {
+  text-decoration-color: rgb(var(--c-accent));
+}
+.mail-body blockquote {
+  border-left: 2px solid rgb(var(--ink-border));
+  padding-left: 14px;
+  color: rgb(var(--ink-fg-2));
+  margin: 14px 0;
+}
+.mail-body ul,
+.mail-body ol {
+  padding-left: 22px;
+  margin: 0 0 12px;
+}
+.mail-body li {
+  margin-bottom: 4px;
+}
+.mail-body img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+.mail-body table {
+  border-collapse: collapse;
+  max-width: 100%;
+}
+.mail-body table td,
+.mail-body table th {
+  border: 1px solid rgb(var(--ink-border));
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+/* ─── Custom checkbox for batch select (cb / cb-on) ─────────────────── */
+.cb {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1.5px solid rgb(var(--ink-fg-3));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+}
+/* hover = 预选提示 (浅 accent tint + 高亮边框), 与 .cb-on 实心选中态明确区分 —
+ * hover 仅预览, 点击行才真正 toggle 选中 (避免用户误以为 hover 已勾选/取消)。 */
+.cb:hover {
+  border-color: rgb(var(--c-accent) / 0.6);
+  background: rgb(var(--c-accent) / 0.12);
+}
+.cb:active {
+  transform: scale(0.95);
+}
+.cb-on {
+  border-color: rgb(var(--c-accent));
+  background: rgb(var(--c-accent));
+}
+.cb-on::after {
+  content: '';
+  width: 7px;
+  height: 4px;
+  border-left: 1.5px solid white;
+  border-bottom: 1.5px solid white;
+  transform: rotate(-45deg) translate(1px, -1px);
+}
+
+/* ─── AI tab — coral underline indicator ────────────────────────────── */
+.tab-active {
+  color: rgb(var(--c-accent));
+  position: relative;
+}
+.tab-active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: rgb(var(--c-accent));
+  border-radius: 1px;
+}
+
+/* AI panel subtle gradient bg */
+/* Pulse dot for "新邮件" pill etc. */
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.dot-pulse {
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+/* Sprint 6 §2.2 — accent swatch preview pills for SettingsPage.
+ *
+ * The currently-active accent drives --c-accent at :root via data-accent
+ * (see top of this file); these swatch classes always render their own
+ * accent regardless of active state so the picker UI shows all 9 options
+ * side-by-side. rgb() values mirror the data-accent={x} --c-accent stop
+ * upstream (channels-only triplets above) into a 135deg gradient with a
+ * 10% darken stop for dimension.
+ *
+ * Defined in CSS so the .tsx file stays compliant with the
+ * `mailagent/no-raw-hex` lint rule (DESIGN.md §14 #1).
+ */
+.swatch-coral {
+  background: linear-gradient(135deg, rgb(248, 138, 125), rgb(230, 123, 110));
+}
+.swatch-cobalt {
+  background: linear-gradient(135deg, rgb(126, 173, 255), rgb(111, 157, 242));
+}
+.swatch-teal {
+  background: linear-gradient(135deg, rgb(55, 199, 174), rgb(25, 183, 158));
+}
+.swatch-rose {
+  background: linear-gradient(135deg, rgb(241, 136, 175), rgb(224, 120, 160));
+}
+.swatch-slate {
+  background: linear-gradient(135deg, rgb(158, 176, 196), rgb(142, 161, 180));
+}
+.swatch-olive {
+  background: linear-gradient(135deg, rgb(163, 185, 108), rgb(147, 169, 92));
+}
+.swatch-amber {
+  background: linear-gradient(135deg, rgb(223, 160, 60), rgb(207, 145, 40));
+}
+.swatch-emerald {
+  background: linear-gradient(135deg, rgb(105, 198, 127), rgb(88, 182, 112));
+}
+.swatch-violet {
+  background: linear-gradient(135deg, rgb(187, 153, 246), rgb(172, 138, 229));
+}
+
+/* ─── 主题 v2 —「一块玻璃」材质结构 (theme-v2.css §材质结构) ──────────
+ * 自底向上: ① OS vibrancy/acrylic (整窗唯一一层重模糊, html 透明) →
+ * ② body::before 玻璃 tint + 氛围光 (CSS 只画这一层, 无 backdrop-filter)
+ * → ③ 面板 .glass-* — 一律【无 backdrop-filter】只叠 --tier-* overlay
+ * (整窗深浅均匀) → ④ 内容。(主题 v3: .grain 噪点层已退役, C1。)
+ * 🔴 2026-08-05: 真浮层 .glass-pop 曾是「唯一保留自带 blur 的类」(20px), 现已
+ * 改**不透明实色** (owner 拍板, 见下方 .glass-pop 与 DESIGN.md §18.1 C10)。同日
+ * 复核发现 .filter-pop 曾手抄同一份配方漏在外面, 已改为消费 .glass-pop 收敛；
+ * 仍自带独立 blur 配方的只剩 #batch-bar.floating 一处（面板/横幅，非真浮层）。 */
+html,
+body {
+  background: transparent;
+  overscroll-behavior: none;
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: color-mix(in srgb, var(--glass-base) calc(var(--glass-alpha) * 100%), transparent);
+  background-image:
+    radial-gradient(120% 90% at 16% -12%, rgb(var(--c-accent) / var(--ambient)), transparent 58%),
+    linear-gradient(180deg, rgb(255 255 255 / 0.045), transparent 16%);
+  transition: background-color 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* 无 vibrancy 回退 (Linux / Win10 / web): 窗内自绘单光源壁纸, 零 blur */
+:root[data-vib='off'] body::before {
+  background-color: transparent;
+  background-image: var(--wp-fallback);
+}
+/* Desktop Computer Use 全屏状态浮窗: 完全透明, 不叠玻璃 tint 或实底。 */
+:root[data-cu-overlay='1'],
+:root[data-cu-overlay='1'] body {
+  background: transparent !important;
+}
+:root[data-cu-overlay='1'] body::before {
+  display: none !important;
+}
+.glass {
+  background-color: var(--tier-side);
+}
+.glass-2 {
+  background-color: var(--tier-list);
+}
+.glass-3 {
+  background-color: var(--tier-detail);
+}
+.glass-bar {
+  background-color: var(--tier-bar);
+}
+.glass-panel {
+  background-color: var(--tier-panel);
+}
+/* 真浮层 (popover / menu / palette / drawer)。
+ * 主题 v3 (C8/§3-13): 浮层圆角默认 --r-pop, 走 :where() 零特异性 —
+ * 消费点显式 rounded-* 仍生效 (tooltip 等小浮层不被压成 14px 药丸),
+ * 各消费点对齐四档刻度由批 4 逐个收口。
+ *
+ * 🔴 2026-08-05 (owner 拍板, DESIGN.md §18.1 C10): 浮层材质改**不透明** —
+ * 原配方 (--glass-base 86% + blur(20px)) 会透出底层正文, 弹层里的菜单项与
+ * 底下的邮件/对话文字叠在一起读。改 rgb(--ink-2) 实色 = 与体系里早就不透明
+ * 的 MentionPopover / ModelDetailCard (裸 bg-ink-2) 收敛成一种形态, 也与下方
+ * solid 档 / reduced-transparency 两处覆盖同值 (那两条因此成为同值护栏, 有意
+ * 保留: 它们编码的是「这两档必须不透明」这条要求, 而非巧合)。
+ * 副作用: 同屏 CSS blur 预算释放 (红线「≤2 且仅真浮层」现只剩
+ * #batch-bar.floating 一处自带 blur 的独立配方——.filter-pop 曾是同类漏网,
+ * 已改消费本类, 见下方「Filter popover」)。 */
+.glass-pop {
+  background-color: rgb(var(--ink-2));
+  border: 1px solid var(--hairline);
+  box-shadow: var(--pop-shadow);
+}
+:where(.glass-pop) {
+  border-radius: var(--r-pop);
+}
+/* 回退路径分层略加深保可读 (壁纸自己可控, 比真实桌面温和) */
+:root[data-vib='off'] .glass-3 {
+  background-color: color-mix(in srgb, var(--tier-detail), rgb(var(--ink-0) / 0.18));
+}
+:root[data-vib='off'][data-theme='light'] .glass-3 {
+  background-color: rgb(255 255 255 / 0.66);
+}
+/* 标签滑动面在回退路径同步重算 (上两条覆盖改了内容面 detail 的实际值, 「滑动面
+ * 叠在 bar 上 = 内容面」的等式要重解, 推导见 :root 的 --tab-strip-surface):
+ * 暗: 目标 = color-mix(白/0.065, ink-0/0.18) ≈ rgb(78 79 82 / 0.1225), 解
+ *     「S over 白/0.02 = 目标」 ⇒ S ≈ rgb(48 49 52 / 0.105)。
+ * 亮: (0.66-0.38)/(1-0.38) = 0.452。 */
+:root[data-vib='off'] {
+  --tab-strip-surface: rgb(48 49 52 / 0.105);
+}
+:root[data-vib='off'][data-theme='light'] {
+  --tab-strip-surface: rgb(255 255 255 / 0.452);
+}
+
+/* 主题 v3 (C1/C2): .grain 静态噪点层与 .specular 标题栏镜面高光已退役
+ * (静态装饰降噪, README §1 决策总表)。 */
+
+/* 切档/换色过渡 — 只过渡颜色, 永不过渡 filter (红线 §4) */
+.glass,
+.glass-2,
+.glass-3,
+.glass-bar,
+.glass-panel {
+  transition: background-color 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ─── 主题 v2 — accent 材质化表达 (theme-v2.css §accent 材质化) ──────
+ * accent 预算规则不变 (每主界面 ≤4 处)。全部相对色法从 --c-accent 派生,
+ * 换色自动跟。主题 v3 (C3): 静态装饰辉光全线退役 — 这些配方类一律无 glow,
+ * 不得自行给新组件加 glow (交互反馈辉光如 composer BorderGlow 不在此列)。 */
+
+/* 主 CTA ("起草回复") — 纵向渐变 + 内顶白高光 (主题 v3/C7: 外辉光退役,
+ * 渐变与 inset 高光保留), 白字全 6 色 AA (≥5.6)。.btn-cta 是既有挂接点
+ * (EmailToolbar), .acc-cta 同配方备用。
+ * hover 用 filter 是「即时态」非过渡 — 红线: 永不 transition filter。 */
+.btn-cta,
+.acc-cta {
+  background: linear-gradient(180deg, var(--cta-top), var(--cta-bot));
+  color: rgb(var(--c-cta-fg));
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.22),
+    0 1px 3px rgb(0 0 0 / 0.35);
+  /* 红线: 永不 transition filter — 只把 transform 纳入过渡, brightness hover
+     维持「即时态」不进 transition。 */
+  transition: transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.btn-cta:hover:not(:disabled),
+.acc-cta:hover {
+  filter: brightness(1.08);
+}
+.btn-cta:active:not(:disabled),
+.acc-cta:active {
+  transform: scale(0.98);
+}
+
+/* 选中行 / 选中邮箱 — 向右衰减的 accent wash (左光条配方见 .acc-bar;
+ * EmailRow / .row-selected 的左条是伪元素, 配方直接写进对应 rule)。
+ * wash 铺满整个元素 — 圆角跟随元素自身 rounded-*; 光条与 wash 的间距由
+ * 光条往左悬挂实现 (.app-nav 内 left:-8px, 见 .row-selected::before),
+ * 不要反过来内缩 wash (会把左侧圆角切成 hard edge)。 */
+/* 设置 rail 的 Radix Tabs (vertical) 选中行与主菜单同语言 (round 8) —
+ * tabs.tsx 的 layoutId indicator 挂裸 `.tabs-indicator` marker，由下方
+ * orientation authored 配方统一绘制 wash + 左光条，避免 active 态与
+ * 滑动层双影。
+ * 主题 v3/C5 — wash 收编到 --sel-wash token
+ * (与 EmailRow/.email-row.is-selected 同一配方, 跨视图选中签名一致;
+ * 亮/暗档由 token 自身按 data-theme 切, 无需单独 light 覆盖)。 */
+.acc-select,
+[data-orientation='vertical'] .tabs-indicator {
+  background: var(--sel-wash);
+}
+[data-orientation='vertical'] [role='tab'] {
+  position: relative;
+}
+.acc-bar {
+  background: linear-gradient(180deg, oklch(from var(--A) calc(l + 0.1) c h), var(--A));
+}
+
+/* 激活 tab 下划线 — 同样的光条语言 (当前无下划线式 tab 挂接点, 配方先就位)。 */
+.acc-underline {
+  background: var(--A);
+}
+[data-orientation='horizontal'] .tabs-indicator {
+  background: var(--A);
+}
+
+/* 计数 pill / 轻 chip (Sidebar 未读计数等) */
+.acc-pill {
+  color: rgb(var(--ink-fg));
+  background: rgb(var(--c-accent) / 0.16);
+  border: 1px solid rgb(var(--c-accent) / 0.32);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07);
+}
+:root[data-theme='light'] .acc-pill {
+  color: rgb(var(--c-accent-dim));
+}
+
+/* 亮色护栏 — accent 文字落在 accent wash 上的 chip / badge 组合
+ * (text-coral + bg-coral/10~15, 散布各 tab/toolbar ~20 处):
+ * v2 亮色 accent (oklch .50) 比 v1 浅, 该组合跌破 WCAG AA。demo 的手法
+ * (app.css .fil.on) = 亮色下文字转 -hi (深一档)。Tailwind utility 无法按
+ * 上下文分流, 用属性子串选择器一条规则覆盖全部现有/未来组合点
+ * (含仅 hover:bg-coral/* 的按钮 — 文字加深无害, AA 只升不降)。 */
+:root[data-theme='light'] [class*='bg-coral/'][class*='text-coral'] {
+  color: rgb(var(--c-accent-hi));
+}
+
+/* 玻璃 hover 止血 (round 5, round 6 扩两主题) — v1 的 hover:bg-ink-3/4
+ * 是不透明实色 (暗=深灰补丁 / 亮=ink-3 纯白「漂白补丁」), 在透壁纸玻璃上
+ * 都突兀。属性子串规则把 93 处消费点零 diff 收编成 ink-fg 半透 wash —
+ * 它随主题翻转: 暗色 ink-fg 近白=轻提亮, 亮色 ink-fg 近黑=轻加深。
+ * solid 档维持 v1 实底 hover 语言, 不收编。 */
+:root:not([data-surface='solid']) [class*='hover:bg-ink-3']:hover {
+  background-color: rgb(var(--ink-fg) / 0.07);
+}
+:root:not([data-surface='solid']) [class*='hover:bg-ink-4']:hover {
+  background-color: rgb(var(--ink-fg) / 0.1);
+}
+
+/* solid 档 CTA 更安静 (实色 = 安静): 无投影 + 内高光减淡; 渐变与 wash
+ * 保留。(主题 v3: 辉光已全局退役, 此特判只剩投影/内高光差异 — 保留以维持
+ * solid 档字节级现状。) */
+:root[data-surface='solid'] .btn-cta,
+:root[data-surface='solid'] .acc-cta {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.18);
+}
+/* Honour accessibility opt-outs — 等价 solid: 不透明 ink 梯度, 关掉一切
+ * 玻璃装饰 (含基底 tint)。Layout 与对比度不变。 */
+@media (prefers-reduced-transparency: reduce) {
+  body::before {
+    background-color: rgb(var(--ink-0));
+    background-image: none;
+  }
+  /* 标签滑动面: 此路径 .glass-3 = 不透明 ink-3, 滑动面直接同色不透明即与内容面
+   * 连成一片 (不透明盖住 bar, 无需 alpha 推导)。 */
+  :root {
+    --tab-strip-surface: rgb(var(--ink-3));
+  }
+  .glass {
+    background-color: rgb(var(--ink-1));
+  }
+  .glass-2 {
+    background-color: rgb(var(--ink-2));
+  }
+  .glass-3 {
+    background-color: rgb(var(--ink-3));
+  }
+  .glass-bar {
+    background-color: rgb(var(--ink-1));
+  }
+  .glass-panel {
+    background-color: rgb(var(--ink-2));
+  }
+  .glass-pop {
+    background-color: rgb(var(--ink-2));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* ─── Surface (材质) 切换 — 主题 v2 两档 (液态档已删) ─────────────────
+ * 设置 → 通用 → 外观写 :root[data-surface='solid'] (frosted 默认不写
+ * attribute, base .glass-* 自然生效)。solid = 不透明 ink 梯度 +
+ * 零 blur (实色 = 安静), 也是 reduced-transparency 的用户主动等价物。
+ * 基底 tint 不画, 由不透明 ink-0 兜底。 */
+:root[data-surface='solid'] body::before {
+  background-color: rgb(var(--ink-0));
+  background-image: none;
+}
+:root[data-surface='solid'] .glass {
+  background-color: rgb(var(--ink-1));
+}
+:root[data-surface='solid'] .glass-2 {
+  background-color: rgb(var(--ink-2));
+}
+:root[data-surface='solid'] .glass-3 {
+  background-color: rgb(var(--ink-3));
+}
+:root[data-surface='solid'] .glass-bar {
+  background-color: rgb(var(--ink-1));
+}
+:root[data-surface='solid'] .glass-panel {
+  background-color: rgb(var(--ink-2));
+}
+:root[data-surface='solid'] .glass-pop {
+  background-color: rgb(var(--ink-2));
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* 标签滑动面: solid 档 .glass-3 = 不透明 ink-3, 同 reduced-transparency 的
+ * 覆盖 —— 不透明同色即连成一片。 */
+:root[data-surface='solid'] {
+  --tab-strip-surface: rgb(var(--ink-3));
+}
+
+/* ─── Surface picker mini preview swatch (主题 v2 两档) ─────────────
+ * 14×14 圆角小块, 每个 variant 视觉化对应材质 (顶栏那枚 picker 08-27 dogfood
+ * 修正批已删, 现存消费方 = popmenu-showcase). 装饰性小块不占 backdrop-filter 预算 (红线:
+ * 同屏 CSS blur ≤2 仅真浮层), frosted 用半透渐变示意即可. */
+.surface-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  border: 1px solid rgb(var(--ink-border-soft));
+  background: linear-gradient(135deg, rgb(126 173 255 / 0.6), rgb(248 138 125 / 0.6));
+}
+.surface-swatch-frosted {
+  background-color: rgb(var(--ink-2) / 0.5);
+  background-image: linear-gradient(135deg, rgb(126 173 255 / 0.6), rgb(248 138 125 / 0.6));
+}
+.surface-swatch-solid {
+  background: rgb(var(--ink-3));
+  background-image: linear-gradient(180deg, rgb(var(--ink-2)), rgb(var(--ink-4)));
+}
+
+/* ─── Sprint 11 V1.4 — 顶栏浮层几何 (原 Theme/Accent picker popover) ──
+ * Ported verbatim from frontend/ref/mockup-inbox.html lines 504-540. 三枚
+ * picker 已随 08-27 dogfood 修正批退役, 现存消费方 = NotificationBellBadge
+ * (+ popmenu-showcase 的 .swatch 网格)。Lives in authored CSS (not Tailwind
+ * utilities) so Tailwind purge cannot touch the class names. */
+.theme-popover {
+  /* 主题 v2 — 材质 (bg/blur/border/shadow) 移交 .glass-pop (消费方组件同时挂
+   * 两类), 这里只留几何。 */
+  position: fixed;
+  /* 顶栏高 44 + 8 间隙 (08-27 标签工作区: 顶栏 36→44 时从 44 跟到 52)。 */
+  top: 52px;
+  right: 12px;
+  width: 264px;
+  /* 主题 v3 C8/批 4: theme/surface/accent picker = 内容浮层档 12px → --r-pop(14) */
+  border-radius: var(--r-pop);
+  z-index: 60;
+  overflow: hidden;
+}
+.swatch {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  border: 0;
+  cursor: pointer;
+  position: relative;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.25),
+    0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.swatch:hover {
+  transform: scale(1.06);
+}
+.swatch:active {
+  transform: scale(0.97);
+}
+.swatch[aria-checked='true'] {
+  box-shadow:
+    0 0 0 2px rgb(var(--ink-2)),
+    0 0 0 4px rgb(var(--c-accent));
+}
+.swatch[aria-checked='true']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='20 6 9 17 4 12'/></svg>")
+    center / 14px 14px no-repeat;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4));
+}
+

@@ -30,8 +30,9 @@ import {
   SECOND_W_MIN,
   useNavShell
 } from '../../src/shared/state/nav-shell'
+import { readRendererCss } from '../helpers/readRendererCss'
 
-const css = readFileSync(resolve(process.cwd(), 'src/electron/renderer/index.css'), 'utf8')
+const css = readRendererCss()
 
 function mustMatch(re: RegExp, what: string): RegExpExecArray {
   const m = re.exec(css)

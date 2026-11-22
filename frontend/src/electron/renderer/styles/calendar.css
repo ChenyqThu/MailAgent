@@ -1,0 +1,1935 @@
+/* ═══ Calendar — mockup-calendar.html 2026-05-23 复刻 ═══════════════════
+ * Mockup §calendar 的所有 utility class. React 组件改写 .evt / .chip /
+ * .wk-body / .m-cell ... 语义 class, 比堆 50 行 Tailwind 简洁.
+ * 命名沿用 mockup; calendar 模块独享, 不跟其他模块冲突.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Week / Day view: timeline ──────────────────────────────────── */
+.cal-week {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  /* F2: 必须与 .scrollbar-thin 槽宽 (:570, v3 起 8px) 一致 — 表头补偿与
+   * wk-body 的 scrollbar-gutter 预留同源, 否则表头列与滚动区列基准漂移. */
+  --cal-scrollbar-w: 8px;
+}
+/* padding-right 补偿 wk-body 的 .scrollbar-thin 槽宽 —
+ * 配合下方 .wk-body { scrollbar-gutter: stable } 后, wk-body 内的 wk-grid
+ * 与 wk-headrow/wk-alldayrow 的内部 grid 宽度严格相等, 7 列不再累积漂移. */
+.wk-headrow,
+.wk-alldayrow { display: grid; flex-shrink: 0; padding-right: var(--cal-scrollbar-w); box-sizing: border-box; }
+
+.wk-corner {
+  border-bottom: 1px solid rgb(var(--ink-border));
+  border-right: 1px solid rgb(var(--ink-border-soft));
+}
+.wk-dayhead {
+  border-bottom: 1px solid rgb(var(--ink-border));
+  border-right: 1px solid rgb(var(--ink-border-soft));
+  padding: 7px 10px 6px;
+  text-align: left;
+}
+.wk-dayhead:last-child { border-right: 0; }
+.wk-dow {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgb(var(--ink-fg-2));
+}
+.wk-dn {
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.1;
+  margin-top: 2px;
+  letter-spacing: -0.01em;
+  color: rgb(var(--ink-fg));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+}
+.wk-dayhead.is-today .wk-dn {
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
+  /* today 高亮落 chip 档 6px (#1: 同一 today 语义→同一形状; 月视图 P3 改右下角
+   * .m-daynum 圆点后, 此处保留 week 头自己的 pill 形态)。 */
+  border-radius: 6px;
+}
+
+/* all-day strip */
+.allday-gutter {
+  border-right: 1px solid rgb(var(--ink-border-soft));
+  border-bottom: 1px solid rgb(var(--ink-border));
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 8px;
+}
+.allday-gutter > span {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10px;
+  color: rgb(var(--ink-fg-3));
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+/* P5 — 置顶条区 (日/周): 全天/跨天条目的 .m-band 色带在这里绝对定位横跨
+ * 若干列 (lane 堆叠, 高度由行内 style 按 laneCount 写)。 */
+.wk-bandarea {
+  position: relative;
+  border-bottom: 1px solid rgb(var(--ink-border));
+  min-width: 0;
+}
+
+/* timeline body */
+/* scrollbar-gutter: stable — 即使无 events / 数据未撑满 viewport, 也预留 10px
+ * scrollbar gutter, 保证 wk-grid 内部宽度永远 = container - 10, 跟
+ * wk-headrow/wk-alldayrow (padding-right: 10px) 严格对齐, 7 列对齐不漂移. */
+.wk-body { flex: 1; min-height: 0; position: relative; overflow-y: auto; scrollbar-gutter: stable; }
+.wk-grid { display: grid; position: relative; }
+.hour-gutter { border-right: 1px solid rgb(var(--ink-border-soft)); }
+.hour-label { height: 48px; position: relative; }
+.hour-label > span {
+  position: absolute;
+  top: -7px;
+  right: 8px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10.5px;
+  color: rgb(var(--ink-fg-3));
+  font-variant-numeric: tabular-nums;
+}
+.day-col {
+  border-right: 1px solid rgb(var(--ink-border-soft));
+  position: relative;
+}
+.day-col:last-child { border-right: 0; }
+.day-col.is-today { background: rgb(var(--c-accent) / 0.045); }
+.hour-cell {
+  height: 48px;
+  border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.6);
+}
+
+/* F23 — Week/Day 结构化加载骨架 (TimelineSkeleton.tsx) 的 ghost 事件块:
+ * 形状对齐 .evt (列内绝对定位), 无内容, pulse 走 tailwind (同 MonthView
+ * 网格骨架惯例). */
+.cal-skel-evt {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  border-radius: 6px;
+  background: rgb(var(--ink-3) / 0.8);
+}
+
+/* event block (timeline)
+ * P5 三源语言 — 着色从 --c-accent 换 --src (wash 底, 月视图同族):
+ * timeline 块只承载 mail 源 (data-src mail/hot), matter/agent 走 .evt-mark。
+ * F24 — 边框造型对齐 .m-evt: 去掉 border + border-left 实色左缘, 圆角与底色
+ * wash 量级同月视图 (owner 三轮反馈的根因是这层从未被列进验收范围, 见 r9)。 */
+.evt {
+  --src: var(--cal-src-mail);
+  position: absolute;
+  border-radius: 5px;
+  padding: 4px 7px;
+  overflow: hidden;
+  cursor: pointer;
+  background: rgb(var(--src) / 0.15);
+  border: 0;
+  /* F8 — 散装 0.12s/0.08s 收编 fast(120ms) + standard 曲线 */
+  transition:
+    background 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 2;
+  text-align: left;
+}
+.evt[data-src='hot'] { --src: var(--cal-src-hot); }
+.evt:hover { background: rgb(var(--src) / 0.22); z-index: 5; }
+.evt:active { transform: scale(0.98); }
+.evt .e-time {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10.5px;
+  color: rgb(var(--src));
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+}
+.evt .e-title {
+  font-size: 12.5px;
+  color: rgb(var(--ink-fg));
+  font-weight: 500;
+  line-height: 1.25;
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.evt .e-loc {
+  font-size: 11px;
+  color: rgb(var(--ink-fg-2));
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.evt.is-selected {
+  background: rgb(var(--src) / 0.26);
+  box-shadow: 0 0 0 1.5px rgb(var(--c-accent) / 0.5);
+  z-index: 6;
+}
+/* F3 (阶段2·2.6) — 状态形态化: 斜纹=暂定 / 内环=待回复 / 删除线+中性灰=拒绝
+ * 与取消。这些规则后置于 :hover/.is-selected → 状态底纹压过两者的 background,
+ * 形态不被洗掉; 选中可辨恒由 .is-selected 的 accent ring (box-shadow) 承担,
+ * hover 反馈由各状态的 :hover 变体补回。暂定/待回复取 --src (源色形态化),
+ * 拒绝/取消维持中性 --c-norm / --c-low。
+ * F24 — 待回复从「真实 border + 透明底」换成 inset 环 + wash 底（.m-band /
+ * .ag-row 同款手法，index.css:3476-3479 / :3885-3890 参照）；透明底正是 owner
+ * 看到「白底粗框」的来源，wash 底不能丢。暂定斜纹透明度量级对齐 .m-band。 */
+.evt[data-resp='TENTATIVE'] {
+  background: repeating-linear-gradient(
+    135deg,
+    rgb(var(--src) / 0.4) 0 3px,
+    rgb(var(--src) / 0.12) 3px 7px
+  );
+}
+.evt[data-resp='NEEDS-ACTION'] {
+  background: rgb(var(--src) / 0.15);
+  box-shadow: inset 0 0 0 1px rgb(var(--src));
+}
+.evt[data-resp='NEEDS-ACTION']:hover { background: rgb(var(--src) / 0.22); }
+/* NEEDS-ACTION 与选中态都要用 box-shadow（前者 inset 环，后者 accent 环），
+ * 同特异性时后声明的会整体覆盖对方 —— 叠满两个 shadow 保住选中可辨。 */
+.evt.is-selected[data-resp='NEEDS-ACTION'] {
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--src)),
+    0 0 0 1.5px rgb(var(--c-accent) / 0.5);
+}
+.evt[data-resp='DECLINED'] {
+  background: rgb(var(--c-norm) / 0.1);
+}
+.evt[data-resp='DECLINED']:hover { background: rgb(var(--c-norm) / 0.18); }
+.evt[data-resp='DECLINED'] .e-time { color: rgb(var(--c-norm)); }
+.evt[data-resp='DECLINED'] .e-title {
+  text-decoration: line-through;
+  color: rgb(var(--c-norm));
+}
+.evt[data-status='CANCELLED'] {
+  background: rgb(var(--c-low) / 0.06);
+}
+.evt[data-status='CANCELLED']:hover { background: rgb(var(--c-low) / 0.12); }
+.evt[data-status='CANCELLED'] .e-time { color: rgb(var(--c-low)); }
+.evt[data-status='CANCELLED'] .e-title {
+  text-decoration: line-through;
+  color: rgb(var(--c-low));
+}
+.evt.is-past { opacity: 0.55; }
+.evt.is-past.is-selected { opacity: 1; }
+/* 阶段2·2.5 — timeline 块 hover 浮出的 Join 小钮 (右上角). 隐藏态 pointer-events
+ * none 不挡「点块开抽屉」; 键盘 tab 到时同样浮出 (focus-visible). */
+.evt-join {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.evt:hover .evt-join,
+.evt-join:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.teams-i { color: rgb(var(--ink-fg-2)); flex-shrink: 0; }
+
+/* now line + bubble (今天列内, 跟时间线漂浮) */
+.now-line {
+  position: absolute;
+  left: 56px;
+  right: 0;
+  height: 0;
+  border-top: 1.5px solid rgb(var(--c-accent));
+  z-index: 8;
+  pointer-events: none;
+}
+.now-line::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgb(var(--c-accent));
+}
+.now-bubble {
+  position: absolute;
+  left: 4px;
+  transform: translateY(-50%);
+  z-index: 9;
+  pointer-events: none;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  color: rgb(var(--c-accent-fg));
+  background: rgb(var(--c-accent));
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Month view ─────────────────────────────────────────────────── */
+.cal-month {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
+}
+.m-dow {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  border-bottom: 1px solid rgb(var(--ink-border));
+}
+.m-dow > div {
+  padding: 6px 10px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgb(var(--ink-fg-2));
+  border-right: 1px solid rgb(var(--ink-border-soft));
+}
+.m-dow > div:last-child { border-right: 0; }
+/* task 08-27 P3 — 每周一行 (r2 calmon): 跨天色带在行内绝对定位横跨若干列,
+ * 一整块 42 格 grid 做不到干净的跨列。日期数字挪到格子右下角。 */
+.m-weeks {
+  display: grid;
+  grid-auto-rows: 1fr;
+  height: 100%;
+  min-height: 0;
+}
+.m-week {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  border-bottom: 1px solid rgb(var(--ink-border-soft));
+  min-height: 0;
+}
+.m-week:last-child { border-bottom: 0; }
+.m-cell {
+  border-right: 1px solid rgb(var(--ink-border-soft));
+  position: relative;
+  /* padding-top 由行内 style 写 (4 + 该周色带条数 × 20); 底部 20 给右下角
+   * 日期数字让位 (r2)。 */
+  padding: 4px 4px 20px;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+/* 色带与格子同为 .m-week 子元素, nth-child 会数进色带 — 行尾判据用 last-child。 */
+.m-cell:last-child { border-right: 0; }
+.m-cell.is-other { background: rgb(var(--ink-2) / 0.5); }
+.m-cell.is-other .m-daynum { color: rgb(var(--ink-fg-3)); }
+.m-cell.is-today { background: rgb(var(--c-accent) / 0.05); }
+.m-daynum {
+  position: absolute;
+  right: 7px;
+  bottom: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgb(var(--ink-fg-1));
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.m-cell.is-today .m-daynum {
+  width: 19px;
+  height: 19px;
+  right: 5px;
+  bottom: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
+}
+
+/* 单日事件胶囊 — 淡 wash + 左圆点取源色 + 标题 + 灰时间同行 (r2)。
+ * --src 随 data-src 切换, 三源 + hot 共用一套规则。 */
+.m-evt {
+  --src: var(--cal-src-mail);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 19px;
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 5px;
+  border: 0;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  cursor: pointer;
+  background: rgb(var(--src) / 0.15);
+  transition: background 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+.m-evt[data-src='matter'] { --src: var(--cal-src-matter); }
+.m-evt[data-src='agent'] { --src: var(--cal-src-agent); }
+.m-evt[data-src='hot'] {
+  --src: var(--cal-src-hot);
+  background: rgb(var(--src) / 0.16);
+}
+.m-evt:hover { background: rgb(var(--src) / 0.24); }
+.m-evt.is-selected {
+  background: var(--sel-wash);
+  box-shadow: 0 0 0 1.5px rgb(var(--c-accent) / 0.5);
+}
+.m-evt-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: rgb(var(--src));
+}
+.m-evt-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: rgb(var(--ink-fg));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-evt-time {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10.5px;
+  color: rgb(var(--ink-fg-2));
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+/* 跨天色带 — 行内绝对定位整条 (r2: 高 18 圆角 5, left/width 按列百分比,
+ * top = 4 + lane × 20 由行内 style 写)。 */
+.m-band {
+  --src: var(--cal-src-mail);
+  position: absolute;
+  z-index: 1;
+  height: 18px;
+  border-radius: 5px;
+  border: 0;
+  cursor: pointer;
+  padding: 0 7px;
+  background: rgb(var(--src) / 0.3);
+  color: rgb(var(--ink-fg));
+  font-size: 11px;
+  line-height: 18px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background 120ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.m-band[data-src='matter'] {
+  --src: var(--cal-src-matter);
+  background: rgb(var(--src) / 0.28);
+}
+.m-band[data-src='agent'] { --src: var(--cal-src-agent); }
+.m-band[data-src='hot'] { --src: var(--cal-src-hot); }
+.m-band:hover { background: rgb(var(--src) / 0.42); }
+/* P5 — 日/周置顶条区的 mail 色带带状态形态化 (月视图 agenda 条目无状态字段,
+ * 不挂这些 attr, 不受影响): 斜纹=暂定 / 空心=待回复 / 删除线+中性灰=拒绝取消。 */
+.m-band[data-resp='TENTATIVE'] {
+  background: repeating-linear-gradient(
+    135deg,
+    rgb(var(--src) / 0.4) 0 3px,
+    rgb(var(--src) / 0.12) 3px 7px
+  );
+}
+.m-band[data-resp='NEEDS-ACTION'] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgb(var(--src));
+}
+.m-band[data-resp='DECLINED'] {
+  text-decoration: line-through;
+  background: rgb(var(--c-norm) / 0.14);
+  color: rgb(var(--c-norm));
+}
+.m-band[data-status='CANCELLED'] {
+  text-decoration: line-through;
+  background: rgb(var(--c-low) / 0.09);
+  color: rgb(var(--c-low));
+}
+
+/* P5 — 时刻标记 (日/周 timeline): matter 截止 / agent 排程是时间点不撑假时长,
+ * 薄条压在时间轴上 (now-line 同族的「时刻」语言), 内部沿用月视图胶囊件
+ * (.m-evt-dot/-title/-time)。top 由行内 style 按时刻写, 同刻级联避让 20px 步进。 */
+.evt-mark {
+  --src: var(--cal-src-matter);
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 5px;
+  border-radius: 5px;
+  border: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  cursor: pointer;
+  background: rgb(var(--src) / 0.15);
+  transition: background 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 4;
+}
+.evt-mark[data-src='mail'] { --src: var(--cal-src-mail); }
+.evt-mark[data-src='agent'] { --src: var(--cal-src-agent); }
+.evt-mark[data-src='hot'] { --src: var(--cal-src-hot); }
+.evt-mark:hover { background: rgb(var(--src) / 0.24); z-index: 5; }
+
+/* 工具条右簇源色点 (月视图) — 关掉一组同步消失。 */
+.cal-src-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 2px;
+}
+.cal-src-dot {
+  --src: var(--cal-src-mail);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgb(var(--src));
+}
+.cal-src-dot[data-src='matter'] { --src: var(--cal-src-matter); }
+.cal-src-dot[data-src='agent'] { --src: var(--cal-src-agent); }
+
+/* 日历域二级栏 = 分组日历树 (CalendarSourcePanel, dogfood 轮 2 起小月历退役)。
+ * 组头一行 + 组内成员各一行 (邮箱日历名 / 事项 / 智能体), 都是 role=checkbox。 */
+.cal-srctree {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.cal-srcgroup {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.cal-srcgroup + .cal-srcgroup {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+.cal-src-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  min-width: 0;
+}
+.cal-src-row:hover { background: rgb(var(--ink-3) / 0.7); }
+.cal-src-check {
+  --src: var(--cal-src-mail);
+  width: 13px;
+  height: 13px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: rgb(var(--src) / 0.85);
+  color: rgb(var(--ink-0));
+}
+.cal-src-check[data-src='matter'] { --src: var(--cal-src-matter); }
+.cal-src-check[data-src='agent'] { --src: var(--cal-src-agent); }
+.cal-src-row.is-off .cal-src-check {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px rgb(var(--src) / 0.55);
+}
+.cal-src-label {
+  font-size: 11.5px;
+  color: rgb(var(--ink-fg-1));
+  flex-shrink: 0;
+}
+.cal-src-row.is-off .cal-src-label { color: rgb(var(--ink-fg-3)); }
+.cal-src-row.is-group .cal-src-label { font-weight: 600; }
+.cal-src-hint {
+  margin-left: auto;
+  font-size: 10px;
+  color: rgb(var(--ink-fg-3));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 成员行 —— 缩进到组头文字下方; 事项/日历名可以很长, 这里的 label 要能截断
+ * (组头那侧是定长文案 + 右对齐 hint, 两者的伸缩规则不同)。 */
+.cal-src-row.is-member { padding-left: 22px; }
+.cal-src-row.is-member .cal-src-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cal-src-empty {
+  padding: 2px 6px 4px 22px;
+  font-size: 10.5px;
+  color: rgb(var(--ink-fg-3));
+}
+
+.more-btn {
+  font-size: 11px;
+  color: rgb(var(--ink-fg-2));
+  padding: 1px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  align-self: flex-start;
+}
+.more-btn:hover {
+  background: rgb(var(--ink-3));
+  color: rgb(var(--ink-fg));
+}
+.more-pop {
+  position: fixed;
+  z-index: 80;
+  width: 220px;
+  /* 主题 v3 C8/批 4: 溢出事件内容浮层 10px → --r-pop(14) */
+  border-radius: var(--r-pop);
+  padding: 10px;
+  /* Q11 — MonthView 传 maxHeight (到 viewport 边缘的可用高度), 超出滚动 */
+  overflow-y: auto;
+}
+.more-pop .mp-head {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgb(var(--ink-fg));
+  margin-bottom: 7px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.more-pop .mp-date {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11px;
+  color: rgb(var(--ink-fg-2));
+}
+
+/* ── Agenda view ────────────────────────────────────────────────── */
+.cal-agenda { padding: 6px 0; height: 100%; overflow-y: auto; }
+.ag-group { padding: 0 18px; }
+.ag-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 16px 0 8px;
+  position: sticky;
+  top: 0;
+  /* mockup 原本 rgb(--ink-2)/0 全透 — 设计意图是纯 typography hierarchy,
+     接受 sticky 时跟事件 scroll 过的轻度重叠. 严格按 mockup 复刻. */
+  background: rgb(var(--ink-2) / 0);
+  z-index: 1;
+}
+.ag-head .ah-day {
+  font-size: 15px;
+  font-weight: 600;
+  color: rgb(var(--ink-fg));
+}
+.ag-head .ah-date {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11.5px;
+  color: rgb(var(--ink-fg-2));
+}
+.ag-head.is-today .ah-day { color: rgb(var(--c-accent)); }
+/* 连续空日折叠行 — 组头与行之间的过渡语气, 不抢眼但说清「这几天没事」。 */
+.ag-gap {
+  margin: 4px 18px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  border: 1px dashed rgb(var(--ink-border) / 0.7);
+  font-size: 11.5px;
+  color: rgb(var(--ink-fg-3));
+}
+.ag-row {
+  /* P4d — 三源色语言 (月/周视图 .m-evt / .m-band 同族): 行的 --src 由 data-src
+     切换, 左 bar 与来源标都取它。 */
+  --src: var(--cal-src-mail);
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  align-items: center;
+  background: transparent;
+  border: 0;
+  width: 100%;
+  text-align: left;
+}
+.ag-row[data-src='matter'] { --src: var(--cal-src-matter); }
+.ag-row[data-src='agent'] { --src: var(--cal-src-agent); }
+.ag-row[data-src='hot'] { --src: var(--cal-src-hot); }
+.ag-row:hover { background: rgb(var(--ink-3) / 0.55); }
+/* F4/Q13 — 选中锚点: --sel-wash 签名 (对齐邮件列表选中语义); 后置声明压过
+ * 同特异性 hover. 跨天事件展开的每个日行同 key 同亮. */
+.ag-row.is-selected { background: var(--sel-wash); }
+.ag-time {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 12px;
+  color: rgb(var(--ink-fg-1));
+  font-variant-numeric: tabular-nums;
+}
+.ag-bar {
+  width: 3px;
+  border-radius: 2px;
+  background: rgb(var(--src));
+  align-self: stretch;
+  min-height: 18px;
+}
+.ag-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ag-title {
+  font-size: 14px;
+  color: rgb(var(--ink-fg));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.ag-loc {
+  font-size: 12px;
+  color: rgb(var(--ink-fg-2));
+  flex-shrink: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* P4d — 事项 / Agent 条目的来源标 (取行的源色, 微标签) */
+.ag-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: rgb(var(--src));
+  background: rgb(var(--src) / 0.14);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+/* 阶段2·2.5 — agenda 行尾 Join (常显轻量 accent, 与 .ag-tag 同语言;
+ * agenda = 「接下来要开的会」清单, Join 是首要动作故不做 hover-reveal). */
+.ag-join {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid rgb(var(--c-accent) / 0.35);
+  border-radius: var(--r-ctl);
+  background: rgb(var(--c-accent) / 0.1);
+  color: rgb(var(--c-accent));
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.ag-join:hover {
+  background: rgb(var(--c-accent) / 0.2);
+  border-color: rgb(var(--c-accent) / 0.6);
+}
+/* F3 (阶段2·2.6) — 状态形态化 (见 .evt 区注): 行的形态承载元素 = 左 bar +
+ * title, 斜纹落 bar, 空心 = 行级 inset 描边 (box-shadow 不占布局)。 */
+.ag-row[data-resp='TENTATIVE'] .ag-bar {
+  background: repeating-linear-gradient(
+    135deg,
+    rgb(var(--src)) 0 3px,
+    rgb(var(--src) / 0.25) 3px 6px
+  );
+}
+.ag-row[data-resp='NEEDS-ACTION'] {
+  box-shadow: inset 0 0 0 1px rgb(var(--src) / 0.6);
+}
+.ag-row[data-resp='NEEDS-ACTION'] .ag-bar {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgb(var(--src));
+}
+.ag-row[data-resp='DECLINED'] .ag-bar { background: rgb(var(--c-norm)); }
+.ag-row[data-resp='DECLINED'] .ag-time { color: rgb(var(--c-norm)); }
+.ag-row[data-resp='DECLINED'] .ag-title {
+  text-decoration: line-through;
+  color: rgb(var(--c-norm));
+}
+.ag-row[data-status='CANCELLED'] .ag-bar { background: rgb(var(--c-low) / 0.55); }
+.ag-row[data-status='CANCELLED'] .ag-time { color: rgb(var(--c-low)); }
+.ag-row[data-status='CANCELLED'] .ag-title {
+  text-decoration: line-through;
+  color: rgb(var(--c-low));
+}
+
+/* ── Recurring view (table) ─────────────────────────────────────── */
+.rec-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.rec-table th {
+  text-align: left;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgb(var(--ink-fg-2));
+  padding: 10px 12px;
+  border-bottom: 1px solid rgb(var(--ink-border));
+  font-weight: 500;
+  position: sticky;
+  top: 0;
+  /* 主题 v2 — sticky 表头非浮层去 blur, alpha 加深遮滚动行 */
+  background: rgb(var(--ink-2) / 0.94);
+}
+.rec-table td {
+  padding: 11px 12px;
+  border-bottom: 1px solid rgb(var(--ink-border-soft));
+  color: rgb(var(--ink-fg-1));
+  vertical-align: middle;
+}
+.rec-table tr:hover td { background: rgb(var(--ink-3) / 0.45); }
+.rec-title {
+  color: rgb(var(--ink-fg));
+  font-weight: 500;
+  cursor: pointer;
+}
+.rec-title:hover { color: rgb(var(--c-accent)); }
+.rrule-code {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11px;
+  color: rgb(var(--ink-fg-2));
+  background: rgb(var(--ink-fg) / 0.05);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.mono-num {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--ink-fg-1));
+}
+
+/* ── EventDetailDrawer ──────────────────────────────────────────── */
+.dw-head {
+  padding: 18px 18px 14px;
+  border-bottom: 1px solid rgb(var(--ink-border-soft));
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.dw-accent {
+  width: 3px;
+  align-self: stretch;
+  border-radius: 2px;
+  background: rgb(var(--c-accent));
+  flex-shrink: 0;
+  min-height: 32px;
+}
+.dw-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: rgb(var(--ink-fg));
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  flex: 1;
+  min-width: 0;
+}
+.dw-close {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--ink-fg-2));
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+}
+.dw-close:hover { background: rgb(var(--ink-3)); color: rgb(var(--ink-fg)); }
+.dw-body { flex: 1; overflow-y: auto; padding: 6px 18px 18px; }
+
+.meta-row {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.6);
+  align-items: start;
+}
+.meta-row:last-child { border-bottom: 0; }
+.meta-k {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: rgb(var(--ink-fg-2));
+  padding-top: 1px;
+}
+.meta-v {
+  font-size: 14px;
+  color: rgb(var(--ink-fg));
+  line-height: 1.5;
+  min-width: 0;
+}
+.meta-v.mono {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+.resp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.resp-accepted  { background: rgb(var(--c-accent) / 0.15); color: rgb(var(--c-accent)); }
+.resp-tentative { background: rgb(var(--ink-fg) / 0.07);   color: rgb(var(--ink-fg-1)); }
+.resp-declined  { background: rgb(var(--ink-fg) / 0.05);   color: rgb(var(--ink-fg-3)); text-decoration: line-through; }
+.resp-needs     { border: 1px solid rgb(var(--c-accent));  color: rgb(var(--c-accent)); }
+
+.att-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+}
+.att-name { font-size: 13.5px; color: rgb(var(--ink-fg)); }
+.att-email {
+  font-size: 11.5px;
+  color: rgb(var(--ink-fg-2));
+  font-family: ui-monospace, 'SF Mono', monospace;
+}
+.att-resp { font-size: 11px; margin-left: auto; flex-shrink: 0; }
+.att-resp.a { color: rgb(var(--c-accent)); }
+.att-resp.t { color: rgb(var(--ink-fg-2)); }
+.att-resp.d { color: rgb(var(--ink-fg-3)); text-decoration: line-through; }
+.att-resp.n { color: rgb(var(--c-accent)); }
+.att-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.link-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: rgb(var(--c-accent));
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+  word-break: break-all;
+}
+.link-row:hover { text-decoration: underline; }
+/* F13: 关联邮件死链改 button — 复用 .link-row 视觉, 只清默认 button 外观 */
+.cal-linkbtn {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-family: inherit;
+}
+
+/* 阶段2·2.5 — drawer 显著 Join 按钮 (.btn-op.edit 的 accent 实底语言, 不占满行) */
+.cal-join-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 14px;
+  margin-bottom: 6px;
+  border: 1px solid rgb(var(--c-accent-hi));
+  border-radius: var(--r-ctl);
+  background: rgb(var(--c-accent));
+  color: rgb(var(--c-accent-fg));
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.08s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.cal-join-btn:hover { background: rgb(var(--c-accent-hi)); }
+.cal-join-btn:active { transform: scale(0.98); }
+
+/* 阶段2·2.3 — drawer 关联邮件摘要卡: 主题 + 发件人/日期两行 + 外跳角标,
+ * 点击跳 inbox 选中定位来源邀请邮件. */
+.cal-srcmail {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  row-gap: 2px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid rgb(var(--ink-border));
+  border-radius: var(--r-ctl);
+  background: rgb(var(--ink-3) / 0.35);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.cal-srcmail:hover {
+  background: rgb(var(--ink-3) / 0.7);
+  border-color: rgb(var(--c-accent) / 0.45);
+}
+.cal-srcmail-subject {
+  grid-column: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgb(var(--ink-fg));
+}
+.cal-srcmail-meta {
+  grid-column: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: rgb(var(--ink-fg-2));
+}
+.cal-srcmail-ext {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  color: rgb(var(--ink-fg-3));
+  flex-shrink: 0;
+}
+
+.desc-box {
+  font-size: 13px;
+  color: rgb(var(--ink-fg-1));
+  line-height: 1.6;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  background: rgb(var(--ink-fg) / 0.04);
+  border-radius: 6px;
+  padding: 10px 12px;
+  word-break: break-word;
+}
+
+.dw-foot {
+  padding: 12px 18px;
+  border-top: 1px solid rgb(var(--ink-border-soft));
+}
+.dw-foot .fm {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10.5px;
+  color: rgb(var(--ink-fg-3));
+  line-height: 1.6;
+  word-break: break-all;
+}
+.empty-field {
+  color: rgb(var(--ink-fg-3));
+  font-style: italic;
+}
+
+/* Skeleton — shimmer for drawer lazy fields (与会者 / 描述 / 关联邮件) */
+@keyframes cal-shimmer {
+  0% { background-position: -200px 0; }
+  100% { background-position: 200px 0; }
+}
+.skel {
+  display: block;
+  height: 11px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    rgb(var(--ink-3) / 0.55) 25%,
+    rgb(var(--ink-fg-3) / 0.18) 50%,
+    rgb(var(--ink-3) / 0.55) 75%
+  );
+  background-size: 400px 100%;
+  animation: cal-shimmer 1.1s infinite linear;
+}
+.skel + .skel { margin-top: 7px; }
+.skel.av { width: 22px; height: 22px; border-radius: 50%; }
+
+/* ── Shortcut help modal (?) ─────────────────────────────────────── */
+.sk-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+:root[data-theme='light'] .sk-backdrop { background: rgba(20, 24, 40, 0.18); }
+.sk-modal {
+  width: 420px;
+  max-width: 92vw;
+  /* 主题 v3 C8/批 4: 模态浮窗 14px → token 化 --r-pop */
+  border-radius: var(--r-pop);
+  padding: 20px 22px;
+}
+.sk-modal h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: rgb(var(--ink-fg));
+  margin: 0 0 4px;
+}
+/* 阶段1·1.9 (F7/Q12) — 标题行 + 关闭钮 (focus trap 需要 ≥1 focusable;
+   视觉同 .dw-close / .efm-close). */
+.cal-sk-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cal-sk-close {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--ink-fg-2));
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+}
+.cal-sk-close:hover { background: rgb(var(--ink-3)); color: rgb(var(--ink-fg)); }
+.sk-sub {
+  font-size: 12px;
+  color: rgb(var(--ink-fg-2));
+  margin-bottom: 14px;
+}
+.sk-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid rgb(var(--ink-border-soft) / 0.6);
+}
+.sk-row:last-child { border-bottom: 0; }
+.sk-label { font-size: 13.5px; color: rgb(var(--ink-fg-1)); }
+.sk-keys { display: flex; gap: 4px; }
+
+/* ── Shared toolbar / chip utility (mockup §toolbar) ──────────────
+   Recurring view 头部 chip + 扫描按钮共用. toolbar 自己暂用 Tailwind
+   inline (历史代码), 后续可统一切到这套 class. */
+.view-chip {
+  position: relative;
+  z-index: 1;
+  font-size: 13px;
+  line-height: 1;
+  padding: 6px 11px;
+  border-radius: 6px;
+  color: rgb(var(--ink-fg-1));
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  /* §8 对齐: fast(120ms) + standard 曲线。bg/border 已移到滑动 indicator,
+     这里仅过渡文字色 (chip 自身不再有 bg 切换)。 */
+  transition: color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  white-space: nowrap;
+}
+.view-chip:hover {
+  color: rgb(var(--ink-fg));
+}
+.view-chip.is-active {
+  /* bg+border 由 .view-chip-indicator 承载, 这里只保留文字态 (accent 色 + 粗体)。 */
+  color: rgb(var(--c-accent));
+  font-weight: 600;
+}
+.view-chip:disabled { opacity: 0.5; cursor: not-allowed; }
+/* §8 滑动 indicator — 激活 chip 的圆角背景 (accent/0.15 + accent/0.3 border)。
+   GSAP 在 JS 层 tween x/width (DUR.fast)。top/bottom 留 2px 对齐容器 p-0.5。 */
+.view-chip-indicator {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  z-index: 0;
+  border-radius: 6px;
+  background: rgb(var(--c-accent) / 0.15);
+  border: 1px solid rgb(var(--c-accent) / 0.3);
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.today-btn {
+  font-size: 13px;
+  padding: 0 12px;
+  height: 28px;
+  border-radius: 6px;
+  color: rgb(var(--ink-fg-1));
+  border: 1px solid rgb(var(--ink-border));
+  background: rgb(var(--ink-2) / 0.5);
+  cursor: pointer;
+  /* #14: 确切属性 (勿 all) — 只动 bg/border/color, 不含 width 防 inline width
+   * 变化被卷入过渡。 */
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.today-btn:hover { background: rgb(var(--ink-3)); color: rgb(var(--ink-fg)); }
+.today-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.nav-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: rgb(var(--ink-fg-1));
+  border: 1px solid rgb(var(--ink-border));
+  background: rgb(var(--ink-2) / 0.5);
+  cursor: pointer;
+  /* #14: 确切属性 (勿 all) — toolbar 内此钮被 inline style 改 width (calendar-
+   * filter / sync), 过渡列表务必不含 width 否则首帧宽度动画。 */
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.nav-btn:hover { background: rgb(var(--ink-3)); color: rgb(var(--ink-fg)); }
+.nav-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+html[data-theme-vt='circle-blur']::view-transition-old(root) {
+  animation: none;
+}
+html[data-theme-vt='circle-blur']::view-transition-new(root) {
+  animation: theme-circle-blur 700ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes theme-circle-blur {
+  from {
+    clip-path: circle(0% at 100% 0%);
+    filter: blur(8px);
+  }
+  to {
+    clip-path: circle(150% at 100% 0%);
+    filter: blur(0);
+  }
+}
+/* F3 (阶段2·2.6) — 事件状态图例: toolbar info 入口, CSS-only hover tip
+ * 模式 (加 :focus-within 键盘可达)。swatch 用与消费面同款形态配方,
+ * 图例即样本。 */
+.cal-legend { position: relative; }
+.cal-legend-tip {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 230px;
+  z-index: 70;
+  border-radius: var(--r-pop);
+  padding: 11px 13px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition:
+    opacity 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  text-align: left;
+}
+.cal-legend:hover .cal-legend-tip,
+.cal-legend:focus-within .cal-legend-tip {
+  opacity: 1;
+  transform: translateY(0);
+}
+.cal-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+.cal-legend-swatch {
+  width: 24px;
+  height: 13px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+.cal-legend-swatch[data-kind='tentative'] {
+  background: repeating-linear-gradient(
+    135deg,
+    rgb(var(--c-accent) / 0.2) 0 3px,
+    rgb(var(--c-accent) / 0.05) 3px 7px
+  );
+  border: 1px dashed rgb(var(--c-accent) / 0.5);
+}
+.cal-legend-swatch[data-kind='needs-action'] {
+  background: transparent;
+  border: 1.5px solid rgb(var(--c-accent));
+}
+.cal-legend-swatch[data-kind='declined'] {
+  background: rgb(var(--c-norm) / 0.12);
+  border: 1px solid rgb(var(--c-norm) / 0.3);
+  border-left: 3px solid rgb(var(--c-norm));
+}
+.cal-legend-swatch[data-kind='cancelled'] {
+  background: rgb(var(--c-low) / 0.07);
+  border: 1px solid rgb(var(--c-low) / 0.22);
+  border-left: 3px solid rgb(var(--c-low) / 0.55);
+}
+.cal-legend-label {
+  font-size: 12px;
+  color: rgb(var(--ink-fg));
+  white-space: nowrap;
+}
+.cal-legend-label[data-kind='declined'] {
+  text-decoration: line-through;
+  color: rgb(var(--c-norm));
+}
+.cal-legend-label[data-kind='cancelled'] {
+  text-decoration: line-through;
+  color: rgb(var(--c-low));
+}
+.cal-legend-shape {
+  font-size: 11px;
+  color: rgb(var(--ink-fg-2));
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Phase 2.5 — Calendar UI polish (1:1 mockup-event-form.html +
+ * mockup-calendar-ops.html).  EventFormModal / Drawer RSVP-vs-owner /
+ * Undo toast / 副 status bar / btn-coral primary.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* ── §11.1 EventFormModal ───────────────────────────────────────── */
+.efm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 主题 v2 — 遮罩去 blur 纯 dim (加深补偿) */
+  background: rgba(0, 0, 0, 0.48);
+  /* 出入场交给 GSAP（useExitAnimation，EventFormModal）。原 .open 的
+     opacity/transform 过渡 + 第二曲线已移除，避免与 GSAP 双重动画。 */
+}
+:root[data-theme='light'] .efm-backdrop { background: rgba(20, 24, 40, 0.22); }
+.efm-modal {
+  width: 500px;
+  max-width: 94vw;
+  max-height: 90vh;
+  /* 主题 v3 C8/批 4: 模态浮窗 12px → --r-pop(14) */
+  border-radius: var(--r-pop);
+  display: flex;
+  flex-direction: column;
+}
+.efm-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 17px 20px 14px;
+  border-bottom: 1px solid rgb(var(--ink-border-soft));
+}
+.efm-accent {
+  width: 3px;
+  height: 18px;
+  border-radius: 2px;
+  background: rgb(var(--c-accent));
+  flex-shrink: 0;
+}
+.efm-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: rgb(var(--ink-fg));
+  letter-spacing: -0.01em;
+  flex: 1;
+  margin: 0;
+}
+.efm-close {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(var(--ink-fg-2));
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+}
+.efm-close:hover { background: rgb(var(--ink-3)); color: rgb(var(--ink-fg)); }
+
+.efm-body { padding: 18px 20px 6px; overflow-y: auto; }
+.ef-field { margin-bottom: 15px; }
+.ef-label {
+  display: block;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgb(var(--ink-fg-2));
+  margin-bottom: 6px;
+}
+.ef-label .req { color: rgb(var(--c-accent)); margin-left: 3px; }
+.ef-input, .ef-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgb(var(--ink-3) / 0.6);
+  border: 1px solid rgb(var(--ink-border));
+  border-radius: 8px;
+  color: rgb(var(--ink-fg));
+  font-size: 14px;
+  font-family: inherit;
+  padding: 9px 11px;
+  transition: border-color 0.12s, box-shadow 0.12s;
+  outline: none;
+}
+.ef-input::placeholder, .ef-textarea::placeholder { color: rgb(var(--ink-fg-3)); }
+.ef-input:focus, .ef-textarea:focus {
+  border-color: rgb(var(--c-accent));
+  box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.18);
+}
+.ef-textarea { resize: vertical; min-height: 76px; line-height: 1.55; }
+.ef-input.mono {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+.ef-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ef-input.invalid, .chip-field.invalid {
+  border-color: rgb(var(--c-accent));
+  box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.16);
+}
+.ef-input.invalid.ef-invalid-shake {
+  animation: ef-invalid-shake 360ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes ef-invalid-shake {
+  0%, 100% { transform: translateX(0); }
+  16.67%, 50%, 83.33% { transform: translateX(-4px); }
+  33.33%, 66.67% { transform: translateX(4px); }
+}
+.ef-err {
+  display: none;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: rgb(var(--c-accent));
+}
+.ef-err.show { display: flex; }
+.ef-err svg { flex-shrink: 0; }
+
+/* attendee chip input */
+.chip-field {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  background: rgb(var(--ink-3) / 0.6);
+  border: 1px solid rgb(var(--ink-border));
+  border-radius: 8px;
+  padding: 7px 8px;
+  transition: border-color 0.12s, box-shadow 0.12s;
+  cursor: text;
+}
+.chip-field.focus {
+  border-color: rgb(var(--c-accent));
+  box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.18);
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 4px 0 8px;
+  border-radius: 6px;
+  background: rgb(var(--c-accent) / 0.14);
+  border: 1px solid rgb(var(--c-accent) / 0.28);
+  font-size: 12.5px;
+  color: rgb(var(--ink-fg));
+}
+/* `.chip-av`（与会者 chip 的实心 accent 圆点）随 08-27 P4d 退役：与会者接通讯录后
+   chip 用 compose 的 `RecipientAvatar`，同一个人在补全下拉与 chip 上是同一个色槽。 */
+.chip-x {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: rgb(var(--ink-fg-2));
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.chip-x:hover { background: rgb(var(--ink-fg) / 0.12); color: rgb(var(--ink-fg)); }
+.chip-input {
+  flex: 1;
+  min-width: 120px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: rgb(var(--ink-fg));
+  font-size: 13.5px;
+  font-family: inherit;
+  padding: 3px 2px;
+}
+.chip-input::placeholder { color: rgb(var(--ink-fg-3)); }
+.chip-hint {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: rgb(var(--ink-fg-3));
+}
+.chip-hint kbd {
+  font-size: 10px;
+  padding: 1px 4px;
+  border-bottom-width: 1px;
+}
+
+.efm-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  padding: 13px 20px 16px;
+  border-top: 1px solid rgb(var(--ink-border-soft));
+  margin-top: 4px;
+}
+.btn-ghost {
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  color: rgb(var(--ink-fg-1));
+  background: transparent;
+  border: 1px solid rgb(var(--ink-border));
+  cursor: pointer;
+  /* #14: 确切属性 (勿 all) — 实际只动 bg/border/color。 */
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  font-family: inherit;
+}
+.btn-ghost:hover:not(:disabled) { background: rgb(var(--ink-3)); color: rgb(var(--ink-fg)); }
+.btn-ghost:disabled { opacity: 0.5; cursor: wait; }
+.btn-primary {
+  height: 34px;
+  padding: 0 18px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: rgb(var(--c-accent-fg));
+  background: rgb(var(--c-accent));
+  border: 1px solid rgb(var(--c-accent-hi));
+  cursor: pointer;
+  transition: background 0.12s, transform 0.08s;
+  font-family: inherit;
+}
+.btn-primary:hover:not(:disabled) { background: rgb(var(--c-accent-hi)); }
+.btn-primary:active { transform: scale(0.985); }
+.btn-primary:disabled { opacity: 0.6; cursor: wait; }
+
+/* ── §11.6 Drawer RSVP vs owner split ───────────────────────────── */
+.dw-role {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  margin-bottom: 6px;
+  width: fit-content;
+}
+.dw-role.owner {
+  color: rgb(var(--c-accent));
+  background: rgb(var(--c-accent) / 0.13);
+  border: 1px solid rgb(var(--c-accent) / 0.3);
+}
+.dw-role.attendee {
+  color: rgb(var(--ink-fg-1));
+  background: rgb(var(--ink-fg) / 0.06);
+  border: 1px solid rgb(var(--ink-border));
+}
+.rsvp-label {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: rgb(var(--ink-fg-2));
+  margin-bottom: 7px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rsvp-row { display: flex; gap: 8px; }
+.btn-rsvp {
+  flex: 1;
+  height: 34px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  cursor: pointer;
+  /* #14: 确切属性含 transform (勿 all); §9.3 press 见 :active。 */
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.08s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid rgb(var(--ink-border));
+  background: rgb(var(--ink-3) / 0.5);
+  color: rgb(var(--ink-fg-1));
+  font-family: inherit;
+}
+.btn-rsvp:hover:not(:disabled):not(.sel) {
+  background: rgb(var(--ink-3));
+  color: rgb(var(--ink-fg));
+  border-color: rgb(var(--c-accent) / 0.5);
+}
+.btn-rsvp:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.btn-rsvp.sel {
+  background: rgb(var(--c-accent));
+  border-color: rgb(var(--c-accent-hi));
+  color: rgb(var(--c-accent-fg));
+  font-weight: 600;
+}
+.btn-rsvp.sel:hover { background: rgb(var(--c-accent-hi)); }
+.btn-rsvp:disabled { opacity: 0.6; cursor: wait; }
+.owner-ops-row { display: flex; gap: 8px; }
+.owner-ops-row.secondary { margin-top: 8px; }
+.btn-op {
+  flex: 1;
+  height: 34px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  /* #14: 确切属性含 transform (勿 all); §9.3 press 见 :active。 */
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.08s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid rgb(var(--ink-border));
+  background: rgb(var(--ink-3) / 0.5);
+  color: rgb(var(--ink-fg-1));
+  font-family: inherit;
+}
+.btn-op:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.btn-op.edit {
+  background: rgb(var(--c-accent));
+  border-color: rgb(var(--c-accent-hi));
+  color: rgb(var(--c-accent-fg));
+  font-weight: 600;
+}
+.btn-op.edit:hover:not(:disabled) { background: rgb(var(--c-accent-hi)); }
+.btn-op.delete {
+  background: transparent;
+  border-color: rgb(var(--c-accent) / 0.5);
+  color: rgb(var(--c-accent));
+}
+.btn-op.delete:hover:not(:disabled) {
+  background: rgb(var(--c-accent) / 0.12);
+  border-color: rgb(var(--c-accent));
+}
+.btn-op:disabled,
+.btn-op[disabled] {
+  opacity: 0.42;
+  cursor: not-allowed;
+  background: rgb(var(--ink-3) / 0.4);
+  color: rgb(var(--ink-fg-3));
+  border-color: rgb(var(--ink-border-soft));
+}
+.btn-op:disabled:hover,
+.btn-op[disabled]:hover {
+  background: rgb(var(--ink-3) / 0.4);
+  color: rgb(var(--ink-fg-3));
+  border-color: rgb(var(--ink-border-soft));
+}
+.ops-note {
+  font-size: 11.5px;
+  color: rgb(var(--ink-fg-3));
+  margin-top: 7px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* ── §11.2 Undo toast stack (calendar-undo store) ───────────────── */
+.undo-stack {
+  position: fixed;
+  bottom: 38px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 120;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 9px;
+  align-items: center;
+  pointer-events: none;
+}
+.undo-toast {
+  position: relative;
+  min-width: 300px;
+  max-width: 380px;
+  /* 主题 v3 C8/批 4: glass-pop 浮动通知 11px → --r-pop(14) */
+  border-radius: var(--r-pop);
+  padding: 12px 14px 13px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  overflow: hidden;
+  pointer-events: auto;
+  /* 进场交给 GSAP（UndoToastStack useGSAP），消除旧 cal-toastin 的第二曲线
+     0.32,0.72,0,1 + 260ms。dead 的 .out / cal-toastout 一并移除（exit 从未接线）。 */
+}
+.undo-ic {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(var(--ink-fg) / 0.07);
+  color: rgb(var(--ink-fg-1));
+}
+.undo-txt { flex: 1; min-width: 0; }
+.undo-t1 {
+  font-size: 13.5px;
+  color: rgb(var(--ink-fg));
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.undo-t2 {
+  font-size: 11.5px;
+  color: rgb(var(--ink-fg-2));
+  font-family: ui-monospace, 'SF Mono', monospace;
+  margin-top: 1px;
+}
+.undo-btn {
+  flex-shrink: 0;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgb(var(--c-accent));
+  background: transparent;
+  border: 1px solid rgb(var(--c-accent) / 0.55);
+  cursor: pointer;
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  font-family: inherit;
+}
+.undo-btn:hover {
+  background: rgb(var(--c-accent) / 0.12);
+  border-color: rgb(var(--c-accent));
+}
+.undo-prog {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2.5px;
+  width: 100%;
+  background: rgb(var(--c-accent));
+  transform-origin: left;
+  /* scaleX 倒计时由 GSAP 驱动（gsap.to scaleX:0, ease:'none'），可被撤销 .kill()。
+     原手写 el.style.transition + 强制 reflow 已移除。 */
+}
+
+/* ── §11.5 副 status bar 重做 (用户向 metric + hover ℹ️ popover) ── */
+.statusbar {
+  height: 26px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  gap: 10px;
+  border-top: 1px solid rgb(var(--ink-border) / 0.6);
+  background: rgb(var(--ink-2) / 0.4);
+}
+.sb-metric {
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: rgb(var(--ink-fg-2));
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.sb-num {
+  color: rgb(var(--ink-fg-1));
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.sb-sep { color: rgb(var(--ink-fg-3)); }
+.sb-sync-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgb(var(--c-ok));
+  flex-shrink: 0;
+}
+.statusbar[data-sync='err'] .sb-sync-dot { background: rgb(var(--c-fail)); }
+.sb-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  color: rgb(var(--ink-fg-3));
+  cursor: default;
+  transition:
+    background 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.sb-info:hover, .sb-info:focus {
+  background: rgb(var(--ink-3) / 0.7);
+  color: rgb(var(--ink-fg-1));
+  outline: none;
+}
+.sb-pop {
+  position: absolute;
+  bottom: calc(100% + 9px);
+  right: -6px;
+  width: 288px;
+  /* 主题 v3 C8/批 4: 288px 富内容悬浮面板(非微型 tooltip) 10px → --r-pop(14) */
+  border-radius: var(--r-pop);
+  padding: 11px 13px;
+  z-index: 80;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  /* F8 — 散装 0.14s 收编 fast(120ms) + standard 曲线 */
+  transition:
+    opacity 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  text-align: left;
+}
+.sb-info:hover .sb-pop, .sb-info:focus .sb-pop, .sb-info:focus-within .sb-pop {
+  opacity: 1;
+  transform: translateY(0);
+}
+.sb-pop-h {
+  font-size: 12px;
+  color: rgb(var(--ink-fg));
+  font-weight: 600;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sb-pop-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  font-family: ui-monospace, 'SF Mono', monospace;
+  font-size: 11px;
+  padding: 3px 0;
+  color: rgb(var(--ink-fg-2));
+}
+.sb-pop-row .k { color: rgb(var(--ink-fg-3)); }
+.sb-pop-row .v {
+  color: rgb(var(--ink-fg-1));
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  word-break: break-all;
+}
+
+/* ── btn-coral — toolbar primary action (e.g. [+ 新建]) ─────────── */
+.btn-coral {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 13px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgb(var(--c-accent-fg));
+  background: rgb(var(--c-accent));
+  border: 1px solid rgb(var(--c-accent-hi));
+  cursor: pointer;
+  transition: background 0.12s, transform 0.08s;
+  font-family: inherit;
+}
+.btn-coral:hover:not(:disabled) { background: rgb(var(--c-accent-hi)); }
+.btn-coral:active { transform: scale(0.98); }
+.btn-coral:disabled { opacity: 0.6; cursor: wait; }
+

@@ -41,7 +41,7 @@ import { AiTab } from './tabs/AiTab'
 import { ConnectorsTab } from './tabs/ConnectorsTab'
 import { GeneralTab } from './tabs/GeneralTab'
 import { IntegrationsTab } from './tabs/IntegrationsTab'
-import { IslandUpdatesTab } from './tabs/IslandUpdatesTab'
+import { UpdatesTab } from './tabs/UpdatesTab'
 import { LabsTab } from './tabs/LabsTab'
 import { MattersTab } from './tabs/MattersTab'
 import { NotificationsTab } from './tabs/NotificationsTab'
@@ -182,7 +182,7 @@ export function SettingsShell(): React.ReactElement {
                 id="settings-notifications-island"
                 className="mt-10 border-t border-ink-border-soft pt-8"
               >
-                <IslandUpdatesTab />
+                <UpdatesTab />
               </div>
             </TabsContent>
             <TabsContent value="integrations">
