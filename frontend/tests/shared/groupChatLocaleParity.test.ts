@@ -10,8 +10,8 @@
 
 import { describe, expect, test } from 'vitest'
 
-import zhCN from '../../src/shared/i18n/locales/zh-CN/common.json'
-import enUS from '../../src/shared/i18n/locales/en-US/common.json'
+import zhCN from '../../src/shared/i18n/locales/zh-CN'
+import enUS from '../../src/shared/i18n/locales/en-US'
 import { GROUP_TURN_OUTCOMES } from '../../src/ai-gateway/groupFloors'
 
 /** g1 `groupChat.settings.*` → `groupChat.details.*` 的迁移清单（值不变，只换位置）。 */

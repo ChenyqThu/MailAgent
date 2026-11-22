@@ -1,0 +1,1192 @@
+{
+  "connectorsConsole": {
+    "title": "Connectors",
+    "subtitle": "One console for built-in tool approval tiers and external service connections",
+    "sectionBuiltin": "Built-in tools",
+    "sectionExternal": "External connections",
+    "addCustomMcp": "Add custom MCP",
+    "composioAccount": "Composio account",
+    "directTrackNote": "Connects directly to the official MCP endpoint (the OAuth page is the vendor's own) — no third-party relay, no API key required.",
+    "managedLocalTrackNote": "Installs and runs locally on this machine via stdio — no Composio cloud relay, zero credentials stored off-device.",
+    "toolCountUnknown": "Tool list arrives after connecting",
+    "switchTrack": "Switch track (disconnect and clear config)",
+    "supersededByDirect": "This connection runs through Composio, but the service now ships as a direct connection to the official endpoint (no third-party approval needed). Use “Switch track” to disconnect and clear its config, then reconnect directly from the catalog.",
+    "updates": {
+      "checkButton": "Check updates",
+      "checking": "Checking…",
+      "availableCount": "{count, plural, one {# update} other {# updates}}",
+      "badge": "Update available",
+      "foundToast": "Found updates or tool changes for {count} connector(s)",
+      "upToDateToast": "All connectors are up to date",
+      "checkFailed": "Failed to check connector updates",
+      "runtimeBannerTitle": "New runtime version available",
+      "driftBannerTitle": "Remote MCP tool schema changes detected",
+      "driftDetails": "+{added} added, ~{changed} changed, -{removed} removed",
+      "updateNow": "Update now",
+      "updating": "Updating…",
+      "syncNow": "Sync tools",
+      "updatedToast": "Updated {name}",
+      "updateFailed": "Update failed",
+      "desktopUpstreamNote": "Upstream GitHub released {upstream}; this client pins hash-verified {pinned}."
+    },
+    "builtinGroupDesc": {
+      "email_write": "High-frequency reversible email actions: flag / archive / pin / resync to Notion.",
+      "draft": "Create and edit local drafts; sending has its own confirmation card.",
+      "web": "Web search and page fetching (URLs and query strings leave the machine).",
+      "calendar": "Reschedule / RSVP / delete calendar events (delete is destructive).",
+      "capability": "Skill toggles and identity-document changes (all with history and rollback).",
+      "supply": "Skill install, uninstall, and draft create / write-file / read / validate (supply chain; install always double-confirms).",
+      "agents": "Create / update / delete / run-now for Custom Agents, plus calling an Agent from chat.",
+      "exec": "Local file read-write and command execution (command bypass rides the policy whitelist).",
+      "outbound": "Sending email and outbound-call tools (irreversible or data-egress; always confirm by default)."
+    },
+    "builtinReadOnlyTools": {
+      "supply": "This group also includes read-only tools with no approval profile: skill_draft_read and skill_draft_validate.",
+      "agents": "This group also includes read-only tools with no approval profile: custom_agent_list and custom_agent_get."
+    },
+    "settingsLink": {
+      "movedTitle": "Moved to the Connectors console",
+      "movedHelper": "To keep a single source of truth this section is no longer editable here; everything lives on the dedicated Connectors page.",
+      "open": "Open Connectors"
+    }
+  },
+  "sessions": {
+    "title": "AI Sessions",
+    "count": "{n, plural, =1 {# session} other {# sessions}}",
+    "searchPlaceholder": "Search conversations…",
+    "filterLabel": "Filter by backend",
+    "filterAll": "All",
+    "untitled": "Untitled session",
+    "emptyTitle": "No AI conversations yet",
+    "emptyHint": "Open the AI assistant from an email to start your first conversation",
+    "noMatchTitle": "No matching sessions",
+    "noMatchHint": "Try a different keyword or switch the backend filter",
+    "deleted": "Session deleted"
+  },
+  "generalAgent": {
+    "title": "General Agent",
+    "newChat": "New conversation",
+    "history": "Conversation history",
+    "close": "Close",
+    "dismiss": "Dismiss",
+    "confirmFailed": "Confirmation failed",
+    "empty": {
+      "title": "Ask the Custom AI anything",
+      "hint": "Search mail, run reports, check the calendar, query Notion, or save a preference — this conversation isn't tied to a single email."
+    },
+    "onboarding": {
+      "title": "Custom AI isn't configured yet",
+      "hint": "Add an LLM API key in Settings → AI to use the General Agent.",
+      "openSettings": "Open Settings"
+    }
+  },
+  "agentView": {
+    "welcome": "How can I help you?",
+    "emptyHint": "Ask anything, or @-mention an email to bring it into context",
+    "thinking": "Thinking",
+    "connecting": "Connecting",
+    "timing": {
+      "label": "Response time",
+      "firstToken": "First token",
+      "total": "Total",
+      "speed": "Speed",
+      "chunks": "Chunks"
+    },
+    "scrollToBottom": "Scroll to bottom",
+    "composer": {
+      "placeholder": "Message MailAgent... (@ to mention an email, / for commands)"
+    },
+    "mention": {
+      "loading": "Searching…",
+      "empty": "No matching emails",
+      "emails": "Emails",
+      "agents": "Agents",
+      "agentsEmpty": "No enabled custom agents",
+      "matters": "Matters",
+      "mattersEmpty": "No matching matters",
+      "noMatches": "No matching items",
+      "emailChip": "Mentioned email: {label}",
+      "agentChip": "Mentioned agent: {label}",
+      "matterChip": "Mentioned matter: {label}"
+    },
+    "slash": {
+      "empty": "No matching commands"
+    },
+    "newSession": "New chat",
+    "share": "Share chat",
+    "shareCopied": "Conversation copied as Markdown",
+    "shareEmpty": "No messages to share yet",
+    "rename": "Rename",
+    "delete": "Delete",
+    "archive": "Archive",
+    "restore": "Restore",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "star": "Star",
+    "unstar": "Unstar",
+    "starred": "Starred",
+    "notStarred": "Not starred",
+    "actionFail": "Action failed: {error}",
+    "more": "More",
+    "collapseSidebar": "Collapse / expand history",
+    "historyTitle": "Chats",
+    "emptyHistory": "No conversations yet",
+    "fromFeishu": "From Feishu",
+    "fromMatter": "Matter",
+    "group": {
+      "pinned": "Pinned",
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "earlier": "Earlier",
+      "archived": "Archived"
+    },
+    "quickActions": {
+      "summarize": {
+        "label": "Summarize",
+        "options": {
+          "unread": "Summarize the unread emails in my inbox",
+          "weekly": "Give me a digest of this week's important emails",
+          "sender": "Summarize recent emails from a specific sender"
+        }
+      },
+      "draft": {
+        "label": "Draft a reply",
+        "options": {
+          "followup": "Draft a follow-up email for me",
+          "decline": "Politely decline a request",
+          "thanks": "Draft a short thank-you reply"
+        }
+      },
+      "search": {
+        "label": "Search mail",
+        "options": {
+          "invoice": "Find recent invoices or bills",
+          "unanswered": "Find emails I haven't replied to",
+          "attachments": "Find emails with attachments"
+        }
+      },
+      "todo": {
+        "label": "This week",
+        "options": {
+          "needReply": "List emails that need my reply",
+          "waiting": "Who am I waiting on",
+          "thisWeek": "What to follow up on this week"
+        }
+      },
+      "write": {
+        "label": "Write",
+        "options": {
+          "meeting": "Write a meeting invitation email",
+          "report": "Draft this week's project report",
+          "intro": "Write an introduction email"
+        }
+      }
+    }
+  },
+  "agents": {
+    "nav": {
+      "allAgents": "All agents"
+    },
+    "unread": "Unread agent runs",
+    "reportsMaster": {
+      "label": "Keep report service running",
+      "hint": "When on, the report service runs continuously and enabling any report takes effect immediately; when off, the first report you enable needs one backend restart before scheduled generation starts.",
+      "saveError": "Failed to save the report service switch"
+    },
+    "schedule": {
+      "label": "Schedule",
+      "hint": "Preview and actual firing both use the selected timezone",
+      "repeats": "Repeats",
+      "every": "Every",
+      "on": "On",
+      "at": "At",
+      "timezone": "Timezone",
+      "tzDevice": "{tz} (device · {abbr})",
+      "tzDeviceNoAbbr": "{tz} (device)",
+      "monthEnd": "Month end",
+      "lessOften": "Less often",
+      "moreOften": "More often",
+      "hourLabel": "Hour",
+      "minuteLabel": "Minutes",
+      "ordinalLabel": "Which one",
+      "weekdayLabel": "Weekday",
+      "monthDayLabel": "Day of month",
+      "monthModeLabel": "Monthly mode",
+      "freq": {
+        "daily": "Daily",
+        "weekly": "Weekly",
+        "monthly": "Monthly"
+      },
+      "unit": {
+        "daily1": "day",
+        "dailyN": "days",
+        "weekly1": "week",
+        "weeklyN": "weeks",
+        "monthly1": "month",
+        "monthlyN": "months"
+      },
+      "weekday": {
+        "0": "Sunday",
+        "1": "Monday",
+        "2": "Tuesday",
+        "3": "Wednesday",
+        "4": "Thursday",
+        "5": "Friday",
+        "6": "Saturday"
+      },
+      "weekdayInitial": {
+        "0": "S",
+        "1": "M",
+        "2": "T",
+        "3": "W",
+        "4": "T",
+        "5": "F",
+        "6": "S"
+      },
+      "monthMode": {
+        "date": "A date",
+        "nth": "A weekday"
+      },
+      "ordinal": {
+        "1": "1st",
+        "2": "2nd",
+        "3": "3rd",
+        "4": "4th",
+        "last": "last"
+      },
+      "dayN": "Day {day}",
+      "clamp": {
+        "off": "Skip the month",
+        "on": "Use last day"
+      },
+      "clampHint": {
+        "off": "Months without that day simply don't run",
+        "on": "Falls back to the month's last day"
+      },
+      "clamped": "clamped",
+      "skipped": "skipped",
+      "skipReason": "{month} has only {days} days",
+      "nextRuns": "Next {count} runs",
+      "sentence": {
+        "freq": {
+          "daily1": "Every day",
+          "dailyN": "Every {count} days",
+          "weekly1": "Every week",
+          "weeklyN": "Every {count} weeks",
+          "monthly1": "Every month",
+          "monthlyN": "Every {count} months"
+        },
+        "onWeekdays": "on {days}",
+        "onDay": "on day {day}",
+        "onNth": "on the {ordinal} {weekday}",
+        "atTime": "at {time}"
+      }
+    },
+    "cadence": {
+      "all": "All",
+      "daily": "Daily",
+      "weekly": "Weekly",
+      "monthly": "Monthly",
+      "custom": "Custom"
+    },
+    "status": {
+      "ready": "Ready",
+      "generating": "Generating",
+      "failed": "Failed",
+      "empty": "Empty",
+      "skipped": "Skipped"
+    },
+    "reports": {
+      "history": "History",
+      "loading": "Loading…",
+      "none": "No reports yet",
+      "selectHint": "Select a report on the left",
+      "generating": "Generating report…",
+      "generatingHint": "The AI assistant is reviewing your mail and curating. Usually 20–40s.",
+      "failed": "Report generation failed",
+      "failedHint": "LLM call errored, retry available.",
+      "regenerate": "Regenerate",
+      "renderError": "Report failed to render",
+      "renderErrorRetry": "Retry",
+      "empty": "No new email in this period",
+      "emptyHint": "No new email in the selected time window — nothing to report.",
+      "generatedAt": "Generated",
+      "backToList": "Back to list",
+      "loadingMore": "Loading more…",
+      "weekday": {
+        "sun": "Sun",
+        "mon": "Mon",
+        "tue": "Tue",
+        "wed": "Wed",
+        "thu": "Thu",
+        "fri": "Fri",
+        "sat": "Sat"
+      },
+      "count": {
+        "total": "{count, plural, one {# email} other {# emails}}",
+        "urgent": "{count, plural, one {# urgent} other {# urgent}}",
+        "replied": "{count, plural, one {# replied} other {# replied}}"
+      },
+      "assistantAuthor": "Assistant"
+    },
+    "block": {
+      "source": "Source",
+      "notExecutable": "Not executable in v1",
+      "unknown": "Unknown block · {type}",
+      "emailCount": "{total, plural, one {# email} other {# emails}}",
+      "flaggedCount": "{flagged, plural, one {# flagged} other {# flagged}}",
+      "matter": {
+        "open": "Open matter {id}",
+        "due": "Due {value}",
+        "progress": "Goals {done}/{total}",
+        "waitingOn": "Waiting on {names}",
+        "nextAction": "Next · {title}",
+        "signals": "{count, plural, one {# signal} other {# signals}}"
+      }
+    },
+    "card": {
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "newAgent": "New Agent",
+      "newAgentHint": "Custom trigger, tools & model · coming soon"
+    },
+    "config": {
+      "enable": "Enable this Agent",
+      "prompt": "Report Prompt",
+      "promptHint": "tune the report's voice",
+      "promptNote": "Counts, internal_ids and links are authoritatively filled by the system; the prompt only affects prose, grouping and selection.",
+      "contextDocs": "Injected identity docs",
+      "contextDocsHint": "Checked docs are injected into the report-generation prompt",
+      "contextDocsNote": "Checked identity docs are injected into the report-generation system prompt (default: SOUL + USER; none checked = no injection).",
+      "schedule": "Schedule",
+      "at": "At",
+      "weekdayLabel": "Weekday",
+      "weekday": {
+        "0": "Mon",
+        "1": "Tue",
+        "2": "Wed",
+        "3": "Thu",
+        "4": "Fri",
+        "5": "Sat",
+        "6": "Sun"
+      },
+      "dayOfMonthLabel": "Day of month",
+      "dayOfMonthN": "Day {day}",
+      "dayOfMonthHint": "Limited to days 1–28 so it fires every month (avoids months without a 29th–31st).",
+      "window": "Lookback window",
+      "windowHint": "How far back to pull emails when generating",
+      "model": "Model",
+      "kos": "Gbrain knowledge enrichment",
+      "kosHint": "Attach Gbrain knowledge-base profile snippets for key projects / senders",
+      "promptPlaceholder": "Empty = built-in chief-of-staff persona (auto per daily/weekly/monthly); type to override",
+      "triggerMode": "Trigger",
+      "triggerHint": "Lookback basis",
+      "trigger": {
+        "rolling_24h": "Rolling 24h",
+        "natural_day": "Natural day (yesterday)"
+      },
+      "timezone": "Timezone",
+      "timezoneHint": "Empty = local; used for natural-day / week / month bounds",
+      "timezoneFromSchedule": "Natural-day bounds use the schedule timezone above ({tz}).",
+      "timezonePlaceholder": "e.g. Asia/Shanghai (empty = local)",
+      "timezoneLocal": "(Local)",
+      "bodyPriorities": "Bodies for priorities",
+      "bodyPrioritiesHint": "Checked priorities get full body; others summary-only (no attachments)",
+      "priority": {
+        "critical": "🔴 Urgent",
+        "important": "🟡 Important",
+        "normal": "🟢 Normal",
+        "low": "⚪ Low"
+      },
+      "aggregation": "Data source",
+      "aggWeekly": "Weekly auto-aggregates the past 7 days' daily reports; missing days are noted.",
+      "aggMonthly": "Monthly auto-aggregates the prior natural month's daily reports; missing days are noted.",
+      "cancel": "Cancel",
+      "save": "Save"
+    },
+    "source": {
+      "title": "Email source",
+      "close": "Close",
+      "noSubject": "(no subject)",
+      "aiFields": "AI Fields",
+      "summary": "Summary",
+      "openNotion": "Open in Notion",
+      "openInbox": "Open in inbox"
+    },
+    "chats": {
+      "title": "Agent run conversations",
+      "filterAgent": "Filter by agent",
+      "allAgents": "All agents",
+      "continue": "Continue in inbox",
+      "selectHint": "Select a conversation on the left",
+      "emptyTranscript": "No messages in this conversation yet"
+    },
+    "search": {
+      "newAgent": "New Search Agent",
+      "newAgentHint": "Custom prompt, model & tools",
+      "titlePlaceholder": "e.g. Mail search assistant",
+      "promptLabel": "Search Prompt",
+      "promptHint": "Built-in default search prompt below — edit to override; placeholders auto-filled at runtime",
+      "promptPlaceholder": "Search agent system prompt",
+      "tools": "Tools",
+      "toolsHint": "Tools this search agent can call (MVP: full-text search only)",
+      "tool": {
+        "email_search_fulltext": "Email full-text search"
+      },
+      "delete": "Delete",
+      "deleteConfirm": "Delete this search agent?",
+      "deleteCancel": "Cancel",
+      "errConflict": "That id already exists — pick another name.",
+      "errGeneric": "Operation failed, please retry."
+    },
+    "preprocess": {
+      "viewStats": "View processing stats",
+      "markReadAfterProcessing": "Mark as read after preprocessing",
+      "markReadAfterProcessingHint": "When off, AI still classifies, flags, and updates processing status without changing the message's current read state. Effective on save.",
+      "restartHint": "Restart required",
+      "modelFollowGlobal": "Follow global default ({model})",
+      "contextDocs": "Injected identity docs",
+      "contextDocsHint": "Checked docs are injected into the classification prompt",
+      "contextDocsNote": "Checked identity docs are injected into the AI email-classification system prompt (default: SOUL + USER).",
+      "contextDocsInactiveNote": "Reference context source is set to \"Notion context page\"; identity docs are not injected into the classification prompt (selection has no effect here).",
+      "contextSource": "Reference context source",
+      "contextSourceHint": "Pick one reference background for the email-classification system prompt (saved instantly, no restart): identity docs or a Notion context page — mutually exclusive, never both.",
+      "contextSourceOption": {
+        "standing_docs": "Identity docs",
+        "notion_context": "Notion context page"
+      },
+      "contextPageId": "Notion context page ID",
+      "contextPageIdPlaceholder": "Notion page ID (LLM_CONTEXT_PAGE_ID)",
+      "contextPageIdHint": "This Notion page's body is injected as reference context into the classification prompt (empty = not injected). env LLM_CONTEXT_PAGE_ID, restart required.",
+      "doc": {
+        "soul": "Soul",
+        "agent": "Agent",
+        "rules": "Rules",
+        "user": "User prefs"
+      },
+      "webReadOnly": "Remote web is read-only: enable state, reference context source and context page ID can't be changed (desktop only); model, fallback and doc selection remain editable.",
+      "fallback": "Fallback model",
+      "fallbackFollowGlobal": "Follow global ({model})",
+      "fallbackGlobalUnset": "not set",
+      "fallbackNone": "(none)",
+      "promptView": "Classification prompt",
+      "promptViewHint": "The mailbox prompt files actually used for classification — one for inbox, one for sent; edit directly, changes take effect on save (no restart needed); identity/preferences come from the docs checked above",
+      "promptTab": {
+        "inbox": "Inbox",
+        "sent": "Sent"
+      },
+      "promptEmpty": "File missing or empty — leave blank to classify with only the built-in hard constraints; saved content creates the file automatically",
+      "promptLoadError": "Failed to load classification prompt (serve-api not ready?)",
+      "promptSaveError": "Failed to save classification prompt",
+      "promptSaved": "Classification prompt saved — effective immediately (no restart needed)",
+      "envSaveError": "Failed to save enable state",
+      "rowSaveError": "Failed to save preprocessing config"
+    },
+    "contactGovernance": {
+      "schedule": "Schedule",
+      "scheduleHint": "One governance scan per day at a fixed hour, alongside the incremental mail sync",
+      "useKos": "Consult KOS",
+      "useKosHint": "Look up this person's KOS wiki before proposing identity changes; no effect when KOS is not configured.",
+      "prompt": "System prompt",
+      "promptHint": "The default prompt is read-only; your addendum is appended after it",
+      "promptDefaultToggle": "View the default prompt",
+      "promptAppend": "Prompt addendum",
+      "promptAppendPlaceholder": "e.g. company background, department structure, recurring external partners — long-lived context belongs here.",
+      "promptAppendNote": "The default prompt already pins the rules that every suggestion cites mail evidence and that identity fields may only be proposed, never written directly; an addendum cannot override that. Empty = default only.",
+      "orgFrame": "Org frame",
+      "orgFrameHint": "Company and department hierarchy; separate levels with ` / `, put anything outside the frame after a pipe",
+      "orgFramePlaceholder": "# Companies\nTP-Link System | tp-link.com.hk | HQ\nTP-Link | tp-link.com, omadanetworks.com\n\n# Department frame\nEBG / ENBU / Product\nCommercial R&D / Systems",
+      "orgFrameNote": "Empty = no constraint: the governance agent still proposes, it just stops judging what is off-frame. Once set, suggestions landing outside it carry an “Off-frame” mark so you can extend the frame before adopting.",
+      "tools": "Injected tools · {count}",
+      "queueNote": "Suggestions from this agent queue up under Contacts → the “Agent” pill in the list header, and its run history lives there too.",
+      "errFireHour": "The daily run hour must be a whole number between 0 and 23"
+    },
+    "contactProfile": {
+      "schedule": "Schedule",
+      "scheduleHint": "One pass per day at a fixed hour, capped at this many people",
+      "dailyCap": "People per pass",
+      "useKos": "Consult KOS",
+      "useKosHint": "Look up this person's KOS wiki as background before writing the profile; no effect when KOS is not configured.",
+      "modelFollowGlobal": "Follow the global default",
+      "fallback": "Fallback model",
+      "fallbackFollowGlobal": "Follow the global default",
+      "fallbackNone": "No fallback",
+      "promptAppend": "Prompt addendum",
+      "promptAppendHint": "Appended after the built-in profile prompt; empty = built-in only",
+      "promptAppendPlaceholder": "e.g. Watch for shifts in how they word contract terms.",
+      "promptAppendNote": "The built-in prompt already pins the rule of citing only the supplied evidence and declining when it is thin; an addendum cannot override that.",
+      "errFireHour": "The daily run hour must be a whole number between 0 and 23",
+      "errDailyLimit": "The per-pass cap must be a whole number above 0"
+    },
+    "projectProgress": {
+      "subtitle": "Matched report emails auto-parse xlsx → sync into the Notion progress database",
+      "masterOff": "Master off",
+      "masterOnNote": "Master switch is on (env PROJECT_PROGRESS_SYNC_ENABLED). The enable toggle and trigger rules below take effect on save.",
+      "masterOffNote": "Master switch is off: the sync will not run. Turn on the master switch below (requires a service restart after saving); the enable toggle and trigger rules are still saved as usual.",
+      "master": "Sync master switch",
+      "masterHint": "Env PROJECT_PROGRESS_SYNC_ENABLED; requires a backend restart to take effect",
+      "subjectPattern": "Subject regex",
+      "subjectPatternHint": "Regex against the email subject; a match marks it as a project report (required)",
+      "subjectPlaceholder": "e.g. \\[weekly\\] project progress",
+      "senderPattern": "Sender (substring, optional)",
+      "senderPatternHint": "Case-insensitive substring match on the address; empty = any sender",
+      "senderPlaceholder": "e.g. weekly@corp.com",
+      "database": "Progress database ID",
+      "databaseHint": "Env PROJECT_PROGRESS_DATABASE_ID (Notion database UUID); requires a restart to take effect",
+      "databaseUnset": "(not configured — sync will fail)",
+      "filterBu": "BU filter (optional)",
+      "filterBuHint": "Exact match on the xlsx BU column; other BUs are dropped; empty = no filter. Env PROJECT_PROGRESS_FILTER_BU; requires a restart",
+      "filterBuPlaceholder": "TPS-ENBU",
+      "capability": "Built-in capability",
+      "capabilityChip": "Project report sync script · built-in, always on",
+      "capabilityNote": "Runs as a deterministic Python sync script (xlsx parsing → Notion writes) — it does not go through the AI engine and is not part of the skill system, so other skills can't be mounted; use the enable toggle above to stop the whole agent.",
+      "webReadOnly": "Remote web is read-only: master switch / database ID / BU filter can't be changed (desktop only); the enable toggle and trigger rules remain editable.",
+      "envSaveError": "Failed to save environment variables",
+      "errEmptyTrigger": "Subject regex and sender cannot both be empty (use the enable toggle above to disable)",
+      "runs": {
+        "statusCompleted": "Completed",
+        "statusFailed": "Failed",
+        "statusSkipped": "Skipped",
+        "statusProcessing": "Processing"
+      }
+    },
+    "avatar": {
+      "label": "Avatar",
+      "identityLabel": "Name & avatar",
+      "hint": "Derived from the agent id until you pick one; your choice is saved as an explicit identity",
+      "change": "Change",
+      "collapse": "Collapse",
+      "tabBot": "Bot",
+      "tabUpload": "Upload",
+      "reset": "Reset",
+      "shuffle": "Shuffle",
+      "shape": "Shape",
+      "color": "Color",
+      "upload": "Upload image",
+      "uploading": "Processing…",
+      "uploaded": "Uploaded image (switch to the Bot tab and pick a shape or color to go back to generated)",
+      "uploadHint": "Uploading replaces the generated avatar (≤10MB, auto-cropped and compressed)",
+      "uploadErr": {
+        "not_image": "Pick an image file (PNG / JPG / WebP…).",
+        "source_too_large": "The original is over 10MB — compress it or pick another.",
+        "decode_failed": "That image could not be read — try another one.",
+        "too_large": "Still over 150KB at the lowest quality — try a simpler image."
+      }
+    },
+    "mainAgent": {
+      "badge": "Default assistant",
+      "namePlaceholder": "AI Assistant (e.g. Jarvis)",
+      "identityHint": "Leave empty to keep the default name; the official look is used when no avatar is set"
+    },
+    "custom": {
+      "import": "Import Agent",
+      "export": "Export",
+      "meetingPrepTemplate": "Create from template: Meeting prep",
+      "mailDigestTemplate": "Create from template: Mail digest",
+      "followupTrackerTemplate": "Create from template: Follow-up tracker",
+      "meetingScribeTemplate": "Create from template: Meeting scribe",
+      "calendarRequired": "Calendar sync must be enabled",
+      "unmetDependencies": "Unmet dependencies: {items}",
+      "newTitle": "New Custom Agent",
+      "configTitle": "Custom Agent · {title}",
+      "newTileTitle": "New Custom Agent",
+      "enableHint": "When enabled, runs automatically on the trigger below (won't run when trigger is None).",
+      "titlePlaceholder": "e.g. DMS approval helper",
+      "descriptionLabel": "Description",
+      "descriptionHint": "Shown in the Agent Catalog so the main agent can choose the right specialist.",
+      "descriptionPlaceholder": "Briefly describe when this agent should be used",
+      "promptLabel": "Task prompt",
+      "promptHint": "Instructions injected on each trigger (what the agent should do)",
+      "promptPlaceholder": "Describe the task the agent should complete on each trigger",
+      "create": "Create",
+      "errTitleRequired": "Name is required.",
+      "errCron5": "Cron must be a standard 5-field expression (min hour dom mon dow).",
+      "errEmailPredicate": "Email trigger needs at least one of: sender / subject / folders / thread IDs.",
+      "errCalendarLead": "Lead time must be between 1 minute and 30 days.",
+      "errMaxRunSeconds": "Max run seconds must be between 1 and {max}.",
+      "errMaxRunsPerDay": "Max runs per day cannot be negative.",
+      "trigger": {
+        "label": "Trigger",
+        "hint": "Decides when the agent runs automatically",
+        "kind": {
+          "none": "None (draft)",
+          "cron": "Schedule",
+          "schedule": "Schedule",
+          "email_filter": "Email event",
+          "calendar_event_change": "Calendar change",
+          "calendar_before_start": "Before start"
+        },
+        "noneHint": "No trigger configured: the agent is saved as a draft and won't run automatically (you can still run it once manually below).",
+        "cronHint": "Standard 5-field cron (min hour dom mon dow), e.g. 0 9 * * 1-5 = weekdays at 9am.",
+        "upgradeToBuilder": "Switch to the schedule builder",
+        "legacyCronHint": "Legacy cron config — firing behaviour is unchanged. Switching to the builder is one-way (the builder can't express every cron expression).",
+        "tz": "Timezone",
+        "senderPlaceholder": "Sender regex (optional), e.g. dms@corp\\.com",
+        "subjectPlaceholder": "Subject regex (optional), e.g. DMS.*approval",
+        "foldersPlaceholder": "Folders (optional, comma-separated), e.g. Inbox, Approvals",
+        "threadIdsPlaceholder": "Thread IDs (optional, comma-separated)",
+        "emailHint": "Sender / subject are regex; folders and thread IDs are exact allowlists. Fill at least one.",
+        "titlePatternPlaceholder": "Title regex (optional)",
+        "organizerPatternPlaceholder": "Organizer regex (optional)",
+        "attendeePatternPlaceholder": "Attendee email regex (optional)",
+        "calendarIdsPlaceholder": "Calendar display names (optional, comma-separated)",
+        "leadLabel": "Lead time",
+        "leadUnitMinutes": "Minutes",
+        "leadUnitHours": "Hours",
+        "leadUnitDays": "Days",
+        "leadMinutes": "{count} minutes before",
+        "leadHours": "{count} hours before",
+        "leadDays": "{count} days before",
+        "calendarHint": "Business-field changes can trigger runs. Before-start runs fire at event start minus the lead time. Empty calendar names match all calendars.",
+        "triggerCalendarChange": "Calendar business-field change",
+        "triggerCalendarBefore": "Before start ({lead})",
+        "add": "Add Trigger",
+        "edit": "Edit",
+        "delete": "Delete",
+        "enabled": "Automatic trigger enabled"
+      },
+      "tools": {
+        "label": "Allowed tools",
+        "hint": "Tools the agent may call at runtime (intersected within the matrix floor)",
+        "unavailable": "Tool list unavailable (service not ready or feature off); saving won't change the existing tool config.",
+        "writeTag": "Write tool (requires approval)",
+        "writeBadge": "write",
+        "group": {
+          "emailRead": "Email reading",
+          "emailWrite": "Email actions",
+          "calendar": "Calendar",
+          "report": "Reports",
+          "session": "Sessions & identity",
+          "knowledge": "Skills & knowledge",
+          "other": "Other",
+          "library": "Library"
+        },
+        "groupSelectAll": "Select all",
+        "groupClearAll": "Clear"
+      },
+      "capabilities": {
+        "label": "Extra capabilities",
+        "hint": "Capability grants beyond the tool whitelist (web access / command execution)",
+        "webDisabled": "Web access is not enabled (controlled by the MAILAGENT_OPENNESS_WEB_TOOLS environment variable); this grant will have no effect until it is turned on.",
+        "execDisabled": "Command execution is not enabled (controlled by the MAILAGENT_OPENNESS_EXEC_TOOLS environment variable); this grant will have no effect until it is turned on."
+      },
+      "capabilityCards": {
+        "label": "Capabilities & permissions",
+        "hint": "Choose the work scope first; expand Advanced only for precise tool control",
+        "advanced": "Advanced: individual tools",
+        "advancedHint": "Keeps the full atomic-tool controls",
+        "writeRuleHint": "Writes require approval by default. After saving, you can add card-free rules for this agent below.",
+        "email": {
+          "title": "Email",
+          "description": "Read mail, organize the inbox, or create and update drafts.",
+          "tier": {
+            "read": "Read",
+            "organize": "Organize",
+            "draft": "Draft"
+          }
+        },
+        "calendar": {
+          "title": "Calendar",
+          "description": "Read events, or propose rescheduling, RSVP, and deletion.",
+          "tier": {
+            "off": "Off",
+            "read": "Read",
+            "write": "Write"
+          },
+          "hitl": "Calendar writes always require human approval and cannot use card-free rules."
+        },
+        "knowledge": {
+          "title": "Knowledge",
+          "description": "Access profile docs, Skills, and KOS knowledge. Off by default.",
+          "tier": {
+            "off": "Off",
+            "on": "On"
+          }
+        },
+        "sessions": {
+          "title": "Sessions",
+          "description": "The chat-history tools are always available; this sets how far they read: only this agent's own history, or every agent's.",
+          "tier": {
+            "own": "Own only",
+            "all": "All agents"
+          },
+          "allHint": "All agents = can read the transcripts of other agents and the main agent (including any email content quoted in them)."
+        },
+        "reports": {
+          "title": "Reports",
+          "description": "Read existing reports or save this run's output as a structured report.",
+          "tier": {
+            "read": "Read",
+            "produce": "Produce"
+          },
+          "produceHint": "Produce writes a local report artifact; it does not send data externally."
+        },
+        "web": {
+          "title": "Web",
+          "description": "Search and fetch public pages; web content always remains untrusted data.",
+          "tier": {
+            "off": "Off",
+            "gated": "Domain-gated",
+            "open": "Open"
+          }
+        },
+        "files": {
+          "title": "Commands & local files",
+          "description": "Read/write files and run authorized local commands or Skill entrypoints.",
+          "tier": {
+            "off": "Off",
+            "on": "On"
+          },
+          "ruleHint": "The grant only admits exec tools; card-free execution still needs a whitelist rule and first-run confirmation."
+        },
+        "connectors": {
+          "title": "External services",
+          "description": "Grant per-service access to connected external services (MCP); fetched content always remains untrusted data.",
+          "tier": {
+            "off": "Off",
+            "read": "Read-only",
+            "write": "Writable"
+          },
+          "disabledHint": "Connector support is off (controlled by MAILAGENT_MCP_CONNECTORS); grants saved here will not take effect yet.",
+          "warn": "Writable grants the \"read + create + update\" ceiling: this agent's background runs may create and modify data in the service (delete is never available).",
+          "empty": "No external service is connected yet. Connect one in Settings → AI first, then grant it to this agent here.",
+          "notConnected": "Not connected",
+          "allowlistAll": "Tool allowlist: all granted tools",
+          "allowlistCustom": "Tool allowlist: {count} selected",
+          "allToolsActive": "No per-tool restriction: all tools allowed by the tier remain active",
+          "selectedToolsCount": "{count}/{total} tools allowed",
+          "resetTools": "Reset to all",
+          "toolsLoading": "Loading tool list…",
+          "toolsEmpty": "No synced tools yet — sync the connector first in External Connections."
+        },
+        "library": {
+          "title": "Library",
+          "description": "Read, search, and write files in the library.",
+          "tier": {
+            "off": "Off",
+            "read": "Read-only",
+            "write": "Writable"
+          },
+          "writeHint": "Writes to Agent docs and “writable” mounted folders — not My docs.",
+          "readScope": "Can read every root, including the mail-attachment projection.",
+          "headlessNote": "Unattended runs skip approval only for Agent docs; mounted folders are always read-only, and move/delete always require approval."
+        },
+        "subsetBadge": "SUBSET",
+        "subsetHint": "The enabled tools are a subset of the “{tier}” tier. A tier states the upper bound of granted power, not that every tool in it is on. Expand “Advanced” for the exact list.",
+        "computerUse": {
+          "title": "Computer Use automation",
+          "desc": "Allow background runs to automate specific browser domains or desktop apps (requires browser_use / desktop_use).",
+          "tier": {
+            "off": "Off",
+            "stop_before_submit": "Stop before submit",
+            "allow_submit": "Allow submit"
+          },
+          "domainsLabel": "Allowed domains (comma-separated, no wildcards)",
+          "domainsPlaceholder": "e.g. dms.company.com, oa.internal",
+          "appsLabel": "Allowed desktop apps (comma-separated, exact names)",
+          "appsPlaceholder": "e.g. Microsoft Teams, Notion",
+          "allowSubmitWarn": "High risk: allows unattended background runs to execute final submit, approve, or join actions inside the listed scope."
+        }
+      },
+      "budget": {
+        "label": "Run budget",
+        "hint": "Caps run frequency and wall-clock duration",
+        "maxRunsPerDay": "Max runs per day",
+        "maxRunSeconds": "Max run seconds (≤ {max})"
+      },
+      "card": {
+        "triggerCron": "Schedule: {cron} ({tz})",
+        "triggerSchedule": "Schedule: {text} ({tz})",
+        "triggerEmail": "Email event trigger",
+        "triggerCalendarChange": "Calendar change trigger",
+        "triggerCalendarBefore": "Before start ({lead})",
+        "triggerNone": "No trigger configured (draft)"
+      },
+      "runs": {
+        "section": "Run history",
+        "runNow": "Run now",
+        "loading": "Loading…",
+        "empty": "No runs yet.",
+        "loadMore": "Load more",
+        "loadMoreLoading": "Loading…",
+        "pausedPendingHint": "Run paused, waiting for approval. Open the execution record to approve, or approve it in the Dynamic Island; it will expire if left unhandled.",
+        "pausedExpiredHint": "Approval expired; this run was not executed.",
+        "skippedHint": "The daily run limit was reached, so this trigger was not executed.",
+        "specInvalidHint": "The agent's configuration could not start this run: it may have been disabled or deleted, or its trigger configuration is invalid. Fix the configuration and try again.",
+        "steps": "{n} steps",
+        "tokens": "{n} tokens",
+        "autoWhitelisted": "Auto-allowed ×{n}",
+        "autoWhitelistedRule": "Card-free: whitelist rule ×{n}",
+        "autoWhitelistedWebOpen": "Card-free: open web access ×{n}",
+        "autoWhitelistedWebSearch": "Card-free: search grant ×{n}",
+        "autoWhitelistedGrant": "Card-free: grant ×{n}",
+        "viewRecord": "View record",
+        "pendingDot": "Approval pending",
+        "recordBanner": "This is an agent execution record — only approvals are interactive (you cannot continue the chat).",
+        "triggeredAgo": "Triggered {ago}",
+        "unknownAgent": "Unknown agent",
+        "ageJustNow": "just now",
+        "ageMinutes": "{n} min ago",
+        "ageHours": "{n} hr ago",
+        "ageDays": "{n} d ago",
+        "approvalTitle": "Approval pending",
+        "approvalBody": "{agent} wants to run {tool} — your approval is required.",
+        "approveLabel": "Approve",
+        "rememberDomain": "Always allow this agent to reach this domain (no approval)",
+        "rememberDomainHint": "Creates a domain whitelist entry for this agent's unattended runs, so future access to this domain skips approval. Tick only for sources you trust.",
+        "editParams": "Edit parameters",
+        "editParamsClose": "Hide parameters",
+        "editParamsHint": "Only the fields below can be changed; the rest are pinned server-side. Approve to run the edited version.",
+        "rememberTool": "Remember: stop asking about this kind of action",
+        "rememberToolHint": "Sets {tool} to run automatically in chat from now on. Unattended agent runs are unaffected. Reversible in Settings → AI → tool approval tiers.",
+        "approvalExpired": "Approval expired (timeout or app restart); this run was not executed.",
+        "decideFailed": "Decision failed",
+        "state": {
+          "queued": "Queued",
+          "running": "Running",
+          "completed": "Completed",
+          "skipped": "Skipped",
+          "pausedPending": "Awaiting approval",
+          "pausedExpired": "Approval expired (not run)",
+          "pausedApproved": "Approved (executed)",
+          "pausedRejected": "Rejected (not run)",
+          "failed": "Failed"
+        }
+      },
+      "policy": {
+        "section": "Automation policy",
+        "hint": "Approval-free whitelist for this agent's unattended runs. With no rules, every write pauses for your approval (Dynamic Island); actions matching a rule execute without a card. To loosen a rule, delete it and create a new one.",
+        "add": "New rule",
+        "loading": "Loading…",
+        "empty": "No rules yet. Every write by this agent requires your per-action approval.",
+        "dormant": "Dormant: the trigger type changed, so this rule no longer matches any run.",
+        "hits": "Matched {n} times",
+        "delete": "Delete",
+        "capability": {
+          "domain_write": "Auto-run write tool",
+          "exec": "Auto-run skill script",
+          "web": "Allow web domain"
+        },
+        "modeDerived": "Applies to: {mode} (derived from the trigger type, not selectable)",
+        "mode": {
+          "untrusted_trigger": "email-triggered runs",
+          "cron_headless": "scheduled runs",
+          "none": "no trigger configured (rule will be dormant)"
+        },
+        "toolLabel": "Tool",
+        "toolNone": "This agent's tool whitelist has no write tools (check write tools under \"Allowed tools\" above and save first).",
+        "skillLabel": "Skill",
+        "skillNone": "No installed skills (install one under Settings → Custom AI first).",
+        "entryLabel": "Entry script",
+        "interpreterPlaceholder": "Absolute interpreter path, e.g. /usr/bin/python3",
+        "argsLabel": "Constrained trailing arguments",
+        "argsHint": "Every position must be pin / enum / pattern / path prefix — no raw wildcard.",
+        "argAdd": "Add argument",
+        "argRemove": "Remove",
+        "argKind": {
+          "pin": "pin (literal)",
+          "enum": "enum",
+          "pattern": "pattern",
+          "path_within": "path prefix"
+        },
+        "argPlaceholder": {
+          "pin": "Literal value",
+          "enum": "Comma-separated allowed values, e.g. approve, reject",
+          "pattern": "Anchored regex, e.g. ^REQ-[0-9]+$",
+          "path_within": "Absolute directory prefix, e.g. /Users/me/exports"
+        },
+        "cwdPin": "Pin the working directory to this skill's folder",
+        "errToolRequired": "Pick the write tool to allow.",
+        "errEntryRequired": "Pick a skill and its entry script.",
+        "errInterpreterAbs": "The interpreter must be an absolute path (starting with /).",
+        "errArgEmpty": "Argument values cannot be empty.",
+        "errOriginRequired": "Enter the domain or full URL to allow.",
+        "originPlaceholder": "Domain or full URL, e.g. api.vendor.com or https://api.vendor.com",
+        "originHint": "An approval-free web domain (the gated-tier whitelist). On submit the server normalizes it to scheme://host:port and echoes it back; different case / port / subdomain count as different origins, and subdomains do not inherit.",
+        "warnTitle": "High risk: approval-free execution",
+        "warnBody": "Once created, \"{agent}\" will execute {action} without asking you. The rule only applies to {mode}; delete it to restore per-action approval.",
+        "confirmCreate": "I understand — create the rule",
+        "create": "Create",
+        "cancel": "Cancel",
+        "grant": {
+          "label": "Allow running local skill scripts (grant_exec)",
+          "hint": "Opens the exec surface for this agent's unattended runs. Execution still requires a whitelist rule match plus a first-run approval on the Dynamic Island; without a match it pauses per action. Takes effect after saving.",
+          "warn": "High risk: once enabled, unattended runs of \"{agent}\" may request executing local skill scripts. Enable?",
+          "confirm": "Enable"
+        },
+        "web": {
+          "label": "Web access (grant_web)",
+          "hint": "Whether this agent's unattended runs may reach the web, and the approval-free scope. Takes effect after saving.",
+          "grant": {
+            "off": "Off",
+            "gated": "Domain whitelist",
+            "open": "Fully open"
+          },
+          "searchWarn": "Both gated and open allow web_search without approval: the search query goes straight to DuckDuckGo, no per-call prompt.",
+          "openWarn": "Fully open: this agent may fetch any URL without approval — smuggled data can be encoded into the URL and exfiltrated, with only SSRF protection as a backstop.",
+          "untrustedOpenWarn": "Email trigger × fully-open web is the largest exposure combination: a poisoned email can steer content into outbound requests. Enable only for agents you trust.",
+          "gatedHint": "Gated tier: web_fetch is approval-free only when the URL matches a domain in the whitelist below; other domains pause per call (with an \"always allow this domain\" affordance on the card)."
+        },
+        "mounts": {
+          "label": "Mounted skills",
+          "hint": "The skills visible to this agent's unattended runs (a narrowing surface). Tools of unmounted skills are unavailable to this agent; mounting cannot revive a globally disabled skill.",
+          "defaultTag": "default mount set (email / search / report)",
+          "empty": "Explicit zero mount: this agent has no skill tools."
+        }
+      },
+      "deleteConfirm": "Delete this agent?",
+      "errComputerUseScope": "Computer Use requires at least one concrete domain or app name (wildcards like * or all are not allowed)."
+    }
+  },
+  "agentSettings": {
+    "section": {
+      "identity": "Identity",
+      "instructions": "Instructions",
+      "model": "Model",
+      "when": "When it runs",
+      "capabilities": "What it can touch",
+      "specific": "Its own settings",
+      "danger": "Delete it"
+    },
+    "readonly": "Read-only",
+    "builtinToolsNote": "Its tools are hard-wired — nothing can be removed or added.",
+    "notFound": "No configuration found for this member.",
+    "loading": "Loading configuration…",
+    "saveDone": "Saved",
+    "header": {
+      "tryRun": "Run once now"
+    },
+    "role": {
+      "builtin": "Built-in member",
+      "custom": "Custom member"
+    },
+    "model": {
+      "primary": "Primary",
+      "fallback": "Fallback on failure",
+      "note": "The fallback model is only tried when the primary call fails (timeout, rate limit, or error)."
+    },
+    "when": {
+      "manual": "On demand · runs when you ask",
+      "timed": "On a schedule",
+      "event": "On an event",
+      "eventKindLabel": "Trigger event",
+      "dailySentence": "Runs every day at {time}",
+      "dailyHourLabel": "Daily run hour",
+      "dailyHourOnly": "This member runs one batch per day and only supports whole-hour times."
+    },
+    "regex": {
+      "ok": "Regex compiles",
+      "invalid": "Regex does not compile: {message}",
+      "jsNote": "Validated with browser regex syntax; a few Python-only constructs (e.g. named groups) may be flagged incorrectly.",
+      "tryLabel": "Try it on the last 5 subjects",
+      "matched": "match",
+      "missed": "no match",
+      "empty": "No inbox subjects found",
+      "loadFailed": "Failed to fetch subjects, try again later"
+    },
+    "notionDb": {
+      "ok": "Looks valid",
+      "parsed": "Detected database ID: {id}",
+      "useParsed": "Use this ID",
+      "invalid": "Doesn't look like a Notion database ID: expected 32 hex characters (dashes allowed), or paste the database link"
+    },
+    "docs": {
+      "injected": "Injected identity documents",
+      "sameSource": "The same documents as Settings → AI → Identity documents — editing either place edits the same data."
+    },
+    "create": {
+      "hint": "Write its identity and instructions first, then save; scheduling can come later. Chat becomes available after saving."
+    },
+    "main": {
+      "role": "Main agent · the global conversation itself"
+    }
+  },
+  "team": {
+    "tabs": {
+      "aria": "View",
+      "chat": "Chat",
+      "record": "Runs",
+      "settings": "Settings"
+    },
+    "goChat": "Open chat",
+    "list": {
+      "builtin": "Built-in",
+      "custom": "Custom",
+      "working": "Working",
+      "newAgent": "New agent"
+    },
+    "noChat": {
+      "matterFollowup": "Follow-up always belongs to one matter: you chat with it inside that matter, and its run history lives on that matter's page (one timeline per matter). Listed here are the existing matter chats.",
+      "preprocess": "It is a pipeline stage that runs automatically on incoming mail, classifying each message — it does not chat. To ask why a message was judged that way, ask the main assistant on that email. Below are the recently classified messages.",
+      "projectProgress": "Deterministic flow, no AI involved — there is no reasoning surface to chat with; records only come from its trigger.",
+      "search": "Its calling surface is the ⌘K command palette; it keeps no run history and does not chat here."
+    },
+    "matterFollowup": {
+      "title": "Matter follow-up",
+      "badge": "Per-matter rules",
+      "settingsIntro": "These follow-up defaults are shared by every matter: save the task contract with Save; model and web settings apply as soon as you change them. A single matter's own follow-up rule is edited on that matter's page.",
+      "perMatterTitle": "Per-matter follow-up rules",
+      "perMatterNote": "How often it follows up and what it looks at is decided by each matter's own follow-up rule — edit it in that matter's follow-up settings on the matters page."
+    },
+    "record": {
+      "listTitle": "Run history",
+      "listTitleMatter": "Matter chats",
+      "new": "New chat",
+      "auto": "auto",
+      "expandList": "Expand record list",
+      "collapseList": "Collapse record list",
+      "newSessionTitlePre": "Start a new chat with",
+      "newSessionTitleRest": "{name}",
+      "runUntitled": "Run",
+      "noOutput": "This run produced no output.",
+      "noOutputError": "This run produced no output: {error}",
+      "rawPrompt": {
+        "title": "Raw record (task contract prompt)",
+        "copy": "Copy"
+      },
+      "trigger": {
+        "badge": "Auto-triggered",
+        "manual": "Manual run",
+        "schedule": "Scheduled",
+        "cron": "Scheduled (cron)",
+        "email": "Triggered by incoming mail",
+        "calendarChange": "Triggered by a calendar change",
+        "calendarBefore": "Triggered before a meeting",
+        "unknown": "Trigger not recorded"
+      },
+      "emptyRuns": "No runs yet — it only runs when its trigger fires; manual test runs land here too.",
+      "emptyReports": "No reports yet — scheduled or manual generations will show up here.",
+      "emptyProgress": "No sync records yet — it runs when a weekly-report email matching the trigger words arrives.",
+      "emptyPreprocess": "No recently classified mail — with AI preprocessing enabled, new mail shows up here message by message.",
+      "emptyMatterSessions": "No matter chats yet — once you talk to the AI inside a matter, those conversations show up here."
+    },
+    "welcome": {
+      "cadence": {
+        "daily": "daily",
+        "weekly": "weekly",
+        "monthly": "monthly"
+      },
+      "schedule": {
+        "report": "It runs on its own schedule ({cadence} report); anything you say here is a direct instruction to it.",
+        "daily": "It runs automatically once a day; anything you say here is a direct instruction to it.",
+        "timed": "It runs on its own schedule ({sentence}); anything you say here is a direct instruction to it.",
+        "timedPlain": "It runs on its own schedule; anything you say here is a direct instruction to it.",
+        "event": "It runs automatically when mail or calendar events match its trigger; anything you say here is a direct instruction to it.",
+        "manual": "It has no schedule — it only acts when you come to it. Anything you say here is a direct instruction to it."
+      }
+    },
+    "detail": {
+      "duration": "Duration",
+      "steps": "Steps",
+      "tokens": "Tokens",
+      "error": "Error",
+      "model": "Model",
+      "reviewStatus": "Review status",
+      "noTranscript": "This kind of run creates no session and keeps no transcript — only the result summary.",
+      "tokensInOut": "in {input} · out {output}",
+      "report": {
+        "trigger": "Trigger",
+        "output": "Output",
+        "triggerBody": "Generated on the {cadence} schedule · {date}",
+        "open": "Open report",
+        "openFromRun": "Open the report this run produced",
+        "fullText": "Full report"
+      },
+      "progress": {
+        "counts": "{total} projects · {created} created · {updated} updated · {failed} failed",
+        "failNote": "Nothing was written this time. A deterministic flow never guesses fields — fix the source sheet and resend the email to rerun (a rerun of the same email overwrites this record)."
+      }
+    },
+    "preprocess": {
+      "labels": {
+        "summary": "Summary",
+        "urgencyReason": "Why this priority",
+        "keyPoints": "Key points",
+        "mailActions": "Suggested actions",
+        "recommendedActions": "Recommended handling",
+        "replySuggestion": "Suggested reply"
+      },
+      "classified": "Classified",
+      "failed": "This one did not go through",
+      "retries": "Retries",
+      "failNote": "No labels were written for this email. Preprocessing retries with backoff; once the retries run out it stops here — the email itself is intact, it just has no AI labels."
+    }
+  },
+  "runErrors": {
+    "E_RUN_TIMEOUT": "Timed out before the AI finished",
+    "E_GATEWAY_DOWN": "AI service is not running or unreachable",
+    "E_GATEWAY_BAD_RESPONSE": "AI service returned an unreadable result",
+    "E_GATEWAY_HTTP": "AI service request failed",
+    "E_AGENT": "AI call failed",
+    "E_BUDGET_TIME": "Run exceeded its time budget",
+    "E_QUOTA": "AI quota exhausted",
+    "E_UPSTREAM": "Upstream AI service error",
+    "E_RUN_STOPPED": "Run was stopped manually",
+    "E_RUN_ERROR": "Run failed",
+    "E_WORKER_CRASH": "Background worker exited unexpectedly",
+    "E_RUN_ACTIVE": "Another run is already active in this session"
+  },
+  "computerUseOverlay": {
+    "activeTitle": "MailAgent is controlling your Mac",
+    "stepLabel": "Step {step}",
+    "stopTakeover": "Stop / Take over",
+    "stopping": "Stopping…",
+    "desktopBadge": "Desktop Use"
+  },
+  "browserPane": {
+    "title": "Built-in Browser",
+    "toggleButton": "Browser",
+    "popOutTab": "Open in standalone tab",
+    "returnToSidebar": "Return to chat sidebar",
+    "closeSidebar": "Collapse browser sidebar",
+    "newTab": "New tab",
+    "closeTab": "Close tab",
+    "back": "Back",
+    "forward": "Forward",
+    "reload": "Reload",
+    "urlPlaceholder": "Enter URL and press Enter",
+    "openExternalChrome": "Open in visible Chrome window",
+    "stopKernel": "Stop browser kernel",
+    "connecting": "Connecting to built-in browser…",
+    "disconnected": "Disconnected from built-in browser",
+    "reconnect": "Reconnect",
+    "notInstalledTitle": "Built-in browser not installed",
+    "notInstalledHint": "Open Settings → Connectors to install and enable Browser Use.",
+    "modeUnsupportedTitle": "Live preview unavailable in current mode",
+    "modeUnsupportedHint": "Switch Browser Use to the built-in managed browser mode to view and interact inline.",
+    "openConnectors": "Open Connector Settings",
+    "agentControlling": "AI is operating this browser",
+    "stopTakeover": "Stop / Take over",
+    "untitledTab": "New tab",
+    "moreMenu": "More actions",
+    "manageCookies": "Login state & cookies",
+    "openDevTools": "Open DevTools",
+    "resetSession": "Reset browser session",
+    "cookieManager": {
+      "title": "Browser login state",
+      "storedTab": "Saved logins",
+      "importTab": "Import from Chrome",
+      "searchStoredPlaceholder": "Filter saved domains…",
+      "searchImportPlaceholder": "Filter Chrome domains…",
+      "emptyStored": "No saved site cookies yet",
+      "goImport": "Import from Chrome",
+      "cookieCount": "{count} cookies",
+      "clearDomain": "Clear site cookies",
+      "clearedDomain": "Cleared {domain} ({count} cookies)",
+      "clearAll": "Clear all logins",
+      "confirmClearAll": "Confirm clear all ({count} sites)",
+      "cancel": "Cancel",
+      "clearedAll": "Cleared all built-in browser cookies ({count})",
+      "selectNonSensitive": "Non-sensitive",
+      "selectAll": "Select all",
+      "clearSelection": "Clear selection",
+      "sensitiveBadge": "Sensitive",
+      "importSelected": "Import selected ({count})",
+      "importing": "Importing…",
+      "selectedCount": "{selected} / {total} domains selected",
+      "emptyChromeDomains": "No active cookies found in this Chrome profile",
+      "refresh": "Refresh",
+      "close": "Close panel"
+    }
+  }
+}

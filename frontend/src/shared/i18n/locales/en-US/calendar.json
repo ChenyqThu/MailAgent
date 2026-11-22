@@ -1,0 +1,373 @@
+{
+  "calendar": {
+    "title": "Recurring meetings",
+    "subtitle": "Invitations received since {since}; replay each one to the Notion calendar.",
+    "loading": "Loading…",
+    "empty": {
+      "day": "No events today",
+      "week": "No events this week",
+      "month": "No events this month",
+      "agenda": "No events in the next {n} days",
+      "recurring": "No recurring meetings found",
+      "syncHint": "Calendar sync isn't ready yet — try again later or contact your admin",
+      "neverSynced": "Calendar hasn't synced yet",
+      "neverSyncedHint": "Click the sync button in the toolbar to fetch calendar events",
+      "syncFailed": "Calendar sync failed",
+      "syncFailedHint": "The last sync errored — hover the ℹ️ in the bottom status bar for details"
+    },
+    "emptyHint": "Widen the time range, or confirm .ics invites synced.",
+    "invite": {
+      "title": "Meeting invitation",
+      "cancelled": "Meeting cancelled",
+      "recurringBadge": "Recurring",
+      "exceptionBadge": "This occurrence",
+      "conflictNone": "No conflicts",
+      "conflictCount": "Overlaps {n} events",
+      "notInCalendar": "Not synced to calendar yet",
+      "seriesEnded": "No upcoming occurrences — showing first occurrence",
+      "viewInCalendar": "View in calendar"
+    },
+    "syncTriggered": "Calendar sync triggered",
+    "syncTriggerFail": "Calendar sync failed",
+    "replay": "Replay",
+    "replayOk": "Email #{id} replayed",
+    "replayFail": "Email #{id} replay failed",
+    "recurring": {
+      "scan": "Scan",
+      "scanning": "Scanning…",
+      "scanTitle": "Scan mail for RRULE-bearing meeting invites (davmail mode may take minutes)",
+      "scanRangeTitle": "Scan last {range}",
+      "replayTitle": "Replay — re-export to Notion (from SQLite calendar_event)",
+      "replayNoUid": "Missing ical_uid — cannot replay (data anomaly?)"
+    },
+    "col": {
+      "subject": "Subject",
+      "organizer": "Organizer",
+      "rrule": "RRULE",
+      "firstOccur": "First",
+      "lastOccur": "Last",
+      "count": "Count",
+      "action": "Action"
+    },
+    "weekday": {
+      "long": {
+        "sun": "Sun",
+        "mon": "Mon",
+        "tue": "Tue",
+        "wed": "Wed",
+        "thu": "Thu",
+        "fri": "Fri",
+        "sat": "Sat"
+      }
+    },
+    "shared": {
+      "untitled": "Untitled event",
+      "allDay": "All day",
+      "loading": "Loading…",
+      "cancel": "Cancel",
+      "close": "Close (Esc)",
+      "closeAria": "Close",
+      "yearMonth": "{m}/{y}"
+    },
+    "toolbar": {
+      "prevAria": "Previous",
+      "prevTitle": "Previous (←)",
+      "nextAria": "Next",
+      "nextTitle": "Next (→)",
+      "today": "Today",
+      "todayTitle": "Today (T)",
+      "viewAria": "Switch view",
+      "viewDay": "Day",
+      "viewWeek": "Week",
+      "viewMonth": "Month",
+      "viewAgenda": "Agenda",
+      "viewRecurring": "Recurring",
+      "newBtn": "New event",
+      "newTitle": "New event — write directly to Exchange (CalDAV PUT)",
+      "syncBtn": "Sync",
+      "syncTitle": "Force sync (⌘R) · Background worker auto-syncs every 60s; this triggers an immediate full fetch",
+      "syncTipUnknownErr": "Unknown error",
+      "range": {
+        "agenda": "Next 14 days",
+        "recurring": "All recurring events"
+      },
+      "calendarFilter": {
+        "title": "Filter by calendar",
+        "all": "All calendars",
+        "selected": "{n} calendars",
+        "ariaLabel": "Calendar filter"
+      },
+      "legend": {
+        "aria": "Event status legend",
+        "title": "Event status legend",
+        "tentative": "Tentative",
+        "tentativeShape": "Striped fill",
+        "needsAction": "Needs action",
+        "needsActionShape": "Outlined",
+        "declined": "Declined",
+        "declinedShape": "Strikethrough + gray",
+        "cancelled": "Cancelled",
+        "cancelledShape": "Strikethrough + dimmed"
+      }
+    },
+    "statusbar": {
+      "autoSync": "Auto sync",
+      "popoverAria": "Sync & backend details",
+      "popoverTitle": "Sync & backend",
+      "noSync": "Never synced",
+      "calendarFallback": "Calendar"
+    },
+    "join": {
+      "button": "Join meeting",
+      "short": "Join",
+      "title": "Join meeting — opens in {p}"
+    },
+    "detail": {
+      "matterRole": "Matter projection",
+      "agentRole": "Agent schedule",
+      "dueTime": "Due",
+      "plannedTime": "Planned for",
+      "matter": "Matter",
+      "item": "Action item",
+      "nextStep": "Next step",
+      "owner": "Owner",
+      "ownerUnset": "Not assigned",
+      "blockers": "Blockers",
+      "blockersNone": "None",
+      "recentProgress": "Latest progress",
+      "progressNone": "No progress yet",
+      "loadFailedLabel": "Matter detail",
+      "loadFailed": "Could not load this matter",
+      "retry": "Retry",
+      "goMatter": "Open matter",
+      "goMatterTitle": "Open this matter in the Matters domain",
+      "matterNote": "This is a projection of a matter — change the date or content in the matter itself",
+      "whatRuns": "What it will run",
+      "triggerRules": "Trigger",
+      "triggerDisabled": "disabled",
+      "lastRun": "Last run",
+      "agentMissing": "Could not load this agent's config",
+      "goAgent": "Open agent",
+      "goAgentTitle": "Open this agent in the Team domain",
+      "agentNote": "This is a projection of a schedule — change the time in the agent's settings",
+      "reportStatus": {
+        "generating": "Generating",
+        "ready": "Ready",
+        "empty": "Nothing to report",
+        "failed": "Failed",
+        "skipped": "Skipped"
+      }
+    },
+    "drawer": {
+      "closeTitle": "Close (Esc)",
+      "noRelatedEmail": "No related email",
+      "sourceEmail": {
+        "openTitle": "Locate this email in the inbox",
+        "noSubject": "(no subject)",
+        "linkedCount": "{n} linked emails"
+      },
+      "teamsMeeting": "Teams meeting",
+      "me": "(me)",
+      "attendeeCount": "{n} attendees",
+      "moreAttendees": "… {n} more",
+      "rruleInstance": "RRULE instance",
+      "ariaFallback": "Event details",
+      "spanDays": "· {n} days",
+      "sourceLabel": "Source",
+      "role": {
+        "owner": "Organizer",
+        "attendee": "Attendee"
+      },
+      "meta": {
+        "time": "Time",
+        "conflict": "Time conflict",
+        "calendar": "Calendar",
+        "location": "Location",
+        "organizer": "Organizer",
+        "attendees": "Attendees",
+        "myResponse": "My response",
+        "meetingLink": "Meeting link",
+        "relatedEmail": "Related email",
+        "rrule": "Recurrence",
+        "description": "Description"
+      },
+      "resp": {
+        "accepted": "Accepted",
+        "tentative": "Tentative",
+        "declined": "Declined",
+        "needsAction": "Needs action"
+      },
+      "ops": {
+        "edit": "Edit",
+        "delete": "Delete",
+        "editTitle": "Edit event — updates Exchange via CalDAV PUT",
+        "deleteTitle": "Delete event — 5-second undo window before CalDAV DELETE",
+        "ownerOnly": "Only the organizer can modify"
+      },
+      "rsvp": {
+        "label": "My response",
+        "labelPending": "· Needs action",
+        "accept": "Accept",
+        "tentative": "Tentative",
+        "decline": "Decline",
+        "acceptTitle": "Accept — sends iTIP REPLY (PARTSTAT=ACCEPTED) to organizer",
+        "tentativeTitle": "Tentative — sends iTIP REPLY (PARTSTAT=TENTATIVE) to organizer",
+        "declineTitle": "Decline — sends iTIP REPLY (PARTSTAT=DECLINED) to organizer",
+        "toastAccepted": "RSVP Accepted sent to organizer",
+        "toastTentative": "RSVP Tentative sent to organizer",
+        "toastDeclined": "RSVP Declined sent to organizer",
+        "toastErr": "Failed to send RSVP ({response})",
+        "confirmTitle": "Send RSVP reply",
+        "confirmBody": "This sends an \"{action}\" RSVP reply email (iTIP REPLY) to the organizer. It cannot be undone.",
+        "confirmEvent": "Event",
+        "confirmSend": "Send reply"
+      }
+    },
+    "form": {
+      "titleCreate": "New event",
+      "titleEdit": "Edit event",
+      "labelTitle": "Title",
+      "placeholderTitle": "Event title",
+      "errTitle": "Please enter a title",
+      "labelTime": "Time",
+      "ariaStart": "Start time",
+      "ariaEnd": "End time",
+      "errTime": "End time must be after start time",
+      "allDayToggle": "All day",
+      "labelCalendar": "Calendar",
+      "calendarDefault": "Default calendar",
+      "calendarEditLocked": "Switching calendars means deleting and re-creating: the event gets a new identity and attendee replies are lost. Create a new event instead.",
+      "labelLocation": "Location",
+      "placeholderLocation": "Room / Teams link / Address",
+      "labelDescription": "Description",
+      "placeholderDescription": "Agenda, notes, links…",
+      "uidAria": "Event UID",
+      "repeat": {
+        "label": "Repeat",
+        "freqNone": "Does not repeat",
+        "everyPrefix": "Every",
+        "onDaysPrefix": "on",
+        "unitDay": "day(s)",
+        "unitWeek": "week(s)",
+        "unitMonth": "month(s)",
+        "unitYear": "year(s)",
+        "dayMo": "Mon",
+        "dayTu": "Tue",
+        "dayWe": "Wed",
+        "dayTh": "Thu",
+        "dayFr": "Fri",
+        "daySa": "Sat",
+        "daySu": "Sun",
+        "endNever": "Never ends",
+        "endCount": "After N times",
+        "endUntil": "Until date",
+        "countSuffix": "times",
+        "seriesHint": "Changing the recurrence rule applies to the whole series",
+        "intervalAria": "Repeat interval",
+        "bydayAria": "Weekly repeat days",
+        "endAria": "End condition",
+        "countAria": "Repeat count",
+        "untilAria": "End date",
+        "summary": {
+          "everyUnit": "Every {unit}",
+          "everyNUnit": "Every {n} {unit}",
+          "daysJoin": ", ",
+          "withDays": "{base} on {days}",
+          "withDaysN": "{base} on {days}",
+          "endCount": "{base}, {n} times",
+          "endUntil": "{base}, until {date}"
+        }
+      },
+      "recurrenceScope": {
+        "title": "Recurring event",
+        "body": "Apply this change to:",
+        "thisOnly": "This event only",
+        "thisAndFuture": "This and following",
+        "allSeries": "Entire series"
+      },
+      "attendees": {
+        "label": "Attendees",
+        "placeholder": "Search a name or email, Enter to add",
+        "hint": "Enter to add · ⌫ remove last · click × to remove",
+        "removeChip": "Remove {email}",
+        "addRaw": "Add “{email}”",
+        "addRawHint": "Not in the directory — use this address",
+        "suggestAria": "Attendee suggestions"
+      },
+      "actions": {
+        "cancel": "Cancel",
+        "create": "Create",
+        "save": "Save",
+        "creating": "Creating…",
+        "saving": "Saving…"
+      },
+      "toastCreated": "Event created — syncs to local view within ~60s",
+      "toastUpdated": "Event updated",
+      "toastErrCreate": "Failed to create event",
+      "toastErrUpdate": "Failed to update event"
+    },
+    "errorBoundary": {
+      "title": "{view} failed to load",
+      "hint": "Switch view or click Retry to reload. See DevTools console for details.",
+      "retry": "Retry"
+    },
+    "error": {
+      "title": "Failed to load calendar data",
+      "hint": "Could not fetch events — the backend may be temporarily unavailable.",
+      "retry": "Retry",
+      "loadShort": "Failed to load"
+    },
+    "relTime": {
+      "justNow": "just now",
+      "secondsAgo": "{n}s ago",
+      "minutesAgo": "{n}m ago",
+      "hoursAgo": "{n}h ago",
+      "daysAgo": "{n}d ago"
+    },
+    "undo": {
+      "aria": "Pending undo actions",
+      "undo": "Undo",
+      "deleted": "Deleted \"{title}\"",
+      "deletedSubtitle": "Syncing to CalDAV in 5 seconds",
+      "restored": "Restored (deletion cancelled)",
+      "deleteFailed": "Failed to delete event",
+      "rescheduled": "Rescheduled \"{title}\"",
+      "resized": "Adjusted duration of \"{title}\"",
+      "rescheduledSubtitle": "{range} · Syncing to CalDAV in 5 seconds",
+      "rescheduleReverted": "Original time restored (not submitted)",
+      "rescheduleFailed": "Failed to reschedule event"
+    },
+    "view": {
+      "month": {
+        "moreItems": "{n} more",
+        "today": "Today",
+        "popEventCount": "{n} events",
+        "popDayLabel": "{m}/{d}"
+      },
+      "agenda": {
+        "today": "Today",
+        "tomorrow": "Tomorrow",
+        "tagMatter": "Matter",
+        "tagAgent": "Agent",
+        "gapDay": "Nothing on {d}",
+        "gapRange": "Nothing from {from} to {to}"
+      }
+    },
+    "shortcut": {
+      "title": "Keyboard shortcuts",
+      "subtitle": "G-prefixed shortcuts switch views (press G then view key within 800 ms)"
+    },
+    "sources": {
+      "legend": "Calendar sources",
+      "mail": "Mailbox",
+      "matter": "Matters",
+      "agent": "Agents",
+      "mailHint": "Accounts + shared calendars",
+      "matterHint": "Due dates + action items",
+      "agentHint": "Agent schedules",
+      "emptyMail": "No mailbox calendars synced yet",
+      "emptyMatter": "No matter dates this month",
+      "emptyAgent": "No agent schedules this month"
+    }
+  }
+}

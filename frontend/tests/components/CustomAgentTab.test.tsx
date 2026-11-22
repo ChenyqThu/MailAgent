@@ -97,8 +97,8 @@ import {
 // P4a：run 历史从配置抽屉移走（归记录列），徽标/run-now 语义闸改为直接钉组件本体。
 import { RunHistorySection } from '../../src/shared/components/agents/custom-agent/RunHistorySection'
 import type { AgentRunState, ReportAgentConfig } from '@shared/api/types'
-import zhCommon from '../../src/shared/i18n/locales/zh-CN/common.json'
-import enCommon from '../../src/shared/i18n/locales/en-US/common.json'
+import zhCommon from '../../src/shared/i18n/locales/zh-CN'
+import enCommon from '../../src/shared/i18n/locales/en-US'
 
 await i18n.changeLanguage('zh-CN')
 

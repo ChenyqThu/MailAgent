@@ -17,8 +17,8 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, test } from 'vitest'
 
 import { TITLED_TOOL_NAMES, toolTitleKey } from '@shared/components/chat/tool_steps'
-import enCommon from '../../src/shared/i18n/locales/en-US/common.json'
-import zhCommon from '../../src/shared/i18n/locales/zh-CN/common.json'
+import enCommon from '../../src/shared/i18n/locales/en-US'
+import zhCommon from '../../src/shared/i18n/locales/zh-CN'
 
 const CATALOG = resolve(
   dirname(fileURLToPath(import.meta.url)),

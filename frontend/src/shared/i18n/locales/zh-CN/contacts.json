@@ -1,0 +1,413 @@
+{
+  "contacts": {
+    "nav": {
+      "title": "通讯录"
+    },
+    "list": {
+      "count": "{count} 人"
+    },
+    "view": {
+      "known": "来往",
+      "all": "全部"
+    },
+    "search": {
+      "placeholder": "搜索姓名 / 名字变体 / 邮箱 / 组织",
+      "clear": "清空搜索"
+    },
+    "sort": {
+      "label": "排序",
+      "density": "往来密度",
+      "recent": "最近往来",
+      "name": "姓名"
+    },
+    "density": {
+      "label": "密度",
+      "compact": "紧凑",
+      "comfortable": "宽松（显示画像摘要）"
+    },
+    "groupBy": {
+      "label": "分组",
+      "none": "不分组",
+      "company": "按公司",
+      "dept": "按部门",
+      "fn": "按职能",
+      "level": "按职级",
+      "ungrouped": "未分组"
+    },
+    "group": {
+      "self": "我",
+      "person": "人",
+      "robot": "机器人 / noreply",
+      "list": "群发列表 / 单向广播",
+      "hidden": "已隐藏",
+      "byManager": "按汇报线",
+      "reportsOf": "{name} 的下级",
+      "noManager": "未设上级"
+    },
+    "kind": {
+      "person": "人",
+      "robot": "机器人",
+      "list": "群发列表"
+    },
+    "badge": {
+      "self": "这是我",
+      "hidden": "已隐藏",
+      "dup": "疑似重复",
+      "emails": "{n} 个邮箱",
+      "outOfFrame": "框架外",
+      "outOfFrameHint": "建议值不在你预设的组织架构框架内，可先补框架再采纳"
+    },
+    "chip": {
+      "open": "打开 {name} 的人物页",
+      "notInDirectory": "这个地址不在通讯录里（不为它建占位记录）"
+    },
+    "stat": {
+      "exchange": "往来 {n} 封 · 我发出 {sent}",
+      "since": "{date} 起 · 最近 {ago}"
+    },
+    "row": {
+      "more": "更多操作"
+    },
+    "action": {
+      "compose": "写邮件",
+      "merge": "合并到另一条记录…",
+      "kindRobot": "改判为机器人",
+      "kindList": "改判为群发列表",
+      "kindPerson": "改判为人",
+      "markSelf": "标记为「我」",
+      "unmarkSelf": "取消「我」标记",
+      "hide": "隐藏",
+      "unhide": "取消隐藏"
+    },
+    "backfill": {
+      "progress": "正在从历史邮件建立通讯录 · 已扫描 {scanned}/{total}",
+      "dismiss": "关闭"
+    },
+    "empty": {
+      "library": "正在从邮件往来建立通讯录…",
+      "libraryHint": "通讯录不需要手工录入。首次启用时会扫描历史邮件，人物会随扫描逐步出现在这里。",
+      "search": "没有匹配「{q}」的联系人",
+      "searchHint": "试试只搜邮箱前缀，或到「全部」视图里找机器人、群发列表与已隐藏的地址。",
+      "detail": "选一个人打开 TA 的档案",
+      "filters": "当前筛选没有匹配的联系人",
+      "filtersHint": "换一组筛选条件试试。"
+    },
+    "detail": {
+      "bareOnly": "仅邮箱记录",
+      "addName": "补充姓名",
+      "locked": "已锁定",
+      "unlocked": "未锁定",
+      "lockHint": "已锁定：自动提取不再覆盖此字段。点击解锁",
+      "editHint": "点击字段即可改，改后锁定"
+    },
+    "section": {
+      "emails": "邮箱锚点",
+      "identity": "身份信息",
+      "notes": "手记",
+      "notesHint": "只有你能看到",
+      "mails": "关联邮件",
+      "matters": "TA 参与的事项"
+    },
+    "field": {
+      "name": "常用名",
+      "formalName": "正式名",
+      "org": "组织",
+      "dept": "部门",
+      "phone": "电话",
+      "variants": "名字变体",
+      "fn": "职能",
+      "level": "职级",
+      "role": "职位署名",
+      "gender": "性别",
+      "variantsHint": "自动收集，搜索时也会命中"
+    },
+    "enum": {
+      "clear": "清除"
+    },
+    "fn": {
+      "tech": "技术",
+      "product": "产品",
+      "delivery": "交付",
+      "legal": "法务",
+      "compliance": "合规",
+      "procurement": "采购",
+      "data": "数据",
+      "security": "安全",
+      "pm": "项目管理",
+      "maillist": "邮件组",
+      "system": "系统"
+    },
+    "level": {
+      "vp": "VP·高管",
+      "director": "总监",
+      "lead": "负责人",
+      "manager": "经理",
+      "staff": "专员"
+    },
+    "gender": {
+      "male": "男",
+      "female": "女",
+      "unset": "未设置"
+    },
+    "org": {
+      "section": "组织关系",
+      "manager": "上级",
+      "reports": "下级",
+      "peers": "同组织同事（自动归类，不是手工关系）",
+      "setManager": "指定上级",
+      "addReport": "添加下级",
+      "noManager": "未设上级 · 指定后可以一键抄送，列表也能按汇报线分组",
+      "noReports": "还没有人把 TA 设为上级",
+      "autoSrc": "从邮件推断",
+      "suggestManager": "上级（从签名档与抄送模式推断）",
+      "composeCc": "写邮件并抄送上级",
+      "unlink": "解除关系"
+    },
+    "email": {
+      "primary": "主邮箱",
+      "setPrimary": "设为主邮箱",
+      "setPrimaryRestore": "设为主邮箱（并恢复在用）",
+      "meta": "{n} 封 · {from}–{to}",
+      "formerPip": "曾用",
+      "former": "标为曾用",
+      "unformer": "恢复在用",
+      "copy": "复制地址",
+      "copied": "已复制 {email}"
+    },
+    "mail": {
+      "filter": {
+        "all": "全部",
+        "from_them": "TA 发的",
+        "from_me": "我发的",
+        "from_third": "第三方发的"
+      },
+      "ccMark": "抄送",
+      "more": "加载更多（还有 {n} 封）",
+      "empty": "没有关联邮件"
+    },
+    "matters": {
+      "empty": "还没有事项挂到 TA 身上"
+    },
+    "profile": {
+      "title": "AI 画像",
+      "topics": "常聊议题",
+      "projects": "共同项目",
+      "evolution": "人物轨迹",
+      "evidence": "证据 {ref}",
+      "evidenceMissing": "邮件不存在或已删除",
+      "contradiction": "待澄清 · {text}",
+      "provenance": "基于 {from}~{to} 的 {n} 封邮件 · {model} · {ago}",
+      "refresh": "立即更新画像",
+      "refreshing": "生成中…",
+      "aiRole": "职务由画像推断",
+      "suggest": "建议值",
+      "adopt": "采纳",
+      "ignore": "忽略",
+      "adoptAll": "全部采纳",
+      "suggestHint": "采纳会写入身份字段并锁定该字段；忽略只让它在本轮消失，下轮画像可能再提。AI 不会直接改身份字段。",
+      "off": "AI 画像未开启",
+      "offHint": "开启后，画像 Agent 会低频批量读取你与 TA 的往来邮件，生成人物画像，并从签名档提出可采纳的建议值。画像只读邮件，不改身份字段。",
+      "offCta": "到 Agents 页开启画像 Agent",
+      "threshold": "还没到画像阈值",
+      "thresholdHint": "往来满 {min} 封后自动生成（当前 {n} 封，还差 {need} 封）。也可以现在手动生成一次。",
+      "queued": "已达阈值 · 等下一轮批处理",
+      "queuedHint": "往来 {n} 封，已过 {min} 封阈值。画像 Agent 低频跑批处理，下一轮会写入；不想等可以现在手动生成。",
+      "thresholdCta": "立即生成",
+      "insufficient": "往来内容尚不足以生成画像",
+      "insufficientHint": "已读过 {n} 封往来，但多为转发、单句确认一类内容，AI 判断证据不足，本轮没有写入画像。下轮批处理会再试。",
+      "retry": "再试一次",
+      "failed": "上次更新失败",
+      "notPerson": "已标为「{kind}」，不生成画像。如果判断错了，可以改判为「人」。",
+      "provenanceNoWindow": "基于 {n} 封邮件 · {model} · {ago}",
+      "modeFirst": "· 首轮",
+      "modeIncremental": "· 增量"
+    },
+    "merge": {
+      "title": "合并联系人",
+      "sub": "把「{name}」与另一条记录合并成同一个人（换过邮箱的常见情况）",
+      "previewTitle": "预览合并结果",
+      "previewSub": "确认后落地为一条记录、两个邮箱。往来账本与事项关系都会挂到保留方。",
+      "searchPlaceholder": "搜索姓名 / 名字变体 / 邮箱",
+      "keepThis": "保留这一条的姓名与身份字段",
+      "result": "合并后",
+      "pickPrimary": "两个邮箱并列 · 选一个做主邮箱",
+      "loser": "{name} → 墓碑记录（数据保留，列表不再显示）",
+      "conflict": "两条记录都是「{matter}」的干系人。合并后角色会重复，确认后需要你二选一（不会静默合并角色）。",
+      "danger": "合并没有一键撤销。数据是可逆的，但需要到数据层处理——可找回，但麻烦。确认前请先看清上面的结果。",
+      "futureSuggest": "「疑似同人」自动建议是后续能力（Phase 3）。上线后会出现在这一行，按证据排序。",
+      "back": "换一条",
+      "confirm": "确认合并",
+      "done": "已合并为一条记录、{n} 个邮箱 · 被并方留作墓碑"
+    },
+    "picker": {
+      "title": "添加干系人",
+      "sub": "{pub} · {title} —— 从通讯录选人；库里没有的人可以直接用邮箱建入",
+      "searchPlaceholder": "搜姓名 / 邮箱 / 组织，或粘贴一个邮箱地址",
+      "source": "按往来密度排序 · 数据来自通讯录",
+      "showAll": "也显示邮件组 / 机器人",
+      "onlyPeople": "只看人",
+      "taken": "已在事项中",
+      "createByEmail": "以这个邮箱新建联系人并添加",
+      "empty": "通讯录里没有匹配的人",
+      "emptyHint": "通讯录只收有邮件往来的地址。要加一个还没往来过的人，直接输入 TA 的邮箱地址。",
+      "role": "在本事项中的角色",
+      "syncHint": "姓名与职位始终读通讯录，不在事项里另存一份",
+      "add": "添加 {n}"
+    },
+    "toast": {
+      "hidden": "已隐藏「{name}」· 数据没删，在「全部」视图可以找回",
+      "unhidden": "已取消隐藏",
+      "kind": "已改判为「{kind}」· 排序与默认视图随之变化",
+      "markSelf": "已标记为「我」· 会置顶显示；「我」只能有一个，原先那条已取消",
+      "unmarkSelf": "已取消「我」标记",
+      "primary": "主邮箱已改为 {email}",
+      "former": "已标为曾用 · 历史往来保留，不再作为默认收件地址",
+      "unformer": "已恢复在用",
+      "locked": "{field} 已保存并锁定 · 自动提取不再覆盖",
+      "unlocked": "已解锁 · 后续自动提取可能覆盖",
+      "adopted": "已采纳 · {field}「{value}」已写入并锁定",
+      "ignored": "已忽略 {field} 建议 · 下轮画像可能再提",
+      "profileRunning": "画像生成中 · 分钟级，可以先去做别的",
+      "profileDone": "画像已更新",
+      "profileFailed": "画像更新失败 · 模型返回超时，已保留上一版画像",
+      "composePrefill": "已打开 compose · 收件人预填 {email}",
+      "pickerAdded": "已添加 {n} 位干系人 · 姓名与职位随通讯录同步",
+      "pickerCreated": "已用邮箱建入通讯录并挂到事项 · {email}",
+      "mergeFailed": "合并未完成 · 两条记录都未改动",
+      "adoptedAll": "已采纳 {n} 项建议值并锁定对应字段",
+      "saveFailed": "保存失败",
+      "suggestionAdopted": "已采纳这条建议",
+      "suggestionIgnored": "已忽略这条建议 · 下轮有新证据时可能再提",
+      "suggestionBlocked": "建议未采纳 · 已留在队列里，没有写入任何字段",
+      "bulkAdopted": "已采纳 {count} 条建议",
+      "bulkIgnored": "已忽略 {count} 条建议",
+      "bulkMergeSkipped": "{count} 条合并建议需逐条人工确认",
+      "bulkBlocked": "{count} 条被守卫拦下，留在「被拦下的建议」里",
+      "bulkRemaining": "还剩 {count} 条待审 · 再点一次接着清",
+      "scanQueued": "治理扫描已排入队列 · 跑完后新建议会出现在这里",
+      "scanCoalesced": "已有一轮治理扫描在跑 · 复用那一轮，没有重复排队",
+      "promptSaved": "系统提示词已保存 · 下一轮扫描生效",
+      "promptSaveFailed": "系统提示词保存失败"
+    },
+    "agent": {
+      "title": "通讯录 Agent",
+      "subtitle": "它读、它提议，你确认",
+      "pill": "Agent",
+      "pillTitle": "通讯录 Agent · 待审治理建议",
+      "pendingBadge": "{count} 条待审建议",
+      "close": "关闭",
+      "tab": {
+        "queue": "待审建议 {count}",
+        "runs": "运行"
+      },
+      "gotoConfig": "模型、排程、提示词、工具清单 —— 都在 Agents 页的「通讯录治理」卡里",
+      "gotoConfigCta": "去配置",
+      "empty": {
+        "title": "没有待审建议",
+        "hint": "Agent 每天随邮件增量跑一次治理扫描；发现同人、缺字段、停用地址时会在这里排队。"
+      },
+      "blocked": {
+        "title": "被拦下的建议",
+        "hint": "采纳时被不变量守卫挡住，留在队列里，没有写入任何字段。"
+      },
+      "bulk": {
+        "prompt": "{count} 条待审建议",
+        "adopt": "全部采纳",
+        "ignore": "全部忽略",
+        "confirmAdopt": "确认采纳这 {count} 条？",
+        "confirmIgnore": "确认忽略这 {count} 条？",
+        "confirm": "确认",
+        "cancel": "取消"
+      },
+      "queueTruncated": "已显示 {shown} / 共 {total} 条 · 整批处置对全部待审生效",
+      "loadFailed": "待审建议读取失败 · 这里显示的可能不是全部",
+      "scanFailed": "上次治理扫描失败：{error} · 队列里没有新建议不代表没发现问题",
+      "runNow": "现在跑一次治理扫描",
+      "running": "扫描中…",
+      "runs": {
+        "runNote": "点了只是排入队列，不等扫描结束；结果落在下面的历史里。平时每天随邮件增量自动跑一次。",
+        "lastScan": "上次扫描",
+        "status": {
+          "queued": "排队中",
+          "running": "进行中",
+          "succeeded": "成功",
+          "failed": "失败"
+        },
+        "detailOk": "产出 {count} 条待审建议",
+        "detailRunning": "正在读增量邮件与通讯录…",
+        "detailDisabled": "治理 Agent 行当前是停用状态 —— 到 Agents 页打开后再跑",
+        "detailFailed": "这一轮没有跑完，错误码见上",
+        "today": "今天 {time}",
+        "yesterday": "昨天 {time}",
+        "historyTitle": "治理扫描历史",
+        "historyEmpty": "还没有跑过治理扫描。",
+        "historyLoadFailed": "扫描历史读取失败 · 上面的「上次扫描」仍然是准的",
+        "produced": "产出 {count} 条建议",
+        "manual": "手动",
+        "loading": "读取中…",
+        "profileTitle": "画像批处理",
+        "profileToday": "今日已处理",
+        "profileUnit": "人",
+        "profileOk": "成功 {count}",
+        "profileSkipped": "证据不足 {count}",
+        "profileFailed": "失败 {count}",
+        "profileFoot": "最近一轮 {last} · 下轮排程 每天 {hour}:00",
+        "profileFootNever": "今天还没跑过 · 下轮排程 每天 {hour}:00",
+        "profileLoadFailed": "画像批处理汇总读取失败",
+        "skippedNote": "「证据不足」不是失败：往来邮件没到阈值、或模型判定材料不足以下结论时会主动拒写，档案页照常显示未生成态。"
+      },
+      "tools": {
+        "footnote": "参数见实现侧工具签名；propose_ 开头的三件只写入待审队列，不动正式字段。",
+        "governanceOff": "标「写（轻）」的那一组只在主对话里可用，每天那轮治理扫描一件写工具都拿不到。"
+      },
+      "perm": {
+        "read": "读",
+        "propose": "建议",
+        "write": "写（轻）"
+      },
+      "desc": {
+        "contact_search": "按姓名 / 变体 / 邮箱 / 组织搜人",
+        "contact_get": "拿到完整档案（多邮箱、往来统计、画像、上下级）",
+        "contact_list_mails": "翻这个人的邮件账本",
+        "contact_propose_update": "提字段 / 曾用邮箱 / 改判建议，进待审队列，不直写",
+        "contact_propose_merge": "提合并建议，采纳时打开预填的合并预览",
+        "contact_propose_relation": "提上级建议，进待审队列",
+        "contact_set_kind": "改判 person / robot / list，可直写，可撤销",
+        "contact_mark_former_email": "把一个地址标为曾用，不删数据",
+        "contact_refresh_profile": "触发一次画像生成",
+        "contact_update_fields": "直接改身份字段（姓名 / 组织 / 职位 / 电话 / 手记…），保存即落锁，恒弹卡",
+        "contact_set_manager": "直接设置或解除上级，服务端管环检测，恒弹卡"
+      },
+      "prompt": {
+        "usingDefault": "跟随默认",
+        "customized": "已自定义",
+        "loadFailed": "提示词读取失败 · 先别保存，那会用一份空草稿覆盖已有内容"
+      }
+    },
+    "suggestion": {
+      "type": {
+        "merge": "合并同人",
+        "identity": "补身份字段",
+        "former_email": "曾用邮箱",
+        "relation": "上下级",
+        "kind": "改判分类"
+      },
+      "text": {
+        "merge": "「{a}」与「{b}」应该是同一人",
+        "identity": "给 {name} 补上{field}「{value}」",
+        "former_email": "把 {email} 标为曾用邮箱",
+        "relation": "把 {manager} 设为 {name} 的上级",
+        "relationClear": "解除 {name} 的上级关系",
+        "kind": "把 {name} 改判为{kind}"
+      },
+      "confidence": "置信度 {percent}%",
+      "adopt": "采纳",
+      "openMerge": "打开合并预览",
+      "ignore": "忽略",
+      "blocked": "已拦下",
+      "blockReason": "原因 · {reason}",
+      "openPerson": "打开 {name}",
+      "evidenceTitle": "邮件证据 · {messageId}"
+    }
+  }
+}

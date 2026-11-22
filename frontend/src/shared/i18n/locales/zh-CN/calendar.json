@@ -1,0 +1,373 @@
+{
+  "calendar": {
+    "title": "周期会议",
+    "subtitle": "扫描 {since} 起的邀请,可单独重放到 Notion 日历",
+    "loading": "加载中…",
+    "empty": {
+      "day": "本日无日程",
+      "week": "本周无日程",
+      "month": "本月无日程",
+      "agenda": "未来 {n} 天无日程",
+      "recurring": "未发现周期会议",
+      "syncHint": "日历同步尚未就绪，请稍后重试或联系管理员",
+      "neverSynced": "日历尚未同步",
+      "neverSyncedHint": "点击工具栏的同步按钮拉取日历事件",
+      "syncFailed": "日历同步失败",
+      "syncFailedHint": "上次同步出错——悬停底部状态栏的 ℹ️ 查看错误详情"
+    },
+    "emptyHint": "调整时间范围或确认 .ics 邀请已被同步",
+    "replay": "重放",
+    "replayOk": "邮件 #{id} 重放完成",
+    "replayFail": "邮件 #{id} 重放失败",
+    "recurring": {
+      "scan": "扫描",
+      "scanning": "扫描中…",
+      "scanTitle": "扫描邮件中带 RRULE 的会议邀请 (davmail 模式可能需要数分钟)",
+      "scanRangeTitle": "扫描最近 {range}",
+      "replayTitle": "重放 — 重导出到 Notion (基于 SQLite calendar_event)",
+      "replayNoUid": "缺少 ical_uid — 无法 replay (数据异常?)"
+    },
+    "col": {
+      "subject": "标题",
+      "organizer": "组织者",
+      "rrule": "RRULE",
+      "firstOccur": "首次",
+      "lastOccur": "最后",
+      "count": "次数",
+      "action": "操作"
+    },
+    "weekday": {
+      "long": {
+        "sun": "周日",
+        "mon": "周一",
+        "tue": "周二",
+        "wed": "周三",
+        "thu": "周四",
+        "fri": "周五",
+        "sat": "周六"
+      }
+    },
+    "shared": {
+      "untitled": "未命名事件",
+      "allDay": "全天",
+      "loading": "加载中…",
+      "cancel": "取消",
+      "close": "关闭 (Esc)",
+      "closeAria": "关闭",
+      "yearMonth": "{y} 年 {m} 月"
+    },
+    "toolbar": {
+      "prevAria": "上一段",
+      "prevTitle": "上一段 (←)",
+      "nextAria": "下一段",
+      "nextTitle": "下一段 (→)",
+      "today": "今天",
+      "todayTitle": "今天 (T)",
+      "viewAria": "视图切换",
+      "viewDay": "日",
+      "viewWeek": "周",
+      "viewMonth": "月",
+      "viewAgenda": "Agenda",
+      "viewRecurring": "定期邀请",
+      "newBtn": "新建日程",
+      "newTitle": "新建事件 — 直接写到 Exchange (CalDAV PUT)",
+      "syncBtn": "同步",
+      "syncTitle": "急刷 (⌘R) · 后台 worker 每 60s 自动同步, 此按钮触发立即全量拉取",
+      "syncTipUnknownErr": "未知错误",
+      "range": {
+        "agenda": "未来 14 天",
+        "recurring": "全部定期事件"
+      },
+      "calendarFilter": {
+        "title": "按日历筛选",
+        "all": "全部日历",
+        "selected": "{n} 个日历",
+        "ariaLabel": "日历筛选"
+      },
+      "legend": {
+        "aria": "事件状态图例",
+        "title": "事件状态图例",
+        "tentative": "暂定",
+        "tentativeShape": "斜纹填充",
+        "needsAction": "待回复",
+        "needsActionShape": "空心描边",
+        "declined": "已拒绝",
+        "declinedShape": "删除线 + 灰",
+        "cancelled": "已取消",
+        "cancelledShape": "删除线 + 深灰"
+      }
+    },
+    "statusbar": {
+      "autoSync": "自动同步",
+      "popoverAria": "同步与后台详情",
+      "popoverTitle": "同步与后台",
+      "noSync": "尚未同步",
+      "calendarFallback": "日历"
+    },
+    "join": {
+      "button": "加入会议",
+      "short": "Join",
+      "title": "加入会议 — 在 {p} 中打开"
+    },
+    "detail": {
+      "matterRole": "事项投影",
+      "agentRole": "Agent 排程",
+      "dueTime": "截止时间",
+      "plannedTime": "计划时刻",
+      "matter": "事项",
+      "item": "行动项",
+      "nextStep": "下一步",
+      "owner": "负责人",
+      "ownerUnset": "未指定",
+      "blockers": "阻塞点",
+      "blockersNone": "没有",
+      "recentProgress": "最近进展",
+      "progressNone": "还没有进展",
+      "loadFailedLabel": "事项详情",
+      "loadFailed": "没取到这件事的详情",
+      "retry": "重试",
+      "goMatter": "去事项",
+      "goMatterTitle": "在事项域打开这件事",
+      "matterNote": "这是事项的投影 —— 改时间或内容要去事项里改",
+      "whatRuns": "这次要跑什么",
+      "triggerRules": "触发规则",
+      "triggerDisabled": "已停用",
+      "lastRun": "上次跑的结果",
+      "agentMissing": "这个 Agent 的配置没取到",
+      "goAgent": "去 Agent",
+      "goAgentTitle": "在团队域打开这个 Agent",
+      "agentNote": "这是排程的投影 —— 改时间要去 Agent 的设置里改",
+      "reportStatus": {
+        "generating": "正在生成",
+        "ready": "已生成",
+        "empty": "没有内容可写",
+        "failed": "失败",
+        "skipped": "跳过"
+      }
+    },
+    "drawer": {
+      "closeTitle": "关闭 (Esc)",
+      "noRelatedEmail": "无关联邮件",
+      "sourceEmail": {
+        "openTitle": "在收件箱中定位该邮件",
+        "noSubject": "(无主题)",
+        "linkedCount": "共 {n} 封"
+      },
+      "teamsMeeting": "Teams 会议",
+      "me": "(我)",
+      "attendeeCount": "{n} 人",
+      "moreAttendees": "… 还有 {n} 位",
+      "rruleInstance": "RRULE 实例",
+      "ariaFallback": "事件详情",
+      "spanDays": "· 跨 {n} 天",
+      "sourceLabel": "源",
+      "role": {
+        "owner": "组织者",
+        "attendee": "与会者"
+      },
+      "meta": {
+        "time": "时间",
+        "conflict": "时间冲突",
+        "calendar": "日历",
+        "location": "地点",
+        "organizer": "组织者",
+        "attendees": "与会者",
+        "myResponse": "我的回复",
+        "meetingLink": "会议链接",
+        "relatedEmail": "关联邮件",
+        "rrule": "重复规则",
+        "description": "描述"
+      },
+      "resp": {
+        "accepted": "已接受",
+        "tentative": "暂定",
+        "declined": "已拒绝",
+        "needsAction": "待回复"
+      },
+      "ops": {
+        "edit": "编辑",
+        "delete": "删除",
+        "editTitle": "编辑事件 — 通过 CalDAV PUT 改 Exchange 端",
+        "deleteTitle": "删除事件 — 5 秒撤销窗口后通过 CalDAV DELETE",
+        "ownerOnly": "只能由组织者修改"
+      },
+      "rsvp": {
+        "label": "我的回复",
+        "labelPending": "· 待回复",
+        "accept": "接受",
+        "tentative": "暂定",
+        "decline": "拒绝",
+        "acceptTitle": "接受邀请 — 发 iTIP REPLY (PARTSTAT=ACCEPTED) 给组织者",
+        "tentativeTitle": "暂定 — 发 iTIP REPLY (PARTSTAT=TENTATIVE) 给组织者",
+        "declineTitle": "拒绝邀请 — 发 iTIP REPLY (PARTSTAT=DECLINED) 给组织者",
+        "toastAccepted": "RSVP 已接受 已发送给组织者",
+        "toastTentative": "RSVP 暂定 已发送给组织者",
+        "toastDeclined": "RSVP 已拒绝 已发送给组织者",
+        "toastErr": "发送 RSVP ({response}) 失败",
+        "confirmTitle": "发送 RSVP 回复",
+        "confirmBody": "将向组织者发送「{action}」回复邮件 (iTIP REPLY), 该操作不可撤回。",
+        "confirmEvent": "事件",
+        "confirmSend": "发送回复"
+      }
+    },
+    "form": {
+      "titleCreate": "新建事件",
+      "titleEdit": "编辑事件",
+      "labelTitle": "标题",
+      "placeholderTitle": "事件标题",
+      "errTitle": "请输入事件标题",
+      "labelTime": "起止时间",
+      "ariaStart": "开始时间",
+      "ariaEnd": "结束时间",
+      "errTime": "结束时间需晚于开始时间",
+      "allDayToggle": "全天",
+      "labelCalendar": "日历",
+      "calendarDefault": "默认日历",
+      "calendarEditLocked": "换日历等于删掉再建一次，事件会换个身份、与会者的回执也跟着丢。要换日历请新建一个事件。",
+      "labelLocation": "地点",
+      "placeholderLocation": "会议室 / Teams 链接 / 地址",
+      "labelDescription": "描述",
+      "placeholderDescription": "议程、备注、相关链接…",
+      "uidAria": "事件 UID",
+      "repeat": {
+        "label": "重复",
+        "freqNone": "不重复",
+        "everyPrefix": "每",
+        "onDaysPrefix": "的",
+        "unitDay": "天",
+        "unitWeek": "周",
+        "unitMonth": "月",
+        "unitYear": "年",
+        "dayMo": "一",
+        "dayTu": "二",
+        "dayWe": "三",
+        "dayTh": "四",
+        "dayFr": "五",
+        "daySa": "六",
+        "daySu": "日",
+        "endNever": "永不结束",
+        "endCount": "次数后结束",
+        "endUntil": "直到日期",
+        "countSuffix": "次",
+        "seriesHint": "修改重复规则将应用到整个系列",
+        "intervalAria": "重复间隔",
+        "bydayAria": "每周重复日",
+        "endAria": "结束方式",
+        "countAria": "重复次数",
+        "untilAria": "结束日期",
+        "summary": {
+          "everyUnit": "每{unit}",
+          "everyNUnit": "每 {n} {unit}",
+          "daysJoin": "、",
+          "withDays": "{base}{days}",
+          "withDaysN": "{base}的{days}",
+          "endCount": "{base}，共 {n} 次",
+          "endUntil": "{base}，到 {date} 止"
+        }
+      },
+      "recurrenceScope": {
+        "title": "周期事件",
+        "body": "此修改应用到：",
+        "thisOnly": "仅此事件",
+        "thisAndFuture": "此事件及以后",
+        "allSeries": "整个系列"
+      },
+      "attendees": {
+        "label": "与会者",
+        "placeholder": "搜姓名或邮箱，回车添加",
+        "hint": "Enter 添加 · ⌫ 删除上一个 · 点 × 移除",
+        "removeChip": "移除 {email}",
+        "addRaw": "添加 “{email}”",
+        "addRawHint": "不在通讯录，直接用这个邮箱",
+        "suggestAria": "与会者候选"
+      },
+      "actions": {
+        "cancel": "取消",
+        "create": "创建",
+        "save": "保存",
+        "creating": "创建中…",
+        "saving": "保存中…"
+      },
+      "toastCreated": "事件已创建, ~60s 内同步到本地视图",
+      "toastUpdated": "事件已更新",
+      "toastErrCreate": "创建事件失败",
+      "toastErrUpdate": "更新事件失败"
+    },
+    "invite": {
+      "title": "会议邀请",
+      "cancelled": "会议已取消",
+      "recurringBadge": "周期会议",
+      "exceptionBadge": "本次例外",
+      "conflictNone": "无冲突",
+      "conflictCount": "与 {n} 场日程重叠",
+      "notInCalendar": "尚未同步到日历",
+      "seriesEnded": "系列近期无场次, 显示首次时间",
+      "viewInCalendar": "在日历中查看"
+    },
+    "syncTriggered": "已触发日历同步",
+    "syncTriggerFail": "日历同步失败",
+    "errorBoundary": {
+      "title": "{view} 加载失败",
+      "hint": "切换视图或点 [重试] 重新加载. 详情见 DevTools console.",
+      "retry": "重试"
+    },
+    "error": {
+      "title": "日历数据加载失败",
+      "hint": "获取日程失败, 可能是后端服务暂不可用.",
+      "retry": "重试",
+      "loadShort": "加载失败"
+    },
+    "relTime": {
+      "justNow": "刚刚",
+      "secondsAgo": "{n} 秒前",
+      "minutesAgo": "{n} 分钟前",
+      "hoursAgo": "{n} 小时前",
+      "daysAgo": "{n} 天前"
+    },
+    "undo": {
+      "aria": "待撤销操作",
+      "undo": "撤销",
+      "deleted": "已删除「{title}」",
+      "deletedSubtitle": "5 秒后同步到 CalDAV",
+      "restored": "已恢复 (未提交删除)",
+      "deleteFailed": "删除事件失败",
+      "rescheduled": "已改期「{title}」",
+      "resized": "已调整「{title}」时长",
+      "rescheduledSubtitle": "{range} · 5 秒后同步到 CalDAV",
+      "rescheduleReverted": "已恢复原时间 (未提交)",
+      "rescheduleFailed": "改期失败"
+    },
+    "view": {
+      "month": {
+        "moreItems": "还有 {n} 项",
+        "today": "今天",
+        "popEventCount": "{n} 个事件",
+        "popDayLabel": "{m} 月 {d} 日"
+      },
+      "agenda": {
+        "today": "今天",
+        "tomorrow": "明天",
+        "tagMatter": "事项",
+        "tagAgent": "Agent",
+        "gapDay": "{d} 无日程",
+        "gapRange": "{from} – {to} 无日程"
+      }
+    },
+    "shortcut": {
+      "title": "键盘快捷键",
+      "subtitle": "G 开头为视图跳转 (先按 G 再按视图键, 800ms 内有效)"
+    },
+    "sources": {
+      "legend": "日历源",
+      "mail": "邮箱日历",
+      "matter": "事项日历",
+      "agent": "Agent 日历",
+      "mailHint": "各账户 + 团队共享",
+      "matterHint": "截止日 + 行动项排期",
+      "agentHint": "智能体排程",
+      "emptyMail": "还没有同步到任何邮箱日历",
+      "emptyMatter": "本月没有事项排期",
+      "emptyAgent": "本月没有智能体排程"
+    }
+  }
+}

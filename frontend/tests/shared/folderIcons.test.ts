@@ -7,10 +7,6 @@
 //   2. 文案 —— 每个候选在选择器里要显示一句动效说明，文案在 i18n。新增一个图标而忘了
 //      补两份 locale，界面上会显示原始 key 路径（i18next 找不到就回显 key），本身不报错。
 
-import { readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
 import { describe, expect, test } from 'vitest'
 
 import {
@@ -18,16 +14,10 @@ import {
   FOLDER_ICON_KEYS,
   folderIcon
 } from '../../src/shared/components/icons/folderIcons'
+import { loadLocaleDict, type SupportedLocale } from '../helpers/loadLocale'
 
-const LOCALES_DIR = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  '../../src/shared/i18n/locales'
-)
-
-function motionTable(locale: string): Record<string, unknown> {
-  const raw = JSON.parse(
-    readFileSync(resolve(LOCALES_DIR, locale, 'common.json'), 'utf-8')
-  ) as Record<string, never>
+function motionTable(locale: SupportedLocale): Record<string, unknown> {
+  const raw = loadLocaleDict(locale) as Record<string, never>
   const table = raw.settings?.folder?.picker?.icon?.motion as Record<string, unknown> | undefined
   // canary：路径写错 / 文案表被挪走时，下面的断言会因为空表而恒真 —— 这里先拦下。
   expect(table, `${locale}: settings.folder.picker.icon.motion 不存在`).toBeTruthy()
@@ -61,7 +51,7 @@ describe('folderIcons — 候选表', () => {
 })
 
 describe('folderIcons — 动效说明文案与候选表逐个对齐', () => {
-  test.each(['zh-CN', 'en-US'])('%s: 每个候选都有一句非空说明，且没有多余条目', (locale) => {
+  test.each(['zh-CN', 'en-US'] as const)('%s: 每个候选都有一句非空说明，且没有多余条目', (locale) => {
     const table = motionTable(locale)
     const missing = FOLDER_ICON_KEYS.filter(
       (k) => typeof table[k] !== 'string' || (table[k] as string).trim() === ''

@@ -14,18 +14,16 @@
 //   ② 过一遍真 `i18n.t` —— 用户看见的就是它的返回值，「返回值等于 key」就是这次的 bug 形态。
 
 import { beforeAll, describe, expect, test } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 
 import i18n from '@shared/i18n'
 import { KINDS } from '@shared/libraryConstants'
 import { OPEN_WITH_APPS } from '@shared/components/library/fileMeta'
+import { loadLocaleDict, type SupportedLocale } from '../../helpers/loadLocale'
 
 const LOCALES = ['zh-CN', 'en-US'] as const
 
-function localeJson(locale: string): Record<string, unknown> {
-  const path = resolve(__dirname, `../../../src/shared/i18n/locales/${locale}/common.json`)
-  return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+function localeJson(locale: SupportedLocale): Record<string, unknown> {
+  return loadLocaleDict(locale)
 }
 
 function lookup(tree: Record<string, unknown>, key: string): unknown {

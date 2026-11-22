@@ -1,0 +1,2586 @@
+{
+  "settings": {
+    "title": "Settings",
+    "appearance": "Appearance",
+    "skills": {
+      "title": "Skills",
+      "desc": "Capabilities the Custom AI can use. Disabling a skill removes its tools and its prompt guidance from the next conversation.",
+      "enabled": "Enabled",
+      "unavailable": "Unavailable: {reason}",
+      "toolCount": "{n, plural, one {# API tool} other {# API tools}}",
+      "scopes": "Scopes",
+      "empty": "No skills available (the skill manifest could not be loaded).",
+      "loading": "Loading skills…",
+      "calendarChatNote": "This toggle only governs the outward Skill interface and capability declaration; the calendar tools in chat are controlled by the Calendar item under System capabilities.",
+      "notionAgentMasterOff": "Master switch MAILAGENT_NOTION_AGENT_TOOL is off: even when enabled here, the notion_agent tool won't be registered in chat.",
+      "skillCreatorChatNote": "This Skill provides workflow guidance; approval profiles for its 6 chat tools are under Connectors & Tools → Skill supply chain.",
+      "customAgentChatNote": "This Skill provides workflow guidance; approval profiles for its 7 chat tools are under Connectors & Tools → Custom Agent.",
+      "sourceBuiltin": "Builtin · product trusted",
+      "sourceUserCreated": "User-created",
+      "sourceThirdParty": "Third-party",
+      "currentHash": "Current package hash",
+      "argvPattern": "Argv pattern (one item per line; prefix regex with pattern:)",
+      "cwdScope": "Working-directory scopes",
+      "readScopes": "Read scopes",
+      "writeScopes": "Write scopes",
+      "networkMode": "Network mode snapshot",
+      "secretNames": "Secret names",
+      "trustVersion": "Trust this version",
+      "revokeTrust": "Revoke",
+      "exportSkill": "Export Skill",
+      "exportPlugin": "Export as Plugin"
+    },
+    "skillDrafts": {
+      "title": "Skill drafts",
+      "desc": "Isolated drafts are never executable. Review validation and publish explicitly.",
+      "empty": "No skill drafts.",
+      "noSkillMd": "SKILL.md is missing or unreadable.",
+      "enableAfterPublish": "Enable after publishing",
+      "publish": "Publish",
+      "discard": "Discard",
+      "publishConfirm": "Publish {name}? Enabled after publish: {enabled}",
+      "discardConfirm": "Discard {name}?",
+      "pluginImport": "Import Agent Plugin",
+      "mcpDetected": "Detected MCP Servers: {names}. This version does not import them yet."
+    },
+    "anchorNav": {
+      "ariaLabel": "Sections on this page"
+    },
+    "connectors": {
+      "title": "External connections (MCP)",
+      "desc": "Connect external services such as Notion or Jira over the MCP protocol. Once connected you decide tool by tool what the AI may call.",
+      "loading": "Loading connections…",
+      "loadError": "Could not load the connection list: {message}",
+      "empty": "No connectable services.",
+      "status": {
+        "connected": "Connected",
+        "disconnected": "Not connected",
+        "authorizing": "Authorizing",
+        "needsReauth": "Authorization expired",
+        "error": "Connection error"
+      },
+      "connect": "Connect",
+      "reconnect": "Reconnect",
+      "connectWeb": "The remote web app cannot start a connection (the authorization callback goes to a local address) — use the desktop app.",
+      "awaiting": "Waiting for browser authorization…",
+      "cancel": "Stop waiting",
+      "authTimeout": "Authorization timed out: no browser callback within {seconds} seconds. Please try again.",
+      "authFailed": "Authorization failed",
+      "connectedToast": "Connected to {name}",
+      "sync": "Sync tools",
+      "syncing": "Syncing…",
+      "syncDone": "Sync complete: {inserted} added · {updated} updated · {orphaned} gone",
+      "disconnect": "Disconnect",
+      "enabled": "Enable this connection",
+      "enabledHelper": "When off, none of this service's tools are given to the AI; credentials and per-tool settings are kept.",
+      "preprocess": "Allow email pre-processing to call it",
+      "preprocessHelper": "Lets the email pre-processing classifier call this service. That venue runs unattended: only tools whose tier is “Auto” are available (“Needs approval” behaves as unavailable there); write tools set to “Auto” are exposed to it too.",
+      "scopes": "Scopes",
+      "tokenExpires": "Token valid until {time}",
+      "tokenExpired": "Token expired at {time} — please reconnect.",
+      "tokenNone": "No credentials stored",
+      "tokenAutoRefresh": "Maintained by auto-refresh",
+      "lastSynced": "Tool list last synced: {time}",
+      "neverSynced": "Tool list never synced",
+      "lastError": "Last error: {message}",
+      "saveFailed": "Save failed",
+      "custom": {
+        "createTitle": "Add custom MCP connection",
+        "editTitle": "Edit {name}",
+        "desc": "Connect a custom Streamable HTTP / SSE MCP endpoint or a local lazy-started stdio MCP process (headers and env secrets are encrypted at rest; desktop only).",
+        "displayName": "Display name",
+        "displayNamePlaceholder": "e.g., GitHub Enterprise / Local Filesystem",
+        "connectorId": "Connector ID",
+        "transportLabel": "Transport",
+        "transportHttp": "Streamable HTTP",
+        "transportSse": "HTTP + SSE",
+        "transportStdio": "Local process (stdio)",
+        "serverUrl": "MCP endpoint URL",
+        "urlHint": "Remote endpoints must use https://; http:// is allowed for localhost / 127.0.0.1.",
+        "headersLabel": "Custom HTTP headers",
+        "envLabel": "Environment variables",
+        "addPair": "Add",
+        "removePair": "Remove entry",
+        "replaceSecrets": "Replace stored secrets",
+        "noHeaders": "No custom headers configured.",
+        "noEnv": "No custom environment variables configured.",
+        "existingKeys": "Encrypted keys configured: {keys}",
+        "command": "Command",
+        "args": "Arguments (space-separated)",
+        "cwd": "Working directory (optional)",
+        "autoSync": "Sync tool manifest after saving",
+        "createAction": "Create connection",
+        "saveEdit": "Save changes",
+        "saving": "Saving…",
+        "created": "Added {name}",
+        "updated": "Updated {name}",
+        "deleted": "Deleted {name}",
+        "syncWarning": "Saved connection, but tool sync failed",
+        "nameRequired": "Display name is required",
+        "idInvalid": "ID must be 2–48 lowercase letters, digits, underscores, or hyphens starting with alphanumeric",
+        "urlRequired": "MCP endpoint URL is required",
+        "commandRequired": "Command is required for stdio connectors",
+        "editButton": "Edit",
+        "deleteButton": "Delete",
+        "deleteTitle": "Delete custom connection \"{name}\"?",
+        "deleteDesc": "Stops any running local process for this connector and removes its encrypted secrets and tool manifest.",
+        "badgeStdio": "stdio",
+        "badgeHttp": "HTTP",
+        "badgeSse": "SSE"
+      },
+      "disconnectDialog": {
+        "title": "Disconnect {name}?",
+        "desc": "This deletes the credentials stored on this machine, and the service's tools stop being available to the AI immediately. The tool list and per-tool permissions are kept and apply again after reconnecting.",
+        "cancel": "Cancel",
+        "confirm": "Disconnect",
+        "confirming": "Disconnecting…",
+        "purge": "Also clear tool configuration",
+        "purgeHelper": "Removes the connection row and its tool list as well (as if it had never been added). Unticked, only the credentials are deleted and the per-tool tiers survive a reconnect."
+      },
+      "tools": {
+        "loading": "Loading tool list…",
+        "loadError": "Could not load the tool list: {message}",
+        "empty": "No tools synced yet — use “Sync tools” above to fetch the list.",
+        "defaultHint": "Default tier: read runs Auto; write, update, and destructive tools require Approval.",
+        "destructive": "Destructive",
+        "orphan": "Gone",
+        "orphanTip": "The remote server no longer offers this tool; the setting is kept but the tool is not given to the AI.",
+        "purgeOrphans": "Clear {count} gone tools",
+        "purgeDone": "Cleared {count} gone tools",
+        "followDefault": "Default",
+        "reset": "Reset permissions",
+        "resetDone": "Reset the tier on {count} tools",
+        "bulkDone": "Updated the tier on {count} tools",
+        "effective": {
+          "auto": "Currently: runs automatically (no approval card)",
+          "ask": "Currently: asks for approval on every call",
+          "off": "Currently: disabled (invisible to the AI)"
+        },
+        "crud": {
+          "read": "Read",
+          "write": "Write",
+          "update": "Update"
+        },
+        "mode": {
+          "label": "Call tier",
+          "auto": "Auto",
+          "ask": "Needs approval",
+          "off": "Disabled"
+        },
+        "bulk": {
+          "label": "Bulk",
+          "auto": "Set all to Auto",
+          "ask": "Set all to Needs approval",
+          "off": "Disable all"
+        }
+      },
+      "toolfaceNotice": {
+        "title": "Tool surface widened under the new default",
+        "body": "This connection offers {reads} read and {writes} write/update tools ({destructive} marked destructive). The default tier is “Auto” (runs without an approval card) — expand the list below to adjust tools one by one.",
+        "loading": "Counting the tool list…",
+        "review": "Review & adjust",
+        "dismiss": "Got it"
+      },
+      "destructiveAutoDialog": {
+        "title": "Set a destructive tool to “Auto”?",
+        "desc": "The service marks {name} as destructive (it may overwrite or delete existing data). On “Auto”, the AI will call it without asking you first.",
+        "bulkDesc": "This group contains {count} tools the service marks as destructive. On “Auto”, the AI will call them without asking you first.",
+        "cancel": "Cancel",
+        "confirm": "Set to Auto"
+      },
+      "viaComposio": "via Composio",
+      "viaDirect": "direct",
+      "viaManagedLocal": "Managed local",
+      "managed": {
+        "installAndEnable": "Install & enable",
+        "installSuccess": "Installed and enabled {name}",
+        "installFailed": "Failed to install local runtime",
+        "uninstallButton": "Uninstall",
+        "uninstallSuccess": "Uninstalled {name}",
+        "uninstallDialogTitle": "Uninstall {name}?",
+        "uninstallDialogDesc": "This stops the local runtime, deletes its managed files from disk, and clears the saved connection configuration.",
+        "runtimeMissing": "Local runtime binary is missing — click “Install & enable” to repair it.",
+        "platformUnsupported": "This local runtime does not support the current operating system or CPU architecture.",
+        "webDisabled": "Managed local runtimes install and control apps on this computer — manage them inside the desktop app.",
+        "webDisabledShort": "Desktop app only",
+        "pixelPrivacyTitle": "Screenshots bypass text privacy masking",
+        "pixelPrivacyBody": "privacyMaskMiddleware only redacts outbound text tool parameters and outputs — it does not blur or mask pixels inside web or desktop screenshots. Raw image frames are sent directly to your configured vision-capable LLM.",
+        "browserModeTitle": "Chrome connection mode",
+        "browserModeHelper": "Choose how Browser Use attaches to a browser. Switching modes restarts the local MCP process on next call.",
+        "recommendedBadge": "Recommended",
+        "modeUpdated": "Switched browser mode to {mode}",
+        "modes": {
+          "cdp_chrome": {
+            "title": "Attach to running Chrome (CDP)",
+            "desc": "Connects via Chrome Remote Debugging so existing logins and extensions stay available inside your everyday browser."
+          },
+          "extension": {
+            "title": "Playwright MCP Extension",
+            "desc": "Bridges through the Playwright MCP browser extension without launching Chrome with a debugging flag."
+          },
+          "isolated_profile": {
+            "title": "Built-in persistent managed browser (Headless)",
+            "desc": "MailAgent-managed persistent browser profile that runs silently with zero Chrome debug prompts and supports one-click Chrome cookie import or manual sign-in window."
+          }
+        },
+        "cdpGuideTitle": "Enable Chrome remote debugging once",
+        "cdpGuideBody": "Open the address below in Chrome and enable the remote debugging toggle so Browser Use can attach to your tabs:",
+        "copyCdpUrl": "Copy address",
+        "copiedCdpUrl": "Copied",
+        "tccTitle": "macOS system permissions",
+        "tccSubtitle": "Desktop Use needs Accessibility control and Screen Recording permission granted to the desktop app.",
+        "tccRefresh": "Refresh status",
+        "tccChecking": "Checking…",
+        "tccWebDisabled": "System permission checks are only available inside the desktop app.",
+        "tccAccessibility": "Accessibility",
+        "tccAccessibilityDesc": "Required to inspect UI elements and perform mouse clicks or keystrokes.",
+        "tccScreenRecording": "Screen Recording",
+        "tccScreenRecordingDesc": "Required to capture desktop and window screenshots for visual grounding.",
+        "tccOpenSettings": "Open System Settings",
+        "tccState": {
+          "granted": "Granted",
+          "denied": "Not granted",
+          "unknown": "Needs confirmation",
+          "unsupported": "Not required on this OS"
+        },
+        "headlessTitle": "Run silently in background (Headless)",
+        "headlessDesc": "Hides the browser window by default so automation never steals focus; turn this off or launch the dedicated window when visual inspection is needed.",
+        "headlessEnabledToast": "Headless mode enabled (takes effect on next run)",
+        "headlessDisabledToast": "Headless mode disabled; browser window will be visible on next run",
+        "importChromeTitle": "Import login session from Chrome",
+        "importChromeDesc": "Decrypts and copies cookies from your local Chrome profile into the built-in managed browser without affecting Chrome; open the dedicated window once for SSO/LocalStorage apps.",
+        "chromeProfileLabel": "Chrome profile",
+        "domainFilterPlaceholder": "Optional: filter domains (e.g. dms.company.com, oa.internal)",
+        "importChromeButton": "Import Chrome cookies",
+        "importingChromeButton": "Importing…",
+        "importChromeDone": "Imported {count} cookies from {profile} into built-in browser",
+        "importChromeFailed": "Failed to import Chrome cookies",
+        "lastImportedSummary": "Last import: profile {profile} · {count} cookies · {time}",
+        "launchWindowButton": "Open managed browser",
+        "launchWindowDone": "Managed browser window opened; sign-ins here persist automatically",
+        "launchWindowFailed": "Failed to open managed browser window",
+        "launchWindowHint": "Tip: Cookie-based logins can use one-click import; both imported cookies and manual window logins persist in the managed profile.",
+        "selectDomainsButton": "Select domains / Manage logins",
+        "hideDomainsButton": "Hide login manager",
+        "tccRequestPrompt": "Request permission"
+      },
+      "supersededHint": "This connection is a self-hosted direct link, but the service now ships through Composio. Use “Switch track” to disconnect and clear its config, then reconnect from the catalog.",
+      "selfHosted": {
+        "badge": "Self-hosted MCP preset",
+        "serverUrlLabel": "Server URL (MCP Endpoint)",
+        "serverUrlHint": "Point to the deployed Streamable HTTP `/mcp` endpoint (e.g. https://canvas.chenge.ink/mcp).",
+        "tokenLabel": "Agent Access Token (Bearer)",
+        "tokenPlaceholder": "Paste your server AGENT_API_TOKEN",
+        "tokenHint": "Encrypted in your local keychain; leave blank only for unauthenticated local dev servers.",
+        "connectAndSync": "Connect & Sync",
+        "webDisabled": "Self-hosted preset setup is only available from the desktop app."
+      },
+      "catalog": {
+        "title": "Preset catalog",
+        "outboundNotice": "Preset connections execute through the Composio cloud: tool inputs and results pass through their servers and the OAuth tokens are held on their side. For services you want to reach directly, use “custom MCP” (a later release).",
+        "toolCount": "{count} tools",
+        "alreadyAdded": "Added",
+        "supersedes": "The old direct configuration of the same service is still listed above — disconnect and clear it first.",
+        "keyLabel": "Composio API key",
+        "keyPlaceholder": "Paste your Composio API key",
+        "keySave": "Save",
+        "keySaved": "Composio API key saved",
+        "keyClear": "Clear",
+        "keyConfigured": "Configured ({time})",
+        "gateTitle": "Add a Composio API key to use the preset catalog",
+        "gateBody": "1. Create an account at app.composio.dev (the free tier includes 20K tool calls/month — plenty for personal use)\n2. Generate a key under Settings → API Keys\n3. Paste it into the field above and save\nOnce saved, every service in the catalog is one click away.",
+        "gateCta": "Enter the key",
+        "gateSignup": "Open composio.dev",
+        "outboundDialog": {
+          "title": "Preset connections send data to Composio",
+          "desc": "Services in the preset catalog are brokered by Composio:\n· tool arguments and results travel through their servers;\n· OAuth tokens are stored on their side, not on this machine;\n· they keep execution logs (including payloads) for up to a year by default — switch Log storage to “Don't store data” under Settings → General in the Composio dashboard now.\nContinuing means you accept this data path.",
+          "cancel": "Cancel",
+          "confirm": "Understood, connect"
+        },
+        "desc": {
+          "artifact_server": "Artifact Server: publish interactive HTML dashboards, decks, and prototypes to your own Cloudflare/self-hosted workspace for versioned sharing and review comments.",
+          "asana": "Asana: search tasks and projects, create tasks and comments, update tasks.",
+          "atlassian": "Atlassian: Jira issues (search/create/edit/transition) + Confluence pages (search/read/create/edit).",
+          "browser_use": "Browser Use: control Chrome or an isolated browser via Playwright MCP — inspect tabs, fill forms, capture screenshots.",
+          "desktop_use": "Desktop Use: operate desktop apps via Agent Desktop MCP — accessibility tree, click, type, and screen capture.",
+          "figma": "Figma: read file structure and components, pull design variables, render nodes, comment.",
+          "github": "GitHub: read repo content and READMEs, browse issues/PRs, open issues and comments.",
+          "gmail": "Gmail: search and read mail and drafts, read contacts; drafting only — no sending.",
+          "googlecalendar": "Google Calendar: read events and free slots, create/update/delete events.",
+          "googledrive": "Google Drive: find files, read metadata and comments, create folders and text files.",
+          "intercom": "Intercom: read conversations/contacts/tickets, search support records and articles.",
+          "linear": "Linear: browse issues and projects, create issues and comments, update state.",
+          "notion": "Notion: search and read pages/databases, create pages, append content, comment.",
+          "outlook": "Outlook: calendar and contacts (🔴 no mail send/draft — the local Exchange chain stays the only write path).",
+          "paypal": "PayPal: read-only invoices, payments, orders, subscriptions and disputes.",
+          "sentry": "Sentry: read projects and error issues, event details, alerts and stats.",
+          "slack": "Slack: read channels and history, search messages, post messages and reactions.",
+          "stripe": "Stripe: read-only finance data (customers, charges, invoices, subscriptions, disputes).",
+          "twitter": "X (Twitter): search posts, read timelines and analytics, post and bookmark."
+        }
+      }
+    },
+    "imFeishu": {
+      "title": "Feishu chat",
+      "desc": "Talk to this machine's AI assistant from a Feishu direct message (same memory, same persona). This is where you can see whether it is connected, who it is bound to, which tools it may use there, and what has been approved.",
+      "loading": "Loading Feishu connection status…",
+      "loadError": "Could not read status: {message}",
+      "connection": "Connection",
+      "disabledHint": "Not enabled: set MAILAGENT_IM_FEISHU=true in .env, then restart the backend and the app.",
+      "connectedAt": "Connected at {time}",
+      "lastEventAt": "Last message received {time}",
+      "noCredential": "No app credentials for the chat bot yet — fill in the App ID and App Secret under \"App credentials\" below and save.",
+      "conflict": "Another MailAgent instance was detected ({reason}). Feishu does not broadcast to multiple long-lived connections, so instances would steal each other's messages — this one deliberately did not connect. Keep only one running (stop the pm2 mail-sync process when using the desktop app).",
+      "conflictUnknown": "reason unknown",
+      "lastError": "Last error: {message}",
+      "status": {
+        "connected": "Connected",
+        "unknown": "Status unknown",
+        "connecting": "Connecting",
+        "disconnected": "Disconnected",
+        "conflict": "Instance conflict",
+        "error": "Connection error",
+        "stopped": "Stopped",
+        "disabled": "Not enabled"
+      },
+      "credential": {
+        "title": "App credentials",
+        "present": "Configured: App ID {appId} · last updated {time}. The App Secret is never shown again — paste a new one to rotate it.",
+        "absent": "Not configured yet. Create a separate custom app in the Feishu open platform (do not reuse the notification bot), then enter its App ID and App Secret below.",
+        "appIdLabel": "App ID",
+        "appIdPlaceholder": "App ID (starts with cli_)",
+        "secretLabel": "App Secret",
+        "secretPlaceholder": "App Secret (never shown again)",
+        "save": "Save credentials",
+        "saved": "Credentials saved",
+        "failed": "Could not save credentials",
+        "restartHint": "Restart the backend (\"Restart now\" in the banner above) before the new credentials are used: if none were configured before, the worker has not started at all, and a live connection is never hot-swapped.",
+        "platformHint": "You still need to finish the app setup in the Feishu open platform: enable the bot capability, request the direct-message permission, and pick long-lived connection in BOTH the \"Event subscription\" and \"Callback subscription\" tabs. See docs/reference/llm-agent/im-feishu-chat.md.",
+        "envSeedHint": "You can also put FEISHU_IM_APP_ID / FEISHU_IM_APP_SECRET in {path} to seed them at first start — but those keys are only a default for \"nothing stored yet\"; once credentials exist, changing them has no effect.",
+        "unbound": "A different Feishu app was detected, so the previously bound account was released (open_id is issued per app, so the old one is meaningless under the new app). Generate a new pairing code after restarting the backend.",
+        "webDisabled": "Credentials cannot be written from the remote web app (this swaps the identity of this machine's execution channel) — use the desktop app."
+      },
+      "bind": {
+        "title": "Bound Feishu account",
+        "boundTo": "Bound open_id: {openId}",
+        "boundAt": "Bound at {time}",
+        "bot": "Chat bot: {name} (app_id {appId})",
+        "unknownBot": "not connected yet, name unknown",
+        "sameNameTrap": "Two Feishu apps can share a display name — identify by app_id / open_id, never by name.",
+        "unbound": "Not bound yet. Only the bound Feishu account reaches the command channel; everyone else is refused.",
+        "codePending": "A pairing code is already waiting (valid until {time}). Generate a new one if you lost it.",
+        "issue": "Generate pairing code",
+        "rebind": "Re-bind",
+        "webDisabled": "Pairing cannot be started from the remote web app — it wires a Feishu account into this machine's execution channel. Do it in the desktop app.",
+        "flagOffDisabled": "Feishu chat is not enabled, so no bot could receive a code right now.",
+        "failed": "Could not generate a pairing code"
+      },
+      "pair": {
+        "countdown": "Expires in {time}",
+        "expired": "Expired — generate a new one.",
+        "howto": "Open a direct message with the bot in Feishu and send it those 6 digits on their own."
+      },
+      "tools": {
+        "title": "Tools the AI may use in Feishu",
+        "desc": "Feishu is a deliberately narrowed venue (a stolen Feishu account is not a stolen computer). These are fixed rules, not settings.",
+        "read": "Reads (mail / calendar / search / reports / conversation lookup): run without approval.",
+        "write": "Writes (send, save draft, flag, reschedule…): every call needs a tap on the Feishu approval card; no auto-approve list applies.",
+        "connector": "External service (MCP) tools: all available; reads run freely, writes always need approval (destructive tools carry a red warning on the card).",
+        "web": "Web access (search / fetch): controlled by the switch below, off by default; even when on, every call needs approval.",
+        "denied": "Local commands, file read/write, config and skill changes, and calls out to third-party AI are not registered in Feishu at all — the model cannot see them. Use the desktop app or the remote web app for those."
+      },
+      "web": {
+        "title": "Allow web access in Feishu chats",
+        "desc": "Lets the AI search and fetch web pages from Feishu. Off by default: web content is untrusted, and a stolen Feishu account is not a stolen computer. Each call still needs approval.",
+        "restartHint": "Takes effect after restarting the app (the AI engine reads this once at startup).",
+        "webDisabled": "This switch cannot be changed from the remote web app — use the desktop app."
+      },
+      "approvals": {
+        "title": "Approvals in Feishu conversations",
+        "desc": "The last 10 approve / reject decisions a human actually made. The criterion is \"this conversation came from Feishu\" — if such a conversation was approved from the desktop app instead, it is still listed here (the record cannot tell which side was tapped). Calls that skipped the card are not counted.",
+        "loading": "Loading approval history…",
+        "loadError": "Could not read approval history: {message}",
+        "unavailable": "Approval history is unreadable right now (the chat database is not accessible) — this does not mean nothing was ever approved.",
+        "empty": "Nothing has been approved or rejected in a Feishu conversation yet.",
+        "approved": "Approved",
+        "rejected": "Rejected"
+      }
+    },
+    "systemCapabilities": {
+      "title": "System capabilities",
+      "desc": "Every capability family the assistant can call in chat. Toggleable ones use a real switch (web access); the rest are env-controlled and read-only here: enabled shows a locked state, and disabled ones are still shown (disabled state).",
+      "lockedBadge": "System · Always on",
+      "lockedTip": "This capability is toggled by an environment variable and cannot be switched here at runtime.",
+      "disabledBadge": "Not enabled",
+      "disabledTip": "This capability is currently disabled via an environment variable; edit .env and restart the backend to enable it.",
+      "controlledBy": "Controlled by env var:",
+      "coreEmail": {
+        "title": "Core email actions",
+        "desc": "Lets the assistant draft replies, compose/forward drafts, edit drafts, flag, archive, pin, resync, and send email (write tools + send).",
+        "control": "Core capability · always available; every write executes only after an approval card."
+      },
+      "kos": {
+        "title": "KOS knowledge brain",
+        "desc": "Lets the assistant search and read the Gbrain cross-domain knowledge graph: semantic retrieval, keyword full-text, read a whole page, find domain experts, list pages by type/tag, and see what links to a page.",
+        "control": "Core read · always registered; retrieval depends on whether Gbrain is configured."
+      },
+      "selfMount": {
+        "title": "Self-config meta tools",
+        "desc": "Lets the assistant view/update its own identity docs and discover/mount skills (update_system_md / discover_skills / set_skill_enabled)."
+      },
+      "calendar": {
+        "title": "Calendar tools (chat)",
+        "desc": "Lets the assistant read/write the calendar in chat (list / get / reschedule / RSVP / delete); unrelated to the calendar skill toggle in the Skills list (which only governs the outward Skill interface)."
+      },
+      "session": {
+        "title": "Session retrieval",
+        "desc": "Lets the assistant search your past AI conversation history (list / search / read)."
+      },
+      "config": {
+        "title": "Agent self-config",
+        "desc": "Lets the assistant view and adjust its own identity docs and memory (read / history / restore / update memory)."
+      },
+      "web": {
+        "title": "Web access",
+        "desc": "Lets the assistant fetch web pages and run web searches (web fetch + web search).",
+        "switchLabel": "Enable web access",
+        "restartHint": "Quit and reopen the App for changes to take effect.",
+        "tavily": {
+          "label": "Tavily API Key",
+          "helper": "web_search defaults to DuckDuckGo, which is blocked on mainland-China networks; enter a Tavily API key to switch to Tavily (reachable in China). Separate multiple Tavily keys with commas to auto-rotate when one runs out of quota; leave empty to use DuckDuckGo (unreachable in China). Stored only in the local .env, never returned to the UI. Takes effect on save.",
+          "placeholder": "tvly-xxx, comma-separate multiple keys"
+        }
+      },
+      "crossRef": {
+        "exec": {
+          "title": "Command / file access",
+          "desc": "Manage the no-approval allowlist for the assistant running commands and reading/writing files.",
+          "action": "Go to automation policy"
+        },
+        "skillPacks": {
+          "title": "Skill packs",
+          "desc": "Install, configure, and uninstall third-party skill packs.",
+          "action": "Go to Skill install"
+        },
+        "customAgents": {
+          "title": "Custom Agents",
+          "desc": "Create automated agents triggered on a schedule or by email.",
+          "action": "Go to Agents"
+        }
+      }
+    },
+    "memory": {
+      "title": "Memory",
+      "desc": "Durable facts the Custom AI remembers about you. Edits and deletions take effect on the next conversation.",
+      "empty": "No memory yet. The agent saves facts here as you confirm them.",
+      "edit": "Edit",
+      "save": "Save",
+      "cancel": "Cancel",
+      "delete": "Delete",
+      "deleteConfirm": "Confirm?",
+      "source": "Source: {source}",
+      "updated": "Updated",
+      "savedToast": "Memory updated",
+      "deletedToast": "Memory deleted",
+      "emptyValue": "Value cannot be empty",
+      "saveError": "Could not save memory",
+      "deleteError": "Could not delete memory",
+      "loadError": "Could not load memory"
+    },
+    "imageGenModel": {
+      "title": "Image Generation Model",
+      "desc": "The model the generate_image tool uses to create or edit images in chat. Only OpenAI or OpenAI-compatible providers can be selected (the AI SDK implements the image endpoints for those two protocols only). Takes effect on save, no restart needed.",
+      "label": "Image model",
+      "helper": "Candidates = enabled models of the enabled OpenAI / OpenAI-compatible providers under Model Services. Leave empty and an image request in chat will point you back here.",
+      "placeholder": "Not configured",
+      "noCandidates": "No candidate models: add and enable an OpenAI or OpenAI-compatible provider under Model Services first, then enable its image model (e.g. gpt-image-1)."
+    },
+    "memoryCaptureModel": {
+      "title": "Memory Extraction Model",
+      "desc": "The model used when auto memory (memory.md) extracts durable facts from your conversations. Only takes effect when memory auto-capture is enabled.",
+      "label": "Extraction model",
+      "helper": "This model runs once per captured conversation turn — pick a fast, cheap small model (e.g. claude-haiku-4-5). Leave empty to use the haiku default. Requires a backend restart to take effect."
+    },
+    "userMdCompile": {
+      "title": "Compile Preferences from Memory",
+      "desc": "Merge AI-captured preference memories into user.md. Takes effect immediately after triggering manually.",
+      "button": "Compile from Memory",
+      "compiling": "Compiling…",
+      "noChange": "No new preferences found to compile",
+      "diffLabel": "Compile result (before / after)",
+      "rollback": "Undo this compile",
+      "rollingBack": "Undoing…",
+      "rolledBackToast": "Compile undone — user.md restored",
+      "compileError": "Compile failed",
+      "rollbackError": "Undo failed"
+    },
+    "standingDocs": {
+      "title": "Identity & Memory Docs",
+      "desc": "View and manually edit the 4 Standing Context identity documents (SOUL / AGENT / RULES / USER) plus the auto-maintained memory (memory.md). Changes take effect on the next conversation.",
+      "highRiskBadge": "High risk",
+      "floorNote": "PRODUCT_SAFETY_FLOOR is always prepended at the code layer — document content cannot weaken it. Override phrasing in RULES is rejected server-side.",
+      "autoBadge": "Auto memory",
+      "memoryNote": "memory.md is auto-extracted and rewritten by the AI from your conversations, and you can also edit it manually. It is injected into every conversation as BACKGROUND memory (not an identity doc) and cannot weaken the safety floor.",
+      "budgetUsage": "Memory usage",
+      "layerUsage": "Per-layer usage (saved content)",
+      "overBudget": "over budget",
+      "overBudgetHint": "Content exceeds the {budget}-character budget; trim it before saving.",
+      "edit": "Edit",
+      "save": "Save",
+      "saving": "Saving…",
+      "cancel": "Cancel",
+      "savedToast": "Document saved",
+      "saveError": "Save failed",
+      "history": "Version history",
+      "rollback": "Restore this version",
+      "rollingBack": "Restoring…",
+      "rolledBackToast": "Restored to this version",
+      "rollbackError": "Restore failed",
+      "emptyHistory": "No version history yet",
+      "updatedBy": "Changed by",
+      "loading": "Loading…",
+      "loadError": "Failed to load",
+      "empty": "(empty)",
+      "docLabels": {
+        "soul": "SOUL (identity)",
+        "agent": "AGENT (operating notes)",
+        "rules": "RULES (hard constraints)",
+        "user": "USER (user preferences)",
+        "memory": "MEMORY (auto memory)"
+      }
+    },
+    "execPolicy": {
+      "title": "Automation policy",
+      "helper": "The assistant needs your approval every time it runs a command or reads/writes files. This is the allowlist you built via “Always allow” for exact operations: matching operations run without approval, everything else still prompts. To loosen a rule, delete and recreate it (in-place editing is not supported, to avoid silently widening scope).",
+      "loadError": "Failed to load policies.",
+      "loading": "Loading…",
+      "empty": "No automation policies yet. When the assistant asks to run a command or read/write files, tick “Always allow” to create an allowlist entry for that exact operation — matching operations then run without approval.",
+      "dangerous": "High risk · not sandboxed",
+      "hitCount": "{count, plural, one {# hit} other {# hits}}",
+      "lastUsed": " · last {time}",
+      "deleted": "Policy deleted",
+      "toggleAria": "Enable/disable this policy",
+      "deleteAria": "Delete this policy",
+      "capability": {
+        "exec": "Run command",
+        "file_read": "Read file",
+        "file_write": "Write file",
+        "web": "Web"
+      },
+      "matcher": {
+        "any": "<any>",
+        "dir": "(dir {scope})"
+      }
+    },
+    "providers": {
+      "title": "Model services",
+      "helper": "Manage LLM upstream providers: official APIs, OpenAI/Anthropic-compatible relays, and local engines can coexist. The default provider carries over the legacy gateway config.",
+      "loading": "Loading…",
+      "loadError": "Failed to load providers.",
+      "empty": "No providers yet. Click “Add” in the corner to create one from a template.",
+      "addButton": "Add",
+      "addTitle": "Add provider",
+      "added": "Added {name}",
+      "deleted": "Deleted {name}",
+      "defaultBadge": "default",
+      "configureButton": "Configure",
+      "configureAria": "Configure {name}",
+      "modalTabs": {
+        "models": "Models",
+        "connection": "Connection & Security"
+      },
+      "expandAria": "Expand {name}",
+      "enabledAria": "Enable/disable {name}",
+      "deleteAria": "Delete {name}",
+      "dragAria": "Drag to reorder {name}",
+      "disabledBadge": "Disabled",
+      "keyConfiguredBadge": "Key set",
+      "keyMissingBadge": "No key",
+      "localNoKeyBadge": "Local / No key",
+      "catalogStatus": "Catalog {date}",
+      "catalogRefresh": "Refresh catalog",
+      "catalogRefreshing": "Updating…",
+      "catalogUpdated": "Model catalog updated",
+      "catalogUpToDate": "Model catalog is already up to date",
+      "catalogSyncFailed": "Catalog refresh failed; keeping cached catalog",
+      "displayName": "Name",
+      "baseUrl": "API base URL",
+      "baseUrlPlaceholder": "Empty = official default endpoint",
+      "categories": {
+        "all": "All",
+        "popular": "Popular",
+        "cn": "China",
+        "global": "Global",
+        "local": "Local",
+        "custom": "Custom"
+      },
+      "apiKey": {
+        "label": "API key",
+        "set": "Set (····{last4}) — enter a new value and save to rotate",
+        "unset": "Not set",
+        "clear": "Clear",
+        "clearAria": "Clear API key",
+        "save": "Save key",
+        "saved": "API key updated",
+        "showAria": "Show API key",
+        "hideAria": "Hide API key"
+      },
+      "keyPool": {
+        "title": "Backup key pool (429 rotation)",
+        "helper": "Enter one spare API key per line. Automatically rotates past HTTP 429 cooldowns while staying sticky on the primary key when healthy.",
+        "countBadge": "{count} Keys",
+        "placeholder": "One spare key per line, e.g.\nsk-spare-1\nsk-spare-2",
+        "save": "Save pool",
+        "clear": "Clear",
+        "saved": "Backup key pool updated"
+      },
+      "headers": {
+        "label": "Custom headers",
+        "opencodeSessionHint": "OpenCode requires an x-opencode-session header. MailAgent attaches a random ID per conversation automatically (used only for OpenCode routing and caching; it contains no conversation content), so there is no need to add it here. If you add one, your value is used instead.",
+        "incrementalHint": "Supports per-header updates and deletions without re-entering other stored secrets.",
+        "setPlaceholder": "Configured (enter a new value to replace)",
+        "keyPlaceholder": "Header name",
+        "valuePlaceholder": "Value",
+        "add": "Add",
+        "update": "Update",
+        "updated": "Custom headers updated",
+        "deleteAria": "Delete header {name}",
+        "save": "Save",
+        "cancel": "Cancel",
+        "reenterHint": "Header values are write-only — re-enter every kept value before saving"
+      },
+      "iconPicker": {
+        "buttonAria": "Change provider icon",
+        "title": "Choose icon",
+        "customPlaceholder": "1-2 chars or emoji",
+        "apply": "Apply",
+        "reset": "Reset"
+      },
+      "test": {
+        "label": "Connectivity test",
+        "button": "Test connection",
+        "running": "Testing…",
+        "ok": "Connected ({ms}ms)",
+        "okNoLatency": "Connected",
+        "fail": "Connection failed",
+        "modelAuto": "Auto-select model",
+        "modelAria": "Select model to probe"
+      },
+      "models": {
+        "title": "Models",
+        "refresh": "Fetch model list",
+        "refreshing": "Fetching…",
+        "loading": "Loading…",
+        "empty": "No models yet. Click “Fetch model list” to pull from upstream, or add one manually below (fallback for relays that don't expose /models).",
+        "noMatch": "No models match the current filter.",
+        "manualBadge": "manual",
+        "manualPlaceholder": "Add a model id manually (wire id)",
+        "manualAdd": "Add",
+        "searchPlaceholder": "Search model ID or name…",
+        "filter": {
+          "all": "All",
+          "enabled": "Enabled",
+          "reasoning": "Reasoning",
+          "vision": "Vision"
+        },
+        "batch": {
+          "enableFiltered": "Enable shown",
+          "disableAll": "Disable all",
+          "clearUnenabled": "Clear disabled fetched",
+          "updated": "Updated {count} models"
+        },
+        "colModel": "Model",
+        "colMaxOutput": "Max output",
+        "colContextWindow": "Context",
+        "groupOther": "Other models",
+        "maxOutputPlaceholder": "maxOutput",
+        "maxOutputAria": "Max output tokens for {model}",
+        "contextWindowPlaceholder": "context",
+        "contextWindowAria": "Context window tokens for {model}",
+        "deleteAria": "Delete model {model}",
+        "cap": {
+          "tools": "tools",
+          "vision": "vision",
+          "reasoning": "reasoning"
+        }
+      },
+      "template": {
+        "ollama": "Ollama (Local)",
+        "lmstudio": "LM Studio (Local)",
+        "opencode": "OpenCode Zen",
+        "custom-openai": "Custom OpenAI-compatible",
+        "custom-anthropic": "Custom Anthropic-compatible"
+      },
+      "add": {
+        "desc": "Pick a cloud or local template, verify connectivity, and save to fetch models.",
+        "template": "Template",
+        "id": "ID (slug)",
+        "idPlaceholder": "Lowercase letter first; digits/-/_ allowed",
+        "idInvalid": "Invalid slug",
+        "protocol": "Protocol",
+        "advancedToggle": "Advanced: custom ID & protocol",
+        "keyOptionalHint": "Optional for local inference engines",
+        "probe": "Test connection",
+        "probing": "Testing…",
+        "probeOk": "Connected ({ms}ms)",
+        "probeFail": "Connection failed",
+        "baseUrlRequired": "Required (this protocol has no official default endpoint)",
+        "submit": "Create",
+        "cancel": "Cancel"
+      },
+      "select": {
+        "searchPlaceholder": "Search model or provider…",
+        "empty": "No matching models",
+        "placeholder": "Select a model"
+      },
+      "group": {
+        "default": "default (main gateway)"
+      },
+      "privacyMask": {
+        "label": "Privacy masking",
+        "aria": "Enable outbound privacy masking for {name}",
+        "helper": "Replace secrets, IDs, phones, emails, and custom regexes with placeholders locally before sending and restore them on arrival (fails closed with HTTP 503 on error).",
+        "configureRules": "Configure rules"
+      }
+    },
+    "privacyMask": {
+      "title": "Outbound Privacy Masking",
+      "helper": "Per-provider bidirectional local redaction: replaces sensitive data with [[PII_TYPE_N]] before leaving this machine and restores original values locally. Only hit counts are stored.",
+      "loading": "Loading privacy masking config…",
+      "loadFailed": "Failed to load privacy masking config",
+      "retry": "Retry",
+      "saved": "Privacy masking rules saved",
+      "saveFailed": "Failed to save privacy masking rules",
+      "hitsCleared": "Hit counters cleared",
+      "hitsClearFailed": "Failed to clear hit counters",
+      "builtin": {
+        "secret": {
+          "label": "API keys & tokens",
+          "helper": "Masks sk-, mak_, AIza, ghp_, and AKIA secret tokens"
+        },
+        "id_card": {
+          "label": "National ID (18-digit checksum)",
+          "helper": "Validated with ISO 7064 check digit to avoid order-ID false positives"
+        },
+        "phone": {
+          "label": "Mobile phone numbers",
+          "helper": "Matches mainland mobile numbers including +86 prefix"
+        },
+        "email": {
+          "label": "Email addresses",
+          "helper": "Masks emails outbound and restores them inside text and tool call inputs"
+        },
+        "bank_card": {
+          "label": "Bank card numbers (Luhn)",
+          "helper": "Matches 16–19 digit sequences verified by Luhn checksum"
+        }
+      },
+      "customRules": {
+        "title": "Custom regex rules",
+        "helper": "Add custom regex patterns (e.g. EMP-\\d{6}); syntax and catastrophic ReDoS patterns are checked before saving.",
+        "namePlaceholder": "Rule name",
+        "add": "Add rule",
+        "deleteAria": "Delete rule {name}"
+      },
+      "preview": {
+        "title": "Local test preview (stays offline)"
+      },
+      "hits": {
+        "title": "Local redaction hit counters",
+        "empty": "No hits recorded yet.",
+        "clear": "Clear counters"
+      }
+    },
+    "usageDashboard": {
+      "title": "AI Usage & Cache Monitor",
+      "helper": "Unified token spend, token-weighted prompt cache hit rate, estimated USD cost, and latest 50 connectivity/runtime probe logs across chat, agents, groups, reports, and email processing.",
+      "shortcutHelper": "Token spend, prompt cache hit rate trends, surface/model billing, and latest 50 probe/error logs now live in Operations → LLM Dashboard.",
+      "shortcutCardHelper": "Inspect live token spend, cache savings, and probe logs in the Operations view",
+      "openLlmDashboard": "Open LLM Dashboard",
+      "rangeAria": "Usage time range",
+      "refreshAria": "Refresh usage analytics",
+      "loading": "Loading usage analytics…",
+      "loadError": "Failed to load usage analytics.",
+      "emptyRange": "No LLM calls recorded in this window.",
+      "emptyBreakdown": "No breakdown entries yet.",
+      "chartTitle": "Token volume & cache hit rate",
+      "legendCacheRead": "Cache read tokens",
+      "legendHitRate": "Cache hit rate",
+      "bySurfaceTitle": "By surface",
+      "byModelTitle": "By model",
+      "kpi": {
+        "totalTokens": "Total tokens",
+        "cacheHitRate": "Token cache hit rate",
+        "estimatedCost": "Estimated cost",
+        "cacheSaved": "Saved by cache"
+      },
+      "surfaces": {
+        "chat": "Chat",
+        "agent_run": "Background agents",
+        "group": "Agent group",
+        "email_classify": "Email classification",
+        "report": "Reports",
+        "matter_run": "Matter runs",
+        "auto_title": "Auto-title",
+        "compact": "Context compact",
+        "search_agent": "AI search",
+        "paused_turn": "Paused approval turn",
+        "translate": "Translation",
+        "nl_search": "NL search",
+        "memory_capture": "Memory capture",
+        "user_md_compile": "Preference compile",
+        "contact_profile": "Contact profile",
+        "task_extract": "Task extraction",
+        "py_loopback": "Python loopback"
+      },
+      "probelog": {
+        "title": "Probe & error diagnostics (latest 50)",
+        "filter": {
+          "all": "All",
+          "errors": "Errors only"
+        },
+        "clear": "Clear",
+        "cleared": "Diagnostics log cleared",
+        "clearFail": "Failed to clear diagnostics log",
+        "empty": "No diagnostic or probe logs yet."
+      }
+    },
+    "skillPacks": {
+      "title": "Skill install",
+      "helper": "Install third-party skill packs from GitHub repos (owner/repo or URL), npm packages (npm:@scope/pkg), archive URLs, or local paths. Two-phase: fetch a preview, review contents and declarations, then confirm.",
+      "sourceType": {
+        "skill_pack": "skill pack",
+        "local_folder": "local folder"
+      },
+      "installedNone": "No skill packs installed yet.",
+      "installedCount": "{count, plural, one {# skill pack installed.} other {# skill packs installed.}}",
+      "installButton": "Install skill",
+      "updates": {
+        "checkButton": "Check updates",
+        "checking": "Checking…",
+        "availableCount": "{count, plural, one {# update} other {# updates}}",
+        "badge": "Update",
+        "updateButton": "Update",
+        "foundToast": "Found updates for {count} skill(s)",
+        "upToDateToast": "All installed skills are up to date",
+        "checkFailed": "Failed to check skill updates"
+      },
+      "dialog": {
+        "title": "Install Skill",
+        "upgradeTitle": "Update Skill: {name}",
+        "desc": "Two-phase install: fetch a pack preview, manually review the file list, secret declarations and SKILL.md excerpt, then install once confirmed. Third-party content is unverified — review it carefully.",
+        "staleError": "The pack contents changed after the preview, so the install was rejected. Fetch a new preview and review again.",
+        "sourceRemote": "GitHub / npm / URL",
+        "remotePlaceholder": "owner/repo, npm:@scope/pkg, or https://.../skill.zip",
+        "remoteHelper": "Supports GitHub (ChenyqThu/omada-ui-kit), npm (npm:@chenyqthu/omada-ui-kit), or .zip / .tgz archive URLs.",
+        "multipleSkillsPrompt": "Multiple skills found in this repository. Choose one to install:",
+        "upgradeSummary": "Ready to upgrade installed skill",
+        "upgradeFilesDelta": "File changes: +{added} added, ~{modified} modified, -{removed} removed",
+        "sourceLocal": "Local path",
+        "localPlaceholder": "/path/to/skill.zip or skill directory",
+        "fetching": "Fetching…",
+        "fetch": "Fetch preview",
+        "fetchFailed": "Failed to fetch preview",
+        "unnamed": "(unnamed)",
+        "source": "Source: ",
+        "packHash": "Pack hash: ",
+        "entryHint": "Entry hint: ",
+        "files": "{count, plural, one {Files (# file)} other {Files (# files)}}",
+        "declaredSecrets": "Declared secrets",
+        "none": "None",
+        "skillMdExcerpt": "SKILL.md excerpt (raw, not rendered)",
+        "empty": "(empty)",
+        "back": "Back",
+        "confirming": "Installing…",
+        "confirm": "Confirm install",
+        "confirmUpgrade": "Confirm update",
+        "installed": "Installed {name}",
+        "installedSecretsHint": "This skill declares {count} secret(s) ({names}); set them under its “Config”.",
+        "installFailed": "Install failed"
+      },
+      "config": {
+        "jsonParseError": "JSON parse failed: {message}",
+        "mustBeObject": "Must be a JSON object ('{ … }')",
+        "saved": "Config saved",
+        "saveFailed": "Failed to save config",
+        "saving": "Saving…",
+        "save": "Save config",
+        "title": "config.json (non-sensitive config, plaintext, shared with the script)",
+        "loading": "Loading…"
+      },
+      "secret": {
+        "set": "Set {time}",
+        "replacePlaceholder": "Enter a new value to replace",
+        "save": "Save",
+        "deleteAria": "Delete secret {name}",
+        "updated": "Secret {name} updated",
+        "updateFailed": "Failed to update secret",
+        "deleted": "Secret {name} deleted",
+        "deleteFailed": "Failed to delete secret",
+        "added": "Secret {name} set",
+        "addFailed": "Failed to set secret",
+        "namePlaceholder": "Secret name (e.g. MY_API_KEY)",
+        "valuePlaceholder": "Value",
+        "add": "Add",
+        "sectionTitle": "Secrets",
+        "sectionDesc": "Secrets are write-only: the value is never shown after saving, only the name and update time. Values are stored encrypted and injected as environment variables when the script runs.",
+        "loading": "Loading…",
+        "empty": "No secrets stored yet."
+      },
+      "pack": {
+        "configAria": "Configure {name}",
+        "uninstallAria": "Uninstall {name}",
+        "uninstallWarning": "This will delete the skill's on-disk directory, its registration row, and clear all of its stored secrets. This cannot be undone.",
+        "loadingSecrets": "Loading secret list…",
+        "noSecrets": "(no stored secrets)",
+        "willDeleteSecrets": "Will delete secrets:",
+        "uninstalling": "Uninstalling…",
+        "confirmUninstall": "Confirm uninstall",
+        "cancel": "Cancel",
+        "uninstalled": "Uninstalled {name}",
+        "uninstallFailed": "Uninstall failed"
+      }
+    },
+    "themeMode": "Theme",
+    "themeModeHint": "Light / Follow system / Dark",
+    "theme": {
+      "light": "Light",
+      "system": "System",
+      "dark": "Dark"
+    },
+    "accent": "Accent",
+    "accentHint": "6 swatches · drives the primary CTA + chip color",
+    "general": {
+      "page": {
+        "intro": "Accent, theme, language, glass material and the tab workspace. Preferences stay local.",
+        "eyebrow": "GENERAL",
+        "title": "General"
+      },
+      "accent": {
+        "meta": "9 prebuilt",
+        "note": "Drives the toolbar, selected row, status chips, Island accent and batch-bar badge. Each change broadcasts to the ping-island bridge."
+      },
+      "language": {
+        "title": "Language",
+        "zh": "简体中文",
+        "zhMeta": "UI · toolbar · settings · AI quick actions. Email body is never auto-translated.",
+        "en": "English",
+        "enMeta": "UI · toolbar · settings · AI quick actions. Email body never auto-translated.",
+        "note": "List headers (MAILBOXES · AI FIELDS · ATTACHMENTS) stay in English mono, unaffected by body font size or density."
+      },
+      "theme": {
+        "title": "Theme",
+        "recommended": "recommended",
+        "systemMeta": "Follows macOS appearance toggle — works out of the box.",
+        "darkMeta": "Canvas #06080B → #0A0C10, glass surfaces on top.",
+        "lightMeta": "Canvas #F6F7FB → #ECEEF4, accent shifts warmer."
+      },
+      "surface": {
+        "title": "Surface",
+        "meta": "2 styles",
+        "frostedMeta": "Frosted · one sheet of glass: OS-level blur + tint. Mood & tuning below.",
+        "solidMeta": "Solid · opaque, zero blur & glow. Best perf, matches prefers-reduced-transparency."
+      },
+      "tabWorkspace": {
+        "title": "Tab workspace",
+        "meta": "{min}-{max}",
+        "limit": {
+          "label": "Tab limit",
+          "meta": "How many email / matter tabs can stay open at once"
+        },
+        "note": "Opening one more past the limit closes the least recently viewed tab. Only an unsaved reply or draft keeps a tab from closing automatically; a tab you have chatted with in the AI drawer closes like any other — it just isn't reused when you move to the next or previous email. Lowering the limit does not close anything retroactively — it applies the next time you open a tab."
+      },
+      "bodyText": {
+        "title": "Body text",
+        "meta": "Email body only",
+        "note": "Font, size and line height apply to the email reading area; compose line height applies to the composer and is sent with the email, so recipients see the same spacing you typed. Defaults: 1.15 reading, 1.5 compose. List rows, AI fields and other UI text are unaffected.",
+        "font": {
+          "system": "System default",
+          "systemMeta": "Sans-serif system font",
+          "serif": "Serif",
+          "serifMeta": "Better for long reads",
+          "mono": "Monospace",
+          "monoMeta": "Code / log friendly"
+        },
+        "size": {
+          "label": "Font size",
+          "meta": "Body text size"
+        },
+        "lineHeight": {
+          "label": "Line height",
+          "meta": "Vertical spacing between lines"
+        },
+        "composeLineHeight": {
+          "label": "Compose line height",
+          "meta": "Spacing in the composer and in sent mail"
+        }
+      },
+      "glass": {
+        "title": "Glass mood",
+        "meta": "Frosted only",
+        "mood": {
+          "neutral": "Silver",
+          "neutralMeta": "Near-neutral and restrained — closest to the macOS system material. Reading first.",
+          "tinted": "Tinted",
+          "tintedMeta": "Accent mixed into the glass + one ambient light from the top-left. Strongest brand feel.",
+          "bright": "Bright",
+          "brightMeta": "Whitened base with lifted brightness — airy and light, close to acrylic.",
+          "recommended": "default"
+        },
+        "knobs": {
+          "title": "Advanced glass tuning",
+          "reset": "Reset",
+          "alpha": "Opacity",
+          "blur": "Base blur",
+          "sat": "Saturation boost",
+          "mix": "Accent tint",
+          "ambient": "Ambient light",
+          "blurNote": "Blur is provided by the OS here; this slider only applies on platforms without native glass.",
+          "note": "Switching mood resets tuning; Reset only clears the sliders, not the mood. Everything applies live and is stored locally."
+        }
+      },
+      "diagnostics": {
+        "title": "Diagnostics",
+        "export": {
+          "label": "Export diagnostics bundle",
+          "helper": "Bundles the last 7 days of runtime logs plus a redacted config snapshot for troubleshooting. May take about a minute to generate.",
+          "cta": "Export bundle",
+          "busy": "Exporting… (~1 min)"
+        },
+        "saved": "Diagnostics bundle saved",
+        "failed": "Failed to export diagnostics bundle",
+        "attachToFeedback": {
+          "label": "Attach the diagnostics bundle when sending feedback",
+          "helper": "Controls the default state of that checkbox in the feedback dialog. Same bundle as the export above."
+        }
+      }
+    },
+    "save": "Save",
+    "clear": "Clear",
+    "saveFail": "Save failed",
+    "set": "Set",
+    "notSet": "Not set",
+    "secretPlaceholder": "Paste new value to save · current value not shown",
+    "testPing": "Test gateway",
+    "choose": "Choose…",
+    "defaultUsed": "(default)",
+    "about": "About",
+    "envField": {
+      "selectPlaceholder": "Select…",
+      "tagListPlaceholder": "Comma-separated",
+      "secretSet": "Set (leave blank to keep)",
+      "secretUnset": "Not set",
+      "reveal": "Show",
+      "hide": "Hide",
+      "clear": "Clear",
+      "secretSaved": "Written to keychain + .env"
+    },
+    "env": {
+      "loadError": "Failed to load settings",
+      "remoteReadonly": "Remote is read-only; edit settings on the host machine"
+    },
+    "tabs": {
+      "general": "General & Appearance",
+      "accounts": "Accounts & Sync",
+      "sync": "Sync",
+      "ai": "Models & AI",
+      "connectors": "Tools & MCP",
+      "matters": "Matters",
+      "notifications": "Notifications & Resident",
+      "integrations": "Knowledge & Integrations",
+      "realtime": "Storage & Remote",
+      "remote": "Remote Access",
+      "mcp": "MCP Server",
+      "labs": "Labs"
+    },
+    "search": {
+      "placeholder": "Search settings, env keys, or keywords…",
+      "shortcut": "⌘F",
+      "empty": "No matching settings found",
+      "aria": "Search all settings"
+    },
+    "connectorsTab": {
+      "connectors": "Tools & Connectors",
+      "mcp": "Outbound MCP Server",
+      "expandWorkspace": "Collapse settings nav",
+      "toggleMasterAria": "Toggle connectors sidebar"
+    },
+    "aiSubtabs": {
+      "all": "All",
+      "models": "Models & Routing",
+      "agent": "Agent & Capabilities"
+    },
+    "labs": {
+      "page": {
+        "eyebrow": "LABS",
+        "title": "Labs",
+        "intro": "Manage experimental capabilities that are still under validation."
+      },
+      "warning": "Experimental features may be unstable. Once promoted, they move into their regular settings area.",
+      "saved": "Experimental setting saved",
+      "saveFailed": "Failed to save experimental setting",
+      "waitingForRestart": "Waiting for restart",
+      "restart": {
+        "backendCta": "Restart backend",
+        "busy": "Restarting…",
+        "success": "Backend restarted",
+        "failed": "Backend restart failed"
+      },
+      "advanced": {
+        "label": "Advanced experiments",
+        "helper": "Low-level capabilities for protocol compatibility and developer debugging."
+      },
+      "groupAgents": {
+        "label": "Multi-agent group chat (experimental)",
+        "helper": "Lets the local AI service drive who speaks in a group: each member's response mode decides who wakes up, members can reply to each other, and every round is bounded by the chain cap and hourly budgets. Turn it off to go back to \"you send one message, each member replies once\". Takes effect immediately — no restart."
+      },
+      "skillCatalogPrompt": {
+        "label": "Skill catalog prompt",
+        "helper": "Inject the skill catalog into the AI system prompt for discoverability, adding about 300 tokens per turn.",
+        "restartHint": "Quit and reopen the App."
+      },
+      "memoryLayers": {
+        "label": "Five-layer memory organization",
+        "helper": "Automatically classifies extracted memories into identity, preferences, context, dynamics, and experience with isolated budgets per layer.",
+        "restartHint": "Restart the backend."
+      },
+      "agUiMirror": {
+        "label": "AG-UI protocol mirror",
+        "helper": "Expose the developer-oriented AG-UI protocol mirror endpoint for compatibility testing and debugging.",
+        "restartHint": "Quit and reopen the App."
+      }
+    },
+    "accounts": {
+      "notion": {
+        "title": "Notion integration",
+        "manual": {
+          "title": "Enter token and database IDs manually",
+          "helper": "For a self-built internal integration, or when you need to point at different databases."
+        },
+        "oauth": {
+          "connect": {
+            "label": "Connect Notion",
+            "helper": "Authorize once in your browser (you can duplicate the official template on the way). The token and both database IDs are written automatically — nothing to paste.",
+            "button": "Connect Notion"
+          },
+          "connectedUnknownWorkspace": "Notion connected",
+          "connectedHelper": "Connected via Notion authorization. \"Remove connection from this Mac\" only clears local config; to revoke on Notion's side, go to Notion → Settings → My connections.",
+          "reauthorize": "Re-authorize",
+          "cancel": "Cancel",
+          "dismiss": "Got it",
+          "doneDetail": "Connected. Email database \"{emailDb}\", calendar database \"{calendarDb}\". Restart the backend to start syncing to Notion.",
+          "phase": {
+            "waitingCallback": "The Notion authorization page is open in your browser — finish it there (keep this window open).",
+            "exchanging": "Exchanging the authorization code…",
+            "discovering": "Identifying the email and calendar databases…",
+            "needSelection": "Pick which databases to use.",
+            "writing": "Writing configuration…",
+            "done": "Authorization complete.",
+            "error": "Authorization did not complete."
+          },
+          "error": {
+            "clientIdMissing": "No Notion integration ID is available on this machine, so authorization cannot start. Update the app or fill the fields manually.",
+            "portUnavailable": "Ports 9280 and 9281 are both in use, so the Notion callback cannot be received. Close whatever holds them and retry.",
+            "browserOpenFailed": "Could not open the system browser; authorization was not started.",
+            "denied": "You cancelled on the Notion page. Existing configuration is unchanged.",
+            "timeout": "Authorization was not completed within 5 minutes and has been cancelled. Existing configuration is unchanged.",
+            "cancelled": "Authorization cancelled. Existing configuration is unchanged.",
+            "invalidGrant": "The authorization code expired (usually after waiting too long). Please authorize again.",
+            "upstreamError": "Notion failed to issue a token. Please retry later.",
+            "notConfigured": "The authorization service is unavailable right now. Retry later, or use the manual fields below.",
+            "rateLimited": "Too many attempts in a short window. Wait a minute and retry.",
+            "invalidRedirectUri": "The callback address was rejected by the authorization service. Please update the app.",
+            "networkError": "Network unreachable; the token exchange failed. Existing configuration is unchanged.",
+            "invalidResponse": "The authorization service returned something unrecognizable. Existing configuration is unchanged.",
+            "discoveryFailed": "Reading Notion databases failed. Authorize again and make sure the pages you need are shared with MailAgent.",
+            "noDatabasesFound": "No database was found in what you authorized. Authorize again and duplicate the template, or select pages that contain the email and calendar databases.",
+            "selectionInvalid": "The selected database is not usable (it may have changed or is no longer visible). Please pick again.",
+            "envWriteFailed": "Writing the configuration failed; existing configuration is unchanged (see the app log).",
+            "unknown": "Authorization did not complete. Existing configuration is unchanged."
+          },
+          "select": {
+            "title": "Pick the databases to use",
+            "description": "These are the databases this authorization can reach. Pick one of each: emails go to the email database, meeting invites to the calendar database.",
+            "emailGroup": "Email database",
+            "calendarGroup": "Calendar database",
+            "empty": "No candidates available.",
+            "untitled": "(untitled)",
+            "cancel": "Cancel authorization",
+            "confirm": "Use selected databases",
+            "warnings": "Missing optional fields: {fields} (only affects optional features such as AI classification — usable as is)",
+            "reason": {
+              "otherRole": "Not this kind of database (field signature does not match)",
+              "missing": "Missing required fields: {fields}",
+              "unknown": "Purpose unrecognized: the field signature matches neither the email nor the calendar database"
+            }
+          },
+          "remove": {
+            "button": "Remove connection from this Mac",
+            "title": "Remove connection from this Mac",
+            "description": "This clears the Notion token, both database IDs, and workspace info stored on this machine. The authorization still exists on Notion's side — to revoke it fully, go to Notion → Settings → My connections and remove MailAgent. Emails already synced to Notion are unaffected.",
+            "cancel": "Cancel",
+            "confirm": "Remove connection",
+            "done": "Connection removed from this Mac",
+            "failTitle": "Removal failed"
+          }
+        },
+        "disabledNotice": "Notion is not configured: mirror sync, project weekly reports, and calendar sync are disabled. Emails sync locally only (list, search, and AI classification still work). Fill in the token and email database ID, then restart to enable. Configuring later only syncs new emails; historical emails are not backfilled (use mailagent email resync to push them individually).",
+        "token": {
+          "label": "Notion token",
+          "helper": "Integration token, starts with ntn_ or secret_",
+          "placeholder": "ntn_xxx or secret_xxx"
+        },
+        "databaseId": {
+          "label": "Email database ID",
+          "helper": "UUID of the Email Inbox database"
+        },
+        "calendarDatabaseId": {
+          "label": "Calendar database ID",
+          "helper": "Optional — leave empty to skip meeting invite sync"
+        }
+      },
+      "mail": {
+        "title": "Mail.app",
+        "userEmail": {
+          "label": "User email",
+          "helper": "Sidebar avatar / reverse-sync actor match"
+        },
+        "accountName": {
+          "label": "Mail.app account name",
+          "helper": "As shown in Mail.app → Settings → Accounts"
+        },
+        "inboxName": {
+          "label": "Inbox name",
+          "helper": "AppleScript label, default 收件箱"
+        },
+        "sentName": {
+          "label": "Sent name",
+          "helper": "AppleScript label, default 已发送邮件"
+        }
+      },
+      "source": {
+        "title": "Mail source",
+        "helper": "Choose how MailAgent reads and writes your mail. Switching sources needs a backend restart; the connection fields below belong to the selected source.",
+        "ariaLabel": "Mail source",
+        "applescript": "Mail.app",
+        "davmail": "DavMail",
+        "saveFail": "Failed to switch mail source",
+        "pickLabel": "Mail source:"
+      },
+      "davmail": {
+        "userEmail": {
+          "label": "IMAP/SMTP login",
+          "helper": "DavMail uses this as the IMAP/SMTP login (= USER_EMAIL)"
+        },
+        "pocMode": {
+          "label": "Use PoC default key",
+          "helper": "On uses the built-in shared key (DAVMAIL_POC_MODE=true); off requires a cipher key."
+        },
+        "cipherKey": {
+          "label": "Cipher key",
+          "helper": "DavMail OAuth cipher key, written to .env (not the system keychain)."
+        },
+        "advanced": {
+          "title": "Advanced connection",
+          "helper": "davmail bridge host / ports; defaults 127.0.0.1 / 1143 / 1025 / 1080."
+        },
+        "host": {
+          "label": "DavMail host",
+          "helper": "davmail bridge listen address, default 127.0.0.1."
+        },
+        "imapPort": {
+          "label": "IMAP port",
+          "helper": "Default 1143."
+        },
+        "smtpPort": {
+          "label": "SMTP port",
+          "helper": "Default 1025."
+        },
+        "caldavPort": {
+          "label": "CalDAV port",
+          "helper": "Used for calendar sync, default 1080."
+        },
+        "draftsFolder": {
+          "label": "Drafts folder name",
+          "helper": "Leave empty to auto-detect; only set if the server Drafts name is non-standard."
+        },
+        "archiveSent": {
+          "label": "Archive sent to Sent",
+          "helper": "When on, mail sent via SMTP is written to the Sent folder."
+        },
+        "sentFolder": {
+          "label": "Sent folder name",
+          "helper": "Leave empty to auto-detect; only set when \"Archive sent\" is on and the server name is non-standard."
+        },
+        "draftsSync": {
+          "label": "Drafts sync",
+          "helper": "Sync the Exchange Drafts folder into your local list (local only — no Notion / AI / Feishu)."
+        },
+        "readReconcile": {
+          "label": "External read sync",
+          "helper": "When you mark an email as read in Outlook or Outlook on the web, your local inbox unread count updates to match (inbox only, one-way \"unread → read\"; doesn't affect read → unread or flags). Checked every 5 minutes; off by default."
+        },
+        "folderSizeLimit": {
+          "label": "IMAP folder view limit (messages)",
+          "helper": "Exposes only the most recent N messages of each folder over IMAP. On a large mailbox (over 10,000 messages) an unlimited view makes DavMail enumerate the whole folder over EWS on every sync — slow enough to time out and stall the entire sync chain. The cost: older messages outside the window are invisible at the IMAP layer (history already synced locally is unaffected; this only limits what incremental sync and write operations such as flag / archive can reach). Default 500; set 0 to leave this key entirely to DavMail.",
+          "status": {
+            "updated": "Written to the DavMail config file ({path} → davmail.folderSizeLimit={desired}). DavMail only reads its config at startup, so restart the DavMail bridge (pm2 restart davmail-poc) for it to take effect.",
+            "unchanged": "The DavMail config file already has {value} ({path}); nothing to change.",
+            "fileMissing": "DavMail config file not found, so this setting has no effect right now: {path}. Point DAVMAIL_ROOT in .env at your DavMail directory, or add davmail.folderSizeLimit={desired} to davmail.properties by hand.",
+            "error": "Failed to write the DavMail config file, so this setting may have no effect: {path} (see the backend log for the reason).",
+            "disabled": "Set to 0: MailAgent leaves this key alone and DavMail uses its own config value (currently {value}).",
+            "disabledUnset": "Set to 0: MailAgent leaves this key alone, and the DavMail config file doesn't set it either (risky on large mailboxes)."
+          }
+        }
+      },
+      "calendar": {
+        "helperDavmail": "DavMail syncs your Exchange calendar into the local list over CalDAV (port under \"Advanced connection · CalDAV port\" above).",
+        "helperApplescript": "Mail.app reads the local Calendar.app via AppleScript / EventKit.",
+        "reminderLead": {
+          "label": "Meeting reminder lead time (minutes)",
+          "helper": "How many minutes before an event a reminder card pops on the Dynamic Island; default 10. Requires CalDAV calendar sync above and the Dynamic Island; each meeting is reminded once."
+        },
+        "caldav": {
+          "enabled": {
+            "label": "Enable CalDAV calendar sync",
+            "helper": "When on, periodically pulls the Exchange calendar into the local list from DavMail CalDAV."
+          },
+          "poll": {
+            "label": "Poll interval (seconds)",
+            "helper": "How often to check for calendar changes, default 60."
+          },
+          "pastDays": {
+            "label": "Days in the past",
+            "helper": "Lookback window for past events, default 30."
+          },
+          "futureDays": {
+            "label": "Days in the future",
+            "helper": "Lookahead window, default 180."
+          }
+        }
+      },
+      "signature": {
+        "title": "Email signature",
+        "helper": "Click the Signature button in the compose toolbar to insert at the cursor. Plain text or HTML.",
+        "placeholder": "e.g.\n<Your name>\n<Company or team>",
+        "saved": "Signature saved",
+        "saveFail": "Failed to save signature"
+      },
+      "page": {
+        "eyebrow": "ACCOUNTS",
+        "title": "Accounts",
+        "intro": "Notion integration credentials and Mail.app account configuration."
+      }
+    },
+    "sync": {
+      "window": {
+        "title": "Sync window",
+        "helper": "Defines the incremental-sync starting point and date filter"
+      },
+      "cadence": {
+        "title": "Cadence"
+      },
+      "calendar": {
+        "title": "Calendar sync",
+        "syncMode": {
+          "label": "Source",
+          "helper": "AppleScript reads Calendar.app; EventKit hits the native framework"
+        },
+        "pastDays": {
+          "label": "Past days",
+          "helper": "How far back to fetch"
+        },
+        "futureDays": {
+          "label": "Future days",
+          "helper": "How far ahead to extend"
+        }
+      },
+      "dateMode": {
+        "label": "Mode",
+        "helper": "Relative — the floor rolls daily with today − lookback days; Fixed — the floor stays on the start date. Mail older than the floor is stored locally only, never pushed to Notion",
+        "fixed": "Fixed date",
+        "relative": "Relative days"
+      },
+      "startDate": {
+        "label": "Start date",
+        "helper": "Fixed mode only — mail before this date is stored locally only, never pushed to Notion"
+      },
+      "lookbackDays": {
+        "label": "Lookback days",
+        "helper": "Relative mode only — floor = N days back from today, rolling forward daily; mail older than the floor is stored locally only, never pushed to Notion"
+      },
+      "mailboxes": {
+        "label": "Mailboxes to watch",
+        "helper": "Comma-separated; SQLite radar will pick up new mail from these",
+        "placeholder": "收件箱,发件箱"
+      },
+      "radarInterval": {
+        "label": "New-mail check interval",
+        "helper": "Seconds — new-mail detection cadence"
+      },
+      "reverseInterval": {
+        "label": "Reverse sync interval",
+        "helper": "Seconds — poll to write Notion-side changes back to the mailbox"
+      },
+      "page": {
+        "eyebrow": "SYNC",
+        "title": "Sync",
+        "intro": "Incremental-sync time window and polling cadence."
+      },
+      "history": {
+        "title": "Past mail",
+        "helper": "Recover mail from before installation or missed during an outage. Covers Inbox and Sent. Mail already stored locally is skipped, and new mail keeps arriving as usual.",
+        "notionFloor": "Mail older than {date} is stored locally only and not pushed to Notion.",
+        "since": "From",
+        "until": "To",
+        "start": "Start sync",
+        "cancel": "Cancel",
+        "cancelling": "Cancelling…",
+        "range": "{since} to {until}",
+        "status": {
+          "idle": "Not run yet",
+          "queued": "Waiting to start",
+          "scanning": "Scanning mailbox",
+          "syncing": "Syncing",
+          "done": "Sync complete",
+          "partial": "Some messages failed",
+          "failed": "Sync failed",
+          "incomplete": "Only covered back to {date}",
+          "cancelled": "Cancelled"
+        },
+        "progress": "Processed {done} / {total}",
+        "eta": "About {minutes, plural, one {# minute} other {# minutes}} left",
+        "etaUnderMinute": "Less than a minute left",
+        "summary": {
+          "scanned": "Found",
+          "existing": "Already stored",
+          "added": "Added",
+          "notionSynced": "Pushed to Notion",
+          "localOnly": "Local only",
+          "failed": "Failed"
+        },
+        "incompleteHint": "The mailbox view only reaches back to {date}; older mail was not scanned.",
+        "error": "Reason: {message}",
+        "startError": "Could not start sync",
+        "cancelError": "Could not cancel sync",
+        "loadError": "Could not load past-mail sync status",
+        "validation": {
+          "required": "Pick both a start and an end date",
+          "order": "The start date must not be after the end date",
+          "future": "The end date must not be later than today",
+          "span": "The range can be at most {days} days"
+        },
+        "unsupported": {
+          "backend_applescript": "Not available with the AppleScript backend. Use \"mailagent init\" to import past mail.",
+          "generic": "The current mail backend does not support past-mail sync."
+        }
+      }
+    },
+    "ai": {
+      "title": "Local LLM Agent",
+      "helper": "Replaces Notion Email Agent for email triage / priority; the gateway / key below are also the LLM source for the Agents-tab reports (daily / weekly / monthly)",
+      "enabled": {
+        "label": "Enable local LLM",
+        "helper": "Pause the Notion Email Agent first, or add a Status filter to its automation"
+      },
+      "apiBase": {
+        "label": "Gateway base URL",
+        "helper": "Anthropic Messages-compatible endpoint; default https://crs.chenge.ink/api"
+      },
+      "apiKey": {
+        "label": "LLM API key",
+        "helper": "Dual-written to keychain + .env; shared by translate / chat / email triage / report agent"
+      },
+      "enabledModels": {
+        "label": "Enabled model list",
+        "helper": "Checked models appear in the chat picker, report agent, and primary/fallback dropdowns. When empty, falls back to the default four models.",
+        "refresh": "Refresh model list",
+        "refreshing": "Refreshing…",
+        "loading": "Loading…",
+        "noModels": "No models found — check API Base / Key and refresh.",
+        "allDefault": "All defaults",
+        "countEnabled": "{count} models enabled",
+        "saved": "Enabled model list updated",
+        "saveFailed": "Save failed",
+        "notEnabled": "(not enabled)"
+      },
+      "model": {
+        "label": "Global default model",
+        "helper": "Default for chat and background AI tasks without a dedicated model (restart required); the email-preprocessing model is configured on its config page under Team"
+      },
+      "translate": {
+        "title": "Email translation",
+        "helper": "Electron-main translation pipeline; independent gateway/key/model + bilingual",
+        "overrideToggle": "Use dedicated translation gateway override (advanced)"
+      },
+      "translateBaseUrl": {
+        "label": "Translation gateway URL",
+        "helper": "Empty = follow the main LLM gateway; can point at a faster dedicated endpoint",
+        "placeholder": "Empty = follow main gateway"
+      },
+      "translateApiKey": {
+        "label": "Translation API key",
+        "helper": "Empty = follow main LLM key; dual-writes to keychain + .env when set"
+      },
+      "translateModel": {
+        "label": "Translation model",
+        "helper": "Used only for email translation; defaults to Haiku (~3-5× faster than Sonnet, quality is enough)",
+        "notInList": "(not in list)",
+        "refresh": "Refresh model list",
+        "refreshing": "Refreshing…",
+        "refreshHelper": "Pull latest model list from the translation provider"
+      },
+      "fallbacks": {
+        "label": "Fallback chain",
+        "helper": "Global fallback chain when the primary model fails; email preprocessing can override it on its config page under Team (defaults to follow global)",
+        "none": "(no fallback)"
+      },
+      "autoTitle": {
+        "title": "Auto chat title",
+        "helper": "Auto-generate titles for general agent chats; off uses the first message as the title.",
+        "enabledLabel": "AI auto-title",
+        "enabledHelper": "After the first turn, generate a title with the chosen model and save it; a manual rename always wins.",
+        "modelLabel": "Title model",
+        "modelHelper": "Model used to generate the title — a fast, cheap small model (e.g. haiku) is recommended."
+      },
+      "autoCompact": {
+        "title": "Automatic context compact",
+        "helper": "Controls automatic compact for interactive chats. Manual /compact remains available.",
+        "enabledLabel": "Compact near the context limit",
+        "enabledHelper": "Warn at 80% and compact after the current reply at 90%. Unknown model windows never trigger automatically."
+      },
+      "approval": {
+        "title": "Agent action approval",
+        "helper": "Whether the agent needs per-action confirmation before write operations. Sending mail always asks (unless every recipient is on the whitelist).",
+        "autoReversibleLabel": "Skip confirmation for reversible actions",
+        "autoReversibleHelper": "When on, reversible (preview-tier) actions without an explicit per-tool tier run directly without a confirmation card; a per-tool \"ask\" set below outranks this toggle.",
+        "managedByMode": "The permission mode is currently \"{mode}\" (switchable at the composer's bottom-left) and overrides this toggle; it takes effect again under \"Manual\".",
+        "modeUnknown": "Can't read the current permission mode (backend unreachable; retries when the window is focused). This toggle applies once the mode is confirmed as \"Manual\"."
+      },
+      "toolPrefs": {
+        "title": "Per-tool approval tiers",
+        "helper": "Decide per tool whether an AI call runs directly, asks first, or is disabled. Factory defaults follow the recommended profile (high-frequency reversible actions run directly); tiers apply only to conversations with you present — scheduled agents and Feishu chats are unaffected.",
+        "loadError": "Can't read the per-tool approval tiers: {message}",
+        "retry": "Retry",
+        "tier": {
+          "label": "Approval tier",
+          "auto": "Run directly",
+          "ask": "Ask first",
+          "deny": "Disabled"
+        },
+        "effective": {
+          "auto": "Runs directly",
+          "ask": "Asks before every call",
+          "deny": "Disabled (invisible to the model)"
+        },
+        "followDefault": "Following default",
+        "clearOverride": "Back to default",
+        "fixedAsk": "Always asks",
+        "fixedAskTip": "This tool's approval shape is fixed: sends use the recipient whitelist, local commands use the automation-policy whitelist, skill installs and agent changes always show a card.",
+        "danger": "Danger",
+        "dangerConfirmTitle": "Set \"{tool}\" to run directly?",
+        "dangerConfirmBody": "This action is irreversible or hands data to an external service; once set to run directly the AI will no longer show a card for it. This confirmation appears only once.",
+        "confirm": "Confirm",
+        "cancel": "Cancel",
+        "group": {
+          "email_write": "Email actions",
+          "draft": "Drafts",
+          "web": "Web",
+          "calendar": "Calendar",
+          "matters": "Matters",
+          "contacts": "Contacts",
+          "capability": "Identity & skills",
+          "supply": "Skill supply chain",
+          "agents": "Agent config",
+          "exec": "Local files & commands",
+          "outbound": "Outbound",
+          "library": "Library"
+        },
+        "bulk": {
+          "label": "Bulk",
+          "auto": "All run directly",
+          "ask": "All ask first",
+          "deny": "All disabled",
+          "clear": "All back to default"
+        },
+        "bulkDone": "Updated {count} tools",
+        "preset": "Accept-edits preset",
+        "presetTip": "One click sets the 15 reversible edit / draft / web / file tools to run directly (the retired \"Accept edits\" mode's new home).",
+        "presetDone": "Accept-edits preset applied ({count} tools)",
+        "reset": "Reset all",
+        "resetDone": "Cleared {count} overrides; every tool is back to its factory default",
+        "saveFailed": "Failed to save the per-tool approval tier",
+        "sendWhitelist": {
+          "label": "Send whitelist",
+          "helper": "The only card-free shape for email_prepare_send: when every recipient matches the whitelist (full emails or @domain entries, comma/newline separated) the send skips the card; empty = sends always ask.",
+          "placeholder": "a@corp.test, @corp.test",
+          "save": "Save",
+          "saved": "Send whitelist saved ({count} entries)",
+          "saveFailed": "Failed to save the send whitelist: {message}"
+        }
+      },
+      "cache": {
+        "title": "Prompt cache",
+        "helper": "Sonnet 4.6 auto-hits at ≥ 2048 tokens; OpenAI protocol has no cache",
+        "enabled": {
+          "label": "Enable prompt cache",
+          "helper": "Hit saves ~90% input cost; off = debugging"
+        },
+        "ttl": {
+          "label": "Cache TTL",
+          "helper": "1h needs extended-cache-ttl beta header (client adds it automatically)",
+          "5m": "5 minutes",
+          "1h": "1 hour"
+        }
+      },
+      "testGateway": {
+        "label": "Gateway health check",
+        "helper": "Burns no tokens — only pings /v1/messages",
+        "button": "Test connection",
+        "running": "Testing…",
+        "ok": "LLM gateway healthy",
+        "fail": "LLM gateway unreachable"
+      },
+      "notionAgent": {
+        "cliMissing": "notion-agent CLI not found",
+        "needsAuth": "notion-agent is not authenticated (missing token_v2)",
+        "account": "Account",
+        "workspace": "Workspace {space}",
+        "agent": "Bound Agent",
+        "agentHelper": "Main agent (personal persona) + workspace Custom Agents; switching writes account.json",
+        "agentPlaceholder": "Select agent",
+        "primaryTag": "Main",
+        "instructionPage": "Instruction Page",
+        "instructionPageHelper": "Instruction-page ID of the bound agent (auto-updates on switch)",
+        "model": "Default model",
+        "modelHelper": "Used when chat doesn't specify a model",
+        "modelPlaceholder": "Select model",
+        "doctor": {
+          "label": "Connection check",
+          "helper": "Run notion-agent doctor to verify account + token",
+          "button": "Check",
+          "running": "Checking",
+          "fail": "doctor check failed"
+        },
+        "toast": {
+          "agentSet": "Bound agent switched",
+          "modelSet": "Default model set",
+          "fail": "Operation failed"
+        }
+      },
+      "page": {
+        "eyebrow": "AI AGENT",
+        "title": "AI Agent",
+        "intro": "Local LLM gateway, model routing, prompt configuration and email translation."
+      }
+    },
+    "notifications": {
+      "desktop": {
+        "title": "macOS permission & menu bar",
+        "helper": "Grant notification permission on first use; choose Alerts style in System Settings to show action buttons directly on banners.",
+        "statusLabel": "System notification availability",
+        "supported": "Desktop notifications supported",
+        "unsupported": "Desktop banners unavailable in this runtime",
+        "authUnknown": "Permission not yet verified — click the button to trigger the macOS prompt",
+        "authPrompted": "Permission prompt triggered (open System Settings if banners are muted)",
+        "authDelivered": "macOS system banner delivery verified",
+        "alertStyleHint": "Tip: set MailAgent alert style to Alerts in System Settings → Notifications to show action buttons inline.",
+        "testBtn": "Send test notification",
+        "requestPermBtn": "Request permission & test banner",
+        "openSystemSettingsBtn": "Open System Settings",
+        "testOk": "Test notification dispatched",
+        "testPrompted": "Requested macOS notification permission — allow alerts in the system prompt",
+        "testFailed": "Failed to send test notification",
+        "openSettingsFailed": "Unable to open macOS Notification Settings",
+        "trayLabel": "Show menu bar tray & popover",
+        "trayHelper": "Pin quick access to replies, notifications, next meeting, and AI quick-capture in the menu bar.",
+        "dockBadgeLabel": "Sync Dock unread badge",
+        "dockBadgeHelper": "Show the unread notification count on the Dock icon.",
+        "matrixTitle": "Category notification rules",
+        "matrixHelper": "Bell-only mode still alerts via system banner for critical severity items.",
+        "modes": {
+          "banner": "Banner + Bell",
+          "center_only": "Bell only (critical banners)",
+          "off": "Silent (Bell only)"
+        },
+        "categories": {
+          "action_required": "Action required (urgent mail, meetings, approvals)",
+          "reviews": "Important mail & contact reviews",
+          "results": "Completed runs & reports",
+          "system": "System health & watchdog alerts"
+        },
+        "saveFailed": "Failed to save notification settings"
+      },
+      "channels": {
+        "title": "Scenario channels & deduplication",
+        "helper": "Choose per-scenario delivery channels instead of notifying across every surface at once.",
+        "suppressFocusedLabel": "Suppress system banners while MailAgent is focused",
+        "suppressFocusedHelper": "Skip non-outage macOS desktop banners when you are actively using the main window.",
+        "skipFeishuLabel": "Skip desktop banner when Feishu already pushed the email",
+        "skipFeishuHelper": "Avoid ringing both Feishu and macOS desktop banners for the same urgent email.",
+        "deliveryOptions": {
+          "both": "macOS banner + In-app bell",
+          "system_only": "macOS banner only (no bell unread count)",
+          "center_only": "In-app bell & Menu Bar only",
+          "off": "Off"
+        },
+        "mailTitle": "Email alerts",
+        "mailHelper": "Triggered when local AI flags incoming emails as urgent or important action items.",
+        "mailScopeLabel": "Banner trigger threshold",
+        "mailScopeUrgentAndImportant": "🔴 Urgent + 🟡 Important action items (Recommended)",
+        "mailScopeUrgentOnly": "🔴 Urgent action items only",
+        "mailActionsLabel": "Include email action buttons",
+        "mailActionsHelper": "Attach 'AI Draft / Follow-up' and 'Remind in 1h' actions to email alerts.",
+        "meetingTitle": "Meeting reminders & Meeting Prep preset",
+        "meetingHelper": "Alert before scheduled meetings with join links, calendar detail deep-link, and AI sidebar.",
+        "meetingLeadLabel": "Reminder lead time",
+        "meetingLeadMinutes": "{count} min before",
+        "meetingActionsLabel": "Include meeting action buttons (Join / AI Follow-up)",
+        "meetingActionsHelper": "Launch meeting clients directly or open the event drawer with the AI sidebar.",
+        "meetingPrepLabel": "Enable 'Meeting Prep' preset agent",
+        "meetingPrepHelper": "Attach brief generation directly to meeting alerts, on-demand or automatically before start.",
+        "meetingPrepModeLabel": "Preparation schedule mode",
+        "meetingPrepOnDemand": "On-demand ('Prepare now' button on reminder — zero idle tokens)",
+        "meetingPrepAutoBefore": "Auto-prepare silently before start (button becomes 'View prep brief')",
+        "meetingPrepLeadLabel": "Auto-prepare lead time",
+        "backgroundTitle": "Background jobs & system alerts",
+        "backgroundHelper": "Route background Custom Agent runs, reports, and watchdog health alerts.",
+        "agentResultsLabel": "Custom Agent & report completions",
+        "systemAlertsLabel": "System health & DavMail watchdog alerts",
+        "saveFailed": "Failed to save notification preferences"
+      },
+      "feishu": {
+        "title": "Feishu app bot",
+        "helper": "Important mail push + interactive reply buttons → Openclaw",
+        "enabled": {
+          "label": "Enable Feishu notifications",
+          "helper": "Needs App ID + Secret + Chat ID"
+        },
+        "appId": {
+          "label": "App ID",
+          "helper": "From Feishu developer console → Credentials"
+        },
+        "appSecret": {
+          "label": "App secret",
+          "helper": "Persisted to .env; Python reads it at boot"
+        },
+        "chatId": {
+          "label": "Chat ID",
+          "helper": "Target group or DM chat_id"
+        }
+      },
+      "alert": {
+        "title": "Feishu alert bot",
+        "helper": "Fires on service crashes / dead-letter pileups / radar outages",
+        "enabled": {
+          "label": "Enable alerts",
+          "helper": "Custom group bot webhook, independent of the app bot"
+        },
+        "webhookUrl": {
+          "label": "Webhook URL",
+          "helper": "Feishu group-bot webhook address"
+        },
+        "webhookSecret": {
+          "label": "Signing secret",
+          "helper": "Optional — enables request-body signature verification"
+        },
+        "levels": {
+          "label": "Alert levels",
+          "helper": "Comma-separated: critical, error, warning, info"
+        }
+      },
+      "matters": {
+        "title": "Matter notifications",
+        "helper": "Choose which matter signals can trigger native notifications.",
+        "level": "Notification level",
+        "high": "High value (default)",
+        "all": "All",
+        "off": "Off",
+        "saved": "Matter notification setting saved",
+        "failed": "Could not save matter notification setting"
+      },
+      "page": {
+        "eyebrow": "NOTIFICATIONS",
+        "title": "Notifications",
+        "intro": "Feishu bot for important email push · alert bot for service errors."
+      }
+    },
+    "integrations": {
+      "attachments": {
+        "title": "Attachment processing",
+        "helper": "Makes text inside attachments searchable. Everything runs on this Mac, no network involved."
+      },
+      "ocr": {
+        "label": "Text recognition for images & scans (OCR)",
+        "helper": "Recognizes Chinese and English text in image attachments and scanned PDFs so full-text search can find them. Uses macOS's built-in on-device recognition (Vision) — content never leaves this Mac, no network involved. When off, images and scans cannot be searched. On by default."
+      },
+      "stats": {
+        "title": "Runtime stats upload",
+        "helper": "Periodically push sync / reverse / handler counters to the dashboard",
+        "url": {
+          "label": "Dashboard URL",
+          "helper": "POST /api/stats/report endpoint"
+        },
+        "token": {
+          "label": "Upload token",
+          "helper": "Bearer auth; empty means anonymous (only when webhook-server allows it)"
+        }
+      },
+      "dashboard": {
+        "password": {
+          "label": "Dashboard password",
+          "helper": "webhook-server /dashboard login; empty disables the page"
+        }
+      },
+      "cli": {
+        "title": "CLI auth",
+        "helper": "API key for external agents calling write commands",
+        "apiKey": {
+          "label": "MAILAGENT_CLI_API_KEY",
+          "helper": "Dual-written to keychain + .env; shared by main process and Python CLI"
+        }
+      },
+      "page": {
+        "eyebrow": "INTEGRATIONS",
+        "title": "Integrations",
+        "intro": "Project progress sync, Office document conversion, dashboard reporting and CLI auth."
+      },
+      "kos": {
+        "title": "Knowledge Brain (KOS)",
+        "helper": "KOS lets the AI search across your emails / product knowledge, recall past facts, and find experts in chat. It needs a self-hosted gbrain knowledge service — deploy from ",
+        "helperSuffix": " and request OAuth credentials, then fill them in below. Without credentials the chat AI cannot reach the brain — calls come back as a not-configured error.",
+        "enabled": {
+          "label": "Enable KOS tools",
+          "helper": "When on, the chat AI can call kos_query / kos_search / kos_get_page / kos_find_experts and other read-only knowledge-brain tools (requires credentials below)."
+        },
+        "endpoint": {
+          "label": "KOS service URL",
+          "helper": "The gbrain MCP endpoint, e.g. https://kos.example.com."
+        },
+        "clientId": {
+          "label": "OAuth Client ID",
+          "helper": "Client ID issued by gbrain (gbrain_cl_ prefix)."
+        },
+        "clientSecret": {
+          "label": "OAuth Client Secret",
+          "helper": "Client secret issued by gbrain (gbrain_cs_ prefix). Stored only in local .env, never returned to the UI."
+        },
+        "advanced": {
+          "label": "Advanced"
+        },
+        "ingest": {
+          "label": "Push emails to KOS",
+          "helper": "After sync, asynchronously push emails into KOS (producer) for later retrieval. Off by default."
+        },
+        "priorityFloor": {
+          "label": "Ingest priority floor",
+          "helper": "Only push emails the AI rated at or above this priority, keeping ads and system notifications out of the knowledge base. Note: emails the AI has never classified count as \"Normal\" — to keep those out too, turn on \"Only push labeled emails\" below.",
+          "critical": "Critical (highest only)",
+          "urgent": "Urgent and above",
+          "important": "Important and above",
+          "normal": "Normal and above (default)",
+          "low": "Low and above (push everything)",
+          "placeholder": "Normal and above (default)"
+        },
+        "requireLabeled": {
+          "label": "Only push labeled emails",
+          "helper": "Off (default): emails the AI has never classified — including all history from before you enabled AI classification — pass through as \"Normal\" and get ingested. On: only emails with an explicit AI priority are pushed; unlabeled ones are skipped (not lost — they re-enter once classification catches up). Prerequisite: this depends on AI email preprocessing running, otherwise nothing ever gets labeled.",
+          "deadlockWarning": "AI email preprocessing is currently OFF — no email will ever get a priority label, so this switch stops ingestion entirely (no error, pushes just silently stop). Enable AI email preprocessing on the Agents page first, or turn this switch off.",
+          "goToAgents": "Open the Agents page →"
+        },
+        "bulkClientId": {
+          "label": "Ingest Client ID",
+          "helper": "Client ID used for pushing emails in (gbrain_cl_ prefix). This is a separate credential from the OAuth Client ID above, which is only used for reading — without it, no email reaches the knowledge base."
+        },
+        "bulkClientSecret": {
+          "label": "Ingest Client Secret",
+          "helper": "Client secret used for pushing emails in (gbrain_cs_ prefix). Stored only in this machine's .env and never sent back to the UI."
+        },
+        "l1": {
+          "label": "Sender hot-memory prefetch",
+          "helper": "At chat start, prefetch a KOS digest by sender into the system prompt so the AI has more context. Off by default."
+        },
+        "timeDecay": {
+          "label": "Time-decay rerank",
+          "helper": "Rerank kos_query hits with a 14-day half-life time decay (favors recent). On by default."
+        },
+        "gateWarning": "KOS is enabled but credentials are incomplete — the chat AI is not told a knowledge brain is available, and any call fails outright. Fill in the credentials above, then verify with Connection check.",
+        "doctor": {
+          "label": "Connection check",
+          "helper": "Step-by-step: credentials → service health → OAuth token → real call.",
+          "button": "Check",
+          "running": "Checking",
+          "fail": "KOS connection check failed"
+        }
+      }
+    },
+    "realtime": {
+      "label": "Realtime events",
+      "hint": "SSE push connection status; the poll cadence below is the fallback when disconnected.",
+      "connected": "Connected · live sync",
+      "connecting": "Connecting…",
+      "reconnecting": "Reconnecting…",
+      "disconnected": "Disconnected · falling back to polling",
+      "disabled": "Disabled",
+      "idle": "Awaiting start",
+      "reconnect": "Reconnect now",
+      "reconnectRequested": "Reconnect requested",
+      "reconnectFailed": "Reconnect failed",
+      "sse": {
+        "title": "SSE live connection",
+        "helper": "Main-process events_bridge keeps a long-lived connection to 9200",
+        "enabled": {
+          "label": "Enable SSE server",
+          "helper": "Off → the renderer can only poll (retro mode)"
+        }
+      },
+      "redis": {
+        "title": "Redis event source",
+        "helper": "Notion webhook → Redis queue → reverse sync",
+        "enabled": {
+          "label": "Enable Redis consumer",
+          "helper": "Requires REDIS_URL"
+        },
+        "url": {
+          "label": "Redis URL",
+          "helper": "redis://host:port[?db=N]"
+        }
+      },
+      "body": {
+        "title": "Body dual-write",
+        "helper": "Sprint 14 v4 SSoT — new mail lands in both SQLite and Notion",
+        "dualWrite": {
+          "label": "Enable dual write",
+          "helper": "Off → Notion-only; LLM / resync go ~100× slower"
+        }
+      },
+      "page": {
+        "eyebrow": "REALTIME & STORAGE",
+        "title": "Realtime & Storage",
+        "intro": "SSE event bus, Redis queue, and attachment / SQLite local storage paths."
+      }
+    },
+    "keepAlive": {
+      "title": "Sleep prevention",
+      "helper": "Sync depends on this Mac staying awake; nothing syncs while the lid is closed or the Mac sleeps. Only meaningful when the mail source is Mail.app — in DavMail mode the backend automatically ignores this setting (no foreground session needed).",
+      "enabled": {
+        "label": "Keep the Mac awake",
+        "helper": "While the sync service runs, prevent the system from sleeping so email keeps syncing. Off by default (follows the system's energy settings)."
+      },
+      "dim": {
+        "label": "Dim the screen while awake",
+        "helper": "Lower the screen brightness to save power while sleep is blocked. On by default; only applies when keep-awake above is on."
+      }
+    },
+    "aiMemory": {
+      "title": "AI memory",
+      "desc": "The AI distills durable preferences and facts from your conversations (e.g. \"always reply in Chinese\") into a local memory file, so later chats don't need re-explaining. Memory never leaves this Mac.",
+      "capture": {
+        "label": "Auto-remember preferences from chats",
+        "helper": "After each conversation turn, extracts anything worth remembering long-term and merges it into memory in the background. When off, the AI stops learning anything new from chats (existing memory is kept and stays editable in the identity documents below). On by default."
+      },
+      "retrieval": {
+        "label": "Use existing memory in chats",
+        "helper": "Provides the memory content to the AI as background every turn. When off, the AI immediately \"forgets\" — it stops consulting any remembered preferences (the memory file itself is not deleted). Takes effect on save. On by default."
+      }
+    },
+    "remote": {
+      "page": {
+        "eyebrow": "REMOTE ACCESS",
+        "title": "Remote Access",
+        "intro": "Securely reach the mail web UI from outside your network via Cloudflare Access. serve-api binds to 127.0.0.1 only; the Cloudflare tunnel forwards traffic and enforces Zero Trust auth."
+      },
+      "gate": {
+        "title": "Remote access",
+        "helper": "When on, serve-api starts with the app and listens on a loopback port; off exposes no remote capability at all."
+      },
+      "enabled": {
+        "label": "Enable remote access (serve-api)",
+        "helper": "On by default · binds 127.0.0.1 only — unreachable externally without a Cloudflare tunnel"
+      },
+      "cf": {
+        "title": "Cloudflare Access",
+        "helper": "serve-api validates the Cloudflare Access JWT on every request; with an empty Audience the process refuses to start."
+      },
+      "audience": {
+        "label": "Application Audience Tag",
+        "helper": "The Audience (AUD) tag from Cloudflare Zero Trust → Access → your app → Overview",
+        "placeholder": "e.g. 6f1d… (required)"
+      },
+      "teamDomain": {
+        "label": "Team domain",
+        "helper": "xxx.cloudflareaccess.com — used to fetch the JWKS keys for verification"
+      },
+      "api": {
+        "title": "Local API",
+        "helper": "Port and allowed email. Point your cloudflared tunnel at this loopback port."
+      },
+      "port": {
+        "label": "Local API port",
+        "helper": "Default 8200, binds 127.0.0.1. A port already in use will make serve-api fail to start."
+      },
+      "allowedEmail": {
+        "label": "Allowed email",
+        "helper": "Only this email passing Cloudflare Access is permitted; empty falls back to USER_EMAIL."
+      },
+      "statusSection": {
+        "title": "Status & access",
+        "helper": "After changing any setting above, serve-api must be restarted to take effect."
+      },
+      "warnAudience": {
+        "label": "Missing Audience",
+        "hint": "Remote access is on but the Application Audience Tag is empty — serve-api will refuse to start. Fill in the Audience under Cloudflare Access above.",
+        "tag": "required"
+      },
+      "status": {
+        "label": "Backend process",
+        "hint": "serve-api is managed alongside the backend process; below is the backend's online status.",
+        "refresh": "Refresh status",
+        "idle": "Disabled",
+        "loading": "Probing…",
+        "online": "Running",
+        "stopped": "Stopped",
+        "errored": "Errored",
+        "unknown": "Unknown"
+      },
+      "restart": {
+        "label": "Apply configuration",
+        "hint": "Restarting briefly interrupts the current sync batch, then brings serve-api back up with the new config.",
+        "cta": "Restart serve-api",
+        "busy": "Restarting…",
+        "requested": "Restart triggered",
+        "failed": "Restart failed",
+        "pm2NotFound": "pm2 not found"
+      },
+      "url": {
+        "localLabel": "Local URL",
+        "localHint": "Open directly in the browser on this machine (bypasses Cloudflare)",
+        "teamLabel": "Cloudflare team domain",
+        "teamHint": "Open the Zero Trust app list to confirm the Access policy",
+        "emailLabel": "Current allowed email",
+        "emailHint": "The email allowed through Cloudflare Access",
+        "emailFallback": "(defaults to USER_EMAIL)",
+        "open": "Open in browser",
+        "copy": "Copy"
+      },
+      "runbook": {
+        "label": "Public access (tunnel)",
+        "hint": "The public URL looks like https://your-domain/app, served by your self-managed cloudflared tunnel pointing the hostname at the local port above. cloudflared must be supervised by you (pm2 / launchd); it is not part of this app's lifecycle.",
+        "tag": "self-managed"
+      }
+    },
+    "mcp": {
+      "page": {
+        "eyebrow": "MCP SERVER",
+        "title": "MCP Server",
+        "intro": "Let external agents (such as Notion Custom Agent or Claude Code) read your mail, calendar, reports and more over MCP. Give each external agent its own access key; permissions are set per key."
+      },
+      "connection": {
+        "title": "Endpoint",
+        "helper": "The address external agents connect to. Cloud services such as Notion can only reach a public HTTPS address."
+      },
+      "status": {
+        "label": "Status",
+        "running": "Running · {count, plural, one {# active key} other {# active keys}}"
+      },
+      "localUrl": {
+        "label": "Local Streamable HTTP URL",
+        "hint": "Standard /mcp endpoint (stateless POST & stateful session/SSE) for local clients such as Claude Code or Cursor",
+        "copy": "Copy local Streamable HTTP URL"
+      },
+      "sseUrl": {
+        "label": "Local HTTP+SSE URL",
+        "hint": "Legacy HTTP+SSE endpoint (/mcp/sse) for clients that only support legacy SSE transport",
+        "copy": "Copy local SSE URL"
+      },
+      "publicUrl": {
+        "label": "Public address",
+        "hint": "The address your Cloudflare tunnel forwards to this Mac, e.g. https://mcp.example.com/mcp. This hostname must not be behind Cloudflare Access.",
+        "save": "Save",
+        "probe": "Check",
+        "saved": "Public address saved",
+        "saveFailed": "Failed to save public address",
+        "errors": {
+          "invalid": "Not a valid URL",
+          "notHttps": "Must start with https://",
+          "loopback": "Local addresses such as localhost or 127.0.0.1 are not allowed. Use a public hostname.",
+          "path": "The path must end with /mcp, e.g. https://mcp.example.com/mcp"
+        }
+      },
+      "probe": {
+        "reachable": "Reachable",
+        "access_blocked": "Blocked by Cloudflare Access. Remove the Access application for this hostname.",
+        "unreachable": "Unreachable ({detail})"
+      },
+      "guide": {
+        "toggle": "How to get a public address",
+        "intro": "Cloud agents such as Notion can only reach a public HTTPS address, so a public address is required for them. Local clients such as Claude Code or Cursor can use the local address directly.",
+        "recommend": "We recommend a Cloudflare Zero Trust Tunnel to forward the local address to the internet.",
+        "docsLink": "Cloudflare docs",
+        "step1": "In Cloudflare Zero Trust → Networks → Tunnels, create or pick a tunnel, then install and run cloudflared on this Mac.",
+        "step2": "Add a Public Hostname to the tunnel: any subdomain (e.g. mcp), Path ^/mcp$, Service http://localhost:{port}.",
+        "step3": "Do not create a Cloudflare Access application for this hostname, or requests will be sent to a login page.",
+        "step4": "Enter https://{host}/mcp as the public address above and click Check.",
+        "hostPlaceholder": "your-hostname",
+        "copyForAgent": "Copy for an agent",
+        "agentTask": "Please expose the MailAgent MCP server on this Mac to the internet with a Cloudflare Tunnel.\n\nGoal: expose http://localhost:{port}/mcp as https://{host}/mcp through a Cloudflare Tunnel.\n\nSteps:\n1. In Cloudflare Zero Trust → Networks → Tunnels, create or pick a tunnel, then install and run cloudflared on this Mac.\n2. Add a Public Hostname to the tunnel: any subdomain (e.g. mcp), Path ^/mcp$, Service http://localhost:{port}.\n3. Do not create a Cloudflare Access application for this hostname, or requests will be sent to a login page.\n4. When done, tell me the final address https://{host}/mcp. I will enter it as the public address under MailAgent Settings → MCP Server and click Check.\n\nConstraints:\n- Only expose the /mcp path. Do not expose any other path of the local API.\n- Do not put Cloudflare Access in front of this hostname.\n- cloudflared must keep running; supervise it with launchd or pm2.\n\nAcceptance:\n- curl -i https://{host}/mcp should return 405 with the response header Allow: POST.\n- A 302 redirect to cloudflareaccess.com means Access is blocking it; remove the Access application for this hostname."
+      },
+      "offline": {
+        "label": "MCP server is not running",
+        "hint": "The MCP server is provided by the local API service. Turn it on under Remote Access and make sure the backend is running.",
+        "cta": "Go to Remote Access"
+      },
+      "keys": {
+        "title": "Access keys",
+        "helper": "External agents use a key to access MailAgent. Create one key per agent and revoke it when no longer needed.",
+        "create": "New key",
+        "empty": "No keys yet",
+        "emptyHint": "Create a key, then paste it into the external agent's configuration.",
+        "createdAt": "Created {time}",
+        "lastUsedAt": "Last used {time}",
+        "neverUsed": "Never used",
+        "expiresAt": "Expires {time}",
+        "writeRpmBadge": "Write cap {limit}/min",
+        "disabledToolsBadge": "{count} tools disabled",
+        "rotate": "Rotate",
+        "revoke": "Revoke",
+        "revoked": "Revoked “{label}”",
+        "rotateFailed": "Failed to rotate key",
+        "revokeFailed": "Failed to revoke key",
+        "createFailed": "Failed to create key",
+        "editScopes": "Edit permissions",
+        "scopesUpdated": "Updated permissions for “{label}”",
+        "updateScopesFailed": "Failed to update permissions",
+        "customScopes": "Permissions: {scopes}. This key was created from the command line; its permission set cannot be changed here.",
+        "state": {
+          "revoked": "revoked",
+          "expired": "expired"
+        }
+      },
+      "presets": {
+        "readonly": {
+          "label": "Read only",
+          "desc": "Can view mail, attachments, calendar, reports, contacts, library, matters and custom agents. Cannot change anything."
+        },
+        "handoff": {
+          "label": "Read + run",
+          "desc": "Everything in Read only, plus generating reports and running custom agents manually. Runs use model quota."
+        },
+        "custom": "Custom"
+      },
+      "create": {
+        "title": "New access key",
+        "desc": "Name the key so you can tell which agent is using it.",
+        "nameLabel": "Name",
+        "namePlaceholder": "e.g. Notion Agent",
+        "baseLabel": "Base permissions",
+        "extraLabel": "Additional write permissions",
+        "submit": "Create"
+      },
+      "editScopes": {
+        "title": "Edit permissions for “{label}”",
+        "desc": "Changes take effect immediately. The key itself stays the same, so configured clients do not need updating.",
+        "submit": "Save"
+      },
+      "policy": {
+        "advancedToggle": "Fine-grained scopes, TTL & rate limits",
+        "scopeModeLabel": "Permission granularity",
+        "usePresetMode": "Use base presets",
+        "useGranularMode": "Pick scopes individually",
+        "readScopesLabel": "Read permissions",
+        "writeScopesLabel": "Write & run permissions",
+        "selectAllRead": "Select all read",
+        "ttlLabel": "Key expiration",
+        "ttlNever": "Never expires",
+        "ttlDays": "Expires in {days} days",
+        "writeRpmLabel": "Write calls per minute",
+        "writeRpmUnlimited": "Unlimited",
+        "disabledToolsLabel": "Per-tool allow/block for this key",
+        "toolEnabled": "Allowed",
+        "toolDisabled": "Blocked"
+      },
+      "clientConfig": {
+        "rowTitle": "One-click client configuration",
+        "rowHelper": "Creates a .bak backup and surgically merges the MailAgent MCP entry into your local client config.",
+        "openButton": "Configure client",
+        "dialogTitle": "Configure local MCP client",
+        "dialogDesc": "Updates only mcpServers.mailagent while preserving all other config keys and writing a .bak backup.",
+        "targetLabel": "Target client",
+        "modeLabel": "Transport mode",
+        "modeHttp": "Streamable HTTP (/mcp)",
+        "modeSse": "HTTP+SSE (/mcp/sse)",
+        "modeStdio": "Local stdio wrapper",
+        "apiKeyLabel": "Access key (Bearer key)",
+        "apiKeyHint": "Leave blank to insert the <YOUR_MAILAGENT_API_KEY> placeholder for previewing or manual editing.",
+        "previewButton": "Preview changes",
+        "writeButton": "Write config",
+        "wroteSuccess": "Wrote config to {path}",
+        "backupCreated": "Backup created: {path}",
+        "failed": "Failed to write config"
+      },
+      "scopes": {
+        "email_read": {
+          "label": "Read mail"
+        },
+        "attachment_read": {
+          "label": "Read attachments"
+        },
+        "report_read": {
+          "label": "View reports"
+        },
+        "report_run": {
+          "label": "Generate reports"
+        },
+        "calendar_read": {
+          "label": "Read calendar"
+        },
+        "contacts_read": {
+          "label": "Read contacts"
+        },
+        "library_read": {
+          "label": "Read library"
+        },
+        "matters_read": {
+          "label": "Read matters"
+        },
+        "agents_read": {
+          "label": "View custom agents"
+        },
+        "agents_run": {
+          "label": "Run custom agents"
+        },
+        "notion_agent_invoke": {
+          "label": "Call Notion Agent"
+        },
+        "email_draft": {
+          "label": "Draft replies",
+          "desc": "Saves drafts. Nothing is sent."
+        },
+        "email_organize": {
+          "label": "Organize mail",
+          "desc": "Flag, pin and archive. Can be undone."
+        },
+        "matters_write": {
+          "label": "Edit matters",
+          "desc": "Create matters, add notes, add and update action items."
+        },
+        "calendar_write": {
+          "label": "Edit calendar",
+          "desc": "Reply to invites, reschedule and delete events. Attendees are notified."
+        },
+        "email_write": {
+          "label": "Send mail",
+          "desc": "Sends real email and cannot be undone. Mail an external agent reads may carry injected instructions, so keep \"ask first\" on in the client."
+        }
+      },
+      "revealed": {
+        "title": "Key created",
+        "desc": "Here is the key for “{label}”.",
+        "warning": "You will not be able to see this key again after closing. Copy it now.",
+        "notionNeedsPublicUrl": "Notion needs a public address. Set one up first — see \"How to get a public address\" on the page. Copy the key before closing this window.",
+        "publicUrlUnverified": "The last check of the public address did not pass. Notion may not be able to connect.",
+        "copyKey": "Copy key",
+        "copyNotion": "Copy Notion config",
+        "copyHttp": "Copy HTTP client config",
+        "copySse": "Copy SSE client config",
+        "done": "Done"
+      },
+      "revoke": {
+        "title": "Revoke “{label}”?",
+        "desc": "Agents using this key will lose access immediately. This cannot be undone.",
+        "confirm": "Revoke"
+      },
+      "rotate": {
+        "title": "Rotate “{label}”?",
+        "desc": "Rotating issues a new key and the old one stops working right away. Clients configured with the old key (such as Notion) need the new key to keep working.",
+        "confirm": "Rotate"
+      },
+      "tools": {
+        "title": "Exposed tools",
+        "helper": "Tools external agents can see, grouped by the permission they need. Each key only sees the tools within its permissions; set write tools to \"ask first\" in the client.",
+        "groupTitle": "{name} · {count}",
+        "groupKeys": "{count, plural, =0 {No active key has this permission} one {# active key has this permission} other {# active keys have this permission}}",
+        "noScope": "No permission required",
+        "suggestAuto": "Suggested: run directly",
+        "suggestAsk": "Suggested: ask first"
+      },
+      "audit": {
+        "title": "Recent calls",
+        "refresh": "Refresh",
+        "empty": "No calls yet",
+        "ok": "OK",
+        "failed": "Failed",
+        "unknownKey": "Unknown key"
+      },
+      "copy": "Copy",
+      "cancel": "Cancel",
+      "retry": "Retry",
+      "loading": "Loading…",
+      "loadFailed": "Failed to load"
+    },
+    "advanced": {
+      "title": "Advanced",
+      "toggle": "Expand advanced settings",
+      "helper": "Internal knobs + read-only paths; only touch if you know what you're doing",
+      "logLevel": {
+        "label": "Log level",
+        "helper": "DEBUG / INFO / WARNING / ERROR"
+      },
+      "outbox": {
+        "enabled": {
+          "label": "Outbox gradual rollout",
+          "helper": "Sprint 15 reverse sync via outbox + FanoutWorker"
+        },
+        "poll": {
+          "label": "FanoutWorker poll (s)",
+          "helper": "Default 5"
+        },
+        "attempts": {
+          "label": "Outbox max attempts",
+          "helper": "After this many failures → dead-letter"
+        },
+        "concurrency": {
+          "label": "Outbox concurrency",
+          "helper": "Max parallel fanout workers"
+        }
+      },
+      "stats": {
+        "interval": {
+          "label": "Stats upload interval (s)",
+          "helper": "STATS_REPORT_INTERVAL"
+        }
+      },
+      "sse": {
+        "host": {
+          "label": "SSE host",
+          "helper": "Renderer hard-binds to 127.0.0.1; changing this breaks the connection"
+        },
+        "port": {
+          "label": "SSE port",
+          "helper": "Renderer hard-binds to 9200; changing this breaks the connection"
+        }
+      },
+      "dbPath": {
+        "label": "SQLite path",
+        "helper": "Default ~/Documents/MailAgent/data/sync_store.db",
+        "pickerTitle": "Choose SQLite folder"
+      },
+      "attachmentDir": {
+        "label": "Attachment directory",
+        "helper": "Default ~/Documents/MailAgent/data/attachments",
+        "pickerTitle": "Choose attachment folder"
+      },
+      "path": {
+        "default": "Default path",
+        "choose": "Choose…"
+      }
+    },
+    "restart": {
+      "required": "Backend service needs a restart",
+      "moreKeys": " and {count} more",
+      "cta": "Restart now",
+      "cancel": "Cancel",
+      "dismiss": "Later",
+      "confirmTitle": "Restart backend service?",
+      "confirmBody": "The current sync batch will be interrupted (~5-10s downtime). Changed fields take effect after restart.",
+      "restarting": "Restarting…",
+      "success": "Service restarted",
+      "failed": "Restart failed",
+      "statusProbeSlow": "Service status probe timed out; verify from the status bar shortly",
+      "notOnline": "Backend service state: {state}",
+      "pm2NotFound": "pm2 not found",
+      "pm2NotFoundHint": "Run in Terminal: pm2 restart mail-sync"
+    },
+    "unsavedBar": {
+      "message": "Unsaved changes · {count}",
+      "save": "Save",
+      "discard": "Discard"
+    },
+    "update": {
+      "heading": "Software updates",
+      "currentVersion": "Current version",
+      "idle": "Not yet checked",
+      "checkNow": "Check for updates",
+      "checking": "Checking…",
+      "upToDate": "You're up to date",
+      "available": "New version available: v{version}",
+      "downloadCta": "Download update",
+      "downloading": "Downloading… {percent}%",
+      "readyToInstall": "Downloaded v{version} — restart to install",
+      "restartCta": "Restart & install",
+      "error": "Update check failed: {message}",
+      "devDisabled": "Auto-updater inactive (dev or unpackaged --dir build)",
+      "channel": "GitHub Releases · ad-hoc signed",
+      "autoDownload": "Auto-download updates",
+      "autoDownloadHint": "Download new versions in the background automatically, then prompt to restart and install.",
+      "unsignedNotice": "This is an ad-hoc signed build: update checks work, but new versions must be downloaded and installed manually from the releases page (in-app one-click update requires a signed build).",
+      "openDownloadCta": "Open download page"
+    },
+    "folder": {
+      "section": {
+        "title": "Custom folder sync",
+        "helper": "Pick the folders to sync into MailAgent; their mail gets full AI triage, Notion sync, and full-text search. None selected by default."
+      },
+      "window": {
+        "pastDays": {
+          "label": "Initial sync window (days)",
+          "helper": "Only fetch the last N days; larger = slower first sync and more disk."
+        },
+        "maxMessages": {
+          "label": "Per-folder cap (messages)",
+          "helper": "Guards against huge mailboxes; truncates oldest beyond the cap."
+        }
+      },
+      "picker": {
+        "refresh": "Refresh",
+        "retry": "Retry",
+        "save": "Save",
+        "saving": "Saving…",
+        "loading": "Loading…",
+        "loadingMeta": "Fetching folders…",
+        "summary": "{count} folders",
+        "refreshedAt": "refreshed {time}",
+        "expand": "Expand",
+        "collapse": "Collapse",
+        "large": "Large",
+        "largeTip": "Over 1,000 messages — first sync may be slow",
+        "systemLockTip": "System folder · always synced",
+        "systemState": "System · always synced",
+        "dirtyHint": "Restart the sync service to apply",
+        "orderOnlyHint": "Display order only — applies immediately after saving",
+        "order": {
+          "title": "Synced folders",
+          "hint": "Drag to reorder, click an icon to change it, set both switches per folder; the sidebar follows this order",
+          "listLabel": "Synced folder order, reorderable",
+          "grip": "Reorder {label}, position {pos} of {count}",
+          "gripGrabbed": "Reorder {label}, position {pos} of {count}, grabbed",
+          "grabbed": "{label} grabbed at position {pos} of {count}. Use arrow keys to move, Space to drop, Escape to cancel.",
+          "dropped": "{label} dropped at position {pos} of {count}.",
+          "moved": "{label} moved to position {pos} of {count}.",
+          "cancelled": "Reorder cancelled. {label} is back at its original position."
+        },
+        "pref": {
+          "columnName": "Icon · name",
+          "rowTip": "{name}: {state}",
+          "notApplicable": "Not applicable",
+          "notify": {
+            "head": "Notify",
+            "on": "Push new mail to Feishu",
+            "off": "No Feishu push",
+            "headTip": "Notify: custom folders default to no push (FOLDER_NOTIFY_ENABLED is an allowlist)",
+            "globalOff": "The Feishu notification master switch is off — this column has no effect right now",
+            "notApplicable": "Built-in mailboxes ignore the per-folder switches: notification follows the global rules (priority + action type)"
+          },
+          "ai": {
+            "head": "AI",
+            "on": "Run LLM triage",
+            "off": "Skip LLM (save cost, cut noise)",
+            "headTip": "AI triage: custom folders default to running it (FOLDER_LLM_DISABLED is a blocklist)",
+            "globalOff": "The AI triage master switch is off — this column has no effect right now",
+            "notApplicable": "Built-in mailboxes ignore the per-folder switches: AI triage is always on"
+          },
+          "builtinTitle": "Built-in mailboxes",
+          "builtinReadonly": "Read-only",
+          "builtinHint": "Fixed order, cannot be removed, icons not customisable; listed here so you can see where custom folders follow them",
+          "builtinNote": "The switches show a dash rather than off: both backend gates check for standard mailboxes first and skip them outright, so built-in rows are not governed by the per-folder switches. Icons are read-only for the same reason and never reach folder_pref.",
+          "builtinLockTip": "Built-in mailbox: fixed position, cannot be reordered or removed",
+          "builtinIconTip": "Built-in mailbox icons are not customisable",
+          "archiveNote": "Archive belongs in this section when it is on the list: STANDARD_MAILBOXES deliberately excludes it, so both per-folder gates apply to it literally and it gets real switches rather than a dash.",
+          "defaultsHint": "Icon and both switches take effect immediately — no sync-service restart needed. A newly added folder starts at notify off · AI on, matching the backend gate defaults.",
+          "saveFail": "Could not save folder settings"
+        },
+        "icon": {
+          "title": "Folder icon",
+          "reset": "Default",
+          "change": "Change icon",
+          "changeFor": "Change the icon for {name}",
+          "dialogLabel": "Pick an icon for {name}",
+          "listLabel": "Icon choices",
+          "unset": "Not set — using the default",
+          "motion": {
+            "folder-archive": "Archived items settle in",
+            "folder-check": "Check mark draws in",
+            "folder-clock": "Minute hand sweeps a full turn",
+            "folder-code": "Angle brackets step aside",
+            "folder-cog": "Gear turns 90°",
+            "folder-dot": "Dot pulses",
+            "folder-down": "Arrow dips down",
+            "folder-git": "Node lights up, links draw outward",
+            "folder-git-2": "Branch draws, end node pops",
+            "folder-heart": "Heartbeat, double thump",
+            "folder-input": "Arrow slides in",
+            "folder-kanban": "Three columns grow in turn",
+            "folder-key": "Key gives a turn",
+            "folder-lock": "Shackle lifts, then closes",
+            "folder-minus": "Dash draws in",
+            "folder-open": "Front flap sweeps open along the outline",
+            "folder-output": "Arrow steps out",
+            "folder-plus": "Plus draws in two staggered strokes",
+            "folder-root": "Node lights up, root grows downward",
+            "folder-sync": "Cycle arrows turn half a round",
+            "folder-tree": "Trunk draws first, branches fade in",
+            "folder-up": "Arrow lifts up",
+            "folder-x": "Cross draws in two staggered strokes",
+            "folders": "Front sheet slides out, the back one recedes"
+          }
+        },
+        "saveOk": "Folder whitelist saved",
+        "saveFail": "Save failed",
+        "errorTitle": "Failed to fetch folders",
+        "emptyTitle": "No custom folders to sync",
+        "emptyBody": "No folders beyond Inbox / Outbox were found in your mailbox. Create one in Outlook, then hit Refresh.",
+        "gatedTitle": "Requires the davmail backend",
+        "gatedBody": "Folder discovery, selection, and sync are only available on the davmail backend. Switch backends under Accounts to enable this section.",
+        "manage": {
+          "menuLabel": "Manage folder",
+          "newChild": "New subfolder",
+          "rename": "Rename",
+          "delete": "Delete",
+          "systemHint": "System folders can't be changed",
+          "confirm": "Confirm",
+          "cancel": "Cancel",
+          "newChildPlaceholder": "Subfolder name",
+          "renamePlaceholder": "Folder name",
+          "createOk": "Created folder “{name}”",
+          "createFail": "Failed to create folder",
+          "renameOk": "Renamed to “{name}”",
+          "renameFail": "Rename failed",
+          "deleteOk": "Deleted folder “{name}”",
+          "deleteFail": "Delete failed",
+          "deleteRollback": "The Exchange operation failed; the local folder tree was rolled back to the server's real state.",
+          "deleteTitle": "Delete folder “{name}”?",
+          "deleteBodyWithCount": "This deletes the folder on Exchange and the {count} synced message copies stored locally. This cannot be undone.",
+          "deleteBody": "This deletes the folder on Exchange and its synced message copies stored locally. This cannot be undone.",
+          "deleteWarn": "This folder may still be referenced by Outlook rules; deleting it breaks those rules. Already-archived Notion pages are unaffected.",
+          "deleting": "Deleting…",
+          "deleteConfirm": "Delete folder",
+          "cleanupPrompt": "Also clean up local copies?",
+          "cleanupHint": "Deletes only the {count} locally synced message copies — Exchange folder and emails are untouched",
+          "cleanupHintNoCount": "Deletes only locally synced message copies — Exchange folder and emails are untouched",
+          "cleanupKeep": "Keep",
+          "cleanupDo": "Clean up",
+          "cleanupOk": "Cleaned up local copies of \"{name}\" ({count} messages)",
+          "cleanupFail": "Failed to clean up local copies",
+          "cleanupBusy": "Cleaning…"
+        }
+      }
+    },
+    "matters": {
+      "title": "Matters",
+      "description": "Global settings for the Matters module. Per-matter follow-up rules and tags stay on the matter page.",
+      "section": "Global configuration",
+      "helper": "Both apply to every matter — there is exactly one of each.",
+      "tags": {
+        "label": "Tag management",
+        "helper": "{total} tags, {count} currently in use; rename, recolor or delete them.",
+        "loadFailed": "Could not load tags — open the manager to retry.",
+        "open": "Manage tags"
+      },
+      "agent": {
+        "label": "Follow-up agent",
+        "helper": "Built in, one instance: task contract, tool face and web-search tier.",
+        "open": "Open configuration"
+      }
+    }
+  }
+}

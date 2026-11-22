@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-import zh from '../../src/shared/i18n/locales/zh-CN/common.json'
-import en from '../../src/shared/i18n/locales/en-US/common.json'
+import zh from '../../src/shared/i18n/locales/zh-CN'
+import en from '../../src/shared/i18n/locales/en-US'
 import {
   MATTER_CONDITION_TRIGGER_TYPES,
   MATTER_EVENT_TRIGGER_TYPES,

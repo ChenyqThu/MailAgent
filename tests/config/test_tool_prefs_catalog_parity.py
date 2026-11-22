@@ -137,6 +137,23 @@ def test_non_configurable_tools_never_default_auto():
             assert policy.default_tier == "ask", policy.tool_name
 
 
+def _load_locale_dict(locale: str) -> dict:
+    locale_dir = REPO / f"frontend/src/shared/i18n/locales/{locale}"
+    files = sorted(locale_dir.glob("*.json"))
+    assert files, f"{locale}: 找不到任何域 locale JSON ({locale_dir})"
+    merged: dict = {}
+    owners: dict[str, str] = {}
+    for path in files:
+        chunk = json.loads(path.read_text(encoding="utf-8"))
+        for key, value in chunk.items():
+            assert key not in owners, (
+                f"{locale}: 顶层 key {key!r} 在 {owners[key]} 与 {path.name} 重复"
+            )
+            owners[key] = path.name
+            merged[key] = value
+    return merged
+
+
 def test_every_tool_pref_group_has_a_bilingual_label():
     """设置页的分组标题是 `settings.ai.toolPrefs.group.<group>` —— 缺词条时 i18n 不会报错，
     只会把**原始 key** 原样渲染在页面上。
@@ -148,8 +165,7 @@ def test_every_tool_pref_group_has_a_bilingual_label():
     from src.agent_config.tool_prefs import TOOL_PREF_GROUPS
 
     for locale in ("zh-CN", "en-US"):
-        path = REPO / f"frontend/src/shared/i18n/locales/{locale}/common.json"
-        labels = json.loads(path.read_text(encoding="utf-8"))["settings"]["ai"]["toolPrefs"]["group"]
+        labels = _load_locale_dict(locale)["settings"]["ai"]["toolPrefs"]["group"]
         missing = [group for group in TOOL_PREF_GROUPS if not labels.get(group)]
         assert not missing, (
             f"{locale} 缺 settings.ai.toolPrefs.group 词条：{missing} —— "

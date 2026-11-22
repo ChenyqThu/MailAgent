@@ -16,8 +16,8 @@ import { resolveAgentAvatar } from '../../src/shared/components/agents/agentAvat
 import { fileToAvatarImage } from '../../src/shared/components/agents/avatarImage'
 import { BOT_AVATAR_COLORS } from '../../src/shared/bot-avatar/colors'
 import { BOT_AVATAR_SHAPES } from '../../src/shared/bot-avatar/shapes'
-import zhCommon from '../../src/shared/i18n/locales/zh-CN/common.json'
-import enCommon from '../../src/shared/i18n/locales/en-US/common.json'
+import zhCommon from '../../src/shared/i18n/locales/zh-CN'
+import enCommon from '../../src/shared/i18n/locales/en-US'
 
 // canvas / createImageBitmap 在 happy-dom 下不存在 —— 处理逻辑本身在
 // tests/components/avatarImage.test.ts 里用注入 deps 测，这里只测组件接线。

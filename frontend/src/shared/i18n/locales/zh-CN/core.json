@@ -1,0 +1,708 @@
+{
+  "app": {
+    "title": "MailAgent",
+    "scaffold": "脚手架就绪"
+  },
+  "empty": {
+    "state": "没有可显示的内容"
+  },
+  "shortcutHelp": {
+    "title": "键盘快捷键",
+    "close": "关闭",
+    "soon": "即将上线",
+    "soonHint": "已在设计规范中,V1 暂未接通",
+    "footer": "按 ? 随时打开此面板",
+    "scope": {
+      "global": "全局",
+      "inbox": "收件箱",
+      "row": "邮件行",
+      "chat": "AI 对话",
+      "calendar": "日历",
+      "contacts": "通讯录"
+    },
+    "binding": {
+      "commandPalette": "命令面板",
+      "navToggle": "收起 / 展开二级栏",
+      "navExpandFocus": "展开二级栏并聚焦",
+      "settings": "打开设置",
+      "shortcutHelp": "显示快捷键帮助",
+      "composeNew": "写新邮件",
+      "generalAgent": "进 AI Chat 并开一个新会话标签",
+      "groups": "去群聊",
+      "tabNew": "新标签页（搜索）",
+      "tabClose": "关闭当前标签",
+      "tabReopen": "恢复刚关闭的标签",
+      "tabCycle": "循环切换标签",
+      "tabJump": "跳到第 N 个标签（⌘1 = 主标签）",
+      "nextEmail": "下一封邮件",
+      "prevEmail": "上一封邮件",
+      "reply": "AI 起草回复",
+      "forward": "转发",
+      "toggleRead": "切换已读/未读",
+      "toggleFlag": "切换旗标",
+      "archive": "归档",
+      "delete": "删除",
+      "translate": "翻译当前邮件",
+      "toggleBatchSelect": "切换批量选择",
+      "openAiPanel": "开关侧边 AI 对话",
+      "sendChat": "发送 AI 消息",
+      "newChat": "新建 AI 对话",
+      "toggleLocale": "切换语言",
+      "calViewDay": "日视图",
+      "calViewWeek": "周视图",
+      "calViewMonth": "月视图",
+      "calViewAgenda": "Agenda 视图",
+      "calViewRecurring": "定期邀请视图",
+      "calPrevNext": "上一段 / 下一段",
+      "calToday": "跳到今天",
+      "calSync": "同步",
+      "calNewEvent": "新建事件",
+      "calNextEvent": "选中下一个事件",
+      "calPrevEvent": "选中上一个事件",
+      "calOpenSelected": "打开选中事件",
+      "calClose": "关闭抽屉 / 弹层",
+      "calHelp": "打开 / 关闭快捷键帮助",
+      "filterUnread": "筛选：未读",
+      "filterFlagged": "筛选：已标记",
+      "filterHasAttach": "筛选：具有附件",
+      "contactsNavDown": "下一个联系人",
+      "contactsNavUp": "上一个联系人"
+    }
+  },
+  "palette": {
+    "coverage": {
+      "candidates": "元数据条件范围内，{count} 封邮件正文缺失或不可检索。这些邮件不代表搜索命中。"
+    },
+    "placeholder": "搜索邮件 · 跳转到信箱 · 运行 AI 动作…",
+    "noResults": "无匹配项 · 试试其他关键词",
+    "searching": "搜索中…",
+    "lang": {
+      "detected": "检测到的输入语言",
+      "zh": "中",
+      "en": "EN"
+    },
+    "aria": {
+      "label": "命令面板 · 搜索 / 跳转",
+      "list": "搜索结果"
+    },
+    "nav": {
+      "inbox": "前往 · 收件箱",
+      "admin": "前往 · 看板",
+      "llm": "前往 · LLM 看板",
+      "calendar": "前往 · 日历",
+      "settings": "前往 · 设置"
+    },
+    "mailbox": {
+      "go": "切换到邮箱 · {name}",
+      "hint": "{unread} 未读 · 共 {total} 封",
+      "matchedSuffix": "含 \"{query}\" 的 {n, plural, one {# 封} other {# 封}}"
+    },
+    "jump": {
+      "generalAgent": "通用 Agent",
+      "generalAgentMeta": "Custom AI · ⌘O",
+      "groupsMeta": "多 agent 群聊 · ⌘G",
+      "admin": "看板 Admin",
+      "adminMeta": "dead-letter {n, plural, =0 {0} other {#}} · 队列健康",
+      "contacts": "打开通讯录",
+      "contactsMeta": "人物档案",
+      "todayMeta": "等我处理的事",
+      "mattersMeta": "事项工作台",
+      "calendarMeta": "日程与会议",
+      "customAiMeta": "智能体团队 · 配置与运行",
+      "reportsMeta": "日报 · 周报 · 自定义产出",
+      "llmMeta": "分类与用量",
+      "settingsMeta": "偏好与账户",
+      "libraryMeta": "本机受管的多根文件夹树"
+    },
+    "email": {
+      "countLabel": "{n} / {total}",
+      "untitled": "(无主题)",
+      "fromAttachment": "命中附件 {filename}",
+      "unnamedAttachment": "未命名附件",
+      "emptyTitle": "未找到匹配的邮件",
+      "emptyHint": "试试更短的关键词，或换个说法",
+      "syntaxLabel": "按字段精确搜索",
+      "syntaxFrom": "发件人",
+      "syntaxAfter": "此日期后",
+      "syntaxHas": "带附件",
+      "syntaxUnread": "仅未读",
+      "syntaxHint": "可组合，如 from:张三 has:attachment"
+    },
+    "actions": {
+      "subtitle": "对当前 {n, plural, one {# 个结果} other {# 个结果}}",
+      "aside": "Notion Agent · AI 助手",
+      "markAllRead": "全部标为已读",
+      "markAllReadMeta": "{n, plural, other {# 封}} · 本地即时 · 同步至 Mail.app + Notion",
+      "reRunAi": "重跑 AI 分类",
+      "reRunAiMeta": "{n, plural, other {# 封}} · 覆盖 11 字段 · 旧版本归档至 ai_history",
+      "summarize": "为本结果集起草摘要",
+      "summarizeMeta": "{n, plural, other {# 封}} · 即将上线",
+      "soon": "即将上线",
+      "running": "运行中…",
+      "doneToast": "{n, plural, other {# 封}} 已处理",
+      "errToast": "动作失败"
+    },
+    "ai": {
+      "understand": "AI 理解「{query}」",
+      "understandHint": "让 AI 帮你检索并梳理相关邮件",
+      "searchingPhrases": [
+        "正在理解你的问题…",
+        "检索相关邮件…"
+      ],
+      "summarizingPhrases": [
+        "筛选最相关的…",
+        "整理结果…"
+      ],
+      "summary": "AI：{text}",
+      "emptyTitle": "AI 没找到相关邮件",
+      "emptyHint": "换个说法，或直接用搜索语法",
+      "viewInPlain": "在普通搜索中查看",
+      "dismiss": "关闭提示",
+      "fellBack": "AI 暂不可用，已转为普通搜索",
+      "errNoKey": "请先在设置中配置 LLM 才能使用 AI 检索",
+      "errEmpty": "没识别出可搜索的意图，换个说法试试",
+      "errUnsupported": "AI 检索仅在桌面 App 中可用",
+      "errTimeout": "AI 检索超时，请稍后重试或直接用搜索语法",
+      "errQuota": "AI 配额已用尽，请稍后重试或直接用搜索语法",
+      "errAgent": "AI 检索出错，请稍后重试或直接用搜索语法",
+      "errGeneric": "AI 检索失败，请稍后重试或直接用搜索语法"
+    },
+    "facet": {
+      "unread": "未读",
+      "hasAttachment": "有附件"
+    },
+    "matters": {
+      "title": "事项",
+      "add": "加入事项",
+      "emptyTitle": "没有匹配的事项",
+      "emptyHint": "事项索引覆盖标题、目的、当前状态、条目与干系人；关联资料正文仍由邮件或文档自身索引负责。",
+      "moreMatches": "另有 {n} 处命中",
+      "scope": {
+        "all": "全部",
+        "email": "邮件",
+        "matter": "事项",
+        "contact": "联系人"
+      },
+      "fields": {
+        "title": "标题",
+        "description": "背景与目标",
+        "currentSummary": "当前状态",
+        "status": "状态",
+        "items": "条目",
+        "stakeholders": "干系人",
+        "notes": "备注"
+      }
+    },
+    "contacts": {
+      "title": "联系人",
+      "emptyTitle": "没有匹配的联系人",
+      "emptyHint": "联系人搜索覆盖姓名、名字变体、邮箱与组织。",
+      "moreMatches": "另有 {n} 人命中"
+    },
+    "history": {
+      "title": "最近搜索",
+      "clear": "清空",
+      "remove": "从历史移除"
+    },
+    "saved": {
+      "title": "已收藏",
+      "save": "收藏此搜索",
+      "savedToast": "已收藏搜索",
+      "remove": "删除收藏"
+    },
+    "kbd": {
+      "navigate": "上下移动",
+      "selectGroup": "切换分组",
+      "open": "打开",
+      "newWindow": "新窗口打开",
+      "aiSearch": "AI 搜索",
+      "dismiss": "关闭",
+      "run": "运行"
+    },
+    "footer": {
+      "fts5Healthy": "FTS5"
+    },
+    "warn": {
+      "emptyValue": "「{field}:」后缺少值，已忽略（冒号后请紧跟值、勿加空格）",
+      "unknownValue": "「{field}:{value}」不是有效值，已忽略",
+      "invalidDate": "「{field}:{value}」日期无法识别，已忽略",
+      "crossClassOr": "OR 暂不支持字段与关键词混用，已按 AND 处理",
+      "negatedOr": "OR 不支持否定项，已按 AND 处理",
+      "unclosedQuote": "引号未闭合，已按普通文本处理",
+      "danglingOr": "OR 缺少操作数，已忽略",
+      "emptyText": "空引号已忽略",
+      "parseError": "查询解析失败，已按普通搜索处理",
+      "generic": "查询有部分内容已忽略"
+    }
+  },
+  "sidebar": {
+    "section": {
+      "mailboxes": "Mailboxes",
+      "aiAgents": "AI Agents",
+      "accounts": "Accounts",
+      "tools": "Tools",
+      "ops": "Ops"
+    },
+    "flagged": "已标旗",
+    "allMail": "所有邮件",
+    "aiHistory": "AI 会话历史",
+    "search": "全文搜索",
+    "translate": "一键翻译",
+    "llmDashboard": "LLM Dashboard",
+    "admin": "看板 Admin",
+    "calendar": "日历",
+    "settings": "设置",
+    "shortcuts": "快捷键",
+    "online": "在线",
+    "cacheWarn": "缓存命中率偏低"
+  },
+  "nav": {
+    "section": {
+      "mailboxes": "Mailboxes",
+      "aiAgents": "AI Agents",
+      "folders": "Folders"
+    },
+    "domain": {
+      "mail": "邮件",
+      "chats": "AI Chat",
+      "groups": "群聊",
+      "team": "团队",
+      "reports": "报告",
+      "ops": "运维",
+      "library": "资料库"
+    },
+    "composeNew": "写邮件",
+    "today": "今日",
+    "inbox": "收件箱",
+    "outbox": "发件箱",
+    "drafts": "草稿箱",
+    "flagged": "已标旗",
+    "allMail": "所有邮件",
+    "aiSessions": "AI 会话历史",
+    "agentView": "MailAgent",
+    "connectors": "Connectors",
+    "adminKanban": "看板 Admin",
+    "calendar": "日历",
+    "settings": "设置",
+    "shortcuts": "快捷键",
+    "collapse": "收起二级栏",
+    "expand": "展开二级栏",
+    "resize": "拖动调整二级栏宽度，双击复位",
+    "drawer": "打开导航",
+    "peekTitle": "{domain} · 预览",
+    "online": "在线",
+    "account": {
+      "tooltip": "{email} — 切换账户"
+    },
+    "folderTree": {
+      "disabledTip": "等待文件夹信息加载后可点击"
+    }
+  },
+  "admin": {
+    "title": "看板",
+    "healthy": "健康",
+    "unhealthy": "异常",
+    "loading": "加载中…",
+    "retry": "重试",
+    "retryOk": "邮件 #{id} 已重新入队",
+    "retryFail": "邮件 #{id} 重试失败",
+    "delete": "删除",
+    "deleteOk": "邮件 #{id} 已删除",
+    "deleteFail": "邮件 #{id} 删除失败",
+    "deleteConfirm": {
+      "title": "删除死信邮件？",
+      "body": "将永久删除「{subject}」及其正文、附件与同步记录，操作不可撤销。请确认已在邮件服务器 / Notion 中处置该邮件。",
+      "confirm": "删除",
+      "cancel": "取消"
+    },
+    "timeAgo": {
+      "seconds": "{n} 秒前",
+      "minutes": "{n} 分钟前",
+      "hours": "{n} 小时前",
+      "days": "{n} 天前"
+    },
+    "dbVersion": "DB 版本",
+    "tables": "表数",
+    "allTablesPresent": "全部就位",
+    "missingTables": "缺少 {n} 张表",
+    "dbAccessible": "可访问",
+    "schemaOk": "Schema OK",
+    "healthNotes": "运行诊断",
+    "syncStore": "同步存储",
+    "totalEmails": "邮件总数",
+    "failureQueue": "失败队列",
+    "failureQueueHint": "等待重试 + 死信",
+    "dbSize": "DB 大小",
+    "lastRowId": "最后 row_id",
+    "statusDist": "状态分布",
+    "byMailbox": "按邮箱",
+    "v4Rollout": "v4 SQLite-SSoT 灰度",
+    "v4Trend": "近 {n} 小时趋势",
+    "v4TrendP99": "路由 p99",
+    "v4TrendFallback": "回落比例",
+    "v4TrendEmpty": "暂无足够的快照",
+    "deadLetter": "死信队列",
+    "noDeadLetter": "无死信邮件",
+    "noDeadLetterHint": "所有同步失败的邮件已重试成功;系统运行正常",
+    "deadLetterExpand": "展开明细",
+    "deadLetterCollapse": "收起明细",
+    "healthRow": {
+      "title": "系统健康",
+      "backend": "后端",
+      "up": "正常",
+      "dbDown": "DB 不可读",
+      "unreachable": "不可达",
+      "dbVersion": "DB 版本",
+      "davmail": {
+        "ok": "正常",
+        "warning": "警告",
+        "critical": "严重",
+        "unknown": "未启动"
+      },
+      "deadLetter": "死信",
+      "outbox": "待派发",
+      "outboxHint": "email_outbox 里 pending 的条数与最老一条的年龄档",
+      "kosDead": "KOS 需人工",
+      "kosDeadHint": "全量口径,不随时间范围变",
+      "agentPending": "待审批",
+      "alerts": "严重告警"
+    },
+    "outbox": {
+      "title": "派发队列 (outbox)",
+      "pending": "待派发",
+      "processing": "派发中",
+      "failed": "失败",
+      "deadLetter": "死信",
+      "byTarget": "按目标 (不含已完成)",
+      "ageDist": "待派发年龄",
+      "ageHint": "只统计 pending 行",
+      "unavailable": "读取失败"
+    },
+    "outboxAge": {
+      "lt_1m": "<1m",
+      "lt_5m": "<5m",
+      "lt_30m": "<30m",
+      "gt_30m": ">30m"
+    },
+    "col": {
+      "subject": "标题",
+      "sender": "发件人",
+      "mailbox": "邮箱",
+      "retries": "重试",
+      "error": "错误",
+      "updated": "更新于",
+      "action": "操作"
+    }
+  },
+  "updater": {
+    "banner": {
+      "title": "新版本 v{version} 已就绪",
+      "restartCta": "重启并更新",
+      "dismiss": "稍后",
+      "availableTitle": "新版本 v{version} 已发布",
+      "openCta": "前往下载"
+    }
+  },
+  "statusbar": {
+    "sync": {
+      "label": "同步",
+      "live": "实时",
+      "connecting": "连接中",
+      "reconnecting": "重连中",
+      "fallbackTpl": "断线 · 兜底 {seconds}s",
+      "fallbackOff": "断线 · 兜底关",
+      "idle": "等待",
+      "disabled": "已禁用",
+      "tooltipConnected": "SSE 推送实时同步",
+      "tooltipFallback": "SSE 断线;每 {seconds}s 兜底拉取",
+      "tooltipFallbackOff": "SSE 断线;兜底轮询已关 (设置 → 实时事件)",
+      "tooltipDisabled": "实时事件已禁用"
+    }
+  },
+  "titleBar": {
+    "synced": "已同步",
+    "themeCycle": "主题 · 点击切换",
+    "update": {
+      "available": "发现新版本 v{version} · 点击下载",
+      "downloading": "正在下载更新 · {percent}%",
+      "downloaded": "新版本 v{version} 已就绪 · 点击安装",
+      "error": "更新下载失败 · 点击重试"
+    }
+  },
+  "surface": {
+    "frosted": "磨砂",
+    "solid": "实色"
+  },
+  "common": {
+    "cancel": "取消",
+    "close": "关闭",
+    "save": "保存",
+    "loading": "加载中…",
+    "imageLoadFailed": "图片加载失败"
+  },
+  "notifications": {
+    "kicker": "通知中心",
+    "title": "通知",
+    "tooltip": "通知中心 · {count} 条未读",
+    "tooltipPending": "通知中心 · {count} 项待办",
+    "tooltipBoth": "通知中心 · {count} 条未读 · {pending} 项待办",
+    "tooltipEmpty": "通知中心",
+    "unreadChip": "未读 {count}",
+    "markAllRead": "全部标为已读",
+    "tabsAria": "通知分类",
+    "tab": {
+      "all": "全部",
+      "action_required": "待办",
+      "reviews": "审阅",
+      "results": "结果",
+      "system": "系统"
+    },
+    "menu": {
+      "trigger": "更多操作",
+      "snooze": "稍后提醒",
+      "snoozeHour": "1 小时后",
+      "snoozeTomorrow": "明天早上",
+      "snoozeThreeDays": "3 天后",
+      "resolve": "标记为已处理"
+    },
+    "history": {
+      "open": "已处理",
+      "back": "返回",
+      "title": "已处理",
+      "empty": {
+        "title": "还没有已处理的通知",
+        "hint": "标记为已处理的通知会留在这里"
+      }
+    },
+    "unreadDot": "未读",
+    "recurrence": "×{count}",
+    "recurrenceTitle": "同类通知已发生 {count} 次",
+    "loading": "加载中…",
+    "error": "通知加载失败",
+    "empty": {
+      "title": "没有新通知",
+      "hint": "后台任务完成后会出现在这里"
+    },
+    "group": {
+      "today": "今天",
+      "yesterday": "昨天",
+      "earlier": "更早"
+    }
+  },
+  "today": {
+    "replyThreadCount": "近 7 天 · {count} 个线程",
+    "replyMessageCount": "{count} 封待回邮件",
+    "replyActions": "待回邮件操作",
+    "replyDismiss": "这 {count} 封无需回复",
+    "replyDismissOne": "无需回复",
+    "replyDismissed": "已标记无需回复",
+    "replyUndo": "撤销",
+    "replyActionFailed": "操作失败，请重试",
+    "kicker": "TODAY",
+    "nav": {
+      "groupNeedYou": "需要你",
+      "groupNext": "接下来",
+      "decide": "等你拍板",
+      "meet": "今天的会",
+      "reply": "待回邮件",
+      "due": "临期事项",
+      "out": "智能体产出"
+    },
+    "title": "今天",
+    "subtitle": "{count} 条等你看一眼",
+    "subtitleLoading": "正在汇总…",
+    "error": "事项数据加载失败，下面只列出了 Agent 运行",
+    "empty": {
+      "title": "今天没有需要你的事",
+      "hint": "等你拍板的、今天的会、待回的信、临期事项、智能体产出，都会汇到这里；现在一条都没有。"
+    },
+    "group": {
+      "waiting": "等我处理",
+      "inProgress": "进行中",
+      "expired": "已失效",
+      "attention": "需要留意",
+      "recent": "最近结果"
+    },
+    "groupCount": "{count} 条",
+    "item": {
+      "proposalTitle": "Agent 提案待评审"
+    },
+    "triage": {
+      "runTrigger": "由「{trigger}」触发",
+      "runTriggerAt": "由「{trigger}」触发 · {at}",
+      "proposalChanges": "{count} 项变更",
+      "proposalConfidence": "置信度 {percent}%",
+      "dispatchAsked": "Agent 有一个问题在等你回答",
+      "dispatchFailed": "这一轮执行失败（{code}）"
+    },
+    "trigger": {
+      "manual": "手动",
+      "cron": "定时",
+      "schedule": "排程",
+      "emailFilter": "邮件规则",
+      "calendarChange": "日历变化",
+      "calendarBefore": "会前提醒"
+    },
+    "run": {
+      "stashMiss": "这条审批已失效（超时或应用重启），只能查看执行记录。"
+    },
+    "menu": {
+      "trigger": "更多",
+      "dismissReasonLabel": "忽略理由（可选）",
+      "dismissReasonPlaceholder": "说明这条信号为什么现在可以先不管",
+      "dismissConfirm": "确认忽略",
+      "dismissBack": "返回"
+    },
+    "dispatch": {
+      "cancel": "取消派发",
+      "answerLabel": "回答 Agent 的提问",
+      "answerPlaceholder": "把它缺的那条信息补给它",
+      "answerConfirm": "回答",
+      "answerBack": "返回"
+    },
+    "meet": {
+      "allDay": "全天",
+      "untitled": "未命名日程"
+    },
+    "why": {
+      "meetUpcoming": "{time} 开始",
+      "meetPast": "{time} 已经开始",
+      "report": "{cadence}，今天生成的"
+    },
+    "meta": {
+      "nextMeet": "下一场 {time}",
+      "oldestReply": "最久一封 {age}"
+    },
+    "action": {
+      "openMail": "去回复",
+      "openCalendar": "看日历",
+      "openReport": "看报告"
+    },
+    "next": {
+      "inMinutes": "还有 {n} 分钟",
+      "inHours": "还有 {h} 小时 {m} 分",
+      "inHoursOnly": "还有 {h} 小时",
+      "started": "已经开始",
+      "pendingBefore": "在那之前有 {count} 件要拍板"
+    },
+    "timeline": {
+      "title": "今天的时间线",
+      "now": "现在 {time}",
+      "empty": "今天还没有带时刻的条目"
+    }
+  },
+  "detached": {
+    "openInWindow": "在新窗口打开"
+  },
+  "tabs": {
+    "pin": "保留标签",
+    "unpin": "取消保留标签",
+    "openInNewTab": "在新标签页打开",
+    "openEveryEmail": "每封邮件在新标签页打开",
+    "browseHint": "默认复用浏览标签；已保留和正在编辑的标签不会被替换。",
+    "untitled": "未命名",
+    "searchTitle": "新标签页",
+    "browserTitle": "内置浏览器",
+    "newTab": "新标签页（⌘T）",
+    "strip": "工作区标签",
+    "close": "关闭标签（⌘W）",
+    "locked": "有未完成的工作，不会被自动关闭",
+    "dirty": "有未保存的修改",
+    "toast": {
+      "full": "标签已满，请先关闭一个标签或取消保留后继续浏览",
+      "targetGone": "该邮件或草稿已不存在，已关闭它的标签"
+    }
+  },
+  "feedback": {
+    "kind": {
+      "problem": "问题",
+      "suggestion": "建议",
+      "question": "咨询"
+    },
+    "freq": {
+      "always": "每次必现",
+      "sometimes": "偶发",
+      "once": "仅出现一次"
+    },
+    "entry": {
+      "send": "发送反馈",
+      "view": "查看反馈"
+    },
+    "dialog": {
+      "title": "发送反馈",
+      "step1Hint": "说清楚遇到了什么，比说「不好用」有用得多。",
+      "step2Hint": "下面就是要发出去的全部内容。不想带的可以现在撤掉。",
+      "doneHint": "收到了。",
+      "kind": "类型",
+      "titleField": "标题",
+      "titlePlaceholder": "一句话说清是什么事",
+      "detail": "详细说明",
+      "detailPlaceholder": "做了什么、看到了什么、期望是什么",
+      "freq": "复现频率",
+      "email": "邮箱（选填）",
+      "emailPlaceholder": "留了才能在有进展时回复你",
+      "emailNone": "（没留邮箱）",
+      "attachments": "附件",
+      "imagesLabel": "图片",
+      "imagesHint": "把截图拖进来，或按 ⌘V 粘贴；也可以点这里选文件",
+      "imagesTitle": "图片（{count}）",
+      "imagesSkipped": "没有附图。",
+      "attachDiagnostics": "附上诊断包",
+      "diagHelper": "近 7 天运行日志 + 已脱敏配置快照，不含邮件正文 / 附件 / 通讯录。点「下一步」后开始组装，约 1 分钟。",
+      "autoContextTitle": "自动带上的运行环境",
+      "diagTitle": "诊断包",
+      "diagBusy": "正在组装…（约 1 分钟）",
+      "diagSkipped": "没有勾选，不会发送。",
+      "diagFailed": "诊断包没能组装出来（{error}），这次不带它提交。",
+      "diagLogs": "运行日志：近 7 天",
+      "diagRedacted": "配置快照：令牌、密钥、邮箱地址已抹掉",
+      "diagExcluded": "不含：邮件正文、附件、通讯录",
+      "diagRenamed": "上传时改名为 .zip.txt（Notion 不收 .zip），下载后去掉 .txt 即可解压",
+      "remove": "撤掉",
+      "cancel": "取消",
+      "next": "下一步",
+      "back": "返回修改",
+      "send": "发送",
+      "close": "关闭",
+      "receipt": "已提交，编号 {id}。在设置底部的「查看反馈」里能看处理进度。",
+      "receiptEmail": "有进展会发到你留的邮箱。",
+      "notSent": "没发出去：{error}",
+      "openForm": "打开表单页手动提交"
+    }
+  },
+  "tray": {
+    "health": {
+      "local": "本地 Mail.app 模式",
+      "ok": "DavMail 连接正常",
+      "warning": "连接波动",
+      "critical": "需重新授权或检查",
+      "unknown": "状态未知"
+    },
+    "refresh": "刷新",
+    "settings": "通知与常驻设置",
+    "openApp": "打开窗口",
+    "newChat": "新建对话",
+    "openToday": "今日待办",
+    "composeEmail": "写新邮件",
+    "viewAllToday": "查看今日全部待办",
+    "quit": "退出 MailAgent",
+    "quickPromptPlaceholder": "让 AI 查信、总结或交办…",
+    "nextUpStarted": "进行中",
+    "emptyAll": "今日收件与提醒已清空",
+    "llmDashboard": "LLM 看板",
+    "activeGateway": "主路由模型",
+    "cacheHit24h": "24h 缓存命中",
+    "providersActive": "{enabled}/{total} 服务商就绪",
+    "noProvider": "暂未配置服务商",
+    "openLlmTitle": "打开运维 LLM 看板",
+    "section": {
+      "notifications": "未读通知",
+      "pendingReplies": "待回复邮件"
+    },
+    "emptyNotifications": "暂无未读提醒",
+    "emptyReplies": "今日收件已清空",
+    "footer": {
+      "ai24h": "24h AI 统计"
+    }
+  }
+}

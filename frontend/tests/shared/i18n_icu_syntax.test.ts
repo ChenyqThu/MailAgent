@@ -1,8 +1,6 @@
-import { readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
 import { describe, expect, test } from 'vitest'
+
+import { loadLocaleDict, loadLocaleFiles, type SupportedLocale } from '../helpers/loadLocale'
 
 /**
  * i18n 占位符语法闸。
@@ -17,10 +15,6 @@ import { describe, expect, test } from 'vitest'
  * 是新加的那一处。
  */
 
-const LOCALES_DIR = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  '../../src/shared/i18n/locales'
-)
 const LOCALES = ['zh-CN', 'en-US'] as const
 
 /** ICU 下必错的双括号占位符：`{{name}}`。 */
@@ -41,9 +35,8 @@ function flatten(
   return out
 }
 
-function entriesOf(locale: string): Array<[string, string]> {
-  const raw = readFileSync(resolve(LOCALES_DIR, locale, 'common.json'), 'utf-8')
-  const entries = flatten(JSON.parse(raw))
+function entriesOf(locale: SupportedLocale): Array<[string, string]> {
+  const entries = flatten(loadLocaleDict(locale))
   // canary：文案表缩水到疑似解析失效的量级时拦下（空表 → 下面的断言恒真）。
   expect(entries.length).toBeGreaterThan(500)
   return entries
@@ -78,5 +71,35 @@ describe('i18n placeholder syntax (ICU, not i18next default)', () => {
       if (JSON.stringify(a) !== JSON.stringify(b)) drift.push(`${key}: zh=${a} en=${b}`)
     }
     expect(drift, `两语言占位符集合不一致：\n  ${drift.join('\n  ')}`).toEqual([])
+  })
+})
+
+describe('i18n domain split integrity', () => {
+  test('zh-CN and en-US expose identical domain JSON file sets', () => {
+    const zhFiles = loadLocaleFiles('zh-CN').map((f) => f.file)
+    const enFiles = loadLocaleFiles('en-US').map((f) => f.file)
+    expect(zhFiles.length).toBeGreaterThanOrEqual(9)
+    expect(zhFiles).toEqual(enFiles)
+  })
+
+  test('domain JSON files have zero top-level collisions and full leaf-key parity per file', () => {
+    const zhFiles = loadLocaleFiles('zh-CN')
+    const enByFile = new Map(loadLocaleFiles('en-US').map((f) => [f.file, f]))
+    const zhDict = loadLocaleDict('zh-CN')
+    const enDict = loadLocaleDict('en-US')
+    expect(Object.keys(zhDict).sort()).toEqual(Object.keys(enDict).sort())
+    expect(Object.keys(zhDict).length).toBeGreaterThanOrEqual(54)
+
+    for (const zhFile of zhFiles) {
+      const enFile = enByFile.get(zhFile.file)
+      expect(enFile, `en-US missing domain file ${zhFile.file}`).toBeDefined()
+      const zhKeys = flatten(zhFile.data)
+        .map(([k]) => k)
+        .sort()
+      const enKeys = flatten(enFile!.data)
+        .map(([k]) => k)
+        .sort()
+      expect(zhKeys, `${zhFile.file}: zh-CN vs en-US leaf keys drifted`).toEqual(enKeys)
+    }
   })
 })

@@ -22,7 +22,7 @@
 - **前端 Design v3 铁律（[`frontend/DESIGN.md`](./frontend/DESIGN.md) §18）**：
   - Token SSoT 在 `frontend/src/electron/renderer/index.css`，**禁止硬编码 hex**（`icons/` 品牌商标资产除外）。
   - **中文最小字号 ≥ 14px（`text-aux` / `text-body`）**：`text-micro` (11px) / `text-meta` (12px) 仅限 ASCII/英文/数字，ESLint 规则 `mailagent/no-cjk-in-mono-size` 会直接拦 CI。
-  - **中英双语 i18n 同源**：`zh-CN/common.json` 与 `en-US/common.json` 必须严格对齐。
+  - **中英双语 i18n 同源**：`locales/zh-CN/*.json` 与 `locales/en-US/*.json` 必须严格对齐。
 - **项目级 Skills（`.agents/skills/` 镜像 `.claude/skills/`）**：
   - `debug` / `deploy` / `health` / `agent-eval` / `db-migration` / `release` / `sprint-handoff`（受 `tests/config/test_agent_skills_parity.py` 闸门约束）。
 - **改后必跑验证闸**：

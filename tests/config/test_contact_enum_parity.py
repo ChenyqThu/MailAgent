@@ -126,6 +126,23 @@ def test_mail_direction_vocabulary_identical_across_languages():
     )
 
 
+def _load_locale_dict(locale: str) -> dict:
+    locale_dir = LOCALE_DIR / locale
+    files = sorted(locale_dir.glob("*.json"))
+    assert files, f"{locale}: 找不到任何域 locale JSON ({locale_dir})"
+    merged: dict = {}
+    owners: dict[str, str] = {}
+    for path in files:
+        chunk = json.loads(path.read_text(encoding="utf-8"))
+        for key, value in chunk.items():
+            assert key not in owners, (
+                f"{locale}: 顶层 key {key!r} 在 {owners[key]} 与 {path.name} 重复"
+            )
+            owners[key] = path.name
+            merged[key] = value
+    return merged
+
+
 def test_every_mail_direction_has_a_label_in_every_locale():
     """🔴 `roleKey` 是模板字面量 `contacts.mail.filter.${direction}` —— TS 类型系统
     盯不住它，少一个 key 就在 UI 上渲染出裸 key（上游刚修过同型 bug: 工具审批档的
@@ -134,8 +151,7 @@ def test_every_mail_direction_has_a_label_in_every_locale():
     """
     canonical = set(py_str_tuple(CONTACTS_ROUTER_PY, "MAIL_DIRECTION_VALUES"))
     for locale in LOCALES:
-        path = LOCALE_DIR / locale / "common.json"
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = _load_locale_dict(locale)
         node = data.get("contacts", {}).get("mail", {}).get("filter")
         assert isinstance(node, dict) and node, (
             f"{locale}: 找不到 `contacts.mail.filter` 块 —— 搬家/改名了，本闸需同步更新"

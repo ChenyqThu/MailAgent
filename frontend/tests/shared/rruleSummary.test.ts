@@ -8,10 +8,6 @@
 // 🔴 词条从 **真实 locale JSON** 取（不是测试里另写一份 labels）—— 组件里的默认值与
 // JSON 漂了、或者哪个 key 被删了，这里当场红。
 
-import { readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
 import { describe, expect, test } from 'vitest'
 
 import {
@@ -23,16 +19,10 @@ import {
   rruleSummaryLabels,
   summarizeRRule
 } from '../../src/shared/components/calendar/lib/rruleSummary'
+import { loadLocaleDict, type SupportedLocale } from '../helpers/loadLocale'
 
-const LOCALES_DIR = resolve(
-  dirname(fileURLToPath(import.meta.url)),
-  '../../src/shared/i18n/locales'
-)
-
-function labelsOf(locale: 'zh-CN' | 'en-US'): ReturnType<typeof rruleSummaryLabels> {
-  const json: unknown = JSON.parse(
-    readFileSync(resolve(LOCALES_DIR, locale, 'common.json'), 'utf-8')
-  )
+function labelsOf(locale: SupportedLocale): ReturnType<typeof rruleSummaryLabels> {
+  const json: unknown = loadLocaleDict(locale)
   return rruleSummaryLabels((key) => {
     let node: unknown = json
     for (const seg of key.split('.')) {

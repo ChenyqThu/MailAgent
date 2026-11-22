@@ -9,8 +9,8 @@
 
 import { describe, expect, test } from 'vitest'
 
-import zhCN from '../../src/shared/i18n/locales/zh-CN/common.json'
-import enUS from '../../src/shared/i18n/locales/en-US/common.json'
+import zhCN from '../../src/shared/i18n/locales/zh-CN'
+import enUS from '../../src/shared/i18n/locales/en-US'
 import { MATTER_ITEM_DISPATCH_STATES } from '@shared/api/types/matter'
 import { MATTER_EXEC_PROFILE_OPTIONS } from '@shared/components/matters/matterDispatchVocab'
 import { TODAY_GROUP_IDS } from '@shared/components/today/todayGroups'

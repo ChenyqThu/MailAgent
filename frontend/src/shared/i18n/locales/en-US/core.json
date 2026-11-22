@@ -1,0 +1,708 @@
+{
+  "app": {
+    "title": "MailAgent",
+    "scaffold": "Scaffold ready"
+  },
+  "empty": {
+    "state": "Nothing to show"
+  },
+  "shortcutHelp": {
+    "title": "Keyboard shortcuts",
+    "close": "Close",
+    "soon": "soon",
+    "soonHint": "Defined in the design but not wired in V1",
+    "footer": "Press ? any time to open this panel",
+    "scope": {
+      "global": "Global",
+      "inbox": "Inbox",
+      "row": "Row",
+      "chat": "AI chat",
+      "calendar": "Calendar",
+      "contacts": "Contacts"
+    },
+    "binding": {
+      "commandPalette": "Command palette",
+      "navToggle": "Collapse / expand sidebar panel",
+      "navExpandFocus": "Expand sidebar panel and focus it",
+      "settings": "Open settings",
+      "shortcutHelp": "Show keyboard help",
+      "composeNew": "Compose new email",
+      "generalAgent": "Open AI Chat in a new session tab",
+      "groups": "Go to Groups",
+      "tabNew": "New tab (search)",
+      "tabClose": "Close current tab",
+      "tabReopen": "Reopen last closed tab",
+      "tabCycle": "Cycle through tabs",
+      "tabJump": "Jump to tab N (⌘1 = main tab)",
+      "nextEmail": "Next email",
+      "prevEmail": "Previous email",
+      "reply": "AI draft reply",
+      "forward": "Forward",
+      "toggleRead": "Toggle read / unread",
+      "toggleFlag": "Toggle flag",
+      "archive": "Archive",
+      "delete": "Delete",
+      "translate": "Translate this email",
+      "toggleBatchSelect": "Toggle batch select",
+      "openAiPanel": "Toggle AI chat",
+      "sendChat": "Send AI message",
+      "newChat": "New AI conversation",
+      "toggleLocale": "Toggle language",
+      "calViewDay": "Day view",
+      "calViewWeek": "Week view",
+      "calViewMonth": "Month view",
+      "calViewAgenda": "Agenda view",
+      "calViewRecurring": "Recurring invites view",
+      "calPrevNext": "Previous / next range",
+      "calToday": "Go to today",
+      "calSync": "Sync",
+      "calNewEvent": "New event",
+      "calNextEvent": "Select next event",
+      "calPrevEvent": "Select previous event",
+      "calOpenSelected": "Open selected event",
+      "calClose": "Close drawer / modal",
+      "calHelp": "Open / close shortcut help",
+      "filterUnread": "Filter: unread",
+      "filterFlagged": "Filter: flagged",
+      "filterHasAttach": "Filter: has attachments",
+      "contactsNavDown": "Next contact",
+      "contactsNavUp": "Previous contact"
+    }
+  },
+  "palette": {
+    "coverage": {
+      "candidates": "{count} emails matching metadata filters have missing or unsearchable bodies. These are not search hits."
+    },
+    "placeholder": "Search mail · jump to mailbox · run AI action…",
+    "noResults": "No matches · try a different query",
+    "searching": "Searching…",
+    "lang": {
+      "detected": "Detected input language",
+      "zh": "中",
+      "en": "EN"
+    },
+    "aria": {
+      "label": "Command palette · search and jump",
+      "list": "Search results"
+    },
+    "nav": {
+      "inbox": "Go · Inbox",
+      "admin": "Go · Admin",
+      "llm": "Go · LLM dashboard",
+      "calendar": "Go · Calendar",
+      "settings": "Go · Settings"
+    },
+    "mailbox": {
+      "go": "Switch to mailbox · {name}",
+      "hint": "{unread} unread · {total} total",
+      "matchedSuffix": "{n, plural, one {# match} other {# matches}} for \"{query}\""
+    },
+    "jump": {
+      "generalAgent": "General Agent",
+      "generalAgentMeta": "Custom AI · ⌘O",
+      "groupsMeta": "Multi-agent group chat · ⌘G",
+      "admin": "Admin kanban",
+      "adminMeta": "{n, plural, =0 {no dead letters} other {# dead-letter}} · queue health",
+      "contacts": "Open Contacts",
+      "contactsMeta": "People profiles",
+      "todayMeta": "What is waiting on you",
+      "mattersMeta": "Matters workspace",
+      "calendarMeta": "Schedule & meetings",
+      "customAiMeta": "Agent team · config & runs",
+      "reportsMeta": "Daily · weekly · custom output",
+      "llmMeta": "Classification & usage",
+      "settingsMeta": "Preferences & accounts",
+      "libraryMeta": "A locally managed, multi-root folder tree"
+    },
+    "email": {
+      "countLabel": "{n} / {total}",
+      "untitled": "(no subject)",
+      "fromAttachment": "Matched in attachment {filename}",
+      "unnamedAttachment": "Unnamed attachment",
+      "emptyTitle": "No matching emails",
+      "emptyHint": "Try a shorter query or different wording",
+      "syntaxLabel": "Search by field",
+      "syntaxFrom": "sender",
+      "syntaxAfter": "after date",
+      "syntaxHas": "has attachment",
+      "syntaxUnread": "unread only",
+      "syntaxHint": "Combine them, e.g. from:alice has:attachment"
+    },
+    "actions": {
+      "subtitle": "on {n, plural, one {# result} other {# results}}",
+      "aside": "Notion Agent · AI assistant",
+      "markAllRead": "Mark all as read",
+      "markAllReadMeta": "{n, plural, one {# email} other {# emails}} · instant local · syncs to Mail.app + Notion",
+      "reRunAi": "Re-run AI classify",
+      "reRunAiMeta": "{n, plural, one {# email} other {# emails}} · overwrite 11 fields · old versions archived to ai_history",
+      "summarize": "Draft a summary for this result set",
+      "summarizeMeta": "{n, plural, one {# email} other {# emails}} · coming soon",
+      "soon": "Soon",
+      "running": "Running…",
+      "doneToast": "Processed {n, plural, one {# email} other {# emails}}",
+      "errToast": "Action failed"
+    },
+    "ai": {
+      "understand": "AI understand “{query}”",
+      "understandHint": "Let AI search and gather the relevant emails",
+      "searchingPhrases": [
+        "Understanding your question…",
+        "Searching relevant emails…"
+      ],
+      "summarizingPhrases": [
+        "Filtering the most relevant…",
+        "Organizing results…"
+      ],
+      "summary": "AI: {text}",
+      "emptyTitle": "AI found no related emails",
+      "emptyHint": "Try rephrasing, or use search syntax directly",
+      "viewInPlain": "View in plain search",
+      "dismiss": "Dismiss",
+      "fellBack": "AI unavailable — switched to plain search",
+      "errNoKey": "Configure an LLM in Settings to use AI search",
+      "errEmpty": "No searchable intent found — try rephrasing",
+      "errUnsupported": "AI search is only available in the desktop app",
+      "errTimeout": "AI search timed out — try again or use search syntax directly",
+      "errQuota": "AI quota exhausted — try again or use search syntax directly",
+      "errAgent": "AI search error — try again or use search syntax directly",
+      "errGeneric": "AI search failed — try again or use search syntax directly"
+    },
+    "facet": {
+      "unread": "Unread",
+      "hasAttachment": "Has attachment"
+    },
+    "matters": {
+      "title": "Matters",
+      "add": "Add to matter",
+      "emptyTitle": "No matching matters",
+      "emptyHint": "Matter search covers titles, purpose, current state, items, and stakeholders. Linked resource content stays in email or document search.",
+      "moreMatches": "{n} more matches",
+      "scope": {
+        "all": "All",
+        "email": "Email",
+        "matter": "Matters",
+        "contact": "Contacts"
+      },
+      "fields": {
+        "title": "Title",
+        "description": "Background and goal",
+        "currentSummary": "Current state",
+        "status": "Status",
+        "items": "Items",
+        "stakeholders": "Stakeholders",
+        "notes": "Notes"
+      }
+    },
+    "contacts": {
+      "title": "Contacts",
+      "emptyTitle": "No matching contacts",
+      "emptyHint": "Contact search covers names, aliases, emails and organizations.",
+      "moreMatches": "{n} more people"
+    },
+    "history": {
+      "title": "Recent searches",
+      "clear": "Clear",
+      "remove": "Remove from history"
+    },
+    "saved": {
+      "title": "Saved searches",
+      "save": "Save search",
+      "savedToast": "Search saved",
+      "remove": "Remove saved search"
+    },
+    "kbd": {
+      "navigate": "navigate",
+      "selectGroup": "select group",
+      "open": "open",
+      "newWindow": "new window",
+      "aiSearch": "AI search",
+      "dismiss": "dismiss",
+      "run": "run"
+    },
+    "footer": {
+      "fts5Healthy": "FTS5"
+    },
+    "warn": {
+      "emptyValue": "\"{field}:\" has no value — ignored (put the value right after the colon, no space)",
+      "unknownValue": "\"{field}:{value}\" is not a valid value — ignored",
+      "invalidDate": "\"{field}:{value}\" is not a recognizable date — ignored",
+      "crossClassOr": "OR across a field and a keyword is not supported yet — treated as AND",
+      "negatedOr": "OR with a negated term is not supported — treated as AND",
+      "unclosedQuote": "Unclosed quote — treated as plain text",
+      "danglingOr": "OR is missing an operand — ignored",
+      "emptyText": "Empty quotes ignored",
+      "parseError": "Query failed to parse — ran as a plain search",
+      "generic": "Part of the query was ignored"
+    }
+  },
+  "sidebar": {
+    "section": {
+      "mailboxes": "Mailboxes",
+      "aiAgents": "AI Agents",
+      "accounts": "Accounts",
+      "tools": "Tools",
+      "ops": "Ops"
+    },
+    "flagged": "Flagged",
+    "allMail": "All mail",
+    "aiHistory": "AI history",
+    "search": "Search",
+    "translate": "Translate",
+    "llmDashboard": "LLM Dashboard",
+    "admin": "Admin",
+    "calendar": "Calendar",
+    "settings": "Settings",
+    "shortcuts": "Shortcuts",
+    "online": "online",
+    "cacheWarn": "Cache hit rate low"
+  },
+  "nav": {
+    "section": {
+      "mailboxes": "Mailboxes",
+      "aiAgents": "AI Agents",
+      "folders": "Folders"
+    },
+    "domain": {
+      "mail": "Mail",
+      "chats": "AI Chat",
+      "groups": "Groups",
+      "team": "Team",
+      "reports": "Reports",
+      "ops": "Ops",
+      "library": "Library"
+    },
+    "composeNew": "Compose",
+    "today": "Today",
+    "inbox": "Inbox",
+    "outbox": "Outbox",
+    "drafts": "Drafts",
+    "flagged": "Flagged",
+    "allMail": "All mail",
+    "aiSessions": "AI sessions",
+    "agentView": "MailAgent",
+    "connectors": "Connectors",
+    "adminKanban": "Admin",
+    "calendar": "Calendar",
+    "settings": "Settings",
+    "shortcuts": "Shortcuts",
+    "collapse": "Collapse sidebar panel",
+    "expand": "Expand sidebar panel",
+    "resize": "Drag to resize the panel, double-click to reset",
+    "drawer": "Open navigation",
+    "peekTitle": "{domain} · peek",
+    "online": "online",
+    "account": {
+      "tooltip": "{email} — switch account"
+    },
+    "folderTree": {
+      "disabledTip": "Available once folder info finishes loading"
+    }
+  },
+  "admin": {
+    "title": "Admin",
+    "healthy": "Healthy",
+    "unhealthy": "Unhealthy",
+    "loading": "Loading…",
+    "retry": "Retry",
+    "retryOk": "Email #{id} re-queued",
+    "retryFail": "Email #{id} retry failed",
+    "delete": "Delete",
+    "deleteOk": "Email #{id} deleted",
+    "deleteFail": "Email #{id} delete failed",
+    "deleteConfirm": {
+      "title": "Delete dead-letter email?",
+      "body": "This permanently removes “{subject}” along with its body, attachments and sync records. It cannot be undone — confirm you have already handled the email on the mail server / Notion.",
+      "confirm": "Delete",
+      "cancel": "Cancel"
+    },
+    "timeAgo": {
+      "seconds": "{n}s ago",
+      "minutes": "{n}m ago",
+      "hours": "{n}h ago",
+      "days": "{n}d ago"
+    },
+    "dbVersion": "DB version",
+    "tables": "Tables",
+    "allTablesPresent": "All present",
+    "missingTables": "{n} missing",
+    "dbAccessible": "Accessible",
+    "schemaOk": "Schema OK",
+    "healthNotes": "Diagnostics",
+    "syncStore": "Sync store",
+    "totalEmails": "Total emails",
+    "failureQueue": "Failure queue",
+    "failureQueueHint": "Pending retry + dead-letter",
+    "dbSize": "DB size",
+    "lastRowId": "Last row id",
+    "statusDist": "Status distribution",
+    "byMailbox": "By mailbox",
+    "v4Rollout": "v4 SQLite-SSoT rollout",
+    "v4Trend": "Last {n}h trend",
+    "v4TrendP99": "Route p99",
+    "v4TrendFallback": "Fallback rate",
+    "v4TrendEmpty": "Not enough snapshots yet",
+    "deadLetter": "Dead-letter",
+    "noDeadLetter": "No dead-letter emails",
+    "noDeadLetterHint": "All sync failures recovered; the pipeline is healthy.",
+    "deadLetterExpand": "Show rows",
+    "deadLetterCollapse": "Hide rows",
+    "healthRow": {
+      "title": "System health",
+      "backend": "Backend",
+      "up": "Up",
+      "dbDown": "DB unreadable",
+      "unreachable": "Unreachable",
+      "dbVersion": "DB version",
+      "davmail": {
+        "ok": "OK",
+        "warning": "Warning",
+        "critical": "Critical",
+        "unknown": "Not started"
+      },
+      "deadLetter": "Dead-letter",
+      "outbox": "Outbox pending",
+      "outboxHint": "Pending rows in email_outbox and the age band of the oldest one",
+      "kosDead": "KOS manual",
+      "kosDeadHint": "All-time count; does not follow the range chips",
+      "agentPending": "Approvals",
+      "alerts": "Critical alerts"
+    },
+    "outbox": {
+      "title": "Dispatch queue (outbox)",
+      "pending": "Pending",
+      "processing": "Processing",
+      "failed": "Failed",
+      "deadLetter": "Dead-letter",
+      "byTarget": "By target (excludes done)",
+      "ageDist": "Pending age",
+      "ageHint": "Pending rows only",
+      "unavailable": "Read failed"
+    },
+    "outboxAge": {
+      "lt_1m": "<1m",
+      "lt_5m": "<5m",
+      "lt_30m": "<30m",
+      "gt_30m": ">30m"
+    },
+    "col": {
+      "subject": "Subject",
+      "sender": "Sender",
+      "mailbox": "Mailbox",
+      "retries": "Retries",
+      "error": "Error",
+      "updated": "Updated",
+      "action": "Action"
+    }
+  },
+  "updater": {
+    "banner": {
+      "title": "Version v{version} is ready",
+      "restartCta": "Restart & update",
+      "dismiss": "Later",
+      "availableTitle": "New version v{version} released",
+      "openCta": "Download"
+    }
+  },
+  "statusbar": {
+    "sync": {
+      "label": "Sync",
+      "live": "live",
+      "connecting": "connecting",
+      "reconnecting": "reconnecting",
+      "fallbackTpl": "offline · poll {seconds}s",
+      "fallbackOff": "offline · poll off",
+      "idle": "idle",
+      "disabled": "disabled",
+      "tooltipConnected": "SSE push, live sync",
+      "tooltipFallback": "SSE offline; fallback poll every {seconds}s",
+      "tooltipFallbackOff": "SSE offline; fallback poll disabled (Settings → Realtime events)",
+      "tooltipDisabled": "Realtime events disabled"
+    }
+  },
+  "titleBar": {
+    "synced": "Synced",
+    "themeCycle": "Theme · click to switch",
+    "update": {
+      "available": "New version v{version} available · click to download",
+      "downloading": "Downloading update · {percent}%",
+      "downloaded": "Version v{version} ready · click to install",
+      "error": "Update download failed · click to retry"
+    }
+  },
+  "surface": {
+    "frosted": "Frosted",
+    "solid": "Solid"
+  },
+  "common": {
+    "cancel": "Cancel",
+    "close": "Close",
+    "save": "Save",
+    "loading": "Loading…",
+    "imageLoadFailed": "Image failed to load"
+  },
+  "notifications": {
+    "kicker": "Notification center",
+    "title": "Notifications",
+    "tooltip": "Notifications · {count} unread",
+    "tooltipPending": "Notifications · {count} awaiting action",
+    "tooltipBoth": "Notifications · {count} unread · {pending} awaiting action",
+    "tooltipEmpty": "Notifications",
+    "unreadChip": "{count} unread",
+    "markAllRead": "Mark all as read",
+    "tabsAria": "Notification categories",
+    "tab": {
+      "all": "All",
+      "action_required": "Action",
+      "reviews": "Reviews",
+      "results": "Results",
+      "system": "System"
+    },
+    "menu": {
+      "trigger": "More actions",
+      "snooze": "Snooze",
+      "snoozeHour": "In 1 hour",
+      "snoozeTomorrow": "Tomorrow morning",
+      "snoozeThreeDays": "In 3 days",
+      "resolve": "Mark as resolved"
+    },
+    "history": {
+      "open": "Resolved",
+      "back": "Back",
+      "title": "Resolved",
+      "empty": {
+        "title": "No resolved notifications yet",
+        "hint": "Notifications you mark as resolved stay here"
+      }
+    },
+    "unreadDot": "Unread",
+    "recurrence": "×{count}",
+    "recurrenceTitle": "This notification recurred {count} times",
+    "loading": "Loading…",
+    "error": "Failed to load notifications",
+    "empty": {
+      "title": "No new notifications",
+      "hint": "Background task results show up here"
+    },
+    "group": {
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "earlier": "Earlier"
+    }
+  },
+  "today": {
+    "replyThreadCount": "Last 7 days · {count, plural, one {# thread} other {# threads}}",
+    "replyMessageCount": "{count, plural, one {# message awaiting reply} other {# messages awaiting reply}}",
+    "replyActions": "Reply actions",
+    "replyDismiss": "No reply needed for {count, plural, one {this message} other {these # messages}}",
+    "replyDismissOne": "No reply needed",
+    "replyDismissed": "Marked as no reply needed",
+    "replyUndo": "Undo",
+    "replyActionFailed": "Action failed. Please try again.",
+    "kicker": "TODAY",
+    "nav": {
+      "groupNeedYou": "Needs you",
+      "groupNext": "Up next",
+      "decide": "Your call",
+      "meet": "Today's meetings",
+      "reply": "Emails to answer",
+      "due": "Due soon",
+      "out": "Agent output"
+    },
+    "title": "Today",
+    "subtitle": "{count, plural, =0 {Nothing waiting} one {# item to look at} other {# items to look at}}",
+    "subtitleLoading": "Collecting…",
+    "error": "Failed to load matters data — only agent runs are listed below",
+    "empty": {
+      "title": "Nothing needs you today",
+      "hint": "Calls to make, today's meetings, emails to answer, things due soon and agent output all collect here. None of them are waiting."
+    },
+    "group": {
+      "waiting": "Waiting on you",
+      "inProgress": "In progress",
+      "expired": "Expired",
+      "attention": "Needs a look",
+      "recent": "Recent results"
+    },
+    "groupCount": "{count, plural, one {# item} other {# items}}",
+    "item": {
+      "proposalTitle": "Agent proposal to review"
+    },
+    "triage": {
+      "runTrigger": "Triggered by {trigger}",
+      "runTriggerAt": "Triggered by {trigger} · {at}",
+      "proposalChanges": "{count, plural, one {# change} other {# changes}}",
+      "proposalConfidence": "{percent}% confidence",
+      "dispatchAsked": "The agent is waiting on an answer",
+      "dispatchFailed": "This run failed ({code})"
+    },
+    "trigger": {
+      "manual": "manual run",
+      "cron": "schedule",
+      "schedule": "schedule rule",
+      "emailFilter": "mail rule",
+      "calendarChange": "calendar change",
+      "calendarBefore": "pre-meeting"
+    },
+    "run": {
+      "stashMiss": "This approval expired (timed out or the app restarted) — the run record is still readable."
+    },
+    "menu": {
+      "trigger": "More",
+      "dismissReasonLabel": "Reason for dismissing (optional)",
+      "dismissReasonPlaceholder": "Say why this can wait for now",
+      "dismissConfirm": "Confirm dismiss",
+      "dismissBack": "Back"
+    },
+    "dispatch": {
+      "cancel": "Cancel dispatch",
+      "answerLabel": "Answer the agent",
+      "answerPlaceholder": "Give it the piece it is missing",
+      "answerConfirm": "Answer",
+      "answerBack": "Back"
+    },
+    "meet": {
+      "allDay": "All day",
+      "untitled": "Untitled event"
+    },
+    "why": {
+      "meetUpcoming": "Starts {time}",
+      "meetPast": "Started {time}",
+      "report": "{cadence}, generated today"
+    },
+    "meta": {
+      "nextMeet": "Next {time}",
+      "oldestReply": "Oldest {age}"
+    },
+    "action": {
+      "openMail": "Reply",
+      "openCalendar": "Open calendar",
+      "openReport": "Open report"
+    },
+    "next": {
+      "inMinutes": "{n, plural, one {# min left} other {# min left}}",
+      "inHours": "{h}h {m}m left",
+      "inHoursOnly": "{h, plural, one {# hour left} other {# hours left}}",
+      "started": "Started",
+      "pendingBefore": "{count, plural, one {# call to make before then} other {# calls to make before then}}"
+    },
+    "timeline": {
+      "title": "Today's timeline",
+      "now": "Now {time}",
+      "empty": "Nothing with a time on it today"
+    }
+  },
+  "detached": {
+    "openInWindow": "Open in New Window"
+  },
+  "tabs": {
+    "pin": "Keep tab",
+    "unpin": "Unpin tab",
+    "openInNewTab": "Open in new tab",
+    "openEveryEmail": "Open each email in a new tab",
+    "browseHint": "By default, reuse a browsing tab. Pinned tabs and editors are protected.",
+    "untitled": "Untitled",
+    "searchTitle": "New Tab",
+    "browserTitle": "Built-in Browser",
+    "newTab": "New tab (⌘T)",
+    "strip": "Workspace tabs",
+    "close": "Close tab (⌘W)",
+    "locked": "Unfinished work here — won't be auto-closed",
+    "dirty": "Unsaved changes here",
+    "toast": {
+      "full": "Tabs are full. Close a tab or unpin one to continue browsing.",
+      "targetGone": "That email or draft no longer exists — its tab was closed"
+    }
+  },
+  "feedback": {
+    "kind": {
+      "problem": "Issue",
+      "suggestion": "Suggestion",
+      "question": "Question"
+    },
+    "freq": {
+      "always": "Every time",
+      "sometimes": "Sometimes",
+      "once": "Once only"
+    },
+    "entry": {
+      "send": "Send feedback",
+      "view": "View feedback"
+    },
+    "dialog": {
+      "title": "Send feedback",
+      "step1Hint": "Concrete detail helps far more than “it does not work”.",
+      "step2Hint": "This is everything that will be sent. Drop anything you would rather keep.",
+      "doneHint": "Received.",
+      "kind": "Category",
+      "titleField": "Title",
+      "titlePlaceholder": "One line: what happened",
+      "detail": "Details",
+      "detailPlaceholder": "What you did, what you saw, what you expected",
+      "freq": "Reproduction",
+      "email": "Email (optional)",
+      "emailPlaceholder": "Leave it and we can reply when there is progress",
+      "emailNone": "(no email left)",
+      "attachments": "Attachments",
+      "imagesLabel": "Images",
+      "imagesHint": "Drop a screenshot here, paste it with ⌘V, or click to pick files",
+      "imagesTitle": "Images ({count})",
+      "imagesSkipped": "No images attached.",
+      "attachDiagnostics": "Attach the diagnostics bundle",
+      "diagHelper": "Last 7 days of runtime logs plus a redacted config snapshot — no email bodies, attachments or contacts. Built after you press Next; takes about a minute.",
+      "autoContextTitle": "Runtime context sent automatically",
+      "diagTitle": "Diagnostics bundle",
+      "diagBusy": "Building… (~1 min)",
+      "diagSkipped": "Not selected — it will not be sent.",
+      "diagFailed": "The diagnostics bundle could not be built ({error}); submitting without it.",
+      "diagLogs": "Runtime logs: last 7 days",
+      "diagRedacted": "Config snapshot: tokens, secrets and email addresses redacted",
+      "diagExcluded": "Excluded: email bodies, attachments, contacts",
+      "diagRenamed": "Uploaded as .zip.txt (Notion refuses .zip) — drop the .txt to unzip it",
+      "remove": "Drop it",
+      "cancel": "Cancel",
+      "next": "Next",
+      "back": "Back",
+      "send": "Send",
+      "close": "Close",
+      "receipt": "Submitted, reference {id}. Track it via “View feedback” at the bottom of Settings.",
+      "receiptEmail": "We will write to the email you left when there is progress.",
+      "notSent": "It was NOT sent: {error}",
+      "openForm": "Open the form page and submit manually"
+    }
+  },
+  "tray": {
+    "health": {
+      "local": "Local Mail.app mode",
+      "ok": "DavMail connected",
+      "warning": "Connection degraded",
+      "critical": "Re-auth or check required",
+      "unknown": "Status unknown"
+    },
+    "refresh": "Refresh",
+    "settings": "Notification & tray settings",
+    "openApp": "Open window",
+    "newChat": "New chat",
+    "openToday": "Today",
+    "composeEmail": "Compose email",
+    "viewAllToday": "View all Today",
+    "quit": "Quit MailAgent",
+    "quickPromptPlaceholder": "Ask AI to search, draft, or act…",
+    "nextUpStarted": "In progress",
+    "emptyAll": "All caught up for today",
+    "llmDashboard": "LLM Metrics",
+    "activeGateway": "Active Model",
+    "cacheHit24h": "24h Cache Hit",
+    "providersActive": "{enabled}/{total} providers ready",
+    "noProvider": "No provider configured",
+    "openLlmTitle": "Open Operations LLM Dashboard",
+    "section": {
+      "notifications": "Unread notifications",
+      "pendingReplies": "Pending replies"
+    },
+    "emptyNotifications": "No unread notifications",
+    "emptyReplies": "Inbox replies caught up",
+    "footer": {
+      "ai24h": "24h AI usage"
+    }
+  }
+}

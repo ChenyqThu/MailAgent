@@ -55,6 +55,13 @@ def test_config_fields_documented():
         f"  {sorted(stale)}"
     )
 
+    # ratchet：字段已从 config.py 删除时，dead 豁免也必须同步从 baseline 删除。
+    dead = baseline - effective_keys
+    assert not dead, (
+        "missing-baseline 里这些键在 config.py 中已不存在（历史退役残留），应从 baseline 删除：\n"
+        f"  {sorted(dead)}"
+    )
+
 
 def test_env_example_orphans_explained():
     """方向 B：.env.example 键 - config 字段 ⊆ orphans-baseline。"""
@@ -85,6 +92,13 @@ def test_env_example_orphans_explained():
         "orphans-baseline 里这些键其实已有 config 字段承接（可能刚被收编 pydantic），"
         "应从 baseline 删除（ratchet 收缩）：\n"
         f"  {sorted(stale)}"
+    )
+
+    # ratchet：键已从 .env.example 删除（如历史笔误修正）时，dead 豁免也必须同步删除。
+    dead = baseline - env_example
+    assert not dead, (
+        "orphans-baseline 里这些键在 .env.example 中已不存在（历史退役残留），应从 baseline 删除：\n"
+        f"  {sorted(dead)}"
     )
 
 

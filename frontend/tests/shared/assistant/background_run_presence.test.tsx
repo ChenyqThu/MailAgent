@@ -15,7 +15,7 @@
 //      将来谁把这个 prop 顺手删了会在这里红）。邮件面 AssistantThread 的槽 09-02 起已删：输入
 //      队列条搬进了消息流末尾（pendingSlot 尾部），那个面只剩 pendingSlot 要验。
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
@@ -28,6 +28,7 @@ import { AssistantThread } from '@shared/assistant/components/thread'
 import { BackgroundRunPresence } from '@shared/assistant/components/TurnPresence'
 import { formatRunElapsed, useRunElapsed } from '@shared/assistant/runtime/useRunElapsed'
 import { AgentThread } from '@shared/components/agents/AgentThread'
+import { loadLocaleDict, loadLocaleFiles } from '../../helpers/loadLocale'
 
 await i18n.changeLanguage('zh-CN')
 
@@ -120,12 +121,12 @@ describe('BackgroundRunPresence — 后台 run 用同一套「头像 + 状态」
 // --- ② 运行条退役的机器判据 --------------------------------------------------------------------
 
 describe('运行条整条退役（组件 + 文案一起）', () => {
-  const LOCALES = resolve(process.cwd(), 'src/shared/i18n/locales')
-
   test('🔴 `chat.runStatus.safeToLeave` 中英两份 locale 都已清掉', () => {
-    for (const locale of ['zh-CN', 'en-US']) {
-      const raw = readFileSync(resolve(LOCALES, locale, 'common.json'), 'utf8')
-      const dict = JSON.parse(raw) as { chat: { runStatus: Record<string, string> } }
+    for (const locale of ['zh-CN', 'en-US'] as const) {
+      const raw = loadLocaleFiles(locale)
+        .map((entry) => entry.raw)
+        .join('\n')
+      const dict = loadLocaleDict(locale) as { chat: { runStatus: Record<string, string> } }
       expect(Object.keys(dict.chat.runStatus)).not.toContain('safeToLeave')
       // 文案本体也不许改名换姓活下来。
       expect(raw).not.toContain('可以切走')
@@ -140,8 +141,8 @@ describe('运行条整条退役（组件 + 文案一起）', () => {
   })
 
   test('被 TurnPresence 接管的 label 集仍在（删过头会让头像行掉回缺翻译占位符）', () => {
-    for (const locale of ['zh-CN', 'en-US']) {
-      const dict = JSON.parse(readFileSync(resolve(LOCALES, locale, 'common.json'), 'utf8')) as {
+    for (const locale of ['zh-CN', 'en-US'] as const) {
+      const dict = loadLocaleDict(locale) as {
         chat: { runStatus: Record<string, string> }
       }
       expect(Object.keys(dict.chat.runStatus).sort()).toEqual([

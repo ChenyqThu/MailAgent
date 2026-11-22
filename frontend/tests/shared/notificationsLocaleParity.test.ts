@@ -6,8 +6,8 @@
 
 import { describe, expect, test } from 'vitest'
 
-import zhCN from '../../src/shared/i18n/locales/zh-CN/common.json'
-import enUS from '../../src/shared/i18n/locales/en-US/common.json'
+import zhCN from '../../src/shared/i18n/locales/zh-CN'
+import enUS from '../../src/shared/i18n/locales/en-US'
 import { NOTIFICATION_TAB_IDS } from '@shared/components/notifications/notificationModel'
 
 function flattenKeys(node: unknown, prefix = ''): string[] {

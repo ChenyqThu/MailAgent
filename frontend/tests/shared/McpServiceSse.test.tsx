@@ -38,8 +38,8 @@ vi.mock('@tanstack/react-router', () => ({
 vi.mock('@shared/state/toast', () => ({ toastError: vi.fn(), toastSuccess: vi.fn() }))
 
 import i18n from '@shared/i18n'
-import enCommon from '../../src/shared/i18n/locales/en-US/common.json'
-import zhCommon from '../../src/shared/i18n/locales/zh-CN/common.json'
+import enCommon from '../../src/shared/i18n/locales/en-US'
+import zhCommon from '../../src/shared/i18n/locales/zh-CN'
 import { McpServiceTab } from '../../src/shared/components/settings/tabs/McpServiceTab'
 import { useEnvStore } from '@shared/state/env'
 

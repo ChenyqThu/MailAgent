@@ -21,8 +21,8 @@ import {
   readNarrative,
   type Translate
 } from '@shared/components/matters/matterTimelineModel'
-import zh from '../../src/shared/i18n/locales/zh-CN/common.json'
-import en from '../../src/shared/i18n/locales/en-US/common.json'
+import zh from '../../src/shared/i18n/locales/zh-CN'
+import en from '../../src/shared/i18n/locales/en-US'
 
 const t = ((key: string, options?: Record<string, unknown>) =>
   i18n.t(key, options as never)) as Translate

@@ -11,7 +11,7 @@
 import { describe, expect, test } from 'vitest'
 
 import { TOOL_DISPLAY_NAMES_ZH } from '../../src/shared/assistant/toolDisplayNames'
-import zhCommon from '../../src/shared/i18n/locales/zh-CN/common.json'
+import zhCommon from '../../src/shared/i18n/locales/zh-CN'
 
 const zhTitles = (zhCommon as { chat: { toolTitle: Record<string, string> } }).chat.toolTitle
 

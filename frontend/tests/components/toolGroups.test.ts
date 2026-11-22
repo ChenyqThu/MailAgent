@@ -11,8 +11,8 @@ import {
   groupToolOptions
 } from '../../src/shared/components/agents/toolGroups'
 import { CUSTOM_AGENT_MANAGED_ALLOWED_TOOLS } from '../../src/shared/lib/customAgentCapabilities'
-import enCommon from '../../src/shared/i18n/locales/en-US/common.json'
-import zhCommon from '../../src/shared/i18n/locales/zh-CN/common.json'
+import enCommon from '../../src/shared/i18n/locales/en-US'
+import zhCommon from '../../src/shared/i18n/locales/zh-CN'
 
 // 镜像 src/api/routers/agent_runs.py::HEADLESS_TOOL_OPTIONS（40 个，/tool-options 契约冻结；
 // task 09-02 起 chat_session_* 三件结构性缺席 —— 恒注册 + grant_sessions 管读取半径）。

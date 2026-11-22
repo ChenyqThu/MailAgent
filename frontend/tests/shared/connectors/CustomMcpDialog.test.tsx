@@ -25,8 +25,8 @@ vi.mock('@shared/hooks/useMailApi', () => ({
 vi.mock('@shared/state/toast', () => ({ toastSuccess, toastError }))
 
 import i18n from '@shared/i18n'
-import enCommon from '../../../src/shared/i18n/locales/en-US/common.json'
-import zhCommon from '../../../src/shared/i18n/locales/zh-CN/common.json'
+import enCommon from '../../../src/shared/i18n/locales/en-US'
+import zhCommon from '../../../src/shared/i18n/locales/zh-CN'
 import { CustomMcpDialog } from '../../../src/shared/components/connectors/CustomMcpDialog'
 
 await i18n.changeLanguage('zh-CN')

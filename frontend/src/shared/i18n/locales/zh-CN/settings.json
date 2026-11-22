@@ -1,0 +1,2586 @@
+{
+  "settings": {
+    "title": "设置",
+    "appearance": "外观",
+    "skills": {
+      "title": "技能",
+      "desc": "Custom AI 可使用的能力。关闭某个技能后，它的工具与提示词指引都不会注入下一次对话。",
+      "enabled": "已启用",
+      "unavailable": "不可用：{reason}",
+      "toolCount": "{n} 个 API 工具",
+      "scopes": "权限范围",
+      "empty": "暂无可用技能（技能清单加载失败）。",
+      "loading": "正在加载技能…",
+      "calendarChatNote": "此开关只管对外 Skill 接口与能力声明；聊天中的日历工具由「系统能力」区的日历项控制。",
+      "notionAgentMasterOff": "主开关 MAILAGENT_NOTION_AGENT_TOOL 已关闭：即使在此启用，聊天中也不会注册 notion_agent 工具。",
+      "skillCreatorChatNote": "此 Skill 提供工作流指引；其驱动的 6 个 chat 工具审批档在「连接与工具 → Skill 供应链」。",
+      "customAgentChatNote": "此 Skill 提供工作流指引；其驱动的 7 个 chat 工具审批档在「连接与工具 → Custom Agent」。",
+      "sourceBuiltin": "内置 · 产品可信",
+      "sourceUserCreated": "用户创建",
+      "sourceThirdParty": "第三方",
+      "currentHash": "当前包哈希",
+      "argvPattern": "Argv 模式（每行一项；正则加 pattern: 前缀）",
+      "cwdScope": "工作目录范围",
+      "readScopes": "读取范围",
+      "writeScopes": "写入范围",
+      "networkMode": "网络模式快照",
+      "secretNames": "Secret 名称",
+      "trustVersion": "信任此版本",
+      "revokeTrust": "撤销",
+      "exportSkill": "导出 Skill",
+      "exportPlugin": "导出为 Plugin"
+    },
+    "skillDrafts": {
+      "title": "技能草稿",
+      "desc": "隔离草稿永不执行；请检查校验结果后显式发布。",
+      "empty": "暂无技能草稿。",
+      "noSkillMd": "SKILL.md 缺失或无法读取。",
+      "enableAfterPublish": "发布后启用",
+      "publish": "发布",
+      "discard": "丢弃",
+      "publishConfirm": "发布 {name}？发布后启用：{enabled}",
+      "discardConfirm": "丢弃 {name}？",
+      "pluginImport": "导入 Agent Plugin",
+      "mcpDetected": "检测到 MCP Server：{names}，当前版本暂未导入"
+    },
+    "anchorNav": {
+      "ariaLabel": "本页区块导航"
+    },
+    "connectors": {
+      "title": "外部连接（MCP）",
+      "desc": "把 Notion、Jira 等外部服务经 MCP 协议接进来。连接后可以逐个工具决定是否允许 AI 调用。",
+      "loading": "正在加载连接…",
+      "loadError": "连接列表加载失败：{message}",
+      "empty": "暂无可连接的服务。",
+      "status": {
+        "connected": "已连接",
+        "disconnected": "未连接",
+        "authorizing": "授权中",
+        "needsReauth": "授权已失效",
+        "error": "连接异常"
+      },
+      "connect": "连接",
+      "reconnect": "重新连接",
+      "connectWeb": "远程网页版无法发起连接（授权回调走本机地址），请在桌面 App 内操作。",
+      "awaiting": "等待浏览器授权…",
+      "cancel": "取消等待",
+      "authTimeout": "授权超时：{seconds} 秒内没有等到浏览器回调，请重试。",
+      "authFailed": "授权失败",
+      "connectedToast": "已连接 {name}",
+      "sync": "同步工具",
+      "syncing": "同步中…",
+      "syncDone": "同步完成：新增 {inserted}·更新 {updated}·失效 {orphaned}",
+      "disconnect": "断开",
+      "enabled": "启用此连接",
+      "enabledHelper": "关闭后该服务的全部工具都不再注入 AI；授权凭证与逐工具设置保留。",
+      "preprocess": "允许邮件预处理调用",
+      "preprocessHelper": "允许邮件预处理分类调用。该场地无人值守：只有档位为「自动」的工具可用（「需审批」在此等同禁用）；写入类工具设为「自动」后同样会开放给它。",
+      "scopes": "授权范围",
+      "tokenExpires": "令牌有效期至 {time}",
+      "tokenExpired": "令牌已于 {time} 过期，请重新连接。",
+      "tokenNone": "尚无授权凭证",
+      "tokenAutoRefresh": "令牌由自动刷新维护",
+      "lastSynced": "上次同步工具清单：{time}",
+      "neverSynced": "尚未同步过工具清单",
+      "lastError": "最近一次错误：{message}",
+      "saveFailed": "保存失败",
+      "custom": {
+        "createTitle": "添加自定义 MCP 连接",
+        "editTitle": "编辑 {name}",
+        "desc": "接入自定义远端 Streamable HTTP / SSE 服务或本机按需启动的 stdio MCP 进程（密钥静态加密落库，仅桌面端可写）。",
+        "displayName": "显示名称",
+        "displayNamePlaceholder": "如：GitHub Enterprise / 本地文件系统",
+        "connectorId": "连接器 ID",
+        "transportLabel": "传输方式",
+        "transportHttp": "Streamable HTTP",
+        "transportSse": "HTTP + SSE",
+        "transportStdio": "本机进程（stdio）",
+        "serverUrl": "MCP 端点 URL",
+        "urlHint": "远端地址须使用 https://；本机调试允许 http://localhost / 127.0.0.1。",
+        "headersLabel": "自定义请求头",
+        "envLabel": "环境变量",
+        "addPair": "添加",
+        "removePair": "移除此项",
+        "replaceSecrets": "覆盖重写",
+        "noHeaders": "未配置自定义请求头。",
+        "noEnv": "未配置自定义环境变量。",
+        "existingKeys": "已配置加密键：{keys}",
+        "command": "启动命令",
+        "args": "命令参数（空格分隔）",
+        "cwd": "工作目录（可选）",
+        "autoSync": "保存后立即同步工具清单",
+        "createAction": "创建连接",
+        "saveEdit": "保存修改",
+        "saving": "保存中…",
+        "created": "已添加 {name}",
+        "updated": "已更新 {name}",
+        "deleted": "已删除 {name}",
+        "syncWarning": "连接已保存，但同步工具清单失败",
+        "nameRequired": "请填写显示名称",
+        "idInvalid": "ID 须为 2–48 位小写字母、数字、下划线或短横线，且以字母或数字开头",
+        "urlRequired": "请填写 MCP 端点 URL",
+        "commandRequired": "请填写启动命令",
+        "editButton": "编辑",
+        "deleteButton": "删除",
+        "deleteTitle": "删除自定义连接「{name}」？",
+        "deleteDesc": "将停止相关本机子进程（如有），并删除此连接的加密凭证与工具清单配置。",
+        "badgeStdio": "stdio",
+        "badgeHttp": "HTTP",
+        "badgeSse": "SSE"
+      },
+      "disconnectDialog": {
+        "title": "断开 {name}？",
+        "desc": "会删除本机保存的授权凭证，该服务的工具立即停止对 AI 可用。工具清单与逐工具权限设置会保留，重新连接后继续生效。",
+        "cancel": "取消",
+        "confirm": "断开连接",
+        "confirming": "断开中…",
+        "purge": "同时清除工具配置",
+        "purgeHelper": "连同这条连接的整行与工具清单一起删除（等于从没添加过）。不勾选则只删凭证，重连后逐工具档位还在。"
+      },
+      "tools": {
+        "loading": "正在加载工具清单…",
+        "loadError": "工具清单加载失败：{message}",
+        "empty": "尚未同步到工具；点上方「同步工具」拉取清单。",
+        "defaultHint": "默认档：只读自动执行，写入 / 更新 / 破坏性操作每次需审批。",
+        "destructive": "破坏性",
+        "orphan": "已失效",
+        "orphanTip": "远端已不再提供这个工具；配置保留，但不会注入 AI。",
+        "purgeOrphans": "清理 {count} 个已失效工具",
+        "purgeDone": "已清理 {count} 个已失效工具",
+        "followDefault": "默认",
+        "reset": "重置全部档位",
+        "resetDone": "已重置 {count} 个工具的档位",
+        "bulkDone": "已更新 {count} 个工具的档位",
+        "effective": {
+          "auto": "当前：自动执行（不弹审批）",
+          "ask": "当前：每次调用需审批",
+          "off": "当前：已禁用（AI 不可见）"
+        },
+        "crud": {
+          "read": "只读",
+          "write": "写入",
+          "update": "更新"
+        },
+        "mode": {
+          "label": "调用档位",
+          "auto": "自动",
+          "ask": "需审批",
+          "off": "禁用"
+        },
+        "bulk": {
+          "label": "批量",
+          "auto": "全部设为自动",
+          "ask": "全部设为需审批",
+          "off": "全部禁用"
+        }
+      },
+      "toolfaceNotice": {
+        "title": "工具面已按新默认放宽",
+        "body": "此连接提供 {reads} 个读取、{writes} 个写入/更新工具（其中 {destructive} 个标记为破坏性）。默认档位为「自动」（免审批执行）——可展开下方清单逐个调档。",
+        "loading": "正在统计工具清单…",
+        "review": "查看并调档",
+        "dismiss": "知道了"
+      },
+      "destructiveAutoDialog": {
+        "title": "把破坏性工具设为「自动」？",
+        "desc": "服务方将 {name} 标记为破坏性操作（可能覆盖或删除既有数据）。设为「自动」后，AI 调用它将不再请求你的确认。",
+        "bulkDesc": "该组包含 {count} 个被服务方标记为破坏性的工具。全部设为「自动」后，AI 调用它们将不再请求你的确认。",
+        "cancel": "取消",
+        "confirm": "设为自动"
+      },
+      "viaComposio": "经 Composio",
+      "viaDirect": "直连",
+      "viaManagedLocal": "本机托管",
+      "managed": {
+        "installAndEnable": "一键安装并启用",
+        "installSuccess": "已安装并启用 {name}",
+        "installFailed": "安装本机运行时失败",
+        "uninstallButton": "卸载",
+        "uninstallSuccess": "已卸载 {name}",
+        "uninstallDialogTitle": "卸载 {name}？",
+        "uninstallDialogDesc": "卸载会停止本机运行进程、删除托管目录中的本地程序文件，并清除该连接器的配置与工具记录。",
+        "runtimeMissing": "本机运行时文件缺失或尚未安装——点右上角「一键安装并启用」即可修复。",
+        "platformUnsupported": "当前操作系统或 CPU 架构暂不支持此本机托管运行时。",
+        "webDisabled": "本机托管运行时在本地电脑安装并操控本机程序，请在桌面端 App 中操作。",
+        "webDisabledShort": "仅限桌面端",
+        "pixelPrivacyTitle": "截图与画面不走文本脱敏",
+        "pixelPrivacyBody": "privacyMaskMiddleware 仅对文本型工具入参和出参做敏感词脱敏，不对网页或桌面截图中的原始像素进行打码处理；图片帧会按模型配置直接发送给多模态大模型。",
+        "browserModeTitle": "浏览器连接模式",
+        "browserModeHelper": "选择 Browser Use 接管浏览器的方式；切换模式会在下次调用时重启本地 MCP 进程生效。",
+        "recommendedBadge": "推荐",
+        "modeUpdated": "已切换浏览器模式为 {mode}",
+        "modes": {
+          "cdp_chrome": {
+            "title": "接管当前已打开的 Chrome（CDP）",
+            "desc": "通过 Chrome 远程调试接口接入你正在使用的浏览器，保留已有登录态与扩展。"
+          },
+          "extension": {
+            "title": "Chrome 扩展桥接模式",
+            "desc": "通过 Playwright MCP 浏览器扩展桥接当前标签页，无需手动开启调试端口参数。"
+          },
+          "isolated_profile": {
+            "title": "内置专属持久化浏览器（Headless 默认）",
+            "desc": "由 MailAgent 托管的独立持久化浏览器配置，后台静默运行且零 Chrome 远程调试弹窗；支持一键从已有 Chrome 导入登录态或打开专属窗口手动登录。"
+          }
+        },
+        "cdpGuideTitle": "首次使用请在 Chrome 中开启远程调试",
+        "cdpGuideBody": "复制下方地址到 Chrome 地址栏打开，开启远程调试开关即可让 Browser Use 接管当前标签页：",
+        "copyCdpUrl": "复制地址",
+        "copiedCdpUrl": "已复制",
+        "tccTitle": "macOS 系统权限诊断",
+        "tccSubtitle": "Desktop Use 需要为本机桌面端 App 授予「辅助功能」与「屏幕录制」权限。",
+        "tccRefresh": "刷新状态",
+        "tccChecking": "检测中…",
+        "tccWebDisabled": "系统权限状态仅能在桌面端 App 内实时检测与跳转。",
+        "tccAccessibility": "辅助功能",
+        "tccAccessibilityDesc": "用于读取桌面窗口控件树，并模拟鼠标点击与键盘输入。",
+        "tccScreenRecording": "屏幕录制",
+        "tccScreenRecordingDesc": "用于截取屏幕或窗口画面，辅助模型识别当前界面位置。",
+        "tccOpenSettings": "前往系统设置",
+        "tccState": {
+          "granted": "已授权",
+          "denied": "未授权",
+          "unknown": "待确认",
+          "unsupported": "当前系统无需"
+        },
+        "headlessTitle": "后台静默运行（Headless）",
+        "headlessDesc": "默认隐藏浏览器窗口在后台执行，不抢夺桌面焦点；需排查页面时可关闭此开关或点击右侧打开可见窗口。",
+        "headlessEnabledToast": "已开启后台静默运行（下次调用生效）",
+        "headlessDisabledToast": "已关闭后台静默运行，将以可见窗口启动浏览器",
+        "importChromeTitle": "从已有 Chrome 导入登录态",
+        "importChromeDesc": "从本机 Chrome 配置文件解密并导入当前 Cookie 至内置专属浏览器（不影响你正在使用的 Chrome）；复杂 SSO / LocalStorage 登录可打开专属窗口手登一次。",
+        "chromeProfileLabel": "Chrome 配置文件",
+        "domainFilterPlaceholder": "可选：限定域名（如 dms.company.com, oa.internal）",
+        "importChromeButton": "一键导入 Chrome 登录态",
+        "importingChromeButton": "正在导入…",
+        "importChromeDone": "已从 {profile} 导入 {count} 条 Cookie 至内置专属浏览器",
+        "importChromeFailed": "导入 Chrome 登录态失败",
+        "lastImportedSummary": "上次导入：配置 {profile} · {count} 条 Cookie · {time}",
+        "launchWindowButton": "打开专属浏览器窗口",
+        "launchWindowDone": "已打开专属浏览器窗口，请完成登录（登录后状态持久保存）",
+        "launchWindowFailed": "打开专属浏览器窗口失败",
+        "launchWindowHint": "提示：若目标系统仅依赖 Cookie，可直接点右侧一键导入；导入与手登状态均保存在受管目录中，后续自动化全自动复用。",
+        "selectDomainsButton": "按域名勾选导入 / 管理登录态",
+        "hideDomainsButton": "收起登录态管理",
+        "tccRequestPrompt": "请求系统授权"
+      },
+      "supersededHint": "这条连接走的是自建直连，而该服务的出厂轨道已改为 Composio 托管。用「切换轨道」断开并清除配置，再从目录重新连接。",
+      "selfHosted": {
+        "badge": "自建 MCP 预设",
+        "serverUrlLabel": "服务地址（MCP Endpoint）",
+        "serverUrlHint": "指向已部署服务暴露的 Streamable HTTP `/mcp` 端点（如 https://canvas.chenge.ink/mcp）。",
+        "tokenLabel": "Agent 访问令牌（Bearer Token）",
+        "tokenPlaceholder": "粘贴服务端 AGENT_API_TOKEN",
+        "tokenHint": "仅加密保存在本机系统钥匙串中；本机开发调试若未启用鉴权可留空。",
+        "connectAndSync": "连接并同步工具",
+        "webDisabled": "为保障本机钥匙串与出站连接安全，请在桌面客户端中完成连接。"
+      },
+      "catalog": {
+        "title": "预置目录",
+        "outboundNotice": "预置连接经 Composio 云执行：工具的输入与返回结果会经过它的服务器，授权令牌也托管在它那边。只想本机直连的服务请用「自定义 MCP」（后续版本提供）。",
+        "toolCount": "{count} 个工具",
+        "alreadyAdded": "已添加",
+        "supersedes": "同名的旧直连配置还在上面，先断开并清除配置才能装这一版。",
+        "keyLabel": "Composio API Key",
+        "keyPlaceholder": "粘贴你的 Composio API Key",
+        "keySave": "保存",
+        "keySaved": "已保存 Composio API Key",
+        "keyClear": "清除",
+        "keyConfigured": "已配置（{time}）",
+        "gateTitle": "先填 Composio API Key 才能使用预置目录",
+        "gateBody": "1. 去 app.composio.dev 注册一个账号（免费档每月 20K 次调用，个人用量足够）\n2. 在 Settings → API Keys 生成一个 key\n3. 粘贴到上面的输入框并保存\n填好之后目录里的服务就可以直接点「连接」。",
+        "gateCta": "去填写 Key",
+        "gateSignup": "打开 Composio 官网",
+        "outboundDialog": {
+          "title": "预置连接会把数据发给 Composio",
+          "desc": "预置目录里的服务由 Composio 代管：\n· 工具调用的入参与返回结果都经过它的服务器；\n· 授权令牌存在它那边，本机不持有；\n· 它默认会保存调用日志（含 payload）最长一年 —— 建议现在就去 Composio 后台 Settings → General 把 Log storage 切成「Don't store data」。\n继续即表示你了解并接受这条数据路径。",
+          "cancel": "取消",
+          "confirm": "我知道了，继续连接"
+        },
+        "desc": {
+          "artifact_server": "Artifact Server：将交互看板、原型与报告发布到自有 Cloudflare/自建画布服务，生成版本化分享链接并回收团队评论。",
+          "asana": "Asana：搜任务与项目、建任务与评论、改任务。",
+          "atlassian": "Atlassian：Jira 议题（查/建/改/流转）+ Confluence 页面（搜/读/建/改）。",
+          "browser_use": "Browser Use：通过本机 Playwright MCP 控制 Chrome 或隔离浏览器——读网页、填表单、截屏与交互操作。",
+          "desktop_use": "Desktop Use：通过本机 Agent Desktop MCP 操作桌面应用——读取无障碍控件树、点击输入与桌面截屏。",
+          "figma": "Figma：读文件结构与组件、取设计变量、渲染节点图、写评论。",
+          "github": "GitHub：读仓库代码与 README、看 issue/PR、提 issue 与评论。",
+          "gmail": "Gmail 邮箱：搜索/读取邮件与草稿、读取联系人；只给起草类写入，不给发信。",
+          "googlecalendar": "Google 日历：查日程与空闲时段、建/改/删事件。",
+          "googledrive": "Google 云端硬盘：找文件、读元数据与评论、建文件夹与文本文件。",
+          "intercom": "Intercom：读会话/联系人/工单、搜索客服记录与帮助文档。",
+          "linear": "Linear：查议题与项目、建议题与评论、改状态。",
+          "notion": "Notion：搜索与读取页面/数据库、建页面、追加内容、写评论。",
+          "outlook": "Outlook：日历与联系人（🔴 不含邮件收发——本机 Exchange 链路才是唯一写邮件通道）。",
+          "paypal": "PayPal：只读账单、付款、订单、订阅与争议。",
+          "sentry": "Sentry：读项目与错误 issue、事件详情、告警与统计。",
+          "slack": "Slack：读频道与会话历史、搜索消息、发消息与表情回应。",
+          "stripe": "Stripe：只读财务数据（客户、扣款、账单、订阅、争议）。",
+          "twitter": "X（Twitter）：搜推文、看时间线与数据、发帖与收藏。"
+        }
+      }
+    },
+    "imFeishu": {
+      "title": "飞书对话",
+      "desc": "在飞书私聊里与这台电脑上的 AI 助手对话（同一份记忆与人设）。这里看得到：连不连得上、绑定了谁、飞书里能用哪些工具、批过哪些操作。",
+      "loading": "正在读取飞书连接状态…",
+      "loadError": "状态读取失败：{message}",
+      "connection": "连接状态",
+      "disabledHint": "未启用：在 .env 里设 MAILAGENT_IM_FEISHU=true，重启后端与 App 后生效。",
+      "connectedAt": "建立连接：{time}",
+      "lastEventAt": "最近一次收到消息：{time}",
+      "noCredential": "尚未配置对话 bot 的应用凭证 —— 在下面的「应用凭证」里填 App ID 与 App Secret 保存即可。",
+      "conflict": "检测到另一个 MailAgent 实例（{reason}）—— 飞书长连接不广播消息，多个实例会互相抢消息，故本实例有意不建立连接。请只保留一个（用桌面 App 时停掉 pm2 的 mail-sync）。",
+      "conflictUnknown": "原因未知",
+      "lastError": "最近一次错误：{message}",
+      "status": {
+        "connected": "已连接",
+        "unknown": "状态未知",
+        "connecting": "连接中",
+        "disconnected": "已断开",
+        "conflict": "实例冲突",
+        "error": "连接异常",
+        "stopped": "已停止",
+        "disabled": "未启用"
+      },
+      "credential": {
+        "title": "应用凭证",
+        "present": "已配置：App ID {appId} · 上次更新 {time}。App Secret 保存后不再显示，轮换时重新粘贴一次即可。",
+        "absent": "尚未配置。在飞书开放平台新建一个独立的企业自建应用（别复用发通知的那个），把它的 App ID 与 App Secret 填在下面。",
+        "appIdLabel": "App ID",
+        "appIdPlaceholder": "App ID（cli_ 开头）",
+        "secretLabel": "App Secret",
+        "secretPlaceholder": "App Secret（保存后不再显示）",
+        "save": "保存凭证",
+        "saved": "凭证已保存",
+        "failed": "保存凭证失败",
+        "restartHint": "保存后需重启后端（用上方横幅的「立即重启」）才会用新凭证连接：之前没配过凭证时 worker 根本还没启动，已经在跑的连接也不会热切换。",
+        "platformHint": "还需在飞书开放平台完成应用配置：开启机器人能力、申请收私聊消息权限、并在「事件订阅」与「回调订阅」两个 tab 各自选长连接。详见文档 docs/reference/llm-agent/im-feishu-chat.md。",
+        "envSeedHint": "也可以在 {path} 里写 FEISHU_IM_APP_ID / FEISHU_IM_APP_SECRET，由首次启动写入 —— 但那两个键只是「还没配过时」的默认值，配过之后改它们不再有任何效果。",
+        "unbound": "检测到换了另一个飞书应用，原来绑定的账号已解绑（open_id 是按应用签发的，旧的在新应用下无效）—— 重启后端后请重新生成绑定码。",
+        "webDisabled": "远程网页版不能写入凭证（这会换掉本机执行通道的身份），请在桌面 App 内操作。"
+      },
+      "bind": {
+        "title": "绑定的飞书账号",
+        "boundTo": "已绑定 open_id：{openId}",
+        "boundAt": "绑定时间：{time}",
+        "bot": "对话 bot：{name}（app_id {appId}）",
+        "unknownBot": "尚未连上，名称未知",
+        "sameNameTrap": "两个应用在飞书后台可以同名 —— 认 app_id / open_id，别认名字。",
+        "unbound": "尚未绑定。只有绑定的那个飞书账号能进入指令通道，其他人一律拒绝。",
+        "codePending": "已有一个绑定码在等待（有效期至 {time}）。忘了码就重新生成一个。",
+        "issue": "生成绑定码",
+        "rebind": "重新绑定",
+        "webDisabled": "远程网页版不能发起绑定（这是把飞书账号接进本机执行通道的动作），请在桌面 App 内操作。",
+        "flagOffDisabled": "飞书对话未启用，现在出的码没有 bot 能接收。",
+        "failed": "生成绑定码失败"
+      },
+      "pair": {
+        "countdown": "{time} 后失效",
+        "expired": "已失效，请重新生成。",
+        "howto": "在飞书里私聊这个 bot，把上面 6 位数字单独发给它即可完成绑定。"
+      },
+      "tools": {
+        "title": "飞书里 AI 能用的工具",
+        "desc": "飞书是权限收紧的一档场合（飞书账号被盗 ≠ 你的电脑被盗）。下面是固定规则，不是可改的设置。",
+        "read": "读类（邮件 / 日历 / 搜索 / 报告 / 会话检索）：免审批直接执行。",
+        "write": "写类（发信 / 存草稿 / 标记 / 改日程等）：每次都要在飞书卡片上点批准，不进任何免批白名单。",
+        "connector": "外部服务（MCP）工具：全部开放；读类免批，写类同样每次都要批（破坏性工具的卡片上带红色警告）。",
+        "web": "联网（网页搜索 / 网页读取）：由下面的开关控制，默认关；开了也每次都要批。",
+        "denied": "本地命令执行 / 文件读写 / 配置与技能变更 / 外呼第三方 AI：在飞书里根本不注册，模型看不见。要用请到桌面 App 或远程网页版。"
+      },
+      "web": {
+        "title": "允许飞书会话联网",
+        "desc": "开启后 AI 在飞书里可以搜网页 / 读网页。默认关：网页内容不可信，且飞书账号被盗不等于你的电脑被盗。开启后每次调用仍要在卡片上批准。",
+        "restartHint": "改动后需重启 App 才生效（AI 引擎启动时读取一次）。",
+        "webDisabled": "远程网页版不能改这个开关，请在桌面 App 内操作。"
+      },
+      "approvals": {
+        "title": "飞书会话里的审批记录",
+        "desc": "最近 10 条真人做出的批准 / 拒绝决定。判据是「这条对话来自飞书」—— 若同一条飞书会话是在桌面 App 上批的，也会记在这里（记录里分不出点击发生在哪一侧）。免批执行的调用不计入。",
+        "loading": "正在读取审批记录…",
+        "loadError": "审批记录读取失败：{message}",
+        "unavailable": "读不到审批记录（对话数据库暂时不可访问）—— 这不代表没有批过任何操作。",
+        "empty": "还没有在飞书会话里批准或拒绝过任何操作。",
+        "approved": "已批准",
+        "rejected": "已拒绝"
+      }
+    },
+    "systemCapabilities": {
+      "title": "系统能力",
+      "desc": "聊天中助手可调用的全部能力族。能开关的用真开关（联网），其余由环境变量控制、此处只读展示：已启用显示锁定态，未启用也在此显示（禁用态）。",
+      "lockedBadge": "系统能力 · 恒启用",
+      "lockedTip": "该能力由环境变量控制启用，运行时不可在此切换。",
+      "disabledBadge": "未启用",
+      "disabledTip": "该能力当前由环境变量关闭；如需启用请改 .env 并重启后端。",
+      "controlledBy": "由环境变量控制：",
+      "coreEmail": {
+        "title": "核心邮件操作",
+        "desc": "让助手起草回复、新建/转发草稿、编辑草稿、标记、归档、置顶、重新同步、发送邮件（写工具 + 发信）。",
+        "control": "核心能力 · 恒可用；所有写操作经审批卡确认后执行。"
+      },
+      "kos": {
+        "title": "KOS 知识大脑",
+        "desc": "让助手检索并深读 Gbrain 跨域知识图谱：语义检索、关键词全文、读整页、找该领域最懂的人、按类型/标签列页、查谁引用了这一页。",
+        "control": "核心只读 · 恒注册；检索效果取决于是否已配置 Gbrain。"
+      },
+      "selfMount": {
+        "title": "自我配置元工具",
+        "desc": "让助手查看/更新自身身份文档、发现并挂载技能（update_system_md / discover_skills / set_skill_enabled）。"
+      },
+      "calendar": {
+        "title": "日历工具（聊天）",
+        "desc": "让助手在聊天中读写日历（列出 / 查看 / 改期 / 回复邀请 / 删除）；与「技能」列表里的日历技能开关无关（那个只管对外 Skill 接口）。"
+      },
+      "session": {
+        "title": "会话检索",
+        "desc": "让助手检索你过往的 AI 会话历史（列出 / 搜索 / 读取）。"
+      },
+      "config": {
+        "title": "Agent 自配置",
+        "desc": "让助手查看并调整自身的身份文档与记忆（读取 / 历史 / 回滚 / 更新记忆）。"
+      },
+      "web": {
+        "title": "联网",
+        "desc": "让助手抓取网页并执行网络搜索（网页抓取 + 网络搜索）。",
+        "switchLabel": "启用联网",
+        "restartHint": "修改后需退出重开 App 才生效。",
+        "tavily": {
+          "label": "Tavily API Key",
+          "helper": "web_search 默认走 DuckDuckGo，国内网络被阻断不可用；填入 Tavily API key 即改走 Tavily（国内可达）。多个 Tavily key 用逗号隔开，额度用完自动切换下一个；留空则用 DuckDuckGo（国内不可达）。仅本机 .env 存储，不回传界面。保存即生效。",
+          "placeholder": "tvly-xxx，多个 key 用逗号隔开"
+        }
+      },
+      "crossRef": {
+        "exec": {
+          "title": "命令执行 / 文件读写",
+          "desc": "管理助手运行命令、读写文件的免审批白名单规则。",
+          "action": "前往自动化策略"
+        },
+        "skillPacks": {
+          "title": "技能包管理",
+          "desc": "安装、配置、卸载第三方 skill 包。",
+          "action": "前往 Skill 安装"
+        },
+        "customAgents": {
+          "title": "自定义 Agent",
+          "desc": "创建按计划或邮件触发的自动化 agent。",
+          "action": "前往 Agents"
+        }
+      }
+    },
+    "memory": {
+      "title": "记忆",
+      "desc": "Custom AI 长期记住的关于你的事实。编辑或删除会在下一次对话生效。",
+      "empty": "暂无记忆。当你确认后，agent 会把事实存在这里。",
+      "edit": "编辑",
+      "save": "保存",
+      "cancel": "取消",
+      "delete": "删除",
+      "deleteConfirm": "确认？",
+      "source": "来源：{source}",
+      "updated": "更新于",
+      "savedToast": "记忆已更新",
+      "deletedToast": "记忆已删除",
+      "emptyValue": "内容不能为空",
+      "saveError": "无法保存记忆",
+      "deleteError": "无法删除记忆",
+      "loadError": "无法加载记忆"
+    },
+    "imageGenModel": {
+      "title": "图像生成模型",
+      "desc": "对话里 generate_image 工具生成或编辑图片时所用的模型。只能选 OpenAI 或 OpenAI 兼容协议的服务商（AI SDK 只有这两类实现了图像接口）。保存即生效，不需重启。",
+      "label": "图像模型",
+      "helper": "候选集 = 「模型服务」里已启用的 OpenAI / OpenAI 兼容服务商的已启用模型。留空时，对话里请求画图会提示先来这里配置。",
+      "placeholder": "未配置",
+      "noCandidates": "没有可选模型：先在「模型服务」里添加并启用一个 OpenAI 或 OpenAI 兼容协议的服务商，并勾选其图像模型（如 gpt-image-1）。"
+    },
+    "memoryCaptureModel": {
+      "title": "记忆抽取模型",
+      "desc": "自动记忆（memory.md）从对话中抽取持久事实时所用的模型。仅在开启自动记忆捕获时生效。",
+      "label": "抽取模型",
+      "helper": "每一轮被捕获的对话会调用一次该模型，建议用快速便宜的小模型（如 claude-haiku-4-5）。留空即用默认 haiku。修改后需重启后端生效。"
+    },
+    "userMdCompile": {
+      "title": "从记忆编译偏好",
+      "desc": "将 AI 从对话中捕获的偏好类记忆合并进 user.md，手动触发后立即生效。",
+      "button": "从记忆编译偏好",
+      "compiling": "编译中…",
+      "noChange": "未发现可编译的新偏好",
+      "diffLabel": "编译结果（上：编译前 / 下：编译后）",
+      "rollback": "撤销此次编译",
+      "rollingBack": "撤销中…",
+      "rolledBackToast": "已撤销编译，user.md 已还原",
+      "compileError": "编译失败",
+      "rollbackError": "撤销失败"
+    },
+    "standingDocs": {
+      "title": "身份与记忆文档",
+      "desc": "查看并手动编辑 Standing Context 的 4 个身份文档（SOUL / AGENT / RULES / USER）与自动维护的记忆（memory）。修改立即生效于下一次对话。",
+      "highRiskBadge": "高危",
+      "floorNote": "PRODUCT_SAFETY_FLOOR 始终在代码层前置，文档内容无法弱化它。RULES 越权措辞会被服务端拒绝。",
+      "autoBadge": "自动记忆",
+      "memoryNote": "memory.md 由 AI 从对话中自动抽取并改写持久事实，你也可手动编辑。它作为「背景记忆」注入每轮对话（非身份文档），无法弱化安全底线。",
+      "budgetUsage": "记忆用量",
+      "layerUsage": "分层用量（已保存内容）",
+      "overBudget": "超出预算",
+      "overBudgetHint": "内容超过 {budget} 字符预算，请精简后再保存。",
+      "edit": "编辑",
+      "save": "保存",
+      "saving": "保存中…",
+      "cancel": "取消",
+      "savedToast": "文档已保存",
+      "saveError": "保存失败",
+      "history": "版本历史",
+      "rollback": "回滚到此版本",
+      "rollingBack": "回滚中…",
+      "rolledBackToast": "已回滚至此版本",
+      "rollbackError": "回滚失败",
+      "emptyHistory": "暂无版本历史记录",
+      "updatedBy": "修改者",
+      "loading": "加载中…",
+      "loadError": "加载失败",
+      "empty": "（空）",
+      "docLabels": {
+        "soul": "SOUL（身份）",
+        "agent": "AGENT（操作笔记）",
+        "rules": "RULES（硬约束）",
+        "user": "USER（用户偏好）",
+        "memory": "MEMORY（自动记忆）"
+      }
+    },
+    "execPolicy": {
+      "title": "自动化策略",
+      "helper": "助手运行命令 / 读写文件默认每次都需你审批。这里是你经「总是允许」为精确操作建立的白名单：命中的操作免审批直接执行，其余仍每次询问。放宽某条规则请删除后重新创建（不支持原地编辑，避免悄悄变宽）。",
+      "loadError": "加载策略失败。",
+      "loading": "加载中…",
+      "empty": "还没有自动化策略。在助手请求运行命令 / 读写文件时，勾选「总是允许」即可为该精确操作创建一条白名单，命中后免审批直接执行。",
+      "dangerous": "高危 · 非沙箱",
+      "hitCount": "命中 {count} 次",
+      "lastUsed": " · 最近 {time}",
+      "deleted": "已删除该策略",
+      "toggleAria": "启用/停用该策略",
+      "deleteAria": "删除该策略",
+      "capability": {
+        "exec": "运行命令",
+        "file_read": "读文件",
+        "file_write": "写文件",
+        "web": "联网"
+      },
+      "matcher": {
+        "any": "<任意>",
+        "dir": "（目录 {scope}）"
+      }
+    },
+    "providers": {
+      "title": "模型服务",
+      "helper": "管理 LLM 上游 provider：官方模型 / OpenAI 兼容中转 / Anthropic 兼容中转与本地引擎可并存。default provider 承接旧网关配置（legacy 模型引用零迁移）。",
+      "loading": "加载中…",
+      "loadError": "加载 provider 列表失败。",
+      "empty": "还没有 provider。点右上「添加」从模板创建。",
+      "addButton": "添加",
+      "addTitle": "添加服务商",
+      "added": "已添加 {name}",
+      "deleted": "已删除 {name}",
+      "defaultBadge": "默认",
+      "configureButton": "配置",
+      "configureAria": "配置 {name}",
+      "modalTabs": {
+        "models": "模型列表",
+        "connection": "连接与安全"
+      },
+      "expandAria": "展开 {name}",
+      "enabledAria": "启用/停用 {name}",
+      "deleteAria": "删除 {name}",
+      "dragAria": "拖动排序 {name}",
+      "disabledBadge": "已停用",
+      "keyConfiguredBadge": "已配 Key",
+      "keyMissingBadge": "未配 Key",
+      "localNoKeyBadge": "免密钥",
+      "catalogStatus": "目录 {date}",
+      "catalogRefresh": "刷新目录",
+      "catalogRefreshing": "更新中…",
+      "catalogUpdated": "模型目录已更新",
+      "catalogUpToDate": "模型目录已是最新",
+      "catalogSyncFailed": "目录刷新失败，继续使用本地缓存",
+      "displayName": "名称",
+      "baseUrl": "API 地址",
+      "baseUrlPlaceholder": "留空 = 官方默认端点",
+      "categories": {
+        "all": "全部",
+        "popular": "常用",
+        "cn": "国内",
+        "global": "海外",
+        "local": "本地",
+        "custom": "自定义"
+      },
+      "apiKey": {
+        "label": "API Key",
+        "set": "已设置（····{last4}），输入新值保存以替换",
+        "unset": "未设置",
+        "clear": "清除",
+        "clearAria": "清除 API Key",
+        "save": "保存密钥",
+        "saved": "API Key 已更新",
+        "showAria": "显示密钥",
+        "hideAria": "隐藏密钥"
+      },
+      "keyPool": {
+        "title": "备用 Key 轮换池（429 冷却）",
+        "helper": "每行输入一个备用 API Key。遇到限流（429）时自动轮换冷却，健康时优先粘滞主 Key 以保 Prompt 缓存。",
+        "countBadge": "{count} Keys",
+        "placeholder": "每行一个备用 Key，例如：\nsk-spare-1\nsk-spare-2",
+        "save": "保存备用池",
+        "clear": "清空",
+        "saved": "备用 Key 池已更新"
+      },
+      "headers": {
+        "label": "自定义 Header",
+        "opencodeSessionHint": "OpenCode 要求请求带 x-opencode-session。MailAgent 已自动为每段对话生成一个随机 ID 附上（只用于 OpenCode 的路由与缓存，不含对话内容），这里无需手动添加；手动添加后会改用你填的值。",
+        "incrementalHint": "支持单条增删改，不会影响其它已保存的加密 Header。",
+        "setPlaceholder": "已配置（输入新值以替换）",
+        "keyPlaceholder": "Header 名",
+        "valuePlaceholder": "值",
+        "add": "添加",
+        "update": "更新",
+        "updated": "已更新自定义 Header",
+        "deleteAria": "删除 header {name}",
+        "save": "保存",
+        "cancel": "取消",
+        "reenterHint": "安全起见服务端不回显 header 值——保存前需为所有保留项重新输入值"
+      },
+      "iconPicker": {
+        "buttonAria": "更换服务商图标",
+        "title": "选择图标",
+        "customPlaceholder": "1-2 个字符或 Emoji",
+        "apply": "应用",
+        "reset": "恢复默认"
+      },
+      "test": {
+        "label": "连通性测试",
+        "button": "测试连接",
+        "running": "测试中…",
+        "ok": "连接正常（{ms}ms）",
+        "okNoLatency": "连接正常",
+        "fail": "连接失败",
+        "modelAuto": "自动选择模型",
+        "modelAria": "选择探测模型"
+      },
+      "models": {
+        "title": "模型",
+        "refresh": "拉取模型列表",
+        "refreshing": "拉取中…",
+        "loading": "加载中…",
+        "empty": "还没有模型。点「拉取模型列表」从上游获取，或在下方手动添加（中转不透传 /models 时的兜底）。",
+        "noMatch": "没有符合筛选条件的模型。",
+        "manualBadge": "手动",
+        "manualPlaceholder": "手动添加模型 id（wire id）",
+        "manualAdd": "添加",
+        "searchPlaceholder": "搜索模型 ID 或名称…",
+        "filter": {
+          "all": "全部",
+          "enabled": "已启用",
+          "reasoning": "推理",
+          "vision": "视觉"
+        },
+        "batch": {
+          "enableFiltered": "启用当前筛选",
+          "disableAll": "全部停用",
+          "clearUnenabled": "清理未启用拉取项",
+          "updated": "已更新 {count} 个模型"
+        },
+        "colModel": "模型",
+        "colMaxOutput": "最大输出",
+        "colContextWindow": "上下文",
+        "groupOther": "其它模型",
+        "maxOutputPlaceholder": "maxOutput",
+        "maxOutputAria": "{model} 的 max output tokens",
+        "contextWindowPlaceholder": "context",
+        "contextWindowAria": "{model} 的上下文窗口 tokens",
+        "deleteAria": "删除模型 {model}",
+        "cap": {
+          "tools": "工具",
+          "vision": "视觉",
+          "reasoning": "推理"
+        }
+      },
+      "template": {
+        "ollama": "Ollama（本地）",
+        "lmstudio": "LM Studio（本地）",
+        "opencode": "OpenCode Zen",
+        "custom-openai": "自定义 OpenAI 兼容",
+        "custom-anthropic": "自定义 Anthropic 兼容"
+      },
+      "add": {
+        "desc": "选择官方、中转或本地推理模板，可先测试连通性再保存并拉取模型。",
+        "template": "模板",
+        "id": "ID（slug）",
+        "idPlaceholder": "小写字母开头，可含数字/-/_",
+        "idInvalid": "非法 slug",
+        "protocol": "协议",
+        "advancedToggle": "高级：自定义 ID 与协议",
+        "keyOptionalHint": "本地推理服务通常无需 API Key，可留空",
+        "probe": "测试连接",
+        "probing": "测试中…",
+        "probeOk": "连接正常（{ms}ms）",
+        "probeFail": "连接失败",
+        "baseUrlRequired": "必填（该协议无官方默认端点）",
+        "submit": "创建",
+        "cancel": "取消"
+      },
+      "select": {
+        "searchPlaceholder": "搜索模型或服务商…",
+        "empty": "没有匹配的模型",
+        "placeholder": "选择模型"
+      },
+      "group": {
+        "default": "default（主网关）"
+      },
+      "privacyMask": {
+        "label": "出站隐私脱敏",
+        "aria": "为 {name} 开启出站隐私占位符脱敏",
+        "helper": "发送前在本地将 API Key、证件号、手机号、邮箱与自定义正则替换为占位符，并在响应中自动还原；失败即 503 阻断出站。",
+        "configureRules": "配置脱敏规则"
+      }
+    },
+    "privacyMask": {
+      "title": "隐私占位符脱敏",
+      "helper": "按 Provider 启用双向本地脱敏：请求离开本机前替换为 [[PII_TYPE_N]]，响应与工具参数在本地自动还原，仅统计命中次数（绝不落盘明文）。",
+      "loading": "正在加载隐私脱敏配置…",
+      "loadFailed": "加载隐私脱敏配置失败",
+      "retry": "重试",
+      "saved": "已保存隐私脱敏配置",
+      "saveFailed": "保存隐私脱敏配置失败",
+      "hitsCleared": "已清零本地脱敏统计",
+      "hitsClearFailed": "清零统计失败",
+      "builtin": {
+        "secret": {
+          "label": "API 密钥与凭证",
+          "helper": "拦截常见 sk-/mak_/AIza/ghp_/AKIA 等密钥"
+        },
+        "id_card": {
+          "label": "身份证号（18 位校验码）",
+          "helper": "通过 ISO 7064 校验位验证，避免误伤订单号"
+        },
+        "phone": {
+          "label": "手机号码",
+          "helper": "拦截中国大陆 11 位手机号（含 +86 前缀）"
+        },
+        "email": {
+          "label": "邮箱地址",
+          "helper": "将邮箱替换为占位符并在工具调用参数中自动还原"
+        },
+        "bank_card": {
+          "label": "银行卡号（Luhn 校验）",
+          "helper": "仅匹配通过 Luhn 校验的 16–19 位卡号"
+        }
+      },
+      "customRules": {
+        "title": "自定义正则规则",
+        "helper": "支持自定义正则（如工号 EMP-\\d{6}）；保存前校验语法与零宽/ReDoS 风险。",
+        "namePlaceholder": "规则名称",
+        "add": "添加规则",
+        "deleteAria": "删除规则 {name}"
+      },
+      "preview": {
+        "title": "本地预览（不发出网络请求）"
+      },
+      "hits": {
+        "title": "本地拦截命中统计",
+        "empty": "暂无命中记录。",
+        "clear": "清零计数"
+      }
+    },
+    "usageDashboard": {
+      "title": "AI 用量与缓存监控",
+      "helper": "统一汇总对话、群聊、自动化与邮件处理的 Token 消耗、Prompt 缓存命中率、估算美元账单，以及最近 50 条连通性探测与调用失败日志。",
+      "shortcutHelper": "Token 消耗、Prompt 缓存命中率趋势、按表面/模型账单与最近 50 条探测异常日志已整合至「运维 → LLM 看板」。",
+      "shortcutCardHelper": "前往运维看板查看实时用量、缓存收益与异常诊断日志",
+      "openLlmDashboard": "前往 LLM 看板",
+      "rangeAria": "统计时间窗口",
+      "refreshAria": "刷新用量统计",
+      "loading": "正在聚合用量统计…",
+      "loadError": "无法加载 AI 用量统计（后端暂不可达）。",
+      "emptyRange": "该时间窗口内暂无 LLM 调用记录。",
+      "emptyBreakdown": "暂无明细数据。",
+      "chartTitle": "Token 消耗与缓存命中率趋势",
+      "legendCacheRead": "缓存读取 Token",
+      "legendHitRate": "缓存命中率",
+      "bySurfaceTitle": "按调用表面统计",
+      "byModelTitle": "按模型统计",
+      "kpi": {
+        "totalTokens": "总 Token 消耗",
+        "cacheHitRate": "Token 缓存命中率",
+        "estimatedCost": "估算总花费",
+        "cacheSaved": "缓存节省估算"
+      },
+      "surfaces": {
+        "chat": "对话问答",
+        "agent_run": "自动化助手",
+        "group": "多 Agent 群聊",
+        "email_classify": "邮件 AI 分类",
+        "report": "日报 / 周报",
+        "matter_run": "事项跟进",
+        "auto_title": "会话自动标题",
+        "compact": "上下文压缩",
+        "search_agent": "AI 智能搜索",
+        "paused_turn": "暂停审批片段",
+        "translate": "邮件翻译",
+        "nl_search": "自然语言检索",
+        "memory_capture": "记忆抽取",
+        "user_md_compile": "偏好档案编译",
+        "contact_profile": "联系人画像",
+        "task_extract": "任务抽取",
+        "py_loopback": "后台网关调用"
+      },
+      "probelog": {
+        "title": "探测与异常诊断日志（最近 50 条）",
+        "filter": {
+          "all": "全部",
+          "errors": "仅异常"
+        },
+        "clear": "清空",
+        "cleared": "已清空诊断日志",
+        "clearFail": "清空诊断日志失败",
+        "empty": "暂无探测或异常日志。"
+      }
+    },
+    "skillPacks": {
+      "title": "Skill 安装",
+      "helper": "支持从 GitHub 仓库（owner/repo 或链接）、npm 包（npm:@scope/pkg）、archive URL 或本地路径安装第三方 skill。两段式：先获取预览、人工审阅包内容与声明，再确认安装。已安装的 skill 会在上方技能列表中显示。",
+      "sourceType": {
+        "skill_pack": "skill 包",
+        "local_folder": "本地目录"
+      },
+      "installedNone": "还没有安装的 skill 包。",
+      "installedCount": "已安装 {count} 个 skill 包。",
+      "installButton": "安装 skill",
+      "updates": {
+        "checkButton": "检查更新",
+        "checking": "检查中…",
+        "availableCount": "{count} 个可更新",
+        "badge": "有更新",
+        "updateButton": "更新",
+        "foundToast": "检测到 {count} 个 skill 有可用更新",
+        "upToDateToast": "所有已安装 skill 均为最新版本",
+        "checkFailed": "检查 skill 更新失败"
+      },
+      "dialog": {
+        "title": "安装 Skill",
+        "upgradeTitle": "更新 Skill：{name}",
+        "desc": "两段式安装：先获取包预览，人工审阅文件清单、密钥声明与 SKILL.md 节选，确认无误后再安装。第三方内容未经验签，请谨慎审阅。",
+        "staleError": "包内容在预览后被改动，已拒绝安装。请重新获取预览并再次审阅。",
+        "sourceRemote": "GitHub / npm / URL",
+        "remotePlaceholder": "owner/repo、npm:@scope/pkg 或 https://.../skill.zip",
+        "remoteHelper": "支持 GitHub（ChenyqThu/omada-ui-kit）、npm（npm:@chenyqthu/omada-ui-kit）、.zip 或 .tgz 下载地址。",
+        "multipleSkillsPrompt": "该包内包含多个 skill，请选择要安装的一个：",
+        "upgradeSummary": "准备升级已安装的 skill",
+        "upgradeFilesDelta": "文件变化：新增 {added}，修改 {modified}，移除 {removed}",
+        "sourceLocal": "本地路径",
+        "localPlaceholder": "/path/to/skill.zip 或 skill 目录",
+        "fetching": "获取中…",
+        "fetch": "获取预览",
+        "fetchFailed": "获取预览失败",
+        "unnamed": "（未命名）",
+        "source": "来源：",
+        "packHash": "包 hash：",
+        "entryHint": "入口提示：",
+        "files": "文件（{count} 个）",
+        "declaredSecrets": "声明密钥",
+        "none": "无",
+        "skillMdExcerpt": "SKILL.md 节选（原文，未渲染）",
+        "empty": "（空）",
+        "back": "返回",
+        "confirming": "安装中…",
+        "confirm": "确认安装",
+        "confirmUpgrade": "确认更新",
+        "installed": "已安装 {name}",
+        "installedSecretsHint": "该 skill 声明了 {count} 个密钥（{names}），请在其「配置」里设置。",
+        "installFailed": "安装失败"
+      },
+      "config": {
+        "jsonParseError": "JSON 解析失败：{message}",
+        "mustBeObject": "必须是 JSON 对象（'{ … }'）",
+        "saved": "已保存配置",
+        "saveFailed": "保存配置失败",
+        "saving": "保存中…",
+        "save": "保存配置",
+        "title": "config.json（非敏感配置，明文，与脚本共读）",
+        "loading": "加载中…"
+      },
+      "secret": {
+        "set": "已设置 {time}",
+        "replacePlaceholder": "输入新值以替换",
+        "save": "保存",
+        "deleteAria": "删除密钥 {name}",
+        "updated": "已更新密钥 {name}",
+        "updateFailed": "更新密钥失败",
+        "deleted": "已删除密钥 {name}",
+        "deleteFailed": "删除密钥失败",
+        "added": "已设置密钥 {name}",
+        "addFailed": "设置密钥失败",
+        "namePlaceholder": "密钥名（如 MY_API_KEY）",
+        "valuePlaceholder": "值",
+        "add": "添加",
+        "sectionTitle": "密钥",
+        "sectionDesc": "密钥只写不读：保存后不回显值，仅显示名称与更新时间。值加密存储，脚本执行时注入环境变量。",
+        "loading": "加载中…",
+        "empty": "尚无已存密钥。"
+      },
+      "pack": {
+        "configAria": "配置 {name}",
+        "uninstallAria": "卸载 {name}",
+        "uninstallWarning": "将删除该 skill 的落盘目录、注册行，并清除其全部已存密钥。此操作不可撤销。",
+        "loadingSecrets": "正在载入密钥清单…",
+        "noSecrets": "（无已存密钥）",
+        "willDeleteSecrets": "将删除密钥：",
+        "uninstalling": "卸载中…",
+        "confirmUninstall": "确认卸载",
+        "cancel": "取消",
+        "uninstalled": "已卸载 {name}",
+        "uninstallFailed": "卸载失败"
+      }
+    },
+    "themeMode": "主题模式",
+    "themeModeHint": "Light / 跟随系统 / Dark",
+    "theme": {
+      "light": "浅色",
+      "system": "跟随系统",
+      "dark": "深色"
+    },
+    "accent": "强调色",
+    "accentHint": "6 种 swatch · 影响主 CTA 与 chip 染色",
+    "general": {
+      "page": {
+        "intro": "控制强调色、主题、语言、界面材质与标签工作区。所有偏好仅保存在本机。",
+        "eyebrow": "GENERAL",
+        "title": "通用"
+      },
+      "accent": {
+        "meta": "9 prebuilt",
+        "note": "同步至灵动岛通知边框、收件列表选中条、AI 起草按钮、批量栏徽章。每次切换都会广播到 ping-island 桥接。"
+      },
+      "language": {
+        "title": "语言",
+        "zh": "简体中文",
+        "zhMeta": "界面文案 · 工具栏 · 设置 · AI 快捷动作。邮件正文不参与翻译。",
+        "en": "English",
+        "enMeta": "UI · toolbar · settings · AI quick actions. Email body never auto-translated.",
+        "note": "列表头 (MAILBOXES · AI FIELDS · ATTACHMENTS) 保持英文等宽体,与正文字号/密度无关。"
+      },
+      "theme": {
+        "title": "主题",
+        "recommended": "recommended",
+        "systemMeta": "macOS 切换时一并切换,开机即用",
+        "darkMeta": "画布主色 #06080B → #0A0C10,玻璃在其之上",
+        "lightMeta": "画布主色 #F6F7FB → #ECEEF4,强调色再走暖色调"
+      },
+      "surface": {
+        "title": "窗口材质",
+        "meta": "2 styles",
+        "frostedMeta": "磨砂 ·「一块玻璃」：系统级模糊 + 玻璃染色，气质与细调见下方",
+        "solidMeta": "实色 · 不透明、零模糊零辉光，性能最好，等价 reduced-transparency"
+      },
+      "tabWorkspace": {
+        "title": "标签工作区",
+        "meta": "{min}-{max}",
+        "limit": {
+          "label": "标签上限",
+          "meta": "右侧最多同时开几个邮件 / 事项标签"
+        },
+        "note": "开到上限还要再开时，自动关掉最久没看的那个。只有正在写的回复、或没保存的草稿会挡住自动关闭；在 AI 里聊过的标签照常参与自动关闭，只是翻上下封邮件时会另开一个标签，不会把它覆盖掉。调低上限不会关掉已经开着的标签，只在下次新开时按新上限收敛。"
+      },
+      "bodyText": {
+        "title": "正文外观",
+        "meta": "仅邮件正文",
+        "note": "字体、字号与行间距作用于邮件正文阅读区；撰写行距作用于撰写框，并随邮件一起发出（收件人看到的行距与你写时一致）。默认：阅读 1.15、撰写 1.5。列表、AI 字段与界面其它文字不受影响。",
+        "font": {
+          "system": "系统默认",
+          "systemMeta": "无衬线系统字体",
+          "serif": "衬线",
+          "serifMeta": "适合长文阅读",
+          "mono": "等宽",
+          "monoMeta": "代码 / 日志友好"
+        },
+        "size": {
+          "label": "字号",
+          "meta": "正文文字大小"
+        },
+        "lineHeight": {
+          "label": "行间距",
+          "meta": "行与行的垂直间距"
+        },
+        "composeLineHeight": {
+          "label": "撰写行距",
+          "meta": "撰写框与发出邮件的行距"
+        }
+      },
+      "glass": {
+        "title": "玻璃气质",
+        "meta": "仅磨砂生效",
+        "mood": {
+          "neutral": "银纱",
+          "neutralMeta": "近中性、克制，最接近 macOS 系统材质，阅读优先",
+          "tinted": "染色",
+          "tintedMeta": "主题色揉进玻璃 + 左上单光源氛围光，品牌感最强",
+          "bright": "亮砂",
+          "brightMeta": "基色抬白、整体提亮，轻盈通透，接近 acrylic",
+          "recommended": "默认"
+        },
+        "knobs": {
+          "title": "高级玻璃调节",
+          "reset": "恢复默认",
+          "alpha": "不透明度",
+          "blur": "基底模糊",
+          "sat": "饱和增益",
+          "mix": "Accent 染色",
+          "ambient": "氛围光",
+          "blurNote": "当前由系统提供模糊，此项仅在不支持原生玻璃的平台生效",
+          "note": "切换气质会重置高级调节；「恢复默认」只重置滑杆、不改气质。所有调节实时生效并保存在本机。"
+        }
+      },
+      "diagnostics": {
+        "title": "诊断",
+        "export": {
+          "label": "导出诊断包",
+          "helper": "打包近 7 天运行日志与脱敏配置快照，用于排查问题。生成可能需要约 1 分钟。",
+          "cta": "导出诊断包",
+          "busy": "导出中…（约 1 分钟）"
+        },
+        "saved": "诊断包已保存",
+        "failed": "导出诊断包失败",
+        "attachToFeedback": {
+          "label": "发送反馈时附上诊断包",
+          "helper": "决定反馈弹窗里那一项的默认勾选状态。与上面导出的是同一个包。"
+        }
+      }
+    },
+    "save": "保存",
+    "clear": "清除",
+    "saveFail": "保存失败",
+    "set": "已设置",
+    "notSet": "未设置",
+    "secretPlaceholder": "粘贴新值后保存 · 当前值不显示",
+    "testPing": "测试网关",
+    "choose": "选择…",
+    "defaultUsed": "(使用默认)",
+    "about": "关于",
+    "envField": {
+      "selectPlaceholder": "请选择",
+      "tagListPlaceholder": "逗号分隔",
+      "secretSet": "已设置(留空保持不变)",
+      "secretUnset": "未设置",
+      "reveal": "显示",
+      "hide": "隐藏",
+      "clear": "清除",
+      "secretSaved": "已写入 keychain + .env"
+    },
+    "env": {
+      "loadError": "配置加载失败",
+      "remoteReadonly": "远程为只读，配置请在本机修改"
+    },
+    "tabs": {
+      "general": "通用与外观",
+      "accounts": "账户与同步",
+      "sync": "同步",
+      "ai": "模型与 AI",
+      "connectors": "工具与 MCP",
+      "matters": "事项",
+      "notifications": "通知与常驻",
+      "integrations": "知识库与集成",
+      "realtime": "存储与远程",
+      "remote": "远程访问",
+      "mcp": "MCP 服务",
+      "labs": "实验室"
+    },
+    "search": {
+      "placeholder": "搜索设置项、环境变量或关键词…",
+      "shortcut": "⌘F",
+      "empty": "未找到匹配的设置项",
+      "aria": "全局搜索设置"
+    },
+    "connectorsTab": {
+      "connectors": "工具与外部连接器",
+      "mcp": "对外 MCP 服务",
+      "expandWorkspace": "收起设置导航以加宽",
+      "toggleMasterAria": "展开/收起左侧工具栏"
+    },
+    "aiSubtabs": {
+      "all": "全部",
+      "models": "模型与路由",
+      "agent": "Agent 与能力"
+    },
+    "labs": {
+      "page": {
+        "eyebrow": "LABS",
+        "title": "实验室",
+        "intro": "集中管理仍在验证中的实验能力。"
+      },
+      "warning": "实验性功能可能不稳定；功能转正后会移入对应的正式设置。",
+      "saved": "实验设置已保存",
+      "saveFailed": "实验设置保存失败",
+      "waitingForRestart": "等待重启生效",
+      "restart": {
+        "backendCta": "重启后端",
+        "busy": "重启中…",
+        "success": "后端已重启",
+        "failed": "后端重启失败"
+      },
+      "advanced": {
+        "label": "高级实验",
+        "helper": "面向协议兼容与开发调试的低层能力。"
+      },
+      "groupAgents": {
+        "label": "群聊多 agent（实验）",
+        "helper": "由本机的 AI 服务接管群里的发言：按每位成员的响应模式决定谁开口、成员之间可以互相接话，并受链上限与每小时预算约束。关掉就退回原来的「你发一条、成员各回一轮」。开关立即生效，不需要重启。"
+      },
+      "skillCatalogPrompt": {
+        "label": "技能目录提示",
+        "helper": "把技能名单注入 AI 的系统提示，提高技能可发现性；每轮约增加 300 token。",
+        "restartHint": "需退出重开 App。"
+      },
+      "memoryLayers": {
+        "label": "五层记忆整理",
+        "helper": "自动按身份、偏好、上下文、动态、经验五层分类抽取记忆，并隔离各层预算。",
+        "restartHint": "需重启后端。"
+      },
+      "agUiMirror": {
+        "label": "AG-UI 协议镜像",
+        "helper": "开放面向开发者的 AG-UI 协议镜像端点，用于兼容性验证与调试。",
+        "restartHint": "需退出重开 App。"
+      }
+    },
+    "accounts": {
+      "notion": {
+        "title": "Notion 集成",
+        "manual": {
+          "title": "手动填写 Token 与数据库 ID",
+          "helper": "自建 internal integration 或需要指定其它数据库时用。"
+        },
+        "oauth": {
+          "connect": {
+            "label": "连接 Notion",
+            "helper": "在浏览器里授权一次即可，可顺带复制官方模板；完成后 Token 与两个数据库 ID 自动写入，无需手填。",
+            "button": "连接 Notion"
+          },
+          "connectedUnknownWorkspace": "已连接 Notion",
+          "connectedHelper": "已通过 Notion 授权连接。「从本机移除连接」只清本机配置；Notion 侧的授权需要到 Notion 的「设置 → 我的连接」里撤销。",
+          "reauthorize": "重新授权",
+          "cancel": "取消",
+          "dismiss": "知道了",
+          "doneDetail": "已连接。邮件库「{emailDb}」，日历库「{calendarDb}」。重启后端后开始同步到 Notion。",
+          "phase": {
+            "waitingCallback": "已在浏览器打开 Notion 授权页，请在那里完成授权（本页保持打开）。",
+            "exchanging": "正在换取访问令牌…",
+            "discovering": "正在识别邮件库与日历库…",
+            "needSelection": "需要你选择要使用的数据库。",
+            "writing": "正在写入配置…",
+            "done": "授权完成。",
+            "error": "授权未完成。"
+          },
+          "error": {
+            "clientIdMissing": "本机没有可用的 Notion 集成 ID，无法发起授权。请更新到新版本或手动填写。",
+            "portUnavailable": "本机 9280 与 9281 端口都被占用，收不到 Notion 的回调。关掉占用这两个端口的程序后重试。",
+            "browserOpenFailed": "打不开系统浏览器，授权未发起。",
+            "denied": "你在 Notion 页面取消了授权，原有配置未改动。",
+            "timeout": "5 分钟内没有完成授权，本次已取消，原有配置未改动。",
+            "cancelled": "授权已取消，原有配置未改动。",
+            "invalidGrant": "授权码已失效（多为等待过久），请重新授权。",
+            "upstreamError": "Notion 侧换取令牌失败，请稍后重试。",
+            "notConfigured": "授权服务暂不可用，请稍后重试，或先用下方手动填写。",
+            "rateLimited": "短时间内尝试次数过多，请等一分钟再试。",
+            "invalidRedirectUri": "回调地址未被授权服务接受，请更新到新版本。",
+            "networkError": "网络不可达，换取令牌失败，原有配置未改动。",
+            "invalidResponse": "授权服务返回了无法识别的内容，原有配置未改动。",
+            "discoveryFailed": "读取 Notion 数据库失败。请重新授权，并确认已把需要的页面授权给 MailAgent。",
+            "noDatabasesFound": "在已授权的内容里没找到数据库。请重新授权并选择复制模板，或勾选包含邮件库、日历库的页面。",
+            "selectionInvalid": "所选数据库不可用（可能已被改动或不再可见），请重新选择。",
+            "envWriteFailed": "配置写入失败，原有配置未改动（详见应用日志）。",
+            "unknown": "授权未完成，原有配置未改动。"
+          },
+          "select": {
+            "title": "选择要使用的数据库",
+            "description": "下面是本次授权能访问到的数据库。各选一个：邮件同步写入邮件库，会议邀请写入日历库。",
+            "emailGroup": "邮件库",
+            "calendarGroup": "日历库",
+            "empty": "没有可用的候选。",
+            "untitled": "（未命名）",
+            "cancel": "取消授权",
+            "confirm": "使用所选数据库",
+            "warnings": "缺少可选字段：{fields}（只影响 AI 分类等可选功能，可以先用）",
+            "reason": {
+              "otherRole": "不是这一类的库（字段签名不匹配）",
+              "missing": "缺少必需字段：{fields}",
+              "unknown": "无法识别用途：字段签名既不匹配邮件库也不匹配日历库"
+            }
+          },
+          "remove": {
+            "button": "从本机移除连接",
+            "title": "从本机移除连接",
+            "description": "将清除本机保存的 Notion Token、邮件库与日历库 ID，以及 workspace 信息；Notion 侧的授权仍然存在，如需彻底撤销请到 Notion 的「设置 → 我的连接」里移除 MailAgent。已同步到 Notion 的邮件不受影响。",
+            "cancel": "取消",
+            "confirm": "移除连接",
+            "done": "已从本机移除连接",
+            "failTitle": "移除失败"
+          }
+        },
+        "disabledNotice": "Notion 未配置：镜像同步 / 项目周报 / 日历同步已停用，邮件仅在本地同步（列表、搜索、AI 分类等本地功能不受影响）。填齐 Token 与邮件数据库 ID 并重启后启用。后补配置只同步新邮件，历史邮件不回填（可用 mailagent email resync 逐封补推）。",
+        "token": {
+          "label": "Notion Token",
+          "helper": "Integration token,以 ntn_ 或 secret_ 开头",
+          "placeholder": "ntn_xxx 或 secret_xxx"
+        },
+        "databaseId": {
+          "label": "邮件数据库 ID",
+          "helper": "Email Inbox 数据库的 UUID"
+        },
+        "calendarDatabaseId": {
+          "label": "日历数据库 ID",
+          "helper": "可选 — 留空则跳过会议邀请同步"
+        }
+      },
+      "mail": {
+        "title": "Mail.app",
+        "userEmail": {
+          "label": "用户邮箱",
+          "helper": "Sidebar 显示头像 / 反向同步 actor 匹配"
+        },
+        "accountName": {
+          "label": "Mail.app 账户名",
+          "helper": "在 Mail.app 偏好设置 → 账户里看到的名字"
+        },
+        "inboxName": {
+          "label": "收件箱名",
+          "helper": "AppleScript 用,默认 收件箱"
+        },
+        "sentName": {
+          "label": "发件箱名",
+          "helper": "AppleScript 用,默认 已发送邮件"
+        }
+      },
+      "source": {
+        "title": "邮件源",
+        "helper": "选择 MailAgent 如何读写你的邮件。切换源需重启后端生效，连接字段也都属于所选源。",
+        "ariaLabel": "邮件源",
+        "applescript": "Mail.app",
+        "davmail": "DavMail",
+        "saveFail": "切换邮件源失败",
+        "pickLabel": "邮件源选择:"
+      },
+      "davmail": {
+        "userEmail": {
+          "label": "IMAP/SMTP 登录名",
+          "helper": "DavMail 用它作 IMAP/SMTP 登录名（= USER_EMAIL）"
+        },
+        "pocMode": {
+          "label": "使用 PoC 默认密钥",
+          "helper": "开启则用内置共享密钥（DAVMAIL_POC_MODE=true）；关闭需手填 cipher key。"
+        },
+        "cipherKey": {
+          "label": "Cipher Key",
+          "helper": "DavMail OAuth cipher 密钥，写入 .env（不进系统钥匙串）。"
+        },
+        "advanced": {
+          "title": "高级连接",
+          "helper": "davmail 桥 host / 端口；默认 127.0.0.1 / 1143 / 1025 / 1080。"
+        },
+        "host": {
+          "label": "DavMail Host",
+          "helper": "davmail 桥监听地址，默认 127.0.0.1。"
+        },
+        "imapPort": {
+          "label": "IMAP 端口",
+          "helper": "默认 1143。"
+        },
+        "smtpPort": {
+          "label": "SMTP 端口",
+          "helper": "默认 1025。"
+        },
+        "caldavPort": {
+          "label": "CalDAV 端口",
+          "helper": "日历同步用，默认 1080。"
+        },
+        "draftsFolder": {
+          "label": "草稿箱文件夹名",
+          "helper": "留空自动探测；仅服务器草稿箱名非标准时才需手填。"
+        },
+        "archiveSent": {
+          "label": "发送后归档到已发送",
+          "helper": "开启后通过 SMTP 发出的邮件会写入已发送文件夹。"
+        },
+        "sentFolder": {
+          "label": "已发送文件夹名",
+          "helper": "留空自动探测；仅在「发送后归档」开启且服务器名非标准时才需手填。"
+        },
+        "draftsSync": {
+          "label": "草稿箱同步",
+          "helper": "把 Exchange 草稿箱同步进本地列表（仅本地，不进 Notion / AI / 飞书）。"
+        },
+        "readReconcile": {
+          "label": "别处已读同步",
+          "helper": "在 Outlook 或网页版 Outlook 里把邮件标为已读后，本地收件箱的未读数会跟着更新（仅收件箱，仅「未读→已读」单向，不影响已读→未读或旗标）。每 5 分钟检查一次，默认关闭。"
+        },
+        "folderSizeLimit": {
+          "label": "IMAP 文件夹视图上限（封）",
+          "helper": "只让 DavMail 在 IMAP 里暴露每个文件夹最近 N 封邮件。大邮箱（超过 1 万封）不限制时，每次同步都要让 DavMail 经 EWS 把整个文件夹枚举一遍——慢到超时，整条同步链停摆。代价：窗口外更早的邮件在 IMAP 层不可见（已同步到本地的历史邮件不受影响，只影响增量同步和标记/归档等写操作能触达的范围）。默认 500；填 0 表示不由 MailAgent 管理这一项。",
+          "status": {
+            "updated": "已写入 DavMail 配置文件（{path} → davmail.folderSizeLimit={desired}）。DavMail 只在启动时读配置，重启 DavMail 桥（pm2 restart davmail-poc）后才生效。",
+            "unchanged": "DavMail 配置文件里已是 {value} 封（{path}），无需改动。",
+            "fileMissing": "未找到 DavMail 配置文件，此设置当前不生效：{path}。请在 .env 配 DAVMAIL_ROOT 指向 DavMail 部署目录，或手动在 davmail.properties 里加一行 davmail.folderSizeLimit={desired}。",
+            "error": "写入 DavMail 配置文件失败，此设置当前可能不生效：{path}（失败原因见后端日志）。",
+            "disabled": "已设为 0：MailAgent 不管理这一项，DavMail 用配置文件里自己的值（当前 {value}）。",
+            "disabledUnset": "已设为 0：MailAgent 不管理这一项，DavMail 配置文件里也没有设置它（大邮箱有停摆风险）。"
+          }
+        }
+      },
+      "calendar": {
+        "helperDavmail": "DavMail 经 CalDAV 把 Exchange 日历同步进本地（端口见上方「高级连接 · CalDAV 端口」）。",
+        "helperApplescript": "Mail.app 经 AppleScript / EventKit 读取本机 Calendar.app。",
+        "reminderLead": {
+          "label": "会前提醒提前量（分钟）",
+          "helper": "日程开始前多少分钟在灵动岛弹提醒卡，默认 10。需启用上方 CalDAV 日历同步和灵动岛；同一场会议只提醒一次。"
+        },
+        "caldav": {
+          "enabled": {
+            "label": "启用 CalDAV 日历同步",
+            "helper": "开启后从 DavMail CalDAV 周期性拉取 Exchange 日历进本地。"
+          },
+          "poll": {
+            "label": "轮询间隔（秒）",
+            "helper": "每隔多少秒检查一次日历变化，默认 60。"
+          },
+          "pastDays": {
+            "label": "过去多少天",
+            "helper": "回溯历史事件窗口，默认 30。"
+          },
+          "futureDays": {
+            "label": "未来多少天",
+            "helper": "向前扩展窗口，默认 180。"
+          }
+        }
+      },
+      "signature": {
+        "title": "邮件签名",
+        "helper": "撰写邮件时点工具栏「签名」按钮，在光标处插入。支持纯文本或 HTML。",
+        "placeholder": "例如：\n<用户姓名>\n<公司或团队名称>",
+        "saved": "签名已保存",
+        "saveFail": "签名保存失败"
+      },
+      "page": {
+        "eyebrow": "ACCOUNTS",
+        "title": "账户",
+        "intro": "Notion 集成凭据与 Mail.app 邮箱账户配置。"
+      }
+    },
+    "sync": {
+      "window": {
+        "title": "同步窗口",
+        "helper": "决定增量同步的起始位置与时间过滤"
+      },
+      "cadence": {
+        "title": "节拍"
+      },
+      "calendar": {
+        "title": "日历同步",
+        "syncMode": {
+          "label": "采集来源",
+          "helper": "AppleScript 走 Calendar.app,EventKit 走原生 framework"
+        },
+        "pastDays": {
+          "label": "过去多少天",
+          "helper": "回溯历史事件用"
+        },
+        "futureDays": {
+          "label": "未来多少天",
+          "helper": "向前扩展窗口"
+        }
+      },
+      "dateMode": {
+        "label": "起始模式",
+        "helper": "相对 — 地板按「今天 − 回溯天数」逐日滚动；固定 — 地板钉在起始日期。早于地板的邮件只存本地，不推 Notion",
+        "fixed": "固定日期",
+        "relative": "相对天数"
+      },
+      "startDate": {
+        "label": "起始日期",
+        "helper": "仅固定模式 — 早于这天的邮件只存本地，不推 Notion"
+      },
+      "lookbackDays": {
+        "label": "回溯天数",
+        "helper": "仅相对模式 — 地板 = 今天向前 N 天，每天滚动前移；早于地板的邮件只存本地，不推 Notion"
+      },
+      "mailboxes": {
+        "label": "监听邮箱",
+        "helper": "逗号分隔; SQLite radar 同步这些邮箱的新邮件",
+        "placeholder": "收件箱,发件箱"
+      },
+      "radarInterval": {
+        "label": "新邮件检测间隔",
+        "helper": "秒 — 检测新邮件频率"
+      },
+      "reverseInterval": {
+        "label": "反向同步间隔",
+        "helper": "秒 — 把 Notion 端改动回写邮箱的轮询间隔"
+      },
+      "page": {
+        "eyebrow": "SYNC",
+        "title": "同步",
+        "intro": "增量同步的时间窗口与轮询节拍。"
+      },
+      "history": {
+        "title": "历史邮件",
+        "helper": "补回安装前或故障期间漏掉的邮件，覆盖收件箱和已发送。本地已有的邮件会跳过，新邮件照常接收。",
+        "notionFloor": "早于 {date} 的邮件只存本地，不推到 Notion。",
+        "since": "起始日期",
+        "until": "结束日期",
+        "start": "开始同步",
+        "cancel": "取消",
+        "cancelling": "正在取消…",
+        "range": "{since} 至 {until}",
+        "status": {
+          "idle": "还没有同步过",
+          "queued": "排队等待",
+          "scanning": "正在扫描邮箱",
+          "syncing": "正在同步",
+          "done": "同步完成",
+          "partial": "部分邮件同步失败",
+          "failed": "同步失败",
+          "incomplete": "只覆盖到 {date}",
+          "cancelled": "已取消"
+        },
+        "progress": "已处理 {done} / {total}",
+        "eta": "预计还需约 {minutes} 分钟",
+        "etaUnderMinute": "预计不到 1 分钟",
+        "summary": {
+          "scanned": "扫描到",
+          "existing": "已有，跳过",
+          "added": "新增",
+          "notionSynced": "推到 Notion",
+          "localOnly": "只存本地",
+          "failed": "失败"
+        },
+        "incompleteHint": "邮箱视图只保留到 {date}，更早的邮件没有扫描到。",
+        "error": "原因：{message}",
+        "startError": "无法开始同步",
+        "cancelError": "无法取消同步",
+        "loadError": "读取历史邮件同步状态失败",
+        "validation": {
+          "required": "请选择起始日期和结束日期",
+          "order": "起始日期不能晚于结束日期",
+          "future": "结束日期不能晚于今天",
+          "span": "范围最长 {days} 天"
+        },
+        "unsupported": {
+          "backend_applescript": "当前使用 AppleScript 后端，这里不能同步历史邮件。请用「mailagent init」导入。",
+          "generic": "当前邮件后端不支持同步历史邮件。"
+        }
+      }
+    },
+    "ai": {
+      "title": "本地 LLM Agent",
+      "helper": "邮件 AI 分类 / 优先级由本地 LLM 接管(取代 Notion Email Agent); 下方网关 / 密钥同时是 Agents 页报告(日 / 周 / 月报)的 LLM 来源",
+      "enabled": {
+        "label": "启用本地 LLM",
+        "helper": "需先在 Notion 端暂停 Email Agent 或加 Status 过滤"
+      },
+      "apiBase": {
+        "label": "网关 base URL",
+        "helper": "Anthropic Messages 兼容端点,默认 https://crs.chenge.ink/api"
+      },
+      "apiKey": {
+        "label": "LLM API Key",
+        "helper": "双写 keychain + .env,翻译 / chat / 邮件分类 / 报告 Agent 共用"
+      },
+      "enabledModels": {
+        "label": "启用模型列表",
+        "helper": "勾选后三处模型选项（chat picker / 报告 agent / 主备模型下拉）同步显示已启用集合；未配置时自动 fallback 到默认四模型。",
+        "refresh": "刷新模型列表",
+        "refreshing": "刷新中…",
+        "loading": "加载中…",
+        "noModels": "未拉取到模型列表，请检查 API Base / Key 后刷新。",
+        "allDefault": "全部默认",
+        "countEnabled": "已启用 {count} 个模型",
+        "saved": "启用模型列表已更新",
+        "saveFailed": "保存失败",
+        "notEnabled": "（未启用）"
+      },
+      "model": {
+        "label": "全局默认模型",
+        "helper": "Chat 对话与未单独设模型的后台 AI 任务默认使用（需重启）；邮件预处理模型在团队页的预处理配置页单独配置"
+      },
+      "translate": {
+        "title": "邮件翻译",
+        "helper": "Electron 主进程翻译流水线;独立 gateway/key/model + 双语对照",
+        "overrideToggle": "使用独立翻译网关覆盖（高级）"
+      },
+      "translateBaseUrl": {
+        "label": "翻译网关 URL",
+        "helper": "留空 = 跟随主 LLM 网关; 可独立指向更快的翻译专用端点",
+        "placeholder": "留空跟随主网关"
+      },
+      "translateApiKey": {
+        "label": "翻译 API Key",
+        "helper": "留空 = 跟随主 LLM API Key; 双写 keychain + .env 独立计费/限额时设置"
+      },
+      "translateModel": {
+        "label": "翻译模型",
+        "helper": "邮件正文翻译专用; 默认 Haiku (~3-5× 比 Sonnet 快, 翻译质量足够)",
+        "notInList": "（不在列表）",
+        "refresh": "刷新模型列表",
+        "refreshing": "刷新中…",
+        "refreshHelper": "从翻译 provider 拉取最新模型列表"
+      },
+      "fallbacks": {
+        "label": "Fallback 链",
+        "helper": "主模型失败时的全局兜底链；邮件预处理可在团队页的预处理配置页单独设置（默认跟随全局）",
+        "none": "（不设备模型）"
+      },
+      "autoTitle": {
+        "title": "会话自动标题",
+        "helper": "为通用 Agent 会话自动生成标题；关闭时用首条消息摘要作标题。",
+        "enabledLabel": "AI 自动标题",
+        "enabledHelper": "开启后首轮对话结束，用所选模型生成标题并写入；手动改名始终优先保留。",
+        "modelLabel": "标题模型",
+        "modelHelper": "生成标题用的模型，建议用快速便宜的小模型（如 haiku）。"
+      },
+      "autoCompact": {
+        "title": "自动压缩上下文",
+        "helper": "控制互动对话的自动 Compact；手动 /compact 始终保留。",
+        "enabledLabel": "接近上限时自动压缩",
+        "enabledHelper": "80% 提醒，90% 在当前回复结束后自动压缩；模型窗口未知时绝不自动触发。"
+      },
+      "approval": {
+        "title": "Agent 操作审批",
+        "helper": "Agent 执行写操作前是否需要逐个确认。发送邮件始终需要确认（除非收件人全部在白名单内）。",
+        "autoReversibleLabel": "可逆操作免确认",
+        "autoReversibleHelper": "开启后，未单独设档的可逆操作（preview 档）直接执行，无需确认卡片；下方按工具设的「必须确认」优先于本开关。",
+        "managedByMode": "当前授权模式为「{mode}」（对话框左下角可切换），已接管审批放行；切回「手动授权」后此开关生效。",
+        "modeUnknown": "无法读取当前授权模式（后端暂不可达，聚焦窗口时自动重试）；确认为「手动授权」后此开关生效。"
+      },
+      "toolPrefs": {
+        "title": "工具审批档",
+        "helper": "按工具决定 AI 调用时直接执行、先弹卡确认、还是完全禁用。默认档来自出厂推荐（高频可逆操作默认直接执行）；只作用于你亲自在场的对话，定时 Agent 与飞书对话不受影响。",
+        "loadError": "无法读取工具审批档：{message}",
+        "retry": "重试",
+        "tier": {
+          "label": "审批档",
+          "auto": "直接执行",
+          "ask": "先确认",
+          "deny": "禁用"
+        },
+        "effective": {
+          "auto": "直接执行",
+          "ask": "调用前弹卡确认",
+          "deny": "已禁用（模型不可见）"
+        },
+        "followDefault": "跟随默认",
+        "clearOverride": "回默认",
+        "fixedAsk": "恒需确认",
+        "fixedAskTip": "该工具的审批形状固定：发送走收件人白名单、本地命令走自动化策略白名单、Skill 安装与 Agent 改动恒弹卡。",
+        "danger": "危险",
+        "dangerConfirmTitle": "把「{tool}」设为直接执行？",
+        "dangerConfirmBody": "该操作不可逆或会把数据交给外部服务，设为直接执行后 AI 调用时不再弹卡。此确认只出现这一次。",
+        "confirm": "确认",
+        "cancel": "取消",
+        "group": {
+          "email_write": "邮件操作",
+          "draft": "草稿",
+          "web": "联网",
+          "calendar": "日历",
+          "matters": "事项",
+          "contacts": "通讯录",
+          "capability": "身份与技能",
+          "supply": "Skill 供应链",
+          "agents": "Agent 配置",
+          "exec": "本地文件与命令",
+          "outbound": "外发与外呼",
+          "library": "资料库"
+        },
+        "bulk": {
+          "label": "批量",
+          "auto": "全部直接执行",
+          "ask": "全部先确认",
+          "deny": "全部禁用",
+          "clear": "全部回默认"
+        },
+        "bulkDone": "已更新 {count} 个工具",
+        "preset": "编辑放行预设",
+        "presetTip": "一键把可逆编辑 / 草稿 / 联网 / 文件读写等 15 个工具设为直接执行（原「编辑放行」模式的降级归宿）。",
+        "presetDone": "已套用编辑放行预设（{count} 个工具）",
+        "reset": "全部重置",
+        "resetDone": "已清除 {count} 个覆盖，全部工具回出厂默认",
+        "saveFailed": "工具审批档保存失败",
+        "sendWhitelist": {
+          "label": "发送白名单",
+          "helper": "email_prepare_send 唯一的免卡形状：收件人全部命中白名单（完整邮箱或 @域名，逗号/换行分隔）时不弹卡；留空 = 发送恒需确认。",
+          "placeholder": "a@corp.test, @corp.test",
+          "save": "保存",
+          "saved": "发送白名单已保存（{count} 条）",
+          "saveFailed": "发送白名单保存失败：{message}"
+        }
+      },
+      "cache": {
+        "title": "Prompt 缓存",
+        "helper": "Sonnet 4.6 ≥ 2048 token 时自动命中; OpenAI 协议无缓存",
+        "enabled": {
+          "label": "启用 prompt cache",
+          "helper": "命中节省 ~90% input cost; 关闭 = 调试用"
+        },
+        "ttl": {
+          "label": "缓存 TTL",
+          "helper": "1h 需 extended-cache-ttl beta header,客户端已自动带",
+          "5m": "5 分钟",
+          "1h": "1 小时"
+        }
+      },
+      "testGateway": {
+        "label": "网关健康检查",
+        "helper": "不烧 token,只 ping /v1/messages",
+        "button": "测试连接",
+        "running": "测试中…",
+        "ok": "LLM 网关健康",
+        "fail": "LLM 网关不可达"
+      },
+      "notionAgent": {
+        "cliMissing": "未找到 notion-agent 命令行工具",
+        "needsAuth": "notion-agent 尚未认证(缺少 token_v2)",
+        "account": "账号",
+        "workspace": "工作区 {space}",
+        "agent": "绑定 Agent",
+        "agentHelper": "主 Agent（个人 persona）+ 工作区 Custom Agent，切换即写入 account.json",
+        "agentPlaceholder": "选择 Agent",
+        "primaryTag": "主 Agent",
+        "instructionPage": "Instruction Page",
+        "instructionPageHelper": "当前绑定 agent 的指令页 ID（切换后自动更新）",
+        "model": "默认模型",
+        "modelHelper": "chat 未指定模型时使用",
+        "modelPlaceholder": "选择模型",
+        "doctor": {
+          "label": "连接检查",
+          "helper": "运行 notion-agent doctor 验证账号与 token",
+          "button": "检查",
+          "running": "检查中",
+          "fail": "doctor 检查失败"
+        },
+        "toast": {
+          "agentSet": "已切换绑定 Agent",
+          "modelSet": "已设默认模型",
+          "fail": "操作失败"
+        }
+      },
+      "page": {
+        "eyebrow": "AI AGENT",
+        "title": "AI Agent",
+        "intro": "本地 LLM 网关、模型路由、prompt 配置与邮件翻译。"
+      }
+    },
+    "notifications": {
+      "desktop": {
+        "title": "macOS 系统权限与常驻",
+        "helper": "首次使用系统横幅需在 macOS 授予通知权限；若需直接显示通知按钮，请在系统设置选「提示」样式。",
+        "statusLabel": "系统通知权限与支持",
+        "supported": "系统通知可用",
+        "unsupported": "当前环境不支持桌面横幅",
+        "authUnknown": "尚未验证系统通知权限 — 点击右侧按钮可唤起 macOS 授权弹窗",
+        "authPrompted": "已发起系统权限请求（若未见横幅，请点击「打开系统设置」检查开关与样式）",
+        "authDelivered": "macOS 系统通知已验证送达",
+        "alertStyleHint": "建议在「系统设置 → 通知 → MailAgent」将提醒样式设为「提示」，即可直接在横幅右侧展开快捷操作按钮。",
+        "testBtn": "发送测试通知",
+        "requestPermBtn": "申请权限并测试横幅",
+        "openSystemSettingsBtn": "打开系统设置",
+        "testOk": "测试通知已发送",
+        "testPrompted": "已向 macOS 请求系统通知权限，请在系统弹窗中点击「允许」",
+        "testFailed": "测试通知发送失败",
+        "openSettingsFailed": "无法打开系统通知设置",
+        "trayLabel": "启用菜单栏常驻图标（Menu Bar）",
+        "trayHelper": "点击顶部菜单栏图标快速查看待回复邮件、未读提醒、日程与 AI 速记。",
+        "dockBadgeLabel": "同步 Dock 未读角标",
+        "dockBadgeHelper": "在程序坞应用图标右上角展示通知中心未读总数。",
+        "matrixTitle": "分类通知策略",
+        "matrixHelper": "仅铃铛模式仍会在 critical 紧急级别时弹出系统横幅。",
+        "modes": {
+          "banner": "系统横幅 + 铃铛",
+          "center_only": "仅铃铛（仅紧急弹窗）",
+          "off": "仅铃铛不弹窗"
+        },
+        "categories": {
+          "action_required": "待办与审批（紧急邮件 / 会议提醒 / 操作确认）",
+          "reviews": "重要邮件与审阅建议",
+          "results": "任务执行与报告结果",
+          "system": "系统维护与服务告警"
+        },
+        "saveFailed": "桌面通知设置保存失败"
+      },
+      "channels": {
+        "title": "分场景通知渠道与防重复",
+        "helper": "按场景按需选择提醒渠道（不必全渠道轰炸），仅开启真正需要即时打断你的入口。",
+        "suppressFocusedLabel": "应用在前台聚焦时不重复弹系统横幅",
+        "suppressFocusedHelper": "正在使用 MailAgent 主窗口时，跳过非故障类 macOS 桌面弹窗。",
+        "skipFeishuLabel": "飞书已推送同封邮件时跳过桌面横幅",
+        "skipFeishuHelper": "优先保持飞书与桌面通知单通道送达，减少同一封邮件双端连响。",
+        "deliveryOptions": {
+          "both": "macOS 系统通知 + 应用内铃铛",
+          "system_only": "仅 macOS 系统通知（不增铃铛未读）",
+          "center_only": "仅应用内铃铛与 Menu Bar",
+          "off": "关闭此类提醒"
+        },
+        "mailTitle": "邮件通知",
+        "mailHelper": "由本地 AI 分类识别为紧急或重要且需行动的新邮件触发。",
+        "mailScopeLabel": "系统横幅触发范围",
+        "mailScopeUrgentAndImportant": "🔴 紧急 + 🟡 重要需行动（推荐）",
+        "mailScopeUrgentOnly": "仅 🔴 紧急需行动邮件",
+        "mailActionsLabel": "在邮件通知附带快捷动作按钮",
+        "mailActionsHelper": "支持直接「AI 拟稿 / 跟进」或在铃铛/横幅一键「1小时后提醒」。",
+        "meetingTitle": "会议提醒与会前准备预设",
+        "meetingHelper": "会议开始前自动弹出提醒，可一键入会或直达会议详情并唤起右侧 AI 侧边栏。",
+        "meetingLeadLabel": "提前提醒时间",
+        "meetingLeadMinutes": "提前 {count} 分钟",
+        "meetingActionsLabel": "附带会议快捷按钮（一键入会 / AI 跟进）",
+        "meetingActionsHelper": "检测到会议链接时直接拉起客户端，或打开该场日程并展开右侧 AI 助理。",
+        "meetingPrepLabel": "启用「会前准备」AI 预设",
+        "meetingPrepHelper": "让每个会议通知自带准备简报入口，支持按需实时生成或会前自动静默完成。",
+        "meetingPrepModeLabel": "会前准备执行方式",
+        "meetingPrepOnDemand": "按需触发（通知带「立即会前准备」按钮，省额度）",
+        "meetingPrepAutoBefore": "会前自动静默跑好（通知按钮变为「查看会前准备」）",
+        "meetingPrepLeadLabel": "自动准备提前量",
+        "backgroundTitle": "后台任务与系统告警",
+        "backgroundHelper": "控制自定义 Agent、报告执行结果与服务监控告警的提醒去向。",
+        "agentResultsLabel": "后台 Agent 与报告完成结果",
+        "systemAlertsLabel": "系统健康与 DavMail 服务告警",
+        "saveFailed": "通知偏好保存失败"
+      },
+      "feishu": {
+        "title": "飞书应用机器人",
+        "helper": "重要邮件推送 + 交互回复按钮 → Openclaw",
+        "enabled": {
+          "label": "启用飞书通知",
+          "helper": "需配置 App ID + Secret + Chat ID"
+        },
+        "appId": {
+          "label": "App ID",
+          "helper": "飞书开发者后台 → 凭证与基础信息"
+        },
+        "appSecret": {
+          "label": "App Secret",
+          "helper": "保存到 .env,Python 启动时读"
+        },
+        "chatId": {
+          "label": "Chat ID",
+          "helper": "目标群聊或个人 chat_id"
+        }
+      },
+      "alert": {
+        "title": "飞书告警机器人",
+        "helper": "服务异常 / dead_letter 累积 / 雷达不可用时告警",
+        "enabled": {
+          "label": "启用告警",
+          "helper": "走自定义机器人 webhook,跟应用机器人独立"
+        },
+        "webhookUrl": {
+          "label": "Webhook URL",
+          "helper": "飞书群机器人 webhook 地址"
+        },
+        "webhookSecret": {
+          "label": "签名密钥",
+          "helper": "可选 — 配置后请求体签名校验"
+        },
+        "levels": {
+          "label": "告警级别",
+          "helper": "逗号分隔: critical, error, warning, info"
+        }
+      },
+      "matters": {
+        "title": "事项通知",
+        "helper": "控制本机原生通知的事项信号范围。",
+        "level": "通知级别",
+        "high": "高价值（默认）",
+        "all": "全部",
+        "off": "关闭",
+        "saved": "事项通知设置已保存",
+        "failed": "事项通知设置保存失败"
+      },
+      "page": {
+        "eyebrow": "NOTIFICATIONS",
+        "title": "通知",
+        "intro": "飞书应用机器人推送重要邮件 · 告警机器人推送服务异常。"
+      }
+    },
+    "integrations": {
+      "attachments": {
+        "title": "附件处理",
+        "helper": "让附件里的文字能被搜索到。全部在本机完成，不联网。"
+      },
+      "ocr": {
+        "label": "图片与扫描件文字识别（OCR）",
+        "helper": "识别图片附件和扫描版 PDF 里的中英文字，让它们能被全文搜索到。使用 macOS 内置的本地识别（Vision），内容不会离开这台电脑、不联网。关闭后图片和扫描件将无法被搜索。默认开启。"
+      },
+      "stats": {
+        "title": "运行统计上报",
+        "helper": "定期把 sync / reverse / handlers 计数上报到看板",
+        "url": {
+          "label": "看板 URL",
+          "helper": "POST /api/stats/report 端点"
+        },
+        "token": {
+          "label": "上报 token",
+          "helper": "Bearer 认证;为空 → 仅在 webhook-server 端禁认证时可用"
+        }
+      },
+      "dashboard": {
+        "password": {
+          "label": "看板登录密码",
+          "helper": "webhook-server /dashboard 登录页;为空则禁用看板"
+        }
+      },
+      "cli": {
+        "title": "CLI 鉴权",
+        "helper": "外部 agent 调写命令的 API key",
+        "apiKey": {
+          "label": "MAILAGENT_CLI_API_KEY",
+          "helper": "双写 keychain + .env,main 进程和 Python CLI 共用"
+        }
+      },
+      "page": {
+        "eyebrow": "INTEGRATIONS",
+        "title": "集成",
+        "intro": "项目周报同步、Office 文档转换、看板上报与 CLI 鉴权。"
+      },
+      "kos": {
+        "title": "知识大脑 (KOS)",
+        "helper": "KOS 让 AI 在对话中跨邮件 / 产品知识检索、召回历史事实、找专家。需对接一套自部署的 gbrain 知识库服务：去 ",
+        "helperSuffix": " 部署服务并申请 OAuth 凭据，填入下方。未对接（凭据缺失）时对话 AI 查不到知识大脑，调用会返回未配置错误。",
+        "enabled": {
+          "label": "启用 KOS 工具",
+          "helper": "开启后，对话 AI 可调用 kos_query / kos_search / kos_get_page / kos_find_experts 等知识大脑读工具（需下方凭据齐全）。"
+        },
+        "endpoint": {
+          "label": "KOS 服务地址",
+          "helper": "gbrain 服务的 MCP endpoint，例如 https://kos.example.com。"
+        },
+        "clientId": {
+          "label": "OAuth Client ID",
+          "helper": "gbrain 颁发的客户端 ID（gbrain_cl_ 前缀）。"
+        },
+        "clientSecret": {
+          "label": "OAuth Client Secret",
+          "helper": "gbrain 颁发的客户端密钥（gbrain_cs_ 前缀），仅本机 .env 存储，不回传界面。"
+        },
+        "advanced": {
+          "label": "高级"
+        },
+        "ingest": {
+          "label": "推送邮件入库",
+          "helper": "邮件同步完成后异步推送进 KOS（producer），供日后检索。默认关。"
+        },
+        "priorityFloor": {
+          "label": "入库重要度门槛",
+          "helper": "只把 AI 判定重要度不低于这一档的邮件推进知识库，挡住广告、系统通知等低价值邮件。注意：AI 从未分类过的邮件会被当作「普通」看待——要把它们也挡掉，请开启下方「仅推送已标注的邮件」。",
+          "critical": "Critical（仅最高优先级）",
+          "urgent": "Urgent 及以上",
+          "important": "Important 及以上",
+          "normal": "Normal 及以上（默认）",
+          "low": "Low 及以上（全部推送）",
+          "placeholder": "Normal 及以上（默认）"
+        },
+        "requireLabeled": {
+          "label": "仅推送已标注的邮件",
+          "helper": "关闭（默认）时，AI 从未分类过的邮件——包括你启用 AI 分类之前的全部历史邮件——都会被当作「普通」放行入库。开启后只推 AI 明确判定过优先级的邮件；未标注的会被跳过（不是丢弃，日后补跑分类会重新入库）。前置条件：依赖「AI 邮件预处理」在跑，否则不会有任何邮件被标注。",
+          "deadlockWarning": "「AI 邮件预处理」当前是关闭的——没有任何邮件会被标注优先级，这个开关会让入库完全停止（不会报错，只是静默推不进去）。请先到 Agents 页开启 AI 邮件预处理，或关闭本开关。",
+          "goToAgents": "前往 Agents 页开启 →"
+        },
+        "bulkClientId": {
+          "label": "入库 Client ID",
+          "helper": "推送入库用的客户端 ID（gbrain_cl_ 前缀）。与上方对话读取用的 OAuth Client ID 是两套凭据，缺它则邮件推不进知识库。"
+        },
+        "bulkClientSecret": {
+          "label": "入库 Client Secret",
+          "helper": "推送入库用的客户端密钥（gbrain_cs_ 前缀），仅本机 .env 存储，不回传界面。"
+        },
+        "l1": {
+          "label": "发件人热记忆预取",
+          "helper": "对话开始时按发件人预取 KOS 摘要注入系统提示，让 AI 更懂上下文。默认关。"
+        },
+        "timeDecay": {
+          "label": "时间衰减重排",
+          "helper": "kos_query 命中结果按 14 天半衰期做时间衰减重排（更偏好近期）。默认开。"
+        },
+        "gateWarning": "KOS 已启用但凭据未配齐 —— 对话 AI 不会被告知有知识大脑可查，调用也会直接失败。补全上方凭据后可用「连接检查」验证。",
+        "doctor": {
+          "label": "连接检查",
+          "helper": "分步验证：凭据配置 → 服务可达 → OAuth token → 真实调用。",
+          "button": "检查",
+          "running": "检查中",
+          "fail": "KOS 连接检查失败"
+        }
+      }
+    },
+    "realtime": {
+      "label": "实时事件",
+      "hint": "SSE 推送连接状态; 断线后下方轮询周期作为兜底。",
+      "connected": "已连接 · 实时同步",
+      "connecting": "连接中…",
+      "reconnecting": "重连中…",
+      "disconnected": "已断开 · 走 fallback 轮询",
+      "disabled": "已禁用",
+      "idle": "等待启动",
+      "reconnect": "立即重连",
+      "reconnectRequested": "已请求重连",
+      "reconnectFailed": "重连失败",
+      "sse": {
+        "title": "SSE 实时连接",
+        "helper": "主进程 events_bridge 持有本机 9200 长连接",
+        "enabled": {
+          "label": "启用 SSE server",
+          "helper": "关掉 → 渲染层只能轮询(retro 模式)"
+        }
+      },
+      "redis": {
+        "title": "Redis 事件源",
+        "helper": "Notion webhook → Redis 队列 → 反向同步",
+        "enabled": {
+          "label": "启用 Redis 消费",
+          "helper": "需配置 REDIS_URL"
+        },
+        "url": {
+          "label": "Redis URL",
+          "helper": "redis://host:port[?db=N]"
+        }
+      },
+      "body": {
+        "title": "正文双写",
+        "helper": "Sprint 14 v4 SSoT — 新邮件同时落 SQLite + Notion",
+        "dualWrite": {
+          "label": "启用双写",
+          "helper": "关掉 → 仅 Notion 单源,LLM / 重传性能下降 100x"
+        }
+      },
+      "page": {
+        "eyebrow": "REALTIME & STORAGE",
+        "title": "实时与存储",
+        "intro": "SSE 事件总线、Redis 队列与附件 / SQLite 本地存储路径。"
+      }
+    },
+    "keepAlive": {
+      "title": "防休眠保活",
+      "helper": "同步依赖这台 Mac 保持运行；合盖或休眠期间不会同步新邮件。仅在邮件源为 Mail.app 时有意义——DavMail 模式下后端会自动忽略此设置（无需保持前台会话）。",
+      "enabled": {
+        "label": "阻止 Mac 自动休眠",
+        "helper": "开启后同步服务运行期间阻止系统休眠，保证邮件持续同步。默认关闭（遵循系统节能设置）。"
+      },
+      "dim": {
+        "label": "保活时调暗屏幕",
+        "helper": "阻止休眠的同时把屏幕亮度调低省电。默认开启；仅在上方保活开启时生效。"
+      }
+    },
+    "aiMemory": {
+      "title": "AI 记忆",
+      "desc": "AI 会把对话中你的持久偏好与事实（如「回复邮件永远用中文」）整理进一份本机记忆文件，让之后的对话不用重复交代。记忆只存在这台电脑上。",
+      "capture": {
+        "label": "自动记住对话中的偏好",
+        "helper": "每轮对话结束后在后台提取值得长期记住的信息并合并进记忆。关闭后 AI 不再从对话中学到任何新东西（已有记忆保留，可在下方身份文档中查看或编辑）。默认开启。"
+      },
+      "retrieval": {
+        "label": "对话中使用已有记忆",
+        "helper": "每轮对话把记忆内容提供给 AI 作背景。关闭后 AI 立即「失忆」——不再参考任何已记住的偏好（记忆文件本身不删除）。保存即生效。默认开启。"
+      }
+    },
+    "remote": {
+      "page": {
+        "eyebrow": "REMOTE ACCESS",
+        "title": "远程访问",
+        "intro": "通过 Cloudflare Access 在外网安全访问邮件 Web 界面。serve-api 仅监听 127.0.0.1，由 Cloudflare 隧道转发并强制零信任鉴权。"
+      },
+      "gate": {
+        "title": "远程访问",
+        "helper": "开启后 serve-api 随应用启动，监听本机回环端口；关闭则不暴露任何远程能力。"
+      },
+      "enabled": {
+        "label": "启用远程访问 (serve-api)",
+        "helper": "默认开启 · 仅 bind 127.0.0.1，无 Cloudflare 隧道时外网不可达"
+      },
+      "cf": {
+        "title": "Cloudflare Access",
+        "helper": "serve-api 在每个请求上校验 Cloudflare Access 签发的 JWT；Audience 留空进程将拒绝启动。"
+      },
+      "audience": {
+        "label": "Application Audience Tag",
+        "helper": "Cloudflare Zero Trust → Access → 你的应用 → Overview 的 Audience (AUD) 标签",
+        "placeholder": "e.g. 6f1d…（必填）"
+      },
+      "teamDomain": {
+        "label": "团队域名",
+        "helper": "xxx.cloudflareaccess.com — 用于拉取 JWKS 公钥验签"
+      },
+      "api": {
+        "title": "本地 API",
+        "helper": "端口与放行邮箱。cloudflared 隧道应指向此回环端口。"
+      },
+      "port": {
+        "label": "本地 API 端口",
+        "helper": "默认 8200，bind 127.0.0.1。改成被占用端口会导致 serve-api 启动失败。"
+      },
+      "allowedEmail": {
+        "label": "允许访问的邮箱",
+        "helper": "只有该邮箱通过 Cloudflare Access 才放行；留空则回退为 USER_EMAIL。"
+      },
+      "statusSection": {
+        "title": "状态与访问",
+        "helper": "改完上面任意配置后，需要重启 serve-api 才会生效。"
+      },
+      "warnAudience": {
+        "label": "缺少 Audience",
+        "hint": "远程访问已开启但 Application Audience Tag 为空，serve-api 会拒绝启动。请在上方 Cloudflare Access 填入 Audience。",
+        "tag": "必填"
+      },
+      "status": {
+        "label": "后端进程",
+        "hint": "serve-api 随后端进程一同托管；下方为后端在线状态。",
+        "refresh": "刷新状态",
+        "idle": "未启用",
+        "loading": "检测中…",
+        "online": "运行中",
+        "stopped": "已停止",
+        "errored": "异常",
+        "unknown": "未知"
+      },
+      "restart": {
+        "label": "应用配置",
+        "hint": "重启会顺带中断当前同步批次几秒，随后用新配置拉起 serve-api。",
+        "cta": "重启 serve-api",
+        "busy": "重启中…",
+        "requested": "已触发重启",
+        "failed": "重启失败",
+        "pm2NotFound": "未找到 pm2"
+      },
+      "url": {
+        "localLabel": "本地地址",
+        "localHint": "在本机浏览器直接打开（不经 Cloudflare）",
+        "teamLabel": "Cloudflare 团队域名",
+        "teamHint": "打开 Zero Trust 应用列表确认 Access 策略",
+        "emailLabel": "当前放行邮箱",
+        "emailHint": "通过 Cloudflare Access 鉴权的允许邮箱",
+        "emailFallback": "(默认 USER_EMAIL)",
+        "open": "在浏览器打开",
+        "copy": "复制"
+      },
+      "runbook": {
+        "label": "公网访问 (隧道)",
+        "hint": "公网 URL 形如 https://你的域名/app，由你自管的 cloudflared 隧道把 hostname 指向上面的本地端口。cloudflared 需你自行用 pm2 / launchd 托管，不在本应用生命周期内。",
+        "tag": "自管"
+      }
+    },
+    "mcp": {
+      "page": {
+        "eyebrow": "MCP SERVER",
+        "title": "MCP 服务",
+        "intro": "让外部 Agent（如 Notion Custom Agent、Claude Code）通过 MCP 协议读取邮件、日历、报告等内容。每个外部 Agent 用一个单独的访问密钥，权限按密钥分配。"
+      },
+      "connection": {
+        "title": "连接地址",
+        "helper": "外部 Agent 连接的地址。Notion 等云端服务只能连公网 HTTPS 地址。"
+      },
+      "status": {
+        "label": "状态",
+        "running": "运行中 · {count} 个可用密钥"
+      },
+      "localUrl": {
+        "label": "本机 Streamable HTTP 地址",
+        "hint": "标准 /mcp 端点（支持无状态 POST 与有状态 Session/SSE），供 Claude Code、Cursor 等本机客户端连接",
+        "copy": "复制本机 Streamable HTTP 地址"
+      },
+      "sseUrl": {
+        "label": "本机 HTTP+SSE 地址",
+        "hint": "Legacy HTTP+SSE 端点（/mcp/sse），供仅支持旧版 SSE 传输的外部客户端连接",
+        "copy": "复制本机 SSE 地址"
+      },
+      "publicUrl": {
+        "label": "公网地址",
+        "hint": "填写经 Cloudflare 隧道转发到本机的地址，例如 https://mcp.example.com/mcp。这个主机名不能挂 Cloudflare Access。",
+        "save": "保存",
+        "probe": "检测",
+        "saved": "已保存公网地址",
+        "saveFailed": "保存公网地址失败",
+        "errors": {
+          "invalid": "不是有效的网址",
+          "notHttps": "必须以 https:// 开头",
+          "loopback": "不能用 localhost、127.0.0.1 这类本机地址，请填公网主机名",
+          "path": "路径必须以 /mcp 结尾，例如 https://mcp.example.com/mcp"
+        }
+      },
+      "probe": {
+        "reachable": "可以访问",
+        "access_blocked": "被 Cloudflare Access 拦截，请去掉该主机名的 Access 应用",
+        "unreachable": "无法访问（{detail}）"
+      },
+      "guide": {
+        "toggle": "如何获得公网地址",
+        "intro": "Notion 等云端 Agent 只能访问公网 HTTPS 地址，必须配置公网地址；Claude Code、Cursor 等本机客户端可以直接用本机地址。",
+        "recommend": "推荐用 Cloudflare Zero Trust Tunnel 把本机地址转发到公网。",
+        "docsLink": "查看 Cloudflare 文档",
+        "step1": "在 Cloudflare Zero Trust → Networks → Tunnels 新建或选一条隧道，在本机安装并运行 cloudflared。",
+        "step2": "给隧道加 Public Hostname：子域名自定（例如 mcp），Path 填 ^/mcp$，Service 填 http://localhost:{port}。",
+        "step3": "不要给这个主机名建 Cloudflare Access 应用，否则请求会被拦到登录页。",
+        "step4": "把 https://{host}/mcp 填到上面的公网地址，点「检测」。",
+        "hostPlaceholder": "你的主机名",
+        "copyForAgent": "复制给 Agent",
+        "agentTask": "请帮我用 Cloudflare Tunnel 把这台 Mac 上的 MailAgent MCP 服务暴露到公网。\n\n目标：把 http://localhost:{port}/mcp 通过 Cloudflare Tunnel 暴露成 https://{host}/mcp。\n\n步骤：\n1. 在 Cloudflare Zero Trust → Networks → Tunnels 新建或选一条隧道，在这台 Mac 上安装并运行 cloudflared。\n2. 给隧道加 Public Hostname：子域名自定（例如 mcp），Path 填 ^/mcp$，Service 填 http://localhost:{port}。\n3. 不要给这个主机名建 Cloudflare Access 应用，否则请求会被拦到登录页。\n4. 完成后告诉我最终地址 https://{host}/mcp，我会把它填到 MailAgent 设置 → MCP 服务的「公网地址」，再点「检测」。\n\n约束：\n- 只放行 /mcp 这一个路径，本机 API 的其他路径不要暴露。\n- 不要给这个主机名加 Cloudflare Access。\n- cloudflared 需要常驻运行，可以用 launchd 或 pm2 托管。\n\n验收：\n- curl -i https://{host}/mcp 应返回 405，并带响应头 Allow: POST。\n- 如果返回 302 并跳到 cloudflareaccess.com，说明被 Access 拦了，需要去掉这个主机名的 Access 应用。"
+      },
+      "offline": {
+        "label": "MCP 服务未运行",
+        "hint": "MCP 服务由本机 API 服务提供。请在「远程访问」里开启它，并确认后端在运行。",
+        "cta": "去远程访问"
+      },
+      "keys": {
+        "title": "访问密钥",
+        "helper": "外部 Agent 用密钥访问 MailAgent。建议每个 Agent 单独建一个，不用时撤销。",
+        "create": "新建密钥",
+        "empty": "还没有密钥",
+        "emptyHint": "新建一个密钥后，就能把它填进外部 Agent 的配置里。",
+        "createdAt": "创建于 {time}",
+        "lastUsedAt": "最近使用 {time}",
+        "neverUsed": "从未使用",
+        "expiresAt": "有效期至 {time}",
+        "writeRpmBadge": "写限流 {limit}/分",
+        "disabledToolsBadge": "已禁用 {count} 个工具",
+        "rotate": "轮换",
+        "revoke": "撤销",
+        "revoked": "已撤销「{label}」",
+        "rotateFailed": "轮换密钥失败",
+        "revokeFailed": "撤销密钥失败",
+        "createFailed": "新建密钥失败",
+        "editScopes": "修改权限",
+        "scopesUpdated": "已更新「{label}」的权限",
+        "updateScopesFailed": "修改权限失败",
+        "customScopes": "权限：{scopes}。这个密钥由命令行创建，权限组合无法在这里修改。",
+        "state": {
+          "revoked": "已撤销",
+          "expired": "已过期"
+        }
+      },
+      "presets": {
+        "readonly": {
+          "label": "只读",
+          "desc": "可以查看邮件、附件、日历、报告、通讯录、资料库、事项和自定义 Agent，不能修改任何内容。"
+        },
+        "handoff": {
+          "label": "只读 + 运行",
+          "desc": "在只读基础上，还可以生成报告、手动运行自定义 Agent。运行会消耗模型额度。"
+        },
+        "custom": "自定义"
+      },
+      "create": {
+        "title": "新建访问密钥",
+        "desc": "给密钥起个名字，方便以后认出是哪个 Agent 在用。",
+        "nameLabel": "名称",
+        "namePlaceholder": "例如 Notion Agent",
+        "baseLabel": "基础权限",
+        "extraLabel": "额外写权限",
+        "submit": "新建"
+      },
+      "editScopes": {
+        "title": "修改「{label}」的权限",
+        "desc": "保存后立即生效。密钥本身不变，已配置的客户端不用更换。",
+        "submit": "保存"
+      },
+      "policy": {
+        "advancedToggle": "高级权限细分与限流 / 禁用工具",
+        "scopeModeLabel": "权限粒度",
+        "usePresetMode": "切回基础档",
+        "useGranularMode": "逐项细选权限",
+        "readScopesLabel": "只读权限（可单选或全选）",
+        "writeScopesLabel": "写入与执行权限",
+        "selectAllRead": "全选只读",
+        "ttlLabel": "密钥有效期",
+        "ttlNever": "永不过期",
+        "ttlDays": "{days} 天后过期",
+        "writeRpmLabel": "写操作每分钟上限（次）",
+        "writeRpmUnlimited": "不限",
+        "disabledToolsLabel": "逐工具启停（针对此密钥）",
+        "toolEnabled": "允许",
+        "toolDisabled": "禁用"
+      },
+      "clientConfig": {
+        "rowTitle": "一键配置外部客户端",
+        "rowHelper": "自动备份原配置（.bak）并将 MailAgent MCP 条目安全合并到目标客户端配置文件。",
+        "openButton": "一键配置客户端",
+        "dialogTitle": "一键配置本机 MCP 客户端",
+        "dialogDesc": "仅合并 mcpServers.mailagent 条目，保留原有配置并生成 .bak 备份。",
+        "targetLabel": "目标客户端",
+        "modeLabel": "连接方式",
+        "modeHttp": "Streamable HTTP (/mcp)",
+        "modeSse": "HTTP+SSE (/mcp/sse)",
+        "modeStdio": "本机 stdio 包装进程",
+        "apiKeyLabel": "访问密钥（Bearer Key）",
+        "apiKeyHint": "留空将写入占位符 <YOUR_MAILAGENT_API_KEY>，方便先预览或稍后手动填入。",
+        "previewButton": "预览合并结果",
+        "writeButton": "写入配置",
+        "wroteSuccess": "已写入 {path}",
+        "backupCreated": "已生成备份：{path}",
+        "failed": "写入配置失败"
+      },
+      "scopes": {
+        "email_read": {
+          "label": "读邮件"
+        },
+        "attachment_read": {
+          "label": "读附件"
+        },
+        "report_read": {
+          "label": "查看报告"
+        },
+        "report_run": {
+          "label": "生成报告"
+        },
+        "calendar_read": {
+          "label": "读日历"
+        },
+        "contacts_read": {
+          "label": "读通讯录"
+        },
+        "library_read": {
+          "label": "读资料库"
+        },
+        "matters_read": {
+          "label": "读事项"
+        },
+        "agents_read": {
+          "label": "查看自定义 Agent"
+        },
+        "agents_run": {
+          "label": "运行自定义 Agent"
+        },
+        "notion_agent_invoke": {
+          "label": "调用 Notion Agent"
+        },
+        "email_draft": {
+          "label": "起草回复",
+          "desc": "存成草稿，不会发出。"
+        },
+        "email_organize": {
+          "label": "邮件整理",
+          "desc": "设旗标、置顶、归档，可以撤回。"
+        },
+        "matters_write": {
+          "label": "事项写",
+          "desc": "建事项、加备注、新增和修改行动项。"
+        },
+        "calendar_write": {
+          "label": "日历写",
+          "desc": "回复邀请、改期、删除事件，会通知参会人。"
+        },
+        "email_write": {
+          "label": "发信",
+          "desc": "真实发出邮件，无法撤回。外部 Agent 读到的邮件可能夹带指令，建议在客户端保持「先确认」。"
+        }
+      },
+      "revealed": {
+        "title": "密钥已生成",
+        "desc": "「{label}」的密钥如下。",
+        "warning": "关闭后无法再次查看这个密钥，请现在复制保存。",
+        "notionNeedsPublicUrl": "Notion 需要公网地址，先配置公网地址。配置方法见页面上的「如何获得公网地址」；关闭这个窗口前请先复制密钥。",
+        "publicUrlUnverified": "公网地址最近一次检测未通过，Notion 可能连不上。",
+        "copyKey": "复制密钥",
+        "copyNotion": "复制 Notion 配置",
+        "copyHttp": "复制 HTTP 客户端配置",
+        "copySse": "复制 SSE 客户端配置",
+        "done": "完成"
+      },
+      "revoke": {
+        "title": "撤销「{label}」？",
+        "desc": "撤销后，使用这个密钥的 Agent 会立即无法访问。撤销不能恢复。",
+        "confirm": "撤销"
+      },
+      "rotate": {
+        "title": "轮换「{label}」？",
+        "desc": "轮换会生成新密钥，旧密钥立即失效。已经配置了旧密钥的客户端（例如 Notion）需要换成新密钥才能继续使用。",
+        "confirm": "轮换"
+      },
+      "tools": {
+        "title": "对外工具",
+        "helper": "外部 Agent 能看到的工具，按所需权限分组。每个密钥只能看到自己权限内的那部分；写入类工具建议在客户端设为「先确认」。",
+        "groupTitle": "{name} · {count}",
+        "groupKeys": "{count, plural, =0 {没有有效密钥拥有此权限} other {# 个有效密钥拥有此权限}}",
+        "noScope": "无需权限",
+        "suggestAuto": "建议：直接执行",
+        "suggestAsk": "建议：先确认"
+      },
+      "audit": {
+        "title": "最近调用",
+        "refresh": "刷新",
+        "empty": "还没有调用记录",
+        "ok": "成功",
+        "failed": "失败",
+        "unknownKey": "未知密钥"
+      },
+      "copy": "复制",
+      "cancel": "取消",
+      "retry": "重试",
+      "loading": "加载中…",
+      "loadFailed": "加载失败"
+    },
+    "advanced": {
+      "title": "高级",
+      "toggle": "展开高级设置",
+      "helper": "内部参数与只读路径; 改之前请确认你知道在做什么",
+      "logLevel": {
+        "label": "日志级别",
+        "helper": "DEBUG / INFO / WARNING / ERROR"
+      },
+      "outbox": {
+        "enabled": {
+          "label": "Outbox 灰度",
+          "helper": "Sprint 15 反向同步走 outbox + FanoutWorker"
+        },
+        "poll": {
+          "label": "FanoutWorker 轮询(秒)",
+          "helper": "默认 5"
+        },
+        "attempts": {
+          "label": "Outbox 重试上限",
+          "helper": "失败累积超过此值 → 进死信"
+        },
+        "concurrency": {
+          "label": "Outbox 并发",
+          "helper": "fanout 最大并行 worker 数"
+        }
+      },
+      "stats": {
+        "interval": {
+          "label": "看板上报间隔(秒)",
+          "helper": "STATS_REPORT_INTERVAL"
+        }
+      },
+      "sse": {
+        "host": {
+          "label": "SSE 本机 host",
+          "helper": "渲染层硬绑 127.0.0.1,修改会导致前端连不上"
+        },
+        "port": {
+          "label": "SSE 本机端口",
+          "helper": "渲染层硬绑 9200,修改会导致前端连不上"
+        }
+      },
+      "dbPath": {
+        "label": "SQLite 路径",
+        "helper": "默认 ~/Documents/MailAgent/data/sync_store.db",
+        "pickerTitle": "选择 SQLite 目录"
+      },
+      "attachmentDir": {
+        "label": "附件目录",
+        "helper": "默认 ~/Documents/MailAgent/data/attachments",
+        "pickerTitle": "选择附件目录"
+      },
+      "path": {
+        "default": "默认路径",
+        "choose": "选择…"
+      }
+    },
+    "restart": {
+      "required": "需要重启后端服务",
+      "moreKeys": " 等 {count} 项",
+      "cta": "立即重启",
+      "cancel": "取消",
+      "dismiss": "稍后",
+      "confirmTitle": "确认重启后端服务?",
+      "confirmBody": "重启会中断正在同步的批次,通常 5-10 秒恢复。已更改的字段重启后才生效。",
+      "restarting": "重启中…",
+      "success": "服务已重启",
+      "failed": "重启失败",
+      "statusProbeSlow": "服务状态确认超时,请稍后在状态栏复核",
+      "notOnline": "后端服务当前状态: {state}",
+      "pm2NotFound": "pm2 未找到",
+      "pm2NotFoundHint": "请在终端运行: pm2 restart mail-sync"
+    },
+    "unsavedBar": {
+      "message": "有未保存的更改 · {count} 项",
+      "save": "保存",
+      "discard": "放弃"
+    },
+    "update": {
+      "heading": "应用更新",
+      "currentVersion": "当前版本",
+      "idle": "尚未检查更新",
+      "checkNow": "检查更新",
+      "checking": "检查中…",
+      "upToDate": "已是最新版本",
+      "available": "发现新版本 v{version}",
+      "downloadCta": "下载更新",
+      "downloading": "下载中… {percent}%",
+      "readyToInstall": "已下载 v{version},重启即可安装",
+      "restartCta": "重启并安装",
+      "error": "更新检查失败:{message}",
+      "devDisabled": "auto-updater 未启用（开发或未签名 --dir 打包）",
+      "channel": "GitHub Releases · ad-hoc 签名",
+      "autoDownload": "自动下载更新",
+      "autoDownloadHint": "检测到新版本后自动在后台下载,就绪后提示重启安装。",
+      "unsignedNotice": "当前为 ad-hoc 签名版本:支持检查更新;有新版本时请前往下载页手动下载、覆盖安装(应用内一键更新需正式签名版本)。",
+      "openDownloadCta": "前往下载页"
+    },
+    "folder": {
+      "section": {
+        "title": "自定义文件夹同步",
+        "helper": "选择要同步进 MailAgent 的文件夹；邮件将享受 AI 分类、Notion 同步、全文搜索等完整能力。默认一个不选。"
+      },
+      "window": {
+        "pastDays": {
+          "label": "首次同步窗口（天）",
+          "helper": "只拉最近 N 天；越大首次越慢、占空间越多。"
+        },
+        "maxMessages": {
+          "label": "单文件夹上限（封）",
+          "helper": "防极端大邮箱；超出按时间降序截断。"
+        }
+      },
+      "picker": {
+        "refresh": "刷新",
+        "retry": "重试",
+        "save": "保存",
+        "saving": "保存中…",
+        "loading": "加载中…",
+        "loadingMeta": "拉取文件夹…",
+        "summary": "共 {count} 个文件夹",
+        "refreshedAt": "上次刷新 {time}",
+        "expand": "展开",
+        "collapse": "收起",
+        "large": "较大",
+        "largeTip": "超过 1000 封，首次同步可能较慢",
+        "systemLockTip": "系统文件夹 · 始终同步",
+        "systemState": "系统 · 始终同步",
+        "dirtyHint": "保存后需重启同步服务生效",
+        "orderOnlyHint": "仅调整显示顺序，保存后立即生效",
+        "order": {
+          "title": "已同步文件夹",
+          "hint": "拖拽调顺序，点图标换图标，两个开关逐个文件夹配；侧边栏按此顺序显示",
+          "listLabel": "已同步文件夹顺序，可重排",
+          "grip": "调整「{label}」的顺序，第 {pos} 位，共 {count} 项",
+          "gripGrabbed": "调整「{label}」的顺序，第 {pos} 位，共 {count} 项，已抓起",
+          "grabbed": "已抓起「{label}」，第 {pos} 位，共 {count} 项。方向键移动，空格放下，Esc 取消。",
+          "dropped": "「{label}」已放至第 {pos} 位，共 {count} 项。",
+          "moved": "「{label}」已移至第 {pos} 位，共 {count} 项。",
+          "cancelled": "已取消调序，「{label}」回到原位。"
+        },
+        "pref": {
+          "columnName": "图标 · 名称",
+          "rowTip": "{name}：{state}",
+          "notApplicable": "不适用",
+          "notify": {
+            "head": "通知",
+            "on": "新邮件推飞书",
+            "off": "不推飞书",
+            "headTip": "通知：自定义文件夹缺省就是「不推」（FOLDER_NOTIFY_ENABLED 是白名单）",
+            "globalOff": "飞书通知总闸关着 —— 这一列当前不生效",
+            "notApplicable": "内建邮箱不受 per-folder 开关约束：通知走全局规则（重要度 + 动作类型）"
+          },
+          "ai": {
+            "head": "AI",
+            "on": "跑 LLM 分类",
+            "off": "跳过 LLM（省成本去噪）",
+            "headTip": "AI 分类：自定义文件夹缺省就是「跑」（FOLDER_LLM_DISABLED 是黑名单）",
+            "globalOff": "AI 分类总闸关着 —— 这一列当前不生效",
+            "notApplicable": "内建邮箱不受 per-folder 开关约束：AI 分类恒开"
+          },
+          "builtinTitle": "内建邮箱",
+          "builtinReadonly": "只读",
+          "builtinHint": "顺序固定、不能移除、图标不可换；列在这里是为了看清自定义文件夹接在它们后面",
+          "builtinNote": "两个开关这里画的是「—」而不是「关」：后端两个 gate 都先判标准邮箱并直接跳过，内建行不受 per-folder 开关约束，画成可关会骗人。图标同理只读，不进 folder_pref。",
+          "builtinLockTip": "内建邮箱：位置固定，不能重排也不能移除",
+          "builtinIconTip": "内建邮箱图标不开放自定义",
+          "archiveNote": "「存档」若在名单里也归这一段：STANDARD_MAILBOXES 有意不含它，两个 per-folder 开关对它逐字生效，所以它拿的是真开关而不是「—」。",
+          "defaultsHint": "图标与两个开关改完立即生效，不需要重启同步服务；新加入的文件夹缺省是「通知 关 · AI 开」，与后端两个 gate 的缺省行为一致。",
+          "saveFail": "保存文件夹配置失败"
+        },
+        "icon": {
+          "title": "文件夹图标",
+          "reset": "默认",
+          "change": "更换图标",
+          "changeFor": "更换「{name}」的图标",
+          "dialogLabel": "为「{name}」选择图标",
+          "listLabel": "图标候选",
+          "unset": "未设置，用默认图标",
+          "motion": {
+            "folder-archive": "归档件下沉入库",
+            "folder-check": "勾描线画出",
+            "folder-clock": "分针走一圈",
+            "folder-code": "尖括号左右让开",
+            "folder-cog": "齿轮转 90°",
+            "folder-dot": "圆点脉冲",
+            "folder-down": "箭头下探",
+            "folder-git": "节点亮起，两侧连线外画",
+            "folder-git-2": "分支画出，末端节点后弹",
+            "folder-heart": "心跳（双拍）",
+            "folder-input": "箭头滑进来",
+            "folder-kanban": "三列依次长高",
+            "folder-key": "钥匙拧一下",
+            "folder-lock": "锁扣抬起再合上",
+            "folder-minus": "横杠描线",
+            "folder-open": "前盖沿轮廓扫开",
+            "folder-output": "箭头往外走",
+            "folder-plus": "加号两笔错开描出",
+            "folder-root": "节点亮起，根须向下长",
+            "folder-sync": "双向环箭头转半圈",
+            "folder-tree": "主干先画，子节点依次浮现",
+            "folder-up": "箭头上抬",
+            "folder-x": "两笔交叉错开划掉",
+            "folders": "前层错开滑出，后层退让"
+          }
+        },
+        "saveOk": "文件夹白名单已保存",
+        "saveFail": "保存失败",
+        "errorTitle": "拉取文件夹失败",
+        "emptyTitle": "没有可同步的自定义文件夹",
+        "emptyBody": "你的邮箱里暂未发现收件箱 / 发件箱以外的文件夹。在 Outlook 里新建文件夹后点「刷新」重新拉取。",
+        "gatedTitle": "需要 davmail 后端",
+        "gatedBody": "多文件夹发现、勾选与同步仅在 davmail 后端可用。请在「账户」切换后端后再启用本区。",
+        "manage": {
+          "menuLabel": "管理文件夹",
+          "newChild": "新建子文件夹",
+          "rename": "重命名",
+          "delete": "删除",
+          "systemHint": "系统文件夹不可修改",
+          "confirm": "确认",
+          "cancel": "取消",
+          "newChildPlaceholder": "子文件夹名称",
+          "renamePlaceholder": "文件夹名称",
+          "createOk": "已新建文件夹「{name}」",
+          "createFail": "新建文件夹失败",
+          "renameOk": "已重命名为「{name}」",
+          "renameFail": "重命名失败",
+          "deleteOk": "已删除文件夹「{name}」",
+          "deleteFail": "删除失败",
+          "deleteRollback": "Exchange 操作失败，本地文件夹树已回滚到服务器真实状态。",
+          "deleteTitle": "删除文件夹「{name}」？",
+          "deleteBodyWithCount": "将删除 Exchange 上的该文件夹，以及本地已同步的 {count} 封邮件副本。此操作不可撤销。",
+          "deleteBody": "将删除 Exchange 上的该文件夹，以及本地已同步的邮件副本。此操作不可撤销。",
+          "deleteWarn": "该文件夹在 Outlook 规则中可能仍被引用；删除后相关规则会失效。Notion 已归档页面不受影响。",
+          "deleting": "删除中…",
+          "deleteConfirm": "删除文件夹",
+          "cleanupPrompt": "也清理本地副本？",
+          "cleanupHint": "仅删本地已同步的 {count} 封副本，不删 Exchange 文件夹/邮件",
+          "cleanupHintNoCount": "仅删本地已同步副本，不删 Exchange 文件夹/邮件",
+          "cleanupKeep": "保留",
+          "cleanupDo": "清理",
+          "cleanupOk": "已清理「{name}」的本地副本（{count} 封）",
+          "cleanupFail": "清理本地副本失败",
+          "cleanupBusy": "清理中…"
+        }
+      }
+    },
+    "matters": {
+      "title": "事项",
+      "description": "事项模块的全局设置。每件事自己的跟进规则、标签仍在事项详情页里改。",
+      "section": "全局配置",
+      "helper": "这两项对所有事项生效，全局各只有一份。",
+      "tags": {
+        "label": "标签管理",
+        "helper": "共 {total} 个标签，{count} 个正在被事项使用；可改名、改色、删除。",
+        "loadFailed": "标签读取失败，打开后可重试。",
+        "open": "管理标签"
+      },
+      "agent": {
+        "label": "跟进 Agent",
+        "helper": "系统内置、全局一份：任务契约、工具面与网页检索档。",
+        "open": "打开配置"
+      }
+    }
+  }
+}

@@ -68,11 +68,23 @@ def find_used_keys() -> Dict[str, List[Path]]:
 
 
 def load_locale(lng: str) -> Dict[str, Any]:
-    """读 zh-CN/common.json / en-US/common.json."""
-    path = LOCALES_DIR / lng / "common.json"
-    if not path.exists():
-        raise FileNotFoundError(f"locale file not found: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    """合并读取 locales/<lng>/*.json（若存在重复顶层 key 立即报错）."""
+    locale_dir = LOCALES_DIR / lng
+    files = sorted(locale_dir.glob("*.json"))
+    if not files:
+        raise FileNotFoundError(f"no locale json files found under: {locale_dir}")
+    merged: Dict[str, Any] = {}
+    owners: Dict[str, str] = {}
+    for path in files:
+        chunk = json.loads(path.read_text(encoding="utf-8"))
+        for key, value in chunk.items():
+            if key in owners:
+                raise ValueError(
+                    f"{lng}: duplicate top-level key {key!r} in {owners[key]} and {path.name}"
+                )
+            owners[key] = path.name
+            merged[key] = value
+    return merged
 
 
 def lookup(tree: Dict[str, Any], dotted_key: str) -> Tuple[bool, Any]:

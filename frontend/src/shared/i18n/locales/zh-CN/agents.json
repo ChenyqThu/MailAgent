@@ -1,0 +1,1192 @@
+{
+  "connectorsConsole": {
+    "title": "Connectors",
+    "subtitle": "内置工具审批档与外部服务连接的统一配置台",
+    "sectionBuiltin": "内置工具",
+    "sectionExternal": "外部连接",
+    "addCustomMcp": "添加自定义 MCP",
+    "composioAccount": "Composio 账户",
+    "directTrackNote": "直连官方 MCP 端点（OAuth 授权页由服务方提供），不经任何第三方中转，也不需要 API Key。",
+    "managedLocalTrackNote": "在本机安装并作为独立本地 stdio 运行时工作，不经 Composio 云端中转，也无需第三方托管凭证。",
+    "toolCountUnknown": "工具清单连接后获取",
+    "switchTrack": "切换轨道（断开并清除配置）",
+    "supersededByDirect": "这条连接走的是 Composio 托管，而该服务已改为直连官方端点（不需要第三方授权）。用「切换轨道」断开并清除配置，再从目录直连重连。",
+    "updates": {
+      "checkButton": "检查更新",
+      "checking": "检查中…",
+      "availableCount": "{count} 个可更新",
+      "badge": "有更新",
+      "foundToast": "检测到 {count} 个连接器有可用更新或工具变化",
+      "upToDateToast": "所有连接器均为最新状态",
+      "checkFailed": "检查连接器更新失败",
+      "runtimeBannerTitle": "检测到新的运行时版本",
+      "driftBannerTitle": "远端 MCP 工具清单有变化",
+      "driftDetails": "新增 {added} 个，变更 {changed} 个，移除 {removed} 个",
+      "updateNow": "一键更新",
+      "updating": "更新中…",
+      "syncNow": "同步工具",
+      "updatedToast": "已更新 {name}",
+      "updateFailed": "更新失败",
+      "desktopUpstreamNote": "上游 GitHub 已发布新版（{upstream}），当前客户端使用已校验哈希的 {pinned}。"
+    },
+    "builtinGroupDesc": {
+      "email_write": "标记 / 归档 / 置顶 / 重传 Notion 等高频可逆的邮件操作。",
+      "draft": "起草与修改本机草稿；发送另有独立的确认卡兜底。",
+      "web": "联网检索与网页抓取（URL 与查询词是数据出境面）。",
+      "calendar": "日程改期 / 回复邀请 / 删除事件（删除为破坏性操作）。",
+      "capability": "技能开关与身份文档等能力面改动（均有历史与回滚补偿）。",
+      "supply": "Skill 安装、卸载与 draft 的创建 / 写文件 / 读取 / 校验（供应链面；安装恒两段确认）。",
+      "agents": "Custom Agent 的创建 / 修改 / 删除 / 立即运行，以及从对话调用 Agent。",
+      "exec": "本地文件读写与命令执行（命令免卡走自动化策略白名单）。",
+      "outbound": "发送邮件与外呼类工具（不可逆或数据出机，默认恒确认）。"
+    },
+    "builtinReadOnlyTools": {
+      "supply": "本组还包含无需审批档的只读工具：skill_draft_read、skill_draft_validate。",
+      "agents": "本组还包含无需审批档的只读工具：custom_agent_list、custom_agent_get。"
+    },
+    "settingsLink": {
+      "movedTitle": "已迁移到 Connectors 配置台",
+      "movedHelper": "为避免两处修改同一份配置，这里不再直接编辑；全部操作在独立的 Connectors 页完成。",
+      "open": "打开 Connectors"
+    }
+  },
+  "sessions": {
+    "title": "AI 会话历史",
+    "count": "{n} 个会话",
+    "searchPlaceholder": "搜索会话…",
+    "filterLabel": "按后端筛选",
+    "filterAll": "全部",
+    "untitled": "未命名会话",
+    "emptyTitle": "暂无 AI 会话",
+    "emptyHint": "在邮件详情里打开 AI 助手，开始你的第一段对话",
+    "noMatchTitle": "没有匹配的会话",
+    "noMatchHint": "换个关键词，或切换后端筛选",
+    "deleted": "已删除会话"
+  },
+  "generalAgent": {
+    "title": "通用 Agent",
+    "newChat": "新建对话",
+    "history": "对话历史",
+    "close": "关闭",
+    "dismiss": "忽略",
+    "confirmFailed": "确认失败",
+    "empty": {
+      "title": "向 Custom AI 提问任何事",
+      "hint": "搜索邮件、跑报告、查日历、问 Notion，或记下一条偏好——这个对话不绑定任何单封邮件。"
+    },
+    "onboarding": {
+      "title": "Custom AI 尚未配置",
+      "hint": "在「设置 → AI」里填入 LLM API Key 即可使用通用 Agent。",
+      "openSettings": "打开设置"
+    }
+  },
+  "agentView": {
+    "welcome": "我能帮你做什么？",
+    "emptyHint": "问任何问题，或用 @ 带上一封邮件作为上下文",
+    "thinking": "思考中",
+    "connecting": "连接中",
+    "timing": {
+      "label": "答复用时",
+      "firstToken": "首 token",
+      "total": "总耗时",
+      "speed": "速度",
+      "chunks": "分块数"
+    },
+    "scrollToBottom": "滚动到底部",
+    "composer": {
+      "placeholder": "给 MailAgent 发消息…（@ 引用邮件，/ 命令）"
+    },
+    "mention": {
+      "loading": "搜索中…",
+      "empty": "没有匹配的邮件",
+      "emails": "邮件",
+      "agents": "Agent",
+      "agentsEmpty": "没有已启用的自定义 Agent",
+      "matters": "事项",
+      "mattersEmpty": "没有匹配的事项",
+      "noMatches": "没有匹配的结果",
+      "emailChip": "已引用邮件：{label}",
+      "agentChip": "已提及 Agent：{label}",
+      "matterChip": "已提及事项：{label}"
+    },
+    "slash": {
+      "empty": "没有匹配的命令"
+    },
+    "newSession": "新会话",
+    "share": "分享会话",
+    "shareCopied": "已复制 Markdown 对话内容",
+    "shareEmpty": "当前会话暂无消息可分享",
+    "rename": "重命名",
+    "delete": "删除",
+    "archive": "归档",
+    "restore": "恢复",
+    "pin": "置顶",
+    "unpin": "取消置顶",
+    "star": "加星",
+    "unstar": "取消星标",
+    "starred": "已加星",
+    "notStarred": "未加星",
+    "actionFail": "操作失败：{error}",
+    "more": "更多",
+    "collapseSidebar": "折叠 / 展开会话历史",
+    "historyTitle": "会话",
+    "emptyHistory": "还没有会话",
+    "fromFeishu": "来自飞书",
+    "fromMatter": "事项",
+    "group": {
+      "pinned": "置顶",
+      "today": "今天",
+      "yesterday": "昨天",
+      "earlier": "更早",
+      "archived": "归档"
+    },
+    "quickActions": {
+      "summarize": {
+        "label": "总结邮件",
+        "options": {
+          "unread": "总结我收件箱里的未读邮件",
+          "weekly": "给我本周重要邮件的摘要",
+          "sender": "总结某位发件人最近发来的邮件"
+        }
+      },
+      "draft": {
+        "label": "起草回复",
+        "options": {
+          "followup": "帮我起草一封跟进邮件",
+          "decline": "礼貌地婉拒一个请求",
+          "thanks": "起草一封简短的感谢回复"
+        }
+      },
+      "search": {
+        "label": "搜索邮件",
+        "options": {
+          "invoice": "找最近的发票或账单邮件",
+          "unanswered": "找出我还没回复的邮件",
+          "attachments": "找带附件的邮件"
+        }
+      },
+      "todo": {
+        "label": "本周待办",
+        "options": {
+          "needReply": "列出需要我回复的邮件",
+          "waiting": "我在等谁回复",
+          "thisWeek": "本周要跟进的事"
+        }
+      },
+      "write": {
+        "label": "写一封",
+        "options": {
+          "meeting": "写一封会议邀请邮件",
+          "report": "起草本周项目周报",
+          "intro": "写一封自我介绍邮件"
+        }
+      }
+    }
+  },
+  "agents": {
+    "nav": {
+      "allAgents": "全部智能体"
+    },
+    "unread": "未读 Agent 运行",
+    "reportsMaster": {
+      "label": "报告生成服务常驻",
+      "hint": "开启后报告生成服务常驻运行，启用任一报告立即生效；关闭时首次启用某个报告后需重启一次后端才开始定时生成。",
+      "saveError": "保存报告服务开关失败"
+    },
+    "schedule": {
+      "label": "排程",
+      "hint": "预览与实际触发都按所选时区",
+      "repeats": "重复",
+      "every": "间隔",
+      "on": "在",
+      "at": "时刻",
+      "timezone": "时区",
+      "tzDevice": "{tz}（设备时区 · {abbr}）",
+      "tzDeviceNoAbbr": "{tz}（设备时区）",
+      "monthEnd": "月末",
+      "lessOften": "降低频率",
+      "moreOften": "提高频率",
+      "hourLabel": "小时",
+      "minuteLabel": "分钟",
+      "ordinalLabel": "第几个",
+      "weekdayLabel": "星期",
+      "monthDayLabel": "每月几号",
+      "monthModeLabel": "每月方式",
+      "freq": {
+        "daily": "按天",
+        "weekly": "按周",
+        "monthly": "按月"
+      },
+      "unit": {
+        "daily1": "天",
+        "dailyN": "天",
+        "weekly1": "周",
+        "weeklyN": "周",
+        "monthly1": "个月",
+        "monthlyN": "个月"
+      },
+      "weekday": {
+        "0": "周日",
+        "1": "周一",
+        "2": "周二",
+        "3": "周三",
+        "4": "周四",
+        "5": "周五",
+        "6": "周六"
+      },
+      "weekdayInitial": {
+        "0": "日",
+        "1": "一",
+        "2": "二",
+        "3": "三",
+        "4": "四",
+        "5": "五",
+        "6": "六"
+      },
+      "monthMode": {
+        "date": "按日期",
+        "nth": "按星期"
+      },
+      "ordinal": {
+        "1": "第 1 个",
+        "2": "第 2 个",
+        "3": "第 3 个",
+        "4": "第 4 个",
+        "last": "最后一个"
+      },
+      "dayN": "{day} 号",
+      "clamp": {
+        "off": "跳过该月",
+        "on": "顺延到月末"
+      },
+      "clampHint": {
+        "off": "该月没有这天就不跑",
+        "on": "该月没有这天就用当月最后一天"
+      },
+      "clamped": "已顺延",
+      "skipped": "已跳过",
+      "skipReason": "{month}只有 {days} 天",
+      "nextRuns": "接下来 {count} 次运行",
+      "sentence": {
+        "freq": {
+          "daily1": "每天",
+          "dailyN": "每 {count} 天",
+          "weekly1": "每周",
+          "weeklyN": "每 {count} 周",
+          "monthly1": "每月",
+          "monthlyN": "每 {count} 个月"
+        },
+        "onWeekdays": "{days}",
+        "onDay": "{day} 号",
+        "onNth": "{ordinal}{weekday}",
+        "atTime": "{time}"
+      }
+    },
+    "cadence": {
+      "all": "全部",
+      "daily": "日报",
+      "weekly": "周报",
+      "monthly": "月报",
+      "custom": "自定义"
+    },
+    "status": {
+      "ready": "已就绪",
+      "generating": "生成中",
+      "failed": "失败",
+      "empty": "空",
+      "skipped": "已跳过"
+    },
+    "reports": {
+      "history": "历史报告",
+      "loading": "加载中…",
+      "none": "暂无报告",
+      "selectHint": "选择左侧一份报告查看",
+      "generating": "正在生成报告…",
+      "generatingHint": "AI 助手正在回顾邮件并策展。通常需要 20–40 秒。",
+      "failed": "报告生成失败",
+      "failedHint": "LLM 调用出错，可重试。",
+      "regenerate": "重新生成",
+      "renderError": "报告渲染出错",
+      "renderErrorRetry": "重试",
+      "empty": "这段时间没有新邮件",
+      "emptyHint": "所选时间窗口内没有新邮件，无需生成报告。",
+      "generatedAt": "生成于",
+      "backToList": "返回列表",
+      "loadingMore": "加载更多…",
+      "weekday": {
+        "sun": "周日",
+        "mon": "周一",
+        "tue": "周二",
+        "wed": "周三",
+        "thu": "周四",
+        "fri": "周五",
+        "sat": "周六"
+      },
+      "count": {
+        "total": "{count} 封",
+        "urgent": "{count} 紧急",
+        "replied": "{count} 已回复"
+      },
+      "assistantAuthor": "通用助手"
+    },
+    "block": {
+      "source": "溯源",
+      "notExecutable": "v1 暂不可执行",
+      "unknown": "未知块 · {type}",
+      "emailCount": "{total} 封",
+      "flaggedCount": "{flagged} 重点",
+      "matter": {
+        "open": "打开事项 {id}",
+        "due": "{value}到期",
+        "progress": "完成标志 {done}/{total}",
+        "waitingOn": "在等 {names}",
+        "nextAction": "下一步 · {title}",
+        "signals": "{count} 条关注信号"
+      }
+    },
+    "card": {
+      "enabled": "已启用",
+      "disabled": "已停用",
+      "newAgent": "新建 Agent",
+      "newAgentHint": "自定义触发、工具与模型 · 即将推出"
+    },
+    "config": {
+      "enable": "启用此 Agent",
+      "prompt": "报告 Prompt",
+      "promptHint": "调报告的「口味」",
+      "promptNote": "计数、internal_ids、链接由系统权威回填；Prompt 只影响文案、分组与挑选。",
+      "contextDocs": "注入的身份文档",
+      "contextDocsHint": "勾选后注入报告生成的系统提示",
+      "contextDocsNote": "勾选的身份文档会注入报告生成的系统提示（默认 灵魂 + 用户偏好；全不勾 = 不注入）。",
+      "schedule": "排程",
+      "at": "每天",
+      "weekdayLabel": "星期",
+      "weekday": {
+        "0": "周一",
+        "1": "周二",
+        "2": "周三",
+        "3": "周四",
+        "4": "周五",
+        "5": "周六",
+        "6": "周日"
+      },
+      "dayOfMonthLabel": "日期",
+      "dayOfMonthN": "{day} 日",
+      "dayOfMonthHint": "为保证每月都能触发，仅支持 1–28 日（避免某些月份缺少 29–31 日而漏报）。",
+      "window": "回看窗口",
+      "windowHint": "生成时回溯的邮件时间范围",
+      "model": "模型",
+      "kos": "Gbrain 知识库增强",
+      "kosHint": "对重点项目 / 发件人附加 Gbrain 知识库档案片段",
+      "promptPlaceholder": "留空 = 用内置默认幕僚 persona（按日 / 周 / 月自动套用）；在此输入可完全覆写",
+      "triggerMode": "触发方式",
+      "triggerHint": "回看的时间口径",
+      "trigger": {
+        "rolling_24h": "回溯 24h",
+        "natural_day": "自然日（昨天）"
+      },
+      "timezone": "时区",
+      "timezoneHint": "留空 = 本地；自然日 / 周月边界按此时区",
+      "timezoneFromSchedule": "自然日边界按上方排程时区（{tz}）计算。",
+      "timezonePlaceholder": "如 Asia/Shanghai（留空 = 本地）",
+      "timezoneLocal": "（本地时区）",
+      "bodyPriorities": "带正文的优先级",
+      "bodyPrioritiesHint": "勾选的优先级邮件带完整正文，其余只摘要（不含附件）",
+      "priority": {
+        "critical": "🔴 紧急",
+        "important": "🟡 重要",
+        "normal": "🟢 一般",
+        "low": "⚪ 低"
+      },
+      "aggregation": "数据来源",
+      "aggWeekly": "周报自动综合过去 7 天已生成的日报；缺失的天会标注。",
+      "aggMonthly": "月报自动综合上一个自然月已生成的日报；缺失的天会标注。",
+      "cancel": "取消",
+      "save": "保存"
+    },
+    "source": {
+      "title": "邮件溯源",
+      "close": "关闭",
+      "noSubject": "(无主题)",
+      "aiFields": "AI 字段",
+      "summary": "摘要",
+      "openNotion": "在 Notion 打开",
+      "openInbox": "在收件箱打开"
+    },
+    "chats": {
+      "title": "Agent 执行会话",
+      "filterAgent": "按 Agent 筛选",
+      "allAgents": "全部 Agent",
+      "continue": "在收件箱继续",
+      "selectHint": "选择左侧一个会话查看",
+      "emptyTranscript": "这个会话还没有消息"
+    },
+    "search": {
+      "newAgent": "新建搜索 Agent",
+      "newAgentHint": "自定义提示词、模型与工具",
+      "titlePlaceholder": "如 邮件搜索助手",
+      "promptLabel": "搜索 Prompt",
+      "promptHint": "下方为内置默认搜索 prompt，可直接覆写；占位符会在运行时自动替换",
+      "promptPlaceholder": "搜索 Agent 的系统 prompt",
+      "tools": "工具",
+      "toolsHint": "搜索 Agent 可调用的工具（MVP 仅全文搜索）",
+      "tool": {
+        "email_search_fulltext": "邮件全文搜索"
+      },
+      "delete": "删除",
+      "deleteConfirm": "确认删除此搜索 Agent？",
+      "deleteCancel": "取消",
+      "errConflict": "该 id 已存在，请换一个名称。",
+      "errGeneric": "操作失败，请重试。"
+    },
+    "preprocess": {
+      "viewStats": "查看处理统计",
+      "markReadAfterProcessing": "预处理完成后自动标已读",
+      "markReadAfterProcessingHint": "关闭后，AI 仍会分类、标旗并更新处理状态，但不会改变邮件当前的已读/未读状态。保存即生效。",
+      "restartHint": "需重启生效",
+      "modelFollowGlobal": "跟随全局默认（{model}）",
+      "contextDocs": "注入的身份文档",
+      "contextDocsHint": "勾选后注入邮件分类的系统提示",
+      "contextDocsNote": "勾选的身份文档会注入 AI 邮件分类的系统提示（默认 灵魂 + 用户偏好）。",
+      "contextDocsInactiveNote": "当前参考上下文源为「Notion 上下文页」，身份文档不会注入分类提示（此处勾选暂不生效）。",
+      "contextSource": "参考上下文源",
+      "contextSourceHint": "邮件分类系统提示的参考背景二选一（保存即生效，无需重启）：身份文档 或 Notion 上下文页，两者互斥不叠加。",
+      "contextSourceOption": {
+        "standing_docs": "身份文档",
+        "notion_context": "Notion 上下文页"
+      },
+      "contextPageId": "Notion 上下文页 ID",
+      "contextPageIdPlaceholder": "Notion 页面 ID（LLM_CONTEXT_PAGE_ID）",
+      "contextPageIdHint": "该 Notion 页面正文会作为参考上下文注入邮件分类提示（留空则不注入）。env LLM_CONTEXT_PAGE_ID，需重启后端生效。",
+      "doc": {
+        "soul": "灵魂 / soul",
+        "agent": "行为 / agent",
+        "rules": "规则 / rules",
+        "user": "用户偏好 / user"
+      },
+      "webReadOnly": "远程 Web 为只读：启用状态、参考上下文源与 context page ID 不可修改（仅本地桌面端可改）；模型、fallback 与文档勾选仍可编辑。",
+      "fallback": "Fallback 备用模型",
+      "fallbackFollowGlobal": "跟随全局（{model}）",
+      "fallbackGlobalUnset": "未设",
+      "fallbackNone": "（不设）",
+      "promptView": "分类 Prompt",
+      "promptViewHint": "实际用于邮件分类的 mailbox prompt 文件，收件箱与发件箱各一份；可直接编辑，保存即生效（无需重启）；身份/偏好由上方勾选的文档注入",
+      "promptTab": {
+        "inbox": "收件箱",
+        "sent": "发件箱"
+      },
+      "promptEmpty": "文件不存在或为空 —— 留空则分类时只用内置硬约束；输入内容保存后自动创建文件",
+      "promptLoadError": "分类 Prompt 加载失败（serve-api 未就绪？）",
+      "promptSaveError": "保存分类 Prompt 失败",
+      "promptSaved": "分类 Prompt 已保存，立即生效（无需重启）",
+      "envSaveError": "保存启用状态失败",
+      "rowSaveError": "保存预处理配置失败"
+    },
+    "contactGovernance": {
+      "schedule": "排程",
+      "scheduleHint": "每天固定时刻随邮件增量跑一次治理扫描",
+      "useKos": "参考 KOS 资料",
+      "useKosHint": "治理扫描先查此人的 KOS wiki 再提身份建议；未配置 KOS 时无效。",
+      "prompt": "系统提示词",
+      "promptHint": "默认提示词只读；你写的追加段接在它之后",
+      "promptDefaultToggle": "查看默认提示词",
+      "promptAppend": "提示词追加段",
+      "promptAppendPlaceholder": "例如：公司背景、部门组织架构、常见的对外合作方 —— 这类长期不变的上下文写在这里。",
+      "promptAppendNote": "默认提示词已经钉死「每条建议必须带邮件证据、身份字段只能提议不能直写」的纪律，追加段不会覆盖它。留空 = 只用默认。",
+      "orgFrame": "组织架构框架",
+      "orgFrameHint": "公司与部门的层级；用 ` / ` 分隔层级，框架外的信息写在竖线后",
+      "orgFramePlaceholder": "# 公司\nTP-Link System | tp-link.com.hk | 总部\nTP-Link | tp-link.com, omadanetworks.com\n\n# 部门框架\nEBG / ENBU / 产品部\n商用产品研发处 / 系统部",
+      "orgFrameNote": "留空 = 不约束：治理 Agent 照常提建议，只是不再判断「框架外」。填了之后，落在框架外的建议值会带一个「框架外」标记，你可以先补框架再采纳。",
+      "tools": "注入的工具 · {count} 件",
+      "queueNote": "这个 Agent 产出的建议在 通讯录 → 列表头「Agent」胶囊里排队等确认；它的运行历史也在那儿。",
+      "errFireHour": "每日运行时刻要是 0 到 23 之间的整数"
+    },
+    "contactProfile": {
+      "schedule": "排程",
+      "scheduleHint": "每天固定时刻跑一轮，每轮最多处理这么多人",
+      "dailyCap": "每轮人数上限",
+      "useKos": "参考 KOS 资料",
+      "useKosHint": "生成画像前先查此人的 KOS wiki 作背景参考；未配置 KOS 时无效。",
+      "modelFollowGlobal": "跟随全局默认",
+      "fallback": "兜底模型",
+      "fallbackFollowGlobal": "跟随全局",
+      "fallbackNone": "不设兜底",
+      "promptAppend": "提示词追加段",
+      "promptAppendHint": "接在内置画像提示词之后；留空 = 只用内置",
+      "promptAppendPlaceholder": "例如：多留意对方在合同条款上的口径变化。",
+      "promptAppendNote": "内置提示词已经钉死「只用给定邮件证据、不足就拒写」的纪律，追加段不会覆盖它。",
+      "errFireHour": "每日运行时刻要是 0 到 23 之间的整数",
+      "errDailyLimit": "每轮人数上限要是大于 0 的整数"
+    },
+    "projectProgress": {
+      "subtitle": "匹配的周报邮件自动解析 xlsx → 同步进 Notion 项目进度库",
+      "masterOff": "总闸未开",
+      "masterOnNote": "总开关已开（环境变量 PROJECT_PROGRESS_SYNC_ENABLED）。下方启用开关与触发规则保存即生效。",
+      "masterOffNote": "总开关未开：同步不会运行。可在下方打开「同步总开关」（保存后需重启服务生效）；启用开关与触发规则会照常保存。",
+      "master": "同步总开关",
+      "masterHint": "环境变量 PROJECT_PROGRESS_SYNC_ENABLED；改后需重启后端生效",
+      "subjectPattern": "标题正则",
+      "subjectPatternHint": "正则匹配邮件标题；命中才认定为项目周报（必填）",
+      "subjectPlaceholder": "例如：\\[weekly\\] 项目进度",
+      "senderPattern": "发件人（子串，可选）",
+      "senderPatternHint": "邮箱子串匹配（不区分大小写）；留空 = 任意发件人",
+      "senderPlaceholder": "例如：weekly@corp.com",
+      "database": "项目进度库 ID",
+      "databaseHint": "环境变量 PROJECT_PROGRESS_DATABASE_ID（Notion 数据库 UUID）；改后需重启生效",
+      "databaseUnset": "（未配置 —— 同步会失败）",
+      "filterBu": "BU 过滤（可选）",
+      "filterBuHint": "精确匹配 xlsx 的 BU 列，其他 BU 项目忽略；留空 = 不过滤。环境变量 PROJECT_PROGRESS_FILTER_BU；改后需重启生效",
+      "filterBuPlaceholder": "TPS-ENBU",
+      "capability": "内置能力",
+      "capabilityChip": "项目周报同步脚本 · 内置恒启用",
+      "capabilityNote": "执行为确定性 Python 同步脚本（xlsx 解析 → Notion 写入），不经 AI 引擎、不属于技能体系，无法挂载或卸载其他技能；要停用整个 Agent 请用上方启用开关。",
+      "webReadOnly": "远程 Web 为只读：总开关 / 项目库 ID / BU 过滤不可修改（仅本地桌面端可改）；启用开关与触发规则仍可编辑。",
+      "envSaveError": "保存环境变量失败",
+      "errEmptyTrigger": "标题正则与发件人不能同时为空（要停用请用上方启用开关）",
+      "runs": {
+        "statusCompleted": "已完成",
+        "statusFailed": "失败",
+        "statusSkipped": "已跳过",
+        "statusProcessing": "处理中"
+      }
+    },
+    "avatar": {
+      "label": "头像",
+      "identityLabel": "名称与头像",
+      "hint": "未设置时按 Agent id 稳定派生；选择后保存为显式身份",
+      "change": "更换",
+      "collapse": "收起",
+      "tabBot": "Bot",
+      "tabUpload": "上传",
+      "reset": "重置",
+      "shuffle": "换一换",
+      "shape": "形状",
+      "color": "颜色",
+      "upload": "上传图片",
+      "uploading": "处理中…",
+      "uploaded": "已上传图片（切到 Bot 标签选形状或颜色可换回生成头像）",
+      "uploadHint": "上传后将替换生成头像（≤10MB，自动裁方压缩）",
+      "uploadErr": {
+        "not_image": "请选择图片文件（PNG / JPG / WebP 等）。",
+        "source_too_large": "原图超过 10MB，请先压缩或换一张。",
+        "decode_failed": "这张图片读不出来，换一张试试。",
+        "too_large": "压到最低画质仍超过 150KB，请换一张更简单的图片。"
+      }
+    },
+    "mainAgent": {
+      "badge": "默认助手",
+      "namePlaceholder": "AI 助手（比如 Jarvis）",
+      "identityHint": "留空则用默认名；头像未设置时用官方形象"
+    },
+    "custom": {
+      "import": "导入 Agent",
+      "export": "导出",
+      "meetingPrepTemplate": "用模板创建：会前准备",
+      "mailDigestTemplate": "用模板创建：邮件摘要",
+      "followupTrackerTemplate": "用模板创建：跟进追踪",
+      "meetingScribeTemplate": "用模板创建：会议速记",
+      "calendarRequired": "需启用日历同步",
+      "unmetDependencies": "未满足依赖：{items}",
+      "newTitle": "新建自定义 Agent",
+      "configTitle": "自定义 Agent · {title}",
+      "newTileTitle": "新建自定义 Agent",
+      "enableHint": "启用后按下方触发条件自动运行（触发为「无」时不会自动跑）。",
+      "titlePlaceholder": "如 DMS 审批助手",
+      "descriptionLabel": "说明",
+      "descriptionHint": "显示在 Agent Catalog 中，帮助主 Agent 选择合适的专家。",
+      "descriptionPlaceholder": "简要说明这个 Agent 适合处理什么任务",
+      "promptLabel": "任务提示词",
+      "promptHint": "触发时注入的任务指令（告诉 Agent 要做什么）",
+      "promptPlaceholder": "描述这个 Agent 每次触发时要完成的任务",
+      "create": "创建",
+      "errTitleRequired": "请填写名称。",
+      "errCron5": "cron 必须是标准 5 段（分 时 日 月 周）。",
+      "errEmailPredicate": "邮件触发至少填一项：发件人 / 主题 / 文件夹 / 线程 ID。",
+      "errCalendarLead": "会前时间需在 1 分钟到 30 天之间。",
+      "errMaxRunSeconds": "单次运行秒数需在 1–{max} 之间。",
+      "errMaxRunsPerDay": "每日运行上限不能为负。",
+      "trigger": {
+        "label": "触发方式",
+        "hint": "决定 Agent 何时自动运行",
+        "kind": {
+          "none": "无（草稿）",
+          "cron": "定时",
+          "schedule": "排程",
+          "email_filter": "邮件事件",
+          "calendar_event_change": "日历变化",
+          "calendar_before_start": "会前"
+        },
+        "noneHint": "未配置触发条件：Agent 保存为草稿、不会自动运行（仍可在下方手动运行一次）。",
+        "cronHint": "标准 5 段 cron（分 时 日 月 周），如 0 9 * * 1-5 = 工作日 9 点。",
+        "upgradeToBuilder": "改用排程构建器",
+        "legacyCronHint": "这是旧版 cron 配置，触发行为保持不变。切到排程构建器后无法切回（构建器不覆盖任意 cron 表达式）。",
+        "tz": "时区",
+        "senderPlaceholder": "发件人正则（可留空），如 dms@corp\\.com",
+        "subjectPlaceholder": "主题正则（可留空），如 DMS.*审批",
+        "foldersPlaceholder": "文件夹（可留空，逗号分隔），如 收件箱, 审批",
+        "threadIdsPlaceholder": "线程 ID（可留空，逗号分隔）",
+        "emailHint": "发件人 / 主题为正则；文件夹与线程 ID 为精确白名单。至少填一项。",
+        "titlePatternPlaceholder": "标题正则（可留空）",
+        "organizerPatternPlaceholder": "组织者正则（可留空）",
+        "attendeePatternPlaceholder": "参与人邮箱正则（可留空）",
+        "calendarIdsPlaceholder": "日历显示名（可留空，逗号分隔）",
+        "leadLabel": "提前时间",
+        "leadUnitMinutes": "分钟",
+        "leadUnitHours": "小时",
+        "leadUnitDays": "天",
+        "leadMinutes": "提前 {count} 分钟",
+        "leadHours": "提前 {count} 小时",
+        "leadDays": "提前 {count} 天",
+        "calendarHint": "业务字段变化可触发；会前触发按事件开始时间减去提前量计算。未填日历名时匹配全部日历。",
+        "triggerCalendarChange": "日历业务字段变化",
+        "triggerCalendarBefore": "会前触发（{lead}）",
+        "add": "添加 Trigger",
+        "edit": "编辑",
+        "delete": "删除",
+        "enabled": "启用自动触发"
+      },
+      "tools": {
+        "label": "可用工具",
+        "hint": "Agent 运行时允许调用的工具（在矩阵地板内取交集）",
+        "unavailable": "无法加载工具清单（服务未就绪或功能未开启）；本次保存不会改动已有工具配置。",
+        "writeTag": "写操作工具（需人工审批）",
+        "writeBadge": "写",
+        "group": {
+          "emailRead": "邮件读取",
+          "emailWrite": "邮件操作",
+          "calendar": "日历",
+          "report": "报告",
+          "session": "会话与身份",
+          "knowledge": "技能与知识",
+          "other": "其他",
+          "library": "资料库"
+        },
+        "groupSelectAll": "全选",
+        "groupClearAll": "清空"
+      },
+      "capabilities": {
+        "label": "额外能力",
+        "hint": "工具白名单之外的能力授权（联网 / 命令执行）",
+        "webDisabled": "联网功能未开启（由环境变量 MAILAGENT_OPENNESS_WEB_TOOLS 控制），此处授权保存后暂不会生效。",
+        "execDisabled": "命令执行功能未开启（由环境变量 MAILAGENT_OPENNESS_EXEC_TOOLS 控制），此处授权保存后暂不会生效。"
+      },
+      "capabilityCards": {
+        "label": "能力与权限",
+        "hint": "先选工作范围；需要精细控制时再展开高级工具",
+        "advanced": "高级：逐工具微调",
+        "advancedHint": "保留完整原子工具控制",
+        "writeRuleHint": "写操作默认逐次审批；保存后可在下方配置该 Agent 的免卡白名单。",
+        "email": {
+          "title": "邮件",
+          "description": "读取邮件、整理收件箱，或生成和更新草稿。",
+          "tier": {
+            "read": "读取",
+            "organize": "整理",
+            "draft": "起草"
+          }
+        },
+        "calendar": {
+          "title": "日历",
+          "description": "查看日程，或提议改期、回复和删除事件。",
+          "tier": {
+            "off": "关闭",
+            "read": "读取",
+            "write": "写入"
+          },
+          "hitl": "日历写操作永久需要人工审批，不能配置免卡规则。"
+        },
+        "knowledge": {
+          "title": "知识",
+          "description": "访问身份文档、Skills 与 KOS 知识。默认关闭。",
+          "tier": {
+            "off": "关闭",
+            "on": "开启"
+          }
+        },
+        "sessions": {
+          "title": "会话",
+          "description": "历史会话工具始终可用；这里决定能读多远：只读它自己的历史，或读全部 Agent 的历史。",
+          "tier": {
+            "own": "只读自己",
+            "all": "读全部"
+          },
+          "allHint": "读全部 = 可读取其他 Agent 与主 Agent 的会话正文（含其中引用的邮件内容）。"
+        },
+        "reports": {
+          "title": "报告",
+          "description": "读取已有报告，或把本次运行产出保存为结构化报告。",
+          "tier": {
+            "read": "读取",
+            "produce": "产出"
+          },
+          "produceHint": "产出只写本地报告产物，不向外发送。"
+        },
+        "web": {
+          "title": "Web",
+          "description": "搜索网页并抓取公开页面；联网内容始终按不可信数据处理。",
+          "tier": {
+            "off": "关闭",
+            "gated": "域名门控",
+            "open": "全开放"
+          }
+        },
+        "files": {
+          "title": "命令与本机文件",
+          "description": "读取/写入文件并运行已授权的本地命令或 Skill 入口。",
+          "tier": {
+            "off": "关闭",
+            "on": "开启"
+          },
+          "ruleHint": "授权只让执行工具进入运行面；免卡仍需白名单规则与首次运行确认。"
+        },
+        "connectors": {
+          "title": "外部服务",
+          "description": "按服务授权访问已连接的外部服务（MCP）；读取内容始终按不可信数据处理。",
+          "tier": {
+            "off": "关",
+            "read": "只读",
+            "write": "可写"
+          },
+          "disabledHint": "外部服务连接未开启（由环境变量 MAILAGENT_MCP_CONNECTORS 控制），此处授权保存后暂不会生效。",
+          "warn": "可写 = 授予「读 + 新建 + 修改」权限上限：该 Agent 后台运行可在该服务里新建和修改数据（删除永不可用）。",
+          "empty": "尚未连接任何外部服务。先到 设置 → AI 完成连接，再回这里为该 Agent 授权。",
+          "notConnected": "未连接",
+          "allowlistAll": "工具白名单：全部已授权工具",
+          "allowlistCustom": "工具白名单：已选 {count} 个",
+          "allToolsActive": "当前未额外限制：沿用权限档位覆盖的全部可用工具",
+          "selectedToolsCount": "已选 {count}/{total} 个允许工具",
+          "resetTools": "恢复全部",
+          "toolsLoading": "正在读取工具列表…",
+          "toolsEmpty": "该服务暂未同步工具，请先到 外部连接 中同步工具列表。"
+        },
+        "library": {
+          "title": "资料库",
+          "description": "读取、检索与写入资料库里的文件。",
+          "tier": {
+            "off": "关闭",
+            "read": "只读",
+            "write": "可写"
+          },
+          "writeHint": "可写 Agents 文档与「可写」挂载根，不含「我的文档」。",
+          "readScope": "可读全部根（含邮件附件投影）。",
+          "headlessNote": "无人值守时只有 Agents 文档免卡；挂载根恒只读，移动 / 删除恒弹卡。"
+        },
+        "subsetBadge": "部分",
+        "subsetHint": "当前启用的工具是「{tier}」档的一个子集——档位表示权限上限，不代表该档每个工具都开着。展开下方「高级」可看确切清单。",
+        "computerUse": {
+          "title": "电脑与浏览器操控",
+          "desc": "允许此后台 Agent 在指定域名或桌面应用范围内操作界面（需先配置内置浏览器或桌面连接器）。",
+          "tier": {
+            "off": "关闭",
+            "stop_before_submit": "提交前停靠",
+            "allow_submit": "允许自动提交"
+          },
+          "domainsLabel": "允许域名（逗号分隔，无通配符）",
+          "domainsPlaceholder": "例如：dms.company.com, oa.internal",
+          "appsLabel": "允许桌面应用（逗号分隔，精确名称）",
+          "appsPlaceholder": "例如：Microsoft Teams, Notion",
+          "allowSubmitWarn": "高风险：允许后台 Agent 在上述限定域名/应用内自动点击「提交 / 审批通过 / 加入」等终态按钮。"
+        }
+      },
+      "budget": {
+        "label": "运行预算",
+        "hint": "限制运行频率与单次最长耗时",
+        "maxRunsPerDay": "每日运行上限",
+        "maxRunSeconds": "单次运行秒数（≤ {max}）"
+      },
+      "card": {
+        "triggerCron": "定时：{cron}（{tz}）",
+        "triggerSchedule": "定时：{text}（{tz}）",
+        "triggerEmail": "邮件事件触发",
+        "triggerCalendarChange": "日历变化触发",
+        "triggerCalendarBefore": "会前触发（{lead}）",
+        "triggerNone": "未配置触发（草稿）"
+      },
+      "runs": {
+        "section": "运行历史",
+        "runNow": "立即运行",
+        "loading": "加载中…",
+        "empty": "暂无运行记录。",
+        "loadMore": "加载更多",
+        "loadMoreLoading": "加载中…",
+        "pausedPendingHint": "运行已暂停、等待审批。打开执行记录即可批准，或在灵动岛批准；超时未处理将过期作废。",
+        "pausedExpiredHint": "审批已过期，此次运行未执行。",
+        "skippedHint": "已达到每日运行上限，本次触发未执行。",
+        "specInvalidHint": "Agent 配置无法启动本次运行：可能已被停用或删除，或触发条件配置非法。修正配置后再试。",
+        "steps": "{n} 步",
+        "tokens": "{n} tokens",
+        "autoWhitelisted": "自动放行 ×{n}",
+        "autoWhitelistedRule": "免卡：白名单规则 ×{n}",
+        "autoWhitelistedWebOpen": "免卡：全开放联网 ×{n}",
+        "autoWhitelistedWebSearch": "免卡：搜索授权 ×{n}",
+        "autoWhitelistedGrant": "免卡：授权放行 ×{n}",
+        "viewRecord": "查看执行记录",
+        "pendingDot": "有待审批",
+        "recordBanner": "这是 agent 执行记录，仅审批可交互（不能续写对话）。",
+        "triggeredAgo": "触发于 {ago}",
+        "unknownAgent": "未知 Agent",
+        "ageJustNow": "刚刚",
+        "ageMinutes": "{n} 分钟前",
+        "ageHours": "{n} 小时前",
+        "ageDays": "{n} 天前",
+        "approvalTitle": "待审批",
+        "approvalBody": "{agent} 请求执行 {tool}，需要你批准。",
+        "approveLabel": "批准",
+        "rememberDomain": "总是允许该 Agent 访问此域名（免审批）",
+        "rememberDomainHint": "为该 Agent 的无人值守运行创建一条域名白名单，此后访问该域名免审批。仅对你信任的来源勾选。",
+        "editParams": "编辑参数",
+        "editParamsClose": "收起参数",
+        "editParamsHint": "只有下列字段可改，其余参数由服务端锁定。改完点「批准」，执行的是改后的版本。",
+        "rememberTool": "记住：以后不再询问这类操作",
+        "rememberToolHint": "把 {tool} 设为自动执行：此后在与助手的对话里调用它不再弹审批；后台自动运行的 agent 不受影响。可在设置 → AI → 工具审批档改回。",
+        "approvalExpired": "审批已失效（超时或应用重启），此次运行未执行。",
+        "decideFailed": "决策失败",
+        "state": {
+          "queued": "排队中",
+          "running": "运行中",
+          "completed": "已完成",
+          "skipped": "已跳过",
+          "pausedPending": "等待审批",
+          "pausedExpired": "审批过期（未执行）",
+          "pausedApproved": "审批通过（已执行）",
+          "pausedRejected": "审批拒绝（未执行）",
+          "failed": "失败"
+        }
+      },
+      "policy": {
+        "section": "自动化策略",
+        "hint": "该 Agent 无人值守运行时的免审批白名单。无规则时所有写操作都会逐次弹审批（灵动岛）；命中规则的操作免审批直接执行。放宽某条规则请删除后重新创建。",
+        "add": "新建规则",
+        "loading": "加载中…",
+        "empty": "还没有规则。该 Agent 的所有写操作都需要你逐次批准。",
+        "dormant": "休眠：触发类型已变更，此规则不再匹配任何运行。",
+        "hits": "命中 {n} 次",
+        "delete": "删除",
+        "capability": {
+          "domain_write": "自动执行写工具",
+          "exec": "自动运行 Skill 脚本",
+          "web": "放行联网域名"
+        },
+        "modeDerived": "生效语境：{mode}（由触发类型自动派生，不可选）",
+        "mode": {
+          "untrusted_trigger": "邮件事件触发运行",
+          "cron_headless": "定时触发运行",
+          "none": "未配置触发（规则将处于休眠）"
+        },
+        "toolLabel": "工具",
+        "toolNone": "该 Agent 的工具白名单里没有写工具（先在上方「可用工具」勾选写工具并保存）。",
+        "skillLabel": "Skill",
+        "skillNone": "没有已安装的 Skill（先在 设置 → Custom AI 安装）。",
+        "entryLabel": "入口脚本",
+        "interpreterPlaceholder": "解释器绝对路径，如 /usr/bin/python3",
+        "argsLabel": "尾参约束位",
+        "argsHint": "每个位置必须是 pin / 枚举 / 正则 / 路径前缀之一，无「任意」通配。",
+        "argAdd": "添加参数位",
+        "argRemove": "移除",
+        "argKind": {
+          "pin": "pin（字面）",
+          "enum": "枚举",
+          "pattern": "正则",
+          "path_within": "路径前缀"
+        },
+        "argPlaceholder": {
+          "pin": "字面值",
+          "enum": "逗号分隔允许值，如 approve, reject",
+          "pattern": "锚定正则，如 ^REQ-[0-9]+$",
+          "path_within": "绝对目录前缀，如 /Users/me/exports"
+        },
+        "cwdPin": "把工作目录锁定到该 Skill 目录",
+        "errToolRequired": "请选择要放行的写工具。",
+        "errEntryRequired": "请选择 Skill 与入口脚本。",
+        "errInterpreterAbs": "解释器必须是绝对路径（以 / 开头）。",
+        "errArgEmpty": "参数位的值不能为空。",
+        "errOriginRequired": "请填写要放行的域名或完整 URL。",
+        "originPlaceholder": "域名或完整 URL，如 api.vendor.com 或 https://api.vendor.com",
+        "originHint": "免审批的联网域名（gated 档白名单）。提交后由服务端归一为 scheme://host:port 入库并回显；不同大小写 / 端口 / 子域视作不同来源，子域不继承。",
+        "warnTitle": "高危：免审批自动执行",
+        "warnBody": "创建后，「{agent}」将在无人确认时自动执行 {action}。规则只在{mode}中生效；删除规则即恢复逐次审批。",
+        "confirmCreate": "我已了解，创建规则",
+        "create": "创建",
+        "cancel": "取消",
+        "grant": {
+          "label": "允许运行本机 Skill 脚本（grant_exec）",
+          "hint": "为该 Agent 的无人值守运行开放执行面。仍需上方白名单规则命中 + 首次运行在灵动岛批准才会免审批执行；无规则命中时逐次弹审批。保存后生效。",
+          "warn": "高危：开启后，「{agent}」的无人值守运行可以请求执行本机 Skill 脚本。确定开启？",
+          "confirm": "确认开启"
+        },
+        "web": {
+          "label": "联网（grant_web）",
+          "hint": "该 Agent 的无人值守运行是否可联网，以及免审批范围。保存后生效。",
+          "grant": {
+            "off": "关闭",
+            "gated": "域名白名单",
+            "open": "全开放"
+          },
+          "searchWarn": "gated / open 均含 web_search 免审批外送：搜索关键词会直接发往 DuckDuckGo，不再逐次弹审批。",
+          "openWarn": "全开放：该 Agent 可免审批抓取任意 URL，被夹带的数据可编入 URL 外送，仅 SSRF 防护兜底。",
+          "untrustedOpenWarn": "邮件触发 × 全开放联网是最大暴露面组合：投毒邮件可诱导把邮件内容编入外网请求。请仅对可信 Agent 开启。",
+          "gatedHint": "gated 档：web_fetch 仅命中下方域名白名单才免审批，未命中的域名逐次弹审批（卡上可「总是允许该域名」）。"
+        },
+        "mounts": {
+          "label": "Skill 挂载",
+          "hint": "该 Agent 无人值守运行时可见的 Skill（收窄面）。未挂载的 Skill 其工具对该 Agent 不可用；挂载不能复活全局已关闭的 Skill。",
+          "defaultTag": "默认挂载集（email / search / report）",
+          "empty": "显式零挂载：该 Agent 无任何 Skill 工具。"
+        }
+      },
+      "deleteConfirm": "确认删除此 Agent？",
+      "errComputerUseScope": "开启电脑/浏览器自动化时，请填写至少一个具体域名或桌面应用名称（禁止使用 * / all 通配符）。"
+    }
+  },
+  "agentSettings": {
+    "section": {
+      "identity": "身份",
+      "instructions": "指令",
+      "model": "模型",
+      "when": "什么时候动",
+      "capabilities": "能碰什么",
+      "specific": "它自己的设置",
+      "danger": "删掉它"
+    },
+    "readonly": "只读",
+    "builtinToolsNote": "它的工具是写死的，删不掉也加不了。",
+    "notFound": "没有找到这位成员的配置。",
+    "loading": "配置加载中…",
+    "saveDone": "已保存",
+    "header": {
+      "tryRun": "试运行一次"
+    },
+    "role": {
+      "builtin": "内置成员",
+      "custom": "自定义成员"
+    },
+    "model": {
+      "primary": "主力",
+      "fallback": "失败时回退",
+      "note": "主力模型调用失败（超时、限流或报错）时，才用回退模型再试。"
+    },
+    "when": {
+      "manual": "不定时 · 你找它才动",
+      "timed": "按时间",
+      "event": "按事件",
+      "eventKindLabel": "触发事件",
+      "dailySentence": "每天 {time} 运行",
+      "dailyHourLabel": "每日运行时刻",
+      "dailyHourOnly": "这位成员按天跑一轮，只支持整点时刻。"
+    },
+    "regex": {
+      "ok": "正则可用",
+      "invalid": "正则无法编译：{message}",
+      "jsNote": "校验按浏览器正则语法；个别 Python 专有写法（如命名分组）可能误报。",
+      "tryLabel": "拿最近 5 封标题试一下",
+      "matched": "命中",
+      "missed": "未命中",
+      "empty": "没取到收件箱标题",
+      "loadFailed": "取标题失败，稍后再试"
+    },
+    "notionDb": {
+      "ok": "格式正确",
+      "parsed": "已识别库 ID：{id}",
+      "useParsed": "使用这个 ID",
+      "invalid": "不像 Notion 库 ID：应为 32 位十六进制（可带连字符），也可以直接粘贴库链接"
+    },
+    "docs": {
+      "injected": "注入的身份文档",
+      "sameSource": "与「设置 → AI → 身份文档」是同一份，改哪边都一样。"
+    },
+    "create": {
+      "hint": "先写清身份和指令再保存，要不要定时之后再说；保存后才有对话。"
+    },
+    "main": {
+      "role": "主 Agent · 全局对话本身"
+    }
+  },
+  "team": {
+    "tabs": {
+      "aria": "视图档",
+      "chat": "对话",
+      "record": "执行",
+      "settings": "设置"
+    },
+    "goChat": "去对话",
+    "list": {
+      "builtin": "内置",
+      "custom": "自定义",
+      "working": "工作中",
+      "newAgent": "新建智能体"
+    },
+    "noChat": {
+      "matterFollowup": "跟进是跟着某一件事走的：对话在那件事里开，执行记录也在那件事的页面里（每件事一条时间线）。这里列的是已有的事项对话。",
+      "preprocess": "它是跟着收信自动跑的流水线环节，逐封分类新邮件，不接对话——想问某封为什么这么判，在那封邮件里问主助手更直接。下面是最近被分类的邮件。",
+      "projectProgress": "确定性流程，不走 AI——没有可对话的推理面，记录只由触发条件产生。",
+      "search": "它的调用面在 ⌘K 命令面板，无独立执行记录，也不在这里对话。"
+    },
+    "matterFollowup": {
+      "title": "事项跟进",
+      "badge": "按事项规则",
+      "settingsIntro": "这里是所有事项共用的跟进默认：任务契约改完点「保存」，模型和网页档改完即生效。单件事的跟进规则在那件事的页面里改。",
+      "perMatterTitle": "逐事项的跟进规则",
+      "perMatterNote": "多久跟一次、跟进时看什么，由每件事自己的跟进规则决定——在事项页里那件事的跟进设置中修改。"
+    },
+    "record": {
+      "listTitle": "执行记录",
+      "listTitleMatter": "事项对话",
+      "new": "新对话",
+      "auto": "自动",
+      "expandList": "展开记录列",
+      "collapseList": "收起记录列",
+      "newSessionTitlePre": "和",
+      "newSessionTitleRest": "{name} 开始新对话",
+      "runUntitled": "一次执行",
+      "noOutput": "这次运行没有产生任何输出。",
+      "noOutputError": "这次运行没有产生输出：{error}",
+      "rawPrompt": {
+        "title": "原始记录（任务契约 prompt）",
+        "copy": "复制"
+      },
+      "trigger": {
+        "badge": "自动触发",
+        "manual": "手动触发",
+        "schedule": "排程触发",
+        "cron": "定时触发（cron）",
+        "email": "收信触发",
+        "calendarChange": "日程变动触发",
+        "calendarBefore": "会前触发",
+        "unknown": "触发方式未记录"
+      },
+      "emptyRuns": "还没有执行记录——它由触发条件叫起来才会跑，手动试运行也会记在这里。",
+      "emptyReports": "还没有报告记录——到点生成或手动生成后会出现在这里。",
+      "emptyProgress": "还没有同步记录——收到命中触发词的周报邮件时才会跑。",
+      "emptyPreprocess": "最近没有被分类的邮件——开启 AI 邮件预处理后，新收的邮件会逐封出现在这里。",
+      "emptyMatterSessions": "还没有事项对话——在某件事里跟 AI 聊过之后，那些会话会出现在这里。"
+    },
+    "welcome": {
+      "cadence": {
+        "daily": "每天",
+        "weekly": "每周",
+        "monthly": "每月"
+      },
+      "schedule": {
+        "report": "它会按排程自动运行，{cadence}生成一次报告；在这里说话就是直接吩咐它。",
+        "daily": "它每天定时自动跑一轮；在这里说话就是直接吩咐它。",
+        "timed": "它按排程自动运行（{sentence}）；在这里说话就是直接吩咐它。",
+        "timedPlain": "它按排程定时自动运行；在这里说话就是直接吩咐它。",
+        "event": "它在邮件或日程命中条件时自动运行；在这里说话就是直接吩咐它。",
+        "manual": "它没有定时任务，只有你来找它才会动——在这里说话就是直接吩咐它。"
+      }
+    },
+    "detail": {
+      "duration": "用时",
+      "steps": "步数",
+      "tokens": "Token",
+      "error": "错误",
+      "model": "模型",
+      "reviewStatus": "标注状态",
+      "noTranscript": "这类执行不建会话、没有过程 transcript，只有结果摘要。",
+      "tokensInOut": "输入 {input} · 输出 {output}",
+      "report": {
+        "trigger": "触发",
+        "output": "输出",
+        "triggerBody": "按{cadence}排程生成 · {date}",
+        "open": "去报告",
+        "openFromRun": "打开这次执行产出的那份报告",
+        "fullText": "报告全文"
+      },
+      "progress": {
+        "counts": "{total} 个项目 · 新建 {created} · 更新 {updated} · 失败 {failed}",
+        "failNote": "这次整批没有写入。确定性流程不会猜测字段——修正来源表格后重发该邮件即可重跑（同一封重跑会覆盖本条记录）。"
+      }
+    },
+    "preprocess": {
+      "labels": {
+        "summary": "概括",
+        "urgencyReason": "判定理由",
+        "keyPoints": "要点",
+        "mailActions": "建议操作",
+        "recommendedActions": "推荐处理",
+        "replySuggestion": "建议回复"
+      },
+      "classified": "已分类",
+      "failed": "这一封没跑通",
+      "retries": "重试",
+      "failNote": "这一封没有写入分类结果。预处理失败会按退避重试，重试用完仍失败就停在这里 —— 邮件本身完好，只是没有 AI 标注。"
+    }
+  },
+  "runErrors": {
+    "E_RUN_TIMEOUT": "运行超时，AI 在时限内没有完成",
+    "E_GATEWAY_DOWN": "AI 服务未启动或连接不上",
+    "E_GATEWAY_BAD_RESPONSE": "AI 服务返回了无法识别的结果",
+    "E_GATEWAY_HTTP": "AI 服务请求失败",
+    "E_AGENT": "AI 调用出错",
+    "E_BUDGET_TIME": "运行超出时间预算",
+    "E_QUOTA": "AI 额度不足",
+    "E_UPSTREAM": "AI 上游服务出错",
+    "E_RUN_STOPPED": "运行被手动停止",
+    "E_RUN_ERROR": "运行出错",
+    "E_WORKER_CRASH": "后台执行进程异常退出",
+    "E_RUN_ACTIVE": "同一会话已有运行在进行"
+  },
+  "computerUseOverlay": {
+    "activeTitle": "MailAgent 正在操控电脑",
+    "stepLabel": "第 {step} 步",
+    "stopTakeover": "停止 / 接管",
+    "stopping": "正在停止…",
+    "desktopBadge": "桌面操控"
+  },
+  "browserPane": {
+    "title": "内置浏览器",
+    "toggleButton": "内置浏览器",
+    "popOutTab": "在独立标签页中打开",
+    "returnToSidebar": "收回对话右侧栏",
+    "closeSidebar": "收起内置浏览器",
+    "newTab": "新建标签页",
+    "closeTab": "关闭标签页",
+    "back": "后退",
+    "forward": "前进",
+    "reload": "刷新",
+    "urlPlaceholder": "输入网址或搜索地址后回车",
+    "openExternalChrome": "在独立 Chrome 窗口打开",
+    "stopKernel": "停止浏览器内核",
+    "connecting": "正在连接内置浏览器…",
+    "disconnected": "与内置浏览器的实时连接已断开",
+    "reconnect": "重新连接",
+    "notInstalledTitle": "内置浏览器尚未启用",
+    "notInstalledHint": "请先在 设置 → 连接器 中一键安装并启用 Browser Use。",
+    "modeUnsupportedTitle": "当前模式不支持内置实时画面",
+    "modeUnsupportedHint": "请切回「内置受管浏览器」模式后，即可在应用内直接查看与操作。",
+    "openConnectors": "前往连接器设置",
+    "agentControlling": "AI 正在操作此浏览器",
+    "stopTakeover": "停止 / 接管",
+    "untitledTab": "新标签页",
+    "moreMenu": "更多操作",
+    "manageCookies": "管理登录态 / 导入 Cookie",
+    "openDevTools": "打开开发者工具",
+    "resetSession": "重置浏览器会话",
+    "cookieManager": {
+      "title": "浏览器登录态管理",
+      "storedTab": "已保存登录态",
+      "importTab": "从 Chrome 导入",
+      "searchStoredPlaceholder": "搜索已保存域名…",
+      "searchImportPlaceholder": "搜索 Chrome 域名…",
+      "emptyStored": "内置浏览器暂未保存任何站点 Cookie",
+      "goImport": "从 Chrome 导入登录态",
+      "cookieCount": "{count} 条 Cookie",
+      "clearDomain": "清除此站点登录态",
+      "clearedDomain": "已清除 {domain} 的登录态（{count} 条 Cookie）",
+      "clearAll": "清除全部登录态",
+      "confirmClearAll": "确认清空全部（{count} 个站点）",
+      "cancel": "取消",
+      "clearedAll": "已清空内置浏览器全部登录态（{count} 条 Cookie）",
+      "selectNonSensitive": "全选非敏感",
+      "selectAll": "全选",
+      "clearSelection": "清空选择",
+      "sensitiveBadge": "敏感/金融",
+      "importSelected": "导入所选登录态 ({count})",
+      "importing": "正在导入…",
+      "selectedCount": "已选 {selected} / {total} 个域名",
+      "emptyChromeDomains": "该 Chrome 配置中未发现可导入的非过期 Cookie",
+      "refresh": "刷新列表",
+      "close": "关闭面板"
+    }
+  }
+}

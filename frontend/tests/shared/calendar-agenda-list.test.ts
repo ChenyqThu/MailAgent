@@ -12,8 +12,8 @@ import { describe, expect, test } from 'vitest'
 
 import type { AgendaEntry } from '@shared/api/types'
 import { buildAgendaSections } from '@shared/components/calendar/lib/agendaList'
-import zhCN from '../../src/shared/i18n/locales/zh-CN/common.json'
-import enUS from '../../src/shared/i18n/locales/en-US/common.json'
+import zhCN from '../../src/shared/i18n/locales/zh-CN'
+import enUS from '../../src/shared/i18n/locales/en-US'
 
 /** 窗口起点固定在一个普通工作日 (本地 00:00), 与真实运行时刻无关。 */
 const WIN_START = new Date(2026, 7, 31)

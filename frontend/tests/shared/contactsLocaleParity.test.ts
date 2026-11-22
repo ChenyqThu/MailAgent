@@ -5,8 +5,8 @@
 
 import { describe, expect, test } from 'vitest'
 
-import zhCN from '../../src/shared/i18n/locales/zh-CN/common.json'
-import enUS from '../../src/shared/i18n/locales/en-US/common.json'
+import zhCN from '../../src/shared/i18n/locales/zh-CN'
+import enUS from '../../src/shared/i18n/locales/en-US'
 
 function flattenKeys(node: unknown, prefix = ''): string[] {
   if (node === null || typeof node !== 'object') return [prefix]

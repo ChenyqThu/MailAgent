@@ -45,8 +45,8 @@ import { ProjectProgressSettings } from '../../src/shared/components/agents/sett
 import { useEnvStore } from '@shared/state/env'
 import { useRestartStore } from '@shared/state/restart'
 import type { ReportAgentConfig } from '@shared/api/types'
-import zhCommon from '../../src/shared/i18n/locales/zh-CN/common.json'
-import enCommon from '../../src/shared/i18n/locales/en-US/common.json'
+import zhCommon from '../../src/shared/i18n/locales/zh-CN'
+import enCommon from '../../src/shared/i18n/locales/en-US'
 
 await i18n.changeLanguage('zh-CN')
 

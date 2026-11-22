@@ -7,8 +7,8 @@ import ICU from 'i18next-icu'
 import LanguageDetector from 'i18next-browser-languagedetector'
 import { initReactI18next } from 'react-i18next'
 
-import zhCommon from './locales/zh-CN/common.json'
-import enCommon from './locales/en-US/common.json'
+import zhCommon from './locales/zh-CN'
+import enCommon from './locales/en-US'
 
 export const SUPPORTED_LOCALES = ['zh-CN', 'en-US'] as const
 export type Locale = (typeof SUPPORTED_LOCALES)[number]
