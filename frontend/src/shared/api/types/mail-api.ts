@@ -17,7 +17,6 @@ import type {
   AttachmentApi,
   EnvApi,
   NotionAgentApi,
-  NotionWriteApi,
   PromptsApi,
   ServicesApi,
   SettingsApi
@@ -46,7 +45,6 @@ export interface MailApi {
   llm: LlmApi
   /** issue #59 — KOS 入库台账统计 (LLM Dashboard「知识库入库」区)。 */
   kos: KosApi
-  notion: NotionWriteApi
   /** Sprint 6 — admin dashboard data. */
   admin: AdminApi
   /** Sprint 6 — recurring meeting list. */

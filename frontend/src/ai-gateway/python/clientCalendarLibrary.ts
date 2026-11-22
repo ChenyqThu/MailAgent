@@ -30,26 +30,25 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     })
   }
 
-  /** calendar_event_get — one event's full row by iCalendar UID. GET /calendar/events/{uid}
-   *  (?source&recurrenceId; C7: data = the bare detail object). E_NOT_FOUND → null. */
+  /** calendar_event_get — one event's full row by iCalendar UID. GET /calendar/events/by-uid
+   *  (?uid&source&recurrenceId; C7: data = the bare detail object). E_NOT_FOUND → null. */
   async calendarEventGet(
     eventId: string,
     opts: { source?: string; recurrenceId?: string } = {},
     signal?: AbortSignal
   ): Promise<Record<string, unknown> | null> {
     try {
-      return await this._req<Record<string, unknown>>(
-        'GET',
-        `/calendar/events/${encodeURIComponent(eventId)}`,
-        { query: { source: opts.source, recurrenceId: opts.recurrenceId }, signal }
-      )
+      return await this._req<Record<string, unknown>>('GET', '/calendar/events/by-uid', {
+        query: { uid: eventId, source: opts.source, recurrenceId: opts.recurrenceId },
+        signal
+      })
     } catch (e) {
       if (e instanceof DomainError && e.code === 'E_NOT_FOUND') return null
       throw e
     }
   }
 
-  /** calendar_event_reschedule — CalDAV update. PATCH /calendar/events/{uid}; the body's
+  /** calendar_event_reschedule — CalDAV update. PATCH /calendar/events/by-uid?uid=...; the body's
    *  recurrenceId/splitFuture combination selects the CLI-mirrored branch (整系列 / 改这一次
    *  detached / 改未来 split). startIso/endIso must be tz-aware (the server rejects naive). */
   calendarEventUpdate(
@@ -57,15 +56,15 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     body: Record<string, unknown>,
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>(
-      'PATCH',
-      `/calendar/events/${encodeURIComponent(eventId)}`,
-      { body, signal }
-    )
+    return this._req<Record<string, unknown>>('PATCH', '/calendar/events/by-uid', {
+      query: { uid: eventId },
+      body,
+      signal
+    })
   }
 
   /** calendar_event_rsvp — send the IRREVOCABLE iTIP REPLY to the organizer (recipient is derived
-   *  from the event row SERVER-SIDE — never a caller field). POST /calendar/events/{uid}/rsvp. */
+   *  from the event row SERVER-SIDE — never a caller field). POST /calendar/events/by-uid/rsvp?uid=... */
   calendarEventRsvp(
     eventId: string,
     body: { response: string; recurrenceId?: string },
@@ -73,25 +72,24 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
   ): Promise<Record<string, unknown>> {
     const wire: Record<string, unknown> = { response: body.response }
     if (body.recurrenceId !== undefined) wire.recurrenceId = body.recurrenceId
-    return this._req<Record<string, unknown>>(
-      'POST',
-      `/calendar/events/${encodeURIComponent(eventId)}/rsvp`,
-      { body: wire, signal }
-    )
+    return this._req<Record<string, unknown>>('POST', '/calendar/events/by-uid/rsvp', {
+      query: { uid: eventId },
+      body: wire,
+      signal
+    })
   }
 
   /** calendar_event_delete — CalDAV DELETE (irreversible; the HTTP request IS the confirmation —
-   *  the gateway approval card is the human gate). DELETE /calendar/events/{uid}?calendarName=. */
+   *  the gateway approval card is the human gate). DELETE /calendar/events/by-uid?uid=...&calendarName=. */
   calendarEventDelete(
     eventId: string,
     calendarName?: string,
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>(
-      'DELETE',
-      `/calendar/events/${encodeURIComponent(eventId)}`,
-      { query: { calendarName }, signal }
-    )
+    return this._req<Record<string, unknown>>('DELETE', '/calendar/events/by-uid', {
+      query: { uid: eventId, calendarName },
+      signal
+    })
   }
 
   // ── 资料库（Library）read face — design §3. Rows come back snake_case (= DB columns); the

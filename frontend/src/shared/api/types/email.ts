@@ -183,14 +183,6 @@ export interface LlmRunOpts {
   noOverwrite?: boolean
 }
 
-export interface UpdateFlagOpts {
-  isRead?: boolean
-  isFlagged?: boolean
-  /** Notion DB enum: 未处理 / AI Reviewed / 已同步 / 已完成 / 草稿已创建. */
-  processingStatus?: string
-  dryRun?: boolean
-}
-
 // ---- Compose (回复 / 回复所有 / 转发) — `mailagent email draft|send` --------
 //
 // `email.draft`     → 把 compose 内容写进 Drafts folder (IMAP APPEND), 可重入。
@@ -308,12 +300,9 @@ export interface DraftPlanResult {
 }
 
 /**
- * Sprint 15 — `mailagent email flag` opts. Mirrors `EmailFlagOpts` declared
- * in `src/electron/main/handlers/write_ops.ts` (same shape, kept duplicated
- * to keep main / renderer free of cross-imports — same convention as
- * `UpdateFlagOpts`).
+ * Sprint 15 — `mailagent email flag` opts.
  *
- * Replaces the v3 `notion.updateFlag` path: writes SQLite flag intent + a
+ * Replaces the retired v3 `notion.updateFlag` path: writes SQLite flag intent + a
  * dual-target outbox row (mailapp + notion), then mail-sync's FanoutWorker
  * dispatches both sides async. Pass `internalId = null` + `opts.ids = [...]`
  * to batch (single CLI fork enqueues N×2 outbox rows).
@@ -436,8 +425,7 @@ export interface EmailApi {
    * Batch: `flag(null, {ids: [...], isRead: true})` — one CLI fork, N×2
    * outbox rows. The two modes are mutually exclusive at the CLI level.
    *
-   * Replaces `mailApi.notion.updateFlag(...)`; the old method stays during
-   * Sprint 15 grayscale (frontend/SPRINT15-D handoff §6).
+   * Replaces the retired `mailApi.notion.updateFlag(...)` surface.
    */
   flag(internalId: number | null, opts: EmailFlagOpts): Promise<unknown>
   /** 归档收件箱邮件: CLI `email archive` 做 IMAP MOVE INBOX→Archive + SQLite/Notion

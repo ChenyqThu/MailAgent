@@ -322,7 +322,7 @@ describe('HttpApi — calendar 写方法 (阶段 3.1 #11)', () => {
     expect(out).toEqual({ ical_uid: 'uid-new' })
   })
 
-  test('eventUpdate → PATCH /calendar/events/{uid}; icalUid 只进 URL 不进 body; 周期参数透传', async () => {
+  test('eventUpdate → PATCH /calendar/events/by-uid?uid=…; icalUid 只进 query 不进 body; 周期参数透传', async () => {
     fetchMock.mockResolvedValue(envelopeResponse({ action: 'split_series' }))
     await api.calendar.eventUpdate({
       icalUid: 'uid a/b',
@@ -332,8 +332,10 @@ describe('HttpApi — calendar 写方法 (阶段 3.1 #11)', () => {
       clearAttendees: true
     })
     expect(calledMethod()).toBe('PATCH')
-    // uid URL-encode (空格/斜杠不能撕裂路径段)。
-    expect(calledUrl()).toContain('/api/calendar/events/uid%20a%2Fb')
+    const url = new URL(calledUrl(), 'http://127.0.0.1')
+    expect(url.pathname).toBe('/api/calendar/events/by-uid')
+    // uid 走 query 参数无损传输（空格/斜杠不能进入 path 分段被 ASGI 拆裂）。
+    expect(url.searchParams.get('uid')).toBe('uid a/b')
     const body = calledBody() as Record<string, unknown>
     expect(body).toMatchObject({
       summary: 'moved',
@@ -344,32 +346,38 @@ describe('HttpApi — calendar 写方法 (阶段 3.1 #11)', () => {
     expect(body).not.toHaveProperty('icalUid')
   })
 
-  test('eventDelete → DELETE /calendar/events/{uid}?calendarName=…', async () => {
+  test('eventDelete → DELETE /calendar/events/by-uid?uid=…&calendarName=…', async () => {
     fetchMock.mockResolvedValue(envelopeResponse({ action: 'deleted' }))
-    await api.calendar.eventDelete({ icalUid: 'uid-1', calendarName: 'Work' })
+    await api.calendar.eventDelete({ icalUid: 'uid a/b', calendarName: 'Work' })
     expect(calledMethod()).toBe('DELETE')
-    expect(calledUrl()).toContain('/api/calendar/events/uid-1')
-    expect(calledUrl()).toContain('calendarName=Work')
+    const url = new URL(calledUrl(), 'http://127.0.0.1')
+    expect(url.pathname).toBe('/api/calendar/events/by-uid')
+    expect(url.searchParams.get('uid')).toBe('uid a/b')
+    expect(url.searchParams.get('calendarName')).toBe('Work')
   })
 
-  test('eventRsvp → POST /calendar/events/{uid}/rsvp + response/dryRun 透传', async () => {
+  test('eventRsvp → POST /calendar/events/by-uid/rsvp?uid=… + response/dryRun 透传', async () => {
     fetchMock.mockResolvedValue(
       envelopeResponse({ response_status: 'ACCEPTED', to_email: 'boss@example.com' })
     )
     const out = await api.calendar.eventRsvp({
-      icalUid: 'uid-1',
+      icalUid: 'uid a/b',
       response: 'accept',
       dryRun: true
     })
-    expect(calledUrl()).toContain('/api/calendar/events/uid-1/rsvp')
+    const url = new URL(calledUrl(), 'http://127.0.0.1')
+    expect(url.pathname).toBe('/api/calendar/events/by-uid/rsvp')
+    expect(url.searchParams.get('uid')).toBe('uid a/b')
     expect(calledBody()).toMatchObject({ response: 'accept', dryRun: true })
     expect(out).toMatchObject({ response_status: 'ACCEPTED' })
   })
 
-  test('eventReplay → POST /calendar/events/{uid}/replay + source 透传', async () => {
+  test('eventReplay → POST /calendar/events/by-uid/replay?uid=… + source 透传', async () => {
     fetchMock.mockResolvedValue(envelopeResponse({ action: 'updated', page_id: 'pg-1' }))
-    await api.calendar.eventReplay({ icalUid: 'uid-1', source: 'caldav' })
-    expect(calledUrl()).toContain('/api/calendar/events/uid-1/replay')
+    await api.calendar.eventReplay({ icalUid: 'uid a/b', source: 'caldav' })
+    const url = new URL(calledUrl(), 'http://127.0.0.1')
+    expect(url.pathname).toBe('/api/calendar/events/by-uid/replay')
+    expect(url.searchParams.get('uid')).toBe('uid a/b')
     expect(calledBody()).toMatchObject({ source: 'caldav' })
   })
 
@@ -426,11 +434,24 @@ describe('HttpApi — calendar C7 裸数组解包（远程日历空 bug 回归�
     expect(out).toEqual(states)
   })
 
-  test('eventGet → 返回裸 detail 对象（非 data.event）', async () => {
-    const detail = { ical_uid: 'u1', recurrence_id: null, summary: 'Standup' }
+  test('eventGet → 返回裸 detail 对象（非 data.event），并支持含 `/` UID', async () => {
+    const detail = { ical_uid: 'uid a/b', recurrence_id: null, summary: 'Standup' }
     fetchMock.mockResolvedValue(envelopeResponse(detail))
-    const out = await api.calendar.eventGet({ icalUid: 'u1' })
-    expect(calledUrl()).toContain('/api/calendar/events/u1')
+    const out = await api.calendar.eventGet({ icalUid: 'uid a/b', source: 'caldav' })
+    const url = new URL(calledUrl(), 'http://127.0.0.1')
+    expect(url.pathname).toBe('/api/calendar/events/by-uid')
+    expect(url.searchParams.get('uid')).toBe('uid a/b')
+    expect(url.searchParams.get('source')).toBe('caldav')
     expect(out).toEqual(detail)
+  })
+
+  test('eventSourceEmail → GET /calendar/events/by-uid/source-email?uid=… 支持含 `/` UID', async () => {
+    const src = { ical_uid: 'uid a/b', internal_id: 42, method: 'REQUEST' }
+    fetchMock.mockResolvedValue(envelopeResponse(src))
+    const out = await api.calendar.eventSourceEmail('uid a/b')
+    const url = new URL(calledUrl(), 'http://127.0.0.1')
+    expect(url.pathname).toBe('/api/calendar/events/by-uid/source-email')
+    expect(url.searchParams.get('uid')).toBe('uid a/b')
+    expect(out).toEqual(src)
   })
 })

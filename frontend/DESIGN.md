@@ -68,11 +68,12 @@ All colors live as Tailwind tokens; production code references them by name
 via `theme.extend.colors`. **Never inline hex** outside the `:root` token
 definition.
 
-> **Live values: `index.css` is SSoT (updated past v1).** The hex tables in
+> **Live values: `styles/tokens.css` is SSoT (updated past v1).** The hex tables in
 > §2.1–§2.5 capture the original v1 design *intent*; the authoritative live
-> token values now live in `frontend/src/electron/renderer/index.css` `:root`
-> (Sprint 4 a11y contrast retune + Theme v3 hex-collection — §18). When a hex
-> here disagrees with `index.css`, `index.css` wins. Don't re-tune these tables
+> token values now live in `frontend/src/electron/renderer/styles/tokens.css` `:root`
+> (imported via `frontend/src/electron/renderer/index.css`; Sprint 4 a11y contrast
+> retune + Theme v3 hex-collection — §18). When a hex here disagrees with
+> `styles/tokens.css`, `styles/tokens.css` wins. Don't re-tune these tables
 > by hand — read the CSS.
 
 ### 2.1 Window-chrome / surface tiers (6 levels)
@@ -1747,8 +1748,8 @@ not a rewrite. The material architecture (OS vibrancy as the sole blur layer +
 four-tier overlay + `data-glass` moods + solid fallback), the 6 accents, and
 light/dark all stay intact. Decision record + migration ledger:
 `docs/plans/theme-v3-native-material/README.md` (archived after landing). Live
-token values live in `frontend/src/electron/renderer/index.css` `:root` (SSoT);
-this section is the design-intent index.
+token values live in `frontend/src/electron/renderer/styles/tokens.css` `:root`
+(SSoT, imported via `index.css`); this section is the design-intent index.
 
 ### 18.1 Change overview
 

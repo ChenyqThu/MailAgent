@@ -20,7 +20,7 @@
 - **环境禁令**：macOS 下 **没有 `sudo`**；不运行交互式命令；未先跑诊断不盲改代码。
 - **跨边界常量纪律**：同一常量 / 枚举 / 派生表要在第二处手抄前，先问能不能消灭镜像（下沉零依赖叶子模块）；消灭不了才建一致性测试闸（见 `CLAUDE.md` & `tests/config/`）。
 - **前端 Design v3 铁律（[`frontend/DESIGN.md`](./frontend/DESIGN.md) §18）**：
-  - Token SSoT 在 `frontend/src/electron/renderer/index.css`，**禁止硬编码 hex**（`icons/` 品牌商标资产除外）。
+  - Token SSoT 在 `frontend/src/electron/renderer/styles/tokens.css`（经 `frontend/src/electron/renderer/index.css` 入口引入），**禁止硬编码 hex**（`icons/` 品牌商标资产除外）。
   - **中文最小字号 ≥ 14px（`text-aux` / `text-body`）**：`text-micro` (11px) / `text-meta` (12px) 仅限 ASCII/英文/数字，ESLint 规则 `mailagent/no-cjk-in-mono-size` 会直接拦 CI。
   - **中英双语 i18n 同源**：`locales/zh-CN/*.json` 与 `locales/en-US/*.json` 必须严格对齐。
 - **项目级 Skills（`.agents/skills/` 镜像 `.claude/skills/`）**：

@@ -35,7 +35,7 @@ const INFRA_EXCLUDES = new Set([
 // 已知发布文件 → 抽取数下限。抽取器坏掉时这里先红、且报得出是哪个文件。
 const PINNED_PUBLISHER_FILES: Record<string, number> = {
   'mail/sync_store.py': 3, // email.synced/failed/dead_letter + folder.changed
-  'mail/new_watcher.py': 2, // email.new + email.flag_changed + email.synced
+  'mail/new_watcher_reconcile.py': 2, // email.new + email.flag_changed + email.synced (Wave 2.3A 拆入 reconcile)
   'services/mail_write.py': 3, // flag/pin/synced + folder.changed
   'sync/outbox.py': 3, // enqueued/done + failed/dead_letter (变量三元)
   'sync/job_worker.py': 3, // running/progress + done/failed (变量三元)

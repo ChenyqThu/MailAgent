@@ -85,12 +85,14 @@ function calDomain(overrides?: {
     if (url.includes('/calendar/events?') || url.endsWith('/calendar/events')) {
       return okEnvelope(overrides?.events ?? [OCCURRENCE])
     }
-    if (overrides?.detailStatus && url.includes('/calendar/events/')) {
+    if (overrides?.detailStatus && url.includes('/calendar/events/by-uid')) {
       const s = overrides.detailStatus
       return errEnvelope(s.code, s.message, s.http)
     }
-    if (url.includes('/rsvp')) return okEnvelope(overrides?.writeResult ?? { action: 'rsvp-sent' })
-    if (url.includes('/calendar/events/')) {
+    if (url.includes('/calendar/events/by-uid/rsvp')) {
+      return okEnvelope(overrides?.writeResult ?? { action: 'rsvp-sent' })
+    }
+    if (url.includes('/calendar/events/by-uid')) {
       // GET detail vs PATCH/DELETE share the path — a PATCH carries a body, a DELETE carries the
       // calendarName query (the tests always pass one); a bare GET has neither.
       if (body !== undefined || url.includes('calendarName=')) {
@@ -343,7 +345,7 @@ describe('calendar write tools — edit tier, 恒 HITL', () => {
     const tools = createCalendarWriteTools(
       calDomain({
         onCall: (_m, url, body) => {
-          if (url.includes('/calendar/events/') && body && !url.includes('/rsvp')) {
+          if (url.includes('/calendar/events/by-uid') && body && !url.includes('/rsvp')) {
             patched = { url, body: JSON.parse(body) as Record<string, unknown> }
           }
         }
@@ -353,13 +355,15 @@ describe('calendar write tools — edit tier, 恒 HITL', () => {
       { contextMode: 'manual_chat' }
     )
     const out = (await approveAndRun(guard, tools.calendar_event_reschedule, {
-      event_id: 'uid-standup@cal.test',
+      event_id: 'uid-standup/a@cal.test',
       new_start: '2026-07-16T14:00',
       new_end: '2026-07-16T15:00',
       scope: 'series',
       timezone: 'America/Los_Angeles'
     })) as Record<string, unknown>
-    expect(patched!.url).toContain('/calendar/events/uid-standup%40cal.test')
+    const patchedUrl = new URL(patched!.url)
+    expect(patchedUrl.pathname).toBe('/api/calendar/events/by-uid')
+    expect(patchedUrl.searchParams.get('uid')).toBe('uid-standup/a@cal.test')
     // LA 14:00 PDT == 21:00Z
     expect(patched!.body).toEqual({
       startIso: '2026-07-16T21:00:00.000Z',
@@ -377,7 +381,7 @@ describe('calendar write tools — edit tier, 恒 HITL', () => {
     const tools = createCalendarWriteTools(
       calDomain({
         onCall: (_m, url, b) => {
-          if (url.includes('/calendar/events/') && b)
+          if (url.includes('/calendar/events/by-uid') && b && !url.includes('/rsvp'))
             body = JSON.parse(b) as Record<string, unknown>
         }
       }),
@@ -469,10 +473,12 @@ describe('calendar write tools — edit tier, 恒 HITL', () => {
       { contextMode: 'manual_chat' }
     )
     const out = (await approveAndRun(guard, tools.calendar_event_rsvp, {
-      event_id: 'uid-standup@cal.test',
+      event_id: 'uid-standup/a@cal.test',
       response: 'accept'
     })) as { rsvp_sent: boolean; server: Record<string, unknown> }
-    expect(captured!.url).toContain('/calendar/events/uid-standup%40cal.test/rsvp')
+    const rsvpUrl = new URL(captured!.url)
+    expect(rsvpUrl.pathname).toBe('/api/calendar/events/by-uid/rsvp')
+    expect(rsvpUrl.searchParams.get('uid')).toBe('uid-standup/a@cal.test')
     expect(captured!.body).toEqual({ response: 'accept' })
     expect(out.rsvp_sent).toBe(true)
     expect(out.server.to_email).toBe('boss@corp.test')

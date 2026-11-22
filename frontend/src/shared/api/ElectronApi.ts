@@ -71,7 +71,6 @@ import type {
   NlToDslResult,
   NotificationPermissionResult,
   NotificationSystemStatus,
-  NotionWriteApi,
   PersistentSettings,
   PingResult,
   PromptsApi,
@@ -604,7 +603,6 @@ export class ElectronApi implements MailApi {
   davmail: DavMailApi = createDavMailApi(loopbackBaseUrl())
   llm: LlmApi = this.loopbackHttp.llm
   kos: KosApi = this.loopbackHttp.kos
-  notion: NotionWriteApi = this.loopbackHttp.notion
   admin: AdminApi = {
     ...this.loopbackHttp.admin,
     health: async (): Promise<AdminHealthData> => {

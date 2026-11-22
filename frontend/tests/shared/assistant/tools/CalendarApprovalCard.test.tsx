@@ -279,3 +279,19 @@ describe('the buttons decide', () => {
     expect(respond).toHaveBeenCalledWith({ approved: false, reason: '这个会议其实还没确认场地' })
   })
 })
+
+describe('slash-containing UID lossless wire URL', () => {
+  test('encodes UID into ?uid= query on /calendar/events/by-uid instead of path segment', async () => {
+    stubFacts(SERVER_FACTS)
+    render(
+      <CalendarApprovalCard
+        {...mockProps('calendar_event_reschedule', { ...RESCHEDULE_ARGS, event_id: 'evt/a/b' })}
+      />
+    )
+    await waitFor(() => expect(screen.getByText('原时间')).toBeTruthy())
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      'http://127.0.0.1:8200/api/calendar/events/by-uid?uid=evt%2Fa%2Fb&source=caldav'
+    )
+  })
+})

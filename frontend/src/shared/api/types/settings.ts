@@ -1,5 +1,4 @@
 import type { AttachmentMeta } from './core'
-import type { UpdateFlagOpts } from './email'
 
 // ---- Sprint 6 §2.2 — SettingsPage surface --------------------------------
 
@@ -95,11 +94,6 @@ export interface SettingsApi {
   requestNotificationPermission(): Promise<NotificationPermissionResult>
   /** 打开 macOS 系统设置 → 通知与聚焦，引导开启横幅/提示样式。 */
   openNotificationSystemSettings(): Promise<{ ok: boolean }>
-}
-
-export interface NotionWriteApi {
-  /** Sprint 5 — push read/flagged/processing_status to the Notion mail page. */
-  updateFlag(internalId: number, opts: UpdateFlagOpts): Promise<unknown>
 }
 
 export interface AttachmentApi {

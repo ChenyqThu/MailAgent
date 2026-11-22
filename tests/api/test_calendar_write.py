@@ -537,7 +537,114 @@ def test_replay_upstream_fail_502(cal_folder_client, monkeypatch):
 
 
 # ===========================================================================
-# 鉴权拒绝 — AUTH_DISABLED off + 无 JWT/本地 token → 五写端点全 401
+# 含 `/` 的 RFC 5545 UID — 实测 FastAPI/Starlette ASGI 真实路由抵达 CalendarService
+# ===========================================================================
+
+
+def test_slash_uid_write_routes_reach_service_via_by_uid_and_path(
+    cal_folder_client, monkeypatch
+):
+    """覆盖 PATCH / DELETE / POST rsvp / POST replay 四条写路由在 `/events/by-uid*`
+    与 legacy `/events/{event_id:path}*` 下均能完整把含 `/` 的 `ical_uid` 送到业务层。
+    """
+    seen: list[tuple[str, str]] = []
+
+    def fake_update(self, **kw):
+        seen.append(("update", kw["ical_uid"]))
+        return {"action": "update_event", "ical_uid": kw["ical_uid"], "calendar_name": "Work"}
+
+    def fake_delete(self, **kw):
+        seen.append(("delete", kw["ical_uid"]))
+        return {"action": "deleted", "ical_uid": kw["ical_uid"], "calendar_name": "Work"}
+
+    def fake_rsvp(self, **kw):
+        seen.append(("rsvp", kw["ical_uid"]))
+        return {
+            "action": "rsvp_sent",
+            "ical_uid": kw["ical_uid"],
+            "recurrence_id": kw.get("recurrence_id"),
+            "source": kw.get("source") or "caldav",
+            "response_status": kw["response_status"],
+            "to_email": "boss@example.com",
+            "dry_run": bool(kw.get("dry_run")),
+        }
+
+    def fake_replay(self, **kw):
+        seen.append(("replay", kw["ical_uid"]))
+        return {
+            "action": "updated",
+            "page_id": "pg-1",
+            "ical_uid": kw["ical_uid"],
+            "recurrence_id": kw.get("recurrence_id"),
+            "source": kw.get("source") or "caldav",
+            "dry_run": bool(kw.get("dry_run")),
+        }
+
+    monkeypatch.setattr(CalendarService, "update_event", fake_update)
+    monkeypatch.setattr(CalendarService, "delete_event", fake_delete)
+    monkeypatch.setattr(CalendarService, "send_rsvp", fake_rsvp)
+    monkeypatch.setattr(CalendarService, "replay_event_to_notion", fake_replay)
+
+    # 1. Canonical lossless query 路由 (含 `/`、空格、路径片段后缀)
+    r_patch = cal_folder_client.patch(
+        "/api/calendar/events/by-uid",
+        params={"uid": "uid a/b/rsvp"},
+        json={"summary": "edited"},
+    )
+    assert r_patch.status_code == 200
+    assert r_patch.json()["data"]["ical_uid"] == "uid a/b/rsvp"
+
+    r_del = cal_folder_client.delete(
+        "/api/calendar/events/by-uid",
+        params={"uid": "uid a/b", "calendarName": "Work"},
+    )
+    assert r_del.status_code == 200
+    assert r_del.json()["data"]["ical_uid"] == "uid a/b"
+
+    r_rsvp = cal_folder_client.post(
+        "/api/calendar/events/by-uid/rsvp",
+        params={"uid": "uid a/b"},
+        json={"response": "accept"},
+    )
+    assert r_rsvp.status_code == 200
+    assert r_rsvp.json()["data"]["ical_uid"] == "uid a/b"
+
+    r_replay = cal_folder_client.post(
+        "/api/calendar/events/by-uid/replay",
+        params={"uid": "uid a/b"},
+        json={},
+    )
+    assert r_replay.status_code == 200
+    assert r_replay.json()["data"]["ical_uid"] == "uid a/b"
+
+    # 2. Legacy `{event_id:path}*` path 兼容路由 (%2F 被 Starlette 解码后仍匹配)
+    assert cal_folder_client.patch(
+        "/api/calendar/events/uid%20a%2Fb", json={"summary": "edited"}
+    ).status_code == 200
+    assert cal_folder_client.delete(
+        "/api/calendar/events/uid%20a%2Fb", params={"calendarName": "Work"}
+    ).status_code == 200
+    assert cal_folder_client.post(
+        "/api/calendar/events/uid%20a%2Fb/rsvp", json={"response": "accept"}
+    ).status_code == 200
+    assert cal_folder_client.post(
+        "/api/calendar/events/uid%20a%2Fb/replay", json={}
+    ).status_code == 200
+
+    assert seen == [
+        ("update", "uid a/b/rsvp"),
+        ("delete", "uid a/b"),
+        ("rsvp", "uid a/b"),
+        ("replay", "uid a/b"),
+        ("update", "uid a/b"),
+        ("delete", "uid a/b"),
+        ("rsvp", "uid a/b"),
+        ("replay", "uid a/b"),
+    ]
+
+
+# ===========================================================================
+# 鉴权拒绝 — AUTH_DISABLED off + 无 JWT/本地 token → 写端点全 401
 # ===========================================================================
 
 
@@ -545,13 +652,21 @@ def test_write_endpoints_reject_unauthenticated(cal_folder_client, monkeypatch):
     monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
 
     reqs = [
-        ("post", "/api/calendar/events", {"summary": "x"}),
-        ("patch", "/api/calendar/events/uid-1", {"summary": "x"}),
-        ("delete", "/api/calendar/events/uid-1", None),
-        ("post", "/api/calendar/events/uid-1/rsvp", {"response": "accept"}),
-        ("post", "/api/calendar/events/uid-1/replay", {}),
+        ("post", "/api/calendar/events", None, {"summary": "x"}),
+        ("patch", "/api/calendar/events/by-uid", {"uid": "uid-1"}, {"summary": "x"}),
+        ("delete", "/api/calendar/events/by-uid", {"uid": "uid-1"}, None),
+        ("post", "/api/calendar/events/by-uid/rsvp", {"uid": "uid-1"}, {"response": "accept"}),
+        ("post", "/api/calendar/events/by-uid/replay", {"uid": "uid-1"}, {}),
+        ("patch", "/api/calendar/events/uid-1", None, {"summary": "x"}),
+        ("delete", "/api/calendar/events/uid-1", None, None),
+        ("post", "/api/calendar/events/uid-1/rsvp", None, {"response": "accept"}),
+        ("post", "/api/calendar/events/uid-1/replay", None, {}),
     ]
-    for method, path, payload in reqs:
-        kwargs = {"json": payload} if payload is not None else {}
+    for method, path, params, payload in reqs:
+        kwargs: dict = {}
+        if params is not None:
+            kwargs["params"] = params
+        if payload is not None:
+            kwargs["json"] = payload
         r = getattr(cal_folder_client, method)(path, **kwargs)
         assert r.status_code == 401, f"{method.upper()} {path} → {r.status_code}"

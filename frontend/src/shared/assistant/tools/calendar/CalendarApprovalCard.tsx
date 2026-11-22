@@ -60,7 +60,7 @@ interface EventFacts {
 
 async function fetchEventFacts(eventId: string): Promise<EventFacts | null> {
   const resp = await fetch(
-    `${resolveApiBaseUrl()}/calendar/events/${encodeURIComponent(eventId)}?source=caldav`,
+    `${resolveApiBaseUrl()}/calendar/events/by-uid?uid=${encodeURIComponent(eventId)}&source=caldav`,
     { credentials: 'include' }
   )
   if (resp.status === 404) return null

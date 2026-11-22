@@ -6,21 +6,28 @@
   GET    /api/calendar/agenda             — agendaList   (→ AgendaEntry[]; 月/日/周视图的
                                             三源聚合: 邮箱日历 / 事项 / Agent 排程,
                                             实现体 src/calendar_sync/agenda.py)
-  GET    /api/calendar/events/{event_id}  — eventGet     (→ CalendarEventDetail | null, 404→null)
+  GET    /api/calendar/events/by-uid?uid=...         — eventGet (无损 query 路由, 兼容含 `/` 的 RFC 5545 UID)
+  GET    /api/calendar/events/{event_id}           — eventGet (path 兼容路由, `{event_id:path}`)
   GET    /api/calendar/email-link/{internal_id}
                                           — emailCalendarLink (→ EmailCalendarLink | null, 404→null)
+  GET    /api/calendar/events/by-uid/source-email?uid=...
+                                          — eventSourceEmail (无损 query 路由)
   GET    /api/calendar/events/{event_id}/source-email
-                                          — eventSourceEmail (→ EventSourceEmail | null, 404→null)
+                                          — eventSourceEmail (path 兼容路由, → EventSourceEmail | null, 404→null)
   GET    /api/calendar/sync-status        — syncStatus   (→ CalendarSyncStateItem[])
   GET    /api/calendar/names              — calendarNames (→ string[])
   POST   /api/calendar/sync-trigger       — syncTrigger  (CalDAV→SQLite, to_thread, →unknown)
   POST   /api/calendar/events             — eventCreate  (CalDAV PUT, to_thread)
+  PATCH  /api/calendar/events/by-uid?uid=...       — eventUpdate (无损 query 路由)
   PATCH  /api/calendar/events/{event_id}  — eventUpdate  (三分支: 整系列 / 改这次 detached /
                                             改未来 split; 语义逐字镜像 CLI `calendar update`)
+  DELETE /api/calendar/events/by-uid?uid=...       — eventDelete (无损 query 路由)
   DELETE /api/calendar/events/{event_id}  — eventDelete  (CalDAV DELETE; 前端 5s undo 后才发,
                                             即 CLI --yes 的确认语义)
-  POST   /api/calendar/events/{event_id}/rsvp   — eventRsvp   (iTIP REPLY via SMTP)
-  POST   /api/calendar/events/{event_id}/replay — eventReplay (重导出 Notion mirror)
+  POST   /api/calendar/events/by-uid/rsvp?uid=...  — eventRsvp   (无损 query 路由)
+  POST   /api/calendar/events/{event_id}/rsvp      — eventRsvp   (iTIP REPLY via SMTP)
+  POST   /api/calendar/events/by-uid/replay?uid=...— eventReplay (无损 query 路由)
+  POST   /api/calendar/events/{event_id}/replay    — eventReplay (重导出 Notion mirror)
 
 写端点纪律 (阶段 3.1, 对齐 email 写面):
   - 鉴权同 email 写端点: ``Depends(verify_cf_access)`` (CF Access JWT L2 + 本地
@@ -271,24 +278,23 @@ async def list_agenda(
 
 
 # ===========================================================================
-# GET /api/calendar/events/{event_id} — CalendarService.get_event
-# (event_id = ical_uid; ?source / ?recurrenceId 选填)
+# GET /api/calendar/events/by-uid (+ path compat /events/{event_id:path})
+#   — CalendarService.get_event / get_event_source_email
+# (by-uid* MUST precede {event_id:path}, and {event_id:path}/source-email MUST
+#  precede {event_id:path}, so RFC 5545 UIDs containing '/' are never torn or
+#  swallowed during ASGI path matching.)
 # ===========================================================================
 
 
-@router.get("/events/{event_id}", dependencies=[Depends(verify_cf_access)])
-async def get_event(
+async def _get_event_impl(
     request: Request,
     event_id: str,
-    cfg: "Config" = Depends(get_settings),
-    source: str = Query("caldav", description=f"source ∈ {VALID_EVENT_SOURCES}"),
-    recurrence_id: Optional[str] = Query(
-        None, alias="recurrenceId", description="非空 = 单次跳脱 occurrence; 留空 = 主事件"
-    ),
+    cfg: "Config",
+    source: str,
+    recurrence_id: Optional[str],
 ):
     """按 (ical_uid, recurrence_id, source) 取单 event 完整 row。
 
-    EventGetOpts 映射: path event_id=icalUid; query source/recurrenceId。
     **C7**: ``data`` = 单个 ``CalendarEventDetail`` (裸对象, 非 {event}; 对齐 frontend
     ``CalendarApi.eventGet`` 返回 ``CalendarEventDetail | null``)。
     404 (E_NOT_FOUND) 当 row 不存在 —— HttpApi (②) 把 404 转成 ``null``, 故服务端只需
@@ -322,6 +328,80 @@ async def get_event(
     return success_envelope(data["event"], request=request, source="sqlite")
 
 
+async def _event_source_email_impl(
+    request: Request,
+    event_id: str,
+    cfg: "Config",
+):
+    """按 ical_uid 反查来源邀请邮件。
+
+    **C7**: ``data`` = 单个 ``EventSourceEmail`` (裸对象, 对齐 frontend
+    ``CalendarApi.eventSourceEmail`` 返回 ``EventSourceEmail | null``)。多封同
+    uid 邮件时优先最新 METHOD:REQUEST, 无 REQUEST 时最新任意一封。404
+    (E_NOT_FOUND) 当该 uid 无映射邮件 (caldav-only 事件 / 旧邮件未回填)。
+    """
+    svc = _build_service(cfg)
+    try:
+        data = svc.get_event_source_email(ical_uid=event_id)
+    except ValueError as exc:
+        raise APIError(
+            "E_NOT_FOUND",
+            str(exc),
+            hint="no invite email mapped to this uid (caldav-only event, "
+            "or emails synced before v34)",
+            source="sqlite",
+        ) from exc
+    return success_envelope(data, request=request, source="sqlite")
+
+
+@router.get("/events/by-uid/source-email", dependencies=[Depends(verify_cf_access)])
+async def event_source_email_by_uid(
+    request: Request,
+    uid: str = Query(..., min_length=1, description="iCalendar UID (query 参数无损传输含 `/` UID)"),
+    cfg: "Config" = Depends(get_settings),
+):
+    return await _event_source_email_impl(request, uid, cfg)
+
+
+@router.get("/events/by-uid", dependencies=[Depends(verify_cf_access)])
+async def get_event_by_uid(
+    request: Request,
+    uid: str = Query(..., min_length=1, description="iCalendar UID (query 参数无损传输含 `/` UID)"),
+    cfg: "Config" = Depends(get_settings),
+    source: str = Query("caldav", description=f"source ∈ {VALID_EVENT_SOURCES}"),
+    recurrence_id: Optional[str] = Query(
+        None, alias="recurrenceId", description="非空 = 单次跳脱 occurrence; 留空 = 主事件"
+    ),
+):
+    return await _get_event_impl(request, uid, cfg, source, recurrence_id)
+
+
+@router.get(
+    "/events/{event_id:path}/source-email", dependencies=[Depends(verify_cf_access)]
+)
+async def event_source_email(
+    request: Request,
+    event_id: str,
+    cfg: "Config" = Depends(get_settings),
+):
+    """按 ical_uid 反查来源邀请邮件 (path 兼容路由, `{event_id:path}` 兼容含 `/` UID)。"""
+    return await _event_source_email_impl(request, event_id, cfg)
+
+
+@router.get("/events/{event_id:path}", dependencies=[Depends(verify_cf_access)])
+async def get_event(
+    request: Request,
+    event_id: str,
+    cfg: "Config" = Depends(get_settings),
+    source: str = Query("caldav", description=f"source ∈ {VALID_EVENT_SOURCES}"),
+    recurrence_id: Optional[str] = Query(
+        None, alias="recurrenceId", description="非空 = 单次跳脱 occurrence; 留空 = 主事件"
+    ),
+):
+    """按 (ical_uid, recurrence_id, source) 取单 event 完整 row (path 兼容路由)。"""
+    return await _get_event_impl(request, event_id, cfg, source, recurrence_id)
+
+
 # ===========================================================================
 # GET /api/calendar/email-link/{internal_id} — CalendarService.get_email_calendar_link
 # (阶段 2.1 P1-3 方向 A: 邮件 → .ics uid + 日历 master 行)
@@ -350,41 +430,6 @@ async def email_calendar_link(
             "E_NOT_FOUND",
             str(exc),
             hint="email has no meeting mapping (not an invite, or synced before v34)",
-            source="sqlite",
-        ) from exc
-    return success_envelope(data, request=request, source="sqlite")
-
-
-# ===========================================================================
-# GET /api/calendar/events/{event_id}/source-email — CalendarService.get_event_source_email
-# (阶段 2.1 P1-3 方向 B: ical_uid → 来源邀请邮件)
-# ===========================================================================
-
-
-@router.get(
-    "/events/{event_id}/source-email", dependencies=[Depends(verify_cf_access)]
-)
-async def event_source_email(
-    request: Request,
-    event_id: str,
-    cfg: "Config" = Depends(get_settings),
-):
-    """按 ical_uid 反查来源邀请邮件 (event_id = ical_uid, 同 eventGet 路径参数)。
-
-    **C7**: ``data`` = 单个 ``EventSourceEmail`` (裸对象, 对齐 frontend
-    ``CalendarApi.eventSourceEmail`` 返回 ``EventSourceEmail | null``)。多封同
-    uid 邮件时优先最新 METHOD:REQUEST, 无 REQUEST 时最新任意一封。404
-    (E_NOT_FOUND) 当该 uid 无映射邮件 (caldav-only 事件 / 旧邮件未回填)。
-    """
-    svc = _build_service(cfg)
-    try:
-        data = svc.get_event_source_email(ical_uid=event_id)
-    except ValueError as exc:
-        raise APIError(
-            "E_NOT_FOUND",
-            str(exc),
-            hint="no invite email mapped to this uid (caldav-only event, "
-            "or emails synced before v34)",
             source="sqlite",
         ) from exc
     return success_envelope(data, request=request, source="sqlite")
@@ -743,15 +788,15 @@ async def create_event(
 
 
 # ===========================================================================
-# PATCH /api/calendar/events/{event_id} — update 三分支 (CLI `calendar update`)
+# PATCH /api/calendar/events/by-uid (+ path compat /events/{event_id:path})
+#   — update 三分支 (CLI `calendar update`)
 # ===========================================================================
 
 
-@router.patch("/events/{event_id}", dependencies=[Depends(verify_cf_access)])
-async def update_event(
+async def _update_event_impl(
     request: Request,
     event_id: str,
-    cfg: "Config" = Depends(get_settings),
+    cfg: "Config",
 ):
     """CalDAV PUT update (event_id = ical_uid); 分支逐字镜像 CLI `calendar update`:
 
@@ -873,17 +918,35 @@ async def update_event(
     return success_envelope(data, request=request, source="cli")
 
 
-# ===========================================================================
-# DELETE /api/calendar/events/{event_id} — CalendarService.delete_event
-# ===========================================================================
+@router.patch("/events/by-uid", dependencies=[Depends(verify_cf_access)])
+async def update_event_by_uid(
+    request: Request,
+    uid: str = Query(..., min_length=1, description="iCalendar UID (query 参数无损传输含 `/` UID)"),
+    cfg: "Config" = Depends(get_settings),
+):
+    return await _update_event_impl(request, uid, cfg)
 
 
-@router.delete("/events/{event_id}", dependencies=[Depends(verify_cf_access)])
-async def delete_event(
+@router.patch("/events/{event_id:path}", dependencies=[Depends(verify_cf_access)])
+async def update_event(
     request: Request,
     event_id: str,
     cfg: "Config" = Depends(get_settings),
-    calendar_name: Optional[str] = Query(None, alias="calendarName"),
+):
+    return await _update_event_impl(request, event_id, cfg)
+
+
+# ===========================================================================
+# DELETE /api/calendar/events/by-uid (+ path compat /events/{event_id:path})
+#   — CalendarService.delete_event
+# ===========================================================================
+
+
+async def _delete_event_impl(
+    request: Request,
+    event_id: str,
+    cfg: "Config",
+    calendar_name: Optional[str],
 ):
     """CalDAV DELETE 删除事件 (event_id = ical_uid), 不可撤销。
 
@@ -916,16 +979,36 @@ async def delete_event(
     return success_envelope(data, request=request, source="cli")
 
 
-# ===========================================================================
-# POST /api/calendar/events/{event_id}/rsvp — CalendarService.send_rsvp (iTIP REPLY)
-# ===========================================================================
+@router.delete("/events/by-uid", dependencies=[Depends(verify_cf_access)])
+async def delete_event_by_uid(
+    request: Request,
+    uid: str = Query(..., min_length=1, description="iCalendar UID (query 参数无损传输含 `/` UID)"),
+    cfg: "Config" = Depends(get_settings),
+    calendar_name: Optional[str] = Query(None, alias="calendarName"),
+):
+    return await _delete_event_impl(request, uid, cfg, calendar_name)
 
 
-@router.post("/events/{event_id}/rsvp", dependencies=[Depends(verify_cf_access)])
-async def event_rsvp(
+@router.delete("/events/{event_id:path}", dependencies=[Depends(verify_cf_access)])
+async def delete_event(
     request: Request,
     event_id: str,
     cfg: "Config" = Depends(get_settings),
+    calendar_name: Optional[str] = Query(None, alias="calendarName"),
+):
+    return await _delete_event_impl(request, event_id, cfg, calendar_name)
+
+
+# ===========================================================================
+# POST /api/calendar/events/by-uid/rsvp (+ path compat /events/{event_id:path}/rsvp)
+#   — CalendarService.send_rsvp (iTIP REPLY)
+# ===========================================================================
+
+
+async def _event_rsvp_impl(
+    request: Request,
+    event_id: str,
+    cfg: "Config",
 ):
     """发 iTIP REPLY 给 organizer (event_id = ical_uid; CLI `calendar rsvp`)。
 
@@ -1004,16 +1087,34 @@ async def event_rsvp(
     return success_envelope(data, request=request, source="cli")
 
 
-# ===========================================================================
-# POST /api/calendar/events/{event_id}/replay — CalendarService.replay_event_to_notion
-# ===========================================================================
+@router.post("/events/by-uid/rsvp", dependencies=[Depends(verify_cf_access)])
+async def event_rsvp_by_uid(
+    request: Request,
+    uid: str = Query(..., min_length=1, description="iCalendar UID (query 参数无损传输含 `/` UID)"),
+    cfg: "Config" = Depends(get_settings),
+):
+    return await _event_rsvp_impl(request, uid, cfg)
 
 
-@router.post("/events/{event_id}/replay", dependencies=[Depends(verify_cf_access)])
-async def event_replay(
+@router.post("/events/{event_id:path}/rsvp", dependencies=[Depends(verify_cf_access)])
+async def event_rsvp(
     request: Request,
     event_id: str,
     cfg: "Config" = Depends(get_settings),
+):
+    return await _event_rsvp_impl(request, event_id, cfg)
+
+
+# ===========================================================================
+# POST /api/calendar/events/by-uid/replay (+ path compat /events/{event_id:path}/replay)
+#   — CalendarService.replay_event_to_notion
+# ===========================================================================
+
+
+async def _event_replay_impl(
+    request: Request,
+    event_id: str,
+    cfg: "Config",
 ):
     """重导出 calendar_event 行到 Notion mirror (event_id = ical_uid; CLI `calendar replay`)。
 
@@ -1055,3 +1156,21 @@ async def event_replay(
     if not dry_run:
         _audit_write(request, "replay", uid=event_id, page_id=data.get("page_id"))
     return success_envelope(data, request=request, source="cli")
+
+
+@router.post("/events/by-uid/replay", dependencies=[Depends(verify_cf_access)])
+async def event_replay_by_uid(
+    request: Request,
+    uid: str = Query(..., min_length=1, description="iCalendar UID (query 参数无损传输含 `/` UID)"),
+    cfg: "Config" = Depends(get_settings),
+):
+    return await _event_replay_impl(request, uid, cfg)
+
+
+@router.post("/events/{event_id:path}/replay", dependencies=[Depends(verify_cf_access)])
+async def event_replay(
+    request: Request,
+    event_id: str,
+    cfg: "Config" = Depends(get_settings),
+):
+    return await _event_replay_impl(request, event_id, cfg)

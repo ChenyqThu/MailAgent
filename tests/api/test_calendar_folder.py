@@ -148,6 +148,61 @@ def test_calendar_event_get_bad_source_400(cal_folder_client):
     _err(r.json(), code="E_INVALID_ARG")
 
 
+def test_calendar_event_get_slash_uid_reaches_service_via_by_uid_and_path(
+    cal_folder_client, monkeypatch
+):
+    """实测 FastAPI/Starlette 真实 ASGI 路由：含 `/` / 特殊后缀的合法 RFC 5545 UID
+    可经 `/events/by-uid?uid=...` 与 legacy `/events/{event_id:path}` 完整抵达业务层。
+    """
+    from src.calendar_sync.service import CalendarService
+
+    seen: list[tuple[str, str, str | None]] = []
+
+    def fake_get_event(self, *, ical_uid, source="caldav", recurrence_id=None):
+        seen.append((ical_uid, source, recurrence_id))
+        return {
+            "event": {
+                "id": 999,
+                "ical_uid": ical_uid,
+                "summary": "Slash UID Event",
+                "description": "",
+                "dtstart_iso": "2026-06-01T02:00:00+00:00",
+            }
+        }
+
+    monkeypatch.setattr(CalendarService, "get_event", fake_get_event)
+
+    # 1. Canonical lossless query 路由 — 即使含 `/source-email`、`//`、`..`、`%` 也能完整抵达
+    tricky_uid = "uid a/b/source-email"
+    r1 = cal_folder_client.get(
+        "/api/calendar/events/by-uid",
+        params={"uid": tricky_uid, "source": "caldav", "recurrenceId": "2026-06-01T02:00:00Z"},
+    )
+    assert r1.status_code == 200
+    _ok_envelope(r1.json())
+    assert r1.json()["data"]["ical_uid"] == tricky_uid
+
+    dot_uid = "org//cal/../evt%2F1"
+    r2 = cal_folder_client.get("/api/calendar/events/by-uid", params={"uid": dot_uid})
+    assert r2.status_code == 200
+    assert r2.json()["data"]["ical_uid"] == dot_uid
+
+    # 2. Legacy `{event_id:path}` path 兼容路由 — ASGI 解码 %2F 后仍匹配并保留 `/`
+    r3 = cal_folder_client.get("/api/calendar/events/uid%20a%2Fb")
+    assert r3.status_code == 200
+    assert r3.json()["data"]["ical_uid"] == "uid a/b"
+
+    # 3. 缺 uid query 参数时应触发 FastAPI 422 校验（不能被 `{event_id:path}` 吞掉当成 uid="by-uid"）
+    r4 = cal_folder_client.get("/api/calendar/events/by-uid")
+    assert r4.status_code == 422
+
+    assert seen == [
+        ("uid a/b/source-email", "caldav", "2026-06-01T02:00:00Z"),
+        ("org//cal/../evt%2F1", "caldav", None),
+        ("uid a/b", "caldav", None),
+    ]
+
+
 # ===========================================================================
 # GET /api/calendar/email-link/{internal_id} (阶段 2.1 P1-3 方向 A)
 # ===========================================================================
@@ -208,6 +263,37 @@ def test_calendar_event_source_email_missing_404(cal_folder_client):
     r = cal_folder_client.get("/api/calendar/events/uid-caldav-only/source-email")
     assert r.status_code == 404
     _err(r.json(), code="E_NOT_FOUND")
+
+
+def test_calendar_event_source_email_slash_uid_routes(cal_folder_client, monkeypatch):
+    from src.calendar_sync.service import CalendarService
+
+    seen: list[str] = []
+
+    def fake_src(self, *, ical_uid):
+        seen.append(ical_uid)
+        return {
+            "ical_uid": ical_uid,
+            "internal_id": 123,
+            "method": "REQUEST",
+            "subject": "Invite",
+            "linked_email_count": 1,
+        }
+
+    monkeypatch.setattr(CalendarService, "get_event_source_email", fake_src)
+
+    r1 = cal_folder_client.get(
+        "/api/calendar/events/by-uid/source-email", params={"uid": "uid a/b"}
+    )
+    assert r1.status_code == 200
+    assert r1.json()["data"]["ical_uid"] == "uid a/b"
+
+    # Legacy `{event_id:path}/source-email` 必须在 `{event_id:path}` 之前注册
+    r2 = cal_folder_client.get("/api/calendar/events/uid%20a%2Fb/source-email")
+    assert r2.status_code == 200
+    assert r2.json()["data"]["ical_uid"] == "uid a/b"
+
+    assert seen == ["uid a/b", "uid a/b"]
 
 
 # ===========================================================================

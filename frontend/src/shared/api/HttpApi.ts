@@ -15,7 +15,7 @@
 // chat.*, ai.translateBatch/abortTranslate, email.createDraft, calendar
 // recurringDiscover/recurringReplay/expand (legacy Notion-mirror 运维面),
 // folder WRITES, settings WRITE/secret, updater.*, env.set, services.*,
-// notionAgent WRITES, island.*, notion.updateFlag, events.status/
+// notionAgent WRITES, island.*, events.status/
 // reconnect. Implemented surfaces: email/attachment (full read + write),
 // ai.getCached/deleteCached, llm.run/stats/selftest, admin.*, calendar READS
 // + event WRITES (阶段 3.1 #11: create/update/delete/rsvp/replay),
@@ -691,12 +691,6 @@ export class HttpApi implements MailApi {
       this.req<KosStatsData>('GET', '/kos/stats', { query: { days: clampStatsDays(days) } })
   }
 
-  // Sprint-15 write path is email.flag. The legacy notion.updateFlag endpoint
-  // exists but wiring it would invite dual-write confusion — keep the stub.
-  notion = {
-    updateFlag: () => notImplemented('notion.updateFlag')
-  }
-
   admin = {
     health: (): Promise<AdminHealthData> => this.req<AdminHealthData>('GET', '/admin/health'),
 
@@ -770,11 +764,10 @@ export class HttpApi implements MailApi {
     eventGet: async (opts: EventGetOpts): Promise<CalendarEventDetail | null> => {
       try {
         // C7: serve-api 返裸 CalendarEventDetail 进 envelope.data（非 {event}）。
-        const data = await this.req<CalendarEventDetail>(
-          'GET',
-          `/calendar/events/${encodeURIComponent(opts.icalUid)}`,
-          { query: { source: opts.source, recurrenceId: opts.recurrenceId } }
-        )
+        // 走 /calendar/events/by-uid?uid=... 无损传输含 `/` 的 RFC 5545 UID。
+        const data = await this.req<CalendarEventDetail>('GET', '/calendar/events/by-uid', {
+          query: { uid: opts.icalUid, source: opts.source, recurrenceId: opts.recurrenceId }
+        })
         return data ?? null
       } catch (e) {
         if (isNotFound(e)) return null
@@ -805,7 +798,8 @@ export class HttpApi implements MailApi {
       try {
         const data = await this.req<EventSourceEmail>(
           'GET',
-          `/calendar/events/${encodeURIComponent(icalUid)}/source-email`
+          '/calendar/events/by-uid/source-email',
+          { query: { uid: icalUid } }
         )
         return data ?? null
       } catch (e) {
@@ -831,13 +825,15 @@ export class HttpApi implements MailApi {
     // clearAttendees=清空, 列表=替换]、rrule ''=删除、isAllDay VALUE=DATE、
     // rsvp response alias→PARTSTAT)。返回 envelope.data = CLI emit 的 data。
     eventReplay: (opts: EventReplayOpts): Promise<unknown> =>
-      this.req<unknown>('POST', `/calendar/events/${encodeURIComponent(opts.icalUid)}/replay`, {
+      this.req<unknown>('POST', '/calendar/events/by-uid/replay', {
+        query: { uid: opts.icalUid },
         body: { recurrenceId: opts.recurrenceId, source: opts.source, dryRun: opts.dryRun }
       }),
 
     eventRsvp: (opts: EventRsvpOpts): Promise<unknown> =>
       // ⚠️ 非 dry-run = 真发 iTIP REPLY 信给组织者, 不可撤回 (调用侧确认卡把关)。
-      this.req<unknown>('POST', `/calendar/events/${encodeURIComponent(opts.icalUid)}/rsvp`, {
+      this.req<unknown>('POST', '/calendar/events/by-uid/rsvp', {
+        query: { uid: opts.icalUid },
         body: {
           response: opts.response,
           recurrenceId: opts.recurrenceId,
@@ -851,13 +847,16 @@ export class HttpApi implements MailApi {
 
     eventUpdate: (opts: EventUpdateOpts): Promise<unknown> => {
       const { icalUid, ...body } = opts
-      return this.req<unknown>('PATCH', `/calendar/events/${encodeURIComponent(icalUid)}`, { body })
+      return this.req<unknown>('PATCH', '/calendar/events/by-uid', {
+        query: { uid: icalUid },
+        body
+      })
     },
 
     eventDelete: (opts: EventDeleteOpts): Promise<unknown> =>
       // 硬删 (CalDAV DELETE); 5 秒撤销窗口在调用侧, 发出即确认 (= CLI --yes)。
-      this.req<unknown>('DELETE', `/calendar/events/${encodeURIComponent(opts.icalUid)}`, {
-        query: { calendarName: opts.calendarName }
+      this.req<unknown>('DELETE', '/calendar/events/by-uid', {
+        query: { uid: opts.icalUid, calendarName: opts.calendarName }
       })
   }
 
