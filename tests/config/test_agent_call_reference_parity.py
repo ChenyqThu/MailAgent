@@ -42,7 +42,7 @@ CARD_TSX = (
     / "generic"
     / "CustomAgentCallCard.tsx"
 )
-SCHEMAS_TS = p.REPO_ROOT / "frontend" / "src" / "ai-gateway" / "tools" / "schemas.ts"
+SCHEMAS_TS = p.REPO_ROOT / "frontend" / "src" / "ai-gateway" / "tools" / "schema_parts" / "agents.ts"
 
 #: 值域下限（canary）—— 消灭镜像前的五个 + P2-L12 新增的 'library'。
 REFERENCE_TYPE_FLOOR = 6

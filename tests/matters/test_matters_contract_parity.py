@@ -43,7 +43,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MATTER_TS = ROOT / "frontend/src/shared/api/types/matter.ts"
 #: effort 档位的 canonical 源（不在 matter.ts —— 它是 chat/gateway 共用的零依赖叶子）。
 EFFORT_TIERS_TS = ROOT / "frontend/src/shared/modelCatalog/effortTiers.ts"
-GATEWAY_SCHEMAS_TS = ROOT / "frontend/src/ai-gateway/tools/schemas.ts"
+GATEWAY_SCHEMAS_TS = ROOT / "frontend/src/ai-gateway/tools/schema_parts/matters.ts"
 GATEWAY_MATTER_TOOLS_TS = ROOT / "frontend/src/ai-gateway/tools/matters.ts"
 
 TS_ARRAYS = {

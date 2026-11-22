@@ -61,7 +61,7 @@ import pytest
 from . import _parsers as p
 
 POLICY_TS = p.REPO_ROOT / "frontend" / "src" / "ai-gateway" / "tools" / "policy.ts"
-SCHEMAS_TS = p.REPO_ROOT / "frontend" / "src" / "ai-gateway" / "tools" / "schemas.ts"
+SCHEMAS_TS = p.REPO_ROOT / "frontend" / "src" / "ai-gateway" / "tools" / "schema_parts" / "agents.ts"
 CHAT_TYPES_TS = p.REPO_ROOT / "frontend" / "src" / "shared" / "api" / "types" / "chat.ts"
 REPORT_TYPES_TS = p.REPO_ROOT / "frontend" / "src" / "shared" / "api" / "types" / "report.ts"
 TRIGGER_PY = p.REPO_ROOT / "src" / "agents" / "trigger.py"

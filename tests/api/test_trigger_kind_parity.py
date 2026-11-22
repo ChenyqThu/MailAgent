@@ -43,7 +43,7 @@ from src.agents.trigger import TriggerValidationError, parse_trigger
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PY_SOURCE = _REPO_ROOT / "src/agents/trigger.py"
-_TS_SOURCE = _REPO_ROOT / "frontend/src/ai-gateway/tools/schemas.ts"
+_TS_SOURCE = _REPO_ROOT / "frontend/src/ai-gateway/tools/schema_parts/agents.ts"
 
 # 三种 kind 各一份**契约合法**的 payload（schedule 那份天然覆盖全 10 键 —— parse_rule 少一键即拒，
 # 故这份 payload 漏键会在行为断言处红）。

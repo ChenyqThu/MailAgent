@@ -168,7 +168,7 @@ describe('B — the validation message reaches the model on the next step', () =
 
 describe('C — toUIMessageStream onError is present at every gateway call site', () => {
   const CALL_SITES = [
-    'src/ai-gateway/server.ts',
+    'src/ai-gateway/routes/chatRoutes.ts',
     'src/ai-gateway/approvalResume.ts',
     'src/ai-gateway/agentRun.ts',
     'src/ai-gateway/agui/aguiRoute.ts'

@@ -42,7 +42,7 @@ CANONICAL: Set[str] = set(SOURCES_TRY_ORDER)
 _SQL_CHECK = _REPO_ROOT / "src/mail/sync_store_migrations.py"
 _SKILL = _REPO_ROOT / "src/skills/builtin/calendar.py"
 _TS_TYPES = _REPO_ROOT / "frontend/src/shared/api/types/calendar.ts"
-_TS_ZOD = _REPO_ROOT / "frontend/src/ai-gateway/tools/schemas.ts"
+_TS_ZOD = _REPO_ROOT / "frontend/src/ai-gateway/tools/schema_parts/calendarAndMisc.ts"
 _TS_SHARED = _REPO_ROOT / "frontend/src/shared/lib/calendarSource.ts"
 
 
