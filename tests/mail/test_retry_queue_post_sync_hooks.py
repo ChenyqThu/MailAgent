@@ -84,7 +84,6 @@ def _build_watcher(email_obj, *, mailbox="收件箱", history=False):
     w._maybe_trigger_project_progress_hook = Mock()
     w._maybe_trigger_llm_hook = Mock()
     w._maybe_trigger_kos_hook = Mock()
-    w._maybe_dispatch_island_received = Mock()
     w._maybe_trigger_custom_agents = Mock()
     return w
 
@@ -94,7 +93,6 @@ def _assert_all_hooks(w, email_obj, page_id):
     w._maybe_trigger_project_progress_hook.assert_called_once_with(email_obj, 42, page_id)
     w._maybe_trigger_llm_hook.assert_called_once_with(email_obj, 42, page_id)
     w._maybe_trigger_kos_hook.assert_called_once_with(email_obj, 42, page_id)
-    w._maybe_dispatch_island_received.assert_called_once_with(email_obj, 42, page_id)
     w._maybe_trigger_custom_agents.assert_called_once_with(email_obj, 42)
 
 
@@ -151,7 +149,6 @@ async def test_retry_drafts_mailbox_dispatches_nothing(monkeypatch):
     w._maybe_trigger_project_progress_hook.assert_not_called()
     w._maybe_trigger_llm_hook.assert_not_called()
     w._maybe_trigger_kos_hook.assert_not_called()
-    w._maybe_dispatch_island_received.assert_not_called()
     w._maybe_trigger_custom_agents.assert_not_called()
 
 
@@ -167,5 +164,4 @@ async def test_retry_history_ingest_skips_realtime_hooks(monkeypatch):
     w._maybe_trigger_llm_hook.assert_called_once_with(email_obj, 42, "page123")
     w._maybe_trigger_kos_hook.assert_called_once_with(email_obj, 42, "page123")
     w._maybe_trigger_project_progress_hook.assert_not_called()
-    w._maybe_dispatch_island_received.assert_not_called()
     w._maybe_trigger_custom_agents.assert_not_called()

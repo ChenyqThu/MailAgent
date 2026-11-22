@@ -542,11 +542,11 @@ async function runOneBatchWithProvider(
     recordTranslateUsage({
       model,
       protocol: resolved.protocol,
-      tokensInput: result.usage.inputTokens ?? null,
-      tokensOutput: result.usage.outputTokens ?? null,
-      cacheReadTokens: result.usage.inputTokenDetails?.cacheReadTokens ?? null,
-      cacheWriteTokens: result.usage.inputTokenDetails?.cacheWriteTokens ?? null,
-      noCacheTokens: result.usage.inputTokenDetails?.noCacheTokens ?? null,
+      tokensInput: result.usage?.inputTokens ?? null,
+      tokensOutput: result.usage?.outputTokens ?? null,
+      cacheReadTokens: result.usage?.inputTokenDetails?.cacheReadTokens ?? null,
+      cacheWriteTokens: result.usage?.inputTokenDetails?.cacheWriteTokens ?? null,
+      noCacheTokens: result.usage?.inputTokenDetails?.noCacheTokens ?? null,
       latencyMs: Date.now() - t0
     })
     if (result.finishReason === 'length') {

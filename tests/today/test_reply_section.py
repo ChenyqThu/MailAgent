@@ -123,20 +123,10 @@ def test_dismissal_survives_metadata_resave(db):
 
 
 class TestActionConstantsSunk:
-    def test_island_module_reexports_the_same_objects(self):
-        """岛模块的 import 指回新位置后，三个消费方拿到的是**同一个**集合对象。
-
-        这一条守的是「下沉零行为变化」：不是内容相等，是同一份 —— 复制一份出来内容也
-        相等，但改一处就漂开了。
-        """
-        from src.notify import digest_query as dq
-        from src.notify import island_dispatch as isl
+    def test_reports_module_reexports_the_same_objects(self):
+        """报告消费方拿到的是**同一个**集合对象。"""
         from src.reports import data as rdata
 
-        assert isl.ACTION_NEEDS_FLAG is ACTION_NEEDS_FLAG
-        assert isl.URGENT_PRIORITY_LABELS is URGENT_PRIORITY_LABELS
-        assert dq.ACTION_NEEDS_FLAG is ACTION_NEEDS_FLAG
-        assert dq.URGENT_PRIORITY_LABELS is URGENT_PRIORITY_LABELS
         assert rdata.ACTION_NEEDS_FLAG is ACTION_NEEDS_FLAG
         assert rdata.URGENT_PRIORITY_LABELS is URGENT_PRIORITY_LABELS
 

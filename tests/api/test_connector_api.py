@@ -1534,9 +1534,9 @@ def test_managed_local_install_runtime_options_and_uninstall_lifecycle(
     entries = {e["connector_id"]: e for e in cat.json()["data"]["entries"]}
     assert entries["browser_use"]["track"] == "managed_local"
     assert entries["browser_use"]["supported_modes"] == [
+        "isolated_profile",
         "cdp_chrome",
         "extension",
-        "isolated_profile",
     ]
     assert entries["browser_use"]["runtime_installed"] is False
     assert entries["desktop_use"]["track"] == "managed_local"

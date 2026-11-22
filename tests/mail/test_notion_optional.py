@@ -136,11 +136,10 @@ def _build_watcher(email_obj):
     w._build_email_object = _build
     w._persist_email_metadata_after_parse = Mock()
     w._maybe_dual_write_body = Mock()
-    # 5 钩子换成录音 stub（钩子内部对空 page_id 的容忍各自有测）
+    # 钩子换成录音 stub（钩子内部对空 page_id 的容忍各自有测）
     w._maybe_trigger_project_progress_hook = Mock()
     w._maybe_trigger_llm_hook = Mock()
     w._maybe_trigger_kos_hook = Mock()
-    w._maybe_dispatch_island_received = Mock()
     w._maybe_trigger_custom_agents = Mock()
     return w
 
@@ -167,11 +166,10 @@ async def test_sync_single_email_disabled_local_only(monkeypatch):
     w.sync_store.mark_synced_v3.assert_not_called()
     w.sync_store.mark_failed_v3.assert_not_called()
     assert w._stats["emails_synced"] == 1
-    # 5 钩子照跑, page_id=""
+    # 钩子照跑, page_id=""
     w._maybe_trigger_project_progress_hook.assert_called_once_with(email_obj, 42, "")
     w._maybe_trigger_llm_hook.assert_called_once_with(email_obj, 42, "")
     w._maybe_trigger_kos_hook.assert_called_once_with(email_obj, 42, "")
-    w._maybe_dispatch_island_received.assert_called_once_with(email_obj, 42, "")
     w._maybe_trigger_custom_agents.assert_called_once_with(email_obj, 42)
 
 
@@ -197,7 +195,6 @@ async def test_sync_single_email_enabled_unchanged(monkeypatch):
     )
     w._maybe_trigger_llm_hook.assert_called_once_with(email_obj, 42, "page123")
     w._maybe_trigger_kos_hook.assert_called_once_with(email_obj, 42, "page123")
-    w._maybe_dispatch_island_received.assert_called_once_with(email_obj, 42, "page123")
     w._maybe_trigger_custom_agents.assert_called_once_with(email_obj, 42)
 
 

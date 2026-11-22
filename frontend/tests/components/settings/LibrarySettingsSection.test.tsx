@@ -164,7 +164,7 @@ describe('语义检索四态', () => {
     )
     renderSection()
 
-    expect(await screen.findByText('Embedded 1820 / 4412 files')).toBeTruthy()
+    expect(await screen.findByText('Library embedded 1820 / 4412 files')).toBeTruthy()
     expect(screen.queryByText('Downloading model')).toBeNull()
     // 作业在跑时不给「重建索引」按钮（服务端是进程内单实例，按了也是 409）。
     expect(screen.queryByRole('button', { name: 'Rebuild index' })).toBeNull()

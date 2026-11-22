@@ -98,7 +98,7 @@ EXPECTED_FIXED_ASK = {
 }
 # D2=a：设 auto 需红警告 + 一次性确认。
 # library_delete 同待遇而非 configurable=False：软删进 .trash，保留期内可恢复。
-EXPECTED_DANGER_AUTO = {"calendar_event_delete", "notion_agent_chat", "library_delete"}
+EXPECTED_DANGER_AUTO = {"calendar_event_delete", "notion_agent_chat", "library_delete", "computer_use_run"}
 
 
 def test_get_factory_defaults_full_table(client, fresh_agent_cfg):

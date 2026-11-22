@@ -582,13 +582,7 @@ def test_scheduled_tick_uses_row_enabled_and_fire_hour(db, monkeypatch):
 
         @classmethod
         def now(cls):
-            return real_datetime(
-                2026,
-                8,
-                20,
-                cls.hour,
-                tzinfo=real_datetime.now().astimezone().tzinfo,
-            )
+            return real_datetime(2026, 8, 20, cls.hour).astimezone()
 
     monkeypatch.setattr(watcher_module, "datetime", FixedDateTime)
 

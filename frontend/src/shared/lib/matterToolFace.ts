@@ -130,6 +130,7 @@ export const MATTER_TOOL_FACE_GROUPS: readonly MatterToolGroup[] = [
     tools: [
       'discover_skills',
       'skill_read',
+      'skill_read_resource',
       'agent_profile_read',
       'agent_profile_history',
       'plan_update'

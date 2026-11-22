@@ -139,7 +139,6 @@ def _watcher(ingest_reason):
     w._maybe_trigger_project_progress_hook = Mock()
     w._maybe_trigger_llm_hook = Mock()
     w._maybe_trigger_kos_hook = Mock()
-    w._maybe_dispatch_island_received = Mock()
     w._maybe_trigger_custom_agents = Mock()
     return w
 
@@ -155,7 +154,6 @@ async def test_history_mail_skips_the_realtime_hooks(monkeypatch, notion_on):
 
     await w._sync_single_email_v3(dict(META))
 
-    w._maybe_dispatch_island_received.assert_not_called()
     w._maybe_trigger_custom_agents.assert_not_called()
     w._maybe_trigger_project_progress_hook.assert_not_called()
     # 内容加工照跑
@@ -166,13 +164,12 @@ async def test_history_mail_skips_the_realtime_hooks(monkeypatch, notion_on):
 
 @pytest.mark.parametrize("notion_on", [True, False])
 async def test_normal_mail_still_fires_every_hook(monkeypatch, notion_on):
-    """对照组: 普通邮件五个钩子一个不少 (证明上面的断言不是恒绿)。"""
+    """对照组: 普通邮件四个钩子一个不少 (证明上面的断言不是恒绿)。"""
     monkeypatch.setattr("src.mail.new_watcher.notion_enabled", lambda: notion_on)
     w = _watcher(INGEST_REALTIME)
 
     await w._sync_single_email_v3(dict(META))
 
-    w._maybe_dispatch_island_received.assert_called_once()
     w._maybe_trigger_custom_agents.assert_called_once()
     w._maybe_trigger_project_progress_hook.assert_called_once()
     w._maybe_trigger_llm_hook.assert_called_once()

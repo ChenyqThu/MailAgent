@@ -90,7 +90,11 @@ describe('nlToDsl provider registry routing', () => {
   test('flag on resolves providerRef and uses AI SDK without fetch', async () => {
     mockIsLlmProviderRegistryEnabled.mockReturnValue(true)
     mockGetLlmApiKey.mockResolvedValue(null)
-    mockGenerateText.mockResolvedValue({ text: 'from:echo is:unread 合同', finishReason: 'stop' })
+    mockGenerateText.mockResolvedValue({
+      text: 'from:echo is:unread 合同',
+      finishReason: 'stop',
+      usage: { inputTokens: 10, outputTokens: 5 }
+    })
 
     const result = await handler.nlToDsl('echo 发来的未读合同')
 

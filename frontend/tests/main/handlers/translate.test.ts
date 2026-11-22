@@ -284,7 +284,8 @@ describe('translateBatch', () => {
       const inputs = JSON.parse(prompt as string) as Array<{ id: string; text: string }>
       return {
         text: JSON.stringify(inputs.map((item) => ({ id: item.id, tgt: `译文 ${item.id}` }))),
-        finishReason: 'stop'
+        finishReason: 'stop',
+        usage: { inputTokens: 10, outputTokens: 5 }
       }
     })
 

@@ -1859,6 +1859,7 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
     'report_get',
     'report_list',
     'skill_read',
+    'skill_read_resource',
     'web_fetch',
     'web_search'
   ]

@@ -404,8 +404,11 @@ def test_streamable_http_get_stream_receives_messages_keepalive_and_closes_on_de
     assert session is not None
 
     def _drive_stream() -> None:
-        time.sleep(0.12)  # allow at least one ': keepalive\n\n' frame
+        deadline = time.monotonic() + 2.0
+        while session.loop is None and time.monotonic() < deadline:
+            time.sleep(0.01)
         assert session.loop is not None
+        time.sleep(0.15)  # allow at least one ': keepalive\n\n' frame after stream enters loop
         session.loop.call_soon_threadsafe(
             session.queue.put_nowait,
             {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"},
