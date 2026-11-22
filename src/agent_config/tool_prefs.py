@@ -164,7 +164,6 @@ BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     BuiltinToolPolicy("library_move", "library", "ask"),
     BuiltinToolPolicy("library_delete", "library", "ask", danger_auto=True),
     BuiltinToolPolicy("artifact_write", "library", "auto"),
-    BuiltinToolPolicy("artifact_build_omada", "library", "auto"),
     BuiltinToolPolicy("artifact_publish_bundle", "library", "ask"),
     # ── B 组：能力/身份面（全部有 history/rollback 补偿）─────────────────────────
     BuiltinToolPolicy("set_skill_enabled", "capability", "ask"),

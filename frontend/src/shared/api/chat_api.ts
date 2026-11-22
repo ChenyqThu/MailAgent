@@ -39,6 +39,7 @@ import type {
   SkillDraftSummary,
   SkillTrustRule,
   SkillUninstallResult,
+  SkillUpdatesResult,
   ToolApprovalPrefsPayload,
   ToolApprovalTierValue
 } from './types'
@@ -591,6 +592,23 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       // unpack / hash) lives in Python; this is a thin transport. Throws Error&{code}
       // (E_PACK_* / E_SSRF_BLOCKED / E_UPSTREAM) — the Settings dialog surfaces code+hint.
       return request<SkillPackPreview>(baseUrl, 'POST', '/agent/skills/fetch', { body: input })
+    },
+
+    async checkSkillUpdates(force = false): Promise<SkillUpdatesResult> {
+      return request<SkillUpdatesResult>(
+        baseUrl,
+        'GET',
+        '/agent/skills/updates',
+        force ? { query: { force: 'true' } } : undefined
+      )
+    },
+
+    async prepareSkillUpdate(name: string): Promise<SkillPackPreview> {
+      return request<SkillPackPreview>(
+        baseUrl,
+        'POST',
+        `/agent/skills/${encodeURIComponent(name)}/update/prepare`
+      )
     },
 
     async confirmSkillPack(input): Promise<SkillConfirmResult> {

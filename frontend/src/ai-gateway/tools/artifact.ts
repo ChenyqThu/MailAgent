@@ -15,7 +15,6 @@ import {
 import type { ApprovalGuard } from '../security/approval'
 import type { AgentContextMode, AgentRunContext } from './policy'
 import {
-  auditedReadTool,
   auditedWriteTool,
   type GatewayApprovalMode,
   type GatewayToolApprovalPrefs,
@@ -26,48 +25,9 @@ import {
 import { AGENT_DOCS_SLUG, TEXT_WRITE_MAX_BYTES } from '../../shared/libraryConstants'
 
 export const GATEWAY_ARTIFACT_TOOL_NAMES = [
-  'omada_catalog_query',
   'artifact_write',
-  'artifact_build_omada',
   'artifact_publish_bundle'
 ] as const
-
-const omadaCatalogQuerySchema = z.object({
-  action: z
-    .enum([
-      'info',
-      'list_components',
-      'component',
-      'search_icons',
-      'search_assets',
-      'tokens',
-      'recipes'
-    ])
-    .describe(
-      'Catalog lookup mode: info (package & CDN URLs), list_components, component (exact props), search_icons (SIcon slugs), search_assets (products/illustrations/clients/brand), tokens (Light/Dark CSS vars & chartPalette), recipes (starter templates).'
-    ),
-  query: z
-    .string()
-    .trim()
-    .max(120)
-    .optional()
-    .describe('Optional filter keyword, category name, or exact component name (required for action="component").'),
-  asset_group: z
-    .enum(['products', 'illustrations', 'clients', 'brand'])
-    .optional()
-    .describe('Asset collection when action="search_assets" (default: "products").'),
-  theme: z
-    .enum(['light', 'dark'])
-    .optional()
-    .describe('Theme mode when action="tokens" (default: "light").'),
-  limit: z
-    .number()
-    .int()
-    .min(1)
-    .max(100)
-    .optional()
-    .describe('Maximum items returned for search_icons / search_assets (default: 25).')
-})
 
 export const ARTIFACT_TYPES = ['dashboard', 'slides', 'report', 'diagram', 'app'] as const
 export type ArtifactType = (typeof ARTIFACT_TYPES)[number]
@@ -103,34 +63,6 @@ const artifactPublishBundleSchema = z.object({
     .describe('Short summary of what changed in this published version.')
 })
 
-const artifactBuildOmadaSchema = z.object({
-  slug: z
-    .string()
-    .trim()
-    .min(1)
-    .max(80)
-    .describe(
-      'Short ASCII kebab-case identifier (e.g. "omada-ap-health-monitor"). Reusing the same slug creates v2, v3, ...'
-    ),
-  title: z.string().trim().min(1).max(160).describe('Human-readable title of the Omada prototype.'),
-  code: z
-    .string()
-    .min(1)
-    .max(TEXT_WRITE_MAX_BYTES)
-    .describe(
-      'Complete React + TypeScript TSX component file saved as src/demos/<slug>/Demo.tsx inside omada-ui-kit. Must default-export (or export `Demo`) a React component using `@/omada` components.'
-    ),
-  theme_mode: z
-    .enum(['light', 'dark'])
-    .optional()
-    .describe('Default theme mode passed to OmadaProvider (default: "light").'),
-  change_note: z
-    .string()
-    .trim()
-    .max(200)
-    .optional()
-    .describe('Short summary of what changed in this prototype build.')
-})
 const VERSION_CONFLICT = 'E_VERSION_CONFLICT'
 const ARTIFACT_ROOT = `${AGENT_DOCS_SLUG}/artifacts`
 const SLUG_MAX_LEN = 64
@@ -268,31 +200,6 @@ export function createArtifactTools(
       ? { kind: 'custom_agent', agentId }
       : { kind: 'main_agent' }
 
-  const omada_catalog_query = auditedReadTool(
-    {
-      name: 'omada_catalog_query',
-      description:
-        'Query verified @chenyqthu/omada-ui-kit exports, component Props, Figma icon/product/illustration slugs, ' +
-        'Light/Dark tokens & chartPalette, CDN URLs (dist/style.css + dist/standalone.js), and starter recipes. ' +
-        'Call this before writing Omada UI prototypes so component props and asset slugs never rely on guesswork. Silent read.',
-      inputSchema: omadaCatalogQuerySchema,
-      run: async (input, signal) =>
-        surfaced(
-          domain.libraryQueryOmadaCatalog(
-            {
-              action: input.action,
-              query: input.query,
-              assetGroup: input.asset_group,
-              theme: input.theme,
-              limit: input.limit
-            },
-            signal
-          )
-        )
-    },
-    collector
-  )
-
   const artifact_write = auditedWriteTool(
     {
       a2uiEnabled: opts.a2uiEnabled,
@@ -414,67 +321,6 @@ export function createArtifactTools(
     guard
   )
 
-  const artifact_build_omada = auditedWriteTool(
-    {
-      a2uiEnabled: opts.a2uiEnabled,
-      approvalMode: opts.approvalMode,
-      toolApprovalPrefs: opts.toolApprovalPrefs,
-      oneShot: opts.oneShot,
-      contextMode: opts.contextMode,
-      name: 'artifact_build_omada',
-      description:
-        'Mode B fallback: compile a React + TypeScript prototype (src/demos/<slug>/Demo.tsx) with local ' +
-        'omada-ui-kit + Vite when offline/no-CDN bundling or custom Tailwind JIT classes are required. Prefer ' +
-        'omada_catalog_query + artifact_write with @chenyqthu/omada-ui-kit standalone CDN for normal prototypes. Edit tier.',
-      inputSchema: artifactBuildOmadaSchema,
-      risk: 'edit',
-      editableFields: ['title', 'code'],
-      run: async (input, { userEdited, signal }) => {
-        const slug = normalizeArtifactSlug(input.slug)
-        if (!slug) {
-          throw new DomainError(
-            'E_INVALID_ARG',
-            'slug must contain ASCII letters or digits (e.g. "omada-ap-health-monitor")'
-          )
-        }
-        if (/\/\/\s*TODO\b|\/\*\s*TODO\b/i.test(input.code)) {
-          return {
-            ok: false,
-            error: 'E_ARTIFACT_LINT',
-            slug,
-            issues: ['Remove TODO placeholders and ship complete interactive React components.'],
-            hint: 'Complete the Demo.tsx code and call artifact_build_omada again.'
-          }
-        }
-
-        const built = await surfaced(
-          domain.libraryBuildOmadaDemo(
-            {
-              slug,
-              title: input.title,
-              code: input.code,
-              themeMode: input.theme_mode ?? 'light',
-              changeNote: input.change_note
-            },
-            actor,
-            signal
-          )
-        )
-
-        return {
-          ...built,
-          ok: true,
-          slug: typeof built.slug === 'string' ? built.slug : slug,
-          title: typeof built.title === 'string' ? built.title : input.title,
-          artifact_type: 'app',
-          user_edited: userEdited
-        }
-      }
-    },
-    collector,
-    guard
-  )
-
   const artifact_publish_bundle = auditedWriteTool(
     {
       a2uiEnabled: opts.a2uiEnabled,
@@ -484,7 +330,7 @@ export function createArtifactTools(
       contextMode: opts.contextMode,
       name: 'artifact_publish_bundle',
       description:
-        'Read an existing local artifact or Omada prototype bundle from agent-docs/artifacts/<slug>/vN/ ' +
+        'Read an existing local artifact bundle from agent-docs/artifacts/<slug>/vN/ ' +
         'and upload the full versioned deliverable to Canvas Artifact Server via the artifact_server MCP ' +
         'connector without pasting bundle source into chat tool arguments. Returns review_url and share_url. Edit tier.',
       inputSchema: artifactPublishBundleSchema,
@@ -495,7 +341,7 @@ export function createArtifactTools(
         if (!slug) {
           throw new DomainError(
             'E_INVALID_ARG',
-            'slug must contain ASCII letters or digits (e.g. "omada-ap-health-monitor")'
+            'slug must contain ASCII letters or digits (e.g. "q4-renewal-dashboard")'
           )
         }
         const res = await surfaced(
@@ -524,5 +370,5 @@ export function createArtifactTools(
     guard
   )
 
-  return { omada_catalog_query, artifact_write, artifact_build_omada, artifact_publish_bundle }
+  return { artifact_write, artifact_publish_bundle }
 }

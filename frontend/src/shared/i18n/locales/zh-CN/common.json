@@ -768,6 +768,24 @@
     "toolCountUnknown": "工具清单连接后获取",
     "switchTrack": "切换轨道（断开并清除配置）",
     "supersededByDirect": "这条连接走的是 Composio 托管，而该服务已改为直连官方端点（不需要第三方授权）。用「切换轨道」断开并清除配置，再从目录直连重连。",
+    "updates": {
+      "checkButton": "检查更新",
+      "checking": "检查中…",
+      "availableCount": "{count} 个可更新",
+      "badge": "有更新",
+      "foundToast": "检测到 {count} 个连接器有可用更新或工具变化",
+      "upToDateToast": "所有连接器均为最新状态",
+      "checkFailed": "检查连接器更新失败",
+      "runtimeBannerTitle": "检测到新的运行时版本",
+      "driftBannerTitle": "远端 MCP 工具清单有变化",
+      "driftDetails": "新增 {added} 个，变更 {changed} 个，移除 {removed} 个",
+      "updateNow": "一键更新",
+      "updating": "更新中…",
+      "syncNow": "同步工具",
+      "updatedToast": "已更新 {name}",
+      "updateFailed": "更新失败",
+      "desktopUpstreamNote": "上游 GitHub 已发布新版（{upstream}），当前客户端使用已校验哈希的 {pinned}。"
+    },
     "builtinGroupDesc": {
       "email_write": "标记 / 归档 / 置顶 / 重传 Notion 等高频可逆的邮件操作。",
       "draft": "起草与修改本机草稿；发送另有独立的确认卡兜底。",
@@ -1083,6 +1101,7 @@
       "agent_memory_update": "更新长期记忆",
       "update_system_md": "修改身份文档",
       "skill_read": "读取技能",
+      "skill_read_resource": "读取技能资源",
       "discover_skills": "查找可用技能",
       "set_skill_enabled": "开关技能",
       "skill_install": "安装技能",
@@ -1169,9 +1188,7 @@
       "library_write": "写入资料库文件",
       "library_move": "移动资料库文件",
       "library_delete": "删除资料库文件",
-      "omada_catalog_query": "查询 Omada 组件目录",
       "artifact_write": "生成交互产物",
-      "artifact_build_omada": "构建 Omada 原型",
       "artifact_publish_bundle": "发布产物到云端"
     },
     "planCard": {
@@ -3420,7 +3437,7 @@
     },
     "skillPacks": {
       "title": "Skill 安装",
-      "helper": "从 URL 或本地路径安装第三方 skill 包。两段式：先获取预览、人工审阅包内容与声明，再确认安装。已安装的 skill 会出现在上方技能列表（启用/停用），密钥与配置在下方逐项管理。",
+      "helper": "支持从 GitHub 仓库（owner/repo 或链接）、npm 包（npm:@scope/pkg）、archive URL 或本地路径安装第三方 skill。两段式：先获取预览、人工审阅包内容与声明，再确认安装。已安装的 skill 会在上方技能列表中显示。",
       "sourceType": {
         "skill_pack": "skill 包",
         "local_folder": "本地目录"
@@ -3428,10 +3445,27 @@
       "installedNone": "还没有安装的 skill 包。",
       "installedCount": "已安装 {count} 个 skill 包。",
       "installButton": "安装 skill",
+      "updates": {
+        "checkButton": "检查更新",
+        "checking": "检查中…",
+        "availableCount": "{count} 个可更新",
+        "badge": "有更新",
+        "updateButton": "更新",
+        "foundToast": "检测到 {count} 个 skill 有可用更新",
+        "upToDateToast": "所有已安装 skill 均为最新版本",
+        "checkFailed": "检查 skill 更新失败"
+      },
       "dialog": {
         "title": "安装 Skill",
+        "upgradeTitle": "更新 Skill：{name}",
         "desc": "两段式安装：先获取包预览，人工审阅文件清单、密钥声明与 SKILL.md 节选，确认无误后再安装。第三方内容未经验签，请谨慎审阅。",
         "staleError": "包内容在预览后被改动，已拒绝安装。请重新获取预览并再次审阅。",
+        "sourceRemote": "GitHub / npm / URL",
+        "remotePlaceholder": "owner/repo、npm:@scope/pkg 或 https://.../skill.zip",
+        "remoteHelper": "支持 GitHub（ChenyqThu/omada-ui-kit）、npm（npm:@chenyqthu/omada-ui-kit）、.zip 或 .tgz 下载地址。",
+        "multipleSkillsPrompt": "该包内包含多个 skill，请选择要安装的一个：",
+        "upgradeSummary": "准备升级已安装的 skill",
+        "upgradeFilesDelta": "文件变化：新增 {added}，修改 {modified}，移除 {removed}",
         "sourceLocal": "本地路径",
         "localPlaceholder": "/path/to/skill.zip 或 skill 目录",
         "fetching": "获取中…",
@@ -3449,6 +3483,7 @@
         "back": "返回",
         "confirming": "安装中…",
         "confirm": "确认安装",
+        "confirmUpgrade": "确认更新",
         "installed": "已安装 {name}",
         "installedSecretsHint": "该 skill 声明了 {count} 个密钥（{names}），请在其「配置」里设置。",
         "installFailed": "安装失败"

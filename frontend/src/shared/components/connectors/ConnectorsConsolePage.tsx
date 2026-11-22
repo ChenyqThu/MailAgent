@@ -25,19 +25,29 @@ import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearch } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, Check, Loader2, PanelLeftClose, PanelLeftOpen, Plus } from 'lucide-react'
+import {
+  AlertCircle,
+  Check,
+  Loader2,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  RefreshCw
+} from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { useDomainCollapsed, useNavShell } from '@shared/state/nav-shell'
-import { toastError } from '@shared/state/toast'
+import { toastError, toastSuccess } from '@shared/state/toast'
 import { Button } from '@shared/components/ui/button'
 import { fetchConnectorToolsEnabled } from '@shared/components/settings/custom-ai/shared'
 import type {
   ConnectorCatalogView,
   ConnectorSummary,
+  ConnectorUpdateItem,
+  ConnectorUpdatesResult,
   ToolApprovalPrefsPayload
 } from '@shared/api/types'
 
@@ -176,6 +186,41 @@ export function ConnectorsConsolePage(): React.ReactElement {
     staleTime: 10_000,
     retry: false
   })
+
+  const updatesQuery = useQuery<ConnectorUpdatesResult>({
+    queryKey: qk.connectorUpdates(),
+    queryFn: () => api.connector.checkUpdates!({ force: false, includeRemote: false }),
+    enabled: externalEnabled && api.connector.checkUpdates != null,
+    staleTime: 600_000,
+    retry: false
+  })
+  const [checkingUpdates, setCheckingUpdates] = React.useState(false)
+
+  const updateById = React.useMemo(
+    () => new Map<string, ConnectorUpdateItem>((updatesQuery.data?.connectors ?? []).map((u) => [u.connector_id, u])),
+    [updatesQuery.data]
+  )
+  const updatesCount = updatesQuery.data?.updatesAvailableCount ?? 0
+
+  async function handleCheckUpdates(): Promise<void> {
+    if (!api.connector.checkUpdates) return
+    setCheckingUpdates(true)
+    try {
+      const res = await api.connector.checkUpdates({ force: true, includeRemote: true })
+      qc.setQueryData<ConnectorUpdatesResult>(qk.connectorUpdates(), res)
+      if (res.updatesAvailableCount > 0) {
+        toastSuccess(
+          t('connectorsConsole.updates.foundToast', { count: res.updatesAvailableCount })
+        )
+      } else {
+        toastSuccess(t('connectorsConsole.updates.upToDateToast'))
+      }
+    } catch (err) {
+      toastError(t('connectorsConsole.updates.checkFailed'), errorMessage(err))
+    } finally {
+      setCheckingUpdates(false)
+    }
+  }
 
   // ── 选中项：URL `?item=` 深链种子 + 页内点击。跟随数据归一（见文件头）。
   // 深链变化用「render 期比较-写入」承接（React docs 的 adjust-state-on-prop-change 形状，
@@ -336,6 +381,7 @@ export function ConnectorsConsolePage(): React.ReactElement {
             key={selection.id}
             connector={row}
             catalogEntry={catalogEntries.find((e) => e.connector_id === selection.id) ?? null}
+            updateInfo={updateById.get(row.connector_id) ?? null}
             nowMs={list.dataUpdatedAt}
           />
         )
@@ -401,6 +447,13 @@ export function ConnectorsConsolePage(): React.ReactElement {
           >
             <StatusDot status={c.status} />
             <span className="min-w-0 flex-1 truncate">{c.display_name}</span>
+            {updateById.get(c.connector_id)?.updateAvailable ? (
+              <span
+                className="size-1.5 shrink-0 rounded-full bg-warn"
+                title={t('connectorsConsole.updates.badge')}
+                aria-label={t('connectorsConsole.updates.badge')}
+              />
+            ) : null}
           </MasterRow>
         ))}
         {unconfiguredEntries.map((entry) => (
@@ -493,17 +546,45 @@ export function ConnectorsConsolePage(): React.ReactElement {
           <span className="truncate text-aux text-ink-fg-2">{t('connectorsConsole.subtitle')}</span>
         </div>
 
-        {!outerCollapsed && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => useNavShell.getState().setCollapsed('settings', true)}
-            className="shrink-0 text-aux text-ink-fg-2 hover:text-ink-fg"
-          >
-            {t('settings.connectorsTab.expandWorkspace')}
-          </Button>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {externalEnabled && api.connector.checkUpdates != null && (
+            <>
+              {updatesCount > 0 && (
+                <span className="inline-flex items-center rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-aux text-warn">
+                  {t('connectorsConsole.updates.availableCount', { count: updatesCount })}
+                </span>
+              )}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={checkingUpdates}
+                onClick={() => void handleCheckUpdates()}
+                className="shrink-0 text-aux text-ink-fg-2 hover:text-ink-fg"
+              >
+                {checkingUpdates ? (
+                  <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-1.5 size-3.5" />
+                )}
+                {checkingUpdates
+                  ? t('connectorsConsole.updates.checking')
+                  : t('connectorsConsole.updates.checkButton')}
+              </Button>
+            </>
+          )}
+          {!outerCollapsed && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => useNavShell.getState().setCollapsed('settings', true)}
+              className="shrink-0 text-aux text-ink-fg-2 hover:text-ink-fg"
+            >
+              {t('settings.connectorsTab.expandWorkspace')}
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="flex min-h-0 flex-1">

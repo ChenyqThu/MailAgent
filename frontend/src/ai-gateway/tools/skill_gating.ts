@@ -126,6 +126,7 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'skill_install_confirm',
   'skill_uninstall',
   'skill_read',
+  'skill_read_resource',
   'skill_draft_create',
   'skill_draft_write_file',
   'skill_draft_read',
@@ -213,11 +214,9 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'library_write',
   'library_move',
   'library_delete',
-  // Artifact Studio + Omada Prototype — versioned deliverables under agent-docs/artifacts.
-  // Core primitives; methodology/aesthetics live in artifact_studio and omada_prototype skills.
-  'omada_catalog_query',
+  // Artifact Studio — versioned deliverables under agent-docs/artifacts.
+  // Core domain_write primitives; methodology/aesthetics live in artifact_studio skill.
   'artifact_write',
-  'artifact_build_omada',
   'artifact_publish_bundle',
   // task 08-27 P4a —— 快捷反馈的 agent 提交面。无 skill 归属（Python 无 feedback builtin
   // skill），永不 skill-gated；它的开关面是 outbound class 的场地地板（只在 manual_chat

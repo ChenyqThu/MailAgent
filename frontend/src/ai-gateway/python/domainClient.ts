@@ -635,6 +635,9 @@ export interface DomainSkillFetchPreview {
   }
   secretNames: string[]
   skillMdExcerpt: string
+  isUpgrade?: boolean
+  previousVersion?: string | null
+  previousPackageHash?: string | null
 }
 
 export interface DomainSkillDraft {
@@ -2160,12 +2163,13 @@ export class MailAgentDomainClient {
    *  POST /agent/skills/fetch {sourceUrl?|localPath?} (exactly one). Returns the preview facts
    *  (quarantine id + real hashes + manifest summary + declared secret names + SKILL.md excerpt). */
   skillSupplyFetch(
-    input: { sourceUrl?: string; localPath?: string },
+    input: { sourceUrl?: string; localPath?: string; skillName?: string },
     signal?: AbortSignal
   ): Promise<DomainSkillFetchPreview> {
     const body: Record<string, unknown> = {}
     if (input.sourceUrl !== undefined) body.sourceUrl = input.sourceUrl
     if (input.localPath !== undefined) body.localPath = input.localPath
+    if (input.skillName !== undefined) body.skillName = input.skillName
     return this._req<DomainSkillFetchPreview>('POST', '/agent/skills/fetch', { body, signal })
   }
 
@@ -2204,6 +2208,36 @@ export class MailAgentDomainClient {
     return this._req<DomainSkillDocResult>('GET', `/agent/skills/${encodeURIComponent(name)}/doc`, {
       signal
     })
+  }
+
+  /** skill_read_resource — list or inspect files bundled inside an installed skill safely. */
+  skillResourceRead(
+    input: {
+      name: string
+      path?: string
+      search?: string
+      jsonPath?: string
+      offsetLine?: number
+      maxLines?: number
+      limit?: number
+    },
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req<Record<string, unknown>>(
+      'GET',
+      `/agent/skills/${encodeURIComponent(input.name)}/resource`,
+      {
+        query: {
+          path: input.path,
+          search: input.search,
+          json_path: input.jsonPath,
+          offset_line: input.offsetLine,
+          max_lines: input.maxLines,
+          limit: input.limit
+        },
+        signal
+      }
+    )
   }
 
   skillDraftCreate(
@@ -2721,66 +2755,6 @@ export class MailAgentDomainClient {
   ): Promise<Record<string, unknown>> {
     return this._req<Record<string, unknown>>('DELETE', `/library/file/${fileId}`, {
       query: { actor_kind: actor.kind, agent_id: actor.agentId },
-      signal
-    })
-  }
-
-  /** Fetch exported component & CSS catalog from local omada-ui-kit workspace. */
-  libraryOmadaCatalog(signal?: AbortSignal): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('GET', '/library/omada/catalog', { signal })
-  }
-
-  /** Query @chenyqthu/omada-ui-kit structured catalog (props, Figma assets, tokens, CDN URLs, recipes). */
-  libraryQueryOmadaCatalog(
-    input: {
-      action:
-        | 'info'
-        | 'list_components'
-        | 'component'
-        | 'search_icons'
-        | 'search_assets'
-        | 'tokens'
-        | 'recipes'
-      query?: string
-      assetGroup?: 'products' | 'illustrations' | 'clients' | 'brand'
-      theme?: 'light' | 'dark'
-      limit?: number
-    },
-    signal?: AbortSignal
-  ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('GET', '/library/omada/catalog', {
-      query: {
-        action: input.action,
-        query: input.query,
-        asset_group: input.assetGroup,
-        theme: input.theme,
-        limit: input.limit
-      },
-      signal
-    })
-  }
-
-  /** Compile a real omada-ui-kit TSX demo with Vite, ingest dist/ into Library, and issue preview URL. */
-  libraryBuildOmadaDemo(
-    input: {
-      slug: string
-      code: string
-      title?: string
-      changeNote?: string
-      themeMode?: 'light' | 'dark'
-    },
-    actor: DomainLibraryActor,
-    signal?: AbortSignal
-  ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('POST', '/library/artifacts/build-omada', {
-      body: {
-        slug: input.slug,
-        code: input.code,
-        title: input.title ?? null,
-        change_note: input.changeNote ?? null,
-        theme_mode: input.themeMode ?? 'light',
-        actor: libraryActorWire(actor)
-      },
       signal
     })
   }

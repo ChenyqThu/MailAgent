@@ -36,6 +36,8 @@ import type {
   ConnectorSyncResult,
   ConnectorToolMode,
   ConnectorToolSummary,
+  ConnectorUpdateResult,
+  ConnectorUpdatesResult,
   CustomConnectorCreateInput,
   CustomConnectorDeleteResult,
   CustomConnectorUpdateInput,
@@ -323,6 +325,31 @@ export function createConnectorApi(baseUrl: string): ConnectorApi {
         'POST',
         `/connector/${seg(connectorId)}/tools/${seg(toolName)}/invoke`,
         { body: { arguments: args ?? {} } }
+      )
+    },
+
+    checkUpdates(opts?: {
+      force?: boolean
+      includeRemote?: boolean
+    }): Promise<ConnectorUpdatesResult> {
+      const query: Record<string, string> = {}
+      if (opts?.force) query.force = 'true'
+      if (opts?.includeRemote !== undefined) {
+        query.include_remote = opts.includeRemote ? 'true' : 'false'
+      }
+      return request<ConnectorUpdatesResult>(
+        baseUrl,
+        'GET',
+        '/connector/updates',
+        Object.keys(query).length > 0 ? { query } : undefined
+      )
+    },
+
+    updateConnector(connectorId: string): Promise<ConnectorUpdateResult> {
+      return request<ConnectorUpdateResult>(
+        baseUrl,
+        'POST',
+        `/connector/${seg(connectorId)}/update`
       )
     }
   }

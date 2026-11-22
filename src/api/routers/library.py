@@ -38,13 +38,10 @@ from src.api.routers.attachment import (
     _stream_response,
 )
 from src.library.constants import FOLDER_PAGE_SIZE, READ_TOOL_MAX_BYTES, SEARCH_MODES, SOURCES
-from src.library.omada_builder import (
-    build_omada_demo,
+from src.library.artifact_bundle import (
     guess_media_type,
     issue_preview_token,
     publish_artifact_bundle,
-    query_omada_catalog,
-    read_omada_catalog,
     resolve_preview_file,
 )
 from src.library.service import TEXT_KINDS, Actor, LibraryError, LibraryService, _cap_text
@@ -165,16 +162,6 @@ class MountPatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     label: Optional[str] = None
     mode: Optional[Literal["ro", "rw"]] = None
-
-
-class BuildOmadaRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    slug: str
-    code: str
-    title: Optional[str] = None
-    change_note: Optional[str] = None
-    theme_mode: Literal["light", "dark"] = "light"
-    actor: Optional[ActorSpec] = None
 
 
 class PublishBundleRequest(BaseModel):
@@ -629,55 +616,8 @@ def library_remove_mount(request: Request, mount_id: int, service: LibraryServic
 
 
 # ---------------------------------------------------------------------------
-# Omada UI Kit 真实组件原型构建 + 多文件云端发布 + 本地 loopback 预览通道
+# Artifact bundle cloud publish & local loopback preview channel
 # ---------------------------------------------------------------------------
-
-
-@router.get("/omada/catalog")
-async def library_omada_catalog(
-    request: Request,
-    action: Optional[str] = Query(None),
-    query: Optional[str] = Query(None),
-    asset_group: Optional[str] = Query(None),
-    theme: str = Query("light"),
-    limit: int = Query(25, ge=1, le=100),
-):
-    """Return exported components or structured @chenyqthu/omada-ui-kit catalog queries."""
-    if action:
-        return await run_in_threadpool(
-            _run,
-            request,
-            query_omada_catalog,
-            action,
-            query=query,
-            asset_group=asset_group,
-            theme=theme,
-            limit=limit,
-        )
-    return await run_in_threadpool(_run, request, read_omada_catalog)
-
-
-@router.post("/artifacts/build-omada")
-async def library_build_omada(
-    request: Request,
-    body: BuildOmadaRequest,
-    service: LibraryService = Depends(get_library_service),
-):
-    """Compile an Omada UI Kit TSX demo with Vite, ingest dist/ into Library, and issue a preview URL."""
-    base_url = str(request.base_url).rstrip("/")
-    return await run_in_threadpool(
-        _run,
-        request,
-        build_omada_demo,
-        service,
-        body.slug,
-        body.code,
-        title=body.title,
-        change_note=body.change_note,
-        theme_mode=body.theme_mode,
-        actor=_actor(body.actor),
-        base_url=base_url,
-    )
 
 
 @router.post("/artifacts/preview-token")

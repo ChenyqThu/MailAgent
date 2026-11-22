@@ -14,10 +14,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
+import tarfile
 import zipfile
 from dataclasses import dataclass
+from typing import Any, Optional
 
 from pydantic import ValidationError
 
@@ -30,16 +33,31 @@ _READ_CHUNK = 64 * 1024
 
 MANIFEST_FILENAME = "manifest.json"
 SKILL_DOC_FILENAME = "SKILL.md"
+_SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,40}$")
+
+
+def sanitize_skill_name(value: str) -> Optional[str]:
+    """把任意名字归一化为合法 skill slug；不合规则返回 None。"""
+    normalized = re.sub(r"[^a-z0-9_-]+", "-", (value or "").strip().lower()).strip("-_")[:41]
+    return normalized if _SKILL_NAME_RE.fullmatch(normalized) else None
 
 
 class PackError(Exception):
-    """skill 包域错误（结构化 code + http_status 供端点透传）。"""
+    """skill 包域错误（结构化 code + http_status + 可选 details 供端点透传）。"""
 
-    def __init__(self, code: str, message: str, *, http_status: int = 400) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        http_status: int = 400,
+        details: Optional[dict[str, Any]] = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.http_status = http_status
+        self.details = details
 
 
 @dataclass
@@ -93,19 +111,51 @@ def _reject_member_path(name: str, dest_dir: str) -> str:
 # ── 安全解包（zip）────────────────────────────────────────────────────────────────────
 
 
-def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
+def _single_top_dir(rel_names: list[str]) -> Optional[str]:
+    """若所有非空归档成员共用同一顶层目录 `<top>/...` 且无顶层散落文件，返回 `<top>`。"""
+    top: Optional[str] = None
+    has_child = False
+    for raw in rel_names:
+        cleaned = raw.lstrip("./").strip("/")
+        if not cleaned or cleaned == ".":
+            continue
+        if "/" not in cleaned:
+            # 可能是 `<top>` 自身目录项，或者顶层散落文件；仅当同名为所有人的唯一前缀才可剥
+            if top is None:
+                top = cleaned
+            elif cleaned != top:
+                return None
+            continue
+        head = cleaned.split("/", 1)[0]
+        if top is None:
+            top = head
+        elif head != top:
+            return None
+        has_child = True
+    return top if (top and has_child) else None
+
+
+def safe_extract_zip(
+    zip_path: str,
+    dest_dir: str,
+    *,
+    strip_top_dir: bool = False,
+    max_entries: int = MAX_ENTRIES,
+) -> Optional[str]:
     """把 zip 安全解到 dest_dir（应为空/新建）。拒绝：绝对/traversal 成员、symlink/hardlink 成员、
-    entry 超限、解压总量超限（炸弹，边写边累计不信 header file_size）。落盘后 realpath 复核。"""
+    entry 超限、解压总量超限（炸弹，边写边累计不信 header file_size）。落盘后 realpath 复核。
+    若 strip_top_dir=True 且全员共属单顶层目录，则剥去该前缀并返回被剥目录名。"""
     try:
         zf = zipfile.ZipFile(zip_path)
     except zipfile.BadZipFile as e:
         raise PackError("E_PACK_BAD_ZIP", f"not a valid zip archive: {e}") from e
     with zf:
         infos = zf.infolist()
-        if len(infos) > MAX_ENTRIES:
+        if len(infos) > max_entries:
             raise PackError(
-                "E_PACK_TOO_MANY_ENTRIES", f"archive has {len(infos)} entries (> {MAX_ENTRIES})"
+                "E_PACK_TOO_MANY_ENTRIES", f"archive has {len(infos)} entries (> {max_entries})"
             )
+        top_prefix = _single_top_dir([i.filename for i in infos]) if strip_top_dir else None
         total = 0
         for info in infos:
             name = info.filename
@@ -113,6 +163,14 @@ def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
             mode = (info.external_attr >> 16) & 0xFFFF
             if mode and stat.S_ISLNK(mode):
                 raise PackError("E_PACK_SYMLINK", f"symlink member not allowed: {name!r}")
+            if top_prefix:
+                cleaned = name.rstrip("/")
+                if cleaned == top_prefix:
+                    continue
+                if name.startswith(top_prefix + "/"):
+                    name = name[len(top_prefix) + 1 :]
+                if not name:
+                    continue
             if info.is_dir():
                 target = _reject_member_path(name.rstrip("/"), dest_dir)
                 os.makedirs(target, exist_ok=True)
@@ -135,6 +193,83 @@ def safe_extract_zip(zip_path: str, dest_dir: str) -> None:
                         )
                     out.write(chunk)
     _assert_no_escape(dest_dir)
+    return top_prefix
+
+
+def safe_extract_tar_gz(
+    tgz_path: str,
+    dest_dir: str,
+    *,
+    strip_top_dir: bool = False,
+    max_entries: int = MAX_ENTRIES,
+) -> Optional[str]:
+    """把 .tar.gz/.tgz 安全解到 dest_dir。拒绝 traversal / symlink / hardlink / 特殊设备 / 炸弹。"""
+    try:
+        tf = tarfile.open(tgz_path, mode="r:gz")
+    except (tarfile.TarError, EOFError, OSError) as e:
+        raise PackError("E_PACK_BAD_ARCHIVE", f"not a valid tar.gz archive: {e}") from e
+    with tf:
+        try:
+            members = tf.getmembers()
+        except (tarfile.TarError, EOFError, OSError) as e:
+            raise PackError("E_PACK_BAD_ARCHIVE", f"corrupted tar.gz archive: {e}") from e
+        if len(members) > max_entries:
+            raise PackError(
+                "E_PACK_TOO_MANY_ENTRIES", f"archive has {len(members)} entries (> {max_entries})"
+            )
+
+        usable: list[tuple[tarfile.TarInfo, str]] = []
+        for m in members:
+            if m.type == tarfile.XGLTYPE or m.name == "pax_global_header":
+                continue
+            if m.issym() or m.islnk():
+                raise PackError("E_PACK_SYMLINK", f"symlink/hardlink member not allowed: {m.name!r}")
+            if not (m.isdir() or m.isfile()):
+                raise PackError("E_PACK_UNSAFE_PATH", f"unsupported archive member: {m.name!r}")
+            rel = m.name
+            while rel.startswith("./"):
+                rel = rel[2:]
+            if rel in ("", "."):
+                continue
+            usable.append((m, rel))
+
+        top_prefix = _single_top_dir([rel for _, rel in usable]) if strip_top_dir else None
+        total = 0
+        for m, rel in usable:
+            name = rel
+            if top_prefix:
+                cleaned = name.rstrip("/")
+                if cleaned == top_prefix:
+                    continue
+                if name.startswith(top_prefix + "/"):
+                    name = name[len(top_prefix) + 1 :]
+                if not name:
+                    continue
+            if m.isdir():
+                target = _reject_member_path(name.rstrip("/"), dest_dir)
+                os.makedirs(target, exist_ok=True)
+                continue
+            target = _reject_member_path(name, dest_dir)
+            parent = os.path.dirname(target)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            src = tf.extractfile(m)
+            if src is None:
+                raise PackError("E_PACK_BAD_ARCHIVE", f"cannot read archive member: {m.name!r}")
+            with src, open(target, "wb") as out:
+                while True:
+                    chunk = src.read(_READ_CHUNK)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > MAX_TOTAL_UNCOMPRESSED:
+                        raise PackError(
+                            "E_PACK_BOMB",
+                            f"uncompressed size exceeds {MAX_TOTAL_UNCOMPRESSED} bytes (archive bomb?)",
+                        )
+                    out.write(chunk)
+    _assert_no_escape(dest_dir)
+    return top_prefix
 
 
 # ── 安全导入（本地目录）────────────────────────────────────────────────────────────────
@@ -216,11 +351,176 @@ def compute_files_and_hash(content_dir: str) -> tuple:
     return files, agg.hexdigest()
 
 
+def _unquote_scalar(val: str) -> str:
+    s = val.strip()
+    if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+        inner = s[1:-1]
+        if s[0] == '"':
+            inner = inner.replace('\\"', '"').replace("\\n", "\n").replace("\\\\", "\\")
+        else:
+            inner = inner.replace("''", "'")
+        return inner
+    return s
+
+
+def parse_skill_frontmatter(text: str) -> dict[str, Any]:
+    """解析 Agent Skill standard ``SKILL.md`` 顶部 YAML frontmatter（无外部 YAML 依赖）。
+
+    支持引号标量、folded/literal 多行块（``>`` / ``>-`` / ``|`` / ``|-``）以及单层缩进子映射
+    （如 ``metadata: { version: ... }``）。无 frontmatter 时返回 ``{}``。
+    """
+    normalized = (text or "").lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    if not normalized.startswith("---\n"):
+        return {}
+    lines = normalized.split("\n")
+    end_idx: Optional[int] = None
+    for idx in range(1, len(lines)):
+        if lines[idx].strip() == "---":
+            end_idx = idx
+            break
+    if end_idx is None:
+        return {}
+
+    fm_lines = lines[1:end_idx]
+    out: dict[str, Any] = {}
+    i = 0
+    while i < len(fm_lines):
+        raw_line = fm_lines[i]
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            i += 1
+            continue
+        if raw_line[0].isspace():
+            i += 1
+            continue
+        key, sep, rest = raw_line.partition(":")
+        if not sep:
+            i += 1
+            continue
+        k = key.strip()
+        v = rest.strip()
+        if v in (">", ">-", "|", "|-"):
+            folded = v.startswith(">")
+            block_lines: list[str] = []
+            i += 1
+            base_indent: Optional[int] = None
+            while i < len(fm_lines):
+                nxt = fm_lines[i]
+                if not nxt.strip():
+                    block_lines.append("")
+                    i += 1
+                    continue
+                indent = len(nxt) - len(nxt.lstrip(" \t"))
+                if indent == 0:
+                    break
+                if base_indent is None:
+                    base_indent = indent
+                block_lines.append(nxt[min(indent, base_indent) :])
+                i += 1
+            while block_lines and block_lines[-1] == "":
+                block_lines.pop()
+            if folded:
+                joined_parts: list[str] = []
+                for bl in block_lines:
+                    if bl == "":
+                        joined_parts.append("\n")
+                    elif joined_parts and joined_parts[-1] != "\n":
+                        joined_parts.append(" " + bl.strip())
+                    else:
+                        joined_parts.append(bl.strip())
+                out[k] = "".join(joined_parts).strip()
+            else:
+                out[k] = "\n".join(block_lines)
+            continue
+        if v == "":
+            nested: dict[str, Any] = {}
+            i += 1
+            while i < len(fm_lines):
+                nxt = fm_lines[i]
+                if not nxt.strip() or nxt.strip().startswith("#"):
+                    i += 1
+                    continue
+                if not nxt[0].isspace():
+                    break
+                sk, ssep, srest = nxt.strip().partition(":")
+                if ssep and sk.strip():
+                    nested[sk.strip()] = _unquote_scalar(srest)
+                i += 1
+            out[k] = nested
+            continue
+        out[k] = _unquote_scalar(v)
+        i += 1
+    return out
+
+
+def _synthesize_manifest_from_skill_md(content_dir: str, smpath: str) -> tuple:
+    """无 manifest.json 时从标准 Agent Skill ``SKILL.md`` 合成严格校验的 manifest v2。"""
+    try:
+        with open(smpath, "r", encoding="utf-8", errors="replace") as f:
+            skill_md = f.read()
+    except OSError as e:
+        raise PackError("E_PACK_BAD_MANIFEST", f"cannot read {SKILL_DOC_FILENAME}: {e}") from e
+
+    fm = parse_skill_frontmatter(skill_md)
+    candidate_name = fm.get("name") if isinstance(fm.get("name"), str) else ""
+    skill_name = sanitize_skill_name(candidate_name) or sanitize_skill_name(
+        os.path.basename(os.path.abspath(content_dir))
+    )
+    if not skill_name:
+        raise PackError(
+            "E_PACK_BAD_MANIFEST",
+            f"{SKILL_DOC_FILENAME} frontmatter must declare a valid lowercase slug 'name'",
+        )
+
+    scripts_dir = os.path.join(content_dir, "scripts")
+    has_scripts = os.path.isdir(scripts_dir) and any(
+        os.path.isfile(os.path.join(root, fname))
+        for root, _dirs, files in os.walk(scripts_dir)
+        for fname in files
+    )
+    meta_block = fm.get("metadata") if isinstance(fm.get("metadata"), dict) else {}
+    version = str(
+        fm.get("version") or meta_block.get("version") or "0.1.0"
+    ).strip() or "0.1.0"
+    title = str(fm.get("title") or fm.get("name") or skill_name).strip() or skill_name
+    description = str(fm.get("description") or "").strip()
+    raw_default = fm.get("default_enabled")
+    if isinstance(raw_default, str):
+        default_enabled = raw_default.strip().lower() not in ("false", "0", "no", "off")
+    elif isinstance(raw_default, bool):
+        default_enabled = raw_default
+    else:
+        default_enabled = True
+
+    raw: dict[str, Any] = {
+        "manifest_version": 2,
+        "type": "script" if has_scripts else "document",
+        "name": skill_name,
+        "version": version,
+        "title": title,
+        "description": description,
+        "default_enabled": default_enabled,
+        "tools": [],
+    }
+    license_val = fm.get("license")
+    if isinstance(license_val, str) and license_val.strip():
+        raw["license"] = license_val.strip()
+
+    try:
+        manifest = SkillPackageManifest(**raw)
+    except ValidationError as e:
+        raise PackError("E_PACK_BAD_MANIFEST", f"synthesized manifest v2 invalid: {e}") from e
+    return manifest, raw
+
+
 def _read_manifest(content_dir: str) -> tuple:
-    """读 + 校验 manifest.json → (SkillPackageManifest, 原始 dict)。缺失/非法 → PackError。"""
+    """读 + 校验 manifest.json（若缺失则从标准 Agent Skill ``SKILL.md`` 合成 v2）→ (SkillPackageManifest, dict)。"""
     mpath = os.path.join(content_dir, MANIFEST_FILENAME)
     if not os.path.isfile(mpath):
-        raise PackError("E_PACK_NO_MANIFEST", f"{MANIFEST_FILENAME} not found in package")
+        smpath = os.path.join(content_dir, SKILL_DOC_FILENAME)
+        if not os.path.isfile(smpath):
+            raise PackError("E_PACK_NO_MANIFEST", f"{MANIFEST_FILENAME} not found in package")
+        return _synthesize_manifest_from_skill_md(content_dir, smpath)
     try:
         with open(mpath, "r", encoding="utf-8") as f:
             raw = json.load(f)

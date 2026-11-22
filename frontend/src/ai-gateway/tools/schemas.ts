@@ -1711,7 +1711,8 @@ export type ExecFileWriteInput = z.infer<typeof execFileWriteSchema>
  *  a preview (quarantine id + hashes + manifest summary) for the user to review. */
 export const skillInstallSchema = z.object({
   source_url: z.string().min(1).max(4096).optional(),
-  local_path: z.string().min(1).max(4096).optional()
+  local_path: z.string().min(1).max(4096).optional(),
+  skill_name: z.string().min(1).max(64).optional()
 })
 export type SkillInstallInput = z.infer<typeof skillInstallSchema>
 
@@ -1738,6 +1739,18 @@ export const skillReadSchema = z.object({
   name: z.string().min(1).max(64)
 })
 export type SkillReadInput = z.infer<typeof skillReadSchema>
+
+/** skill_read_resource — read, list, or search bundled files inside an installed/builtin skill. */
+export const skillReadResourceSchema = z.object({
+  name: z.string().min(1).max(64),
+  path: z.string().min(1).max(512).optional(),
+  search: z.string().min(1).max(256).optional(),
+  json_path: z.string().min(1).max(256).optional(),
+  offset_line: z.number().int().min(1).optional(),
+  max_lines: z.number().int().min(1).max(500).optional(),
+  limit: z.number().int().min(1).max(50).optional()
+})
+export type SkillReadResourceInput = z.infer<typeof skillReadResourceSchema>
 
 export const skillDraftCreateSchema = z.object({
   name: z.string().regex(/^[a-z][a-z0-9_-]{0,40}$/),

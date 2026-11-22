@@ -18,6 +18,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from loguru import logger
+from starlette.concurrency import run_in_threadpool
 
 from src.agent_config.projections import (
     resolved_skills,
@@ -812,7 +813,12 @@ def _pack_api_error(exc: Exception) -> APIError:
     from src.skills.pack_verify import PackError
 
     if isinstance(exc, PackError):
-        return APIError(exc.code, exc.message, http_status=exc.http_status, source="sqlite")
+        hint: Optional[str] = None
+        if isinstance(exc.details, dict) and isinstance(exc.details.get("availableSkills"), list):
+            names = [str(n) for n in exc.details["availableSkills"] if isinstance(n, str) and n]
+            if names:
+                hint = ",".join(names)
+        return APIError(exc.code, exc.message, hint=hint, http_status=exc.http_status, source="sqlite")
     return APIError("E_INVALID_ARG", str(exc), http_status=400, source="sqlite")
 
 
@@ -1031,6 +1037,19 @@ async def list_skill_entrypoints(request: Request):
                             meta_extra={"count": len(out)})
 
 
+@router.get("/skills/updates", dependencies=[Depends(verify_cf_access)])
+async def check_agent_skill_updates(
+    request: Request,
+    force: bool = Query(False),
+):
+    """检测已安装第三方 skill 包上游是否有更新（600s TTL 缓存，force=true 强制刷新）。"""
+    from src.skills.update_check import check_skill_updates
+
+    store = get_agent_config_store()
+    data = await run_in_threadpool(check_skill_updates, store, force=force)
+    return success_envelope(data, request=request, source="sqlite")
+
+
 def _skill_trust_dict(trust: Any, current_hash: Optional[str]) -> dict[str, Any]:
     state = (
         "revoked"
@@ -1192,11 +1211,13 @@ def _full_uninstall(name: str) -> dict[str, Any]:
     skill_secrets 行。``POST /skills/uninstall`` 与旧 ``DELETE /skills/{name}`` 的 pack 分支共用
     —— 两条路径必须同一份清理集，否则同名重装会收养 stale secrets（W2 review P2-2）。幂等。"""
     from src.skills.pack_fetch import remove_skill_dir
+    from src.skills.update_check import invalidate_skill_update_cache
 
     store = get_agent_config_store()
     removed_row = store.uninstall_skill(name)
     removed_dir = remove_skill_dir(name)
     removed_secrets = store.delete_skill_secrets(name)
+    invalidate_skill_update_cache()
     return {
         "name": name,
         "removed": removed_row or removed_dir,
@@ -1230,45 +1251,27 @@ async def uninstall_agent_skill(name: str, request: Request):
 _SKILL_MD_EXCERPT_MAX = 4096
 
 
-@router.post("/skills/fetch", dependencies=[Depends(verify_cf_access)])
-async def fetch_agent_skill(request: Request, body: Optional[dict[str, Any]] = None):
-    """两段式第一段：下载（URL）/ 导入（本地 zip 或目录）skill 包 → quarantine → 安全解包 + manifest
-    v2 校验 + hash。**不安装**（仅落 quarantine）。body = {sourceUrl?} 或 {localPath?}（二选一）。
+def _diff_skill_files(old_files_json: Optional[str], new_files: dict[str, str]) -> dict[str, list[str]]:
+    old_files: dict[str, Any] = {}
+    if old_files_json:
+        try:
+            parsed = json.loads(old_files_json)
+            if isinstance(parsed, dict):
+                old_files = parsed
+        except (ValueError, TypeError):
+            old_files = {}
+    added = sorted(k for k in new_files if k not in old_files)
+    removed = sorted(k for k in old_files if k not in new_files)
+    modified = sorted(k for k in new_files if k in old_files and old_files[k] != new_files[k])
+    return {"added": added, "modified": modified, "removed": removed}
 
-    返回 preview：quarantineId + packageHash + 文件表（路径+每文件 sha256）+ manifest 摘要 + 声明的
-    secret 名 + SKILL.md 节选。owner 审阅后带 quarantineId + packageHash + files 调 /confirm 真安装。"""
-    from src.skills.pack_fetch import fetch_pack
-    from src.skills.pack_verify import PackError
 
-    raw = body or {}
-    source_url = raw.get("sourceUrl")
-    local_path = raw.get("localPath")
-    if bool(source_url) == bool(local_path):
-        raise APIError(
-            "E_INVALID_ARG",
-            "exactly one of body.sourceUrl / body.localPath is required",
-            http_status=400,
-            source="sqlite",
-        )
-    if source_url is not None and not isinstance(source_url, str):
-        raise APIError("E_INVALID_ARG", "body.sourceUrl must be a string", http_status=400, source="sqlite")
-    if local_path is not None and not isinstance(local_path, str):
-        raise APIError("E_INVALID_ARG", "body.localPath must be a string", http_status=400, source="sqlite")
-
-    try:
-        res = fetch_pack(
-            source_url=source_url if source_url else None,
-            local_path=local_path if local_path else None,
-        )
-    except PackError as exc:
-        # 结构化 code（E_PACK_* / E_UPSTREAM / E_CONTENT_TYPE …）+ 各自 http_status 透传，供 W4 壳展示。
-        raise APIError(exc.code, exc.message, http_status=exc.http_status, source="sqlite") from exc
-
+def _build_fetch_preview(res: Any, store: Any) -> dict[str, Any]:
     m = res.manifest_dict
     secret_names = [
         s.get("name") for s in (m.get("secrets") or []) if isinstance(s, dict) and s.get("name")
     ]
-    preview = {
+    preview: dict[str, Any] = {
         "quarantineId": res.quarantine_id,
         "sourceType": res.source_type,
         "sourceUri": res.source_uri,
@@ -1286,7 +1289,52 @@ async def fetch_agent_skill(request: Request, body: Optional[dict[str, Any]] = N
         "secretNames": secret_names,
         "skillMdExcerpt": res.skill_md[:_SKILL_MD_EXCERPT_MAX],
     }
-    return success_envelope(preview, request=request, source="sqlite")
+    skill_name = m.get("name")
+    existing = store.get_skill(skill_name) if isinstance(skill_name, str) and skill_name else None
+    if existing is not None and existing.files_json:
+        preview["isUpgrade"] = True
+        preview["previousVersion"] = existing.version
+        preview["previousPackageHash"] = existing.package_hash
+        preview["changedFiles"] = _diff_skill_files(existing.files_json, res.files)
+    return preview
+
+
+@router.post("/skills/fetch", dependencies=[Depends(verify_cf_access)])
+async def fetch_agent_skill(request: Request, body: Optional[dict[str, Any]] = None):
+    """两段式第一段：下载（GitHub/npm/URL）/ 导入（本地 zip/tgz 或目录）skill 包 → quarantine →
+    manifest v2 校验 + hash。**不安装**（仅落 quarantine）。body = {sourceUrl? | localPath?, skillName?}。"""
+    from src.skills.pack_fetch import fetch_pack
+    from src.skills.pack_verify import PackError
+
+    raw = body or {}
+    source_url = raw.get("sourceUrl")
+    local_path = raw.get("localPath")
+    skill_name = raw.get("skillName")
+    if bool(source_url) == bool(local_path):
+        raise APIError(
+            "E_INVALID_ARG",
+            "exactly one of body.sourceUrl / body.localPath is required",
+            http_status=400,
+            source="sqlite",
+        )
+    if source_url is not None and not isinstance(source_url, str):
+        raise APIError("E_INVALID_ARG", "body.sourceUrl must be a string", http_status=400, source="sqlite")
+    if local_path is not None and not isinstance(local_path, str):
+        raise APIError("E_INVALID_ARG", "body.localPath must be a string", http_status=400, source="sqlite")
+    if skill_name is not None and not isinstance(skill_name, str):
+        raise APIError("E_INVALID_ARG", "body.skillName must be a string", http_status=400, source="sqlite")
+
+    try:
+        res = await run_in_threadpool(
+            fetch_pack,
+            source_url=source_url if source_url else None,
+            local_path=local_path if local_path else None,
+            skill_name=skill_name.strip() if isinstance(skill_name, str) and skill_name.strip() else None,
+        )
+    except PackError as exc:
+        raise _pack_api_error(exc) from exc
+
+    return success_envelope(_build_fetch_preview(res, get_agent_config_store()), request=request, source="sqlite")
 
 
 @router.post("/skills/confirm", dependencies=[Depends(verify_cf_access)])
@@ -1297,6 +1345,7 @@ async def confirm_agent_skill(request: Request, body: Optional[dict[str, Any]] =
     expectedFiles?}。"""
     from src.skills.pack_fetch import confirm_pack, promote_content
     from src.skills.pack_verify import PackError
+    from src.skills.update_check import invalidate_skill_update_cache
 
     raw = body or {}
     qid = raw.get("quarantineId")
@@ -1317,17 +1366,24 @@ async def confirm_agent_skill(request: Request, body: Optional[dict[str, Any]] =
         raise APIError(exc.code, exc.message, http_status=exc.http_status, source="sqlite") from exc
 
     store = get_agent_config_store()
-    # 先落新行数据（含 manifest/hash/files），再 atomic swap 目录（升级语义，失败不留半成品）。
+    # 先落新行数据（含 manifest/hash/files/upstream_meta），保留既有 enabled 覆盖，再 atomic swap 目录。
     try:
+        resolved_version = (
+            (result.upstream_meta or {}).get("version")
+            if isinstance(result.upstream_meta, dict)
+            else None
+        ) or result.manifest_dict.get("version")
         store.install_skill(
             result.name,
             source_type=result.source_type,
             manifest=result.manifest_dict,
             manifest_version=result.manifest_version,
-            version=result.manifest_dict.get("version"),
+            version=str(resolved_version) if resolved_version is not None else None,
             source_uri=result.source_uri,
             package_hash=result.package_hash,
             files_json=json.dumps(result.files, ensure_ascii=False, sort_keys=True),
+            upstream_meta=result.upstream_meta,
+            preserve_enabled=True,
         )
     except ValueError as exc:  # slug / manifest.name 不一致 / 非法 scope
         raise APIError("E_INVALID_ARG", str(exc), http_status=400, source="sqlite") from exc
@@ -1337,12 +1393,47 @@ async def confirm_agent_skill(request: Request, body: Optional[dict[str, Any]] =
     except PackError as exc:
         raise APIError(exc.code, exc.message, http_status=exc.http_status, source="sqlite") from exc
 
+    invalidate_skill_update_cache()
     return success_envelope(
         {"name": result.name, "sourceType": result.source_type, "packageHash": result.package_hash},
         request=request,
         source="sqlite",
         status_code=201,
     )
+
+
+@router.post("/skills/{name}/update/prepare", dependencies=[Depends(verify_cf_access)])
+async def prepare_agent_skill_update(name: str, request: Request):
+    """按已安装 skill 存盘的 sourceUri / localPath 重新拉取到 quarantine 并返回 upgrade preview。"""
+    from src.skills.pack_fetch import fetch_pack
+    from src.skills.pack_verify import PackError
+
+    store = get_agent_config_store()
+    row = store.get_skill(name)
+    if row is None or not row.files_json:
+        raise APIError("E_NOT_FOUND", f"installed skill pack not found: {name}", http_status=404, source="sqlite")
+    if not row.source_uri:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"skill {name!r} has no upstream source URI recorded",
+            http_status=400,
+            source="sqlite",
+        )
+
+    is_local = row.source_type == "local_folder" or (
+        isinstance(row.upstream_meta, dict) and row.upstream_meta.get("provider") in ("local", "local_archive")
+    )
+    try:
+        res = await run_in_threadpool(
+            fetch_pack,
+            source_url=None if is_local else row.source_uri,
+            local_path=row.source_uri if is_local else None,
+            skill_name=name,
+        )
+    except PackError as exc:
+        raise _pack_api_error(exc) from exc
+
+    return success_envelope(_build_fetch_preview(res, store), request=request, source="sqlite")
 
 
 # ── per-skill 密钥（S2 W3 —— Settings 后端；UI 是 W4）──────────────────────────────────
@@ -1544,6 +1635,36 @@ def _skill_doc_envelope(name: str, path: str, *, install_dir: Optional[str], sou
         request=request,
         source="sqlite",
     )
+
+
+@router.get("/skills/{name}/resource", dependencies=[Depends(verify_cf_access)])
+async def get_skill_resource(
+    name: str,
+    request: Request,
+    path: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    json_path: Optional[str] = Query(None),
+    offset_line: int = Query(1, ge=1),
+    max_lines: int = Query(200, ge=1, le=500),
+    limit: int = Query(20, ge=1, le=50),
+):
+    """只读读取/检索已安装或内置 skill 包内附带的参考文件（如 ``references/catalog.json``）。"""
+    from src.skills.pack_verify import PackError
+    from src.skills.resource_read import read_skill_resource
+
+    try:
+        payload = read_skill_resource(
+            name,
+            path=path,
+            search=search,
+            json_path=json_path,
+            offset_line=offset_line,
+            max_lines=max_lines,
+            limit=limit,
+        )
+    except PackError as exc:
+        raise APIError(exc.code, exc.message, http_status=exc.http_status, source="sqlite") from exc
+    return success_envelope(payload, request=request, source="sqlite")
 
 
 @router.get("/skills/{name}/config", dependencies=[Depends(verify_cf_access)])

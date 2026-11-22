@@ -576,6 +576,8 @@ export interface SkillSummary {
   /** Union of the skill tools' auth_scopes (side-effect summary). */
   scopes: string[]
   installDir: string | null
+  version?: string | null
+  sourceUri?: string | null
   trustState: 'trusted' | 'stale' | 'revoked' | null
   lastError: string | null
 }
@@ -695,6 +697,34 @@ export interface SkillPackPreview {
   secretNames: string[]
   /** First 4KB of the pack's SKILL.md. */
   skillMdExcerpt: string
+  /** Upgrade enrichment returned when target skill already exists or via prepareSkillUpdate. */
+  isUpgrade?: boolean
+  previousVersion?: string | null
+  previousPackageHash?: string | null
+  changedFiles?: {
+    added: string[]
+    modified: string[]
+    removed: string[]
+  }
+}
+
+export interface SkillUpdateItem {
+  name: string
+  provider: string
+  sourceUri: string | null
+  installedVersion: string | null
+  latestVersion: string | null
+  installedRef: string | null
+  latestRef: string | null
+  updateAvailable: boolean
+  canAutoUpdate: boolean
+  error: string | null
+}
+
+export interface SkillUpdatesResult {
+  checkedAt: number
+  updatesAvailableCount: number
+  skills: SkillUpdateItem[]
 }
 
 /** S2 W4b — result of confirming a quarantined pack (POST /agent/skills/confirm, 201). */
@@ -1117,7 +1147,13 @@ export interface ChatApi {
    * owner reviews the preview, then calls confirmSkillPack. Throws Error&{code}
    * (E_PACK_* / E_SSRF_BLOCKED / E_UPSTREAM / E_INVALID_ARG).
    */
-  fetchSkillPack(input: { sourceUrl?: string; localPath?: string }): Promise<SkillPackPreview>
+  fetchSkillPack(input: {
+    sourceUrl?: string
+    localPath?: string
+    skillName?: string
+  }): Promise<SkillPackPreview>
+  checkSkillUpdates?(force?: boolean): Promise<SkillUpdatesResult>
+  prepareSkillUpdate?(name: string): Promise<SkillPackPreview>
   /**
    * S2 W4b — two-phase install, phase 2: confirm the quarantined pack (POST
    * /agent/skills/confirm). Pass the preview's packageHash + files verbatim — the

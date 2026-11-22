@@ -768,6 +768,24 @@
     "toolCountUnknown": "Tool list arrives after connecting",
     "switchTrack": "Switch track (disconnect and clear config)",
     "supersededByDirect": "This connection runs through Composio, but the service now ships as a direct connection to the official endpoint (no third-party approval needed). Use “Switch track” to disconnect and clear its config, then reconnect directly from the catalog.",
+    "updates": {
+      "checkButton": "Check updates",
+      "checking": "Checking…",
+      "availableCount": "{count, plural, one {# update} other {# updates}}",
+      "badge": "Update available",
+      "foundToast": "Found updates or tool changes for {count} connector(s)",
+      "upToDateToast": "All connectors are up to date",
+      "checkFailed": "Failed to check connector updates",
+      "runtimeBannerTitle": "New runtime version available",
+      "driftBannerTitle": "Remote MCP tool schema changes detected",
+      "driftDetails": "+{added} added, ~{changed} changed, -{removed} removed",
+      "updateNow": "Update now",
+      "updating": "Updating…",
+      "syncNow": "Sync tools",
+      "updatedToast": "Updated {name}",
+      "updateFailed": "Update failed",
+      "desktopUpstreamNote": "Upstream GitHub released {upstream}; this client pins hash-verified {pinned}."
+    },
     "builtinGroupDesc": {
       "email_write": "High-frequency reversible email actions: flag / archive / pin / resync to Notion.",
       "draft": "Create and edit local drafts; sending has its own confirmation card.",
@@ -1083,6 +1101,7 @@
       "agent_memory_update": "Update long-term memory",
       "update_system_md": "Update profile document",
       "skill_read": "Read skill",
+      "skill_read_resource": "Read skill resource",
       "discover_skills": "Discover skills",
       "set_skill_enabled": "Toggle skill",
       "skill_install": "Install skill",
@@ -1169,9 +1188,7 @@
       "library_write": "Write library file",
       "library_move": "Move library file",
       "library_delete": "Delete library file",
-      "omada_catalog_query": "Query Omada UI catalog",
       "artifact_write": "Create interactive artifact",
-      "artifact_build_omada": "Build Omada prototype",
       "artifact_publish_bundle": "Publish artifact to cloud"
     },
     "planCard": {
@@ -3420,7 +3437,7 @@
     },
     "skillPacks": {
       "title": "Skill install",
-      "helper": "Install third-party skill packs from a URL or a local path. Two-phase: fetch a preview, review the pack contents and declarations, then confirm the install. Installed skills appear in the skills list above (enable/disable); secrets and config are managed per-pack below.",
+      "helper": "Install third-party skill packs from GitHub repos (owner/repo or URL), npm packages (npm:@scope/pkg), archive URLs, or local paths. Two-phase: fetch a preview, review contents and declarations, then confirm.",
       "sourceType": {
         "skill_pack": "skill pack",
         "local_folder": "local folder"
@@ -3428,10 +3445,27 @@
       "installedNone": "No skill packs installed yet.",
       "installedCount": "{count, plural, one {# skill pack installed.} other {# skill packs installed.}}",
       "installButton": "Install skill",
+      "updates": {
+        "checkButton": "Check updates",
+        "checking": "Checking…",
+        "availableCount": "{count, plural, one {# update} other {# updates}}",
+        "badge": "Update",
+        "updateButton": "Update",
+        "foundToast": "Found updates for {count} skill(s)",
+        "upToDateToast": "All installed skills are up to date",
+        "checkFailed": "Failed to check skill updates"
+      },
       "dialog": {
         "title": "Install Skill",
+        "upgradeTitle": "Update Skill: {name}",
         "desc": "Two-phase install: fetch a pack preview, manually review the file list, secret declarations and SKILL.md excerpt, then install once confirmed. Third-party content is unverified — review it carefully.",
         "staleError": "The pack contents changed after the preview, so the install was rejected. Fetch a new preview and review again.",
+        "sourceRemote": "GitHub / npm / URL",
+        "remotePlaceholder": "owner/repo, npm:@scope/pkg, or https://.../skill.zip",
+        "remoteHelper": "Supports GitHub (ChenyqThu/omada-ui-kit), npm (npm:@chenyqthu/omada-ui-kit), or .zip / .tgz archive URLs.",
+        "multipleSkillsPrompt": "Multiple skills found in this repository. Choose one to install:",
+        "upgradeSummary": "Ready to upgrade installed skill",
+        "upgradeFilesDelta": "File changes: +{added} added, ~{modified} modified, -{removed} removed",
         "sourceLocal": "Local path",
         "localPlaceholder": "/path/to/skill.zip or skill directory",
         "fetching": "Fetching…",
@@ -3449,6 +3483,7 @@
         "back": "Back",
         "confirming": "Installing…",
         "confirm": "Confirm install",
+        "confirmUpgrade": "Confirm update",
         "installed": "Installed {name}",
         "installedSecretsHint": "This skill declares {count} secret(s) ({names}); set them under its “Config”.",
         "installFailed": "Install failed"

@@ -148,6 +148,7 @@ class SkillRow:
     # S2 W2 供应链：{relpath: sha256} 逐文件 hash（执行时完整性校验用，W1/W4 消费）+ 首跑闸记录。
     files_json: Optional[str] = None
     first_run_approved: Optional[str] = None
+    upstream_meta: Optional[dict[str, Any]] = None
 
     @property
     def is_builtin(self) -> bool:
@@ -409,7 +410,8 @@ CREATE TABLE IF NOT EXISTS agent_skills (
     updated_at          INTEGER NOT NULL,
     -- S2 W2 供应链：逐文件 sha256（{relpath: sha256} JSON）+ 首跑闸记录（W1/W4 消费，本 wave 只建列）。
     files_json          TEXT,
-    first_run_approved  TEXT
+    first_run_approved  TEXT,
+    upstream_meta_json  TEXT
 );
 
 -- S2 W2 per-skill 密钥：值列只存密文（W3 填 Fernet 加解密，本 wave 只建表）。DB/审计只见名字，
@@ -658,6 +660,8 @@ class AgentConfigStore:
             conn.execute("ALTER TABLE agent_skills ADD COLUMN files_json TEXT")
         if "first_run_approved" not in cols:
             conn.execute("ALTER TABLE agent_skills ADD COLUMN first_run_approved TEXT")
+        if "upstream_meta_json" not in cols:
+            conn.execute("ALTER TABLE agent_skills ADD COLUMN upstream_meta_json TEXT")
         # PR2 裁决① — 已存在的旧 connector_tool 表（建于 PR1）补 destructive 列。
         ct_cols = {
             r["name"] for r in conn.execute("PRAGMA table_info(connector_tool)").fetchall()
@@ -999,6 +1003,8 @@ class AgentConfigStore:
         trusted: bool = False,
         enabled: Optional[bool] = None,
         files_json: Optional[str] = None,
+        upstream_meta: Optional[dict[str, Any]] = None,
+        preserve_enabled: bool = False,
         session_id: Optional[int] = None,
     ) -> SkillRow:
         """安装/更新一个用户来源 skill（source_type ∈ INSTALLABLE_SOURCE_TYPES）。
@@ -1032,6 +1038,16 @@ class AgentConfigStore:
         manifest_json = (
             json.dumps(manifest, ensure_ascii=False, sort_keys=True) if manifest is not None else None
         )
+        upstream_meta_json = (
+            json.dumps(upstream_meta, ensure_ascii=False, sort_keys=True)
+            if upstream_meta is not None
+            else None
+        )
+        enabled_update_sql = (
+            "COALESCE(excluded.enabled, agent_skills.enabled)"
+            if preserve_enabled
+            else "excluded.enabled"
+        )
         now = _now()
         with self._connection() as conn:
             existing = conn.execute(
@@ -1039,18 +1055,18 @@ class AgentConfigStore:
             ).fetchone()
             installed_at = existing["installed_at"] if existing else now
             conn.execute(
-                "INSERT INTO agent_skills "
+                f"INSERT INTO agent_skills "
                 "(skill_name, source_type, source_uri, version, manifest_version, manifest_json, "
                 " enabled, granted_scopes_json, package_hash, trusted, last_error, installed_at, updated_at, "
-                " files_json) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                " files_json, upstream_meta_json) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(skill_name) DO UPDATE SET "
                 " source_type=excluded.source_type, source_uri=excluded.source_uri, "
                 " version=excluded.version, manifest_version=excluded.manifest_version, "
-                " manifest_json=excluded.manifest_json, enabled=excluded.enabled, "
+                f" manifest_json=excluded.manifest_json, enabled={enabled_update_sql}, "
                 " granted_scopes_json=excluded.granted_scopes_json, package_hash=excluded.package_hash, "
                 " trusted=excluded.trusted, last_error=NULL, updated_at=excluded.updated_at, "
-                " files_json=excluded.files_json",
+                " files_json=excluded.files_json, upstream_meta_json=excluded.upstream_meta_json",
                 (
                     skill_name,
                     source_type,
@@ -1066,6 +1082,7 @@ class AgentConfigStore:
                     installed_at,
                     now,
                     files_json,
+                    upstream_meta_json,
                 ),
             )
             # detail 记 source_type + package_hash + manifest_version（供应链溯源）；**绝不含 secret 值**。
@@ -2416,6 +2433,13 @@ def _row_to_skill(row: sqlite3.Row) -> SkillRow:
         except (json.JSONDecodeError, TypeError):
             manifest = None
     keys = row.keys()
+    upstream_meta: Optional[dict[str, Any]] = None
+    if "upstream_meta_json" in keys and row["upstream_meta_json"]:
+        try:
+            parsed_um = json.loads(row["upstream_meta_json"])
+            upstream_meta = parsed_um if isinstance(parsed_um, dict) else None
+        except (json.JSONDecodeError, TypeError):
+            upstream_meta = None
     return SkillRow(
         skill_name=row["skill_name"],
         source_type=row["source_type"],
@@ -2433,6 +2457,7 @@ def _row_to_skill(row: sqlite3.Row) -> SkillRow:
         # 新列（迁移前建的旧库经 _migrate_additive 补齐；防御性 keys() 判存在，避免 KeyError）。
         files_json=row["files_json"] if "files_json" in keys else None,
         first_run_approved=row["first_run_approved"] if "first_run_approved" in keys else None,
+        upstream_meta=upstream_meta,
     )
 
 

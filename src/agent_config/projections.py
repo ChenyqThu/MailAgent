@@ -145,6 +145,8 @@ def resolved_skills(manifest_skills: Iterable[Any], store: AgentConfigStore) -> 
                 "toolCount": len(s.tools),
                 "scopes": sorted({sc for t in s.tools for sc in t.auth_scopes}),
                 "sourceType": row.source_type if row else "builtin",
+                "version": (row.version if row and row.version else s.version),
+                "sourceUri": (row.source_uri if row else None),
                 "installDir": _skill_install_dir(s.name) if row and row.files_json else None,
                 "trustState": trust_state,
                 "lastError": row.last_error if row else None,

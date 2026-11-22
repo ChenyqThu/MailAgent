@@ -66,7 +66,6 @@ EXPECTED_DEFAULT_AUTO = {
     "library_append",
     "library_write",
     "artifact_write",
-    "artifact_build_omada",
 }
 # configurable=False（固定形状）：send=收件人白名单 / run_command=policy_rules /
 # 供应链两卡 / custom-agent CRUD（run_now 除外）。

@@ -10,13 +10,19 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Download, KeyRound, Loader2, Package, Settings2, Trash2 } from 'lucide-react'
+import { ArrowUpCircle, Download, KeyRound, Loader2, Package, RefreshCw, Settings2, Trash2 } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
-import type { SkillPackPreview, SkillSecretMeta, SkillSummary } from '@shared/api/types'
+import type {
+  SkillPackPreview,
+  SkillSecretMeta,
+  SkillSummary,
+  SkillUpdateItem,
+  SkillUpdatesResult
+} from '@shared/api/types'
 import { Button } from '@shared/components/ui/button'
 import { Input } from '@shared/components/ui/input'
 import {
@@ -34,11 +40,6 @@ import { fetchSkillInstallEnabled } from './shared'
 /** Supply-chain confirm only ever writes these source types (URL/zip → 'skill_pack',
  *  local dir import → 'local_folder'); builtin / document / mcp rows are NOT packs. */
 const PACK_SOURCE_TYPES = new Set(['skill_pack', 'local_folder'])
-
-const PACK_SOURCE_LABEL_KEYS: Record<string, string> = {
-  skill_pack: 'settings.skillPacks.sourceType.skill_pack',
-  local_folder: 'settings.skillPacks.sourceType.local_folder'
-}
 
 /** Structured ApiError → user-facing one-liner（code + message + hint）。 */
 function apiErrText(err: unknown): string {
@@ -62,13 +63,34 @@ function formatIsoShort(iso: string | null): string {
   return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
 }
 
-/** 安装对话框：输入步（URL / 本地路径二选一）→ 预览步（服务端事实渲染）→ 确认安装。 */
+function parseAvailableSkillsHint(err: unknown): string[] | null {
+  const e = err as { code?: unknown; hint?: unknown }
+  if (e?.code !== 'E_PACK_MULTIPLE_SKILLS' || typeof e?.hint !== 'string') return null
+  const list = e.hint
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+  return list.length > 0 ? list : null
+}
+
+function sourceOriginLabel(skill: SkillSummary): string {
+  const uri = skill.sourceUri ?? ''
+  if (uri.startsWith('github:')) return 'GitHub'
+  if (uri.startsWith('npm:')) return 'npm'
+  if (uri.startsWith('http://') || uri.startsWith('https://')) return 'URL'
+  if (skill.sourceType === 'local_folder') return 'Local'
+  return 'Pack'
+}
+
+/** 安装/更新对话框：输入步（URL/GitHub/npm 或本地路径）→ 预览步（服务端事实渲染）→ 确认落盘。 */
 function SkillInstallDialog({
   open,
+  initialPreview,
   onOpenChange,
   onInstalled
 }: {
   open: boolean
+  initialPreview?: SkillPackPreview | null
   onOpenChange: (open: boolean) => void
   onInstalled: () => void
 }): React.ReactElement {
@@ -78,7 +100,10 @@ function SkillInstallDialog({
   const [source, setSource] = React.useState<'url' | 'local'>('url')
   const [inputValue, setInputValue] = React.useState('')
   const [fetching, setFetching] = React.useState(false)
-  const [preview, setPreview] = React.useState<SkillPackPreview | null>(null)
+  const [preview, setPreview] = React.useState<SkillPackPreview | null>(
+    () => initialPreview ?? null
+  )
+  const [multipleSkills, setMultipleSkills] = React.useState<string[] | null>(null)
   const [confirming, setConfirming] = React.useState(false)
   const [staleError, setStaleError] = React.useState(false)
 
@@ -87,6 +112,7 @@ function SkillInstallDialog({
     setInputValue('')
     setFetching(false)
     setPreview(null)
+    setMultipleSkills(null)
     setConfirming(false)
     setStaleError(false)
   }
@@ -96,18 +122,27 @@ function SkillInstallDialog({
     onOpenChange(next)
   }
 
-  async function handleFetch(): Promise<void> {
+  async function handleFetch(skillName?: string): Promise<void> {
     const value = inputValue.trim()
     if (!value) return
     setFetching(true)
     setStaleError(false)
+    if (!skillName) setMultipleSkills(null)
     try {
       const p = await api.chat.fetchSkillPack(
-        source === 'url' ? { sourceUrl: value } : { localPath: value }
+        source === 'url'
+          ? { sourceUrl: value, ...(skillName ? { skillName } : {}) }
+          : { localPath: value, ...(skillName ? { skillName } : {}) }
       )
+      setMultipleSkills(null)
       setPreview(p)
     } catch (err) {
-      toastError(t('settings.skillPacks.dialog.fetchFailed'), apiErrText(err))
+      const choices = parseAvailableSkillsHint(err)
+      if (choices) {
+        setMultipleSkills(choices)
+      } else {
+        toastError(t('settings.skillPacks.dialog.fetchFailed'), apiErrText(err))
+      }
     } finally {
       setFetching(false)
     }
@@ -154,7 +189,13 @@ function SkillInstallDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{t('settings.skillPacks.dialog.title')}</DialogTitle>
+          <DialogTitle>
+            {preview?.isUpgrade
+              ? t('settings.skillPacks.dialog.upgradeTitle', {
+                  name: preview.manifest.title ?? preview.manifest.name ?? ''
+                })
+              : t('settings.skillPacks.dialog.title')}
+          </DialogTitle>
           <DialogDescription>{t('settings.skillPacks.dialog.desc')}</DialogDescription>
         </DialogHeader>
 
@@ -169,13 +210,16 @@ function SkillInstallDialog({
             <div className="flex items-center gap-1 rounded-md border border-ink-border-soft p-0.5 w-fit">
               {(
                 [
-                  ['url', 'URL'],
+                  ['url', t('settings.skillPacks.dialog.sourceRemote')],
                   ['local', t('settings.skillPacks.dialog.sourceLocal')]
                 ] as const
               ).map(([key, label]) => (
                 <button
                   key={key}
-                  onClick={() => setSource(key)}
+                  onClick={() => {
+                    setSource(key)
+                    setMultipleSkills(null)
+                  }}
                   className={[
                     'px-2.5 py-1 rounded text-aux transition-colors duration-fast',
                     source === key
@@ -189,14 +233,42 @@ function SkillInstallDialog({
             </div>
             <Input
               value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
+              onChange={(e) => {
+                setInputValue(e.target.value)
+                if (multipleSkills) setMultipleSkills(null)
+              }}
               placeholder={
                 source === 'url'
-                  ? 'https://example.com/skill.zip'
+                  ? t('settings.skillPacks.dialog.remotePlaceholder')
                   : t('settings.skillPacks.dialog.localPlaceholder')
               }
               spellCheck={false}
             />
+            {source === 'url' && (
+              <p className="text-aux text-ink-fg-3">
+                {t('settings.skillPacks.dialog.remoteHelper')}
+              </p>
+            )}
+            {multipleSkills && (
+              <div className="rounded-md border border-ink-border-soft bg-ink-bg-2 p-2.5 space-y-2">
+                <div className="text-aux text-ink-fg">
+                  {t('settings.skillPacks.dialog.multipleSkillsPrompt')}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {multipleSkills.map((name) => (
+                    <Button
+                      key={name}
+                      size="sm"
+                      variant="outline"
+                      disabled={fetching}
+                      onClick={() => void handleFetch(name)}
+                    >
+                      <span className="font-mono">{name}</span>
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
             <DialogFooter>
               <Button
                 size="sm"
@@ -213,6 +285,27 @@ function SkillInstallDialog({
           </div>
         ) : (
           <div className="space-y-3">
+            {preview.isUpgrade && (
+              <div className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-aux text-ink-fg space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium text-warn">
+                    {t('settings.skillPacks.dialog.upgradeSummary')}
+                  </span>
+                  <span className="font-mono text-micro text-ink-fg-2">
+                    {`${preview.previousVersion ? `v${preview.previousVersion.replace(/^v/, '')}` : '—'} -> ${preview.manifest.version ? `v${preview.manifest.version.replace(/^v/, '')}` : '—'}`}
+                  </span>
+                </div>
+                {preview.changedFiles && (
+                  <div className="text-aux text-ink-fg-2">
+                    {t('settings.skillPacks.dialog.upgradeFilesDelta', {
+                      added: preview.changedFiles.added.length,
+                      modified: preview.changedFiles.modified.length,
+                      removed: preview.changedFiles.removed.length
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="rounded-md border border-ink-border-soft divide-y divide-ink-border-soft text-aux">
               <div className="px-3 py-2 flex items-center gap-2">
                 <Package className="size-3.5 shrink-0 text-ink-fg-2" />
@@ -322,7 +415,9 @@ function SkillInstallDialog({
                 {confirming ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
                 {confirming
                   ? t('settings.skillPacks.dialog.confirming')
-                  : t('settings.skillPacks.dialog.confirm')}
+                  : preview.isUpgrade
+                    ? t('settings.skillPacks.dialog.confirmUpgrade')
+                    : t('settings.skillPacks.dialog.confirm')}
               </Button>
             </DialogFooter>
           </div>
@@ -478,12 +573,18 @@ function SkillSecretRow({
   )
 }
 
-/** 一个已安装 pack 行：标题 + 来源 badge + 「配置」抽屉（密钥 write-only + config.json）+ 卸载确认。 */
+/** 一个已安装 pack 行：标题 + 来源/版本 badge + 更新提醒 + 「配置」抽屉 + 卸载确认。 */
 function PackRow({
   skill,
+  updateInfo,
+  preparingUpdate,
+  onPrepareUpdate,
   onChanged
 }: {
   skill: SkillSummary
+  updateInfo?: SkillUpdateItem | null
+  preparingUpdate?: boolean
+  onPrepareUpdate?: (name: string) => void
   onChanged: () => void
 }): React.ReactElement {
   const { t } = useTranslation()
@@ -548,17 +649,44 @@ function PackRow({
 
   return (
     <div className="px-4 py-3 space-y-2">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Package className="size-3.5 shrink-0 text-ink-fg-2" />
         <div className="min-w-0 flex-1">
           <span className="text-aux font-medium text-ink-fg">{skill.title}</span>
           <span className="ml-2 font-mono text-micro text-ink-fg-3">{skill.name}</span>
         </div>
-        <span className="inline-flex items-center rounded-full bg-ink-4 border border-ink-border px-1.5 py-0.5 text-micro text-ink-fg-2 shrink-0">
-          {skill.sourceType in PACK_SOURCE_LABEL_KEYS
-            ? t(PACK_SOURCE_LABEL_KEYS[skill.sourceType])
-            : skill.sourceType}
+        <span className="inline-flex items-center rounded-full bg-ink-4 border border-ink-border px-1.5 py-0.5 font-mono text-micro text-ink-fg-2 shrink-0">
+          {sourceOriginLabel(skill)}
         </span>
+        {skill.version ? (
+          <span className="font-mono text-micro text-ink-fg-3 shrink-0">
+            {`v${skill.version.replace(/^v/, '')}`}
+          </span>
+        ) : null}
+        {updateInfo?.updateAvailable ? (
+          <span className="inline-flex items-center gap-1 rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-aux text-warn shrink-0">
+            <ArrowUpCircle className="size-3 shrink-0" />
+            <span>{t('settings.skillPacks.updates.badge')}</span>
+            {updateInfo.latestVersion ? (
+              <span className="font-mono text-micro">
+                {`-> v${updateInfo.latestVersion.replace(/^v/, '')}`}
+              </span>
+            ) : updateInfo.latestRef ? (
+              <span className="font-mono text-micro">{updateInfo.latestRef}</span>
+            ) : null}
+          </span>
+        ) : null}
+        {updateInfo?.updateAvailable && updateInfo.canAutoUpdate && onPrepareUpdate ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={preparingUpdate}
+            onClick={() => onPrepareUpdate(skill.name)}
+          >
+            {preparingUpdate ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+            {t('settings.skillPacks.updates.updateButton')}
+          </Button>
+        ) : null}
         <Button
           size="sm"
           variant="ghost"
@@ -730,36 +858,135 @@ export function SkillPacksSection(): React.ReactElement | null {
     enabled: enabled === true
   })
 
+  const packs = (skills ?? []).filter((s) => PACK_SOURCE_TYPES.has(s.sourceType))
+
+  const { data: updatesData } = useQuery<SkillUpdatesResult>({
+    queryKey: qk.skillUpdates(),
+    queryFn: () => api.chat.checkSkillUpdates!(false),
+    enabled: enabled === true && packs.length > 0 && api.chat.checkSkillUpdates != null,
+    staleTime: 600_000,
+    retry: false
+  })
+
   const [installOpen, setInstallOpen] = React.useState(false)
+  const [dialogSeed, setDialogSeed] = React.useState(0)
+  const [updatePreview, setUpdatePreview] = React.useState<SkillPackPreview | null>(null)
+  const [checkingUpdates, setCheckingUpdates] = React.useState(false)
+  const [preparingName, setPreparingName] = React.useState<string | null>(null)
 
   // flag-off (false / undefined) → byte-level no-render (DOM has no section).
   if (!enabled) return null
 
-  const packs = (skills ?? []).filter((s) => PACK_SOURCE_TYPES.has(s.sourceType))
+  const updateMap = new Map<string, SkillUpdateItem>(
+    (updatesData?.skills ?? []).map((u) => [u.name, u])
+  )
+  const updatesCount = updatesData?.updatesAvailableCount ?? 0
 
   const onChanged = (): void => {
     void qc.invalidateQueries({ queryKey: qk.skills() })
+    void qc.invalidateQueries({ queryKey: qk.skillUpdates() })
+  }
+
+  async function handleCheckUpdates(): Promise<void> {
+    if (!api.chat.checkSkillUpdates) return
+    setCheckingUpdates(true)
+    try {
+      const res = await api.chat.checkSkillUpdates(true)
+      qc.setQueryData<SkillUpdatesResult>(qk.skillUpdates(), res)
+      if (res.updatesAvailableCount > 0) {
+        toastSuccess(
+          t('settings.skillPacks.updates.foundToast', { count: res.updatesAvailableCount })
+        )
+      } else {
+        toastSuccess(t('settings.skillPacks.updates.upToDateToast'))
+      }
+    } catch (err) {
+      toastError(t('settings.skillPacks.updates.checkFailed'), apiErrText(err))
+    } finally {
+      setCheckingUpdates(false)
+    }
+  }
+
+  async function handlePrepareUpdate(name: string): Promise<void> {
+    if (!api.chat.prepareSkillUpdate) return
+    setPreparingName(name)
+    try {
+      const preview = await api.chat.prepareSkillUpdate(name)
+      setUpdatePreview(preview)
+      setDialogSeed((n) => n + 1)
+      setInstallOpen(true)
+    } catch (err) {
+      toastError(t('settings.skillPacks.dialog.fetchFailed'), apiErrText(err))
+    } finally {
+      setPreparingName(null)
+    }
   }
 
   return (
     <Section title={t('settings.skillPacks.title')} helper={t('settings.skillPacks.helper')}>
-      <div className="flex items-center justify-between px-4 py-3">
-        <span className="text-aux text-ink-fg-2">
-          {packs.length === 0
-            ? t('settings.skillPacks.installedNone')
-            : t('settings.skillPacks.installedCount', { count: packs.length })}
-        </span>
-        <Button size="sm" variant="outline" onClick={() => setInstallOpen(true)}>
-          <Download className="mr-1.5 size-3.5" />
-          {t('settings.skillPacks.installButton')}
-        </Button>
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-aux text-ink-fg-2">
+            {packs.length === 0
+              ? t('settings.skillPacks.installedNone')
+              : t('settings.skillPacks.installedCount', { count: packs.length })}
+          </span>
+          {updatesCount > 0 && (
+            <span className="inline-flex items-center rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-aux text-warn">
+              {t('settings.skillPacks.updates.availableCount', { count: updatesCount })}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {packs.length > 0 && api.chat.checkSkillUpdates && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={checkingUpdates}
+              onClick={() => void handleCheckUpdates()}
+            >
+              {checkingUpdates ? (
+                <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1.5 size-3.5" />
+              )}
+              {checkingUpdates
+                ? t('settings.skillPacks.updates.checking')
+                : t('settings.skillPacks.updates.checkButton')}
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setUpdatePreview(null)
+              setDialogSeed((n) => n + 1)
+              setInstallOpen(true)
+            }}
+          >
+            <Download className="mr-1.5 size-3.5" />
+            {t('settings.skillPacks.installButton')}
+          </Button>
+        </div>
       </div>
       {packs.map((skill) => (
-        <PackRow key={skill.name} skill={skill} onChanged={onChanged} />
+        <PackRow
+          key={skill.name}
+          skill={skill}
+          updateInfo={updateMap.get(skill.name) ?? null}
+          preparingUpdate={preparingName === skill.name}
+          onPrepareUpdate={(name) => void handlePrepareUpdate(name)}
+          onChanged={onChanged}
+        />
       ))}
       <SkillInstallDialog
+        key={dialogSeed}
         open={installOpen}
-        onOpenChange={setInstallOpen}
+        initialPreview={updatePreview}
+        onOpenChange={(next) => {
+          setInstallOpen(next)
+          if (!next) setUpdatePreview(null)
+        }}
         onInstalled={onChanged}
       />
     </Section>

@@ -190,9 +190,7 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   library_write: 'domain_write',
   library_move: 'domain_write',
   library_delete: 'domain_write',
-  omada_catalog_query: 'read',
   artifact_write: 'domain_write',
-  artifact_build_omada: 'domain_write',
   artifact_publish_bundle: 'domain_write',
   email_get: 'read',
   email_body: 'read',
@@ -366,6 +364,7 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   group_create: 'capability_change',
   // S2 W4 — skill_read is a silent read (its third-party content is SKILL_DOC-fenced at the tool).
   skill_read: 'read',
+  skill_read_resource: 'read',
   // calendar epic 4.1 — calendar reads (event text is CALENDAR_EVENT-fenced at the tool).
   calendar_events_list: 'read',
   calendar_event_get: 'read',

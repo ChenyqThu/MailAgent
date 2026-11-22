@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 # （``/chat/config.trustedSkillFragments``）。安装态第三方 skill 的 fragment 永不进这里 —— 那是
 # 恒注入的可信面。加名字前先问：这段文字该不该对**每一轮**对话说话。
 TRUSTED_PROMPT_FRAGMENT_SKILLS = frozenset(
-    {"custom_agent", "matters", "artifact_studio", "omada_prototype"}
+    {"custom_agent", "matters", "artifact_studio"}
 )
 
 

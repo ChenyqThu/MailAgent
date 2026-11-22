@@ -20,7 +20,7 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Ban, Check, Hand, Loader2 } from 'lucide-react'
+import { AlertTriangle, ArrowUpCircle, Ban, Check, Hand, Loader2 } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
@@ -33,7 +33,8 @@ import type {
   ConnectorStatusValue,
   ConnectorSummary,
   ConnectorToolMode,
-  ConnectorToolSummary
+  ConnectorToolSummary,
+  ConnectorUpdateItem
 } from '@shared/api/types'
 import { Button } from '@shared/components/ui/button'
 import { Switch } from '@shared/components/ui/switch'
@@ -143,6 +144,7 @@ function ToolRow({
 export function ConnectorDetailPane({
   connector,
   catalogEntry,
+  updateInfo,
   // 🔴 判「令牌是否过期」的时间基准来自 react-query 的 `dataUpdatedAt`（这份数据落进缓存的
   // 那一刻），不是 render 里的 `Date.now()`（render 期不纯读，react-hooks/purity）。
   nowMs
@@ -150,6 +152,7 @@ export function ConnectorDetailPane({
   connector: ConnectorSummary
   /** 同 id 的目录条目（找得到才有）——一句话说明从这来，行数据自己没有描述。 */
   catalogEntry: ConnectorCatalogEntry | null
+  updateInfo?: ConnectorUpdateItem | null
   nowMs: number
 }): React.ReactElement {
   const { t } = useTranslation()
@@ -175,6 +178,7 @@ export function ConnectorDetailPane({
   const [confirmOpen, setConfirmOpen] = React.useState(false)
   const [disconnecting, setDisconnecting] = React.useState(false)
   const [installingManaged, setInstallingManaged] = React.useState(false)
+  const [updatingConnector, setUpdatingConnector] = React.useState(false)
   const [uninstallConfirmOpen, setUninstallConfirmOpen] = React.useState(false)
   const [uninstallingManaged, setUninstallingManaged] = React.useState(false)
   const isManagedLocal = connector.source === 'managed_local'
@@ -314,6 +318,7 @@ export function ConnectorDetailPane({
       const result = await api.connector.sync(id)
       await invalidateList()
       await qc.invalidateQueries({ queryKey: qk.connectorTools(id) })
+      await qc.invalidateQueries({ queryKey: qk.connectorUpdates() })
       const orphaned = countOf(result, 'orphaned')
       toastSuccess(
         t('settings.connectors.syncDone', {
@@ -396,11 +401,31 @@ export function ConnectorDetailPane({
       await qc.invalidateQueries({ queryKey: qk.connectorCatalog() })
       await qc.invalidateQueries({ queryKey: qk.connectorInstallStatus(id) })
       await qc.invalidateQueries({ queryKey: qk.connectorTools(id) })
+      await qc.invalidateQueries({ queryKey: qk.connectorUpdates() })
       toastSuccess(t('settings.connectors.managed.installSuccess', { name: connector.display_name }))
     } catch (err) {
       toastError(t('settings.connectors.managed.installFailed'), errorMessage(err))
     } finally {
       setInstallingManaged(false)
+    }
+  }
+
+  async function handleUpdateConnector(): Promise<void> {
+    if (!api.connector.updateConnector) return
+    if (isManagedLocal && isWeb) return
+    setUpdatingConnector(true)
+    try {
+      await api.connector.updateConnector(id)
+      await invalidateList()
+      await qc.invalidateQueries({ queryKey: qk.connectorCatalog() })
+      await qc.invalidateQueries({ queryKey: qk.connectorInstallStatus(id) })
+      await qc.invalidateQueries({ queryKey: qk.connectorTools(id) })
+      await qc.invalidateQueries({ queryKey: qk.connectorUpdates() })
+      toastSuccess(t('connectorsConsole.updates.updatedToast', { name: connector.display_name }))
+    } catch (err) {
+      toastError(t('connectorsConsole.updates.updateFailed'), errorMessage(err))
+    } finally {
+      setUpdatingConnector(false)
     }
   }
 
@@ -413,6 +438,7 @@ export function ConnectorDetailPane({
       await qc.invalidateQueries({ queryKey: qk.connectorCatalog() })
       await qc.invalidateQueries({ queryKey: qk.connectorInstallStatus(id) })
       await qc.invalidateQueries({ queryKey: qk.connectorTools(id) })
+      await qc.invalidateQueries({ queryKey: qk.connectorUpdates() })
       setUninstallConfirmOpen(false)
       toastSuccess(
         t('settings.connectors.managed.uninstallSuccess', { name: connector.display_name })
@@ -873,6 +899,70 @@ export function ConnectorDetailPane({
         </div>
         <div className="flex shrink-0 items-center gap-1.5">{headerActions}</div>
       </div>
+
+      {updateInfo?.updateAvailable ? (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-[var(--r-card)] border border-warn/40 bg-warn/[0.06] px-3 py-2.5">
+          <div className="flex min-w-0 items-start gap-2.5">
+            <ArrowUpCircle className="mt-0.5 size-3.5 shrink-0 text-warn" aria-hidden="true" />
+            <div className="min-w-0 space-y-0.5">
+              <div className="flex flex-wrap items-center gap-2 text-aux font-medium text-ink-fg">
+                <span>
+                  {updateInfo.updateKind === 'runtime_version'
+                    ? t('connectorsConsole.updates.runtimeBannerTitle')
+                    : t('connectorsConsole.updates.driftBannerTitle')}
+                </span>
+                {updateInfo.updateKind === 'runtime_version' && (
+                  <span className="font-mono text-micro text-ink-fg-2">
+                    {`${updateInfo.installedVersion ?? '—'} -> ${updateInfo.latestVersion ?? '—'}`}
+                  </span>
+                )}
+              </div>
+              {updateInfo.updateKind === 'tool_schema_drift' && (
+                <div className="text-aux text-ink-fg-2">
+                  {t('connectorsConsole.updates.driftDetails', {
+                    added: updateInfo.addedTools.length,
+                    changed: updateInfo.changedTools.length,
+                    removed: updateInfo.removedTools.length
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+          {updateInfo.canAutoUpdate && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={
+                (isManagedLocal && (isWeb || updatingConnector)) ||
+                (!isManagedLocal && syncing)
+              }
+              onClick={() =>
+                void (isManagedLocal ? handleUpdateConnector() : handleSync())
+              }
+            >
+              {updatingConnector || syncing ? (
+                <Loader2 className="mr-1.5 size-3.5 animate-spin" />
+              ) : null}
+              {updatingConnector
+                ? t('connectorsConsole.updates.updating')
+                : isManagedLocal
+                  ? t('connectorsConsole.updates.updateNow')
+                  : t('connectorsConsole.updates.syncNow')}
+            </Button>
+          )}
+        </div>
+      ) : isManagedLocal &&
+        id === 'desktop_use' &&
+        updateInfo?.upstreamLatestVersion &&
+        updateInfo.latestVersion &&
+        updateInfo.upstreamLatestVersion !== updateInfo.latestVersion ? (
+        <div className="mt-2 text-aux text-ink-fg-3">
+          {t('connectorsConsole.updates.desktopUpstreamNote', {
+            upstream: updateInfo.upstreamLatestVersion,
+            pinned: updateInfo.latestVersion
+          })}
+        </div>
+      ) : null}
 
       {/* 「工具面变宽」一次性概览：N 读 M 写 K 破坏性、默认全自动、可在下方调档。 */}
       {noticePending ? (

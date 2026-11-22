@@ -427,6 +427,8 @@ export interface ConnectorApi {
   launchBrowserWindow?(input?: { url?: string }): Promise<ManagedBrowserWindowLaunchResult>
   browserLiveStatus?(): Promise<ManagedBrowserLiveStatus>
   stopBrowserLive?(): Promise<ManagedBrowserStopResult>
+  checkUpdates?(opts?: { force?: boolean; includeRemote?: boolean }): Promise<ConnectorUpdatesResult>
+  updateConnector?(connectorId: string): Promise<ConnectorUpdateResult>
 }
 
 export interface ManagedBrowserTabInfo {
@@ -535,3 +537,33 @@ export interface ConnectorPurgeOrphansResult {
   connector_id: string
   purged: number
 }
+
+export interface ConnectorUpdateItem {
+  connector_id: string
+  source: string
+  updateKind: 'runtime_version' | 'tool_schema_drift'
+  installedVersion: string | null
+  latestVersion: string | null
+  upstreamLatestVersion: string | null
+  updateAvailable: boolean
+  canAutoUpdate: boolean
+  addedTools: string[]
+  removedTools: string[]
+  changedTools: string[]
+  error: string | null
+}
+
+export interface ConnectorUpdatesResult {
+  checkedAt: number
+  updatesAvailableCount: number
+  connectors: ConnectorUpdateItem[]
+}
+
+export type ConnectorUpdateResult = {
+  ok: boolean
+  connector_id: string
+  previousVersion?: string | null
+  currentVersion?: string | null
+  version?: string | null
+  connector?: ConnectorSummary | null
+} & Record<string, unknown>

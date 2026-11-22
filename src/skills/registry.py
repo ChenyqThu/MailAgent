@@ -81,7 +81,6 @@ def code_builtin_skills() -> tuple[BoundSkill, ...]:
         matter_write,
         matters,
         notion_agent,
-        omada_prototype,
         report,
         search,
         skill_creator,
@@ -103,7 +102,6 @@ def code_builtin_skills() -> tuple[BoundSkill, ...]:
         email_organize.build_skill(),
         matter_write.build_skill(),
         artifact_studio.build_skill(),
-        omada_prototype.build_skill(),
     )
 
 

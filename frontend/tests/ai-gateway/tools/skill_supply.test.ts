@@ -65,6 +65,18 @@ function supplyDomain(overrides?: {
       return okEnvelope(CONFIRM_RESULT)
     }
     if (url.includes('/agent/skills/uninstall')) return okEnvelope(UNINSTALL_RESULT)
+    if (url.includes('/resource')) {
+      return okEnvelope({
+        skill: 'omada-ui-kit',
+        source: 'installed',
+        path: 'references/catalog.json',
+        mode: 'json_search',
+        query: 'SEmulatorShell',
+        matches: [{ path: 'components[0]', score: 3, value: { name: 'SEmulatorShell' } }],
+        truncated: false,
+        sizeBytes: 1024
+      })
+    }
     if (url.includes('/doc')) return okEnvelope(overrides?.doc ?? DOC_RESULT)
     return okEnvelope({})
   })
@@ -146,6 +158,7 @@ describe('buildGatewayTools — MAILAGENT_OPENNESS_SKILL_INSTALL gate', () => {
         expect(tools[name], `${name} must not register in ${mode}`).toBeUndefined()
       }
       expect(tools.skill_read).toBeDefined()
+      expect(tools.skill_read_resource).toBeDefined()
     }
   })
 })
@@ -460,5 +473,36 @@ describe('skill_read (silent read — fenced third-party doc)', () => {
     }
     expect(out.notice).toContain('THIRD-PARTY')
     expect(out.run_hint).toContain(`${dir}/main.py`)
+  })
+})
+
+describe('skill_read_resource (silent read of bundled skill resources)', () => {
+  test('fences matched JSON content inside UNTRUSTED_SKILL_RESOURCE', async () => {
+    const seenUrls: string[] = []
+    const tools = createSkillSupplyTools(
+      supplyDomain({
+        onCall: (url) => seenUrls.push(url)
+      }),
+      [],
+      new ApprovalGuard(),
+      { contextMode: 'manual_chat' }
+    )
+    const out = (await runTool(tools.skill_read_resource, {
+      name: 'omada-ui-kit',
+      path: 'references/catalog.json',
+      search: 'SEmulatorShell'
+    })) as {
+      content: string
+      match_count: number
+      notice: string
+      mode: string
+    }
+    expect(out.mode).toBe('json_search')
+    expect(out.match_count).toBe(1)
+    expect(out.notice).toContain('THIRD-PARTY')
+    expect(out.content).toContain('UNTRUSTED_SKILL_RESOURCE_START')
+    expect(out.content).toContain('SEmulatorShell')
+    expect(seenUrls[0]).toContain('/agent/skills/omada-ui-kit/resource')
+    expect(seenUrls[0]).toContain('search=SEmulatorShell')
   })
 })

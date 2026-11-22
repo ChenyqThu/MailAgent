@@ -29,7 +29,7 @@ import time
 from typing import Any, NoReturn, Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from loguru import logger
 from starlette.concurrency import run_in_threadpool
@@ -672,6 +672,25 @@ async def connector_catalog(request: Request, settings=Depends(get_settings)) ->
     )
 
 
+@router.get("/updates", dependencies=[Depends(verify_cf_access)])
+async def connector_updates(
+    request: Request,
+    force: bool = Query(False),
+    include_remote: bool = Query(True),
+    settings=Depends(get_settings),
+) -> Any:
+    """检测 managed_local 运行时版本更新与已连接远端 MCP 工具清单漂移（600s TTL 缓存）。"""
+    _require_enabled(settings)
+    from src.connectors.update_check import check_connector_updates
+
+    data = await check_connector_updates(
+        _store(),
+        force=force,
+        include_remote=include_remote,
+    )
+    return success_envelope(data, request=request)
+
+
 @router.post("/composio/key", dependencies=[Depends(verify_cf_access)])
 async def set_composio_key(
     request: Request,
@@ -1106,44 +1125,18 @@ async def managed_install_status(
     return success_envelope(data, request=request)
 
 
-@router.post("/{connector_id}/install", dependencies=[Depends(verify_local_token)])
-async def install_managed_connector(
+async def _execute_managed_runtime_install(
     connector_id: str,
-    request: Request,
-    payload: Optional[dict[str, Any]] = Body(default=None),
-    settings=Depends(get_settings),
-) -> Any:
-    """一键安装受管本机 stdio MCP 运行时（仅 Desktop loopback）。"""
-    _require_managed_local_enabled(settings)
-    from src.connectors.catalog import get_managed_local_entry
+    store: Any,
+    entry: Any,
+    normalized_rc: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     from src.connectors.client import ConnectorClient
-    from src.connectors.local_installer import (
-        LocalInstallerError,
-        install_runtime,
-        normalize_runtime_options,
-    )
+    from src.connectors.local_installer import LocalInstallerError, install_runtime
     from src.connectors.oauth_flow import get_flow
     from src.connectors.registry import get_connector_def, namespace_for
     from src.connectors.stdio_pool import stdio_pool
-
-    entry = get_managed_local_entry(connector_id)
-    if entry is None:
-        raise APIError(
-            "E_CONNECTOR_UNSUPPORTED",
-            f"connector {connector_id!r} is not a managed_local catalog entry",
-            http_status=404,
-        )
-
-    store = _store()
-    existing = await run_in_threadpool(store.get_connector, connector_id)
-    try:
-        normalized_rc = normalize_runtime_options(
-            connector_id,
-            payload or {},
-            existing=existing.runtime_config if existing else None,
-        )
-    except LocalInstallerError as e:
-        raise APIError(e.code, e.message, http_status=e.status_code) from None
+    from src.connectors.update_check import invalidate_connector_update_cache
 
     await stdio_pool.invalidate(connector_id)
     try:
@@ -1182,18 +1175,56 @@ async def install_managed_connector(
                 last_synced_at=int(time.time()),
             )
         )
-    except Exception as sync_err:  # noqa: BLE001 — 安装成功后初始同步失败保留运行时与行
+    except Exception as sync_err:  # noqa: BLE001 — 安装/更新成功后初始同步失败保留运行时与行
         logger.warning(
-            "[connector] initial tool sync skipped/failed after install for {}: {}",
+            "[connector] tool sync skipped/failed after install/update for {}: {}",
             connector_id,
             sync_err,
         )
 
+    invalidate_connector_update_cache()
     row = await run_in_threadpool(store.get_connector, connector_id)
     cred = await run_in_threadpool(_credential_view, namespace_for(connector_id))
     meta = await run_in_threadpool(_managed_summary_fields, row)
     summary = _serialize_connector_summary(
         row, cred, _flow_view(get_flow(connector_id)), managed_meta=meta
+    )
+    return status_view, summary
+
+
+@router.post("/{connector_id}/install", dependencies=[Depends(verify_local_token)])
+async def install_managed_connector(
+    connector_id: str,
+    request: Request,
+    payload: Optional[dict[str, Any]] = Body(default=None),
+    settings=Depends(get_settings),
+) -> Any:
+    """一键安装受管本机 stdio MCP 运行时（仅 Desktop loopback）。"""
+    _require_managed_local_enabled(settings)
+    from src.connectors.catalog import get_managed_local_entry
+    from src.connectors.local_installer import LocalInstallerError, normalize_runtime_options
+
+    entry = get_managed_local_entry(connector_id)
+    if entry is None:
+        raise APIError(
+            "E_CONNECTOR_UNSUPPORTED",
+            f"connector {connector_id!r} is not a managed_local catalog entry",
+            http_status=404,
+        )
+
+    store = _store()
+    existing = await run_in_threadpool(store.get_connector, connector_id)
+    try:
+        normalized_rc = normalize_runtime_options(
+            connector_id,
+            payload or {},
+            existing=existing.runtime_config if existing else None,
+        )
+    except LocalInstallerError as e:
+        raise APIError(e.code, e.message, http_status=e.status_code) from None
+
+    status_view, summary = await _execute_managed_runtime_install(
+        connector_id, store, entry, normalized_rc
     )
     return success_envelope(
         {
@@ -1216,6 +1247,7 @@ async def uninstall_managed_connector(
     _require_managed_local_enabled(settings)
     from src.connectors.local_installer import LocalInstallerError, uninstall_runtime
     from src.connectors.stdio_pool import stdio_pool
+    from src.connectors.update_check import invalidate_connector_update_cache
 
     await stdio_pool.invalidate(connector_id)
     try:
@@ -1223,6 +1255,7 @@ async def uninstall_managed_connector(
     except LocalInstallerError as e:
         raise APIError(e.code, e.message, http_status=e.status_code) from None
     await run_in_threadpool(_store().delete_connector, connector_id)
+    invalidate_connector_update_cache()
     return success_envelope(
         {
             "ok": True,
@@ -1413,21 +1446,7 @@ async def connector_status(
     )
 
 
-@router.post("/{connector_id}/sync", dependencies=[Depends(verify_cf_access)])
-async def sync_tools(
-    connector_id: str, request: Request, settings=Depends(get_settings)
-) -> Any:
-    """用已存授权拉工具清单落库（非交互：无授权 → 409 引导走 oauth/start，不挂浏览器）。
-
-    🔴 08-05 WP-12：**要求行已存在** —— sync 的语义是「用已存的连接重拉清单」。以前靠
-    registry 常量能凭空 upsert 出一行，那是撒谎：连都没连，行里写个 server_url 会让列表
-    凭空多一行「未连接」的假象。
-
-    🔴 08-06：判据从「`definition.server_url` 空」改成**直接查行**。空 URL 以前只是「没连过」
-    的代理判据，且只对 composio 轨成立；双轨后 direct 轨的目录条目**自带**官方 endpoint，
-    照旧判会让一个从没连过的 Notion 走进下面的 upsert，把那个假象原样放回来。
-    """
-    _require_enabled(settings)
+async def _execute_connector_sync(connector_id: str) -> dict[str, Any]:
     definition = await _connector_def(connector_id)
     from src.connectors.client import ConnectorClient, ConnectorError
     from src.connectors.gate import ConnectorBusy
@@ -1435,6 +1454,7 @@ async def sync_tools(
         CONNECTOR_REAUTH_MESSAGE,
         should_mark_needs_reauth,
     )
+    from src.connectors.update_check import invalidate_connector_update_cache
 
     store = _store()
     row = await run_in_threadpool(store.get_connector, connector_id)
@@ -1452,18 +1472,12 @@ async def sync_tools(
             display_name=definition.display_name,
             transport=definition.transport,
         )
-    # definition 复用上面解析好的那一份（别在 event loop 上再读一次 `connector` 行）。
     client = ConnectorClient(connector_id, interactive=False, definition=definition)
     try:
         tools = await client.list_tools_manifest()
     except ConnectorBusy as e:
         raise APIError("E_CONNECTOR_BUSY", str(e), http_status=409) from e
     except ConnectorError as e:
-        # 授权**真的**失效 → 连接落 needs_reauth + **可行动**文案（PRD「不静默重试到死」）。
-        # 判定与文案与 invoke 侧同一份（service.py）—— 两个落态点绝不各抄一遍。
-        # 🔴 08-06：判据从「码表命中」换成 should_mark_needs_reauth —— 码表命中不充分（本地
-        # 装配不出请求的那一形状同码，零出网），且两个面必须同判，否则同一次失败会在 sync 与
-        # invoke 上得到相反的状态。
         if should_mark_needs_reauth(e):
             await run_in_threadpool(
                 store.update_connector_state,
@@ -1482,7 +1496,70 @@ async def sync_tools(
         last_error=None,
         last_synced_at=int(time.time()),
     )
-    return success_envelope({"connector_id": connector_id, **stats}, request=request)
+    invalidate_connector_update_cache()
+    return {"connector_id": connector_id, **stats}
+
+
+@router.post("/{connector_id}/sync", dependencies=[Depends(verify_cf_access)])
+async def sync_tools(
+    connector_id: str, request: Request, settings=Depends(get_settings)
+) -> Any:
+    """用已存授权拉工具清单落库（非交互：无授权 → 409 引导走 oauth/start，不挂浏览器）。"""
+    _require_enabled(settings)
+    data = await _execute_connector_sync(connector_id)
+    return success_envelope(data, request=request)
+
+
+@router.post("/{connector_id}/update", dependencies=[Depends(verify_cf_access)])
+async def update_connector(
+    connector_id: str, request: Request, settings=Depends(get_settings)
+) -> Any:
+    """一键更新受管本机运行时（保留既有 runtime_config，仅 Desktop loopback），或同步远端工具清单。"""
+    _require_enabled(settings)
+    from src.connectors.catalog import get_managed_local_entry
+    from src.connectors.local_installer import (
+        LocalInstallerError,
+        get_install_status,
+        normalize_runtime_options,
+    )
+
+    entry = get_managed_local_entry(connector_id)
+    if entry is not None:
+        await verify_local_token(request)
+        _require_managed_local_enabled(settings)
+        store = _store()
+        existing = await run_in_threadpool(store.get_connector, connector_id)
+        prev_status = await run_in_threadpool(
+            get_install_status,
+            connector_id,
+            existing.runtime_config if existing else None,
+        )
+        try:
+            normalized_rc = normalize_runtime_options(
+                connector_id,
+                {},
+                existing=existing.runtime_config if existing else None,
+            )
+        except LocalInstallerError as e:
+            raise APIError(e.code, e.message, http_status=e.status_code) from None
+        status_view, summary = await _execute_managed_runtime_install(
+            connector_id, store, entry, normalized_rc
+        )
+        return success_envelope(
+            {
+                "ok": True,
+                "connector_id": connector_id,
+                "previousVersion": prev_status.get("version"),
+                "currentVersion": status_view.get("version"),
+                **status_view,
+                "status": dict(status_view),
+                "connector": summary,
+            },
+            request=request,
+        )
+
+    sync_data = await _execute_connector_sync(connector_id)
+    return success_envelope({"ok": True, **sync_data}, request=request)
 
 
 @router.get("/{connector_id}/tools", dependencies=[Depends(verify_cf_access)])

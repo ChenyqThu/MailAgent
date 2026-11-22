@@ -92,6 +92,7 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'update_system_md',
   // skill
   'skill_read',
+  'skill_read_resource',
   'discover_skills',
   'set_skill_enabled',
   'skill_install',
@@ -190,9 +191,7 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'library_write',
   'library_move',
   'library_delete',
-  'omada_catalog_query',
   'artifact_write',
-  'artifact_build_omada',
   'artifact_publish_bundle',
   // notion
   'notion_agent_chat',

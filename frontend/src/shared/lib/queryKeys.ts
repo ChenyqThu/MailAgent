@@ -141,6 +141,7 @@ export const qk = {
   },
 
   skills: () => ['skills'] as const,
+  skillUpdates: () => ['skills', 'updates'] as const,
   skillSecrets: (skillName: string) => ['skillSecrets', skillName] as const,
   skillConfig: (skillName: string) => ['skillConfig', skillName] as const,
 
@@ -267,6 +268,7 @@ export const qk = {
   // sync 之后 invalidate `['connectors']` 一处，工具清单跟着刷（TanStack 前缀匹配）。
   connectors: () => ['connectors'] as const,
   connectorTools: (id: string) => ['connectors', id, 'tools'] as const,
+  connectorUpdates: () => ['connectors', 'updates'] as const,
   // 08-06 Connectors 配置台 — built-in 工具审批档全量负载（GET /api/agent/tool-prefs）。
   // 写端点回同形状 → setQueryData 原地覆盖，不走 invalidate。
   toolApprovalPrefs: () => ['tool-approval-prefs'] as const,

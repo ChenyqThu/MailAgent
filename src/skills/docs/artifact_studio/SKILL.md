@@ -9,7 +9,7 @@ Design and build high-craft, self-contained HTML5 interactive deliverables via `
    - `slides`: 16:9 keyboard-navigable presentation decks with overview/notes and print-to-PDF support.
    - `report`: editorial long-form analysis, comparisons, decision memos with sticky outline navigation.
    - `diagram`: crisp system architecture, sequence, flow, or data-model visuals with interactive inspection.
-   - `app`: focused interactive calculators, forms, configurators, or UI prototypes. (For **Omada Controller / TP-Link network management UI prototypes**, call `skill_read("omada_prototype")` first and use `omada_catalog_query` + `artifact_write` with `@chenyqthu/omada-ui-kit`.)
+   - `app`: focused interactive calculators, forms, configurators, or UI prototypes. (When a user-installed UI component-library skill is enabled, e.g. `omada-ui-kit`, call `skill_read` and `skill_read_resource` to inspect its component and asset catalog before writing HTML via `artifact_write`.)
 2. Gather real facts from emails, Matters, Library documents, contacts, or connected tools before writing a single line of HTML. Never invent numbers, names, or dates. If a metric is missing, label it explicitly as unavailable.
 3. Commit to one intentional Art Direction before coding.
 4. Write one complete, self-contained HTML5 document (`<!doctype html> ... </html>`) via `artifact_write`. Choose a concise kebab-case `slug` (e.g. `q4-vendor-renewal-board`).
@@ -20,7 +20,7 @@ Design and build high-craft, self-contained HTML5 interactive deliverables via `
 
 - **Publish / Update**: ALWAYS call `artifact_publish_bundle` with `slug` (and optional `version`, `title`, `artifact_type`, `visibility`, `change_note`) to upload the saved artifact directly from disk to Canvas Artifact Server — **never** paste compiled HTML or bundles into `mcp__artifact_server__artifact_publish`. Always return the `share_url` and `review_url` to the user first so they can inspect and comment full-screen; never invent or print tokens.
 - **Inspect Team Feedback**: When `mcp__artifact_server__*` tools are available, call `mcp__artifact_server__comment_list` with `slug` and `status="open"` before revising an existing cloud artifact.
-- **Close the Loop**: Apply requested changes in a new immutable `artifact_write` (or `artifact_build_omada`) version (`vN+1`), republish with `artifact_publish_bundle`, and mark addressed threads resolved with `mcp__artifact_server__comment_resolve`.
+- **Close the Loop**: Apply requested changes in a new immutable `artifact_write` version (`vN+1`), republish with `artifact_publish_bundle`, and mark addressed threads resolved with `mcp__artifact_server__comment_resolve`.
 
 ## 2. Art Direction & Visual Craft
 
@@ -89,8 +89,8 @@ Artifacts render inside an isolated sandboxed `<iframe>` without `allow-same-ori
 
 ## 6. Optional Visual Self-Check with `browser_use`
 
-`artifact_write` and `artifact_build_omada` return a loopback `local_preview_url` alongside the saved Library path:
+`artifact_write` returns a loopback `local_preview_url` alongside the saved Library path:
 
 - When `browser_use` tools are enabled in the session and visual polish is critical (dense charts, complex grids, or slide layouts), open `local_preview_url` to inspect rendered output at both desktop and mobile viewports and confirm zero console errors.
-- If you spot overlapping labels, contrast issues, or clipped containers, fix the artifact source and call `artifact_write` or `artifact_build_omada` again with the **same `slug`** to produce `v2`, `v3`, ... cleanly.
+- If you spot overlapping labels, contrast issues, or clipped containers, fix the artifact source and call `artifact_write` again with the **same `slug`** to produce `v2`, `v3`, ... cleanly.
 - If `browser_use` is unavailable or disabled, never claim you visually inspected the rendered pixels — report your static HTML/build verification accurately.

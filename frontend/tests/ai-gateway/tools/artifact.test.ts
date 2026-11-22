@@ -116,18 +116,12 @@ describe('lintArtifactHtml', () => {
 describe('artifact_write tool', () => {
   test('registers under approvalGuard with expected policy classes and CORE_UNGATED', () => {
     expect(GATEWAY_ARTIFACT_TOOL_NAMES).toEqual([
-      'omada_catalog_query',
       'artifact_write',
-      'artifact_build_omada',
       'artifact_publish_bundle'
     ])
-    expect(GATEWAY_TOOL_CLASSES.omada_catalog_query).toBe('read')
     expect(GATEWAY_TOOL_CLASSES.artifact_write).toBe('domain_write')
-    expect(GATEWAY_TOOL_CLASSES.artifact_build_omada).toBe('domain_write')
     expect(GATEWAY_TOOL_CLASSES.artifact_publish_bundle).toBe('domain_write')
-    expect(CORE_UNGATED_GATEWAY_TOOLS.has('omada_catalog_query')).toBe(true)
     expect(CORE_UNGATED_GATEWAY_TOOLS.has('artifact_write')).toBe(true)
-    expect(CORE_UNGATED_GATEWAY_TOOLS.has('artifact_build_omada')).toBe(true)
     expect(CORE_UNGATED_GATEWAY_TOOLS.has('artifact_publish_bundle')).toBe(true)
 
     const tools = buildGatewayTools({
@@ -135,10 +129,7 @@ describe('artifact_write tool', () => {
       approvalGuard: new ApprovalGuard(),
       contextMode: 'manual_chat'
     })
-    expect(tools.omada_catalog_query).toBeDefined()
-    expect(tools.omada_catalog_query.needsApproval).toBeUndefined()
     expect(tools.artifact_write).toBeDefined()
-    expect(tools.artifact_build_omada).toBeDefined()
     expect(tools.artifact_publish_bundle).toBeDefined()
   })
 
@@ -304,85 +295,6 @@ describe('artifact_write tool', () => {
   })
 })
 
-describe('artifact_build_omada tool', () => {
-  test('calls POST /library/artifacts/build-omada and returns bundle metadata + local_preview_url', async () => {
-    const calls: Call[] = []
-    const domain = domainWith((call) => {
-      if (call.method === 'POST' && call.url.endsWith('/library/artifacts/build-omada')) {
-        return {
-          json: {
-            status: 'success',
-            data: {
-              ok: true,
-              slug: 'omada-ap-board',
-              title: 'Omada AP Monitor',
-              artifact_type: 'app',
-              version: 1,
-              file_id: 301,
-              path: 'agent-docs/artifacts/omada-ap-board/v1/index.html',
-              folder: 'agent-docs/artifacts/omada-ap-board/v1',
-              file_count: 6,
-              size_bytes: 1200400,
-              build_ms: 820,
-              source_demo: 'omada-ui-kit/src/demos/omada-ap-board/Demo.tsx',
-              local_preview_url: 'http://127.0.0.1:8200/api/library/artifacts/preview/om1/index.html'
-            }
-          }
-        }
-      }
-      throw new Error(`Unexpected call: ${call.method} ${call.url}`)
-    }, calls)
-
-    const guard = new ApprovalGuard()
-    const { artifact_build_omada } = createArtifactTools(domain, [], guard, {
-      contextMode: 'manual_chat',
-      toolApprovalPrefs: { artifact_build_omada: { tier: 'auto', source: 'default' } }
-    })
-
-    const res = (await runWithAuto(artifact_build_omada, {
-      slug: 'Omada AP_Board',
-      title: 'Omada AP Monitor',
-      code: "import { SCard } from '@/omada'; export default function Demo() { return <SCard title='AP' />; }"
-    })) as Record<string, unknown>
-
-    expect(res).toMatchObject({
-      ok: true,
-      slug: 'omada-ap-board',
-      artifact_type: 'app',
-      version: 1,
-      file_id: 301,
-      file_count: 6,
-      build_ms: 820,
-      local_preview_url: 'http://127.0.0.1:8200/api/library/artifacts/preview/om1/index.html'
-    })
-    expect(calls).toHaveLength(1)
-    expect(calls[0]?.body).toMatchObject({
-      slug: 'omada-ap-board',
-      theme_mode: 'light'
-    })
-  })
-
-  test('rejects TODO placeholders in Demo.tsx without calling backend build', async () => {
-    const calls: Call[] = []
-    const domain = domainWith(() => ({ json: { status: 'success', data: {} } }), calls)
-    const guard = new ApprovalGuard()
-    const { artifact_build_omada } = createArtifactTools(domain, [], guard, {
-      contextMode: 'manual_chat',
-      toolApprovalPrefs: { artifact_build_omada: { tier: 'auto', source: 'default' } }
-    })
-
-    const res = (await runWithAuto(artifact_build_omada, {
-      slug: 'omada-todo',
-      title: 'Incomplete',
-      code: 'export default function Demo() { // TODO implement\n return null; }'
-    })) as Record<string, unknown>
-
-    expect(res.ok).toBe(false)
-    expect(res.error).toBe('E_ARTIFACT_LINT')
-    expect(calls).toHaveLength(0)
-  })
-})
-
 describe('artifact_publish_bundle tool', () => {
   test('calls POST /library/artifacts/publish-bundle with normalized slug and metadata', async () => {
     const calls: Call[] = []
@@ -436,54 +348,5 @@ describe('artifact_publish_bundle tool', () => {
       change_note: 'Single-file build',
       entry_path: 'index.html'
     })
-  })
-})
-
-describe('omada_catalog_query tool', () => {
-  test('calls GET /library/omada/catalog with structured query params silently', async () => {
-    const calls: Call[] = []
-    const domain = domainWith((call) => {
-      if (call.method === 'GET' && call.url.includes('/library/omada/catalog')) {
-        return {
-          json: {
-            status: 'success',
-            data: {
-              ok: true,
-              source: 'cdn',
-              query: 'SEmulatorShell',
-              matches: [{ name: 'SEmulatorShell', category: 'emulator-v6', props: [] }]
-            }
-          }
-        }
-      }
-      throw new Error(`Unexpected call: ${call.method} ${call.url}`)
-    }, calls)
-
-    const { omada_catalog_query } = createArtifactTools(domain, [], new ApprovalGuard(), {
-      contextMode: 'manual_chat'
-    })
-    expect(omada_catalog_query.needsApproval).toBeUndefined()
-
-    const exec = omada_catalog_query.execute as (
-      i: unknown,
-      o: { toolCallId: string; messages: unknown[]; abortSignal?: AbortSignal }
-    ) => Promise<unknown>
-    const res = (await exec(
-      { action: 'component', query: 'SEmulatorShell', limit: 10 },
-      { toolCallId: 'tc-cat-1', messages: [], abortSignal: undefined }
-    )) as Record<string, unknown>
-
-    expect(res).toMatchObject({
-      ok: true,
-      source: 'cdn',
-      query: 'SEmulatorShell'
-    })
-    expect(calls).toHaveLength(1)
-    expect(calls[0]?.method).toBe('GET')
-    const url = new URL(calls[0]!.url)
-    expect(url.pathname).toBe('/api/library/omada/catalog')
-    expect(url.searchParams.get('action')).toBe('component')
-    expect(url.searchParams.get('query')).toBe('SEmulatorShell')
-    expect(url.searchParams.get('limit')).toBe('10')
   })
 })

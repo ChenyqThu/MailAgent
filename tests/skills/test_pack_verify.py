@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import os
 import stat
+import tarfile
+import io
 import zipfile
 
 import pytest
@@ -18,10 +20,13 @@ from src.skills.pack_verify import (
     MAX_ENTRIES,
     PackError,
     compute_files_and_hash,
+    parse_skill_frontmatter,
     safe_copy_tree,
+    safe_extract_tar_gz,
     safe_extract_zip,
     verify_content_dir,
 )
+from src.skills.resource_read import read_skill_resource
 
 _MANIFEST = {
     "manifest_version": 2,
@@ -255,3 +260,198 @@ def test_invalid_quarantine_id_rejected(skills_dir):
     for bad in ["../etc", "no-hash", "UPPER-abc123def456", "x/../y-abc123def456"]:
         with pytest.raises(PackError):
             pf._quarantine_dir(bad)
+
+
+# ── SKILL.md frontmatter + tar.gz + source_url + resource_read ───────────────────────
+
+
+def _write_tgz(tgz_path, entries: dict[str, bytes | str], *, symlink: tuple[str, str] | None = None):
+    with tarfile.open(tgz_path, "w:gz") as tf:
+        for name, data in entries.items():
+            raw = data.encode("utf-8") if isinstance(data, str) else data
+            info = tarfile.TarInfo(name)
+            info.size = len(raw)
+            tf.addfile(info, io.BytesIO(raw))
+        if symlink is not None:
+            slink, target = symlink
+            sinfo = tarfile.TarInfo(slink)
+            sinfo.type = tarfile.SYMTYPE
+            sinfo.linkname = target
+            tf.addfile(sinfo)
+
+
+def test_parse_skill_frontmatter_multiline_and_nested():
+    md = (
+        "---\n"
+        "name: omada-ui-kit\n"
+        "title: Omada UI Kit\n"
+        "description: >\n"
+        "  Build high-fidelity Omada\n"
+        "  prototypes cleanly.\n"
+        "metadata:\n"
+        "  version: '0.2.0'\n"
+        "  author: team\n"
+        "---\n\n# Body\n"
+    )
+    fm = parse_skill_frontmatter(md)
+    assert fm["name"] == "omada-ui-kit"
+    assert fm["title"] == "Omada UI Kit"
+    assert fm["description"] == "Build high-fidelity Omada prototypes cleanly."
+    assert fm["metadata"] == {"version": "0.2.0", "author": "team"}
+
+
+def test_verify_content_dir_synthesizes_manifest_from_skill_md(tmp_path):
+    doc_dir = tmp_path / "doc-only"
+    doc_dir.mkdir()
+    (doc_dir / "SKILL.md").write_text(
+        "---\nname: ui-helper\nversion: 1.2.0\ndescription: |\n  line1\n  line2\n---\n# Hi\n",
+        encoding="utf-8",
+    )
+    vp_doc = verify_content_dir(str(doc_dir))
+    assert vp_doc.manifest.name == "ui-helper"
+    assert vp_doc.manifest.type == "document"
+    assert vp_doc.manifest.version == "1.2.0"
+    assert vp_doc.manifest.default_enabled is True
+    assert vp_doc.manifest.description == "line1\nline2"
+    assert not (doc_dir / "manifest.json").exists()
+
+    script_dir = tmp_path / "with-scripts"
+    (script_dir / "scripts").mkdir(parents=True)
+    (script_dir / "SKILL.md").write_text("---\nname: runner\n---\n", encoding="utf-8")
+    (script_dir / "scripts" / "query.mjs").write_text("console.log(1)\n", encoding="utf-8")
+    vp_script = verify_content_dir(str(script_dir))
+    assert vp_script.manifest.type == "script"
+    assert vp_script.manifest.tools == []
+
+
+def test_safe_extract_tar_gz_strip_and_security(tmp_path):
+    good = tmp_path / "good.tgz"
+    _write_tgz(good, {"package/SKILL.md": "---\nname: pkg\n---\n", "package/references/a.txt": "ok"})
+    dest = tmp_path / "out"
+    dest.mkdir()
+    top = safe_extract_tar_gz(str(good), str(dest), strip_top_dir=True)
+    assert top == "package"
+    assert (dest / "SKILL.md").is_file()
+    assert (dest / "references" / "a.txt").read_text() == "ok"
+
+    bad_trav = tmp_path / "trav.tgz"
+    _write_tgz(bad_trav, {"../../evil": "pwn"})
+    d2 = tmp_path / "out2"
+    d2.mkdir()
+    with pytest.raises(PackError) as exc:
+        safe_extract_tar_gz(str(bad_trav), str(d2))
+    assert exc.value.code == "E_PACK_UNSAFE_PATH"
+
+    bad_sym = tmp_path / "sym.tgz"
+    _write_tgz(bad_sym, {"a.txt": "ok"}, symlink=("link.txt", "/etc/passwd"))
+    d3 = tmp_path / "out3"
+    d3.mkdir()
+    with pytest.raises(PackError) as exc2:
+        safe_extract_tar_gz(str(bad_sym), str(d3))
+    assert exc2.value.code == "E_PACK_SYMLINK"
+
+
+def test_parse_skill_source_variants():
+    s1 = pf.parse_skill_source("ChenyqThu/omada-ui-kit")
+    assert (s1.kind, s1.owner, s1.repo, s1.ref, s1.subpath) == ("github", "ChenyqThu", "omada-ui-kit", None, None)
+
+    s2 = pf.parse_skill_source("https://github.com/ChenyqThu/omada-ui-kit/tree/main/skills/omada-ui-kit")
+    assert (s2.kind, s2.owner, s2.repo, s2.ref, s2.subpath) == ("github", "ChenyqThu", "omada-ui-kit", "main", "skills/omada-ui-kit")
+
+    s3 = pf.parse_skill_source("https://github.com/ChenyqThu/omada-ui-kit/blob/v1.0/skills/foo/SKILL.md")
+    assert (s3.kind, s3.ref, s3.subpath) == ("github", "v1.0", "skills/foo")
+
+    s4 = pf.parse_skill_source("npm:@chenyqthu/omada-ui-kit@0.2.0#skills/omada-ui-kit")
+    assert (s4.kind, s4.package, s4.spec, s4.subpath) == ("npm", "@chenyqthu/omada-ui-kit", "0.2.0", "skills/omada-ui-kit")
+
+    s5 = pf.parse_skill_source("@chenyqthu/omada-ui-kit")
+    assert (s5.kind, s5.package, s5.spec) == ("npm", "@chenyqthu/omada-ui-kit", None)
+
+    s6 = pf.parse_skill_source("https://www.npmjs.com/package/@chenyqthu/omada-ui-kit/v/0.1.0")
+    assert (s6.kind, s6.package, s6.spec) == ("npm", "@chenyqthu/omada-ui-kit", "0.1.0")
+
+    s7 = pf.parse_skill_source("https://packs.test/my-skill.zip")
+    assert (s7.kind, s7.url) == ("url", "https://packs.test/my-skill.zip")
+
+
+def test_fetch_local_monorepo_multiple_skills_and_select(tmp_path, skills_dir):
+    repo = tmp_path / "repo"
+    (repo / "skills" / "alpha").mkdir(parents=True)
+    (repo / "skills" / "beta").mkdir(parents=True)
+    (repo / "skills" / "alpha" / "SKILL.md").write_text("---\nname: alpha\n---\n# A\n")
+    (repo / "skills" / "beta" / "SKILL.md").write_text("---\nname: beta\n---\n# B\n")
+
+    with pytest.raises(PackError) as exc:
+        pf.fetch_pack(local_path=str(repo))
+    assert exc.value.code == "E_PACK_MULTIPLE_SKILLS"
+    assert exc.value.details == {"availableSkills": ["alpha", "beta"]}
+
+    res = pf.fetch_pack(local_path=str(repo), skill_name="beta")
+    assert res.manifest_dict["name"] == "beta"
+
+
+def test_read_skill_resource_modes_and_security(tmp_path, skills_dir):
+    sdir = tmp_path / "skills-root" / "omada-ui-kit"
+    (sdir / "references").mkdir(parents=True)
+    (sdir / "SKILL.md").write_text("---\nname: omada-ui-kit\n---\nline1\nmatch here\nline3\n", encoding="utf-8")
+    (sdir / "config.json").write_text('{"secret_setting": true}', encoding="utf-8")
+    (sdir / ".env").write_text("TOKEN=secret", encoding="utf-8")
+    (sdir / "priv.key").write_text("KEY", encoding="utf-8")
+    (sdir / "bin.dat").write_bytes(b"\x00\x01\xff\xfe")
+    (sdir / "references" / "catalog.json").write_text(
+        json.dumps({
+            "package": {"cdn": {"css": "https://cdn.example/style.css"}},
+            "components": [
+                {"name": "SButton", "category": "General"},
+                {"name": "SEmulatorShell", "category": "Layout", "desc": "Hardware frame"},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    os.symlink("/etc/hosts", sdir / "references" / "hosts.txt")
+    # Install directly into isolated skills_dir
+    import shutil
+    installed = os.path.join(pf.skills_data_root(), "omada-ui-kit")
+    os.makedirs(os.path.dirname(installed), exist_ok=True)
+    shutil.copytree(sdir, installed, symlinks=True)
+
+    # Directory list excludes config.json / .env / .key / symlinks
+    listing = read_skill_resource("omada-ui-kit")
+    paths = [e["path"] for e in listing["entries"]]
+    assert "references/catalog.json" in paths
+    assert "config.json" not in paths
+    assert ".env" not in paths
+    assert "priv.key" not in paths
+    assert "references/hosts.txt" not in paths
+
+    # JSON path & search
+    jp = read_skill_resource("omada-ui-kit", path="references/catalog.json", json_path="package.cdn.css")
+    assert jp["mode"] == "json_path"
+    assert "https://cdn.example/style.css" in jp["content"]
+
+    js = read_skill_resource("omada-ui-kit", path="references/catalog.json", search="SEmulatorShell")
+    assert js["mode"] == "json_search"
+    assert js["matches"][0]["value"]["name"] == "SEmulatorShell"
+
+    # Large JSON > 24 KiB defaults to overview without search/json_path
+    big_items = [{"name": f"Comp{i}", "desc": "x" * 200} for i in range(180)]
+    with open(os.path.join(installed, "references", "big.json"), "w", encoding="utf-8") as f:
+        json.dump({"items": big_items}, f)
+    ov = read_skill_resource("omada-ui-kit", path="references/big.json")
+    assert ov["mode"] == "json_overview"
+
+    # Text slicing & search
+    tx = read_skill_resource("omada-ui-kit", path="SKILL.md", search="match here")
+    assert tx["mode"] == "text_search"
+    assert tx["matches"][0]["before"] == "line1"
+    assert tx["matches"][0]["after"] == "line3"
+
+    # Binary rejected & security blocks
+    with pytest.raises(PackError) as e_bin:
+        read_skill_resource("omada-ui-kit", path="bin.dat")
+    assert e_bin.value.code == "E_PACK_UNSUPPORTED_MEDIA"
+
+    for bad_path in ["config.json", ".env", "priv.key", "../etc/passwd", "references/hosts.txt", "."]:
+        with pytest.raises(PackError) as e_sec:
+            read_skill_resource("omada-ui-kit", path=bad_path)
+        assert e_sec.value.code == "E_INVALID_ARG", bad_path
