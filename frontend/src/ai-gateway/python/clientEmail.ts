@@ -389,4 +389,30 @@ export class EmailDomainClient extends MattersDomainClient {
       signal
     })
   }
+
+  /** Wave 4C — Persist on-demand translation segments via serve-api (single-writer sync_store.db). */
+  saveTranslation(
+    internalId: number,
+    input: {
+      targetLang: 'zh' | 'en'
+      segments: Array<{ src: string; tgt: string }>
+      model: string
+      source: 'on_demand' | 'llm_agent'
+    },
+    signal?: AbortSignal
+  ): Promise<{
+    internalId: number
+    targetLang: 'zh' | 'en'
+    segments: Array<{ src: string; tgt: string }>
+    source: string | null
+    model: string | null
+    fetchedAt: number | null
+    saved: boolean
+    cacheKept?: boolean
+  }> {
+    return this._req('PUT', `/ai/translation/${internalId}`, {
+      body: input,
+      signal
+    })
+  }
 }

@@ -12,7 +12,9 @@
 import { readdirSync, statSync, type Dirent } from 'node:fs'
 import { join } from 'node:path'
 
-import { ipcMain, shell } from 'electron'
+import { shell } from 'electron'
+
+import { typedIpcHandle } from '../ipc/typedHandle'
 
 import type { LibraryMount } from '@shared/api/types/library'
 import {
@@ -213,10 +215,10 @@ export function libraryUsageBytes(): LibraryUsageResult {
 }
 
 export function registerLibraryHandlers(): void {
-  ipcMain.handle(LIBRARY_IPC.openPath, (_evt, target: unknown) => openLibraryTarget(target, 'open'))
-  ipcMain.handle(LIBRARY_IPC.showInFolder, (_evt, target: unknown) =>
+  typedIpcHandle(LIBRARY_IPC.openPath, (_evt, target: unknown) => openLibraryTarget(target, 'open'))
+  typedIpcHandle(LIBRARY_IPC.showInFolder, (_evt, target: unknown) =>
     openLibraryTarget(target, 'reveal')
   )
-  ipcMain.handle(LIBRARY_IPC.trashItem, (_evt, target: unknown) => trashLibraryTarget(target))
-  ipcMain.handle(LIBRARY_IPC.usage, () => libraryUsageBytes())
+  typedIpcHandle(LIBRARY_IPC.trashItem, (_evt, target: unknown) => trashLibraryTarget(target))
+  typedIpcHandle(LIBRARY_IPC.usage, () => libraryUsageBytes())
 }

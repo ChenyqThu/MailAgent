@@ -207,3 +207,43 @@ class TranslationRepository:
             )
             conn.commit()
             return cur.rowcount > 0
+
+    def save_segments_guarded(
+        self,
+        internal_id: int,
+        segments: list[dict],
+        *,
+        model: str = "",
+        source: str = "on_demand",
+        target_lang: str = "zh",
+    ) -> dict:
+        """UPSERT translation segments unless existing cache has strictly more segments."""
+        if source not in ("llm_agent", "on_demand"):
+            raise ValueError(
+                f"source must be 'llm_agent' or 'on_demand', got {source!r}"
+            )
+        clean = self._validate_segments(segments)
+        existing = self.get_cache_entry(internal_id, target_lang=target_lang)
+        if existing is not None and len(clean) < len(existing["segments"]):
+            return {
+                **existing,
+                "saved": False,
+                "cacheKept": True,
+            }
+        saved = self.save_segments(
+            internal_id,
+            clean,
+            model=model,
+            source=source,
+            target_lang=target_lang,
+        )
+        return {
+            "internalId": internal_id,
+            "targetLang": target_lang,
+            "segments": clean,
+            "source": source,
+            "model": model,
+            "fetchedAt": time.time(),
+            "saved": saved,
+            "cacheKept": False,
+        }

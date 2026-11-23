@@ -9,9 +9,9 @@
 // types update on `pnpm gen:types`.
 
 import type { Database, Statement } from 'better-sqlite3'
-import { ipcMain } from 'electron'
 
 import { getDb } from '../db'
+import { typedIpcHandle } from '../ipc/typedHandle'
 import {
   mapLanguage,
   mapPriority,
@@ -717,38 +717,38 @@ export function listPinnedEmailIds(): number[] {
 // ---- IPC wiring -------------------------------------------------------------
 
 export function registerEmailHandlers(): void {
-  ipcMain.handle('email:list', (_evt, opts: ListOpts = {}) => listEmails(opts ?? {}))
-  ipcMain.handle('email:listEnriched', (_evt, opts: ListOpts = {}) =>
+  typedIpcHandle('email:list', (_evt, opts: ListOpts = {}) => listEmails(opts ?? {}))
+  typedIpcHandle('email:listEnriched', (_evt, opts: ListOpts = {}) =>
     listEmailsEnriched(opts ?? {})
   )
-  ipcMain.handle('email:listMailboxes', () => listMailboxes())
-  ipcMain.handle('email:aiFields', (_evt, internalId: number) => {
+  typedIpcHandle('email:listMailboxes', () => listMailboxes())
+  typedIpcHandle('email:aiFields', (_evt, internalId: number) => {
     if (!Number.isInteger(internalId) || internalId < 0) {
       throw new TypeError(`email:aiFields expected non-negative integer, got ${String(internalId)}`)
     }
     return getAIFields(internalId)
   })
-  ipcMain.handle('email:get', (_evt, internalId: number) => {
+  typedIpcHandle('email:get', (_evt, internalId: number) => {
     if (!Number.isInteger(internalId) || internalId < 0) {
       throw new TypeError(`email:get expected non-negative integer, got ${String(internalId)}`)
     }
     return getEmail(internalId)
   })
-  ipcMain.handle('email:body', (_evt, internalId: number, opts: BodyOpts = {}) => {
+  typedIpcHandle('email:body', (_evt, internalId: number, opts: BodyOpts = {}) => {
     if (!Number.isInteger(internalId) || internalId < 0) {
       throw new TypeError(`email:body expected non-negative integer, got ${String(internalId)}`)
     }
     return getEmailBody(internalId, opts?.format ?? 'markdown', opts?.mode ?? 'full')
   })
-  ipcMain.handle('email:listByThread', (_evt, threadId: string | null) =>
+  typedIpcHandle('email:listByThread', (_evt, threadId: string | null) =>
     listEmailsByThread(threadId)
   )
-  ipcMain.handle('email:listByThreads', (_evt, threadIds: string[] | null) =>
+  typedIpcHandle('email:listByThreads', (_evt, threadIds: string[] | null) =>
     listEmailsByThreads(threadIds)
   )
   // v8 — listPinnedIds is a readonly SQLite SELECT, wired here. The
   // write path (email:pin / email:unpin) lives in write_ops.ts and forks
   // the `mailagent email pin / unpin` CLI per the renderer-readonly rule
   // (db.ts comment / REVIEW-LOG C-05).
-  ipcMain.handle('email:listPinnedIds', () => listPinnedEmailIds())
+  typedIpcHandle('email:listPinnedIds', () => listPinnedEmailIds())
 }

@@ -1,25 +1,8 @@
-// Sprint Immersive-Translate — body_html 翻译单元提取器 v2。
+// Body HTML translation unit extractor v2 (shared with ai-gateway translateRoutes).
 //
-// Path B 在主进程从 SQLite 读 body_html 后，用本工具把邮件正文切成
-// “可见文本 run” 再批量送 LLM。v2 不再挑 p/li/div 叶子节点，而是让每个
-// 可见 text 节点都归属到某个翻译单元：
-//   - 容器元素按 childNodes 切 run，连续 text / inline 元素合并；
-//   - 遇 block 子元素先结束当前 run，再递归进入 block；
-//   - 连续两个以上 br 断段，单个 br 只作为同段换行；
-//   - script/style/noscript/pre 与显式隐藏子树整棵剪掉。
-//
-// 过滤策略只处理“明显不该翻”的文本：过短、CJK 占比过高、没有连续英文
-// 字母、纯 URL/email、裸 code run。超过 800 字符的 run 会按句子边界拆分，
-// 单句仍过长才硬切，避免旧实现把整段长邮件直接丢弃。
-//
-// 选 node-html-parser 而非 cheerio/jsdom 的理由:
-//   - cheerio 拖 parse5 + htmlparser2 + domhandler ~500KB；jsdom 拖 native
-//     compile + 几 MB。我们只需要读 DOM，不写回 HTML，node-html-parser
-//     50KB 纯 JS 完全够用。
-//   - parse 容错好：邮件 HTML 经常是 Outlook 生成的脏 HTML，node-html-parser
-//     不会因为未闭合 tag 抛错。
-//
-// id 仅是 batch 内部稳定键，不写回 SSoT；渲染端仍用 src 文本 fuzzy 匹配。
+// Collects visible text runs in DOM order, splitting blocks at container/double-br
+// boundaries, pruning script/style/noscript/pre and hidden subtrees, filtering
+// non-translatable runs, and splitting >800 char paragraphs at sentence boundaries.
 
 import { createHash } from 'node:crypto'
 import { type HTMLElement, parse } from 'node-html-parser'
@@ -32,9 +15,9 @@ import {
 } from '@shared/lib/translation_blocks'
 
 export interface ExtractedBlock {
-  /** 8-字符稳定哈希 ID，基于 DOM path + run/chunk 序号。 */
+  /** 8-char stable hash ID from DOM path + run/chunk index. */
   id: string
-  /** 段落 plaintext（trim 后）。喂给 LLM 的 src。 */
+  /** Trimmed paragraph plaintext fed to LLM as `src`. */
   text: string
 }
 
@@ -63,7 +46,6 @@ const htmlAdapter: DomAdapter<HtmlNode> = {
   }
 }
 
-/** 计算从 root 到节点的 tag[idx] path（idx 是同 tag 兄弟里的序号）。 */
 function nodePath(node: HtmlNode): string {
   const parts: string[] = []
   let cur: HtmlNode | null = node
@@ -99,7 +81,7 @@ function hashId(path: string): string {
   return createHash('sha1').update(path).digest('hex').slice(0, 8)
 }
 
-/** 从 body_html 抽出待翻译 run/chunk。返回顺序 = DOM 文档顺序。 */
+/** Extract translatable runs/chunks from body_html in DOM document order. */
 export function extractBlocks(html: string): ExtractedBlock[] {
   if (typeof html !== 'string' || html.length === 0) return []
   const root = parse(html, {

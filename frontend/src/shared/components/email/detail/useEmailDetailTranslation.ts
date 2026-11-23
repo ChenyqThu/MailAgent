@@ -12,6 +12,12 @@ import type { TranslateStatus } from '../EmailToolbar'
 
 const llmAgentUpgradeFired = new Set<number>()
 
+function isAbortFailure(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const code = (err as Error & { code?: string }).code
+  return err.name === 'AbortError' || code === 'E_ABORTED'
+}
+
 interface UseEmailDetailTranslationOpts {
   internalId: number | null
   langIsEn: boolean
@@ -48,6 +54,7 @@ export function useEmailDetailTranslation({
   if (lastInternalId !== internalId) {
     setLastInternalId(internalId)
     setShowTranslation(false)
+    setTranslateError(null)
   }
 
   // The cleanup is a real side-effect (renderer → main IPC), so it stays in an effect.
@@ -83,6 +90,7 @@ export function useEmailDetailTranslation({
       }
     },
     onError: (err: unknown) => {
+      if (isAbortFailure(err)) return
       const e = err instanceof Error ? err : new Error(String(err))
       const code = (e as Error & { code?: string }).code ?? 'E_UPSTREAM'
       setTranslateError({ code, message: e.message })
@@ -105,6 +113,7 @@ export function useEmailDetailTranslation({
       }
     },
     onError: (err: unknown) => {
+      if (isAbortFailure(err)) return
       const e = err instanceof Error ? err : new Error(String(err))
       const code = (e as Error & { code?: string }).code ?? 'E_UPSTREAM'
       setTranslateError({ code, message: e.message })

@@ -120,8 +120,10 @@ import type {
   TodayData as TodayApiData,
   UploadComposeAttachmentOpts,
   TargetLang,
+  TranslateBatchResult,
   TranslationCache
 } from './types'
+import { resolveAiGatewayBaseUrl } from '../assistant/runtime/flags'
 import {
   fetchAsDataUrl,
   requestRaw,
@@ -178,6 +180,8 @@ export interface HttpApiOptions {
 }
 
 export class HttpApi implements MailApi {
+  private readonly translateControllers = new Map<number, AbortController>()
+
   constructor(
     private readonly baseUrl: string,
     private readonly opts: HttpApiOptions = {}
@@ -589,8 +593,64 @@ export class HttpApi implements MailApi {
   }
 
   ai = {
-    // Electron-main LLM logic (html block extract + pLimit + gateway); no CLI.
-    translateBatch: () => notImplemented('ai.translateBatch'),
+    translateBatch: async (
+      internalId: number,
+      targetLang?: TargetLang
+    ): Promise<TranslateBatchResult> => {
+      const prior = this.translateControllers.get(internalId)
+      if (prior) {
+        this.translateControllers.delete(internalId)
+        prior.abort()
+      }
+      const ac = new AbortController()
+      this.translateControllers.set(internalId, ac)
+
+      const gw = resolveAiGatewayBaseUrl()
+      const url = gw !== null ? `${gw}/api/ai/translate/batch` : `${this.baseUrl}/ai/translate/batch`
+      const isLoopbackGateway = gw !== null && gw.length > 0
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ internalId, targetLang }),
+          signal: ac.signal,
+          ...(isLoopbackGateway ? {} : { credentials: 'include' })
+        })
+        let payload: unknown = null
+        try {
+          payload = await res.json()
+        } catch {
+          payload = null
+        }
+        if (!res.ok) {
+          const obj =
+            payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {}
+          const code = typeof obj.error === 'string' ? obj.error : 'E_UPSTREAM'
+          const msg =
+            typeof obj.message === 'string' && obj.message.length > 0
+              ? obj.message
+              : `HTTP ${res.status}`
+          const err = new Error(msg) as Error & { code?: string; httpStatus?: number }
+          err.code = code
+          err.httpStatus = res.status
+          throw err
+        }
+        return payload as TranslateBatchResult
+      } catch (err) {
+        if (ac.signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
+          const abortErr = (err instanceof Error ? err : new Error('Aborted')) as Error & {
+            code?: string
+          }
+          abortErr.code = 'E_ABORTED'
+          throw abortErr
+        }
+        throw err
+      } finally {
+        if (this.translateControllers.get(internalId) === ac) {
+          this.translateControllers.delete(internalId)
+        }
+      }
+    },
 
     getCached: async (
       internalId: number,
@@ -615,8 +675,11 @@ export class HttpApi implements MailApi {
       return data?.deleted ?? false
     },
 
-    abortTranslate: (): void => {
-      /* V2 web build would route through fetch + AbortController; stub. */
+    abortTranslate: (internalId: number): void => {
+      const ac = this.translateControllers.get(internalId)
+      if (!ac) return
+      this.translateControllers.delete(internalId)
+      ac.abort()
     }
   }
 

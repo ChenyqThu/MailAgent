@@ -6,6 +6,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useState } from 'react'
 
+import { openExternalUrl } from '@shared/ipc/client'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { priorityTone, fmtClock } from './lib'
@@ -17,12 +18,7 @@ import { Pip, ReportIcon } from './primitives'
 const PRESS_SCALE = 'scale(0.97)'
 
 function openExternal(url: string): void {
-  const w = window as unknown as {
-    electron?: { ipcRenderer?: { invoke?: (c: string, ...a: unknown[]) => Promise<unknown> } }
-  }
-  const invoke = w.electron?.ipcRenderer?.invoke
-  if (invoke) void invoke('shell:openExternal', url)
-  else window.open(url, '_blank', 'noopener')
+  openExternalUrl(url)
 }
 
 export function EmailSourcePanel({

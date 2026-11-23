@@ -10,9 +10,8 @@ import { constants as fsConstants } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, extname, isAbsolute, join } from 'node:path'
 
-import { ipcMain } from 'electron'
-
 import { getDb, resolveDbPath } from '../db'
+import { typedIpcHandle } from '../ipc/typedHandle'
 import type { AttachmentList_AttachmentItem } from '@shared/types/cli.gen'
 
 interface AttachmentRow {
@@ -179,7 +178,7 @@ export async function downloadAttachmentToDownloads(attachmentId: number): Promi
 }
 
 export function registerAttachmentHandlers(): void {
-  ipcMain.handle('attachment:list', (_evt, internalId: number) => {
+  typedIpcHandle('attachment:list', (_evt, internalId: number) => {
     if (!Number.isInteger(internalId) || internalId < 0) {
       throw new TypeError(
         `attachment:list expected non-negative integer, got ${String(internalId)}`
@@ -187,7 +186,7 @@ export function registerAttachmentHandlers(): void {
     }
     return listAttachments(internalId)
   })
-  ipcMain.handle('attachment:localPath', (_evt, attachmentId: number) => {
+  typedIpcHandle('attachment:localPath', (_evt, attachmentId: number) => {
     if (!Number.isInteger(attachmentId) || attachmentId < 0) {
       throw new TypeError(
         `attachment:localPath expected non-negative integer, got ${String(attachmentId)}`
@@ -195,7 +194,7 @@ export function registerAttachmentHandlers(): void {
     }
     return getAttachmentLocalPath(attachmentId)
   })
-  ipcMain.handle('attachment:readDataUrl', async (_evt, attachmentId: number) => {
+  typedIpcHandle('attachment:readDataUrl', async (_evt, attachmentId: number) => {
     if (!Number.isInteger(attachmentId) || attachmentId < 0) {
       throw new TypeError(
         `attachment:readDataUrl expected non-negative integer, got ${String(attachmentId)}`
@@ -203,7 +202,7 @@ export function registerAttachmentHandlers(): void {
     }
     return readAttachmentAsDataUrl(attachmentId)
   })
-  ipcMain.handle('attachment:download', async (_evt, attachmentId: number) => {
+  typedIpcHandle('attachment:download', async (_evt, attachmentId: number) => {
     if (!Number.isInteger(attachmentId) || attachmentId < 0) {
       throw new TypeError(
         `attachment:download expected non-negative integer, got ${String(attachmentId)}`

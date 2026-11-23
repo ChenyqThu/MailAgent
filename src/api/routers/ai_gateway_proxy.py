@@ -62,6 +62,7 @@ Starlette 自算的 framing 撞车把流式弄坏。请求侧：透传 content-t
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -211,6 +212,56 @@ async def _proxy_buffered(request: Request, target_path: str) -> Response:
     )
 
 
+async def _wait_for_disconnect(request: Request) -> None:
+    while not await request.is_disconnected():
+        await asyncio.sleep(0.05)
+
+
+async def _proxy_buffered_cancellable(request: Request, target_path: str) -> Response:
+    """Buffered JSON proxy that propagates client disconnects to cancel upstream work."""
+    url = f"{_gateway_base()}{target_path}"
+    body = await request.body()
+    headers = _forward_request_headers(request)
+    async with httpx.AsyncClient(timeout=_PROXY_TIMEOUT) as client:
+        req_task = asyncio.create_task(
+            client.request(request.method, url, content=body, headers=headers)
+        )
+        disconnect_task = asyncio.create_task(_wait_for_disconnect(request))
+        try:
+            done, _ = await asyncio.wait(
+                {req_task, disconnect_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if disconnect_task in done and not req_task.done():
+                req_task.cancel()
+                try:
+                    await req_task
+                except BaseException:
+                    pass
+                return Response(status_code=499)
+            upstream_resp = await req_task
+            return Response(
+                content=upstream_resp.content,
+                status_code=upstream_resp.status_code,
+                headers=_passthrough_response_headers(upstream_resp),
+            )
+        except asyncio.CancelledError:
+            req_task.cancel()
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "ai-gateway proxy (cancellable) failed for %s: %s", target_path, exc
+            )
+            return Response(status_code=502)
+        finally:
+            if not disconnect_task.done():
+                disconnect_task.cancel()
+                try:
+                    await disconnect_task
+                except BaseException:
+                    pass
+
+
 # ============================================================
 # 流式端点（UIMessage / AG-UI 流）
 # ============================================================
@@ -237,6 +288,14 @@ async def proxy_agui_chat(
 async def proxy_title(request: Request, _: None = Depends(verify_cf_access)) -> Response:
     """代理 POST /api/ai/title → gateway（非流式 JSON，幂等 LLM 自动标题）。"""
     return await _proxy_buffered(request, "/api/ai/title")
+
+
+@router.post("/api/ai/translate/batch")
+async def proxy_translate_batch(
+    request: Request, _: None = Depends(verify_cf_access)
+) -> Response:
+    """Proxy POST /api/ai/translate/batch -> gateway with disconnect abort propagation."""
+    return await _proxy_buffered_cancellable(request, "/api/ai/translate/batch")
 
 
 @router.post("/api/ai/compact")

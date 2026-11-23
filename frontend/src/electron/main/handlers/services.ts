@@ -21,8 +21,10 @@
 // (it may exit-1 on a broken `.env`).
 
 import { execa } from 'execa'
-import { app, ipcMain } from 'electron'
+import { app } from 'electron'
 import { existsSync } from 'fs'
+
+import { typedIpcHandle } from '../ipc/typedHandle'
 
 import { getBackendLifecycle, probeDbReady, type ServiceName } from '../backend_lifecycle'
 import { whichSync } from '../bin_resolver'
@@ -346,12 +348,12 @@ async function listStatuses(): Promise<ServiceStatus[]> {
 }
 
 export function registerServicesHandlers(): void {
-  ipcMain.handle(
+  typedIpcHandle(
     'services:restart',
     async (_event, target?: ServiceTarget): Promise<ServiceRestartResult> =>
       restartTarget(target ?? 'mail-sync')
   )
-  ipcMain.handle('services:status', async (): Promise<ServiceStatus[]> => listStatuses())
+  typedIpcHandle('services:status', async (): Promise<ServiceStatus[]> => listStatuses())
 }
 
 // Vitest entry points (no IPC).

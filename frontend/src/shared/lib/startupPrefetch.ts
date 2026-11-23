@@ -34,6 +34,7 @@ import { matterLiveListOptions } from '@shared/components/matters/hooks'
 import { notificationListOptions } from '@shared/components/notifications/hooks'
 import { resolveApiBaseUrl } from '@shared/components/settings/custom-ai/shared'
 import { APP_CONFIG_QUERY_KEY, fetchAppConfigFlags } from '@shared/hooks/useAppConfig'
+import { onIpcEvent } from '@shared/ipc/client'
 import { EMAIL_QUERY_ROOT } from '@shared/lib/emailInvalidation'
 import { API_READY_CHANNEL } from '@shared/lib/ipcChannels'
 import { useEventsStatusStore } from '@shared/state/eventsStatus'
@@ -149,24 +150,6 @@ function requestIdle(cb: () => void): () => void {
   return () => window.clearTimeout(timer)
 }
 
-/** ipc.on 范式照抄 useApiReadyRefresh (含「返回值不是函数就退回 removeListener」兜底);
- *  非 Electron (web / 测试) 无 window.electron → no-op。 */
-function subscribeIpc(channel: string, cb: () => void): () => void {
-  const ipc = (
-    window as unknown as {
-      electron?: {
-        ipcRenderer?: {
-          on(ch: string, fn: (...args: unknown[]) => void): (() => void) | void
-          removeListener?(ch: string, fn: (...args: unknown[]) => void): void
-        }
-      }
-    }
-  ).electron?.ipcRenderer
-  if (!ipc) return () => {}
-  const off = ipc.on(channel, cb)
-  return typeof off === 'function' ? off : () => ipc.removeListener?.(channel, cb)
-}
-
 /** 真实 IO 装配 (renderer 用)。preloadRoute 由调用方注入 —— router 单例只在 hook 层
  *  import, 本模块保持可测。 */
 export function makeStartupPrefetchIo(
@@ -188,7 +171,7 @@ export function makeStartupPrefetchIo(
       useEventsStatusStore.getState().isConnected() ||
       queryClient.getQueryState(APP_CONFIG_QUERY_KEY)?.status === 'success',
     onApiReady: (cb) => {
-      const offIpc = subscribeIpc(API_READY_CHANNEL, cb)
+      const offIpc = onIpcEvent(API_READY_CHANNEL, cb)
       const offSse = useEventsStatusStore.subscribe((state) => {
         if (state.isConnected()) cb()
       })

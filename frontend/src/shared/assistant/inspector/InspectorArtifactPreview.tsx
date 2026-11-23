@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { isElectronIpcAvailable } from '@shared/ipc/client'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { buildLibraryPreviewUrl } from '@shared/libraryIpcContract'
 import { qk } from '@shared/lib/queryKeys'
@@ -40,9 +41,7 @@ export interface InspectorArtifactPreviewProps {
 }
 
 function isElectronPreviewAvailable(): boolean {
-  if (typeof window === 'undefined') return false
-  const w = window as unknown as { electron?: { ipcRenderer?: unknown } }
-  return Boolean(w.electron?.ipcRenderer)
+  return isElectronIpcAvailable()
 }
 
 function normalizePublishSlug(raw: string): string {

@@ -20,6 +20,7 @@ import { Minus, Plus, RotateCw, X } from 'lucide-react'
 
 import { request } from '@shared/api/http_client'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { tryInvokeIpc } from '@shared/ipc/client'
 import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import { useAppearance, type BodyFont } from '@shared/state/appearance'
 import { resolveApiBaseUrl } from '@shared/lib/apiBaseUrl'
@@ -787,12 +788,7 @@ function BodyIframe({ srcDoc, translations, onImageClick }: BodyIframeProps): Re
       if (!/^(?:https?|mailto|tel|callto|sms):/i.test(url)) return
       e.preventDefault()
       e.stopPropagation()
-      const invoke = (
-        window as unknown as {
-          electron?: { ipcRenderer?: { invoke?: (c: string, ...a: unknown[]) => Promise<unknown> } }
-        }
-      ).electron?.ipcRenderer?.invoke
-      void invoke?.('shell:openExternal', url)
+      void tryInvokeIpc('shell:openExternal', url)
     }
     function setupObservers(): void {
       const doc = iframe!.contentDocument

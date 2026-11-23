@@ -66,7 +66,27 @@ class DeleteCachedResult(BaseModel):
     deleted: bool
 
 
+TranslationSource = Literal["llm_agent", "on_demand"]
+
+
+class TranslationSaveRequest(BaseModel):
+    """Request payload for `PUT /api/ai/translation/{id}` guarded cache upsert."""
+
+    targetLang: TargetLang = "zh"
+    segments: list[TranslationSegment]
+    model: str = ""
+    source: TranslationSource = "on_demand"
+
+
+class TranslationSaveResponse(TranslationCache):
+    """Response payload for `PUT /api/ai/translation/{id}`."""
+
+    saved: bool
+    cacheKept: bool = False
+
+
 __all__ = [
-    "TargetLang", "TranslationSegment", "TranslationCache",
+    "TargetLang", "TranslationSource", "TranslationSegment", "TranslationCache",
+    "TranslationSaveRequest", "TranslationSaveResponse",
     "TranslateBatchResult", "DeleteCachedResult",
 ]

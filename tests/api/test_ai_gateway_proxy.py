@@ -151,6 +151,28 @@ class _FakeGatewayHandler(BaseHTTPRequestHandler):
             except ValueError:
                 sent = {}
             self._json(200, {"status": "completed", "received": sent})
+        elif self.path == "/api/ai/translate/batch":
+            try:
+                sent = json.loads(raw.decode()) if raw else {}
+            except ValueError:
+                sent = {}
+            if sent.get("fail") is True:
+                self._json(503, {"error": "E_NO_LLM_KEY", "message": "missing key"})
+            else:
+                self._json(
+                    200,
+                    {
+                        "internalId": sent.get("internalId", 1),
+                        "targetLang": sent.get("targetLang", "zh"),
+                        "segments": [{"src": "Hi", "tgt": "嗨"}],
+                        "source": "on_demand",
+                        "model": "test-model",
+                        "fetchedAt": 1.0,
+                        "latencyMs": 5,
+                        "failedBatches": 0,
+                        "totalBatches": 1,
+                    },
+                )
         else:
             self._json(404, {"error": "not_found", "path": self.path})
 
@@ -494,3 +516,60 @@ async def test_streaming_abort_closes_upstream(fake_gateway: int, monkeypatch: p
 
     # finally 已跑 → 上游连接被关 (= 关到 gateway 的 socket → gateway req.on('close') → LLM abort)。
     assert upstream_resp.is_closed is True
+
+
+def test_proxy_translate_batch_forwards_and_requires_auth(
+    proxy_client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    r = proxy_client.post(
+        "/api/ai/translate/batch", json={"internalId": 42, "targetLang": "zh"}
+    )
+    assert r.status_code == 200
+    assert r.json()["internalId"] == 42
+    assert r.json()["segments"] == [{"src": "Hi", "tgt": "嗨"}]
+
+    r_err = proxy_client.post("/api/ai/translate/batch", json={"fail": True})
+    assert r_err.status_code == 503
+    assert r_err.json()["error"] == "E_NO_LLM_KEY"
+
+    monkeypatch.setattr(auth_mod, "AUTH_DISABLED", False)
+    r_unauth = proxy_client.post("/api/ai/translate/batch", json={"internalId": 42})
+    assert r_unauth.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_proxy_translate_batch_disconnect_cancels_upstream(
+    fake_gateway: int, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("MAILAGENT_AI_GATEWAY_PORT", str(fake_gateway))
+    import asyncio as _asyncio
+
+    started = _asyncio.Event()
+    cancelled = _asyncio.Event()
+
+    async def _slow_request(self, method, url, **kwargs):  # noqa: ANN001
+        started.set()
+        try:
+            await _asyncio.sleep(10)
+        except _asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", _slow_request)
+
+    class _DisconnectReq:
+        method = "POST"
+        headers = httpx.Headers({"content-type": "application/json"})
+
+        async def body(self) -> bytes:
+            return b'{"internalId": 42}'
+
+        async def is_disconnected(self) -> bool:
+            return started.is_set()
+
+    resp = await proxy_mod._proxy_buffered_cancellable(
+        _DisconnectReq(),  # type: ignore[arg-type]
+        "/api/ai/translate/batch",
+    )
+    assert resp.status_code == 499
+    assert cancelled.is_set()

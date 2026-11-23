@@ -30,7 +30,13 @@ from fastapi import APIRouter, Depends, Request
 from src.api.app import success_payload
 from src.api.auth import verify_cf_access
 from src.api.deps import get_repository
-from src.api.schemas import DeleteCachedResult, SuccessEnvelope, TranslationCache
+from src.api.schemas import (
+    DeleteCachedResult,
+    SuccessEnvelope,
+    TranslationCache,
+    TranslationSaveRequest,
+    TranslationSaveResponse,
+)
 
 if TYPE_CHECKING:
     from src.repository import EmailRepository
@@ -104,3 +110,31 @@ async def ai_delete_cached(
     repo_t = TranslationRepository(db_path=str(repo.db_path))
     deleted = repo_t.delete(internal_id, target_lang=target_lang)
     return success_payload({"deleted": deleted}, request=request, source="sqlite")
+
+
+# ============================================================
+# PUT /api/ai/translation/{internal_id}  (写, email_translation single-writer)
+# ============================================================
+@router.put(
+    "/translation/{internal_id}",
+    response_model=SuccessEnvelope[TranslationSaveResponse],
+)
+async def ai_save_translation(
+    internal_id: int,
+    body: TranslationSaveRequest,
+    request: Request,
+    _: None = Depends(verify_cf_access),
+    repo: "EmailRepository" = Depends(get_repository),
+):
+    """Guarded translation cache upsert owned by serve-api."""
+    from src.repository import TranslationRepository
+
+    repo_t = TranslationRepository(db_path=str(repo.db_path))
+    data = repo_t.save_segments_guarded(
+        internal_id,
+        [{"src": seg.src, "tgt": seg.tgt} for seg in body.segments],
+        model=body.model,
+        source=body.source,
+        target_lang=body.targetLang,
+    )
+    return success_payload(data, request=request, source="sqlite")

@@ -10,6 +10,7 @@
 //
 // 🔴 这些通道的载荷里没有 token/code/state（main 侧保证），本文件也不落任何本地缓存。
 
+import { canInvokeElectronIpc, invokeIpc, onIpcEvent } from '@shared/ipc/client'
 import {
   NOTION_OAUTH_CANCEL_CHANNEL,
   NOTION_OAUTH_LIST_DATABASES_CHANNEL,
@@ -24,50 +25,26 @@ import {
   type NotionOauthStatusEvent
 } from './notionOauthContract'
 
-type IpcInvoke = (channel: string, ...args: unknown[]) => Promise<unknown>
-type IpcListener = (event: unknown, ...args: unknown[]) => void
-type IpcOn = (channel: string, listener: IpcListener) => unknown
-
-interface IpcBridge {
-  invoke?: IpcInvoke
-  on?: IpcOn
-  removeListener?: (channel: string, listener: IpcListener) => void
-  off?: (channel: string, listener: IpcListener) => void
-}
-
-function bridge(): IpcBridge | undefined {
-  const w = window as unknown as { electron?: { ipcRenderer?: IpcBridge } }
-  return w.electron?.ipcRenderer
-}
-
 /** OAuth 流是否可用：远程 web 构建 / preload 缺席时为 false（入口整体不渲染，
  *  而不是渲染一个点了必然报错的按钮）。 */
 export function notionOauthAvailable(): boolean {
   try {
-    return typeof bridge()?.invoke === 'function'
+    return canInvokeElectronIpc()
   } catch {
     return false
   }
 }
 
-function invoke(channel: string, arg?: unknown): Promise<unknown> {
-  const fn = bridge()?.invoke
-  if (typeof fn !== 'function') {
-    return Promise.reject(new Error('notionOauth IPC: preload bridge missing'))
-  }
-  return arg === undefined ? fn(channel) : fn(channel, arg)
-}
-
 export function startNotionOauth(): Promise<NotionOauthStartResult> {
-  return invoke(NOTION_OAUTH_START_CHANNEL) as Promise<NotionOauthStartResult>
+  return invokeIpc(NOTION_OAUTH_START_CHANNEL)
 }
 
 export function cancelNotionOauth(attemptId: string): Promise<void> {
-  return invoke(NOTION_OAUTH_CANCEL_CHANNEL, { attemptId }) as Promise<void>
+  return invokeIpc(NOTION_OAUTH_CANCEL_CHANNEL, { attemptId })
 }
 
 export function listNotionDatabases(attemptId: string): Promise<NotionDbCandidate[]> {
-  return invoke(NOTION_OAUTH_LIST_DATABASES_CHANNEL, { attemptId }) as Promise<NotionDbCandidate[]>
+  return invokeIpc(NOTION_OAUTH_LIST_DATABASES_CHANNEL, { attemptId })
 }
 
 export function selectNotionDatabases(arg: {
@@ -75,29 +52,18 @@ export function selectNotionDatabases(arg: {
   emailDbId: string
   calendarDbId: string
 }): Promise<NotionOauthSelectResult> {
-  return invoke(NOTION_OAUTH_SELECT_DATABASES_CHANNEL, arg) as Promise<NotionOauthSelectResult>
+  return invokeIpc(NOTION_OAUTH_SELECT_DATABASES_CHANNEL, arg)
 }
 
 export function removeNotionConnection(): Promise<NotionOauthRemoveResult> {
-  return invoke(NOTION_OAUTH_REMOVE_CONNECTION_CHANNEL) as Promise<NotionOauthRemoveResult>
+  return invokeIpc(NOTION_OAUTH_REMOVE_CONNECTION_CHANNEL)
 }
 
 /** 订阅 main → renderer 的授权状态推送。返回反订阅函数（preload 缺席时是 no-op）。 */
 export function subscribeNotionOauthStatus(
   handler: (event: NotionOauthStatusEvent) => void
 ): () => void {
-  const b = bridge()
-  const onFn = b?.on
-  if (typeof onFn !== 'function') return () => undefined
-  const wrapped: IpcListener = (_event, ...args) => {
-    const payload = args[0]
-    if (payload && typeof payload === 'object') handler(payload as NotionOauthStatusEvent)
-  }
-  // 🔴 用 on() 返回的 disposer 反订阅（见文件头）；桥接实现没返回时才退回 removeListener。
-  const dispose = onFn.call(b, NOTION_OAUTH_STATUS_CHANNEL, wrapped) as (() => void) | undefined
-  if (typeof dispose === 'function') return dispose
-  return () => {
-    const removeFn = b?.removeListener ?? b?.off
-    if (typeof removeFn === 'function') removeFn.call(b, NOTION_OAUTH_STATUS_CHANNEL, wrapped)
-  }
+  return onIpcEvent(NOTION_OAUTH_STATUS_CHANNEL, (payload) => {
+    if (payload && typeof payload === 'object') handler(payload)
+  })
 }

@@ -12,6 +12,8 @@
 //     outlook_com 排前 = onboarding 主推卡 / 设置面默认序
 //   - 日历能力 Windows 恒隐藏（不论选了哪个 backend，拍板求简）；mac 不变。
 
+import { getElectronPlatform } from '@shared/ipc/client'
+
 /** 邮件 backend 值域 — mirrors config.py MAILAGENT_BACKEND value domain. */
 export type MailBackendKind = 'applescript' | 'davmail' | 'outlook_com'
 
@@ -35,13 +37,10 @@ export function toUiPlatform(p: string | undefined | null): UiPlatform {
   return 'other'
 }
 
-/** 读 preload (@electron-toolkit) 暴露的 `window.electron.process.platform`。
+/** 读 preload (@electron-toolkit) 暴露的平台字符串。
  *  preload 缺席（纯浏览器/node 测试环境）→ 'other'（按非 win 处理，mac 行为零回归）。 */
 export function detectUiPlatform(): UiPlatform {
-  const w = (typeof window === 'undefined' ? undefined : window) as
-    | { electron?: { process?: { platform?: string } } }
-    | undefined
-  return toUiPlatform(w?.electron?.process?.platform)
+  return toUiPlatform(getElectronPlatform())
 }
 
 /** 平台可选 backend 列表（顺序即 UI 展示顺序：首项为主推/默认）。

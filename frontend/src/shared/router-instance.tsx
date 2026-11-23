@@ -75,6 +75,7 @@ import { resolveStaticNavGate } from './navigation/useNavGates'
 // 标签工作区 ↔ 路由双向同步（08-27 P2 Lane W）：boot 恢复 / 标签激活跟路由 / rail 切域收敛标签态。
 import { useTabRouteSync } from './navigation/useTabRouteSync'
 import { useComputerUseActivityBridge } from './hooks/useComputerUseActivityBridge'
+import { onIpcEvent } from './ipc/client'
 import type { DeeplinkTarget } from './lib/deeplink_target'
 import { clampSettingsTab, legacyAnchorForTab, type SettingsTab } from './lib/settingsTabs'
 
@@ -88,22 +89,7 @@ import { clampSettingsTab, legacyAnchorForTab, type SettingsTab } from './lib/se
  */
 function useDeeplinkRouter(): void {
   useEffect(() => {
-    // window.electron 由 preload (@electron-toolkit) 注入; renderer tsconfig 不含其
-    // global d.ts, 跟 ElectronApi.ts 一样 cast 最小 shape.
-    const ipc = (
-      window as unknown as {
-        electron?: {
-          ipcRenderer?: {
-            on(ch: string, fn: (...args: unknown[]) => void): (() => void) | void
-            removeListener?(ch: string, fn: (...args: unknown[]) => void): void
-          }
-        }
-      }
-    ).electron?.ipcRenderer
-    if (!ipc) return
-    // ipcRenderer.on listener 是 (event, ...args); main send 的 target 在 args[1].
-    const handler = (...args: unknown[]): void => {
-      const target = args[1] as DeeplinkTarget
+    return onIpcEvent('mailagent:deeplink', (target: DeeplinkTarget) => {
       if (!target || typeof target !== 'object') return
       // 门控通用解（Step R check ②）：kind 对应 entry 的 gate 在非组件上下文求值 ——
       // calendar 的 Windows 出范围判定（2026-08-13 拍板）由此自动生效，深链静默忽略；
@@ -142,12 +128,7 @@ function useDeeplinkRouter(): void {
           })
           break
       }
-    }
-    // @electron-toolkit ipcRenderer.on 返回 cleanup fn (removeListener wrapper).
-    const off = ipc.on('mailagent:deeplink', handler)
-    return typeof off === 'function'
-      ? off
-      : () => ipc.removeListener?.('mailagent:deeplink', handler)
+    })
   }, [])
 }
 
@@ -166,60 +147,29 @@ function useGeneralAgentMenu(): void {
   useEffect(() => {
     // 目标同侧栏「MailAgent」行 / ⌘K 的通用 agent 行 —— 三处共用 registry 的同一条 entry。
     const entry = navEntry('sessions')
-    const ipc = (
-      window as unknown as {
-        electron?: {
-          ipcRenderer?: {
-            on(ch: string, fn: (...args: unknown[]) => void): (() => void) | void
-            removeListener?(ch: string, fn: (...args: unknown[]) => void): void
-          }
-        }
-      }
-    ).electron?.ipcRenderer
-    if (!ipc) return
-    const handler = (...args: unknown[]): void => {
-      const payload = args[1] as { prompt?: unknown } | undefined
+    return onIpcEvent('mailagent:open-general-agent', (payload) => {
       const prompt =
         payload && typeof payload.prompt === 'string' && payload.prompt.trim().length > 0
           ? payload.prompt.trim()
           : undefined
       navigateToNavEntry(navigate, entry)
       openNewChatTab(prompt)
-    }
-    const off = ipc.on('mailagent:open-general-agent', handler)
-    return typeof off === 'function'
-      ? off
-      : () => ipc.removeListener?.('mailagent:open-general-agent', handler)
+    })
   }, [navigate])
 }
 
 function useTrayNavigation(): void {
   const navigate = useNavigate()
   useEffect(() => {
-    const ipc = (
-      window as unknown as {
-        electron?: {
-          ipcRenderer?: {
-            on(ch: string, fn: (...args: unknown[]) => void): (() => void) | void
-            removeListener?(ch: string, fn: (...args: unknown[]) => void): void
-          }
-        }
-      }
-    ).electron?.ipcRenderer
-    if (!ipc) return
-    const handleToday = (): void => {
+    const offToday = onIpcEvent('mailagent:tray-open-today', () => {
       void navigate({ to: '/today' })
-    }
-    const handleComposeNew = (): void => {
+    })
+    const offCompose = onIpcEvent('mailagent:tray-compose-new', () => {
       openNewCompose()
-    }
-    const offToday = ipc.on('mailagent:tray-open-today', handleToday)
-    const offCompose = ipc.on('mailagent:tray-compose-new', handleComposeNew)
+    })
     return (): void => {
-      if (typeof offToday === 'function') offToday()
-      else ipc.removeListener?.('mailagent:tray-open-today', handleToday)
-      if (typeof offCompose === 'function') offCompose()
-      else ipc.removeListener?.('mailagent:tray-compose-new', handleComposeNew)
+      offToday()
+      offCompose()
     }
   }, [navigate])
 }

@@ -23,8 +23,9 @@
 // `E_AUTOMATION_DENIED` so the renderer can guide them through System
 // Settings → Privacy → Automation.
 
-import { ipcMain } from 'electron'
 import { execa } from 'execa'
+
+import { typedIpcHandle } from '../ipc/typedHandle'
 import { existsSync } from 'fs'
 import { join } from 'path'
 
@@ -345,7 +346,7 @@ async function createDraftViaAppleScript(
 // ---- IPC wiring ------------------------------------------------------------
 
 export function registerDraftHandlers(): void {
-  ipcMain.handle(
+  typedIpcHandle(
     'email:createDraft',
     async (_evt, opts: CreateDraftOpts): Promise<CreateDraftEnvelope> => {
       try {

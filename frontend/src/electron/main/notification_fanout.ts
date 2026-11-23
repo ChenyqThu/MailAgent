@@ -17,7 +17,9 @@
 //    seen set 防同轮重弹。不判 App 前台（macOS 自行降噪）；全吞异常，绝不影响
 //    SSE 桥的其他消费者。
 
-import { BrowserWindow, ipcMain, Notification, shell } from 'electron'
+import { BrowserWindow, Notification, shell } from 'electron'
+
+import { typedIpcHandle } from './ipc/typedHandle'
 
 import { DEFAULT_API_PORT } from '@shared/lib/ports'
 import { onSseEvent } from './events_bridge'
@@ -786,15 +788,17 @@ function sendPermissionAndTestBanner(
 export function registerNotificationSystemHandlers(
   opts?: RegisterNotificationSystemHandlersOptions
 ): void {
-  ipcMain.handle('notifications:systemStatus', async () => resolveStatusSnapshot(opts?.getAuthMeta))
-  ipcMain.handle('notifications:sendTest', async (): Promise<{ ok: boolean; detail?: string }> => {
+  typedIpcHandle('notifications:systemStatus', async () =>
+    resolveStatusSnapshot(opts?.getAuthMeta)
+  )
+  typedIpcHandle('notifications:sendTest', async (): Promise<{ ok: boolean; detail?: string }> => {
     const res = await sendPermissionAndTestBanner(opts, 0)
     return res.detail ? { ok: res.ok, detail: res.detail } : { ok: res.ok }
   })
-  ipcMain.handle('notifications:requestPermission', async () =>
+  typedIpcHandle('notifications:requestPermission', async () =>
     sendPermissionAndTestBanner(opts, 350)
   )
-  ipcMain.handle('notifications:openSystemSettings', async (): Promise<{ ok: boolean }> => {
+  typedIpcHandle('notifications:openSystemSettings', async (): Promise<{ ok: boolean }> => {
     if (process.platform !== 'darwin') return { ok: false }
     try {
       await shell.openExternal(

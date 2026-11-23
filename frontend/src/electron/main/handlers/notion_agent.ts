@@ -13,8 +13,7 @@
 // chat:start) because Electron IPC drops custom Error properties — the
 // renderer recovers `code` from the envelope, not a thrown Error.
 
-import { ipcMain } from 'electron'
-
+import { typedIpcHandle } from '../ipc/typedHandle'
 import {
   listAgents,
   listModels,
@@ -41,15 +40,15 @@ function errEnvelope(err: unknown): { ok: false; code: string; message: string }
 export function registerNotionAgentHandlers(): void {
   // Pure local reads — no throw path, so no envelope. A missing/garbled
   // account file just yields configured:false / [].
-  ipcMain.handle('notionAgent:getConfig', async (): Promise<NotionAgentConfig> => {
+  typedIpcHandle('notionAgent:getConfig', async (): Promise<NotionAgentConfig> => {
     return readNotionAgentConfig()
   })
 
-  ipcMain.handle('notionAgent:listModels', async (): Promise<string[]> => {
+  typedIpcHandle('notionAgent:listModels', async (): Promise<string[]> => {
     return listModels()
   })
 
-  ipcMain.handle('notionAgent:doctor', async (): Promise<Envelope<NotionAgentDoctorCheck[]>> => {
+  typedIpcHandle('notionAgent:doctor', async (): Promise<Envelope<NotionAgentDoctorCheck[]>> => {
     try {
       return { ok: true, data: await runDoctor() }
     } catch (err) {
@@ -57,7 +56,7 @@ export function registerNotionAgentHandlers(): void {
     }
   })
 
-  ipcMain.handle('notionAgent:listAgents', async (): Promise<Envelope<NotionAgentListItem[]>> => {
+  typedIpcHandle('notionAgent:listAgents', async (): Promise<Envelope<NotionAgentListItem[]>> => {
     try {
       return { ok: true, data: await listAgents() }
     } catch (err) {
@@ -65,7 +64,7 @@ export function registerNotionAgentHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  typedIpcHandle(
     'notionAgent:setAgent',
     async (
       _evt,
@@ -88,7 +87,7 @@ export function registerNotionAgentHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  typedIpcHandle(
     'notionAgent:setModel',
     async (_evt, input: { alias?: unknown }): Promise<Envelope<NotionAgentConfig>> => {
       const alias = typeof input?.alias === 'string' ? input.alias.trim() : ''

@@ -14,24 +14,14 @@ import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { APP_CONFIG_QUERY_KEY } from '@shared/hooks/useAppConfig'
+import { onIpcEvent } from '@shared/ipc/client'
 import { API_READY_CHANNEL } from '@shared/lib/ipcChannels'
 import { qk } from '@shared/lib/queryKeys'
 
 export function useApiReadyRefresh(): void {
   const queryClient = useQueryClient()
   useEffect(() => {
-    const ipc = (
-      window as unknown as {
-        electron?: {
-          ipcRenderer?: {
-            on(ch: string, fn: (...args: unknown[]) => void): (() => void) | void
-            removeListener?(ch: string, fn: (...args: unknown[]) => void): void
-          }
-        }
-      }
-    ).electron?.ipcRenderer
-    if (!ipc) return
-    const handler = (): void => {
+    return onIpcEvent(API_READY_CHANNEL, () => {
       // 四族都走 serve-api：工作台 flag（合并后的单 key）+ 事项 + 通讯录 + 文件夹。
       // 🔴 folder 是后补的：本 hook 引入时只盯着当时正在改的三族，而侧边栏文件夹树的
       // whitelist 才是挂载最早、最容易撞上 serve-api 未起的那个 —— 且它一失败整段树就
@@ -40,9 +30,6 @@ export function useApiReadyRefresh(): void {
       void queryClient.invalidateQueries({ queryKey: qk.matters.all() })
       void queryClient.invalidateQueries({ queryKey: qk.contacts.all() })
       void queryClient.invalidateQueries({ queryKey: qk.folder.all() })
-    }
-    // @electron-toolkit ipcRenderer.on 返回 cleanup fn (removeListener wrapper)。
-    const off = ipc.on(API_READY_CHANNEL, handler)
-    return typeof off === 'function' ? off : () => ipc.removeListener?.(API_READY_CHANNEL, handler)
+    })
   }, [queryClient])
 }

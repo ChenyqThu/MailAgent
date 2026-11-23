@@ -9,6 +9,8 @@
 // isExternalNavUrl scheme 白名单, 已含 msteams); 远程 web 无 ipc → window.open
 // https (网页端恒 https).
 
+import { openExternalUrl } from '@shared/ipc/client'
+
 export type MeetingProvider = 'teams' | 'zoom' | 'meet'
 
 export interface MeetingLink {
@@ -85,13 +87,7 @@ export function extractMeetingLink(fields: {
   return null
 }
 
-/** 打开会议链接 — Electron 走 shell:openExternal(deeplink), web 走 window.open(https).
- *  探针照 EmailSourcePanel.openExternal: window.electron 有无即桌面/网页判定. */
+/** 打开会议链接 — Electron 走 shell:openExternal(deeplink), web 走 window.open(https). */
 export function openMeetingLink(link: MeetingLink): void {
-  const w = window as unknown as {
-    electron?: { ipcRenderer?: { invoke?: (c: string, ...a: unknown[]) => Promise<unknown> } }
-  }
-  const invoke = w.electron?.ipcRenderer?.invoke
-  if (invoke) void invoke('shell:openExternal', link.deeplinkUrl)
-  else window.open(link.httpsUrl, '_blank', 'noopener')
+  openExternalUrl(link.deeplinkUrl, link.httpsUrl)
 }

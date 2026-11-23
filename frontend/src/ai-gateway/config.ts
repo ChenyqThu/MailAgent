@@ -43,7 +43,7 @@ import type { ApprovalRunStash } from './approvalStash'
 import type { ActiveRunRegistry } from './activeRuns'
 // 🔴 type-only (erased) — S4 W3 headless custom-agent run. The spec type is the wire contract the
 // gateway pulls from serve-api; config.ts stays type-only so the S4 chunk isn't pulled when off.
-import type { AgentRunSpec } from '@shared/api/types'
+import type { AgentRunSpec, TargetLang, TranslationSegment } from '@shared/api/types'
 // MEDIUM-6 — type-only + from the SDK-free providerRef: providers.ts (six provider SDK imports)
 // must only ever load via the lifecycle's flag-on dynamic import.
 import type { ProviderModelResolver, ProviderProtocol } from './providerRef'
@@ -892,4 +892,25 @@ export interface AiGatewayConfig {
   computerUseEnabled?: boolean
   /** Phase 4 WP-4B — record non-chat auxiliary LLM spend into ai_llm_usage_log. Best-effort, never throws. */
   recordUsageEvent?: (event: GatewayUsageEvent) => void
+  /** Wave 4C — translation body/persistence/profile hooks (serves POST /api/ai/translate/batch). */
+  translate?: TranslateGatewayHooks
+}
+
+export interface TranslateGatewayHooks {
+  /** Fetch raw HTML (or plaintext-converted HTML) for internalId via serve-api. */
+  readBodyHtml: (internalId: number, signal?: AbortSignal) => Promise<string | null>
+  /** Guarded cache upsert via serve-api PUT /api/ai/translation/{internalId}. */
+  saveTranslation: (input: {
+    internalId: number
+    targetLang: TargetLang
+    segments: TranslationSegment[]
+    model: string
+    source: 'on_demand' | 'llm_agent'
+  }) => Promise<{ cacheKept?: boolean; fetchedAt?: number | null }>
+  /** Dynamic per-request config/profile resolvers backed by Electron main settings/keytar. */
+  isProviderRegistryEnabled: () => boolean
+  hasExplicitTranslateProfile: () => Promise<boolean>
+  getTranslateApiKey: () => Promise<string | null>
+  getTranslateBaseUrl: () => string
+  getTranslateModel: () => string
 }

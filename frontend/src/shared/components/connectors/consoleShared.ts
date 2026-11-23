@@ -18,6 +18,7 @@ import type {
   SystemPermissionKind,
   SystemPermissionsStatus
 } from '@shared/api/types'
+import { canInvokeElectronIpc, invokeIpc, openExternalUrl } from '@shared/ipc/client'
 import { SYSTEM_PERMISSIONS_IPC } from '@shared/systemPermissionsIpcContract'
 
 /** 授权回调轮询节拍。服务端 `callback_timeout_seconds`（默认 300s）是上限，到点即放弃。 */
@@ -44,14 +45,9 @@ export function isWebBuild(): boolean {
 }
 
 /** 外链走仓内既有安全方式：Electron 经 main 的 `shell:openExternal` IPC 打系统浏览器，
- *  web 退 window.open。抄 EmailSourcePanel.openExternal 的同一探针。 */
+ *  web 退 window.open。 */
 export function openExternal(url: string): void {
-  const w = window as unknown as {
-    electron?: { ipcRenderer?: { invoke?: (c: string, ...a: unknown[]) => Promise<unknown> } }
-  }
-  const invoke = w.electron?.ipcRenderer?.invoke
-  if (invoke) void invoke('shell:openExternal', url)
-  else window.open(url, '_blank', 'noopener')
+  openExternalUrl(url)
 }
 
 /** sync 统计的收窄读取。`ConnectorSyncResult` 的统计键**有意**是 `unknown`（服务端可以加
@@ -111,17 +107,6 @@ export function resolveManagedBrowserHeadless(source: {
   return true
 }
 
-type ElectronInvoke = (channel: string, ...args: unknown[]) => Promise<unknown>
-
-function getElectronInvoke(): ElectronInvoke | null {
-  if (typeof window === 'undefined') return null
-  const w = window as unknown as {
-    electron?: { ipcRenderer?: { invoke?: ElectronInvoke } }
-  }
-  const invoke = w.electron?.ipcRenderer?.invoke
-  return typeof invoke === 'function' ? invoke.bind(w.electron?.ipcRenderer) : null
-}
-
 /** 优先走 Electron 主进程 TCC 权威探针；无 IPC 时回退到 Python `/api/connector/system-permissions`。 */
 export async function fetchSystemPermissions(
   connectorApi: ConnectorApi
@@ -134,10 +119,9 @@ export async function fetchSystemPermissions(
       source: 'backend'
     }
   }
-  const invoke = getElectronInvoke()
-  if (invoke) {
+  if (canInvokeElectronIpc()) {
     try {
-      const result = (await invoke(SYSTEM_PERMISSIONS_IPC.check)) as SystemPermissionsStatus | null
+      const result = await invokeIpc(SYSTEM_PERMISSIONS_IPC.check)
       if (result && typeof result.accessibility === 'string') {
         return result
       }
@@ -160,13 +144,9 @@ export async function openSystemPermissionPane(
   if (isWebBuild()) {
     return { ok: false, kind, opened: false }
   }
-  const invoke = getElectronInvoke()
-  if (invoke) {
+  if (canInvokeElectronIpc()) {
     try {
-      const result = (await invoke(
-        SYSTEM_PERMISSIONS_IPC.open,
-        kind
-      )) as OpenSystemPermissionResult | null
+      const result = await invokeIpc(SYSTEM_PERMISSIONS_IPC.open, kind)
       if (result && result.ok) {
         return result
       }
@@ -188,13 +168,9 @@ export async function requestSystemPermission(
   if (isWebBuild()) {
     return { ok: false, kind, prompted: false, opened: false }
   }
-  const invoke = getElectronInvoke()
-  if (invoke) {
+  if (canInvokeElectronIpc()) {
     try {
-      const result = (await invoke(
-        SYSTEM_PERMISSIONS_IPC.request,
-        kind
-      )) as RequestSystemPermissionResult | null
+      const result = await invokeIpc(SYSTEM_PERMISSIONS_IPC.request, kind)
       if (result && result.ok) {
         return result
       }

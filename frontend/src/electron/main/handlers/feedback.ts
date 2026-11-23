@@ -14,9 +14,11 @@
 // 🔴 失败可见是本模块的第一职责：submit 失败一律**抛**（renderer 弹「没发出去」+ 降级
 //    入口），并且失败那条也进台账 —— 「界面说成功、其实没发出去」是这批最不能出的错。
 
-import { app, ipcMain, shell } from 'electron'
+import { app, shell } from 'electron'
 import { readFileSync, statSync } from 'fs'
 import { basename } from 'path'
+
+import { typedIpcHandle } from '../ipc/typedHandle'
 
 import {
   appendFeedbackLog,
@@ -162,21 +164,21 @@ export function getFeedbackLog(): FeedbackLogEntry[] {
 export function registerFeedbackHandlers(): void {
   // 🔴 界面上那一行「自动带上」必须与真正发出去的那一行**由同一个函数算出来**，否则就成了
   // 「显示的和发的不一致」—— renderer 自己拼 version/platform 迟早对不上。
-  ipcMain.handle(
+  typedIpcHandle(
     'feedback:context',
     async (_evt, route?: string): Promise<string> => feedbackContextLine(route)
   )
-  ipcMain.handle(
+  typedIpcHandle(
     'feedback:diagnostics',
     async (): Promise<DiagnosticsResult> => runBuildDiagnostics()
   )
-  ipcMain.handle(
+  typedIpcHandle(
     'feedback:submit',
     async (_evt, req: FeedbackSubmitRequest): Promise<{ submissionBlockId: string }> =>
       runSubmitFeedback(req)
   )
-  ipcMain.handle('feedback:recent', async (): Promise<FeedbackLogEntry[]> => getFeedbackLog())
-  ipcMain.handle('feedback:openForm', async (): Promise<void> => {
+  typedIpcHandle('feedback:recent', async (): Promise<FeedbackLogEntry[]> => getFeedbackLog())
+  typedIpcHandle('feedback:openForm', async (): Promise<void> => {
     await shell.openExternal(FEEDBACK_FORM_URL)
   })
 }

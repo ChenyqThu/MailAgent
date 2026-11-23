@@ -37,9 +37,11 @@
 // The existing 10s startup check + Settings manual check/download/install are
 // UNCHANGED (zero regression) — the flag does NOT gate them.
 
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import type { ProgressInfo, UpdateInfo } from 'electron-updater'
+
+import { typedIpcHandle } from '../ipc/typedHandle'
 
 // feat/auto-update gap A — static import is SAFE: `updater → settings` is
 // acyclic (settings.ts never imports updater), and settings.ts's transitive
@@ -444,10 +446,10 @@ export function registerUpdaterHandlers(opts?: {
   const currentVersion = opts?.currentVersion ?? app.getVersion()
   _status = { ..._status, currentVersion, updatedAt: Date.now() }
 
-  ipcMain.handle('updater:status', async (): Promise<UpdaterStatus> => getStatus())
-  ipcMain.handle('updater:check', async (): Promise<UpdaterStatus> => check())
-  ipcMain.handle('updater:download', async (): Promise<UpdaterStatus> => download())
-  ipcMain.handle('updater:quitAndInstall', async (): Promise<void> => {
+  typedIpcHandle('updater:status', async (): Promise<UpdaterStatus> => getStatus())
+  typedIpcHandle('updater:check', async (): Promise<UpdaterStatus> => check())
+  typedIpcHandle('updater:download', async (): Promise<UpdaterStatus> => download())
+  typedIpcHandle('updater:quitAndInstall', async (): Promise<void> => {
     quitAndInstall()
   })
 

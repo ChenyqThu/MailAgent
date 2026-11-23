@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'vitest'
 
 import { MAX_LEN } from '../../src/shared/lib/translation_blocks'
-import { extractBlocks } from '../../src/electron/main/lib/html-extractor'
+import { extractBlocks } from '../../src/ai-gateway/lib/htmlExtractor'
 
 describe('extractBlocks', () => {
   test('returns empty for empty / non-string input', () => {

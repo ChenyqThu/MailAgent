@@ -23,7 +23,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { randomBytes, timingSafeEqual } from 'crypto'
 
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, shell } from 'electron'
+
+import { typedIpcHandle } from './ipc/typedHandle'
 
 import {
   classifyDataSource,
@@ -953,16 +955,19 @@ export function removeConnection(): RemoveResult {
 // ---- IPC 注册 -------------------------------------------------------------
 
 export function registerNotionOauthHandlers(): void {
-  ipcMain.handle(NOTION_OAUTH_START_CHANNEL, async (): Promise<StartResult> => startNotionOauth())
-  ipcMain.handle(NOTION_OAUTH_CANCEL_CHANNEL, (_evt, arg: unknown): void => {
+  typedIpcHandle(NOTION_OAUTH_START_CHANNEL, async (): Promise<StartResult> => startNotionOauth())
+  typedIpcHandle(NOTION_OAUTH_CANCEL_CHANNEL, (_evt, arg: unknown): void => {
     const attemptId = (arg as { attemptId?: unknown } | null)?.attemptId
     if (typeof attemptId === 'string') cancelNotionOauth(attemptId)
   })
-  ipcMain.handle(NOTION_OAUTH_LIST_DATABASES_CHANNEL, (_evt, arg: unknown): NotionDbCandidate[] => {
-    const attemptId = (arg as { attemptId?: unknown } | null)?.attemptId
-    return typeof attemptId === 'string' ? listDatabases(attemptId) : []
-  })
-  ipcMain.handle(
+  typedIpcHandle(
+    NOTION_OAUTH_LIST_DATABASES_CHANNEL,
+    (_evt, arg: unknown): NotionDbCandidate[] => {
+      const attemptId = (arg as { attemptId?: unknown } | null)?.attemptId
+      return typeof attemptId === 'string' ? listDatabases(attemptId) : []
+    }
+  )
+  typedIpcHandle(
     NOTION_OAUTH_SELECT_DATABASES_CHANNEL,
     async (_evt, arg: unknown): Promise<SelectResult> => {
       const a = (arg ?? {}) as { attemptId?: unknown; emailDbId?: unknown; calendarDbId?: unknown }
@@ -976,7 +981,7 @@ export function registerNotionOauthHandlers(): void {
       return selectDatabases(a.attemptId, a.emailDbId, a.calendarDbId)
     }
   )
-  ipcMain.handle(NOTION_OAUTH_REMOVE_CONNECTION_CHANNEL, (): RemoveResult => removeConnection())
+  typedIpcHandle(NOTION_OAUTH_REMOVE_CONNECTION_CHANNEL, (): RemoveResult => removeConnection())
 
   // app quit → 清干净（server / state / token / 候选列表）。
   app.on('before-quit', () => {

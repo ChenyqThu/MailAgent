@@ -40,6 +40,7 @@ import {
   handleSearchAgent,
   handleTitle
 } from './routes/agentRoutes'
+import { handleTranslateBatch } from './routes/translateRoutes'
 
 export { speakAsGroupMember }
 
@@ -337,6 +338,12 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     // Phase 4 WP-4C — Internal loopback LLM completion endpoint for Python background workers.
     if (method === 'POST' && path === '/api/ai/internal/complete') {
       dispatch('/api/ai/internal/complete', res, handleInternalComplete(req, res, cfg))
+      return
+    }
+
+    // Wave 4C — Batch email translation (moved from Electron IPC to gateway + serve-api).
+    if (method === 'POST' && path === '/api/ai/translate/batch') {
+      dispatch('/api/ai/translate/batch', res, handleTranslateBatch(req, res, cfg))
       return
     }
 

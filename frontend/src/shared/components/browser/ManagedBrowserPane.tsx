@@ -38,6 +38,7 @@ import type {
   EmbeddedBrowserState
 } from '@shared/embeddedBrowserContract'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { canInvokeElectronIpc, invokeIpc, openExternalUrl } from '@shared/ipc/client'
 import { resolveBrowserLiveWsUrl } from '@shared/lib/apiBaseUrl'
 import { cn } from '@shared/lib/cn'
 import { useManagedBrowserUi } from '@shared/state/managed-browser-ui'
@@ -63,10 +64,6 @@ interface DrawGeometry {
   dh: number
   rw: number
   rh: number
-}
-
-interface ElectronIpcInvoker {
-  invoke?: (channel: string, ...args: unknown[]) => Promise<unknown>
 }
 
 const CONTROL_KEYS = new Set([
@@ -702,13 +699,7 @@ export function ManagedBrowserPane({
       handleLaunchExternalChrome()
       return
     }
-    const ipc = (window as unknown as { electron?: { ipcRenderer?: ElectronIpcInvoker } }).electron
-      ?.ipcRenderer
-    if (ipc?.invoke) {
-      void ipc.invoke('shell:openExternal', url)
-      return
-    }
-    window.open(url, '_blank', 'noopener,noreferrer')
+    openExternalUrl(url)
   }
 
   const handleNavigateSubmit = (e: FormEvent<HTMLFormElement>): void => {
@@ -749,11 +740,9 @@ export function ManagedBrowserPane({
   }
 
   const handleStopAgent = (): void => {
-    const ipc = (window as unknown as { electron?: { ipcRenderer?: ElectronIpcInvoker } }).electron
-      ?.ipcRenderer
-    if (!ipc?.invoke || stoppingAgent) return
+    if (!canInvokeElectronIpc() || stoppingAgent) return
     setStoppingAgent(true)
-    void ipc.invoke(COMPUTER_USE_IPC.stopActive).finally(() => {
+    void invokeIpc(COMPUTER_USE_IPC.stopActive).finally(() => {
       setStoppingAgent(false)
     })
   }

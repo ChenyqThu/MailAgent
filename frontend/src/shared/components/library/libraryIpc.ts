@@ -2,27 +2,28 @@
 // 只递「哪个文件」，绝对路径全程留在主进程；非 Electron（web 构建 / 测试）诚实返回不支持。
 
 import type { LibraryFile } from '@shared/api/types/library'
+import { canInvokeElectronIpc, invokeIpc } from '@shared/ipc/client'
 import { readableIpcError } from '@shared/lib/ipcErrors'
 import {
   LIBRARY_IPC,
   type LibraryOpenResult,
-  type LibraryOpenTarget,
-  type LibraryUsageResult
+  type LibraryOpenTarget
 } from '@shared/libraryIpcContract'
 
-type Invoke = (channel: string, ...args: unknown[]) => Promise<unknown>
+type LibraryTargetChannel =
+  | typeof LIBRARY_IPC.openPath
+  | typeof LIBRARY_IPC.showInFolder
+  | typeof LIBRARY_IPC.trashItem
 
-function ipcInvoke(): Invoke | null {
-  const w = window as unknown as { electron?: { ipcRenderer?: { invoke?: Invoke } } }
-  const invoke = w.electron?.ipcRenderer?.invoke
-  return typeof invoke === 'function' ? invoke.bind(w.electron?.ipcRenderer) : null
-}
-
-async function call(channel: string, target: LibraryOpenTarget): Promise<LibraryOpenResult> {
-  const invoke = ipcInvoke()
-  if (invoke === null) return { ok: false, code: 'E_UNSUPPORTED', message: 'desktop only' }
+async function call(
+  channel: LibraryTargetChannel,
+  target: LibraryOpenTarget
+): Promise<LibraryOpenResult> {
+  if (!canInvokeElectronIpc()) {
+    return { ok: false, code: 'E_UNSUPPORTED', message: 'desktop only' }
+  }
   try {
-    return (await invoke(channel, target)) as LibraryOpenResult
+    return await invokeIpc(channel, target)
   } catch (err) {
     return { ok: false, code: 'E_INTERNAL', message: readableIpcError(err) }
   }
@@ -44,10 +45,9 @@ export function trashLibraryTarget(target: LibraryOpenTarget): Promise<LibraryOp
 
 /** 设置页「库占用」。非 Electron（web 构建 / 测试）恒 0 —— 那里没有本机库可量。 */
 export async function libraryUsageBytes(): Promise<number> {
-  const invoke = ipcInvoke()
-  if (invoke === null) return 0
+  if (!canInvokeElectronIpc()) return 0
   try {
-    return ((await invoke(LIBRARY_IPC.usage)) as LibraryUsageResult).bytes
+    return (await invokeIpc(LIBRARY_IPC.usage)).bytes
   } catch {
     return 0
   }

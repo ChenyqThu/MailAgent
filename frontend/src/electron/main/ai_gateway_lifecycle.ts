@@ -21,6 +21,8 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 
+import { typedIpcHandle } from './ipc/typedHandle'
+
 import { ActiveRunRegistry } from '../../ai-gateway/activeRuns'
 import { ApprovalRunStash, DEFAULT_STASH_TTL_MS } from '../../ai-gateway/approvalStash'
 import { type CompactPersistence } from '../../ai-gateway/compact'
@@ -33,9 +35,11 @@ import {
   NORMAL_APPROVAL_TTL_MS
 } from '../../ai-gateway/security/approval'
 import { startAiGatewayServer, type AiGatewayHandle } from '../../ai-gateway/server'
+import { abortAllTranslations } from '../../ai-gateway/routes/translateRoutes'
 import { classOfTool } from '../../ai-gateway/tools/policy'
 import { type ProviderModelResolver } from '../../ai-gateway/providerRef'
 import type { ComputerUseActivityState } from '../../shared/computerUseOverlayContract'
+import { plaintextToHtml } from '../../shared/lib/plaintext_html'
 import {
   buildGroupGatewayHooks,
   computeJudgeScopeStale,
@@ -70,7 +74,15 @@ import {
   getLlmProviderModelResolver,
   isLlmProviderRegistryEnabled
 } from './llm_provider_resolver'
-import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from './llm_settings'
+import {
+  getLlmApiKey,
+  getLlmBaseUrl,
+  getLlmModel,
+  getLlmTranslateApiKey,
+  getLlmTranslateBaseUrl,
+  getLlmTranslateModel,
+  hasLlmTranslateKeytarKey
+} from './llm_settings'
 import { getLocalApiToken } from './local_token'
 import { startMainModelCatalogUpdates } from './model_catalog_updates'
 
@@ -113,7 +125,7 @@ function isGroupForeground(groupId: number, threadId: number | null): boolean {
  *  removeHandler 防「second handler」抛错。 */
 function registerGroupForegroundHandler(): void {
   ipcMain.removeHandler('chat:group-foreground')
-  ipcMain.handle('chat:group-foreground', (_evt, payload: unknown) => {
+  typedIpcHandle('chat:group-foreground', (_evt, payload: unknown) => {
     const body =
       payload != null && typeof payload === 'object'
         ? (payload as { groupId?: unknown; threadId?: unknown })
@@ -513,7 +525,35 @@ export async function startEmbeddedAiGateway(
     imFeishuEnabled,
     toolSearchEnabled,
     computerUseEnabled,
-    localApiToken: getLocalApiToken()
+    localApiToken: getLocalApiToken(),
+    translate: {
+      readBodyHtml: async (internalId: number, signal?: AbortSignal) => {
+        const htmlRes = await domain.getEmailBody(internalId, signal, 'html')
+        if (typeof htmlRes?.content === 'string' && htmlRes.content.length > 0) {
+          return htmlRes.content
+        }
+        const mdRes = await domain.getEmailBody(internalId, signal, 'markdown')
+        if (typeof mdRes?.content === 'string' && mdRes.content.length > 0) {
+          const html = plaintextToHtml(mdRes.content)
+          return html.length > 0 ? html : null
+        }
+        return null
+      },
+      saveTranslation: (input) =>
+        domain.saveTranslation(input.internalId, {
+          targetLang: input.targetLang,
+          segments: input.segments,
+          model: input.model,
+          source: input.source
+        }),
+      isProviderRegistryEnabled: isLlmProviderRegistryEnabled,
+      hasExplicitTranslateProfile: async () =>
+        Boolean(process.env['LLM_TRANSLATE_BASE_URL'] || process.env['LLM_TRANSLATE_API_KEY']) ||
+        hasLlmTranslateKeytarKey(),
+      getTranslateApiKey: getLlmTranslateApiKey,
+      getTranslateBaseUrl: getLlmTranslateBaseUrl,
+      getTranslateModel: getLlmTranslateModel
+    }
   }
 
   onChatRunSettledRef.current = wirePostTurnAndQueuedInput({
@@ -561,6 +601,7 @@ const GATEWAY_CLOSE_TIMEOUT_MS = 3_000
 export async function stopEmbeddedAiGateway(): Promise<void> {
   stopModelCatalogUpdates?.()
   stopModelCatalogUpdates = null
+  abortAllTranslations()
   const handle = _handle
   _handle = null
   if (!handle) return

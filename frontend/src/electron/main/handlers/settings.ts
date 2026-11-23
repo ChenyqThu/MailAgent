@@ -13,9 +13,11 @@
 // Theme mode / accent stay in `appearance.ts` (legacy + bootNativeTheme
 // requires read at boot); we keep that file's surface unchanged.
 
-import { app, dialog, ipcMain } from 'electron'
+import { app, dialog } from 'electron'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
+
+import { typedIpcHandle } from '../ipc/typedHandle'
 
 import {
   clearCliApiKey,
@@ -37,7 +39,7 @@ import { isSafeUserPath } from '../lib/path-guard'
 // USER_EMAIL reader below used to keep its own candidate list; now it
 // resolves the same file that env:* IPC and the Python CLI consume.
 import { resolveEnvPath } from '../lib/env-path'
-import type { LlmSelfTestData } from '@shared/api/types'
+import type { LlmSelfTestData, PersistentSettings as SharedPersistentSettings } from '@shared/api/types'
 import { daemonRead } from '../daemon_api'
 import { registerSystemPermissionsHandlers } from './system_permissions'
 
@@ -349,11 +351,11 @@ async function pingCustomApi(): Promise<PingResult> {
 
 export function registerSettingsHandlers(): void {
   // ---- secrets (status only, never values) -------------------------------
-  ipcMain.handle('settings:secrets:status', async (): Promise<SecretsStatus> => {
+  typedIpcHandle('settings:secrets:status', async (): Promise<SecretsStatus> => {
     return getSecretsStatus()
   })
 
-  ipcMain.handle(
+  typedIpcHandle(
     'settings:secrets:set',
     async (_evt, req: SecretWriteRequest): Promise<SecretsStatus> => {
       if (!req || typeof req.value !== 'string') {
@@ -379,7 +381,7 @@ export function registerSettingsHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  typedIpcHandle(
     'settings:secrets:clear',
     async (_evt, slot: SecretWriteRequest['secret']): Promise<SecretsStatus> => {
       switch (slot) {
@@ -403,16 +405,16 @@ export function registerSettingsHandlers(): void {
   )
 
   // ---- persistent settings -----------------------------------------------
-  ipcMain.handle('settings:get', async (): Promise<PersistentSettings> => readSettings())
+  typedIpcHandle('settings:get', async (): Promise<PersistentSettings> => readSettings())
 
-  ipcMain.handle(
+  typedIpcHandle(
     'settings:set',
-    async (_evt, partial: Partial<PersistentSettings>): Promise<PersistentSettings> =>
-      updateSettingsPatch(partial ?? {})
+    async (_evt, partial: Partial<SharedPersistentSettings>): Promise<PersistentSettings> =>
+      updateSettingsPatch((partial ?? {}) as Partial<PersistentSettings>)
   )
 
   // ---- folder picker dialogs --------------------------------------------
-  ipcMain.handle('settings:pickFolder', async (_evt, title?: string): Promise<string | null> => {
+  typedIpcHandle('settings:pickFolder', async (_evt, title?: string): Promise<string | null> => {
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
       title: typeof title === 'string' && title.length > 0 ? title : 'Choose folder'
@@ -422,8 +424,8 @@ export function registerSettingsHandlers(): void {
   })
 
   // ---- secret ping tests -------------------------------------------------
-  ipcMain.handle('settings:test:llm', async (): Promise<PingResult> => pingLlmEndpoint())
-  ipcMain.handle('settings:test:customApi', async (): Promise<PingResult> => pingCustomApi())
+  typedIpcHandle('settings:test:llm', async (): Promise<PingResult> => pingLlmEndpoint())
+  typedIpcHandle('settings:test:customApi', async (): Promise<PingResult> => pingCustomApi())
 
   // ---- Wave 3: macOS TCC probe & System Settings deep-links --------------
   registerSystemPermissionsHandlers()

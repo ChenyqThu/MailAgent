@@ -13,8 +13,9 @@
 // / getLlmModel）。无 key → 返回结构化 error（前端提示「请先在设置配置 LLM」），
 // 永不抛到 IPC 边界外。
 
-import { ipcMain } from 'electron'
 import { generateText } from 'ai'
+
+import { typedIpcHandle } from '../ipc/typedHandle'
 
 import {
   isPrivacyMaskError,
@@ -343,7 +344,7 @@ export async function nlToDsl(nl: string): Promise<NlToDslResult> {
 }
 
 export function registerNlSearchHandlers(): void {
-  ipcMain.handle('email:nlToDsl', async (_evt, nl: unknown): Promise<NlToDslResult> => {
+  typedIpcHandle('email:nlToDsl', async (_evt, nl: unknown): Promise<NlToDslResult> => {
     return nlToDsl(typeof nl === 'string' ? nl : '')
   })
 }

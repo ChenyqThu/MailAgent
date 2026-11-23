@@ -1,12 +1,13 @@
 // Native-only admin IPC handlers: local SQLite path resolution and OS diagnostics zip export.
 // Health/stats/dead-letter/davmail-health/system-alerts route directly to loopback serve-api via HttpApi.admin.
 
-import { app, dialog, ipcMain } from 'electron'
+import { app, dialog } from 'electron'
 import { copyFileSync, rmSync } from 'fs'
 import { basename, dirname } from 'path'
 
 import { callCli } from '../cli_runner'
 import { resolveDbPath } from '../db'
+import { typedIpcHandle } from '../ipc/typedHandle'
 
 const DIAGNOSTICS_TIMEOUT_MS = 180_000
 
@@ -77,8 +78,8 @@ export async function runExportDiagnostics(): Promise<ExportDiagnosticsResult> {
 }
 
 export function registerAdminHandlers(): void {
-  ipcMain.handle('admin:dbPath', (): string => resolveDbPath())
-  ipcMain.handle(
+  typedIpcHandle('admin:dbPath', (): string => resolveDbPath())
+  typedIpcHandle(
     'admin:exportDiagnostics',
     async (): Promise<ExportDiagnosticsResult> => runExportDiagnostics()
   )

@@ -18,8 +18,9 @@
 // 把 .env 截断成半个文件. Tmp file 落在 `.env` 同目录避免 cross-device rename
 // 失败 (Linux tmpfs / Mac /tmp 是不同 fs).
 
-import { ipcMain } from 'electron'
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'fs'
+
+import { typedIpcHandle } from '../ipc/typedHandle'
 
 import { mergeEnv, parseEnv, serializeEnv, toRecord } from '../lib/env-parser'
 import {
@@ -212,9 +213,9 @@ export function writePatch(patch: Record<string, string | null>): EnvSetResult {
 }
 
 export function registerEnvHandlers(): void {
-  ipcMain.handle('env:get', async (): Promise<EnvSnapshot> => readSnapshot())
+  typedIpcHandle('env:get', async (): Promise<EnvSnapshot> => readSnapshot())
 
-  ipcMain.handle(
+  typedIpcHandle(
     'env:set',
     async (_event, patch: Record<string, string | null>): Promise<EnvSetResult> => {
       if (patch === null || typeof patch !== 'object') {

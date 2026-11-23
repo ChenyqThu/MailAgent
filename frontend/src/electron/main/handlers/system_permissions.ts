@@ -5,7 +5,9 @@
 // `systemPreferences` 比子进程里的 ctypes 探针更权威。非 Electron / 单测环境仍退回
 // Python `/api/connector/system-permissions`。
 
-import { desktopCapturer, ipcMain, shell, systemPreferences } from 'electron'
+import { desktopCapturer, shell, systemPreferences } from 'electron'
+
+import { typedIpcHandle } from '../ipc/typedHandle'
 
 import {
   SYSTEM_PERMISSIONS_IPC,
@@ -176,13 +178,16 @@ export async function requestSystemPermissionSettings(
 
 /** 注册系统权限查询与跳转 System Settings IPC（由 `registerSettingsHandlers` 接入启动流）。 */
 export function registerSystemPermissionsHandlers(): void {
-  ipcMain.handle(SYSTEM_PERMISSIONS_IPC.check, (): SystemPermissionsStatus => probeSystemPermissions())
-  ipcMain.handle(
+  typedIpcHandle(
+    SYSTEM_PERMISSIONS_IPC.check,
+    (): SystemPermissionsStatus => probeSystemPermissions()
+  )
+  typedIpcHandle(
     SYSTEM_PERMISSIONS_IPC.open,
     (_event, kind: unknown): Promise<OpenSystemPermissionResult> =>
       openSystemPermissionSettings(kind)
   )
-  ipcMain.handle(
+  typedIpcHandle(
     SYSTEM_PERMISSIONS_IPC.request,
     (_event, kind: unknown): Promise<RequestSystemPermissionResult> =>
       requestSystemPermissionSettings(kind)

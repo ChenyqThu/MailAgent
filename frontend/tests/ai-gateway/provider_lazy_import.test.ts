@@ -31,7 +31,7 @@ const ALWAYS_LOADED = [
   'ai-gateway/config.ts',
   'electron/main/ai_gateway_lifecycle.ts',
   'electron/main/llm_provider_resolver.ts',
-  'electron/main/handlers/translate.ts',
+  'ai-gateway/routes/translateRoutes.ts',
   'electron/main/handlers/nl_search.ts'
 ]
 
@@ -56,7 +56,7 @@ describe('provider SDK lazy-import split (MEDIUM-6)', () => {
     expect(source).toContain("await import('../../ai-gateway/providers')")
   })
 
-  it.each(['electron/main/handlers/translate.ts', 'electron/main/handlers/nl_search.ts'])(
+  it.each(['electron/main/handlers/nl_search.ts'])(
     '%s delegates registry loading to the shared resolver',
     (rel) => {
       const source = read(rel)
@@ -64,6 +64,13 @@ describe('provider SDK lazy-import split (MEDIUM-6)', () => {
       expect(source).toContain("from '../llm_provider_resolver'")
     }
   )
+
+  it('ai-gateway/routes/translateRoutes.ts stays decoupled from providers.ts and electron/main', () => {
+    const source = read('ai-gateway/routes/translateRoutes.ts')
+    expect(importStatements(source, /\/providers$/)).toEqual([])
+    expect(source).not.toContain('import(')
+    expect(source).not.toContain('electron/main')
+  })
 
   it('providerRef.ts stays SDK-free (type-only imports exclusively)', () => {
     const source = read('ai-gateway/providerRef.ts')

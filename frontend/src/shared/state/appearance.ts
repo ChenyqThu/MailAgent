@@ -4,6 +4,8 @@
 
 import { create } from 'zustand'
 
+import { onIpcEvent, sendIpc } from '@shared/ipc/client'
+
 export type ThemeMode = 'system' | 'dark' | 'light'
 export type AccentId =
   | 'coral'
@@ -374,16 +376,8 @@ export function applyResolvedTheme(): void {
       // resolvedTheme, 不重放的话「暗色调到 0.6 → 切亮色」会停在 0.6 漏过护栏。
       const { glassMood, glassKnobs } = useAppearance.getState()
       applyGlass(glassMood, glassKnobs)
-      // Electron IPC broadcast (no-op in Web build)
-      // `@electron-toolkit/preload`'s electronAPI exposes `ipcRenderer.send`,
-      // NOT `electron.send` directly. Sprint 1 had this typo'd — it never fired
-      // because Sprint 1 didn't really run the app; Sprint 2 surfaced it as
-      // "w.electron?.send is not a function" crashing the entire renderer tree.
-      const w = window as unknown as {
-        electron?: { ipcRenderer?: { send: (ch: string, v: unknown) => void } }
-      }
-      w.electron?.ipcRenderer?.send('appearance:theme', resolved)
-      w.electron?.ipcRenderer?.send('appearance:nativeTheme', themeMode)
+      sendIpc('appearance:theme', resolved)
+      sendIpc('appearance:nativeTheme', themeMode)
     }
 
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -404,10 +398,7 @@ export function applyAccent(accent: AccentId): void {
   const root = document.documentElement
   if (accent === 'coral') root.removeAttribute('data-accent')
   else root.setAttribute('data-accent', accent)
-  const w = window as unknown as {
-    electron?: { ipcRenderer?: { send: (ch: string, v: unknown) => void } }
-  }
-  w.electron?.ipcRenderer?.send('appearance:accent', accent)
+  sendIpc('appearance:accent', accent)
 }
 
 export function applySurface(surface: SurfaceStyle): void {
@@ -416,11 +407,8 @@ export function applySurface(surface: SurfaceStyle): void {
   else root.setAttribute('data-surface', surface)
   // 主题 v2 — 联动原生材质 (solid=关 vibrancy)。main 的 registerSurfaceIpc
   // 处理后回写 appearance:vibrancyState → data-vib (见 bootAppearance)。
-  // web build / 测试环境 electron 缺位 → optional chain 自然 no-op。
-  const w = window as unknown as {
-    electron?: { ipcRenderer?: { send: (ch: string, v: unknown) => void } }
-  }
-  w.electron?.ipcRenderer?.send('appearance:surface', surface)
+  // web build / 测试环境 electron 缺位 → no-op。
+  sendIpc('appearance:surface', surface)
 }
 
 // 主题 v2 — 玻璃气质 + 高级调节落 DOM。覆写以 inline CSS 变量盖在
@@ -472,12 +460,7 @@ export function bootAppearance(): void {
   // solid / Linux / Win10 = off)。CSS 以 :root[data-vib='off'] 切到
   // --wp-fallback 窗内自绘回退。App 生命周期单订阅, 不退订 (同窗口共存亡);
   // 注册发生在 applySurface() 发出请求之后、main 异步回包到达之前, 不丢首包。
-  const w = window as unknown as {
-    electron?: {
-      ipcRenderer?: { on?: (ch: string, listener: (...args: unknown[]) => void) => void }
-    }
-  }
-  w.electron?.ipcRenderer?.on?.('appearance:vibrancyState', (_evt: unknown, active: unknown) => {
+  onIpcEvent('appearance:vibrancyState', (active) => {
     document.documentElement.setAttribute('data-vib', active ? 'on' : 'off')
   })
 }

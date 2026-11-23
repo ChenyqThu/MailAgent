@@ -9,10 +9,12 @@
 // --wp-fallback 自绘回退)。surface 同时持久化到 appearance.json, 让下次
 // createWindow 的构造参数 (vibrancy/backgroundColor) 首帧就正确, 防闪。
 
-import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron'
+import { app, BrowserWindow, nativeTheme } from 'electron'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { release } from 'os'
 import { join } from 'path'
+
+import { typedIpcOn } from './ipc/typedHandle'
 
 type ThemeMode = 'system' | 'dark' | 'light'
 type SurfaceStyle = 'frosted' | 'solid'
@@ -120,7 +122,7 @@ export function applyNativeSurface(win: BrowserWindow, surface: SurfaceStyle): v
 }
 
 export function registerAppearanceIpc(): void {
-  ipcMain.on('appearance:nativeTheme', (_evt, mode: ThemeMode) => {
+  typedIpcOn('appearance:nativeTheme', (_evt, mode: ThemeMode) => {
     if (mode !== 'system' && mode !== 'dark' && mode !== 'light') return
     nativeTheme.themeSource = mode
     writeSettings({ themeMode: mode })
@@ -128,7 +130,7 @@ export function registerAppearanceIpc(): void {
 
   // 主题 v2 — renderer applySurface 的原生材质腿。按 sender 定位窗口
   // (主窗 / popout 各自独立), 持久化后应用 + 回写 vibrancyState。
-  ipcMain.on('appearance:surface', (evt, surface: unknown) => {
+  typedIpcOn('appearance:surface', (evt, surface: unknown) => {
     if (surface !== 'frosted' && surface !== 'solid') return
     writeSettings({ surface })
     const win = BrowserWindow.fromWebContents(evt.sender)
@@ -138,10 +140,10 @@ export function registerAppearanceIpc(): void {
   // appearance:theme and appearance:accent are renderer→main broadcasts that
   // Island plugin forwarding will hook into (REVIEW-LOG M-01). Sprint 0 just
   // sinks them so the renderer's `window.electron.send(...)` does not warn.
-  ipcMain.on('appearance:theme', () => {
+  typedIpcOn('appearance:theme', () => {
     /* Sprint 0 sink; Island Sprint 2 will forward to plugin */
   })
-  ipcMain.on('appearance:accent', () => {
+  typedIpcOn('appearance:accent', () => {
     /* Sprint 0 sink */
   })
 }

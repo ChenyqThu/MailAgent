@@ -16,6 +16,8 @@
 
 import { create } from 'zustand'
 
+import { canSendElectronIpc } from '@shared/ipc/client'
+
 /** 轻窗装的是什么。kind 决定 DetachedShell 挂哪个内容组件。 */
 export type DetachedTarget =
   | { kind: 'email'; emailId: number }
@@ -64,11 +66,7 @@ export function bootDetachedModeFromQuery(): DetachedTarget | null {
   return target
 }
 
-/** 入口门控：轻窗是 Electron BrowserWindow 能力，远程 web 没有第二窗口的概念。
- *  判据抄 openMeetingLink / notionOauthIpc —— 直接摸 preload 注入的 ipcRenderer
- *  （openDetached 走的是 send，故探 send 而不是 invoke）。 */
+/** 入口门控：轻窗是 Electron BrowserWindow 能力，远程 web 没有第二窗口的概念。 */
 export function canOpenDetachedWindow(): boolean {
-  if (typeof window === 'undefined') return false
-  const w = window as unknown as { electron?: { ipcRenderer?: { send?: unknown } } }
-  return typeof w.electron?.ipcRenderer?.send === 'function'
+  return canSendElectronIpc()
 }

@@ -88,7 +88,10 @@ from src.api.schemas.ai import (
     TargetLang,
     TranslateBatchResult,
     TranslationCache,
+    TranslationSaveRequest,
+    TranslationSaveResponse,
     TranslationSegment,
+    TranslationSource,
 )
 
 __all__ = [
@@ -119,6 +122,7 @@ __all__ = [
     "CalendarEventDetail", "CalendarEventGetData",
     "CalendarSyncStateItem", "CalendarSyncStatusData",
     # ai / translation
-    "TargetLang", "TranslationSegment", "TranslationCache",
+    "TargetLang", "TranslationSource", "TranslationSegment", "TranslationCache",
+    "TranslationSaveRequest", "TranslationSaveResponse",
     "TranslateBatchResult", "DeleteCachedResult",
 ]

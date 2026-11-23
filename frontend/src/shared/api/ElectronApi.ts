@@ -84,10 +84,7 @@ import type {
   SecretSlot,
   SecretsStatus,
   SettingsApi,
-  TargetLang,
   TodayApi,
-  TranslateBatchResult,
-  TranslationCache,
   UpdaterApi,
   UpdaterStatus
 } from './types'
@@ -344,39 +341,6 @@ class ElectronAttachmentApi implements AttachmentApi {
   }
 }
 
-// Mirror of TranslateEnvelope in src/electron/main/handlers/translate.ts.
-// Re-declared here (not imported) so the renderer bundle stays main-side
-// free. Codex review M-3 — Electron IPC does NOT preserve custom Error
-// properties; the envelope makes the failure shape explicit.
-type TranslateEnvelope =
-  | { ok: true; data: TranslateBatchResult }
-  | { ok: false; code: string; message: string }
-
-class ElectronAiApi implements AiApi {
-  async translateBatch(internalId: number, targetLang?: TargetLang): Promise<TranslateBatchResult> {
-    const env = (await invoker()('translate:batch', {
-      internalId,
-      targetLang
-    })) as TranslateEnvelope
-    if (env.ok) return env.data
-    const err = new Error(env.message) as Error & { code?: string }
-    err.code = env.code
-    throw err
-  }
-  async getCached(internalId: number, targetLang?: TargetLang): Promise<TranslationCache | null> {
-    return (await invoker()('translation:get', internalId, targetLang)) as TranslationCache | null
-  }
-  async deleteCached(internalId: number, targetLang?: TargetLang): Promise<boolean> {
-    return (await invoker()('translation:delete', internalId, targetLang)) as boolean
-  }
-  abortTranslate(internalId: number): void {
-    // Fire-and-forget — main side aborts every in-flight batch for this id.
-    // No reply needed; the in-flight `translateBatch()` Promise returns
-    // whatever partial segments it had completed.
-    sender()?.('email:translateAbort', internalId)
-  }
-}
-
 // V2.1 3c-3 / S3 — ElectronApi.chat = shared `createChatRuntime`（serve-api 直
 // fetch 薄传输面，S3 删 legacy 引擎后 chat turn 全跑 embedded AI SDK Gateway），
 // 经 loopback serve-api fetch（token + CORS 由 main `chat_local_bridge` 的
@@ -592,7 +556,7 @@ export class ElectronApi implements MailApi {
   historySync: HistorySyncApi = this.loopbackHttp.historySync
   folder: FolderApi = this.loopbackHttp.folder
   attachment: AttachmentApi = new ElectronAttachmentApi()
-  ai: AiApi = new ElectronAiApi()
+  ai: AiApi = this.loopbackHttp.ai
   chat: ChatApi = createElectronChatRuntime()
   // 08-01 PR4 — connector 面无 IPC 通道，直接经 loopback serve-api fetch（与 chat 同 baseUrl；
   // token + CORS 由 main `chat_local_bridge` 的 webRequest 透明注入）。

@@ -36,9 +36,9 @@ function sentKeys(): string[] {
 /** main 侧：handler 里 `positive(body.X)` 实际读的键名。 */
 function readKeys(): string[] {
   const source = read('frontend/src/electron/main/ai_gateway_lifecycle.ts')
-  const handler = new RegExp(`ipcMain\\.handle\\('${CHANNEL}',[\\s\\S]*?\\n  \\}\\)\\n\\}`).exec(
-    source
-  )
+  const handler = new RegExp(
+    `(?:ipcMain\\.handle|typedIpcHandle)\\('${CHANNEL}',[\\s\\S]*?\\n  \\}\\)\\n\\}`
+  ).exec(source)
   if (!handler) {
     throw new Error(`ai_gateway_lifecycle.ts: 抽不到 ${CHANNEL} 的 handler（写法变了？）`)
   }

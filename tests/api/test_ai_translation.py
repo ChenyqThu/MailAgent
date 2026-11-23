@@ -26,21 +26,32 @@ from src.api.deps import get_repository
 from src.repository import AttachmentStore, EmailRepository
 
 TRANS_ID = 555  # internal_id with a 'zh' cache row.
+UNTRANSLATED_ID = 556  # internal_id present in email_metadata, no translation yet.
 
 
 def _seed_translation_db(db_path: Path) -> None:
     conn = sqlite3.connect(str(db_path))
     try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(
+            """CREATE TABLE email_metadata (
+                   internal_id INTEGER PRIMARY KEY
+               )"""
+        )
+        conn.execute("INSERT INTO email_metadata (internal_id) VALUES (?)", (TRANS_ID,))
+        conn.execute(
+            "INSERT INTO email_metadata (internal_id) VALUES (?)", (UNTRANSLATED_ID,)
+        )
         conn.execute(
             """CREATE TABLE email_translation (
-                   internal_id INTEGER NOT NULL,
+                   internal_id INTEGER PRIMARY KEY,
                    target_lang TEXT NOT NULL DEFAULT 'zh',
                    segments_json TEXT NOT NULL,
                    model TEXT,
                    source TEXT,
                    created_at REAL,
                    updated_at REAL,
-                   PRIMARY KEY (internal_id, target_lang)
+                   FOREIGN KEY (internal_id) REFERENCES email_metadata(internal_id) ON DELETE CASCADE
                )"""
         )
         now = time.time()
@@ -147,3 +158,101 @@ def test_delete_cached_unknown_id_false(trans_client):
     r = trans_client.delete("/api/ai/translation/424242")
     assert r.status_code == 200
     assert r.json()["data"] == {"deleted": False}
+
+
+# ===========================================================================
+# PUT /api/ai/translation/{internal_id}
+# ===========================================================================
+
+
+def test_put_translation_fresh_insert_then_get(trans_client):
+    payload = {
+        "targetLang": "zh",
+        "segments": [
+            {"src": "Line one", "tgt": "第一行"},
+            {"src": "Line two", "tgt": "第二行"},
+        ],
+        "model": "claude-sonnet-5",
+        "source": "on_demand",
+    }
+    r = trans_client.put(f"/api/ai/translation/{UNTRANSLATED_ID}", json=payload)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "success"
+    data = body["data"]
+    assert data["internalId"] == UNTRANSLATED_ID
+    assert data["saved"] is True
+    assert data["cacheKept"] is False
+    assert data["segments"] == payload["segments"]
+    assert data["model"] == "claude-sonnet-5"
+
+    r_get = trans_client.get(f"/api/ai/translation/{UNTRANSLATED_ID}")
+    assert r_get.status_code == 200
+    assert r_get.json()["data"]["segments"] == payload["segments"]
+
+
+def test_put_translation_anti_downgrade_keeps_richer_cache(trans_client):
+    # TRANS_ID starts with 2 clean segments; saving only 1 must keep existing cache.
+    r = trans_client.put(
+        f"/api/ai/translation/{TRANS_ID}",
+        json={
+            "targetLang": "zh",
+            "segments": [{"src": "Only one", "tgt": "只有一句"}],
+            "model": "smaller-model",
+            "source": "on_demand",
+        },
+    )
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["saved"] is False
+    assert data["cacheKept"] is True
+    assert data["segments"] == [
+        {"src": "Hello", "tgt": "你好"},
+        {"src": "World", "tgt": "世界"},
+    ]
+
+    # Overwriting with >= 2 segments replaces the cache cleanly.
+    richer = [
+        {"src": "One", "tgt": "一"},
+        {"src": "Two", "tgt": "二"},
+        {"src": "Three", "tgt": "三"},
+    ]
+    r2 = trans_client.put(
+        f"/api/ai/translation/{TRANS_ID}",
+        json={
+            "targetLang": "zh",
+            "segments": richer,
+            "model": "better-model",
+            "source": "on_demand",
+        },
+    )
+    assert r2.status_code == 200
+    assert r2.json()["data"]["saved"] is True
+    assert r2.json()["data"]["cacheKept"] is False
+    assert trans_client.get(f"/api/ai/translation/{TRANS_ID}").json()["data"]["segments"] == richer
+
+
+def test_put_translation_orphan_id_and_invalid_source(trans_client):
+    r_orphan = trans_client.put(
+        "/api/ai/translation/999999",
+        json={
+            "targetLang": "zh",
+            "segments": [{"src": "Hi", "tgt": "嗨"}],
+            "model": "m",
+            "source": "on_demand",
+        },
+    )
+    assert r_orphan.status_code == 200
+    assert r_orphan.json()["data"]["saved"] is False
+    assert r_orphan.json()["data"]["cacheKept"] is False
+
+    r_bad = trans_client.put(
+        f"/api/ai/translation/{UNTRANSLATED_ID}",
+        json={
+            "targetLang": "zh",
+            "segments": [],
+            "model": "m",
+            "source": "bogus_source",
+        },
+    )
+    assert r_bad.status_code == 422

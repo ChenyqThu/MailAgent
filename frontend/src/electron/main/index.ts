@@ -1,6 +1,7 @@
-import { app, shell, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
+import { app, shell, BrowserWindow, dialog, Menu } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { typedIpcHandle, typedIpcOn } from './ipc/typedHandle'
 import {
   applyNativeSurface,
   bootNativeTheme,
@@ -27,7 +28,6 @@ import { registerFeedbackHandlers } from './handlers/feedback'
 import { DETACHED_WINDOW, MAIN_WINDOW, ONBOARDING_WINDOW } from './lib/window-config'
 import { registerEmailHandlers } from './handlers/email'
 import { registerAttachmentHandlers } from './handlers/attachment'
-import { registerTranslateHandlers, abortAllTranslations } from './handlers/translate'
 import { registerNlSearchHandlers } from './handlers/nl_search'
 import { registerChatLocalBridge } from './chat_local_bridge'
 import { getChatDb } from './chat_db'
@@ -489,13 +489,12 @@ app.whenReady().then(async () => {
   // <a> 点击 (导航前 preventDefault) 后调本 IPC —— 这是主路径, 因为 iframe 的
   // 页面 CSP (frame-src 'self') 会在渲染层把外部导航抢先拦成空白页, 主进程的
   // will-frame-navigate 兜底可能根本不触发。scheme 白名单防 file:// / javascript:。
-  ipcMain.handle('shell:openExternal', (_evt, url: unknown) => {
+  typedIpcHandle('shell:openExternal', (_evt, url: unknown) => {
     if (typeof url === 'string' && isExternalNavUrl(url)) {
       void shell.openExternal(url)
     }
   })
   registerAttachmentHandlers()
-  registerTranslateHandlers()
   // P4b — AI 自然语言检索: 自然语言 → DSL (单次 LLM 调用, 不碰 P4a 搜索逻辑)。
   registerNlSearchHandlers()
   // V2.1 阶段 3c-4 cutover — chat 引擎全部下沉 renderer（ElectronApi.chat = ChatRuntime 经
@@ -591,20 +590,20 @@ app.whenReady().then(async () => {
     console.error('[embedded-browser] 启动失败 (将回退 headless Chromium 模式)', err)
   }
 
-  ipcMain.on('ping', () => console.log('pong'))
+  typedIpcOn('ping', () => console.log('pong'))
 
   // Sprint 14 PR E — popout opener. Fire-and-forget from the renderer
   // (the new BrowserWindow shows itself via ready-to-show); no return
   // value or envelope. Bad emailId is silently dropped — the renderer
   // already validates Number.isInteger before sending.
-  ipcMain.on('window:openChatPopout', (_evt, emailId: number) => {
+  typedIpcOn('window:openChatPopout', (_evt, emailId: number) => {
     if (!Number.isInteger(emailId) || emailId < 0) return
     createPopoutWindow(emailId)
   })
 
   // task 08-27 P5 — 轻窗 opener。同 popout: fire-and-forget, 无 envelope; 坏载荷静默丢弃
   // (renderer 侧已窄化过一次, 这里是最后一道)。
-  ipcMain.on('window:openDetached', (_evt, kind: unknown, id: unknown) => {
+  typedIpcOn('window:openDetached', (_evt, kind: unknown, id: unknown) => {
     if (kind !== 'email' && kind !== 'report') return
     if (typeof id !== 'string' || id === '') return
     createDetachedWindow(kind, id)
@@ -740,7 +739,6 @@ app.on('window-all-closed', () => {
 // quit (translation requests + chat streams) so the CLI subprocess
 // teardown (`registerCliLifecycle`) isn't the only path cleaning up.
 app.on('before-quit', () => {
-  abortAllTranslations()
   cuOverlayDispose?.()
   void embeddedBrowserDispose?.()
   // V2.1 阶段 3c-4 cutover：chat dispatcher 的 _inflight 现在在 renderer 进程（ChatRuntime），

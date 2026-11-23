@@ -21,8 +21,9 @@
 //   events:status    (invoke) — renderer 主动查询当前状态
 //   events:reconnect (invoke) — renderer 手动触发立即重连
 
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow } from 'electron'
 
+import { typedIpcHandle } from './ipc/typedHandle'
 import { getLocalApiToken, LOCAL_TOKEN_HEADER } from './local_token'
 
 // ---- types --------------------------------------------------------------
@@ -265,12 +266,12 @@ export function startEventsBridge(url?: string): void {
 
   // 注册 IPC handlers (idempotent — Electron ipcMain.handle 重复注册同 channel 会抛)
   try {
-    ipcMain.handle('events:status', () => currentStatus())
+    typedIpcHandle('events:status', () => currentStatus())
   } catch {
     /* already registered */
   }
   try {
-    ipcMain.handle('events:reconnect', () => {
+    typedIpcHandle('events:reconnect', () => {
       // 立即重连: 清退避 + 取消当前 + 启新 attempt
       _backoffIdx = 0
       if (_reconnectTimer) {
