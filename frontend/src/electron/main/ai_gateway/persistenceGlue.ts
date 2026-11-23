@@ -12,7 +12,7 @@ import type {
 } from '../../../ai-gateway/config'
 import { costUsdFor } from '../../../ai-gateway/modelCost'
 import { parseProviderRef } from '../../../ai-gateway/providerRef'
-import type { MailAgentDomainClient } from '../../../ai-gateway/python/domainClient'
+import { DomainError, type MailAgentDomainClient } from '../../../ai-gateway/python/domainClient'
 import {
   appendLlmUsageLog,
   appendMessage,
@@ -246,6 +246,50 @@ export type TurnPersistenceHooks = Pick<
   | 'recordUsageEvent'
 >
 
+export const MEMORY_CAPTURE_RETRY_DELAYS_MS: readonly number[] = [3_000, 10_000]
+const MEMORY_CAPTURE_ATTEMPT_TIMEOUT_MS = 30_000
+
+/** Retry only transient network / 5xx failures; fail fast on 4xx and AbortError/TimeoutError. */
+export function isRetryableMemoryCaptureError(err: unknown): boolean {
+  if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
+    return false
+  }
+  if (err instanceof DomainError) {
+    if (err.httpStatus !== undefined) {
+      if (err.httpStatus >= 400 && err.httpStatus < 500) return false
+      if (err.httpStatus >= 500) return true
+    }
+    return err.code === 'E_NETWORK'
+  }
+  return err instanceof Error
+}
+
+export async function captureTurnMemoryWithRetry(
+  domain: Pick<MailAgentDomainClient, 'captureMemory'>,
+  payload: { userText: string; assistantText: string; sessionId: number | null },
+  opts?: {
+    delaysMs?: readonly number[]
+    timeoutMs?: number
+    delayFn?: (ms: number) => Promise<void>
+  }
+): Promise<void> {
+  const delays = opts?.delaysMs ?? MEMORY_CAPTURE_RETRY_DELAYS_MS
+  const timeoutMs = opts?.timeoutMs ?? MEMORY_CAPTURE_ATTEMPT_TIMEOUT_MS
+  const delayFn = opts?.delayFn ?? ((ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms)))
+
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await domain.captureMemory(payload, AbortSignal.timeout(timeoutMs))
+      return
+    } catch (err) {
+      if (attempt >= delays.length || !isRetryableMemoryCaptureError(err)) {
+        throw err
+      }
+      await delayFn(delays[attempt])
+    }
+  }
+}
+
 export function buildTurnPersistenceHooks(deps: {
   domain: MailAgentDomainClient
   captureTurnMemoryEnabled: boolean
@@ -358,16 +402,14 @@ export function buildTurnPersistenceHooks(deps: {
           const userText = turn.userMessage ? extractTextFromUIMessage(turn.userMessage) : ''
           const assistantText = extractTextFromUIMessage(turn.responseMessage)
           if (!userText && !assistantText) return // 空 turn 不打扰后端
-          // 30s 上限：mem0 抽取通常几秒；fire-and-forget 下无超时 = 挂死的 serve-api 连接会留
-          // idle socket。AbortSignal.timeout 触发 → _req 抛 AbortError → 下方 .catch 吞。
-          void deps.domain
-            .captureMemory(
-              { userText, assistantText, sessionId: turn.sessionId },
-              AbortSignal.timeout(30_000)
-            )
-            .catch((err) => {
-              console.error('[ai-gateway] auto-capture post failed (turn streamed OK)', err)
-            })
+          // Fire-and-forget bounded retry on 5xx / E_NETWORK; never blocks streamed reply.
+          void captureTurnMemoryWithRetry(deps.domain, {
+            userText,
+            assistantText,
+            sessionId: turn.sessionId
+          }).catch((err) => {
+            console.error('[ai-gateway] auto-capture post failed (turn streamed OK)', err)
+          })
         }
       : undefined,
     // Phase 10b — configurable LLM auto-title. getTitleContext reads ai_chat.db (current title + first

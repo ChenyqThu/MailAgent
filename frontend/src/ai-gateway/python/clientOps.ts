@@ -1,5 +1,5 @@
 // Sessions, group sessions, profile/memory docs, web, notion, connectors, exec, approval/labs/policy.
-import { EmailDomainClient } from './clientEmail'
+import type { DomainHttpCore } from './clientCore'
 import type {
   DomainProfileDocResult,
   DomainProfileHistoryEntry,
@@ -24,7 +24,19 @@ import type {
 import type { AssistantIdentity } from '@shared/api/types'
 import type { GroupConfig } from '@shared/chat_model'
 
-export class OpsDomainClient extends EmailDomainClient {
+/** S5 W4 — stamp the /exec/* audit annotation fields (snake_case per the Python body schema)
+   *  onto a request body. Absent/empty audit → the body is untouched (manual byte-identical). */
+function applyExecAudit(
+    body: Record<string, unknown>,
+    audit?: { contextMode?: string; agentId?: string }
+  ): void {
+    if (audit?.contextMode != null) body.context_mode = audit.contextMode
+    if (audit?.agentId != null) body.agent_id = audit.agentId
+  }
+
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- inferred for MailAgentDomainClient declaration merging
+export function createOpsMethods(http: DomainHttpCore) {
+  return {
   // ── session-read primitives (S1 R1) — the chat-session tools read the SAME ai_chat.db the
   //    gateway persists into, but through serve-api /chat/sessions/* (never SQLite directly):
   //    remote parity for free + the gateway core stays chat_db-free (纯核纪律). The tools that
@@ -37,7 +49,7 @@ export class OpsDomainClient extends EmailDomainClient {
     signal?: AbortSignal,
     scope?: { currentAgentId: string; allowAllHistory: boolean }
   ): Promise<DomainChatSessionSummary[]> {
-    return this._req<DomainChatSessionSummary[]>('GET', '/chat/sessions/all', {
+    return http.req<DomainChatSessionSummary[]>('GET', '/chat/sessions/all', {
       query: query
         ? {
             origin: query.origin,
@@ -60,7 +72,7 @@ export class OpsDomainClient extends EmailDomainClient {
         : undefined,
       signal
     })
-  }
+  },
 
   /** chat_session_search — FTS (trigram) message search aggregated by session. GET
    *  /chat/sessions/search (param is `q`; <3-char queries LIKE-fallback server-side). */
@@ -70,7 +82,7 @@ export class OpsDomainClient extends EmailDomainClient {
     signal?: AbortSignal,
     scope?: { currentAgentId: string; allowAllHistory: boolean }
   ): Promise<DomainSessionSearchHit[]> {
-    return this._req<DomainSessionSearchHit[]>('GET', '/chat/sessions/search', {
+    return http.req<DomainSessionSearchHit[]>('GET', '/chat/sessions/search', {
       query: { q: query, ...filters },
       headers: scope
         ? {
@@ -80,7 +92,7 @@ export class OpsDomainClient extends EmailDomainClient {
         : undefined,
       signal
     })
-  }
+  },
 
   /** chat_session_get — all messages of one session (chronological). GET
    *  /chat/sessions/{id}/messages. Missing session → [] (the endpoint reads gracefully); an
@@ -91,7 +103,7 @@ export class OpsDomainClient extends EmailDomainClient {
     signal?: AbortSignal,
     scope?: { currentAgentId: string; allowAllHistory: boolean }
   ): Promise<DomainChatMessage[]> {
-    return this._req<DomainChatMessage[]>('GET', `/chat/sessions/${sessionId}/messages`, {
+    return http.req<DomainChatMessage[]>('GET', `/chat/sessions/${sessionId}/messages`, {
       headers: scope
         ? {
             'X-MailAgent-Agent-Id': scope.currentAgentId,
@@ -100,7 +112,7 @@ export class OpsDomainClient extends EmailDomainClient {
         : undefined,
       signal
     })
-  }
+  },
 
   // ── group-session write primitives (L4 群聊 g2) — the ONLY serve-api writes of the group tool
   //    family (tools/groups.ts): history / members / deliveries go through the in-process cfg
@@ -127,8 +139,8 @@ export class OpsDomainClient extends EmailDomainClient {
     }
     if (typeof input.parentSessionId === 'number') body.parentSessionId = input.parentSessionId
     if (typeof input.invokedBy === 'string') body.invokedBy = input.invokedBy
-    return this._req<DomainGroupSessionCreated>('POST', '/chat/sessions/new', { body, signal })
-  }
+    return http.req<DomainGroupSessionCreated>('POST', '/chat/sessions/new', { body, signal })
+  },
 
   /** group_create step 2 — PUT /chat/sessions/{id}/group-config (judge / modes / caps…; only
    *  the keys passed are written, explicit null clears a key). Server-validated. */
@@ -137,17 +149,17 @@ export class OpsDomainClient extends EmailDomainClient {
     patch: Partial<GroupConfig> & { modes?: Record<string, 'realtime' | 'mention'> },
     signal?: AbortSignal
   ): Promise<void> {
-    return this._req<void>('PUT', `/chat/sessions/${sessionId}/group-config`, {
+    return http.req<void>('PUT', `/chat/sessions/${sessionId}/group-config`, {
       body: patch,
       signal
     })
-  }
+  },
 
   /** group_create compensation — DELETE /chat/sessions/{id} (messages + tool calls cascade).
    *  Idempotent server-side (an unknown id still answers deleted:true). */
   deleteSession(sessionId: number, signal?: AbortSignal): Promise<void> {
-    return this._req<void>('DELETE', `/chat/sessions/${sessionId}`, { signal })
-  }
+    return http.req<void>('DELETE', `/chat/sessions/${sessionId}`, { signal })
+  },
 
   // ── self-mount primitives (M4) — the agent reads/proposes its own Standing Context docs +
   //    skills. All hit /agent/* (verify_cf_access dual-auth: the embedded gateway's local-token leg
@@ -163,12 +175,12 @@ export class OpsDomainClient extends EmailDomainClient {
     body: { content: string; updatedBy?: string; sessionId?: number; messageId?: number },
     signal?: AbortSignal
   ): Promise<DomainProfileDocResult> {
-    return this._req<DomainProfileDocResult>(
+    return http.req<DomainProfileDocResult>(
       'POST',
       `/agent/profile/docs/${encodeURIComponent(name)}`,
       { body, signal }
     )
-  }
+  },
 
   // ── profile-config primitives (S1 R2) — read/history/restore Standing Context docs +
   //    memory.md edit. Same /agent/* owner surface as setProfileDoc (verify_cf_access local-token
@@ -179,12 +191,12 @@ export class OpsDomainClient extends EmailDomainClient {
    *  (soul/agent/rules/user/memory). GET /agent/profile/docs/{name}; memory carries
    *  budgetChars. */
   readProfileDoc(name: string, signal?: AbortSignal): Promise<DomainProfileDocResult> {
-    return this._req<DomainProfileDocResult>(
+    return http.req<DomainProfileDocResult>(
       'GET',
       `/agent/profile/docs/${encodeURIComponent(name)}`,
       { signal }
     )
-  }
+  },
 
   /** agent_profile_history (S1 R2) — version history (newest first). GET /agent/profile/history
    *  ?docName=&limit= → data.history. */
@@ -193,13 +205,13 @@ export class OpsDomainClient extends EmailDomainClient {
     limit?: number,
     signal?: AbortSignal
   ): Promise<DomainProfileHistoryEntry[]> {
-    const data = await this._req<{ history: DomainProfileHistoryEntry[] }>(
+    const data = await http.req<{ history: DomainProfileHistoryEntry[] }>(
       'GET',
       '/agent/profile/history',
       { query: { docName, limit }, signal }
     )
     return data.history ?? []
-  }
+  },
 
   /** agent_profile_restore (S1 R2) — roll a profile doc back to a history version. POST
    *  /agent/profile/docs/{name}/rollback {targetHash}. For name==='rules' the server re-runs
@@ -210,32 +222,32 @@ export class OpsDomainClient extends EmailDomainClient {
     targetHash: string,
     signal?: AbortSignal
   ): Promise<DomainProfileDocResult> {
-    return this._req<DomainProfileDocResult>(
+    return http.req<DomainProfileDocResult>(
       'POST',
       `/agent/profile/docs/${encodeURIComponent(name)}/rollback`,
       { body: { targetHash, updatedBy: 'agent_proposed' }, signal }
     )
-  }
+  },
 
   /** agent_memory_update (S1 R2) — overwrite memory.md (bounded memory). POST
    *  /agent/profile/docs/memory; the server enforces the hard character budget → 400
    *  E_INVALID_ARG (→ DomainError) when exceeded. Kept separate from setProfileDoc so the
    *  identity boundary stays explicit (memory ≠ Standing Context identity doc). */
   setMemoryDoc(content: string, signal?: AbortSignal): Promise<DomainProfileDocResult> {
-    return this._req<DomainProfileDocResult>('POST', '/agent/profile/docs/memory', {
+    return http.req<DomainProfileDocResult>('POST', '/agent/profile/docs/memory', {
       body: { content, updatedBy: 'agent_proposed' },
       signal
     })
-  }
+  },
 
   /** discover_skills (M4c) — list resolved skills (enabled/available/unavailableReason/toolCount).
    *  GET /agent/skills → data.skills. */
   async listResolvedSkills(signal?: AbortSignal): Promise<DomainResolvedSkill[]> {
-    const data = await this._req<{ skills: DomainResolvedSkill[] }>('GET', '/agent/skills', {
+    const data = await http.req<{ skills: DomainResolvedSkill[] }>('GET', '/agent/skills', {
       signal
     })
     return data.skills ?? []
-  }
+  },
 
   /** set_skill_enabled (M4c) — enable/disable a skill (mount/unmount its tools). POST
    *  /agent/skills/{name}/enabled {enabled}. */
@@ -244,12 +256,12 @@ export class OpsDomainClient extends EmailDomainClient {
     enabled: boolean,
     signal?: AbortSignal
   ): Promise<{ name: string; enabled: boolean }> {
-    return this._req<{ name: string; enabled: boolean }>(
+    return http.req<{ name: string; enabled: boolean }>(
       'POST',
       `/agent/skills/${encodeURIComponent(name)}/enabled`,
       { body: { enabled }, signal }
     )
-  }
+  },
 
   // ── web primitives (S1 R3) — outbound network via serve-api /web/* (never node:fetch in the
   //    gateway core): the business authority (SSRF guard, IP pinning, content extraction) lives in
@@ -274,16 +286,16 @@ export class OpsDomainClient extends EmailDomainClient {
       body.agent_id = constrain.agentId
       body.context_mode = constrain.contextMode
     }
-    return this._req<DomainWebFetchResult>('POST', '/web/fetch', { body, signal })
-  }
+    return http.req<DomainWebFetchResult>('POST', '/web/fetch', { body, signal })
+  },
 
   /** web_search (S1 R3) — DuckDuckGo web search (best-effort). POST /web/search {query, limit}. */
   webSearch(query: string, limit: number, signal?: AbortSignal): Promise<DomainWebSearchResult> {
-    return this._req<DomainWebSearchResult>('POST', '/web/search', {
+    return http.req<DomainWebSearchResult>('POST', '/web/search', {
       body: { query, limit },
       signal
     })
-  }
+  },
 
   // ── notion-agent primitive (task 07-21) — delegate a Notion request to the notion-agent CLI via
   //    the unified Skill Delivery invoke面 (POST /api/skills/invoke). The gateway never spawns the
@@ -313,11 +325,11 @@ export class OpsDomainClient extends EmailDomainClient {
     // runs from the gateway tool's execute, i.e. AFTER the 恒-HITL card was approved — so passing
     // confirm:true here is the human decision reaching Python's second gate (defense in depth). A
     // direct external /api/skills/invoke without confirm still 403s.
-    return this._req<DomainNotionAgentChatResult>('POST', '/skills/invoke', {
+    return http.req<DomainNotionAgentChatResult>('POST', '/skills/invoke', {
       body: { skill: 'notion_agent', tool: 'notion_agent_chat', input, confirm: true },
       signal
     })
-  }
+  },
 
   // ── MCP connector primitives (stage 1 PR2, MAILAGENT_MCP_CONNECTORS) — the connector tool
   //    manifest + call proxy live in Python serve-api /connector/* (the MCP client, OAuth
@@ -327,19 +339,19 @@ export class OpsDomainClient extends EmailDomainClient {
 
   /** List connectors (registry ∪ DB runtime state). GET /connector. */
   listConnectors(signal?: AbortSignal): Promise<DomainConnectorList> {
-    return this._req<DomainConnectorList>('GET', '/connector', { signal })
-  }
+    return http.req<DomainConnectorList>('GET', '/connector', { signal })
+  },
 
   /** List one connector's synced tool manifest (effective_mode already folded server-side —
    *  08-05 per-tool tiers; orphan rows still listed — the registration seam skips them).
    *  GET /connector/{id}/tools. */
   listConnectorTools(connectorId: string, signal?: AbortSignal): Promise<DomainConnectorTools> {
-    return this._req<DomainConnectorTools>(
+    return http.req<DomainConnectorTools>(
       'GET',
       `/connector/${encodeURIComponent(connectorId)}/tools`,
       { signal }
     )
-  }
+  },
 
   /** Invoke one connector tool through the serve-api MCP call proxy (whitelist-gated server-side:
    *  unsynced/orphan/delete/disabled names never reach the remote; the result is already truncated
@@ -374,12 +386,12 @@ export class OpsDomainClient extends EmailDomainClient {
         ...(caller.childTool !== undefined ? { child_tool: caller.childTool } : {})
       }
     }
-    return this._req<DomainConnectorInvokeResult>(
+    return http.req<DomainConnectorInvokeResult>(
       'POST',
       `/connector/${encodeURIComponent(connectorId)}/tools/${encodeURIComponent(toolName)}/invoke`,
       { body, signal }
     )
-  }
+  },
 
   // ── exec primitives (S2 W1) — local command / filesystem execution via serve-api /exec/* (never
   //    child_process/fs in the gateway core): the business authority (fixed env allowlist, inode
@@ -400,9 +412,9 @@ export class OpsDomainClient extends EmailDomainClient {
     const body: Record<string, unknown> = { argv }
     if (opts.cwd !== undefined) body.cwd = opts.cwd
     if (opts.timeoutMs !== undefined) body.timeout_ms = opts.timeoutMs
-    this._applyExecAudit(body, audit)
-    return this._req<DomainExecRunResult>('POST', '/exec/run', { body, signal })
-  }
+    applyExecAudit(body, audit)
+    return http.req<DomainExecRunResult>('POST', '/exec/run', { body, signal })
+  },
 
   /** file_read (S2 W1) — read a local file's text. POST /exec/file_read {path, max_bytes}.
    *  Sensitive targets → DomainError E_EXEC_FLOOR_DENIED (the inode deny floor). */
@@ -413,9 +425,9 @@ export class OpsDomainClient extends EmailDomainClient {
     audit?: { contextMode?: string; agentId?: string }
   ): Promise<DomainExecFileReadResult> {
     const body: Record<string, unknown> = { path, max_bytes: maxBytes }
-    this._applyExecAudit(body, audit)
-    return this._req<DomainExecFileReadResult>('POST', '/exec/file_read', { body, signal })
-  }
+    applyExecAudit(body, audit)
+    return http.req<DomainExecFileReadResult>('POST', '/exec/file_read', { body, signal })
+  },
 
   /** file_write (S2 W1) — write text to a local file. POST /exec/file_write {path, content, mode}.
    *  Sensitive targets → DomainError E_EXEC_FLOOR_DENIED; create_new on an existing file → E_FILE_EXISTS. */
@@ -427,19 +439,9 @@ export class OpsDomainClient extends EmailDomainClient {
     audit?: { contextMode?: string; agentId?: string }
   ): Promise<DomainExecFileWriteResult> {
     const body: Record<string, unknown> = { path, content, mode }
-    this._applyExecAudit(body, audit)
-    return this._req<DomainExecFileWriteResult>('POST', '/exec/file_write', { body, signal })
-  }
-
-  /** S5 W4 — stamp the /exec/* audit annotation fields (snake_case per the Python body schema)
-   *  onto a request body. Absent/empty audit → the body is untouched (manual byte-identical). */
-  private _applyExecAudit(
-    body: Record<string, unknown>,
-    audit?: { contextMode?: string; agentId?: string }
-  ): void {
-    if (audit?.contextMode != null) body.context_mode = audit.contextMode
-    if (audit?.agentId != null) body.agent_id = audit.agentId
-  }
+    applyExecAudit(body, audit)
+    return http.req<DomainExecFileWriteResult>('POST', '/exec/file_write', { body, signal })
+  },
 
   // ── approval mode (07-16 approval-mode switcher) ─────────────────────────────────────────────
 
@@ -450,8 +452,8 @@ export class OpsDomainClient extends EmailDomainClient {
    *  mode switching is an owner UI action (verify_cf_access endpoint) — no gateway tool can
    *  reach the PUT. */
   getApprovalMode(signal?: AbortSignal): Promise<{ mode: string }> {
-    return this._req<{ mode: string }>('GET', '/agent/approval-mode', { signal })
-  }
+    return http.req<{ mode: string }>('GET', '/agent/approval-mode', { signal })
+  },
 
   /** g1 群聊 labs — GET /agent/labs → owner_settings 的实验开关行（今天只有
    *  `{groupAgents: 'on'|'off'}`，key `labs_group_agents`；缺行 / 脏值 serve-api 一律返 'off'）。
@@ -459,8 +461,8 @@ export class OpsDomainClient extends EmailDomainClient {
    *  READ-ONLY from the gateway：开关是 owner UI 动作（verify_cf_access PUT），没有任何 gateway
    *  工具够得着写面（policy_rules 同款纪律）。 */
   getLabsFlags(signal?: AbortSignal): Promise<{ groupAgents: string }> {
-    return this._req<{ groupAgents: string }>('GET', '/agent/labs', { signal })
-  }
+    return http.req<{ groupAgents: string }>('GET', '/agent/labs', { signal })
+  },
 
   /** T4 主 agent 入群 — GET /agent/assistant-identity → owner_settings 的主 agent 显示身份
    *  ({name, avatar}；缺行 / 坏 JSON serve-api 自己 fail-open 成 {null, null}）。
@@ -472,12 +474,12 @@ export class OpsDomainClient extends EmailDomainClient {
    *  READ-ONLY：身份的写面是 owner UI 的 PUT，没有 gateway 工具够得着。 */
   async getAssistantIdentity(signal?: AbortSignal): Promise<AssistantIdentity | null> {
     try {
-      return await this._req<AssistantIdentity>('GET', '/agent/assistant-identity', { signal })
+      return await http.req<AssistantIdentity>('GET', '/agent/assistant-identity', { signal })
     } catch (e) {
       if (e instanceof Error && (e.name === 'AbortError' || /abort/i.test(e.message))) throw e
       return null
     }
-  }
+  },
 
   /** g1 群聊 — POST /agent-runs/run-log：把一个群 spoke turn 镜像成一行 `agent_run_log`
    *  （团队页执行记录可见）。🔴 best-effort 语义在**调用方**（lifecycle 的 mirrorGroupRunLog
@@ -510,16 +512,16 @@ export class OpsDomainClient extends EmailDomainClient {
     },
     signal?: AbortSignal
   ): Promise<{ runLogId: number | null }> {
-    return this._req<{ runLogId: number | null }>('POST', '/agent-runs/run-log', {
+    return http.req<{ runLogId: number | null }>('POST', '/agent-runs/run-log', {
       body: input,
       signal
     })
-  }
+  },
 
   /** P4 GET /agent/auto-compact. Read-only from the gateway; only owner UI reaches PUT. */
   getAutoCompactSetting(signal?: AbortSignal): Promise<{ mode: string }> {
-    return this._req<{ mode: string }>('GET', '/agent/auto-compact', { signal })
-  }
+    return http.req<{ mode: string }>('GET', '/agent/auto-compact', { signal })
+  },
 
   /** 0812 dogfood GET /agent/matter-web-face → the owner's web tier for Matter follow-up runs
    *  ({mode: 'keep'|'search_only'|'off'}; serve-api reads dirty/missing rows as 'keep'). Consulted
@@ -527,8 +529,8 @@ export class OpsDomainClient extends EmailDomainClient {
    *  'keep', fail-SAFE). Read-only from the gateway: the tier is an owner UI action
    *  (verify_cf_access PUT) — no gateway tool can reach it (policy_rules 同款纪律). */
   getMatterRunWebFace(signal?: AbortSignal): Promise<{ mode: string }> {
-    return this._req<{ mode: string }>('GET', '/agent/matter-web-face', { signal })
-  }
+    return http.req<{ mode: string }>('GET', '/agent/matter-web-face', { signal })
+  },
 
   /** 08-05 WP-11 — GET /agent/tool-prefs → the per-tool approval tiers of every built-in write
    *  tool (factory default + explicit override + folded effective) + the send recipient
@@ -548,8 +550,8 @@ export class OpsDomainClient extends EmailDomainClient {
     sendWhitelist: string[]
     acceptEditsPreset: string[]
   }> {
-    return this._req('GET', '/agent/tool-prefs', { signal })
-  }
+    return http.req('GET', '/agent/tool-prefs', { signal })
+  },
 
   /** L4 批次1 #6 — POST /approval/preview → the approval-card line built from the REAL payload
    *  (server-derived reply-all recipients, the calendar row's CURRENT title/times …). `preview`
@@ -561,13 +563,13 @@ export class OpsDomainClient extends EmailDomainClient {
     input: unknown,
     signal?: AbortSignal
   ): Promise<string | null> {
-    const data = await this._req<{ toolName: string; preview: string | null }>(
+    const data = await http.req<{ toolName: string; preview: string | null }>(
       'POST',
       '/approval/preview',
       { body: { toolName, input }, signal }
     )
     return typeof data?.preview === 'string' && data.preview.length > 0 ? data.preview : null
-  }
+  },
 
   // ── policy primitives (S2 W1) — the structured whitelist. evaluate is consulted by the exec
   //    tools' needsApproval (auto_allow → skip card); the CRUD methods back the Settings automation
@@ -586,23 +588,23 @@ export class OpsDomainClient extends EmailDomainClient {
     signal?: AbortSignal,
     agentId?: string
   ): Promise<DomainPolicyVerdict> {
-    return this._req<DomainPolicyVerdict>('POST', '/agent/policy/evaluate', {
+    return http.req<DomainPolicyVerdict>('POST', '/agent/policy/evaluate', {
       body: { capability, action, contextMode, ...(agentId != null ? { agentId } : {}) },
       signal
     })
-  }
+  },
 
   /** GET /agent/policy/rules?capability=&contextMode= → data.rules (newest first). */
   async listPolicyRules(
     opts: { capability?: string; contextMode?: string } = {},
     signal?: AbortSignal
   ): Promise<DomainPolicyRule[]> {
-    const data = await this._req<{ rules: DomainPolicyRule[] }>('GET', '/agent/policy/rules', {
+    const data = await http.req<{ rules: DomainPolicyRule[] }>('GET', '/agent/policy/rules', {
       query: { capability: opts.capability, contextMode: opts.contextMode },
       signal
     })
     return data.rules ?? []
-  }
+  },
 
   /** POST /agent/policy/rules {capability, matcher, contextMode?, note?} → the created rule (201).
    *  A malformed matcher → DomainError E_INVALID_ARG (422). This is the ONLY rule-creation path
@@ -624,8 +626,8 @@ export class OpsDomainClient extends EmailDomainClient {
     if (input.contextMode !== undefined) body.contextMode = input.contextMode
     if (input.note !== undefined) body.note = input.note
     if (input.agentId !== undefined) body.agentId = input.agentId
-    return this._req<DomainPolicyRule>('POST', '/agent/policy/rules', { body, signal })
-  }
+    return http.req<DomainPolicyRule>('POST', '/agent/policy/rules', { body, signal })
+  },
 
   /** PATCH /agent/policy/rules/{id} {enabled?, note?} → the updated rule. matcher is NOT patchable
    *  (widening = delete + recreate). Missing id → DomainError E_NOT_FOUND (404). */
@@ -637,13 +639,16 @@ export class OpsDomainClient extends EmailDomainClient {
     const body: Record<string, unknown> = {}
     if (patch.enabled !== undefined) body.enabled = patch.enabled
     if (patch.note !== undefined) body.note = patch.note
-    return this._req<DomainPolicyRule>('PATCH', `/agent/policy/rules/${id}`, { body, signal })
-  }
+    return http.req<DomainPolicyRule>('PATCH', `/agent/policy/rules/${id}`, { body, signal })
+  },
 
   /** DELETE /agent/policy/rules/{id} → {id, removed} (idempotent). */
   deletePolicyRule(id: number, signal?: AbortSignal): Promise<{ id: number; removed: boolean }> {
-    return this._req<{ id: number; removed: boolean }>('DELETE', `/agent/policy/rules/${id}`, {
+    return http.req<{ id: number; removed: boolean }>('DELETE', `/agent/policy/rules/${id}`, {
       signal
     })
   }
+  }
 }
+
+export type OpsMethods = ReturnType<typeof createOpsMethods>

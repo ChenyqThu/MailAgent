@@ -1,4 +1,4 @@
-// Core HTTP transport, DomainError, and MailAgentDomainClientBase.
+// Core HTTP transport, DomainError, and DomainHttpCore.
 import type { DomainLibraryActor } from './domainTypes'
 
 /** A serve-api domain error surfaced to the caller (tool execute turns it into a
@@ -59,10 +59,10 @@ export function libraryActorWire(actor: DomainLibraryActor): Record<string, unkn
   }
 }
 
-export class MailAgentDomainClientBase {
-  protected readonly baseUrl: string
-  protected readonly localToken: string | null
-  protected readonly fetchImpl: typeof fetch
+export class DomainHttpCore {
+  private readonly baseUrl: string
+  private readonly localToken: string | null
+  private readonly fetchImpl: typeof fetch
 
   constructor(config: DomainClientConfig) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, '')
@@ -71,7 +71,7 @@ export class MailAgentDomainClientBase {
   }
 
   /** Core request: build URL + query, inject the local token, parse the envelope. */
-  protected async _req<T>(
+  public async req<T>(
     method: string,
     path: string,
     opts?: {

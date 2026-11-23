@@ -1,10 +1,11 @@
 // Calendar reads/writes and Library reads/writes.
-import { AgentsDomainClient } from './clientAgents'
-import { DomainError, libraryActorWire } from './clientCore'
+import { DomainError, type DomainHttpCore, libraryActorWire } from './clientCore'
 import type { DomainLibraryActor, DomainLibraryFolder, DomainLibrarySearch } from './domainTypes'
 import type { LibrarySource } from '@shared/libraryConstants'
 
-export class CalendarLibraryDomainClient extends AgentsDomainClient {
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- inferred for MailAgentDomainClient declaration merging
+export function createCalendarLibraryMethods(http: DomainHttpCore) {
+  return {
   // ── calendar primitives (calendar epic 4.1/4.2) — the local calendar SSoT reads + the CalDAV/
   //    iTIP writes via serve-api /calendar/* (routers/calendar.py is the business authority: CLI-
   //    mirrored branch semantics, strict tz-aware ISO validation, audit line per write) → remote
@@ -19,7 +20,7 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     opts: { fromIso: string; toIso: string; calendarName?: string; limit?: number },
     signal?: AbortSignal
   ): Promise<Array<Record<string, unknown>>> {
-    return this._req<Array<Record<string, unknown>>>('GET', '/calendar/events', {
+    return http.req<Array<Record<string, unknown>>>('GET', '/calendar/events', {
       query: {
         fromIso: opts.fromIso,
         toIso: opts.toIso,
@@ -28,7 +29,7 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
       },
       signal
     })
-  }
+  },
 
   /** calendar_event_get — one event's full row by iCalendar UID. GET /calendar/events/by-uid
    *  (?uid&source&recurrenceId; C7: data = the bare detail object). E_NOT_FOUND → null. */
@@ -38,7 +39,7 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     signal?: AbortSignal
   ): Promise<Record<string, unknown> | null> {
     try {
-      return await this._req<Record<string, unknown>>('GET', '/calendar/events/by-uid', {
+      return await http.req<Record<string, unknown>>('GET', '/calendar/events/by-uid', {
         query: { uid: eventId, source: opts.source, recurrenceId: opts.recurrenceId },
         signal
       })
@@ -46,7 +47,7 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
       if (e instanceof DomainError && e.code === 'E_NOT_FOUND') return null
       throw e
     }
-  }
+  },
 
   /** calendar_event_reschedule — CalDAV update. PATCH /calendar/events/by-uid?uid=...; the body's
    *  recurrenceId/splitFuture combination selects the CLI-mirrored branch (整系列 / 改这一次
@@ -56,12 +57,12 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     body: Record<string, unknown>,
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('PATCH', '/calendar/events/by-uid', {
+    return http.req<Record<string, unknown>>('PATCH', '/calendar/events/by-uid', {
       query: { uid: eventId },
       body,
       signal
     })
-  }
+  },
 
   /** calendar_event_rsvp — send the IRREVOCABLE iTIP REPLY to the organizer (recipient is derived
    *  from the event row SERVER-SIDE — never a caller field). POST /calendar/events/by-uid/rsvp?uid=... */
@@ -72,12 +73,12 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
   ): Promise<Record<string, unknown>> {
     const wire: Record<string, unknown> = { response: body.response }
     if (body.recurrenceId !== undefined) wire.recurrenceId = body.recurrenceId
-    return this._req<Record<string, unknown>>('POST', '/calendar/events/by-uid/rsvp', {
+    return http.req<Record<string, unknown>>('POST', '/calendar/events/by-uid/rsvp', {
       query: { uid: eventId },
       body: wire,
       signal
     })
-  }
+  },
 
   /** calendar_event_delete — CalDAV DELETE (irreversible; the HTTP request IS the confirmation —
    *  the gateway approval card is the human gate). DELETE /calendar/events/by-uid?uid=...&calendarName=. */
@@ -86,11 +87,11 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     calendarName?: string,
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('DELETE', '/calendar/events/by-uid', {
+    return http.req<Record<string, unknown>>('DELETE', '/calendar/events/by-uid', {
       query: { uid: eventId, calendarName },
       signal
     })
-  }
+  },
 
   // ── 资料库（Library）read face — design §3. Rows come back snake_case (= DB columns); the
   //    projection into the tool's return shape lives in tools/library.ts, not here. `maxBytes` is
@@ -101,11 +102,11 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     opts: { path?: string; limit: number; offset: number },
     signal?: AbortSignal
   ): Promise<DomainLibraryFolder> {
-    return this._req<DomainLibraryFolder>('GET', '/library/folder', {
+    return http.req<DomainLibraryFolder>('GET', '/library/folder', {
       query: { path: opts.path, limit: opts.limit, offset: opts.offset },
       signal
     })
-  }
+  },
 
   /** library_read step 1 — GET /library/file/{id}: metadata + `content_hash` +, for text files,
    *  the body itself. */
@@ -114,11 +115,11 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     maxBytes: number,
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('GET', `/library/file/${fileId}`, {
+    return http.req<Record<string, unknown>>('GET', `/library/file/${fileId}`, {
       query: { max_bytes: maxBytes },
       signal
     })
-  }
+  },
 
   /** library_read step 2 — GET /library/file/{id}/text: the parsed markdown (`library_text`), the
    *  same one the preview pane and FTS read. 🔴 This call is also what TRIGGERS extraction for a
@@ -128,11 +129,11 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     maxBytes: number,
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('GET', `/library/file/${fileId}/text`, {
+    return http.req<Record<string, unknown>>('GET', `/library/file/${fileId}/text`, {
       query: { max_bytes: maxBytes },
       signal
     })
-  }
+  },
 
   /** library_read on a PROJECTED mail attachment — GET /library/attachment/{attachment_id}
    *  and its /text sibling. Projections have no library id, so the `/file/{id}` family is
@@ -143,22 +144,22 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     maxBytes: number,
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('GET', `/library/attachment/${attachmentId}`, {
+    return http.req<Record<string, unknown>>('GET', `/library/attachment/${attachmentId}`, {
       query: { max_bytes: maxBytes },
       signal
     })
-  }
+  },
 
   libraryAttachmentText(
     attachmentId: number,
     maxBytes: number,
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('GET', `/library/attachment/${attachmentId}/text`, {
+    return http.req<Record<string, unknown>>('GET', `/library/attachment/${attachmentId}/text`, {
       query: { max_bytes: maxBytes },
       signal
     })
-  }
+  },
 
   /** library_search — GET /library/search. Keyword only (no DSL); `warning` carries the
    *  too-short-query notice so a 1-character query is not a silent zero-hit. */
@@ -166,11 +167,11 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     opts: { q: string; limit: number },
     signal?: AbortSignal
   ): Promise<DomainLibrarySearch> {
-    return this._req<DomainLibrarySearch>('GET', '/library/search', {
+    return http.req<DomainLibrarySearch>('GET', '/library/search', {
       query: { q: opts.q, limit: opts.limit },
       signal
     })
-  }
+  },
 
   // ── 资料库 write face (P2-L1) — routers/library.py 的写端点。Every write carries `actor` (see
   //    DomainLibraryActor). Authorization is SERVER-side (mail-attachments projection / .trash /
@@ -189,7 +190,7 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     actor: DomainLibraryActor,
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('POST', '/library/files', {
+    return http.req<Record<string, unknown>>('POST', '/library/files', {
       body: {
         parent_path: input.parentPath,
         filename: input.filename,
@@ -200,7 +201,7 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
       },
       signal
     })
-  }
+  },
 
   /** 二进制入库 —— `POST /library/files` 的 **octet-stream 分支**
    *  (routers/library.py::library_create_file 的 else 支：参数走 query，请求体是裸字节)。
@@ -222,7 +223,7 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     },
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('POST', '/library/files', {
+    return http.req<Record<string, unknown>>('POST', '/library/files', {
       query: {
         parent_path: input.parentPath,
         filename: input.filename,
@@ -232,7 +233,7 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
       rawBody: input.bytes,
       signal
     })
-  }
+  },
 
   /** library_write mode=overwrite — PUT /library/file/{id} {content, expected_hash, change_note,
    *  actor}. expected_hash ≠ current (or null) → 409 with data={content_hash, content}; same
@@ -243,7 +244,7 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     actor: DomainLibraryActor,
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('PUT', `/library/file/${fileId}`, {
+    return http.req<Record<string, unknown>>('PUT', `/library/file/${fileId}`, {
       body: {
         content: input.content,
         expected_hash: input.expectedHash,
@@ -252,7 +253,7 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
       },
       signal
     })
-  }
+  },
 
   /** library_append — POST /library/file/{id}/append {content, change_note, actor}. Additive (no
    *  CAS): the snapshot in history is still the full post-append text. */
@@ -262,7 +263,7 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     actor: DomainLibraryActor,
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('POST', `/library/file/${fileId}/append`, {
+    return http.req<Record<string, unknown>>('POST', `/library/file/${fileId}/append`, {
       body: {
         content: input.content,
         change_note: input.changeNote ?? null,
@@ -270,7 +271,7 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
       },
       signal
     })
-  }
+  },
 
   /** library_move — POST /library/file/{id}/move {target_path, actor}. `target_path` is a virtual
    *  path (a full new path, or an existing folder → filename kept). */
@@ -280,11 +281,11 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     actor: DomainLibraryActor,
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('POST', `/library/file/${fileId}/move`, {
+    return http.req<Record<string, unknown>>('POST', `/library/file/${fileId}/move`, {
       body: { target_path: targetPath, actor: libraryActorWire(actor) },
       signal
     })
-  }
+  },
 
   /** library_delete — DELETE /library/file/{id}?actor_kind=&agent_id= : SOFT delete → .trash
    *  (restorable). The endpoint's `purge` query is a renderer-only affordance (mockup F11) the
@@ -294,18 +295,18 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     actor: DomainLibraryActor,
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('DELETE', `/library/file/${fileId}`, {
+    return http.req<Record<string, unknown>>('DELETE', `/library/file/${fileId}`, {
       query: { actor_kind: actor.kind, agent_id: actor.agentId },
       signal
     })
-  }
+  },
 
   /** Issue an ephemeral loopback capability URL for browser_use preview of saved artifacts. */
   libraryIssueArtifactPreviewToken(
     input: { slug: string; version?: number; entryPath?: string },
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('POST', '/library/artifacts/preview-token', {
+    return http.req<Record<string, unknown>>('POST', '/library/artifacts/preview-token', {
       body: {
         slug: input.slug,
         version: input.version ?? null,
@@ -313,7 +314,7 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
       },
       signal
     })
-  }
+  },
 
   /** Publish a saved local artifact directory / bundle to Canvas Artifact Server. */
   libraryPublishArtifactBundle(
@@ -329,7 +330,7 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
     },
     signal?: AbortSignal
   ): Promise<Record<string, unknown>> {
-    return this._req<Record<string, unknown>>('POST', '/library/artifacts/publish-bundle', {
+    return http.req<Record<string, unknown>>('POST', '/library/artifacts/publish-bundle', {
       body: {
         slug: input.slug,
         version: input.version ?? null,
@@ -343,4 +344,7 @@ export class CalendarLibraryDomainClient extends AgentsDomainClient {
       signal
     })
   }
+  }
 }
+
+export type CalendarLibraryMethods = ReturnType<typeof createCalendarLibraryMethods>

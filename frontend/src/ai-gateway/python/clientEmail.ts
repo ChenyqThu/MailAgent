@@ -1,6 +1,5 @@
 // Email reads/writes, drafts, attachments, KOS passthrough, and reports.
-import { MattersDomainClient } from './clientMatters'
-import { DomainError } from './clientCore'
+import { DomainError, type DomainHttpCore } from './clientCore'
 import type {
   DomainEmailListOpts,
   DomainSearchOpts,
@@ -27,7 +26,9 @@ import type {
 } from '@shared/types/cli.gen'
 import type { ReportBlock, ReportDetail, ReportListItem, SearchResult } from '@shared/api/types'
 
-export class EmailDomainClient extends MattersDomainClient {
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- inferred for MailAgentDomainClient declaration merging
+export function createEmailMethods(http: DomainHttpCore) {
+  return {
   // ── read primitives (one per gateway read tool) ──────────────────────────
 
   /** email_list_filter — metadata-filter list. GET /email/list (camelCase alias query).
@@ -38,7 +39,7 @@ export class EmailDomainClient extends MattersDomainClient {
     opts: DomainEmailListOpts,
     signal?: AbortSignal
   ): Promise<EmailList_EmailListItem[]> {
-    return this._req<EmailList_EmailListItem[]>('GET', '/email/list', {
+    return http.req<EmailList_EmailListItem[]>('GET', '/email/list', {
       query: {
         subject: opts.subject,
         fromAddr: opts.fromAddr,
@@ -53,11 +54,11 @@ export class EmailDomainClient extends MattersDomainClient {
       },
       signal
     })
-  }
+  },
 
   /** email_search_fulltext — FTS body search. GET /email/search (param is `q`). */
   searchEmailsFulltext(opts: DomainSearchOpts, signal?: AbortSignal): Promise<SearchResult> {
-    return this._req<SearchResult>('GET', '/email/search', {
+    return http.req<SearchResult>('GET', '/email/search', {
       query: {
         q: opts.query,
         mailbox: opts.mailbox,
@@ -68,7 +69,7 @@ export class EmailDomainClient extends MattersDomainClient {
       },
       signal
     })
-  }
+  },
 
   /** email_get — single email metadata. GET /email/{id}?include=attachments.
    *  E_NOT_FOUND → null (mirrors httpApi.email.get).
@@ -85,7 +86,7 @@ export class EmailDomainClient extends MattersDomainClient {
     matterScope?: number
   ): Promise<EmailGet_EmailRecord | null> {
     try {
-      return await this._req<EmailGet_EmailRecord>('GET', `/email/${internalId}`, {
+      return await http.req<EmailGet_EmailRecord>('GET', `/email/${internalId}`, {
         query: { include: 'attachments', matter_scope: matterScope },
         signal
       })
@@ -93,7 +94,7 @@ export class EmailDomainClient extends MattersDomainClient {
       if (e instanceof DomainError && e.code === 'E_NOT_FOUND') return null
       throw e
     }
-  }
+  },
 
   /** email_body — body in one format. GET /email/{id}/body?format=markdown (default) | html.
    *  E_NOT_FOUND → null (mirrors httpApi.email.body; the endpoint 404s both for "no body row"
@@ -107,7 +108,7 @@ export class EmailDomainClient extends MattersDomainClient {
     preserveMissingReason = false
   ): Promise<NonNullable<MailagentEmailBody['data']> | null> {
     try {
-      return await this._req<NonNullable<MailagentEmailBody['data']>>(
+      return await http.req<NonNullable<MailagentEmailBody['data']>>(
         'GET',
         `/email/${internalId}/body`,
         { query: { format }, signal }
@@ -117,16 +118,16 @@ export class EmailDomainClient extends MattersDomainClient {
         return null
       throw e
     }
-  }
+  },
 
   /** email_list_thread — sibling emails by thread_id. GET /email/thread/{tid}. */
   listEmailsByThread(threadId: string, signal?: AbortSignal): Promise<EmailList_EmailListItem[]> {
-    return this._req<EmailList_EmailListItem[]>(
+    return http.req<EmailList_EmailListItem[]>(
       'GET',
       `/email/thread/${encodeURIComponent(threadId)}`,
       { signal }
     )
-  }
+  },
 
   /** email_search_attachments — FTS over extracted attachment text. GET /attachment/search
    *  (param is `q`). */
@@ -134,7 +135,7 @@ export class EmailDomainClient extends MattersDomainClient {
     opts: DomainSearchOpts,
     signal?: AbortSignal
   ): Promise<DomainAttachmentSearchResult> {
-    return this._req<DomainAttachmentSearchResult>('GET', '/attachment/search', {
+    return http.req<DomainAttachmentSearchResult>('GET', '/attachment/search', {
       query: {
         q: opts.query,
         mailbox: opts.mailbox,
@@ -144,7 +145,7 @@ export class EmailDomainClient extends MattersDomainClient {
       },
       signal
     })
-  }
+  },
 
   /** email_thread_attachments — every attachment across a thread (metadata + owning-email
    *  provenance). GET /attachment/thread/{thread_id}. The endpoint returns {thread_id, items}. */
@@ -152,12 +153,12 @@ export class EmailDomainClient extends MattersDomainClient {
     threadId: string,
     signal?: AbortSignal
   ): Promise<DomainThreadAttachmentsResult> {
-    return this._req<DomainThreadAttachmentsResult>(
+    return http.req<DomainThreadAttachmentsResult>(
       'GET',
       `/attachment/thread/${encodeURIComponent(threadId)}`,
       { signal }
     )
-  }
+  },
 
   /** email_attachment_text — one page of an attachment's extracted text (server returns
    *  [offset, offset+max_chars) plus total_chars / next_offset). GET
@@ -169,38 +170,38 @@ export class EmailDomainClient extends MattersDomainClient {
     offset: number,
     signal?: AbortSignal
   ): Promise<DomainAttachmentTextResult> {
-    return this._req<DomainAttachmentTextResult>('GET', `/attachment/${attachmentId}/text`, {
+    return http.req<DomainAttachmentTextResult>('GET', `/attachment/${attachmentId}/text`, {
       query: { max_chars: maxChars, offset },
       signal
     })
-  }
+  },
 
   /** kos_query — KOS tool proxy. POST /chat/kos-call {name, args}. Returns the raw
    *  KOS result (list/dict/str). E_KOS_* errors surface as DomainError. */
   kosCall(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
-    return this._req<unknown>('POST', '/chat/kos-call', { body: { name, args }, signal })
-  }
+    return http.req<unknown>('POST', '/chat/kos-call', { body: { name, args }, signal })
+  },
 
   /** report_list — generated reports. GET /reports (agentId alias). */
   listReports(opts: DomainReportListOpts, signal?: AbortSignal): Promise<ReportListItem[]> {
-    return this._req<ReportListItem[]>('GET', '/reports', {
+    return http.req<ReportListItem[]>('GET', '/reports', {
       query: { cadence: opts.cadence, agentId: opts.agentId, limit: opts.limit },
       signal
     })
-  }
+  },
 
   /** report_get — one report incl. doc blocks. GET /reports/{id}.
    *  E_NOT_FOUND → null (mirrors httpApi.report.get). */
   async getReport(reportId: string, signal?: AbortSignal): Promise<ReportDetail | null> {
     try {
-      return await this._req<ReportDetail>('GET', `/reports/${encodeURIComponent(reportId)}`, {
+      return await http.req<ReportDetail>('GET', `/reports/${encodeURIComponent(reportId)}`, {
         signal
       })
     } catch (e) {
       if (e instanceof DomainError && e.code === 'E_NOT_FOUND') return null
       throw e
     }
-  }
+  },
 
   /** report_write — persist a local custom ReportDoc artifact. */
   writeCustomReport(
@@ -208,11 +209,11 @@ export class EmailDomainClient extends MattersDomainClient {
     input: { title: string; blocks: ReportBlock[]; mode: 'new' | 'replace' },
     signal?: AbortSignal
   ): Promise<ReportDetail> {
-    return this._req<ReportDetail>('POST', '/reports/custom', {
+    return http.req<ReportDetail>('POST', '/reports/custom', {
       body: { agentId, ...input },
       signal
     })
-  }
+  },
 
   // ── write primitives (Phase 03b — one per gateway write tool) ─────────────
   // Each mirrors the legacy HttpChatPlatform write method's exact wire call
@@ -232,32 +233,32 @@ export class EmailDomainClient extends MattersDomainClient {
     if (patch.isRead !== undefined) body.isRead = patch.isRead
     if (patch.isFlagged !== undefined) body.isFlagged = patch.isFlagged
     if (patch.processingStatus !== undefined) body.processingStatus = patch.processingStatus
-    return this._req<DomainFlagResult>('POST', `/email/${internalId}/flag`, { body, signal })
-  }
+    return http.req<DomainFlagResult>('POST', `/email/${internalId}/flag`, { body, signal })
+  },
 
   /** email_archive — IMAP MOVE INBOX→Archive + Mailbox→存档. POST /email/{id}/archive. */
   archiveEmail(internalId: number, signal?: AbortSignal): Promise<DomainArchiveResult> {
-    return this._req<DomainArchiveResult>('POST', `/email/${internalId}/archive`, {
+    return http.req<DomainArchiveResult>('POST', `/email/${internalId}/archive`, {
       body: {},
       signal
     })
-  }
+  },
 
   /** email_pin — pin/unpin (local UI flag). POST /email/{id}/pin {pinned}. */
   setPin(internalId: number, pinned: boolean, signal?: AbortSignal): Promise<DomainPinResult> {
-    return this._req<DomainPinResult>('POST', `/email/${internalId}/pin`, {
+    return http.req<DomainPinResult>('POST', `/email/${internalId}/pin`, {
       body: { pinned },
       signal
     })
-  }
+  },
 
   /** email_resync — re-push to Notion from the SQLite SSoT. POST /email/{id}/resync. */
   resyncEmail(internalId: number, signal?: AbortSignal): Promise<DomainResyncResult> {
-    return this._req<DomainResyncResult>('POST', `/email/${internalId}/resync`, {
+    return http.req<DomainResyncResult>('POST', `/email/${internalId}/resync`, {
       body: {},
       signal
     })
-  }
+  },
 
   /** email_draft_reply — create a reply / reply-all draft (davmail IMAP APPEND). POST
    *  /email/draft with {internalId, mode, bodyText, quoteOriginal:true} — mode defaults to
@@ -276,7 +277,7 @@ export class EmailDomainClient extends MattersDomainClient {
       signal?: AbortSignal
     } = {}
   ): Promise<DomainDraftResult> {
-    const data = await this._req<{
+    const data = await http.req<{
       internal_id: number
       drafts_folder?: string | null
       method?: string | null
@@ -298,7 +299,7 @@ export class EmailDomainClient extends MattersDomainClient {
       accountName: null,
       draftId: data.method ?? 'reply_all'
     }
-  }
+  },
 
   /** email_draft_compose / email_draft_update (prd 07-27 C-3/C-4) — create a draft through the
    *  SAME endpoint the renderer's composer uses (POST /email/draft). ONE wire method for both
@@ -320,7 +321,7 @@ export class EmailDomainClient extends MattersDomainClient {
     input: DomainComposeDraftInput,
     signal?: AbortSignal
   ): Promise<DomainComposeDraftResult> {
-    return this._req<DomainComposeDraftResult>('POST', '/email/draft', {
+    return http.req<DomainComposeDraftResult>('POST', '/email/draft', {
       body: {
         internalId: input.internalId,
         mode: input.mode,
@@ -336,14 +337,14 @@ export class EmailDomainClient extends MattersDomainClient {
       },
       signal
     })
-  }
+  },
 
   /** email_draft_update step 3 — delete the superseded draft. DELETE /email/draft/{id}
    *  (IMAP \Deleted+EXPUNGE + local row cleanup). davmail-only; the endpoint itself refuses a
    *  row whose mailbox is not the Drafts folder (E_INVALID_ARG). */
   deleteDraft(internalId: number, signal?: AbortSignal): Promise<DomainDeleteDraftResult> {
-    return this._req<DomainDeleteDraftResult>('DELETE', `/email/draft/${internalId}`, { signal })
-  }
+    return http.req<DomainDeleteDraftResult>('DELETE', `/email/draft/${internalId}`, { signal })
+  },
 
   /** email_prepare_send (Phase 04b) — real SMTP send AFTER the double guard. POST
    *  /email/send-approved with the outbound fields + content hash + idempotency key + HMAC
@@ -354,7 +355,7 @@ export class EmailDomainClient extends MattersDomainClient {
     req: DomainSendApprovedRequest,
     signal?: AbortSignal
   ): Promise<DomainSendApprovedResult> {
-    return this._req<DomainSendApprovedResult>('POST', '/email/send-approved', {
+    return http.req<DomainSendApprovedResult>('POST', '/email/send-approved', {
       body: {
         to: req.to,
         cc: req.cc,
@@ -369,7 +370,7 @@ export class EmailDomainClient extends MattersDomainClient {
       },
       signal
     })
-  }
+  },
 
   /** M1 auto-capture — fire a finished turn at the mem0 extraction endpoint. POST
    *  /chat/memory/capture {userText, assistantText, sessionId?}. Returns the captured-entry
@@ -384,11 +385,11 @@ export class EmailDomainClient extends MattersDomainClient {
       assistantText: input.assistantText
     }
     if (typeof input.sessionId === 'number') body.sessionId = input.sessionId
-    return this._req<{ captured: unknown[]; count: number }>('POST', '/chat/memory/capture', {
+    return http.req<{ captured: unknown[]; count: number }>('POST', '/chat/memory/capture', {
       body,
       signal
     })
-  }
+  },
 
   /** Wave 4C — Persist on-demand translation segments via serve-api (single-writer sync_store.db). */
   saveTranslation(
@@ -410,9 +411,12 @@ export class EmailDomainClient extends MattersDomainClient {
     saved: boolean
     cacheKept?: boolean
   }> {
-    return this._req('PUT', `/ai/translation/${internalId}`, {
+    return http.req('PUT', `/ai/translation/${internalId}`, {
       body: input,
       signal
     })
   }
+  }
 }
+
+export type EmailMethods = ReturnType<typeof createEmailMethods>

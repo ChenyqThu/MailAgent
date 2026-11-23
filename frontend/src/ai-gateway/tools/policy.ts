@@ -44,6 +44,18 @@ import type { ToolSet } from 'ai'
 
 import { GATEWAY_LIBRARY_WRITE_TOOL_NAMES } from '@shared/libraryConstants'
 
+import { registerDynamicToolClass, resolveToolClass, type GatewayToolClass } from './policyRules'
+import {
+  evaluateToolAllowedInContext,
+  filterToolsByContextMode,
+  hasConnectorWriteGrant,
+  type AgentModeGrants,
+  type ImVenueSwitches
+} from './policyEval'
+
+export * from './policyRules'
+export * from './policyEval'
+
 /** Run-level provenance of a chat run (ADR-001 D1). Order of severity: manual_chat is the only
  *  human-in-front-of-screen mode; the other two exist for S4 (email-triggered / scheduled runs)
  *  and are already enforced here so S4 cannot forget them.
@@ -115,42 +127,6 @@ export type AgentContextMode = (typeof AGENT_CONTEXT_MODES)[number]
  *  client-supplied junk → 'untrusted_trigger' (the strictest of the general-purpose modes). This
  *  is the ONLY way a mode enters the policy layer, so "forgot to pass the mode" always degrades
  *  toward safety. */
-export function normalizeContextMode(value: unknown): AgentContextMode {
-  return (AGENT_CONTEXT_MODES as readonly unknown[]).includes(value)
-    ? (value as AgentContextMode)
-    : 'untrusted_trigger'
-}
-
-/** Policy class of a gateway tool (ADR-001 D2, 'web' split out of 'outbound' by ADR-004 rev3.1
- *  §3.1) — orthogonal to the approval tier.
- *
- *  'connector_write' (stage 1 PR2, harness-expansion epic — grill Q5=A原案; 08-05 WP-10 改判): the
- *  write/update tools of an MCP connector (`mcp__<connector>__<tool>`, runtime-registered — never
- *  in the static map below). manual_chat: registered; the approval shape follows the OWNER'S
- *  per-tool tier since 08-05 — 'ask' → the edit-tier card (the pre-08-05 恒 HITL behaviour),
- *  'auto' → card-free via the policyEvaluate seam (audit 'auto_tool_mode'), 'off' → not
- *  registered at all (WP-11's built-in per-tool registry never contains dynamic names —
- *  the CONNECTOR tier, not the built-in tier map, is how a connector write goes card-free). Outside
- *  manual (PR3): the per-connector grant key `connectors` lifts the row for
- *  untrusted_trigger/cron_headless when ANY granted ceiling is write-capable ('write'/'update');
- *  no grants → the fail-closed `return false`. im_chat (stage 2 PR-1, 08-04 拍板「connector 对
- *  im_chat 全开放」; 08-05 场地二: tiers apply like manual — ask 走飞书卡 / auto 免卡): grants
- *  are still never consulted (the venue is owner-present, not a granted headless run). Connector
- *  READ tools map to the existing 'read' (silent on the default 'auto' tier; an owner-demoted
- *  'ask' read registers approval-gated in owner-present venues); the load seam
- *  (shouldLoadConnectorTools) still keeps headless runs WITHOUT connector grants at zero fetches. */
-export const GATEWAY_TOOL_CLASS_VALUES = [
-  'read',
-  'artifact',
-  'domain_write',
-  'capability_change',
-  'exec',
-  'web',
-  'outbound',
-  'connector_write'
-] as const
-export type GatewayToolClass = (typeof GATEWAY_TOOL_CLASS_VALUES)[number]
-
 /** tool name → policy class, per ADR-001 §4. Single source of truth: types.ts resolves each
  *  audited write/send tool's class from this map, and applyContextModePolicy filters the assembled
  *  ToolSet by it. Mirrored into tests/agent_eval/tool_catalog.json as `tool_class` (policy.test.ts
@@ -421,112 +397,22 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   computer_use_run: 'exec'
 }
 
-// ---- Stage 0b (harness-expansion epic) — runtime tool-class registry for DYNAMIC tools --------
-//
-// Stage 1 introduces connector tools whose names are only known at runtime
-// (`mcp__<connector>__<tool>`): the static GATEWAY_TOOL_CLASSES record is structurally blind to
-// them (fail-close to 'exec' would strip them from every headless run) and the static catalog
-// gates have zero coverage. 0b lands the MECHANISM only (stage 1 fills the contents): a dynamic
-// source must REGISTER each tool's class here before assembly; admitDynamicTools() refuses any
-// dynamic tool without a registration (fail-closed), and classOfTool() resolves registered names
-// so the SAME matrix / runtime modeDenied / auto-approve predicates govern them. With zero
-// registrations (today) every path below is byte-identical to the static behaviour.
-
-const RUNTIME_TOOL_CLASSES = new Map<string, GatewayToolClass>()
-
-/** Stage 2 PR-4 (task 08-01 messenger) — the DESTRUCTIVE bit of a runtime-registered tool, kept
- *  in a SIBLING map on purpose: it is a *presentation* fact (render a red warning), NOT a policy
- *  input. Nothing in the matrix / auto-approve predicates reads it, so widening the class map's
- *  value type (and every consumer of it) would have been the larger change.
- *
- *  Why it must live here at all: at approval-stash time (`chatRun.maybeStashAndAnnounceApproval`)
- *  the only tool fact in scope is the composed name — the connector manifest lives in the
- *  Electron lifecycle's TTL cache and is not reachable through `AiGatewayConfig`. The desktop
- *  McpApprovalCard sidesteps this by re-fetching `/api/connector/{id}/tools` from the renderer;
- *  an out-of-app surface (Feishu) has no such renderer, so the bit has to ride the stash. */
-const RUNTIME_TOOL_DESTRUCTIVE = new Map<string, boolean>()
-
-/** Register the policy class of a runtime-discovered (dynamic) tool. Fail-closed guards: a
- *  static GATEWAY_TOOL_CLASSES name can never be shadowed (the compile-time map stays the single
- *  source of truth for built-in tools), and only real GatewayToolClass literals are accepted
- *  (junk from a connector manifest must not mint a policy class).
- *
- *  `destructive` (optional, stage 2 PR-4) is presentation-only — see RUNTIME_TOOL_DESTRUCTIVE.
- *  Omitting it registers `false`, which is byte-identical to the pre-PR-4 behaviour. */
 export function registerRuntimeToolClass(
   name: string,
   toolClass: GatewayToolClass,
   destructive?: boolean
 ): void {
-  if (!name) throw new Error('registerRuntimeToolClass: empty tool name')
-  if (GATEWAY_TOOL_CLASSES[name] !== undefined) {
-    throw new Error(`registerRuntimeToolClass: '${name}' is a static gateway tool (unshadowable)`)
-  }
-  if (!(GATEWAY_TOOL_CLASS_VALUES as readonly string[]).includes(toolClass)) {
-    throw new Error(`registerRuntimeToolClass: invalid tool class '${String(toolClass)}'`)
-  }
-  RUNTIME_TOOL_CLASSES.set(name, toolClass)
-  RUNTIME_TOOL_DESTRUCTIVE.set(name, destructive === true)
+  registerDynamicToolClass(GATEWAY_TOOL_CLASSES, name, toolClass, destructive)
 }
 
-/** Is this runtime-registered tool marked destructive by its MCP server? Unknown name → false
- *  (fail-quiet: an absent registration means "no warning", never a fabricated one). */
-export function isRuntimeToolDestructive(name: string): boolean {
-  return RUNTIME_TOOL_DESTRUCTIVE.get(name) === true
-}
-
-/** Is this name a runtime-registered dynamic tool? (assembly gate + tests) */
-export function hasRuntimeToolClass(name: string): boolean {
-  return RUNTIME_TOOL_CLASSES.has(name)
-}
-
-/** Test-only: clear the registry (module-level state would otherwise leak across tests). */
-export function resetRuntimeToolClasses(): void {
-  RUNTIME_TOOL_CLASSES.clear()
-  RUNTIME_TOOL_DESTRUCTIVE.clear()
-}
-
-/** Stage-0b assembly gate: admit DYNAMIC tools into an assembled ToolSet. A dynamic tool with NO
- *  runtime classification is NOT admitted — without a class the matrix could only fail-close it
- *  to 'exec' (silently stripped headless, catalog gates blind), so the miss is made loud at the
- *  one seam stage 1 owns. A name colliding with an already-assembled tool never clobbers it
- *  (defense in depth on top of the registry's static-shadow rejection). `dynamic` absent/empty →
- *  the SAME base object (identity — every current caller, byte-identical). buildGatewayTools runs
- *  this BEFORE applyContextModePolicy so admitted tools are still mode-filtered by their
- *  registered class. */
-export function admitDynamicTools(base: ToolSet, dynamic?: ToolSet): ToolSet {
-  if (!dynamic) return base
-  const entries = Object.entries(dynamic)
-  if (entries.length === 0) return base
-  const out: ToolSet = { ...base }
-  for (const [name, t] of entries) {
-    if (Object.prototype.hasOwnProperty.call(base, name)) continue
-    if (!RUNTIME_TOOL_CLASSES.has(name)) continue
-    out[name] = t
-  }
-  return out
-}
-
-/** Resolve a tool's policy class: runtime registry first (dynamic tools; can never shadow a
- *  static name — registerRuntimeToolClass rejects those), then the static map. Missing/unknown
- *  name fail-closes to 'exec' (strictest class: manual-only registration + never auto-approved)
- *  — a new tool that forgot to classify itself degrades toward safety AND trips the completeness
- *  test. */
 export function classOfTool(name: string): GatewayToolClass {
-  return RUNTIME_TOOL_CLASSES.get(name) ?? GATEWAY_TOOL_CLASSES[name] ?? 'exec'
+  return resolveToolClass(GATEWAY_TOOL_CLASSES, name)
 }
 
-/** Per-agent web grant tier (ADR-004 rev3.1 D1/D2): 'off' = not registered headless (default),
- *  'gated' = registered + per-agent origin-whitelist免卡 for web_fetch (web_search grant-level),
- *  'open' = registered + grant-level免卡 for any URL. A three-state enum (not two booleans) so the
- *  illegal state "full access while web is off" is unrepresentable. */
-export type WebGrant = 'off' | 'gated' | 'open'
-
-/** Fail-closed parse of a spec's grantWeb: ONLY the exact literals 'gated'/'open' pass; anything
- *  else (true / 1 / 'yes' / junk / absent) collapses to 'off' — the web mirror of the
- *  `grantExec === true` discrimination, never a raw passthrough. */
-export function parseWebGrant(raw: unknown): WebGrant {
-  return raw === 'gated' || raw === 'open' ? raw : 'off'
+export function normalizeContextMode(value: unknown): AgentContextMode {
+  return (AGENT_CONTEXT_MODES as readonly unknown[]).includes(value)
+    ? (value as AgentContextMode)
+    : 'untrusted_trigger'
 }
 
 /** task 09-02 — the per-agent chat-history READ RADIUS of the three chat_session_* tools (which
@@ -535,12 +421,6 @@ export function parseWebGrant(raw: unknown): WebGrant {
  *  are class 'read' and always admitted) — it only decides the X-MailAgent-Allow-All-History header
  *  the serve-api enforces. */
 export type SessionsGrant = 'own' | 'all'
-
-/** Fail-closed parse of a spec's grantSessions: ONLY the exact literal 'all' widens; anything else
- *  (absent / junk / 'own') collapses to 'own' — the sessions mirror of parseWebGrant. */
-export function parseSessionsGrant(raw: unknown): SessionsGrant {
-  return raw === 'all' ? 'all' : 'own'
-}
 
 /** Stage 1 PR3 (harness-expansion epic, grill Q2/Q3=B) — a per-connector crud CEILING of a
  *  headless custom-agent run. 🔴 The vocabulary is read < write < update and deliberately has NO
@@ -556,166 +436,6 @@ export const CONNECTOR_CRUD_RANK: Record<ConnectorGrant, 1 | 2 | 3> = {
   read: 1,
   write: 2,
   update: 3
-}
-
-/** Fail-closed parse of a spec's grantConnectors (`{connectorId: ceiling}`): only entries with a
- *  non-empty string key AND an exact 'read'/'write'/'update' literal value survive; every other
- *  entry (junk value, 'delete', empty key) is dropped PER-ENTRY, and an empty/absent/non-object
- *  result collapses to undefined (= no connector grants at all — the connector mirror of
- *  parseWebGrant, never a raw passthrough). */
-export function parseConnectorGrants(raw: unknown): Record<string, ConnectorGrant> | undefined {
-  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
-  const out: Record<string, ConnectorGrant> = {}
-  for (const [key, value] of Object.entries(raw)) {
-    if (!key) continue
-    if (value === 'read' || value === 'write' || value === 'update') out[key] = value
-  }
-  return Object.keys(out).length > 0 ? out : undefined
-}
-
-/** PR3 — does this (possibly junk) connectors grant object carry ANY write-capable ceiling?
- *  Re-parses fail-closed (a hand-built / stash-frozen grants object may carry junk), so a
- *  'read'-only grant, 'delete'/junk values, empty keys and non-object shapes all yield false.
- *  This is the connector_write CLASS row's coarse gate — see isToolClassAllowedInMode. */
-function hasConnectorWriteGrant(connectors: unknown): boolean {
-  const parsed = parseConnectorGrants(connectors)
-  if (!parsed) return false
-  return Object.values(parsed).some((v) => v === 'write' || v === 'update')
-}
-
-/** Per-agent mode grants (ADR-004 §4.1, web key added by ADR-004 rev3.1 D1, connectors key added
- *  by stage 1 PR3 — the explicit revisions of the ADR-001 §5 matrix's exec/web/connector rows).
- *  🔴 The type has ONLY the `exec`, `web` and `connectors` keys: capability_change and outbound
- *  (send) have NO corresponding field — they are structurally un-grantable (not "don't pass true"
- *  but "nowhere to pass it"), fixing the red line at the type level. Constructed by the gateway
- *  from the strictly-parsed spec as discriminated typed values ({ exec: spec.toolPolicy?.grantExec
- *  === true, web: parseWebGrant(spec.toolPolicy?.grantWeb) }, plus `connectors` ONLY when
- *  parseConnectorGrants yields a non-empty record — an absent key means "no connector grants",
- *  keeping every pre-PR3 grants object byte-identical) — NEVER a passthrough of a raw spec object
- *  (a future spec field must not silently flow into the matrix). */
-export interface MatterItemComputerUsePolicy {
-  enabled: true
-  mode: 'propose_only'
-  stopBeforeSubmit: true
-  allowedApps: string[]
-  allowedDomains: string[]
-  connectors: Array<'browser_use' | 'desktop_use'>
-  jobId?: number
-  dispatchId: number
-}
-
-export interface CustomAgentComputerUsePolicy {
-  enabled: true
-  submitMode: 'stop_before_submit' | 'allow_submit'
-  allowedApps: string[]
-  allowedDomains: string[]
-  connectors: Array<'browser_use' | 'desktop_use'>
-  jobId?: number
-}
-
-export interface AgentModeGrants {
-  exec?: boolean
-  web?: WebGrant
-  /** PR3 — per-connector crud ceilings ({connectorId: 'read'|'write'|'update'}), spec-derived via
-   *  parseConnectorGrants (fail-closed per-entry; 'delete' unrepresentable). Consumed by (a) the
-   *  connector_write matrix row below (coarse class gate) and (b) createConnectorTools'
-   *  registration filter (the per-connector / per-tool precision). */
-  connectors?: Record<string, ConnectorGrant>
-  /** Phase 5 — per-connector per-tool allowlists ({connectorId: [toolName, ...]}). */
-  connectorTools?: Record<string, string[]>
-  /** WS-5 — bounded Computer Use draft grant on a `matter_followup` item-run (`propose_only` +
-   *  `stopBeforeSubmit === true` only). Read solely by `isToolAllowedInContext` (never by
-   *  `isToolClassAllowedInMode`, keeping `exec` strictly closed for general exec tools). */
-  matterItemComputerUse?: MatterItemComputerUsePolicy
-  /** Wave 6 — bounded Computer Use grant on an `untrusted_trigger` / `cron_headless` Custom Agent. */
-  customAgentComputerUse?: CustomAgentComputerUsePolicy
-}
-
-/** The per-agent run context threaded through a headless custom-agent run (ADR-004 §3.1/§4.4):
- *  agentRun.ts constructs it from the pulled spec, buildTools/write/exec factories consume it, and
- *  the approval stash FREEZES it at pause time so an island resume rebuilds the exact same tool
- *  face (never wider). Manual entrypoints never construct one — absent everywhere means the
- *  pre-ADR-004 behaviour, byte-identical. */
-export interface AgentRunContext {
-  agentId: string
-  /** The owner's per-agent allow-list, already normalized: an agent run ALWAYS carries an array
-   *  (a malformed spec normalizes to [] — fail-closed, ADR-004 §5.1); undefined only survives in
-   *  hand-built test contexts and wrapCfgForAgentRun re-normalizes it to []. */
-  allowedTools?: string[]
-  /** S6 W3 (ADR-004 rev3.1 §5.1/D3) — the owner's per-agent skill MOUNT list, spec-projected
-   *  (the Python side substitutes the default mount set for NULL, so a real spec always carries
-   *  the resolved array; missing/malformed → [] fail-closed, mirroring allowedTools). Consumed by
-   *  buildGatewayTools as a SECOND applySkillGating pass (mounted ∩ advertised — pure reduction,
-   *  independent of the M4a flag and of the advertisedSkills null fail-open, which are manual
-   *  business-state semantics). Never widens: CORE_UNGATED / collision-exempt floors stay. */
-  skills?: string[]
-  modeGrants?: AgentModeGrants
-  /** task 09-02 — the chat-history read radius (parseSessionsGrant of the spec's grantSessions).
-   *  Present ONLY when 'all' (conditional include, so every pre-09-02 context object — and the
-   *  stash-freeze assertions on it — stays byte-identical); absent = 'own'. Consumed by ONE
-   *  reader: buildGatewayTools' session-tool binding (allowAllHistory). */
-  grantSessions?: SessionsGrant
-  /** S6 W1 — the async_jobs row id of this headless run, frozen into the run context so a paused
-   *  approval carries it into the stash (maybeStashAndAnnounceApproval freezes the whole context).
-   *  Read-only metadata for GET /api/ai/approval/pending's record-view projection; NEVER consulted
-   *  by the matrix / intersection / whitelist. Absent on manual entrypoints (the pre-S6 shape,
-   *  byte-identical), so pending → jobId:null for a non-agent approval. */
-  jobId?: number
-  /** Matters MVP P4 (D5/D7) — the Matter this run follows up, built by agentRunContextFromSpec
-   *  from the SERVER-assembled spec's `matter` key (never a body). Present ONLY for a
-   *  matter_followup run; every manual/im/cron context omits it, so every pre-P4 assembly is
-   *  byte-identical. Two consumers, both in tools/index.ts: (a) it SCOPES the email read tools to
-   *  this Matter's resource set (the headless counterpart of the manual matterScopeFilter), and
-   *  (b) it is the registration condition + the server-stamped identity of
-   *  `matter_update_propose` (the model never passes matter_id / run_id — they are not in the
-   *  schema at all). NOT a policy input: the matrix row keys on the MODE, so a mis-threaded
-   *  matterRun can never widen a tool face. */
-  matterRun?: {
-    matterId: number
-    publicId: string
-    runId: number
-  }
-  /** L4 批次3 (task 08-25) — the ITEM DISPATCH this run executes, built by agentRunContextFromSpec
-   *  from the SERVER-assembled spec's `matterItem` key (never a body). Present ONLY for a
-   *  `matter_item_run` spec; every other context omits it, so every pre-批次3 assembly is
-   *  byte-identical. Two consumers, both structural: (a) it is the registration condition + the
-   *  server-stamped identity of `matter_item_report` (the model passes no matter / item /
-   *  dispatch id — the schema has none), and (b) it selects wrapCfgForAgentRun's item read-face
-   *  belt. 🔴 NOT a policy input (the matrix row keys on the MODE), and deliberately a SECOND
-   *  input beside the derived mode, so a broken deriveContextMode cannot take both belts down at
-   *  once. Frozen into the approval stash with the rest of the context. */
-  matterItemRun?: {
-    matterId: number
-    publicId: string
-    itemId: number
-    dispatchId: number
-  }
-  /** WS-5 — validated `computer_use_run` propose-only draft policy for a `matter_item_run`.
-   *  Present ONLY when `runKind === 'matter_item_run'`, `mode === 'propose_only'`,
-   *  `stopBeforeSubmit === true`, and non-empty concrete scope entries exist. */
-  matterItemComputerUse?: MatterItemComputerUsePolicy
-  /** Wave 6 — validated bounded Computer Use policy for `untrusted_trigger` / `cron_headless` custom agents. */
-  customAgentComputerUse?: CustomAgentComputerUsePolicy
-  /** 0812 dogfood — the owner-configured web tier of THIS follow-up run, resolved ONCE by
-   *  runHeadlessAgent (owner_settings `matter_run_web_face` via the lifecycle's TTL-cached hot
-   *  read) and consumed ONLY by wrapCfgForAgentRun's matter belt (matterRunAdmitsWeb). It rides
-   *  the run context — rather than being re-read at wrap time — for the same reason the grants
-   *  do: the approval stash FREEZES this object, so an island resume rebuilds the exact same
-   *  face and a mid-run setting change can never widen a paused run.
-   *  🔴 NOT a policy input (the matrix row keys on the MODE alone) and NOT set by
-   *  agentRunContextFromSpec: absent means "use MATTER_RUN_WEB_FACE_DEFAULT", so every context
-   *  built without a resolver (tests, manual entrypoints, non-matter runs) stays byte-identical. */
-  matterWebFace?: MatterRunWebFace
-  /** Contact Directory WP7 — the SERVER's stamp that this run is the contact-directory governance
-   *  scan, built by agentRunContextFromSpec from `spec.runKind` (never a body). Present ONLY for a
-   *  contact_governance run; every manual / im / cron / matter context omits it, so every pre-WP7
-   *  assembly is byte-identical. Its ONE consumer is wrapCfgForAgentRun's contact read-face belt —
-   *  the SECOND, independent belt behind the matrix row above. 🔴 NOT a policy input: the matrix
-   *  row keys on the MODE alone, so a mis-threaded flag can never widen a tool face; and it is
-   *  deliberately a SECOND input (the spec's runKind stamp) rather than the derived mode, so a
-   *  broken deriveContextMode cannot take both belts down at once. Frozen into the approval stash
-   *  with the rest of the context, so a resume rebuilds the exact same face. */
-  contactGovernanceRun?: boolean
 }
 
 /** 0812 dogfood — the three tiers of a Matter follow-up run's web tool face. Declared as a
@@ -740,62 +460,23 @@ export function parseMatterRunWebFace(value: unknown): MatterRunWebFace | null {
     : null
 }
 
-/** Stage 2 PR-1 (grill Q19=A) — VENUE-level switches of the im_chat row. 🔴 NOT grants: the
- *  AgentModeGrants axis is the owner's per-AGENT headless authorization; these are per-VENUE
- *  owner switches (env/Settings), threaded from the lifecycle as trusted data. Only the im_chat
- *  branch ever reads them — every other mode ignores the object entirely, so passing it to a
- *  non-im run is behavior-inert. `imWebEnabled` mirrors MAILAGENT_IM_WEB_ENABLED (default off):
- *  false → web tools are not even registered in an im run; true → registered AND 恒 HITL
- *  (mayAutoApprove stays manual-only — the switch never relaxes approval). */
-export interface ImVenueSwitches {
-  imWebEnabled?: boolean
-}
-
-/** 0812 codex修复批 — the ONE artifact NAME the matter_followup row admits. The row used to admit
- *  the WHOLE artifact class, which silently covered report_write (a LOCAL WRITE: tools/report.ts
- *  persists/replaces Reports data) — a follow-up run's only artifact channel is the proposal
- *  tool, so the admission is BY NAME now. Defined here (not imported from tools/matters.ts)
- *  because policy.ts is the class layer's zero-dependency root — importing the tool module would
- *  cycle through types.ts. */
+/** 0812 codex修复批 — the ONE artifact NAME the matter_followup row admits (not report_write). */
 export const MATTER_RUN_PROPOSE_TOOL = 'matter_update_propose'
 
-/** L4 批次3 (task 08-25) — the item-dispatch run's delivery channel. Same by-name discipline and
- *  the same zero-dependency-root reason as MATTER_RUN_PROPOSE_TOOL. 🔴 Hand-copied from Python
- *  (`src/api/routers/matter_agent.py`'s endpoint + the tool factory in tools/matters.ts, whose
- *  GATEWAY_MATTER_ITEM_RUN_TOOL_NAMES the catalog extractor scans); matters.test.ts pins the two
- *  spellings equal. */
+/** L4 批次3 (task 08-25) — the item-dispatch run's delivery channel. */
 export const MATTER_ITEM_REPORT_TOOL = 'matter_item_report'
 
-/** P2-L3 (task 09-03) — the ONE library write the three unattended belts admit, BY NAME.
- *  All four library writes share class `domain_write`, so a class-level admission would drag
- *  write/move/delete in with it: append is additive (zero conflict surface), overwrite can
- *  clobber, and move/delete break the path strings other agents remember. The annotation pins
- *  the spelling to the single source in `@shared/libraryConstants` — drop it from that list and
- *  this line stops compiling rather than silently naming a tool that no longer exists. */
+/** P2-L3 (task 09-03) — the ONE library write the three unattended belts admit, BY NAME. */
 export const LIBRARY_RUN_APPEND_TOOL: (typeof GATEWAY_LIBRARY_WRITE_TOOL_NAMES)[number] =
   'library_append'
 
-/** The artifact NAMES the matter_followup row admits. Two, because the row serves BOTH unattended
- *  matter venues — the follow-up run (matter_update_propose) and the item-dispatch run
- *  (matter_item_report), which share this venue tier: toolless-by-class, propose-only, no owner
- *  in the room. Whole-class admission stays forbidden (report_write is a LOCAL WRITE sharing the
- *  class — that was the 0812 hole). Cross-venue leakage is not a concern here: each tool only
- *  ever REGISTERS under its own server-assembled anchor (tools/index.ts), so a follow-up run has
- *  no item_report to admit and vice versa. */
+/** The artifact NAMES the matter_followup row admits. */
 export const MATTER_RUN_ARTIFACT_TOOLS: ReadonlySet<string> = new Set([
   MATTER_RUN_PROPOSE_TOOL,
   MATTER_ITEM_REPORT_TOOL
 ])
 
-/** Contact Directory WP7 — the THREE artifact NAMES the contact_governance row admits. Same
- *  by-name discipline as MATTER_RUN_PROPOSE_TOOL and for the same reason: the artifact class also
- *  holds report_write (a local Reports write) and matter_update_propose (another domain's proposal
- *  channel), so whole-class admission would hand an unattended directory scan two write channels
- *  it has no business holding. Defined HERE (not imported from tools/contacts.ts) because policy.ts
- *  is the class layer's zero-dependency root — importing the tool module would cycle through
- *  types.ts. 🔴 The names are duplicated in tools/contacts.ts's
- *  GATEWAY_CONTACT_PROPOSE_TOOL_NAMES (the catalog extractor's name universe only scans
- *  `GATEWAY_*_TOOL_NAMES` arrays); contacts.test.ts pins the two lists equal. */
+/** Contact Directory WP7 — the THREE artifact NAMES the contact_governance row admits. */
 export const CONTACT_PROPOSE_TOOLS: ReadonlySet<string> = new Set([
   'contact_propose_update',
   'contact_propose_merge',
@@ -895,45 +576,6 @@ export function isToolClassAllowedInMode(
   return false
 }
 
-/** May approvalMode 'auto-reversible' skip the approval card for this tool? Only a reversible
- *  DOMAIN write in an owner-driven manual session (ADR-001 D3). The caller additionally requires
- *  tier==='preview' (unchanged UX vocabulary) — this predicate carries the class/mode half. */
-export function mayAutoApprove(toolClass: GatewayToolClass, mode: AgentContextMode): boolean {
-  return toolClass === 'domain_write' && mode === 'manual_chat'
-}
-
-/** WS-5 (Belt 2) — verify a server-authorized `matter_item_run` Computer Use draft policy. */
-export function isMatterItemComputerUseEnabled(
-  grants?: AgentModeGrants
-): grants is AgentModeGrants & { matterItemComputerUse: MatterItemComputerUsePolicy } {
-  const cu = grants?.matterItemComputerUse
-  return (
-    cu != null &&
-    cu.enabled === true &&
-    cu.mode === 'propose_only' &&
-    cu.stopBeforeSubmit === true &&
-    Number.isInteger(cu.dispatchId) &&
-    cu.dispatchId > 0 &&
-    (cu.allowedApps.length > 0 || cu.allowedDomains.length > 0) &&
-    cu.connectors.length > 0
-  )
-}
-
-/** Wave 6 — verify a bounded Custom Agent `grant_computer_use` policy (`stop_before_submit` or `allow_submit`). */
-export function isCustomAgentComputerUseEnabled(
-  grants?: AgentModeGrants
-): grants is AgentModeGrants & { customAgentComputerUse: CustomAgentComputerUsePolicy } {
-  const cu = grants?.customAgentComputerUse
-  return (
-    cu != null &&
-    cu.enabled === true &&
-    (cu.submitMode === 'stop_before_submit' || cu.submitMode === 'allow_submit') &&
-    (cu.allowedApps.length > 0 || cu.allowedDomains.length > 0) &&
-    Array.isArray(cu.connectors) &&
-    cu.connectors.length > 0
-  )
-}
-
 /** WS-5 — tool-name-aware context admission consumed by BOTH `applyContextModePolicy` and
  *  `auditedWriteTool` (`types.ts`). Keeps `isToolClassAllowedInMode('exec', 'matter_followup', ...)`
  *  strictly `false` so `run_command`/general `exec` stay locked while admitting `computer_use_run`
@@ -945,59 +587,22 @@ export function isToolAllowedInContext(
   grants?: AgentModeGrants,
   venue?: ImVenueSwitches
 ): boolean {
-  if (toolName === 'computer_use_run') {
-    if (mode === 'manual_chat') return true
-    if (mode === 'matter_followup') return isMatterItemComputerUseEnabled(grants)
-    if (mode === 'untrusted_trigger' || mode === 'cron_headless') {
-      return isCustomAgentComputerUseEnabled(grants)
-    }
-    return false
-  }
-  return isToolClassAllowedInMode(toolClass, mode, grants, venue, toolName)
+  return evaluateToolAllowedInContext(
+    toolName,
+    toolClass,
+    mode,
+    isToolClassAllowedInMode,
+    grants,
+    venue
+  )
 }
 
-// ── 08-05 WP-11 (owner 拍板) — the acceptEdits sets + the bypass carve-out are RETIRED ─────────
-//
-// 07-16's ACCEPT_EDITS_AUTO_APPROVE_TOOLS / ACCEPT_EDITS_ASK_TOOLS / BYPASS_STILL_ASK used to
-// live here as code constants. The 08-05 per-tool approval-tier system replaced all three:
-//   - Every built-in write tool now carries an owner-configurable tier (ask|auto|deny) whose
-//     canonical registry + factory defaults live in Python `src/agent_config/tool_prefs.py`
-//     (agent_config.db `tool_approval_pref` overrides; served via GET /api/agent/tool-prefs).
-//     The gateway consumes the SERVER-folded map (GatewayToolApprovalPrefs, types.ts) — TS holds
-//     NO copy of the registry (跨语言手抄纪律: the wire is the mirror, not a hand-copy).
-//   - The 'acceptEdits' GLOBAL MODE is retired (GlobalApprovalMode is 'manual'|'bypass' now);
-//     its member list survives as the data-level「编辑放行」preset (tool_prefs.py
-//     ACCEPT_EDITS_PRESET → POST /api/agent/tool-prefs/preset batch-sets explicit 'auto').
-//   - BYPASS_STILL_ASK is EMPTIED AND RETIRED (D1=a: bypass = 字面「无例外」, it outranks a
-//     per-tool 'ask'). notion_agent_chat's carve-out rationale (外呼-不可撤回, codex HIGH-1)
-//     did not disappear — it demoted from a code floor to that tool's factory-default 'ask'
-//     tier + a danger_auto red confirm when the owner sets it to 'auto' (D2=a).
-// The completeness gate moved with the data: tests/config/test_tool_prefs_catalog_parity.py
-// pins registry ↔ tool_catalog.json `default_approval` (a new write tool without an explicit
-// tier decision turns red there, replacing approval_mode.test.ts's two-set partition gate).
-
-/** Filter an assembled ToolSet by the context mode — the LAST step of buildGatewayTools, after
- *  every create* block AND applySkillGating (codex P2-2: no early return may let a class slip
- *  past). manual_chat is an identity pass-through (the same object, zero diff — S2 keeps every
- *  production run manual, so current behaviour is byte-identical); non-manual modes drop every
- *  capability_change/exec/web/outbound tool so the model structurally cannot see them — except an
- *  exec/web tool under an explicit per-agent grant (ADR-004 D2 / rev3.1). Registration here and the runtime
- *  modeDenied double-insurance (types.ts) consume the SAME function with the SAME grants object
- *  (threaded from one agentRunContext) — there is no second decision point. */
+/** Filter an assembled ToolSet by the context mode — the LAST step of buildGatewayTools. */
 export function applyContextModePolicy(
   tools: ToolSet,
   mode: AgentContextMode,
   grants?: AgentModeGrants,
-  /** Stage 2 PR-1 — the im_chat venue switches (Q19 web opt-in). Only consulted by the im_chat
-   *  branch; omitted everywhere else → byte-identical to the pre-PR-1 filter. */
   venue?: ImVenueSwitches
 ): ToolSet {
-  if (mode === 'manual_chat') return tools
-  const out: ToolSet = {}
-  for (const [name, t] of Object.entries(tools)) {
-    // 0812 codex修复批 + WS-5 — name-aware admission (MATTER_RUN_ARTIFACT_TOOLS and bounded
-    // `computer_use_run` in `matter_followup` `propose_only`); class matrix stays pure.
-    if (isToolAllowedInContext(name, classOfTool(name), mode, grants, venue)) out[name] = t
-  }
-  return out
+  return filterToolsByContextMode(tools, mode, isToolClassAllowedInMode, classOfTool, grants, venue)
 }
