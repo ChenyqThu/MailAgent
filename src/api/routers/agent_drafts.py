@@ -8,10 +8,13 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 
-from src.agent_config.store import get_agent_config_store
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
-from src.api.routers.agent_common import _pack_api_error, _require_skill_creator
+from src.api.routers.agent_common import (
+    _pack_api_error,
+    _require_skill_creator,
+    resolve_agent_config_store as get_agent_config_store,
+)
 
 router = APIRouter()
 

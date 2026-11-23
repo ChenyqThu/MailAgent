@@ -13,11 +13,11 @@ from src.agent_config.store import (
     MATTER_AGENT_DOC_NAME,
     MEMORY_DOC_NAME,
     STORABLE_DOC_NAMES,
-    get_agent_config_store,
 )
 from src.agent_config.projections import skills_doc_projection
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
+from src.api.routers.agent_common import resolve_agent_config_store as get_agent_config_store
 
 from loguru import logger
 

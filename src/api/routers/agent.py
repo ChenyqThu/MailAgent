@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from src.agent_config.store import get_agent_config_store
 from src.api.routers.agent_drafts import router as _drafts_router
 from src.api.routers.agent_policy import (
     CHAT_APPROVAL_MODES,
@@ -47,6 +48,7 @@ router.include_router(_policy_router)
 
 __all__ = [
     "router",
+    "get_agent_config_store",
     "ASSISTANT_NAME_MAX_CHARS",
     "CHAT_APPROVAL_MODES",
     "CHAT_AUTO_COMPACT_MODES",
