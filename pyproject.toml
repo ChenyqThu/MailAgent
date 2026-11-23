@@ -76,5 +76,10 @@ exclude = ["tests*", "scripts*", "venv*", "data*", "logs*"]
 # 仓内运行正常、装机后 404（功能只在开发机上是真的）。加/改 builtin 文档路径同步改这里。
 "src.skills" = ["docs/*/SKILL.md"]
 
+[tool.ruff.lint]
+# 显式锁定 Ruff 规则集为 Pyflakes + pycodestyle E4/E7/E9（ruff <0.17 默认集）：
+# ruff 0.17+ 扩充了默认规则（UP/B/BLE/FA/I 等），不显式 select 会导致 CI 装到新版 ruff 时炸红。
+select = ["E4", "E7", "E9", "F"]
+
 [tool.ruff.lint.per-file-ignores]
 "docs/cli-schema/*.json" = ["F821"]
