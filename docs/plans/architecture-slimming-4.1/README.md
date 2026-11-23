@@ -90,3 +90,24 @@
 | **Wave 5A** | 后端高频 Router & `AgentConfigStore` 拆解 | ✅ 已完成 | `connector.py` (2,033→71L)、`agent_config/store.py` (2,690→236L)、`agent.py` (2,053→58L)、`chat.py` (1,974→891L) 按领域拆分子模块并保留门面兼容；`app.py` 收敛为声明式 `_ROUTER_SPECS`；`ruff` 0 错误、`pytest` 3297 passed、`check-openapi-contract.ts` 41 模型通过 |
 | **Wave 5B** | AI Gateway 组合化 / `policy` / 表单收敛 / 记忆重试 | ✅ 已完成 | `domainClient` 6 层继承拍平为 `DomainHttpCore` + 组合工坊；`tools/policy.ts` 拆出 `policyRules.ts` + `policyEval.ts`；`useCustomAgentForm.ts` 49 处 `useState` 收敛为 `useReducer` 且移除 `set-state-in-effect` 豁免；`captureTurnMemoryWithRetry` `[3s, 10s]` 退避重试 + `memory_capture_retry.test.ts`（7 项）；Vitest `149 文件 / 2,135`、Py `427 passed`、`validate_catalog` `119/119` 全绿 |
 | **Wave 5C** | 前端热点拆解 + React Hook 警告清零拉闸 | ✅ 已完成 | `CommandPalette.tsx` 2,030→404 行（4 焦点模块）；`deriveSessionWorkspace.ts` 1,099→179 行（`Base`/`Artifacts`/`Sources`）；剩余 117 条 React Hook 警告清零、`eslint.config.mjs` 恢复 `error`、`ci-test.yml` 升级 `--max-warnings=0`；`eslint --no-cache --max-warnings=0 .` 0 错 0 警、`typecheck` / `build:web` / `electron-vite build` 全绿，核心 Vitest 348 文件 3295 通过 |
+
+---
+
+## 6. 全仓收口验证实测（2026-11-22）
+
+在收口回归修复 [`0a901630`](https://github.com/chenyqThu/MailAgent/commit/0a901630) 之后执行全仓双端门禁（涵盖 Phase 0 `b7f9e3e0`、Wave 4A `774abc29`、Wave 4B `81c2e763`、Wave 4C `c00b7527`、Wave 5A `8d80c915`、Wave 5B `3ff66863`、Wave 5C `d291b8b2` 及收口修复 `0a901630`）：
+
+| 验证项 | 命令 | 实测结果 |
+|---|---|---|
+| Python Lint | `./venv/bin/python -m ruff check src` | `All checks passed!`（0 错） |
+| 全量 Python Pytest | `./venv/bin/python -m pytest tests/ -q --ignore=tests/agent_eval` | **9,222 passed**, 1 skipped（0 failed） |
+| Agent Eval 回归网 | `./venv/bin/python -m pytest tests/agent_eval -q` | **187 passed** |
+| Tool Catalog 对齐 | `./venv/bin/python tests/agent_eval/runner/validate_catalog.py` | `source_tools=119 catalog_tools=119 RESULT: OK` |
+| OpenAPI → TS 契约 | `pnpm --dir frontend exec tsx scripts/check-openapi-contract.ts` | **41** `SuccessEnvelope_*` 模型编译并通过 `tsc`（1,538 行） |
+| Artifact Server | `pnpm --dir artifact-server typecheck && pnpm --dir artifact-server test` | `tsc --noEmit` 0 错；**1 file / 8 passed** |
+| 前端 Typecheck | `pnpm --dir frontend typecheck` | `typecheck:node` + `typecheck:web` + `typecheck:tests` 全过（`manual_compact_spike.test.ts` 债 1→0） |
+| 前端 ESLint 硬闸 | `pnpm --dir frontend exec eslint --no-cache --max-warnings=0 .` | **0 errors, 0 warnings**（`react-hooks/refs` 与 `set-state-in-effect` 均已恢复 `error`） |
+| 全量前端 Vitest | `pnpm --dir frontend test` | **760 files passed (760)**；**9,191 passed**, 1 skipped (9,192) |
+| Web & Electron 构建 | `pnpm --dir frontend build:web && pnpm --dir frontend exec electron-vite build` | 双产物构建均退出 0（Electron Vite `built in 6.89s`） |
+| Electron Native ABI | `pnpm --dir frontend rebuild:electron` | 最终步骤恢复 `better_sqlite3.node` 至 Electron 39.8.10 ABI 140 并签名 |
+
