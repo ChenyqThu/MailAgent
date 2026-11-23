@@ -89,6 +89,7 @@ data/notion_ds_cache.json
 # .pre-vN.bak / -shm / -wal）。通配覆盖所有变体，防 `git add frontend/` 误纳入。
 frontend/ai_chat.db*
 # electron-vite/rollup build 误落根目录的 bundle 产物（正常应在 out/main|out/renderer/）
+frontend/index.html
 frontend/index.js
 frontend/index-*.js
 # 编辑器配置
@@ -132,3 +133,6 @@ scripts/backfill_message_id_normalize.journal.json
 # —— hook.cache.json 含 session UUID 与绝对路径，config.local.json 是本机同意状态。
 .impeccable/hook.cache.json
 .impeccable/config.local.json
+
+# Remotion 产品宣传动画子项目（本地保留，不进 git）
+/promo/

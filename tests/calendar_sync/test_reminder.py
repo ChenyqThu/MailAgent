@@ -115,10 +115,10 @@ def test_notified_marks_pruned_after_meeting(repo, make_event):
     assert r._center_notified == {}
 
 
-def test_repo_failure_fail_open():
+def test_repo_failure_fail_open(tmp_path):
     """repo 查询抛异常 → 静默返回 0, 不上抛."""
     class BoomRepo:
-        db_path = "unused.db"
+        db_path = str(tmp_path / "unused.db")
 
         def list_event_occurrences(self, *a, **kw):
             raise RuntimeError("db locked")
