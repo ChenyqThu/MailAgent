@@ -23,9 +23,15 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import APIRouter, Depends, Request
 
-from src.api.app import APIError, success_envelope
+from src.api.app import APIError, success_payload
 from src.api.auth import verify_cf_access
 from src.api.deps import get_job_repo, get_settings
+from src.api.schemas import SuccessEnvelope
+from src.api.schemas.history_sync import (
+    HistorySyncCancelResponse,
+    HistorySyncStartResponse,
+    HistorySyncStateResponse,
+)
 from src.events.publisher import safe_publish
 from src.services.errors import ServiceInvalidArgError
 from src.sync.history_sync import (
@@ -133,7 +139,11 @@ def _job_payload(job: Optional["AsyncJob"], store: Any) -> Optional[dict[str, An
     }
 
 
-@router.get("", dependencies=[Depends(verify_cf_access)])
+@router.get(
+    "",
+    dependencies=[Depends(verify_cf_access)],
+    response_model=SuccessEnvelope[HistorySyncStateResponse],
+)
 async def get_history_sync(
     request: Request,
     cfg: "Config" = Depends(get_settings),
@@ -150,7 +160,7 @@ async def get_history_sync(
     )
     floor = parse_sync_start_date(cfg)
 
-    return success_envelope(
+    return success_payload(
         {
             "supported": supported,
             "unsupported_reason": None if supported else "backend_applescript",
@@ -169,7 +179,11 @@ async def get_history_sync(
     )
 
 
-@router.post("", dependencies=[Depends(verify_cf_access)])
+@router.post(
+    "",
+    dependencies=[Depends(verify_cf_access)],
+    response_model=SuccessEnvelope[HistorySyncStartResponse],
+)
 async def start_history_sync(
     request: Request,
     body: Optional[dict[str, Any]] = None,
@@ -196,7 +210,7 @@ async def start_history_sync(
     repo = get_job_repo()
     existing = _active_job(repo)
     if existing is not None:
-        return success_envelope(
+        return success_payload(
             {"job_id": existing.job_id, "was_created": False},
             request=request,
             source="sqlite",
@@ -214,14 +228,18 @@ async def start_history_sync(
             data={"job_id": job_id, "job_type": "history_sync"},
             source="api",
         )
-    return success_envelope(
+    return success_payload(
         {"job_id": job_id, "was_created": was_created},
         request=request,
         source="sqlite",
     )
 
 
-@router.post("/cancel", dependencies=[Depends(verify_cf_access)])
+@router.post(
+    "/cancel",
+    dependencies=[Depends(verify_cf_access)],
+    response_model=SuccessEnvelope[HistorySyncCancelResponse],
+)
 async def cancel_history_sync(
     request: Request,
     body: Optional[dict[str, Any]] = None,
@@ -234,7 +252,7 @@ async def cancel_history_sync(
             "E_NOT_FOUND", "没有正在进行的历史邮件同步任务", source="sqlite"
         )
     request_cancel(store, job.job_id)
-    return success_envelope(
+    return success_payload(
         {"job_id": job.job_id, "cancel_requested": True},
         request=request,
         source="sqlite",

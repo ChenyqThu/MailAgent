@@ -593,3 +593,120 @@ class LLMProcessingStore:
                 "SELECT status, COUNT(*) AS n FROM llm_processing GROUP BY status"
             ).fetchall()
             return {r["status"]: int(r["n"]) for r in rows}
+
+
+def read_processing_stats(
+    repo: Any,
+    *,
+    days: int,
+    since_ts: Optional[float],
+    zero_cost: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Read-only ``llm_processing`` stats rollup via ``repo._connect()`` (never migrates)."""
+    conn = repo._connect()
+    try:
+        table_exists = (
+            conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_processing'"
+            ).fetchone()
+            is not None
+        )
+        if not table_exists:
+            return {
+                "total": 0,
+                "by_status": {},
+                "days": days,
+                "since_ts": since_ts,
+                "cost": dict(zero_cost),
+                "by_model": [],
+                "_source": "table_missing",
+            }
+
+        where = "WHERE updated_at >= ?" if since_ts is not None else ""
+        params: list[Any] = [since_ts] if since_ts is not None else []
+
+        by_status_rows = conn.execute(
+            f"SELECT status, COUNT(*) AS n FROM llm_processing {where} GROUP BY status",
+            params,
+        ).fetchall()
+        by_status = {r["status"] or "(null)": int(r["n"]) for r in by_status_rows}
+        total = sum(by_status.values())
+
+        cost_row = conn.execute(
+            f"""SELECT
+                    COALESCE(SUM(input_tokens), 0)                 AS in_tok,
+                    COALESCE(SUM(output_tokens), 0)                AS out_tok,
+                    COALESCE(SUM(cache_creation_input_tokens), 0)  AS cache_write,
+                    COALESCE(SUM(cache_read_input_tokens), 0)      AS cache_read,
+                    COALESCE(AVG(latency_ms), 0)                   AS avg_ms,
+                    COALESCE(SUM(CASE WHEN cache_read_input_tokens > 0
+                                      THEN 1 ELSE 0 END), 0)        AS hit_count,
+                    COUNT(*) AS rows_n
+                FROM llm_processing
+                {where} {'AND' if where else 'WHERE'} status='success'""",
+            params,
+        ).fetchone()
+
+        rows_n = int(cost_row["rows_n"]) if cost_row else 0
+        hit_count = int(cost_row["hit_count"]) if cost_row else 0
+        cache_hit_rate_pct = (
+            round(100.0 * hit_count / rows_n, 1) if rows_n > 0 else 0.0
+        )
+        in_tok_sum = int(cost_row["in_tok"] or 0)
+        cache_write_sum = int(cost_row["cache_write"] or 0)
+        cache_read_sum = int(cost_row["cache_read"] or 0)
+        token_denom = in_tok_sum + cache_read_sum + cache_write_sum
+        token_cache_hit_rate_pct = (
+            round(100.0 * cache_read_sum / token_denom, 1)
+            if token_denom > 0
+            else 0.0
+        )
+        cost = {
+            "input_tokens": in_tok_sum,
+            "output_tokens": int(cost_row["out_tok"] or 0),
+            "cache_creation_input_tokens": cache_write_sum,
+            "cache_read_input_tokens": cache_read_sum,
+            "cache_hit_rate_pct": cache_hit_rate_pct,
+            "token_cache_hit_rate_pct": token_cache_hit_rate_pct,
+            "avg_latency_ms": int(cost_row["avg_ms"] or 0),
+            "success_rows": rows_n,
+        }
+
+        by_model_rows = conn.execute(
+            f"""SELECT COALESCE(NULLIF(model, ''), '(unknown)')  AS model,
+                       COUNT(*)                                   AS rows_n,
+                       COALESCE(SUM(input_tokens), 0)             AS in_tok,
+                       COALESCE(SUM(output_tokens), 0)            AS out_tok,
+                       COALESCE(SUM(cache_read_input_tokens), 0)  AS cache_read,
+                       COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_write,
+                       COALESCE(AVG(latency_ms), 0)               AS avg_ms
+                  FROM llm_processing
+                 {where} {'AND' if where else 'WHERE'} status='success'
+                 GROUP BY 1
+                 ORDER BY in_tok + out_tok DESC""",
+            params,
+        ).fetchall()
+        by_model = [
+            {
+                "model": r["model"],
+                "rows": int(r["rows_n"]),
+                "input_tokens": int(r["in_tok"] or 0),
+                "output_tokens": int(r["out_tok"] or 0),
+                "cache_read_input_tokens": int(r["cache_read"] or 0),
+                "cache_creation_input_tokens": int(r["cache_write"] or 0),
+                "avg_latency_ms": int(r["avg_ms"] or 0),
+            }
+            for r in by_model_rows
+        ]
+    finally:
+        conn.close()
+
+    return {
+        "total": total,
+        "by_status": by_status,
+        "days": days,
+        "since_ts": since_ts,
+        "cost": cost,
+        "by_model": by_model,
+        "_source": "live_query",
+    }

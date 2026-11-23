@@ -22,9 +22,7 @@ ALTER TABLE 升版本时随主仓漂移, API 端不会漏改。
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends, Request
@@ -39,6 +37,7 @@ from src.mail.davmail_watchdog import (
     auth_expiry_level as _auth_expiry_level,
     parse_auth_expires_at as _parse_auth_expires_at,
 )
+from src.repository import admin_queries as _admin_queries
 from src.services import admin_health as _health
 from src.services import admin_stats as _admin_stats
 from src.services.admin_service import AdminService
@@ -106,63 +105,20 @@ async def admin_health(
     token 老化提示行)。均为纯诊断字段, **不改 healthy 计算语义**。
     """
     db_path = str(repo.db_path)
-    db_accessible = False
-    db_version: Optional[int] = None
-    tables_present: list[str] = []
-    error_message: Optional[str] = None
     expected = _expected_db_version()
+    snap = _admin_queries.read_health_snapshot(db_path)
+    db_accessible = snap["db_accessible"]
+    db_version = snap["db_version"]
+    tables_present = snap["tables_present"]
+    error_message = snap["error_message"]
     workers: dict = {}
     davmail_summary: Optional[dict] = None
-
-    try:
-        if not Path(db_path).exists():
-            # 不把 db_path 塞进异常 (会回显到 error) —— 用无路径哨兵。
-            raise FileNotFoundError
-        conn = sqlite3.connect(db_path, timeout=5.0)
-        try:
-            db_accessible = True
-            row = conn.execute(
-                "SELECT value FROM sync_state WHERE key='db_version'"
-            ).fetchone()
-            if row:
-                try:
-                    db_version = int(row[0])
-                except (TypeError, ValueError):
-                    db_version = None
-            tables_present = [
-                r[0]
-                for r in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
-                ).fetchall()
-            ]
-
-            # E4 WP1/WP2: worker 心跳 + davmail 摘要 (镜像 CLI admin health,
-            # sync_state 缺失 / 查询失败 → 静默空值, 不影响 healthy)。
-            try:
-                worker_rows = conn.execute(
-                    "SELECT key, value FROM sync_state WHERE key LIKE 'worker.%'"
-                ).fetchall()
-                workers = _parse_worker_rows(worker_rows)
-                # E4 第二批 (D3): last_started_at 早于本次 boot → stale 标记。
-                boot_row = conn.execute(
-                    "SELECT value FROM sync_state WHERE key='service.start_history'"
-                ).fetchone()
-                _mark_stale_workers(workers, boot_row[0] if boot_row else None)
-                davmail_rows = conn.execute(
-                    "SELECT key, value FROM sync_state WHERE key IN "
-                    "('davmail.last_probe_at', 'davmail.token_age_days', "
-                    "'davmail.imap_reachable', 'davmail.auth.expires_at')"
-                ).fetchall()
-                davmail_summary = _build_davmail_summary(dict(davmail_rows))
-            except sqlite3.Error:
-                workers, davmail_summary = {}, None
-        finally:
-            conn.close()
-    except FileNotFoundError:
-        error_message = "database file not found"
-    except Exception as exc:  # noqa: BLE001 — 任何 DB 故障都汇成诊断字段, 不抛
-        # 只回异常类名: str(exc) 可能含绝对路径 / 连接串 (C9 redaction)。
-        error_message = type(exc).__name__
+    if snap["worker_rows"] or snap["boot_history_raw"] is not None or snap["davmail_rows"]:
+        workers = _parse_worker_rows(snap["worker_rows"])
+        _mark_stale_workers(workers, snap["boot_history_raw"])
+        davmail_summary = _build_davmail_summary(dict(snap["davmail_rows"]))
+    elif db_accessible and not error_message:
+        davmail_summary = _build_davmail_summary({})
 
     missing = [t for t in REQUIRED_TABLES if t not in tables_present]
     schema_ok = db_accessible and db_version == expected and not missing
@@ -187,76 +143,8 @@ async def admin_health(
 
 
 def _read_sync_store_section(repo: "EmailRepository") -> dict:
-    """纯只读复刻 SyncStore.get_stats() 的 sync_store 分布段 (C6: 不实例化 SyncStore)。
-
-    经 ``repo._connect()`` 短命只读连接跑 SELECT —— email_metadata 计数 / 按 status /
-    按 mailbox 分组 + sync_state 的 last_max_row_id / last_sync_time + 文件大小。
-    绝不 CREATE/ALTER/迁移/写 db_version。表缺失 (trimmed 库) → sqlite3.Error 汇成 0,
-    与 get_stats 的 ``except sqlite3.Error → SyncStoreStats()`` 兜底一致。
-    """
-    total_emails = 0
-    by_status: dict[str, int] = {}
-    by_mailbox: dict[str, int] = {}
-    last_max_row_id: Optional[int] = None
-    last_sync_time: Optional[str] = None
-
-    conn = repo._connect()
-    try:
-        try:
-            total_emails = conn.execute(
-                "SELECT COUNT(*) FROM email_metadata"
-            ).fetchone()[0]
-            by_status = {
-                r["sync_status"]: r["count"]
-                for r in conn.execute(
-                    "SELECT sync_status, COUNT(*) AS count "
-                    "FROM email_metadata GROUP BY sync_status"
-                ).fetchall()
-            }
-            by_mailbox = {
-                r["mailbox"]: r["count"]
-                for r in conn.execute(
-                    "SELECT mailbox, COUNT(*) AS count "
-                    "FROM email_metadata GROUP BY mailbox"
-                ).fetchall()
-            }
-        except sqlite3.Error:
-            # email_metadata 缺失 (trimmed 库) → 维持 0/{} (与 get_stats 兜底一致)。
-            total_emails, by_status, by_mailbox = 0, {}, {}
-
-        # sync_state 的两个游标键 (get_last_max_row_id / get_last_sync_time 等价)。
-        try:
-            row = conn.execute(
-                "SELECT value FROM sync_state WHERE key='last_max_row_id'"
-            ).fetchone()
-            if row and row["value"] is not None:
-                try:
-                    last_max_row_id = int(row["value"])
-                except (TypeError, ValueError):
-                    last_max_row_id = None
-            row = conn.execute(
-                "SELECT value FROM sync_state WHERE key='last_sync_time'"
-            ).fetchone()
-            last_sync_time = row["value"] if row else None
-        except sqlite3.Error:
-            last_max_row_id, last_sync_time = None, None
-    finally:
-        conn.close()
-
-    failure_queue = by_status.get("fetch_failed", 0) + by_status.get("failed", 0)
-    db_size_bytes = repo.db_path.stat().st_size if repo.db_path.exists() else 0
-
-    return {
-        "total_emails": total_emails,
-        "by_status": by_status,
-        "by_mailbox": by_mailbox,
-        "failure_queue": failure_queue,
-        "last_max_row_id": last_max_row_id,
-        "last_sync_time": last_sync_time,
-        "db_size_mb": round(db_size_bytes / 1024 / 1024, 2),
-        "db_size_bytes": db_size_bytes,
-        "_source": "live_query",
-    }
+    """纯只读复刻 SyncStore.get_stats() 的 sync_store 分布段 (下沉至 admin_queries)."""
+    return _admin_queries.read_sync_store_section(repo)
 
 
 # ============================================================
@@ -320,37 +208,7 @@ async def admin_dead_letter_list(
             source="sqlite",
         )
 
-    query = (
-        "SELECT internal_id, subject, sender, mailbox, date_received, "
-        "sync_status, retry_count, sync_error, updated_at "
-        "FROM email_metadata WHERE sync_status='dead_letter'"
-    )
-    params: list = []
-    if mailbox:
-        query += " AND mailbox = ?"
-        params.append(mailbox)
-    query += " ORDER BY updated_at DESC LIMIT ?"
-    params.append(limit)
-
-    conn = repo._connect()
-    rows: list[dict] = []
-    try:
-        for r in conn.execute(query, params).fetchall():
-            rows.append({
-                "internal_id": r["internal_id"],
-                "subject": r["subject"],
-                "sender": r["sender"],
-                "mailbox": r["mailbox"],
-                "date_received": r["date_received"],
-                "sync_status": r["sync_status"],
-                "retry_count": r["retry_count"],
-                "sync_error": r["sync_error"],
-                # CLI-native 别名, 兼容直接读 CLI list 形状的旧前端调用。
-                "last_error": r["sync_error"],
-                "updated_at": r["updated_at"],
-            })
-    finally:
-        conn.close()
+    rows = _admin_queries.list_dead_letters(repo, limit=limit, mailbox=mailbox)
 
     return success_envelope(
         rows,
@@ -481,26 +339,8 @@ def _login_fail_threshold(state: dict[str, str]) -> int:
 
 
 def _read_davmail_state(repo: "EmailRepository") -> dict[str, str]:
-    """读全部 ``davmail.*`` 键 + 独立的 ``davmail_uid_backfill_paused`` 键。
-
-    gotcha #12: watchdog 的 health 键都以 ``davmail.`` 前缀落 sync_state, 但
-    uid-backfill 暂停标志用的是 ``davmail_uid_backfill_paused`` (下划线, 无点 —— 与
-    uid-mapper 共享), LIKE 'davmail.%' 抓不到, 故单独读。
-    """
-    conn = repo._connect()
-    try:
-        rows = conn.execute(
-            "SELECT key, value FROM sync_state WHERE key LIKE 'davmail.%'"
-        ).fetchall()
-        state = {r["key"]: r["value"] for r in rows}
-        extra = conn.execute(
-            "SELECT value FROM sync_state WHERE key = 'davmail_uid_backfill_paused'"
-        ).fetchone()
-        if extra is not None:
-            state["davmail_uid_backfill_paused"] = extra["value"]
-    finally:
-        conn.close()
-    return state
+    """读全部 ``davmail.*`` 键 + 独立的 ``davmail_uid_backfill_paused`` 键 (下沉至 admin_queries)."""
+    return _admin_queries.read_davmail_state(repo)
 
 
 def _compute_level(

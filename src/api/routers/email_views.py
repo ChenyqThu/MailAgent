@@ -33,14 +33,14 @@ per-call open/close)，WAL 下与 mail-sync writer 并发安全 (gotcha #13)。
 from __future__ import annotations
 
 import json
-import sqlite3
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Mapping, Optional
 
 from fastapi import APIRouter, Body, Depends, Query, Request
 
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_repository
+from src.repository import email_views_repository as _ev_repo
 from src.mail.mailbox_semantics import (
     DRAFT_LABEL_VARIANTS,
     filter_labels_for_mailbox,
@@ -171,41 +171,8 @@ _SCHEMA_CACHE: dict[str, dict[str, Any]] = {}
 
 
 def _probe_schema(repo: "EmailRepository") -> dict[str, Any]:
-    """探测 email_metadata 列集合 + llm_processing 表是否存在 (按 db_path memo)。
-
-    enriched SQL 据此决定是否 SELECT ``ai_priority`` / ``ai_action`` /
-    ``processing_status`` (v13/v14 迁移列) 与是否 JOIN ``llm_processing``
-    (src/llm_agent/store.py 建)。缺失列/表在生产不会发生，但旧/裸/测试库会 —
-    那时这些字段降级 NULL，核心列表仍出数据 (gotcha #4 graceful)。
-    """
-    key = str(repo.db_path)
-    cached = _SCHEMA_CACHE.get(key)
-    if cached is not None:
-        return cached
-
-    meta_cols: set[str] = set()
-    has_llm = False
-    conn = repo._connect()
-    try:
-        try:
-            rows = conn.execute("PRAGMA table_info(email_metadata)").fetchall()
-            meta_cols = {r["name"] for r in rows}
-        except sqlite3.OperationalError:
-            meta_cols = set()
-        try:
-            row = conn.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name='llm_processing'"
-            ).fetchone()
-            has_llm = row is not None
-        except sqlite3.OperationalError:
-            has_llm = False
-    finally:
-        conn.close()
-
-    result = {"meta_cols": meta_cols, "has_llm": has_llm}
-    _SCHEMA_CACHE[key] = result
-    return result
+    """探测 email_metadata 列集合 + llm_processing 表是否存在 (下沉至 email_views_repository)."""
+    return _ev_repo.probe_schema(repo, cache=_SCHEMA_CACHE)
 
 
 # ===========================================================================
@@ -222,7 +189,7 @@ _LIST_ITEM_META_COLS = (
 )
 
 
-def _shape_list_item(row: sqlite3.Row) -> dict[str, Any]:
+def _shape_list_item(row: Mapping[str, Any]) -> dict[str, Any]:
     """email_metadata 行 → EmailList_EmailListItem wire dict。
 
     镜像 handlers/email.ts::shapeListItem (前端 EmailMeta 形状)。enriched 视图与
@@ -571,11 +538,7 @@ async def list_enriched(
          LIMIT ? OFFSET ?
     """
 
-    conn = repo._connect()
-    try:
-        rows = conn.execute(sql, [*params, limit, offset]).fetchall()
-    finally:
-        conn.close()
+    rows = _ev_repo.query_rows(repo, sql, [*params, limit, offset])
 
     data = [_shape_enriched_item(r) for r in rows]
     return success_envelope(
@@ -586,7 +549,7 @@ async def list_enriched(
     )
 
 
-def _shape_enriched_item(row: sqlite3.Row) -> dict[str, Any]:
+def _shape_enriched_item(row: Mapping[str, Any]) -> dict[str, Any]:
     """enriched 行 → EnrichedEmailMeta wire dict。镜像 handlers/email.ts::shapeEnrichedItem。
 
     snippet 直接来自 email_metadata 去规范化列；lang/ai_priority 经映射；
@@ -634,24 +597,7 @@ async def list_mailboxes(
     1:1 镜像 handlers/email.ts::listMailboxes —— 排除 ``skipped`` (口径对齐
     list-enriched，否则 sidebar 数 ≠ 列表数) + NULL/空 mailbox。total DESC 排序。
     """
-    sql = """
-        SELECT mailbox,
-               COUNT(*) AS total,
-               SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) AS unread,
-               SUM(CASE WHEN is_flagged = 1 THEN 1 ELSE 0 END) AS flagged,
-               SUM(CASE WHEN sync_status IN ('failed', 'dead_letter')
-                        THEN 1 ELSE 0 END) AS failed
-          FROM email_metadata
-         WHERE mailbox IS NOT NULL AND mailbox != ''
-           AND sync_status != 'skipped'
-         GROUP BY mailbox
-         ORDER BY total DESC
-    """
-    conn = repo._connect()
-    try:
-        rows = conn.execute(sql).fetchall()
-    finally:
-        conn.close()
+    rows = _ev_repo.query_mailbox_summaries(repo)
 
     data = [
         {
@@ -700,11 +646,7 @@ async def list_by_thread(
            AND {_DRAFTS_EXCLUDE_SQL}
          ORDER BY date_received ASC NULLS LAST, internal_id ASC
     """
-    conn = repo._connect()
-    try:
-        rows = conn.execute(sql, (thread_id,)).fetchall()
-    finally:
-        conn.close()
+    rows = _ev_repo.query_rows(repo, sql, (thread_id,))
 
     data = [_shape_list_item(r) for r in rows]
     return success_envelope(
@@ -760,11 +702,7 @@ async def list_by_threads(
            AND {_DRAFTS_EXCLUDE_SQL}
          ORDER BY thread_id ASC, date_received ASC NULLS LAST, internal_id ASC
     """
-    conn = repo._connect()
-    try:
-        rows = conn.execute(sql, ids).fetchall()
-    finally:
-        conn.close()
+    rows = _ev_repo.query_rows(repo, sql, ids)
 
     out: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
@@ -861,11 +799,7 @@ async def ai_fields(
           {llm_join}
          WHERE m.internal_id IN ({placeholders})
     """
-    conn = repo._connect()
-    try:
-        rows = conn.execute(sql, ids).fetchall()
-    finally:
-        conn.close()
+    rows = _ev_repo.query_rows(repo, sql, ids)
 
     out: dict[str, dict[str, Any]] = {}
     for r in rows:
@@ -875,7 +809,7 @@ async def ai_fields(
     )
 
 
-def _shape_ai_fields(row: sqlite3.Row) -> dict[str, Any]:
+def _shape_ai_fields(row: Mapping[str, Any]) -> dict[str, Any]:
     """ai-fields 行 → AIFields wire dict。镜像 handlers/email.ts::getAIFields。
 
     labels_json 安全解析后提升 priority/action_type/sentiment；ai_review_status

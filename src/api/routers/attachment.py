@@ -115,20 +115,8 @@ class _AttachmentMeta:
 def _fetch_attachment_meta(
     repo: "EmailRepository", attachment_id: int
 ) -> Optional[_AttachmentMeta]:
-    """1-row SELECT 取 attachment 元信息 (id/filename/content_type/local_path/size)。
-
-    repo 没暴露 get-attachment-by-id 单查 (gotcha #2)，这里复用 repo 自己的短命连接
-    模式 (_connect → close) 做一次窄查询。返回 None 表示行不存在。
-    """
-    conn = repo._connect()
-    try:
-        row = conn.execute(
-            """SELECT id, internal_id, filename, content_type, local_path, size_bytes
-               FROM email_attachment WHERE id = ?""",
-            (attachment_id,),
-        ).fetchone()
-    finally:
-        conn.close()
+    """1-row SELECT 取 attachment 元信息 (委托 EmailRepository.get_attachment_meta)."""
+    row = repo.get_attachment_meta(attachment_id)
     if row is None:
         return None
     return _AttachmentMeta(
@@ -144,39 +132,8 @@ def _fetch_attachment_meta(
 def _fetch_attachment_text_context(
     repo: "EmailRepository", attachment_id: int
 ) -> Optional[dict]:
-    """text 端点用: attachment 行 JOIN 邮件归属 (subject / sender)。
-
-    比 _fetch_attachment_meta 多取 email_metadata 的 subject / sender，让 /text
-    响应能直接带上「这个附件来自哪封邮件」上下文。LEFT JOIN → 附件行即便 internal_id
-    悬空 (理论上不该发生) 也能返回 (subject/sender 空串)，404 只留给「附件行本身不存在」。
-    返回 dict (含 local_path/size_bytes 供同步抽取兜底用)；行不存在 → None。
-    """
-    conn = repo._connect()
-    try:
-        row = conn.execute(
-            """SELECT a.id, a.internal_id, a.filename, a.content_type,
-                      a.local_path, a.size_bytes,
-                      COALESCE(m.subject, '') AS email_subject,
-                      COALESCE(m.sender, '')  AS sender
-                 FROM email_attachment a
-                 LEFT JOIN email_metadata m ON m.internal_id = a.internal_id
-                WHERE a.id = ?""",
-            (attachment_id,),
-        ).fetchone()
-    finally:
-        conn.close()
-    if row is None:
-        return None
-    return {
-        "id": row["id"],
-        "internal_id": row["internal_id"],
-        "filename": row["filename"],
-        "content_type": row["content_type"],
-        "local_path": row["local_path"],
-        "size_bytes": row["size_bytes"],
-        "email_subject": row["email_subject"],
-        "sender": row["sender"],
-    }
+    """text 端点用: attachment 行 JOIN 邮件归属 (委托 EmailRepository.get_attachment_text_context)."""
+    return repo.get_attachment_text_context(attachment_id)
 
 
 def _sync_extract_attachment_text(repo: "EmailRepository", ctx: dict):
@@ -445,23 +402,8 @@ _ATTACHMENT_SEARCH_LIMIT_MAX = 50
 
 
 def _count_attachment_fts_indexed(repo: "EmailRepository") -> int:
-    """``SELECT count(*) FROM email_attachment_fts`` — AttachmentSearchResult.total_indexed 用。
-
-    repo 无现成 helper（同 email.py ``_count_fts_indexed``）；用 repo._connect() 起短命连接。
-    FTS5 表缺失 / 异常 → 0，不让搜索因 count 失败而 500。
-    批次3 PR-E（D3）：口径**继续数老表** —— v39 ``email_attachment_fts_trigram`` 与老表由
-    同源 trigger 维持同集合行数，改口径零收益、有测试波及。
-    """
-    import sqlite3
-
-    conn = repo._connect()
-    try:
-        row = conn.execute("SELECT count(*) AS c FROM email_attachment_fts").fetchone()
-        return int(row["c"]) if row else 0
-    except sqlite3.Error:
-        return 0
-    finally:
-        conn.close()
+    """``SELECT count(*) FROM email_attachment_fts`` (委托 EmailRepository)."""
+    return repo.count_attachment_fts_indexed()
 
 
 @router.get("/search", dependencies=[Depends(verify_cf_access)])

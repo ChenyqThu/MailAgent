@@ -90,20 +90,16 @@ def _require_session_in_scope(request: Request, session_id: int) -> None:
 
 
 def _project_session_runs(items: List[Dict[str, Any]], sync_db_path: str) -> None:
-    job_ids = [int(s["agent_job_id"]) for s in items if s.get("origin") == "agent" and str(s.get("agent_job_id") or "").isdigit()]
-    if not job_ids or not os.path.exists(sync_db_path):
+    from src.sync.async_jobs import fetch_jobs_by_ids
+
+    job_ids = [
+        int(s["agent_job_id"])
+        for s in items
+        if s.get("origin") == "agent" and str(s.get("agent_job_id") or "").isdigit()
+    ]
+    by_id = fetch_jobs_by_ids(sync_db_path, job_ids)
+    if not by_id:
         return
-    try:
-        conn = sqlite3.connect(sync_db_path, timeout=5.0)
-        conn.row_factory = sqlite3.Row
-        try:
-            placeholders = ",".join("?" * len(job_ids))
-            rows = conn.execute(f"SELECT * FROM async_jobs WHERE job_id IN ({placeholders})", job_ids).fetchall()
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        return
-    by_id = {int(r["job_id"]): dict(r) for r in rows}
     for item in items:
         raw_id = str(item.get("agent_job_id") or "")
         row = by_id.get(int(raw_id)) if raw_id.isdigit() else None
@@ -143,74 +139,19 @@ def _kos_available() -> bool:
 def _email_meta_for_sessions(
     email_ids: List[int], sync_db_path: str
 ) -> Dict[int, Dict[str, Any]]:
-    """批量取 session 所属邮件的 subject/sender（join sync_store.db email_metadata）。
+    """批量取 session 所属邮件的 subject/sender（下沉至 email_repository)."""
+    from src.repository.email_repository import fetch_email_meta_by_ids
 
-    best-effort：sync_store.db 不可用 / FDA 未授权 → 空 map（端点降级 nulls），
-    对齐 chat:listAllSessions「降级 preview-only 行」。
-    """
-    if not email_ids:
-        return {}
-    # serve-api 只读：库不存在直接短路，不让 connect 建空库（与 ChatDb._read_all 一致）。
-    if not os.path.exists(sync_db_path):
-        return {}
-    meta: Dict[int, Dict[str, Any]] = {}
-    try:
-        conn = sqlite3.connect(sync_db_path, timeout=5.0)
-        conn.row_factory = sqlite3.Row
-        try:
-            placeholders = ",".join("?" * len(email_ids))
-            rows = conn.execute(
-                f"SELECT internal_id, subject, sender_name, sender FROM email_metadata "
-                f"WHERE internal_id IN ({placeholders})",
-                email_ids,
-            ).fetchall()
-            for r in rows:
-                # sender_name ?? sender（对齐 chat.ts：仅 NULL 回退 sender，空字符串 "" 保留）。
-                sender_name = r["sender_name"]
-                meta[r["internal_id"]] = {
-                    "subject": r["subject"],
-                    "sender": sender_name if sender_name is not None else r["sender"],
-                }
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        pass
-    return meta
+    return fetch_email_meta_by_ids(sync_db_path, email_ids)
 
 
 def _matter_meta_for_sessions(
     matter_ids: List[int], sync_db_path: str
 ) -> Dict[int, Dict[str, Any]]:
-    """批量取 matter-anchored session 的 public_id/title（join sync_store.db matter）。
+    """批量取 matter-anchored session 的 public_id/title（下沉至 matters.repository)."""
+    from src.matters.repository import fetch_matter_meta_by_ids
 
-    ``anchor_id`` 是 matter 的**内部** id，而事项的所有 REST 面（context-snapshot / undo）都按
-    ``MAT-xxxx`` 寻址 —— 不带上 public_id，前端从历史里选中一个事项会话时就只剩一个数字，
-    既拿不到上下文也标不出身份（收口进主 chat 前这条路由根本不存在，因为事项对话是另一套面板）。
-
-    形状与 ``_email_meta_for_sessions`` 逐条对齐（同库、同 best-effort：库缺 / 表缺 / 锁 → 空 map，
-    端点降级成 nulls 而不是 500）。
-    """
-    if not matter_ids:
-        return {}
-    if not os.path.exists(sync_db_path):
-        return {}
-    meta: Dict[int, Dict[str, Any]] = {}
-    try:
-        conn = sqlite3.connect(sync_db_path, timeout=5.0)
-        conn.row_factory = sqlite3.Row
-        try:
-            placeholders = ",".join("?" * len(matter_ids))
-            rows = conn.execute(
-                f"SELECT id, public_id, title FROM matter WHERE id IN ({placeholders})",
-                matter_ids,
-            ).fetchall()
-            for r in rows:
-                meta[r["id"]] = {"public_id": r["public_id"], "title": r["title"]}
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        pass
-    return meta
+    return fetch_matter_meta_by_ids(sync_db_path, matter_ids)
 
 
 def _with_last_message(summary: Dict[str, Any]) -> Dict[str, Any]:

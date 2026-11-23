@@ -241,113 +241,14 @@ async def llm_stats(
     if days > 0:
         since_ts = time.time() - days * 86400
 
-    conn = repo._connect()
-    try:
-        # llm_processing 表可能不存在 (空 DB / 全新 install) — 防御性检
-        table_exists = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_processing'"
-        ).fetchone() is not None
+    from src.llm_agent.store import read_processing_stats
 
-        if not table_exists:
-            data = {
-                "total": 0,
-                "by_status": {},
-                "days": days,
-                "since_ts": since_ts,
-                "cost": _zero_cost(),
-                "by_model": [],
-                "_source": "table_missing",
-            }
-            return success_envelope(data, request=request, source="sqlite")
-
-        where = "WHERE updated_at >= ?" if since_ts is not None else ""
-        params: list = [since_ts] if since_ts is not None else []
-
-        by_status_rows = conn.execute(
-            f"SELECT status, COUNT(*) AS n FROM llm_processing {where} GROUP BY status",
-            params,
-        ).fetchall()
-        by_status = {r["status"] or "(null)": int(r["n"]) for r in by_status_rows}
-        total = sum(by_status.values())
-
-        cost_row = conn.execute(
-            f"""SELECT
-                    COALESCE(SUM(input_tokens), 0)                 AS in_tok,
-                    COALESCE(SUM(output_tokens), 0)                AS out_tok,
-                    COALESCE(SUM(cache_creation_input_tokens), 0)  AS cache_write,
-                    COALESCE(SUM(cache_read_input_tokens), 0)      AS cache_read,
-                    COALESCE(AVG(latency_ms), 0)                   AS avg_ms,
-                    COALESCE(SUM(CASE WHEN cache_read_input_tokens > 0
-                                      THEN 1 ELSE 0 END), 0)        AS hit_count,
-                    COUNT(*) AS rows_n
-                FROM llm_processing
-                {where} {'AND' if where else 'WHERE'} status='success'""",
-            params,
-        ).fetchone()
-
-        rows_n = int(cost_row["rows_n"]) if cost_row else 0
-        hit_count = int(cost_row["hit_count"]) if cost_row else 0
-        cache_hit_rate_pct = round(100.0 * hit_count / rows_n, 1) if rows_n > 0 else 0.0
-        in_tok_sum = int(cost_row["in_tok"] or 0)
-        cache_write_sum = int(cost_row["cache_write"] or 0)
-        cache_read_sum = int(cost_row["cache_read"] or 0)
-        token_denom = in_tok_sum + cache_read_sum + cache_write_sum
-        token_cache_hit_rate_pct = (
-            round(100.0 * cache_read_sum / token_denom, 1) if token_denom > 0 else 0.0
-        )
-        cost = {
-            "input_tokens": in_tok_sum,
-            "output_tokens": int(cost_row["out_tok"] or 0),
-            "cache_creation_input_tokens": cache_write_sum,
-            "cache_read_input_tokens": cache_read_sum,
-            "cache_hit_rate_pct": cache_hit_rate_pct,
-            "token_cache_hit_rate_pct": token_cache_hit_rate_pct,
-            "avg_latency_ms": int(cost_row["avg_ms"] or 0),
-            "success_rows": rows_n,
-        }
-
-        # task 08-20-perf-dashboards §2.6 — 按 model 拆分 (同一个窗口 + 同一个
-        # status='success' 口径, 只多一条 GROUP BY)。全表 rollup 回答「花了多少」,
-        # 这一段回答「花在谁身上」—— 换模型 / 加 fallback 后成本归属只能靠它。
-        # model 为空 (老行没记) → 归到 '(unknown)', 不丢行。
-        by_model_rows = conn.execute(
-            f"""SELECT COALESCE(NULLIF(model, ''), '(unknown)')  AS model,
-                       COUNT(*)                                   AS rows_n,
-                       COALESCE(SUM(input_tokens), 0)             AS in_tok,
-                       COALESCE(SUM(output_tokens), 0)            AS out_tok,
-                       COALESCE(SUM(cache_read_input_tokens), 0)  AS cache_read,
-                       COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_write,
-                       COALESCE(AVG(latency_ms), 0)               AS avg_ms
-                  FROM llm_processing
-                 {where} {'AND' if where else 'WHERE'} status='success'
-                 GROUP BY 1
-                 ORDER BY in_tok + out_tok DESC""",
-            params,
-        ).fetchall()
-        by_model = [
-            {
-                "model": r["model"],
-                "rows": int(r["rows_n"]),
-                "input_tokens": int(r["in_tok"] or 0),
-                "output_tokens": int(r["out_tok"] or 0),
-                "cache_read_input_tokens": int(r["cache_read"] or 0),
-                "cache_creation_input_tokens": int(r["cache_write"] or 0),
-                "avg_latency_ms": int(r["avg_ms"] or 0),
-            }
-            for r in by_model_rows
-        ]
-    finally:
-        conn.close()
-
-    data = {
-        "total": total,
-        "by_status": by_status,
-        "days": days,
-        "since_ts": since_ts,
-        "cost": cost,
-        "by_model": by_model,
-        "_source": "live_query",
-    }
+    data = read_processing_stats(
+        repo,
+        days=days,
+        since_ts=since_ts,
+        zero_cost=_zero_cost(),
+    )
     return success_envelope(data, request=request, source="sqlite")
 
 

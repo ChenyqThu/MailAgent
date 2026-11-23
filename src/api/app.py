@@ -95,6 +95,42 @@ def _duration_ms(request: Optional[Request]) -> int:
     return 0
 
 
+def _build_success_envelope(
+    data: Any,
+    *,
+    request: Optional[Request] = None,
+    meta_extra: Optional[dict[str, Any]] = None,
+    source: str = "sqlite",
+) -> dict[str, Any]:
+    meta: dict[str, Any] = {"duration_ms": _duration_ms(request), "source": source}
+    if meta_extra:
+        meta.update({k: v for k, v in meta_extra.items() if v is not None})
+    return {
+        "status": "success",
+        "schema_version": SCHEMA_VERSION,
+        "data": data,
+        "error": None,  # §3.4 显式 error:null
+        "meta": meta,
+    }
+
+
+def success_payload(
+    data: Any,
+    *,
+    request: Optional[Request] = None,
+    meta_extra: Optional[dict[str, Any]] = None,
+    source: str = "sqlite",
+) -> dict[str, Any]:
+    """构造成功 envelope 的原生 dict，供声明了 ``response_model=SuccessEnvelope[...]`` 的路由直接返回。
+
+    与 ``success_envelope``（返回 ``JSONResponse``，会绕过 FastAPI ``response_model`` 校验）不同，
+    直接返回 dict 会触发 FastAPI 的运行时 Pydantic 校验与序列化。
+    """
+    return _build_success_envelope(
+        data, request=request, meta_extra=meta_extra, source=source
+    )
+
+
 def success_envelope(
     data: Any,
     *,
@@ -111,18 +147,11 @@ def success_envelope(
     或 ``{"query": q, "total_hits": n, "total_indexed": m}``)。
     source: 'sqlite' (repo-backed 读) | 'cli' (subprocess 端点)。
     """
-    meta: dict[str, Any] = {"duration_ms": _duration_ms(request), "source": source}
-    if meta_extra:
-        meta.update({k: v for k, v in meta_extra.items() if v is not None})
     return JSONResponse(
         status_code=status_code,
-        content={
-            "status": "success",
-            "schema_version": SCHEMA_VERSION,
-            "data": data,
-            "error": None,  # §3.4 显式 error:null
-            "meta": meta,
-        },
+        content=_build_success_envelope(
+            data, request=request, meta_extra=meta_extra, source=source
+        ),
     )
 
 

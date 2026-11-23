@@ -44,7 +44,7 @@ class TranslationCache(BaseModel):
     segments: list[TranslationSegment]
     source: Optional[str] = None  # 'llm_agent' (Path A) | 'on_demand' (Path B) | null
     model: Optional[str] = None
-    fetchedAt: Optional[int] = None  # unix seconds; null for un-persisted
+    fetchedAt: Optional[float] = None  # unix seconds; null for un-persisted
 
 
 class TranslateBatchResult(TranslationCache):

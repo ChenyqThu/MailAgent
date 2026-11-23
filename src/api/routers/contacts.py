@@ -15,7 +15,7 @@ from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 
-from src.api.app import APIError, success_envelope
+from src.api.app import APIError, success_payload
 from src.api.auth import verify_cf_access
 from src.api.deps import get_settings
 from src.api.schemas import SuccessEnvelope
@@ -200,7 +200,7 @@ async def list_governance_suggestions(
             conn.close()
 
     result = await asyncio.to_thread(_query)
-    return success_envelope(result, request=request)
+    return success_payload(result, request=request)
 
 
 @router.post(
@@ -222,7 +222,7 @@ async def adopt_governance_suggestion(
     _publish_contact_changed(
         result.get("contact_ids") or [], scope="governance_adopt"
     )
-    return success_envelope(result, request=request)
+    return success_payload(result, request=request)
 
 
 @router.post(
@@ -241,7 +241,7 @@ async def ignore_governance_suggestion(
             suggestion_id,
             now_ms=_now_ms(),
         )
-    return success_envelope(result, request=request)
+    return success_payload(result, request=request)
 
 
 @router.post(
@@ -263,7 +263,7 @@ async def bulk_resolve_governance_suggestions(
         )
     if result["contact_ids"]:
         _publish_contact_changed(result["contact_ids"], scope="governance_bulk_adopt")
-    return success_envelope(result, request=request)
+    return success_payload(result, request=request)
 
 
 @router.post(
@@ -284,7 +284,7 @@ async def run_contact_governance(
         trigger_kind="manual",
         idempotency_key=key,
     )
-    return success_envelope(result, request=request)
+    return success_payload(result, request=request)
 
 
 @router.get(
@@ -303,7 +303,7 @@ async def contact_governance_status(
             conn.close()
 
     status_payload = await asyncio.to_thread(_query)
-    return success_envelope(status_payload, request=request)
+    return success_payload(status_payload, request=request)
 
 
 @router.get(
@@ -323,7 +323,7 @@ async def contact_governance_history(
             conn.close()
 
     items = await asyncio.to_thread(_query)
-    return success_envelope({"items": items}, request=request)
+    return success_payload({"items": items}, request=request)
 
 
 @router.get(
@@ -352,7 +352,7 @@ async def contact_profile_daily_summary(
         return summary, get_contact_profile_agent_config(str(repo.db_path))
 
     summary, cfg = await asyncio.to_thread(_query)
-    return success_envelope(
+    return success_payload(
         {
             "date": local_date.isoformat(),
             **summary,
@@ -380,7 +380,7 @@ async def backfill_progress(
             conn.close()
 
     progress = await asyncio.to_thread(_query)
-    return success_envelope(progress, request=request)
+    return success_payload(progress, request=request)
 
 
 # ---- 批量精确解析 (WP4 互链: 邮件详情头 → PersonChip) ----
@@ -424,7 +424,7 @@ async def resolve_contacts(
         raw: (chip_by_email.get(norm) if norm else None)
         for raw, norm in normalized_by_input.items()
     }
-    return success_envelope({"items": items}, request=request)
+    return success_payload({"items": items}, request=request)
 
 
 # ---- 列表 & 详情 ----
@@ -447,7 +447,7 @@ async def list_contacts(
     page = await asyncio.to_thread(
         query_contact_list, repo, view=view, q=q, sort=sort, limit=limit, cursor=cursor
     )
-    return success_envelope(page, request=request)
+    return success_payload(page, request=request)
 
 
 @router.get(
@@ -467,7 +467,7 @@ async def get_contact(
             conn.close()
 
     detail = await asyncio.to_thread(_query)
-    return success_envelope(detail, request=request)
+    return success_payload(detail, request=request)
 
 
 @router.post(
@@ -501,10 +501,9 @@ async def refresh_contact_profile(
                 full_refresh=True,
             )
         )
-    return success_envelope(
+    return success_payload(
         {"contact_id": contact_id, "status": "running", "started": claimed},
         request=request,
-        status_code=202,
     )
 
 
@@ -543,7 +542,7 @@ async def adopt_contact_profile_suggestion(
         )
         detail = _call(load_contact_detail, conn, contact_id)
     _publish_contact_changed([contact_id], scope="profile_suggestion")
-    return success_envelope(detail, request=request)
+    return success_payload(detail, request=request)
 
 
 @router.post(
@@ -572,7 +571,7 @@ async def ignore_contact_profile_suggestion(
         )
         detail = _call(load_contact_detail, conn, contact_id)
     _publish_contact_changed([contact_id], scope="profile_suggestion")
-    return success_envelope(detail, request=request)
+    return success_payload(detail, request=request)
 
 
 # ---- 关联邮件 ----
@@ -645,7 +644,7 @@ async def list_contact_mails(
         }
         for row in rows
     ]
-    return success_envelope(
+    return success_payload(
         {"items": items, "next_cursor": page["next_cursor"], "total": page["total"]},
         request=request,
     )
@@ -671,7 +670,7 @@ async def list_contact_matters(
             conn.close()
 
     items = await asyncio.to_thread(_query)
-    return success_envelope({"items": items}, request=request)
+    return success_payload({"items": items}, request=request)
 
 
 # ---- 身份字段编辑 + 字段级锁 ----
@@ -700,7 +699,7 @@ async def patch_contact(
             now=now,
         )
         detail = _call(load_contact_detail, conn, contact_id)
-    return success_envelope(
+    return success_payload(
         {"fields": result["fields"], "locks": result["locks"], "contact": detail},
         request=request,
     )
@@ -725,7 +724,7 @@ async def set_contact_lock(
             locked=body.locked,
             now=_now_ms(),
         )
-    return success_envelope({"locks": locks}, request=request)
+    return success_payload({"locks": locks}, request=request)
 
 
 # ---- 治理写面 (service 既有守卫的薄端点) ----
@@ -749,7 +748,7 @@ async def hide_contact(
             hidden=body.hidden,
             now=_now_ms(),
         )
-    return success_envelope({"hidden": body.hidden}, request=request)
+    return success_payload({"hidden": body.hidden}, request=request)
 
 
 @router.post(
@@ -770,7 +769,7 @@ async def set_contact_kind(
             body.kind,
             now=_now_ms(),
         )
-    return success_envelope({"kind": body.kind}, request=request)
+    return success_payload({"kind": body.kind}, request=request)
 
 
 @router.post(
@@ -792,7 +791,7 @@ async def set_contact_self(
             is_self=body.is_self,
             now=_now_ms(),
         )
-    return success_envelope({"is_self": body.is_self}, request=request)
+    return success_payload({"is_self": body.is_self}, request=request)
 
 
 @router.post(
@@ -817,7 +816,7 @@ async def set_contact_manager(
             now_ms=now,
         )
         detail = _call(load_contact_detail, conn, contact_id)
-    return success_envelope(detail, request=request)
+    return success_payload(detail, request=request)
 
 
 @router.post(
@@ -843,7 +842,7 @@ async def merge_contact(
             former_emails=body.former_emails,
         )
         detail = _call(load_contact_detail, conn, contact_id)
-    return success_envelope(detail, request=request)
+    return success_payload(detail, request=request)
 
 
 @router.post(
@@ -864,7 +863,7 @@ async def set_contact_primary_email(
             body.email,
             now=_now_ms(),
         )
-    return success_envelope({"primary_email": body.email}, request=request)
+    return success_payload({"primary_email": body.email}, request=request)
 
 
 @router.post(
@@ -884,6 +883,6 @@ async def set_contact_email_former(
     )
     with repo.transaction() as conn:
         _call(fn, conn, contact_id, body.email, now=_now_ms())
-    return success_envelope(
+    return success_payload(
         {"email": body.email, "former": body.former}, request=request
     )

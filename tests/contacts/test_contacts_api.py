@@ -1305,3 +1305,17 @@ def test_contacts_live_responses_validate_against_response_models(client):
         http.patch("/api/contacts/1", json={"organization": "ACME"}).json()
     )
 
+
+def test_contacts_response_model_actually_enforces_runtime_validation(client, monkeypatch):
+    """负向证明: 使用 success_payload() 后 FastAPI 真实跑 response_model 校验，不再被 JSONResponse 绕过."""
+    from fastapi.exceptions import ResponseValidationError
+
+    http, _settings, _path = client
+    monkeypatch.setattr(
+        contacts_router,
+        "load_contact_detail",
+        lambda *_a, **_kw: {"broken": True},
+    )
+    with pytest.raises(ResponseValidationError):
+        http.get("/api/contacts/1")
+

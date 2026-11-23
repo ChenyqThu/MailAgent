@@ -104,6 +104,50 @@ class TranslationRepository:
             return None
         return data
 
+    def get_cache_entry(
+        self, internal_id: int, target_lang: str = "zh"
+    ) -> Optional[dict]:
+        """Read full camelCase ``TranslationCache`` dict for ``(internal_id, target_lang)``."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT segments_json, model, source, updated_at "
+                "FROM email_translation WHERE internal_id = ? AND target_lang = ?",
+                (internal_id, target_lang),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        if row is None:
+            return None
+        try:
+            parsed = json.loads(row["segments_json"])
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(parsed, list):
+            return None
+
+        segments: list[dict] = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            src = item.get("src")
+            tgt = item.get("tgt")
+            if not isinstance(src, str) or not isinstance(tgt, str):
+                continue
+            if not src.strip() or not tgt.strip():
+                continue
+            segments.append({"src": src.strip(), "tgt": tgt.strip()})
+
+        return {
+            "internalId": internal_id,
+            "targetLang": target_lang,
+            "segments": segments,
+            "source": row["source"],
+            "model": row["model"],
+            "fetchedAt": row["updated_at"],
+        }
+
     def save_segments(
         self,
         internal_id: int,

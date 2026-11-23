@@ -85,8 +85,8 @@
 |---|---|---|---|
 | **Phase 0** | 4.1 路线图落盘 + 卫生态提交 | ✅ 已完成 | 4.1 总纲与 Trellis Epic 建档；收口 `test_reminder.py` 临时路径、`.gitignore` 与 `v4-architecture-quality-review.md` 归档，推齐 `origin/main` |
 | **Wave 4A** | SQLite WAL/安全网 + CI 闸 + ESLint 去噪 | ✅ 已完成 | `AgentConfigStore`/`LlmProviderStore` 启用 WAL+30s `busy_timeout`；`ai_chat.db` 纳入 `run_startup_db_safety`（`ChatDb` 对齐 WAL/30s）；删除死代码 `getWriteDb()`；`ruff check src` 23→**0**；`ci-test.yml` 补齐 `ruff` + `typecheck` + `artifact-server`（8/8）；ESLint 关闭 `prettier/prettier` 噪音并修 `ResourceDrawer` 65 条 ref + 6 条无效 disable，warnings **1,736→117**（0 error；1,159 PY + 50 FE 文件/347 项全绿） |
-| **Wave 4B** | `SuccessEnvelope` 真校验 + Router 裸 SQL 清零 | 🔄 进行中 | 待回填 |
-| **Wave 4C** | 翻译单写收口 + Typed IPC 边界 | ⏳ 待执行 | 待回填 |
+| **Wave 4B** | `SuccessEnvelope` 真校验 + Router 裸 SQL 清零 | ✅ 已完成 | `contacts`(27)+`ai`/`notifications`/`folder`/`history_sync` 真 `response_model`；`check-openapi-contract.ts` 40 模型；Router `.execute()` 33→0；Ruff 0，`pytest` 3069 passed |
+| **Wave 4C** | 翻译单写收口 + Typed IPC 边界 | 🔄 进行中 | 待回填 |
 | **Wave 5A** | 后端高频 Router & `AgentConfigStore` 拆解 | ⏳ 待执行 | 待回填 |
 | **Wave 5B** | AI Gateway 组合化 / `policy` / 表单收敛 / 记忆重试 | ⏳ 待执行 | 待回填 |
 | **Wave 5C** | 前端热点拆解 + React Hook 警告清零拉闸 | ⏳ 待执行 | 待回填 |

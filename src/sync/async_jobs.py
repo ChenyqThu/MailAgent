@@ -640,3 +640,24 @@ class AsyncJobRepository:
                 float(row["finished_at"]) if row["finished_at"] is not None else None
             ),
         )
+
+
+def fetch_jobs_by_ids(sync_db_path: str, job_ids: list[int]) -> dict[int, dict]:
+    """Read-only batch lookup of ``async_jobs`` rows by ID (best-effort)."""
+    import os
+
+    if not job_ids or not sync_db_path or not os.path.exists(sync_db_path):
+        return {}
+    try:
+        conn = sqlite3.connect(sync_db_path, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            placeholders = ",".join("?" * len(job_ids))
+            rows = conn.execute(
+                f"SELECT * FROM async_jobs WHERE job_id IN ({placeholders})", job_ids
+            ).fetchall()
+            return {int(r["job_id"]): dict(r) for r in rows}
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return {}

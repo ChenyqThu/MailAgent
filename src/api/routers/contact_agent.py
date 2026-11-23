@@ -6,7 +6,7 @@ import time
 
 from fastapi import APIRouter, Depends, Request
 
-from src.api.app import success_envelope
+from src.api.app import success_payload
 from src.api.auth import verify_local_token
 from src.api.routers.contacts import (
     _call,
@@ -52,4 +52,4 @@ async def propose_contact_governance(
     # BEGIN IMMEDIATE) 会与这把锁循环等待死锁 (governance.create_suggestion 头注)。
     if result.get("created"):
         notify_pending_suggestion(repo.db_path)
-    return success_envelope(result, request=request, source="contact-agent")
+    return success_payload(result, request=request, source="contact-agent")

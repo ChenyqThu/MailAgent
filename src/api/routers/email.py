@@ -114,28 +114,18 @@ _COUNT_TTL_S = 30.0
 
 
 def _count_fts_indexed(repo: "EmailRepository") -> int:
-    """`SELECT count(*) FROM email_body_fts` — SearchResult.total_indexed 用 (TTL 缓存)。
-
-    repo 无现成 helper (实现规格 gotcha #3), 用 repo._connect() 起一个短命连接
-    (与 repo 内部所有读一致: per-call open/close, WAL 下与 mail-sync writer 并发安全)。
-    FTS5 表缺失 / 异常时回 0, 不让搜索因 count 失败而 500。
-    结果进程级缓存 30s (P2): 同 query 高频按键不重复跑昂贵的 contentful COUNT。
-    """
-    import sqlite3
-
+    """`SELECT count(*) FROM email_body_fts` — SearchResult.total_indexed 用 (TTL 缓存)."""
     now = _time.monotonic()
     cached = _COUNT_CACHE["value"]
     if cached is not None and (now - float(_COUNT_CACHE["ts"] or 0.0)) < _COUNT_TTL_S:
         return int(cached)
 
-    conn = repo._connect()
-    try:
-        row = conn.execute("SELECT count(*) AS c FROM email_body_fts").fetchone()
-        val = int(row["c"]) if row else 0
-    except sqlite3.OperationalError:
-        val = 0
-    finally:
-        conn.close()
+    if hasattr(repo, "count_body_fts_indexed"):
+        val = int(repo.count_body_fts_indexed())
+    else:
+        from src.repository.email_search_fts import _EmailSearchFtsMixin
+
+        val = int(_EmailSearchFtsMixin.count_body_fts_indexed(repo))  # type: ignore[arg-type]
 
     _COUNT_CACHE["value"] = val
     _COUNT_CACHE["ts"] = now
@@ -432,57 +422,28 @@ def _semantic_candidate_items(
     """Filter semantic hit IDs by active structured/matter filters & hydrate UI fields."""
     if not candidate_ids or not hasattr(repo, "_connect"):
         return {}
-    from src.repository.search_query import build_structured_filter_predicates, parse_search_query
+    if hasattr(repo, "query_semantic_candidates"):
+        return repo.query_semantic_candidates(
+            candidate_ids,
+            query=query,
+            mailbox=mailbox,
+            since=since,
+            until=until,
+            matter_id=matter_id,
+            map_priority=map_priority,
+        )
+    from src.repository.email_search_fts import _EmailSearchFtsMixin
 
-    parsed = parse_search_query(query)
-    filters, _ = build_structured_filter_predicates(
-        mailbox=mailbox, since_date=since, until_date=until
+    return _EmailSearchFtsMixin.query_semantic_candidates(
+        repo,  # type: ignore[arg-type]
+        candidate_ids,
+        query=query,
+        mailbox=mailbox,
+        since=since,
+        until=until,
+        matter_id=matter_id,
+        map_priority=map_priority,
     )
-    safe_dsl = [p for p in parsed.filters if "email_attachment" not in p.sql]
-    filters = [*filters, *safe_dsl]
-    if hasattr(repo, "_append_matter_filter"):
-        repo._append_matter_filter(filters, matter_id)
-
-    placeholders = ", ".join("?" for _ in candidate_ids)
-    params: list[Any] = [int(x) for x in candidate_ids]
-    where = repo._append_metadata_predicates(
-        f" WHERE m.internal_id IN ({placeholders})", params, filters
-    )
-    sql = (
-        "SELECT m.internal_id, m.subject, m.sender, m.date_received, m.mailbox,"
-        " m.notion_page_id, m.snippet, m.ai_priority,"
-        " substr(COALESCE(b.body_markdown, ''), 1, 180) AS body_head"
-        " FROM email_metadata m"
-        " LEFT JOIN email_body b ON b.internal_id = m.internal_id"
-        + where
-    )
-    conn = repo._connect()
-    try:
-        rows = conn.execute(sql, params).fetchall()
-    finally:
-        conn.close()
-
-    out: dict[int, dict[str, Any]] = {}
-    for row in rows:
-        iid = int(row["internal_id"])
-        raw_snip = (row["snippet"] or row["body_head"] or "").strip()
-        clean_snip = " ".join(raw_snip.split())[:160] if raw_snip else ""
-        out[iid] = {
-            "internal_id": iid,
-            "subject": row["subject"],
-            "sender": row["sender"],
-            "date_received": row["date_received"],
-            "mailbox": row["mailbox"],
-            "rank": None,
-            "snippet": clean_snip,
-            "notion_page_id": row["notion_page_id"],
-            "notion_url": None,
-            "source": "body",
-            "filename": None,
-            "ai_priority": map_priority(row["ai_priority"]),
-            "lang": None,
-        }
-    return out
 
 
 @router.get("/search", dependencies=[Depends(verify_cf_access)])

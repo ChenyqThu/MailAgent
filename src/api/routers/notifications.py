@@ -25,9 +25,16 @@ from typing import Any, Callable
 from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import Field
 
-from src.api.app import APIError, success_envelope
+from src.api.app import APIError, success_payload
 from src.api.auth import verify_cf_access, verify_local_token
 from src.api.deps import get_report_store, get_settings
+from src.api.schemas import SuccessEnvelope
+from src.api.schemas.notifications import (
+    NotificationItemDto,
+    NotificationPreferencesDto,
+    NotificationReadAllResponse,
+    NotificationUnreadCountResponse,
+)
 
 # mutation 信封与 snooze 预设**复用 matters 既有单源**，不在本域另造镜像：
 # `MutationEnvelope` / `MutationOnly` / `StrictModel` 是通用 mutation DTO（历史上
@@ -97,7 +104,7 @@ def _to_wire(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@router.get("")
+@router.get("", response_model=SuccessEnvelope[list[NotificationItemDto]])
 async def list_notifications(
     request: Request,
     category: str | None = None,
@@ -118,7 +125,7 @@ async def list_notifications(
         offset=offset,
     )
     items = [_to_wire(item) for item in result.items]
-    return success_envelope(
+    return success_payload(
         items,
         request=request,
         meta_extra={
@@ -131,7 +138,7 @@ async def list_notifications(
     )
 
 
-@router.get("/unread-count")
+@router.get("/unread-count", response_model=SuccessEnvelope[NotificationUnreadCountResponse])
 async def get_unread_count(
     request: Request,
     center: NotifyCenter = Depends(get_notify_center),
@@ -146,7 +153,7 @@ async def get_unread_count(
       要保留一档 level 型指示: 未读读掉了、待办还挂着时仍要看得见 (M3 批 C5)。
     """
     result = await _acall(center.unread_count)
-    return success_envelope(
+    return success_payload(
         {
             "total": result["total"],
             "byCategory": result["by_category"],
@@ -157,7 +164,7 @@ async def get_unread_count(
     )
 
 
-@router.get("/preferences")
+@router.get("/preferences", response_model=SuccessEnvelope[NotificationPreferencesDto])
 async def get_notification_preferences(
     request: Request,
     settings=Depends(get_settings),
@@ -166,10 +173,10 @@ async def get_notification_preferences(
     prefs = await asyncio.to_thread(
         load_notification_prefs, str(settings.sync_store_db_path)
     )
-    return success_envelope(prefs, request=request, source="sqlite")
+    return success_payload(prefs, request=request, source="sqlite")
 
 
-@router.put("/preferences")
+@router.put("/preferences", response_model=SuccessEnvelope[NotificationPreferencesDto])
 async def update_notification_preferences(
     request: Request,
     body: dict[str, Any],
@@ -194,10 +201,10 @@ async def update_notification_preferences(
             )
         except Exception as exc:  # noqa: BLE001 — fail-open if custom agent store unavailable
             raise APIError("E_INTERNAL", f"preset agent sync failed: {exc}", source="sqlite") from exc
-    return success_envelope(saved, request=request, source="sqlite")
+    return success_payload(saved, request=request, source="sqlite")
 
 
-@router.post("/read-all")
+@router.post("/read-all", response_model=SuccessEnvelope[NotificationReadAllResponse])
 async def read_all_notifications(
     request: Request,
     body: dict[str, Any] | None = None,
@@ -207,10 +214,10 @@ async def read_all_notifications(
     不挂 mutation 信封 (`matters.py::set_matter_notify_level` 裸 dict body 同形)。"""
     category = (body or {}).get("category")
     updated = _call(center.mark_all_read, category=category)
-    return success_envelope({"updated": updated}, request=request)
+    return success_payload({"updated": updated}, request=request)
 
 
-@router.post("/{notification_id:int}/read")
+@router.post("/{notification_id:int}/read", response_model=SuccessEnvelope[NotificationItemDto])
 async def read_notification(
     notification_id: int,
     request: Request,
@@ -218,7 +225,7 @@ async def read_notification(
 ):
     """单条已读 (design §5 `POST /{id}/read`); 天然幂等; 不存在 id → 404。"""
     result = _call(center.mark_read, notification_id)
-    return success_envelope(_to_wire(result), request=request)
+    return success_payload(_to_wire(result), request=request)
 
 
 # ==================== M2 动作面 (design §5) ====================
@@ -304,7 +311,7 @@ def _resolve_snooze_until(
     return int(body.until)
 
 
-@router.post("/{notification_id:int}/snooze")
+@router.post("/{notification_id:int}/snooze", response_model=SuccessEnvelope[NotificationItemDto])
 async def snooze_notification(
     notification_id: int,
     body: NotificationSnoozeRequest,
@@ -321,10 +328,10 @@ async def snooze_notification(
     _check_idempotency(body.mutation, idempotency_key)
     until = _resolve_snooze_until(body, center)
     result = _call(center.snooze, notification_id, until_ms=until)
-    return success_envelope(_to_wire(result), request=request)
+    return success_payload(_to_wire(result), request=request)
 
 
-@router.post("/{notification_id:int}/resolve")
+@router.post("/{notification_id:int}/resolve", response_model=SuccessEnvelope[NotificationItemDto])
 async def resolve_notification(
     notification_id: int,
     body: MutationOnly,
@@ -339,7 +346,7 @@ async def resolve_notification(
     """
     _check_idempotency(body.mutation, idempotency_key)
     result = _call(center.resolve, notification_id)
-    return success_envelope(_to_wire(result), request=request)
+    return success_payload(_to_wire(result), request=request)
 
 
 async def publish_notification(
@@ -367,7 +374,7 @@ async def publish_notification(
         kwargs["system_only"] = True
     result = _call(center.publish, **kwargs)
     projected = _call(center.get, result.id)  # publish 只回 id/created/计次
-    return success_envelope(_to_wire(projected), request=request)
+    return success_payload(_to_wire(projected), request=request)
 
 
 # internal face 单独一条路由: 主 router 整体挂 `verify_cf_access`, 而 publish 只认
@@ -377,6 +384,7 @@ _internal_router.add_api_route(
     "/publish",
     publish_notification,
     methods=["POST"],
+    response_model=SuccessEnvelope[NotificationItemDto],
     dependencies=[Depends(verify_local_token)],
 )
 router.routes.extend(_internal_router.routes)

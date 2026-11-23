@@ -23,14 +23,14 @@ mail-sync writer 并发安全, 不持长连接)。db_path 取自注入的 EmailR
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends, Request
 
-from src.api.app import success_envelope
+from src.api.app import success_payload
 from src.api.auth import verify_cf_access
 from src.api.deps import get_repository
+from src.api.schemas import DeleteCachedResult, SuccessEnvelope, TranslationCache
 
 if TYPE_CHECKING:
     from src.repository import EmailRepository
@@ -45,60 +45,21 @@ _DEFAULT_TARGET_LANG = "zh"
 def _read_translation_cache(
     db_path: str, internal_id: int, target_lang: str
 ) -> Optional[dict]:
-    """读 email_translation 一行 → camelCase TranslationCache, 未命中 None。
-
-    镜像 Electron ``readCache``: 取 segments_json/model/source/updated_at, 解析 +
-    清洗 segments (跳过非 {src,tgt} 字符串对 / 空白对), fetchedAt = updated_at。
-    JSON 损坏 / 非 list → None (当未命中, 与 Electron 一致)。
-    """
+    """读 email_translation 一行 → camelCase TranslationCache, 未命中 None."""
     from src.repository import TranslationRepository
 
-    repo_t = TranslationRepository(db_path=db_path)
-    conn = repo_t._connect()
-    try:
-        row = conn.execute(
-            "SELECT segments_json, model, source, updated_at "
-            "FROM email_translation WHERE internal_id = ? AND target_lang = ?",
-            (internal_id, target_lang),
-        ).fetchone()
-    finally:
-        conn.close()
-
-    if row is None:
-        return None
-    try:
-        parsed = json.loads(row["segments_json"])
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(parsed, list):
-        return None
-
-    segments: list[dict] = []
-    for item in parsed:
-        if not isinstance(item, dict):
-            continue
-        src = item.get("src")
-        tgt = item.get("tgt")
-        if not isinstance(src, str) or not isinstance(tgt, str):
-            continue
-        if not src.strip() or not tgt.strip():
-            continue
-        segments.append({"src": src.strip(), "tgt": tgt.strip()})
-
-    return {
-        "internalId": internal_id,
-        "targetLang": target_lang,
-        "segments": segments,
-        "source": row["source"],
-        "model": row["model"],
-        "fetchedAt": row["updated_at"],
-    }
+    return TranslationRepository(db_path=db_path).get_cache_entry(
+        internal_id, target_lang=target_lang
+    )
 
 
 # ============================================================
 # GET /api/ai/translation/{internal_id}  (读, email_translation)
 # ============================================================
-@router.get("/translation/{internal_id}")
+@router.get(
+    "/translation/{internal_id}",
+    response_model=SuccessEnvelope[Optional[TranslationCache]],
+)
 async def ai_get_cached(
     internal_id: int,
     request: Request,
@@ -113,13 +74,16 @@ async def ai_get_cached(
     调用值)。meta.source='sqlite'。
     """
     data = _read_translation_cache(str(repo.db_path), internal_id, target_lang)
-    return success_envelope(data, request=request, source="sqlite")
+    return success_payload(data, request=request, source="sqlite")
 
 
 # ============================================================
 # DELETE /api/ai/translation/{internal_id}  (删, email_translation)
 # ============================================================
-@router.delete("/translation/{internal_id}")
+@router.delete(
+    "/translation/{internal_id}",
+    response_model=SuccessEnvelope[DeleteCachedResult],
+)
 async def ai_delete_cached(
     internal_id: int,
     request: Request,
@@ -139,4 +103,4 @@ async def ai_delete_cached(
 
     repo_t = TranslationRepository(db_path=str(repo.db_path))
     deleted = repo_t.delete(internal_id, target_lang=target_lang)
-    return success_envelope({"deleted": deleted}, request=request, source="sqlite")
+    return success_payload({"deleted": deleted}, request=request, source="sqlite")

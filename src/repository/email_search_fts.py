@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 import time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -987,3 +987,78 @@ class _EmailSearchFtsMixin:
             since_date=since_date,
             until_date=until_date,
         ).hits
+
+    def count_body_fts_indexed(self) -> int:
+        """Count indexed rows in ``email_body_fts`` (fail-open to 0)."""
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT count(*) AS c FROM email_body_fts").fetchone()
+            return int(row["c"]) if row else 0
+        except sqlite3.OperationalError:
+            return 0
+        finally:
+            conn.close()
+
+    def query_semantic_candidates(
+        self,
+        candidate_ids: list[int],
+        *,
+        query: str,
+        mailbox: Optional[str],
+        since: Optional[str],
+        until: Optional[str],
+        matter_id: Optional[int],
+        map_priority: Any,
+    ) -> dict[int, dict[str, Any]]:
+        """Filter semantic candidate IDs by active structured/matter filters & hydrate rows."""
+        if not candidate_ids:
+            return {}
+        parsed = parse_search_query(query)
+        filters, _ = build_structured_filter_predicates(
+            mailbox=mailbox, since_date=since, until_date=until
+        )
+        safe_dsl = [p for p in parsed.filters if "email_attachment" not in p.sql]
+        filters = [*filters, *safe_dsl]
+        if hasattr(self, "_append_matter_filter"):
+            self._append_matter_filter(filters, matter_id)
+
+        placeholders = ", ".join("?" for _ in candidate_ids)
+        params: list[Any] = [int(x) for x in candidate_ids]
+        where = self._append_metadata_predicates(
+            f" WHERE m.internal_id IN ({placeholders})", params, filters
+        )
+        sql = (
+            "SELECT m.internal_id, m.subject, m.sender, m.date_received, m.mailbox,"
+            " m.notion_page_id, m.snippet, m.ai_priority,"
+            " substr(COALESCE(b.body_markdown, ''), 1, 180) AS body_head"
+            " FROM email_metadata m"
+            " LEFT JOIN email_body b ON b.internal_id = m.internal_id"
+            + where
+        )
+        conn = self._connect()
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        finally:
+            conn.close()
+
+        out: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            iid = int(row["internal_id"])
+            raw_snip = (row["snippet"] or row["body_head"] or "").strip()
+            clean_snip = " ".join(raw_snip.split())[:160] if raw_snip else ""
+            out[iid] = {
+                "internal_id": iid,
+                "subject": row["subject"],
+                "sender": row["sender"],
+                "date_received": row["date_received"],
+                "mailbox": row["mailbox"],
+                "rank": None,
+                "snippet": clean_snip,
+                "notion_page_id": row["notion_page_id"],
+                "notion_url": None,
+                "source": "body",
+                "filename": None,
+                "ai_priority": map_priority(row["ai_priority"]),
+                "lang": None,
+            }
+        return out

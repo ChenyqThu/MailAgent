@@ -26,9 +26,19 @@ from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
-from src.api.app import APIError, success_envelope
+from src.api.app import APIError, success_payload
 from src.api.auth import verify_cf_access
 from src.api.deps import get_settings
+from src.api.schemas import SuccessEnvelope
+from src.api.schemas.folder import (
+    FolderCreateResponse,
+    FolderDiscoverResponse,
+    FolderMutationResponse,
+    FolderPrefItemDto,
+    FolderPrefsListResponse,
+    FolderWhitelistResponse,
+    FolderWhitelistUpdateResponse,
+)
 
 if TYPE_CHECKING:
     from src.config import Config
@@ -120,7 +130,11 @@ def _reset_discover_cache() -> None:
         _discover_cache.clear()
 
 
-@router.get("/discover", dependencies=[Depends(verify_cf_access)])
+@router.get(
+    "/discover",
+    dependencies=[Depends(verify_cf_access)],
+    response_model=SuccessEnvelope[FolderDiscoverResponse],
+)
 async def folder_discover(
     request: Request,
     cfg: "Config" = Depends(get_settings),
@@ -168,25 +182,33 @@ async def folder_discover(
         d = fi.to_dict()
         d["is_synced"] = fi.imap_name in whitelist_set
         flat.append(d)
-    return success_envelope(
+    return success_payload(
         {"folders": flat, "tree": build_folder_tree(folders), "whitelist": whitelist},
         request=request,
         source="imap",
     )
 
 
-@router.get("/whitelist", dependencies=[Depends(verify_cf_access)])
+@router.get(
+    "/whitelist",
+    dependencies=[Depends(verify_cf_access)],
+    response_model=SuccessEnvelope[FolderWhitelistResponse],
+)
 async def folder_get_whitelist(
     request: Request,
     cfg: "Config" = Depends(get_settings),
 ):
     """读当前 SYNC_FOLDERS 白名单 (imap 原始名列表)。"""
-    return success_envelope(
+    return success_payload(
         {"folders": _current_whitelist(cfg)}, request=request, source="sqlite"
     )
 
 
-@router.put("/whitelist", dependencies=[Depends(verify_cf_access)])
+@router.put(
+    "/whitelist",
+    dependencies=[Depends(verify_cf_access)],
+    response_model=SuccessEnvelope[FolderWhitelistUpdateResponse],
+)
 async def folder_set_whitelist(
     body: _WhitelistBody,
     request: Request,
@@ -234,7 +256,7 @@ async def folder_set_whitelist(
         cfg.sync_folders = new_raw  # type: ignore[attr-defined]
     except Exception:  # noqa: BLE001 — 单例更新 best-effort, 热读 .env 才是一致性主保证
         pass
-    return success_envelope(
+    return success_payload(
         {"folders": names, "restart_required": restart_required},
         request=request,
         source="sqlite",
@@ -283,7 +305,11 @@ def _svc_error_to_api(exc) -> None:
     )
 
 
-@router.post("/manage", dependencies=[Depends(verify_cf_access)])
+@router.post(
+    "/manage",
+    dependencies=[Depends(verify_cf_access)],
+    response_model=SuccessEnvelope[FolderCreateResponse],
+)
 async def folder_manage_create(body: _FolderCreateBody, request: Request, cfg: "Config" = Depends(get_settings)):
     """新建子文件夹 (IMAP CREATE → EWS)。davmail-only。"""
     _require_davmail(cfg)
@@ -293,7 +319,7 @@ async def folder_manage_create(body: _FolderCreateBody, request: Request, cfg: "
         result = await _asyncio.to_thread(
             _svc(request).create_folder, body.parent, body.name, actor=_http_actor()
         )
-        return success_envelope(
+        return success_payload(
             {"action": result.action, "imap_name": result.imap_name},
             request=request, source="cli",
         )
@@ -301,7 +327,11 @@ async def folder_manage_create(body: _FolderCreateBody, request: Request, cfg: "
         _svc_error_to_api(exc)
 
 
-@router.patch("/manage", dependencies=[Depends(verify_cf_access)])
+@router.patch(
+    "/manage",
+    dependencies=[Depends(verify_cf_access)],
+    response_model=SuccessEnvelope[FolderMutationResponse],
+)
 async def folder_manage_rename(body: _FolderRenameBody, request: Request, cfg: "Config" = Depends(get_settings)):
     """重命名文件夹 (IMAP RENAME + 本地一致性)。系统文件夹拒绝。davmail-only。"""
     _require_davmail(cfg)
@@ -311,7 +341,7 @@ async def folder_manage_rename(body: _FolderRenameBody, request: Request, cfg: "
         result = await _asyncio.to_thread(
             _svc(request).rename_folder, body.imap_name, body.new_name, actor=_http_actor()
         )
-        return success_envelope(
+        return success_payload(
             {
                 "action": result.action,
                 "imap_name": result.imap_name,
@@ -325,7 +355,11 @@ async def folder_manage_rename(body: _FolderRenameBody, request: Request, cfg: "
         _svc_error_to_api(exc)
 
 
-@router.delete("/manage", dependencies=[Depends(verify_cf_access)])
+@router.delete(
+    "/manage",
+    dependencies=[Depends(verify_cf_access)],
+    response_model=SuccessEnvelope[FolderMutationResponse],
+)
 async def folder_manage_delete(body: _FolderDeleteBody, request: Request, cfg: "Config" = Depends(get_settings)):
     """删除文件夹 (IMAP DELETE + 本地清理 + 白名单移除)。系统文件夹拒绝。davmail-only。"""
     _require_davmail(cfg)
@@ -335,7 +369,7 @@ async def folder_manage_delete(body: _FolderDeleteBody, request: Request, cfg: "
         result = await _asyncio.to_thread(
             _svc(request).delete_folder, body.imap_name, actor=_http_actor()
         )
-        return success_envelope(
+        return success_payload(
             {
                 "action": result.action,
                 "imap_name": result.imap_name,
@@ -362,7 +396,11 @@ class _FolderPrefBody(BaseModel):
     llm_disabled: Optional[bool] = None
 
 
-@router.get("/prefs", dependencies=[Depends(verify_cf_access)])
+@router.get(
+    "/prefs",
+    dependencies=[Depends(verify_cf_access)],
+    response_model=SuccessEnvelope[FolderPrefsListResponse],
+)
 async def folder_get_prefs(request: Request):
     """读全部 per-folder 配置 (图标 + 通知开关 + AI 开关)。
 
@@ -375,10 +413,14 @@ async def folder_get_prefs(request: Request):
     from src.api.deps import get_service_ctx
 
     prefs = await _asyncio.to_thread(get_service_ctx().sync_store.list_folder_prefs)
-    return success_envelope({"prefs": prefs}, request=request, source="sqlite")
+    return success_payload({"prefs": prefs}, request=request, source="sqlite")
 
 
-@router.put("/prefs", dependencies=[Depends(verify_cf_access)])
+@router.put(
+    "/prefs",
+    dependencies=[Depends(verify_cf_access)],
+    response_model=SuccessEnvelope[FolderPrefItemDto],
+)
 async def folder_set_pref(body: _FolderPrefBody, request: Request):
     """部分更新一个文件夹的配置; 行不存在则按默认值建行。返回落库后的整行。
 
@@ -416,14 +458,18 @@ async def folder_set_pref(body: _FolderPrefBody, request: Request):
     )
     if row is None:
         raise APIError("E_GENERIC", f"folder_pref 写入失败 ({imap_name!r})", source="sqlite")
-    return success_envelope(row, request=request, source="sqlite")
+    return success_payload(row, request=request, source="sqlite")
 
 
 class _FolderCleanupBody(BaseModel):
     imap_name: str
 
 
-@router.post("/cleanup", dependencies=[Depends(verify_cf_access)])
+@router.post(
+    "/cleanup",
+    dependencies=[Depends(verify_cf_access)],
+    response_model=SuccessEnvelope[FolderMutationResponse],
+)
 async def folder_manage_cleanup(body: _FolderCleanupBody, request: Request):
     """取消同步某文件夹时清理本地副本 (P5)。**不碰 Exchange 文件夹**, 纯本地删除 +
     白名单移除。非 davmail 也可 (纯本地操作)。"""
@@ -433,7 +479,7 @@ async def folder_manage_cleanup(body: _FolderCleanupBody, request: Request):
         result = await _asyncio.to_thread(
             _svc(request).cleanup_local_folder, body.imap_name, actor=_http_actor()
         )
-        return success_envelope(
+        return success_payload(
             {
                 "action": result.action,
                 "imap_name": result.imap_name,

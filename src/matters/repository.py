@@ -1376,3 +1376,30 @@ class MatterRepository:
         ):
             result[target] = cls._json(result.pop(source), fallback)
         return result
+
+
+def fetch_matter_meta_by_ids(
+    sync_db_path: str, matter_ids: list[int]
+) -> dict[int, dict[str, Any]]:
+    """Read-only batch lookup of matter ``public_id`` and ``title`` (best-effort)."""
+    import os
+
+    if not matter_ids or not sync_db_path or not os.path.exists(sync_db_path):
+        return {}
+    meta: dict[int, dict[str, Any]] = {}
+    try:
+        conn = sqlite3.connect(sync_db_path, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            placeholders = ",".join("?" * len(matter_ids))
+            rows = conn.execute(
+                f"SELECT id, public_id, title FROM matter WHERE id IN ({placeholders})",
+                matter_ids,
+            ).fetchall()
+            for r in rows:
+                meta[r["id"]] = {"public_id": r["public_id"], "title": r["title"]}
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        pass
+    return meta

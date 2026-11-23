@@ -1138,3 +1138,33 @@ class EmailRepository(
         if deleted:
             self.attachment_store.delete_email_dir(internal_id)
         return deleted
+
+
+def fetch_email_meta_by_ids(sync_db_path: str, email_ids: list[int]) -> dict[int, dict]:
+    """Read-only batch lookup of session email metadata (best-effort)."""
+    import os
+
+    if not email_ids or not sync_db_path or not os.path.exists(sync_db_path):
+        return {}
+    meta: dict[int, dict] = {}
+    try:
+        conn = sqlite3.connect(sync_db_path, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            placeholders = ",".join("?" * len(email_ids))
+            rows = conn.execute(
+                f"SELECT internal_id, subject, sender_name, sender FROM email_metadata "
+                f"WHERE internal_id IN ({placeholders})",
+                email_ids,
+            ).fetchall()
+            for r in rows:
+                sender_name = r["sender_name"]
+                meta[r["internal_id"]] = {
+                    "subject": r["subject"],
+                    "sender": sender_name if sender_name is not None else r["sender"],
+                }
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        pass
+    return meta

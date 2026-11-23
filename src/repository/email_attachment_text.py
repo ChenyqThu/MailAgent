@@ -680,3 +680,67 @@ class _EmailAttachmentTextMixin:
             since_date=since_date,
             until_date=until_date,
         )
+
+    def get_attachment_meta(self, attachment_id: int) -> Optional[dict]:
+        """Single-row attachment metadata lookup (without binary blob)."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """SELECT id, internal_id, filename, content_type, local_path, size_bytes
+                   FROM email_attachment WHERE id = ?""",
+                (attachment_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "internal_id": row["internal_id"],
+            "filename": row["filename"],
+            "content_type": row["content_type"],
+            "local_path": row["local_path"],
+            "size_bytes": row["size_bytes"],
+        }
+
+    def get_attachment_text_context(self, attachment_id: int) -> Optional[dict]:
+        """Attachment metadata LEFT JOIN owning email subject/sender for /text & library."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """SELECT a.id, a.internal_id, a.filename, a.content_type,
+                          a.local_path, a.size_bytes,
+                          COALESCE(m.subject, '') AS email_subject,
+                          COALESCE(m.sender, '')  AS sender
+                     FROM email_attachment a
+                     LEFT JOIN email_metadata m ON m.internal_id = a.internal_id
+                    WHERE a.id = ?""",
+                (attachment_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "internal_id": row["internal_id"],
+            "filename": row["filename"],
+            "content_type": row["content_type"],
+            "local_path": row["local_path"],
+            "size_bytes": row["size_bytes"],
+            "email_subject": row["email_subject"],
+            "sender": row["sender"],
+        }
+
+    def count_attachment_fts_indexed(self) -> int:
+        """Count indexed rows in ``email_attachment_fts`` (fail-open to 0)."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT count(*) AS c FROM email_attachment_fts"
+            ).fetchone()
+            return int(row["c"]) if row else 0
+        except sqlite3.Error:
+            return 0
+        finally:
+            conn.close()
