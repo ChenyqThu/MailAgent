@@ -473,9 +473,9 @@ async function persistGuardedTranslation(
     segments: TranslationSegment[]
     model: string
   }
-): Promise<{ cacheKept: boolean; fetchedAt: number }> {
+): Promise<{ cacheKept: boolean; cacheWriteFailed: boolean; fetchedAt: number | null }> {
   const fallbackTs = Date.now() / 1000
-  if (!cfg.translate) return { cacheKept: false, fetchedAt: fallbackTs }
+  if (!cfg.translate) return { cacheKept: false, cacheWriteFailed: false, fetchedAt: fallbackTs }
   try {
     const res = await cfg.translate.saveTranslation({
       ...input,
@@ -483,6 +483,7 @@ async function persistGuardedTranslation(
     })
     return {
       cacheKept: res.cacheKept === true,
+      cacheWriteFailed: false,
       fetchedAt: typeof res.fetchedAt === 'number' ? res.fetchedAt : fallbackTs
     }
   } catch (err) {
@@ -491,7 +492,7 @@ async function persistGuardedTranslation(
       internalId: input.internalId,
       err: err instanceof Error ? err.message : String(err)
     })
-    return { cacheKept: false, fetchedAt: fallbackTs }
+    return { cacheKept: false, cacheWriteFailed: true, fetchedAt: null }
   }
 }
 
@@ -540,7 +541,8 @@ export async function translateBatchWithConfig(
       latencyMs: 0,
       failedBatches: 0,
       totalBatches: 0,
-      ...(persisted.cacheKept ? { cacheKept: true } : {})
+      ...(persisted.cacheKept ? { cacheKept: true } : {}),
+      ...(persisted.cacheWriteFailed ? { cacheWriteFailed: true } : {})
     }
   }
 
@@ -596,7 +598,7 @@ export async function translateBatchWithConfig(
 
     const latencyMs = Date.now() - start
     const persisted = parentAc.signal.aborted
-      ? { cacheKept: false, fetchedAt: Date.now() / 1000 }
+      ? { cacheKept: false, cacheWriteFailed: false, fetchedAt: Date.now() / 1000 }
       : await persistGuardedTranslation(cfg, {
           internalId,
           targetLang,
@@ -623,7 +625,8 @@ export async function translateBatchWithConfig(
       latencyMs,
       failedBatches: failed,
       totalBatches: batches.length,
-      ...(persisted.cacheKept ? { cacheKept: true } : {})
+      ...(persisted.cacheKept ? { cacheKept: true } : {}),
+      ...(persisted.cacheWriteFailed ? { cacheWriteFailed: true } : {})
     }
   } finally {
     if (externalSignal) {

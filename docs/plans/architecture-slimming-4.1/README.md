@@ -32,7 +32,7 @@
 
 1. **数据库安全网与并发隐患（P0-2）**：
    - `AgentConfigStore` 与 `LlmProviderStore` 文档宣称 WAL 并发安全，但 `_connection()` 从未执行 `PRAGMA journal_mode=WAL`，实测 `data/agent_config.db` 运行在 `delete` 排他锁模式。
-   - `ai_chat.db` 是唯一未纳入 `run_startup_db_safety()`（`quick_check` + 24h 节流 `VACUUM INTO` 3 份滚动备份）的关键用户库；且 Python `src/chat/db.py` 使用 `timeout=5.0`，与 Electron 侧不一致。
+   - `ai_chat.db` 是唯一未纳入 `run_startup_db_safety()`（按 24h 备份间隔统一节流的 `quick_check` + `VACUUM INTO` 3 份滚动备份）的关键用户库；且 Python `src/chat/db.py` 使用 `timeout=5.0`，与 Electron 侧不一致。
    - `frontend/src/electron/main/db.ts` 残留零调用方的 `getWriteDb()`；`handlers/translate.ts` 仍在 Electron Main 直写 `sync_store.db`。
 2. **CI 闸漏洞与 ESLint 告警遮蔽（P0-3）**：
    - `.github/workflows/ci-test.yml` 未跑 `pnpm run typecheck`、`ruff check src`（`src/` 存量 23 处违例），且未接入 `artifact-server`（4,163 LOC）。
@@ -110,4 +110,22 @@
 | 全量前端 Vitest | `pnpm --dir frontend test` | **760 files passed (760)**；**9,191 passed**, 1 skipped (9,192) |
 | Web & Electron 构建 | `pnpm --dir frontend build:web && pnpm --dir frontend exec electron-vite build` | 双产物构建均退出 0（Electron Vite `built in 6.89s`） |
 | Electron Native ABI | `pnpm --dir frontend rebuild:electron` | 最终步骤恢复 `better_sqlite3.node` 至 Electron 39.8.10 ABI 140 并签名 |
+
+### 6.1 独立 Review 收口修复（Codex 复核闭环）
+
+针对本机 Codex（`codex-cli 0.169.1` 只读审计 `.trellis/tasks/11-22-architecture-slimming-4-1-epic/codex-review-4.1.md`）发现的 4 项问题已完成全量闭环：
+
+1. **P1 · 翻译防降级写入原子化**：`src/repository/translation.py::save_segments_guarded` 改为单连接 `BEGIN IMMEDIATE` 事务内读-比-写，并新增双连接锁竞争回归测试 `tests/api/test_ai_translation.py::test_save_segments_guarded_is_atomic_under_concurrent_writer`。
+2. **P1 · 记忆捕获重试与请求幂等**：`src/api/routers/chat_memory.py` 对瞬态 merge/落库异常改抛 HTTP `503 E_UPSTREAM`（输入错误保留 HTTP `400 E_INVALID_ARG`），对接 `ai-gateway` `captureTurnMemoryWithRetry` `[3s, 10s]` 退避重试，并沿 `persistenceGlue.ts` → `clientEmail.ts` → `chat_memory.py` 透传 Bounded `idempotencyKey`（256 项 LRU 去重），补齐 Python + TS 真实 503→200 重试测试。
+3. **P2/UX · 翻译写库失败显性化与临时呈现**：`translateRoutes.ts::persistGuardedTranslation` 失败时标记 `cacheWriteFailed: true, fetchedAt: null`；`useEmailDetailTranslation.ts` 保留 `ephemeralSegments` 让用户当次可见译文，同时通过 `EmailDetailHeader.tsx` 与双语 `email.json` 展示 `E_CACHE_WRITE_FAILED` 提示及重试入口，并新增路由与 Hook 回归单测。
+4. **口径 · 安全网节流说明对齐**：更正第 2 节 `run_startup_db_safety()` 描述，明确 `quick_check` 与 `VACUUM INTO` 共受 24h 备份间隔节流。
+
+复核修复后复验实测：
+- `./venv/bin/python -m ruff check src` → `All checks passed!`
+- `./venv/bin/python -m pytest tests/agent_eval tests/config tests/api -q` → **2,261 passed**
+- `pnpm --dir frontend exec tsx scripts/check-openapi-contract.ts` → **41** `SuccessEnvelope_*` 模型编译并通过 `tsc`
+- `pnpm --dir frontend typecheck` & `pnpm --dir frontend exec eslint --no-cache --max-warnings=0 .` → 0 errors, 0 warnings
+- `pnpm --dir frontend test` → **761 files passed (761)**；**9,194 passed**, 1 skipped (9,195)
+- `pnpm --dir frontend build:web && pnpm --dir frontend exec electron-vite build` → 双产物退出 0（Electron Vite `built in 6.91s`），随后 `pnpm --dir frontend rebuild:electron` 恢复 Electron 39.8.10 ABI 140
+
 

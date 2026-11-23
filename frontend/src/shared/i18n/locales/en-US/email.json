@@ -436,6 +436,7 @@
     "label": "Translate",
     "loading": "Translating…",
     "failed": "Translation failed · Retry",
+    "cacheWriteFailed": "Translation shown for now, but saving cache failed (re-opening will need re-translation)",
     "retry": "Retry",
     "showOriginal": "Show original",
     "showTranslation": "Show translation",

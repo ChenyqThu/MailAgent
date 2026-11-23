@@ -377,7 +377,12 @@ export function createEmailMethods(http: DomainHttpCore) {
    *  summary; the caller (lifecycle, fire-and-forget) ignores it. INDEPENDENT from the
    *  agent_memory_kv layer (now retired). sessionId (provenance) only goes on the wire when it is a real number. */
   captureMemory(
-    input: { userText: string; assistantText: string; sessionId?: number | null },
+    input: {
+      userText: string
+      assistantText: string
+      sessionId?: number | null
+      idempotencyKey?: string
+    },
     signal?: AbortSignal
   ): Promise<{ captured: unknown[]; count: number }> {
     const body: Record<string, unknown> = {
@@ -385,6 +390,9 @@ export function createEmailMethods(http: DomainHttpCore) {
       assistantText: input.assistantText
     }
     if (typeof input.sessionId === 'number') body.sessionId = input.sessionId
+    if (typeof input.idempotencyKey === 'string' && input.idempotencyKey.length > 0) {
+      body.idempotencyKey = input.idempotencyKey
+    }
     return http.req<{ captured: unknown[]; count: number }>('POST', '/chat/memory/capture', {
       body,
       signal

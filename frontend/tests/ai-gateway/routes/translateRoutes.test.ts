@@ -437,6 +437,17 @@ describe('translateBatchWithConfig', () => {
     expect(r2.cacheKept).toBeUndefined()
     expect(r2.fetchedAt).toBe(777)
   })
+
+  test('marks cacheWriteFailed and fetchedAt=null when saveTranslation rejects', async () => {
+    saveTranslationMock.mockRejectedValueOnce(new Error('db busy'))
+    mockEchoTranslation()
+
+    const r = await translateBatchWithConfig({ internalId: 101 }, cfg)
+    expect(r.segments.length).toBeGreaterThan(0)
+    expect(r.cacheWriteFailed).toBe(true)
+    expect(r.fetchedAt).toBeNull()
+    expect(r.cacheKept).toBeUndefined()
+  })
 })
 
 describe('handleTranslateBatch HTTP contract', () => {

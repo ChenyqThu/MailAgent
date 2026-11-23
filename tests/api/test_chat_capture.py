@@ -63,14 +63,19 @@ def capture_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[Tuple[TestClient, _MemoryMdSpy]]:
     """TestClient + memory.md manager spy（端点函数内 import load/merge/save，patch 模块属性）。"""
+    import src.api.routers.chat_memory as chat_memory_router
     import src.memory.memory_md as mmd
 
+    chat_memory_router._clear_completed_capture_keys()
     spy = _MemoryMdSpy()
     monkeypatch.setattr(mmd, "_load_memory_doc", spy.load)
     monkeypatch.setattr(mmd, "merge_turn", spy.merge)
     monkeypatch.setattr(mmd, "save_memory_md", spy.save)
-    with TestClient(app, raise_server_exceptions=False) as client:
-        yield client, spy
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            yield client, spy
+    finally:
+        chat_memory_router._clear_completed_capture_keys()
 
 
 def test_capture_merges_and_saves_when_changed(capture_client) -> None:
@@ -151,23 +156,57 @@ def test_capture_validation_requires_strings(capture_client) -> None:
     assert spy.merge_calls == []
 
 
-def test_capture_best_effort_on_merge_error(capture_client) -> None:
+def test_capture_transient_merge_error_returns_503(capture_client) -> None:
     client, spy = capture_client
     spy.merge_raises = RuntimeError("CRS down")
     r = client.post("/api/chat/memory/capture", json={"userText": "u", "assistantText": "a"})
-    # 合并失败不 500 —— 调用方 fire-and-forget 不重试；返回 changed=False（turn 已正常流式）。
-    assert r.status_code == 200
-    assert r.json()["data"]["changed"] is False
+    assert r.status_code == 503
+    assert r.json()["error"]["code"] == "E_UPSTREAM"
     assert spy.saved is None
 
 
-def test_capture_best_effort_on_save_error(capture_client) -> None:
+def test_capture_transient_save_error_returns_503(capture_client) -> None:
     client, spy = capture_client
     spy.save_raises = RuntimeError("db locked")
     r = client.post("/api/chat/memory/capture", json={"userText": "u", "assistantText": "a"})
-    # 落库失败也 best-effort 吞 → 报 changed=False（不 500）。
-    assert r.status_code == 200
-    assert r.json()["data"]["changed"] is False
+    assert r.status_code == 503
+    assert r.json()["error"]["code"] == "E_UPSTREAM"
+
+
+def test_capture_non_retryable_value_error_returns_400(capture_client) -> None:
+    client, spy = capture_client
+    spy.merge_raises = ValueError("bad memory payload")
+    r = client.post("/api/chat/memory/capture", json={"userText": "u", "assistantText": "a"})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    assert spy.saved is None
+
+
+def test_capture_retry_recovers_and_idempotency_dedups(capture_client) -> None:
+    client, spy = capture_client
+    payload = {"userText": "u", "assistantText": "a", "idempotencyKey": "42:msg-1"}
+
+    # 1st attempt fails transiently -> 503 (must NOT be recorded as completed).
+    spy.merge_raises = RuntimeError("upstream 502")
+    r1 = client.post("/api/chat/memory/capture", json=payload)
+    assert r1.status_code == 503
+    assert len(spy.merge_calls) == 1
+    assert spy.saved is None
+
+    # 2nd attempt recovers -> 200 and records idempotency key.
+    spy.merge_raises = None
+    r2 = client.post("/api/chat/memory/capture", json=payload)
+    assert r2.status_code == 200
+    assert r2.json()["data"]["changed"] is True
+    assert len(spy.merge_calls) == 2
+    assert spy.saved is not None
+
+    # 3rd attempt (duplicate POST after lost response) -> deduped without re-merging.
+    r3 = client.post("/api/chat/memory/capture", json=payload)
+    assert r3.status_code == 200
+    assert r3.json()["data"]["changed"] is False
+    assert r3.json()["meta"]["deduped"] is True
+    assert len(spy.merge_calls) == 2
 
 
 def test_capture_truncated_logs_loguru_warning_with_doc_length(capture_client, caplog) -> None:

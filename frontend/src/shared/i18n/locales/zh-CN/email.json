@@ -436,6 +436,7 @@
     "label": "翻译",
     "loading": "翻译中…",
     "failed": "翻译失败 · 重试",
+    "cacheWriteFailed": "译文已临时显示，但写入缓存失败（重新打开需重新翻译）",
     "retry": "重试",
     "showOriginal": "显示原文",
     "showTranslation": "显示译文",

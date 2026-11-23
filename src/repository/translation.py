@@ -104,20 +104,11 @@ class TranslationRepository:
             return None
         return data
 
-    def get_cache_entry(
-        self, internal_id: int, target_lang: str = "zh"
+    @staticmethod
+    def _parse_cache_row(
+        internal_id: int, target_lang: str, row: Optional[sqlite3.Row]
     ) -> Optional[dict]:
-        """Read full camelCase ``TranslationCache`` dict for ``(internal_id, target_lang)``."""
-        conn = self._connect()
-        try:
-            row = conn.execute(
-                "SELECT segments_json, model, source, updated_at "
-                "FROM email_translation WHERE internal_id = ? AND target_lang = ?",
-                (internal_id, target_lang),
-            ).fetchone()
-        finally:
-            conn.close()
-
+        """Parse an ``email_translation`` row into a camelCase ``TranslationCache`` dict."""
         if row is None:
             return None
         try:
@@ -148,6 +139,46 @@ class TranslationRepository:
             "fetchedAt": row["updated_at"],
         }
 
+    @staticmethod
+    def _execute_upsert(
+        conn: sqlite3.Connection,
+        internal_id: int,
+        target_lang: str,
+        payload: str,
+        model: str,
+        source: str,
+        now: float,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO email_translation
+              (internal_id, target_lang, segments_json, model, source, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(internal_id) DO UPDATE SET
+              target_lang   = excluded.target_lang,
+              segments_json = excluded.segments_json,
+              model         = excluded.model,
+              source        = excluded.source,
+              updated_at    = excluded.updated_at
+            """,
+            (internal_id, target_lang, payload, model, source, now, now),
+        )
+
+    def get_cache_entry(
+        self, internal_id: int, target_lang: str = "zh"
+    ) -> Optional[dict]:
+        """Read full camelCase ``TranslationCache`` dict for ``(internal_id, target_lang)``."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT segments_json, model, source, updated_at "
+                "FROM email_translation WHERE internal_id = ? AND target_lang = ?",
+                (internal_id, target_lang),
+            ).fetchone()
+        finally:
+            conn.close()
+        return self._parse_cache_row(internal_id, target_lang, row)
+
     def save_segments(
         self,
         internal_id: int,
@@ -172,20 +203,7 @@ class TranslationRepository:
         now = time.time()
         with self._connect() as conn:
             try:
-                conn.execute(
-                    """
-                    INSERT INTO email_translation
-                      (internal_id, target_lang, segments_json, model, source, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(internal_id) DO UPDATE SET
-                      target_lang   = excluded.target_lang,
-                      segments_json = excluded.segments_json,
-                      model         = excluded.model,
-                      source        = excluded.source,
-                      updated_at    = excluded.updated_at
-                    """,
-                    (internal_id, target_lang, payload, model, source, now, now),
-                )
+                self._execute_upsert(conn, internal_id, target_lang, payload, model, source, now)
                 conn.commit()
                 return True
             except sqlite3.IntegrityError as e:
@@ -217,33 +235,57 @@ class TranslationRepository:
         source: str = "on_demand",
         target_lang: str = "zh",
     ) -> dict:
-        """UPSERT translation segments unless existing cache has strictly more segments."""
+        """Atomically upsert translation segments unless existing cache has strictly more segments."""
         if source not in ("llm_agent", "on_demand"):
             raise ValueError(
                 f"source must be 'llm_agent' or 'on_demand', got {source!r}"
             )
         clean = self._validate_segments(segments)
-        existing = self.get_cache_entry(internal_id, target_lang=target_lang)
-        if existing is not None and len(clean) < len(existing["segments"]):
-            return {
-                **existing,
-                "saved": False,
-                "cacheKept": True,
-            }
-        saved = self.save_segments(
-            internal_id,
-            clean,
-            model=model,
-            source=source,
-            target_lang=target_lang,
-        )
+        payload = json.dumps(clean, ensure_ascii=False, separators=(",", ":"))
+        now = time.time()
+
+        conn = self._connect()
+        try:
+            conn.isolation_level = None
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT segments_json, model, source, updated_at "
+                "FROM email_translation WHERE internal_id = ? AND target_lang = ?",
+                (internal_id, target_lang),
+            ).fetchone()
+            existing = self._parse_cache_row(internal_id, target_lang, row)
+            if existing is not None and len(clean) < len(existing["segments"]):
+                conn.execute("ROLLBACK")
+                return {
+                    **existing,
+                    "saved": False,
+                    "cacheKept": True,
+                }
+            try:
+                self._execute_upsert(conn, internal_id, target_lang, payload, model, source, now)
+                conn.execute("COMMIT")
+                saved = True
+            except sqlite3.IntegrityError as e:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                logger.warning(
+                    f"[translation-repo] save failed for internal_id={internal_id}: {e}"
+                )
+                saved = False
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.close()
+
         return {
             "internalId": internal_id,
             "targetLang": target_lang,
             "segments": clean,
             "source": source,
             "model": model,
-            "fetchedAt": time.time(),
+            "fetchedAt": now,
             "saved": saved,
             "cacheKept": False,
         }

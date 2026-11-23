@@ -46,6 +46,9 @@ export interface TranslateBatchResult extends TranslationCache {
   /** true when a shorter fresh result was returned but an existing richer cache
    *  row was kept to avoid downgrading coverage. */
   cacheKept?: boolean
+  /** true when fresh translation segments succeeded transiently for the current
+   *  view, but persisting them to email_translation failed. */
+  cacheWriteFailed?: boolean
 }
 
 export interface AiApi {

@@ -5,7 +5,7 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] }
 }))
 
-import { DomainError } from '../../src/ai-gateway/python/domainClient'
+import { DomainError, MailAgentDomainClient } from '../../src/ai-gateway/python/domainClient'
 import {
   buildTurnPersistenceHooks,
   captureTurnMemoryWithRetry,
@@ -123,5 +123,47 @@ describe('captureTurnMemoryWithRetry', () => {
     } finally {
       errSpy.mockRestore()
     }
+  })
+
+  test('retries real MailAgentDomainClient POST /chat/memory/capture on 503 E_UPSTREAM with shared idempotencyKey', async () => {
+    const sentBodies: Array<Record<string, unknown>> = []
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(async (_url, init) => {
+        sentBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+        return new Response(
+          JSON.stringify({
+            status: 'error',
+            error: { code: 'E_UPSTREAM', message: 'memory.md auto-capture failed' }
+          }),
+          { status: 503, headers: { 'Content-Type': 'application/json' } }
+        )
+      })
+      .mockImplementationOnce(async (_url, init) => {
+        sentBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+        return new Response(
+          JSON.stringify({
+            status: 'success',
+            data: { changed: true, captured: [], count: 0 }
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      })
+
+    const domain = new MailAgentDomainClient({
+      baseUrl: 'http://127.0.0.1:8200/api',
+      localToken: null,
+      fetchImpl: fetchMock
+    })
+
+    await captureTurnMemoryWithRetry(
+      domain,
+      { ...samplePayload, idempotencyKey: '42:msg-503' },
+      { delaysMs: [1], delayFn: async () => {} }
+    )
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(sentBodies[0]?.idempotencyKey).toBe('42:msg-503')
+    expect(sentBodies[1]?.idempotencyKey).toBe('42:msg-503')
   })
 })

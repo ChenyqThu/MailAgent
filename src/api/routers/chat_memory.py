@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 import logging
 from typing import Any, Dict, Optional
 
@@ -13,18 +14,33 @@ from src.api.auth import verify_cf_access
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+_MAX_COMPLETED_CAPTURE_KEYS = 256
+_COMPLETED_CAPTURE_KEYS: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+
+
+def _record_completed_capture(key: str, meta: Dict[str, Any]) -> None:
+    _COMPLETED_CAPTURE_KEYS[key] = meta
+    _COMPLETED_CAPTURE_KEYS.move_to_end(key)
+    while len(_COMPLETED_CAPTURE_KEYS) > _MAX_COMPLETED_CAPTURE_KEYS:
+        _COMPLETED_CAPTURE_KEYS.popitem(last=False)
+
+
+def _clear_completed_capture_keys() -> None:
+    _COMPLETED_CAPTURE_KEYS.clear()
+
 
 
 @router.post("/memory/capture", dependencies=[Depends(verify_cf_access)])
 async def capture_memory(request: Request, body: Optional[Dict[str, Any]] = None):
     """从一个完成的 chat turn 把持久事实合并进 memory.md（Hermes 式有界记忆，task 07-01）。
 
-    body = ``{userText:str, assistantText:str, sessionId?:int, messageId?:int}``。
+    body = ``{userText:str, assistantText:str, sessionId?:int, messageId?:int, idempotencyKey?:str}``。
     data = ``{changed:bool, captured:[], count:0}``（``captured``/``count`` 保留形状兼容 Node
     fire-and-forget 的 ``{captured, count}`` 返回类型；memory.md 是单文档、无 per-item id，故恒空）。
 
-    best-effort：合并/写入失败**不 raise**（调用方 fire-and-forget 不重试）→ 记 warning +
-    返回 ``changed=False``。空 turn 直接短路，不触发模型调用。
+    瞬态合并/写库失败返回 HTTP 503 ``E_UPSTREAM`` 供 ai-gateway 退避重试；参数无效返回 HTTP 400
+    ``E_INVALID_ARG``；携带 ``idempotencyKey`` 且之前已完成时直接去重返回 200（``meta.deduped=True``）。
+    空 turn 直接短路，不触发模型调用。
     """
     opts = body or {}
     user_text = opts.get("userText")
@@ -56,6 +72,18 @@ async def capture_memory(request: Request, body: Optional[Dict[str, Any]] = None
     message_id = opts.get("messageId")
     if not (isinstance(message_id, int) and not isinstance(message_id, bool)):
         message_id = None
+    raw_idem = opts.get("idempotencyKey")
+    idempotency_key = (
+        raw_idem.strip() if isinstance(raw_idem, str) and raw_idem.strip() else None
+    )
+    if idempotency_key is not None and idempotency_key in _COMPLETED_CAPTURE_KEYS:
+        _COMPLETED_CAPTURE_KEYS.move_to_end(idempotency_key)
+        return success_envelope(
+            {"changed": False, "captured": [], "count": 0},
+            request=request,
+            source="memory",
+            meta_extra={"deduped": True},
+        )
 
     # 懒 import：守 chat.py 的 lazy-config 纪律（顶部 import memory_md 会触发 src.config
     # import-time，裸 worktree / CI import self-check 会炸）。memory_md 无重依赖（只 LLMClient +
@@ -75,11 +103,26 @@ async def capture_memory(request: Request, body: Optional[Dict[str, Any]] = None
             session_id=session_id,
             message_id=message_id,
         )
-    except Exception:  # noqa: BLE001 — best-effort，读/合并/落库失败都不阻断（turn 已流式）
+    except (ValueError, TypeError) as exc:
+        logger.warning("memory.md auto-capture rejected invalid input: %s", exc)
+        raise APIError(
+            "E_INVALID_ARG",
+            str(exc),
+            http_status=400,
+            source="memory",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 — surface transient merge/save errors as retryable 503
         logger.warning("memory.md auto-capture failed (turn already streamed)", exc_info=True)
-        return success_envelope(
-            {"changed": False, "captured": [], "count": 0}, request=request, source="memory"
-        )
+        raise APIError(
+            "E_UPSTREAM",
+            "memory.md auto-capture failed",
+            http_status=503,
+            source="memory",
+        ) from exc
+
+    meta_extra = {"truncated": result.truncated, "model": result.model}
+    if idempotency_key is not None:
+        _record_completed_capture(idempotency_key, meta_extra)
 
     # 07-15 harness-chat lane C — `result.truncated` 此前只回填进响应 meta 后被丢弃（Node 端
     # fire-and-forget 只读 data，meta 无人消费；serve-api 自己也从不记这件事）。这里补一条

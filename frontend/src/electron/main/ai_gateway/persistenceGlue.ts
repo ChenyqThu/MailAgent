@@ -266,7 +266,12 @@ export function isRetryableMemoryCaptureError(err: unknown): boolean {
 
 export async function captureTurnMemoryWithRetry(
   domain: Pick<MailAgentDomainClient, 'captureMemory'>,
-  payload: { userText: string; assistantText: string; sessionId: number | null },
+  payload: {
+    userText: string
+    assistantText: string
+    sessionId: number | null
+    idempotencyKey?: string
+  },
   opts?: {
     delaysMs?: readonly number[]
     timeoutMs?: number
@@ -402,11 +407,15 @@ export function buildTurnPersistenceHooks(deps: {
           const userText = turn.userMessage ? extractTextFromUIMessage(turn.userMessage) : ''
           const assistantText = extractTextFromUIMessage(turn.responseMessage)
           if (!userText && !assistantText) return // 空 turn 不打扰后端
+          const idempotencyKey = turn.responseMessage?.id
+            ? `${turn.sessionId ?? 'anon'}:${turn.responseMessage.id}`
+            : undefined
           // Fire-and-forget bounded retry on 5xx / E_NETWORK; never blocks streamed reply.
           void captureTurnMemoryWithRetry(deps.domain, {
             userText,
             assistantText,
-            sessionId: turn.sessionId
+            sessionId: turn.sessionId,
+            ...(idempotencyKey ? { idempotencyKey } : {})
           }).catch((err) => {
             console.error('[ai-gateway] auto-capture post failed (turn streamed OK)', err)
           })

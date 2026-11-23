@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { qk } from '@shared/lib/queryKeys'
-import type { TranslationSegment } from '@shared/api/types'
+import type { TranslateBatchResult, TranslationSegment } from '@shared/api/types'
 import type { TranslateStatus } from '../EmailToolbar'
 
 const llmAgentUpgradeFired = new Set<number>()
@@ -48,6 +48,7 @@ export function useEmailDetailTranslation({
   const [translateError, setTranslateError] = useState<{ code: string; message: string } | null>(
     null
   )
+  const [ephemeralSegments, setEphemeralSegments] = useState<TranslationSegment[] | null>(null)
   const [lastInternalId, setLastInternalId] = useState<number | null>(internalId)
 
   // React 19 "Adjusting state on prop change" pattern on internalId transition.
@@ -55,6 +56,7 @@ export function useEmailDetailTranslation({
     setLastInternalId(internalId)
     setShowTranslation(false)
     setTranslateError(null)
+    setEphemeralSegments(null)
   }
 
   // The cleanup is a real side-effect (renderer → main IPC), so it stays in an effect.
@@ -74,14 +76,22 @@ export function useEmailDetailTranslation({
     retry: false
   })
 
-  const translateMut = useMutation({
-    mutationFn: async () => {
-      if (internalId === null) throw new Error('no email selected')
-      return mailApi.ai.translateBatch(internalId, 'zh')
-    },
-    onSuccess: () => {
-      setTranslateError(null)
-      setShowTranslation(true)
+  const handleTranslateSuccess = useCallback(
+    (result: TranslateBatchResult) => {
+      if (result.cacheWriteFailed) {
+        setEphemeralSegments(result.segments.length > 0 ? result.segments : null)
+        setShowTranslation(true)
+        setTranslateError({
+          code: 'E_CACHE_WRITE_FAILED',
+          message: 'Translation cache write failed'
+        })
+      } else {
+        setTranslateError(null)
+        setEphemeralSegments(
+          result.cacheKept ? null : result.segments.length > 0 ? result.segments : null
+        )
+        setShowTranslation(true)
+      }
       // 让 cacheQ 重新拉, 保持 source/fetchedAt 等 meta 字段口径一致。
       if (internalId !== null) {
         void queryClient.invalidateQueries({
@@ -89,12 +99,23 @@ export function useEmailDetailTranslation({
         })
       }
     },
-    onError: (err: unknown) => {
-      if (isAbortFailure(err)) return
-      const e = err instanceof Error ? err : new Error(String(err))
-      const code = (e as Error & { code?: string }).code ?? 'E_UPSTREAM'
-      setTranslateError({ code, message: e.message })
-    }
+    [internalId, queryClient]
+  )
+
+  const handleTranslateError = useCallback((err: unknown) => {
+    if (isAbortFailure(err)) return
+    const e = err instanceof Error ? err : new Error(String(err))
+    const code = (e as Error & { code?: string }).code ?? 'E_UPSTREAM'
+    setTranslateError({ code, message: e.message })
+  }, [])
+
+  const translateMut = useMutation({
+    mutationFn: async () => {
+      if (internalId === null) throw new Error('no email selected')
+      return mailApi.ai.translateBatch(internalId, 'zh')
+    },
+    onSuccess: handleTranslateSuccess,
+    onError: handleTranslateError
   })
 
   const retranslateMut = useMutation({
@@ -103,21 +124,8 @@ export function useEmailDetailTranslation({
       await mailApi.ai.deleteCached(internalId, 'zh')
       return mailApi.ai.translateBatch(internalId, 'zh')
     },
-    onSuccess: () => {
-      setTranslateError(null)
-      setShowTranslation(true)
-      if (internalId !== null) {
-        void queryClient.invalidateQueries({
-          queryKey: qk.email.translation(internalId, 'zh')
-        })
-      }
-    },
-    onError: (err: unknown) => {
-      if (isAbortFailure(err)) return
-      const e = err instanceof Error ? err : new Error(String(err))
-      const code = (e as Error & { code?: string }).code ?? 'E_UPSTREAM'
-      setTranslateError({ code, message: e.message })
-    }
+    onSuccess: handleTranslateSuccess,
+    onError: handleTranslateError
   })
 
   // Cache 命中 + 仍是同一封邮件 → 默认 ON (Path A 让用户打开即看双语)。
@@ -161,11 +169,13 @@ export function useEmailDetailTranslation({
 
   const startTranslate = useCallback(() => {
     setTranslateError(null)
+    setEphemeralSegments(null)
     translateMut.mutate()
   }, [translateMut])
 
   const retranslate = useCallback(() => {
     setTranslateError(null)
+    setEphemeralSegments(null)
     retranslateMut.mutate()
   }, [retranslateMut])
 
@@ -177,13 +187,17 @@ export function useEmailDetailTranslation({
   useShortcut('alt+t', toggleTranslation)
 
   const cache = translationCacheQ.data
-  const hasCache = !!cache && cache.segments.length > 0
+  const cacheSegments = cache && cache.segments.length > 0 ? cache.segments : null
+  const resolvedSegments =
+    cacheSegments ?? (ephemeralSegments && ephemeralSegments.length > 0 ? ephemeralSegments : null)
+  const hasCache = !!cacheSegments
+  const hasDisplaySegments = !!resolvedSegments
   const isTranslating = translateMut.isPending || retranslateMut.isPending
   const translateStatus: TranslateStatus = translateError
     ? 'error'
     : isTranslating
       ? 'loading'
-      : showTranslation && hasCache
+      : showTranslation && hasDisplaySegments
         ? 'translated'
         : 'idle'
 
@@ -193,7 +207,7 @@ export function useEmailDetailTranslation({
     hasCache,
     isTranslating,
     translateStatus,
-    activeSegments: showTranslation && hasCache ? cache!.segments : null,
+    activeSegments: showTranslation && hasDisplaySegments ? resolvedSegments : null,
     toggleTranslation,
     startTranslate,
     retranslate,

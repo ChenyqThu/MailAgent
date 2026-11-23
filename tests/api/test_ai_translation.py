@@ -256,3 +256,65 @@ def test_put_translation_orphan_id_and_invalid_source(trans_client):
         },
     )
     assert r_bad.status_code == 422
+
+
+def test_save_segments_guarded_is_atomic_under_concurrent_writer(tmp_path: Path):
+    """If writer B commits richer segments while writer A waits on BEGIN IMMEDIATE, A must keep B's cache."""
+    import threading
+
+    from src.repository import TranslationRepository
+
+    db = tmp_path / "concurrent_trans.db"
+    _seed_translation_db(db)
+    repo = TranslationRepository(db_path=str(db))
+
+    richer = json.dumps(
+        [
+            {"src": "P1", "tgt": "段一"},
+            {"src": "P2", "tgt": "段二"},
+            {"src": "P3", "tgt": "段三"},
+        ]
+    )
+    now = time.time()
+
+    conn_b = sqlite3.connect(str(db), isolation_level=None)
+    conn_b.execute("PRAGMA journal_mode=WAL")
+    conn_b.execute("BEGIN IMMEDIATE")
+    conn_b.execute(
+        "INSERT INTO email_translation "
+        "(internal_id, target_lang, segments_json, model, source, created_at, updated_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (UNTRANSLATED_ID, "zh", richer, "m-rich", "on_demand", now, now),
+    )
+
+    worker_res: dict = {}
+    worker_err: list[BaseException] = []
+
+    def _run_short_writer() -> None:
+        try:
+            res = repo.save_segments_guarded(
+                UNTRANSLATED_ID,
+                [{"src": "Short", "tgt": "短"}],
+                model="m-short",
+                source="on_demand",
+            )
+            worker_res.update(res)
+        except BaseException as exc:  # pragma: no cover — test failure diagnostic
+            worker_err.append(exc)
+
+    t = threading.Thread(target=_run_short_writer)
+    t.start()
+    time.sleep(0.05)  # Worker enters BEGIN IMMEDIATE and blocks on writer B's write lock.
+    conn_b.execute("COMMIT")
+    conn_b.close()
+    t.join(timeout=5.0)
+
+    assert not t.is_alive()
+    assert not worker_err
+    assert worker_res["saved"] is False
+    assert worker_res["cacheKept"] is True
+    assert len(worker_res["segments"]) == 3
+    entry = repo.get_cache_entry(UNTRANSLATED_ID)
+    assert entry is not None
+    assert len(entry["segments"]) == 3
+    assert entry["model"] == "m-rich"

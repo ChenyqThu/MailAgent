@@ -144,6 +144,7 @@ function TranslationErrorBanner({
   const { t } = useTranslation()
   const isNoKey = errorCode === 'E_NO_LLM_KEY'
   const isNoBody = errorCode === 'E_NO_BODY'
+  const isCacheWriteFailed = errorCode === 'E_CACHE_WRITE_FAILED'
   return (
     <div
       className={cn(
@@ -158,7 +159,9 @@ function TranslationErrorBanner({
             ? t('translate.noKey')
             : isNoBody
               ? t('translate.noBody')
-              : t('translate.failed')}
+              : isCacheWriteFailed
+                ? t('translate.cacheWriteFailed')
+                : t('translate.failed')}
         </div>
         {errorCode && <div className="text-meta font-mono text-ink-fg-3 mt-1">{errorCode}</div>}
       </div>
