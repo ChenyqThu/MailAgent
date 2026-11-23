@@ -653,6 +653,9 @@ async def suggest_contacts(
     email_metadata 聚合 + 通讯录 (contact 三表) 合流，不访问 davmail/GAL。
     通讯录里的 display_name 覆盖邮件头猜出来的名字，零往来的人也进候选。
     """
+    suggestions = await asyncio.to_thread(
+        repo.suggest_contacts, q, limit=limit, exclude=exclude
+    )
     items = [
         {
             "email": item.email,
@@ -661,7 +664,7 @@ async def suggest_contacts(
             "score": item.score,
             "last_seen": item.last_seen,
         }
-        for item in repo.suggest_contacts(q, limit=limit, exclude=exclude)
+        for item in suggestions
     ]
     return success_envelope(
         {"items": items},

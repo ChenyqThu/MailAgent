@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -376,3 +378,110 @@ class TestDirectoryLane:
         _CONTACT_SUGGEST_CACHE.clear()
 
         assert _emails(repo, "李四", limit=5, exclude="lisi@example.com") == []
+
+
+class TestContactCacheConcurrencyAndWarmup:
+    def test_stale_while_revalidate_returns_stale_immediately_and_refreshes(
+        self, repo: EmailRepository, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        assert "bob@example.com" in _emails(repo, "bob", limit=5)
+
+        cache_key = str(repo.db_path.resolve())
+        _, old_items = _CONTACT_SUGGEST_CACHE[cache_key]
+        _CONTACT_SUGGEST_CACHE[cache_key] = (time.time() - 1.0, old_items)
+
+        conn = sqlite3.connect(str(tmp_path / "sync_store.db"))
+        try:
+            now = time.time()
+            conn.execute(
+                """INSERT INTO email_metadata
+                   (internal_id, message_id, subject, sender, sender_name, to_addr,
+                    cc_addr, date_received, mailbox, is_read, is_flagged, sync_status,
+                    retry_count, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    99,
+                    "<mail-99@example.com>",
+                    "subject 99",
+                    "Zed New <zed.new@example.com>",
+                    "Zed New",
+                    "Me <me@example.com>",
+                    "",
+                    "2026-06-15T10:00:00+08:00",
+                    "收件箱",
+                    0,
+                    0,
+                    "synced",
+                    0,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        orig_agg = repo._aggregate_contact_suggestions
+        allow_refresh = threading.Event()
+        refresh_started = threading.Event()
+
+        def gated_agg():
+            refresh_started.set()
+            assert allow_refresh.wait(timeout=2.0)
+            return orig_agg()
+
+        monkeypatch.setattr(repo, "_aggregate_contact_suggestions", gated_agg)
+
+        # Even while background refresh is blocked, caller gets stale hit immediately.
+        assert _emails(repo, "zed.new", limit=5) == []
+        assert refresh_started.wait(timeout=1.0)
+        allow_refresh.set()
+
+        refreshed_hits: list[str] = []
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            refreshed_hits = _emails(repo, "zed.new", limit=5)
+            if refreshed_hits:
+                break
+            time.sleep(0.02)
+        assert refreshed_hits == ["zed.new@example.com"]
+
+    def test_concurrent_cold_miss_aggregates_once(
+        self, repo: EmailRepository, monkeypatch: pytest.MonkeyPatch
+    ):
+        orig_agg = repo._aggregate_contact_suggestions
+        calls = 0
+        calls_lock = threading.Lock()
+
+        def counted_agg():
+            nonlocal calls
+            time.sleep(0.05)
+            with calls_lock:
+                calls += 1
+            return orig_agg()
+
+        monkeypatch.setattr(repo, "_aggregate_contact_suggestions", counted_agg)
+
+        barrier = threading.Barrier(4, timeout=2.0)
+
+        def worker() -> list[str]:
+            barrier.wait()
+            return _emails(repo, "a", limit=10, exclude="me@example.com")
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(pool.map(lambda _: worker(), range(4)))
+
+        assert calls == 1
+        assert all(r == results[0] for r in results)
+        assert "alice@example.com" in results[0]
+
+    def test_warm_contact_suggest_cache_avoids_cold_db_scan(
+        self, repo: EmailRepository, monkeypatch: pytest.MonkeyPatch
+    ):
+        repo.warm_contact_suggest_cache()
+
+        def fail_rescan():
+            raise AssertionError("_aggregate_contact_suggestions should not run after warmup")
+
+        monkeypatch.setattr(repo, "_aggregate_contact_suggestions", fail_rescan)
+        assert _emails(repo, "alice", limit=5) == ["alice@example.com"]

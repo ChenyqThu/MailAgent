@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
+from src.repository.email_models import ContactSuggestion
 from src.repository.email_repository import _CONTACT_SUGGEST_CACHE
 
 
@@ -81,3 +83,37 @@ def test_email_contacts_endpoint_aggregates_and_excludes(client, temp_db: Path):
         conn.commit()
         conn.close()
         _CONTACT_SUGGEST_CACHE.clear()
+
+
+def test_email_contacts_endpoint_offloads_to_worker_thread(client, monkeypatch):
+    import asyncio
+    from src.api.app import app
+    from src.api.deps import get_repository
+
+    caller_threads: list[int] = []
+    loop_threads: list[int] = []
+    orig_to_thread = asyncio.to_thread
+
+    async def spy_to_thread(func, /, *args, **kwargs):
+        loop_threads.append(threading.get_ident())
+        return await orig_to_thread(func, *args, **kwargs)
+
+    class StubRepo:
+        def suggest_contacts(self, q: str = "", *, limit: int = 8, exclude=None):
+            caller_threads.append(threading.get_ident())
+            return [
+                ContactSuggestion(
+                    email="alice@example.com",
+                    name="Alice",
+                    score=5,
+                    last_seen=None,
+                )
+            ]
+
+    monkeypatch.setattr(asyncio, "to_thread", spy_to_thread)
+    monkeypatch.setitem(app.dependency_overrides, get_repository, lambda: StubRepo())
+    r = client.get("/api/email/contacts", params={"q": "alice", "limit": 5})
+    assert r.status_code == 200
+    assert len(loop_threads) == 1
+    assert len(caller_threads) == 1
+    assert caller_threads[0] != loop_threads[0]

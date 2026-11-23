@@ -63,6 +63,12 @@ export function useContactSuggest({
     staleTime: 30_000
   })
 
+  useEffect(() => {
+    if (suggestQ.error) {
+      console.warn('[contactSuggest] query failed:', suggestQ.error)
+    }
+  }, [suggestQ.error])
+
   const suggestions = useMemo(() => suggestQ.data ?? [], [suggestQ.data])
   return { debounced, suggestions }
 }

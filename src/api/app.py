@@ -323,7 +323,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await _assert_bind_loopback()
     cjk2_stop = threading.Event()
     semantic_stop = threading.Event()
+    contact_warmup_stop = threading.Event()
     try:
+        from src.api.deps import get_repository
         from src.config import config as _cfg
         from src.mail.cjk2_backfill_worker import start_background_thread
         from src.semantic.service import get_semantic_service
@@ -333,6 +335,20 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             get_semantic_service(_cfg.sync_store_db_path).start_background_worker(
                 semantic_stop
             )
+
+            def _warm_contacts() -> None:
+                if contact_warmup_stop.is_set():
+                    return
+                try:
+                    get_repository().warm_contact_suggest_cache()
+                except Exception as exc:  # noqa: BLE001 — best-effort startup warmup
+                    logger.debug(f"[contacts] startup warmup skipped: {exc}")
+
+            threading.Thread(
+                target=_warm_contacts,
+                name="mailagent-contact-suggest-warmup",
+                daemon=True,
+            ).start()
     except Exception:  # noqa: BLE001 — 无 .env 或裸测试环境跳过
         pass
     try:
@@ -340,6 +356,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     finally:
         cjk2_stop.set()
         semantic_stop.set()
+        contact_warmup_stop.set()
         try:
             from src.connectors.stdio_pool import stdio_pool
 

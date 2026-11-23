@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from datetime import datetime
 from typing import Optional
@@ -15,6 +16,9 @@ from src.repository.email_models import ContactSuggestion, _ContactCandidate
 
 _CONTACT_CACHE_TTL_SECONDS = 10 * 60
 _CONTACT_SUGGEST_CACHE: dict[str, tuple[float, list["_ContactCandidate"]]] = {}
+_CONTACT_CACHE_LOCK = threading.Lock()
+_CONTACT_BUILD_LOCKS: dict[str, threading.Lock] = {}
+_CONTACT_REFRESHING: set[str] = set()
 # 合流结果的短 TTL (沿用 /chat/config 快照那档 15s): 通讯录是小表、改名要「几乎
 # 立刻」在 compose 里生效, 不能跟着邮件头聚合那份 10 分钟缓存走; 但每次按键都重做
 # 一遍 O(全部候选) 的合流也不必要。第三元 = 建这份合流用的历史 lane 列表本体 ——
@@ -42,6 +46,16 @@ _CONTACT_DIRECTORY_SQL = """SELECT c.display_name AS display_name,
 _CONTACT_NAME_TOKEN_RE = re.compile(r"[\s,.;:()\"'<>]+")
 _CONTACT_LOCAL_TOKEN_RE = re.compile(r"[._%+-]+")
 _EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+_ANGLE_RE = re.compile(r"^(.*?)<([^>]+)>")
+
+
+def _get_build_lock(cache_key: str) -> threading.Lock:
+    with _CONTACT_CACHE_LOCK:
+        lock = _CONTACT_BUILD_LOCKS.get(cache_key)
+        if lock is None:
+            lock = threading.Lock()
+            _CONTACT_BUILD_LOCKS[cache_key] = lock
+        return lock
 
 def _normalize_contact_name(value: Optional[str]) -> Optional[str]:
     trimmed = (value or "").strip().strip("\"'")
@@ -59,12 +73,23 @@ def _contact_date_key(value: Optional[str]) -> float:
 
 
 def _parse_address_segment(segment: str) -> Optional[tuple[str, Optional[str]]]:
-    angle = re.match(r"^(.*?)<([^>]+)>", segment)
-    if angle:
-        email_match = _EMAIL_RE.search(angle.group(2) or "")
-        if not email_match:
-            return None
-        return email_match.group(0).lower(), _normalize_contact_name(angle.group(1))
+    if "@" not in segment:
+        return None
+    lt = segment.find("<")
+    if lt != -1:
+        gt = segment.find(">", lt + 1)
+        if gt > lt + 1 and "\n" not in segment[:gt]:
+            email_match = _EMAIL_RE.search(segment, lt + 1, gt)
+            if not email_match:
+                return None
+            return email_match.group(0).lower(), _normalize_contact_name(segment[:lt])
+        if "\n" in segment:
+            angle = _ANGLE_RE.match(segment)
+            if angle:
+                email_match = _EMAIL_RE.search(angle.group(2) or "")
+                if not email_match:
+                    return None
+                return email_match.group(0).lower(), _normalize_contact_name(angle.group(1))
 
     email_match = _EMAIL_RE.search(segment)
     if not email_match:
@@ -274,37 +299,149 @@ class _EmailContactsMixin:
         history = self._contact_corpus()
         cache_key = str(self.db_path.resolve())
         now = time.time()
-        cached = _CONTACT_MERGED_CACHE.get(cache_key)
+        with _CONTACT_CACHE_LOCK:
+            cached = _CONTACT_MERGED_CACHE.get(cache_key)
         if cached and cached[0] > now and cached[2] is history:
             return cached[1]
         items = _build_contact_candidates(history, self._contact_directory_rows())
-        _CONTACT_MERGED_CACHE[cache_key] = (
-            now + _CONTACT_DIRECTORY_TTL_SECONDS,
-            items,
-            history,
-        )
+        with _CONTACT_CACHE_LOCK:
+            _CONTACT_MERGED_CACHE[cache_key] = (
+                time.time() + _CONTACT_DIRECTORY_TTL_SECONDS,
+                items,
+                history,
+            )
         return items
 
+    def _schedule_corpus_refresh(
+        self,
+        cache_key: str,
+        stale_entry: tuple[float, list[_ContactCandidate]],
+    ) -> None:
+        """Single-flight background refresh for stale contact corpus cache."""
+        with _CONTACT_CACHE_LOCK:
+            if cache_key in _CONTACT_REFRESHING:
+                return
+            _CONTACT_REFRESHING.add(cache_key)
+
+        def _run() -> None:
+            try:
+                items = [
+                    _history_candidate(item)
+                    for item in self._aggregate_contact_suggestions()
+                ]
+                with _CONTACT_CACHE_LOCK:
+                    if _CONTACT_SUGGEST_CACHE.get(cache_key) is stale_entry:
+                        _CONTACT_SUGGEST_CACHE[cache_key] = (
+                            time.time() + _CONTACT_CACHE_TTL_SECONDS,
+                            items,
+                        )
+            except Exception as e:
+                logger.warning(f"suggest_contacts: background refresh failed: {e}")
+            finally:
+                with _CONTACT_CACHE_LOCK:
+                    _CONTACT_REFRESHING.discard(cache_key)
+
+        threading.Thread(
+            target=_run,
+            name="mailagent-contact-corpus-refresh",
+            daemon=True,
+        ).start()
+
     def _contact_corpus(self) -> list[_ContactCandidate]:
-        """邮件头聚合 lane (全表扫 email_metadata, 贵) → 10 分钟缓存。"""
+        """邮件头聚合 lane (全表扫 email_metadata, 贵) → 10 分钟缓存 + stale-while-revalidate。"""
         cache_key = str(self.db_path.resolve())
         now = time.time()
-        cached = _CONTACT_SUGGEST_CACHE.get(cache_key)
-        if cached and cached[0] > now:
+        with _CONTACT_CACHE_LOCK:
+            cached = _CONTACT_SUGGEST_CACHE.get(cache_key)
+        if cached is not None:
+            if cached[0] > now:
+                return cached[1]
+            self._schedule_corpus_refresh(cache_key, cached)
             return cached[1]
+
+        with _get_build_lock(cache_key):
+            with _CONTACT_CACHE_LOCK:
+                cached = _CONTACT_SUGGEST_CACHE.get(cache_key)
+            if cached is not None:
+                if cached[0] <= time.time():
+                    self._schedule_corpus_refresh(cache_key, cached)
+                return cached[1]
+            try:
+                items = [
+                    _history_candidate(item)
+                    for item in self._aggregate_contact_suggestions()
+                ]
+                with _CONTACT_CACHE_LOCK:
+                    _CONTACT_SUGGEST_CACHE[cache_key] = (
+                        time.time() + _CONTACT_CACHE_TTL_SECONDS,
+                        items,
+                    )
+                return items
+            except Exception as e:
+                logger.warning(f"suggest_contacts: aggregation failed: {e}")
+                return []
+
+    def _email_metadata_watermark(self) -> Optional[tuple[int, int]]:
+        """Read (row_count, max_internal_id) watermark to detect concurrent writes."""
+        conn = None
         try:
-            items = [
-                _history_candidate(item)
-                for item in self._aggregate_contact_suggestions()
-            ]
-            _CONTACT_SUGGEST_CACHE[cache_key] = (
-                now + _CONTACT_CACHE_TTL_SECONDS,
-                items,
-            )
-            return items
+            conn = self._connect()
+            conn.row_factory = None
+            row = conn.execute(
+                "SELECT COUNT(*), COALESCE(MAX(internal_id), 0) FROM email_metadata"
+            ).fetchone()
+            return (int(row[0]), int(row[1])) if row else (0, 0)
         except Exception as e:
-            logger.warning(f"suggest_contacts: aggregation failed: {e}")
-            return []
+            logger.debug(f"suggest_contacts: watermark check failed: {e}")
+            return None
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def warm_contact_suggest_cache(self) -> None:
+        """Pre-warm history + merged contact caches off the request path."""
+        cache_key = str(self.db_path.resolve())
+        now = time.time()
+        with _CONTACT_CACHE_LOCK:
+            cached = _CONTACT_SUGGEST_CACHE.get(cache_key)
+        if cached is not None and cached[0] > now:
+            return
+
+        with _get_build_lock(cache_key):
+            with _CONTACT_CACHE_LOCK:
+                if cache_key in _CONTACT_SUGGEST_CACHE:
+                    return
+            before_wm = self._email_metadata_watermark()
+            if before_wm is None:
+                return
+            try:
+                history = [
+                    _history_candidate(item)
+                    for item in self._aggregate_contact_suggestions()
+                ]
+            except Exception as e:
+                logger.warning(f"suggest_contacts: warmup failed: {e}")
+                return
+            after_wm = self._email_metadata_watermark()
+            if after_wm != before_wm:
+                return
+            with _CONTACT_CACHE_LOCK:
+                if cache_key in _CONTACT_SUGGEST_CACHE:
+                    return
+                _CONTACT_SUGGEST_CACHE[cache_key] = (
+                    time.time() + _CONTACT_CACHE_TTL_SECONDS,
+                    history,
+                )
+
+            merged = _build_contact_candidates(history, self._contact_directory_rows())
+            with _CONTACT_CACHE_LOCK:
+                current = _CONTACT_SUGGEST_CACHE.get(cache_key)
+                if current is not None and current[1] is history:
+                    _CONTACT_MERGED_CACHE[cache_key] = (
+                        time.time() + _CONTACT_DIRECTORY_TTL_SECONDS,
+                        merged,
+                        history,
+                    )
 
     def _contact_directory_rows(self) -> list[dict]:
         """通讯录 lane 取数 —— 走 15s 那档短 TTL, 不跟邮件头聚合那份 10 分钟缓存。
@@ -333,82 +470,91 @@ class _EmailContactsMixin:
 
     def _aggregate_contact_suggestions(self) -> list[ContactSuggestion]:
         conn = self._connect()
-        contacts: dict[str, dict[str, object]] = {}
+        conn.row_factory = None
+        # [score, name, last_seen, last_seen_ts, name_seen_ts]
+        contacts: dict[str, list[object]] = {}
+        date_cache: dict[str, float] = {}
+        sent_cache: dict[Optional[str], bool] = {}
+        sender_cache: dict[
+            tuple[str, Optional[str]], Optional[tuple[str, Optional[str]]]
+        ] = {}
+        list_cache: dict[str, list[tuple[str, Optional[str]]]] = {}
+        seen_ts = 0.0
+        date_received: Optional[str] = None
 
-        def upsert(
-            parsed: Optional[tuple[str, Optional[str]]],
-            *,
-            score_delta: int,
-            date_received: Optional[str],
-        ) -> None:
-            if parsed is None:
+        def upsert(em: str, name: Optional[str], score_delta: int) -> None:
+            rec = contacts.get(em)
+            if rec is None:
+                contacts[em] = [
+                    score_delta,
+                    name,
+                    date_received or None,
+                    seen_ts,
+                    seen_ts if name else 0.0,
+                ]
                 return
-            email, name = parsed
-            seen_ts = _contact_date_key(date_received)
-            current = contacts.setdefault(
-                email,
-                {
-                    "email": email,
-                    "name": None,
-                    "score": 0,
-                    "last_seen": None,
-                    "last_seen_ts": 0.0,
-                    "name_seen_ts": 0.0,
-                },
-            )
-            current["score"] = int(current["score"]) + score_delta
-            if seen_ts >= float(current["last_seen_ts"]):
-                current["last_seen_ts"] = seen_ts
+            rec[0] = int(rec[0]) + score_delta  # type: ignore[arg-type]
+            if seen_ts >= float(rec[3]):  # type: ignore[arg-type]
+                rec[3] = seen_ts
                 if date_received:
-                    current["last_seen"] = date_received
-            if name and seen_ts >= float(current["name_seen_ts"]):
-                current["name"] = name
-                current["name_seen_ts"] = seen_ts
+                    rec[2] = date_received
+            if name and seen_ts >= float(rec[4]):  # type: ignore[arg-type]
+                rec[1] = name
+                rec[4] = seen_ts
 
         try:
-            rows = conn.execute(
+            cur = conn.execute(
                 """SELECT sender, sender_name, to_addr, cc_addr, mailbox, date_received
                    FROM email_metadata"""
-            ).fetchall()
-            for row in rows:
-                sender = _parse_address_segment(row["sender"] or "")
-                if sender is not None:
-                    sender_email, sender_name = sender
-                    upsert(
-                        (
-                            sender_email,
-                            _normalize_contact_name(row["sender_name"]) or sender_name,
-                        ),
-                        score_delta=1,
-                        date_received=row["date_received"],
-                    )
+            )
+            for sender, sender_name, to_addr, cc_addr, mailbox, date_received in cur:
+                if date_received:
+                    cached_ts = date_cache.get(date_received)
+                    if cached_ts is None:
+                        cached_ts = _contact_date_key(date_received)
+                        date_cache[date_received] = cached_ts
+                    seen_ts = cached_ts
+                else:
+                    seen_ts = 0.0
 
-                recipient_score = 3 if is_sent_mailbox(row["mailbox"]) else 1
-                for parsed in _parse_address_list(row["to_addr"]):
-                    upsert(
-                        parsed,
-                        score_delta=recipient_score,
-                        date_received=row["date_received"],
-                    )
-                for parsed in _parse_address_list(row["cc_addr"]):
-                    upsert(
-                        parsed,
-                        score_delta=recipient_score,
-                        date_received=row["date_received"],
-                    )
+                if sender and "@" in sender:
+                    skey = (sender, sender_name)
+                    sp = sender_cache.get(skey)
+                    if sp is None and skey not in sender_cache:
+                        parsed = _parse_address_segment(sender)
+                        if parsed is not None:
+                            sp = (
+                                parsed[0],
+                                _normalize_contact_name(sender_name) or parsed[1],
+                            )
+                        sender_cache[skey] = sp
+                    if sp is not None:
+                        upsert(sp[0], sp[1], 1)
+
+                is_sent = sent_cache.get(mailbox)
+                if is_sent is None:
+                    is_sent = is_sent_mailbox(mailbox)
+                    sent_cache[mailbox] = is_sent
+                recipient_score = 3 if is_sent else 1
+
+                for raw_list in (to_addr, cc_addr):
+                    if not raw_list or "@" not in raw_list:
+                        continue
+                    parsed_list = list_cache.get(raw_list)
+                    if parsed_list is None:
+                        parsed_list = _parse_address_list(raw_list)
+                        list_cache[raw_list] = parsed_list
+                    for em, nm in parsed_list:
+                        upsert(em, nm, recipient_score)
 
             return [
                 ContactSuggestion(
-                    email=str(item["email"]),
-                    name=item["name"] if isinstance(item["name"], str) else None,
-                    score=int(item["score"]),
-                    last_seen=(
-                        item["last_seen"]
-                        if isinstance(item["last_seen"], str)
-                        else None
-                    ),
+                    email=em,
+                    name=rec[1] if isinstance(rec[1], str) else None,
+                    score=int(rec[0]),  # type: ignore[arg-type]
+                    last_seen=rec[2] if isinstance(rec[2], str) else None,
                 )
-                for item in contacts.values()
+                for em, rec in contacts.items()
             ]
         finally:
             conn.close()
