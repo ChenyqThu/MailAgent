@@ -87,6 +87,6 @@
 | **Wave 4A** | SQLite WAL/安全网 + CI 闸 + ESLint 去噪 | ✅ 已完成 | `AgentConfigStore`/`LlmProviderStore` 启用 WAL+30s `busy_timeout`；`ai_chat.db` 纳入 `run_startup_db_safety`（`ChatDb` 对齐 WAL/30s）；删除死代码 `getWriteDb()`；`ruff check src` 23→**0**；`ci-test.yml` 补齐 `ruff` + `typecheck` + `artifact-server`（8/8）；ESLint 关闭 `prettier/prettier` 噪音并修 `ResourceDrawer` 65 条 ref + 6 条无效 disable，warnings **1,736→117**（0 error；1,159 PY + 50 FE 文件/347 项全绿） |
 | **Wave 4B** | `SuccessEnvelope` 真校验 + Router 裸 SQL 清零 | ✅ 已完成 | `contacts`(27)+`ai`/`notifications`/`folder`/`history_sync` 真 `response_model`；`check-openapi-contract.ts` 40 模型；Router `.execute()` 33→0；Ruff 0，`pytest` 3069 passed |
 | **Wave 4C** | 翻译单写收口 + Typed IPC 边界 | ✅ 已完成 | 批翻译收口至 `ai-gateway/routes/translateRoutes.ts` + Python `PUT /api/ai/translation/{internal_id}` + `ai_gateway_proxy.py`；删除 `handlers/translate.ts` 与 `syncStoreReadonlyGate.test.ts` 守门；`shared/ipc/{contract,client}.ts` + `typedHandle.ts` 收口 15 个文件；Py `796 passed`、`vitest` 507/507 (6865)、`web`+`electron` build 全绿 |
-| **Wave 5A** | 后端高频 Router & `AgentConfigStore` 拆解 | 🔄 进行中 | 待回填 |
-| **Wave 5B** | AI Gateway 组合化 / `policy` / 表单收敛 / 记忆重试 | ⏳ 待执行 | 待回填 |
+| **Wave 5A** | 后端高频 Router & `AgentConfigStore` 拆解 | ✅ 已完成 | `connector.py` (2,033→71L)、`agent_config/store.py` (2,690→236L)、`agent.py` (2,053→58L)、`chat.py` (1,974→891L) 按领域拆分子模块并保留门面兼容；`app.py` 收敛为声明式 `_ROUTER_SPECS`；`ruff` 0 错误、`pytest` 3297 passed、`check-openapi-contract.ts` 41 模型通过 |
+| **Wave 5B** | AI Gateway 组合化 / `policy` / 表单收敛 / 记忆重试 | 🔄 进行中 | 待回填 |
 | **Wave 5C** | 前端热点拆解 + React Hook 警告清零拉闸 | ⏳ 待执行 | 待回填 |

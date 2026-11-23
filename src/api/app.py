@@ -508,108 +508,59 @@ from src.api.routers import (  # noqa: E402
     web,
 )
 
-app.include_router(email.router)
-app.include_router(attachment.router)
-app.include_router(llm.router)
-# task 07-12 P0 (LLM 多 provider 化) — /api/llm/providers* CRUD（key 掩码, verify_cf_access）
-# + /snapshot（verify_local_token, 解密 key 仅供同机 embedded gateway）+ per-provider 模型
-# 发现 / 连通性测试。seed 迁移惰性触发（表空时把 env 老配置落成 default provider 行）。
-app.include_router(llm_providers.router)
-# issue #59 (KOS 入库可靠性) — /api/kos/stats 读端点，远程 web 的知识库监控区数据出口
-# （桌面走 `mailagent kos stats` IPC）。聚合逻辑与 CLI 单源 src/kos/stats.py。
-app.include_router(kos.router)
-app.include_router(admin.router)
-app.include_router(calendar.router)
-app.include_router(folder.router)
-app.include_router(ai.router)
-app.include_router(email_views.router)
-# H3a — GET /api/email/remote-image（邮件远程图片代理，SSRF 硬化）。与 email.router
-# 同 prefix 不同文件：那边是 CLI 契约镜像的 CRUD，本端点是出网取字节的独立关注点。
-# 路由不撞：email.py 的动态段是 `{internal_id:int}`，'remote-image' 匹配不到 int 转换器。
-app.include_router(email_remote_image.router)
-app.include_router(jobs.router)
-# 同步历史邮件 (task 09-11): 一次性补回某个日期范围内本地缺的邮件。任务本体是
-# async_jobs 的 history_sync 维护任务 (JobWorker 执行), 本 router 只管发起/取消/读进度。
-app.include_router(history_sync.router)
-app.include_router(reports.router)
-app.include_router(matters.router)
-# 统一通知中心 (task 08-20-notification-center) — /api/notifications* 列表/未读数/
-# 已读写面 (M1)。鉴权同 matters/reports (verify_cf_access, 远程 CF Access / 本地
-# ephemeral token 两腿都过)；无 flag 门控 (owner 拍板不设灰度开关, design §8.e)。
-app.include_router(notifications.router)
-# task 08-27 P4c (今日页) — GET /api/today。**只出两块**: 待回邮件 + 下一个硬时间点;
-# 另外四节走各自现成端点 (理由见 src/today/aggregate.py 的模块 docstring —— 那是对
-# design §十「一次算出来」的显式偏离)。鉴权同 matters/reports (verify_cf_access)。
-app.include_router(today.router)
-# Contact Directory WP2 (task 08-13) — /api/contacts* 列表聚合/详情/关联/治理写面。
-# WP7 治理建议落库腿仅接受 verify_local_token。
-app.include_router(contact_agent.router)
-app.include_router(contacts.router)
-# Matters P4 (D6) — matter run 提案内部端点 /api/matters/{id}/runs/{rid}/proposal。
-# verify_local_token（不接受 CF JWT，Remote Web 不可调）+ matters/matter_agent 双 flag 门；
-# 唯一调用方 = embedded gateway 的 matter_update_propose 工具。
-app.include_router(matter_agent.router)
-app.include_router(chat.router)
-app.include_router(settings.router)
-app.include_router(skills.router)
-# task 10-26 — /mcp: 同一 Skill 能力面的 MCP Streamable HTTP 传输（无状态），给远程 MCP 客户端
-# （Notion Custom Agent）用。鉴权同 /api/skills（authenticate_principal，认 scoped Bearer key）。
-app.include_router(skills.mcp_router)
-# task 10-27 — /api/mcp-service/*: 设置页「MCP 服务」的数据面（访问密钥增删轮换 / 对外工具清单 /
-# 最近调用 / 公网地址检测）。owner-only（verify_cf_access），agent Bearer key 天然 401。
-app.include_router(mcp_service.router)
-# task 10-28 — /api/davmail/reauth/*: DavMail 认证失效后在 App 弹窗里自助重新认证（换 token 写
-# token.dat + LOGIN 验证）。owner-only（verify_cf_access），非 davmail 后端 409。
-app.include_router(davmail.router)
-app.include_router(agent.router)
-# S1 R3 (agent openness wave1) — web 联网工具执行端点 /api/web/{fetch,search}。TS 薄壳→
-# Python 执行（业务权威 + 远程 parity）；SSRF 防护 + 钉 IP 在 routers/web.py。gateway 侧
-# 恒 edit-tier 人审，flag MAILAGENT_OPENNESS_WEB_TOOLS 默认 off（工具不注册即无从触达本端点）。
-app.include_router(web.router)
-# S2 W1 (agent openness) — exec 执行工具端点 /api/exec/{run,file_read,file_write}。TS 薄壳→Python
-# 执行；固定 env 白名单不继承全局密钥 + inode 级 deny 地板。gateway 侧恒 edit-tier 人审、不进
-# auto-approve，结构化白名单命中才免卡（/api/agent/policy/evaluate）。owner-only（verify_cf_access）。
-app.include_router(exec_router.router)
-# S4 W2 (custom agent 内核) — headless run 的 spec 面 + 审批终态回写
-# /api/agent-runs/{id}/{spec,approval-state}。gateway 回拉权威 spec（pull 模型，请求体不携带
-# 权威事实）+ 岛 resume 后回写 approval_state。owner-only（verify_local_token，不接受 CF JWT）；
-# flag MAILAGENT_CUSTOM_AGENTS_ENABLED 默认 off → 端点 404。
-app.include_router(agent_runs.router)
-# L4 批次1 #6 (审批卡 preview 服务端化) — /api/approval/preview。同机 embedded gateway
-# 在暂停/查 pending 时调它，拿服务端按真实 payload 生成的一行摘要（模型不传 to 时的
-# reply-all 真实收件人、日历改期的事件现值）；null / 失败时 gateway 回落旧文案。
-# owner-only 且只认本地 token（verify_local_token，不接受 CF JWT）—— 见 router docstring。
-app.include_router(approval_preview.router)
-# 08-01 阶段 1 PR1 (MCP connector) — /api/connector/* 连接/OAuth/工具清单同步。灰度开关
-# MAILAGENT_MCP_CONNECTORS 默认 off (非 callback 端点 409)。oauth/callback 是本仓第三个
-# 无 CF 门路由: 浏览器 302 带不了 header，state 即能力令牌 (单次消费+TTL，404 不泄因)，
-# 见 routers/connector.py 模块 docstring 威胁模型。src.connectors / mcp SDK 全 lazy import。
-app.include_router(connector.router)
-# 08-01 阶段 2 PR4 (飞书对话「信任可见」) — /api/im/{status,pair,approvals}。
-# status/approvals owner-only 读 (verify_cf_access, 远程 web 也该看得见)；🔴 pair 只认
-# 本地 token (verify_local_token, 不接受 CF JWT —— 把飞书账号接进本机执行通道的动作,
-# 远程浏览器不该发起)。status/approvals **有意不挂** MAILAGENT_IM_FEISHU 门:「未启用」
-# 本身就是要如实呈现的状态, 整区 409 只会让设置页显示「加载失败」。src.im.* lazy import。
-app.include_router(im.router)
-# 09-03 资料库 P1 (task 09-03-library-p1-foundation) — /api/library/*: 多根文件树 / library.db 索引 /
-# CAS 写面 / 邮件附件投影 / 挂载根。鉴权 verify_local_token (与 exec 家族同姿态; 远程 web 只读面 P3 再议)。
-app.include_router(library.router)
-app.include_router(library.preview_router)
+# Declarative router registration table — preserves exact middleware/route precedence
+# (e.g. email_remote_image alongside email/{internal_id:int}, skills.mcp_router after
+# skills.router, library preview_router after library.router, all before /app SPA mount).
+_ROUTER_SPECS = (
+    email.router,
+    attachment.router,
+    llm.router,
+    llm_providers.router,
+    kos.router,
+    admin.router,
+    calendar.router,
+    folder.router,
+    ai.router,
+    email_views.router,
+    email_remote_image.router,
+    jobs.router,
+    history_sync.router,
+    reports.router,
+    matters.router,
+    notifications.router,
+    today.router,
+    contact_agent.router,
+    contacts.router,
+    matter_agent.router,
+    chat.router,
+    settings.router,
+    skills.router,
+    skills.mcp_router,
+    mcp_service.router,
+    davmail.router,
+    agent.router,
+    web.router,
+    exec_router.router,
+    agent_runs.router,
+    approval_preview.router,
+    connector.router,
+    im.router,
+    library.router,
+    library.preview_router,
+)
 
-# matters ← library 的存在性 / 摘要回调（进程级装一次）。不装 = 所有 `library:` 资料在
-# 事项里显示不可用、跟进 run 提议库文件恒被判 resource_not_found（fail-closed，见
-# src/library/resource_resolver.py 的模块注释）。
+for _router in _ROUTER_SPECS:
+    app.include_router(_router)
+
+# matters ← library resolver hook (fail-closed if unavailable; see src/library/resource_resolver.py).
 try:
     from src.library.resource_resolver import install_library_resolver
 
     install_library_resolver(library.get_library_service)
-except Exception as _lib_resolver_err:  # noqa: BLE001 — 装不上只降级，不挡 serve-api 起来
+except Exception as _lib_resolver_err:  # noqa: BLE001 — degrade gracefully without blocking startup
     logger.warning(f"[library] matters resolver 未装上: {_lib_resolver_err}")
-# task A — 远程 web 切 AI SDK: 把 web 的 chat 请求 (/api/ai/{chat,title,approval/resolve,
-# config}, /api/ai/agui/chat) + 裸 /health 代理到同机 loopback AI SDK Gateway。在 SPA catch-all
-# mount (/app, 文件末尾) 之前注册，确保 /api/ai/* 与 /health 不被静态 SPA 遮蔽。/api/ai/* 子路径
-# (chat/title/...) 与 ai.router 的 /api/ai/translation/* 不重叠，两者共存。本地 electron 不经此代理
-# (renderer 直连 ?aiGatewayPort= loopback)，仅 web (base='' 同源) 命中。
+
+# AI SDK Gateway loopback proxy — registered after /api/ai/translation/* and before /app SPA catch-all.
 app.include_router(ai_gateway_proxy.router)
 
 
