@@ -42,10 +42,7 @@ export function useAnchoredPopover(
   const [placement, setPlacement] = useState<AnchoredPopoverPlacement | null>(null)
 
   useLayoutEffect(() => {
-    if (!active) {
-      setPlacement(null)
-      return
-    }
+    if (!active) return
     let raf = 0
     const measure = (): void => {
       raf = 0
@@ -89,5 +86,5 @@ export function useAnchoredPopover(
     }
   }, [active, triggerRef, popoverRef, gutter])
 
-  return placement
+  return active ? placement : null
 }

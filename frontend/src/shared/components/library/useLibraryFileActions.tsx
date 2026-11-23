@@ -212,64 +212,67 @@ export function useLibraryFileActions(handlers: LibraryFileActionHandlers = {}):
     [api, handlers, invalidate, openToast, t]
   )
 
-  const dialogs = (
-    <>
-      {picker ? (
-        <FolderPickerDialog
-          open
-          onOpenChange={(next) => {
-            if (!next) setPicker(null)
-          }}
-          mode={picker.mode}
-          file={picker}
-          disabledPaths={picker.mode === 'move' ? [picker.parentPath] : []}
-          busy={busy}
-          onConfirm={(target) => void runPicker(target)}
-        />
-      ) : null}
-      <Dialog
-        open={confirm !== null}
-        onOpenChange={(next) => {
-          if (!next) setConfirm(null)
-        }}
-      >
-        {confirm ? (
-          <DialogContent className="w-[480px]">
-            <DialogHeader>
-              <DialogTitle>
-                {confirm.kind === 'purge'
-                  ? t('library.trash.deleteForeverConfirmTitle', { name: confirm.file.filename })
-                  : confirm.file.mount_id > 0
-                    ? t('library.trash.deleteConfirmTitleMount')
-                    : t('library.trash.deleteConfirmTitleLibrary')}
-              </DialogTitle>
-              <DialogDescription>
-                {confirm.kind === 'purge'
-                  ? t('library.trash.deleteForeverConfirmBody')
-                  : confirm.file.mount_id > 0
-                    ? t('library.trash.deleteConfirmBodyMount')
-                    : t('library.trash.deleteConfirmBodyLibrary', { name: confirm.file.filename })}
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button variant="ghost" size="sm" onClick={() => setConfirm(null)}>
-                {t('library.actions.cancel')}
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={busy}
-                onClick={() => void runConfirm()}
-              >
-                {confirm.kind === 'purge'
-                  ? t('library.trash.deleteForeverConfirm')
-                  : t('library.actions.delete')}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
+  const dialogs = useMemo(
+    () => (
+      <>
+        {picker ? (
+          <FolderPickerDialog
+            open
+            onOpenChange={(next) => {
+              if (!next) setPicker(null)
+            }}
+            mode={picker.mode}
+            file={picker}
+            disabledPaths={picker.mode === 'move' ? [picker.parentPath] : []}
+            busy={busy}
+            onConfirm={(target) => void runPicker(target)}
+          />
         ) : null}
-      </Dialog>
-    </>
+        <Dialog
+          open={confirm !== null}
+          onOpenChange={(next) => {
+            if (!next) setConfirm(null)
+          }}
+        >
+          {confirm ? (
+            <DialogContent className="w-[480px]">
+              <DialogHeader>
+                <DialogTitle>
+                  {confirm.kind === 'purge'
+                    ? t('library.trash.deleteForeverConfirmTitle', { name: confirm.file.filename })
+                    : confirm.file.mount_id > 0
+                      ? t('library.trash.deleteConfirmTitleMount')
+                      : t('library.trash.deleteConfirmTitleLibrary')}
+                </DialogTitle>
+                <DialogDescription>
+                  {confirm.kind === 'purge'
+                    ? t('library.trash.deleteForeverConfirmBody')
+                    : confirm.file.mount_id > 0
+                      ? t('library.trash.deleteConfirmBodyMount')
+                      : t('library.trash.deleteConfirmBodyLibrary', { name: confirm.file.filename })}
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="ghost" size="sm" onClick={() => setConfirm(null)}>
+                  {t('library.actions.cancel')}
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void runConfirm()}
+                >
+                  {confirm.kind === 'purge'
+                    ? t('library.trash.deleteForeverConfirm')
+                    : t('library.actions.delete')}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          ) : null}
+        </Dialog>
+      </>
+    ),
+    [busy, confirm, picker, runConfirm, runPicker, t]
   )
 
   return useMemo(

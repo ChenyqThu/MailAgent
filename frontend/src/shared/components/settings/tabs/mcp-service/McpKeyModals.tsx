@@ -166,11 +166,14 @@ export function ClientConfigDialog({
   const [preview, setPreview] = React.useState<McpWriteClientConfigResult | null>(null)
   const [busy, setBusy] = React.useState(false)
 
-  React.useEffect(() => {
-    if (!open) return
-    setApiKey(initialApiKey ?? '')
-    setPreview(null)
-  }, [open, initialApiKey])
+  const [prevModalSync, setPrevModalSync] = React.useState(() => ({ open, initialApiKey }))
+  if (prevModalSync.open !== open || prevModalSync.initialApiKey !== initialApiKey) {
+    setPrevModalSync({ open, initialApiKey })
+    if (open) {
+      setApiKey(initialApiKey ?? '')
+      setPreview(null)
+    }
+  }
 
   async function runConfigAction(dryRun: boolean): Promise<void> {
     if (!api.mcpService.writeClientConfig) return

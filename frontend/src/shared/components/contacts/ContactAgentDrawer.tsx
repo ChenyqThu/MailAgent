@@ -28,7 +28,7 @@
 // 没发现问题）+ 运行 tab 的「上次扫描」整行（带错误码与下一步）。两处读的是同一条
 // agent-status 查询，不会各说各话。
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
@@ -517,9 +517,11 @@ export function ContactAgentDrawer({
   // 改订阅 store 里的自增 nonce（每次 openQueue() 递增，clearQueue 不重置）——不管抽屉
   // 当前开没开，nonce 一变就切，覆盖「深链拉开」与「已开着时再来一条」两种时序。
   const queueNonce = useContactNavigation((state) => state.queueNonce)
-  useEffect(() => {
+  const [prevQueueNonce, setPrevQueueNonce] = useState(queueNonce)
+  if (prevQueueNonce !== queueNonce) {
+    setPrevQueueNonce(queueNonce)
     setTab('queue')
-  }, [queueNonce])
+  }
   // render 期不许调 Date.now()（react-hooks/purity）—— ContactDetail 同款快照模式。
   const [now] = useState(() => Date.now())
 

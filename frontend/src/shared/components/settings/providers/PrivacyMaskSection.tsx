@@ -75,10 +75,14 @@ export function PrivacyMaskSection(): React.ReactElement {
     'web'
 
   const query = usePrivacyMaskConfig(true)
-  const config: PrivacyMaskConfigWire = query.data?.config ?? {
-    builtIn: { secret: true, id_card: true, phone: true, email: true, bank_card: true },
-    customRules: []
-  }
+  const config: PrivacyMaskConfigWire = React.useMemo(
+    () =>
+      query.data?.config ?? {
+        builtIn: { secret: true, id_card: true, phone: true, email: true, bank_card: true },
+        customRules: []
+      },
+    [query.data?.config]
+  )
   const hits = query.data?.hits ?? { total: 0, byCategory: [] }
 
   const [saving, setSaving] = React.useState(false)

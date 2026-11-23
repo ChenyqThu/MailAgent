@@ -100,7 +100,7 @@ export function NotificationBellBadge(): React.ReactElement {
       document.removeEventListener('mousedown', onPointer)
       document.removeEventListener('keydown', onKey)
     }
-  }, [open])
+  }, [open, scopeRef])
 
   const label = bellLabel(t, unread ?? 0, pendingActionCount)
 

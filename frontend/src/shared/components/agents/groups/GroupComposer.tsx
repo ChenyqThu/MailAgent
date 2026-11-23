@@ -16,7 +16,7 @@
 // 读取结果经 bridge 落在本组件的 map 里，发送时映射成 `GroupAttachment[]`（图片 `text=null` 只留档）随
 // body 走；条数上限 `GROUP_ATTACHMENTS_MAX` 在 add 前拦，超出 toast。
 
-import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowUp, FileText, Users } from 'lucide-react'
 import {
@@ -43,6 +43,7 @@ import i18n from '@shared/i18n'
 import { cn } from '@shared/lib/cn'
 import type { ChatAttachment } from '@shared/lib/chat-attachments'
 import { toastError } from '@shared/state/toast'
+import { LiveBox, useLiveBox } from '@shared/hooks/liveBox'
 import { Loader } from '@shared/components/ui/loader'
 import { ComposerFrame } from '@shared/assistant/components/composer'
 import { ComposerPlusMenu } from '@shared/assistant/components/ComposerPlusMenu'
@@ -159,23 +160,22 @@ function toGroupAttachments(
 export function GroupComposer(props: GroupComposerProps): React.ReactElement {
   const { onSend, sending, disabled } = props
   // 非图片附件的读取结果（adapter 经 bridge 写入，chip 移除 / 发送后删除）。
-  const readRef = useRef(new Map<string, ChatAttachment>())
+  const [readBox] = useState(() => new LiveBox(new Map<string, ChatAttachment>()))
   // P2-L13 —— 本条消息 @ 出来的资料引用。存在这一层（不是 body 里）是因为发送发生在 onNew。
   const pickedRefs = useRef<GroupLibraryRef[]>([])
-  const runtimeRef = useRef<AssistantRuntime | null>(null)
-  const onSendRef = useRef(onSend)
-  onSendRef.current = onSend
+  const [runtimeBox] = useState(() => new LiveBox<AssistantRuntime | null>(null))
+  const onSendBox = useLiveBox(onSend)
   const [adapter] = useState(() =>
     withGroupAttachmentCap(
       createMailAgentAttachmentAdapter(() => ({
         onAdd: (a) => {
-          readRef.current.set(a.id, a)
+          readBox.get().set(a.id, a)
         },
         onRemove: (id) => {
-          readRef.current.delete(id)
+          readBox.get().delete(id)
         }
       })),
-      () => runtimeRef.current?.thread.composer.getState().attachments.length ?? 0
+      () => runtimeBox.get()?.thread.composer.getState().attachments.length ?? 0
     )
   )
   const store = useMemo<ExternalStoreAdapter<ThreadMessage>>(
@@ -186,19 +186,22 @@ export function GroupComposer(props: GroupComposerProps): React.ReactElement {
       adapters: { attachments: adapter },
       onNew: async (message) => {
         const attached = message.attachments ?? []
-        const attachments = toGroupAttachments(attached, readRef.current)
-        for (const a of attached) readRef.current.delete(a.id)
+        const readMap = readBox.get()
+        const attachments = toGroupAttachments(attached, readMap)
+        for (const a of attached) readMap.delete(a.id)
         const text = appendedText(message).trim()
         // 🔴 只发正文里还留着 `@名称` 的那几条：用户选完又把那段字删了，引用就不该跟着走。
         const refs = pickedRefs.current.filter((r) => text.includes(`@${r.name}`))
         pickedRefs.current = []
-        await onSendRef.current(text, attachments, refs)
+        await onSendBox.get()(text, attachments, refs)
       }
     }),
-    [disabled, sending, adapter]
+    [disabled, sending, adapter, readBox, onSendBox]
   )
   const runtime = useExternalStoreRuntime(store)
-  runtimeRef.current = runtime
+  useLayoutEffect(() => {
+    runtimeBox.set(runtime)
+  }, [runtimeBox, runtime])
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <GroupComposerBody {...props} pickedRefs={pickedRefs} />
@@ -231,17 +234,17 @@ function GroupComposerBody({
   // 同一个服务端内核），不新建端点。
   const libraryApi = useMemo(() => createLibraryApi(resolveApiBaseUrl()), [])
   const [libraryHits, setLibraryHits] = useState<readonly GroupLibraryRef[]>([])
-  // 发送后 composer 自己把 text 清空（不经 onChange），弹层状态跟着清，否则会悬在空框上。
-  useEffect(() => {
-    if (text.length === 0) setMention(null)
-  }, [text])
+  // 发送后 composer 自己把 text 清空（不经 onChange），在渲染期调整 mention 状态避免悬在空框上。
+  const [prevText, setPrevText] = useState(text)
+  if (prevText !== text) {
+    setPrevText(text)
+    if (text.length === 0 && mention !== null) setMention(null)
+  }
+  const activeMention = text.length === 0 ? null : mention
 
-  const draftQuery = mention?.query.trim() ?? ''
+  const draftQuery = activeMention?.query.trim() ?? ''
   useEffect(() => {
-    if (draftQuery.length === 0) {
-      setLibraryHits([])
-      return
-    }
+    if (draftQuery.length === 0) return
     let live = true
     const timer = setTimeout(() => {
       void libraryApi
@@ -270,9 +273,10 @@ function GroupComposerBody({
     }
   }, [draftQuery, libraryApi])
 
-  const query = mention?.query.toLowerCase() ?? ''
+  const visibleLibraryHits = draftQuery.length === 0 ? [] : libraryHits
+  const query = activeMention?.query.toLowerCase() ?? ''
   const allLabel = t('groupChat.mentionAll')
-  const items: MentionItem[] = mention
+  const items: MentionItem[] = activeMention
     ? [
         ...(query.length === 0 || allLabel.toLowerCase().includes(query) || 'all'.includes(query)
           ? [{ kind: 'all' } as const]
@@ -281,11 +285,11 @@ function GroupComposerBody({
           .filter((m) => m.title.toLowerCase().includes(query))
           .slice(0, MAX_MENTION_ITEMS)
           .map((member) => ({ kind: 'member', member }) as const),
-        ...libraryHits.map((ref) => ({ kind: 'library', ref }) as const)
+        ...visibleLibraryHits.map((ref) => ({ kind: 'library', ref }) as const)
       ]
     : []
   const firstLibraryIndex = items.findIndex((i) => i.kind === 'library')
-  const open = mention != null && items.length > 0
+  const open = activeMention != null && items.length > 0
   const active = open ? Math.min(activeIndex, items.length - 1) : 0
 
   const refreshMention = (value: string, caret: number | null): void => {

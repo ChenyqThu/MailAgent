@@ -82,15 +82,6 @@ export default defineConfig(
           destructuredArrayIgnorePattern: '^_'
         }
       ],
-      // 🔴 存量债的临时降级（08-02 review F9）。这三条规则本身是对的，降级**只是**为了让
-      // `eslint --quiet` 能作为 CI 闸立刻立起来防住新增 error —— 存量 21 处的修复各自需要真实
-      // 渲染验证，混进一批会让「验证」失焦：
-      //   * react-hooks/refs + set-state-in-effect（12 处）：要改 render/effect 时机，有行为风险，
-      //     各自需要真实渲染验证。
-      // 降级为 warn 后它们仍在本地 lint 里可见，且新增的**其它** error 照常拦。
-      // 🔴 修完存量后把这两行删掉（改回 recommended 的 error），否则闸会永久缺一块。
-      'react-hooks/refs': 'warn',
-      'react-hooks/set-state-in-effect': 'warn',
       // 🔴 react-refresh 的 9 处存量已在本批全部拆干净（_cardShell → +_cardShell.lib.ts，
       // custom-agent/shared.tsx → shared.ts + DangerBlock.tsx，另三处各拆一个 helper 文件），
       // 故**不降级**、保持 vite 预设的 error。这里显式重申一遍带 options 的形态，是因为写成裸

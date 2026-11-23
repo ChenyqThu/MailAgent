@@ -226,7 +226,10 @@ export function SearchTabPage(): React.ReactElement {
     enabled: mattersEnabled && hasQuery
   })
   const matterHits: Matter[] = useMemo(() => mattersQ.data?.items ?? [], [mattersQ.data?.items])
-  const visibleMatterHits = mattersEnabled ? matterHits : []
+  const visibleMatterHits = useMemo(
+    () => (mattersEnabled ? matterHits : []),
+    [mattersEnabled, matterHits]
+  )
 
   const contactsQ = useQuery({
     queryKey: qk.contacts.paletteSearch(normalised),
@@ -243,7 +246,10 @@ export function SearchTabPage(): React.ReactElement {
         .slice(0, MAX_CONTACT_HITS),
     [contactsQ.data?.items]
   )
-  const visibleContactHits = contactsEnabled ? contactHits : []
+  const visibleContactHits = useMemo(
+    () => (contactsEnabled ? contactHits : []),
+    [contactsEnabled, contactHits]
+  )
   const contactOverflow = Math.max(0, (contactsQ.data?.total ?? 0) - visibleContactHits.length)
 
   // 资料库第五路（P2-L7）—— 与 ⌘K 同 query key、同 limit ⇒ 共享缓存与那一次请求。
@@ -398,10 +404,10 @@ export function SearchTabPage(): React.ReactElement {
     void runAiSearch()
   }, [query, runAiSearch])
 
-  const hintChips: ReadonlyArray<{ label: string; onClick(): void }> = [
-    { label: 'from:david', onClick: () => applyToken('from:david') },
-    { label: 'has:attachment', onClick: () => applyToken('has:attachment') },
-    ...(IS_WEB ? [] : [{ label: t('searchTab.hintAi'), onClick: onAiChip }])
+  const hintChips: ReadonlyArray<{ label: string; token?: string }> = [
+    { label: 'from:david', token: 'from:david' },
+    { label: 'has:attachment', token: 'has:attachment' },
+    ...(IS_WEB ? [] : [{ label: t('searchTab.hintAi') }])
   ]
 
   return (
@@ -450,7 +456,7 @@ export function SearchTabPage(): React.ReactElement {
               <button
                 key={chip.label}
                 type="button"
-                onClick={chip.onClick}
+                onClick={() => (chip.token ? applyToken(chip.token) : onAiChip())}
                 className="flex h-6 items-center rounded-md border border-ink-border-soft bg-ink-fg/[0.05] px-2.5 font-mono text-micro text-ink-fg-2 transition hover:text-ink-fg"
               >
                 {chip.label}

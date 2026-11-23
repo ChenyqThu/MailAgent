@@ -177,14 +177,16 @@ export function MatterDetail({
   })
   // G-32 —— 头部「更多」下拉按菜单档 popIn（从触发按钮那侧长出来），永久删除确认按模态档
   // fadeIn + popIn。两者的内容都只依赖 `matter`（关闭期间不会塌），故进退场都做。
-  const moreMenuAnim = useExitAnimation<HTMLDivElement>(moreOpen, {
-    backdrop: false,
-    from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top right' },
-    enterDuration: DUR.fast
-  })
-  const deleteDialogAnim = useExitAnimation<HTMLDivElement>(deleteOpen, {
-    card: '[data-anim-card]'
-  })
+  const { shouldRender: renderMoreMenu, scopeRef: moreMenuScopeRef } =
+    useExitAnimation<HTMLDivElement>(moreOpen, {
+      backdrop: false,
+      from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top right' },
+      enterDuration: DUR.fast
+    })
+  const { shouldRender: renderDeleteDialog, scopeRef: deleteDialogScopeRef } =
+    useExitAnimation<HTMLDivElement>(deleteOpen, {
+      card: '[data-anim-card]'
+    })
   // D14（0813 dogfood）—— 「更多」菜单点外部/按 Esc 收起。此前只有再点一次触发器能关：
   // 点正文、切 tab、滚动都留着它挂在右上角。形态照 `EffortPicker` 的先例（同样是
   // `useExitAnimation` 驱动的自绘菜单）：mousedown 判包含 + keydown 判 Escape，
@@ -464,15 +466,30 @@ export function MatterDetail({
     enabled: reviewId != null
   })
 
-  useEffect(() => setReviewError(null), [reviewId])
+  const [prevReviewId, setPrevReviewId] = useState(reviewId)
+  if (prevReviewId !== reviewId) {
+    setPrevReviewId(reviewId)
+    setReviewError(null)
+  }
+
+  const [prevInitialReviewId, setPrevInitialReviewId] = useState<number | null>(null)
+  if (initialReviewId != null && initialReviewId !== prevInitialReviewId) {
+    setPrevInitialReviewId(initialReviewId)
+    setReviewId(initialReviewId)
+  } else if (initialReviewId == null && prevInitialReviewId !== null) {
+    setPrevInitialReviewId(null)
+  }
   useEffect(() => {
     if (initialReviewId == null) return
-    setReviewId(initialReviewId)
     onReviewOpened?.()
   }, [initialReviewId, onReviewOpened])
-  useEffect(() => {
+
+  const nextTitleSyncKey = `${titleEditing ? '1' : '0'}:${matter?.title ?? ''}`
+  const [prevTitleSyncKey, setPrevTitleSyncKey] = useState(nextTitleSyncKey)
+  if (nextTitleSyncKey !== prevTitleSyncKey) {
+    setPrevTitleSyncKey(nextTitleSyncKey)
     if (!titleEditing) setTitleDraft(matter?.title ?? '')
-  }, [matter?.title, titleEditing])
+  }
 
   const pushUndoToast = useMatterUndoToast()
 
@@ -804,11 +821,11 @@ export function MatterDetail({
               >
                 <MoreHorizontal size={17} />
               </button>
-              {moreMenuAnim.shouldRender ? (
+              {renderMoreMenu ? (
                 /* D14 —— 选中任一项也收起菜单（设计 detail.jsx:13 `onClose(); fn();`）。
                    点外部收起挂在上面那个 effect 上。 */
                 <div
-                  ref={moreMenuAnim.scopeRef}
+                  ref={moreMenuScopeRef}
                   role="menu"
                   aria-label={t('matters.detail.more')}
                   className="absolute right-0 top-10 z-20 w-48 rounded-[var(--r-card)] border border-ink-border bg-ink-1 p-1 shadow-md"
@@ -1071,9 +1088,9 @@ export function MatterDetail({
           onOpenChange={setTagManagerOpen}
         />
 
-        {deleteDialogAnim.shouldRender ? (
+        {renderDeleteDialog ? (
           <div
-            ref={deleteDialogAnim.scopeRef}
+            ref={deleteDialogScopeRef}
             className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4"
           >
             <section

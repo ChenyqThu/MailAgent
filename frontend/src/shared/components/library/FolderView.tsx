@@ -369,9 +369,9 @@ export function FolderView({
   const [filter, setFilter] = useState('')
   const debouncedFilter = useDebouncedValue(filter, FILTER_DEBOUNCE_MS)
   // 换文件夹清过滤词（过滤是「这一个文件夹」的，design §2.3 B3）。
-  const lastPath = useRef(path)
-  if (lastPath.current !== path) {
-    lastPath.current = path
+  const [prevPath, setPrevPath] = useState(path)
+  if (prevPath !== path) {
+    setPrevPath(path)
     setFilter('')
   }
 

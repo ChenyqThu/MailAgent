@@ -20,7 +20,7 @@
 //
 // InboxLayout mounts this unconditionally (S3: the ASSISTANT_MODAL flag was GA'd away).
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
@@ -210,7 +210,7 @@ function AssistantChatModalInner(): React.JSX.Element {
   const chatSelectSession = chat.selectSession
   const matterTargetId = matterTarget?.id ?? null
   const chatIsFreshRef = useRef(false)
-  chatIsFreshRef.current = chat.activeSessionId === null && chat.messages.length === 0
+  const chatIsFresh = chat.activeSessionId === null && chat.messages.length === 0
 
   // 09-02 —— dock 里这场对话**属于哪个对象标签**（email / matter）。会话变化的写回、切标签时的
   // 同步判据都看它，而不是「此刻激活的标签」：「立即跟进」的指令还在飞时用户切走了标签，首发拿到
@@ -237,9 +237,12 @@ function AssistantChatModalInner(): React.JSX.Element {
 
   // 09-02 —— FAB 在事项标签上唤出时，同一次点击还递了这个标签的会话请求（下一个 effect 消费）；
   // 那条请求才是这场对话的归宿（回到绑定的会话 / 开新），本 effect 让位 —— 否则绑定的会话会先
-  // 被这里的 newSession 冲掉。走 ref 读渲染期的值：两个 effect 同一次 commit 里跑，与声明顺序无关。
+  // 被这里的 newSession 冲掉。useLayoutEffect 先于任何 useEffect 同步写入，保持同次 commit 时序。
   const pendingTabSessionRef = useRef(pendingTabSession)
-  pendingTabSessionRef.current = pendingTabSession
+  useLayoutEffect(() => {
+    chatIsFreshRef.current = chatIsFresh
+    pendingTabSessionRef.current = pendingTabSession
+  }, [chatIsFresh, pendingTabSession])
   useEffect(() => {
     if (matterTargetId === null) return
     if (pendingTabSessionRef.current !== null) return

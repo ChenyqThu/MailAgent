@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Save, Trash2, X } from 'lucide-react'
@@ -47,12 +47,14 @@ export function MatterTagManagerModal({
   const [renameDrafts, setRenameDrafts] = useState<Record<string, string>>({})
   const [pendingDeleteName, setPendingDeleteName] = useState<string | null>(null)
 
-  useEffect(() => {
+  const [prevOpen, setPrevOpen] = useState(open)
+  if (prevOpen !== open) {
+    setPrevOpen(open)
     if (!open) {
       setRenameDrafts({})
       setPendingDeleteName(null)
     }
-  }, [open])
+  }
 
   const invalidateMatterTags = async (): Promise<void> => {
     await queryClient.invalidateQueries({ queryKey: qk.matters.all() })

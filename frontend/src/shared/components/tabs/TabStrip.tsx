@@ -429,7 +429,7 @@ function ObjectTab({
   // 拖拽排序（P5）：整标签即拖柄（标签条上没地方放 grip；8px 起拖阈值保住点击）。
   // 幽灵 disabled（它的 id 已不在 SortableContext items 里）。attributes 有意不铺 ——
   // 它带 role="button" / aria-roledescription，会覆盖 role="tab"；键盘拖拽本批不做。
-  const sortable = useSortable({
+  const { setNodeRef, listeners, isDragging, transform, transition } = useSortable({
     id: tab.id,
     disabled: closing,
     transition: reduceMotion ? null : DRAG_TRANSITION
@@ -450,23 +450,23 @@ function ObjectTab({
     tab.kind === 'email' && (tab.draft as { dirty?: unknown } | undefined)?.dirty === true
   return (
     <div
-      ref={sortable.setNodeRef}
+      ref={setNodeRef}
       // 幽灵退出可交互序列（不是 tab、不进 a11y 树、不可聚焦）；pointer-events 由
       // .ttab-closing 关掉，onClick 兜底也打不中（activateTab 对不存在的 id no-op）。
       {...(closing
         ? { 'aria-hidden': true as const }
         : { role: 'tab', 'aria-selected': selected, tabIndex: 0 })}
-      {...(closing ? undefined : sortable.listeners)}
+      {...(closing ? undefined : listeners)}
       className={`ttab${closing ? ' ttab-closing' : ''}${entering ? ' ttab-enter' : ''}${
-        sortable.isDragging ? ' ttab-dragging' : ''
+        isDragging ? ' ttab-dragging' : ''
       }`}
       // transform/transition 只在拖拽/落位期间由 dnd-kit 给值（平时 undefined ⇒
       // authored CSS 的过渡照常）。Translate 不取 scale —— 标签等宽，scaleX 恒 1。
       style={{
         width,
         ...NO_DRAG,
-        transform: CSS.Translate.toString(sortable.transform),
-        transition: sortable.transition
+        transform: CSS.Translate.toString(transform),
+        transition
       }}
       title={title}
       onClick={onActivate}

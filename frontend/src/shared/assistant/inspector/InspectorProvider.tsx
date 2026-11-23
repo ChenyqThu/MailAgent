@@ -112,6 +112,7 @@ export function InspectorProvider({
     }),
     [
       open,
+      setOpen,
       toggle,
       previewArtifactId,
       openArtifactPreview,

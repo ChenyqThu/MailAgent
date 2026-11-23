@@ -124,7 +124,6 @@ export function SortableBoard<T>({
   /** 乐观顺序；null = 用 props 那份。落下后**不清空**（见 `finish`）。 */
   const [draft, setDraft] = useState<SortableBoardOrder | null>(null)
   const startedRef = useRef<SortableBoardOrder | null>(null)
-  const lastFailureRef = useRef(commitFailedAt)
 
   const itemById = useMemo(() => {
     const index = new Map<string, T>()
@@ -163,26 +162,27 @@ export function SortableBoard<T>({
     onDraftChange?.(next)
   }
 
-  // 交还控制权：props 追上乐观顺序了，draft 就没用了。
-  //
-  // 🔴 这个 effect 是「落下先弹回原位、几百毫秒后才跳到新位」的解药的**另一半**。
-  // 落下那一刻清 draft（原实现）⇒ 那一帧渲染的还是服务端旧顺序 ⇒ 卡片弹回去，等
-  // mutation 回来才跳到新位。所以 `finish` 保留 draft，由这里在 props 真的变成新
-  // 顺序之后才放手 —— 中间没有任何一帧是旧顺序。
-  useEffect(() => {
-    if (draft == null || activeId != null) return
-    if (!sameBoardOrder(propsOrder, draft)) return
+  // 交还控制权：props 追上乐观顺序或 commitFailedAt 变化时在渲染期收起 draft，
+  // 并在 effect 里通知外部 onDraftChange(null)。
+  const [prevCommitFailedAt, setPrevCommitFailedAt] = useState(commitFailedAt)
+  if (commitFailedAt !== prevCommitFailedAt) {
+    setPrevCommitFailedAt(commitFailedAt)
     setDraft(null)
-    onDraftChange?.(null)
-  }, [propsOrder, draft, activeId, onDraftChange])
+  } else if (draft != null && activeId == null && sameBoardOrder(propsOrder, draft)) {
+    setDraft(null)
+  }
 
-  // 写入失败 ⇒ 回滚。props 永远追不上时上面那个 effect 不会触发，只能靠调用方给信号。
+  const hadDraftRef = useRef(false)
   useEffect(() => {
-    if (commitFailedAt === lastFailureRef.current) return
-    lastFailureRef.current = commitFailedAt
-    setDraft(null)
-    onDraftChange?.(null)
-  }, [commitFailedAt, onDraftChange])
+    if (draft !== null) {
+      hadDraftRef.current = true
+      return
+    }
+    if (hadDraftRef.current) {
+      hadDraftRef.current = false
+      onDraftChange?.(null)
+    }
+  }, [draft, onDraftChange])
 
   const onDragStart = (event: DragStartEvent): void => {
     startedRef.current = propsOrder
@@ -270,13 +270,18 @@ function BoardGroup<T>({
   gridClassName: string
 }): React.ReactElement {
   // 组容器：空组也是落点 —— 否则「把最后一个 item 拖出去后再也拖不回来」。
-  const container = useDroppable({ id: groupDroppableId(group.id) })
+  const { setNodeRef: setContainerRef, isOver: isContainerOver } = useDroppable({
+    id: groupDroppableId(group.id)
+  })
   // 折叠标题：只在收起时启用（展开后组容器自己就是落点，标题再抢命中会让拖回去变难）。
-  const header = useDroppable({ id: headerDroppableId(group.id), disabled: !group.collapsed })
+  const { setNodeRef: setHeaderRef, isOver: isHeaderOver } = useDroppable({
+    id: headerDroppableId(group.id),
+    disabled: !group.collapsed
+  })
   const itemIds = group.items.map(getItemId)
 
   const body = group.collapsed ? null : (
-    <div ref={container.setNodeRef}>
+    <div ref={setContainerRef}>
       <SortableContext items={itemIds} strategy={rectSortingStrategy}>
         {group.items.length > 0 ? (
           <div className={gridClassName}>
@@ -291,7 +296,7 @@ function BoardGroup<T>({
             ))}
           </div>
         ) : (
-          (renderEmpty?.(group, { isOver: container.isOver }) ?? <div className="min-h-[2.5rem]" />)
+          (renderEmpty?.(group, { isOver: isContainerOver }) ?? <div className="min-h-[2.5rem]" />)
         )}
       </SortableContext>
     </div>
@@ -302,8 +307,8 @@ function BoardGroup<T>({
       {renderGroup({
         group,
         children: body,
-        headerRef: header.setNodeRef,
-        isOver: container.isOver || header.isOver
+        headerRef: setHeaderRef,
+        isOver: isContainerOver || isHeaderOver
       })}
     </>
   )

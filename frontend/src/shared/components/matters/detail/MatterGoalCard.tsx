@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react'
+import { useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, CircleCheckBig, Pencil, Target, Trash2, X } from 'lucide-react'
 
@@ -46,9 +46,23 @@ export function GoalCard({
   const doneGoalChecks = goalChecks.filter((check) => check.done).length
   const proseDirty = proseDraft.background !== matter.background || proseDraft.goal !== matter.goal
 
-  useEffect(() => {
+  const [prevProseSync, setPrevProseSync] = useState(() => ({
+    editing: proseEditing,
+    background: matter.background,
+    goal: matter.goal
+  }))
+  if (
+    prevProseSync.editing !== proseEditing ||
+    prevProseSync.background !== matter.background ||
+    prevProseSync.goal !== matter.goal
+  ) {
+    setPrevProseSync({
+      editing: proseEditing,
+      background: matter.background,
+      goal: matter.goal
+    })
     if (!proseEditing) setProseDraft({ background: matter.background, goal: matter.goal })
-  }, [proseEditing, matter.background, matter.goal])
+  }
 
   const saveGoalCheck = (): void => {
     const text = goalCheckDraft.trim()

@@ -105,45 +105,51 @@ export function CustomMcpDialog({
   const [saving, setSaving] = React.useState(false)
   const [err, setErr] = React.useState<string | null>(null)
 
-  React.useEffect(() => {
-    if (!open) return
-    setErr(null)
-    if (initialConnector) {
-      setConnectorId(initialConnector.connector_id)
-      setIdTouched(true)
-      setDisplayName(initialConnector.display_name)
-      setTransport(
-        initialConnector.transport === 'stdio'
-          ? 'stdio'
-          : initialConnector.transport === 'sse'
-            ? 'sse'
-            : 'streamable_http'
-      )
-      setServerUrl(initialConnector.server_url || '')
-      setHeaderRows([])
-      setReplaceHeaders(false)
-      setCommand(initialConnector.stdio_command?.command ?? '')
-      setArgsText((initialConnector.stdio_command?.args ?? []).join(' '))
-      setCwd(initialConnector.stdio_command?.cwd ?? '')
-      setEnvRows([])
-      setReplaceEnv(false)
-      setAutoSync(false)
-    } else {
-      setConnectorId('')
-      setIdTouched(false)
-      setDisplayName('')
-      setTransport('streamable_http')
-      setServerUrl('')
-      setHeaderRows([])
-      setReplaceHeaders(true)
-      setCommand('')
-      setArgsText('')
-      setCwd('')
-      setEnvRows([])
-      setReplaceEnv(true)
-      setAutoSync(true)
+  const [prevOpenSync, setPrevOpenSync] = React.useState<{
+    open: boolean
+    initialConnector: ConnectorSummary | null | undefined
+  }>({ open: false, initialConnector: undefined })
+  if (prevOpenSync.open !== open || prevOpenSync.initialConnector !== initialConnector) {
+    setPrevOpenSync({ open, initialConnector })
+    if (open) {
+      setErr(null)
+      if (initialConnector) {
+        setConnectorId(initialConnector.connector_id)
+        setIdTouched(true)
+        setDisplayName(initialConnector.display_name)
+        setTransport(
+          initialConnector.transport === 'stdio'
+            ? 'stdio'
+            : initialConnector.transport === 'sse'
+              ? 'sse'
+              : 'streamable_http'
+        )
+        setServerUrl(initialConnector.server_url || '')
+        setHeaderRows([])
+        setReplaceHeaders(false)
+        setCommand(initialConnector.stdio_command?.command ?? '')
+        setArgsText((initialConnector.stdio_command?.args ?? []).join(' '))
+        setCwd(initialConnector.stdio_command?.cwd ?? '')
+        setEnvRows([])
+        setReplaceEnv(false)
+        setAutoSync(false)
+      } else {
+        setConnectorId('')
+        setIdTouched(false)
+        setDisplayName('')
+        setTransport('streamable_http')
+        setServerUrl('')
+        setHeaderRows([])
+        setReplaceHeaders(true)
+        setCommand('')
+        setArgsText('')
+        setCwd('')
+        setEnvRows([])
+        setReplaceEnv(true)
+        setAutoSync(true)
+      }
     }
-  }, [open, initialConnector])
+  }
 
   const kvToRecord = (rows: KvRow[]): Record<string, string> => {
     const out: Record<string, string> = {}

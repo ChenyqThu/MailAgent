@@ -207,9 +207,13 @@ export function CustomAgentCallCard(props: ToolCallMessagePartProps): React.JSX.
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
 
-  useEffect(() => {
+  const [prevResult, setPrevResult] = useState(props.result)
+  const [prevArgs, setPrevArgs] = useState(args)
+  if (prevResult !== props.result || prevArgs !== args) {
+    setPrevResult(props.result)
+    setPrevArgs(args)
     setView(parseResult(props.result, args))
-  }, [props.result, args])
+  }
 
   useEffect(() => {
     if (!args.agent_id) return
@@ -226,23 +230,26 @@ export function CustomAgentCallCard(props: ToolCallMessagePartProps): React.JSX.
     }
   }, [phase, args.agent_id])
 
+  const jobId = view?.jobId
+  const status = view?.status
+
   const refreshRun = useCallback(async (): Promise<void> => {
-    if (!view) return
-    const response = await fetch(`${resolveApiBaseUrl()}/agent-runs/${view.jobId}`, {
+    if (!jobId) return
+    const response = await fetch(`${resolveApiBaseUrl()}/agent-runs/${jobId}`, {
       credentials: 'include'
     })
     if (!response.ok) throw new Error(`E_HTTP_${response.status}`)
     const body = (await response.json()) as { status?: string; data?: AgentRunPoll }
     if (body.status !== 'success' || !body.data) throw new Error('E_BAD_ENVELOPE')
     setView((current) => (current ? projectedView(body.data as AgentRunPoll, current) : current))
-  }, [view?.jobId])
+  }, [jobId])
 
   // perf-sse-realtime R1-5: 活跃 run 的刷新以 `agent.run.changed` SSE 为主
   // (job_id 命中即拉一次), connected 时轮询降为 30s 兜底; 无桥/断线保持 3s。
   const sseConnected = useEventsStatusStore((s) => s.status.state === 'connected')
   const mailApi = useMailApi()
   useEffect(() => {
-    if (!view || !['queued', 'running', 'waiting_approval'].includes(view.status)) return
+    if (!jobId || !status || !['queued', 'running', 'waiting_approval'].includes(status)) return
     let cancelled = false
     const poll = (): void => {
       void refreshRun().catch((error) => {
@@ -252,7 +259,7 @@ export function CustomAgentCallCard(props: ToolCallMessagePartProps): React.JSX.
     const timer = window.setInterval(poll, sseConnected ? 30_000 : POLL_MS)
     const unsubscribe = mailApi.events.onEvent((ev) => {
       if (ev.event_type !== 'agent.run.changed') return
-      if ((ev.data as { job_id?: unknown })?.job_id !== view.jobId) return
+      if ((ev.data as { job_id?: unknown })?.job_id !== jobId) return
       poll()
     })
     return () => {
@@ -260,7 +267,7 @@ export function CustomAgentCallCard(props: ToolCallMessagePartProps): React.JSX.
       window.clearInterval(timer)
       unsubscribe()
     }
-  }, [view?.status, view?.jobId, refreshRun, sseConnected, mailApi])
+  }, [status, jobId, refreshRun, sseConnected, mailApi])
 
   const openSession = (): void => {
     if (!view) return

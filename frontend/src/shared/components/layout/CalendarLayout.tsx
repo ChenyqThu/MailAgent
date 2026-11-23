@@ -265,34 +265,33 @@ export function CalendarLayout(): React.ReactElement {
   // → 日期跳转, 匹配交给下方 effect. 视图不切 — 写侧 navigate 已显式带
   // view ('today': 小时级 timeline 定位最准), 读侧不二次决策.
   const pendingFocus = useCalendarFocus((s) => s.pending)
-  const [focusTarget, setFocusTarget] = useState<CalendarFocusTarget | null>(null)
+  const [focusTarget, setFocusTarget] = useState<
+    (CalendarFocusTarget & { readonly requestedAt: number }) | null
+  >(null)
   useEffect(() => {
     if (!pendingFocus) return
     const target = useCalendarFocus.getState().consume()
     if (!target) return
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 跨面 one-shot 信号消费 (照 AiChatPanel 先例): consume() 带清空 store 副作用, 只能在 effect 做, 消费结果落两个本地 state.
-    setFocusTarget(target)
+    setFocusTarget({ ...target, requestedAt: Date.now() })
     setCurrentDate(new Date(target.dateIso))
   }, [pendingFocus, setCurrentDate])
 
-  // 匹配: 等当前视图窗口覆盖目标日期且数据就位 (isFetching 排除
-  // keepPreviousData 旧窗口留屏) 再按 uid/recurrence_id 找; 找到只设选中
-  // 锚点 + 滚动跟随, 不强开抽屉 (「查看」语义是定位上下文, 详情已在邮件
-  // 卡片看过; Enter 一键可开). 成败都清 target — uid 不在窗口 = 事件过期/
-  // 被删, 静默放弃.
-  useEffect(() => {
-    if (!focusTarget || !navWindow || navFetching || !navEvents) return
+  // 匹配: 等当前视图窗口覆盖目标日期且数据就位 (isFetching 排除 keepPreviousData 旧窗口留屏)
+  // 在渲染期完成一次定位收敛 + 清 target。
+  if (focusTarget && navWindow && !navFetching && navEvents) {
     const targetMs = Date.parse(focusTarget.dateIso)
-    if (targetMs < Date.parse(navWindow.fromIso) || targetMs >= Date.parse(navWindow.toIso)) return
-    const match = matchFocusTarget(navSeq, focusTarget, Date.now())
-    if (match) {
-      setAnchor(match)
-      if (focusTarget.openDrawer) {
-        setActive(match)
+    if (targetMs >= Date.parse(navWindow.fromIso) && targetMs < Date.parse(navWindow.toIso)) {
+      const match = matchFocusTarget(navSeq, focusTarget, focusTarget.requestedAt)
+      if (match) {
+        setAnchor(match)
+        if (focusTarget.openDrawer) {
+          setActive(match)
+        }
       }
+      setFocusTarget(null)
     }
-    setFocusTarget(null)
-  }, [focusTarget, navWindow, navFetching, navEvents, navSeq])
+  }
 
   // useCallback 包 callback — 让 useCalendarShortcuts 的 keydown listener 不会
   // 每次 CalendarLayout re-render 都 unbind+re-bind (闭包问题 §4.5)

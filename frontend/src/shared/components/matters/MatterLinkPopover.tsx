@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
@@ -181,7 +181,9 @@ export function MatterLinkPopover({
   // 🔴 `onClose` 是调用方的内联箭头（每次 render 换身份），只能进 ref —— 进依赖会让本 effect
   // 每次 render 重跑，cleanup 里的 focus() 就成了「每帧把焦点抢回触发按钮」。
   const onCloseRef = useRef(onClose)
-  onCloseRef.current = onClose
+  useLayoutEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
   const openerRef = useRef<HTMLElement | null>(null)
   const panelActive = open && !createOpen
   // G-32 —— 捕获浮层按菜单档 popIn（DUR.fast，从锚点那侧长出来）。只做进场：`open` 归 false

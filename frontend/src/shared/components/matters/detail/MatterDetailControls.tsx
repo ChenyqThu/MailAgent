@@ -126,7 +126,8 @@ export function StatusMenu({
   const Icon = MATTER_STATUS_ICONS[value]
   // 设计 Modal = fadeIn 遮罩 + popIn 卡片（ui.jsx:204-222）；走仓库统一 `useExitAnimation`
   // 通道（同 AddItemModal / 永久删除确认），不自造 keyframes。
-  const modalAnim = useExitAnimation<HTMLDivElement>(open, { card: '[data-anim-card]' })
+  const { shouldRender: renderStatusModal, scopeRef: statusModalRef } =
+    useExitAnimation<HTMLDivElement>(open, { card: '[data-anim-card]' })
   // 设计 Modal 支持 Esc 关闭（ui.jsx:206-210）；只在打开期间挂 document。
   useEffect(() => {
     if (!open) return undefined
@@ -155,9 +156,9 @@ export function StatusMenu({
         <Icon size={11} className="shrink-0" />
         {t(`matters.status.${value}`)}
       </button>
-      {modalAnim.shouldRender ? (
+      {renderStatusModal ? (
         <div
-          ref={modalAnim.scopeRef}
+          ref={statusModalRef}
           role="presentation"
           onClick={(event) => {
             // 设计的遮罩点击即关（ui.jsx:211）；只认遮罩本体，卡片内点击不冒到这里关掉。
@@ -457,16 +458,21 @@ export function MatterTypeEditor({
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const anchorRef = useRef<HTMLDivElement>(null)
-  const menuAnim = useExitAnimation<HTMLDivElement>(open, {
-    backdrop: false,
-    from: { autoAlpha: 0, y: -4, scale: 0.98, transformOrigin: 'top left' },
-    enterDuration: DUR.fast
-  })
+  const { shouldRender: renderTypeMenu, scopeRef: typeMenuRef } = useExitAnimation<HTMLDivElement>(
+    open,
+    {
+      backdrop: false,
+      from: { autoAlpha: 0, y: -4, scale: 0.98, transformOrigin: 'top left' },
+      enterDuration: DUR.fast
+    }
+  )
 
   // 打开时清空上一次的搜索词（关闭期间不清 —— 退场还在播，清了会当场换内容）。
-  useEffect(() => {
+  const [prevOpen, setPrevOpen] = useState(open)
+  if (prevOpen !== open) {
+    setPrevOpen(open)
     if (open) setQuery('')
-  }, [open])
+  }
 
   useEffect(() => {
     if (!open) return undefined
@@ -551,9 +557,9 @@ export function MatterTypeEditor({
         {value ?? t('matters.detail.typeUnset')}
         <ChevronDown size={8} className="shrink-0 opacity-[0.55]" />
       </button>
-      {menuAnim.shouldRender ? (
+      {renderTypeMenu ? (
         <div
-          ref={menuAnim.scopeRef}
+          ref={typeMenuRef}
           role="listbox"
           aria-label={t('matters.detail.type')}
           className="absolute left-0 top-[calc(100%+5px)] z-30 max-h-80 w-52 overflow-y-auto rounded-[var(--r-pop)] border border-ink-border bg-ink-1 p-1.5 shadow-md scrollbar-thin"

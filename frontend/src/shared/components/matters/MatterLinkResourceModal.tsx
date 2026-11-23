@@ -14,7 +14,7 @@
 //      （⌘K 第五 lane / agent `library_search` 同一个服务端内核），纯关键词、无字段语法。
 //      落库形状与 ③ 同为 `kind='file'`，靠 `library:` 前缀与附件的 `attachment:` 互斥。
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useIsFetching, useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { FolderTree, Link2, Loader2, Mail, Paperclip, Search, Sparkles } from 'lucide-react'
@@ -132,19 +132,22 @@ export function MatterLinkResourceModal({
   const [pinned, setPinned] = useState(false)
 
   // 每次打开都回到干净状态（tab 跟随调用方的预选）。
-  useEffect(() => {
-    if (!open) return
-    setTab(initialTab)
-    setSearch('')
-    setLibrarySearch('')
-    setMailPicked([])
-    setAttachmentPicked([])
-    setLibraryPicked([])
-    setRawLinks('')
-    setLinkOff([])
-    setSubscribeThread(true)
-    setPinned(false)
-  }, [open, initialTab])
+  const [prevModalSync, setPrevModalSync] = useState({ open, initialTab })
+  if (prevModalSync.open !== open || prevModalSync.initialTab !== initialTab) {
+    setPrevModalSync({ open, initialTab })
+    if (open) {
+      setTab(initialTab)
+      setSearch('')
+      setLibrarySearch('')
+      setMailPicked([])
+      setAttachmentPicked([])
+      setLibraryPicked([])
+      setRawLinks('')
+      setLinkOff([])
+      setSubscribeThread(true)
+      setPinned(false)
+    }
+  }
 
   const linkedKeys = useMemo(
     () => new Set(resources.map((item) => item.resource.external_key)),

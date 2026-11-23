@@ -105,30 +105,38 @@ export function MatterCreateDialog({
   const researchAbortRef = useRef<AbortController | null>(null)
   const researchRequestRef = useRef(0)
 
-  useEffect(() => {
-    if (!open) {
-      researchRequestRef.current += 1
-      researchAbortRef.current?.abort()
-      researchAbortRef.current = null
-      return
+  const [prevDialogSync, setPrevDialogSync] = useState<{
+    open: boolean
+    source: MatterCreateSource | null | undefined
+  }>({ open: false, source: undefined })
+  if (prevDialogSync.open !== open || prevDialogSync.source !== source) {
+    setPrevDialogSync({ open, source })
+    if (open) {
+      setTitle(source ? stripEmailSubjectPrefix(source.subject) : '')
+      setMatterTypeSelection(TYPE_UNSET)
+      setCustomMatterType('')
+      setPriority('p1')
+      setBackground('')
+      setGoal('')
+      setLinkScope(source?.threadId ? 'thread' : 'single')
+      setDuplicateCandidates([])
+      setDuplicatesLoading(false)
+      setUsingExistingId(null)
+      setResearchState('idle')
+      setResearchStep(0)
+      setResearchError('')
+      setResearchSummary(null)
+      setSuggestedResources([])
+      setSuggestedStakeholders([])
     }
-    setTitle(source ? stripEmailSubjectPrefix(source.subject) : '')
-    setMatterTypeSelection(TYPE_UNSET)
-    setCustomMatterType('')
-    setPriority('p1')
-    setBackground('')
-    setGoal('')
-    setLinkScope(source?.threadId ? 'thread' : 'single')
-    setDuplicateCandidates([])
-    setDuplicatesLoading(false)
-    setUsingExistingId(null)
-    setResearchState('idle')
-    setResearchStep(0)
-    setResearchError('')
-    setResearchSummary(null)
-    setSuggestedResources([])
-    setSuggestedStakeholders([])
-  }, [open, source])
+  }
+
+  useEffect(() => {
+    if (open) return
+    researchRequestRef.current += 1
+    researchAbortRef.current?.abort()
+    researchAbortRef.current = null
+  }, [open])
 
   useEffect(() => {
     if (researchState !== 'loading') return
@@ -146,14 +154,13 @@ export function MatterCreateDialog({
     []
   )
 
+  const trimmedTitle = title.trim()
+  const dupQueryReady = open && (trimmedTitle.length >= 3 || source !== null)
+  const effectiveDuplicateCandidates = dupQueryReady ? duplicateCandidates : []
+  const effectiveDuplicatesLoading = dupQueryReady && duplicatesLoading
+
   useEffect(() => {
-    if (!open) return
-    const trimmedTitle = title.trim()
-    if (trimmedTitle.length < 3 && source === null) {
-      setDuplicateCandidates([])
-      setDuplicatesLoading(false)
-      return
-    }
+    if (!dupQueryReady) return
     let active = true
     const timer = window.setTimeout(() => {
       setDuplicatesLoading(true)
@@ -189,7 +196,7 @@ export function MatterCreateDialog({
       active = false
       window.clearTimeout(timer)
     }
-  }, [api, background, goal, linkScope, open, source, title])
+  }, [api, background, dupQueryReady, goal, linkScope, open, source, title, trimmedTitle])
 
   // G-32 —— 入场遮罩 fadeIn + 卡片 popIn，走仓库统一动效通道（reduced-motion 内置短路）。
   // 关闭期间表单字段不会被清（上面那个 effect 的 `!open` 分支只中止调研请求），退场动画
@@ -512,7 +519,7 @@ export function MatterCreateDialog({
               className="w-full rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body outline-none focus:border-coral/60"
             />
           </label>
-          {duplicatesLoading || duplicateCandidates.length > 0 ? (
+          {effectiveDuplicatesLoading || effectiveDuplicateCandidates.length > 0 ? (
             <section
               className="rounded-[var(--r-card)] border border-ai/25 bg-ai/[0.06] p-3"
               aria-label={t('matters.create.duplicates.title')}
@@ -528,13 +535,13 @@ export function MatterCreateDialog({
                   </p>
                 </div>
               </div>
-              {duplicatesLoading ? (
+              {effectiveDuplicatesLoading ? (
                 <p className="mt-3 text-meta text-ink-fg-3">
                   {t('matters.create.duplicates.loading')}
                 </p>
               ) : null}
               <div className="mt-2 space-y-2">
-                {duplicateCandidates.map((candidate) => (
+                {effectiveDuplicateCandidates.map((candidate) => (
                   <article
                     key={candidate.matter.public_id}
                     className="rounded-[var(--r-ctl)] border border-ink-border bg-ink-1/70 p-3"

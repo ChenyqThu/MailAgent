@@ -222,9 +222,14 @@ export function TeamWorkspace(): React.ReactElement {
     (state) => state.targetRecordSessionId
   )
   const clearAgentsNavigation = useAgentsNavigation((state) => state.clear)
-  useEffect(() => {
-    if (navigationTargetAgentId === null || isLoading) return
-    const target = findMemberByAgentId(members, navigationTargetAgentId)
+  const navKey =
+    navigationTargetAgentId !== null && !isLoading
+      ? `${navigationTargetAgentId}:${navigationTargetRecordSessionId ?? ''}`
+      : null
+  const [handledNavKey, setHandledNavKey] = useState<string | null>(null)
+  if (navKey !== null && navKey !== handledNavKey) {
+    setHandledNavKey(navKey)
+    const target = findMemberByAgentId(members, navigationTargetAgentId!)
     if (target) {
       setCreating(false)
       setSelectedKey(target.key)
@@ -233,15 +238,13 @@ export function TeamWorkspace(): React.ReactElement {
       setFocusSessionId(navigationTargetRecordSessionId)
       if (narrow) setMobileDetail(true)
     }
+  } else if (navKey === null && handledNavKey !== null) {
+    setHandledNavKey(null)
+  }
+  useEffect(() => {
+    if (navigationTargetAgentId === null || isLoading) return
     clearAgentsNavigation()
-  }, [
-    navigationTargetAgentId,
-    navigationTargetRecordSessionId,
-    isLoading,
-    members,
-    clearAgentsNavigation,
-    narrow
-  ])
+  }, [navigationTargetAgentId, isLoading, clearAgentsNavigation])
 
   // 新建入口的门控与流转。表单本体 = agent-config lane 的 CustomAgentCreateView；
   // 创建成功 → 选中新成员落设置档。

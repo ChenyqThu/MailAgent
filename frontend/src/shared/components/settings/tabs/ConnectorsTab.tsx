@@ -13,9 +13,11 @@ export function ConnectorsTab({ initialSection = 'connectors' }: ConnectorsTabPr
   const { t } = useTranslation()
   const [section, setSection] = React.useState<'connectors' | 'mcp'>(initialSection)
 
-  React.useEffect(() => {
+  const [prevInitialSection, setPrevInitialSection] = React.useState(initialSection)
+  if (prevInitialSection !== initialSection) {
+    setPrevInitialSection(initialSection)
     setSection(initialSection)
-  }, [initialSection])
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">

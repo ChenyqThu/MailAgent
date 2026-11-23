@@ -17,7 +17,7 @@
 // **行内的可操作性**。
 
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useId, useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { MoreHorizontal, type LucideIcon } from 'lucide-react'
@@ -97,12 +97,14 @@ export function TodayItemRow({
   const [dismissReasonOpen, setDismissReasonOpen] = useState(false)
   const [dismissReasonText, setDismissReasonText] = useState('')
   const dismissReasonId = useId()
-  useEffect(() => {
+  const [prevMenuOpen, setPrevMenuOpen] = useState(menuOpen)
+  if (prevMenuOpen !== menuOpen) {
+    setPrevMenuOpen(menuOpen)
     if (!menuOpen) {
       setDismissReasonOpen(false)
       setDismissReasonText('')
     }
-  }, [menuOpen])
+  }
 
   const isPausedPending = item.source === 'run' && item.state === 'paused_pending'
   const sessionId = item.source === 'run' ? item.link.sessionId : null

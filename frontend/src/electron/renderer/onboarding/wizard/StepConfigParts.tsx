@@ -230,17 +230,16 @@ export function NotionAuthBlock({
 }: NotionAuthBlockProps): React.JSX.Element | null {
   // null = flag 还没问出来 (先不渲染, 免得按钮闪现后消失)。serve-api 此时通常还没起,
   // fetch 失败 → default-ON → true。
-  const [enabled, setEnabled] = useState<boolean | null>(null)
+  const [enabled, setEnabled] = useState<boolean | null>(() =>
+    notionOauthAvailable() ? null : false
+  )
   const [emailId, setEmailId] = useState('')
   const [calendarId, setCalendarId] = useState('')
   const flow = useNotionOauthFlow({ onWritten: onConnected })
 
   useEffect(() => {
+    if (!notionOauthAvailable()) return
     let alive = true
-    if (!notionOauthAvailable()) {
-      setEnabled(false)
-      return
-    }
     void fetchNotionOauthEnabled()
       .then((v) => {
         if (alive) setEnabled(v)

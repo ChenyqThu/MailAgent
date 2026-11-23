@@ -30,9 +30,11 @@ export function SettingsSearchBar({
     [query, includeMatters]
   )
 
-  React.useEffect(() => {
+  const [prevQuery, setPrevQuery] = React.useState(query)
+  if (prevQuery !== query) {
+    setPrevQuery(query)
     setActiveIndex(0)
-  }, [query])
+  }
 
   // ⌘F / Ctrl+F 劫持为设置页全局检索，避免原生页内查找遮挡结果面板。
   React.useEffect(() => {

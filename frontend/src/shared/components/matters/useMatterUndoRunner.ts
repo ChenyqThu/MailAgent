@@ -11,7 +11,7 @@
 // E_VERSION_CONFLICT and is reported as such rather than retried — "there were later changes" is
 // exactly when a blind undo is the wrong thing to do.
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
@@ -55,7 +55,9 @@ export function useMatterUndoRunner(publicId: string): MatterUndoRunner {
   // 哪里都已过期，照常失效。
   const generationRef = useRef(0)
   const publicIdRef = useRef(publicId)
-  publicIdRef.current = publicId
+  useLayoutEffect(() => {
+    publicIdRef.current = publicId
+  }, [publicId])
   const inflightRef = useRef(new Map<string, symbol>())
   const writeState = useCallback((toolCallId: string, next: MatterUndoState): void => {
     statesRef.current = { ...statesRef.current, [toolCallId]: next }

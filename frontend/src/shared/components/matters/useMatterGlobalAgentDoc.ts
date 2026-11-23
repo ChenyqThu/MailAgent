@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
@@ -75,14 +75,12 @@ export function useMatterTaskContract(onSaved?: () => void): MatterTaskContract 
   const [loaded, setLoaded] = useState(false)
   const defaultContent = doc.data?.defaultContent ?? ''
 
-  useEffect(() => {
-    if (doc.data !== undefined && !loaded) {
-      // 🔴 库里空 = 跟随代码默认。空框会被读成"没有预设"（0812 dogfood 实测），所以未自定义
-      // 时把**当前生效的默认全文**填进来：看得见、可直接改。存储语义不变，见下方 save。
-      setDraft(doc.data.content || doc.data.defaultContent)
-      setLoaded(true)
-    }
-  }, [doc.data, loaded])
+  if (doc.data !== undefined && !loaded) {
+    // 🔴 库里空 = 跟随代码默认。空框会被读成"没有预设"（0812 dogfood 实测），所以未自定义
+    // 时把**当前生效的默认全文**填进来：看得见、可直接改。存储语义不变，见下方 save。
+    setDraft(doc.data.content || doc.data.defaultContent)
+    setLoaded(true)
+  }
 
   const isDefault = draft.trim() === defaultContent.trim()
 

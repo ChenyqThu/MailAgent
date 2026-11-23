@@ -5,7 +5,7 @@
 // 提示「已被改动」、显示当前版本（🔴 靠重拉 `GET /library/file/{id}`，409 body 到不了 UI）、
 // 保留我的文本不丢。「用我的覆盖」= 拿当前版本的 hash 再写一次；「放弃」= 回到当前版本。
 
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { TriangleAlert } from 'lucide-react'
 
@@ -66,9 +66,9 @@ export function MarkdownEditor({ file, mode, onModeChange }: Props): ReactElemen
   //     **跳过** reseed，草稿原样留在编辑框里。
   // 🔴 不要改成「content 没变就不 seed」—— 那会连带把取消的丢弃语义一起改掉。
   // 头部那枚「编辑」按钮再点一次也属于后者（它是显示开关，不是取消）：草稿留着。
-  const userLeftEdit = useRef(true)
+  const [userLeftEdit, setUserLeftEdit] = useState(true)
   const leaveEdit = useCallback((): void => {
-    userLeftEdit.current = true
+    setUserLeftEdit(true)
     onModeChange('read')
   }, [onModeChange])
 
@@ -77,17 +77,16 @@ export function MarkdownEditor({ file, mode, onModeChange }: Props): ReactElemen
     hash: file.content_hash,
     mode
   })
-  useEffect(() => {
-    if (seeded.mode === mode && seeded.hash === file.content_hash) return
+  if (seeded.mode !== mode || seeded.hash !== file.content_hash) {
     setSeeded({ hash: file.content_hash, mode })
-    if (mode === 'edit' && seeded.mode !== 'edit' && userLeftEdit.current) {
+    if (mode === 'edit' && seeded.mode !== 'edit' && userLeftEdit) {
       // 刚进编辑态：草稿 = 磁盘原文（含 frontmatter，用户编辑的是真文件）。
       setText(content)
       setNote('')
       setConflict(null)
-      userLeftEdit.current = false
+      setUserLeftEdit(false)
     }
-  }, [content, file.content_hash, mode, seeded])
+  }
 
   async function write(expectedHash: string | null): Promise<void> {
     if (file.id === null) return

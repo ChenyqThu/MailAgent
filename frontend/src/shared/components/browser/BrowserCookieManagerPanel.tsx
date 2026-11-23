@@ -42,7 +42,9 @@ export function BrowserCookieManagerPanel({
 
   const [activeTab, setActiveTab] = useState<'stored' | 'import'>(initialTab)
   const [storedDomains, setStoredDomains] = useState<ManagedCookieDomainSummary[]>([])
-  const [storedLoading, setStoredLoading] = useState(false)
+  const [storedLoading, setStoredLoading] = useState(
+    () => initialTab === 'stored' && typeof mailApi.connector.managedCookieDomains === 'function'
+  )
   const [storedError, setStoredError] = useState<string | null>(null)
   const [storedSearch, setStoredSearch] = useState('')
   const [clearingDomain, setClearingDomain] = useState<string | null>(null)
@@ -51,7 +53,9 @@ export function BrowserCookieManagerPanel({
   const [profiles, setProfiles] = useState<ChromeProfileSummary[]>([])
   const [selectedProfileId, setSelectedProfileId] = useState('Default')
   const [chromeDomains, setChromeDomains] = useState<ChromeCookieDomainSummary[]>([])
-  const [chromeLoading, setChromeLoading] = useState(false)
+  const [chromeLoading, setChromeLoading] = useState(
+    () => initialTab === 'import' && typeof mailApi.connector.chromeCookieDomains === 'function'
+  )
   const [chromeError, setChromeError] = useState<string | null>(null)
   const [importSearch, setImportSearch] = useState('')
   const [selectedDomains, setSelectedDomains] = useState<Set<string>>(() => new Set())
@@ -83,22 +87,6 @@ export function BrowserCookieManagerPanel({
     }
   }, [mailApi.connector.managedCookieDomains])
 
-  const loadProfiles = useCallback(async (): Promise<void> => {
-    const fn = mailApi.connector.chromeProfiles
-    if (!fn) return
-    try {
-      const res = await fn()
-      if (!mountedRef.current) return
-      const list = res.profiles ?? []
-      setProfiles(list)
-      if (list.length > 0 && !list.some((p) => p.profile_id === selectedProfileId)) {
-        setSelectedProfileId(list[0].profile_id)
-      }
-    } catch {
-      /* ignore profile discovery failure; falls back to Default */
-    }
-  }, [mailApi.connector.chromeProfiles, selectedProfileId])
-
   const loadChromeDomains = useCallback(
     async (profileId: string): Promise<void> => {
       const fn = mailApi.connector.chromeCookieDomains
@@ -127,13 +115,71 @@ export function BrowserCookieManagerPanel({
   )
 
   useEffect(() => {
+    let active = true
     if (activeTab === 'stored') {
-      void loadStoredDomains()
-    } else {
-      void loadProfiles()
-      void loadChromeDomains(selectedProfileId)
+      const fn = mailApi.connector.managedCookieDomains
+      if (!fn) return undefined
+      void fn()
+        .then((res) => {
+          if (active && mountedRef.current) setStoredDomains(res.domains ?? [])
+        })
+        .catch((err) => {
+          if (active && mountedRef.current) setStoredError(errorMessage(err))
+        })
+        .finally(() => {
+          if (active && mountedRef.current) setStoredLoading(false)
+        })
+      return () => {
+        active = false
+      }
     }
-  }, [activeTab, loadStoredDomains, loadProfiles, loadChromeDomains, selectedProfileId])
+    const profilesFn = mailApi.connector.chromeProfiles
+    if (profilesFn) {
+      void profilesFn()
+        .then((res) => {
+          if (!active || !mountedRef.current) return
+          const list = res.profiles ?? []
+          setProfiles(list)
+          if (list.length > 0 && !list.some((p) => p.profile_id === selectedProfileId)) {
+            setSelectedProfileId(list[0].profile_id)
+          }
+        })
+        .catch(() => {
+          /* ignore profile discovery failure; falls back to Default */
+        })
+    }
+    const domainsFn = mailApi.connector.chromeCookieDomains
+    if (domainsFn) {
+      void domainsFn(selectedProfileId)
+        .then((res) => {
+          if (!active || !mountedRef.current) return
+          const nextDomains = res.domains ?? []
+          setChromeDomains(nextDomains)
+          if (touchedProfileRef.current !== selectedProfileId) {
+            setSelectedDomains(
+              new Set(nextDomains.filter((d) => !d.sensitive).map((d) => d.domain))
+            )
+          }
+        })
+        .catch((err) => {
+          if (!active || !mountedRef.current) return
+          setChromeError(errorMessage(err))
+          setChromeDomains([])
+        })
+        .finally(() => {
+          if (active && mountedRef.current) setChromeLoading(false)
+        })
+    }
+    return () => {
+      active = false
+    }
+  }, [
+    activeTab,
+    mailApi.connector.chromeCookieDomains,
+    mailApi.connector.chromeProfiles,
+    mailApi.connector.managedCookieDomains,
+    selectedProfileId
+  ])
 
   const filteredStored = useMemo(() => {
     const q = storedSearch.trim().toLowerCase()
@@ -258,7 +304,11 @@ export function BrowserCookieManagerPanel({
           <div className="flex items-center rounded-md border border-ink-border-soft bg-ink-1 p-0.5">
             <button
               type="button"
-              onClick={() => setActiveTab('stored')}
+              onClick={() => {
+                if (mailApi.connector.managedCookieDomains) setStoredLoading(true)
+                setStoredError(null)
+                setActiveTab('stored')
+              }}
               className={cn(
                 'rounded px-2 py-1 text-aux transition-colors duration-fast',
                 activeTab === 'stored'
@@ -270,7 +320,11 @@ export function BrowserCookieManagerPanel({
             </button>
             <button
               type="button"
-              onClick={() => setActiveTab('import')}
+              onClick={() => {
+                if (mailApi.connector.chromeCookieDomains) setChromeLoading(true)
+                setChromeError(null)
+                setActiveTab('import')
+              }}
               className={cn(
                 'rounded px-2 py-1 text-aux transition-colors duration-fast',
                 activeTab === 'import'
@@ -342,7 +396,11 @@ export function BrowserCookieManagerPanel({
                 </p>
                 <button
                   type="button"
-                  onClick={() => setActiveTab('import')}
+                  onClick={() => {
+                    if (mailApi.connector.chromeCookieDomains) setChromeLoading(true)
+                    setChromeError(null)
+                    setActiveTab('import')
+                  }}
                   className="inline-flex items-center gap-1.5 rounded-md bg-coral/100 px-3 py-1.5 text-aux font-medium text-accent-fg transition-opacity hover:opacity-90"
                 >
                   <Download size={14} />
@@ -387,7 +445,11 @@ export function BrowserCookieManagerPanel({
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-ink-border-soft bg-ink-2/70 px-3 py-2">
             <button
               type="button"
-              onClick={() => setActiveTab('import')}
+              onClick={() => {
+                if (mailApi.connector.chromeCookieDomains) setChromeLoading(true)
+                setChromeError(null)
+                setActiveTab('import')
+              }}
               className="inline-flex items-center gap-1.5 rounded-md border border-ink-border bg-ink-1 px-2.5 py-1.5 text-aux font-medium text-ink-fg transition-colors hover:bg-ink-3"
             >
               <Download size={14} />
@@ -439,6 +501,8 @@ export function BrowserCookieManagerPanel({
               disabled={importing}
               onChange={(e) => {
                 touchedProfileRef.current = null
+                if (mailApi.connector.chromeCookieDomains) setChromeLoading(true)
+                setChromeError(null)
                 setSelectedProfileId(e.target.value)
               }}
               className="h-8 rounded-md border border-ink-border bg-ink-2 px-2 text-aux text-ink-fg"

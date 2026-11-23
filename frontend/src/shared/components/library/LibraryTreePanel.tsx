@@ -28,6 +28,7 @@ import {
   User
 } from 'lucide-react'
 
+import { LiveBox } from '@shared/hooks/liveBox'
 import { Button } from '@shared/components/ui/button'
 import {
   Dialog,
@@ -102,9 +103,16 @@ export function LibraryTreePanel({
 }: Props): ReactElement {
   const { t } = useTranslation()
   const tree = useLibraryTreeQuery()
-  const menu = useCursorMenu<LibraryTreeNode>()
-  const fileInput = useRef<HTMLInputElement | null>(null)
-  const importTarget = useRef<string | null>(null)
+  const {
+    open: menuOpen,
+    close: closeMenu,
+    openAt: openMenuAt,
+    payload: menuPayload,
+    anchorProps: menuAnchorProps,
+    anchorRef: menuAnchorRef
+  } = useCursorMenu<LibraryTreeNode>()
+  const [fileInputBox] = useState(() => new LiveBox<HTMLInputElement | null>(null))
+  const [importTargetBox] = useState(() => new LiveBox<string | null>(null))
   const addMount = useAddMountFlow()
   const mounts = useMountMutations()
   const [renaming, setRenaming] = useState<{ id: number; label: string } | null>(null)
@@ -212,7 +220,7 @@ export function LibraryTreePanel({
   }, [roots, t])
 
   const menuItems = useMemo((): readonly PopmenuItem[] => {
-    const node = menu.payload
+    const node = menuPayload
     if (node === null) return []
     if (node.kind === 'trash')
       return [{ kind: 'label', id: 'notice', label: t('library.trash.notice') }]
@@ -293,14 +301,14 @@ export function LibraryTreePanel({
         id: 'import',
         label: t('library.tree.menu.importFile'),
         onSelect: () => {
-          importTarget.current = node.path
-          fileInput.current?.click()
+          importTargetBox.set(node.path)
+          fileInputBox.get()?.click()
         }
       },
       { kind: 'separator', id: 's1' },
       reveal
     ]
-  }, [menu.payload, mounts, onNewMarkdown, onReveal, t])
+  }, [fileInputBox, importTargetBox, menuPayload, mounts, onNewMarkdown, onReveal, t])
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -368,7 +376,7 @@ export function LibraryTreePanel({
             // 不可用的挂载根仍要能右键 —— 「卸载」是它唯一的出口（卷拔了 / 目录移走）。
             const isMountRoot = target.kind === 'root' && target.mount !== null
             if (target.unavailable && !isMountRoot) return
-            menu.openAt(event, target)
+            openMenuAt(event, target)
           }}
         />
         <button
@@ -381,13 +389,13 @@ export function LibraryTreePanel({
           <span className="flex-1 truncate">{t('library.tree.addFolder')}</span>
         </button>
       </div>
-      <span {...menu.anchorProps} />
+      <span {...menuAnchorProps} />
       <Popmenu
-        open={menu.open && menuItems.length > 0}
-        onClose={menu.close}
-        ariaLabel={t('library.tree.nodeMenuAria', { name: menu.payload?.name ?? '' })}
+        open={menuOpen && menuItems.length > 0}
+        onClose={closeMenu}
+        ariaLabel={t('library.tree.nodeMenuAria', { name: menuPayload?.name ?? '' })}
         portal
-        triggerRef={menu.anchorRef}
+        triggerRef={menuAnchorRef}
         align="start"
         width={240}
         items={menuItems}
@@ -416,15 +424,17 @@ export function LibraryTreePanel({
         busy={mounts.busy}
       />
       <input
-        ref={fileInput}
+        ref={(el) => {
+          fileInputBox.set(el)
+        }}
         type="file"
         multiple
         hidden
         onChange={(event) => {
-          const folder = importTarget.current
+          const folder = importTargetBox.get()
           const files = Array.from(event.target.files ?? [])
           event.target.value = ''
-          importTarget.current = null
+          importTargetBox.set(null)
           if (folder && files.length > 0) onImportFiles(folder, files)
         }}
       />

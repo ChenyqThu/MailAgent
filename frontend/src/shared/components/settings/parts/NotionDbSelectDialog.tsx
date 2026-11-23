@@ -110,10 +110,12 @@ export function NotionDbSelectDialog({
   const [calendarId, setCalendarId] = React.useState('')
 
   // 候选换了（新一次授权）→ 清掉上一次的选择，避免提交一个不在本次列表里的 id。
-  React.useEffect(() => {
+  const [prevCandidates, setPrevCandidates] = React.useState(candidates)
+  if (prevCandidates !== candidates) {
+    setPrevCandidates(candidates)
     setEmailId('')
     setCalendarId('')
-  }, [candidates])
+  }
 
   const canSubmit = emailId !== '' && calendarId !== '' && emailId !== calendarId && !busy
 

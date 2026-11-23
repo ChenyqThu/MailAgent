@@ -21,7 +21,7 @@
 //     toggle (reads useEmailFilter + useBatch stores directly; only the
 //     pipeline-derived counts arrive as props)
 
-import { useCallback, useRef } from 'react'
+import { useCallback, useLayoutEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { List } from 'react-window'
 import { Mail } from 'lucide-react'
@@ -72,7 +72,9 @@ export function EmailList(): React.ReactElement {
   // 顶着空标题等详情回填）。rows 走 ref —— 放进 useCallback 依赖会让 5s poll 的每次
   // rows 变化都换回调引用，react-window 把可见行全部重渲一遍。
   const rowsRef = useRef(rows)
-  rowsRef.current = rows
+  useLayoutEffect(() => {
+    rowsRef.current = rows
+  }, [rows])
   const handleSelect = useCallback(
     (id: number): void => {
       let title: string | undefined

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, ChevronDown, ChevronRight, Plus, Search, Settings2 } from 'lucide-react'
 
@@ -50,13 +50,16 @@ export function MatterTagPicker({
   const [shape, setShape] = useState<MatterTagShape>(MATTER_TAG_DEFAULT_SHAPE)
   const [styleOpen, setStyleOpen] = useState(false)
   // 每次打开重置搜索与样式草稿（设计 :117 打开即清 q；样式回默认档）。
-  useEffect(() => {
-    if (!open) return
-    setSearch('')
-    setColor(MATTER_TAG_DEFAULT_COLOR)
-    setShape(MATTER_TAG_DEFAULT_SHAPE)
-    setStyleOpen(false)
-  }, [open])
+  const [prevOpen, setPrevOpen] = useState(open)
+  if (prevOpen !== open) {
+    setPrevOpen(open)
+    if (open) {
+      setSearch('')
+      setColor(MATTER_TAG_DEFAULT_COLOR)
+      setShape(MATTER_TAG_DEFAULT_SHAPE)
+      setStyleOpen(false)
+    }
+  }
   const normalizedSearch = normalizeMatterTagInput(search)
   const selectedSet = useMemo(() => new Set(selectedTags), [selectedTags])
   const availableTags = useMemo(

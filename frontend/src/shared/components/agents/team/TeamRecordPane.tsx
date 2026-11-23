@@ -280,17 +280,27 @@ export function TeamRecordPane({
   // 通知深链点名的那条记录：run 行（run.sessionId）与会话行（session.id）都可能是它 ——
   // 同一个 headless run 在时间线里只留其中一种形态（有 run 台账时会话行被去重掉）。
   // entries 在途时找不到就等下一次变化，不回落到默认选中项（那会让深链看起来「跳错了」）。
+  const focusHit =
+    focusSessionId == null
+      ? undefined
+      : entries.find(
+          (entry) =>
+            (entry.kind === 'run' && entry.run.sessionId === focusSessionId) ||
+            (entry.kind === 'session' && entry.session.id === focusSessionId)
+        )
+  const [consumedFocusKey, setConsumedFocusKey] = useState<string | null>(null)
+  const focusReqKey =
+    focusSessionId != null && focusHit ? `${focusSessionId}:${focusHit.key}` : null
+  if (focusReqKey !== null && focusReqKey !== consumedFocusKey) {
+    setConsumedFocusKey(focusReqKey)
+    setPicked(focusHit!.key)
+  } else if (focusSessionId == null && consumedFocusKey !== null) {
+    setConsumedFocusKey(null)
+  }
   useEffect(() => {
-    if (focusSessionId == null) return
-    const hit = entries.find(
-      (entry) =>
-        (entry.kind === 'run' && entry.run.sessionId === focusSessionId) ||
-        (entry.kind === 'session' && entry.session.id === focusSessionId)
-    )
-    if (!hit) return
-    setPicked(hit.key)
+    if (focusSessionId == null || !focusHit) return
     onFocusConsumed?.()
-  }, [entries, focusSessionId, onFocusConsumed])
+  }, [focusSessionId, focusHit, onFocusConsumed])
 
   const effectiveCollapsed = forcedCollapsed || collapsed
 

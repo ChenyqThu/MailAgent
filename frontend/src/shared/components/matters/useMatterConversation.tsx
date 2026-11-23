@@ -17,7 +17,7 @@
 // 🔴 锚点二源：`sessionMatter`（会话行自己的 anchor，从历史里选中时的真相）优先于 `seed`
 // （dock 唤出时带的那件事）。两者都没有 = 这就是一场普通对话。
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ClipboardList } from 'lucide-react'
 
@@ -222,7 +222,9 @@ export function useMatterConversation(
   // 🔴 异步落地时"当前这条线程是谁"的活体真相。`anchor` 是 props 派生值，await 期间会变；
   // 闭包里那份只是**发起时**的快照，不能拿来判"现在还是不是它"（撤销执行前的复核靠它）。
   const anchorRef = useRef<MatterChatTarget | null>(anchor)
-  anchorRef.current = anchor
+  useLayoutEffect(() => {
+    anchorRef.current = anchor
+  }, [anchor])
 
   // ── 写入回执 + 撤销 ──
   const anchorPublicId = anchor?.publicId ?? null

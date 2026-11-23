@@ -392,7 +392,7 @@ function ComposeSplitButton({
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
     }
-  }, [menuOpen])
+  }, [menuOpen, menuRef])
 
   const pick = (mode: ComposeMode): void => {
     setMenuOpen(false)
@@ -722,6 +722,42 @@ function ResyncConfirmDialog({
 
 // ─── Root component ──────────────────────────────────────────────────────
 
+function MatterToolbarButton({
+  matter,
+  wantsLabels
+}: {
+  matter: NonNullable<ToolbarProps['matter']>
+  wantsLabels: boolean
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const { anchorRef, state, count, open, onToggle, popover } = matter
+  return (
+    <div ref={anchorRef} className="relative">
+      <GhostBtn
+        icon={
+          <span className="relative">
+            <BriefcaseBusiness size={13} strokeWidth={1.75} />
+            {state === 'multiple' ? (
+              <span className="absolute -right-2 -top-2 min-w-3.5 rounded-full bg-coral/100 px-0.5 text-center text-[8px] leading-3.5 text-accent-fg">
+                {count}
+              </span>
+            ) : null}
+          </span>
+        }
+        label={t(state === 'unlinked' ? 'toolbar.matters' : 'toolbar.mattersLinked')}
+        showLabel={wantsLabels}
+        // active/pressed = 「这封邮件已挂在事项上」（设计 create.jsx:302 的 linked 态）。
+        active={state !== 'unlinked'}
+        pressed={state !== 'unlinked'}
+        expanded={open}
+        hoverHint={t('toolbar.matterMenuHint')}
+        onClick={onToggle}
+      />
+      {popover}
+    </div>
+  )
+}
+
 export function EmailToolbar({
   translate,
   onCreateDraft,
@@ -946,31 +982,7 @@ export function EmailToolbar({
       {/* G-25 (Q2=c) —— 「创建事项」「跟进 Agent」两按钮收敛为一个「事项」按钮（0812 D4
           的两按钮问题就此裁掉）：点开捕获浮层（AI 调研创建 / 快速新建 / 加入已有 / 跟进
           Agent 次级入口），已归属时按钮转按下态 + 标「已在事项中」。 */}
-      {matter ? (
-        <div ref={matter.anchorRef} className="relative">
-          <GhostBtn
-            icon={
-              <span className="relative">
-                <BriefcaseBusiness size={13} strokeWidth={1.75} />
-                {matter.state === 'multiple' ? (
-                  <span className="absolute -right-2 -top-2 min-w-3.5 rounded-full bg-coral/100 px-0.5 text-center text-[8px] leading-3.5 text-accent-fg">
-                    {matter.count}
-                  </span>
-                ) : null}
-              </span>
-            }
-            label={t(matter.state === 'unlinked' ? 'toolbar.matters' : 'toolbar.mattersLinked')}
-            showLabel={wantsLabels}
-            // active/pressed = 「这封邮件已挂在事项上」（设计 create.jsx:302 的 linked 态）。
-            active={matter.state !== 'unlinked'}
-            pressed={matter.state !== 'unlinked'}
-            expanded={matter.open}
-            hoverHint={t('toolbar.matterMenuHint')}
-            onClick={matter.onToggle}
-          />
-          {matter.popover}
-        </div>
-      ) : null}
+      {matter ? <MatterToolbarButton matter={matter} wantsLabels={wantsLabels} /> : null}
 
       {/* Right cluster: Open Notion · Divider · Prev · Next · Divider · AIPanelToggle.
           AIPanelToggle sits at the **very right** because it's the "open

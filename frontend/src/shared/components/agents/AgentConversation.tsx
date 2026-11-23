@@ -12,7 +12,7 @@
 //   D7 — a failed gateway /health probe surfaces an error notice + retry (the probe stays); the
 //        active session stays readable instead of silently swapping engines.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -469,24 +469,18 @@ export function AgentConversation({
   // 判定与落地前复核都在 `./ensureSession` 的 createEnsureSession 里。
   const chatAdoptSession = chat.adoptSession
   const activeSessionIdRef = useRef<number | null>(chat.activeSessionId)
-  activeSessionIdRef.current = chat.activeSessionId
   const navEpochRef = useRef(chat.navEpoch)
-  navEpochRef.current = chat.navEpoch
   const matterAnchorRef = useRef<MatterChatTarget | null>(null)
   // 这几个 ref 让工厂只造一次（造第二次 = 在途状态清零 = 去重失效）。
   const mailApiRef = useRef(mailApi)
-  mailApiRef.current = mailApi
   const modelRef = useRef(model)
-  modelRef.current = model
   const adoptRef = useRef(chatAdoptSession)
-  adoptRef.current = chatAdoptSession
-  // P4b — agent 身份进线程去重键（同 anchor 不同 agent 绝不复用在途创建）。ref 形态与
-  // matterAnchorRef 同构；团队宿主按成员 key 重挂，mount 内不变。
+  // P4b — agent 身份进线程去重键（同 anchor 不同 agent 绝不复用在途创建）。
   const agentIdentityRef = useRef(agentIdentity ?? null)
-  agentIdentityRef.current = agentIdentity ?? null
-  const onEnsureSession = useMemo(
-    () =>
-      createEnsureSession({
+  const ensureSessionRef = useRef<(() => Promise<number>) | null>(null)
+  const onEnsureSession = useCallback((): Promise<number> => {
+    if (!ensureSessionRef.current) {
+      ensureSessionRef.current = createEnsureSession({
         getExistingSessionId: () => activeSessionIdRef.current,
         // 锚点从 ref 读（matter binding 在本 hook 之后才算得出来；真正执行时它已就位）。
         getIdentity: () => ({
@@ -523,9 +517,10 @@ export function AgentConversation({
           adoptRef.current(session)
           activeSessionIdRef.current = session.id
         }
-      }),
-    []
-  )
+      })
+    }
+    return ensureSessionRef.current()
+  }, [])
 
   // ── matter binding (chip / 检索范围 / 缺口卡 / 写入回执 surface) ─────────────────────────────
   // 0812：事项对话没有第二套 UI —— 这里只是往同一个 thread 上挂事项那几件事。
@@ -545,12 +540,32 @@ export function AgentConversation({
     thinkingEnabled: thinkingActive
   })
   const matterAnchor = matter.anchor
-  matterAnchorRef.current = matterAnchor
-  // 08-27 标签工作区 —— 锁定目标随最新一帧同步（send 时从 ref 读，见 buildInjectedContext）。
-  chatLockTargetsRef.current = {
-    email: emailContext?.internalId ?? emailAnchorId,
-    matter: matterAnchor?.id ?? null
-  }
+  const lockEmailTarget = emailContext?.internalId ?? emailAnchorId
+  const lockMatterTarget = matterAnchor?.id ?? null
+  useLayoutEffect(() => {
+    activeSessionIdRef.current = chat.activeSessionId
+    navEpochRef.current = chat.navEpoch
+    mailApiRef.current = mailApi
+    modelRef.current = model
+    adoptRef.current = chatAdoptSession
+    agentIdentityRef.current = agentIdentity ?? null
+    matterAnchorRef.current = matterAnchor
+    // 08-27 标签工作区 —— 锁定目标随最新一帧同步（send 时从 ref 读，见 buildInjectedContext）。
+    chatLockTargetsRef.current = {
+      email: lockEmailTarget,
+      matter: lockMatterTarget
+    }
+  }, [
+    chat.activeSessionId,
+    chat.navEpoch,
+    mailApi,
+    model,
+    chatAdoptSession,
+    agentIdentity,
+    matterAnchor,
+    lockEmailTarget,
+    lockMatterTarget
+  ])
   const inspectorEmailId = emailContext?.internalId ?? emailAnchorId
   const inspectorEmailSubject = emailContext?.subject ?? null
   const inspectorAnchors = useMemo<SessionInspectorBridgeProps['anchors']>(() => {

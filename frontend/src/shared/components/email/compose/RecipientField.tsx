@@ -129,14 +129,11 @@ export function RecipientField({
   const [chipSel, setChipSel] = useState<number | null>(null)
   const [editingIdx, setEditingIdx] = useState<number | null>(null)
   const [detail, setDetail] = useState<{ index: number; rect: DOMRect } | null>(null)
-  // Bumped when a suggestion teaches us a name for an already-present chip, so
-  // pasted/pre-filled chips upgrade from bare email to name once recognised.
-  const [, setCacheTick] = useState(0)
+  // email(lower) → display name, accumulated from picks + loaded suggestions.
+  const [learnedNames, setLearnedNames] = useState<Readonly<Record<string, string>>>({})
 
   const inputRef = useRef<HTMLInputElement>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
-  // email(lower) → display name, accumulated from picks + loaded suggestions.
-  const nameCacheRef = useRef<Map<string, string>>(new Map())
 
   const normalizedSelf = (selfEmail ?? '').trim().toLowerCase()
 
@@ -185,12 +182,12 @@ export function RecipientField({
       return {
         email: addr,
         // 通讯录 display_name 权威 > 邮件头/补全学到的名字 > 裸邮箱（调用方回落）。
-        name: directoryNames.get(key) ?? nameCacheRef.current.get(key) ?? '',
+        name: directoryNames.get(key) ?? learnedNames[key] ?? '',
         external: isExternal(addr),
         determinable: internalDomainSet.size > 0
       }
     },
-    [directoryNames, isExternal, internalDomainSet]
+    [directoryNames, isExternal, internalDomainSet, learnedNames]
   )
 
   // debounce + 查询键 + 条数上限归 ./contact-suggest（日历与会者字段同源）；
@@ -198,19 +195,20 @@ export function RecipientField({
   const { debounced, suggestions } = useContactSuggest({ query: input, enabled: focused, exclude })
 
   // Learn names as suggestions stream in; upgrade any matching chip's label.
-  useEffect(() => {
-    if (suggestions.length === 0) return
-    let learnedForChip = false
+  const [prevSuggestions, setPrevSuggestions] = useState(suggestions)
+  if (prevSuggestions !== suggestions) {
+    setPrevSuggestions(suggestions)
+    let updates: Record<string, string> | null = null
     for (const s of suggestions) {
       if (!s.name) continue
       const key = s.email.toLowerCase()
-      if (nameCacheRef.current.get(key) !== s.name) {
-        nameCacheRef.current.set(key, s.name)
-        if (valuesLowerSet.has(key)) learnedForChip = true
+      if ((updates?.[key] ?? learnedNames[key]) !== s.name) {
+        updates ??= { ...learnedNames }
+        updates[key] = s.name
       }
     }
-    if (learnedForChip) setCacheTick((t) => t + 1)
-  }, [suggestions, valuesLowerSet])
+    if (updates) setLearnedNames(updates)
+  }
 
   const trimmed = input.trim()
   // The raw-add row ("添加 xxx") shows when the canonicalized input is a complete
@@ -260,7 +258,11 @@ export function RecipientField({
 
   const selectSuggestion = useCallback(
     (c: ContactSuggestion) => {
-      if (c.name) nameCacheRef.current.set(c.email.toLowerCase(), c.name)
+      const name = c.name
+      if (name) {
+        const key = c.email.toLowerCase()
+        setLearnedNames((prev) => (prev[key] === name ? prev : { ...prev, [key]: name }))
+      }
       addTokens([c.email])
       setInput('')
       setHighlightedIndex(0)

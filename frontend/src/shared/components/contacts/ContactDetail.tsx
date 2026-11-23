@@ -4,7 +4,7 @@
 // 名字变体）→ 关联邮件（角色过滤 + 加载更多）→ 关联事项。
 // 危险操作全收进「更多操作」菜单（🔒 不放行内悬浮危险钮）；「合并」不渲染（WP3）。
 
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { ChevronLeft, EyeOff, MoreHorizontal } from 'lucide-react'
@@ -92,11 +92,13 @@ function ContactDetailView({
   const [headMenuOpen, setHeadMenuOpen] = useState(false)
   const headMenuRef = useRef<HTMLButtonElement>(null)
 
-  useEffect(() => {
+  const [prevContactId, setPrevContactId] = useState(contactId)
+  if (prevContactId !== contactId) {
+    setPrevContactId(contactId)
     setNameEditing(false)
     setNotesDraft(null)
     setHeadMenuOpen(false)
-  }, [contactId])
+  }
 
   const patch = useMutation({
     mutationFn: (body: ContactPatchBody) => api.patch(contactId, body),

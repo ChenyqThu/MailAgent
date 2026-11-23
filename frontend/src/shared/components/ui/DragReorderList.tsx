@@ -45,7 +45,7 @@
 // a11y：role=list + 每行 grip button（aria-pressed 抓起态），aria-live=polite
 // 播报抓起/移动/放下/取消；Esc 在指针拖拽与键盘抓起两条路径都可取消。
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   MotionConfig,
   animate,
@@ -56,6 +56,19 @@ import {
 } from 'motion/react'
 
 import { cn } from '@shared/lib/cn'
+
+class MotionValueRegistry {
+  private readonly map = new Map<string, MotionValue<number>>()
+
+  get(id: string): MotionValue<number> {
+    let mv = this.map.get(id)
+    if (!mv) {
+      mv = motionValue(0)
+      this.map.set(id, mv)
+    }
+    return mv
+  }
+}
 
 const DRAG_THRESHOLD = 4
 const EASE = [0.22, 1, 0.36, 1] as const
@@ -172,31 +185,31 @@ export function DragReorderList({
    * 是新顺序，props 追上（或写入失败）再交还控制权。
    */
   const [optimistic, setOptimistic] = useState<ReorderItem[] | null>(null)
+  const [prevCommitFailedAt, setPrevCommitFailedAt] = useState(commitFailedAt)
+  let nextOptimistic = optimistic
+  if (commitFailedAt !== prevCommitFailedAt) {
+    setPrevCommitFailedAt(commitFailedAt)
+    if (nextOptimistic !== null) {
+      setOptimistic(null)
+      nextOptimistic = null
+    }
+  } else if (
+    nextOptimistic !== null &&
+    controlledItems !== undefined &&
+    (sameOrder(controlledItems, nextOptimistic) || !sameMembers(controlledItems, nextOptimistic))
+  ) {
+    setOptimistic(null)
+    nextOptimistic = null
+  }
+
   const controlled = controlledItems !== undefined
-  const items = controlled ? (optimistic ?? controlledItems) : uncontrolled
-  const lastFailureRef = useRef(commitFailedAt)
+  const items = controlled ? (nextOptimistic ?? controlledItems) : uncontrolled
   const setItems = (updater: (list: ReorderItem[]) => ReorderItem[]): void => {
     const next = updater(items)
     if (controlled) setOptimistic(next)
     else setUncontrolled(next)
     onReorder?.(next)
   }
-
-  // 交还控制权：props 追上了（写入落地），或 props 换成了另一份集合（增删项 ——
-  // 此时乐观覆盖已经过期，继续拿着会让新增/删除的行看不见）。
-  useEffect(() => {
-    if (optimistic == null || controlledItems === undefined) return
-    if (sameOrder(controlledItems, optimistic) || !sameMembers(controlledItems, optimistic)) {
-      setOptimistic(null)
-    }
-  }, [controlledItems, optimistic])
-
-  // 写入失败 ⇒ 回滚到 props。props 永远追不上时上面那个 effect 不会触发。
-  useEffect(() => {
-    if (commitFailedAt === lastFailureRef.current) return
-    lastFailureRef.current = commitFailedAt
-    setOptimistic(null)
-  }, [commitFailedAt])
 
   const [dragging, setDragging] = useState<{ id: string; from: number } | null>(null)
   const [target, setTarget] = useState<number | null>(null)
@@ -209,27 +222,21 @@ export function DragReorderList({
   const dragRef = useRef<DragData | null>(null)
   const grabSnapshotRef = useRef<ReorderItem[] | null>(null)
   const justDraggedRef = useRef(false)
-  // One y motion value per row id - the single writing channel for all three
-  // motion systems, so they can never fight over a transform.
-  const yMapRef = useRef(new Map<string, MotionValue<number>>())
+  const [yRegistry] = useState(() => new MotionValueRegistry())
   const reduced = useReducedMotion()
 
-  const yFor = (id: string): MotionValue<number> => {
-    let mv = yMapRef.current.get(id)
-    if (!mv) {
-      mv = motionValue(0)
-      yMapRef.current.set(id, mv)
-    }
-    return mv
-  }
+  const yFor = useCallback((id: string): MotionValue<number> => yRegistry.get(id), [yRegistry])
 
   const rowNodes = (): HTMLLIElement[] => [
     ...(listRef.current?.querySelectorAll<HTMLLIElement>('[data-reorder-item]') ?? [])
   ]
-  const glide = (mv: MotionValue<number>, to: number): void => {
-    if (flip && !reduced) animate(mv, to, MOVE)
-    else mv.jump(to)
-  }
+  const glide = useCallback(
+    (mv: MotionValue<number>, to: number): void => {
+      if (flip && !reduced) animate(mv, to, MOVE)
+      else mv.jump(to)
+    },
+    [flip, reduced]
+  )
 
   // FLIP: after any commit that captured First rects, zero everyone, measure the
   // clean layout, invert, then animate() home.
@@ -264,7 +271,7 @@ export function DragReorderList({
         }
       }
     }
-  }, [items, flip, reduced])
+  }, [items, flip, reduced, yFor])
 
   useEffect(() => {
     onStateChange?.({
@@ -355,12 +362,15 @@ export function DragReorderList({
     }
   }
 
-  function settleAll(drag: DragData): void {
-    glide(yFor(drag.row.dataset.id!), 0)
-    drag.rows?.forEach((row) => {
-      if (row !== drag.row) glide(yFor(row.dataset.id!), 0)
-    })
-  }
+  const settleAll = useCallback(
+    (drag: DragData): void => {
+      glide(yFor(drag.row.dataset.id!), 0)
+      drag.rows?.forEach((row) => {
+        if (row !== drag.row) glide(yFor(row.dataset.id!), 0)
+      })
+    },
+    [glide, yFor]
+  )
 
   function handlePointerUp(event: React.PointerEvent<HTMLLIElement>): void {
     const drag = dragRef.current
@@ -374,7 +384,7 @@ export function DragReorderList({
     else settleAll(drag)
   }
 
-  function cancelPointerDrag(): void {
+  const cancelPointerDrag = useCallback((): void => {
     const drag = dragRef.current
     if (!drag) return
     dragRef.current = null
@@ -383,7 +393,7 @@ export function DragReorderList({
     setDragging(null)
     setTarget(null)
     settleAll(drag)
-  }
+  }, [settleAll])
 
   useEffect(() => {
     if (!dragging) return undefined
@@ -392,7 +402,7 @@ export function DragReorderList({
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [dragging])
+  }, [dragging, cancelPointerDrag])
 
   function handleGripKeyDown(
     event: { key: string; preventDefault: () => void },

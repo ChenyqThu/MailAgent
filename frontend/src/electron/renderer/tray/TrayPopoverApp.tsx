@@ -125,8 +125,7 @@ export default function TrayPopoverApp(): React.ReactElement {
     bootAppearance()
   }, [])
 
-  const loadSnapshot = React.useCallback(async (): Promise<void> => {
-    setLoading(true)
+  const fetchSnapshot = React.useCallback(async (): Promise<void> => {
     try {
       const [healthRes, notifRes, todayRes] = await Promise.allSettled([
         mailApi.admin.davmailHealth(),
@@ -150,8 +149,13 @@ export default function TrayPopoverApp(): React.ReactElement {
     }
   }, [mailApi, notificationsApi])
 
+  const loadSnapshot = React.useCallback((): void => {
+    setLoading(true)
+    void fetchSnapshot()
+  }, [fetchSnapshot])
+
   React.useEffect((): (() => void) => {
-    void loadSnapshot()
+    void fetchSnapshot()
     const ipc = (
       window as unknown as {
         electron?: {
@@ -164,14 +168,14 @@ export default function TrayPopoverApp(): React.ReactElement {
     ).electron?.ipcRenderer
     const handler = (): void => {
       userPickedFeedRef.current = false
-      void loadSnapshot()
+      loadSnapshot()
     }
     const off = ipc?.on('tray:opened', handler)
     return (): void => {
       if (typeof off === 'function') off()
       else ipc?.removeListener?.('tray:opened', handler)
     }
-  }, [loadSnapshot])
+  }, [fetchSnapshot, loadSnapshot])
 
   const healthLabel =
     snapshot.health == null

@@ -19,7 +19,7 @@
 // (chatMessageToUIMessage → useChatRuntime({ messages }), architecture §13.8.5). S3 — context
 // injection is always on (the CONTEXT_INJECTION flag was GA'd away).
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import type { AssistantRuntime } from '@assistant-ui/react'
 import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/react-ai-sdk'
 import { generateId as generateFallbackId } from 'ai'
@@ -30,6 +30,7 @@ import type { EffortTier } from '@shared/modelCatalog/effortTiers'
 import { createLibraryApi } from '@shared/api/library'
 import { createChatAttachmentArchiver } from '@shared/lib/chat-attachments'
 import { resolveApiBaseUrl } from '@shared/lib/apiBaseUrl'
+import { LiveBox, useLiveBox } from '@shared/hooks/liveBox'
 
 import {
   createMailAgentAttachmentAdapter,
@@ -352,14 +353,14 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
   // 卸载（切标签 / 切会话）时 assistant-ui 也会 chat.stop() 中止在途请求（useChatRuntime 把
   // stopOnClientDestroy 写死为 true）。那不是用户要停：run 应留在后台继续，由新挂载的
   // useBackgroundChatRun 接上。transport 的中止监听据此标记跳过 /run/stop。
-  const mountedRef = useRef(false)
+  const [mountedBox] = useState(() => new LiveBox(false))
   useEffect(() => {
-    mountedRef.current = true
+    mountedBox.set(true)
     return () => {
-      mountedRef.current = false
+      mountedBox.set(false)
     }
-  }, [])
-  const reconnectSeqRef = useRef(0)
+  }, [mountedBox])
+  const [reconnectSeqBox] = useState(() => new LiveBox(0))
   // Latch resumable reattach at mount so Turn #1 of a fresh session (sessionId: null -> N
   // mid-stream) never triggers resumeStream() mid-response; only mounting an existing session
   // reattaches to `/api/ai/run/stream`.
@@ -379,33 +380,29 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
   // Phase 06a — per-thread session-id latch. Seeded from the sessionId prop (reload → an existing id;
   // a new conversation → null, created lazily on the first send). The panel remounts this provider
   // keyed by (email, session), so within a mount the prop is stable and the latch owns the
-  // null→created transition; the ref lets the memoized transport read the latest id without rebuilding.
-  const latchRef = useRef<AiSdkSessionLatch>({ id: sessionId ?? null, inflight: null })
-  if (sessionId != null && latchRef.current.id !== sessionId) {
-    latchRef.current = { id: sessionId, inflight: null }
-  }
+  // null→created transition; the box lets the memoized transport read the latest id without rebuilding.
+  const [latchBox] = useState(
+    () => new LiveBox<AiSdkSessionLatch>({ id: sessionId ?? null, inflight: null })
+  )
+  useLayoutEffect(() => {
+    if (sessionId != null && latchBox.get().id !== sessionId) {
+      latchBox.set({ id: sessionId, inflight: null })
+    }
+  }, [latchBox, sessionId])
 
-  // composer-parity C2 — refs for the per-send injected-context builder + its post-send consumer. Held
-  // in refs (not transport useMemo deps) so adding/removing a chip doesn't rebuild the transport (which
-  // would drop the resumable adapter mid-thread); the body reads the latest each send.
-  const buildInjectedContextRef = useRef(buildInjectedContext)
-  buildInjectedContextRef.current = buildInjectedContext
-  const onConsumeInjectedRef = useRef(onConsumeInjected)
-  onConsumeInjectedRef.current = onConsumeInjected
+  // composer-parity C2 — boxes for the per-send injected-context builder + its post-send consumer.
+  const buildInjectedContextBox = useLiveBox(buildInjectedContext)
+  const onConsumeInjectedBox = useLiveBox(onConsumeInjected)
 
-  // issue #61 Lane 3 (A2) — one adapter per runtime instance, reading the live bridge through a ref
-  // (same discipline as buildInjectedContext above: panel re-renders must not rebuild the runtime).
-  // Registering it under adapters.attachments REPLACES react-ai-sdk's default vercelAttachmentAdapter,
-  // which base64'd every file — including .txt, whose established path is the injectedContext block.
-  const attachmentBridgeRef = useRef(attachmentBridge)
-  attachmentBridgeRef.current = attachmentBridge
+  // issue #61 Lane 3 (A2) — one adapter per runtime instance, reading the live bridge cleanly.
+  const attachmentBridgeBox = useLiveBox(attachmentBridge)
   // P2-L5 —— 附件发送即入库（design §1.4）。会话 id 从同一个 latch 读：这条对话已经有 id 就
   // 用它，还没有（新会话的第一条消息，session 由 transport 懒创建）就是 null，`source_ref`
   // 的会话段留空。这里**不**调 onEnsureSession —— 拖个附件不该凭空建出一个空会话。
   const [attachmentAdapter] = useState(() =>
-    createMailAgentAttachmentAdapter(() => attachmentBridgeRef.current ?? null, undefined, {
+    createMailAgentAttachmentAdapter(() => attachmentBridgeBox.get() ?? null, undefined, {
       archive: createChatAttachmentArchiver(createLibraryApi(resolveApiBaseUrl())),
-      getSessionId: () => latchRef.current.id
+      getSessionId: () => latchBox.get().id
     })
   )
 
@@ -434,7 +431,7 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
         return false // 体不是 JSON → 判不出是哪种拒绝 → 维持现状
       }
       if (code !== RUN_LEASE_REJECTED_CODE) return false
-      const sid = latchRef.current.id
+      const sid = latchBox.get().id
       const text = lastUserTextOf(init?.body)
       if (sid == null || text == null) return false
       try {
@@ -476,10 +473,10 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
             signal.addEventListener(
               'abort',
               () => {
-                const sid = latchRef.current.id
+                const sid = latchBox.get().id
                 if (sid == null) return
                 setTimeout(() => {
-                  if (!mountedRef.current) return
+                  if (!mountedBox.get()) return
                   void fetch(`${gatewayBaseUrl}/api/ai/run/stop`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -514,8 +511,8 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
           })
         },
         body: async () => {
-          const muteKeyBefore = sessionKeyForId(sessionId ?? latchRef.current.id)
-          const sid = await resolveAiSdkSessionId(latchRef.current, sessionId, onEnsureSession)
+          const muteKeyBefore = sessionKeyForId(sessionId ?? latchBox.get().id)
+          const sid = await resolveAiSdkSessionId(latchBox.get(), sessionId, onEnsureSession)
           if (sessionId == null && muteKeyBefore === 'draft' && sid != null) {
             promoteDraftDisabledConnectors(sid)
           }
@@ -523,10 +520,9 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
           // composer-parity C2 — resolve the mention/attachment prefix at send time (async: mention
           // excerpts are fetched), send it as body.injectedContext (the gateway prepends it to the
           // model's last user message; persistence keeps the original text), then clear the chips.
-          const injectedContext = buildInjectedContextRef.current
-            ? await buildInjectedContextRef.current()
-            : ''
-          if (injectedContext.length > 0) onConsumeInjectedRef.current?.()
+          const buildInjected = buildInjectedContextBox.get()
+          const injectedContext = buildInjected ? await buildInjected() : ''
+          if (injectedContext.length > 0) onConsumeInjectedBox.get()?.()
           return {
             sessionId: sid ?? null,
             ...(model ? { model } : {}),
@@ -551,14 +547,15 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
       },
       {
         gatewayBaseUrl,
-        getSessionId: () => latchRef.current.id,
-        isMounted: () => mountedRef.current,
+        getSessionId: () => latchBox.get().id,
+        isMounted: () => mountedBox.get(),
         ownRunOwner,
         nextReconnectSeq: () => {
-          reconnectSeqRef.current += 1
-          return reconnectSeqRef.current
+          const next = reconnectSeqBox.get() + 1
+          reconnectSeqBox.set(next)
+          return next
         },
-        currentReconnectSeq: () => reconnectSeqRef.current,
+        currentReconnectSeq: () => reconnectSeqBox.get(),
         resumableAdapter
       }
     )

@@ -61,8 +61,9 @@ export function LibrarySearchBar({
 }): ReactElement {
   const { t } = useTranslation()
   const composingRef = useRef(false)
+  const [composing, setComposing] = useState(false)
   const [draft, setDraft] = useState(value)
-  const displayed = composingRef.current ? draft : value
+  const displayed = composing ? draft : value
 
   return (
     <label className="flex h-7 min-w-0 flex-1 items-center gap-[7px] rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2.5 focus-within:border-coral/60">
@@ -76,10 +77,12 @@ export function LibrarySearchBar({
         }}
         onCompositionStart={(e) => {
           composingRef.current = true
+          setComposing(true)
           setDraft(e.currentTarget.value)
         }}
         onCompositionEnd={(e) => {
           composingRef.current = false
+          setComposing(false)
           const next = e.currentTarget.value
           setDraft(next)
           onChange(next)
@@ -96,6 +99,7 @@ export function LibrarySearchBar({
           aria-label={t('library.search.clear')}
           onClick={() => {
             composingRef.current = false
+            setComposing(false)
             setDraft('')
             onChange('')
           }}

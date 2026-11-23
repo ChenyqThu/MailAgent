@@ -126,7 +126,10 @@ export function MattersWorkspace(): React.ReactElement | null {
     gcTime: 15 * 60_000,
     placeholderData: keepPreviousData
   })
-  const scopeRows = scopeOnServer ? (scopedList.data?.items ?? []) : liveMatters
+  const scopeRows = useMemo(
+    () => (scopeOnServer ? (scopedList.data?.items ?? []) : liveMatters),
+    [liveMatters, scopeOnServer, scopedList.data?.items]
+  )
   const scopeReady = scopeOnServer ? scopedList.isSuccess : liveList.isSuccess
 
   // 08-27 标签工作区（Lane W）—— 事项双身份索引的注册边缘：列表行带 id + public_id 两个键。

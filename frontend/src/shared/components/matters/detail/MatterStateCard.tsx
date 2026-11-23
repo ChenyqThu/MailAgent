@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CheckCircle2, FileCheck, Pencil, RefreshCw, Sparkles, TriangleAlert } from 'lucide-react'
 
@@ -48,9 +48,17 @@ export function StateCard({
     matter.summary_at != null ? Math.floor((now - matter.summary_at) / 86_400_000) : null
   const stale = staleDays !== null && staleDays > 14
 
-  useEffect(() => {
+  const [prevSummarySync, setPrevSummarySync] = useState(() => ({
+    editing: summaryEditing,
+    summary: matter.current_summary
+  }))
+  if (
+    prevSummarySync.editing !== summaryEditing ||
+    prevSummarySync.summary !== matter.current_summary
+  ) {
+    setPrevSummarySync({ editing: summaryEditing, summary: matter.current_summary })
     if (!summaryEditing) setSummaryDraft(matter.current_summary ?? '')
-  }, [matter.current_summary, summaryEditing])
+  }
 
   const saveSummary = (): void => {
     onSummarySave(normalizedSummaryDraft, () => setSummaryEditing(false))

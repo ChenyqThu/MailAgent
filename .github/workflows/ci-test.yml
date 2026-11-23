@@ -194,14 +194,15 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      - name: eslint (errors only)
+      - name: eslint (zero warnings)
         # 08-02 review F9 — 建闸前 repo 里积了 30 个 lint error 且无人发现: 三个 workflow 一个
         # lint 步骤都没有, 而本地 `pnpm lint` 必 OOM(4GB 12s 炸 / 8GB 跑 57min 炸到 7.3GB) 所以
         # 也没人跑得完。OOM 真凶不是规则也不是 warning 量, 是 frontend/ 根下一个 6.9MB 的遗留
         # 构建产物(index-<hash>.js): .gitignore 排了它但 eslint flat config **不读 .gitignore**。
         # 已在 eslint.config.mjs 的 ignores 里补上 → 本地全量 lint 现在 15s 跑完。
-        # v4.1 Wave 4A 已关闭 prettier/prettier 噪音规则，让真实 React Hook warning 显性可见。
-        run: pnpm exec eslint --quiet .
+        # v4.1 Wave 4A 已关闭 prettier/prettier 噪音规则；Wave 5C 已清零全部 React Hook 警告并
+        # 将 react-hooks/refs 与 react-hooks/set-state-in-effect 恢复为 error，CI 全量零警告拉闸。
+        run: pnpm exec eslint --no-cache --max-warnings=0 .
 
       - name: typecheck
         run: pnpm run typecheck

@@ -44,10 +44,7 @@ export function useAnchoredPosition(
   const [position, setPosition] = useState<AnchoredPosition | null>(null)
 
   useLayoutEffect(() => {
-    if (!active) {
-      setPosition(null)
-      return
-    }
+    if (!active) return
     let cancelled = false
     const measure = (): boolean => {
       const anchor = anchorRef.current
@@ -93,5 +90,5 @@ export function useAnchoredPosition(
     }
   }, [active, anchorRef, align, gap, maxHeight, width])
 
-  return position
+  return active ? position : null
 }

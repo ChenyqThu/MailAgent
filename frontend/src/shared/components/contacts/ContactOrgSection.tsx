@@ -142,11 +142,14 @@ function PersonPickDialog({
   const { t } = useTranslation()
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
-  useEffect(() => {
-    if (open) return
-    setSearchInput('')
-    setSearch('')
-  }, [open])
+  const [prevOpen, setPrevOpen] = useState(open)
+  if (prevOpen !== open) {
+    setPrevOpen(open)
+    if (!open) {
+      setSearchInput('')
+      setSearch('')
+    }
+  }
   useEffect(() => {
     const timer = window.setTimeout(() => setSearch(searchInput.trim()), SEARCH_DEBOUNCE_MS)
     return () => window.clearTimeout(timer)

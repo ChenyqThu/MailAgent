@@ -191,42 +191,32 @@ export function ContactsWorkspace(): React.ReactElement | null {
   // 与人物页直达是同一个 store 的两条独立轴，各清各的。
   const queueRequested = useContactNavigation((state) => state.queueRequested)
   const clearQueueRequest = useContactNavigation((state) => state.clearQueue)
+  if (queueRequested && !agentOpen) {
+    setAgentOpen(true)
+  }
   useEffect(() => {
     if (!queueRequested) return
-    setAgentOpen(true)
     clearQueueRequest()
   }, [clearQueueRequest, queueRequested])
 
   const navigationTarget = useContactNavigation((state) => state.targetContactId)
   const clearNavigationTarget = useContactNavigation((state) => state.clear)
   const [initialSelectionApplied, setInitialSelectionApplied] = useState(false)
+  if (navigationTarget !== null) {
+    if (selectedId !== navigationTarget) setSelectedId(navigationTarget)
+    if (!initialSelectionApplied) setInitialSelectionApplied(true)
+  } else if (!initialSelectionApplied && list.isSuccess) {
+    // v2 任务 ③ 冷启动初选对账：只跑一次，之后用户的每一次选中都由 selectContact 负责。
+    setInitialSelectionApplied(true)
+    const stored = readLastContactVisit()
+    if (stored === null || !orderedIds.includes(stored.id)) {
+      setSelectedId(orderedIds[0] ?? null)
+    }
+  }
   useEffect(() => {
     if (navigationTarget === null) return
-    setSelectedId(navigationTarget)
     clearNavigationTarget()
-    // 🔴 深链一旦落地就把冷启动初选记成「已经做过」：intent 已经点名了要看谁，而下面那条
-    // effect 的守卫读的是 `navigationTarget` —— 这里刚把它清掉，列表晚一步落定时它已是 null，
-    // 守卫就拦不住了（会把用户点名的那个人换成记录里的 / 列表第一个）。
-    setInitialSelectionApplied(true)
   }, [clearNavigationTarget, navigationTarget])
-
-  // v2 任务 ③ 冷启动初选，现在是**对账**（task 08-20 P0-3 之后）：上次那个人已经在 mount 时
-  // 进了 selectedId（见上面的 useState 初值），列表第一次落定时只需确认它还在可见集里；不在
-  // （被合并 / 被隐藏 / 改判成机器人）或压根没有记录 → 退化成选列表第一个。只跑一次
-  // （`initialSelectionApplied` 守卫），之后用户的每一次选中都由 `selectContact` 负责。
-  // 🔴 判据用 `orderedIds` 而不是 `items` —— 前者才是**实际列出**的行（过了 chips 与分组
-  // 折叠），留着一个用户在列表里看不见的选中等于把详情页钉在一个找不到的人身上。
-  useEffect(() => {
-    if (initialSelectionApplied || !list.isSuccess) return
-    setInitialSelectionApplied(true)
-    if (navigationTarget !== null) return
-    // 🔴 这里走 `setSelectedId` 而不是 `selectContact`：保留与退化都**不是用户的选择**，
-    // 不该回写记录。尤其退化那条 —— 把「列表恰好第一行」写成用户的上次位置，会把一条还
-    // 可能有用的记录（那个人只是暂时不在这个视图里）永久覆盖掉。
-    const stored = readLastContactVisit()
-    if (stored !== null && orderedIds.includes(stored.id)) return
-    setSelectedId(orderedIds[0] ?? null)
-  }, [initialSelectionApplied, list.isSuccess, navigationTarget, orderedIds])
 
   // ── 治理写面（档案头「更多操作」的 handler + toast + 失效）──────────────────
   // 🔴 只解构 `mutate`（task 08-20 P1-6）：react-query v5 的 `useMutation` **每次 render 都
