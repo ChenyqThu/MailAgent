@@ -1428,7 +1428,7 @@ async def run_service():
 
     # E0-WP2 / 4.1 Wave 4A 数据安全网: worker 未起、SyncStore 尚未打开 DB 的最早时点, 对关键
     # 用户库 (sync_store.db / agent_config.db / ai_chat.db) 跑节流的 quick_check + VACUUM INTO
-    # 滚动备份 (<DATA_ROOT>/data/backups/, 24h 节流 + 保 3 份; 放 data/ 下是因为
+    # 滚动备份 (<DATA_ROOT>/data/backups/, 24h 节流 + 保 1 份; 放 data/ 下是因为
     # dev 态 DATA_ROOT=仓库根, data/ 已 gitignore 而根级 backups/ 不是 —— 1.5 GB
     # 备份决不能变成可提交文件)。校验失败 → 写 marker (Electron main waitReady
     # 失败分支据此弹「数据库校验失败」) + fail-fast 退出, **不做备份不轮转** 保住

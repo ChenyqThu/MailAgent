@@ -102,7 +102,7 @@ def _rotate_backups(backups_dir: Path, stem: str, keep: int) -> None:
             logger.warning(f"[db_safety] 删除旧备份 {old.name} 失败: {e}")
 
 
-def create_backup(db_path: PathLike, backups_dir: PathLike, *, keep: int = 3) -> Path:
+def create_backup(db_path: PathLike, backups_dir: PathLike, *, keep: int = 1) -> Path:
     """``VACUUM INTO`` 一份带时间戳的备份, 然后轮转保留最新 keep 份。
 
     仅应在 quick_check 通过后调用 (坏库不备份, 防覆盖好备份)。
@@ -155,7 +155,7 @@ def run_startup_db_safety(
     db_paths: Sequence[PathLike],
     backups_dir: PathLike,
     *,
-    keep: int = 3,
+    keep: int = 1,
     min_interval_hours: float = 24.0,
     marker_path: Optional[PathLike] = None,
     critical: bool = True,

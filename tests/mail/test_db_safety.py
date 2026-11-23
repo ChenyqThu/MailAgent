@@ -173,6 +173,28 @@ def test_rotation_keeps_only_newest_three(tmp_path):
     assert olds[1].exists() and olds[2].exists()
 
 
+def test_default_keep_retains_only_newest_one(tmp_path):
+    db = tmp_path / "sync_store.db"
+    _make_healthy_db(db)
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    olds = []
+    for i, hours in enumerate((72, 48)):
+        f = backups / f"sync_store-2026010{i + 1}-000000.db"
+        f.write_bytes(b"old")
+        stale = time.time() - hours * 3600
+        os.utime(f, (stale, stale))
+        olds.append(f)
+
+    run_startup_db_safety([db], backups)
+
+    remaining = sorted(backups.glob("sync_store-*.db"))
+    assert len(remaining) == 1
+    assert not olds[0].exists()
+    assert not olds[1].exists()
+    assert remaining[0] not in olds
+
+
 def test_throttle_skips_when_recent_backup(tmp_path):
     """最新备份 < min_interval_hours → 本次通道整个跳过 (连 quick_check 都不跑)。"""
     db = tmp_path / "sync_store.db"
