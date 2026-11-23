@@ -285,7 +285,6 @@ export function CalendarLayout(): React.ReactElement {
     const targetMs = Date.parse(focusTarget.dateIso)
     if (targetMs < Date.parse(navWindow.fromIso) || targetMs >= Date.parse(navWindow.toIso)) return
     const match = matchFocusTarget(navSeq, focusTarget, Date.now())
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot: 异步 query 数据到达后的单次匹配落锚 + 清 target, 非派生状态.
     if (match) {
       setAnchor(match)
       if (focusTarget.openDrawer) {

@@ -283,8 +283,9 @@ class ChatDb:
     def _connection(self):
         # 默认 connect（非 mode=ro）：能读 WAL -wal 里前端 writer 尚未 checkpoint 的新数据
         # （mode=ro 读不到未 checkpoint 的 WAL）。只读查询不写，WAL 下 reader 不阻塞 writer。
-        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 30000")
         try:
             yield conn
         finally:
@@ -295,11 +296,13 @@ class ChatDb:
         """写连接：clean exit 自动 commit，异常 rollback，总 close（per-call 短命，WAL 安全）。
 
         ``foreign_keys = ON`` 对齐 chat_db.ts ``getChatDb``（真实 schema 的 ON DELETE CASCADE +
-        message→session FK 在生产里据此生效；测试 DDL 无 FK → no-op）。journal_mode 不在此设：
-        库的 WAL 模式是持久化属性，已由前端首次 ``getChatDb`` 建立，任何后开连接自动沿用。
+        message→session FK 在生产里据此生效；测试 DDL 无 FK → no-op）。显式对齐 WAL 与
+        ``busy_timeout=30000``，保证与前端连接及独立测试库的并发一致性。
         """
-        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 30000")
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA foreign_keys = ON")
         try:
             yield conn

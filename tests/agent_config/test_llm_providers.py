@@ -476,3 +476,12 @@ def test_reorder_providers_and_batch_update_models(tmp_path):
 
     assert st.batch_update_models("a", action="disable") == 1
     assert st.model_counts_by_provider()["a"] == (2, 0)
+
+
+def test_llm_provider_store_enables_wal_mode(tmp_path):
+    st = _store(tmp_path)
+    with st._connection() as conn:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+    assert str(mode).lower() == "wal"
+    assert int(timeout) == 30000

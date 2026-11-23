@@ -274,3 +274,40 @@ def test_multiple_dbs_all_checked_failures_merged(tmp_path):
     assert "sync_store.db" in msg and "agent_config.db" in msg
     payload = json.loads(marker.read_text(encoding="utf-8"))
     assert len(payload["failed"]) == 2
+
+
+def test_ai_chat_db_included_in_safety_run_and_skipped_when_missing(tmp_path):
+    """ai_chat.db 存在时做 quick_check+备份，不存在时静默跳过。"""
+    sync_db = tmp_path / "sync_store.db"
+    cfg_db = tmp_path / "agent_config.db"
+    chat_db = tmp_path / "ai_chat.db"
+    _make_healthy_db(sync_db)
+    _make_healthy_db(cfg_db)
+    backups = tmp_path / "backups"
+
+    # ai_chat.db 尚未创建 → 跳过不报错，只备份已有两库
+    run_startup_db_safety([sync_db, cfg_db, chat_db], backups)
+    assert len(list(backups.glob("sync_store-*.db"))) == 1
+    assert len(list(backups.glob("agent_config-*.db"))) == 1
+    assert not list(backups.glob("ai_chat-*.db"))
+
+    # ai_chat.db 创建后 → 纳入 quick_check + VACUUM INTO 备份
+    _make_healthy_db(chat_db)
+    run_startup_db_safety([sync_db, cfg_db, chat_db], backups)
+    assert len(list(backups.glob("ai_chat-*.db"))) == 1
+
+    # 坏 ai_chat.db → 触发 DbIntegrityError
+    stale = time.time() - 48 * 3600
+    for f in backups.glob("*.db"):
+        os.utime(f, (stale, stale))
+    _corrupt_header(chat_db)
+    with pytest.raises(DbIntegrityError, match="ai_chat.db"):
+        run_startup_db_safety([sync_db, cfg_db, chat_db], backups)
+
+
+def test_service_startup_registers_ai_chat_db_safety():
+    """src/service.py 启动期关键库清单必须包含 resolve_ai_chat_db_path()."""
+    service_src = (
+        Path(__file__).resolve().parents[2] / "src" / "service.py"
+    ).read_text(encoding="utf-8")
+    assert "resolve_ai_chat_db_path()" in service_src

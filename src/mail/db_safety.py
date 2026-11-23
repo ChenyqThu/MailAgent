@@ -20,8 +20,9 @@ waitReady 直读 SQLite 文件判就绪, 已迁移库立即放行)。
   backups/ 目录单写者, 无并发轮转竞态。
 - 备份用 ``VACUUM INTO`` (读快照, WAL 下与并发写共存), **不许**直接 copy 文件
   (WAL 未 checkpoint 的数据在 -wal 里, 单拷主文件 = 撕裂备份)。
-- ai_chat.db 是前端 Electron (chat_db.ts) owned, 首期不纳入 —— 已知边界, 见
-  docs/reference/packaging/packaging-release.md「数据恢复」。
+- ai_chat.db 虽然 schema 由前端 Electron (chat_db) 拥有, 自 v4.1 Wave 4A 起
+  也纳入启动期节流 quick_check + VACUUM INTO 滚动备份 (critical=True; 库未
+  创建前自动跳过), 保护不可重建的会话与工具审批审计账本。
 - 失败 marker (`db_integrity_failure.json`, 与 sync_store.db 同目录) 由 Electron
   main 在 waitReady 失败分支读取 (backend_lifecycle.ts readDbIntegrityFailure),
   文件名两侧手抄必须一致。安全通道成功完成时清除 marker。

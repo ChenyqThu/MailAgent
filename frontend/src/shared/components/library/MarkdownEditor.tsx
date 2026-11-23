@@ -82,7 +82,6 @@ export function MarkdownEditor({ file, mode, onModeChange }: Props): ReactElemen
     setSeeded({ hash: file.content_hash, mode })
     if (mode === 'edit' && seeded.mode !== 'edit' && userLeftEdit.current) {
       // 刚进编辑态：草稿 = 磁盘原文（含 frontmatter，用户编辑的是真文件）。
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setText(content)
       setNote('')
       setConflict(null)

@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 
 _SCHEMA_SQL = """

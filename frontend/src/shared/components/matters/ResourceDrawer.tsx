@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate, useRouter } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
@@ -149,9 +149,9 @@ export function ResourceDrawer({
   // 🔴 调用方是 `open={drawerItem !== null}` + `item={drawerItem}` —— 两者同时归 null，
   // 退场期间面板会瞬间空掉。留住最后一份非空 item（同 EventDetailDrawer 的 RSVP 卡对
   // `pendingRsvp` 的处理），只影响这 220ms 的渲染，写操作全部走 props 上的 `item`。
-  const lastItemRef = useRef(item)
-  if (item) lastItemRef.current = item
-  const shown = item ?? lastItemRef.current
+  const [lastItem, setLastItem] = useState(item)
+  if (item && item !== lastItem) setLastItem(item)
+  const shown = item ?? lastItem
 
   // V3-22 —— 版本轨迹只在抽屉打开时拉。挂在 `listResources` 上会变成每份资料一次扇出
   // （ARCHITECTURE §7.1 列表性能铁律）；而列表行本来也不显示它。

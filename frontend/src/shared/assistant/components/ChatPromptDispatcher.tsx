@@ -119,7 +119,6 @@ export function ChatPromptDispatcher({
       onDispatched(request.nonce, false)
       return
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAwaiting({ nonce: request.nonce, text: request.text, fromIndex })
   }, [request, aui, sendDisabled, onDispatched])
 

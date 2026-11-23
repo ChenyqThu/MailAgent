@@ -255,7 +255,7 @@ class DescriptionParser:
             stripped = line.strip()
             if 'Annual Business Review' in stripped or ('Meeting' in stripped and ('Jan' in stripped or '/' in stripped)):
                 remaining = lines[i+1:i+10] if i+1 < len(lines) else []
-                remaining_text = [l.strip() for l in remaining if l.strip()]
+                remaining_text = [item.strip() for item in remaining if item.strip()]
 
                 if 'Time' in remaining_text and 'Topic' in remaining_text and 'Presenter' in remaining_text:
                     table_start = i

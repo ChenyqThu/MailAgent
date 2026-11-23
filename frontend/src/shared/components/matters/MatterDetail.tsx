@@ -443,7 +443,6 @@ export function MatterDetail({
     const el = bodyScrollRef.current
     if (el && stored > 0) {
       // 命令式恢复滚动位置；规则误判容器不可变。
-      // eslint-disable-next-line react-hooks/immutability
       el.scrollTop = stored
       lastScrollTopRef.current = el.scrollTop
     }

@@ -153,7 +153,6 @@ export function useMatterConversation(
     // 会话已经开始后不再采纳"种子"（chip 已锁定在这场对话的那件事上）；会话行自己的 anchor 例外。
     if (sessionMatter === null && !chatIsEmpty) return
     if (removedRef.current === next.id) return
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setChipTarget((cur) => (cur && cur.id === next.id ? cur : next))
     // sessionMatter / seed 的对象身份每次 render 都可能变，按 id 订阅。
     // seedEpoch 入依赖：同一件事再点一次（id 没变）也必须重跑，否则清掉的移除记忆没人消费。

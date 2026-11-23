@@ -424,3 +424,22 @@ def test_owner_setting_rejects_bad_key_or_value(tmp_path):
         st.set_owner_setting("", "x")
     with pytest.raises(ValueError):
         st.set_owner_setting("k", None)  # type: ignore[arg-type]
+
+
+def test_agent_config_store_enables_wal_mode(tmp_path):
+    import sqlite3
+
+    db_file = tmp_path / "agent_config.db"
+    st = AgentConfigStore(str(db_file))
+    with st._connection() as conn:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+    assert str(mode).lower() == "wal"
+    assert int(timeout) == 30000
+
+    # 独立连接确认文件本身已是 WAL 持久化属性
+    raw = sqlite3.connect(str(db_file))
+    try:
+        assert str(raw.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal"
+    finally:
+        raw.close()

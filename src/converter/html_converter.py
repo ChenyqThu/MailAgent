@@ -778,7 +778,7 @@ class HTMLToNotionConverter:
             # 处理data URI（base64编码的图片）
             elif src.startswith("data:image"):
                 # Notion不支持data URI，跳过
-                logger.debug(f"Skipping data URI image")
+                logger.debug("Skipping data URI image")
                 return None
 
             else:

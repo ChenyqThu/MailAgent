@@ -109,5 +109,12 @@ export default defineConfig(
       'mailagent/no-prefers-color-scheme': 'error'
     }
   },
-  eslintConfigPrettier
+  eslintConfigPrettier,
+  {
+    // 关闭 prettier/prettier 规则（格式仍由 `pnpm format` 负责），避免上千条格式化噪音
+    // 掩盖真实静态缺陷（react-hooks/* 告警）。eslint-config-prettier 的冲突禁用仍保留。
+    rules: {
+      'prettier/prettier': 'off'
+    }
+  }
 )

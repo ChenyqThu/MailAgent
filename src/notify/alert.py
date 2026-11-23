@@ -50,7 +50,7 @@ class FeishuAlertNotifier:
         self.webhook_url = webhook_url
         self.secret = secret
         self.enabled_levels = set(
-            l.strip() for l in enabled_levels.split(",") if l.strip()
+            lvl.strip() for lvl in enabled_levels.split(",") if lvl.strip()
         )
         self.cooldown = cooldown
         self._session: Optional[aiohttp.ClientSession] = None
@@ -153,7 +153,6 @@ class FeishuAlertNotifier:
 
         # 详情字段（key-value 网格）
         if details:
-            columns = []
             items = list(details.items())
             for i in range(0, len(items), 2):
                 row_cols = []

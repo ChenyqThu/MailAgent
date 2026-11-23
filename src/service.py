@@ -1426,17 +1426,18 @@ async def run_service():
 
     start_parent_watchdog()
 
-    # E0-WP2 数据安全网: worker 未起、SyncStore 尚未打开 DB 的最早时点, 对 Python
-    # 两库 (sync_store.db / agent_config.db) 跑节流的 quick_check + VACUUM INTO
+    # E0-WP2 / 4.1 Wave 4A 数据安全网: worker 未起、SyncStore 尚未打开 DB 的最早时点, 对关键
+    # 用户库 (sync_store.db / agent_config.db / ai_chat.db) 跑节流的 quick_check + VACUUM INTO
     # 滚动备份 (<DATA_ROOT>/data/backups/, 24h 节流 + 保 3 份; 放 data/ 下是因为
     # dev 态 DATA_ROOT=仓库根, data/ 已 gitignore 而根级 backups/ 不是 —— 1.5 GB
     # 备份决不能变成可提交文件)。校验失败 → 写 marker (Electron main waitReady
     # 失败分支据此弹「数据库校验失败」) + fail-fast 退出, **不做备份不轮转** 保住
-    # 已有好备份。ai_chat.db 是前端 owned, 首期不纳入 (已知边界, 见
-    # packaging-release.md「数据恢复」)。安全网自身的意外异常不得阻断启动
+    # 已有好备份。ai_chat.db 在首次建会话前可能尚不存在 (run_startup_db_safety 会跳过
+    # 不存在的库), 一旦存在即受同等保护。安全网自身的意外异常不得阻断启动
     # (除 DbIntegrityError 外仅告警)。
     from src.config import DATA_ROOT
     from src.agent_config.store import resolve_agent_config_db_path
+    from src.chat.db import resolve_ai_chat_db_path
     from src.mail.db_safety import (
         DbIntegrityError,
         integrity_failure_marker_path,
@@ -1448,6 +1449,7 @@ async def run_service():
             [
                 config.sync_store_db_path,
                 resolve_agent_config_db_path(config.sync_store_db_path),
+                resolve_ai_chat_db_path(),
             ],
             Path(DATA_ROOT) / "data" / "backups",
             marker_path=integrity_failure_marker_path(config.sync_store_db_path),

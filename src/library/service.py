@@ -47,7 +47,6 @@ from src.library.constants import (
     EMBED_BATCH_FILES,
     EMBED_BATCH_SLEEP_SEC,
     EMBED_MODEL_APPROX_BYTES,
-    EMBED_MODEL_ID,
     EMBED_MODEL_REPO,
     FOLDER_PAGE_SIZE,
     MOUNT_MAX_FILES,

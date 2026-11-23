@@ -133,6 +133,9 @@ jobs:
           pip install -r requirements.txt
           pip install -e ".[cli,dev,api]"
 
+      - name: Ruff lint (src)
+        run: python -m ruff check src
+
       - name: Backend pytest
         # 零排除 — 建闸时 main 上预存的 stale 测试 (test_expansion_loop stale import /
         # test_reverse_sync_outbox 旧签名断言) 已随 E0 修复 (2026-07-02)。
@@ -197,9 +200,11 @@ jobs:
         # 也没人跑得完。OOM 真凶不是规则也不是 warning 量, 是 frontend/ 根下一个 6.9MB 的遗留
         # 构建产物(index-<hash>.js): .gitignore 排了它但 eslint flat config **不读 .gitignore**。
         # 已在 eslint.config.mjs 的 ignores 里补上 → 本地全量 lint 现在 15s 跑完。
-        # --quiet 保留: 存量 299 条 warning(几乎全是 prettier/prettier) 的收编另开一批, 在那之前
-        # 本闸只对 error 负责 —— 新增 error 必红, 存量 warning 不挡 CI。
+        # v4.1 Wave 4A 已关闭 prettier/prettier 噪音规则，让真实 React Hook warning 显性可见。
         run: pnpm exec eslint --quiet .
+
+      - name: typecheck
+        run: pnpm run typecheck
 
       - name: vitest (pnpm test = rebuild:node + vitest run)
         # rebuild:node 把 better-sqlite3 prebuild 切到 Node ABI (--arch=arm64, macos-15
@@ -209,4 +214,34 @@ jobs:
         # undefined) 已随 E0 修复。若将来需临时排除: 写 `pnpm test --exclude <glob>`, 勿写
         # `pnpm test -- --exclude` (pnpm 直接转发未知 flag, 字面 `--` 会传给 vitest 变成
         # 文件过滤参数, 实测排除不生效)。
+        run: pnpm test
+
+  artifact-server-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: artifact-server
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: artifact-server/pnpm-lock.yaml
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: typecheck
+        run: pnpm typecheck
+
+      - name: vitest
         run: pnpm test

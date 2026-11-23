@@ -421,7 +421,6 @@ export function AgentConversation({
     // 后果：唤出瞬间 chip 闪一下才出现；以及取标题失败时**根本没有 chip**，于是「带着这封邮件
     // 提问」静默退化成一次没有引用的提问。注入用的是 internalId（正文在 send 时另取），标题只是
     // 显示，拿不到就退回「未命名」文案。外部指令（ChatPromptDispatcher）也据此判「引用就位了没」。
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setEmailContext((cur) =>
       cur && cur.internalId === seededEmailId ? cur : { internalId: seededEmailId, subject: '' }
     )

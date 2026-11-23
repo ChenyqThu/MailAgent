@@ -32,9 +32,8 @@ import numpy as np
 from src.embedding.protocol import BUILTIN_EMBEDDING_GEMMA_PROFILE
 from src.embedding.quantize import (
     dequantize_int8 as _emb_dequantize,
-    l2_normalize,
-    pack_bq,
-    quantize_int8 as quantize,
+    pack_bq as pack_bq,
+    quantize_int8 as _emb_quantize,
 )
 from src.library.constants import (
     CHUNK_MAX_MODEL_TOKENS,
@@ -50,7 +49,6 @@ from src.library.constants import (
     EMBED_MODEL_ID,
     EMBED_MODEL_REPO,
     EMBED_QUERY_PREFIX,
-    EMBED_QUERY_TASK,
 )
 from src.repository.email_repository import _is_cjk_char
 
@@ -243,6 +241,10 @@ def doc_text(text: str, *, prefix: str = EMBED_DOC_PREFIX) -> str:
 def dequantize(blobs: Iterable[bytes], *, dim: int = EMBED_DIM) -> np.ndarray:
     """一批 int8 blob → ``(n, dim)`` float32 矩阵（已除回 127；仍近似 L2 归一）。"""
     return _emb_dequantize(blobs, dim=dim)
+
+
+# 供 `from src.library import embed as E` 调用方（library/service.py 与单测）直接访问 E.quantize。
+quantize = _emb_quantize
 
 
 # =============================================================================

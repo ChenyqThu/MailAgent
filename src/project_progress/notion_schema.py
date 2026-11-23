@@ -16,9 +16,8 @@ ensure_schema() 副作用:
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Set
 
-import aiohttp
 from loguru import logger
 
 from . import notion_sync as _ns

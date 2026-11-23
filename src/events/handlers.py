@@ -455,7 +455,6 @@ class EventHandlers:
             return
 
         internal_id = record.get('internal_id') if isinstance(record, dict) else getattr(record, 'internal_id', None)
-        mailbox = record.get('mailbox') if isinstance(record, dict) else getattr(record, 'mailbox', None)
         stored_flagged = bool(record.get('is_flagged') if isinstance(record, dict) else getattr(record, 'is_flagged', False))
         stored_read = bool(record.get('is_read') if isinstance(record, dict) else getattr(record, 'is_read', False))
         stored_ps = (record.get('processing_status') if isinstance(record, dict) else getattr(record, 'processing_status', '')) or ''
